@@ -1,0 +1,15 @@
+{
+  "name": "greet_user",
+  "title": "Greet User",
+  "description": "Greets the user with a friendly message",
+  "trigger_phrases": [
+    "hello",
+    "guten tag"
+  ],
+  "parameters": [],
+  "runtime": "powershell",
+  "script": "Write-Output 'Hello there! How can I assist you today?'",
+  "usage_count": 0,
+  "last_output": "",
+  "updated_at": "2026-10-23 18:39:12"
+}

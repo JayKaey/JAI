@@ -1,0 +1,18 @@
+{
+  "name": "check_disk_space",
+  "title": "Check Disk Free Space",
+  "description": "Reports free and total storage space in GB across all local SSDs/drives.",
+  "trigger_phrases": [
+    "check disk space",
+    "how much disk space",
+    "free storage",
+    "speicherplatz prüfen",
+    "wie viel speicherplatz"
+  ],
+  "parameters": [],
+  "runtime": "powershell",
+  "script": "Get-PSDrive -PSProvider FileSystem | Where-Object { $_.Used -gt 0 -or $_.Free -gt 0 } | ForEach-Object {\n    $freeGb = [math]::Round($_.Free / 1GB, 1)\n    $usedGb = [math]::Round($_.Used / 1GB, 1)\n    $totalGb = $freeGb + $usedGb\n    \"Drive $($_.Name):\\ -> $freeGb GB free of $totalGb GB total\"\n} | Out-String",
+  "usage_count": 0,
+  "last_output": "",
+  "updated_at": "2026-10-19 13:53:15"
+}

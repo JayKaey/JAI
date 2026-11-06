@@ -1,0 +1,4 @@
+# Line endings are kept exactly as they are in the working tree: no conversion on commit or
+# checkout. This project mixes CRLF and LF per file (about two thirds of src/ is CRLF) and its
+# patch tooling relies on that, so a global autocrlf setting must not rewrite them.
+* -text

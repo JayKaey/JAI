@@ -1,0 +1,71 @@
+# J.A.R.V.I.S. - what stays out of git.
+#
+# In: source, build scripts and the small assets the build needs.
+# Out: models and runtimes, builds, everything personal (settings, memory database, logs,
+# keys) and everything derived.
+
+# --- Build output and packaged builds ----------------------------------------------------
+/target/
+*.exe
+*.exe.bak_*
+/*.dll
+*.pdb
+
+# --- Large downloads (JARVIS.exe --download-models and tools/package.ps1 fetch them) ----
+/models/
+/runtime/
+/bin/
+
+# --- Personal and machine-specific data: never commit ------------------------------------
+# Settings: they hold the phone pairing key and the addresses of the accounts.
+/jarvis_config.json
+/jarvis_config.json.*
+# The memory database: conversations, memories, calendar, sealed account tokens.
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+# Logs and test reports (they name the public IP, the location and account results).
+*.log
+/live_selftest_report.json
+# The phone page's TLS certificate and private key, and keys of any kind.
+/satellite_cert.*
+/satellite_key.*
+*.pem
+*.key
+*.p8
+*.p12
+*.pfx
+*.der
+*.crt
+.env
+.env.*
+# What Jarvis learns about the habits of the person using him.
+/config/suggestion_habits.json
+
+# --- Recordings --------------------------------------------------------------------------
+# The film-voice reference clips are copyrighted inputs the owner supplies himself; the
+# profiles measured from them are caches keyed to the exact clip files.
+*.mp3
+*.wav
+*.avi
+*.mp4
+*.mkv
+/assets/*_reference_profile.bin
+
+# --- Local snapshots and generated helpers -----------------------------------------------
+# Git history replaces the hand-made _backup_* copies (they stay on disk).
+/_backup_*/
+# The knowledge graph is rebuilt with `graphify update .`.
+/graphify-out/
+# Claude Code settings: the hooks hold absolute paths under the Windows user folder.
+/.claude/
+
+# --- Editors and the OS ------------------------------------------------------------------
+.vscode/
+.idea/
+.vs/
+Thumbs.db
+desktop.ini
+.DS_Store

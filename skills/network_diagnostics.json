@@ -1,0 +1,18 @@
+{
+  "name": "network_diagnostics",
+  "title": "Network & Latency Diagnostics",
+  "description": "Checks local IP address, active network interface, and measures round-trip ping latency to 1.1.1.1.",
+  "trigger_phrases": [
+    "network diagnostics",
+    "check my internet",
+    "what is my ip",
+    "netzwerk status",
+    "wie ist mein ping"
+  ],
+  "parameters": [],
+  "runtime": "powershell",
+  "script": "$ips = Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254*' } | Select-Object -ExpandProperty IPAddress\n$ping = Test-Connection -ComputerName 1.1.1.1 -Count 1 -ErrorAction SilentlyContinue\n$ms = if ($ping) { \"$($ping.ResponseTime) ms\" } else { \"Offline\" }\nWrite-Output \"LAN IPv4: $($ips -join ', ') | Ping (1.1.1.1): $ms\"",
+  "usage_count": 0,
+  "last_output": "",
+  "updated_at": "2026-10-19 13:53:15"
+}

@@ -1,0 +1,28 @@
+{
+  "name": "web_search",
+  "title": "Smart Web & YouTube Search",
+  "description": "Opens a search query directly in the user's browser on Google, YouTube, GitHub, or Wikipedia.",
+  "trigger_phrases": [
+    "search google for",
+    "search youtube for",
+    "suche auf youtube nach",
+    "google nach"
+  ],
+  "parameters": [
+    {
+      "name": "query",
+      "description": "Search term or topic to look up",
+      "required": true
+    },
+    {
+      "name": "engine",
+      "description": "Target site: 'google', 'youtube', 'github', or 'wikipedia'",
+      "required": false
+    }
+  ],
+  "runtime": "powershell",
+  "script": "$q = [uri]::EscapeDataString(\"$env:JARVIS_PARAM_QUERY\")\n$eng = \"$env:JARVIS_PARAM_ENGINE\".ToLower()\n$url = switch ($eng) {\n    \"youtube\" { \"https://www.youtube.com/results?search_query=$q\" }\n    \"github\" { \"https://github.com/search?q=$q\" }\n    \"wikipedia\" { \"https://en.wikipedia.org/w/index.php?search=$q\" }\n    default { \"https://www.google.com/search?q=$q\" }\n}\nStart-Process $url\nWrite-Output \"Opened search for '$env:JARVIS_PARAM_QUERY' on $url\"",
+  "usage_count": 0,
+  "last_output": "",
+  "updated_at": "2026-10-19 13:53:15"
+}

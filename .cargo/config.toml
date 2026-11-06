@@ -1,0 +1,11 @@
+# whisper.cpp is compiled by whisper-rs-sys through cmake-rs. With the Visual Studio generator
+# (MSVC), cmake-rs overwrites CMAKE_<LANG>_FLAGS_RELEASE with flags that contain *no*
+# optimisation level, which produced an unoptimised whisper.cpp (~20x slower speech
+# recognition: ~9 s to transcribe a 3 s utterance). whisper-rs-sys forwards CMAKE_* variables,
+# so defining them here restores proper optimisation.
+# `-O2` is accepted by MSVC (cl.exe takes '-' options) as well as GCC/Clang (Raspberry Pi).
+#
+# After changing these, rebuild whisper.cpp once:  cargo clean -p whisper-rs-sys --release
+[env]
+CMAKE_C_FLAGS_RELEASE = "-O2 -DNDEBUG"
+CMAKE_CXX_FLAGS_RELEASE = "-O2 -DNDEBUG"

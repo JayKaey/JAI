@@ -1,0 +1,348 @@
+//! "What's on my screen?" — Jarvis reads the window Sir is looking at (or the whole screen) with
+//! the OCR engine built into Windows (Windows.Media.Ocr, in Sir's own languages) and hands the
+//! text to the language model, which explains, summarises or answers questions about it. Nothing
+//! leaves the machine.
+
+use std::time::Duration;
+use tracing::info;
+
+const OCR_TIMEOUT: Duration = Duration::from_secs(25);
+const MAX_CHARS: usize = 6000;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scope {
+    /// The top application window (not Jarvis' own).
+    ActiveWindow,
+    /// The primary monitor.
+    Screen,
+}
+
+impl Scope {
+    pub fn parse(raw: &str) -> Self {
+        let r = raw.to_lowercase();
+        if r.contains("screen") || r.contains("monitor") || r.contains("bildschirm") || r.contains("desktop") {
+            Self::Screen
+        } else {
+            Self::ActiveWindow
+        }
+    }
+}
+
+/// Standard base64 (for PowerShell's -EncodedCommand).
+pub(crate) fn base64(bytes: &[u8]) -> String {
+    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+        let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
+        out.push(T[(n >> 18) as usize & 63] as char);
+        out.push(T[(n >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 { T[(n >> 6) as usize & 63] as char } else { '=' });
+        out.push(if chunk.len() > 2 { T[n as usize & 63] as char } else { '=' });
+    }
+    out
+}
+
+/// Capture `rect` (or the primary screen) and print the recognised lines.
+fn ocr_script(rect: Option<[i32; 4]>, png: &str) -> String {
+    let bounds = match rect {
+        Some([x, y, w, h]) => format!("$x={x}; $y={y}; $w={w}; $h={h}"),
+        None => "$b=[System.Windows.Forms.Screen]::PrimaryScreen.Bounds; $x=$b.X; $y=$b.Y; $w=$b.Width; $h=$b.Height".to_string(),
+    };
+    let capture = format!(
+        r#"{bounds}
+$bmp = New-Object System.Drawing.Bitmap $w, $h
+$g = [System.Drawing.Graphics]::FromImage($bmp)
+$g.CopyFromScreen($x, $y, 0, 0, $bmp.Size)
+$bmp.Save('{png}', [System.Drawing.Imaging.ImageFormat]::Png); $g.Dispose(); $bmp.Dispose()"#,
+        png = png.replace('\'', "''"),
+    );
+    recognise_script(&capture, png)
+}
+
+/// Recognise the lines of the image at `png` after running `prepare` (which may write it).
+fn recognise_script(prepare: &str, png: &str) -> String {
+    format!(
+        r#"$ErrorActionPreference='Stop'
+[Console]::OutputEncoding=[System.Text.Encoding]::UTF8
+Add-Type -TypeDefinition 'using System;using System.Runtime.InteropServices;public static class JDpi{{[DllImport("user32.dll")]public static extern bool SetProcessDPIAware();}}'
+[JDpi]::SetProcessDPIAware() | Out-Null
+Add-Type -AssemblyName System.Windows.Forms,System.Drawing,System.Runtime.WindowsRuntime
+{prepare}
+$asTask = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {{ $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1' }})[0]
+function Await($op, $type) {{ $t = $asTask.MakeGenericMethod($type).Invoke($null, @($op)); $t.Wait(-1) | Out-Null; $t.Result }}
+[void][Windows.Storage.StorageFile, Windows.Storage, ContentType = WindowsRuntime]
+[void][Windows.Media.Ocr.OcrEngine, Windows.Foundation, ContentType = WindowsRuntime]
+[void][Windows.Graphics.Imaging.BitmapDecoder, Windows.Graphics, ContentType = WindowsRuntime]
+$file = Await ([Windows.Storage.StorageFile]::GetFileFromPathAsync('{png}')) ([Windows.Storage.StorageFile])
+$stream = Await ($file.OpenAsync([Windows.Storage.FileAccessMode]::Read)) ([Windows.Storage.Streams.IRandomAccessStream])
+$decoder = Await ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream)) ([Windows.Graphics.Imaging.BitmapDecoder])
+$bitmap = Await ($decoder.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap])
+$engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
+if ($engine -eq $null) {{ Write-Output 'JARVIS_NO_OCR'; exit 0 }}
+$result = Await ($engine.RecognizeAsync($bitmap)) ([Windows.Media.Ocr.OcrResult])
+$stream.Dispose()
+$result.Lines | ForEach-Object {{ $_.Text }}
+"#,
+        png = png.replace('\'', "''"),
+    )
+}
+
+/// Runs an OCR script hidden and without the busy cursor (`-EncodedCommand`, UTF-16LE).
+#[cfg(windows)]
+async fn powershell_encoded(script: &str) -> std::io::Result<crate::shell::HelperOutput> {
+    let encoded: Vec<u8> = script.encode_utf16().flat_map(|u| u.to_le_bytes()).collect();
+    let encoded = base64(&encoded);
+    crate::shell::run_helper(
+        std::path::Path::new("powershell"),
+        ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded.as_str()],
+        None,
+        &[],
+        OCR_TIMEOUT,
+    )
+    .await
+}
+
+/// OCR of an image file (a phone photo or scan: JPEG, PNG, BMP …), in Sir's own languages.
+#[cfg(windows)]
+pub async fn ocr_file(path: &std::path::Path) -> Result<String, String> {
+    let script = recognise_script("", &path.display().to_string());
+    let out = powershell_encoded(&script).await.map_err(|e| if e.kind() == std::io::ErrorKind::TimedOut { "Reading the image timed out.".to_string() } else { e.to_string() })?;
+    let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if !out.success() {
+        let err = String::from_utf8_lossy(&out.stderr);
+        return Err(format!("Windows OCR failed: {}", err.lines().find(|l| !l.trim().is_empty()).unwrap_or("unknown error")));
+    }
+    if text == "JARVIS_NO_OCR" {
+        return Err("Windows has no OCR language installed.".into());
+    }
+    info!("[SCREEN] OCR of {}: {} characters", path.display(), text.len());
+    Ok(text)
+}
+
+#[cfg(not(windows))]
+pub async fn ocr_file(path: &std::path::Path) -> Result<String, String> {
+    let p = path.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        let out = std::process::Command::new("tesseract").args([p.to_string_lossy().as_ref(), "-"]).output().map_err(|_| "Install tesseract to read images.".to_string())?;
+        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[cfg(windows)]
+pub async fn read(scope: Scope) -> Result<String, String> {
+    let target = match scope {
+        Scope::ActiveWindow => crate::win32::call(crate::win32::top_app_window).await?,
+        Scope::Screen => None,
+    };
+    let (label, rect) = match (&target, scope) {
+        (Some((title, rect)), _) => (format!("the window \"{}\"", title.chars().take(70).collect::<String>()), Some(*rect)),
+        (None, Scope::ActiveWindow) => ("the screen (no application window was in front)".to_string(), None),
+        (None, Scope::Screen) => ("the primary screen".to_string(), None),
+    };
+    ocr(rect, label).await
+}
+
+/// OCR of `rect` (left, top, width, height in physical pixels; None = primary screen).
+#[cfg(windows)]
+async fn ocr(rect: Option<[i32; 4]>, label: String) -> Result<String, String> {
+    let png = std::env::temp_dir().join(format!("jarvis_ocr_{}.png", std::process::id()));
+    let script = ocr_script(rect, &png.display().to_string());
+    let started = std::time::Instant::now();
+    let out = powershell_encoded(&script).await.map_err(|e| if e.kind() == std::io::ErrorKind::TimedOut { "Reading the screen timed out.".to_string() } else { e.to_string() });
+    let _ = std::fs::remove_file(&png);
+    let out = out?;
+    let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if !out.success() {
+        let err = String::from_utf8_lossy(&out.stderr);
+        return Err(format!("Windows OCR failed: {}", err.lines().find(|l| !l.trim().is_empty()).unwrap_or("unknown error")));
+    }
+    if text == "JARVIS_NO_OCR" {
+        return Err("Windows has no OCR language installed (Settings → Time & language → Language → add the language's optional 'Optical character recognition').".into());
+    }
+    info!("[SCREEN] OCR of {label}: {} characters in {} ms", text.len(), started.elapsed().as_millis());
+    if text.is_empty() {
+        return Ok(format!("No readable text was found on {label}."));
+    }
+    let count = text.chars().count();
+    Ok(format!(
+        "Text visible on {label} (OCR):\n{}{}",
+        text.chars().take(MAX_CHARS).collect::<String>(),
+        if count > MAX_CHARS { "\n…" } else { "" }
+    ))
+}
+
+/// `inspect_screen_or_selection`: what Sir is looking at — his highlighted text (copied out of
+/// the window he was working in, his clipboard restored afterwards), the clipboard, the active
+/// window, or a whole monitor (OCR plus the titles of the windows on it).
+pub async fn inspect(args: &serde_json::Value, foreground: Option<isize>) -> Result<String, String> {
+    let mode = crate::tools::str_arg(args, &["mode", "scope", "target"]).unwrap_or("").to_lowercase();
+    let monitor = args.get("target_monitor").or_else(|| args.get("monitor")).filter(|v| !v.is_null() && v.as_str() != Some(""));
+    match mode.as_str() {
+        "selection" | "selected" | "highlighted" | "selected_text" | "selection_text" => selection(foreground).await,
+        "clipboard" | "copied" => crate::clipboard::tool(&serde_json::json!({ "action": "read" })).await,
+        "active_window" | "window" | "app" if monitor.is_none() => read(Scope::ActiveWindow).await,
+        _ => match monitor {
+            Some(m) => monitor_text(m).await,
+            None if mode.contains("screen") || mode.contains("monitor") || mode == "all" => monitor_text(&serde_json::json!("primary")).await,
+            None => read(Scope::ActiveWindow).await,
+        },
+    }
+}
+
+/// Copies Sir's highlighted text out of the window he was working in (Ctrl+C), then puts his
+/// clipboard back the way it was.
+#[cfg(windows)]
+async fn selection(foreground: Option<isize>) -> Result<String, String> {
+    let hwnd = match foreground.filter(|h| crate::win32::is_window(*h)) {
+        Some(h) => h,
+        None => crate::win32::call(|| crate::win32::user_window().map(|w| w.hwnd)).await?.ok_or("There is no window with a selection to read.")?,
+    };
+    let before = crate::clipboard::read().await.unwrap_or_default();
+    // A marker makes "nothing was selected" detectable even when the selection equals the old
+    // clipboard text.
+    let marker = format!("\u{2063}jarvis-{}", crate::widgets::now_ms());
+    crate::clipboard::write(&marker).await?;
+    async fn read_back(marker: &str) -> String {
+        let mut text = String::new();
+        for _ in 0..6 {
+            tokio::time::sleep(std::time::Duration::from_millis(70)).await;
+            text = crate::clipboard::read().await.unwrap_or_default();
+            if text != marker {
+                break;
+            }
+        }
+        text
+    }
+    // Ctrl+Insert first (it never interrupts a terminal); Ctrl+C for apps that ignore it, but
+    // never into a console, where it would stop the running program.
+    let mut copied = crate::win32::call(move || crate::win32::copy_selection_from(hwnd, false)).await?;
+    let mut text = read_back(&marker).await;
+    if copied && text == marker && !crate::win32::call(move || crate::win32::is_terminal_window(hwnd)).await? {
+        copied = crate::win32::call(move || crate::win32::copy_selection_from(hwnd, true)).await?;
+        text = read_back(&marker).await;
+    }
+    // Sir's clipboard as it was (text; an image on it cannot be restored).
+    if !before.is_empty() || text == marker {
+        let _ = crate::clipboard::write(&before).await;
+    }
+    if !copied {
+        return Err("The window would not come to the front, so I could not copy the selection.".into());
+    }
+    if text == marker || text.trim().is_empty() {
+        return Ok(format!(
+            "Nothing was highlighted (Ctrl+C copied nothing).{}",
+            if before.trim().is_empty() { String::new() } else { format!(" The clipboard holds:\n{}", before.chars().take(4000).collect::<String>()) }
+        ));
+    }
+    let count = text.chars().count();
+    info!("[SCREEN] Selection read: {count} characters");
+    Ok(format!("Sir's highlighted text ({count} characters):\n{}{}", text.chars().take(MAX_CHARS).collect::<String>(), if count > MAX_CHARS { "\n…" } else { "" }))
+}
+
+#[cfg(not(windows))]
+async fn selection(_foreground: Option<isize>) -> Result<String, String> {
+    // X11/Wayland keep the selection in the PRIMARY buffer: no key press needed.
+    tokio::task::spawn_blocking(|| {
+        for (p, a) in [("wl-paste", &["--primary", "--no-newline"][..]), ("xclip", &["-selection", "primary", "-o"][..])] {
+            if let Ok(out) = std::process::Command::new(p).args(a).output() {
+                if out.status.success() {
+                    return Ok(format!("Sir's highlighted text:\n{}", String::from_utf8_lossy(&out.stdout).chars().take(MAX_CHARS).collect::<String>()));
+                }
+            }
+        }
+        Err("No selection tool found (install wl-clipboard or xclip).".to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// OCR of one whole monitor, with the titles of the windows on it.
+#[cfg(windows)]
+async fn monitor_text(target: &serde_json::Value) -> Result<String, String> {
+    let monitors = crate::monitors::list();
+    let index = crate::monitors::resolve(target, None, &monitors).ok_or_else(|| format!("There is no monitor {target}; {} are connected.", monitors.len()))?;
+    let m = monitors[index - 1].clone();
+    let bounds = m.rect;
+    let titles: Vec<String> = crate::win32::call(move || {
+        crate::win32::app_windows()
+            .into_iter()
+            .filter(|w| !crate::win32::is_jarvis_window(w) && !matches!(w.class.as_str(), "Progman" | "WorkerW" | "Shell_TrayWnd"))
+            .filter_map(|w| {
+                let (r, _, minimised) = crate::win32::window_state(w.hwnd)?;
+                let (cx, cy) = (r[0] + r[2] / 2, r[1] + r[3] / 2);
+                (!minimised && cx >= bounds[0] && cx < bounds[2] && cy >= bounds[1] && cy < bounds[3]).then(|| format!("\"{}\" ({})", w.title.chars().take(70).collect::<String>(), w.process))
+            })
+            .take(12)
+            .collect()
+    })
+    .await?;
+    let label = format!("Monitor {index}{}", if m.primary { " (primary)" } else { "" });
+    let text = ocr(Some([m.rect[0], m.rect[1], m.width(), m.height()]), label.clone()).await?;
+    Ok(format!(
+        "{label}, {}×{}. Windows on it (top first): {}.\n{text}",
+        m.width(),
+        m.height(),
+        if titles.is_empty() { "none (desktop)".to_string() } else { titles.join(", ") }
+    ))
+}
+
+#[cfg(not(windows))]
+async fn monitor_text(_target: &serde_json::Value) -> Result<String, String> {
+    read(Scope::Screen).await
+}
+
+pub fn inspect_tool_definition() -> serde_json::Value {
+    serde_json::json!({"type": "function", "function": {
+        "name": "inspect_screen_or_selection",
+        "description": "See what Sir sees: mode selection (the text he highlighted — for 'explain/translate/refactor/debug the code I selected'), clipboard, active_window (the app in front: 'what does this error mean'), or monitor with target_monitor (1, 2, left, right: 'look at my second monitor', 'summarise what's on my screen'). Returns the text (OCR) and window titles; then answer from it.",
+        "parameters": {"type": "object", "properties": {
+            "mode": {"type": "string", "enum": ["selection", "clipboard", "active_window", "monitor"]},
+            "target_monitor": {"type": "string", "description": "1, 2, 3, left, right, primary"}
+        }, "required": ["mode"]}
+    }})
+}
+
+#[cfg(not(windows))]
+pub async fn read(_scope: Scope) -> Result<String, String> {
+    // grim/scrot + tesseract when available.
+    tokio::task::spawn_blocking(|| {
+        let png = std::env::temp_dir().join("jarvis_ocr.png");
+        let p = png.display().to_string();
+        let shot = ["grim", "scrot"].iter().any(|tool| std::process::Command::new(tool).arg(&p).status().map(|s| s.success()).unwrap_or(false));
+        if !shot {
+            return Err("No screenshot tool found (install grim or scrot).".to_string());
+        }
+        let out = std::process::Command::new("tesseract").args([p.as_str(), "-"]).output().map_err(|_| "Install tesseract for screen reading.".to_string())?;
+        let _ = std::fs::remove_file(&png);
+        Ok(format!("Text visible on the screen (OCR):\n{}", String::from_utf8_lossy(&out.stdout).chars().take(MAX_CHARS).collect::<String>()))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn base64_matches_reference() {
+        assert_eq!(base64(b"Man"), "TWFu");
+        assert_eq!(base64(b"Ma"), "TWE=");
+        assert_eq!(base64(b"M"), "TQ==");
+        assert_eq!(base64(b""), "");
+        assert_eq!(Scope::parse("whole screen"), Scope::Screen);
+        assert_eq!(Scope::parse("active_window"), Scope::ActiveWindow);
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    #[ignore = "captures the real screen"]
+    async fn reads_the_screen() {
+        let text = read(Scope::Screen).await.unwrap();
+        println!("OCR returned {} characters", text.chars().count());
+        assert!(text.starts_with("Text visible") || text.starts_with("No readable"));
+    }
+}

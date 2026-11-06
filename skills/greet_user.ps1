@@ -1,0 +1,1 @@
+Write-Output 'Hello there! How can I assist you today?'

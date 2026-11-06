@@ -1,0 +1,18 @@
+{
+  "name": "top_processes_report",
+  "title": "Top Resource Processes",
+  "description": "Inspects and returns the top 6 most resource-intensive processes (CPU and RAM usage) currently running on the PC.",
+  "trigger_phrases": [
+    "top processes",
+    "what is using my cpu",
+    "what is using my ram",
+    "welche prozesse",
+    "was verbraucht ram"
+  ],
+  "parameters": [],
+  "runtime": "powershell",
+  "script": "Get-Process | Sort-Object WorkingSet64 -Descending | Select-Object -First 6 | ForEach-Object {\n    $mb = [math]::Round($_.WorkingSet64 / 1MB, 1)\n    \"$($_.ProcessName) (PID $($_.Id)): $mb MB RAM\"\n} | Out-String",
+  "usage_count": 0,
+  "last_output": "",
+  "updated_at": "2026-10-19 13:53:15"
+}

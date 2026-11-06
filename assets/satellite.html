@@ -1,0 +1,413 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#02060c">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>J.A.R.V.I.S. Satellite</title>
+<style>
+  :root { --bg:#02060c; --card:rgba(10,24,38,.82); --line:rgba(80,190,255,.22); --accent:#4cc3ff; --text:#d8f1ff; --muted:#6f8ea3; --green:#3ee28c; --amber:#ffb547; --red:#ff4d5e; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; background:var(--bg); color:var(--text); font-family:-apple-system,"Segoe UI",Roboto,sans-serif; }
+  body { min-height:100vh; padding:max(14px, env(safe-area-inset-top)) 14px max(14px, env(safe-area-inset-bottom));
+         background-image:linear-gradient(rgba(76,195,255,.05) 1px,transparent 1px),linear-gradient(90deg,rgba(76,195,255,.05) 1px,transparent 1px); background-size:28px 28px; }
+  header { display:flex; align-items:center; gap:12px; margin-bottom:12px; }
+  .logo { width:38px; height:38px; border-radius:50%; border:1.5px solid var(--accent); display:grid; place-items:center; font:600 12px monospace; color:var(--accent); box-shadow:0 0 14px rgba(76,195,255,.35); }
+  h1 { font-size:16px; letter-spacing:3px; margin:0; color:var(--accent); }
+  .sub { font-size:11px; color:var(--muted); letter-spacing:.6px; }
+  .badges { margin-left:auto; display:flex; flex-direction:column; gap:4px; align-items:flex-end; }
+  .badge { font:600 10px monospace; letter-spacing:1px; padding:3px 8px; border-radius:20px; border:1px solid var(--line); color:var(--muted); }
+  .badge.on { color:var(--green); border-color:rgba(62,226,140,.5); box-shadow:0 0 10px rgba(62,226,140,.25); }
+  .badge.warn { color:var(--amber); border-color:rgba(255,181,71,.5); }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:12px; margin-bottom:10px; backdrop-filter:blur(6px); }
+  .title { font:600 10px monospace; letter-spacing:1.6px; color:var(--muted); margin-bottom:8px; }
+  .orb { width:120px; height:120px; margin:4px auto 8px; border-radius:50%; position:relative; }
+  .orb::before,.orb::after { content:""; position:absolute; inset:0; border-radius:50%; border:1.5px dashed rgba(76,195,255,.4); animation:spin 18s linear infinite; }
+  .orb::after { inset:22px; border-style:solid; border-color:var(--accent); background:radial-gradient(circle,rgba(76,195,255,.55),rgba(76,195,255,.05) 70%); animation:breathe 3s ease-in-out infinite; }
+  .orb.thinking::after { animation-duration:.9s; }
+  .orb.speaking::after { background:radial-gradient(circle,rgba(62,226,140,.6),rgba(62,226,140,.05) 70%); border-color:var(--green); }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  @keyframes breathe { 50% { transform:scale(.9); opacity:.75; } }
+  .state { text-align:center; font:600 14px monospace; letter-spacing:3px; color:var(--accent); }
+  .detail { text-align:center; font-size:11px; color:var(--muted); min-height:14px; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:6px 12px; font-size:12px; }
+  .grid b { color:var(--accent); font-weight:600; }
+  #log { max-height:42vh; overflow-y:auto; display:flex; flex-direction:column; gap:6px; }
+  .msg { padding:8px 10px; border-radius:8px; font-size:14px; line-height:1.35; max-width:92%; white-space:pre-wrap; word-wrap:break-word; }
+  .sir { align-self:flex-end; background:rgba(76,195,255,.14); border:1px solid rgba(76,195,255,.35); }
+  .jarvis { align-self:flex-start; background:rgba(255,255,255,.04); border:1px solid rgba(62,226,140,.3); }
+  .push { align-self:stretch; background:rgba(255,181,71,.08); border:1px solid rgba(255,181,71,.35); font-size:13px; }
+  .row { display:flex; gap:6px; margin-top:8px; }
+  input[type=text] { flex:1; min-width:0; background:rgba(0,0,0,.45); color:var(--text); border:1px solid var(--line); border-radius:8px; padding:11px 12px; font-size:15px; outline:none; }
+  input[type=text]:focus { border-color:var(--accent); }
+  button { background:rgba(76,195,255,.12); color:var(--accent); border:1px solid rgba(76,195,255,.45); border-radius:8px; padding:10px 12px; font:600 13px -apple-system,"Segoe UI",sans-serif; }
+  button:active { background:rgba(76,195,255,.3); }
+  button.mic.live { color:var(--red); border-color:var(--red); box-shadow:0 0 12px rgba(255,77,94,.4); }
+  .quick { display:flex; flex-wrap:wrap; gap:6px; }
+  .quick button { font-size:12px; padding:7px 10px; }
+  label { font-size:12px; color:var(--muted); display:flex; align-items:center; gap:6px; }
+  .err { color:var(--red); font-size:12px; }
+  textarea { width:100%; min-height:64px; background:rgba(0,0,0,.45); color:var(--text); border:1px solid var(--line); border-radius:8px; padding:10px; font:14px -apple-system,"Segoe UI",sans-serif; resize:vertical; }
+  .note { font-size:12px; color:var(--muted); margin-top:6px; min-height:14px; }
+  .msg a { color:var(--accent); word-break:break-all; }
+  .drop { display:flex; align-items:center; gap:10px; }
+  .drop a { font-weight:600; }
+  #scanBox { display:none; margin-top:8px; }
+  #scanBox video { width:100%; border-radius:8px; border:1px solid var(--line); background:#000; }
+  .hidden { display:none; }
+  input[type=number],select { min-width:0; width:100%; color:var(--text); background:#07131f; border:1px solid var(--line); border-radius:6px; padding:9px; }
+  .measure { display:block; margin-bottom:6px; }
+  .measure input { display:block; margin-top:4px; }
+  #strength { width:100%; height:160px; }
+  #processes,#pager { max-height:150px; overflow:auto; font:11px monospace; white-space:pre-wrap; }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">J3</div>
+  <div><h1>J.A.R.V.I.S.</h1><div class="sub">MOBILE SATELLITE · HIVEMIND LINK</div></div>
+  <div class="badges"><span id="gpsBadge" class="badge">GPS SEARCHING</span><span id="linkBadge" class="badge">LINK …</span></div>
+</header>
+
+<div class="card">
+  <div id="orb" class="orb"></div>
+  <div id="state" class="state">CONNECTING</div>
+  <div id="detail" class="detail"></div>
+</div>
+
+<div class="card">
+  <div class="title">TELEMETRY</div>
+  <div class="grid">
+    <div>Position <b id="pos">—</b></div><div>Accuracy <b id="acc">—</b></div>
+    <div>Speed <b id="spd">—</b></div><div>Altitude <b id="alt">—</b></div>
+    <div style="grid-column:1/3">Address <b id="addr">—</b></div>
+    <div>WhatsApp <b id="wa">—</b></div><div>Focus <b id="ar">off</b></div>
+  </div>
+  <div id="gpsErr" class="err"></div>
+</div>
+
+<div class="card">
+  <div class="title">PC GUARDIAN · WORLDWIDE</div>
+  <div class="grid"><div>CPU <b id="cpu">—</b></div><div>GPU <b id="gpu">—</b></div><div>RAM <b id="ram">—</b></div><div>Link <b id="worldLink">—</b></div></div>
+  <div class="row"><button id="pcLock">Lock PC</button><button id="pcSleep">Sleep PC</button><button id="pcWake">Wake LAN target</button></div>
+  <div class="row"><select id="protocol" aria-label="Saved protocol"></select><button id="pcProtocol">Run protocol</button></div>
+  <div id="pcNote" class="note">The PC must be awake for this satellite to respond.</div>
+  <a id="wakeRelay" class="hidden" target="_blank" rel="noopener noreferrer">Open independent PC wake relay</a>
+  <details><summary>Active processes</summary><pre id="processes"></pre></details>
+  <details><summary>Completion pager</summary><pre id="pager"></pre></details>
+</div>
+
+<div class="card">
+  <div class="title">WORKOUT COACH</div>
+  <div id="gymSchedule" class="note"></div>
+  <div class="row"><input id="exercise" type="text" placeholder="Exercise (e.g. barbell curl)" aria-label="Exercise"></div>
+  <div class="grid" style="margin-top:8px">
+    <label class="measure">Sets<input id="sets" type="number" min="1" max="100" value="3"></label>
+    <label class="measure">Reps<input id="reps" type="number" min="1" max="1000" value="10"></label>
+    <label class="measure">Weight (kg)<input id="weight" type="number" min="0" max="2000" step="0.5" value="20"></label>
+    <label class="measure">Rest (seconds)<input id="restSecs" type="number" min="1" max="86400" value="90"></label>
+  </div>
+  <div class="row"><button id="gymLog">Log sets</button><button id="gymRest">Start rest</button><button id="gymCancel">Stop rest</button></div>
+  <div id="restClock" class="state" aria-live="polite"></div><div id="gymNote" class="note"></div>
+  <label>Progression <select id="strengthExercise" aria-label="Progression exercise"></select></label>
+  <canvas id="strength" width="600" height="240" aria-label="Estimated one-rep maximum progression" role="img"></canvas>
+  <div id="gymRecords" class="note"></div>
+</div>
+
+<div class="card">
+  <div class="title">CONVERSATION</div>
+  <div class="quick">
+    <button data-q="How's the weather where I am?">☁ Weather here</button>
+    <button data-q="How is the weather for riding my motorcycle right now and later today?">🏍 Ride check</button>
+    <button data-q="When do I need to leave for school tomorrow?">🎒 Leave for school</button>
+    <button data-q="Check all my messages">✉ Messages</button>
+    <button data-q="Where am I?">⌖ Where am I</button>
+  </div>
+  <div id="log" style="margin-top:10px"></div>
+  <div class="row">
+    <input id="text" type="text" placeholder="Talk to Jarvis…" autocomplete="off" enterkeyhint="send">
+    <button id="mic" class="mic" title="Hold a thought, then tap again">🎙</button>
+    <button id="send">➜</button>
+  </div>
+  <div class="row"><label><input id="speak" type="checkbox" checked> Read replies aloud</label></div>
+</div>
+
+<div class="card">
+  <div class="title">STARK AIR-DROP</div>
+  <textarea id="dropText" placeholder="Text or a link for the PC…"></textarea>
+  <div class="row">
+    <button id="dropSend">⇪ Send to PC</button>
+    <button id="dropPick">📎 File / photo</button>
+    <input id="dropFile" type="file" class="hidden">
+  </div>
+  <div class="row"><label><input id="dropOcr" type="checkbox"> Photo → text (read it into the PC's clipboard)</label></div>
+  <div id="dropNote" class="note"></div>
+</div>
+
+<div class="card">
+  <div class="title">SCANNER</div>
+  <div class="quick">
+    <button id="scanCode">⌗ QR / barcode</button>
+    <button id="scanDoc">🗎 Document</button>
+    <input id="docFile" type="file" accept="image/*" capture="environment" class="hidden">
+  </div>
+  <div id="scanBox"><video id="scanVideo" playsinline muted></video><div class="row"><button id="scanStop">✕ Stop</button></div></div>
+  <div id="scanNote" class="note"></div>
+</div>
+
+<script>
+const KEY = "__JARVIS_KEY__";
+try { localStorage.setItem("jarvis_satellite_key", KEY); history.replaceState(null, "", "/satellite"); } catch (e) {}
+const $ = (id) => document.getElementById(id);
+const api = (path) => path + (path.includes("?") ? "&" : "?") + "k=" + encodeURIComponent(KEY);
+let since = 0, lastSent = 0, pending = null, busy = false;
+let workout = null, restDeadline = 0, restNotified = 0;
+
+function add(text, cls) {
+  const d = document.createElement("div");
+  d.className = "msg " + cls; d.textContent = text; $("log").appendChild(d);
+  $("log").scrollTop = $("log").scrollHeight;
+  return d;
+}
+
+// Pushed content: "AIRDROP|id|name" is a file, "SCAN|mode" opens the scanner, links are clickable.
+function pushed(text) {
+  if (text.startsWith("AIRDROP|")) {
+    const [, id, name] = text.split("|");
+    const d = add("", "push"); d.classList.add("drop");
+    const a = document.createElement("a");
+    a.href = api("/api/airdrop/file?id=" + encodeURIComponent(id)); a.textContent = "⇩ " + name; a.download = name;
+    d.append("Air-Drop: ", a);
+    return;
+  }
+  if (text.startsWith("SCAN|")) { text.endsWith("document") ? $("docFile").click() : startScan(); add("Jarvis opened the scanner.", "push"); return; }
+  const d = add("", "push");
+  text.split(/(https?:\/\/[^\s]+)/).forEach((part, i) => {
+    if (i % 2) { const a = document.createElement("a"); a.href = part; a.target = "_blank"; a.rel = "noopener"; a.textContent = part; d.append(a); }
+    else d.append(part);
+  });
+}
+
+async function post(path, body) {
+  const r = await fetch(api(path), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const j = await r.json(); if (!r.ok) throw new Error(j.error || "Request failed"); return j;
+}
+
+function renderWorkout(data) {
+  if (!data) return;
+  workout = data; restDeadline = data.rest ? data.rest.deadline_unix_ms : 0;
+  $("gymSchedule").textContent = (data.scheduled || []).map(e => e.date + ": " + e.title).join(" · ") || "No upcoming workout in the calendar.";
+  const select = $("strengthExercise"), previous = select.value;
+  const exercises = [...new Set((data.progression || []).map(p => p.exercise))];
+  select.replaceChildren(...exercises.map(e => { const o = document.createElement("option"); o.value = o.textContent = e; return o; }));
+  if (exercises.includes(previous)) select.value = previous;
+  $("gymRecords").textContent = (data.records || []).map(r => r.exercise + ": estimated 1RM " + r.estimated_1rm.toFixed(1) + " kg").join(" · ") || "Log your first set to start tracking strength.";
+  drawStrength();
+}
+function drawStrength() {
+  const c = $("strength"), g = c.getContext("2d"), w = c.width, h = c.height;
+  g.clearRect(0,0,w,h); g.font = "14px monospace"; g.fillStyle = "#6f8ea3";
+  const points = (workout && workout.progression || []).filter(p => p.exercise === $("strengthExercise").value);
+  if (!points.length) { g.fillText("Estimated 1RM progression appears after logging sets",20,100); return; }
+  const top = Math.max(1,...points.map(p => p.estimated_1rm)) * 1.15;
+  g.strokeStyle = "#163449"; g.lineWidth = 1;
+  for (let i=0;i<4;i++) { const y=20+i*55; g.beginPath(); g.moveTo(55,y); g.lineTo(w-15,y); g.stroke(); g.fillText((top*(1-i/3)).toFixed(0),6,y+4); }
+  const xy=points.map((p,i)=>[55+i*(w-85)/Math.max(1,points.length-1),185-p.estimated_1rm/top*165]);
+  g.beginPath(); xy.forEach(([x,y],i)=>i?g.lineTo(x,y):g.moveTo(x,y)); g.strokeStyle="#4cc3ff";g.lineWidth=2;g.stroke();
+  g.fillStyle="#4cc3ff";xy.forEach(([x,y])=>{g.beginPath();g.arc(x,y,3,0,Math.PI*2);g.fill();});
+  g.fillStyle="#6f8ea3";g.fillText(points[0].date.slice(0,10),55,220);g.fillText(points[points.length-1].date.slice(0,10),w-120,220);
+}
+$("strengthExercise").onchange = drawStrength;
+setInterval(()=>{
+  if (!restDeadline) { $("restClock").textContent=""; return; }
+  const left=Math.max(0,Math.ceil((restDeadline-Date.now())/1000));
+  $("restClock").textContent=left ? Math.floor(left/60)+":"+String(left%60).padStart(2,"0") : "REST COMPLETE";
+  if (!left && restNotified!==restDeadline) { restNotified=restDeadline; if(navigator.vibrate)navigator.vibrate([100,70,100]); }
+},250);
+async function gymAction(body) {
+  try { const j=await post("/api/workout",body); $("gymNote").textContent=j.result && j.result.new_personal_record ? "New estimated personal record recorded." : "Saved."; await poll(); }
+  catch(e) { $("gymNote").textContent=e.message; }
+}
+$("gymLog").onclick=()=>gymAction({action:"log",exercise:$("exercise").value,sets:Number($("sets").value),reps:Number($("reps").value),weight_kg:Number($("weight").value),calendar_uid:(workout && workout.scheduled || []).find(e=>e.date===new Date().toLocaleDateString('en-CA'))?.uid});
+$("gymRest").onclick=()=>gymAction({action:"rest",seconds:Number($("restSecs").value)});
+$("gymCancel").onclick=()=>gymAction({action:"cancel_rest"});
+async function pcAction(action) {
+  try { const j=await post("/api/pc/control",{action,protocol:$("protocol").value}); $("pcNote").textContent=j.message; }
+  catch(e) { $("pcNote").textContent=e.message; }
+}
+$("pcLock").onclick=()=>pcAction("lock");$("pcSleep").onclick=()=>pcAction("sleep");$("pcWake").onclick=()=>pcAction("wake");$("pcProtocol").onclick=()=>pcAction("protocol");
+
+function fileData(file) {
+  return new Promise((ok, fail) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = fail; r.readAsDataURL(file); });
+}
+
+// A photo scaled down for upload (OCR needs ~2000 px, not 12 MP).
+async function shrink(file, max) {
+  const url = await fileData(file);
+  const img = new Image(); img.src = url; await img.decode();
+  const k = Math.min(1, max / Math.max(img.width, img.height));
+  const c = document.createElement("canvas"); c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+  c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+  return c.toDataURL("image/jpeg", 0.88);
+}
+
+function say(text) {
+  if (!$("speak").checked || !("speechSynthesis" in window) || !text) return;
+  const u = new SpeechSynthesisUtterance(text);
+  const voice = speechSynthesis.getVoices().find(v => /en-GB/i.test(v.lang) && /male|daniel|arthur|george/i.test(v.name))
+             || speechSynthesis.getVoices().find(v => /en-GB/i.test(v.lang));
+  if (voice) u.voice = voice;
+  u.lang = "en-GB"; u.rate = 1.02;
+  speechSynthesis.cancel(); speechSynthesis.speak(u);
+}
+
+async function chat(text) {
+  text = text.trim(); if (!text || busy) return;
+  busy = true; add(text, "sir"); $("text").value = "";
+  const waiting = add("…", "jarvis");
+  try {
+    const r = await fetch(api("/api/chat"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
+    const j = await r.json();
+    waiting.textContent = j.reply || j.error || "(no reply)";
+    say(j.reply);
+  } catch (e) { waiting.textContent = "Link lost: " + e; }
+  busy = false;
+}
+
+// ---- live GPS -----------------------------------------------------------------------
+function sendFix(p) {
+  pending = p;
+  const now = Date.now();
+  if (now - lastSent < 3000) return;
+  lastSent = now;
+  const c = p.coords;
+  fetch(api("/api/location"), { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ latitude: c.latitude, longitude: c.longitude, accuracy: c.accuracy, altitude: c.altitude, speed: c.speed, heading: c.heading }) })
+    .then(() => { $("linkBadge").textContent = "LINK ONLINE"; $("linkBadge").className = "badge on"; })
+    .catch(() => { $("linkBadge").textContent = "LINK LOST"; $("linkBadge").className = "badge warn"; });
+}
+
+function onFix(p) {
+  const c = p.coords;
+  $("gpsBadge").textContent = "GPS LOCK ACTIVE"; $("gpsBadge").className = "badge on"; $("gpsErr").textContent = "";
+  $("pos").textContent = c.latitude.toFixed(5) + ", " + c.longitude.toFixed(5);
+  $("acc").textContent = "±" + Math.round(c.accuracy) + " m";
+  $("spd").textContent = c.speed != null ? Math.round(c.speed * 3.6) + " km/h" : "—";
+  $("alt").textContent = c.altitude != null ? Math.round(c.altitude) + " m" : "—";
+  sendFix(p);
+}
+
+function onGpsError(e) {
+  $("gpsBadge").textContent = "GPS OFFLINE"; $("gpsBadge").className = "badge warn";
+  $("gpsErr").textContent = (window.isSecureContext ? "" : "This page is not a secure context (HTTPS needed for GPS). ") + (e && e.message ? e.message : "");
+}
+
+if ("geolocation" in navigator) {
+  navigator.geolocation.watchPosition(onFix, onGpsError, { enableHighAccuracy: true, maximumAge: 2000, timeout: 20000 });
+  // Keep streaming every few seconds even when standing still.
+  setInterval(() => { if (pending && Date.now() - lastSent > 8000) sendFix(pending); }, 4000);
+} else onGpsError({ message: "This browser has no geolocation." });
+
+// ---- state & pushed content ---------------------------------------------------------
+async function poll() {
+  try {
+    const r = await fetch(api("/api/state?since=" + since));
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || "Unauthorized");
+    const st = (j.state || "idle").toLowerCase();
+    $("state").textContent = st.toUpperCase(); $("detail").textContent = j.detail || "";
+    $("orb").className = "orb " + st;
+    if (j.gps && j.gps.address) $("addr").textContent = j.gps.address;
+    $("wa").textContent = j.whatsapp_unread ? j.whatsapp_unread + " unread" : "none";
+    $("ar").textContent = j.auto_responder || "off";
+    const t=j.telemetry || {}, guardian=j.guardian || {};
+    $("cpu").textContent=Number(t.cpu_usage_pct || 0).toFixed(0)+"%";
+    $("gpu").textContent=t.gpu && t.gpu.utilization_pct != null ? t.gpu.utilization_pct.toFixed(0)+"%" : "unavailable";
+    $("ram").textContent=Number(t.ram_used_gb || 0).toFixed(1)+" / "+Number(t.ram_total_gb || 0).toFixed(1)+" GB";
+    $("worldLink").textContent=j.tunnel && j.tunnel.state || "local";
+    $("processes").textContent=(guardian.processes || []).map(p=>p.name+"  "+p.cpu_percent.toFixed(1)+"%  "+p.memory_mb+" MB").join("\n");
+    $("pager").textContent=(guardian.notifications || []).slice(-20).reverse().map(n=>n.timestamp.slice(11,19)+" "+n.message).join("\n");
+    const options=JSON.stringify(j.protocols || []);
+    if($("protocol").dataset.options!==options){const previous=$("protocol").value;$("protocol").replaceChildren(...(j.protocols || []).map(n=>{const o=document.createElement("option");o.value=o.textContent=n;return o;}));if((j.protocols||[]).includes(previous))$("protocol").value=previous;$("protocol").dataset.options=options;}
+    if(j.wake_relay_url){try{const u=new URL(j.wake_relay_url);if(u.protocol==="https:"){$("wakeRelay").href=u.href;$("wakeRelay").classList.remove("hidden");}}catch(e){}}
+    renderWorkout(j.workout);
+    for (const m of j.outbox || []) { since = Math.max(since, m.id); pushed(m.text); }
+    if ($("linkBadge").textContent !== "LINK ONLINE") { $("linkBadge").textContent = "LINK ONLINE"; $("linkBadge").className = "badge on"; }
+  } catch (e) { $("linkBadge").textContent = "LINK LOST"; $("linkBadge").className = "badge warn"; }
+}
+setInterval(poll, 3000); poll();
+
+// ---- input --------------------------------------------------------------------------
+$("send").onclick = () => chat($("text").value);
+$("text").addEventListener("keydown", (e) => { if (e.key === "Enter") chat($("text").value); });
+document.querySelectorAll(".quick button[data-q]").forEach(b => b.onclick = () => chat(b.dataset.q));
+
+const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
+if (Rec) {
+  const rec = new Rec(); rec.lang = navigator.language && navigator.language.startsWith("de") ? "de-DE" : "en-GB"; rec.interimResults = false;
+  let live = false;
+  rec.onresult = (e) => { const t = e.results[0][0].transcript; chat(t); };
+  rec.onend = () => { live = false; $("mic").classList.remove("live"); };
+  $("mic").onclick = () => { if (live) { rec.stop(); return; } try { rec.start(); live = true; $("mic").classList.add("live"); } catch (e) {} };
+} else $("mic").style.display = "none";
+
+// ---- Stark Air-Drop -----------------------------------------------------------------
+$("dropSend").onclick = async () => {
+  const text = $("dropText").value.trim(); if (!text) return;
+  $("dropNote").textContent = "Sending…";
+  try { const j = await post("/api/airdrop", { text }); $("dropNote").textContent = j.message || j.error; if (j.ok) $("dropText").value = ""; }
+  catch (e) { $("dropNote").textContent = "Link lost: " + e; }
+};
+$("dropPick").onclick = () => { $("dropFile").accept = $("dropOcr").checked ? "image/*" : ""; $("dropFile").click(); };
+$("dropFile").onchange = async () => {
+  const f = $("dropFile").files[0]; if (!f) return;
+  const ocr = $("dropOcr").checked && f.type.startsWith("image/");
+  $("dropNote").textContent = "Uploading " + f.name + "…";
+  try {
+    const data = ocr ? await shrink(f, 2200) : await fileData(f);
+    const j = await post("/api/airdrop", { name: ocr ? f.name.replace(/\.\w+$/, "") + ".jpg" : f.name, data, ocr });
+    $("dropNote").textContent = j.message || j.error;
+  } catch (e) { $("dropNote").textContent = "Upload failed: " + e; }
+  $("dropFile").value = "";
+};
+
+// ---- Scanner ------------------------------------------------------------------------
+let scanStream = null, scanTimer = null;
+function stopScan() {
+  if (scanTimer) clearInterval(scanTimer); scanTimer = null;
+  if (scanStream) scanStream.getTracks().forEach(t => t.stop()); scanStream = null;
+  $("scanBox").style.display = "none";
+}
+async function startScan() {
+  if (!("BarcodeDetector" in window)) { $("scanNote").textContent = "This browser can't read codes live (use Chrome on Android, or the Document mode)."; return; }
+  try {
+    const detector = new BarcodeDetector();
+    scanStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+    $("scanVideo").srcObject = scanStream; await $("scanVideo").play();
+    $("scanBox").style.display = "block"; $("scanNote").textContent = "Point the camera at the code…";
+    scanTimer = setInterval(async () => {
+      const codes = await detector.detect($("scanVideo")).catch(() => []);
+      if (codes.length) {
+        const value = codes[0].rawValue; stopScan();
+        if (navigator.vibrate) navigator.vibrate(80);
+        $("scanNote").textContent = "Read: " + value;
+        try { const j = await post("/api/scan", { kind: "code", value, format: codes[0].format }); $("scanNote").textContent = j.message || j.error; }
+        catch (e) { $("scanNote").textContent = "Link lost: " + e; }
+      }
+    }, 250);
+  } catch (e) { $("scanNote").textContent = "Camera unavailable: " + e.message; stopScan(); }
+}
+$("scanCode").onclick = startScan;
+$("scanStop").onclick = stopScan;
+$("scanDoc").onclick = () => $("docFile").click();
+$("docFile").onchange = async () => {
+  const f = $("docFile").files[0]; if (!f) return;
+  $("scanNote").textContent = "Reading the page…";
+  try { const j = await post("/api/scan", { kind: "document", image: await shrink(f, 2400) }); $("scanNote").textContent = j.message || j.error; }
+  catch (e) { $("scanNote").textContent = "Upload failed: " + e; }
+  $("docFile").value = "";
+};
+</script>
+</body>
+</html>

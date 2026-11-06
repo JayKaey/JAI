@@ -1,0 +1,150 @@
+[package]
+name = "jarvis"
+version = "3.1.0"
+edition = "2021"
+rust-version = "1.87"
+authors = ["Stark Industries <jarvis@stark.local>"]
+description = "J.A.R.V.I.S. - local, offline, low-latency voice assistant in Rust"
+publish = false
+
+[features]
+default = ["desktop-gpu"]
+# NVIDIA GPU telemetry through NVML (falls back to `nvidia-smi` when the library is unavailable).
+desktop-gpu = ["dep:nvml-wrapper"]
+# Raspberry Pi 5 edge profile (smaller default thread counts).
+edge-pi5 = []
+# Build whisper.cpp with CUDA. Requires the CUDA toolkit (nvcc) at build time.
+whisper-cuda = ["whisper-rs/cuda"]
+
+[dependencies]
+# Async runtime & cancellation
+tokio = { version = "1.40", features = ["full"] }
+tokio-util = "0.7.12"
+futures-util = "0.3.30"
+
+# Native desktop HUD: egui rendered with OpenGL straight into a Win32/X11/Wayland window (no browser).
+eframe = { version = "0.29.1", default-features = false, features = ["accesskit", "default_fonts", "glow", "wayland", "x11"] }
+
+# Persistent keep-alive HTTP client (Ollama streaming, web search, model downloads). `cookies`
+# gives the Personal Manager's portal sessions (WebUntis, itslearning, any site) their cookie jars.
+reqwest = { version = "0.12.8", default-features = false, features = ["json", "stream", "rustls-tls", "cookies"] }
+
+# Personal Manager (PIM): the encrypted token vault (AES-256-GCM, master key in the OS keyring),
+# e-mail over IMAP/TLS (same rustls + ring stack as reqwest), MIME parsing, and text from school
+# PDFs for worksheet summaries. CalDAV, WebUntis JSON-RPC and itslearning REST use reqwest.
+aes-gcm = "0.10.3"
+base64 = "0.22"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+webpki-roots = "1"
+# The mobile satellite's HTTPS listener: a self-signed ECDSA P-256 certificate (browsers only
+# grant `navigator.geolocation` to secure pages) signed with the same `ring` rustls already uses,
+# and the pairing QR code shown in the HUD.
+ring = "0.17"
+qrcode = { version = "0.14", default-features = false }
+mailparse = "0.15"
+pdf-extract = "0.7"
+
+# HUD board photo and gallery blocks: PNG / JPEG / WebP decoding into egui textures.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+
+# The film-voice reference clip (`voice_reference`): MP3 / WAV decoding in pure Rust.
+symphonia = { version = "0.5.4", default-features = false, features = ["mp3", "wav", "pcm"] }
+
+# Audio I/O + lock-free SPSC ring buffers
+cpal = "0.15.3"
+ringbuf = "0.3.3"
+
+# ONNX Runtime (Silero VAD v5 + Kokoro TTS). Pinned: the rc API changes between releases.
+ort = "=2.0.0-rc.15"
+
+# whisper.cpp speech-to-text (logs routed into `tracing`)
+whisper-rs = { version = "0.12.0", features = ["whisper-cpp-tracing"] }
+
+# HTML parsing for the multi-source web search and the deep page reader
+scraper = "0.22"
+# Website navigator: URL-encoded platform searches
+urlencoding = "2.1"
+
+# File search & code editing: ripgrep's parallel, .gitignore-aware walker (live searches and
+# content grep) and walkdir for the background file index
+ignore = "0.4"
+walkdir = "2.5"
+
+# Fuzzy wake-word matching, intent fast-path, app index, in-process eSpeak-NG
+strsim = "0.11.1"
+regex = "1.10"
+libloading = "0.8"
+syn = { version = "2", features = ["full", "visit"] }
+toml = "0.8"
+
+# Long-term memory (WAL + FTS5)
+rusqlite = { version = "0.32.1", features = ["bundled"] }
+
+# Telemetry & process control
+sysinfo = "0.31.4"
+nvml-wrapper = { version = "0.10.0", optional = true }
+
+# Serialization, errors, logging, time, ids
+serde = { version = "1.0.210", features = ["derive"] }
+serde_json = "1.0.128"
+thiserror = "1.0.64"
+tracing = "0.1.40"
+tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
+chrono = { version = "0.4.38", features = ["serde"] }
+uuid = { version = "1.10.0", features = ["v4"] }
+aho-corasick = "1.1"
+
+[target.'cfg(windows)'.dependencies]
+# The prebuilt Windows ONNX Runtime always ships with DirectML; this only exposes the API so
+# Kokoro can optionally run on the GPU (`tts_gpu` in jarvis_config.json).
+ort = { version = "=2.0.0-rc.15", features = ["directml"] }
+# The HUD's native window handle (show/hide from the tray, placement, quit message).
+raw-window-handle = "0.6"
+# The vault's master key lives in the Windows Credential Manager.
+keyring = { version = "3", features = ["windows-native"] }
+# Same major as cpal's own `windows` dependency, so it is compiled once.
+windows = { version = "0.54", features = [
+    # WinRT: the system media session (what is playing, play/pause/skip per app).
+    "Foundation",
+    "Foundation_Collections",
+    "Media_Control",
+    "Win32_Foundation",
+    "Win32_Graphics_Dwm",
+    "Win32_Graphics_Gdi",
+    # Instant Replay: JPEG frames through the Windows Imaging Component.
+    "Win32_Graphics_Imaging",
+    "Win32_Media_Audio",
+    "Win32_Media_Audio_Endpoints",
+    # The HUD's CAMERA block: webcam frames through Media Foundation's source reader.
+    "Win32_Media_MediaFoundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Console",
+    "Win32_System_DataExchange",
+    "Win32_System_JobObjects",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
+    "Win32_System_Ole",
+    # Background helpers: anonymous pipes read without blocking (`shell::quiet`).
+    "Win32_System_Pipes",
+    "Win32_System_Registry",
+    "Win32_System_Threading",
+    "Win32_System_Variant",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell",
+    # Audio endpoints' friendly names (which output device Discord plays to).
+    "Win32_UI_Shell_PropertiesSystem",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[build-dependencies]
+# Embeds the icon, version info and the DPI-aware manifest into the Windows executable.
+embed-resource = "3"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1

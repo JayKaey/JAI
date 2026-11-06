@@ -1,0 +1,1608 @@
+//! Tool registry: JSON schemas for Ollama native tool calling + one dispatcher used by the LLM,
+//! the instant-command fast path and the UI.
+
+use crate::config::ConfigStore;
+use crate::file_ops::{self, EditOutcome};
+use crate::focus::{self, FocusTracker};
+use crate::lifecycle::{self, Restart};
+use crate::media::{self, MediaAction};
+use crate::memory::{DeleteOutcome, MemoryManager};
+use crate::modality::{ModalityStore, VoiceResponseMode};
+use crate::protocols::{Protocol, ProtocolStore};
+use crate::reminders::ReminderStore;
+use crate::skills::{JarvisSkill, SkillManager, SkillParameter};
+use crate::telemetry::SystemMonitor;
+use crate::widgets::WidgetEngine;
+use crate::winctl::{self, WindowAction, WindowTarget};
+use crate::music::MusicEngine;
+use crate::pim::{self, Pim};
+use crate::{
+    apps, calc, clipboard, diagnostics, gui, interface, memory, modality, monitors, music, protocols, reminders, screen, self_improve, shell,
+    sites, websearch, widgets,
+};
+use std::path::PathBuf;
+use std::time::Duration;
+use serde::Serialize;
+use serde_json::{json, Value};
+use std::sync::atomic::{AtomicU32, AtomicU8, Ordering};
+use std::sync::Arc;
+use std::time::Instant;
+use tracing::{info, warn};
+
+#[derive(Debug, Serialize)]
+pub struct CapabilityCategory {
+    pub name: &'static str,
+    pub summary: &'static str,
+    pub tools: &'static [&'static str],
+}
+
+/// Human-readable capability taxonomy. The help response joins this with the live tool
+/// schemas, saved skills, protocols and voice macros so no installed tool is omitted.
+pub const JARVIS_CAPABILITY_MANIFEST: &[CapabilityCategory] = &[
+    CapabilityCategory { name: "Music and welcome", summary: "Sonora/Spotify player selection; named playlists, songs and tracks within playlists; local-library indexing; playback, skip, volume and now playing. Say 'Play JaysRock', 'Play Back in Black in JaysRock', or 'Wake up, Daddy's home'. Playback depends on available local files, installed players and streaming access.", tools: &["control_music", "media_and_volume_control"] },
+    CapabilityCategory { name: "Windows, monitors and desktop", summary: "Launch and close applications; focus, resize, snap, maximize and move real windows between monitors; inspect the screen or selected text; clipboard and system telemetry.", tools: &["open_application", "close_application", "window_management", "move_window_to_monitor", "inspect_screen_or_selection", "clipboard", "get_system_status", "top_processes", "network_status", "get_current_datetime", "focus_mode"] },
+    CapabilityCategory { name: "Calendar, school and study", summary: "Apple/iCloud CalDAV and local calendar reads, creation, edits, conflicts and offline synchronization; WebUntis classes and cancellations; itslearning tasks and materials; deadline syncing, watchers, briefings and oral exam practice. Remote integrations require configured credentials.", tools: &["get_calendar_schedule", "create_calendar_event", "modify_or_delete_calendar_event", "check_school_schedule", "check_course_updates", "sync_study_materials_and_deadlines", "manage_schedule_watcher", "configure_productivity_service", "run_executive_briefing", "start_oral_exam_session", "answer_oral_exam", "set_smart_morning_alarm"] },
+    CapabilityCategory { name: "Workout coach", summary: "Detect calendar workout entries such as Arme, record sets/reps/weights, estimate one-repetition personal records, display strength progression and share persistent rest timers between desktop and phone.", tools: &["manage_workout"] },
+    CapabilityCategory { name: "Worldwide phone and remote PC", summary: "Token-protected mobile satellite with local and public HTTPS pairing URLs and QR codes; live CPU/GPU/process telemetry; remote locking, sleep, protocol execution and configured Wake-on-LAN. Internet access requires an active tunnel; waking a sleeping host requires another reachable device or relay.", tools: &["get_remote_pc_status", "control_remote_pc", "manage_remote_node", "manage_location_settings", "beam_to_device", "scan_with_phone", "teleport_content"] },
+    CapabilityCategory { name: "Communication and contacts", summary: "Configured email and WhatsApp inboxes, summaries, search, contacts, explicit messages/replies, unified inbox and auto-responder controls.", tools: &["check_unread_emails", "summarize_email", "search_emails", "send_whatsapp_message", "check_whatsapp_messages", "reply_to_last_whatsapp", "manage_contacts", "check_all_communications", "set_auto_responder"] },
+    CapabilityCategory { name: "Stark protocols, macros and reminders", summary: "Create and run saved app/music/window protocols, capture workspaces, teach multi-step voice macros, set reminders and timers, select spoken/text response modes and control the assistant lifecycle.", tools: &["manage_stark_protocol", "manage_voice_macro", "reminders", "set_response_modality", "control_jarvis_lifecycle", "shutdown_jarvis"] },
+    CapabilityCategory { name: "Memory and learned skills", summary: "Store and recall facts, search conversation history, manage persistent skills and execute installed skill tools.", tools: &["remember_fact", "recall_memories", "delete_memory", "search_conversation", "create_skill", "execute_skill", "create_persistent_skill", "run_custom_skill", "list_skills", "delete_skill"] },
+    CapabilityCategory { name: "Files, code and automation", summary: "Locate/read/write/edit files, undo edits, search source contents, run commands, generate projects, inspect source, apply self-improvements and perform reversible folder cleanup.", tools: &["find_files", "read_text_file", "create_or_overwrite_file", "edit_file_surgical", "undo_last_file_edit", "search_inside_files", "run_shell_command", "spawn_coding_project", "patch_own_source", "smart_folder_cleanup", "undo_last_cleanup", "run_sandbox_calculation_or_script", "diagnose_minecraft_or_server"] },
+    CapabilityCategory { name: "Web, research and locations", summary: "Web search and page reading, connected websites, background research, location-aware weather, nearby places, routes and commute checks, network diagnosis and price watches.", tools: &["web_search", "read_webpage", "open_website", "query_connected_website", "start_background_research", "get_precise_location_weather", "find_nearby_places_or_route", "check_ride_and_commute_status", "diagnose_network_and_ping", "manage_price_sniper"] },
+    CapabilityCategory { name: "Visual tools, media and analysis", summary: "Native widgets and windows, a self-configuring HUD (panels, zen mode, resizable 3D sphere orb, text and window size) and live real-file project graph, interactive simulations, calculation, code/idea analysis, supported media extraction, instant replay and local finance/goal tracking.", tools: &["create_or_update_widget", "remove_widget", "spawn_native_window", "close_native_window", "customize_hud_and_windows", "configure_interface", "control_jarvis_interface", "launch_interactive_simulation", "adjust_simulation", "calculate", "stress_test_idea_or_code", "download_or_extract_media", "save_instant_replay", "manage_finances_and_goals", "list_jarvis_features"] },
+];
+
+fn capability_tool_definition() -> Value {
+    json!({"type":"function","function":{
+        "name":"list_jarvis_features",
+        "description":"Report actual Jarvis capabilities, registered tools, saved protocols, voice macros and installed skills. Use this for 'What can you do?', feature lists and capability questions such as 'Can you play a specific playlist?' without executing those actions.",
+        "parameters":{"type":"object","properties":{"topic":{"type":"string","description":"Optional capability topic, for example music, calendar, phone or workout"}},"required":[]}
+    }})
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ToolOutcome {
+    pub tool: String,
+    pub args: Value,
+    pub output: String,
+    pub success: bool,
+    pub duration_ms: u64,
+    #[serde(skip)]
+    pub memories_changed: bool,
+    #[serde(skip)]
+    pub skills_changed: bool,
+    /// Sir told Jarvis to quit; the app exits once the reply has been spoken.
+    #[serde(skip)]
+    pub shutdown_requested: bool,
+    /// The voice response mode changed (the rest of the turn follows the new one).
+    #[serde(skip)]
+    pub modality_changed: bool,
+    /// Sleep mode or the voice mute changed.
+    #[serde(skip)]
+    pub state_changed: bool,
+}
+
+#[derive(Clone)]
+pub struct ToolContext {
+    pub memory: MemoryManager,
+    pub skills: SkillManager,
+    pub monitor: SystemMonitor,
+    /// Jarvis' own voice loudness (0-200 %), separate from the system volume.
+    pub voice_volume: Arc<AtomicU8>,
+    /// Live settings; `configure_interface` restyles the HUD through them.
+    pub config: ConfigStore,
+    /// When Jarvis answers out loud.
+    pub modality: ModalityStore,
+    /// Dynamic widgets and extra native windows.
+    pub widgets: WidgetEngine,
+    pub reminders: ReminderStore,
+    pub protocols: ProtocolStore,
+    /// Jarvis' speaking rate (f32 bits, 0.5-2.0), applied live by the TTS.
+    pub voice_speed: Arc<AtomicU32>,
+    /// What "it", "that", "full screen" and "close it" refer to.
+    pub focus: FocusTracker,
+    /// Playlists, songs and the media session.
+    pub music: MusicEngine,
+    /// The personal manager: e-mail, calendar, WebUntis, itslearning, web connectors, watchers.
+    pub pim: Pim,
+    pub workout: crate::workout_coach::WorkoutCoach,
+    /// Context graph, contacts, WhatsApp, inbox, macros, hivemind, location and the Simulation Lab.
+    pub stark: crate::stark::StarkSystems,
+}
+
+/// Names small models invent for real tools ("open_app", "search_web", "set_timer" …).
+fn canonical_tool_name(name: &str, known: &[String]) -> Option<String> {
+    let n = name.trim().to_lowercase().replace(['-', ' ', '.'], "_");
+    if known.contains(&n) {
+        return Some(n);
+    }
+    let alias = match n.as_str() {
+        "open_app" | "launch_app" | "launch_application" | "start_application" | "open" | "launch" | "start_app" | "run_app" => "open_application",
+        "close_app" | "kill_app" | "kill_application" | "quit_application" | "close" | "terminate_application" => "close_application",
+        "search" | "search_web" | "websearch" | "google" | "internet_search" | "web" => "web_search",
+        "read_url" | "fetch_url" | "fetch_webpage" | "read_page" | "get_webpage" => "read_webpage",
+        "open_url" | "open_site" | "open_web" | "browse" | "browse_to" | "navigate" | "go_to_website" | "open_channel" | "open_profile"
+        | "youtube_search" | "search_youtube" | "site_search" | "website" => "open_website",
+        "read_file" | "open_text_file" | "view_file" | "cat" | "show_file" => "read_text_file",
+        "write_file" | "create_file" | "save_file" | "overwrite_file" | "new_file" => "create_or_overwrite_file",
+        "edit_file" | "modify_file" | "patch_file" | "replace_in_file" | "change_file" | "edit_code" => "edit_file_surgical",
+        "undo_edit" | "revert_file" | "undo_file_edit" | "undo" | "restore_file" => "undo_last_file_edit",
+        "grep" | "search_in_files" | "find_in_files" | "search_file_contents" | "search_code" | "grep_files" => "search_inside_files",
+        "fullscreen" | "maximize_window" | "minimize_window" | "window" | "snap_window" => "window_management",
+        "customize_hud" | "customize_window" | "style_window" | "restyle_window" | "theme_window" => "customize_hud_and_windows",
+        "control_interface" | "interface_layout" | "hide_panel" | "show_panel" | "declutter" | "declutter_interface" | "clean_up_interface"
+        | "control_ui" | "ui_layout" | "zen_mode" | "orb_size" | "set_orb_size" | "control_jarvis_ui" => "control_jarvis_interface",
+        "orb_mode" | "pure_orb_mode" | "orb_only" | "set_orb_mode" | "toggle_orb_mode" => "control_orb_mode",
+        "gui_aspect" | "set_gui" | "gui_config" | "control_gui" | "set_gui_aspect" | "gui_master_config" => "control_gui_aspect",
+        "mixer" | "audio_mixer" | "volume_mixer" | "app_volume" | "set_app_volume" | "mute_app" => "control_audio_mixer",
+        "listening_mode" | "hands_free" | "wake_word_mode" | "set_wake_word" | "handsfree_mode" => "set_listening_mode",
+        "shutdown" | "quit" | "exit" | "exit_jarvis" | "quit_jarvis" | "shutdown_self" | "close_jarvis" | "stop_jarvis" => "shutdown_jarvis",
+        "remember" | "save_memory" | "store_memory" | "save_fact" | "add_memory" | "memorize" => "remember_fact",
+        "recall" | "search_memory" | "get_memories" | "memory_search" => "recall_memories",
+        "create_widget" | "add_widget" | "update_widget" | "widget" | "make_widget" => "create_or_update_widget",
+        "delete_widget" | "remove_widgets" => "remove_widget",
+        "open_window" | "new_window" | "create_window" | "spawn_window" | "show_window" => "spawn_native_window",
+        "close_window" | "close_jarvis_window" => "close_native_window",
+        "set_reminder" | "remind" | "remind_me" | "create_reminder" | "add_reminder" | "list_reminders" | "cancel_reminder" => "reminders",
+        "set_timer" | "timer" | "start_timer" => "create_or_update_widget",
+        "calculator" | "calc" | "math" | "compute" | "convert" | "convert_units" | "unit_conversion" => "calculate",
+        "briefing" | "morning_briefing" | "daily_brief" | "status_report" | "daily_briefing" | "executive_briefing" | "stark_briefing" | "day_briefing" => {
+            "run_executive_briefing"
+        }
+        "check_email" | "check_emails" | "read_email" | "read_emails" | "emails" | "inbox" | "check_inbox" | "unread_emails" | "get_emails" => "check_unread_emails",
+        "email_summary" | "summarise_email" | "read_mail" => "summarize_email",
+        "find_email" | "find_emails" | "search_mail" | "search_inbox" => "search_emails",
+        "calendar" | "get_calendar" | "schedule" | "get_schedule" | "calendar_events" | "my_calendar" | "agenda" => "get_calendar_schedule",
+        "add_event" | "create_event" | "add_calendar_event" | "schedule_event" | "new_event" | "add_appointment" => "create_calendar_event",
+        "delete_event" | "move_event" | "reschedule_event" | "update_event" | "cancel_event" | "edit_event" | "delete_calendar_event" => {
+            "modify_or_delete_calendar_event"
+        }
+        "timetable" | "school_schedule" | "webuntis" | "stundenplan" | "check_timetable" | "school_timetable" | "get_timetable" => "check_school_schedule",
+        "itslearning" | "course_updates" | "check_courses" | "lms" | "get_course_updates" => "check_course_updates",
+        "query_website" | "connected_website" | "web_connector" | "check_website" | "read_connected_site" => "query_connected_website",
+        "study_sync" | "sync_deadlines" | "organize_study_files" | "summarize_worksheet" | "study_assistant" | "sync_study_materials" => {
+            "sync_study_materials_and_deadlines"
+        }
+        "watch_schedule" | "schedule_watcher" | "change_notifier" | "watcher" | "watch_service" => "manage_schedule_watcher",
+        "productivity_settings" | "integrations" | "configure_service" | "integration_settings" | "productivity_hub" => "configure_productivity_service",
+        "run_protocol" | "engage_protocol" | "create_protocol" | "protocol" | "protocols" | "stark_protocol" | "execute_protocol" | "save_workspace"
+        | "capture_workspace" => "manage_stark_protocol",
+        "focus" | "start_focus" | "focus_session" => "focus_mode",
+        "get_clipboard" | "read_clipboard" | "copy" | "copy_to_clipboard" | "set_clipboard" => "clipboard",
+        "screen" | "ocr" | "read_window" | "screenshot_text" | "look_at_screen" | "read_screen" | "inspect_screen" | "read_selection" | "vision"
+        | "screen_vision" => "inspect_screen_or_selection",
+        "play_music" | "music" | "play_song" | "play_playlist" | "spotify" | "play" | "music_control" | "pause_music" | "now_playing" => "control_music",
+        "move_window" | "move_to_monitor" | "move_app_to_monitor" | "monitor_move" | "move_to_screen" => "move_window_to_monitor",
+        "find_file" | "search_files" | "locate_file" | "file_search" | "open_file" => "find_files",
+        "conversation_history" | "search_history" | "recall_conversation" => "search_conversation",
+        "network" | "ping" | "internet_status" | "check_internet" | "ip_address" => "network_status",
+        "processes" | "list_processes" | "task_manager" | "system_processes" => "top_processes",
+        "volume" | "set_volume" | "media" | "media_control" => "media_and_volume_control",
+        "system_status" | "status" | "system_info" | "telemetry" => "get_system_status",
+        "shell" | "run_command" | "powershell" | "bash" | "terminal" | "execute_command" => "run_shell_command",
+        "lifecycle" | "restart" | "sleep" | "mute" => "control_jarvis_lifecycle",
+        "set_mode" | "response_mode" | "modality" | "set_modality" => "set_response_modality",
+        "whatsapp" | "send_whatsapp" | "whatsapp_message" | "send_message" | "message" | "text_message" | "send_text" => "send_whatsapp_message",
+        "read_whatsapp" | "whatsapp_messages" | "check_whatsapp" | "get_whatsapp" | "whatsapp_inbox" => "check_whatsapp_messages",
+        "reply_whatsapp" | "reply" | "reply_to_message" | "whatsapp_reply" => "reply_to_last_whatsapp",
+        "contacts" | "add_contact" | "save_contact" | "contact" | "find_contact" => "manage_contacts",
+        "check_messages" | "all_messages" | "omni_inbox" | "check_communications" | "messages" => "check_all_communications",
+        "auto_reply" | "autoresponder" | "auto_responder" | "away_message" | "do_not_disturb" => "set_auto_responder",
+        "teleport" | "send_content" | "share" | "forward" => "teleport_content",
+        "macro" | "create_macro" | "voice_macro" | "routine" | "run_macro" => "manage_voice_macro",
+        "remote_node" | "ssh" | "server" | "node" | "remote" | "pi" | "raspberry_pi" | "minecraft_server" | "hivemind" => "manage_remote_node",
+        "weather_here" | "local_weather" | "gps_weather" | "precise_weather" | "location_weather" | "forecast" => "get_precise_location_weather",
+        "nearby" | "find_nearby" | "places" | "route" | "directions" | "where_am_i" | "nearby_places" | "distance" => "find_nearby_places_or_route",
+        "commute" | "ride_check" | "ride" | "commute_status" | "when_to_leave" | "departure" => "check_ride_and_commute_status",
+        "location_settings" | "set_home" | "geofence" | "satellite" => "manage_location_settings",
+        "simulate" | "simulation" | "plot" | "plot_function" | "graph_function" | "physics_simulation" | "simulation_lab" => "launch_interactive_simulation",
+        "update_simulation" | "change_simulation" | "set_simulation" | "simulation_parameters" => "adjust_simulation",
+        "features" | "capabilities" | "help" | "what_can_you_do" | "list_features" => "list_jarvis_features",
+        "workout" | "gym" | "log_workout" | "personal_records" | "rest_timer" => "manage_workout",
+        "open_view" | "jarvis_view" | "open_subwindow" | "spawn_jarvis_subwindow" | "open_system_stats" | "system_monitor" | "open_panel_window" => {
+            "open_jarvis_view"
+        }
+        _ => "",
+    };
+    if !alias.is_empty() {
+        return Some(alias.to_string());
+    }
+    known
+        .iter()
+        .map(|k| (k, strsim::jaro_winkler(&n, k)))
+        .filter(|(_, s)| *s >= 0.92)
+        .max_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(k, _)| k.clone())
+}
+
+/// Tools whose execution takes long enough that Jarvis should acknowledge first.
+pub fn is_slow(tool: &str) -> bool {
+    matches!(
+        tool,
+        "web_search" | "read_webpage" | "run_shell_command" | "create_skill" | "execute_skill" | "create_persistent_skill" | "run_custom_skill"
+            | "patch_own_source" | "search_inside_files"
+    ) || tool.starts_with("skill_")
+        || pim::is_slow(tool)
+        || crate::stark::is_slow(tool)
+}
+
+/// "Close Jarvis" / "close yourself" means quitting this app, not killing a process.
+pub(crate) fn names_jarvis(app: &str) -> bool {
+    let n: String = app.to_lowercase().chars().filter(|c| c.is_alphanumeric() || *c == ' ').collect();
+    let n = n.trim();
+    let n = n.strip_prefix("the ").unwrap_or(n);
+    matches!(
+        n,
+        "jarvis" | "jarvisexe" | "jarvis app" | "yourself" | "you" | "your app" | "your application" | "your program"
+            | "your process" | "your window" | "assistant" | "jarvis assistant" | "dich" | "dich selbst" | "urself" | "ur self"
+            | "your self" | "yourselfe" | "yo self" | "self"
+    )
+}
+
+/// The first '…'-quoted part of a tool result ("Opened native window 'window_2' …" → window_2).
+fn quoted(s: &str) -> &str {
+    s.split('\'').nth(1).unwrap_or("")
+}
+
+pub(crate) fn str_arg<'a>(args: &'a Value, keys: &[&str]) -> Option<&'a str> {
+    keys.iter()
+        .find_map(|k| args.get(*k).and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+}
+
+pub(crate) fn int_arg(args: &Value, key: &str) -> Option<i64> {
+    match args.get(key)? {
+        Value::Number(n) => n.as_i64().or_else(|| n.as_f64().map(|f| f.round() as i64)),
+        Value::String(s) => s.trim().trim_end_matches('%').trim().parse().ok(),
+        _ => None,
+    }
+}
+
+pub(crate) fn bool_arg(args: &Value, key: &str) -> Option<bool> {
+    match args.get(key)? {
+        Value::Bool(b) => Some(*b),
+        Value::String(s) => match s.to_lowercase().as_str() {
+            "true" | "yes" | "1" => Some(true),
+            "false" | "no" | "0" => Some(false),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Every tool definition, Sir's learned `skills` in their stable slot.
+pub fn definitions_with(skills: Vec<Value>) -> Vec<Value> {
+    let mut tools = MemoryManager::tool_definitions();
+    tools.push(memory::conversation_tool_definition());
+    tools.extend(pc_tool_definitions());
+    tools.push(monitors::tool_definition());
+    tools.push(music::tool_definition());
+    tools.extend(assistant_tool_definitions());
+    tools.extend(pim::tool_definitions());
+    tools.extend(crate::stark::tool_definitions());
+    tools.extend(widgets::tool_definitions());
+    tools.extend(protocols::tool_definitions());
+    tools.extend(self_improve::tool_definitions());
+    tools.extend(skills);
+    tools.push(capability_tool_definition());
+    tools.push(crate::workout_coach::tool_definition());
+    tools.push(crate::jarvis_views::tool_definition());
+    tools.extend(crate::remote_guardian::definitions());
+    // Spatial computing: VRAM guard, deep research, the workspace windows and their profiles.
+    tools.extend(crate::vram_guard::definitions());
+    tools.extend(crate::deep_research_engine::definitions());
+    tools.extend(crate::workspace_canvas::definitions());
+    tools.extend(crate::spatial_scenes::definitions());
+    tools.extend(crate::intent_engine::definitions());
+    tools.extend(crate::dynamic_popups::definitions());
+    tools.extend(crate::tool_forge::definitions());
+    tools.extend(crate::hud_board::definitions());
+    tools.extend(crate::venue_guide::definitions());
+    tools.extend(crate::discord_bridge::definitions());
+    tools.extend(crate::shadow_memory::definitions());
+    tools.extend(crate::aegis_server_deck::definitions());
+    tools.extend(crate::llm_reboot::definitions());
+    tools
+}
+
+impl ToolContext {
+    pub fn feature_manifest(&self, topic: Option<&str>) -> String {
+        let topic = topic.unwrap_or("").trim().to_lowercase();
+        if ["music", "playlist", "song", "sonora", "spotify"].iter().any(|word| topic.contains(word)) {
+            return "Certainly, Sir. I can play a specific playlist or track using Sonora or Spotify, including a song within a named playlist. Tell me the name, for example 'Play JaysRock', 'Play Back in Black in JaysRock', or 'Play Highway to Hell'. I search the local library and known playlists first, and can open a Spotify search when needed. I can also pause, resume, skip, adjust volume and report what is playing. Playback requires an available player and a matching local file or accessible streaming result.".into();
+        }
+        let definitions = self.definitions();
+        let mut shown = std::collections::HashSet::new();
+        let mut output = String::from("Certainly, Sir. These are my implemented capabilities. Connected services need their corresponding account/configuration.\n");
+        for category in JARVIS_CAPABILITY_MANIFEST {
+            if !topic.is_empty() && !category.name.to_lowercase().contains(&topic) && !category.summary.to_lowercase().contains(&topic) { continue; }
+            // Sir reads (and hears) this: the area and its summary, never raw tool identifiers or
+            // their model-facing descriptions.
+            output.push_str(&format!("\n{}: {}\n", category.name, category.summary));
+            for def in &definitions {
+                let Some(name) = def["function"]["name"].as_str() else { continue };
+                if category.tools.contains(&name) {
+                    shown.insert(name.to_string());
+                }
+            }
+        }
+        if topic.is_empty() {
+            let other: Vec<_> = definitions.iter().filter_map(|def| {
+                let name = def["function"]["name"].as_str()?;
+                (!shown.contains(name)).then(|| name.trim_start_matches("skill_").replace('_', " "))
+            }).collect();
+            if !other.is_empty() { output.push_str(&format!("\nAlso installed: {}.\n", other.join(", "))); }
+        }
+        if topic.is_empty() || ["protocol", "macro", "voice", "skill"].iter().any(|word| topic.contains(word)) {
+            let protocols = self.protocols.list();
+            output.push_str(&format!("\nSaved Stark protocols: {}.\n", if protocols.is_empty() { "none".into() } else { protocols.iter().map(|p| p.name.clone()).collect::<Vec<_>>().join(", ") }));
+            for item in self.stark.macros.list() {
+                output.push_str(&format!("Voice macro '{}': triggers [{}]; steps: {}.\n", item.name, item.trigger_phrases.join(", "), item.steps.join(" → ")));
+            }
+            output.push_str("Welcome protocol triggers: wake up daddy's home; daddy's home; jarvis wake up; i'm home jarvis; i am back.\n");
+        }
+        if !topic.is_empty() && shown.is_empty() {
+            output.push_str("No registered capability matched that topic. Ask for all features to see the complete registry.\n");
+        }
+        output
+    }
+
+    /// Stable order: memory, PC control, widgets/windows, self-improvement, skills. Stability
+    /// keeps Ollama's prompt cache warm.
+    pub fn definitions(&self) -> Vec<Value> {
+        definitions_with(self.skills.tool_definitions())
+    }
+
+    pub async fn execute(&self, name: &str, raw_args: &Value) -> ToolOutcome {
+        // Some models send arguments as a JSON string.
+        let mut args = match raw_args {
+            Value::String(s) => serde_json::from_str(s).unwrap_or_else(|_| json!({})),
+            Value::Null => json!({}),
+            other => other.clone(),
+        };
+        // A misspelled or invented tool name still reaches the right tool.
+        let known: Vec<String> = self
+            .definitions()
+            .iter()
+            .filter_map(|d| d["function"]["name"].as_str().map(String::from))
+            .chain(["shutdown_jarvis", "create_skill", "execute_skill", "place_application_window"].map(String::from))
+            .collect();
+        let repaired = canonical_tool_name(name, &known);
+        if let Some(fixed) = repaired.as_deref().filter(|f| *f != name) {
+            warn!("[TOOL] '{name}' is not a tool; using '{fixed}'");
+            if matches!(name.to_lowercase().as_str(), "set_timer" | "timer" | "start_timer") {
+                let minutes = args.get("minutes").or_else(|| args.get("duration_minutes")).cloned();
+                if let Some(obj) = args.as_object_mut() {
+                    obj.entry("type").or_insert(json!("CountdownOrStopwatch"));
+                    obj.entry("title").or_insert(json!("Timer"));
+                    if let Some(m) = minutes {
+                        obj.entry("minutes").or_insert(m);
+                    }
+                }
+            }
+        }
+        let name = repaired.as_deref().unwrap_or(name);
+        // Inside the live self-test's dry run the call is recorded, not carried out.
+        if let Some(recorded) = crate::live_self_tester::intercept(name, &args) {
+            return recorded;
+        }
+        crate::core_sphere_3d::pulse("tools.rs");
+        if let Some(module) = crate::core_sphere_3d::CoreActivityBus::module_for_tool(name) {
+            crate::core_sphere_3d::pulse(module);
+        }
+        let started = Instant::now();
+        info!("[TOOL] {name} {args}");
+        let mut memories_changed = false;
+        let mut skills_changed = false;
+        let mut shutdown_requested = false;
+        let mut modality_changed = false;
+        let mut state_changed = false;
+
+        let result: Result<String, String> = match name {
+            "list_jarvis_features" => Ok(self.feature_manifest(str_arg(&args, &["topic"]))),
+            "open_jarvis_view" => crate::jarvis_views::run(self, &args).await,
+            "manage_workout" => crate::workout_coach::run_tool(self, &args),
+            name if crate::remote_guardian::is_tool(name) => crate::remote_guardian::run_tool(self, name, &args).await,
+            name if crate::vram_guard::is_tool(name) => crate::vram_guard::run_tool(&args),
+            name if crate::deep_research_engine::is_tool(name) => crate::deep_research_engine::run_tool(self, &args),
+            name if crate::workspace_canvas::is_tool(name) => crate::workspace_canvas::run_tool(self, name, &args),
+            name if crate::spatial_scenes::is_tool(name) => crate::spatial_scenes::run_tool(self, &args),
+            name if crate::intent_engine::is_tool(name) => crate::intent_engine::run_tool(self, name, &args).await,
+            name if crate::dynamic_popups::is_tool(name) => crate::dynamic_popups::run_tool(name, &args),
+            name if crate::tool_forge::is_tool(name) => Box::pin(crate::tool_forge::run_tool(self, name, &args)).await,
+            name if crate::hud_board::is_tool(name) => crate::hud_board::run_tool(self, &args).await,
+            name if crate::venue_guide::is_tool(name) => Box::pin(crate::venue_guide::run_tool(self, &args)).await,
+            name if crate::discord_bridge::is_tool(name) => Box::pin(crate::discord_bridge::run_tool(self, &args)).await,
+            name if crate::shadow_memory::is_tool(name) => Box::pin(crate::shadow_memory::run_tool(self, &args)).await,
+            name if crate::aegis_server_deck::is_tool(name) => Box::pin(crate::aegis_server_deck::run_tool(self, &args)).await,
+            name if crate::llm_reboot::is_tool(name) => crate::llm_reboot::run_tool().await,
+            "remember_fact" => match (str_arg(&args, &["key", "name"]), str_arg(&args, &["value", "fact"])) {
+                (key, Some(value)) => self
+                    .memory
+                    .remember_fact(key.unwrap_or(""), value, str_arg(&args, &["category"]), int_arg(&args, "importance").map(|i| i as i32))
+                    .map(|o| {
+                        memories_changed = true;
+                        match o.previous_value {
+                            Some(prev) => format!("Updated memory '{}' (was: \"{prev}\"): {}", o.entry.key, o.entry.value),
+                            None => format!("Stored memory '{}' [{}]: {}", o.entry.key, o.entry.category, o.entry.value),
+                        }
+                    })
+                    .map_err(|e| e.to_string()),
+                _ => Err("remember_fact needs a 'value'.".into()),
+            },
+            "recall_memories" => self
+                .memory
+                .recall(str_arg(&args, &["query", "q"]), str_arg(&args, &["category"]), 12)
+                .map(|items| {
+                    if items.is_empty() {
+                        "No matching memories.".to_string()
+                    } else {
+                        items
+                            .iter()
+                            .map(|m| format!("- {} [{}]: {}", m.key, m.category, m.value))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    }
+                })
+                .map_err(|e| e.to_string()),
+            "delete_memory" => match str_arg(&args, &["id_or_key", "key", "id"]) {
+                Some(target) => match self.memory.delete(target) {
+                    Ok(DeleteOutcome::Deleted(v)) => {
+                        memories_changed = true;
+                        Ok(format!(
+                            "Deleted memory: {}",
+                            v.iter().map(|m| format!("{} ({})", m.key, m.value)).collect::<Vec<_>>().join(", ")
+                        ))
+                    }
+                    Ok(DeleteOutcome::Ambiguous(v)) => Err(format!(
+                        "Several memories match '{target}' ({}); ask Sir which one to forget.",
+                        v.iter().map(|m| m.key.as_str()).collect::<Vec<_>>().join(", ")
+                    )),
+                    Ok(DeleteOutcome::NotFound) => Err(format!("No memory matches '{target}'.")),
+                    Err(e) => Err(e.to_string()),
+                },
+                None => Err("delete_memory needs 'id_or_key'.".into()),
+            },
+
+            "create_skill" => self.create_skill(&args).await.inspect(|_| skills_changed = true),
+            "create_persistent_skill" => self.create_persistent_skill(&args).await.inspect(|_| skills_changed = true),
+            "execute_skill" | "run_custom_skill" => match str_arg(&args, &["name", "skill"]) {
+                Some(n) => {
+                    let skill_args = args.get("arguments").or_else(|| args.get("args")).cloned().unwrap_or_else(|| json!({}));
+                    skills_changed = true;
+                    self.skills.execute(n, &skill_args).await.map_err(|e| e.to_string())
+                }
+                None => Err(format!("{name} needs 'name'.")),
+            },
+            "list_skills" => self
+                .skills
+                .list()
+                .map(|list| {
+                    if list.is_empty() {
+                        "No skills learned yet.".to_string()
+                    } else {
+                        list.iter()
+                            .map(|s| format!("- {} ({}): {} [used {}x]", s.name, s.title, s.description, s.usage_count))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    }
+                })
+                .map_err(|e| e.to_string()),
+            "delete_skill" => match str_arg(&args, &["name"]) {
+                Some(n) => self
+                    .skills
+                    .delete(n)
+                    .map_err(|e| e.to_string())
+                    .and_then(|count| {
+                        if count > 0 {
+                            skills_changed = true;
+                            Ok(format!("Deleted skill '{n}'."))
+                        } else {
+                            Err(format!("No skill named '{n}'."))
+                        }
+                    }),
+                None => Err("delete_skill needs 'name'.".into()),
+            },
+
+            // "Open that file (in VS Code)": the file the conversation is about.
+            "open_application" if bool_arg(&args, "open_last_file") == Some(true) => match self.focus.last_file() {
+                Some(path) => {
+                    let with = str_arg(&args, &["with", "open_with"]);
+                    file_ops::open_with(&path, with).await.inspect(|_| {
+                        if let Some(w) = with.filter(|w| !w.eq_ignore_ascii_case("default")) {
+                            self.focus.note_app(w);
+                        }
+                    })
+                }
+                None => Err("I haven't found or edited a file in this conversation yet.".into()),
+            },
+            "open_application" => match str_arg(&args, &["app_name", "name", "app", "application"]) {
+                Some(app) => {
+                    let extra: Vec<String> = args
+                        .get("args")
+                        .and_then(Value::as_array)
+                        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                        .unwrap_or_default();
+                    apps::open(app, &extra).await.inspect(|_| self.focus.note_opened(app))
+                }
+                None => Err("open_application needs 'app_name'.".into()),
+            },
+            "open_website" => sites::open(&args).await.map(|o| {
+                self.focus.note_site(&o.url);
+                o.summary
+            }),
+            "close_application" => match str_arg(&args, &["app_name", "name", "app", "application"]) {
+                Some(app) if names_jarvis(app) => {
+                    shutdown_requested = true;
+                    Ok("That is J.A.R.V.I.S. himself: he shuts down as soon as this reply has been spoken.".into())
+                }
+                // "Close it": the app (or the website's tab) the conversation is about.
+                Some(app) if focus::is_pronoun(app) => self.close_focused(false).await,
+                Some(app) => apps::close(app, bool_arg(&args, "force").unwrap_or(true)).await.inspect(|_| self.focus.forget_app(app)),
+                None => Err("close_application needs 'app_name'.".into()),
+            },
+            "shutdown_jarvis" => {
+                shutdown_requested = true;
+                Ok("J.A.R.V.I.S. shuts down as soon as this reply has been spoken.".into())
+            }
+            "control_jarvis_lifecycle" => {
+                let action = str_arg(&args, &["action", "command"]).unwrap_or("").to_lowercase().replace([' ', '-'], "_");
+                match action.as_str() {
+                    "shutdown_jarvis" | "shutdown" | "shut_down" | "quit" | "exit" | "close" | "power_off" => {
+                        shutdown_requested = true;
+                        Ok("J.A.R.V.I.S. shuts down as soon as this reply has been spoken.".into())
+                    }
+                    "restart_jarvis" | "restart" | "reboot" | "reload" => {
+                        lifecycle::request_restart(Restart::Same);
+                        shutdown_requested = true;
+                        Ok("J.A.R.V.I.S. restarts as soon as this reply has been spoken.".into())
+                    }
+                    "mute_tts" | "mute" | "mute_voice" => {
+                        self.modality.set_voice_muted(true);
+                        state_changed = true;
+                        Ok("Voice muted for this session: replies appear in the chat only.".into())
+                    }
+                    "unmute_tts" | "unmute" | "unmute_voice" => {
+                        self.modality.set_voice_muted(false);
+                        state_changed = true;
+                        Ok("Voice restored.".into())
+                    }
+                    "sleep_mode" | "sleep" | "standby" => {
+                        lifecycle::set_sleeping(true);
+                        // "Go to sleep": the GPU goes back to Sir at once.
+                        crate::vram_guard::flush_with_reason("sleep mode");
+                        state_changed = true;
+                        Ok("Sleep mode: J.A.R.V.I.S. ignores everything except \"wake up\".".into())
+                    }
+                    "wake_up" | "wake" | "awake" => {
+                        lifecycle::set_sleeping(false);
+                        state_changed = true;
+                        Ok("Awake again.".into())
+                    }
+                    other => Err(format!(
+                        "Unknown lifecycle action '{other}' (shutdown_jarvis, restart_jarvis, mute_tts, unmute_tts, sleep_mode, wake_up)."
+                    )),
+                }
+            }
+            "set_response_modality" => {
+                let mode = str_arg(&args, &["mode", "modality"]).unwrap_or("mirror_input");
+                let condition = str_arg(&args, &["custom_condition", "condition", "rule"]);
+                match VoiceResponseMode::from_parts(mode, condition) {
+                    Some(m) => {
+                        self.modality.set(m.clone());
+                        modality_changed = true;
+                        Ok(format!("Voice response mode is now {}.", m.display()))
+                    }
+                    None => Err(format!("Unknown response mode '{mode}' (mirror_input, always_speak, text_only, custom_condition).")),
+                }
+            }
+            "create_or_update_widget" => self.widgets.create_or_update(&args).inspect(|_| gui::refresh()),
+            "remove_widget" => self.widgets.remove_tool(&args).inspect(|_| gui::refresh()),
+            "spawn_native_window" => {
+                if gui::windows_supported() {
+                    self.widgets.spawn_window(&args).inspect(|out| {
+                        self.focus.note_jarvis_window(quoted(out));
+                        gui::sync_windows();
+                    })
+                } else {
+                    Err("Jarvis is running without a display (headless), so he cannot open windows.".into())
+                }
+            }
+            "update_native_window" => {
+                // "That window", "it": the Jarvis window the conversation is about, else the newest.
+                let raw = str_arg(&args, &["id", "window_id"]).unwrap_or("last").to_string();
+                let pronoun = raw == "focus" || focus::is_pronoun(&raw);
+                // "Make it bigger" right after moving Discord: Discord, not one of Jarvis' windows.
+                let size = str_arg(&args, &["size"]).map(str::to_lowercase);
+                if let (true, Some(size), None, Some(_)) = (pronoun, size.as_deref(), self.focus.jarvis_window_is_latest(), self.focus.focused_app()) {
+                    let action = if size.contains("small") || size.contains("klein") || size == "half" { WindowAction::Smaller } else { WindowAction::Bigger };
+                    return Box::pin(self.execute("window_management", &json!({ "action": if action == WindowAction::Bigger { "bigger" } else { "smaller" } }))).await;
+                }
+                if pronoun {
+                    let id = self
+                        .focus
+                        .snapshot()
+                        .last_active_jarvis_window_id
+                        .filter(|id| self.widgets.find_window_named(id).is_some())
+                        .unwrap_or_else(|| "last".into());
+                    if let Some(o) = args.as_object_mut() {
+                        o.insert("id".into(), json!(id));
+                    }
+                }
+                self.widgets.update_window(&args).inspect(|out| {
+                    self.focus.note_jarvis_window(quoted(out));
+                    gui::sync_windows();
+                })
+            }
+            "close_native_window" => {
+                let id = str_arg(&args, &["id", "window_id", "title"]).unwrap_or("last");
+                let fallback = bool_arg(&args, "fallback_to_active_window").unwrap_or(false);
+                // "Close that window" right after "open Discord" means Discord's window; Jarvis'
+                // own window only when it was the latest thing in focus.
+                if fallback && id == "last" && self.focus.jarvis_window_is_latest().is_none() && self.focus.focused_app().is_some() {
+                    self.close_focused(true).await
+                } else {
+                    match self.widgets.close_window(id) {
+                        Ok(out) => {
+                            self.focus.forget_jarvis_window(id);
+                            gui::refresh();
+                            Ok(out)
+                        }
+                        // No Jarvis window open: the window Sir is working in (never the HUD).
+                        Err(_) if fallback => self.close_focused(true).await,
+                        Err(e) => Err(e),
+                    }
+                }
+            }
+            "customize_hud_and_windows" => self.customize(&args),
+            "inspect_own_source" => self_improve::inspect(&args),
+            "patch_own_source" => self_improve::patch(&args).await,
+            "restore_source_backup" => self_improve::restore_backup(&args),
+            "recompile_and_restart" => self_improve::recompile_and_restart(&args),
+            "configure_interface" => self.configure_interface(&args),
+            "control_jarvis_interface" => self.control_interface(&args),
+            "control_orb_mode" => self.orb_mode(&args),
+            "control_gui_aspect" => self.gui_aspect(&args),
+            "control_audio_mixer" => crate::audio_mixer::tool(&args).await,
+            "set_listening_mode" => {
+                let mode = str_arg(&args, &["mode", "listening_mode"]).unwrap_or("").to_lowercase().replace([' ', '-'], "_");
+                let required = match mode.as_str() {
+                    "hands_free" | "handsfree" | "always" | "open" | "freisprech" | "freisprechmodus" => Some(false),
+                    "wake_word" | "wakeword" | "wake" | "keyword" | "only_jarvis" | "aktivierungswort" => Some(true),
+                    _ => bool_arg(&args, "wake_word_required"),
+                };
+                match required {
+                    Some(required) => {
+                        self.config.update(|c| c.wake_word_required = required);
+                        state_changed = true;
+                        Ok(if required {
+                            "Listening mode: WAKE-WORD. Jarvis only answers when Sir says \"Jarvis\" (anywhere in the sentence).".to_string()
+                        } else {
+                            "Listening mode: HANDS-FREE. Jarvis answers relevant speech without the wake word; background talk, humming and fragments are ignored.".to_string()
+                        })
+                    }
+                    None => Err("set_listening_mode needs mode: hands_free or wake_word.".into()),
+                }
+            }
+            "window_management" => match str_arg(&args, &["action"]).and_then(WindowAction::parse) {
+                Some(action) => {
+                    let named = str_arg(&args, &["target_window", "target", "app_name"]);
+                    let unnamed = named.is_none_or(focus::is_pronoun);
+                    if named.is_some_and(names_jarvis) {
+                        // "Maximize Jarvis", "fullscreen yourself": only when Sir says so.
+                        self.hud_window(action)
+                    } else if action == WindowAction::ExitFullscreen && unnamed && self.config.read(|c| c.interface.fullscreen) {
+                        // Jarvis is the one in full screen.
+                        self.hud_window(action)
+                    } else {
+                        self.window_action(action, named).await
+                    }
+                }
+                None => Err("window_management needs a valid 'action'.".into()),
+            },
+            "media_and_volume_control" => self.media(&args).await,
+            "get_system_status" => Ok(self.monitor.latest().summary()),
+            "get_current_datetime" => {
+                let now = chrono::Local::now();
+                Ok(format!("Local time {} on {}.", now.format("%H:%M"), now.format("%A, %-d %B %Y")))
+            }
+            "run_shell_command" => match str_arg(&args, &["command", "cmd"]) {
+                Some(c) => shell::run(c).await.map(|r| match r.exit_code {
+                    Some(0) => r.output,
+                    code => format!("(exit code {}) {}", code.unwrap_or(-1), r.output),
+                }),
+                None => Err("run_shell_command needs 'command'.".into()),
+            },
+            "web_search" => match str_arg(&args, &["query", "q", "search"]) {
+                Some(q) => {
+                    // Weather without a place means Sir's home town, when memory knows it.
+                    websearch::set_home_location(websearch::place_from_memories(&self.memory.list(200).unwrap_or_default()));
+                    websearch::search(q).await
+                }
+                None => Err("web_search needs 'query'.".into()),
+            },
+            "reminders" => {
+                let out = self.reminders.tool(&args);
+                gui::refresh();
+                out
+            }
+            "calculate" => match str_arg(&args, &["expression", "query", "input", "math"]) {
+                Some(e) => calc::tool(e),
+                None => Err("calculate needs 'expression'.".into()),
+            },
+            "manage_stark_protocol" | "protocols" => {
+                let (out, effects) = self.protocols_tool(&args).await;
+                modality_changed |= effects.0;
+                state_changed |= effects.1;
+                shutdown_requested |= effects.2;
+                out
+            }
+            "focus_mode" => {
+                let action = str_arg(&args, &["action"]).unwrap_or("start").to_lowercase();
+                modality_changed = true;
+                if matches!(action.as_str(), "stop" | "end" | "cancel") {
+                    self.protocols.end_focus(&self.modality, &self.widgets).ok_or_else(|| "Focus mode is not active.".to_string())
+                } else {
+                    let minutes = args.get("minutes").and_then(|v| v.as_f64().or_else(|| v.as_str()?.parse().ok())).unwrap_or(25.0);
+                    self.protocols.start_focus(minutes, &self.modality, &self.widgets).inspect(|_| gui::refresh())
+                }
+            }
+            "clipboard" => clipboard::tool(&args).await,
+            "read_screen" => screen::read(screen::Scope::parse(str_arg(&args, &["scope", "target"]).unwrap_or("active_window"))).await,
+            "inspect_screen_or_selection" => screen::inspect(&args, self.focus.foreground().map(|w| w.handle).filter(|h| *h != 0)).await,
+            "control_music" => self.music.control(&args).await.inspect(|_| {
+                if matches!(str_arg(&args, &["action"]).unwrap_or("play"), "play" | "start" | "resume") {
+                    self.focus.note_app("spotify");
+                }
+            }),
+            "move_window_to_monitor" => self.move_to_monitor(&args).await,
+            "place_application_window" => self.place_app(&args).await,
+            "find_files" => file_ops::find_tool(&args).await.map(|o| {
+                if let Some(p) = &o.path {
+                    self.focus.note_file(p);
+                }
+                o.text
+            }),
+            "search_inside_files" => file_ops::grep_tool(&args, self.focus_dir()).await,
+            "read_text_file" => file_ops::read_tool(&args, self.focus_dir().as_deref()).await.map(|o| {
+                if let Some(p) = &o.path {
+                    self.focus.note_file(p);
+                }
+                o.text
+            }),
+            "create_or_overwrite_file" => self.after_file_write(file_ops::write_tool(&args, self.focus_dir().as_deref()).await, &args),
+            "edit_file_surgical" => self.after_file_write(file_ops::edit_tool(&args, self.focus_dir().as_deref()).await, &args),
+            "undo_last_file_edit" => self.after_file_write(file_ops::undo_tool(&args, self.focus.last_file()).await, &args),
+            "search_conversation" => memory::conversation_tool(&self.memory, &args),
+            "network_status" => Ok(diagnostics::network_status(&self.monitor.latest()).await),
+            "top_processes" => {
+                let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(5).clamp(1, 15) as usize;
+                tokio::task::spawn_blocking(diagnostics::top_processes)
+                    .await
+                    .map(|list| diagnostics::processes_report(&list, limit))
+                    .map_err(|e| e.to_string())
+            }
+            "read_webpage" => match str_arg(&args, &["url", "link", "address"]) {
+                Some(u) => websearch::read_webpage(u).await,
+                None => Err("read_webpage needs 'url'.".into()),
+            },
+            pim_tool if pim::is_pim_tool(pim_tool) => pim::run_tool(self, pim_tool, &args).await,
+            stark_tool if crate::stark::is_stark_tool(stark_tool) => crate::stark::run_tool(self, stark_tool, &args).await,
+            other => {
+                let skill_name = other.strip_prefix("skill_").unwrap_or(other);
+                match self.skills.get(skill_name) {
+                    Ok(Some(_)) => {
+                        skills_changed = true;
+                        self.skills.execute(skill_name, &args).await.map_err(|e| e.to_string())
+                    }
+                    _ => Err(format!("Unknown tool '{other}'.")),
+                }
+            }
+        };
+
+        let duration_ms = started.elapsed().as_millis() as u64;
+        match result {
+            Ok(output) => {
+                info!("[TOOL] {name} succeeded in {duration_ms} ms");
+                let outcome = ToolOutcome {
+                    tool: name.to_string(),
+                    args,
+                    output,
+                    success: true,
+                    duration_ms,
+                    memories_changed,
+                    skills_changed,
+                    shutdown_requested,
+                    modality_changed,
+                    state_changed,
+                };
+                // What "that", "him" and "the day after" refer to from now on.
+                self.stark.graph.observe_tool(&outcome, self.focus.focused_app());
+                outcome
+            }
+            Err(err) => {
+                warn!("[TOOL] {name} failed in {duration_ms} ms: {err}");
+                ToolOutcome {
+                    tool: name.to_string(),
+                    args,
+                    output: format!("Error: {err}"),
+                    success: false,
+                    duration_ms,
+                    memories_changed: false,
+                    skills_changed: false,
+                    shutdown_requested: false,
+                    modality_changed: false,
+                    state_changed: false,
+                }
+            }
+        }
+    }
+
+    fn configure_interface(&self, args: &Value) -> Result<String, String> {
+        let current = self.config.read(|c| c.interface.clone());
+        interface::configure(&current, args).and_then(|done| {
+            if done.settings != current {
+                self.config.update(|c| c.interface = done.settings.clone());
+            }
+            if bool_arg(args, "open_settings") == Some(true) {
+                gui::open_interface_settings();
+            }
+            if let Some(open) = bool_arg(args, "text_console") {
+                gui::set_text_console(open);
+            }
+            if let Some(open) = bool_arg(args, "core_view") {
+                gui::core_command(crate::core_sphere_3d::CoreCommand::Open(open));
+            }
+            if let Some(cmd) = interface::core_command(args) {
+                gui::core_command(cmd);
+            }
+            if bool_arg(args, "dock_windows") == Some(true) {
+                crate::hud_dock::dock_all();
+            }
+            if let Some(name) = str_arg(args, &["detach_window"]) {
+                crate::hud_dock::detach_named(name)?;
+            }
+            if let Some(mode) = str_arg(args, &["hud_view"]).and_then(crate::hud_dock::HudViewMode::parse) {
+                crate::hud_dock::request_view(mode);
+            }
+            match done.window {
+                Some(command) => gui::window_command(command)?,
+                // Restyling brings the HUD up so Sir sees the result.
+                None => gui::show(),
+            }
+            Ok(done.summary)
+        })
+    }
+
+    /// `control_jarvis_interface`: the HUD's live layout (panels, zen mode, orb and text size,
+    /// window size). The window picks the new settings up on its next frame.
+    fn control_interface(&self, args: &Value) -> Result<String, String> {
+        let current = self.config.read(|c| c.interface.clone());
+        let done = interface::control(&current, args)?;
+        if done.settings != current {
+            self.config.update(|c| c.interface = done.settings.clone());
+        }
+        if let Some((width, height)) = done.window_size {
+            gui::set_window_size(width, height)?;
+        }
+        // Sir sees the result: the HUD comes up (a no-op when it is already in front).
+        gui::show();
+        gui::refresh();
+        Ok(done.summary)
+    }
+
+    /// `control_orb_mode`: pure orb mode (only the 3D orb, floating), its size, corner, monitor
+    /// and opacity. The HUD window re-shapes itself on its next frame.
+    fn orb_mode(&self, args: &Value) -> Result<String, String> {
+        let current = self.config.read(|c| c.interface.clone());
+        let done = interface::control_orb_mode(&current, args)?;
+        if done.settings != current {
+            self.config.update(|c| c.interface = done.settings.clone());
+        }
+        gui::show();
+        gui::refresh();
+        Ok(done.summary)
+    }
+
+    /// `control_gui_aspect`: one aspect of the GUI master config (mode, theme, darkness, opacity,
+    /// rounding, font, orb size, on top, panels, window position and size).
+    fn gui_aspect(&self, args: &Value) -> Result<String, String> {
+        let current = self.config.read(|c| c.interface.clone());
+        let done = interface::control_gui_aspect(&current, args)?;
+        if done.settings != current {
+            self.config.update(|c| c.interface = done.settings.clone());
+        }
+        if let Some(command) = done.window {
+            gui::window_command(command)?;
+        } else {
+            gui::show();
+        }
+        if let Some((width, height)) = done.window_size {
+            gui::set_window_size(width, height)?;
+        }
+        gui::refresh();
+        Ok(done.summary)
+    }
+
+    /// A window action on the HUD itself: only when Sir named Jarvis ("maximize Jarvis",
+    /// "fullscreen yourself"), or to leave a full screen Jarvis himself is in.
+    fn hud_window(&self, action: WindowAction) -> Result<String, String> {
+        let args = match action {
+            WindowAction::Fullscreen => json!({ "fullscreen": true }),
+            WindowAction::ExitFullscreen => json!({ "fullscreen": false }),
+            WindowAction::Minimize => json!({ "window": "minimize" }),
+            WindowAction::Maximize => json!({ "window": "maximize" }),
+            WindowAction::Restore => json!({ "window": "restore" }),
+            WindowAction::Focus => json!({ "window": "show" }),
+            WindowAction::Close | WindowAction::CloseTab => json!({ "window": "hide" }),
+            WindowAction::SnapLeft => json!({ "window": "left" }),
+            WindowAction::SnapRight => json!({ "window": "right" }),
+            WindowAction::SnapTop | WindowAction::SnapBottom => json!({ "window": "center" }),
+            WindowAction::Bigger => json!({ "window": "bigger" }),
+            WindowAction::Smaller => json!({ "window": "smaller" }),
+            WindowAction::MinimizeAll | WindowAction::ShowDesktop => return Err("That acts on the whole desktop, not on me.".into()),
+        };
+        self.configure_interface(&args)
+    }
+
+    /// A window action on an app. A name Sir said wins; otherwise the conversation focus decides:
+    /// the app it is about, then the window Sir was working in before this request, then the one
+    /// he is in now. Never Jarvis himself.
+    async fn window_action(&self, action: WindowAction, named: Option<&str>) -> Result<String, String> {
+        if action.is_global() {
+            return winctl::manage(action, WindowTarget::Active).await;
+        }
+        if let Some(name) = named.filter(|n| !focus::is_pronoun(n)) {
+            let out = winctl::manage(action, WindowTarget::Named(name.to_string())).await;
+            if out.is_ok() {
+                if action == WindowAction::Close {
+                    self.focus.forget_app(name);
+                } else {
+                    self.focus.note_app(name);
+                }
+            }
+            return out;
+        }
+        let mut last_err = "There is no window to act on.".to_string();
+        for target in self.focus.window_targets() {
+            info!("[FOCUS] {action:?} → {}", target.describe());
+            match self.manage_waiting(action, &target).await {
+                Ok(out) => {
+                    if let (WindowAction::Close, WindowTarget::Focus(app)) = (action, &target) {
+                        self.focus.forget_app(app);
+                    }
+                    return Ok(out);
+                }
+                // The conversation is about this app: never act on some other window instead.
+                Err(e) if matches!(target, WindowTarget::Focus(_)) => return Err(e),
+                Err(e) => last_err = e,
+            }
+        }
+        Err(last_err)
+    }
+
+    /// Right after "open Discord" its window may still be on its way: wait a few seconds for it.
+    async fn manage_waiting(&self, action: WindowAction, target: &WindowTarget) -> Result<String, String> {
+        let just_opened = matches!(target, WindowTarget::Focus(_)) && self.focus.focused_app_age().is_some_and(|a| a < Duration::from_secs(20));
+        let deadline = Instant::now() + Duration::from_secs(if just_opened { 8 } else { 0 });
+        loop {
+            match winctl::manage(action, target.clone()).await {
+                Err(e) if e.starts_with("No open window") && Instant::now() < deadline => tokio::time::sleep(Duration::from_millis(500)).await,
+                other => return other,
+            }
+        }
+    }
+
+    /// "Close it": the tab of a website just opened, the app the conversation is about (quit, or
+    /// only its window with `window_only`), otherwise the window Sir was working in.
+    async fn close_focused(&self, window_only: bool) -> Result<String, String> {
+        if self.focus.website_is_latest() {
+            if let Ok(out) = winctl::manage(WindowAction::CloseTab, WindowTarget::Focus("browser".into())).await {
+                self.focus.forget_app("browser");
+                return Ok(format!("{out} (the tab that was just opened)"));
+            }
+        }
+        if !window_only {
+            if let Some(app) = self.focus.focused_app().filter(|a| a != "browser" && a != "explorer") {
+                return apps::close(&app, true).await.inspect(|_| self.focus.forget_app(&app));
+            }
+        }
+        self.window_action(WindowAction::Close, None).await
+    }
+
+    /// The folder of the file the conversation is about.
+    fn focus_dir(&self) -> Option<PathBuf> {
+        self.focus.last_file().map(|p| if p.is_dir() { p.clone() } else { p.parent().map(|d| d.to_path_buf()).unwrap_or(p) })
+    }
+
+    /// After a file write the file is the conversation focus and its diff appears in the HUD
+    /// (`preview`: panel = a widget card (default), window = a separate window, none).
+    fn after_file_write(&self, result: Result<EditOutcome, String>, args: &Value) -> Result<String, String> {
+        let outcome = result?;
+        self.focus.note_file(&outcome.path);
+        let name = outcome.path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        let shown = outcome.path.display().to_string();
+        let preview = match str_arg(args, &["preview"]).unwrap_or("panel").to_lowercase().as_str() {
+            "none" | "off" | "false" | "no" => Ok(String::new()),
+            "window" | "separate" | "new_window" if gui::windows_supported() => self
+                .widgets
+                .spawn_window(&json!({
+                    "id": "file_edit", "title": format!("Edit: {name}"), "content_title": shown, "code": outcome.diff,
+                    "language": "diff", "replace_content": true, "width": 680, "height": 480,
+                }))
+                .inspect(|_| gui::sync_windows()),
+            _ => self
+                .widgets
+                .create_or_update(&json!({
+                    "id": "file_edit_preview", "type": "MarkdownNoteCard", "title": format!("EDIT // {name}"),
+                    "markdown": format!("`{shown}`\n```diff\n{}\n```", outcome.diff),
+                }))
+                .inspect(|_| gui::refresh()),
+        };
+        if let Err(e) = preview {
+            warn!("[FILES] Diff preview failed: {e}");
+        }
+        Ok(outcome.summary)
+    }
+
+    /// `customize_hud_and_windows`: the main HUD (`target` hud) or Jarvis' extra windows (an id,
+    /// a title, "last" or "all").
+    fn customize(&self, args: &Value) -> Result<String, String> {
+        let mut target = str_arg(args, &["target", "window", "window_id", "id"]).unwrap_or("hud").to_string();
+        // "That window": the Jarvis window the conversation was last about.
+        if matches!(target.as_str(), "focus" | "that" | "it") {
+            target = self.focus.snapshot().last_active_jarvis_window_id.unwrap_or_else(|| "last".into());
+        }
+        let target = target.as_str();
+        let hud = matches!(
+            target.to_lowercase().as_str(),
+            "hud" | "main" | "main hud" | "jarvis" | "yourself" | "interface" | "main window" | "the hud" | "gui"
+        );
+        if !hud {
+            return self.widgets.style_window(target, args).inspect(|_| gui::sync_windows());
+        }
+        let mut hud_args = args.as_object().cloned().unwrap_or_default();
+        hud_args.remove("target");
+        self.configure_interface(&Value::Object(hud_args))
+    }
+
+    /// "Move Discord to monitor 2", "put the PC stats window on my left screen", "move yourself
+    /// to the next monitor": Jarvis' own windows by id / title / live view, the HUD itself, or any
+    /// application (named, or the one the conversation is about).
+    async fn move_to_monitor(&self, args: &Value) -> Result<String, String> {
+        let name = str_arg(args, &["app_or_window_name", "app_name", "window", "target_window", "name", "window_id"]).unwrap_or("it");
+        let monitor = args.get("target_monitor").or_else(|| args.get("monitor")).cloned().unwrap_or_else(|| json!("next"));
+        if names_jarvis(name) || matches!(name.to_lowercase().as_str(), "hud" | "the hud" | "your hud" | "your window" | "your interface") {
+            return self.move_hud(&monitor).await;
+        }
+        // One of Jarvis' windows: named ("the drive space window", "pc_stats"), or "it" right
+        // after it was opened.
+        let jarvis_window = if focus::is_pronoun(name) {
+            self.focus.jarvis_window_is_latest().and_then(|id| self.widgets.find_window_named(&id))
+        } else {
+            self.widgets.find_window_named(name).filter(|w| {
+                let n = name.to_lowercase();
+                // "Discord" is never a Jarvis window, even one titled after it by accident.
+                n.contains("window") || n.contains("fenster") || w.id == n.replace(' ', "_") || widgets::BlockKind::live_from_name(n.trim_end_matches(" window")).is_some()
+            })
+        };
+        if let Some(w) = jarvis_window {
+            let out = self.widgets.update_window(&json!({ "id": w.id, "monitor": monitor }))?;
+            self.focus.note_jarvis_window(&w.id);
+            gui::sync_windows();
+            let index = self.widgets.find_window_named(&w.id).and_then(|w| w.monitor).unwrap_or(1);
+            return Ok(format!("Moved your window '{}' to Monitor {index}. {out}", w.title));
+        }
+        if !focus::is_pronoun(name) {
+            let out = monitors::move_app(WindowTarget::Named(name.to_string()), monitor).await?;
+            self.focus.note_app(name);
+            return Ok(out);
+        }
+        let mut last_err = "There is no window to move.".to_string();
+        for target in self.focus.window_targets() {
+            match monitors::move_app(target.clone(), monitor.clone()).await {
+                Ok(out) => return Ok(out),
+                Err(e) if matches!(target, WindowTarget::Focus(_)) => return Err(e),
+                Err(e) => last_err = e,
+            }
+        }
+        Err(last_err)
+    }
+
+    /// The HUD itself to another monitor ("move yourself to monitor 2").
+    async fn move_hud(&self, monitor: &Value) -> Result<String, String> {
+        #[cfg(windows)]
+        {
+            let hwnd = gui::hud_hwnd();
+            if hwnd == 0 {
+                return Err("My HUD window is not open.".into());
+            }
+            let monitors = monitors::list();
+            let current = crate::win32::window_display_rect(hwnd).and_then(|r| monitors::monitor_at(&monitors, (r[0] + r[2]) / 2, (r[1] + r[3]) / 2));
+            let index = monitors::resolve(monitor, current, &monitors).ok_or_else(|| format!("There is no monitor {monitor}."))?;
+            let m = monitors[index - 1].clone();
+            let display = crate::win32::DisplayInfo { rect: m.rect, work: m.work, primary: m.primary, device: m.name };
+            crate::win32::call(move || {
+                crate::win32::show_hud(hwnd);
+                crate::win32::move_to_display(hwnd, &display)
+            })
+            .await??;
+            gui::remember_placement(&self.config);
+            Ok(format!("Moved the HUD to Monitor {index}."))
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = monitor;
+            Err("Moving the HUD between monitors is only supported on Windows.".into())
+        }
+    }
+
+    /// A protocol step: makes sure an application runs (launching it from its executable or
+    /// name), then puts its window on a monitor — at a saved place and size, or keeping its
+    /// size — and maximises it when asked.
+    async fn place_app(&self, args: &Value) -> Result<String, String> {
+        let app = str_arg(args, &["app_name", "app", "name"]).ok_or("place_application_window needs 'app_name'.")?.to_string();
+        let monitor = args.get("monitor").cloned().unwrap_or(json!(1));
+        #[cfg(windows)]
+        {
+            let target = WindowTarget::Named(app.clone());
+            let find = |t: WindowTarget| crate::win32::call(move || crate::winctl::find_windows(&t).ok().and_then(|l| l.into_iter().next()));
+            let mut window = find(target.clone()).await?;
+            let mut launched = false;
+            if window.is_none() {
+                launched = true;
+                match str_arg(args, &["exe_path"]).filter(|p| std::path::Path::new(p).exists()) {
+                    Some(exe) => {
+                        let exe = exe.to_string();
+                        crate::win32::call(move || crate::win32::shell_execute(&exe, None, None)).await??;
+                    }
+                    None => {
+                        apps::open(&app, &[]).await?;
+                    }
+                }
+                let deadline = Instant::now() + Duration::from_secs(20);
+                while window.is_none() && Instant::now() < deadline {
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                    window = find(target.clone()).await?;
+                }
+            }
+            let w = window.ok_or_else(|| format!("{} did not open a window in time.", apps::display_name(&app)))?;
+            // Windows that just opened settle (splash screens, restored sizes) before moving.
+            if launched {
+                tokio::time::sleep(Duration::from_millis(1200)).await;
+            }
+            let monitors = monitors::list();
+            let wanted = monitors::resolve(&monitor, None, &monitors);
+            // A saved monitor that is not connected now: the closest one there is.
+            let index = wanted.unwrap_or_else(|| monitor.as_u64().map(|n| (n as usize).clamp(1, monitors.len().max(1))).unwrap_or(1));
+            let m = monitors.get(index.saturating_sub(1)).cloned().ok_or("Windows reported no monitors.")?;
+            let maximise = bool_arg(args, "maximized").or_else(|| bool_arg(args, "maximised")).unwrap_or(false);
+            let num = |k: &str| args.get(k).and_then(Value::as_i64).map(|v| v as i32);
+            let hwnd = w.hwnd;
+            match (num("x"), num("y"), num("width"), num("height")) {
+                (Some(x), Some(y), Some(width), Some(height)) => {
+                    let [l, t, r, b] = m.work;
+                    let width = width.min(r - l);
+                    let height = height.min(b - t);
+                    let rect = [(l + x).clamp(l, r - width), (t + y).clamp(t, b - height), width, height];
+                    crate::win32::call(move || crate::win32::place_window(hwnd, rect, maximise)).await??;
+                }
+                _ => {
+                    let display = crate::win32::DisplayInfo { rect: m.rect, work: m.work, primary: m.primary, device: m.name.clone() };
+                    crate::win32::call(move || {
+                        crate::win32::move_to_display(hwnd, &display)?;
+                        if maximise {
+                            crate::win32::show_window(hwnd, crate::win32::WindowCmd::Maximize);
+                        }
+                        Ok::<(), String>(())
+                    })
+                    .await??;
+                }
+            }
+            self.focus.note_app(&app);
+            let note = match wanted {
+                None => format!(" (Monitor {} is not connected, so it went to Monitor {index})", monitor),
+                Some(_) => String::new(),
+            };
+            Ok(format!("{} {} on Monitor {index}{}{note}.", if launched { "Opened" } else { "Placed" }, apps::display_name(&app), if maximise { ", maximised" } else { "" }))
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = apps::open(&app, &[]).await;
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            monitors::move_app(WindowTarget::Named(app), monitor).await
+        }
+    }
+
+    /// run / capture / list / create / delete. Returns the result and (modality, state,
+    /// shutdown) effects of the steps that ran.
+    async fn protocols_tool(&self, args: &Value) -> (Result<String, String>, (bool, bool, bool)) {
+        let action = str_arg(args, &["action"]).unwrap_or("run").to_lowercase().replace([' ', '-'], "_");
+        let name = str_arg(args, &["protocol_name", "name", "protocol"]).unwrap_or("");
+        let mut effects = (false, false, false);
+        let result = match action.as_str() {
+            "capture_current_workspace" | "capture" | "save_workspace" | "snapshot" | "capture_workspace" | "save_current_setup" => {
+                if name.is_empty() {
+                    Err("Which name should the protocol get?".to_string())
+                } else {
+                    let apps = tokio::task::spawn_blocking(protocols::scan_workspace).await.unwrap_or_default();
+                    let jarvis = self.widgets.windows();
+                    let music = self.music.last_played();
+                    let steps = protocols::workspace_steps(&apps, &jarvis, music.as_ref());
+                    let summary: Vec<String> = apps.iter().map(|a| format!("{} on Monitor {}{}", apps::display_name(&a.process), a.monitor, if a.maximized { " (maximised)" } else { "" })).collect();
+                    self.protocols
+                        .save(Protocol {
+                            name: name.to_string(),
+                            description: str_arg(args, &["description"]).map(String::from).unwrap_or_else(|| format!("Captured workspace: {}.", summary.join(", "))),
+                            trigger_phrases: Vec::new(),
+                            steps,
+                        })
+                        .map(|p| {
+                            format!(
+                                "Saved the current workspace as the {} ({} steps): {}{}{}.",
+                                protocols::display_name(&p.name),
+                                p.steps.len(),
+                                if summary.is_empty() { "no application windows".to_string() } else { summary.join(", ") },
+                                if jarvis.iter().any(|w| !w.live_kinds().is_empty()) { ", plus my live windows" } else { "" },
+                                music.map(|m| format!(", and {} playing", m.name)).unwrap_or_default()
+                            )
+                        })
+                }
+            }
+            "run" | "engage" | "start" | "activate" | "execute" | "execute_protocol" | "initiate" => match self.protocols.get(name) {
+                None => Err(format!(
+                    "No protocol called '{name}'. Known protocols: {}.",
+                    self.protocols.list().iter().map(|p| p.name.as_str()).collect::<Vec<_>>().join(", ")
+                )),
+                Some(p) => {
+                    // Steps on different things (each app, the music, Jarvis' own windows)
+                    // run side by side; steps on the same thing keep their order.
+                    let stages = protocols::plan(&p.steps);
+                    let abreast = stages.iter().map(Vec::len).max().unwrap_or(1);
+                    info!("[PROTOCOL] Engaging '{}' ({} steps, up to {abreast} side by side)", p.name, p.steps.len());
+                    let started = std::time::Instant::now();
+                    let mut outcomes: Vec<Option<ToolOutcome>> = p.steps.iter().map(|_| None).collect();
+                    for stage in stages {
+                        match stage.as_slice() {
+                            [lane] if lane.len() == 1 => {
+                                let step = &p.steps[lane[0]];
+                                outcomes[lane[0]] = Some(Box::pin(self.execute(&step.tool, &step.args)).await);
+                            }
+                            lanes => {
+                                let lanes = lanes.iter().map(|lane| lane.iter().map(|i| (*i, p.steps[*i].tool.clone(), p.steps[*i].args.clone())).collect()).collect();
+                                for (index, outcome) in crate::hyper_cortex::run_lanes(self.clone(), lanes).await {
+                                    outcomes[index] = Some(outcome);
+                                }
+                            }
+                        }
+                    }
+                    info!("[PROTOCOL] '{}' ran in {} ms", p.name, started.elapsed().as_millis());
+                    let mut lines = Vec::new();
+                    let mut failed = 0;
+                    for (step, outcome) in p.steps.iter().zip(outcomes) {
+                        let Some(outcome) = outcome else {
+                            failed += 1;
+                            lines.push(format!("FAIL {}: the step stopped unexpectedly", step.tool));
+                            continue;
+                        };
+                        effects.0 |= outcome.modality_changed;
+                        effects.1 |= outcome.state_changed;
+                        effects.2 |= outcome.shutdown_requested;
+                        if !outcome.success {
+                            failed += 1;
+                        }
+                        let first = outcome.output.lines().next().unwrap_or("").chars().take(120).collect::<String>();
+                        lines.push(format!("{} {}: {first}", if outcome.success { "OK" } else { "FAIL" }, step.tool));
+                    }
+                    let summary = format!(
+                        "{} engaged ({} of {} steps succeeded). {}\n{}",
+                        protocols::display_name(&p.name),
+                        p.steps.len() - failed,
+                        p.steps.len(),
+                        protocols::choreography(&p),
+                        lines.join("\n")
+                    );
+                    if failed == p.steps.len() { Err(summary) } else { Ok(summary) }
+                }
+            },
+            "list" | "show" => Ok(self
+                .protocols
+                .list()
+                .iter()
+                .map(|p| {
+                    format!(
+                        "- {} protocol: {} ({} steps{})",
+                        p.name,
+                        if p.description.is_empty() { "custom routine" } else { &p.description },
+                        p.steps.len(),
+                        if p.trigger_phrases.is_empty() { String::new() } else { format!("; also \"{}\"", p.trigger_phrases.join("\", \"")) }
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n")),
+            "create" | "save" | "add" | "update" => {
+                let list = |key: &str| -> Vec<String> {
+                    args.get(key).and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default()
+                };
+                self.protocols
+                    .save(Protocol {
+                        name: name.to_string(),
+                        description: str_arg(args, &["description"]).unwrap_or("").to_string(),
+                        trigger_phrases: list("trigger_phrases"),
+                        steps: protocols::parse_steps(args),
+                    })
+                    .map(|p| format!("Protocol '{}' saved with {} step(s); say \"engage {} protocol\".", p.name, p.steps.len(), p.name))
+            }
+            "delete" | "remove" => {
+                if self.protocols.delete(name) {
+                    Ok(format!("Deleted the {name} protocol."))
+                } else {
+                    Err(format!("No protocol called '{name}'."))
+                }
+            }
+            other => Err(format!("Unknown protocols action '{other}' (run, list, create, delete).")),
+        };
+        (result, effects)
+    }
+
+    async fn media(&self, args: &Value) -> Result<String, String> {
+        let action = str_arg(args, &["action"]).unwrap_or("").to_lowercase();
+        let level = int_arg(args, "level");
+        match action.as_str() {
+            "jarvis_faster" | "jarvis_slower" | "set_jarvis_speed" | "speak_faster" | "speak_slower" => {
+                let current = f32::from_bits(self.voice_speed.load(Ordering::Relaxed));
+                let next = match action.as_str() {
+                    "set_jarvis_speed" => level.map(|l| l as f32 / 100.0).unwrap_or(current),
+                    a if a.ends_with("faster") => current + 0.15,
+                    _ => current - 0.15,
+                }
+                .clamp(0.6, 1.8);
+                self.voice_speed.store(next.to_bits(), Ordering::Relaxed);
+                self.config.update(|c| c.kokoro_speed = (next * 100.0).round() / 100.0);
+                Ok(format!("Jarvis now speaks at {:.0}% speed.", next * 100.0))
+            }
+            "jarvis_louder" | "jarvis_quieter" | "set_jarvis_volume" | "voice_louder" | "voice_quieter" => {
+                let current = self.voice_volume.load(Ordering::Relaxed);
+                let next = match action.as_str() {
+                    "set_jarvis_volume" => level.unwrap_or(current as i64).clamp(0, 200) as u8,
+                    a if a.ends_with("louder") => current.saturating_add(20).min(200),
+                    _ => current.saturating_sub(20).max(10),
+                };
+                self.voice_volume.store(next, Ordering::Relaxed);
+                Ok(format!("Jarvis voice loudness set to {next}%."))
+            }
+            _ => match MediaAction::parse(&action, level) {
+                Some(a) => media::execute(a).await,
+                None => Err(format!("Unknown media action '{action}' (set_volume needs a 'level').")),
+            },
+        }
+    }
+
+    /// Write → test → save: the script must run cleanly once before it becomes a skill.
+    async fn create_persistent_skill(&self, args: &Value) -> Result<String, String> {
+        let name = str_arg(args, &["name"]).ok_or("create_persistent_skill needs 'name'.")?;
+        let script = str_arg(args, &["script", "code"]).ok_or("create_persistent_skill needs 'script'.")?;
+        let list = |key: &str| -> Vec<String> {
+            args.get(key)
+                .and_then(Value::as_array)
+                .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .unwrap_or_default()
+        };
+        let skill = JarvisSkill {
+            name: name.to_string(),
+            title: str_arg(args, &["title"]).unwrap_or("").to_string(),
+            description: str_arg(args, &["description"]).unwrap_or("Custom skill").to_string(),
+            trigger_phrases: list("trigger_phrases"),
+            parameters: args.get("parameters").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default(),
+            runtime: crate::skills::normalize_runtime(str_arg(args, &["language", "runtime"]).unwrap_or("")),
+            script: script.to_string(),
+            usage_count: 0,
+            last_output: String::new(),
+            updated_at: String::new(),
+        };
+        let test_args = args.get("test_args").cloned().unwrap_or_else(|| json!({}));
+        let needs_input = skill.parameters.iter().any(|p| p.required && test_args.get(&p.name).is_none())
+            || (script.contains("{{") && test_args.as_object().is_none_or(|o| o.is_empty()));
+        let test = if needs_input {
+            "not test-run (it needs parameters)".to_string()
+        } else {
+            match self.skills.test_run(&skill, &test_args).await {
+                Ok(out) => format!("test run OK:\n{}", out.chars().take(800).collect::<String>()),
+                Err(e) => return Err(format!("The test run failed, so the skill was NOT saved. Fix the script and try again. {e}")),
+            }
+        };
+        let saved = self.skills.save(&skill).map_err(|e| e.to_string())?;
+        Ok(format!("Learned skill '{}' ({}, {}); it is now the tool skill_{}. {test}", saved.name, saved.title, saved.runtime, saved.name))
+    }
+
+    async fn create_skill(&self, args: &Value) -> Result<String, String> {
+        let name = str_arg(args, &["name"]).ok_or("create_skill needs 'name'.")?;
+        let script = str_arg(args, &["script", "code"]).ok_or("create_skill needs 'script'.")?;
+        let list = |key: &str| -> Vec<String> {
+            args.get(key)
+                .and_then(Value::as_array)
+                .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .unwrap_or_default()
+        };
+        let parameters: Vec<SkillParameter> = args
+            .get("parameters")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .unwrap_or_default();
+        let saved = self
+            .skills
+            .save(&JarvisSkill {
+                name: name.to_string(),
+                title: str_arg(args, &["title"]).unwrap_or("").to_string(),
+                description: str_arg(args, &["description"]).unwrap_or("Custom skill").to_string(),
+                trigger_phrases: list("trigger_phrases"),
+                parameters,
+                runtime: String::new(),
+                script: script.to_string(),
+                usage_count: 0,
+                last_output: String::new(),
+                updated_at: String::new(),
+            })
+            .map_err(|e| e.to_string())?;
+        if bool_arg(args, "run_immediately").unwrap_or(true) && saved.parameters.iter().all(|p| !p.required) {
+            match self.skills.execute(&saved.name, &json!({})).await {
+                Ok(out) => Ok(format!("Learned skill '{}' and ran it. Output:\n{out}", saved.name)),
+                Err(e) => Ok(format!("Learned skill '{}', but the first run reported: {e}", saved.name)),
+            }
+        } else {
+            Ok(format!("Learned skill '{}' ({}).", saved.name, saved.title))
+        }
+    }
+}
+
+fn pc_tool_definitions() -> Vec<Value> {
+    vec![
+        json!({"type": "function", "function": {
+            "name": "open_application",
+            "description": "Open any installed application, folder or file (e.g. browser = Sir's default web browser, spotify, discord, chrome, vs code, steam, explorer, terminal, calculator, downloads folder). Call it whenever Sir asks to open, start or launch something. Websites, channels and site searches: open_website.",
+            "parameters": {"type": "object", "properties": {
+                "app_name": {"type": "string", "description": "Application name, URL, folder or path"},
+                "args": {"type": "array", "items": {"type": "string"}, "description": "Optional command-line arguments"}
+            }, "required": ["app_name"]}
+        }}),
+        json!({"type": "function", "function": {
+            "name": "close_application",
+            "description": "Close a running application by name. app_name \"it\" = the app or website just discussed (a website's tab only).",
+            "parameters": {"type": "object", "properties": {
+                "app_name": {"type": "string"},
+                "force": {"type": "boolean", "description": "Terminate if it refuses to close (default true)"}
+            }, "required": ["app_name"]}
+        }}),
+        json!({"type": "function", "function": {
+            "name": "window_management",
+            "description": "Focus, minimise, maximise, true full screen (F11), exit full screen, restore, close, snap, make bigger / smaller an app's window, or minimise everything. Omit target_window for \"it\"/\"that\": the app or website just discussed, else the window Sir was working in — never yourself.",
+            "parameters": {"type": "object", "properties": {
+                "action": {"type": "string", "enum": ["focus", "minimize", "maximize", "fullscreen", "exit_fullscreen", "restore", "close", "close_tab", "snap_left", "snap_right", "snap_top", "snap_bottom", "bigger", "smaller", "minimize_all", "show_desktop"]},
+                "target_window": {"type": "string", "description": "App or window title; omit for the app in focus"}
+            }, "required": ["action"]}
+        }}),
+        sites::tool_definition(),
+        json!({"type": "function", "function": {
+            "name": "media_and_volume_control",
+            "description": "System volume (exact %), mute, media playback keys, or Jarvis' own voice loudness.",
+            "parameters": {"type": "object", "properties": {
+                "action": {"type": "string", "enum": ["set_volume", "volume_up", "volume_down", "mute", "unmute", "get_volume", "play_pause", "next_track", "prev_track", "stop", "jarvis_louder", "jarvis_quieter", "set_jarvis_volume", "jarvis_faster", "jarvis_slower", "set_jarvis_speed"]},
+                "level": {"type": "integer", "description": "0-100 for set_volume, 0-200 for set_jarvis_volume, 60-180 (percent) for set_jarvis_speed, step size for volume_up/down"}
+            }, "required": ["action"]}
+        }}),
+        json!({"type": "function", "function": {
+            "name": "get_system_status",
+            "description": "Live CPU load, RAM, disk space and GPU temperature/VRAM.",
+            "parameters": {"type": "object", "properties": {}, "required": []}
+        }}),
+        json!({"type": "function", "function": {
+            "name": "get_current_datetime",
+            "description": "Current local date and time.",
+            "parameters": {"type": "object", "properties": {}, "required": []}
+        }}),
+        json!({"type": "function", "function": {
+            "name": "run_shell_command",
+            "description": "Run a PowerShell (Windows) or Bash (Linux) command and return its output (10 s timeout).",
+            "parameters": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}
+        }}),
+        json!({"type": "function", "function": {
+            "name": "web_search",
+            "description": "Search the live web (DuckDuckGo + Wikipedia + live weather) for news, weather, prices, people, facts or anything time-sensitive or uncertain. The best page is read automatically; answer with its concrete facts, numbers and dates.",
+            "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}
+        }}),
+        json!({"type": "function", "function": {
+            "name": "read_webpage",
+            "description": "Fetch a web page and return its readable article text (up to 4,500 characters), e.g. a result URL from web_search.",
+            "parameters": {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]}
+        }}),
+        interface::tool_definition(),
+        interface::control_tool_definition(),
+        interface::orb_mode_tool_definition(),
+        interface::gui_aspect_tool_definition(),
+        crate::audio_mixer::tool_definition(),
+        json!({"type": "function", "function": {
+            "name": "set_listening_mode",
+            "description": "How YOU listen: hands_free (answer relevant speech without the wake word; \"switch to hands-free mode\", \"Freisprechmodus aktivieren\") or wake_word (only when Sir says Jarvis; \"only listen when I say Jarvis\").",
+            "parameters": {"type": "object", "properties": {
+                "mode": {"type": "string", "enum": ["hands_free", "wake_word"]}
+            }, "required": ["mode"]}
+        }}),
+        json!({"type": "function", "function": {
+            "name": "customize_hud_and_windows",
+            "description": "Restyle your main HUD (target \"hud\") or one of your extra windows (target = its id or title, \"last\" or \"all\"): theme (stark = Stark Cyan, mark42 = Iron Man Gold & Red, ultron = Ultron Crimson, stealth = Minimal Monochrome, emerald = Stealth Matrix, …) or custom #RRGGBB accent/background, opacity 0.2-1.0, borderless, always_on_top, font_scale 0.8-1.6; for the HUD also compact (Mini-HUD), layout and show_panels/hide_panels (system, memory, tools, widgets, reactor …).",
+            "parameters": {"type": "object", "properties": {
+                "target": {"type": "string"},
+                "theme": {"type": "string"},
+                "accent_color": {"type": "string"}, "background_color": {"type": "string"},
+                "opacity": {"type": "number"},
+                "borderless": {"type": "boolean"},
+                "always_on_top": {"type": "boolean"},
+                "font_scale": {"type": "number"},
+                "compact": {"type": "boolean"},
+                "layout": {"type": "string", "enum": ["full", "compact", "orb"]},
+                "show_panels": {"type": "array", "items": {"type": "string"}},
+                "hide_panels": {"type": "array", "items": {"type": "string"}}
+            }, "required": ["target"]}
+        }}),
+        modality::tool_definition(),
+        json!({"type": "function", "function": {
+            "name": "control_jarvis_lifecycle",
+            "description": "Control YOURSELF (the J.A.R.V.I.S. app, never the computer): shutdown_jarvis when Sir says shut down, quit, exit, close yourself, go away or similar; restart_jarvis; mute_tts / unmute_tts (your voice); sleep_mode (ignore everything until 'wake up'); wake_up.",
+            "parameters": {"type": "object", "properties": {
+                "action": {"type": "string", "enum": ["shutdown_jarvis", "restart_jarvis", "mute_tts", "unmute_tts", "sleep_mode", "wake_up"]}
+            }, "required": ["action"]}
+        }}),
+    ]
+}
+
+/// Everyday assistant abilities (reminders, briefing, maths, clipboard, screen, files, diagnostics).
+fn assistant_tool_definitions() -> Vec<Value> {
+    let mut tools = vec![
+        reminders::tool_definition(),
+        json!({"type": "function", "function": {
+            "name": "calculate",
+            "description": "Exact arithmetic and unit conversion. ALWAYS use it instead of doing maths yourself: '15% of 240', '(3+4)*2^5', 'sqrt(2)', '5 miles to km', '100 F in C'.",
+            "parameters": {"type": "object", "properties": {"expression": {"type": "string"}}, "required": ["expression"]}
+        }}),
+        clipboard::tool_definition(),
+        screen::inspect_tool_definition(),
+    ];
+    tools.extend(file_ops::tool_definitions());
+    tools.extend(diagnostics::tool_definitions());
+    tools
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn invented_tool_names_are_repaired() {
+        let known: Vec<String> = ["open_application", "web_search", "reminders", "create_or_update_widget", "calculate"].map(String::from).to_vec();
+        assert_eq!(canonical_tool_name("open_app", &known).as_deref(), Some("open_application"));
+        assert_eq!(canonical_tool_name("search-web", &known).as_deref(), Some("web_search"));
+        assert_eq!(canonical_tool_name("set_reminder", &known).as_deref(), Some("reminders"));
+        assert_eq!(canonical_tool_name("open_aplication", &known).as_deref(), Some("open_application"), "typo");
+        assert_eq!(canonical_tool_name("web_search", &known).as_deref(), Some("web_search"));
+        assert_eq!(canonical_tool_name("fly_to_the_moon", &known), None);
+    }
+
+    #[test]
+    fn argument_helpers_are_lenient() {
+        let args = json!({"level": "55%", "force": "yes", "name": "  x  "});
+        assert_eq!(int_arg(&args, "level"), Some(55));
+        assert_eq!(bool_arg(&args, "force"), Some(true));
+        assert_eq!(str_arg(&args, &["missing", "name"]), Some("x"));
+        assert_eq!(int_arg(&json!({"level": 42.6}), "level"), Some(43));
+    }
+
+    #[test]
+    fn closing_jarvis_means_quitting() {
+        for name in ["Jarvis", "J.A.R.V.I.S.", "JARVIS.exe", "yourself", "your app", "dich"] {
+            assert!(names_jarvis(name), "{name}");
+        }
+        for name in ["spotify", "discord", "jarvis-notes", "your browser"] {
+            assert!(!names_jarvis(name), "{name}");
+        }
+    }
+}

@@ -1,0 +1,6 @@
+# Old snapshots of the codebase - would duplicate every node in src/
+_backup_*/
+
+# Vendored runtime binaries/licenses and model blob manifests
+runtime/ollama/
+models/llm/
