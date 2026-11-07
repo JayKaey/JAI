@@ -301,6 +301,16 @@ pub fn is_follow_up(text: &str) -> bool {
     if w.iter().any(|x| REFERENTIAL.contains(x)) {
         return true;
     }
+    // A question about the conversation itself ("what did I just ask you?", "repeat your last
+    // answer", "was habe ich gerade gesagt?") is nothing without it.
+    const ABOUT_THE_TALK: [&str; 26] = [
+        "did i just", "did i ask", "did i say", "did i tell", "i just asked", "i just said", "i just told", "did you just", "you just said", "you just told", "my last question",
+        "my last request", "my previous question", "your last answer", "your last reply", "your previous answer", "the last thing", "last question", "say that", "repeat that",
+        "a moment ago", "just now", "habe ich gerade", "hast du gerade", "meine letzte frage", "deine letzte antwort",
+    ];
+    if ABOUT_THE_TALK.iter().any(|p| joined.contains(p)) {
+        return true;
+    }
     // "put that in a window", "close this", "that one": a demonstrative without its noun.
     w.iter().enumerate().any(|(i, x)| {
         matches!(*x, "that" | "this" | "das" | "dies")
@@ -430,7 +440,7 @@ pub fn fulfilled(class: &IntentClass, tools_run: &[String]) -> bool {
 
 // ------------------------------------------------------------------ grounding filter ----
 
-const ACTION_VERBS: &str = "lowered|raised|increased|decreased|reduced|changed|set|adjusted|opened|closed|created|added|moved|launched|started|turned|switched|muted|unmuted|paused|played|restyled|enabled|disabled|deleted|removed|saved|sent|scheduled|made|put|brought|pulled|spawned|dimmed|brightened|hidden|hid|shown|showed|resized|maximi[sz]ed|minimi[sz]ed|lowering|raising|changing|setting|adjusting|opening|closing|creating|adding|moving|launching|starting|turning|switching|muting|pausing|playing|making|putting|bringing|pulling|sending|saving|deleting|removing|scheduling|spawning|dimming|hiding|showing|resizing|open|close|create|add|move|launch|start|turn|switch|mute|pause|play|make|put|bring|pull|send|save|delete|remove|schedule|spawn|lower|raise|change|set|adjust";
+const ACTION_VERBS: &str = "reopened|reopening|reopen|restarted|restarting|restart|relaunched|relaunching|relaunch|restored|restoring|restore|lowered|raised|increased|decreased|reduced|changed|set|adjusted|opened|closed|created|added|moved|launched|started|turned|switched|muted|unmuted|paused|played|restyled|enabled|disabled|deleted|removed|saved|sent|scheduled|made|put|brought|pulled|spawned|dimmed|brightened|hidden|hid|shown|showed|resized|maximi[sz]ed|minimi[sz]ed|lowering|raising|changing|setting|adjusting|opening|closing|creating|adding|moving|launching|starting|turning|switching|muting|pausing|playing|making|putting|bringing|pulling|sending|saving|deleting|removing|scheduling|spawning|dimming|hiding|showing|resizing|open|close|create|add|move|launch|start|turn|switch|mute|pause|play|make|put|bring|pull|send|save|delete|remove|schedule|spawn|lower|raise|change|set|adjust";
 
 static FIRST_PERSON_CLAIM: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(&format!(r"(?i)\b(?:i(?:'ve|’ve| have)|i(?:'m|’m| am)|i(?:'ll|’ll| will)|i just)\s+(?:(?:also|now|just|already|gone ahead and|taken the liberty of|quickly|then)\s+)*(?:{ACTION_VERBS})\b")).unwrap()
@@ -866,7 +876,7 @@ const VOCABULARY: &[(u32, &[&str])] = &[
             "normaler modus", "zurück wechseln", "wechsel zurück", "wechsle zurück",
         ],
     ),
-    (domain::PRIVACY, &["listening", "listen", "microphone", "mic", "zuhören", "zuzuhören", "zuhoeren", "zuzuhoeren", "hör", "hoer"]),
+    (domain::PRIVACY, &["listening", "listen", "microphone", "mic", "mikro", "mikrofon", "zuhören", "zuzuhören", "zuhoeren", "zuzuhoeren", "hör", "hoer"]),
     (domain::ORB, &["orb", "emblem", "core", "sphere", "kugel", "reactor", "kern"]),
     (
         domain::MOTION,
@@ -1036,11 +1046,14 @@ fn last_orb_move() -> Option<[f32; 2]> {
 /// A reflex was carried out: an emblem move opens the follow-up window, anything else closes it.
 pub fn committed(routed: &Routed) {
     *LAST_ORB_MOVE.lock().unwrap_or_else(|e| e.into_inner()) = routed.orb_step.map(|step| (Instant::now(), step));
+    crate::audio_mixer::forget_step();
 }
 
-/// Any other request ends the emblem's follow-up window ("more" then means something else).
+/// Any other request ends the follow-up window of an emblem move or a volume change ("more"
+/// then means something else).
 pub fn forget_follow_up() {
     *LAST_ORB_MOVE.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    crate::audio_mixer::forget_step();
 }
 
 /// The command's own words: corrections and courtesy in front and politeness behind removed.
@@ -1056,6 +1069,10 @@ pub fn route(text: &str, ctx: &ReflexContext) -> Option<Routed> {
     let mask = domains(&canon);
     let follow_up = last_orb_move();
     if mask & REFLEX_STAGES == 0 && follow_up.is_none() {
+        return None;
+    }
+    // A plain question moves nothing: "why did you stop listening?" holds the lock's own words.
+    if crate::intents::only_asks(text) {
         return None;
     }
     let hit = |reflex: Reflex, stage: &'static str, orb_step: Option<[f32; 2]>| Some(Routed { reflex, stage, orb_step });
@@ -1199,6 +1216,7 @@ fn is_own_view(name: &str) -> bool {
         name,
         "feature lab" | "features" | "feature list" | "telemetry" | "system telemetry" | "system stats" | "pc stats" | "stats" | "theme studio" | "plotter" | "function plotter" | "simulation"
             | "simulation lab" | "sim lab" | "holomat" | "qr" | "qr code" | "phone qr" | "pairing" | "schedule" | "timetable" | "chronos" | "discord routing" | "audio routing"
+            | "mixer" | "audio mixer" | "volume mixer" | "sound mixer"
     )
 }
 

@@ -44,11 +44,16 @@ pub fn pitch_ratio() -> f32 {
     2f32.powf(PITCH_SEMITONES / 12.0)
 }
 
-/// The Kokoro speed that yields `target` after stage 1 (and the resampling part of Ultron's
-/// chain) stretched the clause by `1 / pitch_ratio`.
+/// The Kokoro speed that yields `target` after the voice in use stretched the clause: Jarvis'
+/// stage 1 by `1 / pitch_ratio`, Ultron's chain by the resampling part of its own step.
 pub fn synthesis_speed(target: f32) -> f32 {
-    let ultron = if crate::ultron_mode::active() { crate::ultron_mode::pitch_ratio() } else { 1.0 };
-    (target / (pitch_ratio() * ultron)).clamp(0.5, 2.2)
+    synthesis_speed_as(target, crate::ultron_mode::active())
+}
+
+/// `synthesis_speed` for the voice stated (`ultron`: his chain; else Jarvis').
+pub fn synthesis_speed_as(target: f32, ultron: bool) -> f32 {
+    let stretch = if ultron { crate::ultron_mode::pitch_ratio() } else { pitch_ratio() };
+    (target / stretch).clamp(0.5, 2.2)
 }
 
 // ------------------------------------------------------------------------------ biquads ----
@@ -98,7 +103,7 @@ impl Bq {
     }
 
     /// High shelf (shelf slope S = 1): `gain_db` above `freq`, half of it at `freq`.
-    fn high_shelf(freq: f32, gain_db: f32, rate: f32) -> Self {
+    pub(crate) fn high_shelf(freq: f32, gain_db: f32, rate: f32) -> Self {
         let a = 10f32.powf(gain_db / 40.0);
         let (cos, sin) = Self::w0(freq, rate);
         let alpha = sin / 2.0 * 2f32.sqrt();
@@ -397,7 +402,16 @@ const PRE_GAIN_RMS: f32 = 0.089;
 /// 35 % by default), stage 1 (24 kHz → 48 kHz, −0.55 st), a loudness pre-gain and stages 2-4.
 /// Returns 48 kHz audio.
 pub fn master_dry(input: &[f32], from: u32) -> Vec<f32> {
-    let flat = crate::fish_zero_shot_tts::flatten_f0(input, from, crate::fish_zero_shot_tts::f0_flatten());
+    // Jarvis' clauses are locked to his clip's median F0.
+    master_dry_to(input, from, crate::fish_zero_shot_tts::profile().map(|p| p.f0.median_hz))
+}
+
+/// `master_dry` with the F0 lock stated: `lock_to_hz` is the median F0 the finished clause
+/// should have (the reference clip's), None for no lock.
+pub fn master_dry_to(input: &[f32], from: u32, lock_to_hz: Option<f32>) -> Vec<f32> {
+    // Stage 1 lowers the pitch after this stage: the lock aims that much higher.
+    let target = lock_to_hz.filter(|hz| *hz > 0.0).map(|hz| hz / pitch_ratio());
+    let flat = crate::fish_zero_shot_tts::lock_f0(input, from, crate::fish_zero_shot_tts::f0_flatten(), target);
     let mut audio = pitch_lock(&flat, from);
     let level = crate::dsp::rms(&audio);
     if level > 1e-4 {
@@ -408,15 +422,15 @@ pub fn master_dry(input: &[f32], from: u32) -> Vec<f32> {
     audio
 }
 
-/// The whole chain for one clause: `master_dry` and the reference transfer (stage 5: the clip's
-/// 128-band envelope and speech level). Returns 48 kHz audio.
-pub fn master(input: &[f32], from: u32) -> Vec<f32> {
-    let mut audio = master_dry(input, from);
-    if crate::ultron_mode::active() {
-        crate::ultron_mode::process(&mut audio, MASTER_RATE);
-    } else {
-        crate::fish_zero_shot_tts::transfer_clause(&mut audio, MASTER_RATE);
+/// The whole chain for one clause. Jarvis': `master_dry` and the reference transfer (stage 5:
+/// the clip's 128-band envelope and speech level). Ultron's clauses never pass Jarvis' studio:
+/// his own chain takes the synthesis as it is (`ultron_mode::voice_of`). Returns 48 kHz audio.
+pub fn master_as(input: &[f32], from: u32, ultron: bool) -> Vec<f32> {
+    if ultron {
+        return crate::ultron_mode::voice_of(input, from);
     }
+    let mut audio = master_dry(input, from);
+    crate::fish_zero_shot_tts::transfer_clause(&mut audio, MASTER_RATE);
     audio
 }
 
@@ -456,6 +470,35 @@ pub enum Earcon {
     Confirm,
     /// Sign-off: a soft descending power-down.
     PowerDown,
+    /// A block materialises on the board: a short rising shimmer.
+    Materialize,
+    /// A block is maximised into the spotlight: an upward sweep that opens out.
+    Spotlight,
+    /// Ultron ⇄ Jarvis, orb mode, a view change: a low pulse with a glass overtone.
+    ModeShift,
+    /// A telemetry alert (heat, memory, a crash): two urgent pips.
+    Alert,
+    /// A block leaves the board: the shimmer, falling.
+    Dismiss,
+}
+
+impl Earcon {
+    /// Every cue, for the sound check.
+    pub const ALL: [Earcon; 8] = [Earcon::ReportChime, Earcon::Confirm, Earcon::PowerDown, Earcon::Materialize, Earcon::Spotlight, Earcon::ModeShift, Earcon::Alert, Earcon::Dismiss];
+}
+
+/// A sine gliding from `from` to `to` Hz over the whole of `out[first..]`, with its own envelope
+/// (`env(t)` for t in 0-1).
+fn glide(out: &mut [f32], rate: f32, start: f32, secs: f32, from: f32, to: f32, amp: f32, env: impl Fn(f32) -> f32) {
+    let first = (start * rate) as usize;
+    let n = ((secs * rate) as usize).min(out.len().saturating_sub(first));
+    let mut phase = 0.0f32;
+    for i in 0..n {
+        let t = i as f32 / n.max(1) as f32;
+        let freq = from * (to / from).powf(t);
+        phase = (phase + TAU * freq / rate).rem_euclid(TAU);
+        out[first + i] += phase.sin() * amp * env(t);
+    }
 }
 
 /// A partial that rings like glass: a sine with an exponential decay.
@@ -475,6 +518,11 @@ pub fn earcon(kind: Earcon, rate: u32) -> Vec<f32> {
         Earcon::ReportChime => 0.9,
         Earcon::Confirm => 0.16,
         Earcon::PowerDown => 0.6,
+        Earcon::Materialize => 0.22,
+        Earcon::Spotlight => 0.34,
+        Earcon::ModeShift => 0.5,
+        Earcon::Alert => 0.42,
+        Earcon::Dismiss => 0.2,
     };
     let mut out = vec![0.0f32; (r * secs) as usize];
     match kind {
@@ -501,6 +549,36 @@ pub fn earcon(kind: Earcon, rate: u32) -> Vec<f32> {
                 let env = (1.0 - t).powf(1.6) * (t * 40.0).min(1.0);
                 *s = (phase.sin() * 0.8 + (2.0 * phase).sin() * 0.15) * 0.08 * env;
             }
+        }
+        Earcon::Materialize => {
+            // A fifth sliding up into a glass tick: something assembling itself.
+            glide(&mut out, r, 0.0, 0.16, 740.0, 1480.0, 0.035, |t| (t * 12.0).min(1.0) * (1.0 - t).powf(1.4));
+            glide(&mut out, r, 0.0, 0.16, 1110.0, 2220.0, 0.018, |t| (t * 12.0).min(1.0) * (1.0 - t).powf(1.8));
+            bell(&mut out, r, 0.11, 2960.0, 0.03, 46.0);
+        }
+        Earcon::Spotlight => {
+            // An octave sweep that opens into a held, brighter pair.
+            glide(&mut out, r, 0.0, 0.2, 520.0, 1040.0, 0.045, |t| (t * 10.0).min(1.0) * (1.0 - 0.5 * t));
+            bell(&mut out, r, 0.17, 1560.0, 0.04, 16.0);
+            bell(&mut out, r, 0.19, 2080.0, 0.028, 20.0);
+        }
+        Earcon::ModeShift => {
+            // A low pulse falling a fourth, its octave above, and a glass overtone on top.
+            glide(&mut out, r, 0.0, 0.42, 196.0, 147.0, 0.07, |t| (t * 25.0).min(1.0) * (1.0 - t).powf(1.2));
+            glide(&mut out, r, 0.0, 0.3, 392.0, 294.0, 0.025, |t| (t * 25.0).min(1.0) * (1.0 - t).powf(2.0));
+            bell(&mut out, r, 0.05, 1174.7, 0.03, 12.0);
+            bell(&mut out, r, 0.05, 1174.7 * 2.76, 0.008, 22.0);
+        }
+        Earcon::Alert => {
+            // Two pips a minor second apart: unmistakable, never shrill.
+            for (start, freq) in [(0.0, 932.3f32), (0.17, 987.8)] {
+                glide(&mut out, r, start, 0.11, freq, freq, 0.06, |t| (t * 30.0).min(1.0) * ((1.0 - t) * 30.0).min(1.0));
+                glide(&mut out, r, start, 0.11, freq * 2.0, freq * 2.0, 0.015, |t| (t * 30.0).min(1.0) * ((1.0 - t) * 30.0).min(1.0));
+            }
+        }
+        Earcon::Dismiss => {
+            glide(&mut out, r, 0.0, 0.17, 1480.0, 620.0, 0.03, |t| (t * 14.0).min(1.0) * (1.0 - t).powf(1.5));
+            glide(&mut out, r, 0.0, 0.17, 2220.0, 930.0, 0.012, |t| (t * 14.0).min(1.0) * (1.0 - t).powf(2.0));
         }
     }
     let fade = (r * 0.03) as usize;
@@ -637,7 +715,7 @@ mod tests {
                 ((TAU * 124.0 * t).sin() * 0.3 + (TAU * 2600.0 * t).sin() * 0.05) * (1.0 - (TAU * 3.0 * t).cos()) * 0.5
             })
             .collect();
-        let out = master(&input, 24_000);
+        let out = master_as(&input, 24_000, false);
         let expected = 24_000.0 / pitch_ratio();
         assert!((out.len() as f32 - expected).abs() < 40.0, "{}", out.len());
         assert!(out.iter().all(|s| s.is_finite() && s.abs() <= 0.9));
@@ -660,12 +738,55 @@ mod tests {
 
     #[test]
     fn earcons_are_short_quiet_and_end_in_silence() {
-        for kind in [Earcon::ReportChime, Earcon::Confirm, Earcon::PowerDown] {
+        for kind in Earcon::ALL {
             let e = earcon(kind, 48_000);
             assert!(!e.is_empty() && e.len() < 48_000);
             let peak = e.iter().fold(0.0f32, |m, s| m.max(s.abs()));
             assert!(peak > 0.02 && peak < 0.2, "{kind:?} peak {peak}");
             assert!(e.last().unwrap().abs() < 1e-3);
+            assert!(e.iter().all(|s| s.is_finite()), "{kind:?}");
+        }
+    }
+
+    /// The share of a cue's energy that sits in its second half.
+    fn late_share(e: &[f32]) -> f32 {
+        let half = e.len() / 2;
+        let energy = |x: &[f32]| x.iter().map(|s| s * s).sum::<f32>();
+        energy(&e[half..]) / energy(e).max(1e-12)
+    }
+
+    /// Zero crossings per second over `e[from..to]` (fractions of the cue): a rough pitch.
+    fn crossings(e: &[f32], from: f32, to: f32) -> f32 {
+        let (a, b) = ((e.len() as f32 * from) as usize, (e.len() as f32 * to) as usize);
+        let n = e[a..b].windows(2).filter(|w| w[0] <= 0.0 && w[1] > 0.0).count() as f32;
+        n / ((b - a) as f32 / 48_000.0)
+    }
+
+    #[test]
+    fn every_cue_is_its_own_sound_at_every_device_rate() {
+        // A block arriving rises, a block leaving falls; the mode pulse sits far below both.
+        let (arrive, leave, shift) = (earcon(Earcon::Materialize, 48_000), earcon(Earcon::Dismiss, 48_000), earcon(Earcon::ModeShift, 48_000));
+        assert!(crossings(&arrive, 0.05, 0.3) < crossings(&arrive, 0.45, 0.7), "materialise rises");
+        assert!(crossings(&leave, 0.05, 0.3) > crossings(&leave, 0.55, 0.8), "dismiss falls");
+        assert!(crossings(&shift, 0.3, 0.8) < 600.0, "the mode pulse is low: {}", crossings(&shift, 0.3, 0.8));
+        // The alert is two pips with silence between them.
+        let alert = earcon(Earcon::Alert, 48_000);
+        let gap = &alert[(0.125 * 48_000.0) as usize..(0.16 * 48_000.0) as usize];
+        assert!(rms(gap) < 0.002, "silence between the pips: {}", rms(gap));
+        assert!(rms(&alert[(0.2 * 48_000.0) as usize..(0.26 * 48_000.0) as usize]) > 0.02, "the second pip");
+        // The spotlight opens out: it still rings in its second half.
+        assert!(late_share(&earcon(Earcon::Spotlight, 48_000)) > 0.2);
+        // No two cues are the same samples, and every one scales with the device rate.
+        for (i, a) in Earcon::ALL.iter().enumerate() {
+            for b in &Earcon::ALL[i + 1..] {
+                assert_ne!(earcon(*a, 48_000), earcon(*b, 48_000), "{a:?} vs {b:?}");
+            }
+            for rate in [16_000u32, 44_100, 96_000] {
+                let e = earcon(*a, rate);
+                let secs = e.len() as f32 / rate as f32;
+                assert!((secs - earcon(*a, 48_000).len() as f32 / 48_000.0).abs() < 0.01, "{a:?} at {rate} Hz lasts {secs} s");
+                assert!(e.iter().all(|s| s.is_finite() && s.abs() < 0.2));
+            }
         }
     }
 }

@@ -896,8 +896,12 @@ impl JarvisConfig {
         }
     }
 
-    /// Atomic write: temp file + rename, so a crash never leaves a half-written config.
+    /// Atomic write: temp file + rename, so a crash never leaves a half-written config. In a
+    /// read-only run (`set_read_only`) nothing is written.
     pub fn save(&self) -> std::io::Result<()> {
+        if READ_ONLY.load(std::sync::atomic::Ordering::Acquire) {
+            return Ok(());
+        }
         let json = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
         let tmp = format!("{CONFIG_FILE}.tmp");
         fs::write(&tmp, json)?;
@@ -935,6 +939,15 @@ pub fn inference_threads() -> usize {
     } else {
         logical
     }
+}
+
+/// The settings file is not to be touched in this run (the live self-test and the exhaustive
+/// verifier change settings in memory only: silent, and whatever a probe switches).
+static READ_ONLY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Makes every save of the settings a no-op for the rest of this process.
+pub fn set_read_only(on: bool) {
+    READ_ONLY.store(on, std::sync::atomic::Ordering::Release);
 }
 
 /// Shared, thread-safe config with debounced persistence.

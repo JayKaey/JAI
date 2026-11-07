@@ -771,6 +771,10 @@ pub(super) fn show_windows(ctx: &egui::Context, host: &WidgetHost) {
             let hud_scale = TEXT_SCALE.with(|s| s.get());
             TEXT_SCALE.with(|s| s.set(spec.style.font_scale));
             let mut fast = false;
+            // What the block says, for `Copy Content`, the exports and the search across blocks
+            // (stored again only when it changes).
+            let text: Vec<&str> = spec.blocks.iter().flat_map(|b| [b.title.as_str(), b.body.as_str()]).filter(|s| !s.trim().is_empty()).collect();
+            crate::hud_dock::describe_block(&spec.id, &text.join("\n"));
             let action = super::hud_block_window(ctx, &spec.id, &spec.title, [spec.width, spec.height], |ui| {
                 fast = window_content(ui, &p, &spec, host);
             });

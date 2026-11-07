@@ -32,11 +32,17 @@ mod features_view;
 #[path = "gui_theme_studio.rs"]
 mod theme_studio;
 
+#[path = "gui_mixer.rs"]
+mod mixer_view;
+
 #[path = "gui_discord.rs"]
 mod discord_view;
 
 #[path = "gui_workout.rs"]
 mod workout_view;
+/// The HUD drawn without a window (the live self-test and the exhaustive verifier).
+#[path = "gui_offscreen.rs"]
+pub(crate) mod offscreen;
 
 use crate::app::Jarvis;
 use crate::rose_emblem_renderer::{EmblemInputs, RoseEmblem};
@@ -133,6 +139,39 @@ fn request_repaint_soon() {
 /// Whether Jarvis can open native windows (false when headless).
 pub fn windows_supported() -> bool {
     SHARED.running.load(Ordering::Acquire)
+}
+
+/// The monitor the board was sent to and has not gone to yet (`send_board_to_monitor`).
+static HUD_MONITOR: Mutex<Option<usize>> = Mutex::new(None);
+
+/// Sends the HUD's board to monitor `index` (1-based) as the fullscreen board there; a board
+/// that spans every monitor comes back to that one. False when the HUD is a plain window or
+/// the floating orb, which move as any window does.
+pub fn send_board_to_monitor(config: &ConfigStore, index: usize) -> bool {
+    let iface = config.read(|c| c.interface.clone());
+    if iface.orb_mode || !(iface.fullscreen || iface.span_all_monitors) {
+        return false;
+    }
+    *lock(&HUD_MONITOR) = Some(index);
+    if iface.span_all_monitors {
+        config.update(|c| {
+            c.interface.span_all_monitors = false;
+            c.interface.fullscreen = true;
+        });
+    }
+    request_repaint();
+    true
+}
+
+/// The monitor the fullscreen board was sent to, once it can go there (a board that still
+/// spans the monitors, a window and the floating orb leave the request where it is).
+fn take_monitor_request(current: &InterfaceSettings) -> Option<usize> {
+    if current.fullscreen && !current.span_all_monitors && !current.orb_mode { lock(&HUD_MONITOR).take() } else { None }
+}
+
+/// The part of the HUD in-app blocks live in right now (nothing while no HUD is up).
+pub fn block_area() -> Rect {
+    context().map_or(Rect::NOTHING, |ctx| block_bounds(home_screen(&ctx)))
 }
 
 /// The HUD's native window handle (0 while it has none).
@@ -271,19 +310,52 @@ fn prefill_console(text: String) {
 
 /// HUD controls the Feature Lab's `[ TRY ]` can open (`open_control`).
 #[cfg(test)]
-const CONTROL_IDS: &[&str] = &["screens", "theme_studio"];
+const CONTROL_IDS: &[&str] = &["screens", "theme_studio", "mixer"];
 /// `[ TRY ]` on the monitor features: the SCREENS block opens on the HUD's next frame.
 static SCREENS_REQUEST: AtomicBool = AtomicBool::new(false);
 
-/// Opens a HUD control by id (the SCREENS mover, the Theme Studio) and brings the HUD up.
+/// Opens a HUD control by id (the SCREENS mover, the Theme Studio, the Mixer) and brings the HUD
+/// up.
 fn open_control(id: &str) {
     match id {
         "screens" => SCREENS_REQUEST.store(true, Ordering::Release),
         "theme_studio" => theme_studio::open(),
+        "mixer" => mixer_view::open(),
         _ => return,
     }
     show();
     request_repaint();
+}
+
+/// "Open the theme studio": the block where he designs a theme (and closes it again).
+pub fn show_theme_studio(open: bool) {
+    if open {
+        open_control("theme_studio");
+    } else {
+        theme_studio::close();
+        request_repaint();
+    }
+}
+
+/// "Open the mixer": a fader for every channel (and closes it again).
+pub fn show_mixer(open: bool) {
+    if open {
+        open_control("mixer");
+    } else {
+        mixer_view::close();
+        request_repaint();
+    }
+}
+
+/// Whether the view with this `configure_interface` key is still up. (The core and the console
+/// are asked to close either way: for them closing what is shut does nothing.)
+pub fn view_is_up(key: &str) -> bool {
+    match key {
+        "theme_studio" => theme_studio::is_open(),
+        "mixer_view" => mixer_view::is_open(),
+        "feature_lab" => features_view::is_open(),
+        _ => true,
+    }
 }
 
 /// "Show me your core", "make your core bigger": applied on the HUD's next frame.
@@ -301,6 +373,15 @@ pub fn core_command(cmd: crate::core_sphere_3d::CoreCommand) {
 /// The time a chat line arrived ("14:02:11").
 fn clock_now() -> String {
     chrono::Local::now().format("%H:%M:%S").to_string()
+}
+
+/// Opens (or closes) the Feature Lab: every tool Jarvis has, each with its `[ TRY ]`.
+pub fn show_features(open: bool) {
+    features_view::set_open(open);
+    if open {
+        show();
+    }
+    request_repaint();
 }
 
 /// Opens the Integrations & Productivity Hub (on a service's tab) and brings the HUD up.
@@ -553,7 +634,7 @@ fn open_window(app: &Jarvis, rt: &Handle, model: &Arc<Mutex<HudModel>>) -> Resul
         // but on Windows a transparent window does not take the whole monitor in fullscreen (it
         // stayed a ~60 % rectangle in the top-left corner): the fullscreen board is opaque.
         .with_transparent(geometry.transparent)
-        .with_decorations(!iface.frameless && !iface.orb_mode && !fullscreen)
+        .with_decorations(!iface.frameless && !iface.orb_mode && !fullscreen && !iface.span_all_monitors)
         .with_fullscreen(fullscreen)
         .with_maximized(maximized && !fullscreen)
         .with_window_level(level)
@@ -628,10 +709,13 @@ struct StartupGeometry {
 /// Fullscreen board: borderless, opaque, the primary monitor's full resolution at (0, 0) (pure orb
 /// mode never starts fullscreen). Otherwise the layout's window size, transparent.
 fn startup_geometry(iface: &InterfaceSettings, windowed: Vec2) -> StartupGeometry {
-    let fullscreen = iface.fullscreen && !iface.orb_mode;
-    if !fullscreen {
+    let spanning = iface.span_all_monitors && !iface.orb_mode;
+    let fullscreen = iface.fullscreen && !iface.orb_mode && !spanning;
+    if !fullscreen && !spanning {
         return StartupGeometry { fullscreen, transparent: true, size: windowed, position: None };
     }
+    // One board across every monitor starts as the opaque borderless board on the first one
+    // (never winit's fullscreen); `enforce_fullscreen` stretches it over the others at once.
     let (w, h) = primary_screen_points().unwrap_or((windowed.x, windowed.y));
     StartupGeometry { fullscreen, transparent: false, size: vec2(w, h), position: Some([0.0, 0.0]) }
 }
@@ -1384,6 +1468,11 @@ impl Reactor {
     }
 
     fn step(&mut self, state: &str, level: Option<&AudioLevel>, dt: f32) {
+        self.step_with(state, level, dt, crate::tts::output_level());
+    }
+
+    /// `step` with Jarvis' playback level given (`tts::output_level()`, 0-1 of full scale).
+    fn step_with(&mut self, state: &str, level: Option<&AudioLevel>, dt: f32, playback: f32) {
         let target = match state {
             "speaking" => 0.45 + (self.phase * 3.2).sin() * 0.2,
             "thinking" => 0.3 + (self.phase * 6.0).sin() * 0.08,
@@ -1396,7 +1485,7 @@ impl Reactor {
         let follow = |current: &mut f32, target: f32, rate: f32| *current += (target - *current) * (1.0 - rate.powf(dt * 60.0));
         follow(&mut self.energy, target, 0.82);
         let mic = level.filter(|l| l.phase != "muted").map(|l| ((l.rms_db + 62.0) / 42.0).clamp(0.0, 1.0)).unwrap_or(0.0);
-        let voice = (crate::tts::output_level() * 6.0).clamp(0.0, 1.0);
+        let voice = (playback * 6.0).clamp(0.0, 1.0);
         // Quick attack, slower release, like a VU meter.
         let (mic_rate, voice_rate) = (if mic > self.mic { 0.55 } else { 0.9 }, if voice > self.voice { 0.5 } else { 0.88 });
         follow(&mut self.mic, mic, mic_rate);
@@ -1411,6 +1500,45 @@ impl Reactor {
         for (angle, period) in self.spin.iter_mut().zip(periods) {
             *angle = (*angle + dt * TAU / period).rem_euclid(TAU);
         }
+    }
+}
+
+/// What the emblem's voice ticks follow after a second of `state` with Jarvis' own playback at
+/// `jarvis` (0-1) and Sir's microphone at `mic` (0-1): the reactor's own mapping, as the visual
+/// verifier asks it. The microphone never reaches the emblem.
+pub(crate) fn emblem_voice_of(state: &str, jarvis: f32, mic: f32) -> f32 {
+    let level = AudioLevel { rms: mic, rms_db: -62.0 + 42.0 * mic.clamp(0.0, 1.0), probability: mic, noise_floor: 0.0, start_gate: 0.0, start_threshold: 0.0, release_threshold: 0.0, phase: "listening", speaking: mic > 0.5 };
+    let mut reactor = Reactor::default();
+    for _ in 0..60 {
+        reactor.step_with(state, Some(&level), 1.0 / 60.0, jarvis / 6.0);
+    }
+    reactor.emblem_voice()
+}
+
+pub(crate) use features_view::TryPlan;
+
+/// What the Feature Lab's button does for the tool `def` (the exhaustive verifier presses
+/// every one of them).
+pub(crate) fn lab_plan(def: &serde_json::Value) -> TryPlan {
+    features_view::try_plan(def)
+}
+
+/// The HUD's look for a context that is not the HUD's window (the visual verifier's stage):
+/// the same visuals and text styles, in the active theme.
+pub(crate) fn apply_hud_visuals(ctx: &egui::Context) {
+    ctx.set_visuals(visuals(&Palette::new(&InterfaceSettings::default())));
+}
+
+/// egui measures a window, a menu or a tooltip invisibly in the pass that first shows it, and
+/// for that one pass its hit area is a guess (500 x 400 points, pushed back inside the screen)
+/// that can lie over the pointer and take the press meant for what is under it. A pass that has
+/// measured something new is therefore run again at once: the next press is tested against
+/// what is on screen, and nothing appears a frame late. Called at the end of every pass.
+pub(crate) fn settle_new_areas(ctx: &egui::Context) {
+    let layers = ctx.memory(|m| m.layer_ids().len());
+    let seen = ctx.data_mut(|d| std::mem::replace(d.get_temp_mut_or_insert_with(egui::Id::new("jarvis_layers_seen"), || 0usize), layers));
+    if layers > seen {
+        ctx.request_discard("a new area was measured");
     }
 }
 
@@ -1641,8 +1769,35 @@ impl HudApp {
         send(&self.app, &self.rt, &self.model, cmd);
     }
 
-    fn set_interface(&self, settings: InterfaceSettings) {
-        self.app.config().update(|c| c.interface = settings);
+    fn set_interface(&self, mut settings: InterfaceSettings) {
+        self.app.config().update(|c| {
+            settings.reconcile(&c.interface);
+            c.interface = settings;
+        });
+    }
+
+    /// The fullscreen board on monitor `index` (1-based; None or a monitor that is gone: the
+    /// primary one), from wherever the window is: spanning every monitor, fullscreen on
+    /// another one, or a window. winit makes a window fullscreen on the monitor it is on, so
+    /// the window is put there as a small plain window first.
+    fn fullscreen_on(&mut self, ctx: &egui::Context, index: Option<usize>) {
+        let monitors = crate::monitors::list();
+        let Some(m) = index.and_then(|i| monitors.iter().find(|m| m.index == i)).or_else(|| crate::monitors::primary(&monitors)) else {
+            ctx.send_viewport_cmd(ViewportCommand::Fullscreen(true));
+            return;
+        };
+        let ppp = ctx.pixels_per_point();
+        let points = |px: i32| px as f32 / ppp;
+        let inset = (m.width().min(m.height()) / 8).max(40);
+        ctx.send_viewport_cmd(ViewportCommand::Fullscreen(false));
+        ctx.send_viewport_cmd(ViewportCommand::Maximized(false));
+        ctx.send_viewport_cmd(ViewportCommand::Decorations(false));
+        ctx.send_viewport_cmd(ViewportCommand::OuterPosition(pos2(points(m.rect[0] + inset), points(m.rect[1] + inset))));
+        ctx.send_viewport_cmd(ViewportCommand::InnerSize(vec2(points(m.width() - 2 * inset), points(m.height() - 2 * inset))));
+        ctx.send_viewport_cmd(ViewportCommand::Fullscreen(true));
+        self.fullscreen_check = Instant::now();
+        self.fullscreen_fixes = 0;
+        info!("[HUD] Fullscreen board on {}", m.describe());
     }
 
     /// Applies interface changes (from Jarvis or the Interface window) to the live window.
@@ -1659,6 +1814,10 @@ impl HudApp {
         // Every window's colours follow the theme's fade (and Ultron Mode), not only the board.
         let generation = crate::theme_engine::generation();
         if self.applied.as_ref() == Some(&current) {
+            // "Move yourself to monitor 2" while the fullscreen board is up.
+            if let Some(index) = take_monitor_request(&current) {
+                self.fullscreen_on(ctx, Some(index));
+            }
             if fading || generation != self.theme_generation {
                 self.theme_generation = generation;
                 self.palette = Palette::new(&current);
@@ -1668,7 +1827,9 @@ impl HudApp {
         }
         self.theme_generation = generation;
         self.emblem.set_custom_home(current.orb_board_pos.map(|[x, y]| vec2(x, y)));
+        crate::hud_dock::set_orb_aside(current.orb_aside);
         crate::hud_dock::set_overlap_allowed(current.allow_window_overlap);
+        crate::tts::set_cues(current.sound_cues);
         let previous = self.applied.replace(current.clone());
         self.palette = Palette::new(&current);
         ctx.set_visuals(visuals(&self.palette));
@@ -1691,24 +1852,58 @@ impl HudApp {
                 };
                 ctx.send_viewport_cmd(ViewportCommand::WindowLevel(level));
             }
-            if current.span_all_monitors && !prev.span_all_monitors && !current.orb_mode {
-                // "Use all monitors": borderless and not maximised; `enforce_fullscreen` stretches
-                // the window over the virtual desktop (now, and whenever it drifts).
-                ctx.send_viewport_cmd(ViewportCommand::Fullscreen(false));
-                ctx.send_viewport_cmd(ViewportCommand::Maximized(false));
-                ctx.send_viewport_cmd(ViewportCommand::Decorations(false));
-                self.fullscreen_check = Instant::now().checked_sub(Duration::from_secs(2)).unwrap_or_else(Instant::now);
-            } else if prev.fullscreen != current.fullscreen && !current.orb_mode {
-                // Fullscreen ↔ maximised windowed mode (F11, VIEW, "windowed mode").
-                if current.fullscreen {
-                    ctx.send_viewport_cmd(ViewportCommand::Decorations(false));
-                    ctx.send_viewport_cmd(ViewportCommand::Fullscreen(true));
-                    self.fullscreen_check = Instant::now();
-                } else {
+            // The window's three shapes: one board across every monitor, the fullscreen board on
+            // one monitor, a (maximised) window. Each change of shape has one way through.
+            let shape = |i: &InterfaceSettings| (i.span_all_monitors, i.fullscreen);
+            if shape(&prev) != shape(&current) && !current.orb_mode {
+                let target = lock(&HUD_MONITOR).take();
+                if current.span_all_monitors {
+                    // "Use all monitors": borderless and not maximised; `enforce_fullscreen`
+                    // stretches the window over the virtual desktop (now, and whenever it drifts).
                     ctx.send_viewport_cmd(ViewportCommand::Fullscreen(false));
+                    ctx.send_viewport_cmd(ViewportCommand::Maximized(false));
+                    ctx.send_viewport_cmd(ViewportCommand::Decorations(false));
+                    // Straight onto the box around the monitors, in the same breath: leaving
+                    // fullscreen puts the window back where it was before it (a small window,
+                    // which stood there for two seconds until the next check stretched it).
+                    if let Some([x, y, w, h]) = crate::monitors::virtual_bounds(&crate::monitors::list()) {
+                        let ppp = ctx.pixels_per_point();
+                        ctx.send_viewport_cmd(ViewportCommand::OuterPosition(pos2(x as f32 / ppp, y as f32 / ppp)));
+                        ctx.send_viewport_cmd(ViewportCommand::InnerSize(vec2(w as f32 / ppp, h as f32 / ppp)));
+                    }
+                    // The check that it really covers them follows once those have been carried out.
+                    self.fullscreen_check = Instant::now().checked_sub(Duration::from_millis(1300)).unwrap_or_else(Instant::now);
+                    info!("[HUD] One board across every monitor");
+                } else if current.fullscreen {
+                    // Back from spanning: Sir's first monitor (or the one he named). From a
+                    // window: the monitor the window is on.
+                    if prev.span_all_monitors || target.is_some() {
+                        self.fullscreen_on(ctx, target);
+                    } else {
+                        ctx.send_viewport_cmd(ViewportCommand::Decorations(false));
+                        ctx.send_viewport_cmd(ViewportCommand::Fullscreen(true));
+                        // A maximised window stays maximised underneath when it goes fullscreen;
+                        // the check that lets go of that follows once the change is carried out.
+                        self.fullscreen_check = Instant::now().checked_sub(Duration::from_millis(1300)).unwrap_or_else(Instant::now);
+                    }
+                } else {
+                    // Fullscreen (or the span) → a maximised window ("windowed mode", F11).
+                    ctx.send_viewport_cmd(ViewportCommand::Fullscreen(false));
+                    if prev.span_all_monitors {
+                        // The spanned window is as large as the desktop: a plain window on the
+                        // first monitor is what gets maximised.
+                        let monitors = crate::monitors::list();
+                        if let Some(m) = crate::monitors::primary(&monitors) {
+                            let ppp = ctx.pixels_per_point();
+                            ctx.send_viewport_cmd(ViewportCommand::OuterPosition(pos2((m.rect[0] + 80) as f32 / ppp, (m.rect[1] + 60) as f32 / ppp)));
+                            ctx.send_viewport_cmd(ViewportCommand::InnerSize(layout_size(current.layout) / current.scale));
+                        }
+                    }
                     ctx.send_viewport_cmd(ViewportCommand::Decorations(!current.frameless));
                     ctx.send_viewport_cmd(ViewportCommand::Maximized(true));
                 }
+            } else if let Some(index) = take_monitor_request(&current) {
+                self.fullscreen_on(ctx, Some(index));
             }
             if prev.frameless != current.frameless {
                 ctx.send_viewport_cmd(ViewportCommand::Decorations(!current.frameless));
@@ -2180,7 +2375,7 @@ impl HudApp {
             .fixed_pos(pos2(0.0, 0.0))
             .interactable(false)
             .show(ctx, |ui| {
-                let rect = ctx.screen_rect();
+                let rect = home_screen(ctx);
                 ui.painter().rect_stroke(rect.shrink(3.0), Rounding::same(6.0), stroke(6.0, p.amber.gamma_multiply(pulse)));
                 let banner = Rect::from_center_size(pos2(rect.center().x, rect.top() + 70.0), vec2(rect.width().min(560.0), 44.0));
                 ui.painter().rect_filled(banner, Rounding::same(8.0), p.card_solid);
@@ -2348,15 +2543,10 @@ impl HudApp {
                 PopupAction::MediaPrevious => media(crate::media::MediaAction::Previous),
                 PopupAction::MediaPlayPause => media(crate::media::MediaAction::PlayPause),
                 PopupAction::MediaNext => media(crate::media::MediaAction::Next),
+                // (A drag of the slider is a hundred changes a second: the mixer carries out the
+                // latest, one call at a time.)
                 PopupAction::SetVolume { target, percent } => {
-                    let args = if matches!(target.to_lowercase().as_str(), "master" | "system" | "volume") {
-                        serde_json::json!({"action": "set_master", "level": percent})
-                    } else {
-                        serde_json::json!({"action": "set_app", "app": target, "level": percent})
-                    };
-                    self.rt.spawn(async move {
-                        let _ = crate::audio_mixer::tool(&args).await;
-                    });
+                    self.rt.spawn(async move { crate::audio_mixer::slide(&target, percent).await });
                 }
                 PopupAction::Confirm(_) => self.command(HudCommand::Chat { text: "yes".into() }),
                 PopupAction::Cancel(_) => self.command(HudCommand::Chat { text: "no".into() }),
@@ -2375,8 +2565,12 @@ impl HudApp {
             return;
         }
         let p = self.palette;
+        // (At the bottom right of the home screen: the window's own corner is no monitor's on a
+        // board that spans several.)
+        let home = home_screen(ctx);
         egui::Area::new(egui::Id::new("hud_toasts"))
-            .anchor(Align2::RIGHT_BOTTOM, vec2(-150.0, -(TELEMETRY_H + 30.0)))
+            .pivot(Align2::RIGHT_BOTTOM)
+            .fixed_pos(pos2(home.right() - 150.0, home.bottom() - (TELEMETRY_H + 30.0)))
             .order(egui::Order::Foreground)
             .interactable(false)
             .show(ctx, |ui| {
@@ -2881,6 +3075,8 @@ struct HudApp {
     camera_texture: Option<(u64, egui::TextureHandle)>,
     /// `[ SCREENS ]`.
     screens_open: bool,
+    /// `--window-drill`: the real window driven and checked (`window_drill`).
+    drill: Option<crate::window_drill::Drill>,
     /// The telemetry strip's peak hold (dBFS).
     peak_db: f32,
     /// The COMMS block's lines: (Sir's line, Jarvis' line) and when each last changed.
@@ -2899,6 +3095,25 @@ struct HudApp {
     last_activity: Instant,
     /// The console sits against the right edge (the board and the emblem keep left of it).
     console_at_edge: bool,
+    /// Ctrl+F: the search across every open block, its text and whether it takes the focus.
+    find_open: bool,
+    find_text: String,
+    find_focus: bool,
+    /// The console's predictive completions for what is typed so far (asked again only when
+    /// the line changes).
+    completions: (String, Vec<String>),
+    /// The header menu chosen from `[ MORE ]` in the last frame (it opens in this one).
+    header_menu_next: Option<&'static str>,
+    /// The board's area as the last frame laid it out (right of the widgets column when that
+    /// shows something, left of the console while it is out).
+    board_area_now: Rect,
+    /// The window's place as last seen (x, y, width, height in physical pixels) and, while it
+    /// has not been logged yet, since when it stands there (`note_window`).
+    window_seen: ([i32; 4], Option<Instant>),
+    /// How tall the console's foot (the completions and the input line) was in the last frame:
+    /// the log above it takes what is left, so the input line is never pushed out of the
+    /// console when the completions appear or wrap.
+    console_foot: f32,
 }
 
 /// The emblem's inputs from the HUD's model and the board (`centre_covered`: a block, the
@@ -2946,6 +3161,12 @@ impl HudApp {
         };
         info!("[HUD] Native window open (HUD board)");
         crate::camera_feed::refresh_devices();
+        Self::build(app, rt, model, hwnd)
+    }
+
+    /// The HUD's state for a window that exists (`new`) or for the offscreen HUD, which has
+    /// none (`hwnd` 0: nothing here ever touches a native window then).
+    fn build(app: Jarvis, rt: Handle, model: Arc<Mutex<HudModel>>, hwnd: isize) -> Self {
         let iface = app.config().read(|c| c.interface.clone());
         let widget_host = widget_view::WidgetHost { app: app.clone(), rt: rt.clone() };
         let inputs = emblem_inputs(&lock(&model), false, false, false, false);
@@ -2997,6 +3218,7 @@ impl HudApp {
             camera_device: 0,
             camera_texture: None,
             screens_open: false,
+            drill: crate::window_drill::enabled().then(crate::window_drill::Drill::new),
             peak_db: -90.0,
             captions: [(String::new(), now), (String::new(), now)],
             comms_offset: Vec2::ZERO,
@@ -3006,6 +3228,14 @@ impl HudApp {
             console_pinned: false,
             console_at_edge: true,
             last_activity: now,
+            find_open: false,
+            find_text: String::new(),
+            find_focus: false,
+            completions: (String::new(), Vec::new()),
+            header_menu_next: None,
+            board_area_now: Rect::NOTHING,
+            console_foot: 46.0,
+            window_seen: ([0; 4], None),
         }
     }
 
@@ -3015,7 +3245,11 @@ impl HudApp {
         if escape {
             // Esc closes the innermost thing first: the console, the spotlight, an overlay, then
             // Jarvis' speech.
-            if self.core_open {
+            if self.find_open {
+                self.find_open = false;
+                self.find_text.clear();
+                crate::hud_dock::set_search("");
+            } else if self.core_open {
                 self.core_open = false;
             } else if self.console_open && !self.console_pinned {
                 self.console_open = false;
@@ -3043,6 +3277,16 @@ impl HudApp {
         if pressed(Key::L) {
             self.console_open = !self.console_open;
             self.console_focus = self.console_open;
+        }
+        // Ctrl+K: the command palette (the console's line with its completions).
+        if pressed(Key::K) {
+            self.console_open = true;
+            self.console_focus = true;
+        }
+        // Ctrl+F: search across every open block.
+        if pressed(Key::F) {
+            self.find_open = true;
+            self.find_focus = true;
         }
         // F11: true fullscreen ↔ maximised windowed mode.
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::F11)) {
@@ -3092,13 +3336,31 @@ impl HudApp {
         self.emblem.step(dt, self.reactor.emblem_voice().max(welcome_level() * 0.6), inputs.busy());
     }
 
+    /// Where the window really is, in the log whenever it has changed and come to rest (in
+    /// physical pixels, as the monitors are listed): what a span, a move to another monitor or
+    /// a change to fullscreen actually did.
+    fn note_window(&mut self, ctx: &egui::Context, iface: &InterfaceSettings) {
+        let Some(outer) = ctx.input(|i| i.viewport().outer_rect) else { return };
+        let ppp = ctx.pixels_per_point();
+        let now = [(outer.left() * ppp).round() as i32, (outer.top() * ppp).round() as i32, (outer.width() * ppp).round() as i32, (outer.height() * ppp).round() as i32];
+        let (seen, since) = self.window_seen;
+        if seen != now {
+            // On the move: noted once it has stood still for half a second.
+            self.window_seen = (now, Some(Instant::now()));
+        } else if since.is_some_and(|s| s.elapsed() > Duration::from_millis(500)) {
+            self.window_seen.1 = None;
+            let shape = if iface.orb_mode { "the floating orb" } else if iface.span_all_monitors { "one board across every monitor" } else if iface.fullscreen { "the fullscreen board" } else { "a window" };
+            info!("[HUD] Window at {},{} {}×{} ({shape})", now[0], now[1], now[2], now[3]);
+        }
+    }
+
     /// The fullscreen board fills its monitor: `Fullscreen(true)` on the first frame, and every
     /// 1.5 s a check that the window really covers the monitor (re-applied when it does not).
     fn enforce_fullscreen(&mut self, ctx: &egui::Context, iface: &InterfaceSettings) {
         self.frames += 1;
         // "Use all monitors": the window covers the box around every monitor.
         #[cfg(windows)]
-        if iface.span_all_monitors && !iface.orb_mode && self.hwnd != 0 && self.fullscreen_check.elapsed() > Duration::from_millis(1500) {
+        if iface.span_all_monitors && !iface.orb_mode && self.hwnd != 0 && (self.frames == 2 || self.fullscreen_check.elapsed() > Duration::from_millis(1500)) {
             self.fullscreen_check = Instant::now();
             let hwnd = self.hwnd;
             if let Some(bounds) = crate::monitors::virtual_bounds(&crate::monitors::list()) {
@@ -3137,6 +3399,14 @@ impl HudApp {
                     if let Err(e) = crate::win32::cover_monitor(hwnd) {
                         warn!("[HUD] Could not stretch the board over its monitor: {e}");
                     }
+                });
+            } else if !minimized && crate::win32::window_state(hwnd).is_some_and(|(_, maximised, _)| maximised) {
+                // It covers the monitor but is still maximised underneath (a maximised window
+                // that went fullscreen, F11): a plain window of the same rect, nothing moves.
+                crate::win32::run_detached(move || match crate::win32::unmaximise_in_place(hwnd) {
+                    Ok(true) => info!("[HUD] The fullscreen board is no longer maximised underneath"),
+                    Ok(false) => {}
+                    Err(e) => warn!("[HUD] Could not let go of the board's maximised state: {e}"),
                 });
             }
         }
@@ -3196,10 +3466,10 @@ impl HudApp {
     /// The whole HUD board canvas.
     fn canvas(&mut self, ctx: &egui::Context, m: &HudModel, iface: &InterfaceSettings, dt: f32) {
         egui::CentralPanel::default().frame(Frame::none()).show(ctx, |ui| {
-            let screen = ui.max_rect();
-            // The empty canvas moves the frameless window; a double-click toggles fullscreen.
-            let canvas = ui.interact(screen, ui.id().with("hud_canvas"), Sense::click_and_drag());
-            if canvas.drag_started_by(egui::PointerButton::Primary) && !iface.fullscreen {
+            // The empty canvas moves the frameless window (not the fullscreen board, nor the one
+            // that spans the monitors); a double-click toggles fullscreen.
+            let canvas = ui.interact(ui.max_rect(), ui.id().with("hud_canvas"), Sense::click_and_drag());
+            if canvas.drag_started_by(egui::PointerButton::Primary) && !iface.fullscreen && !iface.span_all_monitors {
                 ctx.send_viewport_cmd(ViewportCommand::StartDrag);
             }
             if canvas.double_clicked() {
@@ -3207,9 +3477,11 @@ impl HudApp {
                 next.fullscreen = !iface.fullscreen;
                 self.set_interface(next);
             }
+            // Everything of the HUD proper is laid out on its home screen: the window, or Sir's
+            // first monitor while one board spans them all.
+            let screen = home_screen(ctx);
 
             let system = self.system_column(ctx, m, screen);
-            let left = screen.left() + 24.0 + if system { SYSTEM_COLUMN + 16.0 } else { 0.0 };
             // While the text console is out the board reflows left of it (its reserved corner
             // cell, where the emblem docks, too).
             self.console_anim.target_open = self.console_open;
@@ -3217,8 +3489,8 @@ impl HudApp {
             if self.console_anim.moving() {
                 ctx.request_repaint();
             }
-            let right = screen.right() - 24.0 - self.console_reserve();
-            let area = Rect::from_min_max(pos2(left, screen.top() + 12.0 + HEADER_H + 14.0), pos2(right.max(left + 240.0), screen.bottom() - 12.0 - TELEMETRY_H - CAPTION_BAND));
+            let area = board_area(screen, if system { SYSTEM_COLUMN + 16.0 } else { 0.0 }, self.console_reserve());
+            self.board_area_now = area;
             for cmd in std::mem::take(&mut *lock(&CORE_REQUESTS)) {
                 use crate::core_sphere_3d::CoreCommand;
                 match cmd {
@@ -3229,12 +3501,12 @@ impl HudApp {
                     }
                 }
             }
-            // The emblem leaves the centre only for what really covers it: the board's blocks, the
-            // spotlight and the in-app tool blocks (the core sphere docks it on its own).
+            // The emblem stays in the middle of the screen. It leaves it for a report on the
+            // board (whose blocks are laid out around its corner) and when Sir tells it to get
+            // out of the way; a window never moves it (windows open around it, and one Sir drags
+            // over it simply covers it). The core sphere docks it on its own.
             let board_rects = crate::hud_board::visible_rects(area);
-            let mut covering = board_rects.clone();
-            covering.extend(crate::hud_dock::block_rects());
-            self.centre_covered = crate::hud_dock::centre_covered(screen, &covering);
+            self.centre_covered = iface.orb_aside || crate::hud_dock::centre_covered(screen, &board_rects);
             // The board fades out while the core sphere fades in over it.
             let core_t = ctx.animate_bool_with_time(egui::Id::new("hud_core_view"), self.core_open, 0.35);
             if core_t < 1.0 {
@@ -3312,6 +3584,11 @@ impl HudApp {
             self.telemetry_strip(ui, m, screen, dt);
         });
         self.text_console(ctx, m);
+        // The search across the blocks, opened with Ctrl+F or by voice ("find voltage on the board").
+        if self.find_open || !crate::hud_dock::search().is_empty() {
+            self.find_open = true;
+            self.find_bar(ctx);
+        }
         if self.history_open {
             self.history_overlay(ctx, m);
         }
@@ -3354,11 +3631,64 @@ impl HudApp {
         // its anchor, so a separate anchor closed it in the frame it opened.
         let mut anchors: Vec<(&str, egui::Response)> = Vec::new();
         let theme_id = ui.id().with("hud_theme_menu");
-        for (id, rect) in header_layout(&items, screen.right() - 12.0, y, |t| painter.layout_no_wrap(t.to_string(), strip_font(), STRIP_INK).size().x) {
+        let view_id = ui.id().with("hud_view_menu");
+        let source_id = ui.id().with("hud_source_menu");
+        let modules_id = ui.id().with("hud_modules_menu");
+        let more_id = ui.id().with("hud_more_menu");
+        // A menu chosen from `[ MORE ]` opens a frame later: in the frame of the click egui
+        // would close it again (a click outside a popup's anchor closes it).
+        if let Some(menu) = self.header_menu_next.take() {
+            let popup = match menu {
+                "theme" => theme_id,
+                "modules" => modules_id,
+                "source" => source_id,
+                _ => view_id,
+            };
+            ui.memory_mut(|mem| mem.open_popup(popup));
+        }
+        let row = header_layout(&items, screen.left() + 12.0, screen.right() - 12.0, y, |t| painter.layout_no_wrap(t.to_string(), strip_font(), STRIP_INK).size().x);
+        // On a screen too narrow for the whole strip: `[ MORE ]` holds the boxes that are not
+        // on the row (lit while one of them is).
+        if let Some(rect) = row.more {
+            let response = ui.interact(rect, ui.id().with(("hud_strip", "more")), Sense::click());
+            let lit = row.hidden.iter().any(|id| items.iter().any(|i| i.id == *id && i.on));
+            let colour = crate::hud_board::active_colour();
+            painter.rect_filled(rect, Rounding::ZERO, if lit { colour.gamma_multiply(0.14) } else { rgba([3, 7, 12], 0.9) });
+            painter.rect_stroke(rect, Rounding::ZERO, stroke(1.0, if response.hovered() || lit { colour } else { STRIP_INK.gamma_multiply(0.7) }));
+            painter.text(rect.center(), Align2::CENTER_CENTER, "MORE", strip_font(), if lit { colour } else { STRIP_INK });
+            if response.clicked() {
+                ui.memory_mut(|mem| mem.toggle_popup(more_id));
+            }
+            egui::popup::popup_below_widget(ui, more_id, &response, egui::popup::PopupCloseBehavior::CloseOnClick, |ui| {
+                ui.set_min_width(190.0);
+                for id in row.hidden.iter().copied() {
+                    let Some(item) = items.iter().find(|i| i.id == id) else { continue };
+                    let ink = if item.on { crate::hud_board::active_colour() } else { STRIP_INK };
+                    if ui.add(egui::Button::new(RichText::new(item.text.as_str()).font(strip_font()).color(ink)).frame(false)).clicked() {
+                        if matches!(id, "theme" | "modules" | "view" | "source") {
+                            if id == "source" {
+                                crate::camera_feed::refresh_devices();
+                            }
+                            self.header_menu_next = Some(id);
+                        } else {
+                            clicked = Some(id);
+                        }
+                    }
+                }
+            });
+            // The menus of the boxes it holds hang off it.
+            for id in row.hidden.iter().copied().filter(|id| matches!(*id, "theme" | "modules" | "view" | "source")) {
+                anchors.push((id, response.clone()));
+            }
+        }
+        for (id, rect) in row.placed {
             let item = items.iter().find(|i| i.id == id).expect("laid-out item");
             if !item.boxed {
                 painter.text(rect.left_center(), Align2::LEFT_CENTER, item.text.as_str(), strip_font(), STRIP_MUTED);
                 continue;
+            }
+            if crate::window_drill::enabled() {
+                crate::window_drill::mark(&format!("header:{id}"), rect);
             }
             let response = ui.interact(rect, ui.id().with(("hud_strip", id)), Sense::click());
             let hot = response.hovered() || item.on;
@@ -3387,9 +3717,6 @@ impl HudApp {
             }
         }
         let anchor = |id: &str| anchors.iter().find(|(a, _)| *a == id).map(|(_, r)| r.clone());
-        let view_id = ui.id().with("hud_view_menu");
-        let source_id = ui.id().with("hud_source_menu");
-        let modules_id = ui.id().with("hud_modules_menu");
         match clicked {
             Some("theme") => self.apply_palette(ctx, iface, crate::theme_engine::next_preset(&iface.hud_palette)),
             Some("phone") => pairing_view::toggle(),
@@ -3577,6 +3904,18 @@ impl HudApp {
                 let mut next = iface.clone();
                 next.comms_block = !iface.comms_block;
                 self.set_interface(next);
+            }
+            if item(ui, if iface.sound_cues { "SOUND CUES: ON" } else { "SOUND CUES: OFF" }) {
+                let mut next = iface.clone();
+                next.sound_cues = !iface.sound_cues;
+                self.set_interface(next);
+            }
+            if item(ui, "  TIDY THE WINDOWS") {
+                crate::hud_dock::retile_all(block_bounds(screen));
+            }
+            if item(ui, "  FIND IN BLOCKS (CTRL+F)") {
+                self.find_open = true;
+                self.find_focus = true;
             }
             if item(ui, if wake_word { "MODE: WAKE WORD → HANDS-FREE" } else { "MODE: HANDS-FREE → WAKE WORD" }) {
                 self.command(HudCommand::SetWakeWordRequired { required: !wake_word });
@@ -3797,6 +4136,52 @@ impl HudApp {
         crate::hud_board::paint_dialogue(&painter, rect, &block);
     }
 
+    /// Ctrl+F: one line that searches every open block (the board's tiles and the in-app
+    /// windows). What carries the words stays lit, the rest steps back; Esc or `[ X ]` ends it.
+    fn find_bar(&mut self, ctx: &egui::Context) {
+        // Changed by voice since the last frame ("find voltage", "clear the search").
+        let live = crate::hud_dock::search();
+        if live != self.find_text.trim().to_lowercase() {
+            if live.is_empty() {
+                self.find_open = false;
+                self.find_text.clear();
+                return;
+            }
+            self.find_text = live;
+        }
+        let screen = home_screen(ctx);
+        let mut close = false;
+        egui::Area::new(egui::Id::new("hud_find_bar")).order(egui::Order::Foreground).fixed_pos(pos2(screen.center().x - FIND_BAR_WIDTH / 2.0, screen.top() + 12.0 + HEADER_H + 10.0)).show(ctx, |ui| {
+            Frame::none().fill(crate::hud_board::BLOCK_FILL).stroke(stroke(1.0, crate::hud_board::border_colour())).rounding(Rounding::ZERO).inner_margin(Margin::symmetric(10.0, 6.0)).show(ui, |ui| {
+                ui.set_width(FIND_BAR_WIDTH - 20.0);
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("FIND IN BLOCKS").font(strip_font()).color(crate::hud_board::active_colour()));
+                    let input = ui.add(egui::TextEdit::singleline(&mut self.find_text).desired_width(220.0).font(FontId::proportional(14.0)).hint_text("voltage, deadline …"));
+                    if self.find_focus {
+                        input.request_focus();
+                        self.find_focus = false;
+                    }
+                    if input.changed() {
+                        crate::hud_dock::set_search(&self.find_text);
+                    }
+                    let needle = crate::hud_dock::search();
+                    let hits = crate::hud_dock::search_hits().len() + crate::hud_board::search_hits(&needle).len();
+                    let tally = if needle.is_empty() { "TYPE TO SEARCH".to_string() } else { format!("{hits} BLOCK{}", if hits == 1 { "" } else { "S" }) };
+                    ui.label(RichText::new(tally).font(strip_font()).color(STRIP_MUTED));
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        let key = egui::Button::new(RichText::new("[ X ]").font(strip_font()).color(STRIP_INK)).fill(rgba([3, 7, 12], 0.9)).stroke(stroke(1.0, crate::hud_board::border_colour())).rounding(Rounding::ZERO);
+                        close = ui.add(key).on_hover_text("End the search (Esc)").clicked();
+                    });
+                });
+            });
+        });
+        if close {
+            self.find_open = false;
+            self.find_text.clear();
+            crate::hud_dock::set_search("");
+        }
+    }
+
     /// What the console keeps free on the right: its width while it sits against the right edge,
     /// nothing once Sir has dragged it elsewhere (or detached it).
     fn console_reserve(&self) -> f32 {
@@ -3840,7 +4225,7 @@ impl HudApp {
                 paint_window_border(ctx);
             });
         } else {
-            let screen = ctx.screen_rect();
+            let screen = home_screen(ctx);
             let top = screen.top() + 12.0 + HEADER_H + 10.0;
             let height = (screen.bottom() - 12.0 - TELEMETRY_H - 10.0 - top).max(220.0);
             let bounds = Rect::from_min_max(pos2(screen.left() + 8.0, top), pos2(screen.right() - 8.0, screen.bottom() - 12.0 - TELEMETRY_H - 4.0));
@@ -3862,6 +4247,10 @@ impl HudApp {
                 .default_pos(at)
                 .default_size(edge.size() - vec2(26.0, 26.0))
                 .min_size([300.0, 220.0])
+                // Never larger than its part of the screen: content that asks for more for a
+                // frame (the completions appearing) must not make the console grow past the
+                // telemetry strip for good, where its input line would be cut off.
+                .max_size(bounds.size() - vec2(26.0, 26.0))
                 .constrain_to(bounds)
                 .order(if self.console_pinned { egui::Order::Foreground } else { egui::Order::Middle })
                 .show(ctx, |ui| {
@@ -3934,7 +4323,7 @@ impl HudApp {
             }
         });
         ui.add_space(8.0);
-        let log_height = (ui.available_height() - 46.0).max(60.0);
+        let log_height = (ui.available_height() - self.console_foot).max(60.0);
         egui::ScrollArea::vertical().max_height(log_height).auto_shrink([false, false]).stick_to_bottom(true).show(ui, |ui| {
             for line in m.messages.iter().filter(|l| !l.text.trim().is_empty()) {
                 let (who, colour) = match line.who {
@@ -3949,7 +4338,34 @@ impl HudApp {
                 ui.add_space(6.0);
             }
         });
+        let foot_top = ui.cursor().top();
         ui.add_space(6.0);
+        // Predictive completion: what Sir most likely means by what he has typed so far (his
+        // own recent requests first, then Jarvis' command vocabulary). Tab takes the first.
+        if self.completions.0 != self.console_input {
+            let recent: Vec<String> = m.messages.iter().rev().filter(|l| l.who == Speaker::Sir).take(40).map(|l| l.text.clone()).collect();
+            self.completions = (self.console_input.clone(), crate::command_palette::complete(&self.console_input, &recent, 4));
+        }
+        if !self.completions.1.is_empty() {
+            let mut taken: Option<String> = None;
+            if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Tab)) {
+                taken = self.completions.1.first().cloned();
+            }
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = vec2(6.0, 4.0);
+                for (n, text) in self.completions.1.iter().enumerate() {
+                    let chip = egui::Button::new(RichText::new(text).font(strip_font()).color(if n == 0 { crate::hud_board::active_colour() } else { STRIP_INK })).fill(rgba([3, 7, 12], 0.9)).stroke(stroke(1.0, crate::hud_board::border_colour())).rounding(Rounding::ZERO);
+                    if ui.add(chip).on_hover_text(if n == 0 { "Tab completes the line with this" } else { "Click to use this" }).clicked() {
+                        taken = Some(text.clone());
+                    }
+                }
+            });
+            if let Some(text) = taken {
+                self.console_input = text;
+                self.console_focus = true;
+            }
+            ui.add_space(4.0);
+        }
         ui.horizontal(|ui| {
             let width = (ui.available_width() - 150.0).max(120.0);
             let input = Frame::none()
@@ -3975,6 +4391,18 @@ impl HudApp {
                 self.console_focus = enter;
             }
         });
+        // What the foot took this frame is what the log leaves it in the next one. A foot that
+        // grew (the completions appeared) overflowed the console in this pass: it is laid out
+        // again at once. One that shrank only left a gap for a frame.
+        let foot = ui.cursor().top() - foot_top;
+        if (foot - self.console_foot).abs() > 0.5 {
+            if foot > self.console_foot {
+                ctx.request_discard("the console's foot grew");
+            } else {
+                ctx.request_repaint();
+            }
+            self.console_foot = foot;
+        }
     }
 
     /// The left column of system blocks: confirmations, message cards, the latest clip and
@@ -4015,7 +4443,7 @@ impl HudApp {
 
     /// `[ HISTORY ]`: saved reports (click to put one on the board) and the conversation.
     fn history_overlay(&mut self, ctx: &egui::Context, m: &HudModel) {
-        let screen = ctx.screen_rect();
+        let screen = home_screen(ctx);
         let size = vec2(560.0f32.min(screen.width() - 48.0), (screen.height() * 0.72).max(240.0));
         let mut present: Option<i64> = None;
         let mut close = false;
@@ -4089,7 +4517,7 @@ impl HudApp {
             }
             ctx.request_repaint_after(Duration::from_millis(33));
         }
-        let screen = ctx.screen_rect();
+        let screen = home_screen(ctx);
         let devices = crate::camera_feed::devices();
         let name = devices.get(self.camera_device).cloned().unwrap_or_else(|| "DEFAULT CAMERA".into()).to_uppercase();
         let status = crate::camera_feed::status();
@@ -4122,60 +4550,35 @@ impl HudApp {
         }
     }
 
-    /// `[ SCREENS ]`: the monitors, and sending the HUD to one of them.
+    /// `[ SCREENS ]`: the monitors, sending the HUD to one of them, and one board across all.
     fn screens_block(&mut self, ctx: &egui::Context) {
-        let screen = ctx.screen_rect();
+        let screen = home_screen(ctx);
         let monitors = crate::monitors::list();
         let iface = self.app.config().read(|c| c.interface.clone());
-        let mut send: Option<usize> = None;
-        let mut span = false;
-        let mut close = false;
-        egui::Area::new(egui::Id::new("hud_screens"))
-            .default_pos(pos2(screen.right() - 24.0 - 340.0, screen.top() + 12.0 + HEADER_H + 14.0))
-            .order(egui::Order::Foreground)
-            .show(ctx, |ui| {
-                ui.set_width(340.0);
-                sharp_block(ui, &format!("SCREENS // {} DISPLAY{}", monitors.len(), if monitors.len() == 1 { "" } else { "S" }), "LIVE", |ui| {
-                    for (i, mon) in monitors.iter().enumerate() {
-                        ui.horizontal(|ui| {
-                            ui.label(RichText::new(format!("DISPLAY {}  {}", i + 1, mon.describe().to_uppercase())).font(strip_font()).color(STRIP_INK));
-                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                if ui.add(egui::Button::new(RichText::new(format!("[ MONITOR {} ]", i + 1)).font(strip_font()).color(crate::hud_board::active_colour())).frame(false)).on_hover_text("Move the HUD here").clicked() {
-                                    send = Some(i + 1);
-                                }
-                            });
-                        });
-                    }
-                    ui.horizontal(|ui| {
-                        if monitors.len() > 1 {
-                            let label = if iface.span_all_monitors { "SPAN ALL" } else { "[ SPAN ALL ]" };
-                            if ui.add(egui::Button::new(RichText::new(label).font(strip_font()).color(crate::hud_board::active_colour())).frame(false)).on_hover_text("One board across every monitor").clicked() {
-                                span = true;
-                            }
-                        }
-                        if ui.add(egui::Button::new(RichText::new("[ CLOSE ]").font(strip_font()).color(STRIP_MUTED)).frame(false)).clicked() {
-                            close = true;
-                        }
-                    });
-                });
-            });
-        if let Some(n) = send {
-            // Back to one monitor (fullscreen there), then moved straight away — no language model.
-            if iface.span_all_monitors {
-                let mut next = iface.clone();
-                next.span_all_monitors = false;
-                next.fullscreen = true;
-                self.set_interface(next);
+        // The monitor the HUD is on (none of them alone while it spans them).
+        let ppp = ctx.pixels_per_point();
+        let here = ctx.input(|i| i.viewport().inner_rect).filter(|_| !iface.span_all_monitors).and_then(|r| crate::monitors::monitor_at(&monitors, (r.center().x * ppp) as i32, (r.center().y * ppp) as i32));
+        let width = SCREENS_WIDTH.min(screen.width() - 32.0);
+        let mut picked = ScreensPick::default();
+        // Always at the home screen's top right, also after the HUD changed monitors.
+        egui::Area::new(egui::Id::new("hud_screens")).fixed_pos(pos2(screen.right() - 24.0 - width, screen.top() + 12.0 + HEADER_H + 14.0)).order(egui::Order::Foreground).show(ctx, |ui| {
+            ui.set_width(width);
+            picked = screens_menu(ui, &monitors, iface.span_all_monitors, here);
+        });
+        if let Some(n) = picked.send {
+            // The fullscreen board (also one that spans the monitors) goes there at once; a
+            // plain window is moved as any window is. No language model either way.
+            if !send_board_to_monitor(self.app.config(), n) {
+                self.run_calls(vec![("move_window_to_monitor", serde_json::json!({ "app_or_window_name": "jarvis", "target_monitor": n }))]);
             }
-            self.run_calls(vec![("move_window_to_monitor", serde_json::json!({ "app_or_window_name": "jarvis", "target_monitor": n }))]);
         }
-        if span && !iface.span_all_monitors {
+        if let Some(on) = picked.span.filter(|on| *on != iface.span_all_monitors) {
             let mut next = iface.clone();
-            next.span_all_monitors = true;
-            next.fullscreen = false;
+            next.span_all_monitors = on;
+            next.fullscreen = !on;
             self.set_interface(next);
         }
-        if close {
+        if picked.close {
             self.screens_open = false;
         }
     }
@@ -4318,6 +4721,7 @@ impl HudApp {
             let spec = serde_json::json!({ "name": t.name, "core_primary": hex(t.core_primary), "core_secondary": hex(t.core_secondary), "window_border": hex(t.window_border), "background_tint": hex(t.background_tint) });
             self.configure_look(&iface, serde_json::json!({ "create_theme": spec }));
         }
+        mixer_view::show(ctx, &self.rt);
         // The spatial workspace: floating glass windows.
         crate::workspace_canvas::show(ctx, &self.app, &self.rt);
         self.workout.show(ctx, &self.palette, &self.app, &self.rt);
@@ -4503,24 +4907,49 @@ const MODULES: &[(&str, &[(&str, &str)])] = &[
 /// The camera picker is at least this wide (a field, not a button).
 const SOURCE_PICKER_W: f32 = 190.0;
 
-/// The items' rects, laid out right to left from `right` (each box its text width plus 14 px,
-/// 6 px apart); `measure` gives a text's width.
-fn header_layout(items: &[HeaderItem], right: f32, y: f32, measure: impl Fn(&str) -> f32) -> Vec<(&'static str, Rect)> {
+/// The header strip as it fits a screen.
+struct HeaderRow {
+    /// The items on the row and their rects, left to right.
+    placed: Vec<(&'static str, Rect)>,
+    /// The boxes the row had no room for, left to right: they are in the `[ MORE ]` menu.
+    hidden: Vec<&'static str>,
+    /// The `[ MORE ]` box, where the row begins, when anything is hidden.
+    more: Option<Rect>,
+}
+
+/// The items' rects on one row between `left` and `right`, laid out right to left (each box its
+/// text width plus 14 px, 6 px apart); `measure` gives a text's width. On a screen too narrow
+/// for all of them (an upright monitor) the leftmost ones leave the row for the `[ MORE ]`
+/// menu: nothing is ever drawn off the screen's edge.
+fn header_layout(items: &[HeaderItem], left: f32, right: f32, y: f32, measure: impl Fn(&str) -> f32) -> HeaderRow {
+    let widths: Vec<f32> = items
+        .iter()
+        .map(|item| {
+            if !item.boxed {
+                measure(&item.text) + 2.0
+            } else if item.id == "source" {
+                (measure(&item.text) + 34.0).max(SOURCE_PICKER_W)
+            } else {
+                measure(&item.text) + 14.0
+            }
+        })
+        .collect();
+    let more_w = measure("MORE") + 14.0;
+    // The row from item `k` on, with the menu's box before it unless it is the whole strip.
+    let needs = |k: usize| widths[k..].iter().sum::<f32>() + 6.0 * (items.len() - k).saturating_sub(1) as f32 + if k > 0 { more_w + 6.0 } else { 0.0 };
+    let first = (0..items.len()).find(|k| needs(*k) <= right - left).unwrap_or(items.len());
     let mut x = right;
-    let mut out = Vec::new();
-    for item in items.iter().rev() {
-        let w = if !item.boxed {
-            measure(&item.text) + 2.0
-        } else if item.id == "source" {
-            (measure(&item.text) + 34.0).max(SOURCE_PICKER_W)
-        } else {
-            measure(&item.text) + 14.0
-        };
-        out.push((item.id, Rect::from_min_size(pos2(x - w, y), vec2(w, HEADER_H))));
+    let mut placed = Vec::new();
+    for (item, w) in items.iter().zip(&widths).skip(first).rev() {
+        placed.push((item.id, Rect::from_min_size(pos2(x - w, y), vec2(*w, HEADER_H))));
         x -= w + 6.0;
     }
-    out.reverse();
-    out
+    placed.reverse();
+    HeaderRow {
+        placed,
+        hidden: items[..first].iter().filter(|item| item.boxed).map(|item| item.id).collect(),
+        more: (first > 0).then(|| Rect::from_min_size(pos2(x - more_w, y), vec2(more_w, HEADER_H))),
+    }
 }
 
 /// The COMMS block's width and centre: half the screen (360-820 px), centred in what the text
@@ -4644,83 +5073,312 @@ pub(super) fn hud_block_window(ctx: &egui::Context, id: &str, title: &str, size:
     if fade.is_some() {
         ctx.request_repaint();
     }
-    let screen = ctx.screen_rect();
-    let bounds = Rect::from_min_max(screen.min + vec2(8.0, 12.0 + HEADER_H + 8.0), screen.max - vec2(8.0, 12.0 + TELEMETRY_H + 8.0));
+    // The block's screen: on a spanned HUD the monitor it stands on (the one under the pointer
+    // while Sir drags it across), so no block straddles a bezel or sits where no screen shows.
+    let regions = block_regions(ctx);
+    let dragged = crate::hud_dock::grabbed(id).and_then(|_| ctx.input(|i| i.pointer.primary_down().then(|| i.pointer.interact_pos()).flatten()));
+    let anchor = dragged.or_else(|| crate::hud_dock::block_rect(id).map(|r| r.center()));
+    let mut bounds = anchor.map_or(regions[0], |at| region_at(&regions, at));
     let size = vec2(size[0].min(bounds.width() - 16.0).max(320.0), size[1].min(bounds.height() - 16.0).max(220.0));
-    let at = new_block_position(ctx, egui::Id::new(("hud_block", id)), bounds, size);
+    let area = egui::Id::new(("hud_block", id));
+    // Where the dock holds the block for now: its first slot, a cell of the tidy grid, the
+    // maximised rect. Otherwise it stays wherever Sir dragged it.
+    // (A block that reopens comes back where it was, unless something has taken that spot. A
+    // block whose place is no longer on the board, because the HUD moved to a smaller or an
+    // upright screen, is placed afresh: pushed back inside by egui alone it would land on
+    // whatever is at the edge.)
+    // The dock thinks in whole blocks (frame included); egui sizes a window by its content.
+    let frame_pad = Vec2::splat(2.0 * BLOCK_MARGIN);
+    // (Only where a block fits the board at all: in a window smaller than one block there is
+    // no place to give.)
+    let fits = bounds.width() >= crate::hud_dock::MIN_BLOCK[0] + 20.0 && bounds.height() >= crate::hud_dock::MIN_BLOCK[1] + 20.0;
+    let fresh = ctx.memory(|m| m.area_rect(area)).is_none_or(|old| (fits && !bounds.expand(2.0).contains_rect(old)) || (!crate::hud_dock::is_open(id) && crate::hud_dock::collides(id, old)));
+    let held = crate::hud_dock::take_forced(id).or_else(|| fresh.then(|| new_block_rect(ctx, id, &regions, size + frame_pad)));
+    // A place the dock gave on another monitor makes that monitor the block's screen.
+    if let Some(r) = held {
+        bounds = region_at(&regions, r.center());
+    }
+    let (at, size) = held.map_or((bounds.min, size), |r| (r.min, (r.size() - frame_pad).max(Vec2::splat(40.0))));
+    // The search across the blocks: a block that answers it is lit, the others step back.
+    let needle = crate::hud_dock::search();
+    let found = !needle.is_empty() && crate::hud_dock::search_matches(&needle, title, &crate::hud_dock::block_content(id).unwrap_or_default());
+    let alpha = alpha * if needle.is_empty() || found { 1.0 } else { SEARCH_DIM };
+    let (pinned, maximized) = (crate::hud_dock::is_pinned(id), crate::hud_dock::is_maximized(id));
+    let edge = if found { crate::hud_board::active_colour() } else { crate::hud_board::border_colour() };
     let frame = Frame::none()
         .fill(BLOCK_SLATE.gamma_multiply(alpha))
-        .stroke(stroke(1.0, crate::hud_board::border_colour().gamma_multiply(alpha)))
+        .stroke(stroke(if found { 2.0 } else { 1.0 }, edge.gamma_multiply(alpha)))
         .rounding(Rounding::ZERO)
-        .inner_margin(Margin::same(12.0));
-    let shown = egui::Window::new(title)
-        .id(egui::Id::new(("hud_block", id)))
-        .title_bar(false)
-        .collapsible(false)
-        .resizable(true)
-        .frame(frame)
-        .default_pos(at)
-        .default_size(size)
-        .min_size([300.0, 200.0])
-        .constrain_to(bounds)
-        .show(ctx, |ui| {
-            if alpha < 1.0 {
-                ui.multiply_opacity(alpha);
-            }
-            // The block keeps the size it was given (or dragged to), however short its content.
-            ui.set_min_size(ui.available_size());
-            ui.horizontal(|ui| {
-                ui.add(egui::Label::new(RichText::new(title.to_uppercase()).font(strip_font()).color(crate::hud_board::active_colour())).truncate());
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    let chip = |ui: &mut Ui, text: &str, hint: &str| {
-                        ui.add(egui::Button::new(RichText::new(text).font(strip_font()).color(STRIP_INK)).fill(rgba([3, 7, 12], 0.9)).stroke(stroke(1.0, crate::hud_board::border_colour())).rounding(Rounding::ZERO))
-                            .on_hover_text(hint)
-                            .clicked()
-                    };
-                    if chip(ui, "[ CLOSE ]", "Close") {
-                        action.close = true;
-                    }
-                    if chip(ui, "[ DETACH ]", "Open in its own window (say \"dock all windows\" to bring it back)") {
-                        action.detach = true;
-                    }
-                });
+        .inner_margin(Margin::same(BLOCK_MARGIN));
+    let window = egui::Window::new(title).id(area).title_bar(false).collapsible(false).resizable(true).frame(frame).default_pos(at).default_size(size).constrain_to(bounds);
+    let window = match held {
+        Some(r) => window.current_pos(r.min).min_size(size).max_size(size),
+        None => window.min_size(Vec2::from(crate::hud_dock::MIN_BLOCK) - frame_pad),
+    };
+    let shown = window.show(ctx, |ui| {
+        if alpha < 1.0 {
+            ui.multiply_opacity(alpha);
+        }
+        // The block keeps the size it was given (or dragged to), however short its content.
+        ui.set_min_size(ui.available_size());
+        ui.horizontal(|ui| {
+            // Not selectable: a drag that begins on the title moves the block (selectable text
+            // would take the drag for a selection).
+            ui.add(egui::Label::new(RichText::new(title.to_uppercase()).font(strip_font()).color(crate::hud_board::active_colour())).truncate().selectable(false))
+                .on_hover_text("Drag to move, drag an edge to resize. Right-click: copy, pin, maximize, export, close. Ctrl+W close, Ctrl+G maximize, Ctrl+P pin, Ctrl+E export.");
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                let chip = |ui: &mut Ui, text: &str, hint: &str| {
+                    ui.add(egui::Button::new(RichText::new(text).font(strip_font()).color(STRIP_INK)).fill(rgba([3, 7, 12], 0.9)).stroke(stroke(1.0, crate::hud_board::border_colour())).rounding(Rounding::ZERO))
+                        .on_hover_text(hint)
+                        .clicked()
+                };
+                if chip(ui, "[ CLOSE ]", "Close (Ctrl+W closes the block under the pointer)") {
+                    action.close = true;
+                }
+                if chip(ui, "[ DETACH ]", "Open in its own window (say \"dock all windows\" to bring it back)") {
+                    action.detach = true;
+                }
+                if pinned {
+                    ui.add(egui::Label::new(RichText::new("PINNED").font(strip_font()).color(crate::hud_board::active_colour())).selectable(false))
+                        .on_hover_text("Stays through \"close the windows\" and keeps its place. Right-click to unpin.");
+                }
             });
-            let r = ui.cursor();
-            ui.painter().line_segment([pos2(r.left(), r.top()), pos2(r.left() + ui.available_width(), r.top())], stroke(1.0, crate::hud_board::border_colour()));
-            ui.add_space(6.0);
-            body(ui);
         });
+        let r = ui.cursor();
+        ui.painter().line_segment([pos2(r.left(), r.top()), pos2(r.left() + ui.available_width(), r.top())], stroke(1.0, crate::hud_board::border_colour()));
+        ui.add_space(6.0);
+        body(ui);
+    });
     if let Some(inner) = shown {
         let rect = inner.response.rect;
         crate::hud_board::brackets(&ctx.layer_painter(inner.response.layer_id), rect, crate::hud_board::bracket_colour());
-        crate::hud_dock::publish_block(id, title, rect);
+        if crate::hud_dock::publish_block(id, title, rect) {
+            crate::tts::play_cue(crate::jarvis_voice_dsp::Earcon::Materialize);
+        }
+        // Moved with the mouse, a block stays exactly under the pointer: where it stood when
+        // the button went down plus the whole way the pointer has come since. (egui's own
+        // window move begins a few pixels late and rounds every frame.) A resize or a drag
+        // inside the block's content is left alone: only a block that egui is moving is taken.
+        let (pressed, down, released, origin, at) = ctx.input(|i| (i.pointer.primary_pressed(), i.pointer.primary_down(), i.pointer.primary_released(), i.pointer.press_origin(), i.pointer.interact_pos()));
+        if pressed {
+            if let Some(origin) = origin.filter(|o| rect.contains(*o)) {
+                crate::hud_dock::grab(id, rect, origin);
+            }
+        } else if let Some((home, origin)) = crate::hud_dock::grabbed(id).filter(|_| down || released) {
+            let moved = (rect.min - home.min).length() > 0.5 && (rect.size() - home.size()).length() <= 0.5;
+            if let Some(at) = at.filter(|_| moved) {
+                crate::hud_dock::hold_once(id, Rect::from_min_size(home.min + (at - origin), home.size()));
+                ctx.request_repaint();
+            }
+        }
+        if !down {
+            crate::hud_dock::let_go(id);
+        }
+        // Ctrl+W / Ctrl+M / Ctrl+P on the block under the pointer; right-click: the block menu.
+        let mut chosen = inner.response.contains_pointer().then(|| block_shortcut(ctx)).flatten();
+        inner.response.context_menu(|ui| chosen = chosen.or(crate::block_actions::menu(ui, pinned, maximized)));
+        if let Some(chosen) = chosen {
+            use crate::block_actions::{BlockAction as Menu, Format};
+            let text = || crate::hud_dock::block_content(id).unwrap_or_else(|| title.to_string());
+            let export = |format| match crate::block_actions::export(title, &text(), None, format) {
+                Ok(path) => info!("[HUD] Block '{title}' exported to {}", path.display()),
+                Err(e) => warn!("[HUD] Could not export '{title}': {e}"),
+            };
+            match chosen {
+                Menu::Copy => crate::block_actions::copy(ctx, &text()),
+                Menu::Pin => {
+                    crate::hud_dock::toggle_pin(id);
+                }
+                Menu::Maximize => {
+                    if crate::hud_dock::toggle_maximize(id, bounds) {
+                        crate::tts::play_cue(crate::jarvis_voice_dsp::Earcon::Spotlight);
+                    }
+                }
+                Menu::ExportMarkdown => export(Format::Markdown),
+                Menu::ExportJson => export(Format::Json),
+                Menu::Close => action.close = true,
+            }
+            ctx.request_repaint();
+        }
+    }
+    // Closed by hand (the chip, the menu, Ctrl+W): the block leaves with its cue.
+    if action.close {
+        crate::tts::play_cue(crate::jarvis_voice_dsp::Earcon::Dismiss);
     }
     action
 }
 
-/// Where a block opens the first time: a free spot off every open window and the orb
-/// (`hud_dock::place_new_window`), inside one monitor when the HUD spans several; later frames
-/// keep wherever Sir dragged it. "Overlap the windows" brings back the cascade.
-fn new_block_position(ctx: &egui::Context, area: egui::Id, bounds: Rect, size: Vec2) -> Pos2 {
-    let slot = (crate::hud_dock::block_rects().len() % 5) as f32;
-    let cascade = bounds.min + vec2(40.0 + 34.0 * slot, 24.0 + 30.0 * slot);
-    if ctx.memory(|m| m.area_rect(area)).is_some() {
-        return cascade;
-    }
-    crate::hud_dock::place_new_window(bounds, &monitor_regions(ctx), size, None, cascade)
+/// How far a block that does not answer the search steps back.
+const SEARCH_DIM: f32 = 0.22;
+/// The margin between a block's frame and its content, on every side.
+const BLOCK_MARGIN: f32 = 12.0;
+/// The search bar's width (it sits centred under the header strip).
+const FIND_BAR_WIDTH: f32 = 520.0;
+
+/// The part of the screen in-app blocks live in (between the header and the telemetry strip).
+pub(crate) fn block_bounds(screen: Rect) -> Rect {
+    Rect::from_min_max(screen.min + vec2(8.0, 12.0 + HEADER_H + 8.0), screen.max - vec2(8.0, 12.0 + TELEMETRY_H + 8.0))
 }
 
-/// Each monitor's part of the HUD window (points, window coordinates) while it spans more than
-/// one screen; empty otherwise.
-fn monitor_regions(ctx: &egui::Context) -> Vec<Rect> {
-    let Some(window) = ctx.input(|i| i.viewport().inner_rect) else { return Vec::new() };
+/// The board's area on `screen`: under the header strip, above the telemetry strip and the
+/// caption band, right of the system column (`left_reserve`) and left of the text console
+/// (`right_reserve`).
+pub(crate) fn board_area(screen: Rect, left_reserve: f32, right_reserve: f32) -> Rect {
+    let left = screen.left() + 24.0 + left_reserve;
+    let right = screen.right() - 24.0 - right_reserve;
+    Rect::from_min_max(pos2(left, screen.top() + 12.0 + HEADER_H + 14.0), pos2(right.max(left + 240.0), screen.bottom() - 12.0 - TELEMETRY_H - CAPTION_BAND))
+}
+
+/// An in-app block with a plain text body, exactly as Jarvis' own Markdown windows are framed
+/// (the visual verifier fills the board with these). Its text scrolls when it is longer than
+/// the block; `content` is what `Copy Content` and the search read. True when it was closed.
+pub(crate) fn text_block(ctx: &egui::Context, id: &str, title: &str, size: [f32; 2], content: &str) -> bool {
+    crate::hud_dock::describe_block(id, content);
+    hud_block_window(ctx, id, title, size, |ui| {
+        egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
+            ui.add(egui::Label::new(RichText::new(content).size(13.5).color(STRIP_INK)).wrap());
+        });
+    })
+    .close
+}
+
+/// The keyboard shortcut for the block under the pointer, if one was pressed this frame:
+/// Ctrl+W closes it, Ctrl+G grows it to the full board (and back), Ctrl+P pins it, Ctrl+E
+/// exports it as Markdown. (Ctrl+M is the microphone's.)
+fn block_shortcut(ctx: &egui::Context) -> Option<crate::block_actions::BlockAction> {
+    use crate::block_actions::BlockAction as Menu;
+    use egui::{Key, Modifiers};
+    ctx.input_mut(|i| {
+        [(Key::W, Menu::Close), (Key::G, Menu::Maximize), (Key::P, Menu::Pin), (Key::E, Menu::ExportMarkdown)].into_iter().find(|(key, _)| i.consume_key(Modifiers::CTRL, *key)).map(|(_, action)| action)
+    })
+}
+
+/// Where a new block opens and how large: a free spot off every open block and the orb, smaller
+/// when the board is full, a cell of one tidy grid when nothing else fits
+/// (`hud_dock::place_new_block`), inside one monitor when the HUD spans several. "Overlap the
+/// windows" brings back the cascade.
+fn new_block_rect(ctx: &egui::Context, id: &str, regions: &[Rect], size: Vec2) -> Rect {
+    let bounds = regions.iter().copied().reduce(|a, b| a.union(b)).unwrap_or(Rect::NOTHING);
+    let slot = (crate::hud_dock::block_rects().len() % 5) as f32;
+    let cascade = regions[0].min + vec2(40.0 + 34.0 * slot, 24.0 + 30.0 * slot);
+    // (A windowed HUD that merely straddles a bezel keeps its blocks off the bezel too.)
+    let parts = if regions.len() > 1 { regions.to_vec() } else { monitor_regions(ctx) };
+    let (at, size) = crate::hud_dock::place_new_block(id, bounds, &parts, size, cascade);
+    Rect::from_min_size(at, size)
+}
+
+/// Each monitor's part of the HUD window (points, window coordinates, the primary monitor's
+/// first) while the window reaches onto more than one screen, and whether the HUD spans them (it
+/// covers the whole primary monitor). Nothing for a window on one screen.
+fn monitor_layout(ctx: &egui::Context) -> (Vec<Rect>, bool) {
+    let Some(window) = ctx.input(|i| i.viewport().inner_rect) else { return (Vec::new(), false) };
     let ppp = ctx.pixels_per_point();
-    let regions: Vec<Rect> = crate::monitors::list()
-        .iter()
-        .map(|m| Rect::from_min_max(pos2(m.rect[0] as f32, m.rect[1] as f32) / ppp, pos2(m.rect[2] as f32, m.rect[3] as f32) / ppp).translate(-window.min.to_vec2()))
-        .filter(|r| r.intersects(Rect::from_min_size(Pos2::ZERO, window.size())))
-        .collect();
-    if regions.len() > 1 { regions } else { Vec::new() }
+    let inside = Rect::from_min_size(Pos2::ZERO, window.size());
+    let mut monitors = crate::monitors::recent();
+    monitors.sort_by_key(|m| !m.primary);
+    let part = |m: &crate::monitors::Monitor| Rect::from_min_max(pos2(m.rect[0] as f32, m.rect[1] as f32) / ppp, pos2(m.rect[2] as f32, m.rect[3] as f32) / ppp).translate(-window.min.to_vec2());
+    let spanning = monitors.first().is_some_and(|m| m.primary && inside.expand(2.0).contains_rect(part(m)));
+    // (A monitor that merely touches the window's edge shows nothing of it.)
+    let regions: Vec<Rect> = monitors.iter().map(|m| part(m).intersect(inside)).filter(|r| r.width() > 1.0 && r.height() > 1.0).collect();
+    if regions.len() > 1 { (regions, spanning) } else { (Vec::new(), false) }
+}
+
+/// Each monitor's part of the HUD window while it reaches onto more than one; empty otherwise.
+fn monitor_regions(ctx: &egui::Context) -> Vec<Rect> {
+    monitor_layout(ctx).0
+}
+
+/// Where the HUD proper lives: the whole window, or, while one board spans every monitor, the
+/// primary monitor's part of it. The header, the console, the emblem and the board stay on
+/// Sir's first screen; the others are room for his windows. (The box around differently placed
+/// monitors has corners no screen shows: a header laid out on the whole window lands there.)
+pub(crate) fn home_screen(ctx: &egui::Context) -> Rect {
+    match monitor_layout(ctx) {
+        (regions, true) => regions[0],
+        _ => ctx.screen_rect(),
+    }
+}
+
+/// Where in-app blocks may stand: the one screen between its header and its telemetry strip,
+/// or, on a spanned HUD, each monitor's part (the home screen's first, between its strips).
+fn block_regions(ctx: &egui::Context) -> Vec<Rect> {
+    match monitor_layout(ctx) {
+        (regions, true) => regions.iter().enumerate().map(|(n, r)| if n == 0 { block_bounds(*r) } else { r.shrink(8.0) }).collect(),
+        _ => vec![block_bounds(ctx.screen_rect())],
+    }
+}
+
+/// The region `at` lies in, else the nearest one (`regions` is never empty).
+fn region_at(regions: &[Rect], at: Pos2) -> Rect {
+    regions.iter().copied().min_by(|a, b| a.distance_sq_to_pos(at).total_cmp(&b.distance_sq_to_pos(at))).unwrap_or(Rect::NOTHING)
+}
+
+/// The SCREENS menu's width (it narrows on a screen that is narrower).
+const SCREENS_WIDTH: f32 = 400.0;
+
+/// What Sir clicked in the SCREENS menu.
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+struct ScreensPick {
+    /// `[ MOVE HERE ]` on this monitor (1-based).
+    send: Option<usize>,
+    /// One board across every monitor on (true) or off.
+    span: Option<bool>,
+    close: bool,
+}
+
+/// The SCREENS menu: one row per monitor — its name over its size and place, its button beside
+/// them, each in its own column, so no text ever stands on another — and under them the switch
+/// between one board across every monitor and the board on one. `here`: the monitor the HUD is on.
+fn screens_menu(ui: &mut Ui, monitors: &[crate::monitors::Monitor], spanning: bool, here: Option<usize>) -> ScreensPick {
+    let mut picked = ScreensPick::default();
+    // (`mark`: the name the window drill clicks it by.)
+    let key = |ui: &mut Ui, text: &str, ink: Color32, hint: &str, mark: &dyn Fn() -> String| {
+        let response = ui.add(egui::Button::new(RichText::new(text).font(strip_font()).color(ink)).fill(rgba([3, 7, 12], 0.9)).stroke(stroke(1.0, crate::hud_board::border_colour())).rounding(Rounding::ZERO)).on_hover_text(hint);
+        if crate::window_drill::enabled() {
+            crate::window_drill::mark(&mark(), response.rect);
+        }
+        response.clicked()
+    };
+    let title = format!("SCREENS // {} DISPLAY{}", monitors.len(), if monitors.len() == 1 { "" } else { "S" });
+    sharp_block(ui, &title, if spanning { "SPANNING ALL" } else { "ONE SCREEN" }, |ui| {
+        for m in monitors {
+            ui.horizontal(|ui| {
+                // The button takes its place at the right first (beside both lines); the two
+                // lines get what is left.
+                ui.set_min_height(28.0);
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if here == Some(m.index) {
+                        ui.add(egui::Label::new(RichText::new("HUD IS HERE").font(strip_font()).color(STRIP_MUTED)).selectable(false));
+                    } else if key(ui, "[ MOVE HERE ]", crate::hud_board::active_colour(), "The fullscreen board on this monitor", &|| format!("screens:move:{}", m.index)) {
+                        picked.send = Some(m.index);
+                    }
+                    ui.with_layout(Layout::top_down(Align::Min), |ui| {
+                        ui.spacing_mut().item_spacing.y = 2.0;
+                        let name = format!("DISPLAY {}{}", m.index, if m.primary { "  //  PRIMARY" } else { "" });
+                        ui.add(egui::Label::new(RichText::new(name).font(strip_font()).color(STRIP_INK)).truncate().selectable(false));
+                        let place = format!("{} x {}  AT  {}, {}", m.width(), m.height(), m.rect[0], m.rect[1]);
+                        ui.add(egui::Label::new(RichText::new(place).font(strip_font()).color(STRIP_MUTED)).truncate().selectable(false));
+                    });
+                });
+            });
+            ui.add_space(6.0);
+        }
+        ui.horizontal(|ui| {
+            if monitors.len() > 1 {
+                if spanning {
+                    if key(ui, "[ BACK TO ONE MONITOR ]", crate::hud_board::active_colour(), "The fullscreen board on your first monitor again", &|| "screens:span:off".into()) {
+                        picked.span = Some(false);
+                    }
+                } else if key(ui, "[ SPAN ALL MONITORS ]", crate::hud_board::active_colour(), "One board across every monitor; the header, the console and the emblem stay on your first", &|| "screens:span:on".into()) {
+                    picked.span = Some(true);
+                }
+            }
+            if key(ui, "[ CLOSE ]", STRIP_MUTED, "Close (Esc)", &|| "screens:close".into()) {
+                picked.close = true;
+            }
+        });
+    });
+    picked
 }
 
 /// A sharp technical block for egui content: dark slate fill, 1 px cyan frame, white L-brackets
@@ -4752,8 +5410,9 @@ pub(crate) fn paint_canvas(ctx: &egui::Context) {
     let painter = ctx.layer_painter(egui::LayerId::background());
     painter.rect_filled(rect, Rounding::ZERO, OBSIDIAN);
     let mut mesh = egui::Mesh::default();
-    let centre = rect.center();
-    let reach = rect.size() * 0.75;
+    let home = home_screen(ctx);
+    let centre = home.center();
+    let reach = home.size() * 0.75;
     let mid = blend(VIGNETTE, OBSIDIAN, 0.55);
     mesh.colored_vertex(centre, VIGNETTE);
     let n = 72;
@@ -4791,6 +5450,11 @@ impl eframe::App for HudApp {
         [0.0; 4]
     }
 
+    /// `--window-drill`: its clicks arrive as the window's own pointer input.
+    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        crate::window_drill::feed(raw_input);
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // A panic anywhere in a frame costs that frame, never the HUD (the next one redraws).
         let started = Instant::now();
@@ -4814,6 +5478,11 @@ impl eframe::App for HudApp {
 impl HudApp {
     fn frame(&mut self, ctx: &egui::Context) {
         ROOT_FRAMES.fetch_add(1, Ordering::AcqRel);
+        // `--window-drill`: its next step, from what the previous frame drew.
+        if let Some(drill) = self.drill.as_mut() {
+            drill.step(ctx, self.hwnd);
+        }
+        crate::window_drill::begin_frame();
         let now = Instant::now();
         // Clamped: the first frame after an idle second never makes an animation jump.
         let dt = crate::rose_emblem_renderer::safe_dt(now.duration_since(self.last_frame).as_secs_f32());
@@ -4824,6 +5493,7 @@ impl HudApp {
         let iface = self.sync_interface(ctx);
         self.enforce_fullscreen(ctx, &iface);
         self.sync_orb_window(ctx, &iface);
+        self.note_window(ctx, &iface);
         self.handle_close(ctx);
         self.handle_keys(ctx);
         self.flush_memory_search();
@@ -4850,19 +5520,38 @@ impl HudApp {
             paint_canvas(ctx);
             // The Settings drawer slides in from the right (VIEW → SETTINGS).
             let p = self.palette;
-            let width = screen.width();
-            egui::SidePanel::right("hud_settings_drawer")
-                .resizable(true)
-                .default_width((width * 0.3).clamp(340.0, 440.0))
-                .width_range(300.0..=(width * 0.5).max(320.0))
-                .show_separator_line(false)
-                .frame(Frame::none().fill(p.card_solid.gamma_multiply(0.96)).stroke(stroke(1.0, p.line)).inner_margin(Margin::same(14.0)))
-                .show_animated(ctx, self.drawer_open, |ui| self.settings_drawer(ui, &m, &iface));
+            let home = home_screen(ctx);
+            let drawer = Frame::none().fill(p.card_solid.gamma_multiply(0.96)).stroke(stroke(1.0, p.line)).inner_margin(Margin::same(14.0));
+            if home != screen {
+                // (A side panel hangs on the window's own edge: on a board across the monitors
+                // that is the far end of the last one, its top in a corner no screen shows.
+                // There the drawer stands at the right of the home screen.)
+                if self.drawer_open {
+                    let width = (home.width() * 0.3).clamp(340.0, 440.0);
+                    egui::Area::new(egui::Id::new("hud_settings_drawer_span")).order(egui::Order::Middle).fixed_pos(pos2(home.right() - width, home.top())).show(ctx, |ui| {
+                        drawer.show(ui, |ui| {
+                            ui.set_width(width - 28.0);
+                            ui.set_height(home.height() - 28.0);
+                            self.settings_drawer(ui, &m, &iface);
+                        });
+                    });
+                }
+            } else {
+                let width = screen.width();
+                egui::SidePanel::right("hud_settings_drawer")
+                    .resizable(true)
+                    .default_width((width * 0.3).clamp(340.0, 440.0))
+                    .width_range(300.0..=(width * 0.5).max(320.0))
+                    .show_separator_line(false)
+                    .frame(drawer)
+                    .show_animated(ctx, self.drawer_open, |ui| self.settings_drawer(ui, &m, &iface));
+            }
             self.canvas(ctx, &m, &iface, dt);
             self.toasts(ctx, &m);
             self.popups(ctx, dt);
             self.room_alert_overlay(ctx, &m);
-            if iface.frameless && !iface.fullscreen && !maximized {
+            // (Neither the fullscreen board nor the one across the monitors is resized by hand.)
+            if iface.frameless && !iface.fullscreen && !iface.span_all_monitors && !maximized {
                 self.resize_grips(ctx);
             }
         }
@@ -4871,6 +5560,7 @@ impl HudApp {
         }
         drop(m);
         self.after_body(ctx, &iface);
+        settle_new_areas(ctx);
         self.last_frame = now;
     }
 }
@@ -4878,6 +5568,123 @@ impl HudApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One board across Sir's three monitors: the window is the box around them, which has
+    /// corners no monitor shows (the upright one starts 290 px higher and ends 190 px lower).
+    /// The HUD proper keeps house on the first monitor; each monitor is a region for blocks.
+    #[test]
+    fn a_board_across_the_monitors_keeps_house_on_the_first_one() {
+        use crate::visual_ui_verifier as visual;
+        crate::monitors::pretend(Some(visual::desk()));
+        let ctx = egui::Context::default();
+        let layout = |size: Vec2, origin: Pos2| {
+            let mut input = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)), ..Default::default() };
+            input.viewports.entry(ViewportId::ROOT).or_default().inner_rect = Some(Rect::from_min_size(origin, size));
+            let _ = ctx.run(input, |_| {});
+            (home_screen(&ctx), block_regions(&ctx), monitor_regions(&ctx))
+        };
+        let screens = visual::desk_screens();
+        let (_, size, origin) = screens[3];
+        assert_eq!(size, vec2(6200.0, 1920.0));
+        let (home, blocks, parts) = layout(size, origin);
+        let first = Rect::from_min_size(pos2(1080.0, 290.0), vec2(2560.0, 1440.0));
+        assert_eq!(home, first, "the first monitor's part of the window");
+        assert_eq!(parts.len(), 3);
+        assert_eq!(blocks, vec![block_bounds(first), parts[1].shrink(8.0), parts[2].shrink(8.0)]);
+        // The emblem's home is the middle of the first monitor, not of the box.
+        let (centre, _) = crate::rose_emblem_renderer::home_pose(home, 0.0);
+        assert_eq!(centre, pos2(1080.0 + 1280.0, 290.0 + 720.0));
+        // The top right of the header and the bottom strip are on the first monitor, not in the
+        // corners above and below the two landscape monitors.
+        assert!(parts.iter().any(|p| p.contains(pos2(home.right() - 40.0, home.top() + 20.0))));
+        assert!(!parts.iter().any(|p| p.contains(pos2(size.x - 40.0, 20.0))), "the box's own top right is on no monitor");
+        // A block belongs to the monitor it stands on; the nearest one from a dead corner.
+        assert_eq!(region_at(&blocks, pos2(4000.0, 900.0)), blocks[1]);
+        assert_eq!(region_at(&blocks, pos2(500.0, 900.0)), blocks[2]);
+        assert_eq!(region_at(&blocks, pos2(3000.0, 100.0)), blocks[0], "above the first monitor: the first monitor");
+        // On one monitor (any of the three) the home screen is the window.
+        for (name, size, origin) in screens.iter().take(3) {
+            let (home, blocks, parts) = layout(*size, *origin);
+            assert_eq!(home, Rect::from_min_size(Pos2::ZERO, *size), "{name}");
+            assert!(parts.is_empty(), "{name}");
+            assert_eq!(blocks, vec![block_bounds(home)], "{name}");
+        }
+        // A plain window that straddles the bezel between two monitors is no span.
+        let (home, blocks, parts) = layout(vec2(1500.0, 940.0), pos2(1800.0, 200.0));
+        assert_eq!(home, Rect::from_min_size(Pos2::ZERO, vec2(1500.0, 940.0)));
+        assert_eq!((parts.len(), blocks.len()), (2, 1));
+        crate::monitors::pretend(None);
+    }
+
+    /// The screenshot of 2026-11-06: each row's `[ MONITOR n ]` button was drawn over its
+    /// description, and the span button could not switch spanning off again.
+    #[test]
+    fn the_screens_menu_keeps_its_texts_apart_and_switches_the_span_both_ways() {
+        use crate::visual_ui_verifier::{self as visual, Stage};
+        let desk = visual::desk();
+        for width in [SCREENS_WIDTH, 300.0] {
+            for (spanning, here) in [(false, Some(1usize)), (true, None), (false, Some(3))] {
+                let mut stage = Stage::new(vec2(900.0, 600.0));
+                let picked = std::cell::Cell::new(ScreensPick::default());
+                let mut menu = |ctx: &egui::Context| {
+                    egui::Area::new(egui::Id::new("screens_under_test")).fixed_pos(pos2(40.0, 40.0)).show(ctx, |ui| {
+                        ui.set_width(width);
+                        let now = screens_menu(ui, &desk, spanning, here);
+                        if now != ScreensPick::default() {
+                            picked.set(now);
+                        }
+                    });
+                };
+                let frame = stage.frames(3, &mut menu);
+                let case = format!("{width} px wide, spanning {spanning}, HUD on {here:?}");
+                assert_eq!(visual::text_over_text(&frame), Vec::<String>::new(), "{case}");
+                assert_eq!(visual::clipped_text(&frame), Vec::<String>::new(), "{case}");
+                // Every monitor has its two lines; all but the HUD's own can be moved to.
+                for n in 1..=3 {
+                    assert_eq!(frame.find_text(&format!("DISPLAY {n}")).len(), 1, "{case}");
+                }
+                assert_eq!(frame.find_text("1080 x 1920  AT  -1080, -290").len(), 1, "{case}");
+                assert_eq!(frame.find_exact("[ MOVE HERE ]").len(), if spanning { 3 } else { 2 }, "{case}");
+                assert_eq!(frame.find_exact("HUD IS HERE").len(), usize::from(!spanning), "{case}");
+                // The switch says what it will do, and does it.
+                let (label, turns) = if spanning { ("[ BACK TO ONE MONITOR ]", false) } else { ("[ SPAN ALL MONITORS ]", true) };
+                let key = frame.find_exact(label);
+                assert_eq!(key.len(), 1, "{case}: {label}");
+                stage.click(key[0].center(), egui::PointerButton::Primary, &mut menu);
+                assert_eq!(picked.get(), ScreensPick { span: Some(turns), ..Default::default() }, "{case}");
+                // `[ MOVE HERE ]` names its own monitor (the rows are in the monitors' order).
+                let mut moves = frame.find_exact("[ MOVE HERE ]");
+                moves.sort_by(|a, b| a.top().total_cmp(&b.top()));
+                stage.click(moves[moves.len() - 1].center(), egui::PointerButton::Primary, &mut menu);
+                assert_eq!(picked.get().send, Some(if here == Some(3) { 2 } else { 3 }), "{case}");
+            }
+        }
+    }
+
+    /// The old menu, as it was drawn: the check the verifier now runs on every frame finds it.
+    #[test]
+    fn text_drawn_over_text_is_found() {
+        use crate::visual_ui_verifier::{self as visual, Stage};
+        let mut stage = Stage::new(vec2(900.0, 600.0));
+        let frame = stage.frames(3, &mut |ctx| {
+            egui::Area::new(egui::Id::new("old_screens_menu")).fixed_pos(pos2(40.0, 40.0)).show(ctx, |ui| {
+                ui.set_width(340.0);
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("DISPLAY 3  MONITOR 3 (1080×1920 AT -1080,-290)").font(strip_font()).color(STRIP_INK));
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| ui.add(egui::Button::new(RichText::new("[ MONITOR 3 ]").font(strip_font())).frame(false)));
+                });
+            });
+        });
+        let found = visual::text_over_text(&frame);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].contains("[ MONITOR 3 ]"), "{found:?}");
+        // A window over the board's text hides it: that is no finding.
+        let frame = stage.frames(3, &mut |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| ui.label("The board's own text, under the window."));
+            egui::Window::new("over").title_bar(false).fixed_pos(pos2(0.0, 0.0)).show(ctx, |ui| ui.label("A window's text over the board."));
+        });
+        assert_eq!(visual::text_over_text(&frame), Vec::<String>::new());
+    }
 
     #[test]
     fn the_hud_draws_as_fast_as_the_display_only_while_sir_is_at_it() {
@@ -5015,13 +5822,43 @@ mod tests {
         assert!(["console", "phone", "core", "features"].iter().all(|id| on(&lit, id)), "a box lights while its panel is open");
         let muted = header_items(&HeaderState { mic_muted: true, ultron: true, ..HeaderState::default() }, "X", "X");
         assert!(muted.iter().any(|i| i.id == "mic" && i.text == "MIC: MUTED" && i.on) && on(&muted, "ultron"));
-        let rects = header_layout(&items, 2548.0, 10.0, |t| t.chars().count() as f32 * 6.0);
-        // Left to right, no overlaps, the last box flush against the right margin.
+        let measure = |t: &str| t.chars().count() as f32 * 6.0;
+        let row = header_layout(&items, 12.0, 2548.0, 10.0, measure);
+        let rects = &row.placed;
+        // A wide screen holds the whole strip: left to right, no overlaps, the last box flush
+        // against the right margin, no menu.
+        assert!(rects.len() == items.len() && row.hidden.is_empty() && row.more.is_none());
         assert_eq!(rects.last().unwrap().1.right(), 2548.0);
         assert!(rects.windows(2).all(|w| w[0].1.right() + 6.0 <= w[1].1.left() + 0.01));
         let source = rects.iter().find(|(id, _)| *id == "source").unwrap().1;
         assert!(source.width() >= SOURCE_PICKER_W, "the picker is a wide field");
         assert!(rects.iter().all(|(_, r)| r.height() == HEADER_H && r.top() == 10.0));
+    }
+
+    #[test]
+    fn on_an_upright_screen_the_header_keeps_inside_and_the_rest_is_in_the_more_menu() {
+        let items = header_items(&HeaderState::default(), "REBOOT LLM", "DEFAULT CAMERA");
+        let measure = |t: &str| t.chars().count() as f32 * 6.6;
+        for width in [1080.0f32, 800.0, 1440.0, 1920.0, 400.0] {
+            let (left, right) = (12.0, width - 12.0);
+            let row = header_layout(&items, left, right, 10.0, measure);
+            let boxes: Vec<Rect> = row.more.into_iter().chain(row.placed.iter().map(|(_, r)| *r)).collect();
+            assert!(boxes.iter().all(|r| r.left() >= left - 0.01 && r.right() <= right + 0.01), "{width}: a box leaves the screen: {boxes:?}");
+            assert!(boxes.windows(2).all(|w| w[0].right() + 6.0 <= w[1].left() + 0.01), "{width}: boxes overlap");
+            // Every box is either on the row or in the menu, and the menu is there exactly
+            // when something is in it.
+            let boxed = items.iter().filter(|i| i.boxed).count();
+            let on_row = row.placed.iter().filter(|(id, _)| items.iter().any(|i| i.id == *id && i.boxed)).count();
+            assert_eq!(on_row + row.hidden.len(), boxed, "{width}");
+            assert_eq!(row.more.is_some(), row.placed.len() < items.len(), "{width}");
+            // What stays is the right end of the strip, the microphone last.
+            if let Some((last, _)) = row.placed.last() {
+                assert_eq!(*last, "mic", "{width}");
+            }
+        }
+        // 1080 points across: the first boxes are in the menu, in the strip's order.
+        let row = header_layout(&items, 12.0, 1068.0, 10.0, measure);
+        assert!(row.hidden.starts_with(&["theme", "ultron"]), "{:?}", row.hidden);
     }
 
     #[test]

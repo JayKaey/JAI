@@ -39,9 +39,45 @@ impl Monitor {
     }
 }
 
+thread_local! {
+    /// A monitor setup this thread sees instead of the real one (`pretend`).
+    static PRETEND: std::cell::RefCell<Option<Vec<Monitor>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Lets this thread see `setup` as the connected monitors (None: the real ones again). The
+/// offscreen HUD and the tests lay a spanned board out on setups this machine does not have.
+pub fn pretend(setup: Option<Vec<Monitor>>) {
+    PRETEND.with(|p| *p.borrow_mut() = setup);
+}
+
+/// The monitors as they were at most a second ago: the HUD asks in every frame.
+pub fn recent() -> Vec<Monitor> {
+    static SEEN: std::sync::Mutex<Option<(std::time::Instant, Vec<Monitor>)>> = std::sync::Mutex::new(None);
+    if let Some(setup) = PRETEND.with(|p| p.borrow().clone()) {
+        return setup;
+    }
+    let mut seen = SEEN.lock().unwrap_or_else(|e| e.into_inner());
+    match seen.as_ref() {
+        Some((at, known)) if at.elapsed() < std::time::Duration::from_secs(1) => known.clone(),
+        _ => {
+            let now = list();
+            *seen = Some((std::time::Instant::now(), now.clone()));
+            now
+        }
+    }
+}
+
+/// The monitor the HUD lives on when it is told nothing else: the primary one.
+pub fn primary(monitors: &[Monitor]) -> Option<&Monitor> {
+    monitors.iter().find(|m| m.primary).or_else(|| monitors.first())
+}
+
 /// All monitors, numbered: the primary is Monitor 1, the others follow Windows' numbering.
 #[cfg(windows)]
 pub fn list() -> Vec<Monitor> {
+    if let Some(setup) = PRETEND.with(|p| p.borrow().clone()) {
+        return setup;
+    }
     crate::win32::displays()
         .into_iter()
         .enumerate()
@@ -60,6 +96,9 @@ pub fn fastest_refresh_hz() -> Option<u32> {
 
 #[cfg(not(windows))]
 pub fn list() -> Vec<Monitor> {
+    if let Some(setup) = PRETEND.with(|p| p.borrow().clone()) {
+        return setup;
+    }
     let run = |p: &str, a: &[&str]| {
         std::process::Command::new(p).args(a).output().ok().filter(|o| o.status.success()).map(|o| String::from_utf8_lossy(&o.stdout).to_string())
     };

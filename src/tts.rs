@@ -84,8 +84,20 @@ const META_WORDS: &[&str] = &["note", "notes", "translation", "translated", "met
 const META_COLON_WORDS: &[&str] = &["action", "actions", "tool", "cmd", "command", "system", "instruction", "instructions", "response", "context"];
 const STAGE_VERBS: &[&str] = &["sighs", "chuckles", "laughs", "coughs", "pauses", "smiles", "nods", "beeps", "whirs", "grins", "winks", "ahem"];
 
+/// A separator nobody sees is a space: a language model now and then writes a zero-width
+/// space where a space belongs, and "in Berlin" was shown and spoken as "inBerlin" (silent
+/// session, 2026-11-06). A soft hyphen is nothing at all.
+fn visible_spaces(text: &str) -> std::borrow::Cow<'_, str> {
+    if !text.contains(['\u{200b}', '\u{200c}', '\u{2060}', '\u{feff}', '\u{00ad}']) {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    std::borrow::Cow::Owned(text.chars().filter(|c| *c != '\u{00ad}').map(|c| if matches!(c, '\u{200b}' | '\u{200c}' | '\u{2060}' | '\u{feff}') { ' ' } else { c }).collect())
+}
+
 /// Strips reasoning, bracketed notes, tags, meta asides, stage directions, fences, URLs and JSON.
 pub fn sanitize_for_display_and_speech(text: &str) -> String {
+    let spaced = visible_spaces(text);
+    let text: &str = &spaced;
     let lower = text.to_ascii_lowercase();
     let start = match (lower.find("<think"), lower.find("</think")) {
         (None, Some(close)) => lower[close..].find('>').map(|q| close + q + 1).unwrap_or(text.len()),
@@ -332,12 +344,21 @@ fn url_span(buf: &str, i: usize, last: bool) -> MetaSpan {
     if !last && rest.len() < 8 && prefixes.iter().any(|p| p.starts_with(head.as_str())) { MetaSpan::Open } else { MetaSpan::Plain }
 }
 
+/// East Asian writing and its punctuation. The local model slips into Chinese in the middle of
+/// an English sentence now and then ("Why was the math book sad?因为它没有封面"; silent session,
+/// 2026-11-06): the voice cannot say it, and he answers in English.
+fn east_asian(c: char) -> bool {
+    matches!(c, '\u{1100}'..='\u{11FF}' | '\u{2E80}'..='\u{2FDF}' | '\u{3000}'..='\u{31FF}' | '\u{3400}'..='\u{4DBF}' | '\u{4E00}'..='\u{9FFF}' | '\u{AC00}'..='\u{D7FF}' | '\u{F900}'..='\u{FAFF}' | '\u{FE30}'..='\u{FE4F}' | '\u{FF00}'..='\u{FFEF}' | '\u{20000}'..='\u{3FFFF}')
+}
+
 /// Streaming form of [`sanitize_for_display_and_speech`] for LLM tokens split at any point.
 #[derive(Default)]
 pub struct MetaStreamFilter {
     held: String,
     pending_space: String,
     started: bool,
+    /// The last thing that came was East Asian writing (it may go on in the next token).
+    in_east_asian: bool,
 }
 
 impl MetaStreamFilter {
@@ -346,10 +367,31 @@ impl MetaStreamFilter {
     }
 
     pub fn push(&mut self, token: &str) -> String {
-        self.held.push_str(token);
+        let token = self.without_east_asian(token);
+        self.held.push_str(&visible_spaces(&token));
         let (ready, consumed) = scan_meta(&self.held, false);
         self.held.drain(..consumed);
         self.emit(&ready)
+    }
+
+    /// One space for a run of it, however the tokens fall.
+    fn without_east_asian<'a>(&mut self, token: &'a str) -> std::borrow::Cow<'a, str> {
+        if !self.in_east_asian && !token.chars().any(east_asian) {
+            return std::borrow::Cow::Borrowed(token);
+        }
+        let mut kept = String::with_capacity(token.len());
+        for c in token.chars() {
+            if east_asian(c) {
+                if !self.in_east_asian {
+                    kept.push(' ');
+                }
+                self.in_east_asian = true;
+            } else if !(self.in_east_asian && c.is_whitespace()) {
+                self.in_east_asian = false;
+                kept.push(c);
+            }
+        }
+        std::borrow::Cow::Owned(kept)
     }
 
     pub fn flush(&mut self) -> String {
@@ -358,6 +400,7 @@ impl MetaStreamFilter {
         let out = self.emit(&ready.replace(']', ""));
         self.pending_space.clear();
         self.started = false;
+        self.in_east_asian = false;
         out
     }
 
@@ -805,6 +848,13 @@ impl Kokoro {
         Ok(table)
     }
 
+    /// The voice pack is Kokoro v1.0: its English voices were trained on the pack's own symbols
+    /// (one letter per diphthong, "ᵊ" before a syllabic consonant), which the first pack's
+    /// table does not hold.
+    pub fn own_symbols(&self) -> bool {
+        self.vocab.contains_key(&'ᵊ')
+    }
+
     pub fn available_voices(&self) -> Vec<String> {
         let mut voices = crate::models::list_voices(&self.archive).unwrap_or_default();
         // Cached tables of this model version only (another version's tables would not fit).
@@ -924,11 +974,18 @@ fn breath_ms(text: &str) -> usize {
     }
 }
 
-/// Trims silence, runs the film mastering chain (`jarvis_voice_dsp::master`: 24 kHz → 48 kHz with
+/// Trims silence, runs the film mastering chain (`jarvis_voice_dsp::master_as`: 24 kHz → 48 kHz with
 /// the −0.35 st pitch lock, the Bettany EQ and de-esser, the helmet micro-double, the broadcast
 /// compressor and limiter), applies 25 ms raised-cosine fades and appends the clause's breath.
 /// Returns `jarvis_voice_dsp::MASTER_RATE` audio.
-pub(crate) fn finish_clause_audio(mut audio: Vec<f32>, text: &str) -> Vec<f32> {
+pub(crate) fn finish_clause_audio(audio: Vec<f32>, text: &str) -> Vec<f32> {
+    finish_clause_audio_as(audio, text, crate::ultron_mode::active())
+}
+
+/// `finish_clause_audio` for the voice stated (`ultron`: his own chain instead of the film
+/// mastering), so that a clause is one voice from its phonemes to its last sample even while
+/// the mode is being switched.
+pub(crate) fn finish_clause_audio_as(mut audio: Vec<f32>, text: &str, ultron: bool) -> Vec<f32> {
     let thresh = 0.003;
     let first = audio.iter().position(|s| s.abs() > thresh).unwrap_or(0);
     let last = audio.iter().rposition(|s| s.abs() > thresh).unwrap_or(audio.len().saturating_sub(1));
@@ -937,7 +994,7 @@ pub(crate) fn finish_clause_audio(mut audio: Vec<f32>, text: &str) -> Vec<f32> {
     if start < end {
         audio = audio[start..end].to_vec();
     }
-    let mut audio = jarvis_voice_dsp::master(&audio, KOKORO_RATE);
+    let mut audio = jarvis_voice_dsp::master_as(&audio, KOKORO_RATE, ultron);
     let rate = jarvis_voice_dsp::MASTER_RATE as usize;
     let fade = (rate * jarvis_voice_dsp::CROSSFADE_MS / 1000).min(audio.len() / 4);
     for (i, s) in audio.iter_mut().take(fade).enumerate() {
@@ -1035,6 +1092,38 @@ pub fn play_earcon(kind: jarvis_voice_dsp::Earcon) {
     controls.guard_echo((samples.len() as u64 * 1000) / rate as u64);
     if let Some(producer) = output.producer.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
         producer.push_slice(&samples);
+    }
+}
+
+/// The board's sound cues are on (`interface.sound_cues`).
+static CUES_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+/// The last cue and when it played.
+static LAST_CUE: Mutex<Option<(jarvis_voice_dsp::Earcon, std::time::Instant)>> = Mutex::new(None);
+/// The same cue is not repeated inside this window (twelve blocks arriving at once chime once).
+const CUE_SPACING: Duration = Duration::from_millis(160);
+
+pub fn set_cues(on: bool) {
+    CUES_ON.store(on, Ordering::Release);
+}
+
+/// Whether `kind` may sound now: cues are on and it is not the cue that just played.
+fn cue_due(kind: jarvis_voice_dsp::Earcon, now: std::time::Instant) -> bool {
+    if !CUES_ON.load(Ordering::Acquire) {
+        return false;
+    }
+    let mut last = LAST_CUE.lock().unwrap_or_else(|e| e.into_inner());
+    if last.is_some_and(|(known, at)| known == kind && now.saturating_duration_since(at) < CUE_SPACING) {
+        return false;
+    }
+    *last = Some((kind, now));
+    true
+}
+
+/// A HUD micro-interaction's cue (a block materialising, the spotlight, a mode change, an
+/// alert): played like an earcon, unless Sir turned the cues off or it has just sounded.
+pub fn play_cue(kind: jarvis_voice_dsp::Earcon) {
+    if cue_due(kind, std::time::Instant::now()) {
+        play_earcon(kind);
     }
 }
 
@@ -1506,8 +1595,10 @@ struct ClauseCache {
 }
 
 impl ClauseCache {
-    fn key(voice: &str, speed: f32, speech: &str) -> String {
-        format!("{voice}|{speed:.2}|{}", speech.trim().to_lowercase())
+    /// (`ultron`: the clause went through his chain; the same words in the same blend through
+    /// Jarvis' are another sound.)
+    fn key(voice: &str, speed: f32, speech: &str, ultron: bool) -> String {
+        format!("{}{voice}|{speed:.2}|{}", if ultron { "ultron|" } else { "" }, speech.trim().to_lowercase())
     }
 
     fn cacheable(speech: &str) -> bool {
@@ -1539,8 +1630,11 @@ fn render_clause(
     voice: &str,
     speed: f32,
 ) -> Option<Arc<Vec<f32>>> {
+    // Whose clause this is, decided once: its phonemes, its speed, its chain and its place in
+    // the cache all follow from it (the mode may be switched while it is being rendered).
+    let ultron = crate::ultron_mode::active();
     let cacheable = ClauseCache::cacheable(speech);
-    let key = ClauseCache::key(voice, speed, speech);
+    let key = ClauseCache::key(voice, speed, speech, ultron);
     if cacheable {
         if let Some(hit) = cache.get(&key) {
             return Some(hit);
@@ -1556,9 +1650,10 @@ fn render_clause(
             };
             let mut audio = Vec::new();
             for part in parts {
-                let ipa = phonemizer.phonemize(&part);
-                match k.synthesize(&ipa, voice, jarvis_voice_dsp::synthesis_speed(speed)) {
-                    Ok(a) if !a.is_empty() => audio.extend(finish_clause_audio(a, &part)),
+                // Ultron speaks General American, Jarvis Received Pronunciation.
+                let ipa = if ultron { phonemizer.phonemize_as(&part, crate::phonemizer::Accent::American, k.own_symbols()) } else { phonemizer.phonemize(&part) };
+                match k.synthesize(&ipa, voice, jarvis_voice_dsp::synthesis_speed_as(speed, ultron)) {
+                    Ok(a) if !a.is_empty() => audio.extend(finish_clause_audio_as(a, &part, ultron)),
                     Ok(_) => {}
                     Err(e) => {
                         warn!("[TTS] Synthesis failed for '{part}': {e}");
@@ -1786,6 +1881,41 @@ fn sapi_synthesize(text: &str) -> Vec<f32> {
     }
 }
 
+/// The two-sink fan-out, checked without opening a device (the exhaustive verifier's dual-sink
+/// check): one clause goes to the speaker output and to the copy for Sir's call, each at its
+/// own device rate and under one shared loudness; a sink that has no device takes nothing and
+/// holds nothing up.
+pub fn dual_sink_probe() -> Result<String, String> {
+    let volume = Arc::new(AtomicU8::new(100));
+    let speaker = Output::new(None, Arc::clone(&volume), false);
+    let call = Output::new(None, Arc::clone(&volume), true);
+    let clause: Vec<f32> = (0..jarvis_voice_dsp::MASTER_RATE / 2).map(|i| (i as f32 * 0.05).sin() * 0.3).collect();
+    call.push_clause(&clause);
+    if call.buffered() != 0 {
+        return Err("a sink without a device queued audio".to_string());
+    }
+    // The ring buffers a device would drain; the consumers stay alive for the check.
+    let mut drains = Vec::new();
+    for (out, rate) in [(&speaker, 48_000u32), (&call, 44_100)] {
+        let (producer, consumer) = HeapRb::<f32>::new(rate as usize * 4).split();
+        *out.producer.lock().unwrap_or_else(|e| e.into_inner()) = Some(producer);
+        out.device_rate.store(rate, Ordering::Release);
+        drains.push(consumer);
+    }
+    for out in [&speaker, &call] {
+        out.push_clause(&clause);
+    }
+    let (to_speaker, to_call) = (speaker.buffered() as i64, call.buffered() as i64);
+    if (to_speaker - 24_000).abs() > 2 || (to_call - 22_050).abs() > 2 {
+        return Err(format!("half a second of speech became {to_speaker} samples at 48 kHz and {to_call} at 44.1 kHz"));
+    }
+    if !Arc::ptr_eq(&speaker.volume, &call.volume) || !call.mirror || speaker.mirror {
+        return Err("the two sinks do not share one loudness".to_string());
+    }
+    drop(drains);
+    Ok(format!("one clause reaches both sinks: {to_speaker} samples at 48 kHz for the speaker, {to_call} at 44.1 kHz for the call, one loudness"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1904,6 +2034,68 @@ mod tests {
         assert_eq!(streamed, clean);
         assert_eq!(sanitize_for_display_and_speech("[CMD: open spotify] Opening Spotify, Sir."), "Opening Spotify, Sir.");
         assert_eq!(sanitize_for_display_and_speech("The ratio is 3 * 4 (roughly)."), "The ratio is 3 * 4 (roughly).");
+    }
+
+    /// "The current temperature inBerlin is 7°C" (silent session, 2026-11-06): whatever the
+    /// model wraps a word in, taking the wrapping away must leave the words apart, in one piece
+    /// and in a stream cut anywhere.
+    #[test]
+    fn taking_the_markup_away_never_glues_two_words() {
+        let clean = "The current temperature in Berlin is 7°C, feeling like 4°C.";
+        for raw in [
+            "The current temperature in **Berlin** is 7°C, feeling like 4°C.",
+            "The current temperature in *Berlin* is 7°C, feeling like 4°C.",
+            "The current temperature in __Berlin__ is 7°C, feeling like 4°C.",
+            "The current temperature in `Berlin` is 7°C, feeling like 4°C.",
+            "The current temperature in\u{a0}Berlin is 7°C, feeling like 4°C.",
+            "The current temperature in\u{200b} Berlin is 7°C, feeling like 4°C.",
+            "The current temperature in \u{200b}Berlin is 7°C, feeling like 4°C.",
+            "The current temperature in\u{200b}Berlin is 7°C, feeling like 4°C.",
+            "The current temperature in\u{2060}Berlin is 7°C, feel\u{00ad}ing like 4°C.",
+            "The current temperature in\tBerlin is 7°C, feeling like 4°C.",
+            "The current temperature in\nBerlin is 7°C, feeling like 4°C.",
+        ] {
+            // (A code span keeps its ticks on screen, and underscore emphasis is only taken away
+            // from the finished reply: neither is a glued word.)
+            let words = |text: &str| text.replace(['`', '_'], "").split_whitespace().collect::<Vec<_>>().join(" ");
+            assert_eq!(words(&sanitize_for_display_and_speech(raw)), clean, "{raw:?} in one piece");
+            for size in [1, 2, 3, 5, 7, 11] {
+                let mut filter = MetaStreamFilter::new();
+                let mut streamed = String::new();
+                let chars: Vec<char> = raw.chars().collect();
+                for piece in chars.chunks(size) {
+                    streamed.push_str(&filter.push(&piece.iter().collect::<String>()));
+                }
+                streamed.push_str(&filter.flush());
+                assert_eq!(words(&streamed), clean, "{raw:?} streamed {size} characters at a time: {streamed:?}");
+            }
+        }
+    }
+
+    /// Repro (silent session, 2026-11-06): a joke that slipped into Chinese half way through.
+    #[test]
+    fn the_models_chinese_never_reaches_the_voice_or_the_screen() {
+        let raw = "Why was the math book sad?因为它没有封面（它是一本无解的书）。但这可能不是您期望听到的答案，让我们来个更轻松一点的吧：Why did the chicken cross the road? To get to the other side!  哪个笑话更适合您？";
+        let chars: Vec<char> = raw.chars().collect();
+        for size in [1, 2, 3, 5, 7, 11, chars.len()] {
+            let mut filter = MetaStreamFilter::new();
+            let mut streamed = String::new();
+            for piece in chars.chunks(size) {
+                streamed.push_str(&filter.push(&piece.iter().collect::<String>()));
+            }
+            streamed.push_str(&filter.flush());
+            assert_eq!(streamed.trim(), "Why was the math book sad? Why did the chicken cross the road? To get to the other side!", "{size} characters at a time");
+        }
+        // A reply of nothing else leaves nothing, so the turn's own retry takes over.
+        let mut filter = MetaStreamFilter::new();
+        let mut all = filter.push("这是一个笑话。");
+        all.push_str(&filter.flush());
+        assert_eq!(all.trim(), "");
+        // What stays is everything else he writes: names, accents, degrees, German.
+        let mut filter = MetaStreamFilter::new();
+        let mut kept = filter.push("Müller in Köln: 7°C, café, 50 % — fine.");
+        kept.push_str(&filter.flush());
+        assert_eq!(kept, "Müller in Köln: 7°C, café, 50 % — fine.");
     }
 
     #[test]

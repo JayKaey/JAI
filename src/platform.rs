@@ -145,6 +145,51 @@ impl Drop for SingleInstance {
     }
 }
 
+/// A scripted session (a self-test, a silent conversation) holds this as well. It runs where
+/// Sir cannot see it, so the Jarvis he starts himself asks it to give way (`tray`) rather than
+/// asking it for a HUD that is on no screen.
+#[cfg(windows)]
+const TEST_SESSION: windows::core::PCWSTR = windows::core::w!("Local\\JARVIS-V3-test-session");
+
+static IN_TEST_SESSION: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// This process is a scripted session, until it ends.
+pub fn mark_test_session() {
+    IN_TEST_SESSION.store(true, std::sync::atomic::Ordering::Release);
+    // SAFETY: named mutex creation; the handle stays open until the process ends, on purpose.
+    #[cfg(windows)]
+    unsafe {
+        let _ = windows::Win32::System::Threading::CreateMutexW(None, false, TEST_SESSION);
+    }
+}
+
+pub fn in_test_session() -> bool {
+    IN_TEST_SESSION.load(std::sync::atomic::Ordering::Acquire)
+}
+
+/// Whether a scripted session is running on this desktop.
+pub fn test_session_running() -> bool {
+    #[cfg(windows)]
+    {
+        use windows::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS};
+        // SAFETY: named mutex creation; the handle is closed again right here.
+        unsafe {
+            match windows::Win32::System::Threading::CreateMutexW(None, false, TEST_SESSION) {
+                Ok(handle) => {
+                    let running = GetLastError() == ERROR_ALREADY_EXISTS;
+                    let _ = CloseHandle(handle);
+                    running
+                }
+                Err(_) => false,
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
 /// Whether a desktop session is available for the HUD window.
 pub fn has_display() -> bool {
     cfg!(windows)

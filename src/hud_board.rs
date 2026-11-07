@@ -25,7 +25,7 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
-use tracing::warn;
+use tracing::{info, warn};
 
 // ------------------------------------------------------------------------------ colours ----
 
@@ -328,10 +328,12 @@ struct Board {
     sign_off_epoch: u64,
     /// The board the last sign-off took down ("bring back the screen" restores it).
     last: Option<Arc<Report>>,
+    /// `Pin Block`: these blocks lead every report that is presented until they are unpinned.
+    pinned: Vec<Block>,
 }
 
 static BOARD: LazyLock<Mutex<Board>> = LazyLock::new(|| {
-    Mutex::new(Board { signed_off: false, shown: None, pending: None, research: None, spotlight: None, leaving: None, sign_off_epoch: 0, last: None })
+    Mutex::new(Board { signed_off: false, shown: None, pending: None, research: None, spotlight: None, leaving: None, sign_off_epoch: 0, last: None, pinned: Vec::new() })
 });
 
 fn board() -> MutexGuard<'static, Board> {
@@ -378,10 +380,16 @@ pub fn researching() -> bool {
 }
 
 /// Puts a report on the board (the cascade starts now); the emblem docks.
-pub fn present(report: Report) -> (usize, usize) {
+pub fn present(mut report: Report) -> (usize, usize) {
     crate::core_sphere_3d::pulse("hud_board.rs");
     let counts = (report.blocks.len(), report.sources.len());
     let mut b = board();
+    // Pinned blocks lead the new report (once each).
+    for pinned in b.pinned.iter().rev() {
+        if !report.blocks.contains(pinned) {
+            report.blocks.insert(0, pinned.clone());
+        }
+    }
     if let Some(old) = b.shown.take() {
         b.leaving = Some((old.report, Instant::now()));
     }
@@ -390,8 +398,72 @@ pub fn present(report: Report) -> (usize, usize) {
     b.spotlight = None;
     b.signed_off = false;
     drop(b);
+    crate::tts::play_cue(Earcon::Materialize);
     changed();
     counts
+}
+
+/// `Pin Block` on block `index` of the board: flips its pin. Some(true) when it is pinned now,
+/// None when there is no such block.
+pub fn toggle_pin(index: usize) -> Option<bool> {
+    let mut b = board();
+    let block = b.shown.as_ref()?.report.blocks.get(index)?.clone();
+    let pinned = match b.pinned.iter().position(|p| *p == block) {
+        Some(at) => {
+            b.pinned.remove(at);
+            false
+        }
+        None => {
+            b.pinned.push(block);
+            true
+        }
+    };
+    drop(b);
+    changed();
+    Some(pinned)
+}
+
+/// Whether this block is pinned.
+pub fn is_pinned(block: &Block) -> bool {
+    board().pinned.contains(block)
+}
+
+/// `Close` on one block of the board: it leaves (and loses its pin); the last block takes the
+/// board with it. The block's header, or None when there is no such block.
+pub fn remove_block(index: usize) -> Option<String> {
+    let mut b = board();
+    let (block, last) = {
+        let shown = b.shown.as_ref()?;
+        (shown.report.blocks.get(index)?.clone(), shown.report.blocks.len() == 1)
+    };
+    b.pinned.retain(|p| *p != block);
+    if last {
+        drop(b);
+        close_board();
+        return Some(block.label);
+    }
+    let shown = b.shown.as_mut()?;
+    let mut report = (*shown.report).clone();
+    report.blocks.remove(index);
+    shown.report = Arc::new(report);
+    shown.fronts.remove(index);
+    shown.highlights.remove(index);
+    // The spotlight follows its block (or closes with it).
+    b.spotlight = match b.spotlight {
+        Some((spot, _)) if spot == index => None,
+        Some((spot, at)) if spot > index => Some((spot - 1, at)),
+        other => other,
+    };
+    drop(b);
+    changed();
+    Some(block.label)
+}
+
+/// The blocks of the board a search lights up ("find voltage"): their indices.
+pub fn search_hits(needle: &str) -> Vec<usize> {
+    let b = board();
+    let Some(shown) = b.shown.as_ref().filter(|_| !needle.trim().is_empty()) else { return Vec::new() };
+    shown.report.blocks.iter().enumerate().filter(|(_, block)| crate::hud_dock::search_matches(needle, &block.label, &block.text())).map(|(i, _)| i).collect()
 }
 
 /// The waiting report on the board, if any.
@@ -577,7 +649,7 @@ pub fn maximize(target: Option<&str>) -> Result<String, String> {
     };
     b.spotlight = Some((index, Instant::now()));
     drop(b);
-    crate::tts::play_earcon(Earcon::Confirm);
+    crate::tts::play_cue(Earcon::Spotlight);
     changed();
     Ok(report.blocks[index].label.clone())
 }
@@ -929,15 +1001,19 @@ pub fn definitions() -> Vec<Value> {
                 present: puts the finished report on screen. recall (topic): brings back an earlier report. \
                 show_map (place): a dark map of a place with photos of it — use it when Sir asks where to go and you have picked a venue. \
                 maximize (target: chart, map, photo, note, figure or words of a block header), minimize, flip_note, \
+                pin (target: a block; again to unpin), copy (target: a block's text to the clipboard), export (target, format markdown or json: saves a block to Documents\\Jarvis Exports), \
+                find (target: words to look for in every open block; empty clears the search), tidy (arranges the open windows in one grid around the orb), \
                 walkthrough (narrates the board block by block, pulsing each one: 'walk me through it'), close (target: an in-app block such as 'feature lab' or 'telemetry'; none: the board), \
+                remove (target: one block of the board leaves it), \
                 clear (board, blocks and windows all leave; the screen stays up), sign_off (screen down), restore (brings the last board back: 'bring back the screen'), wake, status. Questions about what is on the board are answered from the live context, not with this tool.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "action": {"type": "string", "enum": ["research", "present", "walkthrough", "recall", "show_map", "maximize", "minimize", "flip_note", "close", "clear", "sign_off", "wake", "restore", "status"]},
+                    "action": {"type": "string", "enum": ["research", "present", "walkthrough", "recall", "show_map", "maximize", "minimize", "flip_note", "pin", "copy", "export", "find", "tidy", "close", "remove", "clear", "sign_off", "wake", "restore", "status"]},
                     "topic": {"type": "string", "description": "research / recall: the subject."},
                     "place": {"type": "string", "description": "show_map: the place or venue."},
-                    "target": {"type": "string", "description": "maximize / close: which block."},
+                    "target": {"type": "string", "description": "maximize / close / remove / pin / copy / export: which block. find: the words to look for."},
+                    "format": {"type": "string", "enum": ["markdown", "json"], "description": "export: the file format (default markdown)."},
                     "direction": {"type": "string", "enum": ["next", "previous"]},
                     "page": {"type": "integer", "description": "flip_note: go straight to this page (1-based)."}
                 },
@@ -1083,6 +1159,81 @@ async fn run_action(tools: &ToolContext, args: &Value, action: &str) -> Result<S
         "minimize" | "minimise" | "back" => {
             minimize();
             Ok(spoken("Back to the board.", ""))
+        }
+        // "Close the note" with a board up: that one block leaves it (the last one takes the
+        // board with it).
+        "remove" | "remove_block" => {
+            let target = arg(args, "target");
+            let index = board().shown.as_ref().and_then(|s| find_block(&s.report, target));
+            match index.and_then(remove_block) {
+                Some(label) => {
+                    crate::tts::play_earcon(Earcon::Confirm);
+                    Ok(spoken(format!("Removed from the board: {label}"), "Done, Sir. It's off the board."))
+                }
+                None => Ok(spoken(format!("No block '{target}' is open."), "I can't see a block like that, Sir.")),
+            }
+        }
+        // The block menu's entries by voice: "pin the chart", "copy the first note", "export the
+        // map as JSON". A board block first, else an in-app window of that name.
+        "pin" | "unpin" | "copy" | "export" => {
+            let target = arg(args, "target");
+            let (report, spot) = {
+                let b = board();
+                (b.shown.as_ref().map(|s| Arc::clone(&s.report)), b.spotlight.map(|(i, _)| i))
+            };
+            let on_board = report.and_then(|report| {
+                let index = if target.is_empty() || matches!(target, "it" | "that" | "this" | "block" | "this block" | "that block") { spot.or(Some(0)) } else { find_block(&report, target) };
+                index.filter(|i| *i < report.blocks.len()).map(|i| (i, report.blocks[i].clone()))
+            });
+            let window = if on_board.is_some() { None } else { crate::hud_dock::blocks_named(target).into_iter().next() };
+            let as_json = arg(args, "format").eq_ignore_ascii_case("json");
+            let format = if as_json { crate::block_actions::Format::Json } else { crate::block_actions::Format::Markdown };
+            let (title, text, detail) = match (&on_board, &window) {
+                (Some((_, block)), _) => (block.label.clone(), block.text(), serde_json::to_value(block).ok()),
+                (None, Some((id, title))) => (title.clone(), crate::hud_dock::block_content(id).unwrap_or_else(|| title.clone()), None),
+                (None, None) => return Ok(spoken(format!("No block '{target}' is open."), "I can't see a block like that, Sir.")),
+            };
+            match action {
+                "copy" => {
+                    crate::clipboard::write(&text).await?;
+                    Ok(spoken(format!("Copied: {title} ({} characters)", text.chars().count()), "Copied, Sir."))
+                }
+                "export" => {
+                    let path = crate::block_actions::export(&title, &text, detail.as_ref(), format)?;
+                    Ok(spoken(format!("Exported: {}", path.display()), format!("Exported as {}, Sir. It's in your Jarvis Exports folder.", if as_json { "JSON" } else { "Markdown" })))
+                }
+                _ => {
+                    let pinned = match (&on_board, &window) {
+                        (Some((index, _)), _) => toggle_pin(*index).unwrap_or(false),
+                        (None, Some((id, _))) => crate::hud_dock::toggle_pin(id),
+                        (None, None) => false,
+                    };
+                    Ok(spoken(format!("{}: {title}", if pinned { "Pinned" } else { "Unpinned" }), if pinned { "Pinned, Sir. It stays." } else { "Unpinned, Sir." }))
+                }
+            }
+        }
+        // "Find voltage on the board": every open block that carries the words stays lit.
+        "find" | "search" | "filter" => {
+            let target = arg(args, "target");
+            let needle = if target.is_empty() { arg(args, "topic") } else { target };
+            crate::hud_dock::set_search(needle);
+            if needle.is_empty() {
+                return Ok(spoken("Search cleared.", ""));
+            }
+            let hits = search_hits(&crate::hud_dock::search()).len() + crate::hud_dock::search_hits().len();
+            Ok(spoken(
+                format!("Search '{needle}': {hits} block(s)"),
+                match hits {
+                    0 => format!("Nothing on the board mentions {needle}, Sir."),
+                    1 => "One block, Sir. It's the one that's lit.".to_string(),
+                    n => format!("{} blocks, Sir. They're the ones that are lit.", number_words(n)),
+                },
+            ))
+        }
+        // "Tidy the windows": one grid around the orb.
+        "tidy" | "arrange" | "tile" => {
+            let moved = crate::hud_dock::retile_all(crate::gui::block_area());
+            Ok(spoken(format!("Tidied: {moved} window(s)"), if moved == 0 { "There's nothing open to tidy, Sir." } else { "" }))
         }
         "flip_note" | "flip" | "next_note" => {
             let page = match args.get("page").and_then(Value::as_u64) {
@@ -1244,39 +1395,83 @@ pub fn bento(sizes: &[(usize, usize)], cols: usize, rows: usize, reserved: &[(us
         .collect()
 }
 
-/// Columns for a board: enough for every block's cells plus the emblem's corner, 3 to 6.
-pub fn columns_for(report: &Report, rows: usize, reserved: usize) -> usize {
-    let area: usize = report.blocks.iter().map(|b| b.cells().0 * b.cells().1).sum::<usize>() + reserved;
-    area.div_ceil(rows).clamp(3, 6)
+/// The gap between two blocks of the grid.
+const GRID_GAP: f32 = 12.0;
+/// The smallest a grid cell is made (a narrower note could not hold a headline).
+const MIN_CELL: [f32; 2] = [250.0, 150.0];
+
+/// A report's grid on a board area: its columns and rows, and each block's cells (in block
+/// order; None for a block the screen has no room for).
+struct Grid {
+    cols: usize,
+    rows: usize,
+    cells: Vec<Option<Cell>>,
 }
 
-/// The rectangles of a report's blocks inside `area` (None: no room). The bottom-right cell is
-/// left for the docked emblem, the bottom-left one for a running research block.
+/// The grid for `report` on `area` with `reserve` cells kept free (the emblem's corner, the
+/// research block's). Three rows and three to six columns whenever that is enough — a wide
+/// screen with a normal report. A tall screen gets fewer columns and more rows; a report with
+/// more than the screen can take as it is has its last large blocks (charts, maps, videos) made
+/// ordinary ones. Every block gets a place as long as the screen has one cell for each.
+fn grid(report: &Report, area: Rect, research: bool) -> Grid {
+    let reserve = 1 + usize::from(research);
+    let max_cols = (((area.width() + GRID_GAP) / (MIN_CELL[0] + GRID_GAP)).floor() as usize).clamp(2, 6);
+    let max_rows = (((area.height() + GRID_GAP) / (MIN_CELL[1] + GRID_GAP)).floor() as usize).clamp(3, 8);
+    let mut sizes: Vec<(usize, usize)> = report.blocks.iter().map(Block::cells).collect();
+    let demand = |sizes: &[(usize, usize)]| sizes.iter().map(|(w, h)| w * h).sum::<usize>() + reserve;
+    // More than the screen holds: the last large blocks give up their extra cells.
+    while demand(&sizes) > max_cols * max_rows {
+        match sizes.iter().rposition(|(w, h)| w * h > 1) {
+            Some(i) => sizes[i] = (1, 1),
+            None => break,
+        }
+    }
+    let mut rows = demand(&sizes).div_ceil(max_cols).clamp(3, max_rows);
+    loop {
+        let cols = demand(&sizes).div_ceil(rows).clamp(3.min(max_cols), max_cols);
+        let mut reserved = vec![(cols - 1, rows - 1)];
+        if research {
+            reserved.push((0, rows - 1));
+        }
+        // Big blocks first, so the chart and the map anchor the top-left.
+        let mut order: Vec<usize> = (0..sizes.len()).collect();
+        order.sort_by_key(|i| std::cmp::Reverse(sizes[*i].0 * sizes[*i].1));
+        let packed = bento(&order.iter().map(|i| sizes[*i]).collect::<Vec<_>>(), cols, rows, &reserved);
+        let mut cells = vec![None; sizes.len()];
+        for (k, cell) in packed.into_iter().enumerate() {
+            cells[order[k]] = cell;
+        }
+        // Large blocks can leave holes no other block fits: one more row, then smaller blocks.
+        if cells.iter().all(Option::is_some) {
+            return Grid { cols, rows, cells };
+        }
+        if rows < max_rows {
+            rows += 1;
+        } else if let Some(i) = sizes.iter().rposition(|(w, h)| w * h > 1) {
+            sizes[i] = (1, 1);
+        } else {
+            // More blocks than the screen has cells: the ones that fit are shown.
+            return Grid { cols, rows, cells };
+        }
+    }
+}
+
+/// The rectangles of a report's blocks inside `area` (None: the screen has no cell left for
+/// it). The bottom-right cell is left for the docked emblem, the bottom-left one for a running
+/// research block.
 pub fn layout(report: &Report, area: Rect, research: bool) -> Vec<Option<Rect>> {
-    let rows = 3;
-    let mut reserved = vec![];
-    let reserve_count = 1 + usize::from(research);
-    let cols = columns_for(report, rows, reserve_count);
-    reserved.push((cols - 1, rows - 1));
-    if research {
-        reserved.push((0, rows - 1));
-    }
-    // Big blocks first, so the chart and the map anchor the top-left.
-    let mut order: Vec<usize> = (0..report.blocks.len()).collect();
-    order.sort_by_key(|i| std::cmp::Reverse(report.blocks[*i].cells().0 * report.blocks[*i].cells().1));
-    let sizes: Vec<(usize, usize)> = order.iter().map(|i| report.blocks[*i].cells()).collect();
-    let cells = bento(&sizes, cols, rows, &reserved);
-    let gap = 12.0;
-    let cw = (area.width() - gap * (cols as f32 - 1.0)) / cols as f32;
-    let rh = (area.height() - gap * (rows as f32 - 1.0)) / rows as f32;
-    let mut out = vec![None; report.blocks.len()];
-    for (k, cell) in cells.into_iter().enumerate() {
-        out[order[k]] = cell.map(|c| {
-            let min = area.min + vec2(c.col as f32 * (cw + gap), c.row as f32 * (rh + gap));
-            Rect::from_min_size(min, vec2(cw * c.w as f32 + gap * (c.w as f32 - 1.0), rh * c.h as f32 + gap * (c.h as f32 - 1.0)))
-        });
-    }
-    out
+    let grid = grid(report, area, research);
+    let cw = (area.width() - GRID_GAP * (grid.cols as f32 - 1.0)) / grid.cols as f32;
+    let rh = (area.height() - GRID_GAP * (grid.rows as f32 - 1.0)) / grid.rows as f32;
+    grid.cells
+        .into_iter()
+        .map(|cell| {
+            cell.map(|c| {
+                let min = area.min + vec2(c.col as f32 * (cw + GRID_GAP), c.row as f32 * (rh + GRID_GAP));
+                Rect::from_min_size(min, vec2(cw * c.w as f32 + GRID_GAP * (c.w as f32 - 1.0), rh * c.h as f32 + GRID_GAP * (c.h as f32 - 1.0)))
+            })
+        })
+        .collect()
 }
 
 /// The spotlight frame: 780 × 480 in the middle of the board (smaller on small screens).
@@ -1289,10 +1484,9 @@ pub fn spotlight_rect(area: Rect) -> Rect {
 /// than the column, no taller than the row), else the full-size block.
 pub fn research_rect_for(report: Option<&Report>, area: Rect) -> Rect {
     let Some(report) = report else { return research_rect(area) };
-    let (rows, gap) = (3usize, 12.0);
-    let cols = columns_for(report, rows, 2);
-    let cw = (area.width() - gap * (cols as f32 - 1.0)) / cols as f32;
-    let rh = (area.height() - gap * (rows as f32 - 1.0)) / rows as f32;
+    let grid = grid(report, area, true);
+    let cw = (area.width() - GRID_GAP * (grid.cols as f32 - 1.0)) / grid.cols as f32;
+    let rh = (area.height() - GRID_GAP * (grid.rows as f32 - 1.0)) / grid.rows as f32;
     let size = vec2(RESEARCH_BLOCK_SIZE[0].min(cw), RESEARCH_BLOCK_SIZE[1].min(rh));
     Rect::from_min_size(pos2(area.left(), area.bottom() - size.y), size)
 }
@@ -1482,6 +1676,41 @@ pub enum BoardClick {
     Watched(String),
     /// A key of the suggestion bar under the spotlight: (the block's kind, the suggestion).
     Suggested(&'static str, crate::hud_suggestions::Suggestion),
+    /// An entry of a block's right-click menu.
+    Menu(crate::block_actions::BlockAction),
+}
+
+/// How far a block that does not answer the search steps back.
+const SEARCH_DIM: f32 = 0.22;
+
+/// Carries out an entry of the right-click menu on block `index` of the board.
+fn block_menu(ctx: &egui::Context, index: usize, block: &Block, chosen: crate::block_actions::BlockAction) {
+    use crate::block_actions::{BlockAction, Format};
+    let export = |format| {
+        let detail = serde_json::to_value(block).ok();
+        match crate::block_actions::export(&block.label, &block.text(), detail.as_ref(), format) {
+            Ok(path) => info!("[BOARD] Block '{}' exported to {}", block.label, path.display()),
+            Err(e) => warn!("[BOARD] Could not export '{}': {e}", block.label),
+        }
+    };
+    match chosen {
+        BlockAction::Copy => crate::block_actions::copy(ctx, &block.text()),
+        BlockAction::Pin => {
+            toggle_pin(index);
+        }
+        BlockAction::Maximize => {
+            board().spotlight = Some((index, Instant::now()));
+            crate::tts::play_cue(Earcon::Spotlight);
+            changed();
+        }
+        BlockAction::ExportMarkdown => export(Format::Markdown),
+        BlockAction::ExportJson => export(Format::Json),
+        BlockAction::Close => {
+            if remove_block(index).is_some() {
+                crate::tts::play_cue(Earcon::Dismiss);
+            }
+        }
+    }
 }
 
 /// The board's painter state (textures live with the window; `added`: this frame's "ADDED …"
@@ -1497,6 +1726,8 @@ pub struct BoardView {
     /// Where Sir dragged each block (by index) on the board shown at `moved_board`.
     moved: HashMap<usize, Vec2>,
     moved_board: Option<Instant>,
+    /// The block being dragged and where it was when the drag began.
+    drag_from: Option<(usize, Vec2)>,
     /// How far a long note is scrolled, per (block, page).
     scroll: HashMap<(usize, usize), f32>,
     /// The suggestion bar's keys for the block in the spotlight, and the generation of Sir's
@@ -1528,8 +1759,38 @@ fn subject_of(report: &Report, index: usize, front: usize) -> crate::hud_suggest
 
 /// The `[ < PREV ]` / `[ NEXT > ]` keys of a stacked block (88 × 26 px in its bottom corners).
 fn nav_keys(front: Rect) -> [Rect; 2] {
-    let y = front.bottom() - 8.0 - 26.0;
-    [Rect::from_min_size(pos2(front.left() + 8.0, y), vec2(88.0, 26.0)), Rect::from_min_size(pos2(front.right() - 8.0 - 88.0, y), vec2(88.0, 26.0))]
+    let (w, h) = (PAGE_KEY[0], PAGE_KEY[1]);
+    let y = front.bottom() - 8.0 - h;
+    [Rect::from_min_size(pos2(front.left() + 8.0, y), vec2(w, h)), Rect::from_min_size(pos2(front.right() - 8.0 - w, y), vec2(w, h))]
+}
+
+/// The page keys' size (the least a `[ < PREV ]` / `[ NEXT > ]` hitbox may be is 84 × 24 px).
+pub const PAGE_KEY: [f32; 2] = [88.0, 26.0];
+
+/// Where the `[ < PREV ]` and `[ NEXT > ]` keys of the board's first stacked block are inside
+/// `area` right now (the spotlight's when that block is maximised). None without a stack.
+pub fn page_keys(area: Rect) -> Option<[Rect; 2]> {
+    let b = board();
+    let shown = b.shown.as_ref()?;
+    let (index, pages) = shown.report.blocks.iter().enumerate().find_map(|(i, block)| match &block.kind {
+        BlockKind::NoteStack { notes } if notes.len() > 1 => Some((i, notes.len())),
+        _ => None,
+    })?;
+    let slot = match b.spotlight {
+        Some((spot, _)) if spot == index => spotlight_rect(area),
+        _ => layout(&shown.report, area, b.research.is_some()).get(index).copied().flatten()?,
+    };
+    Some(nav_keys(front_rect(slot, Some((shown.fronts[index], pages)))))
+}
+
+/// The page in front of the board's first stacked block (0-based) and how many it has.
+pub fn front_page() -> Option<(usize, usize)> {
+    let b = board();
+    let shown = b.shown.as_ref()?;
+    shown.report.blocks.iter().enumerate().find_map(|(i, block)| match &block.kind {
+        BlockKind::NoteStack { notes } if notes.len() > 1 => Some((shown.fronts[i].min(notes.len() - 1), notes.len())),
+        _ => None,
+    })
 }
 
 /// Which page key (if any) of a stacked `block` in `slot` the pointer is on.
@@ -1571,6 +1832,12 @@ fn bold(size: f32) -> FontId {
 
 fn display(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name("display".into()))
+}
+
+/// How many whole rows of `font` fit into `height` (none when not even one does).
+fn rows_that_fit(p: &Painter, font: &FontId, height: f32) -> usize {
+    let row = p.fonts(|f| f.row_height(font)).max(1.0);
+    (height / row).floor().max(0.0) as usize
 }
 
 /// Wrapped text clipped to `max_rows`; returns the height used.
@@ -1662,6 +1929,11 @@ fn frame(p: &Painter, slot: Rect, block: &Block, active: bool, stack: Option<(us
 }
 
 impl BoardView {
+    /// How far Sir has dragged block `index` from its slot.
+    pub fn moved_by(&self, index: usize) -> Vec2 {
+        self.moved.get(&index).copied().unwrap_or_default()
+    }
+
     /// The suggestion bar under the spotlight frame `r`: the three things Sir most likely wants
     /// next, as keys; returns the one he clicked.
     fn suggestion_bar(&mut self, ui: &mut Ui, p: &Painter, r: Rect, area: Rect, subject: crate::hud_suggestions::Subject) -> Option<crate::hud_suggestions::Suggestion> {
@@ -1748,6 +2020,7 @@ impl BoardView {
             if self.spot.moving() {
                 animating = true;
             }
+            let needle = crate::hud_dock::search();
             for (i, (block, rect)) in shown.report.blocks.iter().zip(&rects).enumerate() {
                 let Some(rect) = *rect else { continue };
                 if spot_shown == Some(i) {
@@ -1763,6 +2036,9 @@ impl BoardView {
                     continue;
                 }
                 let dim = if spot_shown.is_some() { 1.0 - (1.0 - DIM_OPACITY) * spot_t } else { 1.0 };
+                // The search across the blocks: what answers it stays lit, the rest steps back.
+                let found = !needle.is_empty() && crate::hud_dock::search_matches(&needle, &block.label, &block.text());
+                let dim = if needle.is_empty() || found { dim } else { dim * SEARCH_DIM };
                 let mut p = painter.clone();
                 let e = ease_out(t);
                 p.set_opacity(e * e * dim);
@@ -1774,9 +2050,23 @@ impl BoardView {
                 }
                 // Every block moves with the mouse (drag anywhere on it); a click still maximises.
                 let response = ui.interact(r, ui.id().with(("hud_block", i)), Sense::click_and_drag());
+                if response.drag_started() {
+                    self.drag_from = Some((i, self.moved.get(&i).copied().unwrap_or_default()));
+                }
                 if response.dragged() {
-                    *self.moved.entry(i).or_default() += response.drag_delta();
+                    // The whole way the pointer has come since it was pressed: the block stays
+                    // exactly under it, the first pixels before the drag was a drag included.
+                    let way = ui.input(|inp| inp.pointer.press_origin().zip(inp.pointer.interact_pos()).map(|(from, at)| at - from));
+                    match (self.drag_from, way) {
+                        (Some((index, base)), Some(way)) if index == i => {
+                            self.moved.insert(i, base + way);
+                        }
+                        _ => *self.moved.entry(i).or_default() += response.drag_delta(),
+                    }
                     animating = true;
+                }
+                if response.drag_stopped() {
+                    self.drag_from = None;
                 }
                 if response.hovered() {
                     let dy = ui.input(|inp| inp.smooth_scroll_delta.y);
@@ -1785,11 +2075,23 @@ impl BoardView {
                         animating = true;
                     }
                 }
-                let active = pulse.is_some() || response.hovered();
+                let active = pulse.is_some() || response.hovered() || found;
                 self.paint_block(&p, r, block, (i, shown.fronts[i]), active, false, rt);
                 if let Some(s) = pulse {
                     let glow = 0.5 + 0.5 * (s * 7.0).cos();
                     p.rect_stroke(r.expand(2.0), Rounding::ZERO, stroke(2.0, active_colour().gamma_multiply(glow * (1.0 - s / HIGHLIGHT_SECS))));
+                }
+                let pinned = is_pinned(block);
+                if pinned {
+                    p.text(pos2(r.right() - 8.0, r.bottom() - FOOTER_H - 6.0), Align2::RIGHT_BOTTOM, "PINNED", micro(), active_colour());
+                }
+                // Right-click: copy, pin, maximize, export, close (the same menu as a window's).
+                let mut chosen = None;
+                response.context_menu(|ui| chosen = crate::block_actions::menu(ui, pinned, false));
+                if let Some(chosen) = chosen {
+                    block_menu(ui.ctx(), i, block, chosen);
+                    animating = true;
+                    click = Some(BoardClick::Menu(chosen));
                 }
                 let key = nav_key_hit(block, shown.fronts[i], r, response.interact_pointer_pos());
                 if response.clicked() && key.is_some() {
@@ -1800,7 +2102,7 @@ impl BoardView {
                     let mut b = board();
                     b.spotlight = Some((i, Instant::now()));
                     drop(b);
-                    crate::tts::play_earcon(Earcon::Confirm);
+                    crate::tts::play_cue(Earcon::Spotlight);
                     click = Some(BoardClick::Maximized(block.label.clone()));
                 } else if response.clicked() {
                     minimize();
@@ -1890,30 +2192,42 @@ impl BoardView {
             BlockKind::NoteStack { notes } => {
                 let page = front.min(notes.len() - 1);
                 let note = &notes[page];
-                let h = wrapped(&p, inner.min, inner.width(), &note.headline.to_uppercase(), bold(20.0 * scale), INK, 3);
+                // The headline takes up to three rows, but never the room three rows of the text
+                // need: a short block shows less of its headline and more of what it says.
+                let (head_font, body_font) = (bold(20.0 * scale), FontId::proportional(14.5 * scale));
+                let (head_row, body_row) = p.fonts(|f| (f.row_height(&head_font), f.row_height(&body_font)));
+                let head_rows = if note.body.trim().is_empty() { 3 } else { (((inner.height() - 8.0 - 3.0 * body_row) / head_row).floor().max(1.0) as usize).min(3) };
+                let h = wrapped(&p, inner.min, inner.width(), &note.headline.to_uppercase(), head_font, INK, head_rows);
                 // The whole text, never clipped mid-sentence: what does not fit scrolls (wheel).
                 let top = inner.min.y + h + 8.0;
                 let colour = INK.gamma_multiply(0.86);
-                let galley = p.layout_job(egui::text::LayoutJob::simple(note.body.clone(), FontId::proportional(14.5 * scale), colour, (inner.width() - 8.0).max(10.0)));
                 let room = (inner.bottom() - top).max(0.0);
-                let max = (galley.size().y - room).max(0.0);
-                let offset = self.scroll.get(&(index, page)).copied().unwrap_or(0.0).clamp(0.0, max);
-                self.scroll.insert((index, page), offset);
-                let view = Rect::from_min_max(pos2(inner.left(), top), inner.max);
-                p.with_clip_rect(view.intersect(p.clip_rect())).galley(pos2(inner.left(), top - offset), galley, colour);
-                if max > 0.0 {
-                    let track = Rect::from_min_max(pos2(inner.right() - 2.0, top), pos2(inner.right(), inner.bottom()));
-                    let len = (room / (room + max)) * track.height();
-                    let y = track.top() + offset / max * (track.height() - len);
-                    p.rect_filled(Rect::from_min_size(pos2(track.left(), y), vec2(2.0, len)), Rounding::ZERO, active_colour().gamma_multiply(0.8));
+                // (A block too short for even one row of text under its headline shows none.)
+                if room >= body_row {
+                    let galley = p.layout_job(egui::text::LayoutJob::simple(note.body.clone(), body_font, colour, (inner.width() - 8.0).max(10.0)));
+                    let max = (galley.size().y - room).max(0.0);
+                    let offset = self.scroll.get(&(index, page)).copied().unwrap_or(0.0).clamp(0.0, max);
+                    self.scroll.insert((index, page), offset);
+                    let view = Rect::from_min_max(pos2(inner.left(), top), inner.max);
+                    p.with_clip_rect(view.intersect(p.clip_rect())).galley(pos2(inner.left(), top - offset), galley, colour);
+                    if max > 0.0 {
+                        // The track, faint, and on it how far the text has been turned.
+                        let track = Rect::from_min_max(pos2(inner.right() - 2.0, top), pos2(inner.right(), inner.bottom()));
+                        p.rect_filled(track, Rounding::ZERO, active_colour().gamma_multiply(0.16));
+                        let len = ((room / (room + max)) * track.height()).max(track.height().min(12.0));
+                        let y = track.top() + offset / max * (track.height() - len);
+                        p.rect_filled(Rect::from_min_size(pos2(track.left(), y), vec2(2.0, len)), Rounding::ZERO, active_colour().gamma_multiply(0.8));
+                    }
                 }
             }
             BlockKind::HeroFigure { header, figure, note } => {
                 let h = wrapped(&p, inner.min, inner.width(), &header.to_uppercase(), bold(13.0 * scale), INK.gamma_multiply(0.9), 2);
                 let fig = p.text(inner.min + vec2(0.0, h + 6.0), Align2::LEFT_TOP, figure, display(48.0 * scale), Color32::WHITE);
-                let rows = ((inner.bottom() - fig.bottom() - 8.0) / (15.0 * scale)).floor().clamp(0.0, 3.0) as usize;
+                // As many rows of the note as really fit under the figure (three at most).
+                let font = FontId::proportional(12.0 * scale);
+                let rows = rows_that_fit(&p, &font, inner.bottom() - fig.bottom() - 8.0).min(3);
                 if rows > 0 {
-                    wrapped(&p, pos2(inner.left(), fig.bottom() + 8.0), inner.width(), note, FontId::proportional(12.0 * scale), MICRO, rows);
+                    wrapped(&p, pos2(inner.left(), fig.bottom() + 8.0), inner.width(), note, font, MICRO, rows);
                 }
             }
             BlockKind::BarChart { unit, bars, caption } => paint_chart(&p, inner, unit, bars, caption, scale),
@@ -2079,10 +2393,12 @@ fn paint_dialogue_body(p: &Painter, inner: Rect, heard: &str, reply: &str, strea
         y += h.max(12.0) + 5.0;
     }
     if !reply.trim().is_empty() {
-        let rows = (((inner.bottom() - y) / 19.0).floor() as usize).max(1);
+        // The rows that really fit (measured with the font, so the last one is never cut).
+        let font = FontId::proportional(15.0);
+        let rows = rows_that_fit(p, &font, inner.bottom() - y).max(1);
         let label = p.text(pos2(inner.left(), y + 2.0), Align2::LEFT_TOP, "J.A.R.V.I.S. //", micro(), active_colour());
         let text = if streaming { format!("{} ▌", reply.trim()) } else { reply.trim().to_string() };
-        wrapped(p, pos2(label.right() + 6.0, y), inner.width() - label.width() - 6.0, &text, FontId::proportional(15.0), INK, rows);
+        wrapped(p, pos2(label.right() + 6.0, y), inner.width() - label.width() - 6.0, &text, font, INK, rows);
     }
 }
 
@@ -2241,9 +2557,16 @@ fn paint_map(p: &Painter, r: Rect, place: &str, lat: f64, lon: f64, span: f64, r
         p.circle_filled(c, radius, PIN_RED.gamma_multiply(alpha));
     }
     p.circle_filled(c, 2.2, Color32::WHITE);
+    // The place's name on two rows at most, never wider than the block (a long name in a
+    // narrow cell was cut at the block's edge), its coordinates under it.
     let title = place.split(',').take(2).collect::<Vec<_>>().join(",").to_uppercase();
-    let rect = p.text(r.left_bottom() + vec2(14.0, -30.0), Align2::LEFT_BOTTOM, title, display(22.0), Color32::WHITE);
-    p.text(pos2(rect.left(), rect.bottom() + 4.0), Align2::LEFT_TOP, format!("{lat:.4}° N  {lon:.4}° E"), micro(), MICRO);
+    let mut job = egui::text::LayoutJob::simple(title, display(22.0), Color32::WHITE, (r.width() - 28.0).max(40.0));
+    job.wrap.max_rows = 2;
+    job.wrap.overflow_character = Some('…');
+    let galley = p.layout_job(job);
+    let (left, bottom) = (r.left() + 14.0, r.bottom() - 30.0);
+    p.galley(pos2(left, bottom - galley.size().y), galley, Color32::WHITE);
+    p.text(pos2(left, bottom + 4.0), Align2::LEFT_TOP, format!("{lat:.4}° N  {lon:.4}° E"), micro(), MICRO);
 }
 
 /// Tests that drive the one global board run one at a time.

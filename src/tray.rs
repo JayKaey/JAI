@@ -12,7 +12,7 @@ pub enum TrayAction {
 }
 
 #[cfg(windows)]
-pub use win::{remove, show_running_instance, spawn};
+pub use win::{ask_test_session_to_give_way, remove, show_running_instance, spawn};
 
 #[cfg(not(windows))]
 pub fn spawn(_actions: tokio::sync::mpsc::UnboundedSender<TrayAction>, _mic_on: impl Fn() -> bool + Send + Sync + 'static) {}
@@ -23,6 +23,13 @@ pub fn remove() {}
 /// Asks an already running Jarvis to show its HUD. False when none could be reached.
 #[cfg(not(windows))]
 pub fn show_running_instance() -> bool {
+    false
+}
+
+/// Asks a running test session to end, for the Jarvis Sir just started. False when none could
+/// be reached.
+#[cfg(not(windows))]
+pub fn ask_test_session_to_give_way() -> bool {
     false
 }
 
@@ -51,6 +58,8 @@ mod win {
     const CLASS: PCWSTR = w!("JarvisTrayWindow");
     /// Posted by a second `JARVIS.exe` so the running instance shows its HUD.
     const SHOW_HUD_MESSAGE: PCWSTR = w!("JARVIS_SHOW_HUD");
+    /// Posted by the `JARVIS.exe` Sir started while a test session holds the place: it ends.
+    const GIVE_WAY_MESSAGE: PCWSTR = w!("JARVIS_GIVE_WAY");
     const ICON_ID: u32 = 1;
     const CMD_OPEN: usize = 1;
     const CMD_MIC: usize = 2;
@@ -66,6 +75,15 @@ mod win {
     static WINDOW: AtomicIsize = AtomicIsize::new(0);
     static TASKBAR_CREATED: AtomicU32 = AtomicU32::new(0);
     static SHOW_HUD: AtomicU32 = AtomicU32::new(0);
+    static GIVE_WAY: AtomicU32 = AtomicU32::new(0);
+
+    pub fn ask_test_session_to_give_way() -> bool {
+        // SAFETY: window lookup by class name and a posted message; no pointers are kept.
+        unsafe {
+            let hwnd = FindWindowW(CLASS, PCWSTR::null());
+            hwnd.0 != 0 && PostMessageW(hwnd, RegisterWindowMessageW(GIVE_WAY_MESSAGE), WPARAM(0), LPARAM(0)).is_ok()
+        }
+    }
 
     pub fn show_running_instance() -> bool {
         // SAFETY: window lookup by class name and a posted message; no pointers are kept.
@@ -150,6 +168,7 @@ mod win {
             WINDOW.store(hwnd.0, Ordering::Release);
             TASKBAR_CREATED.store(RegisterWindowMessageW(w!("TaskbarCreated")), Ordering::Release);
             SHOW_HUD.store(RegisterWindowMessageW(SHOW_HUD_MESSAGE), Ordering::Release);
+            GIVE_WAY.store(RegisterWindowMessageW(GIVE_WAY_MESSAGE), Ordering::Release);
             if add_icon(hwnd) {
                 info!("[TRAY] Running in the notification area (click: HUD, right-click: menu)");
             } else {
@@ -173,7 +192,8 @@ mod win {
             hIcon: load_icon(),
             ..Default::default()
         };
-        let tip: Vec<u16> = "J.A.R.V.I.S. — online".encode_utf16().take(data.szTip.len() - 1).collect();
+        let tip = if crate::platform::in_test_session() { "J.A.R.V.I.S. — test run (starting him ends it)" } else { "J.A.R.V.I.S. — online" };
+        let tip: Vec<u16> = tip.encode_utf16().take(data.szTip.len() - 1).collect();
         data.szTip[..tip.len()].copy_from_slice(&tip);
         Shell_NotifyIconW(NIM_ADD, &data).as_bool()
     }
@@ -249,6 +269,11 @@ mod win {
             }
             _ if msg != 0 && msg == SHOW_HUD.load(Ordering::Acquire) => {
                 send(TrayAction::OpenHud);
+                LRESULT(0)
+            }
+            _ if msg != 0 && msg == GIVE_WAY.load(Ordering::Acquire) => {
+                info!("[TRAY] Sir started Jarvis: this test session gives way");
+                send(TrayAction::Quit);
                 LRESULT(0)
             }
             _ => DefWindowProcW(hwnd, msg, wparam, lparam),

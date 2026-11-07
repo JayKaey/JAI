@@ -51,17 +51,33 @@ const KNOWN: &[(&str, &str)] = &[
     ("telemtry", "telemetry"), ("telemetery", "telemetry"),
     // Apps Sir names every day.
     ("spotfy", "spotify"), ("spotifiy", "spotify"), ("spotfiy", "spotify"), ("discrod", "discord"), ("dicord", "discord"), ("disocrd", "discord"),
+    // The verbs and words of every other command.
+    ("opn", "open"), ("oepn", "open"), ("opne", "open"), ("clse", "close"), ("cloes", "close"), ("colse", "close"), ("clsoe", "close"),
+    ("shwo", "show"), ("hsow", "show"), ("teh", "the"), ("hte", "the"), ("yur", "your"), ("yuor", "your"), ("trun", "turn"), ("tunr", "turn"),
+    ("lowr", "lower"), ("lwoer", "lower"), ("loewr", "lower"), ("mvoe", "move"), ("moev", "move"),
+    ("swich", "switch"), ("swtich", "switch"), ("switsh", "switch"),
+    ("evrything", "everything"), ("everthing", "everything"), ("everyhting", "everything"), ("evreything", "everything"),
+    ("feture", "feature"), ("featur", "feature"), ("fature", "feature"), ("feautre", "feature"), ("feautres", "features"), ("fetures", "features"),
+    ("stauts", "status"), ("sttus", "status"), ("satus", "status"), ("whta", "what"), ("waht", "what"), ("hwat", "what"),
+    ("thme", "theme"), ("tehme", "theme"), ("theem", "theme"), ("windwo", "window"), ("widnow", "window"), ("wnidow", "window"),
+    ("widgte", "widget"), ("mixr", "mixer"), ("quiter", "quieter"), ("quiteer", "quieter"),
+    ("musci", "music"), ("muisc", "music"), ("msuic", "music"), ("plya", "play"), ("timre", "timer"), ("tiemr", "timer"),
+    // "Stop listeting" (2026-11-07, Sir's own typing).
+    ("listeting", "listening"), ("listning", "listening"), ("lisening", "listening"), ("listenning", "listening"), ("listenig", "listening"),
+    ("lisetning", "listening"), ("litening", "listening"),
 ];
 
-/// Misspellings that are real words elsewhere ("Mut" is German for courage): corrected only when
-/// they are the whole utterance.
-const SHORT_ONLY: &[(&str, &str)] = &[("mut", "mute"), ("pos", "pause"), ("paws", "pause"), ("stp", "stop"), ("nxt", "next"), ("skp", "skip")];
+/// Misspellings that are real words elsewhere ("Mut" is German for courage, "Staus" are traffic
+/// jams): corrected only when they are the whole utterance.
+const SHORT_ONLY: &[(&str, &str)] =
+    &[("mut", "mute"), ("pos", "pause"), ("paws", "pause"), ("stp", "stop"), ("nxt", "next"), ("skp", "skip"), ("staus", "status")];
 
 /// Domain keywords a fuzzy match may correct to (six letters or more, so short words are safe).
 const FUZZY_TARGETS: &[&str] = &[
     "calendar", "kalender", "appointment", "schedule", "tomorrow", "yesterday", "monday", "tuesday", "wednesday", "thursday", "friday",
     "saturday", "sunday", "montag", "dienstag", "mittwoch", "donnerstag", "freitag", "samstag", "sonntag", "übermorgen", "volume",
-    "lautstärke", "shutdown", "restart", "continue", "telemetry", "statistics", "spotify", "discord", "computer",
+    "lautstärke", "shutdown", "restart", "continue", "telemetry", "statistics", "spotify", "discord", "computer", "everything", "feature",
+    "features", "widget", "widgets", "status", "switch",
 ];
 
 /// Real words that look like a domain keyword and must never be "corrected".
@@ -70,6 +86,7 @@ const PROTECTED: &[&str] = &[
     "fridge", "monkey", "money", "mondo", "volumen", "voluntary", "shutout", "discard", "discards", "discarded", "discords", "spotty",
     "commuter", "commuters", "continuum", "dienste", "diensten",
     "telemetrie", "kalendarium", "statistic", "statistik", "montage", "freitagabend", "samstagabend", "sonntagabend",
+    "stats", "statue", "statues", "statur", "statut", "stratus", "staus", "states", "stated", "swatch", "feathers", "fetuses",
 ];
 
 /// "add a new in my calendar", "create a new in my kalender": the noun Sir left out.
@@ -171,8 +188,118 @@ pub fn core_homophones(text: &str) -> String {
     out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// "Would you mind opening the feature lab?" is "open the feature lab" (2026-11-07: the model
+/// took it for a protocol). Only verbs Jarvis acts on; anything else is left as said.
+fn polite_gerund(text: &str) -> Option<String> {
+    static POLITE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)^(?:(?:hey\s+)?jarvis[,.]?\s+)?(?:would|do)\s+you\s+mind\s+([a-z]+ing)\b(.*)$").expect("polite gerund"));
+    const VERBS: &[(&str, &str)] = &[
+        ("opening", "open"), ("closing", "close"), ("turning", "turn"), ("muting", "mute"), ("unmuting", "unmute"), ("playing", "play"),
+        ("pausing", "pause"), ("stopping", "stop"), ("starting", "start"), ("showing", "show"), ("hiding", "hide"), ("putting", "put"),
+        ("making", "make"), ("setting", "set"), ("switching", "switch"), ("taking", "take"), ("moving", "move"), ("lowering", "lower"),
+        ("raising", "raise"), ("skipping", "skip"), ("saving", "save"), ("loading", "load"), ("deleting", "delete"), ("removing", "remove"),
+        ("adding", "add"), ("checking", "check"), ("reading", "read"), ("telling", "tell"), ("giving", "give"), ("bringing", "bring"),
+        ("launching", "launch"), ("running", "run"), ("restarting", "restart"), ("changing", "change"), ("getting", "get"), ("keeping", "keep"),
+        ("fading", "fade"), ("toggling", "toggle"), ("minimizing", "minimize"), ("maximizing", "maximize"), ("dimming", "dim"), ("resetting", "reset"),
+        ("sending", "send"), ("writing", "write"), ("creating", "create"), ("finding", "find"), ("searching", "search"), ("looking", "look"),
+        ("quitting", "quit"), ("leaving", "leave"), ("entering", "enter"), ("going", "go"), ("coming", "come"), ("listening", "listen"),
+    ];
+    let c = POLITE.captures(text.trim())?;
+    let gerund = c[1].to_lowercase();
+    let verb = VERBS.iter().find(|(ing, _)| *ing == gerund)?.1;
+    let rest = c[2].trim_end().trim_end_matches(['?', '.', '!']).trim_end();
+    Some(format!("{verb}{rest}"))
+}
+
+/// Commands as the recogniser mishears them (2026-11-07 verifier, matrix F: stock voices said
+/// them, Whisper wrote "Jarvis Mude", "Java's Pulse", "monitor too", "start stop watch", "is
+/// anything mutant", "Tugglespan mode", "was playing"). Whole commands and fixed pairs only,
+/// none of them a sentence anyone means as it is written.
+fn misheard(text: &str) -> Option<String> {
+    let said = text.trim().trim_start_matches('\u{feff}').trim_end_matches(['.', '!', '?']).trim_end();
+    let whole = match said.to_lowercase().as_str() {
+        "mude" | "mewed" | "mewt" | "moot" => Some("mute"),
+        "pulse" | "poles" | "paws" => Some("pause"),
+        "was playing" => Some("what's playing"),
+        "was open" => Some("what's open"),
+        _ => None,
+    };
+    if let Some(command) = whole {
+        return Some(command.to_string());
+    }
+    static PAIRS: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| {
+        [
+            (r"(?i)\b(monitor|screen|display)\s+(?:too|to)$", "$1 two"),
+            // "Füge einen Termin hinzu" heard as "Flüge einen …" (only before an article: "Flüge
+            // nach Berlin" stays the flights).
+            (r"(?i)^flüge\s+(einen|ein|eine)\s+", "füge $1 "),
+            (r"(?i)\bstop\s+watch\b", "stopwatch"),
+            (r"(?i)\bsystems\s+status\b", "system status"),
+            (r"(?i)^(is|are)\s+(.{1,30}?)\s+mutant$", "$1 $2 muted"),
+            (r"(?i)\b(?:tuggle|tugle)[\s-]?span\b|\btoggle-span\b", "toggle span"),
+            (r"(?i)^(stop|start|end|quit)\s+panning\b", "$1 spanning"),
+            (r"(?i)^(save|load)\s+(this|the|my)\s+mix's\s+", "$1 $2 mix as "),
+            // "Set Discord to eighty percent" heard as "said Discord the 80%" and "said this
+            // called the 80%" (only there: "what's this called?" stays a question).
+            (r"(?i)^(?:set|said)\s+this\s+(?:called|cord|chord)\s+(?:the|to|at)\s+(\d{1,3})\s*(?:%|percent|prozent)$", "set discord to $1 %"),
+            (r"(?i)^said\s+(.+?)\s+(?:the|to|at)\s+(\d{1,3})\s*(?:%|percent|prozent)$", "set $1 to $2 %"),
+        ]
+        .into_iter()
+        .map(|(pattern, with)| (Regex::new(pattern).expect("misheard pair"), with))
+        .collect()
+    });
+    let mut fixed = said.to_string();
+    for (pattern, with) in PAIRS.iter() {
+        fixed = pattern.replace_all(&fixed, *with).into_owned();
+    }
+    (fixed != said).then_some(fixed)
+}
+
+/// What follows his name, as an order: with "Jarvis" heard as the subject the recogniser writes
+/// the order as a report ("Jarvis opened the mixer", "Jarvis stops spanning", "Jarvis saved
+/// this mix as gaming"). Only verbs he takes orders with, only the first word, and only when
+/// something follows it. (The wake word calls this for what comes after his name.)
+pub fn imperative_after_name(command: &str) -> String {
+    const VERBS: &[(&str, &str)] = &[
+        ("opened", "open"), ("opens", "open"), ("closed", "close"), ("closes", "close"), ("saved", "save"), ("saves", "save"),
+        ("loaded", "load"), ("loads", "load"), ("stopped", "stop"), ("stops", "stop"), ("started", "start"), ("starts", "start"),
+        ("muted", "mute"), ("mutes", "mute"), ("unmuted", "unmute"), ("unmutes", "unmute"), ("showed", "show"), ("shows", "show"),
+        ("hid", "hide"), ("hides", "hide"), ("moved", "move"), ("moves", "move"), ("turned", "turn"), ("turns", "turn"),
+        ("switched", "switch"), ("switches", "switch"), ("toggled", "toggle"), ("toggles", "toggle"), ("paused", "pause"),
+        ("pauses", "pause"), ("lowered", "lower"), ("lowers", "lower"), ("raised", "raise"), ("raises", "raise"), ("removed", "remove"),
+        ("removes", "remove"), ("added", "add"), ("adds", "add"), ("sets", "set"), ("minimized", "minimize"), ("minimizes", "minimize"),
+        ("maximized", "maximize"), ("maximizes", "maximize"), ("cleared", "clear"), ("clears", "clear"), ("faded", "fade"), ("fades", "fade"),
+        ("skipped", "skip"), ("skips", "skip"), ("resumed", "resume"), ("resumes", "resume"), ("spans", "span"), ("spanned", "span"),
+        ("öffnet", "öffne"), ("schließt", "schließe"), ("schliesst", "schliesse"), ("zeigt", "zeig"), ("startet", "starte"),
+        ("stoppt", "stopp"), ("beendet", "beende"),
+    ];
+    let trimmed = command.trim_start();
+    let Some((first, rest)) = trimmed.split_once(char::is_whitespace) else {
+        return command.to_string();
+    };
+    let bare = first.trim_end_matches([',', '.', '!', '?', ';', ':']);
+    let lower = bare.to_lowercase();
+    match VERBS.iter().find(|(said, _)| *said == lower) {
+        Some((_, verb)) if !rest.trim().is_empty() => {
+            let mut letters = verb.chars();
+            let verb: String = if bare.chars().next().is_some_and(char::is_uppercase) {
+                letters.next().map_or(String::new(), |c| c.to_uppercase().chain(letters).collect())
+            } else {
+                verb.to_string()
+            };
+            format!("{verb} {}", rest.trim_start())
+        }
+        _ => command.to_string(),
+    }
+}
+
 /// Sir's sentence with Jarvis' domain words spelt right (unchanged when nothing needed fixing).
 pub fn normalize_user_input_typos(text: &str) -> String {
+    if let Some(order) = polite_gerund(text) {
+        return normalize_user_input_typos(&order);
+    }
+    if let Some(heard) = misheard(text) {
+        return normalize_user_input_typos(&heard);
+    }
     let core = core_homophones(text);
     if core != text.split_whitespace().collect::<Vec<_>>().join(" ") {
         return normalize_user_input_typos(&core);
@@ -216,6 +343,56 @@ mod tests {
         );
     }
 
+    /// Repro (verifier matrix F, 2026-11-07): what the recogniser wrote for stock voices.
+    #[test]
+    fn commands_as_the_recogniser_mishears_them() {
+        for (heard, meant) in [
+            ("Mude.", "mute"),
+            ("Mewed.", "mute"),
+            ("Pulse.", "pause"),
+            ("Poles.", "pause"),
+            ("was playing.", "what's playing"),
+            ("was open.", "what's open"),
+            ("move yourself to monitor too.", "move yourself to monitor two"),
+            ("start stop watch.", "start stopwatch"),
+            ("systems status.", "system status"),
+            ("is anything mutant.", "is anything muted"),
+            ("Tugglespan Mode", "toggle span Mode"),
+            ("said discord the 80%.", "set discord to 80 %"),
+            ("said this called the 80%.", "set discord to 80 %"),
+            ("stop panning.", "stop spanning"),
+            ("save this mix's gaming.", "save this mix as gaming"),
+        ] {
+            assert_eq!(normalize_user_input_typos(heard), normalize_user_input_typos(meant), "{heard}");
+        }
+        // As it is, where it is a sentence of its own.
+        for said in ["The pulse is fine", "I paused it", "Is the mutant movie good?", "said nothing", "Stop watching me", "What's this called?", "What's this mix's name?"] {
+            assert_eq!(misheard(said), None, "{said}");
+        }
+    }
+
+    #[test]
+    fn the_order_after_his_name_is_an_order() {
+        assert_eq!(imperative_after_name("opened the mixer."), "open the mixer.");
+        assert_eq!(imperative_after_name("stops spanning."), "stop spanning.");
+        assert_eq!(imperative_after_name("saved this mix as gaming."), "save this mix as gaming.");
+        assert_eq!(imperative_after_name("Öffnet den Mixer"), "Öffne den Mixer");
+        // Nothing after the verb, or not one of his verbs: as heard.
+        for heard in ["muted?", "played football today", "was playing", "is anything muted", "open the mixer"] {
+            assert_eq!(imperative_after_name(heard), heard, "{heard}");
+        }
+    }
+
+    #[test]
+    fn an_order_in_good_manners_is_the_order() {
+        assert_eq!(normalize_user_input_typos("Would you mind opening the feature lab?"), "open the feature lab");
+        assert_eq!(normalize_user_input_typos("Jarvis, do you mind turning it down?"), "turn it down");
+        assert_eq!(normalize_user_input_typos("Would you mind closing Firefox"), "close Firefox");
+        // Not one of his verbs: as said.
+        assert_eq!(normalize_user_input_typos("Would you mind dancing?"), "Would you mind dancing?");
+        assert_eq!(normalize_user_input_typos("Would you mind if I left?"), "Would you mind if I left?");
+    }
+
     #[test]
     fn known_misspellings() {
         assert_eq!(normalize_user_input_typos("Whats in my Calender tomorow?"), "Whats in my Calendar tomorrow?");
@@ -226,6 +403,13 @@ mod tests {
         assert_eq!(normalize_user_input_typos("paus"), "pause");
         assert_eq!(normalize_user_input_typos("yestaday on wednsday"), "yesterday on wednesday");
         assert_eq!(normalize_user_input_typos("trag morgn um 15 uhr test in meinen kalender ein"), "trag morgen um 15 uhr test in meinen kalender ein");
+        assert_eq!(normalize_user_input_typos("opn the feture lab"), "open the feature lab");
+        assert_eq!(normalize_user_input_typos("clse the feature lab"), "close the feature lab");
+        assert_eq!(normalize_user_input_typos("shwo me your core"), "show me your core");
+        assert_eq!(normalize_user_input_typos("lowr discord by 10 percent"), "lower discord by 10 percent");
+        assert_eq!(normalize_user_input_typos("whats teh time"), "whats the time");
+        assert_eq!(normalize_user_input_typos("move yur orb to the left"), "move your orb to the left");
+        assert_eq!(normalize_user_input_typos("mute evrything except discord"), "mute everything except discord");
     }
 
     #[test]
@@ -233,6 +417,8 @@ mod tests {
         assert_eq!(normalize_user_input_typos("mut"), "mute");
         assert_eq!(normalize_user_input_typos("Mut."), "Mute.");
         assert_eq!(normalize_user_input_typos("ich habe keinen mut mehr"), "ich habe keinen mut mehr");
+        assert_eq!(normalize_user_input_typos("system staus"), "system status");
+        assert_eq!(normalize_user_input_typos("gibt es heute viele staus auf der autobahn"), "gibt es heute viele staus auf der autobahn");
     }
 
     #[test]
@@ -242,6 +428,7 @@ mod tests {
         for untouched in [
             "restore the window", "I had a sundae", "the showdown starts", "the continent is big", "restarted it",
             "every Mondays meeting", "money matters", "open C:/Users/calender.txt", "meet me at 15:00",
+            "the united states", "a statue of liberty", "system stats", "a swatch watch", "birds of a feather", "white feathers",
         ] {
             assert_eq!(normalize_user_input_typos(untouched), untouched, "{untouched}");
         }

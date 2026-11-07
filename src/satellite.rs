@@ -624,9 +624,57 @@ pub fn is_tool(name: &str) -> bool {
 pub fn tool_definition() -> Value {
     json!({"type": "function", "function": {
         "name": "show_mobile_satellite_instructions",
-        "description": "How Sir uses Jarvis on his phone or iPad (\"how can I use you on my phone\", \"connect my phone\", \"show me the mobile link\"): explains the steps and opens the pairing window with the QR code and the link on the PC.",
-        "parameters": {"type": "object", "properties": {}, "required": []}
+        "description": "How Sir uses Jarvis on his phone or iPad (\"how can I use you on my phone\", \"connect my phone\", \"show me the mobile link\"): explains the steps and opens the pairing window with the QR code and the link on the PC. topic \"permanent_address\": what Sir has to do so your web page has one address that never changes (\"use you as a website with a static domain\", \"a permanent link\"): the setup steps for his own domain, on screen and in short aloud.",
+        "parameters": {"type": "object", "properties": {"topic": {"type": "string", "enum": ["phone", "permanent_address"]}}, "required": []}
     }})
+}
+
+/// What Sir has to do so the phone page has one address that never changes, from where his
+/// settings stand: (the guide as Markdown for a block on the HUD, what Jarvis says). `address`:
+/// the permanent address when one is configured; `online`: the tunnel serves it right now.
+pub fn permanent_address_guide(settings: &crate::config::SatelliteSettings, token_stored: bool, address: Option<&str>, online: bool) -> (String, String) {
+    let port = if settings.tunnel_origin_port == 0 { 8444 } else { settings.tunnel_origin_port };
+    let provider = settings.tunnel_provider.to_ascii_lowercase();
+    let hub = "the Integrations hub (say \"open the integrations\"), tab **Quick Connections**, section **Worldwide address**";
+    // Already there: say so, and how it is used.
+    if let Some(address) = address {
+        let state = if online { "It is online right now." } else { "The tunnel is not online at this moment; it starts with me and I restart it when you ask for the phone link." };
+        return (
+            format!(
+                "## Your permanent address\n\n**{address}**\n\nIt is set up and stays the same after every restart. {state}\n\n- Open it in any browser, on the phone or on another PC: it is my web page.\n- The first visit needs the pairing key: say **\"how can I use you on my phone\"** and scan the QR code once; the browser remembers it.\n- On the phone: Share, then **Add to Home Screen**. The icon keeps working, because the address never changes.\n- This PC and I must be running; the page is served from here.\n\nTo change it: {hub}."
+            ),
+            format!("It is already set up, Sir. My page lives at {} and that address never changes. The details are on your screen.", address.trim_start_matches("https://")),
+        );
+    }
+    let missing = if token_stored && matches!(provider.as_str(), "auto" | "cloudflare" | "cloudflared") {
+        "\n> A tunnel token is already stored, but the **Permanent address** field is empty: step 5 is all that is missing.\n"
+    } else {
+        ""
+    };
+    let guide = format!(
+        "## One address that never changes\n\nRight now my page uses a quick tunnel: its address is new after every restart. For a static one you need a domain of your own. Three ways; the first is the usual one.\n{missing}\n### A. Your own domain through Cloudflare (free apart from the domain)\n\n1. Have a domain and add it to a free Cloudflare account (Cloudflare then runs its DNS). No domain yet: buy one at any registrar, or at Cloudflare itself.\n2. In the Cloudflare dashboard open **Zero Trust**, then **Networks**, then **Tunnels**, and create a tunnel of the type **Cloudflared**. Name it `jarvis`.\n3. Cloudflare shows an install command with a long token that starts with `eyJ`. Copy it (the whole command is fine). You do not need to install anything: I bring my own cloudflared.\n4. In that tunnel, tab **Public Hostname**, add a hostname: subdomain `jarvis`, your domain, service type **HTTP**, URL `127.0.0.1:{port}`.\n5. Here: {hub}. Set **Tunnel** to Cloudflare, type `https://jarvis.your-domain` into **Permanent address**, paste the token into **Tunnel token**, and save.\n6. Say **\"how can I use you on my phone\"**: the QR code now carries the permanent address. Scan it once and add the page to the home screen; it stays valid for good.\n\n### B. No domain of your own: Tailscale Funnel (free)\n\nInstall Tailscale on this PC, switch **Funnel** on for it in the Tailscale admin console, and set **Tunnel** to Tailscale Funnel in the same section. The address is `https://<this-pc>.<your-tailnet>.ts.net` and never changes.\n\n### C. Your own server\n\nSet **Tunnel** to Own server (SSH), give the SSH target, and put an HTTPS reverse proxy on the server in front of the forwarded port. The permanent address is the proxy's.\n\nWhatever you choose: the page is served from this PC, so it and I must be running. The token is sealed in my vault, never written to the settings file."
+    );
+    let spoken = if missing.is_empty() {
+        format!("You need a domain of your own, Sir. Add it to a free Cloudflare account, create a tunnel there, point a hostname such as jarvis dot your domain at port {port} on this machine, then paste the tunnel's token and that address into my integrations hub. All six steps are on your screen, with two alternatives that need no domain.")
+    } else {
+        "A tunnel token is already stored, Sir. Only the permanent address is missing: enter it in my integrations hub and save. The steps are on your screen.".to_string()
+    };
+    (guide, spoken)
+}
+
+/// `show_mobile_satellite_instructions` with topic `permanent_address`: the guide as a block on
+/// the HUD and its short form aloud ("Spoken:").
+pub fn permanent_address_tool(tools: &crate::tools::ToolContext) -> Result<String, String> {
+    let settings = tools.config.read(|c| c.satellite.clone());
+    let token_stored = tools.pim.config().vault().has_secret(crate::worldwide_tunnel::TOKEN_SERVICE, crate::vault::TOKEN);
+    let tunnel = crate::worldwide_tunnel::snapshot();
+    let address = crate::worldwide_tunnel::configured_address(&settings, token_stored).or_else(|| tunnel.public_url.clone().filter(|_| tunnel.permanent));
+    let (guide, spoken) = permanent_address_guide(&settings, token_stored, address.as_deref(), tunnel.permanent && tunnel.state == "online");
+    if crate::gui::windows_supported() {
+        let _ = tools.widgets.spawn_window(&json!({ "id": "permanent_address", "title": "Permanent address // setup", "markdown": guide, "replace_content": true, "width": 720.0, "height": 640.0 }));
+        crate::gui::refresh();
+    }
+    Ok(format!("{guide}\nSpoken: {spoken}"))
 }
 
 /// How long the phone tool waits for a (re)starting tunnel to come online before answering.
@@ -696,6 +744,30 @@ pub fn has_certificate() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// "What do I have to do so that I can use you as a website with a static domain?": the
+    /// steps with his own port and the hub's own labels; what is missing when he is half way;
+    /// the address itself once it is set up.
+    #[test]
+    fn the_permanent_address_guide_starts_from_where_the_settings_stand() {
+        let mut settings = crate::config::SatelliteSettings::default();
+        let (guide, spoken) = permanent_address_guide(&settings, false, None, false);
+        for needle in ["Zero Trust", "Cloudflared", "eyJ", "Public Hostname", "127.0.0.1:8444", "Quick Connections", "Worldwide address", "**Permanent address**", "**Tunnel token**", "Tailscale Funnel", "Own server (SSH)", "how can I use you on my phone"] {
+            assert!(guide.contains(needle), "the guide lacks '{needle}'");
+        }
+        assert!(spoken.starts_with("You need a domain of your own, Sir.") && spoken.contains("port 8444"), "{spoken}");
+        assert!(!spoken.contains('*') && !spoken.contains('`') && !spoken.contains("https://"), "nothing a voice cannot say: {spoken}");
+        settings.tunnel_origin_port = 9000;
+        assert!(permanent_address_guide(&settings, false, None, false).0.contains("127.0.0.1:9000"));
+        // Half way: the token is there, the address is not.
+        let (guide, spoken) = permanent_address_guide(&settings, true, None, false);
+        assert!(guide.contains("step 5 is all that is missing") && spoken.contains("Only the permanent address is missing"));
+        // Done: the address, and how it is used.
+        let (guide, spoken) = permanent_address_guide(&settings, true, Some("https://jarvis.example.com"), true);
+        assert!(guide.contains("**https://jarvis.example.com**") && guide.contains("It is online right now.") && guide.contains("Add to Home Screen"));
+        assert_eq!(spoken, "It is already set up, Sir. My page lives at jarvis.example.com and that address never changes. The details are on your screen.");
+        assert!(permanent_address_guide(&settings, true, Some("https://jarvis.example.com"), false).0.contains("not online at this moment"));
+    }
 
     #[tokio::test]
     async fn requests_parse_with_query_and_body() {

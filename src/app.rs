@@ -165,6 +165,38 @@ pub struct Channels {
     pub tts: mpsc::UnboundedReceiver<TtsEvent>,
 }
 
+/// What a burst of commands spoken over Jarvis left behind (`Jarvis::probe_barge_in`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BargeIn {
+    /// A turn was running (he was speaking) when the first command arrived.
+    pub was_speaking: bool,
+    /// How long it took to hand all commands to the dispatcher.
+    pub fired_in: Duration,
+    /// When no turn was running and the thinking guard was released again (None: never, within
+    /// the limit).
+    pub settled: Option<Duration>,
+    /// The thinking guard is still held.
+    pub thinking: bool,
+    /// A turn is still running.
+    pub busy: bool,
+    /// The sentence he was saying was cut off.
+    pub speech_cut: bool,
+}
+
+/// What the dispatcher does with a request before any turn exists (`Jarvis::admit`).
+#[derive(Debug, Clone, PartialEq)]
+pub enum Admission {
+    /// Ultron ⇄ Jarvis and nothing else.
+    Mode(bool),
+    /// The privacy lock and nothing else.
+    Privacy(crate::listening_lock::LockCommand),
+    /// Several commands in one sentence: the switches among them, and the other clauses as one
+    /// request for the brain (empty when the switches are all there is).
+    Compound { mode: Option<bool>, privacy: Option<crate::listening_lock::LockCommand>, rest: String },
+    /// A turn for the brain.
+    Turn,
+}
+
 fn now_hms() -> String {
     chrono::Local::now().format("%H:%M:%S").to_string()
 }
@@ -262,18 +294,29 @@ impl Jarvis {
     /// live self-test): what it would have done, and how long deciding took. Nothing is carried
     /// out, spoken or logged. `voice`: as if Sir had said it (else typed).
     pub async fn dry_run(&self, text: &str, voice: bool) -> (Vec<crate::live_self_tester::Recorded>, Duration) {
-        use crate::intent_engine::{Reflex, ReflexContext};
         use crate::live_self_tester::Recorded;
         let started = Instant::now();
-        // Ultron and the privacy lock answer in the dispatcher, before any turn exists.
-        match crate::intent_engine::route(text, &ReflexContext::live()).map(|r| r.reflex) {
-            Some(Reflex::Mode(on)) => return (vec![Recorded { kind: "mode", tool: "ultron_mode".into(), args: json!({ "on": on }) }], started.elapsed()),
-            Some(Reflex::Privacy(cmd)) => return (vec![Recorded { kind: "privacy", tool: "listening_lock".into(), args: json!({ "command": format!("{cmd:?}") }) }], started.elapsed()),
-            _ => {}
-        }
+        let mode = |on: bool| Recorded { kind: "mode", tool: "ultron_mode".into(), args: json!({ "on": on }) };
+        let privacy = |cmd: crate::listening_lock::LockCommand| Recorded { kind: "privacy", tool: "listening_lock".into(), args: json!({ "command": format!("{cmd:?}") }) };
+        // Ultron and the privacy lock answer in the dispatcher, before any turn exists; in a
+        // sentence that asks for more, the other clauses go on to the brain.
+        let mut recorded: Vec<Recorded> = Vec::new();
+        let text = match Self::admit(text) {
+            Admission::Mode(on) => return (vec![mode(on)], started.elapsed()),
+            Admission::Privacy(cmd) => return (vec![privacy(cmd)], started.elapsed()),
+            Admission::Compound { mode: switch, privacy: lock, rest } => {
+                recorded.extend(switch.map(mode));
+                recorded.extend(lock.map(privacy));
+                if rest.is_empty() {
+                    return (recorded, started.elapsed());
+                }
+                rest
+            }
+            Admission::Turn => text.to_string(),
+        };
         let (events, _kept) = mpsc::unbounded_channel();
         let req = TurnRequest {
-            text: text.to_string(),
+            text,
             message_id: uuid::Uuid::new_v4().to_string(),
             generation: self.inner.tts.generation(),
             cancel: CancellationToken::new(),
@@ -283,8 +326,56 @@ impl Jarvis {
             link: Arc::new(TurnLink::default()),
             barge_in: false,
         };
-        let recorded = crate::live_self_tester::record(Box::pin(self.inner.brain.run_turn(req, &self.inner.tts, &events))).await;
+        recorded.extend(crate::live_self_tester::record(Box::pin(self.inner.brain.run_turn(req, &self.inner.tts, &events))).await);
         (recorded, started.elapsed())
+    }
+
+    /// The barge-in pass of the exhaustive verifier: Jarvis starts saying `line`, then `commands`
+    /// arrive `gap` apart through the real dispatcher (each cancels the turn before it). What
+    /// had happened once everything settled, or after `limit`. Meant for a process in which
+    /// every request is a dry run (`live_self_tester::set_everything_dry`).
+    pub async fn probe_barge_in(&self, line: &str, commands: &[&str], gap: Duration, limit: Duration) -> BargeIn {
+        self.speak_standalone(line, false, Trigger::Forced);
+        let spoken = self.inner.tts.generation();
+        // Until his voice is really in the air (the first clause is synthesised first).
+        let waiting = Instant::now();
+        while !self.inner.tts.is_speaking() && waiting.elapsed() < Duration::from_secs(5) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let was_speaking = self.inner.tts.is_speaking() && self.busy();
+        let started = Instant::now();
+        for (i, command) in commands.iter().enumerate() {
+            if i > 0 {
+                tokio::time::sleep(gap).await;
+            }
+            self.dispatch_turn(command.to_string(), Instant::now(), 0, InputSource::Voice);
+        }
+        let fired_in = started.elapsed();
+        let mut settled = None;
+        while started.elapsed() < limit {
+            if !self.busy() && !crate::thinking_guard::is_thinking() {
+                settled = Some(started.elapsed());
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        BargeIn { was_speaking, fired_in, settled, thinking: crate::thinking_guard::is_thinking(), busy: self.busy(), speech_cut: self.inner.tts.generation() != spoken }
+    }
+
+    /// What the speech recogniser makes of `pcm` (16 kHz mono). The exhaustive verifier hands it
+    /// Jarvis' and Ultron's own sentences as samples (no speaker, no microphone) to check that
+    /// each voice is understood. Nothing else happens with the words.
+    pub async fn hear(&self, pcm: Vec<f32>) -> Result<String, String> {
+        let voiced_ms = (pcm.len() as u64 * 1000 / 16_000) as u32;
+        self.inner.stt.transcribe(pcm, voiced_ms).await.map(|t| t.text)
+    }
+
+    /// What the wake word leaves of a heard sentence, as the voice path takes it; `None` when
+    /// his name is not in it (the exhaustive verifier's spoken commands).
+    pub fn wake_command(&self, heard: &str) -> Option<String> {
+        let wake = self.inner.wake.read().unwrap_or_else(|e| e.into_inner()).evaluate(heard);
+        let wake = if wake.matched { wake } else { name_by_command(heard).unwrap_or(wake) };
+        wake.matched.then_some(wake.command)
     }
 
     /// Where the conversation history stands (the self-test rolls its dry turns back to here).
@@ -294,6 +385,12 @@ impl Jarvis {
 
     pub async fn history_rollback(&self, mark: usize) {
         self.inner.brain.history_truncate(mark).await;
+    }
+
+    /// Ultron Mode on or off without a spoken line (the exhaustive verifier sets the stage for
+    /// "change back"). True when the mode changed.
+    pub fn set_ultron_quietly(&self, on: bool) -> bool {
+        crate::ultron_mode::set(on, &self.inner.tts).is_some()
     }
 
     /// Ultron Mode on and off again without a word (the live self-test): the palette, the
@@ -645,7 +742,9 @@ impl Jarvis {
                     let culprit = crate::guardian::culprit(&anomaly.kind, &processes, &gpu);
                     let (message, offer) = crate::guardian::compose(&anomaly, culprit.as_deref(), &t);
                     info!("[GUARDIAN] {:?} at {:.1}: {message}", anomaly.kind, anomaly.value);
-                    // The same offer as a card: "yes" and "terminate it" are its buttons.
+                    // The same offer as a card: "yes" and "terminate it" are its buttons. A
+                    // telemetry alert comes with its two pips.
+                    crate::tts::play_cue(crate::jarvis_voice_dsp::Earcon::Alert);
                     crate::proactive_butler::show(&crate::proactive_butler::hardware(&anomaly, &message, &offer));
                     app.tools().focus.note_offer(crate::focus::PendingOffer {
                         tool: offer.primary.0.to_string(),
@@ -1127,15 +1226,19 @@ impl Jarvis {
         }
 
         // Sir's privacy lock ("stop listening"): nothing gets through — no command, no question,
-        // not even "Jarvis" — but "you can listen again". The words are not logged.
-        if crate::listening_lock::is_locked() {
-            if crate::listening_lock::is_resume_phrase(&transcript.text) {
+        // not even "Jarvis" — but "you can listen again". Nor do words that were recorded just
+        // before the microphone was switched off. The words are not logged.
+        match crate::listening_lock::verdict(&transcript.text, u.ptt || self.inner.controls.mic_enabled.load(Ordering::Acquire)) {
+            crate::listening_lock::Verdict::Heard => {}
+            crate::listening_lock::Verdict::Resumes => {
                 self.set_listening_lock(crate::listening_lock::LockCommand::Resume, Trigger::Input(InputSource::Voice));
-            } else {
+                return;
+            }
+            crate::listening_lock::Verdict::Ignored => {
                 info!("[PRIVACY] Not listening: {} words ignored", transcript.text.split_whitespace().count());
                 self.rest_state();
+                return;
             }
-            return;
         }
         let c = &self.inner.controls;
         let homecoming = crate::ears::is_homecoming_phrase(&transcript.text);
@@ -1164,6 +1267,12 @@ impl Jarvis {
             let ultron = WakeWordMatcher::new(&["ultron".to_string()], 0.88).evaluate(&transcript.text);
             if ultron.matched {
                 wake = ultron;
+            }
+        }
+        if !wake.matched {
+            if let Some(named) = name_by_command(&transcript.text) {
+                info!("[WAKE] '{}' taken for his name: '{}' is one of his commands", named.word, named.command);
+                wake = named;
             }
         }
         // Who is Sir talking to? Push-to-talk, a barge-in and the welcome phrase are always for
@@ -1363,30 +1472,85 @@ impl Jarvis {
     /// he says so in the new voice.
     pub fn set_ultron(&self, on: bool, trigger: Trigger) {
         // Already in that mode: say so (a swallowed command reads as a hang).
-        let line = crate::ultron_mode::set(on, &self.inner.tts).unwrap_or(if on { "Ultron protocol is already engaged, Sir." } else { "I'm already myself, Sir." });
+        let switched = crate::ultron_mode::set(on, &self.inner.tts);
+        if switched.is_some() {
+            crate::tts::play_cue(crate::jarvis_voice_dsp::Earcon::ModeShift);
+        }
+        let line = switched.unwrap_or(if on { "Ultron protocol is already engaged, Sir." } else { "I'm already myself, Sir." });
         self.speak_standalone(line, false, trigger);
+    }
+
+    /// What the dispatcher itself does with a request, before any turn exists: Ultron ⇄ Jarvis and
+    /// the privacy lock (the first two stages of the reflex router), also as clauses of a
+    /// sentence that asks for more ("switch back to Jarvis, set the theme to Arc Cyan and …").
+    /// The live dispatcher and the dry run both decide here.
+    pub fn admit(text: &str) -> Admission {
+        use crate::intent_engine::{Reflex, ReflexContext};
+        // ("swich to ultron" is the same switch; the routes behind this one read it right anyway.)
+        let typed = crate::typos::normalize_user_input_typos(text);
+        let text = typed.as_str();
+        // "Undo that" right after a switch to Ultron: the switch is the dispatcher's to take back.
+        if let Some(on) = crate::undo::mode_way_back().filter(|_| crate::intents::is_undo(text)) {
+            return Admission::Mode(on);
+        }
+        let ctx = ReflexContext::live();
+        if let Some(plan) = crate::compound_planner::plan(text, &ctx).filter(|p| p.mode.is_some() || p.privacy.is_some()) {
+            return Admission::Compound { mode: plan.mode, privacy: plan.privacy, rest: plan.rest() };
+        }
+        match crate::intent_engine::route(text, &ctx).map(|r| r.reflex) {
+            Some(Reflex::Mode(on)) => Admission::Mode(on),
+            Some(Reflex::Privacy(cmd)) => Admission::Privacy(cmd),
+            _ => Admission::Turn,
+        }
     }
 
     /// Starts a brain turn, superseding any running one.
     pub fn dispatch_turn(&self, text: String, started: Instant, stt_ms: u64, source: InputSource) {
-        // Ultron ⇄ Jarvis, then the privacy lock: the first two stages of the reflex router answer
-        // at once — before music or any other parser sees "change back", and without the model.
-        {
-            use crate::intent_engine::{Reflex, ReflexContext};
-            match crate::intent_engine::route(&text, &ReflexContext::live()).map(|r| r.reflex) {
-                Some(Reflex::Mode(on)) => {
-                    crate::intent_engine::forget_follow_up();
-                    self.set_ultron(on, Trigger::Input(source));
-                    return;
-                }
-                Some(Reflex::Privacy(cmd)) if cmd != crate::listening_lock::LockCommand::Resume || crate::listening_lock::is_locked() => {
-                    crate::intent_engine::forget_follow_up();
-                    self.set_listening_lock(cmd, Trigger::Input(source));
-                    return;
-                }
-                _ => {}
+        // Ultron ⇄ Jarvis, then the privacy lock: answered at once — before music or any other
+        // parser sees "change back", and without the model. ("You can listen again" while he is
+        // listening anyway is an ordinary sentence.)
+        let lifts_nothing = |cmd: crate::listening_lock::LockCommand| cmd == crate::listening_lock::LockCommand::Resume && !crate::listening_lock::is_locked();
+        let text = match Self::admit(&text) {
+            Admission::Mode(on) => {
+                crate::intent_engine::forget_follow_up();
+                self.set_ultron(on, Trigger::Input(source));
+                return;
             }
-        }
+            Admission::Privacy(cmd) if !lifts_nothing(cmd) => {
+                crate::intent_engine::forget_follow_up();
+                self.set_listening_lock(cmd, Trigger::Input(source));
+                return;
+            }
+            Admission::Compound { mode, privacy, rest } => {
+                crate::intent_engine::forget_follow_up();
+                let privacy = privacy.filter(|cmd| !lifts_nothing(*cmd));
+                info!("[COMPOUND] '{text}' → mode {mode:?}, privacy {privacy:?}, then '{rest}'");
+                if rest.is_empty() {
+                    // Nothing for the brain: each switch is confirmed in his voice as usual.
+                    if let Some(cmd) = privacy {
+                        self.set_listening_lock(cmd, Trigger::Input(source));
+                    }
+                    if let Some(on) = mode {
+                        self.set_ultron(on, Trigger::Input(source));
+                    }
+                    return;
+                }
+                // The switches happen now and without a line of their own: the turn for the
+                // other clauses answers for the whole sentence.
+                if let Some(on) = mode {
+                    if crate::ultron_mode::set(on, &self.inner.tts).is_some() {
+                        crate::tts::play_cue(crate::jarvis_voice_dsp::Earcon::ModeShift);
+                    }
+                }
+                if let Some(cmd) = privacy {
+                    crate::listening_lock::apply(cmd);
+                    info!("[PRIVACY] {cmd:?}");
+                }
+                self.emit(HudEvent::ConfigState(self.config_state()));
+                rest
+            }
+            _ => text,
+        };
         // A turn for Jarvis: out of the zero-VRAM standby, and the idle countdown starts over.
         crate::vram_guard::touch();
         // "Stop" / "pause" (also "stopp", "halt", "pause music", "Jarvis, stop"): whatever is
@@ -2055,6 +2219,23 @@ async fn foreground_context() -> (bool, bool) {
     (false, false)
 }
 
+/// "Java stops spanning", "Java system status": the recogniser's short sound-alike of his name
+/// at the start (four letters are too close to chance for the wake word alone) counts when what
+/// follows is one of his commands (2026-11-07 verifier, an American stand-in voice). "Java
+/// Edition is better" stays talk.
+fn name_by_command(heard: &str) -> Option<crate::wake::WakeMatch> {
+    let (first, rest) = heard.trim().split_once(char::is_whitespace)?;
+    let name = first.trim_matches(|c: char| !c.is_alphanumeric());
+    if !name.eq_ignore_ascii_case("java") {
+        return None;
+    }
+    let rest = rest.trim_start_matches(|c: char| c.is_whitespace() || matches!(c, ',' | '.' | ':' | ';' | '-' | '!'));
+    let rest = rest.trim_end_matches(|c: char| c.is_whitespace() || c == '.' || c == '!');
+    let command = crate::typos::imperative_after_name(rest);
+    crate::compound_planner::resolve_one(&command, &crate::intent_engine::ReflexContext::live())?;
+    Some(crate::wake::WakeMatch { matched: true, score: 0.8, word: name.to_string(), command })
+}
+
 /// Lowers the system volume (the music in Sir's headphones) to a third and raises Jarvis' own
 /// voice, so the knock alert is heard; the returned future puts both back.
 async fn duck_audio(voice_volume: &Arc<std::sync::atomic::AtomicU8>) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
@@ -2091,6 +2272,18 @@ async fn duck_audio(voice_volume: &Arc<std::sync::atomic::AtomicU8>) -> std::pin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Repro (verifier matrix F, 2026-11-07): "his name was not heard in 'Java stops spanning.'".
+    #[test]
+    fn a_short_sound_alike_of_his_name_counts_before_one_of_his_commands() {
+        let command = |heard: &str| name_by_command(heard).map(|wake| wake.command);
+        assert_eq!(command("Java stops spanning."), Some("stop spanning".to_string()));
+        assert_eq!(command("Java system status."), Some("system status".to_string()));
+        assert_eq!(command("Java stops panning."), Some("stop panning".to_string()));
+        for talk in ["Java Edition is better", "Java is a language", "Javascript open the mixer", "Jarvis open the mixer"] {
+            assert_eq!(command(talk), None, "{talk}");
+        }
+    }
 
     #[test]
     fn stitched_audio_keeps_order_gap_and_the_newest_28_seconds() {

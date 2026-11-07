@@ -364,7 +364,7 @@ static CONVERT: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(?:jarvis\s*,?\s*)?(?:(?:please\s+)?(?:convert|change|turn|rechne|umrechnen|wandle)\s+|what(?:'s| is)\s+|whats\s+|how much is\s+|wie ?viel (?:sind|ist)\s+|was sind\s+)?(-?[\d.,]+)\s*([a-zäöüß°²/ ]{1,24}?)\s+(?:to|in|into|as|nach|zu|in)\s+([a-zäöüß°²/ ]{1,24}?)(?:\s+(?:um|umrechnen|please|bitte))?[?.!]*$")
 });
 static HOW_MANY: LazyLock<Regex> = LazyLock::new(|| {
-    re(r"^(?:jarvis\s*,?\s*)?(?:how many|wie ?viele?)\s+([a-zäöüß°²/ ]{1,24}?)\s+(?:are\s+)?(?:in|sind in|hat|haben)\s+(?:a\s+|an\s+|one\s+|ein\s+|einer\s+|einem\s+)?(-?[\d.,]*)\s*([a-zäöüß°²/ ]{1,24}?)[?.!]*$")
+    re(r"^(?:jarvis\s*,?\s*)?(?:how many|wie ?viele?)\s+([a-zäöüß°²/ ]{1,24}?)\s+(?:are\s+in|are|in|sind in|sind|hat|haben)\s+(?:a\s+|an\s+|one\s+|ein\s+|einer\s+|einem\s+)?(-?[\d.,]*)\s*([a-zäöüß°²/ ]{1,24}?)[?.!]*$")
 });
 
 /// "convert 5 miles to km", "100 F in C", "how many grams in 3 pounds".
@@ -379,22 +379,212 @@ pub fn answer_conversion(text: &str) -> Option<String> {
     };
     let (out, from_name, to_name) = convert(value, &from, &to).ok()?;
     let plural = |n: f64, name: &str| if (n - 1.0).abs() < 1e-9 { name.trim_end_matches('s').to_string() } else { name.to_string() };
+    // (A temperature to a tenth of a degree: "22.222 degrees" is nothing anyone says.)
+    let digits = if to_name.starts_with("degrees") || to_name == "kelvin" { 10.0 } else { 1000.0 };
     Some(format!(
         "{} {} is {} {}, Sir.",
         format_number(value),
         if from_name.starts_with("degrees") || from_name == "kelvin" { from_name.to_string() } else { plural(value, from_name) },
-        format_number((out * 1000.0).round() / 1000.0),
+        format_number((out * digits).round() / digits),
         if to_name.starts_with("degrees") || to_name == "kelvin" { to_name.to_string() } else { plural(out, to_name) },
     ))
 }
 
-/// Calculation or conversion, answered in character; None when the text is neither.
+// ---------------------------------------------------------------------------- dates ----
+
+const MONTHS: [(&str, u32); 26] = [
+    ("january", 1), ("february", 2), ("march", 3), ("april", 4), ("may", 5), ("june", 6), ("july", 7), ("august", 8), ("september", 9), ("october", 10),
+    ("november", 11), ("december", 12), ("januar", 1), ("februar", 2), ("märz", 3), ("maerz", 3), ("mai", 5), ("juni", 6), ("juli", 7), ("oktober", 10),
+    ("dezember", 12), ("jan", 1), ("feb", 2), ("aug", 8), ("sept", 9), ("dec", 12),
+];
+/// Days everybody calls by name: (name, month, day).
+const NAMED_DAYS: [(&str, u32, u32); 12] = [
+    ("christmas eve", 12, 24), ("christmas day", 12, 25), ("christmas", 12, 25), ("new years eve", 12, 31), ("new years day", 1, 1), ("new year", 1, 1), ("halloween", 10, 31),
+    ("valentines day", 2, 14), ("heiligabend", 12, 24), ("weihnachten", 12, 25), ("silvester", 12, 31), ("neujahr", 1, 1),
+];
+
+/// "the 3rd of March", "the 10th of April 2027".
+fn spoken_date(date: chrono::NaiveDate, today: chrono::NaiveDate) -> String {
+    use chrono::Datelike;
+    const NAMES: [&str; 12] = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+    let day = date.day();
+    let suffix = match (day % 10, day % 100) {
+        (1, n) if n != 11 => "st",
+        (2, n) if n != 12 => "nd",
+        (3, n) if n != 13 => "rd",
+        _ => "th",
+    };
+    let year = if date.year() == today.year() { String::new() } else { format!(" {}", date.year()) };
+    format!("the {day}{suffix} of {}{year}", NAMES[date.month0() as usize])
+}
+
+/// A date as Sir says it: "March 3rd", "the 10th of April 2027", "3. März", "10.04.",
+/// "2026-12-24", "tomorrow", "Christmas". Without a year: this year's (`after`: the next one on
+/// or after that day). (the date, whether a year was given)
+fn parse_date(phrase: &str, today: chrono::NaiveDate, after: Option<chrono::NaiveDate>) -> Option<(chrono::NaiveDate, bool)> {
+    use chrono::{Datelike, NaiveDate};
+    let s: String = phrase.to_lowercase().replace(['’', '\''], "").chars().map(|c| if c.is_alphanumeric() || c == '.' || c == '-' { c } else { ' ' }).collect();
+    let s = s.split_whitespace().filter(|w| !matches!(*w, "the" | "of" | "dem" | "den" | "der" | "am" | "on" | "zum")).collect::<Vec<_>>().join(" ");
+    let s = s.trim_end_matches('.').trim();
+    match s {
+        "today" | "heute" | "now" => return Some((today, true)),
+        "tomorrow" | "morgen" => return today.succ_opt().map(|d| (d, true)),
+        "yesterday" | "gestern" => return today.pred_opt().map(|d| (d, true)),
+        _ => {}
+    }
+    // The year to take when none is said: this one, or the first that puts the day on or
+    // after `after`.
+    let place = |month: u32, day: u32, year: Option<i32>| -> Option<(NaiveDate, bool)> {
+        match year {
+            Some(y) => NaiveDate::from_ymd_opt(y, month, day).map(|d| (d, true)),
+            None => {
+                let this = NaiveDate::from_ymd_opt(today.year(), month, day)?;
+                let date = match after {
+                    Some(floor) if this < floor => (floor.year()..=floor.year() + 1).filter_map(|y| NaiveDate::from_ymd_opt(y, month, day)).find(|d| *d >= floor)?,
+                    _ => this,
+                };
+                Some((date, false))
+            }
+        }
+    };
+    if let Some((_, month, day)) = NAMED_DAYS.iter().find(|(name, _, _)| s == *name) {
+        return place(*month, *day, None);
+    }
+    static ISO: LazyLock<Regex> = LazyLock::new(|| re(r"^(\d{4})-(\d{1,2})-(\d{1,2})$"));
+    static DOTTED: LazyLock<Regex> = LazyLock::new(|| re(r"^(\d{1,2})\.\s?(\d{1,2})\.?\s?(\d{4})?$"));
+    static WORDED: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:(\d{1,2})(?:st|nd|rd|th|\.)?\s+([a-zä]+)|([a-zä]+)\s+(\d{1,2})(?:st|nd|rd|th|\.)?)(?:\s+(\d{4}))?$"));
+    if let Some(c) = ISO.captures(s) {
+        return place(c[2].parse().ok()?, c[3].parse().ok()?, c[1].parse().ok());
+    }
+    if let Some(c) = DOTTED.captures(s) {
+        return place(c[2].parse().ok()?, c[1].parse().ok()?, c.get(3).and_then(|y| y.as_str().parse().ok()));
+    }
+    let spelled = ordinal_digits(s);
+    let c = WORDED.captures(&spelled)?;
+    let (day, month) = match (c.get(1), c.get(2), c.get(3), c.get(4)) {
+        (Some(d), Some(m), _, _) => (d.as_str(), m.as_str()),
+        (_, _, Some(m), Some(d)) => (d.as_str(), m.as_str()),
+        _ => return None,
+    };
+    let month = MONTHS.iter().find(|(name, _)| *name == month)?.1;
+    place(month, day.parse().ok()?, c.get(5).and_then(|y| y.as_str().parse().ok()))
+}
+
+/// "The first of January", "der zwölfte Mai": a day said in words, as its number.
+fn ordinal_digits(phrase: &str) -> String {
+    const ENGLISH: [&str; 31] = [
+        "first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth", "eleventh", "twelfth", "thirteenth", "fourteenth", "fifteenth", "sixteenth", "seventeenth",
+        "eighteenth", "nineteenth", "twentieth", "twenty first", "twenty second", "twenty third", "twenty fourth", "twenty fifth", "twenty sixth", "twenty seventh", "twenty eighth", "twenty ninth",
+        "thirtieth", "thirty first",
+    ];
+    const GERMAN: [&str; 12] = ["erste", "zweite", "dritte", "vierte", "fünfte", "sechste", "siebte", "achte", "neunte", "zehnte", "elfte", "zwölfte"];
+    let mut spoken = format!(" {} ", phrase.to_lowercase().replace('-', " "));
+    // (The compounds first: "twenty first" is no "first".)
+    for (at, word) in ENGLISH.iter().enumerate().rev() {
+        spoken = spoken.replace(&format!(" {word} "), &format!(" {} ", at + 1));
+    }
+    for (at, word) in GERMAN.iter().enumerate() {
+        for ending in ["", "n", "r"] {
+            spoken = spoken.replace(&format!(" {word}{ending} "), &format!(" {} ", at + 1));
+        }
+    }
+    spoken.trim().to_string()
+}
+
+/// "How many days are there between March 3rd and April 10th?", "how many days until
+/// Christmas?", "wie viele Tage bis zum 24.12.?", "what day of the week is the 24th of
+/// December?": counted on the calendar (a language model guesses these, and guessed 28 for 38).
+pub fn answer_dates(text: &str, today: chrono::NaiveDate) -> Option<String> {
+    use chrono::Datelike;
+    static BETWEEN: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^(?:jarvis\s*,?\s*)?(?:how many|wie ?viele?)\s+(days|weeks|tage|wochen)\s+(?:are\s+there\s+|are\s+|is\s+it\s+|sind\s+es\s+|liegen\s+)?(?:between|from|zwischen|von)\s+(.+?)\s+(?:and|to|until|till|und|bis)\s+(.+?)[?.!]*$")
+    });
+    static UNTIL: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^(?:jarvis\s*,?\s*)?(?:how many|wie ?viele?)\s+(days|weeks|tage|wochen)\s+(?:are\s+there\s+|are\s+|is\s+it\s+|sind\s+es\s+)?(?:left\s+|noch\s+)?(?:until|till|to|before|bis zum|bis zu|bis)\s+(.+?)[?.!]*$|^(?:jarvis\s*,?\s*)?how long\s+(?:is it\s+)?(?:until|till)\s+(.+?)[?.!]*$")
+    });
+    static WEEKDAY: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^(?:jarvis\s*,?\s*)?(?:what|which)\s+(?:day of the week|weekday|day)\s+(?:is|was|will be|will)\s+(?:it\s+on\s+|on\s+)?(.+?)(?:\s+be)?[?.!]*$|^(?:jarvis\s*,?\s*)?(?:welcher|was für ein)\s+(?:wochentag|tag)\s+(?:ist|war)\s+(?:der\s+|am\s+)?(.+?)[?.!]*$")
+    });
+    let lower = text.trim().to_lowercase();
+    let count = |days: i64, unit: &str| -> String {
+        if unit.starts_with('w') {
+            let (weeks, rest) = (days / 7, days % 7);
+            match (weeks, rest) {
+                (w, 0) => format!("{w} week{}", if w == 1 { "" } else { "s" }),
+                (0, d) => format!("{d} day{}", if d == 1 { "" } else { "s" }),
+                (w, d) => format!("{w} week{} and {d} day{}", if w == 1 { "" } else { "s" }, if d == 1 { "" } else { "s" }),
+            }
+        } else {
+            format!("{days} day{}", if days == 1 { "" } else { "s" })
+        }
+    };
+    if let Some(c) = BETWEEN.captures(&lower) {
+        let (from, _) = parse_date(&c[2], today, None)?;
+        let (to, _) = parse_date(&c[3], today, Some(from))?;
+        let days = (to - from).num_days().abs();
+        return Some(format!("There {} {} between {} and {}, Sir.", if days == 1 { "is" } else { "are" }, count(days, &c[1]), spoken_date(from, today), spoken_date(to, today)));
+    }
+    if let Some(c) = UNTIL.captures(&lower) {
+        let unit = c.get(1).map_or("days", |m| m.as_str());
+        let (date, dated) = parse_date(c.get(2).or(c.get(3))?.as_str(), today, Some(today))?;
+        let days = (date - today).num_days();
+        return Some(match days {
+            0 => "That is today, Sir.".to_string(),
+            d if d < 0 && dated => format!("{} was {} ago, Sir.", capitalise(&spoken_date(date, today)), count(-d, unit)),
+            d => format!("{} until {}, Sir.", capitalise(&count(d.abs(), unit)), spoken_date(date, today)),
+        });
+    }
+    let c = WEEKDAY.captures(&lower)?;
+    let phrase = c.get(1).or(c.get(2))?.as_str();
+    // ("What day is it today" is the date's own question.)
+    if !ordinal_digits(phrase).chars().any(|ch| ch.is_ascii_digit()) && !NAMED_DAYS.iter().any(|(name, _, _)| phrase.replace('\'', "").contains(name)) && !matches!(phrase.trim(), "tomorrow" | "morgen" | "yesterday" | "gestern") {
+        return None;
+    }
+    let (date, _) = parse_date(phrase, today, None)?;
+    let weekday = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"][date.weekday().num_days_from_monday() as usize];
+    Some(format!("{} {} a {weekday}, Sir.", capitalise(&spoken_date(date, today)), if date < today { "was" } else { "is" }))
+}
+
+fn capitalise(s: &str) -> String {
+    let mut c = s.chars();
+    c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default()
+}
+
+/// "… to five decimal places", "… auf 3 Nachkommastellen": (what is left to calculate, how
+/// many places).
+fn decimal_places(text: &str) -> Option<(String, usize)> {
+    static PLACES: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^(.+?)\s*,?\s+(?:rounded\s+)?(?:to|with|auf|mit)\s+(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eine|zwei|drei|vier|fünf|sechs)\s+(?:decimal places?|decimals|decimal digits|places after the (?:decimal )?point|nachkommastellen|stellen nach dem komma)[?.!]*$")
+    });
+    let lower = text.trim().to_lowercase();
+    let c = PLACES.captures(&lower)?;
+    let places = c[2].parse::<usize>().ok().or_else(|| ["one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"].iter().position(|w| *w == &c[2]).map(|i| i + 1)).or_else(|| ["eine", "zwei", "drei", "vier", "fünf", "sechs"].iter().position(|w| *w == &c[2]).map(|i| i + 1))?;
+    Some((c[1].to_string(), places.min(12)))
+}
+
+/// Calculation, conversion or a count of days, answered in character; None when the text is
+/// none of them.
 pub fn try_answer(text: &str) -> Option<String> {
+    if let Some(line) = answer_dates(text, chrono::Local::now().date_naive()) {
+        return Some(line);
+    }
     if let Some(line) = answer_conversion(text) {
         return Some(line);
     }
+    // "… to five decimal places": exactly that many, however the rounding falls.
+    if let Some((rest, places)) = decimal_places(text) {
+        let (spoken, value) = answer_math(&rest)?;
+        return Some(sentence(&spoken, &format!("{value:.places$}")));
+    }
     let (spoken, value) = answer_math(text)?;
-    Some(format!("{spoken} is {}, Sir.", format_number(value)))
+    Some(sentence(&spoken, &format_number(value)))
+}
+
+/// The answer as a sentence: "The square root of 144 is 12, Sir."
+fn sentence(spoken: &str, value: &str) -> String {
+    let mut letters = spoken.chars();
+    let head: String = letters.next().map(|first| first.to_uppercase().chain(letters).collect()).unwrap_or_default();
+    format!("{head} is {value}, Sir.")
 }
 
 /// The `calculate` tool: an expression, or a conversion "5 miles to km".
@@ -433,7 +623,7 @@ mod tests {
         assert_eq!(try_answer("What's 15 percent of 240?").unwrap(), "15 percent of 240 is 36, Sir.");
         assert_eq!(try_answer("Wie viel ist 12 mal 17?").unwrap(), "12 times 17 is 204, Sir.");
         assert_eq!(try_answer("calculate 3,5 plus 1,25").unwrap(), "3.5 plus 1.25 is 4.75, Sir.");
-        assert_eq!(try_answer("what is the square root of 144").unwrap(), "the square root of 144 is 12, Sir.");
+        assert_eq!(try_answer("what is the square root of 144").unwrap(), "The square root of 144 is 12, Sir.");
         assert_eq!(try_answer("what is 2 to the power of 10").unwrap(), "2 to the power of 10 is 1024, Sir.");
         assert_eq!(try_answer("1,000 divided by 8").unwrap(), "1000 divided by 8 is 125, Sir.");
         assert!(try_answer("What is the meaning of life?").is_none());
@@ -442,14 +632,60 @@ mod tests {
         assert!(try_answer("What time is it").is_none());
     }
 
+    /// The silent session of 2026-11-06: the language model answered "28 days" for the 38
+    /// between March 3rd and April 10th, and called the calculator with debris for a square
+    /// root "to five decimal places".
+    #[test]
+    fn days_are_counted_on_the_calendar_and_decimals_are_as_many_as_asked() {
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 11, 6).unwrap();
+        let ask = |text: &str| answer_dates(text, today);
+        assert_eq!(ask("How many days are there between March 3rd and April 10th?").unwrap(), "There are 38 days between the 3rd of March and the 10th of April, Sir.");
+        assert_eq!(ask("how many days between the 20th of December and January 5th").unwrap(), "There are 16 days between the 20th of December and the 5th of January 2027, Sir.");
+        assert_eq!(ask("How many weeks between 2026-01-01 and 2026-03-01?").unwrap(), "There are 8 weeks and 3 days between the 1st of January and the 1st of March, Sir.");
+        assert_eq!(ask("Wie viele Tage zwischen dem 3. März und dem 10.04.?").unwrap(), "There are 38 days between the 3rd of March and the 10th of April, Sir.");
+        assert_eq!(ask("How many days until Christmas?").unwrap(), "49 days until the 25th of December, Sir.");
+        assert_eq!(ask("how many days until new year's eve").unwrap(), "55 days until the 31st of December, Sir.");
+        assert_eq!(ask("How many days until March 1st?").unwrap(), "115 days until the 1st of March 2027, Sir.", "the next one");
+        assert_eq!(ask("how many days until tomorrow").unwrap(), "1 day until the 7th of November, Sir.");
+        assert_eq!(ask("How many days until November 6th?").unwrap(), "That is today, Sir.");
+        assert_eq!(ask("how many days until 2026-01-01").unwrap(), "The 1st of January was 309 days ago, Sir.");
+        assert_eq!(ask("Wie viele Tage bis zum 24.12.?").unwrap(), "48 days until the 24th of December, Sir.");
+        assert_eq!(ask("What day of the week is the 24th of December?").unwrap(), "The 24th of December is a Thursday, Sir.");
+        assert_eq!(ask("Which weekday was 2026-01-01?").unwrap(), "The 1st of January was a Thursday, Sir.");
+        // No dates: none of its business.
+        for text in ["how many days are in a week", "how many weeks to learn Rust", "what day is it", "what day is it today", "how many grams in a pound", "how long until dinner"] {
+            assert_eq!(ask(text), None, "{text}");
+        }
+        assert_eq!(try_answer("What is the square root of 2 to five decimal places?").unwrap(), "The square root of 2 is 1.41421, Sir.");
+        assert_eq!(try_answer("calculate 10 divided by 3 to 2 decimal places").unwrap(), "10 divided by 3 is 3.33, Sir.");
+        assert_eq!(try_answer("Was ist die Wurzel aus 2 auf drei Nachkommastellen?").unwrap(), "The square root of 2 is 1.414, Sir.");
+    }
+
     #[test]
     fn converts_units() {
         assert_eq!(try_answer("Convert 5 miles to km").unwrap(), "5 miles is 8.047 kilometres, Sir.");
-        assert_eq!(try_answer("100 fahrenheit in celsius").unwrap(), "100 degrees Fahrenheit is 37.778 degrees Celsius, Sir.");
+        assert_eq!(try_answer("100 fahrenheit in celsius").unwrap(), "100 degrees Fahrenheit is 37.8 degrees Celsius, Sir.");
+        assert_eq!(try_answer("Convert 72 degrees Fahrenheit to Celsius.").unwrap(), "72 degrees Fahrenheit is 22.2 degrees Celsius, Sir.");
         assert_eq!(try_answer("Wie viel sind 3 Pfund in Kilo?").unwrap(), "3 pounds is 1.361 kilograms, Sir.");
         assert_eq!(try_answer("how many grams in a pound").unwrap(), "1 pound is 453.592 grams, Sir.");
         assert_eq!(try_answer("what is 1 gb in mb").unwrap(), "1 gigabyte is 1000 megabytes, Sir.");
         assert!(convert(1.0, "kg", "metres").is_err());
         assert_eq!(tool("2*(3+4)").unwrap(), "2*(3+4) = 14");
+    }
+
+    #[test]
+    fn days_said_in_words_and_counts_asked_with_are() {
+        assert!(try_answer("What day of the week is the first of January 2030?").unwrap().ends_with("a Tuesday, Sir."));
+        assert!(try_answer("What day is the twenty first of March 2030?").unwrap().ends_with("a Thursday, Sir."));
+        assert!(try_answer("Welcher Wochentag ist der erste Mai 2030?").unwrap().ends_with("a Wednesday, Sir."));
+        assert_eq!(ordinal_digits("the second of May"), "the 2 of may");
+        assert_eq!(ordinal_digits("twenty-first March"), "21 march");
+        assert_eq!(ordinal_digits("zwölften Juni"), "12 juni");
+        assert_eq!(try_answer("How many kilometres are 26 miles?").unwrap(), "26 miles is 41.843 kilometres, Sir.");
+        assert!(try_answer("How many days are there until the 10th of April 2099?").unwrap().contains("until"));
+        // A count of something else is not arithmetic.
+        for question in ["How many people are in the room?", "How many planets are there?", "What is the first thing to do?", "Which day is the best one?"] {
+            assert_eq!(try_answer(question), None, "{question}");
+        }
     }
 }

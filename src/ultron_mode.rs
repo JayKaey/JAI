@@ -1,21 +1,31 @@
 //! Ultron Mode ("Jarvis, switch to Ultron mode", "Activate Ultron protocol", "Ultron Modus
 //! aktivieren", the header's `[ ULTRON ]`): the whole HUD fades to the blood-crimson Ultron
 //! palette (`theme_engine::set_ultron`, the stored theme untouched), the emblem reads
-//! `U.L.T.R.O.N.`, and the voice becomes a deep, deliberate baritone (`base_voice()` at `PACE`)
-//! through the Ultron chain (`process`):
+//! `U.L.T.R.O.N.`, and the voice becomes another man's: a deep, deliberate American baritone
+//! (`base_voice()` at `PACE`) that never passes Jarvis' studio chain. A clause of his goes from
+//! the synthesis straight through his own (`voice_of`):
 //!
+//! * he speaks General American (`phonemizer::Accent::American`): with Jarvis' Received
+//!   Pronunciation an American voice still sounded like an Englishman, and Sir heard "Jarvis,
+//!   lower" (2026-11-06);
 //! * the pitch goes down to the median F0 of Sir's Ultron clip (measured: 88.5 Hz) in two parts:
 //!   8 % by resampling, which lowers the formants with it (a larger chest, `FORMANT_RATIO`), and
 //!   the rest as a move of the pitch alone (`fish_zero_shot_tts::reshape_f0`, TD-PSOLA), so the
 //!   vowels stay vowels. Reaching the clip's pitch by resampling alone dragged every formant down
 //!   by a quarter and had Kokoro speak a third too fast to make up for the stretch: that was the
-//!   voice Sir called "not Ultron's".
-//! * a 14 % sub-octave chest layer and a 12 % metallic ±9-cent double through a 650-3200 Hz body;
+//!   voice Sir called "not Ultron's". His melody is narrowed towards the clip's, never by more
+//!   than `MAX_FLATTEN`: the sarcasm lives in it;
+//! * the man, not a machine around him: Sir wants to hear the actor who speaks Ultron (James
+//!   Spader: slow, husky, dry), so the layers are traces. Under the voice a hint of a second one
+//!   an octave below (`octave_voice`), around it a trace of a metal chassis (`chassis`: two
+//!   short resonant delays on the 450-3600 Hz band), a little grit (`grit`: a driven copy of
+//!   the voice's body) and breath in it (`husk`: noise that follows the voice's loudness);
 //! * the envelope of the clip (`assets/ultron_voice_reference.mp3`, any `ultron*.mp3|wav` next to
 //!   JARVIS.exe), imposed by the same 128-band transfer the Jarvis voice uses.
 //!
-//! The base voice is picked by measurement (`calibrate`, `--voice-calibrate`): the Kokoro voice
-//! or blend whose chain output is closest to the clip, stored in the clip's profile cache.
+//! The base voice is picked by measurement (`calibrate`, `--voice-calibrate ultron`): the
+//! American Kokoro voice or blend whose chain output is closest to the clip with the least pitch
+//! to move, stored in the clip's profile cache.
 //! `verify` (`--voice-verify`) reports how close the finished voice is: the similarity of the
 //! long-term spectral envelopes and the F0 statistics — what can be measured, not a judgement of
 //! whether it is the actor. "Switch back to Jarvis" restores the palette, the voice and its pace
@@ -28,21 +38,49 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, Mutex};
 use tracing::{debug, info, warn};
 
-/// The base voice until `calibrate` has picked one: 70 % am_adam + 30 % bm_lewis.
-pub const VOICE: &str = "am_adam:0.7+bm_lewis:0.3";
-/// Ultron's deliberate pace (× Sir's speaking rate).
-pub const PACE: f32 = 0.93;
+/// The base voice until `calibrate` has picked one: Kokoro's two deepest American voices.
+pub const VOICE: &str = "am_onyx:0.50+am_fenrir:0.50";
+/// Ultron's deliberate pace (× Sir's speaking rate). Measured on the clips (2026-11-06,
+/// `voice_features`): the film's Ultron (James Spader, who never hurries a line) speaks 3.1
+/// syllables a second, its Jarvis 4.7. At 0.8 the synthesis still spoke 4.4, at 0.72 it spoke
+/// 4.0. (Whether he is still understood at this pace is measured: the verifier has Whisper
+/// listen to him.)
+pub const PACE: f32 = 0.68;
 /// −2.2 semitones: the pitch step without a clip to lock to.
 pub const PITCH_SEMITONES: f32 = -2.2;
 /// How much lower the formants sit than the base voice's (a larger chest). The rest of the way
 /// down to the clip's pitch moves the pitch alone.
 pub const FORMANT_RATIO: f32 = 0.92;
-pub const SUB_MIX: f32 = 0.14;
-pub const DOUBLE_MIX: f32 = 0.12;
-/// The metallic double: (cents, delay ms) per voice.
-pub const DOUBLES: [(f32, f32); 2] = [(9.0, 4.5), (-9.0, 8.2)];
-/// The chassis body the double runs through (Hz).
-pub const BODY: (f32, f32) = (650.0, 3200.0);
+/// The most his melody is narrowed towards the clip's.
+pub const MAX_FLATTEN: f32 = 0.3;
+/// The second voice, an octave below: its level against the voice's, and where its body ends.
+/// A hint of body under the voice, no second speaker: Sir's clip shows no period doubling, and
+/// what he wants to hear is the man who speaks Ultron (James Spader), not a machine around him.
+pub const OCTAVE_MIX: f32 = 0.07;
+pub const OCTAVE_BODY_HZ: f32 = 1200.0;
+/// The chassis: (delay ms, feedback) of its two resonances, the band they ring in (Hz) and
+/// their level against the voice's (a trace: the film leaves the actor's voice nearly dry).
+pub const CHASSIS: [(f32, f32); 2] = [(3.3, 0.46), (5.7, 0.40)];
+pub const BODY: (f32, f32) = (450.0, 3600.0);
+pub const CHASSIS_MIX: f32 = 0.06;
+/// Grit: how hard the copy of the voice's body (140-2800 Hz) is driven, and its level.
+pub const GRIT_DRIVE: f32 = 3.0;
+pub const GRIT_MIX: f32 = 0.05;
+/// Breath: the husk in a voice that lets air through. The band it sits in (Hz) and its level
+/// against the voice's.
+pub const HUSK_BAND: (f32, f32) = (1800.0, 7000.0);
+pub const HUSK_MIX: f32 = 0.05;
+/// The level a clause is brought to before the compressor (as Jarvis' chain does).
+const PRE_GAIN_RMS: f32 = 0.089;
+/// His envelope transfer: how much of the way to the clip's envelope, and how many dB a band
+/// at most. Further than Jarvis' (0.78, 9 dB): the clip is much darker than any synthesis.
+pub const TRANSFER_ALPHA: f32 = 0.92;
+pub const MAX_TRANSFER_DB: f32 = 12.0;
+
+/// The transfer that imposes the clip's envelope on his clauses.
+pub fn transfer_for(profile: &ReferenceProfile) -> SpectralTransfer {
+    SpectralTransfer::with(profile, TRANSFER_ALPHA, MAX_TRANSFER_DB)
+}
 pub const ENGAGED: &str = "Ultron protocol engaged, Sir.";
 pub const TERMINATED: &str = "Ultron protocol terminated. I am back online, Sir.";
 /// What the calibration and the verification say (their own words, not the film's).
@@ -117,6 +155,7 @@ pub fn set(on: bool, tts: &crate::tts::TtsController) -> Option<&'static str> {
         speed.store(rate, Ordering::Relaxed);
     }
     ACTIVE.store(on, Ordering::Release);
+    crate::undo::keep_mode(on);
     crate::theme_engine::set_ultron(on);
     crate::gui::refresh();
     info!("[ULTRON] {}", if on { "engaged" } else { "terminated" });
@@ -186,7 +225,7 @@ static TRANSFER: LazyLock<Option<Mutex<SpectralTransfer>>> = LazyLock::new(|| {
         Ok(p) => {
             info!("[ULTRON] Reference clip {}: {}", clip.display(), p.describe());
             *REFERENCE_F0.lock().unwrap_or_else(|e| e.into_inner()) = Some(p.f0);
-            Some(Mutex::new(SpectralTransfer::new(&p)))
+            Some(Mutex::new(transfer_for(&p)))
         }
         Err(e) => {
             warn!("[ULTRON] Reference clip {}: {e}", clip.display());
@@ -197,51 +236,93 @@ static TRANSFER: LazyLock<Option<Mutex<SpectralTransfer>>> = LazyLock::new(|| {
 
 // ---------------------------------------------------------------------------- the chain ----
 
-/// Delays `x` by `ms` (zeros in front, same length).
-fn delayed(x: &[f32], ms: f32, rate: u32) -> Vec<f32> {
-    let d = ((ms / 1000.0) * rate as f32).round() as usize;
-    let mut y = vec![0.0; d.min(x.len())];
-    y.extend_from_slice(&x[..x.len() - y.len()]);
-    y
+/// The second voice: the same words an octave below (the pitch alone is halved, the vowels keep
+/// their formants), kept to its body under `OCTAVE_BODY_HZ`. Same length as `voice`.
+pub fn octave_voice(voice: &[f32], rate: u32) -> Vec<f32> {
+    let r = rate as f32;
+    let (mut lp1, mut lp2) = (Biquad::low_pass(OCTAVE_BODY_HZ, r), Biquad::low_pass(OCTAVE_BODY_HZ, r));
+    reshape_f0(voice, rate, 0.0, 0.5).into_iter().map(|s| lp2.process(lp1.process(s))).collect()
 }
 
-/// The sub-octave chest layer: a flip-flop on the voice's low band (≤ 300 Hz) runs at half its
-/// fundamental, follows its envelope and is smoothed into the 55-110 Hz band.
-pub fn sub_octave(x: &[f32], rate: u32) -> Vec<f32> {
+/// The chassis: what of the voice rings in a metal body. Its `BODY` band through two short
+/// resonant delays (`CHASSIS`); only the ring, without the voice itself.
+pub fn chassis(voice: &[f32], rate: u32) -> Vec<f32> {
     let r = rate as f32;
-    let (mut low, mut low2) = (Biquad::low_pass(300.0, r), Biquad::low_pass(300.0, r));
-    let (mut hp, mut lp1, mut lp2) = (Biquad::high_pass(55.0, r), Biquad::low_pass(110.0, r), Biquad::low_pass(110.0, r));
-    let (mut env, mut prev, mut flip) = (0.0f32, 0.0f32, 1.0f32);
-    let release = (-1.0 / (0.03 * r)).exp();
-    x.iter()
-        .map(|&s| {
-            let l = low2.process(low.process(s));
-            if prev <= 0.0 && l > 0.0 {
-                flip = -flip;
-            }
-            prev = l;
-            env = l.abs().max(env * release);
-            lp2.process(lp1.process(hp.process(flip * env)))
+    let (mut hp, mut lp) = (Biquad::high_pass(BODY.0, r), Biquad::low_pass(BODY.1, r));
+    let band: Vec<f32> = voice.iter().map(|s| lp.process(hp.process(*s))).collect();
+    let mut out = vec![0.0f32; band.len()];
+    for (ms, feedback) in CHASSIS {
+        let mut line = vec![0.0f32; (((ms / 1000.0) * r).round() as usize).max(1)];
+        let mut at = 0;
+        for (o, x) in out.iter_mut().zip(&band) {
+            let ring = line[at];
+            line[at] = x + feedback * ring;
+            at = (at + 1) % line.len();
+            *o += ring;
+        }
+    }
+    out
+}
+
+/// Grit: the voice's body (140-2800 Hz) driven into a soft clip, which puts overtones between
+/// its own. Level-independent: the drive is set against the body's own peak.
+pub fn grit(voice: &[f32], rate: u32) -> Vec<f32> {
+    let r = rate as f32;
+    let (mut hp, mut lp) = (Biquad::high_pass(140.0, r), Biquad::low_pass(2800.0, r));
+    let body: Vec<f32> = voice.iter().map(|s| lp.process(hp.process(*s))).collect();
+    let peak = crate::dsp::peak(&body).max(1e-6);
+    body.into_iter().map(|s| (GRIT_DRIVE * s / peak).tanh() * peak).collect()
+}
+
+/// Breath: noise in the band where breath sits that follows the voice's own loudness (4 ms up,
+/// 30 ms down), so it is in the voice and not beside it. The same clause gives the same breath
+/// twice (the noise is a fixed sequence).
+pub fn husk(voice: &[f32], rate: u32) -> Vec<f32> {
+    let r = rate as f32;
+    // (Two high-passes in a row: breath must not add anything to the chest.)
+    let (mut hp, mut hp2, mut lp) = (Biquad::high_pass(HUSK_BAND.0, r), Biquad::high_pass(HUSK_BAND.0, r), Biquad::low_pass(HUSK_BAND.1, r));
+    let (up, down) = ((-1.0 / (0.004 * r)).exp(), (-1.0 / (0.030 * r)).exp());
+    let mut loudness = 0.0f32;
+    let mut seed = 0x2545_F491u32;
+    voice
+        .iter()
+        .map(|s| {
+            let now = s.abs();
+            loudness = now + if now > loudness { up } else { down } * (loudness - now);
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            let noise = seed as f32 / u32::MAX as f32 * 2.0 - 1.0;
+            lp.process(hp2.process(hp.process(noise * loudness)))
         })
         .collect()
 }
 
-/// One clause through the Ultron chain (48 kHz in and out; the clause gets 1 / `FORMANT_RATIO`
-/// longer, which `PACE` and `synthesis_speed` account for).
-pub fn process(audio: &mut Vec<f32>, rate: u32) {
+/// A clause of the base voice as Ultron speaks it: Kokoro's synthesis (`from` Hz) in, the
+/// finished clause at the master rate out. The clause gets 1 / `FORMANT_RATIO` longer, which
+/// `jarvis_voice_dsp::synthesis_speed_as` makes up for.
+pub fn voice_of(input: &[f32], from: u32) -> Vec<f32> {
+    let mut audio = input.to_vec();
+    process(&mut audio, from);
+    audio
+}
+
+/// `voice_of` in place, with the pitch of Sir's clip once it is loaded.
+pub fn process(audio: &mut Vec<f32>, from: u32) {
     let reference = *REFERENCE_F0.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(step) = process_with(audio, rate, reference) {
+    if let Some(step) = process_with(audio, from, reference) {
         debug!("[ULTRON] Clause put on the clip's pitch: ×{step:.3} in all, ×{:.3} of it the pitch alone", step / FORMANT_RATIO);
     }
 }
 
 /// The chain with the clip's F0 statistics (`reference`) and, on top, the clip's envelope: see
 /// `chain`. Returns the pitch step used when it was locked to the clip.
-pub fn process_with(audio: &mut Vec<f32>, rate: u32, reference: Option<F0Stats>) -> Option<f32> {
+pub fn process_with(audio: &mut Vec<f32>, from: u32, reference: Option<F0Stats>) -> Option<f32> {
     if audio.is_empty() {
         return None;
     }
-    let (mut out, locked) = chain(audio, rate, reference);
+    let rate = crate::jarvis_voice_dsp::MASTER_RATE;
+    let (mut out, locked) = chain(audio, from, reference);
     if let Some(t) = TRANSFER.as_ref() {
         t.lock().unwrap_or_else(|e| e.into_inner()).process(&mut out, rate);
     }
@@ -250,61 +331,98 @@ pub fn process_with(audio: &mut Vec<f32>, rate: u32, reference: Option<F0Stats>)
     locked
 }
 
-/// The chain up to (not including) the clip's envelope. With the clip's F0 statistics the
-/// clause's intonation is narrowed to the clip's width and its median F0 put on the clip's
-/// median; without them the pitch drops by a fixed −2.2 st. `FORMANT_RATIO` of that step lowers
-/// the formants too, the rest moves the pitch alone. Then the chest layer and the metallic
-/// double. Returns the audio and the whole pitch step when it was locked to the clip.
-pub fn chain(audio: &[f32], rate: u32, reference: Option<F0Stats>) -> (Vec<f32>, Option<f32>) {
-    let clause = reference.and_then(|r| Some((r, f0_stats(&pitch_track(audio, rate))?)));
+/// The chain up to (not including) the clip's envelope, from the synthesis at `from` Hz to the
+/// master rate. First the larger chest: pitch and formants down together by `FORMANT_RATIO`.
+/// Then the pitch alone: with the clip's F0 statistics the clause's median is put on the clip's
+/// and its melody narrowed towards the clip's width (by `MAX_FLATTEN` at most); without them
+/// the pitch drops by a fixed −2.2 st in all. Then the layers and the level. Returns the audio
+/// and the whole pitch step when it was locked to the clip.
+pub fn chain(audio: &[f32], from: u32, reference: Option<F0Stats>) -> (Vec<f32>, Option<f32>) {
+    let rate = crate::jarvis_voice_dsp::MASTER_RATE;
+    let lowered = crate::jarvis_voice_dsp::hermite_resample(audio, from as f64 * FORMANT_RATIO as f64 / rate as f64);
+    let clause = reference.and_then(|r| Some((r, f0_stats(&pitch_track(&lowered, rate))?)));
     let (step, flatten, locked) = match clause {
         Some((r, c)) => {
             let ratio = lock_ratio(c.median_hz, r.median_hz);
-            (ratio, flatten_to(c.std_st, r.std_st), Some(ratio))
+            (ratio, flatten_to(c.std_st, r.std_st).min(MAX_FLATTEN), Some(ratio * FORMANT_RATIO))
         }
-        None => (2f32.powf(PITCH_SEMITONES / 12.0), 0.0, None),
+        None => (2f32.powf(PITCH_SEMITONES / 12.0) / FORMANT_RATIO, 0.0, None),
     };
-    // The pitch alone first (the formants untouched), then the part that makes the chest larger.
-    let pitched = reshape_f0(audio, rate, flatten, step / FORMANT_RATIO);
-    let dry = crate::jarvis_voice_dsp::hermite_resample(&pitched, FORMANT_RATIO as f64);
-    (layers(&dry, rate), locked)
+    let voice = reshape_f0(&lowered, rate, flatten, step);
+    (levelled(layers(&voice, rate), rate), locked)
 }
 
-/// The chest layer (a sub-octave under the voice) and the metallic double, on the lowered voice.
-fn layers(dry: &[f32], rate: u32) -> Vec<f32> {
-    let sub = sub_octave(dry, rate);
-    let sub_peak = crate::dsp::peak(&sub).max(1e-6);
-    let dry_rms = crate::dsp::rms(dry);
-    let sub_gain = SUB_MIX * dry_rms / crate::dsp::rms(&sub).max(1e-6);
-    let mut out: Vec<f32> = dry.iter().zip(&sub).map(|(d, s)| (1.0 - DOUBLE_MIX) * d + (s * sub_gain).clamp(-sub_peak * sub_gain, sub_peak * sub_gain)).collect();
-    for (cents, ms) in DOUBLES {
-        let step = 2f64.powf(cents as f64 / 1200.0);
-        let mut double = crate::jarvis_voice_dsp::hermite_resample(dry, step);
-        double.resize(dry.len(), 0.0);
-        let (mut hp, mut lp) = (Biquad::high_pass(BODY.0, rate as f32), Biquad::low_pass(BODY.1, rate as f32));
-        let body: Vec<f32> = delayed(&double, ms, rate).into_iter().map(|s| lp.process(hp.process(s))).collect();
-        for (o, b) in out.iter_mut().zip(body) {
-            *o += DOUBLE_MIX / DOUBLES.len() as f32 * b * 2.0;
+/// The voice with its layers: the second voice an octave below, the chassis' ring, the grit and
+/// the breath, each at its level against the voice's own.
+fn layers(voice: &[f32], rate: u32) -> Vec<f32> {
+    let level = crate::dsp::rms(voice);
+    if level < 1e-6 {
+        return voice.to_vec();
+    }
+    let mut out = voice.to_vec();
+    for (layer, mix) in [(octave_voice(voice, rate), OCTAVE_MIX), (chassis(voice, rate), CHASSIS_MIX), (grit(voice, rate), GRIT_MIX), (husk(voice, rate), HUSK_MIX)] {
+        // (A layer with nothing in it, as under a pure test tone, adds nothing.)
+        let gain = (mix * level / crate::dsp::rms(&layer).max(1e-6)).min(8.0);
+        for (o, l) in out.iter_mut().zip(&layer) {
+            *o += gain * l;
         }
     }
     out
+}
+
+/// His tone, as measured against Sir's clip band by band (2026-11-06): against any base voice
+/// the clip has more chest at the fundamental (60-100 Hz), a little less body around 300 Hz, a
+/// deep dip where sibilance sits (4-6.3 kHz) and more air above it. (frequency Hz, Q, gain dB);
+/// the envelope transfer then only has the rest to do.
+pub const TONE: [(f32, f32, f32); 3] = [(82.0, 0.9, 5.0), (300.0, 0.7, -2.0), (5000.0, 1.3, -6.0)];
+/// The air above the dip: (corner Hz, gain dB).
+pub const AIR: (f32, f32) = (7000.0, 5.0);
+
+/// Rumble out, his tone, and the clause's level evened: a 40 Hz high-pass, `TONE` and `AIR`,
+/// the level Jarvis' chain works at, and the same compressor.
+fn levelled(mut audio: Vec<f32>, rate: u32) -> Vec<f32> {
+    use crate::jarvis_voice_dsp::Bq;
+    let r = rate as f32;
+    let mut rumble = Biquad::high_pass(40.0, r);
+    let mut tone = TONE.map(|(hz, q, gain)| Bq::peaking(hz, q, gain, r));
+    let mut air = Bq::high_shelf(AIR.0, AIR.1, r);
+    audio.iter_mut().for_each(|s| *s = air.process(tone.iter_mut().fold(rumble.process(*s), |x, band| band.process(x))));
+    let level = crate::dsp::rms(&audio);
+    if level > 1e-4 {
+        let gain = (PRE_GAIN_RMS / level).clamp(0.5, 2.2);
+        audio.iter_mut().for_each(|s| *s *= gain);
+    }
+    let mut compressor = crate::jarvis_voice_dsp::Compressor::new(rate as f32);
+    audio.iter_mut().for_each(|s| *s = compressor.process(*s));
+    audio
 }
 
 // ------------------------------------------------------------ calibration & verification ----
 
-/// The base voices the calibration tries: Kokoro's deep male voices, even blends of the deepest
-/// four, and the stock blend.
+/// The base voices the calibration tries: Kokoro's American male voices (he is no Englishman),
+/// and even blends of the four deepest (the stock blend is one of them).
 pub fn candidate_voices() -> Vec<String> {
-    const DEEP: [&str; 8] = ["am_onyx", "am_fenrir", "am_michael", "am_adam", "am_echo", "am_eric", "bm_george", "bm_lewis"];
-    let mut out: Vec<String> = DEEP.iter().map(|v| v.to_string()).collect();
-    for (i, a) in DEEP[..4].iter().enumerate() {
-        for b in &DEEP[i + 1..4] {
+    const AMERICAN: [&str; 8] = ["am_onyx", "am_fenrir", "am_michael", "am_adam", "am_echo", "am_eric", "am_liam", "am_puck"];
+    let mut out: Vec<String> = AMERICAN.iter().map(|v| v.to_string()).collect();
+    for (i, a) in AMERICAN[..4].iter().enumerate() {
+        for b in &AMERICAN[i + 1..4] {
             out.push(format!("{a}:0.50+{b}:0.50"));
         }
     }
-    out.push(VOICE.to_string());
+    // The deepest voice leaning either way with the two warm ones: finer steps where the
+    // closest voices have been found so far.
+    for other in ["am_adam", "am_michael"] {
+        for share in ["0.70", "0.30"] {
+            let rest = if share == "0.70" { "0.30" } else { "0.70" };
+            out.push(format!("am_onyx:{share}+{other}:{rest}"));
+        }
+    }
     out
 }
+
+/// What each semitone the pitch has to be moved on its own costs a base voice in the
+/// calibration: a naturally deep voice needs less of it and keeps more of itself.
+const SHIFT_COST: f32 = 0.12;
 
 /// What a calibration or verification run needs: the clip's profile, Kokoro, and the chain set
 /// as it is while Jarvis runs.
@@ -312,32 +430,32 @@ struct Bench {
     reference: ReferenceProfile,
     phonemizer: crate::phonemizer::Phonemizer,
     kokoro: crate::tts::Kokoro,
-    /// The speed handed to `synth_dry`, so Kokoro speaks as it does while Ultron is on (his pace,
-    /// and the chain's stretch made up for) whether or not Ultron is on right now.
+    /// His speaking rate: Sir's setting at Ultron's pace, as while Ultron is on.
     speed: f32,
 }
 
 impl Bench {
     fn new(cfg: &crate::config::JarvisConfig) -> Result<Self, String> {
-        let reference = reference_profile()?;
-        // The F0 flattening of the shared first stages, as the running Jarvis sets it.
-        let flatten = crate::voice_reference::reference_path()
-            .and_then(|clip| load_profile(&clip, Path::new(crate::fish_zero_shot_tts::PROFILE_PATH)).ok())
-            .and_then(|p| p.flatten);
-        crate::fish_zero_shot_tts::set_f0_flatten(crate::fish_zero_shot_tts::effective_f0_flatten(cfg.voice_f0_flatten, flatten));
-        let stretch = if active() { 1.0 } else { FORMANT_RATIO };
         Ok(Self {
-            reference,
+            reference: reference_profile()?,
             phonemizer: crate::phonemizer::Phonemizer::new(cfg.espeak_path.as_deref()),
             kokoro: crate::tts::Kokoro::load(cfg)?,
-            speed: cfg.kokoro_speed * PACE / stretch,
+            speed: cfg.kokoro_speed * PACE,
         })
     }
 
-    /// `line` in `voice` through the chain, before the clip's envelope is imposed.
-    fn speak(&mut self, line: &str, voice: &str) -> Result<Vec<f32>, String> {
-        let audio = crate::fish_zero_shot_tts::synth_dry(&mut self.kokoro, &self.phonemizer, line, voice, self.speed)?;
-        Ok(chain(&audio, crate::jarvis_voice_dsp::MASTER_RATE, Some(self.reference.f0)).0)
+    /// `line` in `voice` as the synthesis gives it: his English, his pace.
+    fn synthesise(&mut self, line: &str, voice: &str) -> Result<Vec<f32>, String> {
+        let ipa = self.phonemizer.phonemize_as(&crate::tts::normalize_for_speech(line), crate::phonemizer::Accent::American, self.kokoro.own_symbols());
+        self.kokoro.synthesize(&ipa, voice, crate::jarvis_voice_dsp::synthesis_speed_as(self.speed, true))
+    }
+
+    /// `line` in `voice` through the chain, before the clip's envelope is imposed, and the
+    /// pitch step that put it on the clip.
+    fn speak(&mut self, line: &str, voice: &str) -> Result<(Vec<f32>, f32), String> {
+        let audio = self.synthesise(line, voice)?;
+        let (out, locked) = chain(&audio, crate::tts::KOKORO_RATE, Some(self.reference.f0));
+        Ok((out, locked.unwrap_or(1.0)))
     }
 
     fn measure(&self, audio: &[f32]) -> Result<Match, String> {
@@ -345,11 +463,17 @@ impl Bench {
     }
 
     /// How far `voice` is from the clip over both lines (a voice that only fits one sentence
-    /// is no match): the match on the first line and the mean distance.
+    /// is no match): the match on the first line and the mean distance, which also counts how
+    /// far the pitch alone had to be moved (`SHIFT_COST`).
     fn fit(&mut self, voice: &str) -> Result<(Match, f32), String> {
-        let first = self.speak(CALIBRATION_LINE, voice).and_then(|audio| self.measure(&audio))?;
-        let second = self.speak(HELD_OUT_LINE, voice).and_then(|audio| self.measure(&audio))?;
-        Ok((first, (first.distance() + second.distance()) / 2.0))
+        let mut measured = Vec::with_capacity(2);
+        for line in [CALIBRATION_LINE, HELD_OUT_LINE] {
+            let (audio, step) = self.speak(line, voice)?;
+            let moved_st = (12.0 * (step / FORMANT_RATIO).log2()).abs();
+            measured.push((self.measure(&audio)?, moved_st));
+        }
+        let distance = measured.iter().map(|(m, moved)| m.distance() + SHIFT_COST * moved).sum::<f32>() / measured.len() as f32;
+        Ok((measured[0].0, distance))
     }
 }
 
@@ -400,17 +524,36 @@ pub fn verify(cfg: &crate::config::JarvisConfig) -> Result<Verification, String>
     let mut bench = Bench::new(cfg)?;
     let rate = crate::jarvis_voice_dsp::MASTER_RATE;
     let voice = bench.reference.blend.clone().unwrap_or_else(|| VOICE.to_string());
-    let mut transfer = SpectralTransfer::new(&bench.reference);
-    let mut audio = bench.speak(CALIBRATION_LINE, &voice)?;
+    let mut transfer = transfer_for(&bench.reference);
+    let (mut audio, _) = bench.speak(CALIBRATION_LINE, &voice)?;
     let dry = bench.measure(&audio)?;
     transfer.process(&mut audio, rate);
     let transferred = bench.measure(&audio)?;
-    let held_out = bench.speak(HELD_OUT_LINE, &voice).ok().and_then(|mut a| {
+    let held_out = bench.speak(HELD_OUT_LINE, &voice).ok().and_then(|(mut a, _)| {
         transfer.process(&mut a, rate);
         bench.measure(&a).ok()
     });
     Ok(Verification { voice, dry, transferred, held_out, reference: bench.reference })
 }
+
+/// The lines Ultron is measured on (the five sentence types the voices share) in his finished
+/// voice, as the speaker gets them: synthesis, chain, the clip's envelope, the limiter. Each
+/// with its kind and the text as spoken.
+pub fn render_sentences(cfg: &crate::config::JarvisConfig) -> Result<Vec<(&'static str, String, Vec<f32>)>, String> {
+    let mut bench = Bench::new(cfg)?;
+    let rate = crate::jarvis_voice_dsp::MASTER_RATE;
+    let voice = bench.reference.blend.clone().unwrap_or_else(|| VOICE.to_string());
+    let mut transfer = transfer_for(&bench.reference);
+    let mut out = Vec::new();
+    for (kind, text) in crate::fish_zero_shot_tts::VOICE_SENTENCES {
+        let (mut audio, _) = bench.speak(text, &voice)?;
+        transfer.process(&mut audio, rate);
+        audio.iter_mut().for_each(|s| *s = crate::jarvis_voice_dsp::limit(*s));
+        out.push((kind, crate::tts::normalize_for_speech(text), audio));
+    }
+    Ok(out)
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -457,30 +600,96 @@ mod tests {
     }
 
     #[test]
-    fn the_chain_lowers_the_pitch_adds_a_sub_octave_and_stays_intelligible() {
+    fn the_chain_lowers_the_pitch_and_stays_intelligible() {
         // Without a clip: −2.2 st in all, of which only the formant part stretches the clause.
         let step = 2f32.powf(PITCH_SEMITONES / 12.0);
         assert!((step - 0.880).abs() < 0.001);
         assert_eq!(pitch_ratio(), FORMANT_RATIO, "what the Kokoro speed makes up for");
+        assert!((crate::jarvis_voice_dsp::synthesis_speed_as(0.9, true) * FORMANT_RATIO - 0.9).abs() < 1e-4, "his chain's stretch alone is made up for");
         let input = tone(220.0, 1.0);
         let mut out = input.clone();
         process(&mut out, R);
         let stretched = out.len() as f32 / input.len() as f32;
         assert!((stretched - 1.0 / FORMANT_RATIO).abs() < 0.01, "the clause stretches by 1 / {FORMANT_RATIO} only: ×{stretched}");
-        let f = freq(&out[4800..out.len() - 4800]);
+        // (The tone under its breath: the crossings of what is left below 600 Hz.)
+        let (mut lp1, mut lp2) = (Biquad::low_pass(600.0, R as f32), Biquad::low_pass(600.0, R as f32));
+        let body: Vec<f32> = out.iter().map(|s| lp2.process(lp1.process(*s))).collect();
+        let f = freq(&body[4800..body.len() - 4800]);
         assert!((f - 220.0 * step).abs() < 6.0, "−2.2 st: {f} Hz");
         assert!(out.iter().all(|s| s.abs() <= 1.0 && s.is_finite()));
-        // The chest layer runs at half the fundamental.
-        let sub = sub_octave(&tone(160.0, 1.0), R);
-        let f_sub = freq(&sub[9600..]);
-        assert!((f_sub - 80.0).abs() < 4.0, "sub-octave at {f_sub} Hz");
-        // Mostly dry: the double and the sub stay under the voice.
-        let lowered = tone(176.0, 0.5);
+        // From Kokoro's 24 kHz the finished clause is at the master rate, the same way longer.
+        let synthesis: Vec<f32> = (0..24_000).map(|i| 0.4 * (TAU * 220.0 * i as f32 / 24_000.0).sin()).collect();
+        let finished = voice_of(&synthesis, 24_000);
+        assert!((finished.len() as f32 / (2.0 * synthesis.len() as f32) - 1.0 / FORMANT_RATIO).abs() < 0.01);
+        // Mostly the voice: its layers stay under it.
+        let lowered = voice(96.0, 1.0, 1.0, 900.0);
         let layered = layers(&lowered, R);
         assert_eq!(layered.len(), lowered.len());
         let dot: f32 = lowered.iter().zip(&layered).map(|(a, b)| a * b).sum();
         let norm = (lowered.iter().map(|a| a * a).sum::<f32>() * layered.iter().map(|b| b * b).sum::<f32>()).sqrt();
-        assert!(dot / norm > 0.85, "the dry voice dominates: {}", dot / norm);
+        assert!(dot / norm > 0.85, "the voice dominates: {}", dot / norm);
+    }
+
+    #[test]
+    fn under_the_voice_runs_a_second_one_an_octave_below_in_a_ringing_chassis() {
+        let spoken = voice(96.0, 1.0, 1.5, 900.0);
+        // The second voice: the same words at half the pitch, only its body.
+        let below = octave_voice(&spoken, R);
+        assert_eq!(below.len(), spoken.len());
+        let (env, _) = crate::fish_zero_shot_tts::mel_envelope(&below, R).expect("the layer sounds");
+        let centres = crate::fish_zero_shot_tts::band_centres();
+        let level = |lo: f32, hi: f32| centres.iter().zip(env.iter()).filter(|(f, _)| **f >= lo && **f < hi).map(|(_, db)| *db).fold(f32::MIN, f32::max);
+        assert!(level(100.0, 1000.0) > level(3000.0, 8000.0) + 24.0, "its body, not its edge");
+        // Heard together it is a hint of body under the voice (the clip has no second speaker
+        // in it): the half-harmonics rise a little, the pitch heard stays the voice's.
+        let plain = crate::voice_features::Features::measure(&spoken, R).expect("speech");
+        let with_layers = layers(&spoken, R);
+        let layered = crate::voice_features::Features::measure(&with_layers, R).expect("speech");
+        // (What sounds at half the pitch, 48 Hz, where the voice itself has nothing.)
+        let at_half = |x: &[f32]| {
+            let (mut c, mut s) = (0.0f32, 0.0f32);
+            for (i, v) in x.iter().enumerate() {
+                let p = TAU * 48.0 * i as f32 / R as f32;
+                c += v * p.cos();
+                s += v * p.sin();
+            }
+            (c * c + s * s).sqrt() / x.len() as f32
+        };
+        assert!(at_half(&with_layers) > at_half(&spoken) * 3.0 + 1e-5, "{} / {}", at_half(&with_layers), at_half(&spoken));
+        assert!(layered.doubled < 0.3, "no second speaker: {}", layered.describe());
+        assert!((layered.f0_hz - plain.f0_hz).abs() < 3.0, "the pitch heard is still the voice's: {}", layered.describe());
+        // Breath: in its band, only while the voice sounds, and the same every time.
+        let mut phrase = voice(96.0, 1.0, 0.5, 900.0);
+        phrase.extend(std::iter::repeat_n(0.0, R as usize / 2));
+        let breath = husk(&phrase, R);
+        assert_eq!(breath, husk(&phrase, R));
+        let half = R as usize / 2;
+        let (during, after) = (crate::dsp::rms(&breath[..half]), crate::dsp::rms(&breath[half + R as usize / 5..]));
+        assert!(during > 0.0 && after < during * 0.01, "breath only with the voice: {during} / {after}");
+        let (env, _) = crate::fish_zero_shot_tts::mel_envelope(&breath[..half], R).expect("the breath sounds");
+        let level = |lo: f32, hi: f32| centres.iter().zip(env.iter()).filter(|(f, _)| **f >= lo && **f < hi).map(|(_, db)| *db).fold(f32::MIN, f32::max);
+        assert!(level(2000.0, 6500.0) > level(80.0, 500.0) + 18.0, "where breath sits, not in the chest: {} / {}", level(2000.0, 6500.0), level(80.0, 500.0));
+        // The chassis rings on after a click, at its two delays, and dies away.
+        let mut click = vec![0.0f32; R as usize / 4];
+        click[100] = 1.0;
+        let ring = chassis(&click, R);
+        let energy = |from_ms: f32, to_ms: f32| ring[100 + (from_ms * 48.0) as usize..100 + (to_ms * 48.0) as usize].iter().map(|s| s * s).sum::<f32>();
+        assert!(energy(0.0, 2.5) < energy(2.5, 9.0) * 0.05, "nothing before the first reflection");
+        assert!(energy(2.5, 9.0) > 0.0 && energy(9.0, 30.0) > energy(2.5, 9.0) * 0.05, "it rings on");
+        assert!(energy(100.0, 150.0) < energy(2.5, 9.0) * 1e-4, "and dies away");
+        // Grit puts overtones between a tone's own: a 300 Hz tone gains its third.
+        let pure = tone(300.0, 0.5);
+        let rough = grit(&pure, R);
+        let third = |x: &[f32]| {
+            let (mut c, mut s) = (0.0f32, 0.0f32);
+            for (i, v) in x.iter().enumerate().skip(4800) {
+                let p = TAU * 900.0 * i as f32 / R as f32;
+                c += v * p.cos();
+                s += v * p.sin();
+            }
+            (c * c + s * s).sqrt() / (x.len() - 4800) as f32
+        };
+        assert!(third(&rough) > third(&pure) * 20.0 + 1e-4, "{} / {}", third(&rough), third(&pure));
     }
 
     /// A voiced test clause: a pulse train (rich harmonics, like a voice) whose pitch wobbles
@@ -581,5 +790,79 @@ mod tests {
         eprintln!("calibrated {voice}: {} (distance {:.3})", m.describe(), m.distance());
         let v = verify(&cfg).expect("verification runs");
         eprintln!("{}", v.describe());
+    }
+
+    /// Both clips and both finished voices side by side, as measured (`voice_features`), and
+    /// every candidate base voice as the synthesis gives it:
+    /// `cargo test ultron_voice_lab -- --ignored --nocapture` (silent; nothing is written).
+    #[test]
+    #[ignore = "measures the real clips and synthesises with the real voice pack"]
+    fn ultron_voice_lab() {
+        use crate::voice_features::{apart, Features};
+        let cfg = crate::config::JarvisConfig {
+            kokoro_model_path: crate::models::KOKORO_V1_MODEL.into(),
+            kokoro_voices_archive_path: crate::models::KOKORO_V1_VOICES.into(),
+            tts_gpu: false,
+            ..Default::default()
+        };
+        let rate = crate::jarvis_voice_dsp::MASTER_RATE;
+        let of_clip = |path: Option<PathBuf>| path.and_then(|p| crate::voice_reference::decode(&p).ok()).and_then(|(pcm, r)| Features::measure(&pcm, r));
+        let all = |sentences: Vec<(&'static str, String, Vec<f32>)>| -> Vec<f32> { sentences.into_iter().flat_map(|(_, _, audio)| audio).collect() };
+        let jarvis_clip = of_clip(crate::voice_reference::reference_path()).expect("Jarvis' clip");
+        let ultron_clip = of_clip(reference_path()).expect("Ultron's clip");
+        let jarvis_audio = all(crate::fish_zero_shot_tts::render_sentences(&cfg).expect("Jarvis' voice"));
+        let ultron_sentences = render_sentences(&cfg).expect("Ultron's voice");
+        for (kind, _, audio) in &ultron_sentences {
+            eprintln!("Ultron, {kind:<9}: {}", Match::measure(audio, rate, &reference_profile().unwrap()).map_or("no speech".to_string(), |m| m.describe()));
+        }
+        let ultron_audio = all(ultron_sentences);
+        let jarvis = Features::measure(&jarvis_audio, rate).expect("Jarvis speaks");
+        let ultron = Features::measure(&ultron_audio, rate).expect("Ultron speaks");
+        eprintln!("Jarvis' clip  : {}", jarvis_clip.describe());
+        eprintln!("Jarvis' voice : {}", jarvis.describe());
+        eprintln!("Ultron's clip : {}", ultron_clip.describe());
+        eprintln!("Ultron's voice: {}", ultron.describe());
+        eprintln!("apart: the two voices {:.2}; the two clips {:.2}; Ultron from his clip {:.2}, from Jarvis' clip {:.2}; Jarvis from his clip {:.2}, from Ultron's clip {:.2}", apart(&jarvis, &ultron), apart(&jarvis_clip, &ultron_clip), apart(&ultron, &ultron_clip), apart(&ultron, &jarvis_clip), apart(&jarvis, &jarvis_clip), apart(&jarvis, &ultron_clip));
+        // The long-term envelopes, crosswise.
+        let envelope = |audio: &[f32]| crate::fish_zero_shot_tts::mel_envelope(audio, rate).expect("speech").0;
+        let jarvis_profile = load_profile(&crate::voice_reference::reference_path().unwrap(), Path::new(crate::fish_zero_shot_tts::PROFILE_PATH)).unwrap();
+        let ultron_profile = reference_profile().unwrap();
+        let similar = crate::fish_zero_shot_tts::spectral_similarity;
+        eprintln!(
+            "envelope similarity: Ultron's voice to his clip {:.3}, to Jarvis' clip {:.3}; Jarvis' voice to his clip {:.3}, to Ultron's clip {:.3}; the clips to each other {:.3}",
+            similar(&envelope(&ultron_audio), &ultron_profile.envelope_db),
+            similar(&envelope(&ultron_audio), &jarvis_profile.envelope_db),
+            similar(&envelope(&jarvis_audio), &jarvis_profile.envelope_db),
+            similar(&envelope(&jarvis_audio), &ultron_profile.envelope_db),
+            similar(&ultron_profile.envelope_db, &jarvis_profile.envelope_db)
+        );
+        // Where his finished voice and the chain before the transfer stand against the clip,
+        // band by band (dB, each envelope's own mean removed).
+        let mut bench = Bench::new(&cfg).expect("the bench");
+        let voice = bench.reference.blend.clone().unwrap_or_else(|| VOICE.to_string());
+        let dry: Vec<f32> = crate::fish_zero_shot_tts::VOICE_SENTENCES.iter().flat_map(|(_, text)| bench.speak(text, &voice).expect("the chain").0).collect();
+        let centres = crate::fish_zero_shot_tts::band_centres();
+        let shape = |env: &[f32; crate::fish_zero_shot_tts::MEL_BANDS]| -> Vec<f32> {
+            let mean = env.iter().sum::<f32>() / env.len() as f32;
+            env.iter().map(|v| v - mean).collect()
+        };
+        let (clip, before, after) = (shape(&ultron_profile.envelope_db), shape(&envelope(&dry)), shape(&envelope(&ultron_audio)));
+        for (lo, hi) in [(60.0, 100.0), (100.0, 160.0), (160.0, 250.0), (250.0, 400.0), (400.0, 630.0), (630.0, 1000.0), (1000.0, 1600.0), (1600.0, 2500.0), (2500.0, 4000.0), (4000.0, 6300.0), (6300.0, 12000.0)] {
+            let mean = |v: &[f32]| {
+                let inside: Vec<f32> = centres.iter().zip(v).filter(|(f, _)| **f >= lo && **f < hi).map(|(_, x)| *x).collect();
+                inside.iter().sum::<f32>() / inside.len().max(1) as f32
+            };
+            eprintln!("{lo:>6.0}-{hi:<6.0} Hz: clip {:>6.1} dB, chain {:>+6.1} dB off, finished {:>+6.1} dB off", mean(&clip), mean(&before) - mean(&clip), mean(&after) - mean(&clip));
+        }
+        // Each candidate as the synthesis gives it, and what the chain makes of it.
+        let line = "The reactor core is under water, Sir.";
+        eprintln!("British : {}", bench.phonemizer.phonemize(line));
+        eprintln!("American: {}", bench.phonemizer.phonemize_as(line, crate::phonemizer::Accent::American, bench.kokoro.own_symbols()));
+        for voice in candidate_voices() {
+            let raw = bench.synthesise(CALIBRATION_LINE, &voice).expect("synthesis");
+            let natural = f0_stats(&pitch_track(&raw, crate::tts::KOKORO_RATE)).map_or(0.0, |s| s.median_hz);
+            let (m, distance) = bench.fit(&voice).expect("fit");
+            eprintln!("{voice:<30} natural F0 {natural:>6.1} Hz, distance {distance:.3}: {}", m.describe());
+        }
     }
 }

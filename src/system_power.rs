@@ -13,6 +13,9 @@ use std::time::Duration;
 
 /// How long a shutdown or restart question stays open.
 pub const CONFIRM_WINDOW: Duration = Duration::from_secs(30);
+/// How long after the question closed a bare "yes" or "no" is still taken as its late answer
+/// (and told that nothing happened).
+pub const LAPSED_ANSWER_WINDOW: Duration = Duration::from_secs(120);
 /// Between the goodbye and the shutdown command, so the goodbye is heard.
 pub const FAREWELL_DELAY: Duration = Duration::from_millis(1200);
 
@@ -72,6 +75,35 @@ impl PowerAction {
             _ => "Shutdown aborted, Sir.",
         }
     }
+
+    /// What it does to the PC ("what happens if I restart my PC?").
+    pub fn consequence(self) -> &'static str {
+        match self {
+            Self::Shutdown => "Windows closes every program and switches the PC off, Sir; anything unsaved is lost.",
+            Self::Restart => "Windows closes every program and starts again, Sir; anything unsaved is lost.",
+            Self::Sleep => "The PC sleeps with everything left open, Sir, and wakes where you left it.",
+            Self::Lock => "The PC locks, Sir, and everything keeps running behind the sign-in screen.",
+        }
+    }
+}
+
+/// A bare "yes" or "no" to a shutdown / restart question that has closed: what Jarvis says
+/// (nothing runs). None for anything else, which is a request of its own.
+pub fn late_answer(action: PowerAction, text: &str) -> Option<String> {
+    let s = words(text);
+    let s = s.trim_start_matches("jarvis ").trim_end_matches(" jarvis").trim();
+    let (noun, deed) = match action {
+        PowerAction::Restart => ("restart", "restart my PC"),
+        _ => ("shutdown", "shut down my PC"),
+    };
+    if CONFIRM_WORDS.contains(&s) {
+        return Some(format!("That {noun} question has lapsed, Sir, so nothing happened. Say \"{deed}\" again if you still want it."));
+    }
+    const NO: &[&str] = &[
+        "no", "nope", "nah", "nein", "cancel", "cancel it", "abort", "abbrechen", "no thanks", "no thank you", "never mind", "nevermind", "forget it",
+        "vergiss es", "lass es", "lieber nicht", "nein danke", "don't", "dont", "do not", "no don't", "no dont", "no cancel", "nein abbrechen",
+    ];
+    NO.contains(&s).then(|| "It's already called off, Sir. Your PC stays as it is.".to_string())
 }
 
 /// Lower-case words, punctuation gone, umlauts kept.
@@ -85,12 +117,14 @@ fn words(text: &str) -> String {
         .join(" ")
 }
 
-/// The PC itself as the object of the sentence.
-const PC: &str = r"(?:my |the |this |your |our |den |meinen |meinem |dem |mein |deinen )?(?:pc|computer|laptop|rechner|machine|desktop|workstation|gaming pc|gaming rig|rig)";
+/// The PC itself as the object of the sentence ("my system" too, never "your system": that is
+/// Jarvis).
+const PC: &str = r"(?:(?:my |the |this |your |our |den |meinen |meinem |dem |mein |deinen )?(?:pc|computer|laptop|rechner|machine|desktop|workstation|gaming pc|gaming rig|rig)|(?:my |the |this |our |my whole |my entire |the whole |the entire |mein |meinen |das )system)";
 
 static SHUTDOWN_PC: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(&format!(
-        r"\b(?:shut\s*down|shutdown|turn off|switch off|power off|power down)\s+{PC}\b|\b{PC}\s+(?:shut\s*down|shutdown|herunterfahren|runterfahren|ausschalten|abschalten)\b|\b(?:fahr|fahre)\s+{PC}\s+(?:herunter|runter)\b|\b(?:schalt|schalte|mach|mache)\s+{PC}\s+aus\b"
+        // ("Shut on my PC": how the recogniser hears "shut down" said quickly.)
+        r"\b(?:shut\s*down|shutdown|shut on|turn off|switch off|power off|power down)\s+{PC}\b|\b{PC}\s+(?:shut\s*down|shutdown|herunterfahren|runterfahren|ausschalten|abschalten)\b|\b(?:fahr|fahre)\s+{PC}\s+(?:herunter|runter)\b|\b(?:schalt|schalte|mach|mache)\s+{PC}\s+aus\b|\b(?:put|send|set)\s+{PC}\s+(?:to|into|in)\s+(?:shut\s*down|shutdown|power off)(?:\s+mode)?\b"
     ))
     .expect("valid shutdown regex")
 });
@@ -122,7 +156,9 @@ static EXPLANATION: LazyLock<Regex> =
 /// "restart the computer", "put my PC to sleep", "lock my screen").
 pub fn power_request(text: &str) -> Option<PowerAction> {
     let s = words(text);
-    if s.is_empty() || NEGATED.is_match(&s) || EXPLANATION.is_match(&s) {
+    // "Should I lock my PC?", "is it safe to restart the computer?": a question, never the deed
+    // (2026-11-07: sleep and lock run without a double-check).
+    if s.is_empty() || NEGATED.is_match(&s) || EXPLANATION.is_match(&s) || crate::intents::only_asks(text) {
         return None;
     }
     if RESTART_PC.is_match(&s) {
@@ -140,20 +176,22 @@ pub fn power_request(text: &str) -> Option<PowerAction> {
     None
 }
 
+/// A whole answer that says yes (the late answer only takes these, not "ok, play music").
+const CONFIRM_WORDS: &[&str] = &[
+    "yes", "yeah", "yep", "yup", "ja", "jawohl", "jo", "confirm", "confirmed", "i confirm", "do it", "go ahead", "go", "yes please", "yes do it",
+    "please do", "shut it down", "restart it", "reboot it", "mach es", "mach das", "mach", "machs", "mach's", "tu es", "bestätigen", "bestätige",
+    "bestaetigen", "ok", "okay", "sure", "affirmative", "absolutely", "of course", "klar", "genau", "los", "ja bitte", "ja mach", "ja mach es",
+    "proceed", "yes sir", "do that", "make it so", "engage", "execute", "yes shut it down", "yes restart it", "ja fahr ihn runter",
+];
+
 /// "Yes", "ja", "confirm", "do it", "shut it down", "yes please", "mach es": the go-ahead.
 pub fn is_confirmation(text: &str) -> bool {
     let s = words(text);
     if s.is_empty() || is_cancellation(text) {
         return false;
     }
-    const WHOLE: &[&str] = &[
-        "yes", "yeah", "yep", "yup", "ja", "jawohl", "jo", "confirm", "confirmed", "i confirm", "do it", "go ahead", "go", "yes please", "yes do it",
-        "please do", "shut it down", "restart it", "reboot it", "mach es", "mach das", "mach", "machs", "mach's", "tu es", "bestätigen", "bestätige",
-        "bestaetigen", "ok", "okay", "sure", "affirmative", "absolutely", "of course", "klar", "genau", "los", "ja bitte", "ja mach", "ja mach es",
-        "proceed", "yes sir", "do that", "make it so", "engage", "execute", "yes shut it down", "yes restart it", "ja fahr ihn runter",
-    ];
     let trimmed = s.trim_start_matches("jarvis ").trim_end_matches(" jarvis").trim();
-    WHOLE.contains(&trimmed)
+    CONFIRM_WORDS.contains(&trimmed)
         || trimmed.starts_with("confirm")
         || trimmed.starts_with("yes ")
         || trimmed.starts_with("ja ")
@@ -176,6 +214,13 @@ pub async fn execute(action: PowerAction) -> Result<String, String> {
     imp::execute(action).await
 }
 
+/// `shutdown.exe` run exactly as `execute` runs it, with other arguments: the real-PC check
+/// (`live_checks`) schedules a shutdown and a restart ten minutes out and calls each off at once.
+#[cfg(all(test, windows))]
+pub(crate) async fn run_shutdown_exe(args: &[&str]) -> Result<(), String> {
+    imp::shutdown(args).await
+}
+
 #[cfg(windows)]
 mod imp {
     use super::PowerAction;
@@ -188,7 +233,7 @@ mod imp {
     }
 
     /// `shutdown.exe` hidden (CREATE_NO_WINDOW, no busy cursor) with `args`.
-    async fn shutdown(args: &[&str]) -> Result<(), String> {
+    pub(super) async fn shutdown(args: &[&str]) -> Result<(), String> {
         let out = crate::shell::run_helper(&shutdown_exe(), args, None, &[], Duration::from_secs(10)).await.map_err(|e| format!("shutdown.exe could not start: {e}"))?;
         if out.success() {
             Ok(())
@@ -275,12 +320,32 @@ mod tests {
         assert_eq!(power_request("PC in den Ruhezustand"), Some(PowerAction::Sleep));
         assert_eq!(power_request("lock my screen"), Some(PowerAction::Lock));
         assert_eq!(power_request("sperre den PC"), Some(PowerAction::Lock));
+        // An order in good manners is still the order.
+        assert_eq!(power_request("Can you lock my PC?"), Some(PowerAction::Lock));
+        assert_eq!(power_request("Could you restart the computer?"), Some(PowerAction::Restart));
+        // Sir's own words (2026-11-07): his system, a shutdown mode, and "shut on" as heard.
+        for t in ["Please shutdown my system.", "shut down my system", "Can you put my PC into shutdown mode?", "can you shut on my PC please?", "restart the whole system"] {
+            assert!(power_request(t).is_some(), "{t}");
+        }
+        assert_eq!(power_request("restart the whole system"), Some(PowerAction::Restart));
     }
 
     #[test]
     fn not_requests() {
-        for t in ["shut down", "close yourself", "don't shut down my PC", "how do I shut down my PC?", "turn down the volume", "shut down Discord", "restart Spotify"] {
+        for t in ["shut down", "close yourself", "don't shut down my PC", "how do I shut down my PC?", "turn down the volume", "shut down Discord", "restart Spotify", "Should I lock my PC?", "Should I restart my PC?", "Is it safe to put my PC to sleep?", "Soll ich den PC sperren?", "shut down your system", "shut down all systems"] {
             assert_eq!(power_request(t), None, "{t}");
+        }
+    }
+
+    #[test]
+    fn a_late_yes_is_told_the_question_lapsed_and_nothing_else_is_taken() {
+        let line = late_answer(PowerAction::Restart, "Yes").expect("a late yes");
+        assert!(line.contains("lapsed") && line.contains("\"restart my PC\""), "{line}");
+        assert!(late_answer(PowerAction::Shutdown, "Yes, please").unwrap().contains("\"shut down my PC\""));
+        assert!(late_answer(PowerAction::Shutdown, "No").unwrap().contains("called off"));
+        // A request of its own is no answer to the old question.
+        for t in ["ok play some music", "stop the music", "yes open Spotify", "what's the time?", "restart my PC"] {
+            assert_eq!(late_answer(PowerAction::Restart, t), None, "{t}");
         }
     }
 

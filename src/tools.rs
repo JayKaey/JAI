@@ -3,7 +3,7 @@
 
 use crate::config::ConfigStore;
 use crate::file_ops::{self, EditOutcome};
-use crate::focus::{self, FocusTracker};
+use crate::focus::{self, FocusTracker, OwnThing};
 use crate::lifecycle::{self, Restart};
 use crate::media::{self, MediaAction};
 use crate::memory::{DeleteOutcome, MemoryManager};
@@ -40,16 +40,17 @@ pub struct CapabilityCategory {
 /// schemas, saved skills, protocols and voice macros so no installed tool is omitted.
 pub const JARVIS_CAPABILITY_MANIFEST: &[CapabilityCategory] = &[
     CapabilityCategory { name: "Music and welcome", summary: "Sonora/Spotify player selection; named playlists, songs and tracks within playlists; local-library indexing; playback, skip, volume and now playing. Say 'Play JaysRock', 'Play Back in Black in JaysRock', or 'Wake up, Daddy's home'. Playback depends on available local files, installed players and streaming access.", tools: &["control_music", "media_and_volume_control"] },
-    CapabilityCategory { name: "Windows, monitors and desktop", summary: "Launch and close applications; focus, resize, snap, maximize and move real windows between monitors; inspect the screen or selected text; clipboard and system telemetry.", tools: &["open_application", "close_application", "window_management", "move_window_to_monitor", "inspect_screen_or_selection", "clipboard", "get_system_status", "top_processes", "network_status", "get_current_datetime", "focus_mode"] },
+    CapabilityCategory { name: "Windows, monitors and desktop", summary: "Launch and close applications; focus, resize, snap, maximize and move real windows between monitors; inspect the screen or selected text; clipboard and system telemetry.", tools: &["open_application", "close_application", "window_management", "move_window_to_monitor", "inspect_screen_or_selection", "clipboard", "get_system_status", "top_processes", "network_status", "get_current_datetime", "focus_mode", "is_app_running"] },
     CapabilityCategory { name: "Calendar, school and study", summary: "Apple/iCloud CalDAV and local calendar reads, creation, edits, conflicts and offline synchronization; WebUntis classes and cancellations; itslearning tasks and materials; deadline syncing, watchers, briefings and oral exam practice. Remote integrations require configured credentials.", tools: &["get_calendar_schedule", "create_calendar_event", "modify_or_delete_calendar_event", "check_school_schedule", "check_course_updates", "sync_study_materials_and_deadlines", "manage_schedule_watcher", "configure_productivity_service", "run_executive_briefing", "start_oral_exam_session", "answer_oral_exam", "set_smart_morning_alarm"] },
     CapabilityCategory { name: "Workout coach", summary: "Detect calendar workout entries such as Arme, record sets/reps/weights, estimate one-repetition personal records, display strength progression and share persistent rest timers between desktop and phone.", tools: &["manage_workout"] },
     CapabilityCategory { name: "Worldwide phone and remote PC", summary: "Token-protected mobile satellite with local and public HTTPS pairing URLs and QR codes; live CPU/GPU/process telemetry; remote locking, sleep, protocol execution and configured Wake-on-LAN. Internet access requires an active tunnel; waking a sleeping host requires another reachable device or relay.", tools: &["get_remote_pc_status", "control_remote_pc", "manage_remote_node", "manage_location_settings", "beam_to_device", "scan_with_phone", "teleport_content"] },
     CapabilityCategory { name: "Communication and contacts", summary: "Configured email and WhatsApp inboxes, summaries, search, contacts, explicit messages/replies, unified inbox and auto-responder controls.", tools: &["check_unread_emails", "summarize_email", "search_emails", "send_whatsapp_message", "check_whatsapp_messages", "reply_to_last_whatsapp", "manage_contacts", "check_all_communications", "set_auto_responder"] },
-    CapabilityCategory { name: "Stark protocols, macros and reminders", summary: "Create and run saved app/music/window protocols, capture workspaces, teach multi-step voice macros, set reminders and timers, select spoken/text response modes and control the assistant lifecycle.", tools: &["manage_stark_protocol", "manage_voice_macro", "reminders", "set_response_modality", "control_jarvis_lifecycle", "shutdown_jarvis"] },
+    CapabilityCategory { name: "Stark protocols, macros and reminders", summary: "Create and run saved app/music/window protocols, capture workspaces, teach multi-step voice macros, set reminders and timers, select spoken/text response modes, control the assistant lifecycle, take back the last change of his own ('Undo that'), tell what he just did and what is new in this build.", tools: &["manage_stark_protocol", "manage_voice_macro", "reminders", "set_response_modality", "control_jarvis_lifecycle", "shutdown_jarvis", "undo_last_action", "recent_actions", "whats_new", "whats_open", "timer_left"] },
     CapabilityCategory { name: "Memory and learned skills", summary: "Store and recall facts, search conversation history, manage persistent skills and execute installed skill tools.", tools: &["remember_fact", "recall_memories", "delete_memory", "search_conversation", "create_skill", "execute_skill", "create_persistent_skill", "run_custom_skill", "list_skills", "delete_skill"] },
     CapabilityCategory { name: "Files, code and automation", summary: "Locate/read/write/edit files, undo edits, search source contents, run commands, generate projects, inspect source, apply self-improvements and perform reversible folder cleanup.", tools: &["find_files", "read_text_file", "create_or_overwrite_file", "edit_file_surgical", "undo_last_file_edit", "search_inside_files", "run_shell_command", "spawn_coding_project", "patch_own_source", "smart_folder_cleanup", "undo_last_cleanup", "run_sandbox_calculation_or_script", "diagnose_minecraft_or_server"] },
     CapabilityCategory { name: "Web, research and locations", summary: "Web search and page reading, connected websites, background research, location-aware weather, nearby places, routes and commute checks, network diagnosis and price watches.", tools: &["web_search", "read_webpage", "open_website", "query_connected_website", "start_background_research", "get_precise_location_weather", "find_nearby_places_or_route", "check_ride_and_commute_status", "diagnose_network_and_ping", "manage_price_sniper"] },
     CapabilityCategory { name: "Visual tools, media and analysis", summary: "Native widgets and windows, a self-configuring HUD (panels, zen mode, resizable 3D sphere orb, text and window size) and live real-file project graph, interactive simulations, calculation, code/idea analysis, supported media extraction, instant replay and local finance/goal tracking.", tools: &["create_or_update_widget", "remove_widget", "spawn_native_window", "close_native_window", "customize_hud_and_windows", "configure_interface", "control_jarvis_interface", "launch_interactive_simulation", "adjust_simulation", "calculate", "stress_test_idea_or_code", "download_or_extract_media", "save_instant_replay", "manage_finances_and_goals", "list_jarvis_features"] },
+    CapabilityCategory { name: "Workbench", summary: "Spaced-repetition flashcards, the maths/physics/chemistry formula sheet, molar masses and mole conversion, keyboard-shortcut sheets for the program in front, screen time with a break coach, routines learned from what Sir asks for, an hour of temperatures with a fan-curve verdict, clipboard history (in memory only), tiling program windows on a monitor and predictive command completion in the console.", tools: &["manage_flashcards", "lookup_formula", "chemistry_helper", "show_app_shortcuts", "screen_time_report", "suggest_routine", "thermal_advisor", "clipboard_history", "tile_windows", "suggest_commands"] },
 ];
 
 fn capability_tool_definition() -> Value {
@@ -226,6 +227,93 @@ pub fn is_slow(tool: &str) -> bool {
         || crate::stark::is_slow(tool)
 }
 
+/// This run is a silent scripted session (`--silent`): tools act inside Jarvis only.
+static SILENT_SESSION: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_silent_session(on: bool) {
+    SILENT_SESSION.store(on, Ordering::Release);
+}
+
+pub fn silent_session() -> bool {
+    SILENT_SESSION.load(Ordering::Acquire)
+}
+
+/// What a silent scripted session may really carry out: everything that only reads, and what
+/// stays inside Jarvis (his HUD, his windows and widgets, his board, his own voice and modes).
+/// The volume is his too there: the mixer works on a copy of the real one (`audio_mixer`'s
+/// bench). Anything that reaches the PC around him (an application, the music, a window of
+/// Sir's, the keyboard, a message, a file, the power) is noted and left undone. (A script once
+/// held "mute everything except Discord"; it was stopped three requests before that one.)
+pub fn stays_inside(name: &str, args: &Value) -> bool {
+    if crate::hyper_cortex::is_read_only(name, args) {
+        return true;
+    }
+    let action = args["action"].as_str().unwrap_or("");
+    match name {
+        "configure_interface" | "control_jarvis_interface" | "control_gui_aspect" | "customize_hud_and_windows" | "control_orb_mode" | "spawn_native_window" | "update_native_window"
+        | "close_native_window" | "close_all_secondary_windows" | "create_or_update_widget" | "remove_widget" | "hud_board" | "open_jarvis_view" | "control_popups" | "ultron_mode"
+        | "set_response_modality" | "set_listening_mode" | "listening_lock" | "control_audio_mixer" | "thermal_advisor" | "undo_last_action" | "lookup_formula" | "chemistry_helper" => true,
+        // The volume (on the copy) and his own voice, never the media keys.
+        "media_and_volume_control" => matches!(action, "set_volume" | "volume" | "volume_up" | "volume_down" | "mute" | "unmute" | "get_volume") || action.starts_with("jarvis_") || action.contains("jarvis"),
+        // His own guide (the phone link itself would restart the tunnel).
+        "show_mobile_satellite_instructions" => args["topic"] == "permanent_address",
+        // "Get rid of it" says so when there is nothing of his; it never reaches a program.
+        "close_application" => bool_arg(args, "own_only") == Some(true),
+        // Himself to another monitor, nobody else's window.
+        "move_window_to_monitor" => args["app_or_window_name"].as_str().is_some_and(|n| names_jarvis(n) || matches!(n.to_lowercase().as_str(), "hud" | "the hud" | "your hud" | "your window" | "your interface")),
+        _ => false,
+    }
+}
+
+/// What the model is told when it reached for an action on a plain question.
+/// What a silent scripted session says of a call it leaves undone (outside Jarvis).
+pub const NOT_CARRIED_OUT: &str = "Noted, not carried out: this is a silent scripted session, which acts inside Jarvis only.";
+
+pub const ONLY_ASKED: &str = "Nothing was done: Sir asked a question and gave no order. Answer the question itself in one or two sentences, and if doing it would help him, end with \"Shall I?\".";
+
+/// What a plain question may use ("should I close Firefox?" once closed it): what only reads,
+/// works something out or shows it. A tool with actions goes by the action.
+pub fn only_looks(name: &str, args: &Value) -> bool {
+    const BY_NAME: &[&str] = &["check_", "diagnose_", "find_", "get_", "inspect_", "list_", "lookup_", "read_", "recall_", "search_", "show_", "suggest_", "summarize_"];
+    const LOOKING: &[&str] = &["chemistry_helper", "pop_up_ui_card", "run_executive_briefing", "run_sandbox_calculation_or_script", "screen_time_report", "spawn_topic_knowledge_workspace", "stress_test_idea_or_code", "thermal_advisor"];
+    const READ_ACTIONS: &[&str] = &["check", "due", "find", "get", "history", "info", "list", "overview", "query", "read", "recap", "recent", "recommend", "report", "search", "show", "stats", "status", "summary", "view"];
+    crate::hyper_cortex::is_read_only(name, args)
+        || BY_NAME.iter().any(|prefix| name.starts_with(prefix))
+        || LOOKING.contains(&name)
+        // ("Are you there?" wakes the board: that is the answer.)
+        || (name == "hud_board" && args["action"] == "wake")
+        || args["action"].as_str().is_some_and(|action| READ_ACTIONS.iter().any(|read| action == *read || action.strip_prefix(read).is_some_and(|rest| rest.starts_with('_'))))
+}
+
+/// The outcome of a call a plain question does not warrant: nothing ran.
+pub fn only_asked(name: &str, args: &Value) -> ToolOutcome {
+    ToolOutcome {
+        tool: name.to_string(),
+        args: args.clone(),
+        output: ONLY_ASKED.to_string(),
+        success: true,
+        duration_ms: 0,
+        memories_changed: false,
+        skills_changed: false,
+        shutdown_requested: false,
+        modality_changed: false,
+        state_changed: false,
+    }
+}
+
+/// "4 minutes and 30 seconds", "58 seconds", "1 hour and 2 minutes": a span of time as it is said.
+fn spoken_span(ms: i64) -> String {
+    let unit = |n: i64, name: &str| format!("{n} {name}{}", if n == 1 { "" } else { "s" });
+    let seconds = (ms + 999) / 1000;
+    match (seconds / 3600, seconds % 3600 / 60, seconds % 60) {
+        (0, 0, s) => unit(s, "second"),
+        (0, m, 0) => unit(m, "minute"),
+        (0, m, s) => format!("{} and {}", unit(m, "minute"), unit(s, "second")),
+        (h, 0, _) => unit(h, "hour"),
+        (h, m, _) => format!("{} and {}", unit(h, "hour"), unit(m, "minute")),
+    }
+}
+
 /// "Close Jarvis" / "close yourself" means quitting this app, not killing a process.
 pub(crate) fn names_jarvis(app: &str) -> bool {
     let n: String = app.to_lowercase().chars().filter(|c| c.is_alphanumeric() || *c == ' ').collect();
@@ -387,10 +475,39 @@ impl ToolContext {
         if let Some(recorded) = crate::live_self_tester::intercept(name, &args) {
             return recorded;
         }
+        // "Close it" right after something of his own was opened or changed means that, not the
+        // application Sir happens to be working in (2026-11-06: "open a window with my drive
+        // space", "make it smaller", "close it" closed the program in front; the Theme Studio, a
+        // timer or a formula sheet would have fallen through the same way).
+        let own_thing = (name == "close_application" && str_arg(&args, &["app_name", "name", "app", "application"]).is_some_and(focus::is_pronoun))
+            .then(|| self.own_thing_to_close())
+            .flatten();
+        let (name, mut args) = match own_thing {
+            Some((tool, call)) => (tool, call),
+            None => (name, args),
+        };
+        // A silent scripted session acts inside Jarvis only.
+        if silent_session() && !stays_inside(name, &args) {
+            info!("[TOOL] {name} {args} (noted, not carried out: a silent session leaves the PC around Jarvis alone)");
+            return ToolOutcome {
+                tool: name.to_string(),
+                args,
+                output: NOT_CARRIED_OUT.to_string(),
+                success: true,
+                duration_ms: 0,
+                memories_changed: false,
+                skills_changed: false,
+                shutdown_requested: false,
+                modality_changed: false,
+                state_changed: false,
+            };
+        }
         crate::core_sphere_3d::pulse("tools.rs");
         if let Some(module) = crate::core_sphere_3d::CoreActivityBus::module_for_tool(name) {
             crate::core_sphere_3d::pulse(module);
         }
+        // What is his before the call: the way back from what the call changes ("undo that").
+        let before = self.snapshot();
         let started = Instant::now();
         info!("[TOOL] {name} {args}");
         let mut memories_changed = false;
@@ -537,6 +654,8 @@ impl ToolContext {
                     shutdown_requested = true;
                     Ok("That is J.A.R.V.I.S. himself: he shuts down as soon as this reply has been spoken.".into())
                 }
+                // "Get rid of it" with nothing of his up: no program pays for that.
+                Some(app) if focus::is_pronoun(app) && bool_arg(&args, "own_only") == Some(true) => Err("There is nothing of mine up to take away.".into()),
                 // "Close it": the app (or the website's tab) the conversation is about.
                 Some(app) if focus::is_pronoun(app) => self.close_focused(false).await,
                 Some(app) => apps::close(app, bool_arg(&args, "force").unwrap_or(true)).await.inspect(|_| self.focus.forget_app(app)),
@@ -597,6 +716,21 @@ impl ToolContext {
                     None => Err(format!("Unknown response mode '{mode}' (mirror_input, always_speak, text_only, custom_condition).")),
                 }
             }
+            "undo_last_action" => self.undo_last().await,
+            "recent_actions" => Ok(match str_arg(&args, &["about"]).filter(|about| !about.trim().is_empty()) {
+                Some(about) => crate::undo::report_about(about),
+                None => crate::undo::report_done(),
+            }),
+            "whats_new" => Ok(crate::release_notes::spoken()),
+            "whats_open" => Ok(self.whats_open()),
+            "timer_left" => Ok(self.timer_left()),
+            "is_app_running" => match str_arg(&args, &["app_name", "name", "app"]) {
+                Some(app) => {
+                    let name = apps::display_name(app);
+                    Ok(if apps::is_running(app).await { format!("{name} is running, Sir.") } else { format!("{name} isn't running, Sir.") })
+                }
+                None => Err("is_app_running needs app_name.".to_string()),
+            },
             "create_or_update_widget" => self.widgets.create_or_update(&args).inspect(|_| gui::refresh()),
             "remove_widget" => self.widgets.remove_tool(&args).inspect(|_| gui::refresh()),
             "spawn_native_window" => {
@@ -796,7 +930,10 @@ impl ToolContext {
                         skills_changed = true;
                         self.skills.execute(skill_name, &args).await.map_err(|e| e.to_string())
                     }
-                    _ => Err(format!("Unknown tool '{other}'.")),
+                    // (Said so that the model's next move is the right one: it invented
+                    // `translate_text` for "translate good morning into French" and, told only
+                    // "unknown tool", wished Sir a good morning instead.)
+                    _ => Err(format!("Unknown tool '{other}': there is no such tool. Do not call a tool for this. Answer Sir's request yourself, directly, from your own knowledge (a translation, a definition, a fact, an explanation).")),
                 }
             }
         };
@@ -819,6 +956,16 @@ impl ToolContext {
                 };
                 // What "that", "him" and "the day after" refer to from now on.
                 self.stark.graph.observe_tool(&outcome, self.focus.focused_app());
+                // … what "close it" means, what "undo that" takes back, and what "what did you
+                // just do?" tells.
+                let after = self.snapshot();
+                self.note_what_came_up(name, &outcome.args, &outcome.output, &before, &after);
+                if let Some(step) = crate::undo::way_back(name, &outcome.args, &outcome.output, &before, &after) {
+                    crate::undo::keep(step);
+                }
+                if !crate::hyper_cortex::is_read_only(name, &outcome.args) {
+                    crate::undo::note_done(&outcome.output);
+                }
                 outcome
             }
             Err(err) => {
@@ -839,6 +986,128 @@ impl ToolContext {
         }
     }
 
+    /// What this call put up of his own is what "close it" means from now on: a window, whichever
+    /// tool opened it (a formula sheet, a report), a widget, a view of the HUD.
+    fn note_what_came_up(&self, name: &str, args: &Value, said: &str, before: &crate::undo::Snapshot, after: &crate::undo::Snapshot) {
+        if let Some(window) = after.windows.iter().rev().find(|w| !before.windows.contains(w)) {
+            self.focus.note_jarvis_window(&window.id);
+        }
+        if name == "create_or_update_widget" && (said.starts_with("Created widget") || said.starts_with("Updated widget")) {
+            self.focus.note_own_thing(OwnThing::Widget(quoted(said).to_string()));
+        }
+        if name == "configure_interface" {
+            for key in ["core_view", "feature_lab", "theme_studio", "mixer_view", "text_console"] {
+                match args.get(key).and_then(Value::as_bool) {
+                    Some(true) => self.focus.note_own_thing(OwnThing::View(key.to_string())),
+                    Some(false) => self.focus.forget_own_thing(&OwnThing::View(key.to_string())),
+                    None => {}
+                }
+            }
+        }
+    }
+
+    /// The call that closes what "it" means, when that is something of his still up.
+    fn own_thing_to_close(&self) -> Option<(&'static str, Value)> {
+        let thing = self.focus.own_thing_is_latest().and_then(|thing| match thing {
+            OwnThing::View(key) => gui::view_is_up(&key).then(|| ("configure_interface", json!({ key: false }))),
+            OwnThing::Widget(id) => self.widgets.widgets().iter().any(|w| w.id == id).then(|| ("remove_widget", json!({ "id": id }))),
+        });
+        thing.or_else(|| {
+            let id = self.focus.jarvis_window_is_latest().filter(|id| self.widgets.find_window_named(id).is_some())?;
+            Some(("close_native_window", json!({ "id": id })))
+        })
+    }
+
+    /// "What's open?": what of his is up right now, by name, each thing once.
+    fn whats_open(&self) -> String {
+        let mut seen: Vec<String> = Vec::new();
+        let mut named = |names: Vec<String>| -> Vec<String> {
+            let fresh: Vec<String> = names.into_iter().filter(|n| !n.trim().is_empty() && !seen.contains(n)).collect();
+            seen.extend(fresh.iter().cloned());
+            fresh
+        };
+        let mut lines: Vec<String> = Vec::new();
+        if let crate::hud_board::ScreenState::BoardActive { topic, block_count, .. } = crate::hud_board::screen_state() {
+            lines.push(format!("The board is up on {topic}, with {block_count} block{}.", if block_count == 1 { "" } else { "s" }));
+        }
+        for (what, names) in [
+            ("Blocks", named(crate::hud_dock::open_titles())),
+            ("Windows", named(self.widgets.windows().into_iter().map(|w| w.title).collect())),
+            ("On the widgets panel", named(self.widgets.widgets().into_iter().map(|w| w.title).collect())),
+        ] {
+            if !names.is_empty() {
+                lines.push(format!("{what}: {}.", names.join(", ")));
+            }
+        }
+        if lines.is_empty() {
+            return "Nothing of mine is open, Sir: no board, no blocks, no windows and no widgets.".to_string();
+        }
+        lines.join(" ")
+    }
+
+    /// "How long is left on the timer?": the latest timer, or else the latest stopwatch, off the
+    /// widgets panel.
+    fn timer_left(&self) -> String {
+        let now = crate::widgets::now_ms();
+        let clocks: Vec<(i64, Option<i64>)> = self.widgets.widgets().iter().filter_map(|w| crate::widgets::timer_state(&w.kind, now)).collect();
+        match clocks.iter().rev().find(|(_, left)| left.is_some()).or(clocks.last()) {
+            None => "There's no timer on the panel, Sir.".to_string(),
+            Some((_, Some(left))) if *left <= 0 => "The timer has finished, Sir.".to_string(),
+            Some((_, Some(left))) => format!("{} left on the timer, Sir.", spoken_span(*left)),
+            Some((elapsed, None)) => format!("The stopwatch is at {}, Sir.", spoken_span(*elapsed)),
+        }
+    }
+
+    /// What is his right now: the interface, his windows and widgets, the mixer's change count.
+    fn snapshot(&self) -> crate::undo::Snapshot {
+        crate::undo::Snapshot {
+            interface: self.config.read(|c| c.interface.clone()),
+            windows: self.widgets.windows(),
+            widgets: self.widgets.widgets(),
+            volume_changes: crate::audio_mixer::changes(),
+            volume_undoable: crate::audio_mixer::can_undo(),
+        }
+    }
+
+    /// "Undo that": the last change of his own, taken back (`undo`). With nothing noted, an
+    /// edit of the file the conversation is about is still undone the old way.
+    async fn undo_last(&self) -> Result<String, String> {
+        let Some(step) = crate::undo::take() else {
+            if self.focus.last_file().is_some() {
+                let quietly = json!({ "preview": "none" });
+                return self.after_file_write(file_ops::undo_tool(&quietly, self.focus.last_file()).await, &quietly).map(|out| format!("Undone: that edit is undone. {out}"));
+            }
+            return Err("Nothing of mine to take back: the last change is too long ago, or there was none.".to_string());
+        };
+        crate::undo::set_undoing(true);
+        let mut said: Vec<String> = Vec::new();
+        if let Some(settings) = step.interface {
+            self.config.update(|c| c.interface = settings);
+            gui::show();
+            gui::refresh();
+        }
+        let back = self.widgets.put_back(step.windows, step.widgets);
+        if !back.is_empty() {
+            gui::sync_windows();
+            gui::refresh();
+            said.push(format!("Back: {}.", back.join(", ")));
+        }
+        let mut failed = None;
+        for (tool, args) in step.calls {
+            let outcome = Box::pin(self.execute(tool, &args)).await;
+            if !outcome.success {
+                failed = Some(outcome.output.trim_start_matches("Error: ").to_string());
+                break;
+            }
+            said.push(outcome.output);
+        }
+        crate::undo::set_undoing(false);
+        match failed {
+            Some(why) => Err(format!("I could not take all of it back: {why}")),
+            None => Ok(format!("Undone: {}. {}", step.done, said.join(" ")).trim().to_string()),
+        }
+    }
+
     fn configure_interface(&self, args: &Value) -> Result<String, String> {
         let current = self.config.read(|c| c.interface.clone());
         interface::configure(&current, args).and_then(|done| {
@@ -853,6 +1122,15 @@ impl ToolContext {
             }
             if let Some(open) = bool_arg(args, "core_view") {
                 gui::core_command(crate::core_sphere_3d::CoreCommand::Open(open));
+            }
+            if let Some(open) = bool_arg(args, "feature_lab") {
+                gui::show_features(open);
+            }
+            if let Some(open) = bool_arg(args, "theme_studio") {
+                gui::show_theme_studio(open);
+            }
+            if let Some(open) = bool_arg(args, "mixer_view") {
+                gui::show_mixer(open);
             }
             if let Some(cmd) = interface::core_command(args) {
                 gui::core_command(cmd);
@@ -1121,6 +1399,11 @@ impl ToolContext {
             let monitors = monitors::list();
             let current = crate::win32::window_display_rect(hwnd).and_then(|r| monitors::monitor_at(&monitors, (r[0] + r[2]) / 2, (r[1] + r[3]) / 2));
             let index = monitors::resolve(monitor, current, &monitors).ok_or_else(|| format!("There is no monitor {monitor}."))?;
+            // The fullscreen board (also one that spans every monitor) goes there as the
+            // fullscreen board; only a plain window is moved like any other window.
+            if gui::send_board_to_monitor(&self.config, index) {
+                return Ok(format!("Moved the HUD to Monitor {index}."));
+            }
             let m = monitors[index - 1].clone();
             let display = crate::win32::DisplayInfo { rect: m.rect, work: m.work, primary: m.primary, device: m.name };
             crate::win32::call(move || {
@@ -1372,6 +1655,24 @@ impl ToolContext {
                 self.voice_volume.store(next, Ordering::Relaxed);
                 Ok(format!("Jarvis voice loudness set to {next}%."))
             }
+            // A volume for one app, or a level with a sign ("-50" is a step down, never the
+            // level 0): the mixer's, which knows both.
+            "set_volume" | "volume" | "set" | "volume_up" | "volume_down" | "mute" | "unmute"
+                if str_arg(args, &["app", "app_name", "application", "target"]).is_some() || args.get("level").is_some_and(|l| crate::audio_mixer::signed_step(l).is_some()) =>
+            {
+                let mut mixer = args.clone();
+                mixer["action"] = json!(match action.as_str() {
+                    "volume_up" | "volume_down" | "mute" | "unmute" => action.as_str(),
+                    _ => "set",
+                });
+                if matches!(action.as_str(), "volume_up" | "volume_down") {
+                    mixer["delta"] = json!(level.unwrap_or(10));
+                    if let Some(m) = mixer.as_object_mut() {
+                        m.remove("level");
+                    }
+                }
+                crate::audio_mixer::tool(&mixer).await
+            }
             _ => match MediaAction::parse(&action, level) {
                 Some(a) => media::execute(a).await,
                 None => Err(format!("Unknown media action '{action}' (set_volume needs a 'level').")),
@@ -1521,6 +1822,38 @@ fn pc_tool_definitions() -> Vec<Value> {
         interface::gui_aspect_tool_definition(),
         crate::audio_mixer::tool_definition(),
         json!({"type": "function", "function": {
+            "name": "undo_last_action",
+            "description": "\"Undo that\", \"put it back\", \"revert that\": takes back the last thing YOU changed of your own (the HUD's look, layout or screens, a volume, a window or widget of yours that was closed or opened, the music you stopped, a file edit). One step, the latest. Never for another program's window or a message.",
+            "parameters": {"type": "object", "properties": {}, "required": []}
+        }}),
+        json!({"type": "function", "function": {
+            "name": "recent_actions",
+            "description": "\"What did you just do?\", \"what did you change?\", \"did you mute Discord?\": your own last actions as they really went. Never answer that from memory.",
+            "parameters": {"type": "object", "properties": {"about": {"type": "string", "description": "Only what you did to this program or view (\"discord\", \"mixer\"); leave it out for everything."}}, "required": []}
+        }}),
+        json!({"type": "function", "function": {
+            "name": "whats_new",
+            "description": "\"What's new?\", \"any new features?\": what this build of you does that the last one did not.",
+            "parameters": {"type": "object", "properties": {}, "required": []}
+        }}),
+        json!({"type": "function", "function": {
+            "name": "whats_open",
+            "description": "\"What's open?\", \"what's on the board?\", \"which widgets are open?\": the board, blocks, windows and widgets of yours that are up right now, by name. Never answer that from memory.",
+            "parameters": {"type": "object", "properties": {}, "required": []}
+        }}),
+        json!({"type": "function", "function": {
+            "name": "is_app_running",
+            "description": "\"Is Firefox open?\", \"is Discord running?\", \"läuft Spotify?\": whether a program runs right now. Never answer that from memory.",
+            "parameters": {"type": "object", "properties": {
+                "app_name": {"type": "string", "description": "The program"}
+            }, "required": ["app_name"]}
+        }}),
+        json!({"type": "function", "function": {
+            "name": "timer_left",
+            "description": "\"How long is left on the timer?\", \"how much time is left?\", \"what's the stopwatch at?\": read off the widgets panel. Never work that out yourself.",
+            "parameters": {"type": "object", "properties": {}, "required": []}
+        }}),
+        json!({"type": "function", "function": {
             "name": "set_listening_mode",
             "description": "How YOU listen: hands_free (answer relevant speech without the wake word; \"switch to hands-free mode\", \"Freisprechmodus aktivieren\") or wake_word (only when Sir says Jarvis; \"only listen when I say Jarvis\").",
             "parameters": {"type": "object", "properties": {
@@ -1575,6 +1908,90 @@ fn assistant_tool_definitions() -> Vec<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A silent scripted session (`--silent`) carries out what stays inside Jarvis and what
+    /// only reads; everything that would reach the PC around him is noted and left undone.
+    #[test]
+    fn a_silent_session_acts_inside_jarvis_only() {
+        for (name, args) in [
+            ("configure_interface", json!({"span_all_monitors": true})),
+            ("spawn_native_window", json!({"live": "pc_stats"})),
+            ("create_or_update_widget", json!({"type": "MetricGauge", "title": "CPU load"})),
+            ("hud_board", json!({"action": "close"})),
+            // The volume is his there: the mixer works on a copy of the real one.
+            ("control_audio_mixer", json!({"action": "mute_others", "app": "discord"})),
+            ("media_and_volume_control", json!({"action": "set_volume", "level": 40})),
+            ("get_system_status", json!({})),
+            ("web_search", json!({"query": "the height of Mount Everest"})),
+            ("control_music", json!({"action": "what_is_playing"})),
+            ("move_window_to_monitor", json!({"app_or_window_name": "yourself", "target_monitor": 2})),
+            ("show_mobile_satellite_instructions", json!({"topic": "permanent_address"})),
+        ] {
+            assert!(stays_inside(name, &args), "{name} {args}");
+        }
+        for (name, args) in [
+            ("open_application", json!({"app_name": "spotify"})),
+            ("close_application", json!({"app_name": "spotify", "force": true})),
+            ("open_website", json!({"platform_or_url": "youtube"})),
+            ("control_music", json!({"action": "play", "playlist_name": "JaysRock"})),
+            ("control_music", json!({"action": "set_volume", "level": "-50"})),
+            ("media_and_volume_control", json!({"action": "next_track"})),
+            ("window_management", json!({"action": "minimize_all"})),
+            ("move_window_to_monitor", json!({"app_or_window_name": "sonora", "target_monitor": 2})),
+            ("manage_stark_protocol", json!({"action": "execute_protocol", "protocol_name": "gaming"})),
+            ("show_mobile_satellite_instructions", json!({})),
+            ("reminders", json!({"action": "create", "text": "x"})),
+            ("discord_call", json!({"action": "listen"})),
+            ("shutdown_jarvis", json!({})),
+        ] {
+            assert!(!stays_inside(name, &args), "{name} {args}");
+        }
+        assert!(!silent_session(), "only `--silent` switches it on");
+    }
+
+    /// "Should I close Firefox?" had the model call close_application (silent session,
+    /// 2026-11-07): on a plain question it gets what reads, and nothing else.
+    #[test]
+    fn a_plain_question_only_reads() {
+        for (name, args) in [
+            ("get_system_status", json!({})),
+            ("web_search", json!({"query": "x"})),
+            ("calculate", json!({"expression": "2+2"})),
+            ("check_unread_emails", json!({})),
+            ("find_files", json!({"query": "x"})),
+            ("inspect_screen_or_selection", json!({})),
+            ("lookup_formula", json!({"name": "x"})),
+            ("thermal_advisor", json!({})),
+            ("control_audio_mixer", json!({"action": "get_app", "app": "discord"})),
+            ("control_orb_mode", json!({"action": "status"})),
+            ("control_music", json!({"action": "what_is_playing"})),
+            ("manage_stark_protocol", json!({"action": "list"})),
+            ("manage_flashcards", json!({"action": "stats"})),
+            (crate::venue_guide::TOOL, json!({"action": "recommend", "request": "x"})),
+            ("clipboard", json!({"action": "read"})),
+        ] {
+            assert!(only_looks(name, &args), "{name} {args}");
+        }
+        for (name, args) in [
+            ("close_application", json!({"app_name": "firefox"})),
+            ("open_application", json!({"app_name": "firefox"})),
+            ("control_orb_mode", json!({"enabled": false})),
+            ("control_audio_mixer", json!({"action": "set_master", "level": 20})),
+            ("control_audio_mixer", json!({"action": "no_sound"})),
+            ("control_music", json!({"action": "stop_all"})),
+            ("configure_interface", json!({"mixer_view": true})),
+            ("window_management", json!({"action": "minimize_all"})),
+            ("manage_stark_protocol", json!({"action": "execute_protocol", "protocol_name": "gaming"})),
+            ("run_shell_command", json!({"command": "x"})),
+            ("send_whatsapp_message", json!({"to": "x", "text": "y"})),
+            ("shutdown_jarvis", json!({})),
+            ("clipboard", json!({"action": "write", "text": "x"})),
+            ("reminders", json!({"action": "create", "text": "x"})),
+        ] {
+            assert!(!only_looks(name, &args), "{name} {args}");
+        }
+        assert_eq!(only_asked("close_application", &json!({})).output, ONLY_ASKED);
+    }
 
     #[test]
     fn invented_tool_names_are_repaired() {

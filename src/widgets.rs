@@ -237,6 +237,11 @@ pub struct DynamicWidgetSpec {
     pub dock: Dock,
     #[serde(default)]
     pub updated_at: String,
+    /// "Open that widget again the next time you start": it is on the panel from the first
+    /// frame. Every other widget is put away when Jarvis starts ("bring back my windows"
+    /// returns it).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub keep_at_start: bool,
 }
 
 impl DynamicWidgetSpec {
@@ -521,8 +526,9 @@ impl WindowStyle {
     }
 }
 
-/// An additional native window.
-#[derive(Debug, Clone, PartialEq)]
+/// An additional native window. (Saved as it stands when it is open or was closed not long
+/// ago: "bring back my windows" reopens it, also in a later session.)
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NativeWindowSpec {
     pub id: String,
     pub title: String,
@@ -544,10 +550,40 @@ pub struct NativeWindowSpec {
     pub revision: u64,
     /// Where the window really is (logical x, y, width, height), reported by the GUI; relative
     /// changes ("make it smaller") start from here.
+    #[serde(skip)]
     pub actual: Option<[f32; 4]>,
     /// Bumped when Sir asks for the open window again: only then does it come to the front
     /// (never over a game for a mere resize or a live update).
+    #[serde(skip)]
     pub raise: u64,
+    /// "Open that window again the next time you start."
+    #[serde(default)]
+    pub keep_at_start: bool,
+}
+
+impl Default for NativeWindowSpec {
+    /// An empty, resizable 640×360 window where the engine places it.
+    fn default() -> Self {
+        NativeWindowSpec {
+            id: String::new(),
+            title: String::new(),
+            width: 640.0,
+            height: 360.0,
+            x: None,
+            y: None,
+            monitor: None,
+            always_on_top: false,
+            resizable: true,
+            min_size: [240.0, 140.0],
+            style: WindowStyle::default(),
+            widgets: Vec::new(),
+            blocks: Vec::new(),
+            revision: 1,
+            actual: None,
+            raise: 0,
+            keep_at_start: false,
+        }
+    }
 }
 
 impl NativeWindowSpec {
@@ -576,6 +612,24 @@ struct Inner {
     drive_count: std::sync::atomic::AtomicUsize,
     /// Top processes, sampled only while a window shows them.
     processes: RwLock<Vec<crate::diagnostics::ProcessUsage>>,
+    /// This run's number among the sessions of `recent_views` (0: nothing is recorded: the
+    /// self-tests leave Sir's recent windows alone).
+    session: i64,
+}
+
+/// A window (with the widgets that live in it) or a panel widget as `recent_views` keeps it.
+#[derive(Debug, Serialize, Deserialize)]
+struct Recalled {
+    #[serde(default)]
+    window: Option<NativeWindowSpec>,
+    #[serde(default)]
+    widgets: Vec<DynamicWidgetSpec>,
+}
+
+/// Widgets that come and go on their own (a timer, the reminders list, a focus session, a
+/// self-test's probe): no part of what Sir had open.
+fn passing(spec: &DynamicWidgetSpec) -> bool {
+    matches!(spec.kind, WidgetKind::CountdownOrStopwatch { .. }) || matches!(spec.id.as_str(), "reminders" | "focus_session") || spec.id.starts_with("selftest_") || spec.id.starts_with("exhaustive_")
 }
 
 #[derive(Clone)]
@@ -657,12 +711,25 @@ fn normalize_payload(obj: &mut Map<String, Value>) {
 /// Keys of the tool call that are instructions, not spec fields.
 const CONTROL_KEYS: &[&str] = &[
     "push_value", "add_items", "check_item", "uncheck_item", "remove_item", "start", "pause", "reset", "widget_id", "from_last_reply",
-    "duration_minutes", "minutes", "seconds", "hours", "window",
+    "duration_minutes", "minutes", "seconds", "hours", "window", "default_type",
 ];
 
 impl WidgetEngine {
-    /// Opens the `widgets` table in Jarvis' memory database and loads the saved widgets.
+    /// Opens Jarvis' memory database for a new session. He starts with a clean HUD: only the
+    /// widgets and windows Sir told him to open again at the next start are there. Everything
+    /// else that was open last time is put away in `recent_views`, from where "bring back my
+    /// windows" returns it.
     pub fn open<P: AsRef<Path>>(db_path: P) -> Result<Self, rusqlite::Error> {
+        Self::open_as(db_path, true)
+    }
+
+    /// Opens the database without starting a session: the widgets and windows kept for the
+    /// start are shown, nothing is put away and nothing is recorded (the self-tests).
+    pub fn open_untouched<P: AsRef<Path>>(db_path: P) -> Result<Self, rusqlite::Error> {
+        Self::open_as(db_path, false)
+    }
+
+    fn open_as<P: AsRef<Path>>(db_path: P, new_session: bool) -> Result<Self, rusqlite::Error> {
         let conn = Connection::open(db_path.as_ref())?;
         conn.busy_timeout(Duration::from_secs(3))?;
         conn.execute_batch(
@@ -677,29 +744,86 @@ impl WidgetEngine {
                  style_json TEXT NOT NULL,
                  always_on_top INTEGER NOT NULL DEFAULT 0,
                  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+             );
+             CREATE TABLE IF NOT EXISTS recent_views (
+                 kind TEXT NOT NULL,
+                 id TEXT NOT NULL,
+                 view_json TEXT NOT NULL,
+                 session INTEGER NOT NULL DEFAULT 0,
+                 open INTEGER NOT NULL DEFAULT 1,
+                 seen_at TEXT NOT NULL DEFAULT (datetime('now')),
+                 PRIMARY KEY (kind, id)
              );",
         )?;
-        let mut widgets = Vec::new();
+        let last_session: i64 = conn.query_row("SELECT COALESCE(MAX(session), 0) FROM recent_views", [], |r| r.get(0)).unwrap_or(0);
+        let mut saved: Vec<DynamicWidgetSpec> = Vec::new();
         {
             let mut stmt = conn.prepare("SELECT id, spec_json FROM widgets ORDER BY position ASC, updated_at ASC")?;
             let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
             for (id, raw) in rows.flatten() {
                 match serde_json::from_str::<DynamicWidgetSpec>(&raw) {
-                    Ok(spec) => widgets.push(spec),
+                    Ok(spec) => saved.push(spec),
                     Err(e) => warn!("[WIDGET] Ignoring unreadable widget '{id}': {e}"),
                 }
             }
         }
-        info!("[WIDGET] {} widget(s) restored", widgets.len());
-        Ok(Self::with(widgets, Some(conn)))
+        let (kept, put_away): (Vec<DynamicWidgetSpec>, Vec<DynamicWidgetSpec>) = saved.into_iter().partition(|w| w.keep_at_start);
+        // The windows Sir asked to see again at the start.
+        let mut windows: Vec<NativeWindowSpec> = Vec::new();
+        let mut window_widgets: Vec<DynamicWidgetSpec> = Vec::new();
+        {
+            let mut stmt = conn.prepare("SELECT view_json FROM recent_views WHERE kind = 'window' ORDER BY seen_at ASC")?;
+            let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+            for recalled in rows.flatten().filter_map(|raw| serde_json::from_str::<Recalled>(&raw).ok()) {
+                if let Some(mut window) = recalled.window.filter(|w| w.keep_at_start && windows.len() < MAX_WINDOWS) {
+                    window.revision = 1;
+                    windows.push(window);
+                    window_widgets.extend(recalled.widgets);
+                }
+            }
+        }
+        if new_session {
+            // What was open when the last session ended is closed now, and still that
+            // session's; its panel widgets (the ones not kept) join it.
+            conn.execute("UPDATE recent_views SET open = 0 WHERE open = 1", [])?;
+            for spec in put_away.iter().filter(|w| w.dock == Dock::Panel && !passing(w)) {
+                let view = serde_json::to_string(&Recalled { window: None, widgets: vec![spec.clone()] }).unwrap_or_default();
+                conn.execute(
+                    "INSERT INTO recent_views (kind, id, view_json, session, open, seen_at) VALUES ('widget', ?1, ?2, ?3, 0, datetime('now'))
+                     ON CONFLICT(kind, id) DO UPDATE SET view_json = excluded.view_json, session = excluded.session, open = 0, seen_at = excluded.seen_at",
+                    params![spec.id, view, last_session],
+                )?;
+            }
+            for spec in &put_away {
+                conn.execute("DELETE FROM widgets WHERE id = ?1", params![spec.id])?;
+            }
+            conn.execute("DELETE FROM recent_views WHERE seen_at < datetime('now', '-30 days')", [])?;
+            // What is kept for the start is open in this session from its first moment.
+            for window in &windows {
+                conn.execute("UPDATE recent_views SET open = 1, session = ?2 WHERE kind = 'window' AND id = ?1", params![window.id, last_session + 1])?;
+            }
+            for widget in &kept {
+                conn.execute("UPDATE recent_views SET open = 1, session = ?2 WHERE kind = 'widget' AND id = ?1", params![widget.id, last_session + 1])?;
+            }
+        }
+        info!("[WIDGET] A clean start: {} widget(s) and {} window(s) kept for it, {} put away (\"bring back my windows\" returns them)", kept.len(), windows.len(), put_away.len());
+        let mut live = kept;
+        for spec in window_widgets {
+            if !live.iter().any(|w| w.id == spec.id) {
+                live.push(spec);
+            }
+        }
+        let engine = Self::with(live, Some(conn), if new_session { last_session + 1 } else { 0 });
+        *engine.inner.windows.write().unwrap_or_else(|e| e.into_inner()) = windows;
+        Ok(engine)
     }
 
     /// Not persisted (tests, self-test).
     pub fn in_memory() -> Self {
-        Self::with(Vec::new(), None)
+        Self::with(Vec::new(), None, 0)
     }
 
-    fn with(widgets: Vec<DynamicWidgetSpec>, conn: Option<Connection>) -> Self {
+    fn with(widgets: Vec<DynamicWidgetSpec>, conn: Option<Connection>, session: i64) -> Self {
         let (alerts, _) = broadcast::channel(32);
         Self {
             inner: Arc::new(Inner {
@@ -712,8 +836,131 @@ impl WidgetEngine {
                 running_commands: Mutex::new(HashSet::new()),
                 drive_count: std::sync::atomic::AtomicUsize::new(0),
                 processes: RwLock::new(Vec::new()),
+                session,
             }),
         }
+    }
+
+    // ------------------------------------------------- what was open: `recent_views` ----
+
+    /// Saves a view as it stands: open (`still_open`) or just closed. Nothing while no session
+    /// records (tests, the self-tests).
+    fn recall(&self, kind: &str, id: &str, view: &Recalled, still_open: bool) {
+        let Some(conn) = self.inner.conn.as_ref().filter(|_| self.inner.session > 0) else { return };
+        let raw = serde_json::to_string(view).unwrap_or_default();
+        if let Err(e) = conn.lock().unwrap_or_else(|e| e.into_inner()).execute(
+            "INSERT INTO recent_views (kind, id, view_json, session, open, seen_at) VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'))
+             ON CONFLICT(kind, id) DO UPDATE SET view_json = excluded.view_json, session = excluded.session, open = excluded.open, seen_at = excluded.seen_at",
+            params![kind, id, raw, self.inner.session, still_open],
+        ) {
+            warn!("[WINDOW] Could not note '{id}' for \"bring back my windows\": {e}");
+        }
+    }
+
+    /// A window as it stands, with the widgets that live in it.
+    fn recalled_window(&self, spec: &NativeWindowSpec) -> Recalled {
+        let widgets = self.widgets().into_iter().filter(|w| spec.widgets.contains(&w.id)).collect();
+        Recalled { window: Some(spec.clone()), widgets }
+    }
+
+    /// Notes window `id` as open, as it stands now.
+    fn recall_window(&self, id: &str) {
+        if let Some(spec) = self.windows().into_iter().find(|w| w.id == id).filter(|w| !w.id.starts_with("selftest_") && !w.id.starts_with("exhaustive_")) {
+            self.recall("window", id, &self.recalled_window(&spec), true);
+        }
+    }
+
+    /// "Bring back my windows": every window and widget of the last time something was open
+    /// and is not any more: what Sir closed in this session, else what was open when the last
+    /// session ended. Their names.
+    pub fn restore_recent(&self) -> Result<String, String> {
+        // (Nothing to bring back is an answer, not a failure of the window engine.)
+        let nothing = "Nothing to bring back: no window or widget of mine was open recently.";
+        let Some(conn) = self.inner.conn.as_ref() else { return Ok(nothing.into()) };
+        let rows: Vec<(String, String, String)> = {
+            let conn = conn.lock().unwrap_or_else(|e| e.into_inner());
+            let session: Option<i64> = conn.query_row("SELECT MAX(session) FROM recent_views WHERE open = 0", [], |r| r.get(0)).ok().flatten();
+            let Some(session) = session else { return Ok(nothing.into()) };
+            let mut stmt = conn.prepare("SELECT kind, id, view_json FROM recent_views WHERE open = 0 AND session = ?1 ORDER BY seen_at ASC").map_err(|e| e.to_string())?;
+            let found = stmt.query_map(params![session], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).map_err(|e| e.to_string())?.flatten().collect();
+            found
+        };
+        let mut back: Vec<String> = Vec::new();
+        for (kind, id, raw) in rows {
+            let Ok(view) = serde_json::from_str::<Recalled>(&raw) else { continue };
+            for spec in view.widgets {
+                let title = spec.title.clone();
+                if self.widget(&spec.id).is_none() && self.upsert(spec).is_ok() && kind == "widget" {
+                    back.push(title);
+                }
+            }
+            if let Some(mut window) = view.window {
+                let open = self.windows();
+                if open.iter().any(|w| w.id == window.id) || open.len() >= MAX_WINDOWS {
+                    continue;
+                }
+                window.revision = 1;
+                window.raise = 1;
+                back.push(window.title.clone());
+                self.inner.windows.write().unwrap_or_else(|e| e.into_inner()).push(window);
+                self.recall_window(&id);
+            }
+        }
+        if back.is_empty() {
+            return Ok(nothing.into());
+        }
+        self.bump();
+        info!("[WINDOW] Brought back: {}", back.join(", "));
+        Ok(format!("Brought back {}: {}.", if back.len() == 1 { "one view".to_string() } else { format!("{} views", back.len()) }, back.join(", ")))
+    }
+
+    /// "Undo that" after windows or widgets of his were closed: the views as they stood come
+    /// back (the ones not open already; a window only while there is room). Their titles.
+    pub fn put_back(&self, windows: Vec<NativeWindowSpec>, widgets: Vec<DynamicWidgetSpec>) -> Vec<String> {
+        let mut back: Vec<String> = Vec::new();
+        for spec in widgets {
+            let title = spec.title.clone();
+            if self.widget(&spec.id).is_none() && self.upsert(spec).is_ok() {
+                back.push(title);
+            }
+        }
+        for mut window in windows {
+            let open = self.windows();
+            if open.iter().any(|w| w.id == window.id) || open.len() >= MAX_WINDOWS {
+                continue;
+            }
+            window.revision = 1;
+            window.raise = 1;
+            let id = window.id.clone();
+            back.push(window.title.clone());
+            self.inner.windows.write().unwrap_or_else(|e| e.into_inner()).push(window);
+            self.recall_window(&id);
+        }
+        if !back.is_empty() {
+            self.bump();
+            info!("[WINDOW] Put back: {}", back.join(", "));
+        }
+        back
+    }
+
+    /// "Open that again the next time you start" (or not any more) for a widget or a window:
+    /// `target` an id, a title, "last"; a widget first, else a window.
+    pub fn keep_at_start(&self, target: &str, keep: bool) -> Result<String, String> {
+        // ("window": the last window, whatever widgets there are.)
+        let (target, widgets_first) = if target == "window" { ("last", false) } else { (target, true) };
+        if let Some(id) = self.resolve_id(target).or_else(|| self.of_kind(target)).filter(|_| widgets_first) {
+            let spec = self.modify(&id, true, |w| w.keep_at_start = keep).ok_or("That widget is gone.")?;
+            return Ok(format!("Widget '{}' {} at the next start.", spec.title, if keep { "opens again" } else { "no longer opens" }));
+        }
+        let window = self.find_window(target).ok_or_else(|| if self.widgets().is_empty() && self.windows().is_empty() { "No widget or window of mine is open to keep.".to_string() } else { format!("No widget or window matches '{target}'.") })?;
+        {
+            let mut list = self.inner.windows.write().unwrap_or_else(|e| e.into_inner());
+            if let Some(w) = list.iter_mut().find(|w| w.id == window.id) {
+                w.keep_at_start = keep;
+            }
+        }
+        self.recall_window(&window.id);
+        Ok(format!("Window '{}' {} at the next start.", window.title, if keep { "opens again" } else { "no longer opens" }))
     }
 
     /// The latest process sample (for `Processes` blocks).
@@ -822,6 +1069,9 @@ impl WidgetEngine {
             }
         }
         self.persist(&spec);
+        if spec.dock == Dock::Panel && !passing(&spec) {
+            self.recall("widget", &spec.id, &Recalled { window: None, widgets: vec![spec.clone()] }, true);
+        }
         self.bump();
         Ok(spec)
     }
@@ -842,6 +1092,7 @@ impl WidgetEngine {
     }
 
     pub fn remove(&self, id: &str) -> bool {
+        let closed = self.widget(id);
         let removed = {
             let mut list = self.inner.widgets.write().unwrap_or_else(|e| e.into_inner());
             let before = list.len();
@@ -850,6 +1101,10 @@ impl WidgetEngine {
         };
         if removed {
             self.unpersist(id);
+            // A panel widget Sir had open stays within reach of "bring back my windows".
+            if let Some(spec) = closed.filter(|w| w.dock == Dock::Panel && !passing(w)) {
+                self.recall("widget", id, &Recalled { window: None, widgets: vec![spec] }, false);
+            }
             for w in self.inner.windows.write().unwrap_or_else(|e| e.into_inner()).iter_mut() {
                 if w.widgets.iter().any(|x| x == id) {
                     w.widgets.retain(|x| x != id);
@@ -873,6 +1128,24 @@ impl WidgetEngine {
             .map(|w| w.id.clone())
     }
 
+    /// The latest widget of the kind Sir named: "the timer", "the note", "the checklist".
+    fn of_kind(&self, word: &str) -> Option<String> {
+        let word = word.trim().to_lowercase();
+        let wanted = |kind: &WidgetKind| match word.as_str() {
+            "timer" => matches!(kind, WidgetKind::CountdownOrStopwatch { .. }),
+            "countdown" => matches!(kind, WidgetKind::CountdownOrStopwatch { mode: TimerMode::Countdown, .. }),
+            "stopwatch" | "stoppuhr" => matches!(kind, WidgetKind::CountdownOrStopwatch { mode: TimerMode::Stopwatch, .. }),
+            "note" | "notiz" => matches!(kind, WidgetKind::MarkdownNoteCard { .. }),
+            "checklist" | "check list" | "list" | "shopping list" | "to do list" | "todo list" | "to-do list" | "checkliste" | "liste" | "einkaufsliste" | "todo liste" | "to-do-liste" | "aufgabenliste" => {
+                matches!(kind, WidgetKind::Checklist { .. })
+            }
+            "chart" | "graph" | "diagramm" => matches!(kind, WidgetKind::LiveLineChart { .. } | WidgetKind::Sparkline { .. }),
+            "gauge" | "anzeige" => matches!(kind, WidgetKind::MetricGauge { .. }),
+            _ => false,
+        };
+        self.inner.widgets.read().unwrap_or_else(|e| e.into_inner()).iter().rev().find(|w| wanted(&w.kind)).map(|w| w.id.clone())
+    }
+
     // ------------------------------------------------------------------- tool calls ----
 
     /// `create_or_update_widget`: creates a widget, or merges the given fields into an existing
@@ -880,12 +1153,18 @@ impl WidgetEngine {
     /// `check_item` / `uncheck_item` / `remove_item` (index or text), `start` / `pause` / `reset`.
     pub fn create_or_update(&self, args: &Value) -> Result<String, String> {
         let mut patch = args.as_object().cloned().ok_or("create_or_update_widget needs a JSON object.")?;
+        // "Open that widget again the next time you start": that alone changes no widget.
+        if let Some(keep) = args.get("keep_at_start").and_then(Value::as_bool).filter(|_| patch.keys().all(|k| matches!(k.as_str(), "keep_at_start" | "id" | "widget_id" | "title"))) {
+            return self.keep_at_start(str_arg(args, &["id", "widget_id", "title"]).unwrap_or("last"), keep);
+        }
         normalize_payload(&mut patch);
         let raw_id = str_arg(args, &["id", "widget_id"]).map(String::from);
+        // A request with no type is about a widget that is there ("pause the timer").
         let existing = raw_id
             .as_deref()
             .and_then(|id| self.resolve_id(id))
             .or_else(|| str_arg(args, &["title"]).and_then(|t| self.resolve_id(t)))
+            .or_else(|| raw_id.as_deref().filter(|_| !patch.contains_key("type")).and_then(|id| self.of_kind(id)))
             .and_then(|id| self.widget(&id));
         let id = existing
             .as_ref()
@@ -912,6 +1191,10 @@ impl WidgetEngine {
             }
         }
         obj.insert("id".into(), Value::String(id.clone()));
+        // "Add milk to the list" with no list yet starts one.
+        if let Some(kind) = patch.get("default_type").filter(|_| !obj.contains_key("type")) {
+            obj.insert("type".into(), kind.clone());
+        }
         if !obj.contains_key("type") {
             return Err(
                 "A new widget needs a 'type': MetricGauge, ProgressBar, LiveLineChart, Sparkline, CountdownOrStopwatch, KeyValueList, DataTable, MarkdownNoteCard, Checklist, QuickActionButtons or LiveCommandOutput."
@@ -919,6 +1202,12 @@ impl WidgetEngine {
             );
         }
         let mut spec: DynamicWidgetSpec = serde_json::from_value(base).map_err(|e| format!("Invalid widget spec: {e}"))?;
+        // (Saying "done" of an item that is not there would be saying nothing happened.)
+        if let WidgetKind::Checklist { items } = &spec.kind {
+            if let Some(missing) = ["check_item", "uncheck_item", "remove_item"].iter().filter_map(|key| patch.get(*key)).find(|v| checklist_item(v, items).is_none()) {
+                return Err(format!("No item {missing} on the checklist."));
+            }
+        }
         apply_operations(&mut spec, &patch);
         let created = existing.is_none();
         let spec = self.upsert(spec)?;
@@ -943,13 +1232,17 @@ impl WidgetEngine {
             }
             return Ok(format!("Removed all {} widgets.", ids.len()));
         }
-        let id = self.resolve_id(target).ok_or_else(|| format!("No widget matches '{target}'."))?;
+        let id = self.resolve_id(target).or_else(|| self.of_kind(target)).ok_or_else(|| format!("No widget matches '{target}'."))?;
         self.remove(&id);
         Ok(format!("Removed widget '{id}'."))
     }
 
     /// `spawn_native_window`.
     pub fn spawn_window(&self, args: &Value) -> Result<String, String> {
+        // "Bring back my windows": what was open last, also in an earlier session.
+        if args.get("restore").is_some_and(|v| !v.is_null() && *v != json!(false)) {
+            return self.restore_recent();
+        }
         // "A window with my PC stats": the live view decides the id, title and size, so asking
         // again brings the same window back instead of stacking copies.
         let live = live_kinds(args.get("live").or_else(|| args.get("content")).or_else(|| args.get("shows")));
@@ -1001,6 +1294,7 @@ impl WidgetEngine {
             revision: 1,
             actual: None,
             raise: 0,
+            keep_at_start: false,
         };
         if spec.blocks.iter().any(|b| b.kind == BlockKind::DriveSpace) && defaults.is_some() {
             // Tall enough for every drive without scrolling.
@@ -1030,6 +1324,7 @@ impl WidgetEngine {
             if created.is_empty() { String::new() } else { format!("; created widgets {}", created.join(", ")) }
         );
         self.inner.windows.write().unwrap_or_else(|e| e.into_inner()).push(spec);
+        self.recall_window(&id);
         self.bump();
         info!("[WINDOW] {summary}");
         Ok(summary)
@@ -1056,12 +1351,14 @@ impl WidgetEngine {
             if spec.always_on_top { ", always on top" } else { "" },
             if live.is_empty() { String::new() } else { format!(", live {}", live.join(" + ")) }
         );
+        let id = spec.id.clone();
         {
             let mut list = self.inner.windows.write().unwrap_or_else(|e| e.into_inner());
             if let Some(w) = list.iter_mut().find(|w| w.id == spec.id) {
                 *w = spec;
             }
         }
+        self.recall_window(&id);
         self.bump();
         Ok(summary)
     }
@@ -1072,14 +1369,21 @@ impl WidgetEngine {
         if list.is_empty() {
             return Err("No Jarvis windows are open.".into());
         }
-        let closed: Vec<String> = if raw == "all" {
-            list.drain(..).map(|w| w.id).collect()
+        let leaving: Vec<NativeWindowSpec> = if raw == "all" {
+            list.drain(..).collect()
         } else {
             let id = find_window_in(&list, raw).map(|w| w.id).ok_or_else(|| format!("No Jarvis window matches '{raw}'."))?;
+            let found: Vec<NativeWindowSpec> = list.iter().filter(|w| w.id == id).cloned().collect();
             list.retain(|w| w.id != id);
-            vec![id]
+            found
         };
         drop(list);
+        // As they stood, with the widgets that lived in them: "bring back my windows" reopens
+        // them (the self-tests' own windows are no part of what Sir had open).
+        for window in leaving.iter().filter(|w| !w.id.starts_with("selftest_") && !w.id.starts_with("exhaustive_")) {
+            self.recall("window", &window.id, &self.recalled_window(window), false);
+        }
+        let closed: Vec<String> = leaving.into_iter().map(|w| w.id).collect();
         // Widgets that only lived in the closed windows go with them.
         let referenced: HashSet<String> = self.windows().into_iter().flat_map(|w| w.widgets).collect();
         for w in self.widgets().into_iter().filter(|w| w.dock == Dock::Window && !referenced.contains(&w.id)) {
@@ -1583,6 +1887,18 @@ pub fn timer_op(kind: &mut WidgetKind, op: &str) {
     }
 }
 
+/// The checklist item `v` names: by its place, its text, or a word of it.
+fn checklist_item(v: &Value, items: &[ChecklistItem]) -> Option<usize> {
+    match v {
+        Value::Number(n) => n.as_u64().map(|i| i as usize).filter(|i| *i < items.len()),
+        Value::String(s) => {
+            let s = s.to_lowercase();
+            items.iter().position(|i| i.text.to_lowercase() == s).or_else(|| items.iter().position(|i| i.text.to_lowercase().contains(&s)))
+        }
+        _ => None,
+    }
+}
+
 fn apply_operations(spec: &mut DynamicWidgetSpec, patch: &Map<String, Value>) {
     if let Some(v) = patch.get("push_value").and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok()))) {
         match &mut spec.kind {
@@ -1610,22 +1926,12 @@ fn apply_operations(spec: &mut DynamicWidgetSpec, patch: &Map<String, Value>) {
         }
     }
     if let WidgetKind::Checklist { items } = &mut spec.kind {
-        let pick = |v: &Value, items: &Vec<ChecklistItem>| -> Option<usize> {
-            match v {
-                Value::Number(n) => n.as_u64().map(|i| i as usize).filter(|i| *i < items.len()),
-                Value::String(s) => {
-                    let s = s.to_lowercase();
-                    items.iter().position(|i| i.text.to_lowercase() == s).or_else(|| items.iter().position(|i| i.text.to_lowercase().contains(&s)))
-                }
-                _ => None,
-            }
-        };
         for (key, done) in [("check_item", true), ("uncheck_item", false)] {
-            if let Some(i) = patch.get(key).and_then(|v| pick(v, items)) {
+            if let Some(i) = patch.get(key).and_then(|v| checklist_item(v, items)) {
                 items[i].done = done;
             }
         }
-        if let Some(i) = patch.get("remove_item").and_then(|v| pick(v, items)) {
+        if let Some(i) = patch.get("remove_item").and_then(|v| checklist_item(v, items)) {
             items.remove(i);
         }
     }
@@ -1673,7 +1979,7 @@ pub fn tool_definitions() -> Vec<Value> {
     vec![
         json!({"type": "function", "function": {
             "name": "create_or_update_widget",
-            "description": "Create or change a live widget in your HUD's widgets panel (it persists). Types: MetricGauge/ProgressBar (value, min, max, unit; or source cpu|ram|gpu|gpu_temp|vram|disk:C for live data), LiveLineChart/Sparkline (series or a live source), CountdownOrStopwatch (mode countdown|stopwatch, duration_secs; alerts Sir when done), KeyValueList (items [{key,value}]), DataTable (columns, rows), MarkdownNoteCard (markdown), Checklist (items [{text,done}]), QuickActionButtons (buttons [{label, action: 'jarvis: <command>' | 'shell: <cmd>' | 'app: <name>' | 'url: <url>'}]), LiveCommandOutput (command, interval_secs). To update, pass the same id with only the fields to change, or push_value, add_items, check_item, start/pause/reset.",
+            "description": "Create or change a live widget in your HUD's widgets panel (it persists). Types: MetricGauge/ProgressBar (value, min, max, unit; or source cpu|ram|gpu|gpu_temp|vram|disk:C for live data), LiveLineChart/Sparkline (series or a live source), CountdownOrStopwatch (mode countdown|stopwatch, duration_secs; alerts Sir when done), KeyValueList (items [{key,value}]), DataTable (columns, rows), MarkdownNoteCard (markdown), Checklist (items [{text,done}]), QuickActionButtons (buttons [{label, action: 'jarvis: <command>' | 'shell: <cmd>' | 'app: <name>' | 'url: <url>'}]), LiveCommandOutput (command, interval_secs). To update, pass the same id with only the fields to change, or push_value, add_items, check_item, start/pause/reset. You start every session with an empty panel: \"open that widget again next time you start\" → id (or \"last\") with keep_at_start true and nothing else.",
             "parameters": {"type": "object", "properties": {
                 "id": {"type": "string", "description": "snake_case id; reuse it to update"},
                 "type": {"type": "string", "enum": ["MetricGauge", "ProgressBar", "LiveLineChart", "Sparkline", "CountdownOrStopwatch", "KeyValueList", "DataTable", "MarkdownNoteCard", "Checklist", "QuickActionButtons", "LiveCommandOutput"]},
@@ -1690,7 +1996,8 @@ pub fn tool_definitions() -> Vec<Value> {
                 "buttons": {"type": "array", "items": {"type": "object"}},
                 "command": {"type": "string"}, "interval_secs": {"type": "integer"},
                 "push_value": {"type": "number"}, "add_items": {"type": "array", "items": {"type": "object"}},
-                "check_item": {"type": "string"}, "accent": {"type": "string"}
+                "check_item": {"type": "string"}, "accent": {"type": "string"},
+                "keep_at_start": {"type": "boolean", "description": "true: this widget is on the panel again at the next start; false: no longer"}
             }, "required": ["title"]}
         }}),
         json!({"type": "function", "function": {
@@ -1700,8 +2007,9 @@ pub fn tool_definitions() -> Vec<Value> {
         }}),
         json!({"type": "function", "function": {
             "name": "spawn_native_window",
-            "description": "Open a real native J.A.R.V.I.S. window. ALWAYS call it when Sir asks for a (new/second/separate) window — never just say you did. live = data refreshed every second: pc_stats (CPU per core, RAM, swap, GPU load/temperature/VRAM), drive_space (every drive's free and used space), processes (top CPU/memory programs), network (traffic). Or text, markdown, code and/or widgets. Optional size, monitor (1, 2, left, right, primary), always-on-top.",
+            "description": "Open a real native J.A.R.V.I.S. window. ALWAYS call it when Sir asks for a (new/second/separate) window — never just say you did. live = data refreshed every second: pc_stats (CPU per core, RAM, swap, GPU load/temperature/VRAM), drive_space (every drive's free and used space), processes (top CPU/memory programs), network (traffic). Or text, markdown, code and/or widgets. Optional size, monitor (1, 2, left, right, primary), always-on-top. \"Bring back my windows\" / \"reopen what I had open\" (also after a restart) → restore \"recent\" and nothing else.",
             "parameters": {"type": "object", "properties": {
+                "restore": {"type": "string", "enum": ["recent"], "description": "Reopen every window and widget that was open last"},
                 "live": {"type": "string", "enum": ["pc_stats", "drive_space", "processes", "network"], "description": "Live data view"},
                 "id": {"type": "string"}, "title": {"type": "string"},
                 "width": {"type": "number"}, "height": {"type": "number"},
@@ -1750,6 +2058,93 @@ pub fn tool_definitions() -> Vec<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// "Check off milk", "the timer": Sir names a kind, not an id. What is not there is said,
+    /// and never made.
+    #[test]
+    fn a_kind_stands_for_its_widget_and_a_missing_item_is_said() {
+        let path = std::env::temp_dir().join(format!("jarvis_widget_kinds_{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        {
+            let e = WidgetEngine::open(&path).unwrap();
+            e.create_or_update(&json!({"type": "Checklist", "title": "Shopping list", "add_items": [{"text": "milk"}]})).unwrap();
+            // "Add eggs to the list" finds the list he has.
+            e.create_or_update(&json!({"id": "checklist", "default_type": "Checklist", "add_items": [{"text": "eggs"}]})).unwrap();
+            assert_eq!(e.widgets().len(), 1);
+            e.create_or_update(&json!({"id": "checklist", "check_item": "milk"})).unwrap();
+            assert_eq!(e.create_or_update(&json!({"id": "checklist", "check_item": "bread"})), Err("No item \"bread\" on the checklist.".to_string()));
+            assert_eq!(e.widgets().len(), 1, "a missing item makes nothing new");
+            assert!(e.keep_at_start("checklist", true).is_ok(), "the kind names it here too");
+            e.remove_tool(&json!({"id": "list"})).unwrap();
+            assert!(e.widgets().is_empty());
+            // No list yet: the first item starts one.
+            e.create_or_update(&json!({"id": "checklist", "default_type": "Checklist", "add_items": [{"text": "tea"}]})).unwrap();
+            assert!(matches!(e.widgets()[0].kind, WidgetKind::Checklist { .. }));
+            // A kind he has none of stays an error.
+            assert!(e.remove_tool(&json!({"id": "stopwatch"})).is_err());
+        }
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Jarvis starts with an empty panel. What Sir had open comes back when he asks, also a
+    /// session later; a widget or a window he asked to keep is there from the start; a
+    /// self-test's run changes none of it.
+    #[test]
+    fn a_session_starts_clean_and_what_was_open_comes_back_on_request() {
+        let path = std::env::temp_dir().join(format!("jarvis_recent_views_{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        {
+            let e = WidgetEngine::open(&path).unwrap();
+            assert!(e.widgets().is_empty() && e.windows().is_empty());
+            e.create_or_update(&json!({"type": "gauge", "title": "CPU load", "source": "cpu"})).unwrap();
+            e.create_or_update(&json!({"type": "MarkdownNoteCard", "title": "Notes", "markdown": "Buy milk."})).unwrap();
+            e.create_or_update(&json!({"type": "CountdownOrStopwatch", "title": "Tea", "mode": "countdown", "duration_secs": 60})).unwrap();
+            e.spawn_window(&json!({"live": "pc_stats"})).unwrap();
+            e.spawn_window(&json!({"id": "plan", "title": "The plan", "markdown": "Step one."})).unwrap();
+            assert_eq!(e.create_or_update(&json!({"id": "cpu_load", "keep_at_start": true})).unwrap(), "Widget 'CPU load' opens again at the next start.");
+            // Closed in this session, it comes back at once; then nothing is closed any more.
+            e.close_window("plan").unwrap();
+            assert_eq!(e.restore_recent().unwrap(), "Brought back one view: The plan.");
+            assert_eq!(e.windows().len(), 2);
+            assert!(e.restore_recent().unwrap().starts_with("Nothing to bring back"));
+            assert!(e.keep_at_start("the moon", true).is_err());
+        }
+        {
+            // The next session: the kept widget alone; the rest (the stale timer aside) on request.
+            let e = WidgetEngine::open(&path).unwrap();
+            assert_eq!(e.widgets().iter().map(|w| w.id.as_str()).collect::<Vec<_>>(), vec!["cpu_load"]);
+            assert!(e.windows().is_empty());
+            let back = e.spawn_window(&json!({"restore": "recent"})).unwrap();
+            assert!(back.starts_with("Brought back 3 views: ") && back.contains("Notes") && back.contains("The plan"), "{back}");
+            assert_eq!(e.windows().len(), 2);
+            assert!(e.widget("notes").is_some() && e.widget("tea").is_none());
+            assert!(e.windows().iter().any(|w| w.id == "plan" && w.blocks.iter().any(|b| b.body.contains("Step one"))), "a window comes back with its content");
+            // A window is told to stay, the widget no longer.
+            assert!(e.keep_at_start("window", true).unwrap().ends_with("opens again at the next start."));
+            assert_eq!(e.create_or_update(&json!({"id": "last", "keep_at_start": false})).unwrap(), "Widget 'Notes' no longer opens at the next start.");
+            e.create_or_update(&json!({"id": "cpu_load", "keep_at_start": false})).unwrap();
+        }
+        {
+            let e = WidgetEngine::open(&path).unwrap();
+            assert!(e.widgets().is_empty());
+            assert_eq!(e.windows().len(), 1, "the window that was kept");
+        }
+        {
+            // A self-test (or a scripted one-off) in between records nothing.
+            let e = WidgetEngine::open_untouched(&path).unwrap();
+            assert_eq!(e.windows().len(), 1);
+            e.spawn_window(&json!({"id": "probe", "title": "Probe", "markdown": "x"})).unwrap();
+            e.close_window("probe").unwrap();
+            e.create_or_update(&json!({"type": "gauge", "title": "Probe gauge", "value": 1})).unwrap();
+            e.remove("probe_gauge");
+        }
+        {
+            let e = WidgetEngine::open(&path).unwrap();
+            let back = e.restore_recent().unwrap();
+            assert!(!back.contains("Probe") && back.contains("Notes"), "{back}");
+        }
+        let _ = std::fs::remove_file(&path);
+    }
 
     #[test]
     fn creates_merges_and_operates_on_widgets() {

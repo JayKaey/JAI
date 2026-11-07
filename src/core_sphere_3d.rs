@@ -371,6 +371,11 @@ impl CoreSphereView {
         self.zoom_target = zoom.clamp(MIN_ZOOM, MAX_ZOOM);
     }
 
+    /// Where the sphere faces: (yaw, pitch) in radians.
+    pub fn orientation(&self) -> (f32, f32) {
+        (self.yaw, self.pitch)
+    }
+
     pub fn apply(&mut self, cmd: CoreCommand) {
         match cmd {
             CoreCommand::Zoom(z) => self.set_zoom(z),

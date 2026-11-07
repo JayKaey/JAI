@@ -403,7 +403,9 @@ pub fn show(ctx: &egui::Context, style: CardStyle, dt: f32) -> Vec<PopupAction> 
     if m.is_empty() {
         return actions;
     }
-    let screen = ctx.screen_rect();
+    // (The HUD's home screen: on a board across several monitors the window's own bottom
+    // right corner is on none of them.)
+    let screen = crate::gui::home_screen(ctx);
     let width = 340.0_f32.min(screen.width() - 32.0).max(180.0);
     let mut bottom = screen.bottom() - 18.0;
     let mut dismiss = Vec::new();

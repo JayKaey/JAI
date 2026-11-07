@@ -431,12 +431,15 @@ impl Watch {
     }
 }
 
-/// Shows a card; says its line (as an alert: when Jarvis is free, in Sir's reply mode) or, for
-/// a silent one, leaves a notice.
+/// Shows a card; says its line (as an alert, with the alert's two pips: when Jarvis is free, in
+/// Sir's reply mode) or, for a silent one, leaves a notice.
 fn present(app: &crate::app::Jarvis, card: Card) {
     show(&card);
     match &card.spoken {
-        Some(line) => app.raise_alert(line.clone()),
+        Some(line) => {
+            crate::tts::play_cue(crate::jarvis_voice_dsp::Earcon::Alert);
+            app.raise_alert(line.clone());
+        }
         None => app.notice(format!("{} // {}", card.title, card.body.lines().next().unwrap_or(""))),
     }
 }

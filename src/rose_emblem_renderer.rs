@@ -1071,16 +1071,26 @@ impl RoseEmblem {
         // The dial's degree numbers and the halo's telemetry label (big enough to read only).
         if unit > 0.7 && sf.spread > 0.6 {
             let font = FontId::monospace((5.0 * unit).clamp(6.0, 9.0));
-            let spin = self.stack_spin[4];
-            for (k, label) in ["180", "200", "220"].iter().enumerate() {
-                let (p, d) = sf.point(STACK_AXIAL[4], STACK_RADII[4] * 0.8, spin + 0.12 + k as f32 * 0.14);
-                painter.text(p, Align2::CENTER_CENTER, *label, font.clone(), ice().gamma_multiply(0.55 * alpha * depth_fog(d, fog_radius)));
-            }
             // The label glides with the orbiting arc's midpoint, on its outer side.
             let (main, span, _, _) = halo_arcs(self.clock);
             let (p, _) = sf.point(STACK_AXIAL[5], STACK_RADII[5] * 1.13, main + span * 0.5);
             let align = if p.x < sf.ring_centre(5).0.x { Align2::RIGHT_CENTER } else { Align2::LEFT_CENTER };
-            painter.text(p, align, "TR 2003 // 3500", font, Color32::from_rgb(0xFF, 0x9A, 0xB4).gamma_multiply(0.8 * alpha));
+            let colour = Color32::from_rgb(0xFF, 0x9A, 0xB4).gamma_multiply(0.8 * alpha);
+            let telemetry = painter.layout_no_wrap("TR 2003 // 3500".to_string(), font.clone(), colour);
+            let telemetry_at = align.anchor_size(p, telemetry.size());
+            // The dial's numbers turn under it: one that would cross the label is left out until
+            // it has passed (2026-11-07 verifier: "180" drawn over "TR 2003 // 3500").
+            let spin = self.stack_spin[4];
+            for (k, label) in ["180", "200", "220"].iter().enumerate() {
+                let (q, d) = sf.point(STACK_AXIAL[4], STACK_RADII[4] * 0.8, spin + 0.12 + k as f32 * 0.14);
+                let ink = ice().gamma_multiply(0.55 * alpha * depth_fog(d, fog_radius));
+                let number = painter.layout_no_wrap(label.to_string(), font.clone(), ink);
+                let at = Align2::CENTER_CENTER.anchor_size(q, number.size());
+                if !at.expand(2.0).intersects(telemetry_at) {
+                    painter.galley(at.min, number, ink);
+                }
+            }
+            painter.galley(telemetry_at.min, telemetry, colour);
         }
     }
 }

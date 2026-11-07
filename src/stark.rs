@@ -255,6 +255,8 @@ pub async fn run_tool(tools: &ToolContext, name: &str, args: &Value) -> Result<S
         n if crate::location_engine::is_tool(n) => crate::location_engine::run_tool(tools, n, args).await,
         n if crate::commute_advisor::is_tool(n) => crate::commute_advisor::run_tool(tools, args).await,
         n if crate::integration_registry::is_tool(n) => crate::integration_registry::run_tool(tools).await,
+        // "How do I give you one address that never changes": the setup guide, no tunnel work.
+        n if crate::satellite::is_tool(n) && args.get("topic").and_then(Value::as_str) == Some("permanent_address") => crate::satellite::permanent_address_tool(tools),
         n if crate::satellite::is_tool(n) => crate::satellite::run_tool(tools).await,
         n if crate::features::is_tool(n) => crate::features::run_tool(tools, n, args).await,
         n if crate::simulation_lab::is_tool(n) => {

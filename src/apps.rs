@@ -816,6 +816,53 @@ fn proc_stem(name: &std::ffi::OsStr) -> String {
     name.to_string_lossy().to_lowercase().trim_end_matches(".exe").to_string()
 }
 
+/// The process names a program goes by: its spec's, or what it was called and what is installed
+/// under that name.
+async fn process_names(query: &str) -> Vec<String> {
+    let mut wanted: Vec<String> = find_spec(query).map(|s| s.processes.iter().map(|p| p.to_string()).collect()).unwrap_or_default();
+    if wanted.is_empty() {
+        wanted.push(query.replace(' ', ""));
+        wanted.push(query.replace(' ', "-"));
+        // "Close Visual Studio Code" → the installed app's executable ("code").
+        let q = query.to_string();
+        if let Some(entry) = tokio::task::spawn_blocking(move || crate::appindex::lookup(&q)).await.ok().flatten() {
+            if entry.target.extension().is_some_and(|e| e.eq_ignore_ascii_case("exe")) || cfg!(not(windows)) {
+                if let Some(stem) = entry.target.file_stem().map(|s| s.to_string_lossy().to_lowercase()) {
+                    if !wanted.contains(&stem) {
+                        wanted.push(stem);
+                    }
+                }
+            }
+        }
+    }
+    wanted
+}
+
+/// "Is Firefox open?": a process of that name, whatever its windows do. Jarvis' own tree (his
+/// runtime, his tunnels) does not count.
+pub async fn is_running(name: &str) -> bool {
+    let query = normalize(name);
+    if query.is_empty() {
+        return false;
+    }
+    let mut wanted = process_names(&query).await;
+    // (Minecraft runs as Java, as the mixer and the screen time know it too.)
+    if query == "minecraft" {
+        wanted.push("javaw".to_string());
+    }
+    tokio::task::spawn_blocking(move || {
+        let mut sys = System::new();
+        sys.refresh_processes_specifics(ProcessesToUpdate::All, ProcessRefreshKind::new());
+        let own = own_process_tree(&sys);
+        sys.processes().iter().filter(|(pid, _)| !own.contains(pid)).any(|(_, process)| {
+            let stem = proc_stem(process.name());
+            wanted.iter().any(|w| stem == *w || (w.len() >= 4 && stem.starts_with(w.as_str())))
+        })
+    })
+    .await
+    .unwrap_or(false)
+}
+
 /// Closes an application: graceful first, then (if `force`) terminate survivors.
 pub async fn close(name: &str, force: bool) -> Result<String, String> {
     let query = normalize(name);
@@ -842,24 +889,7 @@ pub async fn close(name: &str, force: bool) -> Result<String, String> {
         };
     }
 
-    let mut wanted: Vec<String> = spec
-        .map(|s| s.processes.iter().map(|p| p.to_string()).collect())
-        .unwrap_or_default();
-    if wanted.is_empty() {
-        wanted.push(query.replace(' ', ""));
-        wanted.push(query.replace(' ', "-"));
-        // "Close Visual Studio Code" → the installed app's executable ("code").
-        let q = query.clone();
-        if let Some(entry) = tokio::task::spawn_blocking(move || crate::appindex::lookup(&q)).await.ok().flatten() {
-            if entry.target.extension().is_some_and(|e| e.eq_ignore_ascii_case("exe")) || cfg!(not(windows)) {
-                if let Some(stem) = entry.target.file_stem().map(|s| s.to_string_lossy().to_lowercase()) {
-                    if !wanted.contains(&stem) {
-                        wanted.push(stem);
-                    }
-                }
-            }
-        }
-    }
+    let wanted = process_names(&query).await;
     if wanted.iter().any(|w| PROTECTED.contains(&w.as_str())) {
         return Err(format!("{display} is a protected system process; I will not terminate it."));
     }

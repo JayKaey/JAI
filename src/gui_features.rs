@@ -42,6 +42,16 @@ pub(super) const SAFE_PROBES: &[(&str, &str)] = &[
     ("discord_call", r#"{"action": "status"}"#),
     ("get_remote_pc_status", "{}"),
     ("recall_memories", r#"{"query": "Sir"}"#),
+    // The workbench's reads.
+    ("lookup_formula", r#"{"query": "kinetic energy"}"#),
+    ("chemistry_helper", r#"{"action": "molar_mass", "formula": "H2SO4"}"#),
+    ("show_app_shortcuts", r#"{"app": "Windows"}"#),
+    ("screen_time_report", r#"{"action": "today"}"#),
+    ("suggest_routine", r#"{"action": "now"}"#),
+    ("thermal_advisor", r#"{"action": "status"}"#),
+    ("clipboard_history", r#"{"action": "list"}"#),
+    ("manage_flashcards", r#"{"action": "due"}"#),
+    ("suggest_commands", r#"{"prefix": "open"}"#),
 ];
 
 /// Values of a required enum that only read ("action": "status" …), most telling first.
@@ -73,6 +83,7 @@ const CONTROLS: &[(&str, Control)] = &[
     ("configure_interface", Control::Open("theme_studio")),
     ("customize_hud_and_windows", Control::Open("theme_studio")),
     ("control_gui_aspect", Control::Open("theme_studio")),
+    ("control_audio_mixer", Control::Open("mixer")),
     ("media_and_volume_control", Control::Run("control_audio_mixer", r#"{"action": "list"}"#)),
 ];
 
@@ -86,7 +97,7 @@ enum Control {
 
 /// What `[ TRY ]` does for a feature.
 #[derive(Debug, Clone, PartialEq)]
-pub(super) enum TryPlan {
+pub(crate) enum TryPlan {
     /// Runs `tool` with `args` and shows the result as a board block.
     Run { tool: String, args: Value },
     /// Opens a HUD control.
@@ -126,6 +137,10 @@ pub(super) fn is_open() -> bool {
 
 pub(super) fn toggle() {
     OPEN.fetch_xor(true, Ordering::AcqRel);
+}
+
+pub(super) fn set_open(open: bool) {
+    OPEN.store(open, Ordering::Release);
 }
 
 fn probe_args(name: &str) -> Option<Value> {

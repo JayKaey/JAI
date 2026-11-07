@@ -353,13 +353,51 @@ pub fn flatten_f0(input: &[f32], rate: u32, amount: f32) -> Vec<f32> {
 /// the spectral envelope stay — the vowels keep their formants, which a resampling shift drags
 /// along with the pitch. Unvoiced sound passes through.
 pub fn reshape_f0(input: &[f32], rate: u32, amount: f32, ratio: f32) -> Vec<f32> {
-    let n = input.len();
     let ratio = ratio.clamp(0.5, 2.0);
-    if (amount <= 0.0 && (ratio - 1.0).abs() < 1e-3) || n < rate as usize / 5 {
+    if amount <= 0.0 && (ratio - 1.0).abs() < 1e-3 {
+        return input.to_vec();
+    }
+    reshape_with(input, rate, amount, |_| ratio)
+}
+
+/// How much of the distance between a Jarvis clause's median F0 and the clip's the lock closes
+/// (1 = every clause exactly on the clip's median; a little less keeps a trace of the
+/// sentence's own melody between clauses).
+pub const F0_LOCK: f32 = 0.9;
+/// The lock never moves a clause further than this many semitones: a clause whose pitch was
+/// tracked wrongly is not dragged an octave away.
+pub const F0_LOCK_MAX_ST: f32 = 2.5;
+
+/// The pitch step that pulls a clause whose median F0 is `clause_hz` towards `target_hz`.
+pub fn lock_step(clause_hz: f32, target_hz: f32) -> f32 {
+    if clause_hz <= 0.0 || target_hz <= 0.0 {
+        return 1.0;
+    }
+    2f32.powf((semitones(target_hz, clause_hz) * F0_LOCK).clamp(-F0_LOCK_MAX_ST, F0_LOCK_MAX_ST) / 12.0)
+}
+
+/// Layer C for the Jarvis voice: the flattening, and with `target_hz` (the clip's median F0 as
+/// this stage must produce it) the F0 lock — the clause's whole contour moved so that its
+/// median sits on the clip's. One pitch track serves both.
+pub fn lock_f0(input: &[f32], rate: u32, amount: f32, target_hz: Option<f32>) -> Vec<f32> {
+    match target_hz {
+        Some(target) => reshape_with(input, rate, amount, |clause| lock_step(clause.median_hz, target)),
+        None => flatten_f0(input, rate, amount),
+    }
+}
+
+/// `reshape_f0` with the pitch step chosen from the clause's own F0 statistics.
+pub fn reshape_with(input: &[f32], rate: u32, amount: f32, step: impl Fn(&F0Stats) -> f32) -> Vec<f32> {
+    let n = input.len();
+    if n < rate as usize / 5 {
         return input.to_vec();
     }
     let track = pitch_track(input, rate);
     let Some(stats) = f0_stats(&track) else { return input.to_vec() };
+    let ratio = step(&stats).clamp(0.5, 2.0);
+    if amount <= 0.0 && (ratio - 1.0).abs() < 1e-3 {
+        return input.to_vec();
+    }
     let hop = track.hop.max(1);
     let f0_at = |i: usize| -> f32 {
         let k = (i / hop).min(track.f0.len().saturating_sub(1));
@@ -599,11 +637,21 @@ pub struct SpectralTransfer {
     target_rms_db: f32,
     average: Option<[f32; MEL_BANDS]>,
     speech_secs: f32,
+    /// How much of the way to the clip's envelope a clause is moved, and by how many dB a band
+    /// at most.
+    alpha: f32,
+    max_db: f32,
 }
 
 impl SpectralTransfer {
     pub fn new(profile: &ReferenceProfile) -> Self {
-        Self { reference: shape(&profile.envelope_db), target_rms_db: profile.rms_db.max(MIN_TARGET_RMS_DB), average: None, speech_secs: 0.0 }
+        Self::with(profile, TRANSFER_ALPHA, MAX_TRANSFER_DB)
+    }
+
+    /// A transfer that goes `alpha` of the way to the clip's envelope, `max_db` a band at most
+    /// (Ultron's clip is far darker than any synthesis: his transfer goes further than Jarvis').
+    pub fn with(profile: &ReferenceProfile, alpha: f32, max_db: f32) -> Self {
+        Self { reference: shape(&profile.envelope_db), target_rms_db: profile.rms_db.max(MIN_TARGET_RMS_DB), average: None, speech_secs: 0.0, alpha: alpha.clamp(0.0, 1.0), max_db: max_db.max(0.0) }
     }
 
     #[cfg(test)]
@@ -622,7 +670,7 @@ impl SpectralTransfer {
         self.average = Some(average);
         self.speech_secs += speech_secs;
         let syn: [f32; MEL_BANDS] = std::array::from_fn(|b| CLAUSE_WEIGHT * clause[b] + (1.0 - CLAUSE_WEIGHT) * average[b]);
-        let raw: [f32; MEL_BANDS] = std::array::from_fn(|b| (TRANSFER_ALPHA * (self.reference[b] - syn[b])).clamp(-MAX_TRANSFER_DB, MAX_TRANSFER_DB));
+        let raw: [f32; MEL_BANDS] = std::array::from_fn(|b| (self.alpha * (self.reference[b] - syn[b])).clamp(-self.max_db, self.max_db));
         // A 1-2-3-2-1 smoothing across neighbouring bands keeps the filter free of ripple (about
         // as wide in Hz as the 1-2-1 over the 64 bands the transfer began with).
         const KERNEL: [f32; 5] = [1.0, 2.0, 3.0, 2.0, 1.0];
@@ -785,11 +833,12 @@ pub fn candidate_blends() -> Vec<String> {
     out
 }
 
-/// Synthesises `text` with Kokoro and runs the chain up to (not including) the transfer.
-pub(crate) fn synth_dry(kokoro: &mut crate::tts::Kokoro, phonemizer: &crate::phonemizer::Phonemizer, text: &str, voice: &str, speed: f32) -> Result<Vec<f32>, String> {
+/// Synthesises `text` with Kokoro and runs Jarvis' chain up to (not including) the transfer.
+/// `lock_to_hz`: the clip's median F0 the clause is locked to (None: no lock).
+pub(crate) fn synth_dry(kokoro: &mut crate::tts::Kokoro, phonemizer: &crate::phonemizer::Phonemizer, text: &str, voice: &str, speed: f32, lock_to_hz: Option<f32>) -> Result<Vec<f32>, String> {
     let ipa = phonemizer.phonemize(&crate::tts::normalize_for_speech(text));
-    let audio = kokoro.synthesize(&ipa, voice, crate::jarvis_voice_dsp::synthesis_speed(speed))?;
-    Ok(crate::jarvis_voice_dsp::master_dry(&audio, crate::tts::KOKORO_RATE))
+    let audio = kokoro.synthesize(&ipa, voice, crate::jarvis_voice_dsp::synthesis_speed_as(speed, false))?;
+    Ok(crate::jarvis_voice_dsp::master_dry_to(&audio, crate::tts::KOKORO_RATE, lock_to_hz))
 }
 
 /// What another setting must be closer by before it replaces the calibrated one: the voice Sir
@@ -802,7 +851,7 @@ pub const KEEP_MARGIN: f32 = 0.15;
 /// on the clip's sentence and the mean distance over both.
 fn fit(kokoro: &mut crate::tts::Kokoro, phonemizer: &crate::phonemizer::Phonemizer, reference: &ReferenceProfile, voice: &str, speed: f32) -> Result<(Match, f32), String> {
     let mut measure = |sentence: &str| -> Result<Match, String> {
-        let audio = synth_dry(kokoro, phonemizer, sentence, voice, speed)?;
+        let audio = synth_dry(kokoro, phonemizer, sentence, voice, speed, Some(reference.f0.median_hz))?;
         Match::measure(&audio, crate::jarvis_voice_dsp::MASTER_RATE, reference).ok_or_else(|| "the synthesised sentence holds no speech".to_string())
     };
     let on_clip = measure(REFERENCE_TRANSCRIPT)?;
@@ -912,16 +961,51 @@ pub fn verify_with(cfg: &crate::config::JarvisConfig, clip: &Path, cache: &Path)
     let voice = if cfg.kokoro_voice == crate::tts::JARVIS_VOICE { reference.blend.clone().unwrap_or_else(|| crate::tts::JARVIS_VOICE_BLEND.to_string()) } else { cfg.kokoro_voice.clone() };
     set_f0_flatten(effective_f0_flatten(cfg.voice_f0_flatten, reference.flatten));
     let rate = crate::jarvis_voice_dsp::MASTER_RATE;
-    let mut audio = synth_dry(&mut kokoro, &phonemizer, REFERENCE_TRANSCRIPT, &voice, cfg.kokoro_speed)?;
+    let lock = Some(reference.f0.median_hz);
+    let mut audio = synth_dry(&mut kokoro, &phonemizer, REFERENCE_TRANSCRIPT, &voice, cfg.kokoro_speed, lock)?;
     let dry = Match::measure(&audio, rate, &reference).ok_or("the synthesised sentence holds no speech")?;
     let mut transfer = SpectralTransfer::new(&reference);
     transfer.process(&mut audio, rate);
     let transferred = Match::measure(&audio, rate, &reference).ok_or("the transferred sentence holds no speech")?;
-    let held_out = synth_dry(&mut kokoro, &phonemizer, HELD_OUT_SENTENCE, &voice, cfg.kokoro_speed).ok().and_then(|mut a| {
+    let held_out = synth_dry(&mut kokoro, &phonemizer, HELD_OUT_SENTENCE, &voice, cfg.kokoro_speed, lock).ok().and_then(|mut a| {
         transfer.process(&mut a, rate);
         Match::measure(&a, rate, &reference)
     });
     Ok(Verification { voice, dry, transferred, held_out, reference })
+}
+
+/// The five kinds of sentence a voice is measured on: the clip's own statement, a status
+/// report, a question, a technical line with figures (and the homograph "live", which must be
+/// read "lyve"), and a short alert.
+pub const VOICE_SENTENCES: [(&str, &str); 5] = [
+    ("statement", REFERENCE_TRANSCRIPT),
+    ("report", HELD_OUT_SENTENCE),
+    ("question", "Shall I put the report on the board, Sir, or would you rather hear the short version first?"),
+    ("technical", "Live telemetry shows the reactor at 3.2 gigawatts and 61 degrees, and the interface is live on all three monitors."),
+    ("alert", "Sir, the graphics card has reached its limit. I recommend a pause."),
+];
+
+/// Layer D across sentence types: `VOICE_SENTENCES` in Jarvis' finished voice, as the speaker
+/// gets them (synthesis, F0 lock, mastering, the clip's envelope), each with its kind and the
+/// text as spoken after the pronunciation rules. The transfer is warmed on the clip's own
+/// sentence first, as in a running session. (The exhaustive verifier measures them against
+/// the clip, against Ultron's, and plays them to the speech recogniser.)
+pub fn render_sentences(cfg: &crate::config::JarvisConfig) -> Result<Vec<(&'static str, String, Vec<f32>)>, String> {
+    let clip = crate::voice_reference::reference_path().ok_or("no reference clip (assets/jarvis_voice_reference.mp3)")?;
+    let reference = load_profile(&clip, Path::new(PROFILE_PATH))?;
+    let phonemizer = crate::phonemizer::Phonemizer::new(cfg.espeak_path.as_deref());
+    let mut kokoro = crate::tts::Kokoro::load(cfg)?;
+    let voice = if cfg.kokoro_voice == crate::tts::JARVIS_VOICE { reference.blend.clone().unwrap_or_else(|| crate::tts::JARVIS_VOICE_BLEND.to_string()) } else { cfg.kokoro_voice.clone() };
+    set_f0_flatten(effective_f0_flatten(cfg.voice_f0_flatten, reference.flatten));
+    let rate = crate::jarvis_voice_dsp::MASTER_RATE;
+    let mut transfer = SpectralTransfer::new(&reference);
+    let mut out = Vec::with_capacity(VOICE_SENTENCES.len());
+    for (kind, text) in VOICE_SENTENCES {
+        let mut audio = synth_dry(&mut kokoro, &phonemizer, text, &voice, cfg.kokoro_speed, Some(reference.f0.median_hz))?;
+        transfer.process(&mut audio, rate);
+        out.push((kind, crate::tts::normalize_for_speech(text), audio));
+    }
+    Ok(out)
 }
 
 pub fn verify(cfg: &crate::config::JarvisConfig) -> Result<Verification, String> {
@@ -1036,6 +1120,30 @@ mod tests {
         assert!((0.85..1.15).contains(&level), "loudness kept: {level}");
         // Off: bit-exact.
         assert_eq!(flatten_f0(&x, R, 0.0), x);
+    }
+
+    #[test]
+    fn the_f0_lock_puts_a_clause_on_the_clips_median_and_keeps_its_melody() {
+        // A clause a semitone and a half under the clip's 115 Hz, with a gentle melody.
+        let contour = |t: f32| 105.5 * 2f32.powf(0.08 * (TAU * 1.2 * t).sin());
+        let x = vowel(2.0, R, contour);
+        let before = f0_stats(&pitch_track(&x, R)).unwrap();
+        let y = lock_f0(&x, R, 0.0, Some(115.0));
+        assert_eq!(y.len(), x.len(), "same duration");
+        let after = f0_stats(&pitch_track(&y, R)).unwrap();
+        // Nine tenths of the way to the clip: within a fifth of a semitone of it.
+        assert!(semitones(after.median_hz, 115.0).abs() < 0.3, "{before:?} → {after:?}");
+        assert!(semitones(before.median_hz, 115.0) < -1.2, "it started well below: {before:?}");
+        assert!((after.std_st / before.std_st - 1.0).abs() < 0.2, "the melody keeps its width: {:.2} → {:.2} st", before.std_st, after.std_st);
+        // A clause already on the clip's median is left alone, bit for bit.
+        let on_it = vowel(1.0, R, |_| 115.0);
+        let median = f0_stats(&pitch_track(&on_it, R)).unwrap().median_hz;
+        assert_eq!(lock_f0(&on_it, R, 0.0, Some(median)), on_it);
+        // No clip: the flattening alone. A wild measurement is never followed further than 2.5 st.
+        assert_eq!(lock_f0(&x, R, 0.0, None), x);
+        assert!((semitones(lock_step(60.0, 115.0), 1.0) - F0_LOCK_MAX_ST).abs() < 1e-3);
+        assert!((semitones(lock_step(100.0, 115.0), 1.0) - semitones(115.0, 100.0) * F0_LOCK).abs() < 1e-3);
+        assert_eq!((lock_step(0.0, 115.0), lock_step(115.0, 0.0)), (1.0, 1.0));
     }
 
     #[test]

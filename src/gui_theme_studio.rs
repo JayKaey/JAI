@@ -12,6 +12,10 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 /// The block's id on the board.
 const ID: &str = "theme_studio";
+/// The width its colour rows need (label, picker, hex field, HSV read-out).
+const MIN_WIDTH: f32 = 440.0;
+/// The hex field: "#00f0ff" in the monospace face, with room for the cursor.
+const HEX_WIDTH: f32 = 76.0;
 
 static OPEN: AtomicBool = AtomicBool::new(false);
 /// What Sir is designing (from the active theme when the studio opens).
@@ -28,13 +32,25 @@ pub(super) fn open() {
     OPEN.store(true, Ordering::Release);
 }
 
+/// Closes the studio without saving.
+pub(super) fn close() {
+    OPEN.store(false, Ordering::Release);
+}
+
+pub(super) fn is_open() -> bool {
+    OPEN.load(Ordering::Acquire)
+}
+
 /// One colour: its picker (RGB / HSV), its hex code (applied once it parses) and its HSV.
 fn colour_row(ui: &mut Ui, label: &str, rgb: &mut [u8; 3]) {
     ui.label(RichText::new(label).font(strip_font()).color(STRIP_INK));
     egui::color_picker::color_edit_button_srgb(ui, rgb);
     let id = ui.id().with(("theme_hex", label));
     let mut hex = ui.data_mut(|d| d.get_temp::<String>(id)).unwrap_or_else(|| crate::interface::hex(*rgb));
-    let field = ui.add(egui::TextEdit::singleline(&mut hex).desired_width(76.0).font(egui::TextStyle::Monospace));
+    // (Its full width, whatever the grid offers: a grid gives a cell the width its column had in
+    // the frame before, 40 px in the first, and a field that takes what it is offered stayed
+    // 40 px wide for good, with the hex code cut off.)
+    let field = ui.add_sized(egui::vec2(HEX_WIDTH, ui.spacing().interact_size.y), egui::TextEdit::singleline(&mut hex).font(egui::TextStyle::Monospace));
     if field.changed() {
         if let Some(c) = crate::interface::parse_color(hex.trim()).filter(|_| hex.trim().len() >= 7) {
             *rgb = c;
@@ -91,7 +107,14 @@ pub(super) fn show(ctx: &egui::Context, iface: &InterfaceSettings) -> Option<Cus
     }
     lock(&DRAFT).get_or_insert_with(|| CustomTheme::from_palette("Custom", &crate::theme_engine::current(), iface.background_rgb()));
     if !crate::hud_dock::adopt(ID) {
-        let action = super::hud_block_window(ctx, ID, "Theme Studio // create theme", [560.0, 300.0], body);
+        // (Its rows keep their width: in a block the dock made narrower, the studio scrolls
+        // sideways instead of squeezing its hex fields shut.)
+        let action = super::hud_block_window(ctx, ID, "Theme Studio // create theme", [560.0, 300.0], |ui| {
+            egui::ScrollArea::both().auto_shrink([false; 2]).show(ui, |ui| {
+                ui.set_min_width(MIN_WIDTH);
+                body(ui);
+            });
+        });
         if action.close {
             OPEN.store(false, Ordering::Release);
         }
@@ -129,4 +152,32 @@ pub(super) fn show(ctx: &egui::Context, iface: &InterfaceSettings) -> Option<Cus
         });
     });
     lock(&SAVED).take()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::visual_ui_verifier::{self as visual, Stage};
+
+    /// The exhaustive run of 2026-11-06 17:41: every hex code in the studio was cut off after
+    /// its fourth character, in every frame.
+    #[test]
+    fn every_hex_code_in_the_studio_is_shown_whole() {
+        *lock(&DRAFT) = Some(CustomTheme::from_palette("Custom", &crate::theme_engine::current(), [3, 5, 9]));
+        let mut stage = Stage::new(egui::vec2(900.0, 600.0));
+        let frame = stage.frames(4, &mut |ctx| {
+            egui::Window::new("studio").title_bar(false).fixed_pos(egui::pos2(20.0, 20.0)).fixed_size(egui::vec2(560.0, 300.0)).show(ctx, |ui| {
+                egui::ScrollArea::both().auto_shrink([false; 2]).show(ui, |ui| {
+                    ui.set_min_width(MIN_WIDTH);
+                    body(ui);
+                });
+            });
+        });
+        *lock(&DRAFT) = None;
+        assert_eq!(visual::clipped_text(&frame), Vec::<String>::new());
+        assert_eq!(visual::text_over_text(&frame), Vec::<String>::new());
+        let codes = frame.find_text("#");
+        assert_eq!(codes.len(), 4, "four colours, four hex codes: {}", frame.all_text());
+        assert!(codes.iter().all(|r| r.width() > 40.0), "each seven characters wide: {codes:?}");
+    }
 }

@@ -27,8 +27,11 @@
 *.sqlite
 *.sqlite3
 # Logs and test reports (they name the public IP, the location and account results).
+# jarvis.log starts afresh past 10 MB; the old one is kept as jarvis.log.1.
 *.log
+*.log.*
 /live_selftest_report.json
+/exhaustive_report.json
 # The phone page's TLS certificate and private key, and keys of any kind.
 /satellite_cert.*
 /satellite_key.*
@@ -41,8 +44,8 @@
 *.crt
 .env
 .env.*
-# What Jarvis learns about the habits of the person using him.
-/config/suggestion_habits.json
+# What Jarvis learns about the habits of the person using him, and the themes he made.
+/config/
 
 # --- Recordings --------------------------------------------------------------------------
 # The film-voice reference clips are copyrighted inputs the owner supplies himself; the

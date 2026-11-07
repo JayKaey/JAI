@@ -592,6 +592,9 @@ fn load_f32(a: &AtomicU32) -> f32 {
 /// State shared between capture, TTS, the orchestrator and the HUD.
 pub struct AudioControls {
     pub mic_enabled: AtomicBool,
+    /// The self-test's guarantee: the microphone's audio is dropped whatever its switch or the
+    /// push-to-talk key say (the test clicks the `[ MIC ]` chip; the room must not get in).
+    deaf: AtomicBool,
     pub ptt_active: AtomicBool,
     pub wake_word_required: AtomicBool,
     /// IS_SPEAKING: Jarvis audio is being played.
@@ -630,6 +633,7 @@ impl AudioControls {
     pub fn new(cfg: &JarvisConfig) -> Self {
         Self {
             mic_enabled: AtomicBool::new(true),
+            deaf: AtomicBool::new(false),
             ptt_active: AtomicBool::new(false),
             wake_word_required: AtomicBool::new(cfg.wake_word_required),
             is_speaking: AtomicBool::new(false),
@@ -712,6 +716,12 @@ impl AudioControls {
 
     pub fn window_remaining_ms(&self) -> u64 {
         self.window_until.load(Ordering::Acquire).saturating_sub(now_ms())
+    }
+
+    /// From now on nothing the microphone picks up is processed, whatever its switch says (the
+    /// self-test, which clicks that switch).
+    pub fn make_deaf(&self) {
+        self.deaf.store(true, Ordering::Release);
     }
 
     pub fn request_mic(&self, name: Option<String>) {
@@ -1130,7 +1140,7 @@ fn vad_thread(
 
             let rms = band.rms(frame);
             let ptt = controls.ptt_active.load(Ordering::Acquire);
-            if !controls.mic_enabled.load(Ordering::Acquire) && !ptt {
+            if controls.deaf.load(Ordering::Acquire) || (!controls.mic_enabled.load(Ordering::Acquire) && !ptt) {
                 if machine.in_utterance() {
                     machine.reset();
                 }

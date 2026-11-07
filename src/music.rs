@@ -933,10 +933,11 @@ impl MusicEngine {
             "toggle" | "play_pause" => session_control(SessionOp::Toggle, &player).await,
             "next" | "next_track" | "skip" | "next_song" => session_control(SessionOp::Next, &player).await,
             "previous" | "previous_track" | "prev_track" | "back" | "previous_song" => session_control(SessionOp::Previous, &player).await,
+            // The player's own volume: its mixer channel (the master volume when it has none). A
+            // level with a sign is a step: "-50" was once clamped to the level 0 and muted the PC.
             "set_volume" | "volume" => {
-                let level = args.get("level").or_else(|| args.get("volume")).and_then(|v| v.as_i64().or_else(|| v.as_str()?.trim_end_matches('%').parse().ok()));
-                let level = level.ok_or("set_volume needs 'level' (0-100).")?;
-                crate::media::execute(crate::media::MediaAction::SetVolume(level.clamp(0, 100) as u8)).await
+                let level = args.get("level").or_else(|| args.get("volume")).ok_or("set_volume needs 'level' (0-100, or a step such as \"+10\").")?;
+                crate::audio_mixer::player_volume(level).await
             }
             "what_is_playing" | "now_playing" | "current" | "status" => match now_playing().await {
                 Some(np) => Ok(format!("Now playing: {}.", np.describe())),
@@ -1836,7 +1837,7 @@ async fn control_session(app: Option<String>, op: SessionOp) -> Result<Option<No
 pub fn tool_definition() -> Value {
     json!({"type": "function", "function": {
         "name": "control_music",
-        "description": "Sir's music (Spotify / Sonora library, every indexed song on his drives). ALWAYS call it to play, pause or skip — never only say you did. play with playlist_name (\"play my playlist JaysRock\"), song_name for one specific song (\"play Highway to Hell\"; + playlist_name when he says \"in <playlist>\", + artist_name), artist_name or album_name; pick_music when he leaves the choice to you (\"pick some good music\"); stop_all for a bare \"stop\" / \"pause\" (pauses everything that plays, any app); pause (one player), resume, next_track, previous_track, set_volume (level), what_is_playing, list_playlists, save_alias (playlist_name = alias, uri).",
+        "description": "Sir's music (Spotify / Sonora library, every indexed song on his drives). ALWAYS call it to play, pause or skip — never only say you did. play with playlist_name (\"play my playlist JaysRock\"), song_name for one specific song (\"play Highway to Hell\"; + playlist_name when he says \"in <playlist>\", + artist_name), artist_name or album_name; pick_music when he leaves the choice to you (\"pick some good music\"); stop_all for a bare \"stop\" / \"pause\" (pauses everything that plays, any app); pause (one player), resume, next_track, previous_track, set_volume (level 0-100: the MUSIC PLAYER's own volume only; the browser's, Discord's, any other app's and the PC's volume are control_audio_mixer), what_is_playing, list_playlists, save_alias (playlist_name = alias, uri).",
         "parameters": {"type": "object", "properties": {
             "action": {"type": "string", "enum": ["play", "play_from_playlist", "pick_music", "pause", "stop_all", "resume", "next_track", "previous_track", "set_volume", "what_is_playing", "list_playlists", "save_alias", "set_preferred_player", "welcome_home"]},
             "song_name": {"type": "string"},

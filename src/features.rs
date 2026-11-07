@@ -28,6 +28,8 @@ pub struct Features {
     pub airdrop: crate::airdrop_bridge::AirDrop,
     pub scanner: crate::mobile_scanner::Scanner,
     pub media: crate::media_grabber::MediaJobs,
+    /// The workbench: flashcards, screen time, routines, thermals, clipboard history.
+    pub bench: crate::workbench::Workbench,
 }
 
 impl Features {
@@ -46,7 +48,7 @@ impl Features {
             crate::smart_alarm::AlarmClock::in_memory()
         });
         let dir = db.parent().filter(|p| !p.as_os_str().is_empty()).map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
-        Self::with(deals, finance, alarm, crate::file_janitor::Janitor::new(dir.join("jarvis_cleanup")))
+        Self::with(deals, finance, alarm, crate::file_janitor::Janitor::new(dir.join("jarvis_cleanup")), crate::workbench::Workbench::open(db))
     }
 
     pub fn in_memory() -> Self {
@@ -55,11 +57,13 @@ impl Features {
             crate::finance_tracker::Finance::in_memory(),
             crate::smart_alarm::AlarmClock::in_memory(),
             crate::file_janitor::Janitor::new(std::env::temp_dir().join("jarvis_cleanup_test")),
+            crate::workbench::Workbench::in_memory(),
         )
     }
 
-    fn with(deals: crate::deal_sniper::DealSniper, finance: crate::finance_tracker::Finance, alarm: crate::smart_alarm::AlarmClock, janitor: crate::file_janitor::Janitor) -> Self {
+    fn with(deals: crate::deal_sniper::DealSniper, finance: crate::finance_tracker::Finance, alarm: crate::smart_alarm::AlarmClock, janitor: crate::file_janitor::Janitor, bench: crate::workbench::Workbench) -> Self {
         Self {
+            bench,
             replay: crate::instant_replay::Replay::default(),
             exam: crate::exam_coach::ExamCoach::default(),
             deals,
@@ -77,6 +81,7 @@ impl Features {
         self.replay.start(tools.config.clone());
         self.deals.start(tools.clone());
         self.alarm.start(tools.clone());
+        self.bench.start_background(tools);
     }
 
     /// Lines for the live context block.
@@ -95,6 +100,10 @@ impl Features {
             out.push_str(&format!("Price snipers watching: {snipers} (manage_price_sniper)\n"));
         }
         if let Some(line) = self.media.describe() {
+            out.push_str(&line);
+            out.push('\n');
+        }
+        if let Some(line) = self.bench.live_context() {
             out.push_str(&line);
             out.push('\n');
         }
@@ -126,16 +135,16 @@ const TOOL_NODES: &[(&str, &str)] = &[
 ];
 
 pub fn is_tool(name: &str) -> bool {
-    TOOL_NODES.iter().any(|(t, _)| *t == name)
+    TOOL_NODES.iter().any(|(t, _)| *t == name) || crate::workbench::is_tool(name)
 }
 
 /// The tool name as `'static` (routes and fast-path intents need one).
 pub fn static_name(name: &str) -> Option<&'static str> {
-    TOOL_NODES.iter().map(|(t, _)| *t).find(|t| *t == name)
+    TOOL_NODES.iter().map(|(t, _)| *t).find(|t| *t == name).or_else(|| crate::workbench::static_name(name))
 }
 
 pub fn node_of(name: &str) -> Option<&'static str> {
-    TOOL_NODES.iter().find(|(t, _)| *t == name).map(|(_, n)| *n)
+    TOOL_NODES.iter().find(|(t, _)| *t == name).map(|(_, n)| *n).or_else(|| crate::workbench::is_tool(name).then_some("context"))
 }
 
 /// Tools that take a few seconds (Jarvis acknowledges first).
@@ -155,6 +164,12 @@ pub fn is_slow(name: &str) -> bool {
 }
 
 pub fn tool_definitions() -> Vec<Value> {
+    let mut all = field_definitions();
+    all.extend(crate::workbench::tool_definitions());
+    all
+}
+
+fn field_definitions() -> Vec<Value> {
     vec![
         crate::airdrop_bridge::tool_definition(),
         crate::instant_replay::tool_definition(),
@@ -177,6 +192,9 @@ pub fn tool_definitions() -> Vec<Value> {
 }
 
 pub async fn run_tool(tools: &ToolContext, name: &str, args: &Value) -> Result<String, String> {
+    if crate::workbench::is_tool(name) {
+        return crate::workbench::run_tool(tools, name, args).await;
+    }
     let node = node_of(name).unwrap_or("brain");
     tools.stark.pulse(&["brain", node], false);
     let f = &tools.stark.features;
@@ -258,6 +276,11 @@ pub fn route_text(text: &str) -> Option<Route> {
         return None;
     }
     let lead = lower.trim_start_matches("jarvis").trim_start_matches([',', ' ']).trim_start_matches("please ").trim();
+
+    // ---- The workbench first: "quiz me on my flashcards" is the deck, not an oral exam ----
+    if let Some(route) = crate::workbench::route_text(text) {
+        return Some(route);
+    }
 
     // ---- Instant Replay ----
     if has(&lower, &["clip that", "clip this", "clip it", "clipped it", "clipped that", "save that clip", "save the clip", "instant replay", "save a replay", "save the replay", "save the last", "clip the last", "clip das", "speicher das als clip", "nimm das auf"]) {

@@ -48,9 +48,15 @@ fn words(text: &str) -> Vec<String> {
 /// a shared first letter ("cleaner" ≈ "calender" sent "make the interface cleaner" to the
 /// calendar), so a fuzzy hit must also start like the target and differ by at most two edits.
 fn fuzzy_has(ws: &[String], targets: &[&str]) -> bool {
+    // Real words one or two letters from a keyword: "Terminal" is no "Termine" (2026-11-07 it
+    // read his calendar), "then" no "when".
+    const NEVER_FUZZY: &[&str] = &["terminal", "terminals", "terminate", "terminated", "termination", "determine", "then", "than", "thee"];
     ws.iter().any(|w| {
         targets.iter().any(|t| {
             let same_start = w.chars().take(2).eq(t.chars().take(2));
+            if w != t && NEVER_FUZZY.contains(&w.as_str()) {
+                return false;
+            }
             w == t
                 || (w.len() >= 5 && t.len() >= 5 && same_start && strsim::jaro_winkler(w, t) >= 0.9 && strsim::damerau_levenshtein(w, t) <= 2)
                 || (w.len() >= 4 && t.len() == w.len() && strsim::damerau_levenshtein(w, t) <= 1)
@@ -122,7 +128,7 @@ pub fn has_music_language(text: &str) -> bool {
 
 const CREATE_WORDS: &[&str] = &[
     "create", "creating", "add", "adding", "new", "make", "entry", "eintragen", "hinzufügen", "hinzufuegen", "erstelle", "erstellen", "neuen",
-    "neuer", "neues", "trag", "trage",
+    "neuer", "neues", "trag", "trage", "füge", "fuege", "füg", "hinzu", "lege", "leg",
 ];
 const CREATE_PHRASES: &[&str] = &["schedule a", "schedule an", "put ", "termin eintragen", "can you", "kannst du"];
 
@@ -138,7 +144,7 @@ pub fn calendar_creation_intent(text: &str) -> bool {
     let lower = text.to_lowercase();
     let event = fuzzy_has(&ws, &["calendar", "kalender", "calender", "calandar"])
         || ws.iter().any(|w| matches!(w.as_str(), "event" | "events" | "appointment" | "appointments" | "termin" | "termine" | "entry" | "eintrag"));
-    let create = ws.iter().any(|w| matches!(w.as_str(), "create" | "add" | "new" | "make" | "schedule" | "put" | "book" | "eintragen" | "hinzufügen" | "hinzufuegen" | "erstelle" | "erstellen" | "neuen" | "trag" | "trage"))
+    let create = ws.iter().any(|w| matches!(w.as_str(), "create" | "add" | "new" | "make" | "schedule" | "put" | "book" | "eintragen" | "hinzufügen" | "hinzufuegen" | "erstelle" | "erstellen" | "neuen" | "trag" | "trage" | "füge" | "fuege" | "füg" | "hinzu" | "lege" | "leg"))
         || has_phrase(&lower, &["termin eintragen", "schedule a"]);
     event && create && !has_music_language(text)
 }
@@ -205,7 +211,23 @@ pub fn capability_topic(text: &str) -> Option<&'static str> {
 pub fn route_text(text: &str) -> Option<Route> {
     let lower = text.to_lowercase();
     let ws = words(text);
-    if ws.is_empty() || ws.len() > 22 {
+    if ws.is_empty() {
+        return None;
+    }
+    // ---- one address that never changes: "what do I have to do to set it up so that I can
+    // use you as a website that has a static domain" (a long sentence, hence before the length
+    // rule), "can your link stay the same", "eine feste Domain für dich einrichten" ----
+    let fixed_address = has_phrase(&lower, &[
+        "static domain", "fixed domain", "permanent domain", "own domain", "my domain", "custom domain", "static address", "permanent address", "fixed address",
+        "static url", "permanent url", "fixed url", "permanent link", "static link", "fixed link", "feste domain", "eigene domain", "eigenen domain", "feste adresse", "permanente adresse",
+        "statische domain", "statische adresse", "fester link", "festen link",
+    ]) || (has_phrase(&lower, &["never changes", "never change", "doesn't change", "doesnt change", "does not change", "not change", "always the same", "stay the same", "stays the same", "immer gleich", "nicht ändert", "nie ändert"])
+        && fuzzy_has(&ws, &["domain", "address", "link", "url", "website", "adresse", "webseite"]));
+    let about_him = fuzzy_has(&ws, &["you", "your", "jarvis", "website", "webseite", "page", "site", "phone", "satellite", "tunnel", "dich", "dir", "deine", "dein", "it"]);
+    if fixed_address && about_him && ws.len() <= 40 && !lower.contains("whatsapp") {
+        return route("show_mobile_satellite_instructions", json!({ "topic": "permanent_address" }), Mode::Act);
+    }
+    if ws.len() > 22 {
         return None;
     }
     let asks = fuzzy_has(&ws, QUESTION) || lower.trim_end().ends_with('?');
@@ -407,6 +429,11 @@ fn calendar_create_sentence(text: &str, calendar_word: bool) -> Option<Route> {
         regex::Regex::new(r"(?i)^(?:an?\s+|ein(?:en|e)?\s+)?(?:new\s+|neue[nrs]?\s+)?(?:calendar\s+|kalender)?(?:event|entry|appointment|termin|eintrag)\s*(?:for\s+|für\s+|fuer\s+)?").expect("valid calendar kind regex")
     });
     let before_kind = body.trim().to_string();
+    // The kind word itself names an event Sir gives no title ("füge einen Termin um 15 Uhr
+    // hinzu" is a "Termin" at 15:00).
+    static KIND_WORD: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| regex::Regex::new(r"(?i)\b(event|entry|appointment|termin|eintrag)\b").expect("valid calendar kind word regex"));
+    let kind_word = KIND.find(&before_kind).filter(|m| !m.as_str().trim().is_empty()).and_then(|m| KIND_WORD.find(m.as_str())).map(|w| crate::pim::capitalise(w.as_str()));
     body = KIND.replace(&before_kind, "").to_string();
     // "Add a new in my calendar called Test": the kind word left out ("a new", "einen neuen").
     if body == before_kind {
@@ -461,6 +488,10 @@ fn calendar_create_sentence(text: &str, calendar_word: bool) -> Option<Route> {
         title.pop();
     }
     let title = title.join(" ");
+    let title = match kind_word {
+        Some(kind) if title.is_empty() && timed => kind,
+        _ => title,
+    };
     if title.is_empty() {
         return None;
     }
@@ -528,6 +559,20 @@ mod tests {
         assert_eq!(tool("send that to Max on WhatsApp"), None);
         assert_eq!(tool("how can i use you from my phone"), Some("show_mobile_satellite_instructions"));
         assert_eq!(tool("connect my phone"), Some("show_mobile_satellite_instructions"));
+        assert_eq!(route_text("how can i use you from my phone").unwrap().args.get("topic"), None);
+        // One address that never changes: the setup guide (Sir's own long sentence among them).
+        for text in [
+            "What do I have to do to set it up that I can use you as a website that has a static domain?",
+            "How do I give your website a permanent address?",
+            "Can you get a link that never changes?",
+            "how can i use you with my own domain",
+            "Jarvis, set up a static domain for your website",
+            "Wie richte ich eine feste Domain für dich ein?",
+        ] {
+            let r = route_text(text).unwrap_or_else(|| panic!("{text}: not routed"));
+            assert_eq!((r.tool, r.args["topic"].as_str()), ("show_mobile_satellite_instructions", Some("permanent_address")), "{text}");
+        }
+        assert_eq!(tool("what is a static domain"), None, "a question about the term, not about him");
         for text in [
             "How can I use you on my phone without being on the same Wi-Fi?",
             "Use Jarvis outside my Wi-Fi",

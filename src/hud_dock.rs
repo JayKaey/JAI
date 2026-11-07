@@ -106,6 +106,23 @@ struct DockState {
     /// Blocks Sir asked to close by voice, and when: each fades out over `CLOSE_FADE`, then
     /// closes through its own `[ CLOSE ]` path.
     closing: HashMap<String, Instant>,
+    /// `Pin Block`: these stay through "close the windows" and keep their place when the
+    /// others are tiled.
+    pinned: HashSet<String>,
+    /// Where the dock is moving a block (a new block's slot, a tiled grid cell, the maximised
+    /// rect), and for how many more frames the block is held there.
+    forced: HashMap<String, (Rect, u8)>,
+    /// The maximised block and the rect it goes back to.
+    maximized: Option<(String, Rect)>,
+    /// What each block says (its Markdown, its figures): `Copy Content`, the exports and the
+    /// search read it.
+    content: HashMap<String, String>,
+    /// The search across the open blocks (lower case; empty: every block is lit).
+    search: String,
+    /// Blocks that have been drawn at least once (the materialise cue sounds on the first).
+    drawn: HashSet<String>,
+    /// The block Sir pressed the mouse on: where it stood then, and where the pointer was.
+    grab: Option<(String, Rect, Pos2)>,
 }
 
 /// A block closed by voice fades out over this long before it leaves the board.
@@ -175,7 +192,113 @@ pub fn forget(id: &str) {
         s.detached.remove(id);
         s.last_rect.remove(id);
         s.closing.remove(id);
+        s.pinned.remove(id);
+        s.forced.remove(id);
+        s.content.remove(id);
+        s.drawn.remove(id);
+        if s.maximized.as_ref().is_some_and(|(open, _)| open == id) {
+            s.maximized = None;
+        }
     });
+}
+
+// ----------------------------------------------------------- pin, content, search, maximise ----
+
+/// `Pin Block`: flips the pin of block `id`; true when it is pinned now.
+pub fn toggle_pin(id: &str) -> bool {
+    with(|s| {
+        if s.pinned.remove(id) {
+            false
+        } else {
+            s.pinned.insert(id.to_string())
+        }
+    })
+}
+
+pub fn is_pinned(id: &str) -> bool {
+    with(|s| s.pinned.contains(id))
+}
+
+/// What block `id` says, for `Copy Content`, the exports and the search.
+pub fn describe_block(id: &str, text: &str) {
+    with(|s| {
+        if s.content.get(id).map(String::as_str) != Some(text) {
+            s.content.insert(id.to_string(), text.to_string());
+        }
+    });
+}
+
+pub fn block_content(id: &str) -> Option<String> {
+    with(|s| s.content.get(id).cloned())
+}
+
+/// The search across the open blocks ("find voltage on the board"); empty clears it.
+pub fn set_search(text: &str) {
+    with(|s| s.search = text.trim().to_lowercase());
+    crate::gui::refresh();
+}
+
+pub fn search() -> String {
+    with(|s| s.search.clone())
+}
+
+/// Whether a block with this title and content answers the search (every word of it, in any
+/// order; no search: every block does).
+pub fn search_matches(needle: &str, title: &str, content: &str) -> bool {
+    let hay = format!("{} {}", title.to_lowercase(), content.to_lowercase());
+    needle.split_whitespace().all(|word| hay.contains(word))
+}
+
+/// The open blocks the search lights up, as `(id, title)`.
+pub fn search_hits() -> Vec<(String, String)> {
+    with(|s| {
+        if s.search.is_empty() {
+            return Vec::new();
+        }
+        let mut hits: Vec<(String, String)> = Vec::new();
+        for (id, title, _) in s.last_blocks.iter().chain(s.blocks.iter()) {
+            if search_matches(&s.search, title, s.content.get(id).map_or("", String::as_str)) && !hits.iter().any(|(known, _)| known == id) {
+                hits.push((id.clone(), title.clone()));
+            }
+        }
+        hits
+    })
+}
+
+/// `Maximize`: block `id` fills `bounds`; a second call (or maximising another block) puts it
+/// back where it was. True when it is maximised now.
+pub fn toggle_maximize(id: &str, bounds: Rect) -> bool {
+    with(|s| {
+        let previous = s.maximized.take();
+        if let Some((open, home)) = &previous {
+            s.forced.insert(open.clone(), (*home, FORCED_FRAMES));
+            if open == id {
+                return false;
+            }
+        }
+        let home = s.last_rect.get(id).copied().unwrap_or_else(|| Rect::from_center_size(bounds.center(), bounds.size() * 0.5));
+        s.forced.insert(id.to_string(), (bounds.shrink(8.0), FORCED_FRAMES));
+        s.maximized = Some((id.to_string(), home));
+        true
+    })
+}
+
+pub fn is_maximized(id: &str) -> bool {
+    with(|s| s.maximized.as_ref().is_some_and(|(open, _)| open == id))
+}
+
+/// Where the dock wants block `id` this frame (a fresh slot, a grid cell, the maximised rect);
+/// asked once per frame by the block, which is held there for a few frames and then free again.
+pub fn take_forced(id: &str) -> Option<Rect> {
+    with(|s| {
+        let (rect, frames) = s.forced.get_mut(id)?;
+        let rect = *rect;
+        *frames = frames.saturating_sub(1);
+        if *frames == 0 {
+            s.forced.remove(id);
+        }
+        Some(rect)
+    })
 }
 
 // ------------------------------------------------------------------------ closing by voice ----
@@ -222,6 +345,20 @@ pub fn blocks_named(name: &str) -> Vec<(String, String)> {
     })
 }
 
+/// What the open in-app blocks are called ("Feature Lab // every system" is the Feature Lab).
+pub fn open_titles() -> Vec<String> {
+    with(|s| {
+        let mut titles: Vec<String> = Vec::new();
+        for (_, title, _) in s.last_blocks.iter().chain(s.blocks.iter()) {
+            let title = title.split(" // ").next().unwrap_or(title).trim().to_string();
+            if !title.is_empty() && !titles.contains(&title) {
+                titles.push(title);
+            }
+        }
+        titles
+    })
+}
+
 /// "Close the feature lab": every open block the name means starts fading out; returns their
 /// titles (empty: no such block is open).
 pub fn close_named(name: &str) -> Vec<String> {
@@ -245,7 +382,7 @@ pub fn close_named(name: &str) -> Vec<String> {
 pub fn close_all_blocks() -> usize {
     let now = Instant::now();
     let n = with(|s| {
-        let ids: HashSet<String> = s.last_blocks.iter().chain(s.blocks.iter()).map(|(id, _, _)| id.clone()).filter(|id| id != "console").collect();
+        let ids: HashSet<String> = s.last_blocks.iter().chain(s.blocks.iter()).map(|(id, _, _)| id.clone()).filter(|id| id != "console" && !s.pinned.contains(id)).collect();
         for id in &ids {
             s.closing.entry(id.clone()).or_insert(now);
         }
@@ -327,12 +464,14 @@ pub fn begin_frame() {
     with(|s| s.last_blocks = std::mem::take(&mut s.blocks));
 }
 
-/// An in-app block was drawn at `rect` this frame.
-pub fn publish_block(id: &str, title: &str, rect: Rect) {
+/// An in-app block was drawn at `rect` this frame. True the first time this block is drawn
+/// (it has just materialised).
+pub fn publish_block(id: &str, title: &str, rect: Rect) -> bool {
     with(|s| {
         s.blocks.push((id.to_string(), title.to_string(), rect));
         s.last_rect.insert(id.to_string(), rect);
-    });
+        s.drawn.insert(id.to_string())
+    })
 }
 
 /// Where block `id` was last drawn inside the HUD.
@@ -386,6 +525,18 @@ pub fn publish_obstacles(orb: Option<Rect>, board: Vec<Rect>) {
     *lock(&OBSTACLES) = (orb, board);
 }
 
+/// Sir told the emblem to get out of the way (it waits in its corner until he calls it back).
+static ORB_ASIDE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_orb_aside(on: bool) {
+    ORB_ASIDE.store(on, std::sync::atomic::Ordering::Release);
+}
+
+/// Whether the emblem is out of the way right now ("come back" means it then).
+pub fn orb_aside() -> bool {
+    ORB_ASIDE.load(std::sync::atomic::Ordering::Acquire)
+}
+
 pub fn set_overlap_allowed(on: bool) {
     OVERLAP.store(on, std::sync::atomic::Ordering::Release);
 }
@@ -435,6 +586,183 @@ pub fn place_new_window(bounds: Rect, regions: &[Rect], size: eframe::egui::Vec2
         }
     }
     fallback
+}
+
+/// How many frames a block is held at the rect the dock gave it (egui needs two to settle a
+/// window's size; after that Sir drags and resizes it freely).
+const FORCED_FRAMES: u8 = 4;
+/// The smallest a block is ever made, and the gap between tiled blocks.
+pub const MIN_BLOCK: [f32; 2] = [300.0, 200.0];
+pub const TILE_GAP: f32 = 12.0;
+/// The largest a tiled cell is used (a lone block does not fill a 2560 px screen).
+const MAX_TILE: [f32; 2] = [900.0, 620.0];
+
+/// `count` cells of one size in `bounds`, none touching `keep_out` (the orb), none smaller than
+/// `MIN_BLOCK`: the grid with the largest cells, row by row from the top left. None when even
+/// the smallest cells do not fit.
+pub fn tile_cells(bounds: Rect, count: usize, keep_out: Option<Rect>, gap: f32) -> Option<Vec<Rect>> {
+    if count == 0 {
+        return Some(Vec::new());
+    }
+    if !bounds.is_positive() {
+        return None;
+    }
+    let mut best: Option<(f32, Vec<Rect>)> = None;
+    for cols in 1..=count + 6 {
+        for rows in 1..=count + 6 {
+            if cols * rows < count {
+                continue;
+            }
+            let w = (bounds.width() - gap * (cols - 1) as f32) / cols as f32;
+            let h = (bounds.height() - gap * (rows - 1) as f32) / rows as f32;
+            if w < MIN_BLOCK[0] || h < MIN_BLOCK[1] {
+                break;
+            }
+            let size = vec2(w.min(MAX_TILE[0]), h.min(MAX_TILE[1]));
+            let cells: Vec<Rect> = (0..rows)
+                .flat_map(|row| (0..cols).map(move |col| (col, row)))
+                .map(|(col, row)| Rect::from_min_size(pos2(bounds.left() + col as f32 * (w + gap), bounds.top() + row as f32 * (h + gap)), size))
+                .filter(|cell| keep_out.is_none_or(|orb| !orb.expand(gap * 0.5).intersects(*cell)))
+                .take(count)
+                .collect();
+            if cells.len() < count {
+                continue;
+            }
+            // Large cells win; among equals, the shape closest to a 3:2 block.
+            let score = size.x * size.y * (1.0 - ((size.x / size.y) - 1.5).abs().min(1.0) * 0.25);
+            if best.as_ref().is_none_or(|(known, _)| score > *known) {
+                best = Some((score, cells));
+            }
+        }
+    }
+    best.map(|(_, cells)| cells)
+}
+
+/// Where a new in-app block opens and how large: at the size it asks for in a free spot off
+/// every open block, the board and the orb; else smaller; else every open block moves into one
+/// grid around the orb (pinned blocks keep their place), so nothing ever lands on anything.
+/// With "overlap the windows" on, the cascade `fallback`.
+pub fn place_new_block(id: &str, bounds: Rect, regions: &[Rect], size: eframe::egui::Vec2, fallback: Pos2) -> (Pos2, eframe::egui::Vec2) {
+    if overlap_allowed() {
+        return (fallback, size);
+    }
+    let (orb, board) = lock(&OBSTACLES).clone();
+    // Every open block where it is going to be (a block the dock is still moving counts at
+    // its destination).
+    let open: Vec<(String, Rect)> = with(|s| {
+        let mut known: Vec<(String, Rect)> = Vec::new();
+        for (other, _, rect) in s.last_blocks.iter().chain(s.blocks.iter()) {
+            if other != id && !known.iter().any(|(k, _)| k == other) {
+                known.push((other.clone(), s.forced.get(other).map_or(*rect, |(to, _)| *to)));
+            }
+        }
+        for (other, (to, _)) in &s.forced {
+            if other != id && !known.iter().any(|(k, _)| k == other) {
+                known.push((other.clone(), *to));
+            }
+        }
+        known
+    });
+    let windows: Vec<Rect> = open.iter().map(|(_, r)| *r).filter(|r| r.is_positive()).collect();
+    let areas: Vec<Rect> = if regions.is_empty() { vec![bounds] } else { regions.iter().map(|r| r.intersect(bounds)).filter(|r| r.is_positive()).collect() };
+    let with_board: Vec<Rect> = windows.iter().copied().chain(board).chain(orb).collect();
+    let with_orb: Vec<Rect> = windows.iter().copied().chain(orb).collect();
+    let hold = |at: Pos2, size: eframe::egui::Vec2| {
+        with(|s| s.forced.insert(id.to_string(), (Rect::from_min_size(at, size), FORCED_FRAMES)));
+        (at, size)
+    };
+    let mut tried: Option<eframe::egui::Vec2> = None;
+    for shrink in [1.0f32, 0.8, 0.64, 0.5] {
+        let fitted = vec2((size.x * shrink).max(MIN_BLOCK[0] + 20.0), (size.y * shrink).max(MIN_BLOCK[1] + 20.0));
+        if tried.replace(fitted) == Some(fitted) {
+            continue;
+        }
+        // The board's own blocks give way last: a window may open over a full report, never
+        // over another window or the orb.
+        for taken in [&with_board, &with_orb] {
+            if let Some(at) = areas.iter().find_map(|a| find_non_overlapping_slot(*a, fitted, taken, TILE_GAP)) {
+                return hold(at, fitted);
+            }
+        }
+    }
+    // Nothing fits beside what is open: one grid for all of them (pinned blocks stay put and
+    // the grid goes around them only if it still can).
+    let pinned: Vec<Rect> = with(|s| open.iter().filter(|(other, _)| s.pinned.contains(other)).map(|(_, r)| *r).collect());
+    let movable: Vec<&(String, Rect)> = with(|s| open.iter().filter(|(other, _)| !s.pinned.contains(other)).collect());
+    let keep_out = pinned.iter().copied().chain(orb).reduce(|a, b| a.union(b));
+    let area = areas.iter().copied().max_by(|a, b| (a.width() * a.height()).total_cmp(&(b.width() * b.height()))).unwrap_or(bounds);
+    let cells = tile_cells(area, movable.len() + 1, keep_out, TILE_GAP).or_else(|| tile_cells(area, movable.len() + 1, orb, TILE_GAP));
+    match cells {
+        Some(cells) => {
+            with(|s| {
+                for ((other, _), cell) in movable.iter().zip(&cells) {
+                    s.forced.insert(other.clone(), (*cell, FORCED_FRAMES));
+                }
+            });
+            let cell = cells[movable.len()];
+            hold(cell.min, cell.size())
+        }
+        None => (fallback, size),
+    }
+}
+
+/// Sir pressed the mouse on block `id` while it stood at `rect`, the pointer at `origin`.
+pub fn grab(id: &str, rect: Rect, origin: Pos2) {
+    with(|s| s.grab = Some((id.to_string(), rect, origin)));
+}
+
+/// Where block `id` stood and where the pointer was when Sir pressed the mouse on it.
+pub fn grabbed(id: &str) -> Option<(Rect, Pos2)> {
+    with(|s| s.grab.as_ref().filter(|(held, _, _)| held == id).map(|(_, rect, origin)| (*rect, *origin)))
+}
+
+/// The mouse button is up again: block `id` is no longer held.
+pub fn let_go(id: &str) {
+    with(|s| {
+        if s.grab.as_ref().is_some_and(|(held, _, _)| held == id) {
+            s.grab = None;
+        }
+    });
+}
+
+/// Holds block `id` at `rect` for the next frame only: a block that is being dragged is put
+/// exactly under the pointer, frame by frame.
+pub fn hold_once(id: &str, rect: Rect) {
+    with(|s| {
+        s.forced.insert(id.to_string(), (rect, 1));
+    });
+}
+
+/// Whether block `id` was on screen in the last frame (a block that reopens is placed afresh
+/// when its old spot has been taken).
+pub fn is_open(id: &str) -> bool {
+    with(|s| s.last_blocks.iter().chain(s.blocks.iter()).any(|(other, _, _)| other == id))
+}
+
+/// Whether `rect` would land on another open block or on the orb.
+pub fn collides(id: &str, rect: Rect) -> bool {
+    let orb = lock(&OBSTACLES).0;
+    with(|s| s.last_blocks.iter().chain(s.blocks.iter()).filter(|(other, _, _)| other != id).map(|(other, _, r)| s.forced.get(other).map_or(*r, |(to, _)| *to)).chain(orb).any(|r| r.shrink(0.5).intersects(rect.shrink(0.5))))
+}
+
+/// "Tidy the windows": every open, unpinned block into one grid around the orb. How many moved.
+pub fn retile_all(bounds: Rect) -> usize {
+    let orb = lock(&OBSTACLES).0;
+    with(|s| {
+        let mut ids: Vec<String> = Vec::new();
+        for (id, _, _) in s.last_blocks.iter().chain(s.blocks.iter()) {
+            if !s.pinned.contains(id) && !ids.contains(id) {
+                ids.push(id.clone());
+            }
+        }
+        let keep_out = s.last_blocks.iter().chain(s.blocks.iter()).filter(|(id, _, _)| s.pinned.contains(id)).map(|(_, _, r)| *r).chain(orb).reduce(|a, b| a.union(b));
+        let Some(cells) = tile_cells(bounds, ids.len(), keep_out, TILE_GAP).or_else(|| tile_cells(bounds, ids.len(), orb, TILE_GAP)) else { return 0 };
+        s.maximized = None;
+        for (id, cell) in ids.iter().zip(cells) {
+            s.forced.insert(id.clone(), (cell, FORCED_FRAMES));
+        }
+        ids.len()
+    })
 }
 
 /// The dock state is global: tests that change it run one at a time.
@@ -602,5 +930,117 @@ mod tests {
         let at = place_new_window(all, &[left, right], vec2(700.0, 400.0), None, Pos2::ZERO);
         assert!(right.contains_rect(Rect::from_min_size(at, vec2(700.0, 400.0))), "{at:?}");
         publish_obstacles(None, Vec::new());
+    }
+
+    fn overlapping(rects: &[Rect]) -> Vec<(usize, usize)> {
+        let mut pairs = Vec::new();
+        for a in 0..rects.len() {
+            for b in a + 1..rects.len() {
+                if rects[a].shrink(0.5).intersects(rects[b].shrink(0.5)) {
+                    pairs.push((a, b));
+                }
+            }
+        }
+        pairs
+    }
+
+    #[test]
+    fn a_grid_of_cells_keeps_off_the_orb_and_never_goes_below_the_smallest_block() {
+        let bounds = Rect::from_min_max(pos2(8.0, 60.0), pos2(2552.0, 1380.0));
+        let orb = Rect::from_center_size(bounds.center(), vec2(420.0, 420.0));
+        for count in [1usize, 2, 4, 8, 12] {
+            let cells = tile_cells(bounds, count, Some(orb), TILE_GAP).unwrap_or_else(|| panic!("{count} blocks fit a 2560 px screen"));
+            assert_eq!(cells.len(), count);
+            assert!(overlapping(&cells).is_empty(), "{count}: {cells:?}");
+            for cell in &cells {
+                assert!(bounds.expand(0.5).contains_rect(*cell) && !cell.intersects(orb), "{count}: {cell:?}");
+                assert!(cell.width() >= MIN_BLOCK[0] && cell.height() >= MIN_BLOCK[1], "{cell:?}");
+            }
+        }
+        // The portrait monitor: twelve blocks still fit, three wide.
+        let portrait = Rect::from_min_max(pos2(8.0, 60.0), pos2(1072.0, 1860.0));
+        let cells = tile_cells(portrait, 12, Some(Rect::from_center_size(portrait.center(), vec2(300.0, 300.0))), TILE_GAP).expect("twelve on the portrait monitor");
+        assert!(overlapping(&cells).is_empty() && cells.iter().all(|c| portrait.expand(0.5).contains_rect(*c)));
+        // A phone-sized area cannot take twelve: no grid, the caller cascades.
+        assert_eq!(tile_cells(Rect::from_min_size(Pos2::ZERO, vec2(640.0, 480.0)), 12, None, TILE_GAP), None);
+        assert_eq!(tile_cells(bounds, 0, None, TILE_GAP), Some(Vec::new()));
+    }
+
+    #[test]
+    fn twelve_new_blocks_never_overlap_each_other_or_the_orb() {
+        let _g = test_lock();
+        set_overlap_allowed(false);
+        for (w, h) in [(2560.0, 1440.0), (1080.0, 1920.0), (6240.0, 1920.0)] {
+            begin_frame();
+            begin_frame();
+            with(|s| s.forced.clear());
+            let bounds = Rect::from_min_max(pos2(8.0, 60.0), pos2(w - 8.0, h - 60.0));
+            let orb = Rect::from_center_size(bounds.center(), vec2(380.0, 380.0));
+            publish_obstacles(Some(orb), Vec::new());
+            let mut rects: HashMap<String, Rect> = HashMap::new();
+            for n in 0..12 {
+                let id = format!("tile_test_{n}");
+                let (at, size) = place_new_block(&id, bounds, &[], vec2(820.0, 600.0), pos2(40.0, 80.0));
+                rects.insert(id.clone(), Rect::from_min_size(at, size));
+                // Blocks the dock moved into a grid are where it sent them.
+                for (other, rect) in rects.iter_mut() {
+                    if let Some((to, _)) = with(|s| s.forced.get(other).copied()) {
+                        *rect = to;
+                    }
+                }
+                begin_frame();
+                for (other, rect) in &rects {
+                    publish_block(other, "Tile test", *rect);
+                }
+                let placed: Vec<Rect> = rects.values().copied().collect();
+                assert!(overlapping(&placed).is_empty(), "{w}x{h}: {} blocks overlap: {placed:?}", n + 1);
+                assert!(placed.iter().all(|r| !r.intersects(orb) && bounds.expand(0.5).contains_rect(*r)), "{w}x{h}: {} blocks: {placed:?}", n + 1);
+                assert!(placed.iter().all(|r| r.width() >= MIN_BLOCK[0] && r.height() >= MIN_BLOCK[1]));
+            }
+            for n in 0..12 {
+                forget(&format!("tile_test_{n}"));
+            }
+        }
+        begin_frame();
+        begin_frame();
+        publish_obstacles(None, Vec::new());
+    }
+
+    #[test]
+    fn pinned_blocks_stay_and_a_maximised_block_goes_back_where_it_was() {
+        let _g = test_lock();
+        let bounds = Rect::from_min_max(pos2(8.0, 60.0), pos2(1912.0, 1020.0));
+        let home = Rect::from_min_size(pos2(60.0, 90.0), vec2(500.0, 320.0));
+        for id in ["pin_a", "pin_b"] {
+            publish_block(id, "Pin test", home);
+        }
+        begin_frame();
+        assert!(toggle_pin("pin_a") && is_pinned("pin_a"));
+        assert_eq!(close_all_blocks(), 1, "the pinned block stays through 'close the windows'");
+        assert!(closing_progress("pin_b").is_some() && closing_progress("pin_a").is_none());
+        assert!(!toggle_pin("pin_a") && !is_pinned("pin_a"));
+        // Maximise: held at the full bounds for a few frames; again: back home.
+        assert!(toggle_maximize("pin_a", bounds) && is_maximized("pin_a"));
+        assert_eq!(take_forced("pin_a"), Some(bounds.shrink(8.0)));
+        assert!(!toggle_maximize("pin_a", bounds) && !is_maximized("pin_a"));
+        assert_eq!(take_forced("pin_a"), Some(home));
+        for _ in 0..FORCED_FRAMES {
+            let _ = take_forced("pin_a");
+        }
+        assert_eq!(take_forced("pin_a"), None, "after a few frames the block is Sir's to move again");
+        // The search lights up the blocks whose title or content carries every word.
+        describe_block("pin_a", "Ohm's law: voltage = current x resistance");
+        set_search("Voltage LAW");
+        assert_eq!(search_hits(), vec![("pin_a".to_string(), "Pin test".to_string())]);
+        assert!(search_matches("pin test", "Pin test", "") && !search_matches("reactor", "Pin test", "voltage"));
+        set_search("");
+        assert!(search_hits().is_empty() && search().is_empty());
+        assert_eq!(block_content("pin_a").as_deref(), Some("Ohm's law: voltage = current x resistance"));
+        for id in ["pin_a", "pin_b"] {
+            forget(id);
+        }
+        assert_eq!(block_content("pin_a"), None);
+        begin_frame();
+        begin_frame();
     }
 }

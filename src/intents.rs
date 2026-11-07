@@ -52,6 +52,11 @@ pub fn silent_quick_command(text: &str) -> Option<SilentAction> {
     let act = |tool: &'static str, args: Value, label: &str| Some(SilentAction { tool, args, label: label.to_string() });
     let music = |action: &str, label: &str| act("control_music", json!({ "action": action }), label);
     let mixer = |args: Value, label: &str| act("control_audio_mixer", args, label);
+    // "More", "a bit less", "same for Firefox", while a volume change is fresh.
+    if let Some(args) = crate::audio_mixer::last_step().and_then(|last| volume_follow_up(last, &s)) {
+        let label = args["delta"].as_i64().map_or_else(|| "Volume".to_string(), |d| format!("{d:+} %"));
+        return mixer(args, &label);
+    }
     static VOLUME: LazyLock<Regex> =
         LazyLock::new(|| re(r"^(?:set\s+)?(?:volume|lautstärke|lautstaerke|sound|ton)\s+(?:to\s+|auf\s+|at\s+)?(\d{1,3})\s*(?:%|percent|prozent)?$|^(\d{1,3})\s*(?:%|percent|prozent)$"));
     if let Some(c) = VOLUME.captures(&s) {
@@ -59,10 +64,15 @@ pub fn silent_quick_command(text: &str) -> Option<SilentAction> {
         let level = level.min(100);
         return mixer(json!({ "action": "set_master", "level": level }), &format!("{level} %"));
     }
+    // "Volume forty", "Lautstärke fünfzig": the level as Whisper writes it when it spells it out.
+    static VOLUME_WORDS: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:set\s+)?(?:volume|lautstärke|lautstaerke|sound|ton)\s+(?:to\s+|auf\s+|at\s+)?([a-zäöüß]+(?:[\s-][a-zäöüß]+)?)(?:\s+(?:percent|prozent))?$"));
+    if let Some(level) = VOLUME_WORDS.captures(&s).and_then(|c| spoken_level(&c[1])) {
+        return mixer(json!({ "action": "set_master", "level": level }), &format!("{level} %"));
+    }
     match s.as_str() {
         // Whatever is playing — every media session at once — and Jarvis' own voice.
         "pause" | "pause music" | "pause music please" | "pausieren" | "pausiere" | "musik pause" | "musik pausieren" | "pause it" | "pause playback"
-        | "pause everything" | "pause all" | "paus" | "pos" => music("stop_all", "Paused"),
+        | "pause everything" | "pause all" | "paus" | "pos" | "pause musik" | "pausiere musik" | "musik anhalten" | "halte musik an" => music("stop_all", "Paused"),
         "stop" | "stopp" | "halt" | "stop music" | "stop it" | "stoppe" | "musik stopp" | "musik stoppen" | "stopp musik" | "musik aus" | "stop playing"
         | "stop playback" | "stop everything" | "stop all" | "stop that" => music("stop_all", "Stopped"),
         "play" | "resume" | "continue" | "weiter" | "play music" | "fortsetzen" | "spiel weiter" | "musik weiter" | "unpause" | "resume music" | "weitermachen"
@@ -81,10 +91,15 @@ pub fn silent_quick_command(text: &str) -> Option<SilentAction> {
         "unmute" | "ton an" | "ton wieder an" | "laut schalten" | "unmute sound" | "sound on" | "unmute pc" | "unmute the pc" => {
             mixer(json!({ "action": "unmute_master" }), "Unmuted")
         }
-        "louder" | "lauter" | "volume up" | "turn it up" | "mach lauter" | "a bit louder" => mixer(json!({ "action": "change_master", "delta": 10 }), "+10 %"),
-        "quieter" | "leiser" | "volume down" | "turn it down" | "mach leiser" | "a bit quieter" | "softer" => {
+        "louder" | "lauter" | "volume up" | "mach lauter" => mixer(json!({ "action": "change_master", "delta": 10 }), "+10 %"),
+        "quieter" | "leiser" | "volume down" | "mach leiser" | "softer" => {
             mixer(json!({ "action": "change_master", "delta": -10 }), "−10 %")
         }
+        // ("It" is what the last request was about; the mixer takes the master when there was none.)
+        "turn it up" => mixer(json!({ "action": "change_app", "app": "it", "delta": 10 }), "+10 %"),
+        "turn it down" | "keep it down" => mixer(json!({ "action": "change_app", "app": "it", "delta": -10 }), "−10 %"),
+        "a bit louder" | "a little louder" => mixer(json!({ "action": "change_master", "delta": 5 }), "+5 %"),
+        "a bit quieter" | "a little quieter" => mixer(json!({ "action": "change_master", "delta": -5 }), "−5 %"),
         // A maximised board block goes back to the board first.
         "minimize" | "minimise" | "minimieren" if crate::hud_board::spotlight_active() => {
             act("hud_board", json!({ "action": "minimize" }), "Back to the board")
@@ -96,6 +111,47 @@ pub fn silent_quick_command(text: &str) -> Option<SilentAction> {
             act("control_orb_mode", json!({ "enabled": false }), "Full HUD")
         }
         _ => None,
+    }
+}
+
+/// The short answers to how a volume change sounds, said right after it (`last`): the same way
+/// again ("more", "a bit more", "noch mehr"), a little back ("less", "too much"), past where it
+/// was ("the other way"), or the same to another app ("same for Firefox", "and Discord too").
+/// `s`: `quick_words`. None for anything else.
+fn volume_follow_up(last: crate::audio_mixer::Step, s: &str) -> Option<Value> {
+    static SAME_FOR: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^(?:and\s+|und\s+|also\s+|auch\s+)?(?:do\s+|mach\s+)?(?:same|that|it|this|dasselbe|gleiche|selbe)\s+(?:for|with|to|für|fuer|bei|mit)\s+(.{3,24}?)(?:\s+too|\s+as\s+well|\s+auch)?$|^(?:and|und|also|auch)\s+(.{3,24}?)(?:\s+too|\s+as\s+well|\s+auch)?$|^(.{3,24}?)\s+(?:too|as\s+well|auch)$")
+    });
+    // (A level has no way of its own: more of it is louder.)
+    let way = last.delta.map_or(1, i64::signum);
+    let moved = last.delta.is_some() || last.level.is_some();
+    let step = |delta: i64| Some(if last.app { json!({ "action": "change_app", "app": "it", "delta": delta }) } else { json!({ "action": "change_master", "delta": delta }) });
+    match s {
+        "more" | "again" | "once more" | "same again" | "keep going" | "mehr" | "noch mehr" | "nochmal" | "noch mal" | "noch einmal" if moved => step(way * last.delta.map_or(10, i64::abs)),
+        "bit more" | "a bit more" | "little more" | "a little more" | "slightly more" | "noch etwas" | "noch ein bisschen" | "noch ein wenig" | "ein bisschen mehr" | "etwas mehr" if moved => step(way * 5),
+        "much more" | "a lot more" | "lot more" | "way more" | "viel mehr" | "noch viel mehr" if moved => step(way * 20),
+        "less" | "bit less" | "a bit less" | "little less" | "a little less" | "too much" | "weniger" | "etwas weniger" | "ein bisschen weniger" | "zu viel" if moved => step(-way * 5),
+        "other way" | "other way round" | "other way around" | "wrong way" | "opposite" | "andersrum" | "anders herum" | "andere richtung" => step(-2 * last.delta?),
+        // Bare directions mean the volume only right after one moved.
+        "up" | "higher" | "hoch" | "höher" | "rauf" if moved => step(10),
+        "down" | "lower" | "runter" | "tiefer" if moved => step(-10),
+        "up a bit" | "a bit up" | "bit up" | "a little up" | "up a little" | "etwas hoch" | "etwas höher" | "ein bisschen höher" if moved => step(5),
+        "down a bit" | "a bit down" | "bit down" | "a little down" | "down a little" | "etwas runter" | "etwas tiefer" | "ein bisschen tiefer" if moved => step(-5),
+        // Louder or quieter after an app's change: that app, not the master volume.
+        "louder" | "lauter" | "mach lauter" | "mach es lauter" if last.app => step(10),
+        "quieter" | "leiser" | "mach leiser" | "mach es leiser" | "softer" if last.app => step(-10),
+        "a bit louder" | "a little louder" | "bit louder" | "etwas lauter" | "ein bisschen lauter" if last.app => step(5),
+        "a bit quieter" | "a little quieter" | "bit quieter" | "etwas leiser" | "ein bisschen leiser" if last.app => step(-5),
+        _ => {
+            let c = SAME_FOR.captures(s)?;
+            let app = app_list(c.iter().skip(1).flatten().next()?.as_str().trim())?;
+            Some(match (last.delta, last.level, last.mute) {
+                (Some(delta), ..) => json!({ "action": "change_app", "app": app, "delta": delta }),
+                (None, Some(level), _) => json!({ "action": "set_apps", "apps": app.split(" and ").map(|a| json!({ "app": a, "level": level })).collect::<Vec<_>>() }),
+                (None, None, Some(mute)) => json!({ "action": if mute { "mute_app" } else { "unmute_app" }, "app": app }),
+                (None, None, None) => return None,
+            })
+        }
     }
 }
 
@@ -215,14 +271,20 @@ pub fn orb_mode_command(text: &str) -> Option<Value> {
         return None;
     }
     let mut args = serde_json::Map::new();
-    if ["orb mode", "orb modus", "only show the orb", "only the orb", "just the orb", "minimal orb", "pure orb", "orb only", "nur den orb", "nur noch den orb", "nur die kugel"]
-        .iter()
-        .any(|p| s.contains(p))
-        && !["exit orb", "leave orb", "orb mode off", "turn off orb", "beende"].iter().any(|p| s.contains(p))
+    // "Deactivate orb mode", "turn orb mode off", "get out of orb mode", "Orbmodus beenden"
+    // (2026-11-07 "deactivate Orb mode" switched it on).
+    static ORB_OFF: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"\b(?:exit|leave|quit|get out of|come out of|out of|no more|verlasse|verlass|beende|beend)\b.{0,24}\b(?:orb|kugel)|\b(?:deactivate|disable|turn off|switch off|shut off|stop|end|cancel|close|deaktiviere|deaktivier)\b.{0,24}\b(?:orb ?mod(?:e|us)|pure orb|orb only)|\b(?:orb ?mod(?:e|us)|pure orb|orb only)\b.{0,16}\b(?:off|aus|beenden|deaktivieren|verlassen)\b")
+    });
+    let off = ORB_OFF.is_match(&s);
+    if !off
+        && ["orb mode", "orb modus", "orbmodus", "only show the orb", "only the orb", "just the orb", "minimal orb", "pure orb", "orb only", "nur den orb", "nur noch den orb", "nur die kugel"]
+            .iter()
+            .any(|p| s.contains(p))
     {
         args.insert("enabled".into(), json!(true));
     }
-    if ["exit orb", "leave orb", "orb mode off", "turn off orb mode", "disable orb mode", "no more orb"].iter().any(|p| s.contains(p)) {
+    if off {
         args.insert("enabled".into(), json!(false));
     }
     static PIXELS: LazyLock<Regex> = LazyLock::new(|| re(r"(\d{2,4})\s*(?:px|pixels?|pixel)"));
@@ -285,6 +347,18 @@ pub fn orb_mode_command(text: &str) -> Option<Value> {
 /// "lower the volume by 5 %", "set it back to 100 %": `control_audio_mixer` arguments (several
 /// apps in one sentence become `apps`).
 pub fn mixer_command(text: &str) -> Option<Value> {
+    if let Some(call) = mix_command(text) {
+        return Some(call);
+    }
+    // "No, don't, don't mute it, make it 50 % louder": what Sir does not want is said first;
+    // the request is the last clause.
+    let clauses: Vec<&str> = text.split([',', ';', '.', '!', '?']).map(str::trim).filter(|c| !c.is_empty()).collect();
+    if let [refused @ .., wanted] = clauses.as_slice() {
+        static REFUSAL: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:no|nope|nah|nein|not|nicht|wait|stop|don'?t|do not|doch nicht)\b"));
+        if !refused.is_empty() && refused.iter().all(|c| REFUSAL.is_match(&c.to_lowercase().replace('’', "'"))) {
+            return mixer_command(wanted);
+        }
+    }
     // Lower-case words with the per cent sign kept ("30%").
     let s = text
         .to_lowercase()
@@ -294,12 +368,202 @@ pub fn mixer_command(text: &str) -> Option<Value> {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ");
-    // "Which apps are playing audio?", "show the mixer": read the real mixer (never guess).
+    // "Which apps are playing audio?", "read the mixer": read the real mixer (never guess).
     static LIST: LazyLock<Regex> = LazyLock::new(|| {
-        re(r"^(?:jarvis )?(?:(?:which|what) (?:apps?|programs?|applications?) (?:are|is) (?:playing|making|using) (?:any )?(?:audio|sound|noise)(?: right now| now| at the moment)?|what s playing audio|whats playing audio|what is playing audio|(?:show|open|read|check)(?: me)? (?:the |my )?(?:volume |audio )?mixer|(?:the |my )?(?:volume |audio )mixer|(?:what are )?(?:the |my )?app volumes|welche apps (?:spielen|machen|nutzen) (?:gerade )?(?:audio|ton|sound)|zeig (?:mir )?den (?:lautstärke )?mixer)$")
+        re(r"^(?:jarvis )?(?:(?:which|what) (?:apps?|programs?|applications?) (?:are|is) (?:playing|making|using) (?:any )?(?:audio|sound|noise)(?: right now| now| at the moment)?|(?:what s|whats|what is) playing (?:any )?(?:audio|sound|noise)|(?:what s|whats|what is|who s|whos|who is) making (?:that |this |the |so much |all that )?(?:sound|noise)|(?:read|check)(?: me)? (?:the |my )?(?:volume |audio )?mixer|(?:what are )?(?:the |my )?app volumes|welche apps (?:spielen|machen|nutzen) (?:gerade )?(?:audio|ton|sound)|was spielt (?:gerade |hier |da )?(?:ton|sound|audio)(?: ab)?|(?:was|wer) macht (?:hier |da |gerade )*(?:so einen |solchen |diesen )?(?:lärm|krach|ton|geräusche?|sound))$")
     });
     if LIST.is_match(&s) {
         return Some(json!({ "action": "list" }));
+    }
+    // A possessive is no part of a name ("my browser's volume" is the browser's).
+    let s = s.split(' ').filter(|w| *w != "s").collect::<Vec<_>>().join(" ");
+    // "Mute Discord for 10 minutes", "schalte Discord für 10 Minuten stumm": the mute, and when
+    // it ends by itself. (Anything else with a time in it is not this.)
+    static FOR_A_WHILE: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^(.+?)\s+(?:for|für|fuer)\s+((?:half\s+an|a|an|one|two|three|five|ten|fifteen|twenty|thirty|\d{1,3}|eine|einer|einen|zwei|drei|fünf|fuenf|zehn|fünfzehn|zwanzig|dreißig|dreissig|(?:eine\s+)?halbe)\s+(?:seconds?|minutes?|mins?|hours?|sekunden?|minuten?|stunden?))(\s+(?:stumm|stummschalten|aus))?$")
+    });
+    if let Some(c) = FOR_A_WHILE.captures(&s) {
+        let base = format!("{}{}", &c[1], c.get(3).map_or("", |m| m.as_str()));
+        let call = mixer_command(&base).or_else(|| MUTE.is_match(&base).then(|| json!({ "action": "mute_master" })));
+        if let (Some(mut call), Some(span)) = (call.filter(|call| matches!(call["action"].as_str(), Some("mute_app" | "mute_master"))), crate::listening_lock::duration_in(&c[2])) {
+            call["seconds"] = json!(span.as_secs());
+            return Some(call);
+        }
+    }
+    // "Which audio device am I using?", "where is the sound going?": read, like the levels.
+    static READ_DEVICES: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^(?:what|what is|whats|which)\s+(?:is\s+)?(?:my\s+|the\s+)?(?:audio\s+|sound\s+|output\s+)+(?:device|devices|output)?(?:\s+(?:am\s+i\s+using|do\s+i\s+use|is\s+active|is\s+in\s+use|do\s+i\s+have|are\s+there))?$|^list\s+(?:my\s+|the\s+)?(?:audio\s+|sound\s+|output\s+)+devices?$|^where\s+(?:is\s+)?(?:the\s+|my\s+)?(?:sound|audio)\s+(?:going|coming\s+out|playing)$|^(?:welche|welches)\s+(?:audio|ton|sound|ausgabe)\s*(?:gerät|geräte)(?:\s+(?:nutze\s+ich|benutze\s+ich|ist\s+aktiv|habe\s+ich))?$|^wo\s+(?:geht|kommt|läuft)\s+(?:der\s+|mein\s+)?(?:ton|sound)(?:\s+(?:hin|raus))?$")
+    });
+    if READ_DEVICES.is_match(&s) {
+        // ("List my audio devices" wants them all, "which device am I using?" the one.)
+        let all = s.contains("devices") || s.contains("geräte");
+        return Some(json!({ "action": if all { "devices" } else { "device" } }));
+    }
+    // "Switch to my speakers": the one thing about the sound that is not his to do, so he says so
+    // instead of leaving it to a model that would agree.
+    static SWITCH_DEVICE: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^(?:switch|change)\s+(?:the\s+|my\s+)?(?:output|output\s+device|audio\s+device|audio\s+output|sound\s+output|sound\s+device)(?:\s+to\s+.{2,30})?$|^(?:switch|change|move|put|send|route)\s+(?:the\s+|my\s+)?(?:sound|audio)\s+(?:to|over\s+to|through)\s+(?:the\s+|my\s+)?(?:speakers?|headset|headphones?|boxes|monitors?|tv|bluetooth)$|^(?:switch\s+to|switch\s+over\s+to|use)\s+(?:the\s+|my\s+)(?:speakers?|headset|headphones?)$|^(?:wechsel|wechsle|schalte|schalt|stell|stelle|leg|lege)\s+(?:den\s+ton\s+)?(?:auf|zu|um\s+auf)\s+(?:die\s+|den\s+|das\s+|meine\s+|mein\s+|meinen\s+)?(?:kopfhörer|lautsprecher|headset|boxen)(?:\s+um)?$")
+    });
+    if SWITCH_DEVICE.is_match(&s) {
+        return Some(json!({ "action": "switch_device" }));
+    }
+    // "What's my volume?", "how loud is Discord?", "is the browser muted?": read off the mixer,
+    // never guessed. (`s`: "what's" lost its s above.)
+    static READ_MASTER: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^(?:what|what is|whats)\s+(?:the\s+|my\s+)?(?:current\s+|system\s+|master\s+|pc\s+)*volume(?:\s+(?:level|at|right now|now))?$|^how\s+loud\s+(?:is\s+)?(?:it|the\s+pc|my\s+pc|the\s+volume)(?:\s+(?:right now|now))?$|^wie\s+laut\s+(?:ist\s+)?(?:es|der\s+pc|mein\s+pc|die\s+lautstärke)(?:\s+gerade|\s+jetzt)?$|^wie\s+hoch\s+ist\s+die\s+lautstärke$|^(?:was|wie)\s+ist\s+(?:die|meine)\s+(?:aktuelle\s+)?lautstärke$")
+    });
+    if READ_MASTER.is_match(&s) {
+        return Some(json!({ "action": "get_master" }));
+    }
+    static READ_MUTED: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:is\s+)?(?:anything|something)\s+muted$|^what(?:\s+is)?\s+muted$|^was\s+ist\s+(?:gerade\s+)?stumm(?:geschaltet)?$|^(?:ist\s+)?(?:etwas|irgendwas)\s+stumm(?:geschaltet)?$|^is\s+(?:the\s+|my\s+)?(?:sound|audio|volume)\s+(?:on|off|muted)$|^is\s+(?:it|everything|the\s+pc|my\s+pc)\s+muted$|^ist\s+(?:der\s+|mein\s+)?(?:ton|sound)\s+(?:an|aus|stumm(?:geschaltet)?)$"));
+    if READ_MUTED.is_match(&s) {
+        return Some(json!({ "action": "muted" }));
+    }
+    // "Make it quiet": a level to go down to (never up to), not a step. ("It's very quiet" is an
+    // observation, and a different sentence.)
+    static MAKE_QUIET: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^(?:make|turn)\s+(?:it|this|that|everything|the\s+sound|the\s+volume)\s+(?:(very|really|super|real)\s+)?quiet$|^(very|really|super)\s+quiet$|^(?:mach|mache|stell|stelle)\s+(?:es|das|alles|den\s+ton)\s+(?:(ganz|sehr|richtig)\s+)?leise$|^(ganz|sehr)\s+leise$")
+    });
+    if let Some(c) = MAKE_QUIET.captures(&s) {
+        return Some(json!({ "action": "quiet", "level": if c.iter().skip(1).flatten().next().is_some() { 10 } else { 20 } }));
+    }
+    static MAKE_LOUD: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:make|turn)\s+(?:it|this|that|everything|the\s+sound|the\s+volume)\s+(?:(very|really|super|real)\s+)?loud$|^(?:mach|mache|stell|stelle)\s+(?:es|das|alles|den\s+ton)\s+(?:(ganz|sehr|richtig)\s+)?laut$"));
+    if let Some(c) = MAKE_LOUD.captures(&s) {
+        return Some(json!({ "action": "loud", "level": if c.iter().skip(1).flatten().next().is_some() { 100 } else { 80 } }));
+    }
+    // "It's very quiet", "das ist laut": how it sounds, so one step the other way.
+    static HEARD: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:it|its|it is|this is|that is|that|thats|das ist|es ist)\s+(?:(?:very|so|really|super|sehr|echt|richtig)\s+)?(loud|laut|quiet|leise)$"));
+    if let Some(c) = HEARD.captures(&s) {
+        return Some(json!({ "action": "change_app", "app": "it", "delta": if matches!(&c[1], "loud" | "laut") { -10 } else { 10 } }));
+    }
+    // "Not loud enough", "Discord isn't loud enough", "das ist nicht leise genug": the same.
+    static NOT_ENOUGH: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^(?:(?:it|this|that|thats|es|das)\s+)?(?:is\s+|ist\s+)?(?:still\s+|immer\s+noch\s+)?(?:not|isn\s+t|isnt|nicht)\s+(loud|laut|quiet|leise)\s+(?:enough|genug)$")
+    });
+    static APP_NOT_ENOUGH: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^(?:the\s+|my\s+|der\s+|die\s+|das\s+|mein\s+|meine\s+)?([a-z][a-z0-9äöüß ]{1,24}?)\s+(?:is\s+|ist\s+)?(?:still\s+|immer\s+noch\s+)?(?:not|isn\s+t|isnt|nicht)\s+(loud|laut|quiet|leise)\s+(?:enough|genug)$")
+    });
+    let louder = |word: &str| if matches!(word, "loud" | "laut") { 10 } else { -10 };
+    if let Some(c) = NOT_ENOUGH.captures(&s) {
+        return Some(json!({ "action": "change_app", "app": "it", "delta": louder(&c[1]) }));
+    }
+    // "Make it not so loud", "mach den Ton nicht so laut": a step the other way.
+    static NOT_SO: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^(?:make|mach|mache)\s+(?:it|this|that|the\s+sound|es|das|den\s+ton)\s+(?:not\s+so|nicht\s+so)\s+(loud|laut|quiet|leise)$")
+    });
+    if let Some(c) = NOT_SO.captures(&s) {
+        return Some(json!({ "action": "change_app", "app": "it", "delta": -louder(&c[1]) }));
+    }
+    if let Some(c) = APP_NOT_ENOUGH.captures(&s) {
+        if let Some(app) = app_list(c[1].trim()) {
+            return Some(json!({ "action": "change_app", "app": app, "delta": louder(&c[2]) }));
+        }
+    }
+    // "Why is it so quiet?", "warum ist Discord stumm?": the levels are the answer, and a
+    // question moves nothing.
+    static WHY: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^why\s+is\s+(?:the\s+|my\s+)?([a-z][a-z0-9 ]{1,24}?)\s+(?:so\s+)?(?:quiet|low|silent|loud|muted)$|^warum\s+ist\s+(?:der\s+|die\s+|das\s+|mein\s+|meine\s+)?([a-z][a-z0-9äöüß ]{1,24}?)\s+(?:so\s+)?(?:leise|laut|stumm)$")
+    });
+    if let Some(c) = WHY.captures(&s) {
+        let named = c.iter().skip(1).flatten().next()?.as_str().trim();
+        if matches!(named, "it" | "everything" | "sound" | "audio" | "volume" | "es" | "alles" | "ton" | "sound gerade") {
+            return Some(json!({ "action": "list" }));
+        }
+        if let Some(app) = app_list(named) {
+            return Some(json!({ "action": "get_app", "app": app }));
+        }
+    }
+    // "I can barely hear it", "ich höre Discord kaum": there is sound, just not enough of it.
+    static BARELY: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^(?:i\s+)?(?:can\s+)?(?:barely|hardly|scarcely)\s+hear\s+(?:the\s+|my\s+)?([a-z][a-z0-9 ]{1,24})$|^ich\s+(?:höre?|hoere?)\s+(?:den\s+|die\s+|das\s+|mein\s+|meine\s+|meinen\s+)?([a-z0-9äöüß ]{2,24}?)\s+kaum(?:\s+noch)?$|^ich\s+kann\s+(?:den\s+|die\s+|das\s+|mein\s+|meine\s+|meinen\s+)?([a-z0-9äöüß ]{2,24}?)\s+kaum\s+(?:noch\s+)?(?:hören|hoeren|verstehen)$")
+    });
+    if let Some(c) = BARELY.captures(&s) {
+        let named = c.iter().skip(1).flatten().next()?.as_str().trim();
+        if matches!(named, "it" | "that" | "this" | "es" | "anything") {
+            return Some(json!({ "action": "change_app", "app": "it", "delta": 10 }));
+        }
+        if let Some(app) = app_list(named) {
+            return Some(json!({ "action": "change_app", "app": app, "delta": 10 }));
+        }
+    }
+    // "Make Firefox as loud as Discord", "mach Firefox leiser als Discord": a level read off the
+    // other app, not a guess.
+    static SAME_AS: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^(?:set|make|put|turn|bring)\s+(?:the\s+|my\s+)?([a-z][a-z0-9 ]{1,24}?)\s+(?:to\s+|at\s+|on\s+)?(?:the\s+)?same\s+(?:level|volume)\s+as\s+(?:the\s+|my\s+)?([a-z][a-z0-9 ]{1,24})$|^(?:make|turn|set)\s+(?:the\s+|my\s+)?([a-z][a-z0-9 ]{1,24}?)\s+(?:just\s+)?as\s+(?:loud|quiet)\s+as\s+(?:the\s+|my\s+)?([a-z][a-z0-9 ]{1,24})$|^(?:mach|mache|stell|stelle)\s+(?:den\s+|die\s+|das\s+|mein\s+|meine\s+|meinen\s+)?([a-z][a-z0-9äöüß ]{1,24}?)\s+(?:genauso|so|gleich)\s+(?:laut|leise)\s+wie\s+(?:den\s+|die\s+|das\s+|mein\s+|meine\s+|meinen\s+)?([a-z][a-z0-9äöüß ]{1,24})$")
+    });
+    static THAN: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^(?:make|turn|set)\s+(?:the\s+|my\s+)?([a-z][a-z0-9 ]{1,24}?)\s+(louder|quieter|softer)\s+than\s+(?:the\s+|my\s+)?([a-z][a-z0-9 ]{1,24})$|^(?:mach|mache|stell|stelle)\s+(?:den\s+|die\s+|das\s+|mein\s+|meine\s+|meinen\s+)?([a-z][a-z0-9äöüß ]{1,24}?)\s+(lauter|leiser)\s+als\s+(?:den\s+|die\s+|das\s+|mein\s+|meine\s+|meinen\s+)?([a-z][a-z0-9äöüß ]{1,24})$")
+    });
+    let compared: Option<(String, String, i64)> = if let Some(c) = SAME_AS.captures(&s) {
+        let named: Vec<&str> = c.iter().skip(1).flatten().map(|m| m.as_str().trim()).collect();
+        Some((named[0].to_string(), named[1].to_string(), 0))
+    } else {
+        THAN.captures(&s).map(|c| {
+            let named: Vec<&str> = c.iter().skip(1).flatten().map(|m| m.as_str().trim()).collect();
+            (named[0].to_string(), named[2].to_string(), if matches!(named[1], "louder" | "lauter") { 10 } else { -10 })
+        })
+    };
+    if let Some((app, other, offset)) = compared {
+        if let (Some(app), Some(other)) = (app_list(&app), app_list(&other)) {
+            return Some(json!({ "action": "match_app", "app": app, "to": other, "offset": offset }));
+        }
+    }
+    // "Fade the music out", "fade in Discord", "blende die Musik aus": over a few seconds.
+    // "Turn it down slowly": a step taken the same way.
+    static FADE: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^fade\s+(out|in)(?:\s+(?:the\s+|my\s+)?([a-z][a-z0-9 ]{1,24}))?$|^fade\s+(?:the\s+|my\s+)?([a-z][a-z0-9 ]{1,24}?)\s+(?:back\s+)?(out|in)$|^(?:blende|blend)\s+(?:die\s+|den\s+|das\s+|meine\s+|mein\s+)?([a-z0-9äöüß ]{2,24}?)\s+(?:wieder\s+)?(aus|ein)$")
+    });
+    static SLOWLY: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^slowly\s+turn\s+(?:the\s+|my\s+)?([a-z][a-z0-9 ]{1,24}?)\s+(up|down)$|^turn\s+(?:the\s+|my\s+)?([a-z][a-z0-9 ]{1,24}?)\s+(up|down)\s+(?:slowly|gradually|bit\s+by\s+bit)$|^(?:dreh|drehe|mach|mache)\s+(?:die\s+|den\s+|das\s+|meine\s+|mein\s+)?([a-z0-9äöüß ]{2,24}?)\s+langsam\s+(runter|hoch|leiser|lauter)$")
+    });
+    let is_way = |g: &str| matches!(g, "out" | "in" | "aus" | "ein" | "up" | "down" | "runter" | "hoch" | "leiser" | "lauter");
+    if let Some(c) = FADE.captures(&s).or_else(|| SLOWLY.captures(&s)) {
+        let groups: Vec<&str> = c.iter().skip(1).flatten().map(|m| m.as_str().trim()).collect();
+        let way = groups.iter().copied().find(|g| is_way(g))?;
+        let named = groups.iter().copied().find(|g| !is_way(g)).unwrap_or("it");
+        let app = match named {
+            "it" | "that" | "this" | "es" | "das" => Some(Some("it".to_string())),
+            "everything" | "alles" | "sound" | "audio" | "volume" | "ton" | "lautstärke" => Some(None),
+            other => app_list(other).map(Some),
+        };
+        if let Some(app) = app {
+            let mut call = match way {
+                "out" | "aus" => json!({ "action": "fade", "way": "out" }),
+                "in" | "ein" => json!({ "action": "fade", "way": "in" }),
+                "up" | "hoch" | "lauter" => json!({ "action": "fade", "delta": 20 }),
+                _ => json!({ "action": "fade", "delta": -20 }),
+            };
+            if let Some(app) = app {
+                call["app"] = json!(app);
+            }
+            return Some(call);
+        }
+    }
+    static READ_APP: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^how\s+loud\s+is\s+(?:the\s+|my\s+)?([a-z][a-z0-9 ]{1,24})$|^(?:what is|whats|what)\s+(?:the\s+|my\s+)?([a-z][a-z0-9 ]{1,24}?)\s+(?:volume|level)(?:\s+at)?$|^(?:what is|whats|what|where is|where)\s+(?:the\s+|my\s+)?([a-z][a-z0-9 ]{1,24}?)\s+(?:at|set\s+to)$|^is\s+(?:the\s+|my\s+)?([a-z][a-z0-9 ]{1,24}?)\s+muted$|^wie\s+laut\s+ist\s+(?:der\s+|die\s+|das\s+|mein\s+|meine\s+)?([a-z][a-z0-9äöüß ]{1,24})$|^ist\s+(?:der\s+|die\s+|das\s+|mein\s+|meine\s+)?([a-z][a-z0-9äöüß ]{1,24}?)\s+stumm$")
+    });
+    if let Some(c) = READ_APP.captures(&s) {
+        let named = c.iter().skip(1).flatten().next()?.as_str().trim();
+        if let Some(app) = app_list(named) {
+            return Some(json!({ "action": "get_app", "app": app }));
+        }
+    }
+    // "I can't hear anything", "there's no sound", "ich höre nichts": what stands between him and
+    // the sound is looked for, not guessed at. (`s`: "can't" is "can t", "there's" lost its s.)
+    static NO_SOUND: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^(?:i\s+)?(?:can\s+t|cant|cannot|can\s+not|couldn\s+t|don\s+t|dont|do\s+not)\s+hear\s+(?:anything|a\s+thing|any\s+sound|any\s+audio|sound|audio|the\s+sound|the\s+audio|you)(?:\s+(?:at\s+all|any\s*more|right\s+now|now))?$|^i\s+hear\s+nothing$|^why\s+(?:can\s+t|cant|don\s+t|dont)\s+i\s+hear\s+anything$|^(?:why\s+is\s+there\s+|there\s+is\s+|there\s+|i\s+have\s+|i\s+got\s+|we\s+have\s+)?no\s+(?:sound|audio)(?:\s+(?:at\s+all|any\s*more|right\s+now|now))?$|^(?:the\s+|my\s+)?(?:sound|audio)\s+(?:is\s+)?(?:gone|broken|not\s+working|isn\s+t\s+working|isnt\s+working|stopped|stopped\s+working|doesn\s+t\s+work|doesnt\s+work|does\s+not\s+work|died)$|^(?:ich\s+)?(?:höre?|hoere?)\s+nichts(?:\s+mehr)?$|^ich\s+kann\s+nichts\s+(?:mehr\s+)?hören$|^warum\s+(?:höre?|hoere?)\s+ich\s+nichts$|^(?:es\s+gibt\s+|da\s+ist\s+|ich\s+habe\s+|ich\s+hab\s+|warum\s+ist\s+)?kein(?:en)?\s+(?:ton|sound)(?:\s+(?:da|mehr))?$|^(?:der\s+|mein\s+)?(?:ton|sound)\s+(?:ist\s+weg|ist\s+kaputt|geht\s+nicht(?:\s+mehr)?|funktioniert\s+nicht(?:\s+mehr)?)$")
+    });
+    if NO_SOUND.is_match(&s) {
+        return Some(json!({ "action": "no_sound" }));
+    }
+    static NO_SOUND_FROM: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^(?:i\s+)?(?:can\s+t|cant|cannot|can\s+not|couldn\s+t|don\s+t|dont|do\s+not)\s+hear\s+(?:the\s+|my\s+)?([a-z][a-z0-9 ]{1,24}?)(?:\s+(?:at\s+all|any\s*more|right\s+now|now))?$|^no\s+(?:sound|audio)\s+(?:from|on|in)\s+(?:the\s+|my\s+)?([a-z][a-z0-9 ]{1,24})$|^(?:the\s+|my\s+)?([a-z][a-z0-9 ]{1,24}?)\s+has\s+no\s+(?:sound|audio)$|^ich\s+(?:höre?|hoere?)\s+(?:den\s+|die\s+|das\s+|mein\s+|meine\s+|meinen\s+)?([a-z0-9äöüß ]{2,24}?)\s+nicht(?:\s+mehr)?$|^ich\s+kann\s+(?:den\s+|die\s+|das\s+|mein\s+|meine\s+|meinen\s+)?([a-z0-9äöüß ]{2,24}?)\s+nicht\s+(?:mehr\s+)?hören$")
+    });
+    if let Some(c) = NO_SOUND_FROM.captures(&s) {
+        let named = c.iter().skip(1).flatten().next()?.as_str().trim();
+        if let Some(app) = app_list(named) {
+            return Some(json!({ "action": "no_sound", "app": app }));
+        }
     }
     static BY: LazyLock<Regex> = LazyLock::new(|| {
         re(r"^(?:(lower|reduce|decrease|drop|raise|increase|turn up|turn down)\s+(?:the\s+)?(?:system\s+|master\s+)?(?:volume|sound|lautstärke)\s+by\s+(\d{1,3})(?:\s*(?:%|percent|prozent))?|(?:volume|sound|lautstärke)\s+(up|down)\s+by\s+(\d{1,3})(?:\s*(?:%|percent|prozent))?)$")
@@ -309,49 +573,383 @@ pub fn mixer_command(text: &str) -> Option<Value> {
         let down = c.get(1).map(|m| matches!(m.as_str(), "lower" | "reduce" | "decrease" | "drop" | "turn down")).unwrap_or_else(|| c.get(3).is_some_and(|m| m.as_str() == "down"));
         return Some(json!({ "action": "change_master", "delta": if down { -n } else { n } }));
     }
-    static BACK: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:set|put|turn)\s+(?:it|the volume|the sound|volume)\s+(?:back\s+)?(?:to|on)\s+(?:a\s+)?(\d{1,3})\s*(?:%|percent|prozent)?$"));
+    static BACK: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:set|put|turn)\s+(it|the volume|the sound|volume)\s+(?:back\s+)?(?:to|on)\s+(?:a\s+)?(\d{1,3})\s*(?:%|percent|prozent)?$"));
     if let Some(c) = BACK.captures(&s) {
-        let n: u64 = c[1].parse().ok()?;
-        return Some(json!({ "action": "set_master", "level": n.min(100) }));
+        let n: u64 = c[2].parse().ok()?;
+        // "It" is what the last volume request was about (the browser he just turned down);
+        // the mixer takes the master volume when there was none.
+        return Some(if &c[1] == "it" { json!({ "action": "set_app", "app": "it", "level": n.min(100) }) } else { json!({ "action": "set_master", "level": n.min(100) }) });
+    }
+    // "Make everything loud again", "put the volume back", "restore the volume", "mach alles
+    // wieder laut": every level the mixer changed goes back to what it was.
+    static RESTORE: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^(?:(?:and |now |ok |okay |jarvis )*(?:make|turn|set|put|get)\s+(?:everything|it all|all of it|the volume|the sound|all the volumes|the volumes)\s+(?:loud|normal|back)(?:\s+again)?(?:\s+to\s+(?:normal|how it was|where it was))?|(?:everything|volume|sound|audio|all)\s+back\s+to\s+normal|(?:restore|reset|undo)\s+(?:the\s+|my\s+|all\s+|all the\s+)?(?:volume|volumes|sound|audio|mixer|that volume|the volume)(?:\s+(?:change|changes|levels?))?|(?:put|set|turn)\s+(?:the\s+|all\s+|all the\s+)?(?:volume|volumes|sound)\s+back(?:\s+to\s+(?:normal|how it was|where it was))?|(?:mach|mache|stell|stelle)\s+(?:alles|die lautstärke)\s+wieder\s+(?:laut|normal|zurück|her)|lautstärke\s+(?:zurücksetzen|wiederherstellen))$")
+    });
+    if RESTORE.is_match(&s) {
+        return Some(json!({ "action": "restore" }));
+    }
+    // "Make Discord loud again", "Discord wieder laut": the same for one app.
+    static RESTORE_APP: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^(?:(?:make|turn|set|put|get|bring)\s+)?(?:the\s+|my\s+)?([a-z][a-z0-9 ]{1,24}?)\s+(?:loud\s+again|back\s+to\s+normal|normal\s+again)$|^(?:(?:mach|mache|stell|stelle)\s+)?(?:den\s+|die\s+|das\s+|mein\s+|meine\s+|meinen\s+)?([a-z][a-z0-9äöüß ]{1,24}?)\s+wieder\s+(?:laut|normal)$")
+    });
+    if let Some(c) = RESTORE_APP.captures(&s) {
+        if let Some(app) = app_list(c.iter().skip(1).flatten().next()?.as_str().trim()) {
+            return Some(json!({ "action": "restore", "app": app }));
+        }
+    }
+    // "Mute everything except Discord", "silence all but the browser", "alles außer Discord
+    // stumm": every other app's own volume is muted (the master volume is left alone).
+    static OTHERS: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^(?:mute|silence|stumm)\s+(?:everything|everyone|all|all apps|all other apps|every app|alles)\s+(?:except|but|except for|other than|apart from|besides|außer|ausser|bis auf)\s+(?:the\s+|my\s+)?([a-z][a-z0-9 ]{1,40}?)$|^(?:alles|alle)\s+(?:außer|ausser|bis auf)\s+([a-z][a-z0-9 ]{1,40}?)\s+(?:stumm|stummschalten|muten)$|^(?:(?:mach|mache|schalte|schalt|stell|stelle)\s+)?alles\s+(?:stumm|aus)\s+(?:außer|ausser|bis auf)\s+(?:den\s+|die\s+|das\s+|mein\s+|meine\s+|meinen\s+)?([a-z][a-z0-9 ]{1,40}?)$|^(?:only|nur)\s+([a-z][a-z0-9 ]{1,24}?)(?:\s+(?:audio|sound|ton))$|^solo\s+(?:the\s+|my\s+)?([a-z][a-z0-9 ]{1,24})$")
+    });
+    if let Some(c) = OTHERS.captures(&s) {
+        let names = c.iter().skip(1).flatten().next()?.as_str().trim();
+        if app_list(names).is_some() {
+            return Some(json!({ "action": "mute_others", "app": names }));
+        }
     }
     // Per-application: "<app> to N %" pairs, or "mute / unmute <app>".
     static PAIR: LazyLock<Regex> = LazyLock::new(|| re(r"([a-z][a-z0-9 ]{1,24}?)\s+(?:to|auf|at)\s+(\d{1,3})\s*(?:%|percent|prozent)"));
     let apps: Vec<Value> = PAIR
         .captures_iter(&s)
-        .filter_map(|c| {
-            let raw = c[1].trim();
-            // "Turn Sonora down to 20 %", "mach Discord leiser auf 30 Prozent": the direction is no name.
-            let name = raw
-                .rsplit(" and ")
-                .next()
-                .unwrap_or(raw)
-                .split_whitespace()
-                .filter(|w| {
-                    !matches!(
-                        *w,
-                        "set" | "make" | "mach" | "mache" | "stell" | "stelle" | "put" | "turn" | "bring" | "the" | "and" | "und" | "volume" | "of" | "lautstärke" | "von"
-                            | "down" | "up" | "runter" | "hoch" | "leiser" | "lauter" | "die" | "den" | "my" | "meine" | "mein"
-                    )
+        .flat_map(|c| {
+            let raw = c[1].trim().to_string();
+            let level: u64 = c[2].parse().unwrap_or(0);
+            // "Turn Sonora down to 20 %", "mach Discord leiser auf 30 Prozent": the direction is
+            // no name. "Discord and Spotify to 40 %": both get the level; "… and Discord to
+            // 100 %" after another pair: the app right before the level.
+            let named: Vec<String> = raw
+                .split(" and ")
+                .flat_map(|p| p.split(" und "))
+                .map(|part| {
+                    part.split_whitespace()
+                        .filter(|w| {
+                            !matches!(
+                                *w,
+                                "set" | "make" | "mach" | "mache" | "stell" | "stelle" | "put" | "turn" | "bring" | "the" | "and" | "und" | "volume" | "of" | "lautstärke" | "von"
+                                    | "down" | "up" | "runter" | "hoch" | "leiser" | "lauter" | "die" | "den" | "my" | "meine" | "mein"
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" ")
                 })
-                .collect::<Vec<_>>()
-                .join(" ");
-            let level: u64 = c[2].parse().ok()?;
-            (!name.is_empty() && crate::audio_mixer::is_app_name(&name)).then(|| json!({ "app": name, "level": level.min(100) }))
+                .filter(|name| !name.is_empty())
+                .collect();
+            // The app right before the level must be one; the ones before it share its level.
+            let ok = named.last().is_some_and(|last| crate::audio_mixer::is_app_name(last));
+            named.into_iter().filter(move |name| ok && crate::audio_mixer::is_app_name(name)).map(move |name| json!({ "app": name, "level": level.min(100) })).collect::<Vec<_>>()
         })
         .collect();
     if !apps.is_empty() {
         return Some(json!({ "action": "set_apps", "apps": apps }));
     }
-    static MUTE_APP: LazyLock<Regex> = LazyLock::new(|| re(r"^(mute|unmute|stumm schalten|stummschalten)\s+([a-z][a-z0-9 ]{1,24})$|^([a-z][a-z0-9 ]{1,24})\s+(stumm|stummschalten|muten|unmuten)$"));
+    static MUTE_APP: LazyLock<Regex> = LazyLock::new(|| re(r"^(mute|unmute|stumm schalten|stummschalten)\s+([a-z][a-z0-9 ]{1,24}?)(?:\s+until\s+i\s+(?:say\s+so|tell\s+you(?:\s+otherwise)?))?$|^([a-z][a-z0-9 ]{1,24}?)\s+(stumm\s+schalten|stummschalten|stumm|muten|unmuten)$"));
     if let Some(c) = MUTE_APP.captures(&s) {
         let verb = c.get(1).or(c.get(4))?.as_str();
-        let app = c.get(2).or(c.get(3))?.as_str().trim();
-        if crate::audio_mixer::is_app_name(app) {
+        // ("Mute my browser", "mute Discord and Spotify": the apps as the mixer knows them.)
+        if let Some(app) = app_list(c.get(2).or(c.get(3))?.as_str().trim()) {
             let mute = !verb.starts_with("unmute");
             return Some(json!({ "action": if mute { "mute_app" } else { "unmute_app" }, "app": app }));
         }
     }
-    None
+    volume_phrase(&s)
+}
+
+/// "Save this mix as gaming", "load my gaming mix", "which mixes do I have", "delete the gaming
+/// mix", and a saved mix's name alone ("gaming mix"). A playlist is played or put on, never
+/// loaded: "put on my classic rock mix" stays the music's.
+fn mix_command(text: &str) -> Option<Value> {
+    static SAVE: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^(?:save|store|remember|keep|speicher|speichere|merk dir)\s+(?:this|that|the|my|these|diesen|den|die|meinen)?\s*(?:current\s+|aktuellen\s+)?(?:audio\s+|sound\s+|volume\s+)?(?:mix|volumes?|levels?|mischung|lautstärken?)\s+(?:as|called|named|als|unter)\s+(?:my\s+|the\s+|mein\s+|meinen\s+)?([a-z0-9äöüß][a-z0-9äöüß ]{0,30}?)(?:\s+mix)?$")
+    });
+    static LOAD: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^(?:load|apply|use|switch to|change to|go to|activate|lade|lad|nimm|aktiviere|wechsel zu|wechsle zu)\s+(?:my\s+|the\s+|mein\s+|meinen\s+|den\s+|die\s+|zum\s+|zu\s+)?([a-z0-9äöüß][a-z0-9äöüß ]{0,30}?)\s+(?:mix|mischung)$")
+    });
+    static LIST: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^(?:which|what)\s+(?:audio\s+|sound\s+|volume\s+)?mixes\s+(?:do i have|have i (?:got|saved)|are (?:there|saved)|do we have)$|^(?:list|show)\s+(?:me\s+)?(?:my\s+|the\s+)?(?:saved\s+|audio\s+)?mixes$|^welche\s+(?:mixe|mischungen)\s+(?:habe ich|hab ich|gibt es)$|^(?:zeig|zeige)\s+(?:mir\s+)?(?:meine\s+)?(?:mixe|mischungen)$")
+    });
+    static DELETE: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^(?:delete|remove|forget|erase|lösche|lösch)\s+(?:my\s+|the\s+|mein\s+|meinen\s+|den\s+|die\s+)?([a-z0-9äöüß][a-z0-9äöüß ]{0,30}?)\s+(?:mix|mischung)$")
+    });
+    static ALONE: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:my\s+|the\s+)?([a-z0-9äöüß][a-z0-9äöüß ]{0,30}?)\s+mix$"));
+    // (Cheap for everything else: the word is there or none of these can match.)
+    let lower = text.to_lowercase();
+    if !lower.contains("mix") && !lower.contains("mischung") && !lower.contains("lautstärken") && !(lower.contains(" as ") && (lower.contains("volumes") || lower.contains("levels"))) {
+        return None;
+    }
+    let s = normalize(text);
+    if LIST.is_match(&s) {
+        return Some(json!({ "action": "list_mixes" }));
+    }
+    if let Some(c) = SAVE.captures(&s) {
+        return Some(json!({ "action": "save_mix", "name": c[1].trim() }));
+    }
+    if let Some(c) = LOAD.captures(&s) {
+        return Some(json!({ "action": "load_mix", "name": c[1].trim() }));
+    }
+    if let Some(c) = DELETE.captures(&s) {
+        return Some(json!({ "action": "delete_mix", "name": c[1].trim() }));
+    }
+    let alone = ALONE.captures(&s)?;
+    crate::audio_mixes::find(&alone[1]).map(|mix| json!({ "action": "load_mix", "name": mix.name }))
+}
+
+/// The apps a phrase names ("discord", "the browser and spotify", "discords"): each one known
+/// to the mixer, as Sir would say them. None when any part is no app.
+fn app_list(phrase: &str) -> Option<String> {
+    let mut names: Vec<String> = Vec::new();
+    for part in phrase.split(" and ").flat_map(|p| p.split(" und ")) {
+        let part = part.trim().trim_start_matches("the ").trim_start_matches("my ").trim();
+        // Whisper writes the possessive without its apostrophe ("discords volume"): a name
+        // Sir uses for an app first, as it stands or without that s; then any installed app.
+        let forms = [Some(part), part.strip_suffix('s')];
+        let name = forms.into_iter().flatten().find(|n| crate::audio_mixer::is_alias(n)).or_else(|| forms.into_iter().flatten().find(|n| crate::audio_mixer::is_app_name(n)))?;
+        names.push(name.to_string());
+    }
+    (!names.is_empty()).then(|| names.join(" and "))
+}
+
+/// A level in a volume request: "50", "50%", "fifty", "one hundred", "max", "half". (level,
+/// the words it took.)
+fn level_at(words: &[&str]) -> Option<(i64, usize)> {
+    let first = *words.first()?;
+    if let Ok(n) = first.trim_end_matches('%').parse::<i64>() {
+        return (first.len() <= 4 && (0..=999).contains(&n)).then_some((n.min(100), 1));
+    }
+    if let [a, b, ..] = words {
+        if matches!(*a, "one" | "a" | "ein" | "eine") && matches!(*b, "hundred" | "hundert") {
+            return Some((100, 2));
+        }
+        if let Some(n) = spoken_level(&format!("{a} {b}")) {
+            return Some((n as i64, 2));
+        }
+    }
+    match first {
+        "einhundert" => Some((100, 1)),
+        "zero" | "null" | "minimum" | "min" => Some((0, 1)),
+        // ("One" to "nine" alone are too easily something else: "turn one down".)
+        _ => spoken_level(first).filter(|n| *n >= 10).map(|n| (n as i64, 1)),
+    }
+}
+
+/// One volume request in Sir's words, whatever their order: "lower my browser's volume by 50 %",
+/// "make Discord's volume 50 %", "makes system volume one hundred percent", "turn the music
+/// down a bit", "make it 50 % louder", "mute it", "mach Discord 20 Prozent leiser". `s`: lower
+/// case words, per cent signs kept. None for anything that is no volume request or names no app
+/// the mixer knows (the brightness, the lights, a timer).
+fn volume_phrase(s: &str) -> Option<Value> {
+    let mut words: Vec<&str> = s.split_whitespace().collect();
+    // What the older rules of `parse` answer stays theirs (the plain master volume).
+    if words.len() > 14 || [&*VOLUME_SET, &*VOLUME_SET_REV, &*VOLUME_SET_PC, &*VOLUME_UP, &*VOLUME_DOWN, &*MUTE, &*UNMUTE].iter().any(|r| r.is_match(s)) {
+        return None;
+    }
+    // Lead-ins: "and you make …", "can you …", "I want you to …", "kannst du mal …".
+    const LEAD: &[&str] = &["jarvis", "hey", "ok", "okay", "please", "can", "could", "would", "will", "you", "and", "now", "then", "also", "just", "yes", "well", "so", "i", "want", "need", "id", "like", "bitte", "kannst", "könntest", "du", "und", "dann", "mal", "ich", "will", "möchte"];
+    while words.first().is_some_and(|w| LEAD.contains(w) || (*w == "to" && words.len() > 2)) {
+        words.remove(0);
+    }
+    // A question reads the mixer (above) or is none of this: "is the sound on?" unmuted it.
+    if matches!(words.first().copied(), Some("is" | "isnt" | "are" | "ist" | "sind" | "does" | "did" | "why" | "warum" | "wieso" | "what" | "whats" | "which" | "how" | "wie" | "was" | "when" | "wann" | "who" | "wer")) {
+        return None;
+    }
+    // "It's too loud", "Discord is way too quiet", "das ist zu leise": one step the other way.
+    let judged = words.windows(2).position(|w| matches!(w[0], "too" | "zu") && matches!(w[1], "loud" | "laut" | "quiet" | "low" | "soft" | "leise")).map(|at| {
+        let loud = matches!(words[at + 1], "loud" | "laut");
+        words.drain(at..at + 2);
+        if loud {
+            -1
+        } else {
+            1
+        }
+    });
+    // "It's a bit quiet", "das ist ziemlich laut": a smaller step (the "bit" says so below).
+    let judged = judged.or_else(|| {
+        let at = words.windows(2).position(|w| matches!(w[0], "bit" | "little" | "tad" | "kinda" | "etwas" | "bisschen" | "ziemlich" | "quite" | "rather") && matches!(w[1], "loud" | "laut" | "quiet" | "leise"))?;
+        let loud = matches!(words[at + 1], "loud" | "laut");
+        words.remove(at + 1);
+        Some(if loud { -1 } else { 1 })
+    });
+    // "Turn it all the way up", "dreh die Musik ganz runter": the end of the scale ("ganz leise"
+    // stays just audible).
+    let mut floor = 0;
+    let mut extreme = false;
+    if let Some(at) = words.windows(3).position(|w| w == ["all", "the", "way"]) {
+        words.drain(at..at + 3);
+        extreme = true;
+    } else if let Some(at) = words.iter().position(|w| *w == "ganz") {
+        match words.get(at + 1).copied() {
+            Some("leise") => {
+                floor = 10;
+                words[at + 1] = "runter";
+            }
+            Some("laut") => words[at + 1] = "hoch",
+            _ => {}
+        }
+        words.remove(at);
+        extreme = true;
+    }
+    // "Set every volume back to 100 %", "all volumes to 50", "every app to 80": each app's own
+    // level (the master stays where it is).
+    let every = words.windows(2).any(|w| {
+        matches!(w[0], "every" | "each" | "all" | "alle" | "jede" | "jedes" | "jeder")
+            && matches!(w[1], "volume" | "volumes" | "app" | "apps" | "program" | "programs" | "programme" | "lautstärke" | "lautstärken")
+    }) || words.windows(3).any(|w| w[0] == "all" && w[1] == "the" && matches!(w[2], "volumes" | "apps" | "programs"));
+    if every {
+        words.retain(|w| !matches!(*w, "every" | "each" | "jede" | "jedes" | "jeder" | "app" | "apps" | "program" | "programs" | "programme"));
+    }
+    let mut level: Option<i64> = None;
+    let (mut relative, mut absolute) = (false, false);
+    let mut direction = 0i64;
+    let mut step: Option<i64> = None;
+    let mut mute: Option<bool> = None;
+    let (mut cue, mut turn, mut percent) = (false, false, false);
+    // "Turn off the sound", "turn the sound back on": said of the sound, a mute in other words.
+    let mut switched: Option<bool> = None;
+    // "Dreh die Musik auf": without a level, the German verb for up.
+    let mut auf = false;
+    // ("Crank", "blast off" on their own are about no sound.)
+    let mut cranked = false;
+    let mut target: Vec<&str> = Vec::new();
+    let mut i = 0;
+    while i < words.len() {
+        let w = words[i];
+        match w {
+            "volume" | "volumes" | "sound" | "audio" | "lautstärke" | "lautstaerke" | "ton" | "loudness" | "systemlautstärke" | "gesamtlautstärke" => cue = true,
+            "mute" | "silence" | "stumm" | "stummschalten" | "muten" | "lautlos" => mute = Some(true),
+            "unmute" | "unmuten" | "entstummen" => mute = Some(false),
+            "louder" | "lauter" | "higher" | "höher" | "raise" | "increase" | "boost" | "erhöhe" | "erhöh" | "hoch" => {
+                direction = 1;
+                cue |= matches!(w, "louder" | "lauter");
+            }
+            "quieter" | "leiser" | "softer" | "reduce" | "decrease" | "drop" | "runter" | "verringere" | "senke" | "senk" => {
+                direction = -1;
+                cue |= matches!(w, "quieter" | "leiser" | "softer");
+            }
+            // "Lower the browser" (a verb) and "50 % lower" (after an amount) both mean down.
+            "lower" | "niedriger" => direction = -1,
+            // ("Bring up the browser" names no volume and no turn: it does not qualify below.)
+            "up" | "down" => direction = if w == "up" { 1 } else { -1 },
+            "turn" | "dreh" | "drehe" | "switch" | "schalte" | "schalt" => turn = true,
+            // "Crank the music", "pump up the volume", "blast it": up, unless he says down.
+            "crank" | "pump" | "blast" => {
+                turn = true;
+                cranked = true;
+                if direction == 0 {
+                    direction = 1;
+                }
+            }
+            "by" | "um" => relative = true,
+            "to" | "at" => absolute = true,
+            "on" => {
+                absolute = true;
+                switched = Some(true);
+            }
+            "auf" => {
+                absolute = true;
+                auf = true;
+            }
+            "off" | "aus" => switched = Some(false),
+            "an" => switched = Some(true),
+            "bit" | "little" | "slightly" | "tad" | "touch" | "etwas" | "bisschen" | "wenig" | "leicht" => step = Some(5),
+            "lot" | "much" | "way" | "far" | "viel" | "deutlich" => step = Some(20),
+            "%" | "percent" | "prozent" | "points" | "punkte" => percent = true,
+            "max" | "maximum" | "full" | "voll" | "volle" | "maximal" if level.is_none() => level = Some(100),
+            "half" | "halb" | "halbe" | "hälfte" if level.is_none() => level = Some(50),
+            // Words that carry nothing here.
+            "set" | "make" | "makes" | "put" | "bring" | "change" | "adjust" | "get" | "keep" | "have" | "mach" | "mache" | "machen" | "stell" | "stelle" | "stellen" | "setz" | "setze" | "the" | "my"
+            | "your" | "a" | "die" | "der" | "das" | "den" | "dem" | "mein" | "meine" | "meinen" | "of" | "for" | "von" | "für" | "again" | "back" | "level" | "all" | "alle" | "more"
+            | "noch" | "wieder" | "bitte" | "please" | "ein" | "eine" | "is" | "ist" | "be" | "its" | "s" | "in" | "even" | "still" => {}
+            _ => match level_at(&words[i..]).filter(|_| level.is_none()) {
+                Some((n, took)) => {
+                    level = Some(n);
+                    percent |= w.ends_with('%');
+                    i += took - 1;
+                }
+                None => target.push(w),
+            },
+        }
+        i += 1;
+    }
+    let named = target.join(" ");
+    // "Everything" is the master volume, and so are all the apps.
+    let everything = every || matches!(named.as_str(), "everything" | "alles" | "apps" | "programs" | "programme");
+    // "Discord to half", "put Discord at 50": a level for an app, by a name Sir uses for it.
+    let alias = crate::audio_mixer::is_alias(&named) || named.strip_suffix('s').is_some_and(crate::audio_mixer::is_alias);
+    percent |= absolute && level.is_some() && alias;
+    if auf && turn && level.is_none() && direction == 0 {
+        direction = 1;
+    }
+    // "Too loud", "dreh auf" name nothing: they are about what the last request was about.
+    // ("Even louder", "noch leiser": louder than what was just changed.)
+    let compared = direction != 0 && words.iter().any(|w| matches!(*w, "even" | "noch" | "still"));
+    let about_last = named.is_empty() && (compared || (!cue && !cranked && (judged.is_some() || (turn && direction != 0))));
+    // "Music up", "Discord etwas runter", "Spotify 30": the name and the way or the level, and
+    // nothing else. (Not a small digit: "Discord 2" is more likely a name.)
+    let said = words.iter().filter(|w| !matches!(**w, "the" | "my" | "die" | "meine" | "a" | "bit" | "little" | "etwas" | "bisschen" | "ein" | "more" | "noch" | "much" | "lot" | "viel")).count();
+    let bare = alias && (direction != 0 || level.is_some_and(|l| l >= 10)) && said == target.len() + 1;
+    if let Some(way) = judged {
+        direction = way;
+        cue = true;
+    }
+    turn |= extreme;
+    if cue && mute.is_none() && level.is_none() && direction == 0 {
+        mute = switched.map(|on| !on);
+    }
+    // A volume request names the volume, a loudness or a mute, or gives something a share
+    // ("Sonora 30 %") or a turn ("turn Discord down"). Anything else is none, and is not worth
+    // looking a name up in the list of installed apps for (that costs a millisecond).
+    if !(cue || mute.is_some() || percent || bare || (turn && direction != 0) || (direction != 0 && (level.is_some() || everything)) || (everything && absolute && level.is_some())) {
+        return None;
+    }
+    // …and asks for something: a level, a step or a mute ("turn off the sound cues" does not).
+    if level.is_none() && direction == 0 && mute.is_none() {
+        return None;
+    }
+    // Whom it is about.
+    let app: Option<String> = match named.as_str() {
+        "" if about_last => Some("it".to_string()),
+        // ("My PC's volume" arrives as "pcs".)
+        "" | "system" | "master" | "pc" | "pcs" | "computer" | "computers" | "systems" | "laptop" | "laptops" | "overall" | "main" | "windows" | "everything" | "rechner" | "gesamt" | "alles" | "whole" | "whole system" | "whole pc" | "apps" | "programs" | "programme" => None,
+        "it" | "that" | "this" | "them" | "those" | "es" | "das" | "ihn" | "sie" => Some("it".to_string()),
+        other => Some(app_list(other)?),
+    };
+    // A volume request names the volume, a loudness or a mute, or gives an app a share ("Sonora
+    // 30 %") or a turn ("turn Discord down").
+    let qualifies = cue || mute.is_some() || everything || bare || (app.is_some() && (percent || (turn && direction != 0) || (direction != 0 && level.is_some())));
+    if !qualifies {
+        return None;
+    }
+    if let Some(on) = mute {
+        return Some(match app {
+            Some(app) => json!({ "action": if on { "mute_app" } else { "unmute_app" }, "app": app }),
+            None => json!({ "action": if on { "mute_master" } else { "unmute_master" } }),
+        });
+    }
+    // The end of the scale is a level, not a step.
+    if extreme && direction != 0 {
+        level = Some(if direction > 0 { 100 } else { floor });
+        direction = 0;
+    }
+    // A step: "by 50 %", "50 % louder", "a bit quieter", "turn it down".
+    if direction != 0 && (relative || !absolute || level.is_none()) && !(absolute && level.is_some()) {
+        let delta = direction * level.or(step).unwrap_or(10);
+        return Some(match app {
+            Some(app) => json!({ "action": "change_app", "app": app, "delta": delta }),
+            None => json!({ "action": "change_master", "delta": delta }),
+        });
+    }
+    let level = level?;
+    if relative && direction == 0 {
+        // "Volume by 20" says no direction.
+        return None;
+    }
+    Some(match app {
+        Some(app) if app == "it" => json!({ "action": "set_app", "app": "it", "level": level }),
+        Some(app) => json!({ "action": "set_apps", "apps": app.split(" and ").map(|a| json!({ "app": a, "level": level })).collect::<Vec<_>>() }),
+        // "Set all apps to 100 %" is about their own levels: the master would jump with it.
+        None if every || matches!(named.as_str(), "apps" | "programs" | "programme") => json!({ "action": "set_all_apps", "level": level }),
+        None => json!({ "action": "set_master", "level": level }),
+    })
 }
 
 static BRIEFING: LazyLock<Regex> = LazyLock::new(|| {
@@ -376,10 +974,18 @@ static COPY_THAT: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(?:copy (?:that|this|it)(?: (?:to|into) (?:the |my )?clipboard)?|copy (?:your|the) (?:answer|reply|last answer)(?: (?:to|into) (?:the |my )?clipboard)?|put (?:that|it) (?:in|into|on) (?:the |my )?clipboard|kopier das|kopiere das|kopier es|in die zwischenablage)$")
 });
 static NETWORK: LazyLock<Regex> = LazyLock::new(|| {
-    re(r"^(?:am i online|are we online|are we connected|is (?:my |the )?internet (?:working|down|up|ok|okay)|check (?:my |the )?(?:internet|connection|network|wifi|wlan)(?: connection)?|hows? my (?:internet|connection|network|wifi)|how is my (?:internet|connection|network)|what(?:s| is) my (?:public )?ip(?: address)?|ping|network status|internet status|bin ich online|sind wir online|geht (?:mein |das )?internet|internet check|netzwerkstatus|wie ist meine verbindung|wie ist mein internet)$")
+    re(r"^(?:am i online|are we online|are we connected|is (?:my |the )?internet (?:working|down|up|ok|okay)|check (?:my |the )?(?:internet|connection|network|wifi|wlan)(?: connection)?|hows? my (?:internet|connection|network|wifi)|how is my (?:internet|connection|network)|what(?:s| is) my (?:public )?ip(?: address)?|ping|(?:(?:show|check|give|tell)(?: me)? (?:the |my )?|(?:whats|what is) (?:the |my )?)?(?:network|internet|connection) status|bin ich online|sind wir online|geht (?:mein |das )?internet|internet check|(?:zeig(?:e)?(?: mir)? (?:den |meinen )?)?netzwerkstatus|wie ist meine verbindung|wie ist mein internet)$")
 });
 static PROCESSES: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(?:whats slowing (?:down )?my (?:pc|computer|system|machine|laptop)(?: down)?|what is slowing (?:down )?my (?:pc|computer|system|machine|laptop)(?: down)?|why is my (?:pc|computer|system|machine|laptop) (?:so )?(?:slow|laggy|sluggish)|which (?:app|program|process|application)s? (?:uses|use|is using|are using) (?:the most |so much )?(?:cpu|memory|ram|resources)(?: the most)?|what(?:s| is) using (?:my |all my |so much |the most )?(?:cpu|memory|ram|resources)|top processes|show (?:me )?the top processes|was (?:verbraucht|frisst|bremst) (?:so viel )?(?:ram|cpu|speicher|leistung|meinen pc)|warum ist mein (?:pc|rechner|computer|laptop) so langsam)$")
+});
+/// "List my skills", "what skills have you learned", "welche Skills hast du": read out.
+static LIST_SKILLS: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"^(?:(?:list|show|read|tell)(?: me)? (?:all )?(?:my |your |the )?(?:learned |custom )?skills|(?:what|which) (?:learned |custom )?skills (?:do (?:i|you) have|have you learned|have you got|did you learn|are (?:there|installed))|(?:zeig|zeige)(?: mir)? (?:alle )?(?:deine |meine |die )?skills|welche skills (?:hast du|habe ich|kennst du|gibt es))$")
+});
+/// "What are my protocols?", "list my protocols", "welche Protokolle habe ich": read out.
+static LIST_PROTOCOLS: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"^(?:(?:list|show|read|tell)(?: me)? (?:all )?(?:my |your |the )?(?:stark )?protocols|(?:what|which) (?:stark )?protocols (?:do (?:i|you) have|are there|have i got|can you run)|what are (?:my|your|the) (?:stark )?protocols|(?:zeig|zeige)(?: mir)? (?:alle )?(?:meine |deine |die )?protokolle|welche protokolle (?:habe ich|hast du|gibt es))$")
 });
 static VOICE_FASTER: LazyLock<Regex> =
     LazyLock::new(|| re(r"^(?:speak|talk) (?:a (?:bit|little) |much )?(?:faster|quicker)$|^sprich (?:etwas |ein bisschen )?schneller$|^rede schneller$"));
@@ -416,6 +1022,55 @@ static READ_CLIPBOARD: LazyLock<Regex> = LazyLock::new(|| {
 static RECALL: LazyLock<Regex> = LazyLock::new(|| {
     re(r"\b(?:what did (?:we|i) (?:talk|speak|chat) about|what were we (?:talking|speaking) about|what have we (?:talked|spoken) about|what did i (?:say|tell you|ask you|ask) (?:about|regarding)?|what did you (?:tell|say to) me (?:about)?|do you remember (?:what|when) (?:i|we)|worüber haben wir (?:gesprochen|geredet)|was haben wir (?:besprochen|beredet)|was habe ich (?:dir )?(?:gesagt|erzählt))\b")
 });
+
+/// A level from 0 to 100 spoken as words, English or German: "forty", "forty five",
+/// "twenty-five", "fünfzig", "hundert". None for anything that is not a number.
+fn spoken_level(words: &str) -> Option<u64> {
+    let unit = |w: &str| -> Option<u64> {
+        Some(match w {
+            "zero" | "null" => 0,
+            "one" | "eins" => 1,
+            "two" | "zwei" => 2,
+            "three" | "drei" => 3,
+            "four" | "vier" => 4,
+            "five" | "fünf" => 5,
+            "six" | "sechs" => 6,
+            "seven" | "sieben" => 7,
+            "eight" | "acht" => 8,
+            "nine" | "neun" => 9,
+            _ => return None,
+        })
+    };
+    let tens = |w: &str| -> Option<u64> {
+        Some(match w {
+            "ten" | "zehn" => 10,
+            "eleven" | "elf" => 11,
+            "twelve" | "zwölf" => 12,
+            "fifteen" | "fünfzehn" => 15,
+            "twenty" | "zwanzig" => 20,
+            "thirty" | "dreißig" | "dreissig" => 30,
+            "forty" | "fourty" | "vierzig" => 40,
+            "fifty" | "fünfzig" => 50,
+            "sixty" | "sechzig" => 60,
+            "seventy" | "siebzig" => 70,
+            "eighty" | "achtzig" => 80,
+            "ninety" | "neunzig" => 90,
+            "hundred" | "hundert" | "full" | "max" | "maximum" => 100,
+            "half" | "halb" => 50,
+            _ => return None,
+        })
+    };
+    let parts: Vec<&str> = words.split([' ', '-']).filter(|p| !p.is_empty()).collect();
+    match parts.as_slice() {
+        [one] => tens(one).or_else(|| unit(one)),
+        // "Forty five": a round ten and a unit.
+        [ten, one] => match (tens(ten), unit(one)) {
+            (Some(t), Some(u)) if (20..=90).contains(&t) && t % 10 == 0 => Some(t + u),
+            _ => None,
+        },
+        _ => None,
+    }
+}
 
 /// Small numbers spoken as words, for timers.
 fn small_number(word: &str) -> Option<f64> {
@@ -551,6 +1206,12 @@ fn assistant_command(s: &str, original: &str) -> Option<Intent> {
     if PROCESSES.is_match(s) {
         return tool("top_processes", json!({}));
     }
+    if LIST_SKILLS.is_match(s) {
+        return tool("list_skills", json!({}));
+    }
+    if LIST_PROTOCOLS.is_match(s) {
+        return tool("manage_stark_protocol", json!({ "action": "list" }));
+    }
     if VOICE_FASTER.is_match(s) {
         return tool("media_and_volume_control", json!({ "action": "jarvis_faster" }));
     }
@@ -600,6 +1261,14 @@ fn normalize(text: &str) -> String {
         .collect::<Vec<_>>()
         .join(" ");
     s = s.trim_end_matches('.').trim().to_string();
+    // His name as a sentence of its own, as Sir types it in the console ("Jarvis. Span over all
+    // three monitors."): the full stop kept it from being taken for the address it is.
+    for lead in ["hey jarvis. ", "ok jarvis. ", "okay jarvis. ", "jarvis. "] {
+        if let Some(rest) = s.strip_prefix(lead) {
+            s = rest.trim_start().to_string();
+            break;
+        }
+    }
     // Polite wrappers and spoken interjections ("Nana, open my browser") that don't change the
     // command.
     for _ in 0..4 {
@@ -609,6 +1278,7 @@ fn normalize(text: &str) -> String {
             "könntest du ", "würdest du ", "mal ", "doch mal ", "ok ", "okay ", "so ", "nana ", "na ", "nah ", "no ", "yeah ",
             "yes ", "yep ", "um ", "umm ", "uh ", "uhm ", "äh ", "ähm ", "öhm ", "hmm ", "also ", "well ", "alright ", "right ",
             "and ", "und ", "now ", "then ", "dann ", "ja ", "nein ", "oh ", "ah ", "actually ", "eigentlich ", "hey ",
+            "wait ", "warte ", "maybe ", "vielleicht ", "sorry ", "oops ", "ups ", "hoppla ", "uhh ", "hm ", "ähh ",
         ] {
             if let Some(rest) = s.strip_prefix(prefix) {
                 s = rest.to_string();
@@ -711,8 +1381,345 @@ pub fn hud_view_command(text: &str) -> Option<Intent> {
     hud_view_sentence(text)
 }
 
+/// "Bring back my windows", "reopen the windows from last time", "restore my last session",
+/// "open everything I had open again", "hol meine Fenster von vorhin zurück": what was open
+/// last comes back, also after a restart. ("Bring all the windows back in" docks them.)
+static WINDOWS_BACK: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"^(?:(?:bring|get|put|pull)\s+(?:back\s+)?(?:up\s+)?(?:all\s+)?(?:(?:of\s+)?(?:the|my|your|those)\s+)?(?:recent(?:ly)?(?:\s+(?:opened|open|closed))?\s+|last\s+|previous\s+|old\s+|closed\s+)?(?:windows and widgets|widgets and windows|windows|widgets)(?:\s+back)?(?:\s+up)?(?:\s+(?:again|from\s+(?:last\s+time|before|earlier|yesterday|the\s+last\s+session|last\s+session)|i\s+had\s+open(?:\s+(?:before|last\s+time|earlier))?))?|(?:reopen|restore|re-open)\s+(?:all\s+)?(?:(?:of\s+)?(?:the|my|your)\s+)?(?:recent(?:ly)?(?:\s+(?:opened|open|closed))?\s+|last\s+|previous\s+|closed\s+)?(?:windows and widgets|windows|widgets|session)(?:\s+(?:again|from\s+(?:last\s+time|before|earlier|the\s+last\s+session|last\s+session)|i\s+had\s+open(?:\s+(?:before|last\s+time|earlier))?))?|(?:open|show)\s+(?:all\s+)?(?:(?:the|my)\s+)?(?:recent(?:ly)?(?:\s+(?:opened|closed))?\s+|last\s+|previous\s+)?(?:windows|widgets)\s+(?:again|from\s+(?:last\s+time|before|earlier|the\s+last\s+session|last\s+session))|(?:bring|open|put)\s+(?:back\s+)?(?:everything|all)\s+(?:back\s+)?(?:i|that\s+i|that)\s+(?:had|was)\s+open(?:\s+(?:again|before|last\s+time|earlier))?(?:\s+back)?(?:\s+up)?|(?:hol|hole|bring|bringe)\s+(?:mir\s+)?(?:meine|die|alle\s+meine)\s+(?:letzten\s+|alten\s+)?(?:fenster|widgets)\s+(?:von\s+(?:vorhin|gestern|letztes\s+mal|letztem\s+mal)\s+)?(?:zurück|wieder|wieder\s+her)|(?:öffne|oeffne|stell|stelle)\s+(?:meine|die)\s+(?:letzten\s+)?(?:fenster|widgets)\s+(?:wieder\s+her|wieder\s+auf|wieder))$")
+});
+/// "… the next time I start you", "… at startup", "… when you start", "… beim nächsten Start".
+static NEXT_START: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"\s+(?:again\s+)?(?:(?:the\s+)?next\s+time(?:\s+(?:i\s+start\s+(?:you|jarvis)(?:\s+up)?|you\s+start(?:\s+up)?|i\s+open\s+you))?|(?:at|on|for|after)\s+(?:the\s+|every\s+|each\s+)?(?:next\s+)?(?:start|startup|start-up|launch|boot|restart)|when(?:ever)?\s+(?:you|i)\s+(?:start|restart|boot|launch)(?:\s+(?:you|jarvis|up|again))*(?:\s+(?:the\s+)?next\s+time)?|(?:beim|für\s+den|zum|nach\s+dem)\s+nächsten\s+start)(?:\s+(?:again|wieder))?(?:\s+any\s?more)?$")
+});
+static KEEP_VERB: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"^(dont\s+|do\s+not\s+|never\s+|no\s+longer\s+|stop\s+)?(?:open|opening|show|showing|keep|keeping|bring\s+up|start\s+with|load|display|pin|have|öffne|oeffne|zeig|zeige|behalte|behalt|lade)\s+(.+)$")
+});
+
+/// "Open that widget again the next time I start you", "keep the CPU gauge for the next
+/// start", "don't open it at startup any more": `create_or_update_widget` arguments with
+/// `keep_at_start` (he starts with an empty panel otherwise). The widget is "last", a name, or
+/// "window" for the last window.
+fn keep_at_start_command(s: &str) -> Option<Value> {
+    if s.split_whitespace().count() > 18 {
+        return None;
+    }
+    let tail = NEXT_START.find(s)?;
+    let c = KEEP_VERB.captures(s[..tail.start()].trim())?;
+    // ("Keep that window for next time": the tail starts after "for".)
+    let named: Vec<&str> = c.get(2)?.as_str().split_whitespace().filter(|w| !matches!(*w, "that" | "this" | "it" | "the" | "my" | "one" | "again" | "open" | "up" | "there" | "for" | "das" | "dieses" | "es" | "wieder" | "mein" | "für")).collect();
+    let window = named.iter().any(|w| matches!(*w, "window" | "fenster"));
+    let name = named.into_iter().filter(|w| !matches!(*w, "widget" | "widgets" | "window" | "fenster" | "block")).collect::<Vec<_>>().join(" ");
+    let target = match (name.is_empty(), window) {
+        (true, true) => "window".to_string(),
+        (true, false) => "last".to_string(),
+        // "The CPU gauge" is called what `live_gauge` called it.
+        (false, _) => live_gauge(name.trim_end_matches(" gauge")).map_or(name.clone(), |(_, title, _)| title.to_string()),
+    };
+    Some(json!({ "id": target, "keep_at_start": c.get(1).is_none() }))
+}
+
+/// "Open the feature lab", "show me your features window", "feature lab": his own list of
+/// everything he can do (never a program for the app launcher).
+static FEATURE_LAB: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"^(?:(?:open|show|show me|bring up|pull up|display|launch|start|go to|öffne|oeffne|zeig|zeige|zeig mir)\s+(?:up\s+)?(?:the\s+|your\s+|my\s+|das\s+|dein\s+|die\s+)?)?(?:feature lab|features lab|feature laboratory|featurelab|feature window|features window|feature list window|feature labor)$")
+});
+/// "Open the theme studio", "create a new theme", "erstelle ein neues Theme": the block where
+/// he designs one (never a program for the app launcher).
+static THEME_STUDIO: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"^(?:(?:open|show|show me|bring up|pull up|display|launch|start|go to|öffne|oeffne|zeig|zeige|zeig mir)\s+(?:up\s+)?(?:the\s+|your\s+|my\s+|das\s+|dein\s+|die\s+)?)?(?:theme studio|themestudio|theme editor|theme designer|theme creator)$|^(?:create|make|design|build|erstelle|erstell|mach|mache|bau)\s+(?:me\s+|mir\s+)?(?:a\s+|an\s+|ein\s+|eine\s+)?(?:new\s+|own\s+|custom\s+|neues\s+|eigenes\s+)?theme$")
+});
+/// "Open the mixer", "show me the volume mixer", "zeig den Mixer": the block with a fader for
+/// every app ("which apps are playing audio?" is read out, not opened).
+static MIXER_VIEW: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"^(?:(?:open|show|show me|bring up|pull up|display|öffne|oeffne|zeig|zeige|zeig mir)\s+(?:up\s+)?(?:the\s+|my\s+|den\s+|meinen\s+)?(?:(?:volume|audio|sound|lautstärke)\s*)?mixer|(?:the\s+|my\s+)?(?:volume|audio|sound)\s+mixer|mixer\s+(?:öffnen|zeigen))$")
+});
+/// "Show me my drive space", "how much space do I have left", "zeig mir meinen Speicherplatz":
+/// the live window with every drive in it.
+static DRIVE_SPACE: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"^(?:(?:show|give|open|pull up|bring up|display|check)(?: me)?\s+(?:my\s+|the\s+)?(?:(?:drive|disk|ssd|hdd)\s+(?:space|usage|storage)|free\s+space|storage(?:\s+space)?)|how much (?:(?:drive|disk|storage|free)\s+)?space (?:do i have(?: left)?|is left|have i got(?: left)?|is free)|(?:zeig|zeige)(?: mir)?\s+(?:meinen\s+|den\s+)?speicherplatz|wie viel speicher(?:platz)? (?:habe ich|hab ich|ist)(?: noch)?(?: frei| übrig)?)$")
+});
+/// "Start a stopwatch", "Stoppuhr starten".
+static STOPWATCH: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"^(?:(?:start|begin|run|open|make|create|add|give me|show me|show|starte|öffne|oeffne|zeig mir|zeig|mach|mache|erstelle|erstell)\s+(?:me\s+|mir\s+)?(?:(?:a|an|the|my|eine|die|meine)\s+)?(?:new\s+|neue\s+)?)?(?:stopwatch|stoppuhr)(?:\s+(?:starten|start|an))?$")
+});
+/// "Stop the stopwatch", "pause the timer", "resume the timer", "reset the stopwatch", "Timer
+/// anhalten", "setz die Stoppuhr zurück".
+static TIMER_CONTROL: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"^(stop|pause|hold|halt|freeze|resume|continue|unpause|restart|reset|stoppe|stopp|pausiere|halte|setze|setz)\s+(?:(?:the|my|die|den|meine|meinen)\s+)?(stopwatch|stoppuhr|timer|countdown)(?:\s+(?:an|fort|zurück|weiter))?$|^(stopwatch|stoppuhr|timer|countdown)\s+(stoppen|anhalten|pausieren|fortsetzen|zurücksetzen|stop|pause|resume|reset|restart)$")
+});
+/// "Put a note on the board saying buy milk", "add a note that says call Tom", "schreib eine
+/// Notiz: Milch kaufen". ("Make a note that …" is something to remember, not to look at.)
+static NOTE_ON_PANEL: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"^(?:put|add|write|leave|pin|stick|post|create|make|take)\s+(?:me\s+|up\s+)?(?:(?:a|an|another)\s+)?(?:new\s+|quick\s+|little\s+)?note\s+(?:(?:on|to|onto|in)\s+(?:the\s+|my\s+|your\s+)?(?:board|panel|hud|screen|widgets\s+panel)\s+)?(?:saying|that says|which says|that reads|reading|says|with the text|with)\s+(.+)$|^(?:put|add|write|leave|pin|stick|post|create|make|take)\s+(?:me\s+|up\s+)?(?:(?:a|an|another)\s+)?(?:new\s+|quick\s+|little\s+)?note\s+(?:on|to|onto|in)\s+(?:the\s+|my\s+|your\s+)?(?:board|panel|hud|screen|widgets\s+panel)\s+(.+)$|^(?:schreib|schreibe|mach|mache|leg|lege|erstelle|erstell|pack|setz|setze|häng|hänge)\s+(?:mir\s+)?(?:(?:eine|ne)\s+)?(?:neue\s+|kurze\s+)?notiz\s+(?:(?:auf|an|in)\s+(?:das|die|den|dem|mein|meine)\s+(?:board|tafel|panel|hud)\s+)?(?:mit\s+(?:dem\s+text\s+)?|dass\s+)?(.+)$")
+});
+/// The way a note that was asked for last names its place ("… on the board").
+static NOTE_PLACE_TAIL: LazyLock<Regex> =
+    LazyLock::new(|| re(r"\s+(?:on|onto|to|in|auf|an)\s+(?:the|my|your|das|die|den|dem|mein|meine)\s+(?:board|panel|hud|screen|tafel)$"));
+/// The lists he keeps on the panel; "list" alone only where it can mean nothing else.
+const CHECKLIST_NOUNS: &str = r"(checklist|check list|shopping list|to do list|todo list|to-do list|checkliste|einkaufsliste|todo liste|to-do-liste|aufgabenliste)";
+const ANY_LIST: &str = r"(?:the\s+|my\s+|die\s+|meine\s+|der\s+|meiner\s+)?(checklist|check list|list|shopping list|to do list|todo list|to-do list|checkliste|liste|einkaufsliste|todo liste|to-do-liste|aufgabenliste)";
+/// "Add a checklist with eggs, bread and butter", "start a shopping list", "erstelle eine
+/// Einkaufsliste mit Milch und Eiern".
+static CHECKLIST_NEW: LazyLock<Regex> = LazyLock::new(|| {
+    re(&format!(r"^(?:add|make|create|start|put up|give me|set up|write|begin|open|erstelle|erstell|mach|mache|leg|lege|schreib|schreibe|starte|öffne)\s+(?:me\s+|mir\s+)?(?:(?:a|an|another|my|the|eine|meine|die)\s+)?(?:new\s+|neue\s+)?{CHECKLIST_NOUNS}(?:\s+(?:with|of|containing|for|saying|mit|für)\s+(.+?))?(?:\s+an)?$"))
+});
+/// "Add milk to the list", "put eggs and bread on my shopping list", "setz Milch auf die Liste".
+static CHECKLIST_ADD: LazyLock<Regex> = LazyLock::new(|| {
+    re(&format!(r"^(?:add|put|write|stick|setz|setze|schreib|schreibe|füg|füge|pack|nimm)\s+(.+?)\s+(?:to|on|onto|in|auf|zur|zu|an)\s+{ANY_LIST}(?:\s+hinzu)?$"))
+});
+/// "Check off milk", "tick eggs off the list", "mark bread as done", "hak Milch ab".
+static CHECKLIST_DONE: LazyLock<Regex> = LazyLock::new(|| {
+    re(&format!(r"^(?:check off|tick off|cross off|mark off)\s+(.+?)(?:\s+(?:on|from|in)\s+{ANY_LIST})?$|^(?:check|tick|cross|mark|hak|hake|streich|streiche)\s+(.+?)\s+(?:off|ab|durch)(?:\s+(?:the\s+|my\s+)?(?:check\s?list|list))?$|^mark\s+(.+?)\s+as\s+(?:done|complete|completed|finished)$"))
+});
+/// "Uncheck milk".
+static CHECKLIST_UNDONE: LazyLock<Regex> =
+    LazyLock::new(|| re(&format!(r"^(?:uncheck|untick|unmark)\s+(.+?)(?:\s+(?:on|from|in)\s+{ANY_LIST})?$")));
+/// "Remove milk from the list", "nimm Milch von der Liste".
+static CHECKLIST_DROP: LazyLock<Regex> = LazyLock::new(|| {
+    re(&format!(r"^(?:remove|delete|take|drop|streich|streiche|entferne|entfern|lösche|lösch|nimm)\s+(.+?)\s+(?:from|off|von|aus)\s+{ANY_LIST}(?:\s+(?:weg|raus))?$"))
+});
+/// "Show me a CPU chart", "add a RAM graph", "a chart of my GPU temperature", "zeig mir ein CPU
+/// Diagramm": a live line on the panel.
+static WIDGET_CHART: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"^(?:create|make|add|build|give me|show me|show|put up|set up|open|draw|plot|erstelle|erstell|mach|mache|zeig mir|zeig|zeige mir|zeige|öffne)\s+(?:me\s+|mir\s+)?(?:(?:a|an|another|the|my|ein|eine|einen|das)\s+)?(?:new\s+|live\s+|neues\s+)?(?:(.+?)\s+(?:line chart|chart|graph|diagramm|verlauf)|(?:line chart|chart|graph|diagramm)\s+(?:of|for|with|von|für|mit)\s+(?:my\s+|the\s+|meine\s+|die\s+|der\s+|meiner\s+)?(.+?))$")
+});
+/// "Remove the timer", "close the note", "delete the CPU chart", "cancel the stopwatch", "Notiz
+/// löschen": what is on the panel, by its kind (and never a program of that name).
+static WIDGET_KIND_REMOVE: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"^(?:remove|delete|close|dismiss|clear|cancel|hide|get rid of|kill|entferne|entfern|lösche|lösch|schließe|schließ|schliesse)\s+(?:(?:the|my|that|this|your|die|den|das|meine|meinen)\s+)?(?:(.+?)\s+)?(timer|countdown|stopwatch|stoppuhr|note|notiz|checklist|check list|checkliste|shopping list|einkaufsliste|to do list|todo list|to-do list|chart|graph|diagramm|gauge|anzeige)$|^(?:(?:die|den|das|meine|meinen)\s+)?(timer|countdown|stoppuhr|notiz|checkliste|einkaufsliste|diagramm|anzeige)\s+(?:löschen|entfernen|schließen|wegmachen|weg)$|^take\s+(?:the\s+|my\s+|that\s+|this\s+)?(timer|countdown|stopwatch|note|checklist|shopping list|to do list|chart|graph|gauge)\s+away$")
+});
+/// "What's open?", "what's on the board?", "which widgets are open?", "was ist offen?".
+static WHATS_OPEN: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"^(?:(?:(?:show|tell) me )?(?:whats|what is)\s+open(?:\s+(?:on|in)\s+(?:the|your|my)\s+(?:board|panel|hud|screen))?|(?:(?:show|tell) me )?(?:whats|what is)\s+up\s+(?:on|in)\s+(?:the|your|my)\s+(?:board|panel|hud|screen)|(?:tell me )?(?:whats|what is)\s+on\s+(?:the|your|my)\s+(?:board|panel|hud)|(?:tell me )?what\s+(?:do you have|have you got|have you|you have)\s+open|(?:what|which)\s+(?:widgets|windows|blocks)\s+(?:are|do i have|do you have)(?:\s+(?:open|up))?|list\s+(?:all\s+)?(?:my|the|your|all|open)\s+(?:open\s+)?(?:widgets|windows|blocks)|was\s+(?:ist|hast\s+du)\s+offen|was\s+ist\s+auf\s+(?:dem|deinem|meinem)\s+(?:board|panel|hud)|welche\s+(?:widgets|fenster)\s+(?:sind\s+(?:offen|auf)|habe\s+ich|hast\s+du)|(?:zeig|zeige)(?:\s+mir)?\s+was\s+offen\s+ist)$")
+});
+
+/// `body` (words of the normalised sentence) as Sir wrote them after the word `after`: his own
+/// capitals and commas, up to its last word.
+fn as_written(original: &str, after: &str, body: &str) -> String {
+    let lower = original.to_lowercase();
+    if lower.len() != original.len() {
+        return body.to_string();
+    }
+    let mut at = lower.find(after).map_or(0, |found| found + after.len());
+    let mut start = None;
+    for word in body.split_whitespace() {
+        let Some(found) = lower[at..].find(word) else {
+            return body.to_string();
+        };
+        start.get_or_insert(at + found);
+        at += found + word.len();
+    }
+    match start {
+        Some(start) if original.is_char_boundary(start) && original.is_char_boundary(at) => original[start..at].to_string(),
+        _ => body.to_string(),
+    }
+}
+
+/// "Eggs, bread and butter", as checklist items.
+fn checklist_items(list: &str) -> Vec<Value> {
+    static SEPARATOR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\s*[,;&]\s*(?:and\s+|und\s+)?|\s+(?:and|und)\s+").expect("valid list separator"));
+    SEPARATOR.split(list).map(str::trim).filter(|item| !item.is_empty()).map(|item| json!({ "text": item })).collect()
+}
+
+/// A list by the name he gave it: its title.
+fn checklist_title(noun: &str) -> &'static str {
+    match noun {
+        "shopping list" | "einkaufsliste" => "Shopping list",
+        "to do list" | "todo list" | "to-do list" | "todo liste" | "to-do-liste" | "aufgabenliste" => "To-do list",
+        _ => "Checklist",
+    }
+}
+
+/// What goes onto the list a request names.
+fn checklist_add(noun: &str, items: Vec<Value>) -> Value {
+    match checklist_title(noun) {
+        // "The list": the latest one, or a first one.
+        "Checklist" => json!({ "id": "checklist", "default_type": "Checklist", "add_items": items }),
+        // A list of that name: found, or started.
+        title => json!({ "type": "Checklist", "title": title, "add_items": items }),
+    }
+}
+
+/// `TIMER_CONTROL` as `create_or_update_widget` arguments.
+fn timer_control(s: &str) -> Option<Value> {
+    let c = TIMER_CONTROL.captures(s)?;
+    let (verb, noun) = match (c.get(1), c.get(2)) {
+        (Some(verb), Some(noun)) => (verb.as_str(), noun.as_str()),
+        _ => (c.get(4)?.as_str(), c.get(3)?.as_str()),
+    };
+    let id = if matches!(noun, "stopwatch" | "stoppuhr") { "stopwatch" } else { "timer" };
+    Some(match verb {
+        "stop" | "pause" | "hold" | "halt" | "freeze" | "stoppe" | "stopp" | "pausiere" | "halte" | "stoppen" | "anhalten" | "pausieren" => json!({ "id": id, "pause": true }),
+        "resume" | "continue" | "unpause" | "fortsetzen" => json!({ "id": id, "start": true }),
+        "restart" => json!({ "id": id, "start": true, "reset": true }),
+        "reset" | "zurücksetzen" => json!({ "id": id, "reset": true }),
+        "setze" | "setz" if s.ends_with(" zurück") => json!({ "id": id, "reset": true }),
+        "setze" | "setz" if s.ends_with(" fort") => json!({ "id": id, "start": true }),
+        _ => return None,
+    })
+}
+
+/// A sentence about the widgets on his panel: the stopwatch, a note, a checklist, a live chart,
+/// or one of them by its kind. `text` is the sentence as he said it (a note keeps his words).
+fn widget_sentence(s: &str, text: &str) -> Option<Intent> {
+    let widget = |args: Value| Some(Intent::Tool { name: "create_or_update_widget", args });
+    if STOPWATCH.is_match(s) {
+        return widget(json!({
+            "id": "stopwatch",
+            "type": "CountdownOrStopwatch",
+            "title": "Stopwatch",
+            "mode": "stopwatch",
+            "running": true,
+            "elapsed_ms": 0,
+            "alerted": false,
+            "started_at_ms": crate::widgets::now_ms(),
+        }));
+    }
+    if let Some(args) = timer_control(s) {
+        return widget(args);
+    }
+    if let Some(c) = NOTE_ON_PANEL.captures(s) {
+        let said = c.iter().skip(1).flatten().next()?;
+        // The word before his text: from there on, the text is as he wrote it.
+        let cue = s[..said.start()].split_whitespace().last().unwrap_or("note");
+        let words = NOTE_PLACE_TAIL.replace(said.as_str(), "");
+        // (Two notes in one sentence are two notes, however fast they are read.)
+        static NOTES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let note = as_written(text, cue, &words);
+        // Named after its first words ("what's open?" reads the names out).
+        let head = note.split([',', ';', '\n']).next().unwrap_or("").split_whitespace().take(5).collect::<Vec<_>>().join(" ");
+        return widget(json!({
+            "id": format!("note_{}_{}", crate::widgets::now_ms(), NOTES.fetch_add(1, std::sync::atomic::Ordering::Relaxed)),
+            "type": "MarkdownNoteCard",
+            "title": format!("Note: {}", head.trim_end_matches(|c: char| !c.is_alphanumeric())),
+            "markdown": note,
+        }));
+    }
+    if let Some(c) = CHECKLIST_NEW.captures(s) {
+        let noun = c.get(1)?.as_str();
+        let items = c.get(2).map_or_else(Vec::new, |list| checklist_items(&as_written(text, noun, list.as_str())));
+        let mut args = json!({ "type": "Checklist", "title": checklist_title(noun) });
+        if !items.is_empty() {
+            args["add_items"] = json!(items);
+        }
+        return widget(args);
+    }
+    if let Some(c) = CHECKLIST_ADD.captures(s) {
+        let what = c.get(1)?.as_str();
+        if !matches!(what, "it" | "this" | "that" | "them" | "das" | "es" | "sie") {
+            let verb = s.split_whitespace().next().unwrap_or("");
+            return widget(checklist_add(c.get(2)?.as_str(), checklist_items(&as_written(text, verb, what))));
+        }
+    }
+    // (Of a list that is there: nothing is started for them.)
+    let on_list = |c: &regex::Captures, group: usize| c.get(group).map_or("checklist", |noun| noun.as_str()).to_string();
+    if let Some(c) = CHECKLIST_DONE.captures(s) {
+        return widget(json!({ "id": on_list(&c, 2), "check_item": c.get(1).or(c.get(3)).or(c.get(4))?.as_str() }));
+    }
+    if let Some(c) = CHECKLIST_UNDONE.captures(s) {
+        return widget(json!({ "id": on_list(&c, 2), "uncheck_item": c.get(1)?.as_str() }));
+    }
+    if let Some(c) = CHECKLIST_DROP.captures(s) {
+        return widget(json!({ "id": on_list(&c, 2), "remove_item": c.get(1)?.as_str() }));
+    }
+    if let Some((source, title, unit)) = WIDGET_CHART.captures(s).and_then(|c| c.get(1).or(c.get(2))).and_then(|m| live_gauge(m.as_str())) {
+        // (Its own title: a gauge of the same reading stays.)
+        return widget(json!({ "type": "LiveLineChart", "title": format!("{title} chart"), "source": source, "unit": unit }));
+    }
+    if let Some(c) = WIDGET_KIND_REMOVE.captures(s) {
+        let kind = c.get(2).or(c.get(3)).or(c.get(4))?.as_str();
+        let subject = c.get(1).map_or("", |m| m.as_str());
+        let chart = matches!(kind, "chart" | "graph" | "diagramm");
+        // A note or chart on the board is the board's: the one in the spotlight goes back into
+        // it, another one leaves it.
+        if (chart || matches!(kind, "note" | "notiz")) && subject.is_empty() {
+            if crate::hud_board::spotlight_active() {
+                return Some(Intent::Silent(SilentAction { tool: "hud_board", args: json!({ "action": "minimize" }), label: "Back to the board".to_string() }));
+            }
+            if crate::hud_board::is_active() && crate::hud_board::names_block(kind) {
+                return Some(Intent::Tool { name: "hud_board", args: json!({ "action": "remove", "target": kind }) });
+            }
+        }
+        let id = match live_gauge(subject) {
+            Some((_, title, _)) if chart => format!("{title} chart"),
+            Some((_, title, _)) => title.to_string(),
+            None if subject.is_empty() => kind.to_string(),
+            None => format!("{subject} {kind}"),
+        };
+        return Some(Intent::Tool { name: "remove_widget", args: json!({ "id": id }) });
+    }
+    None
+}
+/// "Remove all widgets", "delete the CPU load widget", "close that widget", "entferne alle
+/// Widgets": the widgets themselves (the panel that holds them is the layout's).
+static WIDGET_REMOVE: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"^(?:remove|delete|close|clear|dismiss|get rid of|kill|entferne|entfern|lösche|lösch|schließe|schließ|schliesse)\s+(?:(alle|all|every)\s+)?(?:of\s+)?(?:the\s+|my\s+|your\s+|those\s+|these\s+|meine\s+|die\s+|das\s+)?(?:(.+?)\s+)?(widgets?)$")
+});
+/// "Create a widget that shows my CPU load", "add a GPU temperature gauge", "make me a RAM
+/// widget", "erstelle ein Widget für die CPU-Auslastung": a live gauge on the widgets panel.
+static WIDGET_LIVE: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"^(?:create|make|add|build|give me|show me|show|put up|set up|erstelle|erstell|mach|mache|zeig mir|zeig)\s+(?:me\s+)?(?:a|an|another|ein|eine|einen)?\s*(?:new\s+|live\s+|small\s+|neues\s+)?(?:(?:widget|gauge|meter|anzeige)\s+(?:that shows|which shows|showing|that displays|that monitors|to show|to monitor|for|with|of|das|für|mit|zur)\s+(?:me\s+)?(?:my\s+|the\s+|meine\s+|die\s+|der\s+)?(.+?)|(.+?)\s+(?:widget|gauge|meter|anzeige))$")
+});
+
+/// The live source a widget's subject names ("cpu load", "gpu temperature", "memory"): (source,
+/// title, unit).
+fn live_gauge(subject: &str) -> Option<(&'static str, &'static str, &'static str)> {
+    let words: Vec<&str> = subject.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty() && !matches!(*w, "load" | "usage" | "use" | "utilisation" | "utilization" | "auslastung" | "live" | "my" | "the" | "current")).collect();
+    Some(match words.as_slice() {
+        ["cpu"] | ["processor"] | ["prozessor"] => ("cpu", "CPU load", "%"),
+        ["ram"] | ["memory"] | ["arbeitsspeicher"] | ["speicher"] => ("ram", "RAM", "%"),
+        ["gpu"] | ["graphics", "card"] | ["grafikkarte"] => ("gpu", "GPU load", "%"),
+        ["gpu", "temperature"] | ["gpu", "temp"] | ["gpu", "temperatur"] | ["graphics", "card", "temperature"] => ("gpu_temp", "GPU temperature", "°C"),
+        ["vram"] | ["video", "memory"] | ["gpu", "memory"] => ("vram", "VRAM", "%"),
+        ["download"] | ["download", "speed"] | ["network"] => ("net_down", "Download", "KB/s"),
+        ["upload"] | ["upload", "speed"] => ("net_up", "Upload", "KB/s"),
+        _ => return None,
+    })
+}
+
 fn hud_view_sentence(text: &str) -> Option<Intent> {
     let s = normalize(text);
+    let interface = |args: Value| Some(Intent::Tool { name: "configure_interface", args });
+    if WINDOWS_BACK.is_match(&s) {
+        return Some(Intent::Tool { name: "spawn_native_window", args: json!({ "restore": "recent" }) });
+    }
+    if let Some(args) = keep_at_start_command(&s) {
+        return Some(Intent::Tool { name: "create_or_update_widget", args });
+    }
+    if FEATURE_LAB.is_match(&s) {
+        return interface(json!({ "feature_lab": true }));
+    }
+    if THEME_STUDIO.is_match(&s) {
+        return interface(json!({ "theme_studio": true }));
+    }
+    if MIXER_VIEW.is_match(&s) {
+        return interface(json!({ "mixer_view": true }));
+    }
+    if DRIVE_SPACE.is_match(&s) {
+        return Some(Intent::Tool { name: "spawn_native_window", args: json!({ "live": "drive_space" }) });
+    }
+    if WHATS_OPEN.is_match(&s) {
+        return Some(Intent::Tool { name: "whats_open", args: json!({}) });
+    }
+    if let Some(intent) = widget_sentence(&s, text) {
+        return Some(intent);
+    }
+    // The emblem is out of the way: "come back" calls it, not the window.
+    if crate::hud_dock::orb_aside() && ORB_BACK_SHORT.is_match(&s) {
+        return interface(json!({ "orb_board_position": "center" }));
+    }
+    if let Some(c) = WIDGET_REMOVE.captures(&s) {
+        let named = c.get(2).map_or("", |m| m.as_str()).trim();
+        let id = match (c.get(1).is_some() || c.get(3).is_some_and(|w| w.as_str() == "widgets"), named) {
+            (true, "") => "all".to_string(),
+            (_, "" | "that" | "this" | "last" | "latest" | "newest") => "last".to_string(),
+            (_, name) => name.to_string(),
+        };
+        return Some(Intent::Tool { name: "remove_widget", args: json!({ "id": id }) });
+    }
+    if let Some((source, title, unit)) = WIDGET_LIVE.captures(&s).and_then(|c| c.get(1).or(c.get(2))).and_then(|m| live_gauge(m.as_str())) {
+        return Some(Intent::Tool { name: "create_or_update_widget", args: json!({ "type": "MetricGauge", "title": title, "source": source, "unit": unit }) });
+    }
     if s.is_empty() || s.split_whitespace().count() > 12 {
         return None;
     }
@@ -852,7 +1859,9 @@ fn discord_call_command(s: &str) -> Option<&'static str> {
     if ["you can talk to them", "talk to them", "talk in the call", "join the conversation", "speak in the call", "you may talk to them", "du darfst mit ihnen reden", "rede mit ihnen", "rede im call", "sprich mit ihnen", "red mit ihnen"].iter().any(|w| s.contains(w)) {
         return Some("converse");
     }
-    if call && ["listen", "hear", "hör", "hoer", "mithören", "mithoeren", "zuhören", "zuhoeren"].iter().any(|w| s.contains(w)) && !s.contains("music") && !s.contains("musik") {
+    // ("I can't hear Discord" and "ich höre Discord nicht" are about the sound, the mixer's.)
+    let cannot = ["cant hear", "cannot hear", "can not hear", "dont hear", "do not hear", "couldnt hear", "barely hear", "hardly hear", "scarcely hear", "nicht", "kaum"].iter().any(|w| s.contains(w));
+    if call && !cannot && ["listen", "hear", "hör", "hoer", "mithören", "mithoeren", "zuhören", "zuhoeren"].iter().any(|w| s.contains(w)) && !s.contains("music") && !s.contains("musik") {
         return Some("listen");
     }
     if crate::discord_bridge::mode() != crate::discord_bridge::CallMode::Off
@@ -871,6 +1880,12 @@ fn theme_preset_request(s: &str) -> Option<&'static str> {
     }
     crate::theme_engine::PRESETS.iter().map(|(n, _)| *n).find(|n| s.contains(&n.replace('_', " ")))
 }
+
+/// "Open the integrations hub", "show my productivity settings", "öffne den Integrations-Hub",
+/// and as Whisper hears it: "the integration sub".
+static INTEGRATIONS_HUB: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"^(?:open|show|bring up|pull up|display|launch|öffne|oeffne|zeig|zeige)\s+(?:me\s+|mir\s+)?(?:the\s+|my\s+|your\s+|den\s+|die\s+|das\s+|meine\s+|deine\s+)?(?:integrations?|productivity)(?:\s+(?:and|und)\s+productivity)?(?:\s*(?:hub|sub|hab|tab|settings|window|center|centre|panel|page|einstellungen))?$")
+});
 
 /// "In a new / separate / its own window": Sir explicitly wants an OS window, not a HUD block.
 static SEPARATE_WINDOW: LazyLock<Regex> = LazyLock::new(|| {
@@ -895,14 +1910,20 @@ fn view_named(object: &str, opening: bool) -> Option<&'static str> {
         }
     }
     match o {
-        "simulation lab" | "sim lab" | "simlab" | "simulationlab" | "simulation labor" | "physics lab" | "stark simulation lab" | "lab" => Some("simulation_lab"),
+        "simulation lab" | "sim lab" | "simlab" | "simulationlab" | "simulation labor" | "physics lab" | "stark simulation lab" | "lab" | "holomat" | "holo mat"
+        | "holomat lab" | "simulationslabor" | "simulations labor" | "physiklabor" | "labor" | "math lab" | "chem lab" => Some("simulation_lab"),
         "qr code" | "qr" | "qr code for my phone" | "pairing qr" | "pairing code" | "mobile link" | "mobile satellite" | "satellite" | "phone link"
         | "qr code für mein handy" | "qr-code" => Some("mobile_qr"),
         "gym logs" | "gym log" | "gym" | "gym coach" | "workout logs" | "workout log" | "workout coach" | "gym tracker" | "finance tracker" | "finances"
         | "finance" | "finanzen" | "gym and finances" | "workout and finance" | "workouts" => Some("workout_finance"),
         "contacts" | "contact list" | "kontakte" | "contact book" => Some("contacts"),
         "schedule" | "calendar" | "kalender" | "webuntis" | "timetable" | "stundenplan" | "agenda" | "school schedule" | "schedule and calendar"
-        | "calendar and schedule" | "termine" | "weekly schedule" | "week" if opening => Some("schedule"),
+        | "calendar and schedule" | "termine" | "weekly schedule" | "week" | "webuntis schedule" | "webuntis timetable" | "untis" | "untis schedule" | "school timetable"
+        | "class schedule" | "webuntis stundenplan" | "schulplan"
+            if opening =>
+        {
+            Some("schedule")
+        }
         _ => None,
     }
 }
@@ -920,7 +1941,8 @@ static SHUTDOWN: LazyLock<Regex> = LazyLock::new(|| {
         r"(?:close|quit|exit|terminate|end|kill|stop)\s+(?:yourself|jarvis|your\s+(?:app|application|program|process|self)|the\s+(?:assistant|jarvis app))",
         r"close|quit|exit|terminate|log off|sign off|go offline|self[- ]destruct",
         r"(?:beende|beend)(?:\s+(?:dich(?:\s+selbst)?|jarvis|dein\s+programm|deine\s+app))?",
-        r"(?:dich|jarvis)?\s*(?:beenden|ausschalten|abschalten|herunterfahren|runterfahren|schließen|schliessen)",
+        // ("Kannst du dich selbst schließen?" arrives as "dich selbst schließen".)
+        r"(?:dich|jarvis)?\s*(?:selbst\s+)?(?:beenden|ausschalten|abschalten|herunterfahren|runterfahren|schließen|schliessen)",
         r"(?:schalt|schalte|mach|mache)\s+(?:dich|jarvis)\s+(?:aus|ab)",
         r"(?:fahr|fahre)\s+(?:dich|jarvis)?\s*(?:herunter|runter)",
         r"(?:schließ|schließe|schliess|schliesse)(?:\s+(?:dich|jarvis))?",
@@ -955,10 +1977,329 @@ static DATE: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(what's the date|whats the date|what is the date|what date is it|what day is it|what day is it today|today's date|todays date|welcher tag ist heute|welches datum haben wir|was ist heute für ein tag|der wievielte ist heute|datum|(?:whats|what is) (?:the date|todays date|today s date)(?: today)?|what day is today|whats today|what is today|(?:the )?date today|welches datum ist heute|was ist heute für ein datum|welcher tag ist es)$")
 });
 static STATUS: LazyLock<Regex> = LazyLock::new(|| {
-    re(r"^(system status|status report|systemstatus|system report|hardware status|run diagnostics|diagnostics|wie geht es dem system|wie geht's dem system|systembericht|cpu usage|gpu temperature|gpu temp|wie warm ist die gpu|auslastung)$")
+    re(r"^(system status|status report|systemstatus|system report|hardware status|run diagnostics|diagnostics|wie geht es dem system|wie geht's dem system|wie gehts dem system|systembericht|cpu usage|gpu temperature|gpu temp|wie warm ist die gpu|auslastung|(?:what s|whats|what is|give me|show me|tell me|check)\s+(?:my\s+|the\s+|a\s+)?(?:system|pc|computer|hardware)\s+(?:status|health|state|report|stats?)|(?:how is|hows|how s)\s+(?:my\s+|the\s+)?(?:system|pc|computer|machine|rig)(?:\s+(?:doing|holding up|running|looking))?|(?:pc|computer|system|hardware)\s+(?:status|health|check|report)|status\s+check|wie ist der systemstatus|wie läuft (?:der pc|das system|mein pc))$")
+});
+/// "Turn Firefox off", "switch Discord back on": only ever about a real program. The PC, the
+/// lights and the sound are no programs; they have rules of their own or none.
+static APP_OFF: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:turn|switch|shut)\s+off\s+(.+?)$|^(?:turn|switch|shut)\s+(.+?)\s+off$|^schalte?\s+(.+?)\s+(?:aus|ab)$"));
+static APP_ON: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:turn|switch)\s+(?:back\s+)?on\s+(.+?)$|^(?:turn|switch)\s+(.+?)\s+(?:back\s+)?on$|^schalte?\s+(.+?)\s+(?:wieder\s+)?(?:ein|an)$"));
+
+fn app_switch(s: &str) -> Option<Intent> {
+    const NO_PROGRAMS: &[&str] = &[
+        "pc", "computer", "laptop", "rechner", "monitor", "screen", "bildschirm", "light", "lights", "licht", "wifi", "wlan", "bluetooth", "sound", "audio", "ton", "music", "musik", "game", "spiel", "mic",
+        "microphone", "mikrofon", "camera", "kamera",
+    ];
+    let program = |c: regex::Captures<'_>| c.iter().skip(1).flatten().next().map(|m| strip_article(m.as_str())).filter(|name| !NO_PROGRAMS.contains(&name.as_str()) && known_app(name));
+    if let Some(app) = APP_OFF.captures(s).and_then(program) {
+        return Some(Intent::Tool { name: "close_application", args: json!({ "app_name": app, "force": true }) });
+    }
+    let app = APP_ON.captures(s).and_then(program)?;
+    Some(Intent::Tool { name: "open_application", args: json!({ "app_name": app }) })
+}
+
+/// A courtesy has one answer, and it takes no model: "thank you" once earned the last explanation
+/// over again, a bare "Jarvis" a goodnight. (Raw words: `normalize` strips both as fillers.)
+fn courtesy(text: &str) -> Option<&'static str> {
+    static THANKS: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^(?:(?:ok|okay|great|perfect|nice|good|cool|awesome|brilliant|lovely|super|prima|klasse|toll|gut)\s+)?(?:thanks|thank\s+you|cheers|many\s+thanks|danke|danke\s+dir|danke\s+schön|danke\s+schoen|vielen\s+dank)(?:\s+(?:very\s+much|so\s+much|a\s+lot|a\s+million))?(?:\s+(?:jarvis|sir))?(?:\s+that\s+was\s+(?:perfect|great|good|helpful|nice))?$")
+    });
+    const REPLIES: [&str; 3] = ["You're welcome, Sir.", "My pleasure, Sir.", "Any time, Sir."];
+    static SAID: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    if text.len() > 60 {
+        return None;
+    }
+    let words = raw_words(text);
+    if matches!(words.as_str(), "jarvis" | "hey jarvis" | "hi jarvis" | "ok jarvis" | "okay jarvis") {
+        return Some("Yes, Sir?");
+    }
+    THANKS.is_match(&words).then(|| REPLIES[SAID.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % REPLIES.len()])
+}
+
+/// "Is my mic muted?", "am I muted?", "are you listening?": the lock's state, as it stands.
+fn microphone_asked(text: &str) -> Option<String> {
+    static ASKED: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^(?:jarvis\s+)?(?:is\s+(?:my|the|your)\s+(?:mic|microphone)\s+(?:muted|on|off|working)|am\s+i\s+muted|are\s+you\s+listening(?:\s+to\s+me)?(?:\s+right\s+now)?|can\s+you\s+hear\s+me|ist\s+(?:mein|das|dein)\s+(?:mikro|mikrofon)\s+(?:stumm|an|aus)|bin\s+ich\s+stumm|(?:hörst|hoerst)\s+du\s+(?:mir\s+)?zu|kannst\s+du\s+mich\s+(?:hören|hoeren))$")
+    });
+    // "Why did you stop listening?": his state, never his record of actions (2026-11-07 it was
+    // "I have not changed anything in this session").
+    static WHY_NOT: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^(?:jarvis\s+)?(?:why\s+(?:did\s+you\s+stop|have\s+you\s+stopped|are\s+you\s+not|aren\s?t\s+you|did\s+you\s+quit)\s+listening(?:\s+to\s+me)?|warum\s+(?:hörst|hoerst)\s+du\s+(?:mir\s+)?(?:nicht\s+mehr|nicht)\s+zu|warum\s+hast\s+du\s+(?:aufgehört|aufgehoert)\s+zuzuhören)$")
+    });
+    let words = raw_words(text);
+    if text.len() <= 60 && WHY_NOT.is_match(&words) {
+        return Some(if crate::listening_lock::is_locked() {
+            format!("Because you asked me to, Sir. {}", crate::listening_lock::spoken_state())
+        } else {
+            "I haven't stopped, Sir. I'm listening.".to_string()
+        });
+    }
+    (text.len() <= 50 && ASKED.is_match(&words)).then(crate::listening_lock::spoken_state)
+}
+
+/// "Don't close it", "do not mute Discord", "schließ das nicht", "nicht stumm schalten": said of
+/// an action, and the action is what must not happen. (A sentence that goes on to what he does
+/// want is left to the rest: "don't close the mixer, close the board instead".)
+fn held_back(text: &str) -> bool {
+    static ENGLISH: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^(?:(?:no|nope|wait|please|jarvis)\s+)*(?:don\s?t|do\s+not|never)\s+(?:ever\s+|you\s+dare\s+)?(?:close|quit|exit|kill|end|open|start|launch|run|mute|unmute|stop|pause|turn|change|delete|remove|shut|restart|reboot|send|play|skip|switch|move|hide|lower|raise|set|put|make)\b")
+    });
+    static GERMAN: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^(?:(?:nein|bitte|jarvis)\s+)*nicht\s+(?:schließen|schliessen|zumachen|aufmachen|öffnen|oeffnen|ausmachen|ausschalten|einschalten|anmachen|stumm\s*schalten|löschen|loeschen|entfernen|stoppen|ändern|aendern|herunterfahren|neu\s+starten|leiser|lauter)(?:\s+machen)?$|^(?:(?:nein|bitte|jarvis)\s+)*(?:schließ|schließe|schliess|schliesse|mach|mache|öffne|oeffne|stell|stelle|dreh|drehe|lösch|lösche|loesch|loesche|entferne|entfern|schalte|schalt|beende|beend|stopp|stoppe)\s+(?:.{1,30}\s+)?nicht(?:\s+(?:zu|auf|aus|an|ab|weg|stumm|leiser|lauter|runter|hoch|leise|laut))?$")
+    });
+    let words = raw_words(text);
+    let words = words.as_str();
+    // ("Don't open it at startup anymore" is an order about the next start; "don't make me
+    // repeat myself" is talk.)
+    text.len() <= 80
+        && (ENGLISH.is_match(words) || GERMAN.is_match(words))
+        && !words.split_whitespace().any(|w| matches!(w, "but" | "instead" | "aber" | "sondern" | "stattdessen"))
+        && !words.contains("make me")
+        && !NEXT_START.is_match(words)
+        // "Don't make the windows overlap" sets the packer.
+        && !WINDOWS_APART.is_match(words)
+}
+
+/// A plain question: it asks, and asks for nothing to be done. "Can you close Firefox?" is an
+/// order in good manners; "should I close Firefox?" is not one, and neither is "why did you mute
+/// Discord?". A sentence that goes on to an order ("is it open? close it") does not count.
+pub fn only_asks(text: &str) -> bool {
+    static ASKING: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^(?:(?:jarvis|hey|ok|okay|so|well|also|sir|uh|um|und|aber|sag\s+mal)\s+)*(?:is|isn\s?t|are|aren\s?t|am|was|were|did|didn\s?t|does|doesn\s?t|do\s+(?:i|you)|don\s?t\s+(?:i|you)|has|have\s+(?:i|you)|why|what|whats|which|who|whos|whose|when\s+(?:is|are|was|were|did|do|does|will|can|should)|where|wheres|how|hows|should\s+i|shall\s+i|must\s+i|ist|sind|bin|war|waren|hast|hat|hatte|hatten|habe\s+ich|warum|wieso|weshalb|welche|welcher|welches|welchen|wer|wann|wo|wie|läuft|laeuft|soll\s+ich|sollte\s+ich|muss\s+ich|darf\s+ich)\b")
+    });
+    static SUGGESTS: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^(?:(?:jarvis|hey|ok|okay|so|well|also|sir|uh|um|und|aber|sag\s+mal)\s+)*(?:how\s+about|what\s+about|why\s+don\s?t\s+you|why\s+not|do\s+you\s+mind|wie\s+wäre\s+es|wie\s+waere\s+es|was\s+ist\s+mit|warum\s+nicht)\b")
+    });
+    static GOES_ON: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"\b(?:then|dann|if\s+so|if\s+it\s+is|if\s+yes|falls\s+ja|wenn\s+ja|and\s+(?:if|close|open|mute|unmute|turn|play|stop|start|pause|put|set|show|make)|und\s+(?:wenn|falls|schließ|schliess|öffne|oeffne|mach|starte|stopp|zeig|stell))\b")
+    });
+    // "Why is there no sound?" is a complaint: he wants it back, as with "I can't hear anything".
+    static COMPLAINS: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^(?:(?:jarvis|hey|ok|okay|so|well|sir|uh|um)\s+)*why\s+(?:is\s+there\s+no\s+(?:sound|audio)|(?:can\s?t|don\s?t)\s+i\s+hear|is\s+(?:the\s+|my\s+)?(?:sound|audio)\s+(?:gone|broken|not\s+working))\b|^(?:(?:jarvis|und|aber)\s+)*warum\s+(?:(?:höre|hoere|hör|hoer)\s+ich\s+(?:nichts|keinen|kein)|ist\s+(?:der\s+)?(?:ton|sound)\s+(?:weg|kaputt)|(?:gibt\s+es\s+)?(?:keinen|kein)\s+(?:ton|sound))\b")
+    });
+    let t = text.trim();
+    let words = raw_words(t);
+    let one_sentence = ![". ", "! ", "? "].iter().any(|end| t.contains(end));
+    one_sentence && ASKING.is_match(&words) && !SUGGESTS.is_match(&words) && !GOES_ON.is_match(&words) && !COMPLAINS.is_match(&words)
+}
+
+/// "How do I mute Discord?", "should I close Firefox?", "wie öffne ich den Mixer?": about an
+/// order he knows. The answer is the order itself, for when Sir wants it; nothing is done.
+fn how_or_whether(text: &str) -> Option<String> {
+    static HOW: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"(?i)^(?:(?:hey\s+)?jarvis[,.]?\s+)?(?:so\s+|ok\s+|okay\s+)?how\s+(?:do|can|could|would|should)\s+(?:i|we)\s+(?:get\s+you\s+to\s+|tell\s+you\s+to\s+|ask\s+you\s+to\s+)?(.{3,60}?)[?.!]*$")
+    });
+    static WHETHER: LazyLock<Regex> = LazyLock::new(|| re(r"(?i)^(?:(?:hey\s+)?jarvis[,.]?\s+)?(?:so\s+|ok\s+|okay\s+)?(?:should|shall)\s+i\s+(.{3,60}?)[?.!]*$"));
+    static WIE: LazyLock<Regex> = LazyLock::new(|| re(r"(?i)^(?:jarvis[,.]?\s+)?wie\s+(\w+e)\s+ich\s+(.{2,60}?)[?.!]*$"));
+    // "Soll ich Firefox schließen?": the infinitive at the end is how he takes the order too.
+    static SOLL: LazyLock<Regex> = LazyLock::new(|| re(r"(?i)^(?:jarvis[,.]?\s+)?(?:soll|sollte)\s+ich\s+(.{2,60}?)[?.!]*$"));
+    static WHAT_IF: LazyLock<Regex> =
+        LazyLock::new(|| re(r"(?i)^(?:(?:hey\s+)?jarvis[,.]?\s+)?what\s+(?:happens|would\s+happen|will\s+happen)\s+if\s+(?:i|you|we)\s+(.{3,60}?)[?.!]*$"));
+    enum Asked {
+        How,
+        Whether,
+        WhatIf,
+    }
+    let said = text.trim();
+    let (order, asked) = if let Some(c) = HOW.captures(said) {
+        (c[1].to_string(), Asked::How)
+    } else if let Some(c) = WHETHER.captures(said).or_else(|| SOLL.captures(said)) {
+        (c[1].to_string(), Asked::Whether)
+    } else if let Some(c) = WIE.captures(said) {
+        // "Wie schließe ich Firefox?" → "Schließe Firefox" (the first person is the imperative).
+        (format!("{} {}", &c[1], &c[2]), Asked::How)
+    } else if let Some(c) = WHAT_IF.captures(said) {
+        (c[1].to_string(), Asked::WhatIf)
+    } else {
+        return None;
+    };
+    // The PC's power is the brain's double-checked dialogue, never a tool call: the same answer,
+    // with what follows the order (2026-11-07 "Should I restart my PC?" reached the model, which
+    // asked when to schedule it).
+    if let Some(action) = crate::system_power::power_request(&order) {
+        let mut letters = order.trim().chars();
+        let said: String = letters.next().map_or(String::new(), |first| first.to_uppercase().chain(letters).collect());
+        let checked = action.needs_confirmation();
+        let then = if checked { "I'll ask once more, then it's done" } else { "it's done" };
+        return Some(match asked {
+            Asked::How => format!("Just say \"{said}\", Sir, and {then}."),
+            Asked::Whether => format!("That's yours to decide, Sir. Say \"{said}\" and {then}."),
+            Asked::WhatIf => format!("{} Say \"{said}\" if you want that{}.", action.consequence(), if checked { "; I'll ask once more first" } else { "" }),
+        });
+    }
+    // Only what he would carry out; "how do I cook rice?" is the model's.
+    let ctx = crate::intent_engine::ReflexContext::live();
+    let (tool, args) = crate::compound_planner::resolve_one(&order, &ctx)?;
+    if !said_as_an_order(&order, &tool, &args) {
+        return None;
+    }
+    let mut letters = order.trim().chars();
+    let order: String = letters.next().map_or(String::new(), |first| first.to_uppercase().chain(letters).collect());
+    Some(match asked {
+        Asked::How => format!("Just say \"{order}\", Sir, and it's done."),
+        Asked::Whether => format!("That's yours to decide, Sir. Say \"{order}\" and it's done."),
+        // What closing or muting a program does; anything else is the model's to explain.
+        Asked::WhatIf => {
+            let app = args["app_name"].as_str().or(args["app"].as_str()).map(crate::apps::display_name)?;
+            match (tool.as_str(), args["action"].as_str()) {
+                ("close_application", _) => format!("{app} closes, Sir, and anything unsaved in it is lost. Say \"{order}\" if you want that."),
+                ("control_audio_mixer", Some("mute_app")) => format!("{app} goes silent until you unmute it, Sir. Nothing else changes. Say \"{order}\" if you want that."),
+                _ => return None,
+            }
+        }
+    })
+}
+
+/// Whether "say X" honestly answers "how do I X?": the sound, one of his own controls, or a
+/// program he knows by name. Never his own sleep ("how do I go to sleep?" is about Sir), and
+/// never a window or a program guessed from a free word ("go to bed", "open a PDF").
+fn said_as_an_order(order: &str, tool: &str, args: &Value) -> bool {
+    if order.to_lowercase().split_whitespace().any(|w| matches!(w, "you" | "dich" | "dir")) {
+        return false;
+    }
+    match tool {
+        "control_audio_mixer" | "media_and_volume_control" | "control_music" | "configure_interface" | "control_orb_mode" | "set_listening_mode"
+        | "open_jarvis_view" | "control_popups" | "control_jarvis_interface" | "hud_board" | "ultron_mode" | "listening_lock" | "undo_last_action"
+        | "close_all_secondary_windows" => true,
+        "open_application" | "close_application" | "is_app_running" => args["app_name"].as_str().is_some_and(known_app),
+        "window_management" => args["action"] != "focus",
+        _ => false,
+    }
+}
+
+/// Whether this call is more than the plain question `text` warrants ("are you in orb mode?"
+/// holds the words that switch it on).
+pub fn beyond_the_question(text: &str, tool: &str, args: &Value) -> bool {
+    only_asks(text) && !crate::tools::only_looks(tool, args)
+}
+
+/// What "did you mute Discord?" / "hast du Firefox geschlossen?" asks about, when it is a program
+/// or one of his own views; anything vaguer ("did you do that?") gets his last few actions.
+fn did_you_about(s: &str) -> Option<String> {
+    static EN: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^(?:why\s+)?(?:did|have)\s+you\s+(?:just\s+|really\s+|actually\s+)?[a-z]+\s+(?:the\s+|my\s+)?(.+?)(?:\s+(?:again|already|just\s+now|earlier|for\s+me|down|up|off|on))?$")
+    });
+    static DE: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^(?:warum\s+)?hast\s+du\s+(?:gerade\s+|eben\s+|wirklich\s+)?(?:den\s+|die\s+|das\s+|mein\s+|meine\s+|meinen\s+)?(.+?)\s+(?:stumm\s*)?\S+$")
+    });
+    const OWN: &[&str] = &["mixer", "board", "theme studio", "feature lab", "console", "text console", "core", "core view", "orb", "theme", "workbench"];
+    const VAGUE: &[&str] = &["it", "that", "this", "anything", "something", "everything", "what", "es", "das", "etwas", "was", "alles"];
+    let s = s.trim().trim_end_matches(['?', '.', '!']).trim_end();
+    let object = EN.captures(s).or_else(|| DE.captures(s))?.get(1)?.as_str().trim().to_string();
+    if VAGUE.contains(&object.as_str()) {
+        return None;
+    }
+    (OWN.contains(&object.as_str()) || known_app(&object)).then_some(object)
+}
+
+/// "What is orb mode?", "what does the mixer do?", "was ist der Ultron Modus?": his own modes and
+/// views, told as they are (2026-11-07: the model made up "a translucent overlay").
+fn explained(s: &str) -> Option<String> {
+    static WHAT_IS: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^(?:what\s+is|whats|what\s+does|what\s+do\s+you\s+mean\s+by|explain|tell\s+me\s+about|was\s+ist|was\s+macht|erklär\s+mir|erkläre\s+mir|erklaer\s+mir|erklaere\s+mir)\s+(?:the\s+|your\s+|a\s+|der\s+|die\s+|das\s+|dein\s+|deine\s+|den\s+)?(.+?)(?:\s+(?:do|for|good\s+for))?$")
+    });
+    let subject = WHAT_IS.captures(s)?.get(1)?.as_str().trim().to_string();
+    let line = match subject.as_str() {
+        "orb mode" | "pure orb mode" | "orb only mode" | "orbmodus" | "orb modus" => {
+            "In orb mode only my orb floats on your screen, Sir: borderless, transparent and always on top. Drag it to move it, scroll to resize it, and double-click it for the full display."
+        }
+        "ultron mode" | "ultron protocol" | "ultron modus" => {
+            "Ultron Mode is my other self, Sir: the display turns blood crimson, the emblem reads Ultron, and a slow American baritone speaks instead of me. Say \"Ultron mode off\" and I'm back."
+        }
+        "mixer" | "audio mixer" => "My mixer is a fader for every program that makes sound, Sir, and one for the master. Open it, or just tell me what to make louder.",
+        "theme studio" => "The Theme Studio is where you pick my colours, name the theme and save it, Sir.",
+        "feature lab" => "The Feature Lab lists everything I can do, Sir, each with a button to try it.",
+        "core view" => "My core view shows every module I run on, wired as it runs, Sir. Drag to orbit it.",
+        "span mode" | "spanmodus" => "Span mode stretches my display across all your monitors, Sir. \"Span mode on\" starts it and \"span mode off\" ends it.",
+        _ => return None,
+    };
+    Some(line.to_string())
+}
+
+/// "Is Firefox open?", "läuft Discord?", "is the mixer open?", "is the music playing?", "how long
+/// is left on the timer?": what only the machine knows, looked up and never guessed.
+fn looked_up(s: &str) -> Option<Intent> {
+    if let Some(line) = explained(s) {
+        return Some(Intent::Answer(line));
+    }
+    // "Did you mute Discord?", "why did you close Firefox?": his own record says.
+    static DID_YOU: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^(?:why\s+)?(?:did|have)\s+you\s+(?:just\s+|really\s+|actually\s+)?(?:close|closed|mute|muted|unmute|unmuted|open|opened|turn|turned|stop|stopped|change|changed|delete|deleted|remove|removed|send|sent|play|played|skip|skipped|move|moved|lower|lowered|raise|raised|set|put|make|made|do|done)\b|^hast\s+du\s+.{0,40}(?:geschlossen|zugemacht|gemacht|geändert|geaendert|gelöscht|geloescht|geöffnet|geoeffnet|aufgemacht|stumm\s*geschaltet|gestoppt|verschoben|abgespielt)$|^warum\s+hast\s+du\b.{0,50}(?:geschlossen|zugemacht|gemacht|geändert|geaendert|gelöscht|geloescht|geöffnet|geoeffnet|aufgemacht|stumm\s*geschaltet|gestoppt|verschoben|abgespielt)$")
+    });
+    if DID_YOU.is_match(s) {
+        let args = did_you_about(s).map_or_else(|| json!({}), |about| json!({ "about": about }));
+        return Some(Intent::Tool { name: "recent_actions", args });
+    }
+    // "Are you in orb mode?", "is the orb hidden?", "are you in Ultron mode?": how it stands.
+    static ORB_ASKED: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^is\s+(?:the\s+|your\s+)?orb(?:\s+mode)?\s+(?:hidden|visible|showing|on|off|active|enabled|up)$|^are\s+you\s+in\s+(?:pure\s+)?orb\s+mode$|^ist\s+(?:der\s+|dein\s+)?(?:orb|orbmodus|orb\s+modus)\s+(?:an|aus|sichtbar|versteckt|aktiv)$|^bist\s+du\s+im\s+(?:orbmodus|orb\s+modus)$")
+    });
+    if ORB_ASKED.is_match(s) {
+        return Some(Intent::Tool { name: "control_orb_mode", args: json!({ "action": "status" }) });
+    }
+    static ULTRON_ASKED: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^are\s+you\s+(?:in\s+)?ultron(?:\s+mode)?$|^is\s+ultron(?:\s+mode)?\s+(?:on|active|enabled)$|^bist\s+du\s+(?:im\s+)?ultron(?:\s*modus)?$|^ist\s+(?:der\s+)?ultron(?:\s*modus)?\s+(?:an|aktiv)$")
+    });
+    if ULTRON_ASKED.is_match(s) {
+        let line = if crate::ultron_mode::active() { "Ultron Mode is on, Sir." } else { "No, Sir. Ultron Mode is off." };
+        return Some(Intent::Answer(line.to_string()));
+    }
+    static TIMER_LEFT: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^how\s+(?:long|much\s+time)\s+(?:is\s+|do\s+i\s+have\s+)?(?:still\s+)?(?:left|remaining)(?:\s+on\s+(?:the|my)\s+(?:timer|countdown))?$|^(?:what|whats|what\s+is)\s+(?:the|my)\s+(?:timer|countdown|stopwatch)\s+at$|^how\s+long\s+until\s+(?:the|my)\s+timer\s+(?:goes\s+off|is\s+done|ends|finishes)$|^is\s+(?:the|my)\s+(?:timer|countdown|stopwatch)\s+(?:done|finished|over|up|running|on)$|^ist\s+(?:der|mein)\s+timer\s+(?:fertig|abgelaufen|an)$|^wie\s+lange\s+(?:noch|läuft\s+(?:der|mein)\s+timer\s+noch)$|^wie\s+viel\s+zeit\s+(?:ist\s+|bleibt\s+|habe\s+ich\s+)?(?:noch\s+)?(?:übrig)?$|^wie\s+viel\s+zeit\s+hat\s+(?:der|mein)\s+timer\s+noch$|^was\s+zeigt\s+(?:der|mein|die)\s+(?:timer|stoppuhr)$")
+    });
+    if TIMER_LEFT.is_match(s) {
+        return Some(Intent::Tool { name: "timer_left", args: json!({}) });
+    }
+    static IS_UP: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^is\s+(?:the\s+|my\s+)?([a-z][a-z0-9 ]{1,24}?)\s+(?:open|running|on|started|up|playing)$|^(?:läuft|laeuft)\s+(?:der\s+|die\s+|das\s+|mein\s+|meine\s+)?([a-z][a-z0-9äöüß ]{1,24})$|^ist\s+(?:der\s+|die\s+|das\s+|mein\s+|meine\s+)?([a-z][a-z0-9äöüß ]{1,24}?)\s+(?:offen|an|auf|gestartet)$")
+    });
+    let c = IS_UP.captures(s)?;
+    let named = c.iter().skip(1).flatten().next()?.as_str().trim();
+    match named {
+        "music" | "musik" | "anything" | "something" | "irgendwas" | "etwas" => Some(Intent::Tool { name: "control_music", args: json!({ "action": "what_is_playing" }) }),
+        "mixer" | "board" | "theme studio" | "feature lab" | "console" | "text console" | "core view" | "note" | "shopping list" => Some(Intent::Tool { name: "whats_open", args: json!({}) }),
+        // (A game is whatever has a channel of its own on the mixer.)
+        "game" | "a game" | "spiel" | "ein spiel" => Some(Intent::Tool { name: "control_audio_mixer", args: json!({ "action": "get_app", "app": "game" }) }),
+        // (The PC, the lights and whatever else is no program have no answer here.)
+        "pc" | "computer" | "laptop" | "rechner" | "monitor" | "screen" | "bildschirm" | "light" | "lights" | "licht" | "wifi" | "wlan" | "bluetooth" | "sound" | "audio" | "ton" | "mic" | "microphone" | "mikro" | "mikrofon" | "camera" | "kamera" | "it" | "that" | "this" | "es" | "das" => None,
+        name if known_app(name) || matches!(name, "minecraft" | "sonora") => Some(Intent::Tool { name: "is_app_running", args: json!({ "app_name": name }) }),
+        _ => None,
+    }
+}
+
+/// "More", "weniger" with nothing else said: the word to ask back with.
+pub fn bare_comparative(text: &str) -> Option<&'static str> {
+    match raw_words(text).trim_start_matches("jarvis ").trim_end_matches(" please").trim_end_matches(" bitte") {
+        "more" | "mehr" | "noch mehr" => Some("More"),
+        "less" | "weniger" => Some("Less"),
+        _ => None,
+    }
+}
+
+/// Which reading of his machine a sentence asks for (`get_system_status`).
+fn reading_asked(s: &str) -> &'static str {
+    let names = |words: &[&str]| s.split(|c: char| !c.is_alphanumeric()).any(|w| words.contains(&w));
+    if names(&["vram"]) {
+        "vram"
+    } else if names(&["ram", "memory", "arbeitsspeicher"]) {
+        "memory"
+    } else if names(&["gpu", "graphics", "grafikkarte"]) {
+        "gpu"
+    } else if names(&["cpu", "processor"]) {
+        "cpu"
+    } else {
+        // ("How hot is my PC?": all of it.)
+        "all"
+    }
+}
+
+/// One reading of his machine: "show me my RAM usage", "how much RAM am I using", "what's my CPU
+/// at", "how hot is my GPU", "wie heiß ist die Grafikkarte". ("What is the CPU?" is a question.)
+static STATUS_READING: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"^(?:(?:show|tell|give|check)(?: me)?\s+(?:my\s+|the\s+|our\s+)(?:current\s+)?(?:cpu|gpu|ram|memory|vram|processor)(?:\s+(?:usage|load|temperature|temp|status|utili[sz]ation))?|(?:whats|what is|how is|hows)\s+(?:my\s+(?:cpu|gpu|ram|memory|vram)(?:\s+(?:usage|load|temperature|temp|at|doing))?|(?:the\s+)?(?:cpu|gpu|ram|memory|vram)\s+(?:usage|load|temperature|temp|at|doing))|how (?:much|many)\s+(?:ram|memory|vram)\s+(?:am i using|is (?:in use|used|free|left|being used)|do i have(?:\s+(?:left|free))?|have i got(?:\s+left)?)|how (?:hot|warm)\s+is\s+(?:my\s+|the\s+)?(?:gpu|cpu|graphics card|pc|computer)|(?:zeig|zeige)\s+(?:mir\s+)?(?:meine|die|meinen|den)\s+(?:cpu|gpu|ram)(?:[\s-]*(?:auslastung|last|temperatur|nutzung))?|wie (?:hoch|viel) ist (?:meine |die )?(?:cpu|gpu|ram)(?:[\s-]*(?:auslastung|last|temperatur))?|wie viel (?:ram|arbeitsspeicher) (?:nutze|brauche|verbrauche) ich|wie (?:heiß|heiss|warm) ist (?:meine |die |mein )?(?:gpu|cpu|grafikkarte|pc|rechner))$")
 });
 static VOLUME_SET: LazyLock<Regex> = LazyLock::new(|| {
-    re(r"^(?:(?:set|turn|put|stell|stelle|setz|setze|mach|mache|make|change|bring|adjust|crank|pump)\s+)?(?:the\s+|die\s+|my\s+|meine\s+|mein\s+|den\s+)?(?:system\s*|master\s+|pc\s+|computer\s+|overall\s+|gesamt\s*|windows\s+)?(?:volume|lautstärke|lautstaerke|sound|ton|audio|loudness)(?:\s+level)?\s+(?:to\s+|auf\s+|at\s+|on\s+)?(\d{1,3})\s*(?:%|percent|prozent)?$")
+    // ("My PC's volume" arrives here as "my pcs volume".)
+    re(r"^(?:(?:set|turn|put|stell|stelle|setz|setze|mach|mache|make|change|bring|adjust|crank|pump)\s+)?(?:the\s+|die\s+|my\s+|meine\s+|mein\s+|den\s+)?(?:system\s*|systems\s+|master\s+|pc\s+|pcs\s+|computer\s+|computers\s+|laptops?\s+|overall\s+|gesamt\s*|windows\s+)?(?:volume|lautstärke|lautstaerke|sound|ton|audio|loudness)(?:\s+level)?\s+(?:to\s+|auf\s+|at\s+|on\s+)?(\d{1,3})\s*(?:%|percent|prozent)?$")
 });
 static VOLUME_SET_REV: LazyLock<Regex> =
     LazyLock::new(|| re(r"^(\d{1,3})\s*(?:%|percent|prozent)\s*(?:volume|lautstärke|lautstaerke)?$"));
@@ -1006,6 +2347,11 @@ static WINDOW_ACTION: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(minimi[sz]e|maximi[sz]e|restore|focus|switch to|bring up|go to|wechsel zu|wechsle zu|zeig mir|zeige)\s+(.+?)$")
 });
 static WINDOW_ACTION_DE: LazyLock<Regex> = LazyLock::new(|| re(r"^(.+?)\s+(minimieren|maximieren|wiederherstellen)$"));
+/// "Make Discord full screen", "put Firefox in fullscreen", "mach Discord auf Vollbild": an app
+/// named (the bare "full screen" and "make it full screen" are the conversation focus's).
+static NAMED_FULLSCREEN: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"^(?:make|put|set|turn|switch|bring)\s+(.+?)\s+(?:to\s+|in\s+|into\s+|on\s+)?full[ -]?screen(?:\s+mode)?$|^(?:mach|mache|stell|stelle|schalt|schalte)\s+(.+?)\s+(?:auf\s+|in\s+(?:den\s+)?|zum\s+)?vollbild(?:modus)?(?:\s+an)?$")
+});
 static SNAP: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(?:snap|move|put|schieb|verschieb|verschiebe)\s+(.+?)\s+(?:to the\s+|nach\s+|to\s+|auf die\s+)?(left|right|links|rechts)(?:\s+side|\s+seite|\s+hälfte)?$")
 });
@@ -1111,7 +2457,8 @@ static HUD_OPACITY: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(?:make\s+)?(?:(?:the|your)\s+)?(?:window|interface|hud|background|yourself|gui|ui|everything)\s+(?:a bit\s+|a little\s+|slightly\s+)?((?:more|less)\s+(?:transparent|see[- ]through|opaque|solid)|transparent|see[- ]through|translucent|opaque|solid|non[- ]transparent)$|^(?:mach|mache)\s+(?:dich|das fenster|das interface|die oberfläche|den hintergrund|das hud|alles)\s+(durchsichtig|durchsichtiger|transparent|transparenter|undurchsichtig|weniger transparent|weniger durchsichtig)$")
 });
 static HUD_OPACITY_SET: LazyLock<Regex> = LazyLock::new(|| {
-    re(r"^(?:set\s+)?(?:the\s+)?(?:(?:window|interface|hud|background)\s+)?(opacity|transparency|deckkraft|transparenz|durchsichtigkeit)\s+(?:to\s+|auf\s+)?(\d{1,3})\s*(?:%|percent|prozent)?$")
+    // ("Make the interfaces opacity 0 %": "interface's" without its apostrophe.)
+    re(r"^(?:(?:set|make|change|put|turn|bring|adjust|stell|stelle|setz|setze|mach|mache)\s+)?(?:the\s+|your\s+|my\s+|die\s+|deine\s+)?(?:(?:window|windows|interface|interfaces|hud|huds|background|gui|guis|ui|board|boards)\s+)?(opacity|transparency|deckkraft|transparenz|durchsichtigkeit)\s+(?:to\s+|at\s+|auf\s+)?(\d{1,3})\s*(?:%|percent|prozent)?$")
 });
 static HUD_ONLY_ORB: LazyLock<Regex> =
     LazyLock::new(|| re(r"^(?:just|only)\s+(?:show\s+)?(?:the\s+)?(?:orb|reactor)$|^nur\s+(?:noch\s+)?(?:den\s+)?(?:reaktor|orb)$"));
@@ -1123,7 +2470,8 @@ static HUD_THEME_MODE: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(?:(?:switch|change|go|turn)\s+(?:to|into)\s+|(?:use|activate|enable|apply|load|start)\s+|(?:wechsel|wechsle|geh|gehe)\s+(?:zu|zum|zur|in den|in die|auf)\s+|(?:aktiviere|aktivier|nimm|nutze)\s+)?(?:(?:the|a|den|das|die|dem)\s+)?(.+?)\s*(theme|mode|modus|design|look|skin|style|stil|ansicht|view|layout|colou?rs|farben|thema)$")
 });
 static HUD_COLOUR: LazyLock<Regex> = LazyLock::new(|| {
-    re(r"^(?:make|turn|change|set|switch|paint|colou?r)\s+(?:(?:the|your|my)\s+)?(?:(?:interface|gui|ui|hud|display|screen|theme|seam|steam|team|scheme|design|look|accents?|accent colou?rs?|colou?r scheme|colou?rs?|everything|yourself|window|reactor|orb|highlights?)\s+)?(?:colou?rs?\s+)?(?:(?:to|into|in)\s+)?(?:the\s+)?(.+?)$")
+    // ("Make the entire face a rose": Whisper's "the entire interface rose".)
+    re(r"^(?:make|turn|change|set|switch|paint|colou?r)\s+(?:(?:the|your|my)\s+)?(?:(?:entire|whole)\s+)?(?:(?:interface|interfaces|gui|ui|hud|display|screen|theme|seam|steam|team|scheme|design|look|accents?|accent colou?rs?|colou?r scheme|colou?rs?|everything|yourself|window|reactor|orb|highlights?|face|thing)\s+)?(?:colou?rs?\s+)?(?:(?:to|into|in)\s+)?(?:the\s+|a\s+)?(.+?)$")
 });
 /// "Create a custom theme called Cyberpunk with neon yellow borders", "design a dark stealth theme"
 /// (STT: seam / steam / scheme).
@@ -1138,16 +2486,38 @@ static WINDOWS_OVERLAP: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(?:(?:overlap|stack|cascade)\s+(?:the\s+|my\s+|all\s+|your\s+)?(?:windows|blocks|panels|them)|let\s+(?:the\s+)?windows\s+overlap)$")
 });
 static WINDOWS_APART: LazyLock<Regex> = LazyLock::new(|| {
-    re(r"^(?:keep\s+(?:the\s+)?windows\s+apart|(?:don'?t|do not|stop)\s+overlap(?:ping)?(?:\s+the\s+windows)?|unstack\s+(?:the\s+)?windows)$")
+    // ("Don't make the windows overlap", "the windows shouldn't overlap": a setting, not a "don't".)
+    re(r"^(?:keep\s+(?:the\s+)?windows\s+apart|(?:don'?t|don\s+t|do not|stop)\s+overlap(?:ping)?(?:\s+the\s+windows)?|unstack\s+(?:the\s+)?windows|(?:don'?t|don\s+t|do not|never)\s+(?:make|let)\s+(?:the\s+|my\s+|your\s+)?windows\s+overlap(?:\s+(?:anymore|again|each other))?|(?:the\s+|my\s+|your\s+)?windows\s+(?:shouldn'?t|shouldn\s+t|should not|must not|mustn'?t|mustn\s+t|may not|can'?t|can\s+t|cannot|won'?t|won\s+t|don'?t|don\s+t|do not)\s+overlap(?:\s+(?:anymore|again|each other))?|no\s+(?:more\s+)?overlapping(?:\s+windows)?|(?:stop|prevent)\s+(?:the\s+)?windows\s+(?:from\s+)?overlapping|(?:die\s+)?fenster\s+(?:sollen|dürfen|duerfen)\s+(?:sich\s+)?nicht\s+(?:mehr\s+)?(?:überlappen|ueberlappen))$")
 });
+/// "Use all monitors", "span over all three monitors", "stretch yourself across both screens",
+/// "span mode on", "nutze alle drei Monitore", "erstreck dich über alle Bildschirme".
 static SPAN_ALL: LazyLock<Regex> = LazyLock::new(|| {
-    re(r"^(?:use|span(?:\s+across)?|(?:stretch|spread)(?:\s+yourself|\s+the\s+hud)?\s+(?:over|across))\s+(?:all|every|both)\s+(?:of\s+)?(?:my\s+|the\s+)?(?:monitors?|screens?|displays?)$")
+    re(r"^(?:(?:use|span|stretch|spread|extend|expand|go|run)(?:\s+(?:yourself|out|(?:the|your)\s+(?:hud|board|interface)))?(?:\s+(?:over|across|on|onto|to))?\s+(?:all|every|both|each)\s+(?:of\s+)?(?:my\s+|the\s+)?(?:(?:two|three|four|2|3|4)\s+)?(?:monitors?|screens?|displays?)|(?:(?:turn|switch)\s+on|enable|activate|start)\s+(?:the\s+)?span(?:ning)?(?:\s+mode)?|(?:turn|switch)\s+(?:the\s+)?span(?:ning)?(?:\s+mode)?\s+on|span(?:\s+mode)?\s+on|span\s+all|(?:nutze|nutz|benutze|benutz|verwende|nimm)\s+(?:alle|beide)\s+(?:(?:zwei|drei|vier|2|3|4)\s+)?(?:meine\s+)?(?:monitore|bildschirme|displays)|(?:erstreck|erstrecke|verteil|verteile|spann|spanne|streck|strecke|zieh|ziehe)\s+dich\s+(?:über|ueber|auf)\s+alle\s+(?:(?:zwei|drei|vier|2|3|4)\s+)?(?:meine\s+)?(?:monitore|bildschirme))$")
 });
-static SPAN_ONE: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:use|go back to|back to)\s+(?:only\s+)?(?:one|a single|1)\s+(?:monitor|screen|display)$"));
+/// "Use one monitor", "back to the main screen", "stop spanning", "span mode off", "don't use
+/// all monitors anymore", "nutze nur einen Monitor".
+static SPAN_ONE: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"^(?:(?:use|go back to|back to|switch back to|switch to|return to|go to|only use|just use)\s+(?:only\s+|just\s+)?(?:one|a single|1|my main|the main|my primary|the primary|my first|the first)\s+(?:monitor|screen|display)(?:\s+(?:only|again))?|(?:stop|quit|end|leave|exit|disable|deactivate|cancel)\s+(?:the\s+)?(?:spanning|span(?:\s+mode)?)(?:\s+(?:over\s+|across\s+)?(?:all\s+)?(?:(?:the|my)\s+)?(?:(?:two|three|four|2|3|4)\s+)?(?:monitors|screens|displays))?|(?:turn|switch)\s+off\s+(?:the\s+)?span(?:ning)?(?:\s+mode)?|(?:turn|switch)\s+(?:the\s+)?span(?:ning)?(?:\s+mode)?\s+off|span(?:\s+mode)?\s+off|(?:don'?t|do not|stop|no longer)\s+(?:span|spanning|use|using|stretch|stretching)(?:\s+(?:over|across))?\s+(?:all|every|both)\s+(?:of\s+)?(?:(?:my|the)\s+)?(?:(?:two|three|four|2|3|4)\s+)?(?:monitors|screens|displays)(?:\s+anymore)?|(?:nutze|nutz|benutze|benutz|verwende|nimm)\s+nur\s+(?:noch\s+)?(?:einen|den\s+ersten|den\s+haupt)\s*(?:monitor|bildschirm)|(?:zurück|zurueck)\s+auf\s+einen\s+(?:monitor|bildschirm)|(?:nur|wieder)\s+(?:ein|einen)\s+(?:monitor|bildschirm)|(?:hör|höre|hoer|hoere)\s+auf\s+(?:zu\s+|mit\s+dem\s+)?(?:spannen|strecken|überspannen)|nicht\s+mehr\s+(?:spannen|strecken))$")
+});
+/// "Toggle span mode", "span mode": the other of the two.
+static SPAN_TOGGLE: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:toggle\s+(?:the\s+)?(?:span(?:ning)?(?:\s+mode)?|span\s+all)|span\s+mode|spanmodus(?:\s+umschalten)?)$"));
+/// "Move out of the way", "step aside", "you're in the way", "geh aus dem Weg", "mach Platz":
+/// the emblem waits in its corner until Sir calls it back.
+static ORB_ASIDE: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"^(?:(?:move|get|go|step|scoot|shift)\s+(?:yourself\s+|(?:the\s+|your\s+)?(?:orb|emblem|icon|logo|core|sphere)\s+)?(?:out\s+of\s+(?:the|my)\s+way|aside|to\s+the\s+side|away)|you(?:'?re|\s+are|\s+re|r)\s+in\s+(?:the|my)\s+way|make\s+(?:some\s+)?room|(?:geh|gehe|beweg\s+dich|bewege\s+dich)\s+(?:mal\s+)?(?:aus\s+dem\s+weg|zur\s+seite|beiseite)|du\s+bist\s+im\s+weg|mach\s+(?:mal\s+)?platz)$")
+});
+/// "Come back to the middle", "back to the centre" — and, while the emblem is out of the way,
+/// plain "come back" / "you can come back" / "komm zurück".
+static ORB_BACK: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:(?:you\s+can\s+|you\s+may\s+)?(?:come|go|move)\s+back\s+(?:to|in|into)\s+the\s+(?:middle|centre|center)(?:\s+now)?|(?:back|return)\s+to\s+the\s+(?:middle|centre|center)|(?:wieder|zurück|zurueck)\s+in\s+die\s+mitte)$"));
+static ORB_BACK_SHORT: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:(?:you\s+can\s+|you\s+may\s+)?come\s+back(?:\s+now)?|(?:komm|komme)\s+(?:wieder\s+)?(?:zurück|zurueck))$"));
+/// "Turn off the sound cues", "mute the interface sounds", "sound cues on", "Soundeffekte aus".
+static SOUND_CUES: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"^(?:(?:turn|switch)\s+)?(on|off|mute|silence|disable|stop|enable)?\s*(?:the\s+|your\s+)?(?:sound\s+cues|sound\s+effects|interface\s+sounds|board\s+sounds|hud\s+sounds|ui\s+sounds|soundeffekte)(?:\s+(on|off|an|aus))?$")
+});
 /// "Move your orb back to the middle", "put the emblem on the right side", "move the orb slightly
 /// left", "bewege deinen Orb in die Mitte".
 static ORB_TO: LazyLock<Regex> = LazyLock::new(|| {
-    re(r"^(?:(?:move|put|place|drag|bring|send|shift)\s+(?:the\s+|your\s+|my\s+)?(?:orb|emblem|core|sphere)\s+(?:back\s+)?(?:(?:over\s+)?(?:to|in|into|on|at)\s+)?(?:the\s+)?(.+)|(?:beweg|bewege|schieb|schiebe|setz|setze|pack|packe)\s+(?:den\s+|deinen\s+|die\s+|deine\s+)?(?:orb|kugel|emblem)\s+(?:wieder\s+)?(?:(?:in die|in den|auf die|zur|zum|nach)\s+)?(.+))$")
+    re(r"^(?:(?:move|put|place|drag|bring|send|shift)\s+(?:the\s+|your\s+|my\s+)?(?:orb|emblem|icon|logo|core|sphere)\s+(?:back\s+)?(?:(?:over\s+)?(?:to|in|into|on|at)\s+)?(?:the\s+)?(.+)|(?:beweg|bewege|schieb|schiebe|setz|setze|pack|packe)\s+(?:den\s+|deinen\s+|die\s+|deine\s+)?(?:orb|kugel|emblem)\s+(?:wieder\s+)?(?:(?:in die|in den|auf die|zur|zum|nach)\s+)?(.+))$")
 });
 
 /// "night ops" → "Night Ops" (a saved theme's name as Sir would write it).
@@ -1181,8 +2551,21 @@ fn layout_and_theme_command(s: &str) -> Option<Value> {
     if WINDOWS_OVERLAP.is_match(s) || WINDOWS_APART.is_match(s) {
         return Some(json!({ "allow_window_overlap": WINDOWS_OVERLAP.is_match(s) }));
     }
+    if let Some(c) = SOUND_CUES.captures(s) {
+        let off = c.iter().flatten().any(|m| matches!(m.as_str(), "off" | "aus" | "mute" | "silence" | "disable" | "stop"));
+        return Some(json!({ "sound_cues": !off }));
+    }
+    if SPAN_TOGGLE.is_match(s) {
+        return Some(json!({ "span_all_monitors": "toggle" }));
+    }
     if SPAN_ALL.is_match(s) || SPAN_ONE.is_match(s) {
         return Some(json!({ "span_all_monitors": SPAN_ALL.is_match(s) }));
+    }
+    if ORB_ASIDE.is_match(s) {
+        return Some(json!({ "orb_board_position": "aside" }));
+    }
+    if ORB_BACK.is_match(s) || (ORB_BACK_SHORT.is_match(s) && crate::hud_dock::orb_aside()) {
+        return Some(json!({ "orb_board_position": "center" }));
     }
     let c = ORB_TO.captures(s)?;
     let spot = c.get(1).or(c.get(2))?.as_str().trim();
@@ -1214,10 +2597,12 @@ fn look_args(name: &str, prefer_layout: bool) -> Option<Value> {
     let layout = || HudLayout::parse(name).map(|l| json!({ "layout": l.id() }));
     let theme = || interface::theme(name).map(|_| json!({ "theme": name }));
     let colour = || interface::parse_color(name).map(|_| json!({ "accent_color": name }));
+    // "Make the theme rose", "switch to the rose theme": a palette by its colour word.
+    let palette = || crate::theme_engine::preset_for_word(name).map(|preset| json!({ "hud_palette": preset }));
     if prefer_layout {
-        layout().or_else(theme).or_else(colour)
+        layout().or_else(theme).or_else(colour).or_else(palette)
     } else {
-        theme().or_else(colour).or_else(layout)
+        theme().or_else(colour).or_else(layout).or_else(palette)
     }
 }
 
@@ -1407,6 +2792,9 @@ static FOCUS_FRONT: LazyLock<Regex> = LazyLock::new(|| {
 static FOCUS_CLOSE: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(?:close|quit|exit|kill|shut)\s+(?:it|that|this|that one|this one|that app|this app|the app|that program|the program|es|das|dies|ihn|sie|das programm|die app)(?:\s+(?:down|now))?$|^(?:mach|mache)\s+(?:es|das|ihn|sie|das programm|die app)\s+zu$|^(?:schließ|schließe|schliess|schliesse|beende|beend)\s+(?:es|das|dies|ihn|sie|das programm|die app)$")
 });
+static FOCUS_REMOVE: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"^(?:remove|dismiss|hide|get rid of|take away)\s+(?:it|that|this|that one|this one)$|^take\s+(?:it|that|this)\s+away$|^(?:entferne|entfern|nimm)\s+(?:es|das)(?:\s+weg)?$|^(?:mach|mache)\s+(?:es|das)\s+weg$|^weg\s+damit$")
+});
 static FOCUS_CLOSE_TAB: LazyLock<Regex> =
     LazyLock::new(|| re(r"^(?:close|shut)\s+(?:the|that|this)\s+tab$|^(?:schließ|schließe|schliess|schliesse)\s+(?:den|diesen)\s+tab$|^tab\s+(?:schließen|schliessen|zu)$"));
 
@@ -1477,8 +2865,33 @@ fn focus_command(s: &str) -> Option<Intent> {
     if FOCUS_CLOSE.is_match(s) {
         return tool("close_application", json!({ "app_name": "it", "force": true }));
     }
+    // "Get rid of it": about something of his or about nothing (a program is closed, not removed).
+    if FOCUS_REMOVE.is_match(s) {
+        return tool("close_application", json!({ "app_name": "it", "force": true, "own_only": true }));
+    }
     None
 }
+
+// ---- "Undo that": the last change of his own, taken back (`undo`) -----------------------------
+
+static UNDO_LAST: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"^(?:never\s*mind\s+|forget\s+it\s+|scratch\s+that\s+)?(?:undo|revert|reverse)(?:\s+(?:that|this|it|(?:that|this)\s+change|(?:the|your|my)\s+last\s+(?:thing|one|action|change)))?$|^(?:put|set)\s+(?:it|that|this|everything)\s+back(?:\s+(?:as|how|the\s+way)\s+it\s+was)?$|^take\s+(?:that|it|this)\s+back$|^(?:mach|mache)\s+(?:das|es|dies|die\s+letzte\s+aktion)?\s*(?:wieder\s+)?rückgängig$|^rückgängig$|^(?:nimm|nehm)\s+(?:das|es)\s+zurück$|^(?:stell|mach)\s+(?:es|das)\s+(?:wieder\s+)?zurück$|^(?:change|switch)\s+(?:it\s+|that\s+)?back$|^(?:wechsel|wechsle|änder|ändere)\s+(?:es\s+|das\s+)?zurück$")
+});
+
+/// "Undo that", "change it back": the sentence the last change is taken back with.
+pub fn is_undo(text: &str) -> bool {
+    UNDO_LAST.is_match(&normalize(text))
+}
+
+// "What did you just do?": his own last actions, as they went (never a guess).
+static RECENT_ACTIONS: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"^what\s+(?:did|have)\s+you\s+(?:just\s+|last\s+|recently\s+)?(?:do|done|change|changed)(?:\s+(?:just\s+now|last|lately|recently|there))?$|^what\s+was\s+the\s+last\s+thing\s+you\s+did$|^was\s+hast\s+du\s+(?:zuletzt\s+|soeben\s+)?(?:gemacht|getan|geändert)$")
+});
+
+// "What's new?": what this build does that the last one did not.
+static WHATS_NEW: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"^(?:whats|what\s+is)\s+new(?:\s+(?:with\s+you|in\s+this\s+(?:version|build|update)|since\s+the\s+last\s+(?:version|build|update)))?$|^(?:any|got\s+any|do\s+you\s+have\s+any)\s+new\s+(?:features|tricks)$|^what\s+are\s+your\s+new\s+features$|^was\s+ist\s+neu$|^was\s+gibt(?:\s+es|s)\s+neues$|^was\s+kannst\s+du\s+neues$")
+});
 
 // ---- Files the conversation is about ("undo that edit", "open that file in VS Code") -------
 
@@ -1712,11 +3125,11 @@ fn looks_like_app_name(name: &str) -> bool {
 
 /// A monitor named in a phrase: "monitor 2", "the second screen", "my left monitor".
 static MONITOR_PHRASE: LazyLock<Regex> = LazyLock::new(|| {
-    re(r"^(?:the\s+|my\s+|den\s+|meinen\s+|dem\s+|mein\s+|die\s+|meinem\s+)?(?:(first|second|third|fourth|1st|2nd|3rd|4th|other|next|left|right|primary|main|erste[nm]?|zweite[nm]?|dritte[nm]?|vierte[nm]?|andere[nm]?|linke[nm]?|rechte[nm]?|nächste[nm]?|haupt)\s*(?:monitor|screen|display|bildschirm)|(?:monitor|screen|display|bildschirm)\s*(\d|one|two|three|four|eins|zwei|drei|vier))$")
+    re(r"^(?:the\s+|my\s+|a\s+|den\s+|meinen\s+|dem\s+|mein\s+|die\s+|meinem\s+|einen\s+)?(?:(first|second|third|fourth|1st|2nd|3rd|4th|other|another|different|next|left|right|primary|main|erste[nm]?|zweite[nm]?|dritte[nm]?|vierte[nm]?|andere[nm]?|linke[nm]?|rechte[nm]?|nächste[nm]?|haupt)\s*(?:monitor|screen|display|bildschirm)|(?:monitor|screen|display|bildschirm)\s*(\d|one|two|three|four|eins|zwei|drei|vier))$")
 });
 /// Anywhere in a sentence ("… on my second monitor").
 static MONITOR_ANYWHERE: LazyLock<Regex> = LazyLock::new(|| {
-    re(r"\b(?:on|to|onto|auf|zum|nach)\s+((?:the\s+|my\s+|den\s+|meinen\s+|dem\s+|meinem\s+)?(?:(?:first|second|third|fourth|other|next|left|right|primary|main|erste[nm]?|zweite[nm]?|dritte[nm]?|andere[nm]?|linke[nm]?|rechte[nm]?|haupt)\s*(?:monitor|screen|display|bildschirm)|(?:monitor|screen|display|bildschirm)\s*(?:\d|one|two|three|four|eins|zwei|drei)))\b")
+    re(r"\b(?:on|to|onto|auf|zum|nach)\s+((?:the\s+|my\s+|a\s+|den\s+|meinen\s+|dem\s+|meinem\s+|einen\s+)?(?:(?:first|second|third|fourth|other|another|different|next|left|right|primary|main|erste[nm]?|zweite[nm]?|dritte[nm]?|andere[nm]?|linke[nm]?|rechte[nm]?|haupt)\s*(?:monitor|screen|display|bildschirm)|(?:monitor|screen|display|bildschirm)\s*(?:\d|one|two|three|four|eins|zwei|drei)))\b")
 });
 static WINDOW_WORD: LazyLock<Regex> = LazyLock::new(|| re(r"\b(?:window|windows|fenster)\b"));
 static CREATE_VERB: LazyLock<Regex> = LazyLock::new(|| {
@@ -1771,7 +3184,7 @@ fn monitor_value(phrase: &str) -> Option<Value> {
         "third" | "3rd" | "dritte" | "dritten" | "drittem" => json!(3),
         "fourth" | "4th" | "vierte" | "vierten" => json!(4),
         "main" | "haupt" => json!("primary"),
-        "andere" | "anderen" | "anderem" => json!("other"),
+        "andere" | "anderen" | "anderem" | "another" | "different" => json!("other"),
         "linke" | "linken" | "linkem" => json!("left"),
         "rechte" | "rechten" | "rechtem" => json!("right"),
         "nächste" | "nächsten" | "nächstem" => json!("next"),
@@ -1885,7 +3298,8 @@ fn jarvis_window_edit(s: &str) -> Option<Intent> {
 static MOVE_TO: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(?:move|put|throw|send|shift|drag|place|bring|verschieb|verschiebe|schieb|schiebe|pack|beweg|bewege|tu|tue)\s+(.+?)\s+(?:over\s+)?(?:to|onto|on|auf|nach|zu|zum|in)\s+(.+)$")
 });
-static SELF_TO_MONITOR: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:move|go|switch|jump|head)\s+(?:over\s+)?(?:to|onto)\s+(.+)$"));
+static SELF_TO_MONITOR: LazyLock<Regex> =
+    LazyLock::new(|| re(r"^(?:move|go|switch|jump|head|geh|gehe|wechsel|wechsle|spring|springe|zieh|ziehe|komm|komme)\s+(?:over\s+|rüber\s+|mal\s+)?(?:to|onto|auf|zu|zum|nach)\s+(.+)$"));
 static OPEN_ON: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:open|launch|start|starte|öffne|oeffne)\s+(.+?)\s+(?:on|auf)\s+(.+)$"));
 
 /// "Move Sonora to monitor 2", "put Discord on my second screen", "move the PC stats window to
@@ -1914,10 +3328,10 @@ static WHAT_PLAYING: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(?:what(?:s| is) (?:playing|this song|that song|the song|this track|on)(?: right now| now)?|what song is (?:this|playing|that)|which song is (?:this|playing)|who sings (?:this|that)|what am i listening to|was läuft(?: gerade)?|welches lied ist das|welcher song ist das|was ist das für ein lied|was höre ich gerade)$")
 });
 static PAUSE_MUSIC: LazyLock<Regex> = LazyLock::new(|| {
-    re(r"^(?:pause|stop|halt)\s+(?:the\s+|my\s+)?(?:music|song|track|playback|spotify|sonora|playlist)$|^pause$|^(?:musik|lied|song)\s+(?:pausieren|stoppen|anhalten|aus)$|^(?:pausier|pausiere|stopp|stoppe)\s+(?:die\s+)?musik$|^musik pause$|^pausieren$|^pausiere$")
+    re(r"^(?:pause|stop|halt)\s+(?:the\s+|my\s+)?(?:music|song|track|playback|spotify|sonora|playlist)$|^pause$|^(?:musik|lied|song)\s+(?:pausieren|stoppen|anhalten|aus)$|^(?:pausier|pausiere|stopp|stoppe)\s+(?:die\s+)?musik$|^musik pause$|^pausieren$|^pausiere$|^(?:turn|switch)\s+off\s+(?:the\s+|my\s+)?music$|^(?:turn|switch)\s+(?:the\s+|my\s+)?music\s+off$|^music\s+off$|^(?:mach|mache|schalt|schalte|dreh|drehe)\s+(?:die\s+|meine\s+)?musik\s+aus$")
 });
 static RESUME_MUSIC: LazyLock<Regex> = LazyLock::new(|| {
-    re(r"^(?:resume|continue|unpause)(?:\s+(?:the\s+)?(?:music|song|track|playback))?$|^play(?:\s+(?:some\s+|the\s+|my\s+)?music)?$|^play music$|^musik\s+(?:weiter|fortsetzen|an)$|^spiel weiter$|^fortsetzen$|^weiter$|^abspielen$|^play pause$")
+    re(r"^(?:resume|continue|unpause)(?:\s+(?:the\s+)?(?:music|song|track|playback))?$|^play(?:\s+(?:some\s+|the\s+|my\s+)?music)?$|^play music$|^musik\s+(?:weiter|fortsetzen|an)$|^spiel weiter$|^fortsetzen$|^weiter$|^abspielen$|^play pause$|^(?:turn|switch)\s+on\s+(?:the\s+|my\s+)?music$|^(?:turn|switch)\s+(?:the\s+|my\s+)?music\s+(?:back\s+)?on$|^music\s+(?:back\s+)?on$|^(?:mach|mache|schalt|schalte)\s+(?:die\s+|meine\s+)?musik\s+(?:wieder\s+)?an$")
 });
 /// Verbs that may start music when a playlist / song is named explicitly.
 const PLAY_VERB: &str = r"(?:play|spiel|spiele|put on|start|starte|shuffle|queue up|throw on|leg)";
@@ -1930,6 +3344,29 @@ static PLAY_PLAYLIST: LazyLock<Regex> = LazyLock::new(|| {
     ))
 });
 static PLAY_SOMETHING: LazyLock<Regex> = LazyLock::new(|| re(&format!(r"^{PLAY_ONLY}\s+(?:the\s+song\s+|the\s+track\s+|das\s+lied\s+)?(.+)$")));
+
+/// A playlist's name as Sir said it, without what came with it: "called jays rock" → "jays
+/// rock", "jays rock playlist my jays rock" (said twice) → "jays rock". None when he named none
+/// ("can you play a specific playlist?").
+fn playlist_name(raw: &str) -> Option<String> {
+    let mut name = raw.trim().trim_end_matches(['.', ',', '!', '?']).trim();
+    // ("my playlist called jace rock": every lead-in, in whatever order.)
+    while let Some(rest) = ["called ", "named ", "namens ", "titled ", "my ", "the ", "meine ", "die ", "playlist ", "play list "].iter().find_map(|p| name.strip_prefix(p)) {
+        name = rest.trim();
+    }
+    // Said twice ("Jay's Rock playlist, my Jay's Rock playlist"): the first time.
+    for word in [" playlist ", " play list "] {
+        if let Some((first, _)) = name.split_once(word) {
+            name = first.trim();
+        }
+    }
+    let name = name.trim_end_matches(" playlist").trim_end_matches(" play list").trim_end_matches(['.', ',']).trim();
+    let none = matches!(
+        name,
+        "" | "a" | "an" | "a specific" | "specific" | "some" | "any" | "a certain" | "certain" | "one" | "a new" | "another" | "a different" | "different" | "a random" | "random" | "eine" | "irgendeine" | "bestimmte" | "eine bestimmte"
+    );
+    (!none).then(|| name.to_string())
+}
 
 /// "Play Back in Black in JaysRock": the split (tried from the right, since titles contain
 /// "in" too) whose second half is one of Sir's playlists.
@@ -1970,6 +3407,13 @@ fn music_command(s: &str) -> Option<Intent> {
     if WHAT_PLAYING.is_match(s) {
         return music(json!({ "action": "what_is_playing" }));
     }
+    // "List my playlists", "what playlists do I have", "welche Playlists habe ich".
+    static LIST_PLAYLISTS: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^(?:(?:list|show|read|tell)(?: me)? (?:all )?(?:my |the )?playlists|(?:what|which) playlists (?:do i have|have i got|are there)|what are my playlists|(?:zeig|zeige)(?: mir)? (?:alle )?(?:meine |die )?playlists|welche playlists (?:habe ich|hab ich|gibt es))$")
+    });
+    if LIST_PLAYLISTS.is_match(s) {
+        return music(json!({ "action": "list_playlists" }));
+    }
     if PAUSE_MUSIC.is_match(s) {
         return music(json!({ "action": "pause" }));
     }
@@ -2005,22 +3449,22 @@ fn music_command(s: &str) -> Option<Intent> {
         // called "back in black from my jaysrock".
         for sep in [" from my ", " in my ", " off my ", " aus meiner ", " von meiner ", " in meiner "] {
             if let Some((song, list)) = name.split_once(sep) {
-                let list = list.trim().trim_start_matches("playlist ").trim();
-                if !song.trim().is_empty() && !list.is_empty() {
-                    return music(json!({ "action": "play", "song_name": song.trim(), "playlist_name": list }));
+                let song = song.trim().trim_end_matches(['.', ',']).trim();
+                if let Some(list) = playlist_name(list).filter(|_| !song.is_empty()) {
+                    return music(json!({ "action": "play", "song_name": song, "playlist_name": list }));
                 }
             }
         }
-        return music(json!({ "action": "play", "playlist_name": name }));
+        // ("Can you play a specific playlist?" names none: the model asks which.)
+        return music(json!({ "action": "play", "playlist_name": playlist_name(&name)? }));
     }
     if let Some(c) = PLAY_BY.captures(s) {
-        let (what, artist) = (c[1].trim(), c[2].trim());
+        let (what, artist) = (c[1].trim().trim_end_matches(['.', ',']).trim(), c[2].trim());
         // "Play Thunderstruck from my playlist JaysRock" / "… from my JaysRock playlist": a song in a
         // playlist even before the library index knows the name, never an artist called "my …".
         let owned = ["my ", "meiner ", "meinem ", "the playlist ", "playlist "].iter().find_map(|p| artist.strip_prefix(p));
         if let Some(rest) = owned.filter(|_| !what.is_empty()) {
-            let list = rest.trim_start_matches("playlist ").trim_start_matches("play list ").trim_end_matches(" playlist").trim_end_matches(" play list").trim();
-            if !list.is_empty() && list != "playlist" {
+            if let Some(list) = playlist_name(rest).filter(|list| list != "playlist") {
                 return music(json!({ "action": "play", "song_name": what, "playlist_name": list }));
             }
         }
@@ -2231,9 +3675,29 @@ pub fn warm_up() {
 }
 
 pub fn parse(text: &str) -> Option<Intent> {
+    if let Some(line) = courtesy(text) {
+        return Some(Intent::Answer(line.to_string()));
+    }
+    if let Some(line) = microphone_asked(text) {
+        return Some(Intent::Answer(line));
+    }
+    if held_back(text) {
+        return Some(Intent::Answer("Very good, Sir. I'll leave it as it is.".to_string()));
+    }
+    if let Some(line) = how_or_whether(text) {
+        return Some(Intent::Answer(line));
+    }
     let s = normalize(text);
     if s.is_empty() {
         return None;
+    }
+    // "Soll ich Firefox schließen?": he asks himself, he tells nobody to.
+    static ASKS_HIMSELF: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:soll|sollte|sollen|muss|müsste|darf)\s+ich\b|^(?:should|shall|must)\s+i\b"));
+    if ASKS_HIMSELF.is_match(&s) {
+        return None;
+    }
+    if let Some(intent) = looked_up(&s) {
+        return Some(intent);
     }
     let tool = |name: &'static str, args: Value| Some(Intent::Tool { name, args });
     let media = |action: &str| json!({ "action": action });
@@ -2241,12 +3705,31 @@ pub fn parse(text: &str) -> Option<Intent> {
     if STOP.is_match(&s) {
         return Some(Intent::Stop);
     }
+    // "Undo that": whatever he changed last, taken back (before any rule that reads "put it
+    // back" or "revert" as something of its own).
+    if UNDO_LAST.is_match(&s) {
+        return tool("undo_last_action", json!({}));
+    }
+    if RECENT_ACTIONS.is_match(&s) {
+        return tool("recent_actions", json!({}));
+    }
+    if WHATS_NEW.is_match(&s) {
+        return tool("whats_new", json!({}));
+    }
     // The HUD's own views ("close your core", "bring back the screen", "dock all windows").
     if let Some(intent) = hud_view_command(text) {
         return Some(intent);
     }
     if let Some(intent) = outing_command(text) {
         return Some(intent);
+    }
+    // The state of his machine is a reading, not a topic for the board to research ("give me a
+    // system report", "show me my RAM usage", "how hot is my GPU").
+    if STATUS.is_match(&s) {
+        return tool("get_system_status", json!({}));
+    }
+    if STATUS_READING.is_match(&s) {
+        return tool("get_system_status", json!({ "reading": reading_asked(&s) }));
     }
     // The HUD board first: "sign off" puts the screen down (it no longer quits Jarvis), and with
     // a board up "maximise that" means a block, not a window.
@@ -2260,6 +3743,14 @@ pub fn parse(text: &str) -> Option<Intent> {
             return tool("configure_interface", json!({ "window": "hide" }));
         }
         return tool("shutdown_jarvis", json!({}));
+    }
+    // "Clear the VRAM", "get out of my VRAM": the zero-VRAM standby at once.
+    if VRAM_FLUSH.is_match(&s) {
+        return tool("manage_vram", json!({ "action": "flush" }));
+    }
+    // "Open the integrations hub" (Whisper: "the integration sub").
+    if INTEGRATIONS_HUB.is_match(&s) {
+        return tool("configure_productivity_service", json!({ "service_name": "all", "action": "open" }));
     }
     // The HUD's own modes and the volume mixer (before the volume rules and "open/close X").
     if let Some(args) = orb_mode_command(text) {
@@ -2395,10 +3886,23 @@ pub fn parse(text: &str) -> Option<Intent> {
             return tool("window_management", json!({ "action": action, "target_window": target }));
         }
     }
+    if let Some(name) = NAMED_FULLSCREEN.captures(&s).as_ref().and_then(capture) {
+        let target = strip_article(name);
+        // (His own board and windows are the HUD's rules, before this one.)
+        let his_own = matches!(target.as_str(), "board" | "hud" | "interface" | "gui" | "ui" | "orb" | "emblem" | "console" | "core" | "screen" | "window" | "windows" | "everything" | "all" | "it all" | "dich" | "alles");
+        if looks_like_app_name(&target) && !his_own && !crate::focus::is_pronoun(&target) {
+            return tool("window_management", json!({ "action": "fullscreen", "target_window": target }));
+        }
+    }
+    if let Some(intent) = app_switch(&s) {
+        return Some(intent);
+    }
+    // ("Shut down the PC" is the PC, and its double-check is the brain's: never a program.)
+    const MACHINE: &[&str] = &["pc", "my pc", "computer", "my computer", "laptop", "rechner", "system", "monitor", "screen", "bildschirm"];
     for re in [&*CLOSE, &*CLOSE_DE, &*CLOSE_DE_SUFFIX] {
         if let Some(c) = re.captures(&s) {
             let app = strip_article(&c[1]);
-            if looks_like_app_name(&app) {
+            if looks_like_app_name(&app) && !MACHINE.contains(&app.as_str()) {
                 return tool("close_application", json!({ "app_name": app, "force": true }));
             }
         }
@@ -2439,7 +3943,7 @@ static BOARD_RECALL: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(?:bring up|pull up|show me|show|open|put up|get)\s+(?:that|the|my|your)\s+(.+?)\s+report(?:\s+(?:again|from (?:earlier|yesterday|before)|(?:that\s+)?you\s+(?:gave|made|did|showed)\s+(?:me\s+)?(?:earlier|before|yesterday)?))*$")
 });
 static BOARD_RESEARCH: LazyLock<Regex> = LazyLock::new(|| {
-    re(r"^(?:do|make|run|put together|prepare|write|build|give)\s+(?:me\s+)?(?:a|an)\s+(.+?)\s+report$|^(?:research|look into)\s+(.+)$|^(?:mach|erstelle)\s+(?:mir\s+)?(?:einen|ein)\s+(.+?)[\s-]*(?:bericht|report)$")
+    re(r"^(?:do|make|run|put together|prepare|write|build|give)\s+(?:me\s+)?(?:a|an)\s+(.+?)\s+report$|^(?:research|look into)\s+(.+)$|^(?:mach|erstelle)\s+(?:mir\s+)?(?:einen|ein)\s+(.+?)[\s-]*(?:bericht|report)$|^(?:recherchiere|recherchier|erforsche|forsche)\s+(?:mal\s+)?(?:zu\s+|zum\s+|zur\s+|über\s+|nach\s+)?(.+)$")
 });
 static BOARD_MAXIMIZE: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(?:maximi[sz]e|expand|enlarge|blow up|zoom in on|spotlight|focus on|maximieren|vergrößere|vergroessere)(?:\s+(?:that|this|it|the|den|die|das))?(?:\s+(.*?))?$")
@@ -2465,6 +3969,19 @@ static BOARD_MAP: LazyLock<Regex> = LazyLock::new(|| {
 static RESEARCH_DURATION: LazyLock<Regex> = LazyLock::new(|| re(r"\bfor\s+(?:\d+|a|an|one|two|three|four|five|six|ten|twelve)\s+(?:hours?|minutes?|mins?)\b"));
 /// Words that name a board block ("the chart", "photos").
 const BOARD_NOUNS: [&str; 16] = ["chart", "graph", "map", "photo", "photos", "picture", "image", "images", "gallery", "note", "notes", "figure", "stat", "video", "block", "report"];
+
+/// "Tidy the windows", "arrange my blocks", "räum die Fenster auf".
+static BLOCK_TIDY: LazyLock<Regex> = LazyLock::new(|| {
+    // ("My windows" are the desktop's programs: the window tiler's.)
+    re(r"^(?:(?:tidy|tidy up|arrange|tile|organi[sz]e|line up|sort out)\s+(?:all\s+)?(?:(?:the\s+|your\s+)?(?:windows|blocks|panels|board|hud)|my\s+(?:blocks|panels|board|hud))(?:\s+up)?|räum(?:e)?\s+(?:die\s+|deine\s+)?(?:fenster|blöcke)\s+auf|ordne\s+(?:die\s+|deine\s+)?(?:fenster|blöcke))$")
+});
+/// "Find voltage on the board", "search the blocks for Ohm's law", "highlight deadline in the windows".
+static BLOCK_FIND: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"^(?:(?:find|search for|look for|highlight|filter for)\s+(.+?)\s+(?:on|in|across)\s+(?:all\s+)?(?:the\s+|my\s+|your\s+)?(?:board|blocks|windows|hud|panels|report)|(?:search|filter)\s+(?:all\s+)?(?:the\s+|my\s+|your\s+)?(?:board|blocks|windows|hud|panels|report)\s+for\s+(.+))$")
+});
+static BLOCK_FIND_CLEAR: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:clear|reset|stop|end|cancel|remove)\s+(?:the\s+|that\s+)?(?:block\s+|board\s+)?(?:search|filter|highlight(?:ing)?)$"));
+/// "Pin the chart", "unpin it", "copy the first note (to the clipboard)", "export the map as JSON".
+static BLOCK_MENU: LazyLock<Regex> = LazyLock::new(|| re(r"^(pin|unpin|copy|export)\s+(.+?)(?:\s+to\s+(?:the\s+|my\s+)?clipboard)?(?:\s+(?:as|to|in)\s+(?:a\s+)?(markdown|json|md)(?:\s+file)?)?$"));
 
 /// The HUD board's voice commands (`active`: a board is on screen, `spotlight`: a block is
 /// maximised). Maximise, minimise and flipping notes are silent (a badge and the UI tone).
@@ -2500,10 +4017,43 @@ pub fn board_command(text: &str, active: bool, spotlight: bool) -> Option<Intent
         return tool(json!({ "action": "recall", "topic": c[1].trim() }));
     }
     if let Some(c) = BOARD_RESEARCH.captures(&s) {
-        let topic = c.get(1).or(c.get(2)).or(c.get(3))?.as_str().trim();
+        let topic = c.get(1).or(c.get(2)).or(c.get(3)).or(c.get(4))?.as_str().trim();
         let workspace = [" and ", "window", "workspace", "dossier"].iter().any(|w| s.contains(w));
         if !RESEARCH_DURATION.is_match(&s) && !workspace && !topic.is_empty() && topic.split_whitespace().count() <= 8 {
             return tool(json!({ "action": "research", "topic": original_case(text, topic) }));
+        }
+    }
+    // The block menu by voice: "tidy the windows", "find voltage on the board", "clear the
+    // search", "pin the chart", "copy the first note", "export the map as JSON".
+    if BLOCK_TIDY.is_match(&s) {
+        return silent(json!({ "action": "tidy" }), "Tidied");
+    }
+    if BLOCK_FIND_CLEAR.is_match(&s) {
+        return silent(json!({ "action": "find", "target": "" }), "Search cleared");
+    }
+    if let Some(c) = BLOCK_FIND.captures(&s) {
+        let words = c.get(1).or(c.get(2))?.as_str().trim();
+        if !words.is_empty() && words.split_whitespace().count() <= 6 {
+            return tool(json!({ "action": "find", "target": words }));
+        }
+    }
+    if let Some(c) = BLOCK_MENU.captures(&s) {
+        let verb = &c[1];
+        let target = c[2].trim().trim_start_matches("the ").trim();
+        // Only what is a block: a board noun, a block header's words or an open in-app window;
+        // "it" only while a board is up (and "copy that" stays the acknowledgement it is).
+        let pronoun = matches!(target, "it" | "this" | "that");
+        let names_block = (pronoun && active && verb != "copy")
+            || target.split_whitespace().any(|w| BOARD_NOUNS.contains(&w))
+            || crate::hud_board::names_block(target)
+            || !crate::hud_dock::blocks_named(target).is_empty();
+        if names_block {
+            let format = c.get(3).map(|m| if m.as_str() == "json" { "json" } else { "markdown" });
+            return match verb {
+                "export" => tool(json!({ "action": "export", "target": target, "format": format.unwrap_or("markdown") })),
+                "copy" => silent(json!({ "action": "copy", "target": target }), "Copied"),
+                _ => silent(json!({ "action": "pin", "target": target }), if verb == "unpin" { "Unpinned" } else { "Pinned" }),
+            };
         }
     }
     if active {
@@ -2538,6 +4088,12 @@ pub fn board_command(text: &str, active: bool, spotlight: bool) -> Option<Intent
             return silent(json!({ "action": "flip_note", "direction": direction }), "PAGE");
         }
     }
+    // "Next page" with nothing on the board is said as it is, at once (the language model took
+    // ten seconds over it and then claimed it had closed something). A bare "next" is the
+    // music's.
+    if !active && BOARD_FLIP.is_match(&s) && ["page", "seite", "note"].iter().any(|w| s.contains(w)) {
+        return Some(Intent::Answer("There is nothing to page through, Sir. The board is empty.".into()));
+    }
     None
 }
 
@@ -2567,7 +4123,9 @@ const SELF_REF: &str = r"(?:ur ?self|your ?selfe?|urself|yo ?self|yer ?self|jarv
 
 static SELF_SHUTDOWN_ANY: LazyLock<Regex> = LazyLock::new(|| {
     re(&format!(
-        r"\b(?:close|quit|exit|kill|terminate|end)\s+{SELF_REF}\b|\b(?:shut|turn|switch|power)\s+(?:(?:down|off)\s+{SELF_REF}|{SELF_REF}\s+(?:down|off))\b|\b(?:mach|mache)\s+(?:dich|jarvis)\s+(?:aus|zu|ab)\b|\b(?:schalt|schalte)\s+(?:dich|jarvis)\s+(?:aus|ab)\b|\b(?:fahr|fahre)\s+(?:dich|jarvis)\s+(?:selbst\s+)?(?:runter|herunter)\b|\b(?:beende|beend|schließe|schliesse|schließ)\s+(?:dich|jarvis)\b"
+        // ("Gliese dich selbst": how the recogniser hears "schließe dich selbst"; "kannst du dich
+        // selbst schließen", heard once as "kannte ich selbst schließen".)
+        r"\b(?:close|quit|exit|kill|terminate|end)\s+{SELF_REF}\b|\b(?:shut|turn|switch|power)\s+(?:(?:down|off)\s+{SELF_REF}|{SELF_REF}\s+(?:down|off))\b|\b(?:mach|mache)\s+(?:dich|jarvis)\s+(?:aus|zu|ab)\b|\b(?:schalt|schalte)\s+(?:dich|jarvis)\s+(?:aus|ab)\b|\b(?:fahr|fahre)\s+(?:dich|jarvis)\s+(?:selbst\s+)?(?:runter|herunter)\b|\b(?:beende|beend|schließe|schliesse|schließ|schliese|gliese|gließe|gliesse)\s+(?:dich|jarvis)\b|\b(?:kannst|könntest|koenntest|würdest|wuerdest)\s+du\s+(?:dich|jarvis)\s+(?:selbst\s+|bitte\s+|mal\s+)*(?:schließen|schliessen|beenden|ausschalten|abschalten|ausmachen|zumachen)\b|\b(?:kannte|kannt)\s+(?:ich|du)\s+(?:dich\s+)?selbst\s+(?:schließen|schliessen|beenden)\b"
     ))
 });
 /// Whole-sentence forms Sir uses for "quit yourself".
@@ -2576,7 +4134,12 @@ static SELF_SHUTDOWN_EXACT: LazyLock<Regex> = LazyLock::new(|| {
 });
 static NEGATION: LazyLock<Regex> = LazyLock::new(|| re(r"\b(?:dont|do not|don t|never|nicht|nie|kein|keine)\b"));
 static SLEEP_MODE: LazyLock<Regex> = LazyLock::new(|| {
-    re(r"^(?:go to sleep|sleep mode|sleep|take a nap|nap time|standby|stand by|go on standby|schlaf|schlafen|geh schlafen|schlafmodus|ruhemodus|standby modus|bereitschaft)$")
+    re(r"^(?:go to sleep|sleep mode|sleep|take a nap|nap time|standby|stand by|standby mode|(?:go|get)\s+(?:on|to|into|in)\s+standby(?:\s+mode)?|enter\s+standby(?:\s+mode)?|schlaf|schlafen|geh schlafen|schlafmodus|ruhemodus|standby modus|bereitschaft|geh\s+(?:in den\s+)?standby)$")
+});
+/// "Clear the VRAM", "free up my VRAM", "can you move out of my VRAM?", "mach die Grafikkarte
+/// frei": every model off the GPU at once (the zero-VRAM standby; Alt+J or a word wakes him).
+static VRAM_FLUSH: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"^(?:clear|free|free up|flush|empty|release|unload|clean|clean up|purge)\s+(?:up\s+)?(?:out\s+)?(?:my\s+|the\s+|your\s+|all\s+(?:of\s+)?(?:my\s+|the\s+)?)?(?:vram|gpu memory|video memory|graphics memory|gpu|graphics card)(?:\s+(?:for me|now|again))?$|^(?:get|move|go|stay|step)\s+out\s+of\s+(?:my\s+|the\s+)?(?:vram|gpu|graphics card|video memory|gpu memory)(?:\s+(?:for me|now|for a while))?$|^(?:leave|give me back)\s+(?:my\s+|the\s+)?(?:vram|gpu|graphics card)(?:\s+(?:alone|free|back))?$|^(?:mach|mache|räum|räume|raeum|leere|leer|gib)\s+(?:meinen\s+|meine\s+|den\s+|die\s+|mir\s+(?:den\s+|die\s+)?)?(?:vram|grafikspeicher|grafikkarte|gpu)\s+(?:frei|leer|zurück|zurueck)$")
 });
 static VOICE_MUTE: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(?:mute yourself|mute your voice|mute tts|turn off your voice|stummschalten dich|schalte deine stimme aus|deine stimme aus)$")
@@ -2865,6 +4428,14 @@ mod board_tests {
         assert_eq!(board("Clear my calendar", true, false), None);
         assert_eq!(board("Show me Tulleys Farm on the map", false, false), Some(json!({"action": "show_map", "place": "Tulleys Farm"})));
         assert_eq!(board("next note", true, false), Some(json!({"action": "flip_note", "direction": "next"})));
+        // With nothing on the board a page turn is answered at once, not by the language model
+        // (which took ten seconds and claimed to have closed something); a bare "next" stays
+        // the music's.
+        for text in ["Next page", "Previous page", "Nächste Seite", "Page 3"] {
+            assert!(matches!(board_command(text, false, false), Some(Intent::Answer(line)) if line.starts_with("There is nothing to page through")), "{text}");
+        }
+        assert_eq!(board_command("next", false, false), None);
+        assert_eq!(board_command("go back", false, false), None);
         // Voice pagination of a stacked block, and closing the board by name (not as a program).
         for text in ["Jarvis, next page", "Next slide", "Next result", "Go forward", "Nächste Seite"] {
             assert_eq!(board(text, true, false), Some(json!({"action": "flip_note", "direction": "next"})), "{text}");
@@ -3031,10 +4602,46 @@ mod tests {
             assert_eq!(hud(text), Some(json!({"allow_window_overlap": true})), "{text}");
         }
         assert_eq!(hud("Keep the windows apart"), Some(json!({"allow_window_overlap": false})));
-        for text in ["Use all monitors", "Span all my screens", "Stretch yourself across all monitors", "Use both screens"] {
+        // "Span over all three monitors" went to the language model, which invented a window.
+        for text in [
+            "Use all monitors",
+            "Span all my screens",
+            "Stretch yourself across all monitors",
+            "Use both screens",
+            "Jarvis. Span over all three monitors.",
+            "Span across all 3 monitors",
+            "Spread the HUD over every screen",
+            "Extend yourself to all my displays",
+            "Span mode on",
+            "Turn on span mode",
+            "Nutze alle drei Monitore",
+            "Erstreck dich über alle Bildschirme",
+        ] {
             assert_eq!(hud(text), Some(json!({"span_all_monitors": true})), "{text}");
         }
-        assert_eq!(hud("Use only one monitor"), Some(json!({"span_all_monitors": false})));
+        for text in [
+            "Use only one monitor",
+            "Stop spanning",
+            "Stop spanning all monitors",
+            "Span mode off",
+            "Turn off span mode",
+            "Go back to one monitor",
+            "Back to the main screen",
+            "Don't use all monitors anymore",
+            "Just use my first monitor",
+            "Nutze nur einen Monitor",
+        ] {
+            assert_eq!(hud(text), Some(json!({"span_all_monitors": false})), "{text}");
+        }
+        assert_eq!(hud("Toggle span mode"), Some(json!({"span_all_monitors": "toggle"})));
+        assert_eq!(hud("Span mode"), Some(json!({"span_all_monitors": "toggle"})));
+        // The emblem stays in the middle until Sir tells it to get out of the way.
+        for text in ["Move out of the way", "Get out of my way", "Step aside", "You're in the way", "Move the orb out of the way", "Geh aus dem Weg", "Mach Platz"] {
+            assert_eq!(hud(text), Some(json!({"orb_board_position": "aside"})), "{text}");
+        }
+        for text in ["Come back to the middle", "Back to the centre", "You can come back to the center now", "Wieder in die Mitte"] {
+            assert_eq!(hud(text), Some(json!({"orb_board_position": "center"})), "{text}");
+        }
         assert_eq!(hud("Move the orb to the top left"), Some(json!({"orb_board_position": "top left"})));
         assert_eq!(hud("Put the emblem on the right side"), Some(json!({"orb_board_position": "right side"})));
         assert_eq!(hud("Move the orb to bottom center"), Some(json!({"orb_board_position": "bottom center"})));
@@ -3196,6 +4803,76 @@ mod tests {
     }
 
     #[test]
+    fn a_volume_is_read_off_the_mixer_when_asked_for() {
+        for said in ["What's my volume?", "What is the volume?", "What's the current volume?", "How loud is it?", "Wie laut ist es?", "Wie hoch ist die Lautstärke?"] {
+            assert_eq!(mixer_command(said), Some(json!({"action": "get_master"})), "{said}");
+        }
+        let app = |name: &str| Some(json!({"action": "get_app", "app": name}));
+        assert_eq!(mixer_command("How loud is Discord?"), app("discord"));
+        assert_eq!(mixer_command("What's Discord's volume?"), app("discord"));
+        assert_eq!(mixer_command("Is my browser muted?"), app("browser"));
+        assert_eq!(mixer_command("How loud is the game?"), app("game"));
+        assert_eq!(mixer_command("Wie laut ist Discord?"), app("discord"));
+        assert_eq!(mixer_command("Ist Discord stumm?"), app("discord"));
+        assert_eq!(mixer_command("Is anything muted?"), Some(json!({"action": "muted"})));
+        assert_eq!(mixer_command("What's muted?"), Some(json!({"action": "muted"})));
+        assert_eq!(mixer_command("Ist irgendwas stumm?"), Some(json!({"action": "muted"})));
+        // A level of something else is no question for the mixer.
+        for said in ["What is the volume of a sphere?", "How loud is a jet engine?", "What is the water level?", "Is the mic muted?"] {
+            assert_eq!(mixer_command(said), None, "{said}");
+        }
+    }
+
+    #[test]
+    fn a_named_mix_is_saved_loaded_listed_and_deleted_by_voice() {
+        let call = |action: &str, name: &str| json!({ "action": action, "name": name });
+        for (said, wanted) in [
+            ("Save this mix as gaming", call("save_mix", "gaming")),
+            ("Save the current volumes as late night", call("save_mix", "late night")),
+            ("Remember this mix as my movie mix", call("save_mix", "movie")),
+            ("Speicher diesen Mix als Gaming", call("save_mix", "gaming")),
+            ("Load my gaming mix", call("load_mix", "gaming")),
+            ("Switch to the movie mix", call("load_mix", "movie")),
+            ("Lade den Gaming Mix", call("load_mix", "gaming")),
+            ("Delete the gaming mix", call("delete_mix", "gaming")),
+            ("Lösch den Gaming Mix", call("delete_mix", "gaming")),
+            ("Which mixes do I have?", json!({"action": "list_mixes"})),
+            ("List my mixes", json!({"action": "list_mixes"})),
+            ("Welche Mixe habe ich?", json!({"action": "list_mixes"})),
+        ] {
+            assert_eq!(mixer_command(said), Some(wanted), "{said}");
+        }
+        // A playlist of that sort is the music's; a name nobody saved is nothing.
+        for said in ["Play my classic rock mix", "Put on my classic rock mix", "classic rock mix", "the mix of the two", "Mix it up"] {
+            assert_eq!(mixer_command(said), None, "{said}");
+        }
+    }
+
+    #[test]
+    fn what_he_just_did_and_what_is_new_are_read_not_guessed() {
+        for said in ["What did you just do?", "What have you done?", "What did you change?", "What was the last thing you did?", "Was hast du gerade gemacht?", "Was hast du zuletzt geändert?"] {
+            assert_eq!(tool(said), Some(("recent_actions", json!({}))), "{said}");
+        }
+        for said in ["What's new?", "What's new in this version?", "Any new features?", "Was ist neu?", "Was gibt's Neues?"] {
+            assert_eq!(tool(said), Some(("whats_new", json!({}))), "{said}");
+        }
+        // The news is a question of its own.
+        assert_ne!(tool("What's new in the news?").map(|t| t.0), Some("whats_new"));
+    }
+
+    #[test]
+    fn undo_that_takes_back_the_last_change_of_his_own() {
+        for said in ["Undo that", "Undo", "Undo it", "Revert that", "Undo that change", "Undo the last change", "Put it back", "Put that back the way it was", "Take that back", "Never mind, undo that", "Mach das rückgängig", "Nimm das zurück", "Rückgängig"] {
+            assert_eq!(tool(said), Some(("undo_last_action", json!({}))), "{said}");
+        }
+        // Naming what is to be undone keeps it the tool it always was.
+        assert_eq!(tool("Undo that edit"), Some(("undo_last_file_edit", json!({}))));
+        assert_eq!(tool("Undo that volume change").map(|t| t.0), Some("control_audio_mixer"));
+        // … and something else that goes back stays what it was.
+        assert_ne!(tool("Put the orb back").map(|t| t.0), Some("undo_last_action"));
+    }
+
+    #[test]
     fn file_follow_ups_and_window_styles() {
         assert_eq!(tool("Undo that edit"), Some(("undo_last_file_edit", json!({}))));
         assert_eq!(tool("Mach die Änderung rückgängig"), Some(("undo_last_file_edit", json!({}))));
@@ -3266,7 +4943,8 @@ mod tests {
         assert_eq!(fuzzy("Open browser"), browser);
         let web = fuzzy("Launch web").unwrap().1;
         assert_eq!(crate::apps::find_spec(web["app_name"].as_str().unwrap()).map(|s| s.id), Some("browser"));
-        assert_eq!(fuzzy("Could you maybe open the web browser for me?"), browser);
+        let web = fuzzy("Could you maybe open the web browser for me?").unwrap();
+        assert_eq!((web.0, crate::apps::find_spec(web.1["app_name"].as_str().unwrap()).map(|s| s.id)), ("open_application", Some("browser")));
         assert_eq!(fuzzy("To open my browser and search for whatever I want to."), browser);
         assert_eq!(
             fuzzy("Open my browser and search for rust tutorials"),
@@ -3768,7 +5446,10 @@ mod tests {
         assert_eq!(tool("Mach Spotify auf 20 Prozent").unwrap().1["apps"], json!([{"app": "spotify", "level": 20}]));
         assert_eq!(tool("Mute Chrome"), Some(("control_audio_mixer", json!({"action": "mute_app", "app": "chrome"}))));
         assert_eq!(tool("Lower the volume by 5%"), Some(("control_audio_mixer", json!({"action": "change_master", "delta": -5}))));
-        assert_eq!(tool("Set it back to 100%"), Some(("control_audio_mixer", json!({"action": "set_master", "level": 100}))));
+        // "It" is what the last volume request was about (the mixer takes the master volume
+        // when there was none).
+        assert_eq!(tool("Set it back to 100%"), Some(("control_audio_mixer", json!({"action": "set_app", "app": "it", "level": 100}))));
+        assert_eq!(tool("Set the volume back to 100%"), Some(("control_audio_mixer", json!({"action": "set_master", "level": 100}))));
         // Not mixer commands.
         assert_ne!(tool("Set the zoom to 125 percent").map(|(n, _)| n), Some("control_audio_mixer"));
         assert_eq!(tool("Mute your voice").unwrap().1["action"], "mute_tts");
@@ -3793,9 +5474,14 @@ mod tests {
         for text in ["What reminders do I have?", "Do I have any reminders?", "Which reminders do I have today?", "Show me my reminders"] {
             assert_eq!(tool(text).map(|(n, a)| (n, a["action"].clone())), Some(("reminders", json!("list"))), "{text}");
         }
-        for text in ["Which apps are playing audio right now?", "Show me the volume mixer", "What's playing audio?", "Welche Apps spielen gerade Ton?"] {
+        for text in ["Which apps are playing audio right now?", "What's playing audio?", "Welche Apps spielen gerade Ton?"] {
             assert_eq!(tool(text), Some(("control_audio_mixer", json!({"action": "list"}))), "{text}");
         }
+        // The block with the faders, not a list read out.
+        assert_eq!(tool("Show me the volume mixer"), Some(("configure_interface", json!({"mixer_view": true}))));
+        // Small talk stays small talk.
+        assert_eq!(parse("What's up?"), None);
+        assert_eq!(tool("What's up on the board?"), Some(("whats_open", json!({}))));
         assert_eq!(tool("Make the accents gold"), Some(("configure_interface", json!({"theme": "gold"}))));
         assert_eq!(tool("Find my jarvis config file").unwrap().1["query"], "jarvis config");
         assert_eq!(tool("Find my tax pdf").unwrap().1["query"], "tax pdf");
@@ -3845,11 +5531,648 @@ mod tests {
         assert_eq!(mixer_command("mach discord auf 80 prozent"), Some(json!({"action": "set_apps", "apps": [{"app": "discord", "level": 80}]})));
         assert_eq!(mixer_command("mute chrome"), Some(json!({"action": "mute_app", "app": "chrome"})));
         // Reflex words.
+        volume_scenarios();
         for (text, action) in [("paus", "stop_all"), ("weiter", "resume"), ("skip", "next_track"), ("zurück", "previous_track")] {
             assert_eq!(silent_quick_command(text).map(|a| a.args["action"].clone()), Some(json!(action)), "{text}");
         }
         for (text, action) in [("silence", "mute_master"), ("stumm", "mute_master"), ("ton an", "unmute_master"), ("lauter", "change_master"), ("leiser", "change_master")] {
             assert_eq!(silent_quick_command(text).map(|a| a.args["action"].clone()), Some(json!(action)), "{text}");
         }
+    }
+
+    /// He starts with an empty HUD; what was open comes back when asked, and a widget stays for
+    /// the next start only when Sir says so.
+    #[test]
+    fn recent_windows_come_back_and_widgets_are_kept_by_voice() {
+        let back = Some(Intent::Tool { name: "spawn_native_window", args: json!({"restore": "recent"}) });
+        for text in [
+            "Bring back my windows",
+            "Bring my windows back",
+            "Jarvis, bring back up all recently opened windows.",
+            "Reopen my windows",
+            "Restore my last session",
+            "Reopen the windows from last time",
+            "Open everything I had open again",
+            "Bring back the widgets",
+            "Hol meine Fenster zurück",
+            "Öffne meine letzten Fenster wieder",
+        ] {
+            assert_eq!(parse(text), back, "{text}");
+        }
+        // Docking detached windows is another thing, as is the board.
+        assert_eq!(parse("bring all the windows back in"), Some(Intent::Tool { name: "configure_interface", args: json!({"dock_windows": true}) }));
+        let keep = |id: &str, on: bool| Some(Intent::Tool { name: "create_or_update_widget", args: json!({"id": id, "keep_at_start": on}) });
+        for (text, id, on) in [
+            ("Open that widget again the next time I start you", "last", true),
+            ("Keep this widget for the next start", "last", true),
+            ("Show the CPU gauge again when you start", "CPU load", true),
+            ("Keep that window open at startup", "window", true),
+            ("Don't open it at startup anymore", "last", false),
+            ("Öffne das Widget beim nächsten Start wieder", "last", true),
+        ] {
+            assert_eq!(parse(text), keep(id, on), "{text}");
+        }
+        // What the silent session of 2026-11-06 found: the Feature Lab was taken for a program,
+        // "remove all widgets" hid the panel that holds them, a status question and a plain
+        // gauge went to the language model.
+        let iface = |args: Value| Some(Intent::Tool { name: "configure_interface", args });
+        for text in ["Open the feature lab", "Show me the feature lab", "Feature lab", "Jarvis, open your feature lab."] {
+            assert_eq!(parse(text), iface(json!({"feature_lab": true})), "{text}");
+        }
+        let remove = |id: &str| Some(Intent::Tool { name: "remove_widget", args: json!({"id": id}) });
+        for (text, id) in [("Remove all widgets", "all"), ("Delete the widgets", "all"), ("Clear my widgets", "all"), ("Remove the CPU load widget", "cpu load"), ("Close that widget", "last"), ("Entferne alle Widgets", "all")] {
+            assert_eq!(parse(text), remove(id), "{text}");
+        }
+        assert_ne!(parse("Hide the widgets panel"), remove("all"), "the panel is the layout's");
+        let gauge = |title: &str, source: &str, unit: &str| Some(Intent::Tool { name: "create_or_update_widget", args: json!({"type": "MetricGauge", "title": title, "source": source, "unit": unit}) });
+        assert_eq!(parse("Create a widget that shows my CPU load"), gauge("CPU load", "cpu", "%"));
+        assert_eq!(parse("Add a GPU temperature gauge"), gauge("GPU temperature", "gpu_temp", "°C"));
+        assert_eq!(parse("Make me a RAM widget"), gauge("RAM", "ram", "%"));
+        assert_eq!(parse("Erstelle ein Widget für die CPU-Auslastung"), gauge("CPU load", "cpu", "%"));
+        for text in ["What's my system status?", "How is my PC doing?", "System status", "PC status", "Give me a system report"] {
+            assert_eq!(parse(text), Some(Intent::Tool { name: "get_system_status", args: json!({}) }), "{text}");
+        }
+        // One reading asked for is the one read out.
+        for (text, reading) in [("Show me my RAM usage", "memory"), ("How much memory am I using?", "memory"), ("What's my CPU at?", "cpu"), ("How hot is my GPU?", "gpu"), ("How much VRAM is free?", "vram"), ("Wie heiß ist die Grafikkarte?", "gpu"), ("Wie viel Arbeitsspeicher nutze ich?", "memory"), ("Wie hoch ist die CPU-Auslastung?", "cpu"), ("Wie hoch ist die RAM-Auslastung?", "memory"), ("How hot is my PC?", "all")] {
+            assert_eq!(parse(text), Some(Intent::Tool { name: "get_system_status", args: json!({"reading": reading}) }), "{text}");
+        }
+    }
+
+    #[test]
+    fn quiet_is_a_level_to_go_down_to() {
+        for (text, level) in [("Make it quiet", 20), ("Make it very quiet", 10), ("Very quiet", 10), ("Make everything quiet", 20), ("Mach es leise", 20), ("Mach es ganz leise", 10), ("Ganz leise", 10)] {
+            assert_eq!(mixer_command(text), Some(json!({"action": "quiet", "level": level})), "{text}");
+        }
+        // How it sounds is one step the other way, about what was just changed.
+        for (text, delta) in [("It's very quiet", 10), ("It's quiet", 10), ("It's so loud", -10), ("That is really loud", -10), ("Das ist laut", -10), ("Es ist sehr leise", 10)] {
+            assert_eq!(mixer_command(text), Some(json!({"action": "change_app", "app": "it", "delta": delta})), "{text}");
+        }
+        for (text, level) in [("Make it loud", 80), ("Make it very loud", 100), ("Mach es laut", 80), ("Mach es richtig laut", 100)] {
+            assert_eq!(mixer_command(text), Some(json!({"action": "loud", "level": level})), "{text}");
+        }
+        assert_eq!(silent_quick_command("Keep it down").unwrap().args, json!({"action": "change_app", "app": "it", "delta": -10}));
+        assert_eq!(bare_comparative("More"), Some("More"));
+        assert_eq!(bare_comparative("Weniger bitte"), Some("Less"));
+        assert_eq!(bare_comparative("More volume"), None);
+    }
+
+    #[test]
+    fn courtesies_are_answered_without_the_model() {
+        for text in ["Thank you", "Thanks", "Thanks, Jarvis.", "Thank you very much", "Thank you, Jarvis, that was perfect.", "Perfect, thanks", "Danke", "Vielen Dank", "Danke schön"] {
+            assert!(matches!(parse(text), Some(Intent::Answer(line)) if line.ends_with("Sir.")), "{text}");
+        }
+        for text in ["Jarvis", "Hey Jarvis", "Jarvis!"] {
+            assert_eq!(parse(text), Some(Intent::Answer("Yes, Sir?".into())), "{text}");
+        }
+        // Thanks with a request, or a declined offer, are no courtesy.
+        for text in ["No thanks", "Thanks for the update, now open Spotify", "Thank you for watching my stream today"] {
+            assert!(!matches!(parse(text), Some(Intent::Answer(_))), "{text}");
+        }
+    }
+
+    /// Repro (route reader, 2026-11-07): "is the sound on?" unmuted, "I can barely hear Discord"
+    /// joined the Discord call, "switch to my speakers" looked for a window.
+    #[test]
+    fn a_question_about_the_sound_moves_nothing_and_every_sentence_lands_on_the_mixer() {
+        let mixer = |args: Value| Some(Intent::Tool { name: "control_audio_mixer", args });
+        for text in ["Is the sound on?", "Is the sound off?", "Is my sound muted?", "Ist der Ton an?", "Ist mein Ton stumm?"] {
+            assert_eq!(parse(text), mixer(json!({"action": "muted"})), "{text}");
+        }
+        for text in ["Is it too loud?", "Why is it so loud?", "Was ist lauter?"] {
+            assert!(volume_phrase(&text.to_lowercase().replace('?', "")).is_none(), "{text} is no request");
+        }
+        for (text, app, delta) in [
+            ("Not loud enough", "it", 10),
+            ("It's not loud enough", "it", 10),
+            ("Das ist nicht laut genug", "it", 10),
+            ("Not quiet enough", "it", -10),
+            ("Discord isn't loud enough", "discord", 10),
+            ("I can barely hear it", "it", 10),
+            ("I can hardly hear Discord", "discord", 10),
+            ("Ich höre Discord kaum", "discord", 10),
+            ("Ich kann es kaum hören", "it", 10),
+        ] {
+            assert_eq!(parse(text), mixer(json!({"action": "change_app", "app": app, "delta": delta})), "{text}");
+        }
+        for (text, app, seconds) in [("Mute Discord for 10 minutes", "discord", 600), ("Mute Firefox for an hour", "firefox", 3600), ("Schalte Discord für 5 Minuten stumm", "discord", 300), ("Discord für eine halbe Stunde stumm", "discord", 1800)] {
+            assert_eq!(parse(text), mixer(json!({"action": "mute_app", "app": app, "seconds": seconds})), "{text}");
+        }
+        for text in ["Mute for 10 minutes", "Mute everything for 10 minutes", "Mute the sound for 10 minutes"] {
+            assert_eq!(parse(text), mixer(json!({"action": "mute_master", "seconds": 600})), "{text}");
+        }
+        assert_eq!(parse("Mute Discord until I say so"), mixer(json!({"action": "mute_app", "app": "discord"})));
+        assert_eq!(parse("Firefox stumm schalten"), mixer(json!({"action": "mute_app", "app": "firefox"})));
+        for text in ["Mach alles stumm außer Discord", "Alles stumm außer Discord", "Schalte alles aus außer Discord"] {
+            assert_eq!(parse(text), mixer(json!({"action": "mute_others", "app": "discord"})), "{text}");
+        }
+        for (text, args) in [
+            ("Fade out the music", json!({"action": "fade", "way": "out", "app": "music"})),
+            ("Fade the music out", json!({"action": "fade", "way": "out", "app": "music"})),
+            ("Fade in the music", json!({"action": "fade", "way": "in", "app": "music"})),
+            ("Fade Discord back in", json!({"action": "fade", "way": "in", "app": "discord"})),
+            ("Blende die Musik aus", json!({"action": "fade", "way": "out", "app": "musik"})),
+            ("Fade out", json!({"action": "fade", "way": "out", "app": "it"})),
+            ("Fade everything out", json!({"action": "fade", "way": "out"})),
+            ("Turn it down slowly", json!({"action": "fade", "delta": -20, "app": "it"})),
+            ("Slowly turn the music up", json!({"action": "fade", "delta": 20, "app": "music"})),
+            ("Dreh die Musik langsam runter", json!({"action": "fade", "delta": -20, "app": "musik"})),
+        ] {
+            assert_eq!(parse(text), mixer(args), "{text}");
+        }
+        for (text, app, to, offset) in [
+            ("Set Firefox to the same level as Discord", "firefox", "discord", 0),
+            ("Make Discord as loud as Firefox", "discord", "firefox", 0),
+            ("Mach Firefox so laut wie Discord", "firefox", "discord", 0),
+            ("Make Firefox quieter than Discord", "firefox", "discord", -10),
+            ("Make Discord louder than the music", "discord", "music", 10),
+            ("Mach Firefox leiser als Discord", "firefox", "discord", -10),
+        ] {
+            assert_eq!(parse(text), mixer(json!({"action": "match_app", "app": app, "to": to, "offset": offset})), "{text}");
+        }
+        assert_eq!(parse("Set all apps to 100 percent"), mixer(json!({"action": "set_all_apps", "level": 100})));
+        assert_eq!(parse("Set everything to 100"), mixer(json!({"action": "set_master", "level": 100})));
+        for text in ["What's my output device?", "Which audio device am I using?", "Where is the sound going?", "Welches Audiogerät nutze ich?"] {
+            assert_eq!(parse(text), mixer(json!({"action": "device"})), "{text}");
+        }
+        assert_eq!(parse("List my audio devices"), mixer(json!({"action": "devices"})));
+        for text in ["Switch to my speakers", "Switch the sound to my headset", "Use my headset", "Change the output device", "Schalte auf die Kopfhörer um"] {
+            assert_eq!(parse(text), mixer(json!({"action": "switch_device"})), "{text}");
+        }
+        assert_eq!(parse("What's Discord at?"), mixer(json!({"action": "get_app", "app": "discord"})));
+        assert_eq!(parse("What is Firefox set to?"), mixer(json!({"action": "get_app", "app": "firefox"})));
+        for text in ["Why is it so quiet?", "Why is it so loud?", "Warum ist es so leise?", "Why is everything so quiet?"] {
+            assert_eq!(parse(text), mixer(json!({"action": "list"})), "{text}");
+        }
+        for text in ["Why is Discord muted?", "Why is Discord so quiet?", "Warum ist Discord stumm?"] {
+            assert_eq!(parse(text), mixer(json!({"action": "get_app", "app": "discord"})), "{text}");
+        }
+        assert_eq!(parse("Is it muted?"), mixer(json!({"action": "muted"})));
+        for text in ["Kannst du es leiser machen?", "Make it not so loud", "Mach den Ton nicht so laut"] {
+            assert_eq!(parse(text), mixer(json!({"action": "change_app", "app": "it", "delta": -10})), "{text}");
+        }
+    }
+
+    #[test]
+    fn whether_he_is_listening_is_answered_from_the_lock() {
+        for text in ["Is my mic muted?", "Is the microphone on?", "Am I muted?", "Are you listening?", "Jarvis, are you listening to me?", "Can you hear me?", "Ist mein Mikro stumm?", "Hörst du mir zu?"] {
+            assert!(matches!(parse(text), Some(Intent::Answer(ref line)) if line.starts_with("I'")), "{text}");
+        }
+    }
+
+    /// Repro (silent session, 2026-11-07): "Should I close Firefox?" had the model call
+    /// close_application, and "Is the orb hidden?" control_orb_mode.
+    #[test]
+    fn a_plain_question_asks_and_an_order_in_good_manners_does_not() {
+        for text in [
+            "Should I close Firefox?",
+            "Soll ich Firefox schließen?",
+            "Is the orb hidden?",
+            "Jarvis, is the orb hidden?",
+            "Did you close Firefox?",
+            "Why did you mute Discord?",
+            "What happens if I close it?",
+            "Do you know how to open Firefox?",
+            "How do I close Firefox?",
+            "Is it muted?",
+            "Why is Firefox closed?",
+            "Warum ist Firefox zu?",
+            "Hast du Firefox geschlossen?",
+            "When is my next class?",
+            "What's the weather like?",
+            "Is it possible to close Firefox?",
+        ] {
+            assert!(only_asks(text), "{text}");
+        }
+        for text in [
+            "Can you close Firefox?",
+            "Could you mute Discord?",
+            "Would you open the mixer?",
+            "Will you turn it down?",
+            "Kannst du Firefox schließen?",
+            "Close Firefox",
+            "How about some music?",
+            "What about Discord?",
+            "Why don't you close it?",
+            "Why not close it?",
+            "Do you mind closing Firefox?",
+            "Wie wäre es mit Musik?",
+            "Is Firefox open? Close it.",
+            "Is Firefox open and if so close it",
+            "Is Firefox open, then close it",
+            "When the timer ends, play music",
+            "Do a backup",
+            "Have a look at it",
+            "Open the mixer",
+            // Complaints: he wants the sound back.
+            "Why is there no sound?",
+            "Why can't I hear anything?",
+            "Warum höre ich nichts?",
+        ] {
+            assert!(!only_asks(text), "{text}");
+        }
+        // "Are you there?" wakes the board, and a question may do that.
+        assert!(!beyond_the_question("Hey Jarvis, are you there?", "hud_board", &json!({"action": "wake"})));
+        assert!(beyond_the_question("Is the board open?", "hud_board", &json!({"action": "close"})));
+        assert_eq!(tool("Why is there no sound?"), Some(("control_audio_mixer", json!({"action": "no_sound"}))));
+    }
+
+    #[test]
+    fn his_own_record_and_his_modes_answer_for_themselves() {
+        for (text, about) in [
+            ("Did you mute Discord?", "discord"),
+            ("Did you close Firefox?", "firefox"),
+            ("Why did you close Firefox?", "firefox"),
+            ("Did you close the mixer?", "mixer"),
+            ("Hast du Firefox geschlossen?", "firefox"),
+            ("Warum hast du Discord stumm geschaltet?", "discord"),
+        ] {
+            assert_eq!(tool(text), Some(("recent_actions", json!({ "about": about }))), "{text}");
+        }
+        for text in ["Have you changed the volume?", "Did you do that?", "Did you just close it?"] {
+            assert_eq!(tool(text), Some(("recent_actions", json!({}))), "{text}");
+        }
+        for text in ["Is the orb hidden?", "Are you in orb mode?", "Is orb mode on?", "Ist der Orbmodus an?", "Bist du im Orbmodus?"] {
+            assert_eq!(tool(text), Some(("control_orb_mode", json!({"action": "status"}))), "{text}");
+        }
+        for text in ["Are you in Ultron mode?", "Is Ultron mode on?", "Bist du im Ultron Modus?"] {
+            assert!(matches!(parse(text), Some(Intent::Answer(ref line)) if line.contains("Ultron Mode")), "{text}");
+        }
+        // Small talk is nobody's record.
+        assert_eq!(tool("Did you sleep well?"), None);
+        assert_eq!(tool("Did you hear me?"), None);
+    }
+
+    /// Repro (route reader, 2026-11-07): "nicht schließen" went to close_application.
+    #[test]
+    fn a_thing_he_is_told_not_to_do_stays_undone() {
+        for text in [
+            "Don't close it",
+            "Do not close Firefox",
+            "No, don't close it",
+            "Don't open the mixer",
+            "Don't mute Discord",
+            "Don't turn it down",
+            "Don't shut down the PC",
+            "Please don't delete that",
+            "Nicht schließen",
+            "Schließ das nicht",
+            "Mach das nicht zu",
+            "Mach das nicht",
+            "Nicht stumm schalten",
+            "Stell das nicht leiser",
+            "Schließ Firefox nicht",
+            "Nein, nicht ausschalten",
+            "Don't ever close Firefox",
+            "Don't you dare close that",
+        ] {
+            assert!(matches!(parse(text), Some(Intent::Answer(ref line)) if line.contains("leave it")), "{text}: {:?}", parse(text));
+        }
+        // What he does want still counts.
+        for text in ["Don't close the mixer, close the board instead", "Mach den Ton nicht so laut", "Don't listen", "Don't make me repeat myself", "Don't open it at startup anymore"] {
+            assert!(!matches!(parse(text), Some(Intent::Answer(ref line)) if line.contains("leave it")), "{text}");
+        }
+        assert!(matches!(parse("Soll ich Firefox schließen?"), Some(Intent::Answer(ref line)) if line.contains("yours to decide")));
+    }
+
+    /// Repro (silent session, 2026-11-07): "How do I mute Discord?" got "I haven't done anything
+    /// about that yet", and "Should I close Firefox?" "I'm not certain what you meant".
+    #[test]
+    fn how_to_and_whether_to_are_answered_with_the_order() {
+        let answer = |text: &str| match parse(text) {
+            Some(Intent::Answer(line)) => line,
+            other => panic!("{text}: {other:?}"),
+        };
+        assert_eq!(answer("How do I mute Discord?"), "Just say \"Mute Discord\", Sir, and it's done.");
+        assert_eq!(answer("How can I open the mixer?"), "Just say \"Open the mixer\", Sir, and it's done.");
+        assert_eq!(answer("Should I close Firefox?"), "That's yours to decide, Sir. Say \"Close Firefox\" and it's done.");
+        assert_eq!(answer("Should I turn the volume down?"), "That's yours to decide, Sir. Say \"Turn the volume down\" and it's done.");
+        assert_eq!(answer("Wie öffne ich den Mixer?"), "Just say \"Öffne den Mixer\", Sir, and it's done.");
+        assert_eq!(answer("Soll ich Firefox schließen?"), "That's yours to decide, Sir. Say \"Firefox schließen\" and it's done.");
+        // Repro (silent session r1, 2026-11-07): the model answered "I'm not certain what
+        // closing Firefox has to do with your query".
+        assert_eq!(answer("What happens if I close Firefox?"), "Firefox closes, Sir, and anything unsaved in it is lost. Say \"Close Firefox\" if you want that.");
+        assert!(answer("What would happen if I mute Discord?").starts_with("Discord goes silent until you unmute it"));
+        // His own modes are told as they are, never switched on by the question.
+        for text in ["What is orb mode?", "What's pure orb mode?", "What does the mixer do?", "Was ist der Ultron Modus?", "What is span mode?"] {
+            assert!(!answer(text).is_empty(), "{text}");
+        }
+        assert!(answer("What is orb mode?").starts_with("In orb mode only my orb floats"));
+        // Why he stopped listening: his state, never his record of actions. (Other tests move
+        // the lock meanwhile, so only the subject is pinned.)
+        for text in ["Why did you stop listening?", "Why aren't you listening?", "Warum hörst du mir nicht mehr zu?"] {
+            let line = answer(text);
+            assert!(line.contains("listening") && !line.contains("changed anything"), "{text}: {line}");
+        }
+        // Nothing of his, or nothing he would do from those words: the model answers. ("Go to
+        // sleep" is his own sleep, "go to bed" a window called "bed", "open a PDF" a guess.)
+        // ("Should I shut down the PC?" is answered with its order since 2026-11-07: the power
+        // dialogue's, see `his_logged_words_reach_the_right_tool`.)
+        for text in ["How do I cook rice?", "Should I go to bed?", "Wie koche ich Reis?", "How do I go to sleep?", "How do I open a PDF?", "How do I close it?"] {
+            assert!(!matches!(parse(text), Some(Intent::Answer(ref line)) if line.contains("Say") || line.contains("say")), "{text}");
+        }
+        // Repro (route reader, 2026-11-07): "Shut down the PC" was close_application "pc".
+        for text in ["Shut down the PC", "Shut down my computer", "Close the PC", "Beende den Rechner"] {
+            assert!(!matches!(parse(text), Some(Intent::Tool { name: "close_application", .. })), "{text}");
+        }
+    }
+
+    #[test]
+    fn what_only_the_machine_knows_is_looked_up() {
+        let running = |app: &str| Some(("is_app_running", json!({ "app_name": app })));
+        for (text, app) in [("Is Firefox open?", "firefox"), ("Is Discord running?", "discord"), ("Läuft Firefox?", "firefox"), ("Ist Firefox offen?", "firefox"), ("Ist Discord an?", "discord")] {
+            assert_eq!(tool(text), running(app), "{text}");
+        }
+        for (text, app) in [("Is Minecraft running?", "minecraft"), ("Is Sonora open?", "sonora")] {
+            assert_eq!(tool(text), running(app), "{text}");
+        }
+        for text in ["Is the music playing?", "Is music playing?", "Ist die Musik an?", "Is anything playing?"] {
+            assert_eq!(tool(text), Some(("control_music", json!({"action": "what_is_playing"}))), "{text}");
+        }
+        for text in ["Is the mixer open?", "Is the board open?"] {
+            assert_eq!(tool(text), Some(("whats_open", json!({}))), "{text}");
+        }
+        for text in ["Is a game running?", "Is the game running?", "Läuft ein Spiel?"] {
+            assert_eq!(tool(text), Some(("control_audio_mixer", json!({"action": "get_app", "app": "game"}))), "{text}");
+        }
+        for text in ["How long is left on the timer?", "How much time is left?", "What's the timer at?", "What is the stopwatch at?", "How long until the timer goes off?", "Is my timer done?", "Is the timer running?", "Ist der Timer an?", "Wie lange noch?", "Wie viel Zeit ist noch übrig?"] {
+            assert_eq!(tool(text), Some(("timer_left", json!({}))), "{text}");
+        }
+        for text in ["Is my PC on?", "Is it on?", "Are the lights on?", "Is that on?"] {
+            assert_eq!(tool(text), None, "{text}");
+        }
+    }
+
+    #[test]
+    fn removing_it_never_reaches_a_program() {
+        let own = Some(Intent::Tool { name: "close_application", args: json!({"app_name": "it", "force": true, "own_only": true}) });
+        for text in ["Remove it", "Get rid of that", "Take it away", "Dismiss that", "Hide it", "Weg damit", "Entferne das", "Mach das weg", "Nimm das weg"] {
+            assert_eq!(parse(text), own, "{text}");
+        }
+        assert_eq!(parse("Close it"), Some(Intent::Tool { name: "close_application", args: json!({"app_name": "it", "force": true}) }));
+    }
+
+    #[test]
+    fn a_program_is_turned_off_and_on_and_nothing_else_is() {
+        let close = |app: &str| Some(Intent::Tool { name: "close_application", args: json!({"app_name": app, "force": true}) });
+        let open = |app: &str| Some(Intent::Tool { name: "open_application", args: json!({"app_name": app}) });
+        assert_eq!(parse("Turn Firefox off"), close("firefox"));
+        assert_eq!(parse("Turn off Discord"), close("discord"));
+        assert_eq!(parse("Switch Spotify off"), close("spotify"));
+        assert_eq!(parse("Schalte Firefox aus"), close("firefox"));
+        assert_eq!(parse("Turn Firefox back on"), open("firefox"));
+        assert_eq!(parse("Turn on Discord"), open("discord"));
+        assert_eq!(parse("Schalte Discord wieder ein"), open("discord"));
+        // What is no program stays where it was.
+        for text in ["Turn off my PC", "Turn the lights off", "Turn off the screen", "Turn it off", "Turn that back on"] {
+            assert!(!matches!(parse(text), Some(Intent::Tool { name: "close_application" | "open_application", .. })), "{text}");
+        }
+    }
+
+    /// The volume requests of jarvis.log 2026-11-06 15:08 (each went to the language model,
+    /// which set the whole PC to 0 with the music tool, then ignored "system volume one hundred
+    /// percent") and the ways Sir might say the same things.
+    fn volume_scenarios() {
+        let app = |name: &str, level: i64| json!({"action": "set_apps", "apps": [{"app": name, "level": level}]});
+        let step = |name: &str, delta: i64| json!({"action": "change_app", "app": name, "delta": delta});
+        let scenarios: Vec<(&str, Value)> = vec![
+            // ---- As he said them ----
+            ("Jarvis, lower my browser's volume by 50%.", step("browser", -50)),
+            ("No, don't, don't mute it, make it 50% louder.", step("it", 50)),
+            ("And you make discords, volume 50%.", app("discord", 50)),
+            ("Make everything loud again.", json!({"action": "restore"})),
+            ("Makes system volume one hundred percent.", json!({"action": "set_master", "level": 100})),
+            // ---- One app, a level ----
+            ("Make Discord's volume 50%", app("discord", 50)),
+            ("Discord volume 50 percent", app("discord", 50)),
+            ("Set the volume of Discord to 30", app("discord", 30)),
+            ("browser volume thirty percent", app("browser", 30)),
+            ("Put my browser at 40 percent", app("browser", 40)),
+            ("Set Spotify volume to 25%", app("spotify", 25)),
+            ("make the music 20 percent", app("music", 20)),
+            ("Mach Discord auf 50 Prozent", app("discord", 50)),
+            ("Stell die Lautstärke von Spotify auf 30 Prozent", app("spotify", 30)),
+            ("Set Discord and Spotify to 40 percent", json!({"action": "set_apps", "apps": [{"app": "discord", "level": 40}, {"app": "spotify", "level": 40}]})),
+            // ---- One app, a step ----
+            ("Raise Chrome by 20", step("chrome", 20)),
+            ("turn Discord down", step("discord", -10)),
+            ("Turn down Discord a bit", step("discord", -5)),
+            ("turn up the music", step("music", 10)),
+            ("Make Spotify louder", step("spotify", 10)),
+            ("make spotify a lot louder", step("spotify", 20)),
+            ("Discord quieter", step("discord", -10)),
+            ("Spotify volume up", step("spotify", 10)),
+            ("increase the browser's volume by 15 percent", step("browser", 15)),
+            ("Can you lower Discord by 30 percent", step("discord", -30)),
+            ("Mach Discord leiser", step("discord", -10)),
+            ("Mach den Browser 20 Prozent leiser", step("browser", -20)),
+            ("Discord etwas lauter", step("discord", 5)),
+            ("lower discords volume by 10", step("discord", -10)),
+            // ---- "It": what the last request was about ----
+            ("make it 50% louder", step("it", 50)),
+            ("Make it louder", step("it", 10)),
+            ("turn it down by 20 percent", step("it", -20)),
+            ("set it to 30 percent", json!({"action": "set_app", "app": "it", "level": 30})),
+            ("mute it", json!({"action": "mute_app", "app": "it"})),
+            ("unmute it", json!({"action": "unmute_app", "app": "it"})),
+            // ---- Mutes ----
+            ("Mute my browser", json!({"action": "mute_app", "app": "browser"})),
+            ("silence Spotify", json!({"action": "mute_app", "app": "spotify"})),
+            ("Unmute Discord", json!({"action": "unmute_app", "app": "discord"})),
+            ("mute Discord and Spotify", json!({"action": "mute_app", "app": "discord and spotify"})),
+            ("Mute everything", json!({"action": "mute_master"})),
+            ("unmute everything", json!({"action": "unmute_master"})),
+            ("Mute everything except Discord", json!({"action": "mute_others", "app": "discord"})),
+            ("silence all but the browser", json!({"action": "mute_others", "app": "browser"})),
+            ("Alles außer Discord stumm", json!({"action": "mute_others", "app": "discord"})),
+            // ---- The master volume, said in words or with a degree ----
+            ("System volume one hundred percent", json!({"action": "set_master", "level": 100})),
+            ("make the system volume fifty percent", json!({"action": "set_master", "level": 50})),
+            ("volume to max", json!({"action": "set_master", "level": 100})),
+            ("full volume", json!({"action": "set_master", "level": 100})),
+            ("half volume", json!({"action": "set_master", "level": 50})),
+            ("Master volume to twenty five percent", json!({"action": "set_master", "level": 25})),
+            ("much louder", json!({"action": "change_master", "delta": 20})),
+            ("a little quieter", json!({"action": "change_master", "delta": -5})),
+            ("make everything quieter", json!({"action": "change_master", "delta": -10})),
+            ("turn the volume up by 15", json!({"action": "change_master", "delta": 15})),
+            ("Mach alles etwas leiser", json!({"action": "change_master", "delta": -5})),
+            // ---- Undo ----
+            ("Put the volume back to normal", json!({"action": "restore"})),
+            ("restore the volume", json!({"action": "restore"})),
+            ("Undo that volume change", json!({"action": "restore"})),
+            ("everything back to normal", json!({"action": "restore"})),
+            ("Mach alles wieder laut", json!({"action": "restore"})),
+        ];
+        let wrong: Vec<String> = scenarios.iter().filter(|(text, wanted)| mixer_command(text).as_ref() != Some(wanted)).map(|(text, wanted)| format!("\"{text}\": wanted {wanted}, got {:?}", mixer_command(text))).collect();
+        assert!(wrong.is_empty(), "{} of {} volume requests go wrong:\n  {}", wrong.len(), scenarios.len(), wrong.join("\n  "));
+        // Every one of them is a command Jarvis knows: none is dropped as a song's words while
+        // music plays, and none reaches the language model.
+        for (text, _) in &scenarios {
+            assert!(matches!(parse(text), Some(Intent::Tool { name: "control_audio_mixer" | "media_and_volume_control", .. })), "{text}: {:?}", parse(text));
+        }
+        // What is no volume request stays none: other things with a level, an up or a down.
+        for text in [
+            "Set the zoom to 125 percent",
+            "turn up the brightness",
+            "Turn down the lights",
+            "lower the blinds by 50 percent",
+            "bring up the browser",
+            "open Discord",
+            "play some loud music",
+            "set a timer for 50 minutes",
+            "make the orb 50 percent bigger",
+            "raise the opacity by 20",
+            "Discord",
+            "what is the volume of a sphere",
+        ] {
+            assert_eq!(mixer_command(text), None, "{text}");
+        }
+    }
+
+    #[test]
+    fn short_answers_right_after_a_volume_change() {
+        use crate::audio_mixer::Step;
+        let down = Step { app: true, delta: Some(-10), ..Step::default() };
+        let master = Step { delta: Some(10), ..Step::default() };
+        let level = Step { app: true, level: Some(50), ..Step::default() };
+        let muted = Step { app: true, mute: Some(true), ..Step::default() };
+        let say = |last: Step, text: &str| volume_follow_up(last, &quick_words(text));
+        let it = |delta: i64| Some(json!({"action": "change_app", "app": "it", "delta": delta}));
+        for (text, delta) in [("More", -10), ("Again", -10), ("Nochmal", -10), ("A bit more", -5), ("Noch ein bisschen", -5), ("A lot more", -20), ("Less", 5), ("Too much", 5), ("Zu viel", 5), ("The other way", 20)] {
+            assert_eq!(say(down, text), it(delta), "{text}");
+        }
+        assert_eq!(say(master, "Noch mehr"), Some(json!({"action": "change_master", "delta": 10})));
+        assert_eq!(say(level, "More"), it(10), "more of a level is louder");
+        assert_eq!(say(level, "The other way"), None, "a level has no way");
+        for text in ["Same for Firefox", "Do the same for Firefox", "And Firefox too", "Also Firefox", "Firefox too", "Firefox as well", "Auch Firefox", "Firefox auch", "Dasselbe für Firefox", "Das gleiche für Firefox"] {
+            assert_eq!(say(down, text), Some(json!({"action": "change_app", "app": "firefox", "delta": -10})), "{text}");
+        }
+        assert_eq!(say(level, "Same for Firefox"), Some(json!({"action": "set_apps", "apps": [{"app": "firefox", "level": 50}]})));
+        assert_eq!(say(muted, "And Firefox too"), Some(json!({"action": "mute_app", "app": "firefox"})));
+        assert_eq!(say(muted, "More"), None, "there is no more of a mute");
+        for text in ["Tell me more", "Me too", "What else", "Also", "Hello too", "Thanks", "Yes"] {
+            assert_eq!(say(down, text), None, "{text}");
+        }
+    }
+
+    #[test]
+    fn a_name_with_a_way_or_a_level_and_the_other_short_forms() {
+        let list = Some(json!({"action": "list"}));
+        for (text, wanted) in [
+            ("Spotify 30", Some(json!({"action": "set_apps", "apps": [{"app": "spotify", "level": 30}]}))),
+            ("Discord 2", None),
+            ("Pump up the volume", Some(json!({"action": "change_master", "delta": 10}))),
+            ("Crank the music", Some(json!({"action": "change_app", "app": "music", "delta": 10}))),
+            ("Crank it down", Some(json!({"action": "change_app", "app": "it", "delta": -10}))),
+            ("Lower the music a bit more", Some(json!({"action": "change_app", "app": "music", "delta": -5}))),
+            ("Discord etwas runter", Some(json!({"action": "change_app", "app": "discord", "delta": -5}))),
+            ("Mute all apps", Some(json!({"action": "mute_master"}))),
+            ("Alle Apps stumm", Some(json!({"action": "mute_master"}))),
+            ("Solo Discord", Some(json!({"action": "mute_others", "app": "discord"}))),
+            ("Make Discord loud again", Some(json!({"action": "restore", "app": "discord"}))),
+            ("Discord back to normal", Some(json!({"action": "restore", "app": "discord"}))),
+            ("Discord wieder laut", Some(json!({"action": "restore", "app": "discord"}))),
+            ("Mach Discord wieder normal", Some(json!({"action": "restore", "app": "discord"}))),
+            ("Who is making that noise?", list.clone()),
+            ("What's making that sound?", list.clone()),
+            ("What's playing sound?", list.clone()),
+            ("Was spielt gerade Ton ab?", list.clone()),
+            ("Wer macht da so einen Lärm?", list.clone()),
+            // (Not a name: nothing to turn.)
+            ("Pump up the jam", None),
+            ("Blast off", None),
+            ("Make my life loud again", None),
+        ] {
+            assert_eq!(mixer_command(text), wanted, "{text}");
+        }
+        // A bit is a bit, however it is said.
+        assert_eq!(silent_quick_command("A bit louder").unwrap().args, json!({"action": "change_master", "delta": 5}));
+        assert_eq!(silent_quick_command("A little quieter").unwrap().args, json!({"action": "change_master", "delta": -5}));
+    }
+
+    /// Sir's own words from his conversation log (2026-11-07) that went to the model or to the
+    /// wrong tool. (Written here in placeholder form where they named anything of his.)
+    #[test]
+    fn his_logged_words_reach_the_right_tool() {
+        let fixed = |text: &str| tool(&crate::typos::normalize_user_input_typos(text));
+        // "Deactivate orb mode" switched it on.
+        for text in ["deactivate Orb mode", "disable orb mode", "turn orb mode off", "get out of orb mode", "Orbmodus beenden"] {
+            assert_eq!(tool(text), Some(("control_orb_mode", json!({"enabled": false}))), "{text}");
+        }
+        assert_eq!(tool("Orb mode"), Some(("control_orb_mode", json!({"enabled": true}))));
+        // The PC's own volume, and every app's.
+        for text in ["set my PC's volume to 15%", "set my computer's volume to 15%", "set the PC volume to 15%"] {
+            assert_eq!(tool(text), Some(("media_and_volume_control", json!({"action": "set_volume", "level": 15}))), "{text}");
+        }
+        for text in ["Set every volume back to 100%", "set all volumes to 100%", "set every app to 100%"] {
+            assert_eq!(tool(text), Some(("control_audio_mixer", json!({"action": "set_all_apps", "level": 100}))), "{text}");
+        }
+        // Windows: full screen by name, another monitor.
+        for text in ["make discord full screen", "make discord fullscreen", "put discord in full screen"] {
+            assert_eq!(tool(text), Some(("window_management", json!({"action": "fullscreen", "target_window": "discord"}))), "{text}");
+        }
+        assert_eq!(tool("Make it full screen"), Some(("window_management", json!({"action": "fullscreen"}))), "the focus's, as before");
+        assert_eq!(tool("Move Discord to another monitor."), Some(("move_window_to_monitor", json!({"app_or_window_name": "discord", "target_monitor": "other"}))));
+        // The GPU back to him.
+        for text in ["clear vram", "clear the vram", "free up my vram", "can you move out of my VRAM please?", "get out of my vram"] {
+            assert_eq!(tool(text), Some(("manage_vram", json!({"action": "flush"}))), "{text}");
+        }
+        assert_eq!(fuzzy("go to standby").map(|t| t.1["action"].clone()), Some(json!("sleep_mode")));
+        // The rose palette, as said and as heard.
+        for text in ["make the interface rose", "make the theme rose", "switch to the rose theme", "make the interface rows", "Make the entire face a rose"] {
+            assert_eq!(tool(text), Some(("configure_interface", json!({"hud_palette": "rose_crimson"}))), "{text}");
+        }
+        // Opacity in his words (0 % ends on the floor, said so by the reply).
+        assert_eq!(tool("make the opacity 50%"), Some(("configure_interface", json!({"opacity": 50}))));
+        assert_eq!(tool("Make the interfaces opacity 0% please."), Some(("configure_interface", json!({"opacity": 0}))));
+        let done = crate::interface::configure(&crate::interface::InterfaceSettings::default(), &json!({"opacity": 0})).unwrap();
+        let said = crate::interface::spoken_ack(&json!({"opacity": 0}), &done.settings);
+        assert!(said.contains("15 percent") && said.contains("lowest it goes"), "{said}");
+        // Closing himself, in German and as the recogniser heard it.
+        for text in ["kannst du dich selbst schließen?", "Stopp, gliese dich selbst.", "kannte ich selbst schließen, bitte?"] {
+            assert_eq!(tool(text), Some(("shutdown_jarvis", json!({}))), "{text}");
+        }
+        // The window packer, said as a "don't".
+        for text in ["don't make the windows overlap", "the windows shouldn't overlap", "Die Fenster sollen sich nicht überlappen"] {
+            assert_eq!(tool(text), Some(("configure_interface", json!({"allow_window_overlap": false}))), "{text}");
+        }
+        assert_eq!(parse("don't close Discord"), Some(Intent::Answer("Very good, Sir. I'll leave it as it is.".into())), "a plain don't stays one");
+        // The Integrations hub (Whisper: "integration sub").
+        for text in ["Open the integration sub, please.", "open the integrations hub", "show my productivity settings"] {
+            assert_eq!(tool(text), Some(("configure_productivity_service", json!({"service_name": "all", "action": "open"}))), "{text}");
+        }
+        // Playlists: "called", said twice, or none named.
+        let m = |text: &str| tool(text).filter(|(name, _)| *name == "control_music").map(|t| t.1);
+        assert_eq!(m("play back in black from my playlist called example rock"), Some(json!({"action": "play", "song_name": "back in black", "playlist_name": "example rock"})));
+        assert_eq!(m("Now play back in black. From my playlist called Example Rock.").map(|a| (a["song_name"].clone(), a["playlist_name"].clone())), Some((json!("back in black"), json!("example rock"))));
+        assert_eq!(m("play Example Rock playlist, my Example Rock playlist"), Some(json!({"action": "play", "playlist_name": "example rock"})));
+        assert!(m("Can you play a specific playlist?").is_none_or(|a| a["playlist_name"] != "a specific"));
+        // A typo of his.
+        assert_eq!(crate::typos::normalize_user_input_typos("stop listeting"), "stop listening");
+        assert!(fixed("stop listeting").is_none_or(|(name, _)| name != "close_application"));
+        // "Should I restart my PC?" answered with the order (never the model's own plan).
+        for (text, order) in [("Should I restart my PC?", "\"Restart my PC\""), ("How do I shut down my PC?", "\"Shut down my PC\""), ("Should I lock my PC?", "\"Lock my PC\""), ("Should I shut down the PC?", "\"Shut down the PC\"")] {
+            match parse(text) {
+                Some(Intent::Answer(line)) => assert!(line.contains(order), "{text}: {line}"),
+                other => panic!("{text}: {other:?}"),
+            }
+        }
+        assert!(matches!(parse("Should I restart my PC?"), Some(Intent::Answer(line)) if line.contains("ask once more")));
+        assert!(matches!(parse("What happens if I restart my PC?"), Some(Intent::Answer(line)) if line.contains("anything unsaved")));
+    }
+
+    #[test]
+    fn terminal_is_no_calendar_and_a_german_add_adds() {
+        use crate::integration_router::route_text;
+        assert!(route_text("Then Sanabhadra, Terminal.").is_none_or(|r| r.tool != "get_calendar_schedule"));
+        for text in ["füge einen Termin in meinem Kalender um 15 Uhr hinzu", "flüge einen Event hinzu in meinem Kalender um 15 Uhr"] {
+            let fixed = crate::typos::normalize_user_input_typos(text);
+            let route = route_text(&fixed).unwrap_or_else(|| panic!("{text}"));
+            assert_eq!(route.tool, "create_calendar_event", "{text}");
+            assert!(route.args["start_time"].as_str().is_some_and(|t| t.ends_with("15:00")), "{text}: {}", route.args);
+            assert!(matches!(route.args["title"].as_str(), Some("Termin" | "Event")), "{text}: {}", route.args);
+        }
+        // A real title stays the title.
+        assert_eq!(route_text("Füge Elternabend am Freitag um 19 Uhr zu meinem Kalender hinzu").unwrap().args["title"], "Elternabend");
     }
 }

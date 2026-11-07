@@ -290,6 +290,8 @@ pub struct InterfaceSettings {
     /// reference board: the strip shows what Sir said, the voice carries the answer and the text
     /// console keeps every written reply.
     pub comms_block: bool,
+    /// The board's sound cues (a block materialising, the spotlight, a mode change, an alert).
+    pub sound_cues: bool,
     /// The HUD's colour theme (`theme_engine`): one of the eight presets ("rose_crimson",
     /// "arc_cyan", …) or "custom:#RRGGBB". The board, the console, the core sphere and the emblem
     /// all read it; a colour request sets it.
@@ -300,6 +302,10 @@ pub struct InterfaceSettings {
     pub span_all_monitors: bool,
     /// "Overlap the windows" / "stack them": new windows cascade instead of packing side by side.
     pub allow_window_overlap: bool,
+    /// Sir told the emblem to get out of the way: it waits in its corner until he calls it back
+    /// (or moves it). Never saved: at the next start it is in the middle again.
+    #[serde(skip)]
+    pub orb_aside: bool,
 }
 
 impl Default for InterfaceSettings {
@@ -333,10 +339,27 @@ impl Default for InterfaceSettings {
             orb_monitor: 0,
             ui_paradigm: crate::oled_minimal_ui::UiDesignParadigm::ModernOledMinimal,
             comms_block: false,
+            sound_cues: true,
             hud_palette: crate::theme_engine::DEFAULT_PRESET.to_string(),
             orb_board_pos: None,
             span_all_monitors: false,
             allow_window_overlap: false,
+            orb_aside: false,
+        }
+    }
+}
+
+impl InterfaceSettings {
+    /// One board across every monitor and the fullscreen board on one monitor exclude each
+    /// other: whichever of the two was just switched on (compared with `before`) wins, so F11,
+    /// the SCREENS menu, a settings checkbox and Jarvis' own tools can never leave both set.
+    pub fn reconcile(&mut self, before: &InterfaceSettings) {
+        if self.span_all_monitors && self.fullscreen {
+            if before.span_all_monitors && !before.fullscreen {
+                self.span_all_monitors = false;
+            } else {
+                self.fullscreen = false;
+            }
         }
     }
 }
@@ -857,6 +880,13 @@ static ZEN_ON: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
 static ZEN_OFF: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
     rx(r"\b(?:(?:exit|leave|end|stop|disable|turn off|quit|beende|verlasse?) (?:the )?zen(?: mode| modus)?|zen(?: mode| modus)? (?:off|aus))\b")
 });
+/// "Hide the panels", "show the panels": all of them at once, which is what zen mode is.
+static PANELS_OFF: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    rx(r"^(?:hide|close|remove|clear|get rid of|turn off|switch off|versteck|verstecke|schließ|schließe|blende)\s+(?:all\s+)?(?:(?:of\s+)?(?:the|my|your|alle|die|deine)\s+)?panels(?:\s+aus)?$")
+});
+static PANELS_ON: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    rx(r"^(?:show|bring back|give me back|turn on|switch on|zeig|zeige|blende)\s+(?:me\s+)?(?:(?:the|my|your|die|deine)\s+)?panels(?:\s+(?:again|back|ein|wieder))*$")
+});
 static RESTORE_ALL: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
     rx(r"^(?:(?:show|bring back|restore|give me back|enable) (?:me )?(?:all|every|everything)(?: (?:the|your|my))? ?(?:panels?|tabs?|sidebars?|of the panels)?(?: again| back)?|(?:show|restore) (?:the )?full (?:workspace|layout|interface|hud)|alle (?:panels|reiter|fenster) (?:wieder )?(?:anzeigen|einblenden|zeigen))$")
 });
@@ -895,10 +925,10 @@ const PANEL_PHRASES: &[(&str, &[&str])] = &[
 /// size, or the panels a sentence hides and shows — several at once and in any order ("just
 /// leave the normal chat window, but remove the audio devices tab and the skills tab").
 pub fn layout_command(s: &str) -> Option<Value> {
-    if ZEN_OFF.is_match(s) {
+    if ZEN_OFF.is_match(s) || PANELS_ON.is_match(s) {
         return Some(json!({ "action": "zen_mode_off" }));
     }
-    if ZEN_ON.is_match(s) {
+    if ZEN_ON.is_match(s) || PANELS_OFF.is_match(s) {
         return Some(json!({ "action": "zen_mode_on" }));
     }
     if RESTORE_ALL.is_match(s) {
@@ -1003,7 +1033,7 @@ pub struct Theme {
 pub const THEMES: &[Theme] = &[
     Theme {
         name: "stark",
-        display: "Stark",
+        display: "Arc Cyan",
         accent: "#00e5ff",
         // Deep obsidian glass.
         background: "#070b12",
@@ -1677,6 +1707,7 @@ pub fn configure(current: &InterfaceSettings, args: &Value) -> Result<Configured
             &mut s.frameless,
         ),
         ("animations", bool_arg(args, "animations"), &mut s.animations),
+        ("sound cues", bool_arg(args, "sound_cues"), &mut s.sound_cues),
     ];
     for (label, value, field) in flags {
         if let Some(on) = value {
@@ -1696,6 +1727,15 @@ pub fn configure(current: &InterfaceSettings, args: &Value) -> Result<Configured
     }
     if let Some(open) = bool_arg(args, "core_view") {
         done.push(format!("core view {}", if open { "open" } else { "closed" }));
+    }
+    if let Some(open) = bool_arg(args, "feature_lab") {
+        done.push(format!("Feature Lab {}", if open { "open" } else { "closed" }));
+    }
+    if let Some(open) = bool_arg(args, "theme_studio") {
+        done.push(format!("Theme Studio {}", if open { "open" } else { "closed" }));
+    }
+    if let Some(open) = bool_arg(args, "mixer_view") {
+        done.push(format!("Mixer {}", if open { "open" } else { "closed" }));
     }
     if let Some(cmd) = core_command(args) {
         done.push(format!("core {cmd:?}"));
@@ -1790,6 +1830,7 @@ pub fn configure(current: &InterfaceSettings, args: &Value) -> Result<Configured
             failed.join("; ")
         });
     }
+    s.reconcile(current);
     s.sanitize();
     let mut summary = format!("Interface updated: {}.", done.join(", "));
     if !failed.is_empty() {
@@ -1842,11 +1883,31 @@ pub fn spoken_ack(args: &Value, now: &InterfaceSettings) -> String {
     if flag("dock_windows") == Some(true) {
         return "Every window is back inside the HUD, Sir.".into();
     }
+    if let Some(open) = flag("feature_lab") {
+        return if open { "The Feature Lab, Sir. Everything I can do, each with a button to try it." } else { "Feature Lab closed, Sir." }.into();
+    }
+    if let Some(open) = flag("theme_studio") {
+        return if open { "The Theme Studio, Sir. Pick your colours, name it and save it." } else { "Theme Studio closed, Sir." }.into();
+    }
+    if let Some(open) = flag("mixer_view") {
+        return if open { "The mixer, Sir. A fader for every channel." } else { "Mixer closed, Sir." }.into();
+    }
     if let Some(name) = text(&["hud_palette", "palette", "hud_theme"]).filter(|n| crate::theme_engine::preset(n).is_some()) {
         return format!("{} it is, Sir.", name.replace(['_', '-'], " ").split_whitespace().map(|w| { let mut c = w.chars(); c.next().map(|f| f.to_uppercase().chain(c).collect::<String>()).unwrap_or_default() }).collect::<Vec<_>>().join(" "));
     }
     if text(&["detach_window"]).is_some() {
         return "Detached into its own window, Sir.".into();
+    }
+    if args.get("span_all_monitors").is_some_and(|v| !v.is_null()) {
+        return if now.span_all_monitors { "One board across every monitor, Sir. I stay on your first screen." } else { "Back on your first monitor, Sir." }.into();
+    }
+    if let Some(spot) = text(&["orb_board_position", "emblem_position"]) {
+        if now.orb_aside {
+            return "Out of your way, Sir. Say the word and I come back.".into();
+        }
+        if matches!(orb_move(spot), Some(OrbMove::Home)) {
+            return "Back in the middle, Sir.".into();
+        }
     }
     if let Some(mode) = text(&["hud_view"]).and_then(crate::hud_dock::HudViewMode::parse) {
         use crate::hud_dock::HudViewMode as V;
@@ -1942,8 +2003,16 @@ pub fn spoken_ack(args: &Value, now: &InterfaceSettings) -> String {
         };
     }
     if args.get("opacity").is_some() || args.get("transparency").is_some() {
+        // "Make the interface's opacity 0 %": the floor, said as such.
+        let asked = match (args.get("opacity").filter(|v| !v.is_null()), args.get("transparency").filter(|v| !v.is_null())) {
+            (Some(v), _) => opacity_value(v, now.opacity),
+            (None, Some(v)) => number_like(v).map(|(x, _)| 100 - if x <= 1.0 { (x * 100.0) as i32 } else { x as i32 }),
+            _ => None,
+        };
         return if now.opacity >= 100 {
             "Done, Sir. Fully opaque again.".into()
+        } else if now.opacity == MIN_OPACITY && asked.is_some_and(|pct| pct < MIN_OPACITY as i32) {
+            format!("Done, Sir. Background opacity at {} percent, the lowest it goes, so you can still find me.", now.opacity)
         } else {
             format!("Done, Sir. Background opacity at {} percent.", now.opacity)
         };
@@ -1963,6 +2032,9 @@ pub fn spoken_ack(args: &Value, now: &InterfaceSettings) -> String {
     }
     if let Some(on) = flag("animations") {
         return if on { "Done, Sir. Animations back on.".into() } else { "Done, Sir. Animations off.".into() };
+    }
+    if let Some(on) = flag("sound_cues") {
+        return if on { "Done, Sir. Sound cues back on.".into() } else { "Done, Sir. The board stays quiet.".into() };
     }
     if text(&["title"]).is_some() {
         return format!("Very good, Sir. On screen I am now {}.", now.title);
@@ -2074,6 +2146,11 @@ pub fn apply_orb_move(m: OrbMove, from: Option<[f32; 2]>) -> Option<[f32; 2]> {
     }
 }
 
+/// "Aside", "out of the way", "zur Seite": the emblem is to leave the middle for its corner.
+pub fn orb_aside_phrase(spot: &str) -> bool {
+    matches!(words(spot).as_str(), "aside" | "out of the way" | "out of my way" | "away" | "to the side" | "its corner" | "docked" | "dock" | "zur seite" | "aus dem weg" | "beiseite")
+}
+
 /// "slightly left", "a little bit to the left", "etwas nach links": a step from where the emblem
 /// is (`from` None = the centre). None when the phrase is no step.
 pub fn nudge(name: &str, from: Option<[f32; 2]>) -> Option<Option<[f32; 2]>> {
@@ -2126,19 +2203,31 @@ pub fn monitor_number(v: &Value) -> Option<u8> {
 /// and whether new windows may overlap (`allow_window_overlap`).
 fn apply_board_layout(s: &mut InterfaceSettings, args: &Value, done: &mut Vec<String>) -> Result<(), String> {
     if let Some(spot) = str_arg(args, &["orb_board_position", "emblem_position"]) {
-        let m = orb_move(spot).ok_or_else(|| format!("unknown emblem spot '{spot}' (top left, top center, right side, bottom center, center, a bit left …)"))?;
-        s.orb_board_pos = apply_orb_move(m, s.orb_board_pos);
-        // In pure orb mode the floating orb goes to that corner too.
-        if let Some(a) = anchor_id(spot).filter(|_| s.orb_mode) {
-            s.orb_anchor = a.to_string();
+        if orb_aside_phrase(spot) {
+            // "Move out of the way": the emblem waits in its corner until it is called back.
+            s.orb_aside = true;
+            done.push("emblem out of the way, docked in its corner".to_string());
+        } else {
+            let m = orb_move(spot).ok_or_else(|| format!("unknown emblem spot '{spot}' (top left, top center, right side, bottom center, center, a bit left, aside …)"))?;
+            s.orb_board_pos = apply_orb_move(m, s.orb_board_pos);
+            s.orb_aside = false;
+            // In pure orb mode the floating orb goes to that corner too.
+            if let Some(a) = anchor_id(spot).filter(|_| s.orb_mode) {
+                s.orb_anchor = a.to_string();
+            }
+            done.push(match m {
+                OrbMove::Step(_) => "emblem nudged".to_string(),
+                OrbMove::Home => "emblem moved to the centre".to_string(),
+                OrbMove::Spot(_) => format!("emblem moved to the {spot}"),
+            });
         }
-        done.push(match m {
-            OrbMove::Step(_) => "emblem nudged".to_string(),
-            OrbMove::Home => "emblem moved to the centre".to_string(),
-            OrbMove::Spot(_) => format!("emblem moved to the {spot}"),
-        });
     }
-    if let Some(on) = bool_arg(args, "span_all_monitors") {
+    // "Toggle span mode": the other of the two.
+    let span = match args.get("span_all_monitors").and_then(Value::as_str).map(words).as_deref() {
+        Some("toggle" | "switch" | "flip" | "other") => Some(!s.span_all_monitors),
+        _ => bool_arg(args, "span_all_monitors"),
+    };
+    if let Some(on) = span {
         s.span_all_monitors = on;
         // One board over every monitor, or back to fullscreen on one.
         s.fullscreen = !on;
@@ -2154,6 +2243,15 @@ fn apply_board_layout(s: &mut InterfaceSettings, args: &Value, done: &mut Vec<St
 /// `control_orb_mode(enabled, orb_size_px, screen_position, monitor, opacity, always_on_top)`.
 pub fn control_orb_mode(current: &InterfaceSettings, args: &Value) -> Result<Configured, String> {
     let mut s = current.clone();
+    // "Are you in orb mode?": how it stands, nothing moved.
+    if args["action"] == "status" {
+        let summary = if s.orb_mode {
+            format!("Orb mode is on, Sir: {:.0} pixels, {}.", s.orb_size_px, s.orb_anchor.replace('-', " "))
+        } else {
+            "Orb mode is off, Sir. The full display is up.".to_string()
+        };
+        return Ok(Configured { settings: s, window: None, summary });
+    }
     let mut done: Vec<String> = Vec::new();
     let enabled = bool_arg(args, "enabled").or_else(|| bool_arg(args, "orb_mode")).or_else(|| bool_arg(args, "on"));
     if let Some(on) = enabled {
@@ -2228,6 +2326,7 @@ pub fn control_orb_mode(current: &InterfaceSettings, args: &Value) -> Result<Con
         s.orb_scale = (s.orb_size_px / 300.0).clamp(MIN_ORB_SCALE, MAX_ORB_SCALE);
         done.push(format!("HUD orb at {:.0} %", s.orb_scale * 100.0));
     }
+    s.reconcile(current);
     s.sanitize();
     let summary = format!(
         "Orb mode: {}. Now: orb mode {}, {:.0} px, {}, monitor {}, opacity {:.0} %, on top {}.",
@@ -2259,6 +2358,7 @@ pub fn orb_mode_tool_definition() -> Value {
         "name": "control_orb_mode",
         "description": "Pure Orb Mode: only YOUR 3D orb floats on screen (borderless, transparent, always on top; Sir drags it, the mouse wheel resizes it, a double-click brings the full HUD back). \"Switch to orb mode\", \"only show the orb\", \"go minimal orb\" → enabled true; \"normal mode\", \"show chat\" → enabled false. Also its size, corner, monitor and opacity.",
         "parameters": {"type": "object", "properties": {
+            "action": {"type": "string", "enum": ["status"], "description": "\"status\" only reads how it stands; leave it out to change something."},
             "enabled": {"type": "boolean"},
             "orb_size_px": {"type": "number", "description": "120-900"},
             "screen_position": {"type": "string", "enum": ["top-right", "top-left", "bottom-right", "bottom-left", "center"]},
@@ -2592,11 +2692,15 @@ pub fn tool_definition() -> Value {
             "span_all_monitors": {"type": "boolean", "description": "true: the HUD stretches across every monitor ('use all monitors'); false: back to one."},
             "allow_window_overlap": {"type": "boolean", "description": "true: new windows may stack on each other ('overlap the windows'); false: they open side by side (default)."},
             "hud_view": {"type": "string", "enum": ["home", "board", "core", "sim_lab", "telemetry", "schedule", "console"], "description": "Switch the HUD to one of its navigation views."},
+            "feature_lab": {"type": "boolean", "description": "Open (true) or close the Feature Lab: the list of everything you can do, each with a TRY button (\"open the feature lab\")."},
+            "theme_studio": {"type": "boolean", "description": "Open (true) or close the Theme Studio, where Sir designs a colour theme of his own (\"open the theme studio\", \"create a new theme\")."},
+            "mixer_view": {"type": "boolean", "description": "Open (true) or close the Mixer block: a live fader and mute key for the master volume and every app (\"open the mixer\")."},
             "core_scale": {"type": ["number", "string"], "description": "The core sphere's size: a percentage (50-300) or 'bigger' / 'smaller'."},
             "core_spin": {"type": "string", "enum": ["faster", "slower", "stop"]},
             "text_console": {"type": "boolean", "description": "Open (true) or close (false) the slide-out text console where Sir types and reads the transcript."},
             "frameless": {"type": "boolean", "description": "true hides the window's title bar."},
             "animations": {"type": "boolean"},
+            "sound_cues": {"type": "boolean", "description": "The board's sound cues (a block appearing, the spotlight, a mode change, an alert): 'turn off the sound cues'."},
             "title": {"type": "string", "description": "Name shown in the HUD header."},
             "window": {"type": "string", "enum": ["show", "hide", "minimize", "maximize", "restore", "center", "bigger", "smaller", "top_left", "top_right", "bottom_left", "bottom_right", "left", "right"]},
             "reset": {"type": "boolean", "description": "Restore the default look (other fields apply on top)."}
@@ -2812,6 +2916,34 @@ mod tests {
         assert!(configure(&now, &json!({"orb_board_position": "monitor 2"})).is_err());
         let spanned = configure(&now, &json!({"span_all_monitors": true})).unwrap().settings;
         assert!(spanned.span_all_monitors && !spanned.fullscreen);
+        // The toggle goes both ways, and back means the fullscreen board on one monitor.
+        let back = configure(&spanned, &json!({"span_all_monitors": "toggle"})).unwrap().settings;
+        assert!(!back.span_all_monitors && back.fullscreen);
+        assert!(configure(&back, &json!({"span_all_monitors": "toggle"})).unwrap().settings.span_all_monitors);
+        assert_eq!(spoken_ack(&json!({"span_all_monitors": true}), &spanned), "One board across every monitor, Sir. I stay on your first screen.");
+        assert_eq!(spoken_ack(&json!({"span_all_monitors": "toggle"}), &back), "Back on your first monitor, Sir.");
+        // Spanning and the fullscreen board exclude each other, whichever way one is asked for:
+        // "full screen" (or F11) on a spanned board ends the span, it never leaves both set.
+        let full = configure(&spanned, &json!({"fullscreen": true})).unwrap().settings;
+        assert!(full.fullscreen && !full.span_all_monitors);
+        let mut f11 = spanned.clone();
+        f11.fullscreen = true;
+        f11.reconcile(&spanned);
+        assert!(f11.fullscreen && !f11.span_all_monitors);
+        let mut menu = now.clone();
+        menu.span_all_monitors = true;
+        menu.reconcile(&now);
+        assert!(menu.span_all_monitors && !menu.fullscreen, "the SCREENS switch on the fullscreen board");
+        // "Move out of the way": the emblem docks until it is called back or put somewhere.
+        let aside = configure(&now, &json!({"orb_board_position": "aside"})).unwrap().settings;
+        assert!(aside.orb_aside && aside.orb_board_pos.is_none());
+        assert_eq!(spoken_ack(&json!({"orb_board_position": "aside"}), &aside), "Out of your way, Sir. Say the word and I come back.");
+        let returned = configure(&aside, &json!({"orb_board_position": "center"})).unwrap().settings;
+        assert!(!returned.orb_aside);
+        assert_eq!(spoken_ack(&json!({"orb_board_position": "center"}), &returned), "Back in the middle, Sir.");
+        assert!(!configure(&aside, &json!({"orb_board_position": "top left"})).unwrap().settings.orb_aside);
+        // It is never saved: at the next start the emblem is in the middle again.
+        assert!(!serde_json::to_string(&aside).unwrap().contains("orb_aside"));
         assert!(configure(&now, &json!({"allow_window_overlap": true})).unwrap().settings.allow_window_overlap);
         // `control_orb_mode` still takes them (saved spatial scenes use it).
         assert_eq!(control_orb_mode(&now, &json!({"orb_board_position": "bottom right"})).unwrap().settings.orb_board_pos, Some([0.86, 0.8]));

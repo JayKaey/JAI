@@ -19,6 +19,7 @@ mod app_icon;
 mod audio_tags;
 mod appindex;
 mod audio_mixer;
+mod block_actions;
 mod board_research;
 mod apps;
 mod brain;
@@ -27,8 +28,12 @@ mod calc;
 mod calendar_client;
 mod camera_feed;
 mod change_notifier;
+mod chem_helper;
 mod clipboard;
+mod clipboard_history;
+mod command_palette;
 mod commute_advisor;
+mod compound_planner;
 mod config;
 mod contacts;
 mod context;
@@ -48,12 +53,15 @@ mod dynamic_popups;
 mod ears;
 mod email_client;
 mod exam_coach;
+mod exhaustive_scenario_verifier;
 mod features;
 mod fish_zero_shot_tts;
 mod file_janitor;
 mod file_ops;
 mod finance_tracker;
+mod flashcards;
 mod focus;
+mod formula_sheet;
 mod guardian;
 mod gui;
 mod hivemind_mesh;
@@ -101,15 +109,18 @@ mod project_architect;
 mod protocols;
 mod reminders;
 mod remote_guardian;
+mod routine_learner;
 mod research_graph_view;
 mod rose_emblem_renderer;
 mod runtime;
 mod sandbox_runner;
 mod satellite;
 mod screen;
+mod screen_time;
 mod self_improve;
 mod selftest;
 mod shell;
+mod shortcut_overlay;
 mod simulation_lab;
 mod sites;
 mod spatial_scenes;
@@ -123,18 +134,23 @@ mod system_power;
 mod teleport;
 mod telemetry;
 mod theme_engine;
+mod thermal_advisor;
 mod ultron_mode;
 mod thinking_guard;
 mod tool_forge;
 mod tools;
 mod tray;
 mod tts;
-#[cfg(test)]
 mod ui_snapshot;
 mod typos;
+mod audio_mixes;
+mod release_notes;
+mod undo;
 mod vad;
 mod vault;
 mod venue_guide;
+mod visual_ui_verifier;
+mod voice_features;
 mod voice_reference;
 mod vram_guard;
 mod wake;
@@ -143,10 +159,16 @@ mod websearch;
 mod webuntis_client;
 mod whatsapp_client;
 mod widgets;
+mod window_drill;
 mod window_physics;
+mod window_tiler;
+mod workbench;
 mod workout_coach;
 mod workspace_canvas;
 mod worldwide_tunnel;
+// Checks against the real PC (mixer, power, give-way, voices): ignored unless asked for.
+#[cfg(test)]
+mod live_checks;
 #[cfg(windows)]
 mod win32;
 mod winctl;
@@ -182,16 +204,33 @@ struct Cli {
     chat_delay: Duration,
     /// Start with the microphone muted (scripted runs must not answer the room).
     no_mic: bool,
+    /// `--silent`: a scripted `--chat` session nobody sees, hears or finds in the history. The
+    /// voice is at 0, the HUD is drawn offscreen, the microphone is deaf, the settings file and
+    /// the conversation log stay as they are; every answer is written to jarvis.log (`[CLI]`),
+    /// and Jarvis quits after the last request.
+    silent: bool,
+    /// `--show` with `--silent`: the session runs in the real HUD window (what a monitor
+    /// change or a span really does can only be seen there).
+    show: bool,
+    /// `--window-drill` with `--silent --show`: the real window's SCREENS buttons and F11
+    /// driven through its message queue and checked against the monitors (`window_drill`).
+    window_drill: bool,
     /// Test every integration and print the report, then exit.
     diagnose: bool,
     /// Pick the Kokoro blend closest to the reference clip (silent), then exit.
     voice_calibrate: bool,
     /// Synthesise the clip's sentence and measure it against the clip (silent), then exit.
     voice_verify: bool,
+    /// `--voice-calibrate ultron` / `--voice-verify ultron`: Ultron's voice alone (Jarvis' own
+    /// calibration is not touched).
+    voice_ultron_only: bool,
     /// Check that Jarvis' voice reaches Sir's Discord microphone (plays one sentence), then exit.
     call_check: bool,
     /// Start Jarvis, run the live self-test in the running app (silent), write the report, exit.
     live_test: bool,
+    /// `--exhaustive [runs]`: the live self-test and the exhaustive matrices, that many runs in
+    /// a row, with the HUD drawn offscreen.
+    exhaustive: Option<usize>,
 }
 
 impl Cli {
@@ -205,6 +244,7 @@ impl Cli {
             selftest: false,
             voice_calibrate: false,
             voice_verify: false,
+            voice_ultron_only: false,
             call_check: false,
             speak: false,
             bench: false,
@@ -213,10 +253,14 @@ impl Cli {
             chat: Vec::new(),
             chat_delay: Duration::from_secs(2),
             no_mic: false,
+            silent: false,
+            show: false,
+            window_drill: false,
             diagnose: false,
             live_test: false,
+            exhaustive: None,
         };
-        let mut args = std::env::args().skip(1);
+        let mut args = std::env::args().skip(1).peekable();
         while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--headless" => cli.headless = true,
@@ -226,16 +270,30 @@ impl Cli {
                 "--check-models" => cli.check_models = true,
                 "--download-models" => cli.download_models = true,
                 "--selftest" => cli.selftest = true,
-                "--voice-calibrate" => cli.voice_calibrate = true,
-                "--voice-verify" => cli.voice_verify = true,
+                "--voice-calibrate" => {
+                    cli.voice_calibrate = true;
+                    cli.voice_ultron_only |= args.next_if(|next| next == "ultron").is_some();
+                }
+                "--voice-verify" => {
+                    cli.voice_verify = true;
+                    cli.voice_ultron_only |= args.next_if(|next| next == "ultron").is_some();
+                }
                 "--call-check" => cli.call_check = true,
                 "--speak" => cli.speak = true,
                 "--bench" => cli.bench = true,
                 "--no-llm" => cli.no_llm = true,
                 "--restarted" => cli.restarted = true,
                 "--no-mic" => cli.no_mic = true,
+                "--silent" => cli.silent = true,
+                "--show" => cli.show = true,
+                "--window-drill" => cli.window_drill = true,
                 "--diagnose" => cli.diagnose = true,
                 "--live-test" => cli.live_test = true,
+                "--exhaustive" => {
+                    // An optional number of runs follows.
+                    let runs = args.next_if(|next| next.parse::<usize>().is_ok()).and_then(|n| n.parse().ok());
+                    cli.exhaustive = Some(runs.unwrap_or(exhaustive_scenario_verifier::DEFAULT_RUNS).clamp(1, 50));
+                }
                 "--chat" => cli.chat.push(args.next().ok_or("--chat needs a message")?),
                 "--chat-delay" => {
                     let secs: f64 = args.next().and_then(|s| s.parse().ok()).ok_or("--chat-delay needs seconds")?;
@@ -245,8 +303,26 @@ impl Cli {
                 other => return Err(format!("unknown argument '{other}'")),
             }
         }
+        // The exhaustive verifier is the live self-test with the HUD drawn offscreen.
+        if cli.exhaustive.is_some() {
+            cli.live_test = true;
+            cli.headless = true;
+        }
         // The self-test must not answer the room while it runs.
         cli.no_mic |= cli.live_test;
+        // A silent session has no window and no ears either.
+        if cli.silent {
+            if cli.chat.is_empty() {
+                return Err("--silent needs at least one --chat request".into());
+            }
+            // (`--show`: with the real window, for what only a window shows.)
+            cli.headless = !cli.show;
+            cli.no_mic = true;
+        }
+        // The drill drives a real window, and only a silent session's (its settings stay in memory).
+        if cli.window_drill && !(cli.silent && cli.show) {
+            return Err("--window-drill needs --silent --show and one --chat request".into());
+        }
         Ok(cli)
     }
 
@@ -270,15 +346,29 @@ USAGE: JARVIS.exe [OPTIONS]
   --speak             with --selftest: also play a test sentence on the speakers
   --bench             with --selftest: time Whisper across settings (threads, encoder window, ...)
   --no-llm            with --selftest: skip the language-model stage (while gaming / Jarvis runs)
-  --voice-calibrate   pick the Kokoro blend closest to the reference clip (silent)
-  --voice-verify      measure the voice chain against the reference clip (silent)
+  --voice-calibrate   pick the Kokoro blend closest to the reference clip (silent);
+                      `--voice-calibrate ultron`: Ultron's base voice alone
+  --voice-verify      measure the voice chain against the reference clip (silent);
+                      `--voice-verify ultron`: Ultron's voice alone
   --call-check        check that Jarvis' voice reaches your Discord mic (Wave Link Chat Mix; plays one sentence)
   --chat \"<text>\"     type a request into Jarvis once he is up (repeatable)
   --chat-delay <secs> pause after each --chat answer (default 2), e.g. to look at a new window
   --no-mic            start with the microphone muted (unmute in the HUD)
-  --diagnose          test every integration (WebUntis, calendar, e-mail, WhatsApp …) and exit
+  --silent            with --chat: a session nobody sees or hears (voice at 0, the HUD drawn
+                      offscreen, settings file and conversation log untouched); every answer
+                      goes to jarvis.log as [CLI] lines, then Jarvis quits; with --show the
+                      session runs in the real HUD window instead of offscreen
+  --window-drill      with --silent --show: click the SCREENS buttons and press F11 in the real
+                      window (posted messages, your mouse untouched), check where Windows put it
+                      on every monitor ([DRILL] lines in jarvis.log), then quit
+  --diagnose         test every integration (WebUntis, calendar, e-mail, WhatsApp …) and exit
   --live-test         start Jarvis, run every probe in the running app (routing, tools, HUD; silent,
-                      nothing is sent or changed), write live_selftest_report.json and exit
+                      nothing is sent or changed), write live_selftest_report.json and exit;
+                      with --headless the HUD is drawn offscreen (no window at all)
+  --exhaustive [n]    the live self-test plus the exhaustive matrices (every command family in five
+                      passes, the interface inspected as geometry on four screen sizes, both voices,
+                      the privacy lock, every Feature Lab button), n runs in a row (default 5), no
+                      window, no sound, the settings file untouched; writes exhaustive_report.json
 
 ENV: JARVIS_LOG (e.g. jarvis=debug), JARVIS_PROFILE, OLLAMA_URL (external engine)";
 
@@ -386,15 +476,21 @@ fn main() -> ExitCode {
     ensure_working_directory();
 
     // Starting Jarvis again only brings the running instance's HUD to the front. After a restart
-    // the previous instance may still be finishing its shutdown, so wait for it.
+    // the previous instance may still be finishing its shutdown, so wait for it. A test session
+    // runs where nobody sees it: it gives way to the Jarvis Sir starts himself.
     let instance = if cli.is_diagnostic() {
         None
     } else {
-        let deadline = std::time::Instant::now() + Duration::from_secs(if cli.restarted { 30 } else { 0 });
+        let mut deadline = std::time::Instant::now() + Duration::from_secs(if cli.restarted { 30 } else { 0 });
+        let mut asked = cli.live_test || cli.silent;
         loop {
             match platform::SingleInstance::acquire() {
                 Some(guard) => break Some(guard),
                 None if std::time::Instant::now() < deadline => std::thread::sleep(Duration::from_millis(250)),
+                None if !asked && platform::test_session_running() && tray::ask_test_session_to_give_way() => {
+                    asked = true;
+                    deadline = std::time::Instant::now() + Duration::from_secs(30);
+                }
                 None => {
                     tray::show_running_instance();
                     return ExitCode::SUCCESS;
@@ -406,7 +502,24 @@ fn main() -> ExitCode {
     init_logging("jarvis.log");
     whisper_rs::install_whisper_tracing_trampoline();
 
-    let cfg = JarvisConfig::load();
+    let mut cfg = JarvisConfig::load();
+    if cli.live_test || cli.silent {
+        // A self-test (or a silent scripted session) makes no sound and leaves the settings
+        // file as it is: whatever is switched, is switched in memory.
+        config::set_read_only(true);
+        cfg.loudness_pct = 0;
+        cfg.startup_greeting = false;
+        platform::mark_test_session();
+    }
+    if cli.silent {
+        // What a script asks is not part of Sir's conversations, and what it sets off stays
+        // inside Jarvis (`tools::stays_inside`).
+        memory::set_off_the_record(true);
+        tools::set_silent_session(true);
+    }
+    if cli.window_drill {
+        window_drill::enable();
+    }
     let runtime = match crash_guard::runtime_builder().build() {
         Ok(rt) => rt,
         Err(e) => {
@@ -421,7 +534,14 @@ fn main() -> ExitCode {
         Started::Done(code) => return code,
     };
     let hud = if cli.headless || !platform::has_display() {
-        info!("[HUD] Headless: no window, voice and tray only.");
+        if cli.live_test || cli.silent {
+            // The self-test still has a HUD to test (and a silent session one to work in): the
+            // real one, drawn offscreen at the main monitor's size.
+            let size = monitors::list().iter().find(|m| m.primary).map_or([2560.0, 1440.0], |m| [m.width() as f32, m.height() as f32]);
+            gui::offscreen::start(session.app.clone(), runtime.handle().clone(), size.into());
+        } else {
+            info!("[HUD] Headless: no window, voice and tray only.");
+        }
         None
     } else {
         Some(gui::Hud::attach(session.app.clone(), runtime.handle().clone()))
@@ -438,20 +558,53 @@ fn main() -> ExitCode {
         streamdeck_bridge::start(session.app.clone());
     }
     if !cli.chat.is_empty() {
-        let (app, messages, delay) = (session.app.clone(), cli.chat.clone(), cli.chat_delay);
+        let (app, messages, delay, silent) = (session.app.clone(), cli.chat.clone(), cli.chat_delay, cli.silent);
         runtime.spawn(async move {
             // Give Whisper, the TTS voice and the language engine a moment to load.
             tokio::time::sleep(Duration::from_secs(4)).await;
+            if silent {
+                // Nothing of a silent session reaches the PC around Jarvis: its volume
+                // requests work on a copy of the mixer, its other outward tools are noted.
+                audio_mixer::work_on_a_copy().await;
+            }
+            let mut events = app.subscribe();
             for text in messages {
                 info!("[CLI] --chat \"{text}\"");
+                let asked = std::time::Instant::now();
                 app.handle_command(hud::HudCommand::Chat { text }).await;
                 // One request at a time: wait for the answer (spoken or written) to finish.
-                let deadline = std::time::Instant::now() + Duration::from_secs(90);
+                let deadline = std::time::Instant::now() + Duration::from_secs(if silent { 240 } else { 90 });
                 tokio::time::sleep(Duration::from_millis(500)).await;
                 while app.busy() && std::time::Instant::now() < deadline {
                     tokio::time::sleep(Duration::from_millis(200)).await;
                 }
                 tokio::time::sleep(delay).await;
+                // A silent session leaves its transcript in the log: what he did and said.
+                while let Ok(event) = events.try_recv() {
+                    match event {
+                        hud::HudEvent::AssistantDone { text, model, latency_ms, interrupted, .. } if silent => {
+                            info!("[CLI] reply ({model}, first token {latency_ms} ms{}): \"{}\"", if interrupted { ", interrupted" } else { "" }, text.replace('\n', " "));
+                        }
+                        hud::HudEvent::ToolLog { tool, result, success, duration_ms, .. } if silent => {
+                            info!("[CLI] tool {tool} {} in {duration_ms} ms: {}", if success { "ok" } else { "FAILED" }, crash_guard::clip(&result.replace('\n', " "), 700));
+                        }
+                        hud::HudEvent::QuickAction { label, ok } if silent => info!("[CLI] quick action '{label}' {}", if ok { "ok" } else { "FAILED" }),
+                        hud::HudEvent::Notice { message } if silent => info!("[CLI] notice: {message}"),
+                        hud::HudEvent::Error { message } if silent => info!("[CLI] error shown: {message}"),
+                        _ => {}
+                    }
+                }
+                if silent {
+                    info!("[CLI] turn took {} ms{}", asked.elapsed().saturating_sub(delay).as_millis(), if app.busy() { " and is STILL BUSY" } else { "" });
+                }
+            }
+            if silent {
+                // `--window-drill`: the session lasts until the drill is through.
+                let until = std::time::Instant::now() + Duration::from_secs(300);
+                while window_drill::running() && std::time::Instant::now() < until {
+                    tokio::time::sleep(Duration::from_millis(250)).await;
+                }
+                app.handle_command(hud::HudCommand::Shutdown).await;
             }
         });
     }
@@ -465,15 +618,36 @@ fn main() -> ExitCode {
         });
     }
     if cli.live_test {
-        let app = session.app.clone();
+        // A run cut short (the tray's Quit, Sir starting Jarvis) proves nothing: until it has
+        // finished, the exit code says it failed.
+        LIVE_TEST_FAILED.store(true, Ordering::Release);
+        let (app, runs) = (session.app.clone(), cli.exhaustive);
         runtime.spawn(async move {
             // Whisper, the voice and the HUD's first frames.
             tokio::time::sleep(Duration::from_secs(5)).await;
-            let summary = live_self_tester::run(&app).await;
-            if let Err(e) = std::fs::write(LIVE_TEST_REPORT, live_self_tester::report_json()) {
-                warn!("[PROBE] Could not write {LIVE_TEST_REPORT}: {e}");
-            }
-            LIVE_TEST_FAILED.store(!summary.clean(), Ordering::Release);
+            let failed = match runs {
+                Some(runs) => {
+                    let report = exhaustive_scenario_verifier::run(&app, runs).await;
+                    let json = serde_json::to_string_pretty(&serde_json::json!({ "exhaustive": report, "last_run": serde_json::from_str::<serde_json::Value>(&live_self_tester::report_json()).unwrap_or_default() })).unwrap_or_default();
+                    if let Err(e) = std::fs::write(EXHAUSTIVE_REPORT, json) {
+                        warn!("[PROBE] Could not write {EXHAUSTIVE_REPORT}: {e}");
+                    }
+                    if report.clean() {
+                        info!("[PROBE] Exhaustive verifier: {} of {} runs clean", report.clean_in_a_row, report.runs.len());
+                    } else {
+                        error!("[PROBE] Exhaustive verifier: {} failing or slow probe(s) over {} runs; {} clean in a row at the end", report.failures.len(), report.runs.len(), report.clean_in_a_row);
+                    }
+                    !report.clean()
+                }
+                None => {
+                    let summary = live_self_tester::run(&app).await;
+                    if let Err(e) = std::fs::write(LIVE_TEST_REPORT, live_self_tester::report_json()) {
+                        warn!("[PROBE] Could not write {LIVE_TEST_REPORT}: {e}");
+                    }
+                    !summary.clean()
+                }
+            };
+            LIVE_TEST_FAILED.store(failed, Ordering::Release);
             app.handle_command(hud::HudCommand::Shutdown).await;
         });
     }
@@ -497,6 +671,8 @@ fn main() -> ExitCode {
 
 /// Where `--live-test` writes its report.
 const LIVE_TEST_REPORT: &str = "live_selftest_report.json";
+/// Where `--exhaustive` writes its report (every run's tally, every failure, the last run's probes).
+const EXHAUSTIVE_REPORT: &str = "exhaustive_report.json";
 /// `--live-test` found a failing or slow probe.
 static LIVE_TEST_FAILED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -567,12 +743,15 @@ async fn start(cli: &Cli, cfg: JarvisConfig) -> Started {
         fish_zero_shot_tts::set_f0_flatten(cfg.voice_f0_flatten);
         // Ultron has his own clip: his base voice is calibrated and measured against it too.
         let ultron = ultron_mode::reference_path().is_some();
+        let jarvis = !cli.voice_ultron_only;
         if cli.voice_calibrate {
-            match fish_zero_shot_tts::calibrate(&cfg) {
-                Ok((blend, m)) => info!("[VOICE] Calibrated: {blend} — {} (distance {:.3})", m.describe(), m.distance()),
-                Err(e) => {
-                    error!("[VOICE] Calibration failed: {e}");
-                    return Started::Done(ExitCode::FAILURE);
+            if jarvis {
+                match fish_zero_shot_tts::calibrate(&cfg) {
+                    Ok((blend, m)) => info!("[VOICE] Calibrated: {blend} — {} (distance {:.3})", m.describe(), m.distance()),
+                    Err(e) => {
+                        error!("[VOICE] Calibration failed: {e}");
+                        return Started::Done(ExitCode::FAILURE);
+                    }
                 }
             }
             if ultron {
@@ -587,14 +766,16 @@ async fn start(cli: &Cli, cfg: JarvisConfig) -> Started {
         }
         if cli.voice_verify {
             let mut reached = true;
-            match fish_zero_shot_tts::verify(&cfg) {
-                Ok(v) => {
-                    info!("[VOICE] Verification\n{}", v.describe());
-                    reached &= v.passed();
-                }
-                Err(e) => {
-                    error!("[VOICE] Verification failed: {e}");
-                    reached = false;
+            if jarvis {
+                match fish_zero_shot_tts::verify(&cfg) {
+                    Ok(v) => {
+                        info!("[VOICE] Verification\n{}", v.describe());
+                        reached &= v.passed();
+                    }
+                    Err(e) => {
+                        error!("[VOICE] Verification failed: {e}");
+                        reached = false;
+                    }
                 }
             }
             if ultron {
@@ -644,7 +825,10 @@ async fn start(cli: &Cli, cfg: JarvisConfig) -> Started {
             modality::ModalityStore::in_memory()
         }
     };
-    let widgets = match widgets::WidgetEngine::open(&cfg.memory_db_path) {
+    // A session of Sir's starts clean and remembers what he opens ("bring back my windows").
+    // A self-test or a scripted one-off (`--chat`) is no session of his: it shows what he kept
+    // for the start and leaves his recent windows as they are.
+    let widgets = match if cli.live_test || !cli.chat.is_empty() { widgets::WidgetEngine::open_untouched(&cfg.memory_db_path) } else { widgets::WidgetEngine::open(&cfg.memory_db_path) } {
         Ok(w) => w,
         Err(e) => {
             warn!("[WIDGET] Widgets cannot be persisted ({e}); they last for this session only.");
@@ -675,6 +859,11 @@ async fn start(cli: &Cli, cfg: JarvisConfig) -> Started {
     if cli.no_mic {
         controls.mic_enabled.store(false, std::sync::atomic::Ordering::Release);
         info!("[MIC] Started with the microphone muted (--no-mic).");
+    }
+    if cli.live_test || cli.silent {
+        // The self-test clicks the microphone's switch; what is said in the room meanwhile
+        // must never become a command.
+        controls.make_deaf();
     }
 
     // The film-voice reference clip (if present) is analysed while the voice loads.

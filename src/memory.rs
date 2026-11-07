@@ -47,6 +47,14 @@ pub enum DeleteOutcome {
 
 const SELECT_COLUMNS: &str = "m.id, m.key, m.value, m.category, m.importance, m.created_at, m.updated_at";
 
+/// A scripted session (`--silent`) is no conversation of Sir's: its turns are not logged.
+static OFF_THE_RECORD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Keeps the turns of this run out of `conversation_logs` (or lets them in again).
+pub fn set_off_the_record(on: bool) {
+    OFF_THE_RECORD.store(on, std::sync::atomic::Ordering::Release);
+}
+
 const STOPWORDS: &[&str] = &[
     "the", "a", "an", "is", "are", "was", "my", "me", "i", "you", "your", "what", "who", "do", "does",
     "of", "to", "in", "on", "for", "and", "or", "about", "that", "this", "it", "der", "die", "das",
@@ -378,6 +386,9 @@ impl MemoryManager {
     }
 
     pub fn log_turn(&self, role: &str, content: &str) {
+        if OFF_THE_RECORD.load(std::sync::atomic::Ordering::Acquire) {
+            return;
+        }
         let now = Utc::now().to_rfc3339();
         if let Err(e) = self.lock().execute(
             "INSERT INTO conversation_logs (role, content, timestamp) VALUES (?1, ?2, ?3)",

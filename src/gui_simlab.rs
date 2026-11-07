@@ -492,8 +492,9 @@ fn draw_function(painter: &egui::Painter, rect: Rect, p: &Palette, sim: &Simulat
         }
     }
     // Legend.
+    let mut top = 8.0;
     for (k, (label, src, _)) in sim.functions.iter().enumerate() {
-        painter.text(rect.left_top() + vec2(10.0, 8.0 + k as f32 * 16.0), Align2::LEFT_TOP, format!("{label}(x) = {src}"), FontId::monospace(11.5), curve_colours(p)[k % 6]);
+        top += readout(painter, rect, top, &format!("{label}(x) = {src}"), curve_colours(p)[k % 6]) + 1.0;
     }
     // Crosshair under the pointer.
     if let Some(h) = hover.filter(|h| rect.contains(*h)) {
@@ -540,13 +541,7 @@ fn draw_projectile(painter: &egui::Painter, rect: Rect, p: &Palette, sim: &Simul
         let (vx, vy) = ((next.1 - x) / dt, (next.2 - y) / dt);
         let tip = view.to_screen(x + vx * 0.15 * max_x / sim.value("velocity").max(1.0), y + vy * 0.15 * max_x / sim.value("velocity").max(1.0));
         painter.arrow(at, tip - at, stroke(2.0, p.green));
-        painter.text(
-            rect.left_top() + vec2(10.0, 8.0),
-            Align2::LEFT_TOP,
-            format!("t = {ts:.2} s   x = {x:.1} m   y = {y:.1} m   v = {:.1} m/s", (vx * vx + vy * vy).sqrt()),
-            FontId::monospace(11.5),
-            p.text,
-        );
+        readout(painter, rect, 8.0, &format!("t = {ts:.2} s   x = {x:.1} m   y = {y:.1} m   v = {:.1} m/s", (vx * vx + vy * vy).sqrt()), p.text);
     }
     painter.line_segment([view.to_screen(0.0, 0.0), view.to_screen(view.x1, 0.0)], stroke(2.0, p.green.gamma_multiply(0.7)));
 }
@@ -585,13 +580,7 @@ fn draw_pendulum(painter: &egui::Painter, rect: Rect, p: &Palette, sim: &Simulat
     painter.circle_filled(bob, 14.0, p.amber);
     painter.circle_stroke(bob, 18.0, stroke(1.0, p.amber.gamma_multiply(0.5)));
     let energy = 0.5 * (l * rt.omega).powi(2) + g * l * (1.0 - rt.theta.cos());
-    painter.text(
-        rect.left_top() + vec2(10.0, 8.0),
-        Align2::LEFT_TOP,
-        format!("θ = {:+.1}°   ω = {:+.2} rad/s   E/m = {:.2} J/kg   t = {:.1} s", rt.theta.to_degrees(), rt.omega, energy, rt.t),
-        FontId::monospace(11.5),
-        p.text,
-    );
+    readout(painter, rect, 8.0, &format!("θ = {:+.1}°   ω = {:+.2} rad/s   E/m = {:.2} J/kg   t = {:.1} s", rt.theta.to_degrees(), rt.omega, energy, rt.t), p.text);
 }
 
 fn draw_collision(painter: &egui::Painter, rect: Rect, p: &Palette, sim: &Simulation, rt: &mut Runtime, dt: f64) {
@@ -627,13 +616,7 @@ fn draw_collision(painter: &egui::Painter, rect: Rect, p: &Palette, sim: &Simula
     }
     let p_total = m1 * rt.v1 + m2 * rt.v2;
     let ke = 0.5 * m1 * rt.v1 * rt.v1 + 0.5 * m2 * rt.v2 * rt.v2;
-    painter.text(
-        rect.left_top() + vec2(10.0, 8.0),
-        Align2::LEFT_TOP,
-        format!("v₁ = {:+.2} m/s   v₂ = {:+.2} m/s   p = {:.2} kg·m/s   KE = {:.2} J   {}", rt.v1, rt.v2, p_total, ke, if rt.hit { "after the collision" } else { "before the collision" }),
-        FontId::monospace(11.5),
-        p.text,
-    );
+    readout(painter, rect, 8.0, &format!("v₁ = {:+.2} m/s   v₂ = {:+.2} m/s   p = {:.2} kg·m/s   KE = {:.2} J   {}", rt.v1, rt.v2, p_total, ke, if rt.hit { "after the collision" } else { "before the collision" }), p.text);
 }
 
 fn draw_waves(painter: &egui::Painter, rect: Rect, p: &Palette, sim: &Simulation, rt: &Runtime) {
@@ -664,13 +647,7 @@ fn draw_waves(painter: &egui::Painter, rect: Rect, p: &Palette, sim: &Simulation
         let at = pos2(rect.left() + ((s.0 + span_x / 2.0) / span_x) as f32 * rect.width(), rect.center().y);
         painter.circle_filled(at, 5.0, p.amber);
     }
-    painter.text(
-        rect.left_top() + vec2(10.0, 8.0),
-        Align2::LEFT_TOP,
-        format!("f = {f:.2} Hz   λ = {lambda:.2} m   d = {sep:.1} m   Δφ = {:.0}°", phase.to_degrees()),
-        FontId::monospace(11.5),
-        p.text,
-    );
+    readout(painter, rect, 8.0, &format!("f = {f:.2} Hz   λ = {lambda:.2} m   d = {sep:.1} m   Δφ = {:.0}°", phase.to_degrees()), p.text);
 }
 
 fn draw_descent(painter: &egui::Painter, rect: Rect, p: &Palette, sim: &Simulation, rt: &mut Runtime, dt: f64) {
@@ -715,13 +692,7 @@ fn draw_descent(painter: &egui::Painter, rect: Rect, p: &Palette, sim: &Simulati
     }
     let loss = e.eval(rt.gd_x, &sim.params);
     let status = if diverged || !visible(rt.gd_x) && rt.gd_steps > 2 { "DIVERGING — the learning rate is too large" } else if rt.gd_steps >= max_steps { "done" } else { "descending…" };
-    painter.text(
-        rect.left_top() + vec2(10.0, 8.0),
-        Align2::LEFT_TOP,
-        format!("loss(x) = {src}\nstep {} / {max_steps}   x = {:.4}   loss = {:.4}   lr = {lr}\n{status}", rt.gd_steps, rt.gd_x, loss),
-        FontId::monospace(11.5),
-        if status.starts_with("DIVERG") { p.red } else { p.text },
-    );
+    readout(painter, rect, 8.0, &format!("loss(x) = {src}\nstep {} / {max_steps}   x = {:.4}   loss = {:.4}   lr = {lr}\n{status}", rt.gd_steps, rt.gd_x, loss), if status.starts_with("DIVERG") { p.red } else { p.text });
 }
 
 fn draw_sorting(painter: &egui::Painter, rect: Rect, p: &Palette, sim: &Simulation, rt: &mut Runtime, dt: f64) {
@@ -745,13 +716,39 @@ fn draw_sorting(painter: &egui::Painter, rect: Rect, p: &Palette, sim: &Simulati
         };
         painter.rect_filled(bar, Rounding::same(1.5), colour);
     }
-    painter.text(
-        rect.left_top() + vec2(10.0, 8.0),
-        Align2::LEFT_TOP,
-        format!("{} sort · step {} of {}{}", sim.algorithm, rt.sort_pos as usize, rt.sort.len() - 1, if done { " · sorted" } else { "" }),
-        FontId::monospace(11.5),
-        p.text,
-    );
+    readout(painter, rect, 8.0, &format!("{} sort · step {} of {}{}", sim.algorithm, rt.sort_pos as usize, rt.sort.len() - 1, if done { " · sorted" } else { "" }), p.text);
+}
+
+/// A simulation's read-out in the top-left corner of its canvas, `top` points under its edge.
+/// Its figures (three spaces apart) share a line while the canvas is wide enough for them and
+/// go on to the next line when it is not; a single figure wider than the canvas wraps. Nothing
+/// is cut by a narrow block. The height it took.
+fn readout(painter: &egui::Painter, rect: Rect, top: f32, text: &str, colour: Color32) -> f32 {
+    let font = FontId::monospace(11.5);
+    let room = (rect.width() - 20.0).max(60.0);
+    let width = |s: &str| painter.layout_no_wrap(s.to_string(), font.clone(), colour).size().x;
+    let mut lines: Vec<String> = Vec::new();
+    for given in text.lines() {
+        let mut line = String::new();
+        for figure in given.split("   ") {
+            if !line.is_empty() && width(&format!("{line}   {figure}")) > room {
+                lines.push(std::mem::take(&mut line));
+            }
+            if !line.is_empty() {
+                line.push_str("   ");
+            }
+            line.push_str(figure);
+        }
+        lines.push(line);
+    }
+    let mut used = 0.0;
+    for line in lines {
+        let galley = painter.layout(line, font.clone(), colour, room);
+        let height = galley.size().y;
+        painter.galley(pos2(rect.left() + 10.0, rect.top() + top + used), galley, colour);
+        used += height;
+    }
+    used
 }
 
 #[cfg(test)]

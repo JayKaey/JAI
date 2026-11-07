@@ -6,6 +6,7 @@
 
 use eframe::egui::{self, epaint, pos2, vec2, Color32, Rect, TextureId};
 use std::collections::HashMap;
+#[cfg(test)]
 use std::path::PathBuf;
 
 /// An RGBA canvas (premultiplied, 0-1).
@@ -83,22 +84,34 @@ impl Snapshot {
         }
     }
 
+    /// The screen this context draws.
+    pub fn screen(&self) -> Rect {
+        Rect::from_min_size(pos2(0.0, 0.0), self.size)
+    }
+
+    /// One frame of `ui` with this input; the font and image textures it loaded are kept for
+    /// rasterising.
+    pub fn frame(&mut self, input: egui::RawInput, ui: impl FnMut(&egui::Context)) -> egui::FullOutput {
+        let output = self.ctx.run(input, ui);
+        self.apply(&output.textures_delta);
+        output
+    }
+
     /// Runs `frames` frames of `ui` (fonts and animations settle) and rasterises the last one.
+    #[cfg(test)]
     pub fn render(&mut self, frames: usize, mut ui: impl FnMut(&egui::Context)) -> Canvas {
         let mut last = None;
         for k in 0..frames.max(1) {
-            let input = egui::RawInput {
-                screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), self.size)),
-                time: Some(k as f64 / 60.0),
-                predicted_dt: 1.0 / 60.0,
-                ..Default::default()
-            };
-            let output = self.ctx.run(input, &mut ui);
-            self.apply(&output.textures_delta);
-            last = Some(output);
+            let input = egui::RawInput { screen_rect: Some(self.screen()), time: Some(k as f64 / 60.0), predicted_dt: 1.0 / 60.0, ..Default::default() };
+            last = Some(self.frame(input, &mut ui));
         }
         let output = last.expect("one frame");
-        let primitives = self.ctx.tessellate(output.shapes, output.pixels_per_point);
+        self.rasterise(output.shapes, output.pixels_per_point)
+    }
+
+    /// Tessellates a frame's shapes and fills the triangles into a canvas of this size.
+    pub fn rasterise(&self, shapes: Vec<epaint::ClippedShape>, pixels_per_point: f32) -> Canvas {
+        let primitives = self.ctx.tessellate(shapes, pixels_per_point);
         let (w, h) = (self.size.x as usize, self.size.y as usize);
         let mut canvas = Canvas { width: w, height: h, pixels: vec![[0.0, 0.0, 0.0, 1.0]; w * h] };
         for p in primitives {
@@ -163,6 +176,7 @@ impl Canvas {
     }
 
     /// Mean brightness (0-255) of a region.
+    #[cfg(test)]
     pub fn brightness(&self, r: Rect) -> f32 {
         let (x0, y0) = (r.left().max(0.0) as usize, r.top().max(0.0) as usize);
         let (x1, y1) = ((r.right() as usize).min(self.width), (r.bottom() as usize).min(self.height));
@@ -178,6 +192,7 @@ impl Canvas {
         if n == 0 { 0.0 } else { sum / n as f32 }
     }
 
+    #[cfg(test)]
     pub fn save(&self, name: &str) -> PathBuf {
         let dir = PathBuf::from("target").join("ui-snapshots");
         let _ = std::fs::create_dir_all(&dir);

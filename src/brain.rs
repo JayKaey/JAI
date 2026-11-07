@@ -330,7 +330,7 @@ fn static_tool(name: &str) -> Option<&'static str> {
         "control_jarvis_interface", "configure_interface", "create_calendar_event", "control_orb_mode", "control_gui_aspect",
         "control_audio_mixer", "set_listening_mode", "save_instant_replay", "open_jarvis_view",
         "spawn_multi_window_workspace", "control_spatial_window", "manage_spatial_scene", "manage_vram", "spawn_topic_knowledge_workspace",
-        "hud_board",
+        "hud_board", "undo_last_action",
     ];
     NAMES.iter().copied().find(|n| *n == name).or_else(|| crate::features::static_name(name))
 }
@@ -353,8 +353,13 @@ impl History {
 
     /// Keeps at most `max_turns` user turns, trimming 5 turns at a time so the cached prompt
     /// prefix is only invalidated every few turns instead of on every turn.
+    ///
+    /// Never during a dry run: its turns are taken off the end again when the run is over
+    /// (`Brain::history_truncate`), so they must not push Sir's own turns off the front first
+    /// (the start-up warm-up alone is longer than the window, and what it pushed out was then
+    /// summarised by the model as if Sir had asked for it).
     fn trim(&mut self) {
-        if self.user_turns() <= self.max_turns {
+        if crate::live_self_tester::dry() || self.user_turns() <= self.max_turns {
             return;
         }
         let keep_turns = self.max_turns.saturating_sub(5).max(1);
@@ -436,7 +441,7 @@ fn is_action_tool(name: &str) -> bool {
             | "place_application_window" | "spawn_native_window" | "update_native_window" | "close_native_window" | "customize_hud_and_windows"
             | "create_or_update_widget" | "remove_widget" | "launch_interactive_simulation" | "adjust_simulation" | "set_response_modality"
             | "control_jarvis_lifecycle" | "save_instant_replay" | "manage_stark_protocol" | "focus_mode" | "open_website" | "clipboard"
-            | "undo_last_file_edit" | "manage_voice_macro" | "open_jarvis_view"
+            | "undo_last_file_edit" | "undo_last_action" | "manage_voice_macro" | "open_jarvis_view"
             | "spawn_multi_window_workspace" | "control_spatial_window" | "manage_spatial_scene" | "manage_vram" | "spawn_topic_knowledge_workspace"
     )
 }
@@ -468,6 +473,8 @@ struct TurnState<'a> {
     voice: VoiceGate,
     /// A tool ran (the turn can no longer be withdrawn or repeated).
     acted: bool,
+    /// "Quiet please": the one turn that ends in silence on purpose.
+    hushed: bool,
     /// Something went wrong or needs Sir's attention (`only_on_alerts`).
     alert: bool,
     /// Streamed LLM text passes through it: sentences Sir heard a moment ago are dropped.
@@ -501,8 +508,9 @@ impl TurnState<'_> {
     fn begin_round(&mut self) {
         self.meta = MetaStreamFilter::new();
         self.persona = crate::persona::PersonaStream::new();
-        // After a data tool (screen, web, calendar) the reply informs; "Consider it done" is wrong.
-        self.persona.info_only = self.last_tool.as_ref().is_some_and(|(tool, _)| !is_action_tool(tool));
+        // After a data tool (screen, web, calendar) the reply informs, and with no tool at all (a
+        // joke, a question) nothing was done: "Consider it done" is wrong either way.
+        self.persona.info_only = self.last_tool.as_ref().is_none_or(|(tool, _)| !is_action_tool(tool));
         self.lang_hold = Some(String::new());
         self.raw.clear();
         self.abort = None;
@@ -588,6 +596,8 @@ struct BrainInner {
     prime_requested: AtomicBool,
     prime_signal: tokio::sync::Notify,
     ack_counter: AtomicUsize,
+    /// The last reply was the model's own: a bare "more" has something to go on from.
+    model_spoke_last: AtomicBool,
     /// One prefill at a time (start-up warm-up and re-primes used to overlap).
     prime_lock: Mutex<()>,
     /// Rolling summary of the conversation that has scrolled out of the history window.
@@ -600,6 +610,9 @@ struct BrainInner {
     /// "Shut down my PC" was answered with "please confirm": the action, when Jarvis asked, and
     /// the confirmation card's id.
     power_pending: StdMutex<Option<(crate::system_power::PowerAction, Instant, String)>>,
+    /// The shutdown / restart question that lapsed or was passed over, and when: a late "yes"
+    /// is told so instead of reaching the model (which offered to restart on its own).
+    power_lapsed: StdMutex<Option<(crate::system_power::PowerAction, Instant)>>,
 }
 
 impl Brain {
@@ -631,11 +644,13 @@ impl Brain {
                 prime_requested: AtomicBool::new(false),
                 prime_signal: tokio::sync::Notify::new(),
                 ack_counter: AtomicUsize::new(0),
+                model_spoke_last: AtomicBool::new(false),
                 prime_lock: Mutex::new(()),
                 summary: StdMutex::new(String::new()),
                 recent: StdMutex::new(RecentResponsesRingBuffer::default()),
                 calendar_pending: StdMutex::new(None),
                 power_pending: StdMutex::new(None),
+                power_lapsed: StdMutex::new(None),
             }),
         };
         brain.spawn_primer();
@@ -988,6 +1003,7 @@ impl Brain {
             first_token: false,
             voice: req.voice,
             acted: false,
+            hushed: false,
             alert: false,
             gate: SentenceGate::new(recent_sentences, allow_repeats),
             last_tool: None,
@@ -1017,7 +1033,12 @@ impl Brain {
         // commands, then (unless Sir is asking for a skill or a memory) the natural / misheard
         // variants of the high-value actions.
         let stark = &self.inner.tools.stark;
-        let mut compound: Option<Vec<Intent>> = None;
+        // "Set the theme to Arc Cyan, move the orb to the top right and open my schedule": every
+        // clause a command of its own. Planned before any single parser takes the sentence for
+        // its first clause. (Mode and privacy clauses are the dispatcher's; it sends the rest.)
+        let compound: Option<Vec<crate::compound_planner::Call>> = crate::compound_planner::plan(&text, &crate::intent_engine::ReflexContext::live())
+            .filter(|plan| plan.mode.is_none() && plan.privacy.is_none() && plan.calls.len() >= 2)
+            .map(|plan| plan.calls);
         // Integration questions go to their tool deterministically ("what classes do I have
         // tomorrow", "any new emails", "yes" to "shall I check your timetable?").
         let mut routed: Option<Route> = None;
@@ -1026,7 +1047,10 @@ impl Brain {
         // says it over him (the dispatcher already silenced him and paused every player).
         let silent = intents::silent_quick_command(&text);
         crate::core_sphere_3d::CoreActivityBus::chain(&["intents.rs", "intent_engine.rs", "brain.rs"]);
-        let fast_intent = if let Some(action) = crate::intent_engine::deterministic_action(&text) {
+        let fast_intent = if compound.is_some() {
+            self.inner.tools.focus.clear_offer();
+            None
+        } else if let Some(action) = crate::intent_engine::deterministic_action(&text) {
             // "No. Just can you close the windows you opened?", "schließ dich": carried out in
             // Rust at once — the model never gets to roleplay them.
             self.inner.tools.focus.clear_offer();
@@ -1113,7 +1137,7 @@ impl Brain {
             // window of Jarvis' own, never the HUD panel toggle or the app launcher.
             self.inner.tools.focus.clear_offer();
             Some(Intent::Tool { name: "open_jarvis_view", args })
-        } else if let Some(args) = intents::ui_layout_command(&text).filter(|_| compound_intents(&text).is_none()) {
+        } else if let Some(args) = intents::ui_layout_command(&text) {
             // "Make the interface less full", "remove the audio devices tab and the skills tab":
             // classified on Sir's own words, before any stale context can claim them.
             self.inner.tools.focus.clear_offer();
@@ -1127,6 +1151,10 @@ impl Brain {
             // "Repeat that" / "bitte wiederholen": the previous reply, word for word.
             info!("[REPEAT] Sir asked to hear the last reply again");
             Some(Intent::Answer(last))
+        } else if let Some(word) = intents::bare_comparative(&text).filter(|_| !self.inner.model_spoke_last.load(Ordering::Acquire)) {
+            // "More" with nothing to go on from (the volume's moment has passed, the last answer
+            // was no model's): asked, not guessed at ("Good night, Sir. The time is 23:31").
+            Some(Intent::Answer(format!("{word} of what, Sir?")))
         } else if let Some(route) = crate::exam_coach::route_answer(&stark.features.exam, &text).filter(|_| !is_command_not_answer(&text)) {
             info!("[EXAM] '{text}' is Sir's answer");
             routed = Some(route);
@@ -1134,7 +1162,7 @@ impl Brain {
         } else if let Some(intent) = self.answer_to_offer(&text).await {
             Some(intent)
         } else if let Some(route) = self.offered_route(&text).await.or_else(|| crate::features::route_text(&text)).or_else(|| integration_router::route_text(&text))
-            .filter(|route| schedule_route_allowed(&text, route.tool)) {
+            .filter(|route| crate::compound_planner::route_allowed(&text, route.tool)) {
             self.inner.tools.focus.clear_offer();
             info!("[ROUTE] '{text}' → {} ({:?})", route.tool, route.mode);
             match (route.mode, static_route_tool(route.tool)) {
@@ -1158,21 +1186,37 @@ impl Brain {
                 .or_else(|| intents::parse_sentences(&text))
                 // "Now this opens your settings.": a misheard wake word in front of a HUD command.
                 .or_else(|| intents::parse_misheard(&text))
-                .or_else(|| {
-                    // "Put it on the other screen and make it bigger": every part a fast command.
-                    compound = compound_intents(&text);
-                    None
-                })
-                .or_else(|| {
-                    (compound.is_none() && !is_skill_creation_request(&text) && !intents::is_memory_command(&text)).then(|| intents::resolve_fuzzy(&text)).flatten()
-                })
+                .or_else(|| (!is_skill_creation_request(&text) && !intents::is_memory_command(&text)).then(|| intents::resolve_fuzzy(&text)).flatten())
                 // "Fight the core", "which do old run": a spoken sentence that matched nothing but
                 // sounds almost exactly like a command that makes sense right now.
-                .or_else(|| (compound.is_none() && req.source == InputSource::Voice).then(|| self.heard_as_command(&text, tts)).flatten())
+                .or_else(|| (req.source == InputSource::Voice).then(|| self.heard_as_command(&text, tts)).flatten())
         };
+        // A plain question only reads, whichever parser took it for an order ("are you in orb
+        // mode?" switched it on): what looks it up answers, or the model does, in words.
+        // (What Sir taught as a trigger is his order in whatever form he taught it, and an
+        // answer in an oral exam is an answer: "is it photosynthesis?".)
+        let taught = |name: &str| matches!(name, "manage_voice_macro" | "run_forged_tool" | "run_custom_skill" | "answer_oral_exam");
+        let beyond = |intent: &Intent| match intent {
+            Intent::Tool { name, args } => !taught(name) && intents::beyond_the_question(&text, name, args),
+            Intent::Silent(action) => intents::beyond_the_question(&text, action.tool, &action.args),
+            _ => false,
+        };
+        let fast_intent = if fast_intent.as_ref().is_some_and(beyond) {
+            warn!("[ASKED] '{text}' is a question: {fast_intent:?} left undone");
+            intents::parse(&text).filter(|intent| !beyond(intent))
+        } else {
+            fast_intent
+        };
+        let routed = routed.filter(|route| taught(route.tool) || !intents::beyond_the_question(&text, route.tool, &route.args));
         let verbatim = routed.as_ref().is_some_and(|r| r.mode == RouteMode::Verbatim);
         // A dry run ends where the language model (or the read it would phrase) would begin.
         if dry && fast_intent.is_none() && compound.is_none() && modality::parse_command(&text).is_none() && crate::live_self_tester::intercept_model(routed.as_ref().map(|r| (r.tool, &r.args))) {
+            // A turn that came through the dispatcher (the whole process is dry) still ends as
+            // a turn does: the app waits for its end mark.
+            if !crate::live_self_tester::borrowed_turn() {
+                tts.finish(req.generation);
+                let _ = events.send(BrainEvent::Done { message_id: req.message_id.clone(), text: String::new(), latency_ms: req.started.elapsed().as_millis() as u64, model: "dry run".to_string(), interrupted: false });
+            }
             return;
         }
 
@@ -1186,7 +1230,7 @@ impl Brain {
             interrupted = self.fast_path(intent, &text, &mut st).await;
         } else if let Some(steps) = compound {
             model_used = "instant".to_string();
-            interrupted = self.fast_path_sequence(steps, &text, &mut st).await;
+            interrupted = self.fast_path_compound(steps, &text, &mut st).await;
         } else {
             let caps = self.caps(&cfg.primary_model).await;
             // A Deep turn on a thinking model reasons; everything else keeps Qwen3's switch off.
@@ -1222,7 +1266,7 @@ impl Brain {
                     Some(("forge_tool", json!({})))
                 } else if is_skill_creation_request(&text) {
                     Some(("forge", json!({})))
-                } else if let Some((tool, args)) = stark.graph.resolve_ellipsis(&text).filter(|(tool, _)| schedule_route_allowed(&text, tool)) {
+                } else if let Some((tool, args)) = stark.graph.resolve_ellipsis(&text).filter(|(tool, _)| crate::compound_planner::route_allowed(&text, tool)) {
                     // "What about the day after?": the last date query again, phrased by the LLM.
                     static_data_tool(&tool).map(|t| (t, args))
                 } else if let Some((tool, args)) = crate::location_engine::upfront(&text) {
@@ -1296,7 +1340,7 @@ impl Brain {
             self.inner.history.lock().await.messages.truncate(history_mark);
             info!("[TURN] Withdrawn: Sir is still talking ('{text}')");
             let _ = events.send(BrainEvent::Retracted { message_id: req.message_id.clone() });
-            if !crate::live_self_tester::dry() {
+            if !crate::live_self_tester::borrowed_turn() {
                 tts.finish(req.generation);
             }
             return;
@@ -1307,7 +1351,7 @@ impl Brain {
         }
         // Every answered turn says something: a silent command acted (its badge shows it), but a
         // question never ends in silence.
-        if !interrupted && !st.acted && st.spoken.trim().is_empty() && !req.cancel.is_cancelled() && !crate::live_self_tester::dry() {
+        if !interrupted && !st.acted && !st.hushed && st.spoken.trim().is_empty() && !req.cancel.is_cancelled() && !crate::live_self_tester::dry() {
             warn!("[TURN] '{text}' produced no reply; answering with the fallback line");
             st.say(&empty_reply_line(&text));
         }
@@ -1317,9 +1361,10 @@ impl Brain {
             info!("[TURN] Alert: speaking the reply");
             tts.speak(&reply, req.generation);
         }
-        // A dry run (the live self-test, the start-up warm-up) has no speech to close: an end
-        // mark for the generation in the air would end a real reply's speaking state early.
-        if !crate::live_self_tester::dry() {
+        // A recorded dry turn (the live self-test, the start-up warm-up) has no speech to close:
+        // an end mark for the generation in the air would end a real reply's speaking state
+        // early.
+        if !crate::live_self_tester::borrowed_turn() {
             tts.finish(req.generation);
         }
         req.link.commit();
@@ -1336,6 +1381,7 @@ impl Brain {
         if !st.gate.stripped().is_empty() {
             info!("[REPEAT] {} repeated sentence(s) left out of this reply", st.gate.stripped().len());
         }
+        self.inner.model_spoke_last.store(model_used != "instant", Ordering::Release);
         let _ = events.send(BrainEvent::Done {
             message_id: req.message_id.clone(),
             text: reply,
@@ -1350,10 +1396,14 @@ impl Brain {
                 debug!("[HISTORY] {compacted} finished action result(s) marked as completed");
             }
         }
-        let dropped = std::mem::take(&mut self.inner.history.lock().await.dropped);
-        if !dropped.is_empty() {
-            let brain = self.clone();
-            tokio::spawn(async move { brain.fold_into_summary(dropped).await });
+        // What scrolled out of the window goes into the rolling summary (a request to the model:
+        // never from a dry run, which asks the model nothing).
+        if !crate::live_self_tester::dry() {
+            let dropped = std::mem::take(&mut self.inner.history.lock().await.dropped);
+            if !dropped.is_empty() {
+                let brain = self.clone();
+                tokio::spawn(async move { brain.fold_into_summary(dropped).await });
+            }
         }
         if !interrupted {
             let system = Self::system_prompt(&cfg);
@@ -1399,7 +1449,13 @@ impl Brain {
         }
         let text = crate::typos::normalize_user_input_typos(req.text.trim());
         let routing = Instant::now();
-        let routed = crate::intent_engine::route(&text, &ReflexContext::live());
+        let ctx = ReflexContext::live();
+        // Several commands in one sentence are the full turn's: one reflex must not take the
+        // sentence for itself and drop the others.
+        if crate::compound_planner::plan(&text, &ctx).is_some() {
+            return false;
+        }
+        let routed = crate::intent_engine::route(&text, &ctx);
         let (action, stage) = match &routed {
             Some(r) => match &r.reflex {
                 Reflex::Silent(action) => (action.clone(), r.stage),
@@ -1407,7 +1463,10 @@ impl Brain {
                 Reflex::Mode(_) | Reflex::Privacy(_) => return false,
             },
             None => match intents::silent_quick_command(&text) {
-                Some(action) if matches!(action.tool, "control_music" | "control_audio_mixer") => (action, "media"),
+                // (A plain question only reads, here as on every other path.)
+                Some(action) if matches!(action.tool, "control_music" | "control_audio_mixer") && !intents::beyond_the_question(&text, action.tool, &action.args) => {
+                    (action, "media")
+                }
                 _ => {
                     // Any other request: "more" no longer means the emblem.
                     crate::intent_engine::forget_follow_up();
@@ -1435,10 +1494,20 @@ impl Brain {
         info!("[REFLEX] '{text}' → {} {} ({stage}, routed in {routed_us} µs, {} ms after it arrived)", action.tool, action.args, req.started.elapsed().as_millis());
         let outcome = self.inner.tools.execute(action.tool, &action.args).await;
         report(&outcome, events);
-        let label = if outcome.success { action.label } else { format!("FAILED: {}", first_sentence(outcome.output.trim_start_matches("Error: "))) };
+        let label = if !outcome.success {
+            format!("FAILED: {}", first_sentence(outcome.output.trim_start_matches("Error: ")))
+        } else if let Some((_, level)) = outcome.output.split_once(" already at ") {
+            // "Louder" at 100 %: nothing moved, and the chip does not say "+10 %".
+            format!("At {}", level.trim_end().trim_end_matches('.'))
+        } else if outcome.output.starts_with("No block") {
+            // "Close the mixer" with no mixer up: not "CLOSED".
+            "Not open".to_string()
+        } else {
+            action.label
+        };
         let _ = events.send(BrainEvent::Quick { label, ok: outcome.success });
-        // (A dry run has no turn of speech to close.)
-        if !crate::live_self_tester::dry() {
+        // (A recorded dry turn has no turn of speech to close.)
+        if !crate::live_self_tester::borrowed_turn() {
             tts.finish(req.generation);
         }
         let _ = events.send(BrainEvent::Done {
@@ -1497,11 +1566,26 @@ impl Brain {
                 crate::dynamic_popups::dismiss_confirm(id);
             }
         };
+        let lapse = |action: PowerAction| {
+            *self.inner.power_lapsed.lock().unwrap_or_else(|e| e.into_inner()) = Some((action, Instant::now()));
+        };
+        // A "yes" (or "no") to a question that is no longer open: it says so, and nothing runs.
+        let lapsed = self.inner.power_lapsed.lock().unwrap_or_else(|e| e.into_inner()).take();
+        if let Some((action, when)) = lapsed.filter(|(_, when)| when.elapsed() <= power::LAPSED_ANSWER_WINDOW) {
+            if let Some(line) = power::late_answer(action, text) {
+                info!("[POWER] '{text}' answers the PC {} question {:.0} s after it closed: nothing runs", action.id(), when.elapsed().as_secs_f32());
+                return Some(Intent::Answer(line));
+            }
+        }
         let mut pending = self.inner.power_pending.lock().unwrap_or_else(|e| e.into_inner());
         if let Some((action, asked, id)) = pending.clone() {
             *pending = None;
             if asked.elapsed() > power::CONFIRM_WINDOW {
                 card(&id, action, "expired");
+                lapse(action);
+                if let Some(line) = power::late_answer(action, text) {
+                    return Some(Intent::Answer(line));
+                }
             } else if power::is_cancellation(text) {
                 info!("[POWER] '{text}' cancels the PC {}", action.id());
                 card(&id, action, "cancelled");
@@ -1514,6 +1598,7 @@ impl Brain {
             } else {
                 info!("[POWER] '{text}' moves on; the PC {} question is withdrawn", action.id());
                 card(&id, action, "cancelled");
+                lapse(action);
             }
         }
         let action = power::power_request(text)?;
@@ -1542,6 +1627,7 @@ impl Brain {
             };
             if let Some((action, _, id)) = lapsed {
                 info!("[POWER] No answer within {} s: the PC {} is aborted", power::CONFIRM_WINDOW.as_secs(), action.id());
+                *brain.inner.power_lapsed.lock().unwrap_or_else(|e| e.into_inner()) = Some((action, Instant::now()));
                 let _ = events.send(BrainEvent::PowerCard { id, action: action.id().into(), label: action.card_label().into(), status: "expired".into() });
             }
         });
@@ -1550,6 +1636,12 @@ impl Brain {
 
     /// Runs a power action once the goodbye had time to be heard.
     fn schedule_power(&self, action: crate::system_power::PowerAction, events: UnboundedSender<BrainEvent>) {
+        // A silent scripted session acts inside Jarvis only, the PC's power included (and a dry
+        // run never reaches the PC at all).
+        if tools::silent_session() || crate::live_self_tester::dry() {
+            info!("[POWER] PC {} noted, not carried out: a silent or dry session leaves the PC alone", action.id());
+            return;
+        }
         tokio::spawn(async move {
             tokio::time::sleep(crate::system_power::FAREWELL_DELAY).await;
             match crate::system_power::execute(action).await {
@@ -1704,6 +1796,7 @@ impl Brain {
         match intent {
             Intent::Stop => {
                 // Playback was already stopped by the dispatcher; no reply, no history.
+                st.hushed = true;
                 return false;
             }
             Intent::Silent(action) => {
@@ -1786,7 +1879,9 @@ impl Brain {
                         if !spoken.is_empty() {
                             st.say(&spoken);
                         }
-                    } else if name == "open_jarvis_view" && !qr {
+                    } else if (name == "open_jarvis_view" && !qr) || (name == "show_mobile_satellite_instructions" && args["topic"] == "permanent_address" && crate::gui::windows_supported()) {
+                        // (The permanent-address guide is on screen as a block of its own: the
+                        // chat gets his summary, not the guide's raw Markdown.)
                         st.say(&spoken);
                     } else {
                         st.say_display(&display, &spoken);
@@ -1806,32 +1901,51 @@ impl Brain {
         false
     }
 
-    /// Several fast commands in one sentence ("put it on the other screen and make it bigger"),
-    /// run in order; one combined confirmation. Returns true if the turn was interrupted.
-    async fn fast_path_sequence(&self, steps: Vec<Intent>, text: &str, st: &mut TurnState<'_>) -> bool {
-        info!("[FAST] '{text}' → {} steps", steps.len());
+    /// Several commands in one sentence, every clause resolved on its own (`compound_planner`:
+    /// "set the theme to Arc Cyan, move the orb to the top right and open my schedule"). The
+    /// stages run in order, the lanes of a stage side by side; one combined confirmation.
+    /// Returns true if the turn was interrupted.
+    async fn fast_path_compound(&self, calls: Vec<crate::compound_planner::Call>, text: &str, st: &mut TurnState<'_>) -> bool {
+        let started = Instant::now();
+        info!("[FAST] '{text}' → {} commands: {}", calls.len(), calls.iter().map(|c| c.tool).collect::<Vec<_>>().join(", "));
+        if !st.begin_action() {
+            return true;
+        }
+        let mut prepared: Vec<(&'static str, Value)> = Vec::with_capacity(calls.len());
+        for call in &calls {
+            prepared.push((call.tool, self.prepare_args(call.tool, call.args.clone()).await));
+        }
+        let mut outcomes: Vec<Option<ToolOutcome>> = calls.iter().map(|_| None).collect();
+        for stage in crate::compound_planner::lanes(&calls) {
+            let lanes: Vec<crate::hyper_cortex::Lane> = stage.iter().map(|lane| lane.iter().map(|i| (*i, prepared[*i].0.to_string(), prepared[*i].1.clone())).collect()).collect();
+            let done = tokio::select! {
+                _ = st.req.cancel.cancelled() => return true,
+                done = crate::hyper_cortex::run_lanes(self.inner.tools.clone(), lanes) => done,
+            };
+            for (index, outcome) in done {
+                outcomes[index] = Some(outcome);
+            }
+        }
+        info!("[FAST] {} commands decided and carried out in {} ms", calls.len(), started.elapsed().as_millis());
         let mut hist_msgs: Vec<Value> = vec![json!({ "role": "user", "content": text })];
         let mut lines: Vec<String> = Vec::new();
-        for intent in steps {
-            let Intent::Tool { name, args } = intent else { continue };
-            if !st.begin_action() {
-                return true;
-            }
-            let args = self.prepare_args(name, args).await;
-            let outcome = tokio::select! {
-                _ = st.req.cancel.cancelled() => return true,
-                o = self.inner.tools.execute(name, &args) => o,
-            };
+        let mut failures: Vec<String> = Vec::new();
+        for ((name, args), outcome) in prepared.iter().zip(outcomes) {
+            let Some(outcome) = outcome else { continue };
             report(&outcome, st.events);
             self.after_tool(&outcome, st);
             hist_msgs.push(json!({ "role": "assistant", "content": "", "tool_calls": [{ "function": { "name": name, "arguments": args } }] }));
             hist_msgs.push(tool_message(name, &outcome.output));
-            let line = self.acknowledge(name, &args, &outcome);
-            if !outcome.success {
-                lines = line.into_iter().collect();
-                break;
+            let line = self.acknowledge(name, args, &outcome);
+            if outcome.success {
+                lines.extend(line);
+            } else {
+                failures.extend(line);
             }
-            lines.extend(line);
+        }
+        // What went wrong is what Sir needs to hear; what worked he can see.
+        if !failures.is_empty() {
+            lines = failures;
         }
         // "Done, Sir. Discord is on Monitor 2." + "It is bigger." (later courtesies dropped).
         let mut combined = String::new();
@@ -1879,6 +1993,11 @@ impl Brain {
     fn after_tool(&self, outcome: &ToolOutcome, st: &mut TurnState<'_>) {
         st.last_tool = Some((outcome.tool.clone(), outcome.output.clone()));
         st.grounding.note_tool(&outcome.tool);
+        // What Sir asks for at the same time on several days becomes a routine (the action
+        // only, never his words; a dry run leaves no trace).
+        if outcome.success && !crate::live_self_tester::dry() {
+            self.inner.tools.stark.features.bench.routines.note(&outcome.tool, &outcome.args, chrono::Local::now().naive_local());
+        }
         if !outcome.success {
             st.alert = true;
         } else if matches!(outcome.tool.as_str(), "get_calendar_schedule" | "check_school_schedule" | "create_calendar_event" | "modify_or_delete_calendar_event") {
@@ -1992,6 +2111,7 @@ impl Brain {
                 "spawn_native_window" => format!("I'm afraid I couldn't open a window, Sir. {}", first_sentence(err)),
                 "close_application" if err.contains("doesn't appear to be running") => format!("{app} isn't running, Sir."),
                 "close_application" if err.contains("protected") => format!("I'd rather not close {app}, Sir. It's a system process."),
+                "close_application" if err.starts_with("There is nothing of mine") => "There's nothing of mine up to take away, Sir.".to_string(),
                 "window_management" | "close_application" | "move_window_to_monitor" | "place_application_window" if err.contains("No open window") => {
                     let named = if app.is_empty() || crate::focus::is_pronoun(app_raw) { err.split('\'').nth(1).unwrap_or("that").to_string() } else { app };
                     format!("I can't see a {named} window, Sir.")
@@ -2000,12 +2120,22 @@ impl Brain {
                 "update_native_window" | "customize_hud_and_windows" if err.contains("No Jarvis window") => "I don't have that window open at the moment, Sir.".to_string(),
                 "control_music" if err.contains("couldn't find") => format!("I couldn't find that in your library, Sir. {}", first_sentence(err)),
                 "undo_last_file_edit" if err.contains("no backup") || err.contains("Which file") => "There's nothing of mine to undo there, Sir.".to_string(),
+                "undo_last_action" if err.starts_with("Nothing of mine") || err.contains("no backup") => "There's nothing of mine to take back, Sir.".to_string(),
+                // "Pause the timer", "close the note" with none on the panel.
+                "create_or_update_widget" | "remove_widget" if err.starts_with("A new widget") || err.starts_with("No widget matches") => {
+                    format!("There's no {} on the panel, Sir.", args["id"].as_str().unwrap_or("such widget"))
+                }
+                "create_or_update_widget" if err.starts_with("No item") => "That's not on the list, Sir.".to_string(),
                 _ => format!("I'm afraid that didn't work, Sir. {}", first_sentence(err)),
             });
         }
         // Every confirmation starts with a pre-rendered opener ("Right away, Sir.") so audio
         // starts instantly while the variable second clause is synthesised.
         let out = outcome.output.as_str();
+        // A silent scripted session left the PC alone: no "Closing Firefox" for what did not run.
+        if out == tools::NOT_CARRIED_OUT {
+            return Some(out.to_string());
+        }
         // "Full screen", "close it": no name was said, so the reply does not invent one.
         let unnamed = app.is_empty() || crate::focus::is_pronoun(app_raw);
         let it = if unnamed { "It".to_string() } else { app.clone() };
@@ -2061,6 +2191,11 @@ impl Brain {
                     }),
                     "pause" | "stop" => Some("Paused, Sir.".into()),
                     "resume" => Some("Resuming, Sir.".into()),
+                    // "Sir's playlists: A, B. Track index: …": the playlists, the index is the log's.
+                    "list_playlists" => Some(match out.strip_prefix("Sir's playlists: ") {
+                        Some(rest) => format!("Your playlists are {}, Sir.", rest.split(". Track index").next().unwrap_or(rest).trim_end_matches('.')),
+                        None => first_sentence(out),
+                    }),
                     "what_is_playing" | "now_playing" => Some(match out.strip_prefix("Now playing: ") {
                         Some(rest) => {
                             let song = rest.split(" (").next().unwrap_or(rest);
@@ -2117,6 +2252,8 @@ impl Brain {
                     _ => format!("Right away, Sir. Opening {site}."),
                 })
             }
+            // ("Close it" right after one of his own windows: that window was closed.)
+            "close_application" if unnamed && out.contains(" window(s): ") => Some("Done, Sir. The window is closed.".into()),
             "close_application" if unnamed => Some(if out.contains("tab") {
                 "Done, Sir. The tab is closed.".into()
             } else if out.starts_with("Closed ") {
@@ -2148,6 +2285,15 @@ impl Brain {
                 _ => "There you are, Sir.".to_string(),
             }),
             "undo_last_file_edit" => Some("Done, Sir. That edit is undone; the file is as it was.".into()),
+            "recent_actions" | "whats_new" | "whats_open" | "timer_left" | "is_app_running" => Some(out.to_string()),
+            // "Undone: the theme is as it was. …": that first clause, said as a sentence.
+            "undo_last_action" => {
+                let what = out.strip_prefix("Undone: ").unwrap_or(out);
+                let what = what.split(". ").next().unwrap_or(what).trim_end_matches('.');
+                let mut letters = what.chars();
+                let first = letters.next().map(|c| c.to_uppercase().to_string()).unwrap_or_default();
+                Some(format!("Done, Sir. {first}{}.", letters.as_str()))
+            }
             "customize_hud_and_windows" if !matches!(args["target"].as_str(), Some("focus" | "last" | "all")) => {
                 Some(crate::interface::spoken_ack(args, &self.inner.config.read(|c| c.interface.clone())))
             }
@@ -2161,6 +2307,8 @@ impl Brain {
                 "Done, Sir. The window is restyled.".into()
             }),
             "media_and_volume_control" => match action {
+                // A step ("-50") or one app's volume went through the mixer: what it did.
+                "set_volume" if crate::audio_mixer::signed_step(&args["level"]).is_some() || args.get("app").is_some_and(|a| !a.is_null()) => Some(format!("Done, Sir. {out}")),
                 "set_volume" => Some(format!("Very good, Sir. Volume at {} percent.", args["level"].as_i64().unwrap_or(0))),
                 "unmute" => Some("Sound restored, Sir.".into()),
                 "jarvis_louder" => Some("Is this better, Sir?".into()),
@@ -2169,7 +2317,7 @@ impl Brain {
                 // Mute, media keys and volume steps speak for themselves.
                 _ => None,
             },
-            "get_system_status" => Some(spoken_status(&self.inner.tools.monitor.latest())),
+            "get_system_status" => Some(spoken_reading(&self.inner.tools.monitor.latest(), args["reading"].as_str())),
             "configure_interface" if args.get("background_shade").is_some() => {
                 let darker = args["background_shade"].as_f64().unwrap_or(0.0) > 0.0;
                 Some(match (darker, out.contains("already at its")) {
@@ -2182,6 +2330,7 @@ impl Brain {
             "configure_interface" => {
                 Some(crate::interface::spoken_ack(args, &self.inner.config.read(|c| c.interface.clone())))
             }
+            "control_orb_mode" if args["action"] == "status" => Some(out.to_string()),
             "control_orb_mode" => Some(crate::interface::orb_mode_ack(args, &self.inner.config.read(|c| c.interface.clone()))),
             "control_gui_aspect" => Some(crate::interface::gui_aspect_ack(args, &self.inner.config.read(|c| c.interface.clone()))),
             "control_audio_mixer" => {
@@ -2206,12 +2355,51 @@ impl Brain {
                 .to_string(),
             ),
             "set_response_modality" => Some(modality::acknowledgement(&self.inner.tools.modality.get())),
+            // "Bring back my windows": what came back, by name.
+            "spawn_native_window" if args.get("restore").is_some_and(|r| !r.is_null()) => Some(if out.starts_with("Brought back") {
+                format!("There you are, Sir. {}", first_sentence(out))
+            } else {
+                "There is nothing to bring back, Sir. No window or widget of mine was open recently.".into()
+            }),
             "spawn_native_window" => Some(self.next_ack(&["Right away, Sir. It's in a new window.", "There you are, Sir. A separate window, as requested."])),
+            "create_or_update_widget" if args.get("keep_at_start").is_some_and(|k| k.is_boolean()) && args.get("type").is_none() => Some(if args["keep_at_start"] == true {
+                "Very good, Sir. It will be there when I start again.".into()
+            } else {
+                "Understood, Sir. It stays away when I start.".into()
+            }),
+            "create_or_update_widget" if args["mode"] == "stopwatch" => Some("Stopwatch running, Sir.".into()),
             "create_or_update_widget" if args["type"] == "CountdownOrStopwatch" => Some(format!(
                 "Timer set, Sir. {} on the clock.",
                 crate::reminders::spoken_duration(args["duration_secs"].as_f64().unwrap_or(60.0).round() as i64)
             )),
+            // "Stop the stopwatch": where it stands, which is why he stopped it.
+            "create_or_update_widget" if args["pause"] == true => {
+                let clock = out.split('\'').nth(1).and_then(|id| self.inner.tools.widgets.widget(id)).and_then(|w| crate::widgets::timer_state(&w.kind, crate::widgets::now_ms()));
+                Some(match clock {
+                    Some((_, Some(left))) => format!("Paused, Sir. {} left.", crate::reminders::spoken_duration(left / 1000)),
+                    Some((elapsed, None)) => format!("Stopped at {}, Sir.", crate::reminders::spoken_duration(elapsed / 1000)),
+                    None => "Paused, Sir.".into(),
+                })
+            }
+            "create_or_update_widget" if args["reset"] == true && args["start"] == true => Some("Started over, Sir.".into()),
+            "create_or_update_widget" if args["reset"] == true => Some("Back to zero, Sir.".into()),
+            "create_or_update_widget" if args["start"] == true => Some("Running again, Sir.".into()),
+            "create_or_update_widget" if args.get("add_items").is_some() => Some("It's on the list, Sir.".into()),
+            "create_or_update_widget" if args.get("check_item").is_some() => Some("Ticked off, Sir.".into()),
+            "create_or_update_widget" if args.get("uncheck_item").is_some() => Some("Back on the list, Sir.".into()),
+            "create_or_update_widget" if args.get("remove_item").is_some() => Some("Off the list, Sir.".into()),
+            "create_or_update_widget" if args["type"] == "Checklist" => Some("Your list is on the panel, Sir.".into()),
+            "create_or_update_widget" if args["type"] == "MarkdownNoteCard" => Some("Noted, Sir. It's on your panel.".into()),
             "create_or_update_widget" => Some("Done, Sir. It's on your widgets panel.".into()),
+            "remove_widget" if out == "Removed all 0 widgets." => Some("There are no widgets on the panel, Sir.".into()),
+            "remove_widget" if args["id"] == "all" => Some("Done, Sir. The panel is clear.".into()),
+            "remove_widget" => Some("Done, Sir. It's gone.".into()),
+            // "- name (title): what it does [used 3x]": the names.
+            "list_skills" if out.starts_with("- ") => {
+                let names: Vec<String> = out.lines().filter_map(|l| l.strip_prefix("- ")).map(|l| l.split(" (").next().unwrap_or(l).to_string()).collect();
+                Some(format!("Your skills are {}, Sir.", join_and(&names)))
+            }
+            "list_skills" => Some("I haven't learned any skills yet, Sir.".into()),
             "control_popups" => Some(self.next_ack(&["Done, Sir.", "Very good, Sir."])),
             "run_forged_tool" => Some(self.next_ack(&["Consider it done, Sir.", "Done, Sir."])),
             "close_all_secondary_windows" if out.starts_with("Closed 0 ") => Some(crate::intent_engine::NO_WINDOWS_REPLY.into()),
@@ -2461,6 +2649,7 @@ impl Brain {
                         }
                         return (model, st.req.cancel.is_cancelled());
                     }
+                    let acted_before = st.acted;
                     if !st.begin_action() {
                         return (model, true);
                     }
@@ -2482,10 +2671,16 @@ impl Brain {
                         }
                         calls.push((name, args));
                     }
+                    // A plain question only reads: "should I close Firefox?" gets an answer, and
+                    // whatever else the model reaches for is left undone (and it is told so).
+                    let only_asked = intents::only_asks(request);
+                    let held_back = |name: &str, args: &Value| only_asked && !tools::only_looks(name, args);
+                    let any_held = calls.iter().any(|(name, args)| held_back(name, args));
+                    let all_held = calls.iter().all(|(name, args)| held_back(name, args));
                     // Several reads in one round (timetable + mail + weather) run side by side;
                     // anything with an effect keeps its order. Every call goes through the cortex:
                     // a read started ahead is taken from memory, an obvious failure healed once.
-                    let outcomes = if crate::hyper_cortex::parallel_safe(&calls) {
+                    let outcomes = if !any_held && crate::hyper_cortex::parallel_safe(&calls) {
                         tokio::select! {
                             _ = st.req.cancel.cancelled() => return (model, true),
                             all = crate::hyper_cortex::run_parallel(&self.inner.tools, calls) => all,
@@ -2493,6 +2688,11 @@ impl Brain {
                     } else {
                         let mut done = Vec::with_capacity(calls.len());
                         for (name, args) in &calls {
+                            if held_back(name, args) {
+                                warn!("[ASKED] '{request}' is a question: {name} {args} left undone");
+                                done.push(tools::only_asked(name, args));
+                                continue;
+                            }
                             done.push(tokio::select! {
                                 _ = st.req.cancel.cancelled() => return (model, true),
                                 o = crate::hyper_cortex::execute(&self.inner.tools, name, args) => o,
@@ -2500,9 +2700,15 @@ impl Brain {
                         }
                         done
                     };
+                    // (Nothing happened: nothing backs a claim, and "Done, Sir" would be one.)
+                    if all_held {
+                        st.acted = acted_before;
+                    }
                     for (outcome, call) in outcomes.iter().zip(&r.tool_calls) {
                         report(outcome, st.events);
-                        self.after_tool(outcome, st);
+                        if outcome.output != tools::ONLY_ASKED {
+                            self.after_tool(outcome, st);
+                        }
                         // Under the name the model called: its tool message must answer that call.
                         let asked = call["function"]["name"].as_str().unwrap_or(outcome.tool.as_str());
                         self.inner.history.lock().await.push(tool_message(asked, &outcome.output));
@@ -2571,7 +2777,7 @@ impl Brain {
     /// Action over words: the model announced an action ("Opening your browser now, Sir.",
     /// "Powering down.") without calling a tool. The action Sir asked for is carried out anyway.
     async fn keep_word(&self, request: &str, st: &mut TurnState<'_>) {
-        if st.acted || st.req.cancel.is_cancelled() {
+        if st.acted || st.req.cancel.is_cancelled() || intents::only_asks(request) {
             return;
         }
         // Claims the grounding filter withheld still count: the action Sir asked for is done.
@@ -3272,14 +3478,6 @@ fn static_route_tool(name: &str) -> Option<&'static str> {
     NAMES.iter().copied().find(|n| *n == name).or_else(|| crate::features::static_name(name))
 }
 
-fn schedule_route_allowed(text: &str, tool: &str) -> bool {
-    match tool {
-        "check_school_schedule" => integration_router::explicit_school_request(text),
-        "get_calendar_schedule" => !integration_router::has_music_language(text),
-        _ => true,
-    }
-}
-
 /// Run explicit music requests before integration questions and stale conversation context.
 /// Known names continue using the full intent parser; an uncached multiword song can be searched.
 fn precision_music_intent(text: &str) -> Option<Intent> {
@@ -3405,37 +3603,6 @@ fn pseudo_call(body: &str, known: &std::collections::HashSet<String>) -> Option<
 fn static_data_tool(name: &str) -> Option<&'static str> {
     const NAMES: &[&str] = &["check_school_schedule", "get_calendar_schedule", "get_precise_location_weather", "check_ride_and_commute_status"];
     NAMES.iter().copied().find(|n| *n == name)
-}
-
-/// "Put it on the other screen and make it bigger": two to three clauses that are each a fast
-/// command on their own.
-fn compound_intents(text: &str) -> Option<Vec<Intent>> {
-    let lower = text.to_lowercase();
-    if ![" and ", " und ", " then ", " dann "].iter().any(|w| lower.contains(w)) {
-        return None;
-    }
-    let mut parts = vec![text.to_string()];
-    for sep in [", and then ", " and then ", ", then ", " then ", " und dann ", ", dann ", " dann ", ", and ", " and ", " und "] {
-        parts = parts
-            .into_iter()
-            .flat_map(|p| {
-                let lp = p.to_lowercase();
-                match lp.find(sep) {
-                    // Lower-casing keeps byte offsets for ASCII separators in practice; guard anyway.
-                    Some(i) if lp.len() == p.len() && p.is_char_boundary(i) && p.is_char_boundary(i + sep.len()) => {
-                        vec![p[..i].to_string(), p[i + sep.len()..].to_string()]
-                    }
-                    _ => vec![p],
-                }
-            })
-            .collect();
-    }
-    let parts: Vec<String> = parts.into_iter().map(|p| p.trim().trim_end_matches(['.', '!']).to_string()).filter(|p| !p.is_empty()).collect();
-    if !(2..=3).contains(&parts.len()) {
-        return None;
-    }
-    let found: Vec<Intent> = parts.iter().map(|p| intents::parse(p)).collect::<Option<Vec<_>>>()?;
-    found.iter().all(|i| matches!(i, Intent::Tool { .. })).then_some(found)
 }
 
 /// Tool result as stored in history. The trailing reminder sits right where small models pay
@@ -3719,13 +3886,22 @@ pub(crate) fn spoken_time(now: chrono::DateTime<chrono::Local>) -> String {
     };
     // British usage: "ten past two", but "twenty-one minutes to six" for non-multiples of five.
     let mins = |n: u32| if n.is_multiple_of(5) { n.to_string() } else { format!("{n} minute{}", if n == 1 { "" } else { "s" }) };
+    // Midnight and noon, not "6 minutes to 12 in the evening".
+    let since = if h == 0 { "midnight".to_string() } else { format!("{} {period}", h12(h)) };
+    let until = match h + 1 {
+        24 => "midnight".to_string(),
+        12 => "noon".to_string(),
+        next => format!("{} {period}", h12(next)),
+    };
     match m {
+        0 if h == 0 => "midnight".to_string(),
+        0 if h == 12 => "noon".to_string(),
         0 => format!("{} o'clock {period}", h12(h)),
-        15 => format!("a quarter past {} {period}", h12(h)),
-        30 => format!("half past {} {period}", h12(h)),
-        45 => format!("a quarter to {} {period}", h12(h + 1)),
-        m if m < 30 => format!("{} past {} {period}", mins(m), h12(h)),
-        m => format!("{} to {} {period}", mins(60 - m), h12(h + 1)),
+        15 => format!("a quarter past {since}"),
+        30 => format!("half past {since}"),
+        45 => format!("a quarter to {until}"),
+        m if m < 30 => format!("{} past {since}", mins(m)),
+        m => format!("{} to {until}", mins(60 - m)),
     }
 }
 
@@ -3742,8 +3918,46 @@ fn spoken_status(t: &crate::telemetry::SystemTelemetry) -> String {
             s.push_str(&format!(" with {:.1} of {:.0} gigabytes of video memory in use", used as f32 / 1024.0, total as f32 / 1024.0));
         }
     }
-    s.push_str(". All systems nominal, Sir.");
+    s.push_str(&format!(". {}", state_of_things(t)));
     s
+}
+
+/// How the machine is doing, from what it reads: "nominal" is only said when it is.
+fn state_of_things(t: &crate::telemetry::SystemTelemetry) -> &'static str {
+    let vram_full = t.gpu.as_ref().is_some_and(|g| matches!((g.vram_used_mb, g.vram_total_mb), (Some(used), Some(total)) if total > 0 && used as f32 / total as f32 >= 0.95));
+    if t.cpu_usage_pct >= 90.0 {
+        "The processor is working hard, Sir."
+    } else if t.ram_usage_pct >= 90.0 {
+        "Memory is running short, Sir."
+    } else if vram_full {
+        "Video memory is nearly full, Sir."
+    } else {
+        "All systems nominal, Sir."
+    }
+}
+
+/// The one reading Sir asked for ("show me my RAM usage"), or the whole report.
+fn spoken_reading(t: &crate::telemetry::SystemTelemetry, reading: Option<&str>) -> String {
+    let gb = |mb: f32| mb / 1024.0;
+    match (reading, &t.gpu) {
+        (Some("memory"), _) => format!("Memory is at {:.0} of {:.0} gigabytes, Sir.", t.ram_used_gb, t.ram_total_gb),
+        (Some("cpu"), _) => match t.cpu_temp_c {
+            Some(temp) => format!("The CPU is at {:.0} percent and {temp:.0} degrees, Sir.", t.cpu_usage_pct),
+            None => format!("The CPU is at {:.0} percent, Sir.", t.cpu_usage_pct),
+        },
+        (Some("vram"), Some(g)) => match (g.vram_used_mb, g.vram_total_mb) {
+            (Some(used), Some(total)) => format!("Video memory is at {:.1} of {:.0} gigabytes, Sir.", gb(used as f32), gb(total as f32)),
+            _ => "The graphics card does not report its video memory, Sir.".to_string(),
+        },
+        (Some("gpu"), Some(g)) => match (g.temperature_c, g.vram_used_mb, g.vram_total_mb) {
+            (Some(temp), Some(used), Some(total)) => format!("The graphics card is running at {temp:.0} degrees with {:.1} of {:.0} gigabytes of video memory in use, Sir.", gb(used as f32), gb(total as f32)),
+            (Some(temp), _, _) => format!("The graphics card is running at {temp:.0} degrees, Sir."),
+            (None, Some(used), Some(total)) => format!("The graphics card has {:.1} of {:.0} gigabytes of video memory in use, Sir.", gb(used as f32), gb(total as f32)),
+            _ => "The graphics card reports nothing right now, Sir.".to_string(),
+        },
+        (Some("gpu" | "vram"), None) => "I cannot read the graphics card right now, Sir.".to_string(),
+        _ => spoken_status(t),
+    }
 }
 
 #[cfg(test)]
@@ -3873,6 +4087,36 @@ mod tests {
     }
 
     #[test]
+    fn a_dry_run_never_pushes_sirs_turns_out_of_the_window() {
+        let mut h = History { messages: Vec::new(), max_turns: 15, dropped: Vec::new() };
+        for i in 0..10 {
+            h.push(json!({"role": "user", "content": format!("real {i}")}));
+            h.push(json!({"role": "assistant", "content": "Done, Sir."}));
+        }
+        let mark = h.messages.len();
+        // The start-up warm-up: sixty dry turns, four windows' worth.
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        rt.block_on(crate::live_self_tester::record(Box::pin(async {
+            for i in 0..60 {
+                h.push(json!({"role": "user", "content": format!("dry {i}")}));
+                h.trim();
+            }
+        })));
+        assert!(h.dropped.is_empty(), "nothing waits to be summarised by the model");
+        // The roll-back takes the dry turns off the end: Sir's conversation is as it was.
+        h.messages.truncate(mark);
+        assert_eq!((h.messages.len(), h.user_turns()), (20, 10));
+        assert_eq!(h.messages[0]["content"], "real 0");
+        // Outside a dry run the window trims as before.
+        for i in 0..6 {
+            h.push(json!({"role": "user", "content": format!("later {i}")}));
+            h.trim();
+        }
+        assert_eq!(h.user_turns(), 10);
+        assert!(!h.dropped.is_empty());
+    }
+
+    #[test]
     fn spoken_time_and_ordinals() {
         use chrono::TimeZone;
         let t = |h, m| chrono::Local.with_ymd_and_hms(2026, 10, 20, h, m, 0).unwrap();
@@ -3880,8 +4124,14 @@ mod tests {
         assert_eq!(spoken_time(t(8, 40)), "20 to 9 in the morning");
         assert_eq!(spoken_time(t(17, 39)), "21 minutes to 6 in the afternoon");
         assert_eq!(spoken_time(t(9, 1)), "1 minute past 9 in the morning");
-        assert_eq!(spoken_time(t(0, 0)), "12 o'clock in the morning");
-        assert_eq!(spoken_time(t(23, 45)), "a quarter to 12 in the evening");
+        assert_eq!(spoken_time(t(0, 0)), "midnight");
+        assert_eq!(spoken_time(t(12, 0)), "noon");
+        assert_eq!(spoken_time(t(23, 45)), "a quarter to midnight");
+        assert_eq!(spoken_time(t(23, 54)), "6 minutes to midnight");
+        assert_eq!(spoken_time(t(11, 40)), "20 to noon");
+        assert_eq!(spoken_time(t(0, 30)), "half past midnight");
+        assert_eq!(spoken_time(t(12, 30)), "half past 12 in the afternoon");
+        assert_eq!(spoken_time(t(12, 40)), "20 to 1 in the afternoon");
         assert_eq!(ordinal(1), "1st");
         assert_eq!(ordinal(12), "12th");
         assert_eq!(ordinal(22), "22nd");

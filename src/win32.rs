@@ -296,6 +296,42 @@ pub fn cover_monitor(hwnd: isize) -> Result<(), String> {
     }
 }
 
+/// A window that covers its monitor but is still maximised underneath (winit keeps a maximised
+/// window "maximised" when it goes fullscreen, F11 from windowed mode, so Windows and Jarvis's
+/// own checks take the board for a maximised window): made a plain window of exactly the same
+/// rect, so nothing moves on screen. Returns whether it was maximised. Synchronous: run it on
+/// the Win32 worker thread.
+pub fn unmaximise_in_place(hwnd: isize) -> Result<bool, String> {
+    use windows::Win32::Foundation::POINT;
+    use windows::Win32::Graphics::Gdi::{MonitorFromPoint, MONITOR_DEFAULTTOPRIMARY};
+    use windows::Win32::UI::WindowsAndMessaging::{SW_SHOWNOACTIVATE, WINDOWPLACEMENT_FLAGS};
+    let h = HWND(hwnd);
+    // SAFETY: queries and one placement change on a window handle; the structs are sized;
+    // failures are reported.
+    unsafe {
+        if !IsZoomed(h).as_bool() {
+            return Ok(false);
+        }
+        let mut rect = RECT::default();
+        GetWindowRect(h, &mut rect).map_err(|e| e.message().to_string())?;
+        let mut wp = WINDOWPLACEMENT { length: std::mem::size_of::<WINDOWPLACEMENT>() as u32, ..Default::default() };
+        GetWindowPlacement(h, &mut wp).map_err(|e| e.message().to_string())?;
+        // The normal position is in workspace coordinates, which start at the corner of the
+        // primary monitor's work area (the screen's corner unless the taskbar sits top or left).
+        let mut primary = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
+        let (dx, dy) = if GetMonitorInfoW(MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTOPRIMARY), &mut primary).as_bool() {
+            (primary.rcWork.left, primary.rcWork.top)
+        } else {
+            (0, 0)
+        };
+        wp.rcNormalPosition = RECT { left: rect.left - dx, top: rect.top - dy, right: rect.right - dx, bottom: rect.bottom - dy };
+        wp.showCmd = SW_SHOWNOACTIVATE.0 as u32;
+        wp.flags = WINDOWPLACEMENT_FLAGS(0);
+        SetWindowPlacement(h, &wp).map_err(|e| e.message().to_string())?;
+        Ok(true)
+    }
+}
+
 /// Presses `modifiers` + `key` and releases them in reverse order (F11, Ctrl+W, Ctrl+Shift+F),
 /// delivered to whichever window has the keyboard focus.
 pub fn send_chord(modifiers: &[VIRTUAL_KEY], key: VIRTUAL_KEY) -> Result<(), String> {
@@ -325,6 +361,31 @@ pub fn foreground_info() -> Option<(String, bool)> {
         GetWindowThreadProcessId(hwnd, Some(&mut pid));
         Some((process_name(pid).unwrap_or_default(), pid == std::process::id()))
     }
+}
+
+#[link(name = "kernel32")]
+extern "system" {
+    /// Milliseconds since Windows started (wraps after 49.7 days, like `LASTINPUTINFO::dwTime`).
+    fn GetTickCount() -> u32;
+}
+
+/// Seconds since Sir last touched the keyboard or the mouse (None if Windows will not say).
+pub fn idle_seconds() -> Option<u64> {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
+    let mut last = LASTINPUTINFO { cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32, dwTime: 0 };
+    // SAFETY: the struct is sized as the call requires; both calls only read system counters.
+    unsafe {
+        if !GetLastInputInfo(&mut last).as_bool() {
+            return None;
+        }
+        Some((GetTickCount().wrapping_sub(last.dwTime) / 1000) as u64)
+    }
+}
+
+/// The clipboard's change counter: it moves whenever anything is copied.
+pub fn clipboard_sequence() -> u32 {
+    // SAFETY: reads a counter.
+    unsafe { windows::Win32::System::DataExchange::GetClipboardSequenceNumber() }
 }
 
 /// A game, video or presentation covers the whole monitor of the foreground window.

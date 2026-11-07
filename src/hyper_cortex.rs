@@ -91,12 +91,18 @@ const READ_ONLY: &[(&str, &[&str])] = &[
     ("get_precise_location_weather", &[]),
     ("check_ride_and_commute_status", &[]),
     ("list_jarvis_features", &[]),
+    ("recent_actions", &[]),
+    ("whats_new", &[]),
+    ("whats_open", &[]),
+    ("timer_left", &[]),
+    ("is_app_running", &[]),
     ("list_skills", &[]),
     ("list_forged_tools", &[]),
     ("inspect_own_source", &[]),
     ("get_remote_pc_status", &[]),
     ("media_and_volume_control", &["get_volume"]),
-    ("control_audio_mixer", &["list"]),
+    ("control_audio_mixer", &["list", "list_mixes", "get_master", "get_app", "muted", "device", "devices", "switch_device"]),
+    ("control_orb_mode", &["status"]),
     ("control_music", &["what_is_playing", "list_playlists"]),
     ("reminders", &["list"]),
     ("manage_vram", &["status"]),
@@ -334,7 +340,7 @@ pub async fn run_parallel(tools: &ToolContext, calls: Vec<(String, Value)>) -> V
     let mut set = JoinSet::new();
     for (index, (name, args)) in calls.iter().cloned().enumerate() {
         let tools = tools.clone();
-        set.spawn(async move { (index, execute(&tools, &name, &args).await) });
+        set.spawn(crate::live_self_tester::carry(async move { (index, execute(&tools, &name, &args).await) }));
     }
     let mut outcomes: Vec<Option<ToolOutcome>> = calls.iter().map(|_| None).collect();
     while let Some(joined) = set.join_next().await {
@@ -378,13 +384,13 @@ pub fn run_lanes(tools: ToolContext, lanes: Vec<Lane>) -> std::pin::Pin<Box<dyn 
         let mut set = JoinSet::new();
         for lane in lanes {
             let tools = tools.clone();
-            set.spawn(async move {
+            set.spawn(crate::live_self_tester::carry(async move {
                 let mut done = Vec::with_capacity(lane.len());
                 for (index, name, args) in lane {
                     done.push((index, tools.execute(&name, &args).await));
                 }
                 done
-            });
+            }));
         }
         let mut outcomes = Vec::new();
         while let Some(joined) = set.join_next().await {

@@ -68,12 +68,21 @@ impl<T> Stamped<T> {
     }
 }
 
+/// Something of his on screen that is no window: a view of the HUD (the `configure_interface`
+/// key that opens it) or a widget (its id).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OwnThing {
+    View(String),
+    Widget(String),
+}
+
 #[derive(Default)]
 struct State {
     app: Option<Stamped<String>>,
     site: Option<Stamped<String>>,
     file: Option<Stamped<PathBuf>>,
     window: Option<Stamped<String>>,
+    own: Option<Stamped<OwnThing>>,
     foreground: Option<Stamped<ForegroundWindow>>,
     offer: Option<Stamped<PendingOffer>>,
 }
@@ -137,6 +146,29 @@ impl FocusTracker {
         if !id.is_empty() {
             self.write(|s| s.window = Some(Stamped::now(id.to_string())));
         }
+    }
+
+    /// A view or a widget of his went up or was changed: "close it" means that from now on.
+    pub fn note_own_thing(&self, thing: OwnThing) {
+        self.write(|s| s.own = Some(Stamped::now(thing)));
+    }
+
+    pub fn forget_own_thing(&self, thing: &OwnThing) {
+        self.write(|s| {
+            if s.own.as_ref().is_some_and(|own| own.value == *thing) {
+                s.own = None;
+            }
+        });
+    }
+
+    /// The view or widget of his that "it" means: nothing has come up since, no app, no window.
+    pub fn own_thing_is_latest(&self) -> Option<OwnThing> {
+        self.read(|s| {
+            let own = s.own.as_ref()?;
+            let after_app = s.app.as_ref().is_none_or(|a| own.at >= a.at || !a.fresh(APP_FOCUS_TTL));
+            let after_window = s.window.as_ref().is_none_or(|w| own.at >= w.at);
+            (after_app && after_window).then(|| own.value.clone())
+        })
     }
 
     /// What `open_application` opened: a URL or website (the browser), a folder or file, or an app.
@@ -372,6 +404,27 @@ mod tests {
         );
         f.forget_app("discord");
         assert_eq!(f.focused_app(), None);
+    }
+
+    #[test]
+    fn a_view_or_widget_of_his_is_it_until_something_else_comes_up() {
+        let f = FocusTracker::new();
+        assert_eq!(f.own_thing_is_latest(), None);
+        f.note_app("firefox");
+        let mixer = OwnThing::View("mixer_view".into());
+        f.note_own_thing(mixer.clone());
+        assert_eq!(f.own_thing_is_latest().as_ref(), Some(&mixer), "newer than the app");
+        f.note_jarvis_window("drive_space");
+        assert_eq!(f.own_thing_is_latest(), None, "a window came up after it");
+        f.note_own_thing(OwnThing::Widget("timer_300".into()));
+        assert_eq!(f.own_thing_is_latest(), Some(OwnThing::Widget("timer_300".into())));
+        f.note_app("discord");
+        assert_eq!(f.own_thing_is_latest(), None, "the conversation moved to an app");
+        f.note_own_thing(mixer.clone());
+        f.forget_own_thing(&OwnThing::View("core_view".into()));
+        assert_eq!(f.own_thing_is_latest().as_ref(), Some(&mixer), "only that thing is forgotten");
+        f.forget_own_thing(&mixer);
+        assert_eq!(f.own_thing_is_latest(), None);
     }
 
     #[test]

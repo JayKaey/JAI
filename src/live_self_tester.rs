@@ -21,6 +21,11 @@
 //! A probe passes when the real result is right *and* it stayed inside its budget (`SLOW`
 //! otherwise). A probe that cannot run here (no HUD, an integration Sir has not set up) is
 //! `SKIP`, with the reason.
+//!
+//! The time is taken from the second pass on: once per process the pipelines, the routes and
+//! the read-only tools are gone through first without being counted (`first_pass`), because the
+//! first time anything runs measures the start of the process, not the app. Only the time is
+//! forgiven there; a wrong result in that pass is a failure of the run that follows.
 
 use crate::app::Jarvis;
 use crate::crash_guard::lock;
@@ -65,13 +70,58 @@ tokio::task_local! {
     static DRY_RUN: Arc<Mutex<Vec<Recorded>>>;
 }
 
+/// The whole process is a dry run (the exhaustive verifier's barge-in pass, which goes through
+/// the real dispatcher and its spawned turns): on only in a process started for that test.
+static EVERYTHING_DRY: AtomicBool = AtomicBool::new(false);
+/// What requests did while the whole process was dry.
+static PROCESS_LOG: Mutex<Vec<Recorded>> = Mutex::new(Vec::new());
+
 /// Inside a dry run: nothing is carried out, logged or remembered.
 pub fn dry() -> bool {
+    DRY_RUN.try_with(|_| ()).is_ok() || EVERYTHING_DRY.load(Ordering::Acquire)
+}
+
+/// Inside a recorded turn (`record`): it has no speech of its own and runs under whatever
+/// generation is in the air, so it must not close that one. (A turn that came through the
+/// dispatcher while the whole process is dry owns its generation and closes it as any turn
+/// does: without the end mark his speaking state would never end.)
+pub fn borrowed_turn() -> bool {
     DRY_RUN.try_with(|_| ()).is_ok()
 }
 
 fn note(kind: &'static str, tool: &str, args: Value) -> bool {
-    DRY_RUN.try_with(|log| lock(log).push(Recorded { kind, tool: tool.to_string(), args })).is_ok()
+    let recorded = Recorded { kind, tool: tool.to_string(), args };
+    match DRY_RUN.try_with(|log| lock(log).push(recorded.clone())) {
+        Ok(()) => true,
+        Err(_) if EVERYTHING_DRY.load(Ordering::Acquire) => {
+            lock(&PROCESS_LOG).push(recorded);
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+/// Makes every request in the process a dry run (or ends that) and empties its record.
+pub fn set_everything_dry(on: bool) {
+    EVERYTHING_DRY.store(on, Ordering::Release);
+    lock(&PROCESS_LOG).clear();
+}
+
+/// What the process-wide dry run recorded so far.
+pub fn process_log() -> Vec<Recorded> {
+    lock(&PROCESS_LOG).clone()
+}
+
+/// `work` as a task of its own that stays inside the caller's dry run (a task-local does not
+/// cross `tokio::spawn`: without this a lane of a dry compound would act for real).
+pub fn carry<F: Future>(work: F) -> impl Future<Output = F::Output> {
+    let log = DRY_RUN.try_with(Arc::clone).ok();
+    async move {
+        match log {
+            Some(log) => DRY_RUN.scope(log, work).await,
+            None => work.await,
+        }
+    }
 }
 
 /// A tool call inside a dry run: recorded, and answered as done without being carried out.
@@ -168,10 +218,21 @@ impl Summary {
 
 static RESULTS: Mutex<Vec<ProbeOutcome>> = Mutex::new(Vec::new());
 static RUNNING: AtomicBool = AtomicBool::new(false);
+/// The first pass after a start is under way: its probes are logged, not counted.
+static FIRST_PASS: AtomicBool = AtomicBool::new(false);
+static FIRST_PASS_RAN: AtomicBool = AtomicBool::new(false);
+/// The probes of the first pass, and (for the reports) the ones that were late in it.
+static FIRST: Mutex<Vec<ProbeOutcome>> = Mutex::new(Vec::new());
+static FIRST_LATE: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 /// The outcomes so far (the Feature Lab reads them while the suite runs).
 pub fn results() -> Vec<ProbeOutcome> {
     lock(&RESULTS).clone()
+}
+
+/// The probes that were late in the first pass after the start, which is not counted.
+pub fn first_pass_late() -> Vec<String> {
+    lock(&FIRST_LATE).clone()
 }
 
 pub fn running() -> bool {
@@ -191,18 +252,75 @@ pub fn tool_outcome(name: &str) -> Option<ProbeOutcome> {
 }
 
 fn push(outcome: ProbeOutcome) {
-    let line = format!("[PROBE] {} {} // {} ({:.3} ms of {} ms) {}", outcome.status.label(), outcome.group, outcome.id, outcome.ms, outcome.budget_ms, outcome.detail);
+    // (A probe without a time budget says so, not "of 1.8e308 ms".)
+    let budget = if outcome.budget_ms < 1e12 { format!(" of {} ms", outcome.budget_ms) } else { String::new() };
+    let counted = !FIRST_PASS.load(Ordering::Acquire);
+    let stage = if counted { "" } else { "first pass, not counted: " };
+    let line = format!("[PROBE] {stage}{} {} // {} ({:.3} ms{budget}) {}", outcome.status.label(), outcome.group, outcome.id, outcome.ms, outcome.detail);
     match outcome.status {
-        Status::Pass | Status::Skip => info!("{line}"),
-        Status::Slow => warn!("{line}"),
         Status::Fail => error!("{line}"),
+        Status::Slow if counted => warn!("{line}"),
+        _ => info!("{line}"),
     }
-    lock(&RESULTS).push(outcome);
+    lock(if counted { &RESULTS } else { &FIRST }).push(outcome);
     crate::gui::refresh();
 }
 
+/// The first pass after a start: run once per process, and not counted.
+///
+/// The first time anything runs it costs two to three times what it costs from then on: its
+/// code comes off the disk, each pattern builds its matcher, the voices load, and the start of
+/// the process is still going on beside it. Measured on 2026-11-06, first pass against every
+/// later one: the median routing 24.7 µs against 9.5, a pass over the routes 161 ms against
+/// 55, the lexicon 1.5 ms against 0.07, Sonora's library 128 ms against 61. A budget is for
+/// the app Sir uses, so the pipelines, the routes and the read-only tools are gone through
+/// once here and the time is taken from the second pass on, as any benchmark does.
+///
+/// Only the time is forgiven. A probe that is wrong in this pass is a failure of the run that
+/// follows it (`first_pass_failures`), and the probes that were late in it are named in the
+/// log and in the reports.
+async fn first_pass(app: &Jarvis) {
+    if FIRST_PASS_RAN.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    let started = Instant::now();
+    info!("[PROBE] First pass after the start (not counted): pipelines, routing, read-only tools");
+    FIRST_PASS.store(true, Ordering::Release);
+    pipeline_probes(app).await;
+    routing_probes(app).await;
+    tool_probes(app.tools()).await;
+    FIRST_PASS.store(false, Ordering::Release);
+    let (probes, late) = first_pass_late_of(&lock(&FIRST));
+    info!(
+        "[PROBE] The first pass after the start took {:.0} s and is not counted: {probes} probes, {} late in it{}",
+        started.elapsed().as_secs_f64(),
+        late.len(),
+        if late.is_empty() { String::new() } else { format!(" ({})", late.join("; ")) }
+    );
+    *lock(&FIRST_LATE) = late;
+}
+
+/// How many probes a first pass ran, and the late ones as "group // id (ms of budget)".
+fn first_pass_late_of(first: &[ProbeOutcome]) -> (usize, Vec<String>) {
+    let late = first.iter().filter(|r| r.status == Status::Slow).map(|r| format!("{} // {} ({:.3} ms of {} ms)", r.group, r.id, r.ms, r.budget_ms)).collect();
+    (first.len(), late)
+}
+
+/// What was wrong in the first pass, handed over once to the run that follows it and marked
+/// as coming from there. (Right-but-late and skipped probes of that pass are dropped.)
+fn first_pass_failures(first: &mut Vec<ProbeOutcome>) -> Vec<ProbeOutcome> {
+    first
+        .drain(..)
+        .filter(|r| r.status == Status::Fail)
+        .map(|mut wrong| {
+            wrong.id = format!("first pass after the start: {}", wrong.id);
+            wrong
+        })
+        .collect()
+}
+
 /// Records a probe: right and in time → PASS, right but late → SLOW, wrong → FAIL.
-fn judge(group: &'static str, id: impl Into<String>, budget_ms: f64, ms: f64, result: Result<String, String>) {
+pub(crate) fn judge(group: &'static str, id: impl Into<String>, budget_ms: f64, ms: f64, result: Result<String, String>) {
     let (status, detail) = match result {
         Ok(detail) if ms <= budget_ms => (Status::Pass, detail),
         Ok(detail) => (Status::Slow, detail),
@@ -211,11 +329,11 @@ fn judge(group: &'static str, id: impl Into<String>, budget_ms: f64, ms: f64, re
     push(ProbeOutcome { id: id.into(), group, status, ms, budget_ms, detail });
 }
 
-fn skip(group: &'static str, id: impl Into<String>, why: impl Into<String>) {
+pub(crate) fn skip(group: &'static str, id: impl Into<String>, why: impl Into<String>) {
     push(ProbeOutcome { id: id.into(), group, status: Status::Skip, ms: 0.0, budget_ms: 0.0, detail: why.into() });
 }
 
-fn ms_since(started: Instant) -> f64 {
+pub(crate) fn ms_since(started: Instant) -> f64 {
     started.elapsed().as_secs_f64() * 1000.0
 }
 
@@ -386,7 +504,7 @@ async fn routing_probes(app: &Jarvis) {
 // ------------------------------------------------------------------------ the tools ----
 
 #[derive(Clone, Copy, PartialEq)]
-enum Reach {
+pub(crate) enum Reach {
     /// Works on this machine.
     Local,
     /// Asks a public server.
@@ -397,18 +515,24 @@ enum Reach {
 
 /// Every tool call that only reads, with real arguments, and a word its answer must contain
 /// ("" = any answer).
-const LIVE_TOOLS: &[(&str, &str, Reach, &str)] = &[
+pub(crate) const LIVE_TOOLS: &[(&str, &str, Reach, &str)] = &[
     ("get_current_datetime", "{}", Reach::Local, ""),
     ("get_system_status", "{}", Reach::Local, "CPU"),
     ("calculate", r#"{"expression": "2 + 2 * 3"}"#, Reach::Local, "8"),
     ("recall_memories", r#"{"query": "Sir"}"#, Reach::Local, ""),
     ("search_conversation", r#"{"query": "weather", "days_back": 1}"#, Reach::Local, ""),
     ("list_jarvis_features", "{}", Reach::Local, ""),
+    ("recent_actions", "{}", Reach::Local, ""),
+    ("whats_new", "{}", Reach::Local, "New in this build"),
+    ("whats_open", "{}", Reach::Local, ""),
+    ("timer_left", "{}", Reach::Local, ""),
+    ("is_app_running", r#"{"app_name": "explorer"}"#, Reach::Local, "File Explorer"),
     ("list_skills", "{}", Reach::Local, ""),
     ("list_forged_tools", "{}", Reach::Local, ""),
     ("inspect_own_source", "{}", Reach::Local, ""),
     ("reminders", r#"{"action": "list"}"#, Reach::Local, ""),
     ("control_audio_mixer", r#"{"action": "list"}"#, Reach::Local, ""),
+    ("control_audio_mixer", r#"{"action": "list_mixes"}"#, Reach::Local, ""),
     ("control_music", r#"{"action": "what_is_playing"}"#, Reach::Local, ""),
     ("control_music", r#"{"action": "list_playlists"}"#, Reach::Local, ""),
     ("media_and_volume_control", r#"{"action": "get_volume"}"#, Reach::Local, ""),
@@ -439,7 +563,33 @@ const LIVE_TOOLS: &[(&str, &str, Reach, &str)] = &[
 ];
 
 /// Words of a failure that means "Sir has not set this up", not "this is broken".
-const NOT_SET_UP: &[&str] = &["not configured", "not set up", "isn't set up", "is not enabled", "disabled", "no account", "not connected", "not paired", "no credentials", "set it up", "no gps", "no location", "home is not set"];
+pub(crate) const NOT_SET_UP: &[&str] = &["not configured", "not set up", "isn't set up", "is not enabled", "disabled", "no account", "not connected", "not paired", "no credentials", "set it up", "no gps", "no location", "home is not set"];
+
+/// Words of a failure that never reached the other side: the server refused, reset or did not
+/// answer, or its name did not resolve. That is the network's doing, not something a probe of
+/// Jarvis can pass or fail.
+const NO_ANSWER: &[&str] = &[
+    "error sending request",
+    "client error (connect)",
+    "connection refused",
+    "connection reset",
+    "forcibly closed",
+    "connection closed before",
+    "timed out",
+    "timeout",
+    "dns error",
+    "failed to lookup address",
+    "no such host",
+    "unreachable",
+    "tls handshake",
+    "unexpected eof",
+];
+
+/// Whether a failed tool's answer says its server could not be reached.
+pub(crate) fn unreachable(output: &str) -> bool {
+    let lower = output.to_lowercase();
+    NO_ANSWER.iter().any(|w| lower.contains(w))
+}
 
 /// Whether `name` with `args` is a call the tool's schema accepts: the tool exists, every
 /// required parameter is there, no unknown one is, and enum values are allowed ones.
@@ -491,8 +641,19 @@ async fn tool_probes(tools: &ToolContext) {
             continue;
         }
         let budget = if *reach == Reach::Local { LOCAL_BUDGET_MS } else { NETWORK_BUDGET_MS };
-        let started = Instant::now();
-        let outcome = tokio::time::timeout(Duration::from_secs(20), Box::pin(tools.execute(name, &args))).await;
+        let mut started = Instant::now();
+        let mut outcome = tokio::time::timeout(Duration::from_secs(20), Box::pin(tools.execute(name, &args))).await;
+        // A server that does not answer is asked once more; if it stays silent the probe is
+        // skipped (it says nothing about Jarvis), with the reason.
+        if *reach != Reach::Local && outcome.as_ref().is_ok_and(|o| !o.success && unreachable(&o.output)) {
+            tokio::time::sleep(Duration::from_millis(1500)).await;
+            started = Instant::now();
+            outcome = tokio::time::timeout(Duration::from_secs(20), Box::pin(tools.execute(name, &args))).await;
+            if outcome.as_ref().is_ok_and(|o| !o.success && unreachable(&o.output)) {
+                skip("tool", id, "its server could not be reached (asked twice)");
+                continue;
+            }
+        }
         let ms = ms_since(started);
         let Ok(outcome) = outcome else {
             judge("tool", id, budget, ms, Err("no answer within 20 s".to_string()));
@@ -972,16 +1133,32 @@ async fn board_probe(tools: &ToolContext) {
 /// Runs the whole suite in the running app. One run at a time: a second call returns the
 /// summary so far.
 pub async fn run(app: &Jarvis) -> Summary {
+    run_pass(app, None).await
+}
+
+/// One run of the suite; with `exhaustive` (the run's number, from 0) the matrices of the
+/// exhaustive verifier follow the base suite in the same run.
+pub async fn run_pass(app: &Jarvis, exhaustive: Option<usize>) -> Summary {
     if RUNNING.swap(true, Ordering::AcqRel) {
         return summary();
     }
-    lock(&RESULTS).clear();
+    first_pass(app).await;
+    // Only the time of the first pass is forgiven: what was wrong in it counts in this run.
+    let wrong = first_pass_failures(&mut lock(&FIRST));
+    {
+        let mut results = lock(&RESULTS);
+        results.clear();
+        results.extend(wrong);
+    }
     let started = Instant::now();
-    info!("[PROBE] Live self-test: pipelines, routing, tools, HUD");
+    info!("[PROBE] Live self-test: pipelines, routing, tools, HUD{}", if exhaustive.is_some() { ", then the exhaustive matrices" } else { "" });
     pipeline_probes(app).await;
     routing_probes(app).await;
     tool_probes(app.tools()).await;
     hud_probes(app).await;
+    if let Some(run) = exhaustive {
+        crate::exhaustive_scenario_verifier::matrices(app, run).await;
+    }
     RUNNING.store(false, Ordering::Release);
     let s = summary();
     let line = format!("[PROBE] Live self-test finished in {:.1} s: {}", started.elapsed().as_secs_f64(), s.describe());
@@ -999,12 +1176,34 @@ pub async fn run(app: &Jarvis) -> Summary {
 
 /// The report of the last run as JSON (`--live-test` writes it next to the log).
 pub fn report_json() -> String {
-    serde_json::to_string_pretty(&json!({ "summary": summary(), "probes": results() })).unwrap_or_default()
+    serde_json::to_string_pretty(&json!({ "summary": summary(), "probes": results(), "first_pass_late": first_pass_late() })).unwrap_or_default()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_first_pass_forgives_the_time_and_nothing_else() {
+        let probe = |id: &str, status: Status, ms: f64| ProbeOutcome { id: id.to_string(), group: "tool", status, ms, budget_ms: 120.0, detail: "said".to_string() };
+        let mut first = vec![probe("quick", Status::Pass, 3.0), probe("late", Status::Slow, 127.982), probe("wrong", Status::Fail, 1.0), probe("not set up", Status::Skip, 0.0)];
+        // The late one is named, with its time and its budget.
+        let (probes, late) = first_pass_late_of(&first);
+        assert_eq!((probes, late), (4, vec!["tool // late (127.982 ms of 120 ms)".to_string()]));
+        // Only the wrong one reaches the run that follows, and says where it is from.
+        let carried = first_pass_failures(&mut first);
+        assert_eq!(carried.len(), 1);
+        assert_eq!((carried[0].id.as_str(), carried[0].status), ("first pass after the start: wrong", Status::Fail));
+        assert!(first.is_empty(), "handed over once: the next run starts with nothing from the first pass");
+        // A run that holds it is not clean; the late one alone would have left it clean.
+        let run = |held: &[ProbeOutcome]| {
+            let count = |s: Status| held.iter().filter(|r| r.status == s).count();
+            Summary { total: held.len(), pass: count(Status::Pass), fail: count(Status::Fail), slow: count(Status::Slow), skip: count(Status::Skip) }
+        };
+        let counted = [probe("quick", Status::Pass, 3.0)];
+        assert!(run(&counted).clean());
+        assert!(!run(&[counted.to_vec(), carried].concat()).clean());
+    }
 
     #[test]
     fn every_route_and_live_tool_names_a_real_tool_with_arguments_its_schema_takes() {

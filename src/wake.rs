@@ -159,12 +159,11 @@ impl WakeWordMatcher {
                 head
             }
         } else {
-            // Keep a trailing '?' (questions read differently), drop '.'/'!'.
-            words[idx + n..]
-                .join(" ")
-                .trim_start_matches(is_punct)
-                .trim_end_matches(|c: char| c.is_whitespace() || c == '.' || c == '!')
-                .to_string()
+            // Keep a trailing '?' (questions read differently), drop '.'/'!'. With his name as
+            // the subject the recogniser writes an order as a report ("Jarvis opened the mixer").
+            let rest = words[idx + n..].join(" ");
+            let rest = rest.trim_start_matches(is_punct).trim_end_matches(|c: char| c.is_whitespace() || c == '.' || c == '!');
+            crate::typos::imperative_after_name(rest)
         };
         WakeMatch {
             matched: true,
@@ -234,6 +233,10 @@ mod tests {
             ("Mach mal Spotify auf, Jarvis.", "Mach mal Spotify auf"),
             ("What time is it, Jarvis?", "What time is it?"),
             ("Jarvis.", ""),
+            // His name as the subject: the order written as a report (verifier, 2026-11-07).
+            ("Jarvis opened the mixer.", "open the mixer"),
+            ("Jarvis stops spanning.", "stop spanning"),
+            ("Jarvis saved this mix as gaming.", "save this mix as gaming"),
         ] {
             let r = m.evaluate(input);
             assert!(r.matched, "should match: {input} (score {:.2})", r.score);

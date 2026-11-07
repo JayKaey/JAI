@@ -33,7 +33,111 @@ ignores them, as it does the logs, the phone page's TLS key and the packaged exe
 
 The film-voice reference recordings are not included either. To calibrate the two voices, put
 your own clips at `assets\jarvis_voice_reference.mp3` and `assets\ultron_voice_reference.mp3`
-and run `JARVIS.exe --voice-calibrate`.
+and run `JARVIS.exe --voice-calibrate` (`--voice-calibrate ultron` for Ultron's alone).
+
+The two voices are two separate chains. Jarvis speaks Received Pronunciation through a dry
+studio chain. Ultron speaks General American with a deep American base voice, pitched onto his
+clip and shaped towards the man who speaks him in the film: slow, husky, with only a trace of
+the machine (a hint of a voice an octave below, of a metallic resonance, of grit, and breath);
+his clauses never pass Jarvis' chain. This is an approximation built from stock voices, not a
+clone of an actor. Besides the similarity of each voice to its own clip, the exhaustive
+verifier measures that the two are apart (pitch, colour, pace, accent) and that the speech
+recogniser understands both.
+
+## Screens
+
+The HUD is the fullscreen board on one monitor, or one board across all of them ("use all
+monitors", "stop spanning", "toggle span mode", the SCREENS menu, F11 to leave). Across several
+monitors the HUD proper (header, console, emblem, the board) stays on the primary one; the
+others are room for windows, each of which stands whole on one monitor. The emblem rests in the
+middle of that screen; it leaves it for a report on the board, or when told to "move out of the
+way" (until "come back").
+
+F11 switches between the fullscreen board and a maximised window. "Make Discord full screen" is
+about Discord, "full screen" alone about the window in front, and neither ever about him; "move
+Discord to another monitor" takes it to the next one.
+
+Jarvis starts with an empty HUD. "Open that widget again next time" keeps one for the next
+start; "bring back my windows" reopens what was open last, also after a restart.
+
+## Volume
+
+Every volume request is carried out on the Windows mixer without the language model: the
+master volume, one app's own ("lower my browser's volume by 50 %", "Discord to 80 %"), "it" for
+what was just changed, "mute everything except Discord", and "make everything loud again",
+which undoes his own changes. A level with a sign is always a step, never a level.
+
+"Save this mix as gaming" keeps the master volume and every app's own level under that name
+(`config/audio_mixes.json`); "load my gaming mix", or just "gaming mix", brings them back in one
+go, and "undo that" takes all of it back. "Which mixes do I have?" and "delete the gaming mix"
+do what they say.
+
+Right after a change, for 30 seconds and until anything else is asked, short answers go on from
+it: "more", "a bit more", "less", "too much", "the other way", "up a bit", "same for Firefox",
+"and Discord too". "Make Discord loud again" puts back one app; "solo Discord" mutes the others.
+"Make it quiet" and "make it loud" go to a level, never past it the wrong way; "it's very quiet"
+is one step up on what was just changed.
+
+"Mute Discord for 10 minutes" ends by itself (a mute or unmute in between takes the timer's job
+away). "Fade out the music" takes five seconds in the background, "fade it back in" returns to
+where it was, "turn it down slowly" is a step taken the same way, and any volume change he asks
+for meanwhile ends a fade. "Make Firefox as loud as Discord" and "make Firefox quieter than
+Discord" read the other app's level off the mixer. "Set all apps to 100 %" (or "every volume",
+"all the volumes") sets their own levels and leaves the master alone; "my PC's volume" is the
+master. Questions ("is the sound on?") only ever read. Which device plays is
+not his to change: "switch to my speakers" says so, "which audio device am I using?" tells.
+
+"Open the mixer" puts a block with a fader for every channel on the board: the master first, then
+each app that has a session. "I can't hear anything" (or "there's no sound", "ich höre Discord
+nicht") looks for the sound: a muted master, a muted or nearly silent app, and says where it went.
+"Is anything muted?" names only what is.
+
+"Turn the game down" finds whatever game has a channel, listed or not; the background agents of
+hardware makers (Logitech, Razer, Corsair and the like) are never taken for one. "Turn Firefox
+off" closes a program and "turn Firefox back on" opens it again; these two sentences work for
+real programs only, never for the PC or the sound.
+
+## Widgets by voice
+
+Notes, lists, clocks and charts go up without the language model: "add a note saying call Tom at
+5", "make a shopping list with milk and eggs", "add butter to my shopping list", "check off milk",
+"start a stopwatch", "pause the timer", "show me a CPU chart". "The note", "the timer", "the list"
+mean the latest one of that kind. "What's open?" names his board, blocks, windows and widgets.
+
+Questions are looked up, not guessed at: "is Firefox open?", "läuft Discord?", "is the mixer
+open?", "how long is left on the timer?", "is my mic muted?", "why is it so quiet?", "are you in
+orb mode?", "did you mute Discord?". And a plain question only reads: whatever the language model
+reaches for beyond reading ("what happens if I close Firefox?") is left undone and it is told so,
+and a question about the PC's power ("should I lock my PC?") never starts it. "How do I mute
+Discord?" and "should I close Firefox?" are answered with the words that do it, and do nothing;
+"what happens if I close Firefox?" says what closing it costs; "what is orb mode?" and "what does
+the mixer do?" are told as they are.
+"Can you close Firefox?" and "would you mind opening the mixer?" are orders in good manners and
+are carried out. A thing he is told not to do stays undone: "don't close it", "schließ das nicht"
+get a plain "I'll leave it".
+
+"Close it" means the last thing of his that came up (a window, a widget, the mixer, the Theme
+Studio) and only then the program the conversation is about. "Get rid of that" (or "weg damit")
+is about his own things alone: with none up he says so, and no program is touched.
+
+## PC power
+
+"Shut down my PC" (or "put my PC into shutdown mode") and "restart the whole system" ask once and
+run on a yes within 30 seconds; anything else said meanwhile calls it off. "Put my PC to sleep"
+and "lock my PC" run straight away. A "yes" that comes after the question has lapsed runs
+nothing, and for two minutes he says that it lapsed and which words start it again. "What
+happens if I restart my PC?" is told what that does (what closes, what is lost), "how do I shut
+down my PC?" the words that do it, and none of these questions starts anything.
+
+## Undo
+
+"Undo that" (or "change it back", "put it back", "mach das rückgängig") takes back the last thing
+he changed of his own, for ten minutes after it: a volume, a window or widget of his that opened
+or closed, the look and layout of the HUD, Ultron Mode, the music he stopped or skipped, a file he
+edited. One step, the latest; a second "undo that" finds nothing rather than redoing. Nothing of
+anybody else's (another program's window, a sent message) comes back this way. "What did you just
+do?" tells his last actions as they went, and "what's new?" what this build does that the last one
+did not.
 
 ## Phone page
 
@@ -48,6 +152,62 @@ a Cloudflare named tunnel (token plus your own hostname), Tailscale Funnel or yo
 cargo test --release
 JARVIS.exe --selftest --no-llm     # silent TTS -> VAD -> Whisper check, no language model
 JARVIS.exe --live-test             # every probe in the running app; nothing is sent or changed
+JARVIS.exe --live-test --headless  # the same with the HUD drawn offscreen (no window)
+JARVIS.exe --exhaustive 5          # the live test plus the exhaustive matrices, five runs in a row
+JARVIS.exe --silent --chat "..."   # ask him for real, unseen and unheard; answers go to jarvis.log
+JARVIS.exe --silent --show --window-drill --chat "What time is it?"   # SCREENS buttons and F11 in the real window
 ```
 
+`--window-drill` clicks every SCREENS button (each monitor, the span and back, CLOSE) and
+presses F11 out of and back into the fullscreen board, in the real window, one step at a time,
+and checks where Windows really put the window after each (`[DRILL]` lines in `jarvis.log`).
+The clicks go into the window's own input and F11 is a key message to the window, so the cursor
+and keyboard are never touched. The checks that change real things on the PC (the real mixer, a
+shutdown that is scheduled and cancelled, the lock screen, voice samples) are ignored tests in
+`src/live_checks.rs`, each behind its own environment switch.
+
+`--silent` (with one or more `--chat` requests) is a scripted session through the real
+pipeline, language model included, that nobody sees or hears and that leaves no trace in the
+conversation log or the settings. It acts inside Jarvis only: reads and his own HUD are carried
+out, the volume works on a copy of the mixer, and anything that would reach the PC around him
+(an application, the music, another window, a message) is logged and left undone. `--show` runs
+it in the real window.
+
+`--exhaustive` needs no window and makes no sound: the real HUD is drawn into a private egui
+context and inspected as geometry (text against clip rectangles, blocks against each other and
+the orb, stroke colours against the theme, animations frame by frame) at four screen sizes.
+Every command family goes through the real dispatcher in five passes (English, German, misheard,
+four commands spoken over Jarvis, compound sentences), both voices are measured against their
+clips and against each other, and every Feature Lab button is pressed five times. What Sir says
+to the screens, his windows and the volume is also said aloud as samples: two stock voices at
+speech level over room hiss, through Whisper, the wake word and the dispatcher. They stand in
+for a person; they do not show how his own accent and microphone fare. The microphone is deaf for
+the whole run, whatever its switch says. Requests are dry runs: tool calls are recorded, not
+carried out, except reads and what only draws inside the HUD. The settings file and the
+conversation log stay untouched. The report is `exhaustive_report.json`.
+
+A test session runs where nobody sees it, so it gives way: starting JARVIS.exe while one is
+running ends it and starts him normally. Its tray tip says so, and a run cut short exits with a
+failure code.
+
+Time budgets are for the running app, not for its start: once per process the pipelines, the
+routes and the read-only tools are gone through first without being counted (the first time
+anything runs costs two to three times what it costs afterwards), and the time is taken from
+the second pass on. Only the time is forgiven: a wrong result in that first pass fails the run
+that follows, and the probes that were late in it are named in the log and in the report
+(`first_pass_late`).
+
 `JARVIS.exe --help` lists all options.
+
+## Workbench
+
+Ten everyday tools with voice routes in English and German: spaced-repetition flashcards, a
+maths/physics/chemistry formula sheet, molar masses and mole conversion, keyboard-shortcut
+sheets for the program in front, screen time with a break coach, routines learned from what is
+asked at the same time on several days, a thermal advisor with a fan-curve suggestion,
+clipboard history (in memory only, secrets never kept), tiling program windows on a monitor,
+and predictive command completion in the text console (Ctrl+K).
+
+Every block on the board has a right-click menu (copy, pin, maximize, export to Markdown or
+JSON, close), Ctrl+F searches across all open blocks, and new blocks are placed so that they
+never overlap each other or the orb.

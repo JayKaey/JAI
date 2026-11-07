@@ -23,6 +23,8 @@ use std::sync::LazyLock;
 use tracing::{info, warn};
 
 const VOICE: &str = "en-gb-x-rp";
+/// General American: Ultron's English (rhotic; the film's Ultron is not an Englishman).
+const US_VOICE: &str = "en-us";
 const GERMAN_VOICE: &str = "de";
 const ESPEAK_CHARS_UTF8: c_int = 1;
 const ESPEAK_PHONEMES_IPA: c_int = 0x02;
@@ -40,11 +42,39 @@ pub enum Lang {
     De,
 }
 
-impl Lang {
-    fn voice(self) -> &'static str {
+/// Which English a voice speaks. Kokoro's accent comes from the phonemes it is given, not only
+/// from its style vector: Jarvis is given Received Pronunciation, Ultron General American (with
+/// Jarvis' phonemes an American voice still sounds like an Englishman, which is why Ultron once
+/// sounded like Jarvis with a lower voice).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Accent {
+    British,
+    American,
+}
+
+/// The eSpeak voice a run is read with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Espeak {
+    Rp = 0,
+    German = 1,
+    American = 2,
+}
+
+impl Espeak {
+    fn of(lang: Lang, accent: Accent) -> Self {
+        match (lang, accent) {
+            (Lang::De, _) => Self::German,
+            (Lang::En, Accent::British) => Self::Rp,
+            (Lang::En, Accent::American) => Self::American,
+        }
+    }
+
+    /// The voice's names, best first.
+    fn names(self) -> &'static [&'static str] {
         match self {
-            Self::En => VOICE,
-            Self::De => GERMAN_VOICE,
+            Self::Rp => &[VOICE, "en-gb", "en"],
+            Self::German => &[GERMAN_VOICE],
+            Self::American => &[US_VOICE, "en"],
         }
     }
 }
@@ -53,8 +83,10 @@ struct EspeakLib {
     _lib: libloading::Library,
     set_voice: FnSetVoiceByName,
     text_to_phonemes: FnTextToPhonemes,
-    /// The voice eSpeak currently has loaded (0 = English, 1 = German, 2 = German missing).
+    /// The voice eSpeak currently has loaded (`Espeak as u8`).
     current: AtomicU8,
+    /// eSpeak has no German voice here: German runs are read with English rules.
+    german_missing: std::sync::atomic::AtomicBool,
 }
 
 impl EspeakLib {
@@ -94,36 +126,27 @@ impl EspeakLib {
             if !voice_ok {
                 return Err("no English voice found in espeak-ng-data".into());
             }
-            Ok(Self { _lib: lib, set_voice, text_to_phonemes, current: AtomicU8::new(0) })
+            Ok(Self { _lib: lib, set_voice, text_to_phonemes, current: AtomicU8::new(Espeak::Rp as u8), german_missing: std::sync::atomic::AtomicBool::new(false) })
         }
     }
 
-    /// Loads the voice of `lang` (only when it changes: switching reloads a dictionary).
-    /// False when German is not installed (the run is then read with English rules).
-    fn select(&self, lang: Lang) -> bool {
-        let wanted = match lang {
-            Lang::En => 0,
-            Lang::De => 1,
-        };
-        match (self.current.load(Ordering::Acquire), lang) {
-            (0, Lang::En) | (1, Lang::De) => return true,
-            // No German voice: English stayed loaded.
-            (2, Lang::En) => return true,
-            (2, Lang::De) => return false,
-            _ => {}
+    /// Loads `voice` (only when it changes: switching reloads a dictionary). False when it is
+    /// not installed: eSpeak then keeps the voice it had (a German run is read with English
+    /// rules, an American one with the British ones).
+    fn select(&self, voice: Espeak) -> bool {
+        if voice == Espeak::German && self.german_missing.load(Ordering::Acquire) {
+            return false;
         }
-        let names: &[&str] = match lang {
-            Lang::En => &[VOICE, "en-gb", "en"],
-            Lang::De => &[GERMAN_VOICE],
-        };
+        if self.current.load(Ordering::Acquire) == voice as u8 {
+            return true;
+        }
         // SAFETY: the function pointer belongs to the library held by `self`.
-        let ok = names.iter().any(|v| CString::new(*v).map(|c| unsafe { (self.set_voice)(c.as_ptr()) } == 0).unwrap_or(false));
+        let ok = voice.names().iter().any(|v| CString::new(*v).map(|c| unsafe { (self.set_voice)(c.as_ptr()) } == 0).unwrap_or(false));
         if ok {
-            self.current.store(wanted, Ordering::Release);
-        } else if lang == Lang::De {
+            self.current.store(voice as u8, Ordering::Release);
+        } else if voice == Espeak::German {
             warn!("[TTS] eSpeak-NG has no German voice; German words are read with English rules.");
-            // German failed: eSpeak keeps the English voice it had.
-            self.current.store(2, Ordering::Release);
+            self.german_missing.store(true, Ordering::Release);
         }
         ok
     }
@@ -250,6 +273,13 @@ impl Phonemizer {
     /// prosody markers: every English and German run in its own language's pronunciation,
     /// all for the same Kokoro voice.
     pub fn phonemize(&self, text: &str) -> String {
+        self.phonemize_as(text, Accent::British, false)
+    }
+
+    /// `phonemize` in the English of `accent`. `own_symbols`: the voice pack is Kokoro v1.0,
+    /// whose American voices were trained on its own symbols (one letter per diphthong,
+    /// r-coloured vowels written out, no length marks), not on eSpeak's IPA.
+    pub fn phonemize_as(&self, text: &str, accent: Accent, own_symbols: bool) -> String {
         let phrases = split_phrases(text);
         // A whole German sentence stays German across its commas.
         let german_sentence = sentence_is_german(text);
@@ -259,7 +289,7 @@ impl Phonemizer {
             if !phrase.trim().is_empty() {
                 let runs = if german_sentence { vec![(Lang::De, phrase.clone())] } else { language_runs(&phrase) };
                 for (lang, run) in runs {
-                    let part = self.phonemize_run(&run, lang);
+                    let part = self.phonemize_run(&run, lang, accent, own_symbols);
                     if part.is_empty() {
                         continue;
                     }
@@ -279,19 +309,22 @@ impl Phonemizer {
     }
 
     /// One single-language run, mapped into Kokoro's symbols.
-    fn phonemize_run(&self, text: &str, lang: Lang) -> String {
+    fn phonemize_run(&self, text: &str, lang: Lang, accent: Accent, own_symbols: bool) -> String {
+        let english = |raw: &str, american: bool| if american { postprocess_us(raw, own_symbols) } else { postprocess_en(raw) };
         match &self.backend {
             Backend::Library(lib) => {
-                let german = lang == Lang::De && lib.select(Lang::De);
-                if !german {
-                    lib.select(Lang::En);
+                let german = lang == Lang::De && lib.select(Espeak::German);
+                // Without an American voice installed the run stays British.
+                let american = !german && accent == Accent::American && lib.select(Espeak::American);
+                if !german && !american {
+                    lib.select(Espeak::Rp);
                 }
                 let raw = lib.phonemize(text);
-                if german { postprocess_de(&raw) } else { postprocess_en(&raw) }
+                if german { postprocess_de(&raw) } else { english(&raw, american) }
             }
-            Backend::Cli(cli) => match cli_phonemize(cli, text, lang) {
+            Backend::Cli(cli) => match cli_phonemize(cli, text, Espeak::of(lang, accent)) {
                 Some(raw) if lang == Lang::De => postprocess_de(raw.trim_end_matches(['.', '!', '?'])),
-                Some(raw) => postprocess_en(raw.trim_end_matches(['.', '!', '?'])),
+                Some(raw) => english(raw.trim_end_matches(['.', '!', '?']), accent == Accent::American),
                 None => postprocess_en(&rules_phonemize(&english_spelling(text))),
             },
             Backend::Rules => postprocess_en(&rules_phonemize(&english_spelling(text))),
@@ -457,13 +490,13 @@ fn split_phrases(text: &str) -> Vec<(String, String)> {
     out
 }
 
-fn cli_phonemize(cli: &Path, text: &str, lang: Lang) -> Option<String> {
+fn cli_phonemize(cli: &Path, text: &str, voice: Espeak) -> Option<String> {
     let mut args: Vec<String> = Vec::new();
     // A bundled CLI must read its own data, not that of a (possibly removed) system install.
     if let Some(dir) = cli.parent().filter(|d| d.join("espeak-ng-data").is_dir()) {
         args.push(format!("--path={}", dir.display()));
     }
-    args.extend(["-q".into(), "--ipa".into(), "-v".into(), lang.voice().into(), text.into()]);
+    args.extend(["-q".into(), "--ipa".into(), "-v".into(), voice.names()[0].into(), text.into()]);
     let out = crate::shell::run_helper_blocking(cli, &args, std::time::Duration::from_secs(10)).ok()?;
     if !out.success() {
         return None;
@@ -502,6 +535,59 @@ fn postprocess_en(ipa: &str) -> String {
     let s = s.replace('ʧ', "tʃ").replace('ʤ', "dʒ");
     let s = Z_JOIN.replace_all(&s, "z$1");
     tidy(&s)
+}
+
+/// American runs. For the first voice pack (trained on eSpeak's IPA): the English normalisations
+/// and the pack's one American rule ("ninety" with a d). For Kokoro v1.0 (`own_symbols`), on
+/// top of that, the symbols its American voices were trained on: one letter per diphthong
+/// (A = eɪ, I = aɪ, O = oʊ, W = aʊ, Y = ɔɪ), ʤ and ʧ as single symbols, r-coloured vowels
+/// written out (ɚ = əɹ, ɜː = ɜɹ), a syllabic consonant as ᵊ + consonant, and no length marks.
+fn postprocess_us(ipa: &str, own_symbols: bool) -> String {
+    let s = postprocess_en(ipa);
+    // "ninety" is said with a d, "nineteen" (a long vowel) is not.
+    let s = s.replace("nˈaɪntiː", "nˈaɪn\u{1}iː").replace("nˈaɪnti", "nˈaɪndi").replace('\u{1}', "t");
+    if !own_symbols {
+        return s;
+    }
+    let mut s = s;
+    for (from, to) in [
+        ("ʔn\u{329}", "tn"),
+        ("ʔn", "tn"),
+        ("ʔ", "t"),
+        ("ɜːɹ", "ɜɹ"),
+        ("ɜː", "ɜɹ"),
+        ("ɝ", "ɜɹ"),
+        ("ɚ", "əɹ"),
+        ("oʊ", "O"),
+        ("eɪ", "A"),
+        ("aɪ", "I"),
+        ("aʊ", "W"),
+        ("ɔɪ", "Y"),
+        ("dʒ", "ʤ"),
+        ("tʃ", "ʧ"),
+        ("ɐ", "ə"),
+        ("ɪə", "iə"),
+        ("ː", ""),
+    ] {
+        s = s.replace(from, to);
+    }
+    // A syllabic consonant ("n̩") is that consonant after a trace of a vowel.
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\u{329}' => {}
+            _ if chars.peek() == Some(&'\u{329}') => {
+                out.push('ᵊ');
+                out.push(c);
+            }
+            // What is left of a bare e or o is the vowel of "day" and of "law".
+            'e' => out.push('A'),
+            'o' => out.push('ɔ'),
+            _ => out.push(c),
+        }
+    }
+    tidy(&out)
 }
 
 /// German runs into Kokoro's shared symbol table: the uvular r (ʁ) instead of the English
@@ -667,6 +753,24 @@ mod tests {
     }
 
     #[test]
+    fn american_runs_keep_their_r_and_take_the_packs_symbols() {
+        // The first voice pack: eSpeak's IPA as it is, "ninety" with a d ("nineteen" keeps its t).
+        assert_eq!(postprocess_us("nˈaɪnti wˈɔːɾɚ", false), "nˈaɪndi wˈɔːɾɚ");
+        assert_eq!(postprocess_us("nˈaɪntiːn", false), "nˈaɪntiːn");
+        // Kokoro v1.0: its own symbols. One letter per diphthong, the r written out, no length.
+        assert_eq!(postprocess_us("pɹˈoʊɾəkˌɑːl", true), "pɹˈOɾəkˌɑl");
+        assert_eq!(postprocess_us("wˈɔːɾɚ", true), "wˈɔɾəɹ");
+        assert_eq!(postprocess_us("sˈɜː", true), "sˈɜɹ");
+        assert_eq!(postprocess_us("ɛŋɡˈeɪdʒd", true), "ɛŋɡˈAʤd");
+        assert_eq!(postprocess_us("nˈaʊ ðə tʃˈɔɪs ɪz mˈaɪn", true), "nˈW ðə ʧˈYs ɪz mˈIn");
+        assert_eq!(postprocess_us("nˈaɪnti", true), "nˈIndi");
+        // Syllabic consonants: "little" and "button".
+        assert_eq!(postprocess_us("lˈɪɾl\u{329}", true), "lˈɪɾᵊl");
+        assert_eq!(postprocess_us("bˈʌʔn\u{329}", true), "bˈʌtn");
+        assert_eq!(postprocess_us("ɐbˈaʊt", true), "əbˈWt");
+    }
+
+    #[test]
     fn german_words_and_sentences_are_found() {
         let runs = language_runs("Your WebUntis shows LK Mathematik and Geschichte");
         assert_eq!(runs, vec![(Lang::En, "Your WebUntis shows".into()), (Lang::De, "LK Mathematik".into()), (Lang::En, "and".into()), (Lang::De, "Geschichte".into())]);
@@ -712,6 +816,17 @@ mod tests {
             // Switching back to English after German.
             assert_eq!(p.phonemize("Right away, Sir."), p.phonemize("Right away, Sir."));
             assert!(!p.phonemize("Right away, Sir.").contains('ʁ'));
+            // Ultron's English is American: every r is spoken (Jarvis' is not), and the
+            // British reading is back, unchanged, right after it.
+            let line = "The reactor core is under water.";
+            let british = p.phonemize(line);
+            let american = p.phonemize_as(line, Accent::American, false);
+            let spoken_r = |ipa: &str| ipa.chars().filter(|c| matches!(c, 'ɹ' | 'ɚ' | 'ɝ')).count();
+            assert!(spoken_r(&american) >= spoken_r(&british) + 3, "American: {american} / British: {british}");
+            let own = p.phonemize_as(line, Accent::American, true);
+            assert!(!own.contains('ɚ') && !own.contains('ː') && own.contains("əɹ"), "{own}");
+            assert_eq!(p.phonemize(line), british);
+            println!("British:  {british}\nAmerican: {american}\nv1.0:     {own}");
         }
     }
 }

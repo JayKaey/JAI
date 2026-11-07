@@ -130,7 +130,8 @@ pub fn preset_for_word(word: &str) -> Option<&'static str> {
     }
     Some(match w {
         "red" | "rot" | "blood red" | "blutrot" | "crimson" => "crimson_overdrive",
-        "rose" | "pink" | "magenta" | "rosa" | "pinke" | "rose crimson" => "rose_crimson",
+        // ("Make the interface rows": the recogniser's "rose".)
+        "rose" | "roses" | "rows" | "pink" | "magenta" | "rosa" | "pinke" | "rose crimson" => "rose_crimson",
         "cyan" | "blue" | "blau" | "türkis" | "tuerkis" | "turquoise" | "aqua" | "arc reactor" | "arc" | "hellblau" => "arc_cyan",
         "gold" | "golden" | "yellow" | "gelb" | "golden yellow" | "stark" => "stark_gold",
         "green" | "grün" | "gruen" | "emerald" | "smaragd" | "matrix" => "emerald_matrix",
@@ -540,6 +541,23 @@ pub fn fading() -> bool {
     ACTIVE.read().unwrap_or_else(|e| e.into_inner()).start.elapsed() < FADE
 }
 
+/// Ends a running fade at once: the palette is the one being faded to. (The visual verifier
+/// steps through every theme and checks each at its final colours.)
+pub fn finish_fade() {
+    let mut f = ACTIVE.write().unwrap_or_else(|e| e.into_inner());
+    if f.start.elapsed() < FADE {
+        f.start = Instant::now().checked_sub(FADE).unwrap_or(f.start);
+        f.from = f.to;
+        GENERATION.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+    }
+}
+
+/// The name of the palette on screen (or being faded to): a preset, "custom:#RRGGBB",
+/// "theme:<name>" or Ultron's.
+pub fn active_name() -> String {
+    ACTIVE.read().unwrap_or_else(|e| e.into_inner()).name.clone()
+}
+
 // ------------------------------------------------------------------------------- HDR neon ----
 
 /// Which colour a neon pass takes.
@@ -559,6 +577,14 @@ pub fn hdr_neon_color(colour: [u8; 3], alpha: u8) -> Color32 {
     let vivid = saturate(colour);
     let a = alpha as f32 / 255.0;
     Color32::from_rgba_premultiplied((vivid[0] as f32 * a) as u8, (vivid[1] as f32 * a) as u8, (vivid[2] as f32 * a) as u8, 0)
+}
+
+/// The active palette is global: tests that change it (here and in the visual verifier) run
+/// one at a time.
+#[cfg(test)]
+pub(crate) fn test_lock() -> std::sync::MutexGuard<'static, ()> {
+    static L: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    L.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 #[cfg(test)]
@@ -702,11 +728,5 @@ mod tests {
         assert_eq!(current(), preset("arc_cyan").unwrap(), "back to what Sir chose meanwhile");
         assert!(!set_ultron(false));
         follow(DEFAULT_PRESET);
-    }
-
-    /// The active palette is global: tests that change it run one at a time.
-    pub(crate) fn test_lock() -> std::sync::MutexGuard<'static, ()> {
-        static L: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        L.lock().unwrap_or_else(|e| e.into_inner())
     }
 }
