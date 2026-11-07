@@ -1256,6 +1256,12 @@ async fn run_action(tools: &ToolContext, args: &Value, action: &str) -> Result<S
                 }
                 let mut closed = crate::hud_dock::close_named(target);
                 if closed.is_empty() {
+                    // The network radar, the disk map or the Earth in its own OS window.
+                    if let Some(title) = crate::jarvis_views::close_panel(target) {
+                        closed.push(title.to_string());
+                    }
+                }
+                if closed.is_empty() {
                     // A window of Jarvis' own that is detached (its own OS window).
                     if let Ok(out) = tools.widgets.close_window(target) {
                         tools.focus.forget_jarvis_window(target);

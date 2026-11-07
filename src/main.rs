@@ -13,6 +13,7 @@
 mod acoustic_radar;
 mod aegis_server_deck;
 mod airdrop_bridge;
+mod announcements;
 mod anti_repeat;
 mod app;
 mod app_icon;
@@ -44,6 +45,8 @@ mod deal_sniper;
 mod deep_research_engine;
 mod deep_researcher;
 mod diagnostics;
+mod disk_map;
+mod earth;
 mod shadow_memory;
 mod streamdeck_bridge;
 mod discord_bridge;
@@ -96,6 +99,7 @@ mod models;
 mod monitors;
 mod music;
 mod network_guardian;
+mod network_radar;
 mod oled_minimal_ui;
 mod omni_inbox;
 mod persona;
@@ -502,11 +506,15 @@ fn main() -> ExitCode {
     init_logging("jarvis.log");
     whisper_rs::install_whisper_tracing_trampoline();
 
+    // A self-test (or a silent scripted session) leaves the settings file as it is from the
+    // first read on (loading writes the file back otherwise): whatever is switched, is switched
+    // in memory.
+    if cli.live_test || cli.silent {
+        config::set_read_only(true);
+    }
     let mut cfg = JarvisConfig::load();
     if cli.live_test || cli.silent {
-        // A self-test (or a silent scripted session) makes no sound and leaves the settings
-        // file as it is: whatever is switched, is switched in memory.
-        config::set_read_only(true);
+        // ... and it makes no sound.
         cfg.loudness_pct = 0;
         cfg.startup_greeting = false;
         platform::mark_test_session();
@@ -936,6 +944,19 @@ async fn start(cli: &Cli, cfg: JarvisConfig) -> Started {
     stark_tools.stark.start_background(&stark_tools, store.clone());
     satellite::start(app.clone(), shutdown.clone());
     remote_guardian::start(app.clone(), shutdown.clone());
+    // What his own jobs have to say once done (the radar's sweep, the disk map's scan), spoken
+    // as soon as he is free.
+    {
+        let (speaker, stop) = (app.clone(), shutdown.clone());
+        tokio::spawn(async move {
+            while !stop.is_cancelled() {
+                tokio::time::sleep(Duration::from_millis(400)).await;
+                for line in announcements::take() {
+                    speaker.raise_alert(line);
+                }
+            }
+        });
+    }
 
     // `[ ⟳ REBOOT LLM ]` and "reboot your language model" reach the engine, the brain and the turn.
     {

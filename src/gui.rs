@@ -35,6 +35,15 @@ mod theme_studio;
 #[path = "gui_mixer.rs"]
 mod mixer_view;
 
+#[path = "gui_network_radar.rs"]
+mod radar_view;
+
+#[path = "gui_disk_map.rs"]
+mod disk_map_view;
+
+#[path = "gui_earth.rs"]
+mod earth_view;
+
 #[path = "gui_discord.rs"]
 mod discord_view;
 
@@ -4722,6 +4731,10 @@ impl HudApp {
             self.configure_look(&iface, serde_json::json!({ "create_theme": spec }));
         }
         mixer_view::show(ctx, &self.rt);
+        // The network radar, the disk map and the Earth, when open.
+        radar_view::show(ctx, &self.rt);
+        disk_map_view::show(ctx, &self.rt);
+        earth_view::show(ctx, &self.rt);
         // The spatial workspace: floating glass windows.
         crate::workspace_canvas::show(ctx, &self.app, &self.rt);
         self.workout.show(ctx, &self.palette, &self.app, &self.rt);

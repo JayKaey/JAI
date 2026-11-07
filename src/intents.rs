@@ -1322,6 +1322,10 @@ pub fn ui_layout_command(text: &str) -> Option<Value> {
 /// for the app launcher. Panel words ("hide the system panel", "show the telemetry tab") stay HUD
 /// layout commands.
 pub fn internal_view_command(text: &str) -> Option<Value> {
+    // The network radar, the disk map and the Earth ("check the network", "show me the earth").
+    if let Some(args) = panel_request(text) {
+        return Some(args);
+    }
     let s = normalize(text);
     if s.is_empty() || s.split_whitespace().count() > 16 {
         return None;
@@ -1891,6 +1895,385 @@ static INTEGRATIONS_HUB: LazyLock<Regex> = LazyLock::new(|| {
 static SEPARATE_WINDOW: LazyLock<Regex> = LazyLock::new(|| {
     re(r"\b(?:new|separate|own|extra|another|real|native|second|neuen|neues|eigenen|separaten|zweiten)\s+(?:native\s+|os\s+)?(?:window|fenster)\b")
 });
+
+/// Which panels from the reference videos are up: a follow-up ("switch back", "fly to Tokyo",
+/// "zoom in", "rescan") only means one of them while it is.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PanelsUp {
+    pub radar: bool,
+    pub disk: bool,
+    pub earth: bool,
+}
+
+impl PanelsUp {
+    pub fn now() -> Self {
+        Self { radar: crate::network_radar::is_open(), disk: crate::disk_map::is_open(), earth: crate::earth::is_open() }
+    }
+}
+
+/// `panel_command` with the panels as they are now.
+pub fn panel_request(text: &str) -> Option<Value> {
+    panel_command(text, PanelsUp::now())
+}
+
+/// The network radar, the disk map and the Earth as Sir asks for them (`open_jarvis_view`
+/// arguments): "check the network", "who is on my network?", "is my network secure?", "what is
+/// taking up space?", "map my D drive", "show me the earth", "switch to satellite view", "fly to
+/// Tokyo", "show the earthquakes in this area", "show me the flights over New York", "where is
+/// the ISS?". A question opens its panel too: every opening action is a `show…` or a `check…`,
+/// which only looks. Closing one is the board's ("close the globe", `intent_engine::block_close`).
+fn panel_command(text: &str, up: PanelsUp) -> Option<Value> {
+    // "Hey Jarvis, check check the network": a word said twice in a row counts once.
+    let said = normalize(text);
+    let mut words: Vec<&str> = Vec::new();
+    for w in said.split_whitespace() {
+        if words.last() != Some(&w) {
+            words.push(w);
+        }
+    }
+    if words.last() == Some(&"sir") {
+        words.pop();
+    }
+    if words.is_empty() || words.len() > 18 {
+        return None;
+    }
+    let mut s = words.join(" ");
+    // "… in a new window", "… on monitor 2": where it goes, not what it is.
+    static OWN_WINDOW: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"\s+(?:in|into|as|im|in\s+einem|als)\s+(?:a\s+|an\s+|its\s+own\s+|one\s+|the\s+|einem\s+|ein\s+)?(?:new|separate|second|own|extra|another|real|neuen|neues|eigenen|separaten|zweiten)\s+(?:native\s+|os\s+)?(?:window|fenster)$")
+    });
+    let separate = OWN_WINDOW.is_match(&s);
+    if separate {
+        s = OWN_WINDOW.replace(&s, "").trim().to_string();
+    }
+    let monitor = MONITOR_ANYWHERE.captures(&s).and_then(|m| monitor_value(m.get(1)?.as_str()));
+    if monitor.is_some() {
+        if let Some(m) = MONITOR_ANYWHERE.find(&s) {
+            s = format!("{} {}", s[..m.start()].trim(), s[m.end()..].trim()).trim().to_string();
+        }
+    }
+    let mut args = panel_args(text, &s, up)?;
+    if separate {
+        args["separate_window"] = json!(true);
+    }
+    if let Some(m) = monitor {
+        args["monitor"] = m;
+    }
+    Some(args)
+}
+
+/// `panel_command` on the cleaned sentence `s` (`text` is Sir's own, for the case of a place).
+fn panel_args(text: &str, s: &str, up: PanelsUp) -> Option<Value> {
+    let view = |name: &str, action: &str| json!({ "view": name, "action": action });
+    let earth = |action: &str| view("earth", action);
+    let at = |mut args: Value, place: &str| {
+        args["place"] = json!(spoken_place(text, place));
+        args
+    };
+
+    // ---- The Earth while it is up: its camera, its layers and its look.
+    if up.earth {
+        static ZOOM: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:zoom\s+(in|out)(?:\s+(?:a\s+bit|a\s+little|more|further|some|a\s+lot))?|(rein|hinein|raus|heraus)zoomen)$"));
+        if let Some(c) = ZOOM.captures(s) {
+            let inward = c.get(1).map_or_else(|| matches!(c.get(2).map(|m| m.as_str()), Some("rein" | "hinein")), |m| m.as_str() == "in");
+            return Some(earth(if inward { "zoom_in" } else { "zoom_out" }));
+        }
+        static HOME: LazyLock<Regex> = LazyLock::new(|| {
+            re(r"^(?:reset|recenter|re-center|recentre|re-centre)\s+(?:the\s+)?(?:globe|earth|view|map|camera)$|^zoom\s+(?:all\s+the\s+way\s+)?out\s+(?:all\s+the\s+way|completely|fully)$|^show\s+(?:me\s+)?the\s+whole\s+(?:globe|earth|world|planet)$")
+        });
+        if HOME.is_match(s) {
+            return Some(earth("home"));
+        }
+        static SPIN: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:spin|rotate)\s+(?:the\s+)?(?:globe|earth|world|planet|it)$|^(stop)\s+(?:spinning|rotating)(?:\s+(?:the\s+)?(?:globe|earth|it))?$"));
+        if let Some(c) = SPIN.captures(s) {
+            return Some(earth(if c.get(1).is_some() { "stop_spin" } else { "spin" }));
+        }
+        static HIDE: LazyLock<Regex> = LazyLock::new(|| {
+            re(r"^(?:hide|remove|turn\s+off|disable|switch\s+off|get\s+rid\s+of|blende|entferne)\s+(?:the\s+|all\s+(?:the\s+)?|die\s+|alle\s+)?(flights|planes|aircraft|air\s+traffic|earthquakes|quakes|storms|hurricanes|fires|wildfires|iss|space\s+station|layers|markers|overlays|flugzeuge|flüge|erdbeben|stürme|brände)(?:\s+(?:layer|layers|markers))?(?:\s+aus)?$")
+        });
+        if let Some(c) = HIDE.captures(s) {
+            let layer = match &c[1] {
+                "flights" | "planes" | "aircraft" | "air traffic" | "flugzeuge" | "flüge" => "flights",
+                "earthquakes" | "quakes" | "erdbeben" => "quakes",
+                "storms" | "hurricanes" | "stürme" => "storms",
+                "fires" | "wildfires" | "brände" => "fires",
+                "iss" | "space station" => "iss",
+                _ => return Some(earth("hide_layers")),
+            };
+            return Some(json!({ "view": "earth", "action": "hide_layer", "layer": layer }));
+        }
+        static BACK_TO_HOLO: LazyLock<Regex> = LazyLock::new(|| {
+            re(r"^(?:switch|change|flip)\s+(?:it\s+)?back$|^(?:switch|change|flip|turn|go)\s+(?:it\s+)?back\s+to\s+(?:the\s+)?(?:normal|default|blue|original|old|holo|holographic|hologram)\s*(?:view|mode|globe|look)?$|^(?:(?:switch|change|go|flip|turn)\s+(?:it\s+)?(?:to|into)\s+(?:the\s+)?)?(?:holo|holographic|hologram)\s*(?:view|mode|globe|map)?$|^(?:normal|default)\s+(?:view|mode|globe)$|^turn\s+off\s+(?:the\s+)?satellite(?:\s+(?:view|mode|imagery))?$")
+        });
+        if BACK_TO_HOLO.is_match(s) {
+            return Some(earth("show_holo"));
+        }
+    }
+
+    // ---- The Earth: satellite imagery, a place on it, its layers, the globe itself.
+    static SATELLITE: LazyLock<Regex> = LazyLock::new(|| {
+        re(concat!(
+            r"^(?:(?:switch|change|go|flip|turn|swap|put|set)\s+(?:it\s+|the\s+(?:globe|earth|map|view)\s+)?(?:over\s+)?(?:to|into|on|in)\s+(?:the\s+)?)?satellite\s+(?:view|mode|imagery|images|map|layer|photos?|pictures?)$",
+            r"|^(?:switch|change|go|flip|swap)\s+(?:it\s+)?(?:over\s+)?to\s+satellite$",
+            r"|^(?:show|show\s+me|use|give\s+me|turn\s+on)\s+(?:me\s+)?(?:the\s+)?(?:real\s+)?satellite\s+(?:view|imagery|images|map|photos?|pictures?)$",
+            r"|^(?:wechsel|wechsle|schalte?|geh|gehe)\s+(?:auf|in|zur|zu)\s+(?:die\s+)?(?:satellitenansicht|satellitenbild|satellitenmodus|satellitenbilder)(?:\s+um)?$|^satellitenansicht$",
+        ))
+    });
+    if SATELLITE.is_match(s) {
+        return Some(earth("show_satellite"));
+    }
+    static ON_GLOBE: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^(?:show|show\s+me|find|locate|point\s+(?:me\s+)?to|where\s+is|wheres|zeig|zeig\s+mir|zeige|zeige\s+mir|wo\s+ist|wo\s+liegt|finde)\s+(?:me\s+|mir\s+)?(.+?)\s+(?:on|auf)\s+(?:the|my|der|dem)\s+(?:globe|earth|world\s+map|erde|globus|weltkugel|weltkarte)$")
+    });
+    if let Some(c) = ON_GLOBE.captures(s) {
+        if !not_a_place(&c[1]) {
+            return Some(at(earth("show_place"), &c[1]));
+        }
+    }
+    static QUAKES: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^(?:(?:show|show\s+me|display|find|list|mark|plot|pull\s+up|bring\s+up|check|look\s+for|search\s+for|zeig|zeig\s+mir|zeige|zeige\s+mir|suche|such)\s+(?:me\s+|mir\s+)?(?:all\s+|for\s+)?(?:the\s+|die\s+|alle\s+|nach\s+)?|(?:are|were)\s+there\s+(?:any\s+)?|(?:have|has)\s+there\s+been\s+(?:any\s+|an?\s+)?|(?:is|was)\s+there\s+(?:an?\s+|any\s+)?|any\s+|(?:gab|gibt)\s+es\s+(?:hier\s+)?(?:ein\s+|irgendwelche\s+)?)?(?:recent\s+|latest\s+|live\s+|current\s+|new\s+|big\s+|major\s+|strong\s+|aktuelle\s+|neue\s+)?(?:earthquakes?|quakes?|seismic\s+activity|erdbeben)(.*)$")
+    });
+    if let Some(c) = QUAKES.captures(s) {
+        if let Some((place, radius)) = quake_area(&c[1]) {
+            let mut args = earth("show_quakes");
+            if let Some(place) = place {
+                args = at(args, &place);
+            }
+            if let Some(km) = radius {
+                args["radius_km"] = json!(km);
+            }
+            return Some(args);
+        }
+    }
+    static FLIGHTS: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^(?:(show|show\s+me|display|turn\s+on|enable|track|add|put\s+up|zeig|zeig\s+mir|zeige|zeige\s+mir)\s+(?:me\s+|mir\s+)?(?:all\s+)?(?:the\s+|die\s+|alle\s+)?)?(live\s+|current\s+|real[\s-]?time\s+)?(?:flights|planes|aircraft|airplanes|air\s+traffic|flight\s+traffic|flugzeuge|flüge|fluege|flugverkehr)(?:\s+(?:over|above|near|around|in|über|ueber|bei|um)\s+(.+))?$|^(?:what|which)\s+(?:planes|aircraft|flights)\s+are\s+(?:flying\s+|in\s+the\s+air\s+)?(?:over|above|near|around)\s+(.+)$|^(flight\s+tracker|flight\s+radar|flightradar)$")
+    });
+    if let Some(c) = FLIGHTS.captures(s) {
+        let place = c.get(3).or(c.get(4)).map(|m| m.as_str());
+        if c.get(1).is_some() || c.get(2).is_some() || c.get(5).is_some() || place.is_some() || up.earth {
+            return Some(match place.filter(|p| !not_a_place(p)) {
+                Some(place) => at(earth("show_flights"), place),
+                None => earth("show_flights"),
+            });
+        }
+    }
+    static NATURE: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^(?:(show|show\s+me|display|turn\s+on|enable|track|mark|zeig|zeig\s+mir|zeige|zeige\s+mir)\s+(?:me\s+|mir\s+)?(?:all\s+)?(?:the\s+|die\s+|alle\s+)?)?(?:active\s+|current\s+|live\s+|tropical\s+|aktuelle\s+|recent\s+)?(storms?|hurricanes?|typhoons?|cyclones?|tropical\s+storms?|stürme|stuerme|wirbelstürme|hurrikans?|wildfires?|fires|bushfires?|forest\s+fires?|waldbrände|waldbraende|brände|braende)(?:\s+(?:on\s+the\s+(?:globe|earth|map)|right\s+now|today))?$")
+    });
+    if let Some(c) = NATURE.captures(s) {
+        if c.get(1).is_some() || up.earth {
+            let fire = ["fire", "brände", "braende", "waldbr"].iter().any(|w| c[2].contains(w));
+            return Some(earth(if fire { "show_fires" } else { "show_storms" }));
+        }
+    }
+    static ISS: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^(?:show|show\s+me|where\s+is|wheres|track|find|locate|zeig|zeig\s+mir|zeige\s+mir|wo\s+ist)\s+(?:me\s+|mir\s+)?(?:the\s+|die\s+)?(?:iss|international\s+space\s+station|space\s+station|raumstation|internationale\s+raumstation)(?:\s+gerade)?$")
+    });
+    if ISS.is_match(s) {
+        return Some(earth("show_iss"));
+    }
+    static EARTH: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^(?:(?:show|show\s+me|open|open\s+up|pull\s+up|bring\s+up|display|give\s+me|launch|put\s+up|zeig|zeig\s+mir|zeige|zeige\s+mir|öffne|oeffne|hol)\s+(?:me\s+|mir\s+)?(?:the\s+|a\s+|my\s+|die\s+|den\s+|das\s+)?(?:whole\s+|entire\s+|ganze\s+|holographic\s+|holo\s+|3d\s+)?)?(?:earth|planet\s+earth|planet|globe|world|erde|weltkugel|globus|earth\s+view|globe\s+view|holo\s*globe)(?:\s+(?:in|im|as|with)\s+(?:the\s+)?(satellite(?:\s+view|\s+mode|\s+imagery)?|satellitenansicht))?$")
+    });
+    if let Some(c) = EARTH.captures(s) {
+        return Some(earth(if c.get(1).is_some() { "show_satellite" } else { "show" }));
+    }
+    if up.earth {
+        static FLY_TO: LazyLock<Regex> = LazyLock::new(|| {
+            re(r"^(?:fly|zoom|go|take\s+me|bring\s+me|move|jump|travel|head|pan|navigate)\s+(?:(?:over|in|back|down|right)\s+)?(?:to|into|on|onto|towards?|over)\s+(.+)$|^(?:center|centre|focus)\s+(?:the\s+(?:globe|earth|map|view|camera)\s+)?(?:on|onto)\s+(.+)$|^(?:flieg|fliege|zoom|zoome|geh|gehe|spring|springe)\s+(?:nach|zu|zum|zur|auf|über|ueber)\s+(.+)$")
+        });
+        if let Some(c) = FLY_TO.captures(s) {
+            let place = c.get(1).or(c.get(2)).or(c.get(3))?.as_str();
+            if !not_a_place(place) {
+                return Some(at(earth("show_place"), place));
+            }
+        }
+    }
+
+    // ---- The network radar.
+    static SECURE: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^(?:is|are)\s+(?:my|the|our)\s+(?:home\s+)?(?:network|wifi|wi-fi|wlan|lan)\s+(?:secure|safe)$|^(?:is|are)\s+there\s+(?:any\s+)?(?:unknown|strange|suspicious|unrecogni[sz]ed|foreign)\s+devices\s+(?:on|in)\s+(?:my|the|our)\s+(?:network|wifi|wi-fi|wlan|lan)$|^ist\s+(?:mein|das|unser)\s+(?:netzwerk|wlan|heimnetz)\s+sicher$")
+    });
+    // ("Is there any security problem?" right after a sweep: the radar on screen is meant.)
+    static SECURE_AFTER: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^(?:is|are)\s+(?:there|it)\s+(?:any\s+)?(?:security\s+(?:problems?|issues?|risks?|threats?|holes?)|unknown\s+devices|strangers|intruders)$|^(?:any\s+)?(?:security\s+(?:problems?|issues?|risks?)|unknown\s+devices|intruders)$|^is\s+(?:it|everything|all\s+that)\s+(?:secure|safe)$|^(?:gibt\s+es|gibts)\s+(?:ein\s+|irgendwelche\s+)?(?:sicherheitsprobleme?|sicherheitsrisiken|unbekannte\s+geräte|unbekannte\s+geraete)$")
+    });
+    if SECURE.is_match(s) || (up.radar && SECURE_AFTER.is_match(s)) {
+        return Some(view("network_radar", "check_security"));
+    }
+    static RADAR: LazyLock<Regex> = LazyLock::new(|| {
+        re(concat!(
+            // "Check the network", "scan my home network", "sweep the LAN".
+            r"^(?:check|scan|sweep|map|radar|analy[sz]e|inspect|survey)\s+(?:my\s+|the\s+|our\s+)?(?:home\s+|local\s+|whole\s+|entire\s+)?(?:network|lan)(?:\s+(?:for\s+devices|devices|again))?$",
+            // "Scan my wifi" (checking it is the connection's: `NETWORK`).
+            r"|^(?:scan|sweep|map)\s+(?:my\s+|the\s+|our\s+)?(?:wifi|wi-fi|wlan)(?:\s+for\s+devices)?$",
+            // "Who is on my network?", "what devices are connected to my wifi?".
+            r"|^(?:who|whos|what|whats|which|how\s+many)\s+(?:devices?\s+|else\s+|other\s+devices\s+)?(?:is\s+|are\s+|s\s+)?(?:connected\s+to|on|in)\s+(?:my|the|our)\s+(?:home\s+)?(?:network|wifi|wi-fi|wlan|lan)$",
+            // "Show me the devices on my network".
+            r"|^(?:show|show\s+me|list|find|give\s+me)\s+(?:me\s+)?(?:all\s+)?(?:the\s+)?(?:devices|gadgets)\s+(?:on|in|connected\s+to)\s+(?:my|the|our)\s+(?:home\s+)?(?:network|wifi|wi-fi|wlan|lan)$",
+            // "Open the network radar", "radar".
+            r"|^(?:(?:open|open\s+up|show|show\s+me|pull\s+up|bring\s+up|display|launch|start|run|zeig|zeig\s+mir|zeige|zeige\s+mir|öffne|oeffne|starte)\s+(?:me\s+|mir\s+)?(?:the\s+|my\s+|das\s+|den\s+)?)?(?:network\s+radar|radar|netzwerkradar|netzwerk\s+radar|network\s+map|netzwerkkarte)$",
+            // German: "scanne mein Netzwerk", "Netzwerk prüfen", "wer ist in meinem WLAN?".
+            r"|^(?:scanne|scann|prüfe|prüf|pruefe|überprüfe|ueberpruefe|checke|durchsuche|analysiere)\s+(?:mein\s+|meine\s+|das\s+|unser\s+|unsere\s+)?(?:netzwerk|wlan|lan|heimnetz|heimnetzwerk)$",
+            r"|^(?:netzwerk|wlan|heimnetz|heimnetzwerk)\s+(?:scannen|prüfen|pruefen|checken|überprüfen|ueberpruefen|analysieren)$",
+            r"|^(?:wer|welche\s+geräte|welche\s+geraete|wie\s+viele\s+geräte|wie\s+viele\s+geraete)\s+(?:ist|sind)\s+(?:alles\s+|gerade\s+)?(?:in|im|mit)\s+(?:meinem\s+|unserem\s+|dem\s+)?(?:netzwerk|wlan|heimnetz|heimnetzwerk)(?:\s+verbunden)?$",
+        ))
+    });
+    if RADAR.is_match(s) {
+        return Some(view("network_radar", "show"));
+    }
+
+    // ---- A second sweep or scan of whichever is up ("rescan", "scan again").
+    static RESCAN: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^(?:rescan|re-scan|re\s+scan|scan\s+(?:it\s+)?again|sweep\s+again|run\s+(?:the\s+)?(?:scan|sweep|radar)\s+again|(?:nochmal|noch\s+mal|neu|erneut)\s+scannen|(?:rescan|refresh|redo)\s+(?:the\s+|my\s+)?(network|radar|lan|wifi|disk|drive|disk\s+map|storage|scan|sweep))(?:\s+(?:the\s+|my\s+)?(network|radar|lan|wifi|disk|drive|disk\s+map|storage))?$")
+    });
+    if let Some(c) = RESCAN.captures(s) {
+        let object = c.get(1).or(c.get(2)).map_or("", |m| m.as_str());
+        let disk = matches!(object, "disk" | "drive" | "disk map" | "storage");
+        let radar = matches!(object, "network" | "radar" | "lan" | "wifi");
+        if disk || (!radar && up.disk && !up.radar) {
+            return Some(view("disk_map", "rescan"));
+        }
+        if radar || up.radar {
+            return Some(view("network_radar", "rescan"));
+        }
+    }
+
+    // ---- The disk map.
+    static DISK_MAP: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^(?:(?:open|open\s+up|show|show\s+me|pull\s+up|bring\s+up|display|launch|start|give\s+me|zeig|zeig\s+mir|zeige|zeige\s+mir|öffne|oeffne)\s+(?:me\s+|mir\s+)?(?:the\s+|my\s+|a\s+|die\s+|meine\s+)?)?(?:disk|drive|storage|space|festplatten|laufwerks)[\s-]*(?:map|tree\s*map|karte)(?:\s+(?:of|for|von)\s+(.+))?$|^tree\s*map$")
+    });
+    if let Some(c) = DISK_MAP.captures(s) {
+        let mut args = view("disk_map", "show");
+        if let Some(path) = c.get(1).and_then(|m| disk_path(m.as_str())) {
+            args["path"] = json!(path);
+        }
+        return Some(args);
+    }
+    static SPACE_HOG: LazyLock<Regex> = LazyLock::new(|| {
+        re(concat!(
+            r"^(?:what|whats|which\s+(?:files|folders|programs|apps)|what\s+(?:files|folders|programs|apps))\s+(?:is\s+|are\s+|s\s+)?(?:taking|eating|using|filling|hogging|wasting|occupying|clogging|chewing)\s+(?:up\s+)?(.+)$",
+            r"|^where\s+(?:has|did|is|does|have)\s+(?:all\s+)?(?:of\s+)?(?:my|the)\s+(.+?)\s+(?:gone|go|going|went)$",
+            r"|^why\s+is\s+(?:my|the)\s+(.+?)\s+(?:so\s+|almost\s+|nearly\s+|completely\s+)?full$",
+            r"|^(?:my|the)\s+(.+?)\s+is\s+(?:so\s+|almost\s+|nearly\s+|completely\s+|totally\s+)?full$",
+            r"|^(?:how\s+(?:can|do|could)\s+i|help\s+me)\s+(?:to\s+)?(?:free|clear|make)\s+(?:up\s+)?(?:some\s+)?(.+)$",
+            r"|^(?:map|analy[sz]e|visuali[sz]e)\s+(?:my\s+|the\s+)?(.+)$",
+            r"|^(?:analysiere|visualisiere)\s+(?:meine\s+|die\s+|mein\s+|das\s+)?(.+)$",
+            r"|^was\s+(?:belegt|frisst|verbraucht|nimmt|füllt|fuellt|blockiert)\s+(.+)$",
+            r"|^wo\s+ist\s+(?:mein|der|meine|die)\s+(?:ganzer\s+|ganze\s+)?(.+?)\s+(?:hin|geblieben)$",
+            r"|^warum\s+ist\s+(?:meine|die|mein|das)\s+(.+?)\s+(?:so\s+|fast\s+)?voll$",
+        ))
+    });
+    if let Some(c) = SPACE_HOG.captures(s) {
+        let tail = c.iter().skip(1).flatten().next()?.as_str();
+        // "What is using my disk?" is the disk's activity (Task Manager's 100 %), not its space.
+        static SPACE_WORD: LazyLock<Regex> = LazyLock::new(|| re(r"\b(?:space|storage|room|platz|speicherplatz)\b"));
+        let activity = s.contains(" using ") && !SPACE_WORD.is_match(tail);
+        if names_storage(tail) && !activity {
+            let mut args = view("disk_map", "show");
+            if let Some(path) = disk_path(tail) {
+                args["path"] = json!(path);
+            }
+            return Some(args);
+        }
+    }
+    None
+}
+
+/// A place on the Earth, or something else that follows "go to" ("page two", "sleep", "Discord").
+fn not_a_place(place: &str) -> bool {
+    static NOT: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^(?:page|seite|result|tab|slide|step|sleep|bed|standby|desktop|monitor|screen|bildschirm|settings|einstellungen|next|previous|last|first|top|bottom|end|start|beginning|full\s*screen|fullscreen|orb|board|chat|console|it|that|this|there|my\s+(?:desktop|screen|monitor|settings|files?|folder|documents|downloads)|the\s+(?:next|previous|last|first|top|bottom|end|start|beginning|board|chat|orb|console|settings|page|tab|desktop|screen|monitor)\b|\d)")
+    });
+    let p = place.trim();
+    p.is_empty() || p.split_whitespace().count() > 6 || NOT.is_match(p) || known_app(p)
+}
+
+/// The place as Sir said it ("tokyo" in his words as "Tokyo"); "this area" and "here" are the
+/// point in view, "me" is where he is.
+fn spoken_place(text: &str, place: &str) -> String {
+    let p = place.trim();
+    let p = p.strip_prefix("the ").unwrap_or(p).trim();
+    match p {
+        "this area" | "area" | "this region" | "region" | "here" | "around here" | "nearby" | "this place" | "there" | "that area" | "that place" | "this spot"
+        | "dieser gegend" | "der gegend" | "hier" | "dieser region" => "here".to_string(),
+        "me" | "my area" | "my location" | "where i am" | "my city" | "my town" | "my place" | "mir" | "meiner nähe" | "meiner naehe" => "my location".to_string(),
+        _ => {
+            let cased = original_case(text, p);
+            if cased.chars().next().is_some_and(char::is_lowercase) {
+                // Whisper writes "new york" in lower case at times.
+                cased
+                    .split(' ')
+                    .map(|w| {
+                        let mut letters = w.chars();
+                        letters.next().map_or_else(String::new, |first| first.to_uppercase().chain(letters).collect())
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            } else {
+                cased
+            }
+        }
+    }
+}
+
+/// What follows "earthquakes": nothing, a time ("recently"), a place ("in this area", "near
+/// Tokyo") or a radius ("within 300 km of Berlin"). None: it was about something else
+/// ("earthquake safety tips").
+fn quake_area(tail: &str) -> Option<(Option<String>, Option<f64>)> {
+    static HAPPENED: LazyLock<Regex> = LazyLock::new(|| re(r"^\s*(?:that|which)\s+(?:have\s+|had\s+)?(?:happened|occurred|hit|struck|were)\b"));
+    static WHEN: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"\s*\b(?:recently|lately|today|yesterday|this\s+week|this\s+month|in\s+the\s+(?:last|past)\s+(?:\w+\s+)?(?:days?|weeks?|hours?|months?)|heute|gestern|kürzlich|diese\s+woche)\s*$")
+    });
+    static RADIUS: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"\s*\b(?:within|in\s+a|in\s+einem\s+umkreis\s+von)\s+(\d{1,5})\s*(km|kilometers?|kilometres?|kilometer|miles?|mi)(?:\s+radius)?(?:\s+(?:of|from|around|um))?")
+    });
+    static WHERE: LazyLock<Regex> = LazyLock::new(|| re(r"^\s*(?:in|near|around|at|close\s+to|by|bei|um|nahe|in\s+der\s+nähe\s+von|rund\s+um)\s+(.+)$"));
+    let mut t = HAPPENED.replace(tail, "").to_string();
+    t = WHEN.replace(&t, "").to_string();
+    let mut radius = None;
+    if let Some(c) = RADIUS.captures(&t) {
+        let n: f64 = c[1].parse().ok()?;
+        radius = Some(if c[2].starts_with('m') { (n * 1.609).round() } else { n });
+        let whole = c.get(0)?.range();
+        let rest = t[whole.end..].trim().to_string();
+        t = if rest.is_empty() { t[..whole.start].to_string() } else { format!("{} in {rest}", &t[..whole.start]) };
+    }
+    let t = t.trim();
+    if t.is_empty() {
+        return Some((None, radius));
+    }
+    let place = WHERE.captures(t)?.get(1)?.as_str().trim().to_string();
+    let place = WHEN.replace(&place, "").trim().to_string();
+    if place.is_empty() || place.split_whitespace().count() > 6 {
+        return None;
+    }
+    Some((Some(place), radius))
+}
+
+/// The tail names a disk, a drive or a folder ("my D drive", "all my space", "my downloads
+/// folder"), not memory, time or the network ("analyse my desktop" is the screen's).
+fn names_storage(tail: &str) -> bool {
+    static STORAGE: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"\b(?:space|storage|disk|disks|drive|drives|ssd|hdd|hard\s+drive|hard\s+disk|festplatte|speicherplatz|platz|laufwerk|partition|folder|ordner)\b")
+    });
+    static OTHER: LazyLock<Regex> = LazyLock::new(|| re(r"\b(?:ram|memory|arbeitsspeicher|cpu|gpu|vram|bandwidth|internet|network|netzwerk|time|zeit|calendar|schedule|day|tag|screen|bildschirm|monitor)\b"));
+    tail.split_whitespace().count() <= 9 && STORAGE.is_match(tail) && !OTHER.is_match(tail)
+}
+
+/// The drive or folder a sentence names: "my D drive" → `D:\`, "on E" → `E:\`, "my downloads"
+/// → `Downloads` (the disk map finds his known folders by name).
+fn disk_path(s: &str) -> Option<String> {
+    static LETTER: LazyLock<Regex> = LazyLock::new(|| re(r"\b([b-z])\s+(?:drive|laufwerk|partition)\b|\b(?:drive|laufwerk|partition)\s+([b-z])\b|\b(?:on|in|auf)\s+([b-z])$"));
+    if let Some(c) = LETTER.captures(s) {
+        let letter = c.iter().skip(1).flatten().next()?.as_str().to_ascii_uppercase();
+        return Some(format!("{letter}:\\"));
+    }
+    static FOLDER: LazyLock<Regex> = LazyLock::new(|| re(r"\b(downloads|documents|desktop|videos|pictures|music|appdata|temp)\b"));
+    let c = FOLDER.captures(s)?;
+    let mut letters = c[1].chars();
+    letters.next().map(|first| first.to_uppercase().chain(letters).collect())
+}
 
 /// The Jarvis view a phrase names (`opening`: Sir wants a window, not a reading in the chat).
 fn view_named(object: &str, opening: bool) -> Option<&'static str> {
@@ -3723,6 +4106,11 @@ pub fn parse(text: &str) -> Option<Intent> {
     if let Some(intent) = outing_command(text) {
         return Some(intent);
     }
+    // The network radar, the disk map and the Earth ("check the network", "what is taking up
+    // space", "show me the earth", "switch to satellite view"), before the readings and the board.
+    if let Some(args) = panel_request(text) {
+        return tool("open_jarvis_view", args);
+    }
     // The state of his machine is a reading, not a topic for the board to research ("give me a
     // system report", "show me my RAM usage", "how hot is my GPU").
     if STATUS.is_match(&s) {
@@ -4457,7 +4845,16 @@ mod board_tests {
             assert!(matches!(parse(text), Some(Intent::Silent(SilentAction { tool: "hud_board", .. }))), "never close_application: {text}");
         }
         // One of Jarvis' own blocks by name: that block closes, the board stays.
-        for (text, target) in [("Close the feature lab", "feature lab"), ("Close telemetry", "telemetry"), ("Hide the feature lab window", "feature lab"), ("Close the theme studio", "theme studio")] {
+        for (text, target) in [
+            ("Close the feature lab", "feature lab"),
+            ("Close telemetry", "telemetry"),
+            ("Hide the feature lab window", "feature lab"),
+            ("Close the theme studio", "theme studio"),
+            ("Close the globe", "globe"),
+            ("Close the network radar", "network radar"),
+            ("Close the disk map", "disk map"),
+            ("Schließe die Erde", "erde"),
+        ] {
             assert_eq!(board(text, true, false), Some(json!({"action": "close", "target": target})), "{text}");
             assert!(matches!(parse(text), Some(Intent::Silent(SilentAction { tool: "hud_board", .. }))), "never close_application: {text}");
         }
@@ -5513,6 +5910,105 @@ mod tests {
         assert_eq!(tool("Open message from stats please.").map(|(n, _)| n), Some("open_jarvis_view"));
         assert_eq!(strip_article("discord for me"), "discord");
         assert_eq!(strip_article("chrome on my pc"), "chrome");
+    }
+
+    #[test]
+    fn panels_from_the_reference_videos() {
+        let none = PanelsUp::default();
+        let earth_up = PanelsUp { earth: true, ..PanelsUp::default() };
+        let radar_up = PanelsUp { radar: true, ..PanelsUp::default() };
+        let disk_up = PanelsUp { disk: true, ..PanelsUp::default() };
+        let act = |text: &str, up: PanelsUp| panel_command(text, up).map(|a| (a["view"].as_str().unwrap_or_default().to_string(), a["action"].as_str().unwrap_or_default().to_string()));
+        let is = |text: &str, up: PanelsUp, view: &str, action: &str| assert_eq!(act(text, up), Some((view.to_string(), action.to_string())), "{text}");
+        // Video 1: the network radar.
+        for text in [
+            "Hey Jarvis, check check the network.",
+            "Check the network",
+            "scan my network",
+            "Scan my home network for devices",
+            "Who's on my wifi?",
+            "What devices are connected to my network?",
+            "How many devices are on my network?",
+            "Open the network radar",
+            "Show me the devices on my network",
+            "Scanne mein Netzwerk",
+            "Netzwerk prüfen",
+            "Wer ist in meinem WLAN?",
+        ] {
+            is(text, none, "network_radar", "show");
+        }
+        is("Is my network secure?", none, "network_radar", "check_security");
+        is("Is there any security problem?", radar_up, "network_radar", "check_security");
+        assert_eq!(act("Is there any security problem?", none), None, "no radar up: about something else");
+        is("Rescan", radar_up, "network_radar", "rescan");
+        is("scan again", disk_up, "disk_map", "rescan");
+        // Video 3: the disk map.
+        for text in [
+            "What is taking up space?",
+            "What's taking up all my disk space on my computer?",
+            "Where did all my space go?",
+            "Why is my C drive so full?",
+            "Show me the disk map",
+            "How can I free up some space?",
+            "Was frisst meinen Speicherplatz?",
+        ] {
+            is(text, none, "disk_map", "show");
+        }
+        assert_eq!(panel_command("Map my D drive", none).unwrap()["path"], "D:\\");
+        assert_eq!(panel_command("What's taking up space on my E drive?", none).unwrap()["path"], "E:\\");
+        // Video 4: the Earth.
+        for text in ["Show me the earth", "Show me the globe.", "Zeig mir die Erde", "Open the globe"] {
+            is(text, none, "earth", "show");
+        }
+        is("Switch to the satellite view.", none, "earth", "show_satellite");
+        is("Switch to satellite view", earth_up, "earth", "show_satellite");
+        is("Switch back to the holographic view", earth_up, "earth", "show_holo");
+        let quakes = panel_command("And also Jarvis, show the earthquakes that happened in this area", earth_up).unwrap();
+        assert_eq!((quakes["action"].as_str(), quakes["place"].as_str()), (Some("show_quakes"), Some("here")));
+        let quakes = panel_command("Were there any earthquakes near Tokyo recently?", none).unwrap();
+        assert_eq!((quakes["action"].as_str(), quakes["place"].as_str()), (Some("show_quakes"), Some("Tokyo")));
+        let quakes = panel_command("show me earthquakes within 300 km of Naples", none).unwrap();
+        assert_eq!((quakes["place"].as_str(), quakes["radius_km"].as_f64()), (Some("Naples"), Some(300.0)));
+        assert_eq!(panel_command("any earthquakes within 200 km", none).unwrap()["radius_km"], 200.0);
+        let fly = panel_command("Fly to New York", earth_up).unwrap();
+        assert_eq!((fly["action"].as_str(), fly["place"].as_str()), (Some("show_place"), Some("New York")));
+        assert_eq!(panel_command("fly to new york", earth_up).unwrap()["place"], "New York");
+        assert_eq!(panel_command("Show me Paris on the globe", none).unwrap()["place"], "Paris");
+        let flights = panel_command("Show me the flights over New York", none).unwrap();
+        assert_eq!((flights["action"].as_str(), flights["place"].as_str()), (Some("show_flights"), Some("New York")));
+        is("Where is the ISS?", none, "earth", "show_iss");
+        is("Show me the storms", none, "earth", "show_storms");
+        is("zoom in", earth_up, "earth", "zoom_in");
+        assert_eq!(panel_command("hide the flights", earth_up).unwrap()["layer"], "flights");
+        assert_eq!(panel_command("Show me the earth in a new window", none).unwrap()["separate_window"], true);
+        // Follow-ups only while their panel is up, and nobody else's words.
+        for (text, up) in [
+            ("zoom in", none),
+            ("go to page 2", earth_up),
+            ("go to sleep", earth_up),
+            ("fly to Tokyo", none),
+            ("switch back", none),
+            ("open Discord", earth_up),
+            ("What is using my disk?", none),
+            ("What is using all my memory?", none),
+            ("Analyse my desktop", none),
+            ("Tell me about the earthquake in Turkey", none),
+            ("earthquake safety tips", none),
+            ("show me flights to Berlin", none),
+            ("Check my internet connection", none),
+            ("How much space do I have left?", none),
+            ("Diagnose my network", none),
+            ("make the globe bigger", none),
+            ("Rescan", none),
+            ("What is an earthquake?", none),
+        ] {
+            assert_eq!(panel_command(text, up), None, "{text}");
+        }
+        // Through the parser and the view command alike; a question only looks.
+        assert_eq!(tool("Check the network").map(|(n, _)| n), Some("open_jarvis_view"));
+        assert_eq!(internal_view_command("What is taking up space?").unwrap()["view"], "disk_map");
+        let asked = panel_command("Who is on my network?", none).unwrap();
+        assert!(!beyond_the_question("Who is on my network?", "open_jarvis_view", &asked));
     }
 
     #[test]

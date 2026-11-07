@@ -417,7 +417,14 @@ pub fn closing_progress(id: &str) -> Option<f32> {
 pub fn id_prefix_for(name: &str) -> Option<&'static str> {
     let n = name.to_lowercase();
     let has = |words: &[&str]| words.iter().any(|w| n.contains(w));
-    Some(if has(&["telemetry", "stats", "system", "vram", "cpu", "gpu"]) {
+    // (The Earth's "satellite view" before the phone's satellite link.)
+    Some(if has(&["earth", "globe", "world map", "erde", "globus", "satellite view", "satellite map"]) {
+        "earth"
+    } else if has(&["radar", "network", "netzwerk"]) {
+        "network_radar"
+    } else if has(&["disk map", "drive map", "storage map", "disk", "drive"]) {
+        "disk_map"
+    } else if has(&["telemetry", "stats", "system", "vram", "cpu", "gpu"]) {
         "system_telemetry"
     } else if has(&["schedule", "calendar", "kalender", "webuntis", "timetable", "stundenplan"]) {
         "schedule"

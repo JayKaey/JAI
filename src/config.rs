@@ -897,9 +897,10 @@ impl JarvisConfig {
     }
 
     /// Atomic write: temp file + rename, so a crash never leaves a half-written config. In a
-    /// read-only run (`set_read_only`) nothing is written.
+    /// read-only run (`set_read_only`) nothing is written, and the unit tests never write Sir's
+    /// settings file at all.
     pub fn save(&self) -> std::io::Result<()> {
-        if READ_ONLY.load(std::sync::atomic::Ordering::Acquire) {
+        if READ_ONLY.load(std::sync::atomic::Ordering::Acquire) || cfg!(test) {
             return Ok(());
         }
         let json = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;

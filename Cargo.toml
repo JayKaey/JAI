@@ -118,6 +118,10 @@ windows = { version = "0.54", features = [
     "Win32_Media_Audio_Endpoints",
     # The HUD's CAMERA block: webcam frames through Media Foundation's source reader.
     "Win32_Media_MediaFoundation",
+    # The NETWORK RADAR: ICMP echo, the ARP/neighbour table and the adapters (IP Helper).
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_NetworkManagement_Ndis",
+    "Win32_Networking_WinSock",
     "Win32_Security",
     "Win32_Storage_FileSystem",
     "Win32_System_Com",

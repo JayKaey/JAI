@@ -275,6 +275,11 @@ pub fn route_text(text: &str) -> Option<Route> {
     if ws.is_empty() || ws.len() > 40 {
         return None;
     }
+    // The network radar, the disk map and the Earth are panels of Jarvis' own ("check the
+    // network" sweeps it on the radar now, "scan my wifi" too): `intents::panel_request`.
+    if crate::intents::panel_request(text).is_some() {
+        return None;
+    }
     let lead = lower.trim_start_matches("jarvis").trim_start_matches([',', ' ']).trim_start_matches("please ").trim();
 
     // ---- The workbench first: "quiz me on my flashcards" is the deck, not an oral exam ----
@@ -736,7 +741,11 @@ mod tests {
         assert_eq!(route_text("save the last 30 seconds").unwrap().args["seconds"], 30);
         assert_eq!(tool("quiz me on the french revolution"), Some("start_oral_exam_session"));
         assert_eq!(tool("why is my ping so high"), Some("diagnose_network_and_ping"));
-        assert_eq!(route_text("scan my network").unwrap().args["action"], "scan_lan");
+        assert_eq!(route_text("lan scan").unwrap().args["action"], "scan_lan");
+        // The radar's now (`intents::panel_request`).
+        for text in ["scan my network", "Hey Jarvis, check the network.", "Who's on my wifi?"] {
+            assert!(route_text(text).is_none(), "{text}");
+        }
         let net = route_text("Diagnose my network").unwrap();
         assert_eq!((net.tool, net.args["action"].as_str()), ("diagnose_network_and_ping", Some("full")));
         assert_eq!(route_text("clip it").unwrap().tool, "save_instant_replay");

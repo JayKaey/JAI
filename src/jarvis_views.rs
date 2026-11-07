@@ -26,6 +26,13 @@ pub enum JarvisSubWindow {
     WorkoutAndFinance,
     /// Saved contacts.
     Contacts,
+    /// The home network swept as a radar: devices by how fast they answer, the adapters, the
+    /// latency to the router and the internet.
+    NetworkRadar,
+    /// A drive scanned live into a treemap: what takes the space, by folder and by file type.
+    DiskMap,
+    /// A holographic globe with earthquakes, storms, a satellite and flights.
+    Earth,
 }
 
 impl JarvisSubWindow {
@@ -37,6 +44,9 @@ impl JarvisSubWindow {
             Self::MobileSatelliteQr => "mobile_qr",
             Self::WorkoutAndFinance => "workout_finance",
             Self::Contacts => "contacts",
+            Self::NetworkRadar => "network_radar",
+            Self::DiskMap => "disk_map",
+            Self::Earth => "earth",
         }
     }
 
@@ -45,7 +55,14 @@ impl JarvisSubWindow {
         let n = name.trim().to_lowercase().replace(['-', '_'], " ");
         let n = n.trim_start_matches("the ").trim_start_matches("my ").trim();
         let has = |words: &[&str]| words.iter().any(|w| n.contains(w));
-        Some(if has(&["system", "stats", "statistic", "telemetry", "telemetrie", "performance", "hardware", "pc status", "cpu", "gpu", "monitoring"]) {
+        // (The Earth's "satellite view" before the phone's satellite link.)
+        Some(if has(&["earth", "globe", "globus", "erde", "weltkugel", "world map", "weltkarte", "satellite view", "satellite map", "satellite imagery", "satellitenansicht", "satellitenbild"]) {
+            Self::Earth
+        } else if has(&["radar", "network", "netzwerk", "lan scan"]) {
+            Self::NetworkRadar
+        } else if has(&["disk map", "drive map", "storage map", "space map", "disk usage", "treemap", "speicherkarte", "festplattenkarte"]) {
+            Self::DiskMap
+        } else if has(&["system", "stats", "statistic", "telemetry", "telemetrie", "performance", "hardware", "pc status", "cpu", "gpu", "monitoring"]) {
             Self::SystemStatsMonitor
         } else if has(&["schedule", "calendar", "kalender", "webuntis", "timetable", "stundenplan", "agenda", "termine"]) {
             Self::ScheduleAndCalendar
@@ -70,6 +87,9 @@ impl JarvisSubWindow {
             Self::MobileSatelliteQr => "J.A.R.V.I.S. // MOBILE SATELLITE",
             Self::WorkoutAndFinance => "J.A.R.V.I.S. // FINANCE TRACKER",
             Self::Contacts => "J.A.R.V.I.S. // CONTACTS",
+            Self::NetworkRadar => "J.A.R.V.I.S. // NETWORK RADAR",
+            Self::DiskMap => "J.A.R.V.I.S. // DISK MAP",
+            Self::Earth => "J.A.R.V.I.S. // EARTH",
         }
     }
 }
@@ -136,12 +156,24 @@ fn placed(args: &Value) -> String {
 /// "Spoken:" line.
 pub async fn run(ctx: &ToolContext, args: &Value) -> Result<String, String> {
     let raw = str_arg(args, &["view", "window_kind", "name", "target"]).unwrap_or("system stats");
-    let view = JarvisSubWindow::parse(raw).ok_or_else(|| format!("'{raw}' is not one of my views (system stats, schedule, simulation lab, mobile QR, gym and finances, contacts)."))?;
+    let view = JarvisSubWindow::parse(raw)
+        .ok_or_else(|| format!("'{raw}' is not one of my views (system stats, schedule, simulation lab, mobile QR, gym and finances, contacts, network radar, disk map, earth)."))?;
     if !crate::gui::windows_supported() {
         return Err("Jarvis is running without a display (headless), so he cannot open windows.".into());
     }
     let on = placed(args);
     match view {
+        // The panels with their own state and actions (sweep, scan, globe): theirs to carry out.
+        JarvisSubWindow::NetworkRadar | JarvisSubWindow::DiskMap | JarvisSubWindow::Earth => {
+            if separate(args) {
+                crate::hud_dock::detach(view.id());
+            }
+            match view {
+                JarvisSubWindow::NetworkRadar => crate::network_radar::run(args).await,
+                JarvisSubWindow::DiskMap => crate::disk_map::run(args).await,
+                _ => crate::earth::run(args).await,
+            }
+        }
         JarvisSubWindow::SystemStatsMonitor => {
             let mut spec = json!({
                 "id": "system_telemetry",
@@ -231,12 +263,53 @@ pub async fn run(ctx: &ToolContext, args: &Value) -> Result<String, String> {
     }
 }
 
+/// The panels that carry their own state (network radar, disk map, Earth): id, title, whether it
+/// is open, and how it closes.
+const PANELS: [(&str, &str, fn() -> bool, fn()); 3] = [
+    ("network_radar", "Network radar", crate::network_radar::is_open, crate::network_radar::close),
+    ("disk_map", "Disk map", crate::disk_map::is_open, crate::disk_map::close),
+    ("earth", "Earth", crate::earth::is_open, crate::earth::close),
+];
+
+/// "Close the globe" while the Earth has its own OS window (an in-app block fades out through
+/// `hud_dock::close_named` instead): the panel the name means closes; its title, if one did.
+pub fn close_panel(name: &str) -> Option<&'static str> {
+    let prefix = crate::hud_dock::id_prefix_for(name)?;
+    let (_, title, open, close) = PANELS.iter().find(|(id, ..)| *id == prefix)?;
+    open().then(|| {
+        close();
+        crate::gui::refresh();
+        *title
+    })
+}
+
+/// "Close the windows you opened": the panels in their own OS windows close (the in-app ones
+/// fade out with the other blocks). How many closed.
+pub fn close_detached_panels() -> usize {
+    let mut closed = 0;
+    for (id, _, open, close) in PANELS {
+        if open() && crate::hud_dock::is_detached(id) {
+            close();
+            closed += 1;
+        }
+    }
+    if closed > 0 {
+        crate::gui::refresh();
+    }
+    closed
+}
+
 pub fn tool_definition() -> Value {
     json!({"type": "function", "function": {
         "name": "open_jarvis_view",
-        "description": "Open one of YOUR OWN views as a separate, movable native window (never an installed program): system stats / telemetry / system monitor, schedule (WebUntis timetable + calendar), simulation lab, mobile QR code, gym & finance tracker, contacts. \"Open my system stats in a new window\" → view system_stats.",
+        "description": "Open one of YOUR OWN views as a separate, movable native window (never an installed program): system stats / telemetry / system monitor, schedule (WebUntis timetable + calendar), simulation lab, mobile QR code, gym & finance tracker, contacts, network radar (\"check the network\", \"who is on my network\"), disk map (\"what is taking up space\"), earth (globe with earthquakes, storms, satellites, flights; satellite view). \"Open my system stats in a new window\" → view system_stats.",
         "parameters": {"type": "object", "properties": {
-            "view": {"type": "string", "enum": ["system_stats", "schedule", "simulation_lab", "mobile_qr", "workout_finance", "contacts"]},
+            "view": {"type": "string", "enum": ["system_stats", "schedule", "simulation_lab", "mobile_qr", "workout_finance", "contacts", "network_radar", "disk_map", "earth"]},
+            "action": {"type": "string", "description": "network_radar: show (sweep the network), rescan, check_security. disk_map: show (scan path), rescan, back. earth: show, show_satellite, show_holo, show_place (needs place), show_quakes (place, radius_km), show_flights (place), show_storms, show_fires, show_iss, hide_layer (layer), hide_layers, zoom_in, zoom_out, home, spin."},
+            "layer": {"type": "string", "description": "earth, hide_layer: quakes, flights, storms, fires, iss"},
+            "path": {"type": "string", "description": "disk_map: the drive or folder to map, e.g. C:\\ or D:\\Games"},
+            "place": {"type": "string", "description": "earth: where to fly to or search around (city, country, landmark; \"here\" = the point in view)"},
+            "radius_km": {"type": "number", "description": "earth: radius of an area search (default 500)"},
             "monitor": {"type": "string", "description": "1 = primary, 2 = second …, left, right"}
         }, "required": ["view"]}
     }})
@@ -260,6 +333,14 @@ mod tests {
             ("gym logs", JarvisSubWindow::WorkoutAndFinance),
             ("finance tracker", JarvisSubWindow::WorkoutAndFinance),
             ("contacts", JarvisSubWindow::Contacts),
+            ("network_radar", JarvisSubWindow::NetworkRadar),
+            ("the network radar", JarvisSubWindow::NetworkRadar),
+            ("disk_map", JarvisSubWindow::DiskMap),
+            ("drive map", JarvisSubWindow::DiskMap),
+            ("earth", JarvisSubWindow::Earth),
+            ("the globe", JarvisSubWindow::Earth),
+            ("satellite view", JarvisSubWindow::Earth),
+            ("satellite", JarvisSubWindow::MobileSatelliteQr),
         ] {
             assert_eq!(JarvisSubWindow::parse(name), Some(view), "{name}");
         }

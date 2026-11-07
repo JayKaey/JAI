@@ -223,14 +223,16 @@ pub fn close_secondary_windows(tools: &ToolContext) -> usize {
     let sims: Vec<String> = tools.stark.simlab.list().into_iter().map(|s| s.id).collect();
     let simulations = sims.iter().filter(|id| tools.stark.simlab.close(id)).count();
     let popups = crate::dynamic_popups::dismiss_all(true);
+    // The radar, the disk map and the Earth in their own OS windows.
+    let panels = crate::jarvis_views::close_detached_panels();
     tools.focus.forget_jarvis_window("all");
     crate::gui::refresh();
     info!(
-        "[WINDOWS] Closed {blocks} in-app block(s), {spatial} workspace, {native} native, {simulations} simulation window(s) and {popups} pop-up(s) in {:.2} ms",
+        "[WINDOWS] Closed {blocks} in-app block(s), {spatial} workspace, {native} native, {simulations} simulation window(s), {panels} panel window(s) and {popups} pop-up(s) in {:.2} ms",
         started.elapsed().as_secs_f64() * 1000.0
     );
     // Docked native windows and simulations are in-app blocks too: counted once.
-    blocks.max(native + simulations) + spatial + popups
+    blocks.max(native + simulations) + spatial + popups + panels
 }
 
 /// "Closed 3 window(s): a, b, c." → 3.
@@ -1217,6 +1219,9 @@ fn is_own_view(name: &str) -> bool {
         "feature lab" | "features" | "feature list" | "telemetry" | "system telemetry" | "system stats" | "pc stats" | "stats" | "theme studio" | "plotter" | "function plotter" | "simulation"
             | "simulation lab" | "sim lab" | "holomat" | "qr" | "qr code" | "phone qr" | "pairing" | "schedule" | "timetable" | "chronos" | "discord routing" | "audio routing"
             | "mixer" | "audio mixer" | "volume mixer" | "sound mixer"
+            // The panels from the reference videos.
+            | "radar" | "network radar" | "netzwerkradar" | "netzwerk radar" | "disk map" | "drive map" | "storage map" | "festplattenkarte" | "earth"
+            | "globe" | "world" | "world map" | "planet" | "earth view" | "satellite view" | "erde" | "globus" | "weltkugel"
     )
 }
 
