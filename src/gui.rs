@@ -5494,12 +5494,28 @@ struct FrameClock {
 
 static FRAME_CLOCK: Mutex<FrameClock> = Mutex::new(FrameClock { recent: std::collections::VecDeque::new(), last_slow: None, window: None });
 
-/// The HUD's own work per frame over its last frames: (frames, average ms, worst ms). None
-/// before the first frame.
-pub fn frame_times() -> Option<(usize, f64, f64)> {
-    let clock = lock(&FRAME_CLOCK);
-    let n = clock.recent.len();
-    (n > 0).then(|| (n, clock.recent.iter().map(|ms| *ms as f64).sum::<f64>() / n as f64, clock.recent.iter().copied().fold(0.0f32, f32::max) as f64))
+/// The HUD's own work per frame over its last frames: (frames, median ms, average ms, worst
+/// ms). None before the first frame.
+pub fn frame_times() -> Option<(usize, f64, f64, f64)> {
+    let costs: Vec<f64> = lock(&FRAME_CLOCK).recent.iter().map(|ms| *ms as f64).collect();
+    frame_summary(&costs).map(|(median, average, worst)| (costs.len(), median, average, worst))
+}
+
+/// Frame costs (ms) as the self-tests judge them: (median, average, worst). The median is what
+/// a frame costs the HUD: a frame's clock runs on while the scheduler gives the core to another
+/// program, which only ever adds (2026-11-08, beside Minecraft with the verifier below normal
+/// priority: the average rose from 0.7 to 5.8 ms and single frames to 25 ms, the HUD's work
+/// the same), and a HUD that is slow itself has a slow median too.
+pub fn frame_summary(costs: &[f64]) -> Option<(f64, f64, f64)> {
+    let mut sorted = costs.to_vec();
+    sorted.sort_by(f64::total_cmp);
+    let n = sorted.len();
+    let median = match n {
+        0 => return None,
+        n if n % 2 == 1 => sorted[n / 2],
+        n => (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0,
+    };
+    Some((median, costs.iter().sum::<f64>() / n as f64, sorted[n - 1]))
 }
 
 /// What Sir did with an in-app block this frame.
@@ -6324,6 +6340,22 @@ impl HudApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A frame is judged by the median of its neighbours: frames the scheduler held up do not
+    /// make a fast HUD slow, and a HUD slow itself stays slow.
+    #[test]
+    fn frame_costs_are_judged_on_the_median() {
+        assert_eq!(frame_summary(&[]), None);
+        let mut held_up = vec![0.7; 30];
+        held_up.extend([25.0; 10]);
+        let (median, average, worst) = frame_summary(&held_up).unwrap();
+        assert_eq!((median, worst), (0.7, 25.0));
+        assert!(average > 5.5 && median < 5.5, "{average} / {median}");
+        let (median, ..) = frame_summary(&[6.0; 40]).unwrap();
+        assert_eq!(median, 6.0, "slow every frame: slow");
+        assert_eq!(frame_summary(&[1.0, 4.0, 2.0, 3.0]).map(|s| s.0), Some(2.5));
+        assert_eq!(frame_summary(&[3.0, 1.0, 2.0]).map(|s| s.0), Some(2.0));
+    }
 
     /// `--monitor 2`: the fullscreen board covers that monitor from its first frame and a window
     /// starts in its middle; without it, the board is the primary's at (0, 0). A board across

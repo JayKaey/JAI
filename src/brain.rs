@@ -330,7 +330,7 @@ fn static_tool(name: &str) -> Option<&'static str> {
         "control_jarvis_interface", "configure_interface", "create_calendar_event", "control_orb_mode", "control_gui_aspect",
         "control_audio_mixer", "set_listening_mode", "save_instant_replay", "open_jarvis_view",
         "spawn_multi_window_workspace", "control_spatial_window", "manage_spatial_scene", "manage_vram", "spawn_topic_knowledge_workspace",
-        "hud_board", "undo_last_action",
+        "hud_board", "undo_last_action", "discord_bot", "away_mode",
     ];
     NAMES.iter().copied().find(|n| *n == name).or_else(|| crate::features::static_name(name))
 }
@@ -3823,7 +3823,12 @@ fn join_and(items: &[String]) -> String {
 /// Tools whose results, errors included, are written as Jarvis' own lines ("Spoken: …"): read
 /// out as they are, never "Done, Sir." or the generic "that didn't work".
 fn speaks_for_itself(tool: &str) -> bool {
-    crate::discord_bridge::is_tool(tool) || crate::shadow_memory::is_tool(tool) || crate::aegis_server_deck::is_tool(tool)
+    crate::discord_bridge::is_tool(tool)
+        || crate::discord_bot::is_tool(tool)
+        || crate::away_mode::is_tool(tool)
+        || crate::watch_and_tell::is_tool(tool)
+        || crate::shadow_memory::is_tool(tool)
+        || crate::aegis_server_deck::is_tool(tool)
 }
 
 fn first_sentence(s: &str) -> String {

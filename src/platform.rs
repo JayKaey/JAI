@@ -174,6 +174,14 @@ pub fn quiet_session() -> bool {
     in_test_session() && !crate::window_drill::enabled()
 }
 
+/// Tests keep their hands off Sir's players: neither `cargo test` nor any scripted session (the
+/// window drill too) pauses, resumes or skips his music and videos, presses a media key, starts
+/// a player or opens a music link. (2026-11-08: the exhaustive verifier's "Pause." went through
+/// the dispatcher's instant stop and paused his players three times while he used the PC.)
+pub fn hands_off() -> bool {
+    cfg!(test) || in_test_session()
+}
+
 /// Whether a scripted session is running on this desktop.
 pub fn test_session_running() -> bool {
     #[cfg(windows)]

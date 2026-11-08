@@ -259,6 +259,10 @@ pub struct JarvisConfig {
     // ---- Stark systems --------------------------------------------------------------------
     /// WhatsApp: desktop URI handler, notification listener and the optional local bridge.
     pub whatsapp: WhatsAppSettings,
+    /// Jarvis's own Discord account (a bot Sir created; its token lives in the vault).
+    pub discord_bot: DiscordBotSettings,
+    /// Away Mode: the answering machine, alerts to Sir's phone and the digest when he's back.
+    pub away: AwaySettings,
     /// The mobile web satellite (phone / iPad HUD with live GPS).
     pub satellite: SatelliteSettings,
     /// Home / school coordinates, IP fallback, the home geofence and the commute advisor.
@@ -310,6 +314,68 @@ impl Default for WhatsAppSettings {
             default_country_code: "+49".into(),
             poll_seconds: 15,
         }
+    }
+}
+
+/// Jarvis's own Discord account (`discord_bot`). The token is in the vault, never here.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DiscordBotSettings {
+    pub enabled: bool,
+    /// Sir's Discord user id (set by pairing): his DMs are orders, everyone else only chats.
+    pub owner_id: String,
+    /// Friends who DM or mention Jarvis get a short answer in character.
+    pub answer_others: bool,
+    /// Away Mode, reminders and alerts reach Sir as DMs.
+    pub notify_owner: bool,
+    /// Jarvis joins whatever voice channel Sir joins (and leaves with him).
+    pub follow_owner_voice: bool,
+    /// "Tell me when Max comes online" (the Presence Intent must be on in the Developer Portal).
+    pub presence_intent: bool,
+    /// Jarvis says once per channel, in its text chat, that he transcribes the call.
+    pub announce_listening: bool,
+    /// "Watching …" under his name.
+    pub status_text: String,
+}
+
+impl Default for DiscordBotSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            owner_id: String::new(),
+            answer_others: true,
+            notify_owner: true,
+            follow_owner_voice: false,
+            presence_intent: false,
+            announce_listening: true,
+            status_text: "over Sir".into(),
+        }
+    }
+}
+
+impl DiscordBotSettings {
+    pub fn owner(&self) -> Option<u64> {
+        self.owner_id.trim().parse().ok().filter(|id| *id > 0)
+    }
+}
+
+/// Away Mode (`away_mode`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AwaySettings {
+    /// Away Mode turns on by itself once the PC has been locked this long (0 = only by voice).
+    pub auto_after_locked_mins: u64,
+    /// A DM to Sir when someone unlocks the PC while he's away.
+    pub alert_on_unlock: bool,
+    /// A DM to Sir when a USB drive is plugged in while he's away.
+    pub alert_on_usb: bool,
+    /// Friends' messages are answered and collected for the digest.
+    pub answering_machine: bool,
+}
+
+impl Default for AwaySettings {
+    fn default() -> Self {
+        Self { auto_after_locked_mins: 10, alert_on_unlock: true, alert_on_usb: true, answering_machine: true }
     }
 }
 
@@ -588,6 +654,8 @@ impl Default for JarvisConfig {
             briefing_news_feed: crate::briefing::DEFAULT_FEED.to_string(),
 
             whatsapp: WhatsAppSettings::default(),
+            discord_bot: DiscordBotSettings::default(),
+            away: AwaySettings::default(),
             satellite: SatelliteSettings::default(),
             location: LocationSettings::default(),
             acoustic: AcousticSettings::default(),

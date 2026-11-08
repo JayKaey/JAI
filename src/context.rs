@@ -132,6 +132,10 @@ pub async fn build(tools: &ToolContext, source: InputSource, voice: VoiceGate, r
     out.push_str(&crate::hud_board::live_context());
     // Sir's Discord call while the bridge listens (what the others said, never Sir).
     out.push_str(&crate::discord_bridge::live_context());
+    // Jarvis's own Discord account: the call he is in, unread messages; Away Mode; watches.
+    out.push_str(&crate::discord_bot::live_context());
+    out.push_str(&crate::away_mode::live_context());
+    out.push_str(&crate::watch_and_tell::live_context());
     let reminders = tools.reminders.list();
     if !reminders.is_empty() {
         let list: Vec<String> = reminders

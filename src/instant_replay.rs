@@ -97,6 +97,11 @@ impl Replay {
             info!("[REPLAY] Rolling recorder off.");
             return;
         }
+        // A test never records Sir's screen (nor spends his game's frame time on it).
+        if crate::platform::hands_off() {
+            info!("[REPLAY] Rolling recorder off: a test session never records Sir's screen.");
+            return;
+        }
         if self.recorder.running.swap(true, Ordering::AcqRel) {
             return;
         }
@@ -530,6 +535,7 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
+    #[ignore = "records Sir's real screen: run by hand while he is away"]
     fn a_few_seconds_make_a_real_video() {
         let r = Arc::new(Recorder::default());
         let rr = Arc::clone(&r);
@@ -579,6 +585,7 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
+    #[ignore = "records Sir's real screen: run by hand while he is away"]
     fn a_real_frame_is_captured_and_encoded() {
         let r = Arc::new(Recorder::default());
         let rr = Arc::clone(&r);

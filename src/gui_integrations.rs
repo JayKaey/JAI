@@ -6,7 +6,7 @@
 
 use super::{bold, button, lock, muted, request_repaint, Palette, Tone};
 use crate::app::Jarvis;
-use crate::config::{AcousticSettings, FeatureSettings, LocationSettings, SatelliteSettings, WhatsAppSettings};
+use crate::config::{AcousticSettings, AwaySettings, DiscordBotSettings, FeatureSettings, LocationSettings, SatelliteSettings, WhatsAppSettings};
 use crate::pim::Pim;
 use crate::pim_config::{self, PimSettings, WebFeed, CALENDAR, EMAIL, FEEDS, LMS, WEBUNTIS};
 use eframe::egui::{self, RichText, Ui};
@@ -89,6 +89,8 @@ pub(super) struct Hub {
     wa_token: String,
     /// A newly typed Cloudflare tunnel token (blank = keep the stored one).
     tunnel_token: String,
+    /// A newly typed token of Jarvis's Discord bot (blank = keep the stored one).
+    discord_token: String,
     node_form: [String; 4],
     contact_form: [String; 3],
     /// (pairing URL, side, modules) of the satellite QR code.
@@ -104,6 +106,8 @@ struct QuickDraft {
     satellite: SatelliteSettings,
     location: LocationSettings,
     acoustic: AcousticSettings,
+    discord_bot: DiscordBotSettings,
+    away: AwaySettings,
 }
 
 impl Default for Hub {
@@ -120,6 +124,7 @@ impl Default for Hub {
             quick: None,
             wa_token: String::new(),
             tunnel_token: String::new(),
+            discord_token: String::new(),
             node_form: Default::default(),
             contact_form: Default::default(),
             qr: None,
@@ -138,6 +143,74 @@ fn secret_field(ui: &mut Ui, value: &mut String, stored: bool) {
     ui.add(egui::TextEdit::singleline(value).password(true).hint_text(hint).desired_width(300.0));
 }
 
+/// Quick Connections: Jarvis's own Discord account and Away Mode. Needs nothing of the running
+/// app, so the offscreen test draws exactly what the hub shows.
+fn account_and_away(ui: &mut Ui, p: &Palette, bot: &mut DiscordBotSettings, away: &mut AwaySettings, token: &mut String, token_stored: bool, results: &Mutex<HashMap<&'static str, (bool, String)>>) {
+    let section = |ui: &mut Ui, title: &str| {
+        ui.add_space(6.0);
+        ui.label(RichText::new(title).font(bold(12.5)).color(p.accent));
+    };
+    section(ui, "Jarvis's Discord account (a bot of his own)");
+    ui.checkbox(&mut bot.enabled, "Enabled");
+    egui::Grid::new("hub_discord_bot").num_columns(2).spacing([12.0, 7.0]).show(ui, |ui| {
+        ui.label("Bot token");
+        secret_field(ui, token, token_stored);
+        ui.end_row();
+        ui.label("Your Discord user id");
+        text_field(ui, &mut bot.owner_id, "set by pairing (or Copy User ID)");
+        ui.end_row();
+        ui.label("Status");
+        text_field(ui, &mut bot.status_text, "Watching … (empty: none)");
+        ui.end_row();
+    });
+    ui.checkbox(&mut bot.answer_others, "Friends who DM or mention him get a short answer");
+    ui.checkbox(&mut bot.notify_owner, "Alerts reach my phone as DMs while I'm away");
+    ui.checkbox(&mut bot.follow_owner_voice, "Join my voice channel whenever I join one");
+    ui.checkbox(&mut bot.announce_listening, "Say once in each call's chat that he transcribes it");
+    ui.checkbox(&mut bot.presence_intent, "Who's online (switch on the Presence Intent in the Developer Portal too)");
+    let status = crate::discord_bot::hud_status();
+    ui.horizontal_wrapped(|ui| {
+        let online = crate::discord_bot::online();
+        if ui.add_enabled(online, egui::Button::new("Pair my account")).on_hover_text("Shows a code: send it to the bot as a direct message within ten minutes").clicked() {
+            if let Some(bot) = crate::discord_bot::bot() {
+                let code = bot.start_pairing();
+                lock(results).insert("discord_bot", (true, format!("Send the bot this code as a DM: {code}")));
+            }
+        }
+        match &status {
+            Some(s) => {
+                let colour = if s.link == "online" { p.green } else if s.link.starts_with("stopped") { p.red } else { p.muted };
+                let who = if s.name.is_empty() { String::new() } else { format!(" as {}", s.name) };
+                let paired = if s.owner_paired { " · your account paired" } else { " · not paired yet" };
+                ui.label(RichText::new(format!("{}{who}{paired}", s.link.to_uppercase())).size(11.0).color(colour));
+                if let Some(code) = &s.pairing_code {
+                    ui.label(RichText::new(format!("CODE {code}")).monospace().size(12.0).color(p.accent));
+                }
+            }
+            None => {
+                ui.label(RichText::new("Starts with Jarvis (not in test sessions)").size(11.0).color(p.muted));
+            }
+        }
+    });
+    if let Some((ok, text)) = lock(results).get("discord_bot").cloned() {
+        ui.label(RichText::new(text).size(11.5).color(if ok { p.accent } else { p.red }));
+    }
+    if let Some(note) = status.and_then(|s| s.note) {
+        ui.add(egui::Label::new(RichText::new(note).size(11.0).color(p.amber)).wrap());
+    }
+    muted(ui, p, "Create it at discord.com/developers → New Application → Bot: copy the token here and switch on the Message Content Intent. Invite it with OAuth2 → URL Generator (scope bot; View Channels, Send Messages, Read Message History, Connect, Speak, Use Voice Activity). Bots join server voice channels, not private calls.");
+
+    section(ui, "Away Mode");
+    ui.horizontal_wrapped(|ui| {
+        ui.label("On by itself once the PC has been locked for");
+        ui.add(egui::DragValue::new(&mut away.auto_after_locked_mins).range(0..=240).suffix(" min"));
+    });
+    muted(ui, p, "0: only when you tell him you're leaving (\"I'm heading out\").");
+    ui.checkbox(&mut away.answering_machine, "Answer friends' Discord messages while I'm away");
+    ui.checkbox(&mut away.alert_on_unlock, "Tell my phone when someone uses the PC after I said I was leaving");
+    ui.checkbox(&mut away.alert_on_usb, "Tell me when a drive is plugged in while I'm away");
+}
+
 impl Hub {
     /// A voice request opens the hub on the right tab.
     pub fn poll_request(&mut self) {
@@ -151,7 +224,14 @@ impl Hub {
     pub fn show(&mut self, ctx: &egui::Context, p: &Palette, app: &Jarvis, rt: &Handle) {
         let pim = &app.tools().pim.clone();
         if self.quick.is_none() {
-            self.quick = Some(app.config().read(|c| QuickDraft { whatsapp: c.whatsapp.clone(), satellite: c.satellite.clone(), location: c.location.clone(), acoustic: c.acoustic.clone() }));
+            self.quick = Some(app.config().read(|c| QuickDraft {
+                whatsapp: c.whatsapp.clone(),
+                satellite: c.satellite.clone(),
+                location: c.location.clone(),
+                acoustic: c.acoustic.clone(),
+                discord_bot: c.discord_bot.clone(),
+                away: c.away.clone(),
+            }));
         }
         if self.field.is_none() {
             let f = app.config().read(|c| c.features.clone());
@@ -370,9 +450,23 @@ impl Hub {
             c.satellite = q.satellite.clone();
             c.location = q.location.clone();
             c.acoustic = q.acoustic.clone();
+            c.discord_bot = q.discord_bot.clone();
+            c.away = q.away.clone();
         });
         app.set_acoustic(&q.acoustic);
         let mut note = "Saved. Satellite port or HTTPS changes apply after a restart.".to_string();
+        // Jarvis's Discord token: sealed in the vault, never in the settings file.
+        if !self.discord_token.trim().is_empty() {
+            match crate::discord_bot::clean_token(&self.discord_token) {
+                Some(token) => match app.tools().pim.config().vault().set_secret(crate::discord_bot::VAULT_SERVICE, crate::vault::TOKEN, &token) {
+                    Ok(()) => self.discord_token.clear(),
+                    Err(e) => note = format!("Saved, but the Discord token could not be stored: {e}"),
+                },
+                None => note = "Saved, but that is not a bot token: copy it from the Developer Portal's Bot page (Reset Token).".to_string(),
+            }
+        }
+        // The account reconnects with the new token or settings.
+        crate::discord_bot::kick();
         if !self.wa_token.trim().is_empty() {
             match app.tools().pim.config().vault().set_secret(crate::whatsapp_client::VAULT_SERVICE, crate::vault::TOKEN, self.wa_token.trim()) {
                 Ok(()) => self.wa_token.clear(),
@@ -454,6 +548,10 @@ impl Hub {
             tools.stark.whatsapp.unread_count(),
             crate::satellite::pairing_url(app.config()).split("/satellite").next().unwrap_or("")
         ));
+
+        // ---- Jarvis's own Discord account and Away Mode -------------------------------------
+        let bot_stored = tools.pim.config().vault().has_secret(crate::discord_bot::VAULT_SERVICE, crate::vault::TOKEN);
+        account_and_away(ui, p, &mut q.discord_bot, &mut q.away, &mut self.discord_token, bot_stored, &self.results);
 
         // ---- The mobile satellite -------------------------------------------------------
         section(ui, "Mobile satellite (phone / iPad with live GPS)");
@@ -991,5 +1089,35 @@ impl Hub {
         });
         muted(ui, p, "“Sync my study materials” sorts files into School/<Subject>/ and adds exams and homework to the calendar; “summarise my new physics worksheet” reads the newest one.");
         self.draft = Some(d);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::visual_ui_verifier::{self as visual, Stage};
+
+    /// Jarvis's Discord account and Away Mode in the hub, drawn offscreen at its width and at a
+    /// narrow one: nothing cut off, nothing drawn over anything else, every control there.
+    #[test]
+    fn the_discord_account_and_away_mode_settings_are_shown_whole() {
+        let p = Palette::new(&crate::interface::InterfaceSettings::default());
+        for width in [540.0, 400.0] {
+            let (mut bot, mut away, mut token) = (DiscordBotSettings::default(), AwaySettings::default(), String::new());
+            let results = Mutex::new(HashMap::new());
+            lock(&results).insert("discord_bot", (true, "Send the bot this code as a DM: 123456".to_string()));
+            let mut stage = Stage::new(egui::vec2(width + 80.0, 980.0));
+            let frame = stage.frames(4, &mut |ctx| {
+                egui::Window::new("hub").title_bar(false).fixed_pos(egui::pos2(20.0, 20.0)).fixed_size(egui::vec2(width, 920.0)).show(ctx, |ui| {
+                    account_and_away(ui, &p, &mut bot, &mut away, &mut token, false, &results);
+                });
+            });
+            stage.raster(&frame).save(&format!("hub_discord_account_{width}"));
+            assert_eq!(visual::clipped_text(&frame), Vec::<String>::new(), "at {width} px");
+            assert_eq!(visual::text_over_text(&frame), Vec::<String>::new(), "at {width} px");
+            for shown in ["Jarvis's Discord account", "Bot token", "Your Discord user id", "Pair my account", "Starts with Jarvis", "123456", "Presence Intent", "Away Mode", "locked for", "a drive is plugged in"] {
+                assert!(!frame.find_text(shown).is_empty(), "{shown} is not in the hub at {width} px");
+            }
+        }
     }
 }

@@ -186,6 +186,44 @@ Cloudflare quick tunnel whose address changes on every start. For an address tha
 changes, set a permanent address in the Integrations hub (Quick Connections, Worldwide address):
 a Cloudflare named tunnel (token plus your own hostname), Tailscale Funnel or your own server.
 
+## Jarvis's own Discord account
+
+Jarvis can have a Discord account of his own: a bot you create once.
+
+1. On discord.com/developers, make a New Application. On its Bot page, copy the token (Reset
+   Token) and switch on the Message Content Intent. Switch on the Presence Intent too if he
+   should tell you who comes online.
+2. Under OAuth2 → URL Generator, tick the scope `bot` and the permissions View Channels, Send
+   Messages, Read Message History, Connect, Speak and Use Voice Activity. Open the link it gives
+   and invite him to your server.
+3. Paste the token into the Integrations hub (Quick Connections, Jarvis's Discord account) and
+   save. The token is sealed in the vault, never in the settings file.
+4. Say "pair my Discord" (or press Pair my account) and send him the six-digit code as a direct
+   message. From then on your DMs to him are orders from anywhere ("what's my GPU temperature",
+   "lock my PC"), answered in the DM.
+
+Friends who DM or mention him get a short answer in character (never a tool, never your private
+things), one every five seconds and twenty an hour per person at most. "Join my call" puts him
+into your voice channel as himself, end-to-end encrypted (DAVE): he hears everyone, answers
+whoever says his name, and what he says goes into the call. What he hears stays in memory for 30
+minutes and is never written down; the first time in a channel he says so in its chat. "What did
+they say?", "summarise the call", "who's in the call?", "only listen", "leave the call". "Write in
+#general that I'm late" asks first; "what did they write on Discord?" reads it out. Bots can join
+server voice channels, not private calls.
+
+## Away Mode
+
+"I'm heading out" (or "ich bin weg", "away mode on") and he minds the PC; it also turns on by
+itself after the PC has been locked for ten minutes (Quick Connections, Away Mode). While it is on,
+friends' Discord and WhatsApp messages are kept for you (a Discord DM gets the answering machine
+once), and every alert (a reminder, the Guardian, an urgent WhatsApp, a finished download, a drive
+plugged in, someone using the PC after you said you were leaving) also reaches your phone as a DM
+from his account. When you're back (you say so, or unlock the PC after an automatic Away Mode) he
+says how long you were gone and what came in; "what did I miss?" goes through it.
+
+"Tell me when my download is done", "tell me when Blender is finished" and "tell me when GitHub is
+back up" are watched until they happen (eight at a time, twelve hours at most).
+
 ## Tests
 
 ```

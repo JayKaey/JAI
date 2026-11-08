@@ -167,6 +167,13 @@ impl OmniInbox {
     async fn handle(&self, tools: &ToolContext, m: WhatsAppMessage) {
         let contact = tools.stark.contacts.resolve(&m.sender).ok();
         let Some(_) = self.active() else {
+            // Away Mode: kept for Sir's digest (an urgent one reaches his phone as an alert).
+            if crate::away_mode::is_away() {
+                crate::away_mode::note_message("WhatsApp", &m.sender, &m.message_text, "WhatsApp");
+                if contact.as_ref().is_some_and(|c| c.priority) || is_urgent(&m.message_text, &[]) {
+                    let _ = tools.stark.events.send(StarkEvent::Alert(format!("An urgent WhatsApp from {}: {}", m.sender, m.message_text.chars().take(200).collect::<String>())));
+                }
+            }
             // No focus time: a quiet notice in the HUD only.
             let _ = tools.stark.events.send(StarkEvent::Notice(format!("WhatsApp — {}: {}", m.sender, m.message_text.chars().take(120).collect::<String>())));
             return;

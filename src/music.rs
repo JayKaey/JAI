@@ -276,6 +276,35 @@ struct Cache {
     stamp: Option<SystemTime>,
     items: Vec<LibraryItem>,
     members: HashMap<String, Vec<LibraryItem>>,
+    /// The files and folders the last scan read, each with its size and time just after it.
+    sources: Vec<(PathBuf, Option<FileStamp>)>,
+}
+
+/// A file's (or folder's) size and last write.
+type FileStamp = (u64, SystemTime);
+
+fn file_stamp(path: &Path) -> Option<FileStamp> {
+    let meta = std::fs::metadata(path).ok()?;
+    Some((meta.len(), meta.modified().ok()?))
+}
+
+/// Within this of a scan the library is used as read, without a look at its files.
+const LIBRARY_FRESH: Duration = Duration::from_secs(30);
+/// At the latest after this it is read again (a song added deep inside a folder changes none of
+/// the files a scan read).
+const LIBRARY_RESCAN: Duration = Duration::from_secs(10 * 60);
+
+/// Whether the library read `age` ago is still Sonora's. Between half a minute and ten minutes it
+/// is, while none of the files and folders it was read from changed: a dozen stats instead of a
+/// scan of Sonora's cache (70 MB here, 60 ms a time and twice that beside a game, 2026-11-08,
+/// for every music command more than half a minute after the last one).
+fn library_current(age: Option<Duration>, sources: &[(PathBuf, Option<FileStamp>)]) -> bool {
+    match age {
+        None => false,
+        Some(age) if age <= LIBRARY_FRESH => true,
+        Some(age) if age > LIBRARY_RESCAN => false,
+        Some(_) => sources.iter().all(|(path, then)| file_stamp(path) == *then),
+    }
 }
 
 /// Bounded, read-only roots; the walker never follows links out into unrelated user folders.
@@ -460,11 +489,15 @@ pub fn playlist_position<'a>(members: &'a [LibraryItem], song: &str, artist: Opt
         .map(|(i, m, _)| (i, m))
 }
 
-fn scan_library() -> (Vec<LibraryItem>, HashMap<String, Vec<LibraryItem>>) {
+/// The library: its items, each playlist's members, and the files and folders it was read from
+/// (`library_current` looks at them before the next scan).
+fn scan_library() -> (Vec<LibraryItem>, HashMap<String, Vec<LibraryItem>>, Vec<PathBuf>) {
     let mut items = Vec::new();
     let mut members = HashMap::new();
     let mut seen = HashSet::new();
+    let mut sources: Vec<PathBuf> = Vec::new();
     for root in library_roots() {
+        sources.push(root.clone());
         for entry in walkdir::WalkDir::new(root).follow_links(false).max_depth(12).into_iter().filter_entry(|e| {
             !matches!(e.file_name().to_str().unwrap_or(""), "node_modules" | ".git" | "GPUCache" | "Code Cache")
         }).filter_map(Result::ok).filter(|e| e.file_type().is_file()).take(50_000) {
@@ -473,15 +506,20 @@ fn scan_library() -> (Vec<LibraryItem>, HashMap<String, Vec<LibraryItem>>) {
             let ext = path.extension().unwrap_or_default().to_string_lossy().to_lowercase();
             if let Some(item) = local_item(path, None) {
                 if item.kind == ItemKind::LocalPlaylist {
+                    sources.push(path.to_path_buf());
                     let tracks = playlist_tracks(path);
                     members.insert(compact(&item.name), tracks.clone());
                     items.extend(tracks);
                 }
                 items.push(item);
             } else if matches!(ext.as_str(), "sqlite" | "sqlite3" | "db") {
+                // (A database in WAL mode takes its writes in the "-wal" file first.)
+                sources.push(path.to_path_buf());
+                sources.push(PathBuf::from(format!("{}-wal", path.display())));
                 items.extend(read_sonora(path));
                 read_playlist_cache(path, &mut items, &mut members);
             } else if ext == "json" && entry.metadata().is_ok_and(|m| m.len() <= 8 * 1024 * 1024) {
+                sources.push(path.to_path_buf());
                 if let Some(value) = std::fs::read(path).ok().and_then(|s| serde_json::from_slice::<Value>(&s).ok()) {
                     json_library(&value, path.parent().unwrap_or(Path::new(".")), &mut items, &mut members, 0);
                     if value.get("tracks").or_else(|| value.get("songs")).is_some() {
@@ -497,7 +535,12 @@ fn scan_library() -> (Vec<LibraryItem>, HashMap<String, Vec<LibraryItem>>) {
     }
     let mut unique = HashSet::new();
     items.retain(|i| unique.insert((i.uri.clone(), i.name.clone())));
-    (items, members)
+    // And the folders they lie in: a playlist saved next to them changes its folder.
+    let folders: Vec<PathBuf> = sources.iter().filter_map(|p| p.parent().map(Path::to_path_buf)).collect();
+    sources.extend(folders);
+    sources.sort();
+    sources.dedup();
+    (items, members, sources)
 }
 
 // ------------------------------------------------------------------------- track index ----
@@ -601,7 +644,7 @@ fn scan_audio_files(roots: &[PathBuf]) -> Vec<IndexedTrack> {
 
 /// The whole index: local files, playlist members (local and Sonora) and saved Spotify songs.
 fn build_track_index() -> Vec<IndexedTrack> {
-    let (items, members) = scan_library();
+    let (items, members, _) = scan_library();
     let mut tracks = scan_audio_files(&audio_roots());
     let tagged: HashMap<String, (String, String, String)> =
         tracks.iter().map(|t| (t.path.clone(), (t.title.clone(), t.artist.clone(), t.album.clone()))).collect();
@@ -722,7 +765,7 @@ static SNAPSHOT: std::sync::RwLock<Vec<LibraryItem>> = std::sync::RwLock::new(Ve
 /// Loads the library snapshot (start-up, off the critical path).
 pub fn warm_up() {
     if SNAPSHOT.read().map(|s| s.is_empty()).unwrap_or(false) {
-        let (items, _) = scan_library();
+        let (items, ..) = scan_library();
         if let Ok(mut s) = SNAPSHOT.write() {
             *s = items;
         }
@@ -803,7 +846,7 @@ impl MusicEngine {
         Self {
             inner: Arc::new(Inner {
                 conn: conn.map(Mutex::new),
-                cache: Mutex::new(Cache { stamp: None, items: Vec::new(), members: HashMap::new() }),
+                cache: Mutex::new(Cache { stamp: None, items: Vec::new(), members: HashMap::new(), sources: Vec::new() }),
                 last_played: Mutex::new(None),
             }),
         }
@@ -817,10 +860,16 @@ impl MusicEngine {
     pub fn library(&self) -> Vec<LibraryItem> {
         let mut items = self.saved();
         let mut cache = self.inner.cache.lock().unwrap_or_else(|e| e.into_inner());
-        if cache.stamp.is_none_or(|stamp| stamp.elapsed().unwrap_or_default() > Duration::from_secs(30)) {
-            let (indexed, members) = scan_library();
+        let age = cache.stamp.map(|stamp| stamp.elapsed().unwrap_or_default());
+        if !library_current(age, &cache.sources) {
+            let (indexed, members, sources) = scan_library();
             cache.items = indexed;
             cache.members = members;
+            // Stamped after the scan: whatever reading them touched belongs to the baseline.
+            cache.sources = sources.into_iter().map(|path| {
+                let stamp = file_stamp(&path);
+                (path, stamp)
+            }).collect();
             cache.stamp = Some(SystemTime::now());
             info!("[MUSIC] Library: {} item(s) from Sonora", cache.items.len());
             if let Ok(mut s) = SNAPSHOT.write() {
@@ -1191,6 +1240,9 @@ fn choose_playlist(items: &[LibraryItem], last: Option<&str>, now: chrono::DateT
 /// Sonora's single-instance handler accepts provider links and local files (upstream
 /// crates/sonora/src/main.rs, `follow` / `single::claim`).
 async fn launch_sonora(arguments: Vec<String>) -> Result<(), String> {
+    if crate::platform::hands_off() {
+        return Err(HANDS_OFF.into());
+    }
     let executable = sonora_binary().ok_or("Sonora.exe was not found in D:\\Program Files\\Sonora or the user installation paths.")?;
     tokio::task::spawn_blocking(move || {
         let mut command = std::process::Command::new(executable);
@@ -1378,6 +1430,9 @@ async fn search_and_play(query: &str, expected_title: &str, player: &str) -> Res
 #[cfg(windows)]
 async fn activate_player_selection(player: &str, search: Option<&str>, first_result: bool) -> Result<(), String> {
     use windows::Win32::UI::Input::KeyboardAndMouse::*;
+    if crate::platform::hands_off() {
+        return Err(HANDS_OFF.into());
+    }
     let player = player.to_string();
     let search = search.map(str::to_string);
     let deadline = std::time::Instant::now() + Duration::from_secs(12);
@@ -1494,14 +1549,23 @@ async fn find_local(name: &str, song: bool) -> Option<LibraryItem> {
     .flatten()
 }
 
+/// What a test gets instead of touching Sir's players.
+const HANDS_OFF: &str = "left alone: a test never touches Sir's players";
+
 #[cfg(windows)]
 async fn open_uri(uri: &str) -> Result<(), String> {
+    if crate::platform::hands_off() {
+        return Err(HANDS_OFF.into());
+    }
     let uri = uri.to_string();
     crate::win32::call(move || crate::win32::shell_execute(&uri, None, None)).await?.map_err(|e| format!("The music link could not be opened ({e})."))
 }
 
 #[cfg(not(windows))]
 async fn open_uri(uri: &str) -> Result<(), String> {
+    if crate::platform::hands_off() {
+        return Err(HANDS_OFF.into());
+    }
     let uri = uri.to_string();
     tokio::task::spawn_blocking(move || std::process::Command::new("xdg-open").arg(&uri).spawn().map(|_| ()).map_err(|e| e.to_string())).await.map_err(|e| e.to_string())?
 }
@@ -1510,6 +1574,9 @@ async fn open_uri(uri: &str) -> Result<(), String> {
 /// Space or the play key: those resume whatever Spotify held before, not what Sir asked for.)
 #[cfg(windows)]
 async fn nudge_spotify_play(_playlist: bool) {
+    if crate::platform::hands_off() {
+        return;
+    }
     let _ = crate::win32::call(move || {
         let Some(w) = crate::win32::app_windows().into_iter().find(|w| w.process == "spotify" && !w.title.trim().is_empty()) else { return };
         crate::win32::focus(w.hwnd);
@@ -1569,6 +1636,10 @@ static LAST_STOP: tokio::sync::Mutex<Option<(std::time::Instant, MediaStop)>> = 
 ///
 /// Jarvis' own voice is stopped by the dispatcher (`TtsController::stop`).
 pub async fn stop_all_active_media() -> MediaStop {
+    if crate::platform::hands_off() {
+        info!("[MUSIC] Stop everything: Sir's players left alone (a test never pauses them)");
+        return MediaStop::default();
+    }
     let mut last = LAST_STOP.lock().await;
     if let Some((_, report)) = last.as_ref().filter(|(at, _)| at.elapsed() < STOP_BURST) {
         return report.clone();
@@ -1794,6 +1865,9 @@ async fn sessions() -> Vec<NowPlaying> {
 
 #[cfg(windows)]
 async fn control_session(app: Option<String>, op: SessionOp) -> Result<Option<NowPlaying>, String> {
+    if crate::platform::hands_off() {
+        return Err(HANDS_OFF.into());
+    }
     tokio::task::spawn_blocking(move || smtc::control(app, op)).await.map_err(|e| e.to_string())
 }
 
@@ -1818,6 +1892,9 @@ async fn sessions() -> Vec<NowPlaying> {
 
 #[cfg(not(windows))]
 async fn control_session(app: Option<String>, op: SessionOp) -> Result<Option<NowPlaying>, String> {
+    if crate::platform::hands_off() {
+        return Err(HANDS_OFF.into());
+    }
     let cmd = match op {
         SessionOp::Play => "play",
         SessionOp::Pause => "pause",
@@ -1870,6 +1947,31 @@ mod tests {
         assert_eq!(tracks[1].artist, "AC/DC");
         assert_eq!(album_position("spotify:track:2zYzyRzz6pRmhPzyfMEC8s"), Some(("spotify:album:10v912xgTZbjAtYfyKWJCS".into(), 1, 1)));
         assert!(downloaded_playlist(r#"{"head":{},"tracks":[]}"#).is_none());
+    }
+
+    #[test]
+    fn the_library_is_read_again_only_when_its_files_change() {
+        let dir = std::env::temp_dir().join(format!("jarvis-library-stamps-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("state.sqlite");
+        let wal = dir.join("state.sqlite-wal");
+        std::fs::write(&db, b"one").unwrap();
+        let sources = vec![(db.clone(), file_stamp(&db)), (wal.clone(), None)];
+        assert!(!library_current(None, &sources), "never read: a scan");
+        assert!(library_current(Some(Duration::from_secs(5)), &sources));
+        assert!(library_current(Some(Duration::from_secs(5 * 60)), &sources), "nothing changed: no scan");
+        assert!(!library_current(Some(Duration::from_secs(11 * 60)), &sources), "after ten minutes it is read again whatever happened");
+        // Sonora writes: its database grows...
+        std::fs::write(&db, b"one two").unwrap();
+        assert!(!library_current(Some(Duration::from_secs(5 * 60)), &sources));
+        assert!(library_current(Some(Duration::from_secs(10)), &sources), "within half a minute its files are not looked at");
+        // ...or its write-ahead log appears.
+        let sources = vec![(db.clone(), file_stamp(&db)), (wal.clone(), None)];
+        assert!(library_current(Some(Duration::from_secs(60)), &sources));
+        std::fs::write(&wal, b"w").unwrap();
+        assert!(!library_current(Some(Duration::from_secs(60)), &sources));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -2013,5 +2115,17 @@ mod tests {
         let lib = MusicEngine::in_memory().library();
         assert!(lib.iter().any(|i| i.kind == ItemKind::Playlist));
         println!("{} items", lib.len());
+    }
+
+    /// Nothing a test runs pauses, skips or starts what Sir is listening to.
+    #[tokio::test]
+    async fn tests_never_touch_sirs_players() {
+        assert!(crate::platform::hands_off());
+        assert_eq!(stop_all_active_media().await, MediaStop::default());
+        for op in [SessionOp::Pause, SessionOp::Play, SessionOp::Toggle, SessionOp::Next, SessionOp::Previous] {
+            assert!(session_control(op, "sonora").await.unwrap_err().contains(HANDS_OFF), "{op:?}");
+        }
+        assert_eq!(open_uri("spotify:search:example%20rock").await, Err(HANDS_OFF.to_string()));
+        assert_eq!(launch_sonora(Vec::new()).await, Err(HANDS_OFF.to_string()));
     }
 }

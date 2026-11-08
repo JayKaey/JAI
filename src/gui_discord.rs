@@ -71,6 +71,15 @@ fn body(ui: &mut Ui, tools: &ToolContext, rt: &Handle) {
     let devices = devices();
     let (target, source) = tools.config.read(|c| (c.discord_call_output.clone(), c.discord_listen_source.clone()));
     ui.label(RichText::new(format!("BRIDGE {} · VOICE INTO CALL: {}", crate::discord_bridge::mode().label().to_uppercase(), crate::discord_bridge::voice_device())).font(strip_font()).color(STRIP_INK));
+    // Jarvis's own account (a bot of his: he joins calls as himself, no routing needed).
+    if let Some(s) = crate::discord_bot::hud_status() {
+        let call = match &s.call {
+            Some(c) => format!(" · IN #{}{}{}", c.to_uppercase(), if s.encrypted { " (E2EE)" } else { "" }, if s.speaking_now { " · SPEAKING" } else if s.talking { " · MAY TALK" } else { " · LISTENING" }),
+            None => String::new(),
+        };
+        let unread = if s.unread > 0 { format!(" · {} UNREAD", s.unread) } else { String::new() };
+        ui.label(RichText::new(format!("HIS ACCOUNT: {}{call}{unread}", s.link.to_uppercase())).font(strip_font()).color(STRIP_INK));
+    }
     ui.add_space(6.0);
     egui::Grid::new("discord_routing").num_columns(2).spacing([10.0, 8.0]).show(ui, |ui| {
         ui.label(RichText::new("INJECTION TARGET").font(strip_font()).color(STRIP_INK));

@@ -264,6 +264,8 @@ impl Jarvis {
         });
         // Sir's Discord call (off until he asks): Whisper, the voice and the tools for the bridge.
         crate::discord_bridge::install(app.inner.stt.clone(), app.inner.tts.clone(), app.tools().clone());
+        // Jarvis's own Discord account (connects once Sir has pasted its token).
+        crate::discord_bot::start(app.clone(), app.inner.stt.clone(), app.inner.tts.clone(), app.inner.shutdown.clone());
         app
     }
 
@@ -425,6 +427,8 @@ impl Jarvis {
     }
 
     pub fn raise_alert(&self, message: String) {
+        // While Sir is away: kept for his digest and sent to his phone (Discord DM).
+        crate::away_mode::relay_alert(&message);
         self.emit(HudEvent::Notice { message: message.clone() });
         // Sir's phone shows it too (the mobile satellite).
         self.tools().stark.push_to_satellite(&message);

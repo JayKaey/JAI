@@ -95,6 +95,14 @@ chrono = { version = "0.4.38", features = ["serde"] }
 uuid = { version = "1.10.0", features = ["v4"] }
 aho-corasick = "1.1"
 
+# Jarvis's own Discord account (a bot): Opus for his voice in calls (audiopus_sys builds libopus
+# from source with CMake) and DAVE, Discord's end-to-end encryption that every voice call has
+# required since March 2026 (OpenMLS underneath, pure Rust).
+audiopus = "0.3.0-rc.0"
+davey = "0.2"
+# The voice transport's fallback mode (aead_xchacha20_poly1305_rtpsize), next to aes-gcm's AES-256-GCM.
+chacha20poly1305 = "0.10"
+
 [target.'cfg(windows)'.dependencies]
 # The prebuilt Windows ONNX Runtime always ships with DirectML; this only exposes the API so
 # Kokoro can optionally run on the GPU (`tts_gpu` in jarvis_config.json).
@@ -114,6 +122,8 @@ windows = { version = "0.54", features = [
     "Win32_Graphics_Gdi",
     # Instant Replay: JPEG frames through the Windows Imaging Component.
     "Win32_Graphics_Imaging",
+    # Discord voice: a 1 ms timer while Jarvis talks in a call (20 ms Opus frames).
+    "Win32_Media",
     "Win32_Media_Audio",
     "Win32_Media_Audio_Endpoints",
     # The HUD's CAMERA block: webcam frames through Media Foundation's source reader.

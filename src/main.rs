@@ -20,6 +20,7 @@ mod app_icon;
 mod audio_tags;
 mod appindex;
 mod audio_mixer;
+mod away_mode;
 mod block_actions;
 mod board_research;
 mod apps;
@@ -50,6 +51,8 @@ mod earth;
 mod shadow_memory;
 mod streamdeck_bridge;
 mod discord_bridge;
+mod discord_bot;
+mod discord_voice;
 mod wave_link;
 mod dsp;
 mod dynamic_popups;
@@ -159,6 +162,7 @@ mod voice_features;
 mod voice_reference;
 mod vram_guard;
 mod wake;
+mod watch_and_tell;
 mod web_connector;
 mod websearch;
 mod webuntis_client;
@@ -171,6 +175,7 @@ mod workbench;
 mod workout_coach;
 mod workspace_canvas;
 mod worldwide_tunnel;
+mod ws_client;
 // Checks against the real PC (mixer, power, give-way, voices): ignored unless asked for.
 #[cfg(test)]
 mod live_checks;
@@ -965,6 +970,9 @@ async fn start(cli: &Cli, cfg: JarvisConfig) -> Started {
     stark_tools.stark.start_background(&stark_tools, store.clone());
     satellite::start(app.clone(), shutdown.clone());
     remote_guardian::start(app.clone(), shutdown.clone());
+    // Away Mode's eye on the PC (lock, drives, Sir's return) and the "tell me when …" watches.
+    away_mode::start(app.tools().clone(), shutdown.clone());
+    watch_and_tell::start(shutdown.clone());
     // What his own jobs have to say once done (the radar's sweep, the disk map's scan), spoken
     // as soon as he is free.
     {

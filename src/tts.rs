@@ -1079,6 +1079,38 @@ static OUTPUT_LEVEL: AtomicU32 = AtomicU32::new(0);
 /// The same for the Discord copy of his voice (the HUD's routing meter).
 static MIRROR_LEVEL: AtomicU32 = AtomicU32::new(0);
 
+/// Jarvis's voice in a Discord call as his own account (`discord_bot`): every clause he renders
+/// (48 kHz mono), and `None` when he is interrupted (the call drops what is still queued).
+pub type VoiceTap = Box<dyn Fn(Option<&[f32]>) + Send + Sync>;
+static VOICE_TAP: Mutex<Option<VoiceTap>> = Mutex::new(None);
+
+/// Sir is in that call himself: he hears Jarvis through Discord, so the speaker at the PC plays
+/// silence of the same length (no second copy of his voice a moment later).
+static TAP_EXCLUSIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Where his voice goes besides the speaker (None: nowhere else).
+pub fn set_voice_tap(tap: Option<VoiceTap>) {
+    let mut slot = VOICE_TAP.lock().unwrap_or_else(|e| e.into_inner());
+    if tap.is_none() {
+        TAP_EXCLUSIVE.store(false, Ordering::Release);
+    }
+    *slot = tap;
+}
+
+pub fn set_voice_exclusive(on: bool) {
+    TAP_EXCLUSIVE.store(on, Ordering::Release);
+}
+
+fn voice_exclusive() -> bool {
+    TAP_EXCLUSIVE.load(Ordering::Acquire) && VOICE_TAP.lock().unwrap_or_else(|e| e.into_inner()).is_some()
+}
+
+fn tap_voice(clause: Option<&[f32]>) {
+    if let Some(tap) = VOICE_TAP.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+        tap(clause);
+    }
+}
+
 /// The speaker path for the HUD board's earcons (set when the controller starts).
 static EARCONS: std::sync::OnceLock<(Arc<Output>, Arc<AudioControls>)> = std::sync::OnceLock::new();
 
@@ -1440,6 +1472,7 @@ impl TtsController {
         let next = self.inner.generation.fetch_add(1, Ordering::AcqRel) + 1;
         self.inner.output.flush.store(true, Ordering::Release);
         self.inner.mirror.flush.store(true, Ordering::Release);
+        tap_voice(None);
         if self.inner.controls.is_speaking.load(Ordering::Acquire) {
             self.inner.controls.set_speaking(false);
         }
@@ -1805,7 +1838,12 @@ fn synth_worker(cfg: JarvisConfig, inner: Arc<Inner>, rx: &mpsc::Receiver<Job>, 
                 }
                 let rate = inner.output.device_rate.load(Ordering::Acquire);
                 inner.mirror.push_clause(&audio48);
-                let audio = joiner.push(resample_voice(&audio48, jarvis_voice_dsp::MASTER_RATE, rate), generation, rate);
+                tap_voice(Some(&audio48));
+                let mut audio = joiner.push(resample_voice(&audio48, jarvis_voice_dsp::MASTER_RATE, rate), generation, rate);
+                // Sir hears him through the call: the speaker keeps the timing, not the voice.
+                if voice_exclusive() {
+                    audio.fill(0.0);
+                }
                 tracing::debug!("[TTS] '{speech}' → {:.2}s audio in {synth_ms} ms", audio48.len() as f32 / jarvis_voice_dsp::MASTER_RATE as f32);
 
                 let mut offset = 0;
@@ -1835,7 +1873,10 @@ fn synth_worker(cfg: JarvisConfig, inner: Arc<Inner>, rx: &mpsc::Receiver<Job>, 
                 }
             }
             Job::Finish { generation } => {
-                let tail = joiner.finish(generation);
+                let mut tail = joiner.finish(generation);
+                if voice_exclusive() {
+                    tail.fill(0.0);
+                }
                 let mut offset = 0;
                 while offset < tail.len() && generation == inner.generation.load(Ordering::Acquire) {
                     offset += inner.output.producer.lock().unwrap_or_else(|e| e.into_inner())

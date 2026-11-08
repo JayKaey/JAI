@@ -68,6 +68,8 @@ pub async fn execute(action: MediaAction) -> Result<String, String> {
             let (level, muted) = mixer::master_state().await?;
             Ok(format!("System volume is {}%{}.", pct(level), if muted { " (muted)" } else { "" }))
         }
+        // A media key reaches whatever plays on the PC: never from a test.
+        MediaAction::PlayPause | MediaAction::Next | MediaAction::Previous | MediaAction::Stop if crate::platform::hands_off() => Ok("Media key left alone: a test never touches Sir's players.".into()),
         MediaAction::PlayPause | MediaAction::Next | MediaAction::Previous | MediaAction::Stop => win32::call(move || -> Result<String, String> {
             match action {
                 MediaAction::PlayPause => win32::tap_key(win32::VK_MEDIA_PLAY_PAUSE).map(|_| "Toggled play/pause.".to_string()),
@@ -190,6 +192,9 @@ mod linux {
     }
 
     pub fn execute(action: MediaAction) -> Result<String, String> {
+        if matches!(action, MediaAction::PlayPause | MediaAction::Next | MediaAction::Previous | MediaAction::Stop) && crate::platform::hands_off() {
+            return Ok("Media key left alone: a test never touches Sir's players.".into());
+        }
         match action {
             MediaAction::SetVolume(level) => {
                 set(level)?;
@@ -233,5 +238,13 @@ mod tests {
         assert_eq!(MediaAction::parse("volume_up", None), Some(MediaAction::VolumeUp(10)));
         assert_eq!(MediaAction::parse("play pause", None), Some(MediaAction::PlayPause));
         assert_eq!(MediaAction::parse("prev_track", None), Some(MediaAction::Previous));
+    }
+
+    /// A test never presses a media key: it would pause or skip whatever Sir is playing.
+    #[tokio::test]
+    async fn a_test_never_presses_a_media_key() {
+        for action in [MediaAction::PlayPause, MediaAction::Next, MediaAction::Previous, MediaAction::Stop] {
+            assert_eq!(execute(action).await, Ok("Media key left alone: a test never touches Sir's players.".to_string()), "{action:?}");
+        }
     }
 }

@@ -1762,6 +1762,16 @@ fn hud_view_sentence(text: &str) -> Option<Intent> {
     if let Some(intent) = shadow_or_server_command(&s) {
         return Some(intent);
     }
+    // Jarvis's own Discord account (once it is set up): calls as himself, pairing, his inbox.
+    if let Some(args) = crate::discord_bot::intent(&s) {
+        return Some(Intent::Tool { name: "discord_bot", args });
+    }
+    if let Some(args) = crate::away_mode::intent(&s) {
+        return Some(Intent::Tool { name: "away_mode", args });
+    }
+    if let Some(args) = crate::watch_and_tell::intent(&s) {
+        return Some(Intent::Tool { name: "watch_and_tell", args });
+    }
     if let Some(action) = discord_call_command(&s) {
         return Some(Intent::Tool { name: "discord_call", args: json!({ "action": action }) });
     }
