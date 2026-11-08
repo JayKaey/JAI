@@ -1456,6 +1456,10 @@ static TIMER_CONTROL: LazyLock<Regex> = LazyLock::new(|| {
 static NOTE_ON_PANEL: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(?:put|add|write|leave|pin|stick|post|create|make|take)\s+(?:me\s+|up\s+)?(?:(?:a|an|another)\s+)?(?:new\s+|quick\s+|little\s+)?note\s+(?:(?:on|to|onto|in)\s+(?:the\s+|my\s+|your\s+)?(?:board|panel|hud|screen|widgets\s+panel)\s+)?(?:saying|that says|which says|that reads|reading|says|with the text|with)\s+(.+)$|^(?:put|add|write|leave|pin|stick|post|create|make|take)\s+(?:me\s+|up\s+)?(?:(?:a|an|another)\s+)?(?:new\s+|quick\s+|little\s+)?note\s+(?:on|to|onto|in)\s+(?:the\s+|my\s+|your\s+)?(?:board|panel|hud|screen|widgets\s+panel)\s+(.+)$|^(?:schreib|schreibe|mach|mache|leg|lege|erstelle|erstell|pack|setz|setze|häng|hänge)\s+(?:mir\s+)?(?:(?:eine|ne)\s+)?(?:neue\s+|kurze\s+)?notiz\s+(?:(?:auf|an|in)\s+(?:das|die|den|dem|mein|meine)\s+(?:board|tafel|panel|hud)\s+)?(?:mit\s+(?:dem\s+text\s+)?|dass\s+)?(.+)$")
 });
+/// "… in a new window" after a note's text: a window of its own for it.
+static NOTE_WINDOW_TAIL: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"\s+(?:in|into|as|on)\s+(?:a\s+|an\s+|its\s+own\s+|one\s+|the\s+)?(?:new|separate|second|own|extra|another|real)\s+(?:native\s+|os\s+)?window$|\s+(?:in|als)\s+(?:einem\s+|ein\s+)?(?:neuen|neues|eigenen|separaten|extra)\s+fenster$")
+});
 /// The way a note that was asked for last names its place ("… on the board").
 static NOTE_PLACE_TAIL: LazyLock<Regex> =
     LazyLock::new(|| re(r"\s+(?:on|onto|to|in|auf|an)\s+(?:the|my|your|das|die|den|dem|mein|meine)\s+(?:board|panel|hud|screen|tafel)$"));
@@ -1587,15 +1591,23 @@ fn widget_sentence(s: &str, text: &str) -> Option<Intent> {
         // The word before his text: from there on, the text is as he wrote it.
         let cue = s[..said.start()].split_whitespace().last().unwrap_or("note");
         let words = NOTE_PLACE_TAIL.replace(said.as_str(), "");
+        // "… in a new window": where the note goes, not words of it.
+        let separate = NOTE_WINDOW_TAIL.is_match(&words);
+        let words = NOTE_WINDOW_TAIL.replace(&words, "");
         // (Two notes in one sentence are two notes, however fast they are read.)
         static NOTES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         let note = as_written(text, cue, &words);
         // Named after its first words ("what's open?" reads the names out).
         let head = note.split([',', ';', '\n']).next().unwrap_or("").split_whitespace().take(5).collect::<Vec<_>>().join(" ");
+        let id = format!("note_{}_{}", crate::widgets::now_ms(), NOTES.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+        let title = format!("Note: {}", head.trim_end_matches(|c: char| !c.is_alphanumeric()));
+        if separate {
+            return Some(Intent::Tool { name: "spawn_native_window", args: json!({ "id": id, "title": title, "markdown": note, "separate_window": true, "width": 460, "height": 300 }) });
+        }
         return widget(json!({
-            "id": format!("note_{}_{}", crate::widgets::now_ms(), NOTES.fetch_add(1, std::sync::atomic::Ordering::Relaxed)),
+            "id": id,
             "type": "MarkdownNoteCard",
-            "title": format!("Note: {}", head.trim_end_matches(|c: char| !c.is_alphanumeric())),
+            "title": title,
             "markdown": note,
         }));
     }
@@ -2136,6 +2148,16 @@ fn panel_args(text: &str, s: &str, up: PanelsUp) -> Option<Value> {
         }
         if radar || up.radar {
             return Some(view("network_radar", "rescan"));
+        }
+    }
+
+    // ---- The disk map while it is up: one folder back out ("go back" stays the music's).
+    if up.disk {
+        static FOLDER_UP: LazyLock<Regex> = LazyLock::new(|| {
+            re(r"^(?:go\s+)?up\s+(?:a|one)\s+(?:folder|level|directory)$|^go\s+(?:back\s+)?up$|^(?:go\s+)?(?:one\s+|a\s+)?(?:folder|level|directory)\s+up$|^(?:go\s+)?back\s+out(?:\s+of\s+(?:this|the)\s+folder)?$|^(?:go\s+)?(?:back\s+)?to\s+the\s+parent\s+(?:folder|directory)$|^(?:einen\s+|eine\s+)?(?:ordner|ebene)\s+(?:hoch|nach\s+oben|zurück|zurueck)$")
+        });
+        if FOLDER_UP.is_match(s) {
+            return Some(view("disk_map", "back"));
         }
     }
 
@@ -5912,6 +5934,19 @@ mod tests {
         assert_eq!(strip_article("chrome on my pc"), "chrome");
     }
 
+    /// "… in a new window" after a note: a window of its own, and not words of the note.
+    #[test]
+    fn a_note_in_a_new_window_gets_one() {
+        let (name, args) = tool("Add a note saying buy milk in a new window").expect("a note");
+        assert_eq!(name, "spawn_native_window");
+        assert_eq!((args["markdown"].as_str(), args["title"].as_str(), args["separate_window"].as_bool()), (Some("buy milk"), Some("Note: buy milk"), Some(true)));
+        assert!(args["id"].as_str().is_some_and(|id| id.starts_with("note_")), "{args}");
+        let (name, args) = tool("Add a note saying buy milk").expect("a note");
+        assert_eq!((name, args["markdown"].as_str()), ("create_or_update_widget", Some("buy milk")));
+        assert!(NOTE_WINDOW_TAIL.is_match("milch kaufen in einem neuen fenster"));
+        assert!(!NOTE_WINDOW_TAIL.is_match("look out of the window"));
+    }
+
     #[test]
     fn panels_from_the_reference_videos() {
         let none = PanelsUp::default();
@@ -5979,6 +6014,9 @@ mod tests {
         is("Where is the ISS?", none, "earth", "show_iss");
         is("Show me the storms", none, "earth", "show_storms");
         is("zoom in", earth_up, "earth", "zoom_in");
+        for text in ["Go up a folder", "up one level", "go back up", "one folder up", "back out", "go to the parent folder", "Einen Ordner hoch"] {
+            is(text, disk_up, "disk_map", "back");
+        }
         assert_eq!(panel_command("hide the flights", earth_up).unwrap()["layer"], "flights");
         assert_eq!(panel_command("Show me the earth in a new window", none).unwrap()["separate_window"], true);
         // Follow-ups only while their panel is up, and nobody else's words.
@@ -6001,6 +6039,10 @@ mod tests {
             ("make the globe bigger", none),
             ("Rescan", none),
             ("What is an earthquake?", none),
+            ("go up a folder", none),
+            ("go back", disk_up),
+            ("back up my documents folder", disk_up),
+            ("turn it up", disk_up),
         ] {
             assert_eq!(panel_command(text, up), None, "{text}");
         }

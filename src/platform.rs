@@ -167,6 +167,13 @@ pub fn in_test_session() -> bool {
     IN_TEST_SESSION.load(std::sync::atomic::Ordering::Acquire)
 }
 
+/// A scripted session that never moves the focus, its own windows' or anyone else's: Sir may
+/// be playing on another monitor. Every test session but the window drill's, which drives the
+/// HUD's own keys.
+pub fn quiet_session() -> bool {
+    in_test_session() && !crate::window_drill::enabled()
+}
+
 /// Whether a scripted session is running on this desktop.
 pub fn test_session_running() -> bool {
     #[cfg(windows)]

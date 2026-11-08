@@ -50,8 +50,8 @@ The HUD is the fullscreen board on one monitor, or one board across all of them 
 monitors", "stop spanning", "toggle span mode", the SCREENS menu, F11 to leave). Across several
 monitors the HUD proper (header, console, emblem, the board) stays on the primary one; the
 others are room for windows, each of which stands whole on one monitor. The emblem rests in the
-middle of that screen; it leaves it for a report on the board, or when told to "move out of the
-way" (until "come back").
+middle of that screen; it leaves it for a report on the board, for a panel on the centre stage
+(below), or when told to "move out of the way" (until "come back").
 
 F11 switches between the fullscreen board and a maximised window. "Make Discord full screen" is
 about Discord, "full screen" alone about the window in front, and neither ever about him; "move
@@ -59,6 +59,45 @@ Discord to another monitor" takes it to the next one.
 
 Jarvis starts with an empty HUD. "Open that widget again next time" keeps one for the next
 start; "bring back my windows" reopens what was open last, also after a restart.
+
+## Panels
+
+Three panels open by voice, as a block on the board or in a window of their own ("… in a new
+window"), and close with "close the radar", "close the disk map", "close the globe". On the
+board a panel takes the centre stage when nothing else stands there, and the emblem moves to its
+corner until the panel closes or is dragged away:
+
+- **Network radar**: "check the network", "who's on my wifi?", "scan my network again" sweep
+  the local network and place every device that answers; "is my network secure?" looks over
+  what the sweep found and says what stands out.
+- **Disk map**: "what is taking up space?" maps the system drive as a treemap, "map my D drive"
+  another drive or folder; clicking a box goes into it, a right-click, BACK, the breadcrumb or
+  "go up a folder" comes back out, and when the reading is done Jarvis says in two sentences
+  what fills it.
+- **Earth**: "show me the earth" opens the globe, "switch to satellite view" and "go back to
+  the hologram" change its face, "fly to Tokyo" turns it. On it: "were there any earthquakes
+  near Tokyo recently?", "show me the flights over New York", "show me the storms", "show me
+  the fires", "where is the space station?", and "hide the flights" takes a layer off. The
+  globe fetches public data while it is open (NASA GIBS imagery, USGS and EONET events, the
+  ISS position, OpenSky flights).
+
+Every window of his opens with a holographic entrance (the frame draws in, brackets close,
+a scan line passes) and leaves with an exit (it folds into a line), whether it is opened or
+closed by voice, by its CLOSE chip, by Ctrl+W, or as a window of its own. Asked for again while
+it is leaving, it stays.
+
+A pill at the top of the HUD says what he is doing: LISTENING, THINKING, SPEAKING, MUTED or
+STANDBY. While Sir speaks, his voice shows as a ring of ticks round the emblem. Both can be
+switched off in the VIEW menu. F1 (or M) mutes the microphone; the key hints at the bottom right
+can be clicked.
+
+"Explain what's on my screen" (and every other look at the screen) leaves his own windows out
+of the capture, so he reads what is behind them; they stay on the monitor (Windows 10 2004 or
+later). The HUD frosts over for a moment while he looks, and a card under the emblem names what
+he saw ("VIDEO DETECTED", "ERROR DETECTED", "CODE DETECTED") with three quick actions.
+
+A file dropped on the HUD becomes the file of the conversation: "summarize this file" or "what
+is in this file?" are about it. The console shows which file is loaded.
 
 ## Volume
 
@@ -102,7 +141,8 @@ real programs only, never for the PC or the sound.
 Notes, lists, clocks and charts go up without the language model: "add a note saying call Tom at
 5", "make a shopping list with milk and eggs", "add butter to my shopping list", "check off milk",
 "start a stopwatch", "pause the timer", "show me a CPU chart". "The note", "the timer", "the list"
-mean the latest one of that kind. "What's open?" names his board, blocks, windows and widgets.
+mean the latest one of that kind. "… in a new window" gives a note a window of its own, and "close
+the note" closes that too. "What's open?" names his board, blocks, windows and widgets.
 
 Questions are looked up, not guessed at: "is Firefox open?", "läuft Discord?", "is the mixer
 open?", "how long is left on the timer?", "is my mic muted?", "why is it so quiet?", "are you in
@@ -155,8 +195,16 @@ JARVIS.exe --live-test             # every probe in the running app; nothing is 
 JARVIS.exe --live-test --headless  # the same with the HUD drawn offscreen (no window)
 JARVIS.exe --exhaustive 5          # the live test plus the exhaustive matrices, five runs in a row
 JARVIS.exe --silent --chat "..."   # ask him for real, unseen and unheard; answers go to jarvis.log
+JARVIS.exe --silent --show --monitor 2 --chat "..."   # the same in the real window, on monitor 2
+JARVIS.exe --live-test --monitor 2   # the live test with its window on monitor 2
 JARVIS.exe --silent --show --window-drill --chat "What time is it?"   # SCREENS buttons and F11 in the real window
 ```
+
+`--monitor <n>` opens a test session's window on monitor n (1 = the primary) for that session
+only, so a test never lands on the monitor you are playing on. A window of its own without a
+place on the board opens on that monitor too. A test session never moves the focus: its board
+covers the monitor as a borderless window rather than winit's fullscreen (which forces a new
+window to the front with an Alt tap), and none of its windows asks to be brought forward.
 
 `--window-drill` clicks every SCREENS button (each monitor, the span and back, CLOSE) and
 presses F11 out of and back into the fullscreen board, in the real window, one step at a time,

@@ -47,6 +47,9 @@ impl VirtualHud {
     fn new(app: Jarvis, rt: Handle, size: Vec2) -> Self {
         let ctx = egui::Context::default();
         install_fonts(&ctx);
+        // Its blocks are measured where they rest (the verifier's own row plays the entrance and
+        // the exit: `set_still`).
+        set_still(&ctx, true);
         configure_style(&ctx, app.config().read(|c| c.interface.font_scale));
         crate::theme_engine::attach_database(&app.config().read(|c| c.memory_db_path.clone()));
         let model = Arc::new(Mutex::new(HudModel::default()));
@@ -66,6 +69,12 @@ impl VirtualHud {
 
     pub(crate) fn screen(&self) -> Rect {
         Rect::from_min_size(Pos2::ZERO, self.size)
+    }
+
+    /// Blocks drawn at rest (`true`, the default here) or with their entrance and exit, as in
+    /// the window.
+    pub(crate) fn animate_windows(&mut self, on: bool) {
+        set_still(&self.ctx, !on);
     }
 
     /// Whether one of the HUD's own surfaces is open: "console", "core", "history", "screens",

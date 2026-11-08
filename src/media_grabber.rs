@@ -65,16 +65,27 @@ async fn active_browser_url() -> Result<String, String> {
     .ok_or("No browser window is open, Sir.")?;
     let before = crate::clipboard::read().await.unwrap_or_default();
     let hwnd = browser.hwnd;
-    crate::win32::call(move || {
-        crate::win32::focus(hwnd);
-        std::thread::sleep(Duration::from_millis(150));
-        let _ = crate::win32::send_chord(&[VK_CONTROL], VK_L);
-        std::thread::sleep(Duration::from_millis(80));
-        let _ = crate::win32::send_chord(&[VK_CONTROL], VK_C);
-        std::thread::sleep(Duration::from_millis(120));
-        let _ = crate::win32::tap_key(VK_ESCAPE);
+    // The keys go to the browser or nowhere: when it would not come to the front they are not
+    // sent (Ctrl+L, Ctrl+C and Escape would land in whatever Sir is using).
+    let in_front = crate::win32::call(move || {
+        for wait in [150, 300] {
+            crate::win32::focus(hwnd);
+            std::thread::sleep(Duration::from_millis(wait));
+            if crate::win32::is_foreground(hwnd) {
+                let _ = crate::win32::send_chord(&[VK_CONTROL], VK_L);
+                std::thread::sleep(Duration::from_millis(80));
+                let _ = crate::win32::send_chord(&[VK_CONTROL], VK_C);
+                std::thread::sleep(Duration::from_millis(120));
+                let _ = crate::win32::tap_key(VK_ESCAPE);
+                return true;
+            }
+        }
+        false
     })
     .await?;
+    if !in_front {
+        return Err("The browser would not come to the front, so I couldn't read its address. Give me the link, Sir.".into());
+    }
     let url = crate::clipboard::read().await.unwrap_or_default();
     let _ = crate::clipboard::write(&before).await;
     let url = url.trim().to_string();

@@ -2,22 +2,18 @@
 
 /// One sentence each, spoken as they stand.
 pub const NOTES: &[&str] = &[
-    "\"Leave orb mode\" and \"turn off orb mode\" bring the whole HUD back.",
-    "\"Set every volume to 50\" sets each app at once, and \"my PC's volume\" is the master.",
-    "\"Make Discord full screen\" is about Discord, and \"move Discord to another monitor\" works.",
-    "\"Clear my VRAM\" hands the graphics card back to you right away, and \"go to standby\" works too.",
-    "\"Make the interface rose\" switches to the rose theme.",
-    "\"Make the opacity 0\" stops at 15 percent and says so, so you can still find me.",
-    "\"Kannst du dich selbst schließen?\" closes me, even when it is misheard.",
-    "\"Don't make the windows overlap\" keeps them apart instead of being taken as a no.",
-    "\"Open the integrations hub\" opens it by voice.",
-    "\"Play my playlist called workout\" finds the list by its name, whatever words come around it.",
-    "\"Füge einen Termin hinzu\" adds an event, and the word terminal is never taken for one.",
-    "A typed slip like \"stop listeting\" still does what you meant.",
-    "A late yes to a restart or shutdown question that has lapsed runs nothing, and I say so.",
-    "\"What happens if I restart my PC?\" is told what it does, and nothing happens.",
-    "\"Put my PC into shutdown mode\" is understood, and I still ask once first.",
-    "F11 from a window gives the true fullscreen board again, not a maximised window underneath.",
+    "\"Check the network\" opens the network radar and sweeps it, and \"who is on my wifi?\" names the devices.",
+    "\"Is my network secure?\" looks over the devices on the radar and tells you what stands out.",
+    "\"What is taking up space?\" maps your drive as a treemap, and \"map my D drive\" maps D.",
+    "\"Show me the earth\" opens the globe, \"switch to satellite view\" changes it, and \"fly to Tokyo\" goes there.",
+    "Earthquakes near a place, the flights over a city, storms, fires and the space station show on the globe.",
+    "\"Close the globe\" closes it, also when it has a window of its own.",
+    "My windows open with a holographic entrance and leave with an exit, by voice or by hand.",
+    "A status pill at the top shows whether I am listening, thinking or speaking.",
+    "While you speak, your voice shows as a ring of ticks round my emblem; the VIEW menu turns it off.",
+    "F1 mutes the microphone, and the key hints at the bottom right can be clicked.",
+    "\"Explain what's on my screen\" reads what is behind my own windows, and a card offers quick actions.",
+    "Drop a file on the HUD and ask about it, for example \"summarize this file\".",
 ];
 
 /// The answer to "what's new?".

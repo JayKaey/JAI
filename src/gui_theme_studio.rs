@@ -101,7 +101,8 @@ fn body(ui: &mut Ui) {
 /// Registers the studio while it is open (a block on the board, or its own window once
 /// detached); the theme Sir saved this frame, if any.
 pub(super) fn show(ctx: &egui::Context, iface: &InterfaceSettings) -> Option<CustomTheme> {
-    if !OPEN.load(Ordering::Acquire) {
+    // (Closed while it was its own window: it plays its exit first.)
+    if !super::detached_keep(ctx, ViewportId::from_hash_of("jarvis_theme_studio"), OPEN.load(Ordering::Acquire)) {
         crate::hud_dock::forget(ID);
         return lock(&SAVED).take();
     }
@@ -130,9 +131,10 @@ pub(super) fn show(ctx: &egui::Context, iface: &InterfaceSettings) -> Option<Cus
     if let Some((at, size)) = super::detached_placement(ctx, ID) {
         builder = builder.with_position(at).with_inner_size(size);
     }
+    let builder = super::for_test_session(builder);
     ctx.show_viewport_deferred(ViewportId::from_hash_of("jarvis_theme_studio"), builder, move |ctx, class| {
         crate::crash_guard::guard("theme studio", || {
-            if ctx.input(|i| i.viewport().close_requested()) || !OPEN.load(Ordering::Acquire) {
+            if ctx.input(|i| i.viewport().close_requested()) || (!OPEN.load(Ordering::Acquire) && !super::detached_leaving(ctx)) {
                 OPEN.store(false, Ordering::Release);
                 ctx.send_viewport_cmd(ViewportCommand::Visible(false));
                 ctx.request_repaint_of(ViewportId::ROOT);

@@ -266,6 +266,22 @@ pub const CASES: &[Case] = &[
     c("holomat", 1, "Open the simulation lab.", "open_jarvis_view", r#"{"view": "simulation_lab"}"#),
     c("holomat", 2, "Öffne das Simulationslabor.", "open_jarvis_view", r#"{"view": "simulation_lab"}"#),
     c("holomat", 3, "open the holomat", "open_jarvis_view", r#"{"view": "simulation_lab"}"#),
+    // ---- The reference videos' panels: network radar, disk map, Earth ----
+    c("panels", 1, "Check the network.", "open_jarvis_view", r#"{"view": "network_radar", "action": "show"}"#),
+    c("panels", 1, "Who's on my wifi?", "open_jarvis_view", r#"{"view": "network_radar", "action": "show"}"#),
+    c("panels", 1, "Is my network secure?", "open_jarvis_view", r#"{"view": "network_radar", "action": "check_security"}"#),
+    c("panels", 1, "What is taking up space?", "open_jarvis_view", r#"{"view": "disk_map", "action": "show"}"#),
+    c("panels", 1, "Map my D drive.", "open_jarvis_view", r#"{"view": "disk_map", "path": "D:\\"}"#),
+    c("panels", 1, "Show me the earth.", "open_jarvis_view", r#"{"view": "earth", "action": "show"}"#),
+    c("panels", 1, "Were there any earthquakes near Tokyo recently?", "open_jarvis_view", r#"{"view": "earth", "action": "show_quakes", "place": "Tokyo"}"#),
+    c("panels", 1, "Show me the flights over New York.", "open_jarvis_view", r#"{"view": "earth", "action": "show_flights", "place": "New York"}"#),
+    c("panels", 1, "Close the globe.", "hud_board", r#"{"action": "close", "target": "globe"}"#),
+    c("panels", 2, "Scanne mein Netzwerk.", "open_jarvis_view", r#"{"view": "network_radar"}"#),
+    c("panels", 2, "Was frisst meinen Speicherplatz?", "open_jarvis_view", r#"{"view": "disk_map"}"#),
+    c("panels", 2, "Zeig mir die Erde.", "open_jarvis_view", r#"{"view": "earth"}"#),
+    c("panels", 3, "hey jarvis check check the network", "open_jarvis_view", r#"{"view": "network_radar"}"#),
+    c("panels", 3, "where did all my space go", "open_jarvis_view", r#"{"view": "disk_map"}"#),
+    c("panels", 3, "show me the globe", "open_jarvis_view", r#"{"view": "earth"}"#),
     // ---- The board's own controls: tidy, find, sound cues ----
     c("blocks", 1, "Tidy the windows.", "hud_board", r#"{"action": "tidy"}"#),
     c("blocks", 1, "Find voltage on the board.", "hud_board", r#"{"action": "find", "target": "voltage"}"#),
@@ -423,6 +439,7 @@ pub const COMPOUNDS: &[Compound] = &[
     Compound { category: "schedule", say: "Open my WebUntis schedule and set theme to Arc Cyan.", wants: &[("check_school_schedule|open_jarvis_view", "{}"), THEME_CYAN], needs: Needs::Nothing },
     Compound { category: "research", say: "Research solid state batteries and move the orb to the top right.", wants: &[("hud_board", r#"{"action": "research"}"#), ORB_TOP_RIGHT], needs: Needs::Nothing },
     Compound { category: "holomat", say: "Open the simulation lab and pause the music.", wants: &[("open_jarvis_view", r#"{"view": "simulation_lab"}"#), PAUSE], needs: Needs::Nothing },
+    Compound { category: "panels", say: "Check the network and pause the music.", wants: &[("open_jarvis_view", r#"{"view": "network_radar"}"#), PAUSE], needs: Needs::Nothing },
     Compound { category: "blocks", say: "Tidy the windows and turn off the sound cues.", wants: &[("hud_board", r#"{"action": "tidy"}"#), ("configure_interface", r#"{"sound_cues": false}"#)], needs: Needs::Nothing },
     Compound { category: "flashcards", say: "Quiz me on my flashcards and pause the music.", wants: &[("manage_flashcards", r#"{"action": "quiz"}"#), PAUSE], needs: Needs::Nothing },
     Compound { category: "formula", say: "Show me the formula for kinetic energy and open my system stats.", wants: &[("lookup_formula", "{}"), STATS], needs: Needs::Nothing },
@@ -695,6 +712,82 @@ fn text_findings(frame: &visual::Frame) -> Vec<String> {
     found
 }
 
+/// The window animations as the window plays them, on the real HUD: a block grows into its
+/// place as it opens, its content showing after its frame, and closed by its `[ CLOSE ]` it
+/// plays its exit (drawn smaller, still there) before it leaves.
+fn window_motion(hud: &mut crate::gui::offscreen::VirtualHud, tools: &ToolContext, rows: &mut Vec<Row>) {
+    let started = Instant::now();
+    let mut found = Vec::new();
+    let id = block_id(0);
+    // How much narrower than its place the block's frame is drawn (none: not drawn), and
+    // whether its title shows.
+    let look = |frame: &visual::Frame| -> (Option<f32>, bool) {
+        let Some(place) = crate::hud_dock::block_rect(&id) else { return (None, false) };
+        let widest = frame.fills.iter().filter(|f| (f.rect.center() - place.center()).length() <= 2.0 && f.rect.width() <= place.width() + 1.0 && f.rect.width() >= place.width() * 0.8).map(|f| f.rect.width()).fold(None, |m: Option<f32>, w| Some(m.map_or(w, |m| m.max(w))));
+        let titled = frame.find_text("verifier // entrance").iter().any(|t| place.expand(2.0).contains(t.center()));
+        (widest.map(|w| (place.width() - w).max(0.0)), titled)
+    };
+    hud.animate_windows(true);
+    let _ = tools.widgets.spawn_window(&json!({ "id": id, "title": "Verifier // entrance", "markdown": "The reactor holds its output.", "replace_content": true, "width": 540, "height": 330 }));
+    // The entrance, frame by frame, until it has rested a while.
+    let mut entrance: Vec<(Option<f32>, bool)> = Vec::new();
+    let mut first: Option<Instant> = None;
+    while first.map_or(started.elapsed() < Duration::from_millis(1500), |at| at.elapsed() < Duration::from_millis(600)) {
+        let seen = look(&hud.frame(1.0 / 60.0));
+        if seen.0.is_some() {
+            first.get_or_insert_with(Instant::now);
+            entrance.push(seen);
+        }
+    }
+    let narrowest = entrance.iter().filter_map(|s| s.0).fold(0.0f32, f32::max);
+    match entrance.last() {
+        None => found.push("the block's frame was never drawn".to_string()),
+        Some(&(gap, titled)) => {
+            if narrowest < 2.0 {
+                found.push(format!("the block did not grow into its place (at most {narrowest:.1} px narrower than at rest)"));
+            }
+            if gap.unwrap_or(0.0) > 1.0 || !titled {
+                found.push(format!("after its entrance the block is {:.1} px narrower than its place{}", gap.unwrap_or(0.0), if titled { "" } else { " and its title is not drawn" }));
+            }
+            if entrance.first().is_some_and(|s| s.1) {
+                found.push("the block's title showed in its first frame (its content should come in after its frame)".to_string());
+            }
+        }
+    }
+    // The exit: closed by hand, it is still there for a moment, drawn smaller, then gone.
+    let frame = hud.frames_at(2, 60.0);
+    let place = crate::hud_dock::block_rect(&id);
+    match frame.find_exact("[ CLOSE ]").into_iter().find(|r| place.is_some_and(|p| p.contains(r.center()))) {
+        None => found.push("the block shows no [ CLOSE ]".to_string()),
+        Some(chip) => {
+            hud.click(chip.center(), PointerButton::Primary);
+            hud.pointer_gone();
+            let leaving = crate::hud_dock::is_open(&id);
+            let closed_at = Instant::now();
+            let mut smallest = 0.0f32;
+            while closed_at.elapsed() < Duration::from_millis(1500) && crate::hud_dock::is_open(&id) {
+                if let (Some(gap), _) = look(&hud.frame(1.0 / 60.0)) {
+                    smallest = smallest.max(gap);
+                }
+            }
+            hud.frames_at(3, 60.0);
+            if !leaving {
+                found.push("the block vanished at the click instead of playing its exit".to_string());
+            } else if smallest < 1.5 {
+                found.push(format!("the block did not shrink as it left (at most {smallest:.1} px narrower)"));
+            }
+            if crate::hud_dock::is_open(&id) || tools.widgets.windows().iter().any(|w| w.id == id) {
+                found.push("the block was still open 1.5 s after its [ CLOSE ]".to_string());
+            }
+        }
+    }
+    hud.animate_windows(false);
+    let _ = tools.widgets.close_window(&id);
+    crate::hud_dock::forget(&id);
+    hud.frames_at(10, 60.0);
+    row(rows, "a block grows into place as it opens and plays its exit when closed".to_string(), started, found, format!("{} entrance frame(s), at most {narrowest:.1} px narrower on the way in", entrance.len()));
+}
+
 /// The offscreen HUD's blocks the verifier opened, by number.
 fn block_id(n: usize) -> String {
     format!("exhaustive_block_{n}")
@@ -886,6 +979,8 @@ fn visual_matrix(hud: &mut crate::gui::offscreen::VirtualHud, tools: &ToolContex
     crate::monitors::pretend(None);
     hud.resize(home, Pos2::ZERO);
     hud.frames_at(20, 60.0);
+
+    window_motion(hud, tools, &mut rows);
 
     // The keyboard: Ctrl+K opens the console's palette, Ctrl+F the search across the blocks,
     // Esc closes the search again.

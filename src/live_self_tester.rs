@@ -1026,6 +1026,37 @@ async fn hud_probes(app: &Jarvis) {
         // Whatever happened, the probe window does not stay.
         let _ = tools.widgets.close_window("selftest_probe");
 
+        // While he looks at the screen his own window is left out of the picture (nothing is
+        // captured here: only the window's display affinity is read). The exhaustive verifier
+        // draws the HUD offscreen: no window of its own, nothing to leave out.
+        #[cfg(windows)]
+        {
+            const LEFT_OUT: &str = "his window is left out of a screen capture while he looks, and back after";
+            let hud = crate::gui::hud_hwnd();
+            if hud == 0 {
+                skip("hud", LEFT_OUT, "the HUD is drawn offscreen here: it has no window to leave out (checked by --live-test with the window)");
+            } else {
+                let started = Instant::now();
+                let looking = crate::screen_context::look().await;
+                let out = crate::screen_context::left_out(hud);
+                drop(looking);
+                // (The window is let back in on the Win32 worker: once it has caught up.)
+                let _ = crate::win32::call(|| ()).await;
+                let back = !crate::screen_context::left_out(hud);
+                judge(
+                    "hud",
+                    LEFT_OUT,
+                    UI_BUDGET_MS,
+                    ms_since(started),
+                    match (out, back) {
+                        (true, true) => Ok("left out while looking, captured again after".to_string()),
+                        (false, _) => Err("the HUD stayed in the capture (Windows older than 10 2004?)".to_string()),
+                        (true, false) => Err("the HUD stayed left out of captures after the look".to_string()),
+                    },
+                );
+            }
+        }
+
         // The emblem: to a corner by the screenshot's sentence family, then back where it was.
         let before = tools.config.read(|c| c.interface.orb_board_pos);
         let started = Instant::now();

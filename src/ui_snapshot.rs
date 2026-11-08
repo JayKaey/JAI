@@ -56,6 +56,8 @@ impl Snapshot {
     pub fn new(size: egui::Vec2) -> Self {
         let ctx = egui::Context::default();
         crate::gui::install_fonts(&ctx);
+        // Measured as it rests: no window entrance or exit moves what is checked.
+        ctx.data_mut(|d| d.insert_temp(egui::Id::new(crate::gui::STILL_WINDOWS), true));
         Self { ctx, textures: HashMap::new(), size }
     }
 

@@ -148,11 +148,15 @@ pub(super) fn show_simulations(ctx: &egui::Context, host: &WidgetHost) {
     let revision = lab.revision();
     let changed = SEEN.swap(revision, std::sync::atomic::Ordering::AcqRel) != revision;
     let sims = lab.list();
+    // (A window playing its exit keeps its run until it has gone.)
+    let leaving: Vec<String> = SHOWN.lock().unwrap_or_else(|e| e.into_inner()).iter().map(|(sim, _)| sim.id.clone()).collect();
     {
         let mut guard = RUNTIMES.lock().unwrap_or_else(|e| e.into_inner());
-        guard.get_or_insert_with(HashMap::new).retain(|id, _| sims.iter().any(|s| s.id == *id));
+        guard.get_or_insert_with(HashMap::new).retain(|id, _| sims.iter().any(|s| s.id == *id) || leaving.contains(id));
     }
     let p = Palette::new(&host.app.config().read(|c| c.interface.clone()));
+    let open_ids: Vec<String> = sims.iter().map(|s| s.id.clone()).collect();
+    let mut shown_now: Vec<(Simulation, ViewportBuilder)> = Vec::new();
     for sim in sims {
         let key = dock_key(&sim.id);
         if !crate::hud_dock::adopt(&key) {
@@ -187,21 +191,47 @@ pub(super) fn show_simulations(ctx: &egui::Context, host: &WidgetHost) {
         if let Some((at, size)) = super::detached_placement(ctx, &key) {
             builder = builder.with_position(at).with_inner_size(size);
         }
+        let builder = super::for_test_session(builder);
+        // (Asked for again while it was leaving: it stays.)
+        super::detached_keep(ctx, viewport_id(&sim.id), true);
+        shown_now.push((sim.clone(), builder.clone()));
         let (host, id) = (host.clone(), sim.id.clone());
         ctx.show_viewport_deferred(viewport_id(&sim.id), builder, move |ctx, class| {
             crate::crash_guard::guard("Simulation Lab window", || sim_frame(ctx, class, &host, &id));
         });
     }
+    // A simulation closed while it had a window of its own plays the window's exit before the
+    // window goes; one that went back into the HUD leaves at once.
+    let before = std::mem::take(&mut *SHOWN.lock().unwrap_or_else(|e| e.into_inner()));
+    for (sim, builder) in before {
+        if shown_now.iter().any(|(s, _)| s.id == sim.id) || open_ids.contains(&sim.id) || !super::detached_keep(ctx, viewport_id(&sim.id), false) {
+            continue;
+        }
+        let (host, id) = (host.clone(), sim.id.clone());
+        ctx.show_viewport_deferred(viewport_id(&sim.id), builder.clone(), move |ctx, class| {
+            crate::crash_guard::guard("Simulation Lab window", || sim_frame(ctx, class, &host, &id));
+        });
+        shown_now.push((sim, builder));
+    }
+    *SHOWN.lock().unwrap_or_else(|e| e.into_inner()) = shown_now;
 }
+
+/// The simulations in windows of their own shown in the last frame, as they were (with their
+/// builders): one that was closed keeps its window while its exit plays, drawn from here.
+static SHOWN: Mutex<Vec<(Simulation, ViewportBuilder)>> = Mutex::new(Vec::new());
 
 fn sim_frame(ctx: &egui::Context, class: ViewportClass, host: &WidgetHost, id: &str) {
     let lab = &host.app.tools().stark.simlab;
-    let Some(sim) = lab.get(id) else {
+    // (Closed and playing its exit: drawn as it was.)
+    let open = lab.get(id);
+    let leaving = open.is_none();
+    let shown = || SHOWN.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|(sim, _)| sim.id == id).map(|(sim, _)| sim.clone());
+    let Some(sim) = open.or_else(|| shown().filter(|_| super::detached_leaving(ctx))) else {
         ctx.send_viewport_cmd(ViewportCommand::Visible(false));
         ctx.request_repaint_of(ViewportId::ROOT);
         return;
     };
-    if ctx.input(|i| i.viewport().close_requested()) {
+    if !leaving && ctx.input(|i| i.viewport().close_requested()) {
         // Closing the detached window brings the simulation back onto the HUD.
         crate::hud_dock::dock(&dock_key(id));
         ctx.send_viewport_cmd(ViewportCommand::Visible(false));

@@ -121,12 +121,17 @@ struct DockState {
     search: String,
     /// Blocks that have been drawn at least once (the materialise cue sounds on the first).
     drawn: HashSet<String>,
+    /// When each block began to appear: its entrance runs `OPEN_ANIM` from then.
+    opened: HashMap<String, Instant>,
     /// The block Sir pressed the mouse on: where it stood then, and where the pointer was.
     grab: Option<(String, Rect, Pos2)>,
 }
 
-/// A block closed by voice fades out over this long before it leaves the board.
-pub const CLOSE_FADE: Duration = Duration::from_millis(180);
+/// A block that closes (by voice, its `[ CLOSE ]`, the menu or Ctrl+W) plays its exit over
+/// this long before it leaves the board.
+pub const CLOSE_FADE: Duration = Duration::from_millis(220);
+/// A block's entrance takes this long: its frame materialises first, then its content.
+pub const OPEN_ANIM: Duration = Duration::from_millis(300);
 
 static STATE: Mutex<Option<DockState>> = Mutex::new(None);
 
@@ -185,8 +190,19 @@ pub fn adopt(id: &str) -> bool {
     })
 }
 
-/// A window that closed: forgotten, so opening it again starts inside the HUD.
+/// Block `id` has finished its exit: off the board at once, not only from the next frame (a
+/// panel that has just left no longer holds the centre stage for the emblem).
+pub fn off_board(id: &str) {
+    with(|s| {
+        s.blocks.retain(|(block, _, _)| block != id);
+        s.last_blocks.retain(|(block, _, _)| block != id);
+    });
+}
+
+/// A window that closed: forgotten, so opening it again starts inside the HUD (and it is off
+/// the board at once).
 pub fn forget(id: &str) {
+    off_board(id);
     with(|s| {
         s.seen.remove(id);
         s.detached.remove(id);
@@ -196,6 +212,7 @@ pub fn forget(id: &str) {
         s.forced.remove(id);
         s.content.remove(id);
         s.drawn.remove(id);
+        s.opened.remove(id);
         if s.maximized.as_ref().is_some_and(|(open, _)| open == id) {
             s.maximized = None;
         }
@@ -394,6 +411,39 @@ pub fn close_all_blocks() -> usize {
     n
 }
 
+/// Block `id` begins its exit (its `[ CLOSE ]`, the menu, Ctrl+W): it closes once that has
+/// played (`closing_progress` reaches 1).
+pub fn begin_close(id: &str) {
+    with(|s| {
+        s.closing.entry(id.to_string()).or_insert_with(Instant::now);
+    });
+    crate::gui::refresh();
+}
+
+/// Block `id` was asked for again while it was leaving: it stays.
+pub fn cancel_close(id: &str) {
+    with(|s| s.closing.remove(id));
+}
+
+/// How far block `id`'s entrance is (0 … 1); None once it has fully appeared. A block that was
+/// not on the board the frame before begins its entrance now: newly opened, reopened, or back
+/// with the board.
+pub fn opening_progress(id: &str) -> Option<f32> {
+    with(|s| {
+        let was_up = s.last_blocks.iter().any(|(b, _, _)| b == id);
+        let since = match s.opened.get(id) {
+            Some(at) if was_up => *at,
+            _ => {
+                let now = Instant::now();
+                s.opened.insert(id.to_string(), now);
+                now
+            }
+        };
+        let t = since.elapsed().as_secs_f32() / OPEN_ANIM.as_secs_f32();
+        (t < 1.0).then_some(t.max(0.0))
+    })
+}
+
 /// A close request nobody collected for this long is dropped (its block went another way), so a
 /// block opened later under the same id never closes on its first frame.
 const CLOSE_EXPIRY: Duration = Duration::from_secs(3);
@@ -514,6 +564,40 @@ pub fn centre_covered(screen: Rect, rects: &[Rect]) -> bool {
     rects.iter().any(|r| r.is_positive() && r.intersects(zone))
 }
 
+// ------------------------------------------------------------------------ the centre stage ----
+
+/// The feature panels that open on the centre stage, as in the reference videos ("check the
+/// network", "what is taking up space?", "show me the earth"): the emblem makes room for them
+/// the way it does for a report on the board, and comes back when they close or are moved off.
+pub const STAGE_BLOCKS: [&str; 3] = ["network_radar", "disk_map", "earth"];
+
+pub fn is_stage_block(id: &str) -> bool {
+    STAGE_BLOCKS.contains(&id)
+}
+
+/// The centre stage of `area` for a panel that asks for `size` (frame included): centred, about
+/// three fifths of the screen wide and two thirds high (room is left beside it for a block or
+/// two), never smaller than it asked for while the screen has room, never past the screen.
+pub fn stage_rect(area: Rect, size: eframe::egui::Vec2) -> Rect {
+    let room = area.shrink2(vec2(24.0, 8.0)).size().max(vec2(1.0, 1.0));
+    let want = vec2(size.x.max(area.width() * 0.60), size.y.max(area.height() * 0.66));
+    Rect::from_center_size(area.center(), want.min(room))
+}
+
+/// Whether a stage panel stands on the centre of `screen`, or is being put there (not while it
+/// leaves): the emblem docks for it.
+pub fn stage_covers_centre(screen: Rect) -> bool {
+    let zone = centre_safe_zone(screen);
+    with(|s| {
+        s.last_blocks
+            .iter()
+            .chain(s.blocks.iter())
+            .map(|(id, _, rect)| (id, *rect))
+            .chain(s.forced.iter().map(|(id, (rect, _))| (id, *rect)))
+            .any(|(id, rect)| is_stage_block(id) && !s.detached.contains(id) && !s.closing.contains_key(id) && rect.is_positive() && rect.intersects(zone))
+    })
+}
+
 /// The docked emblem's centre: bottom-right, left of the text console while it is out
 /// (`console_width` = how far it has slid in), so the console never covers it.
 pub fn docked_centre(screen: Rect, console_width: f32) -> Pos2 {
@@ -530,6 +614,14 @@ static OVERLAP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::n
 /// The emblem's rect and the board's visible blocks this frame.
 pub fn publish_obstacles(orb: Option<Rect>, board: Vec<Rect>) {
     *lock(&OBSTACLES) = (orb, board);
+}
+
+/// Where the emblem goes when it docks (bottom right, left of the console while that is out):
+/// a panel never takes a centre stage that would cover it there.
+static DOCKED_SPOT: Mutex<Option<Rect>> = Mutex::new(None);
+
+pub fn publish_docked_spot(spot: Option<Rect>) {
+    *lock(&DOCKED_SPOT) = spot;
 }
 
 /// Sir told the emblem to get out of the way (it waits in its corner until he calls it back).
@@ -672,12 +764,23 @@ pub fn place_new_block(id: &str, bounds: Rect, regions: &[Rect], size: eframe::e
     });
     let windows: Vec<Rect> = open.iter().map(|(_, r)| *r).filter(|r| r.is_positive()).collect();
     let areas: Vec<Rect> = if regions.is_empty() { vec![bounds] } else { regions.iter().map(|r| r.intersect(bounds)).filter(|r| r.is_positive()).collect() };
-    let with_board: Vec<Rect> = windows.iter().copied().chain(board).chain(orb).collect();
+    let with_board: Vec<Rect> = windows.iter().copied().chain(board.iter().copied()).chain(orb).collect();
     let with_orb: Vec<Rect> = windows.iter().copied().chain(orb).collect();
     let hold = |at: Pos2, size: eframe::egui::Vec2| {
         with(|s| s.forced.insert(id.to_string(), (Rect::from_min_size(at, size), FORCED_FRAMES)));
         (at, size)
     };
+    // A feature panel takes the centre stage of the HUD's own screen when nothing of Sir's is
+    // standing there (the emblem makes room: `stage_covers_centre`); else it finds a place like
+    // any block.
+    if is_stage_block(id) {
+        let stage = stage_rect(areas.first().copied().unwrap_or(bounds), size);
+        let docked = *lock(&DOCKED_SPOT);
+        let others: Vec<Rect> = windows.iter().copied().chain(board.iter().copied()).chain(docked).collect();
+        if stage.width() >= MIN_BLOCK[0] && stage.height() >= MIN_BLOCK[1] && !others.iter().any(|r| r.expand(TILE_GAP * 0.5).intersects(stage)) {
+            return hold(stage.min, stage.size());
+        }
+    }
     let mut tried: Option<eframe::egui::Vec2> = None;
     for shrink in [1.0f32, 0.8, 0.64, 0.5] {
         let fitted = vec2((size.x * shrink).max(MIN_BLOCK[0] + 20.0), (size.y * shrink).max(MIN_BLOCK[1] + 20.0));
@@ -1011,6 +1114,79 @@ mod tests {
         begin_frame();
         begin_frame();
         publish_obstacles(None, Vec::new());
+    }
+
+    #[test]
+    fn a_feature_panel_takes_the_centre_stage() {
+        let _g = test_lock();
+        set_overlap_allowed(false);
+        begin_frame();
+        begin_frame();
+        with(|s| s.forced.clear());
+        let s = screen();
+        let bounds = Rect::from_min_max(pos2(8.0, 60.0), pos2(1912.0, 1020.0));
+        let orb = Rect::from_center_size(s.center(), vec2(380.0, 380.0));
+        publish_obstacles(Some(orb), Vec::new());
+        // Where the emblem docks: bottom right.
+        publish_docked_spot(Some(Rect::from_center_size(docked_centre(s, 0.0), vec2(138.0, 138.0))));
+        // Nothing stands there: the Earth opens in the middle, where the emblem was, and the
+        // emblem makes room from the frame it is put there.
+        let (at, size) = place_new_block("earth", bounds, &[], vec2(1060.0, 660.0), pos2(40.0, 80.0));
+        let stage = Rect::from_min_size(at, size);
+        assert!((stage.center() - bounds.center()).length() < 1.0 && stage.width() >= 1060.0 && stage.height() >= 660.0 && bounds.contains_rect(stage), "{stage:?}");
+        assert!(stage_covers_centre(s));
+        for _ in 0..2 {
+            begin_frame();
+            publish_block("earth", "Earth", stage);
+        }
+        with(|st| st.forced.clear());
+        assert!(stage_covers_centre(s));
+        // Leaving, or in a window of its own, it no longer holds the stage.
+        begin_close("earth");
+        assert!(!stage_covers_centre(s), "the emblem comes back while it leaves");
+        cancel_close("earth");
+        detach("earth");
+        assert!(!stage_covers_centre(s));
+        with(|st| st.detached.remove("earth"));
+        // Any other block keeps off the emblem as before, and there is room beside the stage.
+        let (at, size) = place_new_block("tile_test_plain", bounds, &[], vec2(320.0, 220.0), pos2(40.0, 80.0));
+        let plain = Rect::from_min_size(at, size);
+        assert!(!plain.intersects(orb) && !plain.intersects(stage), "{plain:?}");
+        // Closed, it is off the stage at once: the emblem does not turn back to its corner for
+        // the frames the block was still listed in.
+        forget("earth");
+        assert!(!stage_covers_centre(s), "off the stage from the frame it closed");
+        // With a block of Sir's in the middle, the radar finds a place like any block.
+        begin_frame();
+        begin_frame();
+        with(|st| st.forced.clear());
+        let middle = Rect::from_center_size(s.center(), vec2(500.0, 300.0));
+        publish_block("tile_test_middle", "Middle", middle);
+        let (at, size) = place_new_block("network_radar", bounds, &[], vec2(1060.0, 660.0), pos2(40.0, 80.0));
+        let radar = Rect::from_min_size(at, size);
+        assert!(!radar.intersects(middle) && !radar.intersects(orb), "{radar:?}");
+        // A stage that is smaller than the panel's own size on a small window still fits it.
+        let small = Rect::from_min_max(pos2(8.0, 60.0), pos2(1272.0, 660.0));
+        assert!(small.contains_rect(stage_rect(small, vec2(1060.0, 660.0))));
+        // Where the stage would cover the emblem's docked spot (the console out on a small
+        // screen), the panel finds a place like any block instead.
+        for id in ["tile_test_plain", "tile_test_middle", "network_radar"] {
+            forget(id);
+        }
+        begin_frame();
+        begin_frame();
+        with(|st| st.forced.clear());
+        let spot = Rect::from_center_size(pos2(1300.0, 820.0), vec2(138.0, 138.0));
+        publish_docked_spot(Some(spot));
+        let (at, size) = place_new_block("disk_map", bounds, &[], vec2(1060.0, 660.0), pos2(40.0, 80.0));
+        let disk = Rect::from_min_size(at, size);
+        assert!(disk != stage_rect(bounds, vec2(1060.0, 660.0)) && !disk.intersects(spot), "{disk:?}");
+        forget("disk_map");
+        begin_frame();
+        begin_frame();
+        with(|st| st.forced.clear());
+        publish_obstacles(None, Vec::new());
+        publish_docked_spot(None);
     }
 
     #[test]

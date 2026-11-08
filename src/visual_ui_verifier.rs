@@ -409,7 +409,7 @@ fn of_theme(colour: Color32, hues: &[f32]) -> bool {
         return true;
     }
     let (status, _, _) = theme_engine::to_hsv(STATUS_RED);
-    if hue_distance(h, status) <= 8.0 {
+    if hue_distance(h, status) <= 8.0 || pill_colour(colour) {
         return true;
     }
     if hues.iter().any(|t| hue_distance(h, *t) <= HUE_SLACK) {
@@ -420,6 +420,24 @@ fn of_theme(colour: Color32, hues: &[f32]) -> bool {
         let arc = hue_distance(*a, *b);
         arc < 150.0 && (hue_distance(h, *a) + hue_distance(h, *b) - arc).abs() < 1.0
     }))
+}
+
+/// Whether `colour` is one of the status pill's own (green listening, amber thinking, red
+/// speaking, grey muted or standby, as on the reference board): status colours, the same in
+/// every theme. Only those colours themselves, not their hues.
+fn pill_colour(colour: Color32) -> bool {
+    let [r, g, b, a] = colour.to_array();
+    if a == 0 {
+        return false;
+    }
+    // A fading pill's colours are premultiplied: undone, they are the pill's own up to the
+    // rounding, which grows as the alpha falls.
+    let scale = 255.0 / a as f32;
+    let slack = 2.0 + scale;
+    crate::gui::PILL_WORDS.iter().flat_map(|word| crate::gui::pill_colours(word)).any(|pill| {
+        let [pr, pg, pb, _] = pill.to_array();
+        [(r, pr), (g, pg), (b, pb)].iter().all(|&(c, p)| (c as f32 * scale - p as f32).abs() <= slack)
+    })
 }
 
 /// Check 4: every outline and every mesh colour in the frame that is not of `palette` (named
@@ -1360,6 +1378,37 @@ mod tests {
         let found = jumps(&[0.0, 0.1, 0.9, 1.0], 0.5);
         assert!(found.len() == 1 && found[0].0 == 2 && (found[0].1 - 0.8).abs() < 1e-5, "{found:?}");
         assert!(monotonic(&[0.0, 0.2, 0.2, 0.9], true) && !monotonic(&[0.0, 0.3, 0.2], true));
+    }
+
+    #[test]
+    fn the_status_pill_keeps_its_own_colours_in_every_theme() {
+        let mut frame = Frame { screen: Rect::from_min_size(Pos2::ZERO, vec2(400.0, 300.0)), ..Frame::default() };
+        let clip = frame.screen;
+        let at = Rect::from_min_size(pos2(10.0, 10.0), vec2(90.0, 20.0));
+        for word in crate::gui::PILL_WORDS {
+            for (i, colour) in crate::gui::pill_colours(word).into_iter().enumerate() {
+                // Steady, and half-way through the 33 ms cross-fade.
+                for colour in [colour, colour.gamma_multiply(0.5), colour.gamma_multiply(0.2)] {
+                    if i == 3 {
+                        frame.strokes.push(StrokeItem { clip, rect: at, colour, width: 1.0 });
+                    } else {
+                        frame.mesh_colours.push((at, colour));
+                    }
+                }
+            }
+        }
+        for (name, palette) in theme_engine::PRESETS {
+            fail(&format!("the pill under {name}"), off_theme(&frame, name, &palette));
+        }
+        fail("the pill under Ultron", off_theme(&frame, "Ultron", &theme_engine::ULTRON));
+        // Only the pill's own colours: another green is still off a red theme.
+        frame.strokes.push(StrokeItem { clip, rect: at, colour: Color32::from_rgb(0x20, 0xC0, 0x40), width: 1.0 });
+        let found = off_theme(&frame, "Crimson Overdrive", &theme_engine::resolve("crimson_overdrive"));
+        assert!(found.len() == 1 && found[0].contains("#20C040"), "{found:?}");
+        // Every word the pill can show has its colours here.
+        for (state, muted, asleep) in [("idle", false, false), ("thinking", false, false), ("speaking", false, false), ("idle", true, false), ("idle", false, true)] {
+            assert!(crate::gui::PILL_WORDS.contains(&crate::gui::pill_word(state, muted, asleep)));
+        }
     }
 
     #[test]

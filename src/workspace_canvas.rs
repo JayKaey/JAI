@@ -678,7 +678,10 @@ fn frame_body(ctx: &egui::Context, class: ViewportClass, app: &Jarvis, rt: &Hand
     }
     if w.focus {
         w.focus = false;
-        ctx.send_viewport_cmd(ViewportCommand::Focus);
+        // (Never in a test session: Sir may be playing.)
+        if !crate::platform::in_test_session() {
+            ctx.send_viewport_cmd(ViewportCommand::Focus);
+        }
     }
     if let Some(size) = w.pending_size.take() {
         ctx.send_viewport_cmd(ViewportCommand::InnerSize(size / ppp));

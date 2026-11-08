@@ -28,7 +28,7 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     BringWindowToTop, DestroyWindow, EnumWindows, FindWindowW, GetAncestor, GetClassNameW, GetForegroundWindow, GetWindow,
-    GetWindowLongPtrW, GetWindowPlacement, GetWindowRect, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId,
+    GetWindowLongPtrW, GetWindowPlacement, GetWindowRect, GetWindowTextLengthW, GetWindowThreadProcessId, InternalGetWindowText,
     IsIconic, IsWindow, IsWindowVisible, IsZoomed, PostMessageW, RegisterWindowMessageW, SendMessageW, SetForegroundWindow,
     SetWindowPlacement, SetWindowPos, ShowWindow, ShowWindowAsync, GA_ROOTOWNER, GWL_EXSTYLE, GW_OWNER, SHOW_WINDOW_CMD,
     SWP_NOACTIVATE, SWP_NOZORDER, SW_HIDE, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, SW_SHOW, SW_SHOWNORMAL, WINDOWPLACEMENT,
@@ -133,18 +133,27 @@ unsafe fn app_window(hwnd: HWND) -> Option<WindowInfo> {
         if DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &mut cloaked as *mut u32 as *mut c_void, std::mem::size_of::<u32>() as u32).is_ok() && cloaked != 0 {
             return None;
         }
-        let len = GetWindowTextLengthW(hwnd);
-        if len <= 0 {
+        let title = window_text(hwnd);
+        if title.is_empty() {
             return None;
         }
-        let mut buf = vec![0u16; len as usize + 1];
-        let n = GetWindowTextW(hwnd, &mut buf).max(0) as usize;
         let mut cls = [0u16; 256];
         let cn = GetClassNameW(hwnd, &mut cls).max(0) as usize;
         let mut pid = 0u32;
         GetWindowThreadProcessId(hwnd, Some(&mut pid));
-        Some(WindowInfo { hwnd: hwnd.0, title: String::from_utf16_lossy(&buf[..n]), class: String::from_utf16_lossy(&cls[..cn]), pid, process: process_name(pid).unwrap_or_default() })
+        Some(WindowInfo { hwnd: hwnd.0, title, class: String::from_utf16_lossy(&cls[..cn]), pid, process: process_name(pid).unwrap_or_default() })
     }
+}
+
+/// A window's title as Windows keeps it, read without asking the window. For a window of this
+/// process GetWindowText sends it WM_GETTEXT, which the HUD's thread answers only between two
+/// frames (it waits on the display): a turn routed while the HUD was the top window paid one
+/// or two frames (13 or 27 ms) for the HUD's title.
+fn window_text(hwnd: HWND) -> String {
+    let mut buf = [0u16; 512];
+    // SAFETY: a plain query into a sized local buffer; a window that has closed reads as "".
+    let n = unsafe { InternalGetWindowText(hwnd, &mut buf) }.clamp(0, buf.len() as i32) as usize;
+    String::from_utf16_lossy(&buf[..n])
 }
 
 /// Visible, uncloaked, unowned top-level application windows with a title.
@@ -535,6 +544,8 @@ pub fn window_state(hwnd: isize) -> Option<([i32; 4], bool, bool)> {
 pub fn move_to_display(hwnd: isize, target: &DisplayInfo) -> Result<(), String> {
     use windows::Win32::UI::WindowsAndMessaging::{HWND_TOP, SWP_SHOWWINDOW};
     let h = HWND(hwnd);
+    // A test session moves its windows without activating them.
+    let flags = if crate::platform::quiet_session() { SWP_SHOWWINDOW | SWP_NOACTIVATE } else { SWP_SHOWWINDOW };
     // SAFETY: window state queries and changes on a handle; failures are reported.
     unsafe {
         let maximised = IsZoomed(h).as_bool();
@@ -542,7 +553,7 @@ pub fn move_to_display(hwnd: isize, target: &DisplayInfo) -> Result<(), String> 
         let source = window_display_rect(hwnd).ok_or("could not read the window's monitor")?;
         if fullscreen {
             let [l, t, r, b] = target.rect;
-            SetWindowPos(h, HWND_TOP, l, t, r - l, b - t, SWP_SHOWWINDOW).map_err(|e| e.message().to_string())?;
+            SetWindowPos(h, HWND_TOP, l, t, r - l, b - t, flags).map_err(|e| e.message().to_string())?;
             return Ok(());
         }
         // Restores maximised / minimised windows so they have a normal frame to move.
@@ -559,7 +570,7 @@ pub fn move_to_display(hwnd: isize, target: &DisplayInfo) -> Result<(), String> 
         let x = (tl + (rx * tw as f32) as i32).clamp(tl, (tr - w).max(tl));
         let y = (tt + (ry * th as f32) as i32).clamp(tt, (tb - hgt).max(tt));
         let [bl, bt, br, bb] = borders;
-        SetWindowPos(h, HWND_TOP, x - bl, y - bt, w + bl + br, hgt + bt + bb, SWP_SHOWWINDOW).map_err(|e| e.message().to_string())?;
+        SetWindowPos(h, HWND_TOP, x - bl, y - bt, w + bl + br, hgt + bt + bb, flags).map_err(|e| e.message().to_string())?;
         if maximised {
             let _ = ShowWindow(h, SW_MAXIMIZE);
         }
@@ -684,9 +695,15 @@ pub fn tap_key(vk: VIRTUAL_KEY) -> Result<(), String> {
 }
 
 pub fn show_window(hwnd: isize, cmd: WindowCmd) {
+    use windows::Win32::UI::WindowsAndMessaging::{SW_SHOWMINNOACTIVE, SW_SHOWNOACTIVATE};
+    // A test session restores and minimises without activating a window (maximising has no
+    // such form; a test session's own windows are never maximised).
+    let quiet = crate::platform::quiet_session();
     let cmd: SHOW_WINDOW_CMD = match cmd {
+        WindowCmd::Minimize if quiet => SW_SHOWMINNOACTIVE,
         WindowCmd::Minimize => SW_MINIMIZE,
         WindowCmd::Maximize => SW_MAXIMIZE,
+        WindowCmd::Restore if quiet => SW_SHOWNOACTIVATE,
         WindowCmd::Restore => SW_RESTORE,
     };
     // SAFETY: ShowWindow tolerates stale handles.
@@ -702,8 +719,13 @@ pub enum WindowCmd {
     Restore,
 }
 
-/// Brings a window to the front despite the foreground lock (Alt-tap trick).
+/// Brings a window to the front despite the foreground lock (Alt-tap trick). Never in a test
+/// session (`platform::quiet_session`): the Alt tap would reach Sir's game. Every caller that
+/// sends keys afterwards checks `is_foreground` first, so they send none then.
 pub fn focus(hwnd: isize) {
+    if crate::platform::quiet_session() {
+        return;
+    }
     let h = HWND(hwnd);
     // SAFETY: plain Win32 calls on a window handle; failures are harmless.
     unsafe {
@@ -870,14 +892,26 @@ pub fn post_hud_quit(hwnd: isize) -> bool {
 }
 
 /// Shows the HUD (restoring it when minimised) and brings it to the front. Synchronous: run it
-/// on the Win32 worker thread (`run_detached`), never on the window's own thread.
+/// on the Win32 worker thread (`run_detached`), never on the window's own thread. A test session
+/// shows it without taking the focus (Sir may be playing on another monitor); the window
+/// drill's still does, it drives the window's own keys.
 pub fn show_hud(hwnd: isize) {
+    use windows::Win32::UI::WindowsAndMessaging::{SW_SHOWNA, SW_SHOWNOACTIVATE};
     let h = HWND(hwnd);
+    let quiet = crate::platform::quiet_session();
     // SAFETY: plain window state changes on a handle.
     unsafe {
-        let _ = ShowWindow(h, if IsIconic(h).as_bool() { SW_RESTORE } else { SW_SHOW });
+        let iconic = IsIconic(h).as_bool();
+        let _ = ShowWindow(h, match (iconic, quiet) {
+            (true, false) => SW_RESTORE,
+            (false, false) => SW_SHOW,
+            (true, true) => SW_SHOWNOACTIVATE,
+            (false, true) => SW_SHOWNA,
+        });
     }
-    focus(hwnd);
+    if !quiet {
+        focus(hwnd);
+    }
 }
 
 pub fn is_visible(hwnd: isize) -> bool {
@@ -915,18 +949,25 @@ pub fn window_placement(hwnd: isize) -> Option<([i32; 4], bool)> {
 }
 
 /// Moves a not-yet-shown window to remembered bounds, unless they are off every monitor now.
-pub fn restore_placement(hwnd: isize, [x, y, w, h]: [i32; 4]) {
+/// It stays hidden: eframe shows it after the first frame.
+pub fn restore_placement(hwnd: isize, bounds: [i32; 4]) {
+    set_normal_placement(hwnd, bounds, SW_HIDE);
+}
+
+/// Puts a shown window back at the bounds `window_placement` read earlier (leaving the floating
+/// orb), unless they are off every monitor now. It stays shown and is not activated (the
+/// startup form, `restore_placement`, hid the HUD when the orb was left).
+pub fn put_back_placement(hwnd: isize, bounds: [i32; 4]) {
+    use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNOACTIVATE;
+    set_normal_placement(hwnd, bounds, SW_SHOWNOACTIVATE);
+}
+
+fn set_normal_placement(hwnd: isize, [x, y, w, h]: [i32; 4], show: SHOW_WINDOW_CMD) {
     if w < 200 || h < 150 {
         return;
     }
     let rect = RECT { left: x, top: y, right: x + w, bottom: y + h };
-    let wp = WINDOWPLACEMENT {
-        length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
-        // Stays hidden; eframe shows it after the first frame.
-        showCmd: SW_HIDE.0 as u32,
-        rcNormalPosition: rect,
-        ..Default::default()
-    };
+    let wp = WINDOWPLACEMENT { length: std::mem::size_of::<WINDOWPLACEMENT>() as u32, showCmd: show.0 as u32, rcNormalPosition: rect, ..Default::default() };
     // SAFETY: valid struct pointers for the duration of the calls.
     unsafe {
         if MonitorFromRect(&rect, MONITOR_DEFAULTTONULL).0 != 0 {
@@ -981,3 +1022,30 @@ pub fn set_volume(level: f32) -> Result<(), String> {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::window_text;
+    use windows::core::w;
+    use windows::Win32::Foundation::{HINSTANCE, HWND};
+    use windows::Win32::UI::WindowsAndMessaging::{CreateWindowExW, DestroyWindow, HMENU, WINDOW_EX_STYLE, WS_POPUP};
+
+    /// A title is read from another thread without waiting for the window's own one: this thread
+    /// looks at no message until the read is back (GetWindowText would wait for it to answer).
+    #[test]
+    fn a_title_is_read_without_asking_the_window() {
+        // SAFETY: a hidden window owned by this test thread, destroyed below.
+        let hwnd = unsafe { CreateWindowExW(WINDOW_EX_STYLE(0), w!("STATIC"), w!("jarvis title test"), WS_POPUP, 0, 0, 120, 80, HWND(0), HMENU(0), HINSTANCE(0), None) };
+        assert_ne!(hwnd.0, 0, "test window");
+        let raw = hwnd.0;
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(window_text(HWND(raw)));
+        });
+        let title = rx.recv_timeout(std::time::Duration::from_secs(2));
+        // SAFETY: the window created above.
+        unsafe {
+            let _ = DestroyWindow(hwnd);
+        }
+        assert_eq!(title, Ok("jarvis title test".to_string()));
+    }
+}

@@ -406,7 +406,8 @@ fn row(ui: &mut Ui, tools: &ToolContext, rt: &Handle, name: &str, description: &
 /// Registers the lab with egui while it is open (each HUD frame): a block on the board, or its
 /// own window once detached.
 pub(super) fn show(ctx: &egui::Context, app: &crate::app::Jarvis, rt: &Handle) {
-    if !is_open() {
+    // (Closed while it was its own window: it plays its exit first.)
+    if !super::detached_keep(ctx, ViewportId::from_hash_of("jarvis_feature_lab"), is_open()) {
         crate::hud_dock::forget(ID);
         return;
     }
@@ -427,10 +428,11 @@ pub(super) fn show(ctx: &egui::Context, app: &crate::app::Jarvis, rt: &Handle) {
     if let Some((at, size)) = super::detached_placement(ctx, ID) {
         builder = builder.with_position(at).with_inner_size(size);
     }
+    let builder = super::for_test_session(builder);
     let (app, rt) = (app.clone(), rt.clone());
     ctx.show_viewport_deferred(ViewportId::from_hash_of("jarvis_feature_lab"), builder, move |ctx, class| {
         crate::crash_guard::guard("feature lab", || {
-            if ctx.input(|i| i.viewport().close_requested()) || !is_open() {
+            if ctx.input(|i| i.viewport().close_requested()) || (!is_open() && !super::detached_leaving(ctx)) {
                 OPEN.store(false, Ordering::Release);
                 ctx.send_viewport_cmd(ViewportCommand::Visible(false));
                 ctx.request_repaint_of(ViewportId::ROOT);

@@ -42,7 +42,8 @@ pub(super) fn close_in_app() {
 /// Registers the view with egui while it is open (each HUD frame): a ROSE block inside the HUD,
 /// or its own window once detached.
 pub(super) fn show(ctx: &egui::Context, host: &WidgetHost) {
-    if !OPEN.load(Ordering::Acquire) {
+    // (Closed while it was its own window: it plays its exit first.)
+    if !super::detached_keep(ctx, viewport_id(), OPEN.load(Ordering::Acquire)) {
         crate::hud_dock::forget("pairing");
         return;
     }
@@ -63,6 +64,7 @@ pub(super) fn show(ctx: &egui::Context, host: &WidgetHost) {
     if let Some((at, size)) = super::detached_placement(ctx, "pairing") {
         builder = builder.with_position(at).with_inner_size(size);
     }
+    let builder = super::for_test_session(builder);
     let host = host.clone();
     ctx.show_viewport_deferred(viewport_id(), builder, move |ctx, class| {
         crate::crash_guard::guard("pairing window", || frame(ctx, Some(class), &host));
@@ -98,7 +100,7 @@ pub(super) fn paint_qr(ui: &mut egui::Ui, url: &str, size: f32) {
 
 /// One frame of the pairing view: `class` None = the block inside the HUD.
 fn frame(ctx: &egui::Context, class: Option<ViewportClass>, host: &WidgetHost) {
-    if class.is_some() && (ctx.input(|i| i.viewport().close_requested()) || !OPEN.load(Ordering::Acquire)) {
+    if class.is_some() && (ctx.input(|i| i.viewport().close_requested()) || (!OPEN.load(Ordering::Acquire) && !super::detached_leaving(ctx))) {
         OPEN.store(false, Ordering::Release);
         ctx.send_viewport_cmd(ViewportCommand::Visible(false));
         ctx.request_repaint_of(ViewportId::ROOT);

@@ -715,6 +715,16 @@ fn viewport_id(id: &str) -> ViewportId {
     ViewportId::from_hash_of(("jarvis_window", id))
 }
 
+/// The Jarvis windows of their own shown in the last frame, as they were (spec and builder): one
+/// that was just closed (by voice, by its close button) keeps its viewport while its exit plays,
+/// drawn from here.
+static SHOWN: std::sync::Mutex<Vec<(NativeWindowSpec, ViewportBuilder)>> = std::sync::Mutex::new(Vec::new());
+
+/// Window `id` as it was while it plays its exit (closed, still on the screen).
+fn leaving_spec(id: &str) -> Option<NativeWindowSpec> {
+    SHOWN.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|(spec, _)| spec.id == id).map(|(spec, _)| spec.clone())
+}
+
 /// Logical position of a window: its own x/y, relative to the chosen monitor's work area.
 fn position(spec: &NativeWindowSpec, native_ppp: f32) -> Option<egui::Pos2> {
     if spec.monitor.is_none() && spec.x.is_none() && spec.y.is_none() {
@@ -757,13 +767,18 @@ pub(super) fn show_windows(ctx: &egui::Context, host: &WidgetHost) {
             match seen.iter_mut().find(|(id, _)| *id == spec.id) {
                 Some((_, raise)) if *raise != spec.raise => {
                     *raise = spec.raise;
-                    ctx.send_viewport_cmd_to(viewport_id(&spec.id), ViewportCommand::Focus);
+                    // (Never in a test session: Sir may be playing.)
+                    if !crate::platform::in_test_session() {
+                        ctx.send_viewport_cmd_to(viewport_id(&spec.id), ViewportCommand::Focus);
+                    }
                 }
                 Some(_) => {}
                 None => seen.push((spec.id.clone(), spec.raise)),
             }
         }
     }
+    let open_ids: Vec<String> = windows.iter().map(|w| w.id.clone()).collect();
+    let mut shown_now: Vec<(NativeWindowSpec, ViewportBuilder)> = Vec::new();
     for spec in windows {
         if !crate::hud_dock::adopt(&spec.id) {
             // Inside the HUD: a ROSE block.
@@ -813,23 +828,44 @@ pub(super) fn show_windows(ctx: &egui::Context, host: &WidgetHost) {
         } else if let Some((at, size)) = super::detached_placement(ctx, &spec.id) {
             builder = builder.with_position(at).with_inner_size(size);
         }
+        let builder = super::for_test_session(builder);
+        // (Asked for again while it was leaving: it stays.)
+        super::detached_keep(ctx, viewport_id(&spec.id), true);
+        shown_now.push((spec.clone(), builder.clone()));
         let (host, id) = (host.clone(), spec.id.clone());
         ctx.show_viewport_deferred(viewport_id(&spec.id), builder, move |ctx, class| {
             crate::crash_guard::guard("Jarvis window", || window_frame(ctx, class, &host, &id));
         });
     }
+    // A window of its own that was closed plays its exit before its viewport goes; one that went
+    // back into the HUD leaves at once, as the panels' windows do.
+    let before = std::mem::take(&mut *SHOWN.lock().unwrap_or_else(|e| e.into_inner()));
+    for (spec, builder) in before {
+        if shown_now.iter().any(|(s, _)| s.id == spec.id) || open_ids.contains(&spec.id) || !super::detached_keep(ctx, viewport_id(&spec.id), false) {
+            continue;
+        }
+        let (host, id) = (host.clone(), spec.id.clone());
+        ctx.show_viewport_deferred(viewport_id(&spec.id), builder.clone(), move |ctx, class| {
+            crate::crash_guard::guard("Jarvis window", || window_frame(ctx, class, &host, &id));
+        });
+        shown_now.push((spec, builder));
+    }
+    *SHOWN.lock().unwrap_or_else(|e| e.into_inner()) = shown_now;
 }
 
 /// One frame of a Jarvis window.
 fn window_frame(ctx: &egui::Context, class: ViewportClass, host: &WidgetHost, id: &str) {
     let engine = &host.app.tools().widgets;
-    let Some(spec) = engine.windows().into_iter().find(|w| w.id == id) else {
+    // (Closed and playing its exit: drawn as it was.)
+    let open = engine.windows().into_iter().find(|w| w.id == id);
+    let leaving = open.is_none();
+    let Some(spec) = open.or_else(|| leaving_spec(id).filter(|_| super::detached_leaving(ctx))) else {
         // Closed by Jarvis while the HUD was not painting: hide now, egui drops it next frame.
         ctx.send_viewport_cmd(ViewportCommand::Visible(false));
         ctx.request_repaint_of(ViewportId::ROOT);
         return;
     };
-    if ctx.input(|i| i.viewport().close_requested()) {
+    if !leaving && ctx.input(|i| i.viewport().close_requested()) {
         engine.window_closed_by_user(id);
         crate::hud_dock::forget(id);
         ctx.send_viewport_cmd(ViewportCommand::Visible(false));
@@ -988,8 +1024,8 @@ fn window_toolbar(ui: &mut Ui, ctx: &egui::Context, host: &WidgetHost, spec: &Na
     };
     let small = |text: &str| RichText::new(text).size(ts(11.0));
     if ui.add(egui::Button::new(small("X"))).on_hover_text("Close this window").clicked() {
+        // (It plays its exit, then goes: `show_windows`.)
         engine.window_closed_by_user(&spec.id);
-        ctx.send_viewport_cmd(ViewportCommand::Visible(false));
         ctx.request_repaint_of(ViewportId::ROOT);
         return;
     }

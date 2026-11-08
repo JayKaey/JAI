@@ -290,6 +290,12 @@ pub struct InterfaceSettings {
     /// reference board: the strip shows what Sir said, the voice carries the answer and the text
     /// console keeps every written reply.
     pub comms_block: bool,
+    /// The status pill at the top centre (LISTENING / THINKING / SPEAKING), as in the reference
+    /// videos.
+    pub status_pill: bool,
+    /// Sir's voice as a ring of ticks round the emblem while he speaks, as on the reference orb
+    /// (the emblem's own rings follow only Jarvis' voice).
+    pub voice_rim: bool,
     /// The board's sound cues (a block materialising, the spotlight, a mode change, an alert).
     pub sound_cues: bool,
     /// The HUD's colour theme (`theme_engine`): one of the eight presets ("rose_crimson",
@@ -339,6 +345,8 @@ impl Default for InterfaceSettings {
             orb_monitor: 0,
             ui_paradigm: crate::oled_minimal_ui::UiDesignParadigm::ModernOledMinimal,
             comms_block: false,
+            status_pill: true,
+            voice_rim: true,
             sound_cues: true,
             hud_palette: crate::theme_engine::DEFAULT_PRESET.to_string(),
             orb_board_pos: None,

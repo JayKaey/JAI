@@ -120,6 +120,7 @@ mod runtime;
 mod sandbox_runner;
 mod satellite;
 mod screen;
+mod screen_context;
 mod screen_time;
 mod self_improve;
 mod selftest;
@@ -235,6 +236,8 @@ struct Cli {
     /// `--exhaustive [runs]`: the live self-test and the exhaustive matrices, that many runs in
     /// a row, with the HUD drawn offscreen.
     exhaustive: Option<usize>,
+    /// `--monitor <n>`: a test session's window opens on monitor n (Sir plays on the primary).
+    monitor: Option<usize>,
 }
 
 impl Cli {
@@ -263,6 +266,7 @@ impl Cli {
             diagnose: false,
             live_test: false,
             exhaustive: None,
+            monitor: None,
         };
         let mut args = std::env::args().skip(1).peekable();
         while let Some(arg) = args.next() {
@@ -298,6 +302,10 @@ impl Cli {
                     let runs = args.next_if(|next| next.parse::<usize>().is_ok()).and_then(|n| n.parse().ok());
                     cli.exhaustive = Some(runs.unwrap_or(exhaustive_scenario_verifier::DEFAULT_RUNS).clamp(1, 50));
                 }
+                "--monitor" => {
+                    let n = args.next().and_then(|s| s.parse::<usize>().ok()).filter(|n| *n >= 1);
+                    cli.monitor = Some(n.ok_or("--monitor needs a monitor number (1 = the primary)")?);
+                }
                 "--chat" => cli.chat.push(args.next().ok_or("--chat needs a message")?),
                 "--chat-delay" => {
                     let secs: f64 = args.next().and_then(|s| s.parse().ok()).ok_or("--chat-delay needs seconds")?;
@@ -326,6 +334,10 @@ impl Cli {
         // The drill drives a real window, and only a silent session's (its settings stay in memory).
         if cli.window_drill && !(cli.silent && cli.show) {
             return Err("--window-drill needs --silent --show and one --chat request".into());
+        }
+        // Where a test window opens is that session's alone: its settings are never saved.
+        if cli.monitor.is_some() && !(cli.silent || cli.live_test) {
+            return Err("--monitor is for test sessions (--silent --show or --live-test), whose settings are never saved".into());
         }
         Ok(cli)
     }
@@ -365,6 +377,8 @@ USAGE: JARVIS.exe [OPTIONS]
   --window-drill      with --silent --show: click the SCREENS buttons and press F11 in the real
                       window (posted messages, your mouse untouched), check where Windows put it
                       on every monitor ([DRILL] lines in jarvis.log), then quit
+  --monitor <n>       with --silent --show or --live-test: the test window opens on monitor n
+                      (1 = the primary), this session only; e.g. --monitor 2 while you play
   --diagnose         test every integration (WebUntis, calendar, e-mail, WhatsApp …) and exit
   --live-test         start Jarvis, run every probe in the running app (routing, tools, HUD; silent,
                       nothing is sent or changed), write live_selftest_report.json and exit;
@@ -518,6 +532,13 @@ fn main() -> ExitCode {
         cfg.loudness_pct = 0;
         cfg.startup_greeting = false;
         platform::mark_test_session();
+        // `--monitor`: its window opens on that monitor only (not across all of them), so it
+        // stays off the one Sir is playing on.
+        if let Some(n) = cli.monitor {
+            cfg.interface.span_all_monitors = false;
+            cfg.interface.orb_monitor = u8::try_from(n).unwrap_or(u8::MAX);
+            gui::start_on_monitor(n);
+        }
     }
     if cli.silent {
         // What a script asks is not part of Sir's conversations, and what it sets off stays

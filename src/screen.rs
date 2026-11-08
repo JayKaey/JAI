@@ -151,7 +151,11 @@ async fn ocr(rect: Option<[i32; 4]>, label: String) -> Result<String, String> {
     let png = std::env::temp_dir().join(format!("jarvis_ocr_{}.png", std::process::id()));
     let script = ocr_script(rect, &png.display().to_string());
     let started = std::time::Instant::now();
+    // His own windows stay out of the picture while he looks (he reads what is behind them;
+    // they stay on the monitor), and the HUD frosts over meanwhile.
+    let looking = crate::screen_context::look().await;
     let out = powershell_encoded(&script).await.map_err(|e| if e.kind() == std::io::ErrorKind::TimedOut { "Reading the screen timed out.".to_string() } else { e.to_string() });
+    drop(looking);
     let _ = std::fs::remove_file(&png);
     let out = out?;
     let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
@@ -166,6 +170,8 @@ async fn ocr(rect: Option<[i32; 4]>, label: String) -> Result<String, String> {
     if text.is_empty() {
         return Ok(format!("No readable text was found on {label}."));
     }
+    // The card under the emblem: what he saw, with its quick actions.
+    crate::screen_context::seen(&label, &text);
     let count = text.chars().count();
     Ok(format!(
         "Text visible on {label} (OCR):\n{}{}",

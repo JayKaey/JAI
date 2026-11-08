@@ -1232,7 +1232,18 @@ impl WidgetEngine {
             }
             return Ok(format!("Removed all {} widgets.", ids.len()));
         }
-        let id = self.resolve_id(target).or_else(|| self.of_kind(target)).ok_or_else(|| format!("No widget matches '{target}'."))?;
+        let Some(id) = self.resolve_id(target).or_else(|| self.of_kind(target)) else {
+            // A note in a window of its own ("add a note … in a new window", then "close the
+            // note"): the latest such window. On the board it fades out first (its block closes
+            // it once that has played); a window of its own plays its exit as it closes.
+            let key = snake(target);
+            let window = self.windows().into_iter().rev().find(|w| !key.is_empty() && (w.id.starts_with(&format!("{key}_")) || snake(&w.title).starts_with(&key)));
+            return match window {
+                Some(w) if !crate::hud_dock::close_named(&w.id).is_empty() => Ok(format!("Closing the window '{}'.", w.id)),
+                Some(w) => self.close_window(&w.id),
+                None => Err(format!("No widget matches '{target}'.")),
+            };
+        };
         self.remove(&id);
         Ok(format!("Removed widget '{id}'."))
     }
@@ -1258,6 +1269,8 @@ impl WidgetEngine {
         if separate {
             crate::hud_dock::detach(&id);
         }
+        // Asked for again while it was leaving: it stays.
+        crate::hud_dock::cancel_close(&id);
         if self.windows().iter().any(|w| w.id == id) {
             let mut args = args.clone();
             if let Some(o) = args.as_object_mut() {
@@ -2082,6 +2095,11 @@ mod tests {
             assert!(matches!(e.widgets()[0].kind, WidgetKind::Checklist { .. }));
             // A kind he has none of stays an error.
             assert!(e.remove_tool(&json!({"id": "stopwatch"})).is_err());
+            // A note in a window of its own: "close the note" closes that window.
+            e.spawn_window(&json!({"id": "note_1_0", "title": "Note: buy milk", "markdown": "buy milk"})).unwrap();
+            assert!(e.remove_tool(&json!({"id": "note"})).is_ok());
+            assert!(e.windows().iter().all(|w| w.id != "note_1_0"), "the note's window is closed");
+            assert!(e.remove_tool(&json!({"id": "note"})).is_err(), "no note left");
         }
         let _ = std::fs::remove_file(&path);
     }

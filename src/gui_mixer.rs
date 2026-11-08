@@ -123,7 +123,8 @@ fn rows(ui: &mut Ui, channels: &mut [Channel], rt: &Handle) {
 
 /// Registers the mixer while it is open (a block on the board, or its own window once detached).
 pub(super) fn show(ctx: &egui::Context, rt: &Handle) {
-    if !OPEN.load(Ordering::Acquire) {
+    // (Closed while it was its own window: it plays its exit first.)
+    if !super::detached_keep(ctx, ViewportId::from_hash_of("jarvis_audio_mixer"), OPEN.load(Ordering::Acquire)) {
         crate::hud_dock::forget(ID);
         return;
     }
@@ -144,10 +145,11 @@ pub(super) fn show(ctx: &egui::Context, rt: &Handle) {
     if let Some((at, size)) = super::detached_placement(ctx, ID) {
         builder = builder.with_position(at).with_inner_size(size);
     }
+    let builder = super::for_test_session(builder);
     let rt = rt.clone();
     ctx.show_viewport_deferred(ViewportId::from_hash_of("jarvis_audio_mixer"), builder, move |ctx, class| {
         crate::crash_guard::guard("mixer", || {
-            if ctx.input(|i| i.viewport().close_requested()) || !OPEN.load(Ordering::Acquire) {
+            if ctx.input(|i| i.viewport().close_requested()) || (!OPEN.load(Ordering::Acquire) && !super::detached_leaving(ctx)) {
                 OPEN.store(false, Ordering::Release);
                 ctx.send_viewport_cmd(ViewportCommand::Visible(false));
                 ctx.request_repaint_of(ViewportId::ROOT);

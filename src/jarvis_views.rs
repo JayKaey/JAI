@@ -168,6 +168,8 @@ pub async fn run(ctx: &ToolContext, args: &Value) -> Result<String, String> {
             if separate(args) {
                 crate::hud_dock::detach(view.id());
             }
+            // Asked for again while it was leaving: it stays.
+            crate::hud_dock::cancel_close(view.id());
             match view {
                 JarvisSubWindow::NetworkRadar => crate::network_radar::run(args).await,
                 JarvisSubWindow::DiskMap => crate::disk_map::run(args).await,
