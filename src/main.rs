@@ -169,6 +169,7 @@ mod tools;
 mod tray;
 mod tts;
 mod ui_snapshot;
+mod live_shots;
 mod typos;
 mod audio_mixes;
 mod release_notes;

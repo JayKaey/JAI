@@ -173,6 +173,124 @@ async fn bench_stt(cfg: &JarvisConfig, pcm: &[f32], voiced_ms: u32) {
     }
 }
 
+/// `--selftest --bench`: Sir's own sentences from jarvis.log (among them those Whisper got wrong
+/// on 2026-11-09), said by another voice into a room with a fan, music or people talking: the
+/// share of words each Whisper setting gets right, so the defaults are picked by measurement.
+async fn bench_noise(cfg: &JarvisConfig, kokoro: &mut Kokoro, phonemizer: &Phonemizer, seed: &mut u32) {
+    const SAID: [&str; 10] = [
+        "Close the 3D model.",
+        "Show me a 3D model of the Iron Man armor.",
+        "Change the colour to green.",
+        "Make it way more detailed.",
+        "Jarvis, show me the Earth.",
+        "I don't want to see the satellites anymore.",
+        "Close that window.",
+        "Turn the trains back on.",
+        "Detach the 3D model.",
+        "Save it to my desktop.",
+    ];
+    const CHATTER: [&str; 2] = [
+        "So I told him we would meet at the station around six, and then we could still grab something to eat before the film starts.",
+        "Did you see the match last night? The second half was unbelievable, they scored three times in ten minutes.",
+    ];
+    let mut say = |text: &str, voice: &str| -> Vec<f32> {
+        let ipa = phonemizer.phonemize(&tts::normalize_for_speech(text));
+        let audio = kokoro.synthesize(&ipa, voice, 1.0).or_else(|_| kokoro.synthesize(&ipa, &cfg.kokoro_voice, 1.0)).unwrap_or_default();
+        let mut pcm = dsp::resample(&audio, tts::KOKORO_RATE, 16_000);
+        scale_to_rms(&mut pcm, 0.06);
+        pcm
+    };
+    let speech: Vec<Vec<f32>> = SAID.iter().map(|t| say(t, "am_michael")).collect();
+    let (a, b) = (say(CHATTER[0], "bf_emma"), say(CHATTER[1], "am_adam"));
+    let babble: Vec<f32> = (0..a.len().max(b.len())).map(|i| a.get(i).copied().unwrap_or(0.0) + b.get(i).copied().unwrap_or(0.0)).collect();
+    if babble.is_empty() || speech.iter().any(Vec::is_empty) {
+        warn!("[BENCH] noise: Kokoro gave no audio; skipped");
+        return;
+    }
+    // Music: a minor progression over a beat. A fan: low-passed noise.
+    let tau = std::f32::consts::TAU;
+    let music: Vec<f32> = (0..16_000 * 8)
+        .map(|i| {
+            let t = i as f32 / 16_000.0;
+            let chord = [[220.0, 261.6, 329.6], [174.6, 220.0, 261.6], [196.0, 246.9, 293.7]][(t / 2.0) as usize % 3];
+            let tones: f32 = chord.iter().map(|f| (tau * f * t).sin() + 0.3 * (tau * 2.0 * f * t).sin()).sum();
+            tones + 2.0 * (-(t % 0.5) * 18.0).exp() * (tau * 60.0 * t).sin()
+        })
+        .collect();
+    let mut low = 0.0f32;
+    let fan: Vec<f32> = noise(16_000 * 8, 1.0, seed).into_iter().map(|x| {
+        low += 0.08 * (x - low);
+        low
+    }).collect();
+    let rooms: [(&str, &[f32], f32); 5] = [("quiet", &fan[..], 30.0), ("fan 6 dB", &fan[..], 6.0), ("music 8 dB", &music[..], 8.0), ("talking 10 dB", &babble[..], 10.0), ("talking 3 dB", &babble[..], 3.0)];
+    // Half a second of the room before the words (the pre-roll), 0.4 s after them.
+    let mix = |speech: &[f32], bed: &[f32], snr: f32, offset: usize| -> Vec<f32> {
+        let gain = 0.06 / 10f32.powf(snr / 20.0) / dsp::rms(bed).max(1e-6);
+        (0..8_000 + speech.len() + 6_400).map(|i| bed[(offset + i) % bed.len()] * gain + i.checked_sub(8_000).and_then(|k| speech.get(k)).copied().unwrap_or(0.0)).collect()
+    };
+    let variants: Vec<(&str, ConfigTweak)> = vec![
+        ("current config", Box::new(|_c: &mut JarvisConfig| {})),
+        ("full encoder window", Box::new(|c: &mut JarvisConfig| c.whisper_dynamic_audio_ctx = false)),
+        ("encoder floor 512", Box::new(|c: &mut JarvisConfig| c.whisper_min_audio_ctx = 512)),
+        ("beam 5 for every sentence", Box::new(|c: &mut JarvisConfig| {
+            c.whisper_fast_decode = false;
+            c.whisper_beam_size = 5;
+        })),
+    ];
+    for (label, tweak) in variants {
+        let mut c = cfg.clone();
+        tweak(&mut c);
+        let stt = SttEngine::start(&c);
+        let wait = Instant::now();
+        while !stt.is_ready() && wait.elapsed() < Duration::from_secs(60) {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let (mut times, mut misses, mut per_room, mut all) = (Vec::new(), Vec::new(), Vec::new(), (0usize, 0usize));
+        for (k, (room, bed, snr)) in rooms.iter().enumerate() {
+            let (mut right, mut total) = (0usize, 0usize);
+            for (j, (said, pcm)) in SAID.iter().zip(&speech).enumerate() {
+                let heard = match stt.transcribe(mix(pcm, bed, *snr, (k * 7 + j) * 5_303), (pcm.len() / 16) as u32).await {
+                    Ok(t) => {
+                        times.push(t.stt_ms);
+                        crate::stt::normalize_stt_transcript(&t.text)
+                    }
+                    Err(_) => String::new(),
+                };
+                let (r, n) = words_right(said, &heard);
+                (right, total) = (right + r, total + n);
+                if r < n {
+                    misses.push(format!("{room}: '{said}' → '{heard}'"));
+                }
+            }
+            per_room.push(format!("{room} {:.0}%", 100.0 * right as f32 / total.max(1) as f32));
+            all = (all.0 + right, all.1 + total);
+        }
+        times.sort_unstable();
+        info!("[BENCH] noise  {label:<26} {:.1}% of words right ({}), median {} ms", 100.0 * all.0 as f32 / all.1.max(1) as f32, per_room.join(", "), times.get(times.len() / 2).copied().unwrap_or(0));
+        for m in misses.iter().take(10) {
+            info!("[BENCH]          {m}");
+        }
+    }
+}
+
+/// How many words of `said` came through in `heard` (the word-level edit distance taken off),
+/// and how many there were.
+fn words_right(said: &str, heard: &str) -> (usize, usize) {
+    let words = |s: &str| -> Vec<String> { s.to_lowercase().replace("colour", "color").replace("armour", "armor").replace('\'', "").split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).map(str::to_string).collect() };
+    let (a, b) = (words(said), words(heard));
+    let mut row: Vec<usize> = (0..=b.len()).collect();
+    for (i, x) in a.iter().enumerate() {
+        let mut diagonal = row[0];
+        row[0] = i + 1;
+        for (j, y) in b.iter().enumerate() {
+            let above = row[j + 1];
+            row[j + 1] = (diagonal + usize::from(x != y)).min(row[j] + 1).min(above + 1);
+            diagonal = above;
+        }
+    }
+    (a.len().saturating_sub(row[b.len()]), a.len())
+}
+
 pub async fn run(cfg: &JarvisConfig, speak: bool, bench: bool, llm_stage: bool) -> ExitCode {
     let mut r = Report { failures: Vec::new() };
     let mut seed = 0x5eed_1234u32;
@@ -439,6 +557,7 @@ pub async fn run(cfg: &JarvisConfig, speak: bool, bench: bool, llm_stage: bool) 
     if bench {
         drop(stt);
         bench_stt(cfg, &utterance, vad.speech_ms).await;
+        bench_noise(cfg, &mut kokoro, &phonemizer, &mut seed).await;
         drop(kokoro);
         let clauses = [
             "Right away, Sir.",
@@ -622,5 +741,19 @@ fn summary(r: Report) -> ExitCode {
     } else {
         error!("[TEST] {} check(s) failed: {}", r.failures.len(), r.failures.join(", "));
         ExitCode::FAILURE
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn words_right_is_a_word_error_count() {
+        assert_eq!(words_right("Close the 3D model.", "Close the 3D model"), (4, 4));
+        assert_eq!(words_right("Close the 3D model.", "Those just 3D model."), (2, 4));
+        assert_eq!(words_right("Change the colour to green.", "change the color to green"), (5, 5));
+        assert_eq!(words_right("I don't want to see the satellites anymore.", "I dont want to see the satellite any more"), (5, 8));
+        assert_eq!(words_right("Make it way more detailed.", ""), (0, 5));
     }
 }

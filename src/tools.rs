@@ -526,7 +526,9 @@ impl ToolContext {
         // application Sir happens to be working in (2026-11-06: "open a window with my drive
         // space", "make it smaller", "close it" closed the program in front; the Theme Studio, a
         // timer or a formula sheet would have fallen through the same way).
-        let own_thing = (name == "close_application" && str_arg(&args, &["app_name", "name", "app", "application"]).is_some_and(focus::is_pronoun))
+        // (2026-11-09: "close that window" after a 3D model closed the Claude window in front.)
+        let unnamed_window = name == "close_native_window" && str_arg(&args, &["id", "window_id", "title"]).is_none_or(|id| id == "last" || focus::is_pronoun(id));
+        let own_thing = ((name == "close_application" && str_arg(&args, &["app_name", "name", "app", "application"]).is_some_and(focus::is_pronoun)) || unnamed_window)
             .then(|| self.own_thing_to_close())
             .flatten();
         let (name, args) = match own_thing {
@@ -1090,6 +1092,17 @@ impl ToolContext {
             if let Some(id) = view.map(|v| v.id()).filter(|id| crate::jarvis_views::is_panel(id)) {
                 self.focus.note_own_thing(OwnThing::Panel(id.to_string()));
             }
+        }
+        // So do the 3D studio, a picture, a live camera and street view.
+        let panel = match name {
+            "show_3d_model" => Some("model3d"),
+            "show_image" => Some("image_viewer"),
+            "show_live_camera" => Some("webcams"),
+            "show_street_view" => Some("street_view"),
+            _ => None,
+        };
+        if let Some(id) = panel.filter(|id| crate::jarvis_views::panel_is_open(id)) {
+            self.focus.note_own_thing(OwnThing::Panel(id.to_string()));
         }
     }
 

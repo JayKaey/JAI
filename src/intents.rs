@@ -1993,6 +1993,75 @@ fn panel_command(text: &str, up: PanelsUp) -> Option<Value> {
     Some(args)
 }
 
+/// A layer of the Earth on or off, said any way, while the Earth is up: "I don't want to see the
+/// satellites anymore", "turn the trains back on", "toggle the clouds", "no more flights",
+/// "keine Satelliten mehr", "hide everything". (jarvis.log 2026-11-09: "I don't want to see the
+/// satellites anymore" turned the orb off.)
+fn earth_layer_switch(s: &str, radar_up: bool) -> Option<Value> {
+    const LAYERS: &[(&[&str], &str, &str)] = &[
+        (&["satellites", "satellite", "sats", "starlink", "satelliten", "satellit"], "satellites", "show_satellites"),
+        (&["trains", "train", "züge", "zuege", "bahnen"], "trains", "show_trains"),
+        (&["traffic", "traffic jams", "jams", "verkehr", "staus"], "traffic", "show_traffic"),
+        (&["flights", "planes", "aircraft", "air traffic", "airplanes", "flugzeuge", "flüge"], "flights", "show_flights"),
+        (&["earthquakes", "quakes", "earthquake", "erdbeben"], "quakes", "show_quakes"),
+        (&["storms", "hurricanes", "storm", "stürme"], "storms", "show_storms"),
+        (&["fires", "wildfires", "brände", "waldbrände"], "fires", "show_fires"),
+        (&["iss", "space station", "raumstation"], "iss", "show_iss"),
+        (&["clouds", "cloud cover", "wolken"], "clouds", "show_clouds"),
+        (&["rain radar", "weather radar", "radar", "rain", "regenradar", "regen"], "radar", "show_radar"),
+        (&["terrain", "mountains", "relief", "peaks", "gelände", "berge"], "terrain", "show_terrain"),
+        (&["borders", "labels", "place names", "city names", "names", "grenzen", "beschriftungen", "namen"], "labels", "show_labels"),
+        (&["cameras", "webcams", "kameras"], "cameras", "show_cameras"),
+    ];
+    let words: Vec<&str> = s.split_whitespace().collect();
+    if words.len() > 14 {
+        return None;
+    }
+    let padded = format!(" {s} ");
+    let has = |p: &str| padded.contains(&format!(" {p} "));
+    let all = ["everything", "all layers", "all the layers", "all markers", "the layers", "alles", "alle ebenen"].iter().any(|p| has(p));
+    // A bare "radar" is the network radar's while it is open too.
+    let layer = LAYERS.iter().find(|(names, ..)| names.iter().any(|n| has(n) && !(radar_up && *n == "radar")));
+    if layer.is_none() && !all {
+        return None;
+    }
+    const OFF: &[&str] = &[
+        "hide", "remove", "turn off", "switch off", "disable", "get rid of", "take away", "take off", "stop showing", "don't want", "dont want", "do not want", "don't need", "dont need", "no more", "not anymore",
+        "anymore", "any more", "without", "enough", "clear", "nicht mehr", "keine", "weg", "ausblenden", "entferne", "aus", "off",
+    ];
+    const ON: &[&str] = &["show", "turn on", "switch on", "enable", "add", "display", "put", "bring back", "want to see", "let me see", "zeig", "zeige", "einblenden", "an", "ein", "on"];
+    let toggle = has("toggle") || has("umschalten");
+    let off = OFF.iter().any(|p| has(p));
+    let on = ON.iter().any(|p| has(p));
+    let earth = |action: &str| json!({ "view": "earth", "action": action });
+    let Some(&(_, layer, show)) = layer else {
+        return (off && !on).then(|| earth("hide_layers"));
+    };
+    // "Turn the trains back on" is on, whatever else it holds; "show me no more satellites" off.
+    let hide = if toggle { crate::earth::layer_shown(layer).unwrap_or(false) } else if has("back on") || has("wieder an") { false } else if off { true } else if on { false } else { return None };
+    if !hide {
+        // Switching a layer on is only that when nothing else was asked: "show the flights over
+        // New York", "show me Starlink" and "the traffic on the A8" are their own requests.
+        const SAID: &[&str] = &[
+            "the", "me", "my", "your", "our", "all", "again", "back", "please", "layer", "layers", "markers", "i", "want", "to", "see", "let", "too", "also", "now", "can", "you", "jarvis", "and", "it", "them", "toggle", "umschalten",
+            "show", "turn", "switch", "on", "enable", "add", "display", "put", "bring", "zeig", "zeige", "mir", "die", "den", "das", "wieder", "bitte", "an", "ein", "einblenden", "schalte",
+        ];
+        let named: Vec<&str> = LAYERS.iter().find(|(_, l, _)| *l == layer).map_or(&[][..], |(n, ..)| *n).iter().flat_map(|n| n.split(' ')).collect();
+        if words.iter().any(|w| !SAID.contains(w) && !named.contains(w)) || has("starlink") {
+            return None;
+        }
+    }
+    Some(if hide && layer == "labels" {
+        earth("hide_labels")
+    } else if hide {
+        json!({ "view": "earth", "action": "hide_layer", "layer": layer })
+    } else if layer == "satellites" {
+        json!({ "view": "earth", "action": show, "group": "active" })
+    } else {
+        earth(show)
+    })
+}
+
 /// `panel_command` on the cleaned sentence `s` (`text` is Sir's own, for the case of a place).
 fn panel_args(text: &str, s: &str, up: PanelsUp) -> Option<Value> {
     let view = |name: &str, action: &str| json!({ "view": name, "action": action });
@@ -2019,19 +2088,8 @@ fn panel_args(text: &str, s: &str, up: PanelsUp) -> Option<Value> {
         if let Some(c) = SPIN.captures(s) {
             return Some(earth(if c.get(1).is_some() { "stop_spin" } else { "spin" }));
         }
-        static HIDE: LazyLock<Regex> = LazyLock::new(|| {
-            re(r"^(?:hide|remove|turn\s+off|disable|switch\s+off|get\s+rid\s+of|blende|entferne)\s+(?:the\s+|all\s+(?:the\s+)?|die\s+|alle\s+)?(flights|planes|aircraft|air\s+traffic|earthquakes|quakes|storms|hurricanes|fires|wildfires|iss|space\s+station|layers|markers|overlays|flugzeuge|flüge|erdbeben|stürme|brände)(?:\s+(?:layer|layers|markers))?(?:\s+aus)?$")
-        });
-        if let Some(c) = HIDE.captures(s) {
-            let layer = match &c[1] {
-                "flights" | "planes" | "aircraft" | "air traffic" | "flugzeuge" | "flüge" => "flights",
-                "earthquakes" | "quakes" | "erdbeben" => "quakes",
-                "storms" | "hurricanes" | "stürme" => "storms",
-                "fires" | "wildfires" | "brände" => "fires",
-                "iss" | "space station" => "iss",
-                _ => return Some(earth("hide_layers")),
-            };
-            return Some(json!({ "view": "earth", "action": "hide_layer", "layer": layer }));
+        if let Some(args) = earth_layer_switch(s, up.radar) {
+            return Some(args);
         }
         static BACK_TO_HOLO: LazyLock<Regex> = LazyLock::new(|| {
             re(r"^(?:switch|change|flip)\s+(?:it\s+)?back$|^(?:switch|change|flip|turn|go)\s+(?:it\s+)?back\s+to\s+(?:the\s+)?(?:normal|default|blue|original|old|holo|holographic|hologram)\s*(?:view|mode|globe|look)?$|^(?:(?:switch|change|go|flip|turn)\s+(?:it\s+)?(?:to|into)\s+(?:the\s+)?)?(?:holo|holographic|hologram)\s*(?:view|mode|globe|map)?$|^(?:normal|default)\s+(?:view|mode|globe)$|^turn\s+off\s+(?:the\s+)?satellite(?:\s+(?:view|mode|imagery))?$")
@@ -6298,6 +6356,25 @@ mod tests {
         assert_eq!((name, args["markdown"].as_str()), ("create_or_update_widget", Some("buy milk")));
         assert!(NOTE_WINDOW_TAIL.is_match("milch kaufen in einem neuen fenster"));
         assert!(!NOTE_WINDOW_TAIL.is_match("look out of the window"));
+    }
+
+    /// Sir's words with the Earth up: a layer off, back on, all off; never the orb (the brain
+    /// once turned the orb off for "I don't want to see the satellite any more").
+    #[test]
+    fn earth_layers_by_voice() {
+        let earth_up = PanelsUp { earth: true, ..PanelsUp::default() };
+        let args = |text: &str| panel_command(text, earth_up);
+        let hide = |layer: &str| Some(json!({ "view": "earth", "action": "hide_layer", "layer": layer }));
+        assert_eq!(args("I don't want to see the satellite any more than others."), hide("satellites"));
+        assert_eq!(args("I don't want to see the satellites anymore"), hide("satellites"));
+        assert_eq!(args("turn off the trains"), hide("trains"));
+        assert_eq!(args("hide the traffic"), hide("traffic"));
+        assert_eq!(args("keine Satelliten mehr"), hide("satellites"));
+        assert_eq!(args("turn the trains back on"), Some(json!({ "view": "earth", "action": "show_trains" })));
+        assert_eq!(args("show the satellites again"), Some(json!({ "view": "earth", "action": "show_satellites", "group": "active" })));
+        assert_eq!(args("hide everything"), Some(json!({ "view": "earth", "action": "hide_layers" })));
+        // Requests of their own stay theirs.
+        assert_ne!(args("show the flights over New York"), Some(json!({ "view": "earth", "action": "show_flights" })));
     }
 
     #[test]

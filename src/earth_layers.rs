@@ -122,9 +122,13 @@ pub enum SatKind {
     Other,
 }
 
+/// The ISS, Tiangong and Hubble: the only satellites labelled on the globe.
+const LANDMARKS: [u32; 3] = [25544, 48274, 20580];
+
 pub fn kind_of(el: &Elements, group: &str) -> SatKind {
     let n = el.name.to_uppercase();
-    if [25544, 48274, 20580].contains(&el.norad) || n.starts_with("ISS ") || n.starts_with("CSS ") {
+    // The stations' own modules ("CSS (WENTIAN)"), not what was set loose from them ("ISS OBJECT YQ").
+    if LANDMARKS.contains(&el.norad) || n.starts_with("ISS (") || n.starts_with("CSS (") {
         SatKind::Station
     } else if n.starts_with("STARLINK") {
         SatKind::Starlink
@@ -300,6 +304,17 @@ struct Live {
 }
 
 static LIVE: LazyLock<Mutex<Live>> = LazyLock::new(|| Mutex::new(Live::default()));
+
+/// Whether a live layer ("satellites", "trains", "traffic") is on the globe now.
+pub fn shown(layer: &str) -> Option<bool> {
+    let l = live();
+    match layer {
+        "satellites" => Some(l.group.is_some() || !l.singles.is_empty()),
+        "trains" => Some(l.trains),
+        "traffic" => Some(l.traffic),
+        _ => None,
+    }
+}
 
 fn live() -> std::sync::MutexGuard<'static, Live> {
     lock(&LIVE)
@@ -1225,7 +1240,7 @@ pub fn paint(p: &Painter, v: &MapView) -> Painted {
             let sat = &snap.sats[d.idx as usize];
             let c = kind_colour(sat.kind, v.accent).gamma_multiply(vis);
             mesh.add_colored_rect(Rect::from_center_size(at, Vec2::splat(size)), c);
-            if sat.kind == SatKind::Station && labelled.insert(sat.el.norad) {
+            if LANDMARKS.contains(&sat.el.norad) && labelled.insert(sat.el.norad) {
                 out.labels.push(LiveLabel { at, gap: 6.0, text: display_name(&sat.el).trim_start_matches("the ").to_string(), colour: WHITE.gamma_multiply(vis), rank: 0.6 });
                 out.glyphs.push(Rect::from_center_size(at, Vec2::splat(6.0)));
             }
@@ -1420,6 +1435,10 @@ mod tests {
         assert!(list.len() >= 12, "{}", list.len());
         let sats = build(list, "active");
         assert_eq!(sats.iter().filter(|s| s.kind == SatKind::Station).count(), 3, "ISS, Tiangong, Hubble");
+        // A cubesat set loose from the ISS is no station; a module of Tiangong is.
+        let named = |name: &str| Elements { name: name.into(), norad: 99_999, ..sats[0].el.clone() };
+        assert_ne!(kind_of(&named("ISS OBJECT YQ"), "active"), SatKind::Station);
+        assert_eq!(kind_of(&named("CSS (WENTIAN)"), "active"), SatKind::Station);
         assert!(sats.iter().any(|s| s.kind == SatKind::Navigation));
         assert!(sats.iter().any(|s| s.kind == SatKind::Weather || s.kind == SatKind::Geo));
         let at = sats[0].el.epoch_unix;

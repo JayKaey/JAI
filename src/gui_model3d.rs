@@ -171,8 +171,11 @@ fn toolbar(ui: &mut Ui, snap: &Snapshot, rt: &Handle) {
             ui.add_space(6.0);
             for (label, format) in [("STL", "stl"), ("OBJ", "obj"), ("GLB", "glb")] {
                 if chip(ui, &format!("⤓ {label}"), false, &format!("Save it as {label} in Documents\\JARVIS Models (\"save it as {label}\")")) {
-                    studio::export_in_background(rt, format);
+                    studio::export_in_background(rt, format, None);
                 }
+            }
+            if chip(ui, "⤓ SAVE AS…", false, "Choose the folder and the name (\"save it to my desktop\", \"save it to D:\\Prints\", \"let me choose where\")") {
+                studio::export_in_background(rt, "glb", Some("ask"));
             }
         }
     });
@@ -272,7 +275,7 @@ fn view_area(ui: &mut Ui, snap: &Snapshot, rect: Rect, rt: &Handle) {
     let viewproj = math::mul(&v.proj, &v.view);
     let animated = moving || snap.phase == Phase::Working || snap.view.look == Look::Hologram || snap.scene.as_ref().is_some_and(|s| s.planet);
     if animated {
-        ui.ctx().request_repaint();
+        super::next_animation_frame(ui.ctx());
     }
     // The model.
     if let Some(scene) = &snap.scene {
@@ -509,7 +512,8 @@ fn body(ui: &mut Ui, rt: &Handle) {
     toolbar(ui, &snap, rt);
     ui.add_space(4.0);
     let avail = ui.available_rect_before_wrap();
-    let footer_h = 20.0;
+    // The footer's row and the gap above it (a fixed 20 px left it 10 px short).
+    let footer_h = ui.spacing().interact_size.y + ui.spacing().item_spacing.y;
     let rect = Rect::from_min_max(avail.min, pos2(avail.max.x, (avail.max.y - footer_h).max(avail.min.y + 80.0)));
     view_area(ui, &snap, rect, rt);
     footer(ui, &snap);
@@ -561,7 +565,9 @@ pub(super) fn show(ctx: &egui::Context, rt: &Handle) {
     let rt = rt.clone();
     ctx.show_viewport_deferred(viewport, builder, move |ctx, class| {
         crate::crash_guard::guard("model3d", || {
-            if ctx.input(|i| i.viewport().close_requested()) || (!studio::is_open() && !super::detached_leaving(ctx)) {
+            let asked = ctx.input(|i| i.viewport().close_requested());
+            if asked || (!studio::is_open() && !super::detached_leaving(ctx)) {
+                tracing::info!("[3D] The studio's own window closes ({})", if asked { "Windows asked it to" } else { "the studio was closed" });
                 studio::close();
                 ctx.send_viewport_cmd(ViewportCommand::Visible(false));
                 ctx.request_repaint_of(ViewportId::ROOT);

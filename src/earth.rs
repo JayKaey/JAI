@@ -1367,10 +1367,11 @@ pub struct HoloMask {
 }
 
 /// The Blue Marble shaded relief: blue is water (deep or shallow), everything else land (ice,
-/// desert, forest, rock).
+/// desert, forest, rock). The deepest basins are nearly black, rgb(2, 5, 20): read as land, a
+/// quarter of the open Atlantic lost its sun glint to black blots (2026-11-09).
 pub fn is_water([r, g, b]: [u8; 3]) -> bool {
     let (r, g, b) = (r as i32, g as i32, b as i32);
-    b > r + 18 && b + 12 >= g
+    (b > r + 18 || (b < 48 && b >= r + 8)) && b + 12 >= g
 }
 
 /// Ocean and land from the relief imagery; coastlines and borders from the GIBS line layers
@@ -3037,6 +3038,18 @@ pub fn state() -> MutexGuard<'static, Earth> {
     crate::crash_guard::lock(&STATE)
 }
 
+/// Whether a layer of the globe is on now, by any of its names ("flights", "clouds",
+/// "satellites"); None for a name that is no layer.
+pub fn layer_shown(name: &str) -> Option<bool> {
+    if let Some(layer) = Layer::parse(name).filter(|_| name != "satellite") {
+        return Some(state().layers.get(layer));
+    }
+    if let Some(o) = Overlay::parse(name) {
+        return Some(state().overlays.get(o));
+    }
+    crate::earth_layers::shown(name)
+}
+
 /// Opens or closes the Earth; whether it was open.
 fn set_open(on: bool) -> bool {
     #[cfg(not(test))]
@@ -3600,7 +3613,8 @@ async fn fetch_gpu_base(slot: gl::Slot, caps: gl::Caps, date: Option<NaiveDate>)
     let name = match slot {
         gl::Slot::Day => format!("day_{}.jegi", if big { "8k_dxt" } else if caps.dxt1 { "4k_dxt" } else { "4k_rgba" }),
         gl::Slot::Night => "night_4k.jegi".into(),
-        gl::Slot::Mask => "mask_4k.jegi".into(),
+        // (v2: the deepest sea is water now; the old mask had black blots in the oceans.)
+        gl::Slot::Mask => "mask_4k_v2.jegi".into(),
         gl::Slot::Relief => format!("relief_4k_{}.jegi", if caps.dxt1 { "dxt" } else { "rgba" }),
         gl::Slot::Historic => format!("daily_{}_{}.jegi", date.map(|d| d.format("%Y-%m-%d").to_string()).unwrap_or_default(), if caps.dxt1 { "dxt" } else { "rgba" }),
     };
@@ -4825,6 +4839,8 @@ mod tests {
         let ocean = image.pixels[6];
         assert!(ocean.b() > ocean.r() && ocean.b() < 160, "deep blue ocean: {ocean:?}");
         assert!(is_water([8, 22, 64]) && is_water([60, 130, 190]) && !is_water([240, 245, 250]) && !is_water([200, 170, 130]));
+        // The deepest basins (near black) are the sea; dark forest and shadowed rock stay land.
+        assert!(is_water([2, 5, 20]) && is_water([1, 3, 18]) && !is_water([15, 40, 20]) && !is_water([30, 28, 26]));
         let proc = procedural_texture(64, 32, 206.0);
         assert_eq!(proc.pixels.len(), 64 * 32);
     }

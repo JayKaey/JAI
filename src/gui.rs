@@ -721,7 +721,7 @@ fn open_window(app: &Jarvis, rt: &Handle, model: &Arc<Mutex<HudModel>>) -> Resul
         .with_fullscreen(fullscreen && !quiet)
         .with_maximized(maximized && !fullscreen && !quiet)
         .with_window_level(level)
-        .with_icon(Arc::new(crate::app_icon::generate_rose_gyro_app_icon()))
+        .with_icon(Arc::new(window_icon().unwrap_or_default()))
         .with_active(!quiet);
     // Fullscreen: pinned to its monitor's full resolution (the primary's at (0, 0), or the one
     // `--monitor` named) from the first frame.
@@ -779,7 +779,8 @@ fn min_size(layout: HudLayout) -> Vec2 {
     }
 }
 
-/// The gyroscope emblem icon (256 px) for Jarvis' other windows; rendered once.
+/// The gyroscope emblem icon (256 px) for the HUD and Jarvis' other windows; rendered once, as
+/// the HUD opens (rendered at the first detach instead, it froze the HUD for a second).
 pub(crate) fn window_icon() -> Option<egui::IconData> {
     static ICON: std::sync::OnceLock<egui::IconData> = std::sync::OnceLock::new();
     Some(ICON.get_or_init(crate::app_icon::generate_rose_gyro_app_icon).clone())
@@ -5316,6 +5317,12 @@ fn viewport_for_block(id: &str) -> ViewportId {
         "theme_studio" => ViewportId::from_hash_of("jarvis_theme_studio"),
         "discord_audio" => ViewportId::from_hash_of("jarvis_discord_audio"),
         "pairing" => ViewportId::from_hash_of("jarvis_satellite_pairing"),
+        // ("Dock it back" found no 3D window: these had no entry.)
+        "model3d" => ViewportId::from_hash_of("jarvis_model3d"),
+        "departures" => ViewportId::from_hash_of("jarvis_departures"),
+        "image_viewer" => ViewportId::from_hash_of("jarvis_image_viewer"),
+        "webcams" => ViewportId::from_hash_of("jarvis_webcams"),
+        "street_view" => ViewportId::from_hash_of("jarvis_street_view"),
         id => match id.strip_prefix("sim:") {
             Some(sim) => ViewportId::from_hash_of(("jarvis_simlab", sim)),
             None => ViewportId::from_hash_of(("jarvis_window", id)),
@@ -6044,11 +6051,40 @@ const BLOCK_SLATE: Color32 = Color32::from_rgb(0x05, 0x0A, 0x10);
 /// the dark glass and folds back into it).
 const WINDOW_VOID: Color32 = Color32::from_rgb(0x02, 0x04, 0x07);
 
+/// What the HUD had drawn at each animating window's last frame (`next_animation_frame`).
+static HUD_TURNS: Mutex<Vec<(ViewportId, u64)>> = Mutex::new(Vec::new());
+
+/// Asks for an animation's next frame. Windows hands its paint messages to Jarvis' topmost
+/// window first, so a window of its own above the HUD that asked for every next frame at once
+/// kept the HUD from drawing at all (2026-11-09: behind a turning 3D model the HUD froze and
+/// "dock it back" waited 10 s for its next frame). Such a window skips a beat whenever the HUD
+/// has not drawn since its own last frame: the two take turns.
+pub(super) fn next_animation_frame(ctx: &egui::Context) {
+    let (viewport, hud) = (ctx.viewport_id(), ROOT_FRAMES.load(Ordering::Acquire));
+    let waiting = viewport != ViewportId::ROOT && {
+        let mut turns = lock(&HUD_TURNS);
+        match turns.iter_mut().find(|(v, _)| *v == viewport) {
+            Some((_, seen)) => std::mem::replace(seen, hud) == hud,
+            None => {
+                turns.push((viewport, hud));
+                false
+            }
+        }
+    };
+    if waiting {
+        // (egui takes its predicted frame time off: the next frame comes in about 33 ms.)
+        ctx.request_repaint_after(Duration::from_millis(50));
+    } else {
+        ctx.request_repaint();
+    }
+}
+
 /// A borderless detached window's frame: the theme's 1 px border, inside the window on the pixel
 /// grid (whole at any DPI), and the corner brackets (Windows draws no grey frame of its own
 /// around a Jarvis window). It also plays the window's entrance and exit (`WindowMotion`) over
 /// what the window drew, and shows the window, created hidden, once it has drawn a frame.
 pub(super) fn paint_window_border(ctx: &egui::Context) {
+    crate::live_shots::tick(ctx);
     let screen = ctx.screen_rect();
     let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("jarvis_window_border")));
     let motion = detached_motion(ctx);
@@ -6079,6 +6115,23 @@ pub(super) fn paint_window_border(ctx: &egui::Context) {
         ctx.send_viewport_cmd(ViewportCommand::Fullscreen(false));
     }
     reveal_when_drawn(ctx);
+    keep_above_hud(ctx);
+}
+
+/// A view in a window of its own stays above the HUD it came from: Windows keeps an owned window
+/// above its owner, so the fullscreen board (raised by a reply, a click on it, its watchdog)
+/// never hides it (2026-11-09: a detached 3D model seemed to close; it was behind the board).
+fn keep_above_hud(ctx: &egui::Context) {
+    #[cfg(windows)]
+    {
+        let (viewport, hud) = (ctx.viewport_id(), SHARED.hwnd.load(Ordering::Acquire));
+        if viewport == ViewportId::ROOT || hud == 0 || lock(&DETACHED_MOTIONS).owned.contains(&viewport) {
+            return;
+        }
+        if ctx.input(|i| i.viewport().title.clone()).is_some_and(|title| crate::win32::own_window_titled(&title, hud)) {
+            lock(&DETACHED_MOTIONS).owned.insert(viewport);
+        }
+    }
 }
 
 /// A window of Jarvis' own comes up hidden (`for_test_session`) and shows once it has drawn a
@@ -6138,6 +6191,8 @@ struct DetachedMotions {
     /// Windows that exist and are still hidden, as the HUD sees them: its frames since, and
     /// since when (counted from the HUD's frame after the window was made).
     hidden: std::collections::HashMap<ViewportId, (u32, Instant)>,
+    /// Windows the HUD owns already (`keep_above_hud`).
+    owned: std::collections::HashSet<ViewportId>,
 }
 
 impl DetachedMotions {
@@ -6151,6 +6206,7 @@ impl DetachedMotions {
                 self.leaving.remove(&viewport);
                 if pass == 0 {
                     self.revealed.remove(&viewport);
+                    self.owned.remove(&viewport);
                 }
                 now
             }
@@ -6164,6 +6220,7 @@ impl DetachedMotions {
         self.leaving.remove(&viewport);
         self.revealed.remove(&viewport);
         self.hidden.remove(&viewport);
+        self.owned.remove(&viewport);
     }
 }
 
@@ -6391,7 +6448,14 @@ pub(super) fn hud_block_window(ctx: &egui::Context, id: &str, title: &str, size:
         let r = ui.cursor();
         ui.painter().line_segment([pos2(r.left(), r.top()), pos2(r.left() + ui.available_width(), r.top())], stroke(1.0, crate::hud_board::border_colour()));
         ui.add_space(6.0);
-        body(ui);
+        // The content lives in the block's size and never grows it: egui widens a window to its
+        // last content every frame, so a body a few pixels taller than its room made the block
+        // creep down the screen until it left it and was placed afresh, over and over.
+        let room = ui.available_rect_before_wrap();
+        let mut content = ui.new_child(egui::UiBuilder::new().max_rect(room));
+        content.set_clip_rect(content.clip_rect().intersect(frame_rect));
+        body(&mut content);
+        ui.advance_cursor_after_rect(room);
     });
     if let Some(inner) = shown {
         let rect = inner.response.rect;
@@ -7060,6 +7124,7 @@ impl eframe::App for HudApp {
 impl HudApp {
     fn frame(&mut self, ctx: &egui::Context) {
         ROOT_FRAMES.fetch_add(1, Ordering::AcqRel);
+        crate::live_shots::tick(ctx);
         // `--window-drill`: its next step, from what the previous frame drew.
         if let Some(drill) = self.drill.as_mut() {
             drill.step(ctx, self.hwnd);
@@ -7326,6 +7391,93 @@ mod tests {
         assert!(focused(&ctx), "focused again after sending");
         frame(&ctx, vec![typed("h"), typed("i")], &mut line, &none, &mut focus);
         assert_eq!(line, "hi");
+    }
+
+    /// A body that asks for more room than the block has (the 3D studio's footer did, by 10 px)
+    /// is cut off at the block's edge: the block keeps its size frame after frame.
+    #[test]
+    fn a_block_never_grows_to_its_content() {
+        let _g = crate::hud_dock::test_lock();
+        let screen = Rect::from_min_size(Pos2::ZERO, vec2(1920.0, 1080.0));
+        let ctx = egui::Context::default();
+        install_fonts(&ctx);
+        set_still(&ctx, true);
+        let mut sizes = Vec::new();
+        for _ in 0..40 {
+            let input = egui::RawInput { screen_rect: Some(screen), ..Default::default() };
+            let _ = ctx.run(input, |ctx| {
+                crate::hud_dock::begin_frame();
+                hud_block_window(ctx, "overflow_probe", "Overflow probe", [600.0, 400.0], |ui| {
+                    let over = ui.available_size() + vec2(0.0, 10.0);
+                    ui.allocate_exact_size(over, Sense::hover());
+                });
+            });
+            sizes.push(crate::hud_dock::block_rect("overflow_probe").expect("drawn").size());
+        }
+        assert!(sizes.windows(2).all(|w| (w[0] - w[1]).length() < 0.5), "the block changed size: {:?} … {:?}", sizes[1], sizes[39]);
+        crate::hud_dock::forget("overflow_probe");
+    }
+
+    /// A turning view in a window of its own never takes every frame: when the HUD has not
+    /// drawn since its last frame it waits, and once the HUD has drawn it goes on at once.
+    #[test]
+    fn an_animating_window_takes_turns_with_the_hud() {
+        let ctx = egui::Context::default();
+        let delays = Arc::new(Mutex::new(Vec::new()));
+        let asked = delays.clone();
+        ctx.set_request_repaint_callback(move |info| lock(&asked).push(info.delay));
+        let window = ViewportId::from_hash_of("turns_probe");
+        let frame = || {
+            lock(&delays).clear();
+            let viewports = std::iter::once((window, egui::ViewportInfo::default())).collect();
+            let _ = ctx.run(egui::RawInput { viewport_id: window, viewports, ..Default::default() }, next_animation_frame);
+            lock(&delays).iter().min().copied().unwrap_or(Duration::MAX)
+        };
+        assert_eq!(frame(), Duration::ZERO);
+        // (egui repaints once more after an immediate request, whatever was asked.)
+        frame();
+        assert!(frame() > Duration::from_millis(20), "the window took the HUD's turn");
+        ROOT_FRAMES.fetch_add(1, Ordering::AcqRel);
+        assert_eq!(frame(), Duration::ZERO, "the HUD drew, yet the window waited");
+    }
+
+    /// Its [ DETACH ] (with the motion on): the block plays its exit and then asks for a window
+    /// of its own, never for its close, and the window opens where the block stood.
+    #[test]
+    fn a_detached_block_leaves_for_its_own_window() {
+        let _g = crate::hud_dock::test_lock();
+        let screen = Rect::from_min_size(Pos2::ZERO, vec2(1920.0, 1080.0));
+        let ctx = egui::Context::default();
+        install_fonts(&ctx);
+        set_still(&ctx, false);
+        let id = "detach_probe";
+        let frame = || {
+            let mut out = BlockAction::default();
+            let input = egui::RawInput { screen_rect: Some(screen), ..Default::default() };
+            let _ = ctx.run(input, |ctx| {
+                crate::hud_dock::begin_frame();
+                out = hud_block_window(ctx, id, "Detach probe", [600.0, 400.0], |ui| {
+                    ui.label("probe");
+                });
+            });
+            out
+        };
+        let start = Instant::now();
+        while start.elapsed() < crate::hud_dock::OPEN_ANIM + Duration::from_millis(50) {
+            frame();
+        }
+        let stood = crate::hud_dock::block_rect(id).expect("drawn");
+        crate::hud_dock::begin_detach(id);
+        let start = Instant::now();
+        let mut left = None;
+        while left.is_none() && start.elapsed() < crate::hud_dock::CLOSE_FADE * 3 {
+            let out = frame();
+            assert!(!out.close, "[ DETACH ] closed the block");
+            left = out.detach.then_some(());
+        }
+        assert!(left.is_some(), "the block never asked for its own window");
+        assert_eq!(crate::hud_dock::block_rect(id), Some(stood), "the window's place is the block's");
+        crate::hud_dock::forget(id);
     }
 
     /// "Move it to the middle", "put it on the left half", "full screen it", "minimise it",

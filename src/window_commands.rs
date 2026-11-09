@@ -681,6 +681,10 @@ static SHRINK_GROW: LazyLock<Regex> = LazyLock::new(|| {
 static SIDE_BY_SIDE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^(?:put|place|show|arrange|move|set|lay out|stell|stelle|leg|lege|zeig|zeige|ordne)\s+(.+?)\s+(?:side by side|next to each other|beside each other|nebeneinander)(?:\s+an)?$|^(?:put|place|move|stell|stelle)\s+(.+?)\s+(?:next to|beside|neben)\s+(.+)$").expect("side by side regex")
 });
+/// "Dock it back", "dock the 3D model", "put it back in the HUD", "attach it back".
+static DOCK: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^(?:re-?dock|dock)\s+(.+?)(?:\s+(?:back|again|wieder))?(?:\s+(?:in|into|inside|onto|on|to)(?:\s+(?:the\s+)?(?:hud|board|main window|app|yourself|you)))?(?:\s+an)?$|^attach\s+(.+?)\s+back(?:\s+(?:in|into|inside|onto|on|to)(?:\s+(?:the\s+)?(?:hud|board|main window|app|yourself|you))?)?$|^(?:put|bring|move|pull)\s+(.+?)\s+back\s+(?:in|into|inside|onto|on|to)\s+(?:the\s+)?(?:hud|board|main window|app|yourself|you)$").expect("dock regex")
+});
 static SWAP: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^(?:swap|exchange|switch around|tausch|tausche|vertausch|vertausche)\s+(.+?)(?:\s+(?:around|places|positions|die plätze|die positionen|um))?$").expect("swap regex")
 });
@@ -722,6 +726,10 @@ pub fn parse(text: &str) -> Option<Value> {
     if let Some(c) = SWAP.captures(s) {
         let target = target_of(&c[1])?;
         return matches!(target, Target::Them | Target::Pair(..)).then(|| call(&target, Action::Swap, json!({}))).flatten();
+    }
+    if let Some(c) = DOCK.captures(s) {
+        let target = target_of(c.get(1).or(c.get(2)).or(c.get(3))?.as_str())?;
+        return matches!(target, Target::It | Target::Named(_)).then(|| call(&target, Action::Dock, json!({}))).flatten();
     }
     // Full screen, by name ("make it full screen" keeps its rule; the tools hand it over).
     if let Some(c) = FULLSCREEN.captures(s) {
@@ -852,6 +860,10 @@ pub fn spoken_name(id: &str) -> String {
         "discord_audio" => "the Discord routing".into(),
         "pairing" => "the pairing code".into(),
         "system_telemetry" => "your telemetry".into(),
+        "model3d" => "the 3D model".into(),
+        "image_viewer" => "the picture".into(),
+        "webcams" => "the live camera".into(),
+        "street_view" => "street view".into(),
         id if id.starts_with("sim:") => "the simulation".into(),
         other => format!("the {}", other.replace('_', " ")),
     }
@@ -1090,6 +1102,13 @@ mod tests {
         };
         // The two sentences from the log that had no tool to call.
         assert_eq!(p("Move it to the middle of my screen."), args("it", "move", json!({ "position": "centre" })));
+        // A view of its own window comes back on the board ("dock it back" reached the brain).
+        for docked in ["dock it back", "Dock it.", "dock it back into the HUD", "put it back in the HUD", "attach it back", "redock it"] {
+            assert_eq!(p(docked), args("it", "dock", json!({})), "{docked}");
+        }
+        assert_eq!(p("dock the earth back"), args("earth", "dock", json!({})));
+        // ("Put it back" alone may be the model's colours or a moved block's place.)
+        assert_ne!(p("put it back"), args("it", "dock", json!({})));
         assert_eq!(p("No Jarvis, can you full screen the Earth?"), args("earth", "fullscreen", json!({})));
         assert_eq!(p("Centre the Earth"), args("earth", "move", json!({ "position": "centre" })));
         assert_eq!(p("Put the earth on the left half"), args("earth", "move", json!({ "position": "left" })));

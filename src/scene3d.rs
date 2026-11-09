@@ -167,6 +167,11 @@ pub enum Shape {
     Tube(Vec<[f32; 3]>, f32),
     /// A flat ring in the XZ plane, the inner radius as a share of the outer one.
     Annulus(f32),
+    /// Straight members (from, to, radius), in metres, as one mesh: lattices, frames, cables.
+    Struts(Vec<([f32; 3], [f32; 3], f32)>),
+    /// A lattice tower or girder filling its box: four chords, a ring and X braces per bay, the
+    /// top as a share of the bottom (tapers), this many bays.
+    Truss(f32, u32),
 }
 
 #[derive(Clone, Debug)]
@@ -307,6 +312,10 @@ fn shape_of(v: &Value) -> Shape {
         "extrude" | "extrusion" | "prism" | "polygon" | "plate_shape" if pts.len() >= 3 => Shape::Extrude(pts),
         "lathe" | "revolve" | "revolution" | "vase" if pts.len() >= 2 => Shape::Lathe(pts),
         "wedge" | "ramp" => Shape::Extrude(vec![[-0.5, -0.5], [0.5, -0.5], [-0.5, 0.5]]),
+        "truss" | "lattice" | "girder" | "pylon" | "scaffold" | "lattice_tower" => {
+            let top = first(v, &["top", "top_ratio", "taper"]).and_then(num).map_or(1.0, |t| t.clamp(0.05, 4.0));
+            Shape::Truss(top, first(v, &["bays", "sections", "levels"]).and_then(num).map_or(6, |b| b.clamp(1.0, 64.0) as u32))
+        }
         "lathe" | "revolve" | "revolution" | "vase" => Shape::Cylinder(1.0),
         _ => Shape::Box,
     }
@@ -402,6 +411,68 @@ pub fn scene_from_value(v: &Value) -> Result<SceneDoc, String> {
     }
     let name = first(root, &["name", "title", "model"]).and_then(Value::as_str).unwrap_or("model").trim().to_string();
     Ok(SceneDoc { name, materials, parts })
+}
+
+/// A scene as the JSON the composer writes (what the language model refines). Members and
+/// tubes have no such form and are left out.
+pub fn doc_json(doc: &SceneDoc) -> Value {
+    let hex = |c: [f32; 3]| {
+        let s = |v: f32| (if v <= 0.003_130_8 { v * 12.92 } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 }.clamp(0.0, 1.0) * 255.0).round() as u8;
+        format!("#{:02x}{:02x}{:02x}", s(c[0]), s(c[1]), s(c[2]))
+    };
+    let r = |v: f32| (v * 1000.0).round() / 1000.0;
+    let materials: serde_json::Map<String, Value> = doc
+        .materials
+        .iter()
+        .map(|(name, m)| {
+            let mut o = serde_json::json!({});
+            if let Some(c) = m.color {
+                o["color"] = hex(c).into();
+            }
+            if let Some(f) = m.finish {
+                o["finish"] = f.name.into();
+            }
+            o["metallic"] = r(m.metallic.unwrap_or(0.0)).into();
+            o["roughness"] = r(m.roughness.unwrap_or(0.5)).into();
+            if m.emissive > 0.0 {
+                o["emissive"] = r(m.emissive).into();
+            }
+            (name.clone(), o)
+        })
+        .collect();
+    let parts: Vec<Value> = doc
+        .parts
+        .iter()
+        .filter_map(|p| {
+            let points = |pts: &[[f32; 2]]| Value::from(pts.iter().map(|p| vec![r(p[0]), r(p[1])]).collect::<Vec<_>>());
+            let (shape, extra): (&str, Vec<(&str, Value)>) = match &p.shape {
+                Shape::Box => ("box", vec![]),
+                Shape::RoundedBox(k) => ("rounded_box", vec![("radius", r(*k).into())]),
+                Shape::Sphere => ("sphere", vec![]),
+                Shape::Dome => ("dome", vec![]),
+                Shape::Capsule => ("capsule", vec![]),
+                Shape::Cylinder(top) => ("cylinder", vec![("top", r(*top).into())]),
+                Shape::Cone(sides) => ("cone", vec![("segments", (*sides).into())]),
+                Shape::Torus(k) => ("torus", vec![("thickness", r(*k).into())]),
+                Shape::Truss(top, bays) => ("truss", vec![("top", r(*top).into()), ("bays", (*bays).into())]),
+                Shape::Extrude(pts) => ("extrude", vec![("points", points(pts))]),
+                Shape::Lathe(pts) => ("lathe", vec![("points", points(pts))]),
+                Shape::Tube(..) | Shape::Struts(_) | Shape::Annulus(_) => return None,
+            };
+            let mut o = serde_json::json!({ "name": p.name, "shape": shape });
+            for (k, v) in extra {
+                o[k] = v;
+            }
+            let m = &p.transform;
+            let deg = 180.0 / PI;
+            o["size"] = p.size.map(r).to_vec().into();
+            o["position"] = vec![r(m[12]), r(m[13]), r(m[14])].into();
+            o["rotation"] = vec![r(m[6].atan2(m[10]) * deg), r((-m[2]).clamp(-1.0, 1.0).asin() * deg), r(m[1].atan2(m[0]) * deg)].into();
+            o["material"] = p.material.clone().into();
+            Some(o)
+        })
+        .collect();
+    serde_json::json!({ "name": doc.name, "materials": materials, "parts": parts })
 }
 
 /// Parses a scene the model wrote: the first `{` on, cut-off output repaired.
@@ -715,6 +786,17 @@ pub fn mesh(shape: &Shape, size: [f32; 3], detail: u32) -> Part {
             return lathe(&prof, size, seg, true);
         }
         Shape::Tube(path, radius) => return tube(path, *radius, 12, false),
+        Shape::Struts(list) => return struts(list, if detail >= 96 { 8 } else if detail >= 64 { 6 } else { 4 }),
+        Shape::Truss(top, bays) => {
+            let bays = (*bays).clamp(1, 64);
+            let sections: Vec<([f32; 3], f32, f32)> = (0..=bays).map(|k| {
+                let t = k as f32 / bays as f32;
+                let k = 1.0 + (top - 1.0) * t;
+                ([0.0, size[1] * (t - 0.5), 0.0], 0.5 * size[0] * k, 0.5 * size[2] * k)
+            }).collect();
+            let r = 0.035 * size[0].min(size[2]).max(size[1] / 60.0);
+            return struts(&lattice(&sections, r, r * 0.6), 4);
+        }
         Shape::Annulus(inner) => {
             let cols = seg.max(64) + 1;
             for side in 0..2 {
@@ -1009,6 +1091,46 @@ pub fn tube(path: &[[f32; 3]], radius: f32, sides: u32, closed: bool) -> Part {
     b.part
 }
 
+/// Straight members as one mesh (open prisms of `sides` faces).
+pub fn struts(list: &[([f32; 3], [f32; 3], f32)], sides: u32) -> Part {
+    let mut out = Builder::new().part;
+    for &(a, b, r) in list {
+        if math::length(math::sub(b, a)) < 1e-5 || r <= 0.0 {
+            continue;
+        }
+        let p = tube(&[a, b], r, sides, false);
+        let base = out.positions.len() as u32;
+        out.positions.extend(p.positions);
+        out.normals.extend(p.normals);
+        out.uvs.extend(p.uvs);
+        out.indices.extend(p.indices.iter().map(|i| i + base));
+    }
+    out
+}
+
+/// A square lattice through its sections (centre, half-width x, half-width z), bottom to top:
+/// the corner chords (radius `chord`), a ring at every section and X braces on every face of
+/// every bay (radius `brace`).
+pub fn lattice(sections: &[([f32; 3], f32, f32)], chord: f32, brace: f32) -> Vec<([f32; 3], [f32; 3], f32)> {
+    let corners = |&(c, hx, hz): &([f32; 3], f32, f32)| [[c[0] - hx, c[1], c[2] - hz], [c[0] + hx, c[1], c[2] - hz], [c[0] + hx, c[1], c[2] + hz], [c[0] - hx, c[1], c[2] + hz]];
+    let mut out = Vec::new();
+    for (i, s) in sections.iter().enumerate() {
+        let lo = corners(s);
+        for k in 0..4 {
+            out.push((lo[k], lo[(k + 1) % 4], brace));
+        }
+        let Some(next) = sections.get(i + 1) else { continue };
+        let hi = corners(next);
+        for k in 0..4 {
+            let j = (k + 1) % 4;
+            out.push((lo[k], hi[k], chord));
+            out.push((lo[k], hi[j], brace));
+            out.push((lo[j], hi[k], brace));
+        }
+    }
+    out
+}
+
 // -------------------------------------------------------------------------- the library ----
 
 /// One built-in model: the words that ask for it and how it is made.
@@ -1023,6 +1145,120 @@ pub struct Entry {
 pub enum Kind {
     Planet(Planet),
     Scene(fn() -> SceneDoc),
+    /// A model made at a detail level (1 = the first look, up to `MAX_LEVEL`).
+    Detailed(fn(u32) -> SceneDoc),
+}
+
+/// The finest level a `Kind::Detailed` model is made at.
+pub const MAX_LEVEL: u32 = 4;
+
+impl Kind {
+    /// The scene of a built-in model (a planet has none), at a detail level.
+    pub fn scene(self, level: u32) -> Option<SceneDoc> {
+        match self {
+            Kind::Planet(_) => None,
+            Kind::Scene(f) => Some(f()),
+            Kind::Detailed(f) => Some(f(level.clamp(1, MAX_LEVEL))),
+        }
+    }
+}
+
+/// The Eiffel Tower at real size (330 m): four curved lattice legs with their arches up to the
+/// second floor, one lattice shaft to the top, the three floors and the antenna. Each level
+/// doubles the bays and adds the inner bracing.
+fn eiffel_tower(level: u32) -> SceneDoc {
+    // The outer half-width of the tower at a height (m), from its drawings.
+    const PROFILE: [(f32, f32); 7] = [(0.0, 62.5), (57.6, 37.0), (115.7, 20.5), (180.0, 12.6), (240.0, 9.6), (276.1, 8.3), (300.0, 3.2)];
+    let half = |y: f32| -> f32 {
+        let i = PROFILE.windows(2).position(|w| y <= w[1].0).unwrap_or(PROFILE.len() - 2);
+        let ((y0, w0), (y1, w1)) = (PROFILE[i], PROFILE[i + 1]);
+        w0 + (w1 - w0) * ((y - y0) / (y1 - y0)).clamp(0.0, 1.0)
+    };
+    let l = level.clamp(1, MAX_LEVEL) as f32;
+    let (chord, brace) = (1.5 / l.sqrt(), 0.8 / l.sqrt());
+    let bays = |n: f32| (n * l) as u32;
+    let mut parts = Vec::new();
+    let strut = |name: &str, list: Vec<([f32; 3], [f32; 3], f32)>, mat: &str| ScenePart { name: name.into(), shape: Shape::Struts(list), size: [1.0; 3], transform: math::identity(), material: mat.into(), detail: 32 + 16 * level };
+    // The legs: square box girders leaning in along the diagonals, 26 m wide at the ground.
+    let second = 115.7;
+    for (name, sx, sz) in [("north leg", 1.0, 1.0), ("east leg", 1.0, -1.0), ("south leg", -1.0, -1.0), ("west leg", -1.0, 1.0)] {
+        let n = bays(6.0);
+        let sections: Vec<([f32; 3], f32, f32)> = (0..=n).map(|k| {
+            let y = second * k as f32 / n as f32;
+            let h = 13.0 + (5.0 - 13.0) * y / second;
+            let c = half(y) - h;
+            ([sx * c, y, sz * c], h, h)
+        }).collect();
+        let mut list = lattice(&sections, chord, brace);
+        if level >= 3 {
+            // Inner diagonals of every leg's cross-section.
+            for &(c, h, _) in &sections {
+                list.push(([c[0] - h, c[1], c[2] - h], [c[0] + h, c[1], c[2] + h], brace * 0.8));
+            }
+        }
+        parts.push(strut(name, list, "iron"));
+    }
+    // The arches under the first floor, one on each face.
+    for (name, axis_x, s) in [("north arch", false, 1.0), ("south arch", false, -1.0), ("east arch", true, 1.0), ("west arch", true, -1.0)] {
+        let steps = bays(12.0);
+        let mut list = Vec::new();
+        let point = |t: f32, r: f32| -> [f32; 3] {
+            let (a, b) = (36.5 * r, 39.5 * r);
+            let (x, y) = (a * (std::f32::consts::PI * t).cos(), b * (std::f32::consts::PI * t).sin());
+            let face = half(y) - 1.0;
+            if axis_x { [s * face, y, x] } else { [x, y, s * face] }
+        };
+        for k in 0..steps {
+            let (t0, t1) = (k as f32 / steps as f32, (k + 1) as f32 / steps as f32);
+            list.push((point(t0, 1.0), point(t1, 1.0), chord));
+            list.push((point(t0, 0.9), point(t1, 0.9), brace));
+            list.push((point(t0, 1.0), point(t0, 0.9), brace));
+        }
+        parts.push(strut(name, list, "iron"));
+    }
+    // The shaft: the joined legs from the second floor to the top floor, then the summit.
+    let shaft = |from: f32, to: f32, n: u32| -> Vec<([f32; 3], f32, f32)> {
+        (0..=n).map(|k| {
+            let y = from + (to - from) * k as f32 / n as f32;
+            let h = half(y);
+            ([0.0, y, 0.0], h, h)
+        }).collect()
+    };
+    let mut upper = lattice(&shaft(second, 276.1, bays(8.0)), chord, brace);
+    if level >= 2 {
+        // The inner columns of the joined legs.
+        upper.extend(lattice(&shaft(second, 276.1, bays(8.0)).into_iter().map(|(c, h, _)| (c, h * 0.55, h * 0.55)).collect::<Vec<_>>(), brace, brace * 0.7));
+    }
+    parts.push(strut("upper tower", upper, "iron"));
+    parts.push(strut("summit", lattice(&shaft(276.1, 300.0, bays(2.0)), chord, brace), "iron"));
+    // The floors.
+    let floor = |name: &str, y: f32, side: f32, height: f32, open: f32| -> Vec<ScenePart> {
+        if open <= 0.0 {
+            return vec![part(name, Shape::Box, [side, height, side], [0.0, y, 0.0], [0.0; 3], "deck")];
+        }
+        let band = (side - open) / 2.0;
+        let off = (side - band) / 2.0;
+        vec![
+            part(&format!("{name} north"), Shape::Box, [side, height, band], [0.0, y, off], [0.0; 3], "deck"),
+            part(&format!("{name} south"), Shape::Box, [side, height, band], [0.0, y, -off], [0.0; 3], "deck"),
+            part(&format!("{name} east"), Shape::Box, [band, height, open], [off, y, 0.0], [0.0; 3], "deck"),
+            part(&format!("{name} west"), Shape::Box, [band, height, open], [-off, y, 0.0], [0.0; 3], "deck"),
+        ]
+    };
+    parts.extend(floor("first floor", 57.6, 2.0 * half(57.6) + 6.0, 6.0, 2.0 * half(57.6) - 18.0));
+    parts.extend(floor("second floor", second, 2.0 * half(second) + 4.0, 3.5, 0.0));
+    parts.extend(floor("top floor", 278.0, 2.0 * half(278.0) + 2.0, 7.0, 0.0));
+    if level >= 2 {
+        // Railings round the first and second floors.
+        for (y, w) in [(57.6 + 4.2, half(57.6) + 3.0), (second + 2.6, half(second) + 2.0)] {
+            let ring = [[-w, y, -w], [w, y, -w], [w, y, w], [-w, y, w]];
+            parts.push(strut(&format!("railing at {y:.0} m"), (0..4).map(|k| (ring[k], ring[(k + 1) % 4], 0.35)).collect(), "iron"));
+        }
+    }
+    parts.push(part("lantern", Shape::Cylinder(0.7), [5.0, 8.0, 5.0], [0.0, 304.0, 0.0], [0.0; 3], "iron"));
+    parts.push(part("antenna", Shape::Cylinder(0.3), [1.6, 22.0, 1.6], [0.0, 319.0, 0.0], [0.0; 3], "iron"));
+    parts.push(part("beacon", Shape::Sphere, [2.4, 2.4, 2.4], [0.0, 330.0, 0.0], [0.0; 3], "beacon"));
+    doc("Eiffel Tower", vec![("iron", mat("#6F5A45", 0.55, 0.5)), ("deck", mat("#5C4A3A", 0.4, 0.6)), ("beacon", glow("#FFB347", 3.0))], parts)
 }
 
 fn part(name: &str, shape: Shape, size: [f32; 3], pos: [f32; 3], rot: [f32; 3], material: &str) -> ScenePart {
@@ -1364,6 +1600,7 @@ pub static LIBRARY: &[Entry] = &[
     Entry { key: "inclined plane", words: &["inclined plane", "ramp", "schiefe ebene", "rampe"], kind: Kind::Scene(inclined_plane) },
     Entry { key: "wheel and axle", words: &["wheel and axle", "rad und achse"], kind: Kind::Scene(wheel_and_axle) },
     Entry { key: "satellite", words: &["satellite", "satellit"], kind: Kind::Scene(satellite) },
+    Entry { key: "eiffel tower", words: &["eiffel tower", "eiffel", "eifel tower", "eiffelturm", "eifelturm", "tour eiffel"], kind: Kind::Detailed(eiffel_tower) },
     Entry { key: "tower", words: &["castle tower", "tower", "castle", "turm", "burg"], kind: Kind::Scene(tower) },
     Entry { key: "torus knot", words: &["torus knot", "knot", "knoten"], kind: Kind::Scene(torus_knot) },
     Entry { key: "cube", words: &["cube", "box", "würfel", "kiste", "quader"], kind: Kind::Scene(cube) },
@@ -1536,17 +1773,31 @@ mod tests {
     #[test]
     fn every_library_model_builds_closed_and_sane() {
         for e in LIBRARY {
-            if let Kind::Scene(f) = e.kind {
-                let m = build(&f());
+            for level in 1..=MAX_LEVEL {
+                let Some(doc) = e.kind.scene(level) else { break };
+                let m = build(&doc);
                 assert!(m.triangles() > 10, "{}", e.key);
                 let b = m.bounds();
-                assert!(b.is_valid() && b.min[1] > -1.0 && b.radius() < 20.0, "{}: {b:?}", e.key);
+                // (Landmarks are at their real size.)
+                let limit = if e.key == "eiffel tower" { 400.0 } else { 20.0 };
+                assert!(b.is_valid() && b.min[1] > -1.0 && b.radius() < limit, "{}: {b:?}", e.key);
                 for part in &m.parts {
                     assert_eq!(part.normals.len(), part.positions.len(), "{} {}", e.key, part.name);
                     assert!(part.normals.iter().all(|n| (math::length(*n) - 1.0).abs() < 1e-3), "{} {}", e.key, part.name);
                 }
+                if matches!(e.kind, Kind::Scene(_)) {
+                    break;
+                }
             }
         }
+        // The Eiffel Tower: 330 m to the beacon, 125 m across the legs, more members per level.
+        let tower = |level| build(&eiffel_tower(level));
+        let (one, four) = (tower(1), tower(4));
+        let size = one.size_m();
+        assert!((size[1] - 331.2).abs() < 2.0 && (size[0] - 125.0).abs() < 8.0, "{size:?}");
+        assert!(four.triangles() > 3 * one.triangles(), "{} → {}", one.triangles(), four.triangles());
+        assert_eq!(lookup("the Eiffel Tower").map(|e| e.key), Some("eiffel tower"));
+        assert_eq!(lookup("eiffelturm").map(|e| e.key), Some("eiffel tower"));
         assert_eq!(lookup("an iron man suit").map(|e| e.key), Some("iron man suit"));
         assert_eq!(lookup("planet earth").map(|e| e.key), Some("earth"));
         assert_eq!(lookup("die Erde").map(|e| e.key), Some("earth"));

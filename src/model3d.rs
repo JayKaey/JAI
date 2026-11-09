@@ -221,6 +221,11 @@ struct Studio {
     credit: Option<Credit>,
     demo: bool,
     cached: Option<Arc<Snapshot>>,
+    /// What Sir asked for, the detail level it was made at and, when the language model
+    /// composed it, its scene (so "make it more detailed" knows where to go from).
+    query: String,
+    level: u32,
+    doc: Option<scene3d::SceneDoc>,
 }
 
 impl Default for Studio {
@@ -249,6 +254,9 @@ impl Default for Studio {
             credit: None,
             demo: false,
             cached: None,
+            query: String::new(),
+            level: 1,
+            doc: None,
         }
     }
 }
@@ -411,6 +419,8 @@ struct Delivery {
     keep_preview: bool,
     /// The studio's title (None: keep the one it has).
     title: Option<String>,
+    /// The scene it was built from (built-in or composed), for "make it more detailed".
+    doc: Option<scene3d::SceneDoc>,
 }
 
 /// Shows a model for `job`; false when a newer request or closing the studio came first.
@@ -434,6 +444,9 @@ fn deliver(job: u64, model: Model, d: Delivery) -> bool {
         s.title = t;
     }
     s.credit = d.credit;
+    if !d.partial {
+        s.doc = d.doc;
+    }
     s.phase = if d.partial { Phase::Working } else { Phase::Ready };
     if !d.partial {
         s.progress = None;
@@ -724,10 +737,17 @@ fn command_with(text: &str, open: bool, earth_open: bool, names: &[String]) -> O
     if let Some(args) = open_command(&t) {
         return Some(args);
     }
-    if open {
-        return edit_command(&t, earth_open, names);
+    if !open {
+        return None;
     }
-    None
+    let mut args = edit_command(&t, earth_open, names)?;
+    if args["action"] == "export" {
+        // (The folder as he said it: the cleaned sentence has lost its case and colons.)
+        if let Some(folder) = folder_in(text) {
+            args["folder"] = json!(folder);
+        }
+    }
+    Some(args)
 }
 
 /// The fast path: a ready intent for the brain. (Unit tests of other modules never see a studio
@@ -783,12 +803,17 @@ fn re(s: &str) -> Regex {
 /// Lower case, the wake word and politeness gone, "three d" / "3-D" / "3D-Modell" as "3d".
 fn clean(text: &str) -> String {
     let mut t = text.to_lowercase().replace(['’', '`'], "'");
-    t = t.replace(|c: char| matches!(c, ',' | '!' | '?' | '"' | ';' | ':' | '(' | ')'), " ");
+    t = t.replace(|c: char| matches!(c, ',' | '!' | '?' | '"' | ';' | '(' | ')'), " ");
+    // (A drive's colon stays: "d:\prints".)
+    t = t.split(':').enumerate().map(|(i, part)| if i > 0 && part.starts_with(['\\', '/']) { format!(":{part}") } else if i > 0 { format!(" {part}") } else { part.to_string() }).collect();
     t = t.trim().trim_end_matches('.').to_string();
     static THREE_D: LazyLock<Regex> = LazyLock::new(|| re(r"\b(?:three[\s-]?d|drei[\s-]?d|3[\s-]d)\b|\b3d-"));
     t = THREE_D.replace_all(&t, "3d ").to_string();
     t = t.replace('-', " ");
-    let mut t: String = t.split_whitespace().collect::<Vec<_>>().join(" ");
+    // A word said twice is said once ("a 3D model, model of the Eiffel Tower").
+    let mut words: Vec<&str> = t.split_whitespace().collect();
+    words.dedup();
+    let mut t: String = words.join(" ");
     static LEAD: LazyLock<Regex> = LazyLock::new(|| {
         re(r"^(?:(?:hey|ok|okay|yo|hi|hallo)\s+)?(?:jarvis|java|jervis|travis)\s*(?:please\s+|bitte\s+)?|^(?:please|bitte|now|jetzt|and|und|also|so)\s+|^(?:can|could|would|will)\s+you\s+(?:please\s+)?|^(?:i\s+want\s+you\s+to|i'd\s+like\s+you\s+to|i\s+would\s+like\s+you\s+to|go\s+ahead\s+and)\s+|^(?:kannst|könntest|koenntest|würdest|wuerdest)\s+du\s+(?:bitte\s+)?(?:mal\s+)?")
     });
@@ -848,7 +873,9 @@ fn open_command(t: &str) -> Option<Value> {
     if DOWNLOADS.is_match(t) {
         return Some(json!({ "path": "downloads" }));
     }
-    let raw = OF_3D.captures(t).or_else(|| IN_3D.captures(t)).or_else(|| A_3D.captures(t)).or_else(|| BARE.captures(t)).map(|c| c[1].to_string());
+    // ("Make the 3D model bigger" is about the model on show, not one called "model bigger".)
+    let a_3d = || A_3D.captures(t).filter(|c| !matches!(c[1].split_whitespace().next(), Some("model" | "modell" | "studio" | "viewer")));
+    let raw = OF_3D.captures(t).or_else(|| IN_3D.captures(t)).or_else(a_3d).or_else(|| BARE.captures(t)).map(|c| c[1].to_string());
     let raw = match raw {
         Some(r) => r,
         None => {
@@ -896,6 +923,9 @@ const HUD_WORDS: &[&str] = &[
 ];
 
 fn edit_command(t: &str, earth_open: bool, names: &[String]) -> Option<Value> {
+    // "The 3D model" is the model.
+    let said = t.replace("the 3d model", "the model").replace("das 3d modell", "das modell");
+    let t = said.as_str();
     let words: Vec<&str> = t.split_whitespace().collect();
     let has = |w: &str| words.contains(&w);
     let mentions_model = ["model", "it", "modell", "es", "the suit", "the planet"].iter().any(|w| has(w)) || t.contains("the model") || t.contains("das modell");
@@ -917,7 +947,8 @@ fn edit_command(t: &str, earth_open: bool, names: &[String]) -> Option<Value> {
     if let Some(c) = EXPORT.captures(t) {
         let rest = c.get(2).map_or("", |m| m.as_str());
         let printer = t.contains("printer") || t.contains("printing") || t.contains("print it") || t.contains("drucker") || t.contains("drucken");
-        let format = c.get(1).map(|m| m.as_str()).or(printer.then_some("stl"));
+        // "Save it to my desktop", "save it somewhere else": the printer's format.
+        let format = c.get(1).map(|m| m.as_str()).or((printer || folder_in(rest).is_some()).then_some("stl"));
         if let Some(fmt) = format {
             let fmt = if fmt == "gltf" { "glb" } else if fmt == "3mf" { "stl" } else { fmt };
             let mut args = json!({ "action": "export", "format": fmt });
@@ -939,6 +970,13 @@ fn edit_command(t: &str, earth_open: bool, names: &[String]) -> Option<Value> {
     static PARTS: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:what|which)\s+parts\s+(?:does\s+it\s+have|has\s+it\s+got|are\s+there)|^list\s+(?:the|its|all)\s+parts$|^what\s+is\s+it\s+made\s+of$|^(?:welche|aus\s+welchen)\s+teile"));
     if PARTS.is_match(t) {
         return Some(json!({ "action": "parts" }));
+    }
+    // "Make it (way) more detailed", "a more accurate version", "enhance it", "mach es detaillierter".
+    static ENHANCE: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^(?:make|render|build|do|redo|give\s+me|show\s+me|mach|mache)\s+(?:it|this|that|the\s+model|a|one|es|das(?:\s+modell)?)?\s*(?:a\s+lot\s+|way\s+|much\s+|even\s+|far\s+|a\s+bit\s+|a\s+little\s+|viel\s+|noch\s+|etwas\s+)*(?:more\s+(?:detailed|accurate|realistic|precise|lifelike|refined)|(?:more|higher|finer|extra)\s+detail|better|sharper|detaillierter|genauer|realistischer|besser|feiner)(?:\s+(?:version|model|one|modell))?$|^(?:enhance|refine|improve|upgrade|detail|verbessere|verfeinere)(?:\s+(?:it|this|that|the\s+model|es|das\s+modell))?(?:\s+(?:more|further|even\s+more|weiter))?$|^(?:more|mehr|even\s+more|noch\s+mehr)\s+details?$|^(?:add|füge|fuege)\s+(?:more|mehr)\s+details?(?:\s+(?:to\s+it|hinzu))?$")
+    });
+    if ENHANCE.is_match(t) {
+        return Some(json!({ "action": "enhance" }));
     }
     if HUD_WORDS.iter().any(|w| has(w)) {
         return None;
@@ -1099,12 +1137,14 @@ fn paint_command(t: &str, names: &[String]) -> Option<Value> {
         }
         // The words before the first paint name the target ("the helmet", "it", "den Helm").
         let target_words = pn[..*first_at].trim().replace('_', " ");
-        static PREP: LazyLock<Regex> = LazyLock::new(|| re(r"\s+(?:to|into|in|a|an|out\s+of|with|aus|in|zu|eine?|einen|mit|look|like)$"));
+        // ("The Iron Man suit colour to green": the colour is not a part.)
+        static PREP: LazyLock<Regex> = LazyLock::new(|| re(r"\s+(?:to|into|in|a|an|out\s+of|with|aus|in|zu|eine?|einen|mit|look|like|colou?rs?|paint|finish|texture|material|farbe|lack)$|^(?:colou?rs?|farbe)$"));
         let mut target = target_words;
         for _ in 0..3 {
             target = PREP.replace(&target, "").trim().to_string();
         }
-        let part = part_word(&target);
+        // The model by its own name is all of it ("the Iron Man suit").
+        let part = part_word(&target).filter(|p| names.first().is_none_or(|title| scene3d::norm(title).trim() != scene3d::norm(p).trim()));
         // Paint words inside the target are part names ("the gold parts" stays a colour).
         let material: String = found.iter().map(|(_, _, p)| p.name()).collect::<Vec<_>>().join(" and ");
         let mut e = json!({ "material": material });
@@ -1159,11 +1199,11 @@ pub fn is_tool(name: &str) -> bool {
 pub fn definitions() -> Vec<Value> {
     vec![json!({"type": "function", "function": {
         "name": TOOL,
-        "description": "3D studio: any object as a turnable 3D model (\"render me an Iron Man suit in 3D\"). edit: material (colour/finish), part, glow, look realistic|hologram, wireframe, spin faster|slower|stop|start, view front|back|left|right|top|bottom|zoom_in|zoom_out, explode, scale bigger|smaller. export: format stl|obj|glb, height_cm.",
+        "description": "3D studio: any object as a 3D model. edit: material (colour/finish), part, glow, look realistic|hologram, wireframe, spin faster|slower|stop|start, view front|back|left|right|top|bottom|zoom_in|zoom_out, explode, scale bigger|smaller. enhance: more detail. export: format stl|obj|glb, height_cm, folder (path, desktop, ask).",
         "parameters": {"type": "object", "properties": {
             "query": {"type": "string", "description": "what to show"},
             "path": {"type": "string", "description": "model file or 'downloads'"},
-            "action": {"type": "string", "enum": ["show", "edit", "export", "measure", "parts", "reset", "close"]},
+            "action": {"type": "string", "enum": ["show", "edit", "enhance", "export", "measure", "parts", "reset", "close"]},
             "material": {"type": "string"},
             "part": {"type": "string"},
             "glow": {"type": "string"},
@@ -1174,7 +1214,8 @@ pub fn definitions() -> Vec<Value> {
             "explode": {"type": "boolean"},
             "scale": {"type": "string"},
             "format": {"type": "string"},
-            "height_cm": {"type": "number"}
+            "height_cm": {"type": "number"},
+            "folder": {"type": "string"}
         }}
     }})]
 }
@@ -1210,12 +1251,19 @@ pub async fn run_tool(ctx: &ToolContext, args: &Value) -> Result<String, String>
         "measure" | "size" => return Ok(measure()),
         "parts" | "list_parts" => return Ok(parts()),
         "reset" => return Ok(reset()),
+        "enhance" | "detail" | "more_detail" | "refine" | "improve" => return enhance(ctx).await,
         _ => {}
     }
     if let Some(path) = str_arg(args, "path") {
+        studio().query.clear();
         return open_local(path, args).await;
     }
     if let Some(query) = str_arg(args, "query") {
+        {
+            let mut s = studio();
+            s.query = query.to_string();
+            s.level = num_arg(args, "level").map_or(1, |l| (l as u32).clamp(1, scene3d::MAX_LEVEL));
+        }
         return open_query(ctx, query, args).await;
     }
     // "show" with nothing named: the studio itself ("studio" from older callers).
@@ -1242,10 +1290,7 @@ fn open_studio() -> String {
 }
 
 fn arc_reactor_doc() -> scene3d::SceneDoc {
-    match scene3d::lookup("arc reactor").map(|e| e.kind) {
-        Some(scene3d::Kind::Scene(f)) => f(),
-        _ => scene3d::SceneDoc::default(),
-    }
+    scene3d::lookup("arc reactor").and_then(|e| e.kind.scene(1)).unwrap_or_default()
 }
 
 /// Applies the edit arguments; the reply says what changed.
@@ -1529,10 +1574,21 @@ async fn export(args: &Value) -> Result<String, String> {
     } else {
         1.0
     };
-    let dir = export_dir();
-    std::fs::create_dir_all(&dir).map_err(|e| format!("I couldn't create {}: {e}", dir.display()))?;
     let stamp = chrono::Local::now().format("%Y-%m-%d %H%M").to_string();
-    let file = dir.join(format!("{} {stamp}.{format}", crate::features::safe_name(&title)));
+    let name = format!("{} {stamp}.{format}", crate::features::safe_name(&title));
+    let file = match str_arg(args, "folder").filter(|_| !demo_mode()) {
+        Some(f) if f.eq_ignore_ascii_case("ask") => {
+            let (name, ext) = (name.clone(), format.clone());
+            match tokio::task::spawn_blocking(move || save_dialog(&name, &ext)).await.map_err(|e| e.to_string())?? {
+                Some(path) => path,
+                None => return Ok(reply("Not saved (the dialog was cancelled).", "Very well, Sir, not saved.")),
+            }
+        }
+        Some(f) => folder_path(f).join(&name),
+        None => export_dir().join(&name),
+    };
+    let dir = file.parent().map(Path::to_path_buf).unwrap_or_else(export_dir);
+    std::fs::create_dir_all(&dir).map_err(|e| format!("I couldn't create {}: {e}", dir.display()))?;
     let path = file.clone();
     let fmt = format.clone();
     let out = tokio::task::spawn_blocking(move || match fmt.as_str() {
@@ -1553,16 +1609,142 @@ async fn export(args: &Value) -> Result<String, String> {
     let real = if (scale - 1.0).abs() > 1e-3 { format!(" (the real thing is about {})", length(height)) } else { String::new() };
     let name = out.path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
     info!("[3D] Exported {} triangles to {}", out.triangles, out.path.display());
-    let where_ = if demo_mode() { "the temp folder (test run)".to_string() } else { "Documents\\JARVIS Models".to_string() };
+    let folder = out.path.parent().map(|p| p.display().to_string()).unwrap_or_default();
+    let (where_, said) = if demo_mode() {
+        ("the temp folder (test run)".to_string(), "the temp folder".to_string())
+    } else if dir == export_dir() {
+        ("Documents\\JARVIS Models".to_string(), "JARVIS Models".to_string())
+    } else {
+        let last = out.path.parent().and_then(Path::file_name).map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| folder.clone());
+        (folder.clone(), last)
+    };
     Ok(reply(
         format!("Saved {name} in {where_}: about {tall} tall {ratio}{real}, {} triangles.", out.triangles),
-        format!("Saved as {} in JARVIS Models, Sir: about {tall} tall {ratio}.", format.to_uppercase()),
+        format!("Saved as {} in {said}, Sir: about {tall} tall {ratio}.", format.to_uppercase()),
     ))
 }
 
+/// A folder Sir named: a path ("D:\Prints", "~\3D"), one of his own ("desktop", "downloads"),
+/// else a folder of that name in Documents.
+fn folder_path(name: &str) -> PathBuf {
+    let n = name.trim().trim_matches('"');
+    let known = [("desktop", "Desktop"), ("schreibtisch", "Desktop"), ("documents", "Documents"), ("dokumente", "Documents"), ("downloads", "Downloads"), ("pictures", "Pictures"), ("bilder", "Pictures"), ("3d objects", "3D Objects"), ("music", "Music"), ("videos", "Videos")];
+    if let Some((_, folder)) = known.iter().find(|(k, _)| n.eq_ignore_ascii_case(k)) {
+        return crate::features::user_folder(folder);
+    }
+    if let Some(rest) = n.strip_prefix("~\\").or_else(|| n.strip_prefix("~/")) {
+        return crate::apps::home_dir().unwrap_or_else(std::env::temp_dir).join(rest);
+    }
+    let p = PathBuf::from(n);
+    if p.is_absolute() {
+        p
+    } else {
+        crate::features::user_folder("Documents").join(crate::features::safe_name(n))
+    }
+}
+
+/// Where Sir wants a model saved, from what he said: a path, one of his folders, or "ask" (the
+/// save dialog).
+fn folder_in(text: &str) -> Option<String> {
+    static PATH: LazyLock<Regex> = LazyLock::new(|| re(r#"(?i)((?:[a-z]:[\\/]|\\\\|~[\\/])[^"<>|*?\r\n]*)"#));
+    if let Some(c) = PATH.captures(text) {
+        static TAIL: LazyLock<Regex> = LazyLock::new(|| re(r"(?i)(?:[\s.,!]+(?:please|bitte|for\s+me|jarvis|sir|as\s+(?:an?\s+)?(?:stl|obj|glb)(?:\s+file)?))*[\s.,!]*$"));
+        let p = TAIL.replace(c[1].trim(), "").to_string();
+        return (p.len() > 3).then_some(p);
+    }
+    let t = text.to_lowercase();
+    const ASK: &[&str] = &["choose where", "choose the folder", "choose a folder", "pick where", "pick the folder", "pick a folder", "somewhere else", "where i want", "let me choose", "let me pick", "save dialog", "save as dialog", "wo ich will", "ordner auswählen", "speichern unter", "selbst aussuchen"];
+    if ASK.iter().any(|w| t.contains(w)) {
+        return Some("ask".into());
+    }
+    const KNOWN: &[(&str, &str)] = &[("desktop", "desktop"), ("schreibtisch", "desktop"), ("documents", "documents"), ("dokumente", "documents"), ("downloads", "downloads"), ("download folder", "downloads"), ("pictures", "pictures"), ("bilder", "pictures"), ("3d objects", "3d objects")];
+    KNOWN.iter().find(|(w, _)| t.split(|c: char| !c.is_alphanumeric() && c != ' ').any(|part| part.contains(w))).map(|(_, f)| f.to_string())
+}
+
+/// The Windows "Save as" dialog: the file Sir chose, or None when he cancelled. (A test session
+/// opens no dialog.)
+fn save_dialog(name: &str, ext: &str) -> Result<Option<PathBuf>, String> {
+    if crate::platform::in_test_session() {
+        return Err("a test session opens no dialogs".into());
+    }
+    use windows::core::HSTRING;
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED};
+    use windows::Win32::UI::Shell::{FileSaveDialog, IFileSaveDialog, SIGDN_FILESYSPATH};
+    // SAFETY: COM on this (blocking) thread only, released before it returns; the dialog's
+    // strings outlive the calls that use them and the path it returns is freed after copying.
+    unsafe {
+        let com = CoInitializeEx(None, COINIT_APARTMENTTHREADED).is_ok();
+        let chosen = (|| -> windows::core::Result<Option<PathBuf>> {
+            let dialog: IFileSaveDialog = CoCreateInstance(&FileSaveDialog, None, CLSCTX_INPROC_SERVER)?;
+            dialog.SetTitle(&HSTRING::from("Save the 3D model — J.A.R.V.I.S."))?;
+            dialog.SetFileName(&HSTRING::from(name))?;
+            dialog.SetDefaultExtension(&HSTRING::from(ext))?;
+            if dialog.Show(HWND(0)).is_err() {
+                return Ok(None);
+            }
+            let raw = dialog.GetResult()?.GetDisplayName(SIGDN_FILESYSPATH)?;
+            let path = raw.to_string();
+            CoTaskMemFree(Some(raw.0 as *const std::ffi::c_void));
+            Ok(path.ok().map(PathBuf::from))
+        })();
+        if com {
+            CoUninitialize();
+        }
+        chosen.map_err(|e| format!("the save dialog failed: {e}"))
+    }
+}
+
+/// "Make it more detailed": a built-in made in levels comes at its next level (Sir's paint and
+/// look stay on it); any other scene goes back to the language model to be refined; a file or a
+/// Sketchfab model is already all there is.
+async fn enhance(ctx: &ToolContext) -> Result<String, String> {
+    let (query, level, doc, edits, look, ready) = {
+        let s = studio();
+        (s.query.clone(), s.level, s.doc.clone(), s.edits.clone(), s.view.look, s.base.is_some() && is_open())
+    };
+    if !ready {
+        return Ok(reply("Nothing is in the 3D studio.", "There's nothing to refine yet, Sir. Tell me what to render first."));
+    }
+    if let Some(entry) = scene3d::lookup(&query).filter(|e| matches!(e.kind, scene3d::Kind::Detailed(_))) {
+        if level >= scene3d::MAX_LEVEL {
+            return Ok(reply(format!("The {} is at its finest level ({level} of {}).", entry.key, scene3d::MAX_LEVEL), "That's the finest I have of it, Sir."));
+        }
+        let next = level + 1;
+        open_builtin(entry, &json!({ "level": next })).await?;
+        let triangles = {
+            let mut s = studio();
+            s.level = next;
+            s.query = query;
+            s.edits = edits;
+            s.view.look = look;
+            rebuild(&mut s);
+            touched(&mut s);
+            s.base.as_ref().map_or(0, |m| m.triangles())
+        };
+        return Ok(reply(format!("3D studio: the {} at detail level {next} of {} ({} triangles).", entry.key, scene3d::MAX_LEVEL, triangles), "More detail, Sir."));
+    }
+    let Some(doc) = doc else {
+        return Ok(reply("This model came from a file or Sketchfab and is shown in full.", "That one is already shown in full detail, Sir. I can compose my own, more detailed version if you name it again."));
+    };
+    let base = scene3d::doc_json(&doc);
+    let (llm, cfg, job) = (ctx.pim.llm().cloned(), ctx.config.snapshot(), studio().job);
+    let q = if query.is_empty() { doc.name.clone() } else { query };
+    tokio::spawn(async move {
+        match compose(job, &q, llm, &cfg, Some(base)).await {
+            Ok(line) => crate::announcements::say(line),
+            Err(why) => {
+                fail(job, &format!("Not refined: {why}"));
+                crate::announcements::say(format!("I couldn't refine it, Sir: {why}."));
+            }
+        }
+    });
+    Ok(reply("Refining the model: more parts, truer proportions. It stays on screen meanwhile.", "Refining it now, Sir."))
+}
+
 /// Saves the model from the panel's chips; the studio's note says where it went.
-pub fn export_in_background(rt: &tokio::runtime::Handle, format: &str) {
-    let args = json!({ "format": format });
+pub fn export_in_background(rt: &tokio::runtime::Handle, format: &str, folder: Option<&str>) {
+    let args = json!({ "format": format, "folder": folder });
     rt.spawn(async move {
         let line = match export(&args).await {
             Ok(r) => r.lines().next().unwrap_or("").to_string(),
@@ -1965,12 +2147,13 @@ async fn open_builtin(entry: &'static scene3d::Entry, args: &Value) -> Result<St
     // The studio opens at once (the scanning lattice) while the model is made.
     let (title, planet, doc) = match entry.kind {
         scene3d::Kind::Planet(p) => (capitalise(entry.key), Some(p), None),
-        scene3d::Kind::Scene(f) => {
-            let doc = f();
+        kind => {
+            let doc = kind.scene(num_arg(args, "level").map_or(1, |l| l as u32)).unwrap_or_default();
             (doc.name.clone(), None, Some(doc))
         }
     };
     let job = begin(&title, "Built-in", "", None);
+    let kept = doc.clone();
     let model = tokio::task::spawn_blocking(move || match (planet, doc) {
         (Some(p), _) => scene3d::planet_model(p, planet_maps(p, demo)),
         (None, Some(doc)) => scene3d::build(&doc),
@@ -1979,7 +2162,7 @@ async fn open_builtin(entry: &'static scene3d::Entry, args: &Value) -> Result<St
     .await
     .map_err(|e| e.to_string())?;
     let photo = planet == Some(Planet::Earth) && model.textures.first().is_some_and(|t| t.width >= 2048);
-    deliver(job, model, Delivery { source: if photo { "Built-in · NASA Blue Marble".into() } else { "Built-in".into() }, planet, title: Some(title.clone()), ..Delivery::default() });
+    deliver(job, model, Delivery { source: if photo { "Built-in · NASA Blue Marble".into() } else { "Built-in".into() }, planet, title: Some(title.clone()), doc: kept, ..Delivery::default() });
     let extra = apply_open_extras(args);
     let spoken = format!("Here's {}, Sir.", with_article(&if planet.is_some() { title.clone() } else { title.to_lowercase() }));
     Ok(reply(format!("3D studio: {title} (built-in){extra}. Drag to turn it, scroll to zoom; say \"make it gold\" or \"hologram mode\"."), spoken))
@@ -2108,16 +2291,14 @@ fn title_case(q: &str) -> String {
 fn placeholder_for(query: &str) -> Vec<[[f32; 3]; 2]> {
     let q = scene3d::norm(query);
     for e in scene3d::LIBRARY {
-        if let scene3d::Kind::Scene(f) = e.kind {
-            if e.words.iter().any(|w| q.contains(&format!(" {w} "))) {
-                return wire_of(&scene3d::build(&f()), 1800);
-            }
+        if let Some(doc) = e.kind.scene(1).filter(|_| e.words.iter().any(|w| q.contains(&format!(" {w} ")))) {
+            return wire_of(&scene3d::build(&doc), 1800);
         }
     }
     let humanoid = ["suit", "armor", "armour", "robot", "man", "woman", "person", "hero", "knight", "soldier", "figure", "anzug", "rüstung", "ritter"];
     if humanoid.iter().any(|w| q.contains(&format!(" {w} "))) {
-        if let Some(scene3d::Kind::Scene(f)) = scene3d::lookup("iron man suit").map(|e| e.kind) {
-            return wire_of(&scene3d::build(&f()), 1800);
+        if let Some(doc) = scene3d::lookup("iron man suit").and_then(|e| e.kind.scene(1)) {
+            return wire_of(&scene3d::build(&doc), 1800);
         }
     }
     scan_sphere()
@@ -2129,17 +2310,11 @@ fn stand_in(query: &str, title: &str, args: &Value) -> String {
     let q = scene3d::norm(query);
     let doc = scene3d::LIBRARY
         .iter()
-        .filter_map(|e| match e.kind {
-            scene3d::Kind::Scene(f) if e.words.iter().any(|w| q.contains(&format!(" {w} "))) => Some(f()),
-            _ => None,
-        })
-        .next()
-        .unwrap_or_else(|| match scene3d::lookup("iron man suit").map(|e| e.kind) {
-            Some(scene3d::Kind::Scene(f)) if ["suit", "armor", "armour", "robot"].iter().any(|w| q.contains(w)) => f(),
-            _ => match scene3d::lookup("torus knot").map(|e| e.kind) {
-                Some(scene3d::Kind::Scene(f)) => f(),
-                _ => scene3d::SceneDoc::default(),
-            },
+        .filter(|e| e.words.iter().any(|w| q.contains(&format!(" {w} "))))
+        .find_map(|e| e.kind.scene(1))
+        .unwrap_or_else(|| {
+            let key = if ["suit", "armor", "armour", "robot"].iter().any(|w| q.contains(w)) { "iron man suit" } else { "torus knot" };
+            scene3d::lookup(key).and_then(|e| e.kind.scene(1)).unwrap_or_default()
         });
     let job = begin(title, "Demo stand-in", "", None);
     deliver(job, scene3d::build(&doc), Delivery { source: "Demo stand-in (no download in a test run)".into(), title: Some(title.to_string()), ..Delivery::default() });
@@ -2194,7 +2369,7 @@ fn open_curated(entry: &'static Curated, args: &Value) -> String {
 /// Sketchfab with Sir's token, else the preview card and a composed model.
 async fn fetch_or_compose(job: u64, query: &str, token: Option<String>, llm: Option<Arc<crate::runtime::LlmRuntime>>, cfg: crate::config::JarvisConfig) -> Result<String, String> {
     let search = sketchfab_search(query);
-    let compose_task = move |llm: Option<Arc<crate::runtime::LlmRuntime>>, cfg: crate::config::JarvisConfig, q: String| async move { compose(job, &q, llm, &cfg).await };
+    let compose_task = move |llm: Option<Arc<crate::runtime::LlmRuntime>>, cfg: crate::config::JarvisConfig, q: String| async move { compose(job, &q, llm, &cfg, None).await };
     match token {
         Some(token) => {
             let hits = search.await.unwrap_or_else(|e| {
@@ -2246,19 +2421,23 @@ async fn fetch_or_compose(job: u64, query: &str, token: Option<String>, llm: Opt
     }
 }
 
-const COMPOSE_PROMPT: &str = "You build 3D models out of simple shapes. Reply with JSON only:\n{\"name\":\"…\",\"materials\":{\"<name>\":{\"color\":\"#rrggbb\",\"metallic\":0-1,\"roughness\":0-1,\"emissive\":0-5}},\"parts\":[{\"name\":\"…\",\"shape\":\"box|rounded_box|sphere|cylinder|cone|torus|capsule\",\"size\":[w,h,d],\"position\":[x,y,z],\"rotation\":[x,y,z],\"material\":\"<name>\"}]}\nMetres, Y up, the object stands on y=0 and faces +Z. position is the part's centre, size its full width/height/depth, rotation in degrees. 10 to 24 parts named after the real parts (helmet, left arm, wheel …), real proportions and colours, glowing parts emissive. Write materials first, then parts.";
+const COMPOSE_PROMPT: &str = "You build 3D models out of simple shapes. Reply with JSON only:\n{\"name\":\"…\",\"materials\":{\"<name>\":{\"color\":\"#rrggbb\",\"metallic\":0-1,\"roughness\":0-1,\"emissive\":0-5}},\"parts\":[{\"name\":\"…\",\"shape\":\"box|rounded_box|sphere|cylinder|cone|torus|capsule|dome|truss|lathe|extrude\",\"size\":[w,h,d],\"position\":[x,y,z],\"rotation\":[x,y,z],\"material\":\"<name>\"}]}\nMetres at real size, Y up, the object stands on y=0 and faces +Z. position is the part's centre, size its full width/height/depth, rotation in degrees. cylinder \"top\": top radius share (0.5 tapers). truss: an open steel lattice filling its box (towers, cranes, bridges, pylons), \"top\": top width share, \"bays\": sections. lathe \"points\": [[radius,height]…] in -0.5..0.5 turned around Y (vases, bottles, domes). extrude \"points\": [[x,y]…] in -0.5..0.5, depth along Z (wings, fins, signs). 12 to 30 parts named after the real parts (helmet, left arm, wheel …), real proportions and colours, glowing parts emissive. Write materials first, then parts.";
+
+/// What the composer is asked to do with a model it (or the library) made.
+const REFINE_ASK: &str = "Make this 3D model of {q} more detailed and more accurate. Keep its overall size, position and colours. Split big parts into their real sub-parts, fix wrong proportions and add the missing details: 30 to 60 parts. Reply with the whole new model as JSON in the same format.\nThe model now: ";
 
 /// The language model composes the object as a scene of primitives; parts appear as they are
 /// written.
-async fn compose(job: u64, query: &str, llm: Option<Arc<crate::runtime::LlmRuntime>>, cfg: &crate::config::JarvisConfig) -> Result<String, String> {
+async fn compose(job: u64, query: &str, llm: Option<Arc<crate::runtime::LlmRuntime>>, cfg: &crate::config::JarvisConfig, base: Option<Value>) -> Result<String, String> {
     use futures_util::StreamExt;
     let fallback = |why: &str| -> Result<String, String> {
+        if base.is_some() {
+            // (A refinement that fails leaves the model as it was.)
+            return Err(why.to_string());
+        }
         // Without the language model: the closest built-in shape, said plainly.
         let q = scene3d::norm(query);
-        let doc = scene3d::LIBRARY.iter().find_map(|e| match e.kind {
-            scene3d::Kind::Scene(f) if e.words.iter().any(|w| q.contains(&format!(" {w} "))) => Some(f()),
-            _ => None,
-        });
+        let doc = scene3d::LIBRARY.iter().filter(|e| e.words.iter().any(|w| q.contains(&format!(" {w} ")))).find_map(|e| e.kind.scene(1));
         match doc {
             Some(d) => {
                 let name = d.name.clone();
@@ -2276,20 +2455,25 @@ async fn compose(job: u64, query: &str, llm: Option<Arc<crate::runtime::LlmRunti
     if llm.wait_ready(Duration::from_secs(20)).await.is_err() {
         return fallback("the language engine isn't ready");
     }
-    progress(job, None, Some("Composing it from parts…"));
+    let refine = base.is_some();
+    progress(job, None, Some(if refine { "Refining it…" } else { "Composing it from parts…" }));
     let started = Instant::now();
+    let ask = match &base {
+        Some(doc) => format!("{}{doc}", REFINE_ASK.replace("{q}", query)),
+        None => query.to_string(),
+    };
     let resp = http()
         .post(format!("{}/api/chat", llm.url()))
         .json(&json!({
             "model": cfg.primary_model,
-            "messages": [{ "role": "system", "content": COMPOSE_PROMPT }, { "role": "user", "content": query }],
+            "messages": [{ "role": "system", "content": COMPOSE_PROMPT }, { "role": "user", "content": ask }],
             "format": "json",
             "stream": true,
             "think": false,
             "keep_alive": crate::vram_guard::keep_alive_value(cfg),
-            "options": crate::brain::Brain::json_options(cfg, 1500, 0.35)
+            "options": crate::brain::Brain::json_options(cfg, if refine { 4000 } else { 2200 }, 0.35)
         }))
-        .timeout(COMPOSE_TIMEOUT)
+        .timeout(if refine { COMPOSE_TIMEOUT * 3 } else { COMPOSE_TIMEOUT })
         .send()
         .await;
     let resp = match resp {
@@ -2324,9 +2508,11 @@ async fn compose(job: u64, query: &str, llm: Option<Arc<crate::runtime::LlmRunti
             if let Ok(doc) = scene3d::parse_scene(&text) {
                 if doc.parts.len() > shown {
                     shown = doc.parts.len();
-                    let model = scene3d::build(&doc);
-                    deliver(job, model, Delivery { source: "Composed".into(), partial: true, keep_preview: true, title: Some(title.clone()), ..Delivery::default() });
-                    progress(job, None, Some(&format!("Composing… {shown} parts")));
+                    // (A refined model replaces the one on screen only once it is whole.)
+                    if !refine {
+                        deliver(job, scene3d::build(&doc), Delivery { source: "Composed".into(), partial: true, keep_preview: true, title: Some(title.clone()), ..Delivery::default() });
+                    }
+                    progress(job, None, Some(&format!("{} {shown} parts", if refine { "Refining…" } else { "Composing…" })));
                 }
             }
         }
@@ -2335,9 +2521,20 @@ async fn compose(job: u64, query: &str, llm: Option<Arc<crate::runtime::LlmRunti
         Ok(d) => d,
         Err(e) => return fallback(&format!("the composition didn't work ({e})")),
     };
-    info!("[3D] Composed '{query}': {} parts in {} ms", doc.parts.len(), started.elapsed().as_millis());
+    info!("[3D] {} '{query}': {} parts in {} ms", if refine { "Refined" } else { "Composed" }, doc.parts.len(), started.elapsed().as_millis());
     let parts = doc.parts.len();
-    deliver(job, scene3d::build(&doc), Delivery { source: "Composed".into(), keep_preview: true, title: Some(title.clone()), ..Delivery::default() });
+    if refine {
+        // A refinement that came back poorer than what it started from is not shown.
+        let before = base.as_ref().and_then(|b| b["parts"].as_array()).map_or(0, Vec::len);
+        if parts <= before {
+            return Err(format!("the refinement came back with {parts} parts, no more than the {before} it had"));
+        }
+    }
+    let title = if refine { studio().title.clone() } else { title };
+    deliver(job, scene3d::build(&doc), Delivery { source: "Composed".into(), keep_preview: true, title: Some(title), doc: Some(doc), ..Delivery::default() });
+    if refine {
+        return Ok(format!("Refined, Sir: {parts} parts now."));
+    }
     Ok(format!("Your {} is ready, Sir: {parts} parts.", query.trim_start_matches("a ").trim_start_matches("an ")))
 }
 
@@ -2488,6 +2685,25 @@ mod tests {
         }
     }
 
+    /// Sir's words from the log: the tower said twice, "more detailed", saved where he says.
+    #[test]
+    fn more_detail_the_eiffel_tower_and_saving_anywhere() {
+        assert_eq!(query_of("Jarvis show me a 3D model, model of the Eiffel Tower.").as_deref(), Some("eiffel tower"));
+        let edit = |t: &str| args_of(t, true);
+        for t in ["Make it more detailed.", "Make it way more detailed.", "enhance it", "more detail", "give me a more accurate version", "mach es detaillierter", "make the 3D model more detailed"] {
+            assert_eq!(edit(t).map(|a| a["action"].clone()), Some(json!("enhance")), "{t}");
+        }
+        assert_eq!(args_of("enhance it", false), None, "only while the studio is open");
+        let saved = |t: &str| edit(t).map(|a| (a["action"].as_str().map(str::to_string), a["format"].as_str().map(str::to_string), a["folder"].as_str().map(str::to_string)));
+        let stl = |folder: &str| Some((Some("export".to_string()), Some("stl".to_string()), Some(folder.to_string())));
+        assert_eq!(saved("save it to my desktop"), stl("desktop"));
+        assert_eq!(saved(r"save it to D:\Prints"), stl(r"D:\Prints"));
+        assert_eq!(saved("save it somewhere else"), stl("ask"));
+        assert_eq!(saved("export it as OBJ to my downloads").map(|s| (s.1, s.2)), Some((Some("obj".to_string()), Some("downloads".to_string()))));
+        assert_eq!(folder_path(r"D:\Prints"), PathBuf::from(r"D:\Prints"));
+        assert!(folder_path("desktop").ends_with("Desktop"));
+    }
+
     #[test]
     fn edits_only_while_the_studio_is_open() {
         let edit = |t: &str| args_of(t, true);
@@ -2540,8 +2756,16 @@ mod tests {
         // A name that holds a paint word is not paint: "Iron Man" is not iron.
         let named = edit("make the iron man suit gold").unwrap();
         assert_eq!((named["material"].as_str(), named["part"].as_str()), (Some("gold"), Some("iron man suit")));
+        // (The model on show called by its own name is the whole model, not a part of it.)
         let titled = command_with("paint the silver falcon red", true, false, &["Silver Falcon".to_string()]).unwrap();
-        assert_eq!((titled["material"].as_str(), titled["part"].as_str()), (Some("red"), Some("silver falcon")));
+        assert_eq!((titled["material"].as_str(), titled["part"].as_str()), (Some("red"), None));
+        // From Sir's log: the model on show by its own words, its colour, its own name.
+        assert_eq!(edit("make the 3D model bigger").unwrap()["scale"], "bigger");
+        assert_eq!(args_of("make the 3D model bigger", false), None, "not a new model called 'model bigger'");
+        let c = edit("change the color to green").unwrap();
+        assert_eq!((c["material"].as_str(), c.get("part")), (Some("green"), None));
+        let whole = command_with("Change the Iron Man suit color to green.", true, false, &["iron man suit".to_string()]).unwrap();
+        assert_eq!((whole["material"].as_str(), whole.get("part")), (Some("green"), None));
         // The HUD's own colours stay the HUD's; zoom is the Earth's while it is up.
         for t in ["make the theme red", "make the background blue", "set the accent to gold", "turn the volume up", "what time is it"] {
             assert_eq!(edit(t), None, "{t}");

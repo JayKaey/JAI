@@ -580,6 +580,13 @@ pub fn id_prefix_for(name: &str) -> Option<&'static str> {
 /// that is not open yet opens detached next time. Returns what was detached.
 pub fn detach_named(name: &str) -> Result<String, String> {
     let n = name.to_lowercase();
+    // "Detach it": the view he had last, not the first block whose title holds the letters "it".
+    if crate::focus::is_pronoun(n.trim()) {
+        let (id, _) = recent_blocks().into_iter().find(|(id, _)| !is_detached(id)).ok_or_else(|| "None of my views is on the board, Sir.".to_string())?;
+        let title = with(|s| s.last_blocks.iter().find(|(b, _, _)| *b == id).map(|(_, t, _)| t.clone())).unwrap_or_else(|| crate::window_commands::spoken_name(&id));
+        detach(&id);
+        return Ok(title);
+    }
     let prefix = id_prefix_for(&n);
     let open: Vec<(String, String)> = with(|s| {
         s.last_blocks
@@ -1287,6 +1294,26 @@ mod tests {
         forget("sim:def");
         forget("system_telemetry");
         forget("schedule");
+    }
+
+    /// "Detach it": the view he had last ("Iron Man suit" and "Unit tests" both hold "it").
+    #[test]
+    fn detach_it_means_the_latest_view() {
+        let _g = test_lock();
+        dock_all();
+        let r = Rect::from_min_size(Pos2::ZERO, vec2(300.0, 300.0));
+        begin_frame();
+        publish_block("unit_probe", "Unit tests", r);
+        touch("unit_probe");
+        std::thread::sleep(Duration::from_millis(5));
+        publish_block("model_probe", "Iron Man suit", r.translate(vec2(400.0, 400.0)));
+        touch("model_probe");
+        begin_frame();
+        assert_eq!(detach_named("it"), Ok("Iron Man suit".to_string()));
+        assert!(is_detached("model_probe") && !is_detached("unit_probe"));
+        assert_eq!(dock_all(), 1);
+        forget("unit_probe");
+        forget("model_probe");
     }
 
     #[test]

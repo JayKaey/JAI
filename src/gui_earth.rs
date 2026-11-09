@@ -347,7 +347,7 @@ fn view_with(ui: &mut Ui, st: &mut Earth, rt: &Handle, fetch: bool) {
     // Frames only while something moves: 60 a second for the camera and a fade, fewer for the
     // halo's beat and the aircraft, one a second for the clock.
     if moving || st.globe_fade.progress(now) < 1.0 || map_resp.dragged() || (gpu && gl::proven() && gl::busy()) {
-        ctx.request_repaint();
+        super::next_animation_frame(&ctx);
     } else if pulsing || (st.overlays.radar && st.overlays.animate) {
         ctx.request_repaint_after(Duration::from_millis(90));
     } else if movers {

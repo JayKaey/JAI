@@ -920,7 +920,8 @@ impl RoseEmblem {
                     line(mesh, &[from, outer[k]], &[alpha, alpha], rgb, a, w * scale.max(0.7), false);
                 }
                 cross(mesh, -PI / 2.0, 0.84, 1.08, WHITE_RGB);
-                cross(mesh, PI / 2.0, 0.84, 1.08, WHITE_RGB);
+                // The bottom mark stops at the ring so it never runs through the "TR 2003" label below.
+                cross(mesh, PI / 2.0, 0.84, 1.0, WHITE_RGB);
             }
             // Three white technical arcs on a pink hairline.
             5 => {

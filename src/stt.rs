@@ -445,6 +445,20 @@ fn audio_ctx_for(samples: usize, min_ctx: i32) -> i32 {
     dynamic_ctx.max(min_ctx.min(1500))
 }
 
+/// Below this many dB of words over the room, Whisper gets a wider encoder window: with people
+/// talking around Sir the noise bench heard 96% / 59% of the words with 512 frames against 91% /
+/// 46% with the clip's own (10 dB / 3 dB); quiet rooms, fans and music gained nothing.
+const NOISY_ROOM_DB: f32 = 15.0;
+const NOISY_MIN_CTX: i32 = 512;
+
+/// How far the clip stands above the room, in dB: its level against its first 0.4 s (the
+/// pre-roll before the onset, which holds the room alone).
+fn words_over_room_db(audio: &[f32]) -> f32 {
+    let rms = |s: &[f32]| (s.iter().map(|x| x * x).sum::<f32>() / s.len().max(1) as f32).sqrt();
+    let room = rms(&audio[..audio.len().min(SAMPLE_RATE * 2 / 5)]);
+    20.0 * (rms(audio) / room.max(1e-6)).log10()
+}
+
 /// The decoder's token budget for `samples` of audio: 10 tokens a second (fast German speech
 /// needs about 6) plus 16, between 24 and whisper.cpp's own 220. Without timestamps only
 /// end-of-text stops the decoder, so a greedy repetition loop ("Pause. Pause. Pause. …") would
@@ -535,7 +549,7 @@ fn run_full(
     }
     match audio_ctx {
         Some(ctx) => params.set_audio_ctx(ctx),
-        None if s.dynamic_ctx => params.set_audio_ctx(audio_ctx_for(audio.len(), s.min_ctx)),
+        None if s.dynamic_ctx => params.set_audio_ctx(audio_ctx_for(audio.len(), if words_over_room_db(audio) < NOISY_ROOM_DB { s.min_ctx.max(NOISY_MIN_CTX) } else { s.min_ctx })),
         None => {}
     }
     if let Some(flag) = called_off {
@@ -987,6 +1001,14 @@ pub fn normalize_stt_transcript(text: &str) -> String {
             (r"(?i)\bclose (?:the )?(?:windows|window's) (?:you|u) (?:opened|open)\b", "close the windows you opened"),
             (r"(?i)\bsci[- ]?fi\b|\bscifi\b|\bsigh fi\b", "Sci-Fi"),
             (r"(?i)\bo led\b|\bo-led\b", "OLED"),
+            // "3D" heard as "three" / "3" before what the studio shows (jarvis.log 2026-11-09:
+            // "Close the three model.", "Tommy is 3 model").
+            (r"(?i)\b(?:three|3)[- ]?(?:d[- ])?(model|modell|studio|viewer|render|rendering|printer)\b", "3D $1"),
+            (r"(?i)\bthree[- ]?d\b", "3D"),
+            (r"(?i)\biron and (suit|armou?r)\b", "Iron Man $1"),
+            (r"(?i)\beiffel?\s*tower\b|\beifel\s*tower\b|\bi\s?full tower\b|\beye full tower\b", "Eiffel Tower"),
+            // (The noise bench, fan and chatter: "Save it to my desk call.")
+            (r"(?i)\b(my|the|to) desk ?(?:call|top|tub)\b", "$1 desktop"),
         ]
         .into_iter()
         .map(|(p, r)| (Regex::new(p).expect("valid STT correction"), r))
@@ -1099,6 +1121,15 @@ mod tests {
     #[test]
     fn phonetic_intent_repair() {
         // The screenshot: "No, forget that idea" misheard.
+        // The 3D studio's words as Whisper heard them in Sir's session (2026-11-09).
+        assert_eq!(normalize_stt_transcript("Close the three model."), "Close the 3D model.");
+        assert_eq!(normalize_stt_transcript("Tommy is 3 model of the Iron Man armor."), "Tommy is 3D model of the Iron Man armor.");
+        assert_eq!(normalize_stt_transcript("Show me a model of the iron and suit."), "Show me a model of the Iron Man suit.");
+        assert_eq!(normalize_stt_transcript("show me the eifel tower in three d"), "show me the Eiffel Tower in 3D");
+        assert_eq!(normalize_stt_transcript("Show me a 3D model of the moon."), "Show me a 3D model of the moon.");
+        assert_eq!(normalize_stt_transcript("I have three models and three days"), "I have three models and three days");
+        assert_eq!(normalize_stt_transcript("Save it to my desk call."), "Save it to my desktop.");
+        assert_eq!(normalize_stt_transcript("Put the call on my desk."), "Put the call on my desk.");
         assert_eq!(normalize_stt_transcript("No fool forgets that idea."), "No, forget that idea.");
         assert_eq!(normalize_stt_transcript("no full forget that"), "No, forget that idea.");
         assert_eq!(normalize_stt_transcript("Fool forget that."), "No, forget that idea.");
@@ -1240,6 +1271,20 @@ mod tests {
         assert_eq!(audio_ctx_for(16_000 * 10, 128), 564);
         assert_eq!(audio_ctx_for(16_000 * 30, 128), 1500);
         assert_eq!(audio_ctx_for(16_000 * 40, 128), 1500);
+    }
+
+    /// Words in a quiet room stand far above its pre-roll; words over people talking do not.
+    #[test]
+    fn a_noisy_room_is_told_from_a_quiet_one() {
+        let tone = |n: usize, amp: f32| (0..n).map(|i| amp * (i as f32 * 0.31).sin()).collect::<Vec<f32>>();
+        let mut quiet = tone(8_000, 0.001);
+        quiet.extend(tone(24_000, 0.08));
+        assert!(words_over_room_db(&quiet) > NOISY_ROOM_DB, "{}", words_over_room_db(&quiet));
+        let room = tone(32_000, 0.04);
+        let mut words = vec![0.0; 8_000];
+        words.extend(tone(24_000, 0.06));
+        let talking: Vec<f32> = room.iter().zip(&words).map(|(r, w)| r + w).collect();
+        assert!(words_over_room_db(&talking) < NOISY_ROOM_DB, "{}", words_over_room_db(&talking));
     }
 
     #[test]

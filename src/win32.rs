@@ -210,6 +210,37 @@ pub fn post_app_command(pid: u32, command: u32) -> usize {
         .count()
 }
 
+/// Makes this process's top-level window titled `title` an owned window of `owner`: Windows keeps
+/// an owned window above its owner whatever raises the owner. False while there is no such window.
+pub fn own_window_titled(title: &str, owner: isize) -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{SetWindowLongPtrW, GWLP_HWNDPARENT};
+    struct Search<'a> {
+        title: &'a str,
+        found: Option<HWND>,
+    }
+    unsafe extern "system" fn find(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        // SAFETY: lparam is the &mut Search passed below and outlives EnumWindows.
+        let search = unsafe { &mut *(lparam.0 as *mut Search) };
+        let mut pid = 0u32;
+        // SAFETY: a plain query on a handle from the enumeration.
+        unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
+        if pid == std::process::id() && window_text(hwnd) == search.title {
+            search.found = Some(hwnd);
+            return BOOL(0);
+        }
+        TRUE
+    }
+    let mut search = Search { title, found: None };
+    // SAFETY: the callback only touches `search` through the provided pointer.
+    unsafe {
+        let _ = EnumWindows(Some(find), LPARAM(&mut search as *mut Search as isize));
+    }
+    let Some(hwnd) = search.found.filter(|h| h.0 != owner) else { return false };
+    // SAFETY: setting the owner of our own window to our own HUD window.
+    unsafe { SetWindowLongPtrW(hwnd, GWLP_HWNDPARENT, owner) };
+    true
+}
+
 /// One of Jarvis' own windows (the HUD, his extra windows, a dialog of his process).
 pub fn is_jarvis_window(w: &WindowInfo) -> bool {
     static OWN: OnceLock<u32> = OnceLock::new();
