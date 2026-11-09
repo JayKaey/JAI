@@ -735,6 +735,8 @@ impl ClauseSplitter {
 pub struct Kokoro {
     session: Session,
     vocab: HashMap<char, i64>,
+    /// v0.19 learned eSpeak's two-letter spellings, not v1.0's single letters (misaki).
+    legacy: bool,
     voices: HashMap<String, Arc<Vec<f32>>>,
     models_dir: PathBuf,
     archive: PathBuf,
@@ -784,6 +786,7 @@ impl Kokoro {
         Ok(Self {
             session,
             vocab,
+            legacy: !crate::models::is_kokoro_v1(&cfg.kokoro_model_path),
             voices: HashMap::new(),
             models_dir,
             archive: PathBuf::from(&cfg.kokoro_voices_archive_path),
@@ -870,6 +873,7 @@ impl Kokoro {
     }
 
     pub fn synthesize(&mut self, ipa: &str, voice: &str, speed: f32) -> Result<Vec<f32>, String> {
+        let ipa = if self.legacy { crate::phonemizer::unmerge(ipa) } else { ipa.to_string() };
         let mut ids: Vec<i64> = ipa.chars().filter_map(|c| self.vocab.get(&c).copied()).collect();
         if ids.is_empty() {
             return Ok(Vec::new());

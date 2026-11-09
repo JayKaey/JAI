@@ -177,7 +177,11 @@ async fn bench_stt(cfg: &JarvisConfig, pcm: &[f32], voiced_ms: u32) {
 /// on 2026-11-09), said by another voice into a room with a fan, music or people talking: the
 /// share of words each Whisper setting gets right, so the defaults are picked by measurement.
 async fn bench_noise(cfg: &JarvisConfig, kokoro: &mut Kokoro, phonemizer: &Phonemizer, seed: &mut u32) {
-    const SAID: [&str; 10] = [
+    const SAID: [&str; 14] = [
+        "Can you make the globe spin?",
+        "Can you show me where New York is?",
+        "Can you make it green?",
+        "Show me a picture of the Eiffel Tower.",
         "Close the 3D model.",
         "Show me a 3D model of the Iron Man armor.",
         "Change the colour to green.",

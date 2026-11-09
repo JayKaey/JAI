@@ -951,7 +951,7 @@ fn paint_layers(p: &Painter, st: &Earth, geo: &Geo, ink: &Ink, now: f64, placer:
     if let Some(iss) = iss {
         let footprint = model::circle_points((iss.lat, iss.lon), model::footprint_radius_km(iss.alt_km), 96);
         for run in proj.runs(&footprint) {
-            p.extend(Shape::dashed_line(&run, stroke(1.0, ink.rim.gamma_multiply(0.75)), 5.0, 4.0));
+            p.extend(crate::earth_layers::dashed_on(map, &run, stroke(1.0, ink.rim.gamma_multiply(0.75)), 5.0, 4.0));
         }
         for run in proj.runs(&densify(&st.track.items, 10)) {
             p.add(Shape::line(run, stroke(1.3, WHITE_INK.gamma_multiply(0.55))));
@@ -1068,7 +1068,7 @@ fn paint_layers(p: &Painter, st: &Earth, geo: &Geo, ink: &Ink, now: f64, placer:
         let r_px = (proj.px_per_km() * radius_km) as f32;
         if r_px > 6.0 {
             for run in proj.runs(&circle) {
-                p.extend(Shape::dashed_line(&run, stroke(1.2, ink.accent.gamma_multiply(0.85)), 6.0, 4.0));
+                p.extend(crate::earth_layers::dashed_on(map, &run, stroke(1.2, ink.accent.gamma_multiply(0.85)), 6.0, 4.0));
             }
             if let [whole] = proj.runs(&circle).as_slice() {
                 if whole.len() == circle.len() {
@@ -1965,6 +1965,21 @@ mod tests {
         stage.frames(frames, &mut |ctx| {
             egui::CentralPanel::default().frame(Frame::none()).show(ctx, |ui| view(ui, earth, rt));
         })
+    }
+
+    #[test]
+    fn street_level_costs_no_more_than_space() {
+        // At 250 m the ISS footprint was millions of pixels of dashes: 710 ms a frame (2026-11-09).
+        let rt = runtime();
+        for alt in [12_742.0, 20.0, 0.25] {
+            let mut earth = Earth::demo();
+            earth.cam = crate::earth::Camera { lat: 40.71, lon: -74.0, alt };
+            let mut stage = stage(vec2(1180.0, 720.0));
+            let _ = draw(&mut stage, &mut earth, rt.handle(), 3);
+            let t = std::time::Instant::now();
+            let _ = draw(&mut stage, &mut earth, rt.handle(), 10);
+            assert!(t.elapsed() / 10 < std::time::Duration::from_millis(40), "{alt} km: {:?} a frame", t.elapsed() / 10);
+        }
     }
 
     fn runtime() -> tokio::runtime::Runtime {

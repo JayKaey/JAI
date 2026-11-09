@@ -1247,7 +1247,9 @@ pub fn parse_action(args: &Value) -> Result<Action, String> {
     let text = |key: &str| args.get(key).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
     let place = text("place");
     let radius = args.get("radius_km").and_then(|r| r.as_f64().or_else(|| r.as_str().and_then(|s| s.trim().parse().ok()))).filter(|r| *r > 0.0);
-    let action = text("action").unwrap_or_else(|| "show".to_string()).to_lowercase();
+    // A place and no action means flying there (2026-11-09: {"place":"New York","view":"earth"}
+    // from the model opened the globe and stayed put).
+    let action = text("action").unwrap_or_else(|| if place.is_some() { "show_place" } else { "show" }.to_string()).to_lowercase();
     // live layers (C1)
     if let Some(live) = crate::earth_layers::parse_action(&action, args) {
         return live.map(Action::Live);
@@ -4625,6 +4627,7 @@ mod tests {
         assert_eq!(a(json!({"action": "show_holo"})), Ok(Action::Holo));
         assert_eq!(a(json!({"action": "show_place", "place": "Tokyo"})), Ok(Action::Place("Tokyo".into())));
         assert!(a(json!({"action": "show_place"})).is_err());
+        assert_eq!(a(json!({"view": "earth", "place": "New York"})), Ok(Action::Place("New York".into())));
         assert_eq!(a(json!({"action": "show_quakes", "place": "here"})), Ok(Action::Quakes { place: Some("here".into()), radius_km: None }));
         assert_eq!(a(json!({"action": "show_quakes", "place": "Naples", "radius_km": 300})), Ok(Action::Quakes { place: Some("Naples".into()), radius_km: Some(300.0) }));
         assert_eq!(a(json!({"action": "show_quakes", "radius_km": "200"})), Ok(Action::Quakes { place: None, radius_km: Some(200.0) }));

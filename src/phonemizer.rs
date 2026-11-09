@@ -25,7 +25,8 @@ use tracing::{info, warn};
 const VOICE: &str = "en-gb-x-rp";
 const GERMAN_VOICE: &str = "de";
 const ESPEAK_CHARS_UTF8: c_int = 1;
-const ESPEAK_PHONEMES_IPA: c_int = 0x02;
+/// IPA with '^' tying multi-letter phonemes ("a^ɪ"): bit 7 plus the tie in bits 8-23.
+const ESPEAK_TIED_IPA: c_int = 0x02 | 0x80 | ('^' as c_int) << 8;
 const AUDIO_OUTPUT_SYNCHRONOUS: c_int = 0x02;
 const ESPEAK_INITIALIZE_DONT_EXIT: c_int = 0x8000;
 
@@ -148,7 +149,7 @@ impl EspeakLib {
             let mut guard = 0;
             while !ptr.is_null() && guard < 64 {
                 guard += 1;
-                let res = (self.text_to_phonemes)(&mut ptr, ESPEAK_CHARS_UTF8, ESPEAK_PHONEMES_IPA);
+                let res = (self.text_to_phonemes)(&mut ptr, ESPEAK_CHARS_UTF8, ESPEAK_TIED_IPA);
                 if res.is_null() {
                     break;
                 }
@@ -300,9 +301,9 @@ impl Phonemizer {
             Backend::Cli(cli) => match cli_phonemize(cli, text, Espeak::of(lang)) {
                 Some(raw) if lang == Lang::De => postprocess_de(raw.trim_end_matches(['.', '!', '?'])),
                 Some(raw) => postprocess_en(raw.trim_end_matches(['.', '!', '?'])),
-                None => postprocess_en(&rules_phonemize(&english_spelling(text))),
+                None => rules_en(text),
             },
-            Backend::Rules => postprocess_en(&rules_phonemize(&english_spelling(text))),
+            Backend::Rules => rules_en(text),
         }
     }
 }
@@ -471,7 +472,7 @@ fn cli_phonemize(cli: &Path, text: &str, voice: Espeak) -> Option<String> {
     if let Some(dir) = cli.parent().filter(|d| d.join("espeak-ng-data").is_dir()) {
         args.push(format!("--path={}", dir.display()));
     }
-    args.extend(["-q".into(), "--ipa".into(), "-v".into(), voice.names()[0].into(), text.into()]);
+    args.extend(["-q".into(), "--ipa".into(), "--tie=^".into(), "-v".into(), voice.names()[0].into(), text.into()]);
     let out = crate::shell::run_helper_blocking(cli, &args, std::time::Duration::from_secs(10)).ok()?;
     if !out.success() {
         return None;
@@ -493,21 +494,58 @@ static Z_JOIN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#" z([;:,.!?—…
 static SPACES: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s+").expect("regex"));
 static SPACE_BEFORE_PUNCT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s+([,.!?;:—…])").expect("regex"));
 
-/// English runs: the normalisations Kokoro applied to phonemizer output during training.
+static SYLLABIC: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(\S)\x{329}").expect("regex"));
+
+/// eSpeak's multi-letter phonemes and the single letters Kokoro v1.0 learned for them (misaki).
+/// The affricate ts (last) is German only: English "its" stays two sounds.
+const MERGED: [(char, char, char); 8] = [('e', 'ɪ', 'A'), ('a', 'ɪ', 'I'), ('a', 'ʊ', 'W'), ('ɔ', 'ɪ', 'Y'), ('ə', 'ʊ', 'Q'), ('t', 'ʃ', 'ʧ'), ('d', 'ʒ', 'ʤ'), ('t', 's', 'ʦ')];
+
+/// Multi-letter phonemes joined by `tie` as their single letters.
+fn merge(ipa: &str, tie: &str, letters: &[(char, char, char)]) -> String {
+    letters.iter().fold(ipa.to_string(), |s, (a, b, one)| s.replace(&format!("{a}{tie}{b}"), &one.to_string()))
+}
+
+/// Kokoro v0.19's two-letter spellings back from v1.0's single letters.
+pub fn unmerge(ipa: &str) -> String {
+    let mut out = String::with_capacity(ipa.len() + 8);
+    for c in ipa.chars() {
+        match MERGED.iter().find(|m| m.2 == c) {
+            Some((a, b, _)) => out.extend([*a, *b]),
+            None => out.push(match c { 'ᵊ' => 'ə', 'T' => 'ɾ', _ => c }),
+        }
+    }
+    out
+}
+
+/// The built-in rules spell diphthongs untied.
+fn rules_en(text: &str) -> String {
+    postprocess_en(&merge(&rules_phonemize(&english_spelling(text)), "", &MERGED[..7]))
+}
+
+/// English runs into misaki's British notation, the one Kokoro v1.0 was trained on (its eSpeak
+/// fallback): tied diphthongs and affricates as single letters, RP's "air" as ɛː, syllabic
+/// consonants with ᵊ, glottal stops and flaps as t and T.
 fn postprocess_en(ipa: &str) -> String {
     let s = LANG_SWITCH.replace_all(ipa, "");
-    let s: String = s
+    let s = s.replace("e^ə", "ɛː").replace("ʔˌn\u{329}", "ʔn").replace("ʔn\u{329}", "ʔn").replace("ə^l", "ᵊl");
+    let s = merge(&s, "^", &MERGED[..7]).replace("ʲo", "jo").replace("ʲə", "jə").replace('ɚ', "əɹ").replace("iə", "ɪə");
+    let s: String = SYLLABIC
+        .replace_all(&s, "ᵊ$1")
         .chars()
-        .map(|c| match c {
-            'r' => 'ɹ',
-            'x' => 'k',
-            'ʲ' => 'j',
-            'ɬ' => 'l',
-            'g' => 'ɡ',
-            _ => c,
+        .filter_map(|c| match c {
+            '^' | 'ʲ' | '\u{303}' | '\u{329}' => None,
+            'e' => Some('A'),
+            'r' => Some('ɹ'),
+            'x' | 'ç' => Some('k'),
+            'ɐ' => Some('ə'),
+            'ɬ' => Some('l'),
+            'g' => Some('ɡ'),
+            'o' => Some('ɔ'),
+            'ɾ' => Some('T'),
+            'ʔ' => Some('t'),
+            _ => Some(c),
         })
         .collect();
-    let s = s.replace('ʧ', "tʃ").replace('ʤ', "dʒ");
     let s = Z_JOIN.replace_all(&s, "z$1");
     tidy(&s)
 }
@@ -516,10 +554,10 @@ fn postprocess_en(ipa: &str) -> String {
 /// approximant, "ach"/"ich" (x, ç) kept, ʏ (absent from the table) as its nearest vowel y, and
 /// non-syllabic marks dropped.
 fn postprocess_de(ipa: &str) -> String {
-    let s = LANG_SWITCH.replace_all(ipa, "");
+    let s = merge(&LANG_SWITCH.replace_all(ipa, ""), "^", &MERGED);
     let s: String = s
         .chars()
-        .filter(|c| !matches!(c, '\u{32F}' | '\u{361}' | '\u{35C}'))
+        .filter(|c| !matches!(c, '^' | '\u{32F}' | '\u{361}' | '\u{35C}'))
         .map(|c| match c {
             'r' => 'ʁ',
             'ʏ' => 'y',
@@ -529,7 +567,7 @@ fn postprocess_de(ipa: &str) -> String {
             _ => c,
         })
         .collect();
-    tidy(&s.replace('ʧ', "tʃ").replace('ʤ', "dʒ"))
+    tidy(&s)
 }
 
 /// Single spaces, none before punctuation.
@@ -665,12 +703,18 @@ mod tests {
 
     #[test]
     fn postprocess_matches_kokoro_conventions() {
-        assert_eq!(postprocess_en("ɹˈaɪt ɐwˈeɪ , sˈɜː ."), "ɹˈaɪt ɐwˈeɪ, sˈɜː.");
+        // misaki's notation for v1.0: tied diphthongs and affricates as one letter each.
+        assert_eq!(postprocess_en("ɹˈa^ɪt ɐwˈe^ɪ , sˈɜː ."), "ɹˈIt əwˈA, sˈɜː.");
+        assert_eq!(postprocess_en("ˈɔːl sˈɪstəmz ɑːɹ ˌɒnlˈa^ɪn ."), "ˈɔːl sˈɪstəmz ɑːɹ ˌɒnlˈIn.");
         assert_eq!(postprocess_en("ɪt z ɡʊd"), "ɪtz ɡʊd");
-        assert_eq!(postprocess_en("(en)hˈɛloʊ"), "hˈɛloʊ");
-        assert_eq!(postprocess_en("ʤˈɑːvɪs"), "dʒˈɑːvɪs");
+        assert_eq!(postprocess_en("(en)həlˈə^ʊ"), "həlˈQ");
+        assert_eq!(postprocess_en("d^ʒˈɑːvɪs t^ʃˈe^ə"), "ʤˈɑːvɪs ʧˈɛː");
+        assert_eq!(postprocess_en("bˈʌʔn\u{329} bˈɒtə^l kˈɔːtʃɪp"), "bˈʌtn bˈɒtᵊl kˈɔːtʃɪp", "untied t+ʃ stays two sounds");
+        assert_eq!(rules_en("Right away"), "ɹˈIt əwˈA");
+        // v0.19 hears its old spellings.
+        assert_eq!(unmerge("ɹˈIt əwˈA, ʤˈɑːvɪs bˈɒtᵊl"), "ɹˈaɪt əwˈeɪ, dʒˈɑːvɪs bˈɒtəl");
         // German keeps its own sounds: uvular r, "ach" and "ich", and ʏ as y.
-        assert_eq!(postprocess_de("rˈʏkən bˈax ɪç"), "ʁˈykən bˈax ɪç");
+        assert_eq!(postprocess_de("rˈʏkən bˈax ɪç t^sˈa^ɪt"), "ʁˈykən bˈax ɪç ʦˈIt");
         assert_eq!(postprocess_de("(de)ʃtɾˈɑːsə"), "ʃtɾˈɑːsə");
     }
 
@@ -714,7 +758,9 @@ mod tests {
             // One string, two languages: the German words carry German sounds (ç, x, ʁ).
             let mixed = p.phonemize("Your WebUntis shows LK Mathematik and Geschichte, Sir.");
             assert!(mixed.contains("ɡəʃˈɪçtə") && mixed.contains("atematˈiːk") && mixed.contains("ˌɛlkˈɑː") && mixed.ends_with('.'), "{mixed}");
-            assert!(mixed.contains("ʃˈəʊz") || mixed.contains("ʃˈoʊz") || mixed.contains("ʃəʊz"), "English stays English: {mixed}");
+            assert!(mixed.contains("ʃˈQz") || mixed.contains("ʃQz"), "English stays English: {mixed}");
+            let hello = p.phonemize("Good evening, Sir. All systems are online.");
+            assert!(hello.replace('ˈ', "").contains("ɒnlIn") && !hello.contains(['^', 'e']) && !hello.contains("aɪ"), "{hello}");
             let german = p.phonemize("Ich habe nicht viel Zeit, morgen um acht.");
             assert!(german.contains("ɪç") && german.contains("ˈaxt"), "{german}");
             // Switching back to English after German.

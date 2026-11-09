@@ -5323,6 +5323,8 @@ fn viewport_for_block(id: &str) -> ViewportId {
         "image_viewer" => ViewportId::from_hash_of("jarvis_image_viewer"),
         "webcams" => ViewportId::from_hash_of("jarvis_webcams"),
         "street_view" => ViewportId::from_hash_of("jarvis_street_view"),
+        // The second, third … picture block (`gui_media::show`).
+        id if id.starts_with("image_viewer_") => ViewportId::from_hash_of(format!("jarvis_{id}")),
         id => match id.strip_prefix("sim:") {
             Some(sim) => ViewportId::from_hash_of(("jarvis_simlab", sim)),
             None => ViewportId::from_hash_of(("jarvis_window", id)),

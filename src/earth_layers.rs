@@ -1093,6 +1093,50 @@ fn incident_colour(kind: crate::traffic::Kind) -> Color32 {
 }
 
 /// Points on a circle of `radius_km` around a point.
+/// A dashed line, only where it crosses `map`: a footprint thousands of kilometres round is
+/// millions of pixels at street level, and dashing all of it took most of a frame.
+pub fn dashed_on(map: Rect, run: &[Pos2], stroke: Stroke, dash: f32, gap: f32) -> Vec<Shape> {
+    let map = map.expand(stroke.width + 2.0);
+    let mut pieces: Vec<Vec<Pos2>> = Vec::new();
+    let mut open = false;
+    for w in run.windows(2) {
+        let Some((a, b)) = clip_segment(w[0], w[1], map) else {
+            open = false;
+            continue;
+        };
+        match pieces.last_mut().filter(|_| open) {
+            Some(piece) => piece.push(b),
+            None => pieces.push(vec![a, b]),
+        }
+        open = b == w[1];
+    }
+    pieces.iter().flat_map(|piece| Shape::dashed_line(piece, stroke, dash, gap)).collect()
+}
+
+/// The part of segment `a`–`b` inside `r` (Liang–Barsky).
+fn clip_segment(a: Pos2, b: Pos2, r: Rect) -> Option<(Pos2, Pos2)> {
+    let d = b - a;
+    let (mut t0, mut t1) = (0.0f32, 1.0f32);
+    for (p, q) in [(-d.x, a.x - r.min.x), (d.x, r.max.x - a.x), (-d.y, a.y - r.min.y), (d.y, r.max.y - a.y)] {
+        if p == 0.0 {
+            if q < 0.0 {
+                return None;
+            }
+            continue;
+        }
+        let t = q / p;
+        if p < 0.0 {
+            t0 = t0.max(t);
+        } else {
+            t1 = t1.min(t);
+        }
+        if t0 > t1 {
+            return None;
+        }
+    }
+    Some((a + d * t0, a + d * t1))
+}
+
 fn circle(centre: (f64, f64), radius_km: f64, steps: usize) -> Vec<(f64, f64)> {
     let (lat, lon) = (centre.0.to_radians(), centre.1.to_radians());
     let d = radius_km / 6371.0;
@@ -1222,7 +1266,7 @@ pub fn paint(p: &Painter, v: &MapView) -> Painted {
         }
         if let Some(fix) = fix {
             for run in (v.runs)(&circle((fix.lat, fix.lon), footprint_km(fix.alt_km), 96)) {
-                p.extend(Shape::dashed_line(&run, stroke(1.0, v.rim.gamma_multiply(0.75)), 5.0, 4.0));
+                p.extend(dashed_on(v.map, &run, stroke(1.0, v.rim.gamma_multiply(0.75)), 5.0, 4.0));
             }
         }
     }
@@ -1516,5 +1560,19 @@ mod tests {
         let now = chrono::Utc::now();
         let segs = demo_segments(now);
         assert!(segs.iter().all(|s| s.at(now).is_some()));
+    }
+
+    #[test]
+    fn dashes_only_where_the_line_crosses_the_map() {
+        // A footprint 10 million pixels round through a 1000 px map: a handful of dashes.
+        let map = Rect::from_min_size(Pos2::ZERO, vec2(1000.0, 600.0));
+        let r = 1.6e6_f32;
+        let ring: Vec<Pos2> = (0..=96).map(|k| {
+            let a = std::f32::consts::TAU * k as f32 / 96.0;
+            Pos2::new(500.0 + r * a.cos() - r, 300.0f32 + r * a.sin())
+        }).collect();
+        let dashes = dashed_on(map, &ring, Stroke::new(1.0f32, Color32::WHITE), 5.0, 4.0);
+        assert!((50..400).contains(&dashes.len()), "{} dashes", dashes.len());
+        assert!(dashed_on(map, &[Pos2::new(-50.0f32, -50.0f32), Pos2::new(-10.0f32, 900.0f32)], Stroke::new(1.0f32, Color32::WHITE), 5.0, 4.0).is_empty());
     }
 }

@@ -424,14 +424,14 @@ impl Jarvis {
         Some(v["models"].as_array()?.iter().filter_map(|m| m["size_vram"].as_u64()).sum::<u64>() / 1_048_576)
     }
 
-    /// "Good evening, Sir. All systems are online. You have 2 reminders today."
+    /// "Good evening, Sir. All systems are online. You have 2 reminders today." (varied each start)
     pub fn startup_greeting(&self, restarted: bool) -> String {
         use chrono::Timelike;
         if restarted {
             return "I'm back online, Sir.".into();
         }
         let now = chrono::Local::now();
-        let mut line = format!("{} All systems are online.", crate::briefing::greeting(now.hour()));
+        let mut line = crate::briefing::startup_line(now.hour(), now.timestamp_subsec_micros() as usize);
         let today = self.tools().reminders.list().into_iter().filter(|r| r.due().date_naive() == now.date_naive()).count();
         match today {
             0 => {}

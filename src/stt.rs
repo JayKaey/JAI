@@ -66,6 +66,14 @@ const NO_SPEECH_THOLD: f32 = 0.60;
 /// A decode this confident (mean token log-probability) is kept even with a high no-speech
 /// probability: short real commands padded with silence ("Stop.") can score high on both.
 const CONFIDENT_LOGPROB: f32 = -0.40;
+/// Below this, Whisper is guessing at noise or music (2026-11-09: "Dom spatula, domi dias,
+/// domi dias." at −2.05 got an offer of a protocol); Sir's commands score −0.01 … −0.8.
+const GARBLED_LOGPROB: f32 = -1.2;
+
+/// A transcript to drop rather than act on.
+fn discarded(no_speech: f32, logprob: f32) -> bool {
+    (no_speech > NO_SPEECH_THOLD && logprob < CONFIDENT_LOGPROB) || logprob < GARBLED_LOGPROB
+}
 
 #[derive(Debug, Clone)]
 pub struct Transcript {
@@ -768,7 +776,7 @@ fn transcribe(
     };
     let Heard { decoded, language, language_prob, no_speech, passes } = heard;
     let raw = decoded.text;
-    if no_speech > NO_SPEECH_THOLD && decoded.avg_logprob < CONFIDENT_LOGPROB {
+    if discarded(no_speech, decoded.avg_logprob) {
         info!(
             "[STT] Discarded '{raw}' from {audio_ms} ms of audio: no-speech {no_speech:.2}, log-probability {:.2} (in {} ms)",
             decoded.avg_logprob,
@@ -1274,6 +1282,13 @@ mod tests {
     }
 
     /// Words in a quiet room stand far above its pre-roll; words over people talking do not.
+    #[test]
+    fn gibberish_is_dropped_and_sir_is_kept() {
+        // Sir's lines of 2026-11-09 with their scores; the last is music heard as words.
+        assert!(!discarded(0.04, -0.06) && !discarded(0.18, -0.09) && !discarded(0.12, -0.76));
+        assert!(!discarded(0.03, 0.0) && discarded(0.40, -2.05) && discarded(0.7, -0.5));
+    }
+
     #[test]
     fn a_noisy_room_is_told_from_a_quiet_one() {
         let tone = |n: usize, amp: f32| (0..n).map(|i| amp * (i as f32 * 0.31).sin()).collect::<Vec<f32>>();

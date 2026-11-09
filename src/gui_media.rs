@@ -26,88 +26,110 @@ use tokio::runtime::Handle;
 const PANEL: Color32 = Color32::from_rgb(0x02, 0x05, 0x09);
 const LIVE_RED: Color32 = Color32::from_rgb(0xFF, 0x3B, 0x4E);
 
-/// One of the three blocks.
+/// One block: a picture block (one per subject), the cameras or street view. Its window is the
+/// viewport `jarvis_<id>`.
+#[derive(Clone)]
 struct Block {
-    id: &'static str,
-    viewport: &'static str,
+    id: String,
     title: &'static str,
     window_title: &'static str,
     size: [f32; 2],
     min: [f32; 2],
-    open: fn() -> bool,
-    close: fn(),
-    body: fn(&mut Ui, &Handle),
+    open: Arc<dyn Fn() -> bool + Send + Sync>,
+    close: Arc<dyn Fn() + Send + Sync>,
+    body: Arc<dyn Fn(&mut Ui, &Handle) + Send + Sync>,
 }
 
-static PICTURES: Block = Block {
-    id: "image_viewer",
-    viewport: "jarvis_image_viewer",
-    title: "Pictures",
-    window_title: "Pictures — J.A.R.V.I.S.",
-    size: [980.0, 680.0],
-    min: [520.0, 380.0],
-    open: crate::image_viewer::is_open,
-    close: crate::image_viewer::close,
-    body: pictures_body,
-};
+fn pictures(id: &str) -> Block {
+    let (open, close, body) = (id.to_string(), id.to_string(), id.to_string());
+    Block {
+        id: id.to_string(),
+        title: "Pictures",
+        window_title: "Pictures — J.A.R.V.I.S.",
+        size: [980.0, 680.0],
+        min: [520.0, 380.0],
+        open: Arc::new(move || crate::image_viewer::block_ids().contains(&open)),
+        close: Arc::new(move || crate::image_viewer::close_block(&close)),
+        body: Arc::new(move |ui, rt| pictures_body(ui, rt, &body)),
+    }
+}
 
-static CAMERAS: Block = Block {
-    id: "webcams",
-    viewport: "jarvis_webcams",
-    title: "Live cameras",
-    window_title: "Live cameras — J.A.R.V.I.S.",
-    size: [1040.0, 660.0],
-    min: [560.0, 380.0],
-    open: crate::webcams::is_open,
-    close: crate::webcams::close,
-    body: cameras_body,
-};
+fn cameras() -> Block {
+    Block {
+        id: "webcams".into(),
+        title: "Live cameras",
+        window_title: "Live cameras — J.A.R.V.I.S.",
+        size: [1040.0, 660.0],
+        min: [560.0, 380.0],
+        open: Arc::new(crate::webcams::is_open),
+        close: Arc::new(crate::webcams::close),
+        body: Arc::new(cameras_body),
+    }
+}
 
-static STREET: Block = Block {
-    id: "street_view",
-    viewport: "jarvis_street_view",
-    title: "Street view",
-    window_title: "Street view — J.A.R.V.I.S.",
-    size: [1040.0, 640.0],
-    min: [560.0, 380.0],
-    open: crate::street_view::is_open,
-    close: crate::street_view::close,
-    body: street_body,
-};
+fn street() -> Block {
+    Block {
+        id: "street_view".into(),
+        title: "Street view",
+        window_title: "Street view — J.A.R.V.I.S.",
+        size: [1040.0, 640.0],
+        min: [560.0, 380.0],
+        open: Arc::new(crate::street_view::is_open),
+        close: Arc::new(crate::street_view::close),
+        body: Arc::new(street_body),
+    }
+}
 
-/// Registers the three blocks while they are open (on the board, or as windows of their own).
+/// Picture blocks drawn lately: a closed one is hosted once more, so its window plays its exit.
+static PICTURE_IDS: LazyLock<Mutex<Vec<String>>> = LazyLock::new(Default::default);
+
+/// Registers the blocks while they are open (on the board, or as windows of their own).
 pub(super) fn show(ctx: &egui::Context, rt: &Handle) {
     crate::image_viewer::pixels::set_runtime(rt);
     crate::webcams::set_runtime(rt);
     crate::street_view::set_runtime(rt);
-    for block in [&PICTURES, &CAMERAS, &STREET] {
-        host(ctx, rt, block);
+    let ids = {
+        let mut known = super::lock(&PICTURE_IDS);
+        for id in crate::image_viewer::block_ids() {
+            if !known.contains(&id) {
+                known.push(id);
+            }
+        }
+        known.clone()
+    };
+    for id in ids {
+        if !host(ctx, rt, pictures(&id)) {
+            super::lock(&PICTURE_IDS).retain(|k| *k != id);
+        }
     }
+    host(ctx, rt, cameras());
+    host(ctx, rt, street());
     forget_unused_textures();
 }
 
-fn host(ctx: &egui::Context, rt: &Handle, b: &'static Block) {
-    let viewport = ViewportId::from_hash_of(b.viewport);
+/// Draws block `b`; false once it is closed and gone.
+fn host(ctx: &egui::Context, rt: &Handle, b: Block) -> bool {
+    let viewport = ViewportId::from_hash_of(format!("jarvis_{}", b.id));
     // (Closed while it was a window of its own: it plays its exit first.)
     if !super::detached_keep(ctx, viewport, (b.open)()) {
-        crate::hud_dock::forget(b.id);
-        return;
+        crate::hud_dock::forget(&b.id);
+        return false;
     }
-    if !crate::hud_dock::adopt(b.id) {
-        let action = super::hud_block_window(ctx, b.id, b.title, b.size, |ui| (b.body)(ui, rt));
+    if !crate::hud_dock::adopt(&b.id) {
+        let action = super::hud_block_window(ctx, &b.id, b.title, b.size, |ui| (b.body)(ui, rt));
         if action.close {
             (b.close)();
         }
         if action.detach {
-            crate::hud_dock::detach(b.id);
+            crate::hud_dock::detach(&b.id);
         }
-        return;
+        return true;
     }
     let mut builder = ViewportBuilder::default().with_title(b.window_title).with_app_id("jarvis").with_inner_size(b.size).with_min_inner_size(b.min).with_decorations(false);
     if let Some(icon) = super::window_icon() {
         builder = builder.with_icon(Arc::new(icon));
     }
-    if let Some((at, size)) = super::detached_placement(ctx, b.id) {
+    if let Some((at, size)) = super::detached_placement(ctx, &b.id) {
         builder = builder.with_position(at).with_inner_size(size);
     }
     let builder = super::for_test_session(builder);
@@ -121,7 +143,7 @@ fn host(ctx: &egui::Context, rt: &Handle, b: &'static Block) {
                 return;
             }
             if class == ViewportClass::Embedded {
-                egui::Window::new(b.title).show(ctx, |ui| (b.body)(ui, &rt));
+                egui::Window::new(b.title).id(egui::Id::new(("jarvis_embedded_block", &b.id))).show(ctx, |ui| (b.body)(ui, &rt));
             } else {
                 egui::CentralPanel::default().frame(Frame::none().fill(super::BLOCK_SLATE).inner_margin(Margin::same(14.0))).show(ctx, |ui| {
                     if super::detached_title_bar(ui, ctx, b.title) {
@@ -133,6 +155,7 @@ fn host(ctx: &egui::Context, rt: &Handle, b: &'static Block) {
             }
         });
     });
+    true
 }
 
 // ------------------------------------------------------------------------------ textures ----
@@ -291,8 +314,8 @@ fn arrows(ui: &Ui, rect: Rect) -> Option<bool> {
 
 // ------------------------------------------------------------------------------ pictures ----
 
-fn pictures_body(ui: &mut Ui, rt: &Handle) {
-    let album = crate::image_viewer::album();
+fn pictures_body(ui: &mut Ui, rt: &Handle, id: &str) {
+    let album = crate::image_viewer::album_of(Some(id));
     let current = album.current().cloned();
     let n = album.items.len();
     ui.horizontal(|ui| {
@@ -300,19 +323,20 @@ fn pictures_body(ui: &mut Ui, rt: &Handle) {
         ui.add(egui::Label::new(RichText::new(format!("{} // {}", album.label.to_uppercase(), title)).font(super::strip_font()).color(accent())).truncate());
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             if current.as_ref().is_some_and(|p| p.local.is_none()) && chip(ui, "[ SAVE ]", "Save the full picture to Pictures\\Jarvis") {
-                rt.spawn(async {
-                    if let Err(e) = crate::image_viewer::save_current().await {
-                        crate::image_viewer::set_note(&e);
+                let id = id.to_string();
+                rt.spawn(async move {
+                    if let Err(e) = crate::image_viewer::save_current(Some(&id)).await {
+                        crate::image_viewer::set_note(Some(&id), &e);
                     }
                 });
             }
             if n > 1 {
                 if chip(ui, "[ NEXT ]", "Next picture (→)") {
-                    crate::image_viewer::step(1);
+                    crate::image_viewer::step(Some(id), 1);
                 }
                 ui.label(RichText::new(format!("{} / {n}", album.index + 1)).font(super::strip_font()).color(super::STRIP_INK));
                 if chip(ui, "[ PREV ]", "Previous picture (←)") {
-                    crate::image_viewer::step(-1);
+                    crate::image_viewer::step(Some(id), -1);
                 }
             }
         });
@@ -329,7 +353,7 @@ fn pictures_body(ui: &mut Ui, rt: &Handle) {
             let shown = full.clone().or_else(|| texture(ui.ctx(), &pic.thumb_key()));
             match shown {
                 Some((tex, px)) => {
-                    framed(ui, rect, egui::Id::new("jarvis_picture_frame"), hash_of(&pic.full_key()), &tex, px);
+                    framed(ui, rect, egui::Id::new(("jarvis_picture_frame", id)), hash_of(&pic.full_key()), &tex, px);
                     if full.is_none() {
                         tag(&ui.painter_at(rect), rect.right_top() + vec2(-8.0, 8.0), Align2::RIGHT_TOP, "LOADING FULL RESOLUTION", super::STRIP_MUTED);
                     }
@@ -347,7 +371,7 @@ fn pictures_body(ui: &mut Ui, rt: &Handle) {
                 tag(&ui.painter_at(rect), rect.left_bottom() + vec2(8.0, -8.0), Align2::LEFT_BOTTOM, &album.note, super::STRIP_INK);
             }
             if let Some(forward) = arrows(ui, rect) {
-                crate::image_viewer::step(if forward { 1 } else { -1 });
+                crate::image_viewer::step(Some(id), if forward { 1 } else { -1 });
             }
         }
     }
@@ -363,13 +387,13 @@ fn pictures_body(ui: &mut Ui, rt: &Handle) {
         }
     });
     if n > 1 {
-        strip(ui, &album);
+        strip(ui, &album, id);
     }
 }
 
 /// The album's thumbnails; a click shows that picture.
-fn strip(ui: &mut Ui, album: &crate::image_viewer::Album) {
-    egui::ScrollArea::horizontal().id_salt("jarvis_picture_strip").max_height(66.0).show(ui, |ui| {
+fn strip(ui: &mut Ui, album: &crate::image_viewer::Album, id: &str) {
+    egui::ScrollArea::horizontal().id_salt(("jarvis_picture_strip", id)).max_height(66.0).show(ui, |ui| {
         ui.horizontal(|ui| {
             for (i, pic) in album.items.iter().enumerate() {
                 let (rect, resp) = ui.allocate_exact_size(vec2(96.0, 58.0), Sense::click());
@@ -384,7 +408,7 @@ fn strip(ui: &mut Ui, album: &crate::image_viewer::Album) {
                     p.rect_stroke(rect, Rounding::ZERO, Stroke::new(if i == album.index { 2.0_f32 } else { 1.0 }, edge));
                 }
                 if resp.on_hover_text(&pic.title).clicked() {
-                    crate::image_viewer::select(i);
+                    crate::image_viewer::select(id, i);
                 }
             }
         });

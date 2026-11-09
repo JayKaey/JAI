@@ -27,7 +27,7 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
 use tracing::{debug, info};
@@ -506,52 +506,115 @@ impl Album {
     }
 }
 
-static ALBUM: LazyLock<Mutex<Album>> = LazyLock::new(Default::default);
-static OPEN: AtomicBool = AtomicBool::new(false);
+/// Every picture block, oldest first, by block id ("image_viewer", "image_viewer_2" …): a new
+/// subject opens a block of its own beside the others (2026-11-09: the Statue of Liberty
+/// replaced the Eiffel Tower). The last is the one "next picture" and "save it" mean.
+static ALBUMS: LazyLock<Mutex<Vec<(String, Album)>>> = LazyLock::new(Default::default);
 static ALBUM_VERSION: AtomicU64 = AtomicU64::new(1);
+/// At most this many picture blocks; the oldest makes way.
+const MAX_BLOCKS: usize = 6;
+/// "Spread them", "four at once": this many blocks when no number is said.
+const SPREAD: usize = 4;
 
 pub fn is_open() -> bool {
-    OPEN.load(Ordering::Acquire)
+    !lock(&ALBUMS).is_empty()
 }
 
+/// Every picture block closes.
 pub fn close() {
-    OPEN.store(false, Ordering::Release);
+    lock(&ALBUMS).clear();
     crate::gui::refresh();
+}
+
+/// Picture block `id` closes.
+pub fn close_block(id: &str) {
+    lock(&ALBUMS).retain(|(b, _)| b != id);
+    crate::gui::refresh();
+}
+
+/// The picture blocks' ids, oldest first.
+pub fn block_ids() -> Vec<String> {
+    lock(&ALBUMS).iter().map(|(id, _)| id.clone()).collect()
+}
+
+/// Block `id`'s album (None: the latest block's).
+pub fn album_of(id: Option<&str>) -> Album {
+    let albums = lock(&ALBUMS);
+    id.map_or_else(|| albums.last(), |id| albums.iter().find(|(b, _)| b == id)).map(|(_, a)| a.clone()).unwrap_or_default()
 }
 
 pub fn album() -> Album {
-    lock(&ALBUM).clone()
+    album_of(None)
 }
 
-fn update(f: impl FnOnce(&mut Album)) {
-    let mut album = lock(&ALBUM);
-    f(&mut album);
-    album.version = ALBUM_VERSION.fetch_add(1, Ordering::AcqRel);
-    drop(album);
+fn update_in(id: Option<&str>, f: impl FnOnce(&mut Album)) {
+    let mut albums = lock(&ALBUMS);
+    let slot = match id {
+        Some(id) => albums.iter_mut().find(|(b, _)| b == id),
+        None => albums.last_mut(),
+    };
+    if let Some((_, album)) = slot {
+        f(album);
+        album.version = ALBUM_VERSION.fetch_add(1, Ordering::AcqRel);
+    }
+    drop(albums);
     crate::gui::refresh();
 }
 
-fn open_with(f: impl FnOnce(&mut Album)) {
-    update(f);
-    OPEN.store(true, Ordering::Release);
+/// A block for `album`: the latest one again when it shows the same subject (and `fresh` is
+/// false), else a new one beside the others. Its id.
+fn open_block(mut album: Album, fresh: bool) -> String {
+    album.version = ALBUM_VERSION.fetch_add(1, Ordering::AcqRel);
+    let mut albums = lock(&ALBUMS);
+    let id = match albums.last_mut().filter(|(_, a)| !fresh && a.label.eq_ignore_ascii_case(&album.label)) {
+        Some((id, a)) => {
+            *a = album;
+            id.clone()
+        }
+        None => {
+            if albums.len() >= MAX_BLOCKS {
+                let (oldest, _) = albums.remove(0);
+                crate::hud_dock::forget(&oldest);
+            }
+            let id = (1..).map(|n| if n == 1 { "image_viewer".to_string() } else { format!("image_viewer_{n}") }).find(|id| albums.iter().all(|(b, _)| b != id)).unwrap_or_default();
+            albums.push((id.clone(), album));
+            id
+        }
+    };
+    drop(albums);
     // Asked for again while it was fading out: it stays.
-    crate::hud_dock::cancel_close("image_viewer");
+    crate::hud_dock::cancel_close(&id);
     crate::gui::show();
+    crate::gui::refresh();
+    id
+}
+
+/// "Spread them", "open each picture in its own window": pictures 2 … `n` of the latest block
+/// each in a block of their own beside it; how many blocks show the subject now.
+fn spread(n: usize) -> usize {
+    let album = album();
+    let n = n.clamp(2, MAX_BLOCKS).min(album.items.len());
+    for i in 1..n {
+        let index = (album.index + i) % album.items.len();
+        prefetch(&album.items, index);
+        open_block(Album { index, ..album.clone() }, true);
+    }
+    n.max(1)
 }
 
 /// The strip's click.
-pub fn select(index: usize) {
-    update(|a| {
+pub fn select(id: &str, index: usize) {
+    update_in(Some(id), |a| {
         if index < a.items.len() {
             a.index = index;
         }
     });
 }
 
-/// Next (`+1`) or previous (`-1`), round the album.
-pub fn step(by: isize) -> Option<Picture> {
+/// Next (`+1`) or previous (`-1`), round block `id`'s album (None: the latest block).
+pub fn step(id: Option<&str>, by: isize) -> Option<Picture> {
     let mut out = None;
-    update(|a| {
+    update_in(id, |a| {
         let n = a.items.len() as isize;
         if n > 0 {
             a.index = (a.index as isize + by).rem_euclid(n) as usize;
@@ -561,8 +624,8 @@ pub fn step(by: isize) -> Option<Picture> {
     out
 }
 
-pub fn set_note(text: &str) {
-    update(|a| a.note = text.to_string());
+pub fn set_note(id: Option<&str>, text: &str) {
+    update_in(id, |a| a.note = text.to_string());
 }
 
 // ---------------------------------------------------------------------- what is searched ----
@@ -1068,17 +1131,22 @@ pub fn definitions() -> Vec<Value> {
     vec![json!({"type": "function", "function": {
         "name": TOOL,
         // (Kept short: the whole prompt must fit the context window. "close" works too, unlisted.)
-        "description": "Pictures on the HUD: the web (the Earth: NASA live) or Sir's files. Not spawn_native_window.",
+        "description": "Pictures on the HUD: the web (the Earth: NASA live) or Sir's files; each subject its own block. count: blocks side by side; spread: the open pictures each in its own block. Not spawn_native_window.",
         "parameters": {"type": "object", "properties": {
             "query": {"type": "string"},
             "local": {"type": "string", "enum": ["latest_screenshot", "desktop", "pictures", "downloads", "search"]},
             "path": {"type": "string"},
-            "action": {"type": "string", "enum": ["show", "next", "previous", "save"]}
+            "action": {"type": "string", "enum": ["show", "next", "previous", "save", "spread"]},
+            "count": {"type": "integer"}
         }}
     }})]
 }
 
 pub async fn run_tool(_tools: &ToolContext, args: &Value) -> Result<String, String> {
+    run_tool_args(args).await
+}
+
+async fn run_tool_args(args: &Value) -> Result<String, String> {
     if let Ok(rt) = tokio::runtime::Handle::try_current() {
         pixels::set_runtime(&rt);
     }
@@ -1086,7 +1154,14 @@ pub async fn run_tool(_tools: &ToolContext, args: &Value) -> Result<String, Stri
     match action.as_str() {
         "next" | "forward" => navigate(1),
         "previous" | "prev" | "back" | "last" => navigate(-1),
-        "save" | "download" => save_current().await,
+        "save" | "download" => save_current(None).await,
+        "spread" | "split" | "each" | "side_by_side" => {
+            if album().items.len() < 2 {
+                return Ok("Fewer than two pictures are open, so there is nothing to spread.\nSpoken: There's only one picture up, Sir. Tell me what else you'd like to see.".into());
+            }
+            let n = spread(args.get("count").and_then(|c| c.as_u64().or_else(|| c.as_str()?.trim().parse().ok())).map_or(SPREAD, |c| c as usize));
+            Ok(format!("{n} pictures of \"{}\" side by side, each in a block of its own.\nSpoken: {n} of them side by side, Sir.", album().label))
+        }
         "close" | "hide" => {
             if !is_open() {
                 return Ok("The picture viewer is not open.\nSpoken: There's no picture up, Sir.".into());
@@ -1104,7 +1179,7 @@ fn navigate(by: isize) -> Result<String, String> {
     if !is_open() || album().items.is_empty() {
         return Ok("No pictures are open.\nSpoken: There are no pictures up, Sir. Tell me what you'd like to see.".into());
     }
-    let pic = step(by).ok_or("No pictures are open.")?;
+    let pic = step(None, by).ok_or("No pictures are open.")?;
     let a = album();
     Ok(format!("Picture {} of {}: \"{}\" ({}).\nSpoken: {}", a.index + 1, a.items.len(), pic.title, pic.credit(), short_title(&pic.title)))
 }
@@ -1156,14 +1231,13 @@ async fn show(args: &Value) -> Result<String, String> {
         _ if earth => "Fetching today's Earth from NASA EPIC…".to_string(),
         _ => "Searching Openverse and Wikimedia Commons…".to_string(),
     };
-    open_with(|a| {
-        *a = Album { label: label.clone(), items: Vec::new(), index: 0, version: 0, note: searching, busy: true };
-    });
+    let id = open_block(Album { label: label.clone(), items: Vec::new(), index: 0, version: 0, note: searching, busy: true }, false);
+    let block = Some(id.as_str());
     let started = Instant::now();
     let found = if offline() { demo_pictures(&query) } else { search(&query, &source).await };
     info!("[IMAGES] '{query}': {} pictures from {:?} in {} ms{}", found.pictures.len(), found.used, started.elapsed().as_millis(), if found.failed.is_empty() { String::new() } else { format!(" (failed: {})", found.failed.join("; ")) });
     if found.pictures.is_empty() {
-        update(|a| {
+        update_in(block, |a| {
             a.busy = false;
             a.note = if found.failed.is_empty() { format!("Nothing found for \"{label}\".") } else { format!("The picture sources did not answer ({}).", found.failed.join("; ")) };
         });
@@ -1174,16 +1248,23 @@ async fn show(args: &Value) -> Result<String, String> {
     prefetch(&pictures, 0);
     let first = pictures[0].clone();
     let n = pictures.len();
-    update(|a| {
+    update_in(block, |a| {
         a.items = pictures;
         a.index = 0;
         a.busy = false;
         a.note.clear();
     });
-    crate::hud_dock::describe_block("image_viewer", &format!("PICTURES // {label}: {n} pictures. 1: {} ({})", first.title, first.credit()));
+    crate::hud_dock::describe_block(&id, &format!("PICTURES // {label}: {n} pictures. 1: {} ({})", first.title, first.credit()));
     let sources = found.used.join(", ");
+    // "Show me four pictures of Paris at once": each in a block of its own.
+    let blocks = match args.get("count").and_then(|c| c.as_u64().or_else(|| c.as_str()?.trim().parse().ok())) {
+        Some(k) if k > 1 && n > 1 => spread(k as usize),
+        _ => 1,
+    };
     let spoken = if earth {
         format!("The Earth as DSCOVR sees it, Sir — {n} frames from a million and a half kilometres out.")
+    } else if blocks > 1 {
+        format!("Here's {label}, Sir — {blocks} pictures side by side.")
     } else {
         format!("Here's {label}, Sir — {n} pictures on the HUD.")
     };
@@ -1215,10 +1296,8 @@ async fn show_local(ask: LocalAsk) -> Result<String, String> {
     let n = pictures.len();
     let first = pictures[0].clone();
     prefetch(&pictures, 0);
-    open_with(|a| {
-        *a = Album { label: label.clone(), items: pictures, index: 0, version: 0, note: String::new(), busy: false };
-    });
-    crate::hud_dock::describe_block("image_viewer", &format!("PICTURES // {label}: {n} files. 1: {}", first.title));
+    let id = open_block(Album { label: label.clone(), items: pictures, index: 0, version: 0, note: String::new(), busy: false }, false);
+    crate::hud_dock::describe_block(&id, &format!("PICTURES // {label}: {n} files. 1: {}", first.title));
     let spoken = match ask {
         LocalAsk::LatestScreenshot => format!("Your latest screenshot, Sir — from {}.", first.when),
         _ if n == 1 => format!("{}, Sir.", first.title),
@@ -1246,8 +1325,10 @@ fn free_name(dir: &Path, stem: &str, ext: &str) -> PathBuf {
     (2..1000).map(|n| dir.join(format!("{stem} ({n}).{ext}"))).find(|p| !p.exists()).unwrap_or(first)
 }
 
-pub(crate) async fn save_current() -> Result<String, String> {
-    let Some(pic) = album().current().cloned().filter(|_| is_open()) else {
+/// Saves block `id`'s picture on show (None: the latest block's).
+pub(crate) async fn save_current(id: Option<&str>) -> Result<String, String> {
+    let set_note = |text: &str| set_note(id, text);
+    let Some(pic) = album_of(id).current().cloned().filter(|_| is_open()) else {
         return Ok("No picture is open.\nSpoken: There's no picture up to save, Sir.".into());
     };
     if let Some(path) = &pic.local {
@@ -1346,7 +1427,7 @@ static FILE_NAME: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:show|open|display|
 static PATH: LazyLock<Regex> = LazyLock::new(|| re(r#"(?i)(?P<p>[a-z]:\\[^"<>|?*\r\n]+?\.(?:jpe?g|png|webp))"#));
 static WEB: LazyLock<Regex> = LazyLock::new(|| {
     re(&format!(
-        r"^(?:(?:show|display|find|get|open|pull up|bring up|give|fetch|load|put up|search(?: for)?|look up)(?: me| us)? )?(?:(?:a|an|some|the|a few|few|several|more|any|one|two|three|four|five|six|\d+) )?(?:(?:nice|cool|good|great|beautiful|real|recent|new|current|high resolution|hd) )?{NOUN} (?:of|from|showing|with|about) (?P<q>.+)$"
+        r"^(?:(?:show|display|find|get|open|pull up|bring up|give|fetch|load|put up|search(?: for)?|look up)(?: me| us)? )?(?:(?:a|an|some|the|a few|few|several|multiple|more|any|one|two|three|four|five|six|\d+) )?(?:(?:nice|cool|good|great|beautiful|real|recent|new|current|high resolution|hd) )?{NOUN} (?:of|from|showing|with|about) (?P<q>.+)$"
     ))
 });
 static LOOKS_LIKE: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:show me|zeig mir) (?:what|wie) (?P<q>.+?) (?:looks like|look like|aussieht|aussehen)$"));
@@ -1355,6 +1436,14 @@ static WEB_DE: LazyLock<Regex> = LazyLock::new(|| {
         r"^(?:zeig|zeige|öffne|oeffne|hol|such|suche|finde|lade)(?: mir| uns)? (?:(?:ein|eine|einige|ein paar|mehrere|paar|das|die|\d+|zwei|drei|vier|fünf) )?(?:(?:schöne|schönes|tolle|tolles|aktuelle|aktuelles|neue|neues) )?{NOUN_DE} (?:von|vom|der|des|aus|zu|zum|zur|über|mit) (?P<q>.+)$"
     ))
 });
+static SPREAD_OUT: LazyLock<Regex> = LazyLock::new(|| {
+    re(&format!(
+        r"^(?:open|show|put|display)(?: me)? (?:each|every|all(?: the)?|the) {NOUN} (?:(?:in|into|as) )?(?:(?:its|their) own|an?|separate|individual|own|single|different)? ?(?:own |individual |separate )?(?:windows?|blocks?)$|^(?:spread|lay|split|fan)(?: out)? (?:the |these |those |my )?(?:{NOUN}|windows|blocks|them)(?: out)?(?: side by side)?$|^(?:show|put|lay|place)(?: me)? (?:the )?(?:{NOUN}|them|windows) (?:out )?side by side$|^(?:show|open)(?: me)? (?:multiple|several|more|many|a few|some|\d+|two|three|four|five|six)(?: {NOUN}| of them| windows)? (?:at (?:the same time|once)|side by side|together|simultaneously)$|^(?:zeig|zeige|öffne|oeffne)(?: mir)? (?:die {NOUN_DE}|sie) (?:nebeneinander|gleichzeitig)$|^(?:öffne|oeffne|zeig|zeige)(?: mir)? jedes {NOUN_DE} in einem eigenen fenster$"
+    ))
+});
+/// "… at once", "… side by side": each picture in a block of its own.
+static TOGETHER: LazyLock<Regex> = LazyLock::new(|| re(r" (?:at (?:the same time|once)|side by side|simultaneously|together|in (?:separate|different|multiple|individual) (?:windows|blocks)|each in (?:its|their) own window|nebeneinander|gleichzeitig)$"));
+static COUNT: LazyLock<Regex> = LazyLock::new(|| re(&format!(r"\b(two|three|four|five|six|[2-6]|multiple|several|a few|zwei|drei|vier|mehrere) (?:{NOUN}|{NOUN_DE})\b")));
 static SUBJECT_FIRST: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:show|display|find|open)(?: me)? (?P<q>[a-z0-9äöüß][a-z0-9äöüß .-]{1,50}?) (?:pictures|photos|images|pics|wallpapers)$"));
 
 /// `show_image` arguments for one of Sir's sentences (`s` normalised, `raw` as said).
@@ -1390,6 +1479,23 @@ fn phrase(raw: &str, s: &str) -> Option<Value> {
     if let Some(c) = FILE_NAME.captures(s) {
         return Some(json!({"local": "search", "query": c["q"].trim()}));
     }
+    // ("Spread the windows" with no pictures up is the HUD's.)
+    static NAMES_PICTURES: LazyLock<Regex> = LazyLock::new(|| re(&format!(r"\b(?:{NOUN}|{NOUN_DE})\b")));
+    if SPREAD_OUT.is_match(s) && (is_open() || NAMES_PICTURES.is_match(s)) {
+        return Some(json!({"action": "spread"}));
+    }
+    let together = TOGETHER.find(s);
+    let s = together.map_or(s, |m| s[..m.start()].trim_end());
+    let count = COUNT
+        .captures(s)
+        .map(|c| match &c[1] {
+            "two" | "2" | "zwei" => 2,
+            "three" | "3" | "drei" => 3,
+            "five" | "5" => 5,
+            "six" | "6" => 6,
+            _ => SPREAD,
+        })
+        .or(together.map(|_| SPREAD));
     let subject = WEB
         .captures(s)
         .or_else(|| WEB_DE.captures(s))
@@ -1401,7 +1507,10 @@ fn phrase(raw: &str, s: &str) -> Option<Value> {
         return None;
     }
     let query = if is_the_earth(&subject) { "the Earth".to_string() } else { subject };
-    Some(json!({"query": query}))
+    Some(match count {
+        Some(k) => json!({"query": query, "count": k}),
+        None => json!({"query": query}),
+    })
 }
 
 #[cfg(test)]
@@ -1436,6 +1545,15 @@ mod tests {
             ("save this picture", json!({"action": "save"})),
             ("Speichere das Bild", json!({"action": "save"})),
             ("show me Tokyo pictures", json!({"query": "tokyo"})),
+            // (2026-11-09) Several at once, each in a block of its own.
+            ("Can you open each image individual window?", json!({"action": "spread"})),
+            ("open every picture in its own window", json!({"action": "spread"})),
+            ("spread the pictures", json!({"action": "spread"})),
+            ("Show the photos side by side", json!({"action": "spread"})),
+            ("Zeig mir die Bilder nebeneinander", json!({"action": "spread"})),
+            ("show me four pictures of Paris at once", json!({"query": "paris", "count": 4})),
+            ("show me multiple pictures of the Statue of Liberty at the same time", json!({"query": "the statue of liberty", "count": 4})),
+            ("show me two photos of Tokyo", json!({"query": "tokyo", "count": 2})),
         ];
         for (text, want) in cases {
             assert_eq!(said(text), Some((TOOL, want.clone())), "{text}");
@@ -1556,10 +1674,27 @@ mod tests {
         assert!(pixels::get(&a.items[0].full_key()).is_some());
         assert!(navigate(1).unwrap().contains("Picture 2 of 6"));
         assert!(navigate(-2).unwrap().contains("Picture 6 of 6"));
-        let saved = rt.block_on(save_current()).unwrap();
+        let saved = rt.block_on(save_current(None)).unwrap();
         assert!(saved.starts_with("Dry run"), "{saved}");
         let refused = rt.block_on(show(&json!({"query": "nude beach"}))).unwrap();
         assert!(refused.contains("safe for work"));
+        // (2026-11-09) A second subject opens beside the first; the same subject again stays in
+        // its block; "spread them" and "four at once" give each picture a block of its own.
+        rt.block_on(show(&json!({"query": "the Eiffel Tower"}))).unwrap();
+        assert_eq!(block_ids(), ["image_viewer", "image_viewer_2"]);
+        rt.block_on(show(&json!({"query": "the Eiffel Tower"}))).unwrap();
+        assert_eq!(block_ids().len(), 2);
+        let spread_out = rt.block_on(run_tool_args(&json!({"action": "spread", "count": 3}))).unwrap();
+        assert!(spread_out.starts_with("3 pictures"), "{spread_out}");
+        let ids = block_ids();
+        assert_eq!(ids.len(), 4);
+        let shown: Vec<usize> = ids[1..].iter().map(|id| album_of(Some(id)).index).collect();
+        assert_eq!(shown, [0, 1, 2], "each block a different picture");
+        let out = rt.block_on(show(&json!({"query": "the Statue of Liberty", "count": 4}))).unwrap();
+        assert!(out.contains("side by side"), "{out}");
+        assert_eq!(block_ids().len(), MAX_BLOCKS, "the oldest made way");
+        close_block(&block_ids()[0]);
+        assert_eq!(block_ids().len(), MAX_BLOCKS - 1);
         close();
         assert!(!is_open());
     }

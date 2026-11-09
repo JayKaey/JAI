@@ -1244,6 +1244,17 @@ fn assistant_command(s: &str, original: &str) -> Option<Intent> {
     None
 }
 
+/// "Can you make it green" heard as "And you made it green" (2026-11-09, four times): the "and"
+/// is gone already; "you made it green" → "make it green". None unless a command verb follows.
+pub(crate) fn without_lost_can(s: &str) -> Option<String> {
+    const VERBS: &[&str] = &[
+        "make", "made", "change", "give", "show", "turn", "put", "open", "close", "move", "zoom", "spin", "rotate", "paint", "colour", "color", "hide", "remove", "detach",
+        "dock", "save", "export", "play", "stop", "switch", "set", "bring", "take", "find", "fly", "render", "build",
+    ];
+    let rest = s.strip_prefix("you ").filter(|r| r.split(' ').next().is_some_and(|v| VERBS.contains(&v)))?;
+    Some(rest.strip_prefix("made ").map_or_else(|| rest.to_string(), |r| format!("make {r}")))
+}
+
 fn normalize(text: &str) -> String {
     // Sentence-final punctuation first, so a last filler word ("Yes, please.") is still seen.
     let lower = text.trim().to_lowercase();
@@ -1283,6 +1294,9 @@ fn normalize(text: &str) -> String {
             if let Some(rest) = s.strip_prefix(prefix) {
                 s = rest.to_string();
             }
+        }
+        if let Some(rest) = without_lost_can(&s) {
+            s = rest;
         }
         for suffix in [" please", " bitte", " jarvis", " for me", " für mich", " now", " jetzt", " mal", " sofort", " right now"] {
             if let Some(rest) = s.strip_suffix(suffix) {
@@ -2084,7 +2098,10 @@ fn panel_args(text: &str, s: &str, up: PanelsUp) -> Option<Value> {
         if HOME.is_match(s) {
             return Some(earth("home"));
         }
-        static SPIN: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:spin|rotate)\s+(?:the\s+)?(?:globe|earth|world|planet|it)$|^(stop)\s+(?:spinning|rotating)(?:\s+(?:the\s+)?(?:globe|earth|it))?$"));
+        // (2026-11-09: "Can you make the globe spin?" went to the model, which asked the orb.)
+        static SPIN: LazyLock<Regex> = LazyLock::new(|| {
+            re(r"^(?:spin|rotate)\s+(?:the\s+)?(?:globe|earth|world|planet|it)$|^(stop)\s+(?:spinning|rotating)(?:\s+(?:the\s+)?(?:globe|earth|it))?$|^(?:make|let|have|get)\s+(?:the\s+)?(?:globe|earth|world|planet|it)\s+(?:spin|rotate|turn)(?:\s+(?:again|around|round))?$|^(?:start|keep)\s+(?:spinning|rotating)(?:\s+(?:the\s+)?(?:globe|earth|it))?$|^(?:lass|lasse)\s+(?:die\s+erde|den\s+globus|sie|ihn)\s+(?:drehen|rotieren)$")
+        });
         if let Some(c) = SPIN.captures(s) {
             return Some(earth(if c.get(1).is_some() { "stop_spin" } else { "spin" }));
         }
@@ -2182,6 +2199,21 @@ fn panel_args(text: &str, s: &str, up: PanelsUp) -> Option<Value> {
                 return Some(at(earth("show_place"), place));
             }
         }
+        // "Show me where New York is", "where is Tokyo", "show me the USA" while the globe is up
+        // (2026-11-09: the model opened the Earth again and flew nowhere).
+        static WHERE_IS: LazyLock<Regex> = LazyLock::new(|| {
+            re(r"^(?:show\s+me|show|tell\s+me|zeig\s+mir|zeige\s+mir)\s+where\s+(.+?)\s+(?:is|are|lies)$|^where\s+(?:is|are|lies)\s+(.+)$|^(?:zeig|zeige)\s+(?:mir\s+)?wo\s+(.+?)\s+(?:ist|liegt|liegen)$|^wo\s+(?:ist|liegt|liegen)\s+(.+)$|^(?:show\s+me|show|zeig\s+mir|zeige\s+mir|zoom\s+in\s+on|look\s+at)\s+(.+)$")
+        });
+        static NOT_ON_A_GLOBE: LazyLock<Regex> = LazyLock::new(|| {
+            re(r"\b(?:picture|pictures|image|images|photo|photos|bild|bilder|model|3d|camera|cameras|webcam|street|video|videos|window|windows|weather|news|list|calendar|schedule|timetable|mail|emails?|files?|folder|settings|core|orb|board|radar|network|stats|features|history|console|theme|lab|mixer|song|music|playlist|departures?|abfahrten|reminders?|tasks?|todo|disk|drive|storage|telemetry|qr|game|games|flights?|planes?|quakes?|earthquakes?|storms?|fires?|satellites?|trains?|traffic|clouds?|labels|terrain|yesterday|today|tomorrow|tonight|last|ago|desktop|screen|monitor|logs?|options|wireless|wifi|wi-fi|wlan|devices|i|me|my|you|your|it|that|this|them|what|how|why|more|less|all|everything)\b")
+        });
+        if let Some(c) = WHERE_IS.captures(s) {
+            let place = (1..=5).find_map(|i| c.get(i))?.as_str();
+            let place = place.strip_prefix("the ").unwrap_or(place);
+            if !not_a_place(place) && !NOT_ON_A_GLOBE.is_match(place) && place.split(' ').count() <= 4 {
+                return Some(at(earth("show_place"), place));
+            }
+        }
     }
 
     // ---- The network radar.
@@ -2206,7 +2238,7 @@ fn panel_args(text: &str, s: &str, up: PanelsUp) -> Option<Value> {
             // "Show me the devices on my network".
             r"|^(?:show|show\s+me|list|find|give\s+me)\s+(?:me\s+)?(?:all\s+)?(?:the\s+)?(?:devices|gadgets)\s+(?:on|in|connected\s+to)\s+(?:my|the|our)\s+(?:home\s+)?(?:network|wifi|wi-fi|wlan|lan)$",
             // "Open the network radar", "radar".
-            r"|^(?:(?:open|open\s+up|show|show\s+me|pull\s+up|bring\s+up|display|launch|start|run|zeig|zeig\s+mir|zeige|zeige\s+mir|öffne|oeffne|starte)\s+(?:me\s+|mir\s+)?(?:the\s+|my\s+|das\s+|den\s+)?)?(?:network\s+radar|radar|netzwerkradar|netzwerk\s+radar|network\s+map|netzwerkkarte)$",
+            r"|^(?:(?:open|open\s+up|show|show\s+me|pull\s+up|bring\s+up|display|launch|start|run|zeig|zeig\s+mir|zeige|zeige\s+mir|öffne|oeffne|starte)\s+(?:me\s+|mir\s+)?(?:the\s+|my\s+|das\s+|den\s+)?)?(?:network\s+radar|radar|netzwerkradar|netzwerk\s+radar|network\s+map|netzwerkkarte|wireless(?:\s+(?:networks?|devices))?|(?:wifi|wi-fi|wlan)\s+(?:networks?|devices|radar))$",
             // German: "scanne mein Netzwerk", "Netzwerk prüfen", "wer ist in meinem WLAN?".
             r"|^(?:scanne|scann|prüfe|prüf|pruefe|überprüfe|ueberpruefe|checke|durchsuche|analysiere)\s+(?:mein\s+|meine\s+|das\s+|unser\s+|unsere\s+)?(?:netzwerk|wlan|lan|heimnetz|heimnetzwerk)$",
             r"|^(?:netzwerk|wlan|heimnetz|heimnetzwerk)\s+(?:scannen|prüfen|pruefen|checken|überprüfen|ueberpruefen|analysieren)$",
@@ -2316,6 +2348,8 @@ fn earth_panel_args(text: &str, s: &str, up: PanelsUp) -> Option<Value> {
             r"|^(?:show|show\s+me|tell\s+me)\s+where\s+i\s+am(?:\s+right)?(?:\s+now)?(?:\s+on\s+(?:the\s+)?(?:map|globe|earth|world\s+map))?$",
             r"|^(?:show|show\s+me|mark|put)\s+(?:me\s+)?my\s+(?:location|position)(?:\s+on\s+(?:the\s+)?(?:map|globe|earth|world\s+map))?$",
             r"|^where\s+am\s+i\s+on\s+(?:the\s+)?(?:map|globe|earth|world\s+map|planet)$",
+            // (2026-11-09: "Can you show me where I live?" fetched the weather.)
+            r"|^(?:show|show\s+me|tell\s+me)\s+where\s+i\s+(?:live|stay|am\s+living)(?:\s+on\s+(?:the\s+)?(?:map|globe|earth|world\s+map))?$|^(?:zeig|zeige)\s+(?:mir\s+)?wo\s+ich\s+wohne(?:\s+auf\s+der\s+(?:karte|erde))?$",
             r"|^(?:zeig|zeige)\s+(?:mir\s+)?wo\s+ich\s+bin(?:\s+auf\s+der\s+(?:karte|erde|weltkarte))?$",
             r"|^(?:finde|orte|lokalisiere)\s+mich(?:\s+auf\s+der\s+(?:karte|erde))?$",
             r"|^(?:zeig|zeige)\s+(?:mir\s+)?meinen\s+(?:standort|aufenthaltsort|ort)(?:\s+auf\s+der\s+(?:karte|erde))?$",
@@ -6545,6 +6579,17 @@ mod tests {
             assert_eq!(panel_command(text, earth_up).unwrap()["layer"], layer, "{text}");
         }
         assert_eq!(act("hide the radar", both), None, "the network radar's");
+        // Sir's own words of 2026-11-09, which went to the model.
+        is("Can you make the globe spin?", earth_up, "spin");
+        is("Can you show me where I live?", none, "show_my_location");
+        for (text, place) in [("Can you show me where New York is?", "New York"), ("Can you show me the USA?", "USA"), ("Where is Tokyo?", "Tokyo"), ("Zeig mir, wo Paris liegt", "Paris")] {
+            let fly = panel_command(text, earth_up).unwrap();
+            assert_eq!((fly["action"].as_str(), fly["place"].as_str()), (Some("show_place"), Some(place)), "{text}");
+        }
+        for text in ["Show me a picture of the moon", "Show me the weather", "Show me my files", "Show me wireless", "Show me the satellites"] {
+            assert_ne!(act(text, earth_up).as_deref(), Some("show_place"), "{text}");
+        }
+        assert_eq!(panel_command("Can you show me wireless?", earth_up).unwrap()["view"], "network_radar");
         is("back to today", earth_up, "show_today");
         // The tour.
         for text in ["What's happening in the world?", "Give me a world tour", "Start the world tour", "Was passiert in der Welt?", "Mach eine Welttour"] {

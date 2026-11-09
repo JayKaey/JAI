@@ -11,8 +11,9 @@
 //! 2. a curated index of keyless repositories (NASA 3D Resources, the Khronos glTF samples);
 //! 3. Sketchfab: the search needs no key; downloading needs Sir's own API token, which he
 //!    pastes into the Integrations hub (vault service `sketchfab`; never logged, never asked
-//!    for). Without it the best match shows as a preview card with one line on how to enable
-//!    full models, and Jarvis composes a model meanwhile;
+//!    for). Without it the best named match comes keyless from the Objaverse mirror on Hugging
+//!    Face (Sketchfab's free models, author and licence credited); only when the mirror has none
+//!    does the best match show as a preview card while Jarvis composes a model;
 //! 4. a model composed by the language model as a JSON scene of primitives, streamed in part by
 //!    part over a wireframe placeholder;
 //! 5. Sir's own files: a path, "the model in my Downloads", or a file dropped on the studio.
@@ -822,6 +823,9 @@ fn clean(text: &str) -> String {
         let before = t.clone();
         t = LEAD.replace(&t, "").trim().to_string();
         t = TAIL.replace(&t, "").trim().to_string();
+        if let Some(rest) = crate::intents::without_lost_can(&t) {
+            t = rest;
+        }
         if t == before {
             break;
         }
@@ -973,7 +977,7 @@ fn edit_command(t: &str, earth_open: bool, names: &[String]) -> Option<Value> {
     }
     // "Make it (way) more detailed", "a more accurate version", "enhance it", "mach es detaillierter".
     static ENHANCE: LazyLock<Regex> = LazyLock::new(|| {
-        re(r"^(?:make|render|build|do|redo|give\s+me|show\s+me|mach|mache)\s+(?:it|this|that|the\s+model|a|one|es|das(?:\s+modell)?)?\s*(?:a\s+lot\s+|way\s+|much\s+|even\s+|far\s+|a\s+bit\s+|a\s+little\s+|viel\s+|noch\s+|etwas\s+)*(?:more\s+(?:detailed|accurate|realistic|precise|lifelike|refined)|(?:more|higher|finer|extra)\s+detail|better|sharper|detaillierter|genauer|realistischer|besser|feiner)(?:\s+(?:version|model|one|modell))?$|^(?:enhance|refine|improve|upgrade|detail|verbessere|verfeinere)(?:\s+(?:it|this|that|the\s+model|es|das\s+modell))?(?:\s+(?:more|further|even\s+more|weiter))?$|^(?:more|mehr|even\s+more|noch\s+mehr)\s+details?$|^(?:add|füge|fuege)\s+(?:more|mehr)\s+details?(?:\s+(?:to\s+it|hinzu))?$")
+        re(r"^(?:make|render|build|do|redo|give|give\s+me|show\s+me|mach|mache)\s+(?:it|this|that|the\s+model|a|one|es|das(?:\s+modell)?)?\s*(?:a\s+lot\s+|way\s+|much\s+|even\s+|far\s+|a\s+bit\s+|a\s+little\s+|viel\s+|noch\s+|etwas\s+)*(?:more\s+(?:detailed|accurate|realistic|precise|lifelike|refined)|(?:more|higher|finer|extra)\s+detail|better|sharper|detaillierter|genauer|realistischer|besser|feiner)(?:\s+(?:version|model|one|modell))?$|^(?:enhance|refine|improve|upgrade|detail|verbessere|verfeinere)(?:\s+(?:it|this|that|the\s+model|es|das\s+modell))?(?:\s+(?:more|further|even\s+more|weiter))?$|^(?:more|mehr|even\s+more|noch\s+mehr)\s+details?$|^(?:add|füge|fuege)\s+(?:more|mehr)\s+details?(?:\s+(?:to\s+it|hinzu))?$")
     });
     if ENHANCE.is_match(t) {
         return Some(json!({ "action": "enhance" }));
@@ -1259,6 +1263,16 @@ pub async fn run_tool(ctx: &ToolContext, args: &Value) -> Result<String, String>
         return open_local(path, args).await;
     }
     if let Some(query) = str_arg(args, "query") {
+        // The model on show named again with a change ("iron man suit green colour", "… hyper
+        // detailed" from the model, 2026-11-09): that change; a new model replayed the block's
+        // entrance every time.
+        if let Some(change) = is_open().then(|| studio().query.to_lowercase()).and_then(|shown| change_to_shown(query, &shown)) {
+            return if DETAIL_WORDS.is_match(&change) {
+                enhance(ctx).await
+            } else {
+                edit_command(&clean(&format!("make it {change}")), false, &[]).map_or_else(|| edit(args), |a| edit(&a))
+            };
+        }
         {
             let mut s = studio();
             s.query = query.to_string();
@@ -1271,6 +1285,17 @@ pub async fn run_tool(ctx: &ToolContext, args: &Value) -> Result<String, String>
         return Ok(open_studio());
     }
     edit(args)
+}
+
+static DETAIL_WORDS: LazyLock<Regex> = LazyLock::new(|| re(r"\b(?:detail|detailed|details|accurate|realistic|resolution|hd|high\s+poly|enhanced|refined|better)\b"));
+
+/// What `query` adds to the model on show (`shown`, lower case): "iron man suit green colour"
+/// → "green colour"; None for another model.
+fn change_to_shown(query: &str, shown: &str) -> Option<String> {
+    let q = query.to_lowercase();
+    let rest = q.strip_prefix(shown).filter(|_| !shown.is_empty())?.trim();
+    let rest = rest.trim_start_matches(|c: char| !c.is_alphanumeric()).trim_start_matches("in ").trim_start_matches("with ").trim();
+    (!rest.is_empty()).then(|| rest.to_string())
 }
 
 fn has_edits(args: &Value) -> bool {
@@ -2051,12 +2076,18 @@ fn parse_hits(v: &Value) -> Vec<Hit> {
 
 /// The best result for a request: the name's words, its popularity, a size that loads fast.
 fn pick(hits: &[Hit], query: &str) -> Option<Hit> {
+    ranked(hits, query).into_iter().next().map(|(_, h)| h)
+}
+
+/// The results best first, each with how many of the request's words its name has.
+fn ranked(hits: &[Hit], query: &str) -> Vec<(usize, Hit)> {
     let words: Vec<String> = scene3d::norm(query).split_whitespace().filter(|w| w.len() > 2 && !["the", "and", "with", "for"].contains(w)).map(str::to_string).collect();
-    hits.iter()
+    let mut out: Vec<(f32, usize, Hit)> = hits
+        .iter()
         .map(|h| {
             let name = scene3d::norm(&h.name);
-            let matched = words.iter().filter(|w| name.contains(&format!(" {w}")) || name.contains(w.as_str())).count() as f32;
-            let mut score = matched * 3.0 + ((h.likes + 1) as f32).ln() * 0.6;
+            let matched = words.iter().filter(|w| name.contains(&format!(" {w}")) || name.contains(w.as_str())).count();
+            let mut score = matched as f32 * 3.0 + ((h.likes + 1) as f32).ln() * 0.6;
             if h.glb_size.is_some_and(|s| s > SKETCHFAB_PREFERRED) {
                 score -= 4.0;
             }
@@ -2066,10 +2097,11 @@ fn pick(hits: &[Hit], query: &str) -> Option<Hit> {
             if h.faces > 1_500_000 {
                 score -= 3.0;
             }
-            (score, h)
+            (score, matched, h.clone())
         })
-        .max_by(|a, b| a.0.total_cmp(&b.0))
-        .map(|(_, h)| h.clone())
+        .collect();
+    out.sort_by(|a, b| b.0.total_cmp(&a.0));
+    out.into_iter().map(|(_, m, h)| (m, h)).collect()
 }
 
 async fn sketchfab_search(query: &str) -> Result<Vec<Hit>, String> {
@@ -2111,6 +2143,82 @@ async fn sketchfab_fetch(hit: &Hit, token: &str, job: u64) -> Result<PathBuf, St
     // (The archive link is pre-signed: the token never goes along.)
     let bytes = download(&url, None, job, MAX_DOWNLOAD, (0.08, 0.75)).await?;
     store(&format!("sketchfab_{safe}.{ext}"), &bytes)
+}
+
+/// Built-in models made of primitives that a downloaded real one beats (the planets, the
+/// primitives and the simple machines are exact as they are).
+const SHOWPIECES: &[&str] = &["iron man suit", "arc reactor", "robot", "car", "rocket", "airplane", "house", "tree", "satellite", "eiffel tower", "tower"];
+
+/// Objaverse (Allen AI) mirrors 800,000 of Sketchfab's free models on Hugging Face, where they
+/// download without a key; its index says where each model's file lies.
+const OBJAVERSE: &str = "https://huggingface.co/datasets/allenai/objaverse/resolve/main/";
+const OBJAVERSE_INDEX: &str = "objaverse_paths.json";
+
+/// Model `uid`'s file in the Objaverse index ("glbs/000-023/<uid>.glb").
+fn objaverse_path<'a>(index: &'a str, uid: &str) -> Option<&'a str> {
+    let end = index.find(&format!("/{uid}.glb"))? + uid.len() + 5;
+    let start = index[..end].rfind("glbs/")?;
+    Some(&index[start..end])
+}
+
+/// A gzip file's contents (one member).
+fn gunzip(gz: &[u8]) -> Result<Vec<u8>, String> {
+    if gz.len() < 18 || gz[..3] != [0x1f, 0x8b, 8] {
+        return Err("the index isn't gzip".into());
+    }
+    let flags = gz[3];
+    let mut at = 10;
+    if flags & 4 != 0 {
+        at += 2 + u16::from_le_bytes([gz[10], gz[11]]) as usize;
+    }
+    for name in [8u8, 16] {
+        if flags & name != 0 {
+            at += gz.get(at..).and_then(|r| r.iter().position(|&b| b == 0)).ok_or("the index's header is broken")? + 1;
+        }
+    }
+    if flags & 2 != 0 {
+        at += 2;
+    }
+    let size = u32::from_le_bytes(<[u8; 4]>::try_from(&gz[gz.len() - 4..]).unwrap_or_default()) as usize;
+    mesh_io::inflate(gz.get(at..gz.len() - 8).ok_or("the index's header is broken")?, size)
+}
+
+/// The first of `hits` (best first) that the Objaverse mirror has, downloaded: its path in the
+/// cache and the hit.
+async fn objaverse_fetch(hits: &[Hit], job: u64) -> Result<(PathBuf, Hit), String> {
+    let index = match cached(OBJAVERSE_INDEX) {
+        Some(p) => p,
+        None => {
+            progress(job, Some(0.04), Some("Fetching the index of free models…"));
+            let gz = download(&format!("{OBJAVERSE}object-paths.json.gz"), None, job, 64 << 20, (0.04, 0.2)).await?;
+            let json = tokio::task::spawn_blocking(move || gunzip(&gz)).await.map_err(|e| e.to_string())??;
+            store(OBJAVERSE_INDEX, &json)?
+        }
+    };
+    let uids: Vec<String> = hits.iter().map(|h| h.uid.clone()).collect();
+    let (i, file) = tokio::task::spawn_blocking(move || {
+        let index = std::fs::read_to_string(index).ok()?;
+        uids.iter().enumerate().find_map(|(i, uid)| objaverse_path(&index, uid).map(|p| (i, p.to_string())))
+    })
+    .await
+    .ok()
+    .flatten()
+    .ok_or("none of the matches is in the free mirror")?;
+    let hit = hits[i].clone();
+    let name = format!("objaverse_{}.glb", hit.uid.chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>());
+    if let Some(p) = cached(&name) {
+        return Ok((p, hit));
+    }
+    progress(job, Some(0.2), Some(&format!("Downloading \"{}\"…", hit.name)));
+    let bytes = download(&format!("{OBJAVERSE}{file}"), None, job, MAX_DOWNLOAD, (0.2, 0.75)).await?;
+    Ok((store(&name, &bytes)?, hit))
+}
+
+/// A downloaded Sketchfab model on the studio, credited.
+fn deliver_hit(job: u64, model: Model, hit: &Hit) -> String {
+    let credit = Credit { title: hit.name.clone(), author: hit.author.clone(), license: hit.license.clone(), source: "Sketchfab".into(), url: hit.url.clone() };
+    deliver(job, model, Delivery { source: "Sketchfab".into(), credit: Some(credit), title: Some(hit.name.clone()), ..Delivery::default() });
+    format!("\"{}\" from Sketchfab is ready, Sir.", hit.name)
 }
 
 /// The best Sketchfab match's thumbnail as a preview card.
@@ -2217,12 +2325,16 @@ async fn open_query(ctx: &ToolContext, query: &str, args: &Value) -> Result<Stri
     let query = query.trim().trim_end_matches('.').to_string();
     let lib = library(&query);
     let cur = curated(&query);
+    let demo = demo_mode();
+    // A real model beats a built-in showpiece made of primitives (2026-11-09: "the models look
+    // trash"); the built-in one stays the fallback.
+    let showpiece = lib.map(|(e, _)| e).filter(|e| SHOWPIECES.contains(&e.key) && !demo);
     match (lib, cur) {
+        _ if showpiece.is_some() => {}
         (Some((entry, l)), Some((_, c))) if l >= c => return open_builtin(entry, args).await,
         (Some((entry, _)), None) => return open_builtin(entry, args).await,
         _ => {}
     }
-    let demo = demo_mode();
     if let Some((entry, _)) = cur {
         if demo {
             return Ok(stand_in(&query, entry.title, args));
@@ -2233,17 +2345,16 @@ async fn open_query(ctx: &ToolContext, query: &str, args: &Value) -> Result<Stri
         return Ok(stand_in(&query, &title_case(&query), args));
     }
     let token = ctx.pim.config().vault().secret(SKETCHFAB_SERVICE, crate::vault::TOKEN).map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
-    let has_token = token.is_some();
     let llm = ctx.pim.llm().cloned();
     let cfg = ctx.config.snapshot();
     let title = title_case(&query);
-    let job = begin(&title, if token.is_some() { "Sketchfab" } else { "Composing" }, if token.is_some() { "Searching Sketchfab…" } else { "Composing it from parts…" }, Some(Arc::new(placeholder_for(&query))));
+    let job = begin(&title, "Sketchfab", "Searching Sketchfab…", Some(Arc::new(placeholder_for(&query))));
     let material = str_arg(args, "material").map(str::to_string);
     let look = str_arg(args, "look").map(str::to_string);
     let q = query.clone();
     tokio::spawn(async move {
         let started = Instant::now();
-        let outcome = fetch_or_compose(job, &q, token, llm, cfg).await;
+        let outcome = fetch_or_compose(job, &q, token, llm, cfg, showpiece).await;
         if !current(job) {
             return;
         }
@@ -2262,12 +2373,7 @@ async fn open_query(ctx: &ToolContext, query: &str, args: &Value) -> Result<Stri
             }
         }
     });
-    let spoken = if has_token {
-        format!("Finding {} for you, Sir.", with_article(&query))
-    } else {
-        format!("Building {}, Sir.", with_article(&query))
-    };
-    Ok(reply(format!("3D studio: working on {query}."), spoken))
+    Ok(reply(format!("3D studio: working on {query}."), format!("Finding {} for you, Sir.", with_article(&query))))
 }
 
 fn with_article(q: &str) -> String {
@@ -2367,7 +2473,7 @@ fn open_curated(entry: &'static Curated, args: &Value) -> String {
 }
 
 /// Sketchfab with Sir's token, else the preview card and a composed model.
-async fn fetch_or_compose(job: u64, query: &str, token: Option<String>, llm: Option<Arc<crate::runtime::LlmRuntime>>, cfg: crate::config::JarvisConfig) -> Result<String, String> {
+async fn fetch_or_compose(job: u64, query: &str, token: Option<String>, llm: Option<Arc<crate::runtime::LlmRuntime>>, cfg: crate::config::JarvisConfig, builtin: Option<&'static scene3d::Entry>) -> Result<String, String> {
     let search = sketchfab_search(query);
     let compose_task = move |llm: Option<Arc<crate::runtime::LlmRuntime>>, cfg: crate::config::JarvisConfig, q: String| async move { compose(job, &q, llm, &cfg, None).await };
     match token {
@@ -2382,29 +2488,43 @@ async fn fetch_or_compose(job: u64, query: &str, token: Option<String>, llm: Opt
                 progress(job, Some(0.05), Some(&format!("Downloading \"{}\"…", hit.name)));
                 match sketchfab_fetch(&hit, &token, job).await {
                     Ok(path) => match load_path(path, job, 0.75).await {
-                        Ok(model) => {
-                            let credit = Credit { title: hit.name.clone(), author: hit.author.clone(), license: hit.license.clone(), source: "Sketchfab".into(), url: hit.url.clone() };
-                            let title = hit.name.clone();
-                            deliver(job, model, Delivery { source: "Sketchfab".into(), credit: Some(credit), title: Some(title.clone()), ..Delivery::default() });
-                            return Ok(format!("\"{title}\" from Sketchfab is ready, Sir."));
-                        }
+                        Ok(model) => return Ok(deliver_hit(job, model, &hit)),
                         Err(e) => set_note(job, Some(format!("Sketchfab's file didn't load ({e}); composing one instead."))),
                     },
                     Err(e) => set_note(job, Some(format!("Sketchfab: {e}. Composing one instead."))),
                 }
             }
-            compose_task(llm, cfg, query.to_string()).await
+            match builtin {
+                Some(entry) => open_builtin(entry, &json!({})).await,
+                None => compose_task(llm, cfg, query.to_string()).await,
+            }
         }
         None => {
-            // The card and the composition at once.
+            // A real model from the free mirror first.
+            let hits = search.await.unwrap_or_else(|e| {
+                warn!("[3D] Sketchfab search failed: {e}");
+                Vec::new()
+            });
+            let named: Vec<Hit> = ranked(&hits, query).into_iter().filter(|(m, _)| *m > 0).map(|(_, h)| h).collect();
+            if !named.is_empty() {
+                match objaverse_fetch(&named, job).await {
+                    Ok((path, hit)) => match load_path(path, job, 0.75).await {
+                        Ok(model) => return Ok(deliver_hit(job, model, &hit)),
+                        Err(e) => warn!("[3D] The free copy of '{}' didn't load: {e}", hit.name),
+                    },
+                    Err(e) => warn!("[3D] No free model for '{query}': {e}"),
+                }
+            }
+            if let Some(entry) = builtin {
+                return open_builtin(entry, &json!({})).await;
+            }
+            // Else the card and a composition at once.
             let q = query.to_string();
             let card = async {
-                if let Ok(hits) = search.await {
-                    if let Some(hit) = pick(&hits, &q) {
-                        let p = preview_of(&hit, job).await;
-                        set_preview(job, Some(p));
-                        set_note(job, Some("Full Sketchfab models: paste your Sketchfab API token in Integrations → Quick Connections → Sketchfab.".into()));
-                    }
+                if let Some(hit) = pick(&hits, &q) {
+                    let p = preview_of(&hit, job).await;
+                    set_preview(job, Some(p));
+                    set_note(job, Some("Full Sketchfab models: paste your Sketchfab API token in Integrations → Quick Connections → Sketchfab.".into()));
                 }
             };
             let (_, composed) = tokio::join!(card, compose_task(llm, cfg, query.to_string()));
@@ -2634,6 +2754,19 @@ mod tests {
     static SERIAL: Mutex<()> = Mutex::new(());
 
     #[test]
+    fn the_model_on_show_named_again_is_changed_not_rebuilt() {
+        // The model's calls of 2026-11-09 while the Iron Man suit was up.
+        let change = |q: &str| change_to_shown(q, "iron man suit");
+        assert_eq!(change("iron man suit green colour").as_deref(), Some("green colour"));
+        assert!(change("iron man suit maximum detail resolution").is_some_and(|c| DETAIL_WORDS.is_match(&c)));
+        assert!(change("iron man suit hyper detailed").is_some_and(|c| DETAIL_WORDS.is_match(&c)));
+        assert_eq!(change("Iron Man suit"), None);
+        assert_eq!(change("the eiffel tower"), None);
+        let green = edit_command(&clean("make it green colour"), false, &[]).unwrap();
+        assert_eq!(green["material"], "green");
+    }
+
+    #[test]
     fn the_one_tool_stays_terse_and_takes_numbers_as_text() {
         let defs = definitions();
         assert_eq!(defs.len(), 1);
@@ -2708,6 +2841,12 @@ mod tests {
     fn edits_only_while_the_studio_is_open() {
         let edit = |t: &str| args_of(t, true);
         assert_eq!(edit("make it gold").unwrap()["material"], "gold");
+        // Sir's words of 2026-11-09 as Whisper heard them ("Can you…" → "And you…").
+        assert_eq!(edit("And you made it green.").unwrap()["material"], "green");
+        let iron = edit("And you change it to Iron.");
+        assert!(iron.as_ref().and_then(|v| v["material"].as_str()).is_some_and(|m| m == "steel"), "iron is the steel finish: {iron:?}");
+        assert_eq!(edit("And you give it way more detail.").unwrap()["action"], "enhance");
+        assert_eq!(edit("Can you make it more detailed?").unwrap()["action"], "enhance");
         assert_eq!(edit("Jarvis, make it carbon fibre").unwrap()["material"], "carbon fibre");
         assert_eq!(edit("give it a marble texture").unwrap()["material"], "marble");
         assert_eq!(edit("paint it red and gold").unwrap()["material"], "red and gold");
@@ -2889,6 +3028,16 @@ mod tests {
         assert_eq!(hits[1].author, "maker");
         assert_eq!(hits[1].url, "https://sketchfab.com/3d-models/bbb");
         assert_eq!(pick(&hits, "iron man suit").unwrap().uid, "bbb", "the matching, lighter model wins");
+        assert_eq!(ranked(&hits, "iron man suit")[0].0, 3, "three words of the request matched");
+        // The free mirror's index and its gzip (one stored deflate block).
+        let index = r#"{"aaa": "glbs/000-001/aaa.glb", "bbb":"glbs/000-159/bbb.glb"}"#;
+        assert_eq!((objaverse_path(index, "bbb"), objaverse_path(index, "ccc")), (Some("glbs/000-159/bbb.glb"), None));
+        let mut gz = vec![0x1f, 0x8b, 8, 8, 0, 0, 0, 0, 0, 0xff];
+        gz.extend(b"paths.json\0");
+        gz.extend([1, index.len() as u8, 0, !(index.len() as u8), 0xff]);
+        gz.extend(index.as_bytes());
+        gz.extend([0, 0, 0, 0, index.len() as u8, 0, 0, 0]);
+        assert_eq!(gunzip(&gz).unwrap(), index.as_bytes());
         assert_eq!(curated_url("nasa:3D Models/Saturn V/Saturn V.glb").unwrap().0, "https://raw.githubusercontent.com/nasa/NASA-3D-Resources/master/3D%20Models/Saturn%20V/Saturn%20V.glb");
         assert!(curated_url("khronos:DamagedHelmet").unwrap().0.ends_with("/DamagedHelmet/glTF-Binary/DamagedHelmet.glb"));
         // "Saturn V" is the rocket, "Saturn" the planet; "the Hubble telescope" is NASA's.

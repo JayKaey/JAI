@@ -129,6 +129,10 @@ static SERVICE_CLOSER: LazyLock<Regex> = LazyLock::new(|| {
     re(r"(?i)^(?:and\s+|so\s+)?(?:if (?:there(?:'s|’s| is) anything else|you (?:need|have|want|require|would like) (?:anything|any)(?: else| further| more)?)\b|(?:please\s+)?(?:let me know(?:\s+if\b|\s*[.!]?$)|feel free to\b|don['’]?t hesitate to\b|do not hesitate to\b)|is there anything else\b|(?:i )?hope (?:this|that) helps\b|happy to help\b|how (?:else )?(?:can|may) i (?:assist|help) you\b|i(?:'m| am) here (?:to help|if you need)\b)")
 });
 
+static MISADDRESSED: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"(?i)^((?:done|of course|certainly|right away|straight away|at your service|very well|understood|yes|as you wish|consider it done|indeed|good (?:morning|afternoon|evening)|hello|welcome back)[^.!?]{0,40}?),\s+(?:dear\s+)?(?:earth|globe|world|planet|erde|globus)\s*([.!?])")
+});
+
 /// Rewrites one sentence (or a chunk of sentences) into Jarvis' voice.
 pub fn rewrite(text: &str) -> String {
     if text.trim().is_empty() {
@@ -145,6 +149,10 @@ pub fn rewrite(text: &str) -> String {
     if SERVICE_CLOSER.is_match(&s) {
         return String::new();
     }
+
+    // Sir addressed by what is on screen (2026-11-09, the globe up: "Done, Earth.", "At your
+    // service, Earth.").
+    s = MISADDRESSED.replace(&s, "$1, Sir$2").into_owned();
 
     // Slang interjections.
     s = SLANG_RE
@@ -278,6 +286,9 @@ mod tests {
         }
         assert_eq!(rewrite("Let me know which playlist, Sir."), "Let me know which playlist, Sir.");
         assert_eq!(rewrite("Right away, Sir."), "Right away, Sir.");
+        assert_eq!(rewrite("Done, Earth. The Iron Man suit is back."), "Done, Sir. The Iron Man suit is back.");
+        assert_eq!(rewrite("At your service, Earth."), "At your service, Sir.");
+        assert_eq!(rewrite("Mercury, Venus, Earth."), "Mercury, Venus, Earth.");
     }
 
     #[test]

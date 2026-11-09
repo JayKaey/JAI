@@ -28,6 +28,26 @@ pub fn greeting(hour: u32) -> &'static str {
     }
 }
 
+/// The start-up line, different each time: a time-of-day greeting and a systems report, both
+/// picked by `seed`.
+pub fn startup_line(hour: u32, seed: usize) -> String {
+    let hello: &[&str] = match hour {
+        5..=11 => &["Good morning, Sir.", "Morning, Sir.", "Good morning, Sir. I trust you slept well."],
+        12..=17 => &["Good afternoon, Sir.", "Afternoon, Sir.", "Welcome back, Sir."],
+        18..=22 => &["Good evening, Sir.", "Evening, Sir.", "Welcome back, Sir."],
+        _ => &["Burning the midnight oil, Sir?", "Working late again, Sir?", "Still up, Sir?"],
+    };
+    const STATUS: [&str; 6] = [
+        "All systems are online.",
+        "All systems are up and running.",
+        "Every system is online and standing by.",
+        "Systems are online. Ready when you are.",
+        "Everything is up and running.",
+        "I'm online and at your service.",
+    ];
+    format!("{} {}", hello[seed % hello.len()], STATUS[seed / hello.len() % STATUS.len()])
+}
+
 fn ordinal(day: u32) -> String {
     let suffix = match (day % 10, day % 100) {
         (1, 11) | (2, 12) | (3, 13) => "th",
@@ -433,6 +453,11 @@ mod tests {
         assert_eq!(greeting(15), "Good afternoon, Sir.");
         assert_eq!(greeting(20), "Good evening, Sir.");
         assert_eq!(greeting(2), "Burning the midnight oil, Sir?");
+        for hour in [8, 15, 20, 2] {
+            let lines: std::collections::HashSet<String> = (0..18).map(|seed| startup_line(hour, seed)).collect();
+            assert!(lines.len() == 18 && lines.iter().all(|l| l.contains("Sir")), "{lines:?}");
+        }
+        assert!(startup_line(8, 0).starts_with("Good morning") && startup_line(2, 0).starts_with("Burning"));
         assert_eq!(join_and(&["a".into(), "b".into(), "c".into()]), "a, b and c");
         assert_eq!(ordinal(21), "21st");
         assert!(period(Some("evening"), 8) == Period::Evening && period(None, 9) == Period::Morning);

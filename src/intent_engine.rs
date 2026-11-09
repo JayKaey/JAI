@@ -1288,6 +1288,9 @@ pub fn is_own_view(name: &str) -> bool {
             // The panels from the reference videos.
             | "radar" | "network radar" | "netzwerkradar" | "netzwerk radar" | "disk map" | "drive map" | "storage map" | "festplattenkarte" | "earth"
             | "globe" | "world" | "world map" | "planet" | "earth view" | "satellite view" | "erde" | "globus" | "weltkugel"
+            // (2026-11-09: "close the image" force-closed a program called "image".)
+            | "image" | "images" | "picture" | "pictures" | "photo" | "photos" | "image viewer" | "bild" | "bilder" | "foto" | "fotos"
+            | "3d model" | "3d" | "model" | "3d studio" | "camera" | "cameras" | "live camera" | "webcam" | "webcams" | "street view"
     )
 }
 
@@ -1976,6 +1979,8 @@ mod tests {
             assert_eq!(reflex(text, &BOARD), closed(json!({"action": "close"})), "{text}");
         }
         assert_eq!(reflex("Close the feature lab", &IDLE), closed(json!({"action": "close", "target": "feature lab"})));
+        // (2026-11-09: "close the image" force-closed a program called "image".)
+        assert_eq!(reflex("Close the image.", &IDLE), closed(json!({"action": "close", "target": "image"})));
         assert_eq!(reflex("Close telemetry", &IDLE), closed(json!({"action": "close", "target": "telemetry"})));
         assert_eq!(reflex("Clear the board", &BOARD), closed(json!({"action": "clear"})));
         // Not his: programs, HUD panels, the core view (its own rule), and "don't".
