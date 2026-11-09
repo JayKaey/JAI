@@ -126,6 +126,7 @@ mod oled_minimal_ui;
 mod omni_inbox;
 mod persona;
 mod phonemizer;
+mod photo3d;
 mod pim;
 mod pim_config;
 mod platform;

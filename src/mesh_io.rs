@@ -86,6 +86,9 @@ pub struct Material {
     pub triplanar: bool,
     /// How many times a procedural texture repeats across the model's largest side.
     pub tile: f32,
+    /// The parts' vertex colours tint the base colour (a model rebuilt from a photo); paint
+    /// covers them.
+    pub vertex_colors: bool,
 }
 
 impl Default for Material {
@@ -106,6 +109,7 @@ impl Default for Material {
             double_sided: false,
             triplanar: false,
             tile: 1.0,
+            vertex_colors: false,
         }
     }
 }
@@ -120,6 +124,8 @@ pub struct Part {
     pub uvs: Vec<[f32; 2]>,
     /// xyz + handedness; empty when the part has none.
     pub tangents: Vec<[f32; 4]>,
+    /// Linear RGB per vertex (used where the material says `vertex_colors`); empty when none.
+    pub colors: Vec<[f32; 3]>,
     pub indices: Vec<u32>,
     pub material: usize,
 }
@@ -297,6 +303,9 @@ impl Model {
             if !part.tangents.is_empty() && part.tangents.len() != n {
                 part.tangents.clear();
             }
+            if !part.colors.is_empty() && part.colors.len() != n {
+                part.colors.clear();
+            }
         }
         self.parts.retain(|p| p.indices.len() >= 3);
         if self.parts.len() > MAX_PARTS {
@@ -326,6 +335,7 @@ impl Model {
         let mut slot: HashMap<usize, usize> = HashMap::new();
         let all_uv = self.parts.iter().all(|p| !p.uvs.is_empty());
         let all_tangent = self.parts.iter().all(|p| !p.tangents.is_empty());
+        let all_colour = self.parts.iter().all(|p| !p.colors.is_empty());
         for part in std::mem::take(&mut self.parts) {
             let at = *slot.entry(part.material).or_insert_with(|| {
                 merged.push(Part { name: self.materials.get(part.material).map_or_else(|| "part".to_string(), |m| m.name.clone()), material: part.material, ..Part::default() });
@@ -340,6 +350,9 @@ impl Model {
             }
             if all_tangent {
                 into.tangents.extend_from_slice(&part.tangents);
+            }
+            if all_colour {
+                into.colors.extend_from_slice(&part.colors);
             }
             into.indices.extend(part.indices.iter().map(|i| i + base));
         }
@@ -396,6 +409,7 @@ pub fn smooth_normals(positions: &[[f32; 3]], indices: &[u32]) -> Vec<[f32; 3]> 
 pub fn flat_normals(part: &mut Part) {
     let mut out = Part { name: std::mem::take(&mut part.name), material: part.material, ..Part::default() };
     let has_uv = !part.uvs.is_empty();
+    let has_colour = part.colors.len() == part.positions.len();
     for t in part.indices.chunks_exact(3) {
         let idx = [t[0] as usize, t[1] as usize, t[2] as usize];
         if idx.iter().any(|&i| i >= part.positions.len()) {
@@ -409,6 +423,9 @@ pub fn flat_normals(part: &mut Part) {
             out.normals.push(f);
             if has_uv {
                 out.uvs.push(part.uvs.get(i).copied().unwrap_or([0.0, 0.0]));
+            }
+            if has_colour {
+                out.colors.push(part.colors[i]);
             }
         }
     }
@@ -1222,6 +1239,7 @@ fn build_gltf(json: &Value, bin: Option<&[u8]>, base: Option<&Path>, progress: P
                     let d = math::normalize(math::dir(&world, [t[0], t[1], t[2]]));
                     [d[0], d[1], d[2], if mirrored { -t[3] } else { t[3] }]
                 }).collect(),
+                colors: Vec::new(),
                 indices,
                 material: usize_of(&prim["material"]).filter(|m| *m < fallback_material).unwrap_or(fallback_material),
             };
@@ -1384,6 +1402,7 @@ pub fn load_obj(bytes: &[u8], base: Option<&Path>, progress: Progress) -> Result
             positions: p.positions,
             indices: p.indices,
             tangents: Vec::new(),
+            colors: Vec::new(),
         };
         if part.normals.is_empty() {
             part.normals = smooth_normals(&part.positions, &part.indices);
@@ -2060,6 +2079,12 @@ pub fn glb_bytes(model: &Model, scale: f32) -> Result<Vec<u8>, String> {
             let v = push_view(&mut bin, &f32_bytes(&uv), Some(34962));
             accessors.push(json!({ "bufferView": v, "componentType": 5126, "count": part.uvs.len(), "type": "VEC2" }));
             attributes["TEXCOORD_0"] = json!(accessors.len() - 1);
+        }
+        if !part.colors.is_empty() && model.materials.get(part.material).is_some_and(|m| m.vertex_colors) {
+            let rgb: Vec<f32> = part.colors.iter().flatten().copied().collect();
+            let v = push_view(&mut bin, &f32_bytes(&rgb), Some(34962));
+            accessors.push(json!({ "bufferView": v, "componentType": 5126, "count": part.colors.len(), "type": "VEC3" }));
+            attributes["COLOR_0"] = json!(accessors.len() - 1);
         }
         let idx: Vec<u8> = part.indices.iter().flat_map(|i| i.to_le_bytes()).collect();
         let v = push_view(&mut bin, &idx, Some(34963));

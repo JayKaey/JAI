@@ -166,9 +166,19 @@ async fn cache_write(path: PathBuf, bytes: Vec<u8>) {
     }
 }
 
+/// A picture the way up its camera meant (phones store portraits sideways, with an EXIF note).
+pub(crate) fn load_upright(bytes: &[u8]) -> Option<image::DynamicImage> {
+    use image::ImageDecoder;
+    let mut decoder = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().ok()?.into_decoder().ok()?;
+    let orientation = decoder.orientation().unwrap_or(image::metadata::Orientation::NoTransforms);
+    let mut img = image::DynamicImage::from_decoder(decoder).ok()?;
+    img.apply_orientation(orientation);
+    Some(img)
+}
+
 /// Bytes → pixels, at most `max_side` a side (JPEG, PNG, WebP).
 pub(crate) fn decode(bytes: &[u8], max_side: u32) -> Option<ColorImage> {
-    let img = image::load_from_memory(bytes).ok()?;
+    let img = load_upright(bytes)?;
     let img = if img.width().max(img.height()) > max_side {
         if max_side <= 512 {
             img.thumbnail(max_side, max_side)
@@ -912,6 +922,15 @@ async fn search(query: &str, source: &str) -> Found {
     let mut seen = std::collections::HashSet::new();
     found.pictures = merged.into_iter().filter(|p| !is_unsafe(&p.title) && seen.insert(p.full.clone())).take(MAX_PICTURES).collect();
     found
+}
+
+/// Pictures of a subject from the web sources, best first (the 3D studio rebuilds things from
+/// them); none in tests and dry runs.
+pub(crate) async fn photos(query: &str) -> Vec<Picture> {
+    if offline() {
+        return Vec::new();
+    }
+    search(query, "auto").await.pictures
 }
 
 /// The stand-in album of tests and dry runs.
@@ -1705,5 +1724,21 @@ mod tests {
         assert_eq!(img.size, [256, 128]);
         assert_eq!(decode(&[1, 2, 3], 100), None);
         assert!(http_date("Sun, 08 Nov 2026 23:12:35 GMT").is_some());
+    }
+
+    #[test]
+    fn a_phone_portrait_stands_upright() {
+        // 32×16, red left and blue right, saved as a phone does: sideways, with EXIF orientation
+        // 6 ("turn it a quarter clockwise"). Upright it is 16×32, red on top.
+        let img = image::RgbImage::from_fn(32, 16, |x, _| if x < 16 { image::Rgb([255, 0, 0]) } else { image::Rgb([0, 0, 255]) });
+        let mut jpeg = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut jpeg), image::ImageFormat::Jpeg).unwrap();
+        let mut exif = vec![0xFF, 0xE1, 0, 34];
+        exif.extend_from_slice(b"Exif\0\0II*\0\x08\0\0\0\x01\0\x12\x01\x03\0\x01\0\0\0\x06\0\0\0\0\0\0\0");
+        jpeg.splice(2..2, exif);
+        let up = load_upright(&jpeg).unwrap().to_rgb8();
+        assert_eq!(up.dimensions(), (16, 32));
+        assert!(up.get_pixel(8, 4)[0] > 200 && up.get_pixel(8, 28)[2] > 200, "red on top, blue below");
+        assert_eq!(decode(&jpeg, 100).unwrap().size, [16, 32]);
     }
 }

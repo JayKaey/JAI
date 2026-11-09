@@ -186,6 +186,7 @@ in vec3 a_pos;
 in vec3 a_nrm;
 in vec2 a_uv;
 in vec4 a_tan;
+in vec3 a_col;
 uniform mat4 u_viewproj;
 uniform mat4 u_model;
 uniform mat4 u_normal;
@@ -196,6 +197,7 @@ out vec3 v_onrm;
 out vec2 v_uv;
 out vec4 v_tan;
 out vec3 v_obj;
+out vec3 v_col;
 void main() {
     vec4 w = u_model * vec4(a_pos, 1.0);
     v_world = w.xyz;
@@ -204,6 +206,7 @@ void main() {
     v_tan = vec4(mat3(u_model) * a_tan.xyz, a_tan.w);
     v_uv = a_uv;
     v_obj = (u_tri * vec4(a_pos, 1.0)).xyz;
+    v_col = a_col;
     gl_Position = u_viewproj * w;
 }
 "#;
@@ -215,6 +218,7 @@ in vec3 v_onrm;
 in vec2 v_uv;
 in vec4 v_tan;
 in vec3 v_obj;
+in vec3 v_col;
 out vec4 o_color;
 uniform vec4 u_base;
 uniform vec3 u_emissive;
@@ -305,6 +309,7 @@ void main() {
         vec4 t = triplanar ? tri(t_base, tp, tw) : texture(t_base, v_uv);
         base *= vec4(lin(t.rgb), t.a);
     }
+    if ((u_flags & 512) != 0) base.rgb *= v_col;
     if ((u_flags & 64) != 0 && base.a < u_cutoff) discard;
     float metal = u_metallic;
     float rough = u_roughness;
@@ -622,7 +627,7 @@ impl Renderer {
             other => return Err(format!("OpenGL 3 is needed ({other:?})")),
         };
         let header = format!("{}{}", version.version_declaration(), if es { "precision highp float;\nprecision highp int;\n" } else { "" });
-        let mesh_attribs = ["a_pos", "a_nrm", "a_uv", "a_tan"];
+        let mesh_attribs = ["a_pos", "a_nrm", "a_uv", "a_tan", "a_col"];
         let pbr = Program::new(gl, &header, VS_MESH, FS_PBR, &mesh_attribs, &[MESH_UNIFORMS, PBR_UNIFORMS])?;
         let holo = Program::new(gl, &header, VS_MESH, FS_HOLO, &mesh_attribs, &[MESH_UNIFORMS, HOLO_UNIFORMS]).inspect_err(|_| gl.delete_program(pbr.id))?;
         let ground = Program::new(gl, &header, VS_GROUND, FS_GROUND, &["a_pos"], &[GROUND_UNIFORMS]).inspect_err(|_| {
@@ -955,6 +960,9 @@ impl Renderer {
         if m.triplanar {
             flags |= 32;
         }
+        if m.vertex_colors {
+            flags |= 512;
+        }
         let cutoff = match m.alpha {
             AlphaMode::Mask(c) => {
                 flags |= 64;
@@ -1099,16 +1107,17 @@ fn bytes_of<T: Copy>(v: &[T]) -> &[u8] {
     unsafe { std::slice::from_raw_parts(v.as_ptr() as *const u8, std::mem::size_of_val(v)) }
 }
 
-/// One part as an interleaved vertex buffer: position, normal, uv, tangent (12 floats).
+/// One part as an interleaved vertex buffer: position, normal, uv, tangent, colour (15 floats).
 unsafe fn upload_part(gl: &glow::Context, part: &crate::mesh_io::Part) -> Result<GpuPart, String> {
     let n = part.positions.len();
-    let mut data: Vec<f32> = Vec::with_capacity(n * 12);
+    let mut data: Vec<f32> = Vec::with_capacity(n * 15);
     for i in 0..n {
         let p = part.positions[i];
         let nr = part.normals.get(i).copied().unwrap_or([0.0, 1.0, 0.0]);
         let uv = part.uvs.get(i).copied().unwrap_or([0.0, 0.0]);
         let t = part.tangents.get(i).copied().unwrap_or([0.0; 4]);
-        data.extend_from_slice(&[p[0], p[1], p[2], nr[0], nr[1], nr[2], uv[0], uv[1], t[0], t[1], t[2], t[3]]);
+        let c = part.colors.get(i).copied().unwrap_or([1.0; 3]);
+        data.extend_from_slice(&[p[0], p[1], p[2], nr[0], nr[1], nr[2], uv[0], uv[1], t[0], t[1], t[2], t[3], c[0], c[1], c[2]]);
     }
     // Only indices that point at a vertex.
     let indices: Vec<u32> = if part.indices.iter().all(|&i| (i as usize) < n) {
@@ -1124,8 +1133,8 @@ unsafe fn upload_part(gl: &glow::Context, part: &crate::mesh_io::Part) -> Result
     gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, bytes_of(&data), glow::STATIC_DRAW);
     gl.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, Some(ibo));
     gl.buffer_data_u8_slice(glow::ELEMENT_ARRAY_BUFFER, bytes_of(&indices), glow::STATIC_DRAW);
-    let stride = 12 * 4;
-    for (loc, size, offset) in [(0u32, 3i32, 0i32), (1, 3, 12), (2, 2, 24), (3, 4, 32)] {
+    let stride = 15 * 4;
+    for (loc, size, offset) in [(0u32, 3i32, 0i32), (1, 3, 12), (2, 2, 24), (3, 4, 32), (4, 3, 48)] {
         gl.enable_vertex_attrib_array(loc);
         gl.vertex_attrib_pointer_f32(loc, size, glow::FLOAT, false, stride, offset);
     }
@@ -1161,6 +1170,8 @@ mod tests {
             assert!(FS_PBR.contains(&format!("in vec")) && (FS_PBR.contains(&format!(" {v};"))), "{v}");
             assert!(FS_HOLO.contains(&format!(" {v};")), "{v}");
         }
+        // (Vertex colours only tint the product-shot look.)
+        assert!(VS_MESH.contains("out vec3 v_col;") && FS_PBR.contains("in vec3 v_col;"));
         assert_eq!(status(), Status::Unknown);
     }
 }

@@ -13,10 +13,12 @@
 //!    pastes into the Integrations hub (vault service `sketchfab`; never logged, never asked
 //!    for). Without it the best named match comes keyless from the Objaverse mirror on Hugging
 //!    Face (Sketchfab's free models, author and licence credited); only when the mirror has none
-//!    does the best match show as a preview card while Jarvis composes a model;
-//! 4. a model composed by the language model as a JSON scene of primitives, streamed in part by
-//!    part over a wireframe placeholder;
-//! 5. Sir's own files: a path, "the model in my Downloads", or a file dropped on the studio.
+//!    does the best match show as a preview card while Jarvis rebuilds or composes one;
+//! 4. a model rebuilt from a photograph (`photo3d`: TripoSR on a cut-out picture from the picture
+//!    search, photo credited), when its networks are installed;
+//! 5. else a model composed by the language model as a JSON scene of primitives, streamed in
+//!    part by part over a wireframe placeholder;
+//! 6. Sir's own files: a path, "the model in my Downloads", or a file dropped on the studio.
 //!
 //! Downloads are cached in `config/model_cache` (about 2 GB, the oldest go first). Edits are
 //! deterministic phrase parsing (English and German), never the model. Unit tests, the verifier
@@ -644,6 +646,10 @@ fn effective(model: &Model, edits: &[Edit]) -> (Vec<Material>, Vec<Texture>, Vec
 }
 
 fn apply_change(m: &mut Material, change: &Change, textures: &mut Vec<Texture>, slots: &mut HashMap<pt::Pattern, [Option<usize>; 4]>) {
+    if matches!(change, Change::Paint(_)) {
+        // Paint covers a photo's vertex colours too.
+        m.vertex_colors = false;
+    }
     match change {
         Change::Paint(Paint::Finish(f)) => scene3d::apply_finish(m, f, textures, slots),
         Change::Paint(Paint::Colour(_, c)) => {
@@ -2475,7 +2481,14 @@ fn open_curated(entry: &'static Curated, args: &Value) -> String {
 /// Sketchfab with Sir's token, else the preview card and a composed model.
 async fn fetch_or_compose(job: u64, query: &str, token: Option<String>, llm: Option<Arc<crate::runtime::LlmRuntime>>, cfg: crate::config::JarvisConfig, builtin: Option<&'static scene3d::Entry>) -> Result<String, String> {
     let search = sketchfab_search(query);
-    let compose_task = move |llm: Option<Arc<crate::runtime::LlmRuntime>>, cfg: crate::config::JarvisConfig, q: String| async move { compose(job, &q, llm, &cfg, None).await };
+    // No real model: rebuilt from a photo, else composed from primitives.
+    let compose_task = move |llm: Option<Arc<crate::runtime::LlmRuntime>>, cfg: crate::config::JarvisConfig, q: String| async move {
+        match from_photo(job, &q, &cfg).await {
+            Some(done) => Ok(done),
+            None if !current(job) => Err("cancelled".into()),
+            None => compose(job, &q, llm, &cfg, None).await,
+        }
+    };
     match token {
         Some(token) => {
             let hits = search.await.unwrap_or_else(|e| {
@@ -2541,7 +2554,69 @@ async fn fetch_or_compose(job: u64, query: &str, token: Option<String>, llm: Opt
     }
 }
 
-const COMPOSE_PROMPT: &str = "You build 3D models out of simple shapes. Reply with JSON only:\n{\"name\":\"…\",\"materials\":{\"<name>\":{\"color\":\"#rrggbb\",\"metallic\":0-1,\"roughness\":0-1,\"emissive\":0-5}},\"parts\":[{\"name\":\"…\",\"shape\":\"box|rounded_box|sphere|cylinder|cone|torus|capsule|dome|truss|lathe|extrude\",\"size\":[w,h,d],\"position\":[x,y,z],\"rotation\":[x,y,z],\"material\":\"<name>\"}]}\nMetres at real size, Y up, the object stands on y=0 and faces +Z. position is the part's centre, size its full width/height/depth, rotation in degrees. cylinder \"top\": top radius share (0.5 tapers). truss: an open steel lattice filling its box (towers, cranes, bridges, pylons), \"top\": top width share, \"bays\": sections. lathe \"points\": [[radius,height]…] in -0.5..0.5 turned around Y (vases, bottles, domes). extrude \"points\": [[x,y]…] in -0.5..0.5, depth along Z (wings, fins, signs). 12 to 30 parts named after the real parts (helmet, left arm, wheel …), real proportions and colours, glowing parts emissive. Write materials first, then parts.";
+/// Photos tried for photo-to-3D (each is cut out; the cleanest whole subject wins).
+const PHOTO_TRIES: usize = 4;
+
+/// The thing rebuilt from a photograph (`photo3d`), credited to the photo. None when the networks
+/// aren't installed, no photo shows one whole subject or the rebuild fails: the composer takes
+/// over.
+async fn from_photo(job: u64, query: &str, cfg: &crate::config::JarvisConfig) -> Option<String> {
+    use crate::image_viewer::{self as iv, Fetched};
+    let dir = crate::photo3d::dir(cfg);
+    if !crate::photo3d::installed(&dir) {
+        info!("[3D] Photo to 3D isn't installed ({}); composing '{query}'", dir.display());
+        return None;
+    }
+    progress(job, Some(0.02), Some("Looking for a photo of it…"));
+    let mut photos = Vec::new();
+    for p in iv::photos(query).await {
+        for url in std::iter::once(&p.full).chain(&p.alt) {
+            if let Ok(Fetched::Bytes { bytes, .. }) = iv::fetch(url, true, None).await {
+                photos.push((p, bytes));
+                break;
+            }
+        }
+        if photos.len() == PHOTO_TRIES || !current(job) {
+            break;
+        }
+    }
+    if photos.is_empty() || !current(job) {
+        warn!("[3D] No photo of '{query}' to rebuild it from");
+        return None;
+    }
+    let title = title_case(query);
+    let name = title.clone();
+    let bytes: Vec<Vec<u8>> = photos.iter().map(|(_, b)| b.clone()).collect();
+    let built = tokio::task::spawn_blocking(move || {
+        let go = |p: f32, status: &str| {
+            progress(job, Some(p), Some(status));
+            current(job)
+        };
+        // Half the threads: the HUD (and Sir's game) keep the rest.
+        let threads = std::thread::available_parallelism().map_or(2, |n| n.get() / 2);
+        crate::photo3d::build(&dir, &bytes, &name, threads, &go)
+    })
+    .await;
+    let (model, chosen) = match built {
+        Ok(Ok(b)) => b,
+        Ok(Err(e)) => {
+            warn!("[3D] Photo to 3D of '{query}' failed: {e}");
+            return None;
+        }
+        Err(e) => {
+            warn!("[3D] Photo to 3D of '{query}' stopped: {e}");
+            return None;
+        }
+    };
+    let photo = &photos[chosen].0;
+    let credit = Credit { title: photo.title.clone(), author: photo.creator.clone(), license: photo.license.clone(), source: format!("{}, rebuilt in 3D by TripoSR", photo.source), url: photo.page.clone() };
+    if !deliver(job, model, Delivery { source: "Photo → 3D (TripoSR)".into(), credit: Some(credit), title: Some(title.clone()), ..Delivery::default() }) {
+        return None;
+    }
+    Some(format!("I found no real model of {}, Sir, so I rebuilt it from a photograph.", with_article(&title.to_lowercase())))
+}
+
+const COMPOSE_PROMPT: &str ="You build 3D models out of simple shapes. Reply with JSON only:\n{\"name\":\"…\",\"materials\":{\"<name>\":{\"color\":\"#rrggbb\",\"metallic\":0-1,\"roughness\":0-1,\"emissive\":0-5}},\"parts\":[{\"name\":\"…\",\"shape\":\"box|rounded_box|sphere|cylinder|cone|torus|capsule|dome|truss|lathe|extrude\",\"size\":[w,h,d],\"position\":[x,y,z],\"rotation\":[x,y,z],\"material\":\"<name>\"}]}\nMetres at real size, Y up, the object stands on y=0 and faces +Z. position is the part's centre, size its full width/height/depth, rotation in degrees. cylinder \"top\": top radius share (0.5 tapers). truss: an open steel lattice filling its box (towers, cranes, bridges, pylons), \"top\": top width share, \"bays\": sections. lathe \"points\": [[radius,height]…] in -0.5..0.5 turned around Y (vases, bottles, domes). extrude \"points\": [[x,y]…] in -0.5..0.5, depth along Z (wings, fins, signs). 12 to 30 parts named after the real parts (helmet, left arm, wheel …), real proportions and colours, glowing parts emissive. Write materials first, then parts.";
 
 /// What the composer is asked to do with a model it (or the library) made.
 const REFINE_ASK: &str = "Make this 3D model of {q} more detailed and more accurate. Keep its overall size, position and colours. Split big parts into their real sub-parts, fix wrong proportions and add the missing details: 30 to 60 parts. Reply with the whole new model as JSON in the same format.\nThe model now: ";
@@ -3075,5 +3150,25 @@ mod tests {
         assert!((m.size_m()[1] - 0.55).abs() < 0.01, "{:?}", m.size_m());
         // The materials survive the cut.
         assert!(m.materials[m.parts[0].material].metallic > 0.9);
+    }
+
+    #[test]
+    fn paint_covers_a_photo_models_colours() {
+        // A model rebuilt from a photo wears its vertex colours until Sir paints it.
+        let field: Vec<f32> = (0..512).map(|i| 2.5 - (((i / 64) as f32 - 3.5).powi(2) + ((i / 8 % 8) as f32 - 3.5).powi(2) + ((i % 8) as f32 - 3.5).powi(2)).sqrt()).collect();
+        let (verts, tris) = crate::photo3d::marching_cubes(&field, 8);
+        let model = crate::photo3d::model_of("Vase", &verts, tris, &vec![[0.2, 0.6, 0.9]; verts.len()]);
+        let glow = Edit { target: Target::All, change: Change::Glow(None) };
+        assert!(effective(&model, &[glow.clone()]).0.last().unwrap().vertex_colors);
+        let red = Edit { target: Target::All, change: Change::Paint(Paint::Colour("red", [0.8, 0.0, 0.0])) };
+        let (materials, _, part_material) = effective(&model, &[glow, red]);
+        assert!(!materials[part_material[0]].vertex_colors);
+        // A saved GLB keeps the colours (glTF's COLOR_0) while they show.
+        let has_colours = |m: &Model| String::from_utf8_lossy(&mesh_io::glb_bytes(m, 1.0).unwrap()).contains("COLOR_0");
+        assert!(has_colours(&model));
+        let mut painted = model.clone();
+        painted.materials = materials;
+        painted.parts[0].material = part_material[0];
+        assert!(!has_colours(&painted));
     }
 }
