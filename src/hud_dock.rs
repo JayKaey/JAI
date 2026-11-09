@@ -595,9 +595,16 @@ pub fn detach_named(name: &str) -> Result<String, String> {
             .map(|(id, title, _)| (id.clone(), title.clone()))
             .collect()
     });
-    if let Some((id, title)) = open.first() {
-        detach(id);
-        return Ok(title.clone());
+    // "Detach the pictures" / "all the windows": every block it names (2026-11-09: one went).
+    let every = n.split(|c: char| !c.is_alphanumeric()).any(|w| {
+        ["all", "every", "each", "both", "them", "alle", "beide", "pictures", "images", "photos", "bilder", "fotos", "models", "windows", "fenster", "cameras"].contains(&w)
+    });
+    if let Some((_, title)) = open.first() {
+        let take = if every { open.len() } else { 1 };
+        for (id, _) in &open[..take] {
+            detach(id);
+        }
+        return Ok(if take > 1 { format!("{take} windows") } else { title.clone() });
     }
     match prefix {
         Some(p) => {
@@ -1314,6 +1321,26 @@ mod tests {
         assert_eq!(dock_all(), 1);
         forget("unit_probe");
         forget("model_probe");
+    }
+
+    /// "Detach the pictures": every picture block; "detach the picture" the first one.
+    #[test]
+    fn a_plural_detaches_every_block_it_names() {
+        let _g = test_lock();
+        dock_all();
+        let r = Rect::from_min_size(Pos2::ZERO, vec2(300.0, 300.0));
+        begin_frame();
+        publish_block("image_viewer", "Pictures", r);
+        publish_block("image_viewer_2", "Pictures", r.translate(vec2(320.0, 0.0)));
+        begin_frame();
+        assert_eq!(detach_named("picture"), Ok("Pictures".to_string()));
+        assert!(is_detached("image_viewer") && !is_detached("image_viewer_2"));
+        dock_all();
+        assert_eq!(detach_named("the pictures"), Ok("2 windows".to_string()));
+        assert!(is_detached("image_viewer") && is_detached("image_viewer_2"));
+        assert_eq!(dock_all(), 2);
+        forget("image_viewer");
+        forget("image_viewer_2");
     }
 
     #[test]

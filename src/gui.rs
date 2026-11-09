@@ -5272,12 +5272,34 @@ fn display_hz() -> f32 {
 /// A detached window's first position and size: exactly where its block sat in the HUD (screen
 /// points), so popping it out never throws it onto another monitor.
 pub(super) fn detached_placement(ctx: &egui::Context, id: &str) -> Option<(Pos2, Vec2)> {
+    // Where each detached window first went and the step it took aside, kept while detached
+    // (worked out per frame, a window dragged away would pull the other back).
+    static FIRST: std::sync::LazyLock<Mutex<std::collections::HashMap<String, (Pos2, Vec2)>>> = std::sync::LazyLock::new(Default::default);
     // ("Move the radar to my second monitor" on a HUD that covers one: where it was sent.)
     let wanted = match crate::window_commands::os_placement(id) {
         Some(rect) => rect,
         None => {
             let origin = ctx.input(|i| i.viewport().inner_rect.map(|r| r.min))?;
-            crate::hud_dock::block_rect(id)?.translate(origin.to_vec2())
+            let at = crate::hud_dock::block_rect(id)?.translate(origin.to_vec2());
+            // A second view popped out from the spot the first left steps aside (2026-11-09: the
+            // 3D model covered the pictures).
+            let mut first = lock(&FIRST);
+            first.retain(|k, _| crate::hud_dock::is_detached(k));
+            let step = match first.get(id) {
+                Some((_, step)) => *step,
+                None => {
+                    let mut step = Vec2::ZERO;
+                    for _ in 0..8 {
+                        if !first.values().any(|(p, s)| (*p + *s - (at.min + step)).length() < 12.0) {
+                            break;
+                        }
+                        step += vec2(34.0, 30.0);
+                    }
+                    first.insert(id.to_string(), (at.min, step));
+                    step
+                }
+            };
+            at.translate(step)
         }
     };
     let placed = clamp_to_work_area(wanted, &crate::monitors::recent(), ctx.pixels_per_point());
