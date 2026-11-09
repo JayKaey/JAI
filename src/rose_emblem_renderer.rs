@@ -860,7 +860,7 @@ impl RoseEmblem {
         let size = (frame.radius * 0.17).clamp(8.0, 46.0);
         let font = FontId::new(size, FontFamily::Name("bold".into()));
         let halo = glow(crimson_rgb(), 0.5 * a * (0.55 + 0.45 * self.voice));
-        let wordmark = crate::ultron_mode::wordmark();
+        let wordmark = "J.A.R.V.I.S.";
         painter.text(frame.centre + vec2(0.0, 1.5), Align2::CENTER_CENTER, wordmark, font.clone(), halo);
         painter.text(frame.centre, Align2::CENTER_CENTER, wordmark, font, Color32::WHITE.gamma_multiply(a));
     }

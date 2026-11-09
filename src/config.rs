@@ -15,7 +15,21 @@ use tracing::{error, info, warn};
 
 pub const CONFIG_FILE: &str = "jarvis_config.json";
 /// Bump whenever tuned defaults change and old persisted values must be migrated.
-pub const CONFIG_VERSION: u32 = 22;
+pub const CONFIG_VERSION: u32 = 23;
+
+/// The language model since v23 (`migrate`): Qwen3.5 4B.
+pub const PRIMARY_MODEL: &str = "qwen3.5:4b";
+/// The stock primary model of v12-v22: a Qwen2.5 7B under the tag "qwen3:30b-a3b".
+const LEGACY_PRIMARY_MODEL: &str = "qwen3:30b-a3b";
+/// Qwen3.5's window: the whole prompt in its template (≈ 30k), the live context and a reasoned
+/// answer. Qwen2.5 (the fallback) only ever fills its own 32k positions of it.
+pub const QWEN35_NUM_CTX: u32 = 40_960;
+
+/// A Qwen3.5 model by its tag ("qwen3.5:4b"): its own sampling and the 40k window.
+pub fn is_qwen35(model: &str) -> bool {
+    let m = model.to_lowercase();
+    m.contains("qwen3.5") || m.contains("qwen3_5") || m.contains("qwen35")
+}
 
 /// Whisper's initial prompt in v12-v17: only the name. Without any prompt "Jarvis" came out as
 /// "Service", "Jobes", "That all" or "listen".
@@ -28,7 +42,7 @@ pub const WHISPER_NAME_PROMPT: &str = "Hey Jarvis.";
 /// It opens with "Hey Jarvis." as a sentence: the bare list "Jarvis, core, show core, …" made
 /// the self-test hear the name as "Javis" / "Java" (2026-11-02 A/B, same clips); this form kept
 /// every check green and also heard "Geschichte" right.
-pub const WHISPER_DOMAIN_PROMPT: &str = "Hey Jarvis. Ultron. Show your core, hide your core, close your core. Orb, HUD, board, blocks, Sonora, Spotify, WebUntis, itslearning.";
+pub const WHISPER_DOMAIN_PROMPT: &str = "Hey Jarvis. Show your core, hide your core, close your core. Orb, HUD, board, blocks, Sonora, Spotify, WebUntis, itslearning.";
 
 /// The v9-v10 vocabulary primer. Since v11 Whisper runs without an initial prompt: on short or
 /// quiet audio it invented words from the prompt ("Sonora", "Highway to Hell"); Sir's vocabulary
@@ -56,6 +70,8 @@ const LEGACY_WHISPER_PROMPTS: &[&str] = &[
     "Jarvis. Hey Jarvis, open my browser, full screen, close it, close yourself, only talk when I talk, \
      open BastiGHG on YouTube, search Minecraft on YouTube, Twitch, Discord, Spotify, Steam, VS Code, GitHub, Rust, Python, \
      mach dich zu, öffne den Browser.",
+    // v22
+    "Hey Jarvis. Ultron. Show your core, hide your core, close your core. Orb, HUD, board, blocks, Sonora, Spotify, WebUntis, itslearning.",
 ];
 /// The v8 voice: replaced by the v9 film voice unless Sir chose another.
 const V8_VOICE_BLEND: &str = "bm_george:0.45+bm_fable:0.35+bm_lewis:0.2";
@@ -221,6 +237,10 @@ pub struct JarvisConfig {
     /// Smallest encoder window (frames, 50 per second) used with the dynamic window.
     pub whisper_min_audio_ctx: i32,
     pub whisper_flash_attn: bool,
+    /// One encoder pass per clip: greedy in the last clip's language, the language read from the
+    /// same pass, the beam search only for an unsure sentence (`stt::one_pass`). False = the v22
+    /// decoding (separate language detection, beam search for every sentence).
+    pub whisper_fast_decode: bool,
     pub kokoro_model_path: String,
     /// `voices.bin` (npz) from the kokoro-onnx v0.19 release; voices are extracted on demand.
     pub kokoro_voices_archive_path: String,
@@ -273,6 +293,8 @@ pub struct JarvisConfig {
     pub features: FeatureSettings,
     /// Zero-VRAM gaming standby: idle/game eviction of every model, wake hotkeys.
     pub vram_guard: crate::vram_guard::VramGuardConfig,
+    /// live layers (C1): the rain note before rain arrives and the ISS pass heads-up.
+    pub live_layers: crate::live_layers::LiveLayerSettings,
 
     // ---- Storage ------------------------------------------------------------------------
     pub memory_db_path: String,
@@ -564,7 +586,7 @@ impl Default for JarvisConfig {
             llm_models_dir: "models/llm".to_string(),
             llm_port: 11435,
             ollama_url: env("OLLAMA_URL", "http://127.0.0.1:11434"),
-            primary_model: env("JARVIS_PRIMARY_MODEL", "qwen3:30b-a3b"),
+            primary_model: env("JARVIS_PRIMARY_MODEL", PRIMARY_MODEL),
             fallback_model: env(
                 "JARVIS_FALLBACK_MODEL",
                 match profile {
@@ -572,8 +594,9 @@ impl Default for JarvisConfig {
                     HardwareProfile::EdgePi5 => "qwen2.5:3b",
                 },
             ),
-            // The tool schemas alone are ~12.5k tokens since the Stark systems joined.
-            num_ctx: 32_768,
+            // System prompt and tool schemas are ≈ 26k tokens (≈ 30k in Qwen3.5's template); its
+            // hybrid attention keeps the 40k window at 3.9 GB in all (2026-11-09 lab).
+            num_ctx: QWEN35_NUM_CTX,
             keep_alive: crate::vram_guard::RESIDENT_SECS as i64,
             num_gpu: -1,
             num_thread: 0,
@@ -634,6 +657,7 @@ impl Default for JarvisConfig {
             // The encoder window follows the clip ((secs / 30 × 1500) + 64 frames); 128 is the floor.
             whisper_min_audio_ctx: 128,
             whisper_flash_attn: false,
+            whisper_fast_decode: true,
             kokoro_model_path: env("KOKORO_MODEL", crate::models::KOKORO_V1_MODEL),
             kokoro_voices_archive_path: crate::models::KOKORO_V1_VOICES.to_string(),
             kokoro_voice: env("KOKORO_VOICE", crate::tts::JARVIS_VOICE),
@@ -661,6 +685,7 @@ impl Default for JarvisConfig {
             acoustic: AcousticSettings::default(),
             features: FeatureSettings::default(),
             vram_guard: crate::vram_guard::VramGuardConfig::default(),
+            live_layers: crate::live_layers::LiveLayerSettings::default(), // live layers (C1)
 
             memory_db_path: env("JARVIS_MEMORY_DB", "jarvis_memory.db"),
             skills_dir: "skills".to_string(),
@@ -704,7 +729,7 @@ impl JarvisConfig {
         }
         let defaults = Self::default();
         info!(
-            "Migrating {CONFIG_FILE} v{} -> v{CONFIG_VERSION} (VAD/STT tuning updated to new defaults; devices, voice, model and loudness kept).",
+            "Migrating {CONFIG_FILE} v{} -> v{CONFIG_VERSION} (tuning updated to new defaults; devices, voice, loudness and a model Sir chose kept).",
             self.config_version
         );
         if self.config_version < 4 {
@@ -866,9 +891,22 @@ impl JarvisConfig {
                 }
             }
         }
+        if self.config_version < 23 {
+            // v23 (2026-11-09 lab, the same 21 requests on both): Qwen3.5 4B called the right tool
+            // where the old 7B wrote tool names as text, got the sums right, and answers at
+            // ≈ 65 tok/s in 3.9 GB instead of ≈ 45 tok/s in 5.5 GB. The stock "qwen3:30b-a3b" tag
+            // (really Qwen2.5 7B) gives way to it and stays as the fallback's weights; a model Sir
+            // chose himself stays.
+            if self.primary_model == LEGACY_PRIMARY_MODEL {
+                self.primary_model = defaults.primary_model.clone();
+            }
+            if is_qwen35(&self.primary_model) {
+                self.num_ctx = self.num_ctx.max(QWEN35_NUM_CTX);
+            }
+        }
         if self.config_version < 22 && self.pre_roll_ms == 320 {
-            // v22: 500 ms of audio before the onset, so "Jarvis" / "Ultron" / "Move" keep their
-            // first syllable.
+            // v22: 500 ms of audio before the onset, so "Jarvis" / "Move" keep their first
+            // syllable.
             self.pre_roll_ms = defaults.pre_roll_ms;
         }
         // A stock prompt (v4-v21) becomes today's domain prompt; a prompt Sir wrote himself stays.
@@ -1110,7 +1148,7 @@ mod tests {
         assert_eq!(cfg.vad_release_threshold, 0.35);
         assert_eq!((cfg.silence_hangover_ms, cfg.short_command_hangover_ms, cfg.short_command_max_ms), (450, 220, 1100));
         assert_eq!(cfg.max_utterance_secs, 20);
-        assert_eq!(cfg.num_ctx, 32_768);
+        assert_eq!((cfg.primary_model.as_str(), cfg.num_ctx), (PRIMARY_MODEL, QWEN35_NUM_CTX), "the stock model gives way to Qwen3.5");
         assert_eq!(cfg.whisper_initial_prompt, WHISPER_DOMAIN_PROMPT, "the name and the short domain words");
         assert_eq!(cfg.whisper_beam_size, 2, "beam search for sentences");
         assert_eq!(cfg.active_conversation_window_secs, 5);
@@ -1126,7 +1164,22 @@ mod tests {
         let mut cfg: JarvisConfig = serde_json::from_str(r#"{ "config_version": 19, "num_ctx": 20480, "keep_alive": 90 }"#).unwrap();
         cfg.migrate();
         cfg.sanitize();
-        assert_eq!((cfg.num_ctx, cfg.config_version), (32_768, CONFIG_VERSION));
+        assert_eq!((cfg.num_ctx, cfg.config_version), (QWEN35_NUM_CTX, CONFIG_VERSION));
+    }
+
+    /// v23: the stock model becomes Qwen3.5 4B with its 40k window; Sir's own choice stays.
+    #[test]
+    fn v22_configs_move_to_qwen35_unless_sir_chose_a_model() {
+        let stock = r#"{ "config_version": 22, "primary_model": "qwen3:30b-a3b", "fallback_model": "qwen2.5:7b-instruct", "num_ctx": 32768 }"#;
+        let mut cfg: JarvisConfig = serde_json::from_str(stock).unwrap();
+        cfg.migrate();
+        cfg.sanitize();
+        assert_eq!((cfg.primary_model.as_str(), cfg.fallback_model.as_str(), cfg.num_ctx), (PRIMARY_MODEL, "qwen2.5:7b-instruct", QWEN35_NUM_CTX));
+        let own = r#"{ "config_version": 22, "primary_model": "llama3.1:8b", "num_ctx": 32768 }"#;
+        let mut cfg: JarvisConfig = serde_json::from_str(own).unwrap();
+        cfg.migrate();
+        cfg.sanitize();
+        assert_eq!((cfg.primary_model.as_str(), cfg.num_ctx), ("llama3.1:8b", 32_768));
     }
 
     #[test]
@@ -1144,6 +1197,18 @@ mod tests {
         let mut own: JarvisConfig = serde_json::from_str(r#"{ "config_version": 20, "keep_alive": 45, "vram_guard": { "idle_secs": 600 } }"#).unwrap();
         own.migrate();
         assert_eq!((own.keep_alive, own.vram_guard.idle_secs), (45, 600));
+    }
+
+    /// v23: Ultron mode is gone, and "Ultron." leaves the stock v22 Whisper prompt with it.
+    #[test]
+    fn the_v22_prompt_loses_ultron() {
+        let v22 = LEGACY_WHISPER_PROMPTS.last().unwrap();
+        assert!(v22.contains("Ultron"));
+        let raw = format!(r#"{{ "config_version": 22, "whisper_initial_prompt": "{v22}" }}"#);
+        let mut cfg: JarvisConfig = serde_json::from_str(&raw).unwrap();
+        cfg.migrate();
+        assert_eq!(cfg.whisper_initial_prompt, WHISPER_DOMAIN_PROMPT);
+        assert_eq!(cfg.config_version, CONFIG_VERSION);
     }
 
     #[test]

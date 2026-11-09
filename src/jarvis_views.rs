@@ -33,6 +33,11 @@ pub enum JarvisSubWindow {
     DiskMap,
     /// A holographic globe with earthquakes, storms, a satellite and flights.
     Earth,
+    /// live layers (C1): a station's live departures board.
+    Departures,
+    /// live layers (C1): answers from the live data, no window (satellite passes, road traffic,
+    /// another day's weather, rain in the next hour, the heads-ups).
+    Live,
 }
 
 impl JarvisSubWindow {
@@ -47,6 +52,8 @@ impl JarvisSubWindow {
             Self::NetworkRadar => "network_radar",
             Self::DiskMap => "disk_map",
             Self::Earth => "earth",
+            Self::Departures => "departures",
+            Self::Live => "live",
         }
     }
 
@@ -55,6 +62,10 @@ impl JarvisSubWindow {
         let n = name.trim().to_lowercase().replace(['-', '_'], " ");
         let n = n.trim_start_matches("the ").trim_start_matches("my ").trim();
         let has = |words: &[&str]| words.iter().any(|w| n.contains(w));
+        // live layers (C1)
+        if matches!(n, "live" | "live data") {
+            return Some(Self::Live);
+        }
         // (The Earth's "satellite view" before the phone's satellite link.)
         Some(if has(&["earth", "globe", "globus", "erde", "weltkugel", "world map", "weltkarte", "satellite view", "satellite map", "satellite imagery", "satellitenansicht", "satellitenbild"]) {
             Self::Earth
@@ -62,6 +73,9 @@ impl JarvisSubWindow {
             Self::NetworkRadar
         } else if has(&["disk map", "drive map", "storage map", "space map", "disk usage", "treemap", "speicherkarte", "festplattenkarte"]) {
             Self::DiskMap
+        } else if has(&["departure", "abfahrt", "train board"]) {
+            // live layers (C1)
+            Self::Departures
         } else if has(&["system", "stats", "statistic", "telemetry", "telemetrie", "performance", "hardware", "pc status", "cpu", "gpu", "monitoring"]) {
             Self::SystemStatsMonitor
         } else if has(&["schedule", "calendar", "kalender", "webuntis", "timetable", "stundenplan", "agenda", "termine"]) {
@@ -90,6 +104,8 @@ impl JarvisSubWindow {
             Self::NetworkRadar => "J.A.R.V.I.S. // NETWORK RADAR",
             Self::DiskMap => "J.A.R.V.I.S. // DISK MAP",
             Self::Earth => "J.A.R.V.I.S. // EARTH",
+            Self::Departures => "J.A.R.V.I.S. // DEPARTURES",
+            Self::Live => "J.A.R.V.I.S. // LIVE",
         }
     }
 }
@@ -158,13 +174,16 @@ pub async fn run(ctx: &ToolContext, args: &Value) -> Result<String, String> {
     let raw = str_arg(args, &["view", "window_kind", "name", "target"]).unwrap_or("system stats");
     let view = JarvisSubWindow::parse(raw)
         .ok_or_else(|| format!("'{raw}' is not one of my views (system stats, schedule, simulation lab, mobile QR, gym and finances, contacts, network radar, disk map, earth)."))?;
-    if !crate::gui::windows_supported() {
+    // (live layers (C1): view `live` answers in words and needs no display.)
+    if view != JarvisSubWindow::Live && !crate::gui::windows_supported() {
         return Err("Jarvis is running without a display (headless), so he cannot open windows.".into());
     }
     let on = placed(args);
     match view {
+        // live layers (C1): satellite passes, road traffic, another day's weather, rain soon.
+        JarvisSubWindow::Live => crate::live_layers::run_view(ctx, args).await,
         // The panels with their own state and actions (sweep, scan, globe): theirs to carry out.
-        JarvisSubWindow::NetworkRadar | JarvisSubWindow::DiskMap | JarvisSubWindow::Earth => {
+        JarvisSubWindow::NetworkRadar | JarvisSubWindow::DiskMap | JarvisSubWindow::Earth | JarvisSubWindow::Departures => {
             if separate(args) {
                 crate::hud_dock::detach(view.id());
             }
@@ -173,6 +192,7 @@ pub async fn run(ctx: &ToolContext, args: &Value) -> Result<String, String> {
             match view {
                 JarvisSubWindow::NetworkRadar => crate::network_radar::run(args).await,
                 JarvisSubWindow::DiskMap => crate::disk_map::run(args).await,
+                JarvisSubWindow::Departures => crate::transit::run(ctx, args).await, // live layers (C1)
                 _ => crate::earth::run(args).await,
             }
         }
@@ -267,11 +287,27 @@ pub async fn run(ctx: &ToolContext, args: &Value) -> Result<String, String> {
 
 /// The panels that carry their own state (network radar, disk map, Earth): id, title, whether it
 /// is open, and how it closes.
-const PANELS: [(&str, &str, fn() -> bool, fn()); 3] = [
+const PANELS: [(&str, &str, fn() -> bool, fn()); 8] = [
     ("network_radar", "Network radar", crate::network_radar::is_open, crate::network_radar::close),
     ("disk_map", "Disk map", crate::disk_map::is_open, crate::disk_map::close),
     ("earth", "Earth", crate::earth::is_open, crate::earth::close),
+    ("departures", "Departures", crate::transit::is_open, crate::transit::close), // live layers (C1)
+    // Pictures, live cameras, street view.
+    ("image_viewer", "Pictures", crate::image_viewer::is_open, crate::image_viewer::close),
+    ("webcams", "Live cameras", crate::webcams::is_open, crate::webcams::close),
+    ("street_view", "Street view", crate::street_view::is_open, crate::street_view::close),
+    ("model3d", "3D model", crate::model3d::is_open, crate::model3d::close),
 ];
+
+/// Whether `id` is one of the panels with their own state (network radar, disk map, Earth).
+pub fn is_panel(id: &str) -> bool {
+    PANELS.iter().any(|(panel, ..)| *panel == id)
+}
+
+/// Whether panel `id` is up, as an in-app block or in its own OS window.
+pub fn panel_is_open(id: &str) -> bool {
+    PANELS.iter().any(|(panel, _, open, _)| *panel == id && open()) || crate::hud_dock::is_open(id)
+}
 
 /// "Close the globe" while the Earth has its own OS window (an in-app block fades out through
 /// `hud_dock::close_named` instead): the panel the name means closes; its title, if one did.
@@ -304,11 +340,14 @@ pub fn close_detached_panels() -> usize {
 pub fn tool_definition() -> Value {
     json!({"type": "function", "function": {
         "name": "open_jarvis_view",
-        "description": "Open one of YOUR OWN views as a separate, movable native window (never an installed program): system stats / telemetry / system monitor, schedule (WebUntis timetable + calendar), simulation lab, mobile QR code, gym & finance tracker, contacts, network radar (\"check the network\", \"who is on my network\"), disk map (\"what is taking up space\"), earth (globe with earthquakes, storms, satellites, flights; satellite view). \"Open my system stats in a new window\" → view system_stats.",
+        "description": "Open one of YOUR OWN views as its own movable window (never an installed program): system stats / telemetry, schedule (WebUntis + calendar), simulation lab, mobile QR code, gym & finance tracker, contacts, network radar (\"who is on my network\"), disk map (\"what is taking up space\"), earth (globe: quakes, storms, satellites, flights, trains, traffic; satellite view; where Sir is; terrain; rain radar and clouds; past days; a world tour), departures (next trains), live (spoken answers, no window). \"Open my system stats in a new window\" → view system_stats.",
         "parameters": {"type": "object", "properties": {
-            "view": {"type": "string", "enum": ["system_stats", "schedule", "simulation_lab", "mobile_qr", "workout_finance", "contacts", "network_radar", "disk_map", "earth"]},
-            "action": {"type": "string", "description": "network_radar: show (sweep the network), rescan, check_security. disk_map: show (scan path), rescan, back. earth: show, show_satellite, show_holo, show_place (needs place), show_quakes (place, radius_km), show_flights (place), show_storms, show_fires, show_iss, hide_layer (layer), hide_layers, zoom_in, zoom_out, home, spin."},
-            "layer": {"type": "string", "description": "earth, hide_layer: quakes, flights, storms, fires, iss"},
+            "view": {"type": "string", "enum": ["system_stats", "schedule", "simulation_lab", "mobile_qr", "workout_finance", "contacts", "network_radar", "disk_map", "earth", "departures", "live"]},
+            "action": {"type": "string", "description": "network_radar: show, rescan, check_security. disk_map: show (path), rescan, back. earth: show, show_satellite, show_holo, show_place (place), show_quakes (place, radius_km), show_flights (place), show_storms, show_fires, show_iss, show_satellites (name: group), find_satellite (name), show_overhead, show_trains (place), show_traffic (name or place), show_my_location (where am I), show_mountains (place optional), exaggerate_terrain, show_radar, animate_radar, show_clouds (date optional), show_labels / hide_labels, set_imagery (imagery), show_date (date, place optional: a past day's imagery), show_today, show_world_tour, stop_tour, hide_layer (layer), hide_layers, zoom_in, zoom_out, home, spin. departures: show (name). live: passes (name, place), traffic (name or place), weather_on (date, place), rain_soon (place)."},
+            "layer": {"type": "string", "description": "earth, hide_layer: quakes, flights, storms, fires, iss, satellites, trains, traffic, radar, clouds, terrain, labels"},
+            "name": {"type": "string", "description": "satellite, group (starlink), station or motorway (A8)"},
+            "date": {"type": "string", "description": "a day as said (\"yesterday\", \"1 March 2024\", 2024-03-01)"},
+            "imagery": {"type": "string", "description": "earth, set_imagery: esri, sentinel, nasa"},
             "path": {"type": "string", "description": "disk_map: the drive or folder to map, e.g. C:\\ or D:\\Games"},
             "place": {"type": "string", "description": "earth: where to fly to or search around (city, country, landmark; \"here\" = the point in view)"},
             "radius_km": {"type": "number", "description": "earth: radius of an area search (default 500)"},
@@ -343,6 +382,10 @@ mod tests {
             ("the globe", JarvisSubWindow::Earth),
             ("satellite view", JarvisSubWindow::Earth),
             ("satellite", JarvisSubWindow::MobileSatelliteQr),
+            ("departures", JarvisSubWindow::Departures),
+            ("departure board", JarvisSubWindow::Departures),
+            ("abfahrten", JarvisSubWindow::Departures),
+            ("live", JarvisSubWindow::Live),
         ] {
             assert_eq!(JarvisSubWindow::parse(name), Some(view), "{name}");
         }

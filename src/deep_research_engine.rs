@@ -2212,7 +2212,7 @@ pub fn is_tool(name: &str) -> bool {
 pub fn definitions() -> Vec<Value> {
     vec![json!({"type": "function", "function": {
         "name": "manage_deep_research",
-        "description": "Autonomous multi-hour Deep Research missions (10 minutes to 12 hours) that crawl the web, Wikipedia, arXiv, Hacker News and GitHub in the background — also while Sir games, without using the GPU — extract and cross-check facts, and write a live multi-chapter dossier with a knowledge graph. action start (topic, duration_minutes, focus_areas), pause, resume, stop, status, open_workspace (shows the crawler stream, dossier and graph windows).",
+        "description": "Deep Research missions (10 minutes to 12 hours) that crawl the web, Wikipedia, arXiv, Hacker News and GitHub in the background, also while Sir games (no GPU), and write a live dossier with a knowledge graph. action start (topic, duration_minutes, focus_areas), pause, resume, stop, status, open_workspace.",
         "parameters": {"type": "object", "properties": {
             "action": {"type": "string", "enum": ["start", "pause", "resume", "stop", "status", "open_workspace"]},
             "topic": {"type": "string"},

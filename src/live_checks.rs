@@ -405,7 +405,7 @@ fn write_wav(path: &Path, audio: &[f32], rate: u32) -> std::io::Result<()> {
 }
 
 #[test]
-#[ignore = "renders both voices to WAV files for Sir's ear: JARVIS_SAMPLES=<folder>"]
+#[ignore = "renders the voice to a WAV file for Sir's ear: JARVIS_SAMPLES=<folder>"]
 fn voice_samples_for_his_ear() {
     let Ok(dir) = std::env::var("JARVIS_SAMPLES") else {
         return skipped("JARVIS_SAMPLES=<folder>");
@@ -414,7 +414,7 @@ fn voice_samples_for_his_ear() {
     crate::config::set_read_only(true);
     let cfg = crate::config::JarvisConfig::load();
     let rate = crate::jarvis_voice_dsp::MASTER_RATE;
-    for (who, rendered) in [("jarvis", crate::fish_zero_shot_tts::render_sentences(&cfg)), ("ultron", crate::ultron_mode::render_sentences(&cfg))] {
+    for (who, rendered) in [("jarvis", crate::fish_zero_shot_tts::render_sentences(&cfg))] {
         let sentences = rendered.unwrap_or_else(|e| panic!("{who}'s voice: {e}"));
         let gap = vec![0.0f32; (rate as f32 * 0.6) as usize];
         let audio: Vec<f32> = sentences.iter().flat_map(|(_, _, a)| a.iter().copied().chain(gap.iter().copied())).collect();

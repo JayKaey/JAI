@@ -228,14 +228,11 @@ pub fn derive(colour: [u8; 3]) -> ThemePalette {
     ThemePalette { core_primary: primary, core_secondary: secondary, core_hot_center: mix_const(primary, 0.10), hud_frame_border: primary, hud_frame_glow: glow, hud_bracket_color: mix_bracket(primary) }
 }
 
-/// The palette a stored `hud_palette` value names: a preset, "ultron_crimson", a saved theme
-/// ("theme:Cyberpunk") or "custom:#RRGGBB".
+/// The palette a stored `hud_palette` value names: a preset, a saved theme ("theme:Cyberpunk")
+/// or "custom:#RRGGBB".
 pub fn resolve(name: &str) -> ThemePalette {
     if let Some(p) = preset(name) {
         return p;
-    }
-    if name.trim() == ULTRON_NAME {
-        return ULTRON;
     }
     if let Some(t) = name.trim().strip_prefix(CUSTOM_PREFIX).and_then(custom) {
         return t.palette();
@@ -255,11 +252,8 @@ pub fn palette_name_for(word: &str, colour: [u8; 3]) -> String {
     }
 }
 
-// ------------------------------------------------------------------ Ultron and saved themes ----
+// ------------------------------------------------------------------------- saved themes ----
 
-/// Ultron Mode's palette: blood crimson core, molten-ember rings, razor crimson borders.
-pub const ULTRON: ThemePalette = ThemePalette::new(0xFF001E, 0xFF3B00, 0xDC143C, 0xFF2A40);
-pub const ULTRON_NAME: &str = "ultron_crimson";
 /// `hud_palette` of a saved theme: "theme:" + its name.
 pub const CUSTOM_PREFIX: &str = "theme:";
 /// Where saved themes live (next to JARVIS.exe); mirrored into the memory database.
@@ -448,10 +442,8 @@ pub fn design_theme(name: Option<&str>, description: &str) -> Option<CustomTheme
 
 // ------------------------------------------------------------------------------- the fade ----
 
-/// Bumped on every palette change (fades, Ultron): the HUD rebuilds its colours when it moves.
+/// Bumped on every palette change (fades): the HUD rebuilds its colours when it moves.
 static GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-/// Ultron Mode's override and the palette it replaced (restored when it ends).
-static OVERRIDE: RwLock<Option<String>> = RwLock::new(None);
 
 pub fn generation() -> u64 {
     GENERATION.load(std::sync::atomic::Ordering::Acquire)
@@ -462,32 +454,6 @@ fn start_fade(to: ThemePalette, name: &str) {
     let mut f = ACTIVE.write().unwrap_or_else(|e| e.into_inner());
     *f = Fade { from: now, to, start: Instant::now(), name: name.to_string() };
     GENERATION.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-}
-
-/// Ultron Mode on: snapshots the active palette's name and fades to `ULTRON` (the stored
-/// `hud_palette` stays untouched). Off: fades back to the snapshot. Returns whether it changed.
-pub fn set_ultron(on: bool) -> bool {
-    let mut saved = OVERRIDE.write().unwrap_or_else(|e| e.into_inner());
-    match (on, saved.is_some()) {
-        (true, false) => {
-            *saved = Some(ACTIVE.read().unwrap_or_else(|e| e.into_inner()).name.clone());
-            drop(saved);
-            start_fade(ULTRON, ULTRON_NAME);
-            true
-        }
-        (false, true) => {
-            let previous = saved.take().unwrap_or_else(|| DEFAULT_PRESET.to_string());
-            drop(saved);
-            start_fade(resolve(&previous), &previous);
-            true
-        }
-        _ => false,
-    }
-}
-
-#[cfg(test)]
-fn ultron_active() -> bool {
-    OVERRIDE.read().unwrap_or_else(|e| e.into_inner()).is_some()
 }
 
 struct Fade {
@@ -521,12 +487,6 @@ pub fn current() -> ThemePalette {
 /// Fades to the palette `name` (a preset or "custom:#RRGGBB"); returns whether it changed.
 pub fn follow(name: &str) -> bool {
     {
-        // Ultron Mode holds the palette; the snapshot follows Sir's choice for its return.
-        let mut saved = OVERRIDE.write().unwrap_or_else(|e| e.into_inner());
-        if let Some(previous) = saved.as_mut() {
-            *previous = name.to_string();
-            return false;
-        }
         let f = ACTIVE.read().unwrap_or_else(|e| e.into_inner());
         if f.name == name {
             return false;
@@ -552,8 +512,8 @@ pub fn finish_fade() {
     }
 }
 
-/// The name of the palette on screen (or being faded to): a preset, "custom:#RRGGBB",
-/// "theme:<name>" or Ultron's.
+/// The name of the palette on screen (or being faded to): a preset, "custom:#RRGGBB" or
+/// "theme:<name>".
 pub fn active_name() -> String {
     ACTIVE.read().unwrap_or_else(|e| e.into_inner()).name.clone()
 }
@@ -708,25 +668,5 @@ mod tests {
         save_custom(renamed.clone()).unwrap();
         assert_eq!(custom_themes().iter().filter(|x| x.name == "Cyberpunk").count(), 1, "re-saving replaces");
         let _ = std::fs::remove_file(store_path());
-    }
-
-    #[test]
-    fn ultron_overrides_the_palette_and_restores_the_previous_one() {
-        let _g = test_lock();
-        follow("emerald_matrix");
-        std::thread::sleep(FADE + Duration::from_millis(20));
-        let gen = generation();
-        assert!(set_ultron(true) && ultron_active());
-        assert!(generation() > gen, "the HUD rebuilds its colours");
-        assert!(!follow("arc_cyan"), "the stored theme cannot pull Ultron's palette away");
-        std::thread::sleep(FADE + Duration::from_millis(20));
-        assert_eq!(current(), ULTRON);
-        assert_eq!(ULTRON.core_primary, [0xFF, 0x00, 0x1E]);
-        assert_eq!(ULTRON.hud_frame_border, [0xDC, 0x14, 0x3C]);
-        assert!(set_ultron(false) && !ultron_active());
-        std::thread::sleep(FADE + Duration::from_millis(20));
-        assert_eq!(current(), preset("arc_cyan").unwrap(), "back to what Sir chose meanwhile");
-        assert!(!set_ultron(false));
-        follow(DEFAULT_PRESET);
     }
 }

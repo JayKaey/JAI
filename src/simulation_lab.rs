@@ -990,7 +990,7 @@ pub fn tool_definitions() -> Vec<Value> {
     vec![
         json!({"type": "function", "function": {
             "name": "launch_interactive_simulation",
-            "description": "Stark Simulation Lab: open a live, interactive simulation as a block on the HUD with parameter sliders (separate_window true: its own OS window, only when Sir asks for one). sim_type function (plot f(x), several functions separated by ';', add 'derivative' / 'integral', 'x from -5 to 5'), projectile, pendulum, collision, waves (interference), gradient_descent (loss curve + learning rate), sorting (bubble / insertion / selection / quick). formula_or_params: the formulas, or parameters like 'angle=60, velocity=30, gravity=9.81'. Use it whenever Sir asks about a physics problem, a function or an algorithm he could watch.",
+            "description": "Simulation Lab: a live simulation with sliders as a HUD block (separate_window true only when Sir asks for a window). sim_type function (f(x); several separated by ';'; 'derivative' / 'integral'; 'x from -5 to 5'), projectile, pendulum, collision, waves, gradient_descent, sorting (bubble / insertion / selection / quick). formula_or_params: the formulas, or 'angle=60, velocity=30, gravity=9.81'. For any physics problem, function or algorithm he could watch.",
             "parameters": {"type": "object", "properties": {
                 "sim_type": {"type": "string", "enum": ["function", "projectile", "pendulum", "collision", "waves", "gradient_descent", "sorting"]},
                 "separate_window": {"type": "boolean", "description": "true only when Sir asked for a new / separate window."},

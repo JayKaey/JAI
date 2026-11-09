@@ -65,31 +65,20 @@ impl Slot {
     fn take(&mut self) -> Option<Step> {
         self.0.take().filter(|(_, at)| at.elapsed() < FRESH).map(|(step, _)| step)
     }
+
+    /// Taken out only when it is younger than `max` (an older step stays for "undo that").
+    fn take_within(&mut self, max: Duration) -> Option<Step> {
+        if self.0.as_ref().is_some_and(|(_, at)| at.elapsed() < max.min(FRESH)) {
+            self.take()
+        } else {
+            None
+        }
+    }
 }
 
 static LAST: Mutex<Slot> = Mutex::new(Slot(None));
 /// An undo is under way: what its calls change is not a new step.
 static UNDOING: AtomicBool = AtomicBool::new(false);
-/// Ultron switched on or off: the way back and since when. The switch is the dispatcher's, no
-/// tool's (it takes his voice), so the dispatcher takes it back (`mode_way_back`).
-static MODE: Mutex<Option<(bool, Instant)>> = Mutex::new(None);
-
-/// Ultron Mode is now `now`. This is "that" from here on, unless the switch was the way back
-/// itself: then nothing is left to take back, as after any undo.
-pub fn keep_mode(now: bool) {
-    let mut mode = MODE.lock().unwrap_or_else(|e| e.into_inner());
-    if mode.is_some_and(|(back, at)| back == now && at.elapsed() < FRESH) {
-        *mode = None;
-        return;
-    }
-    *mode = Some((!now, Instant::now()));
-    LAST.lock().unwrap_or_else(|e| e.into_inner()).0 = None;
-}
-
-/// What "undo that" means for Ultron Mode right now (None: it is about something else).
-pub fn mode_way_back() -> Option<bool> {
-    MODE.lock().unwrap_or_else(|e| e.into_inner()).filter(|(_, at)| at.elapsed() < FRESH).map(|(back, _)| back)
-}
 
 /// The way back from a call that succeeded, from what was there before and after it and what
 /// the tool said of it. None: it changed nothing of his own that can be put back.
@@ -178,9 +167,44 @@ pub fn way_back(tool: &str, args: &Value, said: &str, before: &Snapshot, after: 
             step.calls.push(("hud_board", json!({ "action": "restore" })));
             step.done = "the board is back";
         }
+        // A fact he stored or corrected (2026-11-08: "Call me Earth." became the user_title).
+        ("remember_fact", _) => {
+            if let Some(call) = memory_way_back(said) {
+                step.calls.push(call);
+                step.done = "your memory is as it was";
+            }
+        }
         _ => {}
     }
     step.takes_something_back().then_some(step)
+}
+
+/// The call that takes a `remember_fact` result back: a new fact is deleted, a corrected one gets
+/// its old value (and kind) again. None for anything else ("Kept memory …" changed nothing).
+fn memory_way_back(said: &str) -> Option<(&'static str, Value)> {
+    let line = said.lines().next()?.trim();
+    if let Some(rest) = line.strip_prefix("Stored memory '") {
+        let key = rest.split('\'').next().filter(|k| !k.is_empty())?;
+        return Some(("delete_memory", json!({ "id_or_key": key })));
+    }
+    let rest = line.strip_prefix("Updated memory '")?;
+    let (key, rest) = rest.split_once('\'')?;
+    let rest = rest.strip_prefix(" (was: \"")?;
+    // `<old>" [<category>, <importance>]): <new>`, or `<old>"): <new>` without the kind (the
+    // new value may hold anything, so only what comes before the first "]): " is read).
+    let kinded = rest.find("]): ").and_then(|end| rest[..end].rfind("\" [").map(|i| (&rest[..i], &rest[i + 3..end])));
+    let (old, kind) = match kinded {
+        Some((old, kind)) => (old, Some(kind)),
+        None => (rest.split("\"): ").next()?, None),
+    };
+    let mut args = json!({ "key": key, "value": old, "restore": true });
+    if let Some((category, importance)) = kind.and_then(|k| k.split_once(", ")) {
+        args["category"] = json!(category.trim());
+        if let Ok(n) = importance.trim().parse::<i64>() {
+            args["importance"] = json!(n);
+        }
+    }
+    Some(("remember_fact", args))
 }
 
 /// Keeps `step` as the one "undo that" takes (not while an undo is under way: what its own
@@ -189,13 +213,18 @@ pub fn keep(step: Step) {
     if UNDOING.load(Ordering::Acquire) {
         return;
     }
-    *MODE.lock().unwrap_or_else(|e| e.into_inner()) = None;
     LAST.lock().unwrap_or_else(|e| e.into_inner()).keep(step);
 }
 
 /// The step "undo that" takes now, if there is one fresh enough.
 pub fn take() -> Option<Step> {
     LAST.lock().unwrap_or_else(|e| e.into_inner()).take()
+}
+
+/// The step "that's not what I said" takes: only one from the last `max` (the request he just
+/// misheard), never an older change.
+pub fn take_within(max: Duration) -> Option<Step> {
+    LAST.lock().unwrap_or_else(|e| e.into_inner()).take_within(max)
 }
 
 /// Marks the start and the end of an undo.
@@ -420,20 +449,6 @@ mod tests {
     }
 
     #[test]
-    fn ultron_is_taken_back_by_the_dispatcher_once() {
-        // The switch is "that"; the way back leaves nothing, so a second undo redoes nothing.
-        keep_mode(true);
-        assert_eq!(mode_way_back(), Some(false));
-        keep_mode(false);
-        assert_eq!(mode_way_back(), None);
-        // A later change is "that" from then on.
-        keep_mode(true);
-        keep(Step { done: "it is as it was", ..Step::empty() });
-        assert_eq!(mode_way_back(), None);
-        assert_eq!(take().map(|step| step.done), Some("it is as it was"));
-    }
-
-    #[test]
     fn his_last_actions_are_told_latest_first_with_their_age() {
         assert!(told(&[]).starts_with("Nothing so far"));
         let said = told(&[(Duration::from_secs(4), "Firefox lowered to 50 %"), (Duration::from_secs(70), "The theme is Stark Gold"), (Duration::from_secs(600), "Done"), (Duration::from_secs(3700), "Older"), (Duration::from_secs(9000), "Oldest")]);
@@ -505,5 +520,42 @@ mod tests {
         let long_ago = Instant::now().checked_sub(FRESH + Duration::from_secs(1)).expect("the machine has been up long enough");
         slot.0 = Some((step, long_ago));
         assert!(slot.take().is_none() && slot.0.is_none());
+    }
+
+    /// "That's not what I said" only takes back the change of the request just misheard.
+    #[test]
+    fn a_misheard_change_is_taken_within_its_window_only() {
+        let mut slot = Slot(None);
+        slot.keep(Step { done: "your memory is as it was", ..Step::empty() });
+        assert!(slot.take_within(Duration::from_secs(120)).is_some());
+        let three_minutes_ago = Instant::now().checked_sub(Duration::from_secs(180)).expect("the machine has been up long enough");
+        slot.0 = Some((Step { done: "x", ..Step::empty() }, three_minutes_ago));
+        assert!(slot.take_within(Duration::from_secs(120)).is_none(), "an older change stays");
+    }
+
+    /// Repro (jarvis.log, 2026-11-08 23:3x): "Call me Earth." — misheard over Jarvis' voice —
+    /// overwrote the seed "Always address the user respectfully as 'Sir'." (persona, 10) with
+    /// "Sir should be addressed as Earth.", and nothing could take it back.
+    #[test]
+    fn a_remembered_fact_is_taken_back() {
+        let said = "Updated memory 'user_title' (was: \"Always address the user respectfully as 'Sir'.\" [persona, 10]): Sir should be addressed as Earth.";
+        assert_eq!(
+            memory_way_back(said),
+            Some(("remember_fact", json!({"key": "user_title", "value": "Always address the user respectfully as 'Sir'.", "restore": true, "category": "persona", "importance": 10})))
+        );
+        let step = way_back("remember_fact", &json!({"key": "user_title", "value": "Sir should be addressed as Earth."}), said, &snapshot(), &snapshot()).expect("a way back");
+        assert_eq!(step.calls.len(), 1);
+        assert_eq!(step.calls[0].0, "remember_fact");
+        // The restoring call is no new change of its own.
+        assert!(way_back("remember_fact", &step.calls[0].1, "Updated memory 'user_title' (was: \"x\"): y", &snapshot(), &snapshot()).is_none());
+        // Older results without the kind, new facts, and facts that stayed.
+        assert_eq!(memory_way_back("Updated memory 'coffee' (was: \"black\"): with milk"), Some(("remember_fact", json!({"key": "coffee", "value": "black", "restore": true}))));
+        assert_eq!(memory_way_back("Stored memory 'user_title' [persona]: Sir should be addressed as Earth."), Some(("delete_memory", json!({"id_or_key": "user_title"}))));
+        assert_eq!(memory_way_back("Kept memory 'coffee' [preference]: black"), None);
+        // A new value with brackets of its own does not confuse the old one.
+        assert_eq!(
+            memory_way_back("Updated memory 'k' (was: \"old\" [fact, 5]): new \"x\" [y]): z").map(|(_, a)| a["value"].clone()),
+            Some(json!("old"))
+        );
     }
 }

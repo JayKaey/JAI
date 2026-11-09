@@ -384,6 +384,49 @@ pub fn reasoning_gear(text: &str) -> ReasoningGear {
     }
 }
 
+/// Room for a thinking model's hidden reasoning, on top of the answer's own budget. The 2026-11-09
+/// lab run spent all 1024 Deep tokens of Qwen3.5 4B on reasoning for "write a four-line poem" and
+/// "3 apples …" and answered nothing.
+pub const THINK_TOKENS: i32 = 2048;
+
+/// Requests a thinking model reasons through before it answers: arithmetic, logic, proofs and
+/// explicit "think" requests. Writing, explanations and chat do not: a poem or a summary gains
+/// nothing from seconds of hidden reasoning, and Sir waits for every one of them.
+const THINK_CUES: &[&str] = &[
+    " think carefully ", " think hard ", " think it through ", " step by step ", " prove ", " proof ", " derive ", " calculate ",
+    " solve ", " equation ", " integral ", " derivative ", " riddle ", " puzzle ", " logic ", " debug ", " algorithm ",
+    " pros and cons ", " berechne ", " beweise ", " löse ", " rätsel ", " denk genau ", " schritt für schritt ",
+];
+
+/// Words that turn two numbers into a sum or a comparison ("which is bigger, 9.11 or 9.9?").
+const NUMBER_CUES: &[&str] = &[
+    " bigger ", " larger ", " smaller ", " more ", " less ", " fewer ", " plus ", " minus ", " times ", " divided ", " how many ",
+    " how much ", " how long ", " when ", " what time ", " percent ", " größer ", " kleiner ", " mehr ", " weniger ", " wie viele ",
+    " wie viel ", " wie lange ", " wann ", " prozent ",
+];
+
+const NUMBER_WORDS: &[&str] = &[
+    "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve", "twenty", "hundred",
+    "thousand", "half", "twice", "double", "triple", "dozen", "eins", "zwei", "drei", "vier", "fünf", "sechs", "sieben", "acht",
+    "neun", "zehn", "zwanzig", "hundert", "tausend", "hälfte", "doppelt", "halb",
+];
+
+/// Whether a thinking model should reason before answering `text` (see `THINK_CUES`).
+pub fn wants_thinking(text: &str) -> bool {
+    let w = words(text);
+    let padded = format!(" {} ", w.join(" "));
+    if has_any(&padded, THINK_CUES) {
+        return true;
+    }
+    let digits = text
+        .split(|c: char| !(c.is_ascii_digit() || c == '.' || c == ':'))
+        .filter(|t| t.chars().any(|c| c.is_ascii_digit()))
+        .count();
+    // "eat one, then buy twice as many": numbers said as words count too.
+    let spelled = w.iter().filter(|x| NUMBER_WORDS.contains(&x.as_str())).count();
+    digits + spelled >= 2 && has_any(&padded, NUMBER_CUES)
+}
+
 // --------------------------------------------------------------- verification matrix ----
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -431,7 +474,7 @@ const LOOK_TOOLS: &[&str] = &["configure_interface", "control_gui_aspect", "cust
 const WINDOW_TOOLS: &[&str] = &[
     "spawn_native_window", "update_native_window", "close_native_window", "window_management", "move_window_to_monitor", "place_application_window", "open_jarvis_view",
     "spawn_multi_window_workspace", "control_spatial_window", "spawn_topic_knowledge_workspace", "manage_spatial_scene", "launch_interactive_simulation",
-    "manage_deep_research", "open_application", "open_website", "close_all_secondary_windows",
+    "manage_deep_research", "open_application", "open_website", "close_all_secondary_windows", "arrange_jarvis_window",
 ];
 const MEDIA_TOOLS: &[&str] = &["control_music", "media_and_volume_control", "control_audio_mixer", "open_application", "close_application"];
 const SCHEDULE_TOOLS: &[&str] = &["create_calendar_event", "modify_or_delete_calendar_event", "get_calendar_schedule", "check_school_schedule", "reminders", "run_executive_briefing"];
@@ -440,7 +483,7 @@ const APP_TOOLS: &[&str] = &["open_application", "close_application", "open_webs
 /// The tools that fulfil a class (empty: no tool is required).
 pub fn backing_tools(class: &IntentClass) -> &'static [&'static str] {
     match class {
-        IntentClass::Ui => &["configure_interface", "control_gui_aspect", "customize_hud_and_windows", "control_jarvis_interface", "control_orb_mode", "spawn_native_window", "update_native_window", "close_native_window", "window_management", "open_jarvis_view", "spawn_multi_window_workspace", "control_spatial_window", "spawn_topic_knowledge_workspace", "manage_spatial_scene", "create_or_update_widget", "remove_widget"],
+        IntentClass::Ui => &["configure_interface", "control_gui_aspect", "customize_hud_and_windows", "control_jarvis_interface", "control_orb_mode", "spawn_native_window", "update_native_window", "close_native_window", "window_management", "open_jarvis_view", "spawn_multi_window_workspace", "control_spatial_window", "spawn_topic_knowledge_workspace", "manage_spatial_scene", "create_or_update_widget", "remove_widget", "arrange_jarvis_window"],
         IntentClass::Media => MEDIA_TOOLS,
         IntentClass::Schedule => SCHEDULE_TOOLS,
         IntentClass::KnowledgeWorkspace(_) => &["spawn_topic_knowledge_workspace"],
@@ -816,11 +859,10 @@ pub async fn run_tool(tools: &ToolContext, name: &str, args: &Value) -> Result<S
 // Tier 1 of the cognitive router: Jarvis' own controls, decided in microseconds and in a fixed
 // order, before the turn lock, the conversation log and the older parsers.
 //
-//   1. Ultron ⇄ Jarvis    "switch to Ultron", "change back" (never a track: this comes first)
-//   2. the privacy lock   "stop listening", "you can listen again"
-//   3. the emblem         "move your orb a little bit to the left", "center your core", "a bit more"
-//   4. his own blocks     "close the HUD board / web search / feature lab", "clear the board"
-//   5. the board's pages  "next page", "go back", "show result 3"
+//   1. the privacy lock   "stop listening", "you can listen again"
+//   2. the emblem         "move your orb a little bit to the left", "center your core", "a bit more"
+//   3. his own blocks     "close the HUD board / web search / feature lab", "clear the board"
+//   4. the board's pages  "next page", "go back", "show result 3"
 //
 // One Aho-Corasick pass over the sentence (`domains`) says which vocabularies it touches; only
 // the stages those allow run at all, and a sentence with no command vocabulary is dismissed at
@@ -829,7 +871,6 @@ pub async fn run_tool(tools: &ToolContext, name: &str, args: &Value) -> Result<S
 
 /// The vocabularies a sentence can touch: the bit flags `domains` returns.
 pub mod domain {
-    pub const MODE: u32 = 1;
     pub const PRIVACY: u32 = 1 << 1;
     pub const ORB: u32 = 1 << 2;
     pub const MOTION: u32 = 1 << 3;
@@ -852,8 +893,7 @@ pub mod domain {
     pub const MEMORY: u32 = 1 << 20;
     pub const CLOCK: u32 = 1 << 21;
 
-    pub const NAMES: [(u32, &str); 22] = [
-        (MODE, "mode"),
+    pub const NAMES: [(u32, &str); 21] = [
         (PRIVACY, "privacy"),
         (ORB, "orb"),
         (MOTION, "motion"),
@@ -885,13 +925,6 @@ pub mod domain {
 
 /// The words (and short phrases) of each vocabulary, as they stand in a canonical sentence.
 const VOCABULARY: &[(u32, &[&str])] = &[
-    (
-        domain::MODE,
-        &[
-            "ultron", "jarvis mode", "change back", "switch back", "turn back", "back to normal", "normal mode", "back to jarvis", "jarvis again", "zurück zu jarvis", "wieder jarvis",
-            "normaler modus", "zurück wechseln", "wechsel zurück", "wechsle zurück",
-        ],
-    ),
     (domain::PRIVACY, &["listening", "listen", "microphone", "mic", "mikro", "mikrofon", "zuhören", "zuzuhören", "zuhoeren", "zuzuhoeren", "hör", "hoer"]),
     (domain::ORB, &["orb", "emblem", "core", "sphere", "kugel", "reactor", "kern"]),
     (
@@ -946,7 +979,7 @@ const VOCABULARY: &[(u32, &[&str])] = &[
 ];
 
 /// The vocabularies the reflex stages listen for.
-const REFLEX_STAGES: u32 = domain::MODE | domain::PRIVACY | domain::ORB | domain::CLOSE | domain::PAGE;
+const REFLEX_STAGES: u32 = domain::PRIVACY | domain::ORB | domain::CLOSE | domain::PAGE;
 
 struct Lexicon {
     automaton: AhoCorasick,
@@ -1011,8 +1044,6 @@ pub fn domains(canon: &str) -> u32 {
 /// can mean. One atomic and one short lock to read, no I/O.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ReflexContext {
-    /// Ultron Mode is on.
-    pub ultron: bool,
     /// A board is on screen.
     pub board_up: bool,
     /// One of its blocks is maximised.
@@ -1024,15 +1055,13 @@ pub struct ReflexContext {
 impl ReflexContext {
     pub fn live() -> Self {
         let (board_up, spotlight, paged) = crate::hud_board::reflex_flags();
-        Self { ultron: crate::ultron_mode::active(), board_up, spotlight, paged }
+        Self { board_up, spotlight, paged }
     }
 }
 
-/// A reflex: what the router decided, for the dispatcher (mode, privacy) or the brain (silent).
+/// A reflex: what the router decided, for the dispatcher (privacy) or the brain (silent).
 #[derive(Debug, Clone, PartialEq)]
 pub enum Reflex {
-    /// Ultron Mode on / off.
-    Mode(bool),
     /// The privacy lock.
     Privacy(crate::listening_lock::LockCommand),
     /// One of Jarvis' own controls, carried out without a word (a HUD badge only).
@@ -1042,7 +1071,7 @@ pub enum Reflex {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Routed {
     pub reflex: Reflex,
-    /// The stage that answered: "mode", "privacy", "orb", "blocks" or "pages".
+    /// The stage that answered: "privacy", "orb", "blocks" or "pages".
     pub stage: &'static str,
     /// An emblem move's step (zero for a jump to a fixed spot), remembered for "a bit more".
     orb_step: Option<[f32; 2]>,
@@ -1094,13 +1123,7 @@ pub fn route(text: &str, ctx: &ReflexContext) -> Option<Routed> {
     let hit = |reflex: Reflex, stage: &'static str, orb_step: Option<[f32; 2]>| Some(Routed { reflex, stage, orb_step });
     let words: Vec<&str> = canon.split_ascii_whitespace().collect();
     let negated = words.iter().any(|w| matches!(*w, "dont" | "not" | "never" | "nicht" | "nie" | "kein" | "keine" | "doesnt" | "wont" | "cant"));
-    // 1. Ultron ⇄ Jarvis.
-    if mask & domain::MODE != 0 && !negated {
-        if let Some(on) = crate::ultron_mode::parse(text, ctx.ultron) {
-            return hit(Reflex::Mode(on), "mode", None);
-        }
-    }
-    // 2. The privacy lock (its phrases carry their own "don't": "don't listen").
+    // 1. The privacy lock (its phrases carry their own "don't": "don't listen").
     if mask & domain::PRIVACY != 0 {
         if let Some(cmd) = crate::listening_lock::parse(text) {
             return hit(Reflex::Privacy(cmd), "privacy", None);
@@ -1110,7 +1133,7 @@ pub fn route(text: &str, ctx: &ReflexContext) -> Option<Routed> {
         return None;
     }
     let core = command_span(&words);
-    // 3. The emblem's place, and the follow-ups to a move ("a bit more", "the other way").
+    // 2. The emblem's place, and the follow-ups to a move ("a bit more", "the other way").
     let orb = if mask & domain::ORB != 0 { orb_reflex(core) } else { follow_up.and_then(|last| orb_follow_up(core, last)) };
     if let Some((m, place)) = orb {
         let step = match m {
@@ -1124,13 +1147,13 @@ pub fn route(text: &str, ctx: &ReflexContext) -> Option<Routed> {
         };
         return hit(Reflex::Silent(SilentAction { tool: "configure_interface", args: json!({ "orb_board_position": place }), label }), "orb", Some(step));
     }
-    // 4. Jarvis' own blocks.
+    // 3. Jarvis' own blocks.
     if mask & domain::CLOSE != 0 {
         if let Some(action) = block_close(core) {
             return hit(Reflex::Silent(action), "blocks", None);
         }
     }
-    // 5. The board's pages.
+    // 4. The board's pages.
     if mask & domain::PAGE != 0 && ctx.board_up {
         if let Some(action) = page_reflex(text, core, ctx) {
             return hit(Reflex::Silent(action), "pages", None);
@@ -1225,9 +1248,38 @@ fn orb_follow_up(core: &[&str], last: [f32; 2]) -> Option<(crate::interface::Orb
 
 const CLOSE_VERBS: &[&str] = &["close", "hide", "dismiss", "shut", "remove", "schließ", "schließe", "schliess", "schliesse"];
 
+/// Words Sir says after what he wants closed, never part of its name (2026-11-08: "Jarvis, close
+/// the Earth, you." asked Windows for a program called "Earth You"; "close up" and "closed, off"
+/// for one called "Up" and "Off").
+const CLOSE_TAIL: &[&str] = &["you", "please", "bitte", "for", "me", "now", "jetzt", "mal", "up", "off", "down", "away", "again", "too", "sir", "jarvis", "already", "quickly"];
+
+/// `name` without the fillers Sir says after it: "earth you" → "earth", "spotify for me now" →
+/// "spotify", "up" / "off" → "" (nothing was named).
+pub fn strip_close_fillers(name: &str) -> String {
+    let mut words: Vec<&str> = name.split_whitespace().collect();
+    while words.last().is_some_and(|w| CLOSE_TAIL.contains(&w.trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase().as_str())) {
+        words.pop();
+    }
+    words.join(" ")
+}
+
+/// Sir's other names for the Earth that the HUD's own lookup does not know ("close the world").
+pub fn own_view_name(name: &str) -> String {
+    match name {
+        "world" | "planet" | "weltkugel" | "welt" => "earth".to_string(),
+        _ => name.to_string(),
+    }
+}
+
+/// An in-app block open right now under exactly this title ("Feature Lab // every system" is
+/// "feature lab"), when no program is called that.
+fn open_block_titled(name: &str) -> bool {
+    name.len() >= 3 && crate::apps::find_spec(name).is_none() && crate::hud_dock::open_titles().iter().any(|t| t.to_lowercase() == name)
+}
+
 /// Jarvis' own views by the names Sir uses for them. Closing one never asks Windows for a
 /// program called "Feature Lab".
-fn is_own_view(name: &str) -> bool {
+pub fn is_own_view(name: &str) -> bool {
     matches!(
         name,
         "feature lab" | "features" | "feature list" | "telemetry" | "system telemetry" | "system stats" | "pc stats" | "stats" | "theme studio" | "plotter" | "function plotter" | "simulation"
@@ -1257,6 +1309,10 @@ fn block_close(core: &[&str]) -> Option<SilentAction> {
         .copied()
         .filter(|w| !matches!(*w, "the" | "to" | "your" | "that" | "this" | "my" | "up" | "down" | "away" | "again" | "now" | "das" | "die" | "den" | "dein" | "deine" | "wieder" | "mal" | "whole" | "entire"))
         .collect();
+    // "Close the Earth, you", "close the radar for me".
+    while object.len() > 1 && object.last().is_some_and(|w| CLOSE_TAIL.contains(w)) {
+        object.pop();
+    }
     // A HUD panel is the layout's ("hide the system panel"), not a block.
     if object.is_empty() || object.iter().any(|w| matches!(*w, "panel" | "panels" | "tab" | "tabs" | "sidebar" | "section")) {
         return None;
@@ -1265,7 +1321,7 @@ fn block_close(core: &[&str]) -> Option<SilentAction> {
     while object.len() > 1 && matches!(object[object.len() - 1], "block" | "blocks" | "window" | "windows" | "card" | "cards" | "view" | "fenster") {
         object.pop();
     }
-    let name = object.join(" ");
+    let name = own_view_name(&object.join(" "));
     let silent = |args: Value, label: &str| Some(SilentAction { tool: "hud_board", args, label: label.to_string() });
     if clearing {
         // "Clear my calendar" / "clear the chat" are other things entirely.
@@ -1274,7 +1330,7 @@ fn block_close(core: &[&str]) -> Option<SilentAction> {
     if crate::hud_board::is_board_name(&name) {
         return silent(json!({ "action": "close" }), "BOARD CLOSED");
     }
-    if is_own_view(&name) {
+    if is_own_view(&name) || open_block_titled(&name) {
         return silent(json!({ "action": "close", "target": name }), "CLOSED");
     }
     None
@@ -1311,10 +1367,9 @@ fn page_reflex(text: &str, core: &[&str], ctx: &ReflexContext) -> Option<SilentA
 // ------------------------------------------------------------------ phonetic rescue ----
 //
 // Whisper sometimes writes a command as the words it sounds like: "fight the core" (hide the
-// core), "Jarvis disabled the car" (disable the core), "which do old run" (switch to Ultron),
-// "10 discord call on" (turn …). When a short spoken sentence found no route at all, its sound
-// is compared with the sound of the commands that make sense right now; a near-identical one
-// (and only one) is what Sir said.
+// core), "Jarvis disabled the car" (disable the core), "10 discord call on" (turn …). When a
+// short spoken sentence found no route at all, its sound is compared with the sound of the
+// commands that make sense right now; a near-identical one (and only one) is what Sir said.
 
 fn is_vowel(c: char) -> bool {
     matches!(c, 'a' | 'e' | 'i' | 'o' | 'u' | 'y' | 'ä' | 'ö' | 'ü')
@@ -1403,8 +1458,8 @@ fn word_sound(word: &str, out: &mut String) {
     }
 }
 
-/// The sound of a sentence, its words run together ("do old run" sounds like "to Ultron") and
-/// doubled sounds collapsed.
+/// The sound of a sentence, its words run together ("fight the core" sounds like "hide the
+/// core") and doubled sounds collapsed.
 pub fn sound_key(text: &str) -> String {
     let mut raw = String::new();
     for word in text.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()) {
@@ -1458,9 +1513,6 @@ struct Rescue {
 }
 
 const RESCUES: &[Rescue] = &[
-    Rescue { sounds_like: "switch to ultron", means: "switch to Ultron", when: |c| !c.ultron },
-    Rescue { sounds_like: "switch back to jarvis", means: "switch back to Jarvis", when: |c| c.ultron },
-    Rescue { sounds_like: "change back to jarvis", means: "switch back to Jarvis", when: |c| c.ultron },
     Rescue { sounds_like: "hide the core", means: "hide your core", when: |_| true },
     Rescue { sounds_like: "hide your core", means: "hide your core", when: |_| true },
     Rescue { sounds_like: "close your core", means: "hide your core", when: |_| true },
@@ -1507,9 +1559,6 @@ pub fn phonetic_rescue(text: &str, ctx: &ReflexContext) -> Option<&'static str> 
 /// What the routing benchmark feeds the router: Jarvis' own controls, other commands, questions
 /// and chatter, English and German.
 pub const BENCH_CORPUS: &[&str] = &[
-    "Jarvis, switch to Ultron.",
-    "Change back to Jarvis.",
-    "Ultron, switch back.",
     "Please stop listening for five minutes.",
     "You can listen again now.",
     "Move your orb back to the middle.",
@@ -1586,16 +1635,16 @@ fn bench_with(rounds: usize, mut decide: impl FnMut(&str) -> bool) -> RouteBench
     RouteBench { samples: times.len(), routed, p50_us: at(0.5), p99_us: at(0.99), max_us: at(1.0) }
 }
 
-/// The reflex router alone (a board with a stack of pages up, Ultron off).
+/// The reflex router alone (a board with a stack of pages up).
 pub fn benchmark(rounds: usize) -> RouteBench {
-    let ctx = ReflexContext { ultron: false, board_up: true, spotlight: false, paged: true };
+    let ctx = ReflexContext { board_up: true, spotlight: false, paged: true };
     bench_with(rounds, |sentence| route(sentence, &ctx).is_some())
 }
 
 /// The whole deterministic path of a turn: the reflex router, then (when it passes) the older
 /// parsers of `intents`.
 pub fn benchmark_full(rounds: usize) -> RouteBench {
-    let ctx = ReflexContext { ultron: false, board_up: true, spotlight: false, paged: true };
+    let ctx = ReflexContext { board_up: true, spotlight: false, paged: true };
     bench_with(rounds, |sentence| route(sentence, &ctx).is_some() || crate::intents::silent_quick_command(sentence).is_some() || crate::intents::parse(sentence).is_some())
 }
 
@@ -1620,6 +1669,31 @@ mod tests {
             "so tell me what you think about the weather today and the plans I have for the whole long weekend",
         ] {
             assert_eq!(reasoning_gear(heavy), Deep, "{heavy}");
+        }
+    }
+
+    /// The 2026-11-09 lab run: arithmetic and comparisons reason first; writing and chat do not.
+    #[test]
+    fn only_sums_logic_and_think_requests_reason_first() {
+        for think in [
+            "I have 3 apples, eat one, then buy twice as many as I have left. How many now?",
+            "If I leave at 7:40 and the train takes 47 minutes, when do I arrive?",
+            "Which is bigger, 9.11 or 9.9?",
+            "Think carefully about whether I should buy a new GPU",
+            "Berechne das Integral von x²",
+            "Solve 3x + 4 = 19",
+        ] {
+            assert!(wants_thinking(think), "{think}");
+        }
+        for direct in [
+            "Write a four-line poem about Minecraft.",
+            "Explain in two sentences how a black hole forms.",
+            "I'm bored. Give me three quick ideas for tonight.",
+            "Translate 'see you tomorrow at the station' into German and French.",
+            "Remind me in 20 minutes to take the pizza out of the oven.",
+            "What's the capital of Australia, and roughly how far is it from Berlin?",
+        ] {
+            assert!(!wants_thinking(direct), "{direct}");
         }
     }
 
@@ -1792,10 +1866,9 @@ mod tests {
 
     // ------------------------------------------------------------------ reflex router ----
 
-    const IDLE: ReflexContext = ReflexContext { ultron: false, board_up: false, spotlight: false, paged: false };
-    const ULTRON: ReflexContext = ReflexContext { ultron: true, board_up: false, spotlight: false, paged: false };
-    const BOARD: ReflexContext = ReflexContext { ultron: false, board_up: true, spotlight: false, paged: false };
-    const PAGED: ReflexContext = ReflexContext { ultron: false, board_up: true, spotlight: false, paged: true };
+    const IDLE: ReflexContext = ReflexContext { board_up: false, spotlight: false, paged: false };
+    const BOARD: ReflexContext = ReflexContext { board_up: true, spotlight: false, paged: false };
+    const PAGED: ReflexContext = ReflexContext { board_up: true, spotlight: false, paged: true };
 
     /// The emblem's follow-up window is global: tests that open it, or that route the bare words
     /// it listens for ("weiter", "more"), run one at a time.
@@ -1809,7 +1882,6 @@ mod tests {
         route(text, ctx).map(|r| {
             let args = match r.reflex {
                 Reflex::Silent(a) => json!({ "tool": a.tool, "args": a.args }),
-                Reflex::Mode(on) => json!({ "ultron": on }),
                 Reflex::Privacy(cmd) => json!({ "privacy": format!("{cmd:?}") }),
             };
             (r.stage, args)
@@ -1827,29 +1899,13 @@ mod tests {
         // Whole words only: "explore" has no "lore", "orbit" no "orb", "corner" no "core".
         assert_eq!(domains(&canonical("orbital mechanics explore corners")), 0);
         // Phrases of two words, and words that belong to two vocabularies.
-        assert_ne!(domains(&canonical("change back")) & domain::MODE, 0);
+        assert_ne!(domains(&canonical("look up the weather")) & domain::SEARCH, 0);
         assert_ne!(domains(&canonical("what's on my timetable tomorrow")) & domain::SCHEDULE, 0);
         assert_eq!(domains(&canonical("I think the keycaps are the problem")), 0, "chatter touches nothing");
     }
 
     #[test]
-    fn ultron_and_back_is_stage_one_before_music_or_anything_else() {
-        assert_eq!(reflex("Jarvis, switch to Ultron.", &IDLE), Some(("mode", json!({"ultron": true}))));
-        // The screenshot: every way Sir asked to come back.
-        for back in ["Change back to Jarvis.", "Ultron switch back to Jarvis.", "Switch back to Jarvis", "change back", "Ultron, switch back.", "No, change back to Jarvis.", "Zurück zu Jarvis", "normal mode"] {
-            assert_eq!(reflex(back, &ULTRON), Some(("mode", json!({"ultron": false}))), "{back}");
-            // And it is never the music player's "back" / "change …".
-            assert!(crate::intents::silent_quick_command(back).is_none() || route(back, &ULTRON).is_some(), "{back}");
-        }
-        // Outside Ultron Mode a bare "change back" is not his to take.
-        assert_eq!(reflex("change back", &IDLE), None);
-        assert_eq!(reflex("change back to the previous track", &ULTRON), None, "a track is still music");
-        assert_eq!(reflex("Don't switch to Ultron", &IDLE), None);
-        assert_eq!(reflex("What is Ultron?", &IDLE), None);
-    }
-
-    #[test]
-    fn the_privacy_lock_is_stage_two() {
+    fn the_privacy_lock_is_stage_one() {
         assert_eq!(reflex("Jarvis, please stop listening.", &IDLE), Some(("privacy", json!({"privacy": "Lock"}))));
         assert_eq!(reflex("You can listen again now.", &IDLE), Some(("privacy", json!({"privacy": "Resume"}))));
         assert_eq!(route("Stop listening for 5 minutes", &IDLE).map(|r| r.stage), Some("privacy"));
@@ -1967,8 +2023,6 @@ mod tests {
         // The sounds themselves.
         assert_eq!(sound_key("hide the core"), "hiteko");
         assert_eq!(sound_key("Fight the core."), "fiteko");
-        assert_eq!(sound_key("switch to Ultron"), "swixtoltron");
-        assert_eq!(sound_key("Which do old run?"), "wixtoltron");
         assert_eq!(sound_key("turn"), "ten");
         assert_eq!(sound_key("10"), "ten");
         assert!((sound_similarity("hiteko", "hiteko") - 1.0).abs() < 1e-6);
@@ -1977,10 +2031,8 @@ mod tests {
         // jarvis.log 2026-11-03 22:47-22:52: what Whisper wrote, and what Sir had said.
         assert_eq!(phonetic_rescue("Fight the core.", &IDLE), Some("hide your core"));
         assert_eq!(phonetic_rescue("disabled the car.", &IDLE), Some("hide your core"));
-        assert_eq!(phonetic_rescue("Which do old run?", &IDLE), Some("switch to Ultron"), "Whisper's question mark included");
         assert_eq!(phonetic_rescue("10 discord call on.", &IDLE), Some("turn on the discord call"));
-        // Only what makes sense right now: Ultron is already on / no stack of pages is up.
-        assert_eq!(phonetic_rescue("Which do old run", &ULTRON), None);
+        // Only what makes sense right now: no stack of pages is up.
         assert_eq!(phonetic_rescue("next beige", &IDLE), None);
         // Ordinary sentences stay what they are.
         for text in [
@@ -1991,8 +2043,7 @@ mod tests {
         }
         // Every rescue leads somewhere: a reflex, or a command the older parsers know.
         for rescue in RESCUES {
-            let ctx = ReflexContext { ultron: rescue.means.contains("back to Jarvis"), board_up: true, spotlight: false, paged: true };
-            assert!(route(rescue.means, &ctx).is_some() || crate::intents::parse(rescue.means).is_some(), "'{}' runs nothing", rescue.means);
+            assert!(route(rescue.means, &PAGED).is_some() || crate::intents::parse(rescue.means).is_some(), "'{}' runs nothing", rescue.means);
         }
     }
 
@@ -2038,7 +2089,7 @@ mod tests {
         };
         println!("reflex router: {} (try {tries})", reflexes.describe());
         println!("whole deterministic path: {}", full.describe());
-        assert!(reflexes.routed >= 18, "the corpus' own controls are all reflexes: {}", reflexes.routed);
+        assert!(reflexes.routed >= 17, "the corpus' own controls are all reflexes: {}", reflexes.routed);
         assert!(reflexes.p99_us < budget_us, "reflex router: {}", reflexes.describe());
         assert!(full.p99_us < budget_us, "whole deterministic path: {}", full.describe());
     }

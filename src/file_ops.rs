@@ -1171,7 +1171,7 @@ pub fn tool_definitions() -> Vec<Value> {
     vec![
         json!({"type": "function", "function": {
             "name": "find_files",
-            "description": "Find files or folders on Sir's PC in milliseconds (indexed: Desktop, Documents, Downloads, Pictures, Videos, Music, OneDrive, project folders, Minecraft/CurseForge/Modrinth instances, other drives). Fuzzy name words plus kind ('resume pdf', 'holiday photos', 'Kinetic Horizon modpack folder', 'config.toml'). Returns the 15 best with size and date; open_immediately opens the best (default app, VS Code or Explorer via open_with).",
+            "description": "Find files or folders on Sir's PC in milliseconds (indexed: his user folders, OneDrive, projects, Minecraft instances, other drives). Fuzzy name words plus kind ('resume pdf', 'holiday photos', 'config.toml'). Returns the 15 best; open_immediately opens the best (default app, VS Code or Explorer via open_with).",
             "parameters": {"type": "object", "properties": {
                 "query": {"type": "string"},
                 "file_extension": {"type": "string", "description": "e.g. pdf, rs, toml (comma-separated)"},

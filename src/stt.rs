@@ -5,18 +5,29 @@
 //!   a 0.85 peak (`dsp::normalize_for_asr`). No pre-emphasis: Whisper's log-mel front end wants
 //!   flat, natural speech (a 0.95 pre-emphasis turned "core" into "car").
 //!
-//! Latency measures (a short command transcribes in ~100-150 ms instead of ~1.4 s):
+//! Latency measures:
 //! * one persistent `WhisperState` (no ~400 MB allocation per utterance),
-//! * greedy decoding (best_of 1), temperature 0 **and** no temperature fallback,
+//! * one encoder pass per clip (`whisper_fast_decode`, 2026-11-09): the clip is decoded greedily
+//!   (temperature 0, one decoder) in the language of the last clip, and the language is read
+//!   from the same pass — the start-of-transcript step that also gives the no-speech
+//!   probability. Only a change of language (German after English) or a very unsure sentence
+//!   (mean log-probability under -0.8, or the decoder repeating itself) is decoded a second
+//!   time, then with the beam search. Before, every clip paid a separate language-detection
+//!   encode (~30 % of the time) and every sentence the beam search,
 //! * `no_context`, `single_segment`, `no_timestamps`,
 //! * the encoder window (`audio_ctx`) scaled to the clip — `(secs / 30 × 1500) + 64` frames,
 //!   at least 128, and 96 for a one-word reflex ("mute", "stop") — instead of a padded 30 s
 //!   (whisper.cpp's default 1500),
-//! * 4-8 threads, language auto-detection constrained to German/English (configurable).
+//! * 4-8 threads, languages constrained to German/English (configurable).
+//!
+//! `stt_bench.rs` measures it: `cargo test --release --bin jarvis stt::bench -- --ignored
+//! --nocapture` (the real model, Kokoro clips in room noise).
 //!
 //! Phantom words (Whisper inventing "Thank you", "Untertitel …", prompt echoes):
-//! * no initial prompt (a vocabulary prompt was the main source of invented words on quiet
-//!   audio) and no conditioning on previous text,
+//! * a short vocabulary prompt (his name, the HUD's words) and no conditioning on previous text.
+//!   (Adding the names of the views that are up, `command_corrector::whisper_prompt`, cost the
+//!   bench's English clips accuracy — 10.8 % instead of 5.4 % word errors — so the screen is
+//!   used after decoding instead, by `command_corrector`),
 //! * a pre-STT energy gate: breath, mic hiss and clicks (< 180 ms of voiced energy) never reach
 //!   Whisper,
 //! * after decoding, OpenAI's no-speech test: the `<|nospeech|>` probability at the
@@ -67,6 +78,27 @@ pub struct Transcript {
     pub avg_logprob: f32,
     /// … and the probability that the clip holds no speech at all.
     pub no_speech: f32,
+    /// Encoder passes it took (1 = one; a change of language or an unsure sentence takes two).
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub passes: u8,
+}
+
+/// How sure Whisper was of a voice turn's words (what a change of Sir's name or title needs).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HeardQuality {
+    pub avg_logprob: f32,
+    pub language_prob: f32,
+    pub no_speech: f32,
+}
+
+impl HeardQuality {
+    /// Whisper was sure of the words, and of speech in the language it wrote. (2026-11-08,
+    /// misheard over Jarvis' voice: "Call me Earth." at log-probability -0.57, language 0.50,
+    /// no-speech 0.30; Sir's clear commands that evening scored -0.01 … -0.30. His accented
+    /// English can score low as English, so the language only rules out the clearly foreign.)
+    pub fn confident(&self) -> bool {
+        self.avg_logprob >= -0.35 && self.language_prob >= 0.4 && self.no_speech <= 0.4
+    }
 }
 
 struct Job {
@@ -103,6 +135,9 @@ struct Settings {
     languages: Vec<String>,
     dynamic_ctx: bool,
     min_ctx: i32,
+    /// One encoder pass per clip (see the module notes); false is the v22 decoding (a separate
+    /// language-detection pass, the beam search for every sentence).
+    fast: bool,
     /// `<|startoftranscript|>`, `<|nospeech|>` and `<|endoftext|>` of the loaded model.
     sot: WhisperToken,
     no_speech: WhisperToken,
@@ -183,6 +218,7 @@ impl SttEngine {
             languages: cfg.whisper_languages.clone(),
             dynamic_ctx: cfg.whisper_dynamic_audio_ctx,
             min_ctx: cfg.whisper_min_audio_ctx.clamp(64, 1500),
+            fast: cfg.whisper_fast_decode,
             sot: 0,
             no_speech: 0,
             eot: 0,
@@ -223,7 +259,7 @@ impl SttEngine {
                             _ if job.called_off.as_ref().is_some_and(|flag| flag.load(Ordering::Relaxed)) => Err(CALLED_OFF.into()),
                             // A panic inside whisper.cpp's bindings fails this clip only; the
                             // model is re-created for the next one (its state may be torn).
-                            Some(e) => crate::crash_guard::guard("Whisper transcription", || transcribe(&mut e.state, e.detect_state.as_mut(), job.pcm, job.voiced_ms, &settings, job.called_off.as_ref()))
+                            Some(e) => crate::crash_guard::guard("Whisper transcription", || transcribe(e, job.pcm, job.voiced_ms, &settings, &settings.prompt, job.called_off.as_ref()))
                                 .unwrap_or_else(|| {
                                     engine = None;
                                     Err("speech recognition failed on this clip".into())
@@ -291,8 +327,17 @@ impl SttEngine {
 struct WhisperEngine {
     state: WhisperState,
     detect_state: Option<WhisperState>,
+    /// The language the next clip is decoded in first: the last one Whisper was sure of.
+    prior: &'static str,
     _ctx: WhisperContext,
     path: String,
+}
+
+/// The language a clip is decoded in before anything was heard: English when allowed (most of
+/// Sir's commands), else the first allowed one.
+fn first_language(languages: &[String]) -> &'static str {
+    let allowed: Vec<&'static str> = languages.iter().filter_map(|code| whisper_rs::get_lang_id(code).and_then(whisper_rs::get_lang_str)).collect();
+    allowed.iter().copied().find(|l| *l == "en").or_else(|| allowed.first().copied()).unwrap_or("en")
 }
 
 impl WhisperEngine {
@@ -319,11 +364,13 @@ impl WhisperEngine {
         // the last `audio_ctx` per state and language detection reuses it, so a second state
         // pinned to a 3.2 s window makes detection ~3× cheaper than on the main state.
         let warm: Vec<f32> = (0..MIN_SAMPLES).map(|i| ((i as f32) * 0.37).sin() * 0.0005).collect();
-        let _ = run_full(&mut state, &warm, warm.len(), settings, Some("en"), None, None);
-        let detect_state = if settings.languages.len() > 1 {
+        let _ = run_full(&mut state, &warm, settings, &settings.prompt, Some("en"), None, false, None);
+        // The one-pass decoding reads the language from the main state; the separate
+        // detection state is the v22 path's only.
+        let detect_state = if settings.languages.len() > 1 && !settings.fast {
             match ctx.create_state() {
                 Ok(mut s) => {
-                    let _ = run_full(&mut s, &warm, warm.len(), settings, Some("en"), Some(DETECT_CTX), None);
+                    let _ = run_full(&mut s, &warm, settings, &settings.prompt, Some("en"), Some(DETECT_CTX), false, None);
                     Some(s)
                 }
                 Err(e) => {
@@ -337,10 +384,16 @@ impl WhisperEngine {
         info!(
             "[STT] Whisper ready: {path} ({} threads, {}, load + warm-up {} ms)",
             settings.threads,
-            if settings.beam_size > 1 { format!("beam search {}", settings.beam_size) } else { "greedy".to_string() },
+            match (settings.fast, settings.beam_size > 1) {
+                (true, true) => format!("one pass, greedy, beam search {} for unsure sentences", settings.beam_size),
+                (true, false) => "one pass, greedy".to_string(),
+                (false, true) => format!("beam search {}", settings.beam_size),
+                (false, false) => "greedy".to_string(),
+            },
             t0.elapsed().as_millis()
         );
-        Some(Self { state, detect_state, _ctx: ctx, path })
+        let prior = first_language(&settings.languages);
+        Some(Self { state, detect_state, prior, _ctx: ctx, path })
     }
 }
 
@@ -435,19 +488,20 @@ fn use_beam(spoken: usize, beam_size: i32) -> bool {
     beam_size > 1 && spoken > BEAM_SAMPLES
 }
 
+/// One whisper.cpp pass over `audio` (encoder and decoder) with `prompt`. `beam`: the beam search
+/// (`s.beam_size`) instead of one greedy decoder.
+#[allow(clippy::too_many_arguments)]
 fn run_full(
     state: &mut WhisperState,
     audio: &[f32],
-    spoken: usize,
     s: &Settings,
+    prompt: &str,
     language: Option<&str>,
     audio_ctx: Option<i32>,
+    beam: bool,
     called_off: Option<&Arc<AtomicBool>>,
 ) -> Result<Decoded, String> {
-    // Short commands ("stop", "pause") decode greedily for speed; a sentence over 1.2 s gets the
-    // beam search, which hears names, accents and "core" far better. (`audio` is padded to
-    // ≥ 1.3 s, so the decision uses the spoken length.)
-    let strategy = if use_beam(spoken, s.beam_size) {
+    let strategy = if beam && s.beam_size > 1 {
         SamplingStrategy::BeamSearch { beam_size: s.beam_size, patience: BEAM_PATIENCE }
     } else {
         SamplingStrategy::Greedy { best_of: 2 }
@@ -462,8 +516,10 @@ fn run_full(
     params.set_temperature(0.0);
     // A looping or unconfident sentence ("Change the colour to red. Change the colour to red. …")
     // is decoded again at a higher temperature instead of being returned. One-word commands are
-    // not (each retry costs ~0.4 s, and their loops are cut by the token cap).
-    params.set_temperature_inc(if audio.len() > SENTENCE_SAMPLES { 0.2 } else { 0.0 });
+    // not (each retry costs ~0.4 s, and their loops are cut by the token cap); nor is the
+    // one-pass decoding's greedy first pass, whose unsure sentences get the beam search instead.
+    let fallback = beam || !s.fast;
+    params.set_temperature_inc(if fallback && audio.len() > SENTENCE_SAMPLES { 0.2 } else { 0.0 });
     params.set_suppress_blank(true);
     params.set_suppress_non_speech_tokens(true);
     params.set_no_speech_thold(0.65);
@@ -474,8 +530,8 @@ fn run_full(
     params.set_print_progress(false);
     params.set_print_realtime(false);
     params.set_print_timestamps(false);
-    if !s.prompt.is_empty() {
-        params.set_initial_prompt(&s.prompt);
+    if !prompt.is_empty() {
+        params.set_initial_prompt(prompt);
     }
     match audio_ctx {
         Some(ctx) => params.set_audio_ctx(ctx),
@@ -517,16 +573,59 @@ fn run_full(
     Ok(Decoded { text: text.trim().to_string(), avg_logprob })
 }
 
-/// OpenAI Whisper's no-speech probability: the softmax weight of `<|nospeech|>` predicted at the
-/// start-of-transcript position, from one decoder step over the encoder output `full` left in
-/// the state (whisper.cpp itself does not report it).
-fn no_speech_probability(state: &mut WhisperState, s: &Settings) -> Option<f32> {
+/// What the decoder predicts right after `<|startoftranscript|>`, from one step over the encoder
+/// output `full` left in the state.
+struct SotStep {
+    /// OpenAI Whisper's no-speech probability: the softmax weight of `<|nospeech|>` (whisper.cpp
+    /// itself does not report it).
+    no_speech: f32,
+    /// The allowed languages with Whisper's probability for each: the softmax over the language
+    /// tokens, exactly whisper.cpp's `whisper_lang_auto_detect` — without its separate encode.
+    languages: Vec<(&'static str, f32)>,
+}
+
+fn sot_step(state: &mut WhisperState, s: &Settings) -> Option<SotStep> {
     state.decode(&[s.sot], 0, s.threads.max(1) as usize).ok()?;
     let logits = state.get_logits().ok()?;
     let target = *logits.get(usize::try_from(s.no_speech).ok()?)?;
     let max = logits.iter().copied().fold(f32::NEG_INFINITY, f32::max);
     let sum: f32 = logits.iter().map(|l| (l - max).exp()).sum();
-    (sum > 0.0).then(|| ((target - max).exp() / sum).clamp(0.0, 1.0))
+    let no_speech = if sum > 0.0 { ((target - max).exp() / sum).clamp(0.0, 1.0) } else { 0.0 };
+    // Language `id` is token `<|startoftranscript|>` + 1 + id (`whisper_token_lang`).
+    let language_logit = |id: i32| usize::try_from(s.sot + 1 + id).ok().and_then(|t| logits.get(t).copied());
+    let all: Vec<f32> = (0..=whisper_rs::get_lang_max_id()).filter_map(language_logit).collect();
+    let lmax = all.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    let lsum: f32 = all.iter().map(|l| (l - lmax).exp()).sum();
+    let languages = s
+        .languages
+        .iter()
+        .filter_map(|code| {
+            let id = whisper_rs::get_lang_id(code)?;
+            let name = whisper_rs::get_lang_str(id)?;
+            let p = if lsum > 0.0 { (language_logit(id)? - lmax).exp() / lsum } else { 0.0 };
+            Some((name, p))
+        })
+        .collect();
+    Some(SotStep { no_speech, languages })
+}
+
+/// A sentence decoded this unsurely (mean token log-probability) is decoded once more with the
+/// beam search. Sir's clear commands score -0.01 … -0.30; the misheard ones of 2026-11-08 -0.57
+/// … -1.20 — and those were already the beam search's (v22). At -0.5 the retry ran on a quarter
+/// of the bench's clips, cost the 90th percentile 0.55 s and made "Close it." into "Close it.
+/// Closed." without fixing one English command (stt_bench, 2026-11-09); so only the very unsure.
+const BEAM_RETRY_LOGPROB: f32 = -0.8;
+
+/// Whether a one-pass result deserves the beam search: a sentence (not a reflex word) that was
+/// unsure or that the greedy decoder looped on ("Hide your core, hide your core.").
+fn wants_beam(decoded: &Decoded, spoken: usize, s: &Settings) -> bool {
+    use_beam(spoken, s.beam_size) && !decoded.text.is_empty() && (decoded.avg_logprob < BEAM_RETRY_LOGPROB || loops(&decoded.text))
+}
+
+/// The decoder repeated itself: a phrase looped, or the whole sentence said twice.
+fn loops(text: &str) -> bool {
+    let t = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    collapse_echo(&t) != t || collapse_repetitions(&t) != t
 }
 
 /// Picks the most probable language among the allowed codes.
@@ -556,29 +655,61 @@ fn detect_language(state: &mut WhisperState, audio: &[f32], s: &Settings) -> Opt
     pick_language(&allowed)
 }
 
-fn transcribe(
-    state: &mut WhisperState,
-    detect_state: Option<&mut WhisperState>,
-    pcm: Vec<f32>,
-    voiced_ms: u32,
-    s: &Settings,
-    called_off: Option<&Arc<AtomicBool>>,
-) -> Result<Transcript, String> {
-    let started = Instant::now();
-    let audio_ms = (pcm.len() * 1000 / SAMPLE_RATE) as u64;
-    let nothing = |started: Instant| Transcript { text: String::new(), language: "-".into(), language_prob: 0.0, stt_ms: started.elapsed().as_millis() as u64, audio_ms, avg_logprob: 0.0, no_speech: 1.0 };
-    if let Some(why) = energy_gate(&pcm, voiced_ms) {
-        info!("[STT] Skipped {audio_ms} ms of audio without Whisper: {why} (breath, hiss or a click)");
-        return Ok(nothing(started));
-    }
-    let Some(audio) = preprocess(&pcm) else {
-        return Ok(nothing(started));
-    };
+/// What the passes over one clip produced.
+struct Heard {
+    decoded: Decoded,
+    language: Option<&'static str>,
+    language_prob: f32,
+    no_speech: f32,
+    passes: u8,
+}
 
+/// One encoder pass for most clips: greedy in the language of the last clip; the language and
+/// the no-speech probability come from the same pass. A change of language is decoded again in
+/// the language heard, an unsure or looping sentence once more with the beam search.
+fn one_pass(engine: &mut WhisperEngine, audio: &[f32], spoken: usize, ctx: Option<i32>, s: &Settings, prompt: &str, called_off: Option<&Arc<AtomicBool>>) -> Result<Heard, String> {
+    let state = &mut engine.state;
+    let first = if s.languages.len() > 1 { engine.prior } else { first_language(&s.languages) };
+    let mut decoded = run_full(state, audio, s, prompt, Some(first), ctx, false, called_off)?;
+    let step = sot_step(state, s);
+    let no_speech = if decoded.text.is_empty() { 0.0 } else { step.as_ref().map_or(0.0, |st| st.no_speech) };
+    // (Unknown when the start-of-transcript step failed: neither sure nor ruled out.)
+    let (mut language, mut language_prob, mut passes) = (first, if s.languages.len() > 1 { 0.5 } else { 1.0 }, 1u8);
+    if s.languages.len() > 1 {
+        if let Some((heard, p)) = step.as_ref().and_then(|st| pick_language(&st.languages)) {
+            language_prob = p;
+            engine.prior = heard;
+            if heard != first {
+                info!("[STT] Heard {heard} (p={p:.2}) where {first} was expected: decoding again");
+                decoded = run_full(state, audio, s, prompt, Some(heard), ctx, false, called_off)?;
+                language = heard;
+                passes += 1;
+            }
+        }
+    }
+    if wants_beam(&decoded, spoken, s) {
+        let beam = run_full(state, audio, s, prompt, Some(language), ctx, true, called_off)?;
+        passes += 1;
+        let take = !beam.text.is_empty()
+            && match (loops(&beam.text), loops(&decoded.text)) {
+                (false, true) => true,
+                (true, false) => false,
+                _ => beam.avg_logprob >= decoded.avg_logprob,
+            };
+        tracing::debug!("[STT] Unsure '{}' ({:.2}) → beam search '{}' ({:.2}){}", decoded.text, decoded.avg_logprob, beam.text, beam.avg_logprob, if take { "" } else { ", kept the first" });
+        if take {
+            decoded = beam;
+        }
+    }
+    Ok(Heard { decoded, language: Some(language), language_prob, no_speech, passes })
+}
+
+/// The v22 decoding: a separate language-detection pass, then the beam search for a sentence.
+fn two_pass(engine: &mut WhisperEngine, audio: &[f32], spoken: usize, ctx: Option<i32>, s: &Settings, prompt: &str, called_off: Option<&Arc<AtomicBool>>) -> Result<Heard, String> {
     let (language, language_prob) = match s.languages.len() {
         0 => (None, 0.0),
         1 => (whisper_rs::get_lang_id(&s.languages[0]).and_then(whisper_rs::get_lang_str), 1.0),
-        _ => match detect_language(detect_state.unwrap_or(&mut *state), &audio, s) {
+        _ => match detect_language(engine.detect_state.as_mut().unwrap_or(&mut engine.state), audio, s) {
             Some((code, p)) => (Some(code), p),
             None => (None, 0.0),
         },
@@ -587,11 +718,42 @@ fn transcribe(
     if called_off.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
         return Err(CALLED_OFF.into());
     }
+    let state = &mut engine.state;
+    let decoded = run_full(state, audio, s, prompt, language, ctx, use_beam(spoken, s.beam_size), called_off)?;
+    let no_speech = if decoded.text.is_empty() { 0.0 } else { sot_step(state, s).map_or(0.0, |st| st.no_speech) };
+    let passes = if s.languages.len() > 1 { 2 } else { 1 };
+    Ok(Heard { decoded, language, language_prob, no_speech, passes })
+}
+
+fn transcribe(
+    engine: &mut WhisperEngine,
+    pcm: Vec<f32>,
+    voiced_ms: u32,
+    s: &Settings,
+    prompt: &str,
+    called_off: Option<&Arc<AtomicBool>>,
+) -> Result<Transcript, String> {
+    let started = Instant::now();
+    let audio_ms = (pcm.len() * 1000 / SAMPLE_RATE) as u64;
+    let nothing = |started: Instant| Transcript { text: String::new(), language: "-".into(), language_prob: 0.0, stt_ms: started.elapsed().as_millis() as u64, audio_ms, avg_logprob: 0.0, no_speech: 1.0, passes: 0 };
+    if let Some(why) = energy_gate(&pcm, voiced_ms) {
+        info!("[STT] Skipped {audio_ms} ms of audio without Whisper: {why} (breath, hiss or a click)");
+        return Ok(nothing(started));
+    }
+    let Some(audio) = preprocess(&pcm) else {
+        return Ok(nothing(started));
+    };
+
     // German and English are both transcribed as spoken (`set_translate(false)`); the language
-    // comes from detection among the allowed ones, so German is never forced into English.
-    let decoded = run_full(state, &audio, pcm.len(), s, language, reflex_ctx(pcm.len(), voiced_ms), called_off)?;
+    // is the one heard among the allowed ones, so German is never forced into English.
+    let ctx = reflex_ctx(pcm.len(), voiced_ms);
+    let heard = if s.fast && !s.languages.is_empty() {
+        one_pass(engine, &audio, pcm.len(), ctx, s, prompt, called_off)?
+    } else {
+        two_pass(engine, &audio, pcm.len(), ctx, s, prompt, called_off)?
+    };
+    let Heard { decoded, language, language_prob, no_speech, passes } = heard;
     let raw = decoded.text;
-    let no_speech = if raw.is_empty() { 0.0 } else { no_speech_probability(state, s).unwrap_or(0.0) };
     if no_speech > NO_SPEECH_THOLD && decoded.avg_logprob < CONFIDENT_LOGPROB {
         info!(
             "[STT] Discarded '{raw}' from {audio_ms} ms of audio: no-speech {no_speech:.2}, log-probability {:.2} (in {} ms)",
@@ -600,15 +762,16 @@ fn transcribe(
         );
         return Ok(nothing(started));
     }
-    let text = normalize_stt_transcript(&filter_hallucinations(&raw, &s.prompt, voiced_ms < 1500));
+    let text = normalize_stt_transcript(&filter_hallucinations(&raw, prompt, voiced_ms < 1500));
     let lang = language
         .map(String::from)
-        .or_else(|| state.full_lang_id_from_state().ok().and_then(whisper_rs::get_lang_str).map(String::from))
+        .or_else(|| engine.state.full_lang_id_from_state().ok().and_then(whisper_rs::get_lang_str).map(String::from))
         .unwrap_or_else(|| "auto".into());
     let stt_ms = started.elapsed().as_millis() as u64;
     info!(
-        "[STT] Transcribed {audio_ms} ms of audio in {stt_ms} ms [{lang} p={language_prob:.2}, no-speech {no_speech:.2}, logprob {:.2}]: '{text}'{}",
+        "[STT] Transcribed {audio_ms} ms of audio in {stt_ms} ms [{lang} p={language_prob:.2}, no-speech {no_speech:.2}, logprob {:.2}, {passes} pass{}]: '{text}'{}",
         decoded.avg_logprob,
+        if passes == 1 { "" } else { "es" },
         if text.is_empty() && !raw.is_empty() { format!(" (filtered '{raw}')") } else { String::new() }
     );
     Ok(Transcript {
@@ -619,6 +782,7 @@ fn transcribe(
         audio_ms,
         avg_logprob: decoded.avg_logprob,
         no_speech,
+        passes,
     })
 }
 
@@ -699,7 +863,40 @@ pub fn filter_hallucinations(raw: &str, prompt: &str, strict: bool) -> String {
             return String::new();
         }
     }
-    collapse_stutters(&collapse_repetitions(&dedupe_sentences(&text)))
+    collapse_stutters(&collapse_repetitions(&collapse_echo(&dedupe_sentences(&text))))
+}
+
+/// "Hide your core, hide your core.", "Closed. Closed.", "Jarvis closed the Earth Jarvis closed
+/// the Earth": the whole transcript is one order said twice or more — the greedy decoder's echo
+/// on a short clip (stt_bench, 2026-11-09). Collapsed when the copies are closed by punctuation
+/// or are three words or longer; "no no" and "bye bye" stay.
+fn collapse_echo(text: &str) -> String {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    let key = |w: &str| w.trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase();
+    let keys: Vec<String> = words.iter().map(|w| key(w)).collect();
+    if keys.iter().any(String::is_empty) {
+        return text.to_string();
+    }
+    for n in 1..=words.len() / 2 {
+        if words.len() % n != 0 || keys.chunks(n).any(|c| c != &keys[..n]) {
+            continue;
+        }
+        let closed = (1..words.len() / n).all(|i| words[i * n - 1].ends_with([',', '.', '!', '?', ';']));
+        if !closed && n < 3 {
+            continue;
+        }
+        let mut once = words[..n].join(" ");
+        while once.ends_with([',', ';']) {
+            once.pop();
+        }
+        if let Some(end) = words[words.len() - 1].chars().last().filter(|c| matches!(c, '.' | '!' | '?')) {
+            if !once.ends_with(['.', '!', '?']) {
+                once.push(end);
+            }
+        }
+        return once;
+    }
+    text.to_string()
 }
 
 /// "Make the interface red. Make the interface red." → one sentence: the beam search repeats
@@ -816,8 +1013,13 @@ pub fn normalize_stt_transcript(text: &str) -> String {
         .filter(|w| !matches!(*w, "jarvis" | "please" | "bitte"))
         .collect::<Vec<_>>()
         .join(" ");
+    // His name heard as "Java's" / "Java" in front ("Java's Pores." for "Jarvis, pause.").
+    let java = ["java s ", "javas ", "java "].iter().find_map(|p| bare.strip_prefix(p)).map(str::to_string);
+    // (A command said with his name keeps it, so the wake word still hears him.)
+    let named = java.is_some() || out.to_lowercase().split(|c: char| !c.is_alphanumeric()).any(|w| w == "jarvis");
+    let bare = java.unwrap_or(bare);
     let whole = match bare.as_str() {
-        "post" | "pass" | "pos" | "pose" | "pours" | "post it" | "pass it" | "post the music" | "pass the music" | "post music" | "pass music" | "boss"
+        "post" | "pass" | "pos" | "pose" | "pours" | "pores" | "post it" | "pass it" | "post the music" | "pass the music" | "post music" | "pass music" | "boss"
         | "bos" | "bose" => Some("Pause."),
         // "Pause it" heard as "How's it", "Stop" clipped to "Top" when spoken over Jarvis.
         "how s it" | "hows it" | "house it" => Some("Pause it."),
@@ -833,6 +1035,11 @@ pub fn normalize_stt_transcript(text: &str) -> String {
         _ => None,
     };
     match whole {
+        Some(fixed) if named && matches!(fixed, "Pause." | "Pause it." | "Stop." | "Weitermachen." | "Unmute." | "Show my stats.") => {
+            let mut chars = fixed.chars();
+            let first = chars.next().map(|c| c.to_lowercase().collect::<String>()).unwrap_or_default();
+            format!("Jarvis, {first}{}", chars.as_str())
+        }
         Some(fixed) => fixed.to_string(),
         None => out.split_whitespace().collect::<Vec<_>>().join(" "),
     }
@@ -881,6 +1088,10 @@ fn collapse_repetitions(text: &str) -> String {
 }
 
 #[cfg(test)]
+#[path = "stt_bench.rs"]
+mod bench;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::LEGACY_WHISPER_PROMPT;
@@ -893,6 +1104,12 @@ mod tests {
         assert_eq!(normalize_stt_transcript("Fool forget that."), "No, forget that idea.");
         assert!(crate::intent_engine::is_cancel(&normalize_stt_transcript("No fool forgets that idea.")));
         // Instant Replay.
+        assert_eq!(normalize_stt_transcript("Java's Pores."), "Jarvis, pause.");
+        assert_eq!(normalize_stt_transcript("Java, pours."), "Jarvis, pause.");
+        assert_eq!(normalize_stt_transcript("Pores"), "Pause.");
+        assert_eq!(normalize_stt_transcript("Java's top"), "Jarvis, stop.");
+        assert!(crate::intents::is_media_stop(&normalize_stt_transcript("Java's Pores.")));
+        assert_eq!(normalize_stt_transcript("Open the Java post"), "Open the Java post");
         assert_eq!(normalize_stt_transcript("Jarvis, clip it."), "Jarvis, clip the last 60 seconds.");
         assert_eq!(normalize_stt_transcript("Jarvis clipped it"), "Jarvis, clip the last 60 seconds.");
         assert_eq!(normalize_stt_transcript("Clip that!"), "Jarvis, clip the last 60 seconds.");
@@ -1000,7 +1217,7 @@ mod tests {
     fn stt_vocabulary_corrections() {
         assert_eq!(normalize_stt_transcript("Paws."), "pause.");
         assert_eq!(normalize_stt_transcript("Post."), "Pause.");
-        assert_eq!(normalize_stt_transcript("Pass, Jarvis."), "Pause.");
+        assert_eq!(normalize_stt_transcript("Pass, Jarvis."), "Jarvis, pause.");
         assert_eq!(normalize_stt_transcript("Post this on WhatsApp"), "Post this on WhatsApp", "a real sentence keeps its words");
         assert_eq!(normalize_stt_transcript("Un mute"), "unmute");
         assert_eq!(normalize_stt_transcript("On mute."), "Unmute.");
@@ -1095,6 +1312,70 @@ mod tests {
         let candidates = model_candidates("models/ggml-small.bin", "models/ggml-base.bin");
         assert_eq!(&candidates[..2], &["models/ggml-small.bin".to_string(), "models/ggml-base.bin".to_string()]);
         assert!(candidates.iter().filter(|c| c.as_str() == "models/ggml-small.bin").count() == 1, "no duplicates");
+    }
+
+    fn settings(beam_size: i32, languages: &[&str]) -> Settings {
+        Settings {
+            threads: 4,
+            beam_size,
+            prompt: String::new(),
+            languages: languages.iter().map(|l| l.to_string()).collect(),
+            dynamic_ctx: true,
+            min_ctx: 128,
+            fast: true,
+            sot: 0,
+            no_speech: 0,
+            eot: 0,
+        }
+    }
+
+    /// The one-pass decoding: an unsure or looping sentence gets the beam search; a sure one,
+    /// a reflex word or a greedy-only setting does not.
+    #[test]
+    fn only_unsure_sentences_are_decoded_twice() {
+        let s = settings(2, &["de", "en"]);
+        let sentence = SAMPLE_RATE * 2;
+        let heard = |text: &str, avg_logprob: f32| Decoded { text: text.to_string(), avg_logprob };
+        // Sir's clear commands (-0.01 … -0.30) stay at one pass, and so do the bench's middling
+        // ones ("Close it." at -0.61, which the beam made into "Close it. Closed."); a very unsure
+        // sentence ("Include yourself." -1.20) or a loop gets the second.
+        assert!(!wants_beam(&heard("Jarvis, close the Earth.", -0.12), sentence, &s));
+        assert!(!wants_beam(&heard("Close it.", -0.61), sentence, &s));
+        assert!(wants_beam(&heard("Include yourself.", -1.20), sentence, &s));
+        assert!(wants_beam(&heard("Hide your core, hide your core.", -0.21), sentence, &s), "a loop");
+        assert!(!wants_beam(&heard("Stop.", -1.2), SAMPLE_RATE * 8 / 10, &s), "a reflex word stays greedy");
+        assert!(!wants_beam(&heard("Include yourself.", -1.20), sentence, &settings(1, &["de", "en"])), "beam size 1");
+        assert!(!wants_beam(&heard("", 0.0), sentence, &s));
+        // Before anything was heard, English is decoded first (most of his commands).
+        assert_eq!(first_language(&["de".to_string(), "en".to_string()]), "en");
+        assert_eq!(first_language(&["de".to_string()]), "de");
+        assert_eq!(first_language(&[]), "en");
+    }
+
+    /// Repro (stt_bench, 2026-11-09): the greedy decoder said short orders twice.
+    #[test]
+    fn an_order_said_twice_is_heard_once() {
+        assert_eq!(collapse_echo("Hide your core, hide your core."), "Hide your core.");
+        assert_eq!(collapse_echo("Closed. Closed."), "Closed.");
+        assert_eq!(collapse_echo("Jarvis closed the Earth Jarvis closed the Earth"), "Jarvis closed the Earth");
+        assert_eq!(collapse_echo("java is what playing java is what playing"), "java is what playing");
+        for kept in ["no no", "bye bye", "Close it.", "Hide your core and show your core.", "very very good", ""] {
+            assert_eq!(collapse_echo(kept), kept, "{kept}");
+        }
+        assert_eq!(filter_hallucinations("Hide your core, hide your core.", "", false), "Hide your core.");
+        assert!(loops("Hide your core, hide your core.") && loops("go go go go go") && !loops("Hide your core."));
+    }
+
+    /// What a change of his name needs (2026-11-08: "Call me Earth." at -0.57, language 0.50,
+    /// no-speech 0.30, said over Jarvis' voice).
+    #[test]
+    fn a_name_change_needs_a_sure_ear() {
+        let q = |avg_logprob, language_prob, no_speech| HeardQuality { avg_logprob, language_prob, no_speech };
+        assert!(!q(-0.57, 0.50, 0.30).confident(), "the misheard 'Call me Earth.'");
+        assert!(!q(-1.20, 0.95, 0.05).confident(), "'Include yourself.'");
+        assert!(!q(-0.10, 0.20, 0.05).confident(), "not the language it was written in");
+        assert!(q(-0.12, 0.98, 0.02).confident());
+        assert!(q(-0.30, 0.55, 0.10).confident(), "accented English");
     }
 
     #[test]

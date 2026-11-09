@@ -1,5 +1,5 @@
 //! The exhaustive scenario verifier (`JARVIS.exe --exhaustive [runs]`): every command family
-//! in five passes, the whole interface inspected as geometry, both voices on five kinds of
+//! in five passes, the whole interface inspected as geometry, Jarvis' voice on five kinds of
 //! sentence, the privacy lock, the monitors and the two audio sinks, and every button of the
 //! Feature Lab pressed five times — all of it in the running app, silently, with the HUD drawn
 //! offscreen (`gui::offscreen`), run after run until five runs in a row are clean.
@@ -8,14 +8,14 @@
 //!   clean English; German and Denglisch; noisy, fast and misheard; four commands inside
 //!   400 ms spoken over Jarvis' own voice (through the real dispatcher, in a process-wide dry
 //!   run); a compound sentence whose every clause must be carried out. A request is judged by
-//!   the handler it reaches, never by words: the wrong tool, the music player for a mode
-//!   switch, or a dropped clause is a failure.
+//!   the handler it reaches, never by words: the wrong tool, the music player for an undo, or
+//!   a dropped clause is a failure.
 //! * **Matrix B** — `visual_ui_verifier` on the real HUD at four screen sizes: no clipped text,
 //!   no overlap with 1, 2, 4, 8 and 12 blocks, blocks and the orb follow a drag exactly, every
 //!   stroke in the active theme, the page keys large enough and working, no jump in any
 //!   animation.
-//! * **Matrix C** — Jarvis' and Ultron's voices on five sentence types against their clips
-//!   (128-band spectral similarity ≥ 0.97) and the homograph "live" read as "lyve".
+//! * **Matrix C** — Jarvis' voice on five sentence types against his clip (128-band spectral
+//!   similarity ≥ 0.97) and the homograph "live" read as "lyve".
 //! * **Matrix D** — the HUD on every monitor and spanning all of them; ten wake words against
 //!   the privacy lock; "stop listening for one minute"; the microphone chip; one clause reaching
 //!   both audio sinks and the loopback gate's 250 ms tail.
@@ -50,6 +50,8 @@ pub const BARGE_IN_WINDOW_MS: u128 = 400;
 pub const DEFAULT_RUNS: usize = 5;
 /// One frame at 180 Hz, in milliseconds: what the HUD's own work per frame must stay under.
 pub const FRAME_BUDGET_MS: f64 = 5.5;
+/// What matrix B types into the text console, one per screen size and run; each must complete.
+const CONSOLE_PREFIXES: [&str; 5] = ["op", "tu so cu", "mo orb", "näch", "tile"];
 
 /// What the app must be showing for a sentence to mean what the table says.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,8 +59,6 @@ pub enum Needs {
     Nothing,
     /// A board with a stack of pages is up ("next" then means the next page).
     Pages,
-    /// Ultron Mode is on ("change back" then means back to Jarvis).
-    Ultron,
 }
 
 /// One sentence of matrix A and the handler it must reach: `tool` (alternatives separated by
@@ -81,10 +81,6 @@ const fn paged(category: &'static str, pass: u8, say: &'static str, tool: &'stat
     Case { category, pass, say, tool, args, needs: Needs::Pages }
 }
 
-const fn ultron(category: &'static str, pass: u8, say: &'static str, tool: &'static str, args: &'static str) -> Case {
-    Case { category, pass, say, tool, args, needs: Needs::Ultron }
-}
-
 /// Matrix A, passes 1-3.
 pub const CASES: &[Case] = &[
     // ---- The core view ----
@@ -95,15 +91,6 @@ pub const CASES: &[Case] = &[
     c("core", 3, "close your car", "configure_interface", r#"{"core_view": false}"#),
     c("core", 3, "hide your call", "configure_interface", r#"{"core_view": false}"#),
     c("core", 3, "hide your for C-O-R-E", "configure_interface", r#"{"core_view": false}"#),
-    // ---- Ultron ⇄ Jarvis ----
-    c("mode", 1, "Switch to Ultron.", "ultron_mode", r#"{"on": true}"#),
-    c("mode", 1, "Change back to Jarvis.", "ultron_mode", r#"{"on": false}"#),
-    ultron("mode", 1, "Change back.", "ultron_mode", r#"{"on": false}"#),
-    c("mode", 2, "Wechsel zu Ultron.", "ultron_mode", r#"{"on": true}"#),
-    c("mode", 2, "Zurück zu Jarvis.", "ultron_mode", r#"{"on": false}"#),
-    c("mode", 3, "Ultron switch back to Jarvis", "ultron_mode", r#"{"on": false}"#),
-    c("mode", 3, "change back to jarvis", "ultron_mode", r#"{"on": false}"#),
-    ultron("mode", 3, "switch back", "ultron_mode", r#"{"on": false}"#),
     // ---- Undo ----
     c("undo", 1, "Undo that.", "undo_last_action", "{}"),
     c("undo", 1, "Put it back.", "undo_last_action", "{}"),
@@ -112,6 +99,10 @@ pub const CASES: &[Case] = &[
     c("undo", 2, "Nimm das zurück.", "undo_last_action", "{}"),
     c("undo", 3, "uh undo that", "undo_last_action", "{}"),
     c("undo", 3, "never mind undo that", "undo_last_action", "{}"),
+    // (A misheard request's change, 2026-11-08: "Call me Earth." became Sir's title.)
+    c("undo", 1, "That's not what I said.", "undo_last_action", r#"{"within_s": 120}"#),
+    c("undo", 2, "Das habe ich nicht gesagt.", "undo_last_action", r#"{"within_s": 120}"#),
+    c("undo", 3, "you misheard me", "undo_last_action", r#"{"within_s": 120}"#),
     c("undo", 1, "What did you just do?", "recent_actions", "{}"),
     c("undo", 2, "Was hast du gerade gemacht?", "recent_actions", "{}"),
     c("undo", 1, "What's new?", "whats_new", "{}"),
@@ -282,6 +273,57 @@ pub const CASES: &[Case] = &[
     c("panels", 3, "hey jarvis check check the network", "open_jarvis_view", r#"{"view": "network_radar"}"#),
     c("panels", 3, "where did all my space go", "open_jarvis_view", r#"{"view": "disk_map"}"#),
     c("panels", 3, "show me the globe", "open_jarvis_view", r#"{"view": "earth"}"#),
+    // (The Earth made useful: where Sir is, the terrain, the weather, a past day, the tour.)
+    c("panels", 1, "Where am I on the map?", "open_jarvis_view", r#"{"view": "earth", "action": "show_my_location"}"#),
+    c("panels", 1, "Show me the mountains.", "open_jarvis_view", r#"{"view": "earth", "action": "show_mountains"}"#),
+    c("panels", 1, "Show me the rain radar.", "open_jarvis_view", r#"{"view": "earth", "action": "show_radar"}"#),
+    c("panels", 1, "Show me the clouds on 1 March 2024.", "open_jarvis_view", r#"{"view": "earth", "action": "show_clouds"}"#),
+    c("panels", 1, "What did Europe look like yesterday?", "open_jarvis_view", r#"{"view": "earth", "action": "show_date", "place": "Europe"}"#),
+    c("panels", 1, "What's happening in the world?", "open_jarvis_view", r#"{"view": "earth", "action": "show_world_tour"}"#),
+    c("panels", 2, "Zeig mir, wo ich bin.", "open_jarvis_view", r#"{"view": "earth", "action": "show_my_location"}"#),
+    c("panels", 2, "Zeig mir die Berge.", "open_jarvis_view", r#"{"view": "earth", "action": "show_mountains"}"#),
+    c("panels", 2, "Zeig mir das Regenradar.", "open_jarvis_view", r#"{"view": "earth", "action": "show_radar"}"#),
+    c("panels", 2, "Was passiert in der Welt?", "open_jarvis_view", r#"{"view": "earth", "action": "show_world_tour"}"#),
+    c("panels", 3, "locate me", "open_jarvis_view", r#"{"view": "earth", "action": "show_my_location"}"#),
+    c("panels", 3, "exaggerate the terrain", "open_jarvis_view", r#"{"view": "earth", "action": "exaggerate_terrain"}"#),
+    c("panels", 3, "give me a world tour", "open_jarvis_view", r#"{"view": "earth", "action": "show_world_tour"}"#),
+    // ---- His own views moved and sized (the log of 2026-11-08 had no tool for the first two) ----
+    c("arrange", 1, "Move it to the middle of my screen.", "arrange_jarvis_window", r#"{"target": "it", "action": "move", "position": "centre"}"#),
+    c("arrange", 1, "No Jarvis, can you full screen the Earth?", "arrange_jarvis_window", r#"{"target": "earth", "action": "fullscreen"}"#),
+    c("arrange", 1, "Put the earth on the left half.", "arrange_jarvis_window", r#"{"target": "earth", "action": "move", "position": "left"}"#),
+    c("arrange", 1, "Move the radar to my second monitor.", "arrange_jarvis_window", r#"{"target": "radar", "action": "to_monitor"}"#),
+    c("arrange", 1, "Put them side by side.", "arrange_jarvis_window", r#"{"target": "them", "action": "side_by_side"}"#),
+    c("arrange", 1, "Resize it to half the screen.", "arrange_jarvis_window", r#"{"target": "it", "action": "resize", "size": "half"}"#),
+    c("arrange", 2, "Verschieb es in die Mitte.", "arrange_jarvis_window", r#"{"target": "it", "action": "move", "position": "centre"}"#),
+    c("arrange", 2, "Zentriere die Erde.", "arrange_jarvis_window", r#"{"target": "erde", "action": "move", "position": "centre"}"#),
+    c("arrange", 2, "Mach die Erde größer.", "arrange_jarvis_window", r#"{"target": "erde", "action": "resize", "size": "bigger"}"#),
+    c("arrange", 3, "uh centre the earth", "arrange_jarvis_window", r#"{"target": "earth", "action": "move", "position": "centre"}"#),
+    c("arrange", 3, "full screen the globe", "arrange_jarvis_window", r#"{"target": "globe", "action": "fullscreen"}"#),
+    // (jarvis.log 2026-11-08: fillers after a close were asked of Windows as programs.)
+    c("panels", 1, "Jarvis, close the Earth, you.", "hud_board", r#"{"action": "close", "target": "earth"}"#),
+    c("panels", 3, "close the world please", "hud_board", r#"{"action": "close", "target": "earth"}"#),
+    c("blocks", 1, "Jarvis close up.", "close_application", r#"{"app_name": "it", "own_only": true}"#),
+    c("blocks", 3, "jarvis close off please", "close_application", r#"{"app_name": "it", "own_only": true}"#),
+    // ---- The 3D studio (demo models in a test run: nothing is downloaded) ----
+    c("studio3d", 1, "Render me an Iron Man suit in 3D.", "show_3d_model", r#"{"query": "iron man suit"}"#),
+    c("studio3d", 1, "Show me a 3D model of the Earth.", "show_3d_model", r#"{"query": "earth"}"#),
+    c("studio3d", 2, "Zeig mir den Mars in 3D.", "show_3d_model", r#"{"query": "mars"}"#),
+    c("studio3d", 2, "3D-Modell vom Saturn.", "show_3d_model", r#"{"query": "saturn"}"#),
+    c("studio3d", 3, "render me an iron man suit in three d please", "show_3d_model", r#"{"query": "iron man suit"}"#),
+    // live layers (C1): satellites, passes, trains, departures, traffic, rain, past weather.
+    c("live data", 1, "Show me all satellites.", "open_jarvis_view", r#"{"view": "earth", "action": "show_satellites", "group": "active"}"#),
+    c("live data", 1, "When can I see the ISS?", "open_jarvis_view", r#"{"view": "live", "action": "passes", "satellite": "ISS"}"#),
+    c("live data", 1, "Where is Hubble?", "open_jarvis_view", r#"{"view": "earth", "action": "find_satellite", "name": "Hubble"}"#),
+    c("live data", 1, "When's my next train?", "open_jarvis_view", r#"{"view": "departures"}"#),
+    c("live data", 1, "How's the traffic on the A8?", "open_jarvis_view", r#"{"view": "live", "action": "traffic", "road": "A8"}"#),
+    c("live data", 1, "Will it rain in the next hour?", "open_jarvis_view", r#"{"view": "live", "action": "rain_soon"}"#),
+    c("live data", 1, "What was the weather in Berlin on 3 May 2020?", "open_jarvis_view", r#"{"view": "live", "action": "weather_on", "date": "2020-05-03", "place": "Berlin"}"#),
+    c("live data", 2, "Wann sehe ich die ISS?", "open_jarvis_view", r#"{"view": "live", "action": "passes", "satellite": "ISS"}"#),
+    c("live data", 2, "Wann fährt meine Bahn?", "open_jarvis_view", r#"{"view": "departures"}"#),
+    c("live data", 2, "Regnet es gleich?", "open_jarvis_view", r#"{"view": "live", "action": "rain_soon"}"#),
+    c("live data", 3, "show me starlink", "open_jarvis_view", r#"{"view": "earth", "action": "show_satellites", "group": "starlink"}"#),
+    c("live data", 3, "departures from karlsruhe hbf", "open_jarvis_view", r#"{"view": "departures", "station": "Karlsruhe Hbf"}"#),
+    c("live data", 3, "show me the trains around stuttgart", "open_jarvis_view", r#"{"view": "earth", "action": "show_trains", "place": "Stuttgart"}"#),
     // ---- The board's own controls: tidy, find, sound cues ----
     c("blocks", 1, "Tidy the windows.", "hud_board", r#"{"action": "tidy"}"#),
     c("blocks", 1, "Find voltage on the board.", "hud_board", r#"{"action": "find", "target": "voltage"}"#),
@@ -397,6 +439,29 @@ pub const CASES: &[Case] = &[
     c("undo", 1, "Change it back.", "undo_last_action", "{}"),
     c("undo", 2, "Ändere es zurück.", "undo_last_action", "{}"),
     c("chemistry", 1, "How many moles are in 36 grams of water?", "chemistry_helper", r#"{"action": "moles"}"#),
+    // Pictures, live cameras, street view (their dry runs never reach the network).
+    c("pictures", 1, "Show me a picture of the Eiffel Tower.", "show_image", r#"{"query": "eiffel tower"}"#),
+    c("pictures", 1, "Open an image of the Earth.", "show_image", r#"{"query": "the Earth"}"#),
+    c("pictures", 1, "Open my latest screenshot.", "show_image", r#"{"local": "latest_screenshot"}"#),
+    c("pictures", 1, "Show me the photo on my desktop.", "show_image", r#"{"local": "desktop"}"#),
+    c("pictures", 1, "Next picture.", "show_image", r#"{"action": "next"}"#),
+    c("pictures", 1, "Save this picture.", "show_image", r#"{"action": "save"}"#),
+    c("pictures", 2, "Zeig mir ein Bild von Neuschwanstein.", "show_image", r#"{"query": "neuschwanstein"}"#),
+    c("pictures", 2, "Zeig mir meinen letzten Screenshot.", "show_image", r#"{"local": "latest_screenshot"}"#),
+    c("pictures", 2, "Nächstes Bild.", "show_image", r#"{"action": "next"}"#),
+    c("pictures", 3, "uh jarvis could you show me some photos of tokyo please", "show_image", r#"{"query": "tokyo"}"#),
+    c("pictures", 3, "show me tokyo pictures", "show_image", r#"{"query": "tokyo"}"#),
+    c("cameras", 1, "Show me cameras in London.", "show_live_camera", r#"{"place": "london"}"#),
+    c("cameras", 1, "Show me a live camera from New York.", "show_live_camera", r#"{"place": "new york"}"#),
+    c("cameras", 1, "Show me the camera nearest to me.", "show_live_camera", r#"{"near_me": true}"#),
+    c("cameras", 1, "Show me a 3 by 3 camera wall of Hong Kong.", "show_live_camera", r#"{"action": "wall", "size": 9}"#),
+    c("cameras", 2, "Zeig mir eine Webcam in Stuttgart.", "show_live_camera", r#"{"place": "stuttgart"}"#),
+    c("cameras", 2, "Zeig mir Webcams in meiner Nähe.", "show_live_camera", r#"{"near_me": true}"#),
+    c("cameras", 3, "uh jarvis show me a live cam in tokyo please", "show_live_camera", r#"{"place": "tokyo"}"#),
+    c("street view", 1, "Show me street view of the Eiffel Tower.", "show_street_view", r#"{"place": "eiffel tower"}"#),
+    c("street view", 1, "Street view here.", "show_street_view", r#"{"here": true}"#),
+    c("street view", 2, "Zeig mir die Straßenansicht vom Brandenburger Tor.", "show_street_view", r#"{"place": "brandenburger tor"}"#),
+    c("street view", 3, "uh jarvis show me street level photos of times square", "show_street_view", r#"{"place": "times square"}"#),
 ];
 
 /// One compound sentence of pass 5: every `wants` entry must be reached.
@@ -415,13 +480,13 @@ const STATS: (&str, &str) = ("open_jarvis_view", r#"{"view": "system_stats"}"#);
 /// Matrix A, pass 5: one compound per category.
 pub const COMPOUNDS: &[Compound] = &[
     Compound { category: "core", say: "Show me your core, set theme to Arc Cyan and move the orb to the top right.", wants: &[("configure_interface", r#"{"core_view": true}"#), THEME_CYAN, ORB_TOP_RIGHT], needs: Needs::Nothing },
-    Compound { category: "mode", say: "Switch back to Jarvis, set theme to Arc Cyan, move the orb to the top right, and open my WebUntis schedule.", wants: &[("ultron_mode", r#"{"on": false}"#), THEME_CYAN, ORB_TOP_RIGHT, ("check_school_schedule|open_jarvis_view", "{}")], needs: Needs::Ultron },
     Compound { category: "undo", say: "Undo that and move the orb to the top right.", wants: &[("undo_last_action", "{}"), ORB_TOP_RIGHT], needs: Needs::Nothing },
     Compound { category: "mix", say: "Load my gaming mix and pause the music.", wants: &[("control_audio_mixer", r#"{"action": "load_mix", "name": "gaming"}"#), PAUSE], needs: Needs::Nothing },
     Compound { category: "no sound", say: "There's no sound and open the mixer.", wants: &[("control_audio_mixer", r#"{"action": "no_sound"}"#), ("configure_interface", r#"{"mixer_view": true}"#)], needs: Needs::Nothing },
     Compound { category: "programs", say: "Turn Firefox off and open the mixer.", wants: &[("close_application", r#"{"app_name": "firefox"}"#), ("configure_interface", r#"{"mixer_view": true}"#)], needs: Needs::Nothing },
     Compound { category: "mixer block", say: "Open the mixer and mute Discord.", wants: &[("configure_interface", r#"{"mixer_view": true}"#), ("control_audio_mixer", r#"{"action": "mute_app", "app": "discord"}"#)], needs: Needs::Nothing },
     Compound { category: "theme studio", say: "Open the theme studio and move the orb to the top right.", wants: &[("configure_interface", r#"{"theme_studio": true}"#), ORB_TOP_RIGHT], needs: Needs::Nothing },
+    Compound { category: "studio3d", say: "Render me the Moon in 3D and set theme to Arc Cyan.", wants: &[("show_3d_model", r#"{"query": "moon"}"#), THEME_CYAN], needs: Needs::Nothing },
     Compound { category: "notes", say: "Put a note on the board saying buy milk and move the orb to the top right.", wants: &[("create_or_update_widget", r#"{"markdown": "buy milk"}"#), ORB_TOP_RIGHT], needs: Needs::Nothing },
     Compound { category: "checklists", say: "Add butter to my shopping list and start a stopwatch.", wants: &[("create_or_update_widget", r#"{"type": "Checklist"}"#), ("create_or_update_widget", r#"{"mode": "stopwatch"}"#)], needs: Needs::Nothing },
     Compound { category: "stopwatch", say: "Start a stopwatch and pause the music.", wants: &[("create_or_update_widget", r#"{"mode": "stopwatch"}"#), PAUSE], needs: Needs::Nothing },
@@ -432,7 +497,7 @@ pub const COMPOUNDS: &[Compound] = &[
     Compound { category: "theme", say: "Set theme to Stark Gold and show me your core.", wants: &[("configure_interface", r#"{"hud_palette": "stark_gold"}"#), ("configure_interface", r#"{"core_view": true}"#)], needs: Needs::Nothing },
     Compound { category: "close", say: "Close the feature lab and clear the board.", wants: &[("hud_board", r#"{"action": "close", "target": "feature lab"}"#), ("hud_board", r#"{"action": "clear"}"#)], needs: Needs::Nothing },
     Compound { category: "pages", say: "Next page and move the orb to the top right.", wants: &[("hud_board", r#"{"action": "flip_note", "direction": "next"}"#), ORB_TOP_RIGHT], needs: Needs::Pages },
-    Compound { category: "listening", say: "Switch back to Jarvis and stop listening.", wants: &[("ultron_mode", r#"{"on": false}"#), ("listening_lock", r#"{"command": "Lock"}"#)], needs: Needs::Ultron },
+    Compound { category: "listening", say: "Set theme to Arc Cyan and stop listening.", wants: &[THEME_CYAN, ("listening_lock", r#"{"command": "Lock"}"#)], needs: Needs::Nothing },
     Compound { category: "music", say: "Pause the music and set theme to Arc Cyan.", wants: &[PAUSE, THEME_CYAN], needs: Needs::Nothing },
     Compound { category: "volume", say: "Volume 40 and next song.", wants: &[("control_audio_mixer", r#"{"action": "set_master", "level": 40}"#), ("control_music", r#"{"action": "next_track"}"#)], needs: Needs::Nothing },
     Compound { category: "monitors", say: "Use all monitors and set theme to Arc Cyan.", wants: &[("configure_interface", r#"{"span_all_monitors": true}"#), THEME_CYAN], needs: Needs::Nothing },
@@ -440,6 +505,9 @@ pub const COMPOUNDS: &[Compound] = &[
     Compound { category: "research", say: "Research solid state batteries and move the orb to the top right.", wants: &[("hud_board", r#"{"action": "research"}"#), ORB_TOP_RIGHT], needs: Needs::Nothing },
     Compound { category: "holomat", say: "Open the simulation lab and pause the music.", wants: &[("open_jarvis_view", r#"{"view": "simulation_lab"}"#), PAUSE], needs: Needs::Nothing },
     Compound { category: "panels", say: "Check the network and pause the music.", wants: &[("open_jarvis_view", r#"{"view": "network_radar"}"#), PAUSE], needs: Needs::Nothing },
+    Compound { category: "arrange", say: "Centre the Earth and pause the music.", wants: &[("arrange_jarvis_window", r#"{"target": "earth", "action": "move", "position": "centre"}"#), PAUSE], needs: Needs::Nothing },
+    // live layers (C1)
+    Compound { category: "live data", say: "Show me Starlink and pause the music.", wants: &[("open_jarvis_view", r#"{"view": "earth", "action": "show_satellites", "group": "starlink"}"#), PAUSE], needs: Needs::Nothing },
     Compound { category: "blocks", say: "Tidy the windows and turn off the sound cues.", wants: &[("hud_board", r#"{"action": "tidy"}"#), ("configure_interface", r#"{"sound_cues": false}"#)], needs: Needs::Nothing },
     Compound { category: "flashcards", say: "Quiz me on my flashcards and pause the music.", wants: &[("manage_flashcards", r#"{"action": "quiz"}"#), PAUSE], needs: Needs::Nothing },
     Compound { category: "formula", say: "Show me the formula for kinetic energy and open my system stats.", wants: &[("lookup_formula", "{}"), STATS], needs: Needs::Nothing },
@@ -451,6 +519,9 @@ pub const COMPOUNDS: &[Compound] = &[
     Compound { category: "clipboard", say: "Show my clipboard history and pause the music.", wants: &[("clipboard_history", r#"{"action": "list"}"#), PAUSE], needs: Needs::Nothing },
     Compound { category: "tiler", say: "Tile my windows side by side and pause the music.", wants: &[("tile_windows", r#"{"layout": "side_by_side"}"#), PAUSE], needs: Needs::Nothing },
     Compound { category: "palette", say: "What can I say that starts with open and pause the music.", wants: &[("suggest_commands", r#"{"prefix": "open"}"#), PAUSE], needs: Needs::Nothing },
+    Compound { category: "pictures", say: "Show me a picture of the Eiffel Tower and pause the music.", wants: &[("show_image", r#"{"query": "eiffel tower"}"#), PAUSE], needs: Needs::Nothing },
+    Compound { category: "cameras", say: "Show me a live camera from New York and move the orb to the top right.", wants: &[("show_live_camera", r#"{"place": "new york"}"#), ORB_TOP_RIGHT], needs: Needs::Nothing },
+    Compound { category: "street view", say: "Show me street view of the Eiffel Tower and pause the music.", wants: &[("show_street_view", r#"{"place": "eiffel tower"}"#), PAUSE], needs: Needs::Nothing },
 ];
 
 /// The categories of matrix A, in the table's order.
@@ -505,7 +576,7 @@ fn verdict(calls: &[(String, Value)], wants: &[(&str, &str)]) -> Result<String, 
 
 /// The reflex context a case's sentence is said in (what the app's state would be for it).
 pub fn context_for(needs: Needs) -> ReflexContext {
-    ReflexContext { ultron: needs == Needs::Ultron, board_up: needs == Needs::Pages, spotlight: false, paged: needs == Needs::Pages }
+    ReflexContext { board_up: needs == Needs::Pages, spotlight: false, paged: needs == Needs::Pages }
 }
 
 // --------------------------------------------------------------------------- matrix A ----
@@ -519,7 +590,7 @@ fn paged_report() -> crate::hud_board::Report {
 
 /// Puts the app in the state a sentence needs (and out of the states it must not be in).
 /// False when that state is Sir's right now and must not be touched.
-fn prepare(app: &Jarvis, needs: Needs, ours: &mut bool) -> bool {
+fn prepare(needs: Needs, ours: &mut bool) -> bool {
     let board_up = crate::hud_board::is_active();
     match needs {
         Needs::Pages if !board_up => {
@@ -534,10 +605,6 @@ fn prepare(app: &Jarvis, needs: Needs, ours: &mut bool) -> bool {
         }
         _ => {}
     }
-    let want_ultron = needs == Needs::Ultron;
-    if crate::ultron_mode::active() != want_ultron {
-        app.set_ultron_quietly(want_ultron);
-    }
     true
 }
 
@@ -550,7 +617,7 @@ async fn dry_timed(app: &Jarvis, say: &str, budget_ms: f64, needs: Needs, ours: 
     let (mut recorded, took) = app.dry_run(say, true).await;
     let mut ms = took.as_secs_f64() * 1000.0;
     for _ in 0..crate::live_self_tester::AGAIN {
-        if ms <= budget_ms || !prepare(app, needs, ours) {
+        if ms <= budget_ms || !prepare(needs, ours) {
             break;
         }
         tokio::time::sleep(crate::live_self_tester::AGAIN_AFTER).await;
@@ -596,14 +663,14 @@ async fn matrix_a(app: &Jarvis) {
     // Every sentence once without a verdict: its patterns are compiled, as they are for Sir
     // after the start-up warm-up.
     for (say, needs) in CASES.iter().map(|c| (c.say, c.needs)).chain(COMPOUNDS.iter().map(|c| (c.say, c.needs))) {
-        if prepare(app, needs, &mut ours) {
+        if prepare(needs, &mut ours) {
             let _ = app.dry_run(say, true).await;
         }
     }
     // Passes 1-3.
     for case in CASES {
         let id = format!("{} / pass {} / {}", case.category, case.pass, case.say);
-        if !prepare(app, case.needs, &mut ours) {
+        if !prepare(case.needs, &mut ours) {
             skip("matrix A", id, "a board of Sir's is up; it is not replaced");
             continue;
         }
@@ -613,7 +680,7 @@ async fn matrix_a(app: &Jarvis) {
     // Pass 5: every clause of a compound sentence.
     for compound in COMPOUNDS {
         let id = format!("{} / pass 5 / {}", compound.category, compound.say);
-        if !prepare(app, compound.needs, &mut ours) {
+        if !prepare(compound.needs, &mut ours) {
             skip("matrix A", id, "a board of Sir's is up; it is not replaced");
             continue;
         }
@@ -622,13 +689,13 @@ async fn matrix_a(app: &Jarvis) {
         let result = verdict(&calls, compound.wants).map(|did| format!("{} actions: {did}", calls.len()));
         judge("matrix A", id, COMPOUND_BUDGET_MS, ms, result);
     }
-    prepare(app, Needs::Nothing, &mut ours);
+    prepare(Needs::Nothing, &mut ours);
     app.history_rollback(mark).await;
     // Pass 4: four commands inside 400 ms, spoken over his own voice.
     for category in categories() {
         barge_in(app, category, &mut ours).await;
     }
-    prepare(app, Needs::Nothing, &mut ours);
+    prepare(Needs::Nothing, &mut ours);
     app.history_rollback(mark).await;
     crate::listening_lock::apply(crate::listening_lock::LockCommand::Resume);
 }
@@ -648,9 +715,9 @@ const SETTLE_LIMIT: Duration = Duration::from_secs(30);
 /// must have been cut, and the last command must have reached its handler.
 async fn barge_in(app: &Jarvis, category: &'static str, ours: &mut bool) {
     let id = format!("{category} / pass 4 / four commands inside {BARGE_IN_WINDOW_MS} ms over his voice");
-    let cases: Vec<&Case> = CASES.iter().filter(|c| c.category == category && c.needs != Needs::Ultron).collect();
+    let cases: Vec<&Case> = CASES.iter().filter(|c| c.category == category).collect();
     let needs = if cases.iter().any(|c| c.needs == Needs::Pages) { Needs::Pages } else { Needs::Nothing };
-    if cases.is_empty() || !prepare(app, needs, ours) {
+    if cases.is_empty() || !prepare(needs, ours) {
         skip("matrix A", id, "the state it needs is Sir's right now");
         return;
     }
@@ -667,15 +734,11 @@ async fn barge_in(app: &Jarvis, category: &'static str, ours: &mut bool) {
     // The dispatcher's own switches are judged by the state they leave; everything else by
     // what the dry run recorded.
     let handled = match last.tool {
-        "ultron_mode" => crate::ultron_mode::active() == want["on"].as_bool().unwrap_or(false),
         "listening_lock" => crate::listening_lock::is_locked() != (want["command"] == "Resume"),
         tool => reached(&log, tool, last.args),
     };
     // Whatever the burst switched is switched back.
     crate::listening_lock::apply(crate::listening_lock::LockCommand::Resume);
-    if crate::ultron_mode::active() {
-        app.set_ultron_quietly(false);
-    }
     let mut wrong: Vec<String> = Vec::new();
     if !outcome.was_speaking {
         wrong.push("he was not speaking when the first command arrived".to_string());
@@ -729,20 +792,37 @@ fn text_findings(frame: &visual::Frame) -> Vec<String> {
     found
 }
 
-/// The window animations as the window plays them, on the real HUD: a block grows into its
+/// The window animations as the window plays them, on the real HUD: a block unfolds into its
 /// place as it opens, its content showing after its frame, and closed by its `[ CLOSE ]` it
 /// plays its exit (drawn smaller, still there) before it leaves.
 fn window_motion(hud: &mut crate::gui::offscreen::VirtualHud, tools: &ToolContext, rows: &mut Vec<Row>) {
     let started = Instant::now();
     let mut found = Vec::new();
     let id = block_id(0);
-    // How much narrower than its place the block's frame is drawn (none: not drawn), and
-    // whether its title shows.
+    // How tall the block's frame is drawn (none: not drawn), and whether its title shows.
+    // (`gui::WindowMotion` unfolds the frame about its middle at full width and never scales
+    // it; the content inside is clipped to that band, so a fill counts by what of it shows.
+    // egui's own `Frame::none()` leaves a transparent rect over the whole place: not a frame.)
+    // For a failure, the visible heights of the fills spanning the block, frame by frame.
+    let heights_seen: std::cell::RefCell<Vec<String>> = Default::default();
     let look = |frame: &visual::Frame| -> (Option<f32>, bool) {
-        let Some(place) = crate::hud_dock::block_rect(&id) else { return (None, false) };
-        let widest = frame.fills.iter().filter(|f| (f.rect.center() - place.center()).length() <= 2.0 && f.rect.width() <= place.width() + 1.0 && f.rect.width() >= place.width() * 0.8).map(|f| f.rect.width()).fold(None, |m: Option<f32>, w| Some(m.map_or(w, |m| m.max(w))));
+        let Some(place) = crate::hud_dock::block_rect(&id) else {
+            heights_seen.borrow_mut().push("-".into());
+            return (None, false);
+        };
+        let spans: Vec<f32> = frame
+            .fills
+            .iter()
+            .filter(|f| f.cover > 0)
+            .map(|f| f.rect.intersect(f.clip))
+            .filter(|r| r.is_positive() && place.expand(2.0).contains_rect(*r) && r.width() >= place.width() * 0.8 && (r.center().x - place.center().x).abs() <= 4.0)
+            .map(|r| r.height())
+            .collect();
+        if heights_seen.borrow().len() < 40 {
+            heights_seen.borrow_mut().push(format!("[{}]", spans.iter().map(|h| format!("{h:.0}")).collect::<Vec<_>>().join(",")));
+        }
         let titled = frame.find_text("verifier // entrance").iter().any(|t| place.expand(2.0).contains(t.center()));
-        (widest.map(|w| (place.width() - w).max(0.0)), titled)
+        (spans.into_iter().reduce(f32::max), titled)
     };
     hud.animate_windows(true);
     let _ = tools.widgets.spawn_window(&json!({ "id": id, "title": "Verifier // entrance", "markdown": "The reactor holds its output.", "replace_content": true, "width": 540, "height": 330 }));
@@ -756,22 +836,26 @@ fn window_motion(hud: &mut crate::gui::offscreen::VirtualHud, tools: &ToolContex
             entrance.push(seen);
         }
     }
-    let narrowest = entrance.iter().filter_map(|s| s.0).fold(0.0f32, f32::max);
+    // At rest: the frame's height in the last frame. The unfold: how much shorter it was.
+    let rest = entrance.last().and_then(|s| s.0).unwrap_or(0.0);
+    let narrowest = entrance.iter().filter_map(|s| s.0).map(|h| rest - h).fold(0.0f32, f32::max);
+    let diagnosis = || format!("place {:?}, frame heights per frame {}", crate::hud_dock::block_rect(&id).map(|r| r.size()), heights_seen.borrow().join(" "));
     match entrance.last() {
         None => found.push("the block's frame was never drawn".to_string()),
-        Some(&(gap, titled)) => {
+        Some(&(_, titled)) => {
             if narrowest < 2.0 {
-                found.push(format!("the block did not grow into its place (at most {narrowest:.1} px narrower than at rest)"));
+                found.push(format!("the block did not unfold into its place (at most {narrowest:.1} px shorter than at rest; {})", diagnosis()));
             }
-            if gap.unwrap_or(0.0) > 1.0 || !titled {
-                found.push(format!("after its entrance the block is {:.1} px narrower than its place{}", gap.unwrap_or(0.0), if titled { "" } else { " and its title is not drawn" }));
+            let place_h = crate::hud_dock::block_rect(&id).map_or(0.0, |r| r.height());
+            if rest < place_h * 0.85 || !titled {
+                found.push(format!("after its entrance the block's frame is {rest:.0} px of its {place_h:.0} px place{}", if titled { "" } else { " and its title is not drawn" }));
             }
             if entrance.first().is_some_and(|s| s.1) {
                 found.push("the block's title showed in its first frame (its content should come in after its frame)".to_string());
             }
         }
     }
-    // The exit: closed by hand, it is still there for a moment, drawn smaller, then gone.
+    // The exit: closed by hand, it is still there for a moment, folding, then gone.
     let frame = hud.frames_at(2, 60.0);
     let place = crate::hud_dock::block_rect(&id);
     match frame.find_exact("[ CLOSE ]").into_iter().find(|r| place.is_some_and(|p| p.contains(r.center()))) {
@@ -783,15 +867,15 @@ fn window_motion(hud: &mut crate::gui::offscreen::VirtualHud, tools: &ToolContex
             let closed_at = Instant::now();
             let mut smallest = 0.0f32;
             while closed_at.elapsed() < Duration::from_millis(1500) && crate::hud_dock::is_open(&id) {
-                if let (Some(gap), _) = look(&hud.frame(1.0 / 60.0)) {
-                    smallest = smallest.max(gap);
+                if let (Some(h), _) = look(&hud.frame(1.0 / 60.0)) {
+                    smallest = smallest.max(rest - h);
                 }
             }
             hud.frames_at(3, 60.0);
             if !leaving {
                 found.push("the block vanished at the click instead of playing its exit".to_string());
             } else if smallest < 1.5 {
-                found.push(format!("the block did not shrink as it left (at most {smallest:.1} px narrower)"));
+                found.push(format!("the block did not fold as it left (at most {smallest:.1} px shorter; {})", diagnosis()));
             }
             if crate::hud_dock::is_open(&id) || tools.widgets.windows().iter().any(|w| w.id == id) {
                 found.push("the block was still open 1.5 s after its [ CLOSE ]".to_string());
@@ -802,7 +886,7 @@ fn window_motion(hud: &mut crate::gui::offscreen::VirtualHud, tools: &ToolContex
     let _ = tools.widgets.close_window(&id);
     crate::hud_dock::forget(&id);
     hud.frames_at(10, 60.0);
-    row(rows, "a block grows into place as it opens and plays its exit when closed".to_string(), started, found, format!("{} entrance frame(s), at most {narrowest:.1} px narrower on the way in", entrance.len()));
+    row(rows, "a block unfolds into place as it opens and plays its exit when closed".to_string(), started, found, format!("{} entrance frame(s), at most {narrowest:.1} px shorter on the way in", entrance.len()));
 }
 
 /// The offscreen HUD's blocks the verifier opened, by number.
@@ -890,7 +974,7 @@ fn visual_matrix(hud: &mut crate::gui::offscreen::VirtualHud, tools: &ToolContex
         let started = Instant::now();
         hud.set_surface("console", true);
         hud.frames_at(28, 60.0);
-        hud.type_in_console(["op", "sw ba", "mo orb", "näch", "tile"][(run + s) % 5]);
+        hud.type_in_console(CONSOLE_PREFIXES[(run + s) % CONSOLE_PREFIXES.len()]);
         let frame = hud.frames_at(4, 60.0);
         let offered = hud.completions();
         let mut found = text_findings(&frame);
@@ -1102,12 +1186,6 @@ fn visual_matrix(hud: &mut crate::gui::offscreen::VirtualHud, tools: &ToolContex
         let found = visual::off_theme(&frame, &label, &crate::theme_engine::current());
         row(&mut rows, format!("theme {label}: every outline and mesh in its colours"), started, found, format!("{} outlines, {} mesh colours", frame.strokes.len(), frame.mesh_colours.len()));
     }
-    let started = Instant::now();
-    crate::theme_engine::set_ultron(true);
-    crate::theme_engine::finish_fade();
-    let frame = hud.frames_at(3, 60.0);
-    row(&mut rows, "theme Ultron override: every outline and mesh in its colours".to_string(), started, visual::off_theme(&frame, "Ultron", &crate::theme_engine::ULTRON), format!("{} outlines", frame.strokes.len()));
-    crate::theme_engine::set_ultron(false);
     tools.config.update(|c| c.interface.hud_palette = palette.clone());
     hud.frames_at(2, 60.0);
     crate::theme_engine::finish_fade();
@@ -1176,7 +1254,7 @@ fn visual_matrix(hud: &mut crate::gui::offscreen::VirtualHud, tools: &ToolContex
         row(&mut rows, format!("{name}: emblem transitions, ring 5, ring 6, the idle switch, drag and glide"), started, found, "no jump, 120 degrees, proportional ticks, 120-240 s".to_string());
     }
     let started = Instant::now();
-    row(&mut rows, "every theme on the board painter (with rasterised borders)".to_string(), started, visual::check_board_themes(vec2(1600.0, 900.0), run % 3, rt), "eleven themes and Ultron".to_string());
+    row(&mut rows, "every theme on the board painter (with rasterised borders)".to_string(), started, visual::check_board_themes(vec2(1600.0, 900.0), run % 3, rt), "eleven themes".to_string());
     let started = Instant::now();
     let mut found = visual::check_core(vec2(1600.0, 900.0));
     found.extend(visual::check_voice_ticks(&crate::gui::emblem_voice_of));
@@ -1227,9 +1305,9 @@ async fn matrix_c(app: &Jarvis) {
     type Render = fn(&crate::config::JarvisConfig) -> Result<Sentences, String>;
     let rate = crate::jarvis_voice_dsp::MASTER_RATE;
     let jarvis_profile = crate::voice_reference::reference_path().and_then(|clip| crate::fish_zero_shot_tts::load_profile(&clip, std::path::Path::new(crate::fish_zero_shot_tts::PROFILE_PATH)).ok());
-    let voices: [(&'static str, Option<ReferenceProfile>, Render); 2] = [("Jarvis", jarvis_profile, crate::fish_zero_shot_tts::render_sentences), ("Ultron", crate::ultron_mode::reference_profile().ok(), crate::ultron_mode::render_sentences)];
+    let voices: [(&'static str, Option<ReferenceProfile>, Render); 1] = [("Jarvis", jarvis_profile, crate::fish_zero_shot_tts::render_sentences)];
     // Each voice's five sentences as the speaker would get them, with its clip's profile.
-    let mut spoken: Vec<(&'static str, ReferenceProfile, Sentences)> = Vec::new();
+    let mut spoken: Vec<(&'static str, Sentences)> = Vec::new();
     for (who, profile, render) in voices {
         let Some(profile) = profile else {
             skip("matrix C", format!("{who}: five sentence types against his clip"), "no reference clip in assets/");
@@ -1264,80 +1342,9 @@ async fn matrix_c(app: &Jarvis) {
         let lower = technical.to_lowercase();
         let result = if lower.contains("lyve telemetry") && lower.contains("is lyve") && !lower.contains(" live") { Ok(technical) } else { Err(format!("spoken as: {technical}")) };
         judge("matrix C", format!("{who}: \"live\" is read \"lyve\""), LOCAL_BUDGET_MS, 0.0, result);
-        spoken.push((who, profile, sentences));
+        spoken.push((who, sentences));
     }
-    voices_apart(&spoken, rate);
     understood(app, &spoken, rate).await;
-}
-
-/// The two voices are two men: measured on what an ear goes by (`voice_features`), Ultron sits
-/// well under Jarvis, is darker and slower, each is nearer his own clip than the other's, and
-/// Ultron's English is American where Jarvis' is British. (Their long-term envelopes alone
-/// said 0.99 for both while Sir heard "Jarvis, lower".)
-fn voices_apart(spoken: &[(&'static str, crate::fish_zero_shot_tts::ReferenceProfile, Vec<(&'static str, String, Vec<f32>)>)], rate: u32) {
-    use crate::voice_features::{apart, Features};
-    let of = |who: &str| spoken.iter().find(|(name, ..)| *name == who);
-    let (Some((_, jarvis_clip, jarvis)), Some((_, ultron_clip, ultron))) = (of("Jarvis"), of("Ultron")) else {
-        skip("matrix C", "Jarvis and Ultron are two voices", "needs both reference clips");
-        return;
-    };
-    let started = Instant::now();
-    let whole = |sentences: &[(&'static str, String, Vec<f32>)]| -> Vec<f32> { sentences.iter().flat_map(|(_, _, audio)| audio.iter().copied()).collect() };
-    let (jarvis_audio, ultron_audio) = (whole(jarvis), whole(ultron));
-    let result = match (Features::measure(&jarvis_audio, rate), Features::measure(&ultron_audio, rate)) {
-        (Some(j), Some(u)) => {
-            info!("[PROBE] Jarvis' voice as measured: {}", j.describe());
-            info!("[PROBE] Ultron's voice as measured: {}", u.describe());
-            let gap_st = 12.0 * (j.f0_hz / u.f0_hz.max(1.0)).log2();
-            let said = format!("{:.1} apart: Ultron {:.1} st under Jarvis, centre {:.0} Hz against {:.0} Hz, {:.2} against {:.2} syllables a second", apart(&j, &u), gap_st, u.centroid_hz, j.centroid_hz, u.syllable_rate, j.syllable_rate);
-            let mut wrong: Vec<&str> = Vec::new();
-            if gap_st < 3.0 {
-                wrong.push("his pitch is not at least 3 semitones under Jarvis'");
-            }
-            if u.centroid_hz > j.centroid_hz * 0.8 {
-                wrong.push("he is not clearly darker");
-            }
-            if u.syllable_rate > j.syllable_rate * 0.95 {
-                wrong.push("he does not speak slower");
-            }
-            if apart(&j, &u) < 4.0 {
-                wrong.push("measured together they are under 4 apart");
-            }
-            if wrong.is_empty() { Ok(said) } else { Err(format!("{said}; {}", wrong.join("; "))) }
-        }
-        _ => Err("one of the voices holds no measurable speech".to_string()),
-    };
-    judge("matrix C", "Jarvis and Ultron are two voices (pitch, colour, pace)", VOICE_BUDGET_MS, ms_since(started), result);
-
-    // Each nearer his own clip than the other's, by the envelope.
-    let started = Instant::now();
-    let envelope = |audio: &[f32]| crate::fish_zero_shot_tts::mel_envelope(audio, rate).map(|(env, _)| env);
-    let similar = crate::fish_zero_shot_tts::spectral_similarity;
-    let result = match (envelope(&jarvis_audio), envelope(&ultron_audio)) {
-        (Some(j), Some(u)) => {
-            let (jj, ju, uu, uj) = (similar(&j, &jarvis_clip.envelope_db), similar(&j, &ultron_clip.envelope_db), similar(&u, &ultron_clip.envelope_db), similar(&u, &jarvis_clip.envelope_db));
-            let said = format!("Jarvis {jj:.3} to his clip and {ju:.3} to Ultron's; Ultron {uu:.3} to his clip and {uj:.3} to Jarvis'");
-            if jj > ju + 0.03 && uu > uj + 0.03 { Ok(said) } else { Err(format!("{said}; each must be nearer his own by 0.03")) }
-        }
-        _ => Err("one of the voices holds no speech".to_string()),
-    };
-    judge("matrix C", "each voice is nearer his own clip than the other's", VOICE_BUDGET_MS, ms_since(started), result);
-
-    // The accents, as the phonemes say them: an American speaks his r's.
-    let started = Instant::now();
-    let phonemizer = crate::phonemizer::Phonemizer::new(None);
-    let line = "The reactor core is under water.";
-    let british = phonemizer.phonemize(line);
-    let american = phonemizer.phonemize_as(line, crate::phonemizer::Accent::American, false);
-    let spoken_r = |ipa: &str| ipa.chars().filter(|c| matches!(c, 'ɹ' | 'ɚ' | 'ɝ')).count();
-    let result = if phonemizer.backend_name() == "built-in rules" {
-        Ok("eSpeak-NG is not installed here: both voices use the built-in rules".to_string())
-    } else if spoken_r(&american) >= spoken_r(&british) + 2 {
-        Ok(format!("Jarvis: {british} / Ultron: {american}"))
-    } else {
-        Err(format!("Ultron does not speak his r's: {american} (Jarvis: {british})"))
-    };
-    judge("matrix C", "Ultron speaks American English, Jarvis British", LOCAL_BUDGET_MS, ms_since(started), result);
 }
 
 /// The words of `text`, lower case, without punctuation.
@@ -1363,8 +1370,8 @@ fn words_kept(said: &[String], heard: &[String]) -> usize {
 /// Every voice is understood: its report and its alert sentence are played to the speech
 /// recogniser (as samples, not through a speaker), which must hear four words in five. A
 /// voice may be as dark and layered as it likes, as long as Sir still gets what it says.
-async fn understood(app: &Jarvis, spoken: &[(&'static str, crate::fish_zero_shot_tts::ReferenceProfile, Vec<(&'static str, String, Vec<f32>)>)], rate: u32) {
-    for (who, _, sentences) in spoken {
+async fn understood(app: &Jarvis, spoken: &[(&'static str, Vec<(&'static str, String, Vec<f32>)>)], rate: u32) {
+    for (who, sentences) in spoken {
         for (kind, text, audio) in sentences.iter().filter(|(kind, ..)| matches!(*kind, "report" | "alert")) {
             let started = Instant::now();
             let pcm = crate::dsp::resample(audio, rate, 16_000);
@@ -1386,7 +1393,7 @@ async fn understood(app: &Jarvis, spoken: &[(&'static str, crate::fish_zero_shot
 // --------------------------------------------------------------------------- matrix D ----
 
 /// Ten things said with the wake word while the privacy lock is on.
-const WAKE_WORDS: [&str; 10] = ["Jarvis", "Hey Jarvis", "Jarvis, what time is it?", "Jarvis, open Spotify", "Jarvis, are you there?", "Okay Jarvis, play some music", "Jarvis!", "Jarvis, switch to Ultron", "Jarvis, wake up", "Jarvis, close the board"];
+const WAKE_WORDS: [&str; 10] = ["Jarvis", "Hey Jarvis", "Jarvis, what time is it?", "Jarvis, open Spotify", "Jarvis, are you there?", "Okay Jarvis, play some music", "Jarvis!", "Jarvis, show me your core", "Jarvis, wake up", "Jarvis, close the board"];
 
 async fn matrix_d(app: &Jarvis, run: usize) {
     use crate::listening_lock::{apply, is_locked, state, verdict as heard, ListeningLockState, LockCommand, Verdict};
@@ -1657,7 +1664,7 @@ const VARIANTS: &[(&str, [&str; 4])] = &[
 
 /// Tools whose `[ TRY ]` draws inside the HUD: run for real against the offscreen HUD, their
 /// block inspected, then closed again.
-const HUD_TOOLS: &[&str] = &["pop_up_ui_card", "spawn_native_window", "create_or_update_widget", "open_jarvis_view", "launch_interactive_simulation", "lookup_formula", "show_app_shortcuts", "screen_time_report", "thermal_advisor", "clipboard_history"];
+const HUD_TOOLS: &[&str] = &["pop_up_ui_card", "spawn_native_window", "create_or_update_widget", "open_jarvis_view", "launch_interactive_simulation", "lookup_formula", "show_app_shortcuts", "screen_time_report", "thermal_advisor", "clipboard_history", "arrange_jarvis_window"];
 
 /// Answers of the network and account reads, by call: asked once per process, replayed after
 /// (a self-test does not ask a weather service five hundred times).
@@ -1926,12 +1933,13 @@ pub const SPOKEN: &[Spoken] = &[
     s("Jarvis, start a stopwatch.", "create_or_update_widget", r#"{"mode": "stopwatch"}"#),
     s("Jarvis, what's open?", "whats_open", "{}"),
     s("Jarvis, show me my drive space.", "spawn_native_window", r#"{"live": "drive_space"}"#),
-    // ---- The music, the mode and the rest ----
+    // ---- The music and the rest ----
     s("Jarvis, what's playing?", "control_music", r#"{"action": "what_is_playing"}"#),
     s("Jarvis, pause.", "control_music", r#"{"action": "stop_all"}"#),
-    s("Jarvis, switch to Ultron.", "ultron_mode", r#"{"on": true}"#),
     s("Jarvis, system status.", "get_system_status", "{}"),
     s("Jarvis, undo that.", "undo_last_action", "{}"),
+    s("Jarvis, that's not what I said.", "undo_last_action", r#"{"within_s": 120}"#),
+    s("Jarvis, close the Earth, you.", "hud_board", r#"{"action": "close", "target": "earth"}"#),
     s("Jarvis, what did you just do?", "recent_actions", "{}"),
     s("Jarvis, is anything muted?", "control_audio_mixer", r#"{"action": "muted"}"#),
     s("Jarvis, turn Firefox off.", "close_application", r#"{"app_name": "firefox"}"#),
@@ -2013,7 +2021,7 @@ async fn matrix_f(app: &Jarvis) {
     };
     let mark = app.history_mark().await;
     let mut ours = false;
-    prepare(app, Needs::Nothing, &mut ours);
+    prepare(Needs::Nothing, &mut ours);
     for ((who, ..), clips) in STAND_INS.iter().zip(audio.iter()) {
         for (case, clip) in SPOKEN.iter().zip(clips) {
             let started = Instant::now();
@@ -2133,6 +2141,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn every_console_prefix_completes() {
+        // ("sw ba" completed to the retired "switch back to Jarvis" and failed matrix B.)
+        for typed in CONSOLE_PREFIXES {
+            assert!(!crate::command_palette::complete(typed, &[], 2).is_empty(), "'{typed}' offers no completion");
+        }
+    }
+
+    #[test]
     fn every_category_has_all_five_passes() {
         let all = categories();
         assert!(all.len() >= 23, "{all:?}");
@@ -2141,7 +2157,7 @@ mod tests {
                 assert!(CASES.iter().any(|c| c.category == *category && c.pass == pass), "{category} has no pass {pass}");
             }
             // Pass 4 takes its sentences from the category; pass 5 is its compound.
-            assert!(CASES.iter().any(|c| c.category == *category && c.needs != Needs::Ultron), "{category} has nothing for pass 4");
+            assert!(CASES.iter().any(|c| c.category == *category), "{category} has nothing for pass 4");
             assert_eq!(COMPOUNDS.iter().filter(|c| c.category == *category).count(), 1, "{category} needs one compound");
         }
         for compound in COMPOUNDS {
@@ -2163,9 +2179,9 @@ mod tests {
         let calls = vec![("hud_board".to_string(), got)];
         assert!(reached(&calls, "window_management|hud_board", r#"{"action": "close"}"#));
         assert!(reached(&calls, "hud_board", "{}") && !reached(&calls, "control_music", "{}"));
-        // A mode switch that reaches the music player is a failure, whatever else it did.
-        let with_music = vec![("ultron_mode".to_string(), json!({"on": false})), ("control_music".to_string(), json!({"action": "previous_track"}))];
-        assert!(verdict(&with_music, &[("ultron_mode", r#"{"on": false}"#)]).is_err());
+        // An undo that reaches the music player is a failure, whatever else it did.
+        let with_music = vec![("undo_last_action".to_string(), json!({})), ("control_music".to_string(), json!({"action": "previous_track"}))];
+        assert!(verdict(&with_music, &[("undo_last_action", "{}")]).is_err());
         assert!(verdict(&with_music, &[("control_music", "{}")]).is_ok());
     }
 
@@ -2245,7 +2261,6 @@ mod tests {
                 continue;
             };
             let mut calls: Vec<(String, Value)> = plan.calls.iter().map(|c| (c.tool.to_string(), c.args.clone())).collect();
-            calls.extend(plan.mode.map(|on| ("ultron_mode".to_string(), json!({ "on": on }))));
             calls.extend(plan.privacy.map(|cmd| ("listening_lock".to_string(), json!({ "command": format!("{cmd:?}") }))));
             if let Err(why) = verdict(&calls, compound.wants) {
                 wrong.push(format!("[{}] \"{}\": {why}", compound.category, compound.say));

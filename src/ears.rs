@@ -460,7 +460,7 @@ mod relevance_tests {
         // What Sir really said without the wake word, while unsure or not (same log, 11-03/04).
         assert!(!sung_not_said("Close yourself.", -0.60, true), "a command is a command, however unsure");
         assert!(!sung_not_said("Can you test the Discord bars?", -0.34, true), "Whisper is sure of it");
-        assert!(!sung_not_said("That's not Ultron's voice.", -0.21, true));
+        assert!(!sung_not_said("That's not your voice.", -0.21, true));
         assert!(!sung_not_said("Yes.", -0.29, true));
     }
 

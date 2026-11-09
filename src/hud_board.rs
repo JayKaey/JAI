@@ -996,16 +996,7 @@ pub fn definitions() -> Vec<Value> {
         "type": "function",
         "function": {
             "name": TOOL,
-            "description": "Your HUD board of sharp technical blocks (notes, bar charts, big figures, photos, dark vector maps). \
-                action research (topic): a research agent reads 20-50 web sources and assembles a report; a chime and your announcement follow when it is done. \
-                present: puts the finished report on screen. recall (topic): brings back an earlier report. \
-                show_map (place): a dark map of a place with photos of it — use it when Sir asks where to go and you have picked a venue. \
-                maximize (target: chart, map, photo, note, figure or words of a block header), minimize, flip_note, \
-                pin (target: a block; again to unpin), copy (target: a block's text to the clipboard), export (target, format markdown or json: saves a block to Documents\\Jarvis Exports), \
-                find (target: words to look for in every open block; empty clears the search), tidy (arranges the open windows in one grid around the orb), \
-                walkthrough (narrates the board block by block, pulsing each one: 'walk me through it'), close (target: an in-app block such as 'feature lab' or 'telemetry'; none: the board), \
-                remove (target: one block of the board leaves it), \
-                clear (board, blocks and windows all leave; the screen stays up), sign_off (screen down), restore (brings the last board back: 'bring back the screen'), wake, status. Questions about what is on the board are answered from the live context, not with this tool.",
+            "description": "Your HUD board of blocks (notes, charts, figures, photos, maps). research (topic): a research agent reads 20-50 web sources into a report, announced when done; present: shows it; recall (topic): an earlier report. show_map (place): a dark map with photos, for a venue you picked when Sir asks where to go. maximize / minimize / pin / copy / export (target: a block or words of its header; export format markdown or json), flip_note, find (target: words in every block; empty clears), tidy (windows in a grid around the orb), walkthrough ('walk me through it'), close (target: an in-app block such as 'feature lab'; none: the board), remove (one block), clear (everything leaves, screen stays), sign_off (screen down), restore ('bring back the screen'), wake, status. Questions about the board are answered from the live context.",
             "parameters": {
                 "type": "object",
                 "properties": {

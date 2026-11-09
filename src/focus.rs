@@ -74,6 +74,8 @@ impl<T> Stamped<T> {
 pub enum OwnThing {
     View(String),
     Widget(String),
+    /// One of his panels opened by name (`open_jarvis_view`: "earth", "network_radar", …).
+    Panel(String),
 }
 
 #[derive(Default)]
@@ -159,6 +161,11 @@ impl FocusTracker {
                 s.own = None;
             }
         });
+    }
+
+    /// How long ago the view, widget or panel of his that "it" may mean came up.
+    pub fn own_thing_age(&self) -> Option<Duration> {
+        self.read(|s| s.own.as_ref().map(|own| own.at.elapsed()))
     }
 
     /// The view or widget of his that "it" means: nothing has come up since, no app, no window.

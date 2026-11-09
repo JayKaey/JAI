@@ -113,6 +113,8 @@ raw-window-handle = "0.6"
 keyring = { version = "3", features = ["windows-native"] }
 # Same major as cpal's own `windows` dependency, so it is compiled once.
 windows = { version = "0.54", features = [
+    # WinRT: the Windows location service ("where am I" on the Earth).
+    "Devices_Geolocation",
     # WinRT: the system media session (what is playing, play/pause/skip per app).
     "Foundation",
     "Foundation_Collections",

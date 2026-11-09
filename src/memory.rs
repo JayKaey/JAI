@@ -35,6 +35,48 @@ pub struct RememberOutcome {
     pub entry: MemoryEntry,
     /// Previous value when an existing fact was corrected/overwritten.
     pub previous_value: Option<String>,
+    /// The overwritten fact's category and importance (what "undo that" puts back with it).
+    pub previous_kind: Option<(String, i32)>,
+    /// The key was there before (with this value, when `previous_value` is None).
+    pub existed: bool,
+}
+
+/// Memory keys that hold who Sir is and how he is addressed: changed only from a sure ear (see
+/// `Brain::identity_gate`), and "undo that" puts them back.
+pub fn is_identity_key(key: &str) -> bool {
+    let k = MemoryManager::normalize_key(key);
+    matches!(
+        k.as_str(),
+        "user_title" | "title" | "user_name" | "name" | "preferred_name" | "preferred_title" | "form_of_address" | "address_as" | "nickname" | "user_nickname"
+            | "how_to_address_user" | "salutation" | "user_identity" | "sir_name" | "sirs_name"
+    ) || k.ends_with("_title") && k.starts_with("user") || k.contains("form_of_address") || k.contains("preferred_name")
+}
+
+static IDENTITY_CHANGE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(
+        r"(?i)^(?:(?:hey\s+)?jarvis[,.!]?\s+)?(?:(?:from\s+now\s+on|ab\s+jetzt|von\s+jetzt\s+an|please|bitte|you\s+can|you\s+may|du\s+kannst)[,]?\s+)*(?:call\s+me|address\s+me\s+as|refer\s+to\s+me\s+as|my\s+name\s+is|my\s+names|my\s+name's|i\s+am\s+called|i'm\s+called|im\s+called|(?:don'?t|do\s+not|stop)\s+call(?:ing)?\s+me|nenn\s+mich|nenne\s+mich|ich\s+heiße|ich\s+heisse|mein\s+name\s+ist|sag\s+\S+\s+zu\s+mir)\b",
+    )
+    .expect("valid identity regex")
+});
+
+/// "Call me Tony", "my name is …", "ich heiße …", "don't call me Sir": a change of who Sir is or
+/// how he is addressed.
+pub fn is_identity_change(text: &str) -> bool {
+    IDENTITY_CHANGE.is_match(text.trim())
+}
+
+/// The name in "Call me Tony." / "Mein Name ist Tony" ("Tony"), for the one-line confirmation.
+pub fn identity_name(text: &str) -> Option<String> {
+    let m = IDENTITY_CHANGE.find(text.trim())?;
+    // "Don't call me Sir" names what he is not to be called.
+    let lead = m.as_str().to_lowercase();
+    if lead.contains("don") || lead.contains("do not") || lead.contains("stop") {
+        return None;
+    }
+    let rest = text.trim()[m.end()..].trim().trim_end_matches(['.', '!', '?', ',']).trim();
+    let rest = rest.strip_prefix("as ").unwrap_or(rest).trim();
+    let words: Vec<&str> = rest.split_whitespace().take(4).collect();
+    (!words.is_empty() && rest.split_whitespace().count() <= 4).then(|| words.join(" "))
 }
 
 #[derive(Debug, Clone)]
@@ -228,9 +270,13 @@ impl MemoryManager {
         let now = Utc::now().to_rfc3339();
 
         let conn = self.lock();
-        let previous_value: Option<String> = conn
-            .query_row("SELECT value FROM memories WHERE key = ?1", params![key], |r| r.get(0))
+        let previous: Option<(String, String, i32)> = conn
+            .query_row("SELECT value, category, importance FROM memories WHERE key = ?1", params![key], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
             .optional()?;
+        let (previous_value, previous_kind) = match previous {
+            Some((value, category, importance)) => (Some(value), Some((category, importance))),
+            None => (None, None),
+        };
         conn.execute(
             "INSERT INTO memories (key, value, category, importance, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?5)
@@ -246,10 +292,15 @@ impl MemoryManager {
             params![key],
             Self::map_row,
         )?;
-        let previous_value = previous_value.filter(|p| p != &entry.value);
+        let existed = previous_value.is_some();
+        let changed = previous_value.as_ref().is_some_and(|p| p != &entry.value);
+        let previous_value = previous_value.filter(|_| changed);
+        let previous_kind = previous_kind.filter(|_| changed);
         Ok(RememberOutcome {
             entry,
             previous_value,
+            previous_kind,
+            existed,
         })
     }
 
@@ -532,6 +583,44 @@ mod tests {
     fn temp_db() -> (MemoryManager, std::path::PathBuf) {
         let path = std::env::temp_dir().join(format!("jarvis_mem_test_{}.db", uuid::Uuid::new_v4()));
         (MemoryManager::open(&path).expect("open db"), path)
+    }
+
+    /// Repro (jarvis.log, 2026-11-08 23:3x): "Call me Earth." — heard over Jarvis' own voice —
+    /// replaced how Sir is addressed.
+    #[test]
+    fn a_change_of_his_name_or_title_is_recognised() {
+        for text in ["Call me Earth.", "Jarvis, call me Tony", "From now on, call me Boss", "My name is Tony Stark", "Nenn mich Chef", "Ich heiße Max", "Don't call me Sir", "Please address me as Doctor"] {
+            assert!(is_identity_change(text), "{text}");
+        }
+        for text in ["Remember that I like coffee", "Call my mother", "What's my name?", "I told my friend about the world cup"] {
+            assert!(!is_identity_change(text), "{text}");
+        }
+        assert_eq!(identity_name("Call me Earth.").as_deref(), Some("Earth"));
+        assert_eq!(identity_name("Please address me as Doctor Strange").as_deref(), Some("Doctor Strange"));
+        assert_eq!(identity_name("Don't call me Sir"), None, "no name to confirm");
+        assert_eq!(identity_name("Call me when the download is done and then remind me"), None, "no name, a sentence");
+        for key in ["user_title", "User Title", "preferred_name", "form_of_address", "user_display_title"] {
+            assert!(is_identity_key(key), "{key}");
+        }
+        for key in ["favorite_editor", "coffee", "title_of_book", "address", "home_address"] {
+            assert!(!is_identity_key(key), "{key}");
+        }
+    }
+
+    /// The overwrite keeps what was there and its kind, so "that's not what I said" restores the
+    /// seed exactly (persona, importance 10).
+    #[test]
+    fn an_overwritten_fact_reports_its_old_value_and_kind() {
+        let (mem, path) = temp_db();
+        mem.remember_fact("user_title", "Always address the user respectfully as 'Sir'.", Some("persona"), Some(10)).unwrap();
+        let changed = mem.remember_fact("user_title", "Sir should be addressed as Earth.", None, None).unwrap();
+        assert_eq!(changed.previous_value.as_deref(), Some("Always address the user respectfully as 'Sir'."));
+        assert_eq!(changed.previous_kind, Some(("persona".to_string(), 10)));
+        assert!(changed.existed);
+        let fresh = mem.remember_fact("coffee", "black", Some("preference"), Some(5)).unwrap();
+        assert!(!fresh.existed && fresh.previous_value.is_none());
+        drop(mem);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

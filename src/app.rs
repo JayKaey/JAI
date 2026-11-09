@@ -151,6 +151,8 @@ struct Inner {
     heard: Mutex<crate::ears::RollingSpeechTranscriptBuffer>,
     /// The utterance being dispatched was spoken over Jarvis' own voice.
     barge_in_turn: AtomicBool,
+    /// How sure Whisper was of the utterance being dispatched (taken by `dispatch_turn`).
+    heard_turn: Mutex<Option<crate::stt::HeardQuality>>,
     /// The last requests and replies, for the hands-free continuity check.
     recent_turns: Mutex<std::collections::VecDeque<String>>,
 }
@@ -186,13 +188,11 @@ pub struct BargeIn {
 /// What the dispatcher does with a request before any turn exists (`Jarvis::admit`).
 #[derive(Debug, Clone, PartialEq)]
 pub enum Admission {
-    /// Ultron ⇄ Jarvis and nothing else.
-    Mode(bool),
     /// The privacy lock and nothing else.
     Privacy(crate::listening_lock::LockCommand),
-    /// Several commands in one sentence: the switches among them, and the other clauses as one
-    /// request for the brain (empty when the switches are all there is).
-    Compound { mode: Option<bool>, privacy: Option<crate::listening_lock::LockCommand>, rest: String },
+    /// Several commands in one sentence: the privacy switch among them, and the other clauses
+    /// as one request for the brain.
+    Compound { privacy: Option<crate::listening_lock::LockCommand>, rest: String },
     /// A turn for the brain.
     Turn,
 }
@@ -242,6 +242,7 @@ impl Jarvis {
                 macro_running: AtomicBool::new(false),
                 heard: Mutex::new(crate::ears::RollingSpeechTranscriptBuffer::default()),
                 barge_in_turn: AtomicBool::new(false),
+                heard_turn: Mutex::new(None),
                 recent_turns: Mutex::new(std::collections::VecDeque::new()),
             }),
         };
@@ -298,16 +299,13 @@ impl Jarvis {
     pub async fn dry_run(&self, text: &str, voice: bool) -> (Vec<crate::live_self_tester::Recorded>, Duration) {
         use crate::live_self_tester::Recorded;
         let started = Instant::now();
-        let mode = |on: bool| Recorded { kind: "mode", tool: "ultron_mode".into(), args: json!({ "on": on }) };
         let privacy = |cmd: crate::listening_lock::LockCommand| Recorded { kind: "privacy", tool: "listening_lock".into(), args: json!({ "command": format!("{cmd:?}") }) };
-        // Ultron and the privacy lock answer in the dispatcher, before any turn exists; in a
-        // sentence that asks for more, the other clauses go on to the brain.
+        // The privacy lock answers in the dispatcher, before any turn exists; in a sentence that
+        // asks for more, the other clauses go on to the brain.
         let mut recorded: Vec<Recorded> = Vec::new();
         let text = match Self::admit(text) {
-            Admission::Mode(on) => return (vec![mode(on)], started.elapsed()),
             Admission::Privacy(cmd) => return (vec![privacy(cmd)], started.elapsed()),
-            Admission::Compound { mode: switch, privacy: lock, rest } => {
-                recorded.extend(switch.map(mode));
+            Admission::Compound { privacy: lock, rest } => {
                 recorded.extend(lock.map(privacy));
                 if rest.is_empty() {
                     return (recorded, started.elapsed());
@@ -365,8 +363,8 @@ impl Jarvis {
     }
 
     /// What the speech recogniser makes of `pcm` (16 kHz mono). The exhaustive verifier hands it
-    /// Jarvis' and Ultron's own sentences as samples (no speaker, no microphone) to check that
-    /// each voice is understood. Nothing else happens with the words.
+    /// Jarvis' own sentences as samples (no speaker, no microphone) to check that his voice is
+    /// understood. Nothing else happens with the words.
     pub async fn hear(&self, pcm: Vec<f32>) -> Result<String, String> {
         let voiced_ms = (pcm.len() as u64 * 1000 / 16_000) as u32;
         self.inner.stt.transcribe(pcm, voiced_ms).await.map(|t| t.text)
@@ -387,35 +385,6 @@ impl Jarvis {
 
     pub async fn history_rollback(&self, mark: usize) {
         self.inner.brain.history_truncate(mark).await;
-    }
-
-    /// Ultron Mode on or off without a spoken line (the exhaustive verifier sets the stage for
-    /// "change back"). True when the mode changed.
-    pub fn set_ultron_quietly(&self, on: bool) -> bool {
-        crate::ultron_mode::set(on, &self.inner.tts).is_some()
-    }
-
-    /// Ultron Mode on and off again without a word (the live self-test): the palette, the
-    /// wordmark and the voice all change and all come back. None while Sir has Ultron on.
-    pub fn probe_ultron(&self) -> Option<Result<String, String>> {
-        use crate::ultron_mode as ultron;
-        if ultron::active() {
-            return None;
-        }
-        let tts = &self.inner.tts;
-        let (voice, speed) = (tts.voice(), tts.speed_handle().load(Ordering::Relaxed));
-        ultron::set(true, tts);
-        let his = ultron::base_voice();
-        let engaged = ultron::active() && ultron::wordmark() == "U.L.T.R.O.N." && tts.voice() == his;
-        // The way Sir asks to come back, through the reflex router's first stage.
-        let back = crate::intent_engine::route("Change back to Jarvis.", &crate::intent_engine::ReflexContext::live()).map(|r| r.reflex);
-        ultron::set(false, tts);
-        let restored = !ultron::active() && ultron::wordmark() == "J.A.R.V.I.S." && tts.voice() == voice && tts.speed_handle().load(Ordering::Relaxed) == speed;
-        Some(if engaged && restored && back == Some(crate::intent_engine::Reflex::Mode(false)) {
-            Ok(format!("engaged ({his}), \"change back to Jarvis\" → back as {voice}"))
-        } else {
-            Err(format!("engaged: {engaged}, restored: {restored}, 'change back' routed to {back:?}"))
-        })
     }
 
     /// Something Sir must hear about (reminder, finished timer, overheating GPU). Spoken right
@@ -1266,13 +1235,6 @@ impl Jarvis {
         let stitching = self.has_carry() || joined;
         let in_window = u.in_window || stitching || c.window_remaining_ms() > 0 || c.turn_active.load(Ordering::Acquire);
         let mut wake = self.inner.wake.read().unwrap_or_else(|e| e.into_inner()).evaluate(&transcript.text);
-        // In Ultron Mode he answers to "Ultron" as well.
-        if !wake.matched && crate::ultron_mode::active() {
-            let ultron = WakeWordMatcher::new(&["ultron".to_string()], 0.88).evaluate(&transcript.text);
-            if ultron.matched {
-                wake = ultron;
-            }
-        }
         if !wake.matched {
             if let Some(named) = name_by_command(&transcript.text) {
                 info!("[WAKE] '{}' taken for his name: '{}' is one of his commands", named.word, named.command);
@@ -1393,8 +1355,19 @@ impl Jarvis {
             }
         }
         self.inner.heard.lock().unwrap_or_else(|e| e.into_inner()).push(&transcript.text, false);
-        // The rest of an earlier, unfinished sentence: one request.
+        // The rest of an earlier, unfinished sentence: one request — unless the new words are a
+        // command of their own that the held ones would only spoil (2026-11-08: "told me the
+        // world", held after a slow turn, made "Jarvis, show me the world" 13 s later into
+        // "told me the world show me the world").
         let carried = if heard.trim().is_empty() { None } else { self.take_carry() };
+        let named_first = wake.matched && !homecoming && wake_leads(&transcript.text, &wake.word);
+        let carried = match carried {
+            Some(earlier) if supersedes(&earlier, heard.trim(), named_first, &crate::command_corrector::routes) => {
+                info!("[STITCH] '{}' is a command of its own; the held '{earlier}' is dropped", heard.trim());
+                None
+            }
+            other => other,
+        };
         let command = match &carried {
             Some(earlier) => format!("{earlier} {}", heard.trim()),
             None => heard,
@@ -1443,6 +1416,8 @@ impl Jarvis {
             }
         }
         self.inner.barge_in_turn.store(u.barge_in, Ordering::Release);
+        *self.inner.heard_turn.lock().unwrap_or_else(|e| e.into_inner()) =
+            Some(crate::stt::HeardQuality { avg_logprob: transcript.avg_logprob, language_prob: transcript.language_prob, no_speech: transcript.no_speech });
         if let Some(pcm) = kept {
             *self.inner.turn_audio.lock().unwrap_or_else(|e| e.into_inner()) = Some((pcm, speech_ms));
         }
@@ -1472,37 +1447,20 @@ impl Jarvis {
         self.speak_standalone(&crate::listening_lock::reply(cmd), false, trigger);
     }
 
-    /// Ultron Mode on or off (voice, the header button): palette, wordmark and voice switch, then
-    /// he says so in the new voice.
-    pub fn set_ultron(&self, on: bool, trigger: Trigger) {
-        // Already in that mode: say so (a swallowed command reads as a hang).
-        let switched = crate::ultron_mode::set(on, &self.inner.tts);
-        if switched.is_some() {
-            crate::tts::play_cue(crate::jarvis_voice_dsp::Earcon::ModeShift);
-        }
-        let line = switched.unwrap_or(if on { "Ultron protocol is already engaged, Sir." } else { "I'm already myself, Sir." });
-        self.speak_standalone(line, false, trigger);
-    }
-
-    /// What the dispatcher itself does with a request, before any turn exists: Ultron ⇄ Jarvis and
-    /// the privacy lock (the first two stages of the reflex router), also as clauses of a
-    /// sentence that asks for more ("switch back to Jarvis, set the theme to Arc Cyan and …").
-    /// The live dispatcher and the dry run both decide here.
+    /// What the dispatcher itself does with a request, before any turn exists: the privacy lock
+    /// (the first stage of the reflex router), also as a clause of a sentence that asks for more
+    /// ("stop listening and set the theme to Arc Cyan"). The live dispatcher and the dry run both
+    /// decide here.
     pub fn admit(text: &str) -> Admission {
         use crate::intent_engine::{Reflex, ReflexContext};
-        // ("swich to ultron" is the same switch; the routes behind this one read it right anyway.)
+        // (A typed slip is the same command; the routes behind this one read it right anyway.)
         let typed = crate::typos::normalize_user_input_typos(text);
         let text = typed.as_str();
-        // "Undo that" right after a switch to Ultron: the switch is the dispatcher's to take back.
-        if let Some(on) = crate::undo::mode_way_back().filter(|_| crate::intents::is_undo(text)) {
-            return Admission::Mode(on);
-        }
         let ctx = ReflexContext::live();
-        if let Some(plan) = crate::compound_planner::plan(text, &ctx).filter(|p| p.mode.is_some() || p.privacy.is_some()) {
-            return Admission::Compound { mode: plan.mode, privacy: plan.privacy, rest: plan.rest() };
+        if let Some(plan) = crate::compound_planner::plan(text, &ctx).filter(|p| p.privacy.is_some()) {
+            return Admission::Compound { privacy: plan.privacy, rest: plan.rest() };
         }
         match crate::intent_engine::route(text, &ctx).map(|r| r.reflex) {
-            Some(Reflex::Mode(on)) => Admission::Mode(on),
             Some(Reflex::Privacy(cmd)) => Admission::Privacy(cmd),
             _ => Admission::Turn,
         }
@@ -1510,42 +1468,28 @@ impl Jarvis {
 
     /// Starts a brain turn, superseding any running one.
     pub fn dispatch_turn(&self, text: String, started: Instant, stt_ms: u64, source: InputSource) {
-        // Ultron ⇄ Jarvis, then the privacy lock: answered at once — before music or any other
-        // parser sees "change back", and without the model. ("You can listen again" while he is
-        // listening anyway is an ordinary sentence.)
+        // The privacy lock: answered at once — before music or any other parser, and without the
+        // model. ("You can listen again" while he is listening anyway is an ordinary sentence.)
         let lifts_nothing = |cmd: crate::listening_lock::LockCommand| cmd == crate::listening_lock::LockCommand::Resume && !crate::listening_lock::is_locked();
         let text = match Self::admit(&text) {
-            Admission::Mode(on) => {
-                crate::intent_engine::forget_follow_up();
-                self.set_ultron(on, Trigger::Input(source));
-                return;
-            }
             Admission::Privacy(cmd) if !lifts_nothing(cmd) => {
                 crate::intent_engine::forget_follow_up();
                 self.set_listening_lock(cmd, Trigger::Input(source));
                 return;
             }
-            Admission::Compound { mode, privacy, rest } => {
+            Admission::Compound { privacy, rest } => {
                 crate::intent_engine::forget_follow_up();
                 let privacy = privacy.filter(|cmd| !lifts_nothing(*cmd));
-                info!("[COMPOUND] '{text}' → mode {mode:?}, privacy {privacy:?}, then '{rest}'");
+                info!("[COMPOUND] '{text}' → privacy {privacy:?}, then '{rest}'");
                 if rest.is_empty() {
-                    // Nothing for the brain: each switch is confirmed in his voice as usual.
+                    // Nothing for the brain: the switch is confirmed in his voice as usual.
                     if let Some(cmd) = privacy {
                         self.set_listening_lock(cmd, Trigger::Input(source));
                     }
-                    if let Some(on) = mode {
-                        self.set_ultron(on, Trigger::Input(source));
-                    }
                     return;
                 }
-                // The switches happen now and without a line of their own: the turn for the
-                // other clauses answers for the whole sentence.
-                if let Some(on) = mode {
-                    if crate::ultron_mode::set(on, &self.inner.tts).is_some() {
-                        crate::tts::play_cue(crate::jarvis_voice_dsp::Earcon::ModeShift);
-                    }
-                }
+                // The switch happens now and without a line of its own: the turn for the other
+                // clauses answers for the whole sentence.
                 if let Some(cmd) = privacy {
                     crate::listening_lock::apply(cmd);
                     info!("[PRIVACY] {cmd:?}");
@@ -1577,6 +1521,8 @@ impl Jarvis {
         let id = uuid::Uuid::new_v4().to_string();
         let voice = self.tools().modality.gate(Trigger::Input(source), &text);
         let link = Arc::new(TurnLink::default());
+        let heard = self.inner.heard_turn.lock().unwrap_or_else(|e| e.into_inner()).take();
+        link.set_heard(heard.filter(|_| source == InputSource::Voice));
         {
             let mut turn = self.turn_lock();
             if let Some(prev) = turn.take() {
@@ -2240,6 +2186,28 @@ fn name_by_command(heard: &str) -> Option<crate::wake::WakeMatch> {
     Some(crate::wake::WakeMatch { matched: true, score: 0.8, word: name.to_string(), command })
 }
 
+/// His name opens the sentence ("Jarvis, show me the world", "Hey Jarvis, …"): the words are
+/// addressed afresh, not the end of something said before.
+fn wake_leads(text: &str, word: &str) -> bool {
+    let word = word.trim().trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase();
+    !word.is_empty()
+        && text
+            .split_whitespace()
+            .take(3)
+            .any(|t| t.trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase() == word)
+}
+
+/// Whether newly heard words replace held, unfinished ones instead of completing them: they are
+/// a command on their own and either open with his name (two words or more), or the joined
+/// sentence routes nowhere while they do.
+fn supersedes(earlier: &str, heard: &str, named_first: bool, routes: &dyn Fn(&str) -> bool) -> bool {
+    let words = heard.split_whitespace().count();
+    if words == 0 || earlier.trim().is_empty() || !routes(heard) {
+        return false;
+    }
+    (named_first && words >= 2) || !routes(&format!("{} {heard}", earlier.trim()))
+}
+
 /// Lowers the system volume (the music in Sir's headphones) to a third and raises Jarvis' own
 /// voice, so the knock alert is heard; the returned future puts both back.
 async fn duck_audio(voice_volume: &Arc<std::sync::atomic::AtomicU8>) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
@@ -2297,5 +2265,34 @@ mod tests {
         let long = join_audio(vec![1.0; STITCH_MAX_SAMPLES], vec![2.0; 16_000]);
         assert_eq!(long.len(), STITCH_MAX_SAMPLES);
         assert_eq!(long[long.len() - 1], 2.0, "the newest audio stays");
+    }
+
+    /// Repro (jarvis.log, 2026-11-08 23:3x): "told me the world" was held, and "Jarvis show me the
+    /// world" became "[STITCH] Joined: 'told me the world show me the world'".
+    #[test]
+    fn a_fresh_command_with_his_name_drops_a_held_fragment() {
+        assert!(wake_leads("Jarvis show me the world.", "Jarvis"));
+        assert!(wake_leads("Hey, Jarvis, show me the world.", "Jarvis"));
+        assert!(!wake_leads("Show me the world, Jarvis.", "Jarvis"));
+        let routes = |text: &str| matches!(text, "show me the world" | "open the spotify" | "close it");
+        assert!(supersedes("told me the world", "show me the world", true, &routes));
+        // Without the name, the newer words still win when the joined sentence routes nowhere.
+        assert!(supersedes("told me the world", "show me the world", false, &routes));
+        // The rest of a sentence completes it: "open the" … "spotify".
+        let completes = |text: &str| text == "open the spotify";
+        assert!(!supersedes("open the", "spotify", true, &completes));
+        // Words that are no command of their own never replace what was held.
+        assert!(!supersedes("open the", "uh the music", true, &routes));
+        // A one-word fragment after the name joins, as before.
+        let both = |text: &str| matches!(text, "close" | "turn it down close");
+        assert!(!supersedes("turn it down", "close", true, &both));
+        assert!(!supersedes("", "close it", true, &routes));
+    }
+
+    /// The real router: the log's newer words are one of his commands on their own.
+    #[test]
+    fn the_log_phrase_routes_on_its_own() {
+        assert!(crate::command_corrector::routes("show me the world"));
+        assert!(supersedes("told me the world", "show me the world", true, &crate::command_corrector::routes));
     }
 }

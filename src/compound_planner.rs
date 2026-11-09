@@ -1,13 +1,12 @@
-//! Several commands in one breath: "Switch back to Jarvis, set theme to Arc Cyan, move the orb
-//! to the top right, and open my WebUntis schedule."
+//! Several commands in one breath: "Set theme to Arc Cyan, move the orb to the top right, and
+//! open my WebUntis schedule."
 //!
 //! One router answering for the whole sentence carries out the first thing it recognises and
-//! drops the rest (the Ultron stage took the sentence above and the theme, the orb and the
-//! schedule never happened). Here the sentence is cut into its clauses, every clause is resolved
-//! on its own by the same stateless parsers a single command goes through, and only when every
-//! one of them resolves is the sentence a compound: the dispatcher switches mode and privacy
-//! itself, the brain runs the other clauses as tool calls — side by side where they touch
-//! different things, in order where "then" says so.
+//! drops the rest. Here the sentence is cut into its clauses, every clause is resolved on its
+//! own by the same stateless parsers a single command goes through, and only when every one of
+//! them resolves is the sentence a compound: the dispatcher switches privacy itself, the brain
+//! runs the other clauses as tool calls — side by side where they touch different things, in
+//! order where "then" says so.
 //!
 //! A sentence with a clause nothing recognises is not a compound and goes the way it always
 //! went ("play rock and roll", "remind me to buy milk, eggs and bread"). A clause that needs
@@ -35,8 +34,6 @@ pub struct Call {
 /// A sentence of several commands, every one of them resolved.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Plan {
-    /// "Switch back to Jarvis" / "switch to Ultron": the dispatcher's.
-    pub mode: Option<bool>,
     /// "Stop listening" / "you can listen again": the dispatcher's.
     pub privacy: Option<LockCommand>,
     /// Everything else, in the order it was said.
@@ -60,7 +57,7 @@ impl Plan {
 
     /// How many things the sentence asks for.
     pub fn count(&self) -> usize {
-        self.calls.len() + usize::from(self.mode.is_some()) + usize::from(self.privacy.is_some())
+        self.calls.len() + usize::from(self.privacy.is_some())
     }
 }
 
@@ -72,7 +69,7 @@ const AND: &[&str] = &["; ", ", and also ", " and also ", ", and ", " and ", ", 
 fn is_courtesy(clause: &str) -> bool {
     let lower = clause.to_lowercase();
     let words: Vec<&str> = lower.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).collect();
-    words.is_empty() || words.iter().all(|w| matches!(*w, "jarvis" | "hey" | "ok" | "okay" | "please" | "bitte" | "sir" | "now" | "jetzt" | "thanks" | "thank" | "you" | "danke" | "ultron" | "also" | "and" | "und" | "then" | "dann"))
+    words.is_empty() || words.iter().all(|w| matches!(*w, "jarvis" | "hey" | "ok" | "okay" | "please" | "bitte" | "sir" | "now" | "jetzt" | "thanks" | "thank" | "you" | "danke" | "also" | "and" | "und" | "then" | "dann"))
 }
 
 /// Cuts `text` at the first of `separators` in every piece (ASCII separators, so byte offsets of
@@ -147,13 +144,12 @@ fn resolve(clause: &str, ctx: &ReflexContext) -> Option<Resolved> {
 }
 
 /// What one clause says, from the stateless parsers in the order a single command meets them:
-/// the reflex router (mode, privacy, Jarvis' own controls), the deterministic actions, the HUD's
+/// the reflex router (privacy, Jarvis' own controls), the deterministic actions, the HUD's
 /// views and look, quick commands, the mixer, the deterministic routes, then the exact command
 /// grammar.
 fn resolve_any(clause: &str, ctx: &ReflexContext) -> Option<Resolved> {
     if let Some(routed) = crate::intent_engine::route(clause, ctx) {
         return Some(match routed.reflex {
-            Reflex::Mode(on) => Resolved::Mode(on),
             Reflex::Privacy(cmd) => Resolved::Privacy(cmd),
             Reflex::Silent(action) => Resolved::Call(action.tool, action.args),
         });
@@ -198,14 +194,13 @@ pub fn route_allowed(text: &str, tool: &str) -> bool {
 }
 
 enum Resolved {
-    Mode(bool),
     Privacy(LockCommand),
     Call(&'static str, Value),
 }
 
 /// What one spoken command asks for, as the stateless parsers see it: the tool and its
-/// arguments, with the dispatcher's switches as "ultron_mode" `{"on": …}` and "listening_lock"
-/// `{"command": …}` (the names a dry run records them under). As in a turn, Jarvis' own words
+/// arguments, with the dispatcher's privacy switch as "listening_lock" `{"command": …}` (the
+/// name a dry run records it under). As in a turn, Jarvis' own words
 /// are spelt right first ("close your car" is the core) and a sentence that matches nothing
 /// but sounds like a command is taken for it. None: nothing deterministic — the brain's
 /// dialogue state or the language model decides.
@@ -214,7 +209,6 @@ pub fn resolve_one(text: &str, ctx: &ReflexContext) -> Option<(String, Value)> {
     let said = said.trim().trim_end_matches(['.', '!', '?']);
     let resolved = resolve(said, ctx).or_else(|| crate::intent_engine::phonetic_rescue(said, ctx).and_then(|meant| resolve(meant, ctx)))?;
     Some(match resolved {
-        Resolved::Mode(on) => ("ultron_mode".to_string(), json!({ "on": on })),
         Resolved::Privacy(cmd) => ("listening_lock".to_string(), json!({ "command": format!("{cmd:?}") })),
         Resolved::Call(tool, args) => (tool.to_string(), args),
     })
@@ -241,9 +235,8 @@ pub fn plan(text: &str, ctx: &ReflexContext) -> Option<Plan> {
         }
         match resolve(&clause, ctx)? {
             // The same switch twice in one sentence is one switch; opposite ones are a slip.
-            Resolved::Mode(on) if plan.mode.is_none_or(|known| known == on) => plan.mode = Some(on),
             Resolved::Privacy(cmd) if plan.privacy.is_none_or(|known| known == cmd) => plan.privacy = Some(cmd),
-            Resolved::Mode(_) | Resolved::Privacy(_) => return None,
+            Resolved::Privacy(_) => return None,
             Resolved::Call(tool, _) if needs_confirmation(tool) => return None,
             Resolved::Call(tool, args) => plan.calls.push(Call { clause, tool, args, stage }),
         }
@@ -274,15 +267,11 @@ mod tests {
         ReflexContext::default()
     }
 
-    fn ultron() -> ReflexContext {
-        ReflexContext { ultron: true, ..ReflexContext::default() }
-    }
-
     #[test]
     fn a_sentence_is_cut_at_commas_and_conjunctions_and_then_starts_a_new_stage() {
-        let parts = clauses("Switch back to Jarvis, set theme to Arc Cyan, move the orb to the top right, and open my WebUntis schedule.");
+        let parts = clauses("Set theme to Arc Cyan, move the orb to the top right, and open my WebUntis schedule.");
         let words: Vec<&str> = parts.iter().map(|(c, _)| c.as_str()).collect();
-        assert_eq!(words, ["Switch back to Jarvis", "set theme to Arc Cyan", "move the orb to the top right", "open my WebUntis schedule"]);
+        assert_eq!(words, ["Set theme to Arc Cyan", "move the orb to the top right", "open my WebUntis schedule"]);
         assert!(parts.iter().all(|(_, staged)| !staged));
         assert_eq!(clauses("Open the feature lab and then close it"), vec![("Open the feature lab".to_string(), false), ("close it".to_string(), true)]);
         assert_eq!(clauses("Mach das Theme rot und dann zeig mir den Stundenplan"), vec![("Mach das Theme rot".to_string(), false), ("zeig mir den Stundenplan".to_string(), true)]);
@@ -293,9 +282,8 @@ mod tests {
     }
 
     #[test]
-    fn the_four_command_sentence_resolves_every_clause() {
-        let plan = plan("Switch back to Jarvis, set theme to Arc Cyan, move the orb to the top right, and open my WebUntis schedule.", &ultron()).expect("a compound");
-        assert_eq!(plan.mode, Some(false), "the mode switch is the dispatcher's");
+    fn the_three_command_sentence_resolves_every_clause() {
+        let plan = plan("Set theme to Arc Cyan, move the orb to the top right, and open my WebUntis schedule.", &idle()).expect("a compound");
         assert_eq!(plan.privacy, None);
         let tools: Vec<&str> = plan.calls.iter().map(|c| c.tool).collect();
         assert_eq!(plan.calls.len(), 3, "{tools:?}");
@@ -304,7 +292,7 @@ mod tests {
         assert_eq!(plan.calls[0].args["hud_palette"], "arc_cyan", "{}", plan.calls[0].args);
         assert!(plan.calls[1].args.to_string().contains("top"), "the orb goes to the top right: {} {}", plan.calls[1].tool, plan.calls[1].args);
         assert!(plan.calls[2].args.to_string().to_lowercase().contains("schedule") || plan.calls[2].tool.contains("schedule"), "{} {}", plan.calls[2].tool, plan.calls[2].args);
-        assert_eq!(plan.rest(), "set theme to Arc Cyan, move the orb to the top right and open my WebUntis schedule");
+        assert_eq!(plan.rest(), "Set theme to Arc Cyan, move the orb to the top right and open my WebUntis schedule");
         // The look, the orb and the schedule view all draw in the HUD: one stage, one lane, in
         // the order they were said.
         assert_eq!(lanes(&plan.calls), vec![vec![vec![0, 1, 2]]]);
@@ -318,10 +306,9 @@ mod tests {
 
     #[test]
     fn german_and_mixed_sentences_plan_the_same_way() {
-        let plan = plan("Wechsel zurück zu Jarvis und mach das Theme blau", &ultron()).expect("a compound");
-        assert_eq!(plan.mode, Some(false));
-        assert_eq!(plan.calls.len(), 1);
-        assert_eq!(plan.calls[0].tool, "configure_interface", "{}", plan.calls[0].args);
+        let plan = plan("Zeig mir deinen Core und mach das Theme blau", &idle()).expect("a compound");
+        assert_eq!(plan.calls.len(), 2);
+        assert_eq!(plan.calls[1].tool, "configure_interface", "{}", plan.calls[1].args);
         let plan = super::plan("Pause the music and close the feature lab", &idle()).expect("a compound");
         assert_eq!(plan.calls.len(), 2);
         assert_eq!((plan.calls[0].tool, plan.calls[1].tool), ("control_music", "hud_board"), "{:?}", plan.calls);
@@ -345,28 +332,20 @@ mod tests {
         assert_eq!(super::plan("Pause the music and quit Jarvis", &idle()), None);
         assert_eq!(super::plan("mute, pause, mute, pause, mute, pause, mute", &idle()), None);
         // Opposite switches in one breath are a slip of the tongue, not a plan.
-        assert_eq!(super::plan("Switch to Ultron and switch back to Jarvis", &idle()), None);
-    }
-
-    #[test]
-    fn mode_and_privacy_together_are_both_the_dispatchers() {
-        let plan = plan("Switch back to Jarvis and stop listening", &ultron()).expect("a compound");
-        assert_eq!((plan.mode, plan.privacy.is_some(), plan.calls.len()), (Some(false), true, 0));
-        assert!(plan.rest().is_empty());
-        assert_eq!(plan.count(), 2);
+        assert_eq!(super::plan("Stop listening and you can listen again", &idle()), None);
     }
 
     #[test]
     fn planning_a_sentence_stays_far_inside_the_reflex_budget() {
-        let ctx = ultron();
-        let text = "Switch back to Jarvis, set theme to Arc Cyan, move the orb to the top right, and open my WebUntis schedule.";
+        let ctx = idle();
+        let text = "Set theme to Arc Cyan, move the orb to the top right, and open my WebUntis schedule.";
         let _ = plan(text, &ctx);
         let started = std::time::Instant::now();
         for _ in 0..50 {
             assert!(plan(text, &ctx).is_some());
         }
         let per_plan = started.elapsed().as_secs_f64() * 1000.0 / 50.0;
-        assert!(per_plan < 15.0, "planning four commands took {per_plan:.2} ms");
+        assert!(per_plan < 15.0, "planning three commands took {per_plan:.2} ms");
         // An ordinary sentence costs a substring scan.
         let started = std::time::Instant::now();
         for _ in 0..2000 {

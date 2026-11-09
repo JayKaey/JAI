@@ -271,7 +271,8 @@ impl LocationEngine {
         let mut url = reqwest::Url::parse("https://nominatim.openstreetmap.org/search").map_err(|e| e.to_string())?;
         {
             let mut q = url.query_pairs_mut();
-            q.append_pair("format", "jsonv2").append_pair("limit", "1").append_pair("q", query);
+            // English names (he speaks English), and Sir's words without their article.
+            q.append_pair("format", "jsonv2").append_pair("limit", "1").append_pair("accept-language", "en").append_pair("q", without_article(query));
             if let Some((lat, lon)) = near {
                 q.append_pair("viewbox", &format!("{},{},{},{}", lon - 0.6, lat + 0.4, lon + 0.6, lat - 0.4));
             }
@@ -344,6 +345,16 @@ impl LocationEngine {
             return Ok(fix);
         }
         Err("I don't know where you are, Sir: open the satellite on your phone, or tell me your home address (\"set my home to …\").".into())
+    }
+}
+
+/// "the Eiffel Tower" → "Eiffel Tower": with the article, OpenStreetMap's first hit is the
+/// replica in Nikko, Japan. A one-word rest keeps it ("the Hague", "the Netherlands").
+fn without_article(query: &str) -> &str {
+    let q = query.trim();
+    match q.get(..4) {
+        Some(head) if head.eq_ignore_ascii_case("the ") && q[4..].trim().split_whitespace().count() >= 2 => q[4..].trim(),
+        _ => q,
     }
 }
 
@@ -837,6 +848,16 @@ async fn settings_tool(tools: &ToolContext, args: &Value) -> Result<String, Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn landmarks_lose_their_article_places_keep_it() {
+        assert_eq!(without_article("the Eiffel Tower"), "Eiffel Tower");
+        assert_eq!(without_article("The white house"), "white house");
+        assert_eq!(without_article("the Hague"), "the Hague");
+        assert_eq!(without_article("the Netherlands"), "the Netherlands");
+        assert_eq!(without_article("Brandenburger Tor"), "Brandenburger Tor");
+        assert_eq!(without_article("theatre district"), "theatre district");
+    }
 
     #[test]
     fn geometry_and_wording() {

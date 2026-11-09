@@ -327,7 +327,9 @@ fn lane_of(step: &Step, index: usize) -> Option<String> {
             Some(if PLAYERS.contains(&app.as_str()) { "media".to_string() } else { format!("app:{app}") })
         }
         "control_music" | "media_and_volume_control" | "control_audio_mixer" => Some("media".to_string()),
-        "spawn_native_window" | "close_native_window" | "update_native_window" | "configure_interface" | "control_orb_mode" | "open_jarvis_view" | "hud_board" | "pop_up_ui_card" => Some("hud".to_string()),
+        "spawn_native_window" | "close_native_window" | "update_native_window" | "configure_interface" | "control_orb_mode" | "open_jarvis_view" | "hud_board" | "pop_up_ui_card" | "arrange_jarvis_window" => {
+            Some("hud".to_string())
+        }
         "set_response_modality" | "focus_mode" | "set_listening_mode" => Some("mode".to_string()),
         // A step that only reads disturbs nothing and waits for nothing.
         tool if crate::hyper_cortex::is_read_only(tool, &step.args) => Some(format!("read:{index}")),

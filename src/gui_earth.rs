@@ -1,16 +1,19 @@
 //! The EARTH block (`crate::earth`): on the board, or in its own window once detached.
 //!
-//! All of it is egui shapes. The globe is a textured mesh: a polar grid from the middle of the
-//! view out to the limb whose vertices carry their latitude and longitude as equirectangular
-//! UVs, lit by a fresnel rim, with a faint graticule and an aurora over the north, against a
-//! starfield in the theme's colour. Below ~1 600 km a flat Web Mercator map of GIBS tiles takes
-//! over. Over either: the layers (earthquakes, storms, wildfires, the ISS, flights), the info card
-//! (the time and the coordinates of the point in view), the place chip (a card with the weather
-//! on the flat map), the legend, the scale, the control column and, after an area query, the
-//! drawer of results under the map.
+//! The globe is drawn on the GPU (`earth_gl`: one paint callback, a ray-cast sphere lit by the
+//! sun, its base imagery and the clipmaps of tiles around the view) against a starfield in the
+//! theme's colour. Until that callback has drawn (and for good where the driver cannot) the globe
+//! is a textured egui mesh: a polar grid from the middle of the view out to the limb whose
+//! vertices carry their latitude and longitude as equirectangular UVs, with a fresnel rim. Below
+//! ~1 600 km a flat Web Mercator map of tiles takes over, to street level. Over either: the layers
+//! (earthquakes, storms, wildfires, the ISS, flights, the peaks, Sir's "YOU"), the info card (the
+//! time and the coordinates of the point in view), the place chip (a card with the weather on the
+//! flat map), the tour's caption, the legend, the scale, the control column and, after an area
+//! query, the drawer of results under the map.
 
 use super::{stroke, STRIP_INK, STRIP_MUTED};
-use crate::earth::{self as model, Bbox, Camera, Earth, EventKind, Flight, FlatView, GeoEvent, GlobeView, Iss, Layer, Look, Outlook, Quake, TileKey, TileLayer};
+use crate::earth::{self as model, Bbox, Camera, Earth, EventKind, Flight, FlatView, GeoEvent, GlobeView, Iss, Layer, Look, Outlook, Overlay, Quake, TileKey, TileLayer};
+use crate::earth_gl as gl;
 use eframe::egui::{self, epaint::Vertex, pos2, vec2, Align2, Color32, FontFamily, FontId, Frame, Galley, Margin, Mesh, Painter, Pos2, Rect, Sense, Shape, Stroke, TextureId, Ui, UiBuilder, Vec2, ViewportBuilder, ViewportClass, ViewportCommand, ViewportId};
 use std::f32::consts::{PI, TAU};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -283,29 +286,50 @@ fn view_with(ui: &mut Ui, st: &mut Earth, rt: &Handle, fetch: bool) {
     let lay = Layout::new(full, st.area.is_some(), credits.size().y);
     ui.allocate_rect(full, Sense::hover());
     let map_resp = ui.interact(lay.map, ui.id().with("earth_map"), Sense::click_and_drag());
-    if handle_input(&ctx, st, &Geo::new(st.cam, lay.map), &map_resp, now) {
+    if handle_input(&ctx, st, &Geo::new(st.cam, lay.map), &map_resp, now, dt) {
         moving = true;
     }
     let geo = Geo::new(st.cam, lay.map);
 
     let painter = ui.painter_at(lay.map);
     painter.rect_filled(lay.map, 0.0, SPACE);
+    // The GPU draws the globe (and the flat map's base) once it has; the CPU until then, and for
+    // good where the shader would not build. The offscreen HUD never runs the callback.
+    let gpu = !gl::failed();
+    let cpu = !gl::proven();
     let textures = globe_textures(st, now);
     if geo.flatness < 1.0 {
         stars(&painter, lay.map, mix(ink.rim, Color32::WHITE, 0.55), &geo.globe);
-        paint_globe(&painter, &geo.globe, &ink, st.look, textures, now);
+        if cpu {
+            paint_globe(&painter, &geo.globe, &ink, st.look, textures, now);
+        }
+    }
+    if gpu {
+        let frame = gpu_frame(st, &geo, &ink, now, rt);
+        painter.add(Shape::Callback(gl::callback(lay.map, frame)));
+        if geo.flatness < 1.0 && !cpu {
+            globe_marks(&painter, &geo.globe, &ink, st.look, now);
+        }
     }
     if geo.flatness > 0.0 {
-        paint_flat(&painter, st, &geo, textures.0, &ink, rt);
+        paint_flat(&painter, st, &geo, textures.0, &ink, rt, cpu);
     }
 
     let controls = controls_layout(lay.map);
     let mut placer = Placer { bounds: lay.map.shrink(4.0), taken: vec![controls.area] };
     let cards = plan_cards(&painter, st, &geo, &controls, &mut placer, &ink);
     let mut picker = Picker { pointer: map_resp.hover_pos(), best: None };
+    let tour_card = plan_tour_card(&painter, st, &geo, &mut placer);
     let (pulsing, movers) = paint_layers(&painter, st, &geo, &ink, now, &mut placer, &mut picker);
     cards.paint(&painter, &ink);
-    paint_controls(ui, &painter, st, &controls, &ink);
+    if let Some(card) = tour_card {
+        card.paint(&painter, &ink);
+    }
+    paint_controls(ui, &painter, st, &controls, &ink, rt);
+    // live layers (C1): a click picks a satellite or a train (or lets go).
+    if map_resp.clicked() && !controls.area.contains(map_resp.interact_pointer_pos().unwrap_or_default()) {
+        crate::earth_layers::clicked(picker.best.as_ref().and_then(|(_, h)| if let Hover::Live(hit) = h { Some(hit) } else { None }));
+    }
     if let (Some((_, hover)), Some(at)) = (picker.best, picker.pointer) {
         callout(&painter, &hover, at, lay.map, &ink);
     }
@@ -322,9 +346,9 @@ fn view_with(ui: &mut Ui, st: &mut Earth, rt: &Handle, fetch: bool) {
     }
     // Frames only while something moves: 60 a second for the camera and a fade, fewer for the
     // halo's beat and the aircraft, one a second for the clock.
-    if moving || st.globe_fade.progress(now) < 1.0 || map_resp.dragged() {
+    if moving || st.globe_fade.progress(now) < 1.0 || map_resp.dragged() || (gpu && gl::proven() && gl::busy()) {
         ctx.request_repaint();
-    } else if pulsing {
+    } else if pulsing || (st.overlays.radar && st.overlays.animate) {
         ctx.request_repaint_after(Duration::from_millis(90));
     } else if movers {
         ctx.request_repaint_after(Duration::from_millis(250));
@@ -335,7 +359,27 @@ fn view_with(ui: &mut Ui, st: &mut Earth, rt: &Handle, fetch: bool) {
 
 /// The sources of what is shown, the layers that are off left out.
 fn credits_line(st: &Earth) -> String {
-    let mut parts = vec!["Imagery: NASA GIBS / EOSDIS"];
+    let mut parts = vec![match (st.look, st.historic) {
+        (Look::Holo, _) => "Imagery: NASA GIBS / EOSDIS",
+        (_, Some(_)) => "Imagery: NASA GIBS / EOSDIS (VIIRS)",
+        _ => st.imagery.credit(),
+    }];
+    if st.look == Look::Satellite {
+        parts.push("Globe: NASA GIBS / EOSDIS (Blue Marble, Black Marble)");
+        if st.overlays.labels {
+            parts.push(crate::earth_sources::REFERENCE_CREDIT);
+        }
+    }
+    if st.overlays.terrain {
+        parts.push(crate::earth_sources::TERRAIN_CREDIT);
+        parts.push(crate::earth_sources::PEAKS_CREDIT);
+    }
+    if st.overlays.radar {
+        parts.push(crate::earth_sources::RADAR_CREDIT);
+    }
+    if st.overlays.clouds {
+        parts.push(crate::earth_sources::IR_CREDIT);
+    }
     if st.layers.quakes {
         parts.push("Quakes: USGS");
     }
@@ -348,19 +392,40 @@ fn credits_line(st: &Earth) -> String {
     if st.layers.flights {
         parts.push("Flights: OpenSky Network");
     }
+    parts.extend(crate::earth_layers::credits()); // live layers (C1)
     parts.push("Weather & places: Open-Meteo, BigDataCloud");
     parts.join(" \u{b7} ")
 }
 
-/// A drag turns the globe (pans the map), the wheel zooms, a double click flies closer to the
-/// point under the pointer. True when the camera moved.
-fn handle_input(ctx: &egui::Context, st: &mut Earth, geo: &Geo, resp: &egui::Response, now: f64) -> bool {
+/// A drag turns the globe (pans the map) and, let go, the map glides on a little; the wheel
+/// zooms, a double click flies closer to the point under the pointer. True when the camera moved.
+fn handle_input(ctx: &egui::Context, st: &mut Earth, geo: &Geo, resp: &egui::Response, now: f64, dt: f64) -> bool {
+    /// The glide's time constant and the speed (points a second) below which it stops.
+    const GLIDE_TAU: f64 = 0.32;
+    const GLIDE_MIN: f32 = 12.0;
     let mut moved = false;
     if resp.dragged() {
         let d = resp.drag_delta();
+        let before = st.inertia.unwrap_or((0.0, 0.0));
         if d != Vec2::ZERO {
             st.grab();
             pan(st, geo, d);
+            st.still_since = now;
+            moved = true;
+        }
+        // The drag's speed, smoothed over a few frames (a pause on the spot stills it).
+        st.inertia = (dt > 0.0).then(|| {
+            let v = d / dt as f32;
+            (before.0 + (v.x - before.0) * 0.5, before.1 + (v.y - before.1) * 0.5)
+        });
+    } else if let Some((vx, vy)) = st.inertia {
+        let decay = (-dt / GLIDE_TAU).exp() as f32;
+        let v = vec2(vx, vy) * decay;
+        if v.length() < GLIDE_MIN || st.motion.is_some() {
+            st.inertia = None;
+        } else {
+            pan(st, geo, v * dt as f32);
+            st.inertia = Some((v.x, v.y));
             st.still_since = now;
             moved = true;
         }
@@ -450,6 +515,70 @@ fn paint_globe(p: &Painter, g: &GlobeView, ink: &Ink, look: Look, (id, share, un
     graticule(p, g, ink.rim.gamma_multiply(0.16));
     aurora(p, g, ink.aurora, now);
     p.circle_stroke(centre, r, stroke(1.2, ink.rim.gamma_multiply(0.85)));
+}
+
+/// What the GPU globe has no shader for: the hologram's graticule and outline, the aurora.
+fn globe_marks(p: &Painter, g: &GlobeView, ink: &Ink, look: Look, now: f64) {
+    if look == Look::Holo {
+        graticule(p, g, ink.rim.gamma_multiply(0.16));
+        p.circle_stroke(pos2(g.cx as f32, g.cy as f32), g.limb_radius() as f32, stroke(1.0, ink.rim.gamma_multiply(0.7)));
+    }
+    aurora(p, g, ink.aurora, now);
+}
+
+fn rgb(c: Color32) -> [f32; 3] {
+    [c.r() as f32 / 255.0, c.g() as f32 / 255.0, c.b() as f32 / 255.0]
+}
+
+/// The level of Web Mercator tiles whose pixels are the screen's in the middle of the view.
+fn tile_zoom(geo: &Geo) -> f64 {
+    (2.0 * std::f64::consts::PI * model::R_KM * geo.proj().px_per_km() / 256.0).max(1.0).log2()
+}
+
+/// The GPU globe's frame: the camera, the sun, the look, the textures and the clipmaps (whose
+/// tiles are asked for here).
+fn gpu_frame(st: &mut Earth, geo: &Geo, ink: &Ink, now: f64, rt: &Handle) -> gl::Frame {
+    let g = &geo.globe;
+    let photo = st.look == Look::Satellite;
+    let (sun_lat, sun_lon) = crate::earth_sources::subsolar_point(chrono::Utc::now());
+    let p = model::holo_palette(model::theme_hue());
+    let c = |v: [u8; 3]| [v[0] as f32 / 255.0, v[1] as f32 / 255.0, v[2] as f32 / 255.0];
+    let day = match (photo, st.historic) {
+        (false, _) if gl::ready(gl::Slot::Relief) => gl::Slot::Relief,
+        (true, Some(_)) if gl::ready(gl::Slot::Historic) => gl::Slot::Historic,
+        _ => gl::Slot::Day,
+    };
+    // The clipmaps: the imagery once the base texture is magnified, the overlays at any height;
+    // none on the flat map (its own tiles cover it) or before the GPU has drawn.
+    let z = tile_zoom(geo);
+    let base_z = if gl::caps().is_some_and(|c| c.dxt1 && c.max_side >= 8192) { 5.0 } else { 4.0 };
+    let clips = if gl::proven() && geo.flatness < 1.0 {
+        let detail = (z > base_z - 0.7).then(|| ((z + 0.5).floor().clamp(3.0, 12.0) as u8, model::smoothstep(base_z - 0.7, base_z, z) as f32));
+        let overlay = Some(z.round().clamp(3.0, 7.0) as u8);
+        st.update_clips(rt, (st.cam.lat, st.cam.lon), detail, overlay, now)
+    } else {
+        [gl::ClipUse::default(), gl::ClipUse::default()]
+    };
+    let live = photo && st.historic.is_none();
+    gl::Frame {
+        centre: [g.cx as f32, g.cy as f32],
+        f: g.f as f32,
+        d: g.d as f32,
+        basis: gl::view_basis(g.lat0, g.lon0),
+        flatness: geo.flatness,
+        flat: [model::merc_x(geo.flat.lon0) as f32, model::merc_y(geo.flat.lat0) as f32, geo.flat.world as f32],
+        sun: gl::world_unit(sun_lat, sun_lon),
+        holo: if photo { 0.0 } else { 1.0 },
+        night: if live { 1.0 } else { 0.0 },
+        borders: if photo { 0.0 } else { 1.0 },
+        glint: if live { 1.0 } else { 0.0 },
+        rim: rgb(ink.rim),
+        palette: [c(p.ocean_deep), c(p.ocean_shallow), c(p.land_dark), c(p.land), c(p.dot), c(p.coast), c(p.border)],
+        day,
+        detail: clips[0],
+        overlay: clips[1],
+        time: (now % 10_000.0) as f32,
+    }
 }
 
 /// The visible cap of the globe as a polar grid around the middle of the view: the outermost
@@ -597,46 +726,57 @@ fn stars(p: &Painter, map: Rect, colour: Color32, g: &GlobeView) {
 
 // ------------------------------------------------------------------------ the flat map ----
 
-/// The flat map: the globe's texture in Web Mercator under the GIBS tiles of the look (imagery,
-/// then borders and coastlines, then place names), all at `geo.flatness`.
-fn paint_flat(p: &Painter, st: &mut Earth, geo: &Geo, base: TextureId, ink: &Ink, rt: &Handle) {
+/// The flat map: the globe's texture in Web Mercator (drawn by the GPU's pass when it runs, as a
+/// mesh by `cpu`) under the tiles: the imagery, the terrain's shading, the clouds and the radar,
+/// then the labels and borders, all at `geo.flatness`.
+#[allow(clippy::too_many_arguments)]
+fn paint_flat(p: &Painter, st: &mut Earth, geo: &Geo, base: TextureId, ink: &Ink, rt: &Handle, cpu: bool) {
     let (map, flat) = (geo.map, &geo.flat);
     let tint = Color32::WHITE.gamma_multiply(geo.flatness);
-    const COLS: u32 = 24;
-    const ROWS: u32 = 18;
-    let mut mesh = Mesh::with_texture(base);
-    for r in 0..=ROWS {
-        for c in 0..=COLS {
-            let at = pos2(map.left() + map.width() * c as f32 / COLS as f32, map.top() + map.height() * r as f32 / ROWS as f32);
-            let (lat, lon) = flat.unproject(at.x as f64, at.y as f64);
-            mesh.vertices.push(Vertex { pos: at, uv: pos2(((lon + 180.0) / 360.0) as f32, ((90.0 - lat) / 180.0) as f32), color: tint });
+    if cpu {
+        const COLS: u32 = 24;
+        const ROWS: u32 = 18;
+        let mut mesh = Mesh::with_texture(base);
+        for r in 0..=ROWS {
+            for c in 0..=COLS {
+                let at = pos2(map.left() + map.width() * c as f32 / COLS as f32, map.top() + map.height() * r as f32 / ROWS as f32);
+                let (lat, lon) = flat.unproject(at.x as f64, at.y as f64);
+                mesh.vertices.push(Vertex { pos: at, uv: pos2(((lon + 180.0) / 360.0) as f32, ((90.0 - lat) / 180.0) as f32), color: tint });
+            }
         }
-    }
-    for r in 0..ROWS {
-        for c in 0..COLS {
-            let i = r * (COLS + 1) + c;
-            mesh.add_triangle(i, i + 1, i + COLS + 1);
-            mesh.add_triangle(i + 1, i + COLS + 2, i + COLS + 1);
+        for r in 0..ROWS {
+            for c in 0..COLS {
+                let i = r * (COLS + 1) + c;
+                mesh.add_triangle(i, i + 1, i + COLS + 1);
+                mesh.add_triangle(i + 1, i + COLS + 2, i + COLS + 1);
+            }
         }
+        p.add(Shape::mesh(mesh));
     }
-    p.add(Shape::mesh(mesh));
     let zoom = flat.zoom();
-    let imagery = match st.look {
-        Look::Holo => TileLayer::Holo,
-        Look::Satellite => TileLayer::Satellite,
-    };
-    tiles(p, st, flat, map, imagery, (zoom + 0.3).floor().clamp(0.0, imagery.max_level() as f64) as u8, tint, rt);
+    let level = |layer: TileLayer, bias: f64| (zoom + bias).floor().clamp(0.0, layer.max_level() as f64) as u8;
+    let imagery = st.imagery_layer();
+    tiles(p, st, flat, map, imagery, level(imagery, 0.3), tint, rt);
+    if let Some(terrain) = st.terrain_layer() {
+        tiles(p, st, flat, map, terrain, level(terrain, 0.3), tint, rt);
+    }
     // The hologram's grid (a satellite photo stays clean once it is there).
-    if st.look == Look::Holo || st.sat.tex.is_none() {
+    if st.look == Look::Holo || (cpu && st.sat.tex.is_none()) {
         flat_graticule(p, flat, map, ink.rim.gamma_multiply(0.18 * geo.flatness));
     }
-    let detail = (zoom + 0.5).floor().clamp(0.0, TileLayer::Features.max_level() as f64) as u8;
-    let lines = match st.look {
-        Look::Holo => ink.lines,
-        Look::Satellite => WHITE_INK,
-    };
-    tiles(p, st, flat, map, TileLayer::Features, detail, lines.gamma_multiply(0.85 * geo.flatness), rt);
-    tiles(p, st, flat, map, TileLayer::Labels, detail, tint, rt);
+    let now = p.ctx().input(|i| i.time);
+    for layer in st.overlay_layers(now) {
+        match layer {
+            // The hologram's lines in its own colour, then its names.
+            TileLayer::Labels => {
+                let detail = level(TileLayer::Features, 0.5);
+                tiles(p, st, flat, map, TileLayer::Features, detail, ink.lines.gamma_multiply(0.85 * geo.flatness), rt);
+                tiles(p, st, flat, map, TileLayer::Labels, detail, tint, rt);
+            }
+            TileLayer::Radar(_) => tiles(p, st, flat, map, layer, level(layer, 0.0), Color32::WHITE.gamma_multiply(0.85 * geo.flatness), rt),
+            _ => tiles(p, st, flat, map, layer, level(layer, 0.5), tint, rt),
+        }
+    }
 }
 
 /// Parallels and meridians over the flat map (straight lines in Web Mercator), every 30 degrees
@@ -668,22 +808,25 @@ fn flat_graticule(p: &Painter, flat: &FlatView, map: Rect, colour: Color32) {
 fn tiles(p: &Painter, st: &mut Earth, flat: &FlatView, map: Rect, layer: TileLayer, z: u8, tint: Color32, rt: &Handle) {
     let n = 1i64 << z;
     let whole = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
+    let ctx = p.ctx().clone();
     for (x, y) in flat.tiles([map.left() as f64, map.top() as f64, map.right() as f64, map.bottom() as f64], z) {
         let key = TileKey { layer, z, x: x.rem_euclid(n) as u32, y: y as u32 };
         let r = flat.tile_rect(z, x, y);
         let rect = Rect::from_min_max(pos2(r[0] as f32, r[1] as f32), pos2(r[2] as f32, r[3] as f32));
-        if let Some(texture) = st.tile(key) {
+        if let Some(texture) = st.tile(&ctx, key) {
             p.image(texture, rect, whole, tint);
             continue;
         }
         st.request_tile(key, rt);
+        // An ancestor stands in (up to six levels: street level shows the town's tile blurred
+        // rather than the globe's texture).
         let (mut k, mut uv) = (key, whole);
-        for _ in 0..4 {
+        for _ in 0..6 {
             let Some(parent) = k.parent() else { break };
             let (qx, qy) = ((k.x % 2) as f32, (k.y % 2) as f32);
             uv = Rect::from_min_size(pos2((qx + uv.min.x) / 2.0, (qy + uv.min.y) / 2.0), uv.size() / 2.0);
             k = parent;
-            if let Some(texture) = st.tile(k) {
+            if let Some(texture) = st.tile(&ctx, k) {
                 p.image(texture, rect, uv, tint);
                 break;
             }
@@ -700,6 +843,8 @@ enum Hover {
     Event(GeoEvent),
     Plane(Flight),
     Iss(Iss),
+    // live layers (C1)
+    Live(crate::earth_layers::Hit),
 }
 
 /// The thing nearest the pointer among those drawn.
@@ -783,6 +928,7 @@ fn paint_layers(p: &Painter, st: &Earth, geo: &Geo, ink: &Ink, now: f64, placer:
     let proj = geo.proj();
     let map = geo.map;
     let inside = |at: Pos2, r: f32| map.expand(r).contains(at);
+    super::media_view::paint_earth_cameras(p, map, &|lat, lon| proj.at(lat, lon)); // cameras (C2)
     let (mut pulsing, mut movers) = (false, false);
     let mut labels: Vec<Label> = Vec::new();
     // What no label may cover: the earthquakes, storms, fires, the ISS and the marker.
@@ -872,6 +1018,17 @@ fn paint_layers(p: &Painter, st: &Earth, geo: &Geo, ink: &Ink, now: f64, placer:
         }
         movers |= !st.flights.items.is_empty();
     }
+    // live layers (C1): satellites, trains, traffic (earth_layers.rs paints, the Earth places).
+    {
+        let view = crate::earth_layers::MapView { map, alt_km: st.cam.alt, centre: (st.cam.lat, st.cam.lon), px_per_km: proj.px_per_km(), at: &|lat, lon| proj.at(lat, lon), runs: &|pts| proj.runs(pts), pointer: picker.pointer, rim: ink.rim, accent: ink.accent, iss_layer: iss.is_some() };
+        let live = crate::earth_layers::paint(p, &view);
+        glyphs.extend(live.glyphs);
+        labels.extend(live.labels.into_iter().map(|l| Label { at: l.at, gap: l.gap, text: l.text, font: mono(10.0), colour: l.colour, rank: l.rank }));
+        if let Some((at, r, hit)) = live.hover {
+            picker.consider(at, r, || Hover::Live(hit));
+        }
+        movers |= live.moving;
+    }
     if let Some(iss) = iss {
         if let Some((at, vis)) = proj.at(iss.lat, iss.lon).filter(|(at, _)| inside(*at, 12.0)) {
             p.circle_filled(at, 11.0, light(ink.rim, 0.3 * vis));
@@ -887,6 +1044,47 @@ fn paint_layers(p: &Painter, st: &Earth, geo: &Geo, ink: &Ink, now: f64, placer:
             reticle(p, at, WHITE_INK.gamma_multiply(vis));
             glyphs.push(Rect::from_center_size(at, Vec2::splat(28.0)));
             labels.push(Label { at, gap: 16.0, text: m.name.clone(), font: super::bold(11.0), colour: WHITE_INK.gamma_multiply(vis), rank: 0.0 });
+        }
+    }
+    // The peaks in view on the shaded terrain: the highest named first.
+    if st.overlays.terrain && st.cam.alt <= model::PEAKS_MAX_ALT_KM {
+        let mut shown = 0;
+        for peak in &st.peaks.items {
+            if shown >= 40 {
+                break;
+            }
+            let Some((at, vis)) = proj.at(peak.lat, peak.lon).filter(|(at, _)| map.shrink(6.0).contains(*at)) else { continue };
+            shown += 1;
+            let c = WHITE_INK.gamma_multiply(vis);
+            p.add(Shape::convex_polygon(vec![at + vec2(0.0, -4.5), at + vec2(4.0, 3.0), at + vec2(-4.0, 3.0)], c, Stroke::NONE));
+            glyphs.push(Rect::from_center_size(at, Vec2::splat(9.0)));
+            labels.push(Label { at, gap: 7.0, text: format!("{} {} m", peak.name, model::group_digits(peak.ele_m.round() as i64)), font: mono(10.0), colour: c, rank: 2.0 + shown as f32 * 0.01 });
+        }
+    }
+    // Sir himself: a beating dot in the accent, his accuracy around it.
+    if let Some(me) = &st.me {
+        let radius_km = me.accuracy_m / 1000.0;
+        let circle = model::circle_points((me.lat, me.lon), radius_km, 72);
+        let r_px = (proj.px_per_km() * radius_km) as f32;
+        if r_px > 6.0 {
+            for run in proj.runs(&circle) {
+                p.extend(Shape::dashed_line(&run, stroke(1.2, ink.accent.gamma_multiply(0.85)), 6.0, 4.0));
+            }
+            if let [whole] = proj.runs(&circle).as_slice() {
+                if whole.len() == circle.len() {
+                    p.add(Shape::convex_polygon(whole.clone(), ink.accent.gamma_multiply(0.08), Stroke::NONE));
+                }
+            }
+        }
+        if let Some((at, vis)) = proj.at(me.lat, me.lon).filter(|(at, _)| inside(*at, 16.0)) {
+            let phase = (((now - st.me_since) / PULSE_SECS).max(0.0).fract()) as f32;
+            p.circle_stroke(at, 6.0 + 14.0 * phase, stroke(1.6, ink.accent.gamma_multiply((1.0 - phase) * vis)));
+            p.circle_filled(at, 6.5, Color32::from_black_alpha((170.0 * vis) as u8));
+            p.circle_filled(at, 5.0, ink.accent.gamma_multiply(vis));
+            p.circle_filled(at, 2.0, WHITE_INK.gamma_multiply(vis));
+            glyphs.push(Rect::from_center_size(at, Vec2::splat(16.0)));
+            labels.push(Label { at, gap: 12.0, text: "YOU".into(), font: super::bold(11.0), colour: WHITE_INK.gamma_multiply(vis), rank: -1.0 });
+            pulsing = true;
         }
     }
     // (Each label's own glyph lies inside its gap: none of its spots touches it.)
@@ -996,6 +1194,13 @@ enum Icon {
     Minus,
     Home,
     Globe,
+    /// A crosshair round a dot: where Sir is.
+    You,
+    /// "Aa" over a dashed border.
+    Labels,
+    Mountain,
+    Radar,
+    Cloud,
 }
 
 impl Icon {
@@ -1056,6 +1261,46 @@ impl Icon {
                 let meridian: Vec<Pos2> = (0..=16).map(|k| TAU * k as f32 / 16.0).map(|a| c + vec2(s * 0.38 * a.cos(), s * 0.85 * a.sin())).collect();
                 p.add(Shape::line(meridian, line));
                 p.line_segment([c - vec2(s * 0.85, 0.0), c + vec2(s * 0.85, 0.0)], line);
+            }
+            Icon::You => {
+                p.circle_stroke(c, s * 0.6, line);
+                p.circle_filled(c, s * 0.2, ink);
+                for dir in [vec2(1.0, 0.0), vec2(-1.0, 0.0), vec2(0.0, 1.0), vec2(0.0, -1.0)] {
+                    p.line_segment([c + dir * s * 0.6, c + dir * s], line);
+                }
+            }
+            Icon::Labels => {
+                // A border's dashes under a little "A".
+                let base = c.y + s * 0.15;
+                p.add(Shape::line(vec![pos2(c.x - s * 0.55, base), pos2(c.x, c.y - s * 0.85), pos2(c.x + s * 0.55, base)], line));
+                p.line_segment([pos2(c.x - s * 0.3, c.y - s * 0.25), pos2(c.x + s * 0.3, c.y - s * 0.25)], line);
+                let y = c.y + s * 0.7;
+                for k in 0..3 {
+                    let x = c.x - s + k as f32 * s * 0.75;
+                    p.line_segment([pos2(x, y), pos2(x + s * 0.45, y)], line);
+                }
+            }
+            Icon::Mountain => {
+                let foot = c.y + s * 0.7;
+                p.add(Shape::line(
+                    vec![pos2(c.x - s, foot), pos2(c.x - s * 0.25, c.y - s * 0.75), pos2(c.x + s * 0.15, c.y - s * 0.1), pos2(c.x + s * 0.45, c.y - s * 0.45), pos2(c.x + s, foot)],
+                    line,
+                ));
+                p.line_segment([pos2(c.x - s * 0.5, c.y - s * 0.3), pos2(c.x - s * 0.05, c.y - s * 0.3)], line);
+            }
+            Icon::Radar => {
+                for k in 1..=3 {
+                    let r = s * 0.3 * k as f32;
+                    let arc: Vec<Pos2> = (0..=8).map(|j| -PI * 0.25 + PI * 0.5 * j as f32 / 8.0).map(|a| c + vec2(0.0, s * 0.55) + vec2(a.sin(), -a.cos()) * r * 1.2).collect();
+                    p.add(Shape::line(arc, line));
+                }
+                p.circle_filled(c + vec2(0.0, s * 0.55), s * 0.14, ink);
+            }
+            Icon::Cloud => {
+                let base = c.y + s * 0.45;
+                p.circle_stroke(c + vec2(-s * 0.4, s * 0.05), s * 0.4, line);
+                p.circle_stroke(c + vec2(s * 0.15, -s * 0.15), s * 0.55, line);
+                p.line_segment([pos2(c.x - s * 0.8, base), pos2(c.x + s * 0.7, base)], line);
             }
         }
     }
@@ -1243,9 +1488,9 @@ fn plan_cards(p: &Painter, st: &Earth, geo: &Geo, controls: &Controls, placer: &
         list.push(card);
     }
 
-    // How the imagery is doing (or "ZOOM IN FOR FLIGHTS").
-    if let Some(status) = st.status() {
-        let rows = vec![vec![Piece::text(text(status.to_string(), mono(10.0), ink.accent))]];
+    // How the imagery is doing (or "ZOOM IN FOR FLIGHTS", the day or the radar's time shown).
+    if let Some(status) = st.status(p.ctx().input(|i| i.time)) {
+        let rows = vec![vec![Piece::text(text(status, mono(10.0), ink.accent))]];
         let mut spots = vec![(pos2(map.center().x, map.top() + 10.0), Align2::CENTER_TOP)];
         if let Some(info) = info_rect {
             spots.push((pos2(info.left(), info.bottom() + 6.0), Align2::LEFT_TOP));
@@ -1278,6 +1523,24 @@ fn plan_cards(p: &Painter, st: &Earth, geo: &Geo, controls: &Controls, placer: &
     Cards { list, scale }
 }
 
+/// The world tour's caption at the bottom of the map: the stop, what it is, where.
+fn plan_tour_card(p: &Painter, st: &Earth, geo: &Geo, placer: &mut Placer) -> Option<Card> {
+    let tour = st.tour.as_ref()?;
+    let stop = tour.current()?;
+    let map = geo.map;
+    let width = (map.width() * 0.5).clamp(140.0, 420.0);
+    let head = format!("WORLD TOUR {}/{} \u{b7} {}", tour.index + 1, tour.stops.len(), stop.kind.label());
+    let rows = vec![
+        vec![Piece::text(p.layout_no_wrap(head, mono(10.0), STRIP_MUTED))],
+        vec![Piece::text(elided(p, &stop.title, super::bold(13.0), WHITE_INK, width))],
+        vec![Piece::text(elided(p, &stop.caption, mono(10.0), STRIP_INK, width))],
+    ];
+    let spots = [(pos2(map.center().x, map.bottom() - 10.0), Align2::CENTER_BOTTOM), (pos2(map.center().x, map.bottom() - 60.0), Align2::CENTER_BOTTOM), (pos2(map.center().x, map.top() + 40.0), Align2::CENTER_TOP)];
+    let card = spots.into_iter().map(|(at, align)| Card::new(rows.clone(), at, align, true)).find(|c| placer.fits(c.rect))?;
+    placer.take(card.rect);
+    Some(card)
+}
+
 /// The legend's pieces: each layer that is on with its count.
 fn legend(p: &Painter, st: &Earth) -> Vec<Piece> {
     let text = |s: String| p.layout_no_wrap(s, mono(10.0), STRIP_INK);
@@ -1302,6 +1565,8 @@ fn legend(p: &Painter, st: &Earth) -> Vec<Piece> {
     if st.layers.flights {
         pieces.push(Piece::with(Icon::Plane, text(model::group_digits(st.flights.items.len() as i64))));
     }
+    // live layers (C1)
+    pieces.extend(crate::earth_layers::legend().into_iter().map(|(c, s)| Piece::with(Icon::Dot(c), text(s))));
     pieces
 }
 
@@ -1324,6 +1589,8 @@ fn callout(p: &Painter, hover: &Hover, at: Pos2, map: Rect, ink: &Ink) {
             vec![Piece::with(Icon::Iss, line("ISS", super::bold(12.0), WHITE_INK))],
             vec![Piece::text(line(&format!("{} km \u{b7} {} km/h", iss.alt_km.round(), model::group_digits(iss.speed_kmh.round() as i64)), mono(10.0), STRIP_INK))],
         ],
+        // live layers (C1): a satellite, a train or a road incident.
+        Hover::Live(hit) => hit.lines().iter().enumerate().map(|(i, s)| vec![if i == 0 { Piece::with(Icon::Dot(ink.accent), line(s, super::bold(12.0), WHITE_INK)) } else { Piece::text(line(s, mono(10.0), STRIP_INK)) }]).collect(),
     };
     let size = Card::size(&rows);
     let mut min = at + vec2(14.0, 14.0);
@@ -1344,21 +1611,30 @@ enum Control {
     ZoomIn,
     ZoomOut,
     Home,
+    Locate,
     Layer(Layer),
+    Overlay(Overlay),
     Satellite,
 }
 
-const CONTROLS: [Control; 9] = [
+const CONTROLS: [Control; 14] = [
     Control::ZoomIn,
     Control::ZoomOut,
     Control::Home,
+    Control::Locate,
     Control::Layer(Layer::Quakes),
     Control::Layer(Layer::Storms),
     Control::Layer(Layer::Fires),
     Control::Layer(Layer::Iss),
     Control::Layer(Layer::Flights),
+    Control::Overlay(Overlay::Labels),
+    Control::Overlay(Overlay::Terrain),
+    Control::Overlay(Overlay::Radar),
+    Control::Overlay(Overlay::Clouds),
     Control::Satellite,
 ];
+/// Where the column's groups start (the camera, the live layers, the overlays).
+const GROUP_STARTS: [usize; 2] = [4, 9];
 
 impl Control {
     fn icon(self) -> Icon {
@@ -1366,11 +1642,17 @@ impl Control {
             Control::ZoomIn => Icon::Plus,
             Control::ZoomOut => Icon::Minus,
             Control::Home => Icon::Home,
+            Control::Locate => Icon::You,
             Control::Layer(Layer::Quakes) => Icon::Quake,
             Control::Layer(Layer::Storms) => Icon::Storm,
             Control::Layer(Layer::Fires) => Icon::Fire,
             Control::Layer(Layer::Iss) => Icon::Iss,
             Control::Layer(Layer::Flights) => Icon::Plane,
+            Control::Layer(Layer::Cameras) => Icon::Globe, // cameras (C2)
+            Control::Overlay(Overlay::Labels) => Icon::Labels,
+            Control::Overlay(Overlay::Terrain) => Icon::Mountain,
+            Control::Overlay(Overlay::Radar) => Icon::Radar,
+            Control::Overlay(Overlay::Clouds) => Icon::Cloud,
             Control::Satellite => Icon::Globe,
         }
     }
@@ -1380,8 +1662,13 @@ impl Control {
             Control::ZoomIn => "Zoom in (or the mouse wheel)",
             Control::ZoomOut => "Zoom out",
             Control::Home => "Back to the whole globe",
+            Control::Locate => "Where am I? (the Windows location service, else your connection's city)",
             Control::Layer(layer) => layer.hint(),
-            Control::Satellite => "Satellite imagery (NASA Blue Marble); again for the holographic globe",
+            Control::Overlay(Overlay::Labels) => "Place names and borders (Esri)",
+            Control::Overlay(Overlay::Terrain) => "Shaded terrain and the peaks' names (AWS Terrain Tiles, OpenStreetMap)",
+            Control::Overlay(Overlay::Radar) => "Rain radar, the past two hours (RainViewer)",
+            Control::Overlay(Overlay::Clouds) => "Live cloud cover: infrared from GOES and Himawari (NASA GIBS)",
+            Control::Satellite => "The photo globe; again for the holographic one",
         }
     }
 }
@@ -1409,7 +1696,7 @@ fn controls_layout(map: Rect) -> Controls {
         .enumerate()
         .map(|(i, control)| {
             let (col, row) = (i / rows, i % rows);
-            let groups = if cols == 1 { GROUP * (u8::from(i >= 3) + u8::from(i >= 8)) as f32 } else { 0.0 };
+            let groups = if cols == 1 { GROUP * (u8::from(i >= GROUP_STARTS[0]) + u8::from(i >= GROUP_STARTS[1])) as f32 } else { 0.0 };
             let x = map.right() - 10.0 - size - (cols - 1 - col) as f32 * (size + GAP);
             let y = map.top() + 10.0 + row as f32 * (size + GAP) + groups;
             (control, Rect::from_min_size(pos2(x, y), vec2(size, size)))
@@ -1420,11 +1707,13 @@ fn controls_layout(map: Rect) -> Controls {
 }
 
 /// The control column: filled in the accent while a layer (or the satellite view) is on.
-fn paint_controls(ui: &mut Ui, p: &Painter, st: &mut Earth, controls: &Controls, ink: &Ink) {
+fn paint_controls(ui: &mut Ui, p: &Painter, st: &mut Earth, controls: &Controls, ink: &Ink, rt: &Handle) {
     for &(control, rect) in &controls.buttons {
         let resp = ui.interact(rect, ui.id().with(("earth_control", control)), Sense::click());
         let on = match control {
             Control::Layer(layer) => st.layers.get(layer),
+            Control::Overlay(overlay) => st.overlays.get(overlay),
+            Control::Locate => st.me.is_some(),
             Control::Satellite => st.look == Look::Satellite,
             _ => false,
         };
@@ -1434,7 +1723,7 @@ fn paint_controls(ui: &mut Ui, p: &Painter, st: &mut Earth, controls: &Controls,
             SPACE
         } else {
             p.circle(c, r, CARD, stroke(1.0, if resp.hovered() { ink.accent } else { ink.border }));
-            if matches!(control, Control::Layer(_) | Control::Satellite) { ink.accent } else { STRIP_INK }
+            if matches!(control, Control::Layer(_) | Control::Overlay(_) | Control::Satellite) { ink.accent } else { STRIP_INK }
         };
         control.icon().paint(p, c, r * 0.5, Some(icon));
         if resp.on_hover_text(control.hint()).clicked() {
@@ -1445,7 +1734,14 @@ fn paint_controls(ui: &mut Ui, p: &Painter, st: &mut Earth, controls: &Controls,
                     st.area = None;
                     st.go_home();
                 }
+                Control::Locate => model::locate_in_background(rt),
                 Control::Layer(layer) => st.layers.set(layer, !on),
+                Control::Overlay(overlay) => {
+                    st.overlays.set(overlay, !on);
+                    if overlay == Overlay::Radar {
+                        st.radar_since = f64::NAN;
+                    }
+                }
                 Control::Satellite => st.set_look(if on { Look::Holo } else { Look::Satellite }),
             }
         }
@@ -1543,6 +1839,33 @@ fn summary(st: &Earth) -> String {
     if let Some(area) = &st.area {
         lines.push(format!("area query {} around {}: {}", area.header(), model::coords_label(area.lat, area.lon), area.results.as_ref().map_or("waiting".to_string(), |r| format!("{} found", r.len()))));
     }
+    // What the imagery shows: its source or day, the overlays, the tour.
+    let o = st.overlays;
+    let overlays: Vec<&str> = [
+        (o.labels, "labels and borders"),
+        (o.terrain && !o.exaggerate, "terrain"),
+        (o.terrain && o.exaggerate, "terrain (exaggerated)"),
+        (o.radar && !o.animate, "rain radar"),
+        (o.radar && o.animate, "rain radar (past two hours)"),
+        (o.clouds, "clouds"),
+    ]
+    .into_iter()
+    .filter_map(|(on, name)| on.then_some(name))
+    .collect();
+    let imagery = match (st.look, st.historic) {
+        (Look::Holo, _) => "holographic".to_string(),
+        (_, Some(day)) => format!("NASA imagery of {}", day.format("%Y-%m-%d")),
+        _ => st.imagery.credit().trim_start_matches("Imagery: ").to_string(),
+    };
+    lines.push(format!("imagery: {imagery}{}", if overlays.is_empty() { String::new() } else { format!("; overlays: {}", overlays.join(", ")) }));
+    if st.me.is_some() {
+        lines.push("Sir's position is marked (YOU)".into());
+    }
+    if let Some(tour) = &st.tour {
+        if let Some(stop) = tour.current() {
+            lines.push(format!("world tour, stop {} of {}: {}", tour.index + 1, tour.stops.len(), stop.title));
+        }
+    }
     lines.join("\n")
 }
 
@@ -1577,6 +1900,11 @@ pub(super) fn show(ctx: &egui::Context, rt: &Handle) {
         crate::hud_dock::forget(ID);
         if !LET_GO.swap(true, Ordering::AcqRel) {
             crate::earth::let_go();
+        }
+        // (The globe's GPU textures go in a paint callback: the GL context is the painter's.)
+        if gl::release_pending() {
+            ctx.layer_painter(egui::LayerId::background()).add(Shape::Callback(gl::janitor(pos2(0.0, 0.0))));
+            ctx.request_repaint();
         }
         return;
     }
@@ -1656,7 +1984,7 @@ mod tests {
         let mut stage = stage(vec2(1180.0, 720.0));
         let frame = draw(&mut stage, &mut earth, rt.handle(), 4);
         clean(&frame);
-        for shown in ["UTC", "28.0000, -78.0000", "12 742 km", "UNITED STATES", "DEMO DATA", "M4.5\u{2013}5.2", "ODALYS-26", "POLO-26", "FAY-26", "5.2", "ISS", "Imagery: NASA GIBS"] {
+        for shown in ["UTC", "28.0000, -78.0000", "12 742 km", "UNITED STATES", "DEMO DATA", "M4.5\u{2013}5.2", "ODALYS-26", "POLO-26", "FAY-26", "5.2", "ISS", "Globe: NASA GIBS"] {
             assert!(!frame.find_text(shown).is_empty(), "{shown} is not on the Earth:\n{}", frame.all_text());
         }
         // The globe is drawn: its middle is lit, the corner beyond it is space.
@@ -1704,7 +2032,7 @@ mod tests {
         });
         assert!(earth.cam.lon < before.lon - 10.0, "dragged east, the view turns west: {} -> {}", before.lon, earth.cam.lon);
         assert!((earth.cam.lat - before.lat).abs() < 1.0);
-        // The flights key (the eighth of the column) switches the flights on.
+        // The flights key switches the flights on.
         let column = controls_layout(Rect::from_min_size(pos2(0.0, 0.0), vec2(1180.0, 640.0)));
         let (_, flights) = column.buttons.iter().find(|(c, _)| *c == Control::Layer(Layer::Flights)).copied().expect("a flights key");
         assert!(!earth.layers.flights);
@@ -1713,11 +2041,21 @@ mod tests {
         });
         assert!(earth.layers.flights, "the flights key did nothing");
         assert!(!frame.find_text("Flights: OpenSky Network").is_empty());
+        // The photo globe is the default: its key switches to the hologram.
         let (_, satellite) = column.buttons.iter().find(|(c, _)| *c == Control::Satellite).copied().expect("a satellite key");
+        assert_eq!(earth.look, Look::Satellite);
         stage.click(satellite.center(), PointerButton::Primary, &mut |ctx| {
             egui::CentralPanel::default().frame(Frame::none()).show(ctx, |ui| view(ui, &mut earth, rt.handle()));
         });
-        assert_eq!(earth.look, Look::Satellite);
+        assert_eq!(earth.look, Look::Holo);
+        // The radar key switches the rain radar on (its credit shows).
+        let (_, radar) = column.buttons.iter().find(|(c, _)| *c == Control::Overlay(Overlay::Radar)).copied().expect("a radar key");
+        let frame = stage.click(radar.center(), PointerButton::Primary, &mut |ctx| {
+            egui::CentralPanel::default().frame(Frame::none()).show(ctx, |ui| view(ui, &mut earth, rt.handle()));
+        });
+        assert!(earth.overlays.radar, "the radar key did nothing");
+        assert!(!frame.find_text("Radar: RainViewer").is_empty());
+        clean(&frame);
     }
 
     /// The theme the test found, back however it ends.
@@ -1725,7 +2063,6 @@ mod tests {
 
     impl Drop for ThemeBack {
         fn drop(&mut self) {
-            crate::theme_engine::set_ultron(false);
             crate::theme_engine::follow(&self.0);
             crate::theme_engine::finish_fade();
         }
@@ -1761,9 +2098,6 @@ mod tests {
             crate::theme_engine::finish_fade();
             findings.extend(off_theme(&label, rt.handle()));
         }
-        crate::theme_engine::set_ultron(true);
-        crate::theme_engine::finish_fade();
-        findings.extend(off_theme("Ultron override", rt.handle()));
         assert_eq!(findings, Vec::<String>::new());
     }
 

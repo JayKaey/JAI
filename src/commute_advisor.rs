@@ -193,7 +193,7 @@ pub fn is_tool(name: &str) -> bool {
 pub fn tool_definition() -> Value {
     json!({"type": "function", "function": {
         "name": "check_ride_and_commute_status",
-        "description": "Stark commute & ride advisor: road and weather conditions at Sir's exact GPS position (temperature, gusts, rain probability over the next hours and for the way back, wet-road risk) plus his next class (WebUntis, first non-cancelled period) or calendar event, travel time and the exact time to leave. Use for 'how's the weather for riding my motorcycle', 'when do I need to leave for school tomorrow'.",
+        "description": "Ride and commute advisor at Sir's GPS position: temperature, gusts, rain chance now and for the way back, wet-road risk, plus his next class (WebUntis) or event and the time to leave. For 'how's the weather for riding my motorcycle', 'when do I need to leave for school tomorrow'.",
         "parameters": {"type": "object", "properties": {
             "destination": {"type": "string", "description": "school, home, an address, next (the next class or event), or empty for the riding conditions only"},
             "travel_mode": {"type": "string", "enum": ["motorcycle", "car", "bike", "walk", "transit"]},

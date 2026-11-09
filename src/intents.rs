@@ -1366,6 +1366,15 @@ pub fn internal_view_command(text: &str) -> Option<Value> {
 /// sphere (also as Whisper mishears it, see `typos::core_homophones`), the board restore ("bring
 /// back the screen"), docking and detaching windows, and the navigation dock's tabs.
 pub fn hud_view_command(text: &str) -> Option<Intent> {
+    // The 3D studio ("render me an Iron Man suit in 3D"; its edits only while it is open).
+    if let Some(intent) = crate::model3d::intent(text) {
+        return Some(intent);
+    }
+    // Pictures, live cameras and street view ("show me a picture of the Earth", "Zeig mir eine
+    // Webcam in Stuttgart", "street view of the Eiffel Tower"): their phrases live there.
+    if let Some(intent) = crate::image_viewer::voice_intent(text) {
+        return Some(intent);
+    }
     // "No. Close your core.": the command may be the last of a few short sentences.
     // Sentence ends only (". " or the end), never the dots inside "play.example.net".
     let mut pieces: Vec<String> = Vec::new();
@@ -2032,6 +2041,11 @@ fn panel_args(text: &str, s: &str, up: PanelsUp) -> Option<Value> {
         }
     }
 
+    // ---- The Earth: where Sir is, the terrain, the weather, a past day, the imagery, the tour.
+    if let Some(args) = earth_panel_args(text, s, up) {
+        return Some(args);
+    }
+
     // ---- The Earth: satellite imagery, a place on it, its layers, the globe itself.
     static SATELLITE: LazyLock<Regex> = LazyLock::new(|| {
         re(concat!(
@@ -2210,6 +2224,226 @@ fn panel_args(text: &str, s: &str, up: PanelsUp) -> Option<Value> {
         }
     }
     None
+}
+
+/// The Earth beyond its live layers (`panel_args`): "where am I?" / "locate me" (the "YOU"
+/// marker), "show me the mountains (of Nepal)", "exaggerate the terrain", "show the rain radar",
+/// "animate the radar", "show me the clouds on 1 March 2024", "what did Europe look like
+/// yesterday?", "switch to Sentinel imagery", "show the country borders", "give me a world tour",
+/// "what's happening in the world?", "stop the tour"; English and German. A bare "where am I?"
+/// with the Earth down stays the location engine's (it answers with the street address).
+fn earth_panel_args(text: &str, s: &str, up: PanelsUp) -> Option<Value> {
+    let earth = |action: &str| json!({ "view": "earth", "action": action });
+    let today = chrono::Local::now().date_naive();
+    // A day before today in Sir's words ("yesterday", "1 March 2024"; today is the live imagery).
+    let past_day = |words: &str| crate::earth_sources::parse_date(words, today).is_some_and(|d| d < today);
+    // "the world", "die Erde": the whole globe, no place to fly to.
+    static WHOLE: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:the\s+|die\s+|den\s+)?(?:whole\s+|entire\s+|ganze\s+)?(?:earth|world|globe|planet|map|erde|welt|globus|weltkugel|karte)$"));
+    // A place (Sir's casing), none for the globe itself; None when it is no place at all.
+    let place_of = |words: &str| -> Option<Option<String>> {
+        let w = words.trim();
+        // ("in der Schweiz": the article is no part of the name.)
+        let w = ["der ", "die ", "das ", "dem ", "den "].iter().find_map(|a| w.strip_prefix(a)).unwrap_or(w);
+        if WHOLE.is_match(w) {
+            return Some(None);
+        }
+        (!not_a_place(w)).then(|| Some(spoken_place(text, w)))
+    };
+
+    // Where Sir is.
+    static LOCATE: LazyLock<Regex> = LazyLock::new(|| {
+        re(concat!(
+            r"^(?:locate|pinpoint)\s+me(?:\s+on\s+(?:the\s+)?(?:map|globe|earth|world\s+map))?$",
+            r"|^(?:find|show|mark|put)\s+me\s+on\s+(?:the\s+)?(?:map|globe|earth|world\s+map)$",
+            r"|^(?:show|show\s+me|tell\s+me)\s+where\s+i\s+am(?:\s+right)?(?:\s+now)?(?:\s+on\s+(?:the\s+)?(?:map|globe|earth|world\s+map))?$",
+            r"|^(?:show|show\s+me|mark|put)\s+(?:me\s+)?my\s+(?:location|position)(?:\s+on\s+(?:the\s+)?(?:map|globe|earth|world\s+map))?$",
+            r"|^where\s+am\s+i\s+on\s+(?:the\s+)?(?:map|globe|earth|world\s+map|planet)$",
+            r"|^(?:zeig|zeige)\s+(?:mir\s+)?wo\s+ich\s+bin(?:\s+auf\s+der\s+(?:karte|erde|weltkarte))?$",
+            r"|^(?:finde|orte|lokalisiere)\s+mich(?:\s+auf\s+der\s+(?:karte|erde))?$",
+            r"|^(?:zeig|zeige)\s+(?:mir\s+)?meinen\s+(?:standort|aufenthaltsort|ort)(?:\s+auf\s+der\s+(?:karte|erde))?$",
+            r"|^wo\s+bin\s+ich\s+auf\s+(?:der\s+(?:karte|erde|weltkarte)|dem\s+globus)$",
+        ))
+    });
+    static WHERE_AM_I: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:where\s+am\s+i(?:\s+right)?(?:\s+now)?|(?:whats|what\s+is|wheres)\s+my\s+(?:location|position)|wo\s+bin\s+ich(?:\s+jetzt)?)$"));
+    if LOCATE.is_match(s) || (up.earth && WHERE_AM_I.is_match(s)) {
+        return Some(earth("show_my_location"));
+    }
+
+    // The terrain: shaded relief, the peaks named; over a place when one is named.
+    static TERRAIN: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^(?:show|show\s+me|display|turn\s+on|put\s+up|bring\s+up|pull\s+up|give\s+me|zeig|zeig\s+mir|zeige|zeige\s+mir)\s+(?:me\s+|mir\s+)?(?:the\s+|die\s+|das\s+|den\s+)?(?:shaded\s+)?(terrain(?:\s+(?:view|map|layer))?|relief|elevation|topography|hillshade|mountains|mountain\s+ranges?|peaks|mountain\s+peaks|gelände|gelaende|topografie|topographie|berge|gebirge|gipfel)(?:\s+(?:of|in|on|around|near|over|von|im|um|bei|der|des)\s+(.+))?$")
+    });
+    if let Some(c) = TERRAIN.captures(s) {
+        let mountains = ["mountain", "peak", "berge", "gebirge", "gipfel"].iter().any(|w| c[1].contains(w));
+        let mut args = earth(if mountains { "show_mountains" } else { "show_terrain" });
+        match c.get(2).map(|m| place_of(m.as_str())) {
+            Some(None) => return None,
+            Some(Some(Some(place))) => args["place"] = json!(place),
+            _ => {}
+        }
+        return Some(args);
+    }
+    static EXAGGERATE: LazyLock<Regex> = LazyLock::new(|| {
+        re(concat!(
+            r"^(?:exaggerate|amplify|boost|stretch|enhance)\s+(?:the\s+)?(?:terrain|relief|elevation|mountains|heights?|topography)$",
+            r"|^(?:make|let)\s+(?:the\s+)?(?:mountains|terrain|relief|peaks)\s+(?:look\s+)?(?:taller|higher|bigger|steeper|more\s+dramatic|stand\s+out(?:\s+more)?|pop)$",
+            r"|^(?:exaggerated|amplified)\s+(?:terrain|relief|elevation)$",
+            r"|^(?:überhöhe|ueberhoehe|übertreibe|uebertreibe|verstärke|verstaerke)\s+(?:das\s+|die\s+)?(?:gelände|gelaende|relief|berge|höhen|hoehen)$",
+            r"|^(?:mach|mache)\s+(?:die\s+)?berge\s+(?:höher|hoeher|größer|groesser|steiler)$",
+        ))
+    });
+    if EXAGGERATE.is_match(s) {
+        return Some(earth("exaggerate_terrain"));
+    }
+
+    // The weather: the rain radar (its loop of the past two hours) and the clouds.
+    static ANIMATE: LazyLock<Regex> = LazyLock::new(|| {
+        re(concat!(
+            r"^(?:animate|play|loop)\s+(?:the\s+)?(?:weather\s+|rain\s+)?radar(?:\s+(?:loop|animation))?$",
+            r"|^(?:show|show\s+me|play)\s+(?:me\s+)?(?:the\s+)?(?:rain|radar|weather\s+radar|rain\s+radar|precipitation)\s+(?:(?:of|from|over|for|in)\s+)?the\s+(?:past|last)\s+(?:two|2|few|couple\s+of|couple)\s+hours$",
+            r"|^(?:show|show\s+me)\s+(?:me\s+)?how\s+the\s+rain\s+(?:has\s+)?moved$",
+            r"|^(?:regenradar|wetterradar|radar)\s+(?:animieren|abspielen)$",
+            r"|^(?:spiel|spiele|animiere)\s+(?:das\s+)?(?:regenradar|wetterradar|radar)(?:\s+ab)?$",
+        ))
+    });
+    if ANIMATE.is_match(s) {
+        return Some(earth("animate_radar"));
+    }
+    static RAIN: LazyLock<Regex> = LazyLock::new(|| {
+        re(concat!(
+            r"^(?:(?:show|show\s+me|display|turn\s+on|put\s+up|bring\s+up|pull\s+up|give\s+me|zeig|zeig\s+mir|zeige|zeige\s+mir)\s+(?:me\s+|mir\s+)?(?:the\s+|das\s+|den\s+)?)?(?:live\s+|current\s+|latest\s+|aktuelle\s+|aktuelles\s+)?",
+            r"(?:weather\s+radar|rain\s+radar|precipitation\s+radar|precipitation\s+map|rain\s+map|regenradar|wetterradar|niederschlagsradar)(\s+(?:loop|animation))?(?:\s+(?:on\s+the\s+(?:globe|earth|map)|right\s+now|now|jetzt))?$",
+            r"|^where\s+is\s+it\s+raining(?:\s+right)?(?:\s+now)?$|^wo\s+regnet\s+es(?:\s+jetzt)?$",
+        ))
+    });
+    if let Some(c) = RAIN.captures(s) {
+        return Some(earth(if c.get(1).is_some() { "animate_radar" } else { "show_radar" }));
+    }
+    static CLOUDS: LazyLock<Regex> = LazyLock::new(|| {
+        re(concat!(
+            r"^(?:(show|show\s+me|display|turn\s+on|put\s+up|bring\s+up|pull\s+up|give\s+me|zeig|zeig\s+mir|zeige|zeige\s+mir)\s+(?:me\s+|mir\s+)?(?:the\s+|die\s+|den\s+)?)?(?:live\s+|current\s+|latest\s+|todays\s+|aktuelle\s+|aktuellen\s+)?",
+            r"(?:clouds|cloud\s+cover|cloud\s+layer|cloud\s+map|infrared(?:\s+(?:clouds|satellite|imagery|images))?|satellite\s+clouds|wolken|wolkendecke|bewölkung|bewoelkung)",
+            r"(?:\s+(?:on|from|of|for|at|as\s+of|vom|von|am)\s+(.+?)|\s+((?:the\s+day\s+before\s+)?yesterday|(?:vor)?gestern|last\s+week|letzte\s+woche|\d+\s+days\s+ago))?(?:\s+(?:on\s+the\s+(?:globe|earth|map)|right\s+now|now|today|jetzt|heute))?$",
+        ))
+    });
+    if let Some(c) = CLOUDS.captures(s) {
+        if c.get(1).is_some() || up.earth {
+            let mut args = earth("show_clouds");
+            if let Some(day) = c.get(2).or(c.get(3)).map(|m| m.as_str()).filter(|d| past_day(d)) {
+                args["date"] = json!(day);
+            }
+            return Some(args);
+        }
+    }
+
+    // A past day: NASA's imagery of it ("what did Europe look like yesterday?").
+    static LOOKED: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^(?:what|how)\s+did\s+(.+?)\s+look(?:\s+like)?\s+(.+)$|^wie\s+sah\s+(.+?)\s+((?:vor)?gestern|letzte\s+woche|am\s+.+|vor\s+\d+\s+tagen)\s+aus$")
+    });
+    static ON_DAY: LazyLock<Regex> = LazyLock::new(|| {
+        re(concat!(
+            r"^(?:show|show\s+me|zeig|zeig\s+mir|zeige|zeige\s+mir)\s+(?:me\s+|mir\s+)?(.+?)\s+(?:on|from|as\s+of|as\s+it\s+(?:was|looked)\s+on|am|vom|von)\s+(.+)$",
+            r"|^(?:show|show\s+me|zeig\s+mir|zeige\s+mir)\s+(?:me\s+|mir\s+)?(.+?)\s+((?:the\s+day\s+before\s+)?yesterday|last\s+week|\d+\s+days\s+ago|(?:vor)?gestern|letzte\s+woche)$",
+        ))
+    });
+    let looked = LOOKED.captures(s).map(|c| (c.get(1).or(c.get(3)).map_or("", |m| m.as_str()).to_string(), c.get(2).or(c.get(4)).map_or("", |m| m.as_str()).to_string(), true));
+    let on_day = || ON_DAY.captures(s).map(|c| (c.get(1).or(c.get(3)).map_or("", |m| m.as_str()).to_string(), c.get(2).or(c.get(4)).map_or("", |m| m.as_str()).to_string(), false));
+    if let Some((what, day, asked)) = looked.or_else(on_day) {
+        // ("Show me my emails from yesterday" is no place: shown only for the globe itself, a
+        // continent, a known city, or any place he names on the Earth that is up.)
+        let what = what.trim();
+        let known = WHOLE.is_match(what) || crate::earth::continent(what).is_some() || crate::earth::gazetteer(what).is_some();
+        static NOT_A_SIGHT: LazyLock<Regex> = LazyLock::new(|| {
+            re(concat!(
+                r"^(?:my|your|our|his|her|their|all|meine?n?|deine?n?|unsere?n?|alle)\b|^(?:you|i|me|he|she|it|we|they|that|this|du|ich|er|sie|es|wir|ihr)$",
+                r"|\b(?:flights?|planes?|aircraft|quakes?|earthquakes?|storms?|fires?|wildfires?|iss|radar|rain|clouds?|weather|wetter|news|nachrichten|photos?|pictures?|images?|bilder|fotos|e-?mails?|mails?|messages?|videos?|calendar|kalender|notes?|tasks?|logs?|files?|dateien|screenshots?|history|verlauf|stats|statistics|charts?|graphs?|results?|scores?|games?|stocks?|prices?|schedule|stundenplan|homework|hausaufgaben)\b",
+            ))
+        });
+        if past_day(&day) && (known || ((asked || up.earth) && !NOT_A_SIGHT.is_match(what))) {
+            if let Some(place) = place_of(what) {
+                let mut args = earth("show_date");
+                args["date"] = json!(day.trim());
+                if let Some(place) = place {
+                    args["place"] = json!(place);
+                }
+                return Some(args);
+            }
+        }
+    }
+
+    // The tour of what is happening (the week's strongest quake, the storms, the fires).
+    static TOUR: LazyLock<Regex> = LazyLock::new(|| {
+        re(concat!(
+            r"^(?:give\s+me|take\s+me\s+on|start|begin|do|run|show\s+me|lets\s+do|go\s+on)\s+(?:a\s+|the\s+|your\s+)?(?:world\s+tour|tour\s+of\s+the\s+world|tour\s+around\s+the\s+world|global\s+tour|world\s+briefing|globe\s+tour)$",
+            r"|^(?:world\s+tour|tour\s+the\s+world)$",
+            r"|^(?:whats|what\s+is)\s+(?:happening|going\s+on)\s+(?:in|around|across)\s+the\s+world(?:\s+(?:right\s+now|today|now))?$",
+            r"|^(?:was\s+passiert|was\s+ist\s+los|was\s+geht\s+vor)\s+(?:jetzt\s+|heute\s+)?(?:in\s+der|auf\s+der)\s+welt(?:\s+(?:jetzt|heute))?$",
+            r"|^(?:mach|mache|starte|gib\s+mir|zeig\s+mir)\s+(?:eine\s+|die\s+)?(?:welttour|weltreise|weltrundschau|tour\s+um\s+die\s+welt)$|^welttour$",
+        ))
+    });
+    if TOUR.is_match(s) {
+        return Some(earth("show_world_tour"));
+    }
+
+    // The rest only means the Earth while it is up.
+    if !up.earth {
+        // ("Show the country borders" opens it; "show the labels" is anybody's.)
+        static BORDERS: LazyLock<Regex> = LazyLock::new(|| {
+            re(r"^(?:show|show\s+me|display|zeig|zeig\s+mir|zeige|zeige\s+mir)\s+(?:me\s+|mir\s+)?(?:the\s+|die\s+|alle\s+)?(?:country\s+borders|national\s+borders|borders\s+of\s+the\s+countries|landesgrenzen|ländergrenzen|laendergrenzen)(?:\s+on\s+the\s+(?:globe|earth|map))?$")
+        });
+        return BORDERS.is_match(s).then(|| earth("show_labels"));
+    }
+    static STOP_TOUR: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^(?:stop|end|cancel|abort|finish|quit|exit|break\s+off)\s+(?:the\s+)?(?:world\s+)?tour$|^(?:enough|thats\s+enough)\s+(?:of\s+the\s+)?tour$|^(?:welt)?tour\s+(?:beenden|stoppen|abbrechen)$|^(?:beende|stoppe?|brich)\s+die\s+(?:welt)?tour(?:\s+ab)?$")
+    });
+    if STOP_TOUR.is_match(s) {
+        return Some(earth("stop_tour"));
+    }
+    static FLATTEN: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^(?:flatten|unexaggerate|normali[sz]e)\s+(?:the\s+)?(?:terrain|relief|elevation|mountains)$|^(?:terrain|relief)\s+(?:back\s+)?to\s+(?:normal|scale)$|^(?:true\s+to\s+scale|real\s+scale|normal)\s+(?:terrain|relief)$")
+    });
+    if FLATTEN.is_match(s) {
+        return Some(earth("flatten_terrain"));
+    }
+    static LABELS: LazyLock<Regex> = LazyLock::new(|| {
+        re(concat!(
+            r"^(?:(show|show\s+me|display|turn\s+on|switch\s+on|enable|add|put\s+up|bring\s+back|zeig|zeig\s+mir|zeige|zeige\s+mir|blende)|(hide|remove|turn\s+off|switch\s+off|disable|get\s+rid\s+of|entferne))",
+            r"\s+(?:me\s+|mir\s+)?(?:the\s+|die\s+|alle\s+)?(?:country\s+borders|national\s+borders|borders|labels|place\s+names|city\s+names|names|landesgrenzen|ländergrenzen|laendergrenzen|grenzen|beschriftungen|ortsnamen|namen)(?:\s+(?:on\s+the\s+(?:globe|earth|map)|ein|an|aus))?$",
+        ))
+    });
+    if let Some(c) = LABELS.captures(s) {
+        let off = c.get(2).is_some() || s.ends_with(" aus");
+        return Some(earth(if off { "hide_labels" } else { "show_labels" }));
+    }
+    static HIDE_OVERLAY: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^(?:hide|remove|turn\s+off|switch\s+off|disable|get\s+rid\s+of|blende|entferne)\s+(?:the\s+|die\s+|das\s+|den\s+)?(weather\s+radar|rain\s+radar|radar|regenradar|wetterradar|clouds|cloud\s+cover|infrared|wolken|terrain|relief|mountains|peaks|hillshade|gelände|gelaende|berge)(?:\s+(?:layer|overlay))?(?:\s+aus)?$")
+    });
+    if let Some(c) = HIDE_OVERLAY.captures(s) {
+        let layer = match &c[1] {
+            // (A bare "radar" with the network radar up is that one's.)
+            "radar" if up.radar => return None,
+            l if l.contains("radar") => "radar",
+            "clouds" | "cloud cover" | "infrared" | "wolken" => "clouds",
+            _ => "terrain",
+        };
+        return Some(json!({ "view": "earth", "action": "hide_layer", "layer": layer }));
+    }
+    static IMAGERY: LazyLock<Regex> = LazyLock::new(|| {
+        re(concat!(
+            r"^(?:(?:switch|change|go|flip|swap|turn)\s+(?:the\s+)?(?:imagery\s+|map\s+|globe\s+|earth\s+)?(?:over\s+|back\s+)?to|use|show|show\s+me|give\s+me)\s+(?:me\s+)?(?:the\s+)?",
+            r"(sentinel(?:\s*-?\s*2)?|esri|nasa|blue\s+marble|eox|copernicus)(?:\s+(?:imagery|images|maps?|tiles|view|layer|photos|cloudless))?$",
+            r"|^(?:wechsel|wechsle|schalte?|geh|gehe)\s+(?:auf|zu|zur)\s+(?:die\s+|den\s+)?(sentinel(?:\s*-?\s*2)?|esri|nasa|blue\s+marble)(?:\s*-?\s*(?:bilder|ansicht|karte))?(?:\s+um)?$",
+        ))
+    });
+    if let Some(c) = IMAGERY.captures(s) {
+        let mut args = earth("set_imagery");
+        args["imagery"] = json!(c.get(1).or(c.get(2)).map_or("", |m| m.as_str()));
+        return Some(args);
+    }
+    static TODAY: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^(?:(?:go\s+|switch\s+|come\s+)?back\s+to|return\s+to|show\s+(?:me\s+)?)\s*(?:the\s+)?(?:today|todays\s+imagery|present|now|live\s+imagery|live\s+view|current\s+imagery)$|^(?:zurück|zurueck)\s+(?:zu|nach)\s+(?:heute|jetzt)$")
+    });
+    TODAY.is_match(s).then(|| earth("show_today"))
 }
 
 /// A place on the Earth, or something else that follows "go to" ("page two", "sleep", "Discord").
@@ -2573,7 +2807,7 @@ fn said_as_an_order(order: &str, tool: &str, args: &Value) -> bool {
     }
     match tool {
         "control_audio_mixer" | "media_and_volume_control" | "control_music" | "configure_interface" | "control_orb_mode" | "set_listening_mode"
-        | "open_jarvis_view" | "control_popups" | "control_jarvis_interface" | "hud_board" | "ultron_mode" | "listening_lock" | "undo_last_action"
+        | "open_jarvis_view" | "control_popups" | "control_jarvis_interface" | "hud_board" | "listening_lock" | "undo_last_action"
         | "close_all_secondary_windows" => true,
         "open_application" | "close_application" | "is_app_running" => args["app_name"].as_str().is_some_and(known_app),
         "window_management" => args["action"] != "focus",
@@ -2606,7 +2840,7 @@ fn did_you_about(s: &str) -> Option<String> {
     (OWN.contains(&object.as_str()) || known_app(&object)).then_some(object)
 }
 
-/// "What is orb mode?", "what does the mixer do?", "was ist der Ultron Modus?": his own modes and
+/// "What is orb mode?", "what does the mixer do?", "was ist der Orbmodus?": his own modes and
 /// views, told as they are (2026-11-07: the model made up "a translucent overlay").
 fn explained(s: &str) -> Option<String> {
     static WHAT_IS: LazyLock<Regex> = LazyLock::new(|| {
@@ -2616,9 +2850,6 @@ fn explained(s: &str) -> Option<String> {
     let line = match subject.as_str() {
         "orb mode" | "pure orb mode" | "orb only mode" | "orbmodus" | "orb modus" => {
             "In orb mode only my orb floats on your screen, Sir: borderless, transparent and always on top. Drag it to move it, scroll to resize it, and double-click it for the full display."
-        }
-        "ultron mode" | "ultron protocol" | "ultron modus" => {
-            "Ultron Mode is my other self, Sir: the display turns blood crimson, the emblem reads Ultron, and a slow American baritone speaks instead of me. Say \"Ultron mode off\" and I'm back."
         }
         "mixer" | "audio mixer" => "My mixer is a fader for every program that makes sound, Sir, and one for the master. Open it, or just tell me what to make louder.",
         "theme studio" => "The Theme Studio is where you pick my colours, name the theme and save it, Sir.",
@@ -2644,19 +2875,12 @@ fn looked_up(s: &str) -> Option<Intent> {
         let args = did_you_about(s).map_or_else(|| json!({}), |about| json!({ "about": about }));
         return Some(Intent::Tool { name: "recent_actions", args });
     }
-    // "Are you in orb mode?", "is the orb hidden?", "are you in Ultron mode?": how it stands.
+    // "Are you in orb mode?", "is the orb hidden?": how it stands.
     static ORB_ASKED: LazyLock<Regex> = LazyLock::new(|| {
         re(r"^is\s+(?:the\s+|your\s+)?orb(?:\s+mode)?\s+(?:hidden|visible|showing|on|off|active|enabled|up)$|^are\s+you\s+in\s+(?:pure\s+)?orb\s+mode$|^ist\s+(?:der\s+|dein\s+)?(?:orb|orbmodus|orb\s+modus)\s+(?:an|aus|sichtbar|versteckt|aktiv)$|^bist\s+du\s+im\s+(?:orbmodus|orb\s+modus)$")
     });
     if ORB_ASKED.is_match(s) {
         return Some(Intent::Tool { name: "control_orb_mode", args: json!({ "action": "status" }) });
-    }
-    static ULTRON_ASKED: LazyLock<Regex> = LazyLock::new(|| {
-        re(r"^are\s+you\s+(?:in\s+)?ultron(?:\s+mode)?$|^is\s+ultron(?:\s+mode)?\s+(?:on|active|enabled)$|^bist\s+du\s+(?:im\s+)?ultron(?:\s*modus)?$|^ist\s+(?:der\s+)?ultron(?:\s*modus)?\s+(?:an|aktiv)$")
-    });
-    if ULTRON_ASKED.is_match(s) {
-        let line = if crate::ultron_mode::active() { "Ultron Mode is on, Sir." } else { "No, Sir. Ultron Mode is off." };
-        return Some(Intent::Answer(line.to_string()));
     }
     static TIMER_LEFT: LazyLock<Regex> = LazyLock::new(|| {
         re(r"^how\s+(?:long|much\s+time)\s+(?:is\s+|do\s+i\s+have\s+)?(?:still\s+)?(?:left|remaining)(?:\s+on\s+(?:the|my)\s+(?:timer|countdown))?$|^(?:what|whats|what\s+is)\s+(?:the|my)\s+(?:timer|countdown|stopwatch)\s+at$|^how\s+long\s+until\s+(?:the|my)\s+timer\s+(?:goes\s+off|is\s+done|ends|finishes)$|^is\s+(?:the|my)\s+(?:timer|countdown|stopwatch)\s+(?:done|finished|over|up|running|on)$|^ist\s+(?:der|mein)\s+timer\s+(?:fertig|abgelaufen|an)$|^wie\s+lange\s+(?:noch|läuft\s+(?:der|mein)\s+timer\s+noch)$|^wie\s+viel\s+zeit\s+(?:ist\s+|bleibt\s+|habe\s+ich\s+)?(?:noch\s+)?(?:übrig)?$|^wie\s+viel\s+zeit\s+hat\s+(?:der|mein)\s+timer\s+noch$|^was\s+zeigt\s+(?:der|mein|die)\s+(?:timer|stoppuhr)$")
@@ -2880,7 +3104,7 @@ static HUD_ONLY_ORB: LazyLock<Regex> =
 static HUD_BACKGROUND: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(?:make|turn|change|set|paint|switch)\s+(?:(?:the|your)\s+)?(?:background|backdrop)(?:\s+colou?r)?\s+(?:(?:to|into)\s+)?(.+?)$|^(?:(?:use|give me|set|switch to)\s+)?(?:(?:a|an|the)\s+)?(.+?)\s+background(?:\s+colou?r)?$|^(?:mach|mache|färb|färbe|faerbe|stell|stelle|setz|setze|ändere|änder|aendere)\s+(?:den\s+)?hintergrund\s+(?:(?:auf|zu|in)\s+)?(.+?)$|^hintergrund(?:farbe)?\s+(?:(?:auf|zu|in)\s+)?(.+?)$|^(.+?)\s+hintergrund$")
 });
-/// "Red theme", "switch to the Ultron theme", "dark mode", "Kompaktmodus".
+/// "Red theme", "switch to the Mark 42 theme", "dark mode", "Kompaktmodus".
 static HUD_THEME_MODE: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(?:(?:switch|change|go|turn)\s+(?:to|into)\s+|(?:use|activate|enable|apply|load|start)\s+|(?:wechsel|wechsle|geh|gehe)\s+(?:zu|zum|zur|in den|in die|auf)\s+|(?:aktiviere|aktivier|nimm|nutze)\s+)?(?:(?:the|a|den|das|die|dem)\s+)?(.+?)\s*(theme|mode|modus|design|look|skin|style|stil|ansicht|view|layout|colou?rs|farben|thema)$")
 });
@@ -3293,9 +3517,21 @@ static UNDO_LAST: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(?:never\s*mind\s+|forget\s+it\s+|scratch\s+that\s+)?(?:undo|revert|reverse)(?:\s+(?:that|this|it|(?:that|this)\s+change|(?:the|your|my)\s+last\s+(?:thing|one|action|change)))?$|^(?:put|set)\s+(?:it|that|this|everything)\s+back(?:\s+(?:as|how|the\s+way)\s+it\s+was)?$|^take\s+(?:that|it|this)\s+back$|^(?:mach|mache)\s+(?:das|es|dies|die\s+letzte\s+aktion)?\s*(?:wieder\s+)?rückgängig$|^rückgängig$|^(?:nimm|nehm)\s+(?:das|es)\s+zurück$|^(?:stell|mach)\s+(?:es|das)\s+(?:wieder\s+)?zurück$|^(?:change|switch)\s+(?:it\s+|that\s+)?back$|^(?:wechsel|wechsle|änder|ändere)\s+(?:es\s+|das\s+)?zurück$")
 });
 
+/// "That's not what I said", "I didn't say that", "das habe ich nicht gesagt": what he just did on
+/// a misheard request is taken back — only a change of the last two minutes (2026-11-08: "Call me
+/// Earth." became Sir's title). Not "that's wrong", which corrects an answer, not an action.
+static NOT_WHAT_I_SAID: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"^(?:thats|that\s+is|this\s+is|that\s+was|this\s+was|thats\s+just)\s+not\s+what\s+i\s+(?:said|meant|asked\s+for|asked|wanted|told\s+you)$|^i\s+(?:didnt|did\s+not|never)\s+(?:say|ask\s+for|mean)\s+(?:that|this)$|^you\s+misheard(?:\s+me)?$|^you\s+heard\s+(?:me\s+)?wrong$|^(?:das|dies)\s+(?:habe|hab)\s+ich\s+(?:nicht|nie)\s+gesagt$|^(?:das|dies)\s+(?:war|ist)\s+nicht\s+(?:was|das\s+was)\s+ich\s+(?:gesagt|gemeint|wollte)(?:\s+habe)?$|^(?:du\s+hast\s+mich\s+)?falsch\s+verstanden$")
+});
+
+/// How long after a change "that's not what I said" still takes it back.
+pub const MISHEARD_UNDO_SECS: u64 = 120;
+
 /// "Undo that", "change it back": the sentence the last change is taken back with.
+#[cfg(test)]
 pub fn is_undo(text: &str) -> bool {
-    UNDO_LAST.is_match(&normalize(text))
+    let s = normalize(text);
+    UNDO_LAST.is_match(&s) || NOT_WHAT_I_SAID.is_match(&s)
 }
 
 // "What did you just do?": his own last actions, as they went (never a guess).
@@ -3340,7 +3576,7 @@ static WINDOW_PIN: LazyLock<Regex> = LazyLock::new(|| {
     re(&format!(r"^(pin|unpin)\s+{JARVIS_WINDOW}$|^keep\s+{JARVIS_WINDOW}\s+(on top)$|^(?:dont|do not|stop)\s+keep(?:ing)?\s+{JARVIS_WINDOW}\s+(on top)$"))
 });
 
-/// "make that window transparent / borderless / red / Ultron / always on top".
+/// "make that window transparent / borderless / red / emerald / always on top".
 fn window_style_command(s: &str) -> Option<Intent> {
     let style = |args: Value| {
         let mut args = args;
@@ -4089,6 +4325,15 @@ pub fn warm_up() {
     let _ = is_affirmation("warm up");
 }
 
+/// "Switch to Ultron mode", "Ultron-Modus aktivieren", "are you in Ultron mode?": the mode is
+/// retired, and saying so is all that happens (no model, nothing launched).
+fn ultron_retired(s: &str) -> Option<Intent> {
+    static ULTRON: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^(?:(?:switch|change|go|turn|flip|wechsel|wechsle|schalte?|geh|gehe)\s+(?:back\s+|zurück\s+)?(?:to|into|zu|zum|in\s+den|auf\s+den|auf)\s+|(?:activate|enable|engage|start|initiate|turn\s+on|aktiviere?|starte?)\s+|(?:what\s+is|whats|was\s+ist|are\s+you\s+in|bist\s+du\s+im|is|ist)\s+)?(?:the\s+|den\s+|der\s+)?ultron(?:[\s-]*(?:mode|modus|protocol|protokoll))?(?:\s+(?:on|off|an|aus|ein|aktivieren|einschalten|starten|engage|activate|active|aktiv|enabled))?$")
+    });
+    ULTRON.is_match(s).then(|| Intent::Answer("Ultron mode has been retired, Sir.".to_string()))
+}
+
 pub fn parse(text: &str) -> Option<Intent> {
     if let Some(line) = courtesy(text) {
         return Some(Intent::Answer(line.to_string()));
@@ -4111,6 +4356,9 @@ pub fn parse(text: &str) -> Option<Intent> {
     if ASKS_HIMSELF.is_match(&s) {
         return None;
     }
+    if let Some(intent) = ultron_retired(&s) {
+        return Some(intent);
+    }
     if let Some(intent) = looked_up(&s) {
         return Some(intent);
     }
@@ -4125,6 +4373,9 @@ pub fn parse(text: &str) -> Option<Intent> {
     if UNDO_LAST.is_match(&s) {
         return tool("undo_last_action", json!({}));
     }
+    if NOT_WHAT_I_SAID.is_match(&s) {
+        return tool("undo_last_action", json!({ "within_s": MISHEARD_UNDO_SECS }));
+    }
     if RECENT_ACTIONS.is_match(&s) {
         return tool("recent_actions", json!({}));
     }
@@ -4137,6 +4388,17 @@ pub fn parse(text: &str) -> Option<Intent> {
     }
     if let Some(intent) = outing_command(text) {
         return Some(intent);
+    }
+    // His own views moved and sized ("move it to the middle", "full screen the Earth", "put the
+    // earth on the left half", "move the radar to my second monitor", "put them side by side"),
+    // before "show me the earth" opens the panel.
+    if let Some(args) = crate::window_commands::parse(text) {
+        return tool("arrange_jarvis_window", args);
+    }
+    // live layers (C1): satellites, passes, trains, departures, traffic, rain, past weather
+    // ("show me Starlink", "when can I see the ISS?", "when's my next train?", "how's the A8?").
+    if let Some((name, args)) = crate::live_layers::voice_command(text) {
+        return tool(name, args);
     }
     // The network radar, the disk map and the Earth ("check the network", "what is taking up
     // space", "show me the earth", "switch to satellite view"), before the readings and the board.
@@ -4321,7 +4583,23 @@ pub fn parse(text: &str) -> Option<Intent> {
     const MACHINE: &[&str] = &["pc", "my pc", "computer", "my computer", "laptop", "rechner", "system", "monitor", "screen", "bildschirm"];
     for re in [&*CLOSE, &*CLOSE_DE, &*CLOSE_DE_SUFFIX] {
         if let Some(c) = re.captures(&s) {
-            let app = strip_article(&c[1]);
+            // "Close the Earth, you", "close Spotify for me now": what follows a name is no part
+            // of it (2026-11-08: Windows was asked for programs called "Earth You", "Up", "Off").
+            let named = strip_article(&c[1]);
+            // ("Close yourself" / "quit you" name Jarvis himself: that stays as it was said.)
+            let app = if crate::tools::names_jarvis(&named) { named } else { strip_article(&crate::intent_engine::strip_close_fillers(&named)) };
+            if app.is_empty() {
+                // "Close up", "closed, off": nothing named. Something of his that is up (the view
+                // he just opened), never the program Sir is working in.
+                return tool("close_application", json!({ "app_name": "it", "force": true, "own_only": true }));
+            }
+            if crate::focus::is_pronoun(&app) {
+                // "Close it up, please": the "it" of "close it".
+                return tool("close_application", json!({ "app_name": "it", "force": true }));
+            }
+            if crate::intent_engine::is_own_view(&app) {
+                return Some(Intent::Silent(SilentAction { tool: "hud_board", args: json!({ "action": "close", "target": crate::intent_engine::own_view_name(&app) }), label: "CLOSED".to_string() }));
+            }
             if looks_like_app_name(&app) && !MACHINE.contains(&app.as_str()) {
                 return tool("close_application", json!({ "app_name": app, "force": true }));
             }
@@ -4896,6 +5174,71 @@ mod board_tests {
         }
     }
 
+    /// What the fast path makes of a spoken command after the wake word (typos fixed first, as
+    /// in `brain`).
+    fn heard(text: &str) -> Option<Intent> {
+        parse(&crate::typos::normalize_user_input_typos(text))
+    }
+
+    fn closes_view(text: &str) -> Option<String> {
+        match heard(text)? {
+            Intent::Silent(SilentAction { tool: "hud_board", args, .. }) | Intent::Tool { name: "hud_board", args } if args["action"] == "close" => args["target"].as_str().map(str::to_string),
+            _ => None,
+        }
+    }
+
+    /// Repro (jarvis.log, 2026-11-08 23:27-23:42): "Jarvis, close the Earth, you." asked Windows
+    /// for a program called "earth you" ("Earth You isn't running, Sir."); "Jarvis close up." and
+    /// "Jarvis closed, off." for programs called "up" and "off".
+    #[test]
+    fn fillers_after_a_close_never_become_a_program() {
+        for text in ["close the Earth, you.", "Close the Earth, you", "close the earth please", "close the Earth for me now", "Close the world.", "close the planet, you"] {
+            assert_eq!(closes_view(text).as_deref(), Some("earth"), "{text}");
+        }
+        let own = Some(Intent::Tool { name: "close_application", args: json!({"app_name": "it", "force": true, "own_only": true}) });
+        for text in ["close up.", "Close up", "close off", "Close it up, please"] {
+            let intent = heard(text);
+            assert!(
+                intent == own || matches!(&intent, Some(Intent::Tool { name: "close_application", args }) if args["app_name"] == "it"),
+                "{text}: {intent:?}"
+            );
+        }
+        // "Closed, off." is no order the parser takes (the model's close_application "off" is
+        // caught in `tools::own_close`).
+        assert!(!matches!(heard("closed, off."), Some(Intent::Tool { name: "close_application", ref args }) if args["app_name"] != "it"));
+        // No filler or pronoun is ever a program's name.
+        for text in ["close the Earth, you.", "close up.", "closed, off.", "Close Spotify for me now", "close discord please"] {
+            if let Some(Intent::Tool { name: "close_application", args }) = heard(text) {
+                let app = args["app_name"].as_str().unwrap_or_default().to_lowercase();
+                for filler in ["you", "up", "off", "please", "now", "for me"] {
+                    assert!(!app.ends_with(filler), "{text}: '{app}'");
+                }
+            }
+        }
+        assert_eq!(heard("Close Spotify for me now"), Some(Intent::Tool { name: "close_application", args: json!({"app_name": "spotify", "force": true}) }));
+        // "Close yourself" / "quit you" still name Jarvis himself.
+        for text in ["Close yourself", "Quit you", "Close you"] {
+            let intent = heard(text);
+            assert!(closes_view(text).is_none() && intent != own, "{text}: {intent:?}");
+            if let Some(Intent::Tool { name: "close_application", args }) = &intent {
+                assert!(crate::tools::names_jarvis(args["app_name"].as_str().unwrap_or_default()), "{text}: {intent:?}");
+            }
+        }
+    }
+
+    /// "That's not what I said" takes back the misheard request's change (2026-11-08: "Call me
+    /// Earth." became Sir's title); "that's wrong" corrects an answer and stays a sentence.
+    #[test]
+    fn a_misheard_complaint_takes_the_last_change_back() {
+        let undo = Some(Intent::Tool { name: "undo_last_action", args: json!({"within_s": MISHEARD_UNDO_SECS}) });
+        for text in ["That's not what I said.", "That is not what I meant", "I didn't say that", "You misheard me", "Das habe ich nicht gesagt", "Du hast mich falsch verstanden"] {
+            assert_eq!(heard(text), undo, "{text}");
+            assert!(is_undo(text), "{text}");
+        }
+        assert_ne!(heard("That's wrong"), undo);
+        assert!(!is_undo("What did I say?"));
+    }
+
     #[test]
     fn board_phrases_leave_windows_and_long_missions_alone() {
         // No board up: "maximise that" is a window command.
@@ -5315,7 +5658,7 @@ mod tests {
         assert_eq!(style("Make that window transparent"), json!({"opacity": 0.6, "target": "focus"}));
         assert_eq!(style("Make the second window borderless"), json!({"borderless": true, "target": "focus"}));
         assert_eq!(style("Make that window red"), json!({"accent_color": "red", "target": "focus"}));
-        assert_eq!(style("Make that window ultron"), json!({"theme": "ultron", "target": "focus"}));
+        assert_eq!(style("Make that window emerald"), json!({"theme": "emerald", "target": "focus"}));
         assert_eq!(style("Pin that window"), json!({"always_on_top": true, "target": "focus"}));
         assert_eq!(style("Unpin that window"), json!({"always_on_top": false, "target": "focus"}));
         // "The window" / "your window" is still the HUD.
@@ -6064,6 +6407,103 @@ mod tests {
     }
 
     #[test]
+    fn the_earth_locates_shades_rains_remembers_and_tours() {
+        let none = PanelsUp::default();
+        let earth_up = PanelsUp { earth: true, ..PanelsUp::default() };
+        let both = PanelsUp { earth: true, radar: true, ..PanelsUp::default() };
+        let act = |text: &str, up: PanelsUp| panel_command(text, up).filter(|a| a["view"] == "earth").map(|a| a["action"].as_str().unwrap_or_default().to_string());
+        let is = |text: &str, up: PanelsUp, action: &str| assert_eq!(act(text, up).as_deref(), Some(action), "{text}");
+        // Where Sir is: a bare "where am I?" is the Earth's only while it is up.
+        for text in ["Locate me", "Show me where I am", "Where am I on the map?", "Show my location on the globe", "Zeig mir, wo ich bin", "Finde mich", "Wo bin ich auf der Karte?"] {
+            is(text, none, "show_my_location");
+        }
+        for text in ["Where am I?", "Where am I right now?", "Wo bin ich?", "What's my location?"] {
+            is(text, earth_up, "show_my_location");
+            assert_eq!(act(text, none), None, "{text}: the location engine's address");
+        }
+        // The terrain.
+        for (text, action) in [("Show me the mountains", "show_mountains"), ("Show the terrain", "show_terrain"), ("Zeig mir die Berge", "show_mountains"), ("Show me the relief", "show_terrain")] {
+            is(text, none, action);
+        }
+        let nepal = panel_command("Show me the mountains of Nepal", none).unwrap();
+        assert_eq!((nepal["action"].as_str(), nepal["place"].as_str()), (Some("show_mountains"), Some("Nepal")));
+        assert_eq!(panel_command("Zeig mir die Berge in der Schweiz", none).unwrap()["place"], "Schweiz");
+        assert!(panel_command("Show me the mountains on the globe", none).unwrap().get("place").is_none());
+        for text in ["Exaggerate the terrain", "Make the mountains taller", "Überhöhe das Gelände"] {
+            is(text, none, "exaggerate_terrain");
+        }
+        is("flatten the terrain", earth_up, "flatten_terrain");
+        // The weather.
+        for text in ["Show me the weather radar", "Show the rain radar", "Where is it raining?", "Zeig mir das Regenradar", "rain radar"] {
+            is(text, none, "show_radar");
+        }
+        for text in ["Animate the radar", "Show me the rain over the past two hours", "Play the rain radar", "Spiel das Regenradar ab", "show the rain radar loop"] {
+            is(text, none, "animate_radar");
+        }
+        for text in ["Show me the clouds", "Show the live cloud cover", "Zeig mir die Wolken"] {
+            is(text, none, "show_clouds");
+        }
+        is("clouds", earth_up, "show_clouds");
+        assert_eq!(act("clouds", none), None);
+        let march = panel_command("Show me the clouds on 1 March 2024", none).unwrap();
+        assert_eq!((march["action"].as_str(), march["date"].as_str()), (Some("show_clouds"), Some("1 march 2024")));
+        assert_eq!(panel_command("Zeig mir die Wolken von gestern", none).unwrap()["date"], "gestern");
+        assert!(panel_command("Show me the clouds today", none).unwrap().get("date").is_none(), "today is live");
+        // A past day.
+        let europe = panel_command("What did Europe look like yesterday?", none).unwrap();
+        assert_eq!((europe["action"].as_str(), europe["place"].as_str(), europe["date"].as_str()), (Some("show_date"), Some("Europe"), Some("yesterday")));
+        let world = panel_command("Show me the Earth on 2024-03-01", none).unwrap();
+        assert_eq!((world["action"].as_str(), world["date"].as_str()), (Some("show_date"), Some("2024-03-01")));
+        assert!(world.get("place").is_none());
+        assert_eq!(panel_command("Wie sah Europa gestern aus?", none).unwrap()["place"], "Europa");
+        assert_eq!(panel_command("Show me Germany from last week", earth_up).unwrap()["place"], "Germany");
+        // Imagery, labels, the overlays off, back to today.
+        let sentinel = panel_command("Switch to Sentinel imagery", earth_up).unwrap();
+        assert_eq!((sentinel["action"].as_str(), sentinel["imagery"].as_str()), (Some("set_imagery"), Some("sentinel")));
+        assert_eq!(panel_command("use the esri imagery", earth_up).unwrap()["imagery"], "esri");
+        is("Show the country borders", none, "show_labels");
+        is("Hide the labels", earth_up, "hide_labels");
+        is("Blende die Grenzen aus", earth_up, "hide_labels");
+        for (text, layer) in [("Hide the clouds", "clouds"), ("turn off the rain radar", "radar"), ("remove the terrain", "terrain"), ("Blende die Wolken aus", "clouds")] {
+            assert_eq!(panel_command(text, earth_up).unwrap()["layer"], layer, "{text}");
+        }
+        assert_eq!(act("hide the radar", both), None, "the network radar's");
+        is("back to today", earth_up, "show_today");
+        // The tour.
+        for text in ["What's happening in the world?", "Give me a world tour", "Start the world tour", "Was passiert in der Welt?", "Mach eine Welttour"] {
+            is(text, none, "show_world_tour");
+        }
+        for text in ["Stop the tour", "End the world tour", "Tour beenden"] {
+            is(text, earth_up, "stop_tour");
+            assert_eq!(act(text, none), None, "{text}: no Earth, no tour");
+        }
+        // Other people's words stay theirs.
+        for (text, up) in [
+            ("Show me my emails from yesterday", earth_up),
+            ("Show me the flights from yesterday", earth_up),
+            ("Show me the photos from last week", none),
+            ("What did you look like yesterday?", none),
+            ("show me", none),
+            ("find me a restaurant", none),
+            ("show me the labels", none),
+            ("Tell me about the mountains", none),
+            ("switch to nasa", none),
+            ("hide the clouds", none),
+        ] {
+            assert_eq!(act(text, up), None, "{text}");
+        }
+        // A question only looks: these pass the question guard.
+        for text in ["Where am I on the map?", "What's happening in the world?", "What did Europe look like yesterday?", "Where is it raining?"] {
+            let args = panel_command(text, none).unwrap();
+            assert!(!beyond_the_question(text, "open_jarvis_view", &args), "{text}");
+        }
+        // The whole fast path reaches them (the verifier's probes).
+        for text in ["Where am I on the map?", "Show me the mountains.", "Show me the rain radar.", "Show me the clouds on 1 March 2024.", "What's happening in the world?", "Zeig mir, wo ich bin.", "locate me", "give me a world tour"] {
+            assert_eq!(tool(text).map(|(n, _)| n), Some("open_jarvis_view"), "{text}");
+        }
+    }
+
+    #[test]
     fn every_way_to_say_the_system_volume() {
         let set = |text: &str| match tool(text) {
             Some(("media_and_volume_control", a)) => a["level"].as_i64(),
@@ -6342,12 +6782,46 @@ mod tests {
         for text in ["Is the orb hidden?", "Are you in orb mode?", "Is orb mode on?", "Ist der Orbmodus an?", "Bist du im Orbmodus?"] {
             assert_eq!(tool(text), Some(("control_orb_mode", json!({"action": "status"}))), "{text}");
         }
-        for text in ["Are you in Ultron mode?", "Is Ultron mode on?", "Bist du im Ultron Modus?"] {
-            assert!(matches!(parse(text), Some(Intent::Answer(ref line)) if line.contains("Ultron Mode")), "{text}");
-        }
         // Small talk is nobody's record.
         assert_eq!(tool("Did you sleep well?"), None);
         assert_eq!(tool("Did you hear me?"), None);
+    }
+
+    /// Sir retired Ultron Mode (2026-11-09): asking for it gets one line, and no parser that runs
+    /// before this one takes the sentence for a theme, a mode, an app or the model.
+    #[test]
+    fn ultron_mode_is_retired_in_one_line() {
+        let ctx = crate::intent_engine::ReflexContext::default();
+        for text in [
+            "Switch to Ultron mode.",
+            "Jarvis, switch to Ultron.",
+            "Activate Ultron protocol",
+            "Turn on Ultron mode, please",
+            "Ultron mode on",
+            "Are you in Ultron mode?",
+            "What is Ultron mode?",
+            "Ultron-Modus aktivieren",
+            "Wechsel zu Ultron.",
+            "Schalte in den Ultron-Modus",
+            "Bist du im Ultron Modus?",
+        ] {
+            let said = crate::typos::normalize_user_input_typos(text);
+            assert!(matches!(parse(&said), Some(Intent::Answer(ref line)) if line == "Ultron mode has been retired, Sir."), "{text}: {:?}", parse(&said));
+            assert!(crate::intent_engine::route(&said, &ctx).is_none(), "{text}: the reflex router");
+            assert!(crate::intent_engine::deterministic_action(&said).is_none(), "{text}: a window action");
+            assert!(silent_quick_command(&said).is_none(), "{text}: a quick command");
+            assert!(hud_view_command(&said).is_none() && outing_command(&said).is_none(), "{text}: a HUD view");
+            assert!(crate::oled_minimal_ui::voice_command(&said).is_none() && crate::dynamic_popups::voice_command(&said).is_none(), "{text}: the look");
+            assert!(orb_mode_command(&said).is_none() && listening_mode_command(&said).is_none() && mixer_command(&said).is_none(), "{text}: a mode");
+            assert!(internal_view_command(&said).is_none() && ui_layout_command(&said).is_none(), "{text}: a view");
+            assert!(crate::modality::parse_command(&said).is_none(), "{text}: the reply mode");
+            assert!(crate::features::route_text(&said).is_none() && crate::integration_router::route_text(&said).is_none(), "{text}: a route");
+            assert!(crate::compound_planner::plan(&said, &ctx).is_none(), "{text}: a compound");
+        }
+        // Ultron the character is still the model's to talk about.
+        for text in ["Who is Ultron?", "Play the Age of Ultron soundtrack", "Is Ultron a villain?"] {
+            assert!(!matches!(parse(text), Some(Intent::Answer(ref line)) if line.contains("retired")), "{text}");
+        }
     }
 
     /// Repro (route reader, 2026-11-07): "nicht schließen" went to close_application.
@@ -6401,7 +6875,7 @@ mod tests {
         assert_eq!(answer("What happens if I close Firefox?"), "Firefox closes, Sir, and anything unsaved in it is lost. Say \"Close Firefox\" if you want that.");
         assert!(answer("What would happen if I mute Discord?").starts_with("Discord goes silent until you unmute it"));
         // His own modes are told as they are, never switched on by the question.
-        for text in ["What is orb mode?", "What's pure orb mode?", "What does the mixer do?", "Was ist der Ultron Modus?", "What is span mode?"] {
+        for text in ["What is orb mode?", "What's pure orb mode?", "What does the mixer do?", "Was ist der Orbmodus?", "What is span mode?"] {
             assert!(!answer(text).is_empty(), "{text}");
         }
         assert!(answer("What is orb mode?").starts_with("In orb mode only my orb floats"));

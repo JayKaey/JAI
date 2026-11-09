@@ -31,18 +31,12 @@ The app writes `jarvis_config.json` and `jarvis_memory.db` next to the executabl
 personal data (settings, the phone pairing key, conversations, sealed account tokens), so git
 ignores them, as it does the logs, the phone page's TLS key and the packaged executables.
 
-The film-voice reference recordings are not included either. To calibrate the two voices, put
-your own clips at `assets\jarvis_voice_reference.mp3` and `assets\ultron_voice_reference.mp3`
-and run `JARVIS.exe --voice-calibrate` (`--voice-calibrate ultron` for Ultron's alone).
+The film-voice reference recording is not included either. To calibrate the voice, put your own
+clip at `assets\jarvis_voice_reference.mp3` and run `JARVIS.exe --voice-calibrate`.
 
-The two voices are two separate chains. Jarvis speaks Received Pronunciation through a dry
-studio chain. Ultron speaks General American with a deep American base voice, pitched onto his
-clip and shaped towards the man who speaks him in the film: slow, husky, with only a trace of
-the machine (a hint of a voice an octave below, of a metallic resonance, of grit, and breath);
-his clauses never pass Jarvis' chain. This is an approximation built from stock voices, not a
-clone of an actor. Besides the similarity of each voice to its own clip, the exhaustive
-verifier measures that the two are apart (pitch, colour, pace, accent) and that the speech
-recogniser understands both.
+Jarvis speaks Received Pronunciation through a dry studio chain. This is an approximation built
+from stock voices, not a clone of an actor. Besides the similarity of the voice to its clip, the
+exhaustive verifier measures that the speech recogniser understands it.
 
 ## Screens
 
@@ -173,8 +167,7 @@ down my PC?" the words that do it, and none of these questions starts anything.
 
 "Undo that" (or "change it back", "put it back", "mach das rückgängig") takes back the last thing
 he changed of his own, for ten minutes after it: a volume, a window or widget of his that opened
-or closed, the look and layout of the HUD, Ultron Mode, the music he stopped or skipped, a file he
-edited. One step, the latest; a second "undo that" finds nothing rather than redoing. Nothing of
+or closed, the look and layout of the HUD, the music he stopped or skipped, a file he edited. One step, the latest; a second "undo that" finds nothing rather than redoing. Nothing of
 anybody else's (another program's window, a sent message) comes back this way. "What did you just
 do?" tells his last actions as they went, and "what's new?" what this build does that the last one
 did not.

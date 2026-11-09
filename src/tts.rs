@@ -848,13 +848,6 @@ impl Kokoro {
         Ok(table)
     }
 
-    /// The voice pack is Kokoro v1.0: its English voices were trained on the pack's own symbols
-    /// (one letter per diphthong, "ᵊ" before a syllabic consonant), which the first pack's
-    /// table does not hold.
-    pub fn own_symbols(&self) -> bool {
-        self.vocab.contains_key(&'ᵊ')
-    }
-
     pub fn available_voices(&self) -> Vec<String> {
         let mut voices = crate::models::list_voices(&self.archive).unwrap_or_default();
         // Cached tables of this model version only (another version's tables would not fit).
@@ -974,18 +967,11 @@ fn breath_ms(text: &str) -> usize {
     }
 }
 
-/// Trims silence, runs the film mastering chain (`jarvis_voice_dsp::master_as`: 24 kHz → 48 kHz with
+/// Trims silence, runs the film mastering chain (`jarvis_voice_dsp::master`: 24 kHz → 48 kHz with
 /// the −0.35 st pitch lock, the Bettany EQ and de-esser, the helmet micro-double, the broadcast
 /// compressor and limiter), applies 25 ms raised-cosine fades and appends the clause's breath.
 /// Returns `jarvis_voice_dsp::MASTER_RATE` audio.
-pub(crate) fn finish_clause_audio(audio: Vec<f32>, text: &str) -> Vec<f32> {
-    finish_clause_audio_as(audio, text, crate::ultron_mode::active())
-}
-
-/// `finish_clause_audio` for the voice stated (`ultron`: his own chain instead of the film
-/// mastering), so that a clause is one voice from its phonemes to its last sample even while
-/// the mode is being switched.
-pub(crate) fn finish_clause_audio_as(mut audio: Vec<f32>, text: &str, ultron: bool) -> Vec<f32> {
+pub(crate) fn finish_clause_audio(mut audio: Vec<f32>, text: &str) -> Vec<f32> {
     let thresh = 0.003;
     let first = audio.iter().position(|s| s.abs() > thresh).unwrap_or(0);
     let last = audio.iter().rposition(|s| s.abs() > thresh).unwrap_or(audio.len().saturating_sub(1));
@@ -994,7 +980,7 @@ pub(crate) fn finish_clause_audio_as(mut audio: Vec<f32>, text: &str, ultron: bo
     if start < end {
         audio = audio[start..end].to_vec();
     }
-    let mut audio = jarvis_voice_dsp::master_as(&audio, KOKORO_RATE, ultron);
+    let mut audio = jarvis_voice_dsp::master(&audio, KOKORO_RATE);
     let rate = jarvis_voice_dsp::MASTER_RATE as usize;
     let fade = (rate * jarvis_voice_dsp::CROSSFADE_MS / 1000).min(audio.len() / 4);
     for (i, s) in audio.iter_mut().take(fade).enumerate() {
@@ -1628,10 +1614,8 @@ struct ClauseCache {
 }
 
 impl ClauseCache {
-    /// (`ultron`: the clause went through his chain; the same words in the same blend through
-    /// Jarvis' are another sound.)
-    fn key(voice: &str, speed: f32, speech: &str, ultron: bool) -> String {
-        format!("{}{voice}|{speed:.2}|{}", if ultron { "ultron|" } else { "" }, speech.trim().to_lowercase())
+    fn key(voice: &str, speed: f32, speech: &str) -> String {
+        format!("{voice}|{speed:.2}|{}", speech.trim().to_lowercase())
     }
 
     fn cacheable(speech: &str) -> bool {
@@ -1663,11 +1647,8 @@ fn render_clause(
     voice: &str,
     speed: f32,
 ) -> Option<Arc<Vec<f32>>> {
-    // Whose clause this is, decided once: its phonemes, its speed, its chain and its place in
-    // the cache all follow from it (the mode may be switched while it is being rendered).
-    let ultron = crate::ultron_mode::active();
     let cacheable = ClauseCache::cacheable(speech);
-    let key = ClauseCache::key(voice, speed, speech, ultron);
+    let key = ClauseCache::key(voice, speed, speech);
     if cacheable {
         if let Some(hit) = cache.get(&key) {
             return Some(hit);
@@ -1683,10 +1664,9 @@ fn render_clause(
             };
             let mut audio = Vec::new();
             for part in parts {
-                // Ultron speaks General American, Jarvis Received Pronunciation.
-                let ipa = if ultron { phonemizer.phonemize_as(&part, crate::phonemizer::Accent::American, k.own_symbols()) } else { phonemizer.phonemize(&part) };
-                match k.synthesize(&ipa, voice, jarvis_voice_dsp::synthesis_speed_as(speed, ultron)) {
-                    Ok(a) if !a.is_empty() => audio.extend(finish_clause_audio_as(a, &part, ultron)),
+                let ipa = phonemizer.phonemize(&part);
+                match k.synthesize(&ipa, voice, jarvis_voice_dsp::synthesis_speed(speed)) {
+                    Ok(a) if !a.is_empty() => audio.extend(finish_clause_audio(a, &part)),
                     Ok(_) => {}
                     Err(e) => {
                         warn!("[TTS] Synthesis failed for '{part}': {e}");

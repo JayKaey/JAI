@@ -34,6 +34,7 @@ mod chem_helper;
 mod clipboard;
 mod clipboard_history;
 mod command_palette;
+mod command_corrector;
 mod commute_advisor;
 mod compound_planner;
 mod config;
@@ -48,6 +49,17 @@ mod deep_researcher;
 mod diagnostics;
 mod disk_map;
 mod earth;
+mod earth_gl;
+mod earth_locate;
+mod earth_sources;
+mod earth_tour;
+// live layers (C1): satellites (SGP4/SDP4), trains, departures, traffic, past weather, rain.
+mod earth_layers;
+mod live_layers;
+mod sat_orbit;
+mod traffic;
+mod transit;
+mod weather_history;
 mod shadow_memory;
 mod streamdeck_bridge;
 mod discord_bridge;
@@ -76,6 +88,7 @@ mod hud_dock;
 mod hud_board;
 mod hud_suggestions;
 mod hyper_cortex;
+mod image_viewer;
 mod instant_replay;
 mod integration_registry;
 mod integration_router;
@@ -99,6 +112,12 @@ mod minecraft_doctor;
 mod mobile_scanner;
 mod modality;
 mod models;
+// The 3D studio.
+mod gpu3d;
+mod mesh_io;
+mod model3d;
+mod procedural_textures;
+mod scene3d;
 mod monitors;
 mod music;
 mod network_guardian;
@@ -135,6 +154,7 @@ mod spatial_scenes;
 mod skills;
 mod smart_alarm;
 mod stark;
+mod street_view;
 mod stt;
 mod stress_tester;
 mod study_assistant;
@@ -143,7 +163,6 @@ mod teleport;
 mod telemetry;
 mod theme_engine;
 mod thermal_advisor;
-mod ultron_mode;
 mod thinking_guard;
 mod tool_forge;
 mod tools;
@@ -158,16 +177,17 @@ mod vad;
 mod vault;
 mod venue_guide;
 mod visual_ui_verifier;
-mod voice_features;
 mod voice_reference;
 mod vram_guard;
 mod wake;
 mod watch_and_tell;
 mod web_connector;
+mod webcams;
 mod websearch;
 mod webuntis_client;
 mod whatsapp_client;
 mod widgets;
+mod window_commands;
 mod window_drill;
 mod window_physics;
 mod window_tiler;
@@ -231,9 +251,6 @@ struct Cli {
     voice_calibrate: bool,
     /// Synthesise the clip's sentence and measure it against the clip (silent), then exit.
     voice_verify: bool,
-    /// `--voice-calibrate ultron` / `--voice-verify ultron`: Ultron's voice alone (Jarvis' own
-    /// calibration is not touched).
-    voice_ultron_only: bool,
     /// Check that Jarvis' voice reaches Sir's Discord microphone (plays one sentence), then exit.
     call_check: bool,
     /// Start Jarvis, run the live self-test in the running app (silent), write the report, exit.
@@ -256,7 +273,6 @@ impl Cli {
             selftest: false,
             voice_calibrate: false,
             voice_verify: false,
-            voice_ultron_only: false,
             call_check: false,
             speak: false,
             bench: false,
@@ -283,14 +299,8 @@ impl Cli {
                 "--check-models" => cli.check_models = true,
                 "--download-models" => cli.download_models = true,
                 "--selftest" => cli.selftest = true,
-                "--voice-calibrate" => {
-                    cli.voice_calibrate = true;
-                    cli.voice_ultron_only |= args.next_if(|next| next == "ultron").is_some();
-                }
-                "--voice-verify" => {
-                    cli.voice_verify = true;
-                    cli.voice_ultron_only |= args.next_if(|next| next == "ultron").is_some();
-                }
+                "--voice-calibrate" => cli.voice_calibrate = true,
+                "--voice-verify" => cli.voice_verify = true,
                 "--call-check" => cli.call_check = true,
                 "--speak" => cli.speak = true,
                 "--bench" => cli.bench = true,
@@ -367,10 +377,8 @@ USAGE: JARVIS.exe [OPTIONS]
   --speak             with --selftest: also play a test sentence on the speakers
   --bench             with --selftest: time Whisper across settings (threads, encoder window, ...)
   --no-llm            with --selftest: skip the language-model stage (while gaming / Jarvis runs)
-  --voice-calibrate   pick the Kokoro blend closest to the reference clip (silent);
-                      `--voice-calibrate ultron`: Ultron's base voice alone
-  --voice-verify      measure the voice chain against the reference clip (silent);
-                      `--voice-verify ultron`: Ultron's voice alone
+  --voice-calibrate   pick the Kokoro blend closest to the reference clip (silent)
+  --voice-verify      measure the voice chain against the reference clip (silent)
   --call-check        check that Jarvis' voice reaches your Discord mic (Wave Link Chat Mix; plays one sentence)
   --chat \"<text>\"     type a request into Jarvis once he is up (repeatable)
   --chat-delay <secs> pause after each --chat answer (default 2), e.g. to look at a new window
@@ -775,55 +783,26 @@ async fn start(cli: &Cli, cfg: JarvisConfig) -> Started {
     }
     if cli.voice_calibrate || cli.voice_verify {
         fish_zero_shot_tts::set_f0_flatten(cfg.voice_f0_flatten);
-        // Ultron has his own clip: his base voice is calibrated and measured against it too.
-        let ultron = ultron_mode::reference_path().is_some();
-        let jarvis = !cli.voice_ultron_only;
         if cli.voice_calibrate {
-            if jarvis {
-                match fish_zero_shot_tts::calibrate(&cfg) {
-                    Ok((blend, m)) => info!("[VOICE] Calibrated: {blend} — {} (distance {:.3})", m.describe(), m.distance()),
-                    Err(e) => {
-                        error!("[VOICE] Calibration failed: {e}");
-                        return Started::Done(ExitCode::FAILURE);
-                    }
-                }
-            }
-            if ultron {
-                match ultron_mode::calibrate(&cfg) {
-                    Ok((voice, m)) => info!("[ULTRON] Calibrated: {voice} — {} (distance {:.3})", m.describe(), m.distance()),
-                    Err(e) => {
-                        error!("[ULTRON] Calibration failed: {e}");
-                        return Started::Done(ExitCode::FAILURE);
-                    }
+            match fish_zero_shot_tts::calibrate(&cfg) {
+                Ok((blend, m)) => info!("[VOICE] Calibrated: {blend} — {} (distance {:.3})", m.describe(), m.distance()),
+                Err(e) => {
+                    error!("[VOICE] Calibration failed: {e}");
+                    return Started::Done(ExitCode::FAILURE);
                 }
             }
         }
         if cli.voice_verify {
-            let mut reached = true;
-            if jarvis {
-                match fish_zero_shot_tts::verify(&cfg) {
-                    Ok(v) => {
-                        info!("[VOICE] Verification\n{}", v.describe());
-                        reached &= v.passed();
-                    }
-                    Err(e) => {
-                        error!("[VOICE] Verification failed: {e}");
-                        reached = false;
-                    }
+            let reached = match fish_zero_shot_tts::verify(&cfg) {
+                Ok(v) => {
+                    info!("[VOICE] Verification\n{}", v.describe());
+                    v.passed()
                 }
-            }
-            if ultron {
-                match ultron_mode::verify(&cfg) {
-                    Ok(v) => {
-                        info!("[ULTRON] Verification\n{}", v.describe());
-                        reached &= v.passed();
-                    }
-                    Err(e) => {
-                        error!("[ULTRON] Verification failed: {e}");
-                        reached = false;
-                    }
+                Err(e) => {
+                    error!("[VOICE] Verification failed: {e}");
+                    false
                 }
-            }
+            };
             return Started::Done(if reached { ExitCode::SUCCESS } else { ExitCode::FAILURE });
         }
         return Started::Done(ExitCode::SUCCESS);
@@ -973,6 +952,8 @@ async fn start(cli: &Cli, cfg: JarvisConfig) -> Started {
     // Away Mode's eye on the PC (lock, drives, Sir's return) and the "tell me when …" watches.
     away_mode::start(app.tools().clone(), shutdown.clone());
     watch_and_tell::start(shutdown.clone());
+    // live layers (C1): the rain note and the ISS heads-up.
+    live_layers::start(app.clone(), shutdown.clone());
     // What his own jobs have to say once done (the radar's sweep, the disk map's scan), spoken
     // as soon as he is free.
     {

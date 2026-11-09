@@ -12,8 +12,8 @@
 //!    board's scroll track is drawn at its edge), and no pictographs in rendered text;
 //! 2. no overlap between blocks, or between a block and the orb, with 1, 2, 4, 8 and 12 blocks;
 //! 3. every block type and the orb move by exactly the pointer's drag;
-//! 4. every stroke and mesh colour belongs to the active theme (the eight presets, Ultron's
-//!    override and three custom themes), a status red aside;
+//! 4. every stroke and mesh colour belongs to the active theme (the eight presets and three
+//!    custom themes), a status red aside;
 //! 5. no pictographs in the `.rs` sources (`live_self_tester::source_hygiene`);
 //! 6. the page keys are at least 84 x 24 px and turn the page when clicked;
 //! 7. the emblem's poses change without a single-frame jump, ring 5's clusters sit 120 degrees
@@ -465,9 +465,9 @@ pub fn off_theme(frame: &Frame, theme: &str, palette: &ThemePalette) -> Vec<Stri
     findings
 }
 
-/// The themes of the matrix: the eight presets, three custom themes (Sir's own from
-/// `config/custom_themes.json` first, filled up with probe colours no preset uses) and Ultron's
-/// override. Each as (palette name for `theme_engine::follow`, label).
+/// The themes of the matrix: the eight presets and three custom themes (Sir's own from
+/// `config/custom_themes.json` first, filled up with probe colours no preset uses). Each as
+/// (palette name for `theme_engine::follow`, label).
 pub fn themes() -> Vec<(String, String)> {
     let mut list: Vec<(String, String)> = theme_engine::PRESETS.iter().map(|(name, _)| (name.to_string(), theme_engine::label(name))).collect();
     let mut custom: Vec<(String, String)> = theme_engine::custom_themes().into_iter().take(3).map(|t| (t.key(), format!("custom theme {}", t.name))).collect();
@@ -896,9 +896,9 @@ pub fn check_board(size: Vec2, count: usize, pass: usize, rt: &tokio::runtime::H
     findings
 }
 
-/// Check 4 on the board: one report under every theme of the matrix (and Ultron's override);
-/// every outline and mesh colour must be the theme's, and the rasterised border of the first
-/// block must carry the theme's border hue. The theme is put back afterwards.
+/// Check 4 on the board: one report under every theme of the matrix; every outline and mesh
+/// colour must be the theme's, and the rasterised border of the first block must carry the
+/// theme's border hue. The theme is put back afterwards.
 pub fn check_board_themes(size: Vec2, pass: usize, rt: &tokio::runtime::Handle) -> Vec<String> {
     let mut findings = Vec::new();
     let before = theme_engine::active_name();
@@ -923,14 +923,8 @@ pub fn check_board_themes(size: Vec2, pass: usize, rt: &tokio::runtime::Handle) 
     }
     theme_engine::follow(&before);
     theme_engine::finish_fade();
-    seen.push(("Ultron override".to_string(), theme_engine::ULTRON));
     for (n, (label, palette)) in seen.iter().enumerate() {
-        let ultron = n + 1 == seen.len();
-        if ultron {
-            theme_engine::set_ultron(true);
-        } else {
-            theme_engine::follow(&themes()[n].0);
-        }
+        theme_engine::follow(&themes()[n].0);
         theme_engine::finish_fade();
         let frame = stage.frames(2, &mut paint);
         findings.extend(off_theme(&frame, label, palette));
@@ -951,9 +945,6 @@ pub fn check_board_themes(size: Vec2, pass: usize, rt: &tokio::runtime::Handle) 
                     }
                 }
             }
-        }
-        if ultron {
-            theme_engine::set_ultron(false);
         }
     }
     theme_engine::follow(&before);
@@ -1371,7 +1362,7 @@ mod tests {
         let found = off_theme(&frame, "Crimson Overdrive", &red);
         assert_eq!(found.len(), 2, "{found:?}");
         assert!(found[0].contains("#2B7A9E") && found[1].contains("#3DF59B"), "{found:?}");
-        // The matrix has twelve themes; Ultron's override is checked on top.
+        // The matrix has eleven themes.
         let list = themes();
         assert_eq!(list.len(), 11, "{list:?}");
         assert!(list.iter().any(|(name, _)| name == theme_engine::DEFAULT_PRESET));
@@ -1400,7 +1391,6 @@ mod tests {
         for (name, palette) in theme_engine::PRESETS {
             fail(&format!("the pill under {name}"), off_theme(&frame, name, &palette));
         }
-        fail("the pill under Ultron", off_theme(&frame, "Ultron", &theme_engine::ULTRON));
         // Only the pill's own colours: another green is still off a red theme.
         frame.strokes.push(StrokeItem { clip, rect: at, colour: Color32::from_rgb(0x20, 0xC0, 0x40), width: 1.0 });
         let found = off_theme(&frame, "Crimson Overdrive", &theme_engine::resolve("crimson_overdrive"));

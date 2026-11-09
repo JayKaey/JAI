@@ -121,17 +121,39 @@ struct DockState {
     search: String,
     /// Blocks that have been drawn at least once (the materialise cue sounds on the first).
     drawn: HashSet<String>,
-    /// When each block began to appear: its entrance runs `OPEN_ANIM` from then.
-    opened: HashMap<String, Instant>,
+    /// When each block began to appear (its entrance runs `OPEN_ANIM` from then), and when its
+    /// entrance was last asked about (a frame the HUD was held up for moves the start on).
+    opened: HashMap<String, (Instant, Instant)>,
     /// The block Sir pressed the mouse on: where it stood then, and where the pointer was.
     grab: Option<(String, Rect, Pos2)>,
+    /// Blocks the dock is gliding somewhere ("move it to the middle"): from, to, since when.
+    glides: HashMap<String, (Rect, Rect, Instant)>,
+    /// The block filling the home screen ("full screen the Earth") and the rect it goes back to.
+    fullscreen: Option<(String, Rect)>,
+    /// Blocks put away ("minimise it"), by title: their exit has played, they wait in the tray.
+    minimized: Vec<(String, String)>,
+    /// Blocks whose exit is playing on the way to the tray.
+    minimizing: HashSet<String>,
+    /// Blocks whose exit is playing on the way into a window of their own.
+    detaching: HashSet<String>,
+    /// When each block or window was opened, moved by hand or arranged by voice: "it" means
+    /// the latest of them.
+    touched: HashMap<String, Instant>,
 }
 
 /// A block that closes (by voice, its `[ CLOSE ]`, the menu or Ctrl+W) plays its exit over
-/// this long before it leaves the board.
-pub const CLOSE_FADE: Duration = Duration::from_millis(220);
-/// A block's entrance takes this long: its frame materialises first, then its content.
-pub const OPEN_ANIM: Duration = Duration::from_millis(300);
+/// this long before it leaves the board: its content goes, its frame folds into a hairline and
+/// the line contracts to a point (`gui::WindowMotion`).
+pub const CLOSE_FADE: Duration = Duration::from_millis(200);
+/// A block's entrance takes this long: a hairline draws out of its middle, the frame unfolds
+/// from it with the corner brackets leading, the content resolves top to bottom behind a scan
+/// edge and one faint glow settles on the border (`gui::WindowMotion`).
+pub const OPEN_ANIM: Duration = Duration::from_millis(400);
+/// How long a block glides to where it was told to go ("move it to the middle").
+pub const GLIDE: Duration = Duration::from_millis(280);
+/// A frame later than this after the one before moves an entrance's start on by the wait: a
+/// HUD held up (a new OS window, a heavy first frame) never skips the motion it was playing.
+const STALL: Duration = Duration::from_millis(50);
 
 static STATE: Mutex<Option<DockState>> = Mutex::new(None);
 
@@ -181,6 +203,8 @@ pub fn detach_next(prefix: &str) {
 pub fn adopt(id: &str) -> bool {
     with(|s| {
         if s.seen.insert(id.to_string()) {
+            // Newly opened: "it" means this one now.
+            s.touched.insert(id.to_string(), Instant::now());
             if let Some(k) = s.pending.iter().position(|p| id.starts_with(p.as_str())) {
                 s.pending.remove(k);
                 s.detached.insert(id.to_string());
@@ -216,6 +240,14 @@ pub fn forget(id: &str) {
         if s.maximized.as_ref().is_some_and(|(open, _)| open == id) {
             s.maximized = None;
         }
+        s.glides.remove(id);
+        if s.fullscreen.as_ref().is_some_and(|(open, _)| open == id) {
+            s.fullscreen = None;
+        }
+        s.minimized.retain(|(open, _)| open != id);
+        s.minimizing.remove(id);
+        s.detaching.remove(id);
+        s.touched.remove(id);
     });
 }
 
@@ -308,6 +340,16 @@ pub fn is_maximized(id: &str) -> bool {
 /// asked once per frame by the block, which is held there for a few frames and then free again.
 pub fn take_forced(id: &str) -> Option<Rect> {
     with(|s| {
+        // A glide ("move it to the middle"): eased from where it stood to where it goes, then
+        // held there for the frames egui needs to settle it.
+        if let Some((from, to, since)) = s.glides.get(id).copied() {
+            let t = since.elapsed().as_secs_f32() / GLIDE.as_secs_f32();
+            if t < 1.0 {
+                return Some(lerp_rect(from, to, ease_out_cubic(t)));
+            }
+            s.glides.remove(id);
+            s.forced.insert(id.to_string(), (to, FORCED_FRAMES));
+        }
         let (rect, frames) = s.forced.get_mut(id)?;
         let rect = *rect;
         *frames = frames.saturating_sub(1);
@@ -399,7 +441,15 @@ pub fn close_named(name: &str) -> Vec<String> {
 pub fn close_all_blocks() -> usize {
     let now = Instant::now();
     let n = with(|s| {
-        let ids: HashSet<String> = s.last_blocks.iter().chain(s.blocks.iter()).map(|(id, _, _)| id.clone()).filter(|id| id != "console" && !s.pinned.contains(id)).collect();
+        // (Blocks waiting in the tray close with them.)
+        let ids: HashSet<String> = s
+            .last_blocks
+            .iter()
+            .chain(s.blocks.iter())
+            .map(|(id, _, _)| id.clone())
+            .chain(s.minimized.iter().map(|(id, _)| id.clone()))
+            .filter(|id| id != "console" && !s.pinned.contains(id))
+            .collect();
         for id in &ids {
             s.closing.entry(id.clone()).or_insert(now);
         }
@@ -422,7 +472,13 @@ pub fn begin_close(id: &str) {
 
 /// Block `id` was asked for again while it was leaving: it stays.
 pub fn cancel_close(id: &str) {
-    with(|s| s.closing.remove(id));
+    with(|s| {
+        s.closing.remove(id);
+        s.minimizing.remove(id);
+        s.detaching.remove(id);
+    });
+    // (Asked for again while it waited in the tray: it comes back.)
+    restore(id);
 }
 
 /// How far block `id`'s entrance is (0 … 1); None once it has fully appeared. A block that was
@@ -431,17 +487,28 @@ pub fn cancel_close(id: &str) {
 pub fn opening_progress(id: &str) -> Option<f32> {
     with(|s| {
         let was_up = s.last_blocks.iter().any(|(b, _, _)| b == id);
-        let since = match s.opened.get(id) {
-            Some(at) if was_up => *at,
-            _ => {
-                let now = Instant::now();
-                s.opened.insert(id.to_string(), now);
-                now
-            }
+        let now = Instant::now();
+        let since = match s.opened.get(id).copied() {
+            Some((at, seen)) if was_up => stall_shifted(at, seen, now, OPEN_ANIM),
+            _ => now,
         };
-        let t = since.elapsed().as_secs_f32() / OPEN_ANIM.as_secs_f32();
+        s.opened.insert(id.to_string(), (since, now));
+        let t = now.duration_since(since).as_secs_f32() / OPEN_ANIM.as_secs_f32();
         (t < 1.0).then_some(t.max(0.0))
     })
+}
+
+/// When a motion that began at `start` and was last drawn at `seen` begins now: a frame that
+/// came more than `STALL` after the one before (the HUD was held up: a new OS window, a heavy
+/// first frame) moves the start on by the wait, so the motion goes on where it was instead of
+/// jumping to its end. A motion already over stays over.
+pub fn stall_shifted(start: Instant, seen: Instant, now: Instant, length: Duration) -> Instant {
+    let gap = now.saturating_duration_since(seen);
+    if gap > STALL && seen.saturating_duration_since(start) < length {
+        start + (gap - Duration::from_millis(16))
+    } else {
+        start
+    }
 }
 
 /// A close request nobody collected for this long is dropped (its block went another way), so a
@@ -467,13 +534,31 @@ pub fn closing_progress(id: &str) -> Option<f32> {
 pub fn id_prefix_for(name: &str) -> Option<&'static str> {
     let n = name.to_lowercase();
     let has = |words: &[&str]| words.iter().any(|w| n.contains(w));
+    // Street view, the live cameras and the pictures ("close the Earth picture" is the picture;
+    // whole words for "bild", which "bildschirm" contains).
+    let word = |set: &[&str]| n.split(|c: char| !c.is_alphanumeric()).any(|w| set.contains(&w));
+    if has(&["street view", "streetview", "straßenansicht"]) {
+        return Some("street_view");
+    }
+    if has(&["camera", "webcam", "kamera", "livecam"]) {
+        return Some("webcams");
+    }
+    if word(&["image", "images", "picture", "pictures", "photo", "photos", "bild", "bilder", "foto", "fotos"]) {
+        return Some("image_viewer");
+    }
+    // (The 3D studio first: "the 3D model of the Earth" is the studio's.)
     // (The Earth's "satellite view" before the phone's satellite link.)
-    Some(if has(&["earth", "globe", "world map", "erde", "globus", "satellite view", "satellite map"]) {
+    Some(if has(&["3d", "3-d", "model viewer", "3d studio", "modell", "the model"]) {
+        "model3d"
+    } else if has(&["earth", "globe", "world map", "erde", "globus", "satellite view", "satellite map"]) {
         "earth"
     } else if has(&["radar", "network", "netzwerk"]) {
         "network_radar"
     } else if has(&["disk map", "drive map", "storage map", "disk", "drive"]) {
         "disk_map"
+    } else if has(&["departure", "abfahrt"]) {
+        // live layers (C1): the departures board.
+        "departures"
     } else if has(&["telemetry", "stats", "system", "vram", "cpu", "gpu"]) {
         "system_telemetry"
     } else if has(&["schedule", "calendar", "kalender", "webuntis", "timetable", "stundenplan"]) {
@@ -875,6 +960,268 @@ pub fn retile_all(bounds: Rect) -> usize {
     })
 }
 
+// ------------------------------------------------------------------- arranging on command ----
+// "Move it to the middle", "full screen the Earth", "minimise it", "put them side by side":
+// `window_commands` works out where a block goes; here the block glides there, fills the home
+// screen, waits in the tray or plays its exit on the way into a window of its own.
+
+fn ease_out_cubic(t: f32) -> f32 {
+    1.0 - (1.0 - t.clamp(0.0, 1.0)).powi(3)
+}
+
+/// `a` → `b` by `t` (corner by corner).
+pub fn lerp_rect(a: Rect, b: Rect, t: f32) -> Rect {
+    Rect::from_min_max(a.min + (b.min - a.min) * t, a.max + (b.max - a.max) * t)
+}
+
+/// Where a glide has got to now (None: block `id` is not gliding).
+fn glide_now(s: &DockState, id: &str) -> Option<Rect> {
+    let (from, to, since) = s.glides.get(id)?;
+    Some(lerp_rect(*from, *to, ease_out_cubic(since.elapsed().as_secs_f32() / GLIDE.as_secs_f32())))
+}
+
+/// Block `id` glides from `from` to `to` over `GLIDE` (a block already on its way starts from
+/// where it is now). It is no longer maximised: Sir put it somewhere.
+pub fn glide_to(id: &str, from: Rect, to: Rect) {
+    // (With the interface's animations off it is simply there.)
+    if !crate::gui::motion_enabled() {
+        place_at(id, to);
+        return;
+    }
+    with(|s| {
+        let from = glide_now(s, id).unwrap_or(from);
+        s.forced.remove(id);
+        s.glides.insert(id.to_string(), (from, to, Instant::now()));
+        s.touched.insert(id.to_string(), Instant::now());
+        if s.maximized.as_ref().is_some_and(|(open, _)| open == id) {
+            s.maximized = None;
+        }
+    });
+    crate::gui::refresh();
+}
+
+/// Block `id` stands at `to` from the next frame on (no glide: an offscreen render, or the
+/// animations are off). It is no longer maximised.
+pub fn place_at(id: &str, to: Rect) {
+    with(|s| {
+        s.glides.remove(id);
+        s.forced.insert(id.to_string(), (to, FORCED_FRAMES));
+        s.touched.insert(id.to_string(), Instant::now());
+        if s.maximized.as_ref().is_some_and(|(open, _)| open == id) {
+            s.maximized = None;
+        }
+    });
+    crate::gui::refresh();
+}
+
+/// Whether block `id` is on its way somewhere (its window may leave its monitor's part meanwhile).
+pub fn is_gliding(id: &str) -> bool {
+    with(|s| s.glides.contains_key(id))
+}
+
+/// "Full screen the Earth": block `id` glides from `current` onto the home screen (`screen`) and
+/// fills it, above everything, until "exit full screen" or Esc puts it back at `current`. A block
+/// that was full screen before goes back first.
+pub fn enter_fullscreen(id: &str, current: Rect, screen: Rect) {
+    let _ = exit_fullscreen();
+    with(|s| {
+        let current = s.maximized.as_ref().filter(|(open, _)| open == id).map_or(current, |(_, home)| *home);
+        s.maximized = None;
+        s.fullscreen = Some((id.to_string(), current));
+    });
+    glide_to(id, current, screen);
+}
+
+/// "Exit full screen", Esc: the full-screen block glides back where it was. Its id (None: no
+/// block was full screen).
+pub fn exit_fullscreen() -> Option<String> {
+    let (id, home, now) = with(|s| {
+        let (id, home) = s.fullscreen.take()?;
+        let now = glide_now(s, &id).or_else(|| s.last_rect.get(&id).copied()).unwrap_or(home);
+        Some((id, home, now))
+    })?;
+    glide_to(&id, now, home);
+    Some(id)
+}
+
+pub fn is_fullscreen(id: &str) -> bool {
+    with(|s| s.fullscreen.as_ref().is_some_and(|(open, _)| open == id))
+}
+
+/// The block filling the home screen, if one does.
+pub fn fullscreen_block() -> Option<String> {
+    with(|s| s.fullscreen.as_ref().map(|(id, _)| id.clone()))
+}
+
+/// Where the full-screen block goes back to, if block `id` is the one filling the home screen.
+pub fn fullscreen_home(id: &str) -> Option<Rect> {
+    with(|s| s.fullscreen.as_ref().filter(|(open, _)| open == id).map(|(_, home)| *home))
+}
+
+/// "Minimise it": block `id` plays its exit and waits in the tray (`minimized_blocks`) until it
+/// is restored. False when it is not on the board.
+pub fn minimize(id: &str) -> bool {
+    let up = with(|s| {
+        let up = s.last_blocks.iter().chain(s.blocks.iter()).any(|(b, _, _)| b == id);
+        if up {
+            s.minimizing.insert(id.to_string());
+            s.closing.entry(id.to_string()).or_insert_with(Instant::now);
+            s.touched.insert(id.to_string(), Instant::now());
+            if s.fullscreen.as_ref().is_some_and(|(open, _)| open == id) {
+                s.fullscreen = None;
+            }
+        }
+        up
+    });
+    if up {
+        crate::gui::refresh();
+    }
+    up
+}
+
+/// Block `id`'s exit has played: true when it was on its way to the tray (it waits there now,
+/// under `title`), false when it closes.
+pub fn take_minimizing(id: &str, title: &str) -> bool {
+    with(|s| {
+        if !s.minimizing.remove(id) {
+            return false;
+        }
+        if !s.minimized.iter().any(|(open, _)| open == id) {
+            s.minimized.push((id.to_string(), title.to_string()));
+        }
+        true
+    })
+}
+
+pub fn is_minimized(id: &str) -> bool {
+    with(|s| s.minimized.iter().any(|(open, _)| open == id))
+}
+
+/// "Restore it", its tray chip: block `id` comes back where it was (with its entrance). False
+/// when it was not in the tray.
+pub fn restore(id: &str) -> bool {
+    let back = with(|s| {
+        let before = s.minimized.len();
+        s.minimized.retain(|(open, _)| open != id);
+        if s.minimized.len() < before {
+            s.touched.insert(id.to_string(), Instant::now());
+            true
+        } else {
+            false
+        }
+    });
+    if back {
+        crate::gui::refresh();
+    }
+    back
+}
+
+/// The blocks waiting in the tray, as `(id, title)`, oldest first.
+pub fn minimized_blocks() -> Vec<(String, String)> {
+    with(|s| s.minimized.clone())
+}
+
+/// "Detach it": block `id` plays its exit first and then becomes its own OS window (the new
+/// window's slow first frame falls between the two motions, where nothing moves).
+pub fn begin_detach(id: &str) {
+    with(|s| {
+        s.detaching.insert(id.to_string());
+        s.closing.entry(id.to_string()).or_insert_with(Instant::now);
+        s.touched.insert(id.to_string(), Instant::now());
+        if s.fullscreen.as_ref().is_some_and(|(open, _)| open == id) {
+            s.fullscreen = None;
+        }
+    });
+    crate::gui::refresh();
+}
+
+/// Block `id`'s exit has played: true when it was on its way into a window of its own.
+pub fn take_detaching(id: &str) -> bool {
+    with(|s| s.detaching.remove(id))
+}
+
+/// Block `id` was moved by hand or arranged by voice: "it" means this one now.
+pub fn touch(id: &str) {
+    with(|s| {
+        s.touched.insert(id.to_string(), Instant::now());
+    });
+}
+
+/// The block or window of Jarvis' that was opened, moved or arranged last and is still open
+/// (on the board, in the tray or in a window of its own), and how long ago that was. Never the
+/// text console.
+pub fn latest_block() -> Option<(String, Duration)> {
+    recent_blocks().into_iter().next()
+}
+
+/// Jarvis' open blocks and windows (on the board, in the tray, in windows of their own), the
+/// one opened, moved or arranged last first, with how long ago that was ("them": the first two).
+/// Never the text console.
+pub fn recent_blocks() -> Vec<(String, Duration)> {
+    with(|s| {
+        let mut out: Vec<(String, Duration)> = Vec::new();
+        let open = s.last_blocks.iter().chain(s.blocks.iter()).map(|(id, _, _)| id).chain(s.minimized.iter().map(|(id, _)| id)).chain(s.detached.iter().filter(|id| s.seen.contains(*id)));
+        for id in open.filter(|id| id.as_str() != "console") {
+            if let Some(at) = s.touched.get(id) {
+                if !out.iter().any(|(known, _)| known == id) {
+                    out.push((id.clone(), at.elapsed()));
+                }
+            }
+        }
+        out.sort_by_key(|(_, age)| *age);
+        out
+    })
+}
+
+/// Where one of Jarvis' blocks or windows is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Whereabouts {
+    /// On the board, inside the HUD.
+    Board,
+    /// Put away in the tray.
+    Tray,
+    /// A window of its own.
+    Window,
+    /// Not open.
+    Closed,
+}
+
+pub fn whereabouts(id: &str) -> Whereabouts {
+    with(|s| {
+        if s.minimized.iter().any(|(open, _)| open == id) {
+            Whereabouts::Tray
+        } else if s.detached.contains(id) && s.seen.contains(id) {
+            Whereabouts::Window
+        } else if s.last_blocks.iter().chain(s.blocks.iter()).any(|(b, _, _)| b == id) {
+            Whereabouts::Board
+        } else {
+            Whereabouts::Closed
+        }
+    })
+}
+
+/// The block or window of Jarvis' a spoken name means ("the Earth", "the radar", "the feature
+/// lab"), wherever it is: on the board (by title, then by kind), in the tray or in a window of
+/// its own (by kind). None when nothing of that name is open.
+pub fn find_open(name: &str) -> Option<String> {
+    if let Some((id, _)) = blocks_named(name).into_iter().find(|(id, _)| id != "console") {
+        return Some(id);
+    }
+    let n = spoken_block_name(name);
+    if n.len() < 2 {
+        return None;
+    }
+    let prefix = id_prefix_for(&n);
+    with(|s| {
+        let tray = s.minimized.iter().find(|(id, title)| title.to_lowercase().contains(n.as_str()) || prefix.is_some_and(|p| id.starts_with(p))).map(|(id, _)| id.clone());
+        tray.or_else(|| {
+            let mut windows: Vec<&String> = s.detached.iter().filter(|id| s.seen.contains(*id) && (prefix.is_some_and(|p| id.starts_with(p)) || id.replace('_', " ") == n)).collect();
+            windows.sort();
+            windows.first().map(|id| (*id).clone())
+        })
+    })
+}
+
 /// The dock state is global: tests that change it run one at a time.
 #[cfg(test)]
 pub(crate) fn test_lock() -> std::sync::MutexGuard<'static, ()> {
@@ -993,6 +1340,10 @@ mod tests {
         assert_eq!(id_prefix_for("QR code"), Some("pairing"));
         assert_eq!(id_prefix_for("my calendar"), Some("schedule"));
         assert_eq!(id_prefix_for("banana"), None);
+        assert_eq!(id_prefix_for("the picture of the Earth"), Some("image_viewer"));
+        assert_eq!(id_prefix_for("the webcams"), Some("webcams"));
+        assert_eq!(id_prefix_for("street view"), Some("street_view"));
+        assert_eq!(id_prefix_for("bildschirm"), None);
         assert_eq!(HudViewMode::parse("the 3D core"), Some(HudViewMode::CoreArchitectureSphere));
         assert_eq!(HudViewMode::parse("sim lab"), Some(HudViewMode::SimLab));
         assert_eq!(HudViewMode::parse("HUD board"), Some(HudViewMode::Board));
@@ -1225,5 +1576,73 @@ mod tests {
         assert_eq!(block_content("pin_a"), None);
         begin_frame();
         begin_frame();
+    }
+
+    /// "Move it to the middle", "full screen it", "minimise it", "detach it": a block glides
+    /// there, fills the screen and goes back, waits in the tray, plays its exit before its window;
+    /// "it" is the block opened, moved or arranged last.
+    #[test]
+    fn arranged_blocks_glide_fill_the_screen_wait_in_the_tray_and_are_what_it_means() {
+        let _g = test_lock();
+        let screen = Rect::from_min_size(pos2(0.0, 0.0), vec2(1920.0, 1080.0));
+        let home = Rect::from_min_size(pos2(60.0, 90.0), vec2(500.0, 320.0));
+        let to = Rect::from_center_size(screen.center(), home.size());
+        for id in ["arr_a", "arr_b"] {
+            adopt(id);
+            publish_block(id, "Arrange test", home);
+        }
+        begin_frame();
+        std::thread::sleep(Duration::from_millis(3));
+        touch("arr_b");
+        let mine = || recent_blocks().into_iter().map(|(id, _)| id).filter(|id| id.starts_with("arr_")).collect::<Vec<_>>();
+        assert_eq!(mine(), ["arr_b", "arr_a"], "the one touched last first");
+        // A glide: on its way between where it stood and where it goes, then held there.
+        glide_to("arr_a", home, to);
+        if is_gliding("arr_a") {
+            let first = take_forced("arr_a").expect("on its way");
+            assert!(home.union(to).expand(1.0).contains_rect(first), "{first:?}");
+        }
+        assert_eq!(mine()[0], "arr_a", "arranged: it is 'it' now");
+        std::thread::sleep(GLIDE + Duration::from_millis(30));
+        assert_eq!(take_forced("arr_a"), Some(to));
+        assert!(!is_gliding("arr_a"));
+        // Full screen, and back where it was.
+        enter_fullscreen("arr_a", to, screen);
+        assert!(is_fullscreen("arr_a") && fullscreen_block().as_deref() == Some("arr_a") && fullscreen_home("arr_a") == Some(to));
+        assert_eq!(exit_fullscreen().as_deref(), Some("arr_a"));
+        assert!(!is_fullscreen("arr_a") && exit_fullscreen().is_none());
+        std::thread::sleep(GLIDE + Duration::from_millis(30));
+        assert_eq!(take_forced("arr_a"), Some(to), "back where it was");
+        // Minimised: its exit plays, then it waits in the tray until it is restored.
+        assert!(minimize("arr_b"));
+        assert!(closing_progress("arr_b").is_some());
+        assert!(take_minimizing("arr_b", "Arrange test") && is_minimized("arr_b"));
+        off_board("arr_b");
+        assert_eq!(whereabouts("arr_b"), Whereabouts::Tray);
+        assert_eq!(minimized_blocks(), vec![("arr_b".to_string(), "Arrange test".to_string())]);
+        assert!(mine().contains(&"arr_b".to_string()), "a block in the tray can still be 'it'");
+        assert!(restore("arr_b") && !is_minimized("arr_b") && !restore("arr_b"));
+        // Detached: its exit plays first, then it becomes a window of its own.
+        begin_detach("arr_a");
+        assert!(closing_progress("arr_a").is_some() && take_detaching("arr_a") && !take_detaching("arr_a"));
+        assert!(!minimize("arr_none"), "nothing to minimise");
+        for id in ["arr_a", "arr_b"] {
+            forget(id);
+        }
+        assert!(mine().is_empty());
+        begin_frame();
+        begin_frame();
+    }
+
+    /// A frame the HUD was held up for (a new OS window's first frame) moves an entrance on by
+    /// the wait: it goes on where it was instead of jumping to its end.
+    #[test]
+    fn a_held_up_frame_moves_an_entrance_on_instead_of_skipping_it() {
+        let start = Instant::now();
+        let seen = start + Duration::from_millis(100);
+        assert_eq!(stall_shifted(start, seen, seen + Duration::from_millis(200), OPEN_ANIM), start + Duration::from_millis(184));
+        assert_eq!(stall_shifted(start, seen, seen + Duration::from_millis(16), OPEN_ANIM), start, "an ordinary frame");
+        let over = start + OPEN_ANIM + Duration::from_millis(10);
+        assert_eq!(stall_shifted(start, over, over + Duration::from_millis(300), OPEN_ANIM), start, "a motion already over stays over");
     }
 }

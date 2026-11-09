@@ -648,8 +648,7 @@ impl SpectralTransfer {
         Self::with(profile, TRANSFER_ALPHA, MAX_TRANSFER_DB)
     }
 
-    /// A transfer that goes `alpha` of the way to the clip's envelope, `max_db` a band at most
-    /// (Ultron's clip is far darker than any synthesis: his transfer goes further than Jarvis').
+    /// A transfer that goes `alpha` of the way to the clip's envelope, `max_db` a band at most.
     pub fn with(profile: &ReferenceProfile, alpha: f32, max_db: f32) -> Self {
         Self { reference: shape(&profile.envelope_db), target_rms_db: profile.rms_db.max(MIN_TARGET_RMS_DB), average: None, speech_secs: 0.0, alpha: alpha.clamp(0.0, 1.0), max_db: max_db.max(0.0) }
     }
@@ -837,7 +836,7 @@ pub fn candidate_blends() -> Vec<String> {
 /// `lock_to_hz`: the clip's median F0 the clause is locked to (None: no lock).
 pub(crate) fn synth_dry(kokoro: &mut crate::tts::Kokoro, phonemizer: &crate::phonemizer::Phonemizer, text: &str, voice: &str, speed: f32, lock_to_hz: Option<f32>) -> Result<Vec<f32>, String> {
     let ipa = phonemizer.phonemize(&crate::tts::normalize_for_speech(text));
-    let audio = kokoro.synthesize(&ipa, voice, crate::jarvis_voice_dsp::synthesis_speed_as(speed, false))?;
+    let audio = kokoro.synthesize(&ipa, voice, crate::jarvis_voice_dsp::synthesis_speed(speed))?;
     Ok(crate::jarvis_voice_dsp::master_dry_to(&audio, crate::tts::KOKORO_RATE, lock_to_hz))
 }
 
@@ -989,7 +988,7 @@ pub const VOICE_SENTENCES: [(&str, &str); 5] = [
 /// gets them (synthesis, F0 lock, mastering, the clip's envelope), each with its kind and the
 /// text as spoken after the pronunciation rules. The transfer is warmed on the clip's own
 /// sentence first, as in a running session. (The exhaustive verifier measures them against
-/// the clip, against Ultron's, and plays them to the speech recogniser.)
+/// the clip and plays them to the speech recogniser.)
 pub fn render_sentences(cfg: &crate::config::JarvisConfig) -> Result<Vec<(&'static str, String, Vec<f32>)>, String> {
     let clip = crate::voice_reference::reference_path().ok_or("no reference clip (assets/jarvis_voice_reference.mp3)")?;
     let reference = load_profile(&clip, Path::new(PROFILE_PATH))?;
@@ -1263,12 +1262,12 @@ mod tests {
         assert!((60.0..200.0).contains(&f0.median_hz), "a baritone: {f0:?}");
     }
 
-    /// What the two reference clips really hold: the pitch histogram (how sure the F0 is) and the
+    /// What the reference clip really holds: the pitch histogram (how sure the F0 is) and the
     /// envelope's shape. `cargo test reference_clips_measured -- --ignored --nocapture`.
     #[test]
-    #[ignore = "prints measurements of the reference clips"]
+    #[ignore = "prints measurements of the reference clip"]
     fn reference_clips_measured() {
-        for (name, path) in [("Jarvis", crate::voice_reference::reference_path()), ("Ultron", crate::ultron_mode::reference_path())] {
+        for (name, path) in [("Jarvis", crate::voice_reference::reference_path())] {
             let Some(path) = path else { continue };
             let (pcm, rate) = crate::voice_reference::decode(&path).expect("decodes");
             let track = pitch_track(&pcm, rate);

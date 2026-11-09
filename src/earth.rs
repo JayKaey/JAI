@@ -1,11 +1,16 @@
 //! THE EARTH ("show me the earth", "switch to satellite view", "earthquakes in this area"): a
-//! holographic globe on the board with live earthquakes, storms, wildfires, the ISS and flights.
+//! globe on the board with live earthquakes, storms, wildfires, the ISS and flights.
 //!
-//! * `gui_earth` draws it (egui meshes, no web view): a holographic texture built at run time from
-//!   NASA GIBS imagery (the Blue Marble shaded relief classified into ocean and land, coastlines
-//!   and borders from the GIBS reference layers), or true-colour Blue Marble imagery in the
-//!   satellite view. Below ~1 600 km the camera looks at a flat Web Mercator map of GIBS tiles
-//!   with labels and borders.
+//! * `gui_earth` draws it (no web view): on the GPU (`earth_gl`, a ray-cast sphere lit by the real
+//!   sun, night lights, an atmosphere in the theme's tint) when the driver allows, as egui meshes
+//!   otherwise. The photo look is the default; the holographic one is drawn from the same data.
+//!   Below ~1 600 km the camera looks at a flat Web Mercator map of tiles, to street level.
+//! * Imagery: Esri World Imagery (default), Sentinel-2 cloudless or NASA Blue Marble; a day of
+//!   NASA's daily true colour by date ("the clouds on 1 March 2024"). Overlays: labels and
+//!   borders, shaded terrain with the peaks' names, the rain radar (animated on request) and
+//!   infrared cloud tops (`earth_sources` has the URLs and the pixel work).
+//! * "Where am I?" (`earth_locate`) puts a "YOU" marker on Sir's position; "what's happening in
+//!   the world?" (`earth_tour`) flies from event to event.
 //! * Live layers: USGS earthquakes (M4.5+ of the past week; area queries through the FDSN
 //!   service), NASA EONET storms and wildfires, the ISS (wheretheiss.at) with its footprint and
 //!   ground track, OpenSky flights over the map in view, and the place in view (BigDataCloud)
@@ -20,10 +25,12 @@
 //! The maths (projections, great circles, Web Mercator tiles), the parsers and the spoken
 //! answers are pure and unit-tested at the end of this file.
 
-use chrono::{DateTime, Datelike, Local, Utc};
+use crate::earth_gl::{self as gl, Atlas, Clip, ClipUse, GpuImage};
+use crate::earth_sources::{self as src, Imagery, Peak, RadarFrame};
+use chrono::{DateTime, Datelike, Local, NaiveDate, Utc};
 use eframe::egui::{self, Color32, ColorImage, TextureFilter, TextureHandle, TextureId, TextureOptions, TextureWrapMode};
 use serde_json::Value;
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::f64::consts::PI;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -38,7 +45,8 @@ use tracing::{debug, info, warn};
 pub const R_KM: f64 = 6371.0;
 /// The resting view: the whole planet, the camera one diameter above the surface.
 pub const HOME_ALT_KM: f64 = 12_742.0;
-pub const MIN_ALT_KM: f64 = 60.0;
+/// Street level (Esri's level 19 needs ~250 m).
+pub const MIN_ALT_KM: f64 = 0.25;
 pub const MAX_ALT_KM: f64 = 60_000.0;
 /// The flat map starts to show below `FLAT_FROM_KM` and is all there is below `FLAT_FULL_KM`.
 pub const FLAT_FROM_KM: f64 = 1_750.0;
@@ -68,8 +76,23 @@ const FETCH_TIMEOUT: Duration = Duration::from_secs(8);
 const SLOW_TIMEOUT: Duration = Duration::from_secs(25);
 const USER_AGENT: &str = "JARVIS/3 desktop assistant";
 const CACHE_DIR: &str = "config/earth_cache";
-const CACHE_LIMIT: u64 = 200 * 1024 * 1024;
-const CACHE_TRIM_TO: u64 = 160 * 1024 * 1024;
+const CACHE_LIMIT: u64 = 1024 * 1024 * 1024;
+const CACHE_TRIM_TO: u64 = 850 * 1024 * 1024;
+/// Decoded tiles kept in memory (256 KB each): the flat map's next uploads and the globe's
+/// clipmaps are made from them.
+const PIXEL_CACHE: usize = 192;
+/// The radar's frame list is asked for again after this.
+const RADAR_EVERY: Duration = Duration::from_secs(300);
+/// The radar loop: each past frame this long, the latest a while longer.
+pub const RADAR_STEP_SECS: f64 = 0.45;
+pub const RADAR_HOLD_SECS: f64 = 1.6;
+/// Infrared cloud tiles are fetched again every half hour.
+const CLOUD_SLOT_SECS: i64 = 1800;
+/// Peaks: only up close, at most one Overpass query this often.
+pub const PEAKS_MAX_ALT_KM: f64 = 1_200.0;
+const PEAKS_GAP: Duration = Duration::from_secs(20);
+/// Place and weather lookups stay this far from Sir's fix.
+const PRIVATE_KM: f64 = 60.0;
 /// The equirectangular globe textures.
 pub const BASE_W: usize = 2048;
 pub const BASE_H: usize = 1024;
@@ -307,7 +330,7 @@ pub struct FlatView {
 impl FlatView {
     pub fn new(lat0: f64, lon0: f64, alt_km: f64, f: f64, centre: (f64, f64)) -> Self {
         let lat0 = lat0.clamp(-80.0, 80.0);
-        let world = 2.0 * PI * R_KM * lat0.to_radians().cos() * f / alt_km.max(1.0);
+        let world = 2.0 * PI * R_KM * lat0.to_radians().cos() * f / alt_km.max(0.05);
         Self { lat0, lon0, world, cx: centre.0, cy: centre.1 }
     }
 
@@ -598,6 +621,7 @@ pub enum PlaceKind {
     Region,
     Country,
     Other,
+    Continent,
 }
 
 impl PlaceKind {
@@ -608,8 +632,28 @@ impl PlaceKind {
             Self::Region => 3_600.0,
             Self::Country => 5_500.0,
             Self::Other => 4_000.0,
+            Self::Continent => 6_500.0,
         }
     }
+}
+
+/// A continent or an ocean by name ("Europe", "Europa", "the Pacific"): the geocoder knows
+/// towns called that, not the continents.
+pub fn continent(name: &str) -> Option<GeoHit> {
+    const CONTINENTS: [(&[&str], &str, f64, f64); 10] = [
+        (&["europe", "europa"], "Europe", 50.0, 12.0),
+        (&["africa", "afrika"], "Africa", 3.0, 20.0),
+        (&["asia", "asien"], "Asia", 38.0, 92.0),
+        (&["north america", "nordamerika"], "North America", 45.0, -100.0),
+        (&["south america", "südamerika", "suedamerika"], "South America", -18.0, -60.0),
+        (&["australia", "australien", "oceania", "ozeanien"], "Australia", -25.0, 134.0),
+        (&["antarctica", "antarktis"], "Antarctica", -78.0, 20.0),
+        (&["the atlantic", "atlantic", "atlantic ocean", "atlantik"], "the Atlantic", 20.0, -38.0),
+        (&["the pacific", "pacific", "pacific ocean", "pazifik"], "the Pacific", 5.0, -150.0),
+        (&["the indian ocean", "indian ocean", "indischer ozean"], "the Indian Ocean", -15.0, 78.0),
+    ];
+    let key = name.trim().to_lowercase();
+    CONTINENTS.iter().find(|(names, ..)| names.contains(&key.as_str())).map(|(_, n, lat, lon)| GeoHit { name: n.to_string(), lat: *lat, lon: *lon, kind: PlaceKind::Continent })
 }
 
 /// A geocoded place.
@@ -1009,6 +1053,7 @@ pub enum Layer {
     Fires,
     Iss,
     Flights,
+    Cameras, // cameras (C2)
 }
 
 impl Layer {
@@ -1019,6 +1064,7 @@ impl Layer {
             "fires" | "fire" | "wildfires" | "wildfire" => Self::Fires,
             "iss" | "space station" | "satellite" => Self::Iss,
             "flights" | "flight" | "planes" | "aircraft" => Self::Flights,
+            "cameras" | "camera" | "webcams" | "webcam" => Self::Cameras, // cameras (C2)
             _ => return None,
         })
     }
@@ -1031,6 +1077,7 @@ impl Layer {
             Self::Fires => "wildfires",
             Self::Iss => "space station",
             Self::Flights => "flights",
+            Self::Cameras => "cameras", // cameras (C2)
         }
     }
 
@@ -1042,6 +1089,7 @@ impl Layer {
             Self::Fires => "Wildfires (NASA EONET)",
             Self::Iss => "The ISS, its footprint and ground track (wheretheiss.at)",
             Self::Flights => "Flights over the map in view (OpenSky Network)",
+            Self::Cameras => "Live public cameras (click one for its feed)", // cameras (C2)
         }
     }
 }
@@ -1065,6 +1113,7 @@ impl Layers {
             Layer::Fires => self.fires,
             Layer::Iss => self.iss,
             Layer::Flights => self.flights,
+            Layer::Cameras => crate::webcams::earth_layer(), // cameras (C2)
         }
     }
 
@@ -1075,6 +1124,7 @@ impl Layers {
             Layer::Fires => self.fires = on,
             Layer::Iss => self.iss = on,
             Layer::Flights => self.flights = on,
+            Layer::Cameras => crate::webcams::set_earth_layer(on), // cameras (C2)
         }
     }
 }
@@ -1098,6 +1148,98 @@ pub enum Action {
     Home,
     Spin,
     StopSpin,
+    /// "Where am I?": the "YOU" marker on Sir's position.
+    Locate,
+    /// Shaded terrain and the peaks' names; over a place, or the nearest mountains.
+    Mountains(Option<String>),
+    /// The relief steeper than life (or back).
+    Exaggerate(bool),
+    /// The rain radar; `animate`: the past two hours in a loop.
+    Radar { animate: bool },
+    /// Live infrared cloud tops.
+    Clouds,
+    Overlay(Overlay, bool),
+    Imagery(Imagery),
+    /// NASA's daily true colour of a day (over a place).
+    Historic { date: NaiveDate, place: Option<String> },
+    /// Back to today's imagery.
+    Today,
+    Tour,
+    StopTour,
+    Cameras, // cameras (C2)
+    // live layers (C1): satellites, trains, traffic (earth_layers.rs).
+    Live(crate::earth_layers::LiveAction),
+}
+
+/// The map's overlays (on top of the imagery, not live layers).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Overlay {
+    /// Place names and borders.
+    Labels,
+    /// Shaded relief and the peaks.
+    Terrain,
+    Radar,
+    Clouds,
+}
+
+impl Overlay {
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s.trim().to_lowercase().as_str() {
+            "labels" | "label" | "borders" | "border" | "names" | "places" | "boundaries" => Self::Labels,
+            "terrain" | "relief" | "mountains" | "peaks" | "hillshade" | "elevation" => Self::Terrain,
+            "radar" | "rain" | "rain radar" | "weather radar" | "precipitation" => Self::Radar,
+            "clouds" | "cloud" | "infrared" | "cloud cover" | "satellite clouds" => Self::Clouds,
+            _ => return None,
+        })
+    }
+
+    pub fn noun(self) -> &'static str {
+        match self {
+            Self::Labels => "labels and borders",
+            Self::Terrain => "terrain",
+            Self::Radar => "rain radar",
+            Self::Clouds => "clouds",
+        }
+    }
+}
+
+/// Which overlays are on.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Overlays {
+    pub labels: bool,
+    pub terrain: bool,
+    pub exaggerate: bool,
+    pub radar: bool,
+    pub animate: bool,
+    pub clouds: bool,
+}
+
+impl Overlays {
+    pub const DEFAULT: Overlays = Overlays { labels: true, terrain: false, exaggerate: false, radar: false, animate: false, clouds: false };
+
+    pub fn get(&self, o: Overlay) -> bool {
+        match o {
+            Overlay::Labels => self.labels,
+            Overlay::Terrain => self.terrain,
+            Overlay::Radar => self.radar,
+            Overlay::Clouds => self.clouds,
+        }
+    }
+
+    pub fn set(&mut self, o: Overlay, on: bool) {
+        match o {
+            Overlay::Labels => self.labels = on,
+            Overlay::Terrain => {
+                self.terrain = on;
+                self.exaggerate &= on;
+            }
+            Overlay::Radar => {
+                self.radar = on;
+                self.animate &= on;
+            }
+            Overlay::Clouds => self.clouds = on,
+        }
+    }
 }
 
 /// The tool's arguments as an action.
@@ -1106,7 +1248,42 @@ pub fn parse_action(args: &Value) -> Result<Action, String> {
     let place = text("place");
     let radius = args.get("radius_km").and_then(|r| r.as_f64().or_else(|| r.as_str().and_then(|s| s.trim().parse().ok()))).filter(|r| *r > 0.0);
     let action = text("action").unwrap_or_else(|| "show".to_string()).to_lowercase();
+    // live layers (C1)
+    if let Some(live) = crate::earth_layers::parse_action(&action, args) {
+        return live.map(Action::Live);
+    }
+    let today = Local::now().date_naive();
+    let date = match text("date") {
+        Some(d) => Some(src::parse_date(&d, today).ok_or_else(|| format!("'{d}' is not a past date the imagery has (\"yesterday\", \"1 March 2024\", 2024-03-01)"))?),
+        None => None,
+    };
+    let overlay = |name: Option<String>| -> Result<Overlay, String> {
+        let name = name.ok_or("hide_layer needs a layer")?;
+        Overlay::parse(&name).ok_or_else(|| format!("'{name}' is not a layer of the Earth (quakes, flights, storms, fires, iss, labels, terrain, radar, clouds)"))
+    };
     Ok(match action.as_str() {
+        // (The "show_" names pass the question guard: "where am I?" only looks.)
+        "show_my_location" | "locate_me" | "locate" | "where_am_i" | "show_me" | "my_location" => Action::Locate,
+        "show_terrain" | "terrain" | "show_mountains" | "mountains" | "show_relief" => Action::Mountains(place),
+        "exaggerate_terrain" | "exaggerate" => Action::Exaggerate(true),
+        "flatten_terrain" | "normal_terrain" => Action::Exaggerate(false),
+        "show_radar" | "radar" | "rain_radar" | "weather_radar" => Action::Radar { animate: false },
+        "animate_radar" | "radar_loop" | "play_radar" => Action::Radar { animate: true },
+        "show_clouds" | "clouds" | "infrared" => match date {
+            Some(date) => Action::Historic { date, place },
+            None => Action::Clouds,
+        },
+        "show_labels" | "labels" | "show_borders" | "borders" => Action::Overlay(Overlay::Labels, true),
+        "hide_labels" | "hide_borders" => Action::Overlay(Overlay::Labels, false),
+        "set_imagery" | "imagery" | "switch_imagery" => {
+            let name = text("imagery").or(place).ok_or("set_imagery needs an imagery (esri, sentinel or nasa)")?;
+            Action::Imagery(Imagery::parse(&name).ok_or_else(|| format!("'{name}' is not an imagery of the Earth (esri, sentinel, nasa)"))?)
+        }
+        "show_date" | "historic" | "show_history" | "history" | "past_imagery" => Action::Historic { date: date.ok_or("show_date needs a date (\"yesterday\", \"1 March 2024\")")?, place },
+        "show_today" | "today" | "live_imagery" | "present" => Action::Today,
+        "show_world_tour" | "world_tour" | "tour" | "world_briefing" | "whats_happening" => Action::Tour,
+        "stop_tour" | "end_tour" => Action::StopTour,
+        "hide_layer" if text("layer").as_deref().and_then(Layer::parse).is_none() && text("layer").as_deref().and_then(Overlay::parse).is_some() => Action::Overlay(overlay(text("layer"))?, false),
         "show" | "open" => Action::Show,
         "show_satellite" | "satellite" => Action::Satellite,
         "show_holo" | "holo" | "show_holographic" => Action::Holo,
@@ -1126,7 +1303,8 @@ pub fn parse_action(args: &Value) -> Result<Action, String> {
         "home" | "reset" => Action::Home,
         "spin" => Action::Spin,
         "stop_spin" => Action::StopSpin,
-        other => return Err(format!("'{other}' is not something the Earth does (show, show_satellite, show_holo, show_place, show_quakes, show_flights, show_storms, show_fires, show_iss, hide_layer, hide_layers, zoom_in, zoom_out, home, spin, stop_spin).")),
+        "show_cameras" | "cameras" | "webcams" => Action::Cameras, // cameras (C2)
+        other => return Err(format!("'{other}' is not something the Earth does (show, show_satellite, show_holo, show_place, show_quakes, show_flights, show_storms, show_fires, show_iss, show_cameras, hide_layer, hide_layers, zoom_in, zoom_out, home, spin, stop_spin, show_my_location, show_mountains, show_terrain, exaggerate_terrain, show_radar, animate_radar, show_clouds, show_labels, hide_labels, set_imagery, show_date, show_today, show_world_tour, stop_tour).")),
     })
 }
 
@@ -1315,6 +1493,20 @@ pub enum TileLayer {
     Features,
     /// Place names.
     Labels,
+    /// Esri World Imagery (to street level).
+    Esri,
+    /// EOX Sentinel-2 cloudless.
+    Sentinel,
+    /// Esri's place names and borders.
+    Reference,
+    /// Terrarium elevation shaded on the fly (the exaggeration in tenths).
+    Terrain(u8),
+    /// RainViewer radar of one frame (its Unix time).
+    Radar(u32),
+    /// Infrared cloud tops (the half hour since 1970).
+    Clouds(u32),
+    /// NASA's daily true colour of a day (days since 1970).
+    Daily(i32),
 }
 
 impl TileLayer {
@@ -1324,27 +1516,94 @@ impl TileLayer {
             Self::Satellite => "BlueMarble_NextGeneration",
             Self::Features => "Reference_Features_15m",
             Self::Labels => "Reference_Labels_15m",
+            Self::Daily(_) => src::DAILY_LAYER,
+            _ => "",
         }
+    }
+
+    /// GIBS layers with a fixed time whose URL form is probed once.
+    fn probed(self) -> bool {
+        matches!(self, Self::Holo | Self::Satellite | Self::Features | Self::Labels)
     }
 
     pub fn max_level(self) -> u8 {
         match self {
             Self::Holo | Self::Satellite => 8,
             Self::Features | Self::Labels => 13,
+            Self::Esri => Imagery::Esri.max_level(),
+            Self::Sentinel => Imagery::Sentinel.max_level(),
+            Self::Reference => src::REFERENCE_MAX_LEVEL,
+            Self::Terrain(_) => src::TERRAIN_MAX_LEVEL,
+            Self::Radar(_) => src::RADAR_MAX_LEVEL,
+            Self::Clouds(_) => src::IR_MAX_LEVEL,
+            Self::Daily(_) => src::DAILY_MAX_LEVEL,
         }
     }
 
-    fn dir(self) -> &'static str {
+    /// The imagery layer of a choice.
+    pub fn of(imagery: Imagery) -> Self {
+        match imagery {
+            Imagery::Esri => Self::Esri,
+            Imagery::Sentinel => Self::Sentinel,
+            Imagery::Nasa => Self::Satellite,
+        }
+    }
+
+    fn dir(self) -> String {
         match self {
-            Self::Holo => "holo",
-            Self::Satellite => "satellite",
-            Self::Features => "features",
-            Self::Labels => "labels",
+            Self::Holo => "holo".into(),
+            Self::Satellite => "satellite".into(),
+            Self::Features => "features".into(),
+            Self::Labels => "labels".into(),
+            Self::Esri => "esri".into(),
+            Self::Sentinel => "sentinel".into(),
+            Self::Reference => "reference".into(),
+            // (The elevation itself, whatever the shading.)
+            Self::Terrain(_) => "terrain".into(),
+            Self::Radar(t) => format!("radar/{t}"),
+            Self::Clouds(t) => format!("clouds/{t}"),
+            Self::Daily(d) => format!("daily/{d}"),
         }
     }
 
     fn photo(self) -> bool {
-        matches!(self, Self::Holo | Self::Satellite)
+        matches!(self, Self::Holo | Self::Satellite | Self::Esri | Self::Sentinel | Self::Daily(_))
+    }
+
+    /// Live layers stay in memory only (stale by the next half hour).
+    fn cached_on_disk(self) -> bool {
+        !matches!(self, Self::Radar(_) | Self::Clouds(_))
+    }
+
+    /// The day of a daily layer.
+    pub fn day(date: NaiveDate) -> Self {
+        Self::Daily((date - NaiveDate::from_ymd_opt(1970, 1, 1).expect("a date")).num_days() as i32)
+    }
+
+    fn date(self) -> Option<NaiveDate> {
+        match self {
+            Self::Daily(d) => NaiveDate::from_ymd_opt(1970, 1, 1).map(|e| e + chrono::Duration::days(d as i64)),
+            _ => None,
+        }
+    }
+}
+
+/// The URLs of a tile of the layers that need no probing (several for the infrared clouds: one per
+/// satellite, merged).
+pub fn source_urls(key: TileKey, radar: Option<(&str, &RadarFrame)>) -> Vec<String> {
+    let TileKey { layer, z, x, y } = key;
+    match layer {
+        TileLayer::Esri => vec![Imagery::Esri.url(z, x, y)],
+        TileLayer::Sentinel => vec![Imagery::Sentinel.url(z, x, y)],
+        TileLayer::Reference => vec![src::reference_url(z, x, y)],
+        TileLayer::Terrain(_) => vec![src::terrarium_url(z, x, y)],
+        TileLayer::Radar(t) => radar.filter(|(_, f)| f.time as u32 == t).map(|(host, f)| vec![src::radar_tile_url(host, &f.path, z, x, y)]).unwrap_or_default(),
+        TileLayer::Clouds(_) => src::IR_LAYERS.iter().map(|l| src::gibs_tile_url(l, None, src::IR_MAX_LEVEL, "png", z, x, y)).collect(),
+        TileLayer::Daily(_) => {
+            let day = layer.date().map(|d| d.format("%Y-%m-%d").to_string());
+            vec![src::gibs_tile_url(src::DAILY_LAYER, day.as_deref(), src::DAILY_MAX_LEVEL, "jpg", z, x, y)]
+        }
+        TileLayer::Holo | TileLayer::Satellite | TileLayer::Features | TileLayer::Labels => Vec::new(),
     }
 }
 
@@ -1437,7 +1696,7 @@ pub enum Motion {
 /// How long a flight between two views takes (1 to 1.5 s by distance).
 pub fn fly_secs(from: Camera, to: Camera) -> f64 {
     let km = haversine_km((from.lat, from.lon), (to.lat, to.lon));
-    let zoom = (to.alt.max(1.0) / from.alt.max(1.0)).ln().abs();
+    let zoom = (to.alt.max(0.05) / from.alt.max(0.05)).ln().abs();
     1.0 + 0.5 * (km / 10_000.0 + zoom / 6.0).min(1.0)
 }
 
@@ -1445,7 +1704,7 @@ pub fn fly_secs(from: Camera, to: Camera) -> f64 {
 /// targets, the altitude interpolated in log space with a lift over long distances.
 pub fn fly_camera(from: Camera, to: Camera, t: f64) -> Camera {
     let (lat, lon) = great_circle((from.lat, from.lon), (to.lat, to.lon), t);
-    let (a, b) = (from.alt.max(1.0).ln(), to.alt.max(1.0).ln());
+    let (a, b) = (from.alt.max(0.05).ln(), to.alt.max(0.05).ln());
     let base = (a + (b - a) * t).exp();
     let km = haversine_km((from.lat, from.lon), (to.lat, to.lon));
     let lift = (0.9 * km - from.alt.max(to.alt)).max(0.0);
@@ -1614,7 +1873,9 @@ pub struct Earth {
     pub retired: Vec<TextureHandle>,
     pub tiles: HashMap<TileKey, TileSlot>,
     tiles_in_flight: usize,
-    uploads: VecDeque<(TileKey, ColorImage)>,
+    /// Decoded tiles in memory (least recently used go first) and this frame's uploads.
+    pixels: HashMap<TileKey, (Arc<ColorImage>, u64)>,
+    uploaded: usize,
     templates: HashMap<TileLayer, Template>,
     templates_loaded: bool,
     /// Frames drawn (the tile LRU's clock).
@@ -1629,6 +1890,120 @@ pub struct Earth {
     next_area: u64,
     /// What the block says it shows (the board's search and "copy").
     pub described: String,
+    /// The photo layer.
+    pub imagery: Imagery,
+    pub overlays: Overlays,
+    /// A day of NASA's daily imagery instead of today's.
+    pub historic: Option<NaiveDate>,
+    /// RainViewer's frames (oldest first) and its tile host.
+    pub radar: Feed<RadarFrame>,
+    pub radar_host: String,
+    /// egui time the radar loop started.
+    pub radar_since: f64,
+    pub peaks: Feed<Peak>,
+    pub peaks_box: Option<Bbox>,
+    peaks_host: usize,
+    peaks_backoff: Option<Instant>,
+    /// Sir's position ("where am I?") and the egui time it was put on the map.
+    pub me: Option<crate::earth_locate::Fix>,
+    pub me_since: f64,
+    pub tour: Option<crate::earth_tour::Tour>,
+    /// A drag's speed after the release (points a second), dying away.
+    pub inertia: Option<(f32, f32)>,
+    /// The globe on the GPU: how its base textures are coming along, and its clipmaps.
+    gpu_fetch: [Fetch; 5],
+    gpu_busy: bool,
+    gpu_historic: Option<NaiveDate>,
+    pub clips: [ClipFeed; 2],
+}
+
+/// One of the globe's clipmaps on the CPU side: the window it wants, the layers it composites
+/// (bottom first) and what each of its 64 slots holds.
+#[derive(Default)]
+pub struct ClipFeed {
+    pub clip: Option<Clip>,
+    pub layers: Vec<TileLayer>,
+    pub mix: f32,
+    slots: Vec<ClipSlot>,
+    dirty: bool,
+}
+
+#[derive(Default, Clone)]
+struct ClipSlot {
+    tile: Option<(u32, u32)>,
+    parts: HashMap<TileLayer, Arc<ColorImage>>,
+    sent: bool,
+}
+
+impl ClipFeed {
+    /// The clipmap's wish for this frame; slots that no longer fit it are emptied.
+    fn want(&mut self, clip: Option<Clip>, layers: Vec<TileLayer>, mix: f32) {
+        self.mix = mix;
+        if self.slots.len() != (gl::CLIP_N * gl::CLIP_N) as usize {
+            self.slots = vec![ClipSlot::default(); (gl::CLIP_N * gl::CLIP_N) as usize];
+        }
+        if clip == self.clip && layers == self.layers {
+            return;
+        }
+        let z_changed = clip.map(|c| c.z) != self.clip.map(|c| c.z);
+        for slot in &mut self.slots {
+            let keep = match (clip, slot.tile) {
+                (Some(c), Some((x, y))) => !z_changed && c.contains(x, y),
+                _ => false,
+            };
+            if !keep {
+                *slot = ClipSlot::default();
+            } else {
+                let before = slot.parts.len();
+                slot.parts.retain(|layer, _| layers.contains(layer));
+                if slot.parts.len() != before {
+                    slot.sent = false;
+                }
+            }
+        }
+        self.clip = clip;
+        self.layers = layers;
+        self.dirty = true;
+    }
+
+    /// Which slots show their tile (the bottom layer is there for the imagery; anything for the
+    /// overlays), as the GPU's slot map.
+    fn valid(&self, need_bottom: bool) -> Vec<u8> {
+        self.slots
+            .iter()
+            .map(|s| {
+                let ok = s.sent && s.tile.is_some() && (!need_bottom || self.layers.first().is_some_and(|l| s.parts.contains_key(l)));
+                if ok { 255 } else { 0 }
+            })
+            .collect()
+    }
+
+    /// The slot's layers composited (premultiplied "over", bottom first) as 256 x 256 RGBA.
+    fn composite(&self, slot: &ClipSlot) -> Option<Vec<u8>> {
+        let side = gl::TILE_PX as usize;
+        let mut out = vec![0u8; side * side * 4];
+        let mut any = false;
+        for layer in &self.layers {
+            let Some(img) = slot.parts.get(layer) else { continue };
+            if img.size != [side, side] {
+                continue;
+            }
+            any = true;
+            for (o, p) in out.chunks_exact_mut(4).zip(&img.pixels) {
+                let a = p.a() as u32;
+                if a == 255 {
+                    o.copy_from_slice(&p.to_array());
+                } else if a > 0 {
+                    let keep = 255 - a;
+                    let c = p.to_array();
+                    for k in 0..4 {
+                        o[k] = (c[k] as u32 + (o[k] as u32 * keep + 127) / 255).min(255) as u8;
+                    }
+                }
+            }
+        }
+        any.then_some(out)
+    }
 }
 
 impl Default for Earth {
@@ -1641,7 +2016,7 @@ impl Earth {
     pub fn new() -> Self {
         Self {
             demo: false,
-            look: Look::Holo,
+            look: Look::Satellite,
             layers: Layers::DEFAULT,
             cam: HOME,
             motion: None,
@@ -1678,7 +2053,8 @@ impl Earth {
             retired: Vec::new(),
             tiles: HashMap::new(),
             tiles_in_flight: 0,
-            uploads: VecDeque::new(),
+            pixels: HashMap::new(),
+            uploaded: 0,
             templates: HashMap::new(),
             templates_loaded: false,
             frame: 0,
@@ -1689,6 +2065,24 @@ impl Earth {
             trimmed: false,
             next_area: 1,
             described: String::new(),
+            imagery: Imagery::Esri,
+            overlays: Overlays::DEFAULT,
+            historic: None,
+            radar: Feed::default(),
+            radar_host: String::new(),
+            radar_since: 0.0,
+            peaks: Feed::default(),
+            peaks_box: None,
+            peaks_host: 0,
+            peaks_backoff: None,
+            me: None,
+            me_since: 0.0,
+            tour: None,
+            inertia: None,
+            gpu_fetch: Default::default(),
+            gpu_busy: false,
+            gpu_historic: None,
+            clips: Default::default(),
         }
     }
 
@@ -1700,10 +2094,15 @@ impl Earth {
         e
     }
 
-    /// Fresh for an open: home view with the fly-in, the holographic look, the default layers.
+    /// Fresh for an open: home view with the fly-in, the photo look, the default layers.
     fn reset_for_open(&mut self, offline: bool) {
-        self.look = Look::Holo;
+        self.look = Look::Satellite;
         self.layers = Layers::DEFAULT;
+        self.overlays = Overlays::DEFAULT;
+        self.historic = None;
+        self.tour = None;
+        self.inertia = None;
+        self.peaks_box = None;
         self.marker = None;
         self.area = None;
         self.spin = false;
@@ -1713,6 +2112,7 @@ impl Earth {
         self.place_cell = None;
         self.weather = None;
         self.weather_cell = None;
+        crate::earth_layers::reset(); // live layers (C1)
         if offline {
             self.load_demo();
         } else if self.demo {
@@ -1730,6 +2130,7 @@ impl Earth {
     pub fn load_demo(&mut self) {
         let now = Utc::now().timestamp_millis();
         self.demo = true;
+        crate::earth_layers::load_demo(); // live layers (C1)
         self.cam = DEMO_CAMERA;
         self.motion = None;
         self.queued = None;
@@ -1789,6 +2190,7 @@ impl Earth {
     /// From the demo back to the live Earth: its data goes, the real one is fetched.
     fn leave_demo(&mut self) {
         self.demo = false;
+        crate::earth_layers::leave_demo(); // live layers (C1)
         for feed in [&mut self.quakes.fetch, &mut self.events.fetch, &mut self.iss.fetch, &mut self.track.fetch, &mut self.flights.fetch] {
             *feed = Fetch::Idle;
         }
@@ -1802,15 +2204,20 @@ impl Earth {
         self.sat.fetch = if self.sat.image.is_some() { Fetch::Ready } else { Fetch::Idle };
     }
 
-    /// Frees the GPU (a closed Earth keeps its images in memory only).
+    /// Frees the GPU (a closed Earth keeps its images in memory only; the globe's textures come
+    /// back from the disk cache on the next open).
     fn release_gpu(&mut self) {
         self.holo.tex = None;
         self.sat.tex = None;
         self.procedural = None;
         self.retired.clear();
         self.tiles.clear();
-        self.uploads.clear();
+        self.pixels.clear();
         self.globe_fade = TexFade::default();
+        gl::request_release();
+        self.gpu_fetch = Default::default();
+        self.gpu_historic = None;
+        self.clips = Default::default();
     }
 
     /// Where the camera is headed (the end of its flight), or where it is.
@@ -1835,6 +2242,7 @@ impl Earth {
         let fly = Motion::Fly { start: None, from: self.cam, to, secs: 1.2 };
         self.zoom_target = None;
         self.spin = false;
+        self.inertia = None;
         match self.motion {
             Some(Motion::Intro { .. }) => self.queued = Some(fly),
             _ => self.motion = Some(fly),
@@ -1856,9 +2264,11 @@ impl Earth {
         self.zoom_target = Some((from * factor).clamp(MIN_ALT_KM, MAX_ALT_KM));
     }
 
-    /// A drag of the map stops whatever moved the camera.
+    /// A drag of the map stops whatever moved the camera (a tour included).
     pub fn grab(&mut self) {
         self.spin = false;
+        self.tour = None;
+        self.inertia = None;
         if let Some(Motion::Fly { .. }) = self.motion {
             self.motion = None;
             self.queued = None;
@@ -1906,10 +2316,85 @@ impl Earth {
             moving = true;
             self.cam.lon = wrap_lon(self.cam.lon - SPIN_DEG_PER_SEC * dt);
         }
+        if self.tour.is_some() {
+            self.step_tour(now);
+            moving = true;
+        }
         if moving {
             self.still_since = now;
         }
         moving
+    }
+
+    /// The world tour's frame: on to the next stop, its line, or home.
+    fn step_tour(&mut self, now: f64) {
+        use crate::earth_tour::TourStep;
+        let flying = self.motion.is_some() || self.queued.is_some();
+        let Some(tour) = self.tour.as_mut() else { return };
+        match tour.step(now, flying) {
+            TourStep::Wait => {}
+            TourStep::FlyTo(cam) => {
+                let tour = self.tour.take();
+                self.fly_to(cam);
+                self.tour = tour;
+            }
+            TourStep::Say(line) => {
+                if !self.demo && !offline() {
+                    crate::announcements::say(line);
+                }
+            }
+            TourStep::Done => {
+                self.tour = None;
+                if !self.demo && !offline() {
+                    crate::announcements::say(crate::earth_tour::CLOSING);
+                }
+                self.go_home();
+            }
+        }
+    }
+
+    /// The radar frame shown now: the latest, or the loop's.
+    pub fn radar_frame(&self, now: f64) -> Option<&RadarFrame> {
+        let frames = &self.radar.items;
+        let last = frames.len().checked_sub(1)?;
+        if !self.overlays.animate || last == 0 {
+            return frames.last();
+        }
+        let cycle = last as f64 * RADAR_STEP_SECS + RADAR_HOLD_SECS;
+        let t = (now - self.radar_since).rem_euclid(cycle);
+        frames.get(((t / RADAR_STEP_SECS) as usize).min(last))
+    }
+
+    /// The photo layer under everything: the day asked for, or the imagery chosen.
+    pub fn imagery_layer(&self) -> TileLayer {
+        match (self.look, self.historic) {
+            (Look::Holo, _) => TileLayer::Holo,
+            (_, Some(date)) => TileLayer::day(date),
+            _ => TileLayer::of(self.imagery),
+        }
+    }
+
+    /// The overlays over the imagery, bottom first, at time `now` (the radar's frame, the half
+    /// hour of the clouds).
+    pub fn overlay_layers(&self, now: f64) -> Vec<TileLayer> {
+        let mut layers = Vec::new();
+        if self.overlays.clouds && self.historic.is_none() {
+            layers.push(TileLayer::Clouds((Utc::now().timestamp() / CLOUD_SLOT_SECS) as u32));
+        }
+        if self.overlays.radar && self.historic.is_none() {
+            if let Some(frame) = self.radar_frame(now) {
+                layers.push(TileLayer::Radar(frame.time as u32));
+            }
+        }
+        if self.overlays.labels || self.look == Look::Holo {
+            layers.push(if self.look == Look::Holo { TileLayer::Labels } else { TileLayer::Reference });
+        }
+        layers
+    }
+
+    /// The shaded terrain over the imagery (when it is on).
+    pub fn terrain_layer(&self) -> Option<TileLayer> {
+        self.overlays.terrain.then_some(TileLayer::Terrain(if self.overlays.exaggerate { 25 } else { 10 }))
     }
 
     /// The point in view's UTC offset: the weather's (a real time zone) or the nautical one.
@@ -1975,13 +2460,17 @@ impl Earth {
         if self.procedural.is_none() {
             self.procedural = Some(ctx.load_texture("earth_procedural", procedural_texture(1024, 512, self.holo_hue), globe_texture_options()));
         }
-        for _ in 0..UPLOADS_PER_FRAME {
-            let Some((key, image)) = self.uploads.pop_front() else { break };
-            let tex = ctx.load_texture(format!("earth_tile_{:?}_{}_{}_{}", key.layer, key.z, key.x, key.y), image, TextureOptions::LINEAR);
-            self.tiles.insert(key, TileSlot::Ready { tex, used: self.frame });
-        }
-        if !self.uploads.is_empty() {
+        if self.uploaded >= UPLOADS_PER_FRAME {
             ctx.request_repaint();
+        }
+        self.uploaded = 0;
+        // Decoded tiles past the memory budget go, least recently used first.
+        if self.pixels.len() > PIXEL_CACHE {
+            let mut ages: Vec<(u64, TileKey)> = self.pixels.iter().map(|(k, (_, used))| (*used, *k)).collect();
+            ages.sort_by_key(|a| a.0);
+            for (_, key) in ages.into_iter().take(self.pixels.len() - PIXEL_CACHE) {
+                self.pixels.remove(&key);
+            }
         }
         // Least recently drawn tiles leave the GPU.
         let ready = self.tiles.values().filter(|s| matches!(s, TileSlot::Ready { .. })).count();
@@ -1999,6 +2488,12 @@ impl Earth {
         }
         if self.look_changed.is_nan() {
             self.look_changed = now;
+        }
+        if self.me_since.is_nan() {
+            self.me_since = now;
+        }
+        if self.radar_since.is_nan() {
+            self.radar_since = now;
         }
     }
 
@@ -2096,8 +2591,10 @@ impl Earth {
                 self.tiles_in_flight = self.tiles_in_flight.saturating_sub(1);
                 match result {
                     Ok(image) => {
-                        self.tiles.insert(key, TileSlot::Loading);
-                        self.uploads.push_back((key, image));
+                        self.tiles.remove(&key);
+                        let image = Arc::new(image);
+                        self.pixels.insert(key, (image.clone(), self.frame));
+                        self.feed_clips(key, &image);
                     }
                     Err(forever) => {
                         self.tiles.insert(key, TileSlot::Failed { at: Instant::now(), forever });
@@ -2105,29 +2602,80 @@ impl Earth {
                 }
             }
             Arrival::Area(id, result) => self.area_result(id, result),
+            Arrival::GpuBase(slot, result) => {
+                self.gpu_busy = false;
+                let i = slot as usize;
+                self.gpu_fetch[i] = match result {
+                    Ok(()) => Fetch::Ready,
+                    Err(e) => {
+                        warn!("[EARTH] No {slot:?} texture for the globe: {e}");
+                        Fetch::Failed(e)
+                    }
+                };
+            }
+            Arrival::Radar(result) => match result {
+                Ok(frames) => {
+                    self.radar_host = frames.host;
+                    self.radar.set(Ok(frames.frames));
+                }
+                Err(e) => self.radar.set(Err(e)),
+            },
+            Arrival::Peaks(bbox, result, host) => {
+                if result.is_err() {
+                    self.peaks_host = (host + 1) % src::OVERPASS_HOSTS.len();
+                    self.peaks_backoff = Some(Instant::now() + Duration::from_secs(60));
+                } else {
+                    self.peaks_box = Some(bbox);
+                }
+                self.peaks.set(result);
+            }
         }
     }
 
-    /// A tile's texture when it is on the GPU (marked as drawn this frame).
-    pub fn tile(&mut self, key: TileKey) -> Option<TextureId> {
-        match self.tiles.get_mut(&key) {
-            Some(TileSlot::Ready { tex, used }) => {
-                *used = self.frame;
-                Some(tex.id())
-            }
-            _ => None,
+    /// A tile's texture when it is on the GPU (marked as drawn this frame); one decoded in memory
+    /// goes up now (a few a frame).
+    pub fn tile(&mut self, ctx: &egui::Context, key: TileKey) -> Option<TextureId> {
+        if let Some(TileSlot::Ready { tex, used }) = self.tiles.get_mut(&key) {
+            *used = self.frame;
+            return Some(tex.id());
         }
+        if self.uploaded >= UPLOADS_PER_FRAME {
+            return None;
+        }
+        let (image, used) = self.pixels.get_mut(&key)?;
+        *used = self.frame;
+        let image = (**image).clone();
+        self.uploaded += 1;
+        let tex = ctx.load_texture(format!("earth_tile_{:?}_{}_{}_{}", key.layer, key.z, key.x, key.y), image, TextureOptions::LINEAR);
+        let id = tex.id();
+        self.tiles.insert(key, TileSlot::Ready { tex, used: self.frame });
+        Some(id)
     }
 
     /// Asks for a tile that is not there yet (in the background, a few at a time).
     pub fn request_tile(&mut self, key: TileKey, rt: &Handle) {
-        if self.demo || self.tiles_in_flight >= TILES_IN_FLIGHT {
+        if self.demo || self.tiles_in_flight >= TILES_IN_FLIGHT || self.pixels.contains_key(&key) {
             return;
         }
         match self.tiles.get(&key) {
             Some(TileSlot::Ready { .. } | TileSlot::Loading) => return,
             Some(TileSlot::Failed { at, forever }) if *forever || at.elapsed() < Duration::from_secs(30) => return,
             _ => {}
+        }
+        let hue = self.holo_hue;
+        if !key.layer.probed() {
+            let radar = self.radar.items.iter().find(|f| matches!(key.layer, TileLayer::Radar(t) if f.time as u32 == t)).map(|f| (self.radar_host.as_str(), f));
+            let urls = source_urls(key, radar);
+            if urls.is_empty() {
+                return;
+            }
+            self.tiles.insert(key, TileSlot::Loading);
+            self.tiles_in_flight += 1;
+            rt.spawn(async move {
+                let result = fetch_source_tile(key, urls, hue).await;
+                deliver(Arrival::Tile(key, result));
+            });
+            return;
         }
         if !self.templates_loaded {
             self.templates_loaded = true;
@@ -2140,7 +2688,7 @@ impl Earth {
             Template::Unknown | Template::Unreachable(_) => {
                 self.templates.insert(key.layer, Template::Probing);
                 self.tiles_in_flight += 1;
-                let (layer, hue) = (key.layer, self.holo_hue);
+                let layer = key.layer;
                 rt.spawn(async move {
                     let form = probe_layer(layer, hue).await;
                     deliver(Arrival::Probe(layer, form));
@@ -2150,17 +2698,89 @@ impl Earth {
         };
         self.tiles.insert(key, TileSlot::Loading);
         self.tiles_in_flight += 1;
-        let hue = self.holo_hue;
         rt.spawn(async move {
             let result = fetch_tile(key, form, hue).await;
             deliver(Arrival::Tile(key, result));
         });
     }
 
+    // ------------------------------------------------------------------ the GPU globe ----
+
+    /// A decoded tile the globe's clipmaps wait for goes into its slot.
+    fn feed_clips(&mut self, key: TileKey, image: &Arc<ColorImage>) {
+        for feed in self.clips.iter_mut() {
+            let Some(clip) = feed.clip else { continue };
+            if key.z != clip.z || !feed.layers.contains(&key.layer) || !clip.contains(key.x, key.y) {
+                continue;
+            }
+            let i = Clip::slot(key.x, key.y);
+            let Some(slot) = feed.slots.get_mut(i) else { continue };
+            if slot.tile != Some((key.x, key.y)) {
+                *slot = ClipSlot { tile: Some((key.x, key.y)), ..ClipSlot::default() };
+            }
+            slot.parts.insert(key.layer, image.clone());
+            slot.sent = false;
+            feed.dirty = true;
+        }
+    }
+
+    /// The globe's clipmaps for this frame: `detail` (the imagery up close, the terrain shading
+    /// on it) and `overlay` (clouds, radar, labels) as windows of level `z` around the view; the
+    /// tiles they lack are asked for, the slots that changed go to the GPU. What the shader
+    /// should draw of each.
+    pub fn update_clips(&mut self, rt: &Handle, view: (f64, f64), detail: Option<(u8, f32)>, overlay_z: Option<u8>, now: f64) -> [ClipUse; 2] {
+        let mut detail_layers = vec![self.imagery_layer()];
+        detail_layers.extend(self.terrain_layer());
+        let overlay_layers = self.overlay_layers(now);
+        let detail_clip = detail.map(|(z, _)| Clip::around(view.0, view.1, z.min(detail_layers[0].max_level())));
+        let overlay_clip = overlay_z.filter(|_| !overlay_layers.is_empty()).map(|z| Clip::around(view.0, view.1, overlay_layers.iter().map(|l| l.max_level()).fold(z, u8::min)));
+        self.clips[0].want(detail_clip, detail_layers, detail.map_or(0.0, |d| d.1));
+        self.clips[1].want(overlay_clip, overlay_layers, 1.0);
+        for k in 0..2 {
+            let Some(clip) = self.clips[k].clip else { continue };
+            let layers = self.clips[k].layers.clone();
+            for (x, y) in clip.tiles() {
+                let i = Clip::slot(x, y);
+                for layer in &layers {
+                    if self.clips[k].slots[i].tile == Some((x, y)) && self.clips[k].slots[i].parts.contains_key(layer) {
+                        continue;
+                    }
+                    let key = TileKey { layer: *layer, z: clip.z, x, y };
+                    match self.pixels.get_mut(&key) {
+                        Some((image, used)) => {
+                            *used = self.frame;
+                            let image = image.clone();
+                            self.feed_clips(key, &image);
+                        }
+                        None => self.request_tile(key, rt),
+                    }
+                }
+            }
+            // The changed slots go up (the GPU side takes a few a frame).
+            if self.clips[k].dirty {
+                self.clips[k].dirty = false;
+                let atlas = if k == 0 { Atlas::Detail } else { Atlas::Overlay };
+                let feed = &mut self.clips[k];
+                for i in 0..feed.slots.len() {
+                    if feed.slots[i].sent || feed.slots[i].tile.is_none() {
+                        continue;
+                    }
+                    if let Some(rgba) = feed.composite(&feed.slots[i]) {
+                        gl::submit_tile(atlas, i, rgba);
+                    }
+                    feed.slots[i].sent = true;
+                }
+                gl::submit_valid(atlas, feed.valid(k == 0));
+            }
+        }
+        [ClipUse { clip: self.clips[0].clip, mix: self.clips[0].mix }, ClipUse { clip: self.clips[1].clip, mix: self.clips[1].mix }]
+    }
+
     // -------------------------------------------------------------------------- schedule ----
 
     /// Starts whatever is due: imagery, the live layers, the place in view and its weather.
     pub fn schedule(&mut self, rt: &Handle, view: &Outlook) {
+        crate::earth_layers::schedule(rt, self.demo); // live layers (C1)
         if self.demo {
             return;
         }
@@ -2168,15 +2788,27 @@ impl Earth {
             self.trimmed = true;
             rt.spawn_blocking(|| trim_cache(Path::new(CACHE_DIR), CACHE_LIMIT, CACHE_TRIM_TO));
         }
-        // The globe's imagery: the holographic one first, the satellite one after it.
-        if self.holo.fetch == Fetch::Idle {
+        // The globe's imagery: on the GPU its own textures; drawn on the CPU (no GL, or not yet
+        // known after a few frames) the 2048 px ones, the look in view first.
+        self.schedule_gpu(rt);
+        let cpu = gl::failed() || (!gl::proven() && self.frame > 30);
+        let holo_first = self.look == Look::Holo;
+        if cpu && self.holo.fetch == Fetch::Idle && (holo_first || self.sat.fetch != Fetch::Loading) {
             self.holo.fetch = Fetch::Loading;
             let hue = theme_hue();
             rt.spawn(async move { deliver(Arrival::Base(Look::Holo, fetch_holo_base(hue).await)) });
         }
-        if self.sat.fetch == Fetch::Idle && (self.look == Look::Satellite || self.holo.fetch != Fetch::Loading) {
+        if cpu && self.sat.fetch == Fetch::Idle && (!holo_first || self.holo.fetch != Fetch::Loading) {
             self.sat.fetch = Fetch::Loading;
             rt.spawn(async move { deliver(Arrival::Base(Look::Satellite, fetch_satellite_base().await)) });
+        }
+        // The radar's frames while it shows; the peaks over a resting view of the terrain.
+        if self.overlays.radar && self.radar.due(RADAR_EVERY) {
+            self.radar.fetch = Fetch::Loading;
+            rt.spawn(async { deliver(Arrival::Radar(fetch_radar().await)) });
+        }
+        if self.overlays.terrain && view.resting {
+            self.schedule_peaks(rt, view);
         }
         // A new theme recolours the hologram (and its tiles).
         if self.hue_checked.is_none_or(|at| at.elapsed() > Duration::from_millis(700)) {
@@ -2228,6 +2860,64 @@ impl Earth {
         }
     }
 
+    /// The globe's textures, one at a time (each from the disk cache when it is there): the day
+    /// first, then the land mask, the night lights and the relief; a date's imagery when asked.
+    fn schedule_gpu(&mut self, rt: &Handle) {
+        let Some(caps) = gl::caps() else { return };
+        if gl::failed() || self.gpu_busy {
+            return;
+        }
+        if self.historic != self.gpu_historic && !matches!(self.gpu_fetch[gl::Slot::Historic as usize], Fetch::Loading) {
+            self.gpu_fetch[gl::Slot::Historic as usize] = Fetch::Idle;
+        }
+        let photo = self.look == Look::Satellite;
+        let wanted = [
+            (gl::Slot::Day, true),
+            (gl::Slot::Mask, true),
+            (gl::Slot::Historic, self.historic.is_some() && self.historic != self.gpu_historic),
+            (gl::Slot::Night, photo),
+            (gl::Slot::Relief, !photo),
+        ];
+        for (slot, want) in wanted {
+            let i = slot as usize;
+            if !want || self.gpu_fetch[i] != Fetch::Idle || (slot != gl::Slot::Historic && gl::has(slot)) {
+                continue;
+            }
+            self.gpu_fetch[i] = Fetch::Loading;
+            self.gpu_busy = true;
+            let date = self.historic;
+            if slot == gl::Slot::Historic {
+                self.gpu_historic = date;
+            }
+            rt.spawn(async move {
+                let result = fetch_gpu_base(slot, caps, date).await.map(|image| gl::submit(slot, image));
+                deliver(Arrival::GpuBase(slot, result));
+            });
+            return;
+        }
+    }
+
+    /// The named peaks in view (a little more than the view, so a small pan needs no new query).
+    fn schedule_peaks(&mut self, rt: &Handle, view: &Outlook) {
+        if view.alt > PEAKS_MAX_ALT_KM || self.peaks.fetch == Fetch::Loading || self.peaks_backoff.is_some_and(|t| Instant::now() < t) {
+            return;
+        }
+        let half_lat = (view.alt / 111.2 * 0.75).clamp(0.08, 6.0);
+        let half_lon = (half_lat / view.lat.to_radians().cos().max(0.2)).min(10.0);
+        let inside = self.peaks_box.is_some_and(|b| b.contains(view.lat - half_lat * 0.6, view.lon - half_lon * 0.6) && b.contains(view.lat + half_lat * 0.6, view.lon + half_lon * 0.6) && b.span().0 < half_lat * 5.0);
+        if inside || self.peaks.at.is_some_and(|at| at.elapsed() < PEAKS_GAP) {
+            return;
+        }
+        let bbox = Bbox::around(view.lat, view.lon, half_lat * 1.3, half_lon * 1.3);
+        let host = self.peaks_host;
+        self.peaks.fetch = Fetch::Loading;
+        self.peaks.at = Some(Instant::now());
+        rt.spawn(async move {
+            let result = fetch_peaks(bbox, host).await;
+            deliver(Arrival::Peaks(bbox, result, host));
+        });
+    }
+
     fn schedule_flights(&mut self, rt: &Handle, view: &Outlook) {
         if !self.layers.flights {
             self.flights_note = None;
@@ -2258,6 +2948,14 @@ impl Earth {
 
     /// The place chip and card: the country or region in view, its weather and time zone.
     fn look_up_place(&mut self, rt: &Handle, view: &Outlook) {
+        // Around Sir's own position nothing is looked up: his position stays on this PC.
+        if self.near_me(view.lat, view.lon) {
+            self.place = self.me.as_ref().and_then(|m| m.label.clone()).map(|city| Place { city: city.clone(), region: city, ..Place::default() });
+            self.place_cell = None;
+            self.weather = None;
+            self.weather_cell = None;
+            return;
+        }
         let cell = cell_of(view.lat, view.lon, cell_size_for(view.alt));
         if self.place_cell != Some(cell) {
             if let Some(known) = self.place_cache.get(&cell) {
@@ -2287,17 +2985,40 @@ impl Earth {
         }
     }
 
-    /// One line on the state of the imagery for the map's status (None: all is well).
-    pub fn status(&self) -> Option<&'static str> {
+    /// Within `PRIVATE_KM` of Sir's fix.
+    pub fn near_me(&self, lat: f64, lon: f64) -> bool {
+        self.me.as_ref().is_some_and(|m| haversine_km((m.lat, m.lon), (lat, lon)) < PRIVATE_KM.max(m.accuracy_m / 1000.0 * 2.0))
+    }
+
+    /// One line on the state of the imagery for the map's status (None: all is well): what is
+    /// loading or missing, the day shown, the radar's time.
+    pub fn status(&self, now: f64) -> Option<String> {
         if self.demo {
-            return Some("DEMO DATA \u{b7} NO IMAGERY");
+            return Some("DEMO DATA \u{b7} NO IMAGERY".into());
+        }
+        if let Some(date) = self.historic {
+            return Some(format!("NASA VIIRS \u{b7} {}", date.format("%-d %b %Y").to_string().to_uppercase()));
+        }
+        if self.overlays.radar && self.overlays.animate {
+            if let Some(frame) = self.radar_frame(now) {
+                let at = DateTime::from_timestamp(frame.time, 0).map(|t| t.with_timezone(&Local).format("%H:%M").to_string()).unwrap_or_default();
+                return Some(format!("RADAR {at}"));
+            }
+        }
+        if gl::proven() {
+            let day = gl::Slot::Day as usize;
+            return match (&self.gpu_fetch[day], gl::ready(gl::Slot::Day)) {
+                (_, true) => self.flights_note.map(str::to_string),
+                (Fetch::Failed(_), false) => Some("OFFLINE \u{b7} NO IMAGERY".into()),
+                _ => Some("ACQUIRING IMAGERY..".into()),
+            };
         }
         match (&self.holo.fetch, &self.sat.fetch, self.look) {
-            (Fetch::Loading | Fetch::Idle, _, Look::Holo) => Some("ACQUIRING IMAGERY.."),
-            (_, Fetch::Loading | Fetch::Idle, Look::Satellite) => Some("ACQUIRING SATELLITE IMAGERY.."),
-            (Fetch::Failed(_), _, Look::Holo) => Some("OFFLINE \u{b7} NO IMAGERY"),
-            (_, Fetch::Failed(_), Look::Satellite) => Some("NO SATELLITE IMAGERY"),
-            _ => self.flights_note,
+            (Fetch::Loading | Fetch::Idle, _, Look::Holo) => Some("ACQUIRING IMAGERY..".into()),
+            (_, Fetch::Loading | Fetch::Idle, Look::Satellite) => Some("ACQUIRING SATELLITE IMAGERY..".into()),
+            (Fetch::Failed(_), _, Look::Holo) => Some("OFFLINE \u{b7} NO IMAGERY".into()),
+            (_, Fetch::Failed(_), Look::Satellite) => Some("NO SATELLITE IMAGERY".into()),
+            _ => self.flights_note.map(str::to_string),
         }
     }
 }
@@ -2382,6 +3103,11 @@ pub enum Arrival {
     /// A tile's image, or whether it will never come.
     Tile(TileKey, Result<ColorImage, bool>),
     Area(u64, Result<Vec<Quake>, String>),
+    /// A globe texture went to the GPU's queue (or could not be made).
+    GpuBase(gl::Slot, Result<(), String>),
+    Radar(Result<src::RadarFrames, String>),
+    /// The peaks in a box, and the Overpass server asked.
+    Peaks(Bbox, Result<Vec<Peak>, String>, usize),
 }
 
 static INBOX: Mutex<Vec<Arrival>> = Mutex::new(Vec::new());
@@ -2422,7 +3148,7 @@ async fn get(url: &str, timeout: Duration) -> Result<Vec<u8>, (Option<u16>, Stri
     response.bytes().await.map(|b| b.to_vec()).map_err(|e| (None, e.to_string()))
 }
 
-async fn get_json(url: &str, timeout: Duration) -> Result<Value, String> {
+pub(crate) async fn get_json(url: &str, timeout: Duration) -> Result<Value, String> {
     let body = get(url, timeout).await.map_err(|e| e.1)?;
     serde_json::from_slice(&body).map_err(|e| format!("unreadable answer: {e}"))
 }
@@ -2556,6 +3282,9 @@ pub fn gazetteer(name: &str) -> Option<GeoHit> {
 }
 
 async fn resolve(name: &str, offline: bool) -> Result<GeoHit, String> {
+    if let Some(hit) = continent(name) {
+        return Ok(hit);
+    }
     if offline {
         return gazetteer(name).ok_or_else(|| format!("'{name}' is not among the demo's places."));
     }
@@ -2571,9 +3300,16 @@ fn known_location(offline: bool) -> Option<(f64, f64)> {
     if offline {
         return None;
     }
-    let raw = std::fs::read_to_string(crate::config::CONFIG_FILE).ok()?;
-    let v: Value = serde_json::from_str(&raw).ok()?;
-    let (lat, lon) = (v["location"]["home_lat"].as_f64()?, v["location"]["home_lon"].as_f64()?);
+    // (Where "locate me" found him, else the home in the settings; to half a degree either way.)
+    let found = state().me.as_ref().map(|f| (f.lat, f.lon));
+    let (lat, lon) = match found {
+        Some(p) => p,
+        None => {
+            let raw = std::fs::read_to_string(crate::config::CONFIG_FILE).ok()?;
+            let v: Value = serde_json::from_str(&raw).ok()?;
+            (v["location"]["home_lat"].as_f64()?, v["location"]["home_lon"].as_f64()?)
+        }
+    };
     Some(((lat * 2.0).round() / 2.0, (lon * 2.0).round() / 2.0))
 }
 
@@ -2610,7 +3346,7 @@ fn cache_path(parts: &[&str]) -> PathBuf {
 
 fn tile_path(key: TileKey) -> PathBuf {
     let ext = if key.layer.photo() { "jpg" } else { "png" };
-    cache_path(&["tiles", key.layer.dir(), &key.z.to_string(), &format!("{}_{}.{ext}", key.x, key.y)])
+    cache_path(&["tiles", &key.layer.dir(), &key.z.to_string(), &format!("{}_{}.{ext}", key.x, key.y)])
 }
 
 static WRITES: AtomicUsize = AtomicUsize::new(0);
@@ -2666,7 +3402,7 @@ fn load_templates() -> HashMap<TileLayer, Template> {
     let Ok(v) = serde_json::from_str::<Value>(&raw) else { return HashMap::new() };
     [TileLayer::Holo, TileLayer::Satellite, TileLayer::Features, TileLayer::Labels]
         .into_iter()
-        .filter_map(|l| v[l.dir()].as_u64().filter(|f| (*f as usize) < TEMPLATE_FORMS).map(|f| (l, Template::Works(f as usize))))
+        .filter_map(|l| v[l.dir().as_str()].as_u64().filter(|f| (*f as usize) < TEMPLATE_FORMS).map(|f| (l, Template::Works(f as usize))))
         .collect()
 }
 
@@ -2674,7 +3410,7 @@ fn save_templates(templates: &HashMap<TileLayer, Template>) {
     let mut v = serde_json::Map::new();
     for (layer, t) in templates {
         if let Template::Works(form) = t {
-            v.insert(layer.dir().to_string(), Value::from(*form as u64));
+            v.insert(layer.dir(), Value::from(*form as u64));
         }
     }
     let path = templates_path();
@@ -2741,14 +3477,246 @@ async fn fetch_satellite_base() -> Result<BaseImage, String> {
     .map_err(|e| e.to_string())?
 }
 
-/// A tile's bytes decoded for the GPU: the relief in the holo look, the overlays as white light.
-fn tile_image(layer: TileLayer, bytes: &[u8], hue: f32) -> Option<ColorImage> {
+/// A tile's bytes decoded for the GPU: the relief in the holo look, the GIBS lines as white light,
+/// the elevation as shading; imagery and the other overlays as they are.
+fn tile_image(key: TileKey, bytes: &[u8], hue: f32) -> Option<ColorImage> {
     let img = image::load_from_memory(bytes).ok()?;
-    Some(match layer {
+    Some(match key.layer {
         TileLayer::Holo => colour_holo(&build_mask(&img.to_rgb8(), None, None), &holo_palette(hue)),
-        TileLayer::Satellite | TileLayer::Labels => to_color_image(&img.to_rgba8()),
         TileLayer::Features => as_light(&img.to_rgba8()),
+        TileLayer::Terrain(tenths) => {
+            let rgba = img.to_rgba8();
+            let (w, h) = (rgba.width() as usize, rgba.height() as usize);
+            let n = 1u64 << key.z;
+            let lat = lat_of_merc_y((key.y as f64 + 0.5) / n as f64);
+            let shaded = src::terrain_overlay(rgba.as_raw(), w, h, key.z, lat, tenths as f32 / 10.0);
+            ColorImage::from_rgba_premultiplied([w, h], &shaded)
+        }
+        _ => to_color_image(&img.to_rgba8()),
     })
+}
+
+/// A tile of the layers that need no probing: from the disk cache or the first URL that answers;
+/// the infrared clouds from all three satellites, merged.
+async fn fetch_source_tile(key: TileKey, urls: Vec<String>, hue: f32) -> Result<ColorImage, bool> {
+    if let TileLayer::Clouds(_) = key.layer {
+        let got = futures_util::future::join_all(urls.iter().map(|u| get(u, FETCH_TIMEOUT))).await;
+        if got.iter().all(Result::is_err) {
+            return Err(got.iter().all(|r| matches!(r, Err((Some(400 | 404), _)))));
+        }
+        return tokio::task::spawn_blocking(move || {
+            let side = gl::TILE_PX as usize;
+            let tiles: Vec<Option<Vec<u8>>> = got
+                .into_iter()
+                .map(|r| r.ok().and_then(|b| image::load_from_memory(&b).ok()).map(|i| i.resize_exact(side as u32, side as u32, image::imageops::FilterType::Triangle).to_rgba8().into_raw()))
+                .collect();
+            let merged = src::merge_ir(&tiles, side * side);
+            ColorImage::from_rgba_premultiplied([side, side], &merged)
+        })
+        .await
+        .map_err(|_| false);
+    }
+    let path = tile_path(key);
+    let cached = if key.layer.cached_on_disk() { tokio::fs::read(&path).await.ok() } else { None };
+    let bytes = match cached {
+        Some(bytes) => bytes,
+        None => {
+            let mut forever = false;
+            let mut found = None;
+            for url in &urls {
+                match get(url, FETCH_TIMEOUT).await {
+                    Ok(bytes) => {
+                        found = Some(bytes);
+                        break;
+                    }
+                    Err((status, _)) => forever = matches!(status, Some(400 | 404)),
+                }
+            }
+            let Some(bytes) = found else { return Err(forever) };
+            if key.layer.cached_on_disk() && image::load_from_memory(&bytes).is_ok() {
+                cache_write(path, bytes.clone()).await;
+            }
+            bytes
+        }
+    };
+    tokio::task::spawn_blocking(move || tile_image(key, &bytes, hue)).await.ok().flatten().ok_or(true)
+}
+
+/// RainViewer's frame list.
+async fn fetch_radar() -> Result<src::RadarFrames, String> {
+    src::parse_rainviewer(&get_json(src::RAINVIEWER_URL, FETCH_TIMEOUT).await?).ok_or_else(|| "no radar frames".to_string())
+}
+
+/// The named peaks in a box from an Overpass server (the higher ones only in a wide box).
+async fn fetch_peaks(b: Bbox, host: usize) -> Result<Vec<Peak>, String> {
+    let (span_lat, span_lon) = b.span();
+    let query = src::peaks_query_from(b.south, b.west, b.north, b.east, src::peaks_floor(span_lat.max(span_lon * b.centre().0.to_radians().cos())));
+    let url = src::overpass_url(src::OVERPASS_HOSTS[host % src::OVERPASS_HOSTS.len()], &query);
+    Ok(src::parse_peaks(&get_json(&url, Duration::from_secs(25)).await?))
+}
+
+/// A whole-world image from GIBS WMS in `cols` x `rows` pieces of 2048 px (each cached), as RGB.
+async fn world_pieces(layer: &str, date: Option<NaiveDate>, cols: u32, rows: u32, png: bool) -> Result<image::RgbaImage, String> {
+    const PIECE: u32 = 2048;
+    let (dlon, dlat) = (360.0 / cols as f64, 180.0 / rows as f64);
+    let tag = date.map(|d| d.format("%Y-%m-%d").to_string()).unwrap_or_else(|| "best".into());
+    let mut jobs: Vec<(PathBuf, String)> = Vec::new();
+    for r in 0..rows {
+        for c in 0..cols {
+            let (south, north) = (90.0 - (r + 1) as f64 * dlat, 90.0 - r as f64 * dlat);
+            let (west, east) = (-180.0 + c as f64 * dlon, -180.0 + (c + 1) as f64 * dlon);
+            let format = if png { "image/png&TRANSPARENT=TRUE" } else { "image/jpeg" };
+            let time = date.map(|d| format!("&TIME={}", d.format("%Y-%m-%d"))).unwrap_or_default();
+            let url = format!("https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi?SERVICE=WMS&REQUEST=GetMap&VERSION=1.3.0&LAYERS={layer}&STYLES=&CRS=EPSG:4326&BBOX={south},{west},{north},{east}&WIDTH={PIECE}&HEIGHT={PIECE}&FORMAT={format}{time}");
+            let path = cache_path(&["globe", "pieces", &format!("{layer}_{tag}_{cols}x{rows}_{r}_{c}.{}", if png { "png" } else { "jpg" })]);
+            jobs.push((path, url));
+        }
+    }
+    // (Two at a time: polite, and the pieces are big.)
+    let mut bytes = Vec::new();
+    for pair in jobs.chunks(2) {
+        let got = futures_util::future::join_all(pair.iter().map(|(path, url)| image_bytes(path.clone(), std::slice::from_ref(url)))).await;
+        for b in got {
+            bytes.push(b?);
+        }
+    }
+    tokio::task::spawn_blocking(move || {
+        let mut world = image::RgbaImage::new(cols * PIECE, rows * PIECE);
+        for (i, b) in bytes.iter().enumerate() {
+            let piece = image::load_from_memory(b).map_err(|e| e.to_string())?.to_rgba8();
+            let piece = if piece.dimensions() == (PIECE, PIECE) { piece } else { image::imageops::resize(&piece, PIECE, PIECE, image::imageops::FilterType::Triangle) };
+            image::imageops::replace(&mut world, &piece, (i as u32 % cols * PIECE) as i64, (i as u32 / cols * PIECE) as i64);
+        }
+        Ok(world)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// One of the globe's textures: from its blob in the disk cache, or made from GIBS imagery (and
+/// cached as a blob for the next time).
+async fn fetch_gpu_base(slot: gl::Slot, caps: gl::Caps, date: Option<NaiveDate>) -> Result<GpuImage, String> {
+    let big = caps.dxt1 && caps.max_side >= 8192;
+    let name = match slot {
+        gl::Slot::Day => format!("day_{}.jegi", if big { "8k_dxt" } else if caps.dxt1 { "4k_dxt" } else { "4k_rgba" }),
+        gl::Slot::Night => "night_4k.jegi".into(),
+        gl::Slot::Mask => "mask_4k.jegi".into(),
+        gl::Slot::Relief => format!("relief_4k_{}.jegi", if caps.dxt1 { "dxt" } else { "rgba" }),
+        gl::Slot::Historic => format!("daily_{}_{}.jegi", date.map(|d| d.format("%Y-%m-%d").to_string()).unwrap_or_default(), if caps.dxt1 { "dxt" } else { "rgba" }),
+    };
+    let path = cache_path(&["globe", &name]);
+    if let Ok(blob) = tokio::fs::read(&path).await {
+        let touched = path.clone();
+        if let Some(image) = tokio::task::spawn_blocking(move || {
+            // (Used: it stays out of the cache's trim a while longer.)
+            let _ = std::fs::File::options().write(true).open(&touched).and_then(|f| f.set_modified(std::time::SystemTime::now()));
+            GpuImage::from_blob(&blob)
+        })
+        .await
+        .ok()
+        .flatten()
+        {
+            return Ok(image);
+        }
+    }
+    let threads = std::thread::available_parallelism().map_or(4, |n| n.get()).clamp(2, 8);
+    let colour = move |img: image::RgbaImage| -> GpuImage {
+        let (w, h) = img.dimensions();
+        if caps.dxt1 {
+            GpuImage::dxt1_with_mips(w, h, img.into_raw(), threads)
+        } else {
+            let (w2, h2) = (w.min(4096), h.min(2048));
+            let img = if (w, h) == (w2, h2) { img } else { image::imageops::resize(&img, w2, h2, image::imageops::FilterType::Triangle) };
+            GpuImage::with_mips(gl::Format::Rgba8, w2, h2, img.into_raw())
+        }
+    };
+    let image = match slot {
+        gl::Slot::Day => {
+            let (cols, rows) = if big { (4, 2) } else { (2, 1) };
+            let world = world_pieces(src::DAY_LAYER, None, cols, rows, false).await?;
+            tokio::task::spawn_blocking(move || colour(world)).await.map_err(|e| e.to_string())?
+        }
+        gl::Slot::Relief => {
+            let world = world_pieces(src::RELIEF_LAYER, None, 2, 1, false).await?;
+            tokio::task::spawn_blocking(move || colour(world)).await.map_err(|e| e.to_string())?
+        }
+        gl::Slot::Historic => {
+            let world = world_pieces(src::DAILY_LAYER, date, 2, 1, false).await?;
+            tokio::task::spawn_blocking(move || colour(world)).await.map_err(|e| e.to_string())?
+        }
+        gl::Slot::Night => {
+            let world = world_pieces(src::NIGHT_LAYER, None, 2, 1, false).await?;
+            tokio::task::spawn_blocking(move || {
+                let (w, h) = world.dimensions();
+                let lum: Vec<u8> = world.pixels().map(|p| ((p.0[0] as u32 * 3 + p.0[1] as u32 * 5 + p.0[2] as u32 * 2) / 10) as u8).collect();
+                GpuImage::with_mips(gl::Format::R8, w, h, lum)
+            })
+            .await
+            .map_err(|e| e.to_string())?
+        }
+        gl::Slot::Mask => {
+            let relief = world_pieces(src::RELIEF_LAYER, None, 2, 1, false).await?;
+            let lines = world_pieces(src::LINES_LAYER, None, 2, 1, true).await.ok();
+            tokio::task::spawn_blocking(move || {
+                let (w, h) = relief.dimensions();
+                GpuImage::with_mips(gl::Format::Rg8, w, h, gpu_mask(&relief, lines.as_ref()))
+            })
+            .await
+            .map_err(|e| e.to_string())?
+        }
+    };
+    let blob = image.to_blob();
+    cache_write(path, blob).await;
+    info!("[EARTH] Globe texture {slot:?} made ({} MB)", image.bytes() / (1024 * 1024));
+    Ok(image)
+}
+
+/// The globe's mask (two bytes a texel): red is land, softened so its 0.5 line is the coast at
+/// any zoom; green the borders (the GIBS line layer away from the coasts).
+pub fn gpu_mask(relief: &image::RgbaImage, lines: Option<&image::RgbaImage>) -> Vec<u8> {
+    let (w, h) = (relief.width() as usize, relief.height() as usize);
+    let mut land: Vec<f32> = relief.pixels().map(|p| if is_water([p.0[0], p.0[1], p.0[2]]) { 0.0 } else { 1.0 }).collect();
+    // A lone texel among four of the other kind takes theirs.
+    let source = land.clone();
+    for y in 1..h.saturating_sub(1) {
+        for x in 0..w {
+            let n = [source[y * w + (x + w - 1) % w], source[y * w + (x + 1) % w], source[(y - 1) * w + x], source[(y + 1) * w + x]];
+            if n.iter().all(|v| *v == n[0]) && n[0] != source[y * w + x] {
+                land[y * w + x] = n[0];
+            }
+        }
+    }
+    // Two passes of a 3x3 box blur: a ramp across the coast.
+    for _ in 0..2 {
+        let src = land.clone();
+        for y in 0..h {
+            for x in 0..w {
+                let mut sum = 0.0;
+                for dy in [-1isize, 0, 1] {
+                    let yy = (y as isize + dy).clamp(0, h as isize - 1) as usize;
+                    for dx in [w - 1, 0, 1] {
+                        sum += src[yy * w + (x + dx) % w];
+                    }
+                }
+                land[y * w + x] = sum / 9.0;
+            }
+        }
+    }
+    let mut out = Vec::with_capacity(w * h * 2);
+    for y in 0..h {
+        for x in 0..w {
+            let l = land[y * w + x];
+            let line = lines.map_or(0u8, |m| {
+                let (mx, my) = ((x * m.width() as usize / w) as u32, (y * m.height() as usize / h) as u32);
+                m.get_pixel(mx.min(m.width() - 1), my.min(m.height() - 1)).0[3]
+            });
+            // (Near a coast the line is the coast itself, drawn from the red.)
+            let border = if l > 0.08 && l < 0.92 { 0 } else { line };
+            out.push((l * 255.0).round() as u8);
+            out.push(border);
+        }
+    }
+    out
 }
 
 /// Finds the URL form a layer answers to with its world tile, which it delivers as a tile.
@@ -2763,7 +3731,7 @@ async fn probe_layer(layer: TileLayer, hue: f32) -> Result<usize, bool> {
             Ok(bytes) => {
                 let decoded = tokio::task::spawn_blocking({
                     let bytes = bytes.clone();
-                    move || tile_image(layer, &bytes, hue)
+                    move || tile_image(key, &bytes, hue)
                 })
                 .await
                 .ok()
@@ -2798,7 +3766,7 @@ async fn fetch_tile(key: TileKey, form: usize, hue: f32) -> Result<ColorImage, b
             Err((status, _)) => return Err(matches!(status, Some(400 | 404))),
         },
     };
-    tokio::task::spawn_blocking(move || tile_image(key.layer, &bytes, hue)).await.ok().flatten().ok_or(true)
+    tokio::task::spawn_blocking(move || tile_image(key, &bytes, hue)).await.ok().flatten().ok_or(true)
 }
 
 // ---------------------------------------------------------------------------------- run ----
@@ -2826,11 +3794,94 @@ pub async fn run(args: &Value) -> Result<String, String> {
 }
 
 async fn act(action: Action, offline: bool) -> (String, String) {
+    // Whatever Sir asks for next ends a tour (but the Earth's own "show").
+    if !matches!(action, Action::Tour | Action::StopTour | Action::Show) {
+        state().tour = None;
+    }
     match action {
-        Action::Show => ("The Earth is open: the holographic globe with earthquakes, storms, wildfires and the ISS.".into(), "The Earth is on your display, Sir. You can spin or zoom it as you like.".into()),
+        Action::Show => ("The Earth is open: the globe with earthquakes, storms, wildfires and the ISS.".into(), "The Earth is on your display, Sir. You can spin or zoom it as you like.".into()),
         Action::Satellite => {
-            state().set_look(Look::Satellite);
-            ("Satellite imagery: NASA Blue Marble.".into(), "The satellite view is now active, Sir.".into())
+            let imagery = {
+                let mut st = state();
+                st.set_look(Look::Satellite);
+                st.imagery
+            };
+            (format!("Satellite imagery: {}.", imagery.credit().trim_start_matches("Imagery: ")), "The satellite view is now active, Sir.".into())
+        }
+        Action::Locate => locate_me(offline).await,
+        Action::Mountains(place) => mountains(place, offline).await,
+        Action::Exaggerate(on) => {
+            let mut st = state();
+            st.overlays.terrain |= on;
+            st.overlays.exaggerate = on;
+            if on {
+                ("Terrain: relief exaggerated 2.5 times.".into(), "Exaggerating the relief, Sir.".into())
+            } else {
+                ("Terrain: true to scale.".into(), "The relief is back to scale, Sir.".into())
+            }
+        }
+        Action::Radar { animate } => {
+            let mut st = state();
+            st.overlays.radar = true;
+            st.overlays.animate = animate;
+            st.radar_since = f64::NAN;
+            if !animate {
+                return ("Rain radar: RainViewer.".into(), "The rain radar is on, Sir.".into());
+            }
+            // The loop runs on the map (the globe shows the latest frame): down to a region.
+            let t = st.target();
+            if t.alt > FLAT_FROM_KM {
+                st.fly_to(Camera { alt: 1_300.0, ..t });
+            }
+            ("Rain radar: the past two hours in a loop (RainViewer).".into(), "Here's the radar over the past two hours, Sir.".into())
+        }
+        Action::Clouds => {
+            let mut st = state();
+            st.overlays.clouds = true;
+            st.historic = None;
+            ("Clouds: infrared from GOES and Himawari (NASA GIBS).".into(), "The live cloud cover is on, Sir.".into())
+        }
+        Action::Overlay(overlay, on) => {
+            state().overlays.set(overlay, on);
+            let spoken = match (overlay, on) {
+                (Overlay::Labels, true) => "Labels and borders are on, Sir.",
+                (Overlay::Labels, false) => "Labels and borders are off, Sir.",
+                (Overlay::Terrain, true) => "The terrain is shaded, Sir.",
+                (Overlay::Terrain, false) => "The terrain is off, Sir.",
+                (Overlay::Radar, true) => "The rain radar is on, Sir.",
+                (Overlay::Radar, false) => "The rain radar is off, Sir.",
+                (Overlay::Clouds, true) => "The clouds are on, Sir.",
+                (Overlay::Clouds, false) => "The clouds are off, Sir.",
+            };
+            (format!("{}: {}.", overlay.noun(), if on { "on" } else { "off" }), spoken.into())
+        }
+        Action::Imagery(imagery) => {
+            let mut st = state();
+            st.imagery = imagery;
+            st.historic = None;
+            st.set_look(Look::Satellite);
+            (imagery.credit().to_string(), format!("Switching to {}, Sir.", imagery.spoken()))
+        }
+        Action::Historic { date, place } => historic(date, place, offline).await,
+        Action::Today => {
+            let mut st = state();
+            st.historic = None;
+            st.set_look(Look::Satellite);
+            ("Today's imagery.".into(), "Back to today's imagery, Sir.".into())
+        }
+        Action::Tour => world_tour(offline).await,
+        Action::StopTour => {
+            let mut st = state();
+            let touring = st.tour.take().is_some();
+            if let Some(Motion::Fly { .. }) = st.motion {
+                st.motion = None;
+                st.queued = None;
+            }
+            if touring {
+                ("The tour is over.".into(), "Stopping the tour, Sir.".into())
+            } else {
+                ("No tour was running.".into(), "There's no tour running, Sir.".into())
+            }
         }
         Action::Holo => {
             state().set_look(Look::Holo);
@@ -2849,9 +3900,12 @@ async fn act(action: Action, offline: bool) -> (String, String) {
             (format!("Layer off: {}.", layer.noun()), spoken)
         }
         Action::HideAll => {
+            crate::webcams::set_earth_layer(false); // cameras (C2)
             let mut st = state();
             st.layers = Layers { quakes: false, storms: false, fires: false, iss: false, flights: false };
+            st.overlays = Overlays { labels: st.overlays.labels, ..Overlays { labels: false, terrain: false, exaggerate: false, radar: false, animate: false, clouds: false } };
             st.area = None;
+            crate::earth_layers::hide_all(); // live layers (C1)
             ("Every layer is off.".into(), "All layers are off, Sir.".into())
         }
         Action::ZoomIn => {
@@ -2876,6 +3930,8 @@ async fn act(action: Action, offline: bool) -> (String, String) {
             state().spin = false;
             ("The globe holds still.".into(), "Holding it still, Sir.".into())
         }
+        Action::Cameras => crate::webcams::earth_layer_action(offline).await, // cameras (C2)
+        Action::Live(live) => crate::earth_layers::act(live, offline).await, // live layers (C1)
     }
 }
 
@@ -2891,6 +3947,143 @@ async fn show_place(name: &str, offline: bool) -> (String, String) {
         }
         Err(e) => (e, format!("I couldn't find {name} on the map, Sir.")),
     }
+}
+
+/// "Where am I?": the camera flies to Sir with the "YOU" marker and its accuracy circle.
+async fn locate_me(offline: bool) -> (String, String) {
+    match crate::earth_locate::locate(offline).await {
+        Ok(fix) => {
+            let mut st = state();
+            st.marker = None;
+            st.area = None;
+            st.fly_to(Camera { lat: fix.lat, lon: fix.lon, alt: fix.altitude_km() });
+            st.me_since = f64::NAN;
+            let said = (fix.display(), fix.spoken());
+            st.me = Some(fix);
+            said
+        }
+        Err(e) => (format!("No position: {e}"), "I can't tell where you are right now, Sir: the location service, the network lookup and the settings all came up empty.".into()),
+    }
+}
+
+/// The map's own "where am I" button: the same fix as the voice command, nothing spoken.
+pub fn locate_in_background(rt: &Handle) {
+    let offline = offline();
+    rt.spawn(async move {
+        // Not logged: the coordinates stay on the map.
+        let _ = locate_me(offline).await;
+        crate::gui::refresh();
+    });
+}
+
+/// Mountain ranges for "show me the mountains" far from any.
+const RANGES: [(&str, f64, f64); 9] = [
+    ("the Alps", 46.4, 9.6),
+    ("the Himalayas", 28.2, 85.0),
+    ("the Rocky Mountains", 39.6, -106.2),
+    ("the Andes", -32.7, -70.0),
+    ("the Caucasus", 43.0, 43.5),
+    ("the Alaska Range", 63.1, -150.5),
+    ("the Southern Alps", -43.6, 170.3),
+    ("the Atlas Mountains", 31.1, -7.9),
+    ("the Pyrenees", 42.7, 0.6),
+];
+
+/// The range nearest a point.
+pub fn nearest_range(lat: f64, lon: f64) -> (&'static str, f64, f64) {
+    RANGES.into_iter().min_by(|a, b| haversine_km((lat, lon), (a.1, a.2)).total_cmp(&haversine_km((lat, lon), (b.1, b.2)))).expect("ranges")
+}
+
+/// "Show me the mountains": the shaded terrain, the peaks named up close; over a place, or the
+/// range nearest the view when the camera is far out.
+async fn mountains(place: Option<String>, offline: bool) -> (String, String) {
+    let target = state().target();
+    let goal = match place {
+        Some(name) => match resolve(&name, offline).await {
+            Ok(hit) => Some((hit.name, hit.lat, hit.lon)),
+            Err(e) => return (e, format!("I couldn't find {name} on the map, Sir.")),
+        },
+        None if target.alt > 2_600.0 => {
+            let (name, lat, lon) = nearest_range(target.lat, target.lon);
+            Some((name.to_string(), lat, lon))
+        }
+        None => None,
+    };
+    let mut st = state();
+    st.overlays.terrain = true;
+    st.set_look(Look::Satellite);
+    match goal {
+        Some((name, lat, lon)) => {
+            st.fly_to(Camera { lat, lon, alt: 520.0 });
+            (format!("Terrain over {name}: shaded relief (AWS Terrain Tiles), peaks from OpenStreetMap."), format!("Here are the mountains of {name}, Sir, with the peaks named as you zoom in."))
+        }
+        None => ("Terrain: shaded relief, peaks named up close.".into(), "The terrain is shaded, Sir, with the peaks named.".into()),
+    }
+}
+
+/// A day of NASA's daily imagery, over a place when one is named.
+async fn historic(date: NaiveDate, place: Option<String>, offline: bool) -> (String, String) {
+    let hit = match place.as_deref().filter(|p| !p.eq_ignore_ascii_case("here")) {
+        Some(name) => match resolve(name, offline).await {
+            Ok(hit) => Some(hit),
+            Err(e) => return (e, format!("I couldn't find {name} on the map, Sir.")),
+        },
+        None => None,
+    };
+    let when = src::spoken_date(date);
+    let mut st = state();
+    st.historic = Some(date);
+    st.set_look(Look::Satellite);
+    st.overlays.clouds = false;
+    let display = format!("NASA VIIRS true colour of {}.", date.format("%Y-%m-%d"));
+    match hit {
+        Some(hit) => {
+            let alt = (hit.kind.altitude_km() * 1.6).min(MAX_ALT_KM);
+            st.marker = (hit.kind != PlaceKind::Continent).then(|| Marker { name: hit.name.clone(), lat: hit.lat, lon: hit.lon });
+            st.fly_to(Camera { lat: hit.lat, lon: hit.lon, alt });
+            (display, format!("Here's {} on {when}, Sir, as NASA's satellites saw it.", hit.name))
+        }
+        None => (display, format!("Here's the Earth on {when}, Sir, clouds and all, as NASA's satellites saw it.")),
+    }
+}
+
+/// "What's happening in the world?": the tour through the week's strongest quake, the storms and
+/// the largest group of wildfires.
+async fn world_tour(offline: bool) -> (String, String) {
+    let (quakes_due, events_due) = {
+        let mut st = state();
+        let live = !offline && !st.demo;
+        st.layers.quakes = true;
+        st.layers.storms = true;
+        st.layers.fires = true;
+        (live && st.quakes.due(QUAKES_EVERY), live && st.events.due(EVENTS_EVERY))
+    };
+    let (quakes, events) = tokio::join!(
+        async { if quakes_due { Some(fetch_quakes_week().await) } else { None } },
+        async { if events_due { Some(fetch_events().await) } else { None } }
+    );
+    let mut st = state();
+    if let Some(r) = quakes {
+        st.quakes.set(r);
+    }
+    if let Some(r) = events {
+        st.events.set(r);
+    }
+    let stops = crate::earth_tour::plan(&st.quakes.items, &st.events.items, Utc::now().timestamp_millis());
+    let spoken = crate::earth_tour::opening(&stops);
+    if stops.is_empty() {
+        return ("Nothing to visit: no earthquakes, storms or wildfires are loaded.".into(), spoken);
+    }
+    let display = format!(
+        "World tour, {} stops: {}",
+        stops.len(),
+        stops.iter().map(|s| format!("{} ({})", s.title, s.caption)).collect::<Vec<_>>().join("; ")
+    );
+    st.area = None;
+    st.marker = None;
+    st.spin = false;
+    st.tour = Some(crate::earth_tour::Tour::new(stops));
+    (display, spoken)
 }
 
 async fn global_quakes(offline: bool) -> (String, String) {
@@ -3424,12 +4617,79 @@ mod tests {
         assert_eq!(a(json!({"action": "show_flights", "place": "New York"})), Ok(Action::Flights(Some("New York".into()))));
         assert_eq!(a(json!({"action": "show_flights"})), Ok(Action::Flights(None)));
         assert_eq!(a(json!({"action": "hide_layer", "layer": "flights"})), Ok(Action::Hide(Layer::Flights)));
-        assert!(a(json!({"action": "hide_layer", "layer": "clouds"})).is_err());
+        assert!(a(json!({"action": "hide_layer", "layer": "volcanoes"})).is_err());
+        assert_eq!(a(json!({"action": "hide_layer", "layer": "clouds"})), Ok(Action::Overlay(Overlay::Clouds, false)));
+        assert_eq!(a(json!({"action": "hide_layer", "layer": "rain radar"})), Ok(Action::Overlay(Overlay::Radar, false)));
         assert_eq!(a(json!({"action": "hide_layers"})), Ok(Action::HideAll));
         for (name, action) in [("show_storms", Action::Storms), ("show_fires", Action::Fires), ("show_iss", Action::Iss), ("zoom_in", Action::ZoomIn), ("zoom_out", Action::ZoomOut), ("home", Action::Home), ("spin", Action::Spin), ("stop_spin", Action::StopSpin)] {
             assert_eq!(a(json!({"action": name})), Ok(action));
         }
         assert!(a(json!({"action": "launch_missiles"})).is_err());
+        // Locate, terrain, weather, imagery, dates, the tour.
+        let new = [
+            ("show_my_location", Action::Locate),
+            ("locate_me", Action::Locate),
+            ("show_world_tour", Action::Tour),
+            ("show_terrain", Action::Mountains(None)),
+            ("exaggerate_terrain", Action::Exaggerate(true)),
+            ("flatten_terrain", Action::Exaggerate(false)),
+            ("show_radar", Action::Radar { animate: false }),
+            ("animate_radar", Action::Radar { animate: true }),
+            ("show_clouds", Action::Clouds),
+            ("show_labels", Action::Overlay(Overlay::Labels, true)),
+            ("hide_borders", Action::Overlay(Overlay::Labels, false)),
+            ("show_today", Action::Today),
+            ("world_tour", Action::Tour),
+            ("stop_tour", Action::StopTour),
+        ];
+        for (name, action) in new {
+            assert_eq!(a(json!({"action": name})), Ok(action), "{name}");
+        }
+        assert_eq!(a(json!({"action": "show_mountains", "place": "Nepal"})), Ok(Action::Mountains(Some("Nepal".into()))));
+        assert_eq!(a(json!({"action": "set_imagery", "imagery": "Sentinel-2"})), Ok(Action::Imagery(Imagery::Sentinel)));
+        assert!(a(json!({"action": "set_imagery", "imagery": "crayons"})).is_err());
+        let march = NaiveDate::from_ymd_opt(2024, 3, 1).unwrap();
+        assert_eq!(a(json!({"action": "show_date", "date": "2024-03-01", "place": "Europe"})), Ok(Action::Historic { date: march, place: Some("Europe".into()) }));
+        assert_eq!(a(json!({"action": "show_clouds", "date": "1 March 2024"})), Ok(Action::Historic { date: march, place: None }));
+        assert!(a(json!({"action": "show_date"})).is_err(), "a date is needed");
+        assert!(a(json!({"action": "show_date", "date": "next Tuesday"})).is_err());
+    }
+
+    #[test]
+    fn continents_ranges_and_the_land_mask() {
+        let europe = continent("Europa").expect("German too");
+        assert_eq!((europe.name.as_str(), europe.kind), ("Europe", PlaceKind::Continent));
+        assert!(continent("the Atlantic").is_some() && continent("Narnia").is_none());
+        assert_eq!(nearest_range(47.0, 8.0).0, "the Alps");
+        assert_eq!(nearest_range(-20.0, -68.0).0, "the Andes");
+        // Relief: land is light, sea dark; the lines' alpha is the border channel.
+        let relief = image::RgbaImage::from_fn(32, 8, |x, _| if x < 16 { image::Rgba([10, 30, 90, 255]) } else { image::Rgba([90, 120, 60, 255]) });
+        let lines = image::RgbaImage::from_fn(32, 8, |x, _| image::Rgba([255, 255, 255, if x == 24 || x == 16 { 255 } else { 0 }]));
+        let mask = gpu_mask(&relief, Some(&lines));
+        assert_eq!(mask.len(), 32 * 8 * 2);
+        let at = |x: usize, y: usize| (mask[(y * 32 + x) * 2], mask[(y * 32 + x) * 2 + 1]);
+        assert!(at(6, 4).0 < 5 && at(24, 4).0 > 250, "sea then land: {:?} {:?}", at(6, 4), at(24, 4));
+        assert!(at(15, 4).0 > 40 && at(15, 4).0 < at(16, 4).0 && at(16, 4).0 < 215, "a ramp across the coast: {:?} {:?}", at(15, 4), at(16, 4));
+        assert_eq!((at(24, 4).1, at(23, 4).1), (255, 0), "a border only where the lines are");
+        assert_eq!(at(16, 4).1, 0, "on the coast the line is the coast's");
+    }
+
+    #[test]
+    fn tile_layers_name_their_sources() {
+        let key = |layer, z, x, y| TileKey { layer, z, x, y };
+        assert_eq!(source_urls(key(TileLayer::Esri, 12, 2140, 1420), None), vec![Imagery::Esri.url(12, 2140, 1420)]);
+        assert!(source_urls(key(TileLayer::Terrain(25), 8, 134, 90), None)[0].ends_with("/terrarium/8/134/90.png"));
+        assert_eq!(source_urls(key(TileLayer::Clouds(7), 2, 1, 1), None).len(), 3, "one per geostationary satellite");
+        let frame = RadarFrame { time: 1_794_178_200, path: "/v2/radar/2c5".into() };
+        assert!(source_urls(key(TileLayer::Radar(1_794_178_200), 3, 4, 2), None).is_empty(), "no frame list yet");
+        assert_eq!(source_urls(key(TileLayer::Radar(1_794_178_200), 3, 4, 2), Some(("https://tilecache.rainviewer.com", &frame))), vec!["https://tilecache.rainviewer.com/v2/radar/2c5/256/3/4/2/2/1_1.png".to_string()]);
+        let march = NaiveDate::from_ymd_opt(2024, 3, 1).unwrap();
+        let daily = TileLayer::day(march);
+        assert_eq!(daily.date(), Some(march));
+        assert!(source_urls(key(daily, 4, 8, 5), None)[0].contains("/VIIRS_SNPP_CorrectedReflectance_TrueColor/default/2024-03-01/GoogleMapsCompatible_Level9/4/5/8.jpg"));
+        assert!(source_urls(key(TileLayer::Holo, 2, 1, 1), None).is_empty(), "probed GIBS layers go by their templates");
+        assert_eq!(TileLayer::of(Imagery::Nasa), TileLayer::Satellite);
+        assert!(!TileLayer::Radar(1).cached_on_disk() && TileLayer::Esri.cached_on_disk());
     }
 
     /// `run` end to end on the demo (tests are always offline): open, the reference's quake
@@ -3475,6 +4735,69 @@ mod tests {
         assert!(rt.block_on(run(&json!({"view": "earth", "action": "warp"}))).is_err());
         close();
         assert!(!is_open());
+    }
+
+    /// The new actions on the demo: locate, mountains, weather, imagery, a date, the tour.
+    #[test]
+    fn locate_terrain_weather_dates_and_the_tour_on_the_demo() {
+        let _one = test_lock();
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("a runtime");
+        let go = |args: Value| rt.block_on(run(&args)).unwrap();
+        close();
+        let out = go(json!({"view": "earth", "action": "locate_me"}));
+        assert!(out.ends_with("Spoken: There you are, Sir."), "{out}");
+        {
+            let st = state();
+            let me = st.me.as_ref().expect("the YOU marker");
+            assert_eq!(me.source, crate::earth_locate::Source::Demo);
+            assert!(haversine_km((st.target().lat, st.target().lon), (me.lat, me.lon)) < 1.0, "the camera flies to him");
+            assert!(st.near_me(me.lat + 0.1, me.lon) && !st.near_me(0.0, 0.0), "places near him are not looked up");
+        }
+        // Far out, "show me the mountains" goes to the range nearest the view.
+        go(json!({"view": "earth", "action": "home"}));
+        let out = go(json!({"view": "earth", "action": "show_mountains"}));
+        assert!(out.ends_with("Spoken: Here are the mountains of the Rocky Mountains, Sir, with the peaks named as you zoom in."), "{out}");
+        assert!(state().overlays.terrain && state().target().alt < 1_000.0);
+        let out = go(json!({"view": "earth", "action": "show_mountains", "place": "Delhi"}));
+        assert!(out.contains("Spoken: Here are the mountains of Delhi, Sir"), "{out}");
+        let out = go(json!({"view": "earth", "action": "show_terrain"}));
+        assert!(out.ends_with("Spoken: The terrain is shaded, Sir, with the peaks named."), "{out}");
+        let out = go(json!({"view": "earth", "action": "exaggerate_terrain"}));
+        assert!(out.ends_with("Spoken: Exaggerating the relief, Sir."), "{out}");
+        assert!(state().overlays.exaggerate);
+        assert_eq!(state().terrain_layer(), Some(TileLayer::Terrain(25)));
+        let out = go(json!({"view": "earth", "action": "show_radar"}));
+        assert!(out.ends_with("Spoken: The rain radar is on, Sir."), "{out}");
+        let out = go(json!({"view": "earth", "action": "show_clouds"}));
+        assert!(out.ends_with("Spoken: The live cloud cover is on, Sir."), "{out}");
+        assert!(state().overlays.clouds && state().overlays.radar);
+        let out = go(json!({"view": "earth", "action": "hide_layer", "layer": "radar"}));
+        assert!(out.ends_with("Spoken: The rain radar is off, Sir."), "{out}");
+        let out = go(json!({"view": "earth", "action": "set_imagery", "imagery": "sentinel"}));
+        assert!(out.ends_with("Spoken: Switching to the Sentinel-2 cloudless imagery, Sir."), "{out}");
+        assert_eq!(state().imagery_layer(), TileLayer::Sentinel);
+        let out = go(json!({"view": "earth", "action": "show_date", "date": "2024-03-01", "place": "Europe"}));
+        assert!(out.contains("2024-03-01") && out.ends_with("Spoken: Here's Europe on 1 March 2024, Sir, as NASA's satellites saw it."), "{out}");
+        assert_eq!(state().imagery_layer(), TileLayer::day(NaiveDate::from_ymd_opt(2024, 3, 1).unwrap()));
+        assert!(!state().overlays.clouds, "the day's own clouds, not today's");
+        let out = go(json!({"view": "earth", "action": "show_today"}));
+        assert!(out.ends_with("Spoken: Back to today's imagery, Sir."), "{out}");
+        assert!(state().historic.is_none());
+        let out = go(json!({"view": "earth", "action": "world_tour"}));
+        assert!(out.contains("Spoken: Here's the world right now, Sir."), "{out}");
+        assert!(state().tour.is_some() && state().layers.quakes);
+        let out = go(json!({"view": "earth", "action": "stop_tour"}));
+        assert!(out.ends_with("Spoken: Stopping the tour, Sir."), "{out}");
+        assert!(state().tour.is_none());
+        let out = go(json!({"view": "earth", "action": "stop_tour"}));
+        assert!(out.ends_with("Spoken: There's no tour running, Sir."), "{out}");
+        // Another order ends a tour.
+        go(json!({"view": "earth", "action": "world_tour"}));
+        go(json!({"view": "earth", "action": "zoom_in"}));
+        assert!(state().tour.is_none());
+        close();
+        let_go();
+        assert!(state().me.is_some(), "the fix stays for the session");
     }
 
     #[test]

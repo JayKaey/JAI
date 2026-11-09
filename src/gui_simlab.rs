@@ -847,6 +847,11 @@ mod tests {
         let mut sim = lab.launch(SimKind::Function, "x^2 - 2x - 3", Some("Function plotter")).unwrap();
         sim.show_derivative = true;
         let p = Palette::new(&crate::interface::InterfaceSettings::default());
+        // The curves take the active theme's colours, which other tests switch: judged by the
+        // colours this drawing uses, not by a fixed cyan.
+        let _theme = crate::theme_engine::test_lock();
+        crate::theme_engine::finish_fade();
+        let (f_colour, df_colour) = (plot_cyan(), plot_crimson());
         let size = vec2(900.0, 520.0);
         let plot = Rect::from_min_size(pos2(20.0, 20.0), size - vec2(40.0, 40.0));
         let mut snap = crate::ui_snapshot::Snapshot::new(size);
@@ -861,20 +866,21 @@ mod tests {
             });
         });
         canvas.save("simlab_function_plotter");
-        // Cyan curve pixels exist (f) and crimson ones (f').
+        // Pixels of f's colour (cyan in the default theme) and of f''s (crimson) exist.
+        let near = |[r, g, b]: [u8; 3], c: Color32| r.abs_diff(c.r()) as u32 + g.abs_diff(c.g()) as u32 + b.abs_diff(c.b()) as u32 <= 90;
         let (mut cyan, mut crimson) = (0, 0);
         for y in 0..canvas.height {
             for x in 0..canvas.width {
-                let [r, g, b] = canvas.pixel(x, y);
-                if g > 170 && b > 190 && r < 90 {
+                let px = canvas.pixel(x, y);
+                if near(px, f_colour) {
                     cyan += 1;
                 }
-                if r > 190 && g < 90 && b < 140 {
+                if near(px, df_colour) {
                     crimson += 1;
                 }
             }
         }
-        assert!(cyan > 300, "f(x) drawn in cyan: {cyan} px");
-        assert!(crimson > 200, "f'(x) drawn in crimson: {crimson} px");
+        assert!(cyan > 300, "f(x) drawn in {f_colour:?}: {cyan} px");
+        assert!(crimson > 200, "f'(x) drawn in {df_colour:?}: {crimson} px");
     }
 }

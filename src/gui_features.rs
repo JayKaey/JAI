@@ -69,6 +69,8 @@ const DEMOS: &[(&str, &str)] = &[
     ("spawn_native_window", r#"{"title": "Feature Lab", "markdown": "Native windows are online, Sir."}"#),
     ("create_or_update_widget", r#"{"title": "Feature Lab", "type": "MetricGauge", "value": 72, "unit": "%"}"#),
     ("hud_board", r#"{"action": "status"}"#),
+    // (Opens the telemetry block if it is not up, then glides it to the middle: inside the HUD.)
+    ("arrange_jarvis_window", r#"{"target": "telemetry", "action": "move", "position": "centre"}"#),
     // Without arguments these two would sort Sir's school files / need a host: a read instead.
     ("sync_study_materials_and_deadlines", r#"{"action": "list"}"#),
     ("server_deck", r#"{"hosts": ["mc.hypixel.net"]}"#),

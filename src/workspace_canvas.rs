@@ -1824,7 +1824,7 @@ pub fn definitions() -> Vec<Value> {
     vec![
         json!({"type": "function", "function": {
             "name": "spawn_multi_window_workspace",
-            "description": "Bring up the cinematic multi-window workspace: Jarvis fans out floating glass windows from the orb into a non-overlapping cockpit. Use for 'bring up the research workspace', 'open all windows', 'spread out my workspace', 'show me everything on <topic>' (a topic starts or reuses a deep research mission). Window types: crawler (live crawl stream), dossier (executive research report), graph (knowledge-graph pinboard), inspector (code / JSON / CSV / plot; pass inspect), hardware (CPU, VRAM, ping, processes), schedule (WebUntis, calendar, protocols).",
+            "description": "Bring up the cinematic multi-window workspace: glass windows fanned out from the orb. For 'bring up the research workspace', 'open all windows', 'show me everything on <topic>' (a topic starts or reuses a deep research mission). Windows: crawler, dossier, graph, inspector (code / JSON / CSV / plot; pass inspect), hardware, schedule.",
             "parameters": {"type": "object", "properties": {
                 "windows": {"type": "array", "items": {"type": "string", "enum": kinds}},
                 "topic": {"type": "string"},

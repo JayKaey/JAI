@@ -91,6 +91,8 @@ pub(super) struct Hub {
     tunnel_token: String,
     /// A newly typed token of Jarvis's Discord bot (blank = keep the stored one).
     discord_token: String,
+    /// A newly typed Mapillary client token for street view (blank = keep the stored one).
+    mapillary_token: String,
     node_form: [String; 4],
     contact_form: [String; 3],
     /// (pairing URL, side, modules) of the satellite QR code.
@@ -125,6 +127,7 @@ impl Default for Hub {
             wa_token: String::new(),
             tunnel_token: String::new(),
             discord_token: String::new(),
+            mapillary_token: String::new(),
             node_form: Default::default(),
             contact_form: Default::default(),
             qr: None,
@@ -467,6 +470,16 @@ impl Hub {
         }
         // The account reconnects with the new token or settings.
         crate::discord_bot::kick();
+        // Street view's Mapillary token: sealed in the vault too (never asked for in chat).
+        if !self.mapillary_token.trim().is_empty() {
+            match crate::street_view::clean_token(&self.mapillary_token) {
+                Some(token) => match app.tools().pim.config().vault().set_secret(crate::street_view::VAULT_SERVICE, crate::vault::TOKEN, &token) {
+                    Ok(()) => self.mapillary_token.clear(),
+                    Err(e) => note = format!("Saved, but the Mapillary token could not be stored: {e}"),
+                },
+                None => note = "Saved, but that is not a Mapillary client token: copy the one starting with MLY| from your app at mapillary.com/dashboard/developers.".to_string(),
+            }
+        }
         if !self.wa_token.trim().is_empty() {
             match app.tools().pim.config().vault().set_secret(crate::whatsapp_client::VAULT_SERVICE, crate::vault::TOKEN, self.wa_token.trim()) {
                 Ok(()) => self.wa_token.clear(),
@@ -552,6 +565,21 @@ impl Hub {
         // ---- Jarvis's own Discord account and Away Mode -------------------------------------
         let bot_stored = tools.pim.config().vault().has_secret(crate::discord_bot::VAULT_SERVICE, crate::vault::TOKEN);
         account_and_away(ui, p, &mut q.discord_bot, &mut q.away, &mut self.discord_token, bot_stored, &self.results);
+
+        // ---- Street view (Mapillary, optional) ------------------------------------------
+        section(ui, "Street view (Mapillary, optional)");
+        let mapillary_stored = tools.pim.config().vault().has_secret(crate::street_view::VAULT_SERVICE, crate::vault::TOKEN);
+        egui::Grid::new("hub_mapillary").num_columns(2).spacing([12.0, 7.0]).show(ui, |ui| {
+            ui.label("Client token");
+            secret_field(ui, &mut self.mapillary_token, mapillary_stored);
+            ui.end_row();
+        });
+        if mapillary_stored && ui.small_button("Forget the Mapillary token").on_hover_text("Street view then uses Panoramax and KartaView only").clicked() {
+            tools.pim.config().vault().clear_secret(crate::street_view::VAULT_SERVICE, crate::vault::TOKEN);
+        }
+        muted(ui, p, "Without a token street view uses Panoramax and KartaView (open, no account). With a free Mapillary client token (MLY|…, from mapillary.com/dashboard/developers) Mapillary's photos come first. Stored encrypted, never in the settings file.");
+        // ---- Sketchfab (the 3D studio's full models) ----------------------------------------
+        super::model3d_view::sketchfab_section(ui, p, tools.pim.config().vault(), rt);
 
         // ---- The mobile satellite -------------------------------------------------------
         section(ui, "Mobile satellite (phone / iPad with live GPS)");

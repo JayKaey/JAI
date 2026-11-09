@@ -407,6 +407,9 @@ pub fn show(ctx: &egui::Context, style: CardStyle, dt: f32) -> Vec<PopupAction> 
     // right corner is on none of them.)
     let screen = crate::gui::home_screen(ctx);
     let width = 340.0_f32.min(screen.width() - 32.0).max(180.0);
+    // The column keeps off the text console: a card over its input line took the clicks and
+    // the keys' focus meant for the line ("the text field sometimes refuses my input").
+    let right = card_column_right(screen, width, crate::gui::console_rect());
     let mut bottom = screen.bottom() - 18.0;
     let mut dismiss = Vec::new();
     let mut pins = Vec::new();
@@ -414,9 +417,14 @@ pub fn show(ctx: &egui::Context, style: CardStyle, dt: f32) -> Vec<PopupAction> 
         let (scale, alpha, dy) = p.transform();
         let height = p.rect.map(|r| r.height()).unwrap_or(if p.collapsed { 36.0 } else { 120.0 });
         let top = bottom - height;
-        let at = pos2(screen.right() - width - 18.0, top);
+        // (On whole pixels: a card between two would draw its text and border soft.)
+        let ppp = ctx.pixels_per_point();
+        let at = pos2(((right - width) * ppp).round() / ppp, (top * ppp).round() / ppp);
         let area_id = Id::new(("jarvis_popup", p.id));
-        let response = egui::Area::new(area_id).order(Order::Foreground).fixed_pos(at).interactable(true).show(ctx, |ui| {
+        // A card on its way out, or still faint on its way in, takes no clicks: what is under it
+        // (a block, the console's line) keeps them.
+        let solid = !p.dismissing && alpha > 0.5;
+        let response = egui::Area::new(area_id).order(Order::Foreground).fixed_pos(at).interactable(solid).show(ctx, |ui| {
             ui.set_width(width);
             ui.multiply_opacity(alpha);
             let hovered_border = if p.pinned { style.accent } else { style.border };
@@ -431,14 +439,20 @@ pub fn show(ctx: &egui::Context, style: CardStyle, dt: f32) -> Vec<PopupAction> 
                 });
         });
         let rect = response.response.rect;
-        p.hovered = ctx.pointer_hover_pos().is_some_and(|pos| rect.contains(pos));
+        p.hovered = solid && ctx.pointer_hover_pos().is_some_and(|pos| rect.contains(pos));
         if p.hovered && !p.pinned {
             // Hovering a card holds it (and lights its edge).
-            ctx.layer_painter(egui::LayerId::new(Order::Foreground, area_id)).rect_stroke(rect, Rounding::same(style.rounding), Stroke::new(1.0_f32, style.accent.gamma_multiply(0.7)));
+            ctx.layer_painter(egui::LayerId::new(Order::Foreground, area_id)).rect_stroke(rect.shrink(0.5), Rounding::same(style.rounding), Stroke::new(1.0_f32, style.accent.gamma_multiply(0.7)));
         }
         p.rect = Some(rect);
-        let center = rect.center();
-        let transform = TSTransform::new(vec2(center.x * (1.0 - scale), center.y * (1.0 - scale) + dy), scale);
+        // At rest exactly where it stands (a scale a hair off 1 blurs every letter); on its way
+        // in or out it grows from, and shrinks to, a little below its place.
+        let transform = if p.anim.settled() || ((scale - 1.0).abs() < 1e-3 && dy.abs() < 0.05) || !crate::gui::motion_enabled() {
+            TSTransform::IDENTITY
+        } else {
+            let center = rect.center();
+            TSTransform::new(vec2(center.x * (1.0 - scale), center.y * (1.0 - scale) + dy), scale)
+        };
         ctx.set_transform_layer(egui::LayerId::new(Order::Foreground, area_id), transform);
         bottom = top - 10.0;
     }
@@ -452,6 +466,16 @@ pub fn show(ctx: &egui::Context, style: CardStyle, dt: f32) -> Vec<PopupAction> 
         ctx.request_repaint();
     }
     actions
+}
+
+/// The right edge of the cards' column on `screen`: its bottom-right corner, or left of the text
+/// console when the console stands there (as far left as the screen allows).
+pub fn card_column_right(screen: Rect, width: f32, console: Option<Rect>) -> f32 {
+    let right = screen.right() - 18.0;
+    match console.filter(|c| c.left() < right && c.right() > right - width && c.bottom() > screen.top()) {
+        Some(c) => (c.left() - 18.0).max(screen.left() + 16.0 + width),
+        None => right,
+    }
 }
 
 fn card_body(ui: &mut egui::Ui, p: &mut DynamicHudPopup, style: &CardStyle, actions: &mut Vec<PopupAction>, dismiss: &mut Vec<u64>, pins: &mut Vec<(u64, bool)>) {
@@ -585,6 +609,22 @@ mod tests {
             m.step(1.0 / 60.0);
             t += 1.0 / 60.0;
         }
+    }
+
+    /// The cards' column never stands on the text console (its input line lies under the
+    /// column's bottom-right corner).
+    #[test]
+    fn cards_keep_off_the_text_console() {
+        let screen = Rect::from_min_size(pos2(0.0, 0.0), vec2(1920.0, 1080.0));
+        assert_eq!(card_column_right(screen, 340.0, None), 1902.0);
+        let console = Rect::from_min_max(pos2(1480.0, 60.0), pos2(1920.0, 1020.0));
+        let right = card_column_right(screen, 340.0, Some(console));
+        assert!(right <= console.left() - 18.0 + 1e-3 && right - 340.0 >= 16.0, "{right}");
+        // A console elsewhere leaves the corner alone.
+        assert_eq!(card_column_right(screen, 340.0, Some(Rect::from_min_size(pos2(40.0, 60.0), vec2(400.0, 900.0)))), 1902.0);
+        // A screen too narrow for both: as far left as it goes, never off it.
+        let narrow = Rect::from_min_size(pos2(0.0, 0.0), vec2(600.0, 800.0));
+        assert_eq!(card_column_right(narrow, 340.0, Some(Rect::from_min_max(pos2(160.0, 0.0), pos2(600.0, 800.0)))), 356.0);
     }
 
     #[test]

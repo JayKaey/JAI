@@ -15,8 +15,8 @@
 //!   must not send a message or shut the PC down).
 //! * **The HUD** (only while its window is up): a window opens as an in-app block and closes by
 //!   name with its fade; the emblem moves and comes back; the theme changes and comes back; a
-//!   test report's pages turn by voice command and the board closes; Ultron Mode and the privacy
-//!   lock go on and off; the frame time is read.
+//!   test report's pages turn by voice command and the board closes; the privacy lock goes on
+//!   and off; the frame time is read.
 //!
 //! A probe passes when the real result is right *and* it stayed inside its budget (`SLOW`
 //! otherwise). A probe that cannot run here (no HUD, an integration Sir has not set up) is
@@ -70,7 +70,7 @@ pub(crate) const AGAIN_AFTER: Duration = Duration::from_millis(40);
 #[derive(Debug, Clone, PartialEq)]
 pub struct Recorded {
     /// "tool" (a call the fast path made), "route" (a read the model would phrase), "answer"
-    /// (an instant answer), "model", "mode" or "privacy".
+    /// (an instant answer), "model" or "privacy".
     pub kind: &'static str,
     pub tool: String,
     pub args: Value,
@@ -370,7 +370,7 @@ async fn wait_until(limit: Duration, mut done: impl FnMut() -> bool) -> Option<f
 // ----------------------------------------------------------------------- the routes ----
 
 /// A sentence and what it must reach: a tool with (at least) these arguments, or one of
-/// "language_model", "time", "date", "ultron_mode", "listening_lock".
+/// "language_model", "time", "date", "answer", "listening_lock".
 struct Route {
     say: &'static str,
     tool: &'static str,
@@ -384,11 +384,6 @@ const fn r(say: &'static str, tool: &'static str, args: &'static str) -> Route {
 /// The routing matrix: Jarvis' own controls first (the bugs of Sir's screenshots among them),
 /// then every family of deterministic commands, then requests that must reach the model.
 const ROUTES: &[Route] = &[
-    // Ultron ⇄ Jarvis: stage 1, never music.
-    r("Jarvis, switch to Ultron.", "ultron_mode", r#"{"on": true}"#),
-    r("Change back to Jarvis.", "ultron_mode", r#"{"on": false}"#),
-    r("Ultron switch back to Jarvis.", "ultron_mode", r#"{"on": false}"#),
-    r("Zurück zu Jarvis", "ultron_mode", r#"{"on": false}"#),
     // The privacy lock.
     r("Please stop listening for five minutes.", "listening_lock", "{}"),
     // The emblem.
@@ -436,12 +431,25 @@ const ROUTES: &[Route] = &[
     r("List your features.", "list_jarvis_features", "{}"),
     r("System status.", "get_system_status", "{}"),
     r("Research the state of VR.", "hud_board", r#"{"action": "research"}"#),
+    // Pictures, live cameras, street view (dry: nothing is fetched).
+    r("Show me a picture of the Eiffel Tower.", "show_image", r#"{"query": "the eiffel tower"}"#),
+    r("Show me a live camera from New York.", "show_live_camera", r#"{"place": "new york"}"#),
+    r("Show me street view of the Eiffel Tower.", "show_street_view", r#"{"place": "the eiffel tower"}"#),
+    // The 3D studio (decided only: a dry run builds nothing).
+    r("Render me an Iron Man suit in 3D.", "show_3d_model", r#"{"query": "iron man suit"}"#),
+    r("Zeig mir den Mars in 3D.", "show_3d_model", r#"{"query": "mars"}"#),
     // School, calendar, mail: read first, phrased afterwards.
     r("What classes do I have tomorrow?", "check_school_schedule", "{}"),
     r("What's on my calendar today?", "get_calendar_schedule", "{}"),
     r("Do I have any new emails?", "check_unread_emails", "{}"),
     // The Discord bridge.
     r("Turn on the Discord call.", "discord_call", r#"{"action": "listen"}"#),
+    // live layers (C1): satellites, passes, trains, traffic, rain.
+    r("When can I see the ISS?", "open_jarvis_view", r#"{"view": "live", "action": "passes", "satellite": "ISS"}"#),
+    r("Show me all satellites.", "open_jarvis_view", r#"{"view": "earth", "action": "show_satellites", "group": "active"}"#),
+    r("When's my next train?", "open_jarvis_view", r#"{"view": "departures"}"#),
+    r("How's the traffic on the A8?", "open_jarvis_view", r#"{"view": "live", "action": "traffic", "road": "A8"}"#),
+    r("Will it rain in the next hour?", "open_jarvis_view", r#"{"view": "live", "action": "rain_soon"}"#),
     // Instant answers.
     r("What time is it?", "time", "{}"),
     r("What's 17 times 23?", "answer", "{}"),
@@ -574,6 +582,8 @@ pub(crate) const LIVE_TOOLS: &[(&str, &str, Reach, &str)] = &[
     ("configure_productivity_service", r#"{"service_name": "all", "action": "status"}"#, Reach::Local, ""),
     ("manage_schedule_watcher", r#"{"service_name": "list"}"#, Reach::Local, ""),
     ("get_remote_pc_status", "{}", Reach::Local, ""),
+    // (Measure only reads: it opens nothing on Sir's board.)
+    ("show_3d_model", r#"{"action": "measure"}"#, Reach::Local, ""),
     ("top_processes", r#"{"limit": 5}"#, Reach::Network, ""),
     ("network_status", "{}", Reach::Network, ""),
     ("web_search", r#"{"query": "Stark Industries arc reactor"}"#, Reach::Network, ""),
@@ -905,7 +915,7 @@ async fn pipeline_probes(app: &Jarvis) {
     // What Whisper wrote on 2026-11-03, and what Sir had said.
     timed("pipeline", "misheard commands are recognised by their sound", REFLEX_BUDGET_MS, || {
         let idle = ReflexContext::default();
-        let cases = [("Fight the core.", Some("hide your core")), ("disabled the car.", Some("hide your core")), ("Which do old run?", Some("switch to Ultron")), ("10 discord call on.", Some("turn on the discord call")), ("next week", None), ("I hate this game", None)];
+        let cases = [("Fight the core.", Some("hide your core")), ("disabled the car.", Some("hide your core")), ("10 discord call on.", Some("turn on the discord call")), ("next week", None), ("I hate this game", None)];
         match cases.iter().find(|(heard, said)| intent_engine::phonetic_rescue(heard, &idle) != *said) {
             None => Ok(format!("{} sentences read right", cases.len())),
             Some((heard, said)) => Err(format!("'{heard}' → {:?}, wanted {said:?}", intent_engine::phonetic_rescue(heard, &idle))),
@@ -917,24 +927,18 @@ async fn pipeline_probes(app: &Jarvis) {
         if said.to_lowercase().contains("lyve telemetry") && said.contains("I live in") { Ok(said) } else { Err(said) }
     });
 
-    // Both voices have their reference clip and its profile.
+    // The voice has its reference clip and its profile.
     timed("pipeline", "voice: the Jarvis reference clip and its calibrated profile", LOCAL_BUDGET_MS, || {
         let clip = crate::voice_reference::reference_path().ok_or("no Jarvis reference clip in assets/")?;
         let profile = crate::fish_zero_shot_tts::load_profile(&clip, Path::new(crate::fish_zero_shot_tts::PROFILE_PATH))?;
         let blend = profile.blend.clone().ok_or("the Jarvis voice is not calibrated yet (run --voice-calibrate)")?;
         Ok(format!("{}: {blend}, F0 {:.1} Hz", clip.display(), profile.f0.median_hz))
     });
-    timed("pipeline", "voice: the Ultron reference clip and its profile", LOCAL_BUDGET_MS, || {
-        let clip = crate::ultron_mode::reference_path().ok_or("no Ultron reference clip in assets/")?;
-        let profile = crate::ultron_mode::reference_profile()?;
-        let voice = profile.blend.clone().ok_or("the Ultron voice is not calibrated yet (run --voice-calibrate)")?;
-        Ok(format!("{}: {voice}, F0 {:.1} Hz, formants ×{}", clip.display(), profile.f0.median_hz, crate::ultron_mode::FORMANT_RATIO))
-    });
 
-    // Both voices closed loop: a sentence through the whole chain, measured against the clip
+    // The voice closed loop: a sentence through the whole chain, measured against the clip
     // (silent, on the CPU whatever the speech engine uses, so a game keeps the GPU).
     type Verify = fn(&crate::config::JarvisConfig) -> Result<crate::fish_zero_shot_tts::Verification, String>;
-    let voices: [(&str, Verify); 2] = [("voice: Jarvis measured against his clip (closed loop)", crate::fish_zero_shot_tts::verify), ("voice: Ultron measured against his clip (closed loop)", crate::ultron_mode::verify)];
+    let voices: [(&str, Verify); 1] = [("voice: Jarvis measured against his clip (closed loop)", crate::fish_zero_shot_tts::verify)];
     for (id, verify) in voices {
         let mut cfg = tools.config.read(|c| c.clone());
         cfg.tts_gpu = false;
@@ -1152,13 +1156,6 @@ async fn hud_probes(app: &Jarvis) {
         }
     }
 
-    // Ultron Mode: on, everything changes; off, everything is back.
-    let started = Instant::now();
-    match app.probe_ultron() {
-        Some(result) => judge("hud", "Ultron Mode goes on and comes back to Jarvis", LOCAL_BUDGET_MS, ms_since(started), result),
-        None => skip("hud", "Ultron Mode goes on and comes back to Jarvis", "Ultron Mode is on right now; not touched"),
-    }
-
     // The privacy lock: on, then off (untouched when Sir has it on).
     if crate::listening_lock::is_locked() {
         skip("hud", "the privacy lock locks and releases", "the lock is on right now; not touched");
@@ -1300,7 +1297,7 @@ mod tests {
         for route in ROUTES {
             let args: Value = serde_json::from_str(route.args).unwrap_or_else(|e| panic!("{}: {e}", route.say));
             assert!(args.is_object(), "{}", route.say);
-            let special = matches!(route.tool, "language_model" | "time" | "date" | "answer" | "ultron_mode" | "listening_lock");
+            let special = matches!(route.tool, "language_model" | "time" | "date" | "answer" | "listening_lock");
             assert!(special || defs.iter().any(|d| d["function"]["name"] == route.tool), "'{}' routes to no tool: {}", route.say, route.tool);
         }
         // Every registered tool is well-formed (what the wiring probe checks at run time).

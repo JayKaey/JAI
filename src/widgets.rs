@@ -1319,8 +1319,13 @@ impl WidgetEngine {
         if (spec.style.clone(), spec.always_on_top) != before {
             self.save_style(&spec);
         }
+        // A window without content is not opened (it used to fall back to system telemetry, so
+        // "open an image of the Earth" showed CPU and RAM).
         if spec.widgets.is_empty() && spec.blocks.is_empty() {
-            spec.blocks.push(WindowBlock { kind: BlockKind::Telemetry, title: "System".into(), body: String::new(), language: String::new() });
+            if separate {
+                crate::hud_dock::forget(&id);
+            }
+            return Err("Nothing was opened: a window needs content (markdown, text, code, a live view such as pc_stats, or widgets). For a picture call show_image, for a live camera show_live_camera, for street view show_street_view.".into());
         }
         let live = spec.live_kinds();
         let summary = format!(
@@ -1992,7 +1997,7 @@ pub fn tool_definitions() -> Vec<Value> {
     vec![
         json!({"type": "function", "function": {
             "name": "create_or_update_widget",
-            "description": "Create or change a live widget in your HUD's widgets panel (it persists). Types: MetricGauge/ProgressBar (value, min, max, unit; or source cpu|ram|gpu|gpu_temp|vram|disk:C for live data), LiveLineChart/Sparkline (series or a live source), CountdownOrStopwatch (mode countdown|stopwatch, duration_secs; alerts Sir when done), KeyValueList (items [{key,value}]), DataTable (columns, rows), MarkdownNoteCard (markdown), Checklist (items [{text,done}]), QuickActionButtons (buttons [{label, action: 'jarvis: <command>' | 'shell: <cmd>' | 'app: <name>' | 'url: <url>'}]), LiveCommandOutput (command, interval_secs). To update, pass the same id with only the fields to change, or push_value, add_items, check_item, start/pause/reset. You start every session with an empty panel: \"open that widget again next time you start\" → id (or \"last\") with keep_at_start true and nothing else.",
+            "description": "Create or change a live widget on your HUD's widget panel. Types: MetricGauge/ProgressBar (value, min, max, unit, or a live source), LiveLineChart/Sparkline (series or source), CountdownOrStopwatch (mode, duration_secs; alerts when done), KeyValueList (items [{key,value}]), DataTable (columns, rows), MarkdownNoteCard (markdown), Checklist (items [{text,done}]), QuickActionButtons (buttons [{label, action: 'jarvis: <command>' | 'shell: <cmd>' | 'app: <name>' | 'url: <url>'}]), LiveCommandOutput (command, interval_secs). Update: same id with only the changes, or push_value, add_items, check_item, start/pause/reset. \"Open that widget again next time you start\" → id (or \"last\") with keep_at_start true only.",
             "parameters": {"type": "object", "properties": {
                 "id": {"type": "string", "description": "snake_case id; reuse it to update"},
                 "type": {"type": "string", "enum": ["MetricGauge", "ProgressBar", "LiveLineChart", "Sparkline", "CountdownOrStopwatch", "KeyValueList", "DataTable", "MarkdownNoteCard", "Checklist", "QuickActionButtons", "LiveCommandOutput"]},
@@ -2020,7 +2025,7 @@ pub fn tool_definitions() -> Vec<Value> {
         }}),
         json!({"type": "function", "function": {
             "name": "spawn_native_window",
-            "description": "Open a real native J.A.R.V.I.S. window. ALWAYS call it when Sir asks for a (new/second/separate) window — never just say you did. live = data refreshed every second: pc_stats (CPU per core, RAM, swap, GPU load/temperature/VRAM), drive_space (every drive's free and used space), processes (top CPU/memory programs), network (traffic). Or text, markdown, code and/or widgets. Optional size, monitor (1, 2, left, right, primary), always-on-top. \"Bring back my windows\" / \"reopen what I had open\" (also after a restart) → restore \"recent\" and nothing else.",
+            "description": "Open a real native J.A.R.V.I.S. window. ALWAYS call it when Sir asks for a (new/second/separate) window — never just say you did. live (refreshed every second): pc_stats (CPU, RAM, GPU, VRAM), drive_space, processes, network. Or text, markdown, code and/or widgets; optional size, monitor, always-on-top. \"Bring back my windows\" / \"reopen what I had open\" → restore \"recent\" only.",
             "parameters": {"type": "object", "properties": {
                 "restore": {"type": "string", "enum": ["recent"], "description": "Reopen every window and widget that was open last"},
                 "live": {"type": "string", "enum": ["pc_stats", "drive_space", "processes", "network"], "description": "Live data view"},
@@ -2032,7 +2037,7 @@ pub fn tool_definitions() -> Vec<Value> {
                 "resizable": {"type": "boolean"},
                 "opacity": {"type": "number", "description": "Background opacity 0.2-1.0"},
                 "borderless": {"type": "boolean"},
-                "theme": {"type": "string", "description": "Theme preset for this window (stark, mark42, ultron, stealth, emerald …) or 'hud'"},
+                "theme": {"type": "string", "description": "Theme preset for this window (stark, mark42, stealth, emerald …) or 'hud'"},
                 "font_scale": {"type": "number", "description": "Text size 0.8-1.6"},
                 "markdown": {"type": "string"}, "text": {"type": "string"},
                 "code": {"type": "string"}, "language": {"type": "string"},
@@ -2227,6 +2232,18 @@ mod tests {
         assert!(e.windows().is_empty());
         assert!(e.widget("gpu_temp").is_none(), "window-only widgets close with their window");
         assert!(e.close_window("last").is_err());
+    }
+
+    #[test]
+    fn a_window_without_content_is_not_opened() {
+        // The LLM once answered "open an image of the Earth" with this: it showed CPU and RAM.
+        let e = WidgetEngine::in_memory();
+        let err = e.spawn_window(&json!({"telemetry": false, "title": "Earth Image"})).unwrap_err();
+        assert!(err.contains("show_image"), "{err}");
+        assert!(e.windows().is_empty());
+        // Telemetry still opens when it is asked for.
+        e.spawn_window(&json!({"telemetry": true, "title": "System"})).unwrap();
+        assert_eq!(e.windows()[0].blocks[0].kind, BlockKind::Telemetry);
     }
 
     #[test]

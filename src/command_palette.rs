@@ -25,6 +25,15 @@ pub const VOCABULARY: &[&str] = &[
     "pin the chart",
     "export the chart as JSON",
     "close the feature lab",
+    // His own views moved and sized.
+    "move it to the middle",
+    "full screen the Earth",
+    "put the earth on the left half",
+    "move the radar to my second monitor",
+    "put them side by side",
+    "exit full screen",
+    "minimise it",
+    "restore it",
     // The look.
     "set theme to Arc Cyan",
     "set theme to Stark Gold",
@@ -36,9 +45,7 @@ pub const VOCABULARY: &[&str] = &[
     "open the text console",
     "turn off the sound cues",
     "use all monitors",
-    // Modes and privacy.
-    "switch to Ultron",
-    "switch back to Jarvis",
+    // Privacy.
     "stop listening",
     "stop listening for 5 minutes",
     "you can listen again",
@@ -80,6 +87,10 @@ pub const VOCABULARY: &[&str] = &[
     "diagnose my network",
     "open the feature lab",
     "what can you do",
+    // The 3D studio.
+    "render me an Iron Man suit in 3D",
+    "show me a 3D model of the Earth",
+    "open the 3D studio",
     // Deutsch.
     "mach das Theme blau",
     "nächste Seite",
@@ -91,7 +102,6 @@ pub const VOCABULARY: &[&str] = &[
     "wie sind meine Temperaturen",
     "zeig meinen Zwischenablage-Verlauf",
     "hör nicht mehr zu",
-    "wechsel zurück zu Jarvis",
 ];
 
 /// Lower-case words of a line (letters, digits and apostrophes).
@@ -166,7 +176,7 @@ mod tests {
         // The vocabulary's copy of his own request is not offered twice.
         assert_eq!(complete("open my web", &mine, 4), ["open my WebUntis schedule"]);
         // Word prefixes in order: abbreviations work.
-        assert_eq!(complete("sw ba", &[], 2), ["switch back to Jarvis"]);
+        assert_eq!(complete("tu so cu", &[], 2), ["turn off the sound cues"]);
         assert_eq!(complete("mo orb top", &[], 1), ["move your orb to the top right"]);
         // German completes too.
         assert_eq!(complete("näch", &[], 1), ["nächste Seite"]);

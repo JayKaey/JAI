@@ -251,16 +251,24 @@ pub fn stays_inside(name: &str, args: &Value) -> bool {
     let action = args["action"].as_str().unwrap_or("");
     match name {
         "configure_interface" | "control_jarvis_interface" | "control_gui_aspect" | "customize_hud_and_windows" | "control_orb_mode" | "spawn_native_window" | "update_native_window"
-        | "close_native_window" | "close_all_secondary_windows" | "create_or_update_widget" | "remove_widget" | "hud_board" | "open_jarvis_view" | "control_popups" | "ultron_mode"
+        | "close_native_window" | "close_all_secondary_windows" | "create_or_update_widget" | "remove_widget" | "hud_board" | "open_jarvis_view" | "control_popups"
         | "set_response_modality" | "set_listening_mode" | "listening_lock" | "control_audio_mixer" | "thermal_advisor" | "undo_last_action" | "lookup_formula" | "chemistry_helper" => true,
+        // His own views moved and sized (with "it" an app, it hands over to the window tools,
+        // which a silent session stops in their turn).
+        "arrange_jarvis_window" => true,
         // The volume (on the copy) and his own voice, never the media keys.
         "media_and_volume_control" => matches!(action, "set_volume" | "volume" | "volume_up" | "volume_down" | "mute" | "unmute" | "get_volume") || action.starts_with("jarvis_") || action.contains("jarvis"),
         // His own guide (the phone link itself would restart the tunnel).
         "show_mobile_satellite_instructions" => args["topic"] == "permanent_address",
         // "Get rid of it" says so when there is nothing of his; it never reaches a program.
         "close_application" => bool_arg(args, "own_only") == Some(true),
+        // Pictures, live cameras and street view are his blocks; saving writes into Pictures.
+        "show_live_camera" | "show_street_view" => true,
+        "show_image" => action != "save",
         // Himself to another monitor, nobody else's window.
         "move_window_to_monitor" => args["app_or_window_name"].as_str().is_some_and(|n| names_jarvis(n) || matches!(n.to_lowercase().as_str(), "hud" | "the hud" | "your hud" | "your window" | "your interface")),
+        // The 3D studio is his own block; saving a model writes a file of Sir's.
+        "show_3d_model" => action != "export",
         _ => false,
     }
 }
@@ -325,6 +333,30 @@ pub(crate) fn names_jarvis(app: &str) -> bool {
             | "your process" | "your window" | "assistant" | "jarvis assistant" | "dich" | "dich selbst" | "urself" | "ur self"
             | "your self" | "yourselfe" | "yo self" | "self"
     )
+}
+
+/// A `close_application` call that names no program: only fillers ("up", "off", "Earth, you"
+/// without the Earth) close something of his that is up, never the program Sir works in; one of
+/// his own views by name ("earth you") closes as his own. None: the call stands as it is.
+fn own_close(name: &str, args: &Value) -> Option<(&'static str, Value)> {
+    if name != "close_application" {
+        return None;
+    }
+    let raw = str_arg(args, &["app_name", "name", "app", "application"])?;
+    if focus::is_pronoun(raw) || names_jarvis(raw) {
+        return None;
+    }
+    let lower: String = raw.to_lowercase().chars().map(|c| if c.is_alphanumeric() || c == ' ' { c } else { ' ' }).collect();
+    let cleaned = crate::intent_engine::strip_close_fillers(&lower);
+    let cleaned = cleaned.trim().trim_start_matches("the ").trim_start_matches("my ").trim();
+    if cleaned.is_empty() {
+        warn!("[TOOL] close_application '{raw}' names no program: something of his, if anything");
+        return Some(("close_application", json!({ "app_name": "it", "force": true, "own_only": true })));
+    }
+    if crate::intent_engine::is_own_view(cleaned) {
+        return Some(("hud_board", json!({ "action": "close", "target": crate::intent_engine::own_view_name(cleaned) })));
+    }
+    None
 }
 
 /// The first '…'-quoted part of a tool result ("Opened native window 'window_2' …" → window_2).
@@ -394,6 +426,12 @@ pub fn definitions_with(skills: Vec<Value>) -> Vec<Value> {
     tools.extend(crate::shadow_memory::definitions());
     tools.extend(crate::aegis_server_deck::definitions());
     tools.extend(crate::llm_reboot::definitions());
+    tools.extend(crate::window_commands::definitions());
+    // Pictures, live public cameras and street view.
+    tools.extend(crate::image_viewer::definitions());
+    tools.extend(crate::webcams::definitions());
+    tools.extend(crate::street_view::definitions());
+    tools.extend(crate::model3d::definitions());
     tools
 }
 
@@ -478,6 +516,12 @@ impl ToolContext {
         if let Some(recorded) = crate::live_self_tester::intercept(name, &args) {
             return recorded;
         }
+        // "Close up", "close the Earth, you": a filler names no program (only something of his),
+        // and a view of his own closes as his own — whichever parser or model made the call.
+        let (name, args) = match own_close(name, &args) {
+            Some((tool, call)) => (tool, call),
+            None => (name, args),
+        };
         // "Close it" right after something of his own was opened or changed means that, not the
         // application Sir happens to be working in (2026-11-06: "open a window with my drive
         // space", "make it smaller", "close it" closed the program in front; the Theme Studio, a
@@ -485,8 +529,18 @@ impl ToolContext {
         let own_thing = (name == "close_application" && str_arg(&args, &["app_name", "name", "app", "application"]).is_some_and(focus::is_pronoun))
             .then(|| self.own_thing_to_close())
             .flatten();
-        let (name, mut args) = match own_thing {
+        let (name, args) = match own_thing {
             Some((tool, call)) => (tool, call),
+            None => (name, args),
+        };
+        // "Make it full screen", "minimise it", "move it to the left" right after one of his own
+        // views was opened, moved or arranged mean that view, not the app in front; "exit full
+        // screen" means the view of his filling a screen (`window_commands::redirect`).
+        let (name, mut args) = match crate::window_commands::redirect_for(self, name, &args) {
+            Some(call) => {
+                info!("[TOOL] {name} {args} → arrange_jarvis_window {call} (it is a view of his)");
+                ("arrange_jarvis_window", call)
+            }
             None => (name, args),
         };
         // A silent scripted session acts inside Jarvis only.
@@ -532,6 +586,7 @@ impl ToolContext {
             name if crate::dynamic_popups::is_tool(name) => crate::dynamic_popups::run_tool(name, &args),
             name if crate::tool_forge::is_tool(name) => Box::pin(crate::tool_forge::run_tool(self, name, &args)).await,
             name if crate::hud_board::is_tool(name) => crate::hud_board::run_tool(self, &args).await,
+            name if crate::window_commands::is_tool(name) => Box::pin(crate::window_commands::run_tool(self, &args)).await,
             name if crate::venue_guide::is_tool(name) => Box::pin(crate::venue_guide::run_tool(self, &args)).await,
             name if crate::discord_bridge::is_tool(name) => Box::pin(crate::discord_bridge::run_tool(self, &args)).await,
             name if crate::discord_bot::is_tool(name) => Box::pin(crate::discord_bot::run_tool(self, &args)).await,
@@ -540,15 +595,22 @@ impl ToolContext {
             name if crate::shadow_memory::is_tool(name) => Box::pin(crate::shadow_memory::run_tool(self, &args)).await,
             name if crate::aegis_server_deck::is_tool(name) => Box::pin(crate::aegis_server_deck::run_tool(self, &args)).await,
             name if crate::llm_reboot::is_tool(name) => crate::llm_reboot::run_tool().await,
+            name if crate::image_viewer::is_tool(name) => Box::pin(crate::image_viewer::run_tool(self, &args)).await,
+            name if crate::webcams::is_tool(name) => Box::pin(crate::webcams::run_tool(self, &args)).await,
+            name if crate::street_view::is_tool(name) => Box::pin(crate::street_view::run_tool(self, &args)).await,
+            name if crate::model3d::is_tool(name) => Box::pin(crate::model3d::run_tool(self, &args)).await,
             "remember_fact" => match (str_arg(&args, &["key", "name"]), str_arg(&args, &["value", "fact"])) {
                 (key, Some(value)) => self
                     .memory
                     .remember_fact(key.unwrap_or(""), value, str_arg(&args, &["category"]), int_arg(&args, "importance").map(|i| i as i32))
                     .map(|o| {
                         memories_changed = true;
-                        match o.previous_value {
-                            Some(prev) => format!("Updated memory '{}' (was: \"{prev}\"): {}", o.entry.key, o.entry.value),
-                            None => format!("Stored memory '{}' [{}]: {}", o.entry.key, o.entry.category, o.entry.value),
+                        // (What it was, with its kind, is what "undo that" puts back: `undo::way_back`.)
+                        match (o.previous_value, o.previous_kind) {
+                            (Some(prev), Some((category, importance))) => format!("Updated memory '{}' (was: \"{prev}\" [{category}, {importance}]): {}", o.entry.key, o.entry.value),
+                            (Some(prev), None) => format!("Updated memory '{}' (was: \"{prev}\"): {}", o.entry.key, o.entry.value),
+                            _ if o.existed => format!("Kept memory '{}' [{}]: {}", o.entry.key, o.entry.category, o.entry.value),
+                            _ => format!("Stored memory '{}' [{}]: {}", o.entry.key, o.entry.category, o.entry.value),
                         }
                     })
                     .map_err(|e| e.to_string()),
@@ -664,7 +726,15 @@ impl ToolContext {
                 Some(app) if focus::is_pronoun(app) && bool_arg(&args, "own_only") == Some(true) => Err("There is nothing of mine up to take away.".into()),
                 // "Close it": the app (or the website's tab) the conversation is about.
                 Some(app) if focus::is_pronoun(app) => self.close_focused(false).await,
-                Some(app) => apps::close(app, bool_arg(&args, "force").unwrap_or(true)).await.inspect(|_| self.focus.forget_app(app)),
+                Some(app) => match apps::close(app, bool_arg(&args, "force").unwrap_or(true)).await {
+                    Ok(out) => {
+                        self.focus.forget_app(app);
+                        Ok(out)
+                    }
+                    // No program by that name: a block or window of his own by that title is
+                    // what Sir meant ("close the feature lab", a title read off the HUD).
+                    Err(e) => self.close_own_named(app).ok_or(e),
+                },
                 None => Err("close_application needs 'app_name'.".into()),
             },
             "shutdown_jarvis" => {
@@ -722,7 +792,7 @@ impl ToolContext {
                     None => Err(format!("Unknown response mode '{mode}' (mirror_input, always_speak, text_only, custom_condition).")),
                 }
             }
-            "undo_last_action" => self.undo_last().await,
+            "undo_last_action" => self.undo_last(int_arg(&args, "within_s").filter(|s| *s > 0).map(|s| Duration::from_secs(s as u64))).await,
             "recent_actions" => Ok(match str_arg(&args, &["about"]).filter(|about| !about.trim().is_empty()) {
                 Some(about) => crate::undo::report_about(about),
                 None => crate::undo::report_done(),
@@ -740,6 +810,10 @@ impl ToolContext {
             "create_or_update_widget" => self.widgets.create_or_update(&args).inspect(|_| gui::refresh()),
             "remove_widget" => self.widgets.remove_tool(&args).inspect(|_| gui::refresh()),
             "spawn_native_window" => {
+                // A content-less "Earth Image" / "Webcam" window: the picture, camera or street view.
+                if let Some((tool, routed)) = crate::image_viewer::reroute_window(&args) {
+                    return Box::pin(self.execute(tool, &routed)).await;
+                }
                 if gui::windows_supported() {
                     self.widgets.spawn_window(&args).inspect(|out| {
                         self.focus.note_jarvis_window(quoted(out));
@@ -1010,6 +1084,33 @@ impl ToolContext {
                 }
             }
         }
+        // The Earth, the radar, the disk map: "close it" / "close up" means that panel now.
+        if name == "open_jarvis_view" {
+            let view = str_arg(args, &["view", "window_kind", "name", "target"]).and_then(crate::jarvis_views::JarvisSubWindow::parse);
+            if let Some(id) = view.map(|v| v.id()).filter(|id| crate::jarvis_views::is_panel(id)) {
+                self.focus.note_own_thing(OwnThing::Panel(id.to_string()));
+            }
+        }
+    }
+
+    /// A block, panel or window of his own called `name`, closed; what closed (None: nothing of
+    /// his is called that).
+    fn close_own_named(&self, name: &str) -> Option<String> {
+        let name = crate::intent_engine::own_view_name(&crate::intent_engine::strip_close_fillers(&name.to_lowercase()));
+        if name.trim().len() < 3 {
+            return None;
+        }
+        let mut closed = crate::hud_dock::close_named(&name);
+        if closed.is_empty() {
+            closed.extend(crate::jarvis_views::close_panel(&name).map(str::to_string));
+        }
+        if closed.is_empty() {
+            if let Ok(out) = self.widgets.close_window(&name) {
+                self.focus.forget_jarvis_window(&name);
+                closed.push(out);
+            }
+        }
+        (!closed.is_empty()).then(|| format!("Closed: {}", closed.join(", ")))
     }
 
     /// The call that closes what "it" means, when that is something of his still up.
@@ -1017,6 +1118,9 @@ impl ToolContext {
         let thing = self.focus.own_thing_is_latest().and_then(|thing| match thing {
             OwnThing::View(key) => gui::view_is_up(&key).then(|| ("configure_interface", json!({ key: false }))),
             OwnThing::Widget(id) => self.widgets.widgets().iter().any(|w| w.id == id).then(|| ("remove_widget", json!({ "id": id }))),
+            // A panel opened within the last ten minutes and still up.
+            OwnThing::Panel(id) => (crate::jarvis_views::panel_is_open(&id) && self.focus.own_thing_age().is_some_and(|age| age < Duration::from_secs(10 * 60)))
+                .then(|| ("hud_board", json!({ "action": "close", "target": id.replace('_', " ") }))),
         });
         thing.or_else(|| {
             let id = self.focus.jarvis_window_is_latest().filter(|id| self.widgets.find_window_named(id).is_some())?;
@@ -1077,8 +1181,17 @@ impl ToolContext {
 
     /// "Undo that": the last change of his own, taken back (`undo`). With nothing noted, an
     /// edit of the file the conversation is about is still undone the old way.
-    async fn undo_last(&self) -> Result<String, String> {
-        let Some(step) = crate::undo::take() else {
+    /// `within`: only a change that recent ("that's not what I said" means the request just
+    /// misheard, never an older one; nor a file edit).
+    async fn undo_last(&self, within: Option<Duration>) -> Result<String, String> {
+        let step = match within {
+            Some(max) => crate::undo::take_within(max),
+            None => crate::undo::take(),
+        };
+        let Some(step) = step else {
+            if within.is_some() {
+                return Err("Nothing of mine to take back: nothing changed on that request.".to_string());
+            }
             if self.focus.last_file().is_some() {
                 let quietly = json!({ "preview": "none" });
                 return self.after_file_write(file_ops::undo_tool(&quietly, self.focus.last_file()).await, &quietly).map(|out| format!("Undone: that edit is undone. {out}"));
@@ -1868,7 +1981,7 @@ fn pc_tool_definitions() -> Vec<Value> {
         }}),
         json!({"type": "function", "function": {
             "name": "customize_hud_and_windows",
-            "description": "Restyle your main HUD (target \"hud\") or one of your extra windows (target = its id or title, \"last\" or \"all\"): theme (stark = Stark Cyan, mark42 = Iron Man Gold & Red, ultron = Ultron Crimson, stealth = Minimal Monochrome, emerald = Stealth Matrix, …) or custom #RRGGBB accent/background, opacity 0.2-1.0, borderless, always_on_top, font_scale 0.8-1.6; for the HUD also compact (Mini-HUD), layout and show_panels/hide_panels (system, memory, tools, widgets, reactor …).",
+            "description": "Restyle your main HUD (target \"hud\") or one of your extra windows (target = its id or title, \"last\" or \"all\"): theme (stark = Stark Cyan, mark42 = Iron Man Gold & Red, stealth = Minimal Monochrome, emerald = Stealth Matrix, …) or custom #RRGGBB accent/background, opacity 0.2-1.0, borderless, always_on_top, font_scale 0.8-1.6; for the HUD also compact (Mini-HUD), layout and show_panels/hide_panels (system, memory, tools, widgets, reactor …).",
             "parameters": {"type": "object", "properties": {
                 "target": {"type": "string"},
                 "theme": {"type": "string"},
@@ -2027,5 +2140,26 @@ mod tests {
         for name in ["spotify", "discord", "jarvis-notes", "your browser"] {
             assert!(!names_jarvis(name), "{name}");
         }
+    }
+
+    /// Repro (jarvis.log, 2026-11-08): close_application "earth you", "up" and "off" reached
+    /// Windows ("Earth You isn't running, Sir."). Whoever made the call (the parser or the
+    /// model), a filler is no program and his own view closes as his.
+    #[test]
+    fn a_close_call_naming_fillers_or_his_view_stays_inside_jarvis() {
+        let call = |app: &str| own_close("close_application", &json!({ "app_name": app, "force": true }));
+        assert_eq!(call("earth you"), Some(("hud_board", json!({"action": "close", "target": "earth"}))));
+        assert_eq!(call("Earth, you."), Some(("hud_board", json!({"action": "close", "target": "earth"}))));
+        assert_eq!(call("the world"), Some(("hud_board", json!({"action": "close", "target": "earth"}))));
+        assert_eq!(call("the radar please"), Some(("hud_board", json!({"action": "close", "target": "radar"}))));
+        let own = Some(("close_application", json!({"app_name": "it", "force": true, "own_only": true})));
+        for filler in ["up", "off", "Off.", "for me now"] {
+            assert_eq!(call(filler), own, "{filler}");
+        }
+        // Programs, pronouns and Jarvis himself stay as they were asked for.
+        for app in ["Spotify", "notepad++", "it", "that", "yourself", "you", "Jarvis"] {
+            assert_eq!(call(app), None, "{app}");
+        }
+        assert_eq!(own_close("open_application", &json!({"app_name": "up"})), None);
     }
 }
