@@ -2041,8 +2041,9 @@ impl Brain {
         st.last_tool = Some((outcome.tool.clone(), outcome.output.clone()));
         st.grounding.note_tool(&outcome.tool);
         // What Sir asks for at the same time on several days becomes a routine (the action
-        // only, never his words; a dry run leaves no trace).
-        if outcome.success && !crate::live_self_tester::dry() {
+        // only, never his words; a dry run leaves no trace, and a scripted test session is not
+        // Sir asking: on 2026-11-11 five of its actions stood in his routine log as his).
+        if outcome.success && !crate::live_self_tester::dry() && !crate::platform::in_test_session() {
             self.inner.tools.stark.features.bench.routines.note(&outcome.tool, &outcome.args, chrono::Local::now().naive_local());
         }
         if !outcome.success {
