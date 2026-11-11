@@ -95,6 +95,8 @@ mod music_lyrics;
 mod pc_audio;
 mod desktop_backdrop;
 mod startup_sequence;
+mod speaker_id;
+mod voice_setup;
 mod hud_style;
 mod hud_suggestions;
 mod hyper_cortex;
@@ -587,6 +589,12 @@ fn main() -> ExitCode {
         Started::Running(session) => session,
         Started::Done(code) => return code,
     };
+    // Whose voice it is: where the speaker model lives, and whether Sir's print is known.
+    {
+        let (models, db) = session.app.config().read(|c| (c.silero_vad_model_path.clone(), c.memory_db_path.clone()));
+        speaker_id::set_models_dir(std::path::Path::new(&models).parent().unwrap_or(std::path::Path::new("models")));
+        hud_feel::set_voice_known(speaker_id::known(&db).is_some());
+    }
     // How he powers up this time: by how long Sir has not spoken with him, and the hour. (A
     // scripted session, the self-test and a restart of his own come up without ceremony.)
     let boot = (cli.chat.is_empty() && !cli.live_test && !cli.restarted && !cli.silent).then(|| startup_sequence::plan(session.app.tools().memory.last_turn_at()));

@@ -5508,6 +5508,8 @@ impl HudApp {
         }
         // "What did I miss?": the notifications of the last hours.
         crate::hud_notify::show(ctx);
+        // "Learn my voice": the set-up's block.
+        crate::voice_setup::show(ctx);
         // The live subtitles' bar, while they are on.
         crate::live_subtitles::show(ctx, &self.app, &self.rt);
         // The live desktop background, on a monitor the board is not on.
@@ -7332,6 +7334,12 @@ pub(crate) fn text_block(ctx: &egui::Context, id: &str, title: &str, size: [f32;
         });
     })
     .close
+}
+
+/// A block of the board for a module outside the GUI (`body` draws its content). Returns
+/// whether it was closed.
+pub(crate) fn block(ctx: &egui::Context, id: &str, title: &str, size: [f32; 2], body: impl FnOnce(&mut Ui)) -> bool {
+    hud_block_window(ctx, id, title, size, body).close
 }
 
 /// The keyboard shortcut for the block under the pointer, if one was pressed this frame:

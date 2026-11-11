@@ -285,6 +285,9 @@ pub struct InterfaceSettings {
     /// The emblem, clock and state as the live desktop background of a monitor without the
     /// board.
     pub desktop_background: bool,
+    /// The voice lock: a spoken order is carried out only in Sir's own voice (after the voice
+    /// set-up; push-to-talk and the keyboard are his hands and always work).
+    pub voice_lock: bool,
     /// Name shown in the header.
     pub title: String,
     /// Minimal zen mode: no sidebars, widgets or pills — only the 3D orb and a clean chat.
@@ -365,6 +368,7 @@ impl Default for InterfaceSettings {
             music_visuals: true,
             mini_strip: false,
             desktop_background: false,
+            voice_lock: false,
             title: DEFAULT_TITLE.to_string(),
             // The clean two-zone studio layout: the orb and the conversation; every technical
             // panel lives in the Settings drawer.
@@ -1782,7 +1786,13 @@ pub fn configure(current: &InterfaceSettings, args: &Value) -> Result<Configured
         ("music visuals", bool_arg(args, "music_visuals"), &mut s.music_visuals),
         ("mini mode", bool_arg(args, "mini_strip"), &mut s.mini_strip),
         ("live desktop background", bool_arg(args, "desktop_background"), &mut s.desktop_background),
+        // (Only once his voice is known: there is nothing to lock to before the set-up.)
+        ("voice lock", bool_arg(args, "voice_lock").filter(|on| !*on || crate::hud_feel::voice_known()), &mut s.voice_lock),
     ];
+    // Asked for without a voice print: said so (`hud_feel::spoken`), and it counts as heard.
+    if bool_arg(args, "voice_lock") == Some(true) && !crate::hud_feel::voice_known() {
+        done.push("voice lock not on (the voice set-up comes first)".into());
+    }
     for (label, value, field) in flags {
         if let Some(on) = value {
             *field = on;

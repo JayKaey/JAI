@@ -911,6 +911,53 @@ impl Jai {
         }
     }
 
+    /// The voice set-up's six lines are read: what JAI learns from them. The spellings the
+    /// recogniser wrote for his name join the names he answers to, the ear's gate is set to
+    /// Sir's voice over his room, and the clips' mean becomes his voice print.
+    fn learn_from_setup(&self, prints: Vec<Vec<f32>>, heard: Vec<String>, levels: Vec<(f32, f32)>) {
+        let mut outcome = crate::voice_setup::Outcome::default();
+        let spellings = {
+            let wake = self.inner.wake.read().unwrap_or_else(|e| e.into_inner());
+            crate::voice_setup::learnt_spellings(&heard, |word| wake.evaluate(&format!("{word}, open the mixer")).matched)
+        };
+        if !spellings.is_empty() {
+            self.inner.config.update(|c| {
+                for s in &spellings {
+                    if !c.wake_words.iter().any(|w| w.eq_ignore_ascii_case(s)) {
+                        c.wake_words.push(s.clone());
+                    }
+                }
+            });
+            *self.inner.wake.write().unwrap_or_else(|e| e.into_inner()) = self.inner.config.read(|c| WakeWordMatcher::new(&c.wake_words, c.wake_word_similarity_threshold));
+        }
+        outcome.spellings = spellings;
+        // The gate: by how far his voice stands over the room in the middle line of the six.
+        let mut over: Vec<f32> = levels.iter().map(|(peak, floor)| peak - floor).filter(|d| d.is_finite()).collect();
+        over.sort_by(f32::total_cmp);
+        let current = self.inner.config.read(|c| c.vad_noise_multiplier);
+        if let Some(gate) = over.get(over.len() / 2).and_then(|over| crate::voice_setup::gate_for(*over, current)) {
+            self.inner.config.update(|c| c.vad_noise_multiplier = gate);
+            self.inner.controls.set_vad(None, None, None, Some(gate));
+            outcome.gate = Some((current, gate));
+        }
+        let db = self.inner.config.read(|c| c.memory_db_path.clone());
+        match crate::speaker_id::enrol(&prints) {
+            Some(print) => match crate::speaker_id::keep(&db, &print) {
+                Ok(()) => {
+                    outcome.print = true;
+                    crate::hud_feel::set_voice_known(true);
+                    info!("[VOICE] Sir's voice print is kept ({} clips; a voice is his from a likeness of {:.2})", print.clips, print.threshold);
+                }
+                Err(e) => outcome.no_print = Some(e),
+            },
+            None => outcome.no_print = Some(if crate::speaker_id::available() { "too few lines came through clearly".to_string() } else { "the voice model is not installed".to_string() }),
+        }
+        info!("[VOICE] Set-up done: spellings {:?}, gate {:?}, print {}", outcome.spellings, outcome.gate, outcome.print);
+        let line = outcome.spoken();
+        crate::voice_setup::finished(outcome);
+        self.speak_standalone(&line, true, Trigger::Input(InputSource::Voice));
+    }
+
     /// A clip of what the PC plays, for the live subtitles (`live_subtitles`): the flag that
     /// calls it off and the words to come. None while Whisper sleeps or is not loaded.
     pub fn subtitle_ahead(&self, pcm: Vec<f32>, translate: bool) -> Option<(Arc<AtomicBool>, tokio::sync::oneshot::Receiver<Result<crate::stt::Transcript, String>>)> {
@@ -1219,6 +1266,15 @@ impl Jai {
             return;
         }
         let kept = stitching_enabled.then(|| pcm.clone());
+        // Whose voice it is (for the voice lock and the voice set-up): worked out on the
+        // processor while Whisper hears the words.
+        let lock_on = !u.ptt && self.inner.config.read(|c| c.interface.voice_lock);
+        let in_setup = crate::voice_setup::active();
+        let voice_levels = (crate::voice_setup::peak_db(&pcm), crate::dsp::to_dbfs(self.inner.controls.noise_floor_now()));
+        let voice_print = (lock_on || in_setup).then(|| {
+            let clip = pcm.clone();
+            tokio::task::spawn_blocking(move || crate::speaker_id::print_of(&clip))
+        });
         crate::core_sphere_3d::pulse("stt.rs");
         // With a head start the transcript is already on its way (or here): only the rest of the
         // decode is waited for.
@@ -1283,6 +1339,19 @@ impl Jai {
                 self.rest_state();
                 return;
             }
+        }
+        let voice: Option<Result<Vec<f32>, String>> = match voice_print {
+            Some(print) => print.await.ok(),
+            None => None,
+        };
+        // The voice set-up is listening: what is said is a line read to it, not an order.
+        if in_setup && crate::voice_setup::heard(&transcript.text, voice.clone().and_then(Result::ok), voice_levels) {
+            crate::hud_lines::speech_over();
+            if let Some((prints, texts, levels)) = crate::voice_setup::take_finished() {
+                self.learn_from_setup(prints, texts, levels);
+            }
+            self.rest_state();
+            return;
         }
         // "Heard: … – do it?" stands on the HUD and Sir says yes: the offered order is his.
         if !lifecycle::is_sleeping() {
@@ -1399,6 +1468,34 @@ impl Jai {
         }
         if wake.matched {
             info!("[WAKE] '{}' (score {:.2}) → command '{}'", wake.word, wake.score, wake.command);
+        }
+        // The voice lock: a spoken order is carried out only in Sir's own voice. (Push-to-talk
+        // and the keyboard are his hands; a voice that cannot be judged is let through and
+        // logged, so a fault of the lock never locks Sir out.)
+        if lock_on {
+            let db = self.inner.config.read(|c| c.memory_db_path.clone());
+            match (crate::speaker_id::known(&db), &voice) {
+                (Some(print), Some(Ok(clip))) => {
+                    let (his, score) = print.is_his(clip, speech_ms);
+                    if !his {
+                        info!("[VOICE LOCK] Not Sir's voice (likeness {score:.2}, his from {:.2}): '{}' is not carried out", print.threshold, transcript.text);
+                        crate::hud_lines::speech_over();
+                        self.emit(HudEvent::Transcript {
+                            text: transcript.text,
+                            language: transcript.language,
+                            source: "ignored".into(),
+                            wake_word: Some("voice lock".into()),
+                            stt_ms: transcript.stt_ms,
+                            audio_ms: transcript.audio_ms,
+                        });
+                        self.rest_state();
+                        return;
+                    }
+                    tracing::debug!("[VOICE LOCK] Sir's voice (likeness {score:.2})");
+                }
+                (Some(_), Some(Err(why))) => warn!("[VOICE LOCK] The voice could not be judged ({why}): the order is carried out"),
+                _ => {}
+            }
         }
         // His words stand under the emblem as they were understood.
         crate::hud_lines::settled(&transcript.text);

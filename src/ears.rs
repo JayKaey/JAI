@@ -677,6 +677,11 @@ impl AudioControls {
         )
     }
 
+    /// The room's noise as the VAD measures it right now (linear, 0-1).
+    pub fn noise_floor_now(&self) -> f32 {
+        f32::from_bits(self.noise_floor.load(Ordering::Relaxed))
+    }
+
     pub fn set_vad(&self, start: Option<f32>, release: Option<f32>, hangover_ms: Option<u32>, multiplier: Option<f32>) {
         if let Some(s) = start {
             self.start_threshold.store(s.clamp(0.05, 0.98).to_bits(), Ordering::Relaxed);

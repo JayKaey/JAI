@@ -151,14 +151,13 @@ pub fn is_game(process: &str) -> bool {
 
 /// The arguments that are requests of the moment, not settings (`interface::configure` names
 /// them in its summary; `apply` carries them out).
-pub const RUNTIME_KEYS: [(&str, &str); 8] = [
+pub const RUNTIME_KEYS: [(&str, &str); 7] = [
     ("night_now", "night mode"),
     ("subtitles", "subtitles"),
     ("subtitles_translate", "subtitle translation"),
     ("lyrics", "lyrics"),
     ("missed", "notification history"),
     ("voice_setup", "voice set-up"),
-    ("voice_lock", "voice lock"),
     ("settings_panel", "settings panel"),
 ];
 
@@ -171,8 +170,6 @@ static LYRICS: AtomicBool = AtomicBool::new(false);
 static MISSED: AtomicBool = AtomicBool::new(false);
 static VOICE_SETUP: AtomicBool = AtomicBool::new(false);
 static SETTINGS_PANEL: AtomicBool = AtomicBool::new(false);
-/// "Only obey me" / "obey everyone", for the voice lock to pick up.
-static VOICE_LOCK: Mutex<Option<bool>> = Mutex::new(None);
 
 /// Night runs from this hour to that one.
 pub const NIGHT_FROM: u32 = 22;
@@ -284,21 +281,16 @@ pub fn open_settings_panel() {
     SETTINGS_PANEL.store(true, Ordering::Release);
 }
 
-/// Whether the voice lock is on right now (published by the voice lock; the settings panel
-/// shows it).
-static VOICE_LOCKED: AtomicBool = AtomicBool::new(false);
+/// Whether Sir's voice print exists (the voice set-up has been done): without it the voice
+/// lock cannot be switched on.
+static VOICE_KNOWN: AtomicBool = AtomicBool::new(false);
 
-pub fn voice_locked() -> bool {
-    VOICE_LOCKED.load(Ordering::Acquire)
+pub fn voice_known() -> bool {
+    VOICE_KNOWN.load(Ordering::Acquire)
 }
 
-pub fn publish_voice_locked(on: bool) {
-    VOICE_LOCKED.store(on, Ordering::Release);
-}
-
-/// "Only obey me" (true) or "obey everyone" (false) was asked (once).
-pub fn take_voice_lock() -> Option<bool> {
-    lock(&VOICE_LOCK).take()
+pub fn set_voice_known(known: bool) {
+    VOICE_KNOWN.store(known, Ordering::Release);
 }
 
 /// Carries out the requests of the moment in `configure_interface`'s arguments.
@@ -320,9 +312,6 @@ pub fn apply(args: &Value) {
     }
     if flag(args, "voice_setup") == Some(true) {
         VOICE_SETUP.store(true, Ordering::Release);
-    }
-    if let Some(on) = flag(args, "voice_lock") {
-        *lock(&VOICE_LOCK) = Some(on);
     }
     if flag(args, "settings_panel") == Some(true) {
         open_settings_panel();
@@ -381,6 +370,9 @@ pub fn spoken(args: &Value) -> Option<String> {
         return Some("Let us get acquainted, Sir. Read me the lines on the screen.".to_string());
     }
     if let Some(v) = on("voice_lock") {
+        if v && !voice_known() {
+            return Some("I don't know your voice yet, Sir. Say \"learn my voice\" and read me six lines first.".to_string());
+        }
         return say("From now on I answer to your voice alone, Sir.", "I'll answer to anyone again, Sir.", v);
     }
     if on("settings_panel") == Some(true) {
@@ -558,10 +550,15 @@ mod tests {
         assert_eq!(subtitles(), Some(true));
         apply(&json!({"subtitles": false}));
         assert_eq!(subtitles(), None);
-        apply(&json!({"subtitles_translate": false, "lyrics": true, "missed": true, "voice_setup": true, "voice_lock": true, "settings_panel": true}));
+        apply(&json!({"subtitles_translate": false, "lyrics": true, "missed": true, "voice_setup": true, "settings_panel": true}));
         assert!(lyrics() && take_missed() && !take_missed() && take_voice_setup() && !take_voice_setup());
-        assert_eq!((take_voice_lock(), take_voice_lock()), (Some(true), None));
         assert!(take_settings_panel() && !take_settings_panel());
+        // The lock needs a voice to lock to.
+        set_voice_known(false);
+        assert!(spoken(&json!({"voice_lock": true})).unwrap().contains("learn my voice"));
+        set_voice_known(true);
+        assert!(spoken(&json!({"voice_lock": true})).unwrap().contains("your voice alone"));
+        set_voice_known(false);
         apply(&json!({"lyrics": false}));
         assert!(!lyrics());
     }

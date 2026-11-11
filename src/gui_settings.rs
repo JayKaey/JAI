@@ -98,7 +98,7 @@ static ROWS: [Row; 31] = [
     row("SCREENS", "Monitors", "Which monitor the board is on.", "screens display", Control::Open(Tool::Screens, "[ SCREENS ]")),
     row("VOICE", "Live words", "Your words appear under the emblem while you speak (paused while a game runs).", "captions transcript", Control::Switch(|s| s.live_words, |s, v| s.live_words = v)),
     row("VOICE", "Learn my voice", "One minute of reading aloud: he tunes his hearing to your voice and microphone.", "set-up setup calibrate wake name jay", Control::Open(Tool::VoiceSetup, "[ START ]")),
-    row("VOICE", "Only obey me", "He answers to your voice alone (after the voice set-up).", "lock speaker stranger everyone", Control::Moment(|_| crate::hud_feel::voice_locked(), "voice_lock")),
+    row("VOICE", "Only obey me", "He answers to your voice alone (it stays off until the voice set-up is done).", "lock speaker stranger everyone", Control::Switch(|s| s.voice_lock, |s, v| s.voice_lock = v && crate::hud_feel::voice_known())),
     row("VOICE", "Sound cues", "The short sounds when a block opens or closes, a report is ready, something fails.", "sounds earcons beep", Control::Switch(|s| s.sound_cues, |s, v| s.sound_cues = v)),
     row("VOICE", "Microphone, devices and memory", "Pick the microphone and speaker, the wake word's strictness, what he remembers.", "audio input output drawer", Control::Open(Tool::Devices, "[ OPEN ]")),
     row("VOICE", "Mixer", "A fader for the master volume and for every program that plays sound.", "volume loud quiet", Control::Open(Tool::Mixer, "[ MIXER ]")),
@@ -273,6 +273,7 @@ mod tests {
             assert!(row.explain.ends_with('.') && row.explain.len() < 100, "{}: one line", row.name);
             match row.control {
                 Control::Switch(get, set) => {
+                    crate::hud_feel::set_voice_known(true);
                     let mut s = defaults.clone();
                     let was = get(&s);
                     set(&mut s, !was);
