@@ -1901,6 +1901,12 @@ impl HudApp {
 
     fn set_interface(&self, mut settings: InterfaceSettings) {
         self.app.config().update(|c| {
+            // (Mini mode borrows the orb's window: what it set for that is not Sir's setting.)
+            if settings.orb_anchor == MINI_STRIP {
+                settings.orb_mode = c.interface.orb_mode && !settings.mini_strip;
+                settings.orb_anchor = c.interface.orb_anchor.clone();
+                settings.orb_on_top = c.interface.orb_on_top;
+            }
             settings.reconcile(&c.interface);
             c.interface = settings;
         });
@@ -1938,7 +1944,21 @@ impl HudApp {
 
     /// Applies interface changes (from JAI or the Interface window) to the live window.
     fn sync_interface(&mut self, ctx: &egui::Context) -> InterfaceSettings {
-        let current = self.app.config().read(|c| c.interface.clone());
+        let mut current = self.app.config().read(|c| c.interface.clone());
+        // Mini mode and pure orb mode are two shapes of the one window: asked for both, the one
+        // asked for last stands.
+        if current.mini_strip && current.orb_mode {
+            let mini_is_new = self.applied.as_ref().is_some_and(|p| p.orb_mode && p.orb_anchor != MINI_STRIP);
+            self.app.config().update(|c| if mini_is_new { c.interface.orb_mode = false } else { c.interface.mini_strip = false });
+            current = self.app.config().read(|c| c.interface.clone());
+        }
+        // Mini mode: the window becomes the strip the way it becomes the orb (the orb's own
+        // settings stay as they are in the configuration: `set_interface` never writes these).
+        if current.mini_strip {
+            current.orb_mode = true;
+            current.orb_anchor = MINI_STRIP.to_string();
+            current.orb_on_top = true;
+        }
         // The HUD's colours (board, console, core, emblem) cross-fade to the chosen theme.
         if crate::theme_engine::follow(&current.hud_palette) {
             info!("[THEME] {}", current.hud_palette);
@@ -2958,6 +2978,13 @@ fn place_orb(hwnd: isize, size: f32, anchor: &str, monitor: u8, ppp: f32) {
     let side = (size * ppp).round() as i32;
     let margin = (24.0 * ppp).round() as i32;
     let [l, t, r, b] = target.work;
+    // Mini mode: a strip across the top of the monitor's work area.
+    if anchor == MINI_STRIP {
+        if let Err(e) = crate::win32::set_window_rect(hwnd, [l, t, r - l, (MINI_STRIP_HEIGHT * ppp).round() as i32]) {
+            warn!("[HUD] Could not place the mini strip: {e}");
+        }
+        return;
+    }
     let (x, y) = match anchor {
         "top-left" => (l + margin, t + margin),
         "top-right" => (r - side - margin, t + margin),
@@ -3443,11 +3470,20 @@ struct HudApp {
     calm: f32,
     /// How far night mode has dimmed the HUD (0 day … 1 night).
     night: f32,
+    /// The start-up sequence while it plays: since when, and whether its sound has played.
+    boot: Option<(Instant, bool)>,
+    /// How far the idle screen has come up (0 in use … 1 idle).
+    idle: f32,
     /// The utterance Sir is in: since when, and the loudest his voice was (dBFS).
     mic_speech: Option<(Instant, f32)>,
     /// What is wrong with the way he hears Sir ("TOO QUIET"), and since when it has been shown.
     mic_verdict: Option<(&'static str, Instant)>,
 }
+
+/// Mini mode's place among the orb window's anchors (the window is a strip then), and how tall
+/// the strip is (points).
+const MINI_STRIP: &str = "strip";
+const MINI_STRIP_HEIGHT: f32 = 40.0;
 
 /// How dark night mode makes the HUD (the share of black laid over it).
 const NIGHT_DIM: f32 = 0.42;
@@ -3583,6 +3619,8 @@ impl HudApp {
             console_foot: 46.0,
             calm: 1.0,
             night: 0.0,
+            boot: None,
+            idle: 0.0,
             mic_speech: None,
             mic_verdict: None,
             window_seen: ([0; 4], None),
@@ -3820,7 +3858,69 @@ impl HudApp {
     }
 
     /// Pure orb mode: a transparent window with the emblem and nothing else.
+    /// Mini mode: the window is a slim strip across the top of its monitor, always in front:
+    /// what he is doing, Sir's last words, his last answer, the running timers and the time.
+    /// `[ BOARD ]` (or "mini mode off") brings the board back.
+    fn mini_strip(&mut self, ctx: &egui::Context, m: &HudModel) {
+        let accent = crate::hud_board::active_colour();
+        let mut leave = false;
+        egui::CentralPanel::default().frame(Frame::none()).show(ctx, |ui| {
+            let rect = ui.max_rect();
+            let p = ui.painter().clone();
+            p.rect_filled(rect, Rounding::ZERO, Color32::from_rgb(3, 6, 10));
+            p.rect_filled(Rect::from_min_size(pos2(rect.left(), rect.bottom() - 1.0), vec2(rect.width(), 1.0)), Rounding::ZERO, accent.gamma_multiply(0.85));
+            let mid = rect.center().y;
+            // What he is doing: a lamp and the word.
+            let muted = m.level.as_ref().is_none_or(|l| l.phase == "muted") || m.cfg.as_ref().is_some_and(|c| !c.mic_enabled) || crate::listening_lock::is_locked();
+            let asleep = m.cfg.as_ref().is_some_and(|c| c.sleeping) || crate::vram_guard::is_dormant();
+            let word = pill_word(&m.state, muted, asleep);
+            let lamp = pill_colours(word)[0];
+            p.circle_filled(pos2(rect.left() + 16.0, mid), 4.0, lamp);
+            p.circle_filled(pos2(rect.left() + 16.0, mid), 8.0, lamp.gamma_multiply(0.18));
+            let mut x = p.text(pos2(rect.left() + 30.0, mid), Align2::LEFT_CENTER, format!("J.A.I.  {word}"), crate::hud_style::title_font(13.5), accent).right() + 22.0;
+            // On the right: the key back to the board, the time, the running timers.
+            let (key, keys_left) = crate::hud_style::keys(ui, egui::Id::new("mini_strip"), rect.right() - 10.0, mid, &[("[ BOARD ]", false, "Back to the full board (or say \"mini mode off\")")], 1.0);
+            leave = key.is_some();
+            let mut right = p.text(pos2(keys_left - 14.0, mid), Align2::RIGHT_CENTER, chrono::Local::now().format("%H:%M").to_string(), FontId::monospace(12.0), STRIP_INK).left() - 18.0;
+            let now_ms = chrono::Utc::now().timestamp_millis();
+            for w in self.app.tools().widgets.widgets().iter().rev() {
+                let crate::widgets::WidgetKind::CountdownOrStopwatch { running: true, .. } = &w.kind else { continue };
+                let Some((elapsed, remaining)) = crate::widgets::timer_state(&w.kind, now_ms) else { continue };
+                let secs = remaining.unwrap_or(elapsed) / 1000;
+                let label = format!("{}  {:02}:{:02}", if remaining.is_some() { "TIMER" } else { "STOPWATCH" }, secs / 60, secs % 60);
+                right = p.text(pos2(right, mid), Align2::RIGHT_CENTER, label, FontId::monospace(11.0), accent).left() - 18.0;
+            }
+            // In between: his last words and JAI's last answer, each cut to its half.
+            let sir = m.messages.iter().rev().find(|l| l.who == Speaker::Sir).map(|l| l.text.clone()).unwrap_or_default();
+            let jai = m.messages.iter().rev().find(|l| l.who == Speaker::Jai).map(|l| l.text.clone()).unwrap_or_default();
+            let room = (right - x).max(0.0);
+            let font = FontId::proportional(12.5);
+            if room > 160.0 {
+                let one_line = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+                if !sir.is_empty() {
+                    let tag = p.text(pos2(x, mid), Align2::LEFT_CENTER, "YOU", FontId::monospace(10.0), STRIP_MUTED).right() + 8.0;
+                    let shown = fit_width(&p, &one_line(&sir), &font, room * 0.38 - 40.0);
+                    x = p.text(pos2(tag, mid), Align2::LEFT_CENTER, shown, font.clone(), STRIP_INK).right() + 22.0;
+                }
+                if !jai.is_empty() {
+                    let tag = p.text(pos2(x, mid), Align2::LEFT_CENTER, "J.A.I.", FontId::monospace(10.0), accent.gamma_multiply(0.8)).right() + 8.0;
+                    let shown = fit_width(&p, &one_line(&jai), &font, (right - tag).max(40.0));
+                    p.text(pos2(tag, mid), Align2::LEFT_CENTER, shown, font, Color32::WHITE);
+                }
+            }
+        });
+        if leave {
+            self.app.config().update(|c| c.interface.mini_strip = false);
+        }
+        // (The time and the timers tick.)
+        ctx.request_repaint_after(Duration::from_millis(500));
+    }
+
     fn pure_orb(&mut self, ctx: &egui::Context, m: &HudModel, iface: &InterfaceSettings) {
+        if iface.orb_anchor == MINI_STRIP {
+            self.mini_strip(ctx, m);
+            return;
+        }
         let p = self.palette;
         egui::CentralPanel::default().frame(Frame::none()).show(ctx, |ui| {
             let rect = ui.max_rect();
@@ -4033,6 +4133,40 @@ impl HudApp {
         if self.screens_open {
             self.screens_block(ctx);
         }
+    }
+
+    /// The start-up sequence (on the first frames of a start that has one) and the idle screen
+    /// (once nothing was touched or said for five minutes), both over the whole home screen.
+    fn presence(&mut self, ctx: &egui::Context, m: &HudModel, iface: &InterfaceSettings, dt: f32) {
+        let still = windows_still(ctx) || crate::platform::in_test_session();
+        let home = home_screen(ctx);
+        let frame = self.emblem.frame(home);
+        if self.frames <= 2 && self.boot.is_none() && iface.startup_sequence && !still && crate::startup_sequence::current().is_some() {
+            self.boot = Some((Instant::now(), false));
+        }
+        if let (Some((started, sounded)), Some(plan)) = (self.boot, crate::startup_sequence::current()) {
+            // Any key or click skips it.
+            let skipped = ctx.input(|i| i.pointer.any_click() || !i.keys_down.is_empty());
+            if !sounded && started.elapsed() >= plan.kind.ignition() {
+                self.boot = Some((started, true));
+                crate::tts::play_cue(if plan.kind == crate::startup_sequence::Kind::Long { crate::jai_voice_dsp::Earcon::Spotlight } else { crate::jai_voice_dsp::Earcon::Materialize });
+            }
+            if skipped || !crate::startup_sequence::paint(ctx, home, frame.centre, frame.radius, plan.kind, started.elapsed()) {
+                self.boot = None;
+                self.last_activity = Instant::now();
+            }
+        }
+        let idle = self.boot.is_none() && !still && crate::idle_screen::is_idle(iface.idle_screen, self.last_activity.elapsed(), &m.state);
+        if idle {
+            crate::idle_screen::refresh(&self.app, &self.rt);
+        }
+        let target = if idle { 1.0 } else { 0.0 };
+        if self.idle != target {
+            // It comes up slowly and is gone at once.
+            self.idle = crate::hud_style::motion::approach(self.idle, target, dt, if idle { Duration::from_millis(1200) } else { crate::hud_style::motion::SLOW });
+            ctx.request_repaint();
+        }
+        crate::idle_screen::paint(ctx, home, frame.centre, frame.radius, self.idle);
     }
 
     /// The calm HUD: how much of the header strip, the telemetry strip and the key hints shows.
@@ -5327,6 +5461,12 @@ impl HudApp {
         }
         // "What did I miss?": the notifications of the last hours.
         crate::hud_notify::show(ctx);
+        // The live desktop background, on a monitor the board is not on.
+        let state = lock(&self.model).state.clone();
+        if let Some(crate::desktop_backdrop::Refused(why)) = crate::desktop_backdrop::show(ctx, iface.desktop_background && !windows_still(ctx) && !iface.orb_mode, self.hwnd, iface.span_all_monitors, &state) {
+            lock(&self.model).toast(why, true);
+            self.app.config().update(|c| c.interface.desktop_background = false);
+        }
         mark("mixer");
         mixer_view::show(ctx, &self.rt);
         // The network radar, the disk map and the Earth, when open.
@@ -7572,6 +7712,7 @@ impl HudApp {
             if iface.edge_light && !windows_still(ctx) {
                 crate::hud_notify::paint_edge(ctx, home_screen(ctx), 1.0 - 0.5 * self.night);
             }
+            self.presence(ctx, &m, &iface, dt);
             self.toasts(ctx, &m);
             self.popups(ctx, dt);
             self.room_alert_overlay(ctx, &m);

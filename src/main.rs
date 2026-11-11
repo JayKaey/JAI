@@ -89,6 +89,9 @@ mod hud_board;
 mod hud_feel;
 mod hud_lines;
 mod hud_notify;
+mod idle_screen;
+mod desktop_backdrop;
+mod startup_sequence;
 mod hud_style;
 mod hud_suggestions;
 mod hyper_cortex;
@@ -581,6 +584,9 @@ fn main() -> ExitCode {
         Started::Running(session) => session,
         Started::Done(code) => return code,
     };
+    // How he powers up this time: by how long Sir has not spoken with him, and the hour. (A
+    // scripted session, the self-test and a restart of his own come up without ceremony.)
+    let boot = (cli.chat.is_empty() && !cli.live_test && !cli.restarted && !cli.silent).then(|| startup_sequence::plan(session.app.tools().memory.last_turn_at()));
     let hud = if cli.headless || !platform::has_display() {
         if cli.live_test || cli.silent {
             // The self-test still has a HUD to test (and a silent session one to work in): the
@@ -596,9 +602,34 @@ fn main() -> ExitCode {
     };
     // Scripted --chat runs stay silent (Sir may be listening to music or in a call).
     if session.greet && cli.chat.is_empty() && !cli.live_test {
-        let _rt = runtime.enter();
-        let line = session.app.startup_greeting(cli.restarted);
-        session.app.speak_standalone(&line, false, modality::Trigger::System);
+        let (app, restarted) = (session.app.clone(), cli.restarted);
+        runtime.spawn(async move {
+            // The greeting comes with the emblem's ignition (when the sequence plays).
+            if let Some(plan) = boot.filter(|_| app.config().read(|c| c.interface.startup_sequence)) {
+                tokio::time::sleep(plan.kind.ignition()).await;
+            }
+            let mut line = app.startup_greeting(restarted);
+            let catch_up = boot.is_some_and(|plan| plan.catch_up);
+            if let Some(away) = boot.as_ref().and_then(startup_sequence::away_line) {
+                line.push(' ');
+                line.push_str(&away);
+            }
+            if catch_up {
+                line.push_str(" Here is what is new.");
+            }
+            app.speak_standalone(&line, false, modality::Trigger::System);
+            if catch_up {
+                // After a long time away, once the greeting is said: his day, his mail, the news.
+                tokio::time::sleep(Duration::from_secs(3)).await;
+                for _ in 0..60 {
+                    if app.hud_state().state == "idle" {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                }
+                app.handle_command(hud::HudCommand::Chat { text: "Brief me".into() }).await;
+            }
+        });
     }
     // The Stream Deck / macro-key bridge on 127.0.0.1:19840 (token-guarded, localhost only).
     {

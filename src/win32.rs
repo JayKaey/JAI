@@ -210,6 +210,78 @@ pub fn post_app_command(pid: u32, command: u32) -> usize {
         .count()
 }
 
+/// This process's top-level window titled `title`, if there is one.
+pub fn own_window(title: &str) -> Option<isize> {
+    struct Search<'a> {
+        title: &'a str,
+        found: Option<HWND>,
+    }
+    unsafe extern "system" fn find(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        // SAFETY: lparam is the &mut Search passed below and outlives EnumWindows.
+        let search = unsafe { &mut *(lparam.0 as *mut Search) };
+        let mut pid = 0u32;
+        // SAFETY: a plain query on a handle from the enumeration.
+        unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
+        if pid == std::process::id() && window_text(hwnd) == search.title {
+            search.found = Some(hwnd);
+            return BOOL(0);
+        }
+        TRUE
+    }
+    let mut search = Search { title, found: None };
+    // SAFETY: the callback only touches `search` through the provided pointer.
+    unsafe {
+        let _ = EnumWindows(Some(find), LPARAM(&mut search as *mut Search as isize));
+    }
+    search.found.map(|h| h.0)
+}
+
+/// Hands window `hwnd` (one of ours) to the desktop as its live background on the monitor
+/// `[left, top, right, bottom]`: it becomes a child of the layer between the wallpaper and the
+/// icons (the `WorkerW` that `Progman` creates when asked with message 0x052C), so the icons
+/// stay in front of it and it never takes a click or the focus. Synchronous: on the Win32
+/// worker. Fails when the desktop has no such layer (a shell replacement).
+pub fn attach_behind_desktop_icons(hwnd: isize, [left, top, right, bottom]: [i32; 4]) -> Result<(), String> {
+    use windows::Win32::UI::WindowsAndMessaging::{FindWindowExW, SendMessageTimeoutW, SetParent, SMTO_NORMAL, SWP_SHOWWINDOW};
+    /// The layer: the `WorkerW` that follows the top-level window holding the icons' view.
+    unsafe extern "system" fn layer(top: HWND, lparam: LPARAM) -> BOOL {
+        // SAFETY: lparam is the &mut HWND passed below and outlives EnumWindows; the queries
+        // are plain lookups by class name.
+        unsafe {
+            if FindWindowExW(top, HWND(0), w!("SHELLDLL_DefView"), PCWSTR::null()).0 != 0 {
+                let found = &mut *(lparam.0 as *mut HWND);
+                *found = FindWindowExW(HWND(0), top, w!("WorkerW"), PCWSTR::null());
+            }
+        }
+        TRUE
+    }
+    // SAFETY: lookups by class name, one message to the shell's own window (with a timeout),
+    // and a re-parenting of our own window; every failure is reported.
+    unsafe {
+        let progman = FindWindowW(w!("Progman"), PCWSTR::null());
+        if progman.0 == 0 {
+            return Err("the desktop's window was not found".to_string());
+        }
+        let mut result = 0usize;
+        let _ = SendMessageTimeoutW(progman, 0x052C, WPARAM(0xD), LPARAM(0x1), SMTO_NORMAL, 1000, Some(&mut result));
+        let mut worker = HWND(0);
+        let _ = EnumWindows(Some(layer), LPARAM(&mut worker as *mut HWND as isize));
+        // (Windows 11 from 24H2: the layer is a child of Progman itself.)
+        if worker.0 == 0 {
+            worker = FindWindowExW(progman, HWND(0), w!("WorkerW"), PCWSTR::null());
+        }
+        if worker.0 == 0 {
+            return Err("the desktop has no layer behind its icons".to_string());
+        }
+        let mut origin = RECT::default();
+        GetWindowRect(worker, &mut origin).map_err(|e| e.message().to_string())?;
+        if SetParent(HWND(hwnd), worker).0 == 0 {
+            return Err("the desktop did not take the window".to_string());
+        }
+        SetWindowPos(HWND(hwnd), HWND(0), left - origin.left, top - origin.top, right - left, bottom - top, SWP_NOACTIVATE | SWP_NOZORDER | SWP_SHOWWINDOW).map_err(|e| e.message().to_string())
+    }
+}
+
 /// Makes this process's top-level window titled `title` an owned window of `owner`: Windows keeps
 /// an owned window above its owner whatever raises the owner. False while there is no such window.
 pub fn own_window_titled(title: &str, owner: isize) -> bool {

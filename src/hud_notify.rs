@@ -130,7 +130,7 @@ pub fn paint_stack(ctx: &egui::Context, area: Rect, cards: &[Card<'_>]) -> bool 
     if cards.is_empty() {
         return false;
     }
-    let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("hud_notifications")));
+    let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("hud_notifications")));
     let mut y = area.top();
     let mut moving = false;
     for card in cards.iter().rev() {
@@ -223,7 +223,7 @@ pub fn paint_edge(ctx: &egui::Context, screen: Rect, dim: f32) -> bool {
     let lit = colour.gamma_multiply(0.5 * strength);
     let line = colour.gamma_multiply(0.9 * strength);
     let clear = Color32::TRANSPARENT;
-    let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("hud_edge_light")));
+    let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("hud_edge_light")));
     let mut mesh = egui::Mesh::default();
     let inner = screen.shrink(EDGE_REACH);
     let outer = [screen.left_top(), screen.right_top(), screen.right_bottom(), screen.left_bottom()];

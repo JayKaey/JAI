@@ -449,6 +449,12 @@ impl MemoryManager {
         }
     }
 
+    /// When Sir and JAI last exchanged a word (the newest logged turn). None before the first.
+    pub fn last_turn_at(&self) -> Option<chrono::DateTime<Utc>> {
+        let stamp: String = self.lock().query_row("SELECT timestamp FROM conversation_logs ORDER BY id DESC LIMIT 1", [], |r| r.get(0)).ok()?;
+        chrono::DateTime::parse_from_rfc3339(&stamp).ok().map(|t| t.with_timezone(&Utc))
+    }
+
     /// The newest conversation turns, oldest first: (local time, role, text).
     pub fn recent_turns(&self, limit: usize) -> Vec<(String, String, String)> {
         let conn = self.lock();
