@@ -416,35 +416,67 @@ fn truncate(s: &str, n: usize) -> String {
     }
 }
 
-/// The line under the model: where it is from, its size, its credit.
+/// What the footer says of the model: where it is from, its size.
+fn facts_of(snap: &Snapshot) -> String {
+    let mut facts: Vec<String> = Vec::new();
+    if snap.demo {
+        facts.push("TEST RUN".into());
+    }
+    if !snap.source.is_empty() {
+        facts.push(snap.source.to_uppercase());
+    }
+    if snap.triangles > 0 {
+        facts.push(format!("{} TRIS", grouped(snap.triangles)));
+    }
+    if let Some(s) = snap.size_m {
+        let planet = snap.scene.as_ref().is_some_and(|x| x.planet);
+        facts.push(if planet { format!("Ø {}", studio::length(s[1])) } else { format!("{} TALL", studio::length(s[1])) });
+    }
+    facts.join("  ·  ")
+}
+
+/// The footer's texts for a block `width` wide: side by side where both fit, else one under the
+/// other (`true`), each cut to the width. (2026-11-09: in a block 476 px wide the credit, right
+/// aligned, was painted over the facts.)
+fn footer_lines(facts: &str, credit: Option<&str>, width: f32, char_w: f32) -> (String, Option<String>, bool) {
+    let fits = ((width / char_w.max(1.0)).floor() as usize).max(8);
+    let Some(credit) = credit else { return (truncate(facts, fits), None, false) };
+    if facts.chars().count() + credit.chars().count() + 3 <= fits {
+        return (facts.to_string(), Some(credit.to_string()), false);
+    }
+    (truncate(facts, fits), Some(truncate(credit, fits)), true)
+}
+
+/// The footer laid out for the width at hand: (facts, credit, stacked).
+fn footer_for(ui: &Ui, snap: &Snapshot) -> (String, Option<String>, bool) {
+    let char_w = ui.fonts(|f| f.glyph_width(&mono(9.5), 'M'));
+    let credit = snap.credit.as_ref().map(|c| truncate(&c.line(), 90));
+    footer_lines(&facts_of(snap), credit.as_deref(), ui.available_width() - 2.0, char_w)
+}
+
+/// The lines under the model: where it is from and its size, then its credit.
 fn footer(ui: &mut Ui, snap: &Snapshot) {
+    let (facts, credit, stacked) = footer_for(ui, snap);
+    let credit_label = |ui: &mut Ui, text: String| {
+        let text = RichText::new(text).font(mono(9.5)).color(STRIP_MUTED);
+        match &snap.credit {
+            Some(c) if c.url.starts_with("https://") => {
+                ui.hyperlink_to(text, &c.url);
+            }
+            _ => {
+                ui.label(text);
+            }
+        }
+    };
     ui.horizontal(|ui| {
-        let mut facts: Vec<String> = Vec::new();
-        if snap.demo {
-            facts.push("TEST RUN".into());
-        }
-        if !snap.source.is_empty() {
-            facts.push(snap.source.to_uppercase());
-        }
-        if snap.triangles > 0 {
-            facts.push(format!("{} TRIS", grouped(snap.triangles)));
-        }
-        if let Some(s) = snap.size_m {
-            let planet = snap.scene.as_ref().is_some_and(|x| x.planet);
-            facts.push(if planet { format!("Ø {}", studio::length(s[1])) } else { format!("{} TALL", studio::length(s[1])) });
-        }
-        ui.label(RichText::new(facts.join("  ·  ")).font(mono(9.5)).color(STRIP_MUTED));
-        if let Some(c) = &snap.credit {
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let text = RichText::new(truncate(&c.line(), 90)).font(mono(9.5)).color(STRIP_MUTED);
-                if c.url.starts_with("https://") {
-                    ui.hyperlink_to(text, &c.url);
-                } else {
-                    ui.label(text);
-                }
-            });
+        ui.label(RichText::new(facts).font(mono(9.5)).color(STRIP_MUTED));
+        if let Some(c) = credit.clone().filter(|_| !stacked) {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| credit_label(ui, c));
         }
     });
+    if let Some(c) = credit.filter(|_| stacked) {
+        ui.horizontal(|ui| credit_label(ui, c));
+    }
 }
 
 fn grouped(n: usize) -> String {
@@ -512,8 +544,10 @@ fn body(ui: &mut Ui, rt: &Handle) {
     toolbar(ui, &snap, rt);
     ui.add_space(4.0);
     let avail = ui.available_rect_before_wrap();
-    // The footer's row and the gap above it (a fixed 20 px left it 10 px short).
-    let footer_h = ui.spacing().interact_size.y + ui.spacing().item_spacing.y;
+    // The footer's rows and the gap above each (a fixed 20 px left it 10 px short).
+    let rows = if footer_for(ui, &snap).2 { 2.0 } else { 1.0 };
+    let footer_h = rows * (ui.spacing().interact_size.y + ui.spacing().item_spacing.y);
+
     let rect = Rect::from_min_max(avail.min, pos2(avail.max.x, (avail.max.y - footer_h).max(avail.min.y + 80.0)));
     view_area(ui, &snap, rect, rt);
     footer(ui, &snap);
@@ -656,6 +690,29 @@ mod tests {
         }
         assert!((cam.dist - HOME_DIST * 0.5).abs() < 0.02);
         assert!(cam.spin > 0.0, "the turntable turns again");
+    }
+
+    /// 2026-11-09 screenshot: "SKETCHFAB · 97,409 TRIS · …" and the credit, right aligned, were
+    /// painted over each other in a block 476 px wide.
+    #[test]
+    fn the_footer_never_paints_the_credit_over_the_facts() {
+        let facts = "SKETCHFAB  ·  97,409 TRIS  ·  24.8 CM TALL";
+        let credit = "\"Apple iPad Pro\" by Sketch78 · CC Attribution-NonCommercial · Sketchfab";
+        let char_w = 5.7;
+        for width in [300.0f32, 452.0, 476.0, 640.0, 900.0, 1400.0] {
+            let (f, c, stacked) = footer_lines(facts, Some(credit), width, char_w);
+            let c = c.unwrap();
+            let (fw, cw) = (f.chars().count() as f32 * char_w, c.chars().count() as f32 * char_w);
+            if stacked {
+                assert!(fw <= width && cw <= width, "{width}: each line fits its own row ({fw}, {cw})");
+            } else {
+                assert!(fw + cw + 3.0 * char_w <= width, "{width}: side by side only with room between ({fw} + {cw})");
+                assert_eq!((f.as_str(), c.as_str()), (facts, credit), "{width}: nothing cut where both fit");
+            }
+        }
+        assert!(footer_lines(facts, Some(credit), 476.0, char_w).2, "the screenshot's width stacks");
+        assert!(!footer_lines(facts, Some(credit), 1400.0, char_w).2);
+        assert_eq!(footer_lines(facts, None, 476.0, char_w), (facts.to_string(), None, false));
     }
 
     #[test]

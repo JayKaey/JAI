@@ -2102,6 +2102,18 @@ fn panel_args(text: &str, s: &str, up: PanelsUp) -> Option<Value> {
         static SPIN: LazyLock<Regex> = LazyLock::new(|| {
             re(r"^(?:spin|rotate)\s+(?:the\s+)?(?:globe|earth|world|planet|it)$|^(stop)\s+(?:spinning|rotating)(?:\s+(?:the\s+)?(?:globe|earth|it))?$|^(?:make|let|have|get)\s+(?:the\s+)?(?:globe|earth|world|planet|it)\s+(?:spin|rotate|turn)(?:\s+(?:again|around|round))?$|^(?:start|keep)\s+(?:spinning|rotating)(?:\s+(?:the\s+)?(?:globe|earth|it))?$|^(?:lass|lasse)\s+(?:die\s+erde|den\s+globus|sie|ihn)\s+(?:drehen|rotieren)$")
         });
+        // (2026-11-09: "Can you spin it in the other direction?" became a window swap, then an
+        // orb status.)
+        static SPIN_BACK: LazyLock<Regex> = LazyLock::new(|| {
+            let globe = r"(?:the\s+)?(?:globe|earth|world|planet|it)";
+            let other = r"(?:(?:in|into)\s+)?(?:the\s+)?(?:other|opposite|reverse|wrong|different)\s+(?:direction|way)(?:\s+(?:round|around))?";
+            re(&format!(
+                r"^(?:spin|rotate|turn)\s+{globe}\s+(?:{other}|backwards?|back|around|round|counter\s?clockwise|anti\s?clockwise|the\s+other\s+way\s+(?:round|around))$|^(?:make|let|have|get)\s+{globe}\s+(?:spin|rotate|turn)\s+(?:{other}|backwards?)$|^(?:spin|rotate|turn)\s+(?:{other}|backwards?)$|^reverse\s+(?:the\s+|its\s+)?(?:spin|rotation|direction)(?:\s+of\s+{globe})?$|^reverse\s+{globe}$|^(?:change|switch|flip)\s+(?:the\s+|its\s+)?(?:spin\s+|rotation\s+|spinning\s+)?direction(?:\s+of\s+{globe})?$|^(?:and\s+)?(?:now\s+)?(?:the\s+)?other\s+(?:direction|way)(?:\s+(?:round|around))?$|^(?:dreh|drehe)\s+(?:die\s+erde|den\s+globus|sie|ihn|es)\s+(?:andersherum|andersrum|anders\s+herum|rückwärts|in\s+die\s+andere\s+richtung)$|^(?:andersherum|andersrum|in\s+die\s+andere\s+richtung)(?:\s+drehen)?$"
+            ))
+        });
+        if SPIN_BACK.is_match(s) {
+            return Some(earth("spin_reverse"));
+        }
         if let Some(c) = SPIN.captures(s) {
             return Some(earth(if c.get(1).is_some() { "stop_spin" } else { "spin" }));
         }
@@ -6581,6 +6593,19 @@ mod tests {
         assert_eq!(act("hide the radar", both), None, "the network radar's");
         // Sir's own words of 2026-11-09, which went to the model.
         is("Can you make the globe spin?", earth_up, "spin");
+        for text in [
+            "Can you spin it in the other direction?",
+            "Can you spin the Earth in the other direction?",
+            "Spin it the other way round",
+            "Reverse the spin",
+            "rotate the globe backwards",
+            "Turn it the opposite way",
+            "Now the other direction",
+            "Dreh die Erde andersherum",
+        ] {
+            is(text, earth_up, "spin_reverse");
+        }
+        assert_eq!(panel_command("Spin it in the other direction", none), None, "no globe up: not the Earth's");
         is("Can you show me where I live?", none, "show_my_location");
         for (text, place) in [("Can you show me where New York is?", "New York"), ("Can you show me the USA?", "USA"), ("Where is Tokyo?", "Tokyo"), ("Zeig mir, wo Paris liegt", "Paris")] {
             let fly = panel_command(text, earth_up).unwrap();

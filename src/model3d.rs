@@ -26,7 +26,7 @@
 //! a stand-in, and exports land in the temp folder.
 
 use crate::intents::Intent;
-use crate::mesh_io::{self, math, AlphaMode, Bounds, Credit, Material, Model, Texture};
+use crate::mesh_io::{self, math, AlphaMode, Bounds, Credit, Material, Model, Part, Texture};
 use crate::procedural_textures::{self as pt, Planet};
 use crate::scene3d::{self, Paint};
 use crate::tools::ToolContext;
@@ -580,6 +580,150 @@ fn named_parts(model: &Model, name: &str) -> Vec<usize> {
     Vec::new()
 }
 
+/// A zone of a model by where it lies, for a name no part carries ("the helmet" of a suit that
+/// came as one mesh): a band of the height and a reach from the upright axis, both in heights.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Zone {
+    /// From the feet (0) to the crown (1).
+    y: (f32, f32),
+    /// Distance from the upright axis.
+    reach: (f32, f32),
+    /// A figure's (a head, arms, legs); the rest any model has (a top, a base).
+    figure: bool,
+}
+
+/// The zone a part word means and the name its carved part gets.
+fn zone_of(word: &str) -> Option<(&'static str, Zone)> {
+    const FAR: f32 = 99.0;
+    const ZONES: &[(&str, &[&str], Zone)] = &[
+        ("helmet", &["helmet", "helm", "head", "kopf", "mask", "maske", "face", "faceplate", "face plate", "gesicht", "visor", "visier"], Zone { y: (0.865, 1.01), reach: (0.0, 0.115), figure: true }),
+        ("chest", &["chest", "torso", "brust", "rumpf", "oberkörper", "upper body", "chest plate", "chestplate", "brustplatte"], Zone { y: (0.56, 0.84), reach: (0.0, 0.115), figure: true }),
+        ("arms", &["arm", "arms", "arme", "sleeves", "ärmel"], Zone { y: (0.36, 0.86), reach: (0.115, FAR), figure: true }),
+        ("legs", &["leg", "legs", "bein", "beine", "trousers", "pants", "hose"], Zone { y: (0.09, 0.48), reach: (0.0, FAR), figure: true }),
+        ("boots", &["boot", "boots", "foot", "feet", "shoe", "shoes", "stiefel", "fuß", "füße", "fuesse", "schuhe"], Zone { y: (-0.01, 0.09), reach: (0.0, FAR), figure: true }),
+        ("top", &["top", "top part", "upper part", "top third", "oberteil", "spitze", "tip"], Zone { y: (0.66, 1.01), reach: (0.0, FAR), figure: false }),
+        ("top half", &["top half", "upper half", "obere hälfte"], Zone { y: (0.5, 1.01), reach: (0.0, FAR), figure: false }),
+        ("bottom half", &["bottom half", "lower half", "untere hälfte"], Zone { y: (-0.01, 0.5), reach: (0.0, FAR), figure: false }),
+        ("base", &["base", "bottom", "bottom part", "lower part", "bottom third", "unterteil", "sockel", "boden"], Zone { y: (-0.01, 0.34), reach: (0.0, FAR), figure: false }),
+        ("middle", &["middle", "middle part", "centre", "center", "mitte", "mittelteil"], Zone { y: (0.34, 0.66), reach: (0.0, FAR), figure: false }),
+    ];
+    let w = word.trim().to_lowercase();
+    ZONES.iter().find(|(_, words, _)| words.contains(&w.as_str())).map(|(name, _, zone)| (*name, *zone))
+}
+
+/// A standing figure: taller than it is deep, and no wider than its arms can make it.
+fn is_figure(model: &Model) -> bool {
+    let s = model.bounds().size();
+    let (wide, narrow) = (s[0].max(s[2]), s[0].min(s[2]));
+    s[1] > 0.0 && s[1] >= 0.8 * wide && s[1] >= 1.3 * narrow
+}
+
+/// Cuts the triangles lying in `zone` out of their parts into parts of their own called `name`
+/// (same materials, so nothing looks different until they are painted). How many it took.
+fn carve(model: &mut Model, name: &str, zone: Zone) -> usize {
+    let b = model.bounds();
+    let h = (b.max[1] - b.min[1]).max(1e-9);
+    // The upright axis: a figure's runs through its crown (it may hold something to one side).
+    let mut axis = [b.centre()[0], b.centre()[2]];
+    if zone.figure {
+        let crown = b.max[1] - 0.06 * h;
+        let (mut sum, mut n) = ([0.0f64; 2], 0u64);
+        for p in model.parts.iter().flat_map(|part| &part.positions).filter(|p| p[1] >= crown) {
+            sum[0] += p[0] as f64;
+            sum[1] += p[2] as f64;
+            n += 1;
+        }
+        if n > 0 {
+            axis = [(sum[0] / n as f64) as f32, (sum[1] / n as f64) as f32];
+        }
+    }
+    let inside = |p: [f32; 3]| {
+        let y = (p[1] - b.min[1]) / h;
+        let r = ((p[0] - axis[0]).powi(2) + (p[2] - axis[1]).powi(2)).sqrt() / h;
+        y >= zone.y.0 && y <= zone.y.1 && r >= zone.reach.0 && r <= zone.reach.1
+    };
+    let mut parts = Vec::with_capacity(model.parts.len() + 4);
+    let mut taken = 0usize;
+    for part in std::mem::take(&mut model.parts) {
+        let in_zone: Vec<bool> = part
+            .indices
+            .chunks_exact(3)
+            .map(|t| {
+                let (a, b, c) = (part.positions[t[0] as usize], part.positions[t[1] as usize], part.positions[t[2] as usize]);
+                inside([(a[0] + b[0] + c[0]) / 3.0, (a[1] + b[1] + c[1]) / 3.0, (a[2] + b[2] + c[2]) / 3.0])
+            })
+            .collect();
+        let count = in_zone.iter().filter(|x| **x).count();
+        if count == 0 {
+            parts.push(part);
+            continue;
+        }
+        taken += count;
+        let mut cut = triangles_of(&part, |i| in_zone[i]);
+        cut.name = name.to_string();
+        if count < in_zone.len() {
+            parts.push(triangles_of(&part, |i| !in_zone[i]));
+        }
+        parts.push(cut);
+    }
+    model.parts = parts;
+    taken
+}
+
+/// The part with only the triangles `keep` says, and only the vertices they use.
+fn triangles_of(part: &Part, keep: impl Fn(usize) -> bool) -> Part {
+    let mut out = Part { name: part.name.clone(), material: part.material, ..Part::default() };
+    let mut slot = vec![u32::MAX; part.positions.len()];
+    for (i, t) in part.indices.chunks_exact(3).enumerate() {
+        if !keep(i) {
+            continue;
+        }
+        for &v in t {
+            let v = v as usize;
+            if slot[v] == u32::MAX {
+                slot[v] = out.positions.len() as u32;
+                out.positions.push(part.positions[v]);
+                if let Some(n) = part.normals.get(v) {
+                    out.normals.push(*n);
+                }
+                if let Some(uv) = part.uvs.get(v) {
+                    out.uvs.push(*uv);
+                }
+                if let Some(t) = part.tangents.get(v) {
+                    out.tangents.push(*t);
+                }
+                if let Some(c) = part.colors.get(v) {
+                    out.colors.push(*c);
+                }
+            }
+            out.indices.push(slot[v]);
+        }
+    }
+    out
+}
+
+/// "The helmet" on a model that has no such part: carved out by where a helmet is. The name the
+/// edit then targets, or why there is none.
+fn carve_zone(word: &str) -> Result<String, String> {
+    let (name, zone) = zone_of(word).ok_or_else(|| format!("I can't find a part called \"{word}\""))?;
+    let mut s = studio();
+    let Some(base) = s.base.clone() else { return Err("nothing is in the studio".into()) };
+    if zone.figure && !is_figure(&base) {
+        return Err(format!("this model has no {word} I can single out"));
+    }
+    let mut model = (*base).clone();
+    let total = model.triangles().max(1);
+    let taken = carve(&mut model, name, zone);
+    // Nothing there, or all of it: where the zone lies says nothing about this model.
+    if taken == 0 || taken * 100 >= total * 97 {
+        return Err(format!("I can't single out the {word} on this model"));
+    }
+    info!("[3D] Carved the {name} out of '{}' by its place: {taken} of {total} triangles", s.title);
+    s.base = Some(Arc::new(model));
+    s.model_id = next_id();
+    Ok(name.to_string())
+}
+
 /// The parts that make up at least 60 % of the surface (largest first), and the rest.
 fn split_by_area(model: &Model) -> (Vec<usize>, Vec<usize>) {
     if model.parts.len() < 2 {
@@ -747,6 +891,9 @@ fn command_with(text: &str, open: bool, earth_open: bool, names: &[String]) -> O
     if !open {
         return None;
     }
+    if let Some(args) = correction(&t) {
+        return Some(args);
+    }
     let mut args = edit_command(&t, earth_open, names)?;
     if args["action"] == "export" {
         // (The folder as he said it: the cleaned sentence has lost its case and colons.)
@@ -755,6 +902,35 @@ fn command_with(text: &str, open: bool, earth_open: bool, names: &[String]) -> O
         }
     }
     Some(args)
+}
+
+/// The thing a paint order names when that is not his interface: "make the helmet yellow" →
+/// "helmet". None for "make it yellow", "make the theme yellow", "yellow, please". (The brain
+/// holds an interface recolour back for such a sentence: 2026-11-09, the model turned the whole
+/// HUD yellow and said the helmet was.)
+pub fn painted_thing(text: &str) -> Option<String> {
+    let args = command_with(text, true, false, &[])?;
+    let mut parts: Vec<&str> = args["part"].as_str().into_iter().collect();
+    if let Some(list) = args["edits"].as_array() {
+        parts.extend(list.iter().filter_map(|e| e["part"].as_str()));
+    }
+    const HIS: &[&str] = &["you", "yourself", "your", "jarvis", "jai", "jay", "everything", "colour", "color", "colours", "colors", "dich", "dein", "deine", "deinen", "alles", "farbe"];
+    parts.into_iter().find(|p| !p.split_whitespace().any(|w| HUD_WORDS.contains(&w) || HIS.contains(&w))).map(str::to_string)
+}
+
+/// "No, not an iPad, I mean a real apple", "I meant the fruit": the model on show was the wrong
+/// thing; the one meant, and what it is not.
+fn correction(t: &str) -> Option<Value> {
+    static NOT_BUT: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^(?:no\s+|nope\s+|nein\s+)?(?:that\s+is\s+|that's\s+|thats\s+|it\s+is\s+|it's\s+)?(?:not|nicht|kein|keine|keinen)\s+(.+?)\s+(?:i\s+(?:mean|meant|want|wanted|said|asked\s+for)|but|rather|give\s+me|show\s+me|sondern|ich\s+(?:meine|meinte|will|wollte))\s+(.+)$")
+    });
+    static I_MEAN: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:no\s+|nope\s+|nein\s+)?(?:i\s+(?:mean|meant)|ich\s+(?:meine|meinte))\s+(.+)$"));
+    if let Some(c) = NOT_BUT.captures(t) {
+        let (not, meant) = (subject(&c[1])?, subject(&c[2])?);
+        return Some(json!({ "query": meant, "avoid": [not] }));
+    }
+    let meant = subject(&I_MEAN.captures(t)?[1].to_string())?;
+    Some(json!({ "query": meant }))
 }
 
 /// The fast path: a ready intent for the brain. (Unit tests of other modules never see a studio
@@ -772,17 +948,20 @@ pub fn intent(text: &str) -> Option<Intent> {
         (Vec::new(), None)
     };
     let args = command_with(text, open, crate::earth::is_open(), &names)?;
-    // "Make the note gold" is not an edit unless the model has such a part.
+    // "Make the note gold" is not an edit unless the model has such a part, or the word names
+    // a place on it ("the helmet" of a suit in one piece; 2026-11-09: that sentence went to the
+    // model, which turned the whole interface yellow).
     let mut asked: Vec<&str> = args["part"].as_str().into_iter().collect();
     if let Some(list) = args["edits"].as_array() {
         asked.extend(list.iter().filter_map(|e| e["part"].as_str()));
     }
     if !asked.is_empty() {
         let model = model?;
-        if asked.iter().any(|p| named_parts(&model, p).is_empty()) {
+        if asked.iter().any(|p| named_parts(&model, p).is_empty() && zone_of(p).is_none()) {
             return None;
         }
     }
+
     Some(Intent::Tool { name: TOOL, args })
 }
 
@@ -865,7 +1044,11 @@ fn subject(raw: &str) -> Option<String> {
 fn open_command(t: &str) -> Option<Value> {
     const VERBS: &str = r"(?:render|draw|build|make|create|model|generate|show|display|bring\s+up|pull\s+up|give|put\s+up|load|open|visuali[sz]e|project|zeig|zeige|zeigt|rendere|bau|baue|erstelle|erstell|mach|mache|generiere|modelliere|öffne|oeffne|lade|stell\s+dar)";
     static OF_3D: LazyLock<Regex> = LazyLock::new(|| {
-        re(&format!(r"^{VERBS}(?:\s+(?:me|us|mir|uns))?(?:\s+up)?\s+(?:a|an|the|some|ein|eine|einen|das|den|die)?\s*3d\s+(?:model|modell|render|rendering|version|view|ansicht|hologram|hologramm|replica|scan)\s+(?:of|von|vom|from)\s+(.+)$"))
+        re(&format!(r"^{VERBS}(?:\s+(?:me|us|mir|uns))?(?:\s+up)?\s+(?:a|an|the|some|this|that|another|ein|eine|einen|das|den|die)?\s*3d\s+(?:model|modell|render|rendering|version|view|ansicht|hologram|hologramm|replica|scan)\s+(?:of|von|vom|from)\s+(.+)$"))
+    });
+    // "Show me the model of an eatable apple" (2026-11-09: without "3D" it went to the model).
+    static MODEL_OF: LazyLock<Regex> = LazyLock::new(|| {
+        re(&format!(r"^{VERBS}(?:\s+(?:me|us|mir|uns))?(?:\s+up)?\s+(?:a|an|the|this|that|another|ein|eine|einen|das|den|die)\s+(?:model|modell|render|rendering|replica)\s+(?:of|von|vom)\s+(.+)$"))
     });
     static IN_3D: LazyLock<Regex> = LazyLock::new(|| re(&format!(r"^{VERBS}(?:\s+(?:me|us|mir|uns))?(?:\s+up)?\s+(.+?)\s+(?:in|als|as)\s+(?:a\s+)?3d(?:\s+(?:model|modell|hologram|hologramm))?$")));
     static A_3D: LazyLock<Regex> = LazyLock::new(|| re(&format!(r"^{VERBS}(?:\s+(?:me|us|mir|uns))?\s+(?:a|an|the|ein|eine|einen|das|den|die)\s+3d\s+(.+)$")));
@@ -885,7 +1068,7 @@ fn open_command(t: &str) -> Option<Value> {
     }
     // ("Make the 3D model bigger" is about the model on show, not one called "model bigger".)
     let a_3d = || A_3D.captures(t).filter(|c| !matches!(c[1].split_whitespace().next(), Some("model" | "modell" | "studio" | "viewer")));
-    let raw = OF_3D.captures(t).or_else(|| IN_3D.captures(t)).or_else(a_3d).or_else(|| BARE.captures(t)).map(|c| c[1].to_string());
+    let raw = OF_3D.captures(t).or_else(|| IN_3D.captures(t)).or_else(a_3d).or_else(|| BARE.captures(t)).or_else(|| MODEL_OF.captures(t)).map(|c| c[1].to_string());
     let raw = match raw {
         Some(r) => r,
         None => {
@@ -1279,12 +1462,15 @@ pub async fn run_tool(ctx: &ToolContext, args: &Value) -> Result<String, String>
                 edit_command(&clean(&format!("make it {change}")), false, &[]).map_or_else(|| edit(args), |a| edit(&a))
             };
         }
-        {
+        // "I meant the fruit": the sense of what was asked for before.
+        let asked = {
             let mut s = studio();
-            s.query = query.to_string();
+            let asked = if is_open() && !s.query.is_empty() && sense_only(query) { format!("{} {query}", wanted(&s.query, &[]).core) } else { query.to_string() };
+            s.query = asked.clone();
             s.level = num_arg(args, "level").map_or(1, |l| (l as u32).clamp(1, scene3d::MAX_LEVEL));
-        }
-        return open_query(ctx, query, args).await;
+            asked
+        };
+        return open_query(ctx, &asked, args).await;
     }
     // "show" with nothing named: the studio itself ("studio" from older callers).
     if !has_edits(args) && (matches!(action.as_str(), "show" | "open" | "studio") || !is_open()) {
@@ -1341,7 +1527,6 @@ fn edit(args: &Value) -> Result<String, String> {
         items.push(json!({ "material": str_arg(args, "material").or_else(|| str_arg(args, "color")).or_else(|| str_arg(args, "colour")).unwrap_or(""), "part": args.get("part").cloned().unwrap_or(Value::Null) }));
     }
     let mut new_edits: Vec<Edit> = Vec::new();
-    let model = studio().base.clone();
     for item in &items {
         let material = str_arg(item, "material").unwrap_or("");
         let paints = scene3d::paints_in(material);
@@ -1352,14 +1537,19 @@ fn edit(args: &Value) -> Result<String, String> {
         let part = str_arg(item, "part").map(str::to_string);
         let target = match &part {
             Some(p) => {
-                if let Some(m) = &model {
-                    if named_parts(m, p).is_empty() {
-                        let names: Vec<String> = m.parts.iter().map(|x| x.name.clone()).take(8).collect();
-                        problems.push(format!("I can't find a part called \"{p}\" (it has {})", names.join(", ")));
-                        continue;
+                let known = studio().base.as_ref().is_none_or(|m| !named_parts(m, p).is_empty());
+                if known {
+                    Target::Named(p.clone())
+                } else {
+                    // No part of that name: where such a part is, on a model that came in one piece.
+                    match carve_zone(p) {
+                        Ok(name) => Target::Named(name),
+                        Err(why) => {
+                            problems.push(why);
+                            continue;
+                        }
                     }
                 }
-                Target::Named(p.clone())
             }
             None => Target::All,
         };
@@ -1454,7 +1644,7 @@ fn edit(args: &Value) -> Result<String, String> {
     crate::gui::show();
     if said.is_empty() {
         let why = problems.first().cloned().unwrap_or_else(|| "nothing to change".into());
-        return Ok(reply(format!("3D studio: {why}."), format!("{why}, Sir.")));
+        return Ok(reply(format!("3D studio: {why}."), format!("{}, Sir.", capitalise(&why))));
     }
     let line = said.join(", ");
     let mut spoken = match said.len() {
@@ -2080,20 +2270,138 @@ fn parse_hits(v: &Value) -> Vec<Hit> {
         .unwrap_or_default()
 }
 
-/// The best result for a request: the name's words, its popularity, a size that loads fast.
+/// The best result for a request: a name that is the thing asked for, its popularity, a size
+/// that loads fast.
 fn pick(hits: &[Hit], query: &str) -> Option<Hit> {
     ranked(hits, query).into_iter().next().map(|(_, h)| h)
 }
 
+/// What a request means to the catalogue.
+#[derive(Clone, Debug, PartialEq)]
+struct Wanted {
+    /// The thing itself ("apple"): the studio's title, the words a hit's name is held against.
+    core: String,
+    /// The words searched for ("apple fruit").
+    search: String,
+    /// Things it is not ("ipad" after "not an iPad, a real apple").
+    avoid: Vec<String>,
+}
+
+/// Everyday words that are also a brand: asked for plainly ("a model of an apple") they mean
+/// the thing, and the catalogue is told so (2026-11-09: "an apple" came back as an iPad Pro).
+const EVERYDAY: &[(&str, &str)] = &[
+    ("apple", "fruit"), ("apples", "fruit"), ("apfel", "fruit"), ("orange", "fruit"), ("blackberry", "fruit"), ("raspberry", "fruit"), ("kiwi", "fruit"), ("date", "fruit"),
+    ("jaguar", "animal"), ("puma", "animal"), ("python", "snake"), ("crane", "bird"), ("turkey", "bird"), ("dove", "bird"), ("falcon", "bird"), ("mustang", "horse"), ("beetle", "insect"),
+    ("shell", "seashell"), ("amazon", "river"),
+];
+
+/// "A real apple", "an eatable apple", "the apple you can eat", "apple, the fruit": the words
+/// that say which sense is meant leave the name and steer the search.
+fn wanted(query: &str, avoid: &[String]) -> Wanted {
+    static REAL: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"\b(?:real|actual|genuine|proper|normal|regular|ordinary|natural|living|live|echte[rnms]?|echt|richtige[rnms]?|normale[rnms]?)\b|\b(?:(?:that|which|what)\s+)?(?:you|i|one|we)\s+can\s+eat\b|\b(?:to|for|zum)\s+(?:eat|eating|essen)\b|\b(?:like|as\s+in|i\s+mean|meaning|not\s+the\s+(?:company|brand|device|phone|computer|logo))\b")
+    });
+    static KIND: LazyLock<Regex> = LazyLock::new(|| re(r"\b(?:the\s+|die\s+|das\s+)?(eatable|edible|essbare[rnms]?|essbar|fruit|frucht|obst|food|animal|tier|bird|vogel|plant|pflanze)\b"));
+    let q = scene3d::norm(query);
+    let said: Option<&'static str> = KIND.captures(&q).map(|c| match &c[1] {
+        "animal" | "tier" => "animal",
+        "bird" | "vogel" => "bird",
+        "plant" | "pflanze" => "plant",
+        "food" => "food",
+        _ => "fruit",
+    });
+    let stripped = KIND.replace_all(&REAL.replace_all(&q, " "), " ").split_whitespace().filter(|w| !matches!(*w, "the" | "a" | "an")).collect::<Vec<_>>().join(" ");
+    // Nothing but the sense word was said ("fruit"): that is the thing.
+    let core = if stripped.is_empty() { q.trim().to_string() } else { stripped };
+    let everyday = EVERYDAY.iter().find(|(w, _)| *w == core).map(|(_, kind)| *kind);
+    // "Eatable" names a fruit only where the word is one; elsewhere it is plain food.
+    let kind = match (said, everyday) {
+        (Some("fruit"), None) if !q.contains(" fruit ") && !q.contains(" frucht ") && !q.contains(" obst ") => Some("food"),
+        (Some(k), _) => Some(k),
+        (None, k) => k,
+    };
+    let search = match kind {
+        Some(k) if !core.split_whitespace().any(|w| w == k) => format!("{core} {k}"),
+        _ => core.clone(),
+    };
+    let avoid = avoid.iter().flat_map(|a| scene3d::norm(a).split_whitespace().map(singular).collect::<Vec<_>>()).filter(|w| w.len() > 1 && !matches!(w.as_str(), "an" | "the" | "ein" | "eine" | "einen" | "der" | "die" | "das") && !core.split_whitespace().any(|c| singular(c) == *w)).collect();
+    Wanted { core, search, avoid }
+}
+
+/// Nothing but a sense was named ("the fruit", "a real one", "the animal").
+fn sense_only(query: &str) -> bool {
+    let q = scene3d::norm(query);
+    let core = wanted(query, &[]).core;
+    core == q.trim() && core.split_whitespace().all(|w| matches!(w, "fruit" | "frucht" | "obst" | "food" | "animal" | "tier" | "bird" | "vogel" | "plant" | "pflanze" | "eatable" | "edible" | "one" | "thing" | "kind"))
+        || core.split_whitespace().all(|w| matches!(w, "one" | "thing" | "kind" | "version"))
+}
+
+/// "apples" → "apple" (names are compared word by word).
+fn singular(word: &str) -> String {
+    let w = word.to_lowercase();
+    match w.strip_suffix('s') {
+        Some(stem) if w.len() > 3 && !w.ends_with("ss") && !w.ends_with("us") => stem.to_string(),
+        _ => w,
+    }
+}
+
+/// Words in a model's name that describe it instead of renaming it ("Low Poly Red Apple (Free)").
+const DESCRIPTIVE: &[&str] = &[
+    "low", "poly", "lowpoly", "high", "hd", "hq", "3d", "model", "scan", "scanned", "photogrammetry", "realistic", "real", "pbr", "game", "ready", "free", "freebie", "demo", "stylized", "stylised",
+    "cartoon", "cute", "simple", "detailed", "textured", "raw", "asset", "tasty", "delicious", "fresh", "ripe", "red", "green", "yellow", "blue", "black", "white", "golden", "small", "big", "little",
+    "old", "new", "rigged", "animated", "printable", "fruit", "food", "animal", "fbx", "obj", "glb", "gltf", "the", "a", "an", "my", "test", "wip", "version", "final", "download", "downloadable",
+];
+
+/// Words after which a name describes where its thing is or what goes with it ("Basket of
+/// apples", "Laptop and mouse"): the thing itself stands before them.
+const JOINERS: &[&str] = &["of", "with", "in", "on", "by", "for", "from", "and", "at", "inside", "under", "mit", "von", "und", "im", "auf"];
+
+/// How well a catalogue name is the thing asked for.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Fit {
+    /// The request's words in the name.
+    matched: usize,
+    /// The name's own head word is the request's ("Red Apple" is an apple, "Apple Watch" a watch).
+    headed: bool,
+    /// Words that name something else ("ipad", "pro").
+    extras: usize,
+}
+
+fn fit(name: &str, words: &[String]) -> Fit {
+    let normed = scene3d::norm(name);
+    let tokens: Vec<String> = normed.split_whitespace().map(singular).collect();
+    let is_word = |t: &String| words.iter().any(|w| w == t || (w.len() >= 5 && t.contains(w.as_str())));
+    let plain = |t: &String| DESCRIPTIVE.contains(&t.as_str()) || t.chars().all(|c| c.is_ascii_digit()) || (t.len() <= 2 && t.chars().any(|c| c.is_ascii_digit()));
+    let matched = words.iter().filter(|w| tokens.iter().any(|t| t == *w || (w.len() >= 5 && t.contains(w.as_str())))).count();
+    let extras = tokens.iter().filter(|t| !is_word(t) && !plain(t) && !JOINERS.contains(&t.as_str())).count();
+    let head = tokens.iter().take_while(|t| !JOINERS.contains(&t.as_str())).filter(|t| !plain(t)).last();
+    let headed = match (head, words.last()) {
+        (Some(h), Some(w)) => h == w,
+        _ => false,
+    };
+    Fit { matched, headed, extras }
+}
+
+/// The request's words as names are compared: singular, without filler.
+fn name_words(query: &str) -> Vec<String> {
+    scene3d::norm(query).split_whitespace().filter(|w| w.len() > 2 && !["the", "and", "with", "for"].contains(w)).map(singular).collect()
+}
+
 /// The results best first, each with how many of the request's words its name has.
 fn ranked(hits: &[Hit], query: &str) -> Vec<(usize, Hit)> {
-    let words: Vec<String> = scene3d::norm(query).split_whitespace().filter(|w| w.len() > 2 && !["the", "and", "with", "for"].contains(w)).map(str::to_string).collect();
-    let mut out: Vec<(f32, usize, Hit)> = hits
+    fitted(hits, query, &[]).into_iter().map(|(f, h)| (f.matched, h)).collect()
+}
+
+/// The results best first with their fit; names holding a word of `avoid` are left out.
+fn fitted(hits: &[Hit], query: &str, avoid: &[String]) -> Vec<(Fit, Hit)> {
+    let words = name_words(query);
+    let mut out: Vec<(f32, Fit, Hit)> = hits
         .iter()
+        .filter(|h| avoid.is_empty() || !scene3d::norm(&h.name).split_whitespace().any(|t| avoid.contains(&singular(t))))
         .map(|h| {
-            let name = scene3d::norm(&h.name);
-            let matched = words.iter().filter(|w| name.contains(&format!(" {w}")) || name.contains(w.as_str())).count();
-            let mut score = matched as f32 * 3.0 + ((h.likes + 1) as f32).ln() * 0.6;
+            let f = fit(&h.name, &words);
+            // Popularity breaks ties between names that fit; it never outweighs the name.
+            let mut score = f.matched as f32 * 3.0 + if f.headed { 5.0 } else { 0.0 } - f.extras.min(4) as f32 + (((h.likes + 1) as f32).ln() * 0.6).min(4.0);
             if h.glb_size.is_some_and(|s| s > SKETCHFAB_PREFERRED) {
                 score -= 4.0;
             }
@@ -2103,11 +2411,24 @@ fn ranked(hits: &[Hit], query: &str) -> Vec<(usize, Hit)> {
             if h.faces > 1_500_000 {
                 score -= 3.0;
             }
-            (score, matched, h.clone())
+            (score, f, h.clone())
         })
         .collect();
     out.sort_by(|a, b| b.0.total_cmp(&a.0));
-    out.into_iter().map(|(_, m, h)| (m, h)).collect()
+    out.into_iter().map(|(_, f, h)| (f, h)).collect()
+}
+
+/// The hits worth fetching for a request, best first: for one word, the names that are that
+/// thing where any are ("Apple", "Red Apple", never "Apple iPad Pro"); else every name with
+/// one of its words.
+fn candidates(hits: &[Hit], want: &Wanted) -> Vec<Hit> {
+    let all = fitted(hits, &want.core, &want.avoid);
+    let single = name_words(&want.core).len() == 1;
+    let headed: Vec<Hit> = all.iter().filter(|(f, _)| f.headed && f.matched > 0).map(|(_, h)| h.clone()).collect();
+    if single && !headed.is_empty() {
+        return headed;
+    }
+    all.into_iter().filter(|(f, _)| f.matched > 0).map(|(_, h)| h).collect()
 }
 
 async fn sketchfab_search(query: &str) -> Result<Vec<Hit>, String> {
@@ -2328,7 +2649,14 @@ fn apply_open_extras(args: &Value) -> String {
 /// "Render me X in 3D": the library at once, else a keyless repository, else Sketchfab
 /// (with Sir's token) and the language model.
 async fn open_query(ctx: &ToolContext, query: &str, args: &Value) -> Result<String, String> {
-    let query = query.trim().trim_end_matches('.').to_string();
+    // The thing itself, without the words that only say which sense is meant ("a real apple").
+    let avoid: Vec<String> = match args.get("avoid") {
+        Some(Value::Array(list)) => list.iter().filter_map(Value::as_str).map(str::to_string).collect(),
+        Some(Value::String(one)) => vec![one.clone()],
+        _ => Vec::new(),
+    };
+    let want = wanted(query.trim().trim_end_matches('.'), &avoid);
+    let query = want.core.clone();
     let lib = library(&query);
     let cur = curated(&query);
     let demo = demo_mode();
@@ -2360,7 +2688,7 @@ async fn open_query(ctx: &ToolContext, query: &str, args: &Value) -> Result<Stri
     let q = query.clone();
     tokio::spawn(async move {
         let started = Instant::now();
-        let outcome = fetch_or_compose(job, &q, token, llm, cfg, showpiece).await;
+        let outcome = fetch_or_compose(job, &want, token, llm, cfg, showpiece).await;
         if !current(job) {
             return;
         }
@@ -2479,11 +2807,13 @@ fn open_curated(entry: &'static Curated, args: &Value) -> String {
 }
 
 /// Sketchfab with Sir's token, else the preview card and a composed model.
-async fn fetch_or_compose(job: u64, query: &str, token: Option<String>, llm: Option<Arc<crate::runtime::LlmRuntime>>, cfg: crate::config::JarvisConfig, builtin: Option<&'static scene3d::Entry>) -> Result<String, String> {
-    let search = sketchfab_search(query);
-    // No real model: rebuilt from a photo, else composed from primitives.
+async fn fetch_or_compose(job: u64, want: &Wanted, token: Option<String>, llm: Option<Arc<crate::runtime::LlmRuntime>>, cfg: crate::config::JarvisConfig, builtin: Option<&'static scene3d::Entry>) -> Result<String, String> {
+    let query = want.core.as_str();
+    let search = sketchfab_search(&want.search);
+    // No real model: rebuilt from a photo (found by the sense meant), else composed from primitives.
+    let photo_query = want.search.clone();
     let compose_task = move |llm: Option<Arc<crate::runtime::LlmRuntime>>, cfg: crate::config::JarvisConfig, q: String| async move {
-        match from_photo(job, &q, &cfg).await {
+        match from_photo(job, &q, &photo_query, &cfg).await {
             Some(done) => Ok(done),
             None if !current(job) => Err("cancelled".into()),
             None => compose(job, &q, llm, &cfg, None).await,
@@ -2495,7 +2825,7 @@ async fn fetch_or_compose(job: u64, query: &str, token: Option<String>, llm: Opt
                 warn!("[3D] Sketchfab search failed: {e}");
                 Vec::new()
             });
-            if let Some(hit) = pick(&hits, query) {
+            if let Some(hit) = candidates(&hits, want).into_iter().next() {
                 let card = preview_of(&hit, job).await;
                 set_preview(job, Some(card));
                 progress(job, Some(0.05), Some(&format!("Downloading \"{}\"…", hit.name)));
@@ -2518,7 +2848,7 @@ async fn fetch_or_compose(job: u64, query: &str, token: Option<String>, llm: Opt
                 warn!("[3D] Sketchfab search failed: {e}");
                 Vec::new()
             });
-            let named: Vec<Hit> = ranked(&hits, query).into_iter().filter(|(m, _)| *m > 0).map(|(_, h)| h).collect();
+            let named = candidates(&hits, want);
             if !named.is_empty() {
                 match objaverse_fetch(&named, job).await {
                     Ok((path, hit)) => match load_path(path, job, 0.75).await {
@@ -2532,9 +2862,8 @@ async fn fetch_or_compose(job: u64, query: &str, token: Option<String>, llm: Opt
                 return open_builtin(entry, &json!({})).await;
             }
             // Else the card and a composition at once.
-            let q = query.to_string();
             let card = async {
-                if let Some(hit) = pick(&hits, &q) {
+                if let Some(hit) = named.first().cloned() {
                     let p = preview_of(&hit, job).await;
                     set_preview(job, Some(p));
                     set_note(job, Some("Full Sketchfab models: paste your Sketchfab API token in Integrations → Quick Connections → Sketchfab.".into()));
@@ -2560,7 +2889,7 @@ const PHOTO_TRIES: usize = 4;
 /// The thing rebuilt from a photograph (`photo3d`), credited to the photo. None when the networks
 /// aren't installed, no photo shows one whole subject or the rebuild fails: the composer takes
 /// over.
-async fn from_photo(job: u64, query: &str, cfg: &crate::config::JarvisConfig) -> Option<String> {
+async fn from_photo(job: u64, query: &str, photo_query: &str, cfg: &crate::config::JarvisConfig) -> Option<String> {
     use crate::image_viewer::{self as iv, Fetched};
     let dir = crate::photo3d::dir(cfg);
     if !crate::photo3d::installed(&dir) {
@@ -2569,7 +2898,8 @@ async fn from_photo(job: u64, query: &str, cfg: &crate::config::JarvisConfig) ->
     }
     progress(job, Some(0.02), Some("Looking for a photo of it…"));
     let mut photos = Vec::new();
-    for p in iv::photos(query).await {
+    for p in iv::photos(photo_query).await {
+
         for url in std::iter::once(&p.full).chain(&p.alt) {
             if let Ok(Fetched::Bytes { bytes, .. }) = iv::fetch(url, true, None).await {
                 photos.push((p, bytes));
@@ -2912,8 +3242,94 @@ mod tests {
         assert!(folder_path("desktop").ends_with("Desktop"));
     }
 
+    /// A standing figure in one piece, the way a downloaded suit arrives ("Object_2"): boxes for
+    /// the legs, the torso, the arms, the neck and the head, 1.8 tall.
+    fn one_piece_figure() -> Model {
+        let mut body = Part { name: "Object_2".into(), ..Part::default() };
+        let mut cube = |min: [f32; 3], max: [f32; 3]| {
+            let base = body.positions.len() as u32;
+            for k in 0..8u32 {
+                body.positions.push([if k & 1 == 0 { min[0] } else { max[0] }, if k & 2 == 0 { min[1] } else { max[1] }, if k & 4 == 0 { min[2] } else { max[2] }]);
+                body.normals.push([0.0, 1.0, 0.0]);
+            }
+            for t in [[0, 1, 3], [0, 3, 2], [4, 6, 7], [4, 7, 5], [0, 4, 5], [0, 5, 1], [2, 3, 7], [2, 7, 6], [0, 2, 6], [0, 6, 4], [1, 5, 7], [1, 7, 3]] {
+                body.indices.extend(t.iter().map(|i| base + i));
+            }
+        };
+        cube([-0.2, 0.0, -0.1], [-0.04, 0.85, 0.1]); // legs
+        cube([0.04, 0.0, -0.1], [0.2, 0.85, 0.1]);
+        cube([-0.2, 0.85, -0.12], [0.2, 1.5, 0.12]); // torso
+        cube([-0.34, 0.8, -0.07], [-0.23, 1.45, 0.07]); // arms
+        cube([0.23, 0.8, -0.07], [0.34, 1.45, 0.07]);
+        cube([-0.05, 1.5, -0.05], [0.05, 1.55, 0.05]); // neck
+        cube([-0.1, 1.58, -0.1], [0.1, 1.8, 0.1]); // head
+        Model { name: "Iron Man suit".into(), parts: vec![body], materials: vec![Material::default()], unit_m: 1.0, ..Model::default() }
+    }
+
+    /// 2026-11-09, "Make the helmet yellow." with a downloaded suit on show: no part was called
+    /// helmet, so the sentence went to the model, which turned the interface yellow and said the
+    /// helmet was.
+    #[test]
+    fn the_helmet_of_a_one_piece_suit_is_painted_by_its_place() {
+        let mut model = one_piece_figure();
+        assert!(named_parts(&model, "helmet").is_empty(), "the suit came in one piece");
+        assert!(is_figure(&model));
+        let all = model.triangles();
+        let (name, zone) = zone_of("helmet").unwrap();
+        assert_eq!((name, zone_of("Kopf").map(|z| z.0), zone_of("mask").map(|z| z.0)), ("helmet", Some("helmet"), Some("helmet")));
+        let taken = carve(&mut model, name, zone);
+        assert_eq!(taken, 12, "the head's twelve triangles, nothing of the neck or the shoulders");
+        assert_eq!(model.triangles(), all, "nothing lost");
+        let helmet = named_parts(&model, "helmet");
+        assert_eq!(helmet.len(), 1);
+        let b = model.parts[helmet[0]].bounds();
+        assert!(b.min[1] >= 1.57 && b.max[1] <= 1.81 && b.min[0] >= -0.11 && b.max[0] <= 0.11, "{b:?}");
+        assert_eq!(model.parts[helmet[0]].positions.len(), 8, "only the vertices it uses");
+        // Painted: the helmet alone changes.
+        let yellow = scene3d::paints_in("yellow").remove(0);
+        let before = model.materials[0].base_color;
+        let (materials, _, part_material) = effective(&model, &[Edit { target: Target::Named("helmet".into()), change: Change::Paint(yellow) }]);
+        for (i, part) in model.parts.iter().enumerate() {
+            let c = materials[part_material[i]].base_color;
+            if part.name == "helmet" {
+                assert!(c[0] > 0.7 && c[1] > 0.5 && c[2] < 0.35, "yellow: {c:?}");
+            } else {
+                assert_eq!(c, before, "{} keeps its look", part.name);
+            }
+        }
+        // The other places of a figure, and of anything.
+        // (The chest: the torso's sides and top, and the neck's underside on it.)
+        for (word, tris) in [("arms", 24), ("boots", 4), ("chest", 12)] {
+            let mut m = one_piece_figure();
+            let (name, zone) = zone_of(word).unwrap();
+            assert_eq!(carve(&mut m, name, zone), tris, "{word}");
+        }
+        let mut m = one_piece_figure();
+        let (name, zone) = zone_of("top half").unwrap();
+        let top = carve(&mut m, name, zone);
+        assert!(top > 12 && top < all, "{top} of {all}");
+        // A car has no helmet; a word that is no place is no zone ("make the note gold").
+        let mut car = Part { name: "body".into(), ..Part::default() };
+        car.positions = vec![[-2.0, 0.0, -0.9], [2.0, 0.0, -0.9], [2.0, 1.4, 0.9], [-2.0, 1.4, 0.9]];
+        car.indices = vec![0, 1, 2, 0, 2, 3];
+        assert!(!is_figure(&Model { parts: vec![car], materials: vec![Material::default()], unit_m: 1.0, ..Model::default() }));
+        assert!(zone_of("note").is_none() && zone_of("theme").is_none() && zone_of("interface").is_none());
+    }
+
+    #[test]
+    fn a_paint_order_names_its_thing_or_the_interface() {
+        for (said, thing) in [("Make the helmet yellow.", "helmet"), ("paint the arms silver", "arms"), ("mach den Helm rot", "helm"), ("Jarvis, make the cape red", "cape")] {
+            assert_eq!(painted_thing(said).as_deref(), Some(thing), "{said}");
+        }
+        for said in ["make it yellow", "make the theme yellow", "make the interface yellow", "yellow please", "change the accent to gold", "make yourself red", "what time is it", "make the background darker"] {
+            assert_eq!(painted_thing(said), None, "{said}");
+        }
+    }
+
     #[test]
     fn edits_only_while_the_studio_is_open() {
+
+
         let edit = |t: &str| args_of(t, true);
         assert_eq!(edit("make it gold").unwrap()["material"], "gold");
         // Sir's words of 2026-11-09 as Whisper heard them ("Can you…" → "And you…").
@@ -3104,6 +3520,10 @@ mod tests {
         assert_eq!(hits[1].url, "https://sketchfab.com/3d-models/bbb");
         assert_eq!(pick(&hits, "iron man suit").unwrap().uid, "bbb", "the matching, lighter model wins");
         assert_eq!(ranked(&hits, "iron man suit")[0].0, 3, "three words of the request matched");
+        // Both suits are worth fetching for the three words; the banana is not.
+        let suits: Vec<String> = candidates(&hits, &wanted("iron man suit", &[])).into_iter().map(|h| h.uid).collect();
+        assert_eq!(suits, ["bbb", "aaa"]);
+
         // The free mirror's index and its gzip (one stored deflate block).
         let index = r#"{"aaa": "glbs/000-001/aaa.glb", "bbb":"glbs/000-159/bbb.glb"}"#;
         assert_eq!((objaverse_path(index, "bbb"), objaverse_path(index, "ccc")), (Some("glbs/000-159/bbb.glb"), None));
@@ -3124,8 +3544,65 @@ mod tests {
         assert!(curated("a millennium falcon").is_none());
     }
 
+    /// 2026-11-09: "Can you show me a 3D model of an Apple?" brought up an iPad Pro, and three
+    /// more tries ("a real apple", "an eatable apple") did no better. The names are the
+    /// catalogue's own answer to "apple" that week.
+    #[test]
+    fn an_apple_is_the_fruit_not_the_tablet() {
+        let named = |list: &[(&str, u64)]| -> Vec<Hit> {
+            list.iter()
+                .enumerate()
+                .map(|(i, (name, likes))| Hit { uid: format!("u{i}"), name: name.to_string(), author: String::new(), license: String::new(), likes: *likes, faces: 20_000, glb_size: Some(2_000_000), thumb: None, url: String::new() })
+                .collect()
+        };
+        let catalogue = named(&[
+            ("Apple Macintosh", 204), ("Apple Watch Ultra 2", 344), ("Apple", 317), ("Apple II Computer", 750), ("Apple Watch", 144), ("Red Apple", 172), ("Royal gala apples", 347),
+            ("Cute Apple (Free)", 290), ("Apples", 114), ("Bronze Moses at Augustana University", 627), ("Apple iPad Pro", 323), ("Apple Desktop", 88), ("Apple iPhone 17 Pro Max", 81),
+            ("Apple Box", 281), ("Apple Vision Pro", 162), ("Tasty Green Apple", 283), ("Basket of apples", 900), ("Pineapple", 5000), ("Apple Tree", 800),
+        ]);
+        for asked in ["apple", "an apple", "real apple", "eatable apple", "apple fruit", "the apple you can eat"] {
+            let want = wanted(asked, &[]);
+            assert_eq!((want.core.as_str(), want.search.as_str()), ("apple", "apple fruit"), "{asked}");
+            let names: Vec<String> = candidates(&catalogue, &want).into_iter().map(|h| h.name).collect();
+            assert_eq!(names[0], "Apple", "{asked}: {names:?}");
+            for wrong in ["Apple iPad Pro", "Apple Watch", "Apple II Computer", "Apple Box", "Apple Tree", "Basket of apples", "Pineapple", "Apple Vision Pro", "Bronze Moses at Augustana University"] {
+                assert!(!names.iter().any(|n| n == wrong), "{asked}: {wrong} is no apple ({names:?})");
+            }
+            for right in ["Red Apple", "Cute Apple (Free)", "Apples", "Tasty Green Apple", "Royal gala apples"] {
+                assert!(names.iter().any(|n| n == right), "{asked}: {right} is one ({names:?})");
+            }
+        }
+        // The product by its name is still the product.
+        let tablet = wanted("apple ipad pro", &[]);
+        assert_eq!(tablet.search, "apple ipad pro");
+        assert_eq!(candidates(&catalogue, &tablet)[0].name, "Apple iPad Pro");
+        assert_eq!(candidates(&catalogue, &wanted("apple watch", &[]))[0].name, "Apple Watch");
+        // Only products on offer: the nearest name still comes, never nothing.
+        let products = named(&[("Apple iPad Pro", 323), ("Apple Watch", 144)]);
+        assert_eq!(candidates(&products, &wanted("apple", &[])).len(), 2);
+        // "Not an iPad": whatever else, not that.
+        let no_tablet = wanted("real apple", &["an iPad".to_string()]);
+        assert_eq!(no_tablet.avoid, ["ipad"]);
+        assert_eq!(candidates(&products, &no_tablet).iter().map(|h| h.name.as_str()).collect::<Vec<_>>(), ["Apple Watch"]);
+        // Other senses and plain things.
+        assert_eq!(wanted("a real horse", &[]).search, "horse");
+        assert_eq!(wanted("jaguar", &[]).search, "jaguar animal");
+        assert_eq!(wanted("jaguar e type", &[]).search, "jaguar e type");
+        assert_eq!(wanted("iron man suit", &[]), Wanted { core: "iron man suit".into(), search: "iron man suit".into(), avoid: vec![] });
+        assert_eq!(wanted("edible mushroom", &[]).search, "mushroom food");
+        assert!(sense_only("the fruit") && sense_only("a real one") && !sense_only("an apple") && !sense_only("fruit bowl"));
+        // His own sentences, with a model on show.
+        let said = |text: &str| command_with(text, true, false, &["apple ipad pro".to_string()]);
+        assert_eq!(said("No, not an iPad, I mean a real Apple."), Some(json!({"query": "real apple", "avoid": ["ipad"]})));
+        assert_eq!(said("Can you show me this 3D render of an apple?"), Some(json!({"query": "apple"})));
+        assert_eq!(said("Can you show me the model of an eatable apple?"), Some(json!({"query": "eatable apple"})));
+        assert_eq!(said("I meant the fruit"), Some(json!({"query": "fruit"})));
+        assert_eq!(command_with("No, not an iPad, I mean a real Apple.", false, false, &[]), None, "nothing on show: not the studio's");
+    }
+
     #[test]
     fn the_cache_keeps_its_bound_by_dropping_the_oldest() {
+
         let dir = std::env::temp_dir().join(format!("jarvis_cache_bound_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         for (i, name) in ["old.glb", "mid.glb", "new.glb"].iter().enumerate() {

@@ -288,7 +288,7 @@ fn widget_name(id: &str) -> &'static str {
 
 /// The first sentence of what a tool said, fit to be told: no asides in brackets ("window(s)",
 /// sizes, how to detach it), no ids, cut at a word.
-fn plain(said: &str) -> String {
+pub(crate) fn plain(said: &str) -> String {
     const LONGEST: usize = 120;
     // "Created widget 'id' (Checklist, "Shopping list") in the widgets panel of the HUD."
     for (opening, told) in [("Created widget '", "Added"), ("Updated widget '", "Updated")] {

@@ -160,9 +160,12 @@ static CLOSE_SECONDARY: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     [
         // "close the windows you opened", "close all windows", "close the research windows",
         // "close subwindows", "get rid of those extra windows".
-        format!(r"^(?:close|shut|dismiss|get rid of|remove|kill)\s+(?:down\s+)?{adjectives}(?:windows|sub ?windows|panels|popups|pop ups){made}(?:\s+again)?$"),
+        // "clear all open windows" (2026-11-09: it went to the model, which closed one).
+        format!(r"^(?:close|shut|dismiss|get rid of|remove|kill|clear|wipe|put away|take down|tidy away)\s+(?:down\s+|away\s+|out\s+|up\s+)?{adjectives}(?:windows|sub ?windows|panels|popups|pop ups|blocks){made}(?:\s+(?:again|away))?$"),
         // "close everything you opened", "close all of them".
-        r"^(?:close|shut)\s+(?:everything|all of them|them all)(?:\s+(?:that\s+)?you\s+(?:just\s+)?(?:opened|open|made|spawned))?$".to_string(),
+        r"^(?:close|shut|dismiss)\s+(?:everything|all of them|them all)(?:\s+(?:that\s+)?you\s+(?:just\s+)?(?:opened|open|made|spawned))?$".to_string(),
+        // "räum die Fenster weg", "entfern alle Fenster".
+        r"^(?:räum|räume|raeum|entfern|entferne)\s+(?:(?:alle|die|deine|diese|offenen|geöffneten)\s+)*fenster(?:\s+(?:weg|auf|ab))?$".to_string(),
         // "schließ die Fenster", "mach die Fenster wieder zu", "schließ alle deine Fenster".
         r"^(?:schließ|schließe|schliess|schliesse|mach|mache)\s+(?:(?:alle|die|deine|diese|eure|zusätzlichen|extra|neuen|offenen|geöffneten|anderen|recherche|unter)\s+)*(?:fenster|unterfenster|nebenfenster)(?:\s+(?:die du|die du geöffnet hast|wieder|alle|bitte))*(?:\s+zu)?$".to_string(),
         // "Fenster schließen", "alle Fenster zu".
@@ -1720,10 +1723,18 @@ mod tests {
             "mach die Fenster wieder zu",
             "Fenster schließen",
             "Jarvis, could you please close all of your windows?",
+            // Sir's own words of 2026-11-09 and their neighbours.
+            "clear all open windows",
+            "Clear the windows.",
+            "can you clear away all the windows",
+            "get rid of all the open windows",
+            "wipe all windows",
+            "close all the blocks",
+            "räum die Fenster weg",
         ] {
             assert_eq!(deterministic_action(yes), Some(IntentAction::CloseSecondaryWindows), "{yes}");
         }
-        for no in ["close Discord", "close the Chrome windows", "don't close the windows", "what windows did you open?", "open the windows settings", "No."] {
+        for no in ["close Discord", "close the Chrome windows", "don't close the windows", "what windows did you open?", "open the windows settings", "No.", "clear my calendar", "clear the board", "clear the recycle bin", "clear everything from my desktop"] {
             assert_ne!(deterministic_action(no), Some(IntentAction::CloseSecondaryWindows), "{no}");
         }
         assert_eq!(command_core("No. Just can you close the windows you opened?"), "close the windows you opened");

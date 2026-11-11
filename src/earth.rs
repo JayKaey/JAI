@@ -1147,6 +1147,8 @@ pub enum Action {
     ZoomOut,
     Home,
     Spin,
+    /// "Spin it the other way": the spin turns round (and starts if it stood still).
+    SpinReverse,
     StopSpin,
     /// "Where am I?": the "YOU" marker on Sir's position.
     Locate,
@@ -1304,9 +1306,10 @@ pub fn parse_action(args: &Value) -> Result<Action, String> {
         "zoom_out" => Action::ZoomOut,
         "home" | "reset" => Action::Home,
         "spin" => Action::Spin,
+        "spin_reverse" | "reverse_spin" | "spin_other_way" | "spin_backwards" => Action::SpinReverse,
         "stop_spin" => Action::StopSpin,
         "show_cameras" | "cameras" | "webcams" => Action::Cameras, // cameras (C2)
-        other => return Err(format!("'{other}' is not something the Earth does (show, show_satellite, show_holo, show_place, show_quakes, show_flights, show_storms, show_fires, show_iss, show_cameras, hide_layer, hide_layers, zoom_in, zoom_out, home, spin, stop_spin, show_my_location, show_mountains, show_terrain, exaggerate_terrain, show_radar, animate_radar, show_clouds, show_labels, hide_labels, set_imagery, show_date, show_today, show_world_tour, stop_tour).")),
+        other => return Err(format!("'{other}' is not something the Earth does (show, show_satellite, show_holo, show_place, show_quakes, show_flights, show_storms, show_fires, show_iss, show_cameras, hide_layer, hide_layers, zoom_in, zoom_out, home, spin, spin_reverse, stop_spin, show_my_location, show_mountains, show_terrain, exaggerate_terrain, show_radar, animate_radar, show_clouds, show_labels, hide_labels, set_imagery, show_date, show_today, show_world_tour, stop_tour).")),
     })
 }
 
@@ -1845,6 +1848,9 @@ pub struct Earth {
     pub queued: Option<Motion>,
     pub zoom_target: Option<f64>,
     pub spin: bool,
+    /// The way the spin turns: 1 as the Earth itself turns (the ground moves east), -1 the
+    /// other way. Kept while the view stays open, so "spin it again" turns as it last did.
+    pub spin_dir: f64,
     pub marker: Option<Marker>,
     pub area: Option<AreaQuery>,
     pub quakes: Feed<Quake>,
@@ -2026,6 +2032,7 @@ impl Earth {
             queued: None,
             zoom_target: None,
             spin: false,
+            spin_dir: 1.0,
             marker: None,
             area: None,
             quakes: Feed::default(),
@@ -2317,7 +2324,7 @@ impl Earth {
         }
         if self.spin && self.motion.is_none() {
             moving = true;
-            self.cam.lon = wrap_lon(self.cam.lon - SPIN_DEG_PER_SEC * dt);
+            self.cam.lon = wrap_lon(self.cam.lon - SPIN_DEG_PER_SEC * self.spin_dir * dt);
         }
         if self.tour.is_some() {
             self.step_tour(now);
@@ -3942,6 +3949,12 @@ async fn act(action: Action, offline: bool) -> (String, String) {
             state().spin = true;
             ("The globe spins.".into(), "Spinning the globe, Sir.".into())
         }
+        Action::SpinReverse => {
+            let mut st = state();
+            st.spin_dir = -st.spin_dir;
+            st.spin = true;
+            ("The globe spins the other way.".into(), "Turning it the other way, Sir.".into())
+        }
         Action::StopSpin => {
             state().spin = false;
             ("The globe holds still.".into(), "Holding it still, Sir.".into())
@@ -4407,6 +4420,20 @@ mod tests {
         assert!(near(smooth_towards(10.0, 0.0, 0.12, 0.12), 10.0 / std::f64::consts::E, 1e-9));
     }
 
+    /// 2026-11-09, "Can you spin the Earth in the other direction?": there was no such thing.
+    #[test]
+    fn the_spin_turns_either_way() {
+        let mut e = Earth::demo();
+        e.motion = None;
+        let start = e.cam.lon;
+        e.spin = true;
+        e.step(0.0, 1.0);
+        assert!(near(wrap_lon(start - e.cam.lon), SPIN_DEG_PER_SEC, 1e-9), "as the Earth turns: {} → {}", start, e.cam.lon);
+        e.spin_dir = -1.0;
+        e.step(1.0, 2.0);
+        assert!(near(wrap_lon(e.cam.lon - start), SPIN_DEG_PER_SEC, 1e-9), "and back past the start: {}", e.cam.lon);
+    }
+
     #[test]
     fn the_fly_in_comes_from_far_and_flights_follow_the_great_circle() {
         let mut e = Earth::new();
@@ -4638,7 +4665,7 @@ mod tests {
         assert_eq!(a(json!({"action": "hide_layer", "layer": "clouds"})), Ok(Action::Overlay(Overlay::Clouds, false)));
         assert_eq!(a(json!({"action": "hide_layer", "layer": "rain radar"})), Ok(Action::Overlay(Overlay::Radar, false)));
         assert_eq!(a(json!({"action": "hide_layers"})), Ok(Action::HideAll));
-        for (name, action) in [("show_storms", Action::Storms), ("show_fires", Action::Fires), ("show_iss", Action::Iss), ("zoom_in", Action::ZoomIn), ("zoom_out", Action::ZoomOut), ("home", Action::Home), ("spin", Action::Spin), ("stop_spin", Action::StopSpin)] {
+        for (name, action) in [("show_storms", Action::Storms), ("show_fires", Action::Fires), ("show_iss", Action::Iss), ("zoom_in", Action::ZoomIn), ("zoom_out", Action::ZoomOut), ("home", Action::Home), ("spin", Action::Spin), ("spin_reverse", Action::SpinReverse), ("stop_spin", Action::StopSpin)] {
             assert_eq!(a(json!({"action": name})), Ok(action));
         }
         assert!(a(json!({"action": "launch_missiles"})).is_err());

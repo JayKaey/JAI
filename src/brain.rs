@@ -1764,6 +1764,12 @@ impl Brain {
         if crate::window_commands::is_tool(tool) {
             return (spoken.clone(), spoken);
         }
+        // "Closed 1 window(s): drive_space." is the tool's ledger line, not a sentence
+        // (2026-11-09: it was read out as it stood).
+        if matches!(tool, "close_native_window" | "spawn_native_window") && !output.contains("\nSpoken: ") {
+            let line = format!("{}, Sir.", crate::undo::plain(output));
+            return (line.clone(), line);
+        }
         (display, spoken)
     }
 
@@ -2732,8 +2738,16 @@ impl Brain {
                     // waits for his yes, like the memory command's (`identity_gate`).
                     let spoken = st.req.source == InputSource::Voice;
                     let unconfirmed = |name: &str, args: &Value| spoken && name == "remember_fact" && crate::memory::is_identity_key(args["key"].as_str().unwrap_or(""));
-                    let any_held = calls.iter().any(|(name, args)| held_back(name, args) || unconfirmed(name, args));
-                    let all_held = calls.iter().all(|(name, args)| held_back(name, args));
+                    // A look for the interface the sentence never asked for: "make the helmet
+                    // yellow" names a thing (2026-11-09: the model recoloured the whole HUD and
+                    // said the helmet was yellow).
+                    let painted = crate::model3d::painted_thing(request);
+                    let not_his = |name: &str, args: &Value| {
+                        const LOOK: &[&str] = &["theme", "preset", "style", "accent_color", "accent_colour", "accent", "color", "colour", "highlight_color", "background_color", "background_colour", "background", "backdrop"];
+                        painted.is_some() && name == "configure_interface" && LOOK.iter().any(|k| args.get(*k).is_some_and(|v| !v.is_null()))
+                    };
+                    let any_held = calls.iter().any(|(name, args)| held_back(name, args) || unconfirmed(name, args) || not_his(name, args));
+                    let all_held = calls.iter().all(|(name, args)| held_back(name, args) || not_his(name, args));
                     // Several reads in one round (timetable + mail + weather) run side by side;
                     // anything with an effect keeps its order. Every call goes through the cortex:
                     // a read started ahead is taken from memory, an obvious failure healed once.
@@ -2750,8 +2764,17 @@ impl Brain {
                                 done.push(tools::only_asked(name, args));
                                 continue;
                             }
+                            if not_his(name, args) {
+                                let thing = painted.clone().unwrap_or_default();
+                                warn!("[GROUND] '{request}' names the {thing}, not the interface: {name} {args} left undone");
+                                let mut held = tools::only_asked(name, args);
+                                held.output = format!("Not done: Sir's sentence is about the {thing}, not about your interface, and nothing on screen has a {thing} to paint. Tell him that in one sentence. Do not say it was done.");
+                                done.push(held);
+                                continue;
+                            }
                             if unconfirmed(name, args) {
                                 let mut held = tools::only_asked(name, args);
+
                                 if !st.req.barge_in && st.req.link.heard().is_some_and(|h| h.confident()) {
                                     info!("[MEM] {name} {args} changes how Sir is addressed: held for his yes");
                                     self.inner.tools.focus.note_offer(crate::focus::PendingOffer { tool: name.clone(), args: args.clone(), terminate: None });
