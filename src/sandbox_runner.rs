@@ -72,7 +72,7 @@ pub async fn run_tool(tools: &ToolContext, args: &Value) -> Result<String, Strin
         };
         extract_code(&tools.pim.complete(instruction, &task, 900).await.ok_or("The language model is not available to write the program, Sir.")?)
     };
-    let dir: PathBuf = std::env::temp_dir().join("jarvis_sandbox").join(crate::features::stamp());
+    let dir: PathBuf = std::env::temp_dir().join("jai_sandbox").join(crate::features::stamp());
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let mut attempt = execute(&dir, &code, rust).await?;
     let mut fixes = 0;

@@ -485,7 +485,7 @@ pub fn window_command(command: WindowCommand) -> Result<(), String> {
     Ok(())
 }
 
-/// Resizes the HUD window (logical points) — `control_jarvis_interface` set_window_size.
+/// Resizes the HUD window (logical points) — `control_jai_interface` set_window_size.
 pub fn set_window_size(width: f32, height: f32) -> Result<(), String> {
     if !SHARED.running.load(Ordering::Acquire) {
         return Err("JAI is running without his HUD window (headless), so there is no window to resize.".into());
@@ -709,7 +709,7 @@ fn open_window(app: &Jai, rt: &Handle, model: &Arc<Mutex<HudModel>>) -> Result<(
     let quiet = crate::platform::quiet_session();
     let viewport = egui::ViewportBuilder::default()
         .with_title(window_title(&iface))
-        .with_app_id("jarvis")
+        .with_app_id("jai")
         .with_inner_size(geometry.size)
         .with_resizable(true)
         .with_min_inner_size(min)
@@ -1603,13 +1603,13 @@ impl Reactor {
 }
 
 /// What the emblem's voice ticks follow after a second of `state` with JAI's own playback at
-/// `jarvis` (0-1) and Sir's microphone at `mic` (0-1): the reactor's own mapping, as the visual
+/// `jai` (0-1) and Sir's microphone at `mic` (0-1): the reactor's own mapping, as the visual
 /// verifier asks it. The microphone never reaches the emblem.
-pub(crate) fn emblem_voice_of(state: &str, jarvis: f32, mic: f32) -> f32 {
+pub(crate) fn emblem_voice_of(state: &str, jai: f32, mic: f32) -> f32 {
     let level = AudioLevel { rms: mic, rms_db: -62.0 + 42.0 * mic.clamp(0.0, 1.0), probability: mic, noise_floor: 0.0, start_gate: 0.0, start_threshold: 0.0, release_threshold: 0.0, phase: "listening", speaking: mic > 0.5 };
     let mut reactor = Reactor::default();
     for _ in 0..60 {
-        reactor.step_with(state, Some(&level), 1.0 / 60.0, jarvis / 6.0);
+        reactor.step_with(state, Some(&level), 1.0 / 60.0, jai / 6.0);
     }
     reactor.emblem_voice()
 }
@@ -1635,7 +1635,7 @@ pub(crate) fn apply_hud_visuals(ctx: &egui::Context) {
 /// what is on screen, and nothing appears a frame late. Called at the end of every pass.
 pub(crate) fn settle_new_areas(ctx: &egui::Context) {
     let layers = ctx.memory(|m| m.layer_ids().len());
-    let seen = ctx.data_mut(|d| std::mem::replace(d.get_temp_mut_or_insert_with(egui::Id::new("jarvis_layers_seen"), || 0usize), layers));
+    let seen = ctx.data_mut(|d| std::mem::replace(d.get_temp_mut_or_insert_with(egui::Id::new("jai_layers_seen"), || 0usize), layers));
     if layers > seen {
         ctx.request_discard("a new area was measured");
     }
@@ -3170,7 +3170,7 @@ fn paint_frost(ctx: &egui::Context, screen: Rect) {
         return;
     }
     ctx.request_repaint();
-    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("jarvis_screen_frost")));
+    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("jai_screen_frost")));
     painter.rect_filled(screen, Rounding::ZERO, Color32::from_rgba_unmultiplied(205, 228, 245, (frost * 70.0) as u8));
 }
 
@@ -3561,7 +3561,7 @@ impl HudApp {
         let (dropped, hovering) = ctx.input(|i| (i.raw.dropped_files.iter().filter_map(|f| f.path.clone()).collect::<Vec<_>>(), !i.raw.hovered_files.is_empty()));
         if hovering {
             let screen = ctx.screen_rect();
-            let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("jarvis_file_drop")));
+            let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("jai_file_drop")));
             let accent = crate::hud_board::active_colour();
             painter.rect_filled(screen, Rounding::ZERO, rgba([3, 7, 12], 0.55));
             let zone = Rect::from_center_size(screen.center(), vec2(420.0, 120.0));
@@ -4101,7 +4101,7 @@ impl HudApp {
             Some("clear") => {
                 // Silent: the blocks collapse and the emblem folds home (no speech, no flush).
                 crate::hud_board::sign_off();
-                crate::tts::play_earcon(crate::jarvis_voice_dsp::Earcon::PowerDown);
+                crate::tts::play_earcon(crate::jai_voice_dsp::Earcon::PowerDown);
             }
             Some("console") => {
                 self.console_open = !self.console_open;
@@ -4596,8 +4596,8 @@ impl HudApp {
     /// `CAPTION_SECS` after the last word; the text console and HISTORY keep everything.
     fn comms_block(&mut self, ui: &mut Ui, m: &HudModel, screen: Rect) {
         let sir = m.messages.iter().rev().find(|l| l.who == Speaker::Sir && !l.faded).map(|l| l.text.clone()).unwrap_or_default();
-        let jarvis = m.messages.iter().rev().find(|l| l.who == Speaker::Jai);
-        let (reply, streaming, at) = jarvis.map(|l| (l.text.clone(), l.streaming, l.at.clone())).unwrap_or_default();
+        let jai = m.messages.iter().rev().find(|l| l.who == Speaker::Jai);
+        let (reply, streaming, at) = jai.map(|l| (l.text.clone(), l.streaming, l.at.clone())).unwrap_or_default();
         let now = Instant::now();
         for (slot, text) in self.captions.iter_mut().zip([&sir, &reply]) {
             if slot.0 != *text {
@@ -4697,16 +4697,16 @@ impl HudApp {
         let mut act = ConsoleActions::default();
         if crate::hud_dock::is_detached(CONSOLE_ID) {
             // (Closed while it is a window of its own: it plays its exit, then goes.)
-            if !detached_keep(ctx, ViewportId::from_hash_of("jarvis_text_console"), self.console_open) {
+            if !detached_keep(ctx, ViewportId::from_hash_of("jai_text_console"), self.console_open) {
                 return;
             }
             self.console_at_edge = false;
-            let mut builder = egui::ViewportBuilder::default().with_title("Text Console — J.A.I.").with_app_id("jarvis").with_inner_size([CONSOLE_WIDTH, 640.0]).with_min_inner_size([320.0, 260.0]).with_decorations(false);
+            let mut builder = egui::ViewportBuilder::default().with_title("Text Console — J.A.I.").with_app_id("jai").with_inner_size([CONSOLE_WIDTH, 640.0]).with_min_inner_size([320.0, 260.0]).with_decorations(false);
             if let Some((at, size)) = detached_placement(ctx, CONSOLE_ID) {
                 builder = builder.with_position(at).with_inner_size(size);
             }
             let builder = for_test_session(builder);
-            ctx.show_viewport_immediate(ViewportId::from_hash_of("jarvis_text_console"), builder, |ctx, _| {
+            ctx.show_viewport_immediate(ViewportId::from_hash_of("jai_text_console"), builder, |ctx, _| {
                 if ctx.input(|i| i.viewport().close_requested()) {
                     act.close = true;
                 }
@@ -5036,7 +5036,7 @@ impl HudApp {
             // The fullscreen board (also one that spans the monitors) goes there at once; a
             // plain window is moved as any window is. No language model either way.
             if !send_board_to_monitor(self.app.config(), n) {
-                self.run_calls(vec![("move_window_to_monitor", serde_json::json!({ "app_or_window_name": "jarvis", "target_monitor": n }))]);
+                self.run_calls(vec![("move_window_to_monitor", serde_json::json!({ "app_or_window_name": "jai", "target_monitor": n }))]);
             }
         }
         if let Some(on) = picked.span.filter(|on| *on != iface.span_all_monitors) {
@@ -5141,7 +5141,7 @@ impl HudApp {
                 if toggle && window_open(id) {
                     engine.window_closed_by_user(id);
                 } else if !window_open(id) {
-                    self.run_tool("open_jarvis_view", serde_json::json!({ "view": view }));
+                    self.run_tool("open_jai_view", serde_json::json!({ "view": view }));
                 }
             }
             V::TextConsole => {
@@ -5330,25 +5330,25 @@ pub(crate) fn clamp_to_work_area(rect: Rect, monitors: &[crate::monitors::Monito
 /// The OS window of view `id` while it is a window of its own.
 fn viewport_for_block(id: &str) -> ViewportId {
     match id {
-        "earth" => ViewportId::from_hash_of("jarvis_earth"),
-        "network_radar" => ViewportId::from_hash_of("jarvis_network_radar"),
-        "disk_map" => ViewportId::from_hash_of("jarvis_disk_map"),
-        "features" => ViewportId::from_hash_of("jarvis_feature_lab"),
-        "audio_mixer" => ViewportId::from_hash_of("jarvis_audio_mixer"),
-        "theme_studio" => ViewportId::from_hash_of("jarvis_theme_studio"),
-        "discord_audio" => ViewportId::from_hash_of("jarvis_discord_audio"),
-        "pairing" => ViewportId::from_hash_of("jarvis_satellite_pairing"),
+        "earth" => ViewportId::from_hash_of("jai_earth"),
+        "network_radar" => ViewportId::from_hash_of("jai_network_radar"),
+        "disk_map" => ViewportId::from_hash_of("jai_disk_map"),
+        "features" => ViewportId::from_hash_of("jai_feature_lab"),
+        "audio_mixer" => ViewportId::from_hash_of("jai_audio_mixer"),
+        "theme_studio" => ViewportId::from_hash_of("jai_theme_studio"),
+        "discord_audio" => ViewportId::from_hash_of("jai_discord_audio"),
+        "pairing" => ViewportId::from_hash_of("jai_satellite_pairing"),
         // ("Dock it back" found no 3D window: these had no entry.)
-        "model3d" => ViewportId::from_hash_of("jarvis_model3d"),
-        "departures" => ViewportId::from_hash_of("jarvis_departures"),
-        "image_viewer" => ViewportId::from_hash_of("jarvis_image_viewer"),
-        "webcams" => ViewportId::from_hash_of("jarvis_webcams"),
-        "street_view" => ViewportId::from_hash_of("jarvis_street_view"),
+        "model3d" => ViewportId::from_hash_of("jai_model3d"),
+        "departures" => ViewportId::from_hash_of("jai_departures"),
+        "image_viewer" => ViewportId::from_hash_of("jai_image_viewer"),
+        "webcams" => ViewportId::from_hash_of("jai_webcams"),
+        "street_view" => ViewportId::from_hash_of("jai_street_view"),
         // The second, third … picture block (`gui_media::show`).
-        id if id.starts_with("image_viewer_") => ViewportId::from_hash_of(format!("jarvis_{id}")),
+        id if id.starts_with("image_viewer_") => ViewportId::from_hash_of(format!("jai_{id}")),
         id => match id.strip_prefix("sim:") {
-            Some(sim) => ViewportId::from_hash_of(("jarvis_simlab", sim)),
-            None => ViewportId::from_hash_of(("jarvis_window", id)),
+            Some(sim) => ViewportId::from_hash_of(("jai_simlab", sim)),
+            None => ViewportId::from_hash_of(("jai_window", id)),
         },
     }
 }
@@ -5711,7 +5711,7 @@ fn block_tray(ctx: &egui::Context) {
     }
     let home = home_screen(ctx);
     let at = pos2(home.left() + 24.0, home.bottom() - 12.0 - TELEMETRY_H - 8.0 - 26.0);
-    egui::Area::new(egui::Id::new("jarvis_block_tray")).order(egui::Order::Foreground).fixed_pos(at).show(ctx, |ui| {
+    egui::Area::new(egui::Id::new("jai_block_tray")).order(egui::Order::Foreground).fixed_pos(at).show(ctx, |ui| {
         ui.horizontal(|ui| {
             for (id, title) in &tray {
                 let name = title.split(" // ").next().unwrap_or(title).trim().to_uppercase();
@@ -5822,10 +5822,10 @@ fn header_items(lit: &HeaderState, reboot: &str, source: &str) -> Vec<HeaderItem
 
 /// `[ MODULES ]`: each Stark module and the tool calls (name, JSON arguments) that open it.
 const MODULES: &[(&str, &[(&str, &str)])] = &[
-    ("HOLOMAT — MATH · PHYSICS · CHEM LAB", &[("open_jarvis_view", r#"{"view": "simulation_lab"}"#)]),
-    ("CHRONOS — WEBUNTIS · ITSLEARNING · CALENDAR", &[("open_jarvis_view", r#"{"view": "schedule"}"#)]),
+    ("HOLOMAT — MATH · PHYSICS · CHEM LAB", &[("open_jai_view", r#"{"view": "simulation_lab"}"#)]),
+    ("CHRONOS — WEBUNTIS · ITSLEARNING · CALENDAR", &[("open_jai_view", r#"{"view": "schedule"}"#)]),
     ("MEDIA & AUDIO MIXER — PLAYLISTS · APP VOLUMES", &[("control_audio_mixer", r#"{"action": "list"}"#), ("control_music", r#"{"action": "list_playlists"}"#)]),
-    ("SENTINEL & AEGIS — TELEMETRY · VRAM · SERVERS", &[("open_jarvis_view", r#"{"view": "system_stats"}"#), ("server_deck", "{}")]),
+    ("SENTINEL & AEGIS — TELEMETRY · VRAM · SERVERS", &[("open_jai_view", r#"{"view": "system_stats"}"#), ("server_deck", "{}")]),
     ("DEEP RESEARCH AGENT", &[("manage_deep_research", r#"{"action": "open_workspace"}"#)]),
     ("TOOL FORGE — SELF-CREATED TOOLS", &[("list_forged_tools", "{}")]),
     ("MOTO & WEATHER RADAR — ROUTE · RAIN", &[("check_ride_and_commute_status", "{}"), ("get_precise_location_weather", "{}")]),
@@ -5893,7 +5893,7 @@ fn comms_placement(screen: Rect, console_width: f32) -> (f32, f32) {
 }
 
 /// Frame-time diagnostics: a frame over 120 ms is logged (at most every 5 s), and with
-/// `JARVIS_LOG=jarvis=debug` the frame rate every 2 s.
+/// `JAI_LOG=jai=debug` the frame rate every 2 s.
 fn frame_stats(took: Duration) {
     let mut clock = lock(&FRAME_CLOCK);
     if took > Duration::from_millis(120) && clock.last_slow.is_none_or(|t| t.elapsed() > Duration::from_secs(5)) {
@@ -5971,7 +5971,7 @@ struct ConsoleActions {
 const CONSOLE_ID: &str = "console";
 
 /// The console's input line's egui id: fixed, whatever stands above it.
-pub(crate) const CONSOLE_INPUT_ID: &str = "jarvis_console_input";
+pub(crate) const CONSOLE_INPUT_ID: &str = "jai_console_input";
 
 /// Where the text console stands on the HUD this frame and stood in the last one (None: not on
 /// the HUD).
@@ -6109,7 +6109,7 @@ pub(super) fn next_animation_frame(ctx: &egui::Context) {
 pub(super) fn paint_window_border(ctx: &egui::Context) {
     crate::live_shots::tick(ctx);
     let screen = ctx.screen_rect();
-    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("jarvis_window_border")));
+    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("jai_window_border")));
     let motion = detached_motion(ctx);
     if motion.moving() {
         ctx.request_repaint();
@@ -6194,7 +6194,7 @@ pub(super) fn detached_title_bar(ui: &mut Ui, ctx: &egui::Context, title: &str) 
     motions.opened(viewport, ctx.cumulative_pass_nr());
     if clicked && !motions.leaving.contains_key(&viewport) {
         motions.leaving.insert(viewport, (Instant::now(), true));
-        crate::tts::play_cue(crate::jarvis_voice_dsp::Earcon::Dismiss);
+        crate::tts::play_cue(crate::jai_voice_dsp::Earcon::Dismiss);
         ctx.request_repaint();
     }
     // The exit its [ CLOSE ] started has played: now it closes.
@@ -6494,7 +6494,7 @@ pub(super) fn hud_block_window(ctx: &egui::Context, id: &str, title: &str, size:
             paint_resize_grip(&painter, rect, edge.gamma_multiply(0.8 * dim));
         }
         if crate::hud_dock::publish_block(id, title, rect) {
-            crate::tts::play_cue(crate::jarvis_voice_dsp::Earcon::Materialize);
+            crate::tts::play_cue(crate::jai_voice_dsp::Earcon::Materialize);
         }
         // Moved with the mouse, a block stays exactly under the pointer: where it stood when
         // the button went down plus the whole way the pointer has come since. (egui's own
@@ -6541,7 +6541,7 @@ pub(super) fn hud_block_window(ctx: &egui::Context, id: &str, title: &str, size:
                 }
                 Menu::Maximize => {
                     if crate::hud_dock::toggle_maximize(id, bounds) {
-                        crate::tts::play_cue(crate::jarvis_voice_dsp::Earcon::Spotlight);
+                        crate::tts::play_cue(crate::jai_voice_dsp::Earcon::Spotlight);
                     }
                 }
                 Menu::ExportMarkdown => export(Format::Markdown),
@@ -6554,7 +6554,7 @@ pub(super) fn hud_block_window(ctx: &egui::Context, id: &str, title: &str, size:
     // Closed by hand (the chip, the menu, Ctrl+W): the block leaves with its cue, after its exit
     // (offscreen, at once).
     if close_asked {
-        crate::tts::play_cue(crate::jarvis_voice_dsp::Earcon::Dismiss);
+        crate::tts::play_cue(crate::jai_voice_dsp::Earcon::Dismiss);
         if still {
             action.close = true;
         } else {
@@ -6567,7 +6567,7 @@ pub(super) fn hud_block_window(ctx: &egui::Context, id: &str, title: &str, size:
 
 /// The egui-data key that marks a context whose windows are drawn at rest (offscreen renders:
 /// `ui_snapshot`, the visual verifier): no entrance or exit moves them while they are measured.
-pub(crate) const STILL_WINDOWS: &str = "jarvis_still_windows";
+pub(crate) const STILL_WINDOWS: &str = "jai_still_windows";
 
 /// Whether this context draws its windows at rest (`STILL_WINDOWS`), or Sir turned the
 /// interface's animations off (`REDUCED_MOTION`): then windows come and go at once.
@@ -6950,7 +6950,7 @@ fn monitor_layout(ctx: &egui::Context) -> (Vec<Rect>, bool) {
     // Every block asks in every frame: worked out once per frame (and window place and scale),
     // not once per block from a fresh copy of the monitor list.
     type Layout = (u64, Rect, f32, Vec<Rect>, bool);
-    let key = egui::Id::new(("jarvis_monitor_layout", ctx.viewport_id()));
+    let key = egui::Id::new(("jai_monitor_layout", ctx.viewport_id()));
     let pass = ctx.cumulative_pass_nr();
     if let Some((_, _, _, regions, spanning)) = ctx.data(|d| d.get_temp::<Layout>(key)).filter(|(at, rect, scale, ..)| *at == pass && *rect == window && *scale == ppp) {
         return (regions, spanning);
@@ -8092,10 +8092,10 @@ mod tests {
     }
 
     #[test]
-    fn the_emblem_follows_jarvis_voice_and_never_sirs_microphone() {
+    fn the_emblem_follows_jai_voice_and_never_sirs_microphone() {
         // Repro 2026-11-03: `mic.max(voice)` made the orb pulse while Sir talked.
         let sir = Reactor { mic: 0.8, voice: 0.0, ..Default::default() };
-        let jarvis = Reactor { mic: 0.1, voice: 0.6, ..Default::default() };
-        assert_eq!((sir.emblem_voice(), jarvis.emblem_voice()), (0.0, 0.6));
+        let jai = Reactor { mic: 0.1, voice: 0.6, ..Default::default() };
+        assert_eq!((sir.emblem_voice(), jai.emblem_voice()), (0.0, 0.6));
     }
 }

@@ -327,7 +327,7 @@ fn lane_of(step: &Step, index: usize) -> Option<String> {
             Some(if PLAYERS.contains(&app.as_str()) { "media".to_string() } else { format!("app:{app}") })
         }
         "control_music" | "media_and_volume_control" | "control_audio_mixer" => Some("media".to_string()),
-        "spawn_native_window" | "close_native_window" | "update_native_window" | "configure_interface" | "control_orb_mode" | "open_jarvis_view" | "hud_board" | "pop_up_ui_card" | "arrange_jarvis_window" => {
+        "spawn_native_window" | "close_native_window" | "update_native_window" | "configure_interface" | "control_orb_mode" | "open_jai_view" | "hud_board" | "pop_up_ui_card" | "arrange_jai_window" => {
             Some("hud".to_string())
         }
         "set_response_modality" | "focus_mode" | "set_listening_mode" => Some("mode".to_string()),
@@ -405,7 +405,7 @@ fn starter_protocols() -> Vec<Protocol> {
             trigger_phrases: vec!["study mode".into(), "time to study".into(), "lernmodus".into(), "zeit zu lernen".into()],
             steps: vec![
                 step("focus_mode", json!({ "action": "start", "minutes": 50 })),
-                step("open_jarvis_view", json!({ "view": "schedule" })),
+                step("open_jai_view", json!({ "view": "schedule" })),
                 step("sync_study_materials_and_deadlines", json!({ "action": "list" })),
                 step("control_music", json!({ "action": "play", "playlist_name": "Jays Focus" })),
                 step("media_and_volume_control", json!({ "action": "set_volume", "level": 25 })),
@@ -537,7 +537,7 @@ pub fn scan_workspace() -> Vec<CapturedWindow> {
     let monitors = crate::monitors::list();
     let mut out: Vec<CapturedWindow> = Vec::new();
     for w in win32::app_windows() {
-        if win32::is_jarvis_window(&w) || is_shell_process(&w.process) || matches!(w.class.as_str(), "Progman" | "WorkerW" | "Shell_TrayWnd") {
+        if win32::is_jai_window(&w) || is_shell_process(&w.process) || matches!(w.class.as_str(), "Progman" | "WorkerW" | "Shell_TrayWnd") {
             continue;
         }
         if out.iter().any(|c| c.process == w.process) {
@@ -569,7 +569,7 @@ pub fn scan_workspace() -> Vec<CapturedWindow> {
 }
 
 /// The steps that rebuild a captured workspace.
-pub fn workspace_steps(apps: &[CapturedWindow], jarvis_windows: &[crate::widgets::NativeWindowSpec], music: Option<&crate::music::LibraryItem>) -> Vec<Step> {
+pub fn workspace_steps(apps: &[CapturedWindow], jai_windows: &[crate::widgets::NativeWindowSpec], music: Option<&crate::music::LibraryItem>) -> Vec<Step> {
     let mut steps: Vec<Step> = apps
         .iter()
         .map(|a| {
@@ -582,7 +582,7 @@ pub fn workspace_steps(apps: &[CapturedWindow], jarvis_windows: &[crate::widgets
             )
         })
         .collect();
-    for w in jarvis_windows {
+    for w in jai_windows {
         let live = w.live_kinds();
         if let Some(kind) = live.first() {
             let mut args = json!({ "id": w.id, "title": w.title, "live": kind, "width": w.actual.map(|a| a[2]).unwrap_or(w.width), "height": w.actual.map(|a| a[3]).unwrap_or(w.height) });

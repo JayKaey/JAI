@@ -241,12 +241,12 @@ pub fn route_text(text: &str) -> Option<Route> {
         "not at home", "away from home", "from anywhere", "anywhere in the world", "on the go", "mobile data", "außer haus", "ausser haus", "nicht zuhause",
         "nicht zu hause", "mobilen daten", "mobile daten", "anderen wlan", "ohne wlan", "gleichen wlan", "selben wlan",
     ]) || ws.iter().any(|w| matches!(w.as_str(), "4g" | "5g" | "lte" | "cellular" | "unterwegs"));
-    let use_jarvis = has_phrase(&lower, &["use you", "use jai", "reach you", "talk to you", "access you", "dich nutzen", "dich benutzen", "dich erreichen", "jai nutzen", "jai benutzen"]);
+    let use_jai = has_phrase(&lower, &["use you", "use jai", "reach you", "talk to you", "access you", "dich nutzen", "dich benutzen", "dich erreichen", "jai nutzen", "jai benutzen"]);
     if ((phone
         && (has_phrase(&lower, &["use you", "connect", "link", "pair", "qr", "satellite", "set up", "setup", "verbind", "benutz", "nutzen", "talk to you", "access you", "on my phone", "from my phone", "auf meinem handy", "mit meinem handy", "auf dem handy", "am handy"])
             || lower.contains("mobile link")
             || anywhere))
-        || (anywhere && use_jarvis))
+        || (anywhere && use_jai))
         && !lower.contains("whatsapp") {
             return route("show_mobile_satellite_instructions", json!({}), Mode::Act);
         }

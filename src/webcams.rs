@@ -673,7 +673,7 @@ pub fn set_earth_layer(on: bool) {
     crate::gui::refresh();
 }
 
-/// `open_jarvis_view {"view": "earth", "action": "show_cameras"}` (the Earth is open already).
+/// `open_jai_view {"view": "earth", "action": "show_cameras"}` (the Earth is open already).
 pub async fn earth_layer_action(offline_run: bool) -> (String, String) {
     set_earth_layer(true);
     if offline_run {

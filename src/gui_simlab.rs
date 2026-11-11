@@ -91,7 +91,7 @@ impl Runtime {
 static RUNTIMES: Mutex<Option<HashMap<String, Runtime>>> = Mutex::new(None);
 
 fn viewport_id(id: &str) -> ViewportId {
-    ViewportId::from_hash_of(("jarvis_simlab", id))
+    ViewportId::from_hash_of(("jai_simlab", id))
 }
 
 /// The projectile's flight (with quadratic drag), sampled every 5 ms.
@@ -180,7 +180,7 @@ pub(super) fn show_simulations(ctx: &egui::Context, host: &WidgetHost) {
         // Opaque: a transparent GL window showed black wherever nothing was painted.
         let mut builder = ViewportBuilder::default()
             .with_title(format!("{} — J.A.I. Simulation Lab", sim.title))
-            .with_app_id("jarvis")
+            .with_app_id("jai")
             .with_inner_size([960.0, 620.0])
             .with_min_inner_size([560.0, 380.0])
             .with_transparent(false)
@@ -242,7 +242,7 @@ fn sim_frame(ctx: &egui::Context, class: ViewportClass, host: &WidgetHost, id: &
     paint_background(ctx, &p);
     let body = |ui: &mut egui::Ui| draw_body(ui, &p, &sim, host, false);
     if class == ViewportClass::Embedded {
-        egui::Window::new(&sim.title).id(egui::Id::new(("jarvis_sim_embedded", id))).default_size([900.0, 560.0]).show(ctx, body);
+        egui::Window::new(&sim.title).id(egui::Id::new(("jai_sim_embedded", id))).default_size([900.0, 560.0]).show(ctx, body);
     } else {
         egui::CentralPanel::default().frame(Frame::none().inner_margin(Margin::same(12.0))).show(ctx, |ui| {
             // Closing the borderless window brings the simulation back onto the HUD.

@@ -468,7 +468,7 @@ fn allow_form(html: &str, page: &str) -> Option<FormPost> {
 /// The app's OAuth code for the signed-in session, exchanged for an access token.
 async fn app_token(s: &BwSession) -> Result<String, String> {
     let client = client_for(&s.jar, false)?;
-    let mut url = format!("{}/oauth2/authorize.aspx?client_id={CLIENT_ID}&state=jarvis&response_type=code&redirect_uri={}", s.base, urlencoding::encode(APP_REDIRECT));
+    let mut url = format!("{}/oauth2/authorize.aspx?client_id={CLIENT_ID}&state=jai&response_type=code&redirect_uri={}", s.base, urlencoding::encode(APP_REDIRECT));
     let mut code = None;
     for _ in 0..8 {
         let resp = client.get(&url).send().await.map_err(crate::web_connector::err_chain)?;
@@ -790,7 +790,7 @@ fn edge_binary() -> Option<std::path::PathBuf> {
 /// Step 5: the same sign-in in a headless Edge; its itslearning cookies join a fresh jar.
 pub async fn edge_login(base: &str, username: &str, password: &str) -> Result<BwSession, String> {
     let edge = edge_binary().ok_or("Microsoft Edge is not installed")?;
-    let profile = std::env::temp_dir().join(format!("jarvis-edge-sso-{}", std::process::id()));
+    let profile = std::env::temp_dir().join(format!("jai-edge-sso-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&profile);
     std::fs::create_dir_all(&profile).map_err(|e| e.to_string())?;
     let mut cmd = std::process::Command::new(edge);
@@ -957,7 +957,7 @@ mod tests {
 
     #[test]
     fn the_app_code_is_read_from_the_custom_scheme_redirect() {
-        assert_eq!(code_from_redirect("itsl-itslearning://login?state=jarvis&code=AbC%2B9"), Some("AbC+9".into()));
+        assert_eq!(code_from_redirect("itsl-itslearning://login?state=jai&code=AbC%2B9"), Some("AbC+9".into()));
         assert_eq!(code_from_redirect("itsl-itslearning://login?error=denied"), None);
     }
 

@@ -640,7 +640,7 @@ mod tests {
         }
         assert!(is_tool("thermal_advisor") && !is_tool("web_search"));
         assert_eq!(static_name("tile_windows"), Some("tile_windows"));
-        for card in [break_card(3000), routine_card(&crate::routine_learner::Habit { tool: "open_jarvis_view".into(), args: json!({"view": "schedule"}), label: "open the schedule view".into(), days: 3, usual_minute: 430 })] {
+        for card in [break_card(3000), routine_card(&crate::routine_learner::Habit { tool: "open_jai_view".into(), args: json!({"view": "schedule"}), label: "open the schedule view".into(), days: 3, usual_minute: 430 })] {
             assert!(!card.body.is_empty() && card.spoken.is_none(), "the cards are silent");
             for fix in &card.fixes {
                 assert!(is_tool(fix.tool), "{}", fix.tool);

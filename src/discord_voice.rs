@@ -1082,13 +1082,13 @@ mod tests {
             writer.send_text(&json!({"op": 8, "d": {"heartbeat_interval": 60_000.0}}).to_string()).await.unwrap();
             writer.send_text(&json!({"op": 2, "d": {"ssrc": 77, "ip": "127.0.0.1", "port": udp_port, "modes": ["aead_xchacha20_poly1305_rtpsize", "aead_aes256_gcm_rtpsize"]}}).to_string()).await.unwrap();
             let mut buf = [0u8; 2048];
-            let (n, jarvis) = udp.recv_from(&mut buf).await.unwrap();
+            let (n, jai) = udp.recv_from(&mut buf).await.unwrap();
             assert_eq!(n, 74);
             let mut answer = [0u8; 74];
             answer[1] = 2;
             answer[8..17].copy_from_slice(b"127.0.0.1");
-            answer[72..74].copy_from_slice(&jarvis.port().to_be_bytes());
-            udp.send_to(&answer, jarvis).await.unwrap();
+            answer[72..74].copy_from_slice(&jai.port().to_be_bytes());
+            udp.send_to(&answer, jai).await.unwrap();
             // Select protocol (heartbeats may come first).
             let select = loop {
                 if let Message::Text(t) = reader.recv().await.unwrap() {
@@ -1107,7 +1107,7 @@ mod tests {
             for (i, chunk) in tone(1.0, 0.3).chunks(FRAME).enumerate() {
                 let frame = friend.encode(chunk).unwrap();
                 friend.timestamp = (i * FRAME) as u32;
-                udp.send_to(&friend.packet(&transport, &frame).unwrap(), jarvis).await.unwrap();
+                udp.send_to(&friend.packet(&transport, &frame).unwrap(), jai).await.unwrap();
                 tokio::time::sleep(Duration::from_millis(5)).await;
             }
             // His voice: decode what arrives from ssrc 77 until a loud frame shows up.

@@ -417,7 +417,9 @@ impl InterfaceSettings {
     /// v24: the stock title follows his new name, and the stock look (or the yellow accent the
     /// 2026-11-09 helmet mishap left on the gold palette) becomes the new default.
     pub fn renamed_v24(&mut self) {
-        if matches!(self.title.trim(), "J.A.R.V.I.S." | "J.A.R.V.I.S" | "JARVIS" | "Jarvis") {
+        // (The stock titles of v1-v23, as fingerprints: `config::fingerprint`.)
+        const STOCK_TITLES: [u64; 4] = [0x8b99_a312_d3e9_a308, 0x0fb8_900f_eed4_fcf6, 0xac2f_d99e_782e_a7e4, 0xd68c_c20b_65a0_1b44];
+        if STOCK_TITLES.contains(&crate::config::fingerprint(self.title.trim())) {
             self.title = DEFAULT_TITLE.to_string();
         }
         let defaults = Self::default();
@@ -602,7 +604,7 @@ const LAYOUT_STEP: f32 = 1.2;
 /// Every panel and element of the HUD that JAI (and Sir, through the HUD's own controls) can
 /// change while it runs. The panel switches and scales persist in `interface`; the window size
 /// is whatever the open window measures. The HUD publishes the live state each frame
-/// ([`publish_layout`]), so `control_jarvis_interface` reports what is really on screen.
+/// ([`publish_layout`]), so `control_jai_interface` reports what is really on screen.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 pub struct UiLayoutState {
     pub show_audio_devices_panel: bool,
@@ -643,7 +645,7 @@ fn live_window_size() -> (f32, f32) {
     ui_layout().lock().unwrap_or_else(|e| e.into_inner()).window_size
 }
 
-/// The result of `control_jarvis_interface`.
+/// The result of `control_jai_interface`.
 pub struct Controlled {
     pub settings: InterfaceSettings,
     /// A new inner size for the HUD window (logical points).
@@ -688,7 +690,7 @@ fn labels(panels: &[HudPanel]) -> String {
     join_labels(&names)
 }
 
-/// Applies `control_jarvis_interface(action, target_panel, scale_value)` to `current`.
+/// Applies `control_jai_interface(action, target_panel, scale_value)` to `current`.
 pub fn control(current: &InterfaceSettings, args: &Value) -> Result<Controlled, String> {
     let action = str_arg(args, &["action", "command"]).unwrap_or("status").to_lowercase().replace([' ', '-'], "_");
     let mut s = current.clone();
@@ -849,7 +851,7 @@ fn on_off(b: bool) -> &'static str {
     if b { "shown" } else { "hidden" }
 }
 
-/// In-character confirmation of `control_jarvis_interface`, from the request and the settings it
+/// In-character confirmation of `control_jai_interface`, from the request and the settings it
 /// produced.
 pub fn control_ack(args: &Value, now: &InterfaceSettings) -> String {
     let action = str_arg(args, &["action", "command"]).unwrap_or("status").to_lowercase().replace([' ', '-'], "_");
@@ -951,7 +953,7 @@ const PANEL_PHRASES: &[(&str, &[&str])] = &[
 ];
 
 /// Spoken layout commands on the fast path (`s` = the intent parser's normalised sentence):
-/// `control_jarvis_interface` arguments for a goal ("less full" → declutter), zen mode, the orb's
+/// `control_jai_interface` arguments for a goal ("less full" → declutter), zen mode, the orb's
 /// size, or the panels a sentence hides and shows — several at once and in any order ("just
 /// leave the normal chat window, but remove the audio devices tab and the skills tab").
 pub fn layout_command(s: &str) -> Option<Value> {
@@ -1034,10 +1036,10 @@ pub fn layout_command(s: &str) -> Option<Value> {
     None
 }
 
-/// The `control_jarvis_interface` tool schema.
+/// The `control_jai_interface` tool schema.
 pub fn control_tool_definition() -> Value {
     json!({"type": "function", "function": {
-        "name": "control_jarvis_interface",
+        "name": "control_jai_interface",
         "description": "Change YOUR OWN HUD layout live: hide or show panels (\"remove the audio devices tab and the skills tab\" → hide_panel [audio_devices, skills]; \"bring back the audio settings\" → show_panel audio_devices), declutter (\"make the interface less full\", \"clean up the UI\": decide yourself, no questions), zen mode (only the 3D orb and the chat), the orb's size, the text size or the window size.",
         "parameters": {"type": "object", "properties": {
             "action": {"type": "string", "enum": ["declutter", "hide_panel", "show_panel", "toggle_panel", "zen_mode_on", "zen_mode_off", "restore_all", "orb_bigger", "orb_smaller", "set_orb_scale", "font_bigger", "font_smaller", "set_font_scale", "set_window_size", "status"]},

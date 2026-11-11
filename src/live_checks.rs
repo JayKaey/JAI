@@ -2,23 +2,23 @@
 //! runs only when its environment variable says so, one at a time:
 //! `cargo test --release <name> -- --ignored --exact --nocapture --test-threads=1`.
 //!
-//! - `the_real_mixer_moves_its_own_session_and_nothing_else` (JARVIS_REAL_AUDIO=1): this test
+//! - `the_real_mixer_moves_its_own_session_and_nothing_else` (JAI_REAL_AUDIO=1): this test
 //!   plays silence, which gives it a session of its own in Windows' volume mixer, and JAI's
 //!   mixer sets, steps, mutes, mutes for three seconds, fades out and in, undoes and restores
 //!   that session through Core Audio; every other app and the master volume must stay as they
 //!   were.
-//! - `the_master_volume_moves_and_comes_back` (JARVIS_REAL_MASTER=1): the master volume a few
+//! - `the_master_volume_moves_and_comes_back` (JAI_REAL_MASTER=1): the master volume a few
 //!   points down and up, muted and unmuted, and put back exactly (only while nobody listens).
-//! - `shutdown_and_restart_reach_windows_and_are_called_off` (JARVIS_REAL_POWER=1): shutdown.exe
+//! - `shutdown_and_restart_reach_windows_and_are_called_off` (JAI_REAL_POWER=1): shutdown.exe
 //!   run exactly as JAI runs it, but ten minutes out, and called off at once; and whether
 //!   Windows lets the PC sleep.
-//! - `lock_locks_the_pc` (JARVIS_REAL_LOCK=1): the lock JAI runs, and the lock screen taking
+//! - `lock_locks_the_pc` (JAI_REAL_LOCK=1): the lock JAI runs, and the lock screen taking
 //!   the input desktop.
-//! - `a_test_session_gives_way_to_the_jarvis_sir_starts` (JARVIS_EXE=<JAI.exe>): a hidden
+//! - `a_test_session_gives_way_to_the_jai_sir_starts` (JAI_EXE=<JAI.exe>): a hidden
 //!   silent session is started and asked to give way as Sir's JAI asks it.
-//! - `his_words_for_the_route_reader` (JARVIS_HIS_WORDS=<file>): Sir's own lines from the
+//! - `his_words_for_the_route_reader` (JAI_HIS_WORDS=<file>): Sir's own lines from the
 //!   conversation log (read-only), one per line, for `where_these_sentences_go`.
-//! - `voice_samples_for_his_ear` (JARVIS_SAMPLES=<folder>): both voices as WAV files.
+//! - `voice_samples_for_his_ear` (JAI_SAMPLES=<folder>): both voices as WAV files.
 
 use serde_json::json;
 use std::path::Path;
@@ -64,10 +64,10 @@ fn near(a: f32, b: f32) -> bool {
 }
 
 #[test]
-#[ignore = "changes real mixer levels (its own session only): JARVIS_REAL_AUDIO=1"]
+#[ignore = "changes real mixer levels (its own session only): JAI_REAL_AUDIO=1"]
 fn the_real_mixer_moves_its_own_session_and_nothing_else() {
-    if !wanted("JARVIS_REAL_AUDIO") {
-        return skipped("JARVIS_REAL_AUDIO=1");
+    if !wanted("JAI_REAL_AUDIO") {
+        return skipped("JAI_REAL_AUDIO=1");
     }
     assert!(crate::audio_mixer::bench().is_none(), "the pretend mixer is set: run this check alone");
     let rt = tokio::runtime::Runtime::new().expect("a runtime");
@@ -165,10 +165,10 @@ fn the_real_mixer_moves_its_own_session_and_nothing_else() {
 }
 
 #[test]
-#[ignore = "moves the real master volume and puts it back: JARVIS_REAL_MASTER=1, only while nobody listens"]
+#[ignore = "moves the real master volume and puts it back: JAI_REAL_MASTER=1, only while nobody listens"]
 fn the_master_volume_moves_and_comes_back() {
-    if !wanted("JARVIS_REAL_MASTER") {
-        return skipped("JARVIS_REAL_MASTER=1");
+    if !wanted("JAI_REAL_MASTER") {
+        return skipped("JAI_REAL_MASTER=1");
     }
     let rt = tokio::runtime::Runtime::new().expect("a runtime");
     rt.block_on(async {
@@ -226,10 +226,10 @@ extern "system" {
 }
 
 #[test]
-#[ignore = "schedules a real shutdown and restart ten minutes out and calls each off: JARVIS_REAL_POWER=1"]
+#[ignore = "schedules a real shutdown and restart ten minutes out and calls each off: JAI_REAL_POWER=1"]
 fn shutdown_and_restart_reach_windows_and_are_called_off() {
-    if !wanted("JARVIS_REAL_POWER") {
-        return skipped("JARVIS_REAL_POWER=1");
+    if !wanted("JAI_REAL_POWER") {
+        return skipped("JAI_REAL_POWER=1");
     }
     #[cfg(windows)]
     {
@@ -273,10 +273,10 @@ fn input_desktop_locked() -> bool {
 }
 
 #[test]
-#[ignore = "really locks the PC: JARVIS_REAL_LOCK=1"]
+#[ignore = "really locks the PC: JAI_REAL_LOCK=1"]
 fn lock_locks_the_pc() {
-    if !wanted("JARVIS_REAL_LOCK") {
-        return skipped("JARVIS_REAL_LOCK=1");
+    if !wanted("JAI_REAL_LOCK") {
+        return skipped("JAI_REAL_LOCK=1");
     }
     #[cfg(windows)]
     {
@@ -308,10 +308,10 @@ fn log_since(log: &Path, from: u64) -> String {
 }
 
 #[test]
-#[ignore = "starts a hidden silent JAI and asks it to give way: JARVIS_EXE=<path to JAI.exe>"]
-fn a_test_session_gives_way_to_the_jarvis_sir_starts() {
-    let Ok(exe) = std::env::var("JARVIS_EXE") else {
-        return skipped("JARVIS_EXE=<path to JAI.exe>");
+#[ignore = "starts a hidden silent JAI and asks it to give way: JAI_EXE=<path to JAI.exe>"]
+fn a_test_session_gives_way_to_the_jai_sir_starts() {
+    let Ok(exe) = std::env::var("JAI_EXE") else {
+        return skipped("JAI_EXE=<path to JAI.exe>");
     };
     #[cfg(windows)]
     {
@@ -363,10 +363,10 @@ fn a_test_session_gives_way_to_the_jarvis_sir_starts() {
 /// key and could read no secret. This installation's vault, opened as the app opens it: every
 /// stored secret decrypts. Counts and slot names only; no secret is printed.
 #[test]
-#[ignore = "opens this installation's vault with its real key: JARVIS_VAULT_DB=<path to the memory database>"]
+#[ignore = "opens this installation's vault with its real key: JAI_VAULT_DB=<path to the memory database>"]
 fn the_installations_vault_reads_every_secret() {
-    let Ok(db) = std::env::var("JARVIS_VAULT_DB") else {
-        return skipped("JARVIS_VAULT_DB=<path to the memory database>");
+    let Ok(db) = std::env::var("JAI_VAULT_DB") else {
+        return skipped("JAI_VAULT_DB=<path to the memory database>");
     };
     let slots: Vec<(String, String)> = {
         let conn = rusqlite::Connection::open_with_flags(&db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).expect("the memory database");
@@ -381,10 +381,10 @@ fn the_installations_vault_reads_every_secret() {
 }
 
 #[test]
-#[ignore = "reads Sir's own lines from jai_memory.db (read-only) into a file: JARVIS_HIS_WORDS=<file>"]
+#[ignore = "reads Sir's own lines from jai_memory.db (read-only) into a file: JAI_HIS_WORDS=<file>"]
 fn his_words_for_the_route_reader() {
-    let Ok(out) = std::env::var("JARVIS_HIS_WORDS") else {
-        return skipped("JARVIS_HIS_WORDS=<file>");
+    let Ok(out) = std::env::var("JAI_HIS_WORDS") else {
+        return skipped("JAI_HIS_WORDS=<file>");
     };
     let conn = rusqlite::Connection::open_with_flags("jai_memory.db", rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).expect("the memory database");
     let mut roles = conn.prepare("SELECT role, COUNT(*) FROM conversation_logs GROUP BY role").expect("roles");
@@ -426,16 +426,16 @@ fn write_wav(path: &Path, audio: &[f32], rate: u32) -> std::io::Result<()> {
 }
 
 #[test]
-#[ignore = "renders the voice to a WAV file for Sir's ear: JARVIS_SAMPLES=<folder>"]
+#[ignore = "renders the voice to a WAV file for Sir's ear: JAI_SAMPLES=<folder>"]
 fn voice_samples_for_his_ear() {
-    let Ok(dir) = std::env::var("JARVIS_SAMPLES") else {
-        return skipped("JARVIS_SAMPLES=<folder>");
+    let Ok(dir) = std::env::var("JAI_SAMPLES") else {
+        return skipped("JAI_SAMPLES=<folder>");
     };
     // His settings as they are (read, never written).
     crate::config::set_read_only(true);
     let cfg = crate::config::JaiConfig::load();
-    let rate = crate::jarvis_voice_dsp::MASTER_RATE;
-    for (who, rendered) in [("jarvis", crate::fish_zero_shot_tts::render_sentences(&cfg))] {
+    let rate = crate::jai_voice_dsp::MASTER_RATE;
+    for (who, rendered) in [("jai", crate::fish_zero_shot_tts::render_sentences(&cfg))] {
         let sentences = rendered.unwrap_or_else(|e| panic!("{who}'s voice: {e}"));
         let gap = vec![0.0f32; (rate as f32 * 0.6) as usize];
         let audio: Vec<f32> = sentences.iter().flat_map(|(_, _, a)| a.iter().copied().chain(gap.iter().copied())).collect();

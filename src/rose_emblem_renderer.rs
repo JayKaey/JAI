@@ -1425,7 +1425,7 @@ mod tests {
     }
 
     #[test]
-    fn idle_jarvis_morphs_between_the_front_emblem_and_the_gyroscope() {
+    fn idle_jai_morphs_between_the_front_emblem_and_the_gyroscope() {
         let mut m = IdleMorph::new(7);
         // Not idle: never the gyroscope.
         assert!(!(0..200).any(|k| m.step(k as f32 * 0.1, false)));

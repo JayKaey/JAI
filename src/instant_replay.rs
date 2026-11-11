@@ -110,7 +110,7 @@ impl Replay {
         let keep = Duration::from_secs(settings.replay_seconds.clamp(10, 300) as u64 + 2);
         let width = settings.replay_width.clamp(320, 1920);
         let recorder = Arc::clone(&self.recorder);
-        let spawned = std::thread::Builder::new().name("jarvis-replay".into()).spawn(move || {
+        let spawned = std::thread::Builder::new().name("jai-replay".into()).spawn(move || {
             #[cfg(windows)]
             capture::run(&recorder, fps, width, keep);
             recorder.running.store(false, Ordering::Release);

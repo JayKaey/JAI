@@ -486,7 +486,7 @@ fn bar_row(ui: &mut Ui, p: &Palette, label: &str, value: String, fraction: f32, 
 
 /// History of a live value per window (kept in egui's memory, two minutes at one sample/s).
 fn history(ui: &Ui, key: (&str, &str), value: f32) -> Vec<f64> {
-    let id = egui::Id::new(("jarvis_history", key.0, key.1));
+    let id = egui::Id::new(("jai_history", key.0, key.1));
     let now = ui.input(|i| i.time);
     ui.ctx().data_mut(|d| {
         let (last, series) = d.get_temp_mut_or_default::<(f64, Vec<f64>)>(id);
@@ -712,7 +712,7 @@ fn network_view(ui: &mut Ui, p: &Palette, app: &Jai, window: &str) {
 // -------------------------------------------------------------------------- windows ----
 
 fn viewport_id(id: &str) -> ViewportId {
-    ViewportId::from_hash_of(("jarvis_window", id))
+    ViewportId::from_hash_of(("jai_window", id))
 }
 
 /// The JAI windows of their own shown in the last frame, as they were (spec and builder): one
@@ -809,7 +809,7 @@ pub(super) fn show_windows(ctx: &egui::Context, host: &WidgetHost) {
         }
         let mut builder = ViewportBuilder::default()
             .with_title(format!("{} — J.A.I.", spec.title))
-            .with_app_id("jarvis")
+            .with_app_id("jai")
             .with_inner_size([spec.width, spec.height])
             .with_min_inner_size(spec.min_size)
             .with_resizable(spec.resizable)
@@ -908,7 +908,7 @@ fn window_frame(ctx: &egui::Context, class: ViewportClass, host: &WidgetHost, id
     };
     if class == ViewportClass::Embedded {
         // Backends without multi-window support: the window becomes a floating egui window.
-        egui::Window::new(&spec.title).id(egui::Id::new(("jarvis_embedded", id))).default_size([spec.width, spec.height]).show(ctx, body);
+        egui::Window::new(&spec.title).id(egui::Id::new(("jai_embedded", id))).default_size([spec.width, spec.height]).show(ctx, body);
     } else {
         egui::CentralPanel::default().frame(Frame::none().inner_margin(Margin::same(14.0))).show(ctx, body);
         resize_grip(ctx, &p, id);
@@ -1030,7 +1030,7 @@ fn window_toolbar(ui: &mut Ui, ctx: &egui::Context, host: &WidgetHost, spec: &Na
         return;
     }
     let current = spec.style.theme.as_deref().and_then(crate::interface::theme).map(|t| t.display).unwrap_or("HUD theme");
-    egui::ComboBox::from_id_salt(("jarvis_window_theme", &spec.id)).width(ts(92.0)).selected_text(small(current)).show_ui(ui, |ui| {
+    egui::ComboBox::from_id_salt(("jai_window_theme", &spec.id)).width(ts(92.0)).selected_text(small(current)).show_ui(ui, |ui| {
         if ui.selectable_label(spec.style.theme.is_none() && spec.style.accent.is_none(), "Like the HUD").clicked() {
             restyle(serde_json::json!({ "theme": "hud" }));
         }
@@ -1064,7 +1064,7 @@ fn window_toolbar(ui: &mut Ui, ctx: &egui::Context, host: &WidgetHost, spec: &Na
 
 /// Bottom-right corner handle that resizes a borderless window.
 fn resize_grip(ctx: &egui::Context, p: &Palette, id: &str) {
-    egui::Area::new(egui::Id::new(("jarvis_window_grip", id))).anchor(egui::Align2::RIGHT_BOTTOM, vec2(-2.0, -2.0)).show(ctx, |ui| {
+    egui::Area::new(egui::Id::new(("jai_window_grip", id))).anchor(egui::Align2::RIGHT_BOTTOM, vec2(-2.0, -2.0)).show(ctx, |ui| {
         let (rect, response) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::drag());
         for k in [4.0, 8.0, 12.0] {
             ui.painter().line_segment([pos2(rect.right() - k, rect.bottom()), pos2(rect.right(), rect.bottom() - k)], stroke(1.0, p.muted));

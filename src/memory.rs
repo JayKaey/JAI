@@ -581,7 +581,7 @@ mod tests {
     use super::*;
 
     fn temp_db() -> (MemoryManager, std::path::PathBuf) {
-        let path = std::env::temp_dir().join(format!("jarvis_mem_test_{}.db", uuid::Uuid::new_v4()));
+        let path = std::env::temp_dir().join(format!("jai_mem_test_{}.db", uuid::Uuid::new_v4()));
         (MemoryManager::open(&path).expect("open db"), path)
     }
 

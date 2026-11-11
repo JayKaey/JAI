@@ -655,7 +655,7 @@ impl Hub {
             ui.end_row();
             if provider != "tailscale" {
                 ui.label("Permanent address");
-                text_field(ui, &mut q.satellite.tunnel_public_url, "https://jarvis.your-domain (empty: new every start)");
+                text_field(ui, &mut q.satellite.tunnel_public_url, "https://jai.your-domain (empty: new every start)");
                 ui.end_row();
             }
             if provider == "cloudflare" {
@@ -674,7 +674,7 @@ impl Hub {
         });
         let address = q.satellite.tunnel_public_url.trim().to_string();
         if provider != "tailscale" && !address.is_empty() && crate::worldwide_tunnel::https_origin(&address).is_none() {
-            ui.label(RichText::new("The address must look like https://jarvis.your-domain, without a path.").size(11.0).color(p.red));
+            ui.label(RichText::new("The address must look like https://jai.your-domain, without a path.").size(11.0).color(p.red));
         }
         let tunnel = crate::worldwide_tunnel::snapshot();
         let (colour, line) = match (&tunnel.public_url, tunnel.permanent) {

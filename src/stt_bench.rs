@@ -1,6 +1,6 @@
 //! Whisper speed and accuracy on fixed command clips, measured on this machine.
 //!
-//! `cargo test --release --bin jarvis stt::bench -- --ignored --nocapture`
+//! `cargo test --release --bin jai stt::bench -- --ignored --nocapture`
 //!
 //! The clips are synthesised offline with JAI's own Kokoro path (only voices already cached
 //! under `models/voices/`, so nothing is written into the models folder), resampled to 16 kHz,
@@ -9,8 +9,8 @@
 //! variant hears every clip in the same round, interleaved, so a CPU that other programs load
 //! slows all of them alike: compare the numbers within one run.
 //!
-//! `JARVIS_MODELS` (default `D:/Code/jarvis V.3/models`), `JARVIS_ESPEAK` (the eSpeak-NG folder),
-//! `JARVIS_BENCH_ROUNDS` (default 2) and `JARVIS_BENCH_ONLY` (comma list of variant labels).
+//! `JAI_MODELS` (default `D:/Code/jai V.3/models`), `JAI_ESPEAK` (the eSpeak-NG folder),
+//! `JAI_BENCH_ROUNDS` (default 2) and `JAI_BENCH_ONLY` (comma list of variant labels).
 //!
 //! 2026-11-09, ggml-small (q8_0), 8 threads, other builds running: v22 844 ms median (783 ms for
 //! 1.5-3 s clips), 6.1 % English word errors; one pass 559 ms (509 ms), 4.7 %. The voices are
@@ -49,7 +49,7 @@ fn env_or(key: &str, default: &str) -> String {
 }
 
 pub(super) fn models_dir() -> PathBuf {
-    PathBuf::from(env_or("JARVIS_MODELS", "D:/Code/jarvis V.3/models"))
+    PathBuf::from(env_or("JAI_MODELS", "D:/Code/jai V.3/models"))
 }
 
 fn noise(n: usize, level: f32, hum: f32, seed: &mut u32) -> Vec<f32> {
@@ -68,7 +68,7 @@ pub(super) fn synth_clips() -> Vec<Clip> {
     let mut cfg = JaiConfig::default();
     cfg.kokoro_model_path = models.join("kokoro-v1.0.onnx").to_string_lossy().into_owned();
     cfg.kokoro_voices_archive_path = models.join("voices-v1.0.bin").to_string_lossy().into_owned();
-    cfg.espeak_path = Some(env_or("JARVIS_ESPEAK", "D:/Code/jarvis V.3/runtime/espeak-ng"));
+    cfg.espeak_path = Some(env_or("JAI_ESPEAK", "D:/Code/jai V.3/runtime/espeak-ng"));
     cfg.tts_gpu = false;
     let cache = models.join("voices").join("voices-v1.0");
     let phonemizer = crate::phonemizer::Phonemizer::new(cfg.espeak_path.as_deref());
@@ -201,8 +201,8 @@ fn variants() -> Vec<Variant> {
 #[ignore]
 fn bench_command_clips() {
     let model = models_dir().join("ggml-small.bin").to_string_lossy().replace('\\', "/");
-    let rounds: usize = env_or("JARVIS_BENCH_ROUNDS", "2").parse().unwrap_or(2);
-    let only: Vec<String> = env_or("JARVIS_BENCH_ONLY", "").split(',').map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty()).collect();
+    let rounds: usize = env_or("JAI_BENCH_ROUNDS", "2").parse().unwrap_or(2);
+    let only: Vec<String> = env_or("JAI_BENCH_ONLY", "").split(',').map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty()).collect();
     let t = Instant::now();
     let clips = synth_clips();
     println!("{} clips synthesised in {} ms", clips.len(), t.elapsed().as_millis());

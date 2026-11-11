@@ -1,6 +1,6 @@
 //! Streaming text-to-speech: clause splitting of LLM tokens → speech normalisation →
 //! bilingual eSpeak-NG phonemes (English and German runs, one IPA string) → Kokoro-ONNX
-//! (24 kHz, one voice for both languages) → the film mastering chain (`jarvis_voice_dsp`, 48 kHz)
+//! (24 kHz, one voice for both languages) → the film mastering chain (`jai_voice_dsp`, 48 kHz)
 //! → resample → lock-free ring → cpal output.
 //!
 //! Barge-in: [`TtsController::stop`] bumps a generation counter (queued and in-flight clauses
@@ -23,24 +23,24 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::{mpsc, Arc, LazyLock, Mutex, RwLock};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::UnboundedSender;
-use crate::jarvis_voice_dsp;
+use crate::jai_voice_dsp;
 use tracing::{error, info, warn};
 
 pub const KOKORO_RATE: u32 = 24_000;
-/// The film voice (`bm_jarvis_movie_1to1`): one style vector interpolated row by row at load time
+/// The film voice (`bm_jai_movie_1to1`): one style vector interpolated row by row at load time
 /// from 75 % Fable (crisp, non-rhotic RP diction, dry cadence) and 25 % George (calm baritone chest
 /// authority), matched to the film clip. A component the installed voice pack lacks (`bm_fable`
 /// ships only with Kokoro v1.0) is skipped and the other weights are renormalised.
-pub const JARVIS_VOICE: &str = "bm_jarvis_movie_1to1";
-pub const JARVIS_VOICE_BLEND: &str = "bm_fable:0.75+bm_george:0.25";
+pub const JAI_VOICE: &str = "bm_jai_movie_1to1";
+pub const JAI_VOICE_BLEND: &str = "bm_fable:0.75+bm_george:0.25";
 /// The v15 film blend (config v17 moves it back to the alias).
 pub const V15_VOICE_BLEND: &str = "bm_fable:0.62+bm_george:0.28+bm_lewis:0.10";
-/// The previous stock blend (config migrations move it to `JARVIS_VOICE`).
+/// The previous stock blend (config migrations move it to `JAI_VOICE`).
 pub const LEGACY_VOICE_BLEND: &str = "bm_fable:0.45+bm_george:0.4+bm_lewis:0.15";
 /// The speaking tempo: the film's calm, unhurried 0.98×; the synthesis runs 3 % faster to make up
-/// for the pitch lock's stretch (`jarvis_voice_dsp::synthesis_speed`).
-pub const JARVIS_VOICE_SPEED: f32 = 0.98;
-/// The v15 tempo (config v17 moves it to `JARVIS_VOICE_SPEED`).
+/// for the pitch lock's stretch (`jai_voice_dsp::synthesis_speed`).
+pub const JAI_VOICE_SPEED: f32 = 0.98;
+/// The v15 tempo (config v17 moves it to `JAI_VOICE_SPEED`).
 pub const V15_VOICE_SPEED: f32 = 1.04;
 const STYLE_DIM: usize = 256;
 const MAX_TOKENS: usize = 510;
@@ -799,11 +799,11 @@ impl Kokoro {
         if let Some(v) = self.voices.get(name) {
             return Ok(Arc::clone(v));
         }
-        if name == JARVIS_VOICE {
+        if name == JAI_VOICE {
             // The blend calibrated against the reference clip (`--voice-calibrate`), else the stock one.
-            let blend = crate::fish_zero_shot_tts::calibrated_blend().unwrap_or_else(|| JARVIS_VOICE_BLEND.to_string());
-            if blend != JARVIS_VOICE_BLEND {
-                info!("[TTS] {JARVIS_VOICE} uses the calibrated blend {blend}");
+            let blend = crate::fish_zero_shot_tts::calibrated_blend().unwrap_or_else(|| JAI_VOICE_BLEND.to_string());
+            if blend != JAI_VOICE_BLEND {
+                info!("[TTS] {JAI_VOICE} uses the calibrated blend {blend}");
             }
             let mix = self.voice(&blend)?;
             self.voices.insert(name.to_string(), Arc::clone(&mix));
@@ -868,7 +868,7 @@ impl Kokoro {
             }
         }
         voices.sort();
-        voices.insert(0, JARVIS_VOICE.to_string());
+        voices.insert(0, JAI_VOICE.to_string());
         voices
     }
 
@@ -961,7 +961,7 @@ fn builtin_vocab() -> HashMap<char, i64> {
 /// "Checking.", "On it, Sir.") and at a comma or a dash, 140 ms at a full stop (and ! ? …), 30 ms
 /// where a long sentence was cut without punctuation.
 fn breath_ms(text: &str) -> usize {
-    if let Some(ms) = jarvis_voice_dsp::breath_cue_ms(text) {
+    if let Some(ms) = jai_voice_dsp::breath_cue_ms(text) {
         return ms;
     }
     match text.trim_end().chars().last() {
@@ -971,10 +971,10 @@ fn breath_ms(text: &str) -> usize {
     }
 }
 
-/// Trims silence, runs the film mastering chain (`jarvis_voice_dsp::master`: 24 kHz → 48 kHz with
+/// Trims silence, runs the film mastering chain (`jai_voice_dsp::master`: 24 kHz → 48 kHz with
 /// the −0.35 st pitch lock, the Bettany EQ and de-esser, the helmet micro-double, the broadcast
 /// compressor and limiter), applies 25 ms raised-cosine fades and appends the clause's breath.
-/// Returns `jarvis_voice_dsp::MASTER_RATE` audio.
+/// Returns `jai_voice_dsp::MASTER_RATE` audio.
 pub(crate) fn finish_clause_audio(mut audio: Vec<f32>, text: &str) -> Vec<f32> {
     let thresh = 0.003;
     let first = audio.iter().position(|s| s.abs() > thresh).unwrap_or(0);
@@ -984,9 +984,9 @@ pub(crate) fn finish_clause_audio(mut audio: Vec<f32>, text: &str) -> Vec<f32> {
     if start < end {
         audio = audio[start..end].to_vec();
     }
-    let mut audio = jarvis_voice_dsp::master(&audio, KOKORO_RATE);
-    let rate = jarvis_voice_dsp::MASTER_RATE as usize;
-    let fade = (rate * jarvis_voice_dsp::CROSSFADE_MS / 1000).min(audio.len() / 4);
+    let mut audio = jai_voice_dsp::master(&audio, KOKORO_RATE);
+    let rate = jai_voice_dsp::MASTER_RATE as usize;
+    let fade = (rate * jai_voice_dsp::CROSSFADE_MS / 1000).min(audio.len() / 4);
     for (i, s) in audio.iter_mut().take(fade).enumerate() {
         *s *= raised_cosine(i, fade);
     }
@@ -1035,7 +1035,7 @@ impl ClauseJoiner {
         if generation != self.generation || rate != self.rate { self.tail.clear(); }
         self.generation = generation;
         self.rate = rate;
-        let overlap = (rate as usize * jarvis_voice_dsp::CROSSFADE_MS / 1000).max(1).min(audio.len());
+        let overlap = (rate as usize * jai_voice_dsp::CROSSFADE_MS / 1000).max(1).min(audio.len());
         if !self.tail.is_empty() {
             let n = self.tail.len().min(overlap);
             let prefix = self.tail.len() - n;
@@ -1107,10 +1107,10 @@ static EARCONS: std::sync::OnceLock<(Arc<Output>, Arc<AudioControls>)> = std::sy
 /// Plays a HUD earcon (report chime, confirmation tone, power-down) straight into the speaker
 /// buffer, like the listening chime: no synthesis and no turn. The microphone treats it as
 /// JAI's own sound.
-pub fn play_earcon(kind: jarvis_voice_dsp::Earcon) {
+pub fn play_earcon(kind: jai_voice_dsp::Earcon) {
     let Some((output, controls)) = EARCONS.get() else { return };
     let rate = output.device_rate.load(Ordering::Acquire).max(8_000);
-    let samples = jarvis_voice_dsp::earcon(kind, rate);
+    let samples = jai_voice_dsp::earcon(kind, rate);
     controls.guard_echo((samples.len() as u64 * 1000) / rate as u64);
     if let Some(producer) = output.producer.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
         producer.push_slice(&samples);
@@ -1120,7 +1120,7 @@ pub fn play_earcon(kind: jarvis_voice_dsp::Earcon) {
 /// The board's sound cues are on (`interface.sound_cues`).
 static CUES_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 /// The last cue and when it played.
-static LAST_CUE: Mutex<Option<(jarvis_voice_dsp::Earcon, std::time::Instant)>> = Mutex::new(None);
+static LAST_CUE: Mutex<Option<(jai_voice_dsp::Earcon, std::time::Instant)>> = Mutex::new(None);
 /// The same cue is not repeated inside this window (twelve blocks arriving at once chime once).
 const CUE_SPACING: Duration = Duration::from_millis(160);
 
@@ -1129,7 +1129,7 @@ pub fn set_cues(on: bool) {
 }
 
 /// Whether `kind` may sound now: cues are on and it is not the cue that just played.
-fn cue_due(kind: jarvis_voice_dsp::Earcon, now: std::time::Instant) -> bool {
+fn cue_due(kind: jai_voice_dsp::Earcon, now: std::time::Instant) -> bool {
     if !CUES_ON.load(Ordering::Acquire) {
         return false;
     }
@@ -1143,7 +1143,7 @@ fn cue_due(kind: jarvis_voice_dsp::Earcon, now: std::time::Instant) -> bool {
 
 /// A HUD micro-interaction's cue (a block materialising, the spotlight, a mode change, an
 /// alert): played like an earcon, unless Sir turned the cues off or it has just sounded.
-pub fn play_cue(kind: jarvis_voice_dsp::Earcon) {
+pub fn play_cue(kind: jai_voice_dsp::Earcon) {
     if cue_due(kind, std::time::Instant::now()) {
         play_earcon(kind);
     }
@@ -1200,7 +1200,7 @@ impl Output {
     /// for room: the Discord copy plays alongside the speaker.
     fn push_clause(&self, audio48: &[f32]) {
         if let Some(p) = self.producer.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
-            p.push_slice(&resample_voice(audio48, jarvis_voice_dsp::MASTER_RATE, self.device_rate.load(Ordering::Acquire)));
+            p.push_slice(&resample_voice(audio48, jai_voice_dsp::MASTER_RATE, self.device_rate.load(Ordering::Acquire)));
         }
     }
 
@@ -1416,7 +1416,7 @@ impl TtsController {
         let output = Arc::new(Output::new(cfg.preferred_speaker.clone(), Arc::new(AtomicU8::new(cfg.loudness_pct.min(200))), false));
         // Same loudness; no device until the Discord bridge (or the HUD's test) asks for one.
         let mirror = Arc::new(Output::new(None, Arc::clone(&output.volume), true));
-        for (name, out) in [("jarvis-speaker", &output), ("jarvis-discord-voice", &mirror)] {
+        for (name, out) in [("jai-speaker", &output), ("jai-discord-voice", &mirror)] {
             let out_thread = Arc::clone(out);
             if let Err(e) = std::thread::Builder::new().name(name.into()).spawn(move || crate::crash_guard::supervise(name, || speaker_thread(Arc::clone(&out_thread)))) {
                 error!("[TTS] Could not start {name} thread: {e}");
@@ -1440,8 +1440,8 @@ impl TtsController {
         let worker_inner = Arc::clone(&inner);
         let cfg = cfg.clone();
         if let Err(e) = std::thread::Builder::new()
-            .name("jarvis-tts".into())
-            .spawn(move || crate::crash_guard::supervise("jarvis-tts", || synth_worker(cfg.clone(), Arc::clone(&worker_inner), &rx, events.clone())))
+            .name("jai-tts".into())
+            .spawn(move || crate::crash_guard::supervise("jai-tts", || synth_worker(cfg.clone(), Arc::clone(&worker_inner), &rx, events.clone())))
         {
             error!("[TTS] Could not start synthesis thread: {e}");
         }
@@ -1658,18 +1658,18 @@ fn render_clause(
             return Some(hit);
         }
     }
-    crate::core_sphere_3d::CoreActivityBus::chain(&["pronunciation_lexicon.rs", "phonemizer.rs", "tts.rs", "jarvis_voice_dsp.rs", "fish_zero_shot_tts.rs"]);
+    crate::core_sphere_3d::CoreActivityBus::chain(&["pronunciation_lexicon.rs", "phonemizer.rs", "tts.rs", "jai_voice_dsp.rs", "fish_zero_shot_tts.rs"]);
     let audio = match engine {
         Engine::Kokoro(k) => {
             // "Sir, the report's done.": the vocative gets its own 85 ms breath.
-            let parts = match jarvis_voice_dsp::split_leading_cue(speech) {
+            let parts = match jai_voice_dsp::split_leading_cue(speech) {
                 Some((head, rest)) => vec![head, rest],
                 None => vec![speech.to_string()],
             };
             let mut audio = Vec::new();
             for part in parts {
                 let ipa = phonemizer.phonemize(&part);
-                match k.synthesize(&ipa, voice, jarvis_voice_dsp::synthesis_speed(speed)) {
+                match k.synthesize(&ipa, voice, jai_voice_dsp::synthesis_speed(speed)) {
                     Ok(a) if !a.is_empty() => audio.extend(finish_clause_audio(a, &part)),
                     Ok(_) => {}
                     Err(e) => {
@@ -1680,7 +1680,7 @@ fn render_clause(
             }
             audio
         }
-        Engine::Sapi => resample_voice(&sapi_synthesize(speech), KOKORO_RATE, jarvis_voice_dsp::MASTER_RATE),
+        Engine::Sapi => resample_voice(&sapi_synthesize(speech), KOKORO_RATE, jai_voice_dsp::MASTER_RATE),
         Engine::None => return None,
     };
     if audio.is_empty() {
@@ -1823,12 +1823,12 @@ fn synth_worker(cfg: JaiConfig, inner: Arc<Inner>, rx: &mpsc::Receiver<Job>, eve
                 let rate = inner.output.device_rate.load(Ordering::Acquire);
                 inner.mirror.push_clause(&audio48);
                 tap_voice(Some(&audio48));
-                let mut audio = joiner.push(resample_voice(&audio48, jarvis_voice_dsp::MASTER_RATE, rate), generation, rate);
+                let mut audio = joiner.push(resample_voice(&audio48, jai_voice_dsp::MASTER_RATE, rate), generation, rate);
                 // Sir hears him through the call: the speaker keeps the timing, not the voice.
                 if voice_exclusive() {
                     audio.fill(0.0);
                 }
-                tracing::debug!("[TTS] '{speech}' → {:.2}s audio in {synth_ms} ms", audio48.len() as f32 / jarvis_voice_dsp::MASTER_RATE as f32);
+                tracing::debug!("[TTS] '{speech}' → {:.2}s audio in {synth_ms} ms", audio48.len() as f32 / jai_voice_dsp::MASTER_RATE as f32);
 
                 let mut offset = 0;
                 let mut announced = started_generation == generation;
@@ -1914,7 +1914,7 @@ pub fn dual_sink_probe() -> Result<String, String> {
     let volume = Arc::new(AtomicU8::new(100));
     let speaker = Output::new(None, Arc::clone(&volume), false);
     let call = Output::new(None, Arc::clone(&volume), true);
-    let clause: Vec<f32> = (0..jarvis_voice_dsp::MASTER_RATE / 2).map(|i| (i as f32 * 0.05).sin() * 0.3).collect();
+    let clause: Vec<f32> = (0..jai_voice_dsp::MASTER_RATE / 2).map(|i| (i as f32 * 0.05).sin() * 0.3).collect();
     call.push_clause(&clause);
     if call.buffered() != 0 {
         return Err("a sink without a device queued audio".to_string());
@@ -1948,7 +1948,7 @@ mod tests {
     #[test]
     fn the_discord_copy_gets_every_clause_at_its_own_rate_and_stops_with_him() {
         let mirror = Output::new(None, Arc::new(AtomicU8::new(100)), true);
-        let clause: Vec<f32> = (0..jarvis_voice_dsp::MASTER_RATE / 2).map(|i| (i as f32 * 0.05).sin() * 0.3).collect();
+        let clause: Vec<f32> = (0..jai_voice_dsp::MASTER_RATE / 2).map(|i| (i as f32 * 0.05).sin() * 0.3).collect();
         // No device: nothing is queued (and nothing blocks the speaker).
         mirror.push_clause(&clause);
         assert_eq!(mirror.buffered(), 0);
@@ -2036,7 +2036,7 @@ mod tests {
     #[test]
     fn voice_blends_parse_with_weights() {
         assert_eq!(
-            voice_components(JARVIS_VOICE_BLEND),
+            voice_components(JAI_VOICE_BLEND),
             vec![("bm_fable".to_string(), 0.75), ("bm_george".to_string(), 0.25)]
         );
         assert_eq!(voice_components("bm_george, bm_lewis"), vec![("bm_george".to_string(), 1.0), ("bm_lewis".to_string(), 1.0)]);

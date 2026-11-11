@@ -98,10 +98,9 @@ const ALIASES: &[(&str, &[&str])] = &[
     ("game", &[GAME]),
     ("spiel", &[GAME]),
     ("das spiel", &[GAME]),
-    // (His session carries the program's file name: JAI.exe, or jarvis.exe from a build folder.)
-    ("jai", &["jai", "jarvis"]),
-    ("jay", &["jai", "jarvis"]),
-    ("jarvis", &["jai", "jarvis"]),
+    // (His session carries the program's file name.)
+    ("jai", &["jai"]),
+    ("jay", &["jai"]),
     ("system sounds", &["system sounds"]),
     ("systemsounds", &["system sounds"]),
 ];
@@ -210,7 +209,7 @@ fn spoken(name: &str) -> String {
 /// session would silence the app that was to stay).
 fn keeps_playing(session: &str) -> bool {
     let s = session.to_lowercase();
-    matches!(s.as_str(), "jai" | "jai.exe") || ["jarvis", "wavelink", "elgato", "voicemeeter", "sonar", "goxlr", "audiorelay", "vb-audio"].iter().any(|k| s.contains(k))
+    matches!(s.as_str(), "jai" | "jai.exe") || ["wavelink", "elgato", "voicemeeter", "sonar", "goxlr", "audiorelay", "vb-audio"].iter().any(|k| s.contains(k))
 }
 
 /// A change to a volume: a level (0-1), a step from where it is (a signed fraction) and/or a
@@ -1961,7 +1960,7 @@ pub async fn work_on_a_copy() {
 /// browser, Discord and the music play; Wave Link's session carries their mix to the headset).
 pub fn scenario_bench() -> Bench {
     let app = |name: &str, level: f32| AppSession { name: name.to_string(), pid: 1, level, muted: false, labels: Vec::new() };
-    Bench { master: (0.8, false), apps: vec![app("firefox", 1.0), app("Discord", 1.0), app("sonora", 0.6), app("steam", 1.0), app("System sounds", 1.0), app("Elgato.WaveLink", 1.0), app("jarvis", 1.0)] }
+    Bench { master: (0.8, false), apps: vec![app("firefox", 1.0), app("Discord", 1.0), app("sonora", 0.6), app("steam", 1.0), app("System sounds", 1.0), app("Elgato.WaveLink", 1.0), app("jai", 1.0)] }
 }
 
 /// One volume request carried out as JAI carries it out: the sentence through the fast
@@ -2019,7 +2018,7 @@ pub async fn scenarios() -> Vec<(String, Result<(), String>)> {
         ("Mute everything except Discord", "sonora", (55, true), "Everything but Discord is muted"),
         ("Mute everything except Discord", "Discord", (100, false), "Nothing but Discord"),
         ("Mute everything except Discord", "Elgato.WaveLink", (100, false), ""),
-        ("Mute everything except Discord", "jarvis", (100, false), ""),
+        ("Mute everything except Discord", "jai", (100, false), ""),
         ("Unmute", "sonora", (55, false), "unmuted"),
         ("Mute Spotify", "master", (45, false), "!no audio session"),
         ("Raise Chrome by 20", "firefox", (30, false), "!not playing any audio"),
@@ -2440,7 +2439,7 @@ mod tests {
         assert!(matches_target("Discord", &targets("discord")));
         assert!(matches_target("chrome", &targets("browser")));
         assert!(!matches_target("Discord", &targets("spotify")));
-        assert!(matches_target("JARVIS", &targets("jarvis")));
+        assert!(matches_target("JAI", &targets("jai")));
         assert!(!is_app_name("zoom") && !is_app_name("your voice"), "the HUD zoom and JAI's voice are not apps");
     }
 
@@ -2511,7 +2510,7 @@ mod tests {
         // Several apps in one name, and the sessions that are never muted with "everything".
         assert_eq!(targets("Discord and Spotify"), vec!["discord", "discordptb", "discordcanary", "spotify"]);
         assert_eq!(spoken("my browser and discord"), "Browser and Discord");
-        assert!(keeps_playing("Elgato.WaveLink") && keeps_playing("JARVIS") && keeps_playing("JAI") && !keeps_playing("firefox") && !keeps_playing("jailbreak"));
+        assert!(keeps_playing("Elgato.WaveLink") && keeps_playing("JAI") && !keeps_playing("firefox") && !keeps_playing("jailbreak"));
     }
 
     #[test]

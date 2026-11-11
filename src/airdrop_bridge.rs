@@ -81,7 +81,7 @@ impl AirDrop {
 
 /// A screenshot of the primary screen as PNG (for "beam my screen to my phone").
 async fn screenshot() -> Result<PathBuf, String> {
-    let path = std::env::temp_dir().join(format!("jarvis_beam_{}.png", crate::features::stamp()));
+    let path = std::env::temp_dir().join(format!("jai_beam_{}.png", crate::features::stamp()));
     let script = format!(
         "Add-Type -AssemblyName System.Windows.Forms,System.Drawing\n$b=[System.Windows.Forms.Screen]::PrimaryScreen.Bounds\n$bmp=New-Object System.Drawing.Bitmap $b.Width,$b.Height\n$g=[System.Drawing.Graphics]::FromImage($bmp)\n$g.CopyFromScreen($b.X,$b.Y,0,0,$bmp.Size)\n$bmp.Save('{}',[System.Drawing.Imaging.ImageFormat]::Png)\n$g.Dispose();$bmp.Dispose()",
         path.display().to_string().replace('\'', "''")

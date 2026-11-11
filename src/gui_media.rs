@@ -27,7 +27,7 @@ const PANEL: Color32 = Color32::from_rgb(0x02, 0x05, 0x09);
 const LIVE_RED: Color32 = Color32::from_rgb(0xFF, 0x3B, 0x4E);
 
 /// One block: a picture block (one per subject), the cameras or street view. Its window is the
-/// viewport `jarvis_<id>`.
+/// viewport `jai_<id>`.
 #[derive(Clone)]
 struct Block {
     id: String,
@@ -109,7 +109,7 @@ pub(super) fn show(ctx: &egui::Context, rt: &Handle) {
 
 /// Draws block `b`; false once it is closed and gone.
 fn host(ctx: &egui::Context, rt: &Handle, b: Block) -> bool {
-    let viewport = ViewportId::from_hash_of(format!("jarvis_{}", b.id));
+    let viewport = ViewportId::from_hash_of(format!("jai_{}", b.id));
     // (Closed while it was a window of its own: it plays its exit first.)
     if !super::detached_keep(ctx, viewport, (b.open)()) {
         crate::hud_dock::forget(&b.id);
@@ -125,7 +125,7 @@ fn host(ctx: &egui::Context, rt: &Handle, b: Block) -> bool {
         }
         return true;
     }
-    let mut builder = ViewportBuilder::default().with_title(b.window_title).with_app_id("jarvis").with_inner_size(b.size).with_min_inner_size(b.min).with_decorations(false);
+    let mut builder = ViewportBuilder::default().with_title(b.window_title).with_app_id("jai").with_inner_size(b.size).with_min_inner_size(b.min).with_decorations(false);
     if let Some(icon) = super::window_icon() {
         builder = builder.with_icon(Arc::new(icon));
     }
@@ -143,7 +143,7 @@ fn host(ctx: &egui::Context, rt: &Handle, b: Block) -> bool {
                 return;
             }
             if class == ViewportClass::Embedded {
-                egui::Window::new(b.title).id(egui::Id::new(("jarvis_embedded_block", &b.id))).show(ctx, |ui| (b.body)(ui, &rt));
+                egui::Window::new(b.title).id(egui::Id::new(("jai_embedded_block", &b.id))).show(ctx, |ui| (b.body)(ui, &rt));
             } else {
                 egui::CentralPanel::default().frame(Frame::none().fill(super::BLOCK_SLATE).inner_margin(Margin::same(14.0))).show(ctx, |ui| {
                     if super::detached_title_bar(ui, ctx, b.title) {
@@ -353,7 +353,7 @@ fn pictures_body(ui: &mut Ui, rt: &Handle, id: &str) {
             let shown = full.clone().or_else(|| texture(ui.ctx(), &pic.thumb_key()));
             match shown {
                 Some((tex, px)) => {
-                    framed(ui, rect, egui::Id::new(("jarvis_picture_frame", id)), hash_of(&pic.full_key()), &tex, px);
+                    framed(ui, rect, egui::Id::new(("jai_picture_frame", id)), hash_of(&pic.full_key()), &tex, px);
                     if full.is_none() {
                         tag(&ui.painter_at(rect), rect.right_top() + vec2(-8.0, 8.0), Align2::RIGHT_TOP, "LOADING FULL RESOLUTION", super::STRIP_MUTED);
                     }
@@ -393,7 +393,7 @@ fn pictures_body(ui: &mut Ui, rt: &Handle, id: &str) {
 
 /// The album's thumbnails; a click shows that picture.
 fn strip(ui: &mut Ui, album: &crate::image_viewer::Album, id: &str) {
-    egui::ScrollArea::horizontal().id_salt(("jarvis_picture_strip", id)).max_height(66.0).show(ui, |ui| {
+    egui::ScrollArea::horizontal().id_salt(("jai_picture_strip", id)).max_height(66.0).show(ui, |ui| {
         ui.horizontal(|ui| {
             for (i, pic) in album.items.iter().enumerate() {
                 let (rect, resp) = ui.allocate_exact_size(vec2(96.0, 58.0), Sense::click());
@@ -451,7 +451,7 @@ fn cameras_body(ui: &mut Ui, _rt: &Handle) {
         for (i, (cam, km)) in view.cams.iter().take(shown).enumerate() {
             let at = rect.min + vec2((i % cols) as f32 * (cell.x + gap), (i / cols) as f32 * (cell.y + gap));
             let r = Rect::from_min_size(at, cell);
-            let resp = ui.interact(r, egui::Id::new(("jarvis_cam_tile", i)), Sense::click());
+            let resp = ui.interact(r, egui::Id::new(("jai_cam_tile", i)), Sense::click());
             camera_frame(ui, r, cam, *km, true, resp.hovered());
             if resp.on_hover_text("Show this camera large").clicked() {
                 crate::webcams::select(i);
@@ -472,7 +472,7 @@ fn cameras_body(ui: &mut Ui, _rt: &Handle) {
     if side > 0.0 {
         let list = Rect::from_min_max(pos2(rect.right() - side, rect.top()), rect.max);
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(list).layout(Layout::top_down(Align::Min)));
-        egui::ScrollArea::vertical().id_salt("jarvis_cam_list").show(&mut child, |ui| {
+        egui::ScrollArea::vertical().id_salt("jai_cam_list").show(&mut child, |ui| {
             for (i, (cam, km)) in view.cams.iter().enumerate() {
                 let text = RichText::new(format!("{}\n{} · {:.1} km", cam.title(), cam.area, km)).font(FontId::monospace(10.5)).color(if i == view.index { accent() } else { super::STRIP_INK });
                 if ui.add(egui::SelectableLabel::new(i == view.index, text)).clicked() {
@@ -575,12 +575,12 @@ fn street_body(ui: &mut Ui, _rt: &Handle) {
     let mut heading = shot.heading;
     match shown {
         Some((tex, px)) if shot.pano => {
-            let look = panorama(ui, rect, egui::Id::new("jarvis_street_pano"), key, scene.start_yaw, tex.id());
+            let look = panorama(ui, rect, egui::Id::new("jai_street_pano"), key, scene.start_yaw, tex.id());
             heading = shot.heading.map(|h| (h + look.yaw.to_degrees() as f64).rem_euclid(360.0));
             let _ = px;
         }
         Some((tex, px)) => {
-            framed(ui, rect, egui::Id::new("jarvis_street_photo"), key, &tex, px);
+            framed(ui, rect, egui::Id::new("jai_street_photo"), key, &tex, px);
         }
         None => {
             let text = match crate::image_viewer::pixels::status(&shot.full_key()) {

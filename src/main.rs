@@ -96,8 +96,8 @@ mod intent_engine;
 mod intents;
 mod itslearning_bw_sso;
 mod interface;
-mod jarvis_voice_dsp;
-mod jarvis_views;
+mod jai_voice_dsp;
+mod jai_views;
 mod lifecycle;
 mod live_self_tester;
 mod listening_lock;
@@ -403,7 +403,7 @@ USAGE: JAI.exe [OPTIONS]
                       the privacy lock, every Feature Lab button), n runs in a row (default 5), no
                       window, no sound, the settings file untouched; writes exhaustive_report.json
 
-ENV: JARVIS_LOG (e.g. jarvis=debug), JARVIS_PROFILE, OLLAMA_URL (external engine)";
+ENV: JAI_LOG (e.g. jai=debug), JAI_PROFILE, OLLAMA_URL (external engine)";
 
 /// Finds the project folder (models/, runtime/) even when started from target\release.
 fn ensure_working_directory() {
@@ -456,9 +456,9 @@ fn enable_vt_mode() -> bool {
 
 fn init_logging(log_file: &str) {
     use tracing_subscriber::{fmt, prelude::*, EnvFilter};
-    let filter = EnvFilter::try_from_env("JARVIS_LOG")
+    let filter = EnvFilter::try_from_env("JAI_LOG")
         .or_else(|_| EnvFilter::try_from_default_env())
-        .unwrap_or_else(|_| EnvFilter::new("jarvis=info,whisper_rs=warn,ort=warn"));
+        .unwrap_or_else(|_| EnvFilter::new("jai=info,whisper_rs=warn,ort=warn"));
 
     // Simple size-based rotation: keep one previous log.
     if std::fs::metadata(log_file).map(|m| m.len() > 10 * 1024 * 1024).unwrap_or(false) {
@@ -507,9 +507,6 @@ fn main() -> ExitCode {
         }
     };
     ensure_working_directory();
-    // His files and folders from before he was renamed take their new names, before the log and
-    // the settings are opened under them.
-    let adopted = config::adopt_old_names(Path::new("."), features::user_folder);
 
     // Starting JAI again only brings the running instance's HUD to the front. After a restart
     // the previous instance may still be finishing its shutdown, so wait for it. A test session
@@ -536,9 +533,6 @@ fn main() -> ExitCode {
     };
 
     init_logging("jai.log");
-    for renamed in &adopted {
-        info!("[NAMES] {renamed}");
-    }
     whisper_rs::install_whisper_tracing_trampoline();
 
     // A self-test (or a silent scripted session) leaves the settings file as it is from the

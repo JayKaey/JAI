@@ -1,6 +1,5 @@
 //! Reference transfer for the film voice: everything JAI's Kokoro voice can borrow from the
-//! recording of the film's J.A.I. (`assets/jarvis_voice_reference.mp3`, "Formally known as
-//! Just A Rather Very Intelligent System…"), offline and in pure Rust.
+//! recording of the film voice (`assets/jai_voice_reference.mp3`), offline and in pure Rust.
 //!
 //! What this is — and is not. Fish Audio's model `c231dcd3116a4c0984e3bced753c1274` clones the
 //! voice on Fish Audio's servers with a neural speaker encoder; that model cannot run here (it is
@@ -10,7 +9,7 @@
 //! * **A — voice blend calibration** (`calibrate`, `--voice-calibrate`): the clip's sentence is
 //!   synthesised with blends of `bm_fable`, `bm_george` and `bm_lewis`; the blend whose mastered
 //!   output is closest to the clip (spectral-envelope shape and F0 level / range) is stored in the
-//!   profile cache and used by the `bm_jarvis_movie_1to1` alias from then on.
+//!   profile cache and used by the `bm_jai_movie_1to1` alias from then on.
 //! * **B — 128-band spectral envelope transfer** (`SpectralTransfer`): the clip's long-term mel
 //!   envelope (128 bands, 60 Hz – 12 kHz, 2048-point Hann STFT at 48 kHz with a 512 hop) is imposed
 //!   on every clause: `H[k] = clamp(α · (E_ref[k] − E_syn[k]), ±9 dB)` with α = 0.78, where E_syn
@@ -27,10 +26,10 @@
 //!   (Pearson correlation of the mean-removed 128-band log-mel envelopes) and the F0 statistics
 //!   against the clip — before and after the transfer, and on a sentence the transfer never saw.
 //!
-//! The analysis of the clip is cached in `assets/jarvis_reference_profile.bin` (keyed by the
+//! The analysis of the clip is cached in `assets/jai_reference_profile.bin` (keyed by the
 //! clip's size and modification time).
 
-use crate::jarvis_voice_dsp::{db_to_gain, gain_to_db, limit};
+use crate::jai_voice_dsp::{db_to_gain, gain_to_db, limit};
 use std::f32::consts::PI;
 use std::path::Path;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -59,12 +58,24 @@ pub const DEFAULT_F0_FLATTEN: f32 = 0.35;
 /// Speech frames: louder than −45 dBFS and within 35 dB of the loudest frame.
 const GATE_DB: f32 = -45.0;
 const RELATIVE_GATE_DB: f32 = 35.0;
-/// The clip's own words (the closed-loop test synthesises them).
-pub const REFERENCE_TRANSCRIPT: &str = "Formally known as Just A Rather Very Intelligent System, JARVIS, it was Tony Stark's organic user interface software platform.";
+/// Where the clip's own words are written down, beside the clip. They are the film's, like the
+/// recording itself, so they are Sir's file and no part of the code.
+pub const TRANSCRIPT_PATH: &str = "assets/jai_voice_reference.txt";
+
+/// The clip's own words (the closed-loop test synthesises them); without the file, the
+/// held-out sentence stands in.
+pub fn reference_transcript() -> String {
+    let words = std::fs::read_to_string(TRANSCRIPT_PATH).unwrap_or_default().split_whitespace().collect::<Vec<_>>().join(" ");
+    if words.is_empty() {
+        HELD_OUT_SENTENCE.to_string()
+    } else {
+        words
+    }
+}
 /// A sentence the transfer never saw (generalisation check).
 pub const HELD_OUT_SENTENCE: &str = "Good evening, Sir. The research agent has finished, and the report is ready whenever you are.";
 /// Where the clip's analysis is cached.
-pub const PROFILE_PATH: &str = "assets/jarvis_reference_profile.bin";
+pub const PROFILE_PATH: &str = "assets/jai_reference_profile.bin";
 /// The verification target for the mastered clip sentence (both voices).
 pub const SIMILARITY_TARGET: f32 = 0.97;
 
@@ -604,7 +615,7 @@ static PROFILE: LazyLock<Option<ReferenceProfile>> = LazyLock::new(|| {
         return None;
     }
     let Some(clip) = crate::voice_reference::reference_path() else {
-        info!("[VOICE] No reference clip; drop the film voice at assets/jarvis_voice_reference.mp3 to transfer its timbre.");
+        info!("[VOICE] No reference clip; drop the film voice at assets/jai_voice_reference.mp3 to transfer its timbre.");
         return None;
     };
     let started = std::time::Instant::now();
@@ -624,7 +635,7 @@ pub fn profile() -> Option<&'static ReferenceProfile> {
     PROFILE.as_ref()
 }
 
-/// The calibrated blend the `bm_jarvis_movie_1to1` alias uses (None: not calibrated).
+/// The calibrated blend the `bm_jai_movie_1to1` alias uses (None: not calibrated).
 pub fn calibrated_blend() -> Option<String> {
     profile().and_then(|p| p.blend.clone())
 }
@@ -836,8 +847,8 @@ pub fn candidate_blends() -> Vec<String> {
 /// `lock_to_hz`: the clip's median F0 the clause is locked to (None: no lock).
 pub(crate) fn synth_dry(kokoro: &mut crate::tts::Kokoro, phonemizer: &crate::phonemizer::Phonemizer, text: &str, voice: &str, speed: f32, lock_to_hz: Option<f32>) -> Result<Vec<f32>, String> {
     let ipa = phonemizer.phonemize(&crate::tts::normalize_for_speech(text));
-    let audio = kokoro.synthesize(&ipa, voice, crate::jarvis_voice_dsp::synthesis_speed(speed))?;
-    Ok(crate::jarvis_voice_dsp::master_dry_to(&audio, crate::tts::KOKORO_RATE, lock_to_hz))
+    let audio = kokoro.synthesize(&ipa, voice, crate::jai_voice_dsp::synthesis_speed(speed))?;
+    Ok(crate::jai_voice_dsp::master_dry_to(&audio, crate::tts::KOKORO_RATE, lock_to_hz))
 }
 
 /// What another setting must be closer by before it replaces the calibrated one: the voice Sir
@@ -851,9 +862,9 @@ pub const KEEP_MARGIN: f32 = 0.15;
 fn fit(kokoro: &mut crate::tts::Kokoro, phonemizer: &crate::phonemizer::Phonemizer, reference: &ReferenceProfile, voice: &str, speed: f32) -> Result<(Match, f32), String> {
     let mut measure = |sentence: &str| -> Result<Match, String> {
         let audio = synth_dry(kokoro, phonemizer, sentence, voice, speed, Some(reference.f0.median_hz))?;
-        Match::measure(&audio, crate::jarvis_voice_dsp::MASTER_RATE, reference).ok_or_else(|| "the synthesised sentence holds no speech".to_string())
+        Match::measure(&audio, crate::jai_voice_dsp::MASTER_RATE, reference).ok_or_else(|| "the synthesised sentence holds no speech".to_string())
     };
-    let on_clip = measure(REFERENCE_TRANSCRIPT)?;
+    let on_clip = measure(&reference_transcript())?;
     let held_out = measure(HELD_OUT_SENTENCE)?;
     Ok((on_clip, (on_clip.distance() + held_out.distance()) / 2.0))
 }
@@ -861,7 +872,7 @@ fn fit(kokoro: &mut crate::tts::Kokoro, phonemizer: &crate::phonemizer::Phonemiz
 /// Layer A: picks the blend closest to the clip and stores it in the profile cache. The blend
 /// and the flattening already calibrated stay unless another is closer by `KEEP_MARGIN`.
 pub fn calibrate(cfg: &crate::config::JaiConfig) -> Result<(String, Match), String> {
-    let clip = crate::voice_reference::reference_path().ok_or("no reference clip (assets/jarvis_voice_reference.mp3)")?;
+    let clip = crate::voice_reference::reference_path().ok_or("no reference clip (assets/jai_voice_reference.mp3)")?;
     let mut reference = load_profile(&clip, Path::new(PROFILE_PATH))?;
     let phonemizer = crate::phonemizer::Phonemizer::new(cfg.espeak_path.as_deref());
     let mut kokoro = crate::tts::Kokoro::load(cfg)?;
@@ -957,11 +968,11 @@ pub fn verify_with(cfg: &crate::config::JaiConfig, clip: &Path, cache: &Path) ->
     let reference = load_profile(clip, cache)?;
     let phonemizer = crate::phonemizer::Phonemizer::new(cfg.espeak_path.as_deref());
     let mut kokoro = crate::tts::Kokoro::load(cfg)?;
-    let voice = if cfg.kokoro_voice == crate::tts::JARVIS_VOICE { reference.blend.clone().unwrap_or_else(|| crate::tts::JARVIS_VOICE_BLEND.to_string()) } else { cfg.kokoro_voice.clone() };
+    let voice = if cfg.kokoro_voice == crate::tts::JAI_VOICE { reference.blend.clone().unwrap_or_else(|| crate::tts::JAI_VOICE_BLEND.to_string()) } else { cfg.kokoro_voice.clone() };
     set_f0_flatten(effective_f0_flatten(cfg.voice_f0_flatten, reference.flatten));
-    let rate = crate::jarvis_voice_dsp::MASTER_RATE;
+    let rate = crate::jai_voice_dsp::MASTER_RATE;
     let lock = Some(reference.f0.median_hz);
-    let mut audio = synth_dry(&mut kokoro, &phonemizer, REFERENCE_TRANSCRIPT, &voice, cfg.kokoro_speed, lock)?;
+    let mut audio = synth_dry(&mut kokoro, &phonemizer, &reference_transcript(), &voice, cfg.kokoro_speed, lock)?;
     let dry = Match::measure(&audio, rate, &reference).ok_or("the synthesised sentence holds no speech")?;
     let mut transfer = SpectralTransfer::new(&reference);
     transfer.process(&mut audio, rate);
@@ -977,7 +988,7 @@ pub fn verify_with(cfg: &crate::config::JaiConfig, clip: &Path, cache: &Path) ->
 /// report, a question, a technical line with figures (and the homograph "live", which must be
 /// read "lyve"), and a short alert.
 pub const VOICE_SENTENCES: [(&str, &str); 5] = [
-    ("statement", REFERENCE_TRANSCRIPT),
+    ("statement", "The workshop is secure, the reactor is stable, and every system reports ready for the morning."),
     ("report", HELD_OUT_SENTENCE),
     ("question", "Shall I put the report on the board, Sir, or would you rather hear the short version first?"),
     ("technical", "Live telemetry shows the reactor at 3.2 gigawatts and 61 degrees, and the interface is live on all three monitors."),
@@ -990,13 +1001,13 @@ pub const VOICE_SENTENCES: [(&str, &str); 5] = [
 /// sentence first, as in a running session. (The exhaustive verifier measures them against
 /// the clip and plays them to the speech recogniser.)
 pub fn render_sentences(cfg: &crate::config::JaiConfig) -> Result<Vec<(&'static str, String, Vec<f32>)>, String> {
-    let clip = crate::voice_reference::reference_path().ok_or("no reference clip (assets/jarvis_voice_reference.mp3)")?;
+    let clip = crate::voice_reference::reference_path().ok_or("no reference clip (assets/jai_voice_reference.mp3)")?;
     let reference = load_profile(&clip, Path::new(PROFILE_PATH))?;
     let phonemizer = crate::phonemizer::Phonemizer::new(cfg.espeak_path.as_deref());
     let mut kokoro = crate::tts::Kokoro::load(cfg)?;
-    let voice = if cfg.kokoro_voice == crate::tts::JARVIS_VOICE { reference.blend.clone().unwrap_or_else(|| crate::tts::JARVIS_VOICE_BLEND.to_string()) } else { cfg.kokoro_voice.clone() };
+    let voice = if cfg.kokoro_voice == crate::tts::JAI_VOICE { reference.blend.clone().unwrap_or_else(|| crate::tts::JAI_VOICE_BLEND.to_string()) } else { cfg.kokoro_voice.clone() };
     set_f0_flatten(effective_f0_flatten(cfg.voice_f0_flatten, reference.flatten));
-    let rate = crate::jarvis_voice_dsp::MASTER_RATE;
+    let rate = crate::jai_voice_dsp::MASTER_RATE;
     let mut transfer = SpectralTransfer::new(&reference);
     let mut out = Vec::with_capacity(VOICE_SENTENCES.len());
     for (kind, text) in VOICE_SENTENCES {
@@ -1008,7 +1019,7 @@ pub fn render_sentences(cfg: &crate::config::JaiConfig) -> Result<Vec<(&'static 
 }
 
 pub fn verify(cfg: &crate::config::JaiConfig) -> Result<Verification, String> {
-    let clip = crate::voice_reference::reference_path().ok_or("no reference clip (assets/jarvis_voice_reference.mp3)")?;
+    let clip = crate::voice_reference::reference_path().ok_or("no reference clip (assets/jai_voice_reference.mp3)")?;
     verify_with(cfg, &clip, Path::new(PROFILE_PATH))
 }
 
@@ -1218,7 +1229,7 @@ mod tests {
     }
 
     /// Layer A on the real clip: `cargo test calibrate_the_project_voice -- --ignored --nocapture`
-    /// (writes `assets/jarvis_reference_profile.bin`; the app reads it at its next start).
+    /// (writes `assets/jai_reference_profile.bin`; the app reads it at its next start).
     #[test]
     #[ignore]
     fn calibrate_the_project_voice() {
@@ -1244,11 +1255,11 @@ mod tests {
         let cfg = crate::config::JaiConfig {
             kokoro_model_path: crate::models::KOKORO_V1_MODEL.into(),
             kokoro_voices_archive_path: crate::models::KOKORO_V1_VOICES.into(),
-            kokoro_voice: crate::tts::JARVIS_VOICE.into(),
+            kokoro_voice: crate::tts::JAI_VOICE.into(),
             tts_gpu: false,
             ..Default::default()
         };
-        let cache = std::env::temp_dir().join(format!("jarvis_profile_{}.bin", uuid::Uuid::new_v4()));
+        let cache = std::env::temp_dir().join(format!("jai_profile_{}.bin", uuid::Uuid::new_v4()));
         // The project's calibrated blend (if any) is used, as in the app.
         if let Ok(bytes) = std::fs::read(PROFILE_PATH) {
             let _ = std::fs::write(&cache, bytes);

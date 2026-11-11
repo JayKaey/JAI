@@ -15,55 +15,7 @@ use tracing::{error, info, warn};
 
 pub const CONFIG_FILE: &str = "jai_config.json";
 /// Bump whenever tuned defaults change and old persisted values must be migrated.
-pub const CONFIG_VERSION: u32 = 25;
-
-/// What his own files and folders next to the program were called while he was Jarvis, and
-/// what they are called now: (then, now).
-pub const RENAMED_FILES: &[(&str, &str)] = &[
-    ("jarvis_config.json", CONFIG_FILE),
-    ("jarvis_config.json.broken", "jai_config.json.broken"),
-    ("jarvis_memory.db", "jai_memory.db"),
-    ("jarvis_memory.db-wal", "jai_memory.db-wal"),
-    ("jarvis_memory.db-shm", "jai_memory.db-shm"),
-    ("jarvis.log", "jai.log"),
-    ("jarvis.log.1", "jai.log.1"),
-    ("jarvis-llm.log", "jai-llm.log"),
-    (".jarvis_backups", ".jai_backups"),
-    ("jarvis_cleanup", "jai_cleanup"),
-    ("jarvis_vault.key", "jai_vault.key"),
-];
-/// And in Sir's own folders: (the folder, then, now).
-pub const RENAMED_FOLDERS: &[(&str, &str, &str)] = &[
-    ("Documents", "JARVIS Models", "JAI Models"),
-    ("Documents", "Jarvis_Research", "JAI_Research"),
-    ("Documents", "Jarvis_Scans", "JAI_Scans"),
-    ("Documents", "Jarvis Exports", "JAI Exports"),
-    ("Videos", "Jarvis_Clips", "JAI_Clips"),
-    ("Downloads", "Jarvis_AirDrop", "JAI_AirDrop"),
-    ("Pictures", "Jarvis", "JAI"),
-];
-
-/// Gives every file and folder that still carries his old name its new one (2026-11-11: Sir
-/// wanted them renamed too), at the start, before anything is opened under the new names.
-/// Nothing is renamed over something that already has the new name, and what cannot be renamed
-/// (a folder open in another program) keeps its name. What happened, for the log.
-pub fn adopt_old_names(home: &Path, user_folder: impl Fn(&str) -> std::path::PathBuf) -> Vec<String> {
-    let files = RENAMED_FILES.iter().map(|(then, now)| (home.join(then), home.join(now)));
-    let folders = RENAMED_FOLDERS.iter().map(|(folder, then, now)| {
-        let base = user_folder(folder);
-        (base.join(then), base.join(now))
-    });
-    let mut done = Vec::new();
-    for (then, now) in files.chain(folders) {
-        if then.exists() && !now.exists() {
-            done.push(match std::fs::rename(&then, &now) {
-                Ok(()) => format!("{} is {} now", then.display(), now.display()),
-                Err(e) => format!("{} keeps its name: {e}", then.display()),
-            });
-        }
-    }
-    done
-}
+pub const CONFIG_VERSION: u32 = 26;
 
 /// His name as the settings list it (`wake::WakeWordMatcher` knows how it is misheard and spelt;
 /// further names may be added here).
@@ -83,52 +35,41 @@ pub fn is_qwen35(model: &str) -> bool {
     m.contains("qwen3.5") || m.contains("qwen3_5") || m.contains("qwen35")
 }
 
-/// Whisper's initial prompt in v12-v17: only the name. Without any prompt "Jarvis" came out as
-/// "Service", "Jobes", "That all" or "listen".
-pub const WHISPER_NAME_PROMPT: &str = "Hey Jarvis.";
-
-/// Whisper's initial prompt since v18: the name as Sir says it ("Jay") plus his own short domain words, so "core"
-/// stops coming out as "car" / "call" / "for C-O-R-E". Short on purpose (the long v9 list made
-/// Whisper invent words on quiet audio); `no_context` + `single_segment` keep it from echoing, and
-/// `stt::normalize_stt_transcript` / `typos::core_homophones` repair what still slips through.
-/// It opens with "Hey Jarvis." as a sentence: the bare list "Jarvis, core, show core, …" made
-/// the self-test hear the name as "Javis" / "Java" (2026-11-02 A/B, same clips); this form kept
-/// every check green and also heard "Geschichte" right.
+/// Whisper's initial prompt: the name as Sir says it ("Jay") plus his own short domain words, so
+/// "core" stops coming out as "car" / "call" / "for C-O-R-E". Short on purpose (the long v9
+/// list made Whisper invent words on quiet audio); `no_context` + `single_segment` keep it from
+/// echoing, and `stt::normalize_stt_transcript` / `typos::core_homophones` repair what still
+/// slips through. It opens with a greeting as a sentence: a bare list of words made the
+/// self-test mishear the name (2026-11-02 A/B, same clips).
 pub const WHISPER_DOMAIN_PROMPT: &str = "Hey Jay. Show your core, hide your core, close your core. Orb, HUD, board, blocks, Sonora, Spotify, WebUntis, itslearning.";
 
-/// The domain prompt of v18-v23, when his name was Jarvis (kept to recognise a stock prompt in
-/// an older settings file).
-const WHISPER_DOMAIN_PROMPT_V23: &str = "Hey Jarvis. Show your core, hide your core, close your core. Orb, HUD, board, blocks, Sonora, Spotify, WebUntis, itslearning.";
+/// A value's fingerprint (FNV-1a, 64 bit). The stock values of earlier settings versions are
+/// kept as fingerprints: a settings file from before v24 is brought up to date as it always
+/// was, and the name he had then is written nowhere.
+pub(crate) fn fingerprint(value: &str) -> u64 {
+    value.bytes().fold(0xcbf2_9ce4_8422_2325, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3))
+}
 
-/// The v9-v10 vocabulary primer. Since v11 Whisper runs without an initial prompt: on short or
-/// quiet audio it invented words from the prompt ("Sonora", "Highway to Hell"); Sir's vocabulary
-/// is fixed after decoding instead (`stt::normalize_stt_transcript`).
-pub const LEGACY_WHISPER_PROMPT: &str = "Jarvis, pause, resume, play, stop, mute, unmute, louder, quieter, Sonora, Spotify, JaysRock, Highway to Hell, \
-     WebUntis, itslearning, WhatsApp, Kalender, Stundenplan, Hausaufgaben, Orb mode, hands-free mode, wake up Daddy's home. \
-     Hey Jarvis, open my browser, full screen, close it, open BastiGHG on YouTube, search Minecraft, Twitch, Discord, Steam, \
-     VS Code, GitHub, Rust, Python, mach dich zu.";
-/// Earlier default prompts; removed on migration unless Sir customised his.
-const LEGACY_WHISPER_PROMPTS: &[&str] = &[
-    // v12-v17
-    WHISPER_NAME_PROMPT,
-    // v18-v21 and v23
-    WHISPER_DOMAIN_PROMPT_V23,
-    // v18 (first build): the bare domain list
-    "Jarvis, core, show core, hide core, close core, orb, HUD, board, blocks, Sonora, Spotify, WebUntis, itslearning.",
-    // v9-v10
-    LEGACY_WHISPER_PROMPT,
-    // v4
-    "Jarvis. Hey Jarvis, öffne Spotify, Discord, Browser, Terminal. Hallo Jarvis, how are you Sir?",
-    // v5
-    "Jarvis. Hey Jarvis, open my browser, close yourself, shut down, only talk when I talk, answer in text only, \
-     create a widget, open a new window, mach dich zu, öffne den Browser, Spotify, Discord, Steam, VS Code.",
-    // v6-v8
-    "Jarvis. Hey Jarvis, open my browser, full screen, close it, close yourself, only talk when I talk, \
-     open BastiGHG on YouTube, search Minecraft on YouTube, Twitch, Discord, Spotify, Steam, VS Code, GitHub, Rust, Python, \
-     mach dich zu, öffne den Browser.",
-    // v22
-    "Hey Jarvis. Ultron. Show your core, hide your core, close your core. Orb, HUD, board, blocks, Sonora, Spotify, WebUntis, itslearning.",
+/// Earlier default prompts, whitespace collapsed (v12-v17, v18-v23, v18's first build, v9-v10,
+/// v4, v5, v6-v8, v22): replaced on migration; a prompt Sir wrote himself stays.
+const STOCK_PROMPTS: [u64; 8] = [
+    0xf36e_a15a_d215_d828,
+    0x1199_73a0_01f5_c968,
+    0xfed6_77b4_7bc6_dbe4,
+    0xfd42_252b_0eb3_adc3,
+    0x179e_290d_0566_afbe,
+    0x5fa3_00bd_7bff_9f5e,
+    0x5ab7_18fe_bb4b_c004,
+    0x4681_af27_8122_e3c4,
 ];
+/// The stock wake words of v1-v23 (lower case).
+const STOCK_WAKE_WORDS: [u64; 7] = [0x979e_eefc_7363_6064, 0xa760_0ad3_2f22_bd2a, 0x6dbc_2d77_f26c_4c41, 0xffbe_25f7_baf8_72c5, 0x979e_e7fc_7363_547f, 0xd9cf_874f_5ed7_7792, 0x869e_b459_8016_e517];
+/// The stock paths of the memory database and the log (v1-v24), and the film voice's alias
+/// (v15-v25).
+const STOCK_DB_PATH: u64 = 0xac98_211b_7100_d85e;
+const STOCK_LOG_FILE: u64 = 0xec79_b0f6_831d_d6f4;
+const STOCK_VOICE_ALIAS: u64 = 0x43cd_6bae_b2a4_ddc1;
+
 /// The v8 voice: replaced by the v9 film voice unless Sir chose another.
 const V8_VOICE_BLEND: &str = "bm_george:0.45+bm_fable:0.35+bm_lewis:0.2";
 
@@ -145,7 +86,7 @@ pub enum HardwareProfile {
 
 impl HardwareProfile {
     pub fn detect() -> Self {
-        if let Ok(value) = std::env::var("JARVIS_PROFILE") {
+        if let Ok(value) = std::env::var("JAI_PROFILE") {
             let v = value.to_lowercase();
             if v.contains("pi") || v.contains("edge") || v.contains("arm") {
                 return Self::EdgePi5;
@@ -530,7 +471,7 @@ pub struct SatelliteSettings {
     pub worldwide_enabled: bool,
     /// auto/cloudflare, tailscale, or ssh. SSH requires an HTTPS reverse proxy on the VPS.
     pub tunnel_provider: String,
-    /// The permanent address (`https://jarvis.your-domain`): with a Cloudflare tunnel token in
+    /// The permanent address (`https://jai.your-domain`): with a Cloudflare tunnel token in
     /// the vault it is the named tunnel's own hostname, the same after every restart; with
     /// SSH it is the reverse proxy's. Empty with Cloudflare: a quick tunnel, whose
     /// trycloudflare.com address is new on every start.
@@ -650,9 +591,9 @@ impl Default for JaiConfig {
             llm_models_dir: "models/llm".to_string(),
             llm_port: 11435,
             ollama_url: env("OLLAMA_URL", "http://127.0.0.1:11434"),
-            primary_model: env("JARVIS_PRIMARY_MODEL", PRIMARY_MODEL),
+            primary_model: env("JAI_PRIMARY_MODEL", PRIMARY_MODEL),
             fallback_model: env(
-                "JARVIS_FALLBACK_MODEL",
+                "JAI_FALLBACK_MODEL",
                 match profile {
                     HardwareProfile::Desktop => "qwen2.5:7b-instruct",
                     HardwareProfile::EdgePi5 => "qwen2.5:3b",
@@ -720,8 +661,8 @@ impl Default for JaiConfig {
             whisper_fast_decode: true,
             kokoro_model_path: env("KOKORO_MODEL", crate::models::KOKORO_V1_MODEL),
             kokoro_voices_archive_path: crate::models::KOKORO_V1_VOICES.to_string(),
-            kokoro_voice: env("KOKORO_VOICE", crate::tts::JARVIS_VOICE),
-            kokoro_speed: crate::tts::JARVIS_VOICE_SPEED,
+            kokoro_voice: env("KOKORO_VOICE", crate::tts::JAI_VOICE),
+            kokoro_speed: crate::tts::JAI_VOICE_SPEED,
             voice_f0_flatten: crate::fish_zero_shot_tts::DEFAULT_F0_FLATTEN,
             tts_threads: 0,
             tts_gpu: false,
@@ -748,7 +689,7 @@ impl Default for JaiConfig {
             vram_guard: crate::vram_guard::VramGuardConfig::default(),
             live_layers: crate::live_layers::LiveLayerSettings::default(), // live layers (C1)
 
-            memory_db_path: env("JARVIS_MEMORY_DB", "jai_memory.db"),
+            memory_db_path: env("JAI_MEMORY_DB", "jai_memory.db"),
             skills_dir: "skills".to_string(),
             log_file: "jai.log".to_string(),
         }
@@ -895,10 +836,10 @@ impl JaiConfig {
             }
         }
         if self.config_version < 15 {
-            // v15, the film voice: the 62/28/10 Fable-George-Lewis blend (`bm_jarvis_movie_1to1`)
+            // v15, the film voice: the 62/28/10 Fable-George-Lewis blend (`bm_jai_movie_1to1`)
             // through the 48 kHz mastering chain at 1.04× (the chain's pitch lock stretches 2 %, so
             // the synthesis itself runs faster). Only the stock voices and speeds move.
-            if [crate::tts::LEGACY_VOICE_BLEND, crate::tts::JARVIS_VOICE_BLEND, crate::tts::V15_VOICE_BLEND, V8_VOICE_BLEND, ""].contains(&self.kokoro_voice.trim()) {
+            if [crate::tts::LEGACY_VOICE_BLEND, crate::tts::JAI_VOICE_BLEND, crate::tts::V15_VOICE_BLEND, V8_VOICE_BLEND, ""].contains(&self.kokoro_voice.trim()) {
                 self.kokoro_voice = defaults.kokoro_voice.clone();
             }
             if [1.0f32, 1.05, 1.06].iter().any(|v| (self.kokoro_speed - v).abs() < 1e-3) {
@@ -914,10 +855,10 @@ impl JaiConfig {
             // v17, the reference-matched film voice: 75 % Fable / 25 % George at an unhurried 0.98×
             // (−0.55 semitones, dry studio chain). Only the stock voices and the stock tempo move.
             if [crate::tts::V15_VOICE_BLEND, crate::tts::LEGACY_VOICE_BLEND, ""].contains(&self.kokoro_voice.trim()) {
-                self.kokoro_voice = crate::tts::JARVIS_VOICE.to_string();
+                self.kokoro_voice = crate::tts::JAI_VOICE.to_string();
             }
             if (self.kokoro_speed - crate::tts::V15_VOICE_SPEED).abs() < 1e-3 {
-                self.kokoro_speed = crate::tts::JARVIS_VOICE_SPEED;
+                self.kokoro_speed = crate::tts::JAI_VOICE_SPEED;
             }
         }
         if self.config_version < 18 {
@@ -966,12 +907,11 @@ impl JaiConfig {
             }
         }
         if self.config_version < 24 {
-            // v24 (2026-11-11): his name is J.A.I. ("Jay"). The old name and its mumbled forms
-            // leave the wake words (names Sir added himself stay), the stock window title follows,
-            // and the stock look (or the yellow accent the 2026-11-09 helmet mishap left behind)
-            // becomes the new amber default.
-            const OLD_NAMES: &[&str] = &["jarvis", "javis", "charvis", "schawis", "jarviz", "dscharvis", "yarvis"];
-            self.wake_words.retain(|w| !OLD_NAMES.contains(&w.trim().to_lowercase().as_str()));
+            // v24 (2026-11-11): his name is J.A.I. ("Jay"). The stock wake words of before leave
+            // (names Sir added himself stay), the stock window title follows, and the stock look
+            // (or the yellow accent the 2026-11-09 helmet mishap left behind) becomes the new
+            // amber default.
+            self.wake_words.retain(|w| !STOCK_WAKE_WORDS.contains(&fingerprint(&w.trim().to_lowercase())));
             for name in DEFAULT_WAKE_WORDS.iter().rev() {
                 if !self.wake_words.iter().any(|w| w.eq_ignore_ascii_case(name)) {
                     self.wake_words.insert(0, name.to_string());
@@ -980,14 +920,18 @@ impl JaiConfig {
             self.interface.renamed_v24();
         }
         if self.config_version < 25 {
-            // v25 (2026-11-11): his files carry his name too (`adopt_old_names` renames them at
-            // the start). The stock paths follow; a path Sir chose himself stays.
-            if self.memory_db_path == "jarvis_memory.db" {
+            // v25 (2026-11-11): his files carry his name too. The stock paths follow; a path Sir
+            // chose himself stays.
+            if fingerprint(&self.memory_db_path) == STOCK_DB_PATH {
                 self.memory_db_path = defaults.memory_db_path.clone();
             }
-            if self.log_file == "jarvis.log" {
+            if fingerprint(&self.log_file) == STOCK_LOG_FILE {
                 self.log_file = defaults.log_file.clone();
             }
+        }
+        if self.config_version < 26 && fingerprint(self.kokoro_voice.trim()) == STOCK_VOICE_ALIAS {
+            // v26: the film voice's alias carries his name of today.
+            self.kokoro_voice = crate::tts::JAI_VOICE.to_string();
         }
         if self.config_version < 22 && self.pre_roll_ms == 320 {
             // v22: 500 ms of audio before the onset, so "JAI" / "Move" keep their first
@@ -996,7 +940,7 @@ impl JaiConfig {
         }
         // A stock prompt (v4-v21) becomes today's domain prompt; a prompt Sir wrote himself stays.
         let prompt = self.whisper_initial_prompt.split_whitespace().collect::<Vec<_>>().join(" ");
-        let stock = LEGACY_WHISPER_PROMPTS.iter().any(|p| p.split_whitespace().collect::<Vec<_>>().join(" ") == prompt);
+        let stock = STOCK_PROMPTS.contains(&fingerprint(&prompt));
         if stock {
             self.whisper_initial_prompt = defaults.whisper_initial_prompt;
         }
@@ -1202,7 +1146,7 @@ pub fn ort_env() -> ort::Result<&'static ort::environment::Environment> {
     if let Some(env) = ORT_ENV.get() {
         return Ok(env);
     }
-    let env = ort::init().with_name("jarvis").build()?;
+    let env = ort::init().with_name("jai").build()?;
     Ok(ORT_ENV.get_or_init(|| env))
 }
 
@@ -1284,87 +1228,37 @@ mod tests {
         assert_eq!((own.keep_alive, own.vram_guard.idle_secs), (45, 600));
     }
 
-    /// 2026-11-11, "they should be renamed": his files and folders take his new name at the
-    /// start, once, with what is in them; the settings then point at them.
+    /// The stock values of earlier settings are known by fingerprint, so the name he had then
+    /// is written nowhere. (The numbers were made from those values with the same sum.)
     #[test]
-    fn files_and_folders_take_his_new_name_once() {
-        let root = std::env::temp_dir().join(format!("jai_adopt_{}", uuid::Uuid::new_v4()));
-        let (home, user) = (root.join("app"), root.join("user"));
-        std::fs::create_dir_all(home.join(".jarvis_backups")).unwrap();
-        std::fs::create_dir_all(user.join("Documents").join("Jarvis_Research")).unwrap();
-        std::fs::create_dir_all(user.join("Pictures").join("Jarvis")).unwrap();
-        for name in ["jarvis_config.json", "jarvis_memory.db", "jarvis_memory.db-wal", "jarvis.log"] {
-            std::fs::write(home.join(name), name).unwrap();
-        }
-        std::fs::write(user.join("Documents").join("Jarvis_Research").join("dossier.md"), "kept").unwrap();
-        // Something that already has the new name is never overwritten.
-        std::fs::write(home.join("jarvis-llm.log"), "then").unwrap();
-        std::fs::write(home.join("jai-llm.log"), "now").unwrap();
-        let folder = |name: &str| user.join(name);
-        let done = adopt_old_names(&home, &folder);
-        assert_eq!(done.len(), 7, "four files, the backups and two of his folders: {done:?}");
-        assert!(done.iter().all(|line| line.contains(" now")), "{done:?}");
-        for name in ["jai_config.json", "jai_memory.db", "jai_memory.db-wal", "jai.log", ".jai_backups"] {
-            assert!(home.join(name).exists(), "{name}");
-        }
-        for name in ["jarvis_config.json", "jarvis_memory.db", "jarvis_memory.db-wal", "jarvis.log", ".jarvis_backups"] {
-            assert!(!home.join(name).exists(), "{name}");
-        }
-        assert_eq!(std::fs::read_to_string(home.join("jai_config.json")).unwrap(), "jarvis_config.json", "what was in it came along");
-        assert_eq!(std::fs::read_to_string(user.join("Documents").join("JAI_Research").join("dossier.md")).unwrap(), "kept");
-        assert!(user.join("Pictures").join("JAI").is_dir() && !user.join("Documents").join("Jarvis_Research").exists());
-        assert_eq!(std::fs::read_to_string(home.join("jai-llm.log")).unwrap(), "now");
-        assert_eq!(std::fs::read_to_string(home.join("jarvis-llm.log")).unwrap(), "then");
-        assert!(adopt_old_names(&home, &folder).is_empty(), "a second start finds nothing to do");
-        let _ = std::fs::remove_dir_all(root);
-        // The settings follow the stock paths; a path Sir chose himself stays.
-        let mut cfg: JaiConfig = serde_json::from_str(r#"{ "config_version": 24, "memory_db_path": "jarvis_memory.db", "log_file": "jarvis.log" }"#).unwrap();
-        cfg.migrate();
-        assert_eq!((cfg.memory_db_path.as_str(), cfg.log_file.as_str(), cfg.config_version), ("jai_memory.db", "jai.log", CONFIG_VERSION));
-        let mut own: JaiConfig = serde_json::from_str(r#"{ "config_version": 24, "memory_db_path": "D:/data/mine.db" }"#).unwrap();
-        own.migrate();
-        assert_eq!(own.memory_db_path, "D:/data/mine.db");
-        assert_eq!(CONFIG_FILE, "jai_config.json");
-    }
-
-    /// v24 (2026-11-11): Sir renamed him J.A.I. ("Jay"). The settings of 2026-11-09, as they
-    /// stood after the helmet mishap, come out with the new name, title, prompt and look.
-    #[test]
-    fn the_v23_settings_take_his_new_name() {
-        let v23 = r##"{ "config_version": 23,
-            "interface": { "theme": "custom", "accent": "#ffe14d", "background": "#0f0507", "title": "J.A.R.V.I.S.", "hud_palette": "stark_gold" },
-            "wake_words": ["jarvis", "javis", "charvis", "schawis", "jarviz", "dscharvis", "yarvis", "friday"],
-            "whisper_initial_prompt": "Hey Jarvis. Show your core, hide your core, close your core. Orb, HUD, board, blocks, Sonora, Spotify, WebUntis, itslearning." }"##;
-        let mut cfg: JaiConfig = serde_json::from_str(v23).unwrap();
-        cfg.migrate();
-        assert_eq!(cfg.wake_words, ["jai", "jay", "friday"], "the old name goes, a name Sir added stays");
-        assert_eq!(cfg.interface.title, "J.A.I.");
-        assert_eq!(cfg.whisper_initial_prompt, WHISPER_DOMAIN_PROMPT);
-        assert!(cfg.whisper_initial_prompt.starts_with("Hey Jay.") && !cfg.whisper_initial_prompt.contains("Jarvis"));
-        assert_eq!((cfg.interface.theme.as_str(), cfg.interface.hud_palette.as_str(), cfg.interface.accent.as_str()), ("jai", "jai_gold", "#ffd400"));
-        assert_eq!(cfg.config_version, CONFIG_VERSION);
-        // A look Sir chose himself stays; only the stock title follows.
-        let own = r##"{ "config_version": 23, "interface": { "theme": "crimson_mk42", "accent": "#ff2a45", "background": "#0f0507", "title": "Workshop", "hud_palette": "rose_crimson" } }"##;
+    fn earlier_stock_values_are_known_by_their_fingerprints() {
+        assert_eq!(fingerprint("Hey Jay."), 0xa202_2afb_e1f5_133d, "FNV-1a, 64 bit");
+        assert_eq!(fingerprint(""), 0xcbf2_9ce4_8422_2325);
+        // Today's defaults are no earlier stock.
+        let now = JaiConfig::default();
+        assert!(!STOCK_PROMPTS.contains(&fingerprint(&now.whisper_initial_prompt)));
+        assert!(now.wake_words.iter().all(|w| !STOCK_WAKE_WORDS.contains(&fingerprint(w))));
+        assert!(fingerprint(&now.memory_db_path) != STOCK_DB_PATH && fingerprint(&now.log_file) != STOCK_LOG_FILE && fingerprint(&now.kokoro_voice) != STOCK_VOICE_ALIAS);
+        // What Sir set himself comes through every migration untouched.
+        let own = r##"{ "config_version": 23, "wake_words": ["friday"], "whisper_initial_prompt": "Sir's own words.", "memory_db_path": "D:/data/mine.db", "log_file": "mine.log", "kokoro_voice": "bm_george",
+            "interface": { "theme": "crimson_mk42", "accent": "#ff2a45", "background": "#0f0507", "title": "Workshop", "hud_palette": "rose_crimson" } }"##;
         let mut cfg: JaiConfig = serde_json::from_str(own).unwrap();
         cfg.migrate();
+        assert_eq!(cfg.wake_words, ["jai", "jay", "friday"], "his name in front, a name Sir added stays");
+        assert_eq!((cfg.whisper_initial_prompt.as_str(), cfg.memory_db_path.as_str(), cfg.log_file.as_str(), cfg.kokoro_voice.as_str()), ("Sir's own words.", "D:/data/mine.db", "mine.log", "bm_george"));
         assert_eq!((cfg.interface.theme.as_str(), cfg.interface.hud_palette.as_str(), cfg.interface.title.as_str()), ("crimson_mk42", "rose_crimson", "Workshop"));
-        assert_eq!(cfg.wake_words, ["jai", "jay"]);
+        assert_eq!(cfg.config_version, CONFIG_VERSION);
+        // The yellow accent the 2026-11-09 helmet mishap left on the gold palette becomes the
+        // default look.
+        let mishap = r##"{ "config_version": 23, "interface": { "theme": "custom", "accent": "#ffe14d", "background": "#0f0507", "hud_palette": "stark_gold" } }"##;
+        let mut cfg: JaiConfig = serde_json::from_str(mishap).unwrap();
+        cfg.migrate();
+        assert_eq!((cfg.interface.theme.as_str(), cfg.interface.hud_palette.as_str(), cfg.interface.accent.as_str(), cfg.interface.title.as_str()), ("jai", "jai_gold", "#ffd400", "J.A.I."));
         // A fresh install is his from the start.
         let fresh = JaiConfig::default();
         assert_eq!((fresh.wake_words.as_slice(), fresh.interface.hud_palette.as_str()), (["jai".to_string(), "jay".to_string()].as_slice(), "jai_gold"));
         assert!(fresh.name_meaning.is_empty(), "what the name stands for is Sir's to set, not the code's");
-    }
-
-    /// v23: Ultron mode is gone, and "Ultron." leaves the stock v22 Whisper prompt with it.
-    #[test]
-    fn the_v22_prompt_loses_ultron() {
-        let v22 = LEGACY_WHISPER_PROMPTS.last().unwrap();
-        assert!(v22.contains("Ultron"));
-        let raw = format!(r#"{{ "config_version": 22, "whisper_initial_prompt": "{v22}" }}"#);
-        let mut cfg: JaiConfig = serde_json::from_str(&raw).unwrap();
-        cfg.migrate();
-        assert_eq!(cfg.whisper_initial_prompt, WHISPER_DOMAIN_PROMPT);
-        assert_eq!(cfg.config_version, CONFIG_VERSION);
+        assert_eq!(CONFIG_FILE, "jai_config.json");
     }
 
     #[test]
@@ -1376,11 +1270,10 @@ mod tests {
         assert_eq!(cfg.silence_hangover_ms, 450);
         assert_eq!(cfg.history_turns, 20);
         assert_eq!(cfg.whisper_initial_prompt, "JAI, Sir's own words.");
-        for (version, prompt) in [(4, LEGACY_WHISPER_PROMPTS[1]), (5, LEGACY_WHISPER_PROMPTS[2]), (8, LEGACY_WHISPER_PROMPTS[3]), (10, LEGACY_WHISPER_PROMPT)] {
-            let raw = format!(r#"{{ "config_version": {version}, "whisper_initial_prompt": "{prompt}", "whisper_beam_size": 3, "silence_hangover_ms": 750, "whisper_min_audio_ctx": 256 }}"#);
+        for version in [4, 5, 8, 10] {
+            let raw = format!(r#"{{ "config_version": {version}, "whisper_beam_size": 3, "silence_hangover_ms": 750, "whisper_min_audio_ctx": 256 }}"#);
             let mut cfg: JaiConfig = serde_json::from_str(&raw).unwrap();
             cfg.migrate();
-            assert_eq!(cfg.whisper_initial_prompt, WHISPER_DOMAIN_PROMPT, "v{version}");
             assert_eq!((cfg.whisper_beam_size, cfg.whisper_min_audio_ctx, cfg.silence_hangover_ms), (2, 128, 450), "v{version}");
         }
         // v11 files (no prompt, greedy) get the name prompt and the beam back.
@@ -1388,11 +1281,6 @@ mod tests {
         let mut cfg: JaiConfig = serde_json::from_str(v11).unwrap();
         cfg.migrate();
         assert_eq!((cfg.whisper_initial_prompt.as_str(), cfg.whisper_beam_size), (WHISPER_DOMAIN_PROMPT, 2));
-        // v17 files with the name-only prompt get the domain prompt.
-        let v17 = r#"{ "config_version": 17, "whisper_initial_prompt": "Hey Jarvis.", "whisper_pre_emphasis": 0.95 }"#;
-        let mut cfg: JaiConfig = serde_json::from_str(v17).unwrap();
-        cfg.migrate();
-        assert_eq!(cfg.whisper_initial_prompt, WHISPER_DOMAIN_PROMPT);
         let v10 = r##"{ "config_version": 10, "active_conversation_window_secs": 45, "features": { "replay_fps": 12.0 },
                        "interface": { "zen_mode": false, "background": "#030509" } }"##;
         let mut cfg: JaiConfig = serde_json::from_str(v10).unwrap();
@@ -1412,8 +1300,8 @@ mod tests {
         cfg.migrate();
         cfg.sanitize();
         assert_eq!(cfg.active_conversation_window_secs, 5);
-        assert_eq!(cfg.kokoro_voice, crate::tts::JARVIS_VOICE);
-        assert!((cfg.kokoro_speed - crate::tts::JARVIS_VOICE_SPEED).abs() < 1e-6);
+        assert_eq!(cfg.kokoro_voice, crate::tts::JAI_VOICE);
+        assert!((cfg.kokoro_speed - crate::tts::JAI_VOICE_SPEED).abs() < 1e-6);
         assert!(cfg.addressee_detection, "on by default for files that predate it");
         assert!(!cfg.wake_word_required, "Sir's own choice stays");
         let custom = r#"{ "config_version": 7, "active_conversation_window_secs": 90, "kokoro_voice": "bf_emma", "kokoro_speed": 1.2 }"#;
@@ -1428,14 +1316,14 @@ mod tests {
         let v14 = r#"{ "config_version": 14, "kokoro_voice": "bm_fable:0.45+bm_george:0.4+bm_lewis:0.15", "kokoro_speed": 1.06 }"#;
         let mut cfg: JaiConfig = serde_json::from_str(v14).unwrap();
         cfg.migrate();
-        assert_eq!(cfg.kokoro_voice, crate::tts::JARVIS_VOICE);
-        assert!((cfg.kokoro_speed - crate::tts::JARVIS_VOICE_SPEED).abs() < 1e-6, "0.98× since v17");
+        assert_eq!(cfg.kokoro_voice, crate::tts::JAI_VOICE);
+        assert!((cfg.kokoro_speed - crate::tts::JAI_VOICE_SPEED).abs() < 1e-6, "0.98× since v17");
         assert!(cfg.interface.fullscreen, "v16: the HUD board starts fullscreen");
         // v16 → v17: the stock 1.04× film tempo becomes the unhurried 0.98×, the old blend the alias.
         let v16 = r#"{ "config_version": 16, "kokoro_voice": "bm_fable:0.62+bm_george:0.28+bm_lewis:0.10", "kokoro_speed": 1.04 }"#;
         let mut cfg: JaiConfig = serde_json::from_str(v16).unwrap();
         cfg.migrate();
-        assert_eq!(cfg.kokoro_voice, crate::tts::JARVIS_VOICE);
+        assert_eq!(cfg.kokoro_voice, crate::tts::JAI_VOICE);
         assert!((cfg.kokoro_speed - 0.98).abs() < 1e-6);
         assert_eq!(cfg.config_version, CONFIG_VERSION);
         // Leaving fullscreen afterwards sticks.
@@ -1469,8 +1357,8 @@ mod tests {
         let v8 = r#"{ "config_version": 8, "kokoro_voice": "bm_george:0.45+bm_fable:0.35+bm_lewis:0.2", "kokoro_speed": 1.06, "interface": { "frameless": false } }"#;
         let mut cfg: JaiConfig = serde_json::from_str(v8).unwrap();
         cfg.migrate();
-        assert_eq!(cfg.kokoro_voice, crate::tts::JARVIS_VOICE);
-        assert!((cfg.kokoro_speed - crate::tts::JARVIS_VOICE_SPEED).abs() < 1e-6);
+        assert_eq!(cfg.kokoro_voice, crate::tts::JAI_VOICE);
+        assert!((cfg.kokoro_speed - crate::tts::JAI_VOICE_SPEED).abs() < 1e-6);
         assert!(cfg.interface.frameless, "the custom title bar");
         let custom = r#"{ "config_version": 8, "kokoro_voice": "bf_emma", "kokoro_speed": 1.2 }"#;
         let mut cfg: JaiConfig = serde_json::from_str(custom).unwrap();

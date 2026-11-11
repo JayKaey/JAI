@@ -1,9 +1,9 @@
 [package]
-name = "jarvis"
+name = "jai"
 version = "3.1.0"
 edition = "2021"
 rust-version = "1.87"
-authors = ["Stark Industries <jarvis@stark.local>"]
+authors = ["Stark Industries <jai@stark.local>"]
 description = "J.A.I. - local, offline, low-latency voice assistant in Rust"
 publish = false
 
@@ -95,7 +95,7 @@ chrono = { version = "0.4.38", features = ["serde"] }
 uuid = { version = "1.10.0", features = ["v4"] }
 aho-corasick = "1.1"
 
-# Jarvis's own Discord account (a bot): Opus for his voice in calls (audiopus_sys builds libopus
+# JAI's own Discord account (a bot): Opus for his voice in calls (audiopus_sys builds libopus
 # from source with CMake) and DAVE, Discord's end-to-end encryption that every voice call has
 # required since March 2026 (OpenMLS underneath, pure Rust).
 audiopus = "0.3.0-rc.0"
@@ -124,7 +124,7 @@ windows = { version = "0.54", features = [
     "Win32_Graphics_Gdi",
     # Instant Replay: JPEG frames through the Windows Imaging Component.
     "Win32_Graphics_Imaging",
-    # Discord voice: a 1 ms timer while Jarvis talks in a call (20 ms Opus frames).
+    # Discord voice: a 1 ms timer while JAI talks in a call (20 ms Opus frames).
     "Win32_Media",
     "Win32_Media_Audio",
     "Win32_Media_Audio_Endpoints",

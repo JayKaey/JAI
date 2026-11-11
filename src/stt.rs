@@ -20,7 +20,7 @@
 //!   (whisper.cpp's default 1500),
 //! * 4-8 threads, languages constrained to German/English (configurable).
 //!
-//! `stt_bench.rs` measures it: `cargo test --release --bin jarvis stt::bench -- --ignored
+//! `stt_bench.rs` measures it: `cargo test --release --bin jai stt::bench -- --ignored
 //! --nocapture` (the real model, Kokoro clips in room noise).
 //!
 //! Phantom words (Whisper inventing "Thank you", "Untertitel …", prompt echoes):
@@ -238,7 +238,7 @@ impl SttEngine {
         let boost = cfg.whisper_priority_boost && !crate::platform::in_test_session();
         let (ready_w, model_w) = (Arc::clone(&ready), Arc::clone(&model));
 
-        let spawned = std::thread::Builder::new().name("jarvis-stt".into()).spawn(move || {
+        let spawned = std::thread::Builder::new().name("jai-stt".into()).spawn(move || {
             crate::platform::raise_thread_priority(false);
             let Some(first) = WhisperEngine::load(&paths, flash_attn, &mut settings) else {
                 error!("[STT] No Whisper model could be loaded; voice input is disabled.");
@@ -1131,7 +1131,11 @@ mod bench;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::LEGACY_WHISPER_PROMPT;
+    /// A long vocabulary primer of the kind v9-v10 used: Whisper echoed it on quiet audio.
+    const LONG_PROMPT: &str = "JAI, pause, resume, play, stop, mute, unmute, louder, quieter, Sonora, Spotify, JaysRock, Highway to Hell, \
+        WebUntis, itslearning, WhatsApp, Kalender, Stundenplan, Hausaufgaben, Orb mode, hands-free mode, wake up Daddy's home. \
+        Hey JAI, open my browser, full screen, close it, open BastiGHG on YouTube, search Minecraft, Twitch, Discord, Steam, \
+        VS Code, GitHub, Rust, Python, mach dich zu.";
 
     #[test]
     fn phonetic_intent_repair() {
@@ -1211,14 +1215,14 @@ mod tests {
 
     #[test]
     fn hallucination_filter() {
-        let p = LEGACY_WHISPER_PROMPT;
+        let p = LONG_PROMPT;
         let f = |s: &str| filter_hallucinations(s, p, true);
         assert_eq!(f(" Thank you."), "");
         assert_eq!(filter_hallucinations(" Thank you.", p, false), "Thank you.");
         assert_eq!(filter_hallucinations("Okay.", p, true), "Okay.");
         assert_eq!(f("[Musik]"), "");
         assert_eq!(f("Untertitel im Auftrag des ZDF, 2020"), "");
-        assert_eq!(f("Jarvis, pause, resume, play, stop, mute, unmute, louder, quieter, Sonora, Spotify, JaysRock."), "");
+        assert_eq!(f("JAI, pause, resume, play, stop, mute, unmute, louder, quieter, Sonora, Spotify, JaysRock."), "");
         assert_eq!(f("Open BastiGHG on YouTube, search Minecraft, Twitch, Discord, Steam."), "");
         assert_eq!(f("Hmm hmm hmm."), "", "humming");
         assert_eq!(f("La la la la."), "", "sung syllables");
@@ -1464,13 +1468,13 @@ mod tests {
         assert_eq!(filter_hallucinations("Hide core.", prompt, true), "Hide core.");
     }
 
-    /// A developer tool: `JARVIS_TRANSCRIBE="a.wav;b.wav" cargo test transcribe_wav_files --
+    /// A developer tool: `JAI_TRANSCRIBE="a.wav;b.wav" cargo test transcribe_wav_files --
     /// --ignored --nocapture` prints what Whisper hears in 16 kHz mono 16-bit WAV files (in 10 s
     /// pieces, through the same pipeline as the microphone).
     #[test]
     #[ignore]
     fn transcribe_wav_files() {
-        let Ok(list) = std::env::var("JARVIS_TRANSCRIBE") else { return };
+        let Ok(list) = std::env::var("JAI_TRANSCRIBE") else { return };
         let rt = tokio::runtime::Runtime::new().unwrap();
         let stt = SttEngine::start(&JaiConfig::load());
         for path in list.split(';').filter(|p| !p.trim().is_empty()) {

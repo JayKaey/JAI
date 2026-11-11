@@ -492,7 +492,7 @@ mod tests {
     #[test]
     fn scenes_persist_in_sqlite() {
         // The only test that sets the database path.
-        let path = std::env::temp_dir().join(format!("jarvis_scenes_{}.db", uuid::Uuid::new_v4()));
+        let path = std::env::temp_dir().join(format!("jai_scenes_{}.db", uuid::Uuid::new_v4()));
         init(path.to_str().unwrap());
         let matrix = find_scene("deep research matrix").expect("built-in profile");
         assert_eq!(matrix.name, "Deep Research Matrix");

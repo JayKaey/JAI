@@ -219,7 +219,7 @@ mod tests {
         let capped = 0.6 + HABIT_WEIGHT * HABIT_CAP as f32;
         assert!(capped < 3.0 + HABIT_WEIGHT * HABIT_CAP as f32, "a capped habit cannot bury an action he uses as often");
         // Saved and loaded: the same habits.
-        let path = std::env::temp_dir().join(format!("jarvis-suggestion-habits-{}.json", std::process::id()));
+        let path = std::env::temp_dir().join(format!("jai-suggestion-habits-{}.json", std::process::id()));
         habits.save(&path).unwrap();
         assert_eq!(Habits::load(&path), habits);
         std::fs::remove_file(&path).ok();

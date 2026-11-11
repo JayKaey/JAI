@@ -2142,7 +2142,7 @@ mod tests {
     fn quiet(_: f32) {}
 
     fn temp_dir(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("jarvis_mesh_io_{tag}_{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("jai_mesh_io_{tag}_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -2313,7 +2313,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
         // Fixed-Huffman and stored blocks (zlib level 1 on a short text).
         let fixed = base64::engine::general_purpose::STANDARD.decode(FIXED_FIXTURE).unwrap();
-        assert_eq!(inflate(&fixed, 0).unwrap(), b"Jarvis, render me an Iron Man suit. Jarvis, render me an Iron Man suit.".to_vec());
+        assert_eq!(inflate(&fixed, 0).unwrap(), b"JAI, render me an Iron Man suit. JAI, render me an Iron Man suit.".to_vec());
         assert!(inflate(&[0xFF, 0xFF, 0xFF], 0).is_err(), "garbage is an error, never a panic");
     }
 
@@ -2339,11 +2339,11 @@ mod tests {
         assert_eq!(m.triangles(), MAX_PARTS + 10);
     }
 
-    /// Optional: real files from a folder (`JARVIS_MODEL_FIXTURES`), e.g. the Khronos samples.
+    /// Optional: real files from a folder (`JAI_MODEL_FIXTURES`), e.g. the Khronos samples.
     #[test]
-    #[ignore = "reads real model files from JARVIS_MODEL_FIXTURES"]
+    #[ignore = "reads real model files from JAI_MODEL_FIXTURES"]
     fn real_files_load() {
-        let dir = std::env::var("JARVIS_MODEL_FIXTURES").expect("JARVIS_MODEL_FIXTURES");
+        let dir = std::env::var("JAI_MODEL_FIXTURES").expect("JAI_MODEL_FIXTURES");
         for entry in std::fs::read_dir(dir).unwrap().flatten() {
             let path = entry.path();
             if !Format::is_model_file(&path) && Format::of_path(&path) != Some(Format::Zip) {
@@ -2356,5 +2356,5 @@ mod tests {
     }
 
     const ZIP_FIXTURE: &str = "UEsDBBQAAAAIAAAAIQAwIrukewEAADkEAAAKAAAAc2NlbmUuZ2x0Zo1TTW/CMAy98ytQzt1GKasmph06tgMSGmhDXCYOaUm7SDSpEpcPof73JSmEthREDo39Xmw/J+6h0+0iLCUBNOwelKPcDRGScqYA1H/sIadEE8KIwMCFxmO6g1wQpKhC80hGilZM7+xJ5f6a2DKvwhlfVWC9ekdrafZCfZcmQ/3kOQFOdRU0FxSzZE2O4hSTEvmn6zfyaLgtUSZoSoFuGnIO1tLXAiBomIM5U2UUN5v+jOfj6ZctWa7CqSagbEUjE+1auLjScJjHsbr3S6XhHsiEsAR0e4OBbTgXVN/ECgMe4ixb0wiDerUnHgGBBwmC4PQ1xJL4Aye4WKNgtr1Ek4+Xk/keBGO9v6FWoQtKtm1iDXmaA6t/GsflhNVh25bndyq3d3c2z29P5zck40i9guTiqmDdTa1MxNOMM8Jgvs/0wD27fb9C5syUtwiUp9Dic+RVRpKy+qw7reZpIM5xeFeLc502s/HnODf6cm/15d3R188omATflUnoFP9QSwMEFAAAAAAAAAAhAN5q+nIUAAAAFAAAAAkAAABub3Rlcy50eHRzdG9yZWQsIG5vdCBkZWZsYXRlZFBLAQIUABQAAAAIAAAAIQAwIrukewEAADkEAAAKAAAAAAAAAAAAAACAAQAAAABzY2VuZS5nbHRmUEsBAhQAFAAAAAAAAAAhAN5q+nIUAAAAFAAAAAkAAAAAAAAAAAAAAIABowEAAG5vdGVzLnR4dFBLBQYAAAAAAgACAG8AAADeAQAAAAA=";
-    const FIXED_FIXTURE: &str = "80osKsss1lEoSs1LSS1SyE1VSMxT8CzKz1PwTcxTKC7NLNFTIEINAA==";
+    const FIXED_FIXTURE: &str = "83L01FEoSs1LSS1SyE1VSMxT8CzKz1PwTcxTKC7NLNFTIKQAAA==";
 }

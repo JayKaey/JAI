@@ -914,7 +914,7 @@ mod tests {
 
     #[test]
     fn import_copies_blobs_then_manifest_and_respects_the_budget() {
-        let root = std::env::temp_dir().join(format!("jarvis_import_{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("jai_import_{}", uuid::Uuid::new_v4()));
         let (src, dest) = (root.join("src"), root.join("dest"));
         let digest = |c: char| format!("sha256:{}", c.to_string().repeat(64));
         let manifest = json!({

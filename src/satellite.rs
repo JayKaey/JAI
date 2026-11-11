@@ -306,7 +306,7 @@ async fn read_request<S: AsyncRead + Unpin>(stream: &mut S, token: Option<&str>)
         .collect();
     let mut request = Request { method, path, query, headers, body: Vec::new() };
     if let Some(token) = token {
-        let given = request.header("X-JAI-Key").or_else(|| request.header("X-Jarvis-Key")).or_else(|| request.param("token")).or_else(|| request.param("k")).unwrap_or("");
+        let given = request.header("X-JAI-Key").or_else(|| request.param("token")).or_else(|| request.param("k")).unwrap_or("");
         let public_get = request.method == "GET" && length == 0 && (request.path == "/" || (given.is_empty() && matches!(request.path.as_str(), "/satellite" | "/satellite/")));
         if !public_get && !same_token(given, token) { return Err("pairing key required".into()); }
     }
@@ -346,7 +346,7 @@ async fn chat(app: &Jai, text: &str) -> Value {
     let wait = async {
         loop {
             match events.recv().await {
-                Ok(HudEvent::AssistantDone { text, model, interrupted, .. }) if model != "jarvis" || interrupted => return Some(text),
+                Ok(HudEvent::AssistantDone { text, model, interrupted, .. }) if model != "jai" || interrupted => return Some(text),
                 Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => {}
                 Err(broadcast::error::RecvError::Closed) => return None,
             }
@@ -370,7 +370,7 @@ async fn handle<S: AsyncRead + AsyncWrite + Unpin>(mut stream: S, app: Jai, peer
         }
         Err(_) => return,
     };
-    let given = req.header("X-JAI-Key").or_else(|| req.header("X-Jarvis-Key")).or_else(|| req.param("token")).or_else(|| req.param("k")).unwrap_or("");
+    let given = req.header("X-JAI-Key").or_else(|| req.param("token")).or_else(|| req.param("k")).unwrap_or("");
     if req.path == "/" || req.path.is_empty() {
         respond(&mut stream, "200 OK", "text/html; charset=utf-8", b"<!doctype html><meta name=viewport content='width=device-width'><body style='background:#000;color:#5ad;font-family:sans-serif;padding:2em'><h2>J.A.I. Satellite</h2><p>Scan the QR code in the HUD (Integrations &rarr; Quick Connections) to pair this device.</p>").await;
         return;
@@ -378,7 +378,7 @@ async fn handle<S: AsyncRead + AsyncWrite + Unpin>(mut stream: S, app: Jai, peer
     if !same_token(given, &token) {
         if given.is_empty() && req.method == "GET" && matches!(req.path.as_str(), "/satellite" | "/satellite/") {
             // An unpaired request gets only a bootstrap, never data or an embedded secret.
-            respond(&mut stream, "200 OK", "text/html; charset=utf-8", br#"<!doctype html><meta name="viewport" content="width=device-width"><title>Pair with JAI</title><p>Scan the pairing QR code in the desktop HUD to authorize this phone.</p><script>try{const k=localStorage.getItem('jarvis_satellite_key');if(k)location.replace('/satellite?token='+encodeURIComponent(k));}catch(e){}</script>"#).await;
+            respond(&mut stream, "200 OK", "text/html; charset=utf-8", br#"<!doctype html><meta name="viewport" content="width=device-width"><title>Pair with JAI</title><p>Scan the pairing QR code in the desktop HUD to authorize this phone.</p><script>try{const k=localStorage.getItem('jai_satellite_key');if(k)location.replace('/satellite?token='+encodeURIComponent(k));}catch(e){}</script>"#).await;
             return;
         }
         warn!("[SATELLITE] Rejected {} {} from {peer} (bad or missing pairing key)", req.method, req.path);
@@ -389,7 +389,7 @@ async fn handle<S: AsyncRead + AsyncWrite + Unpin>(mut stream: S, app: Jai, peer
     match (req.method.as_str(), req.path.as_str()) {
         ("GET", "/satellite") | ("GET", "/satellite/") => {
             let key = serde_json::to_string(&token).unwrap_or_default().replace('<', "\\u003c");
-            let page = PAGE.replace("\"__JARVIS_KEY__\"", &key);
+            let page = PAGE.replace("\"__JAI_KEY__\"", &key);
             respond(&mut stream, "200 OK", "text/html; charset=utf-8", page.as_bytes()).await;
             tools.stark.pulse(&["hivemind", "brain"], false);
             info!("[SATELLITE] {peer} opened the satellite");
@@ -444,7 +444,7 @@ async fn handle<S: AsyncRead + AsyncWrite + Unpin>(mut stream: S, app: Jai, peer
             .await;
         }
         ("GET", "/api/tunnel-health") => {
-            respond_json(&mut stream, "200 OK", &json!({"service":"jarvis-satellite"})).await;
+            respond_json(&mut stream, "200 OK", &json!({"service":"jai-satellite"})).await;
         }
         ("POST", "/api/pc/control") => {
             match crate::remote_guardian::run_tool(&tools, "control_remote_pc", &req.json()).await {
@@ -652,7 +652,7 @@ pub fn permanent_address_guide(settings: &crate::config::SatelliteSettings, toke
         ""
     };
     let guide = format!(
-        "## One address that never changes\n\nRight now my page uses a quick tunnel: its address is new after every restart. For a static one you need a domain of your own. Three ways; the first is the usual one.\n{missing}\n### A. Your own domain through Cloudflare (free apart from the domain)\n\n1. Have a domain and add it to a free Cloudflare account (Cloudflare then runs its DNS). No domain yet: buy one at any registrar, or at Cloudflare itself.\n2. In the Cloudflare dashboard open **Zero Trust**, then **Networks**, then **Tunnels**, and create a tunnel of the type **Cloudflared**. Name it `jai`.\n3. Cloudflare shows an install command with a long token that starts with `eyJ`. Copy it (the whole command is fine). You do not need to install anything: I bring my own cloudflared.\n4. In that tunnel, tab **Public Hostname**, add a hostname: subdomain `jai`, your domain, service type **HTTP**, URL `127.0.0.1:{port}`.\n5. Here: {hub}. Set **Tunnel** to Cloudflare, type `https://jarvis.your-domain` into **Permanent address**, paste the token into **Tunnel token**, and save.\n6. Say **\"how can I use you on my phone\"**: the QR code now carries the permanent address. Scan it once and add the page to the home screen; it stays valid for good.\n\n### B. No domain of your own: Tailscale Funnel (free)\n\nInstall Tailscale on this PC, switch **Funnel** on for it in the Tailscale admin console, and set **Tunnel** to Tailscale Funnel in the same section. The address is `https://<this-pc>.<your-tailnet>.ts.net` and never changes.\n\n### C. Your own server\n\nSet **Tunnel** to Own server (SSH), give the SSH target, and put an HTTPS reverse proxy on the server in front of the forwarded port. The permanent address is the proxy's.\n\nWhatever you choose: the page is served from this PC, so it and I must be running. The token is sealed in my vault, never written to the settings file."
+        "## One address that never changes\n\nRight now my page uses a quick tunnel: its address is new after every restart. For a static one you need a domain of your own. Three ways; the first is the usual one.\n{missing}\n### A. Your own domain through Cloudflare (free apart from the domain)\n\n1. Have a domain and add it to a free Cloudflare account (Cloudflare then runs its DNS). No domain yet: buy one at any registrar, or at Cloudflare itself.\n2. In the Cloudflare dashboard open **Zero Trust**, then **Networks**, then **Tunnels**, and create a tunnel of the type **Cloudflared**. Name it `jai`.\n3. Cloudflare shows an install command with a long token that starts with `eyJ`. Copy it (the whole command is fine). You do not need to install anything: I bring my own cloudflared.\n4. In that tunnel, tab **Public Hostname**, add a hostname: subdomain `jai`, your domain, service type **HTTP**, URL `127.0.0.1:{port}`.\n5. Here: {hub}. Set **Tunnel** to Cloudflare, type `https://jai.your-domain` into **Permanent address**, paste the token into **Tunnel token**, and save.\n6. Say **\"how can I use you on my phone\"**: the QR code now carries the permanent address. Scan it once and add the page to the home screen; it stays valid for good.\n\n### B. No domain of your own: Tailscale Funnel (free)\n\nInstall Tailscale on this PC, switch **Funnel** on for it in the Tailscale admin console, and set **Tunnel** to Tailscale Funnel in the same section. The address is `https://<this-pc>.<your-tailnet>.ts.net` and never changes.\n\n### C. Your own server\n\nSet **Tunnel** to Own server (SSH), give the SSH target, and put an HTTPS reverse proxy on the server in front of the forwarded port. The permanent address is the proxy's.\n\nWhatever you choose: the page is served from this PC, so it and I must be running. The token is sealed in my vault, never written to the settings file."
     );
     let spoken = if missing.is_empty() {
         format!("You need a domain of your own, Sir. Add it to a free Cloudflare account, create a tunnel there, point a hostname such as jai dot your domain at port {port} on this machine, then paste the tunnel's token and that address into my integrations hub. All six steps are on your screen, with two alternatives that need no domain.")
@@ -763,10 +763,10 @@ mod tests {
         let (guide, spoken) = permanent_address_guide(&settings, true, None, false);
         assert!(guide.contains("step 5 is all that is missing") && spoken.contains("Only the permanent address is missing"));
         // Done: the address, and how it is used.
-        let (guide, spoken) = permanent_address_guide(&settings, true, Some("https://jarvis.example.com"), true);
-        assert!(guide.contains("**https://jarvis.example.com**") && guide.contains("It is online right now.") && guide.contains("Add to Home Screen"));
-        assert_eq!(spoken, "It is already set up, Sir. My page lives at jarvis.example.com and that address never changes. The details are on your screen.");
-        assert!(permanent_address_guide(&settings, true, Some("https://jarvis.example.com"), false).0.contains("not online at this moment"));
+        let (guide, spoken) = permanent_address_guide(&settings, true, Some("https://jai.example.com"), true);
+        assert!(guide.contains("**https://jai.example.com**") && guide.contains("It is online right now.") && guide.contains("Add to Home Screen"));
+        assert_eq!(spoken, "It is already set up, Sir. My page lives at jai.example.com and that address never changes. The details are on your screen.");
+        assert!(permanent_address_guide(&settings, true, Some("https://jai.example.com"), false).0.contains("not online at this moment"));
     }
 
     #[tokio::test]
@@ -782,7 +782,7 @@ mod tests {
         assert!(same_token("abc", "abc") && !same_token("abc", "abd") && !same_token("ab", "abc"));
         let (side, modules) = qr_matrix("https://192.168.1.20:8443/satellite?k=0123456789abcdef01234567").unwrap();
         assert_eq!(modules.len(), side * side);
-        assert!(PAGE.contains("__JARVIS_KEY__") && PAGE.contains("watchPosition"));
+        assert!(PAGE.contains("__JAI_KEY__") && PAGE.contains("watchPosition"));
     }
 
     #[tokio::test]

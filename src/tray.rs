@@ -57,9 +57,9 @@ mod win {
     const WM_TRAY: u32 = WM_APP + 1;
     const CLASS: PCWSTR = w!("JaiTrayWindow");
     /// Posted by a second `JAI.exe` so the running instance shows its HUD.
-    const SHOW_HUD_MESSAGE: PCWSTR = w!("JARVIS_SHOW_HUD");
+    const SHOW_HUD_MESSAGE: PCWSTR = w!("JAI_SHOW_HUD");
     /// Posted by the `JAI.exe` Sir started while a test session holds the place: it ends.
-    const GIVE_WAY_MESSAGE: PCWSTR = w!("JARVIS_GIVE_WAY");
+    const GIVE_WAY_MESSAGE: PCWSTR = w!("JAI_GIVE_WAY");
     const ICON_ID: u32 = 1;
     const CMD_OPEN: usize = 1;
     const CMD_MIC: usize = 2;
@@ -102,7 +102,7 @@ mod win {
         if TRAY.set(Tray { actions, mic_on: Box::new(mic_on) }).is_err() {
             return;
         }
-        if let Err(e) = std::thread::Builder::new().name("jarvis-tray".into()).spawn(run) {
+        if let Err(e) = std::thread::Builder::new().name("jai-tray".into()).spawn(run) {
             warn!("[TRAY] Could not start the tray icon: {e}");
         }
     }
@@ -198,7 +198,7 @@ mod win {
         Shell_NotifyIconW(NIM_ADD, &data).as_bool()
     }
 
-    /// Icon resource 1 (assets/jarvis_icon.ico, embedded by build.rs) at the small-icon size.
+    /// Icon resource 1 (assets/jai_icon.ico, embedded by build.rs) at the small-icon size.
     unsafe fn load_icon() -> HICON {
         if let Ok(module) = GetModuleHandleW(PCWSTR::null()) {
             let (cx, cy) = (GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON));

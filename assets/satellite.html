@@ -61,7 +61,7 @@
   #log { max-height:46vh; min-height:72px; overflow-y:auto; display:flex; flex-direction:column; gap:7px; padding-right:2px; }
   .msg { padding:9px 11px; font-size:14.5px; line-height:1.38; max-width:92%; white-space:pre-wrap; word-wrap:break-word; animation:rise .22s ease-out both; }
   .sir { align-self:flex-end; background:rgba(255,212,0,.12); border:1px solid rgba(255,212,0,.4); border-right:3px solid var(--accent); }
-  .jarvis { align-self:flex-start; background:rgba(255,255,255,.035); border:1px solid var(--line); border-left:3px solid var(--accent2); }
+  .jai { align-self:flex-start; background:rgba(255,255,255,.035); border:1px solid var(--line); border-left:3px solid var(--accent2); }
   .push { align-self:stretch; background:rgba(255,154,0,.08); border:1px dashed rgba(255,154,0,.45); font-size:13px; }
   .row { display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; }
   .row > button { flex:1 1 auto; }
@@ -199,8 +199,8 @@
 </details>
 
 <script>
-const KEY = "__JARVIS_KEY__";
-try { localStorage.setItem("jarvis_satellite_key", KEY); history.replaceState(null, "", "/satellite"); } catch (e) {}
+const KEY = "__JAI_KEY__";
+try { localStorage.setItem("jai_satellite_key", KEY); history.replaceState(null, "", "/satellite"); } catch (e) {}
 const $ = (id) => document.getElementById(id);
 const api = (path) => path + (path.includes("?") ? "&" : "?") + "k=" + encodeURIComponent(KEY);
 let since = 0, lastSent = 0, pending = null, busy = false;
@@ -307,7 +307,7 @@ function say(text) {
 async function chat(text) {
   text = text.trim(); if (!text || busy) return;
   busy = true; add(text, "sir"); $("text").value = "";
-  const waiting = add("…", "jarvis");
+  const waiting = add("…", "jai");
   try {
     const r = await fetch(api("/api/chat"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
     const j = await r.json();

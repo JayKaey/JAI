@@ -96,7 +96,7 @@ pub struct VramGuardState {
     pub power: VramPowerState,
     pub last_user_interaction: Instant,
     /// JAI spoke or ran a turn.
-    pub last_jarvis_activity: Instant,
+    pub last_jai_activity: Instant,
     /// The running game, if any.
     pub game: Option<String>,
     /// When and why the GPU was last cleared.
@@ -115,7 +115,7 @@ impl VramGuardState {
         Self {
             power: VramPowerState::ActiveReady,
             last_user_interaction: now,
-            last_jarvis_activity: now,
+            last_jai_activity: now,
             game: None,
             last_flush: None,
             resident_models: Vec::new(),
@@ -137,7 +137,7 @@ impl VramGuardState {
             return None;
         }
         let idle = self.config.idle_secs.saturating_sub(self.last_user_interaction.elapsed().as_secs());
-        let silent_for = self.last_jarvis_activity.elapsed().min(self.last_user_interaction.elapsed()).as_secs();
+        let silent_for = self.last_jai_activity.elapsed().min(self.last_user_interaction.elapsed()).as_secs();
         Some(match self.game {
             Some(_) => idle.min(self.config.game_silence_secs.saturating_sub(silent_for)),
             None => idle,
@@ -196,7 +196,7 @@ pub fn touch() {
         let mut g = guard();
         let now = Instant::now();
         g.last_user_interaction = now;
-        g.last_jarvis_activity = now;
+        g.last_jai_activity = now;
         g.power == VramPowerState::ZeroVramDormant
     };
     if dormant {
@@ -328,7 +328,7 @@ pub fn wake(source: &str) {
         let now = Instant::now();
         g.power = VramPowerState::ActiveReady;
         g.last_user_interaction = now;
-        g.last_jarvis_activity = now;
+        g.last_jai_activity = now;
     }
     if was_dormant {
         info!("[VRAM] Waking from zero-VRAM standby ({source}): re-loading Whisper, Kokoro and the language model.");
@@ -409,7 +409,7 @@ async fn watchdog(controls: Arc<AudioControls>, config: VramGuardConfig) {
         n += 1;
         let busy = controls.is_speaking.load(Ordering::Acquire) || controls.turn_active.load(Ordering::Acquire);
         if busy {
-            guard().last_jarvis_activity = Instant::now();
+            guard().last_jai_activity = Instant::now();
         }
         if !n.is_multiple_of(poll) {
             continue;
@@ -442,7 +442,7 @@ async fn watchdog(controls: Arc<AudioControls>, config: VramGuardConfig) {
                 None
             } else {
                 let idle = g.last_user_interaction.elapsed();
-                let silent = g.last_jarvis_activity.elapsed().min(idle);
+                let silent = g.last_jai_activity.elapsed().min(idle);
                 match &g.game {
                     Some(game) if silent >= Duration::from_secs(g.config.game_silence_secs) => Some(format!("{game} is running")),
                     _ if idle >= Duration::from_secs(g.config.idle_secs) => Some(format!("{} s idle", g.config.idle_secs)),
@@ -583,7 +583,7 @@ mod hotkeys {
         if parsed.is_empty() {
             return;
         }
-        let spawned = std::thread::Builder::new().name("jarvis-wake-hotkey".into()).spawn(move || {
+        let spawned = std::thread::Builder::new().name("jai-wake-hotkey".into()).spawn(move || {
             let mut any = false;
             for (i, (name, mods, vk)) in parsed.iter().enumerate() {
                 // SAFETY: thread-owned hotkey (no window); the id is unique within this thread.

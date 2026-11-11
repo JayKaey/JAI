@@ -16,7 +16,7 @@ const TITLE: &str = "Departures";
 const BLOCK_SIZE: [f32; 2] = [560.0, 470.0];
 const WINDOW_SIZE: [f32; 2] = [580.0, 520.0];
 const WINDOW_MIN: [f32; 2] = [420.0, 300.0];
-const VIEWPORT: &str = "jarvis_departures";
+const VIEWPORT: &str = "jai_departures";
 const ROW_H: f32 = 30.0;
 const LATE: Color32 = Color32::from_rgb(0xFF, 0x9A, 0x3C);
 const CANCELLED: Color32 = Color32::from_rgb(0xFF, 0x4D, 0x4D);
@@ -209,7 +209,7 @@ pub(super) fn show(ctx: &egui::Context, rt: &Handle) {
         }
         return;
     }
-    let mut builder = ViewportBuilder::default().with_title("Departures — J.A.I.").with_app_id("jarvis").with_inner_size(WINDOW_SIZE).with_min_inner_size(WINDOW_MIN).with_decorations(false);
+    let mut builder = ViewportBuilder::default().with_title("Departures — J.A.I.").with_app_id("jai").with_inner_size(WINDOW_SIZE).with_min_inner_size(WINDOW_MIN).with_decorations(false);
     if let Some(icon) = super::window_icon() {
         builder = builder.with_icon(Arc::new(icon));
     }

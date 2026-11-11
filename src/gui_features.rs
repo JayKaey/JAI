@@ -12,7 +12,7 @@
 //! as an example request for Sir to send. The badge shows PASS / FAIL (or IN CONSOLE).
 
 use super::{rgba, stroke, strip_font, STRIP_INK, STRIP_MUTED};
-use crate::tools::{ToolContext, JARVIS_CAPABILITY_MANIFEST};
+use crate::tools::{ToolContext, JAI_CAPABILITY_MANIFEST};
 use eframe::egui::{self, Color32, Frame, Margin, Response, RichText, Rounding, Ui, ViewportBuilder, ViewportClass, ViewportCommand, ViewportId};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -33,7 +33,7 @@ pub(super) const SAFE_PROBES: &[(&str, &str)] = &[
     ("check_school_schedule", "{}"),
     ("get_precise_location_weather", "{}"),
     ("check_ride_and_commute_status", "{}"),
-    ("list_jarvis_features", "{}"),
+    ("list_jai_features", "{}"),
     ("list_skills", "{}"),
     ("list_forged_tools", "{}"),
     ("reminders", r#"{"action": "list"}"#),
@@ -61,16 +61,16 @@ const READ_ONLY: &[&str] = &["status", "list", "summary", "get_volume", "what_is
 const DEMOS: &[(&str, &str)] = &[
     ("web_search", r#"{"query": "Stark Industries arc reactor"}"#),
     ("read_webpage", r#"{"url": "https://example.com"}"#),
-    ("open_jarvis_view", r#"{"view": "system_stats"}"#),
+    ("open_jai_view", r#"{"view": "system_stats"}"#),
     ("launch_interactive_simulation", r#"{"sim_type": "pendulum"}"#),
-    ("find_files", r#"{"query": "jarvis"}"#),
+    ("find_files", r#"{"query": "jai"}"#),
     ("find_nearby_places_or_route", r#"{"query": "coffee"}"#),
     ("pop_up_ui_card", r#"{"title": "Feature Lab", "content": "Pop-up cards are online, Sir."}"#),
     ("spawn_native_window", r#"{"title": "Feature Lab", "markdown": "Native windows are online, Sir."}"#),
     ("create_or_update_widget", r#"{"title": "Feature Lab", "type": "MetricGauge", "value": 72, "unit": "%"}"#),
     ("hud_board", r#"{"action": "status"}"#),
     // (Opens the telemetry block if it is not up, then glides it to the middle: inside the HUD.)
-    ("arrange_jarvis_window", r#"{"target": "telemetry", "action": "move", "position": "centre"}"#),
+    ("arrange_jai_window", r#"{"target": "telemetry", "action": "move", "position": "centre"}"#),
     // Without arguments these two would sort Sir's school files / need a host: a read instead.
     ("sync_study_materials_and_deadlines", r#"{"action": "list"}"#),
     ("server_deck", r#"{"hosts": ["mc.hypixel.net"]}"#),
@@ -206,11 +206,11 @@ fn run_try(tools: &ToolContext, rt: &Handle, name: &str, tool: String, args: Val
 /// description.
 pub(super) fn catalogue(defs: &[Value]) -> Vec<(&'static str, Vec<(String, String)>)> {
     let entry = |d: &Value| Some((d["function"]["name"].as_str()?.to_string(), d["function"]["description"].as_str().unwrap_or("").to_string()));
-    let mut groups: Vec<(&'static str, Vec<(String, String)>)> = JARVIS_CAPABILITY_MANIFEST
+    let mut groups: Vec<(&'static str, Vec<(String, String)>)> = JAI_CAPABILITY_MANIFEST
         .iter()
         .map(|c| (c.name, defs.iter().filter_map(entry).filter(|(n, _)| c.tools.contains(&n.as_str())).collect()))
         .collect();
-    let rest = defs.iter().filter_map(entry).filter(|(n, _)| !JARVIS_CAPABILITY_MANIFEST.iter().any(|c| c.tools.contains(&n.as_str())));
+    let rest = defs.iter().filter_map(entry).filter(|(n, _)| !JAI_CAPABILITY_MANIFEST.iter().any(|c| c.tools.contains(&n.as_str())));
     groups.push(("Everything else", rest.collect()));
     // A tool listed in two categories shows under the first.
     let mut seen = std::collections::HashSet::new();
@@ -409,7 +409,7 @@ fn row(ui: &mut Ui, tools: &ToolContext, rt: &Handle, name: &str, description: &
 /// own window once detached.
 pub(super) fn show(ctx: &egui::Context, app: &crate::app::Jai, rt: &Handle) {
     // (Closed while it was its own window: it plays its exit first.)
-    if !super::detached_keep(ctx, ViewportId::from_hash_of("jarvis_feature_lab"), is_open()) {
+    if !super::detached_keep(ctx, ViewportId::from_hash_of("jai_feature_lab"), is_open()) {
         crate::hud_dock::forget(ID);
         return;
     }
@@ -423,7 +423,7 @@ pub(super) fn show(ctx: &egui::Context, app: &crate::app::Jai, rt: &Handle) {
         }
         return;
     }
-    let mut builder = ViewportBuilder::default().with_title("Feature Lab — J.A.I.").with_app_id("jarvis").with_inner_size([820.0, 720.0]).with_min_inner_size([520.0, 400.0]).with_decorations(false);
+    let mut builder = ViewportBuilder::default().with_title("Feature Lab — J.A.I.").with_app_id("jai").with_inner_size([820.0, 720.0]).with_min_inner_size([520.0, 400.0]).with_decorations(false);
     if let Some(icon) = super::window_icon() {
         builder = builder.with_icon(Arc::new(icon));
     }
@@ -432,7 +432,7 @@ pub(super) fn show(ctx: &egui::Context, app: &crate::app::Jai, rt: &Handle) {
     }
     let builder = super::for_test_session(builder);
     let (app, rt) = (app.clone(), rt.clone());
-    ctx.show_viewport_deferred(ViewportId::from_hash_of("jarvis_feature_lab"), builder, move |ctx, class| {
+    ctx.show_viewport_deferred(ViewportId::from_hash_of("jai_feature_lab"), builder, move |ctx, class| {
         crate::crash_guard::guard("feature lab", || {
             if ctx.input(|i| i.viewport().close_requested()) || (!is_open() && !super::detached_leaving(ctx)) {
                 OPEN.store(false, Ordering::Release);
@@ -470,7 +470,7 @@ mod tests {
     #[test]
     fn every_tool_is_listed_once_and_every_probe_is_a_valid_call() {
         // As the app builds them: the skill registry adds list_skills and the other skill tools.
-        let root = std::env::temp_dir().join(format!("jarvis_lab_{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("jai_lab_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         let skills = crate::skills::SkillManager::open(root.join("db.sqlite"), root.join("skills")).unwrap();
         let defs = crate::tools::definitions_with(skills.tool_definitions());
@@ -489,7 +489,7 @@ mod tests {
     /// deletes, closes or rewrites) stages an example request.
     #[test]
     fn every_try_does_something_real() {
-        let root = std::env::temp_dir().join(format!("jarvis_lab_{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("jai_lab_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         let skills = crate::skills::SkillManager::open(root.join("db.sqlite"), root.join("skills")).unwrap();
         let defs = crate::tools::definitions_with(skills.tool_definitions());
@@ -518,7 +518,7 @@ mod tests {
         assert_eq!(try_plan(defs.iter().find(|d| d["function"]["name"] == "manage_vram").unwrap()), TryPlan::Run { tool: "manage_vram".into(), args: serde_json::json!({"action": "status"}) });
         assert_eq!(try_plan(defs.iter().find(|d| d["function"]["name"] == "media_and_volume_control").unwrap()), TryPlan::Run { tool: "control_audio_mixer".into(), args: serde_json::json!({"action": "list"}) });
         assert_eq!(try_plan(defs.iter().find(|d| d["function"]["name"] == "move_window_to_monitor").unwrap()), TryPlan::Open("screens"));
-        for side_effect in ["send_whatsapp_message", "recompile_and_restart", "close_all_secondary_windows", "run_shell_command", "control_jarvis_lifecycle", "delete_memory", "save_instant_replay"] {
+        for side_effect in ["send_whatsapp_message", "recompile_and_restart", "close_all_secondary_windows", "run_shell_command", "control_jai_lifecycle", "delete_memory", "save_instant_replay"] {
             assert!(console.contains(&side_effect), "{side_effect} must wait in the console");
         }
         // Found by the tool audit: without arguments this one sorts Sir's school files and adds

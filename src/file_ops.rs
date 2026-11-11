@@ -146,7 +146,7 @@ fn is_junk_file(name: &str) -> bool {
 
 /// Builds the index on a background thread and refreshes it every 20 minutes.
 pub fn start() {
-    let spawned = std::thread::Builder::new().name("jarvis-fileindex".into()).spawn(|| {
+    let spawned = std::thread::Builder::new().name("jai-fileindex".into()).spawn(|| {
         crate::platform::lower_thread_priority();
         loop {
             rebuild();
@@ -842,7 +842,7 @@ static BACKUP_LOCK: Mutex<()> = Mutex::new(());
 
 fn backup_dir() -> PathBuf {
     if cfg!(test) {
-        return std::env::temp_dir().join(format!("jarvis_test_backups_{}", std::process::id()));
+        return std::env::temp_dir().join(format!("jai_test_backups_{}", std::process::id()));
     }
     std::env::current_dir().unwrap_or_default().join(BACKUP_DIR)
 }
@@ -1233,7 +1233,7 @@ mod tests {
     use super::*;
 
     fn temp_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("jarvis_file_ops_{name}_{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("jai_file_ops_{name}_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir

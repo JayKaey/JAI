@@ -1,9 +1,9 @@
 // Windows resources for JAI.exe (compiled by build.rs).
 
-1 ICON "jarvis_icon.ico"
+1 ICON "jai_icon.ico"
 
 // RT_MANIFEST (24), id 1 = the executable's application manifest.
-1 24 "jarvis.manifest"
+1 24 "jai.manifest"
 
 1 VERSIONINFO
 FILEVERSION 3,1,0,0

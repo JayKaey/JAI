@@ -1753,7 +1753,7 @@ fn parts() -> String {
 
 fn export_dir() -> PathBuf {
     if demo_mode() {
-        std::env::temp_dir().join("jarvis_3d_export_demo")
+        std::env::temp_dir().join("jai_3d_export_demo")
     } else {
         crate::features::user_folder("Documents").join("JAI Models")
     }
@@ -2012,7 +2012,7 @@ fn http() -> &'static reqwest::Client {
 
 fn cache_dir() -> PathBuf {
     if cfg!(test) {
-        std::env::temp_dir().join("jarvis_model_cache_test")
+        std::env::temp_dir().join("jai_model_cache_test")
     } else {
         PathBuf::from(CACHE_DIR)
     }
@@ -3610,7 +3610,7 @@ mod tests {
     #[test]
     fn the_cache_keeps_its_bound_by_dropping_the_oldest() {
 
-        let dir = std::env::temp_dir().join(format!("jarvis_cache_bound_{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("jai_cache_bound_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         for (i, name) in ["old.glb", "mid.glb", "new.glb"].iter().enumerate() {
             let p = dir.join(name);

@@ -69,7 +69,7 @@ pub struct ChecklistItem {
     pub done: bool,
 }
 
-/// `action`: `jarvis: <command>` (runs as if Sir typed it), `shell: <command>`, `skill: <name>`,
+/// `action`: `jai: <command>` (runs as if Sir typed it), `shell: <command>`, `skill: <name>`,
 /// `app: <name>` or `url: <address>`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct QuickAction {
@@ -2081,7 +2081,7 @@ mod tests {
     /// and never made.
     #[test]
     fn a_kind_stands_for_its_widget_and_a_missing_item_is_said() {
-        let path = std::env::temp_dir().join(format!("jarvis_widget_kinds_{}.db", std::process::id()));
+        let path = std::env::temp_dir().join(format!("jai_widget_kinds_{}.db", std::process::id()));
         let _ = std::fs::remove_file(&path);
         {
             let e = WidgetEngine::open(&path).unwrap();
@@ -2114,7 +2114,7 @@ mod tests {
     /// self-test's run changes none of it.
     #[test]
     fn a_session_starts_clean_and_what_was_open_comes_back_on_request() {
-        let path = std::env::temp_dir().join(format!("jarvis_recent_views_{}.db", std::process::id()));
+        let path = std::env::temp_dir().join(format!("jai_recent_views_{}.db", std::process::id()));
         let _ = std::fs::remove_file(&path);
         {
             let e = WidgetEngine::open(&path).unwrap();

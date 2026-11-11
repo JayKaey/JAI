@@ -16,7 +16,7 @@
 //!
 //! The research agent and the map / photo fetchers live in `board_research`.
 
-use crate::jarvis_voice_dsp::Earcon;
+use crate::jai_voice_dsp::Earcon;
 use crate::tools::ToolContext;
 use eframe::egui::{self, pos2, vec2, Align2, Color32, FontFamily, FontId, Painter, Pos2, Rect, Rounding, Sense, Shape, Stroke, Ui, Vec2};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -1248,14 +1248,14 @@ async fn run_action(tools: &ToolContext, args: &Value, action: &str) -> Result<S
                 let mut closed = crate::hud_dock::close_named(target);
                 if closed.is_empty() {
                     // The network radar, the disk map or the Earth in its own OS window.
-                    if let Some(title) = crate::jarvis_views::close_panel(target) {
+                    if let Some(title) = crate::jai_views::close_panel(target) {
                         closed.push(title.to_string());
                     }
                 }
                 if closed.is_empty() {
                     // A window of JAI's own that is detached (its own OS window).
                     if let Ok(out) = tools.widgets.close_window(target) {
-                        tools.focus.forget_jarvis_window(target);
+                        tools.focus.forget_jai_window(target);
                         closed.push(out);
                     }
                 }
@@ -3065,7 +3065,7 @@ mod tests {
 
     #[test]
     fn reports_round_trip_through_sqlite_and_recall_by_topic() {
-        let dir = std::env::temp_dir().join(format!("jarvis_board_{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("jai_board_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("board.db").display().to_string();
         let mut vr = report();

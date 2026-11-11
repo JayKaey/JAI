@@ -27,7 +27,7 @@ pub const NEAR_MINUTES: i64 = 45;
 const ROUTINE_TOOLS: &[&str] = &[
     "open_application",
     "open_website",
-    "open_jarvis_view",
+    "open_jai_view",
     "control_music",
     "check_school_schedule",
     "get_calendar_schedule",
@@ -70,7 +70,7 @@ pub fn label_for(tool: &str, args: &Value) -> String {
     match tool {
         "open_application" => format!("open {}", arg(&["app_name", "name"])),
         "open_website" => format!("open {}", arg(&["platform_or_url", "url", "site"])),
-        "open_jarvis_view" => format!("open the {} view", arg(&["view"]).replace('_', " ")),
+        "open_jai_view" => format!("open the {} view", arg(&["view"]).replace('_', " ")),
         "control_music" => match arg(&["playlist", "playlist_name", "query", "song"]).as_str() {
             "" => format!("music: {}", arg(&["action"]).replace('_', " ")),
             what => format!("play {what}"),
@@ -278,7 +278,7 @@ mod tests {
     }
 
     fn schedule(day: u32, h: u32, m: u32) -> Event {
-        Event { at: at(day, h, m), tool: "open_jarvis_view".into(), args: json!({"view": "schedule"}), label: "open the schedule view".into() }
+        Event { at: at(day, h, m), tool: "open_jai_view".into(), args: json!({"view": "schedule"}), label: "open the schedule view".into() }
     }
 
     #[test]
@@ -314,16 +314,16 @@ mod tests {
     fn only_routine_actions_are_noted_and_an_offer_is_made_once_a_day() {
         let r = Routines::in_memory();
         for day in 2..=4 {
-            r.note("open_jarvis_view", &json!({"view": "schedule"}), at(day, 7, 10));
+            r.note("open_jai_view", &json!({"view": "schedule"}), at(day, 7, 10));
             // Not what a routine is made of: stopping music, a search, a shutdown.
             r.note("control_music", &json!({"action": "pause"}), at(day, 7, 10));
             r.note("web_search", &json!({"query": "weather"}), at(day, 7, 10));
-            r.note("shutdown_jarvis", &json!({}), at(day, 7, 10));
+            r.note("shutdown_jai", &json!({}), at(day, 7, 10));
         }
         assert_eq!(r.events().len(), 3);
         assert_eq!(r.events()[0].label, "open the schedule view");
         let offer = r.offer(at(6, 7, 0)).expect("an offer");
-        assert_eq!(offer.tool, "open_jarvis_view");
+        assert_eq!(offer.tool, "open_jai_view");
         assert_eq!(r.offer(at(6, 7, 20)), None, "once a day");
         assert!(r.offer(at(7, 7, 5)).is_some(), "again the next day");
         let said = r.tool(&json!({"action": "now"}), at(8, 7, 5)).unwrap();

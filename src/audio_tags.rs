@@ -286,7 +286,7 @@ mod tests {
     use super::*;
 
     fn temp(name: &str, bytes: &[u8]) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("jarvis-tags-{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("jai-tags-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join(name);
         std::fs::write(&path, bytes).unwrap();

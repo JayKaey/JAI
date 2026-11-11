@@ -444,7 +444,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_download_watch_ends_when_the_partial_file_is_gone() {
-        let dir = std::env::temp_dir().join(format!("jarvis-watch-{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("jai-watch-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let partial = dir.join("setup.exe.crdownload");
         std::fs::write(&partial, b"half").unwrap();
@@ -473,7 +473,7 @@ mod tests {
 
     #[test]
     fn leftovers_and_stalled_downloads_do_not_keep_a_watch_waiting() {
-        let dir = std::env::temp_dir().join(format!("jarvis-watch-{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("jai-watch-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let age = |path: &Path, secs: u64| std::fs::File::options().write(true).open(path).unwrap().set_modified(SystemTime::now() - Duration::from_secs(secs)).unwrap();
         // Last week's broken download is not "a download in progress".

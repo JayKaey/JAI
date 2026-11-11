@@ -1,14 +1,12 @@
-# Packages target\release\jarvis.exe as JAI.exe in the project folder (next to models\ and
+# Packages target\release\jai.exe as JAI.exe in the project folder (next to models\ and
 # runtime\), together with the DLLs it loads, so the app does not depend on anything installed
 # system-wide. Called by build.bat.
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
-$src = Join-Path $root 'target\release\jarvis.exe'
+$src = Join-Path $root 'target\release\jai.exe'
 $dst = Join-Path $root 'JAI.exe'
-# The program file's name from before he was renamed.
-$before = Join-Path $root 'JARVIS.exe'
 
-if (Get-Process -Name 'JAI', 'JARVIS' -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $dst -or $_.Path -eq $before }) {
+if (Get-Process -Name 'JAI' -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $dst }) {
     throw 'J.A.I. is running. Quit it first ("JAI, shut down", or tray icon > Quit).'
 }
 
@@ -20,8 +18,6 @@ if ([BitConverter]::ToUInt32($bytes, $pe) -ne 0x00004550) { throw "$src is not a
 $subsystem = [BitConverter]::ToUInt16($bytes, $pe + 4 + 20 + 68)   # "PE\0\0" + COFF header + Subsystem offset
 if ($subsystem -ne 2) { throw "$src is a console program (subsystem $subsystem); it would open a terminal window" }
 Copy-Item $src $dst -Force
-# One program file: the one with his old name leaves once the new one is in place.
-if (Test-Path $before) { Remove-Item $before -Force }
 Write-Host "JAI.exe           $([math]::Round($bytes.Length / 1MB, 1)) MB (native window, no console)"
 
 # 2. DirectML (ONNX Runtime GPU provider) and the Visual C++ runtime, deployed app-locally.

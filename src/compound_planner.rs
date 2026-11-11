@@ -157,7 +157,7 @@ fn resolve_any(clause: &str, ctx: &ReflexContext) -> Option<Resolved> {
     if let Some(action) = crate::intent_engine::deterministic_action(clause) {
         return Some(match action {
             IntentAction::CloseSecondaryWindows => Resolved::Call("close_all_secondary_windows", json!({})),
-            IntentAction::ExitJaiApplication => Resolved::Call("shutdown_jarvis", json!({})),
+            IntentAction::ExitJaiApplication => Resolved::Call("shutdown_jai", json!({})),
         });
     }
     let of = |intent: Option<Intent>| match intent {
@@ -173,7 +173,7 @@ fn resolve_any(clause: &str, ctx: &ReflexContext) -> Option<Resolved> {
         .or_else(|| intents::orb_mode_command(clause).map(call("control_orb_mode")))
         .or_else(|| intents::listening_mode_command(clause).map(call("set_listening_mode")))
         .or_else(|| intents::mixer_command(clause).map(call("control_audio_mixer")))
-        .or_else(|| intents::internal_view_command(clause).map(call("open_jarvis_view")))
+        .or_else(|| intents::internal_view_command(clause).map(call("open_jai_view")))
         .or_else(|| {
             crate::features::route_text(clause)
                 .or_else(|| crate::integration_router::route_text(clause))
@@ -181,7 +181,7 @@ fn resolve_any(clause: &str, ctx: &ReflexContext) -> Option<Resolved> {
                 .map(|route| Resolved::Call(route.tool, route.args))
         })
         .or_else(|| of(intents::parse(clause)))
-        .or_else(|| intents::ui_layout_command(clause).map(call("control_jarvis_interface")))
+        .or_else(|| intents::ui_layout_command(clause).map(call("control_jai_interface")))
 }
 
 /// A schedule route only for words that mean the schedule (never a playlist called "classes").

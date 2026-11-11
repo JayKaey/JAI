@@ -20,7 +20,7 @@ pub(super) fn request() {
 }
 
 fn viewport_id() -> ViewportId {
-    ViewportId::from_hash_of("jarvis_satellite_pairing")
+    ViewportId::from_hash_of("jai_satellite_pairing")
 }
 
 pub(super) fn is_open() -> bool {
@@ -53,7 +53,7 @@ pub(super) fn show(ctx: &egui::Context, host: &WidgetHost) {
     }
     let mut builder = ViewportBuilder::default()
         .with_title("Mobile Satellite Pairing — J.A.I.")
-        .with_app_id("jarvis")
+        .with_app_id("jai")
         .with_inner_size([520.0, 700.0])
         .with_min_inner_size([420.0, 560.0])
         .with_transparent(true)

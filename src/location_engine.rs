@@ -26,7 +26,7 @@ use tracing::info;
 /// A phone fix older than this no longer counts as "where Sir is".
 const PHONE_FIX_TTL: Duration = Duration::from_secs(15 * 60);
 const IP_CACHE_TTL: Duration = Duration::from_secs(30 * 60);
-const USER_AGENT: &str = concat!("JARVIS-desktop/", env!("CARGO_PKG_VERSION"), " (personal assistant; local use)");
+const USER_AGENT: &str = concat!("JAI-desktop/", env!("CARGO_PKG_VERSION"), " (personal assistant; local use)");
 
 /// One sample from the phone's browser.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Deserialize)]

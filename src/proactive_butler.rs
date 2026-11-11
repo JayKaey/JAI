@@ -164,7 +164,7 @@ pub fn upcoming_card(now: NaiveDateTime, starting: &[&Upcoming]) -> Option<Card>
         title: format!("NEXT UP // {}", first.start.format("%H:%M")),
         body: format!("{}\nStarts in {minutes} {unit}.", names.join("\n")),
         fixes: vec![
-            Fix { label: "OPEN SCHEDULE".into(), tool: "open_jarvis_view", args: json!({ "view": "schedule" }) },
+            Fix { label: "OPEN SCHEDULE".into(), tool: "open_jai_view", args: json!({ "view": "schedule" }) },
             Fix { label: "REMIND ME AT START".into(), tool: "reminders", args: json!({ "action": "set", "text": format!("{} starts now", first.title), "in_minutes": minutes }) },
         ],
         spoken: Some(format!("Sir, {} starts in {minutes} {unit}.", describe(first))),
@@ -437,7 +437,7 @@ fn present(app: &crate::app::Jai, card: Card) {
     show(&card);
     match &card.spoken {
         Some(line) => {
-            crate::tts::play_cue(crate::jarvis_voice_dsp::Earcon::Alert);
+            crate::tts::play_cue(crate::jai_voice_dsp::Earcon::Alert);
             app.raise_alert(line.clone());
         }
         None => app.notice(format!("{} // {}", card.title, card.body.lines().next().unwrap_or(""))),
@@ -550,7 +550,7 @@ mod tests {
         assert_eq!(card.title, "NEXT UP // 08:35");
         assert_eq!(card.body, "Physics, room 204\nStarts in 14 minutes.");
         assert_eq!(card.spoken.as_deref(), Some("Sir, Physics, room 204 starts in 14 minutes."));
-        assert_eq!(card.fixes[0], Fix { label: "OPEN SCHEDULE".into(), tool: "open_jarvis_view", args: json!({ "view": "schedule" }) });
+        assert_eq!(card.fixes[0], Fix { label: "OPEN SCHEDULE".into(), tool: "open_jai_view", args: json!({ "view": "schedule" }) });
         assert_eq!(card.fixes[1].args, json!({ "action": "set", "text": "Physics starts now", "in_minutes": 14 }));
         // Exactly a quarter of an hour ahead counts; sixteen minutes do not, nor the minute it starts.
         assert_eq!(due(at(8, 20), &items).len(), 1);
@@ -607,7 +607,7 @@ mod tests {
 
     #[test]
     fn the_watch_reports_news_only_and_waits_for_a_builds_verdict() {
-        let root = std::env::temp_dir().join(format!("jarvis-butler-test-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("jai-butler-test-{}", std::process::id()));
         let dir = root.join("9.2.1");
         std::fs::create_dir_all(&dir).unwrap();
         let log = dir.join("daemon-4242.out.log");

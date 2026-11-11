@@ -39,7 +39,7 @@ pub struct ConversationalFocus {
     pub last_target_app: Option<String>,
     pub last_opened_url_or_site: Option<String>,
     pub last_edited_or_found_file: Option<PathBuf>,
-    pub last_active_jarvis_window_id: Option<String>,
+    pub last_active_jai_window_id: Option<String>,
     /// `"<title>" (<process>)` of the window Sir was in before his latest request.
     pub last_os_foreground_window: Option<String>,
 }
@@ -74,7 +74,7 @@ impl<T> Stamped<T> {
 pub enum OwnThing {
     View(String),
     Widget(String),
-    /// One of his panels opened by name (`open_jarvis_view`: "earth", "network_radar", …).
+    /// One of his panels opened by name (`open_jai_view`: "earth", "network_radar", …).
     Panel(String),
 }
 
@@ -125,7 +125,7 @@ impl FocusTracker {
     /// An app the conversation is now about ("discord", "browser", "vs code").
     pub fn note_app(&self, app: &str) {
         let app = crate::apps::normalize(app);
-        if app.is_empty() || is_pronoun(&app) || crate::tools::names_jarvis(&app) {
+        if app.is_empty() || is_pronoun(&app) || crate::tools::names_jai(&app) {
             return;
         }
         self.write(|s| s.app = Some(Stamped::now(app)));
@@ -144,7 +144,7 @@ impl FocusTracker {
         self.write(|s| s.file = Some(Stamped::now(path.to_path_buf())));
     }
 
-    pub fn note_jarvis_window(&self, id: &str) {
+    pub fn note_jai_window(&self, id: &str) {
         if !id.is_empty() {
             self.write(|s| s.window = Some(Stamped::now(id.to_string())));
         }
@@ -210,7 +210,7 @@ impl FocusTracker {
         });
     }
 
-    pub fn forget_jarvis_window(&self, id: &str) {
+    pub fn forget_jai_window(&self, id: &str) {
         self.write(|s| {
             if id == "all" || s.window.as_ref().is_some_and(|w| w.value == id) {
                 s.window = None;
@@ -268,7 +268,7 @@ impl FocusTracker {
             let window = crate::context::desktop()
                 .await
                 .foreground
-                .filter(|(title, process)| !title.contains("J.A.I.") && !process.eq_ignore_ascii_case("jarvis") && !process.eq_ignore_ascii_case("jai"))
+                .filter(|(title, process)| !title.contains("J.A.I.") && !process.eq_ignore_ascii_case("jai"))
                 .map(|(title, process)| ForegroundWindow { handle: 0, title, process });
             if let Some(w) = window {
                 self.note_foreground(w);
@@ -283,7 +283,7 @@ impl FocusTracker {
             last_target_app: s.app.as_ref().map(|a| a.value.clone()),
             last_opened_url_or_site: s.site.as_ref().map(|a| a.value.clone()),
             last_edited_or_found_file: s.file.as_ref().map(|a| a.value.clone()),
-            last_active_jarvis_window_id: s.window.as_ref().map(|a| a.value.clone()),
+            last_active_jai_window_id: s.window.as_ref().map(|a| a.value.clone()),
             last_os_foreground_window: s.foreground.as_ref().map(|f| format!("\"{}\" ({})", f.value.title, f.value.process)),
         })
     }
@@ -316,7 +316,7 @@ impl FocusTracker {
     }
 
     /// A JAI window was dealt with more recently than any app ("close that window").
-    pub fn jarvis_window_is_latest(&self) -> Option<String> {
+    pub fn jai_window_is_latest(&self) -> Option<String> {
         self.read(|s| {
             let window = s.window.as_ref()?;
             let newer = s.app.as_ref().is_none_or(|a| window.at >= a.at || !a.fresh(APP_FOCUS_TTL));
@@ -421,7 +421,7 @@ mod tests {
         let mixer = OwnThing::View("mixer_view".into());
         f.note_own_thing(mixer.clone());
         assert_eq!(f.own_thing_is_latest().as_ref(), Some(&mixer), "newer than the app");
-        f.note_jarvis_window("drive_space");
+        f.note_jai_window("drive_space");
         assert_eq!(f.own_thing_is_latest(), None, "a window came up after it");
         f.note_own_thing(OwnThing::Widget("timer_300".into()));
         assert_eq!(f.own_thing_is_latest(), Some(OwnThing::Widget("timer_300".into())));
@@ -435,7 +435,7 @@ mod tests {
     }
 
     #[test]
-    fn websites_focus_the_browser_and_jarvis_is_never_the_app() {
+    fn websites_focus_the_browser_and_jai_is_never_the_app() {
         let f = FocusTracker::new();
         f.note_opened("https://www.youtube.com/@BastiGHG");
         assert_eq!(f.focused_app().as_deref(), Some("browser"));
@@ -445,10 +445,10 @@ mod tests {
         f.note_app("yourself");
         f.note_app("JAI");
         assert_eq!(f.focused_app().as_deref(), Some("spotify"));
-        f.note_jarvis_window("window_1");
-        assert_eq!(f.jarvis_window_is_latest().as_deref(), Some("window_1"));
+        f.note_jai_window("window_1");
+        assert_eq!(f.jai_window_is_latest().as_deref(), Some("window_1"));
         f.note_app("discord");
-        assert_eq!(f.jarvis_window_is_latest(), None);
+        assert_eq!(f.jai_window_is_latest(), None);
         assert!(f.describe().contains("Discord"));
     }
 }

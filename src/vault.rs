@@ -20,11 +20,6 @@ use tracing::{info, warn};
 const KEY_FILE: &str = "jai_vault.key";
 #[cfg(windows)]
 const KEYRING_SERVICE: &str = "J.A.I. Personal Manager";
-/// The entry's name until 2026-11-11. Every secret in the database is sealed with the key that
-/// was made under it, so that key is the key, wherever it is read from. (A blanket rename once
-/// changed the name alone: the next start made a fresh key and could read nothing.)
-#[cfg(windows)]
-const KEYRING_SERVICE_BEFORE: &str = "J.A.R.V.I.S. Personal Manager";
 #[cfg(windows)]
 const KEYRING_USER: &str = "vault-master-key";
 
@@ -94,7 +89,7 @@ impl Vault {
     }
 
     fn aad(service: &str, name: &str) -> Vec<u8> {
-        format!("jarvis-vault|{service}|{name}").into_bytes()
+        format!("jai-vault|{service}|{name}").into_bytes()
     }
 
     pub fn set_secret(&self, service: &str, name: &str, value: &str) -> Result<(), String> {
@@ -189,44 +184,18 @@ fn master_key(dir: &Path) -> Result<(Key<Aes256Gcm>, String), String> {
     Ok((key, format!("{} (local key file)", file.display())))
 }
 
-/// Which stored key is the master key, and whether it has yet to be written under his new
-/// name: the one from before the rename wherever there is one, else the one under his name.
-#[cfg(any(windows, test))]
-fn choose_key(before: Option<String>, now: Option<String>) -> Option<(String, bool)> {
-    match (before, now) {
-        (Some(before), now) => {
-            let copy = now.as_deref() != Some(before.as_str());
-            Some((before, copy))
-        }
-        (None, Some(now)) => Some((now, false)),
-        (None, None) => None,
-    }
-}
-
 #[cfg(windows)]
 fn keyring_key() -> Result<Key<Aes256Gcm>, String> {
-    let read = |entry: &keyring::Entry| match entry.get_password() {
-        Ok(stored) => Ok(Some(stored)),
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(e) => Err(e.to_string()),
-    };
     let entry = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER).map_err(|e| e.to_string())?;
-    let before = keyring::Entry::new(KEYRING_SERVICE_BEFORE, KEYRING_USER).ok().map(|e| read(&e)).transpose()?.flatten();
-    match choose_key(before, read(&entry)?) {
-        Some((stored, copy)) => {
-            let key = decode_key(&stored)?;
-            if copy {
-                entry.set_password(&stored).map_err(|e| e.to_string())?;
-                info!("[VAULT] The master key stands under his new name in the Windows Credential Manager now.");
-            }
-            Ok(key)
-        }
-        None => {
+    match entry.get_password() {
+        Ok(stored) => decode_key(&stored),
+        Err(keyring::Error::NoEntry) => {
             let key = Aes256Gcm::generate_key(OsRng);
             entry.set_password(&encode_key(&key)).map_err(|e| e.to_string())?;
             info!("[VAULT] Created a new master key in the Windows Credential Manager.");
             Ok(key)
         }
+        Err(e) => Err(e.to_string()),
     }
 }
 
@@ -234,18 +203,12 @@ fn keyring_key() -> Result<Key<Aes256Gcm>, String> {
 mod tests {
     use super::*;
 
-    /// 2026-11-11: a rename changed the entry's name alone, the next start made a fresh key
-    /// under it, and the WebUntis token could not be read. The key from before is the key.
+    /// The entry the master key is stored under is an address, not a label: a rename of
+    /// 2026-11-11 changed it, the next start made a fresh key and could read no secret.
+    #[cfg(windows)]
     #[test]
-    fn the_key_from_before_the_rename_stays_the_key() {
-        let (sealed_with, stray) = ("b2xkIGtleQ==".to_string(), "c3RyYXkga2V5".to_string());
-        assert_eq!(choose_key(Some(sealed_with.clone()), Some(stray)), Some((sealed_with.clone(), true)), "over a key a start made by mistake");
-        assert_eq!(choose_key(Some(sealed_with.clone()), None), Some((sealed_with.clone(), true)));
-        assert_eq!(choose_key(Some(sealed_with.clone()), Some(sealed_with.clone())), Some((sealed_with.clone(), false)), "written once");
-        assert_eq!(choose_key(None, Some(sealed_with.clone())), Some((sealed_with, false)));
-        assert_eq!(choose_key(None, None), None, "a new install makes its own");
-        #[cfg(windows)]
-        assert_eq!((KEYRING_SERVICE_BEFORE, KEYRING_USER), ("J.A.R.V.I.S. Personal Manager", "vault-master-key"), "the entry Sir's secrets are sealed under");
+    fn the_master_keys_entry_keeps_its_name() {
+        assert_eq!((KEYRING_SERVICE, KEYRING_USER), ("J.A.I. Personal Manager", "vault-master-key"));
     }
 
     #[test]

@@ -13,6 +13,8 @@
 
 # --- Large downloads (JAI.exe --download-models and tools/package.ps1 fetch them) ----
 /models/
+# libclang for building whisper.cpp's bindings (build.bat looks here).
+/tools/libclang/
 /runtime/
 /bin/
 
@@ -20,8 +22,6 @@
 # Settings: they hold the phone pairing key and the addresses of the accounts.
 /jai_config.json
 /jai_config.json.*
-/jarvis_config.json
-/jarvis_config.json.*
 # The memory database: conversations, memories, calendar, sealed account tokens.
 *.db
 *.db-shm

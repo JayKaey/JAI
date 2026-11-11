@@ -244,61 +244,61 @@ pub const CASES: &[Case] = &[
     c("monitors", 3, "go back to one monitor", "configure_interface", r#"{"span_all_monitors": false}"#),
     // ---- The schedule ----
     c("schedule", 1, "What classes do I have tomorrow?", "check_school_schedule", "{}"),
-    c("schedule", 1, "Open my WebUntis schedule.", "check_school_schedule|open_jarvis_view", "{}"),
+    c("schedule", 1, "Open my WebUntis schedule.", "check_school_schedule|open_jai_view", "{}"),
     c("schedule", 2, "Wie sieht mein Stundenplan morgen aus?", "check_school_schedule", "{}"),
-    c("schedule", 2, "Öffne meinen Stundenplan.", "check_school_schedule|open_jarvis_view", "{}"),
+    c("schedule", 2, "Öffne meinen Stundenplan.", "check_school_schedule|open_jai_view", "{}"),
     c("schedule", 3, "what classes do i have tomorrow", "check_school_schedule", "{}"),
-    c("schedule", 3, "open my webuntis schedule", "check_school_schedule|open_jarvis_view", "{}"),
+    c("schedule", 3, "open my webuntis schedule", "check_school_schedule|open_jai_view", "{}"),
     // ---- Research ----
     c("research", 1, "Research the state of VR.", "hud_board", r#"{"action": "research"}"#),
     c("research", 2, "Recherchiere Festkörperbatterien.", "hud_board", r#"{"action": "research"}"#),
     c("research", 3, "research solid state batteries", "hud_board", r#"{"action": "research"}"#),
     // ---- The HoloMat (simulation lab) ----
-    c("holomat", 1, "Open the simulation lab.", "open_jarvis_view", r#"{"view": "simulation_lab"}"#),
-    c("holomat", 2, "Öffne das Simulationslabor.", "open_jarvis_view", r#"{"view": "simulation_lab"}"#),
-    c("holomat", 3, "open the holomat", "open_jarvis_view", r#"{"view": "simulation_lab"}"#),
+    c("holomat", 1, "Open the simulation lab.", "open_jai_view", r#"{"view": "simulation_lab"}"#),
+    c("holomat", 2, "Öffne das Simulationslabor.", "open_jai_view", r#"{"view": "simulation_lab"}"#),
+    c("holomat", 3, "open the holomat", "open_jai_view", r#"{"view": "simulation_lab"}"#),
     // ---- The reference videos' panels: network radar, disk map, Earth ----
-    c("panels", 1, "Check the network.", "open_jarvis_view", r#"{"view": "network_radar", "action": "show"}"#),
-    c("panels", 1, "Who's on my wifi?", "open_jarvis_view", r#"{"view": "network_radar", "action": "show"}"#),
-    c("panels", 1, "Is my network secure?", "open_jarvis_view", r#"{"view": "network_radar", "action": "check_security"}"#),
-    c("panels", 1, "What is taking up space?", "open_jarvis_view", r#"{"view": "disk_map", "action": "show"}"#),
-    c("panels", 1, "Map my D drive.", "open_jarvis_view", r#"{"view": "disk_map", "path": "D:\\"}"#),
-    c("panels", 1, "Show me the earth.", "open_jarvis_view", r#"{"view": "earth", "action": "show"}"#),
-    c("panels", 1, "Were there any earthquakes near Tokyo recently?", "open_jarvis_view", r#"{"view": "earth", "action": "show_quakes", "place": "Tokyo"}"#),
-    c("panels", 1, "Show me the flights over New York.", "open_jarvis_view", r#"{"view": "earth", "action": "show_flights", "place": "New York"}"#),
+    c("panels", 1, "Check the network.", "open_jai_view", r#"{"view": "network_radar", "action": "show"}"#),
+    c("panels", 1, "Who's on my wifi?", "open_jai_view", r#"{"view": "network_radar", "action": "show"}"#),
+    c("panels", 1, "Is my network secure?", "open_jai_view", r#"{"view": "network_radar", "action": "check_security"}"#),
+    c("panels", 1, "What is taking up space?", "open_jai_view", r#"{"view": "disk_map", "action": "show"}"#),
+    c("panels", 1, "Map my D drive.", "open_jai_view", r#"{"view": "disk_map", "path": "D:\\"}"#),
+    c("panels", 1, "Show me the earth.", "open_jai_view", r#"{"view": "earth", "action": "show"}"#),
+    c("panels", 1, "Were there any earthquakes near Tokyo recently?", "open_jai_view", r#"{"view": "earth", "action": "show_quakes", "place": "Tokyo"}"#),
+    c("panels", 1, "Show me the flights over New York.", "open_jai_view", r#"{"view": "earth", "action": "show_flights", "place": "New York"}"#),
     c("panels", 1, "Close the globe.", "hud_board", r#"{"action": "close", "target": "globe"}"#),
-    c("panels", 2, "Scanne mein Netzwerk.", "open_jarvis_view", r#"{"view": "network_radar"}"#),
-    c("panels", 2, "Was frisst meinen Speicherplatz?", "open_jarvis_view", r#"{"view": "disk_map"}"#),
-    c("panels", 2, "Zeig mir die Erde.", "open_jarvis_view", r#"{"view": "earth"}"#),
-    c("panels", 3, "hey jai check check the network", "open_jarvis_view", r#"{"view": "network_radar"}"#),
-    c("panels", 3, "where did all my space go", "open_jarvis_view", r#"{"view": "disk_map"}"#),
-    c("panels", 3, "show me the globe", "open_jarvis_view", r#"{"view": "earth"}"#),
+    c("panels", 2, "Scanne mein Netzwerk.", "open_jai_view", r#"{"view": "network_radar"}"#),
+    c("panels", 2, "Was frisst meinen Speicherplatz?", "open_jai_view", r#"{"view": "disk_map"}"#),
+    c("panels", 2, "Zeig mir die Erde.", "open_jai_view", r#"{"view": "earth"}"#),
+    c("panels", 3, "hey jai check check the network", "open_jai_view", r#"{"view": "network_radar"}"#),
+    c("panels", 3, "where did all my space go", "open_jai_view", r#"{"view": "disk_map"}"#),
+    c("panels", 3, "show me the globe", "open_jai_view", r#"{"view": "earth"}"#),
     // (The Earth made useful: where Sir is, the terrain, the weather, a past day, the tour.)
-    c("panels", 1, "Where am I on the map?", "open_jarvis_view", r#"{"view": "earth", "action": "show_my_location"}"#),
-    c("panels", 1, "Show me the mountains.", "open_jarvis_view", r#"{"view": "earth", "action": "show_mountains"}"#),
-    c("panels", 1, "Show me the rain radar.", "open_jarvis_view", r#"{"view": "earth", "action": "show_radar"}"#),
-    c("panels", 1, "Show me the clouds on 1 March 2024.", "open_jarvis_view", r#"{"view": "earth", "action": "show_clouds"}"#),
-    c("panels", 1, "What did Europe look like yesterday?", "open_jarvis_view", r#"{"view": "earth", "action": "show_date", "place": "Europe"}"#),
-    c("panels", 1, "What's happening in the world?", "open_jarvis_view", r#"{"view": "earth", "action": "show_world_tour"}"#),
-    c("panels", 2, "Zeig mir, wo ich bin.", "open_jarvis_view", r#"{"view": "earth", "action": "show_my_location"}"#),
-    c("panels", 2, "Zeig mir die Berge.", "open_jarvis_view", r#"{"view": "earth", "action": "show_mountains"}"#),
-    c("panels", 2, "Zeig mir das Regenradar.", "open_jarvis_view", r#"{"view": "earth", "action": "show_radar"}"#),
-    c("panels", 2, "Was passiert in der Welt?", "open_jarvis_view", r#"{"view": "earth", "action": "show_world_tour"}"#),
-    c("panels", 3, "locate me", "open_jarvis_view", r#"{"view": "earth", "action": "show_my_location"}"#),
-    c("panels", 3, "exaggerate the terrain", "open_jarvis_view", r#"{"view": "earth", "action": "exaggerate_terrain"}"#),
-    c("panels", 3, "give me a world tour", "open_jarvis_view", r#"{"view": "earth", "action": "show_world_tour"}"#),
+    c("panels", 1, "Where am I on the map?", "open_jai_view", r#"{"view": "earth", "action": "show_my_location"}"#),
+    c("panels", 1, "Show me the mountains.", "open_jai_view", r#"{"view": "earth", "action": "show_mountains"}"#),
+    c("panels", 1, "Show me the rain radar.", "open_jai_view", r#"{"view": "earth", "action": "show_radar"}"#),
+    c("panels", 1, "Show me the clouds on 1 March 2024.", "open_jai_view", r#"{"view": "earth", "action": "show_clouds"}"#),
+    c("panels", 1, "What did Europe look like yesterday?", "open_jai_view", r#"{"view": "earth", "action": "show_date", "place": "Europe"}"#),
+    c("panels", 1, "What's happening in the world?", "open_jai_view", r#"{"view": "earth", "action": "show_world_tour"}"#),
+    c("panels", 2, "Zeig mir, wo ich bin.", "open_jai_view", r#"{"view": "earth", "action": "show_my_location"}"#),
+    c("panels", 2, "Zeig mir die Berge.", "open_jai_view", r#"{"view": "earth", "action": "show_mountains"}"#),
+    c("panels", 2, "Zeig mir das Regenradar.", "open_jai_view", r#"{"view": "earth", "action": "show_radar"}"#),
+    c("panels", 2, "Was passiert in der Welt?", "open_jai_view", r#"{"view": "earth", "action": "show_world_tour"}"#),
+    c("panels", 3, "locate me", "open_jai_view", r#"{"view": "earth", "action": "show_my_location"}"#),
+    c("panels", 3, "exaggerate the terrain", "open_jai_view", r#"{"view": "earth", "action": "exaggerate_terrain"}"#),
+    c("panels", 3, "give me a world tour", "open_jai_view", r#"{"view": "earth", "action": "show_world_tour"}"#),
     // ---- His own views moved and sized (the log of 2026-11-08 had no tool for the first two) ----
-    c("arrange", 1, "Move it to the middle of my screen.", "arrange_jarvis_window", r#"{"target": "it", "action": "move", "position": "centre"}"#),
-    c("arrange", 1, "No JAI, can you full screen the Earth?", "arrange_jarvis_window", r#"{"target": "earth", "action": "fullscreen"}"#),
-    c("arrange", 1, "Put the earth on the left half.", "arrange_jarvis_window", r#"{"target": "earth", "action": "move", "position": "left"}"#),
-    c("arrange", 1, "Move the radar to my second monitor.", "arrange_jarvis_window", r#"{"target": "radar", "action": "to_monitor"}"#),
-    c("arrange", 1, "Put them side by side.", "arrange_jarvis_window", r#"{"target": "them", "action": "side_by_side"}"#),
-    c("arrange", 1, "Resize it to half the screen.", "arrange_jarvis_window", r#"{"target": "it", "action": "resize", "size": "half"}"#),
-    c("arrange", 2, "Verschieb es in die Mitte.", "arrange_jarvis_window", r#"{"target": "it", "action": "move", "position": "centre"}"#),
-    c("arrange", 2, "Zentriere die Erde.", "arrange_jarvis_window", r#"{"target": "erde", "action": "move", "position": "centre"}"#),
-    c("arrange", 2, "Mach die Erde größer.", "arrange_jarvis_window", r#"{"target": "erde", "action": "resize", "size": "bigger"}"#),
-    c("arrange", 3, "uh centre the earth", "arrange_jarvis_window", r#"{"target": "earth", "action": "move", "position": "centre"}"#),
-    c("arrange", 3, "full screen the globe", "arrange_jarvis_window", r#"{"target": "globe", "action": "fullscreen"}"#),
+    c("arrange", 1, "Move it to the middle of my screen.", "arrange_jai_window", r#"{"target": "it", "action": "move", "position": "centre"}"#),
+    c("arrange", 1, "No JAI, can you full screen the Earth?", "arrange_jai_window", r#"{"target": "earth", "action": "fullscreen"}"#),
+    c("arrange", 1, "Put the earth on the left half.", "arrange_jai_window", r#"{"target": "earth", "action": "move", "position": "left"}"#),
+    c("arrange", 1, "Move the radar to my second monitor.", "arrange_jai_window", r#"{"target": "radar", "action": "to_monitor"}"#),
+    c("arrange", 1, "Put them side by side.", "arrange_jai_window", r#"{"target": "them", "action": "side_by_side"}"#),
+    c("arrange", 1, "Resize it to half the screen.", "arrange_jai_window", r#"{"target": "it", "action": "resize", "size": "half"}"#),
+    c("arrange", 2, "Verschieb es in die Mitte.", "arrange_jai_window", r#"{"target": "it", "action": "move", "position": "centre"}"#),
+    c("arrange", 2, "Zentriere die Erde.", "arrange_jai_window", r#"{"target": "erde", "action": "move", "position": "centre"}"#),
+    c("arrange", 2, "Mach die Erde größer.", "arrange_jai_window", r#"{"target": "erde", "action": "resize", "size": "bigger"}"#),
+    c("arrange", 3, "uh centre the earth", "arrange_jai_window", r#"{"target": "earth", "action": "move", "position": "centre"}"#),
+    c("arrange", 3, "full screen the globe", "arrange_jai_window", r#"{"target": "globe", "action": "fullscreen"}"#),
     // (jai.log 2026-11-08: fillers after a close were asked of Windows as programs.)
     c("panels", 1, "JAI, close the Earth, you.", "hud_board", r#"{"action": "close", "target": "earth"}"#),
     c("panels", 3, "close the world please", "hud_board", r#"{"action": "close", "target": "earth"}"#),
@@ -311,19 +311,19 @@ pub const CASES: &[Case] = &[
     c("studio3d", 2, "3D-Modell vom Saturn.", "show_3d_model", r#"{"query": "saturn"}"#),
     c("studio3d", 3, "render me an iron man suit in three d please", "show_3d_model", r#"{"query": "iron man suit"}"#),
     // live layers (C1): satellites, passes, trains, departures, traffic, rain, past weather.
-    c("live data", 1, "Show me all satellites.", "open_jarvis_view", r#"{"view": "earth", "action": "show_satellites", "group": "active"}"#),
-    c("live data", 1, "When can I see the ISS?", "open_jarvis_view", r#"{"view": "live", "action": "passes", "satellite": "ISS"}"#),
-    c("live data", 1, "Where is Hubble?", "open_jarvis_view", r#"{"view": "earth", "action": "find_satellite", "name": "Hubble"}"#),
-    c("live data", 1, "When's my next train?", "open_jarvis_view", r#"{"view": "departures"}"#),
-    c("live data", 1, "How's the traffic on the A8?", "open_jarvis_view", r#"{"view": "live", "action": "traffic", "road": "A8"}"#),
-    c("live data", 1, "Will it rain in the next hour?", "open_jarvis_view", r#"{"view": "live", "action": "rain_soon"}"#),
-    c("live data", 1, "What was the weather in Berlin on 3 May 2020?", "open_jarvis_view", r#"{"view": "live", "action": "weather_on", "date": "2020-05-03", "place": "Berlin"}"#),
-    c("live data", 2, "Wann sehe ich die ISS?", "open_jarvis_view", r#"{"view": "live", "action": "passes", "satellite": "ISS"}"#),
-    c("live data", 2, "Wann fährt meine Bahn?", "open_jarvis_view", r#"{"view": "departures"}"#),
-    c("live data", 2, "Regnet es gleich?", "open_jarvis_view", r#"{"view": "live", "action": "rain_soon"}"#),
-    c("live data", 3, "show me starlink", "open_jarvis_view", r#"{"view": "earth", "action": "show_satellites", "group": "starlink"}"#),
-    c("live data", 3, "departures from karlsruhe hbf", "open_jarvis_view", r#"{"view": "departures", "station": "Karlsruhe Hbf"}"#),
-    c("live data", 3, "show me the trains around stuttgart", "open_jarvis_view", r#"{"view": "earth", "action": "show_trains", "place": "Stuttgart"}"#),
+    c("live data", 1, "Show me all satellites.", "open_jai_view", r#"{"view": "earth", "action": "show_satellites", "group": "active"}"#),
+    c("live data", 1, "When can I see the ISS?", "open_jai_view", r#"{"view": "live", "action": "passes", "satellite": "ISS"}"#),
+    c("live data", 1, "Where is Hubble?", "open_jai_view", r#"{"view": "earth", "action": "find_satellite", "name": "Hubble"}"#),
+    c("live data", 1, "When's my next train?", "open_jai_view", r#"{"view": "departures"}"#),
+    c("live data", 1, "How's the traffic on the A8?", "open_jai_view", r#"{"view": "live", "action": "traffic", "road": "A8"}"#),
+    c("live data", 1, "Will it rain in the next hour?", "open_jai_view", r#"{"view": "live", "action": "rain_soon"}"#),
+    c("live data", 1, "What was the weather in Berlin on 3 May 2020?", "open_jai_view", r#"{"view": "live", "action": "weather_on", "date": "2020-05-03", "place": "Berlin"}"#),
+    c("live data", 2, "Wann sehe ich die ISS?", "open_jai_view", r#"{"view": "live", "action": "passes", "satellite": "ISS"}"#),
+    c("live data", 2, "Wann fährt meine Bahn?", "open_jai_view", r#"{"view": "departures"}"#),
+    c("live data", 2, "Regnet es gleich?", "open_jai_view", r#"{"view": "live", "action": "rain_soon"}"#),
+    c("live data", 3, "show me starlink", "open_jai_view", r#"{"view": "earth", "action": "show_satellites", "group": "starlink"}"#),
+    c("live data", 3, "departures from karlsruhe hbf", "open_jai_view", r#"{"view": "departures", "station": "Karlsruhe Hbf"}"#),
+    c("live data", 3, "show me the trains around stuttgart", "open_jai_view", r#"{"view": "earth", "action": "show_trains", "place": "Stuttgart"}"#),
     // ---- The board's own controls: tidy, find, sound cues ----
     c("blocks", 1, "Tidy the windows.", "hud_board", r#"{"action": "tidy"}"#),
     c("blocks", 1, "Find voltage on the board.", "hud_board", r#"{"action": "find", "target": "voltage"}"#),
@@ -475,7 +475,7 @@ pub struct Compound {
 const THEME_CYAN: (&str, &str) = ("configure_interface", r#"{"hud_palette": "arc_cyan"}"#);
 const ORB_TOP_RIGHT: (&str, &str) = ("configure_interface", r#"{"orb_board_position": "top right"}"#);
 const PAUSE: (&str, &str) = ("control_music", "{}");
-const STATS: (&str, &str) = ("open_jarvis_view", r#"{"view": "system_stats"}"#);
+const STATS: (&str, &str) = ("open_jai_view", r#"{"view": "system_stats"}"#);
 
 /// Matrix A, pass 5: one compound per category.
 pub const COMPOUNDS: &[Compound] = &[
@@ -501,13 +501,13 @@ pub const COMPOUNDS: &[Compound] = &[
     Compound { category: "music", say: "Pause the music and set theme to Arc Cyan.", wants: &[PAUSE, THEME_CYAN], needs: Needs::Nothing },
     Compound { category: "volume", say: "Volume 40 and next song.", wants: &[("control_audio_mixer", r#"{"action": "set_master", "level": 40}"#), ("control_music", r#"{"action": "next_track"}"#)], needs: Needs::Nothing },
     Compound { category: "monitors", say: "Use all monitors and set theme to Arc Cyan.", wants: &[("configure_interface", r#"{"span_all_monitors": true}"#), THEME_CYAN], needs: Needs::Nothing },
-    Compound { category: "schedule", say: "Open my WebUntis schedule and set theme to Arc Cyan.", wants: &[("check_school_schedule|open_jarvis_view", "{}"), THEME_CYAN], needs: Needs::Nothing },
+    Compound { category: "schedule", say: "Open my WebUntis schedule and set theme to Arc Cyan.", wants: &[("check_school_schedule|open_jai_view", "{}"), THEME_CYAN], needs: Needs::Nothing },
     Compound { category: "research", say: "Research solid state batteries and move the orb to the top right.", wants: &[("hud_board", r#"{"action": "research"}"#), ORB_TOP_RIGHT], needs: Needs::Nothing },
-    Compound { category: "holomat", say: "Open the simulation lab and pause the music.", wants: &[("open_jarvis_view", r#"{"view": "simulation_lab"}"#), PAUSE], needs: Needs::Nothing },
-    Compound { category: "panels", say: "Check the network and pause the music.", wants: &[("open_jarvis_view", r#"{"view": "network_radar"}"#), PAUSE], needs: Needs::Nothing },
-    Compound { category: "arrange", say: "Centre the Earth and pause the music.", wants: &[("arrange_jarvis_window", r#"{"target": "earth", "action": "move", "position": "centre"}"#), PAUSE], needs: Needs::Nothing },
+    Compound { category: "holomat", say: "Open the simulation lab and pause the music.", wants: &[("open_jai_view", r#"{"view": "simulation_lab"}"#), PAUSE], needs: Needs::Nothing },
+    Compound { category: "panels", say: "Check the network and pause the music.", wants: &[("open_jai_view", r#"{"view": "network_radar"}"#), PAUSE], needs: Needs::Nothing },
+    Compound { category: "arrange", say: "Centre the Earth and pause the music.", wants: &[("arrange_jai_window", r#"{"target": "earth", "action": "move", "position": "centre"}"#), PAUSE], needs: Needs::Nothing },
     // live layers (C1)
-    Compound { category: "live data", say: "Show me Starlink and pause the music.", wants: &[("open_jarvis_view", r#"{"view": "earth", "action": "show_satellites", "group": "starlink"}"#), PAUSE], needs: Needs::Nothing },
+    Compound { category: "live data", say: "Show me Starlink and pause the music.", wants: &[("open_jai_view", r#"{"view": "earth", "action": "show_satellites", "group": "starlink"}"#), PAUSE], needs: Needs::Nothing },
     Compound { category: "blocks", say: "Tidy the windows and turn off the sound cues.", wants: &[("hud_board", r#"{"action": "tidy"}"#), ("configure_interface", r#"{"sound_cues": false}"#)], needs: Needs::Nothing },
     Compound { category: "flashcards", say: "Quiz me on my flashcards and pause the music.", wants: &[("manage_flashcards", r#"{"action": "quiz"}"#), PAUSE], needs: Needs::Nothing },
     Compound { category: "formula", say: "Show me the formula for kinetic energy and open my system stats.", wants: &[("lookup_formula", "{}"), STATS], needs: Needs::Nothing },
@@ -1291,9 +1291,9 @@ async fn matrix_c(app: &Jai) {
     let tools = app.tools();
     // The HUD's sound cues are synthesised here, sample by sample: each one is there, short,
     // quiet beside his voice, free of clicks at its end and of anything that is not a number.
-    for kind in crate::jarvis_voice_dsp::Earcon::ALL {
+    for kind in crate::jai_voice_dsp::Earcon::ALL {
         let started = Instant::now();
-        let cue = crate::jarvis_voice_dsp::earcon(kind, 48_000);
+        let cue = crate::jai_voice_dsp::earcon(kind, 48_000);
         let ms = ms_since(started);
         let peak = cue.iter().fold(0.0f32, |m, s| m.max(s.abs()));
         let said = format!("{:.0} ms of sound, peak {peak:.3}", cue.len() as f32 / 48.0);
@@ -1303,9 +1303,9 @@ async fn matrix_c(app: &Jai) {
     use crate::fish_zero_shot_tts::{Match, ReferenceProfile};
     type Sentences = Vec<(&'static str, String, Vec<f32>)>;
     type Render = fn(&crate::config::JaiConfig) -> Result<Sentences, String>;
-    let rate = crate::jarvis_voice_dsp::MASTER_RATE;
-    let jarvis_profile = crate::voice_reference::reference_path().and_then(|clip| crate::fish_zero_shot_tts::load_profile(&clip, std::path::Path::new(crate::fish_zero_shot_tts::PROFILE_PATH)).ok());
-    let voices: [(&'static str, Option<ReferenceProfile>, Render); 1] = [("JAI", jarvis_profile, crate::fish_zero_shot_tts::render_sentences)];
+    let rate = crate::jai_voice_dsp::MASTER_RATE;
+    let jai_profile = crate::voice_reference::reference_path().and_then(|clip| crate::fish_zero_shot_tts::load_profile(&clip, std::path::Path::new(crate::fish_zero_shot_tts::PROFILE_PATH)).ok());
+    let voices: [(&'static str, Option<ReferenceProfile>, Render); 1] = [("JAI", jai_profile, crate::fish_zero_shot_tts::render_sentences)];
     // Each voice's five sentences as the speaker would get them, with its clip's profile.
     let mut spoken: Vec<(&'static str, Sentences)> = Vec::new();
     for (who, profile, render) in voices {
@@ -1659,12 +1659,12 @@ const VARIANTS: &[(&str, [&str; 4])] = &[
     ("spawn_native_window", [r#"{"title": "Feature Lab", "markdown": "A longer note: the reactor sustains its output without drift."}"#, r#"{"title": "Feature Lab", "markdown": "**Heading**\n\nA list:\n\n- one\n- two"}"#, r#"{"title": "Feature Lab", "markdown": "Übergrößen und Maßeinheiten."}"#, r#"{"title": "Feature Lab", "markdown": "63.7 % of 4.2 GW"}"#]),
     ("create_or_update_widget", [r#"{"title": "Feature Lab", "type": "MetricGauge", "value": 12, "unit": "%"}"#, r#"{"title": "Feature Lab", "type": "MetricGauge", "value": 99, "unit": "%"}"#, r#"{"title": "Feature Lab", "type": "MetricGauge", "value": 50, "unit": "°C"}"#, r#"{"title": "Feature Lab", "type": "MetricGauge", "value": 0, "unit": "%"}"#]),
     ("launch_interactive_simulation", [r#"{"sim_type": "pendulum"}"#, r#"{"sim_type": "projectile"}"#, r#"{"sim_type": "pendulum"}"#, r#"{"sim_type": "projectile"}"#]),
-    ("open_jarvis_view", [r#"{"view": "system_stats"}"#, r#"{"view": "simulation_lab"}"#, r#"{"view": "system_stats"}"#, r#"{"view": "schedule"}"#]),
+    ("open_jai_view", [r#"{"view": "system_stats"}"#, r#"{"view": "simulation_lab"}"#, r#"{"view": "system_stats"}"#, r#"{"view": "schedule"}"#]),
 ];
 
 /// Tools whose `[ TRY ]` draws inside the HUD: run for real against the offscreen HUD, their
 /// block inspected, then closed again.
-const HUD_TOOLS: &[&str] = &["pop_up_ui_card", "spawn_native_window", "create_or_update_widget", "open_jarvis_view", "launch_interactive_simulation", "lookup_formula", "show_app_shortcuts", "screen_time_report", "thermal_advisor", "clipboard_history", "arrange_jarvis_window"];
+const HUD_TOOLS: &[&str] = &["pop_up_ui_card", "spawn_native_window", "create_or_update_widget", "open_jai_view", "launch_interactive_simulation", "lookup_formula", "show_app_shortcuts", "screen_time_report", "thermal_advisor", "clipboard_history", "arrange_jai_window"];
 
 /// Answers of the network and account reads, by call: asked once per process, replayed after
 /// (a self-test does not ask a weather service five hundred times).
@@ -1741,7 +1741,7 @@ async fn press(tools: &ToolContext, defs: &[Value], tool: &str, args: &Value) ->
         },
     };
     // A view that loads from one of Sir's accounts opens when its answer is there.
-    let remote_view = tool == "open_jarvis_view" && args["view"] == "schedule";
+    let remote_view = tool == "open_jai_view" && args["view"] == "schedule";
     let budget = if remote || remote_view { NETWORK_BUDGET_MS } else if draws { UI_BUDGET_MS } else { LOCAL_BUDGET_MS };
     let lower = output.to_lowercase();
     if !success && NOT_SET_UP.iter().any(|w| lower.contains(w)) {
@@ -2050,17 +2050,17 @@ async fn matrix_f(app: &Jai) {
 }
 
 /// The matrices of one run (after the base suite of the live self-test, in the same run).
-/// `JARVIS_MATRICES` (for work on one of them: "B", "AD" …) limits the run to the ones named;
+/// `JAI_MATRICES` (for work on one of them: "B", "AD" …) limits the run to the ones named;
 /// a run that left one out is not the full verification.
 pub async fn matrices(app: &Jai, run: usize) {
     let tools = app.tools().clone();
     let before = conversation_rows(&tools);
-    let exports = std::env::temp_dir().join(format!("jarvis_exhaustive_exports_{}", std::process::id()));
+    let exports = std::env::temp_dir().join(format!("jai_exhaustive_exports_{}", std::process::id()));
     crate::block_actions::set_export_dir(Some(exports.clone()));
-    let only = std::env::var("JARVIS_MATRICES").ok().map(|named| named.to_uppercase()).filter(|named| !named.trim().is_empty());
+    let only = std::env::var("JAI_MATRICES").ok().map(|named| named.to_uppercase()).filter(|named| !named.trim().is_empty());
     let wanted = |matrix: char| only.as_deref().is_none_or(|named| named.contains(matrix));
     if let Some(named) = &only {
-        skip("exhaustive", "every matrix", format!("JARVIS_MATRICES limits this run to {named}"));
+        skip("exhaustive", "every matrix", format!("JAI_MATRICES limits this run to {named}"));
     }
     if wanted('A') {
         info!("[PROBE] Exhaustive run {}: matrix A (commands, five passes)", run + 1);
@@ -2219,11 +2219,11 @@ mod tests {
     }
 
     /// Where each sentence of a file goes, one per line: nothing runs, nothing is heard, no model
-    /// is asked. `JARVIS_ROUTES=<file> jarvis-test where_these_sentences_go --ignored --nocapture`
+    /// is asked. `JAI_ROUTES=<file> jai-test where_these_sentences_go --ignored --nocapture`
     #[test]
     #[ignore = "a reading aid, wants a file of sentences"]
     fn where_these_sentences_go() {
-        let path = std::env::var("JARVIS_ROUTES").expect("JARVIS_ROUTES names the file of sentences");
+        let path = std::env::var("JAI_ROUTES").expect("JAI_ROUTES names the file of sentences");
         let text = std::fs::read_to_string(path).expect("the file of sentences");
         for line in text.lines().map(str::trim).filter(|line| !line.is_empty()) {
             if let Some(set) = line.strip_prefix('#') {
@@ -2293,7 +2293,7 @@ mod tests {
     }
 
     /// The widgets saved in Sir's memory database:
-    /// `cargo test saved_widgets -- --ignored --nocapture`. With `JARVIS_REMOVE_WIDGET=<id>`
+    /// `cargo test saved_widgets -- --ignored --nocapture`. With `JAI_REMOVE_WIDGET=<id>`
     /// that one is removed. (The first exhaustive runs, 2026-11-06, pressed the Feature Lab's
     /// widget example for real and left its gauge in his widgets panel; the verifier now uses
     /// `PROBE_WIDGET` and removes it.)
@@ -2314,7 +2314,7 @@ mod tests {
             eprintln!("recent {row}");
         }
         eprintln!("conversation_logs: {:?} (rows, highest id)", conn.query_row("SELECT COUNT(*), COALESCE(MAX(rowid), 0) FROM conversation_logs", [], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))).ok());
-        if let Ok(id) = std::env::var("JARVIS_REMOVE_WIDGET") {
+        if let Ok(id) = std::env::var("JAI_REMOVE_WIDGET") {
             eprintln!("removed widget {id}: {:?}", conn.execute("DELETE FROM widgets WHERE id = ?1", [&id]));
             eprintln!("removed recent {id}: {:?}", conn.execute("DELETE FROM recent_views WHERE id = ?1", [&id]));
         }

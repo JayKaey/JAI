@@ -262,7 +262,7 @@ mod tests {
 
     #[test]
     fn the_program_in_front_gets_its_own_sheet() {
-        assert_eq!(for_app("Code.exe", "main.rs - jarvis - Visual Studio Code").map(|s| s.app), Some("Visual Studio Code"));
+        assert_eq!(for_app("Code.exe", "main.rs - jai - Visual Studio Code").map(|s| s.app), Some("Visual Studio Code"));
         assert_eq!(for_app("chrome.exe", "YouTube - Google Chrome").map(|s| s.app), Some("Browser"));
         assert_eq!(for_app("javaw.exe", "Minecraft 1.21").map(|s| s.app), Some("Minecraft"));
         assert_eq!(for_app("ApplicationFrameHost.exe", "Discord | #general").map(|s| s.app), Some("Discord"), "by the title when the process says nothing");

@@ -124,7 +124,7 @@ fn rows(ui: &mut Ui, channels: &mut [Channel], rt: &Handle) {
 /// Registers the mixer while it is open (a block on the board, or its own window once detached).
 pub(super) fn show(ctx: &egui::Context, rt: &Handle) {
     // (Closed while it was its own window: it plays its exit first.)
-    if !super::detached_keep(ctx, ViewportId::from_hash_of("jarvis_audio_mixer"), OPEN.load(Ordering::Acquire)) {
+    if !super::detached_keep(ctx, ViewportId::from_hash_of("jai_audio_mixer"), OPEN.load(Ordering::Acquire)) {
         crate::hud_dock::forget(ID);
         return;
     }
@@ -138,7 +138,7 @@ pub(super) fn show(ctx: &egui::Context, rt: &Handle) {
         }
         return;
     }
-    let mut builder = ViewportBuilder::default().with_title("Mixer — J.A.I.").with_app_id("jarvis").with_inner_size([580.0, 340.0]).with_min_inner_size([480.0, 200.0]).with_decorations(false);
+    let mut builder = ViewportBuilder::default().with_title("Mixer — J.A.I.").with_app_id("jai").with_inner_size([580.0, 340.0]).with_min_inner_size([480.0, 200.0]).with_decorations(false);
     if let Some(icon) = super::window_icon() {
         builder = builder.with_icon(Arc::new(icon));
     }
@@ -147,7 +147,7 @@ pub(super) fn show(ctx: &egui::Context, rt: &Handle) {
     }
     let builder = super::for_test_session(builder);
     let rt = rt.clone();
-    ctx.show_viewport_deferred(ViewportId::from_hash_of("jarvis_audio_mixer"), builder, move |ctx, class| {
+    ctx.show_viewport_deferred(ViewportId::from_hash_of("jai_audio_mixer"), builder, move |ctx, class| {
         crate::crash_guard::guard("mixer", || {
             if ctx.input(|i| i.viewport().close_requested()) || (!OPEN.load(Ordering::Acquire) && !super::detached_leaving(ctx)) {
                 OPEN.store(false, Ordering::Release);

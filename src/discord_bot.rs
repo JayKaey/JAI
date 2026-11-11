@@ -142,7 +142,7 @@ pub struct Posted {
     /// JAI's own.
     pub outgoing: bool,
     /// A DM to JAI, a mention of him or a reply to him.
-    pub to_jarvis: bool,
+    pub to_jai: bool,
     /// Sir was mentioned.
     pub to_sir: bool,
 }
@@ -374,7 +374,7 @@ impl Bot {
         json!({ "op": 2, "d": {
             "token": token,
             "intents": self.intents(),
-            "properties": { "os": std::env::consts::OS, "browser": "jarvis", "device": "jarvis" },
+            "properties": { "os": std::env::consts::OS, "browser": "jai", "device": "jai" },
             "presence": { "since": null, "activities": activity, "status": "online", "afk": false },
         }})
     }
@@ -596,17 +596,17 @@ impl Bot {
             s.names.insert(author, name.clone());
             let outgoing = Some(author) == me;
             let replying_to_me = me.is_some() && snowflake(&d["referenced_message"]["author"]["id"]) == me;
-            let to_jarvis = !outgoing && (guild_id.is_none() || me.is_some_and(|m| mentions.contains(&m)) || replying_to_me);
+            let to_jai = !outgoing && (guild_id.is_none() || me.is_some_and(|m| mentions.contains(&m)) || replying_to_me);
             let to_sir = owner.is_some_and(|o| mentions.contains(&o));
             if guild_id.is_none() && !outgoing {
                 s.dms.insert(author, channel_id);
             }
-            let posted = Posted { at: Local::now(), id: snowflake(&d["id"]).unwrap_or(0), channel_id, guild_id, author_id: author, author: name.clone(), text, outgoing, to_jarvis, to_sir };
+            let posted = Posted { at: Local::now(), id: snowflake(&d["id"]).unwrap_or(0), channel_id, guild_id, author_id: author, author: name.clone(), text, outgoing, to_jai, to_sir };
             s.messages.push_back(posted.clone());
             while s.messages.len() > KEEP_MESSAGES {
                 s.messages.pop_front();
             }
-            if !outgoing && !other_bot && (to_jarvis || to_sir) && owner != Some(author) {
+            if !outgoing && !other_bot && (to_jai || to_sir) && owner != Some(author) {
                 s.unread += 1;
             }
             posted
@@ -624,7 +624,7 @@ impl Bot {
             self.rt.spawn(async move { bot.owner_command(posted).await });
             return;
         }
-        if !posted.to_jarvis {
+        if !posted.to_jai {
             if posted.to_sir {
                 let place = self.place(&posted);
                 self.host.notice(format!("Discord: {name} mentioned you in {place}: {}", short(&posted.text, 90)));
@@ -808,7 +808,7 @@ impl Bot {
                 _ => self.http.get(&url),
             }
             .header("Authorization", format!("Bot {token}"))
-            .header("User-Agent", "DiscordBot (jarvis, 3.2)");
+            .header("User-Agent", "DiscordBot (jai, 3.2)");
             request = match &body {
                 Some(b) => request.json(b),
                 None if method == "POST" => request.header("Content-Length", "0"),
@@ -1316,7 +1316,7 @@ async fn turn(app: &crate::app::Jai, text: &str) -> Option<String> {
     let wait = async {
         loop {
             match events.recv().await {
-                Ok(HudEvent::AssistantDone { text, model, interrupted, .. }) if model != "jarvis" || interrupted => return Some(text),
+                Ok(HudEvent::AssistantDone { text, model, interrupted, .. }) if model != "jai" || interrupted => return Some(text),
                 Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
             }
@@ -1393,7 +1393,7 @@ fn claim_account() -> bool {
         use windows::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS};
         // SAFETY: named mutex creation; the handle stays open until the process ends, on purpose.
         unsafe {
-            match windows::Win32::System::Threading::CreateMutexW(None, false, windows::core::w!("Local\\JARVIS-V3-discord-account")) {
+            match windows::Win32::System::Threading::CreateMutexW(None, false, windows::core::w!("Local\\JAI-V3-discord-account")) {
                 Ok(_) => GetLastError() != ERROR_ALREADY_EXISTS,
                 Err(_) => true,
             }
@@ -1671,7 +1671,7 @@ pub async fn run_tool(tools: &ToolContext, args: &Value) -> Result<String, Strin
                     .filter(|m| !m.outgoing && Some(m.author_id) != owner)
                     .filter(|m| match &from {
                         Some(f) => m.author.to_lowercase().starts_with(f.as_str()) || names.get(&m.channel_id).is_some_and(|n| n.contains(f.as_str())),
-                        None => m.to_jarvis || m.to_sir,
+                        None => m.to_jai || m.to_sir,
                     })
                     .collect();
                 picked.iter().rev().take(12).rev().map(|m| (*m).clone()).collect()
@@ -1685,7 +1685,7 @@ pub async fn run_tool(tools: &ToolContext, args: &Value) -> Result<String, Strin
             if message.is_empty() {
                 return Ok(spoken("Discord: nothing to reply yet", "What shall I answer, Sir?"));
             }
-            let last = lock(&bot.state).messages.iter().rev().find(|m| !m.outgoing && (m.to_jarvis || m.to_sir) && Some(m.author_id) != bot.host.settings().owner()).cloned();
+            let last = lock(&bot.state).messages.iter().rev().find(|m| !m.outgoing && (m.to_jai || m.to_sir) && Some(m.author_id) != bot.host.settings().owner()).cloned();
             let last = last.ok_or("Nobody has written to you or me on Discord lately, Sir.")?;
             if !bool_arg(args, "send_immediately").unwrap_or(false) {
                 tools.focus.note_offer(crate::focus::PendingOffer { tool: TOOL.into(), args: json!({ "action": "reply", "message": message, "send_immediately": true }), terminate: None });

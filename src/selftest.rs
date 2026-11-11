@@ -1,4 +1,4 @@
-//! `jarvis --selftest`: exercises the real pipeline without a microphone.
+//! `jai --selftest`: exercises the real pipeline without a microphone.
 //!
 //! Kokoro speaks a command → embedded in a noisy 16 kHz "microphone" stream → Silero VAD +
 //! state machine (calibration, onset, end-of-speech latency) → Whisper → wake word → intent.
@@ -315,7 +315,7 @@ pub async fn run(cfg: &JaiConfig, speak: bool, bench: bool, llm_stage: bool) -> 
         }
     };
     // The film voice synthesises 2 % faster; the mastering chain's pitch lock stretches it back.
-    let speed = crate::jarvis_voice_dsp::synthesis_speed(cfg.kokoro_speed);
+    let speed = crate::jai_voice_dsp::synthesis_speed(cfg.kokoro_speed);
     let _ = kokoro.synthesize(&phonemizer.phonemize("Sir."), &cfg.kokoro_voice, speed);
     let t = Instant::now();
     let speech24 = match kokoro.synthesize(&ipa, &cfg.kokoro_voice, speed) {
@@ -340,7 +340,7 @@ pub async fn run(cfg: &JaiConfig, speak: bool, bench: bool, llm_stage: bool) -> 
     let t = Instant::now();
     let mastered = tts::finish_clause_audio(speech24.clone(), command);
     let master_ms = t.elapsed().as_secs_f64() * 1000.0;
-    let rate = crate::jarvis_voice_dsp::MASTER_RATE;
+    let rate = crate::jai_voice_dsp::MASTER_RATE;
     let (peak, level) = (dsp::peak(&mastered), dsp::rms(&mastered));
     r.check(
         "Film voice chain",
@@ -614,7 +614,7 @@ pub async fn run(cfg: &JaiConfig, speak: bool, bench: bool, llm_stage: bool) -> 
     let reminder = crate::reminders::parse_request("Erinnere mich in 5 Minuten an den Tee", chrono::Local::now());
     r.check("Reminder parsing (DE)", reminder.as_ref().is_some_and(|(_, what)| what == "den Tee"), format!("{reminder:?}"));
     let quit = intents::parse("can you please close ur self");
-    r.check("Self-shutdown fallback", matches!(&quit, Some(Intent::Tool { name: "shutdown_jarvis", .. })), format!("{quit:?}"));
+    r.check("Self-shutdown fallback", matches!(&quit, Some(Intent::Tool { name: "shutdown_jai", .. })), format!("{quit:?}"));
     let browser = intents::parse("Nana, open my browser").or_else(|| intents::resolve_fuzzy("Help my browser"));
     r.check("Browser intent", matches!(&browser, Some(Intent::Tool { name: "open_application", .. })), format!("{browser:?}"));
     let mode = crate::modality::parse_command("Only talk when I talk to you");
@@ -630,7 +630,7 @@ pub async fn run(cfg: &JaiConfig, speak: bool, bench: bool, llm_stage: bool) -> 
     });
     match espeak {
         Some(bin) => {
-            let wav = std::env::temp_dir().join("jarvis_selftest_de.wav");
+            let wav = std::env::temp_dir().join("jai_selftest_de.wav");
             let mut cmd = std::process::Command::new(&bin);
             cmd.args(["-v", "de", "-s", "150", "-w"]).arg(&wav).arg("Hallo Dschey, wie spät ist es?");
             crate::shell::hide_console_std(&mut cmd);

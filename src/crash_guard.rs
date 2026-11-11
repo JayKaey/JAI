@@ -76,7 +76,7 @@ pub fn supervise(name: &str, mut body: impl FnMut()) {
     }
 }
 
-/// Stack of every async worker (`jarvis-rt`). Tokio's 2 MB default overflowed on "open my system
+/// Stack of every async worker (`jai-rt`). Tokio's 2 MB default overflowed on "open my system
 /// stats" (a tool that runs another tool: two of the big `ToolContext::execute` poll frames on
 /// top of the turn), which aborted the whole process (a stack overflow cannot be caught).
 pub const RUNTIME_STACK_BYTES: usize = 16 * 1024 * 1024;
@@ -84,7 +84,7 @@ pub const RUNTIME_STACK_BYTES: usize = 16 * 1024 * 1024;
 /// The application's multi-threaded runtime: named workers with `RUNTIME_STACK_BYTES` of stack.
 pub fn runtime_builder() -> tokio::runtime::Builder {
     let mut b = tokio::runtime::Builder::new_multi_thread();
-    b.enable_all().thread_name("jarvis-rt").thread_stack_size(RUNTIME_STACK_BYTES);
+    b.enable_all().thread_name("jai-rt").thread_stack_size(RUNTIME_STACK_BYTES);
     b
 }
 

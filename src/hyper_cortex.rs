@@ -90,7 +90,7 @@ const READ_ONLY: &[(&str, &[&str])] = &[
     ("query_connected_website", &[]),
     ("get_precise_location_weather", &[]),
     ("check_ride_and_commute_status", &[]),
-    ("list_jarvis_features", &[]),
+    ("list_jai_features", &[]),
     ("recent_actions", &[]),
     ("whats_new", &[]),
     ("whats_open", &[]),
@@ -123,7 +123,7 @@ const READ_ONLY: &[(&str, &[&str])] = &[
     ("manage_location_settings", &["status"]),
     ("show_3d_model", &["measure", "parts"]),
     // live layers (C1): view "live"'s answers (passes, traffic, weather_on, rain_soon, alerts).
-    ("open_jarvis_view", &crate::live_layers::READ_ACTIONS),
+    ("open_jai_view", &crate::live_layers::READ_ACTIONS),
 ];
 
 /// Reads whose answer is the same a moment later and that put nothing on screen: these may be

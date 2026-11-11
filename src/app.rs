@@ -716,7 +716,7 @@ impl Jai {
                     info!("[GUARDIAN] {:?} at {:.1}: {message}", anomaly.kind, anomaly.value);
                     // The same offer as a card: "yes" and "terminate it" are its buttons. A
                     // telemetry alert comes with its two pips.
-                    crate::tts::play_cue(crate::jarvis_voice_dsp::Earcon::Alert);
+                    crate::tts::play_cue(crate::jai_voice_dsp::Earcon::Alert);
                     crate::proactive_butler::show(&crate::proactive_butler::hardware(&anomaly, &message, &offer));
                     app.tools().focus.note_offer(crate::focus::PendingOffer {
                         tool: offer.primary.0.to_string(),
@@ -1243,8 +1243,8 @@ impl Jai {
         } else if !wake_required && !self.inner.config.read(|c| c.addressee_detection) {
             crate::ears::Addressee::HandsFree
         } else {
-            let (jarvis_focused, gaming) = foreground_context().await;
-            let ctx = crate::ears::AddresseeContext { wake_word: wake.matched, wake_required, conversation_open: in_window, jarvis_focused, gaming };
+            let (jai_focused, gaming) = foreground_context().await;
+            let ctx = crate::ears::AddresseeContext { wake_word: wake.matched, wake_required, conversation_open: in_window, jai_focused, gaming };
             crate::ears::classify_addressee(&transcript.text, &ctx)
         };
         let source = if u.ptt {
@@ -1645,7 +1645,7 @@ impl Jai {
             message_id: uuid::Uuid::new_v4().to_string(),
             text: text.to_string(),
             latency_ms: 0,
-            model: "jarvis".into(),
+            model: "jai".into(),
             interrupted: false,
         });
         if self.tools().modality.gate(trigger, text).speaks() {
@@ -1792,7 +1792,7 @@ impl Jai {
         }
     }
 
-    /// Quits once the goodbye has been spoken ("JAI, shut down", `shutdown_jarvis`).
+    /// Quits once the goodbye has been spoken ("JAI, shut down", `shutdown_jai`).
     fn shutdown_after_reply(&self) {
         if self.inner.quitting.swap(true, Ordering::AcqRel) {
             return;
@@ -1870,14 +1870,14 @@ impl Jai {
         self.emit(HudEvent::ConfigState(self.config_state()));
     }
 
-    /// A quick-action button: `jarvis: <command>`, `shell: <cmd>`, `skill: <name>`, `app: <name>`
+    /// A quick-action button: `jai: <command>`, `shell: <cmd>`, `skill: <name>`, `app: <name>`
     /// or `url: <address>` (no prefix = a JAI command).
     async fn run_widget_action(&self, action: &str) {
         let (kind, value) = match action.split_once(':') {
-            Some((k, v)) if matches!(k.trim().to_lowercase().as_str(), "jarvis" | "shell" | "skill" | "app" | "url" | "https" | "http") => {
+            Some((k, v)) if matches!(k.trim().to_lowercase().as_str(), "jai" | "shell" | "skill" | "app" | "url" | "https" | "http") => {
                 (k.trim().to_lowercase(), v.trim().to_string())
             }
-            _ => ("jarvis".to_string(), action.trim().to_string()),
+            _ => ("jai".to_string(), action.trim().to_string()),
         };
         match kind.as_str() {
             "shell" => self.run_ui_tool("run_shell_command", json!({ "command": value })).await,

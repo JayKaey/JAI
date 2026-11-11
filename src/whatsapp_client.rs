@@ -41,7 +41,7 @@ pub struct WhatsAppMessage {
     pub timestamp: String,
     pub is_unread: bool,
     pub incoming: bool,
-    /// "notification", "bridge", "webhook" or "jarvis".
+    /// "notification", "bridge", "webhook" or "jai".
     pub source: String,
     pub phone: String,
 }
@@ -507,7 +507,7 @@ fn open_wpn(path: &Path) -> Result<Connection, String> {
             return Ok(conn);
         }
     }
-    let dir = std::env::temp_dir().join("jarvis_wpn");
+    let dir = std::env::temp_dir().join("jai_wpn");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let copy = dir.join("wpndatabase.db");
     std::fs::copy(path, &copy).map_err(|e| format!("cannot copy the notification database: {e}"))?;

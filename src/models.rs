@@ -208,7 +208,7 @@ pub async fn ensure(cfg: &JaiConfig) -> Vec<ModelFile> {
     let client = match reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(15))
         .read_timeout(Duration::from_secs(60))
-        .user_agent("jarvis-model-fetcher/3.1")
+        .user_agent("jai-model-fetcher/3.1")
         .build()
     {
         Ok(c) => c,
@@ -434,7 +434,7 @@ mod tests {
     fn extracts_voice_from_npz() {
         let george: Vec<f32> = (0..512).map(|i| i as f32 * 0.5).collect();
         let archive = zip(&[("af.npy", npy(&[1.0; 256])), ("bm_george.npy", npy(&george))]);
-        let path = std::env::temp_dir().join(format!("jarvis_voices_{}.bin", uuid::Uuid::new_v4()));
+        let path = std::env::temp_dir().join(format!("jai_voices_{}.bin", uuid::Uuid::new_v4()));
         std::fs::write(&path, archive).unwrap();
         assert_eq!(list_voices(&path).unwrap(), vec!["af", "bm_george"]);
         assert_eq!(extract_voice(&path, "bm_george").unwrap(), george);

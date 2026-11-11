@@ -1129,7 +1129,7 @@ impl Layers {
     }
 }
 
-/// What `open_jarvis_view {"view": "earth", …}` asks for.
+/// What `open_jai_view {"view": "earth", …}` asks for.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Action {
     Show,
@@ -3794,7 +3794,7 @@ async fn fetch_tile(key: TileKey, form: usize, hue: f32) -> Result<ColorImage, b
 
 // ---------------------------------------------------------------------------------- run ----
 
-/// `open_jarvis_view {"view": "earth", "action": …, "place": …, "radius_km": …, "layer": …}`:
+/// `open_jai_view {"view": "earth", "action": …, "place": …, "radius_km": …, "layer": …}`:
 /// opens the globe or acts on it. The result is the display text and a "Spoken:" line.
 pub async fn run(args: &Value) -> Result<String, String> {
     let action = parse_action(args)?;
@@ -4886,7 +4886,7 @@ mod tests {
 
     #[test]
     fn the_cache_keeps_under_its_limit_oldest_first() {
-        let dir = std::env::temp_dir().join(format!("jarvis_earth_cache_test_{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("jai_earth_cache_test_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("tiles")).unwrap();
         for i in 0..5 {

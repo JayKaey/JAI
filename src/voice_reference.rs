@@ -1,23 +1,16 @@
-//! The reference voice: a recording of the film's J.A.R.V.I.S. (`Voicy_J.A.R.V.I.S..mp3`, "Formally
-//! known as Just A Rather Very Intelligent System…").
+//! The reference voice: a recording of the film voice.
 //!
-//! Drop the clip at `assets/jarvis_voice_reference.mp3` (or keep `Voicy_J.A.R.V.I.S..mp3` /
-//! `jarvis voice.mp3` next to JAI.exe). This module finds it, decodes it (MP3 or WAV, pure
+//! Drop the clip at `assets/jai_voice_reference.mp3` (or `.wav`). This module finds it,
+//! decodes it (MP3 or WAV, pure
 //! Rust via `symphonia`) and measures the level side of a voice: speech RMS, crest factor and a
 //! coarse six-band balance. `fish_zero_shot_tts` builds the 128-band envelope transfer, the F0
 //! analysis and the level lock on top of it.
 
-use crate::jarvis_voice_dsp::{gain_to_db, Bq};
+use crate::jai_voice_dsp::{gain_to_db, Bq};
 use std::path::{Path, PathBuf};
 
 /// Where the clip is looked for, in order (relative to the folder JAI.exe runs from).
-pub const REFERENCE_PATHS: [&str; 5] = [
-    "assets/jarvis_voice_reference.mp3",
-    "assets/jarvis_voice_reference.wav",
-    "Voicy_J.A.R.V.I.S..mp3",
-    "jarvis voice.mp3",
-    "jarvis_voice_reference.mp3",
-];
+pub const REFERENCE_PATHS: [&str; 3] = ["assets/jai_voice_reference.mp3", "assets/jai_voice_reference.wav", "jai_voice_reference.mp3"];
 /// Band centres of the spectral envelope (Hz).
 pub const BANDS: [f32; 6] = [135.0, 420.0, 1000.0, 2850.0, 5000.0, 7600.0];
 /// The band the others are measured against (1 kHz).
@@ -140,7 +133,7 @@ pub fn reference_path() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::jarvis_voice_dsp::db_to_gain;
+    use crate::jai_voice_dsp::db_to_gain;
     use std::f32::consts::TAU;
 
     const R: u32 = 48_000;
@@ -183,10 +176,9 @@ mod tests {
 
     #[test]
     fn decodes_a_wav_and_knows_where_to_look() {
-        assert_eq!(REFERENCE_PATHS[0], "assets/jarvis_voice_reference.mp3");
-        assert!(REFERENCE_PATHS.contains(&"Voicy_J.A.R.V.I.S..mp3"));
+        assert_eq!(REFERENCE_PATHS[0], "assets/jai_voice_reference.mp3");
         // A 16-bit stereo WAV written by hand decodes to the mono average.
-        let dir = std::env::temp_dir().join(format!("jarvis_ref_{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("jai_ref_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("ref.wav");
         let frames: Vec<(i16, i16)> = (0..22_050).map(|i| (((i as f32 * 0.05).sin() * 8000.0) as i16, 0)).collect();
@@ -223,11 +215,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
-    /// Run with `JARVIS_VOICE_REFERENCE=<path to the mp3> cargo test -- --ignored reference_clip`.
+    /// Run with `JAI_VOICE_REFERENCE=<path to the mp3> cargo test -- --ignored reference_clip`.
     #[test]
     #[ignore]
     fn reference_clip_profile() {
-        let path = std::env::var("JARVIS_VOICE_REFERENCE").expect("set JARVIS_VOICE_REFERENCE");
+        let path = std::env::var("JAI_VOICE_REFERENCE").expect("set JAI_VOICE_REFERENCE");
         let (pcm, rate) = decode(Path::new(&path)).unwrap();
         let profile = analyze(&pcm, rate).unwrap();
         println!("{} Hz, {:.1} s: {profile:?}", rate, pcm.len() as f32 / rate as f32);

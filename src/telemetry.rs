@@ -149,7 +149,7 @@ impl SystemMonitor {
         let latest_thread = Arc::clone(&latest);
 
         let spawned = std::thread::Builder::new()
-            .name("jarvis-telemetry".into())
+            .name("jai-telemetry".into())
             .spawn(move || {
                 let mut sampler = Sampler::new(profile);
                 loop {

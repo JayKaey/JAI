@@ -1085,7 +1085,7 @@ fn check_block_menu(stage: &mut Stage, scene: &mut dyn FnMut(&egui::Context), n:
     use crate::block_actions::BlockAction;
     let mut findings = Vec::new();
     let id = window_id(n);
-    let exports = std::env::temp_dir().join(format!("jarvis_verifier_exports_{}", std::process::id()));
+    let exports = std::env::temp_dir().join(format!("jai_verifier_exports_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&exports);
     crate::block_actions::set_export_dir(Some(exports.clone()));
     // Opens the menu on the block's title row and clicks the entry called `label`.
@@ -1279,12 +1279,12 @@ pub fn check_orb_glide(screen: Rect, pass: usize) -> Vec<String> {
 }
 
 /// The radial voice ticks of the 2D orb move with JAI's own voice only: Sir's microphone
-/// level never reaches the emblem. `voice_of(state, jarvis_level, mic_level)` is the HUD's own
+/// level never reaches the emblem. `voice_of(state, jai_level, mic_level)` is the HUD's own
 /// mapping (`gui::emblem_voice_of`).
 pub fn check_voice_ticks(voice_of: &dyn Fn(&str, f32, f32) -> f32) -> Vec<String> {
     let mut findings = Vec::new();
-    for (state, jarvis, mic) in [("listening", 0.0f32, 0.95f32), ("idle", 0.0, 0.85), ("thinking", 0.0, 1.0), ("speaking", 0.0, 0.9)] {
-        let voice = voice_of(state, jarvis, mic);
+    for (state, jai, mic) in [("listening", 0.0f32, 0.95f32), ("idle", 0.0, 0.85), ("thinking", 0.0, 1.0), ("speaking", 0.0, 0.9)] {
+        let voice = voice_of(state, jai, mic);
         if emblem::tach_ticks(voice) != emblem::tach_ticks(0.0) {
             findings.push(format!("the voice ticks move while JAI is silent ({state}, microphone at {mic}): voice {voice}"));
         }

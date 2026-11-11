@@ -338,7 +338,7 @@ mod tests {
             ("Jay.", ""),
             ("J.A.I.", ""),
             ("Hey Jay", ""),
-            // Whisper's stray word before the name (2026-11-09: "In Jarvis, can you show me …").
+            // Whisper's stray word before the name (2026-11-09: "In JAI, can you show me …").
             ("In Jay, can you show me my storage?", "can you show me my storage?"),
             ("And Jay, can you clear my recycle bin?", "can you clear my recycle bin?"),
             // His name as the subject: the order written as a report (verifier, 2026-11-07).

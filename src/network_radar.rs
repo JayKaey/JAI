@@ -454,7 +454,7 @@ impl Action {
     }
 }
 
-/// `open_jarvis_view {"view": "network_radar", "action": …}`: `show` opens the radar and sweeps
+/// `open_jai_view {"view": "network_radar", "action": …}`: `show` opens the radar and sweeps
 /// (unless a sweep is under a minute old), `rescan` sweeps again, `check_security` answers
 /// whether every device is known (sweeping first when it has to). The result is the display
 /// text and a "Spoken:" line; what a sweep finds later is said through `announcements`.

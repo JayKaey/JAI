@@ -642,7 +642,7 @@ mod tests {
         assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "quiet ok");
         assert_eq!(String::from_utf8_lossy(&out.stderr).trim(), "err");
         assert_eq!(out.code, Some(3));
-        let env = run_helper(ps, ["-NoProfile", "-Command", "Write-Output $env:JARVIS_TEST_VAR"], None, &[("JARVIS_TEST_VAR".into(), "visible".into())], Duration::from_secs(30)).await.unwrap();
+        let env = run_helper(ps, ["-NoProfile", "-Command", "Write-Output $env:JAI_TEST_VAR"], None, &[("JAI_TEST_VAR".into(), "visible".into())], Duration::from_secs(30)).await.unwrap();
         assert_eq!(String::from_utf8_lossy(&env.stdout).trim(), "visible");
         let started = Instant::now();
         let slow = run_helper(ps, ["-NoProfile", "-Command", "Start-Sleep -Seconds 20"], None, &[], Duration::from_millis(1500)).await;

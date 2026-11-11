@@ -4,7 +4,7 @@
 //! the screen", "shrink it", "minimise it", "restore it", "mach es größer", "verschieb es in die
 //! Mitte", "Vollbild".
 //!
-//! One tool, `arrange_jarvis_window`, for his views on the board (in-app blocks: they glide
+//! One tool, `arrange_jai_window`, for his views on the board (in-app blocks: they glide
 //! there, `hud_dock`) and in windows of their own (OS windows: `ViewportCommand`s). The HUD
 //! carries an arrangement out in its next frame, where it knows the screens (`gui`).
 //!
@@ -476,7 +476,7 @@ fn it(ctx: &ToolContext, ttl: Duration) -> Option<String> {
 }
 
 /// The call an unnamed window command becomes when "it" is one of his views (or one of them
-/// fills the screen, for "exit full screen"): `arrange_jarvis_window` arguments, or None (it
+/// fills the screen, for "exit full screen"): `arrange_jai_window` arguments, or None (it
 /// stays with the app). `view_is_it`: "it" is one of his views; `fullscreen`: a view of his
 /// fills a screen; `latest_is_widget_window`: "it" is a window of the window engine, which
 /// `update_native_window` sizes itself.
@@ -587,7 +587,7 @@ fn is_them(o: &str) -> bool {
 /// Never this tool: JAI himself (his HUD, board, orb, core), which only moves when Sir says
 /// "yourself" or "JAI" (`configure_interface`).
 fn names_himself(o: &str) -> bool {
-    crate::tools::names_jarvis(o)
+    crate::tools::names_jai(o)
         || matches!(
             o.trim_start_matches("the ").trim_start_matches("your ").trim_start_matches("my "),
             "hud" | "board" | "hud board" | "orb" | "core" | "emblem" | "sphere" | "reactor" | "ring" | "rings" | "kugel" | "kern" | "interface" | "gui" | "screen" | "display" | "monitor" | "console" | "text console" | "dich" | "dein fenster" | "das hud" | "die kugel" | "den orb"
@@ -606,7 +606,7 @@ fn view_name(o: &str) -> Option<String> {
     if name.len() < 3 || names_himself(&name) {
         return None;
     }
-    use crate::jarvis_views::JaiSubWindow as View;
+    use crate::jai_views::JaiSubWindow as View;
     // The panels by their own names: never an app of his.
     if matches!(View::parse(&name), Some(View::Earth | View::NetworkRadar | View::DiskMap)) && name.split_whitespace().count() <= 3 {
         return Some(name);
@@ -689,7 +689,7 @@ static SWAP: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^(?:swap|exchange|switch around|tausch|tausche|vertausch|vertausche)\s+(.+?)(?:\s+(?:around|places|positions|die plätze|die positionen|um))?$").expect("swap regex")
 });
 
-/// The arguments of `arrange_jarvis_window` for a sentence that says to move or size one of his
+/// The arguments of `arrange_jai_window` for a sentence that says to move or size one of his
 /// views, or None (nothing for this tool: an app, himself, or a phrase another rule has).
 pub fn parse(text: &str) -> Option<Value> {
     let s = crate::intents::normalize_phrase(text);
@@ -830,12 +830,12 @@ pub fn parse(text: &str) -> Option<Value> {
 // ---------------------------------------------------------------------------- the tool ----
 
 pub fn is_tool(name: &str) -> bool {
-    name == "arrange_jarvis_window"
+    name == "arrange_jai_window"
 }
 
 pub fn definitions() -> Vec<Value> {
     vec![json!({"type": "function", "function": {
-        "name": "arrange_jarvis_window",
+        "name": "arrange_jai_window",
         "description": "Move, size, full-screen, minimise, restore, detach or dock one of YOUR OWN views (Earth, radar, disk map, Feature Lab, a simulation, a window you opened): \"full screen the Earth\", \"move it to the middle\". target: its name, \"it\" (the latest) or \"them\". Not Sir's apps (window_management), not yourself.",
         "parameters": {"type": "object", "properties": {
             "target": {"type": "string"},
@@ -870,12 +870,12 @@ pub fn spoken_name(id: &str) -> String {
 }
 
 /// The view a name means, open or not: its block id (a simulation's is only known once it is up:
-/// `sim:`), and None when it is open now, else the `open_jarvis_view` name that opens it.
+/// `sim:`), and None when it is open now, else the `open_jai_view` name that opens it.
 fn resolve_named(name: &str) -> Option<(String, Option<&'static str>)> {
     if let Some(id) = crate::hud_dock::find_open(name) {
         return Some((id, None));
     }
-    use crate::jarvis_views::JaiSubWindow as View;
+    use crate::jai_views::JaiSubWindow as View;
     let view = View::parse(name)?;
     let id = match view {
         View::SystemStatsMonitor => "system_telemetry",
@@ -893,10 +893,10 @@ fn latest_two() -> Option<(String, String)> {
     Some((ids.next()?, ids.next()?))
 }
 
-/// `arrange_jarvis_window`. The HUD carries it out in its next frame; the result ends with a
+/// `arrange_jai_window`. The HUD carries it out in its next frame; the result ends with a
 /// "Spoken:" line.
 pub async fn run_tool(ctx: &ToolContext, args: &Value) -> Result<String, String> {
-    let action = str_arg(args, &["action"]).and_then(Action::parse).ok_or("arrange_jarvis_window needs an action (move, resize, fullscreen, exit_fullscreen, maximize, restore, minimize, detach, dock, to_monitor, side_by_side, swap).")?;
+    let action = str_arg(args, &["action"]).and_then(Action::parse).ok_or("arrange_jai_window needs an action (move, resize, fullscreen, exit_fullscreen, maximize, restore, minimize, detach, dock, to_monitor, side_by_side, swap).")?;
     let position = str_arg(args, &["position", "where", "place"]).map(|p| Position::parse(p).ok_or(format!("'{p}' is not a place I know (centre, left, right, top, bottom, a corner, a third)."))).transpose()?;
     let size = str_arg(args, &["size"]).map(|s| Size::parse(s).ok_or(format!("'{s}' is not a size I know (bigger, smaller, half, 60%, 900x600)."))).transpose()?;
     let monitor = args.get("monitor").or_else(|| args.get("target_monitor")).filter(|m| !m.is_null()).cloned();
@@ -909,7 +909,7 @@ pub async fn run_tool(ctx: &ToolContext, args: &Value) -> Result<String, String>
     let raw = str_arg(args, &["target", "view", "name", "id"]).unwrap_or("it").to_string();
     let lower = raw.to_lowercase();
     if names_himself(&lower) {
-        return Err("arrange_jarvis_window arranges my views; my own HUD moves with configure_interface (\"full screen yourself\").".into());
+        return Err("arrange_jai_window arranges my views; my own HUD moves with configure_interface (\"full screen yourself\").".into());
     }
     // "Exit full screen": whichever of his views fills a screen.
     let raw = if lower == "fullscreen" || (action == Action::ExitFullscreen && is_it(&lower)) { fullscreen_view().unwrap_or(raw) } else { raw };
@@ -943,14 +943,14 @@ pub async fn run_tool(ctx: &ToolContext, args: &Value) -> Result<String, String>
         if matches!(action, Action::Minimize | Action::ExitFullscreen | Action::Restore | Action::Dock) {
             return Err(format!("{} is not open, Sir.", capitalised(&spoken_name(&id))));
         }
-        let opened = Box::pin(ctx.execute("open_jarvis_view", &json!({ "view": view }))).await;
+        let opened = Box::pin(ctx.execute("open_jai_view", &json!({ "view": view }))).await;
         if !opened.success {
             return Err(format!("I could not open {}: {}", spoken_name(&id), opened.output.trim_start_matches("Error: ")));
         }
     }
     // (A window of the window engine: "close it" means it now, as for one it just opened.)
     if ctx.widgets.find_window_named(&id).is_some() {
-        ctx.focus.note_jarvis_window(&id);
+        ctx.focus.note_jai_window(&id);
     }
     crate::hud_dock::touch(&id);
     let wait = if opening.is_some() { OPENING_WAIT } else { NEXT_FRAME_WAIT };
@@ -1197,6 +1197,6 @@ mod tests {
         assert_eq!(redirect("update_native_window", &json!({ "id": "focus", "size": "bigger" }), true, false, true), None, "a window of the window engine sizes itself");
         assert_eq!(redirect("update_native_window", &json!({ "id": "focus", "add_content": ["cpu"] }), true, false, false), None);
         assert_eq!(redirect("move_window_to_monitor", &json!({ "app_or_window_name": "it", "target_monitor": 2 }), true, false, false), Some(json!({ "target": "it", "action": "to_monitor", "monitor": 2 })));
-        assert_eq!(redirect("move_window_to_monitor", &json!({ "app_or_window_name": "jarvis", "target_monitor": 2 }), true, false, false), None);
+        assert_eq!(redirect("move_window_to_monitor", &json!({ "app_or_window_name": "jai", "target_monitor": 2 }), true, false, false), None);
     }
 }

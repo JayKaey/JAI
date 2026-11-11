@@ -405,7 +405,7 @@ const ROUTES: &[Route] = &[
     r("Close your car.", "configure_interface", r#"{"core_view": false}"#),
     // Themes, monitors, layout.
     r("Change the theme to Arc Cyan.", "configure_interface", "{}"),
-    r("Move to my third monitor.", "move_window_to_monitor", r#"{"app_or_window_name": "jarvis", "target_monitor": 3}"#),
+    r("Move to my third monitor.", "move_window_to_monitor", r#"{"app_or_window_name": "jai", "target_monitor": 3}"#),
     r("Move Sonora to monitor 2.", "move_window_to_monitor", r#"{"target_monitor": 2}"#),
     r("Use all monitors.", "configure_interface", r#"{"span_all_monitors": true}"#),
     r("Overlap the windows.", "configure_interface", r#"{"allow_window_overlap": true}"#),
@@ -427,8 +427,8 @@ const ROUTES: &[Route] = &[
     r("Gaming protocol.", "manage_stark_protocol", r#"{"action": "execute_protocol", "protocol_name": "gaming"}"#),
     r("House party protocol.", "manage_stark_protocol", r#"{"action": "execute_protocol", "protocol_name": "house party"}"#),
     // His own views and reports.
-    r("Open my system stats.", "open_jarvis_view", r#"{"view": "system_stats"}"#),
-    r("List your features.", "list_jarvis_features", "{}"),
+    r("Open my system stats.", "open_jai_view", r#"{"view": "system_stats"}"#),
+    r("List your features.", "list_jai_features", "{}"),
     r("System status.", "get_system_status", "{}"),
     r("Research the state of VR.", "hud_board", r#"{"action": "research"}"#),
     // Pictures, live cameras, street view (dry: nothing is fetched).
@@ -445,11 +445,11 @@ const ROUTES: &[Route] = &[
     // The Discord bridge.
     r("Turn on the Discord call.", "discord_call", r#"{"action": "listen"}"#),
     // live layers (C1): satellites, passes, trains, traffic, rain.
-    r("When can I see the ISS?", "open_jarvis_view", r#"{"view": "live", "action": "passes", "satellite": "ISS"}"#),
-    r("Show me all satellites.", "open_jarvis_view", r#"{"view": "earth", "action": "show_satellites", "group": "active"}"#),
-    r("When's my next train?", "open_jarvis_view", r#"{"view": "departures"}"#),
-    r("How's the traffic on the A8?", "open_jarvis_view", r#"{"view": "live", "action": "traffic", "road": "A8"}"#),
-    r("Will it rain in the next hour?", "open_jarvis_view", r#"{"view": "live", "action": "rain_soon"}"#),
+    r("When can I see the ISS?", "open_jai_view", r#"{"view": "live", "action": "passes", "satellite": "ISS"}"#),
+    r("Show me all satellites.", "open_jai_view", r#"{"view": "earth", "action": "show_satellites", "group": "active"}"#),
+    r("When's my next train?", "open_jai_view", r#"{"view": "departures"}"#),
+    r("How's the traffic on the A8?", "open_jai_view", r#"{"view": "live", "action": "traffic", "road": "A8"}"#),
+    r("Will it rain in the next hour?", "open_jai_view", r#"{"view": "live", "action": "rain_soon"}"#),
     // Instant answers.
     r("What time is it?", "time", "{}"),
     r("What's 17 times 23?", "answer", "{}"),
@@ -548,7 +548,7 @@ pub(crate) const LIVE_TOOLS: &[(&str, &str, Reach, &str)] = &[
     ("calculate", r#"{"expression": "2 + 2 * 3"}"#, Reach::Local, "8"),
     ("recall_memories", r#"{"query": "Sir"}"#, Reach::Local, ""),
     ("search_conversation", r#"{"query": "weather", "days_back": 1}"#, Reach::Local, ""),
-    ("list_jarvis_features", "{}", Reach::Local, ""),
+    ("list_jai_features", "{}", Reach::Local, ""),
     ("recent_actions", "{}", Reach::Local, ""),
     ("whats_new", "{}", Reach::Local, "New in this build"),
     ("whats_open", "{}", Reach::Local, ""),
@@ -808,7 +808,7 @@ async fn pipeline_probes(app: &Jai) {
     judge("pipeline", "deterministic path (p99 over its corpus)", REFLEX_BUDGET_MS, full.p99_us / 1000.0, Ok(full.describe()));
 
     // The cortex: three reads side by side, in order, faster than one after another.
-    let calls = vec![("get_current_datetime".to_string(), json!({})), ("get_system_status".to_string(), json!({})), ("list_jarvis_features".to_string(), json!({}))];
+    let calls = vec![("get_current_datetime".to_string(), json!({})), ("get_system_status".to_string(), json!({})), ("list_jai_features".to_string(), json!({}))];
     let started = Instant::now();
     let outcomes = crate::hyper_cortex::run_parallel(tools, calls.clone()).await;
     let in_order = outcomes.iter().zip(&calls).all(|(o, (name, _))| o.success && o.tool == *name);
@@ -959,10 +959,10 @@ async fn pipeline_probes(app: &Jai) {
         use crate::worldwide_tunnel::{configured_address, plan, snapshot, TOKEN_SERVICE};
         // The shape of a tunnel token (not one).
         let token = format!("eyJ{}", "hIjoiZXhhbXBsZSJ9".repeat(4));
-        let named = plan(&SatelliteSettings { tunnel_public_url: "https://jarvis.example.com".to_string(), ..Default::default() }, Some(&token), 8444)?;
+        let named = plan(&SatelliteSettings { tunnel_public_url: "https://jai.example.com".to_string(), ..Default::default() }, Some(&token), 8444)?;
         let quick = plan(&SatelliteSettings::default(), None, 8444)?;
         let sound = named.permanent
-            && named.address.as_deref() == Some("https://jarvis.example.com")
+            && named.address.as_deref() == Some("https://jai.example.com")
             && named.args.iter().all(|a| !a.contains(&token))
             && named.env.iter().any(|(key, value)| key == "TUNNEL_TOKEN" && *value == token)
             && !quick.permanent

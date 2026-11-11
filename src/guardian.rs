@@ -136,7 +136,7 @@ fn untouchable(name: &str) -> bool {
     let n = name.to_lowercase();
     matches!(
         n.as_str(),
-        "system" | "registry" | "memory compression" | "dwm" | "csrss" | "svchost" | "explorer" | "jarvis" | "jai" | "ollama" | "ollama_llama_server"
+        "system" | "registry" | "memory compression" | "dwm" | "csrss" | "svchost" | "explorer" | "jai" | "ollama" | "ollama_llama_server"
             | "msmpeng" | "wininit" | "services" | "lsass" | "searchindexer" | "audiodg"
     ) || n.starts_with("ollama")
 }
@@ -313,7 +313,7 @@ mod tests {
     }
 
     #[test]
-    fn jarvis_own_model_filling_vram_is_no_anomaly() {
+    fn jai_own_model_filling_vram_is_no_anomaly() {
         // 7.9 of 8 GB used, 5.6 GB of it JAI's model: the rest is a third of the card.
         assert!(vram_is_ours(&hot_vram(), Some(5600)));
         // A game holding 6.5 GB next to a small model is worth an alert.

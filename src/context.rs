@@ -21,7 +21,7 @@ pub async fn desktop() -> Desktop {
         let apps: BTreeSet<String> = crate::win32::app_windows()
             .into_iter()
             .map(|w| w.process)
-            .filter(|p| !p.is_empty() && !matches!(p.as_str(), "jarvis" | "jai" | "applicationframehost" | "textinputhost" | "explorer"))
+            .filter(|p| !p.is_empty() && !matches!(p.as_str(), "jai" | "applicationframehost" | "textinputhost" | "explorer"))
             .collect();
         Desktop { foreground, apps: apps.into_iter().take(16).collect() }
     })

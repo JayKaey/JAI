@@ -291,7 +291,7 @@ impl CustomTheme {
 
 fn store_path() -> std::path::PathBuf {
     if cfg!(test) {
-        std::env::temp_dir().join(format!("jarvis_custom_themes_{}.json", std::process::id()))
+        std::env::temp_dir().join(format!("jai_custom_themes_{}.json", std::process::id()))
     } else {
         std::path::PathBuf::from(CUSTOM_THEMES_PATH)
     }
@@ -653,7 +653,7 @@ mod tests {
     }
 
     #[test]
-    fn jarvis_designs_saves_and_reloads_custom_themes() {
+    fn jai_designs_saves_and_reloads_custom_themes() {
         let t = design_theme(Some("Cyberpunk"), "neon yellow borders and electric purple core").unwrap();
         assert_eq!(t.name, "Cyberpunk");
         let (bh, bs, bv) = to_hsv(t.window_border);

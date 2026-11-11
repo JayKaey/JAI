@@ -183,7 +183,7 @@ impl SingleInstance {
             use windows::Win32::System::Threading::CreateMutexW;
             // SAFETY: named mutex creation; the handle is owned by the returned guard.
             unsafe {
-                match CreateMutexW(None, false, w!("Local\\JARVIS-V3-single-instance")) {
+                match CreateMutexW(None, false, w!("Local\\JAI-V3-single-instance")) {
                     Ok(handle) if GetLastError() == ERROR_ALREADY_EXISTS => {
                         let _ = CloseHandle(handle);
                         None
@@ -218,7 +218,7 @@ impl Drop for SingleInstance {
 /// Sir cannot see it, so the JAI he starts himself asks it to give way (`tray`) rather than
 /// asking it for a HUD that is on no screen.
 #[cfg(windows)]
-const TEST_SESSION: windows::core::PCWSTR = windows::core::w!("Local\\JARVIS-V3-test-session");
+const TEST_SESSION: windows::core::PCWSTR = windows::core::w!("Local\\JAI-V3-test-session");
 
 static IN_TEST_SESSION: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 

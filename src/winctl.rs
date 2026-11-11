@@ -108,8 +108,8 @@ impl WindowTarget {
         }
     }
 
-    fn names_jarvis(&self) -> bool {
-        matches!(self, Self::Named(t) | Self::Focus(t) if crate::tools::names_jarvis(t))
+    fn names_jai(&self) -> bool {
+        matches!(self, Self::Named(t) | Self::Focus(t) if crate::tools::names_jai(t))
     }
 }
 
@@ -201,8 +201,8 @@ pub async fn manage(action: WindowAction, target: WindowTarget) -> Result<String
 #[cfg(windows)]
 pub fn find_windows(target: &WindowTarget) -> Result<Vec<crate::win32::WindowInfo>, String> {
     use crate::win32;
-    let allow_jarvis = target.names_jarvis();
-    let candidates = || win32::app_windows().into_iter().filter(move |w| allow_jarvis || !win32::is_jarvis_window(w));
+    let allow_jai = target.names_jai();
+    let candidates = || win32::app_windows().into_iter().filter(move |w| allow_jai || !win32::is_jai_window(w));
     let chosen: Vec<win32::WindowInfo> = match target {
         WindowTarget::Named(t) | WindowTarget::Focus(t) => candidates().filter(|w| matches_target(t, &w.process, &w.title)).collect(),
         WindowTarget::Handle { id, .. } if win32::is_window(*id) => candidates().filter(|w| w.hwnd == *id).collect(),
@@ -307,8 +307,8 @@ mod linux {
         }
     }
 
-    fn is_jarvis(class: &str, title: &str) -> bool {
-        class.eq_ignore_ascii_case("jarvis") || title.contains("J.A.I.")
+    fn is_jai(class: &str, title: &str) -> bool {
+        class.eq_ignore_ascii_case("jai") || title.contains("J.A.I.")
     }
 
     /// (process/class, title) a target has to match; `None` = the active window.
@@ -321,7 +321,7 @@ mod linux {
     }
 
     fn picks(target: &WindowTarget, class: &str, title: &str) -> bool {
-        if is_jarvis(class, title) && !target.names_jarvis() {
+        if is_jai(class, title) && !target.names_jai() {
             return false;
         }
         match wanted(target) {
@@ -416,7 +416,7 @@ mod linux {
                 let id = format!("0x{:08x}", active.trim().parse::<u64>().map_err(|e| e.to_string())?);
                 let found = windows.iter().find(|(w, _, _)| u64::from_str_radix(w.trim_start_matches("0x"), 16).ok() == u64::from_str_radix(id.trim_start_matches("0x"), 16).ok());
                 match found {
-                    Some((_, class, title)) if is_jarvis(class, title) => return Err("Only JAI's own window is active.".into()),
+                    Some((_, class, title)) if is_jai(class, title) => return Err("Only JAI's own window is active.".into()),
                     Some((_, class, title)) => (id, class.clone(), title.clone()),
                     None => (id, String::new(), String::new()),
                 }
@@ -513,10 +513,10 @@ mod tests {
     }
 
     #[test]
-    fn jarvis_is_only_a_target_when_named() {
-        assert!(WindowTarget::Named("yourself".into()).names_jarvis());
-        assert!(WindowTarget::Focus("JAI".into()).names_jarvis());
-        assert!(!WindowTarget::Focus("browser".into()).names_jarvis());
-        assert!(!WindowTarget::Active.names_jarvis());
+    fn jai_is_only_a_target_when_named() {
+        assert!(WindowTarget::Named("yourself".into()).names_jai());
+        assert!(WindowTarget::Focus("JAI".into()).names_jai());
+        assert!(!WindowTarget::Focus("browser".into()).names_jai());
+        assert!(!WindowTarget::Active.names_jai());
     }
 }

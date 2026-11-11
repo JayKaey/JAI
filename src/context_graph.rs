@@ -292,7 +292,7 @@ impl ContextGraph {
 
     pub fn note_app(&self, app: &str, monitor: Option<usize>) {
         let app = crate::apps::normalize(app);
-        if app.is_empty() || crate::focus::is_pronoun(&app) || crate::tools::names_jarvis(&app) {
+        if app.is_empty() || crate::focus::is_pronoun(&app) || crate::tools::names_jai(&app) {
             if let Some(m) = monitor {
                 self.write(|g| {
                     if let Some(a) = g.active_app_and_monitor.as_mut() {

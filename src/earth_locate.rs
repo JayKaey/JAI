@@ -145,7 +145,7 @@ pub async fn locate(offline: bool) -> Result<Fix, String> {
 async fn device() -> Result<Fix, String> {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::Builder::new()
-        .name("jarvis-geolocation".into())
+        .name("jai-geolocation".into())
         .spawn(move || {
             let _ = tx.send(device_position(DEVICE_TIMEOUT));
         })

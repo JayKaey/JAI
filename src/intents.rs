@@ -189,7 +189,7 @@ pub fn parse_sentences(text: &str) -> Option<Intent> {
 /// The tools a garbled sentence may still reach (`parse_misheard`): JAI's own HUD, board, views
 /// and media — never an app launch or close, which a misheard sentence must not trigger.
 const MISHEARD_SAFE_TOOLS: &[&str] = &[
-    "configure_interface", "control_jarvis_interface", "hud_board", "open_jarvis_view", "control_orb_mode", "media_and_volume_control", "control_music", "set_listening_mode",
+    "configure_interface", "control_jai_interface", "hud_board", "open_jai_view", "control_orb_mode", "media_and_volume_control", "control_music", "set_listening_mode",
 ];
 
 /// A third-person verb at the start made imperative ("opens your settings" → "open …").
@@ -1214,10 +1214,10 @@ fn assistant_command(s: &str, original: &str) -> Option<Intent> {
         return tool("manage_stark_protocol", json!({ "action": "list" }));
     }
     if VOICE_FASTER.is_match(s) {
-        return tool("media_and_volume_control", json!({ "action": "jarvis_faster" }));
+        return tool("media_and_volume_control", json!({ "action": "jai_faster" }));
     }
     if VOICE_SLOWER.is_match(s) {
-        return tool("media_and_volume_control", json!({ "action": "jarvis_slower" }));
+        return tool("media_and_volume_control", json!({ "action": "jai_slower" }));
     }
     if let Some(c) = OPEN_FILE.captures(s) {
         let name = c.iter().skip(1).flatten().map(|m| m.as_str().trim()).find(|n| !n.is_empty())?;
@@ -1230,7 +1230,7 @@ fn assistant_command(s: &str, original: &str) -> Option<Intent> {
         let is_file = what.split_whitespace().any(|w| FILE_WORDS.contains(&w))
             || what.rsplit_once('.').is_some_and(|(_, ext)| (2..=4).contains(&ext.len()) && ext.chars().all(char::is_alphanumeric));
         if is_file {
-            // "my jarvis config file" searches for "jarvis config" (the generic word is no name).
+            // "my jai config file" searches for "jai config" (the generic word is no name).
             let words: Vec<&str> = what.split_whitespace().collect();
             let query = match words.split_last() {
                 Some((last, rest)) if !rest.is_empty() && matches!(*last, "file" | "files" | "document" | "documents" | "datei" | "dateien" | "dokument") => rest.join(" "),
@@ -1320,7 +1320,7 @@ pub fn normalize_phrase(text: &str) -> String {
     normalize(text)
 }
 
-/// Spoken layout commands for the HUD (`control_jarvis_interface` arguments), classified on Sir's
+/// Spoken layout commands for the HUD (`control_jai_interface` arguments), classified on Sir's
 /// own words: "make the interface less full", "remove the audio devices tab and the skills
 /// tab", "bring back the audio settings", "make the orb bigger", "zen mode".
 pub fn ui_layout_command(text: &str) -> Option<Value> {
@@ -1333,7 +1333,7 @@ pub fn ui_layout_command(text: &str) -> Option<Value> {
 
 /// "Open my system stats (in a new window)", "show my telemetry on monitor 2", "open my calendar
 /// in a new window", "open the simulation lab", "show the QR code", "open my gym logs", Whisper's
-/// "open message from stats": `open_jarvis_view` arguments. JAI's own views are never programs
+/// "open message from stats": `open_jai_view` arguments. JAI's own views are never programs
 /// for the app launcher. Panel words ("hide the system panel", "show the telemetry tab") stay HUD
 /// layout commands.
 pub fn internal_view_command(text: &str) -> Option<Value> {
@@ -1962,7 +1962,7 @@ pub fn panel_request(text: &str) -> Option<Value> {
     panel_command(text, PanelsUp::now())
 }
 
-/// The network radar, the disk map and the Earth as Sir asks for them (`open_jarvis_view`
+/// The network radar, the disk map and the Earth as Sir asks for them (`open_jai_view`
 /// arguments): "check the network", "who is on my network?", "is my network secure?", "what is
 /// taking up space?", "map my D drive", "show me the earth", "switch to satellite view", "fly to
 /// Tokyo", "show the earthquakes in this area", "show me the flights over New York", "where is
@@ -2709,7 +2709,7 @@ static BARE_QUIT: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 /// The raw sentence names JAI himself ("close JAI", "quit yourself", "beende dich").
-fn names_jarvis(text: &str) -> bool {
+fn names_jai(text: &str) -> bool {
     raw_words(text).split_whitespace().any(|w| matches!(w, "jai" | "jay" | "yourself" | "urself" | "dich"))
 }
 static MEMORY_COMMAND: LazyLock<Regex> = LazyLock::new(|| {
@@ -2912,7 +2912,7 @@ fn said_as_an_order(order: &str, tool: &str, args: &Value) -> bool {
     }
     match tool {
         "control_audio_mixer" | "media_and_volume_control" | "control_music" | "configure_interface" | "control_orb_mode" | "set_listening_mode"
-        | "open_jarvis_view" | "control_popups" | "control_jarvis_interface" | "hud_board" | "listening_lock" | "undo_last_action"
+        | "open_jai_view" | "control_popups" | "control_jai_interface" | "hud_board" | "listening_lock" | "undo_last_action"
         | "close_all_secondary_windows" => true,
         "open_application" | "close_application" | "is_app_running" => args["app_name"].as_str().is_some_and(known_app),
         "window_management" => args["action"] != "focus",
@@ -3673,12 +3673,12 @@ fn file_followup(s: &str) -> Option<Intent> {
 
 // ---- JAI's extra windows ("make that window transparent", "pin that window") ------------
 
-const JARVIS_WINDOW: &str =
+const JAI_WINDOW: &str =
     r"(?:that|this|the new|the second|the other|the extra|the last|your second|your other|your new|the jai|that jai)\s+window";
 
-static WINDOW_STYLE: LazyLock<Regex> = LazyLock::new(|| re(&format!(r"^(?:make|set|turn|switch)\s+{JARVIS_WINDOW}\s+(?:to\s+|into\s+)?(.+)$")));
+static WINDOW_STYLE: LazyLock<Regex> = LazyLock::new(|| re(&format!(r"^(?:make|set|turn|switch)\s+{JAI_WINDOW}\s+(?:to\s+|into\s+)?(.+)$")));
 static WINDOW_PIN: LazyLock<Regex> = LazyLock::new(|| {
-    re(&format!(r"^(pin|unpin)\s+{JARVIS_WINDOW}$|^keep\s+{JARVIS_WINDOW}\s+(on top)$|^(?:dont|do not|stop)\s+keep(?:ing)?\s+{JARVIS_WINDOW}\s+(on top)$"))
+    re(&format!(r"^(pin|unpin)\s+{JAI_WINDOW}$|^keep\s+{JAI_WINDOW}\s+(on top)$|^(?:dont|do not|stop)\s+keep(?:ing)?\s+{JAI_WINDOW}\s+(on top)$"))
 });
 
 /// "make that window transparent / borderless / red / emerald / always on top".
@@ -3975,7 +3975,7 @@ fn live_window_request(s: &str) -> Option<Value> {
 
 /// A JAI window named in a phrase → the id the window tools resolve ("focus" = the one the
 /// conversation is about).
-fn jarvis_window_target(phrase: &str) -> Option<String> {
+fn jai_window_target(phrase: &str) -> Option<String> {
     let p = phrase.trim();
     if crate::focus::is_pronoun(p) || matches!(p, "that window" | "this window" | "the new window" | "the second window" | "the other window" | "the last window" | "your second window" | "your new window") {
         return Some("focus".into());
@@ -4001,14 +4001,14 @@ static WINDOW_ADD_CONTENT: LazyLock<Regex> = LazyLock::new(|| {
 
 /// "Make the drive space window smaller", "resize it to 800 by 500", "make it borderless", "pin
 /// it always on top", "add CPU temperature to that window too".
-fn jarvis_window_edit(s: &str) -> Option<Intent> {
+fn jai_window_edit(s: &str) -> Option<Intent> {
     let tool = |name: &'static str, args: Value| Some(Intent::Tool { name, args });
     if let Some(c) = WINDOW_RESIZE_TO.captures(s) {
-        let id = jarvis_window_target(&c[1])?;
+        let id = jai_window_target(&c[1])?;
         return tool("update_native_window", json!({ "id": id, "width": c[2].parse::<u32>().ok()?, "height": c[3].parse::<u32>().ok()? }));
     }
     if let Some(c) = WINDOW_RESIZE_REL.captures(s) {
-        let id = jarvis_window_target(&c[1])?;
+        let id = jai_window_target(&c[1])?;
         let much = s.contains(" much ") || s.contains(" way ") || s.contains(" viel ");
         let size = match &c[2] {
             "smaller" | "kleiner" if much => "much smaller",
@@ -4044,7 +4044,7 @@ fn jarvis_window_edit(s: &str) -> Option<Intent> {
         let id = if target.is_empty() || matches!(target.as_str(), "that" | "this" | "it" | "the" | "dem" | "das" | "diesem") {
             "focus".to_string()
         } else {
-            jarvis_window_target(&format!("{target} window")).unwrap_or_else(|| "focus".into())
+            jai_window_target(&format!("{target} window")).unwrap_or_else(|| "focus".into())
         };
         return tool("update_native_window", json!({ "id": id, "add_content": [what] }));
     }
@@ -4062,7 +4062,7 @@ static OPEN_ON: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:open|launch|start|st
 /// monitor 1", "move yourself to the left monitor", "open Spotify on my second monitor".
 fn monitor_command(s: &str) -> Option<Intent> {
     if let Some(monitor) = SELF_TO_MONITOR.captures(s).and_then(|c| monitor_value(&c[1])) {
-        return Some(Intent::Tool { name: "move_window_to_monitor", args: json!({ "app_or_window_name": "jarvis", "target_monitor": monitor }) });
+        return Some(Intent::Tool { name: "move_window_to_monitor", args: json!({ "app_or_window_name": "jai", "target_monitor": monitor }) });
     }
     if let Some(c) = MOVE_TO.captures(s) {
         let monitor = monitor_value(&c[2])?;
@@ -4381,7 +4381,7 @@ pub fn reply_actions(reply: &str) -> Vec<ReplyAction> {
         let command = command.trim_end_matches(" for you").trim_end_matches(" now").trim_end_matches(" right away").trim_end_matches(", sir").trim_end_matches(" sir").to_string();
         if let Some(Intent::Tool { name, args }) = parse(&command).or_else(|| resolve_fuzzy(&command)) {
             // Quitting is never inferred from a reply.
-            if !matches!(name, "shutdown_jarvis" | "control_jarvis_lifecycle") {
+            if !matches!(name, "shutdown_jai" | "control_jai_lifecycle") {
                 out.push(ReplyAction { offer: offer.unwrap_or(false), name, args });
             }
         }
@@ -4498,7 +4498,7 @@ pub fn parse(text: &str) -> Option<Intent> {
     // earth on the left half", "move the radar to my second monitor", "put them side by side"),
     // before "show me the earth" opens the panel.
     if let Some(args) = crate::window_commands::parse(text) {
-        return tool("arrange_jarvis_window", args);
+        return tool("arrange_jai_window", args);
     }
     // live layers (C1): satellites, passes, trains, departures, traffic, rain, past weather
     // ("show me Starlink", "when can I see the ISS?", "when's my next train?", "how's the A8?").
@@ -4508,7 +4508,7 @@ pub fn parse(text: &str) -> Option<Intent> {
     // The network radar, the disk map and the Earth ("check the network", "what is taking up
     // space", "show me the earth", "switch to satellite view"), before the readings and the board.
     if let Some(args) = panel_request(text) {
-        return tool("open_jarvis_view", args);
+        return tool("open_jai_view", args);
     }
     // The state of his machine is a reading, not a topic for the board to research ("give me a
     // system report", "show me my RAM usage", "how hot is my GPU").
@@ -4526,10 +4526,10 @@ pub fn parse(text: &str) -> Option<Intent> {
     // Before the close/open rules, which would read "close ur self" or "kill process" as apps.
     if SHUTDOWN.is_match(&s) || is_self_shutdown(&s) {
         // A bare "close" / "quit" (JAI not named) only sends the HUD to the tray.
-        if BARE_QUIT.is_match(&s) && !names_jarvis(text) {
+        if BARE_QUIT.is_match(&s) && !names_jai(text) {
             return tool("configure_interface", json!({ "window": "hide" }));
         }
-        return tool("shutdown_jarvis", json!({}));
+        return tool("shutdown_jai", json!({}));
     }
     // "Clear the VRAM", "get out of my VRAM": the zero-VRAM standby at once.
     if VRAM_FLUSH.is_match(&s) {
@@ -4584,10 +4584,10 @@ pub fn parse(text: &str) -> Option<Intent> {
         return tool("media_and_volume_control", media("play_pause"));
     }
     if VOICE_LOUDER.is_match(&s) {
-        return tool("media_and_volume_control", media("jarvis_louder"));
+        return tool("media_and_volume_control", media("jai_louder"));
     }
     if VOICE_QUIETER.is_match(&s) {
-        return tool("media_and_volume_control", media("jarvis_quieter"));
+        return tool("media_and_volume_control", media("jai_quieter"));
     }
     if let Some(intent) = lifecycle_or_window_command(&s) {
         return Some(intent);
@@ -4601,7 +4601,7 @@ pub fn parse(text: &str) -> Option<Intent> {
         return tool("spawn_native_window", args);
     }
     // "Make the drive space window smaller", "add CPU temperature to that window".
-    if let Some(intent) = jarvis_window_edit(&s) {
+    if let Some(intent) = jai_window_edit(&s) {
         return Some(intent);
     }
     // "Move Sonora to monitor 2", "open Spotify on my second screen".
@@ -4692,7 +4692,7 @@ pub fn parse(text: &str) -> Option<Intent> {
             // of it (2026-11-08: Windows was asked for programs called "Earth You", "Up", "Off").
             let named = strip_article(&c[1]);
             // ("Close yourself" / "quit you" name JAI himself: that stays as it was said.)
-            let app = if crate::tools::names_jarvis(&named) { named } else { strip_article(&crate::intent_engine::strip_close_fillers(&named)) };
+            let app = if crate::tools::names_jai(&named) { named } else { strip_article(&crate::intent_engine::strip_close_fillers(&named)) };
             if app.is_empty() {
                 // "Close up", "closed, off": nothing named. Something of his that is up (the view
                 // he just opened), never the program Sir is working in.
@@ -4712,7 +4712,7 @@ pub fn parse(text: &str) -> Option<Intent> {
     }
     // JAI's own views are never programs ("open my system stats", "open message from stats").
     if let Some(args) = internal_view_command(text) {
-        return tool("open_jarvis_view", args);
+        return tool("open_jai_view", args);
     }
     for re in [&*OPEN, &*OPEN_DE, &*OPEN_DE_SUFFIX] {
         if let Some(c) = re.captures(&s) {
@@ -4983,10 +4983,10 @@ static LIVE_WIDGET: LazyLock<Regex> = LazyLock::new(|| {
 static TELEMETRY_WINDOW: LazyLock<Regex> = LazyLock::new(|| {
     re(r"\b(?:show|put|display|open|give me|zeig|zeige)\s+(?:me\s+|mir\s+)?(?:my\s+|the\s+|meinen\s+|den\s+)?(?:system status|system stats|telemetry|system monitor|performance|hardware status|system info|systemstatus)\s+(?:in|into|on|im)\s+(?:a|an|the|einem)?\s*(?:new|second|separate|own|extra|another|neuen|eigenen|separaten)?\s*(?:window|fenster)\b")
 });
-static CLOSE_JARVIS_WINDOW: LazyLock<Regex> = LazyLock::new(|| {
+static CLOSE_JAI_WINDOW: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(?:close|shut)\s+(?:that|this|the|the jai|the new|the second|the separate|the extra|the last|the other)\s+(?:jai\s+)?window$|^(?:schließ|schließe|schliess|schliesse|mach)\s+(?:das|dieses|dein)\s+(?:neue\s+|zweite\s+)?fenster(?:\s+zu)?$")
 });
-static CLOSE_ALL_JARVIS_WINDOWS: LazyLock<Regex> = LazyLock::new(|| {
+static CLOSE_ALL_JAI_WINDOWS: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(?:close|shut)\s+all\s+(?:of\s+)?(?:your|the|jai|the jai|extra|secondary)?\s*windows$|^(?:schließ|schließe|schliess|schliesse)\s+alle\s+(?:deine\s+|zusätzlichen\s+)?fenster$")
 });
 
@@ -5004,7 +5004,7 @@ pub fn resolve_fuzzy(text: &str) -> Option<Intent> {
     let tool = |name: &'static str, args: Value| Some(Intent::Tool { name, args });
 
     if is_self_shutdown(&s) {
-        return tool("shutdown_jarvis", json!({}));
+        return tool("shutdown_jai", json!({}));
     }
     if let Some(intent) = lifecycle_or_window_command(&s) {
         return Some(intent);
@@ -5070,9 +5070,9 @@ pub fn resolve_fuzzy(text: &str) -> Option<Intent> {
 /// that would read "close the second window" as an application called "second").
 fn lifecycle_or_window_command(s: &str) -> Option<Intent> {
     let tool = |name: &'static str, args: Value| Some(Intent::Tool { name, args });
-    let lifecycle = |action: &str| tool("control_jarvis_lifecycle", json!({ "action": action }));
+    let lifecycle = |action: &str| tool("control_jai_lifecycle", json!({ "action": action }));
     if RESTART.is_match(s) {
-        return lifecycle("restart_jarvis");
+        return lifecycle("restart_jai");
     }
     if SLEEP_MODE.is_match(s) {
         return lifecycle("sleep_mode");
@@ -5083,10 +5083,10 @@ fn lifecycle_or_window_command(s: &str) -> Option<Intent> {
     if VOICE_UNMUTE.is_match(s) {
         return lifecycle("unmute_tts");
     }
-    if CLOSE_ALL_JARVIS_WINDOWS.is_match(s) {
+    if CLOSE_ALL_JAI_WINDOWS.is_match(s) {
         return tool("close_native_window", json!({ "id": "all" }));
     }
-    if CLOSE_JARVIS_WINDOW.is_match(s) {
+    if CLOSE_JAI_WINDOW.is_match(s) {
         return tool("close_native_window", json!({ "id": "last", "fallback_to_active_window": true }));
     }
     if NEW_WINDOW.is_match(s) {
@@ -5116,7 +5116,7 @@ pub fn claimed_action(reply: &str, request: &str) -> Option<(&'static str, Value
     let said = reply.to_lowercase();
     let asked = normalize(request);
     if CLAIM_SHUTDOWN.is_match(&said) && (ASKED_QUIT.is_match(&asked) || is_self_shutdown(&asked)) {
-        return Some(("shutdown_jarvis", json!({})));
+        return Some(("shutdown_jai", json!({})));
     }
     if let Some(c) = CLAIM_OPEN.captures(&said) {
         let app = strip_article(c.get(1)?.as_str().trim());
@@ -5326,7 +5326,7 @@ mod board_tests {
             let intent = heard(text);
             assert!(closes_view(text).is_none() && intent != own, "{text}: {intent:?}");
             if let Some(Intent::Tool { name: "close_application", args }) = &intent {
-                assert!(crate::tools::names_jarvis(args["app_name"].as_str().unwrap_or_default()), "{text}: {intent:?}");
+                assert!(crate::tools::names_jai(args["app_name"].as_str().unwrap_or_default()), "{text}: {intent:?}");
             }
         }
     }
@@ -5390,7 +5390,7 @@ mod tests {
         assert_eq!(tool("Nächstes Lied").unwrap().1["action"], "next_track");
         assert_eq!(tool("Pause the music"), Some(("control_music", json!({"action": "pause"}))));
         assert_eq!(tool("Mach lauter").unwrap().1["action"], "volume_up");
-        assert_eq!(tool("Speak louder").unwrap().1["action"], "jarvis_louder");
+        assert_eq!(tool("Speak louder").unwrap().1["action"], "jai_louder");
     }
 
     #[test]
@@ -5432,8 +5432,8 @@ mod tests {
     }
 
     #[test]
-    fn shutting_jarvis_down() {
-        let quits = |text: &str| tool(text).map(|(name, _)| name) == Some("shutdown_jarvis");
+    fn shutting_jai_down() {
+        let quits = |text: &str| tool(text).map(|(name, _)| name) == Some("shutdown_jai");
         // Phrases from the log that used to fail ("close_application yourself/your").
         for text in [
             "JAI, please close yourself.",
@@ -5535,7 +5535,7 @@ mod tests {
         }
         // "Move to my 3rd monitor": JAI himself.
         for (text, n) in [("Move to my 3rd monitor", 3), ("JAI, go to monitor 2", 2), ("Move over to the second screen", 2)] {
-            assert_eq!(tool(text), Some(("move_window_to_monitor", json!({"app_or_window_name": "jarvis", "target_monitor": n}))), "{text}");
+            assert_eq!(tool(text), Some(("move_window_to_monitor", json!({"app_or_window_name": "jai", "target_monitor": n}))), "{text}");
         }
     }
 
@@ -5609,7 +5609,7 @@ mod tests {
     }
 
     #[test]
-    fn follow_ups_act_on_the_focus_never_on_jarvis() {
+    fn follow_ups_act_on_the_focus_never_on_jai() {
         let window = |text: &str| match tool(text) {
             Some(("window_management", args)) if args.get("target_window").is_none() => args["action"].as_str().map(String::from),
             other => panic!("{text}: {other:?}"),
@@ -5637,7 +5637,7 @@ mod tests {
         assert_eq!(tool("Maximize JAI"), Some(("configure_interface", json!({"window": "maximize"}))));
         assert_eq!(tool("JAI, minimise yourself"), Some(("configure_interface", json!({"window": "minimize"}))));
         assert_eq!(tool("Make yourself full screen"), Some(("configure_interface", json!({"fullscreen": true}))));
-        assert_eq!(tool("Close yourself").map(|t| t.0), Some("shutdown_jarvis"));
+        assert_eq!(tool("Close yourself").map(|t| t.0), Some("shutdown_jai"));
         // Named apps keep working.
         assert_eq!(tool("Maximize Spotify").unwrap().1, json!({"action": "maximize", "target_window": "spotify"}));
         assert_eq!(tool("Close Discord"), Some(("close_application", json!({"app_name": "discord", "force": true}))));
@@ -5805,10 +5805,10 @@ mod tests {
             "JAI, turn yourself off now",
             "Could you power yourself down for today",
         ] {
-            assert_eq!(fuzzy(text).map(|(n, _)| n), Some("shutdown_jarvis"), "{text}");
+            assert_eq!(fuzzy(text).map(|(n, _)| n), Some("shutdown_jai"), "{text}");
         }
         for text in ["Don't close yourself", "Close Spotify", "Turn off the lights", "Shut down the computer"] {
-            assert_ne!(fuzzy(text).map(|(n, _)| n), Some("shutdown_jarvis"), "{text}");
+            assert_ne!(fuzzy(text).map(|(n, _)| n), Some("shutdown_jai"), "{text}");
         }
     }
 
@@ -5847,7 +5847,7 @@ mod tests {
         assert_eq!(fuzzy("Close all your windows").unwrap().1["id"], "all");
         assert_eq!(fuzzy("Close your window"), Some(("configure_interface", json!({"window": "hide"}))));
         assert_eq!(fuzzy("Go to sleep").unwrap().1["action"], "sleep_mode");
-        assert_eq!(fuzzy("Restart yourself").unwrap().1["action"], "restart_jarvis");
+        assert_eq!(fuzzy("Restart yourself").unwrap().1["action"], "restart_jai");
         assert_eq!(fuzzy("Mute your voice").unwrap().1["action"], "mute_tts");
     }
 
@@ -5876,7 +5876,7 @@ mod tests {
         assert_eq!(name("What's my IP address"), Some("network_status"));
         assert_eq!(name("What's slowing down my PC?"), Some("top_processes"));
         assert_eq!(name("Warum ist mein PC so langsam?"), Some("top_processes"));
-        assert_eq!(tool("Speak a bit faster").unwrap().1["action"], "jarvis_faster");
+        assert_eq!(tool("Speak a bit faster").unwrap().1["action"], "jai_faster");
         assert_eq!(tool("Find my tax return pdf").unwrap().1, json!({"query": "tax return pdf"}));
         assert_eq!(tool("Open budget.xlsx").unwrap().1, json!({"query": "budget.xlsx", "open": true}));
         assert_eq!(name("Find a good restaurant nearby"), None, "not a file");
@@ -5904,7 +5904,7 @@ mod tests {
             None,
             "no quit request"
         );
-        assert_eq!(claimed_action("As you wish, Sir. Powering down.", "JAI you should exit now").map(|(n, _)| n), Some("shutdown_jarvis"));
+        assert_eq!(claimed_action("As you wish, Sir. Powering down.", "JAI you should exit now").map(|(n, _)| n), Some("shutdown_jai"));
         assert_eq!(
             claimed_action("Right away, Sir. Opening your browser now.", "could you bring my browser up"),
             Some(("open_application", json!({"app_name": "browser"})))
@@ -5937,7 +5937,7 @@ mod tests {
     }
 
     #[test]
-    fn jarvis_windows_are_resized_restyled_and_extended() {
+    fn jai_windows_are_resized_restyled_and_extended() {
         let edit = |text: &str| tool(text).unwrap_or_else(|| panic!("{text}"));
         assert_eq!(edit("Make the drive space window smaller"), ("update_native_window", json!({"id": "drive space", "size": "smaller"})));
         assert_eq!(edit("Resize it to 800 by 500"), ("update_native_window", json!({"id": "focus", "width": 800, "height": 500})));
@@ -6301,8 +6301,8 @@ mod tests {
         }
         // A bare "close" hides the HUD; quitting needs JAI named.
         assert_eq!(tool("Close"), Some(("configure_interface", json!({"window": "hide"}))));
-        assert_eq!(tool("Close JAI").map(|(n, _)| n), Some("shutdown_jarvis"));
-        assert_eq!(tool("Close yourself").map(|(n, _)| n), Some("shutdown_jarvis"));
+        assert_eq!(tool("Close JAI").map(|(n, _)| n), Some("shutdown_jai"));
+        assert_eq!(tool("Close yourself").map(|(n, _)| n), Some("shutdown_jai"));
     }
 
     #[test]
@@ -6361,7 +6361,7 @@ mod tests {
         assert_eq!(parse("What's up?"), None);
         assert_eq!(tool("What's up on the board?"), Some(("whats_open", json!({}))));
         assert_eq!(tool("Make the accents gold"), Some(("configure_interface", json!({"theme": "gold"}))));
-        assert_eq!(tool("Find my jarvis config file").unwrap().1["query"], "jarvis config");
+        assert_eq!(tool("Find my jai config file").unwrap().1["query"], "jai config");
         assert_eq!(tool("Find my tax pdf").unwrap().1["query"], "tax pdf");
         // "What's playing" is the song, not the mixer.
         assert_eq!(tool("What's playing?").map(|(n, _)| n), Some("control_music"));
@@ -6370,7 +6370,7 @@ mod tests {
     }
 
     #[test]
-    fn jarvis_views_open_as_windows_never_as_programs() {
+    fn jai_views_open_as_windows_never_as_programs() {
         let view = |text: &str| internal_view_command(text).and_then(|a| a["view"].as_str().map(String::from));
         // Screenshots 3 and 4, and Whisper's version of the second.
         for text in ["open my system stats in a new window", "Open my system stats, please.", "Open message from stats please.", "show my system stats", "Zeig mir meine Systemstatistik"] {
@@ -6388,7 +6388,7 @@ mod tests {
         for text in ["show the system panel", "hide my system stats", "open discord", "open spotify please", "bring back the system stats"] {
             assert_eq!(view(text), None, "{text}");
         }
-        assert_eq!(tool("Open message from stats please.").map(|(n, _)| n), Some("open_jarvis_view"));
+        assert_eq!(tool("Open message from stats please.").map(|(n, _)| n), Some("open_jai_view"));
         assert_eq!(strip_article("discord for me"), "discord");
         assert_eq!(strip_article("chrome on my pc"), "chrome");
     }
@@ -6525,10 +6525,10 @@ mod tests {
             assert_eq!(panel_command(text, up), None, "{text}");
         }
         // Through the parser and the view command alike; a question only looks.
-        assert_eq!(tool("Check the network").map(|(n, _)| n), Some("open_jarvis_view"));
+        assert_eq!(tool("Check the network").map(|(n, _)| n), Some("open_jai_view"));
         assert_eq!(internal_view_command("What is taking up space?").unwrap()["view"], "disk_map");
         let asked = panel_command("Who is on my network?", none).unwrap();
-        assert!(!beyond_the_question("Who is on my network?", "open_jarvis_view", &asked));
+        assert!(!beyond_the_question("Who is on my network?", "open_jai_view", &asked));
     }
 
     #[test]
@@ -6644,11 +6644,11 @@ mod tests {
         // A question only looks: these pass the question guard.
         for text in ["Where am I on the map?", "What's happening in the world?", "What did Europe look like yesterday?", "Where is it raining?"] {
             let args = panel_command(text, none).unwrap();
-            assert!(!beyond_the_question(text, "open_jarvis_view", &args), "{text}");
+            assert!(!beyond_the_question(text, "open_jai_view", &args), "{text}");
         }
         // The whole fast path reaches them (the verifier's probes).
         for text in ["Where am I on the map?", "Show me the mountains.", "Show me the rain radar.", "Show me the clouds on 1 March 2024.", "What's happening in the world?", "Zeig mir, wo ich bin.", "locate me", "give me a world tour"] {
-            assert_eq!(tool(text).map(|(n, _)| n), Some("open_jarvis_view"), "{text}");
+            assert_eq!(tool(text).map(|(n, _)| n), Some("open_jai_view"), "{text}");
         }
     }
 
@@ -7301,7 +7301,7 @@ mod tests {
         assert!(said.contains("15 percent") && said.contains("lowest it goes"), "{said}");
         // Closing himself, in German and as the recogniser heard it.
         for text in ["kannst du dich selbst schließen?", "Stopp, gliese dich selbst.", "kannte ich selbst schließen, bitte?"] {
-            assert_eq!(tool(text), Some(("shutdown_jarvis", json!({}))), "{text}");
+            assert_eq!(tool(text), Some(("shutdown_jai", json!({}))), "{text}");
         }
         // The window packer, said as a "don't".
         for text in ["don't make the windows overlap", "the windows shouldn't overlap", "Die Fenster sollen sich nicht überlappen"] {

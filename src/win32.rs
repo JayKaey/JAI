@@ -46,7 +46,7 @@ fn worker() -> Option<&'static mpsc::Sender<Job>> {
     TX.get_or_init(|| {
         let (tx, rx) = mpsc::channel::<Job>();
         std::thread::Builder::new()
-            .name("jarvis-win32".into())
+            .name("jai-win32".into())
             .spawn(move || {
                 // SAFETY: called once at the start of this thread, before any COM use.
                 let _ = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) };
@@ -242,7 +242,7 @@ pub fn own_window_titled(title: &str, owner: isize) -> bool {
 }
 
 /// One of JAI's own windows (the HUD, his extra windows, a dialog of his process).
-pub fn is_jarvis_window(w: &WindowInfo) -> bool {
+pub fn is_jai_window(w: &WindowInfo) -> bool {
     static OWN: OnceLock<u32> = OnceLock::new();
     w.pid == *OWN.get_or_init(std::process::id) || w.process == "jai" || w.title.contains("J.A.I.")
 }
@@ -256,7 +256,7 @@ pub fn user_window() -> Option<WindowInfo> {
         // SAFETY: lparam is the &mut Option passed below and outlives EnumWindows.
         let found = unsafe { &mut *(lparam.0 as *mut Option<WindowInfo>) };
         // SAFETY: a handle from the enumeration; plain queries on it.
-        let his = unsafe { app_window(hwnd) }.filter(|w| !is_jarvis_window(w) && !matches!(w.class.as_str(), "Progman" | "WorkerW" | "Shell_TrayWnd") && !unsafe { IsIconic(hwnd) }.as_bool());
+        let his = unsafe { app_window(hwnd) }.filter(|w| !is_jai_window(w) && !matches!(w.class.as_str(), "Progman" | "WorkerW" | "Shell_TrayWnd") && !unsafe { IsIconic(hwnd) }.as_bool());
         match his {
             Some(window) => {
                 *found = Some(window);
@@ -460,7 +460,7 @@ pub fn foreground_is_fullscreen() -> bool {
 /// HUD is in front): its title and visible bounds (left, top, width, height in physical pixels).
 pub fn top_app_window() -> Option<(String, [i32; 4])> {
     app_windows().into_iter().find_map(|w| {
-        if is_jarvis_window(&w) {
+        if is_jai_window(&w) {
             return None;
         }
         let hwnd = HWND(w.hwnd);
@@ -891,7 +891,7 @@ const HUD_SUBCLASS_ID: usize = 0x4A52_5653;
 pub fn install_hud_quit_hook(hwnd: isize) {
     // SAFETY: subclasses our own window on its own thread (called from eframe's app creator).
     unsafe {
-        HUD_QUIT_MESSAGE.store(RegisterWindowMessageW(w!("JARVIS_HUD_QUIT")), Ordering::Release);
+        HUD_QUIT_MESSAGE.store(RegisterWindowMessageW(w!("JAI_HUD_QUIT")), Ordering::Release);
         let _ = SetWindowSubclass(HWND(hwnd), Some(hud_subclass), HUD_SUBCLASS_ID, 0);
     }
 }

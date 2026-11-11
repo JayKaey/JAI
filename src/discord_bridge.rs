@@ -246,9 +246,9 @@ async fn set_mode(next: CallMode, tools: &ToolContext) -> Result<String, String>
             None => source_device().await,
         };
         std::thread::Builder::new()
-            .name("jarvis-discord".into())
+            .name("jai-discord".into())
             .spawn(move || {
-                crate::crash_guard::supervise("jarvis-discord", || capture_loop(device.clone()));
+                crate::crash_guard::supervise("jai-discord", || capture_loop(device.clone()));
                 CAPTURING.store(false, Ordering::Release);
             })
             .map_err(|e| e.to_string())?;
@@ -582,7 +582,7 @@ pub fn probe_margin_db(captured: &[f32], rate: f32) -> f32 {
 pub fn probe_candidates(outputs: &[String], discord_output: Option<&str>) -> Vec<String> {
     let rank = |n: &str| {
         let l = n.to_lowercase();
-        let spare = ["jarvis", "jai", "sfx", "aux"].iter().any(|w| l.contains(w));
+        let spare = ["jai", "sfx", "aux"].iter().any(|w| l.contains(w));
         if spare { 0 } else if l.contains("music") { 1 } else if l.contains("browser") { 2 } else if l.contains("system") { 3 } else if l.contains("microphone") { 5 } else { 4 }
     };
     let mut out: Vec<String> = outputs
@@ -784,7 +784,7 @@ pub async fn call_check(cfg: &crate::config::JaiConfig) -> std::process::ExitCod
         }
     };
     let ipa = phonemizer.phonemize(&crate::tts::normalize_for_speech("Discord voice check, Sir."));
-    let speed = crate::jarvis_voice_dsp::synthesis_speed(cfg.kokoro_speed);
+    let speed = crate::jai_voice_dsp::synthesis_speed(cfg.kokoro_speed);
     let Ok(voice24) = kokoro.synthesize(&ipa, &cfg.kokoro_voice, speed) else {
         info!("[CALL CHECK] Synthesis failed");
         return ExitCode::FAILURE;
@@ -910,7 +910,7 @@ mod tests {
     }
 
     #[test]
-    fn friends_address_jarvis_by_name() {
+    fn friends_address_jai_by_name() {
         assert!(addressed("JAI, what's the weather like?"));
         assert!(addressed("J.A.I., what's the weather like?"));
         assert!(addressed("hey Jay, du bist witzig"));
@@ -949,7 +949,7 @@ mod tests {
     }
 
     #[test]
-    fn the_call_is_deaf_while_jarvis_speaks_and_250_ms_after() {
+    fn the_call_is_deaf_while_jai_speaks_and_250_ms_after() {
         let t0 = Instant::now();
         let ms = |n: u64| t0 + Duration::from_millis(n);
         let mut gate = AntiLoopbackGate::default();

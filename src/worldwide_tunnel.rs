@@ -276,7 +276,7 @@ fn launch(program: &Path, args: &[String], env: &[(String, String)]) -> Result<T
     let stop = Arc::new(AtomicBool::new(false));
     let stopping = Arc::clone(&stop);
     std::thread::Builder::new()
-        .name("jarvis-tunnel-io".into())
+        .name("jai-tunnel-io".into())
         .spawn(move || {
             let (mut out, mut err) = (Vec::new(), Vec::new());
             let forward = |buf: &mut Vec<u8>, last: bool| {
@@ -377,7 +377,7 @@ async fn verify_origin(origin: &str, token: &str) -> bool {
         .connect_timeout(Duration::from_secs(3)).timeout(Duration::from_secs(5)).build() else { return false };
     let Ok(response) = client.get(format!("{origin}/api/tunnel-health")).header("X-JAI-Key", token).send().await else { return false };
     if !response.status().is_success() { return false; }
-    response.json::<serde_json::Value>().await.ok().is_some_and(|v| v["service"] == "jarvis-satellite")
+    response.json::<serde_json::Value>().await.ok().is_some_and(|v| v["service"] == "jai-satellite")
 }
 
 /// What the tunnel program said went wrong, short enough for the status line (its own log
@@ -544,30 +544,30 @@ mod tests {
         assert_eq!(quick.args, ["tunnel", "--no-autoupdate", "--url", "http://127.0.0.1:51234"]);
         assert!(quick.env.is_empty());
         // A token and the address it belongs to: the named tunnel, the address known at once.
-        let named = plan(&settings("https://jarvis.example.com"), Some(TOKEN), 8444).unwrap();
-        assert_eq!((named.provider, named.permanent, named.address.as_deref()), ("cloudflare", true, Some("https://jarvis.example.com")));
+        let named = plan(&settings("https://jai.example.com"), Some(TOKEN), 8444).unwrap();
+        assert_eq!((named.provider, named.permanent, named.address.as_deref()), ("cloudflare", true, Some("https://jai.example.com")));
         assert_eq!(named.args, ["tunnel", "--no-autoupdate", "run"]);
         assert_eq!(named.env, [("TUNNEL_TOKEN".to_string(), TOKEN.to_string())]);
         assert!(named.args.iter().all(|a| !a.contains("eyJ")), "the token is never on the command line");
         // Pasted as Cloudflare shows it, inside its whole command: the token alone is used.
         let pasted = format!("cloudflared.exe service install {TOKEN}");
-        assert_eq!(plan(&settings("https://jarvis.example.com/"), Some(&pasted), 8444).unwrap().env[0].1, TOKEN);
+        assert_eq!(plan(&settings("https://jai.example.com/"), Some(&pasted), 8444).unwrap().env[0].1, TOKEN);
         assert_eq!(clean_token(&pasted).as_deref(), Some(TOKEN));
         assert_eq!(clean_token("hello"), None);
         assert_eq!(clean_token(""), None);
         // A token without its address, with an address that is no clean HTTPS origin, or with
         // the fixed local port taken: said plainly, nothing is started.
-        for bad in ["", "http://jarvis.example.com", "https://jarvis.example.com/satellite", "jarvis.example.com"] {
+        for bad in ["", "http://jai.example.com", "https://jai.example.com/satellite", "jai.example.com"] {
             let why = plan(&settings(bad), Some(TOKEN), 8444).unwrap_err();
             assert!(why.contains("permanent address"), "{bad}: {why}");
         }
-        let taken = plan(&settings("https://jarvis.example.com"), Some(TOKEN), 51_234).unwrap_err();
+        let taken = plan(&settings("https://jai.example.com"), Some(TOKEN), 51_234).unwrap_err();
         assert!(taken.contains("8444") && taken.contains("taken"), "{taken}");
-        assert!(plan(&settings("https://jarvis.example.com"), Some("not a token"), 8444).unwrap_err().contains("not a Cloudflare tunnel token"));
+        assert!(plan(&settings("https://jai.example.com"), Some("not a token"), 8444).unwrap_err().contains("not a Cloudflare tunnel token"));
         // An address without a token is still a quick tunnel (nothing would answer at that name).
-        assert!(!plan(&settings("https://jarvis.example.com"), None, 8444).unwrap().permanent);
-        assert_eq!(configured_address(&settings("https://jarvis.example.com"), false), None);
-        assert_eq!(configured_address(&settings("https://jarvis.example.com"), true).as_deref(), Some("https://jarvis.example.com"));
+        assert!(!plan(&settings("https://jai.example.com"), None, 8444).unwrap().permanent);
+        assert_eq!(configured_address(&settings("https://jai.example.com"), false), None);
+        assert_eq!(configured_address(&settings("https://jai.example.com"), true).as_deref(), Some("https://jai.example.com"));
     }
 
     #[test]
@@ -575,11 +575,11 @@ mod tests {
         let funnel = plan(&SatelliteSettings { tunnel_provider: "tailscale".into(), ..Default::default() }, None, 8444).unwrap();
         assert_eq!((funnel.provider, funnel.program, funnel.permanent), ("tailscale", "tailscale", true));
         assert_eq!(funnel.args, ["funnel", "http://127.0.0.1:8444"]);
-        let own = SatelliteSettings { tunnel_provider: "ssh".into(), tunnel_ssh_target: "sir@vps.example.com".into(), tunnel_public_url: "https://jarvis.example.com".into(), ..Default::default() };
+        let own = SatelliteSettings { tunnel_provider: "ssh".into(), tunnel_ssh_target: "sir@vps.example.com".into(), tunnel_public_url: "https://jai.example.com".into(), ..Default::default() };
         let ssh = plan(&own, None, 8444).unwrap();
-        assert_eq!((ssh.provider, ssh.permanent, ssh.address.as_deref()), ("ssh", true, Some("https://jarvis.example.com")));
+        assert_eq!((ssh.provider, ssh.permanent, ssh.address.as_deref()), ("ssh", true, Some("https://jai.example.com")));
         assert!(ssh.args.ends_with(&["-R".to_string(), "127.0.0.1:18443:127.0.0.1:8444".to_string(), "sir@vps.example.com".to_string()]));
-        assert_eq!(configured_address(&own, false).as_deref(), Some("https://jarvis.example.com"));
+        assert_eq!(configured_address(&own, false).as_deref(), Some("https://jai.example.com"));
         assert!(plan(&SatelliteSettings { tunnel_provider: "ssh".into(), ..Default::default() }, None, 8444).is_err());
         assert!(plan(&SatelliteSettings { tunnel_provider: "carrier pigeon".into(), ..Default::default() }, None, 8444).is_err());
         // What the tunnel program complains about reaches the status line, without its prefix.

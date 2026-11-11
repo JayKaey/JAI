@@ -198,7 +198,7 @@ pub static APPS: &[AppSpec] = &[
 const PROTECTED: &[&str] = &[
     "system", "idle", "registry", "smss", "csrss", "wininit", "winlogon", "services", "lsass", "svchost",
     "dwm", "explorer", "fontdrvhost", "sihost", "taskhostw", "ctfmon", "conhost", "runtimebroker",
-    "jarvis", "jai", "ollama", "ollama app", "ollama_llama_server", "systemd", "init", "kthreadd", "xorg",
+    "jai", "ollama", "ollama app", "ollama_llama_server", "systemd", "init", "kthreadd", "xorg",
     "xwayland", "gnome-shell", "plasmashell", "kwin_x11", "kwin_wayland", "hyprland", "sway",
     "pipewire", "wireplumber", "pulseaudio", "dbus-daemon", "sshd", "login",
 ];
@@ -544,7 +544,7 @@ async fn launch_target(target: &str, args: &[String]) -> Result<(), String> {
     }
 }
 
-/// Arguments joined for ShellExecute: ones with spaces (paths like `D:\Code\jarvis V.3\x.rs`)
+/// Arguments joined for ShellExecute: ones with spaces (paths like `D:\Code\jai V.3\x.rs`)
 /// are quoted, already-quoted ones are kept as they are.
 #[cfg(windows)]
 fn windows_command_line(args: &[String]) -> String {
@@ -1017,8 +1017,8 @@ mod tests {
         assert_eq!(as_url("youtube.com").as_deref(), Some("https://youtube.com"));
         assert_eq!(as_url("https://github.com/x").as_deref(), Some("https://github.com/x"));
         assert!(as_url("visual studio code").is_none());
-        std::env::set_var("JARVIS_TEST_DIR", "C:\\Tools");
-        assert_eq!(expand_env("%JARVIS_TEST_DIR%\\app.exe"), "C:\\Tools\\app.exe");
+        std::env::set_var("JAI_TEST_DIR", "C:\\Tools");
+        assert_eq!(expand_env("%JAI_TEST_DIR%\\app.exe"), "C:\\Tools\\app.exe");
         assert_eq!(expand_env("%NOPE_NOT_SET%\\x"), "%NOPE_NOT_SET%\\x");
     }
 

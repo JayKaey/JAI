@@ -87,7 +87,7 @@ fn spawn(plan: &Restart) -> Result<(), String> {
     match plan {
         Restart::Same => launch(&exe, &args),
         Restart::Rebuilt { project } => {
-            let built = project.join("target").join("release").join(if cfg!(windows) { "jarvis.exe" } else { "jai" });
+            let built = project.join("target").join("release").join(if cfg!(windows) { "jai.exe" } else { "jai" });
             if !built.exists() {
                 return Err(format!("{} does not exist", built.display()));
             }
@@ -144,7 +144,7 @@ fn package_after_exit(project: &std::path::Path, packaged: &std::path::Path, arg
 
 #[cfg(not(windows))]
 fn package_after_exit(project: &std::path::Path, _packaged: &std::path::Path, args: &[String]) -> Result<(), String> {
-    launch(&project.join("target").join("release").join("jarvis"), args)
+    launch(&project.join("target").join("release").join("jai"), args)
 }
 
 #[cfg(test)]

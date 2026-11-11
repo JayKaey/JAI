@@ -349,7 +349,7 @@ fn canvas() -> MutexGuard<'static, WorkspaceCanvas> {
 }
 
 fn viewport_id(id: u64) -> ViewportId {
-    ViewportId::from_hash_of(("jarvis_spatial", id))
+    ViewportId::from_hash_of(("jai_spatial", id))
 }
 
 /// The orb: the centre of the HUD window, else of the primary monitor (physical pixels).
@@ -621,7 +621,7 @@ pub fn show(ctx: &egui::Context, app: &Jai, rt: &Handle) {
     for (id, title, at, size, ghost, on_top) in specs {
         let mut builder = ViewportBuilder::default()
             .with_title(title)
-            .with_app_id("jarvis")
+            .with_app_id("jai")
             .with_decorations(false)
             .with_transparent(true)
             .with_resizable(true)
@@ -811,7 +811,7 @@ fn frame_body(ctx: &egui::Context, class: ViewportClass, app: &Jai, rt: &Handle,
         }
     };
     if embedded {
-        egui::Window::new(kind_title).id(egui::Id::new(("jarvis_spatial_embedded", window_id))).default_size(logical).title_bar(false).frame(Frame::none()).show(ctx, |ui| {
+        egui::Window::new(kind_title).id(egui::Id::new(("jai_spatial_embedded", window_id))).default_size(logical).title_bar(false).frame(Frame::none()).show(ctx, |ui| {
             ui.set_min_size(logical);
             draw(ui)
         });
@@ -1551,7 +1551,7 @@ fn want_hardware() {
     static SAMPLER: OnceLock<()> = OnceLock::new();
     hw().wanted = Some(Instant::now());
     SAMPLER.get_or_init(|| {
-        let spawned = std::thread::Builder::new().name("jarvis-hud-sampler".into()).spawn(|| {
+        let spawned = std::thread::Builder::new().name("jai-hud-sampler".into()).spawn(|| {
             use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System};
             let mut sys = System::new();
             let target: std::net::SocketAddr = ([1, 1, 1, 1], 443).into();

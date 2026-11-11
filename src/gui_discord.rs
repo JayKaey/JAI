@@ -121,7 +121,7 @@ fn body(ui: &mut Ui, tools: &ToolContext, rt: &Handle) {
 /// Registers the block while it is open: on the board, or its own window once detached.
 pub(super) fn show(ctx: &egui::Context, tools: &ToolContext, rt: &Handle) {
     // (Closed while it was its own window: it plays its exit first.)
-    if !super::detached_keep(ctx, ViewportId::from_hash_of("jarvis_discord_audio"), OPEN.load(Ordering::Acquire)) {
+    if !super::detached_keep(ctx, ViewportId::from_hash_of("jai_discord_audio"), OPEN.load(Ordering::Acquire)) {
         crate::hud_dock::forget(ID);
         return;
     }
@@ -135,7 +135,7 @@ pub(super) fn show(ctx: &egui::Context, tools: &ToolContext, rt: &Handle) {
         }
         return;
     }
-    let mut builder = ViewportBuilder::default().with_title("Discord Audio — J.A.I.").with_app_id("jarvis").with_inner_size([560.0, 350.0]).with_min_inner_size([460.0, 300.0]).with_decorations(false);
+    let mut builder = ViewportBuilder::default().with_title("Discord Audio — J.A.I.").with_app_id("jai").with_inner_size([560.0, 350.0]).with_min_inner_size([460.0, 300.0]).with_decorations(false);
     if let Some(icon) = super::window_icon() {
         builder = builder.with_icon(Arc::new(icon));
     }
@@ -144,7 +144,7 @@ pub(super) fn show(ctx: &egui::Context, tools: &ToolContext, rt: &Handle) {
     }
     let builder = super::for_test_session(builder);
     let (tools, rt) = (tools.clone(), rt.clone());
-    ctx.show_viewport_deferred(ViewportId::from_hash_of("jarvis_discord_audio"), builder, move |ctx, class| {
+    ctx.show_viewport_deferred(ViewportId::from_hash_of("jai_discord_audio"), builder, move |ctx, class| {
         crate::crash_guard::guard("discord audio", || {
             if ctx.input(|i| i.viewport().close_requested()) || (!OPEN.load(Ordering::Acquire) && !super::detached_leaving(ctx)) {
                 OPEN.store(false, Ordering::Release);

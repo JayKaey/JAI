@@ -168,7 +168,7 @@ fn placed(args: &Value) -> String {
     }
 }
 
-/// `open_jarvis_view`: the view as a HUD block (or its own window). The result ends with a
+/// `open_jai_view`: the view as a HUD block (or its own window). The result ends with a
 /// "Spoken:" line.
 pub async fn run(ctx: &ToolContext, args: &Value) -> Result<String, String> {
     let raw = str_arg(args, &["view", "window_kind", "name", "target"]).unwrap_or("system stats");
@@ -339,7 +339,7 @@ pub fn close_detached_panels() -> usize {
 
 pub fn tool_definition() -> Value {
     json!({"type": "function", "function": {
-        "name": "open_jarvis_view",
+        "name": "open_jai_view",
         "description": "Open one of YOUR OWN views as its own movable window (never an installed program): system stats / telemetry, schedule (WebUntis + calendar), simulation lab, mobile QR code, gym & finance tracker, contacts, network radar (\"who is on my network\"), disk map (\"what is taking up space\"), earth (globe: quakes, storms, satellites, flights, trains, traffic; satellite view; where Sir is; terrain; rain radar and clouds; past days; a world tour), departures (next trains), live (spoken answers, no window). \"Open my system stats in a new window\" → view system_stats.",
         "parameters": {"type": "object", "properties": {
             "view": {"type": "string", "enum": ["system_stats", "schedule", "simulation_lab", "mobile_qr", "workout_finance", "contacts", "network_radar", "disk_map", "earth", "departures", "live"]},

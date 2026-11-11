@@ -54,7 +54,7 @@ pub struct CalEvent {
 impl CalEvent {
     pub fn new(title: &str, start: NaiveDateTime, end: NaiveDateTime, all_day: bool) -> Self {
         Self {
-            uid: format!("{}@jarvis.stark", uuid::Uuid::new_v4()),
+            uid: format!("{}@jai.stark", uuid::Uuid::new_v4()),
             title: title.trim().to_string(),
             start,
             end,

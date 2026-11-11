@@ -264,7 +264,7 @@ async fn deadlines(pim: &Pim, course: Option<&str>) -> Result<String, String> {
                         ("exam", _, _) => CalEvent::new(&format!("Exam: {subject}{detail}"), t.date.and_time(NaiveTime::MIN), (t.date + ChronoDuration::days(1)).and_time(NaiveTime::MIN), true),
                         _ => CalEvent::new(&format!("Homework due: {subject}{detail}"), t.date.and_time(NaiveTime::MIN), (t.date + ChronoDuration::days(1)).and_time(NaiveTime::MIN), true),
                     };
-                    ev.uid = format!("jarvis-untis-{}@jarvis.stark", t.id);
+                    ev.uid = format!("jai-untis-{}@jai.stark", t.id);
                     ev.description = "Added by J.A.I. from WebUntis.".into();
                     events.push(ev);
                 }
@@ -279,7 +279,7 @@ async fn deadlines(pim: &Pim, course: Option<&str>) -> Result<String, String> {
                     let Some(due) = u.due.filter(|d| d.date() >= today && d.date() <= until) else { continue };
                     let title = format!("Due: {}{}", u.title.chars().take(80).collect::<String>(), if u.course.is_empty() { String::new() } else { format!(" ({})", u.course) });
                     let mut ev = CalEvent::new(&title, due - ChronoDuration::minutes(30), due, false);
-                    ev.uid = format!("jarvis-itslearning-{}@jarvis.stark", u.id.chars().filter(|c| c.is_alphanumeric() || *c == '-').collect::<String>());
+                    ev.uid = format!("jai-itslearning-{}@jai.stark", u.id.chars().filter(|c| c.is_alphanumeric() || *c == '-').collect::<String>());
                     ev.description = format!("Added by J.A.I. from itslearning. {}", u.url);
                     events.push(ev);
                 }
@@ -472,7 +472,7 @@ mod tests {
 
     #[test]
     fn taken_names_get_a_number() {
-        let dir = std::env::temp_dir().join(format!("jarvis_study_{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("jai_study_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("AB.pdf"), b"x").unwrap();
         assert_eq!(free_name(&dir, "AB.pdf"), dir.join("AB (2).pdf"));

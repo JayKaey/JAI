@@ -90,7 +90,7 @@ fn body(ui: &mut Ui, _rt: &Handle) {
 /// detached).
 pub(super) fn show(ctx: &egui::Context, rt: &Handle) {
     // (Closed while it was its own window: it plays its exit first.)
-    if !super::detached_keep(ctx, ViewportId::from_hash_of("jarvis_disk_map"), crate::disk_map::is_open()) {
+    if !super::detached_keep(ctx, ViewportId::from_hash_of("jai_disk_map"), crate::disk_map::is_open()) {
         crate::hud_dock::forget(ID);
         super::lock(&LAST).take();
         return;
@@ -105,7 +105,7 @@ pub(super) fn show(ctx: &egui::Context, rt: &Handle) {
         }
         return;
     }
-    let mut builder = ViewportBuilder::default().with_title("Disk map — J.A.I.").with_app_id("jarvis").with_inner_size([1120.0, 700.0]).with_min_inner_size([680.0, 440.0]).with_decorations(false);
+    let mut builder = ViewportBuilder::default().with_title("Disk map — J.A.I.").with_app_id("jai").with_inner_size([1120.0, 700.0]).with_min_inner_size([680.0, 440.0]).with_decorations(false);
     if let Some(icon) = super::window_icon() {
         builder = builder.with_icon(Arc::new(icon));
     }
@@ -114,7 +114,7 @@ pub(super) fn show(ctx: &egui::Context, rt: &Handle) {
     }
     let builder = super::for_test_session(builder);
     let rt = rt.clone();
-    ctx.show_viewport_deferred(ViewportId::from_hash_of("jarvis_disk_map"), builder, move |ctx, class| {
+    ctx.show_viewport_deferred(ViewportId::from_hash_of("jai_disk_map"), builder, move |ctx, class| {
         crate::crash_guard::guard("disk map", || {
             if ctx.input(|i| i.viewport().close_requested()) || (!crate::disk_map::is_open() && !super::detached_leaving(ctx)) {
                 crate::disk_map::close();
@@ -512,7 +512,7 @@ fn breadcrumb(ui: &mut Ui, p: &Painter, area: Rect, crumbs: &[String], font: &Fo
         let last = i + 1 == n;
         let Some((mut label, r)) = place(&ctx, room, &crumbs[i], font, INK, Align2::LEFT_CENTER, last) else { break };
         if !last {
-            let response = ui.interact(r, ui.id().with(("jarvis_disk_map_crumb", i)), Sense::click()).on_hover_cursor(CursorIcon::PointingHand);
+            let response = ui.interact(r, ui.id().with(("jai_disk_map_crumb", i)), Sense::click()).on_hover_cursor(CursorIcon::PointingHand);
             label.colour = if response.hovered() { c.accent } else { super::STRIP_MUTED };
             if response.clicked() {
                 clicked = Some(i);
@@ -1086,7 +1086,7 @@ fn draw_map(ui: &mut Ui, p: &Painter, frame: Rect, snap: &Snapshot, m: &Metrics,
         put(p, area.shrink(8.0), &text, &mono(m.label), colour, Align2::CENTER_CENTER, true);
         return (None, false);
     }
-    let id = ui.id().with("jarvis_disk_map_view");
+    let id = ui.id().with("jai_disk_map_view");
     let mut view: ViewState = ui.data_mut(|d| d.remove_temp(id)).unwrap_or_default();
     let key = LayoutKey::of(snap, area);
     if view.key.as_ref() != Some(&key) {
@@ -1095,7 +1095,7 @@ fn draw_map(ui: &mut Ui, p: &Painter, frame: Rect, snap: &Snapshot, m: &Metrics,
     }
     let animating = view.paint(p, area, now, c);
     let mut action = None;
-    let response = ui.interact(frame, ui.id().with("jarvis_disk_map_area"), Sense::click());
+    let response = ui.interact(frame, ui.id().with("jai_disk_map_area"), Sense::click());
     let hovered = response.hover_pos().and_then(|at| view.tiles.iter().rposition(|t| t.rect.contains(at)));
     if let Some(t) = hovered.map(|i| &view.tiles[i]) {
         p.rect_stroke(t.rect.shrink(0.75), Rounding::ZERO, super::stroke(1.5, INK));
@@ -1409,7 +1409,7 @@ fn largest(ui: &mut Ui, p: &Painter, area: Rect, snap: &Snapshot, m: &Metrics, c
         let mut ink = if row.busy { c.accent } else { super::STRIP_INK };
         if let Some(id) = row.opens {
             let whole = Rect::from_min_size(line.min, vec2(area.width(), line_h + 2.0 + bar_h));
-            let response = ui.interact(whole, ui.id().with(("jarvis_disk_map_largest", i)), Sense::click()).on_hover_cursor(CursorIcon::PointingHand);
+            let response = ui.interact(whole, ui.id().with(("jai_disk_map_largest", i)), Sense::click()).on_hover_cursor(CursorIcon::PointingHand);
             if response.hovered() {
                 ink = INK;
             }
@@ -1441,7 +1441,7 @@ fn draw_buttons(ui: &mut Ui, p: &Painter, area: Rect, snap: &Snapshot, font: &Fo
     let mut action = None;
     for (i, (label, enabled, act)) in buttons.into_iter().enumerate() {
         let r = Rect::from_min_size(pos2(area.left() + i as f32 * (w + gap), area.top()), vec2(w, area.height()));
-        let mut response = ui.interact(r, ui.id().with(("jarvis_disk_map_button", i)), if enabled { Sense::click() } else { Sense::hover() });
+        let mut response = ui.interact(r, ui.id().with(("jai_disk_map_button", i)), if enabled { Sense::click() } else { Sense::hover() });
         if enabled {
             response = response.on_hover_cursor(CursorIcon::PointingHand);
         }

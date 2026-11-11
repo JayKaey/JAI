@@ -8,8 +8,7 @@ His name is J.A.I., said "Jay". He answers to it said or spelt a little wrong ("
 "J A I", "Hey Jay"); what the letters stand for is yours to set (`name_meaning` in
 `jai_config.json`). His files carry his name too: `JAI.exe`, `jai_config.json`,
 `jai_memory.db`, `jai.log` and his folders (`Documents\JAI Models`, `Documents\JAI_Research`,
-...). Files and folders from before the rename take the new names at the next start, with
-everything in them.
+...).
 
 ## Build
 
@@ -22,7 +21,7 @@ build.bat
 ```
 
 That runs `cargo build --release` and then `tools\package.ps1`, which copies
-`target\release\jarvis.exe` to `JAI.exe` together with the DLLs it needs.
+`target\release\jai.exe` to `JAI.exe` together with the DLLs it needs.
 
 ## First start
 
@@ -39,7 +38,7 @@ personal data (settings, the phone pairing key, conversations, sealed account to
 ignores them, as it does the logs, the phone page's TLS key and the packaged executables.
 
 The film-voice reference recording is not included either. To calibrate the voice, put your own
-clip at `assets\jarvis_voice_reference.mp3` and run `JAI.exe --voice-calibrate`.
+clip at `assets\jai_voice_reference.mp3` and run `JAI.exe --voice-calibrate`.
 
 JAI speaks Received Pronunciation through a dry studio chain. This is an approximation built
 from stock voices, not a clone of an actor. Besides the similarity of the voice to its clip, the

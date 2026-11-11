@@ -643,7 +643,7 @@ mod tests {
             g.edges.iter().any(|(x, y, _)| *x == a && *y == b)
         };
         assert!(uses("brain.rs", "tools.rs"), "brain uses tools");
-        assert!(uses("jarvis_voice_dsp.rs", "fish_zero_shot_tts.rs"), "the chain calls the transfer");
+        assert!(uses("jai_voice_dsp.rs", "fish_zero_shot_tts.rs"), "the chain calls the transfer");
         assert!(uses("main.rs", "gui.rs"), "main declares every module");
         assert!(uses("gui_widgets.rs", "gui.rs"), "the GUI's path modules reach gui.rs through super::");
         assert!(g.neighbours(brain).len() > 10);

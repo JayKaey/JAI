@@ -379,7 +379,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn without_a_running_jarvis_the_reboot_says_so() {
+    async fn without_a_running_jai_the_reboot_says_so() {
         if CONTEXT.get().is_none() {
             assert!(reboot(Trigger::Voice).await.is_err());
             assert!(!auto_recover(), "no automatic reboot without a running engine");

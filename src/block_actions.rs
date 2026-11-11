@@ -142,7 +142,7 @@ mod tests {
 
     #[test]
     fn a_block_exports_as_markdown_and_as_json_without_overwriting() {
-        let dir = std::env::temp_dir().join(format!("jarvis_export_test_{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("jai_export_test_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         set_export_dir(Some(dir.clone()));
         let detail = json!({ "type": "note_stack", "pages": 2 });

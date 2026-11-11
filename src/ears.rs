@@ -1,9 +1,9 @@
 //! Microphone capture → 16 kHz mono → 512-sample frames → Silero VAD → [`VadMachine`].
 //!
 //! Threads:
-//! * `jarvis-mic`: owns the cpal input stream(s). The real-time callback only down-mixes to
+//! * `jai-mic`: owns the cpal input stream(s). The real-time callback only down-mixes to
 //!   mono and pushes into a lock-free SPSC ring buffer (no locks, no allocation).
-//! * `jarvis-vad` (high priority): drains the ring, resamples to 16 kHz with an anti-aliasing
+//! * `jai-vad` (high priority): drains the ring, resamples to 16 kHz with an anti-aliasing
 //!   FIR, cuts exact 512-sample frames, runs Silero + the state machine and emits events.
 //!
 //! In "Auto" mode the default microphone plus one more physical microphone are opened; if the
@@ -112,7 +112,7 @@ pub struct AddresseeContext {
     /// The conversation window is open (or a turn is running / Sir is finishing a sentence).
     pub conversation_open: bool,
     /// One of JAI's windows is the foreground window.
-    pub jarvis_focused: bool,
+    pub jai_focused: bool,
     /// A game, a full-screen app or a voice chat (Discord, TeamSpeak …) is in front.
     pub gaming: bool,
 }
@@ -224,7 +224,7 @@ pub fn classify_addressee(text: &str, ctx: &AddresseeContext) -> Addressee {
     if ctx.wake_word {
         return Addressee::WakeWord;
     }
-    if ctx.jarvis_focused {
+    if ctx.jai_focused {
         return Addressee::Focus;
     }
     if bare_window_word(text) && !ctx.conversation_open {
@@ -553,7 +553,7 @@ mod addressee_tests {
         assert_eq!(classify_addressee("Hab ich morgen Mathe?", &ctx()), Addressee::DirectIntent);
         assert_eq!(classify_addressee("What is 5 plus 5?", &ctx()), Addressee::DirectIntent);
         assert_eq!(classify_addressee("Can you create a new event in my calendar?", &ctx()), Addressee::DirectIntent);
-        let focused = AddresseeContext { jarvis_focused: true, ..ctx() };
+        let focused = AddresseeContext { jai_focused: true, ..ctx() };
         assert_eq!(classify_addressee("the weather in Paris", &focused), Addressee::Focus);
         let hands_free = AddresseeContext { wake_required: false, ..ctx() };
         assert_eq!(classify_addressee("I was thinking about the holidays", &hands_free), Addressee::HandsFree);
@@ -1000,8 +1000,8 @@ pub fn spawn(cfg: &JaiConfig, controls: Arc<AudioControls>, events: UnboundedSen
     let (feeds_tx, feeds_rx) = mpsc::channel::<Vec<DeviceFeed>>();
     let mic_controls = Arc::clone(&controls);
     if let Err(e) = std::thread::Builder::new()
-        .name("jarvis-mic".into())
-        .spawn(move || crate::crash_guard::supervise("jarvis-mic", || mic_thread(Arc::clone(&mic_controls), feeds_tx.clone())))
+        .name("jai-mic".into())
+        .spawn(move || crate::crash_guard::supervise("jai-mic", || mic_thread(Arc::clone(&mic_controls), feeds_tx.clone())))
     {
         error!("[MIC] Could not start capture thread: {e}");
         return;
@@ -1009,8 +1009,8 @@ pub fn spawn(cfg: &JaiConfig, controls: Arc<AudioControls>, events: UnboundedSen
 
     let cfg = cfg.clone();
     if let Err(e) = std::thread::Builder::new()
-        .name("jarvis-vad".into())
-        .spawn(move || crate::crash_guard::supervise("jarvis-vad", || vad_thread(cfg.clone(), Arc::clone(&controls), &feeds_rx, events.clone())))
+        .name("jai-vad".into())
+        .spawn(move || crate::crash_guard::supervise("jai-vad", || vad_thread(cfg.clone(), Arc::clone(&controls), &feeds_rx, events.clone())))
     {
         error!("[VAD] Could not start VAD thread: {e}");
     }

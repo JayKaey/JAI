@@ -144,7 +144,7 @@ Get-NetTCPConnection -State Established -ErrorAction SilentlyContinue | Where-Ob
             _ => {}
         }
     }
-    let top = hogs.iter().find(|(n, _)| !matches!(n.as_str(), "System" | "svchost" | "MsMpEng" | "jarvis" | "JARVIS" | "jai" | "JAI"));
+    let top = hogs.iter().find(|(n, _)| !matches!(n.as_str(), "System" | "svchost" | "MsMpEng" | "jai" | "JAI"));
     let verdict = match top {
         Some((name, b)) if *b > 1_000_000.0 => format!("{name} is the heaviest right now at {:.1} megabytes a second.", b / 1_000_000.0),
         Some((name, _)) => format!("Nothing is hogging the line; the busiest process is {name}, and it is modest."),

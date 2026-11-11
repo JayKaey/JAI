@@ -264,7 +264,7 @@ mod tests {
 
     #[test]
     fn rest_deadlines_are_shared_and_survive_reopen() {
-        let path = std::env::temp_dir().join(format!("jarvis-workout-{}.db", uuid::Uuid::new_v4()));
+        let path = std::env::temp_dir().join(format!("jai-workout-{}.db", uuid::Uuid::new_v4()));
         let coach = WorkoutCoach::open(&path).unwrap();
         let timer = coach.start_rest(60).unwrap();
         drop(coach);

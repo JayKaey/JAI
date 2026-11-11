@@ -273,7 +273,7 @@ mod tests {
         assert_eq!(category(Path::new("a.PNG"), 0), "Images");
         assert_eq!(category(Path::new("setup.exe"), 90), "Installers\\Old");
         assert_eq!(category(Path::new("pack.mrpack"), 0), "Minecraft");
-        let dir = std::env::temp_dir().join(format!("jarvis_janitor_test_{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("jai_janitor_test_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         for (name, body) in [("a.pdf", "same"), ("a (1).pdf", "same"), ("b.png", "img"), ("c.zip", "zip")] {

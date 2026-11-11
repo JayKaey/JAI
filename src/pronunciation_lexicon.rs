@@ -112,9 +112,6 @@ static NAMES: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| {
         (r"\bJ\.\s?A\.\s?I\b\.?", "Jay"),
         (r"\bJAI\b", "Jay"),
         (r"\bJai\b", "Jay"),
-        // (The film's, when he is asked about it.)
-        (r"\bJ\.A\.R\.V\.I\.S\.?", "Jarvis"),
-        (r"\bJARVIS\b", "Jarvis"),
         (r"(?i)\bsonora\b", "Suh-nora"),
         (r"(?i)\bspotify\b", "Spot-ify"),
         (r"(?i)\bweb ?untis\b", "Web-Oontis"),
@@ -420,7 +417,7 @@ mod tests {
     fn paths_and_identifiers_are_never_read_raw() {
         assert_eq!(say("I patched src/brain.rs"), "I patched brain dot R S");
         assert_eq!(say(r"Saved to C:\Users\max\Documents\notes.txt"), "Saved to your user folder");
-        assert_eq!(say(r"It is in D:\Code\jarvis_config.json"), "It is in jarvis config dot Jason");
+        assert_eq!(say(r"It is in D:\Code\jai_config.json"), "It is in jai config dot Jason");
         assert_eq!(say("hands_free_mode is on, see camelCase and SpatialWindowKind"), "hands free mode is on, see camel Case and Spatial Window Kind");
         assert_eq!(say("WhatsApp and YouTube stay"), "WhatsApp and YouTube stay");
     }

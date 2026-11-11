@@ -53,7 +53,7 @@ const USER_AGENTS: [&str; 5] = [
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
 ];
 /// APIs get an honest agent.
-const API_AGENT: &str = "JARVIS-DeepResearch/3.1 (local personal research assistant)";
+const API_AGENT: &str = "JAI-DeepResearch/3.1 (local personal research assistant)";
 
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS research_missions (
@@ -1721,7 +1721,7 @@ pub fn parse_ddg_instant(v: &Value) -> Option<DdgBrief> {
 }
 
 pub async fn ddg_instant(topic: &str) -> Option<DdgBrief> {
-    let r = fetch(&format!("https://api.duckduckgo.com/?q={}&format=json&no_html=1&skip_disambig=1&t=jarvis", urlencoding::encode(topic)), API_AGENT, "application/json").await.ok()?;
+    let r = fetch(&format!("https://api.duckduckgo.com/?q={}&format=json&no_html=1&skip_disambig=1&t=jai", urlencoding::encode(topic)), API_AGENT, "application/json").await.ok()?;
     let v: Value = serde_json::from_slice(&r.body).ok()?;
     parse_ddg_instant(&v)
 }
@@ -2350,7 +2350,7 @@ mod tests {
 
     #[test]
     fn schema_checkpoints_and_resumes_missions() {
-        let path = std::env::temp_dir().join(format!("jarvis_research_{}.db", uuid::Uuid::new_v4()));
+        let path = std::env::temp_dir().join(format!("jai_research_{}.db", uuid::Uuid::new_v4()));
         let conn = Connection::open(&path).unwrap();
         conn.execute_batch(SCHEMA).unwrap();
         for table in ["research_missions", "research_queries", "research_sources", "research_facts", "research_frontier"] {

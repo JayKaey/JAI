@@ -79,7 +79,7 @@ $stream = Await ($file.OpenAsync([Windows.Storage.FileAccessMode]::Read)) ([Wind
 $decoder = Await ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream)) ([Windows.Graphics.Imaging.BitmapDecoder])
 $bitmap = Await ($decoder.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap])
 $engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
-if ($engine -eq $null) {{ Write-Output 'JARVIS_NO_OCR'; exit 0 }}
+if ($engine -eq $null) {{ Write-Output 'JAI_NO_OCR'; exit 0 }}
 $result = Await ($engine.RecognizeAsync($bitmap)) ([Windows.Media.Ocr.OcrResult])
 $stream.Dispose()
 $result.Lines | ForEach-Object {{ $_.Text }}
@@ -113,7 +113,7 @@ pub async fn ocr_file(path: &std::path::Path) -> Result<String, String> {
         let err = String::from_utf8_lossy(&out.stderr);
         return Err(format!("Windows OCR failed: {}", err.lines().find(|l| !l.trim().is_empty()).unwrap_or("unknown error")));
     }
-    if text == "JARVIS_NO_OCR" {
+    if text == "JAI_NO_OCR" {
         return Err("Windows has no OCR language installed.".into());
     }
     info!("[SCREEN] OCR of {}: {} characters", path.display(), text.len());
@@ -148,7 +148,7 @@ pub async fn read(scope: Scope) -> Result<String, String> {
 /// OCR of `rect` (left, top, width, height in physical pixels; None = primary screen).
 #[cfg(windows)]
 async fn ocr(rect: Option<[i32; 4]>, label: String) -> Result<String, String> {
-    let png = std::env::temp_dir().join(format!("jarvis_ocr_{}.png", std::process::id()));
+    let png = std::env::temp_dir().join(format!("jai_ocr_{}.png", std::process::id()));
     let script = ocr_script(rect, &png.display().to_string());
     let started = std::time::Instant::now();
     // His own windows stay out of the picture while he looks (he reads what is behind them;
@@ -163,7 +163,7 @@ async fn ocr(rect: Option<[i32; 4]>, label: String) -> Result<String, String> {
         let err = String::from_utf8_lossy(&out.stderr);
         return Err(format!("Windows OCR failed: {}", err.lines().find(|l| !l.trim().is_empty()).unwrap_or("unknown error")));
     }
-    if text == "JARVIS_NO_OCR" {
+    if text == "JAI_NO_OCR" {
         return Err("Windows has no OCR language installed (Settings → Time & language → Language → add the language's optional 'Optical character recognition').".into());
     }
     info!("[SCREEN] OCR of {label}: {} characters in {} ms", text.len(), started.elapsed().as_millis());
@@ -209,7 +209,7 @@ async fn selection(foreground: Option<isize>) -> Result<String, String> {
     let before = crate::clipboard::read().await.unwrap_or_default();
     // A marker makes "nothing was selected" detectable even when the selection equals the old
     // clipboard text.
-    let marker = format!("\u{2063}jarvis-{}", crate::widgets::now_ms());
+    let marker = format!("\u{2063}jai-{}", crate::widgets::now_ms());
     crate::clipboard::write(&marker).await?;
     async fn read_back(marker: &str) -> String {
         let mut text = String::new();
@@ -275,7 +275,7 @@ async fn monitor_text(target: &serde_json::Value) -> Result<String, String> {
     let titles: Vec<String> = crate::win32::call(move || {
         crate::win32::app_windows()
             .into_iter()
-            .filter(|w| !crate::win32::is_jarvis_window(w) && !matches!(w.class.as_str(), "Progman" | "WorkerW" | "Shell_TrayWnd"))
+            .filter(|w| !crate::win32::is_jai_window(w) && !matches!(w.class.as_str(), "Progman" | "WorkerW" | "Shell_TrayWnd"))
             .filter_map(|w| {
                 let (r, _, minimised) = crate::win32::window_state(w.hwnd)?;
                 let (cx, cy) = (r[0] + r[2] / 2, r[1] + r[3] / 2);
@@ -315,7 +315,7 @@ pub fn inspect_tool_definition() -> serde_json::Value {
 pub async fn read(_scope: Scope) -> Result<String, String> {
     // grim/scrot + tesseract when available.
     tokio::task::spawn_blocking(|| {
-        let png = std::env::temp_dir().join("jarvis_ocr.png");
+        let png = std::env::temp_dir().join("jai_ocr.png");
         let p = png.display().to_string();
         let shot = ["grim", "scrot"].iter().any(|tool| std::process::Command::new(tool).arg(&p).status().map(|s| s.success()).unwrap_or(false));
         if !shot {

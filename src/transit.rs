@@ -671,7 +671,7 @@ pub async fn locate_trip(trip_id: &str) -> Result<(f64, f64, String), String> {
 
 // ----------------------------------------------------------------------------- the tool ----
 
-/// `open_jarvis_view` with view `departures`: opens the board for `station` (or the station
+/// `open_jai_view` with view `departures`: opens the board for `station` (or the station
 /// near Sir), waits for the first answer, and says the next train.
 pub async fn run(_ctx: &crate::tools::ToolContext, args: &Value) -> Result<String, String> {
     open_board(args).await

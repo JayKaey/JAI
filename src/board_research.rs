@@ -14,7 +14,7 @@
 use crate::deep_research_engine::{self as engine, Candidate};
 use crate::focus::PendingOffer;
 use crate::hud_board::{self, Bar, Block, BlockKind, Note, Report, ResearchStatus, Road};
-use crate::jarvis_voice_dsp::Earcon;
+use crate::jai_voice_dsp::Earcon;
 use crate::tools::ToolContext;
 use futures_util::stream::{self, StreamExt};
 use regex::Regex;
@@ -25,7 +25,7 @@ use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 use tracing::{info, warn};
 
-const API_AGENT: &str = "JARVIS-HUD/3.6 (local personal assistant; board research)";
+const API_AGENT: &str = "JAI-HUD/3.6 (local personal assistant; board research)";
 const PAGE_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36";
 const MAX_SOURCES: usize = 48;
 const SEARCHES: usize = 8;

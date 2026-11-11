@@ -420,7 +420,7 @@ pub fn show(ctx: &egui::Context, style: CardStyle, dt: f32) -> Vec<PopupAction> 
         // (On whole pixels: a card between two would draw its text and border soft.)
         let ppp = ctx.pixels_per_point();
         let at = pos2(((right - width) * ppp).round() / ppp, (top * ppp).round() / ppp);
-        let area_id = Id::new(("jarvis_popup", p.id));
+        let area_id = Id::new(("jai_popup", p.id));
         // A card on its way out, or still faint on its way in, takes no clicks: what is under it
         // (a block, the console's line) keeps them.
         let solid = !p.dismissing && alpha > 0.5;

@@ -461,7 +461,7 @@ pub enum LiveLayer {
     Traffic,
 }
 
-/// What `open_jarvis_view {"view": "earth", …}` asks of the live layers.
+/// What `open_jai_view {"view": "earth", …}` asks of the live layers.
 #[derive(Debug, Clone, PartialEq)]
 pub enum LiveAction {
     /// A group's satellites ("active", "starlink", …).

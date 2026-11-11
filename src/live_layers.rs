@@ -4,7 +4,7 @@
 //! * **Where Sir is** is asked in ONE place, `here()`, so a more precise "locate me" can take
 //!   over there alone.
 //! * **No tools of their own** (the prompt has no room left): the spoken answers are
-//!   `open_jarvis_view` view `live` — `passes` ("when can I see the ISS?"), `traffic` ("how's
+//!   `open_jai_view` view `live` — `passes` ("when can I see the ISS?"), `traffic` ("how's
 //!   the traffic on the A5?"), `weather_on` ("what was the weather in Berlin on 3 May 2020?"),
 //!   `rain_soon` ("will it rain in the next hour?"), `alerts` / `set_alert` (the rain and ISS
 //!   heads-ups); the Earth's layers and the departures board are its views `earth` and
@@ -232,10 +232,10 @@ pub async fn over_what(lat: f64, lon: f64) -> Option<String> {
 
 // ------------------------------------------------------------------------------ tools ----
 
-// No tools of their own (the prompt has no room): everything is `open_jarvis_view`, the globe's
+// No tools of their own (the prompt has no room): everything is `open_jai_view`, the globe's
 // layers as Earth actions, the board as view `departures`, and the spoken answers as view `live`.
 
-/// `open_jarvis_view {"view": "live", "action": …}`: an answer, no window. The actions that only
+/// `open_jai_view {"view": "live", "action": …}`: an answer, no window. The actions that only
 /// read (`hyper_cortex`'s table) and the one that changes a setting.
 pub const READ_ACTIONS: [&str; 5] = ["passes", "traffic", "weather_on", "rain_soon", "alerts"];
 pub const SET_ALERT: &str = "set_alert";
@@ -544,12 +544,12 @@ fn starts_with_any(s: &str, leads: &[&str]) -> bool {
     leads.iter().any(|l| s == *l || s.starts_with(&format!("{l} ")))
 }
 
-/// Sir's words as one of the live calls: always `open_jarvis_view` (view `earth`, `departures`
+/// Sir's words as one of the live calls: always `open_jai_view` (view `earth`, `departures`
 /// or `live`). `text` is his sentence as said.
 pub fn voice_command(text: &str) -> Option<(&'static str, Value)> {
     let (what, args) = voice_call(text)?;
     let action = match what {
-        "open_jarvis_view" => return Some((what, args)),
+        "open_jai_view" => return Some((what, args)),
         "get_satellite_passes" => "passes",
         "check_traffic" => "traffic",
         "get_weather_for_date" => "weather_on",
@@ -561,7 +561,7 @@ pub fn voice_command(text: &str) -> Option<(&'static str, Value)> {
         // (A heads-up's switch goes in "set".)
         call[if key == "action" { "set" } else { key.as_str() }] = value.clone();
     }
-    Some(("open_jarvis_view", call))
+    Some(("open_jai_view", call))
 }
 
 /// What Sir asked for, by what it does: (passes / traffic / weather / rain / heads-up, or the
@@ -613,7 +613,7 @@ fn voice_call(text: &str) -> Option<(&'static str, Value)> {
     // "What satellite is above me?", "welche Satelliten sind über mir?".
     let above_me = has(&["above me", "over me", "above us", "over us", "overhead", "over my head", "above my head", "above here", "over here", "über mir", "ueber mir", "über uns", "ueber uns", "über meinem kopf", "über dem haus", "über mich"]);
     if above_me && (sat_word || has(&["satellite", "satellit"])) && !when && !imagery {
-        return Some(("open_jarvis_view", earth("show_overhead")));
+        return Some(("open_jai_view", earth("show_overhead")));
     }
     // "Show me all satellites", "show me Starlink", "zeig mir die GPS-Satelliten".
     if !imagery && !phone_link {
@@ -622,7 +622,7 @@ fn voice_call(text: &str) -> Option<(&'static str, Value)> {
             let alone = matches!(group, "starlink" | "oneweb");
             let shows = starts_with_any(&s, SHOW_VERBS) || has(&["on the earth", "on the globe", "on the map", "auf der erde", "auf dem globus", "auf der karte"]) || starts_with_any(&s, &["where are", "wo sind", "all", "alle"]);
             if (sat_word || alone || has(&["satellit"])) && shows {
-                return Some(("open_jarvis_view", json!({ "view": "earth", "action": "show_satellites", "group": group })));
+                return Some(("open_jai_view", json!({ "view": "earth", "action": "show_satellites", "group": group })));
             }
         }
     }
@@ -633,7 +633,7 @@ fn voice_call(text: &str) -> Option<(&'static str, Value)> {
         if let Some((name, iss)) = satellite_named(&object) {
             let explicit = has(&["satellite", "satellit", "telescope", "teleskop", "station"]) || ["hubble", "tiangong", "tianhe", "css"].iter().any(|w| object.contains(w)) || name.chars().any(|ch| ch.is_ascii_digit());
             if !iss && explicit && !imagery && !phone_link {
-                return Some(("open_jarvis_view", json!({ "view": "earth", "action": "find_satellite", "name": name })));
+                return Some(("open_jai_view", json!({ "view": "earth", "action": "find_satellite", "name": name })));
             }
         }
     }
@@ -649,7 +649,7 @@ fn voice_call(text: &str) -> Option<(&'static str, Value)> {
                 "trains" | "züge" | "zuege" | "bahnen" => "trains",
                 _ => "traffic",
             };
-            return Some(("open_jarvis_view", json!({ "view": "earth", "action": "hide_layer", "layer": layer })));
+            return Some(("open_jai_view", json!({ "view": "earth", "action": "hide_layer", "layer": layer })));
         }
     }
 
@@ -657,7 +657,7 @@ fn voice_call(text: &str) -> Option<(&'static str, Value)> {
     let trains_word = word(&["trains", "train", "züge", "zuege", "zug", "bahn", "bahnen", "s-bahn", "u-bahn", "tram", "trams", "railway", "railways"]);
     // "Where is that train?", "wo ist mein Zug?" → on the Earth.
     if trains_word && (starts_with_any(&s, &["where is", "wheres", "where s", "wo ist", "wo bleibt", "wo fährt", "wo faehrt"]) || has(&["that train on", "my train on", "the train on the", "den zug auf", "show me that train", "show that train", "show me my train", "zeig mir den zug", "zeig mir meinen zug"])) && !word(&["trains", "züge", "zuege", "bahnen"]) && !has(&["station", "bahnhof", "hbf", "platform", "gleis"]) {
-        return Some(("open_jarvis_view", earth("show_train")));
+        return Some(("open_jai_view", earth("show_train")));
     }
     // The departures board.
     let departures_word = has(&["departures", "departure board", "departure times", "abfahrten", "abfahrtstafel", "abfahrtszeiten", "abfahrtsplan", "abfahrtsmonitor"]);
@@ -667,7 +667,7 @@ fn voice_call(text: &str) -> Option<(&'static str, Value)> {
         if let Some(station) = after_lead(&s, &["from", "at", "for", "in", "ab", "von", "vom", "am", "für", "fuer", "of"]).and_then(|r| place_words(&r)) {
             args["station"] = json!(station);
         }
-        return Some(("open_jarvis_view", args));
+        return Some(("open_jai_view", args));
     }
     // "Show me the trains around Stuttgart", "live trains", "zeig mir die Züge in Helsinki".
     if word(&["trains", "züge", "zuege", "bahnen", "railway traffic", "zugverkehr"]) && (starts_with_any(&s, SHOW_VERBS) || has(&["live trains", "trains on the", "züge auf der"])) {
@@ -675,7 +675,7 @@ fn voice_call(text: &str) -> Option<(&'static str, Value)> {
         if let Some(place) = after_lead(&s, &["around", "near", "in", "over", "at", "um", "bei", "über", "ueber", "nahe"]).and_then(|r| place_words(&r)) {
             args["place"] = json!(place);
         }
-        return Some(("open_jarvis_view", args));
+        return Some(("open_jai_view", args));
     }
 
     // ---- traffic.
@@ -690,7 +690,7 @@ fn voice_call(text: &str) -> Option<(&'static str, Value)> {
             } else if let Some(place) = after_lead(&s, &["around", "near", "in", "over", "at", "um", "bei", "in der nähe von"]).and_then(|r| place_words(&r)) {
                 args["place"] = json!(place);
             }
-            return Some(("open_jarvis_view", args));
+            return Some(("open_jai_view", args));
         }
         if let Some(road) = road {
             return Some(("check_traffic", json!({ "road": road })));
@@ -888,16 +888,16 @@ mod tests {
 
     #[test]
     fn every_call_is_a_view_call() {
-        assert_eq!(voice_command("When can I see the ISS?"), Some(("open_jarvis_view", json!({"view": "live", "action": "passes", "satellite": "ISS"}))));
-        assert_eq!(voice_command("Stau auf der A8?"), Some(("open_jarvis_view", json!({"view": "live", "action": "traffic", "road": "A8"}))));
-        assert_eq!(voice_command("Will it rain in the next hour?"), Some(("open_jarvis_view", json!({"view": "live", "action": "rain_soon", "minutes": 60}))));
-        assert_eq!(voice_command("Warn me before it rains."), Some(("open_jarvis_view", json!({"view": "live", "action": "set_alert", "set": "rain_on"}))));
-        assert_eq!(voice_command("Show me Starlink."), Some(("open_jarvis_view", json!({"view": "earth", "action": "show_satellites", "group": "starlink"}))));
+        assert_eq!(voice_command("When can I see the ISS?"), Some(("open_jai_view", json!({"view": "live", "action": "passes", "satellite": "ISS"}))));
+        assert_eq!(voice_command("Stau auf der A8?"), Some(("open_jai_view", json!({"view": "live", "action": "traffic", "road": "A8"}))));
+        assert_eq!(voice_command("Will it rain in the next hour?"), Some(("open_jai_view", json!({"view": "live", "action": "rain_soon", "minutes": 60}))));
+        assert_eq!(voice_command("Warn me before it rains."), Some(("open_jai_view", json!({"view": "live", "action": "set_alert", "set": "rain_on"}))));
+        assert_eq!(voice_command("Show me Starlink."), Some(("open_jai_view", json!({"view": "earth", "action": "show_satellites", "group": "starlink"}))));
         // What only reads is known to: a question may run it.
         for action in READ_ACTIONS {
-            assert!(crate::hyper_cortex::is_read_only("open_jarvis_view", &json!({"view": "live", "action": action})), "{action}");
+            assert!(crate::hyper_cortex::is_read_only("open_jai_view", &json!({"view": "live", "action": action})), "{action}");
         }
-        assert!(!crate::hyper_cortex::is_read_only("open_jarvis_view", &json!({"view": "live", "action": SET_ALERT, "set": "rain_off"})));
+        assert!(!crate::hyper_cortex::is_read_only("open_jai_view", &json!({"view": "live", "action": SET_ALERT, "set": "rain_off"})));
     }
 
     fn tool(text: &str) -> Option<&'static str> {
@@ -906,13 +906,13 @@ mod tests {
 
     #[test]
     fn satellites_are_asked_for_by_name_and_group() {
-        assert_eq!(said("Show me all satellites."), Some(("open_jarvis_view", json!({"view": "earth", "action": "show_satellites", "group": "active"}))));
-        assert_eq!(said("Show me Starlink."), Some(("open_jarvis_view", json!({"view": "earth", "action": "show_satellites", "group": "starlink"}))));
-        assert_eq!(said("Zeig mir die GPS Satelliten"), Some(("open_jarvis_view", json!({"view": "earth", "action": "show_satellites", "group": "gps"}))));
-        assert_eq!(said("Where is Hubble?"), Some(("open_jarvis_view", json!({"view": "earth", "action": "find_satellite", "name": "Hubble"}))));
-        assert_eq!(said("Wo ist das Hubble Teleskop gerade?"), Some(("open_jarvis_view", json!({"view": "earth", "action": "find_satellite", "name": "Hubble"}))));
-        assert_eq!(said("What satellite is above me?"), Some(("open_jarvis_view", json!({"view": "earth", "action": "show_overhead"}))));
-        assert_eq!(said("Welche Satelliten sind gerade über mir?"), Some(("open_jarvis_view", json!({"view": "earth", "action": "show_overhead"}))));
+        assert_eq!(said("Show me all satellites."), Some(("open_jai_view", json!({"view": "earth", "action": "show_satellites", "group": "active"}))));
+        assert_eq!(said("Show me Starlink."), Some(("open_jai_view", json!({"view": "earth", "action": "show_satellites", "group": "starlink"}))));
+        assert_eq!(said("Zeig mir die GPS Satelliten"), Some(("open_jai_view", json!({"view": "earth", "action": "show_satellites", "group": "gps"}))));
+        assert_eq!(said("Where is Hubble?"), Some(("open_jai_view", json!({"view": "earth", "action": "find_satellite", "name": "Hubble"}))));
+        assert_eq!(said("Wo ist das Hubble Teleskop gerade?"), Some(("open_jai_view", json!({"view": "earth", "action": "find_satellite", "name": "Hubble"}))));
+        assert_eq!(said("What satellite is above me?"), Some(("open_jai_view", json!({"view": "earth", "action": "show_overhead"}))));
+        assert_eq!(said("Welche Satelliten sind gerade über mir?"), Some(("open_jai_view", json!({"view": "earth", "action": "show_overhead"}))));
         // The ISS keeps the Earth's own layer; the imagery and the phone link are not satellites.
         assert_eq!(said("Where is the ISS?"), None);
         assert_eq!(said("Switch to satellite view."), None);
@@ -930,16 +930,16 @@ mod tests {
 
     #[test]
     fn trains_and_departures() {
-        assert_eq!(said("When's my next train?"), Some(("open_jarvis_view", json!({"view": "departures", "action": "show"}))));
-        assert_eq!(said("Wann fährt meine Bahn?"), Some(("open_jarvis_view", json!({"view": "departures", "action": "show"}))));
-        assert_eq!(said("Departures from Karlsruhe Hbf."), Some(("open_jarvis_view", json!({"view": "departures", "action": "show", "station": "Karlsruhe Hbf"}))));
-        assert_eq!(said("Show me the departures at Stuttgart Hauptbahnhof."), Some(("open_jarvis_view", json!({"view": "departures", "action": "show", "station": "Stuttgart Hauptbahnhof"}))));
-        assert_eq!(said("Abfahrten in Ulm"), Some(("open_jarvis_view", json!({"view": "departures", "action": "show", "station": "Ulm"}))));
-        assert_eq!(said("When is the next train from Freiburg?"), Some(("open_jarvis_view", json!({"view": "departures", "action": "show", "station": "Freiburg"}))));
-        assert_eq!(said("Show me the trains around Stuttgart."), Some(("open_jarvis_view", json!({"view": "earth", "action": "show_trains", "place": "Stuttgart"}))));
-        assert_eq!(said("Zeig mir die Züge in Helsinki"), Some(("open_jarvis_view", json!({"view": "earth", "action": "show_trains", "place": "Helsinki"}))));
-        assert_eq!(said("Where is that train?"), Some(("open_jarvis_view", json!({"view": "earth", "action": "show_train"}))));
-        assert_eq!(said("Wo ist mein Zug?"), Some(("open_jarvis_view", json!({"view": "earth", "action": "show_train"}))));
+        assert_eq!(said("When's my next train?"), Some(("open_jai_view", json!({"view": "departures", "action": "show"}))));
+        assert_eq!(said("Wann fährt meine Bahn?"), Some(("open_jai_view", json!({"view": "departures", "action": "show"}))));
+        assert_eq!(said("Departures from Karlsruhe Hbf."), Some(("open_jai_view", json!({"view": "departures", "action": "show", "station": "Karlsruhe Hbf"}))));
+        assert_eq!(said("Show me the departures at Stuttgart Hauptbahnhof."), Some(("open_jai_view", json!({"view": "departures", "action": "show", "station": "Stuttgart Hauptbahnhof"}))));
+        assert_eq!(said("Abfahrten in Ulm"), Some(("open_jai_view", json!({"view": "departures", "action": "show", "station": "Ulm"}))));
+        assert_eq!(said("When is the next train from Freiburg?"), Some(("open_jai_view", json!({"view": "departures", "action": "show", "station": "Freiburg"}))));
+        assert_eq!(said("Show me the trains around Stuttgart."), Some(("open_jai_view", json!({"view": "earth", "action": "show_trains", "place": "Stuttgart"}))));
+        assert_eq!(said("Zeig mir die Züge in Helsinki"), Some(("open_jai_view", json!({"view": "earth", "action": "show_trains", "place": "Helsinki"}))));
+        assert_eq!(said("Where is that train?"), Some(("open_jai_view", json!({"view": "earth", "action": "show_train"}))));
+        assert_eq!(said("Wo ist mein Zug?"), Some(("open_jai_view", json!({"view": "earth", "action": "show_train"}))));
         assert_eq!(tool("Show me the flight departures."), None);
     }
 
@@ -950,8 +950,8 @@ mod tests {
         assert_eq!(said("Any traffic jams near me?"), Some(("check_traffic", json!({"jams_only": true}))));
         assert_eq!(said("Gibt es Staus?"), Some(("check_traffic", json!({"jams_only": true}))));
         assert_eq!(said("How is the traffic around Stuttgart?"), Some(("check_traffic", json!({"jams_only": true, "place": "Stuttgart"}))));
-        assert_eq!(said("Show me the traffic on the A8."), Some(("open_jarvis_view", json!({"view": "earth", "action": "show_traffic", "road": "A8"}))));
-        assert_eq!(said("Show me the live traffic."), Some(("open_jarvis_view", json!({"view": "earth", "action": "show_traffic"}))));
+        assert_eq!(said("Show me the traffic on the A8."), Some(("open_jai_view", json!({"view": "earth", "action": "show_traffic", "road": "A8"}))));
+        assert_eq!(said("Show me the live traffic."), Some(("open_jai_view", json!({"view": "earth", "action": "show_traffic"}))));
         // Not the roads.
         assert_eq!(tool("How much traffic is on my network?"), None);
         assert_eq!(tool("Set a 5 minute timer."), None);
@@ -1002,7 +1002,7 @@ mod tests {
             ("Where is Hubble?", "earth", "find_satellite"),
         ] {
             let got = crate::compound_planner::resolve_one(text, &ctx);
-            let ok = got.as_ref().is_some_and(|(t, a)| t == "open_jarvis_view" && a["view"] == view && a["action"] == action);
+            let ok = got.as_ref().is_some_and(|(t, a)| t == "open_jai_view" && a["view"] == view && a["action"] == action);
             assert!(ok, "{text}: {got:?}");
         }
     }

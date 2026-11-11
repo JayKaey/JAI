@@ -31,7 +31,7 @@ const FORBIDDEN_BINARIES: &[&str] = &[
 ];
 /// JAI tools a forged step may not call (no recursion, no self-modification, no quitting).
 const FORBIDDEN_TOOLS: &[&str] = &[
-    "forge_tool", "correct_forged_tool", "run_forged_tool", "delete_forged_tool", "shutdown_jarvis", "control_jarvis_lifecycle", "patch_own_source",
+    "forge_tool", "correct_forged_tool", "run_forged_tool", "delete_forged_tool", "shutdown_jai", "control_jai_lifecycle", "patch_own_source",
     "recompile_and_restart", "restore_source_backup", "system_power", "create_skill", "delete_skill",
 ];
 
@@ -232,11 +232,11 @@ pub fn match_triggers(spec: &ForgedToolSpec, text: &str) -> Option<Value> {
 /// What a step needs from the running JAI.
 #[allow(async_fn_in_trait)]
 pub trait StepHost {
-    async fn jarvis_tool(&self, name: &str, args: &Value) -> Result<String, String>;
+    async fn jai_tool(&self, name: &str, args: &Value) -> Result<String, String>;
 }
 
 impl StepHost for crate::tools::ToolContext {
-    async fn jarvis_tool(&self, name: &str, args: &Value) -> Result<String, String> {
+    async fn jai_tool(&self, name: &str, args: &Value) -> Result<String, String> {
         let outcome = Box::pin(self.execute(name, args)).await;
         if outcome.success {
             Ok(outcome.output)
@@ -342,9 +342,9 @@ async fn run_step<H: StepHost>(spec: &ForgedToolSpec, step: &RustStep, args: &Va
                         "mute" => "mute",
                         _ => "play_pause",
                     };
-                    host.jarvis_tool("media_and_volume_control", &json!({ "action": media })).await
+                    host.jai_tool("media_and_volume_control", &json!({ "action": media })).await
                 }
-                _ => host.jarvis_tool("window_management", &json!({ "action": action, "target_window": f(window_title_match) })).await,
+                _ => host.jai_tool("window_management", &json!({ "action": action, "target_window": f(window_title_match) })).await,
             }
         }
         RustStep::HttpRequest { method, url, headers, body_template } => {
@@ -375,7 +375,7 @@ async fn run_step<H: StepHost>(spec: &ForgedToolSpec, step: &RustStep, args: &Va
             if FORBIDDEN_TOOLS.contains(&name.as_str()) {
                 return Err(format!("'{name}' may not be called from a forged tool."));
             }
-            host.jarvis_tool(name, &fill_value(targs, args, prev)).await
+            host.jai_tool(name, &fill_value(targs, args, prev)).await
         }
     }
 }
@@ -729,8 +729,8 @@ pub fn forge_prompt() -> String {
      {\"step\":\"win32_window_action\",\"window_title_match\":\"Discord\",\"action\":\"focus|minimize|maximize|close|play_pause|next_track\"}\n\
      {\"step\":\"http_request\",\"method\":\"GET\",\"url\":\"https://…\",\"headers\":[[\"k\",\"v\"]],\"body_template\":null}\n\
      {\"step\":\"compile_and_run_rust_plugin\",\"rust_source_code\":\"fn main(){ … }\",\"args\":[\"{slot}\"]}  (std only; print the result)\n\
-     {\"step\":\"jarvis_tool\",\"name\":\"control_music|window_management|open_application|open_website|media_and_volume_control|…\",\"args\":{…}}\n\
-     Prefer jarvis_tool when one of JAI's tools already does a step. Keep it to the fewest steps that do exactly what Sir asked."
+     {\"step\":\"jai_tool\",\"name\":\"control_music|window_management|open_application|open_website|media_and_volume_control|…\",\"args\":{…}}\n\
+     Prefer jai_tool when one of JAI's tools already does a step. Keep it to the fewest steps that do exactly what Sir asked."
         .to_string()
 }
 
@@ -752,7 +752,7 @@ pub fn definitions() -> Vec<Value> {
     let mut defs = vec![
         json!({"type": "function", "function": {
             "name": "forge_tool",
-            "description": "Create (or correct) a NEW persistent native tool for yourself when Sir asks for something no tool covers, or tells you how to do it instead. Pass the full spec: name, description, triggers (with {slot}s), args for the first run, steps (scan_directory, parse_file_or_sqlite, launch_or_invoke_process, win32_window_action, http_request, compile_and_run_rust_plugin, jarvis_tool). It is test-run immediately and saved only if it works.",
+            "description": "Create (or correct) a NEW persistent native tool for yourself when Sir asks for something no tool covers, or tells you how to do it instead. Pass the full spec: name, description, triggers (with {slot}s), args for the first run, steps (scan_directory, parse_file_or_sqlite, launch_or_invoke_process, win32_window_action, http_request, compile_and_run_rust_plugin, jai_tool). It is test-run immediately and saved only if it works.",
             "parameters": {"type": "object", "properties": {
                 "name": {"type": "string"}, "description": {"type": "string"},
                 "triggers": {"type": "array", "items": {"type": "string"}},
@@ -832,7 +832,7 @@ mod tests {
     }
 
     impl StepHost for Host {
-        async fn jarvis_tool(&self, name: &str, args: &Value) -> Result<String, String> {
+        async fn jai_tool(&self, name: &str, args: &Value) -> Result<String, String> {
             self.calls.lock().unwrap_or_else(|e| e.into_inner()).push((name.to_string(), args.clone()));
             if name == "fail_me" {
                 return Err("simulated failure".into());
@@ -842,7 +842,7 @@ mod tests {
     }
 
     fn temp_dir(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("jarvis_forge_test_{tag}_{}", std::process::id()));
+        let d = std::env::temp_dir().join(format!("jai_forge_test_{tag}_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
@@ -876,7 +876,7 @@ mod tests {
         assert!(spec.validate().is_ok());
         spec.steps = vec![RustStep::LaunchOrInvokeProcess { binary: "powershell.exe".into(), args: vec![], working_dir: None }];
         assert!(spec.validate().unwrap_err().contains("native"));
-        spec.steps = vec![RustStep::JaiTool { name: "shutdown_jarvis".into(), args: json!({}) }];
+        spec.steps = vec![RustStep::JaiTool { name: "shutdown_jai".into(), args: json!({}) }];
         assert!(spec.validate().is_err());
         spec.name = "Bad Name".into();
         assert!(spec.validate().is_err());

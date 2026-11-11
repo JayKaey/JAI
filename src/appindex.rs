@@ -53,7 +53,7 @@ static INDEX: LazyLock<RwLock<Index>> = LazyLock::new(|| RwLock::new(Index::defa
 
 /// Builds the index on a background thread.
 pub fn start() {
-    let spawned = std::thread::Builder::new().name("jarvis-appindex".into()).spawn(|| {
+    let spawned = std::thread::Builder::new().name("jai-appindex".into()).spawn(|| {
         crate::platform::lower_thread_priority();
         rebuild();
     });

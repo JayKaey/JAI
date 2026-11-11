@@ -367,7 +367,7 @@ impl SkillManager {
         Some((skill, Value::Object(args)))
     }
 
-    /// Runs a skill with `args` exposed as `$env:JARVIS_PARAM_<KEY>` and `{{key}}` substitutions.
+    /// Runs a skill with `args` exposed as `$env:JAI_PARAM_<KEY>` and `{{key}}` substitutions.
     pub async fn execute(&self, name: &str, args: &Value) -> Result<String, SkillError> {
         let skill = self
             .get(name)?
@@ -398,7 +398,7 @@ impl SkillManager {
                         if &c[1] == k { val.clone() } else { c[0].to_string() }
                     })
                     .into_owned();
-                env_pairs.push((format!("JARVIS_PARAM_{}", k.to_uppercase()), val));
+                env_pairs.push((format!("JAI_PARAM_{}", k.to_uppercase()), val));
             }
         }
         let missing: Vec<String> = PLACEHOLDER.captures_iter(&script).map(|c| c[1].to_string()).collect();
@@ -470,7 +470,7 @@ impl SkillManager {
                     "description": {"type": "string", "description": "What the skill does"},
                     "language": {"type": "string", "enum": ["powershell", "bash", "python"], "description": format!("Script language (default {os_language})")},
                     "trigger_phrases": {"type": "array", "items": {"type": "string"}, "description": "English and German phrases that should run it"},
-                    "script": {"type": "string", "description": "Complete script printing a short result. Parameters: $env:JARVIS_PARAM_<NAME> (PowerShell), $JARVIS_PARAM_<NAME> (Bash), os.environ['JARVIS_PARAM_<NAME>'] (Python) or {{name}}."},
+                    "script": {"type": "string", "description": "Complete script printing a short result. Parameters: $env:JAI_PARAM_<NAME> (PowerShell), $JAI_PARAM_<NAME> (Bash), os.environ['JAI_PARAM_<NAME>'] (Python) or {{name}}."},
                     "test_args": {"type": "object", "description": "Arguments for the test run"}
                 }, "required": ["name", "description", "script"]}
             }}),
@@ -571,7 +571,7 @@ mod tests {
     use super::*;
 
     fn temp_manager() -> (SkillManager, PathBuf) {
-        let root = std::env::temp_dir().join(format!("jarvis_skills_{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("jai_skills_{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
         let mgr = SkillManager::open(root.join("db.sqlite"), root.join("skills")).unwrap();
         (mgr, root)

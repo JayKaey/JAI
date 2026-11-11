@@ -7,7 +7,7 @@
 //! radial gradient with a cold rim light. The fine parts (ticks, hairline, core ring) only appear
 //! from about 64 px up; the bold rings carry the taskbar frames on their own.
 //!
-//! Pure `std` on purpose: `build.rs` includes this file (`#[path]`) to write `assets/jarvis_icon.ico`
+//! Pure `std` on purpose: `build.rs` includes this file (`#[path]`) to write `assets/jai_icon.ico`
 //! (taskbar, Alt-Tab, Explorer and the tray load it from the executable's resources), and the HUD
 //! window takes the same pixels at runtime (`generate_rose_gyro_app_icon`). Every pixel is
 //! anti-aliased analytically (coverage from signed distances) and 8 × 8 supersampled.
@@ -291,13 +291,13 @@ pub fn icon_ico() -> Vec<u8> {
 }
 
 /// The window / taskbar icon of the HUD (256 × 256 RGBA).
-#[cfg(jarvis_app)]
+#[cfg(jai_app)]
 pub fn generate_rose_gyro_app_icon() -> eframe::egui::IconData {
     eframe::egui::IconData { rgba: render_icon_rgba(ICON_SIZE), width: ICON_SIZE, height: ICON_SIZE }
 }
 
 
-#[cfg(all(test, jarvis_app))]
+#[cfg(all(test, jai_app))]
 mod tests {
     use super::*;
 

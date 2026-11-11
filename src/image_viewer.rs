@@ -1659,7 +1659,7 @@ mod tests {
 
     #[test]
     fn local_pictures_come_newest_first_and_names_match() {
-        let dir = std::env::temp_dir().join(format!("jarvis_image_test_{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("jai_image_test_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("sub")).unwrap();
         for (name, secs) in [("Screenshot 2026-11-01.png", 10), ("holiday beach.jpg", 20), ("notes.txt", 30), ("sub/deep.webp", 40)] {

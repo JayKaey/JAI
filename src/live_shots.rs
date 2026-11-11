@@ -1,4 +1,4 @@
-//! `JARVIS_SHOTS=<folder>` in a test session (`--silent --show`): every window of JAI's own
+//! `JAI_SHOTS=<folder>` in a test session (`--silent --show`): every window of JAI's own
 //! saves what it shows as a PNG every second — the real frames, 3D and globe included — so a
 //! scripted session's UI can be looked at afterwards. Only JAI's windows, never the screen.
 
@@ -14,7 +14,7 @@ const EVERY: Duration = Duration::from_millis(1000);
 fn folder() -> Option<&'static PathBuf> {
     static DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
     DIR.get_or_init(|| {
-        let dir = PathBuf::from(std::env::var_os("JARVIS_SHOTS")?);
+        let dir = PathBuf::from(std::env::var_os("JAI_SHOTS")?);
         std::fs::create_dir_all(&dir).ok()?;
         Some(dir)
     })

@@ -49,21 +49,21 @@ pub fn parse(mixes: &Value, channels: &Value) -> Vec<Channel> {
         .collect()
 }
 
-fn is_jarvis_app(app: &str) -> bool {
+fn is_jai_app(app: &str) -> bool {
     app.to_lowercase().replace('.', "").contains("jai")
 }
 
 /// The channel JAI may talk through: in the Chat Mix and carrying no other app's audio (so the
 /// call hears only him — never Sir's music or the call itself). One named for JAI first.
 pub fn talk_channel(channels: &[Channel]) -> Option<&Channel> {
-    let mut fit: Vec<&Channel> = channels.iter().filter(|c| c.software && c.in_chat_mix && c.apps.iter().all(|a| is_jarvis_app(a))).collect();
+    let mut fit: Vec<&Channel> = channels.iter().filter(|c| c.software && c.in_chat_mix && c.apps.iter().all(|a| is_jai_app(a))).collect();
     fit.sort_by_key(|c| !c.name.to_lowercase().contains("jai"));
     fit.into_iter().next()
 }
 
 /// Channels in the Chat Mix that carry other apps (their audio reaches the call too).
 pub fn leaking(channels: &[Channel]) -> Vec<&Channel> {
-    channels.iter().filter(|c| c.in_chat_mix && c.apps.iter().any(|a| !is_jarvis_app(a))).collect()
+    channels.iter().filter(|c| c.in_chat_mix && c.apps.iter().any(|a| !is_jai_app(a))).collect()
 }
 
 /// The software channel Wave Link assigned `app` to ("Discord" → "Voice chat").
@@ -157,7 +157,7 @@ async fn fetch() -> Result<Vec<Channel>, String> {
 mod tests {
     use super::*;
 
-    fn fixture(jarvis_mix: &str, music_in_chat: bool) -> (Value, Value) {
+    fn fixture(jai_mix: &str, music_in_chat: bool) -> (Value, Value) {
         let mixes = json!({"mixes": [
             {"id": "SD1", "name": "Personal Mix", "level": 1, "isMuted": false},
             {"id": "SD2", "name": "Audio Mix", "level": 1, "isMuted": false},
@@ -171,12 +171,12 @@ mod tests {
             {"name": "Music", "type": "Software", "level": 0.12, "isMuted": false, "apps": [{"name": "Sonora"}], "mixes": music},
             {"name": "Voice chat", "type": "Software", "level": 1, "isMuted": false, "apps": [{"name": "Discord"}], "mixes": [{"id": "SD1", "level": 1, "isMuted": false}]},
             {"name": "Microphone (fifine Microphone)", "type": "Hardware", "level": 1, "isMuted": false, "apps": [], "mixes": [{"id": "SD2", "level": 1, "isMuted": false}, {"id": "SD3", "level": 1, "isMuted": false}]},
-            {"name": "JAI", "type": "Software", "level": 1, "isMuted": false, "apps": [{"name": "J.A.I"}], "mixes": [{"id": "SD1", "level": 1, "isMuted": false}, {"id": jarvis_mix, "level": 1, "isMuted": false}]}]});
+            {"name": "JAI", "type": "Software", "level": 1, "isMuted": false, "apps": [{"name": "J.A.I"}], "mixes": [{"id": "SD1", "level": 1, "isMuted": false}, {"id": jai_mix, "level": 1, "isMuted": false}]}]});
         (mixes, channels)
     }
 
     #[test]
-    fn finds_the_jarvis_channel_in_the_chat_mix() {
+    fn finds_the_jai_channel_in_the_chat_mix() {
         let (m, c) = fixture("SD3", false);
         let channels = parse(&m, &c);
         assert_eq!(talk_channel(&channels).map(|c| c.name.as_str()), Some("JAI"));

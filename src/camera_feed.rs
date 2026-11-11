@@ -58,7 +58,7 @@ pub fn start(index: usize) {
     }
     feed().status = "STARTING".into();
     std::thread::Builder::new()
-        .name("jarvis-camera".into())
+        .name("jai-camera".into())
         .spawn(move || {
             let result = platform::capture(index, &|image| {
                 SEQ.fetch_add(1, Ordering::AcqRel);

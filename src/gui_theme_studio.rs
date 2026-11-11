@@ -102,7 +102,7 @@ fn body(ui: &mut Ui) {
 /// detached); the theme Sir saved this frame, if any.
 pub(super) fn show(ctx: &egui::Context, iface: &InterfaceSettings) -> Option<CustomTheme> {
     // (Closed while it was its own window: it plays its exit first.)
-    if !super::detached_keep(ctx, ViewportId::from_hash_of("jarvis_theme_studio"), OPEN.load(Ordering::Acquire)) {
+    if !super::detached_keep(ctx, ViewportId::from_hash_of("jai_theme_studio"), OPEN.load(Ordering::Acquire)) {
         crate::hud_dock::forget(ID);
         return lock(&SAVED).take();
     }
@@ -124,7 +124,7 @@ pub(super) fn show(ctx: &egui::Context, iface: &InterfaceSettings) -> Option<Cus
         }
         return lock(&SAVED).take();
     }
-    let mut builder = ViewportBuilder::default().with_title("Theme Studio — J.A.I.").with_app_id("jarvis").with_inner_size([580.0, 330.0]).with_min_inner_size([460.0, 280.0]).with_decorations(false);
+    let mut builder = ViewportBuilder::default().with_title("Theme Studio — J.A.I.").with_app_id("jai").with_inner_size([580.0, 330.0]).with_min_inner_size([460.0, 280.0]).with_decorations(false);
     if let Some(icon) = super::window_icon() {
         builder = builder.with_icon(Arc::new(icon));
     }
@@ -132,7 +132,7 @@ pub(super) fn show(ctx: &egui::Context, iface: &InterfaceSettings) -> Option<Cus
         builder = builder.with_position(at).with_inner_size(size);
     }
     let builder = super::for_test_session(builder);
-    ctx.show_viewport_deferred(ViewportId::from_hash_of("jarvis_theme_studio"), builder, move |ctx, class| {
+    ctx.show_viewport_deferred(ViewportId::from_hash_of("jai_theme_studio"), builder, move |ctx, class| {
         crate::crash_guard::guard("theme studio", || {
             if ctx.input(|i| i.viewport().close_requested()) || (!OPEN.load(Ordering::Acquire) && !super::detached_leaving(ctx)) {
                 OPEN.store(false, Ordering::Release);

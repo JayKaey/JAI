@@ -582,7 +582,7 @@ fn skip_dir(name: &str) -> bool {
             "windows" | "system volume information" | "program files" | "program files (x86)" | "programdata" | "steamlibrary" | "steamapps" | "steam"
                 | "epic games" | "xboxgames" | "riot games" | "battle.net" | "games" | "node_modules" | "target" | "appdata" | "site-packages"
                 | "venv" | "__pycache__" | "models" | "runtime" | "cache" | "gpucache" | "code cache" | "windowsapps" | "msocache" | "recovery"
-                | "temp" | "tmp" | "minecraft" | "resourcepacks" | "shaderpacks" | "mods" | "assets" | "sounds" | "sfx" | "jarvis_replay"
+                | "temp" | "tmp" | "minecraft" | "resourcepacks" | "shaderpacks" | "mods" | "assets" | "sounds" | "sfx" | "jai_replay"
         )
 }
 
@@ -711,7 +711,7 @@ fn spawn_track_indexer(db_path: PathBuf) {
                 }
             }
         }
-        let spawned = std::thread::Builder::new().name("jarvis-track-index".into()).spawn(move || {
+        let spawned = std::thread::Builder::new().name("jai-track-index".into()).spawn(move || {
             std::thread::sleep(Duration::from_secs(20));
             loop {
                 let started = std::time::Instant::now();
@@ -1750,7 +1750,7 @@ mod smtc {
         TX.get_or_init(|| {
             let (tx, rx) = mpsc::channel::<Job>();
             std::thread::Builder::new()
-                .name("jarvis-smtc".into())
+                .name("jai-smtc".into())
                 .spawn(move || {
                     // SAFETY: called once at the start of this thread, before any WinRT use.
                     let _ = unsafe { windows::Win32::System::Com::CoInitializeEx(None, windows::Win32::System::Com::COINIT_MULTITHREADED) };
@@ -1793,7 +1793,7 @@ mod smtc {
 
     /// Asks for the manager now (in the background), so the first "stop" is instant.
     pub fn warm() {
-        let _ = std::thread::Builder::new().name("jarvis-smtc-warm".into()).spawn(|| {
+        let _ = std::thread::Builder::new().name("jai-smtc-warm".into()).spawn(|| {
             let _ = run(|manager| manager.is_some());
         });
     }
@@ -1951,7 +1951,7 @@ mod tests {
 
     #[test]
     fn the_library_is_read_again_only_when_its_files_change() {
-        let dir = std::env::temp_dir().join(format!("jarvis-library-stamps-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("jai-library-stamps-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let db = dir.join("state.sqlite");
@@ -1983,7 +1983,7 @@ mod tests {
         assert_eq!(playlist_position(&tracks, "Back in Black", Some("AC/DC")).map(|(i, _)| i), Some(2));
         assert!(playlist_position(&tracks, "Bohemian Rhapsody", None).is_none(), "only songs inside that playlist");
         // The state database is read straight from SQLite, in playlist order.
-        let dir = std::env::temp_dir().join(format!("jarvis_sonora_state_{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("jai_sonora_state_{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
         let db = dir.join("state.sqlite");
         let _ = std::fs::remove_file(&db);
@@ -2022,7 +2022,7 @@ mod tests {
 
     #[test]
     fn local_playlist_tracks_and_json_membership_are_indexed() {
-        let root = std::env::temp_dir().join(format!("jarvis-music-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("jai-music-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("Back in Black.mp3"), []).unwrap();
         let playlist = root.join("JaysRock.m3u8");
@@ -2068,7 +2068,7 @@ mod tests {
     }
 
     #[test]
-    fn jarvis_picks_one_of_sirs_own_playlists() {
+    fn jai_picks_one_of_sirs_own_playlists() {
         use chrono::TimeZone;
         let lib = vec![
             item(ItemKind::Playlist, "Classic Rock Mix", "Spotify"),
@@ -2088,7 +2088,7 @@ mod tests {
     fn the_track_index_finds_tagged_songs_and_skips_system_folders() {
         assert!(skip_dir("Windows") && skip_dir(".git") && skip_dir("SteamLibrary") && skip_dir("$Recycle.Bin"));
         assert!(!skip_dir("Music") && !skip_dir("Downloads") && !skip_dir("AC-DC"));
-        let root = std::env::temp_dir().join(format!("jarvis-index-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("jai-index-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(root.join("Rock")).unwrap();
         std::fs::create_dir_all(root.join("node_modules")).unwrap();
         let song = vec![0u8; (MIN_SONG_BYTES + 10) as usize];

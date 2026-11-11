@@ -1674,7 +1674,7 @@ fn demo_mode() -> bool {
     cfg!(test) || crate::live_self_tester::running() || crate::live_self_tester::dry()
 }
 
-/// `open_jarvis_view {"view": "disk_map", "path": …, "action": "show" | "rescan" | "back"}`:
+/// `open_jai_view {"view": "disk_map", "path": …, "action": "show" | "rescan" | "back"}`:
 /// opens the map and starts a scan (or reads it again, or goes one folder up). The result is
 /// the display text and a "Spoken:" line; the verdict follows once the scan is done.
 pub async fn run(args: &Value) -> Result<String, String> {
@@ -2114,7 +2114,7 @@ mod tests {
             ("main.rs", Category::Code),
             ("app.ts", Category::Code),
             ("Cargo.lock", Category::Code),
-            ("jarvis.pdb", Category::Code),
+            ("jai.pdb", Category::Code),
             ("photo.JPEG", Category::Images),
             ("design.psd", Category::Images),
             ("report.pdf", Category::Documents),
@@ -2217,7 +2217,7 @@ mod tests {
     #[test]
     fn a_small_folder_is_read_whole_with_its_types_and_bounds() {
         let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
-        let dir = TempTree(std::env::temp_dir().join(format!("jarvis_disk_map_test_{}_{nanos}", std::process::id())));
+        let dir = TempTree(std::env::temp_dir().join(format!("jai_disk_map_test_{}_{nanos}", std::process::id())));
         let root = &dir.0;
         write(root, "big.mp4", 4000);
         write(root, "notes.txt", 50);

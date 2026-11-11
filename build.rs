@@ -2,7 +2,7 @@
 //! Manager) and a manifest declaring per-monitor DPI awareness and themed common controls.
 //!
 //! The icon is rendered here from `src/app_icon.rs` (the HUD emblem, pure Rust) into
-//! `assets/jarvis_icon.ico` before the resource script embeds it.
+//! `assets/jai_icon.ico` before the resource script embeds it.
 //!
 //! The "show me your core" sphere's module graph is generated here too: every `src/*.rs` file, its
 //! lines of code and the files it uses (`crate::x`, `use crate::{x, y}`, `super::` in the
@@ -16,12 +16,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 fn main() {
-    println!("cargo:rerun-if-changed=assets/jarvis.rc");
-    println!("cargo:rerun-if-changed=assets/jarvis.manifest");
+    println!("cargo:rerun-if-changed=assets/jai.rc");
+    println!("cargo:rerun-if-changed=assets/jai.manifest");
     println!("cargo:rerun-if-changed=src");
     // `app_icon::generate_rose_gyro_app_icon` (egui types) only exists in the application itself.
-    println!("cargo::rustc-check-cfg=cfg(jarvis_app)");
-    println!("cargo:rustc-cfg=jarvis_app");
+    println!("cargo::rustc-check-cfg=cfg(jai_app)");
+    println!("cargo:rustc-cfg=jai_app");
 
     write_icon();
     write_core_graph();
@@ -32,16 +32,16 @@ fn main() {
         if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
             println!("cargo:rustc-link-arg-bins=/STACK:8388608");
         }
-        embed_resource::compile("assets/jarvis.rc", embed_resource::NONE)
+        embed_resource::compile("assets/jai.rc", embed_resource::NONE)
             .manifest_optional()
-            .expect("compiling assets/jarvis.rc (Windows SDK resource compiler)");
+            .expect("compiling assets/jai.rc (Windows SDK resource compiler)");
     }
 }
 
 /// Re-renders the icon only when `src/app_icon.rs` is newer than it (the build script reruns on
 /// every source change for the core graph).
 fn write_icon() {
-    let path = Path::new("assets/jarvis_icon.ico");
+    let path = Path::new("assets/jai_icon.ico");
     let modified = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
     if let (Some(icon), Some(source)) = (modified(path), modified(Path::new("src/app_icon.rs"))) {
         if icon >= source {
@@ -50,7 +50,7 @@ fn write_icon() {
     }
     let ico = app_icon::icon_ico();
     if std::fs::read(path).ok().as_deref() != Some(ico.as_slice()) {
-        std::fs::write(path, &ico).expect("writing assets/jarvis_icon.ico");
+        std::fs::write(path, &ico).expect("writing assets/jai_icon.ico");
     }
 }
 

@@ -177,7 +177,7 @@ static CLOSE_SECONDARY: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     .collect()
 });
 
-static EXIT_JARVIS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
+static EXIT_JAI: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     [
         // German.
         r"^(?:schließ|schließe|schliess|schliesse|beende|beend)\s+dich(?:\s+selbst)?$",
@@ -205,7 +205,7 @@ pub fn deterministic_action(text: &str) -> Option<IntentAction> {
         return None;
     }
     let named = strip_fillers(text, true);
-    if EXIT_JARVIS.iter().any(|r| r.is_match(&core) || r.is_match(&named)) {
+    if EXIT_JAI.iter().any(|r| r.is_match(&core) || r.is_match(&named)) {
         return Some(IntentAction::ExitJaiApplication);
     }
     if CLOSE_SECONDARY.iter().any(|r| r.is_match(&core)) {
@@ -234,7 +234,7 @@ pub fn close_secondary_windows(tools: &ToolContext) -> usize {
     let simulations = own_sims.iter().filter(|id| tools.stark.simlab.close(id)).count() + fading_sims.len();
     if !fading_windows.is_empty() || !fading_sims.is_empty() {
         let (widgets, lab) = (tools.widgets.clone(), tools.stark.simlab.clone());
-        let _ = std::thread::Builder::new().name("jarvis-close-after-exit".into()).spawn(move || {
+        let _ = std::thread::Builder::new().name("jai-close-after-exit".into()).spawn(move || {
             std::thread::sleep(crate::hud_dock::CLOSE_FADE + std::time::Duration::from_millis(180));
             for id in &fading_windows {
                 let _ = widgets.close_window(id);
@@ -246,8 +246,8 @@ pub fn close_secondary_windows(tools: &ToolContext) -> usize {
     }
     let popups = crate::dynamic_popups::dismiss_all(true);
     // The radar, the disk map and the Earth in their own OS windows.
-    let panels = crate::jarvis_views::close_detached_panels();
-    tools.focus.forget_jarvis_window("all");
+    let panels = crate::jai_views::close_detached_panels();
+    tools.focus.forget_jai_window("all");
     crate::gui::refresh();
     info!(
         "[WINDOWS] Closed {blocks} in-app block(s), {spatial} workspace, {native} native, {simulations} simulation window(s), {panels} panel window(s) and {popups} pop-up(s) in {:.2} ms",
@@ -474,11 +474,11 @@ pub fn classify(text: &str) -> IntentClass {
     }
 }
 
-const LOOK_TOOLS: &[&str] = &["configure_interface", "control_gui_aspect", "customize_hud_and_windows", "control_jarvis_interface", "control_orb_mode", "create_or_update_widget", "remove_widget"];
+const LOOK_TOOLS: &[&str] = &["configure_interface", "control_gui_aspect", "customize_hud_and_windows", "control_jai_interface", "control_orb_mode", "create_or_update_widget", "remove_widget"];
 const WINDOW_TOOLS: &[&str] = &[
-    "spawn_native_window", "update_native_window", "close_native_window", "window_management", "move_window_to_monitor", "place_application_window", "open_jarvis_view",
+    "spawn_native_window", "update_native_window", "close_native_window", "window_management", "move_window_to_monitor", "place_application_window", "open_jai_view",
     "spawn_multi_window_workspace", "control_spatial_window", "spawn_topic_knowledge_workspace", "manage_spatial_scene", "launch_interactive_simulation",
-    "manage_deep_research", "open_application", "open_website", "close_all_secondary_windows", "arrange_jarvis_window",
+    "manage_deep_research", "open_application", "open_website", "close_all_secondary_windows", "arrange_jai_window",
 ];
 const MEDIA_TOOLS: &[&str] = &["control_music", "media_and_volume_control", "control_audio_mixer", "open_application", "close_application"];
 const SCHEDULE_TOOLS: &[&str] = &["create_calendar_event", "modify_or_delete_calendar_event", "get_calendar_schedule", "check_school_schedule", "reminders", "run_executive_briefing"];
@@ -487,7 +487,7 @@ const APP_TOOLS: &[&str] = &["open_application", "close_application", "open_webs
 /// The tools that fulfil a class (empty: no tool is required).
 pub fn backing_tools(class: &IntentClass) -> &'static [&'static str] {
     match class {
-        IntentClass::Ui => &["configure_interface", "control_gui_aspect", "customize_hud_and_windows", "control_jarvis_interface", "control_orb_mode", "spawn_native_window", "update_native_window", "close_native_window", "window_management", "open_jarvis_view", "spawn_multi_window_workspace", "control_spatial_window", "spawn_topic_knowledge_workspace", "manage_spatial_scene", "create_or_update_widget", "remove_widget", "arrange_jarvis_window"],
+        IntentClass::Ui => &["configure_interface", "control_gui_aspect", "customize_hud_and_windows", "control_jai_interface", "control_orb_mode", "spawn_native_window", "update_native_window", "close_native_window", "window_management", "open_jai_view", "spawn_multi_window_workspace", "control_spatial_window", "spawn_topic_knowledge_workspace", "manage_spatial_scene", "create_or_update_widget", "remove_widget", "arrange_jai_window"],
         IntentClass::Media => MEDIA_TOOLS,
         IntentClass::Schedule => SCHEDULE_TOOLS,
         IntentClass::KnowledgeWorkspace(_) => &["spawn_topic_knowledge_workspace"],
@@ -808,7 +808,7 @@ pub async fn spawn_topic_knowledge_workspace(tools: &ToolContext, topic: &str) -
         abilities.iter().map(|(n, d)| format!("JAI can work with {title} through the {} tool: {d}.\n\n", n.replace('_', " "))).collect::<String>(),
         memories.iter().map(|m| format!("Sir's note about {title}: {} — {}.\n\n", m.key, m.value)).collect::<String>()
     );
-    research::add_local_source(mission, &format!("jai://jarvis.local/knowledge/{}", lower.replace(' ', "-")), &format!("JAI knowledge: {title}"), &local, 0.75);
+    research::add_local_source(mission, &format!("jai://jai.local/knowledge/{}", lower.replace(' ', "-")), &format!("JAI knowledge: {title}"), &local, 0.75);
     if let Some(w) = &wiki {
         research::add_local_source(mission, &format!("{}#summary", w.url), &format!("{} (Wikipedia summary)", w.title), &format!("# {}\n\n{}\n\n{}", w.title, w.description, w.extract), research::reliability(&w.url));
     }
@@ -1743,7 +1743,7 @@ mod tests {
     }
 
     #[test]
-    fn german_and_english_self_close_exit_jarvis() {
+    fn german_and_english_self_close_exit_jai() {
         for yes in [
             "schließ dich", "Schließe dich", "beende dich", "mach dich zu", "schalt dich aus", "schalte dich ab", "JAI beenden", "JAI schließen",
             "Programm beenden", "App schließen", "geh aus", "Nein, beende dich bitte", "close yourself", "shut yourself down", "exit JAI", "quit jai",
@@ -1985,7 +1985,7 @@ mod tests {
     }
 
     #[test]
-    fn his_own_blocks_close_inside_jarvis_never_as_programs() {
+    fn his_own_blocks_close_inside_jai_never_as_programs() {
         let closed = |args: Value| Some(("blocks", json!({"tool": "hud_board", "args": args})));
         // The screenshot: "Hud Board isn't running, Sir."
         for text in ["Close the HUD board, please.", "Close the HUD board", "JAI close to web search.", "Close web search", "Schließe das HUD Board"] {

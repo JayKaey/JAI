@@ -59,7 +59,7 @@ impl Scene {
         let open = VIEWS
             .iter()
             .map(|v| v.id)
-            .filter(|id| if crate::jarvis_views::is_panel(id) { crate::jarvis_views::panel_is_open(id) } else { crate::hud_dock::is_open(id) })
+            .filter(|id| if crate::jai_views::is_panel(id) { crate::jai_views::panel_is_open(id) } else { crate::hud_dock::is_open(id) })
             .collect();
         Self { open }
     }
@@ -97,7 +97,7 @@ pub struct Correction {
 pub fn routed_intent(text: &str) -> Option<Intent> {
     let t = crate::typos::normalize_user_input_typos(text);
     crate::intents::hud_view_command(&t)
-        .or_else(|| crate::intents::internal_view_command(&t).map(|args| Intent::Tool { name: "open_jarvis_view", args }))
+        .or_else(|| crate::intents::internal_view_command(&t).map(|args| Intent::Tool { name: "open_jai_view", args }))
         .or_else(|| crate::intents::parse(&t))
         .or_else(|| match crate::intent_engine::route(&t, &crate::intent_engine::ReflexContext::live()).map(|r| r.reflex) {
             Some(crate::intent_engine::Reflex::Silent(action)) => Some(Intent::Silent(action)),
@@ -136,7 +136,7 @@ const VERB_SLIPS: &[(&str, &str)] = &[
     ("open up", "open"),
 ];
 
-/// Words in front of a verb that change nothing ("can you", "please", "jarvis").
+/// Words in front of a verb that change nothing ("can you", "please", "jai").
 const LEAD: &[&str] = &["jai", "hey", "ok", "okay", "please", "can", "could", "would", "you", "now", "then", "and", "so", "just", "no", "yes", "yeah", "um", "uh", "the"];
 
 /// Commands that make sense on this screen, as (sentence, meaning id).
@@ -306,7 +306,7 @@ mod tests {
         // 23:28:00 "JAI told me the world." (the Earth was not up yet).
         let fixed = correct("told me the world", &Scene::default(), &routes).expect("show me the world");
         assert_eq!(fixed.text, "show me the Earth");
-        assert!(matches!(routed_intent(&fixed.text), Some(Intent::Tool { name: "open_jarvis_view", ref args }) if args["view"] == "earth"), "{:?}", routed_intent(&fixed.text));
+        assert!(matches!(routed_intent(&fixed.text), Some(Intent::Tool { name: "open_jai_view", ref args }) if args["view"] == "earth"), "{:?}", routed_intent(&fixed.text));
         // 23:28:28 "Call me Earth." over JAI's voice, with the Earth up: "close the Earth".
         let fixed = correct("Call me Earth.", &earth_up(), &routes).expect("close the Earth");
         assert_eq!(fixed.text, "close the Earth");
