@@ -769,6 +769,8 @@ impl Jai {
                 self.emit(HudEvent::ConfigState(self.config_state()));
             }
             AudioEvent::SpeechStarted { barge_in, ptt } => {
+                // (Whisper is his from here: a video's clip being written along is dropped.)
+                crate::live_subtitles::sir_speaks();
                 crate::core_sphere_3d::CoreActivityBus::chain(&["ears.rs", "vad.rs"]);
                 self.inner.speech_epoch.fetch_add(1, Ordering::AcqRel);
                 // Sir is speaking: the desktop and the media session are read now, so the turn
@@ -907,6 +909,15 @@ impl Jai {
         if let Some(flag) = self.inner.live_decode.lock().unwrap_or_else(|e| e.into_inner()).take() {
             flag.store(true, Ordering::Release);
         }
+    }
+
+    /// A clip of what the PC plays, for the live subtitles (`live_subtitles`): the flag that
+    /// calls it off and the words to come. None while Whisper sleeps or is not loaded.
+    pub fn subtitle_ahead(&self, pcm: Vec<f32>, translate: bool) -> Option<(Arc<AtomicBool>, tokio::sync::oneshot::Receiver<Result<crate::stt::Transcript, String>>)> {
+        if !self.inner.stt.is_ready() || !crate::vram_guard::voice_wake_allowed() {
+            return None;
+        }
+        self.inner.stt.subtitle(pcm, translate)
     }
 
     /// Sir carried on (or the sound was nothing): the head start is void and Whisper stops.

@@ -3485,6 +3485,37 @@ struct HudApp {
 const MINI_STRIP: &str = "strip";
 const MINI_STRIP_HEIGHT: f32 = 40.0;
 
+/// The music's spectrum round the emblem: each band a pair of ticks, the low ones at the bottom,
+/// the high ones at the top, the same on both sides.
+fn paint_spectrum_ring(painter: &egui::Painter, frame: &crate::rose_emblem_renderer::EmblemFrame, bands: &[f32; crate::pc_audio::BANDS]) {
+    const PER_SIDE: usize = 2 * crate::pc_audio::BANDS;
+    let accent = crate::hud_board::active_colour();
+    let inner = frame.radius * 1.1;
+    let reach = 30.0 * (frame.radius / 175.0).clamp(0.5, 1.6);
+    for k in 0..PER_SIDE {
+        let at = (k as f32 + 0.5) / PER_SIDE as f32;
+        // Between two bands: the mean of them.
+        let band = at * (crate::pc_audio::BANDS - 1) as f32;
+        let (low, mix) = (band.floor() as usize, band.fract());
+        let value = bands[low] * (1.0 - mix) + bands[(low + 1).min(crate::pc_audio::BANDS - 1)] * mix;
+        if value < 0.02 {
+            continue;
+        }
+        let colour = mix_colour(accent, Color32::WHITE, ((value - 0.8) * 4.0).clamp(0.0, 0.8)).gamma_multiply(0.3 + 0.7 * value);
+        for side in [1.0f32, -1.0] {
+            // From straight down (the bass) up to straight up (the highs).
+            let angle = std::f32::consts::FRAC_PI_2 - side * at * std::f32::consts::PI;
+            let dir = vec2(angle.cos(), angle.sin());
+            painter.line_segment([frame.centre + dir * inner, frame.centre + dir * (inner + 3.0 + reach * value)], stroke(1.6, colour));
+        }
+    }
+}
+
+/// `a` → `b` by `t` (opaque colours).
+fn mix_colour(a: Color32, b: Color32, t: f32) -> Color32 {
+    mix(a, b, t)
+}
+
 /// How dark night mode makes the HUD (the share of black laid over it).
 const NIGHT_DIM: f32 = 0.42;
 
@@ -4052,6 +4083,14 @@ impl HudApp {
                 }
             }
 
+            // The music: while something plays on the PC the emblem moves with it (he only
+            // listens to the sound; never while a game is in front, never to his own voice).
+            let music_on = iface.music_visuals && !windows_still(ctx) && !crate::platform::in_test_session() && !crate::hud_feel::game_in_front();
+            crate::pc_audio::want(crate::pc_audio::Use::Spectrum, music_on);
+            crate::music_lyrics::want(music_on, crate::hud_feel::lyrics(), &self.rt);
+            let (bass, level) = if music_on { crate::pc_audio::bass_and_level() } else { (0.0, 0.0) };
+            let music = music_on && level > 0.05 && m.state != "speaking";
+            self.emblem.set_music(if music { bass } else { 0.0 });
             // The emblem (drawn over the board; its corner cell is kept free), wherever Sir put it.
             self.emblem.glide(screen, dt);
             self.emblem.paint(&ui.painter_at(screen), screen);
@@ -4093,7 +4132,15 @@ impl HudApp {
             // The lines under the emblem: his words while he speaks, what JAI is working on,
             // the song's line, and the offer of an order heard without his name.
             let lines_top = if frame.dock < 0.5 { pos2(frame.centre.x, frame.centre.y + frame.radius * 1.2 + 10.0) } else { pos2(screen.center().x, screen.bottom() - TELEMETRY_H - 110.0) };
-            let lyric = crate::hud_feel::lyric_line();
+            // The spectrum as a ring of ticks round the emblem (when Sir's own voice is not there).
+            if music && frame.dock < 0.5 && self.voice_rim < 0.05 {
+                paint_spectrum_ring(&ui.painter_at(screen), &frame, &crate::pc_audio::bands());
+                ctx.request_repaint_after(Duration::from_millis(16));
+            }
+            // Under it: the line being sung (lyrics on), else what plays.
+            let lyric = crate::hud_feel::lyric_line()
+                .or_else(|| (crate::hud_feel::lyrics() && crate::music_lyrics::none_found()).then(|| "no synced lyrics for this song".to_string()))
+                .or_else(|| music.then(crate::music_lyrics::title_line).flatten());
             if let Some(order) = crate::hud_lines::paint(ui, lines_top, (screen.width() * 0.5).min(760.0), &m.state, iface.live_words, lyric.as_deref()) {
                 info!("[HUD] The offered order was taken: '{order}'");
                 self.command(HudCommand::Chat { text: order });
@@ -5461,6 +5508,8 @@ impl HudApp {
         }
         // "What did I miss?": the notifications of the last hours.
         crate::hud_notify::show(ctx);
+        // The live subtitles' bar, while they are on.
+        crate::live_subtitles::show(ctx, &self.app, &self.rt);
         // The live desktop background, on a monitor the board is not on.
         let state = lock(&self.model).state.clone();
         if let Some(crate::desktop_backdrop::Refused(why)) = crate::desktop_backdrop::show(ctx, iface.desktop_background && !windows_still(ctx) && !iface.orb_mode, self.hwnd, iface.span_all_monitors, &state) {

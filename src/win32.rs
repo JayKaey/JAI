@@ -210,6 +210,13 @@ pub fn post_app_command(pid: u32, command: u32) -> usize {
         .count()
 }
 
+/// The rect of the monitor the window in front is on (left, top, right, bottom).
+pub fn foreground_monitor() -> Option<[i32; 4]> {
+    // SAFETY: a plain query of the foreground window handle.
+    let hwnd = unsafe { GetForegroundWindow() };
+    (hwnd.0 != 0).then(|| window_display_rect(hwnd.0)).flatten()
+}
+
 /// This process's top-level window titled `title`, if there is one.
 pub fn own_window(title: &str) -> Option<isize> {
     struct Search<'a> {

@@ -123,6 +123,8 @@ const FAULT_SECS: f32 = 0.7;
 /// How far the rings open while he listens, and how far they swell with his own voice.
 const LISTEN_OPEN: f32 = 0.055;
 const VOICE_PULSE: f32 = 0.03;
+/// How far they swell with the music's bass.
+const MUSIC_PULSE: f32 = 0.045;
 /// `t` of the way from `c` to white.
 fn whiten(c: [u8; 3], t: f32) -> [u8; 3] {
     mix(c, WHITE_RGB, t)
@@ -683,6 +685,8 @@ pub struct RoseEmblem {
     think: f32,
     /// A failed order's flash (1 right after it, dying away).
     fault: f32,
+    /// The music's bass right now (0-1): the rings swell and turn with it.
+    music: f32,
 }
 
 impl Default for RoseEmblem {
@@ -714,6 +718,7 @@ impl RoseEmblem {
             listen: 0.0,
             think: 0.0,
             fault: 0.0,
+            music: 0.0,
         }
     }
 
@@ -801,6 +806,11 @@ impl RoseEmblem {
         self.mood
     }
 
+    /// The music's bass right now (0 while nothing plays): the emblem moves with it.
+    pub fn set_music(&mut self, bass: f32) {
+        self.music = bass.clamp(0.0, 1.0);
+    }
+
     /// An order failed: one red flash.
     pub fn flash_fault(&mut self) {
         self.fault = 1.0;
@@ -832,7 +842,7 @@ impl RoseEmblem {
         let target = if busy { 1.0 } else { 0.0 };
         self.busy += (target - self.busy) * (1.0 - 0.94f32.powf(dt * 60.0));
         let flat = self.flat.value(self.clock).clamp(0.0, 1.0);
-        let boost = 1.0 + 2.6 * self.busy + 2.4 * self.voice;
+        let boost = 1.0 + 2.6 * self.busy + 2.4 * self.voice + 1.4 * self.music;
         for (angle, speed) in self.spin.iter_mut().zip(RING_SPIN) {
             *angle = (*angle + speed * boost * dt).rem_euclid(TAU);
         }
@@ -846,7 +856,7 @@ impl RoseEmblem {
     /// Whether a transition is still running (the HUD repaints at 60 FPS meanwhile).
     pub fn is_animating(&self) -> bool {
         let easing = |x: f32| x > 0.0 && x < 1.0;
-        if self.fault > 0.0 || easing(self.listen) || easing(self.think) {
+        if self.fault > 0.0 || self.music > 0.01 || easing(self.listen) || easing(self.think) {
             return true;
         }
         let settling = (self.spread - (1.0 - self.flat.to)).abs() > 1e-3 || self.spread_v.abs() > 1e-3;
@@ -865,7 +875,7 @@ impl RoseEmblem {
         let centre = home.lerp(docked, dock);
         let radius = home_radius + (DOCKED_DIAMETER / 2.0 - home_radius) * dock;
         // At home the rings open a little while he listens and swell with his own voice.
-        let alive = 1.0 + (1.0 - dock) * (LISTEN_OPEN * self.listen + if self.mood == Mood::Speaking { VOICE_PULSE * self.voice } else { 0.0 });
+        let alive = 1.0 + (1.0 - dock) * (LISTEN_OPEN * self.listen + MUSIC_PULSE * self.music + if self.mood == Mood::Speaking { VOICE_PULSE * self.voice } else { 0.0 });
         EmblemFrame { centre, radius: radius * alive, flat, dock }
     }
 

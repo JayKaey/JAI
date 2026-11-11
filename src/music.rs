@@ -59,6 +59,8 @@ pub struct NowPlaying {
     pub artist: String,
     pub album: String,
     pub playing: bool,
+    /// Where in the track it is now (seconds), when the player says (its timeline).
+    pub position: Option<f32>,
 }
 
 impl NowPlaying {
@@ -1817,12 +1819,25 @@ mod smtc {
         let app = s.SourceAppUserModelId().ok()?.to_string();
         let props = s.TryGetMediaPropertiesAsync().ok()?.get().ok();
         let playing = s.GetPlaybackInfo().ok().and_then(|i| i.PlaybackStatus().ok()) == Some(Status::Playing);
+        // The timeline: where it was when the player last said, plus the time since (while it
+        // plays). Players that keep no timeline report an empty one.
+        let position = s.GetTimelineProperties().ok().and_then(|t| {
+            let (at, end, updated) = (t.Position().ok()?.Duration, t.EndTime().ok()?.Duration, t.LastUpdatedTime().ok()?.UniversalTime);
+            if end <= 0 {
+                return None;
+            }
+            // (Windows counts 100 ns ticks since 1601.)
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()?.as_nanos() as i64 / 100 + 116_444_736_000_000_000;
+            let since = if playing { ((now - updated) as f64 / 1e7).clamp(0.0, 3600.0) } else { 0.0 };
+            Some((at as f64 / 1e7 + since) as f32)
+        });
         Some(NowPlaying {
             app,
             title: props.as_ref().and_then(|p| p.Title().ok()).map(|t| t.to_string()).unwrap_or_default(),
             artist: props.as_ref().and_then(|p| p.Artist().ok()).map(|t| t.to_string()).unwrap_or_default(),
             album: props.as_ref().and_then(|p| p.AlbumTitle().ok()).map(|t| t.to_string()).unwrap_or_default(),
             playing,
+            position,
         })
     }
 
@@ -1880,7 +1895,7 @@ async fn sessions() -> Vec<NowPlaying> {
                 .lines()
                 .filter_map(|l| {
                     let f: Vec<&str> = l.split('\t').collect();
-                    (f.len() >= 5).then(|| NowPlaying { app: f[0].into(), playing: f[1] == "Playing", title: f[2].into(), artist: f[3].into(), album: f[4].into() })
+                    (f.len() >= 5).then(|| NowPlaying { app: f[0].into(), playing: f[1] == "Playing", title: f[2].into(), artist: f[3].into(), album: f[4].into(), position: None })
                 })
                 .collect()
         })

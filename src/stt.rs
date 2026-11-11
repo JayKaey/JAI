@@ -116,6 +116,9 @@ struct Job {
     /// Set when this clip is no longer wanted (a head start Sir talked on after): the decode
     /// stops at its next step.
     called_off: Option<Arc<AtomicBool>>,
+    /// A clip of what the PC plays, for the live subtitles (Some(translate into English)): it
+    /// is decoded as speech in any language, not as a command of Sir's.
+    subtitle: Option<bool>,
 }
 
 /// What a transcription that was called off returns.
@@ -270,8 +273,13 @@ impl SttEngine {
                             // A panic inside whisper.cpp's bindings fails this clip only; the
                             // model is re-created for the next one (its state may be torn).
                             Some(e) => {
-                                let _urgent = boost.then(crate::platform::urgent);
-                                crate::crash_guard::guard("Whisper transcription", || transcribe(e, job.pcm, job.voiced_ms, &settings, &settings.prompt, job.called_off.as_ref())).unwrap_or_else(|| {
+                                // (A video's words are never urgent: only Sir's raise the thread.)
+                                let _urgent = (boost && job.subtitle.is_none()).then(crate::platform::urgent);
+                                crate::crash_guard::guard("Whisper transcription", || match job.subtitle {
+                                    Some(translate) => subtitle_pass(e, &job.pcm, translate, &settings, job.called_off.as_ref()),
+                                    None => transcribe(e, job.pcm, job.voiced_ms, &settings, &settings.prompt, job.called_off.as_ref()),
+                                })
+                                .unwrap_or_else(|| {
                                     engine = None;
                                     Err("speech recognition failed on this clip".into())
                                 })
@@ -318,7 +326,7 @@ impl SttEngine {
     pub async fn transcribe(&self, pcm: Vec<f32>, voiced_ms: u32) -> Result<Transcript, String> {
         let (reply, rx) = oneshot::channel();
         self.tx
-            .send(Job { pcm, voiced_ms, reply, called_off: None })
+            .send(Job { pcm, voiced_ms, reply, called_off: None, subtitle: None })
             .map_err(|_| "speech recognition worker is not running".to_string())?;
         rx.await.map_err(|_| "speech recognition worker stopped".to_string())?
     }
@@ -329,7 +337,17 @@ impl SttEngine {
     pub fn transcribe_ahead(&self, pcm: Vec<f32>, voiced_ms: u32) -> Option<(Arc<AtomicBool>, oneshot::Receiver<Result<Transcript, String>>)> {
         let (reply, rx) = oneshot::channel();
         let called_off = Arc::new(AtomicBool::new(false));
-        self.tx.send(Job { pcm, voiced_ms, reply, called_off: Some(Arc::clone(&called_off)) }).ok()?;
+        self.tx.send(Job { pcm, voiced_ms, reply, called_off: Some(Arc::clone(&called_off)), subtitle: None }).ok()?;
+        Some((called_off, rx))
+    }
+
+    /// A clip of what the PC plays (16 kHz), for the live subtitles: its words in the language
+    /// spoken, or in English when `translate`. Returns the flag that calls it off (Sir speaks)
+    /// and the words to come.
+    pub fn subtitle(&self, pcm: Vec<f32>, translate: bool) -> Option<(Arc<AtomicBool>, oneshot::Receiver<Result<Transcript, String>>)> {
+        let (reply, rx) = oneshot::channel();
+        let called_off = Arc::new(AtomicBool::new(false));
+        self.tx.send(Job { pcm, voiced_ms: 0, reply, called_off: Some(Arc::clone(&called_off)), subtitle: Some(translate) }).ok()?;
         Some((called_off, rx))
     }
 }
@@ -597,6 +615,64 @@ fn run_full(
     }
     let avg_logprob = if tokens > 0 { logprob / tokens as f32 } else { 0.0 };
     Ok(Decoded { text: text.trim().to_string(), avg_logprob })
+}
+
+/// A clip of what the PC plays, for the live subtitles: decoded in whatever language is spoken
+/// (or translated into English), without the commands' prompt, as many segments as it has.
+fn subtitle_pass(engine: &mut WhisperEngine, pcm: &[f32], translate: bool, s: &Settings, called_off: Option<&Arc<AtomicBool>>) -> Result<Transcript, String> {
+    let started = Instant::now();
+    let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+    params.set_n_threads(s.threads);
+    params.set_language(Some("auto"));
+    params.set_translate(translate);
+    params.set_no_context(true);
+    params.set_single_segment(false);
+    params.set_no_timestamps(true);
+    params.set_temperature(0.0);
+    params.set_temperature_inc(0.0);
+    params.set_suppress_blank(true);
+    params.set_suppress_non_speech_tokens(true);
+    params.set_no_speech_thold(0.6);
+    params.set_print_special(false);
+    params.set_print_progress(false);
+    params.set_print_realtime(false);
+    params.set_print_timestamps(false);
+    if s.dynamic_ctx {
+        params.set_audio_ctx(audio_ctx_for(pcm.len(), s.min_ctx));
+    }
+    if let Some(flag) = called_off {
+        // SAFETY: the callback only reads the flag, and the caller's `Arc` keeps it alive until
+        // `full` below has returned (the parameters do not outlive that call).
+        unsafe {
+            params.set_abort_callback(Some(called_off_callback));
+            params.set_abort_callback_user_data(Arc::as_ptr(flag) as *mut std::ffi::c_void);
+        }
+    }
+    let state = &mut engine.state;
+    let decoded = state.full(params, pcm);
+    if called_off.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+        return Err(CALLED_OFF.into());
+    }
+    decoded.map_err(|e| format!("whisper failed: {e}"))?;
+    let n = state.full_n_segments().map_err(|e| e.to_string())?;
+    let mut text = String::new();
+    for i in 0..n {
+        if let Ok(seg) = state.full_get_segment_text_lossy(i) {
+            text.push_str(seg.trim());
+            text.push(' ');
+        }
+    }
+    let language = state.full_lang_id_from_state().ok().and_then(whisper_rs::get_lang_str).unwrap_or("").to_string();
+    Ok(Transcript {
+        text: text.trim().to_string(),
+        language,
+        language_prob: 0.0,
+        stt_ms: started.elapsed().as_millis() as u64,
+        audio_ms: pcm.len() as u64 / 16,
+        avg_logprob: 0.0,
+        no_speech: 0.0,
+        passes: 1,
+    })
 }
 
 /// What the decoder predicts right after `<|startoftranscript|>`, from one step over the encoder

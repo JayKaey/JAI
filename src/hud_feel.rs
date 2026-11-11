@@ -125,12 +125,19 @@ pub fn game_in_front() -> bool {
 #[cfg(windows)]
 fn game_in_front_now() -> bool {
     let (process, own) = crate::win32::foreground_info().unwrap_or_default();
-    !own && (is_game(&process) || crate::win32::foreground_is_fullscreen())
+    !own && (is_game(&process) || (crate::win32::foreground_is_fullscreen() && !is_player(&process)))
 }
 
 #[cfg(not(windows))]
 fn game_in_front_now() -> bool {
     false
+}
+
+/// A browser or a media player: full screen, it shows a film, not a game.
+pub fn is_player(process: &str) -> bool {
+    let p = process.to_lowercase();
+    let p = p.trim_end_matches(".exe");
+    ["firefox", "chrome", "msedge", "opera", "brave", "vivaldi", "vlc", "mpv", "mpc-hc64", "mpc-hc", "mpc-be64", "wmplayer", "spotify", "sonora", "netflix", "video.ui", "microsoft.media.player", "potplayermini64", "twitch"].contains(&p)
 }
 
 /// A game's process (the listed games; a voice chat in front is no game).
@@ -541,6 +548,7 @@ mod tests {
     fn a_voice_chat_in_front_is_no_game() {
         assert!(is_game("javaw.exe") && is_game("cs2") && is_game("Cyberpunk2077.exe"));
         assert!(!is_game("Discord.exe") && !is_game("firefox.exe") && !is_game("Code.exe"));
+        assert!(is_player("Firefox.exe") && is_player("vlc") && !is_player("javaw.exe"));
     }
 
     #[test]
