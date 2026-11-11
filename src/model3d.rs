@@ -2272,6 +2272,7 @@ fn parse_hits(v: &Value) -> Vec<Hit> {
 
 /// The best result for a request: a name that is the thing asked for, its popularity, a size
 /// that loads fast.
+#[cfg(test)]
 fn pick(hits: &[Hit], query: &str) -> Option<Hit> {
     ranked(hits, query).into_iter().next().map(|(_, h)| h)
 }
@@ -2393,6 +2394,7 @@ fn name_words(query: &str) -> Vec<String> {
 }
 
 /// The results best first, each with how many of the request's words its name has.
+#[cfg(test)]
 fn ranked(hits: &[Hit], query: &str) -> Vec<(usize, Hit)> {
     fitted(hits, query, &[]).into_iter().map(|(f, h)| (f.matched, h)).collect()
 }

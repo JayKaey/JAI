@@ -511,7 +511,8 @@ pub async fn run(cfg: &JaiConfig, speak: bool, bench: bool, llm_stage: bool) -> 
             r.check(
                 "Paused sentence heard as one",
                 joined.as_ref().is_ok_and(|t| {
-                    let l = t.text.to_lowercase();
+                    // (As the app reads it: his name in its one spelling.)
+                    let l = crate::wake::canon(&t.text).to_lowercase();
                     l.contains("jai") && l.contains("red") && t.language == "en"
                 }),
                 match &joined {
@@ -530,7 +531,7 @@ pub async fn run(cfg: &JaiConfig, speak: bool, bench: bool, llm_stage: bool) -> 
     for (text, open) in commands {
         let Some((clip, ms)) = piece(text, &mut kokoro, &mut seed) else { continue };
         if let Ok(t) = stt.transcribe(clip, ms).await {
-            let intent = crate::intents::hud_view_command(&crate::typos::normalize_user_input_typos(&t.text));
+            let intent = crate::intents::hud_view_command(&crate::typos::normalize_user_input_typos(&crate::wake::canon(&t.text)));
             if matches!(&intent, Some(crate::intents::Intent::Tool { name: "configure_interface", args }) if args["core_view"] == open) {
                 routed += 1;
             }

@@ -246,7 +246,8 @@ pub fn is_screen_question(text: &str) -> bool {
 /// "Switch to hands-free mode", "Freisprechmodus aktivieren", "only listen when I say JAI":
 /// `set_listening_mode` arguments.
 pub fn listening_mode_command(text: &str) -> Option<Value> {
-    let s = raw_words(text);
+    // (His name as Sir says it, where it is the sentence's object: "... when I say Jay".)
+    let s = raw_words(text).split_whitespace().map(|w| if w == "jay" { "jai" } else { w }).collect::<Vec<_>>().join(" ");
     let hands_free = ["hands free mode", "handsfree mode", "hands free", "handsfree", "freisprechmodus", "freisprech modus", "listen to everything", "always listen", "hör immer zu", "immer zuhören"];
     let wake = ["wake word mode", "wakeword mode", "wake word", "only listen when i say jai", "only when i say jai", "only respond when i say jai", "only listen to jai", "aktivierungswort", "nur wenn ich jai sage", "weckwort"];
     let switching = ["switch", "turn on", "activate", "enable", "go", "use", "set", "change", "aktivier", "aktiviere", "schalte", "schalt", "wechsel", "wechsle", "only", "nur", "mode", "modus", "listen", "zuhören", "hör"];
@@ -6316,6 +6317,7 @@ mod tests {
         assert_eq!(tool("Freisprechmodus aktivieren"), Some(("set_listening_mode", json!({"mode": "hands_free"}))));
         assert_eq!(tool("Switch to wake word mode"), Some(("set_listening_mode", json!({"mode": "wake_word"}))));
         assert_eq!(tool("Only listen when I say JAI"), Some(("set_listening_mode", json!({"mode": "wake_word"}))));
+        assert_eq!(tool("Only listen when I say Jay"), Some(("set_listening_mode", json!({"mode": "wake_word"}))));
         let mix = tool("Set Sonora to 30% and Discord to 100%").unwrap();
         assert_eq!(mix.0, "control_audio_mixer");
         assert_eq!(mix.1["apps"], json!([{"app": "sonora", "level": 30}, {"app": "discord", "level": 100}]));

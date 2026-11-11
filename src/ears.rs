@@ -31,20 +31,26 @@ static CLOCK: LazyLock<Instant> = LazyLock::new(Instant::now);
 pub fn is_homecoming_phrase(text: &str) -> bool {
     let normalized = text.to_lowercase().replace(['\'', '’'], "").chars()
         .map(|c| if c.is_alphanumeric() { c } else { ' ' }).collect::<String>();
-    let normalized = normalized.split_whitespace().collect::<Vec<_>>().join(" ");
-    matches!(normalized.as_str(), "wake up daddys home" | "daddys home" | "jai wake up"
-        | "im home jai" | "i am home jai" | "i am back" | "jai i am back"
-        | "jai wake up daddys home" | "jai daddys home")
+    // His name may stand in front or behind ("JAI, I'm home": `wake::canon` puts it in front),
+    // or be said as Sir says it ("I'm home, Jay").
+    let is_name = |w: &str| matches!(w, "jai" | "jay");
+    let named = normalized.split_whitespace().any(is_name);
+    let said = normalized.split_whitespace().filter(|w| !is_name(w)).collect::<Vec<_>>().join(" ");
+    matches!(said.as_str(), "wake up daddys home" | "daddys home" | "i am back") || (named && matches!(said.as_str(), "wake up" | "im home" | "i am home"))
 }
 
 #[cfg(test)]
 mod homecoming_tests {
     #[test]
     fn protocol_requires_the_whole_utterance() {
-        for text in ["Wake up, Daddy's home!", "Daddy’s home", "JAI wake up", "I'm home JAI", "I am back"] {
+        for text in ["Wake up, Daddy's home!", "Daddy’s home", "JAI wake up", "I'm home JAI", "I am back", "JAI, I'm home", "Jay, wake up, daddy's home", "I'm home, Jay."] {
             assert!(super::is_homecoming_phrase(text), "{text}");
         }
-        for text in ["what happens when I say daddy's home", "play daddy's home", "I am back at school tomorrow"] {
+        // As the voice path hands them over: his name in its one spelling, in front.
+        for said in ["I'm home, Jay.", "Jay, I am back", "Wake up, Jay"] {
+            assert!(super::is_homecoming_phrase(&crate::wake::canon(said)), "{said} → {}", crate::wake::canon(said));
+        }
+        for text in ["what happens when I say daddy's home", "play daddy's home", "I am back at school tomorrow", "wake up", "I'm home"] {
             assert!(!super::is_homecoming_phrase(text), "{text}");
         }
     }
