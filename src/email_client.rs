@@ -1,7 +1,7 @@
 //! Standard IMAP4rev1 (RFC 3501) over implicit TLS — port 993, rustls with the webpki roots — for
 //! Gmail or any other provider: unread headers with snippets, keyword search (Gmail's `X-GM-RAW`
 //! when the server offers it, `FROM`/`SUBJECT` elsewhere) and one message's plain text for a
-//! summary. Mailboxes are opened with `EXAMINE` and read with `BODY.PEEK`, so Jarvis never marks
+//! summary. Mailboxes are opened with `EXAMINE` and read with `BODY.PEEK`, so JAI never marks
 //! anything as read.
 
 use crate::pim_config::EmailSettings;

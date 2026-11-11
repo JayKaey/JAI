@@ -1,9 +1,9 @@
-//! Jarvis' own views: "open my system stats", "show my schedule on monitor 2", "open the
+//! JAI's own views: "open my system stats", "show my schedule on monitor 2", "open the
 //! simulation lab", "the QR code for my phone", "my gym logs and finances", "my contacts". Each
 //! opens as a ROSE block inside the HUD (`hud_dock`); "in a new / separate window" or a monitor
 //! makes it its own native OS window.
 //!
-//! These names are Jarvis' panels, never programs: they must not reach the app launcher (which
+//! These names are JAI's panels, never programs: they must not reach the app launcher (which
 //! once searched the PC for an application called "Message From Stats", Whisper's version of
 //! "my system stats"). Every view becomes an egui deferred viewport — an independent, movable,
 //! resizable OS window — through the window engine (`spawn_native_window`) or the view's own
@@ -13,7 +13,7 @@ use crate::tools::{str_arg, ToolContext};
 use serde_json::{json, Value};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum JarvisSubWindow {
+pub enum JaiSubWindow {
     /// Live CPU / GPU / RAM / VRAM / temperatures, the busiest processes and the network.
     SystemStatsMonitor,
     /// The WebUntis timetable and the calendar.
@@ -40,7 +40,7 @@ pub enum JarvisSubWindow {
     Live,
 }
 
-impl JarvisSubWindow {
+impl JaiSubWindow {
     pub fn id(self) -> &'static str {
         match self {
             Self::SystemStatsMonitor => "system_stats",
@@ -95,17 +95,17 @@ impl JarvisSubWindow {
 
     fn title(self) -> &'static str {
         match self {
-            Self::SystemStatsMonitor => "J.A.R.V.I.S. // SYSTEM TELEMETRY",
-            Self::ScheduleAndCalendar => "J.A.R.V.I.S. // SCHEDULE & CALENDAR",
-            Self::SimulationLab => "J.A.R.V.I.S. // SIMULATION LAB",
-            Self::MobileSatelliteQr => "J.A.R.V.I.S. // MOBILE SATELLITE",
-            Self::WorkoutAndFinance => "J.A.R.V.I.S. // FINANCE TRACKER",
-            Self::Contacts => "J.A.R.V.I.S. // CONTACTS",
-            Self::NetworkRadar => "J.A.R.V.I.S. // NETWORK RADAR",
-            Self::DiskMap => "J.A.R.V.I.S. // DISK MAP",
-            Self::Earth => "J.A.R.V.I.S. // EARTH",
-            Self::Departures => "J.A.R.V.I.S. // DEPARTURES",
-            Self::Live => "J.A.R.V.I.S. // LIVE",
+            Self::SystemStatsMonitor => "J.A.I. // SYSTEM TELEMETRY",
+            Self::ScheduleAndCalendar => "J.A.I. // SCHEDULE & CALENDAR",
+            Self::SimulationLab => "J.A.I. // SIMULATION LAB",
+            Self::MobileSatelliteQr => "J.A.I. // MOBILE SATELLITE",
+            Self::WorkoutAndFinance => "J.A.I. // FINANCE TRACKER",
+            Self::Contacts => "J.A.I. // CONTACTS",
+            Self::NetworkRadar => "J.A.I. // NETWORK RADAR",
+            Self::DiskMap => "J.A.I. // DISK MAP",
+            Self::Earth => "J.A.I. // EARTH",
+            Self::Departures => "J.A.I. // DEPARTURES",
+            Self::Live => "J.A.I. // LIVE",
         }
     }
 }
@@ -131,7 +131,7 @@ fn on_monitor(args: &Value) -> String {
 }
 
 /// Opens a markdown window through the window engine (refreshed when it is open already).
-async fn markdown_window(ctx: &ToolContext, view: JarvisSubWindow, markdown: String, args: &Value, size: (u32, u32)) -> Result<String, String> {
+async fn markdown_window(ctx: &ToolContext, view: JaiSubWindow, markdown: String, args: &Value, size: (u32, u32)) -> Result<String, String> {
     let mut spec = json!({
         "id": view.id(),
         "title": view.title(),
@@ -172,31 +172,31 @@ fn placed(args: &Value) -> String {
 /// "Spoken:" line.
 pub async fn run(ctx: &ToolContext, args: &Value) -> Result<String, String> {
     let raw = str_arg(args, &["view", "window_kind", "name", "target"]).unwrap_or("system stats");
-    let view = JarvisSubWindow::parse(raw)
+    let view = JaiSubWindow::parse(raw)
         .ok_or_else(|| format!("'{raw}' is not one of my views (system stats, schedule, simulation lab, mobile QR, gym and finances, contacts, network radar, disk map, earth)."))?;
     // (live layers (C1): view `live` answers in words and needs no display.)
-    if view != JarvisSubWindow::Live && !crate::gui::windows_supported() {
-        return Err("Jarvis is running without a display (headless), so he cannot open windows.".into());
+    if view != JaiSubWindow::Live && !crate::gui::windows_supported() {
+        return Err("JAI is running without a display (headless), so he cannot open windows.".into());
     }
     let on = placed(args);
     match view {
         // live layers (C1): satellite passes, road traffic, another day's weather, rain soon.
-        JarvisSubWindow::Live => crate::live_layers::run_view(ctx, args).await,
+        JaiSubWindow::Live => crate::live_layers::run_view(ctx, args).await,
         // The panels with their own state and actions (sweep, scan, globe): theirs to carry out.
-        JarvisSubWindow::NetworkRadar | JarvisSubWindow::DiskMap | JarvisSubWindow::Earth | JarvisSubWindow::Departures => {
+        JaiSubWindow::NetworkRadar | JaiSubWindow::DiskMap | JaiSubWindow::Earth | JaiSubWindow::Departures => {
             if separate(args) {
                 crate::hud_dock::detach(view.id());
             }
             // Asked for again while it was leaving: it stays.
             crate::hud_dock::cancel_close(view.id());
             match view {
-                JarvisSubWindow::NetworkRadar => crate::network_radar::run(args).await,
-                JarvisSubWindow::DiskMap => crate::disk_map::run(args).await,
-                JarvisSubWindow::Departures => crate::transit::run(ctx, args).await, // live layers (C1)
+                JaiSubWindow::NetworkRadar => crate::network_radar::run(args).await,
+                JaiSubWindow::DiskMap => crate::disk_map::run(args).await,
+                JaiSubWindow::Departures => crate::transit::run(ctx, args).await, // live layers (C1)
                 _ => crate::earth::run(args).await,
             }
         }
-        JarvisSubWindow::SystemStatsMonitor => {
+        JaiSubWindow::SystemStatsMonitor => {
             let mut spec = json!({
                 "id": "system_telemetry",
                 "title": view.title(),
@@ -222,7 +222,7 @@ pub async fn run(ctx: &ToolContext, args: &Value) -> Result<String, String> {
             };
             Ok(format!("{}\nSpoken: {spoken}", outcome.output))
         }
-        JarvisSubWindow::ScheduleAndCalendar => {
+        JaiSubWindow::ScheduleAndCalendar => {
             let calendar = Box::pin(ctx.execute("get_calendar_schedule", &json!({ "date_or_range": "this week" }))).await;
             let school = Box::pin(ctx.execute("check_school_schedule", &json!({ "target_date": "today" }))).await;
             let section = |name: &str, ok: bool, out: &str| {
@@ -241,7 +241,7 @@ pub async fn run(ctx: &ToolContext, args: &Value) -> Result<String, String> {
             let out = markdown_window(ctx, view, markdown, args, (640, 720)).await?;
             Ok(format!("{out}\nSpoken: There you are, Sir. Your timetable and this week's calendar{on}."))
         }
-        JarvisSubWindow::SimulationLab => {
+        JaiSubWindow::SimulationLab => {
             let kind = str_arg(args, &["sim_type"]).unwrap_or("projectile");
             let outcome = Box::pin(ctx.execute("launch_interactive_simulation", &json!({ "sim_type": kind, "title": "Simulation Lab", "separate_window": separate(args) }))).await;
             if !outcome.success {
@@ -249,7 +249,7 @@ pub async fn run(ctx: &ToolContext, args: &Value) -> Result<String, String> {
             }
             Ok(format!("{}\nSpoken: The Simulation Lab is open{on}, Sir. Drag the sliders, or just tell me what to change.", outcome.output))
         }
-        JarvisSubWindow::MobileSatelliteQr => {
+        JaiSubWindow::MobileSatelliteQr => {
             if separate(args) {
                 crate::hud_dock::detach("pairing");
             }
@@ -261,7 +261,7 @@ pub async fn run(ctx: &ToolContext, args: &Value) -> Result<String, String> {
             let display = display_part(&outcome.output);
             Ok(format!("{display}\nSpoken: Your pairing QR code is up{on}, Sir. Scan it with your phone's camera."))
         }
-        JarvisSubWindow::WorkoutAndFinance => {
+        JaiSubWindow::WorkoutAndFinance => {
             crate::gui::open_workout();
             let finance = Box::pin(ctx.execute("manage_finances_and_goals", &json!({ "action": "summary" }))).await;
             let markdown = if finance.success {
@@ -272,7 +272,7 @@ pub async fn run(ctx: &ToolContext, args: &Value) -> Result<String, String> {
             let out = markdown_window(ctx, view, markdown, args, (520, 560)).await?;
             Ok(format!("{out}\nSpoken: Your gym coach and this month's finances are up{on}, Sir."))
         }
-        JarvisSubWindow::Contacts => {
+        JaiSubWindow::Contacts => {
             let contacts = Box::pin(ctx.execute("manage_contacts", &json!({ "action": "list" }))).await;
             let markdown = if contacts.success {
                 format!("## Contacts\n\n{}", display_part(&contacts.output))
@@ -363,33 +363,33 @@ mod tests {
     #[test]
     fn view_names() {
         for (name, view) in [
-            ("system stats", JarvisSubWindow::SystemStatsMonitor),
-            ("system_stats", JarvisSubWindow::SystemStatsMonitor),
-            ("my telemetry", JarvisSubWindow::SystemStatsMonitor),
-            ("webuntis", JarvisSubWindow::ScheduleAndCalendar),
-            ("the calendar", JarvisSubWindow::ScheduleAndCalendar),
-            ("simulation lab", JarvisSubWindow::SimulationLab),
-            ("QR code", JarvisSubWindow::MobileSatelliteQr),
-            ("mobile_qr", JarvisSubWindow::MobileSatelliteQr),
-            ("gym logs", JarvisSubWindow::WorkoutAndFinance),
-            ("finance tracker", JarvisSubWindow::WorkoutAndFinance),
-            ("contacts", JarvisSubWindow::Contacts),
-            ("network_radar", JarvisSubWindow::NetworkRadar),
-            ("the network radar", JarvisSubWindow::NetworkRadar),
-            ("disk_map", JarvisSubWindow::DiskMap),
-            ("drive map", JarvisSubWindow::DiskMap),
-            ("earth", JarvisSubWindow::Earth),
-            ("the globe", JarvisSubWindow::Earth),
-            ("satellite view", JarvisSubWindow::Earth),
-            ("satellite", JarvisSubWindow::MobileSatelliteQr),
-            ("departures", JarvisSubWindow::Departures),
-            ("departure board", JarvisSubWindow::Departures),
-            ("abfahrten", JarvisSubWindow::Departures),
-            ("live", JarvisSubWindow::Live),
+            ("system stats", JaiSubWindow::SystemStatsMonitor),
+            ("system_stats", JaiSubWindow::SystemStatsMonitor),
+            ("my telemetry", JaiSubWindow::SystemStatsMonitor),
+            ("webuntis", JaiSubWindow::ScheduleAndCalendar),
+            ("the calendar", JaiSubWindow::ScheduleAndCalendar),
+            ("simulation lab", JaiSubWindow::SimulationLab),
+            ("QR code", JaiSubWindow::MobileSatelliteQr),
+            ("mobile_qr", JaiSubWindow::MobileSatelliteQr),
+            ("gym logs", JaiSubWindow::WorkoutAndFinance),
+            ("finance tracker", JaiSubWindow::WorkoutAndFinance),
+            ("contacts", JaiSubWindow::Contacts),
+            ("network_radar", JaiSubWindow::NetworkRadar),
+            ("the network radar", JaiSubWindow::NetworkRadar),
+            ("disk_map", JaiSubWindow::DiskMap),
+            ("drive map", JaiSubWindow::DiskMap),
+            ("earth", JaiSubWindow::Earth),
+            ("the globe", JaiSubWindow::Earth),
+            ("satellite view", JaiSubWindow::Earth),
+            ("satellite", JaiSubWindow::MobileSatelliteQr),
+            ("departures", JaiSubWindow::Departures),
+            ("departure board", JaiSubWindow::Departures),
+            ("abfahrten", JaiSubWindow::Departures),
+            ("live", JaiSubWindow::Live),
         ] {
-            assert_eq!(JarvisSubWindow::parse(name), Some(view), "{name}");
+            assert_eq!(JaiSubWindow::parse(name), Some(view), "{name}");
         }
-        assert_eq!(JarvisSubWindow::parse("discord"), None);
+        assert_eq!(JaiSubWindow::parse("discord"), None);
     }
 
     #[test]

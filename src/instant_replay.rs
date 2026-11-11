@@ -1,4 +1,4 @@
-//! Instant Replay: "Jarvis, clip that." A native rolling screen recorder keeps the last minute of
+//! Instant Replay: "JAI, clip that." A native rolling screen recorder keeps the last minute of
 //! the primary monitor in memory — 5 frames a second by default (light on the machine), scaled
 //! to 1280 px with GDI's halftone StretchBlt and JPEG-compressed through the Windows Imaging
 //! Component on a low-priority thread — and the conversation of the same time.
@@ -28,7 +28,7 @@ const MIN_VIDEO_BYTES: u64 = 100 * 1024;
 /// JPEG quality of the buffered frames (WIC ImageQuality, 0-1).
 const JPEG_QUALITY: f32 = 0.6;
 
-/// Notes a line of the conversation (Sir's words, Jarvis' replies).
+/// Notes a line of the conversation (Sir's words, JAI's replies).
 pub fn note(who: &str, text: &str) {
     let text = text.trim();
     if text.is_empty() {

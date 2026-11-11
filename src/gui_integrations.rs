@@ -5,7 +5,7 @@
 //! "Test connection" runs the real client in the background and shows its answer.
 
 use super::{bold, button, lock, muted, request_repaint, Palette, Tone};
-use crate::app::Jarvis;
+use crate::app::Jai;
 use crate::config::{AcousticSettings, AwaySettings, DiscordBotSettings, FeatureSettings, LocationSettings, SatelliteSettings, WhatsAppSettings};
 use crate::pim::Pim;
 use crate::pim_config::{self, PimSettings, WebFeed, CALENDAR, EMAIL, FEEDS, LMS, WEBUNTIS};
@@ -89,7 +89,7 @@ pub(super) struct Hub {
     wa_token: String,
     /// A newly typed Cloudflare tunnel token (blank = keep the stored one).
     tunnel_token: String,
-    /// A newly typed token of Jarvis's Discord bot (blank = keep the stored one).
+    /// A newly typed token of JAI's Discord bot (blank = keep the stored one).
     discord_token: String,
     /// A newly typed Mapillary client token for street view (blank = keep the stored one).
     mapillary_token: String,
@@ -146,14 +146,14 @@ fn secret_field(ui: &mut Ui, value: &mut String, stored: bool) {
     ui.add(egui::TextEdit::singleline(value).password(true).hint_text(hint).desired_width(300.0));
 }
 
-/// Quick Connections: Jarvis's own Discord account and Away Mode. Needs nothing of the running
+/// Quick Connections: JAI's own Discord account and Away Mode. Needs nothing of the running
 /// app, so the offscreen test draws exactly what the hub shows.
 fn account_and_away(ui: &mut Ui, p: &Palette, bot: &mut DiscordBotSettings, away: &mut AwaySettings, token: &mut String, token_stored: bool, results: &Mutex<HashMap<&'static str, (bool, String)>>) {
     let section = |ui: &mut Ui, title: &str| {
         ui.add_space(6.0);
         ui.label(RichText::new(title).font(bold(12.5)).color(p.accent));
     };
-    section(ui, "Jarvis's Discord account (a bot of his own)");
+    section(ui, "JAI's Discord account (a bot of his own)");
     ui.checkbox(&mut bot.enabled, "Enabled");
     egui::Grid::new("hub_discord_bot").num_columns(2).spacing([12.0, 7.0]).show(ui, |ui| {
         ui.label("Bot token");
@@ -191,7 +191,7 @@ fn account_and_away(ui: &mut Ui, p: &Palette, bot: &mut DiscordBotSettings, away
                 }
             }
             None => {
-                ui.label(RichText::new("Starts with Jarvis (not in test sessions)").size(11.0).color(p.muted));
+                ui.label(RichText::new("Starts with JAI (not in test sessions)").size(11.0).color(p.muted));
             }
         }
     });
@@ -224,7 +224,7 @@ impl Hub {
         }
     }
 
-    pub fn show(&mut self, ctx: &egui::Context, p: &Palette, app: &Jarvis, rt: &Handle) {
+    pub fn show(&mut self, ctx: &egui::Context, p: &Palette, app: &Jai, rt: &Handle) {
         let pim = &app.tools().pim.clone();
         if self.quick.is_none() {
             self.quick = Some(app.config().read(|c| QuickDraft {
@@ -253,7 +253,7 @@ impl Hub {
             .resizable(true)
             .default_width(560.0)
             .show(ctx, |ui| {
-                muted(ui, p, "Or just ask: “Jarvis, check my school schedule”, “any new emails?”, “give me my morning briefing”.");
+                muted(ui, p, "Or just ask: “JAI, check my school schedule”, “any new emails?”, “give me my morning briefing”.");
                 // One button that verifies every connection, with status codes and previews.
                 let registry = app.tools().stark.integrations.clone();
                 ui.horizontal(|ui| {
@@ -337,8 +337,8 @@ impl Hub {
         }
     }
 
-    /// Writes the field-system settings (the replay buffer restarts with Jarvis).
-    fn save_field(&mut self, app: &Jarvis) {
+    /// Writes the field-system settings (the replay buffer restarts with JAI).
+    fn save_field(&mut self, app: &Jai) {
         let Some(mut f) = self.field.clone() else { return };
         f.game_servers = self.field_servers.split([',', ';']).map(str::trim).filter(|s| !s.is_empty()).map(String::from).collect();
         app.config().update(|c| c.features = f.clone());
@@ -347,7 +347,7 @@ impl Hub {
     }
 
     /// The fifteen field systems: live state, one-click actions, settings.
-    fn field_tab(&mut self, ui: &mut Ui, p: &Palette, app: &Jarvis, rt: &Handle) {
+    fn field_tab(&mut self, ui: &mut Ui, p: &Palette, app: &Jai, rt: &Handle) {
         let tools = app.tools().clone();
         let f = tools.stark.features.clone();
         ui.label(RichText::new("FIELD SYSTEMS").font(bold(12.0)).color(p.accent));
@@ -446,7 +446,7 @@ impl Hub {
     }
 
     /// Writes the Quick Connections settings (and a new bridge token) and applies them live.
-    fn save_quick(&mut self, app: &Jarvis) {
+    fn save_quick(&mut self, app: &Jai) {
         let Some(q) = self.quick.clone() else { return };
         app.config().update(|c| {
             c.whatsapp = q.whatsapp.clone();
@@ -458,7 +458,7 @@ impl Hub {
         });
         app.set_acoustic(&q.acoustic);
         let mut note = "Saved. Satellite port or HTTPS changes apply after a restart.".to_string();
-        // Jarvis's Discord token: sealed in the vault, never in the settings file.
+        // JAI's Discord token: sealed in the vault, never in the settings file.
         if !self.discord_token.trim().is_empty() {
             match crate::discord_bot::clean_token(&self.discord_token) {
                 Some(token) => match app.tools().pim.config().vault().set_secret(crate::discord_bot::VAULT_SERVICE, crate::vault::TOKEN, &token) {
@@ -503,7 +503,7 @@ impl Hub {
         self.message = Some((note, false));
     }
 
-    fn quick_tab(&mut self, ui: &mut Ui, p: &Palette, app: &Jarvis, rt: &Handle) {
+    fn quick_tab(&mut self, ui: &mut Ui, p: &Palette, app: &Jai, rt: &Handle) {
         let Some(mut q) = self.quick.take() else { return };
         let tools = app.tools();
         let section = |ui: &mut Ui, title: &str| {
@@ -562,7 +562,7 @@ impl Hub {
             crate::satellite::pairing_url(app.config()).split("/satellite").next().unwrap_or("")
         ));
 
-        // ---- Jarvis's own Discord account and Away Mode -------------------------------------
+        // ---- JAI's own Discord account and Away Mode -------------------------------------
         let bot_stored = tools.pim.config().vault().has_secret(crate::discord_bot::VAULT_SERVICE, crate::vault::TOKEN);
         account_and_away(ui, p, &mut q.discord_bot, &mut q.away, &mut self.discord_token, bot_stored, &self.results);
 
@@ -697,7 +697,7 @@ impl Hub {
                     crate::worldwide_tunnel::kick();
                 }
             }
-            "tailscale" => muted(ui, p, "Tailscale Funnel gives this PC one address for good (https://pc-name.your-tailnet.ts.net) without a domain: install Tailscale on this PC, sign in and allow Funnel once. Jarvis starts it himself."),
+            "tailscale" => muted(ui, p, "Tailscale Funnel gives this PC one address for good (https://pc-name.your-tailnet.ts.net) without a domain: install Tailscale on this PC, sign in and allow Funnel once. JAI starts it himself."),
             _ => muted(ui, p, "Your own server: an HTTPS reverse proxy on it forwards to the SSH port; the permanent address is the proxy's."),
         }
 
@@ -766,8 +766,8 @@ impl Hub {
         section(ui, "Acoustic radar");
         ui.horizontal_wrapped(|ui| {
             ui.checkbox(&mut q.acoustic.double_clap, "Double clap");
-            egui::ComboBox::from_id_salt("hub_clap").selected_text(if q.acoustic.clap_action == "toggle_music" { "toggles the music" } else { "wakes Jarvis" }).show_ui(ui, |ui| {
-                ui.selectable_value(&mut q.acoustic.clap_action, "wake".to_string(), "wakes Jarvis");
+            egui::ComboBox::from_id_salt("hub_clap").selected_text(if q.acoustic.clap_action == "toggle_music" { "toggles the music" } else { "wakes JAI" }).show_ui(ui, |ui| {
+                ui.selectable_value(&mut q.acoustic.clap_action, "wake".to_string(), "wakes JAI");
                 ui.selectable_value(&mut q.acoustic.clap_action, "toggle_music".to_string(), "toggles the music");
             });
             ui.checkbox(&mut q.acoustic.knock_alert, "Door-knock alert");
@@ -939,7 +939,7 @@ impl Hub {
             ui.end_row();
             self.token_row(ui, p, pim, EMAIL, "App token");
         });
-        muted(ui, p, "Gmail: turn on 2-step verification, create an app password (Google Account → Security → App passwords) and paste it here. Jarvis only reads (EXAMINE + BODY.PEEK); nothing is marked as read.");
+        muted(ui, p, "Gmail: turn on 2-step verification, create an app password (Google Account → Security → App passwords) and paste it here. JAI only reads (EXAMINE + BODY.PEEK); nothing is marked as read.");
         self.draft = Some(d);
     }
 
@@ -986,7 +986,7 @@ impl Hub {
             text_field(ui, &mut d.webuntis.student_id, "element id (optional)");
             ui.end_row();
             ui.label("Client name");
-            text_field(ui, &mut d.webuntis.client_name, "JARVIS");
+            text_field(ui, &mut d.webuntis.client_name, "JAI");
             ui.end_row();
             ui.label("Session id (SSO)");
             ui.horizontal(|ui| {
@@ -1067,7 +1067,7 @@ impl Hub {
     fn study_tab(&mut self, ui: &mut Ui, p: &Palette, pim: &Pim) {
         let Some(mut d) = self.draft.take() else { return };
         ui.label(RichText::new("Background change watchers").font(bold(12.0)).color(p.accent));
-        muted(ui, p, "Jarvis checks the service on a timer, lights its node in the core and tells you the moment a class is cancelled or something new is posted.");
+        muted(ui, p, "JAI checks the service on a timer, lights its node in the core and tells you the moment a class is cancelled or something new is posted.");
         let running: HashMap<String, u32> = pim.watchers().list().into_iter().collect();
         let mut targets: Vec<(String, String)> = vec![(WEBUNTIS.into(), "WebUntis (cancellations, substitutions)".into()), (LMS.into(), "itslearning (new posts)".into())];
         targets.extend(d.feeds.iter().filter(|f| !f.name.trim().is_empty()).map(|f| (format!("feed:{}", f.name), format!("Web feed: {}", f.name))));
@@ -1125,7 +1125,7 @@ mod tests {
     use super::*;
     use crate::visual_ui_verifier::{self as visual, Stage};
 
-    /// Jarvis's Discord account and Away Mode in the hub, drawn offscreen at its width and at a
+    /// JAI's Discord account and Away Mode in the hub, drawn offscreen at its width and at a
     /// narrow one: nothing cut off, nothing drawn over anything else, every control there.
     #[test]
     fn the_discord_account_and_away_mode_settings_are_shown_whole() {
@@ -1143,7 +1143,7 @@ mod tests {
             stage.raster(&frame).save(&format!("hub_discord_account_{width}"));
             assert_eq!(visual::clipped_text(&frame), Vec::<String>::new(), "at {width} px");
             assert_eq!(visual::text_over_text(&frame), Vec::<String>::new(), "at {width} px");
-            for shown in ["Jarvis's Discord account", "Bot token", "Your Discord user id", "Pair my account", "Starts with Jarvis", "123456", "Presence Intent", "Away Mode", "locked for", "a drive is plugged in"] {
+            for shown in ["JAI's Discord account", "Bot token", "Your Discord user id", "Pair my account", "Starts with JAI", "123456", "Presence Intent", "Away Mode", "locked for", "a drive is plugged in"] {
                 assert!(!frame.find_text(shown).is_empty(), "{shown} is not in the hub at {width} px");
             }
         }

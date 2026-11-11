@@ -1,14 +1,14 @@
-//! Jarvis's voice in a Discord call as his own account (the bot, `discord_bot`): Discord's voice
+//! JAI's voice in a Discord call as his own account (the bot, `discord_bot`): Discord's voice
 //! gateway (v8), RTP over UDP sealed with the transport encryption the server offers
 //! (AES-256-GCM, else XChaCha20-Poly1305, both "rtpsize"), Opus at 48 kHz, and DAVE, the
 //! end-to-end encryption every voice call has required since 1 March 2026, through `davey`
 //! (OpenMLS).
 //!
-//! * Speaking: the clauses the TTS renders while Jarvis may talk in the call arrive here as
+//! * Speaking: the clauses the TTS renders while JAI may talk in the call arrive here as
 //!   48 kHz mono (`Audio::Samples`) and go out as 20 ms Opus frames: DAVE-encrypted, sealed,
 //!   paced by the clock. A pause ends with five silence frames and "not speaking".
 //! * Listening: every participant's packets are opened (transport, then DAVE), decoded and cut
-//!   into sentences by the call VAD (`discord_bridge::CallVad`, 16 kHz) for Whisper. While Jarvis
+//!   into sentences by the call VAD (`discord_bridge::CallVad`, 16 kHz) for Whisper. While JAI
 //!   talks, what comes back is dropped (a friend's open microphone would echo him).
 //! * Nothing here is written to disk.
 
@@ -38,7 +38,7 @@ pub const FRAME: usize = 960;
 /// Opus's RTP payload type on Discord.
 const OPUS_PT: u8 = 0x78;
 const SILENCE: [u8; 3] = davey::OPUS_SILENCE_PACKET;
-/// The transport encryptions Jarvis speaks, preferred first (Discord's own order).
+/// The transport encryptions JAI speaks, preferred first (Discord's own order).
 pub const MODES: [&str; 2] = ["aead_aes256_gcm_rtpsize", "aead_xchacha20_poly1305_rtpsize"];
 const TAG: usize = 16;
 const NONCE: usize = 4;
@@ -498,7 +498,7 @@ fn rand_u32() -> u32 {
 }
 
 /// Windows wakes timers on a 15.6 ms tick unless someone asks for 1 ms; 20 ms Opus frames need
-/// it while Jarvis is in a call.
+/// it while JAI is in a call.
 struct FineTimer;
 
 impl FineTimer {

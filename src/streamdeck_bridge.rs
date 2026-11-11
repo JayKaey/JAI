@@ -1,6 +1,6 @@
 //! DECK // STREAM DECK BRIDGE: a tiny HTTP endpoint on 127.0.0.1:19840 so an Elgato Stream Deck
 //! button (its "Website" / API action, "open in background") or a G915 macro tool can trigger
-//! Jarvis without the microphone:
+//! JAI without the microphone:
 //!
 //! * `GET /run?token=…&text=open%20my%20timetable` — any request, exactly as if typed;
 //! * `GET /theme?token=…&name=stark_gold` — one of the HUD presets;
@@ -9,9 +9,9 @@
 //!
 //! Localhost only. Every command needs the bridge token (`streamdeck_token` in the config,
 //! generated on first start), and a request a web page made (it carries an `Origin` header) is
-//! refused, so a website cannot drive Jarvis through the browser.
+//! refused, so a website cannot drive JAI through the browser.
 
-use crate::app::Jarvis;
+use crate::app::Jai;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::{info, warn};
 
@@ -70,7 +70,7 @@ fn new_token() -> String {
 }
 
 /// Opens the bridge (once, at start-up; a busy port only logs).
-pub fn start(app: Jarvis) {
+pub fn start(app: Jai) {
     let token = {
         let existing = app.config().read(|c| c.streamdeck_token.clone());
         if existing.len() >= 16 {
@@ -151,7 +151,7 @@ mod tests {
         assert_eq!(parse_request("GET /view?name=sim_lab&token=abcdef0123456789 HTTP/1.1\r\n\r\n", t), Ok(DeckCommand::View("sim_lab".into())));
         assert_eq!(parse_request("GET /run?token=wrong&text=x HTTP/1.1\r\n\r\n", t), Err("401 Unauthorized"));
         assert_eq!(parse_request("GET /run?text=shutdown HTTP/1.1\r\n\r\n", t), Err("401 Unauthorized"));
-        assert_eq!(parse_request("GET /run?token=abcdef0123456789&text=x HTTP/1.1\r\nOrigin: https://evil.example\r\n\r\n", t), Err("403 Forbidden"), "a web page cannot drive Jarvis");
+        assert_eq!(parse_request("GET /run?token=abcdef0123456789&text=x HTTP/1.1\r\nOrigin: https://evil.example\r\n\r\n", t), Err("403 Forbidden"), "a web page cannot drive JAI");
         assert_eq!(parse_request("POST /run HTTP/1.1\r\n\r\n", t), Err("405 Method Not Allowed"));
         assert_eq!(parse_request("GET /run?token=abcdef0123456789 HTTP/1.1\r\n\r\n", t), Err("400 Bad Request"));
         assert_eq!(parse_request("GET /nope?token=abcdef0123456789 HTTP/1.1\r\n\r\n", t), Err("404 Not Found"));

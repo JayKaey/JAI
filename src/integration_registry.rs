@@ -5,7 +5,7 @@
 //! `diagnose_integrations` (the tool, the hub's "Test & Diagnose All Connections" button and
 //! `JARVIS.exe --diagnose`) runs every check concurrently and reports, per service, the exact
 //! HTTP status (or protocol result), timing and a preview of the data it read — so a broken
-//! integration fails loudly instead of Jarvis quietly answering from imagination.
+//! integration fails loudly instead of JAI quietly answering from imagination.
 
 use crate::pim_config::{CALENDAR, EMAIL, LMS, WEBUNTIS};
 use crate::tools::ToolContext;
@@ -250,7 +250,7 @@ async fn check_satellite(tools: &ToolContext) -> ServiceReport {
     ServiceReport::new(
         name,
         if open { "ok" } else { "error" },
-        if open { format!("TCP {} open", s.port) } else { format!("TCP {} closed (Jarvis not running?)", s.port) },
+        if open { format!("TCP {} open", s.port) } else { format!("TCP {} closed (JAI not running?)", s.port) },
         phone,
         vec![url.replace(&s.token, "<key>")],
         started,
@@ -309,7 +309,7 @@ async fn check_llm(tools: &ToolContext) -> ServiceReport {
                 format!(
                     "'{}' is a {family} model with {size} parameters{}",
                     cfg.primary_model,
-                    if mismatch { " — NOT Qwen3 despite its tag; small models skip tools, so Jarvis routes integrations himself" } else { "" }
+                    if mismatch { " — NOT Qwen3 despite its tag; small models skip tools, so JAI routes integrations himself" } else { "" }
                 ),
                 vec![format!("num_ctx {}", cfg.num_ctx)],
                 started,
@@ -368,7 +368,7 @@ pub async fn run_tool(tools: &ToolContext) -> Result<String, String> {
 }
 
 /// `JARVIS.exe --diagnose`: the same checks from the command line (read-only; no audio, no HUD).
-pub async fn cli(cfg: &crate::config::JarvisConfig) -> std::process::ExitCode {
+pub async fn cli(cfg: &crate::config::JaiConfig) -> std::process::ExitCode {
     let store = crate::config::ConfigStore::new(cfg.clone());
     let memory = match crate::memory::MemoryManager::open(&cfg.memory_db_path) {
         Ok(m) => m,
@@ -401,7 +401,7 @@ pub async fn cli(cfg: &crate::config::JarvisConfig) -> std::process::ExitCode {
         pim: crate::pim::Pim::open(&cfg.memory_db_path, store.clone(), None),
         stark: crate::stark::StarkSystems::open(&cfg.memory_db_path),
     };
-    println!("J.A.R.V.I.S. integration diagnostics…\n");
+    println!("J.A.I. integration diagnostics…\n");
     let reports = tools.stark.integrations.diagnose_all(&tools).await;
     println!("{}", report_text(&reports));
     if reports.iter().any(|r| r.state == "error") {

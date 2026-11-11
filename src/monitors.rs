@@ -1,7 +1,7 @@
 //! Multi-monitor routing: every connected display, numbered the way Sir sees them (Monitor 1 =
 //! the primary, then Windows' own display numbers), "left"/"right"/"next" resolution by
 //! position, and moving
-//! any application window — or Jarvis himself — from one monitor to another.
+//! any application window — or JAI himself — from one monitor to another.
 //!
 //! Windows: `EnumDisplayMonitors` + `GetMonitorInfoW`, windows moved with `SetWindowPos`
 //! (restored first and maximised again when they were maximised). Linux: `hyprctl monitors -j`
@@ -302,7 +302,7 @@ fn short(title: &str) -> String {
 pub fn tool_definition() -> Value {
     json!({"type": "function", "function": {
         "name": "move_window_to_monitor",
-        "description": "Move any application window (Discord, Spotify, Sonora, Chrome, VS Code, a game …) or one of YOUR windows (an id/title from the live context, e.g. pc_stats, drive_space) to another monitor. app_or_window_name \"it\"/\"that\" = the app or Jarvis window just discussed; \"yourself\" = your HUD. target_monitor: 1, 2, 3, \"left\", \"right\", \"primary\", \"next\".",
+        "description": "Move any application window (Discord, Spotify, Sonora, Chrome, VS Code, a game …) or one of YOUR windows (an id/title from the live context, e.g. pc_stats, drive_space) to another monitor. app_or_window_name \"it\"/\"that\" = the app or JAI window just discussed; \"yourself\" = your HUD. target_monitor: 1, 2, 3, \"left\", \"right\", \"primary\", \"next\".",
         "parameters": {"type": "object", "properties": {
             "app_or_window_name": {"type": "string"},
             "target_monitor": {"type": "string", "description": "1, 2, 3, left, right, primary or next"}

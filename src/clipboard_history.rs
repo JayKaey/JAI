@@ -3,7 +3,7 @@
 //! the third one").
 //!
 //! The history lives in memory only: it is never written to disk, never logged and gone when
-//! Jarvis quits. Anything that looks like a secret — a password-shaped token, an API key, a
+//! JAI quits. Anything that looks like a secret — a password-shaped token, an API key, a
 //! private key block, a card or bank number — is not kept at all. Sir can pause it ("pause the
 //! clipboard history") and clear it at any time.
 

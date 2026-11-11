@@ -1,4 +1,4 @@
-//! Looking at the screen as in the reference videos. While Jarvis captures it ("explain what's
+//! Looking at the screen as in the reference videos. While JAI captures it ("explain what's
 //! on my screen") his own windows are left out of the picture, so he reads what is behind them
 //! (they stay on the monitor: Windows 10 2004+ `WDA_EXCLUDEFROMCAPTURE`); the HUD frosts over for
 //! a moment as he looks, and a card under the emblem names what he saw ("VIDEO DETECTED") with
@@ -19,7 +19,7 @@ pub struct Card {
     pub kind: &'static str,
     /// One line: the window's title or the first line he read.
     pub line: String,
-    /// The quick actions: the word on the card and what Jarvis is asked when it is clicked.
+    /// The quick actions: the word on the card and what JAI is asked when it is clicked.
     pub actions: [(&'static str, &'static str); 3],
 }
 
@@ -151,12 +151,12 @@ pub fn frost() -> f32 {
     .unwrap_or(0.0)
 }
 
-/// While this lives, Jarvis' own windows are left out of screen captures (they stay on the
+/// While this lives, JAI's own windows are left out of screen captures (they stay on the
 /// monitor) and the HUD is frosted; once the last one is dropped, they are captured again and
 /// the frost clears.
 pub struct Looking(());
 
-/// Leaves Jarvis' own windows out of screen captures until the guard is dropped. The guard
+/// Leaves JAI's own windows out of screen captures until the guard is dropped. The guard
 /// exists from the start: a turn cancelled while this waits (ESC, "stop") ends the look all the
 /// same. Both changes run on the Win32 worker in the order they were asked for, so a window is
 /// never left out after its look has ended.
@@ -223,7 +223,7 @@ fn set_capture_affinity(_handles: &[isize], _out: bool) -> Vec<isize> {
     Vec::new()
 }
 
-/// Jarvis' own visible top-level windows (the HUD and every window of his).
+/// JAI's own visible top-level windows (the HUD and every window of his).
 #[cfg(windows)]
 fn own_windows() -> Vec<isize> {
     let pid = std::process::id();
@@ -286,7 +286,7 @@ mod tests {
         // The word alone is no error: in code, in a file's name, in prose.
         let errors_in_code = "fn parse(s: &str) -> Result<u32, Error> {\n    s.parse().map_err(|_| Error::Bad)\n}\nuse std::io;\n";
         assert_eq!(classify("the window \"parse.rs - Visual Studio Code\"", errors_in_code).kind, "CODE");
-        assert_eq!(classify("the window \"error.rs - jarvis - Visual Studio Code\"", "let x = 1;").kind, "CODE");
+        assert_eq!(classify("the window \"error.rs - jai - Visual Studio Code\"", "let x = 1;").kind, "CODE");
         let long = "word ".repeat(150);
         assert_eq!(classify("the window \"Wikipedia — Firefox\"", &long).kind, "ARTICLE");
         let prose = format!("{} The first attempt failed, and the error was in the design. {}", "word ".repeat(80), "word ".repeat(60));

@@ -68,7 +68,7 @@ impl Fix {
         format!("You: {} ({}, {})", crate::earth::coords_label(self.lat, self.lon), accuracy_label(self.accuracy_m), self.source.label())
     }
 
-    /// What Jarvis says as the camera flies there.
+    /// What JAI says as the camera flies there.
     pub fn spoken(&self) -> String {
         let within = spoken_accuracy(self.accuracy_m);
         match (self.source, &self.label) {

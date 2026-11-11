@@ -35,7 +35,7 @@ pub fn definitions() -> Vec<Value> {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Line {
     pub at: DateTime<Utc>,
-    /// "Sir", "Jarvis" or "Call".
+    /// "Sir", "JAI" or "Call".
     pub who: String,
     pub text: String,
 }
@@ -44,7 +44,7 @@ fn stamp(t: DateTime<Utc>) -> String {
     t.to_rfc3339_opts(SecondsFormat::Nanos, false)
 }
 
-/// The conversation log between two instants (Sir and Jarvis), oldest first.
+/// The conversation log between two instants (Sir and JAI), oldest first.
 pub fn lines_between(conn: &Connection, from: DateTime<Utc>, to: DateTime<Utc>) -> Vec<Line> {
     let Ok(mut q) = conn.prepare("SELECT role, content, timestamp FROM conversation_logs WHERE timestamp >= ?1 AND timestamp <= ?2 ORDER BY timestamp") else { return Vec::new() };
     let rows = q.query_map(params![stamp(from), stamp(to)], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)));
@@ -52,7 +52,7 @@ pub fn lines_between(conn: &Connection, from: DateTime<Utc>, to: DateTime<Utc>) 
     rows.flatten()
         .filter_map(|(role, text, ts)| {
             let at = DateTime::parse_from_rfc3339(&ts).ok()?.with_timezone(&Utc);
-            Some(Line { at, who: if role == "user" { "Sir".into() } else { "Jarvis".into() }, text })
+            Some(Line { at, who: if role == "user" { "Sir".into() } else { "JAI".into() }, text })
         })
         .collect()
 }

@@ -191,7 +191,7 @@ impl Phonemizer {
                 libs.push(p);
             }
         }
-        // The copy shipped with Jarvis, then system installs. Absolute, because the Windows
+        // The copy shipped with JAI, then system installs. Absolute, because the Windows
         // loader resolves the library's own dependencies relative to its full path.
         let bundled = std::path::absolute(Path::new("runtime").join("espeak-ng")).unwrap_or_default();
         if bundled.is_dir() {
@@ -328,7 +328,7 @@ const GERMAN_WEAK: &[&str] = &[
     "die", "was", "will", "so", "also", "in", "am", "an", "man", "war", "bin", "den", "um", "da", "ja", "hand", "kind", "rat", "hat", "gut", "bald", "ins",
     "dir", "mach",
 ];
-/// German content words Jarvis says inside English sentences (school, gym, calendar, people).
+/// German content words JAI says inside English sentences (school, gym, calendar, people).
 const GERMAN_TERMS: &[&str] = &[
     "mathematik", "mathe", "geschichte", "klausur", "klausuren", "probeklausur", "klassenarbeit", "hausaufgaben", "hausaufgabe", "stundenplan",
     "vertretung", "vertretungsplan", "freistunde", "entfall", "ausfall", "unterricht", "leistungskurs", "grundkurs", "lk", "gk", "physik", "chemie",
@@ -346,7 +346,7 @@ fn has_umlaut(word: &str) -> bool {
     word.chars().any(|c| matches!(c, 'ä' | 'ö' | 'ü' | 'Ä' | 'Ö' | 'Ü' | 'ß'))
 }
 
-/// A word that is German inside an English sentence: umlauts, Jarvis' German vocabulary
+/// A word that is German inside an English sentence: umlauts, JAI's German vocabulary
 /// (compounds included: "Deutschprobeklausur"), unambiguous function words, German noun
 /// morphology ("Vertretung", "Gesundheit") and German names ("Schmidt", "Schneider").
 fn is_german_word(word: &str) -> bool {
@@ -582,7 +582,7 @@ fn tidy(ipa: &str) -> String {
 
 static LEXICON: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| {
     HashMap::from([
-        ("jarvis", "dʒˈɑːvɪs"), ("sir", "sˈɜː"), ("yes", "jˈɛs"), ("no", "nˈəʊ"), ("hello", "həlˈəʊ"),
+        ("jai", "dʒˈɑːvɪs"), ("sir", "sˈɜː"), ("yes", "jˈɛs"), ("no", "nˈəʊ"), ("hello", "həlˈəʊ"),
         ("good", "ɡˈʊd"), ("morning", "mˈɔːnɪŋ"), ("afternoon", "ˌɑːftənˈuːn"), ("evening", "ˈiːvnɪŋ"),
         ("day", "dˈeɪ"), ("night", "nˈaɪt"), ("now", "nˈaʊ"), ("right", "ɹˈaɪt"), ("away", "əwˈeɪ"),
         ("certainly", "sˈɜːtənli"), ("course", "kˈɔːs"), ("indeed", "ɪndˈiːd"), ("very", "vˈɛɹi"),

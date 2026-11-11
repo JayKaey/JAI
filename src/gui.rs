@@ -1,15 +1,15 @@
 //! Native HUD window: egui drawn with OpenGL (eframe/glow) straight into a desktop window — no
 //! browser, no webview, no console. It lives on the main thread for the whole session; closing
-//! it hides it to the tray, and Jarvis restyles it live when Sir asks (`InterfaceSettings`).
+//! it hides it to the tray, and JAI restyles it live when Sir asks (`InterfaceSettings`).
 //!
 //! Backend events are applied to a shared `HudModel` by a background task, so nothing is missed
-//! while the window is hidden; the window drives `app::Jarvis` with `HudCommand`s.
+//! while the window is hidden; the window drives `app::JAI` with `HudCommand`s.
 //!
 //! The window is the HUD board: an obsidian canvas with the gyroscopic ring emblem
 //! (`rose_emblem_renderer`), the board of sharp technical blocks (`hud_board`), a micro header
 //! strip and a micro telemetry strip. Every exchange appears in the `COMMS // LIVE RESPONSE` block
 //! above the strip; the header's `[ CONSOLE ]` (Ctrl+L, "open text interface") slides
-//! out the text console with the full transcript and an input line. Jarvis' live widgets,
+//! out the text console with the full transcript and an input line. JAI's live widgets,
 //! confirmations and message cards render as blocks in the left system column; his extra native
 //! windows are egui deferred viewports (`widget_view`). The board launches in true borderless
 //! fullscreen on the primary monitor (F11 toggles maximised windowed mode).
@@ -63,7 +63,7 @@ mod model3d_view;
 #[path = "gui_offscreen.rs"]
 pub(crate) mod offscreen;
 
-use crate::app::Jarvis;
+use crate::app::Jai;
 use crate::rose_emblem_renderer::{EmblemInputs, RoseEmblem};
 use crate::config::ConfigStore;
 use crate::ears::AudioLevel;
@@ -71,7 +71,7 @@ use crate::hud::{ConfigState, HudCommand, HudEvent};
 use crate::interface::{self, HudLayout, InterfaceSettings, WindowCommand, THEMES};
 use crate::memory::MemoryEntry;
 use crate::modality::VoiceResponseMode;
-use crate::skills::JarvisSkill;
+use crate::skills::JaiSkill;
 use crate::telemetry::SystemTelemetry;
 use eframe::egui::{
     self, pos2, vec2, Align, Align2, Color32, FontData, FontDefinitions, FontFamily, FontId, Frame, Key, Layout, Margin,
@@ -86,7 +86,7 @@ use tokio::runtime::Handle;
 use tokio::sync::broadcast;
 use tracing::{info, warn};
 
-const WINDOW_TITLE: &str = "J.A.R.V.I.S. HUD";
+const WINDOW_TITLE: &str = "J.A.I. HUD";
 const MAX_MESSAGES: usize = 200;
 const MAX_TOOL_LINES: usize = 60;
 const MEMORY_CATEGORIES: [&str; 6] = ["preference", "personal", "project", "schedule", "system", "general"];
@@ -155,7 +155,7 @@ fn request_repaint_soon() {
     }
 }
 
-/// Whether Jarvis can open native windows (false when headless).
+/// Whether JAI can open native windows (false when headless).
 pub fn windows_supported() -> bool {
     SHARED.running.load(Ordering::Acquire)
 }
@@ -204,7 +204,7 @@ pub fn hud_hwnd() -> isize {
     SHARED.hwnd.load(Ordering::Acquire)
 }
 
-/// Widget content changed or a window closed: a repaint is enough (Jarvis' windows redraw and
+/// Widget content changed or a window closed: a repaint is enough (JAI's windows redraw and
 /// hide themselves on their own schedule, even while the HUD sits in the tray).
 pub fn refresh() {
     request_repaint();
@@ -402,7 +402,7 @@ fn clock_now() -> String {
     chrono::Local::now().format("%H:%M:%S").to_string()
 }
 
-/// Opens (or closes) the Feature Lab: every tool Jarvis has, each with its `[ TRY ]`.
+/// Opens (or closes) the Feature Lab: every tool JAI has, each with its `[ TRY ]`.
 pub fn show_features(open: bool) {
     features_view::set_open(open);
     if open {
@@ -418,7 +418,7 @@ pub fn open_integrations(service: Option<&'static str>) {
     request_repaint();
 }
 
-/// Hides the HUD to the tray; Jarvis keeps running.
+/// Hides the HUD to the tray; JAI keeps running.
 pub fn hide() {
     #[cfg(windows)]
     {
@@ -434,7 +434,7 @@ pub fn hide() {
     }
 }
 
-/// Ends `run`; called once Jarvis' own shutdown work is done.
+/// Ends `run`; called once JAI's own shutdown work is done.
 pub fn quit() {
     SHARED.quitting.store(true, Ordering::Release);
     #[cfg(windows)]
@@ -454,7 +454,7 @@ pub fn quit() {
 /// One-shot window actions from `configure_interface`.
 pub fn window_command(command: WindowCommand) -> Result<(), String> {
     if !SHARED.running.load(Ordering::Acquire) {
-        return Err("Jarvis is running without his HUD window (headless), so there is no window to change.".into());
+        return Err("JAI is running without his HUD window (headless), so there is no window to change.".into());
     }
     match command {
         WindowCommand::Show => show(),
@@ -488,7 +488,7 @@ pub fn window_command(command: WindowCommand) -> Result<(), String> {
 /// Resizes the HUD window (logical points) — `control_jarvis_interface` set_window_size.
 pub fn set_window_size(width: f32, height: f32) -> Result<(), String> {
     if !SHARED.running.load(Ordering::Acquire) {
-        return Err("Jarvis is running without his HUD window (headless), so there is no window to resize.".into());
+        return Err("JAI is running without his HUD window (headless), so there is no window to resize.".into());
     }
     let ctx = context().ok_or("The HUD window is not open.")?;
     ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Maximized(false));
@@ -554,18 +554,18 @@ pub fn remember_placement(config: &ConfigStore) {
     let _ = config;
 }
 
-/// The HUD's link to the backend; it follows Jarvis' events from `attach` on, whether or not a
+/// The HUD's link to the backend; it follows JAI's events from `attach` on, whether or not a
 /// window is open.
 pub struct Hud {
-    app: Jarvis,
+    app: Jai,
     rt: Handle,
     model: Arc<Mutex<HudModel>>,
     wake: mpsc::Receiver<Wake>,
 }
 
 impl Hud {
-    /// Starts following Jarvis (before he says anything, so the chat shows it all).
-    pub fn attach(app: Jarvis, rt: Handle) -> Self {
+    /// Starts following JAI (before he says anything, so the chat shows it all).
+    pub fn attach(app: Jai, rt: Handle) -> Self {
         let (tx, wake) = mpsc::channel();
         *lock(&SHARED.wake) = Some(tx);
         let model = Arc::new(Mutex::new(HudModel::default()));
@@ -574,7 +574,7 @@ impl Hud {
         Self { app, rt, model, wake }
     }
 
-    /// Runs the window on the calling (main) thread until Jarvis quits. Returns early — Jarvis
+    /// Runs the window on the calling (main) thread until JAI quits. Returns early — JAI
     /// keeps running in the tray — if no window can be created (e.g. no OpenGL driver).
     pub fn run(self, open_now: bool) {
         let mut open = open_now;
@@ -591,12 +591,12 @@ impl Hud {
             open = false;
             if let Err(e) = open_window(&self.app, &self.rt, &self.model) {
                 crate::platform::alert(&format!(
-                    "The J.A.R.V.I.S. window could not be opened ({e}). He keeps listening in the tray; \
+                    "The J.A.I. window could not be opened ({e}). He keeps listening in the tray; \
                      updating the graphics driver usually fixes this."
                 ));
                 break;
             }
-            // On Windows the window only ends when Jarvis quits. Elsewhere closing it lands here,
+            // On Windows the window only ends when JAI quits. Elsewhere closing it lands here,
             // and the tray (or "show yourself") opens a new one.
         }
         SHARED.running.store(false, Ordering::Release);
@@ -605,7 +605,7 @@ impl Hud {
 }
 
 /// Keeps `model` current from backend events, whether or not a window is open.
-fn feed_model(app: &Jarvis, rt: &Handle, model: &Arc<Mutex<HudModel>>) {
+fn feed_model(app: &Jai, rt: &Handle, model: &Arc<Mutex<HudModel>>) {
     let mut events = app.subscribe();
     {
         let mut m = lock(model);
@@ -634,7 +634,7 @@ fn feed_model(app: &Jarvis, rt: &Handle, model: &Arc<Mutex<HudModel>>) {
 }
 
 /// Runs a command on the backend; a direct reply (search results, model list, …) lands in the model.
-fn send(app: &Jarvis, rt: &Handle, model: &Arc<Mutex<HudModel>>, cmd: HudCommand) {
+fn send(app: &Jai, rt: &Handle, model: &Arc<Mutex<HudModel>>, cmd: HudCommand) {
     let (app, model) = (app.clone(), Arc::clone(model));
     rt.spawn(async move {
         if let Some(reply) = app.handle_command(cmd).await {
@@ -669,11 +669,11 @@ fn start_monitor_points() -> Option<Rect> {
     Some(Rect::from_min_max(pos2(m.rect[0] as f32 / scale, m.rect[1] as f32 / scale), pos2(m.rect[2] as f32 / scale, m.rect[3] as f32 / scale)))
 }
 
-/// A window of Jarvis' own in a test session: it never takes the focus (Sir may be playing),
+/// A window of JAI's own in a test session: it never takes the focus (Sir may be playing),
 /// and with `--monitor` one without a place of its own opens in the middle of that monitor
 /// (else Windows would put it on the primary one).
 pub(crate) fn for_test_session(builder: egui::ViewportBuilder) -> egui::ViewportBuilder {
-    // Every window of Jarvis' own passes here: it comes up hidden and shows itself once it has
+    // Every window of JAI's own passes here: it comes up hidden and shows itself once it has
     // drawn its first frame (`reveal_when_drawn`, `reveal_overdue`), so Windows never shows its
     // empty client area (a white or black flash) before the window's entrance.
     let builder = builder.with_visible(false);
@@ -690,7 +690,7 @@ pub(crate) fn for_test_session(builder: egui::ViewportBuilder) -> egui::Viewport
     }
 }
 
-fn open_window(app: &Jarvis, rt: &Handle, model: &Arc<Mutex<HudModel>>) -> Result<(), String> {
+fn open_window(app: &Jai, rt: &Handle, model: &Arc<Mutex<HudModel>>) -> Result<(), String> {
     let (iface, placement, maximized) = app.config().read(|c| (c.interface.clone(), c.hud_window, c.hud_maximized));
     let on_top = if iface.orb_mode { iface.orb_on_top } else { iface.always_on_top };
     let level = if on_top { egui::viewport::WindowLevel::AlwaysOnTop } else { egui::viewport::WindowLevel::Normal };
@@ -746,7 +746,7 @@ fn open_window(app: &Jarvis, rt: &Handle, model: &Arc<Mutex<HudModel>>) -> Resul
     let restore = placement.filter(|_| !maximized && !fullscreen && !iface.orb_mode && start_on.is_none());
     let (app, rt, model) = (app.clone(), rt.clone(), Arc::clone(model));
     eframe::run_native(
-        "J.A.R.V.I.S.",
+        "J.A.I.",
         options,
         Box::new(move |cc| Ok(Box::new(HudApp::new(cc, app, rt, model, restore)))),
     )
@@ -779,7 +779,7 @@ fn min_size(layout: HudLayout) -> Vec2 {
     }
 }
 
-/// The gyroscope emblem icon (256 px) for the HUD and Jarvis' other windows; rendered once, as
+/// The gyroscope emblem icon (256 px) for the HUD and JAI's other windows; rendered once, as
 /// the HUD opens (rendered at the first detach instead, it froze the HUD for a second).
 pub(crate) fn window_icon() -> Option<egui::IconData> {
     static ICON: std::sync::OnceLock<egui::IconData> = std::sync::OnceLock::new();
@@ -846,16 +846,16 @@ fn native_window(cc: &eframe::CreationContext<'_>) -> isize {
 #[derive(Clone, Copy, PartialEq)]
 enum Speaker {
     Sir,
-    Jarvis,
+    Jai,
     System,
 }
 
 struct ChatLine {
     id: String,
     who: Speaker,
-    /// The bubble's header: "YOU" or "J.A.R.V.I.S." (empty for system lines).
+    /// The bubble's header: "YOU" or "J.A.I." (empty for system lines).
     meta: String,
-    /// A tiny pill beside the header: the latency ("140 ms"), "not for Jarvis", a time.
+    /// A tiny pill beside the header: the latency ("140 ms"), "not for JAI", a time.
     pill: Option<String>,
     /// Everything technical (source, language, wake word, STT timing, model) — on hover only.
     detail: String,
@@ -935,7 +935,7 @@ struct HudModel {
     telemetry: Option<SystemTelemetry>,
     memories: Vec<MemoryEntry>,
     memory_query: Option<String>,
-    skills: Vec<JarvisSkill>,
+    skills: Vec<JaiSkill>,
     cfg: Option<ConfigState>,
     inputs: Vec<String>,
     outputs: Vec<String>,
@@ -993,7 +993,7 @@ impl HudModel {
                 }
                 let detail = detail.join(" · ");
                 let pill = if ignored {
-                    Some("not for Jarvis".to_string())
+                    Some("not for JAI".to_string())
                 } else {
                     (stt_ms > 0).then(|| format!("{stt_ms} ms"))
                 };
@@ -1033,10 +1033,10 @@ impl HudModel {
                         let sir = role == "user";
                         self.push(ChatLine {
                             id: String::new(),
-                            who: if sir { Speaker::Sir } else { Speaker::Jarvis },
+                            who: if sir { Speaker::Sir } else { Speaker::Jai },
                             pill: Some(time.get(11..16).unwrap_or(&time).to_string()),
                             detail: format!("An earlier session, {time}"),
-                            meta: if sir { "YOU".to_string() } else { "J.A.R.V.I.S.".to_string() },
+                            meta: if sir { "YOU".to_string() } else { "J.A.I.".to_string() },
                             text,
                             streaming: false,
                             faded: true,
@@ -1068,7 +1068,7 @@ impl HudModel {
             }
             HudEvent::Retracted { message_id } => {
                 if !message_id.is_empty() {
-                    self.messages.retain(|l| !(l.who == Speaker::Jarvis && l.id == message_id));
+                    self.messages.retain(|l| !(l.who == Speaker::Jai && l.id == message_id));
                 }
                 if let Some(line) = self.messages.iter_mut().rev().find(|l| l.who == Speaker::Sir) {
                     line.partial = true;
@@ -1086,7 +1086,7 @@ impl HudModel {
                 }
                 line.streaming = false;
                 line.interrupted = interrupted;
-                line.meta = "J.A.R.V.I.S.".to_string();
+                line.meta = "J.A.I.".to_string();
                 line.pill = if interrupted { Some("interrupted".to_string()) } else { (latency_ms > 0).then(|| format!("{latency_ms} ms")) };
                 line.detail = format!(
                     "{model}{}{}",
@@ -1241,17 +1241,17 @@ impl HudModel {
         }
     }
 
-    /// Jarvis' (possibly still streaming) reply with this id.
+    /// JAI's (possibly still streaming) reply with this id.
     fn reply(&mut self, id: &str) -> &mut ChatLine {
-        match self.messages.iter().rposition(|l| l.id == id && l.who == Speaker::Jarvis) {
+        match self.messages.iter().rposition(|l| l.id == id && l.who == Speaker::Jai) {
             Some(i) => &mut self.messages[i],
             None => {
                 self.push(ChatLine {
                     id: id.to_string(),
-                    who: Speaker::Jarvis,
+                    who: Speaker::Jai,
                     pill: None,
                     detail: String::new(),
-                    meta: "J.A.R.V.I.S.".into(),
+                    meta: "J.A.I.".into(),
                     text: String::new(),
                     streaming: true,
                     faded: false,
@@ -1509,7 +1509,7 @@ fn bold_family() -> FontFamily {
 
 thread_local! {
     /// Text size factor of the window being drawn: 1.0 for the HUD (its zoom is egui's), a
-    /// Jarvis window's own `font_scale` while that window draws (egui's zoom is shared by all
+    /// JAI window's own `font_scale` while that window draws (egui's zoom is shared by all
     /// windows). Every viewport is drawn on the GUI thread, one after the other.
     static TEXT_SCALE: std::cell::Cell<f32> = const { std::cell::Cell::new(1.0) };
 }
@@ -1553,14 +1553,14 @@ struct Reactor {
     energy: f32,
     /// Rotation of the dashed ring and the slow drift of the node circle (radians).
     spin: [f32; 3],
-    /// Smoothed loudness of Sir's microphone and of Jarvis' voice (0-1): the strings vibrate
+    /// Smoothed loudness of Sir's microphone and of JAI's voice (0-1): the strings vibrate
     /// with them.
     mic: f32,
     voice: f32,
 }
 
 impl Reactor {
-    /// What the emblem's voice equaliser follows: Jarvis' own voice only (his TTS playback
+    /// What the emblem's voice equaliser follows: JAI's own voice only (his TTS playback
     /// level) — Sir talking into the microphone leaves it calm.
     fn emblem_voice(&self) -> f32 {
         self.voice
@@ -1570,7 +1570,7 @@ impl Reactor {
         self.step_with(state, level, dt, crate::tts::output_level());
     }
 
-    /// `step` with Jarvis' playback level given (`tts::output_level()`, 0-1 of full scale).
+    /// `step` with JAI's playback level given (`tts::output_level()`, 0-1 of full scale).
     fn step_with(&mut self, state: &str, level: Option<&AudioLevel>, dt: f32, playback: f32) {
         let target = match state {
             "speaking" => 0.45 + (self.phase * 3.2).sin() * 0.2,
@@ -1602,7 +1602,7 @@ impl Reactor {
     }
 }
 
-/// What the emblem's voice ticks follow after a second of `state` with Jarvis' own playback at
+/// What the emblem's voice ticks follow after a second of `state` with JAI's own playback at
 /// `jarvis` (0-1) and Sir's microphone at `mic` (0-1): the reactor's own mapping, as the visual
 /// verifier asks it. The microphone never reaches the emblem.
 pub(crate) fn emblem_voice_of(state: &str, jarvis: f32, mic: f32) -> f32 {
@@ -1642,8 +1642,8 @@ pub(crate) fn settle_new_areas(ctx: &egui::Context) {
 }
 
 // ------------------------------------------------------------------ the node-graph core ----
-// Jarvis' subsystems sit on a sphere (`orb_3d`), tied together by strings through the interior.
-// The strings vibrate with Sir's voice and Jarvis' own, and signal particles run along them
+// JAI's subsystems sit on a sphere (`orb_3d`), tied together by strings through the interior.
+// The strings vibrate with Sir's voice and JAI's own, and signal particles run along them
 // while a request flows EARS → STT → BRAIN → a tool.
 
 /// Cascade colours along the orb's real dependency chains.
@@ -1905,7 +1905,7 @@ impl HudApp {
         info!("[HUD] Fullscreen board on {}", m.describe());
     }
 
-    /// Applies interface changes (from Jarvis or the Interface window) to the live window.
+    /// Applies interface changes (from JAI or the Interface window) to the live window.
     fn sync_interface(&mut self, ctx: &egui::Context) -> InterfaceSettings {
         let current = self.app.config().read(|c| c.interface.clone());
         // The HUD's colours (board, console, core, emblem) cross-fade to the chosen theme.
@@ -2136,7 +2136,7 @@ impl HudApp {
         }
     }
 
-    /// The close button hides the window to the tray (Windows); Jarvis keeps running.
+    /// The close button hides the window to the tray (Windows); JAI keeps running.
     fn handle_close(&mut self, ctx: &egui::Context) {
         if !ctx.input(|i| i.viewport().close_requested()) || SHARED.quitting.load(Ordering::Acquire) {
             return;
@@ -2181,10 +2181,10 @@ impl HudApp {
             }
             if let VoiceResponseMode::CustomCondition(c) = &current {
                 pill(ui, &p, format!("CUSTOM: {}", c.replace('_', " ")), p.amber)
-                    .on_hover_text("A custom rule Jarvis applies per answer (set by voice or chat)");
+                    .on_hover_text("A custom rule JAI applies per answer (set by voice or chat)");
             }
             if cfg.voice_muted {
-                pill(ui, &p, "voice muted", p.red).on_hover_text("Say \"unmute your voice\" to hear Jarvis again");
+                pill(ui, &p, "voice muted", p.red).on_hover_text("Say \"unmute your voice\" to hear JAI again");
             }
         });
     }
@@ -2258,7 +2258,7 @@ impl HudApp {
                 }
                 let mut silence = cfg.silence_ms as f32;
                 let r = slider(ui, &p, "Silence before end-of-speech", format!("{silence:.0} ms"), egui::Slider::new(&mut silence, 150.0..=1500.0).step_by(10.0))
-                    .on_hover_text("How long you must pause before Jarvis treats your sentence as finished");
+                    .on_hover_text("How long you must pause before JAI treats your sentence as finished");
                 if r.changed() {
                     self.command(HudCommand::SetVad { start_threshold: None, release_threshold: None, silence_ms: Some(silence as u32), noise_multiplier: None });
                 }
@@ -2312,7 +2312,7 @@ impl HudApp {
                 }
                 row(ui, &p, "Active", &cfg.active_speaker);
                 let mut loudness = cfg.loudness_pct as f32;
-                if slider(ui, &p, "Jarvis voice loudness", format!("{loudness:.0} %"), egui::Slider::new(&mut loudness, 0.0..=200.0).step_by(5.0)).changed() {
+                if slider(ui, &p, "JAI voice loudness", format!("{loudness:.0} %"), egui::Slider::new(&mut loudness, 0.0..=200.0).step_by(5.0)).changed() {
                     self.command(HudCommand::SetLoudness { volume_pct: loudness as u8 });
                 }
                 ui.horizontal(|ui| {
@@ -2650,7 +2650,7 @@ impl HudApp {
 
     // ------------------------------------------------------------------- overlays ----
 
-    /// Jarvis' contextual cards beside the orb, and what Sir clicks on them.
+    /// JAI's contextual cards beside the orb, and what Sir clicks on them.
     fn popups(&self, ctx: &egui::Context, dt: f32) {
         use crate::dynamic_popups::PopupAction;
         for action in crate::dynamic_popups::show(ctx, self.palette.card_style(), dt) {
@@ -2671,7 +2671,7 @@ impl HudApp {
                 PopupAction::Confirm(_) => self.command(HudCommand::Chat { text: "yes".into() }),
                 PopupAction::Cancel(_) => self.command(HudCommand::Chat { text: "no".into() }),
                 // A butler card's button is its fix, carried out as the tool call it stands for;
-                // any other card's button goes to Jarvis as a request.
+                // any other card's button goes to JAI as a request.
                 PopupAction::Button(label) => match crate::proactive_butler::click(&label) {
                     Some(fix) => self.run_calls(vec![(fix.tool, fix.args)]),
                     None => self.command(HudCommand::Chat { text: label }),
@@ -2721,7 +2721,7 @@ impl HudApp {
                 .resizable(false)
                 .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
                 .show(ctx, |ui| {
-                    ui.label("Shut down J.A.R.V.I.S. completely?");
+                    ui.label("Shut down J.A.I. completely?");
                     muted(ui, &p, "Closing the window only hides him in the tray.");
                     ui.add_space(6.0);
                     ui.horizontal(|ui| {
@@ -2767,7 +2767,7 @@ impl HudApp {
             .resizable(false)
             .default_width(340.0)
             .show(ctx, |ui| {
-                muted(ui, &p, "Or just ask: “Jarvis, make the interface gold”, “hide the system panel”, “zoom in”, “stay on top”.");
+                muted(ui, &p, "Or just ask: “JAI, make the interface gold”, “hide the system panel”, “zoom in”, “stay on top”.");
                 ui.add_space(4.0);
                 egui::Grid::new("hud_interface").num_columns(2).spacing([14.0, 8.0]).show(ui, |ui| {
                     ui.label("Theme");
@@ -2849,7 +2849,7 @@ impl HudApp {
                     ui.end_row();
                 });
                 ui.separator();
-                // The live layout state Jarvis controls by voice ("zen mode", "make the orb bigger").
+                // The live layout state JAI controls by voice ("zen mode", "make the orb bigger").
                 ui.label("Live layout");
                 let mut state = s.layout_state((0.0, 0.0));
                 let before = state;
@@ -2900,7 +2900,7 @@ impl HudApp {
             .show(ctx, |ui| {
                 let rect = ctx.screen_rect();
                 ui.painter().rect_filled(rect, Rounding::ZERO, p.card_solid.gamma_multiply(0.94));
-                ui.painter().text(rect.center(), Align2::CENTER_CENTER, "J.A.R.V.I.S. IS SHUTTING DOWN", bold(16.0), p.accent);
+                ui.painter().text(rect.center(), Align2::CENTER_CENTER, "J.A.I. IS SHUTTING DOWN", bold(16.0), p.accent);
                 ui.allocate_rect(rect, Sense::click());
             });
     }
@@ -3105,7 +3105,6 @@ impl HudApp {
 // a small floating command prompt; everything else is voice.
 
 const OBSIDIAN: Color32 = Color32::from_rgb(0x02, 0x04, 0x08);
-const VIGNETTE: Color32 = Color32::from_rgb(0x07, 0x15, 0x22);
 const STRIP_INK: Color32 = Color32::from_rgb(0xD4, 0xEC, 0xF5);
 const STRIP_MUTED: Color32 = Color32::from_rgb(0x7F, 0xA6, 0xB6);
 /// A muted microphone and the privacy lock's status.
@@ -3116,7 +3115,7 @@ const TELEMETRY_H: f32 = 14.0;
 /// The dot matrix: 1 px dots every 28 px at 6 %.
 const DOT_SPACING: f32 = 28.0;
 const DOT_ALPHA: f32 = 0.06;
-/// The COMMS block (what Sir said, what Jarvis answers) fades this long after the last word.
+/// The COMMS block (what Sir said, what JAI answers) fades this long after the last word.
 const CAPTION_SECS: f32 = 20.0;
 /// The band above the telemetry strip the board leaves to the COMMS block (its frame, a heard
 /// line and two rows of his answer).
@@ -3164,7 +3163,7 @@ fn fit_width(painter: &egui::Painter, text: &str, font: &FontId, width: f32) -> 
     cut(lo)
 }
 
-/// The frost over the whole HUD while Jarvis looks at the screen (`screen_context::frost`).
+/// The frost over the whole HUD while JAI looks at the screen (`screen_context::frost`).
 fn paint_frost(ctx: &egui::Context, screen: Rect) {
     let frost = crate::screen_context::frost();
     if frost <= 0.0 {
@@ -3290,7 +3289,7 @@ fn paint_pill(painter: &egui::Painter, centre: Pos2, word: &str, alpha: f32) {
 }
 
 /// How strongly the voice rim shows for the microphone's VAD `phase` and level `mic` (0-1):
-/// only while Sir speaks (not while Jarvis does), and only with the emblem at home.
+/// only while Sir speaks (not while JAI does), and only with the emblem at home.
 fn rim_target(state: &str, phase: &str, mic: f32, dock: f32) -> f32 {
     let speech = matches!(phase, "pre_speech" | "speaking" | "hangover");
     if !speech || state == "speaking" || dock >= 0.5 {
@@ -3317,7 +3316,7 @@ fn rim_ticks(centre: Pos2, radius: f32, strength: f32, clock: f32) -> Vec<(Pos2,
 }
 
 struct HudApp {
-    app: Jarvis,
+    app: Jai,
     rt: Handle,
     model: Arc<Mutex<HudModel>>,
     /// Interface settings currently applied to the window.
@@ -3342,7 +3341,7 @@ struct HudApp {
     /// Zoom being dragged in the Interface window (applied on release, so the slider holds still).
     zoom_draft: Option<f32>,
     title_draft: Option<String>,
-    /// Widgets and Jarvis' extra windows send their clicks through this.
+    /// Widgets and JAI's extra windows send their clicks through this.
     widget_host: widget_view::WidgetHost,
     /// The Integrations & Productivity Hub window.
     hub: integrations::Hub,
@@ -3385,7 +3384,7 @@ struct HudApp {
     drill: Option<crate::window_drill::Drill>,
     /// The telemetry strip's peak hold (dBFS).
     peak_db: f32,
-    /// The COMMS block's lines: (Sir's line, Jarvis' line) and when each last changed.
+    /// The COMMS block's lines: (Sir's line, JAI's line) and when each last changed.
     captions: [(String, Instant); 2],
     /// Where Sir dragged the COMMS block (from its place above the telemetry strip).
     comms_offset: Vec2,
@@ -3448,7 +3447,7 @@ fn emblem_inputs(m: &HudModel, console_open: bool, core_open: bool, centre_cover
 }
 
 impl HudApp {
-    fn new(cc: &eframe::CreationContext<'_>, app: Jarvis, rt: Handle, model: Arc<Mutex<HudModel>>, restore: Option<[i32; 4]>) -> Self {
+    fn new(cc: &eframe::CreationContext<'_>, app: Jai, rt: Handle, model: Arc<Mutex<HudModel>>, restore: Option<[i32; 4]>) -> Self {
         install_fonts(&cc.egui_ctx);
         configure_style(&cc.egui_ctx, app.config().read(|c| c.interface.font_scale));
         crate::theme_engine::attach_database(&app.config().read(|c| c.memory_db_path.clone()));
@@ -3478,7 +3477,7 @@ impl HudApp {
 
     /// The HUD's state for a window that exists (`new`) or for the offscreen HUD, which has
     /// none (`hwnd` 0: nothing here ever touches a native window then).
-    fn build(app: Jarvis, rt: Handle, model: Arc<Mutex<HudModel>>, hwnd: isize) -> Self {
+    fn build(app: Jai, rt: Handle, model: Arc<Mutex<HudModel>>, hwnd: isize) -> Self {
         let iface = app.config().read(|c| c.interface.clone());
         let widget_host = widget_view::WidgetHost { app: app.clone(), rt: rt.clone() };
         let inputs = emblem_inputs(&lock(&model), false, false, false, false);
@@ -3598,7 +3597,7 @@ impl HudApp {
         let (space, escape, focused) = ctx.input(|i| (i.key_down(Key::Space), i.key_pressed(Key::Escape), i.focused));
         if escape {
             // Esc closes the innermost thing first: a block filling the screen, the console, the
-            // spotlight, an overlay, then Jarvis' speech.
+            // spotlight, an overlay, then JAI's speech.
             if crate::hud_dock::exit_fullscreen().is_some() {
             } else if self.find_open {
                 self.find_open = false;
@@ -3617,7 +3616,7 @@ impl HudApp {
             }
         }
         self.ptt_key = space && !typing && focused;
-        // Ctrl+1/2/3 reply mode, Ctrl+M microphone, Ctrl+L type to Jarvis, Ctrl+B briefing.
+        // Ctrl+1/2/3 reply mode, Ctrl+M microphone, Ctrl+L type to JAI, Ctrl+B briefing.
         let ctrl = egui::Modifiers::COMMAND;
         let pressed = |key: Key| ctx.input_mut(|i| i.consume_key(ctrl, key));
         for (key, mode) in [(Key::Num1, VoiceResponseMode::MirrorInput), (Key::Num2, VoiceResponseMode::AlwaysSpeak), (Key::Num3, VoiceResponseMode::TextOnly)] {
@@ -4348,7 +4347,7 @@ impl HudApp {
             if item(ui, "HIDE TO TRAY") {
                 hide();
             }
-            if item(ui, "SHUT DOWN J.A.R.V.I.S.") {
+            if item(ui, "SHUT DOWN J.A.I.") {
                 self.confirm_shutdown = true;
             }
         });
@@ -4450,14 +4449,14 @@ impl HudApp {
             self.command(HudCommand::SetMic { enabled });
         }
         x = rect.right() + 14.0;
-        // `[CALL · LISTENING]` / `[CALL · TALKING]` while Jarvis is in Sir's Discord call.
+        // `[CALL · LISTENING]` / `[CALL · TALKING]` while JAI is in Sir's Discord call.
         if let Some(call) = crate::discord_bridge::status_label() {
             let ink = crate::hud_board::active_colour();
             let galley = painter.layout_no_wrap(call.to_string(), strip_font(), ink);
             let rect = Rect::from_min_size(pos2(x, y), vec2(galley.size().x + 12.0, TELEMETRY_H));
             painter.rect_stroke(rect, Rounding::ZERO, stroke(1.0, ink));
             painter.galley(rect.center() - galley.size() / 2.0, galley, ink);
-            ui.interact(rect, ui.id().with("hud_call"), Sense::hover()).on_hover_text("Jarvis hears the others in your Discord call (not your microphone). Say \"stop listening to the call\" to end it.");
+            ui.interact(rect, ui.id().with("hud_call"), Sense::hover()).on_hover_text("JAI hears the others in your Discord call (not your microphone). Say \"stop listening to the call\" to end it.");
             x = rect.right() + 14.0;
         }
         // `F1 MUTE · F11 FULLSCREEN · ESC INTERRUPT` on the right, as on the reference board
@@ -4494,7 +4493,7 @@ impl HudApp {
             if n > 0 {
                 painter.text(pos2(rect.left() - 9.0, mid), Align2::CENTER_CENTER, "·", strip_font(), STRIP_MUTED);
             }
-            let response = response.on_hover_text(["Microphone on / off (F1, Ctrl+M)", "Fullscreen ↔ maximised window (F11)", "Stop Jarvis speaking (Esc)"][n]);
+            let response = response.on_hover_text(["Microphone on / off (F1, Ctrl+M)", "Fullscreen ↔ maximised window (F11)", "Stop JAI speaking (Esc)"][n]);
             if response.clicked() {
                 match n {
                     0 => self.toggle_mic(),
@@ -4526,16 +4525,16 @@ impl HudApp {
         }
         paint_pill(&painter, rect.center(), word, t);
         let tip = match word {
-            "LISTENING" => "Listening: say \"Jarvis\" and your command (F1 mutes the microphone).",
+            "LISTENING" => "Listening: say \"JAI\" and your command (F1 mutes the microphone).",
             "THINKING" => "Thinking: working on your request.",
             "SPEAKING" => "Speaking (Esc interrupts).",
             "MUTED" => "The microphone is off (F1 or Ctrl+M turns it on).",
-            _ => "Standby: say \"Jarvis\" or click the emblem to wake him.",
+            _ => "Standby: say \"JAI\" or click the emblem to wake him.",
         };
         ui.interact(rect, ui.id().with("hud_status_pill"), Sense::hover()).on_hover_text(tip);
     }
 
-    /// The card under the emblem after Jarvis looked at the screen (`screen_context`), as in the
+    /// The card under the emblem after JAI looked at the screen (`screen_context`), as in the
     /// reference video: `● VIDEO DETECTED`, what it was, and its quick actions (a click asks
     /// him); it leaves by itself after a few seconds (the pointer on it keeps it).
     fn screen_card(&mut self, ui: &mut Ui, screen: Rect, frame: &crate::rose_emblem_renderer::EmblemFrame) {
@@ -4574,7 +4573,7 @@ impl HudApp {
     }
 
     /// While Sir speaks, his voice shows as a ring of radial ticks round the emblem, as on the
-    /// reference orb (only at home, not docked; the emblem's own rings follow Jarvis' voice).
+    /// reference orb (only at home, not docked; the emblem's own rings follow JAI's voice).
     fn voice_rim(&mut self, painter: &egui::Painter, m: &HudModel, frame: &crate::rose_emblem_renderer::EmblemFrame, dt: f32) {
         let phase = m.level.as_ref().map_or("muted", |l| l.phase);
         let target = rim_target(&m.state, phase, self.reactor.mic, frame.dock);
@@ -4597,7 +4596,7 @@ impl HudApp {
     /// `CAPTION_SECS` after the last word; the text console and HISTORY keep everything.
     fn comms_block(&mut self, ui: &mut Ui, m: &HudModel, screen: Rect) {
         let sir = m.messages.iter().rev().find(|l| l.who == Speaker::Sir && !l.faded).map(|l| l.text.clone()).unwrap_or_default();
-        let jarvis = m.messages.iter().rev().find(|l| l.who == Speaker::Jarvis);
+        let jarvis = m.messages.iter().rev().find(|l| l.who == Speaker::Jai);
         let (reply, streaming, at) = jarvis.map(|l| (l.text.clone(), l.streaming, l.at.clone())).unwrap_or_default();
         let now = Instant::now();
         for (slot, text) in self.captions.iter_mut().zip([&sir, &reply]) {
@@ -4702,7 +4701,7 @@ impl HudApp {
                 return;
             }
             self.console_at_edge = false;
-            let mut builder = egui::ViewportBuilder::default().with_title("Text Console — J.A.R.V.I.S.").with_app_id("jarvis").with_inner_size([CONSOLE_WIDTH, 640.0]).with_min_inner_size([320.0, 260.0]).with_decorations(false);
+            let mut builder = egui::ViewportBuilder::default().with_title("Text Console — J.A.I.").with_app_id("jarvis").with_inner_size([CONSOLE_WIDTH, 640.0]).with_min_inner_size([320.0, 260.0]).with_decorations(false);
             if let Some((at, size)) = detached_placement(ctx, CONSOLE_ID) {
                 builder = builder.with_position(at).with_inner_size(size);
             }
@@ -4838,7 +4837,7 @@ impl HudApp {
             for line in m.messages.iter().filter(|l| !l.text.trim().is_empty()) {
                 let (who, colour) = match line.who {
                     Speaker::Sir => ("USER", STRIP_MUTED),
-                    Speaker::Jarvis => ("J.A.R.V.I.S.", crate::hud_board::active_colour()),
+                    Speaker::Jai => ("J.A.I.", crate::hud_board::active_colour()),
                     Speaker::System => ("SYSTEM", STRIP_MUTED),
                 };
                 ui.label(RichText::new(format!("[{who} // {}]", line.at)).font(strip_font()).color(colour));
@@ -4851,7 +4850,7 @@ impl HudApp {
         let foot_top = ui.cursor().top();
         ui.add_space(6.0);
         // Predictive completion: what Sir most likely means by what he has typed so far (his
-        // own recent requests first, then Jarvis' command vocabulary). Tab takes the first.
+        // own recent requests first, then JAI's command vocabulary). Tab takes the first.
         if self.completions.0 != self.console_input {
             let recent: Vec<String> = m.messages.iter().rev().filter(|l| l.who == Speaker::Sir).take(40).map(|l| l.text.clone()).collect();
             self.completions = (self.console_input.clone(), crate::command_palette::complete(&self.console_input, &recent, 4));
@@ -4874,7 +4873,7 @@ impl HudApp {
     }
 
     /// The left column of system blocks: confirmations, message cards, the latest clip and
-    /// Jarvis' live widgets. Returns whether anything is shown.
+    /// JAI's live widgets. Returns whether anything is shown.
     fn system_column(&mut self, ctx: &egui::Context, m: &HudModel, screen: Rect) -> bool {
         let power: Vec<PowerCardView> = m.messages.iter().filter_map(|l| l.power.clone()).filter(|c| c.status == "pending").collect();
         let cards: Vec<MessageCardView> = m.messages.iter().filter_map(|l| l.card.clone()).filter(|c| c.status == "pending").collect();
@@ -4940,14 +4939,14 @@ impl HudApp {
                         for line in m.messages.iter().filter(|l| !l.text.trim().is_empty()) {
                             let (who, colour) = match line.who {
                                 Speaker::Sir => ("YOU //", STRIP_MUTED),
-                                Speaker::Jarvis => ("J.A.R.V.I.S. //", crate::hud_board::active_colour()),
+                                Speaker::Jai => ("J.A.I. //", crate::hud_board::active_colour()),
                                 Speaker::System => ("SYSTEM //", STRIP_MUTED),
                             };
                             ui.horizontal_wrapped(|ui| {
                                 ui.label(RichText::new(who).font(strip_font()).color(colour));
                                 let ink = if line.faded { STRIP_MUTED } else { STRIP_INK };
                                 ui.add(egui::Label::new(RichText::new(&line.text).size(13.0).color(ink)).wrap());
-                                if line.who == Speaker::Jarvis && ui.add(egui::Button::new(RichText::new("[ DETACH ]").font(strip_font()).color(STRIP_MUTED)).frame(false)).on_hover_text("Open in its own window").clicked() {
+                                if line.who == Speaker::Jai && ui.add(egui::Button::new(RichText::new("[ DETACH ]").font(strip_font()).color(STRIP_MUTED)).frame(false)).on_hover_text("Open in its own window").clicked() {
                                     open_window = Some(line.text.clone());
                                 }
                             });
@@ -4960,7 +4959,7 @@ impl HudApp {
             self.history_open = false;
         }
         if let Some(text) = open_window {
-            self.command(HudCommand::OpenTextWindow { title: "J.A.R.V.I.S.".into(), text });
+            self.command(HudCommand::OpenTextWindow { title: "J.A.I.".into(), text });
         }
         if let Some(id) = present {
             let db = self.app.config().read(|c| c.memory_db_path.clone());
@@ -5063,7 +5062,7 @@ impl HudApp {
             if ui.button("Theme, colours, zoom and panels…").clicked() {
                 self.settings_open = true;
             }
-            muted(ui, &p, "Or just ask: “Jarvis, go fullscreen”, “orb mode”, “clear the board”.");
+            muted(ui, &p, "Or just ask: “JAI, go fullscreen”, “orb mode”, “clear the board”.");
             if &s != iface {
                 s.sanitize();
                 self.set_interface(s);
@@ -5152,7 +5151,7 @@ impl HudApp {
         }
     }
 
-    /// Dialogs, the settings and hub windows, Jarvis' extra windows, push-to-talk and the frame
+    /// Dialogs, the settings and hub windows, JAI's extra windows, push-to-talk and the frame
     /// rate: everything after the HUD's own canvas.
     fn after_body(&mut self, ctx: &egui::Context, iface: &InterfaceSettings) {
         let iface = iface.clone();
@@ -5170,7 +5169,7 @@ impl HudApp {
         if self.hub.open {
             self.hub.show(ctx, &self.palette, &self.app, &self.rt);
         }
-        // Jarvis' tool views: ROSE blocks inside the HUD, or their own OS windows when detached.
+        // JAI's tool views: ROSE blocks inside the HUD, or their own OS windows when detached.
         crate::hud_dock::begin_frame();
         // "Move it to the middle", "full screen the Earth": where his views go, this frame.
         apply_arrangements(ctx);
@@ -5213,7 +5212,7 @@ impl HudApp {
             self.command(HudCommand::Ptt { active: ptt });
         }
 
-        // While something moves (the emblem unfolds or docks, blocks cascade, Jarvis listens,
+        // While something moves (the emblem unfolds or docks, blocks cascade, JAI listens,
         // thinks or speaks, the camera runs) the HUD draws at the display's own rate when Sir
         // is at it, at 60 FPS when he is elsewhere; 30 FPS at rest; never an unthrottled loop.
         let (busy, pointer, attended) = {
@@ -6006,7 +6005,7 @@ pub(crate) fn console_rect() -> Option<Rect> {
 /// - Tab, which takes the completion, also moved egui's focus on to the next widget (the chips
 ///   or TRANSMIT): the line keeps it (`lock_focus`).
 /// - TRANSMIT took the focus off the line: after sending, by Enter or the button, the line has
-///   it again for the next command (Jarvis thinking or speaking never takes it).
+///   it again for the next command (JAI thinking or speaking never takes it).
 fn console_foot(ui: &mut Ui, line: &mut String, completions: &[String], focus: &mut bool) -> Option<String> {
     if !completions.is_empty() {
         let mut taken: Option<String> = None;
@@ -6043,7 +6042,7 @@ fn console_foot(ui: &mut Ui, line: &mut String, completions: &[String], focus: &
                         .desired_width(width)
                         .font(FontId::proportional(14.0))
                         .frame(false)
-                        .hint_text("Type to Jarvis — English, Deutsch…"),
+                        .hint_text("Type to JAI — English, Deutsch…"),
                 )
             })
             .inner;
@@ -6078,7 +6077,7 @@ const WINDOW_VOID: Color32 = Color32::from_rgb(0x02, 0x04, 0x07);
 /// What the HUD had drawn at each animating window's last frame (`next_animation_frame`).
 static HUD_TURNS: Mutex<Vec<(ViewportId, u64)>> = Mutex::new(Vec::new());
 
-/// Asks for an animation's next frame. Windows hands its paint messages to Jarvis' topmost
+/// Asks for an animation's next frame. Windows hands its paint messages to JAI's topmost
 /// window first, so a window of its own above the HUD that asked for every next frame at once
 /// kept the HUD from drawing at all (2026-11-09: behind a turning 3D model the HUD froze and
 /// "dock it back" waited 10 s for its next frame). Such a window skips a beat whenever the HUD
@@ -6105,7 +6104,7 @@ pub(super) fn next_animation_frame(ctx: &egui::Context) {
 
 /// A borderless detached window's frame: the theme's 1 px border, inside the window on the pixel
 /// grid (whole at any DPI), and the corner brackets (Windows draws no grey frame of its own
-/// around a Jarvis window). It also plays the window's entrance and exit (`WindowMotion`) over
+/// around a JAI window). It also plays the window's entrance and exit (`WindowMotion`) over
 /// what the window drew, and shows the window, created hidden, once it has drawn a frame.
 pub(super) fn paint_window_border(ctx: &egui::Context) {
     crate::live_shots::tick(ctx);
@@ -6158,7 +6157,7 @@ fn keep_above_hud(ctx: &egui::Context) {
     }
 }
 
-/// A window of Jarvis' own comes up hidden (`for_test_session`) and shows once it has drawn a
+/// A window of JAI's own comes up hidden (`for_test_session`) and shows once it has drawn a
 /// frame of its own: Windows never shows its empty client area (a white or black flash) first.
 /// Called at the end of each of its frames.
 fn reveal_when_drawn(ctx: &egui::Context) {
@@ -6326,7 +6325,7 @@ fn detached_motion(ctx: &egui::Context) -> WindowMotion {
 }
 
 /// A tool view as a ROSE block inside the main HUD — the default for every view (Simulation Lab,
-/// telemetry, schedule, the QR link, Jarvis' markdown windows): `#050A10` slate, a 1 px
+/// telemetry, schedule, the QR link, JAI's markdown windows): `#050A10` slate, a 1 px
 /// `#2B7A9E` frame, white L-corner brackets, the title on the left and `[ DETACH ]` `[ X ]`
 /// on the right. Movable and resizable on the board; its rect is published so the emblem knows
 /// whether the centre is covered (`hud_dock::block_rects`).
@@ -6428,6 +6427,7 @@ pub(super) fn hud_block_window(ctx: &egui::Context, id: &str, title: &str, size:
         None => window.min_size(Vec2::from(crate::hud_dock::MIN_BLOCK) - frame_pad),
     };
     let mut close_asked = false;
+    let mut natural = None;
     let shown = window.show(ctx, |ui| {
         let frame_rect = ui.max_rect().expand(BLOCK_MARGIN);
         paint_block_frame(ui.painter(), frame_rect, &motion, BLOCK_SLATE.gamma_multiply(dim), edge.gamma_multiply(dim), if found { 2.0 } else { 1.0 });
@@ -6479,6 +6479,8 @@ pub(super) fn hud_block_window(ctx: &egui::Context, id: &str, title: &str, size:
         let mut content = ui.new_child(egui::UiBuilder::new().max_rect(room));
         content.set_clip_rect(content.clip_rect().intersect(frame_rect));
         body(&mut content);
+        // What the body really took: less than its room (a short list, a few lines) or more.
+        natural = Some(block_natural_size(frame_rect, room, content.min_rect()));
         ui.advance_cursor_after_rect(room);
     });
     if let Some(inner) = shown {
@@ -6514,6 +6516,13 @@ pub(super) fn hud_block_window(ctx: &egui::Context, id: &str, title: &str, size:
         }
         if !down {
             crate::hud_dock::let_go(id);
+        }
+        // An edge dragged by hand: the block keeps Sir's size. Otherwise it takes the size of
+        // what it shows (once per content, gliding), like the blocks of the reference video.
+        if down && crate::hud_dock::grabbed(id).is_some_and(|(home, _)| (rect.size() - home.size()).length() > 2.0) {
+            crate::hud_dock::sized_by_hand(id);
+        } else if let Some(natural) = natural.filter(|_| held.is_none() && !still && !full && !motion.moving()) {
+            crate::hud_dock::fit_to_content(id, natural, bounds);
         }
         // Ctrl+W / Ctrl+M / Ctrl+P on the block under the pointer; right-click: the block menu.
         let mut chosen = inner.response.contains_pointer().then(|| block_shortcut(ctx)).flatten();
@@ -6884,7 +6893,7 @@ pub(crate) fn board_area(screen: Rect, left_reserve: f32, right_reserve: f32) ->
     Rect::from_min_max(pos2(left, screen.top() + 12.0 + HEADER_H + 14.0), pos2(right.max(left + 240.0), screen.bottom() - 12.0 - TELEMETRY_H - CAPTION_BAND))
 }
 
-/// An in-app block with a plain text body, exactly as Jarvis' own Markdown windows are framed
+/// An in-app block with a plain text body, exactly as JAI's own Markdown windows are framed
 /// (the visual verifier fills the board with these). Its text scrolls when it is longer than
 /// the block; `content` is what `Copy Content` and the search read. True when it was closed.
 pub(crate) fn text_block(ctx: &egui::Context, id: &str, title: &str, size: [f32; 2], content: &str) -> bool {
@@ -6912,6 +6921,16 @@ fn block_shortcut(ctx: &egui::Context) -> Option<crate::block_actions::BlockActi
 /// when the board is full, a cell of one tidy grid when nothing else fits
 /// (`hud_dock::place_new_block`), inside one monitor when the HUD spans several. "Overlap the
 /// windows" brings back the cascade.
+/// The size a block needs for what its body took: the frame and the title row as they are,
+/// the body's own width and height in place of its room. A body that fills its room (a map, a
+/// model, a scroll list) needs what it has; the title row keeps the block wide enough for its
+/// name and its two keys.
+fn block_natural_size(frame: Rect, room: Rect, used: Rect) -> Vec2 {
+    const TITLE_ROW: f32 = 300.0;
+    let chrome = frame.size() - room.size();
+    vec2(used.width().max(TITLE_ROW - chrome.x).ceil() + chrome.x, used.height().ceil() + chrome.y)
+}
+
 fn new_block_rect(ctx: &egui::Context, id: &str, regions: &[Rect], size: Vec2) -> Rect {
     let bounds = regions.iter().copied().reduce(|a, b| a.union(b)).unwrap_or(Rect::NOTHING);
     let slot = (crate::hud_dock::block_rects().len() % 5) as f32;
@@ -7073,8 +7092,70 @@ fn sharp_block<R>(ui: &mut Ui, label: &str, tag: &str, body: impl FnOnce(&mut Ui
     shown.inner
 }
 
-/// The obsidian canvas: `#020408` with a dark cyan-slate radial vignette in the centre
-/// (`#071522` fading to black at the edges) and the 28 px dot matrix at 6 %.
+/// The glow in the middle of the canvas for a theme colour: the colour itself at about a
+/// twelfth, on obsidian (Arc Cyan's is the old cyan slate, his yellow's a warm umber).
+pub(crate) fn vignette_for(primary: Color32) -> Color32 {
+    let lift = |c: u8, floor: u8| ((c as f32 * 0.085) as u8).saturating_add(floor);
+    Color32::from_rgb(lift(primary.r(), OBSIDIAN.r()), lift(primary.g(), OBSIDIAN.g()), lift(primary.b(), OBSIDIAN.b()))
+}
+
+/// Rows between two scan lines, and the grain's tile and strength (alpha of 255).
+const SCAN_PITCH: f32 = 3.0;
+const GRAIN_TILE: usize = 128;
+const GRAIN_ALPHA: u32 = 15;
+
+/// The grain's tile: every pixel a shade lighter or darker by chance (a fixed pattern: the
+/// same tile on every start).
+fn grain_image() -> egui::ColorImage {
+    let mut seed = 0x9E37_79B9u32;
+    let pixels = (0..GRAIN_TILE * GRAIN_TILE)
+        .map(|_| {
+            // xorshift
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            let (light, a) = (seed & 1 == 0, ((seed >> 8) % (GRAIN_ALPHA + 1)) as u8);
+            if light {
+                Color32::from_white_alpha(a)
+            } else {
+                Color32::from_black_alpha(a.saturating_mul(2))
+            }
+        })
+        .collect();
+    egui::ColorImage { size: [GRAIN_TILE, GRAIN_TILE], pixels }
+}
+
+/// The display's finish: scan lines and film grain over everything the HUD draws, so it reads as
+/// light on glass and not as flat vector art (Sir, 2026-11-11: "more realistic, a bit more
+/// rough"). Two meshes on the topmost layer; the grain shifts twelve times a second, but only
+/// on frames that are painted anyway (it never asks for one).
+pub(crate) fn paint_finish(ctx: &egui::Context) {
+    let rect = ctx.screen_rect();
+    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("hud_finish")));
+    let mut lines = egui::Mesh::default();
+    let dark = Color32::from_black_alpha(24);
+    let mut y = rect.top();
+    while y < rect.bottom() {
+        lines.add_colored_rect(Rect::from_min_size(pos2(rect.left(), y), vec2(rect.width(), 1.0)), dark);
+        y += SCAN_PITCH;
+    }
+    painter.add(Shape::mesh(lines));
+    let key = egui::Id::new("hud_grain");
+    let grain = ctx.data(|d| d.get_temp::<egui::TextureHandle>(key)).unwrap_or_else(|| {
+        let options = egui::TextureOptions { magnification: egui::TextureFilter::Nearest, minification: egui::TextureFilter::Nearest, wrap_mode: egui::TextureWrapMode::Repeat, mipmap_mode: None };
+        let texture = ctx.load_texture("hud_grain", grain_image(), options);
+        ctx.data_mut(|d| d.insert_temp(key, texture.clone()));
+        texture
+    });
+    let tick = (ctx.input(|i| i.time) * 12.0) as u32;
+    let shift = vec2((tick.wrapping_mul(0x9E37) % 97) as f32 / 97.0, (tick.wrapping_mul(0x85EB) % 89) as f32 / 89.0);
+    let mut mesh = egui::Mesh::with_texture(grain.id());
+    mesh.add_rect_with_uv(rect, Rect::from_min_size(pos2(shift.x, shift.y), rect.size() / GRAIN_TILE as f32), Color32::WHITE);
+    painter.add(Shape::mesh(mesh));
+}
+
+/// The obsidian canvas: `#020408` with a radial vignette of the theme's colour in the centre
+/// (fading to black at the edges) and the 28 px dot matrix at 6 %.
 pub(crate) fn paint_canvas(ctx: &egui::Context) {
     let rect = ctx.screen_rect();
     let painter = ctx.layer_painter(egui::LayerId::background());
@@ -7083,8 +7164,9 @@ pub(crate) fn paint_canvas(ctx: &egui::Context) {
     let home = home_screen(ctx);
     let centre = home.center();
     let reach = home.size() * 0.75;
-    let mid = blend(VIGNETTE, OBSIDIAN, 0.55);
-    mesh.colored_vertex(centre, VIGNETTE);
+    let vignette = vignette_for(crate::hud_board::active_colour());
+    let mid = blend(vignette, OBSIDIAN, 0.55);
+    mesh.colored_vertex(centre, vignette);
     let n = 72;
     for k in 0..n {
         let a = TAU * k as f32 / n as f32;
@@ -7187,7 +7269,7 @@ impl HudApp {
         }
         self.step_emblem(&m, if iface.animations { dt } else { 0.0 });
 
-        // The HUD's text scale (Jarvis' extra windows set their own while they draw).
+        // The HUD's text scale (JAI's extra windows set their own while they draw).
         TEXT_SCALE.with(|s| s.set(iface.font_scale));
         let screen = ctx.screen_rect();
         crate::interface::publish_layout(iface.layout_state((screen.width() * iface.scale, screen.height() * iface.scale)));
@@ -7196,6 +7278,10 @@ impl HudApp {
             self.pure_orb(ctx, &m, &iface);
         } else {
             paint_canvas(ctx);
+            // (Offscreen renders stay clean: the verifier reads their colours.)
+            if iface.display_finish && !self.palette.oled && !windows_still(ctx) {
+                paint_finish(ctx);
+            }
             // The Settings drawer slides in from the right (VIEW → SETTINGS).
             let p = self.palette;
             let home = home_screen(ctx);
@@ -7286,6 +7372,32 @@ mod tests {
     /// the brackets leading, the content resolves top to bottom only once the frame is whole, one
     /// glow settles, and it ends exactly at rest. Its exit, quicker: the content goes first, the
     /// frame folds into the line, the line contracts to a point that flashes once.
+    /// "More realistic, a bit more rough": the finish is faint (it never hides what is under
+    /// it), and the canvas glows in the theme's own colour.
+    #[test]
+    fn the_display_finish_is_faint_and_the_canvas_takes_the_themes_colour() {
+        let grain = grain_image();
+        assert_eq!(grain.size, [GRAIN_TILE, GRAIN_TILE]);
+        let strongest = grain.pixels.iter().map(|p| p.a()).max().unwrap();
+        assert!(strongest > 0 && strongest <= 2 * GRAIN_ALPHA as u8, "grain is a whisper: {strongest}");
+        let (light, dark) = (grain.pixels.iter().filter(|p| p.r() > 0).count(), grain.pixels.iter().filter(|p| p.r() == 0 && p.a() > 0).count());
+        assert!(light > GRAIN_TILE * GRAIN_TILE / 4 && dark > GRAIN_TILE * GRAIN_TILE / 4, "lighter and darker specks: {light} / {dark}");
+        // His yellow glows warm (red and green lead), Arc Cyan cool, and both stay dark.
+        let warm = vignette_for(Color32::from_rgb(0xFF, 0xD4, 0x00));
+        assert!(warm.r() > warm.b() && warm.g() > warm.b() && warm.r() < 40, "{warm:?}");
+        let cool = vignette_for(Color32::from_rgb(0x00, 0xF0, 0xFF));
+        assert!(cool.b() > cool.r() && cool.b() < 40, "{cool:?}");
+        // A frame with the finish paints, and asks for no frame of its own.
+        // (A new context paints twice before it settles, and the grain's texture is new once.)
+        let ctx = egui::Context::default();
+        let frame = || ctx.run(egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(640.0, 360.0))), ..Default::default() }, |ctx| paint_finish(ctx));
+        let _ = (frame(), frame(), frame());
+        let out = frame();
+        assert!(!out.shapes.is_empty());
+        let wait = out.viewport_output.values().map(|v| v.repaint_delay).min().unwrap_or(Duration::MAX);
+        assert!(wait > Duration::from_millis(500), "the finish never drives the frame rate: {wait:?}");
+    }
+
     #[test]
     fn windows_open_and_close_with_their_motion() {
         // (Sampled every 1 % of each motion: 4 ms of the entrance, 2 ms of the exit.)
@@ -7486,11 +7598,13 @@ mod tests {
             });
             out
         };
+        // Up, and settled at the size of what it shows (one word: the smallest block).
         let start = Instant::now();
-        while start.elapsed() < crate::hud_dock::OPEN_ANIM + Duration::from_millis(50) {
+        while start.elapsed() < crate::hud_dock::OPEN_ANIM + crate::hud_dock::GLIDE + Duration::from_millis(200) {
             frame();
         }
         let stood = crate::hud_dock::block_rect(id).expect("drawn");
+        assert!(stood.width() < 400.0 && stood.height() < 300.0, "a block round one word is a small one: {stood:?}");
         crate::hud_dock::begin_detach(id);
         let start = Instant::now();
         let mut left = None;
@@ -7590,7 +7704,7 @@ mod tests {
     }
 
     /// The reference videos' shell pieces: the status pill's words and colours, the voice rim
-    /// (only while Sir speaks, never while Jarvis does, never docked), the key hints, the pill's
+    /// (only while Sir speaks, never while JAI does, never docked), the key hints, the pill's
     /// place beside the header row and the screen card's place.
     #[test]
     fn the_reference_shell_pieces() {
@@ -7612,7 +7726,7 @@ mod tests {
         assert_eq!(rim_target("listening", "idle", 0.9, 0.0), 0.0, "silence");
         assert!(rim_target("listening", "speaking", 0.6, 0.0) >= 0.6);
         assert!(rim_target("idle", "pre_speech", 0.0, 0.0) >= 0.25, "a quiet voice still shows");
-        assert_eq!(rim_target("speaking", "speaking", 0.9, 0.0), 0.0, "never while Jarvis speaks");
+        assert_eq!(rim_target("speaking", "speaking", 0.9, 0.0), 0.0, "never while JAI speaks");
         assert_eq!(rim_target("listening", "speaking", 0.9, 1.0), 0.0, "never docked");
         let centre = pos2(500.0, 400.0);
         let ticks = rim_ticks(centre, 100.0, 1.0, 2.5);

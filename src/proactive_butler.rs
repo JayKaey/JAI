@@ -1,4 +1,4 @@
-//! The proactive butler: Jarvis notices things on his own and puts a card on the HUD with the
+//! The proactive butler: JAI notices things on his own and puts a card on the HUD with the
 //! fix one click away — the films' "Sir, I think you should see this".
 //!
 //! * Hardware (what the Guardian finds: a hot GPU or CPU, memory or VRAM nearly full, a pegged
@@ -53,7 +53,7 @@ pub struct Card {
     pub title: String,
     pub body: String,
     pub fixes: Vec<Fix>,
-    /// What Jarvis says with it (None: the card and a notice are enough).
+    /// What JAI says with it (None: the card and a notice are enough).
     pub spoken: Option<String>,
 }
 
@@ -83,7 +83,7 @@ pub fn show(card: &Card) {
 }
 
 /// The tool call behind a clicked card button; None when the button is not one of the butler's
-/// (its label then goes to Jarvis as a request, as before). The card goes with the click.
+/// (its label then goes to JAI as a request, as before). The card goes with the click.
 pub fn click(label: &str) -> Option<Fix> {
     let mut fixes = FIXES.lock().unwrap_or_else(|e| e.into_inner());
     let pending = fixes.remove(label)?;
@@ -180,7 +180,7 @@ struct Agenda {
 }
 
 impl Agenda {
-    async fn cards(&mut self, app: &crate::app::Jarvis) -> Vec<Card> {
+    async fn cards(&mut self, app: &crate::app::Jai) -> Vec<Card> {
         let now = Local::now().naive_local();
         let pim = &app.tools().pim;
         let mut items: Vec<Upcoming> = pim
@@ -362,7 +362,7 @@ struct Watch {
     /// The newest Minecraft crash report already handled.
     crash_seen: SystemTime,
     /// Gradle daemon logs: the bytes already read. None until the first look (what is there
-    /// when Jarvis starts is history, not news).
+    /// when JAI starts is history, not news).
     gradle: Option<HashMap<PathBuf, u64>>,
 }
 
@@ -431,9 +431,9 @@ impl Watch {
     }
 }
 
-/// Shows a card; says its line (as an alert, with the alert's two pips: when Jarvis is free, in
+/// Shows a card; says its line (as an alert, with the alert's two pips: when JAI is free, in
 /// Sir's reply mode) or, for a silent one, leaves a notice.
-fn present(app: &crate::app::Jarvis, card: Card) {
+fn present(app: &crate::app::Jai, card: Card) {
     show(&card);
     match &card.spoken {
         Some(line) => {
@@ -446,7 +446,7 @@ fn present(app: &crate::app::Jarvis, card: Card) {
 
 /// Starts the butler: the agenda every 30 s, the files every 10 s. Off while proactive alerts
 /// are off and while the live self-test runs.
-pub fn start(app: crate::app::Jarvis) {
+pub fn start(app: crate::app::Jai) {
     crate::telemetry::watch_cpu_temperature();
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_secs(20)).await;
@@ -503,7 +503,7 @@ mod tests {
             spoken: None,
         };
         show(&card);
-        assert_eq!(click("Play Clip"), None, "a model's own card button stays a request to Jarvis");
+        assert_eq!(click("Play Clip"), None, "a model's own card button stays a request to JAI");
         let fix = click("BUTLER TEST FIX").expect("the card's fix");
         assert_eq!((fix.tool, &fix.args["live"]), ("spawn_native_window", &json!("pc_stats")));
         assert_eq!(click("BUTLER TEST FIX"), None, "one click, one fix");
@@ -613,7 +613,7 @@ mod tests {
         let log = dir.join("daemon-4242.out.log");
         std::fs::write(&log, FAILED_BUILD).unwrap();
         let mut watch = Watch::new();
-        assert_eq!(watch.build_failed(&root), None, "what failed before Jarvis started is history");
+        assert_eq!(watch.build_failed(&root), None, "what failed before JAI started is history");
         assert_eq!(watch.build_failed(&root), None);
         // A new build: its errors arrive first, its verdict a moment later.
         let (errors, verdict) = FAILED_BUILD.split_at(FAILED_BUILD.find("FAILURE:").unwrap());

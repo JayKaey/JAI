@@ -351,7 +351,7 @@ mod tests {
             CreateWindowExW, DestroyWindow, GetWindowLongPtrW, GWL_EXSTYLE, HMENU, WINDOW_EX_STYLE, WS_EX_LAYERED, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
         };
         // SAFETY: a hidden window owned by this test thread, destroyed below.
-        let hwnd = unsafe { CreateWindowExW(WINDOW_EX_STYLE(0), w!("STATIC"), w!("jarvis ghost test"), WS_POPUP, 0, 0, 120, 80, HWND(0), HMENU(0), HINSTANCE(0), None) };
+        let hwnd = unsafe { CreateWindowExW(WINDOW_EX_STYLE(0), w!("STATIC"), w!("jai ghost test"), WS_POPUP, 0, 0, 120, 80, HWND(0), HMENU(0), HINSTANCE(0), None) };
         assert_ne!(hwnd.0, 0, "test window");
         // SAFETY: style query on the live test window.
         let ex = || unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } as u32;
@@ -369,7 +369,7 @@ mod tests {
             set_window_click_through(hwnd.0, false).unwrap();
             assert_eq!(ex() & WS_EX_TRANSPARENT.0, 0, "clicks reach it again");
             set_topmost(hwnd.0, false).unwrap();
-            assert_eq!(find_window("jarvis ghost test"), Some(hwnd.0));
+            assert_eq!(find_window("jai ghost test"), Some(hwnd.0));
         });
         // SAFETY: the window created above (destroyed even when an assertion failed).
         unsafe {

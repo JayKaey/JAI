@@ -24,7 +24,7 @@
 //! for the app's redirect URI), then reads the personal tasks and notifications; when that is
 //! refused it tries the REST endpoints with the session cookies alone.
 //!
-//! The username lives in the itslearning settings; the password only in Jarvis's encrypted vault
+//! The username lives in the itslearning settings; the password only in JAI's encrypted vault
 //! (`pim_config` token "itslearning"). Nothing here stores either.
 
 use crate::hud_board::{Bar, Block, BlockKind, Note, Report};

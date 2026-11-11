@@ -1,4 +1,4 @@
-//! Typo-tolerant input: the misspellings Sir types and Whisper writes for Jarvis' own domain
+//! Typo-tolerant input: the misspellings Sir types and Whisper writes for JAI's own domain
 //! words ("calender", "tommorw", "volum", "shudown", "systm stats") become the real word before
 //! any routing, so the deterministic fast paths see what he meant.
 //!
@@ -45,7 +45,7 @@ const KNOWN: &[(&str, &str)] = &[
     ("shutdwn", "shutdown"), ("shudown", "shutdown"), ("shutdon", "shutdown"), ("shutdonw", "shutdown"), ("shtdown", "shutdown"),
     ("shutdowm", "shutdown"), ("restar", "restart"), ("restat", "restart"), ("rstart", "restart"), ("resart", "restart"),
     ("comupter", "computer"), ("compter", "computer"), ("computr", "computer"), ("copmuter", "computer"),
-    // Jarvis' own views.
+    // JAI's own views.
     ("systm", "system"), ("sytem", "system"), ("sistem", "system"), ("sysem", "system"), ("systen", "system"), ("sysytem", "system"),
     ("stast", "stats"), ("statts", "stats"), ("satts", "stats"),
     ("telemtry", "telemetry"), ("telemetery", "telemetry"),
@@ -169,7 +169,7 @@ static CORE_SPELT: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 /// Whisper's near-misses of "core" next to a view verb become "core": "close your car", "hide
-/// your call", "hide your for C-O-R-E", "show your cord", "schließ deinen Chor". Jarvis is a
+/// your call", "hide your for C-O-R-E", "show your cord", "schließ deinen Chor". JAI is a
 /// desktop AI: with "show / hide / close / open your …" Sir never means a vehicle or a phone
 /// call. "Only show the orb" and "orb mode" stay the pure orb mode.
 pub fn core_homophones(text: &str) -> String {
@@ -189,9 +189,9 @@ pub fn core_homophones(text: &str) -> String {
 }
 
 /// "Would you mind opening the feature lab?" is "open the feature lab" (2026-11-07: the model
-/// took it for a protocol). Only verbs Jarvis acts on; anything else is left as said.
+/// took it for a protocol). Only verbs JAI acts on; anything else is left as said.
 fn polite_gerund(text: &str) -> Option<String> {
-    static POLITE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)^(?:(?:hey\s+)?jarvis[,.]?\s+)?(?:would|do)\s+you\s+mind\s+([a-z]+ing)\b(.*)$").expect("polite gerund"));
+    static POLITE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)^(?:(?:hey\s+)?jai[,.]?\s+)?(?:would|do)\s+you\s+mind\s+([a-z]+ing)\b(.*)$").expect("polite gerund"));
     const VERBS: &[(&str, &str)] = &[
         ("opening", "open"), ("closing", "close"), ("turning", "turn"), ("muting", "mute"), ("unmuting", "unmute"), ("playing", "play"),
         ("pausing", "pause"), ("stopping", "stop"), ("starting", "start"), ("showing", "show"), ("hiding", "hide"), ("putting", "put"),
@@ -211,7 +211,7 @@ fn polite_gerund(text: &str) -> Option<String> {
 }
 
 /// Commands as the recogniser mishears them (2026-11-07 verifier, matrix F: stock voices said
-/// them, Whisper wrote "Jarvis Mude", "Java's Pulse", "monitor too", "start stop watch", "is
+/// them, Whisper wrote "JAI Mude", "Java's Pulse", "monitor too", "start stop watch", "is
 /// anything mutant", "Tugglespan mode", "was playing"). Whole commands and fixed pairs only,
 /// none of them a sentence anyone means as it is written.
 fn misheard(text: &str) -> Option<String> {
@@ -254,8 +254,8 @@ fn misheard(text: &str) -> Option<String> {
     (fixed != said).then_some(fixed)
 }
 
-/// What follows his name, as an order: with "Jarvis" heard as the subject the recogniser writes
-/// the order as a report ("Jarvis opened the mixer", "Jarvis stops spanning", "Jarvis saved
+/// What follows his name, as an order: with "JAI" heard as the subject the recogniser writes
+/// the order as a report ("JAI opened the mixer", "JAI stops spanning", "JAI saved
 /// this mix as gaming"). Only verbs he takes orders with, only the first word, and only when
 /// something follows it. (The wake word calls this for what comes after his name.)
 pub fn imperative_after_name(command: &str) -> String {
@@ -292,7 +292,7 @@ pub fn imperative_after_name(command: &str) -> String {
     }
 }
 
-/// Sir's sentence with Jarvis' domain words spelt right (unchanged when nothing needed fixing).
+/// Sir's sentence with JAI's domain words spelt right (unchanged when nothing needed fixing).
 pub fn normalize_user_input_typos(text: &str) -> String {
     if let Some(order) = polite_gerund(text) {
         return normalize_user_input_typos(&order);
@@ -386,7 +386,7 @@ mod tests {
     #[test]
     fn an_order_in_good_manners_is_the_order() {
         assert_eq!(normalize_user_input_typos("Would you mind opening the feature lab?"), "open the feature lab");
-        assert_eq!(normalize_user_input_typos("Jarvis, do you mind turning it down?"), "turn it down");
+        assert_eq!(normalize_user_input_typos("JAI, do you mind turning it down?"), "turn it down");
         assert_eq!(normalize_user_input_typos("Would you mind closing Firefox"), "close Firefox");
         // Not one of his verbs: as said.
         assert_eq!(normalize_user_input_typos("Would you mind dancing?"), "Would you mind dancing?");

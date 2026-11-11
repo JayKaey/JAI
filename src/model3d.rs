@@ -13,7 +13,7 @@
 //!    pastes into the Integrations hub (vault service `sketchfab`; never logged, never asked
 //!    for). Without it the best named match comes keyless from the Objaverse mirror on Hugging
 //!    Face (Sketchfab's free models, author and licence credited); only when the mirror has none
-//!    does the best match show as a preview card while Jarvis rebuilds or composes one;
+//!    does the best match show as a preview card while JAI rebuilds or composes one;
 //! 4. a model rebuilt from a photograph (`photo3d`: TripoSR on a cut-out picture from the picture
 //!    search, photo credited), when its networks are installed;
 //! 5. else a model composed by the language model as a JSON scene of primitives, streamed in
@@ -914,7 +914,7 @@ pub fn painted_thing(text: &str) -> Option<String> {
     if let Some(list) = args["edits"].as_array() {
         parts.extend(list.iter().filter_map(|e| e["part"].as_str()));
     }
-    const HIS: &[&str] = &["you", "yourself", "your", "jarvis", "jai", "jay", "everything", "colour", "color", "colours", "colors", "dich", "dein", "deine", "deinen", "alles", "farbe"];
+    const HIS: &[&str] = &["you", "yourself", "your", "jai", "jai", "jay", "everything", "colour", "color", "colours", "colors", "dich", "dein", "deine", "deinen", "alles", "farbe"];
     parts.into_iter().find(|p| !p.split_whitespace().any(|w| HUD_WORDS.contains(&w) || HIS.contains(&w))).map(str::to_string)
 }
 
@@ -1001,9 +1001,9 @@ fn clean(text: &str) -> String {
     words.dedup();
     let mut t: String = words.join(" ");
     static LEAD: LazyLock<Regex> = LazyLock::new(|| {
-        re(r"^(?:(?:hey|ok|okay|yo|hi|hallo)\s+)?(?:jarvis|java|jervis|travis)\s*(?:please\s+|bitte\s+)?|^(?:please|bitte|now|jetzt|and|und|also|so)\s+|^(?:can|could|would|will)\s+you\s+(?:please\s+)?|^(?:i\s+want\s+you\s+to|i'd\s+like\s+you\s+to|i\s+would\s+like\s+you\s+to|go\s+ahead\s+and)\s+|^(?:kannst|könntest|koenntest|würdest|wuerdest)\s+du\s+(?:bitte\s+)?(?:mal\s+)?")
+        re(r"^(?:(?:hey|ok|okay|yo|hi|hallo)\s+)?(?:jai|jay)\s*(?:please\s+|bitte\s+)?|^(?:please|bitte|now|jetzt|and|und|also|so)\s+|^(?:can|could|would|will)\s+you\s+(?:please\s+)?|^(?:i\s+want\s+you\s+to|i'd\s+like\s+you\s+to|i\s+would\s+like\s+you\s+to|go\s+ahead\s+and)\s+|^(?:kannst|könntest|koenntest|würdest|wuerdest)\s+du\s+(?:bitte\s+)?(?:mal\s+)?")
     });
-    static TAIL: LazyLock<Regex> = LazyLock::new(|| re(r"\s+(?:please|bitte|for\s+me|für\s+mich|jarvis|mal|now|jetzt|sir)$"));
+    static TAIL: LazyLock<Regex> = LazyLock::new(|| re(r"\s+(?:please|bitte|for\s+me|für\s+mich|jai|mal|now|jetzt|sir)$"));
     for _ in 0..4 {
         let before = t.clone();
         t = LEAD.replace(&t, "").trim().to_string();
@@ -1869,7 +1869,7 @@ fn folder_path(name: &str) -> PathBuf {
 fn folder_in(text: &str) -> Option<String> {
     static PATH: LazyLock<Regex> = LazyLock::new(|| re(r#"(?i)((?:[a-z]:[\\/]|\\\\|~[\\/])[^"<>|*?\r\n]*)"#));
     if let Some(c) = PATH.captures(text) {
-        static TAIL: LazyLock<Regex> = LazyLock::new(|| re(r"(?i)(?:[\s.,!]+(?:please|bitte|for\s+me|jarvis|sir|as\s+(?:an?\s+)?(?:stl|obj|glb)(?:\s+file)?))*[\s.,!]*$"));
+        static TAIL: LazyLock<Regex> = LazyLock::new(|| re(r"(?i)(?:[\s.,!]+(?:please|bitte|for\s+me|jai|sir|as\s+(?:an?\s+)?(?:stl|obj|glb)(?:\s+file)?))*[\s.,!]*$"));
         let p = TAIL.replace(c[1].trim(), "").to_string();
         return (p.len() > 3).then_some(p);
     }
@@ -1898,7 +1898,7 @@ fn save_dialog(name: &str, ext: &str) -> Result<Option<PathBuf>, String> {
         let com = CoInitializeEx(None, COINIT_APARTMENTTHREADED).is_ok();
         let chosen = (|| -> windows::core::Result<Option<PathBuf>> {
             let dialog: IFileSaveDialog = CoCreateInstance(&FileSaveDialog, None, CLSCTX_INPROC_SERVER)?;
-            dialog.SetTitle(&HSTRING::from("Save the 3D model — J.A.R.V.I.S."))?;
+            dialog.SetTitle(&HSTRING::from("Save the 3D model — J.A.I."))?;
             dialog.SetFileName(&HSTRING::from(name))?;
             dialog.SetDefaultExtension(&HSTRING::from(ext))?;
             if dialog.Show(HWND(0)).is_err() {
@@ -2005,7 +2005,7 @@ fn fmt_ratio(k: f32) -> String {
 
 fn http() -> &'static reqwest::Client {
     static CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
-        reqwest::Client::builder().user_agent("JARVIS/3 (3D studio)").connect_timeout(Duration::from_secs(8)).timeout(Duration::from_secs(240)).build().unwrap_or_default()
+        reqwest::Client::builder().user_agent("JAI/3 (3D studio)").connect_timeout(Duration::from_secs(8)).timeout(Duration::from_secs(240)).build().unwrap_or_default()
     });
     &CLIENT
 }
@@ -2301,9 +2301,11 @@ fn wanted(query: &str, avoid: &[String]) -> Wanted {
     static REAL: LazyLock<Regex> = LazyLock::new(|| {
         re(r"\b(?:real|actual|genuine|proper|normal|regular|ordinary|natural|living|live|echte[rnms]?|echt|richtige[rnms]?|normale[rnms]?)\b|\b(?:(?:that|which|what)\s+)?(?:you|i|one|we)\s+can\s+eat\b|\b(?:to|for|zum)\s+(?:eat|eating|essen)\b|\b(?:like|as\s+in|i\s+mean|meaning|not\s+the\s+(?:company|brand|device|phone|computer|logo))\b")
     });
-    static KIND: LazyLock<Regex> = LazyLock::new(|| re(r"\b(?:the\s+|die\s+|das\s+)?(eatable|edible|essbare[rnms]?|essbar|fruit|frucht|obst|food|animal|tier|bird|vogel|plant|pflanze)\b"));
+    // The sense as an adjective anywhere ("eatable apple"), or as the last word ("apple fruit",
+    // "apple, the fruit"): "fruit bowl" and "animal cell" are things of their own.
+    static KIND: LazyLock<Regex> = LazyLock::new(|| re(r"\b(eatable|edible|essbare[rnms]?|essbar)\b|(?:^|\s)(?:the\s+|die\s+|das\s+)?(fruit|frucht|obst|food|animal|tier|bird|vogel|plant|pflanze)\s*$"));
     let q = scene3d::norm(query);
-    let said: Option<&'static str> = KIND.captures(&q).map(|c| match &c[1] {
+    let said: Option<&'static str> = KIND.captures(&q).map(|c| match c.get(1).or(c.get(2)).map_or("", |m| m.as_str()) {
         "animal" | "tier" => "animal",
         "bird" | "vogel" => "bird",
         "plant" | "pflanze" => "plant",
@@ -2332,8 +2334,11 @@ fn wanted(query: &str, avoid: &[String]) -> Wanted {
 fn sense_only(query: &str) -> bool {
     let q = scene3d::norm(query);
     let core = wanted(query, &[]).core;
-    core == q.trim() && core.split_whitespace().all(|w| matches!(w, "fruit" | "frucht" | "obst" | "food" | "animal" | "tier" | "bird" | "vogel" | "plant" | "pflanze" | "eatable" | "edible" | "one" | "thing" | "kind"))
-        || core.split_whitespace().all(|w| matches!(w, "one" | "thing" | "kind" | "version"))
+    let words = |text: &str| text.split_whitespace().filter(|w| !matches!(*w, "the" | "a" | "an" | "die" | "das")).map(str::to_string).collect::<Vec<_>>();
+    let named = words(&core);
+    // Only the sense word was left in ("the fruit"), or a stand-in for the thing ("a real one").
+    (words(&q) == named && named.iter().all(|w| matches!(w.as_str(), "fruit" | "frucht" | "obst" | "food" | "animal" | "tier" | "bird" | "vogel" | "plant" | "pflanze")))
+        || named.iter().all(|w| matches!(w.as_str(), "one" | "thing" | "kind" | "version"))
 }
 
 /// "apples" → "apple" (names are compared word by word).
@@ -2807,12 +2812,12 @@ fn open_curated(entry: &'static Curated, args: &Value) -> String {
 }
 
 /// Sketchfab with Sir's token, else the preview card and a composed model.
-async fn fetch_or_compose(job: u64, want: &Wanted, token: Option<String>, llm: Option<Arc<crate::runtime::LlmRuntime>>, cfg: crate::config::JarvisConfig, builtin: Option<&'static scene3d::Entry>) -> Result<String, String> {
+async fn fetch_or_compose(job: u64, want: &Wanted, token: Option<String>, llm: Option<Arc<crate::runtime::LlmRuntime>>, cfg: crate::config::JaiConfig, builtin: Option<&'static scene3d::Entry>) -> Result<String, String> {
     let query = want.core.as_str();
     let search = sketchfab_search(&want.search);
     // No real model: rebuilt from a photo (found by the sense meant), else composed from primitives.
     let photo_query = want.search.clone();
-    let compose_task = move |llm: Option<Arc<crate::runtime::LlmRuntime>>, cfg: crate::config::JarvisConfig, q: String| async move {
+    let compose_task = move |llm: Option<Arc<crate::runtime::LlmRuntime>>, cfg: crate::config::JaiConfig, q: String| async move {
         match from_photo(job, &q, &photo_query, &cfg).await {
             Some(done) => Ok(done),
             None if !current(job) => Err("cancelled".into()),
@@ -2889,7 +2894,7 @@ const PHOTO_TRIES: usize = 4;
 /// The thing rebuilt from a photograph (`photo3d`), credited to the photo. None when the networks
 /// aren't installed, no photo shows one whole subject or the rebuild fails: the composer takes
 /// over.
-async fn from_photo(job: u64, query: &str, photo_query: &str, cfg: &crate::config::JarvisConfig) -> Option<String> {
+async fn from_photo(job: u64, query: &str, photo_query: &str, cfg: &crate::config::JaiConfig) -> Option<String> {
     use crate::image_viewer::{self as iv, Fetched};
     let dir = crate::photo3d::dir(cfg);
     if !crate::photo3d::installed(&dir) {
@@ -2953,7 +2958,7 @@ const REFINE_ASK: &str = "Make this 3D model of {q} more detailed and more accur
 
 /// The language model composes the object as a scene of primitives; parts appear as they are
 /// written.
-async fn compose(job: u64, query: &str, llm: Option<Arc<crate::runtime::LlmRuntime>>, cfg: &crate::config::JarvisConfig, base: Option<Value>) -> Result<String, String> {
+async fn compose(job: u64, query: &str, llm: Option<Arc<crate::runtime::LlmRuntime>>, cfg: &crate::config::JaiConfig, base: Option<Value>) -> Result<String, String> {
     use futures_util::StreamExt;
     let fallback = |why: &str| -> Result<String, String> {
         if base.is_some() {
@@ -3198,7 +3203,7 @@ mod tests {
 
     #[test]
     fn opening_phrases_in_english_and_german() {
-        assert_eq!(query_of("Jarvis, render me an Iron Man suit in 3D").as_deref(), Some("iron man suit"));
+        assert_eq!(query_of("JAI, render me an Iron Man suit in 3D").as_deref(), Some("iron man suit"));
         assert_eq!(query_of("render me an iron man suit in three d please").as_deref(), Some("iron man suit"));
         assert_eq!(query_of("Show me a 3D model of Earth.").as_deref(), Some("earth"));
         assert_eq!(query_of("show me a 3-D model of the earth").as_deref(), Some("earth"));
@@ -3226,7 +3231,7 @@ mod tests {
     /// Sir's words from the log: the tower said twice, "more detailed", saved where he says.
     #[test]
     fn more_detail_the_eiffel_tower_and_saving_anywhere() {
-        assert_eq!(query_of("Jarvis show me a 3D model, model of the Eiffel Tower.").as_deref(), Some("eiffel tower"));
+        assert_eq!(query_of("JAI show me a 3D model, model of the Eiffel Tower.").as_deref(), Some("eiffel tower"));
         let edit = |t: &str| args_of(t, true);
         for t in ["Make it more detailed.", "Make it way more detailed.", "enhance it", "more detail", "give me a more accurate version", "mach es detaillierter", "make the 3D model more detailed"] {
             assert_eq!(edit(t).map(|a| a["action"].clone()), Some(json!("enhance")), "{t}");
@@ -3318,7 +3323,7 @@ mod tests {
 
     #[test]
     fn a_paint_order_names_its_thing_or_the_interface() {
-        for (said, thing) in [("Make the helmet yellow.", "helmet"), ("paint the arms silver", "arms"), ("mach den Helm rot", "helm"), ("Jarvis, make the cape red", "cape")] {
+        for (said, thing) in [("Make the helmet yellow.", "helmet"), ("paint the arms silver", "arms"), ("mach den Helm rot", "helm"), ("JAI, make the cape red", "cape")] {
             assert_eq!(painted_thing(said).as_deref(), Some(thing), "{said}");
         }
         for said in ["make it yellow", "make the theme yellow", "make the interface yellow", "yellow please", "change the accent to gold", "make yourself red", "what time is it", "make the background darker"] {
@@ -3338,7 +3343,7 @@ mod tests {
         assert!(iron.as_ref().and_then(|v| v["material"].as_str()).is_some_and(|m| m == "steel"), "iron is the steel finish: {iron:?}");
         assert_eq!(edit("And you give it way more detail.").unwrap()["action"], "enhance");
         assert_eq!(edit("Can you make it more detailed?").unwrap()["action"], "enhance");
-        assert_eq!(edit("Jarvis, make it carbon fibre").unwrap()["material"], "carbon fibre");
+        assert_eq!(edit("JAI, make it carbon fibre").unwrap()["material"], "carbon fibre");
         assert_eq!(edit("give it a marble texture").unwrap()["material"], "marble");
         assert_eq!(edit("paint it red and gold").unwrap()["material"], "red and gold");
         let h = edit("make the helmet blue").unwrap();

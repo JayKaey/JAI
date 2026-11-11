@@ -1165,7 +1165,7 @@ fn iss_glyph(p: &Painter, c: Pos2, size: f32, colour: Color32) {
     p.line_segment([c - vec2(size * 0.42, 0.0), c + vec2(size * 0.42, 0.0)], stroke(1.0, colour));
 }
 
-/// The place Jarvis flew to: a reticle.
+/// The place JAI flew to: a reticle.
 fn reticle(p: &Painter, c: Pos2, colour: Color32) {
     let line = stroke(1.4, colour);
     p.circle_stroke(c, 6.5, line);
@@ -1918,7 +1918,7 @@ pub(super) fn show(ctx: &egui::Context, rt: &Handle) {
         }
         return;
     }
-    let mut builder = ViewportBuilder::default().with_title("Earth — J.A.R.V.I.S.").with_app_id("jarvis").with_inner_size([1200.0, 740.0]).with_min_inner_size([700.0, 460.0]).with_decorations(false);
+    let mut builder = ViewportBuilder::default().with_title("Earth — J.A.I.").with_app_id("jarvis").with_inner_size([1200.0, 740.0]).with_min_inner_size([700.0, 460.0]).with_decorations(false);
     if let Some(icon) = super::window_icon() {
         builder = builder.with_icon(Arc::new(icon));
     }

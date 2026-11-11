@@ -1,4 +1,4 @@
-# J.A.R.V.I.S. precision overhaul
+# J.A.I. precision overhaul
 
 The desktop remains a native Rust/egui application. The existing mobile satellite is served by Rust and uses a browser on the phone.
 
@@ -13,7 +13,7 @@ The desktop remains a native Rust/egui application. The existing mobile satellit
 
 ## Worldwide phone access
 
-When the satellite is enabled, Jarvis starts a separate loopback-only HTTP origin, then a managed HTTPS tunnel. The LAN listener retains its own TLS certificate. Every control and data request requires the saved pairing token. Scan the Worldwide QR code in the desktop pairing window; the phone remembers its token in local storage. Treat the QR code as a password.
+When the satellite is enabled, JAI starts a separate loopback-only HTTP origin, then a managed HTTPS tunnel. The LAN listener retains its own TLS certificate. Every control and data request requires the saved pairing token. Scan the Worldwide QR code in the desktop pairing window; the phone remembers its token in local storage. Treat the QR code as a password.
 
 New fields within `satellite` in `jarvis_config.json`:
 
@@ -29,9 +29,9 @@ New fields within `satellite` in `jarvis_config.json`:
 | `wake_broadcast` | `255.255.255.255` | IPv4 broadcast destination for Wake-on-LAN. |
 | `wake_relay_url` | empty | Independent HTTPS wake service, opened by the phone when this PC is offline. |
 
-Cloudflare mode finds an installed executable or downloads the official standalone release into `bin/`, verifying the release SHA-256 digest before execution. The child is terminated when Jarvis exits. Connection failures are reported in the GUI and retried. Quick Tunnel addresses are temporary, so rescan after an address change. Tailscale mode requires Tailscale installation, login and Funnel permission. SSH mode requires a configured VPS, trusted host key, key-based login and an HTTPS reverse proxy; Jarvis does not invent credentials or provision a VPS.
+Cloudflare mode finds an installed executable or downloads the official standalone release into `bin/`, verifying the release SHA-256 digest before execution. The child is terminated when JAI exits. Connection failures are reported in the GUI and retried. Quick Tunnel addresses are temporary, so rescan after an address change. Tailscale mode requires Tailscale installation, login and Funnel permission. SSH mode requires a configured VPS, trusted host key, key-based login and an HTTPS reverse proxy; JAI does not invent credentials or provision a VPS.
 
-The PC must be awake and connected to the Internet. A sleeping PC cannot run its own web server or tunnel. Waking this same PC remotely requires a separate always-on relay on the home network and hardware/firmware Wake-on-LAN support. The built-in wake action sends packets to a configured LAN target while Jarvis is online; sending a packet does not confirm that the target woke.
+The PC must be awake and connected to the Internet. A sleeping PC cannot run its own web server or tunnel. Waking this same PC remotely requires a separate always-on relay on the home network and hardware/firmware Wake-on-LAN support. The built-in wake action sends packets to a configured LAN target while JAI is online; sending a packet does not confirm that the target woke.
 
 ## Calendar and workouts
 

@@ -2,7 +2,7 @@
 //!
 //! `cargo test --release --bin jarvis stt::bench -- --ignored --nocapture`
 //!
-//! The clips are synthesised offline with Jarvis' own Kokoro path (only voices already cached
+//! The clips are synthesised offline with JAI's own Kokoro path (only voices already cached
 //! under `models/voices/`, so nothing is written into the models folder), resampled to 16 kHz,
 //! put into room noise (and a noisier copy with mains hum) with the VAD's 500 ms pre-roll and its
 //! hangover, then transcribed through `transcribe` exactly as the microphone's clips are. Every
@@ -21,17 +21,17 @@ use crate::tts::{self, Kokoro};
 use std::path::PathBuf;
 
 const PHRASES: &[&str] = &[
-    "Jarvis, show me the world.",
-    "Jarvis, close the Earth.",
+    "JAI, show me the world.",
+    "JAI, close the Earth.",
     "Close it.",
     "Switch to satellite view.",
-    "Jarvis, open my stats.",
+    "JAI, open my stats.",
     "Close yourself.",
     "Move it to the middle of my screen.",
-    "Jarvis, what's playing?",
+    "JAI, what's playing?",
     "Hide your core.",
     "Open Spotify and play some music.",
-    "Jarvis, schließ die Erde.",
+    "JAI, schließ die Erde.",
     "Wie spät ist es?",
 ];
 /// An American, a British and a Spanish voice (accented English) for Sir's voice.
@@ -65,7 +65,7 @@ fn noise(n: usize, level: f32, hum: f32, seed: &mut u32) -> Vec<f32> {
 /// Every phrase in every voice, in room noise; the Spanish voice once more in a noisy room.
 pub(super) fn synth_clips() -> Vec<Clip> {
     let models = models_dir();
-    let mut cfg = JarvisConfig::default();
+    let mut cfg = JaiConfig::default();
     cfg.kokoro_model_path = models.join("kokoro-v1.0.onnx").to_string_lossy().into_owned();
     cfg.kokoro_voices_archive_path = models.join("voices-v1.0.bin").to_string_lossy().into_owned();
     cfg.espeak_path = Some(env_or("JARVIS_ESPEAK", "D:/Code/jarvis V.3/runtime/espeak-ng"));
@@ -117,11 +117,11 @@ pub(super) fn word_errors(heard: &str, said: &str) -> (usize, usize) {
     (prev[h.len()], r.len())
 }
 
-/// The same command for Jarvis: what the fast path makes of both is the same.
+/// The same command for JAI: what the fast path makes of both is the same.
 pub(super) fn routes_alike(heard: &str, said: &str) -> bool {
     let route = |t: &str| {
         let t = normalize_stt_transcript(t);
-        let wake = crate::wake::WakeWordMatcher::new(&["jarvis".to_string()], 0.72).evaluate(&t);
+        let wake = crate::wake::WakeWordMatcher::new(&["jai".to_string()], 0.72).evaluate(&t);
         let command = if wake.matched && !wake.command.trim().is_empty() { wake.command } else { t };
         format!("{:?}", crate::intents::parse(&crate::typos::normalize_user_input_typos(&command)))
     };
@@ -208,7 +208,7 @@ fn bench_command_clips() {
     println!("{} clips synthesised in {} ms", clips.len(), t.elapsed().as_millis());
 
     let variants: Vec<Variant> = variants().into_iter().filter(|v| only.is_empty() || only.iter().any(|o| v.label.to_lowercase().contains(o))).collect();
-    let threads = JarvisConfig::default().whisper_thread_count();
+    let threads = JaiConfig::default().whisper_thread_count();
     // One engine (model + states) per flash setting; each variant has its own settings.
     let mut engines: Vec<(bool, WhisperEngine)> = Vec::new();
     let mut settings: Vec<Settings> = Vec::new();

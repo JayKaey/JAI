@@ -2,9 +2,9 @@
 //!
 //! Shutdown and restart never run on the first word: the brain asks "Sir, please confirm …",
 //! shows a crimson confirmation card and waits up to 30 s for a clear "yes" (or the card's
-//! button). Only then Jarvis says goodbye and, 1.2 s later (the goodbye is heard), runs
+//! button). Only then JAI says goodbye and, 1.2 s later (the goodbye is heard), runs
 //! `shutdown /s /t 0` or `shutdown /r /t 0` hidden. Sleep and lock are harmless and run at once.
-//! "Shut down" on its own still quits Jarvis himself (`intents::SHUTDOWN`); only the PC named as
+//! "Shut down" on its own still quits JAI himself (`intents::SHUTDOWN`); only the PC named as
 //! the object ("my PC", "the computer", "den Rechner") reaches this module.
 
 use regex::Regex;
@@ -58,7 +58,7 @@ impl PowerAction {
         }
     }
 
-    /// What Jarvis says as he carries it out.
+    /// What JAI says as he carries it out.
     pub fn farewell(self) -> &'static str {
         match self {
             Self::Shutdown => "Shutting down all systems now. Goodbye, Sir.",
@@ -68,7 +68,7 @@ impl PowerAction {
         }
     }
 
-    /// What Jarvis says when Sir says no or the question times out.
+    /// What JAI says when Sir says no or the question times out.
     pub fn aborted(self) -> &'static str {
         match self {
             Self::Restart => "Restart aborted, Sir.",
@@ -87,11 +87,11 @@ impl PowerAction {
     }
 }
 
-/// A bare "yes" or "no" to a shutdown / restart question that has closed: what Jarvis says
+/// A bare "yes" or "no" to a shutdown / restart question that has closed: what JAI says
 /// (nothing runs). None for anything else, which is a request of its own.
 pub fn late_answer(action: PowerAction, text: &str) -> Option<String> {
     let s = words(text);
-    let s = s.trim_start_matches("jarvis ").trim_end_matches(" jarvis").trim();
+    let s = s.trim_start_matches("jai ").trim_end_matches(" jai").trim();
     let (noun, deed) = match action {
         PowerAction::Restart => ("restart", "restart my PC"),
         _ => ("shutdown", "shut down my PC"),
@@ -118,7 +118,7 @@ fn words(text: &str) -> String {
 }
 
 /// The PC itself as the object of the sentence ("my system" too, never "your system": that is
-/// Jarvis).
+/// JAI).
 const PC: &str = r"(?:(?:my |the |this |your |our |den |meinen |meinem |dem |mein |deinen )?(?:pc|computer|laptop|rechner|machine|desktop|workstation|gaming pc|gaming rig|rig)|(?:my |the |this |our |my whole |my entire |the whole |the entire |mein |meinen |das )system)";
 
 static SHUTDOWN_PC: LazyLock<Regex> = LazyLock::new(|| {
@@ -190,7 +190,7 @@ pub fn is_confirmation(text: &str) -> bool {
     if s.is_empty() || is_cancellation(text) {
         return false;
     }
-    let trimmed = s.trim_start_matches("jarvis ").trim_end_matches(" jarvis").trim();
+    let trimmed = s.trim_start_matches("jai ").trim_end_matches(" jai").trim();
     CONFIRM_WORDS.contains(&trimmed)
         || trimmed.starts_with("confirm")
         || trimmed.starts_with("yes ")
@@ -310,7 +310,7 @@ mod tests {
 
     #[test]
     fn requests_in_english_and_german() {
-        for t in ["Jarvis, shut down my PC", "Turn off the computer", "Fahre meinen PC herunter", "shutdown my pc please", "schalte den Rechner aus", "PC herunterfahren"] {
+        for t in ["JAI, shut down my PC", "Turn off the computer", "Fahre meinen PC herunter", "shutdown my pc please", "schalte den Rechner aus", "PC herunterfahren"] {
             assert_eq!(power_request(t), Some(PowerAction::Shutdown), "{t}");
         }
         for t in ["Restart my PC", "reboot the computer", "Starte den PC neu", "Rechner neu starten"] {

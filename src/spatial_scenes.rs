@@ -18,7 +18,7 @@ use tracing::{info, warn};
 /// One connected display (physical virtual-desktop pixels).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct MonitorInfo {
-    /// 1-based, primary first (the numbering "monitor 2" uses everywhere in Jarvis).
+    /// 1-based, primary first (the numbering "monitor 2" uses everywhere in JAI).
     pub number: usize,
     pub x: i32,
     pub y: i32,

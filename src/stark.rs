@@ -200,7 +200,7 @@ pub fn is_stark_tool(name: &str) -> bool {
         || name == "manage_contacts"
 }
 
-/// Tools that go to the network or other machines (Jarvis acknowledges first).
+/// Tools that go to the network or other machines (JAI acknowledges first).
 pub fn is_slow(name: &str) -> bool {
     matches!(
         name,

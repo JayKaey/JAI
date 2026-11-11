@@ -4,7 +4,7 @@
 //! * Names are matched fuzzily and phonetically against Sir's library, so Whisper's "Jays Rock",
 //!   "Jay's Rock", "jayrock" or "chase rock" all find the playlist "Jays Rock".
 //! * The library is what Sir already has: the Spotify library Sonora (his Spotify client) keeps in
-//!   `%LOCALAPPDATA%\sonora\cache.sqlite`, aliases Sir taught Jarvis (`music_library` table in
+//!   `%LOCALAPPDATA%\sonora\cache.sqlite`, aliases Sir taught JAI (`music_library` table in
 //!   `jarvis_memory.db`), and local playlists / audio files from the file index.
 //! * Sonora receives local paths and provider links directly through its supported single-
 //!   instance command-line handoff. Spotify uses its own URI handler. The selected player's
@@ -801,7 +801,7 @@ pub fn quick_lookup(name: &str) -> Option<ItemKind> {
 struct Inner {
     conn: Option<Mutex<Connection>>,
     cache: Mutex<Cache>,
-    /// The playlist (or song) Jarvis started last (protocols capture it).
+    /// The playlist (or song) JAI started last (protocols capture it).
     last_played: Mutex<Option<LibraryItem>>,
 }
 
@@ -1094,7 +1094,7 @@ impl MusicEngine {
         }
     }
 
-    /// "Pick some good music": Jarvis decides — one of Sir's own playlists, the one he played
+    /// "Pick some good music": JAI decides — one of Sir's own playlists, the one he played
     /// last or whichever suits the time of day — and starts it.
     async fn pick_music(&self, player: &str) -> Result<String, String> {
         let engine = self.clone();
@@ -1200,7 +1200,7 @@ impl MusicEngine {
     }
 }
 
-/// The playlist Jarvis picks when Sir leaves the choice to him: his own playlists first (not
+/// The playlist JAI picks when Sir leaves the choice to him: his own playlists first (not
 /// Spotify's mixes), the last one he played, a name that suits the hour, and his taste for rock;
 /// the day of the year varies the pick among equals.
 fn choose_playlist(items: &[LibraryItem], last: Option<&str>, now: chrono::DateTime<chrono::Local>) -> Option<String> {
@@ -1612,7 +1612,7 @@ impl MediaStop {
             }
         }
         match names.len() {
-            0 => "Nothing else was playing; Jarvis is quiet.".into(),
+            0 => "Nothing else was playing; JAI is quiet.".into(),
             1 => format!("Stopped {}.", names[0]),
             _ => format!("Stopped {} and {}.", names[..names.len() - 1].join(", "), names[names.len() - 1]),
         }
@@ -1634,7 +1634,7 @@ static LAST_STOP: tokio::sync::Mutex<Option<(std::time::Instant, MediaStop)>> = 
 ///    media session) get `WM_APPCOMMAND` / `APPCOMMAND_MEDIA_PAUSE`, a pause-only command, on
 ///    their windows.
 ///
-/// Jarvis' own voice is stopped by the dispatcher (`TtsController::stop`).
+/// JAI's own voice is stopped by the dispatcher (`TtsController::stop`).
 pub async fn stop_all_active_media() -> MediaStop {
     if crate::platform::hands_off() {
         info!("[MUSIC] Stop everything: Sir's players left alone (a test never pauses them)");

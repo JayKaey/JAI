@@ -1,4 +1,4 @@
-//! The application icon: Jarvis's HUD emblem on a deep-space glass squircle. It reads at 256 × 256 px
+//! The application icon: JAI's HUD emblem on a deep-space glass squircle. It reads at 256 × 256 px
 //! and stays unmistakable at 16-24 px on the Windows taskbar.
 //!
 //! From the outside in: a hairline rim with a 72-tick scale (long ticks every 30°), a bold cyan ring

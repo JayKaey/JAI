@@ -1,4 +1,4 @@
-//! `[ ⟳ REBOOT LLM ]` / "Jarvis, reboot your language model": a hard reset of the language engine
+//! `[ ⟳ REBOOT LLM ]` / "JAI, reboot your language model": a hard reset of the language engine
 //! when it is stuck (a cold start that never finishes, a wedged generation, a poisoned
 //! conversation).
 //!
@@ -11,7 +11,7 @@
 //!    again; then the prompt prefix is re-primed in the background.
 //!
 //! The HUD's header button shows the phase (amber while rebooting, the latency once online) and
-//! Jarvis confirms "Language model rebooted and online, Sir." How long the reload takes depends on
+//! JAI confirms "Language model rebooted and online, Sir." How long the reload takes depends on
 //! the model: unloading is instant, loading an 18 GB model back into VRAM takes seconds.
 
 use serde_json::{json, Value};
@@ -30,7 +30,7 @@ pub enum Trigger {
     Button,
     /// Sir asked: the running turn is the one rebooting, so it carries on.
     Voice,
-    /// A turn found the engine unavailable: Jarvis recovers on his own (at most once a minute).
+    /// A turn found the engine unavailable: JAI recovers on his own (at most once a minute).
     Auto,
 }
 
@@ -166,12 +166,12 @@ where
     Ok(CycleReport { unloaded, restarted, latency_ms: started.elapsed().as_millis() as u64, warm_ms: warm.elapsed().as_millis() as u64, model: model.clone() })
 }
 
-/// What the reboot needs from the running Jarvis (registered at startup).
+/// What the reboot needs from the running JAI (registered at startup).
 pub struct RebootContext {
     pub llm: Arc<crate::runtime::LlmRuntime>,
     pub brain: crate::brain::Brain,
     pub config: crate::config::ConfigStore,
-    /// Cancels the running turn and silences Jarvis.
+    /// Cancels the running turn and silences JAI.
     pub interrupt: Box<dyn Fn() + Send + Sync>,
     /// A notice in the HUD.
     pub notice: Box<dyn Fn(String) + Send + Sync>,

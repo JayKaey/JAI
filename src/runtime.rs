@@ -1,16 +1,16 @@
 //! Built-in LLM engine.
 //!
-//! Jarvis ships its own copy of the Ollama engine in `runtime/ollama` and runs it as a hidden
+//! JAI ships its own copy of the Ollama engine in `runtime/ollama` and runs it as a hidden
 //! child process on a private localhost port with a private model store (`models/llm`), so
 //! nothing has to be installed or started separately.
 //!
-//! * Windows: the engine runs inside a job object, so it dies with Jarvis — even after a crash.
+//! * Windows: the engine runs inside a job object, so it dies with JAI — even after a crash.
 //! * A missing model is imported from a local Ollama store when one exists (a file copy, no
 //!   download) and pulled from the Ollama registry otherwise.
 //! * A crashed engine is restarted automatically.
-//! * Without a bundled engine Jarvis falls back to an external Ollama at `ollama_url`.
+//! * Without a bundled engine JAI falls back to an external Ollama at `ollama_url`.
 
-use crate::config::JarvisConfig;
+use crate::config::JaiConfig;
 use futures_util::StreamExt;
 use serde_json::{json, Value};
 use std::io::{Read, Write};
@@ -60,7 +60,7 @@ pub struct LlmRuntime {
 
 impl LlmRuntime {
     /// Starts the engine in the background; `wait_ready`/`settled` tell callers when it is usable.
-    pub fn start(cfg: &JarvisConfig) -> Arc<Self> {
+    pub fn start(cfg: &JaiConfig) -> Arc<Self> {
         let engine = engine_binary(Path::new(&cfg.llm_runtime_dir)).map(|p| absolute(&p));
         let url = match &engine {
             Some(_) => format!("http://127.0.0.1:{}", free_port(cfg.llm_port)),
@@ -265,11 +265,11 @@ impl LlmRuntime {
         Ok(())
     }
 
-    /// Keeps the process handle and ties the process to Jarvis's lifetime.
+    /// Keeps the process handle and ties the process to JAI's lifetime.
     fn adopt(&self, child: Child) {
         #[cfg(windows)]
         if !self.job.as_ref().is_some_and(|job| job.assign(&child)) {
-            warn!("[LLM] Could not tie the engine to Jarvis's lifetime (job object).");
+            warn!("[LLM] Could not tie the engine to JAI's lifetime (job object).");
         }
         *self.child.lock().unwrap_or_else(|e| e.into_inner()) = Some(child);
     }
@@ -443,7 +443,7 @@ impl LlmRuntime {
         }
     }
 
-    /// Unloads Jarvis's models from a separately installed Ollama so their VRAM is free for the
+    /// Unloads JAI's models from a separately installed Ollama so their VRAM is free for the
     /// built-in engine; other models are only reported.
     async fn release_external_vram(&self, ours: &[&str]) {
         let Some(addr) = socket_addr(&self.external_url) else { return };
@@ -477,17 +477,17 @@ impl LlmRuntime {
                 }
             } else if vram_gb > 0.5 {
                 warn!(
-                    "[LLM] A separately installed Ollama holds '{name}' in VRAM ({vram_gb:.1} GB); Jarvis's model may not fit on the GPU."
+                    "[LLM] A separately installed Ollama holds '{name}' in VRAM ({vram_gb:.1} GB); JAI's model may not fit on the GPU."
                 );
             }
         }
     }
 
     /// Kills the built-in engine and starts it fresh (`llm_reboot`); an external Ollama is not
-    /// Jarvis's to restart.
+    /// JAI's to restart.
     pub async fn restart_engine(&self) -> Result<(), String> {
         let Some(engine) = self.engine.clone() else {
-            return Err(format!("the language engine at {} is an external Ollama, which Jarvis cannot restart", self.url));
+            return Err(format!("the language engine at {} is an external Ollama, which JAI cannot restart", self.url));
         };
         if self.restarting.swap(true, Ordering::AcqRel) {
             return Err("the engine is already restarting".into());
@@ -512,7 +512,7 @@ impl LlmRuntime {
         result
     }
 
-    /// Stops the engine (also happens automatically when Jarvis exits).
+    /// Stops the engine (also happens automatically when JAI exits).
     pub fn shutdown(&self) {
         self.stopping.store(true, Ordering::Release);
         if let Some(mut child) = self.child.lock().unwrap_or_else(|e| e.into_inner()).take() {
@@ -559,7 +559,7 @@ fn same_model(a: &str, b: &str) -> bool {
 }
 
 /// The model to talk to: the first of `preferred` that is installed, else the first installed
-/// chat model (a missing tag never leaves Jarvis without a language model).
+/// chat model (a missing tag never leaves JAI without a language model).
 pub fn pick_model(installed: &[String], preferred: &[String]) -> Option<String> {
     let found = preferred.iter().filter(|p| !p.trim().is_empty()).find_map(|p| installed.iter().find(|i| same_model(p, i)));
     found.or_else(|| installed.iter().find(|i| !i.to_lowercase().contains("embed"))).cloned()
@@ -831,7 +831,7 @@ mod job {
     };
 
     /// Processes in this job are killed when its last handle closes — at the latest when
-    /// Jarvis exits or crashes.
+    /// JAI exits or crashes.
     pub struct Job(HANDLE);
 
     // SAFETY: a job object handle may be used from any thread.

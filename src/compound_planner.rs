@@ -65,11 +65,11 @@ impl Plan {
 const THEN: &[&str] = &[", and then ", " and then ", ", then ", " then ", " und dann ", ", dann ", " dann ", ", danach ", " danach ", " after that ", ", after that ", ", afterwards ", " afterwards "];
 const AND: &[&str] = &["; ", ", and also ", " and also ", ", and ", " and ", ", und ", " und ", ", sowie ", " sowie ", ", "];
 
-/// Words that are a clause to nobody ("Jarvis, …", "…, please").
+/// Words that are a clause to nobody ("JAI, …", "…, please").
 fn is_courtesy(clause: &str) -> bool {
     let lower = clause.to_lowercase();
     let words: Vec<&str> = lower.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).collect();
-    words.is_empty() || words.iter().all(|w| matches!(*w, "jarvis" | "hey" | "ok" | "okay" | "please" | "bitte" | "sir" | "now" | "jetzt" | "thanks" | "thank" | "you" | "danke" | "also" | "and" | "und" | "then" | "dann"))
+    words.is_empty() || words.iter().all(|w| matches!(*w, "jai" | "hey" | "ok" | "okay" | "please" | "bitte" | "sir" | "now" | "jetzt" | "thanks" | "thank" | "you" | "danke" | "also" | "and" | "und" | "then" | "dann"))
 }
 
 /// Cuts `text` at the first of `separators` in every piece (ASCII separators, so byte offsets of
@@ -144,7 +144,7 @@ fn resolve(clause: &str, ctx: &ReflexContext) -> Option<Resolved> {
 }
 
 /// What one clause says, from the stateless parsers in the order a single command meets them:
-/// the reflex router (privacy, Jarvis' own controls), the deterministic actions, the HUD's
+/// the reflex router (privacy, JAI's own controls), the deterministic actions, the HUD's
 /// views and look, quick commands, the mixer, the deterministic routes, then the exact command
 /// grammar.
 fn resolve_any(clause: &str, ctx: &ReflexContext) -> Option<Resolved> {
@@ -157,7 +157,7 @@ fn resolve_any(clause: &str, ctx: &ReflexContext) -> Option<Resolved> {
     if let Some(action) = crate::intent_engine::deterministic_action(clause) {
         return Some(match action {
             IntentAction::CloseSecondaryWindows => Resolved::Call("close_all_secondary_windows", json!({})),
-            IntentAction::ExitJarvisApplication => Resolved::Call("shutdown_jarvis", json!({})),
+            IntentAction::ExitJaiApplication => Resolved::Call("shutdown_jarvis", json!({})),
         });
     }
     let of = |intent: Option<Intent>| match intent {
@@ -200,7 +200,7 @@ enum Resolved {
 
 /// What one spoken command asks for, as the stateless parsers see it: the tool and its
 /// arguments, with the dispatcher's privacy switch as "listening_lock" `{"command": …}` (the
-/// name a dry run records it under). As in a turn, Jarvis' own words
+/// name a dry run records it under). As in a turn, JAI's own words
 /// are spelt right first ("close your car" is the core) and a sentence that matches nothing
 /// but sounds like a command is taken for it. None: nothing deterministic — the brain's
 /// dialogue state or the language model decides.
@@ -221,7 +221,7 @@ pub fn plan(text: &str, ctx: &ReflexContext) -> Option<Plan> {
     if clauses(text).len() < 2 {
         return None;
     }
-    // Jarvis' own words spelt right first, as a single command gets them ("close your car").
+    // JAI's own words spelt right first, as a single command gets them ("close your car").
     let text = crate::typos::normalize_user_input_typos(text.trim());
     let parts = clauses(&text);
     if !(2..=MAX_CLAUSES).contains(&parts.len()) {
@@ -276,9 +276,9 @@ mod tests {
         assert_eq!(clauses("Open the feature lab and then close it"), vec![("Open the feature lab".to_string(), false), ("close it".to_string(), true)]);
         assert_eq!(clauses("Mach das Theme rot und dann zeig mir den Stundenplan"), vec![("Mach das Theme rot".to_string(), false), ("zeig mir den Stundenplan".to_string(), true)]);
         // The wake word and a courtesy are nobody's clause; one command stays one command.
-        assert_eq!(clauses("Jarvis, pause the music, please."), vec![("pause the music".to_string(), false)]);
+        assert_eq!(clauses("JAI, pause the music, please."), vec![("pause the music".to_string(), false)]);
         assert_eq!(clauses("What time is it?"), vec![("What time is it?".to_string(), false)]);
-        assert_eq!(clauses("Jarvis, and then, please"), Vec::new());
+        assert_eq!(clauses("JAI, and then, please"), Vec::new());
     }
 
     #[test]
@@ -321,7 +321,7 @@ mod tests {
         assert_eq!(lanes(&plan.calls).len(), 2, "two stages, one after the other");
         assert_eq!(plan.rest(), "Open the feature lab, then close the feature lab");
         // One command, a list inside one command, small talk: never a compound.
-        for text in ["Play rock and roll", "Remind me to buy milk, eggs and bread", "Switch back to Jarvis and tell me a joke", "What is the weather like today?"] {
+        for text in ["Play rock and roll", "Remind me to buy milk, eggs and bread", "Switch back to JAI and tell me a joke", "What is the weather like today?"] {
             assert_eq!(super::plan(text, &idle()), None, "{text}");
         }
         // Two levels for the mixer are two mixer calls on one lane, in the order they were said.
@@ -329,7 +329,7 @@ mod tests {
         assert!(mixer.calls.iter().all(|c| c.tool == "control_audio_mixer"), "{:?}", mixer.calls);
         assert_eq!(lanes(&mixer.calls), vec![vec![vec![0, 1]]]);
         // Nothing that needs a yes runs from a list, and a seventh clause is dictation.
-        assert_eq!(super::plan("Pause the music and quit Jarvis", &idle()), None);
+        assert_eq!(super::plan("Pause the music and quit JAI", &idle()), None);
         assert_eq!(super::plan("mute, pause, mute, pause, mute, pause, mute", &idle()), None);
         // Opposite switches in one breath are a slip of the tongue, not a plan.
         assert_eq!(super::plan("Stop listening and you can listen again", &idle()), None);

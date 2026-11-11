@@ -1,5 +1,5 @@
 //! The pronunciation lexicon: every reply is respelled for the British voice before eSpeak and
-//! Kokoro see it, so Jarvis never spells out "J A R V I S", reads underscores, backslashes or
+//! Kokoro see it, so JAI never spells out "J A R V I S", reads underscores, backslashes or
 //! "15h" aloud, or butchers app names, acronyms, units and times.
 //!
 //! German words stay German: the phonemizer gives them German pronunciation in the same voice;
@@ -107,6 +107,12 @@ fn paths(s: &str) -> String {
 
 static NAMES: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| {
     [
+        // His name is said "Jay", however it is written; a sentence it ends keeps its stop.
+        (r"\bJ\.\s?A\.\s?I\.(\s*)$", "Jay.$1"),
+        (r"\bJ\.\s?A\.\s?I\b\.?", "Jay"),
+        (r"\bJAI\b", "Jay"),
+        (r"\bJai\b", "Jay"),
+        // (The film's, when he is asked about it.)
         (r"\bJ\.A\.R\.V\.I\.S\.?", "Jarvis"),
         (r"\bJARVIS\b", "Jarvis"),
         (r"(?i)\bsonora\b", "Suh-nora"),
@@ -287,7 +293,7 @@ static READ_PAST: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)(\b(?:have|has|had|having|been|was|were)|'ve|’ve)(\s+(?:already|just|not|never|also|finally|recently|now|all))?\s+read\b").unwrap()
 });
 
-/// Homographs eSpeak and Kokoro get wrong in Jarvis' lines.
+/// Homographs eSpeak and Kokoro get wrong in JAI's lines.
 ///
 /// * "live" as an adjective or adverb ("live telemetry", "live data", "currently live", "the
 ///   interface is live") is /laɪv/ like "five": spelt "lyve", which both read that way. The verb
@@ -357,8 +363,8 @@ mod tests {
 
     #[test]
     fn the_screenshot_sentence_is_speakable() {
-        let out = say("J.A.R.V.I.S. uses 0 MB VRAM in SQLite on WebUntis at 15h");
-        assert_eq!(out, "Jarvis uses 0 megabytes V-Ram in S-Q-Lite on Web-Oontis at three P M");
+        let out = say("J.A.I. uses 0 MB VRAM in SQLite on WebUntis at 15h");
+        assert_eq!(out, "Jay uses 0 megabytes V-Ram in S-Q-Lite on Web-Oontis at three P M");
     }
 
     #[test]
@@ -384,7 +390,13 @@ mod tests {
 
     #[test]
     fn names_acronyms_and_hardware() {
-        assert_eq!(say("JARVIS opened Spotify and Sonora"), "Jarvis opened Spot-ify and Suh-nora");
+        assert_eq!(say("JAI opened Spotify and Sonora"), "Jay opened Spot-ify and Suh-nora");
+        // His name is "Jay" to the ear, whichever way a line writes it.
+        for written in ["J.A.I. is online", "JAI is online", "Jai is online", "J. A. I. is online"] {
+            assert_eq!(say(written), "Jay is online", "{written}");
+        }
+        assert_eq!(say("I am J.A.I."), "I am Jay.");
+        assert_eq!(say("They call me JAI, Sir."), "They call me Jay, Sir.");
         assert_eq!(say("itslearning and JaysRock over Wi-Fi"), "its learning and Jays Rock over Why-Fy");
         assert_eq!(say("the egui GUI shows CPU, GPU and RAM"), "the ee-gooey Gooey shows C P U, G P U and Ram");
         assert_eq!(say("the UI calls the API"), "the U I calls the A P I");

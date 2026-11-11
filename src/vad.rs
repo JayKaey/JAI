@@ -7,7 +7,7 @@
 //! * [`VadMachine`]: pure, unit-tested state machine
 //!   `Calibrating → Idle → PreSpeech → Speaking ⇄ Hangover → (finalised) → Idle`
 //!   with a dual probability threshold, an adaptive noise floor, a pre-roll buffer, a hard length
-//!   cap, raised-threshold barge-in while Jarvis is talking, and push-to-talk.
+//!   cap, raised-threshold barge-in while JAI is talking, and push-to-talk.
 //!
 //!   The end of speech is decided in two steps. After a first, short silence (160 ms behind a
 //!   one-word reflex, 220 ms otherwise) the words so far are handed out (`SpeechPaused`) so that
@@ -186,7 +186,7 @@ fn ms_to_frames(ms: u32) -> u32 {
 }
 
 impl VadParams {
-    pub fn from_config(cfg: &crate::config::JarvisConfig) -> Self {
+    pub fn from_config(cfg: &crate::config::JaiConfig) -> Self {
         let mut p = Self {
             start_threshold: 0.5,
             release_threshold: 0.35,
@@ -225,7 +225,7 @@ impl VadParams {
     }
 
     /// The trailing silence that ends an utterance with `voiced_frames` of speech so far: a
-    /// short burst of up to 1.1 s of voice ("stop", "Jarvis, next page") after 280 ms, a
+    /// short burst of up to 1.1 s of voice ("stop", "JAI, next page") after 280 ms, a
     /// sentence after the normal hangover.
     pub fn end_of_speech_frames(&self, voiced_frames: u32) -> u32 {
         if voiced_frames <= self.short_burst_frames {
@@ -278,7 +278,7 @@ pub enum EndReason {
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct FrameContext {
-    /// Jarvis is speaking (or its echo tail is still in the room): use barge-in thresholds.
+    /// JAI is speaking (or its echo tail is still in the room): use barge-in thresholds.
     pub assistant_speaking: bool,
     pub ptt: bool,
     /// e.g. while the microphone test records: track noise, never open utterances.
@@ -594,7 +594,7 @@ mod tests {
     /// 450 ms sentence hangover, 280 ms after a ≤ 1.1 s command with a head start after 160 /
     /// 220 ms, 500 ms pre-roll, 20 s cap, 160 ms barge-in).
     fn params() -> VadParams {
-        VadParams::from_config(&crate::config::JarvisConfig::default())
+        VadParams::from_config(&crate::config::JaiConfig::default())
     }
 
     fn calibrated() -> VadMachine {
@@ -717,7 +717,7 @@ mod tests {
 
     #[test]
     fn a_short_command_is_not_cut_at_a_breath_between_its_words() {
-        // "Jarvis … next page": a 256 ms breath after the name used to end the utterance (the
+        // "JAI … next page": a 256 ms breath after the name used to end the utterance (the
         // old 160 / 220 ms cut) and cost a second transcription. Now it only hands the name out
         // early, and the command stays one utterance.
         let mut m = calibrated();
@@ -787,7 +787,7 @@ mod tests {
     fn barge_in_needs_160ms_of_louder_voice_while_speaking() {
         let mut m = calibrated();
         let speaking = FrameContext { assistant_speaking: true, ..Default::default() };
-        // Normal-strength speech (prob 0.6) is treated as echo while Jarvis talks.
+        // Normal-strength speech (prob 0.6) is treated as echo while JAI talks.
         assert!(feed(&mut m, 10, (0.6, 0.05), speaking).is_empty());
         let ev = feed(&mut m, 4, SPEECH, speaking);
         assert!(ev.is_empty(), "4 frames = 128 ms is not enough");

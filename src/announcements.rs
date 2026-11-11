@@ -1,12 +1,12 @@
-//! What Jarvis says unprompted once a job of his own is done (the network radar's sweep, the
+//! What JAI says unprompted once a job of his own is done (the network radar's sweep, the
 //! disk map's scan): any module queues a line here, and the app speaks it as an alert as soon
-//! as he is free (`Jarvis::raise_alert`, which waits while he is talking or thinking).
+//! as he is free (`JAI::raise_alert`, which waits while he is talking or thinking).
 
 use std::sync::Mutex;
 
 static QUEUE: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
-/// Queues one line for Jarvis to say (blank lines are dropped).
+/// Queues one line for JAI to say (blank lines are dropped).
 pub fn say(line: impl Into<String>) {
     let line = line.into();
     if line.trim().is_empty() {

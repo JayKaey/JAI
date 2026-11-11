@@ -1613,7 +1613,7 @@ fn mission_terms(row: &MissionRow) -> Vec<String> {
     t
 }
 
-/// Adds a page Jarvis already has (his own knowledge, an encyclopedia summary) to a mission:
+/// Adds a page JAI already has (his own knowledge, an encyclopedia summary) to a mission:
 /// stored, its facts extracted and cross-checked like any crawled page. Returns the source id.
 pub fn add_local_source(mission_id: i64, url: &str, title: &str, markdown: &str, reliability: f32) -> Option<i64> {
     let db = MissionDb::open(&engine()?.db_path).ok()?;

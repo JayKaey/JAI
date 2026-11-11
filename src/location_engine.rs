@@ -534,7 +534,7 @@ async fn nearby(tools: &ToolContext, query: &str, radius: f64) -> Result<String,
     let fix = engine.current(tools).await?;
     tools.stark.pulse(&["brain", "gps", "context"], false);
     let q = query.trim();
-    let q = q.strip_prefix("Jarvis").or_else(|| q.strip_prefix("jarvis")).unwrap_or(q).trim_start_matches([',', ' ']).trim();
+    let q = q.strip_prefix("JAI").or_else(|| q.strip_prefix("jai")).unwrap_or(q).trim_start_matches([',', ' ']).trim();
     let lower = q.to_lowercase();
     if lower.is_empty() || ["where am i", "wo bin ich", "my location", "mein standort", "current location"].iter().any(|w| lower.contains(w)) {
         let address = match &fix.address {

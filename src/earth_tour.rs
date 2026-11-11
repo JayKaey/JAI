@@ -31,7 +31,7 @@ impl StopKind {
     }
 }
 
-/// One stop: where the camera goes, the caption card and the line Jarvis says there.
+/// One stop: where the camera goes, the caption card and the line JAI says there.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Stop {
     pub kind: StopKind,
@@ -123,7 +123,7 @@ pub fn plan(quakes: &[Quake], events: &[GeoEvent], now_ms: i64) -> Vec<Stop> {
     stops
 }
 
-/// What Jarvis says as the tour starts (the first stop's line with it).
+/// What JAI says as the tour starts (the first stop's line with it).
 pub fn opening(stops: &[Stop]) -> String {
     match stops.first() {
         Some(first) => format!("Here's the world right now, Sir. {}", first.line),

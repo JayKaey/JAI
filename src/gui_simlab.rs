@@ -179,7 +179,7 @@ pub(super) fn show_simulations(ctx: &egui::Context, host: &WidgetHost) {
         }
         // Opaque: a transparent GL window showed black wherever nothing was painted.
         let mut builder = ViewportBuilder::default()
-            .with_title(format!("{} — J.A.R.V.I.S. Simulation Lab", sim.title))
+            .with_title(format!("{} — J.A.I. Simulation Lab", sim.title))
             .with_app_id("jarvis")
             .with_inner_size([960.0, 620.0])
             .with_min_inner_size([560.0, 380.0])
@@ -357,7 +357,7 @@ fn controls(ui: &mut egui::Ui, p: &Palette, sim: &Simulation, host: &WidgetHost)
     ui.label(RichText::new("READOUT").font(bold(10.5)).color(p.muted).extra_letter_spacing(1.0));
     ui.add(egui::Label::new(RichText::new(sim.readout()).size(11.5)).wrap());
     ui.add_space(8.0);
-    muted(ui, p, "Drag the sliders, or tell Jarvis: “set the angle to 60 degrees and double the velocity”.");
+    muted(ui, p, "Drag the sliders, or tell JAI: “set the angle to 60 degrees and double the velocity”.");
 }
 
 // ---------------------------------------------------------------------- plotting ----

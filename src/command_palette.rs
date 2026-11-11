@@ -1,7 +1,7 @@
 //! Predictive command completion for the text console (Ctrl+K, or just start typing).
 //!
 //! What Sir has typed so far is matched against two sources, his own first: the requests he
-//! sent recently (so the fourth "open my WebUntis schedule" is three keystrokes), then Jarvis'
+//! sent recently (so the fourth "open my WebUntis schedule" is three keystrokes), then JAI's
 //! command vocabulary — one sentence per thing he can do, English and German, every one of
 //! them a sentence the routers really take (the test below sends each through them).
 //!
@@ -10,7 +10,7 @@
 //! before a vocabulary entry, a shorter completion before a longer one. Pure and synchronous:
 //! the console asks again only when the line changes.
 
-/// Jarvis' command vocabulary: what the palette offers when Sir's own history has nothing.
+/// JAI's command vocabulary: what the palette offers when Sir's own history has nothing.
 pub const VOCABULARY: &[&str] = &[
     // The board, the blocks and the search.
     "close the HUD board",

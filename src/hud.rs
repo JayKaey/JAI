@@ -1,10 +1,10 @@
-//! Messages between the backend (`app::Jarvis`) and the native HUD window: events the HUD
+//! Messages between the backend (`app::JAI`) and the native HUD window: events the HUD
 //! renders and commands it sends back. Everything stays in-process — there is no web server.
 
 use crate::ears::AudioLevel;
 use crate::memory::MemoryEntry;
 use crate::modality::VoiceResponseMode;
-use crate::skills::JarvisSkill;
+use crate::skills::JaiSkill;
 use crate::telemetry::SystemTelemetry;
 use serde_json::Value;
 
@@ -33,7 +33,7 @@ pub struct ConfigState {
     pub hardware_profile: String,
     /// Language engine status line.
     pub llm: String,
-    /// When Jarvis answers out loud (`modality`).
+    /// When JAI answers out loud (`modality`).
     pub response_mode: VoiceResponseMode,
     /// `mute_tts`: his voice is off for this session.
     pub voice_muted: bool,
@@ -50,7 +50,7 @@ pub enum HudEvent {
     FirstToken { message_id: String, latency_ms: u64, since_speech_ms: u64, model: String },
     Token { message_id: String, token: String },
     AssistantDone { message_id: String, text: String, latency_ms: u64, model: String, interrupted: bool },
-    /// Sir kept talking before Jarvis answered: the reply is withdrawn and his words are
+    /// Sir kept talking before JAI answered: the reply is withdrawn and his words are
     /// stitched onto the next transcript.
     Retracted { message_id: String },
     /// The end of the previous conversation (time, role, text), shown when the HUD opens.
@@ -59,7 +59,7 @@ pub enum HudEvent {
     ToolLog { tool: String, args: Value, result: String, success: bool, duration_ms: u64, timestamp: String },
     SystemMetrics { telemetry: SystemTelemetry },
     Memories { items: Vec<MemoryEntry>, query: Option<String> },
-    Skills { items: Vec<JarvisSkill> },
+    Skills { items: Vec<JaiSkill> },
     ConfigState(ConfigState),
     Devices { inputs: Vec<String>, outputs: Vec<String> },
     Models { items: Vec<String>, current: String },
@@ -79,7 +79,7 @@ pub enum HudEvent {
     /// A PC shutdown / restart waiting for Sir's double-check, or its outcome (`status`: pending,
     /// confirmed, cancelled, expired): the crimson confirmation card.
     PowerCard { id: String, action: String, label: String, status: String },
-    /// Jarvis is quitting; the HUD shows that he is going offline.
+    /// JAI is quitting; the HUD shows that he is going offline.
     Shutdown,
 }
 
@@ -112,11 +112,11 @@ pub enum HudCommand {
     RunSkill { name: String },
     DeleteSkill { name: String },
     ClearHistory,
-    /// Quit Jarvis (HUD power button).
+    /// Quit JAI (HUD power button).
     Shutdown,
     /// The HUD's reply-mode selector.
     SetResponseMode { mode: VoiceResponseMode },
-    /// Widget interactions in the HUD or a Jarvis window.
+    /// Widget interactions in the HUD or a JAI window.
     WidgetToggleItem { id: String, index: usize },
     WidgetTimer { id: String, op: String },
     WidgetAction { id: String, index: usize },

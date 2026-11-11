@@ -3,7 +3,7 @@
 //!
 //! Wave Link serves JSON-RPC 2.0 over a local WebSocket (the one its Stream Deck plugin uses); the
 //! port is in `%LOCALAPPDATA%\Packages\Elgato.WaveLink_*\LocalState\ws-info.json`. Only
-//! `getMixes` and `getChannels` are ever sent: Jarvis never changes Wave Link.
+//! `getMixes` and `getChannels` are ever sent: JAI never changes Wave Link.
 
 use crate::itslearning_bw_sso::{decode_frame, encode_frame};
 use serde_json::{json, Value};
@@ -13,7 +13,7 @@ use std::time::Duration;
 #[derive(Debug, Clone, PartialEq)]
 pub struct Channel {
     pub name: String,
-    /// Apps Wave Link assigned to it ("Sonora", "Discord", "J.A.R.V.I.S").
+    /// Apps Wave Link assigned to it ("Sonora", "Discord", "J.A.I").
     pub apps: Vec<String>,
     /// Is it audible in the Chat Mix (routed, turned up, nothing muted)?
     pub in_chat_mix: bool,
@@ -50,14 +50,14 @@ pub fn parse(mixes: &Value, channels: &Value) -> Vec<Channel> {
 }
 
 fn is_jarvis_app(app: &str) -> bool {
-    app.to_lowercase().replace('.', "").contains("jarvis")
+    app.to_lowercase().replace('.', "").contains("jai")
 }
 
-/// The channel Jarvis may talk through: in the Chat Mix and carrying no other app's audio (so the
-/// call hears only him — never Sir's music or the call itself). One named for Jarvis first.
+/// The channel JAI may talk through: in the Chat Mix and carrying no other app's audio (so the
+/// call hears only him — never Sir's music or the call itself). One named for JAI first.
 pub fn talk_channel(channels: &[Channel]) -> Option<&Channel> {
     let mut fit: Vec<&Channel> = channels.iter().filter(|c| c.software && c.in_chat_mix && c.apps.iter().all(|a| is_jarvis_app(a))).collect();
-    fit.sort_by_key(|c| !c.name.to_lowercase().contains("jarvis"));
+    fit.sort_by_key(|c| !c.name.to_lowercase().contains("jai"));
     fit.into_iter().next()
 }
 
@@ -71,7 +71,7 @@ pub fn channel_of_app<'a>(channels: &'a [Channel], app: &str) -> Option<&'a Chan
     channels.iter().find(|c| c.software && c.apps.iter().any(|a| a.eq_ignore_ascii_case(app)))
 }
 
-/// The Windows output device of a channel ("Jarvis" → "Jarvis (Elgato Virtual Audio)").
+/// The Windows output device of a channel ("JAI" → "JAI (Elgato Virtual Audio)").
 pub fn device_of(channel: &str, outputs: &[String]) -> Option<String> {
     let prefix = format!("{} (", channel.to_lowercase());
     outputs.iter().find(|o| o.to_lowercase().starts_with(&prefix) && o.to_lowercase().contains("elgato")).cloned()
@@ -171,7 +171,7 @@ mod tests {
             {"name": "Music", "type": "Software", "level": 0.12, "isMuted": false, "apps": [{"name": "Sonora"}], "mixes": music},
             {"name": "Voice chat", "type": "Software", "level": 1, "isMuted": false, "apps": [{"name": "Discord"}], "mixes": [{"id": "SD1", "level": 1, "isMuted": false}]},
             {"name": "Microphone (fifine Microphone)", "type": "Hardware", "level": 1, "isMuted": false, "apps": [], "mixes": [{"id": "SD2", "level": 1, "isMuted": false}, {"id": "SD3", "level": 1, "isMuted": false}]},
-            {"name": "Jarvis", "type": "Software", "level": 1, "isMuted": false, "apps": [{"name": "J.A.R.V.I.S"}], "mixes": [{"id": "SD1", "level": 1, "isMuted": false}, {"id": jarvis_mix, "level": 1, "isMuted": false}]}]});
+            {"name": "JAI", "type": "Software", "level": 1, "isMuted": false, "apps": [{"name": "J.A.I"}], "mixes": [{"id": "SD1", "level": 1, "isMuted": false}, {"id": jarvis_mix, "level": 1, "isMuted": false}]}]});
         (mixes, channels)
     }
 
@@ -179,10 +179,10 @@ mod tests {
     fn finds_the_jarvis_channel_in_the_chat_mix() {
         let (m, c) = fixture("SD3", false);
         let channels = parse(&m, &c);
-        assert_eq!(talk_channel(&channels).map(|c| c.name.as_str()), Some("Jarvis"));
+        assert_eq!(talk_channel(&channels).map(|c| c.name.as_str()), Some("JAI"));
         assert!(leaking(&channels).is_empty(), "the mic carries no app");
-        let outputs: Vec<String> = ["Speakers (Logitech G733 Gaming Headset)", "Jarvis (Elgato Virtual Audio)", "Music (Elgato Virtual Audio)"].iter().map(|s| s.to_string()).collect();
-        assert_eq!(device_of("Jarvis", &outputs).as_deref(), Some("Jarvis (Elgato Virtual Audio)"));
+        let outputs: Vec<String> = ["Speakers (Logitech G733 Gaming Headset)", "JAI (Elgato Virtual Audio)", "Music (Elgato Virtual Audio)"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(device_of("JAI", &outputs).as_deref(), Some("JAI (Elgato Virtual Audio)"));
     }
 
     #[test]
@@ -195,7 +195,7 @@ mod tests {
 
     #[test]
     fn never_talks_through_a_channel_that_carries_other_apps() {
-        // Jarvis routed to the Audio Mix only, Music in the Chat Mix: no talk channel, one leak.
+        // JAI routed to the Audio Mix only, Music in the Chat Mix: no talk channel, one leak.
         let (m, c) = fixture("SD2", true);
         let channels = parse(&m, &c);
         assert_eq!(talk_channel(&channels), None, "Sonora's channel would send Sir's music too");

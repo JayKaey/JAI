@@ -1,12 +1,12 @@
 //! The exhaustive scenario verifier (`JARVIS.exe --exhaustive [runs]`): every command family
-//! in five passes, the whole interface inspected as geometry, Jarvis' voice on five kinds of
+//! in five passes, the whole interface inspected as geometry, JAI's voice on five kinds of
 //! sentence, the privacy lock, the monitors and the two audio sinks, and every button of the
 //! Feature Lab pressed five times — all of it in the running app, silently, with the HUD drawn
 //! offscreen (`gui::offscreen`), run after run until five runs in a row are clean.
 //!
 //! * **Matrix A** — every command category (the old ones and the workbench's) in five passes:
 //!   clean English; German and Denglisch; noisy, fast and misheard; four commands inside
-//!   400 ms spoken over Jarvis' own voice (through the real dispatcher, in a process-wide dry
+//!   400 ms spoken over JAI's own voice (through the real dispatcher, in a process-wide dry
 //!   run); a compound sentence whose every clause must be carried out. A request is judged by
 //!   the handler it reaches, never by words: the wrong tool, the music player for an undo, or
 //!   a dropped clause is a failure.
@@ -14,14 +14,14 @@
 //!   no overlap with 1, 2, 4, 8 and 12 blocks, blocks and the orb follow a drag exactly, every
 //!   stroke in the active theme, the page keys large enough and working, no jump in any
 //!   animation.
-//! * **Matrix C** — Jarvis' voice on five sentence types against his clip (128-band spectral
+//! * **Matrix C** — JAI's voice on five sentence types against his clip (128-band spectral
 //!   similarity ≥ 0.97) and the homograph "live" read as "lyve".
 //! * **Matrix D** — the HUD on every monitor and spanning all of them; ten wake words against
 //!   the privacy lock; "stop listening for one minute"; the microphone chip; one clause reaching
 //!   both audio sinks and the loopback gate's 250 ms tail.
 //! * **Matrix E** — every `[ TRY ]` and `[ TEST ]` of the Feature Lab five times with varied
 //!   inputs: what only reads runs for real, what draws in the HUD is drawn and inspected, what
-//!   would act outside Jarvis is recorded as a dry run and checked against its schema.
+//!   would act outside JAI is recorded as a dry run and checked against its schema.
 //! * **Matrix F** — the commands as sound: two stock voices standing in for Sir say each
 //!   sentence of `SPOKEN` with his name in front; the recogniser hears it (as samples, no
 //!   speaker), the wake word takes the name off and the dispatcher must reach the handler.
@@ -30,7 +30,7 @@
 //! every one of them through the stateless parsers, so a routing regression fails `cargo test`
 //! long before the app is started.
 
-use crate::app::Jarvis;
+use crate::app::Jai;
 use crate::intent_engine::ReflexContext;
 use crate::live_self_tester::{judge, ms_since, skip, LOCAL_BUDGET_MS, NETWORK_BUDGET_MS, REFLEX_BUDGET_MS, TURN_BUDGET_MS, UI_BUDGET_MS, VOICE_BUDGET_MS};
 use crate::tools::ToolContext;
@@ -153,7 +153,7 @@ pub const CASES: &[Case] = &[
     // ---- The privacy lock ----
     c("listening", 1, "Stop listening.", "listening_lock", r#"{"command": "Lock"}"#),
     c("listening", 1, "Stop listening for 1 minute.", "listening_lock", r#"{"command": "Pause"}"#),
-    c("listening", 1, "Jarvis, you can now listen again.", "listening_lock", r#"{"command": "Resume"}"#),
+    c("listening", 1, "JAI, you can now listen again.", "listening_lock", r#"{"command": "Resume"}"#),
     c("listening", 2, "Hör nicht mehr zu.", "listening_lock", r#"{"command": "Lock"}"#),
     c("listening", 2, "Du kannst wieder zuhören.", "listening_lock", r#"{"command": "Resume"}"#),
     c("listening", 3, "please stop listening for five minutes", "listening_lock", r#"{"command": "Pause"}"#),
@@ -270,7 +270,7 @@ pub const CASES: &[Case] = &[
     c("panels", 2, "Scanne mein Netzwerk.", "open_jarvis_view", r#"{"view": "network_radar"}"#),
     c("panels", 2, "Was frisst meinen Speicherplatz?", "open_jarvis_view", r#"{"view": "disk_map"}"#),
     c("panels", 2, "Zeig mir die Erde.", "open_jarvis_view", r#"{"view": "earth"}"#),
-    c("panels", 3, "hey jarvis check check the network", "open_jarvis_view", r#"{"view": "network_radar"}"#),
+    c("panels", 3, "hey jai check check the network", "open_jarvis_view", r#"{"view": "network_radar"}"#),
     c("panels", 3, "where did all my space go", "open_jarvis_view", r#"{"view": "disk_map"}"#),
     c("panels", 3, "show me the globe", "open_jarvis_view", r#"{"view": "earth"}"#),
     // (The Earth made useful: where Sir is, the terrain, the weather, a past day, the tour.)
@@ -289,7 +289,7 @@ pub const CASES: &[Case] = &[
     c("panels", 3, "give me a world tour", "open_jarvis_view", r#"{"view": "earth", "action": "show_world_tour"}"#),
     // ---- His own views moved and sized (the log of 2026-11-08 had no tool for the first two) ----
     c("arrange", 1, "Move it to the middle of my screen.", "arrange_jarvis_window", r#"{"target": "it", "action": "move", "position": "centre"}"#),
-    c("arrange", 1, "No Jarvis, can you full screen the Earth?", "arrange_jarvis_window", r#"{"target": "earth", "action": "fullscreen"}"#),
+    c("arrange", 1, "No JAI, can you full screen the Earth?", "arrange_jarvis_window", r#"{"target": "earth", "action": "fullscreen"}"#),
     c("arrange", 1, "Put the earth on the left half.", "arrange_jarvis_window", r#"{"target": "earth", "action": "move", "position": "left"}"#),
     c("arrange", 1, "Move the radar to my second monitor.", "arrange_jarvis_window", r#"{"target": "radar", "action": "to_monitor"}"#),
     c("arrange", 1, "Put them side by side.", "arrange_jarvis_window", r#"{"target": "them", "action": "side_by_side"}"#),
@@ -300,10 +300,10 @@ pub const CASES: &[Case] = &[
     c("arrange", 3, "uh centre the earth", "arrange_jarvis_window", r#"{"target": "earth", "action": "move", "position": "centre"}"#),
     c("arrange", 3, "full screen the globe", "arrange_jarvis_window", r#"{"target": "globe", "action": "fullscreen"}"#),
     // (jarvis.log 2026-11-08: fillers after a close were asked of Windows as programs.)
-    c("panels", 1, "Jarvis, close the Earth, you.", "hud_board", r#"{"action": "close", "target": "earth"}"#),
+    c("panels", 1, "JAI, close the Earth, you.", "hud_board", r#"{"action": "close", "target": "earth"}"#),
     c("panels", 3, "close the world please", "hud_board", r#"{"action": "close", "target": "earth"}"#),
-    c("blocks", 1, "Jarvis close up.", "close_application", r#"{"app_name": "it", "own_only": true}"#),
-    c("blocks", 3, "jarvis close off please", "close_application", r#"{"app_name": "it", "own_only": true}"#),
+    c("blocks", 1, "JAI close up.", "close_application", r#"{"app_name": "it", "own_only": true}"#),
+    c("blocks", 3, "jai close off please", "close_application", r#"{"app_name": "it", "own_only": true}"#),
     // ---- The 3D studio (demo models in a test run: nothing is downloaded) ----
     c("studio3d", 1, "Render me an Iron Man suit in 3D.", "show_3d_model", r#"{"query": "iron man suit"}"#),
     c("studio3d", 1, "Show me a 3D model of the Earth.", "show_3d_model", r#"{"query": "earth"}"#),
@@ -435,7 +435,7 @@ pub const CASES: &[Case] = &[
     c("stopwatch", 2, "Wie lange noch?", "timer_left", "{}"),
     c("drive space", 1, "Show me my drive space.", "spawn_native_window", r#"{"live": "drive_space"}"#),
     c("drive space", 2, "Zeig mir meinen Speicherplatz.", "spawn_native_window", r#"{"live": "drive_space"}"#),
-    c("drive space", 3, "uh jarvis could you maybe show me my drive space please", "spawn_native_window", r#"{"live": "drive_space"}"#),
+    c("drive space", 3, "uh jai could you maybe show me my drive space please", "spawn_native_window", r#"{"live": "drive_space"}"#),
     c("undo", 1, "Change it back.", "undo_last_action", "{}"),
     c("undo", 2, "Ändere es zurück.", "undo_last_action", "{}"),
     c("chemistry", 1, "How many moles are in 36 grams of water?", "chemistry_helper", r#"{"action": "moles"}"#),
@@ -449,7 +449,7 @@ pub const CASES: &[Case] = &[
     c("pictures", 2, "Zeig mir ein Bild von Neuschwanstein.", "show_image", r#"{"query": "neuschwanstein"}"#),
     c("pictures", 2, "Zeig mir meinen letzten Screenshot.", "show_image", r#"{"local": "latest_screenshot"}"#),
     c("pictures", 2, "Nächstes Bild.", "show_image", r#"{"action": "next"}"#),
-    c("pictures", 3, "uh jarvis could you show me some photos of tokyo please", "show_image", r#"{"query": "tokyo"}"#),
+    c("pictures", 3, "uh jai could you show me some photos of tokyo please", "show_image", r#"{"query": "tokyo"}"#),
     c("pictures", 3, "show me tokyo pictures", "show_image", r#"{"query": "tokyo"}"#),
     c("cameras", 1, "Show me cameras in London.", "show_live_camera", r#"{"place": "london"}"#),
     c("cameras", 1, "Show me a live camera from New York.", "show_live_camera", r#"{"place": "new york"}"#),
@@ -457,11 +457,11 @@ pub const CASES: &[Case] = &[
     c("cameras", 1, "Show me a 3 by 3 camera wall of Hong Kong.", "show_live_camera", r#"{"action": "wall", "size": 9}"#),
     c("cameras", 2, "Zeig mir eine Webcam in Stuttgart.", "show_live_camera", r#"{"place": "stuttgart"}"#),
     c("cameras", 2, "Zeig mir Webcams in meiner Nähe.", "show_live_camera", r#"{"near_me": true}"#),
-    c("cameras", 3, "uh jarvis show me a live cam in tokyo please", "show_live_camera", r#"{"place": "tokyo"}"#),
+    c("cameras", 3, "uh jai show me a live cam in tokyo please", "show_live_camera", r#"{"place": "tokyo"}"#),
     c("street view", 1, "Show me street view of the Eiffel Tower.", "show_street_view", r#"{"place": "eiffel tower"}"#),
     c("street view", 1, "Street view here.", "show_street_view", r#"{"here": true}"#),
     c("street view", 2, "Zeig mir die Straßenansicht vom Brandenburger Tor.", "show_street_view", r#"{"place": "brandenburger tor"}"#),
-    c("street view", 3, "uh jarvis show me street level photos of times square", "show_street_view", r#"{"place": "times square"}"#),
+    c("street view", 3, "uh jai show me street level photos of times square", "show_street_view", r#"{"place": "times square"}"#),
 ];
 
 /// One compound sentence of pass 5: every `wants` entry must be reached.
@@ -613,7 +613,7 @@ fn prepare(needs: Needs, ours: &mut bool) -> bool {
 /// scheduler gave to another program does not (2026-11-07: 19 probes at 10-29 ms within one
 /// second while Sir used the PC; 2026-11-08 beside Minecraft: 12-16 ms after a second try
 /// straight away, which the same burst of the game's work had caught too).
-async fn dry_timed(app: &Jarvis, say: &str, budget_ms: f64, needs: Needs, ours: &mut bool) -> (Vec<crate::live_self_tester::Recorded>, f64) {
+async fn dry_timed(app: &Jai, say: &str, budget_ms: f64, needs: Needs, ours: &mut bool) -> (Vec<crate::live_self_tester::Recorded>, f64) {
     let (mut recorded, took) = app.dry_run(say, true).await;
     let mut ms = took.as_secs_f64() * 1000.0;
     for _ in 0..crate::live_self_tester::AGAIN {
@@ -630,7 +630,7 @@ async fn dry_timed(app: &Jarvis, say: &str, budget_ms: f64, needs: Needs, ours: 
     (recorded, ms)
 }
 
-async fn matrix_a(app: &Jarvis) {
+async fn matrix_a(app: &Jai) {
     let mark = app.history_mark().await;
     let mut ours = false;
     let calls_of = |recorded: Vec<crate::live_self_tester::Recorded>| -> Vec<(String, Value)> { recorded.into_iter().map(|r| (r.tool, r.args)).collect() };
@@ -700,7 +700,7 @@ async fn matrix_a(app: &Jarvis) {
     crate::listening_lock::apply(crate::listening_lock::LockCommand::Resume);
 }
 
-/// What Jarvis is saying when the commands of pass 4 arrive (long enough to be cut off).
+/// What JAI is saying when the commands of pass 4 arrive (long enough to be cut off).
 const SPEAKING: &str = "Running the full diagnostic now, Sir. Every subsystem reports in turn, beginning with the reactor core, the flight surfaces, the targeting array and the long-range communications relay, and I will read each figure as it arrives.";
 
 /// How long everything may take to settle after the burst of pass 4. Not a latency: the last
@@ -713,7 +713,7 @@ const SETTLE_LIMIT: Duration = Duration::from_secs(30);
 /// Pass 4 for one category: its sentences in turn, four of them, 90 ms apart, while he speaks.
 /// Everything must settle (no turn left running, the thinking guard released), his sentence
 /// must have been cut, and the last command must have reached its handler.
-async fn barge_in(app: &Jarvis, category: &'static str, ours: &mut bool) {
+async fn barge_in(app: &Jai, category: &'static str, ours: &mut bool) {
     let id = format!("{category} / pass 4 / four commands inside {BARGE_IN_WINDOW_MS} ms over his voice");
     let cases: Vec<&Case> = CASES.iter().filter(|c| c.category == category).collect();
     let needs = if cases.iter().any(|c| c.needs == Needs::Pages) { Needs::Pages } else { Needs::Nothing };
@@ -1258,12 +1258,12 @@ fn visual_matrix(hud: &mut crate::gui::offscreen::VirtualHud, tools: &ToolContex
     let started = Instant::now();
     let mut found = visual::check_core(vec2(1600.0, 900.0));
     found.extend(visual::check_voice_ticks(&crate::gui::emblem_voice_of));
-    row(&mut rows, "the core sphere holds under the pointer and turns with a drag; the voice ticks follow Jarvis only".to_string(), started, found, "holds, turns, follows his voice".to_string());
+    row(&mut rows, "the core sphere holds under the pointer and turns with a drag; the voice ticks follow JAI only".to_string(), started, found, "holds, turns, follows his voice".to_string());
     hud.frames_at(10, 60.0);
     rows
 }
 
-async fn matrix_b(app: &Jarvis, run: usize) {
+async fn matrix_b(app: &Jai, run: usize) {
     if !crate::gui::offscreen::is_running() {
         skip("matrix B", "the visual matrix on the real HUD", "needs the offscreen HUD: start with --exhaustive or --live-test --headless");
         return;
@@ -1287,7 +1287,7 @@ async fn matrix_b(app: &Jarvis, run: usize) {
 
 // --------------------------------------------------------------------------- matrix C ----
 
-async fn matrix_c(app: &Jarvis) {
+async fn matrix_c(app: &Jai) {
     let tools = app.tools();
     // The HUD's sound cues are synthesised here, sample by sample: each one is there, short,
     // quiet beside his voice, free of clicks at its end and of anything that is not a number.
@@ -1302,10 +1302,10 @@ async fn matrix_c(app: &Jarvis) {
     }
     use crate::fish_zero_shot_tts::{Match, ReferenceProfile};
     type Sentences = Vec<(&'static str, String, Vec<f32>)>;
-    type Render = fn(&crate::config::JarvisConfig) -> Result<Sentences, String>;
+    type Render = fn(&crate::config::JaiConfig) -> Result<Sentences, String>;
     let rate = crate::jarvis_voice_dsp::MASTER_RATE;
     let jarvis_profile = crate::voice_reference::reference_path().and_then(|clip| crate::fish_zero_shot_tts::load_profile(&clip, std::path::Path::new(crate::fish_zero_shot_tts::PROFILE_PATH)).ok());
-    let voices: [(&'static str, Option<ReferenceProfile>, Render); 1] = [("Jarvis", jarvis_profile, crate::fish_zero_shot_tts::render_sentences)];
+    let voices: [(&'static str, Option<ReferenceProfile>, Render); 1] = [("JAI", jarvis_profile, crate::fish_zero_shot_tts::render_sentences)];
     // Each voice's five sentences as the speaker would get them, with its clip's profile.
     let mut spoken: Vec<(&'static str, Sentences)> = Vec::new();
     for (who, profile, render) in voices {
@@ -1370,7 +1370,7 @@ fn words_kept(said: &[String], heard: &[String]) -> usize {
 /// Every voice is understood: its report and its alert sentence are played to the speech
 /// recogniser (as samples, not through a speaker), which must hear four words in five. A
 /// voice may be as dark and layered as it likes, as long as Sir still gets what it says.
-async fn understood(app: &Jarvis, spoken: &[(&'static str, Vec<(&'static str, String, Vec<f32>)>)], rate: u32) {
+async fn understood(app: &Jai, spoken: &[(&'static str, Vec<(&'static str, String, Vec<f32>)>)], rate: u32) {
     for (who, sentences) in spoken {
         for (kind, text, audio) in sentences.iter().filter(|(kind, ..)| matches!(*kind, "report" | "alert")) {
             let started = Instant::now();
@@ -1393,20 +1393,20 @@ async fn understood(app: &Jarvis, spoken: &[(&'static str, Vec<(&'static str, St
 // --------------------------------------------------------------------------- matrix D ----
 
 /// Ten things said with the wake word while the privacy lock is on.
-const WAKE_WORDS: [&str; 10] = ["Jarvis", "Hey Jarvis", "Jarvis, what time is it?", "Jarvis, open Spotify", "Jarvis, are you there?", "Okay Jarvis, play some music", "Jarvis!", "Jarvis, show me your core", "Jarvis, wake up", "Jarvis, close the board"];
+const WAKE_WORDS: [&str; 10] = ["JAI", "Hey JAI", "JAI, what time is it?", "JAI, open Spotify", "JAI, are you there?", "Okay JAI, play some music", "JAI!", "JAI, show me your core", "JAI, wake up", "JAI, close the board"];
 
-async fn matrix_d(app: &Jarvis, run: usize) {
+async fn matrix_d(app: &Jai, run: usize) {
     use crate::listening_lock::{apply, is_locked, state, verdict as heard, ListeningLockState, LockCommand, Verdict};
-    // ---- Jarvis on every monitor and across all of them ----
+    // ---- JAI on every monitor and across all of them ----
     let monitors = crate::monitors::list();
     if monitors.is_empty() {
-        skip("matrix D", "Jarvis on every monitor", "no monitor is reported here");
+        skip("matrix D", "JAI on every monitor", "no monitor is reported here");
     }
     for m in &monitors {
         let say = format!("Move to monitor {}", m.index);
         let (recorded, took) = app.dry_run(&say, true).await;
         let calls: Vec<(String, Value)> = recorded.into_iter().map(|r| (r.tool, r.args)).collect();
-        judge("matrix D", format!("\"{say}\" moves Jarvis there"), TURN_BUDGET_MS, took.as_secs_f64() * 1000.0, verdict(&calls, &[("move_window_to_monitor", &format!(r#"{{"target_monitor": {}}}"#, m.index))]));
+        judge("matrix D", format!("\"{say}\" moves JAI there"), TURN_BUDGET_MS, took.as_secs_f64() * 1000.0, verdict(&calls, &[("move_window_to_monitor", &format!(r#"{{"target_monitor": {}}}"#, m.index))]));
     }
     if crate::gui::offscreen::is_running() {
         let screens: Vec<(String, Vec2, Pos2)> = monitors.iter().map(|m| (format!("monitor {} ({}x{})", m.index, m.width(), m.height()), vec2(m.width() as f32, m.height() as f32), pos2(m.rect[0] as f32, m.rect[1] as f32))).collect();
@@ -1483,10 +1483,10 @@ async fn matrix_d(app: &Jarvis, run: usize) {
         apply(LockCommand::Lock);
         // (An open microphone throughout: here only the lock decides.)
         let through: Vec<&str> = WAKE_WORDS.iter().copied().filter(|say| heard(say, true) != Verdict::Ignored).collect();
-        let resumes = heard("Jarvis, you can now listen again", true) == Verdict::Resumes;
+        let resumes = heard("JAI, you can now listen again", true) == Verdict::Resumes;
         // The words that lift it, through the dispatcher's own admission.
         let lifted_in = Instant::now();
-        let admitted = Jarvis::admit("Jarvis, you can now listen again");
+        let admitted = Jai::admit("JAI, you can now listen again");
         if let crate::app::Admission::Privacy(cmd) = admitted {
             apply(cmd);
         }
@@ -1495,7 +1495,7 @@ async fn matrix_d(app: &Jarvis, run: usize) {
             Err(format!("heard while locked: {}", through.join(" / ")))
         } else if !resumes || is_locked() {
             Err(format!("\"you can now listen again\" did not lift the lock (admitted as {admitted:?})"))
-        } else if heard("Jarvis", true) != Verdict::Heard {
+        } else if heard("JAI", true) != Verdict::Heard {
             Err("he does not hear again after the lock was lifted".to_string())
         } else {
             Ok(format!("ten of ten wake words ignored; lifted in {lift_ms:.3} ms"))
@@ -1504,7 +1504,7 @@ async fn matrix_d(app: &Jarvis, run: usize) {
         judge("matrix D", "\"stop listening\": ten wake words ignored, \"you can now listen again\" resumes at once", LOCAL_BUDGET_MS, ms_since(started), result);
 
         let started = Instant::now();
-        let result = match Jarvis::admit("Stop listening for 1 minute.") {
+        let result = match Jai::admit("Stop listening for 1 minute.") {
             crate::app::Admission::Privacy(cmd @ LockCommand::Pause(length)) => {
                 apply(cmd);
                 let until = match state() {
@@ -1534,7 +1534,7 @@ async fn matrix_d(app: &Jarvis, run: usize) {
         let was_on = app.config_state().mic_enabled;
         let mic_on = || app.config_state().mic_enabled;
         let nothing_heard = || WAKE_WORDS.iter().all(|say| heard(say, mic_on()) == Verdict::Ignored);
-        let hears = || heard("Jarvis", mic_on()) == Verdict::Heard;
+        let hears = || heard("JAI", mic_on()) == Verdict::Heard;
         let mut steps: Vec<String> = Vec::new();
         let mut wrong: Vec<String> = Vec::new();
         if !was_on && !nothing_heard() {
@@ -1653,7 +1653,7 @@ const VARIANTS: &[(&str, [&str; 4])] = &[
     ("suggest_routine", [r#"{"action": "list"}"#, r#"{"action": "now"}"#, r#"{"action": "list"}"#, r#"{"action": "now"}"#]),
     ("thermal_advisor", [r#"{"action": "advice"}"#, r#"{"action": "status"}"#, r#"{"action": "advice"}"#, r#"{"action": "status"}"#]),
     ("suggest_commands", [r#"{"prefix": "sw"}"#, r#"{"prefix": "move orb"}"#, r#"{"prefix": "clear"}"#, r#"{"prefix": "näch"}"#]),
-    ("recall_memories", [r#"{"query": "music"}"#, r#"{"query": "school"}"#, r#"{"query": "monitor"}"#, r#"{"query": "Jarvis"}"#]),
+    ("recall_memories", [r#"{"query": "music"}"#, r#"{"query": "school"}"#, r#"{"query": "monitor"}"#, r#"{"query": "JAI"}"#]),
     ("reminders", [r#"{"action": "list"}"#, r#"{"action": "list"}"#, r#"{"action": "list"}"#, r#"{"action": "list"}"#]),
     ("pop_up_ui_card", [r#"{"title": "Reactor", "content": "Output nominal."}"#, r#"{"title": "Thermals", "content": "All cool, Sir."}"#, r#"{"title": "Schedule", "content": "Nothing due."}"#, r#"{"title": "Board", "content": "Ready."}"#]),
     ("spawn_native_window", [r#"{"title": "Feature Lab", "markdown": "A longer note: the reactor sustains its output without drift."}"#, r#"{"title": "Feature Lab", "markdown": "**Heading**\n\nA list:\n\n- one\n- two"}"#, r#"{"title": "Feature Lab", "markdown": "Übergrößen und Maßeinheiten."}"#, r#"{"title": "Feature Lab", "markdown": "63.7 % of 4.2 GW"}"#]),
@@ -1719,7 +1719,7 @@ async fn press(tools: &ToolContext, defs: &[Value], tool: &str, args: &Value) ->
     };
     let reads = reach.is_some() || crate::hyper_cortex::is_read_only(tool, args) || workbench_read;
     if !draws && !reads {
-        // It would act outside Jarvis (a program, the browser, other windows, a file): recorded,
+        // It would act outside JAI (a program, the browser, other windows, a file): recorded,
         // not carried out, and checked to be the call the lab meant.
         let recorded = crate::live_self_tester::record(Box::pin(tools.execute(tool, args))).await;
         let ok = recorded.iter().any(|r| r.tool == tool && r.args == *args);
@@ -1789,7 +1789,7 @@ async fn close_lab_leftovers(tools: &ToolContext, known: &[String]) {
     .await;
 }
 
-async fn matrix_e(app: &Jarvis) {
+async fn matrix_e(app: &Jai) {
     use crate::gui::TryPlan;
     let tools = app.tools();
     let defs = tools.definitions();
@@ -1901,49 +1901,49 @@ const fn s(say: &'static str, tool: &'static str, args: &'static str) -> Spoken 
 /// the recogniser, stripped of his name by the wake word and sent through the dispatcher.
 pub const SPOKEN: &[Spoken] = &[
     // ---- The screens and the emblem ----
-    s("Jarvis, use all monitors.", "configure_interface", r#"{"span_all_monitors": true}"#),
-    s("Jarvis, stop spanning.", "configure_interface", r#"{"span_all_monitors": false}"#),
-    s("Jarvis, toggle span mode.", "configure_interface", r#"{"span_all_monitors": "toggle"}"#),
-    s("Jarvis, move yourself to monitor two.", "move_window_to_monitor", r#"{"target_monitor": 2}"#),
-    s("Jarvis, move out of the way.", "configure_interface", r#"{"orb_board_position": "aside"}"#),
-    s("Jarvis, come back to the middle.", "configure_interface", r#"{"orb_board_position": "center"}"#),
-    s("Jarvis, show me your core.", "configure_interface", r#"{"core_view": true}"#),
+    s("JAI, use all monitors.", "configure_interface", r#"{"span_all_monitors": true}"#),
+    s("JAI, stop spanning.", "configure_interface", r#"{"span_all_monitors": false}"#),
+    s("JAI, toggle span mode.", "configure_interface", r#"{"span_all_monitors": "toggle"}"#),
+    s("JAI, move yourself to monitor two.", "move_window_to_monitor", r#"{"target_monitor": 2}"#),
+    s("JAI, move out of the way.", "configure_interface", r#"{"orb_board_position": "aside"}"#),
+    s("JAI, come back to the middle.", "configure_interface", r#"{"orb_board_position": "center"}"#),
+    s("JAI, show me your core.", "configure_interface", r#"{"core_view": true}"#),
     // ---- His windows and widgets ----
-    s("Jarvis, bring back my windows.", "spawn_native_window", r#"{"restore": "recent"}"#),
-    s("Jarvis, open that widget again next time.", "create_or_update_widget", r#"{"keep_at_start": true}"#),
-    s("Jarvis, remove all widgets.", "remove_widget", r#"{"id": "all"}"#),
-    s("Jarvis, open the feature lab.", "configure_interface", r#"{"feature_lab": true}"#),
-    s("Jarvis, close the board.", "hud_board", r#"{"action": "close"}"#),
+    s("JAI, bring back my windows.", "spawn_native_window", r#"{"restore": "recent"}"#),
+    s("JAI, open that widget again next time.", "create_or_update_widget", r#"{"keep_at_start": true}"#),
+    s("JAI, remove all widgets.", "remove_widget", r#"{"id": "all"}"#),
+    s("JAI, open the feature lab.", "configure_interface", r#"{"feature_lab": true}"#),
+    s("JAI, close the board.", "hud_board", r#"{"action": "close"}"#),
     // ---- The volume ----
-    s("Jarvis, lower my browser's volume by fifty percent.", "control_audio_mixer", r#"{"action": "change_app", "app": "browser", "delta": -50}"#),
-    s("Jarvis, set Discord to eighty percent.", "control_audio_mixer", r#"{"action": "set_apps", "apps": [{"app": "discord", "level": 80}]}"#),
-    s("Jarvis, mute everything except Discord.", "control_audio_mixer", r#"{"action": "mute_others", "app": "discord"}"#),
-    s("Jarvis, make everything loud again.", "control_audio_mixer", r#"{"action": "restore"}"#),
-    s("Jarvis, volume forty.", "control_audio_mixer", r#"{"action": "set_master", "level": 40}"#),
-    s("Jarvis, turn the volume up by fifteen.", "control_audio_mixer", r#"{"action": "change_master", "delta": 15}"#),
-    s("Jarvis, mute.", "control_audio_mixer|media_and_volume_control", "{}"),
-    s("Jarvis, save this mix as gaming.", "control_audio_mixer", r#"{"action": "save_mix", "name": "gaming"}"#),
-    s("Jarvis, load my gaming mix.", "control_audio_mixer", r#"{"action": "load_mix", "name": "gaming"}"#),
-    s("Jarvis, open the mixer.", "configure_interface", r#"{"mixer_view": true}"#),
-    s("Jarvis, there's no sound.", "control_audio_mixer", r#"{"action": "no_sound"}"#),
-    s("Jarvis, too loud.", "control_audio_mixer", r#"{"action": "change_app", "app": "it", "delta": -10}"#),
-    s("Jarvis, turn the music off.", "control_music", "{}"),
+    s("JAI, lower my browser's volume by fifty percent.", "control_audio_mixer", r#"{"action": "change_app", "app": "browser", "delta": -50}"#),
+    s("JAI, set Discord to eighty percent.", "control_audio_mixer", r#"{"action": "set_apps", "apps": [{"app": "discord", "level": 80}]}"#),
+    s("JAI, mute everything except Discord.", "control_audio_mixer", r#"{"action": "mute_others", "app": "discord"}"#),
+    s("JAI, make everything loud again.", "control_audio_mixer", r#"{"action": "restore"}"#),
+    s("JAI, volume forty.", "control_audio_mixer", r#"{"action": "set_master", "level": 40}"#),
+    s("JAI, turn the volume up by fifteen.", "control_audio_mixer", r#"{"action": "change_master", "delta": 15}"#),
+    s("JAI, mute.", "control_audio_mixer|media_and_volume_control", "{}"),
+    s("JAI, save this mix as gaming.", "control_audio_mixer", r#"{"action": "save_mix", "name": "gaming"}"#),
+    s("JAI, load my gaming mix.", "control_audio_mixer", r#"{"action": "load_mix", "name": "gaming"}"#),
+    s("JAI, open the mixer.", "configure_interface", r#"{"mixer_view": true}"#),
+    s("JAI, there's no sound.", "control_audio_mixer", r#"{"action": "no_sound"}"#),
+    s("JAI, too loud.", "control_audio_mixer", r#"{"action": "change_app", "app": "it", "delta": -10}"#),
+    s("JAI, turn the music off.", "control_music", "{}"),
     // ---- The widget panel ----
-    s("Jarvis, add milk to my shopping list.", "create_or_update_widget", r#"{"type": "Checklist"}"#),
-    s("Jarvis, start a stopwatch.", "create_or_update_widget", r#"{"mode": "stopwatch"}"#),
-    s("Jarvis, what's open?", "whats_open", "{}"),
-    s("Jarvis, show me my drive space.", "spawn_native_window", r#"{"live": "drive_space"}"#),
+    s("JAI, add milk to my shopping list.", "create_or_update_widget", r#"{"type": "Checklist"}"#),
+    s("JAI, start a stopwatch.", "create_or_update_widget", r#"{"mode": "stopwatch"}"#),
+    s("JAI, what's open?", "whats_open", "{}"),
+    s("JAI, show me my drive space.", "spawn_native_window", r#"{"live": "drive_space"}"#),
     // ---- The music and the rest ----
-    s("Jarvis, what's playing?", "control_music", r#"{"action": "what_is_playing"}"#),
-    s("Jarvis, pause.", "control_music", r#"{"action": "stop_all"}"#),
-    s("Jarvis, system status.", "get_system_status", "{}"),
-    s("Jarvis, undo that.", "undo_last_action", "{}"),
-    s("Jarvis, that's not what I said.", "undo_last_action", r#"{"within_s": 120}"#),
-    s("Jarvis, close the Earth, you.", "hud_board", r#"{"action": "close", "target": "earth"}"#),
-    s("Jarvis, what did you just do?", "recent_actions", "{}"),
-    s("Jarvis, is anything muted?", "control_audio_mixer", r#"{"action": "muted"}"#),
-    s("Jarvis, turn Firefox off.", "close_application", r#"{"app_name": "firefox"}"#),
-    s("Jarvis, how do I use you as a website with a static domain?", "show_mobile_satellite_instructions", "{}"),
+    s("JAI, what's playing?", "control_music", r#"{"action": "what_is_playing"}"#),
+    s("JAI, pause.", "control_music", r#"{"action": "stop_all"}"#),
+    s("JAI, system status.", "get_system_status", "{}"),
+    s("JAI, undo that.", "undo_last_action", "{}"),
+    s("JAI, that's not what I said.", "undo_last_action", r#"{"within_s": 120}"#),
+    s("JAI, close the Earth, you.", "hud_board", r#"{"action": "close", "target": "earth"}"#),
+    s("JAI, what did you just do?", "recent_actions", "{}"),
+    s("JAI, is anything muted?", "control_audio_mixer", r#"{"action": "muted"}"#),
+    s("JAI, turn Firefox off.", "close_application", r#"{"app_name": "firefox"}"#),
+    s("JAI, how do I use you as a website with a static domain?", "show_mobile_satellite_instructions", "{}"),
 ];
 
 /// Who says them: stock voices standing in for Sir at the microphone, a British blend and an
@@ -1957,7 +1957,7 @@ const STAND_INS: [(&str, &str, f32); 2] = [("a British voice", crate::tts::LEGAC
 /// after. Synthesised once per process (on the CPU); the recogniser hears them in every run.
 static SPOKEN_AUDIO: Mutex<Option<std::sync::Arc<Vec<Vec<Vec<f32>>>>>> = Mutex::new(None);
 
-fn spoken_audio(cfg: &crate::config::JarvisConfig) -> Result<Vec<Vec<Vec<f32>>>, String> {
+fn spoken_audio(cfg: &crate::config::JaiConfig) -> Result<Vec<Vec<Vec<f32>>>, String> {
     let phonemizer = crate::phonemizer::Phonemizer::new(cfg.espeak_path.as_deref());
     let mut kokoro = crate::tts::Kokoro::load(cfg)?;
     let mut seed = 0x51e_0f26u32;
@@ -1995,7 +1995,7 @@ fn spoken_audio(cfg: &crate::config::JarvisConfig) -> Result<Vec<Vec<Vec<f32>>>,
 /// Matrix F: every sentence of `SPOKEN`, by every stand-in, through the recogniser, the wake
 /// word and the dispatcher (a dry run). The typed tests know what the words mean; this one
 /// knows whether the words survive being said.
-async fn matrix_f(app: &Jarvis) {
+async fn matrix_f(app: &Jai) {
     let cached = SPOKEN_AUDIO.lock().unwrap_or_else(|e| e.into_inner()).clone();
     let audio = match cached {
         Some(audio) => audio,
@@ -2052,7 +2052,7 @@ async fn matrix_f(app: &Jarvis) {
 /// The matrices of one run (after the base suite of the live self-test, in the same run).
 /// `JARVIS_MATRICES` (for work on one of them: "B", "AD" …) limits the run to the ones named;
 /// a run that left one out is not the full verification.
-pub async fn matrices(app: &Jarvis, run: usize) {
+pub async fn matrices(app: &Jai, run: usize) {
     let tools = app.tools().clone();
     let before = conversation_rows(&tools);
     let exports = std::env::temp_dir().join(format!("jarvis_exhaustive_exports_{}", std::process::id()));
@@ -2120,7 +2120,7 @@ impl Report {
 }
 
 /// Runs the whole suite `runs` times, one after the other.
-pub async fn run(app: &Jarvis, runs: usize) -> Report {
+pub async fn run(app: &Jai, runs: usize) -> Report {
     let mut report = Report { runs: Vec::new(), failures: Vec::new(), clean_in_a_row: 0, first_pass_late: Vec::new() };
     for n in 0..runs.max(1) {
         let started = Instant::now();
@@ -2142,7 +2142,7 @@ mod tests {
 
     #[test]
     fn every_console_prefix_completes() {
-        // ("sw ba" completed to the retired "switch back to Jarvis" and failed matrix B.)
+        // ("sw ba" completed to the retired "switch back to JAI" and failed matrix B.)
         for typed in CONSOLE_PREFIXES {
             assert!(!crate::command_palette::complete(typed, &[], 2).is_empty(), "'{typed}' offers no completion");
         }
@@ -2199,7 +2199,7 @@ mod tests {
 
     #[test]
     fn every_spoken_command_reaches_its_handler_once_his_name_is_off() {
-        let wake = crate::wake::WakeWordMatcher::new(&["jarvis".to_string()], 0.8);
+        let wake = crate::wake::WakeWordMatcher::new(&["jai".to_string()], 0.8);
         let mut wrong: Vec<String> = Vec::new();
         for case in SPOKEN {
             assert!(serde_json::from_str::<Value>(case.args).is_ok(), "{}: {}", case.say, case.args);

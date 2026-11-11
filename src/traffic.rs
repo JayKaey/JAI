@@ -76,7 +76,7 @@ pub struct Incident {
 }
 
 impl Incident {
-    /// "a 4 km jam", "an accident", "road damage" (English, for Jarvis's sentences).
+    /// "a 4 km jam", "an accident", "road damage" (English, for JAI's sentences).
     pub fn what(&self) -> String {
         match self.kind {
             Kind::Accident => "an accident".into(),
@@ -356,7 +356,7 @@ fn spoken_one(i: &Incident, with_road: bool) -> String {
     s
 }
 
-/// "How's the traffic on the A5?": (the block, the line Jarvis says).
+/// "How's the traffic on the A5?": (the block, the line JAI says).
 pub fn road_answer(road: &str, incidents: &[Incident]) -> (String, String) {
     let mut serious: Vec<&Incident> = incidents.iter().filter(|i| i.kind != Kind::Roadworks).collect();
     serious.sort_by_key(|i| (i.kind, i.exit_only));

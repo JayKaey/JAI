@@ -1,4 +1,4 @@
-//! The Guardian: Jarvis watches over the machine on his own, like in the films. Every 10 s he
+//! The Guardian: JAI watches over the machine on his own, like in the films. Every 10 s he
 //! checks the latest telemetry (no extra sampling) for
 //!
 //! * the GPU above 83 °C or its VRAM above 95 % (Sir's 8 GB RTX 3060 Ti),
@@ -41,7 +41,7 @@ pub enum Kind {
 }
 
 impl Kind {
-    /// How long the condition must hold before Jarvis speaks up.
+    /// How long the condition must hold before JAI speaks up.
     fn sustain(&self) -> Duration {
         match self {
             Self::GpuHot => Duration::from_secs(10),
@@ -131,7 +131,7 @@ impl Guardian {
     }
 }
 
-/// Processes Jarvis never offers to terminate.
+/// Processes JAI never offers to terminate.
 fn untouchable(name: &str) -> bool {
     let n = name.to_lowercase();
     matches!(
@@ -204,7 +204,7 @@ pub fn compose(a: &Anomaly, culprit: Option<&str>, t: &SystemTelemetry) -> (Stri
     }
 }
 
-/// VRAM is full because Jarvis' own language model fills it (the engine loads as much of the
+/// VRAM is full because JAI's own language model fills it (the engine loads as much of the
 /// model as fits): without the model the card would be far from full, so it is no anomaly.
 pub fn vram_is_ours(t: &SystemTelemetry, llm_vram_mb: Option<u64>) -> bool {
     let (Some(g), Some(llm)) = (t.gpu.as_ref(), llm_vram_mb) else { return false };
@@ -314,7 +314,7 @@ mod tests {
 
     #[test]
     fn jarvis_own_model_filling_vram_is_no_anomaly() {
-        // 7.9 of 8 GB used, 5.6 GB of it Jarvis' model: the rest is a third of the card.
+        // 7.9 of 8 GB used, 5.6 GB of it JAI's model: the rest is a third of the card.
         assert!(vram_is_ours(&hot_vram(), Some(5600)));
         // A game holding 6.5 GB next to a small model is worth an alert.
         assert!(!vram_is_ours(&hot_vram(), Some(1400)));

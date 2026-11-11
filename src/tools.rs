@@ -10,7 +10,7 @@ use crate::memory::{DeleteOutcome, MemoryManager};
 use crate::modality::{ModalityStore, VoiceResponseMode};
 use crate::protocols::{Protocol, ProtocolStore};
 use crate::reminders::ReminderStore;
-use crate::skills::{JarvisSkill, SkillManager, SkillParameter};
+use crate::skills::{JaiSkill, SkillManager, SkillParameter};
 use crate::telemetry::SystemMonitor;
 use crate::widgets::WidgetEngine;
 use crate::winctl::{self, WindowAction, WindowTarget};
@@ -44,7 +44,7 @@ pub const JARVIS_CAPABILITY_MANIFEST: &[CapabilityCategory] = &[
     CapabilityCategory { name: "Calendar, school and study", summary: "Apple/iCloud CalDAV and local calendar reads, creation, edits, conflicts and offline synchronization; WebUntis classes and cancellations; itslearning tasks and materials; deadline syncing, watchers, briefings and oral exam practice. Remote integrations require configured credentials.", tools: &["get_calendar_schedule", "create_calendar_event", "modify_or_delete_calendar_event", "check_school_schedule", "check_course_updates", "sync_study_materials_and_deadlines", "manage_schedule_watcher", "configure_productivity_service", "run_executive_briefing", "start_oral_exam_session", "answer_oral_exam", "set_smart_morning_alarm"] },
     CapabilityCategory { name: "Workout coach", summary: "Detect calendar workout entries such as Arme, record sets/reps/weights, estimate one-repetition personal records, display strength progression and share persistent rest timers between desktop and phone.", tools: &["manage_workout"] },
     CapabilityCategory { name: "Worldwide phone and remote PC", summary: "Token-protected mobile satellite with local and public HTTPS pairing URLs and QR codes; live CPU/GPU/process telemetry; remote locking, sleep, protocol execution and configured Wake-on-LAN. Internet access requires an active tunnel; waking a sleeping host requires another reachable device or relay.", tools: &["get_remote_pc_status", "control_remote_pc", "manage_remote_node", "manage_location_settings", "beam_to_device", "scan_with_phone", "teleport_content"] },
-    CapabilityCategory { name: "Communication and contacts", summary: "Configured email and WhatsApp inboxes, summaries, search, contacts, explicit messages/replies, unified inbox and auto-responder controls; Jarvis's own Discord account (Sir's DMs are orders, friends get answers, he joins voice calls as himself, posts, reads and summarises); Away Mode (answering machine, alerts to Sir's phone, welcome-back digest).", tools: &["check_unread_emails", "summarize_email", "search_emails", "send_whatsapp_message", "check_whatsapp_messages", "reply_to_last_whatsapp", "manage_contacts", "check_all_communications", "set_auto_responder", "discord_bot", "away_mode"] },
+    CapabilityCategory { name: "Communication and contacts", summary: "Configured email and WhatsApp inboxes, summaries, search, contacts, explicit messages/replies, unified inbox and auto-responder controls; JAI's own Discord account (Sir's DMs are orders, friends get answers, he joins voice calls as himself, posts, reads and summarises); Away Mode (answering machine, alerts to Sir's phone, welcome-back digest).", tools: &["check_unread_emails", "summarize_email", "search_emails", "send_whatsapp_message", "check_whatsapp_messages", "reply_to_last_whatsapp", "manage_contacts", "check_all_communications", "set_auto_responder", "discord_bot", "away_mode"] },
     CapabilityCategory { name: "Stark protocols, macros and reminders", summary: "Create and run saved app/music/window protocols, capture workspaces, teach multi-step voice macros, set reminders and timers, select spoken/text response modes, control the assistant lifecycle, take back the last change of his own ('Undo that'), tell what he just did and what is new in this build.", tools: &["manage_stark_protocol", "manage_voice_macro", "reminders", "set_response_modality", "control_jarvis_lifecycle", "shutdown_jarvis", "undo_last_action", "recent_actions", "whats_new", "whats_open", "timer_left"] },
     CapabilityCategory { name: "Memory and learned skills", summary: "Store and recall facts, search conversation history, manage persistent skills and execute installed skill tools.", tools: &["remember_fact", "recall_memories", "delete_memory", "search_conversation", "create_skill", "execute_skill", "create_persistent_skill", "run_custom_skill", "list_skills", "delete_skill"] },
     CapabilityCategory { name: "Files, code and automation", summary: "Locate/read/write/edit files, undo edits, search source contents, run commands, generate projects, inspect source, apply self-improvements and perform reversible folder cleanup.", tools: &["find_files", "read_text_file", "create_or_overwrite_file", "edit_file_surgical", "undo_last_file_edit", "search_inside_files", "run_shell_command", "spawn_coding_project", "patch_own_source", "smart_folder_cleanup", "undo_last_cleanup", "run_sandbox_calculation_or_script", "diagnose_minecraft_or_server"] },
@@ -56,7 +56,7 @@ pub const JARVIS_CAPABILITY_MANIFEST: &[CapabilityCategory] = &[
 fn capability_tool_definition() -> Value {
     json!({"type":"function","function":{
         "name":"list_jarvis_features",
-        "description":"Report actual Jarvis capabilities, registered tools, saved protocols, voice macros and installed skills. Use this for 'What can you do?', feature lists and capability questions such as 'Can you play a specific playlist?' without executing those actions.",
+        "description":"Report actual JAI capabilities, registered tools, saved protocols, voice macros and installed skills. Use this for 'What can you do?', feature lists and capability questions such as 'Can you play a specific playlist?' without executing those actions.",
         "parameters":{"type":"object","properties":{"topic":{"type":"string","description":"Optional capability topic, for example music, calendar, phone or workout"}},"required":[]}
     }})
 }
@@ -72,7 +72,7 @@ pub struct ToolOutcome {
     pub memories_changed: bool,
     #[serde(skip)]
     pub skills_changed: bool,
-    /// Sir told Jarvis to quit; the app exits once the reply has been spoken.
+    /// Sir told JAI to quit; the app exits once the reply has been spoken.
     #[serde(skip)]
     pub shutdown_requested: bool,
     /// The voice response mode changed (the rest of the turn follows the new one).
@@ -88,17 +88,17 @@ pub struct ToolContext {
     pub memory: MemoryManager,
     pub skills: SkillManager,
     pub monitor: SystemMonitor,
-    /// Jarvis' own voice loudness (0-200 %), separate from the system volume.
+    /// JAI's own voice loudness (0-200 %), separate from the system volume.
     pub voice_volume: Arc<AtomicU8>,
     /// Live settings; `configure_interface` restyles the HUD through them.
     pub config: ConfigStore,
-    /// When Jarvis answers out loud.
+    /// When JAI answers out loud.
     pub modality: ModalityStore,
     /// Dynamic widgets and extra native windows.
     pub widgets: WidgetEngine,
     pub reminders: ReminderStore,
     pub protocols: ProtocolStore,
-    /// Jarvis' speaking rate (f32 bits, 0.5-2.0), applied live by the TTS.
+    /// JAI's speaking rate (f32 bits, 0.5-2.0), applied live by the TTS.
     pub voice_speed: Arc<AtomicU32>,
     /// What "it", "that", "full screen" and "close it" refer to.
     pub focus: FocusTracker,
@@ -216,7 +216,7 @@ fn canonical_tool_name(name: &str, known: &[String]) -> Option<String> {
         .map(|(k, _)| k.clone())
 }
 
-/// Tools whose execution takes long enough that Jarvis should acknowledge first.
+/// Tools whose execution takes long enough that JAI should acknowledge first.
 pub fn is_slow(tool: &str) -> bool {
     matches!(
         tool,
@@ -227,7 +227,7 @@ pub fn is_slow(tool: &str) -> bool {
         || crate::stark::is_slow(tool)
 }
 
-/// This run is a silent scripted session (`--silent`): tools act inside Jarvis only.
+/// This run is a silent scripted session (`--silent`): tools act inside JAI only.
 static SILENT_SESSION: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 pub fn set_silent_session(on: bool) {
@@ -239,7 +239,7 @@ pub fn silent_session() -> bool {
 }
 
 /// What a silent scripted session may really carry out: everything that only reads, and what
-/// stays inside Jarvis (his HUD, his windows and widgets, his board, his own voice and modes).
+/// stays inside JAI (his HUD, his windows and widgets, his board, his own voice and modes).
 /// The volume is his too there: the mixer works on a copy of the real one (`audio_mixer`'s
 /// bench). Anything that reaches the PC around him (an application, the music, a window of
 /// Sir's, the keyboard, a message, a file, the power) is noted and left undone. (A script once
@@ -257,7 +257,7 @@ pub fn stays_inside(name: &str, args: &Value) -> bool {
         // which a silent session stops in their turn).
         "arrange_jarvis_window" => true,
         // The volume (on the copy) and his own voice, never the media keys.
-        "media_and_volume_control" => matches!(action, "set_volume" | "volume" | "volume_up" | "volume_down" | "mute" | "unmute" | "get_volume") || action.starts_with("jarvis_") || action.contains("jarvis"),
+        "media_and_volume_control" => matches!(action, "set_volume" | "volume" | "volume_up" | "volume_down" | "mute" | "unmute" | "get_volume") || action.starts_with("jarvis_") || action.contains("jai"),
         // His own guide (the phone link itself would restart the tunnel).
         "show_mobile_satellite_instructions" => args["topic"] == "permanent_address",
         // "Get rid of it" says so when there is nothing of his; it never reaches a program.
@@ -274,8 +274,8 @@ pub fn stays_inside(name: &str, args: &Value) -> bool {
 }
 
 /// What the model is told when it reached for an action on a plain question.
-/// What a silent scripted session says of a call it leaves undone (outside Jarvis).
-pub const NOT_CARRIED_OUT: &str = "Noted, not carried out: this is a silent scripted session, which acts inside Jarvis only.";
+/// What a silent scripted session says of a call it leaves undone (outside JAI).
+pub const NOT_CARRIED_OUT: &str = "Noted, not carried out: this is a silent scripted session, which acts inside JAI only.";
 
 pub const ONLY_ASKED: &str = "Nothing was done: Sir asked a question and gave no order. Answer the question itself in one or two sentences, and if doing it would help him, end with \"Shall I?\".";
 
@@ -322,15 +322,15 @@ fn spoken_span(ms: i64) -> String {
     }
 }
 
-/// "Close Jarvis" / "close yourself" means quitting this app, not killing a process.
+/// "Close JAI" / "close yourself" means quitting this app, not killing a process.
 pub(crate) fn names_jarvis(app: &str) -> bool {
     let n: String = app.to_lowercase().chars().filter(|c| c.is_alphanumeric() || *c == ' ').collect();
     let n = n.trim();
     let n = n.strip_prefix("the ").unwrap_or(n);
     matches!(
         n,
-        "jarvis" | "jarvisexe" | "jarvis app" | "yourself" | "you" | "your app" | "your application" | "your program"
-            | "your process" | "your window" | "assistant" | "jarvis assistant" | "dich" | "dich selbst" | "urself" | "ur self"
+        "jai" | "jay" | "jarvis" | "jarvisexe" | "jai app" | "yourself" | "you" | "your app" | "your application" | "your program"
+            | "your process" | "your window" | "assistant" | "jai assistant" | "dich" | "dich selbst" | "urself" | "ur self"
             | "your self" | "yourselfe" | "yo self" | "self"
     )
 }
@@ -469,7 +469,7 @@ impl ToolContext {
             for item in self.stark.macros.list() {
                 output.push_str(&format!("Voice macro '{}': triggers [{}]; steps: {}.\n", item.name, item.trigger_phrases.join(", "), item.steps.join(" → ")));
             }
-            output.push_str("Welcome protocol triggers: wake up daddy's home; daddy's home; jarvis wake up; i'm home jarvis; i am back.\n");
+            output.push_str("Welcome protocol triggers: wake up daddy's home; daddy's home; jai wake up; i'm home jai; i am back.\n");
         }
         if !topic.is_empty() && shown.is_empty() {
             output.push_str("No registered capability matched that topic. Ask for all features to see the complete registry.\n");
@@ -545,9 +545,9 @@ impl ToolContext {
             }
             None => (name, args),
         };
-        // A silent scripted session acts inside Jarvis only.
+        // A silent scripted session acts inside JAI only.
         if silent_session() && !stays_inside(name, &args) {
-            info!("[TOOL] {name} {args} (noted, not carried out: a silent session leaves the PC around Jarvis alone)");
+            info!("[TOOL] {name} {args} (noted, not carried out: a silent session leaves the PC around JAI alone)");
             return ToolOutcome {
                 tool: name.to_string(),
                 args,
@@ -722,7 +722,7 @@ impl ToolContext {
             "close_application" => match str_arg(&args, &["app_name", "name", "app", "application"]) {
                 Some(app) if names_jarvis(app) => {
                     shutdown_requested = true;
-                    Ok("That is J.A.R.V.I.S. himself: he shuts down as soon as this reply has been spoken.".into())
+                    Ok("That is J.A.I. himself: he shuts down as soon as this reply has been spoken.".into())
                 }
                 // "Get rid of it" with nothing of his up: no program pays for that.
                 Some(app) if focus::is_pronoun(app) && bool_arg(&args, "own_only") == Some(true) => Err("There is nothing of mine up to take away.".into()),
@@ -741,19 +741,19 @@ impl ToolContext {
             },
             "shutdown_jarvis" => {
                 shutdown_requested = true;
-                Ok("J.A.R.V.I.S. shuts down as soon as this reply has been spoken.".into())
+                Ok("J.A.I. shuts down as soon as this reply has been spoken.".into())
             }
             "control_jarvis_lifecycle" => {
                 let action = str_arg(&args, &["action", "command"]).unwrap_or("").to_lowercase().replace([' ', '-'], "_");
                 match action.as_str() {
                     "shutdown_jarvis" | "shutdown" | "shut_down" | "quit" | "exit" | "close" | "power_off" => {
                         shutdown_requested = true;
-                        Ok("J.A.R.V.I.S. shuts down as soon as this reply has been spoken.".into())
+                        Ok("J.A.I. shuts down as soon as this reply has been spoken.".into())
                     }
                     "restart_jarvis" | "restart" | "reboot" | "reload" => {
                         lifecycle::request_restart(Restart::Same);
                         shutdown_requested = true;
-                        Ok("J.A.R.V.I.S. restarts as soon as this reply has been spoken.".into())
+                        Ok("J.A.I. restarts as soon as this reply has been spoken.".into())
                     }
                     "mute_tts" | "mute" | "mute_voice" => {
                         self.modality.set_voice_muted(true);
@@ -770,7 +770,7 @@ impl ToolContext {
                         // "Go to sleep": the GPU goes back to Sir at once.
                         crate::vram_guard::flush_with_reason("sleep mode");
                         state_changed = true;
-                        Ok("Sleep mode: J.A.R.V.I.S. ignores everything except \"wake up\".".into())
+                        Ok("Sleep mode: J.A.I. ignores everything except \"wake up\".".into())
                     }
                     "wake_up" | "wake" | "awake" => {
                         lifecycle::set_sleeping(false);
@@ -822,14 +822,14 @@ impl ToolContext {
                         gui::sync_windows();
                     })
                 } else {
-                    Err("Jarvis is running without a display (headless), so he cannot open windows.".into())
+                    Err("JAI is running without a display (headless), so he cannot open windows.".into())
                 }
             }
             "update_native_window" => {
-                // "That window", "it": the Jarvis window the conversation is about, else the newest.
+                // "That window", "it": the JAI window the conversation is about, else the newest.
                 let raw = str_arg(&args, &["id", "window_id"]).unwrap_or("last").to_string();
                 let pronoun = raw == "focus" || focus::is_pronoun(&raw);
-                // "Make it bigger" right after moving Discord: Discord, not one of Jarvis' windows.
+                // "Make it bigger" right after moving Discord: Discord, not one of JAI's windows.
                 let size = str_arg(&args, &["size"]).map(str::to_lowercase);
                 if let (true, Some(size), None, Some(_)) = (pronoun, size.as_deref(), self.focus.jarvis_window_is_latest(), self.focus.focused_app()) {
                     let action = if size.contains("small") || size.contains("klein") || size == "half" { WindowAction::Smaller } else { WindowAction::Bigger };
@@ -854,7 +854,7 @@ impl ToolContext {
             "close_native_window" => {
                 let id = str_arg(&args, &["id", "window_id", "title"]).unwrap_or("last");
                 let fallback = bool_arg(&args, "fallback_to_active_window").unwrap_or(false);
-                // "Close that window" right after "open Discord" means Discord's window; Jarvis'
+                // "Close that window" right after "open Discord" means Discord's window; JAI's
                 // own window only when it was the latest thing in focus.
                 if fallback && id == "last" && self.focus.jarvis_window_is_latest().is_none() && self.focus.focused_app().is_some() {
                     self.close_focused(true).await
@@ -865,7 +865,7 @@ impl ToolContext {
                             gui::refresh();
                             Ok(out)
                         }
-                        // No Jarvis window open: the window Sir is working in (never the HUD).
+                        // No JAI window open: the window Sir is working in (never the HUD).
                         Err(_) if fallback => self.close_focused(true).await,
                         Err(e) => Err(e),
                     }
@@ -893,9 +893,9 @@ impl ToolContext {
                         self.config.update(|c| c.wake_word_required = required);
                         state_changed = true;
                         Ok(if required {
-                            "Listening mode: WAKE-WORD. Jarvis only answers when Sir says \"Jarvis\" (anywhere in the sentence).".to_string()
+                            "Listening mode: WAKE-WORD. JAI only answers when Sir says \"JAI\" (anywhere in the sentence).".to_string()
                         } else {
-                            "Listening mode: HANDS-FREE. Jarvis answers relevant speech without the wake word; background talk, humming and fragments are ignored.".to_string()
+                            "Listening mode: HANDS-FREE. JAI answers relevant speech without the wake word; background talk, humming and fragments are ignored.".to_string()
                         })
                     }
                     None => Err("set_listening_mode needs mode: hands_free or wake_word.".into()),
@@ -906,10 +906,10 @@ impl ToolContext {
                     let named = str_arg(&args, &["target_window", "target", "app_name"]);
                     let unnamed = named.is_none_or(focus::is_pronoun);
                     if named.is_some_and(names_jarvis) {
-                        // "Maximize Jarvis", "fullscreen yourself": only when Sir says so.
+                        // "Maximize JAI", "fullscreen yourself": only when Sir says so.
                         self.hud_window(action)
                     } else if action == WindowAction::ExitFullscreen && unnamed && self.config.read(|c| c.interface.fullscreen) {
-                        // Jarvis is the one in full screen.
+                        // JAI is the one in full screen.
                         self.hud_window(action)
                     } else {
                         self.window_action(action, named).await
@@ -1088,7 +1088,7 @@ impl ToolContext {
         }
         // The Earth, the radar, the disk map: "close it" / "close up" means that panel now.
         if name == "open_jarvis_view" {
-            let view = str_arg(args, &["view", "window_kind", "name", "target"]).and_then(crate::jarvis_views::JarvisSubWindow::parse);
+            let view = str_arg(args, &["view", "window_kind", "name", "target"]).and_then(crate::jarvis_views::JaiSubWindow::parse);
             if let Some(id) = view.map(|v| v.id()).filter(|id| crate::jarvis_views::is_panel(id)) {
                 self.focus.note_own_thing(OwnThing::Panel(id.to_string()));
             }
@@ -1335,8 +1335,8 @@ impl ToolContext {
         Ok(done.summary)
     }
 
-    /// A window action on the HUD itself: only when Sir named Jarvis ("maximize Jarvis",
-    /// "fullscreen yourself"), or to leave a full screen Jarvis himself is in.
+    /// A window action on the HUD itself: only when Sir named JAI ("maximize JAI",
+    /// "fullscreen yourself"), or to leave a full screen JAI himself is in.
     fn hud_window(&self, action: WindowAction) -> Result<String, String> {
         let args = match action {
             WindowAction::Fullscreen => json!({ "fullscreen": true }),
@@ -1358,7 +1358,7 @@ impl ToolContext {
 
     /// A window action on an app. A name Sir said wins; otherwise the conversation focus decides:
     /// the app it is about, then the window Sir was working in before this request, then the one
-    /// he is in now. Never Jarvis himself.
+    /// he is in now. Never JAI himself.
     async fn window_action(&self, action: WindowAction, named: Option<&str>) -> Result<String, String> {
         if action.is_global() {
             return winctl::manage(action, WindowTarget::Active).await;
@@ -1456,18 +1456,18 @@ impl ToolContext {
         Ok(outcome.summary)
     }
 
-    /// `customize_hud_and_windows`: the main HUD (`target` hud) or Jarvis' extra windows (an id,
+    /// `customize_hud_and_windows`: the main HUD (`target` hud) or JAI's extra windows (an id,
     /// a title, "last" or "all").
     fn customize(&self, args: &Value) -> Result<String, String> {
         let mut target = str_arg(args, &["target", "window", "window_id", "id"]).unwrap_or("hud").to_string();
-        // "That window": the Jarvis window the conversation was last about.
+        // "That window": the JAI window the conversation was last about.
         if matches!(target.as_str(), "focus" | "that" | "it") {
             target = self.focus.snapshot().last_active_jarvis_window_id.unwrap_or_else(|| "last".into());
         }
         let target = target.as_str();
         let hud = matches!(
             target.to_lowercase().as_str(),
-            "hud" | "main" | "main hud" | "jarvis" | "yourself" | "interface" | "main window" | "the hud" | "gui"
+            "hud" | "main" | "main hud" | "jai" | "yourself" | "interface" | "main window" | "the hud" | "gui"
         );
         if !hud {
             return self.widgets.style_window(target, args).inspect(|_| gui::sync_windows());
@@ -1478,7 +1478,7 @@ impl ToolContext {
     }
 
     /// "Move Discord to monitor 2", "put the PC stats window on my left screen", "move yourself
-    /// to the next monitor": Jarvis' own windows by id / title / live view, the HUD itself, or any
+    /// to the next monitor": JAI's own windows by id / title / live view, the HUD itself, or any
     /// application (named, or the one the conversation is about).
     async fn move_to_monitor(&self, args: &Value) -> Result<String, String> {
         let name = str_arg(args, &["app_or_window_name", "app_name", "window", "target_window", "name", "window_id"]).unwrap_or("it");
@@ -1486,14 +1486,14 @@ impl ToolContext {
         if names_jarvis(name) || matches!(name.to_lowercase().as_str(), "hud" | "the hud" | "your hud" | "your window" | "your interface") {
             return self.move_hud(&monitor).await;
         }
-        // One of Jarvis' windows: named ("the drive space window", "pc_stats"), or "it" right
+        // One of JAI's windows: named ("the drive space window", "pc_stats"), or "it" right
         // after it was opened.
         let jarvis_window = if focus::is_pronoun(name) {
             self.focus.jarvis_window_is_latest().and_then(|id| self.widgets.find_window_named(&id))
         } else {
             self.widgets.find_window_named(name).filter(|w| {
                 let n = name.to_lowercase();
-                // "Discord" is never a Jarvis window, even one titled after it by accident.
+                // "Discord" is never a JAI window, even one titled after it by accident.
                 n.contains("window") || n.contains("fenster") || w.id == n.replace(' ', "_") || widgets::BlockKind::live_from_name(n.trim_end_matches(" window")).is_some()
             })
         };
@@ -1671,7 +1671,7 @@ impl ToolContext {
                     self.protocols.list().iter().map(|p| p.name.as_str()).collect::<Vec<_>>().join(", ")
                 )),
                 Some(p) => {
-                    // Steps on different things (each app, the music, Jarvis' own windows)
+                    // Steps on different things (each app, the music, JAI's own windows)
                     // run side by side; steps on the same thing keep their order.
                     let stages = protocols::plan(&p.steps);
                     let abreast = stages.iter().map(Vec::len).max().unwrap_or(1);
@@ -1775,7 +1775,7 @@ impl ToolContext {
                 .clamp(0.6, 1.8);
                 self.voice_speed.store(next.to_bits(), Ordering::Relaxed);
                 self.config.update(|c| c.kokoro_speed = (next * 100.0).round() / 100.0);
-                Ok(format!("Jarvis now speaks at {:.0}% speed.", next * 100.0))
+                Ok(format!("JAI now speaks at {:.0}% speed.", next * 100.0))
             }
             "jarvis_louder" | "jarvis_quieter" | "set_jarvis_volume" | "voice_louder" | "voice_quieter" => {
                 let current = self.voice_volume.load(Ordering::Relaxed);
@@ -1785,7 +1785,7 @@ impl ToolContext {
                     _ => current.saturating_sub(20).max(10),
                 };
                 self.voice_volume.store(next, Ordering::Relaxed);
-                Ok(format!("Jarvis voice loudness set to {next}%."))
+                Ok(format!("JAI voice loudness set to {next}%."))
             }
             // A volume for one app, or a level with a sign ("-50" is a step down, never the
             // level 0): the mixer's, which knows both.
@@ -1822,7 +1822,7 @@ impl ToolContext {
                 .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
                 .unwrap_or_default()
         };
-        let skill = JarvisSkill {
+        let skill = JaiSkill {
             name: name.to_string(),
             title: str_arg(args, &["title"]).unwrap_or("").to_string(),
             description: str_arg(args, &["description"]).unwrap_or("Custom skill").to_string(),
@@ -1864,7 +1864,7 @@ impl ToolContext {
             .unwrap_or_default();
         let saved = self
             .skills
-            .save(&JarvisSkill {
+            .save(&JaiSkill {
                 name: name.to_string(),
                 title: str_arg(args, &["title"]).unwrap_or("").to_string(),
                 description: str_arg(args, &["description"]).unwrap_or("Custom skill").to_string(),
@@ -1917,7 +1917,7 @@ fn pc_tool_definitions() -> Vec<Value> {
         sites::tool_definition(),
         json!({"type": "function", "function": {
             "name": "media_and_volume_control",
-            "description": "System volume (exact %), mute, media playback keys, or Jarvis' own voice loudness.",
+            "description": "System volume (exact %), mute, media playback keys, or JAI's own voice loudness.",
             "parameters": {"type": "object", "properties": {
                 "action": {"type": "string", "enum": ["set_volume", "volume_up", "volume_down", "mute", "unmute", "get_volume", "play_pause", "next_track", "prev_track", "stop", "jarvis_louder", "jarvis_quieter", "set_jarvis_volume", "jarvis_faster", "jarvis_slower", "set_jarvis_speed"]},
                 "level": {"type": "integer", "description": "0-100 for set_volume, 0-200 for set_jarvis_volume, 60-180 (percent) for set_jarvis_speed, step size for volume_up/down"}
@@ -1987,7 +1987,7 @@ fn pc_tool_definitions() -> Vec<Value> {
         }}),
         json!({"type": "function", "function": {
             "name": "set_listening_mode",
-            "description": "How YOU listen: hands_free (answer relevant speech without the wake word; \"switch to hands-free mode\", \"Freisprechmodus aktivieren\") or wake_word (only when Sir says Jarvis; \"only listen when I say Jarvis\").",
+            "description": "How YOU listen: hands_free (answer relevant speech without the wake word; \"switch to hands-free mode\", \"Freisprechmodus aktivieren\") or wake_word (only when Sir says JAI; \"only listen when I say JAI\").",
             "parameters": {"type": "object", "properties": {
                 "mode": {"type": "string", "enum": ["hands_free", "wake_word"]}
             }, "required": ["mode"]}
@@ -2012,7 +2012,7 @@ fn pc_tool_definitions() -> Vec<Value> {
         modality::tool_definition(),
         json!({"type": "function", "function": {
             "name": "control_jarvis_lifecycle",
-            "description": "Control YOURSELF (the J.A.R.V.I.S. app, never the computer): shutdown_jarvis when Sir says shut down, quit, exit, close yourself, go away or similar; restart_jarvis; mute_tts / unmute_tts (your voice); sleep_mode (ignore everything until 'wake up'); wake_up.",
+            "description": "Control YOURSELF (the J.A.I. app, never the computer): shutdown_jarvis when Sir says shut down, quit, exit, close yourself, go away or similar; restart_jarvis; mute_tts / unmute_tts (your voice); sleep_mode (ignore everything until 'wake up'); wake_up.",
             "parameters": {"type": "object", "properties": {
                 "action": {"type": "string", "enum": ["shutdown_jarvis", "restart_jarvis", "mute_tts", "unmute_tts", "sleep_mode", "wake_up"]}
             }, "required": ["action"]}
@@ -2041,7 +2041,7 @@ fn assistant_tool_definitions() -> Vec<Value> {
 mod tests {
     use super::*;
 
-    /// A silent scripted session (`--silent`) carries out what stays inside Jarvis and what
+    /// A silent scripted session (`--silent`) carries out what stays inside JAI and what
     /// only reads; everything that would reach the PC around him is noted and left undone.
     #[test]
     fn a_silent_session_acts_inside_jarvis_only() {
@@ -2147,7 +2147,7 @@ mod tests {
 
     #[test]
     fn closing_jarvis_means_quitting() {
-        for name in ["Jarvis", "J.A.R.V.I.S.", "JARVIS.exe", "yourself", "your app", "dich"] {
+        for name in ["JAI", "J.A.I.", "JARVIS.exe", "yourself", "your app", "dich"] {
             assert!(names_jarvis(name), "{name}");
         }
         for name in ["spotify", "discord", "jarvis-notes", "your browser"] {
@@ -2169,8 +2169,8 @@ mod tests {
         for filler in ["up", "off", "Off.", "for me now"] {
             assert_eq!(call(filler), own, "{filler}");
         }
-        // Programs, pronouns and Jarvis himself stay as they were asked for.
-        for app in ["Spotify", "notepad++", "it", "that", "yourself", "you", "Jarvis"] {
+        // Programs, pronouns and JAI himself stay as they were asked for.
+        for app in ["Spotify", "notepad++", "it", "that", "yourself", "you", "JAI"] {
             assert_eq!(call(app), None, "{app}");
         }
         assert_eq!(own_close("open_application", &json!({"app_name": "up"})), None);

@@ -990,7 +990,7 @@ pub fn check_windows(size: Vec2, count: usize, pass: usize, menus: bool) -> Vec<
     let rects = |open: usize, closed: &[usize]| -> Vec<(String, Rect)> {
         (0..open).filter(|n| !closed.contains(n)).filter_map(|n| crate::hud_dock::block_rect(&window_id(n)).map(|r| (format!("block {}", n + 1), r))).collect()
     };
-    // The blocks arrive one after the other, as Jarvis opens them.
+    // The blocks arrive one after the other, as JAI opens them.
     let mut frame = Frame::default();
     for n in 1..=count {
         open = n;
@@ -1278,7 +1278,7 @@ pub fn check_orb_glide(screen: Rect, pass: usize) -> Vec<String> {
     findings
 }
 
-/// The radial voice ticks of the 2D orb move with Jarvis' own voice only: Sir's microphone
+/// The radial voice ticks of the 2D orb move with JAI's own voice only: Sir's microphone
 /// level never reaches the emblem. `voice_of(state, jarvis_level, mic_level)` is the HUD's own
 /// mapping (`gui::emblem_voice_of`).
 pub fn check_voice_ticks(voice_of: &dyn Fn(&str, f32, f32) -> f32) -> Vec<String> {
@@ -1286,12 +1286,12 @@ pub fn check_voice_ticks(voice_of: &dyn Fn(&str, f32, f32) -> f32) -> Vec<String
     for (state, jarvis, mic) in [("listening", 0.0f32, 0.95f32), ("idle", 0.0, 0.85), ("thinking", 0.0, 1.0), ("speaking", 0.0, 0.9)] {
         let voice = voice_of(state, jarvis, mic);
         if emblem::tach_ticks(voice) != emblem::tach_ticks(0.0) {
-            findings.push(format!("the voice ticks move while Jarvis is silent ({state}, microphone at {mic}): voice {voice}"));
+            findings.push(format!("the voice ticks move while JAI is silent ({state}, microphone at {mic}): voice {voice}"));
         }
     }
     let speaking = voice_of("speaking", 0.6, 0.0);
     if emblem::tach_ticks(speaking) == emblem::tach_ticks(0.0) {
-        findings.push("the voice ticks stay at rest while Jarvis speaks".to_string());
+        findings.push("the voice ticks stay at rest while JAI speaks".to_string());
     }
     findings
 }
@@ -1362,9 +1362,9 @@ mod tests {
         let found = off_theme(&frame, "Crimson Overdrive", &red);
         assert_eq!(found.len(), 2, "{found:?}");
         assert!(found[0].contains("#2B7A9E") && found[1].contains("#3DF59B"), "{found:?}");
-        // The matrix has eleven themes.
+        // The matrix has twelve themes.
         let list = themes();
-        assert_eq!(list.len(), 11, "{list:?}");
+        assert_eq!(list.len(), 12, "{list:?}");
         assert!(list.iter().any(|(name, _)| name == theme_engine::DEFAULT_PRESET));
         let found = jumps(&[0.0, 0.1, 0.9, 1.0], 0.5);
         assert!(found.len() == 1 && found[0].0 == 2 && (found[0].1 - 0.8).abs() < 1e-5, "{found:?}");

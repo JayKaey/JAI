@@ -19,6 +19,75 @@ pub fn raise_thread_priority(audio: bool) {
     }
 }
 
+/// While it lives the whole process runs above normal priority. whisper.cpp starts its own
+/// worker threads at normal priority whatever the thread that called it has, so with a compile
+/// or a game on every core a half-second decode took one to three seconds (jarvis.log,
+/// 2026-11-09, rustc at 99 %). Above normal, all of them are served first for the half second
+/// a decode lasts. A process started below normal on purpose (a test run beside Sir's game)
+/// stays where it was put.
+pub struct Urgent(Option<u32>);
+
+/// The process's priority class (0 where there is none to read).
+pub fn priority_class() -> u32 {
+    #[cfg(windows)]
+    {
+        use windows::Win32::System::Threading::{GetCurrentProcess, GetPriorityClass};
+        // SAFETY: reads this process's own priority class.
+        unsafe { GetPriorityClass(GetCurrentProcess()) }
+    }
+    #[cfg(not(windows))]
+    {
+        0
+    }
+}
+
+pub fn urgent() -> Urgent {
+    #[cfg(windows)]
+    {
+        use windows::Win32::System::Threading::{GetCurrentProcess, SetPriorityClass, ABOVE_NORMAL_PRIORITY_CLASS, NORMAL_PRIORITY_CLASS};
+        let was = priority_class();
+        // SAFETY: sets this process's own priority class.
+        if was == NORMAL_PRIORITY_CLASS.0 && unsafe { SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS) }.is_ok() {
+            return Urgent(Some(was));
+        }
+    }
+    Urgent(None)
+}
+
+impl Drop for Urgent {
+    fn drop(&mut self) {
+        #[cfg(windows)]
+        if let Some(was) = self.0 {
+            use windows::Win32::System::Threading::{GetCurrentProcess, SetPriorityClass, PROCESS_CREATION_FLAGS};
+            // SAFETY: puts this process's own priority class back.
+            let _ = unsafe { SetPriorityClass(GetCurrentProcess(), PROCESS_CREATION_FLAGS(was)) };
+        }
+    }
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+    use windows::Win32::System::Threading::{ABOVE_NORMAL_PRIORITY_CLASS, NORMAL_PRIORITY_CLASS};
+
+    /// A decode runs above normal and leaves the process as it found it; a run started below
+    /// normal (beside Sir's game) is never raised.
+    #[test]
+    fn a_decode_is_urgent_only_for_as_long_as_it_lasts() {
+        let before = priority_class();
+        {
+            let _urgent = urgent();
+            let during = priority_class();
+            if before == NORMAL_PRIORITY_CLASS.0 {
+                assert_eq!(during, ABOVE_NORMAL_PRIORITY_CLASS.0);
+            } else {
+                assert_eq!(during, before, "a lowered process stays lowered");
+            }
+        }
+        assert_eq!(priority_class(), before);
+    }
+}
+
 /// Background scans (application index) must never compete with audio or speech recognition.
 pub fn lower_thread_priority() {
     #[cfg(windows)]
@@ -29,8 +98,8 @@ pub fn lower_thread_priority() {
     }
 }
 
-/// `--console`: the live log in the terminal Jarvis was started from, or else in a new console
-/// window (Jarvis itself never opens one).
+/// `--console`: the live log in the terminal JAI was started from, or else in a new console
+/// window (JAI itself never opens one).
 pub fn open_console() {
     attach_parent_console();
     #[cfg(windows)]
@@ -45,7 +114,7 @@ pub fn open_console() {
     }
 }
 
-/// Jarvis is a windowless (GUI-subsystem) program. Diagnostics (`--selftest`, `--check-models`,
+/// JAI is a windowless (GUI-subsystem) program. Diagnostics (`--selftest`, `--check-models`,
 /// …) started from a terminal print into that terminal instead.
 pub fn attach_parent_console() {
     #[cfg(windows)]
@@ -93,7 +162,7 @@ pub fn alert(text: &str) {
         let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
         // SAFETY: the text buffer outlives the (blocking) call.
         unsafe {
-            MessageBoxW(HWND(0), PCWSTR(wide.as_ptr()), w!("J.A.R.V.I.S."), MB_ICONERROR | MB_OK | MB_SETFOREGROUND);
+            MessageBoxW(HWND(0), PCWSTR(wide.as_ptr()), w!("J.A.I."), MB_ICONERROR | MB_OK | MB_SETFOREGROUND);
         }
     }
 }
@@ -105,7 +174,7 @@ pub struct SingleInstance {
 }
 
 impl SingleInstance {
-    /// None when another Jarvis is already running.
+    /// None when another JAI is already running.
     pub fn acquire() -> Option<Self> {
         #[cfg(windows)]
         {
@@ -146,7 +215,7 @@ impl Drop for SingleInstance {
 }
 
 /// A scripted session (a self-test, a silent conversation) holds this as well. It runs where
-/// Sir cannot see it, so the Jarvis he starts himself asks it to give way (`tray`) rather than
+/// Sir cannot see it, so the JAI he starts himself asks it to give way (`tray`) rather than
 /// asking it for a HUD that is on no screen.
 #[cfg(windows)]
 const TEST_SESSION: windows::core::PCWSTR = windows::core::w!("Local\\JARVIS-V3-test-session");

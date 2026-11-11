@@ -54,7 +54,7 @@ pub fn is_identity_key(key: &str) -> bool {
 
 static IDENTITY_CHANGE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
     regex::Regex::new(
-        r"(?i)^(?:(?:hey\s+)?jarvis[,.!]?\s+)?(?:(?:from\s+now\s+on|ab\s+jetzt|von\s+jetzt\s+an|please|bitte|you\s+can|you\s+may|du\s+kannst)[,]?\s+)*(?:call\s+me|address\s+me\s+as|refer\s+to\s+me\s+as|my\s+name\s+is|my\s+names|my\s+name's|i\s+am\s+called|i'm\s+called|im\s+called|(?:don'?t|do\s+not|stop)\s+call(?:ing)?\s+me|nenn\s+mich|nenne\s+mich|ich\s+heiße|ich\s+heisse|mein\s+name\s+ist|sag\s+\S+\s+zu\s+mir)\b",
+        r"(?i)^(?:(?:hey\s+)?jai[,.!]?\s+)?(?:(?:from\s+now\s+on|ab\s+jetzt|von\s+jetzt\s+an|please|bitte|you\s+can|you\s+may|du\s+kannst)[,]?\s+)*(?:call\s+me|address\s+me\s+as|refer\s+to\s+me\s+as|my\s+name\s+is|my\s+names|my\s+name's|i\s+am\s+called|i'm\s+called|im\s+called|(?:don'?t|do\s+not|stop)\s+call(?:ing)?\s+me|nenn\s+mich|nenne\s+mich|ich\s+heiße|ich\s+heisse|mein\s+name\s+ist|sag\s+\S+\s+zu\s+mir)\b",
     )
     .expect("valid identity regex")
 });
@@ -104,7 +104,7 @@ const STOPWORDS: &[&str] = &[
     "von", "mit", "für", "fuer", "über", "ueber", "remember", "recall", "memory", "memories",
     // Weak verbs/fillers that would otherwise prefix-match unrelated facts ("use" → "user").
     "use", "used", "using", "have", "has", "had", "know", "tell", "like", "call", "called", "get",
-    "got", "can", "could", "would", "should", "please", "jarvis", "sir", "habe", "hab", "hast",
+    "got", "can", "could", "would", "should", "please", "jai", "sir", "habe", "hab", "hast",
     "kennst", "weißt", "weisst", "nutze", "benutze", "heißt", "heisst", "bitte",
 ];
 
@@ -203,7 +203,7 @@ impl MemoryManager {
         );
         let _ = self.remember_fact(
             "language_preference",
-            "Sir speaks German, English or a mix of both; Jarvis always replies in British English.",
+            "Sir speaks German, English or a mix of both; JAI always replies in British English.",
             Some("preference"),
             Some(10),
         );
@@ -535,7 +535,7 @@ fn local_time(ts: &str) -> String {
         .unwrap_or_else(|_| ts.chars().take(16).collect())
 }
 
-/// The `search_conversation` tool: what Sir and Jarvis said, e.g. yesterday or about a topic.
+/// The `search_conversation` tool: what Sir and JAI said, e.g. yesterday or about a topic.
 pub fn conversation_tool(memory: &MemoryManager, args: &Value) -> Result<String, String> {
     let query = crate::tools::str_arg(args, &["query", "topic", "about"]);
     let days = args.get("days_back").and_then(|v| v.as_u64().or_else(|| v.as_str()?.parse().ok())).unwrap_or(7).clamp(1, 365) as u32;
@@ -546,7 +546,7 @@ pub fn conversation_tool(memory: &MemoryManager, args: &Value) -> Result<String,
     Ok(lines
         .into_iter()
         .map(|(ts, role, text)| {
-            let who = if role == "user" { "Sir" } else { "Jarvis" };
+            let who = if role == "user" { "Sir" } else { "JAI" };
             format!("[{ts}] {who}: {}", text.chars().take(240).collect::<String>())
         })
         .collect::<Vec<_>>()
@@ -585,11 +585,11 @@ mod tests {
         (MemoryManager::open(&path).expect("open db"), path)
     }
 
-    /// Repro (jarvis.log, 2026-11-08 23:3x): "Call me Earth." — heard over Jarvis' own voice —
+    /// Repro (jarvis.log, 2026-11-08 23:3x): "Call me Earth." — heard over JAI's own voice —
     /// replaced how Sir is addressed.
     #[test]
     fn a_change_of_his_name_or_title_is_recognised() {
-        for text in ["Call me Earth.", "Jarvis, call me Tony", "From now on, call me Boss", "My name is Tony Stark", "Nenn mich Chef", "Ich heiße Max", "Don't call me Sir", "Please address me as Doctor"] {
+        for text in ["Call me Earth.", "JAI, call me Tony", "From now on, call me Boss", "My name is Tony Stark", "Nenn mich Chef", "Ich heiße Max", "Don't call me Sir", "Please address me as Doctor"] {
             assert!(is_identity_change(text), "{text}");
         }
         for text in ["Remember that I like coffee", "Call my mother", "What's my name?", "I told my friend about the world cup"] {
@@ -653,14 +653,14 @@ mod tests {
         // "sir" appears in several memories → must not mass-delete.
         assert!(matches!(mem.delete("sir").unwrap(), DeleteOutcome::Ambiguous(_)));
 
-        mem.log_turn("user", "Jarvis, what is the boiling point of tungsten?");
+        mem.log_turn("user", "JAI, what is the boiling point of tungsten?");
         mem.log_turn("assistant", "Tungsten boils at about 5,900 degrees Celsius, Sir.");
         mem.log_turn("user", "Open Spotify");
         let hits = mem.search_conversation(Some("tungsten"), 1, 10);
         assert_eq!(hits.len(), 2);
         assert_eq!(hits[0].1, "user");
         assert_eq!(mem.recent_turns(2).last().map(|t| t.2.as_str()), Some("Open Spotify"));
-        assert!(conversation_tool(&mem, &json!({"query": "tungsten"})).unwrap().contains("Jarvis: Tungsten boils"));
+        assert!(conversation_tool(&mem, &json!({"query": "tungsten"})).unwrap().contains("JAI: Tungsten boils"));
         drop(mem);
         let _ = std::fs::remove_file(&path);
     }

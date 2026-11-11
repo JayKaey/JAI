@@ -2,7 +2,7 @@
 //! desktop. Windows uses native Win32; Linux uses Hyprland (`hyprctl`) or X11 (`wmctrl` +
 //! `xdotool`).
 //!
-//! Jarvis' own windows are never a target unless Sir names Jarvis: without a name an action goes
+//! JAI's own windows are never a target unless Sir names JAI: without a name an action goes
 //! to the app the conversation is about or the window Sir was working in (see `focus`).
 
 use crate::apps;
@@ -17,7 +17,7 @@ pub enum WindowAction {
     Fullscreen,
     ExitFullscreen,
     Close,
-    /// Ctrl+W: the browser tab Jarvis just opened, not the whole window.
+    /// Ctrl+W: the browser tab JAI just opened, not the whole window.
     CloseTab,
     SnapLeft,
     SnapRight,
@@ -94,7 +94,7 @@ pub enum WindowTarget {
     /// A window captured earlier: the one Sir was working in right before he spoke or typed.
     /// `id` is the native handle (0 where there is none, e.g. Linux).
     Handle { id: isize, title: String, process: String },
-    /// The window Sir is working in now (never one of Jarvis' own).
+    /// The window Sir is working in now (never one of JAI's own).
     Active,
 }
 
@@ -196,7 +196,7 @@ pub async fn manage(action: WindowAction, target: WindowTarget) -> Result<String
     .await?
 }
 
-/// The windows a target means, top of the Z-order first (Jarvis' own only when he is named).
+/// The windows a target means, top of the Z-order first (JAI's own only when he is named).
 /// Synchronous: call it on the Win32 worker thread.
 #[cfg(windows)]
 pub fn find_windows(target: &WindowTarget) -> Result<Vec<crate::win32::WindowInfo>, String> {
@@ -213,14 +213,14 @@ pub fn find_windows(target: &WindowTarget) -> Result<Vec<crate::win32::WindowInf
         return Err(match target {
             WindowTarget::Named(t) | WindowTarget::Focus(t) => format!("No open window matches '{}'.", apps::display_name(t)),
             WindowTarget::Handle { title, .. } => format!("The window '{}' is no longer open.", short_title(title)),
-            WindowTarget::Active => "There is no window to act on (only Jarvis' own are open).".to_string(),
+            WindowTarget::Active => "There is no window to act on (only JAI's own are open).".to_string(),
         });
     }
     Ok(chosen)
 }
 
 /// Focuses a window and checks it really is in front before a key is sent to it, so a hotkey
-/// can never land in another app (or in Jarvis' HUD).
+/// can never land in another app (or in JAI's HUD).
 #[cfg(windows)]
 fn bring_to_front(w: &crate::win32::WindowInfo) -> Result<(), String> {
     use std::time::Duration;
@@ -308,7 +308,7 @@ mod linux {
     }
 
     fn is_jarvis(class: &str, title: &str) -> bool {
-        class.eq_ignore_ascii_case("jarvis") || title.contains("J.A.R.V.I.S.")
+        class.eq_ignore_ascii_case("jarvis") || title.contains("J.A.I.")
     }
 
     /// (process/class, title) a target has to match; `None` = the active window.
@@ -416,7 +416,7 @@ mod linux {
                 let id = format!("0x{:08x}", active.trim().parse::<u64>().map_err(|e| e.to_string())?);
                 let found = windows.iter().find(|(w, _, _)| u64::from_str_radix(w.trim_start_matches("0x"), 16).ok() == u64::from_str_radix(id.trim_start_matches("0x"), 16).ok());
                 match found {
-                    Some((_, class, title)) if is_jarvis(class, title) => return Err("Only Jarvis' own window is active.".into()),
+                    Some((_, class, title)) if is_jarvis(class, title) => return Err("Only JAI's own window is active.".into()),
                     Some((_, class, title)) => (id, class.clone(), title.clone()),
                     None => (id, String::new(), String::new()),
                 }
@@ -504,10 +504,10 @@ mod tests {
 
     #[test]
     fn target_matching_uses_process_aliases_and_titles() {
-        assert!(matches_target("vs code", "code", "main.rs - jarvis - Visual Studio Code"));
+        assert!(matches_target("vs code", "code", "main.rs - jai - Visual Studio Code"));
         assert!(matches_target("spotify", "spotify", "Spotify Premium"));
         assert!(matches_target("browser", "chrome", "YouTube - Google Chrome"), "the browser alias covers every browser");
-        assert!(matches_target("jarvis", "msedge", "J.A.R.V.I.S. – jarvis HUD"));
+        assert!(matches_target("jai", "msedge", "J.A.I. – jai HUD"));
         assert!(!matches_target("discord", "chrome", "YouTube"));
         assert!(uses_ctrl_shift_f("discord") && !uses_ctrl_shift_f("chrome"));
     }
@@ -515,7 +515,7 @@ mod tests {
     #[test]
     fn jarvis_is_only_a_target_when_named() {
         assert!(WindowTarget::Named("yourself".into()).names_jarvis());
-        assert!(WindowTarget::Focus("Jarvis".into()).names_jarvis());
+        assert!(WindowTarget::Focus("JAI".into()).names_jarvis());
         assert!(!WindowTarget::Focus("browser".into()).names_jarvis());
         assert!(!WindowTarget::Active.names_jarvis());
     }

@@ -1,4 +1,4 @@
-//! Dynamic native widgets and extra native windows, created and changed by Jarvis at runtime.
+//! Dynamic native widgets and extra native windows, created and changed by JAI at runtime.
 //!
 //! * [`DynamicWidgetSpec`]: a serde-described widget (gauge, chart, timer, table, note, checklist,
 //!   buttons, live command output …). Specs are persisted in `jarvis_memory.db` (`widgets`
@@ -79,13 +79,13 @@ pub struct QuickAction {
     pub action: String,
 }
 
-/// The widget types Jarvis can build (`"type"` in the JSON spec).
+/// The widget types JAI can build (`"type"` in the JSON spec).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
 pub enum WidgetKind {
     #[serde(alias = "gauge", alias = "metric", alias = "metric_gauge")]
     MetricGauge {
-        /// Live value: cpu, ram, gpu, gpu_temp, vram, disk:<drive>; none = set by Jarvis.
+        /// Live value: cpu, ram, gpu, gpu_temp, vram, disk:<drive>; none = set by JAI.
         #[serde(default)]
         source: Option<String>,
         #[serde(default)]
@@ -238,7 +238,7 @@ pub struct DynamicWidgetSpec {
     #[serde(default)]
     pub updated_at: String,
     /// "Open that widget again the next time you start": it is on the panel from the first
-    /// frame. Every other widget is put away when Jarvis starts ("bring back my windows"
+    /// frame. Every other widget is put away when JAI starts ("bring back my windows"
     /// returns it).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub keep_at_start: bool,
@@ -300,7 +300,7 @@ impl DynamicWidgetSpec {
             WidgetKind::QuickActionButtons { buttons } => {
                 buttons.retain(|b| !b.label.trim().is_empty());
                 for b in buttons.iter_mut().filter(|b| b.action.trim().is_empty()) {
-                    b.action = format!("jarvis: {}", b.label);
+                    b.action = format!("jai: {}", b.label);
                 }
                 buttons.truncate(24);
             }
@@ -430,7 +430,7 @@ pub struct WindowBlock {
     pub language: String,
 }
 
-/// How one of Jarvis' extra windows looks. Sir changes it from the window's hover toolbar or by
+/// How one of JAI's extra windows looks. Sir changes it from the window's hover toolbar or by
 /// voice (`customize_hud_and_windows`, `update_native_window`); it is saved per window id in
 /// `window_styles`, so a window opened again under that id keeps its look.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -686,7 +686,7 @@ fn normalize_payload(obj: &mut Map<String, Value>) {
     if let Some(Value::Array(buttons)) = obj.get_mut("buttons") {
         for b in buttons.iter_mut() {
             if let Value::String(s) = b {
-                *b = json!({ "label": s.clone(), "action": format!("jarvis: {s}") });
+                *b = json!({ "label": s.clone(), "action": format!("jai: {s}") });
             }
         }
     }
@@ -715,7 +715,7 @@ const CONTROL_KEYS: &[&str] = &[
 ];
 
 impl WidgetEngine {
-    /// Opens Jarvis' memory database for a new session. He starts with a clean HUD: only the
+    /// Opens JAI's memory database for a new session. He starts with a clean HUD: only the
     /// widgets and windows Sir told him to open again at the next start are there. Everything
     /// else that was open last time is put away in `recent_views`, from where "bring back my
     /// windows" returns it.
@@ -1284,12 +1284,12 @@ impl WidgetEngine {
             return Ok(format!("{out} (it was already open)"));
         }
         if self.windows().len() >= MAX_WINDOWS {
-            return Err(format!("{MAX_WINDOWS} Jarvis windows are already open; close one first."));
+            return Err(format!("{MAX_WINDOWS} JAI windows are already open; close one first."));
         }
         self.inner.window_seq.fetch_add(1, Ordering::AcqRel);
         // A window opened again under a known id keeps the look Sir gave it.
         let (style, always_on_top) = self.load_style(&id).unwrap_or_default();
-        let (default_title, width, height) = defaults.map(|d| (d.1, d.2, d.3)).unwrap_or(("J.A.R.V.I.S.", 560.0, 420.0));
+        let (default_title, width, height) = defaults.map(|d| (d.1, d.2, d.3)).unwrap_or(("J.A.I.", 560.0, 420.0));
         let mut spec = NativeWindowSpec {
             id: id.clone(),
             title: str_arg(args, &["title", "name"]).unwrap_or(default_title).chars().take(80).collect(),
@@ -1351,7 +1351,7 @@ impl WidgetEngine {
     /// `update_native_window`.
     pub fn update_window(&self, args: &Value) -> Result<String, String> {
         let raw = str_arg(args, &["id", "window_id"]).unwrap_or("last");
-        let mut spec = self.find_window(raw).ok_or_else(|| format!("No Jarvis window matches '{raw}'."))?;
+        let mut spec = self.find_window(raw).ok_or_else(|| format!("No JAI window matches '{raw}'."))?;
         let before = (spec.style.clone(), spec.always_on_top);
         self.apply_window_args(&mut spec, args, false)?;
         if (spec.style.clone(), spec.always_on_top) != before {
@@ -1385,12 +1385,12 @@ impl WidgetEngine {
     pub fn close_window(&self, raw: &str) -> Result<String, String> {
         let mut list = self.inner.windows.write().unwrap_or_else(|e| e.into_inner());
         if list.is_empty() {
-            return Err("No Jarvis windows are open.".into());
+            return Err("No JAI windows are open.".into());
         }
         let leaving: Vec<NativeWindowSpec> = if raw == "all" {
             list.drain(..).collect()
         } else {
-            let id = find_window_in(&list, raw).map(|w| w.id).ok_or_else(|| format!("No Jarvis window matches '{raw}'."))?;
+            let id = find_window_in(&list, raw).map(|w| w.id).ok_or_else(|| format!("No JAI window matches '{raw}'."))?;
             let found: Vec<NativeWindowSpec> = list.iter().filter(|w| w.id == id).cloned().collect();
             list.retain(|w| w.id != id);
             found
@@ -1416,18 +1416,18 @@ impl WidgetEngine {
         let _ = self.close_window(id);
     }
 
-    /// Restyles Jarvis windows (`target`: an id, a title, "last" or "all") from voice or the
+    /// Restyles JAI windows (`target`: an id, a title, "last" or "all") from voice or the
     /// window's toolbar; the look is saved per window.
     pub fn style_window(&self, target: &str, args: &Value) -> Result<String, String> {
         let ids: Vec<String> = {
             let list = self.inner.windows.read().unwrap_or_else(|e| e.into_inner());
             if list.is_empty() {
-                return Err("No Jarvis windows are open.".into());
+                return Err("No JAI windows are open.".into());
             }
             if target == "all" {
                 list.iter().map(|w| w.id.clone()).collect()
             } else {
-                vec![find_window_in(&list, target).map(|w| w.id).ok_or_else(|| format!("No Jarvis window matches '{target}'."))?]
+                vec![find_window_in(&list, target).map(|w| w.id).ok_or_else(|| format!("No JAI window matches '{target}'."))?]
             }
         };
         let mut changes = Vec::new();
@@ -1997,7 +1997,7 @@ pub fn tool_definitions() -> Vec<Value> {
     vec![
         json!({"type": "function", "function": {
             "name": "create_or_update_widget",
-            "description": "Create or change a live widget on your HUD's widget panel. Types: MetricGauge/ProgressBar (value, min, max, unit, or a live source), LiveLineChart/Sparkline (series or source), CountdownOrStopwatch (mode, duration_secs; alerts when done), KeyValueList (items [{key,value}]), DataTable (columns, rows), MarkdownNoteCard (markdown), Checklist (items [{text,done}]), QuickActionButtons (buttons [{label, action: 'jarvis: <command>' | 'shell: <cmd>' | 'app: <name>' | 'url: <url>'}]), LiveCommandOutput (command, interval_secs). Update: same id with only the changes, or push_value, add_items, check_item, start/pause/reset. \"Open that widget again next time you start\" → id (or \"last\") with keep_at_start true only.",
+            "description": "Create or change a live widget on your HUD's widget panel. Types: MetricGauge/ProgressBar (value, min, max, unit, or a live source), LiveLineChart/Sparkline (series or source), CountdownOrStopwatch (mode, duration_secs; alerts when done), KeyValueList (items [{key,value}]), DataTable (columns, rows), MarkdownNoteCard (markdown), Checklist (items [{text,done}]), QuickActionButtons (buttons [{label, action: 'jai: <command>' | 'shell: <cmd>' | 'app: <name>' | 'url: <url>'}]), LiveCommandOutput (command, interval_secs). Update: same id with only the changes, or push_value, add_items, check_item, start/pause/reset. \"Open that widget again next time you start\" → id (or \"last\") with keep_at_start true only.",
             "parameters": {"type": "object", "properties": {
                 "id": {"type": "string", "description": "snake_case id; reuse it to update"},
                 "type": {"type": "string", "enum": ["MetricGauge", "ProgressBar", "LiveLineChart", "Sparkline", "CountdownOrStopwatch", "KeyValueList", "DataTable", "MarkdownNoteCard", "Checklist", "QuickActionButtons", "LiveCommandOutput"]},
@@ -2025,7 +2025,7 @@ pub fn tool_definitions() -> Vec<Value> {
         }}),
         json!({"type": "function", "function": {
             "name": "spawn_native_window",
-            "description": "Open a real native J.A.R.V.I.S. window. ALWAYS call it when Sir asks for a (new/second/separate) window — never just say you did. live (refreshed every second): pc_stats (CPU, RAM, GPU, VRAM), drive_space, processes, network. Or text, markdown, code and/or widgets; optional size, monitor, always-on-top. \"Bring back my windows\" / \"reopen what I had open\" → restore \"recent\" only.",
+            "description": "Open a real native J.A.I. window. ALWAYS call it when Sir asks for a (new/second/separate) window — never just say you did. live (refreshed every second): pc_stats (CPU, RAM, GPU, VRAM), drive_space, processes, network. Or text, markdown, code and/or widgets; optional size, monitor, always-on-top. \"Bring back my windows\" / \"reopen what I had open\" → restore \"recent\" only.",
             "parameters": {"type": "object", "properties": {
                 "restore": {"type": "string", "enum": ["recent"], "description": "Reopen every window and widget that was open last"},
                 "live": {"type": "string", "enum": ["pc_stats", "drive_space", "processes", "network"], "description": "Live data view"},
@@ -2067,7 +2067,7 @@ pub fn tool_definitions() -> Vec<Value> {
         }}),
         json!({"type": "function", "function": {
             "name": "close_native_window",
-            "description": "Close a Jarvis window by id or title ('last' = newest, 'all').",
+            "description": "Close a JAI window by id or title ('last' = newest, 'all').",
             "parameters": {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]}
         }}),
     ]
@@ -2109,7 +2109,7 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
-    /// Jarvis starts with an empty panel. What Sir had open comes back when he asks, also a
+    /// JAI starts with an empty panel. What Sir had open comes back when he asks, also a
     /// session later; a widget or a window he asked to keep is there from the start; a
     /// self-test's run changes none of it.
     #[test]

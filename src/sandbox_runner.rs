@@ -1,4 +1,4 @@
-//! The Sandbox Runner: "calculate the orbital period in Python." Jarvis writes (or takes) a Python
+//! The Sandbox Runner: "calculate the orbital period in Python." JAI writes (or takes) a Python
 //! or Rust program, runs it in a throw-away folder with a time limit, repairs it from the error up
 //! to three times, and shows the code, the output and any chart it drew (chart.png).
 

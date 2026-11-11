@@ -1,14 +1,14 @@
-// A desktop app, never a console program: no terminal window opens, whichever way Jarvis is
+// A desktop app, never a console program: no terminal window opens, whichever way JAI is
 // started. `--console` attaches one on request (tests keep the console subsystem).
 #![cfg_attr(not(test), windows_subsystem = "windows")]
 #![recursion_limit = "256"]
 
-//! J.A.R.V.I.S. — local, offline, low-latency voice assistant.
+//! J.A.I. — local, offline, low-latency voice assistant.
 //!
 //! Pipeline: microphone → 16 kHz → Silero VAD state machine → Whisper → wake word →
 //! instant-command fast path or streaming LLM (built-in engine) with tools → clause splitter →
 //! Kokoro TTS → speaker, with barge-in at every stage. UI: a native egui HUD window (no browser)
-//! that Jarvis restyles on request, plus a tray icon.
+//! that JAI restyles on request, plus a tray icon.
 
 mod acoustic_radar;
 mod aegis_server_deck;
@@ -205,7 +205,7 @@ mod live_checks;
 mod win32;
 mod winctl;
 
-use crate::config::{ConfigStore, JarvisConfig};
+use crate::config::{ConfigStore, JaiConfig};
 use crate::tray::TrayAction;
 use std::io::IsTerminal;
 use std::path::Path;
@@ -228,9 +228,9 @@ struct Cli {
     bench: bool,
     /// With --selftest: stop before the language-model stage (no GPU load, no second engine).
     no_llm: bool,
-    /// Started by Jarvis himself (restart): wait for the old instance to let go.
+    /// Started by JAI himself (restart): wait for the old instance to let go.
     restarted: bool,
-    /// Typed requests to run once Jarvis is up (diagnostics, scripted demos).
+    /// Typed requests to run once JAI is up (diagnostics, scripted demos).
     chat: Vec<String>,
     /// Pause after each scripted request's answer.
     chat_delay: Duration,
@@ -239,7 +239,7 @@ struct Cli {
     /// `--silent`: a scripted `--chat` session nobody sees, hears or finds in the history. The
     /// voice is at 0, the HUD is drawn offscreen, the microphone is deaf, the settings file and
     /// the conversation log stay as they are; every answer is written to jarvis.log (`[CLI]`),
-    /// and Jarvis quits after the last request.
+    /// and JAI quits after the last request.
     silent: bool,
     /// `--show` with `--silent`: the session runs in the real HUD window (what a monitor
     /// change or a span really does can only be seen there).
@@ -253,9 +253,9 @@ struct Cli {
     voice_calibrate: bool,
     /// Synthesise the clip's sentence and measure it against the clip (silent), then exit.
     voice_verify: bool,
-    /// Check that Jarvis' voice reaches Sir's Discord microphone (plays one sentence), then exit.
+    /// Check that JAI's voice reaches Sir's Discord microphone (plays one sentence), then exit.
     call_check: bool,
-    /// Start Jarvis, run the live self-test in the running app (silent), write the report, exit.
+    /// Start JAI, run the live self-test in the running app (silent), write the report, exit.
     live_test: bool,
     /// `--exhaustive [runs]`: the live self-test and the exhaustive matrices, that many runs in
     /// a row, with the HUD drawn offscreen.
@@ -365,11 +365,11 @@ impl Cli {
     }
 }
 
-const HELP: &str = "J.A.R.V.I.S. — local voice assistant
+const HELP: &str = "J.A.I. — local voice assistant
 
 USAGE: JARVIS.exe [OPTIONS]
 
-  (no options)        start Jarvis with his HUD window (closing it keeps him in the tray)
+  (no options)        start JAI with his HUD window (closing it keeps him in the tray)
   --hidden            start in the tray only (click the tray icon for the HUD)
   --headless          voice only, no window (e.g. a Raspberry Pi without a display)
   --console           show the live log in a console window
@@ -378,16 +378,16 @@ USAGE: JARVIS.exe [OPTIONS]
   --selftest          offline pipeline test (TTS → VAD → Whisper → wake word → intents → LLM)
   --speak             with --selftest: also play a test sentence on the speakers
   --bench             with --selftest: time Whisper across settings (threads, encoder window, ...)
-  --no-llm            with --selftest: skip the language-model stage (while gaming / Jarvis runs)
+  --no-llm            with --selftest: skip the language-model stage (while gaming / JAI runs)
   --voice-calibrate   pick the Kokoro blend closest to the reference clip (silent)
   --voice-verify      measure the voice chain against the reference clip (silent)
-  --call-check        check that Jarvis' voice reaches your Discord mic (Wave Link Chat Mix; plays one sentence)
-  --chat \"<text>\"     type a request into Jarvis once he is up (repeatable)
+  --call-check        check that JAI's voice reaches your Discord mic (Wave Link Chat Mix; plays one sentence)
+  --chat \"<text>\"     type a request into JAI once he is up (repeatable)
   --chat-delay <secs> pause after each --chat answer (default 2), e.g. to look at a new window
   --no-mic            start with the microphone muted (unmute in the HUD)
   --silent            with --chat: a session nobody sees or hears (voice at 0, the HUD drawn
                       offscreen, settings file and conversation log untouched); every answer
-                      goes to jarvis.log as [CLI] lines, then Jarvis quits; with --show the
+                      goes to jarvis.log as [CLI] lines, then JAI quits; with --show the
                       session runs in the real HUD window instead of offscreen
   --window-drill      with --silent --show: click the SCREENS buttons and press F11 in the real
                       window (posted messages, your mouse untouched), check where Windows put it
@@ -395,7 +395,7 @@ USAGE: JARVIS.exe [OPTIONS]
   --monitor <n>       with --silent --show or --live-test: the test window opens on monitor n
                       (1 = the primary), this session only; e.g. --monitor 2 while you play
   --diagnose         test every integration (WebUntis, calendar, e-mail, WhatsApp …) and exit
-  --live-test         start Jarvis, run every probe in the running app (routing, tools, HUD; silent,
+  --live-test         start JAI, run every probe in the running app (routing, tools, HUD; silent,
                       nothing is sent or changed), write live_selftest_report.json and exit;
                       with --headless the HUD is drawn offscreen (no window at all)
   --exhaustive [n]    the live self-test plus the exhaustive matrices (every command family in five
@@ -508,9 +508,9 @@ fn main() -> ExitCode {
     };
     ensure_working_directory();
 
-    // Starting Jarvis again only brings the running instance's HUD to the front. After a restart
+    // Starting JAI again only brings the running instance's HUD to the front. After a restart
     // the previous instance may still be finishing its shutdown, so wait for it. A test session
-    // runs where nobody sees it: it gives way to the Jarvis Sir starts himself.
+    // runs where nobody sees it: it gives way to the JAI Sir starts himself.
     let instance = if cli.is_diagnostic() {
         None
     } else {
@@ -541,7 +541,7 @@ fn main() -> ExitCode {
     if cli.live_test || cli.silent {
         config::set_read_only(true);
     }
-    let mut cfg = JarvisConfig::load();
+    let mut cfg = JaiConfig::load();
     if cli.live_test || cli.silent {
         // ... and it makes no sound.
         cfg.loudness_pct = 0;
@@ -557,7 +557,7 @@ fn main() -> ExitCode {
     }
     if cli.silent {
         // What a script asks is not part of Sir's conversations, and what it sets off stays
-        // inside Jarvis (`tools::stays_inside`).
+        // inside JAI (`tools::stays_inside`).
         memory::set_off_the_record(true);
         tools::set_silent_session(true);
     }
@@ -607,7 +607,7 @@ fn main() -> ExitCode {
             // Give Whisper, the TTS voice and the language engine a moment to load.
             tokio::time::sleep(Duration::from_secs(4)).await;
             if silent {
-                // Nothing of a silent session reaches the PC around Jarvis: its volume
+                // Nothing of a silent session reaches the PC around JAI: its volume
                 // requests work on a copy of the mixer, its other outward tools are noted.
                 audio_mixer::work_on_a_copy().await;
             }
@@ -662,7 +662,7 @@ fn main() -> ExitCode {
         });
     }
     if cli.live_test {
-        // A run cut short (the tray's Quit, Sir starting Jarvis) proves nothing: until it has
+        // A run cut short (the tray's Quit, Sir starting JAI) proves nothing: until it has
         // finished, the exit code says it failed.
         LIVE_TEST_FAILED.store(true, Ordering::Release);
         let (app, runs) = (session.app.clone(), cli.exhaustive);
@@ -696,7 +696,7 @@ fn main() -> ExitCode {
         });
     }
     if let Some(hud) = hud {
-        // The window system wants the main thread; the HUD keeps it until Jarvis quits.
+        // The window system wants the main thread; the HUD keeps it until JAI quits.
         hud.run(session.show_hud && !cli.hidden);
     }
     // The shutdown sequence (voice, HUD, tray or Ctrl+C) also ends the HUD.
@@ -708,7 +708,7 @@ fn main() -> ExitCode {
     drop(instance);
     // "Restart yourself" / a finished self-rebuild: the next instance waits for this one.
     lifecycle::spawn_pending_restart();
-    info!("J.A.R.V.I.S. offline.");
+    info!("J.A.I. offline.");
     // `--live-test`: the exit code says whether every probe passed.
     std::process::exit(i32::from(LIVE_TEST_FAILED.load(Ordering::Acquire)))
 }
@@ -721,7 +721,7 @@ const EXHAUSTIVE_REPORT: &str = "exhaustive_report.json";
 static LIVE_TEST_FAILED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 struct Session {
-    app: app::Jarvis,
+    app: app::Jai,
     /// Completes once the shutdown sequence has run.
     finished: tokio::task::JoinHandle<()>,
     show_hud: bool,
@@ -734,13 +734,13 @@ enum Started {
     Done(ExitCode),
 }
 
-async fn start(cli: &Cli, cfg: JarvisConfig) -> Started {
+async fn start(cli: &Cli, cfg: JaiConfig) -> Started {
     let engine = match runtime::engine_binary(Path::new(&cfg.llm_runtime_dir)) {
         Some(_) => format!("built-in engine ({})", cfg.llm_runtime_dir),
         None => format!("external Ollama at {}", cfg.ollama_url),
     };
     info!("═══════════════════════════════════════════════════════════════");
-    info!(" J.A.R.V.I.S. v{} — {} ({})", env!("CARGO_PKG_VERSION"), cfg.hardware_profile.display_name(), std::env::consts::OS);
+    info!(" J.A.I. v{} — {} ({})", env!("CARGO_PKG_VERSION"), cfg.hardware_profile.display_name(), std::env::consts::OS);
     info!(" LLM {} (fallback {}) via the {engine}", cfg.primary_model, cfg.fallback_model);
     info!(
         " VAD start {:.2} / release {:.2}, noise ×{:.1}, silence {} ms (+{} ms for unfinished thoughts, stitching {}), max {} s",
@@ -775,7 +775,7 @@ async fn start(cli: &Cli, cfg: JarvisConfig) -> Started {
         }
     }
     if !models::report(&cfg) {
-        warn!("[MODELS] Some models are missing; Jarvis installs what it can (or run `JARVIS.exe --download-models`).");
+        warn!("[MODELS] Some models are missing; JAI installs what it can (or run `JARVIS.exe --download-models`).");
     }
     if cli.selftest {
         return Started::Done(selftest::run(&cfg, cli.speak, cli.bench, !cli.no_llm).await);
@@ -820,14 +820,14 @@ async fn start(cli: &Cli, cfg: JarvisConfig) -> Started {
     let memory = match memory::MemoryManager::open(&cfg.memory_db_path) {
         Ok(m) => m,
         Err(e) => {
-            platform::alert(&format!("J.A.R.V.I.S. cannot open its memory database {}: {e}", cfg.memory_db_path));
+            platform::alert(&format!("J.A.I. cannot open its memory database {}: {e}", cfg.memory_db_path));
             return Started::Done(ExitCode::FAILURE);
         }
     };
     let skills = match skills::SkillManager::open(&cfg.memory_db_path, &cfg.skills_dir) {
         Ok(s) => s,
         Err(e) => {
-            platform::alert(&format!("J.A.R.V.I.S. cannot open its skill library: {e}"));
+            platform::alert(&format!("J.A.I. cannot open its skill library: {e}"));
             return Started::Done(ExitCode::FAILURE);
         }
     };
@@ -916,7 +916,7 @@ async fn start(cli: &Cli, cfg: JarvisConfig) -> Started {
     };
     let stark_tools = tools.clone();
     let brain = brain::Brain::new(store.clone(), tools, Arc::clone(&llm));
-    // Zero-VRAM standby: idle or gaming evicts every model; a hotkey or a word wakes Jarvis.
+    // Zero-VRAM standby: idle or gaming evicts every model; a hotkey or a word wakes JAI.
     {
         let (flushed, woken, rt) = (brain.clone(), brain.clone(), tokio::runtime::Handle::current());
         vram_guard::start(
@@ -935,7 +935,7 @@ async fn start(cli: &Cli, cfg: JarvisConfig) -> Started {
     spatial_scenes::init(&cfg.memory_db_path);
 
     let (audio_tx, audio_rx) = tokio::sync::mpsc::unbounded_channel();
-    let app = app::Jarvis::start(
+    let app = app::Jai::start(
         store.clone(),
         Arc::clone(&controls),
         brain.clone(),
@@ -995,7 +995,7 @@ async fn start(cli: &Cli, cfg: JarvisConfig) -> Started {
     // Regex compilation for the fast path / speech filters, off the critical path.
     tokio::task::spawn_blocking(|| {
         intents::warm_up();
-        let _ = tts::normalize_for_speech("Warm-up: 5 GB at 40°C, e.g. J.A.R.V.I.S.");
+        let _ = tts::normalize_for_speech("Warm-up: 5 GB at 40°C, e.g. J.A.I.");
         let _ = shell::blocked_reason("echo warm-up");
     });
 
@@ -1004,13 +1004,13 @@ async fn start(cli: &Cli, cfg: JarvisConfig) -> Started {
     tray::spawn(tray_tx, move || mic.mic_enabled.load(Ordering::Relaxed));
     spawn_tray_handler(tray_rx, app.clone(), shutdown.clone());
 
-    info!("[READY] Say \"Jarvis …\". Quit by voice (\"Jarvis, shut down\"), from the tray icon or the HUD.");
+    info!("[READY] Say \"JAI …\". Quit by voice (\"JAI, shut down\"), from the tray icon or the HUD.");
     let finished = tokio::spawn(shutdown_sequence(app.clone(), store, llm, shutdown));
     Started::Running(Session { app, finished, show_hud: cfg.open_ui_on_start, greet: cfg.startup_greeting })
 }
 
 /// Waits for the quit signal (voice, HUD power button, tray, Ctrl+C), then shuts down in order.
-async fn shutdown_sequence(app: app::Jarvis, store: ConfigStore, llm: Arc<runtime::LlmRuntime>, shutdown: CancellationToken) {
+async fn shutdown_sequence(app: app::Jai, store: ConfigStore, llm: Arc<runtime::LlmRuntime>, shutdown: CancellationToken) {
     tokio::select! {
         _ = shutdown.cancelled() => {}
         result = tokio::signal::ctrl_c() => {
@@ -1026,7 +1026,7 @@ async fn shutdown_sequence(app: app::Jarvis, store: ConfigStore, llm: Arc<runtim
     gui::remember_placement(&store);
     store.save_now();
     tray::remove();
-    // Lets the HUD show that Jarvis is going offline.
+    // Lets the HUD show that JAI is going offline.
     tokio::time::sleep(Duration::from_millis(250)).await;
     llm.shutdown();
     gui::quit();
@@ -1039,12 +1039,12 @@ async fn shutdown_sequence(app: app::Jarvis, store: ConfigStore, llm: Arc<runtim
 }
 
 /// Tray menu actions → app.
-fn spawn_tray_handler(mut actions: UnboundedReceiver<TrayAction>, app: app::Jarvis, shutdown: CancellationToken) {
+fn spawn_tray_handler(mut actions: UnboundedReceiver<TrayAction>, app: app::Jai, shutdown: CancellationToken) {
     tokio::spawn(async move {
         while let Some(action) = actions.recv().await {
             match action {
                 TrayAction::OpenHud => gui::show(),
-                TrayAction::WakeJarvis => vram_guard::wake("tray"),
+                TrayAction::WakeJai => vram_guard::wake("tray"),
                 TrayAction::ToggleMic => {
                     let enabled = !app.config_state().mic_enabled;
                     app.handle_command(hud::HudCommand::SetMic { enabled }).await;

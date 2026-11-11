@@ -1,6 +1,6 @@
 //! Zero-VRAM gaming hibernation and the on-demand model loader.
 //!
-//! The RTX card belongs to Sir's games: whenever a game is running and Jarvis has been silent for
+//! The RTX card belongs to Sir's games: whenever a game is running and JAI has been silent for
 //! 15 s, Sir puts him to sleep or signs off, or he has been idle for 30 minutes, every model
 //! leaves the GPU:
 //! * Ollama unloads each resident model (`/api/generate` with `"keep_alive": 0`, verified with
@@ -9,10 +9,10 @@
 //!   whisper.cpp / ONNX Runtime buffer, CPU or GPU) on their next idle tick.
 //!
 //! While dormant only the light Silero VAD and a Win32 hotkey (`Alt+J`) are alive. A hotkey, the
-//! standby button (HUD, orb, tray) or Sir talking to Jarvis wakes him: the workers re-create their
+//! standby button (HUD, orb, tray) or Sir talking to JAI wakes him: the workers re-create their
 //! engines on the fly and the next language request loads the model again.
 
-use crate::config::JarvisConfig;
+use crate::config::JaiConfig;
 use crate::ears::AudioControls;
 use crate::runtime::LlmRuntime;
 use serde::{Deserialize, Serialize};
@@ -28,17 +28,17 @@ use tracing::{info, warn};
 const DORMANT_LINGER: Duration = Duration::from_secs(30);
 /// After a failed re-load a worker waits this long before trying again on its own.
 pub const RELOAD_BACKOFF: Duration = Duration::from_secs(30);
-/// While Jarvis is awake and no game runs, the model stays in VRAM this long after a request
+/// While JAI is awake and no game runs, the model stays in VRAM this long after a request
 /// (and the idle standby waits as long): consecutive sentences always meet a warm model.
 pub const RESIDENT_SECS: u64 = 30 * 60;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VramPowerState {
-    /// Models resident, Sir is talking to Jarvis.
+    /// Models resident, Sir is talking to JAI.
     ActiveReady,
     /// Models resident; they leave the GPU at this instant unless something happens.
     IdleCountdown(Instant),
-    /// Nothing of Jarvis is on the GPU.
+    /// Nothing of JAI is on the GPU.
     ZeroVramDormant,
 }
 
@@ -95,7 +95,7 @@ impl Default for VramGuardConfig {
 pub struct VramGuardState {
     pub power: VramPowerState,
     pub last_user_interaction: Instant,
-    /// Jarvis spoke or ran a turn.
+    /// JAI spoke or ran a turn.
     pub last_jarvis_activity: Instant,
     /// The running game, if any.
     pub game: Option<String>,
@@ -165,9 +165,9 @@ fn guard() -> std::sync::MutexGuard<'static, VramGuardState> {
 }
 
 /// Starts the idle/game watchdog and the wake hotkeys. `on_flush` runs after an eviction (the
-/// brain forgets its primed prompt), `on_wake` when Sir wakes Jarvis (the brain primes again).
+/// brain forgets its primed prompt), `on_wake` when Sir wakes JAI (the brain primes again).
 pub fn start(
-    cfg: &JarvisConfig,
+    cfg: &JaiConfig,
     controls: Arc<AudioControls>,
     llm: Arc<LlmRuntime>,
     on_flush: impl Fn() + Send + Sync + 'static,
@@ -190,7 +190,7 @@ pub fn start(
     hotkeys::spawn(&config.hotkeys);
 }
 
-/// Sir interacted with Jarvis (a spoken or typed turn): wakes him from standby.
+/// Sir interacted with JAI (a spoken or typed turn): wakes him from standby.
 pub fn touch() {
     let dormant = {
         let mut g = guard();
@@ -224,9 +224,9 @@ pub fn llm_allowed() -> bool {
     guard().game.is_none()
 }
 
-/// The `keep_alive` of a normal language request ("30m"): the model stays resident while Jarvis is
+/// The `keep_alive` of a normal language request ("30m"): the model stays resident while JAI is
 /// awake, never "forever" while the guard is on (a game or sleep evicts it at once).
-pub fn keep_alive_value(cfg: &JarvisConfig) -> Value {
+pub fn keep_alive_value(cfg: &JaiConfig) -> Value {
     if !cfg.vram_guard.enabled {
         return json!(cfg.keep_alive);
     }
@@ -249,7 +249,7 @@ pub enum WorkerAction {
     Keep,
     /// Drop the engine (`Option` → `None`).
     Unload,
-    /// Re-create the engine (Jarvis was woken).
+    /// Re-create the engine (JAI was woken).
     Reload,
 }
 
@@ -290,7 +290,7 @@ pub fn eviction_payload(model: &str) -> Value {
     json!({ "model": model, "prompt": "", "keep_alive": 0 })
 }
 
-/// Evicts everything Jarvis holds on the GPU right now.
+/// Evicts everything JAI holds on the GPU right now.
 pub fn flush_all_vram_now() {
     flush_with_reason("requested by Sir");
 }
@@ -398,7 +398,7 @@ fn detect_game(sys: &mut System, games: &[String]) -> Option<String> {
     })
 }
 
-/// Once a second: notes when Jarvis speaks; every `poll_secs`: the game and idle checks.
+/// Once a second: notes when JAI speaks; every `poll_secs`: the game and idle checks.
 async fn watchdog(controls: Arc<AudioControls>, config: VramGuardConfig) {
     let mut sys = System::new();
     let mut tick = tokio::time::interval(Duration::from_secs(1));
@@ -633,7 +633,7 @@ mod tests {
     /// eviction 90 s), and BatmanAK.exe filled the GPU without counting as a game.
     #[test]
     fn the_model_stays_resident_for_30_minutes_and_batman_is_a_game() {
-        let cfg = JarvisConfig::default();
+        let cfg = JaiConfig::default();
         assert_eq!(keep_alive_value(&cfg), json!("30m"));
         assert!(cfg.vram_guard.idle_secs >= 1800, "idle eviction after {} s", cfg.vram_guard.idle_secs);
         assert!(cfg.vram_guard.game_processes.iter().any(|g| g.eq_ignore_ascii_case("BatmanAK.exe")));
@@ -642,7 +642,7 @@ mod tests {
     #[test]
     fn keep_alive_never_forever() {
         let cfg = |keep_alive, enabled| {
-            let mut c = JarvisConfig { keep_alive, ..JarvisConfig::default() };
+            let mut c = JaiConfig { keep_alive, ..JaiConfig::default() };
             c.vram_guard.enabled = enabled;
             c
         };

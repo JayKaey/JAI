@@ -520,7 +520,7 @@ pub struct Board {
     pub updated: String,
     pub error: Option<String>,
     pub loading: bool,
-    /// The row clicked (or the one Jarvis named): "where is that train?" means it.
+    /// The row clicked (or the one JAI named): "where is that train?" means it.
     pub selected: Option<usize>,
     pub demo: bool,
 }

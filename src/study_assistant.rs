@@ -81,7 +81,7 @@ fn title_case(s: &str) -> String {
     s.split_whitespace().map(pim::capitalise).collect::<Vec<_>>().join(" ")
 }
 
-/// The subjects Jarvis knows about (folders first, so their spelling wins).
+/// The subjects JAI knows about (folders first, so their spelling wins).
 async fn subjects(pim: &Pim, root: &Path, wanted: Option<&str>) -> Vec<Subject> {
     let mut raw: Vec<String> = std::fs::read_dir(root)
         .map(|d| d.flatten().filter(|e| e.path().is_dir()).map(|e| e.file_name().to_string_lossy().to_string()).collect())
@@ -265,7 +265,7 @@ async fn deadlines(pim: &Pim, course: Option<&str>) -> Result<String, String> {
                         _ => CalEvent::new(&format!("Homework due: {subject}{detail}"), t.date.and_time(NaiveTime::MIN), (t.date + ChronoDuration::days(1)).and_time(NaiveTime::MIN), true),
                     };
                     ev.uid = format!("jarvis-untis-{}@jarvis.stark", t.id);
-                    ev.description = "Added by J.A.R.V.I.S. from WebUntis.".into();
+                    ev.description = "Added by J.A.I. from WebUntis.".into();
                     events.push(ev);
                 }
             }
@@ -280,7 +280,7 @@ async fn deadlines(pim: &Pim, course: Option<&str>) -> Result<String, String> {
                     let title = format!("Due: {}{}", u.title.chars().take(80).collect::<String>(), if u.course.is_empty() { String::new() } else { format!(" ({})", u.course) });
                     let mut ev = CalEvent::new(&title, due - ChronoDuration::minutes(30), due, false);
                     ev.uid = format!("jarvis-itslearning-{}@jarvis.stark", u.id.chars().filter(|c| c.is_alphanumeric() || *c == '-').collect::<String>());
-                    ev.description = format!("Added by J.A.R.V.I.S. from itslearning. {}", u.url);
+                    ev.description = format!("Added by J.A.I. from itslearning. {}", u.url);
                     events.push(ev);
                 }
             }

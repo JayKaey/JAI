@@ -44,7 +44,7 @@ pub async fn execute(action: MediaAction) -> Result<String, String> {
     use crate::win32;
     let pct = |v: f32| (v * 100.0).round() as i32;
     // The volume goes through the mixer's three layers (Core Audio, the PowerShell endpoint,
-    // the volume keys), so it changes even when COM fails inside Jarvis.
+    // the volume keys), so it changes even when COM fails inside JAI.
     match action {
         MediaAction::SetVolume(level) => mixer::set_master_volume(level as f32 / 100.0).await.map(|_| format!("System volume set to {level}%.")),
         MediaAction::VolumeUp(step) | MediaAction::VolumeDown(step) => {

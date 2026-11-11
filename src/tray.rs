@@ -1,4 +1,4 @@
-//! Notification-area (tray) icon: shows that Jarvis is running in the background and offers
+//! Notification-area (tray) icon: shows that JAI is running in the background and offers
 //! Open HUD, a microphone toggle and Quit. Runs its own Win32 message loop on a dedicated thread,
 //! which also receives the "show your HUD" request of a second `JARVIS.exe`.
 
@@ -7,7 +7,7 @@ pub enum TrayAction {
     OpenHud,
     ToggleMic,
     /// Leave the zero-VRAM gaming standby (models load again).
-    WakeJarvis,
+    WakeJai,
     Quit,
 }
 
@@ -20,13 +20,13 @@ pub fn spawn(_actions: tokio::sync::mpsc::UnboundedSender<TrayAction>, _mic_on: 
 #[cfg(not(windows))]
 pub fn remove() {}
 
-/// Asks an already running Jarvis to show its HUD. False when none could be reached.
+/// Asks an already running JAI to show its HUD. False when none could be reached.
 #[cfg(not(windows))]
 pub fn show_running_instance() -> bool {
     false
 }
 
-/// Asks a running test session to end, for the Jarvis Sir just started. False when none could
+/// Asks a running test session to end, for the JAI Sir just started. False when none could
 /// be reached.
 #[cfg(not(windows))]
 pub fn ask_test_session_to_give_way() -> bool {
@@ -55,7 +55,7 @@ mod win {
     };
 
     const WM_TRAY: u32 = WM_APP + 1;
-    const CLASS: PCWSTR = w!("JarvisTrayWindow");
+    const CLASS: PCWSTR = w!("JaiTrayWindow");
     /// Posted by a second `JARVIS.exe` so the running instance shows its HUD.
     const SHOW_HUD_MESSAGE: PCWSTR = w!("JARVIS_SHOW_HUD");
     /// Posted by the `JARVIS.exe` Sir started while a test session holds the place: it ends.
@@ -150,7 +150,7 @@ mod win {
             let hwnd = CreateWindowExW(
                 WINDOW_EX_STYLE(0),
                 class,
-                w!("J.A.R.V.I.S."),
+                w!("J.A.I."),
                 WS_OVERLAPPED,
                 0,
                 0,
@@ -192,7 +192,7 @@ mod win {
             hIcon: load_icon(),
             ..Default::default()
         };
-        let tip = if crate::platform::in_test_session() { "J.A.R.V.I.S. — test run (starting him ends it)" } else { "J.A.R.V.I.S. — online" };
+        let tip = if crate::platform::in_test_session() { "J.A.I. — test run (starting him ends it)" } else { "J.A.I. — online" };
         let tip: Vec<u16> = tip.encode_utf16().take(data.szTip.len() - 1).collect();
         data.szTip[..tip.len()].copy_from_slice(&tip);
         Shell_NotifyIconW(NIM_ADD, &data).as_bool()
@@ -218,9 +218,9 @@ mod win {
         let mic_on = TRAY.get().map(|t| (t.mic_on)()).unwrap_or(true);
         let _ = AppendMenuW(menu, MF_STRING, CMD_OPEN, w!("Open HUD"));
         let _ = AppendMenuW(menu, MF_STRING | if mic_on { MF_CHECKED } else { MF_UNCHECKED }, CMD_MIC, w!("Microphone on"));
-        let _ = AppendMenuW(menu, MF_STRING, CMD_WAKE, w!("Wake Jarvis (load models)"));
+        let _ = AppendMenuW(menu, MF_STRING, CMD_WAKE, w!("Wake JAI (load models)"));
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-        let _ = AppendMenuW(menu, MF_STRING, CMD_QUIT, w!("Quit J.A.R.V.I.S."));
+        let _ = AppendMenuW(menu, MF_STRING, CMD_QUIT, w!("Quit J.A.I."));
         let _ = SetMenuDefaultItem(menu, CMD_OPEN as u32, 0);
         let mut pt = POINT::default();
         let _ = GetCursorPos(&mut pt);
@@ -232,7 +232,7 @@ mod win {
         match picked.0 as usize {
             CMD_OPEN => send(TrayAction::OpenHud),
             CMD_MIC => send(TrayAction::ToggleMic),
-            CMD_WAKE => send(TrayAction::WakeJarvis),
+            CMD_WAKE => send(TrayAction::WakeJai),
             CMD_QUIT => send(TrayAction::Quit),
             _ => {}
         }
@@ -272,7 +272,7 @@ mod win {
                 LRESULT(0)
             }
             _ if msg != 0 && msg == GIVE_WAY.load(Ordering::Acquire) => {
-                info!("[TRAY] Sir started Jarvis: this test session gives way");
+                info!("[TRAY] Sir started JAI: this test session gives way");
                 send(TrayAction::Quit);
                 LRESULT(0)
             }

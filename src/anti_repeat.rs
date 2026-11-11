@@ -1,4 +1,4 @@
-//! Anti-repetition: Jarvis never restates what Sir heard a moment ago and never opens three
+//! Anti-repetition: JAI never restates what Sir heard a moment ago and never opens three
 //! replies in a row with the same "Very good, Sir."
 //!
 //! * [`explicit_repeat_requested`]: "repeat that", "say that again", "bitte wiederholen",
@@ -26,7 +26,7 @@ const RING_CAPACITY: usize = 6;
 /// Replies a new one is compared with.
 pub const COMPARE_TURNS: usize = 3;
 
-/// British acknowledgements Jarvis rotates through instead of always saying "Very good, Sir."
+/// British acknowledgements JAI rotates through instead of always saying "Very good, Sir."
 pub const ACKNOWLEDGEMENTS: &[&str] = &[
     "Right away, Sir.",
     "On it.",
@@ -105,7 +105,7 @@ pub fn prefix_similarity(partial: &str, previous: &str) -> f64 {
 /// Sir explicitly asked to hear the last reply again.
 pub fn explicit_repeat_requested(text: &str) -> bool {
     let full = normalize(text);
-    let full = full.trim_start_matches("jarvis ").trim_end_matches(" jarvis").trim().to_string();
+    let full = full.trim_start_matches("jai ").trim_end_matches(" jai").trim().to_string();
     let s = full.trim_end_matches(" please").trim_end_matches(" bitte").trim();
     let s = s.strip_prefix("please ").or_else(|| s.strip_prefix("bitte ")).unwrap_or(s).trim();
     if s.is_empty() || full.split_whitespace().count() > 9 {
@@ -212,7 +212,7 @@ pub fn opener_of(text: &str) -> Option<String> {
     COURTESY.contains(&norm.as_str()).then_some(first)
 }
 
-/// One reply Jarvis gave.
+/// One reply JAI gave.
 #[derive(Debug, Clone)]
 pub struct RecentResponse {
     pub request: String,
@@ -459,7 +459,7 @@ mod tests {
 
     #[test]
     fn explicit_repeat_requests_are_recognised() {
-        for t in ["Repeat that, please.", "Jarvis, say that again", "What did you just say?", "Bitte wiederholen", "nochmal", "Wie bitte?", "Was hast du gerade gesagt?"] {
+        for t in ["Repeat that, please.", "JAI, say that again", "What did you just say?", "Bitte wiederholen", "nochmal", "Wie bitte?", "Was hast du gerade gesagt?"] {
             assert!(explicit_repeat_requested(t), "{t}");
         }
         for t in ["Play that song again", "mach das nochmal", "open Spotify", "repeat the timer every day at 8 and remind me to stretch"] {
@@ -469,7 +469,7 @@ mod tests {
 
     #[test]
     fn whole_reply_similarity_separates_parrots_from_new_answers() {
-        let previous = "The Audio Devices tab has been disabled in the main J.A.R.V.I.S. window, Sir.";
+        let previous = "The Audio Devices tab has been disabled in the main J.A.I. window, Sir.";
         assert!(reply_similarity(previous, "The Audio Devices tab has been disabled in the main window, Sir.") > REPLY_SIMILARITY);
         assert!(reply_similarity(previous, "Your first lesson tomorrow is maths at eight, Sir.") < 0.4);
         assert!(prefix_similarity("The Audio Devices tab has been", previous) > REPLY_SIMILARITY);

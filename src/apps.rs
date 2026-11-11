@@ -3,7 +3,7 @@
 //! Resolution order: URL / known folder / existing path → alias table (per-OS candidates) →
 //! executable lookup (App Paths + PATH) → Start-Menu shortcuts (Windows) or `.desktop`
 //! entries (Linux) → UWP Start apps (Windows). Closing is graceful first (WM_CLOSE / SIGTERM),
-//! then forceful via `sysinfo`, and never touches system processes or Jarvis' own process tree.
+//! then forceful via `sysinfo`, and never touches system processes or JAI's own process tree.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -838,7 +838,7 @@ async fn process_names(query: &str) -> Vec<String> {
     wanted
 }
 
-/// "Is Firefox open?": a process of that name, whatever its windows do. Jarvis' own tree (his
+/// "Is Firefox open?": a process of that name, whatever its windows do. JAI's own tree (his
 /// runtime, his tunnels) does not count.
 pub async fn is_running(name: &str) -> bool {
     let query = normalize(name);

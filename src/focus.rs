@@ -1,11 +1,11 @@
 //! Conversational focus: what "it", "that", "full screen", "close it", "move it to the left" and
 //! "undo that edit" refer to.
 //!
-//! Jarvis remembers the app, website, file and Jarvis window the conversation was last about, and
+//! JAI remembers the app, website, file and JAI window the conversation was last about, and
 //! the window Sir was working in right before he spoke or typed (captured at the start of every
-//! turn, never Jarvis' own HUD). Requests without a name resolve against it, so "open Discord" …
-//! "full screen" puts Discord in full screen and never Jarvis: Jarvis is only a target when Sir
-//! says so ("fullscreen yourself", "maximize Jarvis").
+//! turn, never JAI's own HUD). Requests without a name resolve against it, so "open Discord" …
+//! "full screen" puts Discord in full screen and never JAI: JAI is only a target when Sir
+//! says so ("fullscreen yourself", "maximize JAI").
 
 use crate::winctl::WindowTarget;
 use std::path::{Path, PathBuf};
@@ -23,7 +23,7 @@ const OFFER_TTL: Duration = Duration::from_secs(3 * 60);
 #[cfg_attr(not(windows), allow(dead_code))]
 const FOREGROUND_WAIT: Duration = Duration::from_millis(250);
 
-/// Something Jarvis offered or announced without doing it yet ("Shall I open a live telemetry
+/// Something JAI offered or announced without doing it yet ("Shall I open a live telemetry
 /// window?"): "yes" / "do it" runs `tool` with `args`; "terminate it" closes `terminate`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PendingOffer {
@@ -222,7 +222,7 @@ impl FocusTracker {
         self.write(|s| s.foreground = Some(Stamped::now(window)));
     }
 
-    /// Jarvis offered (or claimed) an action; Sir's "yes" carries it out.
+    /// JAI offered (or claimed) an action; Sir's "yes" carries it out.
     pub fn note_offer(&self, offer: PendingOffer) {
         self.write(|s| s.offer = Some(Stamped::now(offer)));
     }
@@ -238,7 +238,7 @@ impl FocusTracker {
         self.write(|s| s.offer = None);
     }
 
-    /// Remembers the window Sir is working in, skipping Jarvis' own (called as a turn starts).
+    /// Remembers the window Sir is working in, skipping JAI's own (called as a turn starts).
     pub async fn capture_foreground(&self) {
         #[cfg(windows)]
         {
@@ -268,7 +268,7 @@ impl FocusTracker {
             let window = crate::context::desktop()
                 .await
                 .foreground
-                .filter(|(title, process)| !title.contains("J.A.R.V.I.S.") && !process.eq_ignore_ascii_case("jarvis"))
+                .filter(|(title, process)| !title.contains("J.A.I.") && !process.eq_ignore_ascii_case("jarvis"))
                 .map(|(title, process)| ForegroundWindow { handle: 0, title, process });
             if let Some(w) = window {
                 self.note_foreground(w);
@@ -315,7 +315,7 @@ impl FocusTracker {
         })
     }
 
-    /// A Jarvis window was dealt with more recently than any app ("close that window").
+    /// A JAI window was dealt with more recently than any app ("close that window").
     pub fn jarvis_window_is_latest(&self) -> Option<String> {
         self.read(|s| {
             let window = s.window.as_ref()?;
@@ -326,7 +326,7 @@ impl FocusTracker {
 
     /// Where an unnamed window action goes, best first: the app the conversation is about, the
     /// window Sir was working in before this request, the window he is working in now. Never
-    /// Jarvis himself.
+    /// JAI himself.
     pub fn window_targets(&self) -> Vec<WindowTarget> {
         let mut targets = Vec::new();
         if let Some(app) = self.focused_app() {
@@ -359,7 +359,7 @@ impl FocusTracker {
                 parts.push(format!("file {} ({})", f.value.display(), ago(f.at)));
             }
             if let Some(w) = &s.window {
-                parts.push(format!("Jarvis window {} ({})", w.value, ago(w.at)));
+                parts.push(format!("JAI window {} ({})", w.value, ago(w.at)));
             }
             let mut out = if parts.is_empty() { "Conversation focus: nothing yet".to_string() } else { format!("Conversation focus: {}", parts.join("; ")) };
             out.push_str(" — \"it\", \"that\", \"full screen\", \"close it\" mean this, never you.");
@@ -443,7 +443,7 @@ mod tests {
         f.note_app("spotify");
         assert!(!f.website_is_latest(), "an app opened after the website is the focus now");
         f.note_app("yourself");
-        f.note_app("Jarvis");
+        f.note_app("JAI");
         assert_eq!(f.focused_app().as_deref(), Some("spotify"));
         f.note_jarvis_window("window_1");
         assert_eq!(f.jarvis_window_is_latest().as_deref(), Some("window_1"));

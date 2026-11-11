@@ -1,23 +1,23 @@
-//! Jarvis in Sir's Discord call — only when Sir asks for it, and without touching Elgato Wave Link.
+//! JAI in Sir's Discord call — only when Sir asks for it, and without touching Elgato Wave Link.
 //!
-//! * **Listen** ("listen to my Discord call", "hör im Discord mit"): Jarvis records what Discord
+//! * **Listen** ("listen to my Discord call", "hör im Discord mit"): JAI records what Discord
 //!   *plays* — the output device its audio session is on (with Wave Link, the "Voice chat"
 //!   channel), as a WASAPI loopback (`cpal` input stream on an output device). That is only the
 //!   other people in the call: Discord never plays Sir's own voice back, and Sir's microphone is
 //!   not touched. Speech is cut by a call VAD (`CallVad`), transcribed by the same Whisper worker,
 //!   kept for 30 minutes in memory only (never written to disk) and given to the model as live
 //!   context, so "what did they just say?" works.
-//! * **Converse** ("you can talk to them", "du darfst mit ihnen reden"): a second copy of Jarvis'
+//! * **Converse** ("you can talk to them", "du darfst mit ihnen reden"): a second copy of JAI's
 //!   voice plays on an output that reaches Discord's microphone — with Wave Link a channel in the
 //!   Chat Mix, else a virtual cable — while Sir keeps hearing him on his own speaker (the TTS dual
-//!   sink, resampled to that device); a friend who says "Jarvis, …" gets a short spoken answer. Guests only ever get
+//!   sink, resampled to that device); a friend who says "JAI, …" gets a short spoken answer. Guests only ever get
 //!   conversation: their words never run a tool (no "shut down Sir's PC" from the call).
 //!   The output is `discord_call_output` in the config (the HUD's `DISCORD // AUDIO ROUTING`
-//!   injection target); when it is unset Jarvis finds it once with
+//!   injection target); when it is unset JAI finds it once with
 //!   a silent probe (an 18.5 kHz tone at −34 dBFS for 0.4 s on each Wave Link channel, listening for
-//!   it on the Chat Mix) and keeps it. Jarvis never changes Wave Link's routing, levels or devices.
+//!   it on the Chat Mix) and keeps it. JAI never changes Wave Link's routing, levels or devices.
 //! * **Off** ("stop listening to the call"): the loopback closes and his voice goes back to the
-//!   normal output. Every Jarvis start begins with Off.
+//!   normal output. Every JAI start begins with Off.
 
 use crate::crash_guard::lock;
 use crate::stt::SttEngine;
@@ -26,7 +26,7 @@ use crate::tts::TtsController;
 use serde_json::{json, Value};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tracing::{info, warn};
 
@@ -34,7 +34,7 @@ pub const TOOL: &str = "discord_call";
 /// Lines kept for the live context and "what did they say".
 const KEEP_FOR: Duration = Duration::from_secs(30 * 60);
 const KEEP_LINES: usize = 60;
-/// The Wave Link channel Discord itself plays to (never Jarvis' talk channel).
+/// The Wave Link channel Discord itself plays to (never JAI's talk channel).
 const DISCORD_OWN_CHANNEL: &str = "voice chat";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -333,11 +333,18 @@ fn remember(text: &str) {
     }
 }
 
-/// A friend in the call is talking to Jarvis ("Jarvis, …", "hey Jarvis", Whisper's "Javis").
+/// A friend in the call is talking to JAI: "Hey Jay, …", "okay Jay …", or his name spelt out
+/// ("J.A.I., …"). A bare "Jay, …" in a call is Sir's own nickname more often than his, so
+/// friends greet him.
 pub fn addressed(text: &str) -> bool {
-    text.to_lowercase()
-        .split(|c: char| !c.is_alphanumeric())
-        .any(|w| matches!(w, "jarvis" | "javis" | "jarvys" | "jervis" | "jarviz"))
+    static MATCHER: LazyLock<crate::wake::WakeWordMatcher> = LazyLock::new(|| crate::wake::WakeWordMatcher::new(&[], 0.8));
+    let m = MATCHER.evaluate(text);
+    if !m.matched {
+        return false;
+    }
+    let first = text.split(|c: char| !c.is_alphanumeric()).find(|w| !w.is_empty()).unwrap_or("").to_lowercase();
+    let spelt = m.word.contains('.') || m.word.split_whitespace().count() > 1 || m.word == "JAI";
+    spelt || matches!(first.as_str(), "hey" | "hi" | "ok" | "okay" | "yo" | "hallo" | "hello" | "ey")
 }
 
 /// What one transcribed line does.
@@ -357,7 +364,7 @@ fn on_heard(text: String) {
         let (tools, tts) = (h.tools.clone(), h.tts.clone());
         h.rt.spawn(async move {
             let context: String = recent(Duration::from_secs(5 * 60)).iter().map(|(_, t)| format!("- {t}\n")).collect();
-            let instruction = "You are J.A.R.V.I.S., Sir's assistant, speaking in his Discord voice call with his friends. \
+            let instruction = "You are J.A.I., Sir's assistant, speaking in his Discord voice call with his friends. \
                 A friend just addressed you. Answer in one or two short, warm, witty spoken sentences in the friend's language. \
                 You cannot act on anything for them: never claim to open, change or control anything on Sir's computer; politely say only Sir can ask for that.";
             let prompt = format!("Recent call:\n{context}\nThe friend said: {text}");
@@ -441,7 +448,7 @@ impl CallVad {
 
 // ------------------------------------------------------------------------------- capture ----
 
-/// Jarvis never hears himself through the call: while he speaks into it, and for a 250 ms
+/// JAI never hears himself through the call: while he speaks into it, and for a 250 ms
 /// acoustic tail after, the call's audio is dropped (a friend's open mic would echo him back).
 #[derive(Default)]
 pub struct AntiLoopbackGate {
@@ -568,8 +575,8 @@ pub fn probe_margin_db(captured: &[f32], rate: f32) -> f32 {
     10.0 * (on / off).log10()
 }
 
-/// Which Wave Link outputs to try for Jarvis' call voice, best first (never Discord's own
-/// channel): a channel named for Jarvis or a spare one (SFX, Aux) carries nothing else, then
+/// Which Wave Link outputs to try for JAI's call voice, best first (never Discord's own
+/// channel): a channel named for JAI or a spare one (SFX, Aux) carries nothing else, then
 /// Music and Browser before System, which usually carries everything else; the mic's own
 /// endpoint last.
 pub fn probe_candidates(outputs: &[String], discord_output: Option<&str>) -> Vec<String> {
@@ -601,7 +608,7 @@ fn probe_chat_channel(mic: &str) -> Option<String> {
     }
     // One recording for every candidate, warmed up first: the first capture of a Wave Link mix
     // in a process can start late (live 2026-11-03: the tone reached the Chat Mix, a fresh
-    // recording in Jarvis saw nothing), so a tone played right at the start would be missed.
+    // recording in JAI saw nothing), so a tone played right at the start would be missed.
     let captured = Arc::new(Mutex::new(Vec::<f32>::new()));
     let sink = Arc::clone(&captured);
     let in_ch = in_cfg.channels() as usize;
@@ -703,10 +710,10 @@ fn room_level(name: &str) -> Option<f32> {
 }
 
 /// `JARVIS.exe --call-check`: where Discord plays, which Wave Link channel reaches the Chat Mix
-/// (the silent probe), and whether Jarvis' voice really arrives there — a short sentence played on
+/// (the silent probe), and whether JAI's voice really arrives there — a short sentence played on
 /// that channel while the Chat Mix is recorded. Nothing in Wave Link is changed. The sentence is
 /// audible (headset, and the call if one is running).
-pub async fn call_check(cfg: &crate::config::JarvisConfig) -> std::process::ExitCode {
+pub async fn call_check(cfg: &crate::config::JaiConfig) -> std::process::ExitCode {
     use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
     use std::process::ExitCode;
     let discord = tokio::time::timeout(Duration::from_secs(6), source_device()).await.ok().flatten();
@@ -823,7 +830,7 @@ pub async fn call_check(cfg: &crate::config::JarvisConfig) -> std::process::Exit
     match result {
         Ok(Ok((level, above, r))) => {
             let ok = above > 6.0 && r > 0.5;
-            info!("[CALL CHECK] Jarvis' voice in the Chat Mix: {level:.1} dBFS, {above:.1} dB above the room, match {r:.2} -> {}", if ok { "the call hears him" } else { "NOT reaching the call" });
+            info!("[CALL CHECK] JAI's voice in the Chat Mix: {level:.1} dBFS, {above:.1} dB above the room, match {r:.2} -> {}", if ok { "the call hears him" } else { "NOT reaching the call" });
             if !ok {
                 info!("[CALL CHECK] {NO_TALK_CHANNEL}");
             }
@@ -904,10 +911,14 @@ mod tests {
 
     #[test]
     fn friends_address_jarvis_by_name() {
-        assert!(addressed("Jarvis, what's the weather like?"));
-        assert!(addressed("hey javis du bist witzig"));
+        assert!(addressed("JAI, what's the weather like?"));
+        assert!(addressed("J.A.I., what's the weather like?"));
+        assert!(addressed("hey Jay, du bist witzig"));
+        assert!(addressed("Okay Jay what time is it"));
+        assert!(!addressed("Jay, come over here"), "Sir's nickname in a call, not his name");
+        assert!(!addressed("JayKaey is in the lobby"));
         assert!(!addressed("Let's play another round"));
-        assert!(!addressed("jarvisfan2000 joined"), "a word, not a part of one");
+        assert!(!addressed("jayfan2000 joined"), "a word, not a part of one");
     }
 
     #[test]
@@ -942,7 +953,7 @@ mod tests {
         let t0 = Instant::now();
         let ms = |n: u64| t0 + Duration::from_millis(n);
         let mut gate = AntiLoopbackGate::default();
-        assert!(gate.admit(false, ms(0)), "open before Jarvis has spoken");
+        assert!(gate.admit(false, ms(0)), "open before JAI has spoken");
         assert!(!gate.admit(true, ms(10)), "closed while he speaks");
         assert!(!gate.admit(true, ms(900)));
         assert!(!gate.admit(false, ms(1000)), "the acoustic tail is still gated");

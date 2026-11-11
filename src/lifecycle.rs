@@ -1,4 +1,4 @@
-//! Jarvis' own lifecycle beyond quitting: sleep mode (ignores everything but "wake up") and
+//! JAI's own lifecycle beyond quitting: sleep mode (ignores everything but "wake up") and
 //! restarting into the same or a freshly compiled binary once the shutdown sequence has run.
 
 use std::path::PathBuf;
@@ -60,7 +60,7 @@ pub fn request_restart(plan: Restart) {
     *RESTART.lock().unwrap_or_else(|e| e.into_inner()) = Some(plan);
 }
 
-/// "Wake up", "wach auf", "I'm back" — the only things Jarvis reacts to while asleep.
+/// "Wake up", "wach auf", "I'm back" — the only things JAI reacts to while asleep.
 pub fn is_wake_up_phrase(text: &str) -> bool {
     let t = text.to_lowercase();
     ["wake up", "wakey", "wach auf", "wach wieder auf", "aufwachen", "i'm back", "im back", "i am back", "bin wieder da", "good morning", "guten morgen", "come back online", "stand up"]
@@ -87,7 +87,7 @@ fn spawn(plan: &Restart) -> Result<(), String> {
     match plan {
         Restart::Same => launch(&exe, &args),
         Restart::Rebuilt { project } => {
-            let built = project.join("target").join("release").join(if cfg!(windows) { "jarvis.exe" } else { "jarvis" });
+            let built = project.join("target").join("release").join(if cfg!(windows) { "jarvis.exe" } else { "jai" });
             if !built.exists() {
                 return Err(format!("{} does not exist", built.display()));
             }
@@ -153,8 +153,8 @@ mod tests {
 
     #[test]
     fn wake_up_phrases() {
-        assert!(is_wake_up_phrase("Jarvis, wake up."));
-        assert!(is_wake_up_phrase("Wach auf, Jarvis"));
+        assert!(is_wake_up_phrase("JAI, wake up."));
+        assert!(is_wake_up_phrase("Wach auf, JAI"));
         assert!(!is_wake_up_phrase("What's the weather?"));
     }
 }

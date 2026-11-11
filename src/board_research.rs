@@ -5,7 +5,7 @@
 //! extracted with the engine's heuristics, then 8-13 blocks assembled — by the language model
 //! from the numbered facts when the GPU may run (every number it uses must appear in a fact),
 //! otherwise by heuristics. The live counts feed the `RESEARCH // ACTIVE` block; at the end the
-//! report is saved, a crystal chime plays and Jarvis offers to put it on screen.
+//! report is saved, a crystal chime plays and JAI offers to put it on screen.
 //!
 //! Places ("show me Tulleys Farm on the map"): Nominatim coordinates, OpenStreetMap roads and
 //! water from OpenFreeMap's vector tiles (decoded here: Mapbox Vector Tile protobuf) or, when

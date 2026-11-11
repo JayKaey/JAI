@@ -1,11 +1,11 @@
-//! The Tool Forge: Jarvis builds himself new tools in pure Rust when Sir asks for something no
+//! The Tool Forge: JAI builds himself new tools in pure Rust when Sir asks for something no
 //! built-in tool covers ("create a tool that …", "mach dir ein eigenes Tool dafür") or tells him
 //! he did it wrong ("don't use search, do it this way instead").
 //!
 //! * A forged tool is a `ForgedToolSpec`: trigger phrases with `{slots}` ("play {song} from my
 //!   playlist {playlist}") and a chain of native `RustStep`s — scan a directory, parse a file or
 //!   SQLite database, launch a process (no shells, no window), act on a window, call an HTTP API,
-//!   compile and run a small Rust plugin with `rustc -O`, or call one of Jarvis' own tools.
+//!   compile and run a small Rust plugin with `rustc -O`, or call one of JAI's own tools.
 //! * Forging runs the tool straight away with Sir's own arguments; only a run that succeeds is
 //!   saved (`forged_tools` in `jarvis_memory.db` + `skills/forged_tools/<name>.json`). A failed
 //!   run is reported back so the model can repair the spec (the brain retries once).
@@ -29,7 +29,7 @@ const FORBIDDEN_BINARIES: &[&str] = &[
     "cmd", "powershell", "pwsh", "bash", "sh", "wsl", "python", "python3", "py", "pythonw", "node", "perl", "ruby", "wscript", "cscript", "mshta", "rundll32",
     "regsvr32", "reg", "diskpart", "format", "shutdown", "bcdedit", "vssadmin", "takeown", "icacls",
 ];
-/// Jarvis tools a forged step may not call (no recursion, no self-modification, no quitting).
+/// JAI tools a forged step may not call (no recursion, no self-modification, no quitting).
 const FORBIDDEN_TOOLS: &[&str] = &[
     "forge_tool", "correct_forged_tool", "run_forged_tool", "delete_forged_tool", "shutdown_jarvis", "control_jarvis_lifecycle", "patch_own_source",
     "recompile_and_restart", "restore_source_backup", "system_power", "create_skill", "delete_skill",
@@ -75,8 +75,8 @@ pub enum RustStep {
         #[serde(default)]
         args: Vec<String>,
     },
-    /// One of Jarvis' own tools ("control_music", "window_management", …).
-    JarvisTool {
+    /// One of JAI's own tools ("control_music", "window_management", …).
+    JaiTool {
         name: String,
         #[serde(default)]
         args: Value,
@@ -97,7 +97,7 @@ impl RustStep {
             Self::Win32WindowAction { window_title_match, action } => format!("{action} window '{window_title_match}'"),
             Self::HttpRequest { method, url, .. } => format!("{method} {}", truncate(url, 60)),
             Self::CompileAndRunRustPlugin { .. } => "compile + run a native Rust plugin".into(),
-            Self::JarvisTool { name, .. } => format!("call {name}"),
+            Self::JaiTool { name, .. } => format!("call {name}"),
         }
     }
 }
@@ -147,7 +147,7 @@ impl ForgedToolSpec {
                         return Err(format!("'{binary}' is a shell or system tool; forged tools stay native (use a Rust plugin step instead)."));
                     }
                 }
-                RustStep::JarvisTool { name, .. } if FORBIDDEN_TOOLS.contains(&name.as_str()) => {
+                RustStep::JaiTool { name, .. } if FORBIDDEN_TOOLS.contains(&name.as_str()) => {
                     return Err(format!("A forged tool may not call '{name}'."));
                 }
                 RustStep::HttpRequest { method, url, .. } => {
@@ -172,7 +172,7 @@ impl ForgedToolSpec {
 
 static SLOT: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| Regex::new(r"\{([a-z_][a-z0-9_]*)\}").expect("slot expression"));
 
-/// Lower case, punctuation gone, courtesy stripped ("Jarvis, could you play X please?").
+/// Lower case, punctuation gone, courtesy stripped ("JAI, could you play X please?").
 fn normalize(text: &str) -> String {
     crate::intent_engine::command_core(text)
 }
@@ -229,7 +229,7 @@ pub fn match_triggers(spec: &ForgedToolSpec, text: &str) -> Option<Value> {
 
 // ------------------------------------------------------------------------- execution ----
 
-/// What a step needs from the running Jarvis.
+/// What a step needs from the running JAI.
 #[allow(async_fn_in_trait)]
 pub trait StepHost {
     async fn jarvis_tool(&self, name: &str, args: &Value) -> Result<String, String>;
@@ -371,7 +371,7 @@ async fn run_step<H: StepHost>(spec: &ForgedToolSpec, step: &RustStep, args: &Va
             let argv: Vec<String> = argv.iter().map(|a| f(a)).collect();
             launch(&exe.to_string_lossy(), &argv, None).await
         }
-        RustStep::JarvisTool { name, args: targs } => {
+        RustStep::JaiTool { name, args: targs } => {
             if FORBIDDEN_TOOLS.contains(&name.as_str()) {
                 return Err(format!("'{name}' may not be called from a forged tool."));
             }
@@ -718,7 +718,7 @@ pub fn correction(text: &str) -> Option<String> {
 
 /// The forge's JSON instructions for the model.
 pub fn forge_prompt() -> String {
-    "You build NATIVE tools for J.A.R.V.I.S. (Windows). Reply with ONLY a JSON object:\n\
+    "You build NATIVE tools for J.A.I. (Windows). Reply with ONLY a JSON object:\n\
      {\"name\": \"snake_case\", \"description\": \"one sentence\", \"triggers\": [\"english phrase with {slot}\", \"german phrase with {slot}\"],\n\
       \"args\": {\"slot\": \"value from Sir's request\"},\n\
       \"steps\": [ ... ]}\n\
@@ -730,7 +730,7 @@ pub fn forge_prompt() -> String {
      {\"step\":\"http_request\",\"method\":\"GET\",\"url\":\"https://…\",\"headers\":[[\"k\",\"v\"]],\"body_template\":null}\n\
      {\"step\":\"compile_and_run_rust_plugin\",\"rust_source_code\":\"fn main(){ … }\",\"args\":[\"{slot}\"]}  (std only; print the result)\n\
      {\"step\":\"jarvis_tool\",\"name\":\"control_music|window_management|open_application|open_website|media_and_volume_control|…\",\"args\":{…}}\n\
-     Prefer jarvis_tool when one of Jarvis' tools already does a step. Keep it to the fewest steps that do exactly what Sir asked."
+     Prefer jarvis_tool when one of JAI's tools already does a step. Keep it to the fewest steps that do exactly what Sir asked."
         .to_string()
 }
 
@@ -825,7 +825,7 @@ mod tests {
     use super::*;
     use std::sync::Mutex as StdMutex;
 
-    /// Records Jarvis-tool calls instead of executing them.
+    /// Records JAI-tool calls instead of executing them.
     #[derive(Default)]
     struct Host {
         calls: StdMutex<Vec<(String, Value)>>,
@@ -853,7 +853,7 @@ mod tests {
             name: "playlist_direct_player".into(),
             description: "Plays a song straight from a named playlist without search.".into(),
             triggers: vec!["play {song} from my playlist {playlist}".into(), "spiel {song} aus meiner playlist {playlist}".into()],
-            steps: vec![RustStep::JarvisTool { name: "control_music".into(), args: json!({"action": "play_from_playlist", "song_name": "{song}", "playlist_name": "{playlist}"}) }],
+            steps: vec![RustStep::JaiTool { name: "control_music".into(), args: json!({"action": "play_from_playlist", "song_name": "{song}", "playlist_name": "{playlist}"}) }],
             version: 0,
             corrections: vec![],
         }
@@ -862,7 +862,7 @@ mod tests {
     #[test]
     fn triggers_capture_slots_through_courtesy() {
         let spec = playlist_spec();
-        let args = match_triggers(&spec, "Jarvis, could you play Highway to Hell from my playlist JaysRock please?").unwrap();
+        let args = match_triggers(&spec, "JAI, could you play Highway to Hell from my playlist JaysRock please?").unwrap();
         assert_eq!(args, json!({"song": "highway to hell", "playlist": "jaysrock"}));
         let de = match_triggers(&spec, "Spiel Thunderstruck aus meiner Playlist Jays Rock").unwrap();
         assert_eq!(de["playlist"], "jays rock");
@@ -876,7 +876,7 @@ mod tests {
         assert!(spec.validate().is_ok());
         spec.steps = vec![RustStep::LaunchOrInvokeProcess { binary: "powershell.exe".into(), args: vec![], working_dir: None }];
         assert!(spec.validate().unwrap_err().contains("native"));
-        spec.steps = vec![RustStep::JarvisTool { name: "shutdown_jarvis".into(), args: json!({}) }];
+        spec.steps = vec![RustStep::JaiTool { name: "shutdown_jarvis".into(), args: json!({}) }];
         assert!(spec.validate().is_err());
         spec.name = "Bad Name".into();
         assert!(spec.validate().is_err());
@@ -928,7 +928,7 @@ mod tests {
         assert_eq!(saved.steps.len(), 2);
         assert_eq!(saved.corrections, vec!["Don't use search, do it this way instead".to_string()]);
         // A spec whose test run fails is reported and never saved.
-        let broken = ForgedToolSpec { name: "broken_tool".into(), description: String::new(), triggers: vec!["break it".into()], steps: vec![RustStep::JarvisTool { name: "fail_me".into(), args: json!({}) }], version: 0, corrections: vec![] };
+        let broken = ForgedToolSpec { name: "broken_tool".into(), description: String::new(), triggers: vec!["break it".into()], steps: vec![RustStep::JaiTool { name: "fail_me".into(), args: json!({}) }], version: 0, corrections: vec![] };
         let err = forge.forge(broken, &json!({}), None, &host).await.unwrap_err();
         assert!(err.contains("simulated failure"), "{err}");
         assert!(forge.get("broken_tool").is_none());

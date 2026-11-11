@@ -49,7 +49,7 @@ const DEMO_SATELLITES: &str = include_str!("../assets/live_layers/demo_satellite
 
 // ----------------------------------------------------------------------------- groups ----
 
-/// (key, CelesTrak group, how Jarvis says it).
+/// (key, CelesTrak group, how JAI says it).
 pub const GROUPS: &[(&str, &str, &str)] = &[
     ("active", "active", "active satellites"),
     ("starlink", "starlink", "Starlink satellites"),
@@ -166,7 +166,7 @@ fn build(elements: Vec<Elements>, group: &str) -> Vec<Sat> {
     elements.into_iter().filter_map(|el| Some(Sat { model: Sgp4::new(&el).ok()?, kind: kind_of(&el, group), el })).collect()
 }
 
-/// How Jarvis names a satellite: "the ISS", "Hubble", "Tiangong", else its catalogue name.
+/// How JAI names a satellite: "the ISS", "Hubble", "Tiangong", else its catalogue name.
 pub fn display_name(el: &Elements) -> String {
     match el.norad {
         25544 => "the ISS".into(),
@@ -537,7 +537,7 @@ fn camera_alt() -> f64 {
     crate::earth::state().cam.alt
 }
 
-/// The Earth's `act` hook: (the block, the line Jarvis says).
+/// The Earth's `act` hook: (the block, the line JAI says).
 pub async fn act(action: LiveAction, offline: bool) -> (String, String) {
     let result = match action {
         LiveAction::Satellites(key) => show_group(&key).await,

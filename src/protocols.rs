@@ -1,15 +1,15 @@
 //! Protocols — named multi-step routines, the way Tony Stark has his "House Party Protocol":
-//! "engage gaming protocol" opens Steam and Discord, sets the volume and keeps Jarvis quiet in
+//! "engage gaming protocol" opens Steam and Discord, sets the volume and keeps JAI quiet in
 //! full-screen games. Sir creates his own by voice or chat ("create a protocol called …");
 //! they are persisted in `jarvis_memory.db` and run through the normal tools — steps on
-//! different things (each application, the music, Jarvis' own windows) side by side, steps on
+//! different things (each application, the music, JAI's own windows) side by side, steps on
 //! the same thing in their order (`plan`).
 //!
 //! Focus mode is the built-in protocol with a timer: replies stay silent except for alerts, a
 //! "Focus session" countdown appears in the HUD, and the previous reply mode returns at the end.
 //!
 //! Stark Protocols: "save my current setup as Gaming Protocol" captures the whole workspace —
-//! every open application (its executable, monitor, position, size and maximised state), Jarvis'
+//! every open application (its executable, monitor, position, size and maximised state), JAI's
 //! own live windows and the playlist he started last — as steps; engaging it relaunches the apps,
 //! moves each window back to its monitor and place, reopens the telemetry windows and starts the
 //! music: "Initiating Gaming Protocol, Sir. Moving Discord to Monitor 2 and starting JaysRock."
@@ -378,7 +378,7 @@ fn starter_protocols() -> Vec<Protocol> {
         },
         Protocol {
             name: "gaming".into(),
-            description: "Steam up, Discord on Monitor 2, JaysRock playing, volume at 40 %, Jarvis silent while a full-screen game runs.".into(),
+            description: "Steam up, Discord on Monitor 2, JaysRock playing, volume at 40 %, JAI silent while a full-screen game runs.".into(),
             trigger_phrases: vec!["gaming mode".into(), "zeit zu zocken".into(), "game time".into()],
             steps: vec![
                 step("open_application", json!({ "app_name": "steam" })),
@@ -436,7 +436,7 @@ fn starter_protocols() -> Vec<Protocol> {
         },
         Protocol {
             name: "clean slate".into(),
-            description: "Stealth: music paused, Jarvis' extra windows closed, every window out of the way.".into(),
+            description: "Stealth: music paused, JAI's extra windows closed, every window out of the way.".into(),
             trigger_phrases: vec!["clear my desk".into(), "clean up my screen".into(), "stealth protocol".into(), "stealth mode".into()],
             steps: vec![
                 step("control_music", json!({ "action": "pause" })),
@@ -526,7 +526,7 @@ fn is_shell_process(p: &str) -> bool {
     matches!(
         p,
         "" | "explorer" | "applicationframehost" | "textinputhost" | "shellexperiencehost" | "searchhost" | "startmenuexperiencehost"
-            | "systemsettings" | "lockapp" | "jarvis" | "nvidia overlay" | "gamebar" | "widgets" | "shellhost" | "crossdeviceresume"
+            | "systemsettings" | "lockapp" | "jai" | "nvidia overlay" | "gamebar" | "widgets" | "shellhost" | "crossdeviceresume"
     )
 }
 

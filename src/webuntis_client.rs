@@ -218,7 +218,7 @@ fn rpc_error(e: &Value) -> String {
 
 impl WebUntis {
     async fn post(&self, cfg: &WebUntisSettings, session: Option<&str>, method: &str, params: Value) -> Result<Value, String> {
-        let mut req = self.http.post(rpc_url(cfg)).json(&json!({ "id": "jarvis", "method": method, "params": params, "jsonrpc": "2.0" }));
+        let mut req = self.http.post(rpc_url(cfg)).json(&json!({ "id": "jai", "method": method, "params": params, "jsonrpc": "2.0" }));
         if let Some(s) = session {
             req = req.header(reqwest::header::COOKIE, cookie(cfg, s));
         }
@@ -237,7 +237,7 @@ impl WebUntis {
             if cfg.username.trim().is_empty() {
                 return Err("WebUntis needs a username for the password login".into());
             }
-            let client = if cfg.client_name.trim().is_empty() { "JARVIS" } else { cfg.client_name.trim() };
+            let client = if cfg.client_name.trim().is_empty() { "JAI" } else { cfg.client_name.trim() };
             let r = self.post(cfg, None, "authenticate", json!({ "user": cfg.username.trim(), "password": password, "client": client })).await?;
             let id = r["sessionId"].as_str().ok_or("WebUntis returned no session")?.to_string();
             info!(
@@ -653,7 +653,7 @@ fn parse_weekly(v: &Value, element_id: i64) -> Vec<Lesson> {
         .collect()
 }
 
-/// The timetable of one day the way Jarvis says it ("Tomorrow you have five lessons, from 7:50
+/// The timetable of one day the way JAI says it ("Tomorrow you have five lessons, from 7:50
 /// to 13:00: Physics in room 204 — cancelled, …").
 pub fn spoken_day(lessons: &[Lesson], day: NaiveDate) -> String {
     let today = Local::now().date_naive();

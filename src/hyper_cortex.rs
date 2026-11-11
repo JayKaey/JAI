@@ -1,4 +1,4 @@
-//! The hyper cortex: the part of Jarvis that works ahead of the request and beside the language
+//! The hyper cortex: the part of JAI that works ahead of the request and beside the language
 //! model.
 //!
 //! * **Tiers** (`tier`): Reflex (his own controls and exact commands, decided in Rust in
@@ -13,7 +13,7 @@
 //! * **Context ahead of time** (`prefetch_context`, `take_prefetched`): the desktop and the media
 //!   session are read when Sir starts speaking, not after he has finished.
 //! * **Self-healing** (`execute`): a read that failed on the network is tried once more; a
-//!   window or program action aimed at one of Jarvis' own blocks goes to the block instead of
+//!   window or program action aimed at one of JAI's own blocks goes to the block instead of
 //!   Windows ("Hud Board doesn't appear to be running" never reaches Sir).
 //! * **Checked figures** (`FigureCheck`): arithmetic the model states in a reply
 //!   ("12 × 8 = 86") is recomputed while it streams, and a wrong result is corrected before Sir
@@ -33,7 +33,7 @@ use tracing::{debug, info, warn};
 
 // ---------------------------------------------------------------------------- tiers ----
 
-/// How much of Jarvis a request needs.
+/// How much of JAI a request needs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tier {
     /// One of his own controls or an exact command: decided in Rust, no language model.
@@ -155,7 +155,7 @@ static HEALED: AtomicU64 = AtomicU64::new(0);
 static BATCHES: AtomicU64 = AtomicU64::new(0);
 static FIGURES: AtomicU64 = AtomicU64::new(0);
 
-/// What the cortex has done since Jarvis started.
+/// What the cortex has done since JAI started.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct CortexStats {
     /// Reads started before they were asked for.
@@ -242,7 +242,7 @@ async fn speculated(name: &str, args: &Value) -> Option<ToolOutcome> {
     outcome.success.then_some(outcome)
 }
 
-/// What a transcript lets Jarvis do before the request reaches the brain.
+/// What a transcript lets JAI do before the request reaches the brain.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Anticipation {
     /// The vocabularies it touches (`intent_engine::domain`).
@@ -288,7 +288,7 @@ const TRANSIENT: &[&str] = &["timed out", "timeout", "connection", "dns error", 
 
 /// The repair for a failed call, if there is an obvious one.
 fn repair(name: &str, args: &Value, error: &str) -> Option<Repair> {
-    // One of Jarvis' own blocks named as a window or a program ("close HUD Board"): the block.
+    // One of JAI's own blocks named as a window or a program ("close HUD Board"): the block.
     let closing = match name {
         "close_application" | "close_native_window" => true,
         "window_management" => args["action"] == "close",

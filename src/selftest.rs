@@ -5,7 +5,7 @@
 //! A German utterance (eSpeak-NG `-v de`) checks German detection, and the LLM is probed for
 //! first-token latency with the real prompt prefix and tools.
 
-use crate::config::{ConfigStore, JarvisConfig};
+use crate::config::{ConfigStore, JaiConfig};
 use crate::dsp;
 use crate::intents::{self, Intent};
 use crate::phonemizer::Phonemizer;
@@ -50,7 +50,7 @@ struct VadResult {
     speech_ms: u32,
     /// Voiced time of the last piece: its length chose the hangover that ended the request.
     last_speech_ms: u32,
-    /// Pieces stitched together (a breath after "Hey Jarvis," makes two).
+    /// Pieces stitched together (a breath after "Hey JAI," makes two).
     pieces: usize,
     started: bool,
     eos_latency_ms: Option<i64>,
@@ -63,9 +63,9 @@ const STITCH_QUIET_SAMPLES: usize = 16_000 * 1200 / 1000;
 
 /// Runs a 16 kHz stream through Silero + the state machine; `speech_end` is the sample index
 /// where the spoken audio actually stops. Pieces split by a breath (the short-command cutoff
-/// after "Hey Jarvis,") are stitched like the app does; the end-of-speech latency is the last
+/// after "Hey JAI,") are stitched like the app does; the end-of-speech latency is the last
 /// piece's.
-fn run_vad(cfg: &JarvisConfig, silero: &mut SileroVad, stream: &[f32], speech_end: usize) -> VadResult {
+fn run_vad(cfg: &JaiConfig, silero: &mut SileroVad, stream: &[f32], speech_end: usize) -> VadResult {
     let mut machine = VadMachine::new(VadParams::from_config(cfg));
     // As the microphone thread does: the energy gate hears the voice band.
     let mut band = crate::vad::VoiceBand::new();
@@ -139,18 +139,18 @@ fn scale_to_rms(audio: &mut [f32], target: f32) {
     }
 }
 
-type ConfigTweak = Box<dyn Fn(&mut JarvisConfig)>;
+type ConfigTweak = Box<dyn Fn(&mut JaiConfig)>;
 
 /// `--selftest --bench`: times Whisper on `pcm` across settings so the fastest accurate
 /// configuration for this machine can be picked.
-async fn bench_stt(cfg: &JarvisConfig, pcm: &[f32], voiced_ms: u32) {
+async fn bench_stt(cfg: &JaiConfig, pcm: &[f32], voiced_ms: u32) {
     let variants: Vec<(&str, ConfigTweak)> = vec![
-        ("current config", Box::new(|_c: &mut JarvisConfig| {})),
-        ("no language detection (en)", Box::new(|c: &mut JarvisConfig| c.whisper_languages = vec!["en".into()])),
-        ("encoder floor 256", Box::new(|c: &mut JarvisConfig| c.whisper_min_audio_ctx = 256)),
-        ("encoder floor 192", Box::new(|c: &mut JarvisConfig| c.whisper_min_audio_ctx = 192)),
-        ("8 threads", Box::new(|c: &mut JarvisConfig| c.whisper_threads = 8)),
-        ("base model", Box::new(|c: &mut JarvisConfig| c.whisper_model_path = c.whisper_fallback_model_path.clone())),
+        ("current config", Box::new(|_c: &mut JaiConfig| {})),
+        ("no language detection (en)", Box::new(|c: &mut JaiConfig| c.whisper_languages = vec!["en".into()])),
+        ("encoder floor 256", Box::new(|c: &mut JaiConfig| c.whisper_min_audio_ctx = 256)),
+        ("encoder floor 192", Box::new(|c: &mut JaiConfig| c.whisper_min_audio_ctx = 192)),
+        ("8 threads", Box::new(|c: &mut JaiConfig| c.whisper_threads = 8)),
+        ("base model", Box::new(|c: &mut JaiConfig| c.whisper_model_path = c.whisper_fallback_model_path.clone())),
     ];
     for (label, tweak) in variants {
         let mut c = cfg.clone();
@@ -176,7 +176,7 @@ async fn bench_stt(cfg: &JarvisConfig, pcm: &[f32], voiced_ms: u32) {
 /// `--selftest --bench`: Sir's own sentences from jarvis.log (among them those Whisper got wrong
 /// on 2026-11-09), said by another voice into a room with a fan, music or people talking: the
 /// share of words each Whisper setting gets right, so the defaults are picked by measurement.
-async fn bench_noise(cfg: &JarvisConfig, kokoro: &mut Kokoro, phonemizer: &Phonemizer, seed: &mut u32) {
+async fn bench_noise(cfg: &JaiConfig, kokoro: &mut Kokoro, phonemizer: &Phonemizer, seed: &mut u32) {
     const SAID: [&str; 14] = [
         "Can you make the globe spin?",
         "Can you show me where New York is?",
@@ -186,7 +186,7 @@ async fn bench_noise(cfg: &JarvisConfig, kokoro: &mut Kokoro, phonemizer: &Phone
         "Show me a 3D model of the Iron Man armor.",
         "Change the colour to green.",
         "Make it way more detailed.",
-        "Jarvis, show me the Earth.",
+        "JAI, show me the Earth.",
         "I don't want to see the satellites anymore.",
         "Close that window.",
         "Turn the trains back on.",
@@ -233,10 +233,10 @@ async fn bench_noise(cfg: &JarvisConfig, kokoro: &mut Kokoro, phonemizer: &Phone
         (0..8_000 + speech.len() + 6_400).map(|i| bed[(offset + i) % bed.len()] * gain + i.checked_sub(8_000).and_then(|k| speech.get(k)).copied().unwrap_or(0.0)).collect()
     };
     let variants: Vec<(&str, ConfigTweak)> = vec![
-        ("current config", Box::new(|_c: &mut JarvisConfig| {})),
-        ("full encoder window", Box::new(|c: &mut JarvisConfig| c.whisper_dynamic_audio_ctx = false)),
-        ("encoder floor 512", Box::new(|c: &mut JarvisConfig| c.whisper_min_audio_ctx = 512)),
-        ("beam 5 for every sentence", Box::new(|c: &mut JarvisConfig| {
+        ("current config", Box::new(|_c: &mut JaiConfig| {})),
+        ("full encoder window", Box::new(|c: &mut JaiConfig| c.whisper_dynamic_audio_ctx = false)),
+        ("encoder floor 512", Box::new(|c: &mut JaiConfig| c.whisper_min_audio_ctx = 512)),
+        ("beam 5 for every sentence", Box::new(|c: &mut JaiConfig| {
             c.whisper_fast_decode = false;
             c.whisper_beam_size = 5;
         })),
@@ -295,13 +295,13 @@ fn words_right(said: &str, heard: &str) -> (usize, usize) {
     (a.len().saturating_sub(row[b.len()]), a.len())
 }
 
-pub async fn run(cfg: &JarvisConfig, speak: bool, bench: bool, llm_stage: bool) -> ExitCode {
+pub async fn run(cfg: &JaiConfig, speak: bool, bench: bool, llm_stage: bool) -> ExitCode {
     let mut r = Report { failures: Vec::new() };
     let mut seed = 0x5eed_1234u32;
 
     // ---- 1. Phonemizer + Kokoro --------------------------------------------------------
     let phonemizer = Phonemizer::new(cfg.espeak_path.as_deref());
-    let command = "Hey Jarvis, open Spotify please.";
+    let command = "Hey JAI, open Spotify please.";
     let t = Instant::now();
     let ipa = phonemizer.phonemize(&tts::normalize_for_speech(command));
     let g2p_ms = t.elapsed().as_secs_f64() * 1000.0;
@@ -423,7 +423,7 @@ pub async fn run(cfg: &JarvisConfig, speak: bool, bench: bool, llm_stage: bool) 
 
     // ---- 3b. Short commands: closed 280 ms after the word, transcribed fast, nothing invented ----
     // A stand-in for Sir's own voice at the microphone: the stock blend at 1.06×, fixed so the
-    // VAD timings do not drift whenever Jarvis' voice changes.
+    // VAD timings do not drift whenever JAI's voice changes.
     for (phrase, expect) in [("Stop.", "stop"), ("Pause.", "pause")] {
         let audio24 = match kokoro.synthesize(&phonemizer.phonemize(&tts::normalize_for_speech(phrase)), tts::LEGACY_VOICE_BLEND, 1.06) {
             Ok(a) => a,
@@ -483,7 +483,7 @@ pub async fn run(cfg: &JarvisConfig, speak: bool, bench: bool, llm_stage: bool) 
         );
     }
 
-    // ---- 3c'. A sentence with a breath: "Jarvis, … change the interface colour to red." -----
+    // ---- 3c'. A sentence with a breath: "JAI, … change the interface colour to red." -----
     // The short-command cutoff ends the first piece after the name; the app hears both pieces
     // again as one clip (`app::join_audio`), so the name and the English sentence survive.
     let piece = |text: &str, kokoro: &mut Kokoro, seed: &mut u32| -> Option<(Vec<f32>, u32)> {
@@ -500,7 +500,7 @@ pub async fn run(cfg: &JarvisConfig, speak: bool, bench: bool, llm_stage: bool) 
         let v = run_vad(cfg, &mut silero, &stream, lead + last);
         Some((v.utterance?, v.speech_ms))
     };
-    match (piece("Jarvis,", &mut kokoro, &mut seed), piece("change the interface colour to red.", &mut kokoro, &mut seed)) {
+    match (piece("JAI,", &mut kokoro, &mut seed), piece("change the interface colour to red.", &mut kokoro, &mut seed)) {
         (Some((name, name_ms)), Some((rest, rest_ms))) => {
             let alone = stt.transcribe(name.clone(), name_ms).await;
             info!(
@@ -512,7 +512,7 @@ pub async fn run(cfg: &JarvisConfig, speak: bool, bench: bool, llm_stage: bool) 
                 "Paused sentence heard as one",
                 joined.as_ref().is_ok_and(|t| {
                     let l = t.text.to_lowercase();
-                    l.contains("jarvis") && l.contains("red") && t.language == "en"
+                    l.contains("jai") && l.contains("red") && t.language == "en"
                 }),
                 match &joined {
                     Ok(t) => format!("'{}' [{} p={:.2}] in {} ms", t.text, t.language, t.language_prob, t.stt_ms),
@@ -526,7 +526,7 @@ pub async fn run(cfg: &JarvisConfig, speak: bool, bench: bool, llm_stage: bool) 
     // ---- 3c''. "Core", not "car": the core commands reach the core sphere ------------------
     let mut heard = Vec::new();
     let mut routed = 0;
-    let commands = [("Jarvis, hide your core.", false), ("Close your core.", false), ("Show me your core.", true)];
+    let commands = [("JAI, hide your core.", false), ("Close your core.", false), ("Show me your core.", true)];
     for (text, open) in commands {
         let Some((clip, ms)) = piece(text, &mut kokoro, &mut seed) else { continue };
         if let Ok(t) = stt.transcribe(clip, ms).await {
@@ -631,7 +631,7 @@ pub async fn run(cfg: &JarvisConfig, speak: bool, bench: bool, llm_stage: bool) 
         Some(bin) => {
             let wav = std::env::temp_dir().join("jarvis_selftest_de.wav");
             let mut cmd = std::process::Command::new(&bin);
-            cmd.args(["-v", "de", "-s", "150", "-w"]).arg(&wav).arg("Hallo Jarvis, wie spät ist es?");
+            cmd.args(["-v", "de", "-s", "150", "-w"]).arg(&wav).arg("Hallo Dschey, wie spät ist es?");
             crate::shell::hide_console_std(&mut cmd);
             match cmd.status().ok().filter(|s| s.success()).and_then(|_| read_wav_mono(&wav)) {
                 Some((audio, rate)) => {
@@ -698,7 +698,7 @@ pub async fn run(cfg: &JarvisConfig, speak: bool, bench: bool, llm_stage: bool) 
             brain.prime().await;
             info!("[TEST]   prime/warm-up took {} ms", t.elapsed().as_millis());
             for (label, prompt) in [
-                ("LLM chat", "Good evening, Jarvis. How are you?"),
+                ("LLM chat", "Good evening, JAI. How are you?"),
                 ("LLM chat (cached)", "Wie geht es dir heute?"),
                 ("LLM tool call", "Wie ist das Wetter gerade in Berlin?"),
             ] {

@@ -1,11 +1,11 @@
-//! Native rendering of Jarvis' dynamic widgets (the HUD's widgets panel and his extra windows)
+//! Native rendering of JAI's dynamic widgets (the HUD's widgets panel and his extra windows)
 //! and the window spawner: every `NativeWindowSpec` is a ROSE block inside the HUD
 //! (`gui::hud_block_window`) until it is detached ("in a new window", a monitor, `[ DETACH ]`);
 //! then it becomes a real OS window through an egui deferred viewport. Child module of `gui`, so
 //! it shares the HUD's palette and building blocks.
 
 use super::{bold, button, chip, meter, muted, paint_background, row, stroke, ts, Palette, Tone, TEXT_SCALE};
-use crate::app::Jarvis;
+use crate::app::Jai;
 use crate::hud::HudCommand;
 use crate::widgets::{self, BlockKind, DynamicWidgetSpec, NativeWindowSpec, TimerMode, WidgetKind};
 use eframe::egui::{
@@ -23,10 +23,10 @@ fn icon() -> Option<Arc<IconData>> {
     ICON.get_or_init(|| super::window_icon().map(Arc::new)).clone()
 }
 
-/// Lets widgets send commands to Jarvis from any window.
+/// Lets widgets send commands to JAI from any window.
 #[derive(Clone)]
 pub(super) struct WidgetHost {
-    pub app: Jarvis,
+    pub app: Jai,
     pub rt: Handle,
 }
 
@@ -418,7 +418,7 @@ fn code_block(ui: &mut Ui, p: &Palette, code: &str) {
     });
 }
 
-/// A unified diff (Jarvis' file edits): an `@@` hunk header and only ` `/`+`/`-` lines.
+/// A unified diff (JAI's file edits): an `@@` hunk header and only ` `/`+`/`-` lines.
 fn looks_like_diff(code: &str) -> bool {
     let mut lines = code.lines().filter(|l| !l.is_empty());
     lines.clone().any(|l| l.starts_with("@@")) && lines.all(|l| l.starts_with(['@', '+', '-', ' ', '…']))
@@ -441,7 +441,7 @@ fn diff_job(p: &Palette, code: &str) -> LayoutJob {
 
 // ------------------------------------------------------------------------ telemetry ----
 
-fn telemetry_view(ui: &mut Ui, p: &Palette, app: &Jarvis) {
+fn telemetry_view(ui: &mut Ui, p: &Palette, app: &Jai) {
     let t = app.telemetry();
     let bar = |ui: &mut Ui, pct: f32, hot: bool| meter(ui, p, pct / 100.0, 6.0, if hot { p.amber } else { p.accent }, &[]);
     row(ui, p, "CPU", format!("{:.1}% · {} threads", t.cpu_usage_pct, t.cpu_cores));
@@ -465,7 +465,7 @@ fn telemetry_view(ui: &mut Ui, p: &Palette, app: &Jarvis) {
 
 // ------------------------------------------------------------------ live data views ----
 // Every view sizes itself from the space it gets, so a window reflows when Sir drags its edge
-// or Jarvis resizes it ("make the drive space window smaller").
+// or JAI resizes it ("make the drive space window smaller").
 
 /// The theme's accent below 75 %, amber to 90 %, red above.
 fn capacity_colour(p: &Palette, pct: f32) -> Color32 {
@@ -528,7 +528,7 @@ fn section(ui: &mut Ui, p: &Palette, title: &str, body: impl FnOnce(&mut Ui)) {
 }
 
 /// CPU (overall gauge + every core), RAM + swap, GPU load / temperature / VRAM, with history.
-fn pc_stats_view(ui: &mut Ui, p: &Palette, app: &Jarvis, window: &str) {
+fn pc_stats_view(ui: &mut Ui, p: &Palette, app: &Jai, window: &str) {
     let t = app.telemetry();
     let width = ui.available_width();
     let wide = width >= 520.0;
@@ -615,7 +615,7 @@ fn pc_stats_view(ui: &mut Ui, p: &Palette, app: &Jarvis, window: &str) {
 }
 
 /// Every drive: letter and label, file system, total / used / free (GB and %), capacity bar.
-fn drive_space_view(ui: &mut Ui, p: &Palette, app: &Jarvis) {
+fn drive_space_view(ui: &mut Ui, p: &Palette, app: &Jai) {
     let t = app.telemetry();
     if t.disks.is_empty() {
         muted(ui, p, "Reading the drives…");
@@ -700,7 +700,7 @@ fn processes_view(ui: &mut Ui, p: &Palette, host: &WidgetHost) {
 }
 
 /// Download / upload throughput with two minutes of history.
-fn network_view(ui: &mut Ui, p: &Palette, app: &Jarvis, window: &str) {
+fn network_view(ui: &mut Ui, p: &Palette, app: &Jai, window: &str) {
     let t = app.telemetry();
     let down = history(ui, (window, "down"), t.net_down_kbps);
     let up = history(ui, (window, "up"), t.net_up_kbps);
@@ -715,7 +715,7 @@ fn viewport_id(id: &str) -> ViewportId {
     ViewportId::from_hash_of(("jarvis_window", id))
 }
 
-/// The Jarvis windows of their own shown in the last frame, as they were (spec and builder): one
+/// The JAI windows of their own shown in the last frame, as they were (spec and builder): one
 /// that was just closed (by voice, by its close button) keeps its viewport while its exit plays,
 /// drawn from here.
 static SHOWN: std::sync::Mutex<Vec<(NativeWindowSpec, ViewportBuilder)>> = std::sync::Mutex::new(Vec::new());
@@ -747,7 +747,7 @@ fn position(spec: &NativeWindowSpec, native_ppp: f32) -> Option<egui::Pos2> {
     Some(pos2(ox + x, oy + y))
 }
 
-/// Registers every Jarvis window with egui (each root frame); egui creates, patches and closes
+/// Registers every JAI window with egui (each root frame); egui creates, patches and closes
 /// the native windows to match.
 pub(super) fn show_windows(ctx: &egui::Context, host: &WidgetHost) {
     static SEEN_REVISION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -808,7 +808,7 @@ pub(super) fn show_windows(ctx: &egui::Context, host: &WidgetHost) {
             ctx.request_repaint_of(viewport_id(&spec.id));
         }
         let mut builder = ViewportBuilder::default()
-            .with_title(format!("{} — J.A.R.V.I.S.", spec.title))
+            .with_title(format!("{} — J.A.I.", spec.title))
             .with_app_id("jarvis")
             .with_inner_size([spec.width, spec.height])
             .with_min_inner_size(spec.min_size)
@@ -816,7 +816,7 @@ pub(super) fn show_windows(ctx: &egui::Context, host: &WidgetHost) {
             // See-through backgrounds (`opacity`) and the borderless look; egui re-applies a
             // changed builder to the open window.
             .with_transparent(true)
-            // Always borderless: Windows never draws its grey frame around a Jarvis window (the
+            // Always borderless: Windows never draws its grey frame around a JAI window (the
             // title moves it, the grip resizes it, the theme draws its border).
             .with_decorations(false)
             .with_window_level(if spec.always_on_top { egui::viewport::WindowLevel::AlwaysOnTop } else { egui::viewport::WindowLevel::Normal });
@@ -834,7 +834,7 @@ pub(super) fn show_windows(ctx: &egui::Context, host: &WidgetHost) {
         shown_now.push((spec.clone(), builder.clone()));
         let (host, id) = (host.clone(), spec.id.clone());
         ctx.show_viewport_deferred(viewport_id(&spec.id), builder, move |ctx, class| {
-            crate::crash_guard::guard("Jarvis window", || window_frame(ctx, class, &host, &id));
+            crate::crash_guard::guard("JAI window", || window_frame(ctx, class, &host, &id));
         });
     }
     // A window of its own that was closed plays its exit before its viewport goes; one that went
@@ -846,21 +846,21 @@ pub(super) fn show_windows(ctx: &egui::Context, host: &WidgetHost) {
         }
         let (host, id) = (host.clone(), spec.id.clone());
         ctx.show_viewport_deferred(viewport_id(&spec.id), builder.clone(), move |ctx, class| {
-            crate::crash_guard::guard("Jarvis window", || window_frame(ctx, class, &host, &id));
+            crate::crash_guard::guard("JAI window", || window_frame(ctx, class, &host, &id));
         });
         shown_now.push((spec, builder));
     }
     *SHOWN.lock().unwrap_or_else(|e| e.into_inner()) = shown_now;
 }
 
-/// One frame of a Jarvis window.
+/// One frame of a JAI window.
 fn window_frame(ctx: &egui::Context, class: ViewportClass, host: &WidgetHost, id: &str) {
     let engine = &host.app.tools().widgets;
     // (Closed and playing its exit: drawn as it was.)
     let open = engine.windows().into_iter().find(|w| w.id == id);
     let leaving = open.is_none();
     let Some(spec) = open.or_else(|| leaving_spec(id).filter(|_| super::detached_leaving(ctx))) else {
-        // Closed by Jarvis while the HUD was not painting: hide now, egui drops it next frame.
+        // Closed by JAI while the HUD was not painting: hide now, egui drops it next frame.
         ctx.send_viewport_cmd(ViewportCommand::Visible(false));
         ctx.request_repaint_of(ViewportId::ROOT);
         return;
@@ -927,7 +927,7 @@ fn window_frame(ctx: &egui::Context, class: ViewportClass, host: &WidgetHost, id
     ctx.request_repaint_after(Duration::from_millis(if hovered { 250 } else if fast { 1000 } else { 700 }));
 }
 
-/// A Jarvis window's blocks and widgets (in the HUD block or the detached window); true when a
+/// A JAI window's blocks and widgets (in the HUD block or the detached window); true when a
 /// live view needs the 1 s refresh.
 fn window_content(ui: &mut Ui, p: &Palette, spec: &NativeWindowSpec, host: &WidgetHost) -> bool {
     let engine = &host.app.tools().widgets;
@@ -983,13 +983,13 @@ fn window_content(ui: &mut Ui, p: &Palette, spec: &NativeWindowSpec, host: &Widg
             }
         }
         if spec.blocks.is_empty() && spec.widgets.is_empty() {
-            muted(ui, &p, "Empty window — ask Jarvis to put something here.");
+            muted(ui, &p, "Empty window — ask JAI to put something here.");
         }
     });
     fast
 }
 
-/// A Jarvis window's colours: the HUD's, with the window's own theme, colours and opacity.
+/// A JAI window's colours: the HUD's, with the window's own theme, colours and opacity.
 fn window_palette(host: &WidgetHost, style: &widgets::WindowStyle) -> Palette {
     let mut iface = host.app.config().read(|c| c.interface.clone());
     if let Some(t) = style.theme.as_deref().and_then(crate::interface::theme) {
@@ -1011,7 +1011,7 @@ fn window_palette(host: &WidgetHost, style: &widgets::WindowStyle) -> Palette {
     p
 }
 
-/// The hover toolbar of a Jarvis window (right to left): close, theme, opacity, text size,
+/// The hover toolbar of a JAI window (right to left): close, theme, opacity, text size,
 /// borderless and always-on-top. Every change is saved for the window.
 fn window_toolbar(ui: &mut Ui, ctx: &egui::Context, host: &WidgetHost, spec: &NativeWindowSpec) {
     let engine = &host.app.tools().widgets;

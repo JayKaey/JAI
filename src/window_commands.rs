@@ -1,4 +1,4 @@
-//! Jarvis' own windows moved and sized on command: "move it to the middle", "centre the Earth",
+//! JAI's own windows moved and sized on command: "move it to the middle", "centre the Earth",
 //! "put the earth on the left half", "make it bigger", "full screen the Earth", "exit full
 //! screen", "move the radar to my second monitor", "put them side by side", "resize it to half
 //! the screen", "shrink it", "minimise it", "restore it", "mach es größer", "verschieb es in die
@@ -10,7 +10,7 @@
 //!
 //! What "it" means: the view of his that was opened, moved or arranged last, while that is newer
 //! than the app the conversation is about (else "it" stays that app, as before). His own HUD is
-//! never moved unless Sir says "yourself" or "Jarvis" (`configure_interface` does that).
+//! never moved unless Sir says "yourself" or "JAI" (`configure_interface` does that).
 //!
 //! The fast path here catches only what has no way yet: a view named by name ("full screen the
 //! Earth"), and for "it" the places and sizes nothing else knows (the middle, a corner, a third,
@@ -584,8 +584,8 @@ fn is_them(o: &str) -> bool {
     matches!(o, "them" | "both" | "both of them" | "those" | "these" | "the two" | "those two" | "these two" | "the windows" | "both windows" | "beide" | "die beiden" | "sie beide" | "beide fenster")
 }
 
-/// Never this tool: Jarvis himself (his HUD, board, orb, core), which only moves when Sir says
-/// "yourself" or "Jarvis" (`configure_interface`).
+/// Never this tool: JAI himself (his HUD, board, orb, core), which only moves when Sir says
+/// "yourself" or "JAI" (`configure_interface`).
 fn names_himself(o: &str) -> bool {
     crate::tools::names_jarvis(o)
         || matches!(
@@ -606,7 +606,7 @@ fn view_name(o: &str) -> Option<String> {
     if name.len() < 3 || names_himself(&name) {
         return None;
     }
-    use crate::jarvis_views::JarvisSubWindow as View;
+    use crate::jarvis_views::JaiSubWindow as View;
     // The panels by their own names: never an app of his.
     if matches!(View::parse(&name), Some(View::Earth | View::NetworkRadar | View::DiskMap)) && name.split_whitespace().count() <= 3 {
         return Some(name);
@@ -875,7 +875,7 @@ fn resolve_named(name: &str) -> Option<(String, Option<&'static str>)> {
     if let Some(id) = crate::hud_dock::find_open(name) {
         return Some((id, None));
     }
-    use crate::jarvis_views::JarvisSubWindow as View;
+    use crate::jarvis_views::JaiSubWindow as View;
     let view = View::parse(name)?;
     let id = match view {
         View::SystemStatsMonitor => "system_telemetry",
@@ -904,7 +904,7 @@ pub async fn run_tool(ctx: &ToolContext, args: &Value) -> Result<String, String>
         return Err("to_monitor needs a monitor (1, 2, left, right, other).".into());
     }
     if !crate::gui::windows_supported() {
-        return Err("Jarvis is running without a display (headless), so he has no windows to arrange.".into());
+        return Err("JAI is running without a display (headless), so he has no windows to arrange.".into());
     }
     let raw = str_arg(args, &["target", "view", "name", "id"]).unwrap_or("it").to_string();
     let lower = raw.to_lowercase();
@@ -1109,7 +1109,7 @@ mod tests {
         assert_eq!(p("dock the earth back"), args("earth", "dock", json!({})));
         // ("Put it back" alone may be the model's colours or a moved block's place.)
         assert_ne!(p("put it back"), args("it", "dock", json!({})));
-        assert_eq!(p("No Jarvis, can you full screen the Earth?"), args("earth", "fullscreen", json!({})));
+        assert_eq!(p("No JAI, can you full screen the Earth?"), args("earth", "fullscreen", json!({})));
         assert_eq!(p("Centre the Earth"), args("earth", "move", json!({ "position": "centre" })));
         assert_eq!(p("Put the earth on the left half"), args("earth", "move", json!({ "position": "left" })));
         assert_eq!(p("Full screen the Earth"), args("earth", "fullscreen", json!({})));
@@ -1152,7 +1152,7 @@ mod tests {
             "Make Firefox bigger",
             "Full screen yourself",
             "Move yourself to the left",
-            "Maximize Jarvis",
+            "Maximize JAI",
             "Make the HUD full screen",
             "Put the board on the left",
             "Move the orb to the middle",

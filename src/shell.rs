@@ -158,7 +158,7 @@ impl Drop for CancelOnDrop {
 /// Runs a background helper (PowerShell, `arp`, `ping`, `ssh`, `nvidia-smi` …) and collects its
 /// output. On Windows it starts hidden **and** with the "working in background" cursor forced
 /// off (`STARTF_FORCEOFFFEEDBACK`, which std's spawner cannot set), inside a job object that dies
-/// with Jarvis. Batch files and other platforms use the ordinary spawner. `Err(TimedOut)` once
+/// with JAI. Batch files and other platforms use the ordinary spawner. `Err(TimedOut)` once
 /// `timeout` passes (the process is killed); dropping the future kills it as well.
 pub async fn run_helper<I, S>(program: &Path, args: I, cwd: Option<&Path>, envs: &[(String, String)], timeout: Duration) -> std::io::Result<HelperOutput>
 where
@@ -215,7 +215,7 @@ where
 }
 
 /// A long-running hidden helper (the worldwide tunnel) on Windows: no feedback cursor, killed
-/// with Jarvis by the helper job and on drop. `capture` pipes its stdout and stderr; `envs` are
+/// with JAI by the helper job and on drop. `capture` pipes its stdout and stderr; `envs` are
 /// added to its environment (a secret travels there, not on the command line, which every
 /// program on the PC can read).
 #[cfg(windows)]
@@ -261,7 +261,7 @@ pub mod quiet {
         io::Error::from_raw_os_error(e.code().0 & 0xFFFF)
     }
 
-    /// Every helper joins this job: when Jarvis exits or crashes, its last handle closes and the
+    /// Every helper joins this job: when JAI exits or crashes, its last handle closes and the
     /// helpers die with it (no orphaned `cloudflared`). Processes the helpers start themselves
     /// break away silently, so an app launched from a shell command keeps running.
     struct HelperJob(HANDLE);

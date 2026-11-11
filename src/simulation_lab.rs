@@ -1027,7 +1027,7 @@ pub fn run_tool(lab: &SimulationLab, name: &str, args: &Value) -> Result<String,
             let spec = str_arg(args, &["formula_or_params", "formula", "params", "parameters"]).unwrap_or("");
             let kind = SimKind::parse(raw).or_else(|| SimKind::parse(spec)).unwrap_or(SimKind::Function);
             if !crate::gui::windows_supported() {
-                return Err("Jarvis is running without a display, so the Simulation Lab cannot open a window.".into());
+                return Err("JAI is running without a display, so the Simulation Lab cannot open a window.".into());
             }
             let sim = lab.launch(kind, spec, str_arg(args, &["title", "name"]))?;
             let separate = place_simulation(&sim.id, args);
@@ -1257,7 +1257,7 @@ pub fn voice_adjust(lab: &SimulationLab, text: &str) -> Option<Value> {
     let names: Vec<&str> = sim.params.iter().map(|p| p.name.as_str()).collect();
     let mut changes = serde_json::Map::new();
     for clause in lower.split([',', ';']).flat_map(|c| c.split(" and ")).flat_map(|c| c.split(" und ")) {
-        let words: Vec<&str> = clause.split_whitespace().filter(|w| !matches!(*w, "the" | "die" | "den" | "das" | "der" | "please" | "bitte" | "jarvis")).collect();
+        let words: Vec<&str> = clause.split_whitespace().filter(|w| !matches!(*w, "the" | "die" | "den" | "das" | "der" | "please" | "bitte" | "jai")).collect();
         if words.is_empty() {
             continue;
         }
@@ -1297,7 +1297,7 @@ pub fn voice_adjust(lab: &SimulationLab, text: &str) -> Option<Value> {
     }
     // Only commands that are clearly about the simulation ("set/make/change/double …").
     let verb = ["set", "make", "change", "double", "halve", "half", "triple", "increase", "decrease", "raise", "lower", "reduce", "put", "stell", "setz", "verdopp", "halbier", "erhöh", "verringer", "ändere"];
-    if !verb.iter().any(|v| lower.trim_start_matches("jarvis").trim_start_matches([',', ' ']).starts_with(v) || lower.contains(&format!(" {v}"))) {
+    if !verb.iter().any(|v| lower.trim_start_matches("jai").trim_start_matches([',', ' ']).starts_with(v) || lower.contains(&format!(" {v}"))) {
         return None;
     }
     Some(json!({ "sim": sim.id, "changes": Value::Object(changes) }))
@@ -1321,7 +1321,7 @@ mod tests {
 
     #[test]
     fn simulation_requests_take_their_numbers_from_the_conversation() {
-        // Jarvis' reply first, Sir's words last (they win): what the brain passes.
+        // JAI's reply first, Sir's words last (they win): what the brain passes.
         let context = vec![
             "It needs about 9.9 metres per second, Sir, with gravity at 9.81 m/s².".to_string(),
             "A ball is thrown 5 m straight up. How fast was it thrown?".to_string(),

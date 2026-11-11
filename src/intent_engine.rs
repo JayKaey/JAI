@@ -3,7 +3,7 @@
 //!
 //! * "Forget that" / "never mind" / "vergiss es" (also misheard: "no fool forgets that idea")
 //!   cancels: the conversation, any pending offer or dialogue and the working memory are
-//!   cleared and Jarvis says one line — the model is never asked.
+//!   cleared and JAI says one line — the model is never asked.
 //! * "Bring up everything you know about Spotify" / "zeig mir alles über …" opens the topic
 //!   knowledge workspace deterministically (overview dossier, knowledge graph, live research).
 //! * A new, self-contained request is answered on its own (no earlier turns in the prompt); a
@@ -50,9 +50,9 @@ fn words(text: &str) -> Vec<String> {
 
 // --------------------------------------------------------------------------- cancel ----
 
-/// Courtesy and hesitation words around a cancel ("no, Jarvis, just forget that idea").
+/// Courtesy and hesitation words around a cancel ("no, JAI, just forget that idea").
 const CANCEL_FILLERS: [&str; 34] = [
-    "no", "nope", "nah", "nein", "oh", "um", "uh", "hm", "hmm", "well", "okay", "ok", "jarvis", "please", "bitte", "sir", "actually", "just", "wait", "hey",
+    "no", "nope", "nah", "nein", "oh", "um", "uh", "hm", "hmm", "well", "okay", "ok", "jai", "please", "bitte", "sir", "actually", "just", "wait", "hey",
     "the", "that's", "thats", "idea", "die", "idee", "a", "about", "sorry", "mal", "you", "can", "ach", "na",
 ];
 /// Words Whisper puts into a mumbled "no, forget that" ("no fool forgets that idea").
@@ -123,31 +123,31 @@ pub fn is_cancel(text: &str) -> bool {
 pub enum IntentAction {
     /// "Close the windows you opened", "mach die Fenster wieder zu" (also after "No. Just …").
     CloseSecondaryWindows,
-    /// "Schließ dich", "beende dich", "quit Jarvis", "close yourself".
-    ExitJarvisApplication,
+    /// "Schließ dich", "beende dich", "quit JAI", "close yourself".
+    ExitJaiApplication,
 }
 
 pub const WINDOWS_CLOSED_REPLY: &str = "Right away, Sir. All secondary windows have been closed.";
 pub const NO_WINDOWS_REPLY: &str = "There are no secondary windows open, Sir.";
 
 /// Corrections, courtesy and hesitation in front of the real command ("No. Just can you …",
-/// "Nein, einfach …", "Wait, Jarvis, could you please …").
+/// "Nein, einfach …", "Wait, JAI, could you please …").
 const LEAD_FILLERS: [&str; 40] = [
-    "no", "nope", "nah", "nein", "wait", "warte", "just", "einfach", "actually", "eigentlich", "okay", "ok", "jarvis", "please", "bitte", "hey", "um", "uh",
+    "no", "nope", "nah", "nein", "wait", "warte", "just", "einfach", "actually", "eigentlich", "okay", "ok", "jai", "please", "bitte", "hey", "um", "uh",
     "ähm", "äh", "so", "also", "then", "dann", "sir", "well", "oh", "can", "could", "would", "will", "you", "kannst", "könntest", "würdest", "du", "mal",
     "now", "jetzt", "and",
 ];
 /// Courtesy after the command ("… for me, please", "… bitte jetzt").
-const TAIL_FILLERS: [&str; 12] = ["please", "bitte", "jarvis", "sir", "now", "jetzt", "mal", "too", "as", "well", "for", "me"];
+const TAIL_FILLERS: [&str; 12] = ["please", "bitte", "jai", "sir", "now", "jetzt", "mal", "too", "as", "well", "for", "me"];
 
 /// The command itself: leading corrections and trailing courtesy stripped, lower case.
 pub fn command_core(text: &str) -> String {
     strip_fillers(text, false)
 }
 
-/// `keep_name`: "Jarvis" stays ("Jarvis beenden", "quit Jarvis" name their object).
+/// `keep_name`: "JAI" stays ("JAI beenden", "quit JAI" name their object).
 fn strip_fillers(text: &str, keep_name: bool) -> String {
-    let filler = |t: &String, list: &[&str]| list.contains(&t.as_str()) && !(keep_name && t == "jarvis");
+    let filler = |t: &String, list: &[&str]| list.contains(&t.as_str()) && !(keep_name && t == "jai");
     let w = words(text);
     let start = w.iter().position(|t| !filler(t, &LEAD_FILLERS)).unwrap_or(w.len());
     let end = w.iter().rposition(|t| !filler(t, &TAIL_FILLERS)).map_or(start, |i| i + 1).max(start);
@@ -155,8 +155,8 @@ fn strip_fillers(text: &str, keep_name: bool) -> String {
 }
 
 static CLOSE_SECONDARY: LazyLock<Vec<Regex>> = LazyLock::new(|| {
-    let adjectives = r"(?:(?:extra|secondary|research|sub|other|additional|new|open|opened|spatial|workspace|knowledge|floating|pop ?up|jarvis|your|my|those|these|the|all|of|remaining)\s+)*";
-    let made = r"(?:\s+(?:that\s+|which\s+)?(?:you|jarvis)\s+(?:just\s+|have\s+|had\s+)?(?:opened|open|made|created|spawned|brought up|pulled up|put up))?";
+    let adjectives = r"(?:(?:extra|secondary|research|sub|other|additional|new|open|opened|spatial|workspace|knowledge|floating|pop ?up|jai|your|my|those|these|the|all|of|remaining)\s+)*";
+    let made = r"(?:\s+(?:that\s+|which\s+)?(?:you|jai)\s+(?:just\s+|have\s+|had\s+)?(?:opened|open|made|created|spawned|brought up|pulled up|put up))?";
     [
         // "close the windows you opened", "close all windows", "close the research windows",
         // "close subwindows", "get rid of those extra windows".
@@ -165,7 +165,8 @@ static CLOSE_SECONDARY: LazyLock<Vec<Regex>> = LazyLock::new(|| {
         // "close everything you opened", "close all of them".
         r"^(?:close|shut|dismiss)\s+(?:everything|all of them|them all)(?:\s+(?:that\s+)?you\s+(?:just\s+)?(?:opened|open|made|spawned))?$".to_string(),
         // "räum die Fenster weg", "entfern alle Fenster".
-        r"^(?:räum|räume|raeum|entfern|entferne)\s+(?:(?:alle|die|deine|diese|offenen|geöffneten)\s+)*fenster(?:\s+(?:weg|auf|ab))?$".to_string(),
+        // ("Räum die Fenster auf" tidies them.)
+        r"^(?:räum|räume|raeum)\s+(?:(?:alle|die|deine|diese|offenen|geöffneten)\s+)*fenster\s+(?:weg|ab)$|^(?:entfern|entferne)\s+(?:(?:alle|die|deine|diese|offenen|geöffneten)\s+)*fenster$".to_string(),
         // "schließ die Fenster", "mach die Fenster wieder zu", "schließ alle deine Fenster".
         r"^(?:schließ|schließe|schliess|schliesse|mach|mache)\s+(?:(?:alle|die|deine|diese|eure|zusätzlichen|extra|neuen|offenen|geöffneten|anderen|recherche|unter)\s+)*(?:fenster|unterfenster|nebenfenster)(?:\s+(?:die du|die du geöffnet hast|wieder|alle|bitte))*(?:\s+zu)?$".to_string(),
         // "Fenster schließen", "alle Fenster zu".
@@ -183,13 +184,13 @@ static EXIT_JARVIS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
         r"^(?:mach|mache)\s+dich\s+(?:zu|aus)$",
         r"^(?:schalt|schalte)\s+dich\s+(?:aus|ab)$",
         r"^(?:fahr|fahre)\s+dich\s+(?:runter|herunter)$",
-        r"^(?:jarvis|programm|das programm|app|die app)\s+(?:beenden|schließen|schliessen|ausschalten)$",
-        r"^(?:beende|schließ|schließe)\s+(?:jarvis|das programm|die app)$",
+        r"^(?:jai|programm|das programm|app|die app)\s+(?:beenden|schließen|schliessen|ausschalten)$",
+        r"^(?:beende|schließ|schließe)\s+(?:jai|das programm|die app)$",
         r"^geh\s+aus$",
         // English.
-        r"^(?:close|quit|exit|terminate|end)\s+(?:yourself|urself|your self|jarvis|the jarvis app)$",
-        r"^(?:shut|turn|switch|power)\s+(?:yourself|jarvis)\s+(?:down|off)$",
-        r"^(?:shut|turn|switch|power)\s+(?:down|off)\s+(?:yourself|jarvis)$",
+        r"^(?:close|quit|exit|terminate|end)\s+(?:yourself|urself|your self|jai|the jai app)$",
+        r"^(?:shut|turn|switch|power)\s+(?:yourself|jai)\s+(?:down|off)$",
+        r"^(?:shut|turn|switch|power)\s+(?:down|off)\s+(?:yourself|jai)$",
     ]
     .iter()
     .map(|p| Regex::new(p).expect("exit expression"))
@@ -205,7 +206,7 @@ pub fn deterministic_action(text: &str) -> Option<IntentAction> {
     }
     let named = strip_fillers(text, true);
     if EXIT_JARVIS.iter().any(|r| r.is_match(&core) || r.is_match(&named)) {
-        return Some(IntentAction::ExitJarvisApplication);
+        return Some(IntentAction::ExitJaiApplication);
     }
     if CLOSE_SECONDARY.iter().any(|r| r.is_match(&core)) {
         return Some(IntentAction::CloseSecondaryWindows);
@@ -213,7 +214,7 @@ pub fn deterministic_action(text: &str) -> Option<IntentAction> {
     None
 }
 
-/// Closes every secondary window Jarvis opened, at once: the in-app blocks (Feature Lab, Theme
+/// Closes every secondary window JAI opened, at once: the in-app blocks (Feature Lab, Theme
 /// Studio, telemetry …, which fade out), the spatial workspace windows, the native windows
 /// (system stats, schedule …), the simulations and every pop-up card. Returns how many were
 /// closed.
@@ -261,9 +262,9 @@ pub fn close_secondary_windows(tools: &ToolContext) -> usize {
 
 static KNOWLEDGE: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     [
-        r"(?i)^(?:(?:hey |ok |okay )?jarvis[,!]?\s+)?(?:(?:can|could|would|will) you |please |kindly )*(?:bring up|pull up|show me|show|open up|give me|display|put up)\s+(?:everything|all(?: the)? (?:data|files|info|information|facts|stuff|details|knowledge)|all)\s+(?:that )?(?:you (?:know|have|got|can find|could find)\s+)?(?:about|on|regarding|for|concerning|of)\s+(.+?)\s*(?:please|for me|sir|jarvis)?[?.!]*$",
-        r"(?i)^(?:(?:hey )?jarvis[,!]?\s+)?(?:(?:can|could|would) you |please )*research\s+(.+?)\s+and\s+(?:bring up|show|open|pull up|put up)(?: me)?\s+(?:the |all the )?(?:windows?|workspace|everything|results?|dossier)\s*(?:please|for me)?[?.!]*$",
-        r"(?i)^(?:jarvis[,!]?\s+)?(?:zeig|zeige|bring)\s+mir\s+alles\s+(?:was du\s+)?(?:über|ueber|zu|von)\s+(.+?)(?:\s+(?:weißt|weisst|hast))?(?:\s+bitte)?[?.!]*$",
+        r"(?i)^(?:(?:hey |ok |okay )?jai[,!]?\s+)?(?:(?:can|could|would|will) you |please |kindly )*(?:bring up|pull up|show me|show|open up|give me|display|put up)\s+(?:everything|all(?: the)? (?:data|files|info|information|facts|stuff|details|knowledge)|all)\s+(?:that )?(?:you (?:know|have|got|can find|could find)\s+)?(?:about|on|regarding|for|concerning|of)\s+(.+?)\s*(?:please|for me|sir|jai)?[?.!]*$",
+        r"(?i)^(?:(?:hey )?jai[,!]?\s+)?(?:(?:can|could|would) you |please )*research\s+(.+?)\s+and\s+(?:bring up|show|open|pull up|put up)(?: me)?\s+(?:the |all the )?(?:windows?|workspace|everything|results?|dossier)\s*(?:please|for me)?[?.!]*$",
+        r"(?i)^(?:jai[,!]?\s+)?(?:zeig|zeige|bring)\s+mir\s+alles\s+(?:was du\s+)?(?:über|ueber|zu|von)\s+(.+?)(?:\s+(?:weißt|weisst|hast))?(?:\s+bitte)?[?.!]*$",
     ]
     .into_iter()
     .map(|p| Regex::new(p).expect("valid knowledge pattern"))
@@ -309,7 +310,7 @@ const CONTINUATIONS: [&str; 34] = [
 /// "yes", "full screen"). Biased towards follow-up: a wrong "new request" loses context.
 pub fn is_follow_up(text: &str) -> bool {
     let w = words(text);
-    let w: Vec<&str> = w.iter().map(String::as_str).filter(|x| *x != "jarvis").collect();
+    let w: Vec<&str> = w.iter().map(String::as_str).filter(|x| *x != "jai").collect();
     if w.len() <= 3 {
         return true;
     }
@@ -694,7 +695,7 @@ pub fn compose_spoken(topic: &str, facts: &[String], installed: Option<&str>) ->
     lines.into_iter().take(2).map(|l| l.trim().to_string()).collect::<Vec<_>>().join(" ")
 }
 
-/// Everything Jarvis can tell about a topic right now: local memories, the installed app and
+/// Everything JAI can tell about a topic right now: local memories, the installed app and
 /// files, his own tools for it, Wikipedia and DuckDuckGo. Opens the three topic windows and
 /// returns the display text with a two-sentence spoken overview.
 pub async fn spawn_topic_knowledge_workspace(tools: &ToolContext, topic: &str) -> Result<String, String> {
@@ -707,7 +708,7 @@ pub async fn spawn_topic_knowledge_workspace(tools: &ToolContext, topic: &str) -
     let (wiki, ddg) = tokio::join!(tokio::time::timeout(wait, research::wikipedia_brief(topic)), tokio::time::timeout(wait, research::ddg_instant(topic)));
     let wiki = wiki.ok().flatten();
     let ddg = ddg.ok().flatten();
-    // On this PC: the app, whether it runs, files with its name, what Jarvis can do with it.
+    // On this PC: the app, whether it runs, files with its name, what JAI can do with it.
     let app = crate::appindex::lookup(topic);
     let needle = lower.replace(' ', "");
     let running = tokio::task::spawn_blocking(move || {
@@ -801,13 +802,13 @@ pub async fn spawn_topic_knowledge_workspace(tools: &ToolContext, topic: &str) -
     // The live research mission behind the graph and the crawler window.
     let mission = research::start_or_reuse_mission(tools, topic, 20)?;
     let local = format!(
-        "# What Jarvis knows about {title}\n\n{}\n\n{}{}{}",
+        "# What JAI knows about {title}\n\n{}\n\n{}{}{}",
         what.clone().unwrap_or_default(),
         app.as_ref().map(|a| format!("{} is installed on this computer as {} and {} running at the moment.\n\n", title, a.name, if running { "is" } else { "is not" })).unwrap_or_default(),
-        abilities.iter().map(|(n, d)| format!("Jarvis can work with {title} through the {} tool: {d}.\n\n", n.replace('_', " "))).collect::<String>(),
+        abilities.iter().map(|(n, d)| format!("JAI can work with {title} through the {} tool: {d}.\n\n", n.replace('_', " "))).collect::<String>(),
         memories.iter().map(|m| format!("Sir's note about {title}: {} — {}.\n\n", m.key, m.value)).collect::<String>()
     );
-    research::add_local_source(mission, &format!("jarvis://jarvis.local/knowledge/{}", lower.replace(' ', "-")), &format!("Jarvis knowledge: {title}"), &local, 0.75);
+    research::add_local_source(mission, &format!("jai://jarvis.local/knowledge/{}", lower.replace(' ', "-")), &format!("JAI knowledge: {title}"), &local, 0.75);
     if let Some(w) = &wiki {
         research::add_local_source(mission, &format!("{}#summary", w.url), &format!("{} (Wikipedia summary)", w.title), &format!("# {}\n\n{}\n\n{}", w.title, w.description, w.extract), research::reliability(&w.url));
     }
@@ -837,7 +838,7 @@ pub fn definitions() -> Vec<Value> {
     vec![
         json!({"type": "function", "function": {
             "name": "spawn_topic_knowledge_workspace",
-            "description": "Bring up everything Jarvis knows about a topic: three floating windows (overview & facts dossier with what it is, whether it is installed, key facts and what Jarvis can do with it; a knowledge graph of its connections; live web research). Use for 'bring up / show me / pull up everything you know about X', 'zeig mir alles über X'.",
+            "description": "Bring up everything JAI knows about a topic: three floating windows (overview & facts dossier with what it is, whether it is installed, key facts and what JAI can do with it; a knowledge graph of its connections; live web research). Use for 'bring up / show me / pull up everything you know about X', 'zeig mir alles über X'.",
             "parameters": {"type": "object", "properties": {"topic": {"type": "string"}}, "required": ["topic"]}
         }}),
         json!({"type": "function", "function": {
@@ -859,7 +860,7 @@ pub async fn run_tool(tools: &ToolContext, name: &str, args: &Value) -> Result<S
 
 // ================================================================== the reflex router ====
 //
-// Tier 1 of the cognitive router: Jarvis' own controls, decided in microseconds and in a fixed
+// Tier 1 of the cognitive router: JAI's own controls, decided in microseconds and in a fixed
 // order, before the turn lock, the conversation log and the older parsers.
 //
 //   1. the privacy lock   "stop listening", "you can listen again"
@@ -1067,7 +1068,7 @@ impl ReflexContext {
 pub enum Reflex {
     /// The privacy lock.
     Privacy(crate::listening_lock::LockCommand),
-    /// One of Jarvis' own controls, carried out without a word (a HUD badge only).
+    /// One of JAI's own controls, carried out without a word (a HUD badge only).
     Silent(SilentAction),
 }
 
@@ -1111,7 +1112,7 @@ fn command_span<'a>(words: &'a [&'a str]) -> &'a [&'a str] {
     &words[start..end]
 }
 
-/// The reflex in `text`, if it is one of Jarvis' own controls (see the stage list above).
+/// The reflex in `text`, if it is one of JAI's own controls (see the stage list above).
 pub fn route(text: &str, ctx: &ReflexContext) -> Option<Routed> {
     let canon = canonical(text);
     let mask = domains(&canon);
@@ -1150,7 +1151,7 @@ pub fn route(text: &str, ctx: &ReflexContext) -> Option<Routed> {
         };
         return hit(Reflex::Silent(SilentAction { tool: "configure_interface", args: json!({ "orb_board_position": place }), label }), "orb", Some(step));
     }
-    // 3. Jarvis' own blocks.
+    // 3. JAI's own blocks.
     if mask & domain::CLOSE != 0 {
         if let Some(action) = block_close(core) {
             return hit(Reflex::Silent(action), "blocks", None);
@@ -1251,10 +1252,10 @@ fn orb_follow_up(core: &[&str], last: [f32; 2]) -> Option<(crate::interface::Orb
 
 const CLOSE_VERBS: &[&str] = &["close", "hide", "dismiss", "shut", "remove", "schließ", "schließe", "schliess", "schliesse"];
 
-/// Words Sir says after what he wants closed, never part of its name (2026-11-08: "Jarvis, close
+/// Words Sir says after what he wants closed, never part of its name (2026-11-08: "JAI, close
 /// the Earth, you." asked Windows for a program called "Earth You"; "close up" and "closed, off"
 /// for one called "Up" and "Off").
-const CLOSE_TAIL: &[&str] = &["you", "please", "bitte", "for", "me", "now", "jetzt", "mal", "up", "off", "down", "away", "again", "too", "sir", "jarvis", "already", "quickly"];
+const CLOSE_TAIL: &[&str] = &["you", "please", "bitte", "for", "me", "now", "jetzt", "mal", "up", "off", "down", "away", "again", "too", "sir", "jai", "already", "quickly"];
 
 /// `name` without the fillers Sir says after it: "earth you" → "earth", "spotify for me now" →
 /// "spotify", "up" / "off" → "" (nothing was named).
@@ -1280,7 +1281,7 @@ fn open_block_titled(name: &str) -> bool {
     name.len() >= 3 && crate::apps::find_spec(name).is_none() && crate::hud_dock::open_titles().iter().any(|t| t.to_lowercase() == name)
 }
 
-/// Jarvis' own views by the names Sir uses for them. Closing one never asks Windows for a
+/// JAI's own views by the names Sir uses for them. Closing one never asks Windows for a
 /// program called "Feature Lab".
 pub fn is_own_view(name: &str) -> bool {
     matches!(
@@ -1298,7 +1299,7 @@ pub fn is_own_view(name: &str) -> bool {
 }
 
 /// "Close the HUD board", "close to web search", "hide the feature lab window", "mach das Board
-/// zu", "clear the board": the board, one of Jarvis' own blocks, or everything on the canvas.
+/// zu", "clear the board": the board, one of JAI's own blocks, or everything on the canvas.
 /// None for anything that is not his ("close Spotify", "hide the system panel").
 fn block_close(core: &[&str]) -> Option<SilentAction> {
     let (object, clearing): (&[&str], bool) = match core {
@@ -1373,7 +1374,7 @@ fn page_reflex(text: &str, core: &[&str], ctx: &ReflexContext) -> Option<SilentA
 // ------------------------------------------------------------------ phonetic rescue ----
 //
 // Whisper sometimes writes a command as the words it sounds like: "fight the core" (hide the
-// core), "Jarvis disabled the car" (disable the core), "10 discord call on" (turn …). When a
+// core), "JAI disabled the car" (disable the core), "10 discord call on" (turn …). When a
 // short spoken sentence found no route at all, its sound is compared with the sound of the
 // commands that make sense right now; a near-identical one (and only one) is what Sir said.
 
@@ -1562,7 +1563,7 @@ pub fn phonetic_rescue(text: &str, ctx: &ReflexContext) -> Option<&'static str> 
 
 // ------------------------------------------------------------------------ benchmark ----
 
-/// What the routing benchmark feeds the router: Jarvis' own controls, other commands, questions
+/// What the routing benchmark feeds the router: JAI's own controls, other commands, questions
 /// and chatter, English and German.
 pub const BENCH_CORPUS: &[&str] = &[
     "Please stop listening for five minutes.",
@@ -1661,7 +1662,7 @@ mod tests {
     #[test]
     fn quick_requests_take_the_reflex_gear_and_analysis_the_deep_one() {
         use ReasoningGear::*;
-        for quick in ["What's the capital of France?", "Make the interface the typical Jarvis blue", "Tell me a joke", "Wie spät ist es?"] {
+        for quick in ["What's the capital of France?", "Make the interface the typical JAI blue", "Tell me a joke", "Wie spät ist es?"] {
             assert_eq!(reasoning_gear(quick), Reflex, "{quick}");
         }
         for heavy in [
@@ -1722,7 +1723,7 @@ mod tests {
             "Nein, einfach die Fenster wieder zumachen",
             "mach die Fenster wieder zu",
             "Fenster schließen",
-            "Jarvis, could you please close all of your windows?",
+            "JAI, could you please close all of your windows?",
             // Sir's own words of 2026-11-09 and their neighbours.
             "clear all open windows",
             "Clear the windows.",
@@ -1731,10 +1732,11 @@ mod tests {
             "wipe all windows",
             "close all the blocks",
             "räum die Fenster weg",
+            "entferne alle Fenster",
         ] {
             assert_eq!(deterministic_action(yes), Some(IntentAction::CloseSecondaryWindows), "{yes}");
         }
-        for no in ["close Discord", "close the Chrome windows", "don't close the windows", "what windows did you open?", "open the windows settings", "No.", "clear my calendar", "clear the board", "clear the recycle bin", "clear everything from my desktop"] {
+        for no in ["close Discord", "close the Chrome windows", "don't close the windows", "what windows did you open?", "open the windows settings", "No.", "clear my calendar", "clear the board", "clear the recycle bin", "clear everything from my desktop", "Räum die Fenster auf."] {
             assert_ne!(deterministic_action(no), Some(IntentAction::CloseSecondaryWindows), "{no}");
         }
         assert_eq!(command_core("No. Just can you close the windows you opened?"), "close the windows you opened");
@@ -1743,14 +1745,14 @@ mod tests {
     #[test]
     fn german_and_english_self_close_exit_jarvis() {
         for yes in [
-            "schließ dich", "Schließe dich", "beende dich", "mach dich zu", "schalt dich aus", "schalte dich ab", "Jarvis beenden", "Jarvis schließen",
-            "Programm beenden", "App schließen", "geh aus", "Nein, beende dich bitte", "close yourself", "shut yourself down", "exit Jarvis", "quit jarvis",
-            "terminate yourself", "turn yourself off", "Jarvis, could you close yourself please",
+            "schließ dich", "Schließe dich", "beende dich", "mach dich zu", "schalt dich aus", "schalte dich ab", "JAI beenden", "JAI schließen",
+            "Programm beenden", "App schließen", "geh aus", "Nein, beende dich bitte", "close yourself", "shut yourself down", "exit JAI", "quit jai",
+            "terminate yourself", "turn yourself off", "JAI, could you close yourself please",
         ] {
-            assert_eq!(deterministic_action(yes), Some(IntentAction::ExitJarvisApplication), "{yes}");
+            assert_eq!(deterministic_action(yes), Some(IntentAction::ExitJaiApplication), "{yes}");
         }
         for no in ["don't close yourself", "schließ Discord", "beende Spotify", "close the app store website", "shut down my PC", "nicht beenden"] {
-            assert_ne!(deterministic_action(no), Some(IntentAction::ExitJarvisApplication), "{no}");
+            assert_ne!(deterministic_action(no), Some(IntentAction::ExitJaiApplication), "{no}");
         }
     }
 
@@ -1758,9 +1760,9 @@ mod tests {
     fn passive_roleplay_claims_are_withheld() {
         let none: Vec<String> = Vec::new();
         assert!(unbacked_claim("The overview & facts dossier window should be closing now, followed by the knowledge graph window.", &none));
-        assert!(unbacked_claim("All related Jarvis windows have been closed as requested.", &none));
+        assert!(unbacked_claim("All related JAI windows have been closed as requested.", &none));
         let closed = vec!["close_all_secondary_windows".to_string()];
-        assert!(!unbacked_claim("All related Jarvis windows have been closed as requested.", &closed));
+        assert!(!unbacked_claim("All related JAI windows have been closed as requested.", &closed));
         assert!(!unbacked_claim("The window has a dark theme.", &none));
     }
 
@@ -1771,7 +1773,7 @@ mod tests {
             "No, forget that idea",
             "forget it",
             "Never mind.",
-            "nevermind jarvis",
+            "nevermind jai",
             "scratch that",
             "cancel that",
             "Abort!",
@@ -1920,7 +1922,7 @@ mod tests {
 
     #[test]
     fn the_privacy_lock_is_stage_one() {
-        assert_eq!(reflex("Jarvis, please stop listening.", &IDLE), Some(("privacy", json!({"privacy": "Lock"}))));
+        assert_eq!(reflex("JAI, please stop listening.", &IDLE), Some(("privacy", json!({"privacy": "Lock"}))));
         assert_eq!(reflex("You can listen again now.", &IDLE), Some(("privacy", json!({"privacy": "Resume"}))));
         assert_eq!(route("Stop listening for 5 minutes", &IDLE).map(|r| r.stage), Some("privacy"));
         assert_eq!(reflex("Stop listening to the call", &IDLE), None, "the call bridge, not the lock");
@@ -1931,9 +1933,9 @@ mod tests {
     fn the_emblem_moves_wherever_sir_says() {
         let moved = |place: &str| Some(("orb", json!({"tool": "configure_interface", "args": {"orb_board_position": place}})));
         // jarvis.log 2026-11-04 00:53:46: this went to window snapping ("Your Orb A Little Bit").
-        assert_eq!(reflex("Jarvis, move your orb a little bit to the left.", &IDLE), moved("a little bit to the left"));
+        assert_eq!(reflex("JAI, move your orb a little bit to the left.", &IDLE), moved("a little bit to the left"));
         // The screenshot sentence, and its siblings.
-        assert_eq!(reflex("Jarvis, move your orb back to the middle.", &IDLE), moved("back to the middle"));
+        assert_eq!(reflex("JAI, move your orb back to the middle.", &IDLE), moved("back to the middle"));
         assert_eq!(reflex("Center your orb", &IDLE), moved("center"));
         assert_eq!(reflex("Put your core in the middle", &IDLE), moved("in the middle"));
         assert_eq!(reflex("Move your orb to the top right", &IDLE), moved("to the top right"));
@@ -1986,7 +1988,7 @@ mod tests {
     fn his_own_blocks_close_inside_jarvis_never_as_programs() {
         let closed = |args: Value| Some(("blocks", json!({"tool": "hud_board", "args": args})));
         // The screenshot: "Hud Board isn't running, Sir."
-        for text in ["Close the HUD board, please.", "Close the HUD board", "Jarvis close to web search.", "Close web search", "Schließe das HUD Board"] {
+        for text in ["Close the HUD board, please.", "Close the HUD board", "JAI close to web search.", "Close web search", "Schließe das HUD Board"] {
             assert_eq!(reflex(text, &BOARD), closed(json!({"action": "close"})), "{text}");
         }
         assert_eq!(reflex("Close the feature lab", &IDLE), closed(json!({"action": "close", "target": "feature lab"})));
@@ -2004,7 +2006,7 @@ mod tests {
     fn pages_turn_by_voice_and_bare_words_only_with_a_stack_on_screen() {
         let _g = follow_up_lock();
         let page = |args: Value| Some(("pages", json!({"tool": "hud_board", "args": args})));
-        for text in ["Jarvis, next page", "Next result", "Show me the next result", "Nächste Seite"] {
+        for text in ["JAI, next page", "Next result", "Show me the next result", "Nächste Seite"] {
             assert_eq!(reflex(text, &PAGED), page(json!({"action": "flip_note", "direction": "next"})), "{text}");
         }
         for text in ["Previous page", "Go back", "Zurück", "back"] {

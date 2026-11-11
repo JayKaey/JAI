@@ -1,10 +1,10 @@
 //! The HUD's views and where its windows live.
 //!
 //! Every tool view (Simulation Lab and function plotter, system telemetry, schedule, the phone
-//! QR link, Jarvis' markdown windows) opens **inside** the main fullscreen board as a ROSE block
+//! QR link, JAI's markdown windows) opens **inside** the main fullscreen board as a ROSE block
 //! by default. A view becomes its own OS window only when Sir asks — the block's
 //! `[ DETACH ]` button, "open the telemetry in a separate window", "detach the plotter" — and
-//! "dock all windows back inside Jarvis" brings every one of them home.
+//! "dock all windows back inside JAI" brings every one of them home.
 //!
 //! This module is the shared state behind that (which ids are detached, which views should open
 //! detached), the top navigation dock's `HudViewMode`, and the emblem's spatial rule: it only
@@ -139,6 +139,12 @@ struct DockState {
     /// When each block or window was opened, moved by hand or arranged by voice: "it" means
     /// the latest of them.
     touched: HashMap<String, Instant>,
+    /// Content-sized blocks: the content (a hash of what it shows) each block was last fitted
+    /// to, and how often it has grown. A block is fitted once per content, and grows three times at most
+    /// (a body that always asks for more than it has cannot push it across the board).
+    fitted: HashMap<String, (u64, u8)>,
+    /// Blocks Sir sized by hand: they keep his size until they close.
+    hand_sized: HashSet<String>,
 }
 
 /// A block that closes (by voice, its `[ CLOSE ]`, the menu or Ctrl+W) plays its exit over
@@ -248,6 +254,8 @@ pub fn forget(id: &str) {
         s.minimizing.remove(id);
         s.detaching.remove(id);
         s.touched.remove(id);
+        s.fitted.remove(id);
+        s.hand_sized.remove(id);
     });
 }
 
@@ -1028,6 +1036,84 @@ pub fn place_at(id: &str, to: Rect) {
     crate::gui::refresh();
 }
 
+/// A difference in size not worth a move.
+const FIT_SLACK: f32 = 10.0;
+
+/// Sir dragged an edge of block `id`: it keeps the size he gave it.
+pub fn sized_by_hand(id: &str) {
+    with(|s| {
+        s.hand_sized.insert(id.to_string());
+    });
+}
+
+/// Where a block of `current` goes to be `natural` in size: between the smallest block and the
+/// board, at its own place (pushed back inside the board). None while the difference is not
+/// worth a move.
+pub fn fitted_rect(current: Rect, natural: eframe::egui::Vec2, bounds: Rect) -> Option<Rect> {
+    let size = vec2(natural.x.clamp(MIN_BLOCK[0], (bounds.width() - 16.0).max(MIN_BLOCK[0])), natural.y.clamp(MIN_BLOCK[1], (bounds.height() - 16.0).max(MIN_BLOCK[1])));
+    if (size.x - current.width()).abs() <= FIT_SLACK && (size.y - current.height()).abs() <= FIT_SLACK {
+        return None;
+    }
+    let min = pos2(current.min.x.min(bounds.right() - 8.0 - size.x).max(bounds.left() + 8.0), current.min.y.min(bounds.bottom() - 8.0 - size.y).max(bounds.top() + 8.0));
+    Some(Rect::from_min_size(min, size))
+}
+
+/// Content-sized blocks: block `id` shows something that needs `natural` (the whole block, frame
+/// included), and glides to that size at its place. Once per content; never while it opens,
+/// closes, glides or is held, nor a block Sir pinned, maximised or sized by hand. Growing stops
+/// at a neighbour or the emblem.
+pub fn fit_to_content(id: &str, natural: eframe::egui::Vec2, bounds: Rect) {
+    use std::hash::{Hash, Hasher};
+    let orb = lock(&OBSTACLES).0;
+    let moved = with(|s| {
+        let current = *s.last_rect.get(id)?;
+        let held = |open: &Option<(String, Rect)>| open.as_ref().is_some_and(|(open, _)| open == id);
+        let busy = s.glides.contains_key(id)
+            || s.forced.contains_key(id)
+            || s.closing.contains_key(id)
+            || s.pinned.contains(id)
+            || s.hand_sized.contains(id)
+            || s.minimizing.contains(id)
+            || s.detaching.contains(id)
+            || s.grab.as_ref().is_some_and(|(held, _, _)| held == id)
+            || held(&s.maximized)
+            || held(&s.fullscreen)
+            || s.opened.get(id).is_some_and(|(at, _)| at.elapsed() < OPEN_ANIM);
+        if busy {
+            return None;
+        }
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        s.content.get(id).hash(&mut hasher);
+        let content = hasher.finish();
+        let grown = match s.fitted.get(id) {
+            Some((last, _)) if *last == content => return None,
+            Some((_, grown)) => *grown,
+            None => 0,
+        };
+        s.fitted.insert(id.to_string(), (content, grown));
+        let mut to = fitted_rect(current, natural, bounds)?;
+        let grows = to.width() > current.width() + FIT_SLACK || to.height() > current.height() + FIT_SLACK;
+        if grows && grown >= 3 {
+            return None;
+        }
+        if grows {
+            s.fitted.insert(id.to_string(), (content, grown + 1));
+        }
+        let grows_into = s.last_blocks.iter().chain(s.blocks.iter()).filter(|(other, _, _)| other != id).map(|(_, _, r)| *r).chain(orb).any(|r| r.shrink(0.5).intersects(to) && !r.shrink(0.5).intersects(current));
+        if grows_into {
+            to = Rect::from_min_size(current.min, vec2(to.width().min(current.width()), to.height().min(current.height())));
+            if (to.size() - current.size()).length() <= FIT_SLACK {
+                return None;
+            }
+        }
+        s.glides.insert(id.to_string(), (current, to, Instant::now()));
+        Some(())
+    });
+    if moved.is_some() {
+        crate::gui::refresh();
+    }
+}
+
 /// Whether block `id` is on its way somewhere (its window may leave its monitor's part meanwhile).
 pub fn is_gliding(id: &str) -> bool {
     with(|s| s.glides.contains_key(id))
@@ -1161,14 +1247,14 @@ pub fn touch(id: &str) {
     });
 }
 
-/// The block or window of Jarvis' that was opened, moved or arranged last and is still open
+/// The block or window of JAI's that was opened, moved or arranged last and is still open
 /// (on the board, in the tray or in a window of its own), and how long ago that was. Never the
 /// text console.
 pub fn latest_block() -> Option<(String, Duration)> {
     recent_blocks().into_iter().next()
 }
 
-/// Jarvis' open blocks and windows (on the board, in the tray, in windows of their own), the
+/// JAI's open blocks and windows (on the board, in the tray, in windows of their own), the
 /// one opened, moved or arranged last first, with how long ago that was ("them": the first two).
 /// Never the text console.
 pub fn recent_blocks() -> Vec<(String, Duration)> {
@@ -1187,7 +1273,7 @@ pub fn recent_blocks() -> Vec<(String, Duration)> {
     })
 }
 
-/// Where one of Jarvis' blocks or windows is.
+/// Where one of JAI's blocks or windows is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Whereabouts {
     /// On the board, inside the HUD.
@@ -1214,7 +1300,7 @@ pub fn whereabouts(id: &str) -> Whereabouts {
     })
 }
 
-/// The block or window of Jarvis' a spoken name means ("the Earth", "the radar", "the feature
+/// The block or window of JAI's a spoken name means ("the Earth", "the radar", "the feature
 /// lab"), wherever it is: on the board (by title, then by kind), in the tray or in a window of
 /// its own (by kind). None when nothing of that name is open.
 pub fn find_open(name: &str) -> Option<String> {
@@ -1245,6 +1331,29 @@ pub(crate) fn test_lock() -> std::sync::MutexGuard<'static, ()> {
 
 #[cfg(test)]
 mod tests {
+    /// Windows the size of what they show: the Drive Space block of 2026-11-09 stood 640 × 306
+    /// round three short rows.
+    #[test]
+    fn a_block_glides_to_the_size_of_what_it_shows() {
+        use super::{fitted_rect, MIN_BLOCK};
+        use eframe::egui::{pos2, vec2, Rect};
+        let board = Rect::from_min_size(pos2(0.0, 0.0), vec2(1600.0, 900.0));
+        let drive_space = Rect::from_min_size(pos2(100.0, 100.0), vec2(640.0, 306.0));
+        // Less is needed: it shrinks at its place, never under the smallest block.
+        assert_eq!(fitted_rect(drive_space, vec2(420.0, 236.0), board), Some(Rect::from_min_size(pos2(100.0, 100.0), vec2(420.0, 236.0))));
+        assert_eq!(fitted_rect(drive_space, vec2(120.0, 90.0), board).map(|r| r.size()), Some(vec2(MIN_BLOCK[0], MIN_BLOCK[1])));
+        // A few pixels are not worth a move.
+        assert_eq!(fitted_rect(drive_space, vec2(646.0, 300.0), board), None);
+        // More is needed near the board's corner: it grows and stays on the board.
+        let corner = Rect::from_min_size(pos2(1250.0, 700.0), vec2(300.0, 180.0));
+        let grown = fitted_rect(corner, vec2(700.0, 600.0), board).unwrap();
+        assert_eq!(grown.size(), vec2(700.0, 600.0));
+        assert!(board.shrink(7.5).contains_rect(grown), "{grown:?}");
+        // More than the board has: the board, with its margin.
+        let most = fitted_rect(corner, vec2(5000.0, 5000.0), board).unwrap();
+        assert!(board.contains_rect(most) && most.width() == 1584.0 && most.height() == 884.0, "{most:?}");
+    }
+
     use super::*;
 
     fn screen() -> Rect {
@@ -1361,7 +1470,7 @@ mod tests {
         let _g = test_lock();
         let r = Rect::from_min_size(pos2(40.0, 80.0), vec2(820.0, 680.0));
         publish_block("features", "Feature Lab // every system", r);
-        publish_block("system_telemetry", "J.A.R.V.I.S. // SYSTEM TELEMETRY", r);
+        publish_block("system_telemetry", "J.A.I. // SYSTEM TELEMETRY", r);
         publish_block("sim:pendulum", "Pendulum", r);
         begin_frame();
         // The title wins: "feature lab" is the lab, never the simulation ("lab" → `sim:`).

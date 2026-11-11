@@ -19,7 +19,7 @@ use tracing::{info, warn};
 
 const KEY_FILE: &str = "jarvis_vault.key";
 #[cfg(windows)]
-const KEYRING_SERVICE: &str = "J.A.R.V.I.S. Personal Manager";
+const KEYRING_SERVICE: &str = "J.A.I. Personal Manager";
 #[cfg(windows)]
 const KEYRING_USER: &str = "vault-master-key";
 

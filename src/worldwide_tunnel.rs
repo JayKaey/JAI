@@ -1,4 +1,4 @@
-//! Supervised outbound HTTPS tunnel to the token-protected satellite listener: Jarvis on Sir's
+//! Supervised outbound HTTPS tunnel to the token-protected satellite listener: JAI on Sir's
 //! phone from anywhere (4G/5G, any Wi-Fi). The origin is loopback HTTP; TLS terminates at the
 //! tunnel provider. No router changes.
 //!
@@ -9,8 +9,8 @@
 //! `plan` decides which one runs, from the settings alone.
 //!
 //! The tunnel process starts hidden and without the busy cursor, inside the helper job (it dies
-//! with Jarvis — no orphaned `cloudflared`), and `kick` (re)starts it the moment Sir asks how to
-//! use Jarvis on his phone.
+//! with JAI — no orphaned `cloudflared`), and `kick` (re)starts it the moment Sir asks how to
+//! use JAI on his phone.
 
 use crate::config::{ConfigStore, SatelliteSettings};
 use serde::Serialize;
@@ -199,7 +199,7 @@ async fn cloudflared() -> Result<PathBuf, String> {
         _ => return Err("Install the official cloudflared executable in bin/ on this platform.".into()),
     };
     update("cloudflare", "downloading", "Downloading the official cloudflared release and verifying its SHA-256 digest", None);
-    let client = reqwest::Client::builder().user_agent("JarvisWorldwide/1.0")
+    let client = reqwest::Client::builder().user_agent("JaiWorldwide/1.0")
         .connect_timeout(Duration::from_secs(15)).timeout(Duration::from_secs(180))
         .build().map_err(|e| e.to_string())?;
     let release: serde_json::Value = client.get("https://api.github.com/repos/cloudflare/cloudflared/releases/latest")
@@ -375,7 +375,7 @@ async fn spawn(plan: &Plan) -> Result<TunnelProcess, String> {
 async fn verify_origin(origin: &str, token: &str) -> bool {
     let Ok(client) = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_secs(3)).timeout(Duration::from_secs(5)).build() else { return false };
-    let Ok(response) = client.get(format!("{origin}/api/tunnel-health")).header("X-Jarvis-Key", token).send().await else { return false };
+    let Ok(response) = client.get(format!("{origin}/api/tunnel-health")).header("X-JAI-Key", token).send().await else { return false };
     if !response.status().is_success() { return false; }
     response.json::<serde_json::Value>().await.ok().is_some_and(|v| v["service"] == "jarvis-satellite")
 }
@@ -431,7 +431,7 @@ pub async fn run(config: ConfigStore, secrets: crate::vault::Vault, port: u16, s
                     tokio::select! {
                         _ = shutdown.cancelled() => {
                             child.kill();
-                            update(provider, "stopped", "Jarvis has shut down", None);
+                            update(provider, "stopped", "JAI has shut down", None);
                             return;
                         }
                         status = &mut child.exited => {
@@ -515,7 +515,7 @@ pub async fn run(config: ConfigStore, secrets: crate::vault::Vault, port: u16, s
         // Sir asking for phone access cuts the wait short.
         tokio::select! { _ = shutdown.cancelled() => break, _ = tokio::time::sleep(delay) => {}, _ = kicked() => {} }
     }
-    update("", "stopped", "Jarvis has shut down", None);
+    update("", "stopped", "JAI has shut down", None);
 }
 
 #[cfg(test)]

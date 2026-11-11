@@ -14,7 +14,7 @@
 //! * The drive's total and free space (`GetDiskFreeSpaceExW`) give the progress ("62.0 GB TO
 //!   GO"); what the walk cannot see becomes "System & hidden" at the end; the Recycle Bin is asked
 //!   for its size (`SHQueryRecycleBinW`).
-//! * When a scan Sir asked for is done, the advice is queued for Jarvis to say
+//! * When a scan Sir asked for is done, the advice is queued for JAI to say
 //!   (`announcements`).
 //!
 //! Verifier and dry runs (and unit tests) never touch a disk: they open a fixed demo drive.
@@ -127,7 +127,7 @@ impl Category {
         }
     }
 
-    /// One file of the type, as Jarvis says it ("a single video over 10 GB").
+    /// One file of the type, as JAI says it ("a single video over 10 GB").
     fn noun(self) -> &'static str {
         match self {
             Category::Programs => "program file",
@@ -214,7 +214,7 @@ pub(crate) fn format_size(bytes: u64) -> String {
     }
 }
 
-/// A size as Jarvis says it ("9 GB", not "9.0 GB").
+/// A size as JAI says it ("9 GB", not "9.0 GB").
 pub(crate) fn spoken_size(bytes: u64) -> String {
     format_size(bytes).replace(".0 ", " ")
 }
@@ -432,7 +432,7 @@ fn root_name(root: &Path) -> String {
     }
 }
 
-/// How Jarvis names the scanned root ("your drive", "your D drive", "your Downloads folder").
+/// How JAI names the scanned root ("your drive", "your D drive", "your Downloads folder").
 fn spoken_target(root: &Path) -> String {
     if is_drive_root(root) {
         let letter = drive_letter(root).unwrap_or('C');
@@ -1238,7 +1238,7 @@ pub(crate) struct Summary {
     pub temp: u64,
 }
 
-/// Jarvis' verdict, two sentences at most: "Your C drive is nearly full, Sir: 231 of 234 GB.
+/// JAI's verdict, two sentences at most: "Your C drive is nearly full, Sir: 231 of 234 GB.
 /// Users takes 127 GB, there's a single video over 10 GB, and emptying the Recycle Bin would
 /// free 9 GB."
 pub(crate) fn advice(s: &Summary) -> String {
@@ -1430,7 +1430,7 @@ struct Job {
     name: String,
     label: String,
     is_drive: bool,
-    /// Jarvis says the verdict when it is done.
+    /// JAI says the verdict when it is done.
     announce: bool,
     /// The folder of the finished tree it reads again (the map stays up meanwhile).
     graft: Option<u32>,
@@ -2160,7 +2160,7 @@ mod tests {
         }
         let none = |_: &str| None;
         assert!(parse_target("Downloads", &none, None, 'C').is_err());
-        // What the panel and Jarvis call a root.
+        // What the panel and JAI call a root.
         assert!(is_drive_root(Path::new("D:\\")) && is_drive_root(Path::new("d:")) && !is_drive_root(Path::new("D:\\Games")));
         assert_eq!(drive_letter(Path::new("e:\\x")), Some('E'));
         assert_eq!(drive_letter(Path::new("relative")), None);

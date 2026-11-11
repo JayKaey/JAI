@@ -1,4 +1,4 @@
-//! The Feature Lab (`[ FEATURES ]` in the header): every system Jarvis has, grouped as in the
+//! The Feature Lab (`[ FEATURES ]` in the header): every system JAI has, grouped as in the
 //! capability manifest, each with one button. `[ TEST ALL PROBES ]` runs the live self-test
 //! (`live_self_tester`): every pipeline, every route through the real brain as a dry run, every
 //! tool (a read is run for real, anything else is checked to be wired) and the HUD itself, each
@@ -270,7 +270,7 @@ fn cached_catalogue(tools: &ToolContext) -> Arc<Catalogue> {
 
 /// The lab's content: the filter, `[ TEST ALL PROBES ]` with the live suite's tally, what failed,
 /// then every category.
-fn body(ui: &mut Ui, app: &crate::app::Jarvis, rt: &Handle) {
+fn body(ui: &mut Ui, app: &crate::app::Jai, rt: &Handle) {
     use crate::live_self_tester as suite;
     let tools = app.tools();
     let catalogue = cached_catalogue(tools);
@@ -407,7 +407,7 @@ fn row(ui: &mut Ui, tools: &ToolContext, rt: &Handle, name: &str, description: &
 
 /// Registers the lab with egui while it is open (each HUD frame): a block on the board, or its
 /// own window once detached.
-pub(super) fn show(ctx: &egui::Context, app: &crate::app::Jarvis, rt: &Handle) {
+pub(super) fn show(ctx: &egui::Context, app: &crate::app::Jai, rt: &Handle) {
     // (Closed while it was its own window: it plays its exit first.)
     if !super::detached_keep(ctx, ViewportId::from_hash_of("jarvis_feature_lab"), is_open()) {
         crate::hud_dock::forget(ID);
@@ -423,7 +423,7 @@ pub(super) fn show(ctx: &egui::Context, app: &crate::app::Jarvis, rt: &Handle) {
         }
         return;
     }
-    let mut builder = ViewportBuilder::default().with_title("Feature Lab — J.A.R.V.I.S.").with_app_id("jarvis").with_inner_size([820.0, 720.0]).with_min_inner_size([520.0, 400.0]).with_decorations(false);
+    let mut builder = ViewportBuilder::default().with_title("Feature Lab — J.A.I.").with_app_id("jarvis").with_inner_size([820.0, 720.0]).with_min_inner_size([520.0, 400.0]).with_decorations(false);
     if let Some(icon) = super::window_icon() {
         builder = builder.with_icon(Arc::new(icon));
     }

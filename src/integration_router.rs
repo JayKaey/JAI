@@ -5,7 +5,7 @@
 //! model left to itself announces "Checking your WebUntis timetable…", writes the call as text
 //! and invents the lessons.
 //!
-//! `Mode::Verbatim` answers are read out by Jarvis himself (the exact timetable block in the
+//! `Mode::Verbatim` answers are read out by JAI himself (the exact timetable block in the
 //! chat, its spoken summary aloud); `Mode::Phrase` results go through the LLM; `Mode::Act` tools
 //! run on the fast path with a canned confirmation.
 
@@ -14,7 +14,7 @@ use serde_json::{json, Value};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
-    /// Jarvis reads the tool's own text (display block + its "Spoken:" line).
+    /// JAI reads the tool's own text (display block + its "Spoken:" line).
     Verbatim,
     /// The LLM answers from the tool result.
     Phrase,
@@ -223,7 +223,7 @@ pub fn route_text(text: &str) -> Option<Route> {
         "statische domain", "statische adresse", "fester link", "festen link",
     ]) || (has_phrase(&lower, &["never changes", "never change", "doesn't change", "doesnt change", "does not change", "not change", "always the same", "stay the same", "stays the same", "immer gleich", "nicht ändert", "nie ändert"])
         && fuzzy_has(&ws, &["domain", "address", "link", "url", "website", "adresse", "webseite"]));
-    let about_him = fuzzy_has(&ws, &["you", "your", "jarvis", "website", "webseite", "page", "site", "phone", "satellite", "tunnel", "dich", "dir", "deine", "dein", "it"]);
+    let about_him = fuzzy_has(&ws, &["you", "your", "jai", "website", "webseite", "page", "site", "phone", "satellite", "tunnel", "dich", "dir", "deine", "dein", "it"]);
     if fixed_address && about_him && ws.len() <= 40 && !lower.contains("whatsapp") {
         return route("show_mobile_satellite_instructions", json!({ "topic": "permanent_address" }), Mode::Act);
     }
@@ -231,7 +231,7 @@ pub fn route_text(text: &str) -> Option<Route> {
         return None;
     }
     let asks = fuzzy_has(&ws, QUESTION) || lower.trim_end().ends_with('?');
-    let imperative = ws.first().is_some_and(|w| ACTION_VERBS.contains(&w.as_str())) || (ws.first().is_some_and(|w| w == "jarvis") && ws.get(1).is_some_and(|w| ACTION_VERBS.contains(&w.as_str())));
+    let imperative = ws.first().is_some_and(|w| ACTION_VERBS.contains(&w.as_str())) || (ws.first().is_some_and(|w| w == "jai") && ws.get(1).is_some_and(|w| ACTION_VERBS.contains(&w.as_str())));
 
     // ---- the phone: "how can I use you on my phone", "connect my phone", "mobile link" ----
     let phone = fuzzy_has(&ws, &["phone", "handy", "iphone", "ipad", "smartphone", "mobile", "tablet", "telefon"]);
@@ -241,7 +241,7 @@ pub fn route_text(text: &str) -> Option<Route> {
         "not at home", "away from home", "from anywhere", "anywhere in the world", "on the go", "mobile data", "außer haus", "ausser haus", "nicht zuhause",
         "nicht zu hause", "mobilen daten", "mobile daten", "anderen wlan", "ohne wlan", "gleichen wlan", "selben wlan",
     ]) || ws.iter().any(|w| matches!(w.as_str(), "4g" | "5g" | "lte" | "cellular" | "unterwegs"));
-    let use_jarvis = has_phrase(&lower, &["use you", "use jarvis", "reach you", "talk to you", "access you", "dich nutzen", "dich benutzen", "dich erreichen", "jarvis nutzen", "jarvis benutzen"]);
+    let use_jarvis = has_phrase(&lower, &["use you", "use jai", "reach you", "talk to you", "access you", "dich nutzen", "dich benutzen", "dich erreichen", "jai nutzen", "jai benutzen"]);
     if ((phone
         && (has_phrase(&lower, &["use you", "connect", "link", "pair", "qr", "satellite", "set up", "setup", "verbind", "benutz", "nutzen", "talk to you", "access you", "on my phone", "from my phone", "auf meinem handy", "mit meinem handy", "auf dem handy", "am handy"])
             || lower.contains("mobile link")
@@ -400,7 +400,7 @@ fn when_span(tokens: &[&str], now: chrono::NaiveDateTime) -> Option<(usize, usiz
 
 fn calendar_create_sentence(text: &str, calendar_word: bool) -> Option<Route> {
     static CREATE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
-        regex::Regex::new(r"(?i)^(?:(?:hey|ok|okay)\s+)?(?:jarvis[,\s]+)?(?:please\s+|bitte\s+|can you\s+|could you\s+|would you\s+|kannst du\s+|könntest du\s+)?(add|put|schedule|create|enter|make|book|set up|plan|note|trag|trage|erstelle|erstell|leg|lege|füge|fuege|setz|setze|notier|notiere|mach|mache)\s+(.+)$")
+        regex::Regex::new(r"(?i)^(?:(?:hey|ok|okay)\s+)?(?:jai[,\s]+)?(?:please\s+|bitte\s+|can you\s+|could you\s+|would you\s+|kannst du\s+|könntest du\s+)?(add|put|schedule|create|enter|make|book|set up|plan|note|trag|trage|erstelle|erstell|leg|lege|füge|fuege|setz|setze|notier|notiere|mach|mache)\s+(.+)$")
             .expect("valid calendar create regex")
     });
     // "add a new in my calender called test for 15h tommorw": the words spelt right first, so
@@ -507,7 +507,7 @@ fn calendar_create_sentence(text: &str, calendar_word: bool) -> Option<Route> {
     route("create_calendar_event", args, Mode::Act)
 }
 
-/// An offer in Jarvis' last reply ("Shall I check your WebUntis timetable?") that Sir's "yes"
+/// An offer in JAI's last reply ("Shall I check your WebUntis timetable?") that Sir's "yes"
 /// accepts.
 pub fn route_offer(reply: &str) -> Option<Route> {
     let lower = reply.to_lowercase();
@@ -566,7 +566,7 @@ mod tests {
             "How do I give your website a permanent address?",
             "Can you get a link that never changes?",
             "how can i use you with my own domain",
-            "Jarvis, set up a static domain for your website",
+            "JAI, set up a static domain for your website",
             "Wie richte ich eine feste Domain für dich ein?",
         ] {
             let r = route_text(text).unwrap_or_else(|| panic!("{text}: not routed"));
@@ -575,7 +575,7 @@ mod tests {
         assert_eq!(tool("what is a static domain"), None, "a question about the term, not about him");
         for text in [
             "How can I use you on my phone without being on the same Wi-Fi?",
-            "Use Jarvis outside my Wi-Fi",
+            "Use JAI outside my Wi-Fi",
             "Wie kann ich dich unterwegs auf dem Handy nutzen?",
             "Can I reach you from anywhere over 4G?",
         ] {
@@ -657,7 +657,7 @@ mod tests {
         assert!(a["start_time"].as_str().unwrap().ends_with("09:00"));
         let a = add("Erstelle einen Termin ganztägig am Sonntag namens Familienfest");
         assert_eq!((a["title"].as_str(), a["all_day"].as_bool()), (Some("Familienfest"), Some(true)));
-        // Without a date there is nothing to add: Jarvis asks instead.
+        // Without a date there is nothing to add: JAI asks instead.
         assert!(route_text("Add a new event to my calendar").is_none_or(|r| r.tool != "create_calendar_event"));
     }
 

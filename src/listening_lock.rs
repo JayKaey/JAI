@@ -1,9 +1,9 @@
-//! "Stop listening" — Sir's privacy lock. "Jarvis, stop listening for a minute" / "for 5 minutes"
+//! "Stop listening" — Sir's privacy lock. "JAI, stop listening for a minute" / "for 5 minutes"
 //! / "Hör für 2 Minuten nicht zu" pauses him for that long; "stop listening", "mute my
 //! microphone", "don't listen", "Hör auf zuzuhören" until Sir lets him listen again. While locked
-//! every word is ignored — commands, questions, even "Jarvis" — except the resume phrases ("you
+//! every word is ignored — commands, questions, even "JAI" — except the resume phrases ("you
 //! can listen again", "resume listening", "unmute microphone", "Du kannst wieder zuhören",
-//! "Jarvis hör wieder zu") and the header's `[ MIC: MUTED ]` button. A timed pause ends on
+//! "JAI hör wieder zu") and the header's `[ MIC: MUTED ]` button. A timed pause ends on
 //! its own.
 
 use std::sync::Mutex;
@@ -277,15 +277,15 @@ mod tests {
 
     #[test]
     fn phrases_pause_lock_and_resume_in_english_and_german() {
-        assert_eq!(parse("Jarvis, stop listening for a minute"), Some(LockCommand::Pause(Duration::from_secs(60))));
+        assert_eq!(parse("JAI, stop listening for a minute"), Some(LockCommand::Pause(Duration::from_secs(60))));
         assert_eq!(parse("Stop listening for 5 minutes"), Some(LockCommand::Pause(Duration::from_secs(300))));
         assert_eq!(parse("Hör für 2 Minuten nicht zu"), Some(LockCommand::Pause(Duration::from_secs(120))));
         assert_eq!(parse("stop listening for thirty seconds"), Some(LockCommand::Pause(Duration::from_secs(30))));
-        for lock in ["Jarvis, stop listening", "Mute my microphone", "Don't listen", "Hör auf zuzuhören"] {
+        for lock in ["JAI, stop listening", "Mute my microphone", "Don't listen", "Hör auf zuzuhören"] {
             assert_eq!(parse(lock), Some(LockCommand::Lock), "{lock}");
         }
         // ("Start listening" once went on to the app launcher, with him still paused.)
-        for resume in ["You can listen again", "Jarvis, you can now listen again", "Start listening again", "Start listening", "Keep listening", "Resume listening", "Unmute microphone", "Du kannst wieder zuhören", "Fang wieder an zuzuhören", "Jarvis hör wieder zu"] {
+        for resume in ["You can listen again", "JAI, you can now listen again", "Start listening again", "Start listening", "Keep listening", "Resume listening", "Unmute microphone", "Du kannst wieder zuhören", "Fang wieder an zuzuhören", "JAI hör wieder zu"] {
             assert_eq!(parse(resume), Some(LockCommand::Resume), "{resume}");
             assert!(is_resume_phrase(resume));
         }
@@ -320,23 +320,23 @@ mod tests {
         apply(LockCommand::Lock);
         assert!(is_locked());
         assert!(status_line().unwrap().contains("YOU CAN LISTEN AGAIN"));
-        for ignored in ["Jarvis", "Jarvis, what time is it?", "Jarvis, stop listening"] {
+        for ignored in ["JAI", "JAI, what time is it?", "JAI, stop listening"] {
             assert!(!is_resume_phrase(ignored), "{ignored} must be ignored");
         }
-        assert!(is_resume_phrase("Jarvis, you can listen again"));
+        assert!(is_resume_phrase("JAI, you can listen again"));
         // The microphone path's one decision: under the lock only the lifting words pass,
         // whatever the microphone's switch says.
         for mic_on in [true, false] {
-            assert_eq!(verdict("Jarvis, what time is it?", mic_on), Verdict::Ignored);
-            assert_eq!(verdict("Jarvis, you can listen again", mic_on), Verdict::Resumes);
+            assert_eq!(verdict("JAI, what time is it?", mic_on), Verdict::Ignored);
+            assert_eq!(verdict("JAI, you can listen again", mic_on), Verdict::Resumes);
         }
         apply(LockCommand::Resume);
         assert!(!is_locked() && status_line().is_none());
         // Unlocked: heard with the microphone on (or the push-to-talk key held); words that
         // were recorded just before it was switched off are dropped.
-        assert_eq!(verdict("Jarvis", true), Verdict::Heard);
-        assert_eq!(verdict("Jarvis", false), Verdict::Ignored);
-        assert_eq!(verdict("Jarvis, you can listen again", false), Verdict::Ignored);
+        assert_eq!(verdict("JAI", true), Verdict::Heard);
+        assert_eq!(verdict("JAI", false), Verdict::Ignored);
+        assert_eq!(verdict("JAI, you can listen again", false), Verdict::Ignored);
         // A timed pause runs out on its own; the status counts down.
         apply(LockCommand::Pause(Duration::from_millis(60)));
         assert!(matches!(state(), ListeningLockState::PausedUntil(_)));

@@ -125,7 +125,7 @@ impl Default for WebUntisSettings {
             username: String::new(),
             class_name: String::new(),
             student_id: String::new(),
-            client_name: "JARVIS".into(),
+            client_name: "JAI".into(),
         }
     }
 }

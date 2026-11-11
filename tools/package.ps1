@@ -7,7 +7,7 @@ $src = Join-Path $root 'target\release\jarvis.exe'
 $dst = Join-Path $root 'JARVIS.exe'
 
 if (Get-Process -Name 'JARVIS' -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $dst }) {
-    throw 'J.A.R.V.I.S. is running. Quit it first ("Jarvis, shut down", or tray icon > Quit).'
+    throw 'J.A.I. is running. Quit it first ("JAI, shut down", or tray icon > Quit).'
 }
 
 # 1. The executable. It is built for the Windows GUI subsystem (windows_subsystem in main.rs),
@@ -52,7 +52,7 @@ if (-not (Test-Path (Join-Path $espeak 'libespeak-ng.dll'))) {
         robocopy $installed $espeak /E /NFL /NDL /NJH /NJS /NP | Out-Null
         Write-Host "runtime\espeak-ng copied from $installed"
     } else {
-        Write-Warning 'runtime\espeak-ng is missing: Jarvis falls back to its basic built-in phonemizer.'
+        Write-Warning 'runtime\espeak-ng is missing: JAI falls back to its basic built-in phonemizer.'
     }
 }
 exit 0

@@ -74,7 +74,7 @@ pub const FLIGHTS_MAX_SPAN_DEG: f64 = 40.0;
 const FETCH_TIMEOUT: Duration = Duration::from_secs(8);
 /// The background retry of an area query that took longer than Sir's answer could wait.
 const SLOW_TIMEOUT: Duration = Duration::from_secs(25);
-const USER_AGENT: &str = "JARVIS/3 desktop assistant";
+const USER_AGENT: &str = "JAI/3 desktop assistant";
 const CACHE_DIR: &str = "config/earth_cache";
 const CACHE_LIMIT: u64 = 1024 * 1024 * 1024;
 const CACHE_TRIM_TO: u64 = 850 * 1024 * 1024;
@@ -450,7 +450,7 @@ pub fn ago(secs: i64) -> String {
     }
 }
 
-/// The same for Jarvis to say.
+/// The same for JAI to say.
 pub fn spoken_ago(secs: i64) -> String {
     let s = secs.max(0);
     let unit = |n: i64, one: &str| if n == 1 { format!("1 {one} ago") } else { format!("{n} {one}s ago") };
@@ -476,7 +476,7 @@ pub fn coords_label(lat: f64, lon: f64) -> String {
     format!("{lat:.4}, {:.4}", wrap_lon(lon))
 }
 
-/// "12 degrees south, 30 degrees west" for Jarvis to say.
+/// "12 degrees south, 30 degrees west" for JAI to say.
 pub fn spoken_coords(lat: f64, lon: f64) -> String {
     let lon = wrap_lon(lon);
     let ns = if lat >= 0.0 { "north" } else { "south" };
@@ -587,7 +587,7 @@ impl Place {
         pick.into_iter().find(|s| !s.trim().is_empty()).cloned().unwrap_or_default()
     }
 
-    /// For Jarvis: "the North Atlantic Ocean", "Brazil".
+    /// For JAI: "the North Atlantic Ocean", "Brazil".
     pub fn spoken(&self) -> String {
         if !self.country.is_empty() {
             self.country.clone()
@@ -1069,7 +1069,7 @@ impl Layer {
         })
     }
 
-    /// For Jarvis: "The flights are off, Sir."
+    /// For JAI: "The flights are off, Sir."
     pub fn noun(self) -> &'static str {
         match self {
             Self::Quakes => "earthquakes",
@@ -4172,7 +4172,7 @@ async fn area_quakes(place: Option<String>, radius: Option<f64>, offline: bool) 
             Ok(Ok(result)) => result,
             Ok(Err(e)) => Err(e.to_string()),
             Err(_) => {
-                // Too slow for the answer: it comes later, said as soon as Jarvis is free.
+                // Too slow for the answer: it comes later, said as soon as JAI is free.
                 tokio::spawn(async move {
                     let Ok(result) = task.await else { return };
                     let line = match &result {
@@ -4913,6 +4913,6 @@ mod tests {
         assert!(tile_url(TileLayer::Labels, 0, 5, 9, 12).ends_with("/Reference_Labels_15m/default/GoogleMapsCompatible_Level13/5/12/9.png"));
         assert!(tile_url(TileLayer::Holo, 4, 2, 1, 3).ends_with("/BlueMarble_ShadedRelief_Bathymetry/default/default/GoogleMapsCompatible_Level8/2/3/1.jpg"));
         assert!(wms_url("Coastlines_15m", true, false).contains("BBOX=-90,-180,90,180&WIDTH=2048&HEIGHT=1024&FORMAT=image/png"));
-        assert_eq!(USER_AGENT, "JARVIS/3 desktop assistant");
+        assert_eq!(USER_AGENT, "JAI/3 desktop assistant");
     }
 }

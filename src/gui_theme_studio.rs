@@ -124,7 +124,7 @@ pub(super) fn show(ctx: &egui::Context, iface: &InterfaceSettings) -> Option<Cus
         }
         return lock(&SAVED).take();
     }
-    let mut builder = ViewportBuilder::default().with_title("Theme Studio — J.A.R.V.I.S.").with_app_id("jarvis").with_inner_size([580.0, 330.0]).with_min_inner_size([460.0, 280.0]).with_decorations(false);
+    let mut builder = ViewportBuilder::default().with_title("Theme Studio — J.A.I.").with_app_id("jarvis").with_inner_size([580.0, 330.0]).with_min_inner_size([460.0, 280.0]).with_decorations(false);
     if let Some(icon) = super::window_icon() {
         builder = builder.with_icon(Arc::new(icon));
     }

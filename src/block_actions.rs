@@ -85,7 +85,7 @@ pub enum Format {
 
 /// The block as a Markdown document.
 pub fn markdown(title: &str, text: &str, exported_at: &str) -> String {
-    format!("# {}\n\n{}\n\n---\nExported from J.A.R.V.I.S. on {exported_at}\n", title.trim(), text.trim())
+    format!("# {}\n\n{}\n\n---\nExported from J.A.I. on {exported_at}\n", title.trim(), text.trim())
 }
 
 /// The block as a JSON document (`detail`: the block's own structure, when it has one).
@@ -154,7 +154,7 @@ mod tests {
         assert_eq!(md.extension().and_then(|e| e.to_str()), Some("md"));
         let text = std::fs::read_to_string(&md).unwrap();
         assert!(text.starts_with("# NOTE // 01 - Ohm's law?\n\nU = R * I\nVoltage is current times resistance.\n"), "{text}");
-        assert!(text.contains("Exported from J.A.R.V.I.S. on "));
+        assert!(text.contains("Exported from J.A.I. on "));
         let parsed: Value = serde_json::from_str(&std::fs::read_to_string(&js).unwrap()).expect("valid JSON");
         assert_eq!(parsed["title"], "NOTE // 01 - Ohm's law?");
         assert_eq!(parsed["content"], "U = R * I");

@@ -420,7 +420,7 @@ fn demo_shot(at: (f64, f64), n: i64) -> Shot {
         thumb: format!("demo://pano/{n}/thumb"),
         full: format!("demo://pano/{n}"),
         alt: Vec::new(),
-        creator: "Jarvis self-test".into(),
+        creator: "JAI self-test".into(),
         license: "CC0".into(),
         page: String::new(),
         prev: (n > 0).then_some(Step::Demo(n - 1)),
@@ -691,7 +691,7 @@ mod tests {
     fn sirs_street_view_requests_route() {
         assert_eq!(said("Show me street view of the Eiffel Tower"), Some(json!({"place": "the eiffel tower"})));
         assert_eq!(said("street view here"), Some(json!({"here": true})));
-        assert_eq!(said("Jarvis, open street view."), Some(json!({"here": true})));
+        assert_eq!(said("JAI, open street view."), Some(json!({"here": true})));
         assert_eq!(said("Zeig mir die Straßenansicht vom Brandenburger Tor"), Some(json!({"place": "brandenburger tor"})));
         assert_eq!(said("show me street level photos of Times Square"), Some(json!({"place": "times square"})));
         assert_eq!(said("show me the street"), None);

@@ -209,7 +209,7 @@ pub(super) fn show(ctx: &egui::Context, rt: &Handle) {
         }
         return;
     }
-    let mut builder = ViewportBuilder::default().with_title("Departures — J.A.R.V.I.S.").with_app_id("jarvis").with_inner_size(WINDOW_SIZE).with_min_inner_size(WINDOW_MIN).with_decorations(false);
+    let mut builder = ViewportBuilder::default().with_title("Departures — J.A.I.").with_app_id("jarvis").with_inner_size(WINDOW_SIZE).with_min_inner_size(WINDOW_MIN).with_decorations(false);
     if let Some(icon) = super::window_icon() {
         builder = builder.with_icon(Arc::new(icon));
     }

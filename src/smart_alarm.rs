@@ -1,7 +1,7 @@
-//! The Smart Alarm: "wake me at 6:30 with JaysRock." Ninety minutes before the alarm Jarvis checks
+//! The Smart Alarm: "wake me at 6:30 with JaysRock." Ninety minutes before the alarm JAI checks
 //! WebUntis: when the first lessons are cancelled he lets Sir sleep until the first real lesson
 //! needs him (the same commute buffer). At wake time the playlist starts quietly and fades in, then
-//! the music dips and Jarvis reads the morning briefing.
+//! the music dips and JAI reads the morning briefing.
 
 use crate::features::{spoken, str_arg};
 use crate::stark::StarkEvent;
@@ -215,7 +215,7 @@ impl AlarmClock {
                             me.advance(&a);
                             ring(tools.clone(), a.clone()).await;
                         } else {
-                            info!("[ALARM] Missed the {} alarm (Jarvis was not running)", due.format("%d.%m. %H:%M"));
+                            info!("[ALARM] Missed the {} alarm (JAI was not running)", due.format("%d.%m. %H:%M"));
                             me.advance(&a);
                         }
                     }

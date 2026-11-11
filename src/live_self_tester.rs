@@ -27,7 +27,7 @@
 //! first time anything runs measures the start of the process, not the app. Only the time is
 //! forgiven there; a wrong result in that pass is a failure of the run that follows.
 
-use crate::app::Jarvis;
+use crate::app::Jai;
 use crate::crash_guard::lock;
 use crate::intent_engine::{self, ReflexContext};
 use crate::tools::{ToolContext, ToolOutcome};
@@ -41,7 +41,7 @@ use tracing::{error, info, warn};
 
 // --------------------------------------------------------------------------- budgets ----
 
-/// Deciding one of Jarvis' own controls (the reflex router).
+/// Deciding one of JAI's own controls (the reflex router).
 pub const REFLEX_BUDGET_MS: f64 = 1.5;
 /// Deciding any request end to end through the dispatcher and the brain (no model).
 pub const TURN_BUDGET_MS: f64 = 10.0;
@@ -289,7 +289,7 @@ fn push(outcome: ProbeOutcome) {
 /// Only the time is forgiven. A probe that is wrong in this pass is a failure of the run that
 /// follows it (`first_pass_failures`), and the probes that were late in it are named in the
 /// log and in the reports.
-async fn first_pass(app: &Jarvis) {
+async fn first_pass(app: &Jai) {
     if FIRST_PASS_RAN.swap(true, Ordering::AcqRel) {
         return;
     }
@@ -381,7 +381,7 @@ const fn r(say: &'static str, tool: &'static str, args: &'static str) -> Route {
     Route { say, tool, args }
 }
 
-/// The routing matrix: Jarvis' own controls first (the bugs of Sir's screenshots among them),
+/// The routing matrix: JAI's own controls first (the bugs of Sir's screenshots among them),
 /// then every family of deterministic commands, then requests that must reach the model.
 const ROUTES: &[Route] = &[
     // The privacy lock.
@@ -470,7 +470,7 @@ fn contains(got: &Value, wanted: &Value) -> bool {
 /// opens what it opens the first time. Run after start-up, so Sir's first command of each kind
 /// is as fast as his hundredth (measured cold: the first "open my system stats" took 451 ms to
 /// decide, the next one 3 ms).
-pub async fn warm_up(app: &Jarvis) {
+pub async fn warm_up(app: &Jai) {
     let started = Instant::now();
     let mark = app.history_mark().await;
     for route in ROUTES {
@@ -497,7 +497,7 @@ pub async fn warm_up(app: &Jarvis) {
     info!("[CORTEX] Every command path warmed with {} dry routes in {} ms", ROUTES.len(), started.elapsed().as_millis());
 }
 
-async fn routing_probes(app: &Jarvis) {
+async fn routing_probes(app: &Jai) {
     // Measured as Sir meets them: after the start-up warm-up (a no-op when it already ran).
     warm_up(app).await;
     let mark = app.history_mark().await;
@@ -600,7 +600,7 @@ pub(crate) const NOT_SET_UP: &[&str] = &["not configured", "not set up", "isn't 
 /// Words of a failure that never reached the other side: the server refused, reset or did not
 /// answer, or its name did not resolve — or it answered that it is down for now (502/503/504:
 /// Open-Meteo's outage of 2026-11-08). That is the network's doing, not something a probe of
-/// Jarvis can pass or fail.
+/// JAI can pass or fail.
 const NO_ANSWER: &[&str] = &[
     "http 502",
     "http 503",
@@ -683,7 +683,7 @@ async fn tool_probes(tools: &ToolContext) {
         let mut started = Instant::now();
         let mut outcome = tokio::time::timeout(Duration::from_secs(20), Box::pin(tools.execute(name, &args))).await;
         // A server that does not answer is asked once more; if it stays silent the probe is
-        // skipped (it says nothing about Jarvis), with the reason.
+        // skipped (it says nothing about JAI), with the reason.
         if *reach != Reach::Local && outcome.as_ref().is_ok_and(|o| !o.success && unreachable(&o.output)) {
             tokio::time::sleep(Duration::from_millis(1500)).await;
             started = Instant::now();
@@ -799,7 +799,7 @@ fn suggestion_bars(defs: &[Value]) -> Result<(usize, usize), String> {
     Ok((subjects.len(), keys))
 }
 
-async fn pipeline_probes(app: &Jarvis) {
+async fn pipeline_probes(app: &Jai) {
     let tools = app.tools();
     // The reflex router and the whole deterministic path, over the benchmark corpus.
     let bench = intent_engine::benchmark(25);
@@ -928,17 +928,17 @@ async fn pipeline_probes(app: &Jarvis) {
     });
 
     // The voice has its reference clip and its profile.
-    timed("pipeline", "voice: the Jarvis reference clip and its calibrated profile", LOCAL_BUDGET_MS, || {
-        let clip = crate::voice_reference::reference_path().ok_or("no Jarvis reference clip in assets/")?;
+    timed("pipeline", "voice: the JAI reference clip and its calibrated profile", LOCAL_BUDGET_MS, || {
+        let clip = crate::voice_reference::reference_path().ok_or("no JAI reference clip in assets/")?;
         let profile = crate::fish_zero_shot_tts::load_profile(&clip, Path::new(crate::fish_zero_shot_tts::PROFILE_PATH))?;
-        let blend = profile.blend.clone().ok_or("the Jarvis voice is not calibrated yet (run --voice-calibrate)")?;
+        let blend = profile.blend.clone().ok_or("the JAI voice is not calibrated yet (run --voice-calibrate)")?;
         Ok(format!("{}: {blend}, F0 {:.1} Hz", clip.display(), profile.f0.median_hz))
     });
 
     // The voice closed loop: a sentence through the whole chain, measured against the clip
     // (silent, on the CPU whatever the speech engine uses, so a game keeps the GPU).
-    type Verify = fn(&crate::config::JarvisConfig) -> Result<crate::fish_zero_shot_tts::Verification, String>;
-    let voices: [(&str, Verify); 1] = [("voice: Jarvis measured against his clip (closed loop)", crate::fish_zero_shot_tts::verify)];
+    type Verify = fn(&crate::config::JaiConfig) -> Result<crate::fish_zero_shot_tts::Verification, String>;
+    let voices: [(&str, Verify); 1] = [("voice: JAI measured against his clip (closed loop)", crate::fish_zero_shot_tts::verify)];
     for (id, verify) in voices {
         let mut cfg = tools.config.read(|c| c.clone());
         cfg.tts_gpu = false;
@@ -1051,14 +1051,14 @@ async fn reflex(tools: &ToolContext, say: &str) -> Result<String, String> {
     }
 }
 
-async fn hud_probes(app: &Jarvis) {
+async fn hud_probes(app: &Jai) {
     let tools = app.tools();
     if !crate::gui::windows_supported() {
         for id in ["a window opens in the HUD and closes by name", "the emblem moves and comes back", "the theme changes and comes back", "pages turn and the board closes by voice command", "frame time"] {
             skip("hud", id, "the HUD window is not up (headless or hidden)");
         }
     } else {
-        // A window of Jarvis' own: an in-app block the moment it is asked for, gone by name.
+        // A window of JAI's own: an in-app block the moment it is asked for, gone by name.
         const TITLE: &str = "SELF TEST // PROBE";
         let started = Instant::now();
         let opened = Box::pin(tools.execute("spawn_native_window", &json!({"id": "selftest_probe", "title": TITLE, "markdown": "Live self-test: this block opens, then closes by name.", "width": 420, "height": 240}))).await;
@@ -1211,13 +1211,13 @@ async fn board_probe(tools: &ToolContext) {
 
 /// Runs the whole suite in the running app. One run at a time: a second call returns the
 /// summary so far.
-pub async fn run(app: &Jarvis) -> Summary {
+pub async fn run(app: &Jai) -> Summary {
     run_pass(app, None).await
 }
 
 /// One run of the suite; with `exhaustive` (the run's number, from 0) the matrices of the
 /// exhaustive verifier follow the base suite in the same run.
-pub async fn run_pass(app: &Jarvis, exhaustive: Option<usize>) -> Summary {
+pub async fn run_pass(app: &Jai, exhaustive: Option<usize>) -> Summary {
     if RUNNING.swap(true, Ordering::AcqRel) {
         return summary();
     }
@@ -1345,7 +1345,7 @@ mod tests {
         assert!(Summary { total: 3, pass: 3, ..Default::default() }.clean());
         assert!(!Summary { total: 3, pass: 2, slow: 1, ..Default::default() }.clean());
         assert!(!Summary::default().clean(), "nothing ran");
-        // A server that is down for now says nothing about Jarvis; his own refusals and a bad
+        // A server that is down for now says nothing about JAI; his own refusals and a bad
         // request do.
         assert!(unreachable("Error: Open-Meteo answered HTTP 503 Service Unavailable"));
         assert!(unreachable("error sending request for url (https://api.open-meteo.com/v1/forecast)"));

@@ -1,6 +1,6 @@
-//! `JARVIS_SHOTS=<folder>` in a test session (`--silent --show`): every window of Jarvis' own
+//! `JARVIS_SHOTS=<folder>` in a test session (`--silent --show`): every window of JAI's own
 //! saves what it shows as a PNG every second — the real frames, 3D and globe included — so a
-//! scripted session's UI can be looked at afterwards. Only Jarvis' windows, never the screen.
+//! scripted session's UI can be looked at afterwards. Only JAI's windows, never the screen.
 
 use crate::crash_guard::lock;
 use eframe::egui::{self, ViewportCommand, ViewportId};

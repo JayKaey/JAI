@@ -1,4 +1,4 @@
-//! Instant arithmetic and unit conversion, the way the real J.A.R.V.I.S. does sums: no language
+//! Instant arithmetic and unit conversion, the way the real J.A.I. does sums: no language
 //! model round-trip (small LLMs are unreliable at maths anyway). English and German phrasing:
 //! "what's 15 percent of 240", "wie viel ist 12 mal 17", "square root of 2", "convert 5 miles to
 //! km", "100 Fahrenheit in Celsius", "how many grams in 3 pounds".
@@ -211,7 +211,7 @@ fn to_expression(text: &str) -> String {
 }
 
 static ASK_MATH: LazyLock<Regex> = LazyLock::new(|| {
-    re(r"^(?:jarvis\s*,?\s*)?(?:what(?:'s| is)|whats|calculate|compute|how much is|work out|tell me|wie ?viel (?:ist|sind|macht|ergibt)|was (?:ist|ergibt|macht)|rechne|berechne|was sind)\s+(.+?)[?.!]*$")
+    re(r"^(?:jai\s*,?\s*)?(?:what(?:'s| is)|whats|calculate|compute|how much is|work out|tell me|wie ?viel (?:ist|sind|macht|ergibt)|was (?:ist|ergibt|macht)|rechne|berechne|was sind)\s+(.+?)[?.!]*$")
 });
 static PERCENT_OF: LazyLock<Regex> =
     LazyLock::new(|| re(r"^([\d.]+)\s*(?:%|percent|prozent)\s*(?:of|von)\s+([\d.]+)$"));
@@ -361,10 +361,10 @@ pub fn convert(value: f64, from: &str, to: &str) -> Result<(f64, &'static str, &
 }
 
 static CONVERT: LazyLock<Regex> = LazyLock::new(|| {
-    re(r"^(?:jarvis\s*,?\s*)?(?:(?:please\s+)?(?:convert|change|turn|rechne|umrechnen|wandle)\s+|what(?:'s| is)\s+|whats\s+|how much is\s+|wie ?viel (?:sind|ist)\s+|was sind\s+)?(-?[\d.,]+)\s*([a-zäöüß°²/ ]{1,24}?)\s+(?:to|in|into|as|nach|zu|in)\s+([a-zäöüß°²/ ]{1,24}?)(?:\s+(?:um|umrechnen|please|bitte))?[?.!]*$")
+    re(r"^(?:jai\s*,?\s*)?(?:(?:please\s+)?(?:convert|change|turn|rechne|umrechnen|wandle)\s+|what(?:'s| is)\s+|whats\s+|how much is\s+|wie ?viel (?:sind|ist)\s+|was sind\s+)?(-?[\d.,]+)\s*([a-zäöüß°²/ ]{1,24}?)\s+(?:to|in|into|as|nach|zu|in)\s+([a-zäöüß°²/ ]{1,24}?)(?:\s+(?:um|umrechnen|please|bitte))?[?.!]*$")
 });
 static HOW_MANY: LazyLock<Regex> = LazyLock::new(|| {
-    re(r"^(?:jarvis\s*,?\s*)?(?:how many|wie ?viele?)\s+([a-zäöüß°²/ ]{1,24}?)\s+(?:are\s+in|are|in|sind in|sind|hat|haben)\s+(?:a\s+|an\s+|one\s+|ein\s+|einer\s+|einem\s+)?(-?[\d.,]*)\s*([a-zäöüß°²/ ]{1,24}?)[?.!]*$")
+    re(r"^(?:jai\s*,?\s*)?(?:how many|wie ?viele?)\s+([a-zäöüß°²/ ]{1,24}?)\s+(?:are\s+in|are|in|sind in|sind|hat|haben)\s+(?:a\s+|an\s+|one\s+|ein\s+|einer\s+|einem\s+)?(-?[\d.,]*)\s*([a-zäöüß°²/ ]{1,24}?)[?.!]*$")
 });
 
 /// "convert 5 miles to km", "100 F in C", "how many grams in 3 pounds".
@@ -497,13 +497,13 @@ fn ordinal_digits(phrase: &str) -> String {
 pub fn answer_dates(text: &str, today: chrono::NaiveDate) -> Option<String> {
     use chrono::Datelike;
     static BETWEEN: LazyLock<Regex> = LazyLock::new(|| {
-        re(r"^(?:jarvis\s*,?\s*)?(?:how many|wie ?viele?)\s+(days|weeks|tage|wochen)\s+(?:are\s+there\s+|are\s+|is\s+it\s+|sind\s+es\s+|liegen\s+)?(?:between|from|zwischen|von)\s+(.+?)\s+(?:and|to|until|till|und|bis)\s+(.+?)[?.!]*$")
+        re(r"^(?:jai\s*,?\s*)?(?:how many|wie ?viele?)\s+(days|weeks|tage|wochen)\s+(?:are\s+there\s+|are\s+|is\s+it\s+|sind\s+es\s+|liegen\s+)?(?:between|from|zwischen|von)\s+(.+?)\s+(?:and|to|until|till|und|bis)\s+(.+?)[?.!]*$")
     });
     static UNTIL: LazyLock<Regex> = LazyLock::new(|| {
-        re(r"^(?:jarvis\s*,?\s*)?(?:how many|wie ?viele?)\s+(days|weeks|tage|wochen)\s+(?:are\s+there\s+|are\s+|is\s+it\s+|sind\s+es\s+)?(?:left\s+|noch\s+)?(?:until|till|to|before|bis zum|bis zu|bis)\s+(.+?)[?.!]*$|^(?:jarvis\s*,?\s*)?how long\s+(?:is it\s+)?(?:until|till)\s+(.+?)[?.!]*$")
+        re(r"^(?:jai\s*,?\s*)?(?:how many|wie ?viele?)\s+(days|weeks|tage|wochen)\s+(?:are\s+there\s+|are\s+|is\s+it\s+|sind\s+es\s+)?(?:left\s+|noch\s+)?(?:until|till|to|before|bis zum|bis zu|bis)\s+(.+?)[?.!]*$|^(?:jai\s*,?\s*)?how long\s+(?:is it\s+)?(?:until|till)\s+(.+?)[?.!]*$")
     });
     static WEEKDAY: LazyLock<Regex> = LazyLock::new(|| {
-        re(r"^(?:jarvis\s*,?\s*)?(?:what|which)\s+(?:day of the week|weekday|day)\s+(?:is|was|will be|will)\s+(?:it\s+on\s+|on\s+)?(.+?)(?:\s+be)?[?.!]*$|^(?:jarvis\s*,?\s*)?(?:welcher|was für ein)\s+(?:wochentag|tag)\s+(?:ist|war)\s+(?:der\s+|am\s+)?(.+?)[?.!]*$")
+        re(r"^(?:jai\s*,?\s*)?(?:what|which)\s+(?:day of the week|weekday|day)\s+(?:is|was|will be|will)\s+(?:it\s+on\s+|on\s+)?(.+?)(?:\s+be)?[?.!]*$|^(?:jai\s*,?\s*)?(?:welcher|was für ein)\s+(?:wochentag|tag)\s+(?:ist|war)\s+(?:der\s+|am\s+)?(.+?)[?.!]*$")
     });
     let lower = text.trim().to_lowercase();
     let count = |days: i64, unit: &str| -> String {

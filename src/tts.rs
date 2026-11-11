@@ -7,7 +7,7 @@
 //! of older generations are dropped) and sets a flush flag the audio callback honours on its
 //! next buffer (≈10 ms), so playback stops well under 50 ms.
 
-use crate::config::JarvisConfig;
+use crate::config::JaiConfig;
 use crate::dsp;
 use crate::ears::AudioControls;
 use crate::phonemizer::Phonemizer;
@@ -430,8 +430,8 @@ impl MetaStreamFilter {
 
 static UNITS: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| {
     [
-        (r"\bJ\.A\.R\.V\.I\.S\.?", "Jarvis"),
-        (r"\bJARVIS\b", "Jarvis"),
+        (r"\bJ\.A\.R\.V\.I\.S\.?", "JAI"),
+        (r"\bJAI\b", "JAI"),
         (r"°\s?C\b", " degrees Celsius"),
         (r"°\s?F\b", " degrees Fahrenheit"),
         (r"°", " degrees"),
@@ -743,7 +743,7 @@ pub struct Kokoro {
 }
 
 impl Kokoro {
-    pub fn load(cfg: &JarvisConfig) -> Result<Self, String> {
+    pub fn load(cfg: &JaiConfig) -> Result<Self, String> {
         let path = Path::new(&cfg.kokoro_model_path);
         let env = crate::config::ort_env().map_err(|e| e.to_string())?;
         let mut builder = Session::builder(env)
@@ -1063,18 +1063,18 @@ impl ClauseJoiner {
 // Audio output
 // ---------------------------------------------------------------------------------------------
 
-/// Loudness of what Jarvis is saying right now (RMS of the latest output block, f32 bits): the
+/// Loudness of what JAI is saying right now (RMS of the latest output block, f32 bits): the
 /// HUD's node core vibrates with his voice.
 static OUTPUT_LEVEL: AtomicU32 = AtomicU32::new(0);
 /// The same for the Discord copy of his voice (the HUD's routing meter).
 static MIRROR_LEVEL: AtomicU32 = AtomicU32::new(0);
 
-/// Jarvis's voice in a Discord call as his own account (`discord_bot`): every clause he renders
+/// JAI's voice in a Discord call as his own account (`discord_bot`): every clause he renders
 /// (48 kHz mono), and `None` when he is interrupted (the call drops what is still queued).
 pub type VoiceTap = Box<dyn Fn(Option<&[f32]>) + Send + Sync>;
 static VOICE_TAP: Mutex<Option<VoiceTap>> = Mutex::new(None);
 
-/// Sir is in that call himself: he hears Jarvis through Discord, so the speaker at the PC plays
+/// Sir is in that call himself: he hears JAI through Discord, so the speaker at the PC plays
 /// silence of the same length (no second copy of his voice a moment later).
 static TAP_EXCLUSIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -1106,7 +1106,7 @@ static EARCONS: std::sync::OnceLock<(Arc<Output>, Arc<AudioControls>)> = std::sy
 
 /// Plays a HUD earcon (report chime, confirmation tone, power-down) straight into the speaker
 /// buffer, like the listening chime: no synthesis and no turn. The microphone treats it as
-/// Jarvis' own sound.
+/// JAI's own sound.
 pub fn play_earcon(kind: jarvis_voice_dsp::Earcon) {
     let Some((output, controls)) = EARCONS.get() else { return };
     let rate = output.device_rate.load(Ordering::Acquire).max(8_000);
@@ -1412,7 +1412,7 @@ pub struct TtsController {
 }
 
 impl TtsController {
-    pub fn start(cfg: &JarvisConfig, controls: Arc<AudioControls>, events: UnboundedSender<TtsEvent>) -> Self {
+    pub fn start(cfg: &JaiConfig, controls: Arc<AudioControls>, events: UnboundedSender<TtsEvent>) -> Self {
         let output = Arc::new(Output::new(cfg.preferred_speaker.clone(), Arc::new(AtomicU8::new(cfg.loudness_pct.min(200))), false));
         // Same loudness; no device until the Discord bridge (or the HUD's test) asks for one.
         let mirror = Arc::new(Output::new(None, Arc::clone(&output.volume), true));
@@ -1503,9 +1503,9 @@ impl TtsController {
         let _ = self.inner.jobs.send(Job::Finish { generation });
     }
 
-    /// A soft two-note chime (the "I'm listening" cue after a bare "Jarvis" or a double clap),
+    /// A soft two-note chime (the "I'm listening" cue after a bare "JAI" or a double clap),
     /// written straight into the speaker buffer: no synthesis and no turn. The microphone treats
-    /// it, plus the usual echo tail, as Jarvis' own sound.
+    /// it, plus the usual echo tail, as JAI's own sound.
     pub fn chime(&self) {
         let rate = self.inner.output.device_rate.load(Ordering::Acquire).max(8_000) as f32;
         let mut samples: Vec<f32> = Vec::with_capacity((rate * 0.2) as usize);
@@ -1592,7 +1592,7 @@ enum Engine {
     None,
 }
 
-/// Openers Jarvis uses constantly (wake acknowledgements, fast-path confirmations, typical LLM
+/// Openers JAI uses constantly (wake acknowledgements, fast-path confirmations, typical LLM
 /// first clauses). They are rendered while idle and served from the cache, so the first audio
 /// of most turns needs no synthesis at all.
 const WARM_PHRASES: &[&str] = &[
@@ -1694,7 +1694,7 @@ fn render_clause(
 }
 
 /// Re-creates Kokoro after the zero-VRAM standby.
-fn reload_kokoro(cfg: &JarvisConfig, engine: &mut Engine, unloaded: &mut bool) {
+fn reload_kokoro(cfg: &JaiConfig, engine: &mut Engine, unloaded: &mut bool) {
     let t0 = Instant::now();
     match Kokoro::load(cfg) {
         Ok(k) => {
@@ -1707,7 +1707,7 @@ fn reload_kokoro(cfg: &JarvisConfig, engine: &mut Engine, unloaded: &mut bool) {
     }
 }
 
-fn synth_worker(cfg: JarvisConfig, inner: Arc<Inner>, rx: &mpsc::Receiver<Job>, events: UnboundedSender<TtsEvent>) {
+fn synth_worker(cfg: JaiConfig, inner: Arc<Inner>, rx: &mpsc::Receiver<Job>, events: UnboundedSender<TtsEvent>) {
     let phonemizer = Phonemizer::new(cfg.espeak_path.as_deref());
     let mut engine = match Kokoro::load(&cfg) {
         Ok(k) => Engine::Kokoro(Box::new(k)),
@@ -2157,9 +2157,9 @@ mod tests {
 
     #[test]
     fn numbers_acronyms_and_abbreviations_do_not_split() {
-        let out = stream(&["The CPU runs at 3.5 GHz ", "and it is 12:30 now, Sir. ", "J.A.R.V.I.S. is ", "online, e.g. fully."]);
+        let out = stream(&["The CPU runs at 3.5 GHz ", "and it is 12:30 now, Sir. ", "J.A.I. is ", "online, e.g. fully."]);
         assert_eq!(out[0], "The CPU runs at 3.5 GHz and it is 12:30 now, Sir.");
-        assert_eq!(out[1], "J.A.R.V.I.S. is online, e.g. fully.");
+        assert_eq!(out[1], "J.A.I. is online, e.g. fully.");
     }
 
     #[test]
@@ -2188,7 +2188,7 @@ mod tests {
         // The pronunciation lexicon respells the acronyms ("G P U", "V-Ram").
         assert_eq!(normalize_for_speech("GPU at 48°C, 6.5 GB VRAM"), "G P U at 48 degrees Celsius, 6.5 gigabytes V-Ram");
         assert_eq!(normalize_for_speech("**Spotify** at 15:00 on the RTX 3060 Ti"), "Spot-ify at three P M on the R T X thirty sixty T I");
-        assert_eq!(normalize_for_speech("J.A.R.V.I.S. online & ready"), "Jarvis online and ready");
+        assert_eq!(normalize_for_speech("J.A.I. online & ready"), "Jay online and ready");
         assert_eq!(strip_markdown("## Status\n* **CPU**: 12% \u{1F680}"), "Status CPU: 12%");
     }
 

@@ -42,7 +42,7 @@ fn projects_root(tools: &ToolContext) -> PathBuf {
 /// The template's files (relative path, content).
 pub fn files(template: &str, name: &str) -> Vec<(String, String)> {
     let crate_name: String = name.to_lowercase().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();
-    let readme = |what: &str, run: &str| format!("# {name}\n\n{what}\n\nCreated by J.A.R.V.I.S. on {}.\n\n## Run\n\n```\n{run}\n```\n", chrono::Local::now().format("%d.%m.%Y"));
+    let readme = |what: &str, run: &str| format!("# {name}\n\n{what}\n\nCreated by J.A.I. on {}.\n\n## Run\n\n```\n{run}\n```\n", chrono::Local::now().format("%d.%m.%Y"));
     match template {
         "PyTorch_CUDA" => vec![
             ("README.md".into(), readme("A PyTorch project with CUDA.", ".venv\\Scripts\\activate\npip install -r requirements.txt\npython train.py")),
@@ -179,7 +179,7 @@ pub async fn run_tool(tools: &ToolContext, args: &Value) -> Result<String, Strin
     if step(&mut log, "git init", git.clone(), &["init", "-q"], &dir, 30).await {
         step(&mut log, "git add", git.clone(), &["add", "-A"], &dir, 30).await;
         // Only with Sir's own git identity; otherwise the repository waits for his first commit.
-        step(&mut log, "first commit", git, &["commit", "-q", "-m", "Initial commit (J.A.R.V.I.S. Project Architect)"], &dir, 30).await;
+        step(&mut log, "first commit", git, &["commit", "-q", "-m", "Initial commit (J.A.I. Project Architect)"], &dir, 30).await;
     }
     match template {
         "PyTorch_CUDA" | "Python_App" => {

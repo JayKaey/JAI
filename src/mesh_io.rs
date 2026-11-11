@@ -1872,7 +1872,7 @@ pub fn export_stl(model: &Model, path: &Path, scale: f32) -> Result<Exported, St
     let (m, size) = placed(model, scale);
     let tris = model.triangles();
     let mut out: Vec<u8> = Vec::with_capacity(84 + tris * 50);
-    let mut header = format!("J.A.R.V.I.S. 3D studio: {}", model.name).into_bytes();
+    let mut header = format!("J.A.I. 3D studio: {}", model.name).into_bytes();
     header.resize(80, b' ');
     out.extend_from_slice(&header);
     out.extend_from_slice(&(tris as u32).to_le_bytes());
@@ -1908,8 +1908,8 @@ pub fn export_obj(model: &Model, path: &Path, scale: f32) -> Result<Exported, St
     let (m, size) = placed(model, scale);
     let stem = file_name_of(path);
     let dir = path.parent().unwrap_or(Path::new("."));
-    let mut obj = format!("# J.A.R.V.I.S. 3D studio: {}\nmtllib {stem}.mtl\n", model.name);
-    let mut mtl = String::from("# J.A.R.V.I.S. 3D studio\n");
+    let mut obj = format!("# J.A.I. 3D studio: {}\nmtllib {stem}.mtl\n", model.name);
+    let mut mtl = String::from("# J.A.I. 3D studio\n");
     let mut written: HashMap<usize, String> = HashMap::new();
     for (i, mat) in model.materials.iter().enumerate() {
         let s = |c: f32| linear_to_srgb(c);
@@ -2096,7 +2096,7 @@ pub fn glb_bytes(model: &Model, scale: f32) -> Result<Vec<u8>, String> {
         bin.push(0);
     }
     let mut doc = json!({
-        "asset": { "version": "2.0", "generator": "J.A.R.V.I.S. 3D studio" },
+        "asset": { "version": "2.0", "generator": "J.A.I. 3D studio" },
         "scene": 0,
         "scenes": [{ "name": model.name, "nodes": (0..nodes.len()).collect::<Vec<_>>() }],
         "nodes": nodes,

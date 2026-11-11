@@ -120,7 +120,7 @@ pub fn voice_command(text: &str) -> Option<Value> {
         Regex::new(r"^(?:(?:set|change|make|switch)\s+(?:the\s+|my\s+)?(?:oled\s+)?accent(?:\s+colou?r)?\s+(?:to\s+)?|accent(?:\s+colou?r)?\s+|akzent(?:farbe)?\s+(?:auf\s+)?)(.+)$").expect("accent expression")
     });
     let s: String = text.to_lowercase().chars().map(|c| if c.is_alphanumeric() || c == '-' || c == ' ' { c } else { ' ' }).collect();
-    let s = s.split_whitespace().filter(|w| !matches!(*w, "jarvis" | "please" | "bitte" | "sir" | "can" | "you" | "could")).collect::<Vec<_>>().join(" ");
+    let s = s.split_whitespace().filter(|w| !matches!(*w, "jai" | "please" | "bitte" | "sir" | "can" | "you" | "could")).collect::<Vec<_>>().join(" ");
     if let Some(c) = SWITCH.captures(&s) {
         let paradigm = UiDesignParadigm::parse(&c[1])?;
         return Some(json!({ "ui_paradigm": paradigm.id() }));
@@ -168,7 +168,7 @@ mod tests {
     #[test]
     fn voice_switches() {
         assert_eq!(voice_command("Switch to Sci-Fi UI"), Some(json!({"ui_paradigm": "classic_scifi_hud"})));
-        assert_eq!(voice_command("Jarvis, switch to modern minimal UI"), Some(json!({"ui_paradigm": "modern_oled_minimal"})));
+        assert_eq!(voice_command("JAI, switch to modern minimal UI"), Some(json!({"ui_paradigm": "modern_oled_minimal"})));
         assert_eq!(voice_command("OLED mode"), Some(json!({"ui_paradigm": "modern_oled_minimal"})));
         assert_eq!(voice_command("wechsel zum Sci-Fi Design"), Some(json!({"ui_paradigm": "classic_scifi_hud"})));
         assert_eq!(voice_command("set the accent color to electric blue"), Some(json!({"accent_preset": "Electric Blue"})));

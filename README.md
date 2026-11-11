@@ -1,8 +1,14 @@
-# J.A.R.V.I.S.
+# J.A.I.
 
 A local voice assistant for Windows in native Rust. Speech recognition (Whisper), voice
 activity detection (Silero), speech synthesis (Kokoro), the language model (a local Ollama
 engine) and the egui HUD all run on the PC; there is no cloud speech or text-to-speech.
+
+His name is J.A.I., said "Jay". He answers to it said or spelt a little wrong ("Jai", "Jae",
+"J A I", "Hey Jay"); what the letters stand for is yours to set (`name_meaning` in
+`jarvis_config.json`). The program file, the settings file, the database and the folders he
+writes to keep the names they had (`JARVIS.exe`, `jarvis_config.json`, ...), so nothing that
+points at them breaks.
 
 ## Build
 
@@ -34,7 +40,7 @@ ignores them, as it does the logs, the phone page's TLS key and the packaged exe
 The film-voice reference recording is not included either. To calibrate the voice, put your own
 clip at `assets\jarvis_voice_reference.mp3` and run `JARVIS.exe --voice-calibrate`.
 
-Jarvis speaks Received Pronunciation through a dry studio chain. This is an approximation built
+JAI speaks Received Pronunciation through a dry studio chain. This is an approximation built
 from stock voices, not a clone of an actor. Besides the similarity of the voice to its clip, the
 exhaustive verifier measures that the speech recogniser understands it.
 
@@ -51,7 +57,7 @@ F11 switches between the fullscreen board and a maximised window. "Make Discord 
 about Discord, "full screen" alone about the window in front, and neither ever about him; "move
 Discord to another monitor" takes it to the next one.
 
-Jarvis starts with an empty HUD. "Open that widget again next time" keeps one for the next
+JAI starts with an empty HUD. "Open that widget again next time" keeps one for the next
 start; "bring back my windows" reopens what was open last, also after a restart.
 
 ## Panels
@@ -66,7 +72,7 @@ corner until the panel closes or is dragged away:
   what the sweep found and says what stands out.
 - **Disk map**: "what is taking up space?" maps the system drive as a treemap, "map my D drive"
   another drive or folder; clicking a box goes into it, a right-click, BACK, the breadcrumb or
-  "go up a folder" comes back out, and when the reading is done Jarvis says in two sentences
+  "go up a folder" comes back out, and when the reading is done JAI says in two sentences
   what fills it.
 - **Earth**: "show me the earth" opens the globe, "switch to satellite view" and "go back to
   the hologram" change its face, "fly to Tokyo" turns it. On it: "were there any earthquakes
@@ -179,9 +185,9 @@ Cloudflare quick tunnel whose address changes on every start. For an address tha
 changes, set a permanent address in the Integrations hub (Quick Connections, Worldwide address):
 a Cloudflare named tunnel (token plus your own hostname), Tailscale Funnel or your own server.
 
-## Jarvis's own Discord account
+## JAI's own Discord account
 
-Jarvis can have a Discord account of his own: a bot you create once.
+JAI can have a Discord account of his own: a bot you create once.
 
 1. On discord.com/developers, make a New Application. On its Bot page, copy the token (Reset
    Token) and switch on the Message Content Intent. Switch on the Presence Intent too if he
@@ -189,7 +195,7 @@ Jarvis can have a Discord account of his own: a bot you create once.
 2. Under OAuth2 → URL Generator, tick the scope `bot` and the permissions View Channels, Send
    Messages, Read Message History, Connect, Speak and Use Voice Activity. Open the link it gives
    and invite him to your server.
-3. Paste the token into the Integrations hub (Quick Connections, Jarvis's Discord account) and
+3. Paste the token into the Integrations hub (Quick Connections, JAI's Discord account) and
    save. The token is sealed in the vault, never in the settings file.
 4. Say "pair my Discord" (or press Pair my account) and send him the six-digit code as a direct
    message. From then on your DMs to him are orders from anywhere ("what's my GPU temperature",
@@ -247,7 +253,7 @@ shutdown that is scheduled and cancelled, the lock screen, voice samples) are ig
 
 `--silent` (with one or more `--chat` requests) is a scripted session through the real
 pipeline, language model included, that nobody sees or hears and that leaves no trace in the
-conversation log or the settings. It acts inside Jarvis only: reads and his own HUD are carried
+conversation log or the settings. It acts inside JAI only: reads and his own HUD are carried
 out, the volume works on a copy of the mixer, and anything that would reach the PC around him
 (an application, the music, another window, a message) is logged and left undone. `--show` runs
 it in the real window.
@@ -256,7 +262,7 @@ it in the real window.
 context and inspected as geometry (text against clip rectangles, blocks against each other and
 the orb, stroke colours against the theme, animations frame by frame) at four screen sizes.
 Every command family goes through the real dispatcher in five passes (English, German, misheard,
-four commands spoken over Jarvis, compound sentences), both voices are measured against their
+four commands spoken over JAI, compound sentences), both voices are measured against their
 clips and against each other, and every Feature Lab button is pressed five times. What Sir says
 to the screens, his windows and the volume is also said aloud as samples: two stock voices at
 speech level over room hiss, through Whisper, the wake word and the dispatcher. They stand in

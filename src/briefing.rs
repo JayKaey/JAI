@@ -1,4 +1,4 @@
-//! The Stark Executive Briefing ("Good morning, Jarvis", "brief me", "update me on my day", "was
+//! The Stark Executive Briefing ("Good morning, JAI", "brief me", "update me on my day", "was
 //! steht heute an?"): greeting, time and date, then — gathered concurrently — cancelled classes
 //! and room changes (WebUntis), new uploads and due dates (itslearning), the day's appointments
 //! with clashes (Apple Calendar), unread e-mail, the weather at Sir's home, today's reminders,

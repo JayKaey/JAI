@@ -368,7 +368,7 @@ pub async fn run_tool(tools: &ToolContext, args: &Value) -> Result<String, Strin
             }
             mesh.save(&n)?;
             info!("[HIVEMIND] Registered node {}", n.describe());
-            Ok(format!("Registered {}. Jarvis logs in with SSH keys (no passwords): run `ssh-copy-id {}` once if he can't.", n.describe(), n.target()))
+            Ok(format!("Registered {}. JAI logs in with SSH keys (no passwords): run `ssh-copy-id {}` once if he can't.", n.describe(), n.target()))
         }
         "remove" | "delete" | "forget" => {
             let n = node()?;

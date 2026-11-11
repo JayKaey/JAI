@@ -1,10 +1,10 @@
-//! Reference transfer for the film voice: everything Jarvis' Kokoro voice can borrow from the
-//! recording of the film's J.A.R.V.I.S. (`assets/jarvis_voice_reference.mp3`, "Formally known as
+//! Reference transfer for the film voice: everything JAI's Kokoro voice can borrow from the
+//! recording of the film's J.A.I. (`assets/jarvis_voice_reference.mp3`, "Formally known as
 //! Just A Rather Very Intelligent System…"), offline and in pure Rust.
 //!
 //! What this is — and is not. Fish Audio's model `c231dcd3116a4c0984e3bced753c1274` clones the
 //! voice on Fish Audio's servers with a neural speaker encoder; that model cannot run here (it is
-//! a hosted voice, and Jarvis makes no cloud TTS calls). Kokoro has no speaker encoder either, so
+//! a hosted voice, and JAI makes no cloud TTS calls). Kokoro has no speaker encoder either, so
 //! this module transfers the *measurable* parts of the recording onto Kokoro's British RP voices:
 //!
 //! * **A — voice blend calibration** (`calibrate`, `--voice-calibrate`): the clip's sentence is
@@ -60,7 +60,7 @@ pub const DEFAULT_F0_FLATTEN: f32 = 0.35;
 const GATE_DB: f32 = -45.0;
 const RELATIVE_GATE_DB: f32 = 35.0;
 /// The clip's own words (the closed-loop test synthesises them).
-pub const REFERENCE_TRANSCRIPT: &str = "Formally known as Just A Rather Very Intelligent System, JARVIS, it was Tony Stark's organic user interface software platform.";
+pub const REFERENCE_TRANSCRIPT: &str = "Formally known as Just A Rather Very Intelligent System, JAI, it was Tony Stark's organic user interface software platform.";
 /// A sentence the transfer never saw (generalisation check).
 pub const HELD_OUT_SENTENCE: &str = "Good evening, Sir. The research agent has finished, and the report is ready whenever you are.";
 /// Where the clip's analysis is cached.
@@ -360,7 +360,7 @@ pub fn reshape_f0(input: &[f32], rate: u32, amount: f32, ratio: f32) -> Vec<f32>
     reshape_with(input, rate, amount, |_| ratio)
 }
 
-/// How much of the distance between a Jarvis clause's median F0 and the clip's the lock closes
+/// How much of the distance between a JAI clause's median F0 and the clip's the lock closes
 /// (1 = every clause exactly on the clip's median; a little less keeps a trace of the
 /// sentence's own melody between clauses).
 pub const F0_LOCK: f32 = 0.9;
@@ -376,7 +376,7 @@ pub fn lock_step(clause_hz: f32, target_hz: f32) -> f32 {
     2f32.powf((semitones(target_hz, clause_hz) * F0_LOCK).clamp(-F0_LOCK_MAX_ST, F0_LOCK_MAX_ST) / 12.0)
 }
 
-/// Layer C for the Jarvis voice: the flattening, and with `target_hz` (the clip's median F0 as
+/// Layer C for the JAI voice: the flattening, and with `target_hz` (the clip's median F0 as
 /// this stage must produce it) the F0 lock — the clause's whole contour moved so that its
 /// median sits on the clip's. One pitch track serves both.
 pub fn lock_f0(input: &[f32], rate: u32, amount: f32, target_hz: Option<f32>) -> Vec<f32> {
@@ -598,7 +598,7 @@ pub fn load_profile(clip: &Path, cache: &Path) -> Result<ReferenceProfile, Strin
     Ok(profile)
 }
 
-/// The cached profile next to the clip Jarvis found (never in unit tests).
+/// The cached profile next to the clip JAI found (never in unit tests).
 static PROFILE: LazyLock<Option<ReferenceProfile>> = LazyLock::new(|| {
     if cfg!(test) {
         return None;
@@ -832,7 +832,7 @@ pub fn candidate_blends() -> Vec<String> {
     out
 }
 
-/// Synthesises `text` with Kokoro and runs Jarvis' chain up to (not including) the transfer.
+/// Synthesises `text` with Kokoro and runs JAI's chain up to (not including) the transfer.
 /// `lock_to_hz`: the clip's median F0 the clause is locked to (None: no lock).
 pub(crate) fn synth_dry(kokoro: &mut crate::tts::Kokoro, phonemizer: &crate::phonemizer::Phonemizer, text: &str, voice: &str, speed: f32, lock_to_hz: Option<f32>) -> Result<Vec<f32>, String> {
     let ipa = phonemizer.phonemize(&crate::tts::normalize_for_speech(text));
@@ -860,7 +860,7 @@ fn fit(kokoro: &mut crate::tts::Kokoro, phonemizer: &crate::phonemizer::Phonemiz
 
 /// Layer A: picks the blend closest to the clip and stores it in the profile cache. The blend
 /// and the flattening already calibrated stay unless another is closer by `KEEP_MARGIN`.
-pub fn calibrate(cfg: &crate::config::JarvisConfig) -> Result<(String, Match), String> {
+pub fn calibrate(cfg: &crate::config::JaiConfig) -> Result<(String, Match), String> {
     let clip = crate::voice_reference::reference_path().ok_or("no reference clip (assets/jarvis_voice_reference.mp3)")?;
     let mut reference = load_profile(&clip, Path::new(PROFILE_PATH))?;
     let phonemizer = crate::phonemizer::Phonemizer::new(cfg.espeak_path.as_deref());
@@ -953,7 +953,7 @@ impl Verification {
 
 /// Layer D: the clip's own sentence through the whole chain, measured against the clip; then a
 /// held-out sentence through the same (now warmed-up) transfer.
-pub fn verify_with(cfg: &crate::config::JarvisConfig, clip: &Path, cache: &Path) -> Result<Verification, String> {
+pub fn verify_with(cfg: &crate::config::JaiConfig, clip: &Path, cache: &Path) -> Result<Verification, String> {
     let reference = load_profile(clip, cache)?;
     let phonemizer = crate::phonemizer::Phonemizer::new(cfg.espeak_path.as_deref());
     let mut kokoro = crate::tts::Kokoro::load(cfg)?;
@@ -984,12 +984,12 @@ pub const VOICE_SENTENCES: [(&str, &str); 5] = [
     ("alert", "Sir, the graphics card has reached its limit. I recommend a pause."),
 ];
 
-/// Layer D across sentence types: `VOICE_SENTENCES` in Jarvis' finished voice, as the speaker
+/// Layer D across sentence types: `VOICE_SENTENCES` in JAI's finished voice, as the speaker
 /// gets them (synthesis, F0 lock, mastering, the clip's envelope), each with its kind and the
 /// text as spoken after the pronunciation rules. The transfer is warmed on the clip's own
 /// sentence first, as in a running session. (The exhaustive verifier measures them against
 /// the clip and plays them to the speech recogniser.)
-pub fn render_sentences(cfg: &crate::config::JarvisConfig) -> Result<Vec<(&'static str, String, Vec<f32>)>, String> {
+pub fn render_sentences(cfg: &crate::config::JaiConfig) -> Result<Vec<(&'static str, String, Vec<f32>)>, String> {
     let clip = crate::voice_reference::reference_path().ok_or("no reference clip (assets/jarvis_voice_reference.mp3)")?;
     let reference = load_profile(&clip, Path::new(PROFILE_PATH))?;
     let phonemizer = crate::phonemizer::Phonemizer::new(cfg.espeak_path.as_deref());
@@ -1007,7 +1007,7 @@ pub fn render_sentences(cfg: &crate::config::JarvisConfig) -> Result<Vec<(&'stat
     Ok(out)
 }
 
-pub fn verify(cfg: &crate::config::JarvisConfig) -> Result<Verification, String> {
+pub fn verify(cfg: &crate::config::JaiConfig) -> Result<Verification, String> {
     let clip = crate::voice_reference::reference_path().ok_or("no reference clip (assets/jarvis_voice_reference.mp3)")?;
     verify_with(cfg, &clip, Path::new(PROFILE_PATH))
 }
@@ -1222,7 +1222,7 @@ mod tests {
     #[test]
     #[ignore]
     fn calibrate_the_project_voice() {
-        let cfg = crate::config::JarvisConfig {
+        let cfg = crate::config::JaiConfig {
             kokoro_model_path: crate::models::KOKORO_V1_MODEL.into(),
             kokoro_voices_archive_path: crate::models::KOKORO_V1_VOICES.into(),
             tts_gpu: false,
@@ -1241,7 +1241,7 @@ mod tests {
             eprintln!("skipped: no reference clip or Kokoro model in this checkout");
             return;
         };
-        let cfg = crate::config::JarvisConfig {
+        let cfg = crate::config::JaiConfig {
             kokoro_model_path: crate::models::KOKORO_V1_MODEL.into(),
             kokoro_voices_archive_path: crate::models::KOKORO_V1_VOICES.into(),
             kokoro_voice: crate::tts::JARVIS_VOICE.into(),
@@ -1267,7 +1267,7 @@ mod tests {
     #[test]
     #[ignore = "prints measurements of the reference clip"]
     fn reference_clips_measured() {
-        for (name, path) in [("Jarvis", crate::voice_reference::reference_path())] {
+        for (name, path) in [("JAI", crate::voice_reference::reference_path())] {
             let Some(path) = path else { continue };
             let (pcm, rate) = crate::voice_reference::decode(&path).expect("decodes");
             let track = pitch_track(&pcm, rate);

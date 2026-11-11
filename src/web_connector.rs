@@ -1,5 +1,5 @@
 //! Custom website / REST connectors: Sir registers a page or JSON endpoint (name, URL, a CSS
-//! selector or JSON path, a refresh interval) and Jarvis reads it on command or watches it.
+//! selector or JSON path, a refresh interval) and JAI reads it on command or watches it.
 //!
 //! One persistent cookie-jar `reqwest::Client` serves every connector, so sites that set a
 //! session cookie on the first visit keep it. HTML is parsed with `scraper`: a CSS selector

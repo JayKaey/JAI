@@ -6,7 +6,7 @@
 //! `SessionKeepAliveManager`: one persistent cookie-jar `reqwest::Client`, the OAuth tokens, and
 //! the time of the last request. When the session has been idle longer than the keep-alive
 //! interval (8 minutes by default) it is refreshed first (refresh token, else a new login); a
-//! background heartbeat keeps it warm while Jarvis runs, and a 401 triggers one re-login.
+//! background heartbeat keeps it warm while JAI runs, and a 401 triggers one re-login.
 
 use crate::pim_config::LmsSettings;
 use crate::web_connector::{cookie_client, err_chain, host_of, normalize_url, resolve};

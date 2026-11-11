@@ -1,11 +1,11 @@
-//! Crash containment: no single fault takes J.A.R.V.I.S. down.
+//! Crash containment: no single fault takes J.A.I. down.
 //!
 //! * `lock` — a poisoned mutex (a thread panicked while holding it) is recovered, never
 //!   re-panicked: the data inside is still the last consistent value the code wrote.
 //! * `guard` — one unit of work (a transcription, a synthesis, a GUI frame, a viewport) runs
 //!   under `catch_unwind`; a panic is logged with its message and the caller carries on.
 //! * `supervise` — a worker loop (microphone, VAD, TTS) that panics is restarted after a short
-//!   back-off instead of leaving Jarvis deaf or mute; a loop that keeps panicking (more than
+//!   back-off instead of leaving JAI deaf or mute; a loop that keeps panicking (more than
 //!   `MAX_RESTARTS` within `RESTART_WINDOW`) is given up on and says so in the log.
 //! * `clip` / `floor_char_boundary` — prefixes of user and model text by characters, never by a
 //!   byte index that could split "ä", "ß" or "—" (`byte index is not a char boundary`).

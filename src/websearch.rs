@@ -1,4 +1,4 @@
-//! Live web search from several sources at once, so Jarvis answers with concrete facts instead
+//! Live web search from several sources at once, so JAI answers with concrete facts instead
 //! of guesses:
 //! * DuckDuckGo (HTML endpoint, falling back to Lite when the first serves a bot check): the
 //!   top five results (title, URL, snippet), parsed with `scraper`;
@@ -679,8 +679,8 @@ mod tests {
 
     #[test]
     fn decodes_html_and_urls() {
-        let page = extract_readable("<p>Hello &amp; welcome to &quot;<b>J.A.R.V.I.S.</b>&quot; &lt;World&gt;, the finest butler!</p>", 500);
-        assert_eq!(page.text, "Hello & welcome to \"J.A.R.V.I.S.\" <World>, the finest butler!");
+        let page = extract_readable("<p>Hello &amp; welcome to &quot;<b>J.A.I.</b>&quot; &lt;World&gt;, the finest butler!</p>", 500);
+        assert_eq!(page.text, "Hello & welcome to \"J.A.I.\" <World>, the finest butler!");
         assert_eq!(
             percent_decode("https%3A%2F%2Fde.wikipedia.org%2Fwiki%2FBundeskanzler"),
             "https://de.wikipedia.org/wiki/Bundeskanzler"

@@ -2,11 +2,11 @@
 //! plain words and a fan curve to match ("how are my temperatures", "is my PC running hot",
 //! "fan curve advice").
 //!
-//! A sample is taken every ten seconds from the telemetry Jarvis reads anyway and kept in
+//! A sample is taken every ten seconds from the telemetry JAI reads anyway and kept in
 //! memory for an hour. The verdict looks at what the numbers mean together: hot under load is
 //! one thing, hot while idle another, and a card that sits at its limit while the fans could
 //! still turn faster is a fan curve that starts too late. The advice is arithmetic on Sir's
-//! own measurements; Jarvis changes no fan setting himself.
+//! own measurements; JAI changes no fan setting himself.
 
 use crate::features::{spoken, str_arg};
 use serde_json::{json, Value};

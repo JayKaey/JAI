@@ -121,7 +121,7 @@ pub async fn run_tool(tools: &ToolContext, args: &Value) -> Result<String, Strin
                 }
                 (contact.name, contact.email)
             };
-            let subject = str_arg(args, &["subject"]).map(str::to_string).unwrap_or_else(|| format!("From Jarvis: {label}"));
+            let subject = str_arg(args, &["subject"]).map(str::to_string).unwrap_or_else(|| format!("From JAI: {label}"));
             let url = format!("mailto:{address}?subject={}&body={}", urlencoding::encode(&subject), urlencoding::encode(&content));
             crate::apps::open(&url, &[]).await?;
             return Ok(format!("Opened an e-mail draft to {name} with {label}; it is ready to send in your mail app."));
@@ -130,7 +130,7 @@ pub async fn run_tool(tools: &ToolContext, args: &Value) -> Result<String, Strin
         "window" | "native_window" => run("spawn_native_window", json!({ "title": crate::pim::capitalise(&label), "markdown": content })).await,
         "widget" | "note" => run("create_or_update_widget", json!({ "id": format!("teleport_{}", Local::now().format("%H%M%S")), "type": "MarkdownNoteCard", "title": crate::pim::capitalise(&label), "markdown": content })).await,
         "file" => {
-            let dir = crate::apps::home_dir().ok_or("I can't find your home folder.")?.join("Documents").join("Jarvis");
+            let dir = crate::apps::home_dir().ok_or("I can't find your home folder.")?.join("Documents").join("JAI");
             std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
             let path = dir.join(format!("teleport_{}.txt", Local::now().format("%Y%m%d_%H%M%S")));
             std::fs::write(&path, &content).map_err(|e| e.to_string())?;

@@ -347,7 +347,7 @@ pub fn spoken_day(date: NaiveDate, today: NaiveDate) -> String {
     }
 }
 
-/// (the block, the line Jarvis says) for one day or a stretch of days at `place`. `focus` is
+/// (the block, the line JAI says) for one day or a stretch of days at `place`. `focus` is
 /// what he asked about ("cold", "warm", "rain", "wind"), if anything.
 pub fn answer(days: &[DayWeather], when: &When, place: &str, today: NaiveDate, focus: Option<&str>) -> (String, String) {
     let Some(first) = days.first() else {
@@ -538,7 +538,7 @@ fn ahead(quarters: &[Quarter], now: NaiveDateTime) -> Vec<&Quarter> {
     quarters.iter().filter(|q| q.at > now).collect()
 }
 
-/// "Will it rain in the next hour?": (the block, the line Jarvis says).
+/// "Will it rain in the next hour?": (the block, the line JAI says).
 pub fn nowcast_answer(quarters: &[Quarter], now: NaiveDateTime, place: &str, minutes: i64) -> (String, String) {
     let next = ahead(quarters, now);
     if next.is_empty() {

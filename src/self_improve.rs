@@ -1,4 +1,4 @@
-//! Self-improvement: Jarvis reads his own Rust source, applies changes behind a safety net and
+//! Self-improvement: JAI reads his own Rust source, applies changes behind a safety net and
 //! rebuilds himself.
 //!
 //! * `inspect_own_source`: list `src/*.rs`, read a file (with line numbers) or grep the tree.
@@ -6,7 +6,7 @@
 //!   copied to `./backups/<timestamp>/` first, `cargo check` must pass, and a failing change is
 //!   rolled back automatically, so a bad patch can never leave the tree broken.
 //! * `restore_source_backup`: puts the newest (or a named) backup back.
-//! * `recompile_and_restart`: `cargo build --release` in the background; on success Jarvis
+//! * `recompile_and_restart`: `cargo build --release` in the background; on success JAI
 //!   announces it, shuts down and the new binary starts (`lifecycle::Restart::Rebuilt`).
 //!
 //! The cargo environment mirrors `build.bat` (its PATH and LIBCLANG_PATH lines are read).
@@ -28,7 +28,7 @@ const BUILD_TIMEOUT: Duration = Duration::from_secs(45 * 60);
 
 static BUILDING: AtomicBool = AtomicBool::new(false);
 
-/// The folder with `Cargo.toml` and `src/` (Jarvis runs from his project folder).
+/// The folder with `Cargo.toml` and `src/` (JAI runs from his project folder).
 pub fn project_root() -> Result<PathBuf, String> {
     let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
     let mut dir = Some(cwd.as_path());
@@ -249,7 +249,7 @@ pub fn recompile_and_restart(args: &Value) -> Result<String, String> {
     let shown = root.display().to_string();
     tokio::spawn(async move {
         let started = Instant::now();
-        lifecycle::signal(Signal::Notice("Rebuilding J.A.R.V.I.S. (cargo build --release)…".into()));
+        lifecycle::signal(Signal::Notice("Rebuilding J.A.I. (cargo build --release)…".into()));
         let renamed = free_running_binary(&root);
         let result = cargo(&root, &["build", "--release", "--message-format", "short"], BUILD_TIMEOUT).await;
         BUILDING.store(false, Ordering::Release);
@@ -281,7 +281,7 @@ pub fn recompile_and_restart(args: &Value) -> Result<String, String> {
     ))
 }
 
-/// Windows cannot overwrite a running executable but can rename it: when Jarvis runs from
+/// Windows cannot overwrite a running executable but can rename it: when JAI runs from
 /// `target/release`, his binary moves aside so the linker can write the new one.
 fn free_running_binary(root: &Path) -> Option<(PathBuf, PathBuf)> {
     if !cfg!(windows) {

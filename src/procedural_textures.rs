@@ -44,7 +44,7 @@ pub enum Pattern {
 /// A material preset Sir can name.
 #[derive(Debug, PartialEq)]
 pub struct Finish {
-    /// How Jarvis says it ("carbon fibre").
+    /// How JAI says it ("carbon fibre").
     pub name: &'static str,
     /// The words that ask for it, English and German, longest first where they overlap.
     pub words: &'static [&'static str],

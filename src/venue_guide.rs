@@ -1,6 +1,6 @@
 //! Going out, the way the reference board does it.
 //!
-//! * "Where can I take my fiancée for a super serious Halloween night?" — Jarvis picks one real
+//! * "Where can I take my fiancée for a super serious Halloween night?" — JAI picks one real
 //!   venue himself ("I know just the place"): a web search near where Sir is, then the local
 //!   model chooses one place *from the results* (a pick that appears nowhere in them is thrown
 //!   away and the first result that names a venue wins instead). The place goes on the board as a
@@ -19,7 +19,7 @@ use tracing::{info, warn};
 
 pub const TOOL: &str = "venue_guide";
 
-/// The place Jarvis last recommended (name, lat, lon): "let's go here" goes there.
+/// The place JAI last recommended (name, lat, lon): "let's go here" goes there.
 static LAST_PLACE: Mutex<Option<(String, f64, f64)>> = Mutex::new(None);
 
 pub fn is_tool(name: &str) -> bool {
@@ -51,7 +51,7 @@ fn re(p: &str) -> Regex {
 /// "Where can I take my fiancée for …", "where should we go tonight", "any ideas where to take
 /// her for dinner", "wo können wir heute Abend hin": the outing, in Sir's words.
 static VENUE: LazyLock<Regex> = LazyLock::new(|| {
-    re(r"(?i)^(?:hey\s+)?(?:jarvis[,\s]+)?(?:any\s+ideas?\s+|do you know\s+|can you suggest\s+|suggest\s+)?(?:where|somewhere)\s+(?:(?:can|could|should|shall|do|might)\s+)?(?:i\s+|we\s+|to\s+)(?:take|bring|go|head|go out)\b(.*)$|^(?:hey\s+)?(?:jarvis[,\s]+)?(?:wo|wohin)\s+(?:kann|können|koennen|sollen|soll)\s+(?:ich|wir)\b(.*)$")
+    re(r"(?i)^(?:hey\s+)?(?:jai[,\s]+)?(?:any\s+ideas?\s+|do you know\s+|can you suggest\s+|suggest\s+)?(?:where|somewhere)\s+(?:(?:can|could|should|shall|do|might)\s+)?(?:i\s+|we\s+|to\s+)(?:take|bring|go|head|go out)\b(.*)$|^(?:hey\s+)?(?:jai[,\s]+)?(?:wo|wohin)\s+(?:kann|können|koennen|sollen|soll)\s+(?:ich|wir)\b(.*)$")
 });
 
 /// Sir is asking for a place to go: the request (trimmed), or None.
@@ -75,7 +75,7 @@ static GO_HERE: LazyLock<Regex> = LazyLock::new(|| {
 
 pub fn go_request(text: &str) -> bool {
     let t = text.trim().trim_end_matches(['?', '.', '!']).trim();
-    let t = t.strip_prefix("Jarvis,").or_else(|| t.strip_prefix("Jarvis")).map(str::trim).unwrap_or(t);
+    let t = t.strip_prefix("JAI,").or_else(|| t.strip_prefix("JAI")).map(str::trim).unwrap_or(t);
     GO_HERE.is_match(t)
 }
 
@@ -88,7 +88,7 @@ fn occasion(request: &str) -> String {
     let after_for = ["for ", "für "].iter().filter_map(|k| lower.find(k).map(|i| &request[i + k.len()..])).next();
     let after_verb = || [" take ", " go ", " head ", " bring ", " hin"].iter().filter_map(|k| lower.find(k).map(|i| &request[i + k.len()..])).next();
     let base = after_for.or_else(after_verb).unwrap_or(request);
-    const DROP: &[&str] = &["a", "an", "the", "my", "super", "really", "very", "some", "please", "jarvis", "ein", "eine", "einen", "her", "him", "them", "us", "out", "to", "with", "and", "go", "hin", "wir", "ich"];
+    const DROP: &[&str] = &["a", "an", "the", "my", "super", "really", "very", "some", "please", "jai", "ein", "eine", "einen", "her", "him", "them", "us", "out", "to", "with", "and", "go", "hin", "wir", "ich"];
     let words: Vec<&str> = base.split_whitespace().filter(|w| !DROP.contains(&w.to_lowercase().trim_matches(|c: char| !c.is_alphanumeric()))).collect();
     match words.as_slice() {
         [] => "things to do tonight".to_string(),
@@ -424,7 +424,7 @@ mod tests {
     #[test]
     fn going_out_questions_are_recognised() {
         // The reference clip.
-        assert!(venue_request("Hey Jarvis, where can I take my fiancée for a super serious Halloween night?").is_some());
+        assert!(venue_request("Hey JAI, where can I take my fiancée for a super serious Halloween night?").is_some());
         for yes in ["Where should we go tonight?", "Any ideas where to take her for dinner", "where can we go this weekend with the kids", "Wo können wir heute Abend hin?", "Where can I take my girlfriend on a date"] {
             assert!(venue_request(yes).is_some(), "{yes}");
         }
@@ -435,7 +435,7 @@ mod tests {
 
     #[test]
     fn lets_go_here_is_recognised() {
-        for yes in ["Yeah, okay let's go here.", "Let's go there", "take me there", "Jarvis, navigate there", "How do I get there?", "show me the route", "Lass uns da hingehen", "bring mich dahin"] {
+        for yes in ["Yeah, okay let's go here.", "Let's go there", "take me there", "JAI, navigate there", "How do I get there?", "show me the route", "Lass uns da hingehen", "bring mich dahin"] {
             assert!(go_request(yes), "{yes}");
         }
         for no in ["let's go to bed", "go to the sim lab", "take me to the board", "here we go"] {

@@ -1,7 +1,7 @@
-//! Natural voice macros: Sir teaches Jarvis a routine in his own words ("when I say 'study time',
+//! Natural voice macros: Sir teaches JAI a routine in his own words ("when I say 'study time',
 //! open my physics folder, start a 45 minute focus timer and play my lo-fi playlist"). Each step is
 //! an ordinary request, run one after the other through the full pipeline (fast path, LLM,
-//! tools) as if Sir had said it, so a step can be anything Jarvis understands. Stored in
+//! tools) as if Sir had said it, so a step can be anything JAI understands. Stored in
 //! `voice_macros` (`jarvis_memory.db`); the trigger phrase runs it from the fast path.
 
 use crate::stark::StarkEvent;
@@ -249,7 +249,7 @@ mod tests {
         store
             .save(&VoiceMacro { name: "Study time".into(), trigger_phrases: vec!["study time".into()], steps: vec!["open Discord".into()], description: String::new(), usage_count: 0 })
             .unwrap();
-        assert_eq!(store.match_trigger("Jarvis, study time!").map(|m| m.name), Some("Study time".into()));
+        assert_eq!(store.match_trigger("JAI, study time!").map(|m| m.name), Some("Study time".into()));
         assert_eq!(store.match_trigger("run the study time macro").map(|m| m.name), Some("Study time".into()));
         assert!(store.match_trigger("open Spotify").is_none());
         assert!(store.delete("study time"));

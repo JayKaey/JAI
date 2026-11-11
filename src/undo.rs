@@ -1,4 +1,4 @@
-//! "Undo that": the last change Jarvis made to something of his own, taken back.
+//! "Undo that": the last change JAI made to something of his own, taken back.
 //!
 //! After every tool call that succeeded, what it changed is read off a snapshot taken before
 //! and after it (`way_back`): the look and layout of the HUD, a window or widget of his that
@@ -41,7 +41,7 @@ impl Step {
     }
 }
 
-/// What Jarvis looked like around a call: enough to see what it changed of his own.
+/// What JAI looked like around a call: enough to see what it changed of his own.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Snapshot {
     pub interface: InterfaceSettings,
@@ -533,7 +533,7 @@ mod tests {
         assert!(slot.take_within(Duration::from_secs(120)).is_none(), "an older change stays");
     }
 
-    /// Repro (jarvis.log, 2026-11-08 23:3x): "Call me Earth." — misheard over Jarvis' voice —
+    /// Repro (jarvis.log, 2026-11-08 23:3x): "Call me Earth." — misheard over JAI's voice —
     /// overwrote the seed "Always address the user respectfully as 'Sir'." (persona, 10) with
     /// "Sir should be addressed as Earth.", and nothing could take it back.
     #[test]

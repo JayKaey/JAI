@@ -1,4 +1,4 @@
-//! Jarvis' voice on every line he says: himself in the first person, Sir in the second. Small
+//! JAI's voice on every line he says: himself in the first person, Sir in the second. Small
 //! models drift into narrating ("Sir's request seems unclear", "Sir wants the music louder"),
 //! log fragments ("Set background opacity lower.", "Opened Spotify.") and slang ("Welp"). The
 //! stream filter rewrites whole sentences before they reach the chat or the voice.
@@ -133,7 +133,7 @@ static MISADDRESSED: LazyLock<Regex> = LazyLock::new(|| {
     re(r"(?i)^((?:done|of course|certainly|right away|straight away|at your service|very well|understood|yes|as you wish|consider it done|indeed|good (?:morning|afternoon|evening)|hello|welcome back)[^.!?]{0,40}?),\s+(?:dear\s+)?(?:earth|globe|world|planet|erde|globus)\s*([.!?])")
 });
 
-/// Rewrites one sentence (or a chunk of sentences) into Jarvis' voice.
+/// Rewrites one sentence (or a chunk of sentences) into JAI's voice.
 pub fn rewrite(text: &str) -> String {
     if text.trim().is_empty() {
         return text.to_string();

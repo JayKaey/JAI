@@ -194,9 +194,9 @@ impl OmniInbox {
                 let text = if !r.reply.is_empty() {
                     r.reply.clone()
                 } else if looks_german(&m.message_text) {
-                    format!("Hey, ich bin gerade beschäftigt und melde mich in etwa {} Minuten. (Automatische Antwort von J.A.R.V.I.S.)", left)
+                    format!("Hey, ich bin gerade beschäftigt und melde mich in etwa {} Minuten. (Automatische Antwort von J.A.I.)", left)
                 } else {
-                    format!("Hey, I'm {} right now and will get back to you in about {}. (Auto-reply from J.A.R.V.I.S.)", r.activity, human_minutes(left))
+                    format!("Hey, I'm {} right now and will get back to you in about {}. (Auto-reply from J.A.I.)", r.activity, human_minutes(left))
                 };
                 if first {
                     r.replied.push(m.sender.clone());

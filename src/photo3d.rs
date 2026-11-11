@@ -1,6 +1,6 @@
 //! PHOTO TO 3D: the 3D studio's last resort before composing primitives. When neither the
 //! library, the curated repositories nor Sketchfab and its free Objaverse mirror have a real
-//! model of a thing, Jarvis rebuilds it from a photograph:
+//! model of a thing, JAI rebuilds it from a photograph:
 //! 1. the picture search (`image_viewer`) brings a few photos; BiRefNet lite cuts each subject
 //!    out, and the cleanest whole subject wins;
 //! 2. it is framed the way TripoSR was trained: cropped to the subject, which fills 0.85 of a
@@ -11,7 +11,7 @@
 //!    to the studio's Y-up, the photographed side towards the studio's camera).
 //!
 //! Offline: the three networks lie in `models/photo3d`, fetched once by hand with Sir's leave,
-//! never by Jarvis (without them the studio composes, as before). They run on half the CPU's
+//! never by JAI (without them the studio composes, as before). They run on half the CPU's
 //! threads, never the GPU. Licences: TripoSR (Tripo AI and Stability AI; the ONNX export is
 //! QtMeshEditor's) and BiRefNet (Zheng et al.), both MIT.
 
@@ -48,7 +48,7 @@ const MAX_PHOTO: u32 = 1024;
 const CRISP: f32 = 0.9;
 
 /// Where the networks lie: `photo3d` beside Kokoro's model (`models/photo3d`).
-pub fn dir(cfg: &crate::config::JarvisConfig) -> PathBuf {
+pub fn dir(cfg: &crate::config::JaiConfig) -> PathBuf {
     Path::new(&cfg.kokoro_model_path).parent().unwrap_or(Path::new("models")).join("photo3d")
 }
 

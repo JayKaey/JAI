@@ -186,7 +186,7 @@ pub fn tool_definitions() -> Vec<Value> {
         crate::window_tiler::tool_definition(),
         json!({"type": "function", "function": {
             "name": "suggest_commands",
-            "description": "Commands Jarvis understands that begin with or contain the given words (the text console's predictive completion): 'what can I say that starts with open'.",
+            "description": "Commands JAI understands that begin with or contain the given words (the text console's predictive completion): 'what can I say that starts with open'.",
             "parameters": {"type": "object", "properties": {"prefix": {"type": "string", "description": "The first words or letters of a command."}}, "required": ["prefix"]}
         }}),
     ]
@@ -283,7 +283,7 @@ fn verbatim(tool: &'static str, args: Value) -> Option<Route> {
 fn core(text: &str) -> String {
     let lower = text.trim().to_lowercase();
     let mut s = lower.trim_end_matches(['?', '.', '!', ',']).trim();
-    for lead in ["hey jarvis", "jarvis", ",", "please", "bitte", "can you", "could you", "kannst du", "would you", "ok", "okay"] {
+    for lead in ["hey jai", "jai", ",", "please", "bitte", "can you", "could you", "kannst du", "would you", "ok", "okay"] {
         s = s.trim_start_matches(lead).trim_start_matches([',', ' ']);
     }
     s.trim_end_matches(" please").trim_end_matches(" bitte").trim().to_string()
@@ -529,7 +529,7 @@ mod tests {
     #[test]
     fn every_system_answers_in_english() {
         expect("Add a flashcard: Mitosis means cell division into two identical cells", "manage_flashcards", json!({"action": "add", "front": "Mitosis", "back": "cell division into two identical cells"}));
-        expect("Jarvis, new card to my Biology deck: ATP is the energy currency of the cell.", "manage_flashcards", json!({"action": "add", "front": "ATP", "back": "the energy currency of the cell", "deck": "Biology"}));
+        expect("JAI, new card to my Biology deck: ATP is the energy currency of the cell.", "manage_flashcards", json!({"action": "add", "front": "ATP", "back": "the energy currency of the cell", "deck": "Biology"}));
         expect("Quiz me on my flashcards", "manage_flashcards", json!({"action": "quiz"}));
         expect("study my biology flashcards", "manage_flashcards", json!({"action": "quiz", "deck": "biology"}));
         expect("How many flashcards are due?", "manage_flashcards", json!({"action": "due"}));

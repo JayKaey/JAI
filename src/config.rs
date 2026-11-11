@@ -15,7 +15,11 @@ use tracing::{error, info, warn};
 
 pub const CONFIG_FILE: &str = "jarvis_config.json";
 /// Bump whenever tuned defaults change and old persisted values must be migrated.
-pub const CONFIG_VERSION: u32 = 23;
+pub const CONFIG_VERSION: u32 = 24;
+
+/// His name as the settings list it (`wake::WakeWordMatcher` knows how it is misheard and spelt;
+/// further names may be added here).
+pub const DEFAULT_WAKE_WORDS: &[&str] = &["jai", "jay"];
 
 /// The language model since v23 (`migrate`): Qwen3.5 4B.
 pub const PRIMARY_MODEL: &str = "qwen3.5:4b";
@@ -35,14 +39,18 @@ pub fn is_qwen35(model: &str) -> bool {
 /// "Service", "Jobes", "That all" or "listen".
 pub const WHISPER_NAME_PROMPT: &str = "Hey Jarvis.";
 
-/// Whisper's initial prompt since v18: the name plus Jarvis' own short domain words, so "core"
+/// Whisper's initial prompt since v18: the name as Sir says it ("Jay") plus his own short domain words, so "core"
 /// stops coming out as "car" / "call" / "for C-O-R-E". Short on purpose (the long v9 list made
 /// Whisper invent words on quiet audio); `no_context` + `single_segment` keep it from echoing, and
 /// `stt::normalize_stt_transcript` / `typos::core_homophones` repair what still slips through.
 /// It opens with "Hey Jarvis." as a sentence: the bare list "Jarvis, core, show core, …" made
 /// the self-test hear the name as "Javis" / "Java" (2026-11-02 A/B, same clips); this form kept
 /// every check green and also heard "Geschichte" right.
-pub const WHISPER_DOMAIN_PROMPT: &str = "Hey Jarvis. Show your core, hide your core, close your core. Orb, HUD, board, blocks, Sonora, Spotify, WebUntis, itslearning.";
+pub const WHISPER_DOMAIN_PROMPT: &str = "Hey Jay. Show your core, hide your core, close your core. Orb, HUD, board, blocks, Sonora, Spotify, WebUntis, itslearning.";
+
+/// The domain prompt of v18-v23, when his name was Jarvis (kept to recognise a stock prompt in
+/// an older settings file).
+const WHISPER_DOMAIN_PROMPT_V23: &str = "Hey Jarvis. Show your core, hide your core, close your core. Orb, HUD, board, blocks, Sonora, Spotify, WebUntis, itslearning.";
 
 /// The v9-v10 vocabulary primer. Since v11 Whisper runs without an initial prompt: on short or
 /// quiet audio it invented words from the prompt ("Sonora", "Highway to Hell"); Sir's vocabulary
@@ -55,8 +63,8 @@ pub const LEGACY_WHISPER_PROMPT: &str = "Jarvis, pause, resume, play, stop, mute
 const LEGACY_WHISPER_PROMPTS: &[&str] = &[
     // v12-v17
     WHISPER_NAME_PROMPT,
-    // v18-v21
-    "Hey Jarvis. Show your core, hide your core, close your core. Orb, HUD, board, blocks, Sonora, Spotify, WebUntis, itslearning.",
+    // v18-v21 and v23
+    WHISPER_DOMAIN_PROMPT_V23,
     // v18 (first build): the bare domain list
     "Jarvis, core, show core, hide core, close core, orb, HUD, board, blocks, Sonora, Spotify, WebUntis, itslearning.",
     // v9-v10
@@ -120,23 +128,23 @@ impl HardwareProfile {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
-pub struct JarvisConfig {
+pub struct JaiConfig {
     /// Missing in pre-v4 files, which must therefore read as version 0 to trigger migration.
     #[serde(default = "legacy_config_version")]
     pub config_version: u32,
     pub hardware_profile: HardwareProfile,
 
     // ---- HUD window -----------------------------------------------------------------------
-    /// Show the HUD window at start-up (otherwise Jarvis starts in the tray).
+    /// Show the HUD window at start-up (otherwise JAI starts in the tray).
     pub open_ui_on_start: bool,
-    /// Look and layout of the HUD; Jarvis changes it on request (`configure_interface`).
+    /// Look and layout of the HUD; JAI changes it on request (`configure_interface`).
     pub interface: InterfaceSettings,
     /// Last HUD window placement on the desktop (x, y, width, height in physical pixels).
     pub hud_window: Option<[i32; 4]>,
     pub hud_maximized: bool,
 
     // ---- LLM ----------------------------------------------------------------------------
-    /// Built-in engine shipped with Jarvis (a private copy of Ollama). Used whenever present.
+    /// Built-in engine shipped with JAI (a private copy of Ollama). Used whenever present.
     pub llm_runtime_dir: String,
     /// Private model store of the built-in engine.
     pub llm_models_dir: String,
@@ -182,14 +190,14 @@ pub struct JarvisConfig {
     /// (160 ms behind a one-word reflex, `reflex_hangover_ms`). The utterance itself only ends
     /// after `short_command_commit_ms` / `silence_hangover_ms`.
     pub short_command_hangover_ms: u32,
-    /// Trailing silence that closes a short burst ("stop", "pause", "Jarvis, next page"): 280 ms,
-    /// long enough for the breath between "Jarvis" and the command.
+    /// Trailing silence that closes a short burst ("stop", "pause", "JAI, next page"): 280 ms,
+    /// long enough for the breath between "JAI" and the command.
     pub short_command_commit_ms: u32,
     /// Up to this much voiced audio an utterance counts as a short command burst.
     pub short_command_max_ms: u32,
     /// The head start behind a one-word reflex burst ("mute", "stop", "weiter"): after 160 ms of
     /// silence the word reaches Whisper's small reflex window, while the utterance stays open
-    /// until `short_command_commit_ms` in case more follows ("Jarvis … open Discord").
+    /// until `short_command_commit_ms` in case more follows ("JAI … open Discord").
     pub reflex_hangover_ms: u32,
     /// A reflex burst has at least this much voiced audio …
     pub reflex_min_ms: u32,
@@ -197,7 +205,7 @@ pub struct JarvisConfig {
     pub reflex_max_ms: u32,
     /// Extra wait after a fragment that sounds unfinished ("… und", "open the", < 4 words).
     pub incomplete_thought_wait_ms: u32,
-    /// Speech that resumes before Jarvis has answered is joined onto the previous transcript.
+    /// Speech that resumes before JAI has answered is joined onto the previous transcript.
     pub utterance_stitching: bool,
     pub pre_roll_ms: u32,
     /// Utterances with less voiced audio than this are discarded as noise.
@@ -206,16 +214,16 @@ pub struct JarvisConfig {
     pub noise_calibration_ms: u32,
     pub barge_in_enabled: bool,
     pub barge_in_min_ms: u32,
-    /// Added to the start threshold while Jarvis is talking (speaker-echo guard).
+    /// Added to the start threshold while JAI is talking (speaker-echo guard).
     pub barge_in_threshold_boost: f32,
-    /// After Jarvis answers (or asks something), Sir may talk on without the wake word.
+    /// After JAI answers (or asks something), Sir may talk on without the wake word.
     pub active_conversation_window_secs: u64,
 
     // ---- Wake word ----------------------------------------------------------------------
     pub wake_words: Vec<String>,
     pub wake_word_similarity_threshold: f64,
     pub wake_word_required: bool,
-    /// The addressee detector: speech meant for Jarvis is answered without the wake word (an
+    /// The addressee detector: speech meant for JAI is answered without the wake word (an
     /// open conversation, his window in front, a direct command or question), while gamer
     /// chatter over a game or Discord is ignored even in hands-free mode.
     pub addressee_detection: bool,
@@ -237,6 +245,10 @@ pub struct JarvisConfig {
     /// Smallest encoder window (frames, 50 per second) used with the dynamic window.
     pub whisper_min_audio_ctx: i32,
     pub whisper_flash_attn: bool,
+    /// The whole process runs above normal priority for the half second a decode lasts
+    /// (`platform::urgent`), so a busy CPU does not slow the transcript. Off: Whisper shares
+    /// the cores evenly with whatever else runs.
+    pub whisper_priority_boost: bool,
     /// One encoder pass per clip: greedy in the last clip's language, the language read from the
     /// same pass, the beam search only for an unsure sentence (`stt::one_pass`). False = the v22
     /// decoding (separate language detection, beam search for every sentence).
@@ -257,13 +269,13 @@ pub struct JarvisConfig {
     pub espeak_path: Option<String>,
 
     // ---- Audio devices & output ---------------------------------------------------------
-    /// Jarvis voice loudness (0-200 %), independent of the system volume.
+    /// JAI voice loudness (0-200 %), independent of the system volume.
     pub loudness_pct: u8,
     pub preferred_mic: Option<String>,
     pub preferred_speaker: Option<String>,
-    /// The output Jarvis speaks on while he may talk in Sir's Discord call: a channel that reaches
+    /// The output JAI speaks on while he may talk in Sir's Discord call: a channel that reaches
     /// Discord's microphone (with Wave Link, one in the Chat Mix). None: found once by a silent
-    /// probe (`discord_bridge`), then kept here. Jarvis never changes Wave Link itself.
+    /// probe (`discord_bridge`), then kept here. JAI never changes Wave Link itself.
     pub discord_call_output: Option<String>,
     /// The output whose sound is the call, for listening (None: Discord's own channel or session,
     /// found automatically). Set from the HUD's `DISCORD // AUDIO ROUTING` block.
@@ -271,7 +283,11 @@ pub struct JarvisConfig {
     /// The Stream Deck bridge's secret (`streamdeck_bridge`; generated on first start).
     pub streamdeck_token: String,
     pub startup_greeting: bool,
-    /// Jarvis warns on his own about overheating, full memory or disks (`watchdog`).
+    /// What his name stands for, as Sir put it (kept in the settings file, not in the code:
+    /// it may hold Sir's own name). Empty: he is J.A.I. and says no more.
+    #[serde(default)]
+    pub name_meaning: String,
+    /// JAI warns on his own about overheating, full memory or disks (`watchdog`).
     pub proactive_alerts: bool,
     /// RSS feed for the headlines of the daily briefing ("" = no headlines).
     pub briefing_news_feed: String,
@@ -279,7 +295,7 @@ pub struct JarvisConfig {
     // ---- Stark systems --------------------------------------------------------------------
     /// WhatsApp: desktop URI handler, notification listener and the optional local bridge.
     pub whatsapp: WhatsAppSettings,
-    /// Jarvis's own Discord account (a bot Sir created; its token lives in the vault).
+    /// JAI's own Discord account (a bot Sir created; its token lives in the vault).
     pub discord_bot: DiscordBotSettings,
     /// Away Mode: the answering machine, alerts to Sir's phone and the digest when he's back.
     pub away: AwaySettings,
@@ -339,22 +355,22 @@ impl Default for WhatsAppSettings {
     }
 }
 
-/// Jarvis's own Discord account (`discord_bot`). The token is in the vault, never here.
+/// JAI's own Discord account (`discord_bot`). The token is in the vault, never here.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DiscordBotSettings {
     pub enabled: bool,
     /// Sir's Discord user id (set by pairing): his DMs are orders, everyone else only chats.
     pub owner_id: String,
-    /// Friends who DM or mention Jarvis get a short answer in character.
+    /// Friends who DM or mention JAI get a short answer in character.
     pub answer_others: bool,
     /// Away Mode, reminders and alerts reach Sir as DMs.
     pub notify_owner: bool,
-    /// Jarvis joins whatever voice channel Sir joins (and leaves with him).
+    /// JAI joins whatever voice channel Sir joins (and leaves with him).
     pub follow_owner_voice: bool,
     /// "Tell me when Max comes online" (the Presence Intent must be on in the Developer Portal).
     pub presence_intent: bool,
-    /// Jarvis says once per channel, in its text chat, that he transcribes the call.
+    /// JAI says once per channel, in its text chat, that he transcribes the call.
     pub announce_listening: bool,
     /// "Watching …" under his name.
     pub status_text: String,
@@ -460,7 +476,7 @@ pub struct SatelliteSettings {
     pub port: u16,
     /// Browsers only hand out GPS to secure pages, so HTTPS (self-signed) is the default.
     pub https: bool,
-    /// Pairing token every request must carry (`?k=` / `X-Jarvis-Key`); generated once.
+    /// Pairing token every request must carry (`?k=` / `X-JAI-Key`); generated once.
     pub token: String,
     /// Public HTTPS tunnel. Disable to retain local-network access only.
     pub worldwide_enabled: bool,
@@ -552,7 +568,7 @@ impl Default for LocationSettings {
 pub struct AcousticSettings {
     /// Two sharp claps 150-450 ms apart.
     pub double_clap: bool,
-    /// "wake" (Jarvis listens) or "toggle_music" (play / pause).
+    /// "wake" (JAI listens) or "toggle_music" (play / pause).
     pub clap_action: String,
     /// Rhythmic low knocks (100-900 Hz) duck the music and raise an amber alert.
     pub knock_alert: bool,
@@ -568,7 +584,7 @@ impl Default for AcousticSettings {
     }
 }
 
-impl Default for JarvisConfig {
+impl Default for JaiConfig {
     fn default() -> Self {
         let profile = HardwareProfile::detect();
         let env = |key: &str, fallback: &str| std::env::var(key).unwrap_or_else(|_| fallback.to_string());
@@ -632,12 +648,7 @@ impl Default for JarvisConfig {
             barge_in_threshold_boost: 0.15,
             active_conversation_window_secs: 5,
 
-            wake_words: [
-                "jarvis", "javis", "charvis", "schawis", "jarviz", "dscharvis", "yarvis",
-            ]
-            .iter()
-            .map(|s| s.to_string())
-            .collect(),
+            wake_words: DEFAULT_WAKE_WORDS.iter().map(|s| s.to_string()).collect(),
             wake_word_similarity_threshold: 0.80,
             wake_word_required: true,
             addressee_detection: true,
@@ -657,6 +668,7 @@ impl Default for JarvisConfig {
             // The encoder window follows the clip ((secs / 30 × 1500) + 64 frames); 128 is the floor.
             whisper_min_audio_ctx: 128,
             whisper_flash_attn: false,
+            whisper_priority_boost: true,
             whisper_fast_decode: true,
             kokoro_model_path: env("KOKORO_MODEL", crate::models::KOKORO_V1_MODEL),
             kokoro_voices_archive_path: crate::models::KOKORO_V1_VOICES.to_string(),
@@ -674,6 +686,7 @@ impl Default for JarvisConfig {
             discord_listen_source: None,
             streamdeck_token: String::new(),
             startup_greeting: true,
+            name_meaning: String::new(),
             proactive_alerts: true,
             briefing_news_feed: crate::briefing::DEFAULT_FEED.to_string(),
 
@@ -694,13 +707,13 @@ impl Default for JarvisConfig {
     }
 }
 
-impl JarvisConfig {
+impl JaiConfig {
     /// Loads `jarvis_config.json` (or defaults), migrates old versions and clamps ranges.
     /// The (possibly migrated) result is written back so the file always reflects reality.
     pub fn load() -> Self {
         let path = Path::new(CONFIG_FILE);
         let mut cfg = match fs::read_to_string(path) {
-            Ok(raw) => match serde_json::from_str::<JarvisConfig>(&raw) {
+            Ok(raw) => match serde_json::from_str::<JaiConfig>(&raw) {
                 Ok(cfg) => cfg,
                 Err(e) => {
                     let backup = format!("{CONFIG_FILE}.broken");
@@ -762,7 +775,7 @@ impl JarvisConfig {
             self.num_ctx = self.num_ctx.max(defaults.num_ctx);
         }
         if self.config_version < 8 {
-            // v8: a 45 s conversation window (Sir never repeats "Jarvis" mid-dialogue), and the
+            // v8: a 45 s conversation window (Sir never repeats "JAI" mid-dialogue), and the
             // film voice: the British blend at 1.06 instead of a single stock voice at 1.0.
             self.active_conversation_window_secs = self.active_conversation_window_secs.max(defaults.active_conversation_window_secs);
             // The old stock default only; a voice Sir picked himself stays.
@@ -796,7 +809,7 @@ impl JarvisConfig {
         if self.config_version < 11 {
             // v11, latency: adaptive end of speech (220 ms after a short command, 450 ms after a
             // sentence), greedy Whisper with the encoder window scaled to the clip, and a 5 s
-            // follow-up window after Jarvis has finished (45 s picked up unrelated room speech).
+            // follow-up window after JAI has finished (45 s picked up unrelated room speech).
             self.silence_hangover_ms = defaults.silence_hangover_ms;
             self.short_command_hangover_ms = defaults.short_command_hangover_ms;
             self.short_command_max_ms = defaults.short_command_max_ms;
@@ -813,7 +826,7 @@ impl JarvisConfig {
             }
         }
         if self.config_version < 12 {
-            // v12, voice input: the name prompt (no prompt made "Jarvis" unrecognisable) and the
+            // v12, voice input: the name prompt (no prompt made "JAI" unrecognisable) and the
             // beam search for sentences (greedy decoding looped and misheard names).
             if self.whisper_initial_prompt.trim().is_empty() {
                 self.whisper_initial_prompt = defaults.whisper_initial_prompt.clone();
@@ -904,8 +917,22 @@ impl JarvisConfig {
                 self.num_ctx = self.num_ctx.max(QWEN35_NUM_CTX);
             }
         }
+        if self.config_version < 24 {
+            // v24 (2026-11-11): his name is J.A.I. ("Jay"). The old name and its mumbled forms
+            // leave the wake words (names Sir added himself stay), the stock window title follows,
+            // and the stock look (or the yellow accent the 2026-11-09 helmet mishap left behind)
+            // becomes the new amber default.
+            const OLD_NAMES: &[&str] = &["jarvis", "javis", "charvis", "schawis", "jarviz", "dscharvis", "yarvis"];
+            self.wake_words.retain(|w| !OLD_NAMES.contains(&w.trim().to_lowercase().as_str()));
+            for name in DEFAULT_WAKE_WORDS.iter().rev() {
+                if !self.wake_words.iter().any(|w| w.eq_ignore_ascii_case(name)) {
+                    self.wake_words.insert(0, name.to_string());
+                }
+            }
+            self.interface.renamed_v24();
+        }
         if self.config_version < 22 && self.pre_roll_ms == 320 {
-            // v22: 500 ms of audio before the onset, so "Jarvis" / "Move" keep their first
+            // v22: 500 ms of audio before the onset, so "JAI" / "Move" keep their first
             // syllable.
             self.pre_roll_ms = defaults.pre_roll_ms;
         }
@@ -958,7 +985,7 @@ impl JarvisConfig {
         self.active_conversation_window_secs = self.active_conversation_window_secs.clamp(0, 120);
         self.wake_word_similarity_threshold = self.wake_word_similarity_threshold.clamp(0.5, 0.99);
         if self.wake_words.is_empty() {
-            self.wake_words = vec!["jarvis".to_string()];
+            self.wake_words = DEFAULT_WAKE_WORDS.iter().map(|s| s.to_string()).collect();
         }
         self.loudness_pct = self.loudness_pct.min(200);
         self.kokoro_speed = self.kokoro_speed.clamp(0.5, 2.0);
@@ -1060,29 +1087,29 @@ pub fn set_read_only(on: bool) {
 /// Shared, thread-safe config with debounced persistence.
 #[derive(Clone)]
 pub struct ConfigStore {
-    inner: Arc<RwLock<JarvisConfig>>,
+    inner: Arc<RwLock<JaiConfig>>,
     dirty: Arc<tokio::sync::Notify>,
 }
 
 impl ConfigStore {
-    pub fn new(cfg: JarvisConfig) -> Self {
+    pub fn new(cfg: JaiConfig) -> Self {
         Self {
             inner: Arc::new(RwLock::new(cfg)),
             dirty: Arc::new(tokio::sync::Notify::new()),
         }
     }
 
-    pub fn snapshot(&self) -> JarvisConfig {
+    pub fn snapshot(&self) -> JaiConfig {
         self.read(|c| c.clone())
     }
 
-    pub fn read<R>(&self, f: impl FnOnce(&JarvisConfig) -> R) -> R {
+    pub fn read<R>(&self, f: impl FnOnce(&JaiConfig) -> R) -> R {
         let guard = self.inner.read().unwrap_or_else(|e| e.into_inner());
         f(&guard)
     }
 
     /// Mutates the config and schedules a debounced save.
-    pub fn update(&self, f: impl FnOnce(&mut JarvisConfig)) {
+    pub fn update(&self, f: impl FnOnce(&mut JaiConfig)) {
         {
             let mut guard = self.inner.write().unwrap_or_else(|e| e.into_inner());
             f(&mut guard);
@@ -1139,7 +1166,7 @@ mod tests {
             "loudness_pct": 10,
             "preferred_mic": "Audio Mix (Elgato Virtual Audio)"
         }"#;
-        let mut cfg: JarvisConfig = serde_json::from_str(legacy).expect("legacy config parses");
+        let mut cfg: JaiConfig = serde_json::from_str(legacy).expect("legacy config parses");
         assert_eq!(cfg.config_version, 0, "a file without config_version must migrate");
         cfg.migrate();
         cfg.sanitize();
@@ -1161,7 +1188,7 @@ mod tests {
 
     #[test]
     fn v19_configs_get_the_full_32k_window() {
-        let mut cfg: JarvisConfig = serde_json::from_str(r#"{ "config_version": 19, "num_ctx": 20480, "keep_alive": 90 }"#).unwrap();
+        let mut cfg: JaiConfig = serde_json::from_str(r#"{ "config_version": 19, "num_ctx": 20480, "keep_alive": 90 }"#).unwrap();
         cfg.migrate();
         cfg.sanitize();
         assert_eq!((cfg.num_ctx, cfg.config_version), (QWEN35_NUM_CTX, CONFIG_VERSION));
@@ -1171,12 +1198,12 @@ mod tests {
     #[test]
     fn v22_configs_move_to_qwen35_unless_sir_chose_a_model() {
         let stock = r#"{ "config_version": 22, "primary_model": "qwen3:30b-a3b", "fallback_model": "qwen2.5:7b-instruct", "num_ctx": 32768 }"#;
-        let mut cfg: JarvisConfig = serde_json::from_str(stock).unwrap();
+        let mut cfg: JaiConfig = serde_json::from_str(stock).unwrap();
         cfg.migrate();
         cfg.sanitize();
         assert_eq!((cfg.primary_model.as_str(), cfg.fallback_model.as_str(), cfg.num_ctx), (PRIMARY_MODEL, "qwen2.5:7b-instruct", QWEN35_NUM_CTX));
         let own = r#"{ "config_version": 22, "primary_model": "llama3.1:8b", "num_ctx": 32768 }"#;
-        let mut cfg: JarvisConfig = serde_json::from_str(own).unwrap();
+        let mut cfg: JaiConfig = serde_json::from_str(own).unwrap();
         cfg.migrate();
         cfg.sanitize();
         assert_eq!((cfg.primary_model.as_str(), cfg.num_ctx), ("llama3.1:8b", 32_768));
@@ -1184,7 +1211,7 @@ mod tests {
 
     #[test]
     fn v20_configs_keep_the_model_resident_and_know_batman() {
-        let mut cfg: JarvisConfig = serde_json::from_str(
+        let mut cfg: JaiConfig = serde_json::from_str(
             r#"{ "config_version": 20, "keep_alive": 90, "vram_guard": { "idle_secs": 90, "keep_alive_secs": 90, "game_processes": ["GTA5.exe", "MyGame.exe"] } }"#,
         )
         .unwrap();
@@ -1194,9 +1221,37 @@ mod tests {
         assert_eq!((cfg.keep_alive, g.idle_secs, g.keep_alive_secs), (1800, 1800, 1800));
         assert!(g.game_processes.iter().any(|p| p == "BatmanAK.exe") && g.game_processes.iter().any(|p| p == "MyGame.exe"));
         // Sir's own shorter values stay.
-        let mut own: JarvisConfig = serde_json::from_str(r#"{ "config_version": 20, "keep_alive": 45, "vram_guard": { "idle_secs": 600 } }"#).unwrap();
+        let mut own: JaiConfig = serde_json::from_str(r#"{ "config_version": 20, "keep_alive": 45, "vram_guard": { "idle_secs": 600 } }"#).unwrap();
         own.migrate();
         assert_eq!((own.keep_alive, own.vram_guard.idle_secs), (45, 600));
+    }
+
+    /// v24 (2026-11-11): Sir renamed him J.A.I. ("Jay"). The settings of 2026-11-09, as they
+    /// stood after the helmet mishap, come out with the new name, title, prompt and look.
+    #[test]
+    fn the_v23_settings_take_his_new_name() {
+        let v23 = r##"{ "config_version": 23,
+            "interface": { "theme": "custom", "accent": "#ffe14d", "background": "#0f0507", "title": "J.A.R.V.I.S.", "hud_palette": "stark_gold" },
+            "wake_words": ["jarvis", "javis", "charvis", "schawis", "jarviz", "dscharvis", "yarvis", "friday"],
+            "whisper_initial_prompt": "Hey Jarvis. Show your core, hide your core, close your core. Orb, HUD, board, blocks, Sonora, Spotify, WebUntis, itslearning." }"##;
+        let mut cfg: JaiConfig = serde_json::from_str(v23).unwrap();
+        cfg.migrate();
+        assert_eq!(cfg.wake_words, ["jai", "jay", "friday"], "the old name goes, a name Sir added stays");
+        assert_eq!(cfg.interface.title, "J.A.I.");
+        assert_eq!(cfg.whisper_initial_prompt, WHISPER_DOMAIN_PROMPT);
+        assert!(cfg.whisper_initial_prompt.starts_with("Hey Jay.") && !cfg.whisper_initial_prompt.contains("Jarvis"));
+        assert_eq!((cfg.interface.theme.as_str(), cfg.interface.hud_palette.as_str(), cfg.interface.accent.as_str()), ("jai", "jai_gold", "#ffd400"));
+        assert_eq!(cfg.config_version, CONFIG_VERSION);
+        // A look Sir chose himself stays; only the stock title follows.
+        let own = r##"{ "config_version": 23, "interface": { "theme": "crimson_mk42", "accent": "#ff2a45", "background": "#0f0507", "title": "Workshop", "hud_palette": "rose_crimson" } }"##;
+        let mut cfg: JaiConfig = serde_json::from_str(own).unwrap();
+        cfg.migrate();
+        assert_eq!((cfg.interface.theme.as_str(), cfg.interface.hud_palette.as_str(), cfg.interface.title.as_str()), ("crimson_mk42", "rose_crimson", "Workshop"));
+        assert_eq!(cfg.wake_words, ["jai", "jay"]);
+        // A fresh install is his from the start.
+        let fresh = JaiConfig::default();
+        assert_eq!((fresh.wake_words.as_slice(), fresh.interface.hud_palette.as_str()), (["jai".to_string(), "jay".to_string()].as_slice(), "jai_gold"));
+        assert!(fresh.name_meaning.is_empty(), "what the name stands for is Sir's to set, not the code's");
     }
 
     /// v23: Ultron mode is gone, and "Ultron." leaves the stock v22 Whisper prompt with it.
@@ -1205,7 +1260,7 @@ mod tests {
         let v22 = LEGACY_WHISPER_PROMPTS.last().unwrap();
         assert!(v22.contains("Ultron"));
         let raw = format!(r#"{{ "config_version": 22, "whisper_initial_prompt": "{v22}" }}"#);
-        let mut cfg: JarvisConfig = serde_json::from_str(&raw).unwrap();
+        let mut cfg: JaiConfig = serde_json::from_str(&raw).unwrap();
         cfg.migrate();
         assert_eq!(cfg.whisper_initial_prompt, WHISPER_DOMAIN_PROMPT);
         assert_eq!(cfg.config_version, CONFIG_VERSION);
@@ -1214,32 +1269,32 @@ mod tests {
     #[test]
     fn old_configs_get_the_v11_latency_tuning_but_keep_a_custom_prompt() {
         let v4 = r#"{ "config_version": 4, "silence_hangover_ms": 350, "history_turns": 15, "num_ctx": 8192,
-                      "whisper_initial_prompt": "Jarvis, Sir's own words." }"#;
-        let mut cfg: JarvisConfig = serde_json::from_str(v4).expect("v4 config parses");
+                      "whisper_initial_prompt": "JAI, Sir's own words." }"#;
+        let mut cfg: JaiConfig = serde_json::from_str(v4).expect("v4 config parses");
         cfg.migrate();
         assert_eq!(cfg.silence_hangover_ms, 450);
         assert_eq!(cfg.history_turns, 20);
-        assert_eq!(cfg.whisper_initial_prompt, "Jarvis, Sir's own words.");
+        assert_eq!(cfg.whisper_initial_prompt, "JAI, Sir's own words.");
         for (version, prompt) in [(4, LEGACY_WHISPER_PROMPTS[1]), (5, LEGACY_WHISPER_PROMPTS[2]), (8, LEGACY_WHISPER_PROMPTS[3]), (10, LEGACY_WHISPER_PROMPT)] {
             let raw = format!(r#"{{ "config_version": {version}, "whisper_initial_prompt": "{prompt}", "whisper_beam_size": 3, "silence_hangover_ms": 750, "whisper_min_audio_ctx": 256 }}"#);
-            let mut cfg: JarvisConfig = serde_json::from_str(&raw).unwrap();
+            let mut cfg: JaiConfig = serde_json::from_str(&raw).unwrap();
             cfg.migrate();
             assert_eq!(cfg.whisper_initial_prompt, WHISPER_DOMAIN_PROMPT, "v{version}");
             assert_eq!((cfg.whisper_beam_size, cfg.whisper_min_audio_ctx, cfg.silence_hangover_ms), (2, 128, 450), "v{version}");
         }
         // v11 files (no prompt, greedy) get the name prompt and the beam back.
         let v11 = r#"{ "config_version": 11, "whisper_initial_prompt": "", "whisper_beam_size": 1 }"#;
-        let mut cfg: JarvisConfig = serde_json::from_str(v11).unwrap();
+        let mut cfg: JaiConfig = serde_json::from_str(v11).unwrap();
         cfg.migrate();
         assert_eq!((cfg.whisper_initial_prompt.as_str(), cfg.whisper_beam_size), (WHISPER_DOMAIN_PROMPT, 2));
         // v17 files with the name-only prompt get the domain prompt.
         let v17 = r#"{ "config_version": 17, "whisper_initial_prompt": "Hey Jarvis.", "whisper_pre_emphasis": 0.95 }"#;
-        let mut cfg: JarvisConfig = serde_json::from_str(v17).unwrap();
+        let mut cfg: JaiConfig = serde_json::from_str(v17).unwrap();
         cfg.migrate();
         assert_eq!(cfg.whisper_initial_prompt, WHISPER_DOMAIN_PROMPT);
         let v10 = r##"{ "config_version": 10, "active_conversation_window_secs": 45, "features": { "replay_fps": 12.0 },
                        "interface": { "zen_mode": false, "background": "#030509" } }"##;
-        let mut cfg: JarvisConfig = serde_json::from_str(v10).unwrap();
+        let mut cfg: JaiConfig = serde_json::from_str(v10).unwrap();
         cfg.migrate();
         cfg.sanitize();
         assert_eq!(cfg.active_conversation_window_secs, 5);
@@ -1252,7 +1307,7 @@ mod tests {
     #[test]
     fn v7_config_gets_the_follow_up_window_and_the_film_voice() {
         let v7 = r#"{ "config_version": 7, "active_conversation_window_secs": 8, "kokoro_voice": "bm_george", "kokoro_speed": 1.0, "wake_word_required": false }"#;
-        let mut cfg: JarvisConfig = serde_json::from_str(v7).unwrap();
+        let mut cfg: JaiConfig = serde_json::from_str(v7).unwrap();
         cfg.migrate();
         cfg.sanitize();
         assert_eq!(cfg.active_conversation_window_secs, 5);
@@ -1261,7 +1316,7 @@ mod tests {
         assert!(cfg.addressee_detection, "on by default for files that predate it");
         assert!(!cfg.wake_word_required, "Sir's own choice stays");
         let custom = r#"{ "config_version": 7, "active_conversation_window_secs": 90, "kokoro_voice": "bf_emma", "kokoro_speed": 1.2 }"#;
-        let mut cfg: JarvisConfig = serde_json::from_str(custom).unwrap();
+        let mut cfg: JaiConfig = serde_json::from_str(custom).unwrap();
         cfg.migrate();
         assert_eq!((cfg.active_conversation_window_secs, cfg.kokoro_voice.as_str()), (5, "bf_emma"));
         assert!((cfg.kokoro_speed - 1.2).abs() < 1e-6);
@@ -1270,25 +1325,25 @@ mod tests {
     #[test]
     fn v14_config_moves_to_the_movie_voice_and_its_tempo() {
         let v14 = r#"{ "config_version": 14, "kokoro_voice": "bm_fable:0.45+bm_george:0.4+bm_lewis:0.15", "kokoro_speed": 1.06 }"#;
-        let mut cfg: JarvisConfig = serde_json::from_str(v14).unwrap();
+        let mut cfg: JaiConfig = serde_json::from_str(v14).unwrap();
         cfg.migrate();
         assert_eq!(cfg.kokoro_voice, crate::tts::JARVIS_VOICE);
         assert!((cfg.kokoro_speed - crate::tts::JARVIS_VOICE_SPEED).abs() < 1e-6, "0.98× since v17");
         assert!(cfg.interface.fullscreen, "v16: the HUD board starts fullscreen");
         // v16 → v17: the stock 1.04× film tempo becomes the unhurried 0.98×, the old blend the alias.
         let v16 = r#"{ "config_version": 16, "kokoro_voice": "bm_fable:0.62+bm_george:0.28+bm_lewis:0.10", "kokoro_speed": 1.04 }"#;
-        let mut cfg: JarvisConfig = serde_json::from_str(v16).unwrap();
+        let mut cfg: JaiConfig = serde_json::from_str(v16).unwrap();
         cfg.migrate();
         assert_eq!(cfg.kokoro_voice, crate::tts::JARVIS_VOICE);
         assert!((cfg.kokoro_speed - 0.98).abs() < 1e-6);
         assert_eq!(cfg.config_version, CONFIG_VERSION);
         // Leaving fullscreen afterwards sticks.
         let windowed = r#"{ "config_version": 16, "interface": { "fullscreen": false } }"#;
-        let mut cfg: JarvisConfig = serde_json::from_str(windowed).unwrap();
+        let mut cfg: JaiConfig = serde_json::from_str(windowed).unwrap();
         cfg.migrate();
         assert!(!cfg.interface.fullscreen);
         let custom = r#"{ "config_version": 14, "kokoro_voice": "bf_emma", "kokoro_speed": 1.2 }"#;
-        let mut cfg: JarvisConfig = serde_json::from_str(custom).unwrap();
+        let mut cfg: JaiConfig = serde_json::from_str(custom).unwrap();
         cfg.migrate();
         assert_eq!(cfg.kokoro_voice, "bf_emma", "Sir's own voice stays");
         assert!((cfg.kokoro_speed - 1.2).abs() < 1e-6);
@@ -1297,13 +1352,13 @@ mod tests {
     #[test]
     fn v9_config_moves_to_kokoro_v1_only_when_installed() {
         let v9 = r#"{ "config_version": 9, "kokoro_model_path": "models/kokoro-v0_19.onnx", "kokoro_voices_archive_path": "models/voices_npz.bin" }"#;
-        let mut cfg: JarvisConfig = serde_json::from_str(v9).unwrap();
+        let mut cfg: JaiConfig = serde_json::from_str(v9).unwrap();
         cfg.upgrade_kokoro(false);
         assert_eq!(cfg.kokoro_model_path, "models/kokoro-v0_19.onnx", "nothing to upgrade to");
         cfg.upgrade_kokoro(true);
         assert_eq!((cfg.kokoro_model_path.as_str(), cfg.kokoro_voices_archive_path.as_str()), (crate::models::KOKORO_V1_MODEL, crate::models::KOKORO_V1_VOICES));
         let custom = r#"{ "config_version": 9, "kokoro_model_path": "D:/my/kokoro-custom.onnx", "kokoro_voices_archive_path": "D:/my/voices.bin" }"#;
-        let mut cfg: JarvisConfig = serde_json::from_str(custom).unwrap();
+        let mut cfg: JaiConfig = serde_json::from_str(custom).unwrap();
         cfg.upgrade_kokoro(true);
         assert_eq!(cfg.kokoro_model_path, "D:/my/kokoro-custom.onnx", "Sir's own model stays");
     }
@@ -1311,13 +1366,13 @@ mod tests {
     #[test]
     fn v8_config_gets_the_v9_voice_and_the_stark_window() {
         let v8 = r#"{ "config_version": 8, "kokoro_voice": "bm_george:0.45+bm_fable:0.35+bm_lewis:0.2", "kokoro_speed": 1.06, "interface": { "frameless": false } }"#;
-        let mut cfg: JarvisConfig = serde_json::from_str(v8).unwrap();
+        let mut cfg: JaiConfig = serde_json::from_str(v8).unwrap();
         cfg.migrate();
         assert_eq!(cfg.kokoro_voice, crate::tts::JARVIS_VOICE);
         assert!((cfg.kokoro_speed - crate::tts::JARVIS_VOICE_SPEED).abs() < 1e-6);
         assert!(cfg.interface.frameless, "the custom title bar");
         let custom = r#"{ "config_version": 8, "kokoro_voice": "bf_emma", "kokoro_speed": 1.2 }"#;
-        let mut cfg: JarvisConfig = serde_json::from_str(custom).unwrap();
+        let mut cfg: JaiConfig = serde_json::from_str(custom).unwrap();
         cfg.migrate();
         assert_eq!(cfg.kokoro_voice, "bf_emma");
         assert!((cfg.kokoro_speed - 1.2).abs() < 1e-6);
@@ -1325,7 +1380,7 @@ mod tests {
 
     #[test]
     fn whisper_runs_with_the_domain_prompt_and_the_short_command_cutoff() {
-        let cfg = JarvisConfig::default();
+        let cfg = JaiConfig::default();
         assert_eq!(cfg.whisper_initial_prompt, WHISPER_DOMAIN_PROMPT);
         // Short: a long vocabulary list makes Whisper invent words on quiet audio.
         assert!(cfg.whisper_initial_prompt.split_whitespace().count() <= 20);

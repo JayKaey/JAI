@@ -1,5 +1,5 @@
 //! Voice or text replies. Every input is tagged with where it came from (`InputSource`), and
-//! Sir's `VoiceResponseMode` (persisted in `jarvis_memory.db`) decides per turn whether Jarvis
+//! Sir's `VoiceResponseMode` (persisted in `jarvis_memory.db`) decides per turn whether JAI
 //! answers out loud (TTS + chat) or silently in the HUD chat only.
 //!
 //! Sir switches modes by voice or text ("only talk when I talk to you", "sei leise und schreib
@@ -37,7 +37,7 @@ impl InputSource {
     }
 }
 
-/// When Jarvis speaks his replies out loud.
+/// When JAI speaks his replies out loud.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum VoiceResponseMode {
     /// Spoken input gets a spoken + written reply; typed input a written reply only.
@@ -137,7 +137,7 @@ impl Condition {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Trigger {
     Input(InputSource),
-    /// Jarvis speaking on his own (greeting, wake acknowledgement).
+    /// JAI speaking on his own (greeting, wake acknowledgement).
     System,
     /// Something Sir must hear about (finished timer, failure).
     Alert,
@@ -324,7 +324,7 @@ pub struct ModalityStore {
 }
 
 impl ModalityStore {
-    /// Opens (or creates) the `app_settings` table in Jarvis' memory database.
+    /// Opens (or creates) the `app_settings` table in JAI's memory database.
     pub fn open<P: AsRef<Path>>(db_path: P) -> Result<Self, rusqlite::Error> {
         let conn = Connection::open(db_path.as_ref())?;
         conn.busy_timeout(Duration::from_secs(3))?;
@@ -493,7 +493,7 @@ mod tests {
         assert_eq!(p("Only talk when I talk to you"), Some(MirrorInput));
         assert_eq!(p("Antworte nur sprechend wenn ich rede"), Some(MirrorInput));
         assert_eq!(
-            p("Jarvis, can you please only answer me talking when I talk to you, so when I write to you, you don't talk back."),
+            p("JAI, can you please only answer me talking when I talk to you, so when I write to you, you don't talk back."),
             Some(MirrorInput)
         );
         assert_eq!(p("Stop talking, only write in text"), Some(TextOnly));

@@ -1,4 +1,4 @@
-//! The Exam Coach: a spoken oral exam. Jarvis reads a source (a worksheet, notes, a PDF) or takes a
+//! The Exam Coach: a spoken oral exam. JAI reads a source (a worksheet, notes, a PDF) or takes a
 //! topic, asks one question at a time, grades each spoken answer 0-10 with a short correction, and
 //! keeps a Quiz card window up to date. While a session runs, everything Sir says is his answer
 //! (the brain routes it here) until he says "stop the quiz".
@@ -86,7 +86,7 @@ impl ExamCoach {
         if finished {
             md.push_str(&format!("### Final grade: {}\n", grade(points as f64 / max as f64)));
         }
-        show_window(tools, "oral_exam", "Quiz — J.A.R.V.I.S. Exam Coach", &md, 520.0, 620.0);
+        show_window(tools, "oral_exam", "Quiz — J.A.I. Exam Coach", &md, 520.0, 620.0);
     }
 
     /// `start_oral_exam_session`.
@@ -198,7 +198,7 @@ fn grade(fraction: f64) -> &'static str {
 pub fn tool_definition() -> Value {
     json!({"type": "function", "function": {
         "name": "start_oral_exam_session",
-        "description": "Exam Coach: start a spoken oral exam. Jarvis asks one question at a time about a subject or a file (worksheet, notes, PDF), grades each spoken answer 0-10 and shows a Quiz card. Use for 'quiz me on …', 'test me on my biology worksheet'.",
+        "description": "Exam Coach: start a spoken oral exam. JAI asks one question at a time about a subject or a file (worksheet, notes, PDF), grades each spoken answer 0-10 and shows a Quiz card. Use for 'quiz me on …', 'test me on my biology worksheet'.",
         "parameters": {"type": "object", "properties": {
             "subject": {"type": "string"},
             "source_file_or_topic": {"type": "string", "description": "A file path (PDF, .md, .txt) or a topic"},

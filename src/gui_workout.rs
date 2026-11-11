@@ -3,7 +3,7 @@
 //! mobile satellite. Child module of `gui`.
 
 use super::{bold, button, card, item, muted, row, Palette, Tone};
-use crate::app::Jarvis;
+use crate::app::Jai;
 use crate::workout_coach::WorkoutSnapshot;
 use eframe::egui::{self, pos2, vec2, Color32, RichText, Sense, Stroke};
 use std::sync::{Arc, Mutex};
@@ -43,7 +43,7 @@ impl Default for WorkoutWindow {
 }
 
 impl WorkoutWindow {
-    fn refresh(&mut self, app: &Jarvis, rt: &Handle) {
+    fn refresh(&mut self, app: &Jai, rt: &Handle) {
         self.fetched_at = Some(Instant::now());
         let tools = app.tools().clone();
         let slot = self.snapshot.clone();
@@ -55,7 +55,7 @@ impl WorkoutWindow {
         });
     }
 
-    pub fn show(&mut self, ctx: &egui::Context, p: &Palette, app: &Jarvis, rt: &Handle) {
+    pub fn show(&mut self, ctx: &egui::Context, p: &Palette, app: &Jai, rt: &Handle) {
         if !self.open {
             return;
         }
@@ -70,7 +70,7 @@ impl WorkoutWindow {
             .resizable(true)
             .default_width(540.0)
             .show(ctx, |ui| {
-                muted(ui, p, "Or just say: \"Jarvis, log 3 by 10 bench press at 60 kilos\", \"start a 90 second rest timer\".");
+                muted(ui, p, "Or just say: \"JAI, log 3 by 10 bench press at 60 kilos\", \"start a 90 second rest timer\".");
                 ui.add_space(6.0);
                 egui::ScrollArea::vertical().max_height(620.0).show(ui, |ui| match &snapshot {
                     None => muted(ui, p, "Loading workout records..."),
@@ -84,7 +84,7 @@ impl WorkoutWindow {
         ctx.request_repaint_after(Duration::from_millis(500));
     }
 
-    fn body(&mut self, ui: &mut egui::Ui, p: &Palette, app: &Jarvis, rt: &Handle, snapshot: &WorkoutSnapshot) {
+    fn body(&mut self, ui: &mut egui::Ui, p: &Palette, app: &Jai, rt: &Handle, snapshot: &WorkoutSnapshot) {
         self.rest_card(ui, p, app, rt, snapshot);
         self.log_card(ui, p, app, rt, snapshot);
         card(ui, p, "CALENDAR SESSIONS (NEXT 14 DAYS)", |_| {}, |ui| {
@@ -134,7 +134,7 @@ impl WorkoutWindow {
         });
     }
 
-    fn rest_card(&mut self, ui: &mut egui::Ui, p: &Palette, app: &Jarvis, rt: &Handle, snapshot: &WorkoutSnapshot) {
+    fn rest_card(&mut self, ui: &mut egui::Ui, p: &Palette, app: &Jai, rt: &Handle, snapshot: &WorkoutSnapshot) {
         card(ui, p, "REST TIMER (PC + PHONE)", |_| {}, |ui| {
             match &snapshot.rest {
                 Some(rest) if !rest.finished => {
@@ -173,7 +173,7 @@ impl WorkoutWindow {
         });
     }
 
-    fn log_card(&mut self, ui: &mut egui::Ui, p: &Palette, app: &Jarvis, rt: &Handle, snapshot: &WorkoutSnapshot) {
+    fn log_card(&mut self, ui: &mut egui::Ui, p: &Palette, app: &Jai, rt: &Handle, snapshot: &WorkoutSnapshot) {
         card(ui, p, "LOG A SET", |_| {}, |ui| {
             ui.horizontal(|ui| {
                 ui.label(RichText::new("Exercise").size(11.5).color(p.muted));

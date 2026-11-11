@@ -1,4 +1,4 @@
-//! WhatsApp for Jarvis, two ways at once:
+//! WhatsApp for JAI, two ways at once:
 //!
 //! 1. **Desktop / URI**: `whatsapp://send?phone=<digits>&text=<text>` opens WhatsApp Desktop on the
 //!    right chat with the message typed in (`https://web.whatsapp.com/send?…` when the app is not
@@ -10,7 +10,7 @@
 //!    which can also push webhooks to the satellite server. Everything lands in the
 //!    `whatsapp_messages` table (`sender`, `chat_name`, `message_text`, `timestamp`, `is_unread`).
 //!
-//! A message Jarvis prepares without being told to send it becomes a WhatsApp Message Card in the
+//! A message JAI prepares without being told to send it becomes a WhatsApp Message Card in the
 //! HUD chat (`[ Send via WhatsApp ]` / `[ Cancel ]`); "yes" by voice sends it too.
 
 use crate::config::WhatsAppSettings;
@@ -359,7 +359,7 @@ impl WhatsApp {
             desktop_send(&digits, text, settings.desktop_auto_send).await.map(|how| format!("{how} ({recipient}): \"{text}\""))
         };
         if result.is_ok() {
-            let _ = self.store(recipient, recipient, text, &now_local(), false, "jarvis", &uuid::Uuid::new_v4().to_string(), phone);
+            let _ = self.store(recipient, recipient, text, &now_local(), false, "jai", &uuid::Uuid::new_v4().to_string(), phone);
         }
         result
     }
@@ -650,7 +650,7 @@ fn resolve_recipient(tools: &ToolContext, reference: &str, cc: &str) -> Result<(
     match tools.stark.contacts.resolve(reference) {
         Ok(c) => Ok((c.name.clone(), c.phone_number.clone(), Some(c))),
         Err(e) => {
-            // A WhatsApp sender Jarvis has seen (chat name only).
+            // A WhatsApp sender JAI has seen (chat name only).
             let seen = tools.stark.whatsapp.recent(Some(reference), false, 1).into_iter().next();
             match seen {
                 Some(m) => Ok((m.sender.clone(), m.phone.clone(), None)),
@@ -704,7 +704,7 @@ pub async fn run_tool(tools: &ToolContext, name: &str, args: &Value) -> Result<S
             }
             if list.is_empty() {
                 let how = if settings.notification_listener || !settings.bridge_url.is_empty() {
-                    "Nothing has come in yet (Jarvis reads WhatsApp Desktop's notifications and the bridge)."
+                    "Nothing has come in yet (JAI reads WhatsApp Desktop's notifications and the bridge)."
                 } else {
                     "The notification listener and the bridge are both switched off (Quick Connections)."
                 };

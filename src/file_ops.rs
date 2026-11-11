@@ -760,7 +760,7 @@ pub fn resolve_new(raw: &str, focus_dir: Option<&Path>) -> Result<PathBuf, Strin
     Ok(focus_dir.map(Path::to_path_buf).unwrap_or_else(|| home.join("Documents")).join(expanded))
 }
 
-/// Writing here could break Windows, Linux or Jarvis himself.
+/// Writing here could break Windows, Linux or JAI himself.
 fn check_writable(path: &Path) -> Result<(), String> {
     let key = same_path_key(path);
     let protected: &[&str] = if cfg!(windows) {
@@ -1126,7 +1126,7 @@ pub async fn edit_tool(args: &Value, focus_dir: Option<&Path>) -> Result<EditOut
     Ok(EditOutcome::new(path, "Edited", &file.text, &new_text, &note))
 }
 
-/// `undo_last_file_edit`: puts the newest backup of a file back (a file Jarvis created is moved
+/// `undo_last_file_edit`: puts the newest backup of a file back (a file JAI created is moved
 /// to the backups). The version being replaced is kept in `.jarvis_backups/` too.
 pub async fn undo_tool(args: &Value, focus_file: Option<PathBuf>) -> Result<EditOutcome, String> {
     let path = match str_arg(args, &["file_path", "path", "file", "name"]) {
@@ -1222,7 +1222,7 @@ pub fn tool_definitions() -> Vec<Value> {
         }}),
         json!({"type": "function", "function": {
             "name": "undo_last_file_edit",
-            "description": "Undo Jarvis' last change to a file (restores the backup; a newly created file is removed). Without file_path: the file just edited.",
+            "description": "Undo JAI's last change to a file (restores the backup; a newly created file is removed). Without file_path: the file just edited.",
             "parameters": {"type": "object", "properties": {"file_path": {"type": "string"}}, "required": []}
         }}),
     ]

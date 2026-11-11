@@ -11,7 +11,7 @@
 //!   through a word filter (English and German).
 //! * **The block** (`gui_media.rs`): fit, zoom and pan, a thumbnail strip, next and previous,
 //!   title, source and licence; "detach it" gives it a window of its own; "save this picture"
-//!   puts the full picture into `Pictures\Jarvis`.
+//!   puts the full picture into `Pictures\JAI`.
 //!
 //! `pixels` is also the frame store of the live cameras (`webcams`) and street view
 //! (`street_view`). Tests and dry runs never touch the network or Sir's folders: every source
@@ -33,7 +33,7 @@ use std::time::{Duration, Instant, SystemTime};
 use tracing::{debug, info};
 
 pub const TOOL: &str = "show_image";
-const USER_AGENT: &str = "JARVIS/3 desktop assistant (picture viewer)";
+const USER_AGENT: &str = "JAI/3 desktop assistant (picture viewer)";
 const CACHE_DIR: &str = "config/image_cache";
 const CACHE_LIMIT: u64 = 200 * 1024 * 1024;
 const CACHE_TRIM_TO: u64 = 160 * 1024 * 1024;
@@ -943,7 +943,7 @@ fn demo_pictures(query: &str) -> Found {
             full: format!("demo://{label}/{n}"),
             alt: Vec::new(),
             source: if is_the_earth(query) { "NASA EPIC".into() } else { "Openverse".into() },
-            creator: "Jarvis self-test".into(),
+            creator: "JAI self-test".into(),
             license: "CC0".into(),
             page: String::new(),
             local: None,
@@ -1354,7 +1354,7 @@ pub(crate) async fn save_current(id: Option<&str>) -> Result<String, String> {
         return Ok(format!("That picture is already on the PC: {}.\nSpoken: That one is already on your PC, Sir — {}.", path.display(), pic.title));
     }
     if offline() {
-        return Ok(format!("Dry run: \"{}\" would be saved to Pictures\\Jarvis.\nSpoken: Saved, Sir.", pic.title));
+        return Ok(format!("Dry run: \"{}\" would be saved to Pictures\\JAI.\nSpoken: Saved, Sir.", pic.title));
     }
     set_note("Saving…");
     let mut bytes = None;
@@ -1376,7 +1376,7 @@ pub(crate) async fn save_current(id: Option<&str>) -> Result<String, String> {
     info!("[IMAGES] Saved '{}' to {}", pic.title, path.display());
     set_note(&format!("Saved to {}", path.display()));
     let credit = if pic.license.is_empty() { String::new() } else { format!(" It's {}, credit {}.", pic.license, if pic.creator.is_empty() { pic.source.clone() } else { pic.creator.clone() }) };
-    Ok(format!("Saved \"{}\" to {} ({}).\nSpoken: Saved to your Pictures folder, under Jarvis, Sir.{credit}", pic.title, path.display(), pic.credit()))
+    Ok(format!("Saved \"{}\" to {} ({}).\nSpoken: Saved to your Pictures folder, under JAI, Sir.{credit}", pic.title, path.display(), pic.credit()))
 }
 
 /// A window asked for with nothing in it whose title names a picture, a camera or street view
@@ -1390,7 +1390,7 @@ pub fn reroute_window(args: &Value) -> Option<(&'static str, Value)> {
     let title = str_arg(args, &["title", "name", "id"])?.replace(['_', '-'], " ").to_lowercase();
     let words: Vec<&str> = title.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).collect();
     let has = |set: &[&str]| words.iter().any(|w| set.contains(w));
-    const FILLER: &[&str] = &["image", "images", "picture", "pictures", "photo", "photos", "bild", "bilder", "foto", "fotos", "viewer", "window", "of", "the", "a", "an", "live", "camera", "cameras", "webcam", "webcams", "cam", "cams", "feed", "street", "view", "streetview", "von", "der", "die", "das", "jarvis"];
+    const FILLER: &[&str] = &["image", "images", "picture", "pictures", "photo", "photos", "bild", "bilder", "foto", "fotos", "viewer", "window", "of", "the", "a", "an", "live", "camera", "cameras", "webcam", "webcams", "cam", "cams", "feed", "street", "view", "streetview", "von", "der", "die", "das", "jai"];
     let subject = || words.iter().filter(|w| !FILLER.contains(w)).copied().collect::<Vec<_>>().join(" ");
     if title.contains("street view") || has(&["streetview", "straßenansicht"]) {
         let place = subject();
@@ -1547,7 +1547,7 @@ mod tests {
     fn sirs_picture_requests_reach_the_viewer() {
         let cases: &[(&str, Value)] = &[
             ("Show me a picture of the Eiffel Tower.", json!({"query": "the eiffel tower"})),
-            ("Jarvis, open an image of the Earth.", json!({"query": "the Earth"})),
+            ("JAI, open an image of the Earth.", json!({"query": "the Earth"})),
             ("Zeig mir ein Bild von Neuschwanstein", json!({"query": "neuschwanstein"})),
             ("Zeig mir ein Bild der Erde", json!({"query": "the Earth"})),
             ("show me photos of Tokyo", json!({"query": "tokyo"})),

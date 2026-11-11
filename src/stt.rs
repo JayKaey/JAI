@@ -37,7 +37,7 @@
 //! whisper.cpp silently returns nothing for input shorter than 1 s, so short commands
 //! ("Stopp!") are padded to 1.3 s.
 
-use crate::config::JarvisConfig;
+use crate::config::JaiConfig;
 use crate::dsp::{self, Biquad};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -101,7 +101,7 @@ pub struct HeardQuality {
 
 impl HeardQuality {
     /// Whisper was sure of the words, and of speech in the language it wrote. (2026-11-08,
-    /// misheard over Jarvis' voice: "Call me Earth." at log-probability -0.57, language 0.50,
+    /// misheard over JAI's voice: "Call me Earth." at log-probability -0.57, language 0.50,
     /// no-speech 0.30; Sir's clear commands that evening scored -0.01 … -0.30. His accented
     /// English can score low as English, so the language only rules out the clearly foreign.)
     pub fn confident(&self) -> bool {
@@ -215,7 +215,7 @@ fn prefer_multilingual(path: &str) -> String {
 
 impl SttEngine {
     /// Spawns the worker; the model loads in the background (`is_ready` turns true).
-    pub fn start(cfg: &JarvisConfig) -> Self {
+    pub fn start(cfg: &JaiConfig) -> Self {
         let (tx, rx) = mpsc::channel::<Job>();
         let ready = Arc::new(AtomicBool::new(false));
         let model = Arc::new(std::sync::Mutex::new(String::new()));
@@ -234,6 +234,8 @@ impl SttEngine {
         // Multilingual models only (German and English); an `.en` model is swapped for its sibling.
         let paths = model_candidates(&prefer_multilingual(&cfg.whisper_model_path), &prefer_multilingual(&cfg.whisper_fallback_model_path));
         let flash_attn = cfg.whisper_flash_attn;
+        // (A scripted session may run beside Sir's game: it never takes the cores from it.)
+        let boost = cfg.whisper_priority_boost && !crate::platform::in_test_session();
         let (ready_w, model_w) = (Arc::clone(&ready), Arc::clone(&model));
 
         let spawned = std::thread::Builder::new().name("jarvis-stt".into()).spawn(move || {
@@ -267,11 +269,13 @@ impl SttEngine {
                             _ if job.called_off.as_ref().is_some_and(|flag| flag.load(Ordering::Relaxed)) => Err(CALLED_OFF.into()),
                             // A panic inside whisper.cpp's bindings fails this clip only; the
                             // model is re-created for the next one (its state may be torn).
-                            Some(e) => crate::crash_guard::guard("Whisper transcription", || transcribe(e, job.pcm, job.voiced_ms, &settings, &settings.prompt, job.called_off.as_ref()))
-                                .unwrap_or_else(|| {
+                            Some(e) => {
+                                let _urgent = boost.then(crate::platform::urgent);
+                                crate::crash_guard::guard("Whisper transcription", || transcribe(e, job.pcm, job.voiced_ms, &settings, &settings.prompt, job.called_off.as_ref())).unwrap_or_else(|| {
                                     engine = None;
                                     Err("speech recognition failed on this clip".into())
-                                }),
+                                })
+                            }
                             None => Err("speech recognition model could not be re-loaded".into()),
                         };
                         let _ = job.reply.send(result);
@@ -866,7 +870,7 @@ pub fn filter_hallucinations(raw: &str, prompt: &str, strict: bool) -> String {
         return String::new();
     }
     // Prompt echo: Whisper repeating (a long stretch of) its initial prompt on unclear audio.
-    // Commands that happen to appear in the prompt ("Hey Jarvis, open my browser") stay.
+    // Commands that happen to appear in the prompt ("Hey JAI, open my browser") stay.
     let prompt_norm = normalize(prompt);
     if norm.split_whitespace().count() >= 8 && prompt_norm.contains(&norm) {
         return String::new();
@@ -888,7 +892,7 @@ pub fn filter_hallucinations(raw: &str, prompt: &str, strict: bool) -> String {
     collapse_stutters(&collapse_repetitions(&collapse_echo(&dedupe_sentences(&text))))
 }
 
-/// "Hide your core, hide your core.", "Closed. Closed.", "Jarvis closed the Earth Jarvis closed
+/// "Hide your core, hide your core.", "Closed. Closed.", "JAI closed the Earth JAI closed
 /// the Earth": the whole transcript is one order said twice or more — the greedy decoder's echo
 /// on a short clip (stt_bench, 2026-11-09). Collapsed when the copies are closed by punctuation
 /// or are three words or longer; "no no" and "bye bye" stay.
@@ -1015,6 +1019,9 @@ pub fn normalize_stt_transcript(text: &str) -> String {
             (r"(?i)\bthree[- ]?d\b", "3D"),
             (r"(?i)\biron and (suit|armou?r)\b", "Iron Man $1"),
             (r"(?i)\beiffel?\s*tower\b|\beifel\s*tower\b|\bi\s?full tower\b|\beye full tower\b", "Eiffel Tower"),
+            // "Show" heard as "solve" before a thing one shows (jarvis.log 2026-11-09: "Can you
+            // solve the weather in Germany?" went to a web search of that very sentence).
+            (r"(?i)\bsolve (me )?(the|my|a|all the) (weather|forecast|earth|globe|world|radar|satellites?|stats|schedule|calendar|timetable|images?|pictures?|photos?|news|mixer|storage|board|core|map)\b", "show $1$2 $3"),
             // (The noise bench, fan and chatter: "Save it to my desk call.")
             (r"(?i)\b(my|the|to) desk ?(?:call|top|tub)\b", "$1 desktop"),
         ]
@@ -1033,32 +1040,32 @@ pub fn normalize_stt_transcript(text: &str) -> String {
     }
     // "Close your car" / "hide your call" / "for C-O-R-E": the core, shown right in the HUD too.
     out = crate::typos::core_homophones(&out);
-    // Whole-utterance corrections ("Post." / "Pass, Jarvis" / "On mute").
+    // Whole-utterance corrections ("Post." / "Pass, JAI" / "On mute").
     let bare: String = out
         .to_lowercase()
         .chars()
         .map(|c| if c.is_alphanumeric() || c == ' ' { c } else { ' ' })
         .collect::<String>()
         .split_whitespace()
-        .filter(|w| !matches!(*w, "jarvis" | "please" | "bitte"))
+        .filter(|w| !matches!(*w, "jai" | "please" | "bitte"))
         .collect::<Vec<_>>()
         .join(" ");
-    // His name heard as "Java's" / "Java" in front ("Java's Pores." for "Jarvis, pause.").
-    let java = ["java s ", "javas ", "java "].iter().find_map(|p| bare.strip_prefix(p)).map(str::to_string);
+    // His name run into the word after it ("Jay's Pores." for "Jay, pause.").
+    let run_in = ["jay s ", "jays ", "jai s ", "jais "].iter().find_map(|p| bare.strip_prefix(p)).map(str::to_string);
     // (A command said with his name keeps it, so the wake word still hears him.)
-    let named = java.is_some() || out.to_lowercase().split(|c: char| !c.is_alphanumeric()).any(|w| w == "jarvis");
-    let bare = java.unwrap_or(bare);
+    let named = run_in.is_some() || out.to_lowercase().split(|c: char| !c.is_alphanumeric()).any(|w| matches!(w, "jai" | "jay"));
+    let bare = run_in.unwrap_or_else(|| bare.split_whitespace().filter(|w| *w != "jay").collect::<Vec<_>>().join(" "));
     let whole = match bare.as_str() {
         "post" | "pass" | "pos" | "pose" | "pours" | "pores" | "post it" | "pass it" | "post the music" | "pass the music" | "post music" | "pass music" | "boss"
         | "bos" | "bose" => Some("Pause."),
-        // "Pause it" heard as "How's it", "Stop" clipped to "Top" when spoken over Jarvis.
+        // "Pause it" heard as "How's it", "Stop" clipped to "Top" when spoken over JAI.
         "how s it" | "hows it" | "house it" => Some("Pause it."),
         "top" | "stob" | "stopp" | "stop it now" => Some("Stop."),
         // "Weitermachen" in an English decode.
         "weitebachen" | "weiterbachen" | "weite machen" | "weitermachen" | "weiter machen" | "wider machen" => Some("Weitermachen."),
         "on mute" | "an mute" | "and mute" | "un mute" => Some("Unmute."),
-        // "Jarvis, clip it" / "clipped it" / "clip that": Instant Replay of the last minute.
-        "clip it" | "clipped it" | "clip that" | "clipped that" | "clip this" => Some("Jarvis, clip the last 60 seconds."),
+        // "JAI, clip it" / "clipped it" / "clip that": Instant Replay of the last minute.
+        "clip it" | "clipped it" | "clip that" | "clipped that" | "clip this" => Some("JAI, clip the last 60 seconds."),
         // "Show my stats" heard as "steps" (the model then printed a raw tool call).
         "show my steps" | "open my steps" | "show me my steps" | "show my step" | "show my staffs" | "show my stacks" => Some("Show my stats."),
         _ if MISHEARD_CANCEL.is_match(&bare) => Some("No, forget that idea."),
@@ -1068,7 +1075,7 @@ pub fn normalize_stt_transcript(text: &str) -> String {
         Some(fixed) if named && matches!(fixed, "Pause." | "Pause it." | "Stop." | "Weitermachen." | "Unmute." | "Show my stats.") => {
             let mut chars = fixed.chars();
             let first = chars.next().map(|c| c.to_lowercase().collect::<String>()).unwrap_or_default();
-            format!("Jarvis, {first}{}", chars.as_str())
+            format!("JAI, {first}{}", chars.as_str())
         }
         Some(fixed) => fixed.to_string(),
         None => out.split_whitespace().collect::<Vec<_>>().join(" "),
@@ -1143,15 +1150,19 @@ mod tests {
         assert_eq!(normalize_stt_transcript("Fool forget that."), "No, forget that idea.");
         assert!(crate::intent_engine::is_cancel(&normalize_stt_transcript("No fool forgets that idea.")));
         // Instant Replay.
-        assert_eq!(normalize_stt_transcript("Java's Pores."), "Jarvis, pause.");
-        assert_eq!(normalize_stt_transcript("Java, pours."), "Jarvis, pause.");
+        assert_eq!(normalize_stt_transcript("Jay's Pores."), "JAI, pause.");
+        assert_eq!(normalize_stt_transcript("Jay, pours."), "JAI, pause.");
         assert_eq!(normalize_stt_transcript("Pores"), "Pause.");
-        assert_eq!(normalize_stt_transcript("Java's top"), "Jarvis, stop.");
-        assert!(crate::intents::is_media_stop(&normalize_stt_transcript("Java's Pores.")));
+        assert_eq!(normalize_stt_transcript("Jay's top"), "JAI, stop.");
+        assert!(crate::intents::is_media_stop(&normalize_stt_transcript("Jay's Pores.")));
         assert_eq!(normalize_stt_transcript("Open the Java post"), "Open the Java post");
-        assert_eq!(normalize_stt_transcript("Jarvis, clip it."), "Jarvis, clip the last 60 seconds.");
-        assert_eq!(normalize_stt_transcript("Jarvis clipped it"), "Jarvis, clip the last 60 seconds.");
-        assert_eq!(normalize_stt_transcript("Clip that!"), "Jarvis, clip the last 60 seconds.");
+        // "Show" heard as "solve" (2026-11-09), and a sum that really is to be solved.
+        assert_eq!(normalize_stt_transcript("Can you solve the weather in Germany?"), "Can you show the weather in Germany?");
+        assert_eq!(normalize_stt_transcript("Solve me the weather"), "show me the weather");
+        assert_eq!(normalize_stt_transcript("Can you solve the equation on my board?"), "Can you solve the equation on my board?");
+        assert_eq!(normalize_stt_transcript("JAI, clip it."), "JAI, clip the last 60 seconds.");
+        assert_eq!(normalize_stt_transcript("JAI clipped it"), "JAI, clip the last 60 seconds.");
+        assert_eq!(normalize_stt_transcript("Clip that!"), "JAI, clip the last 60 seconds.");
         let route = crate::features::route_text(&normalize_stt_transcript("clip that")).expect("replay route");
         assert_eq!((route.tool, route.args["seconds"].as_u64()), ("save_instant_replay", Some(60)));
         // A single "pos" / "paws" / "post" is "pause".
@@ -1171,7 +1182,7 @@ mod tests {
         assert_eq!(dedupe_sentences("Make the interface right. Make the interface right."), "Make the interface right.");
         assert_eq!(dedupe_sentences("Open the interface settings. Open the interface settings."), "Open the interface settings.");
         assert_eq!(dedupe_sentences("Stop. Stop."), "Stop. Stop.", "a single word may be said twice");
-        assert_eq!(dedupe_sentences("Hey Jarvis. What's up? Can you change the interface to red?"), "Hey Jarvis. What's up? Can you change the interface to red?");
+        assert_eq!(dedupe_sentences("Hey JAI. What's up? Can you change the interface to red?"), "Hey JAI. What's up? Can you change the interface to red?");
         assert_eq!(normalize_stt_transcript("Top."), "Stop.");
         assert_eq!(normalize_stt_transcript("Boss."), "Pause.");
         assert_eq!(normalize_stt_transcript("How's it?"), "Pause it.");
@@ -1212,10 +1223,10 @@ mod tests {
         assert_eq!(f("Hmm hmm hmm."), "", "humming");
         assert_eq!(f("La la la la."), "", "sung syllables");
         assert_eq!(f("Mmmmm"), "");
-        assert_eq!(f("Hey Jarvis, open my browser."), "Hey Jarvis, open my browser.");
+        assert_eq!(f("Hey JAI, open my browser."), "Hey JAI, open my browser.");
         assert_eq!(f("Open BastiGHG on YouTube."), "Open BastiGHG on YouTube.", "a real command that is also in the prompt");
-        assert_eq!(f("Hey Jarvis, öffne Spotify."), "Hey Jarvis, öffne Spotify.");
-        assert_eq!(f("Jarvis, wie spät ist es?"), "Jarvis, wie spät ist es?");
+        assert_eq!(f("Hey JAI, öffne Spotify."), "Hey JAI, öffne Spotify.");
+        assert_eq!(f("JAI, wie spät ist es?"), "JAI, wie spät ist es?");
         assert_eq!(f("(laughs) Open Discord please"), "Open Discord please");
         assert_eq!(f("你好你好你好"), "");
         assert_eq!(f("stop stop stop stop stop now"), "stop now");
@@ -1223,7 +1234,7 @@ mod tests {
         for phantom in ["You", "You.", "Subtitles by the Amara.org community", "Untertitel von Stephanie Geiges", "MBC 뉴스 김철수입니다", "Watching.", "Vielen Dank."] {
             assert_eq!(f(phantom), "", "{phantom}");
         }
-        assert_eq!(f("Thank you, Jarvis, that was perfect."), "Thank you, Jarvis, that was perfect.", "real thanks stay");
+        assert_eq!(f("Thank you, JAI, that was perfect."), "Thank you, JAI, that was perfect.", "real thanks stay");
         assert_eq!(f("Open the the the browser"), "Open the browser");
         assert_eq!(f("Play the the music"), "Play the music");
         assert_eq!(f("That is very very good"), "That is very very good");
@@ -1256,7 +1267,7 @@ mod tests {
     fn stt_vocabulary_corrections() {
         assert_eq!(normalize_stt_transcript("Paws."), "pause.");
         assert_eq!(normalize_stt_transcript("Post."), "Pause.");
-        assert_eq!(normalize_stt_transcript("Pass, Jarvis."), "Jarvis, pause.");
+        assert_eq!(normalize_stt_transcript("Pass, JAI."), "JAI, pause.");
         assert_eq!(normalize_stt_transcript("Post this on WhatsApp"), "Post this on WhatsApp", "a real sentence keeps its words");
         assert_eq!(normalize_stt_transcript("Un mute"), "unmute");
         assert_eq!(normalize_stt_transcript("On mute."), "Unmute.");
@@ -1399,7 +1410,7 @@ mod tests {
         // Sir's clear commands (-0.01 … -0.30) stay at one pass, and so do the bench's middling
         // ones ("Close it." at -0.61, which the beam made into "Close it. Closed."); a very unsure
         // sentence ("Include yourself." -1.20) or a loop gets the second.
-        assert!(!wants_beam(&heard("Jarvis, close the Earth.", -0.12), sentence, &s));
+        assert!(!wants_beam(&heard("JAI, close the Earth.", -0.12), sentence, &s));
         assert!(!wants_beam(&heard("Close it.", -0.61), sentence, &s));
         assert!(wants_beam(&heard("Include yourself.", -1.20), sentence, &s));
         assert!(wants_beam(&heard("Hide your core, hide your core.", -0.21), sentence, &s), "a loop");
@@ -1417,7 +1428,7 @@ mod tests {
     fn an_order_said_twice_is_heard_once() {
         assert_eq!(collapse_echo("Hide your core, hide your core."), "Hide your core.");
         assert_eq!(collapse_echo("Closed. Closed."), "Closed.");
-        assert_eq!(collapse_echo("Jarvis closed the Earth Jarvis closed the Earth"), "Jarvis closed the Earth");
+        assert_eq!(collapse_echo("JAI closed the Earth JAI closed the Earth"), "JAI closed the Earth");
         assert_eq!(collapse_echo("java is what playing java is what playing"), "java is what playing");
         for kept in ["no no", "bye bye", "Close it.", "Hide your core and show your core.", "very very good", ""] {
             assert_eq!(collapse_echo(kept), kept, "{kept}");
@@ -1427,7 +1438,7 @@ mod tests {
     }
 
     /// What a change of his name needs (2026-11-08: "Call me Earth." at -0.57, language 0.50,
-    /// no-speech 0.30, said over Jarvis' voice).
+    /// no-speech 0.30, said over JAI's voice).
     #[test]
     fn a_name_change_needs_a_sure_ear() {
         let q = |avg_logprob, language_prob, no_speech| HeardQuality { avg_logprob, language_prob, no_speech };
@@ -1461,7 +1472,7 @@ mod tests {
     fn transcribe_wav_files() {
         let Ok(list) = std::env::var("JARVIS_TRANSCRIBE") else { return };
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let stt = SttEngine::start(&JarvisConfig::load());
+        let stt = SttEngine::start(&JaiConfig::load());
         for path in list.split(';').filter(|p| !p.trim().is_empty()) {
             let bytes = std::fs::read(path.trim()).expect("readable WAV");
             let data = bytes.windows(4).position(|w| w == b"data").expect("a data chunk") + 8;

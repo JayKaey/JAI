@@ -11,7 +11,7 @@
 //!    changed (Discord and Chrome run several audio processes), matched by executable, session
 //!    display name and session identifier, then by window title and a close spelling.
 //! 2. The same endpoint calls from a hidden PowerShell with inline C# (CREATE_NO_WINDOW) when COM
-//!    fails inside Jarvis.
+//!    fails inside JAI.
 //! 3. The keyboard's volume keys (2 % per step) as the last resort for the master volume.
 
 use crate::tools::{bool_arg, str_arg};
@@ -98,6 +98,9 @@ const ALIASES: &[(&str, &[&str])] = &[
     ("game", &[GAME]),
     ("spiel", &[GAME]),
     ("das spiel", &[GAME]),
+    // (His session carries the program's file name.)
+    ("jai", &["jarvis"]),
+    ("jay", &["jarvis"]),
     ("jarvis", &["jarvis"]),
     ("system sounds", &["system sounds"]),
     ("systemsounds", &["system sounds"]),
@@ -202,7 +205,7 @@ fn spoken(name: &str) -> String {
     parts(name).iter().map(|p| display_name(p)).collect::<Vec<_>>().join(" and ")
 }
 
-/// Sessions "mute everything except …" never mutes: Jarvis' own voice, and the audio routers
+/// Sessions "mute everything except …" never mutes: JAI's own voice, and the audio routers
 /// whose one session carries every other app's sound to the headphones (muting Wave Link's
 /// session would silence the app that was to stay).
 fn keeps_playing(session: &str) -> bool {
@@ -914,7 +917,7 @@ interface IMMDeviceEnumerator {
   int GetDefaultAudioEndpoint(int dataFlow, int role, out IMMDevice endpoint);
 }
 [ComImport, Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")] class MMDeviceEnumeratorComObject { }
-public class JarvisAudio {
+public class JaiAudio {
   static IAudioEndpointVolume Vol() {
     var enumerator = new MMDeviceEnumeratorComObject() as IMMDeviceEnumerator;
     IMMDevice dev = null;
@@ -938,7 +941,7 @@ public class JarvisAudio {
     /// Runs `commands` after loading the interop class; returns "level|muted" read afterwards.
     async fn run(commands: &str) -> Result<(f32, bool), String> {
         let script = format!(
-            "$ErrorActionPreference = 'Stop'\nAdd-Type -TypeDefinition @'\n{CSHARP}\n'@\n{commands}\n[Console]::Out.Write(([JarvisAudio]::GetVolume()).ToString([Globalization.CultureInfo]::InvariantCulture) + '|' + [JarvisAudio]::GetMute())"
+            "$ErrorActionPreference = 'Stop'\nAdd-Type -TypeDefinition @'\n{CSHARP}\n'@\n{commands}\n[Console]::Out.Write(([JaiAudio]::GetVolume()).ToString([Globalization.CultureInfo]::InvariantCulture) + '|' + [JaiAudio]::GetMute())"
         );
         let utf16: Vec<u8> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
         let encoded = base64::engine::general_purpose::STANDARD.encode(utf16);
@@ -956,16 +959,16 @@ public class JarvisAudio {
     pub async fn set(level: Option<f32>, mute: Option<bool>, delta: Option<f32>) -> Result<(f32, bool), String> {
         let mut commands = String::new();
         if let Some(d) = delta {
-            commands.push_str(&format!("[JarvisAudio]::SetVolume([JarvisAudio]::GetVolume() + ({:.4}))\n", d / 100.0));
+            commands.push_str(&format!("[JaiAudio]::SetVolume([JaiAudio]::GetVolume() + ({:.4}))\n", d / 100.0));
         }
         if let Some(l) = level {
-            commands.push_str(&format!("[JarvisAudio]::SetVolume({:.4})\n", l.clamp(0.0, 1.0)));
+            commands.push_str(&format!("[JaiAudio]::SetVolume({:.4})\n", l.clamp(0.0, 1.0)));
             if l > 0.0 && mute.is_none() {
-                commands.push_str("[JarvisAudio]::SetMute($false)\n");
+                commands.push_str("[JaiAudio]::SetMute($false)\n");
             }
         }
         if let Some(m) = mute {
-            commands.push_str(if m { "[JarvisAudio]::SetMute($true)\n" } else { "[JarvisAudio]::SetMute($false)\n" });
+            commands.push_str(if m { "[JaiAudio]::SetMute($true)\n" } else { "[JaiAudio]::SetMute($false)\n" });
         }
         run(&commands).await
     }
@@ -1350,7 +1353,7 @@ pub async fn set_app_mute(app: &str, muted: bool) -> Result<String, String> {
 }
 
 /// "Mute everything except Discord": every other app's own volume is muted. The master
-/// volume, Jarvis' voice and an audio router's session stay as they are.
+/// volume, JAI's voice and an audio router's session stay as they are.
 pub async fn mute_others(keep: &str) -> Result<String, String> {
     let hit = apps_apply(targets(keep), true, Change { mute: Some(true), ..Change::default() }).await?;
     let newly: Vec<&Applied> = hit.iter().filter(|h| !h.before.1).collect();
@@ -1484,7 +1487,7 @@ async fn match_app(app: &str, other: &str, offset: f32) -> Result<String, String
     set_app_volume(app, level + offset / 100.0).await
 }
 
-/// "Set all apps to 100 %": every app's own level, the master volume left where it is. Jarvis'
+/// "Set all apps to 100 %": every app's own level, the master volume left where it is. JAI's
 /// voice and an audio router's session stay as they are.
 async fn set_all_apps(level: f32) -> Result<String, String> {
     let level = level.clamp(0.0, 1.0);
@@ -1621,7 +1624,7 @@ async fn read_muted() -> Result<String, String> {
 }
 
 /// "Save this mix as gaming": the master volume and every app of Sir's as they stand now.
-/// (An audio router and Jarvis' own voice are no part of a mix.)
+/// (An audio router and JAI's own voice are no part of a mix.)
 async fn save_mix(name: &str) -> Result<String, String> {
     let name = crate::audio_mixes::clean_name(name).ok_or("A mix needs a short name.")?;
     let master = master_state().await?;
@@ -1745,7 +1748,7 @@ pub async fn list_audio_apps() -> Result<Vec<AppSession>, String> {
 
 /// The Mixer block's faders: the master first, then one per app in the order of their names (an
 /// app with several sessions is one fader, at its loudest, muted when all of them are). The
-/// audio routers and Jarvis' own session are not there to be pulled down by accident.
+/// audio routers and JAI's own session are not there to be pulled down by accident.
 pub async fn channels() -> Result<Vec<Channel>, String> {
     let percent = |level: f32| (level.clamp(0.0, 1.0) * 100.0).round() as u8;
     let (level, muted) = master_state().await?;
@@ -1926,7 +1929,7 @@ pub async fn tool(args: &Value) -> Result<String, String> {
             let (master, muted) = master_state().await?;
             let apps = list_audio_apps().await?;
             // What is making sound this moment, and what merely has a channel in the mixer (a
-            // paused player, Steam). Jarvis' own voice and an audio router's mix are no apps
+            // paused player, Steam). JAI's own voice and an audio router's mix are no apps
             // of Sir's.
             // (Asked of the real mixer even while the levels are a copy: it only reads.)
             let audible: Vec<String> = if cfg!(test) { Vec::new() } else { audible_apps().await.into_iter().map(|(name, _)| name.to_lowercase()).collect() };
@@ -1961,7 +1964,7 @@ pub fn scenario_bench() -> Bench {
     Bench { master: (0.8, false), apps: vec![app("firefox", 1.0), app("Discord", 1.0), app("sonora", 0.6), app("steam", 1.0), app("System sounds", 1.0), app("Elgato.WaveLink", 1.0), app("jarvis", 1.0)] }
 }
 
-/// One volume request carried out as Jarvis carries it out: the sentence through the fast
+/// One volume request carried out as JAI carries it out: the sentence through the fast
 /// path's parser, its tool call through the mixer (or the media tool's volume half).
 async fn say(sentence: &str) -> Result<String, String> {
     // (In the order he asks: the quick commands, "more" among them, come first.)
@@ -2091,7 +2094,7 @@ pub async fn scenarios() -> Vec<(String, Result<(), String>)> {
     let answer = tool(&undo).await;
     out.push(seen("\"undo that\" after a mute unmutes the master", answer, "master", (40, false)));
     // Named mixes: saved as they stand, back in one go, taken back in one go; an app of the
-    // mix that is gone is left out, the routers and Jarvis are no part of one.
+    // mix that is gone is left out, the routers and JAI are no part of one.
     set_bench(Some(scenario_bench()));
     forget();
     let _ = say("Set Discord to 30 percent").await;
@@ -2375,7 +2378,7 @@ pub async fn write_path_check() -> Result<String, String> {
     if (before.0 - after.0).abs() > 0.004 || before.1 != after.1 {
         return Err(format!("the master volume moved from {before:?} to {after:?} when it was written back as it was"));
     }
-    // Every app session but the routers' and Jarvis' own (which nothing ever writes to).
+    // Every app session but the routers' and JAI's own (which nothing ever writes to).
     let apps = com(|| retrying(|| imp::apply(&[], true, Change::default()))).await?;
     let now = com(imp::list).await?;
     for app in &apps {
@@ -2438,7 +2441,7 @@ mod tests {
         assert!(matches_target("chrome", &targets("browser")));
         assert!(!matches_target("Discord", &targets("spotify")));
         assert!(matches_target("JARVIS", &targets("jarvis")));
-        assert!(!is_app_name("zoom") && !is_app_name("your voice"), "the HUD zoom and Jarvis' voice are not apps");
+        assert!(!is_app_name("zoom") && !is_app_name("your voice"), "the HUD zoom and JAI's voice are not apps");
     }
 
     /// Reads the real mixer (nothing is changed: no sound, no volume).

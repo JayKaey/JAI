@@ -1,4 +1,4 @@
-# J.A.R.V.I.S. - what stays out of git.
+# J.A.I. - what stays out of git.
 #
 # In: source, build scripts and the small assets the build needs.
 # Out: models and runtimes, builds, everything personal (settings, memory database, logs,
@@ -44,7 +44,7 @@
 *.crt
 .env
 .env.*
-# What Jarvis learns about the habits of the person using him, and the themes he made.
+# What JAI learns about the habits of the person using him, and the themes he made.
 /config/
 
 # --- Recordings --------------------------------------------------------------------------

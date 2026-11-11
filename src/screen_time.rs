@@ -60,7 +60,7 @@ pub fn app_name(process: &str) -> String {
         "powerpnt" => "PowerPoint".to_string(),
         "explorer" => "File Explorer".to_string(),
         "applicationframehost" => "Windows app".to_string(),
-        "jarvis" => "J.A.R.V.I.S.".to_string(),
+        "jai" => "J.A.I.".to_string(),
         "windowsterminal" => "Terminal".to_string(),
         lower => {
             let mut c = lower.chars();

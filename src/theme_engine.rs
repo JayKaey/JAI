@@ -3,7 +3,7 @@
 //! re-themes the whole HUD — board frames and brackets, the text console, the core sphere and the
 //! emblem's rings — at once, cross-fading through HSV over 0.35 s.
 //!
-//! Eight hyper-saturated presets (`PRESETS`, `rose_crimson` the default) and any custom colour:
+//! Nine hyper-saturated presets (`PRESETS`, `jai_gold` the default) and any custom colour:
 //! a colour word or #RRGGBB becomes a palette with its saturation and value pushed to 1.0
 //! (`derive`). The neon itself is premultiplied-additive light (`hdr_neon_color`): four passes
 //! from a wide 22 px aura to a 1.5 px white-hot filament (`NEON_PASSES`), so the rings glow
@@ -89,8 +89,9 @@ fn c32(c: [u8; 3]) -> Color32 {
     Color32::from_rgb(c[0], c[1], c[2])
 }
 
-/// The eight Stark presets.
-pub const PRESETS: [(&str, ThemePalette); 8] = [
+/// The presets: his own yellow first (the default since v24), then the eight Stark ones.
+pub const PRESETS: [(&str, ThemePalette); 9] = [
+    ("jai_gold", ThemePalette::new(0xFFD400, 0xFF9A00, 0xFFC400, 0xFFE873)),
     ("rose_crimson", ThemePalette::new(0xFF0055, 0x00F5FF, 0x00D8FF, 0xFF1E6E)),
     ("arc_cyan", ThemePalette::new(0x00F0FF, 0x38B6FF, 0x00E5FF, 0x80F8FF)),
     ("stark_gold", ThemePalette::new(0xFFB700, 0xFF2A00, 0xFFA500, 0xFFE066)),
@@ -101,7 +102,7 @@ pub const PRESETS: [(&str, ThemePalette); 8] = [
     ("ice_monochrome", ThemePalette::new(0xFFFFFF, 0xA5F3FC, 0xE2E8F0, 0xFFFFFF)),
 ];
 
-pub const DEFAULT_PRESET: &str = "arc_cyan";
+pub const DEFAULT_PRESET: &str = "jai_gold";
 
 /// A preset by name ("rose_crimson", "Arc Cyan", "stark-gold").
 pub fn preset(name: &str) -> Option<ThemePalette> {
@@ -133,7 +134,8 @@ pub fn preset_for_word(word: &str) -> Option<&'static str> {
         // ("Make the interface rows": the recogniser's "rose".)
         "rose" | "roses" | "rows" | "pink" | "magenta" | "rosa" | "pinke" | "rose crimson" => "rose_crimson",
         "cyan" | "blue" | "blau" | "türkis" | "tuerkis" | "turquoise" | "aqua" | "arc reactor" | "arc" | "hellblau" => "arc_cyan",
-        "gold" | "golden" | "yellow" | "gelb" | "golden yellow" | "stark" => "stark_gold",
+        "yellow" | "gelb" | "golden yellow" | "goldgelb" | "jai" | "jai gold" | "jai yellow" => "jai_gold",
+        "gold" | "golden" | "stark" => "stark_gold",
         "green" | "grün" | "gruen" | "emerald" | "smaragd" | "matrix" => "emerald_matrix",
         "purple" | "violet" | "lila" | "violett" | "lilac" | "vibranium" => "ultraviolet",
         "orange" | "amber" | "bernstein" | "solar" => "solar_orange",
@@ -259,7 +261,7 @@ pub const CUSTOM_PREFIX: &str = "theme:";
 /// Where saved themes live (next to JARVIS.exe); mirrored into the memory database.
 pub const CUSTOM_THEMES_PATH: &str = "config/custom_themes.json";
 
-/// A theme Sir built in `[ + CREATE THEME ]` or Jarvis designed from a description.
+/// A theme Sir built in `[ + CREATE THEME ]` or JAI designed from a description.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CustomTheme {
     pub name: String,
@@ -376,7 +378,7 @@ fn colour_phrase(phrase: &str) -> Option<[u8; 3]> {
     Some(from_hsv(h, sat.unwrap_or(s), val.unwrap_or(v)))
 }
 
-/// Moods Jarvis designs from ("design a dark stealth theme"): (word, primary, secondary, border).
+/// Moods JAI designs from ("design a dark stealth theme"): (word, primary, secondary, border).
 const MOODS: &[(&str, u32, u32, u32)] = &[
     ("stealth", 0x7FA3B8, 0x3E5566, 0x4A6272),
     ("cyberpunk", 0xFFE600, 0xB026FF, 0xFFE600),
@@ -430,7 +432,7 @@ pub fn design_theme(name: Option<&str>, description: &str) -> Option<CustomTheme
     let (h, _, _) = to_hsv(primary);
     let background = background.unwrap_or(if dark { [2, 3, 5] } else { from_hsv(h, 0.6, 0.06) });
     let name = name.map(str::trim).filter(|n| !n.is_empty()).map(str::to_string).unwrap_or_else(|| {
-        let skip = ["a", "an", "the", "me", "for", "theme", "design", "create", "make", "build", "new", "custom", "please", "jarvis", "with", "and", "my"];
+        let skip = ["a", "an", "the", "me", "for", "theme", "design", "create", "make", "build", "new", "custom", "please", "jai", "with", "and", "my"];
         let words: Vec<String> = d.split_whitespace().filter(|w| !skip.contains(w)).take(2).map(|w| {
             let mut c = w.chars();
             c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default()
@@ -552,22 +554,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_theme_button_cycles_through_all_eight_presets() {
-        let mut name = "rose_crimson";
+    fn the_theme_button_cycles_through_all_the_presets() {
+        let mut name = PRESETS[0].0;
         let mut seen = vec![name];
         for _ in 0..PRESETS.len() - 1 {
             name = next_preset(name);
             seen.push(name);
         }
-        assert_eq!(seen, PRESETS.map(|(n, _)| n), "Rose Crimson → Arc Cyan → … → Ice Monochrome");
-        assert_eq!(next_preset("ice_monochrome"), "rose_crimson", "and round again");
-        assert_eq!(next_preset("custom:#123456"), "rose_crimson");
+        assert_eq!(seen, PRESETS.map(|(n, _)| n), "JAI Gold → Rose Crimson → Arc Cyan → … → Ice Monochrome");
+        assert_eq!(next_preset("ice_monochrome"), "jai_gold", "and round again");
+        assert_eq!(next_preset("custom:#123456"), "jai_gold");
         assert_eq!(label("stark_gold"), "STARK GOLD");
     }
 
     #[test]
-    fn eight_presets_are_fully_saturated_with_white_hot_centres() {
-        assert_eq!(PRESETS.len(), 8);
+    fn the_presets_are_fully_saturated_with_white_hot_centres() {
+        assert_eq!(PRESETS.len(), 9);
+        // His own yellow is the default: yellow, not the gold preset's orange.
+        let own = preset(DEFAULT_PRESET).unwrap();
+        assert_eq!((DEFAULT_PRESET, own.core_primary), ("jai_gold", [0xFF, 0xD4, 0x00]));
+        assert!(own.core_primary[1] > preset("stark_gold").unwrap().core_primary[1], "more yellow than Stark Gold");
         assert_eq!(preset("rose_crimson").unwrap().core_primary, [0xFF, 0x00, 0x55]);
         assert_eq!(preset("Arc Cyan").unwrap().hud_frame_border, [0x00, 0xE5, 0xFF]);
         assert_eq!(preset("stark-gold").unwrap().core_secondary, [0xFF, 0x2A, 0x00]);
@@ -586,7 +592,7 @@ mod tests {
 
     #[test]
     fn colour_words_pick_presets_in_english_and_german() {
-        for (word, want) in [("red", "crimson_overdrive"), ("Rot", "crimson_overdrive"), ("blue", "arc_cyan"), ("cyan", "arc_cyan"), ("gold", "stark_gold"), ("gelb", "stark_gold"), ("green", "emerald_matrix"), ("grün", "emerald_matrix"), ("purple", "ultraviolet"), ("lila", "ultraviolet"), ("orange", "solar_orange"), ("pink", "rose_crimson"), ("white", "ice_monochrome"), ("weiß", "ice_monochrome"), ("ultraviolet", "ultraviolet")] {
+        for (word, want) in [("red", "crimson_overdrive"), ("Rot", "crimson_overdrive"), ("blue", "arc_cyan"), ("cyan", "arc_cyan"), ("gold", "stark_gold"), ("gelb", "jai_gold"), ("yellow", "jai_gold"), ("green", "emerald_matrix"), ("grün", "emerald_matrix"), ("purple", "ultraviolet"), ("lila", "ultraviolet"), ("orange", "solar_orange"), ("pink", "rose_crimson"), ("white", "ice_monochrome"), ("weiß", "ice_monochrome"), ("ultraviolet", "ultraviolet")] {
             assert_eq!(preset_for_word(word), Some(want), "{word}");
         }
         assert_eq!(preset_for_word("teal-ish brown"), None);

@@ -2,7 +2,7 @@
 //! the VPS reachable. Minecraft servers are asked with the game's own Server List Ping (a
 //! handshake and a status request over TCP, no plugin or RCON password needed); a VPS is checked
 //! by opening its SSH port. The result goes on the board as one figure block per server.
-//! (TPS / MSPT / RAM need RCON or SSH credentials, which Jarvis does not keep.)
+//! (TPS / MSPT / RAM need RCON or SSH credentials, which JAI does not keep.)
 
 use crate::hud_board::{self, Block, BlockKind, Report};
 use crate::tools::ToolContext;

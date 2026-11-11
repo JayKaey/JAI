@@ -241,13 +241,13 @@ pub fn own_window_titled(title: &str, owner: isize) -> bool {
     true
 }
 
-/// One of Jarvis' own windows (the HUD, his extra windows, a dialog of his process).
+/// One of JAI's own windows (the HUD, his extra windows, a dialog of his process).
 pub fn is_jarvis_window(w: &WindowInfo) -> bool {
     static OWN: OnceLock<u32> = OnceLock::new();
-    w.pid == *OWN.get_or_init(std::process::id) || w.process == "jarvis" || w.title.contains("J.A.R.V.I.S.")
+    w.pid == *OWN.get_or_init(std::process::id) || w.process == "jai" || w.title.contains("J.A.I.")
 }
 
-/// The window Sir is working in, never one of Jarvis' own: the top of the Z-order among the
+/// The window Sir is working in, never one of JAI's own: the top of the Z-order among the
 /// visible, non-minimised application windows (when he typed into the HUD, the one beneath it).
 /// The enumeration runs from the top and stops at the first one that qualifies, so a turn does
 /// not pay for looking up the process of every open window (measured: ~10 ms a turn before).
@@ -337,7 +337,7 @@ pub fn cover_monitor(hwnd: isize) -> Result<(), String> {
 }
 
 /// A window that covers its monitor but is still maximised underneath (winit keeps a maximised
-/// window "maximised" when it goes fullscreen, F11 from windowed mode, so Windows and Jarvis's
+/// window "maximised" when it goes fullscreen, F11 from windowed mode, so Windows and JAI's
 /// own checks take the board for a maximised window): made a plain window of exactly the same
 /// rect, so nothing moves on screen. Returns whether it was maximised. Synchronous: run it on
 /// the Win32 worker thread.
@@ -388,7 +388,7 @@ pub fn send_chord(modifiers: &[VIRTUAL_KEY], key: VIRTUAL_KEY) -> Result<(), Str
     }
 }
 
-/// The window in front right now: its process name and whether it belongs to Jarvis himself
+/// The window in front right now: its process name and whether it belongs to JAI himself
 /// (the addressee detector: his HUD in front means Sir is talking to him).
 pub fn foreground_info() -> Option<(String, bool)> {
     // SAFETY: plain queries of the foreground window handle.
@@ -456,7 +456,7 @@ pub fn foreground_is_fullscreen() -> bool {
     }
 }
 
-/// The window Sir is looking at, skipping Jarvis' own windows (when he types into the HUD, the
+/// The window Sir is looking at, skipping JAI's own windows (when he types into the HUD, the
 /// HUD is in front): its title and visible bounds (left, top, width, height in physical pixels).
 pub fn top_app_window() -> Option<(String, [i32; 4])> {
     app_windows().into_iter().find_map(|w| {
@@ -883,7 +883,7 @@ pub fn place(hwnd: isize, placement: Placement) -> Result<(), String> {
 // ---------------------------------------------------------------------- the HUD window ----
 
 /// Registered message that makes the HUD window destroy itself, posted from any thread when
-/// Jarvis quits: eframe only reacts to close requests while it paints, and a window hidden in
+/// JAI quits: eframe only reacts to close requests while it paints, and a window hidden in
 /// the tray never paints.
 static HUD_QUIT_MESSAGE: AtomicU32 = AtomicU32::new(0);
 const HUD_SUBCLASS_ID: usize = 0x4A52_5653;
@@ -1065,7 +1065,7 @@ mod tests {
     #[test]
     fn a_title_is_read_without_asking_the_window() {
         // SAFETY: a hidden window owned by this test thread, destroyed below.
-        let hwnd = unsafe { CreateWindowExW(WINDOW_EX_STYLE(0), w!("STATIC"), w!("jarvis title test"), WS_POPUP, 0, 0, 120, 80, HWND(0), HMENU(0), HINSTANCE(0), None) };
+        let hwnd = unsafe { CreateWindowExW(WINDOW_EX_STYLE(0), w!("STATIC"), w!("jai title test"), WS_POPUP, 0, 0, 120, 80, HWND(0), HMENU(0), HINSTANCE(0), None) };
         assert_ne!(hwnd.0, 0, "test window");
         let raw = hwnd.0;
         let (tx, rx) = std::sync::mpsc::channel();
@@ -1077,6 +1077,6 @@ mod tests {
         unsafe {
             let _ = DestroyWindow(hwnd);
         }
-        assert_eq!(title, Ok("jarvis title test".to_string()));
+        assert_eq!(title, Ok("jai title test".to_string()));
     }
 }

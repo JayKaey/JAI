@@ -1,6 +1,6 @@
 //! The HUD's emblem, painted with `egui::Painter` meshes, in three states (`RoseEmblemState`):
 //!
-//! * `ThinkingGyroscope` — Jarvis is thinking, transcribing a turn into an answer, running a
+//! * `ThinkingGyroscope` — JAI is thinking, transcribing a turn into an answer, running a
 //!   research agent, asleep or signed off: the **thinking stack** of Sir's reference frame
 //!   (`image_1f7704.png`). Six circular ring planes stand in depth on one straight spindle axis
 //!   that runs at −30° on screen from the bottom-left (front) to the top-right (back). Every ring
@@ -16,7 +16,7 @@
 //!   critically damped spring, each ring spins on its own harmonic, and the core rings' bloom
 //!   pulses while he thinks and speaks.
 //! * `AwakeFrontEmblem` — awake with the centre of the screen free: a compact crimson-and-white
-//!   dial (no cyan) around the white `J.A.R.V.I.S.` wordmark on a dark core — from the outside in:
+//!   dial (no cyan) around the white `J.A.I.` wordmark on a dark core — from the outside in:
 //!   a fine dotted rim with four double-bar markers on the diagonals and a fixed red arc under it,
 //!   a pink and white tick ring with crosshair marks at top and bottom, three white technical
 //!   arcs, the blazing magenta torus, a thinner rose ring, and the inner ring with its vertical
@@ -134,7 +134,7 @@ fn ice() -> Color32 {
 /// What the emblem shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RoseEmblemState {
-    /// Flat, concentric, facing the camera, the `J.A.R.V.I.S.` wordmark in the centre.
+    /// Flat, concentric, facing the camera, the `J.A.I.` wordmark in the centre.
     AwakeFrontEmblem,
     /// The six-ring thinking stack in the centre.
     ThinkingGyroscope,
@@ -186,7 +186,7 @@ pub fn resolve_state(inputs: EmblemInputs) -> RoseEmblemState {
 }
 
 /// (flat, dock) a state eases to: flat 0 = thinking stack, 1 = front emblem; dock 0 = centre,
-/// 1 = corner. A docked emblem tilts into a small stack while Jarvis is busy.
+/// 1 = corner. A docked emblem tilts into a small stack while JAI is busy.
 pub fn pose_targets(state: RoseEmblemState, busy: bool) -> (f32, f32) {
     match state {
         RoseEmblemState::ThinkingGyroscope => (0.0, 0.0),
@@ -556,7 +556,7 @@ fn arc_of<T: Copy>(points: &[T], start: f32, length: f32) -> Vec<T> {
 
 // ---------------------------------------------------------------------------- idle morph ----
 
-/// While Jarvis idles, the front emblem now and then unfolds into the six-ring gyroscope and
+/// While JAI idles, the front emblem now and then unfolds into the six-ring gyroscope and
 /// folds back, calmly: after 120-240 s of uninterrupted idle (random) it holds the other form
 /// for 120-240 s. Any activity ends it at once.
 #[derive(Debug, Clone, Copy)]
@@ -860,7 +860,7 @@ impl RoseEmblem {
         let size = (frame.radius * 0.17).clamp(8.0, 46.0);
         let font = FontId::new(size, FontFamily::Name("bold".into()));
         let halo = glow(crimson_rgb(), 0.5 * a * (0.55 + 0.45 * self.voice));
-        let wordmark = "J.A.R.V.I.S.";
+        let wordmark = "J.A.I.";
         painter.text(frame.centre + vec2(0.0, 1.5), Align2::CENTER_CENTER, wordmark, font.clone(), halo);
         painter.text(frame.centre, Align2::CENTER_CENTER, wordmark, font, Color32::WHITE.gamma_multiply(a));
     }
@@ -1506,7 +1506,7 @@ mod tests {
             let swell = 1.0 + e.voice * VOICE_SWELL_PX / (RING_RADII_PX[1] * f.unit());
             (ring_points_at(&f, 1, 0.0, 8, swell)[0] - f.centre).length()
         };
-        assert_eq!(quiet.voice, 0.0, "silent Jarvis: calm ticks");
+        assert_eq!(quiet.voice, 0.0, "silent JAI: calm ticks");
         assert!(ring(&talking) > ring(&quiet) + 4.0, "speaking swells the inner rings");
         assert!(tach_ticks(talking.voice).iter().any(|(_, l)| *l > TACH_BASE_LEN + 5.0));
     }

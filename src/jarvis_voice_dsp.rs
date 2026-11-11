@@ -1,12 +1,12 @@
-//! The film voice's mastering chain, matched to the reference clip of the film's J.A.R.V.I.S.
-//! (`Voicy_J.A.R.V.I.S..mp3`): an ultra-clean, dry, intimate close-mic studio voice — calm
+//! The film voice's mastering chain, matched to the reference clip of the film's J.A.I.
+//! (`Voicy_J.A.I..mp3`): an ultra-clean, dry, intimate close-mic studio voice — calm
 //! baritone, crisp non-rhotic RP diction, no chorus and no echo. Every synthesised clause runs
 //! through these stages at 48 kHz (f32) before it reaches the speaker.
 //!
 //! 1. Pitch & formant lock: −0.55 semitones (×0.9687) by resampling the 24 kHz synthesis straight
 //!    to 48 kHz, which puts the voice's fundamental on Paul Bettany's 118–128 Hz baritone. Pitch and
 //!    formants drop together; the tempo is kept by synthesising faster (`synthesis_speed`), so
-//!    Jarvis speaks at an unhurried 0.98×.
+//!    JAI speaks at an unhurried 0.98×.
 //! 2. Reference-matched 5-band studio EQ: 85 Hz high-pass (12 dB/oct Butterworth), +2.2 dB warm
 //!    fundamental at 135 Hz (Q 1.15), −2.5 dB mud cut at 420 Hz (Q 1.5), −0.8 dB upper-mid contour
 //!    at 2.85 kHz (Q 1.2), a +2.0 dB condenser-air shelf from 4.2 kHz and a soft dynamic de-esser
@@ -363,13 +363,13 @@ pub fn limit(x: f32) -> f32 {
 }
 
 /// Stages 2-4 with their state (one per clause: the cache stores finished clauses).
-pub struct JarvisVoiceDsp {
+pub struct JaiVoiceDsp {
     eq: StudioEq,
     room: StudioRoom,
     comp: Compressor,
 }
 
-impl JarvisVoiceDsp {
+impl JaiVoiceDsp {
     pub fn new(rate: u32) -> Self {
         let rate = rate.max(8_000) as f32;
         Self { eq: StudioEq::new(rate), room: StudioRoom::new(rate), comp: Compressor::new(rate) }
@@ -395,7 +395,7 @@ const PRE_GAIN_RMS: f32 = 0.089;
 /// 35 % by default), stage 1 (24 kHz → 48 kHz, −0.55 st), a loudness pre-gain and stages 2-4.
 /// Returns 48 kHz audio.
 pub fn master_dry(input: &[f32], from: u32) -> Vec<f32> {
-    // Jarvis' clauses are locked to his clip's median F0.
+    // JAI's clauses are locked to his clip's median F0.
     master_dry_to(input, from, crate::fish_zero_shot_tts::profile().map(|p| p.f0.median_hz))
 }
 
@@ -411,7 +411,7 @@ pub fn master_dry_to(input: &[f32], from: u32, lock_to_hz: Option<f32>) -> Vec<f
         let gain = (PRE_GAIN_RMS / level).clamp(0.5, 2.2);
         audio.iter_mut().for_each(|s| *s *= gain);
     }
-    JarvisVoiceDsp::new(MASTER_RATE).process(&mut audio);
+    JaiVoiceDsp::new(MASTER_RATE).process(&mut audio);
     audio
 }
 

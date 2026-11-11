@@ -147,7 +147,7 @@ pub fn node_of(name: &str) -> Option<&'static str> {
     TOOL_NODES.iter().find(|(t, _)| *t == name).map(|(_, n)| *n).or_else(|| crate::workbench::is_tool(name).then_some("context"))
 }
 
-/// Tools that take a few seconds (Jarvis acknowledges first).
+/// Tools that take a few seconds (JAI acknowledges first).
 pub fn is_slow(name: &str) -> bool {
     matches!(
         name,
@@ -275,12 +275,12 @@ pub fn route_text(text: &str) -> Option<Route> {
     if ws.is_empty() || ws.len() > 40 {
         return None;
     }
-    // The network radar, the disk map and the Earth are panels of Jarvis' own ("check the
+    // The network radar, the disk map and the Earth are panels of JAI's own ("check the
     // network" sweeps it on the radar now, "scan my wifi" too): `intents::panel_request`.
     if crate::intents::panel_request(text).is_some() {
         return None;
     }
-    let lead = lower.trim_start_matches("jarvis").trim_start_matches([',', ' ']).trim_start_matches("please ").trim();
+    let lead = lower.trim_start_matches("jai").trim_start_matches([',', ' ']).trim_start_matches("please ").trim();
 
     // ---- The workbench first: "quiz me on my flashcards" is the deck, not an oral exam ----
     if let Some(route) = crate::workbench::route_text(text) {
@@ -516,7 +516,7 @@ pub fn route_text(text: &str) -> Option<Route> {
 
 // ---------------------------------------------------------------------------- helpers ----
 
-/// A tool result Jarvis reads himself: the block in the chat, one short line aloud.
+/// A tool result JAI reads himself: the block in the chat, one short line aloud.
 pub fn spoken(display: impl AsRef<str>, spoken: impl AsRef<str>) -> String {
     format!("{}\nSpoken: {}", display.as_ref().trim_end(), spoken.as_ref().trim())
 }
@@ -670,7 +670,7 @@ pub fn python() -> Option<PathBuf> {
     found.pop().or_else(|| crate::apps::which("py"))
 }
 
-/// A program on PATH or next to Jarvis (`runtime\tools\<name>.exe`).
+/// A program on PATH or next to JAI (`runtime\tools\<name>.exe`).
 pub fn find_tool(name: &str) -> Option<PathBuf> {
     crate::apps::which(name).or_else(|| {
         let exe = std::env::current_exe().ok()?;
@@ -737,19 +737,19 @@ mod tests {
 
     #[test]
     fn field_system_routes() {
-        assert_eq!(tool("Jarvis, clip that"), Some("save_instant_replay"));
+        assert_eq!(tool("JAI, clip that"), Some("save_instant_replay"));
         assert_eq!(route_text("save the last 30 seconds").unwrap().args["seconds"], 30);
         assert_eq!(tool("quiz me on the french revolution"), Some("start_oral_exam_session"));
         assert_eq!(tool("why is my ping so high"), Some("diagnose_network_and_ping"));
         assert_eq!(route_text("lan scan").unwrap().args["action"], "scan_lan");
         // The radar's now (`intents::panel_request`).
-        for text in ["scan my network", "Hey Jarvis, check the network.", "Who's on my wifi?"] {
+        for text in ["scan my network", "Hey JAI, check the network.", "Who's on my wifi?"] {
             assert!(route_text(text).is_none(), "{text}");
         }
         let net = route_text("Diagnose my network").unwrap();
         assert_eq!((net.tool, net.args["action"].as_str()), ("diagnose_network_and_ping", Some("full")));
         assert_eq!(route_text("clip it").unwrap().tool, "save_instant_replay");
-        assert_eq!(route_text("Jarvis clipped it").unwrap().tool, "save_instant_replay");
+        assert_eq!(route_text("JAI clipped it").unwrap().tool, "save_instant_replay");
         assert_eq!(tool("I'm going shopping later"), None);
         let r = route_text("I spent 12,50 euro on pizza").unwrap();
         assert_eq!((r.tool, r.args["action"].as_str(), r.args["amount_eur"].as_f64()), ("manage_finances_and_goals", Some("add_expense"), Some(12.5)));

@@ -1,4 +1,4 @@
-//! `DISCORD // AUDIO ROUTING` (`[ MODULES ]`): where the copy of Jarvis' voice goes into Sir's
+//! `DISCORD // AUDIO ROUTING` (`[ MODULES ]`): where the copy of JAI's voice goes into Sir's
 //! call (the injection target: a Wave Link channel in the Chat Mix or a virtual cable) and which
 //! output he listens to (the call), a level meter of what the call hears, and
 //! `[ TEST VOICE IN DISCORD ]`. Sir's own speaker keeps playing either way.
@@ -71,7 +71,7 @@ fn body(ui: &mut Ui, tools: &ToolContext, rt: &Handle) {
     let devices = devices();
     let (target, source) = tools.config.read(|c| (c.discord_call_output.clone(), c.discord_listen_source.clone()));
     ui.label(RichText::new(format!("BRIDGE {} · VOICE INTO CALL: {}", crate::discord_bridge::mode().label().to_uppercase(), crate::discord_bridge::voice_device())).font(strip_font()).color(STRIP_INK));
-    // Jarvis's own account (a bot of his: he joins calls as himself, no routing needed).
+    // JAI's own account (a bot of his: he joins calls as himself, no routing needed).
     if let Some(s) = crate::discord_bot::hud_status() {
         let call = match &s.call {
             Some(c) => format!(" · IN #{}{}{}", c.to_uppercase(), if s.encrypted { " (E2EE)" } else { "" }, if s.speaking_now { " · SPEAKING" } else if s.talking { " · MAY TALK" } else { " · LISTENING" }),
@@ -135,7 +135,7 @@ pub(super) fn show(ctx: &egui::Context, tools: &ToolContext, rt: &Handle) {
         }
         return;
     }
-    let mut builder = ViewportBuilder::default().with_title("Discord Audio — J.A.R.V.I.S.").with_app_id("jarvis").with_inner_size([560.0, 350.0]).with_min_inner_size([460.0, 300.0]).with_decorations(false);
+    let mut builder = ViewportBuilder::default().with_title("Discord Audio — J.A.I.").with_app_id("jarvis").with_inner_size([560.0, 350.0]).with_min_inner_size([460.0, 300.0]).with_decorations(false);
     if let Some(icon) = super::window_icon() {
         builder = builder.with_icon(Arc::new(icon));
     }

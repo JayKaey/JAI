@@ -1,14 +1,14 @@
-//! Away Mode: Jarvis minds the PC while Sir is out.
+//! Away Mode: JAI minds the PC while Sir is out.
 //!
 //! * On by voice ("I'm heading out", "ich bin weg", "away mode on") or by itself once the PC has
 //!   been locked for `away.auto_after_locked_mins` minutes.
 //! * While it is on, friends' Discord and WhatsApp messages are collected (a Discord DM gets the
-//!   answering machine once per person). Every alert Jarvis raises (a reminder, the Guardian, an
-//!   urgent WhatsApp, a finished download) also reaches Sir's phone as a DM from Jarvis's own
+//!   answering machine once per person). Every alert JAI raises (a reminder, the Guardian, an
+//!   urgent WhatsApp, a finished download) also reaches Sir's phone as a DM from JAI's own
 //!   Discord account, and so does a drive plugged into the PC or someone using it after Sir said
 //!   he was leaving (he can answer "lock my PC" right there).
 //! * Off when Sir is back: he says so, unlocks the PC after an automatic Away Mode, or uses it
-//!   after telling Jarvis he was leaving. "Welcome back, Sir", how long he was gone and what came
+//!   after telling JAI he was leaving. "Welcome back, Sir", how long he was gone and what came
 //!   in; "what did I miss?" goes through it.
 
 use crate::crash_guard::lock;
@@ -118,7 +118,7 @@ pub fn note_message(source: &str, from: &str, text: &str, place: &str) {
     s.messages.push(Note { at: Local::now(), source: source.into(), from: from.into(), text: short(text.trim(), 1000), place: place.into() });
 }
 
-/// Every alert Jarvis raises while Sir is away: kept for the digest and sent to his phone.
+/// Every alert JAI raises while Sir is away: kept for the digest and sent to his phone.
 pub fn relay_alert(message: &str) {
     {
         let mut away = lock(&AWAY);
@@ -306,7 +306,7 @@ fn returned(armed: Armed, locked: bool, idle_secs: Option<u64>, armed_for: Durat
     }
 }
 
-/// Watches the PC while Jarvis runs: the lock that starts an automatic Away Mode, drives plugged
+/// Watches the PC while JAI runs: the lock that starts an automatic Away Mode, drives plugged
 /// in, and Sir's return. Never in scripted sessions.
 pub fn start(tools: ToolContext, stop: CancellationToken) {
     if cfg!(test) || crate::platform::in_test_session() {
@@ -364,7 +364,7 @@ pub fn is_tool(name: &str) -> bool {
 pub fn definitions() -> Vec<Value> {
     vec![json!({"type": "function", "function": {
         "name": TOOL,
-        "description": "Away Mode: Jarvis minds the PC while Sir is out. on: Sir is leaving (friends' messages are collected and answered, alerts reach his phone as Discord DMs, drives plugged in and anyone using the PC are reported). off: Sir is back (welcome back and what came in). digest: what happened while he was away. status.",
+        "description": "Away Mode: JAI minds the PC while Sir is out. on: Sir is leaving (friends' messages are collected and answered, alerts reach his phone as Discord DMs, drives plugged in and anyone using the PC are reported). off: Sir is back (welcome back and what came in). digest: what happened while he was away. status.",
         "parameters": {"type": "object", "properties": {
             "action": {"type": "string", "enum": ["on", "off", "digest", "status"]},
             "reason": {"type": "string", "description": "on: where Sir is going (optional)"}
@@ -385,7 +385,7 @@ pub fn intent(s: &str) -> Option<Value> {
     }
     // Leaving and coming back only as the whole sentence: "I'm heading out in an hour, remind
     // me …" stays with the brain.
-    let bare = s.trim().trim_start_matches("jarvis ").trim_end_matches(" jarvis").trim_end_matches(" sir").trim();
+    let bare = s.trim().trim_start_matches("jai ").trim_end_matches(" jai").trim_end_matches(" sir").trim();
     const LEAVING: &[&str] = &[
         "im heading out", "i am heading out", "im heading out now", "im leaving", "i am leaving", "im leaving now", "im going out", "i am going out", "im off", "im off now", "im out",
         "im leaving the house", "mind the house", "watch the house", "keep an eye on things", "ich bin weg", "ich bin jetzt weg", "ich bin dann weg", "ich geh jetzt", "ich gehe jetzt", "ich gehe raus",
@@ -495,7 +495,7 @@ mod tests {
     #[test]
     fn leaving_and_coming_back_are_whole_sentences() {
         let action = |s: &str| intent(s).and_then(|v| v["action"].as_str().map(String::from));
-        for s in ["im heading out", "jarvis im leaving now", "ich bin weg", "ich gehe jetzt", "away mode on", "turn on away mode please"] {
+        for s in ["im heading out", "jai im leaving now", "ich bin weg", "ich gehe jetzt", "away mode on", "turn on away mode please"] {
             assert_eq!(action(s).as_deref(), Some("on"), "{s}");
         }
         for s in ["im back", "ich bin wieder da", "away mode off", "im home"] {

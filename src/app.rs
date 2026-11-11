@@ -4,7 +4,7 @@
 //!
 //! Every turn is tagged with its `InputSource`; Sir's `VoiceResponseMode` decides whether it is
 //! spoken. Voice turns are *stitched*: when Sir resumes speaking while his previous words are
-//! still being transcribed, or before Jarvis has acted or made a sound, the premature turn is
+//! still being transcribed, or before JAI has acted or made a sound, the premature turn is
 //! withdrawn and the new speech is appended to the earlier transcript as one request.
 
 use crate::brain::{Brain, BrainEvent, TurnLink, TurnRequest};
@@ -34,11 +34,11 @@ use tracing::{info, warn};
 const STITCH_TURN_MAX_AGE: Duration = Duration::from_secs(15);
 /// Words waiting for the rest of the sentence expire after this.
 const CARRY_MAX_AGE: Duration = Duration::from_secs(25);
-/// After a bare "Jarvis", how long Jarvis waits for the rest before he only listens on — with
+/// After a bare "JAI", how long JAI waits for the rest before he only listens on — with
 /// the 160 ms reflex cutoff this keeps the old ~0.7 s of room for a breath.
 const BARE_WAKE_GRACE: Duration = Duration::from_millis(560);
 
-/// The audio of a sentence Sir paused in ("Jarvis, … change the colour"): the next utterance is
+/// The audio of a sentence Sir paused in ("JAI, … change the colour"): the next utterance is
 /// transcribed together with it, so Whisper hears the whole sentence instead of fragments.
 struct CarryAudio {
     id: u64,
@@ -103,7 +103,7 @@ struct ActiveTurn {
     first_audio_logged: bool,
     /// Conversation window opens after this turn's audio finishes.
     opens_window: bool,
-    /// None for Jarvis' own lines (greeting, alerts).
+    /// None for JAI's own lines (greeting, alerts).
     source: Option<InputSource>,
     /// Sir's request of a voice turn (what gets stitched when he keeps talking).
     request: Option<String>,
@@ -143,13 +143,13 @@ struct Inner {
     utterance_order: tokio::sync::Mutex<()>,
     /// Utterances being transcribed right now.
     stt_pending: AtomicUsize,
-    /// How Sir last talked to Jarvis (voice macros run their steps the same way).
+    /// How Sir last talked to JAI (voice macros run their steps the same way).
     last_source: Mutex<InputSource>,
     /// A voice macro is running its steps.
     macro_running: AtomicBool,
     /// The last few things heard (addressed or not): the retroactive wake word stitches them.
     heard: Mutex<crate::ears::RollingSpeechTranscriptBuffer>,
-    /// The utterance being dispatched was spoken over Jarvis' own voice.
+    /// The utterance being dispatched was spoken over JAI's own voice.
     barge_in_turn: AtomicBool,
     /// How sure Whisper was of the utterance being dispatched (taken by `dispatch_turn`).
     heard_turn: Mutex<Option<crate::stt::HeardQuality>>,
@@ -158,7 +158,7 @@ struct Inner {
 }
 
 #[derive(Clone)]
-pub struct Jarvis {
+pub struct Jai {
     inner: Arc<Inner>,
 }
 
@@ -167,7 +167,7 @@ pub struct Channels {
     pub tts: mpsc::UnboundedReceiver<TtsEvent>,
 }
 
-/// What a burst of commands spoken over Jarvis left behind (`Jarvis::probe_barge_in`).
+/// What a burst of commands spoken over JAI left behind (`JAI::probe_barge_in`).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BargeIn {
     /// A turn was running (he was speaking) when the first command arrived.
@@ -185,7 +185,7 @@ pub struct BargeIn {
     pub speech_cut: bool,
 }
 
-/// What the dispatcher does with a request before any turn exists (`Jarvis::admit`).
+/// What the dispatcher does with a request before any turn exists (`JAI::admit`).
 #[derive(Debug, Clone, PartialEq)]
 pub enum Admission {
     /// The privacy lock and nothing else.
@@ -201,7 +201,7 @@ fn now_hms() -> String {
     chrono::Local::now().format("%H:%M:%S").to_string()
 }
 
-impl Jarvis {
+impl Jai {
     pub fn start(
         config: ConfigStore,
         controls: Arc<AudioControls>,
@@ -265,7 +265,7 @@ impl Jarvis {
         });
         // Sir's Discord call (off until he asks): Whisper, the voice and the tools for the bridge.
         crate::discord_bridge::install(app.inner.stt.clone(), app.inner.tts.clone(), app.tools().clone());
-        // Jarvis's own Discord account (connects once Sir has pasted its token).
+        // JAI's own Discord account (connects once Sir has pasted its token).
         crate::discord_bot::start(app.clone(), app.inner.stt.clone(), app.inner.tts.clone(), app.inner.shutdown.clone());
         app
     }
@@ -330,7 +330,7 @@ impl Jarvis {
         (recorded, started.elapsed())
     }
 
-    /// The barge-in pass of the exhaustive verifier: Jarvis starts saying `line`, then `commands`
+    /// The barge-in pass of the exhaustive verifier: JAI starts saying `line`, then `commands`
     /// arrive `gap` apart through the real dispatcher (each cancels the turn before it). What
     /// had happened once everything settled, or after `limit`. Meant for a process in which
     /// every request is a dry run (`live_self_tester::set_everything_dry`).
@@ -363,7 +363,7 @@ impl Jarvis {
     }
 
     /// What the speech recogniser makes of `pcm` (16 kHz mono). The exhaustive verifier hands it
-    /// Jarvis' own sentences as samples (no speaker, no microphone) to check that his voice is
+    /// JAI's own sentences as samples (no speaker, no microphone) to check that his voice is
     /// understood. Nothing else happens with the words.
     pub async fn hear(&self, pcm: Vec<f32>) -> Result<String, String> {
         let voiced_ms = (pcm.len() as u64 * 1000 / 16_000) as u32;
@@ -374,7 +374,6 @@ impl Jarvis {
     /// his name is not in it (the exhaustive verifier's spoken commands).
     pub fn wake_command(&self, heard: &str) -> Option<String> {
         let wake = self.inner.wake.read().unwrap_or_else(|e| e.into_inner()).evaluate(heard);
-        let wake = if wake.matched { wake } else { name_by_command(heard).unwrap_or(wake) };
         wake.matched.then_some(wake.command)
     }
 
@@ -388,7 +387,7 @@ impl Jarvis {
     }
 
     /// Something Sir must hear about (reminder, finished timer, overheating GPU). Spoken right
-    /// away when Jarvis is idle, otherwise as soon as the current answer is finished — an alert
+    /// away when JAI is idle, otherwise as soon as the current answer is finished — an alert
     /// never cuts a reply short.
     /// A notice in the HUD (toast).
     pub fn notice(&self, message: String) {
@@ -486,7 +485,7 @@ impl Jarvis {
         }
     }
 
-    /// Tells the HUD that Jarvis is going offline.
+    /// Tells the HUD that JAI is going offline.
     pub fn announce_shutdown(&self) {
         self.emit(HudEvent::Shutdown);
     }
@@ -538,11 +537,11 @@ impl Jarvis {
         }
         let window = self.inner.controls.window_remaining_ms();
         if lifecycle::is_sleeping() {
-            self.set_state("idle", "Sleeping — say \"Jarvis, wake up\"");
+            self.set_state("idle", "Sleeping — say \"JAI, wake up\"");
         } else if window > 0 {
             self.set_state("listening", "Conversation window open — speak without the wake word");
         } else if self.inner.controls.wake_word_required.load(Ordering::Relaxed) {
-            self.set_state("idle", "Awaiting \"Jarvis\"");
+            self.set_state("idle", "Awaiting \"JAI\"");
         } else {
             self.set_state("idle", "Hands-free — listening for speech");
         }
@@ -686,7 +685,7 @@ impl Jarvis {
             }
         });
 
-        // The Guardian: every 10 s Jarvis looks for overheating, full VRAM / memory, a pegged CPU
+        // The Guardian: every 10 s JAI looks for overheating, full VRAM / memory, a pegged CPU
         // or a nearly full drive, names the culprit and offers help ("yes" accepts the offer).
         let app = self.clone();
         tokio::spawn(async move {
@@ -775,7 +774,7 @@ impl Jarvis {
                 // Sir is still finishing his thought: pull back the turn his first words started.
                 let withdrawn = self.withdraw_unanswered_turn();
                 if barge_in && !withdrawn {
-                    info!("[TURN] Barge-in: user speaking over Jarvis");
+                    info!("[TURN] Barge-in: user speaking over JAI");
                     self.interrupt(if ptt { "push-to-talk" } else { "barge-in" });
                     self.emit(HudEvent::VadEvent { event: "barge_in".into(), detail: String::new() });
                 }
@@ -825,7 +824,7 @@ impl Jarvis {
     }
 
     /// A pause that may be the end of the utterance: Whisper starts on the words so far, and what
-    /// they ask for (when they carry Jarvis' name) is fetched ahead. Nothing is carried out here.
+    /// they ask for (when they carry JAI's name) is fetched ahead. Nothing is carried out here.
     fn start_head_start(&self, pcm: Vec<f32>, speech_ms: u32) {
         self.call_off_head_start();
         // Not while Whisper sleeps, and not for a piece that will be heard together with audio
@@ -1143,7 +1142,7 @@ impl Jarvis {
             self.keep_audio_for_stitching(pcm, speech_ms, u.barge_in, u.ptt);
             return;
         }
-        // Zero-VRAM standby with voice wake off: only the hotkey, the standby button or push-to-talk wake Jarvis.
+        // Zero-VRAM standby with voice wake off: only the hotkey, the standby button or push-to-talk wake JAI.
         if !u.ptt && !crate::vram_guard::voice_wake_allowed() {
             tracing::debug!("[VRAM] Standby: {speech_ms} ms of speech not transcribed (voice wake is off).");
             self.rest_state();
@@ -1174,7 +1173,7 @@ impl Jarvis {
             }
             None => None,
         };
-        let transcript = match heard_ahead {
+        let mut transcript = match heard_ahead {
             Some(t) => t,
             None => match self.inner.stt.transcribe(pcm, speech_ms).await {
                 Ok(t) => t,
@@ -1186,8 +1185,10 @@ impl Jarvis {
                 }
             },
         };
+        // His name as the fixed phrases know it: "Jay, wake up" / "wake up, J.A.I." → "JAI, wake up".
+        transcript.text = crate::wake::canon(&transcript.text);
         if transcript.text.is_empty() {
-            // A first piece too short or unclear on its own ("Jarvis" alone): with the rest of
+            // A first piece too short or unclear on its own ("JAI" alone): with the rest of
             // the sentence it may well be words.
             if let Some(pcm) = kept.filter(|_| stitching_enabled && superseded()) {
                 info!("[STITCH] Nothing clear in {speech_ms} ms on its own; hearing it again with the rest");
@@ -1199,7 +1200,7 @@ impl Jarvis {
         }
 
         // Sir's privacy lock ("stop listening"): nothing gets through — no command, no question,
-        // not even "Jarvis" — but "you can listen again". Nor do words that were recorded just
+        // not even "JAI" — but "you can listen again". Nor do words that were recorded just
         // before the microphone was switched off. The words are not logged.
         match crate::listening_lock::verdict(&transcript.text, u.ptt || self.inner.controls.mic_enabled.load(Ordering::Acquire)) {
             crate::listening_lock::Verdict::Heard => {}
@@ -1234,15 +1235,9 @@ impl Jarvis {
         let wake_required = c.wake_word_required.load(Ordering::Relaxed);
         let stitching = self.has_carry() || joined;
         let in_window = u.in_window || stitching || c.window_remaining_ms() > 0 || c.turn_active.load(Ordering::Acquire);
-        let mut wake = self.inner.wake.read().unwrap_or_else(|e| e.into_inner()).evaluate(&transcript.text);
-        if !wake.matched {
-            if let Some(named) = name_by_command(&transcript.text) {
-                info!("[WAKE] '{}' taken for his name: '{}' is one of his commands", named.word, named.command);
-                wake = named;
-            }
-        }
+        let wake = self.inner.wake.read().unwrap_or_else(|e| e.into_inner()).evaluate(&transcript.text);
         // Who is Sir talking to? Push-to-talk, a barge-in and the welcome phrase are always for
-        // Jarvis; everything else goes through the four-layer addressee detector.
+        // JAI; everything else goes through the four-layer addressee detector.
         let addressee = if homecoming || u.ptt || u.barge_in {
             crate::ears::Addressee::WakeWord
         } else if !wake_required && !self.inner.config.read(|c| c.addressee_detection) {
@@ -1301,7 +1296,7 @@ impl Jarvis {
         }
         if !addressee.accepted() {
             self.inner.heard.lock().unwrap_or_else(|e| e.into_inner()).push(&transcript.text, true);
-            info!("[WAKE] Not addressed to Jarvis ({addressee:?}, wake score {:.2}): '{}'", wake.score, transcript.text);
+            info!("[WAKE] Not addressed to JAI ({addressee:?}, wake score {:.2}): '{}'", wake.score, transcript.text);
             self.emit(HudEvent::Transcript {
                 text: transcript.text,
                 language: transcript.language,
@@ -1319,7 +1314,7 @@ impl Jarvis {
         if wake.matched {
             info!("[WAKE] '{}' (score {:.2}) → command '{}'", wake.word, wake.score, wake.command);
         }
-        // A bare "Jarvis" and a breath: since a short burst ends after 160-220 ms of silence, the
+        // A bare "JAI" and a breath: since a short burst ends after 160-220 ms of silence, the
         // rest of the sentence often starts a moment later. Wait for it before listening on or
         // acting on words heard earlier (the retroactive wake word).
         if wake.matched && !homecoming && stitching_enabled && crate::ears::is_retro_reference(&wake.command) {
@@ -1346,7 +1341,7 @@ impl Jarvis {
             }
         }
         let mut heard = if wake.matched && !homecoming { wake.command.clone() } else { transcript.text.clone() };
-        // The retroactive wake word: "… turn the music down. — Jarvis, do that." acts on the
+        // The retroactive wake word: "… turn the music down. — JAI, do that." acts on the
         // words spoken just before the name (ignored then, at most 12 s ago).
         if wake.matched && !homecoming && crate::ears::is_retro_reference(&heard) {
             if let Some(earlier) = self.inner.heard.lock().unwrap_or_else(|e| e.into_inner()).take_referenced() {
@@ -1357,7 +1352,7 @@ impl Jarvis {
         self.inner.heard.lock().unwrap_or_else(|e| e.into_inner()).push(&transcript.text, false);
         // The rest of an earlier, unfinished sentence: one request — unless the new words are a
         // command of their own that the held ones would only spoil (2026-11-08: "told me the
-        // world", held after a slow turn, made "Jarvis, show me the world" 13 s later into
+        // world", held after a slow turn, made "JAI, show me the world" 13 s later into
         // "told me the world show me the world").
         let carried = if heard.trim().is_empty() { None } else { self.take_carry() };
         let named_first = wake.matched && !homecoming && wake_leads(&transcript.text, &wake.word);
@@ -1376,8 +1371,8 @@ impl Jarvis {
             info!("[STITCH] Joined: '{command}'");
         }
         if command.trim().is_empty() {
-            // A bare "Jarvis" (or noise that sounded like it): the orb listens; neither a
-            // "Jarvis" line nor a "Yes, Sir?" reply lands in the chat.
+            // A bare "JAI" (or noise that sounded like it): the orb listens; neither a
+            // "JAI" line nor a "Yes, Sir?" reply lands in the chat.
             self.wake_listening("Bare wake word");
             return;
         }
@@ -1468,6 +1463,8 @@ impl Jarvis {
 
     /// Starts a brain turn, superseding any running one.
     pub fn dispatch_turn(&self, text: String, started: Instant, stt_ms: u64, source: InputSource) {
+        // His name in one spelling, typed or spoken ("J.A.I., open Spotify", "jay open spotify").
+        let text = crate::wake::canon(&text);
         // The privacy lock: answered at once — before music or any other parser, and without the
         // model. ("You can listen again" while he is listening anyway is an ordinary sentence.)
         let lifts_nothing = |cmd: crate::listening_lock::LockCommand| cmd == crate::listening_lock::LockCommand::Resume && !crate::listening_lock::is_locked();
@@ -1499,10 +1496,10 @@ impl Jarvis {
             }
             _ => text,
         };
-        // A turn for Jarvis: out of the zero-VRAM standby, and the idle countdown starts over.
+        // A turn for JAI: out of the zero-VRAM standby, and the idle countdown starts over.
         crate::vram_guard::touch();
-        // "Stop" / "pause" (also "stopp", "halt", "pause music", "Jarvis, stop"): whatever is
-        // playing stops right now — every playing media session and Jarvis' own voice (stopped
+        // "Stop" / "pause" (also "stopp", "halt", "pause music", "JAI, stop"): whatever is
+        // playing stops right now — every playing media session and JAI's own voice (stopped
         // just below) — before the turn even queues. The brain's silent command reports the
         // same run (`stop_all_active_media` shares one result per burst).
         if crate::intents::is_media_stop(&text) {
@@ -1560,7 +1557,7 @@ impl Jarvis {
 
     /// The watchdog after a brain turn: if the HUD still says "thinking" long after the brain
     /// finished (no audio ever started, so no `PlaybackFinished` will come), the turn is closed and
-    /// Jarvis rests — he never stays stuck in the thinking state.
+    /// JAI rests — he never stays stuck in the thinking state.
     async fn settle_turn(&self, id: String) {
         tokio::time::sleep(Duration::from_secs(12)).await;
         let stuck = self.hud_state().state == "thinking" && !self.inner.controls.speaking_or_tail() && self.inner.stt_pending.load(Ordering::Acquire) == 0;
@@ -1600,13 +1597,13 @@ impl Jarvis {
         self.inner.recent_turns.lock().unwrap_or_else(|e| e.into_inner()).iter().cloned().collect()
     }
 
-    /// A bare "Jarvis" or a double clap: Jarvis listens for the request — the orb's cyan
+    /// A bare "JAI" or a double clap: JAI listens for the request — the orb's cyan
     /// listening ring and the follow-up window open, with a soft chime when his reply mode lets
     /// him make a sound — without a "Yes, Sir?" bubble in the chat (his own echo and room noise
     /// used to fill it with them, one after another).
     fn wake_listening(&self, why: &str) {
         let secs = self.inner.config.read(|c| c.active_conversation_window_secs).max(5);
-        // A second clap or "Jarvis" while he is already listening only extends the window.
+        // A second clap or "JAI" while he is already listening only extends the window.
         let already_listening = self.inner.controls.window_remaining_ms() > 0;
         self.inner.controls.open_window(secs);
         let chime = !already_listening
@@ -1689,7 +1686,7 @@ impl Jarvis {
             TtsEvent::PlaybackStarted { generation, synth_ms } => {
                 let metrics = {
                     let mut turn = self.turn_lock();
-                    // Sir has heard Jarvis answer: the turn can no longer be withdrawn.
+                    // Sir has heard JAI answer: the turn can no longer be withdrawn.
                     if let Some(t) = turn.as_ref().filter(|t| t.generation == generation) {
                         t.link.commit();
                     }
@@ -1751,7 +1748,7 @@ impl Jarvis {
             }
             BrainEvent::Done { message_id, text, latency_ms, model, interrupted } => {
                 info!("[TURN] Done in {latency_ms} ms via {model}{}", if interrupted { " (interrupted)" } else { "" });
-                // Jarvis asked something (even in writing): Sir may answer without the wake word.
+                // JAI asked something (even in writing): Sir may answer without the wake word.
                 // A spoken reply re-opens the window once its audio has finished.
                 if !interrupted && text.trim_end().ends_with('?') && !self.inner.quitting.load(Ordering::Acquire) {
                     let secs = self.inner.config.read(|c| c.active_conversation_window_secs);
@@ -1784,7 +1781,7 @@ impl Jarvis {
             // The HUD was told when the turn was withdrawn (`withdraw_unanswered_turn`).
             BrainEvent::Retracted { message_id } => tracing::debug!("[STITCH] Turn {message_id} unwound"),
             BrainEvent::PowerCard { id, action, label, status } => {
-                // Thirty seconds without an answer: the card says so and Jarvis tells Sir.
+                // Thirty seconds without an answer: the card says so and JAI tells Sir.
                 if status == "expired" {
                     let line = if action == "restart" { "Restart aborted, Sir." } else { "Shutdown aborted, Sir." };
                     let source = *self.inner.last_source.lock().unwrap_or_else(|e| e.into_inner());
@@ -1795,7 +1792,7 @@ impl Jarvis {
         }
     }
 
-    /// Quits once the goodbye has been spoken ("Jarvis, shut down", `shutdown_jarvis`).
+    /// Quits once the goodbye has been spoken ("JAI, shut down", `shutdown_jarvis`).
     fn shutdown_after_reply(&self) {
         if self.inner.quitting.swap(true, Ordering::AcqRel) {
             return;
@@ -1874,7 +1871,7 @@ impl Jarvis {
     }
 
     /// A quick-action button: `jarvis: <command>`, `shell: <cmd>`, `skill: <name>`, `app: <name>`
-    /// or `url: <address>` (no prefix = a Jarvis command).
+    /// or `url: <address>` (no prefix = a JAI command).
     async fn run_widget_action(&self, action: &str) {
         let (kind, value) = match action.split_once(':') {
             Some((k, v)) if matches!(k.trim().to_lowercase().as_str(), "jarvis" | "shell" | "skill" | "app" | "url" | "https" | "http") => {
@@ -2151,7 +2148,7 @@ impl Jarvis {
     }
 }
 
-/// For the addressee detector: (one of Jarvis' windows is in front, a game / voice chat /
+/// For the addressee detector: (one of JAI's windows is in front, a game / voice chat /
 /// full-screen app is in front).
 #[cfg(windows)]
 async fn foreground_context() -> (bool, bool) {
@@ -2169,24 +2166,7 @@ async fn foreground_context() -> (bool, bool) {
     (false, false)
 }
 
-/// "Java stops spanning", "Java system status": the recogniser's short sound-alike of his name
-/// at the start (four letters are too close to chance for the wake word alone) counts when what
-/// follows is one of his commands (2026-11-07 verifier, an American stand-in voice). "Java
-/// Edition is better" stays talk.
-fn name_by_command(heard: &str) -> Option<crate::wake::WakeMatch> {
-    let (first, rest) = heard.trim().split_once(char::is_whitespace)?;
-    let name = first.trim_matches(|c: char| !c.is_alphanumeric());
-    if !name.eq_ignore_ascii_case("java") {
-        return None;
-    }
-    let rest = rest.trim_start_matches(|c: char| c.is_whitespace() || matches!(c, ',' | '.' | ':' | ';' | '-' | '!'));
-    let rest = rest.trim_end_matches(|c: char| c.is_whitespace() || c == '.' || c == '!');
-    let command = crate::typos::imperative_after_name(rest);
-    crate::compound_planner::resolve_one(&command, &crate::intent_engine::ReflexContext::live())?;
-    Some(crate::wake::WakeMatch { matched: true, score: 0.8, word: name.to_string(), command })
-}
-
-/// His name opens the sentence ("Jarvis, show me the world", "Hey Jarvis, …"): the words are
+/// His name opens the sentence ("JAI, show me the world", "Hey JAI, …"): the words are
 /// addressed afresh, not the end of something said before.
 fn wake_leads(text: &str, word: &str) -> bool {
     let word = word.trim().trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase();
@@ -2208,7 +2188,7 @@ fn supersedes(earlier: &str, heard: &str, named_first: bool, routes: &dyn Fn(&st
     (named_first && words >= 2) || !routes(&format!("{} {heard}", earlier.trim()))
 }
 
-/// Lowers the system volume (the music in Sir's headphones) to a third and raises Jarvis' own
+/// Lowers the system volume (the music in Sir's headphones) to a third and raises JAI's own
 /// voice, so the knock alert is heard; the returned future puts both back.
 async fn duck_audio(voice_volume: &Arc<std::sync::atomic::AtomicU8>) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
     let voice = Arc::clone(voice_volume);
@@ -2245,18 +2225,6 @@ async fn duck_audio(voice_volume: &Arc<std::sync::atomic::AtomicU8>) -> std::pin
 mod tests {
     use super::*;
 
-    /// Repro (verifier matrix F, 2026-11-07): "his name was not heard in 'Java stops spanning.'".
-    #[test]
-    fn a_short_sound_alike_of_his_name_counts_before_one_of_his_commands() {
-        let command = |heard: &str| name_by_command(heard).map(|wake| wake.command);
-        assert_eq!(command("Java stops spanning."), Some("stop spanning".to_string()));
-        assert_eq!(command("Java system status."), Some("system status".to_string()));
-        assert_eq!(command("Java stops panning."), Some("stop panning".to_string()));
-        for talk in ["Java Edition is better", "Java is a language", "Javascript open the mixer", "Jarvis open the mixer"] {
-            assert_eq!(command(talk), None, "{talk}");
-        }
-    }
-
     #[test]
     fn stitched_audio_keeps_order_gap_and_the_newest_28_seconds() {
         let joined = join_audio(vec![1.0; 100], vec![2.0; 50]);
@@ -2267,13 +2235,13 @@ mod tests {
         assert_eq!(long[long.len() - 1], 2.0, "the newest audio stays");
     }
 
-    /// Repro (jarvis.log, 2026-11-08 23:3x): "told me the world" was held, and "Jarvis show me the
+    /// Repro (jarvis.log, 2026-11-08 23:3x): "told me the world" was held, and "JAI show me the
     /// world" became "[STITCH] Joined: 'told me the world show me the world'".
     #[test]
     fn a_fresh_command_with_his_name_drops_a_held_fragment() {
-        assert!(wake_leads("Jarvis show me the world.", "Jarvis"));
-        assert!(wake_leads("Hey, Jarvis, show me the world.", "Jarvis"));
-        assert!(!wake_leads("Show me the world, Jarvis.", "Jarvis"));
+        assert!(wake_leads("JAI show me the world.", "JAI"));
+        assert!(wake_leads("Hey, JAI, show me the world.", "JAI"));
+        assert!(!wake_leads("Show me the world, JAI.", "JAI"));
         let routes = |text: &str| matches!(text, "show me the world" | "open the spotify" | "close it");
         assert!(supersedes("told me the world", "show me the world", true, &routes));
         // Without the name, the newer words still win when the joined sentence routes nowhere.

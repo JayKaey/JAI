@@ -1,4 +1,4 @@
-//! The HUD's look and layout, which Jarvis changes himself when Sir asks ("make the interface
+//! The HUD's look and layout, which JAI changes himself when Sir asks ("make the interface
 //! red", "hide the system panel", "zoom in", "stay on top", "go minimal").
 //!
 //! The settings live in `jarvis_config.json` (`interface`) and the native window re-applies
@@ -10,7 +10,7 @@ use crate::tools::{bool_arg, str_arg};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-pub const DEFAULT_TITLE: &str = "J.A.R.V.I.S.";
+pub const DEFAULT_TITLE: &str = "J.A.I.";
 const MIN_OPACITY: u8 = 15;
 /// The darkest background "darker" goes to (deep obsidian).
 pub const DEEPEST_BACKGROUND: [u8; 3] = [3, 5, 9];
@@ -106,7 +106,7 @@ pub enum HudPanel {
     Skills,
     Tools,
     Brain,
-    /// Jarvis' dynamic widgets (gauges, charts, timers, notes …).
+    /// JAI's dynamic widgets (gauges, charts, timers, notes …).
     Widgets,
     /// The quick-action pills above the conversation ("Daddy's home", "Add calendar event" …).
     Pills,
@@ -259,6 +259,10 @@ pub struct InterfaceSettings {
     /// No title bar: the header (or the reactor) moves the window.
     pub frameless: bool,
     pub animations: bool,
+    /// The display's finish: fine scan lines and film grain over the whole HUD, so it reads as
+    /// light on glass (Sir, 2026-11-11: "more realistic, a bit more rough"). "Turn off the scan
+    /// lines" / the tool's `display_finish`. Never in OLED mode (true black stays black).
+    pub display_finish: bool,
     /// Name shown in the header.
     pub title: String,
     /// Minimal zen mode: no sidebars, widgets or pills — only the 3D orb and a clean chat.
@@ -294,7 +298,7 @@ pub struct InterfaceSettings {
     /// videos.
     pub status_pill: bool,
     /// Sir's voice as a ring of ticks round the emblem while he speaks, as on the reference orb
-    /// (the emblem's own rings follow only Jarvis' voice).
+    /// (the emblem's own rings follow only JAI's voice).
     pub voice_rim: bool,
     /// The board's sound cues (a block materialising, the spotlight, a mode change, an alert).
     pub sound_cues: bool,
@@ -329,6 +333,7 @@ impl Default for InterfaceSettings {
             fullscreen: true,
             frameless: true,
             animations: true,
+            display_finish: true,
             title: DEFAULT_TITLE.to_string(),
             // The clean two-zone studio layout: the orb and the conversation; every technical
             // panel lives in the Settings drawer.
@@ -360,7 +365,7 @@ impl Default for InterfaceSettings {
 impl InterfaceSettings {
     /// One board across every monitor and the fullscreen board on one monitor exclude each
     /// other: whichever of the two was just switched on (compared with `before`) wins, so F11,
-    /// the SCREENS menu, a settings checkbox and Jarvis' own tools can never leave both set.
+    /// the SCREENS menu, a settings checkbox and JAI's own tools can never leave both set.
     pub fn reconcile(&mut self, before: &InterfaceSettings) {
         if self.span_all_monitors && self.fullscreen {
             if before.span_all_monitors && !before.fullscreen {
@@ -409,6 +414,23 @@ pub fn with_darkness(current: [u8; 3], darkness: f32) -> [u8; 3] {
 }
 
 impl InterfaceSettings {
+    /// v24: the stock title follows his new name, and the stock look (or the yellow accent the
+    /// 2026-11-09 helmet mishap left on the gold palette) becomes the new default.
+    pub fn renamed_v24(&mut self) {
+        if matches!(self.title.trim(), "J.A.R.V.I.S." | "J.A.R.V.I.S" | "JARVIS" | "Jarvis") {
+            self.title = DEFAULT_TITLE.to_string();
+        }
+        let defaults = Self::default();
+        let stock = self.theme == "stark" && self.hud_palette == "arc_cyan";
+        let mishap = self.theme == "custom" && self.accent.eq_ignore_ascii_case("#ffe14d") && self.hud_palette == "stark_gold";
+        if stock || mishap {
+            self.theme = defaults.theme;
+            self.accent = defaults.accent;
+            self.background = defaults.background;
+            self.hud_palette = defaults.hud_palette;
+        }
+    }
+
     pub fn sanitize(&mut self) {
         let defaults = Self::default();
         let known = crate::theme_engine::preset(&self.hud_palette).is_some()
@@ -577,7 +599,7 @@ const MAX_FONT_SCALE: f32 = 1.6;
 /// Relative step for "make the orb bigger" / "bigger text".
 const LAYOUT_STEP: f32 = 1.2;
 
-/// Every panel and element of the HUD that Jarvis (and Sir, through the HUD's own controls) can
+/// Every panel and element of the HUD that JAI (and Sir, through the HUD's own controls) can
 /// change while it runs. The panel switches and scales persist in `interface`; the window size
 /// is whatever the open window measures. The HUD publishes the live state each frame
 /// ([`publish_layout`]), so `control_jarvis_interface` reports what is really on screen.
@@ -1040,13 +1062,22 @@ pub struct Theme {
 
 pub const THEMES: &[Theme] = &[
     Theme {
+        name: "jai",
+        display: "JAI Gold",
+        accent: "#ffd400",
+        // Warm obsidian glass.
+        background: "#0a0804",
+        hint: "yellow, the default",
+        aliases: &["jai", "jai gold", "jai yellow", "default", "standard", "classic", "original", "normal"],
+    },
+    Theme {
         name: "stark",
         display: "Arc Cyan",
         accent: "#00e5ff",
         // Deep obsidian glass.
         background: "#070b12",
-        hint: "cyan, the default",
-        aliases: &["jarvis", "default", "standard", "classic", "original", "arc reactor", "stark industries", "normal", "stark cyan", "cyan", "arc cyan", "arc_cyan"],
+        hint: "cyan",
+        aliases: &["arc reactor", "stark industries", "stark cyan", "cyan", "arc cyan", "arc_cyan"],
     },
     Theme {
         name: "mark42",
@@ -1312,7 +1343,7 @@ pub fn parse_background(input: &str) -> Option<[u8; 3]> {
     Some(if luminance(rgb) > 0.62 { LIGHTEST_BACKGROUND } else { dark_glass(scale_rgb(rgb, 0.14)) })
 }
 
-/// The colour as Jarvis says it: always English ("dunkelblau" → "dark blue").
+/// The colour as JAI says it: always English ("dunkelblau" → "dark blue").
 fn colour_word(input: &str) -> String {
     if parse_hex(input).is_some() || parse_rgb_triplet(input).is_some() {
         return "your custom colour".to_string();
@@ -1707,6 +1738,7 @@ pub fn configure(current: &InterfaceSettings, args: &Value) -> Result<Configured
             &mut s.frameless,
         ),
         ("animations", bool_arg(args, "animations"), &mut s.animations),
+        ("display finish", bool_arg(args, "display_finish").or_else(|| bool_arg(args, "scan_lines")).or_else(|| bool_arg(args, "grain")), &mut s.display_finish),
         ("sound cues", bool_arg(args, "sound_cues"), &mut s.sound_cues),
     ];
     for (label, value, field) in flags {
@@ -2032,6 +2064,9 @@ pub fn spoken_ack(args: &Value, now: &InterfaceSettings) -> String {
     }
     if let Some(on) = flag("animations") {
         return if on { "Done, Sir. Animations back on.".into() } else { "Done, Sir. Animations off.".into() };
+    }
+    if let Some(on) = flag("display_finish") {
+        return if on { "Done, Sir. Scan lines and grain are back.".into() } else { "Done, Sir. A clean display.".into() };
     }
     if let Some(on) = flag("sound_cues") {
         return if on { "Done, Sir. Sound cues back on.".into() } else { "Done, Sir. The board stays quiet.".into() };
@@ -2667,7 +2702,7 @@ pub fn tool_definition() -> Value {
     let panels: Vec<&str> = HudPanel::ALL.iter().map(|p| p.id()).collect();
     json!({"type": "function", "function": {
         "name": "configure_interface",
-        "description": "Restyle or rearrange YOUR OWN HUD (the J.A.R.V.I.S. window) when Sir asks: colours, theme, zoom, transparency, layout, panels, always on top, fullscreen, title bar, name, or show/hide/move/resize the window. Pass only what changes.",
+        "description": "Restyle or rearrange YOUR OWN HUD (the J.A.I. window) when Sir asks: colours, theme, zoom, transparency, layout, panels, always on top, fullscreen, title bar, name, or show/hide/move/resize the window. Pass only what changes.",
         "parameters": {"type": "object", "properties": {
             "ui_paradigm": {"type": "string", "enum": ["modern_oled_minimal", "classic_scifi_hud"], "description": "OLED minimal (default) or classic sci-fi HUD."},
             "accent_preset": {"type": "string", "enum": ["Ice White", "Electric Blue", "Stark Gold", "Emerald", "Violet", "Crimson", "Sunset Orange"]},
@@ -2683,7 +2718,7 @@ pub fn tool_definition() -> Value {
             "fullscreen": {"type": "boolean"},
             "core_view": {"type": "boolean", "description": "The 3D sphere of your source modules ('show me your core')."},
             "dock_windows": {"type": "boolean", "description": "Bring every detached view back inside the HUD."},
-            "hud_palette": {"type": "string", "enum": ["rose_crimson", "arc_cyan", "stark_gold", "emerald_matrix", "ultraviolet", "crimson_overdrive", "solar_orange", "ice_monochrome"], "description": "The whole HUD's colour theme; a plain colour is accent_color."},
+            "hud_palette": {"type": "string", "enum": ["jai_gold", "rose_crimson", "arc_cyan", "stark_gold", "emerald_matrix", "ultraviolet", "crimson_overdrive", "solar_orange", "ice_monochrome"], "description": "The whole HUD's colour theme; a plain colour is accent_color."},
             "detach_window": {"type": "string", "description": "Pop a view out into its own OS window."},
             "create_theme": {"type": "object", "description": "Design, save and apply a named theme ('a theme called Cyberpunk with neon yellow borders').", "properties": {"name": {"type": "string"}, "description": {"type": "string", "description": "Sir's colours per role and/or a mood."}, "core_primary": {"type": "string"}, "core_secondary": {"type": "string"}, "window_border": {"type": "string"}, "background_tint": {"type": "string"}}},
             "save_theme": {"type": "string", "description": "Save the current look under this name."},
@@ -2700,6 +2735,7 @@ pub fn tool_definition() -> Value {
             "text_console": {"type": "boolean", "description": "The slide-out text console."},
             "frameless": {"type": "boolean", "description": "true hides the title bar."},
             "animations": {"type": "boolean"},
+            "display_finish": {"type": "boolean", "description": "scan lines and film grain over the HUD"},
             "sound_cues": {"type": "boolean", "description": "The board's sound cues."},
             "title": {"type": "string", "description": "Name in the HUD header."},
             "window": {"type": "string", "enum": ["show", "hide", "minimize", "maximize", "restore", "center", "bigger", "smaller", "top_left", "top_right", "bottom_left", "bottom_right", "left", "right"]},
@@ -2769,7 +2805,7 @@ mod tests {
         assert_eq!((s.accent.as_str(), s.background.as_str()), ("#ffc233", "#170507"));
         // "Make the interface black" darkens the background instead of hiding the accent.
         let s = apply(json!({"accent_color": "black"}));
-        assert_eq!((s.accent.as_str(), s.background.as_str()), ("#00e5ff", "#000000"));
+        assert_eq!((s.accent.as_str(), s.background.as_str()), ("#ffd400", "#000000"));
         let s = apply(json!({"background_color": "red"}));
         assert_eq!(s.background, hex(scale_rgb([255, 59, 59], 0.14)));
         let done = configure(&InterfaceSettings::default(), &json!({"accent_color": "red", "opacity": "nonsense"})).unwrap();

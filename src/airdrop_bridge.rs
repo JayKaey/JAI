@@ -65,7 +65,7 @@ impl AirDrop {
         item
     }
 
-    /// A file the phone may download (only ones Jarvis offered).
+    /// A file the phone may download (only ones JAI offered).
     pub fn shared(&self, id: u64) -> Option<Shared> {
         self.state.lock().unwrap_or_else(|e| e.into_inner()).shared.iter().find(|s| s.id == id).cloned()
     }

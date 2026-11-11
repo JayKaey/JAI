@@ -662,7 +662,7 @@ pub fn is_pim_tool(name: &str) -> bool {
     )
 }
 
-/// Tools that talk to the network (Jarvis acknowledges before they run).
+/// Tools that talk to the network (JAI acknowledges before they run).
 pub fn is_slow(name: &str) -> bool {
     is_pim_tool(name) && name != "configure_productivity_service"
 }
@@ -860,7 +860,7 @@ pub async fn run_tool(tools: &ToolContext, name: &str, args: &Value) -> Result<S
                 }
                 text
             };
-            // The sentence Jarvis says when he reads the calendar himself.
+            // The sentence JAI says when he reads the calendar himself.
             let spoken = if events.is_empty() {
                 format!("Your calendar is clear {}, Sir.", if range.label == "today" || range.label == "tomorrow" { range.label.clone() } else { format!("for {}", range.label) })
             } else {
@@ -1064,7 +1064,7 @@ async fn configure(pim: &Pim, args: &Value) -> Result<String, String> {
                     pim.config().vault().key_store()
                 ))
             } else {
-                Ok(format!("Jarvis is running without his HUD, so the hub cannot open. Status:\n{}", status_text(pim, &targets)))
+                Ok(format!("JAI is running without his HUD, so the hub cannot open. Status:\n{}", status_text(pim, &targets)))
             }
         }
         "status" | "check" | "list" => Ok(status_text(pim, &targets)),

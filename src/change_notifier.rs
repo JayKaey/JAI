@@ -3,7 +3,7 @@
 //! `watch_state` (`jarvis_memory.db`), light up the service's node in the HUD's core on every
 //! check, and tell Sir proactively the moment a class is cancelled or moved, or something new is
 //! posted. The first check only records the baseline. Watchers are saved in the PIM settings and
-//! restart with Jarvis.
+//! restart with JAI.
 
 use crate::pim::{self, Pim};
 use crate::pim_config::{self, WatcherSpec, LMS, WEBUNTIS};

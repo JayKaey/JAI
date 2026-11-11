@@ -44,7 +44,7 @@ pub(crate) struct VirtualHud {
 }
 
 impl VirtualHud {
-    fn new(app: Jarvis, rt: Handle, size: Vec2) -> Self {
+    fn new(app: Jai, rt: Handle, size: Vec2) -> Self {
         let ctx = egui::Context::default();
         install_fonts(&ctx);
         // Its blocks are measured where they rest (the verifier's own row plays the entrance and
@@ -312,7 +312,7 @@ impl VirtualHud {
 }
 
 /// Starts the offscreen HUD on its own thread (once). `size`: its resolution in points.
-pub(crate) fn start(app: Jarvis, rt: Handle, size: Vec2) {
+pub(crate) fn start(app: Jai, rt: Handle, size: Vec2) {
     let mut jobs = lock(&JOBS);
     if jobs.is_some() {
         return;

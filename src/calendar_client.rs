@@ -16,7 +16,7 @@
 //!   `caldav_discovery` so later starts skip it. A new event is verified with a `GET` after its
 //!   `PUT`.
 //! * Times: UTC values are converted to local time; `TZID` and floating times are taken as
-//!   local wall-clock time (Sir's calendars live in his own time zone). Jarvis writes UTC.
+//!   local wall-clock time (Sir's calendars live in his own time zone). JAI writes UTC.
 
 use crate::pim_config::CalendarSettings;
 use crate::web_connector::{err_chain, normalize_url, resolve};
@@ -30,7 +30,7 @@ use std::time::{Duration, Instant};
 use tracing::{info, warn};
 
 const STAMP: &str = "%Y-%m-%dT%H:%M:%S";
-const PRODID: &str = "-//Stark Industries//J.A.R.V.I.S.//EN";
+const PRODID: &str = "-//Stark Industries//J.A.I.//EN";
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CalEvent {
@@ -184,7 +184,7 @@ impl CalendarStore {
             .redirect(reqwest::redirect::Policy::none())
             .timeout(Duration::from_secs(25))
             .connect_timeout(Duration::from_secs(8))
-            .user_agent("JarvisCalDAV/1.0")
+            .user_agent("JaiCalDAV/1.0")
             .build()
             .unwrap_or_default();
         Ok(Self {
@@ -853,7 +853,7 @@ pub fn describe_when(ev: &CalEvent) -> String {
     }
 }
 
-/// What Jarvis says once an event is in: "Done, Sir. I have scheduled 'Test' for tomorrow at
+/// What JAI says once an event is in: "Done, Sir. I have scheduled 'Test' for tomorrow at
 /// 15:00." (24-hour time, as Sir writes it; all-day events: "for Saturday, all day").
 pub fn confirmation(ev: &CalEvent) -> String {
     let day = crate::pim::spoken_day(ev.start.date(), Local::now().date_naive());

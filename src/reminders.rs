@@ -1,7 +1,7 @@
 //! Reminders in plain English or German: "remind me in 10 minutes to check the oven", "remind
 //! me at 6 pm to call Mum", "erinnere mich morgen um 9 an den Zahnarzt". Persisted in
 //! `jarvis_memory.db`, shown as a live "Reminders" widget in the HUD, and announced as alerts
-//! when due (also the ones that fell due while Jarvis was offline).
+//! when due (also the ones that fell due while JAI was offline).
 
 use crate::widgets::WidgetEngine;
 use chrono::{DateTime, Duration as ChronoDuration, Local, NaiveTime, TimeZone, Timelike};
@@ -142,7 +142,7 @@ static NAMED_TIME: LazyLock<Regex> = LazyLock::new(|| {
     re(r"\b(?P<day>tomorrow|morgen)?\s*(?:at\s+|um\s+|am\s+)?(?P<name>noon|midday|mittag|mittags|midnight|mitternacht|tonight|heute abend|tomorrow morning|morgen früh|morgen frueh)\b")
 });
 static REQUEST: LazyLock<Regex> = LazyLock::new(|| {
-    re(r"^(?:jarvis\s*,?\s*)?(?:please\s+|bitte\s+|can you\s+|could you\s+|kannst du\s+|kannst du mich\s+)?(?:remind me|set a reminder|set reminder|create a reminder|add a reminder|erinnere mich|erinner mich|erinnere|stell eine erinnerung|erstelle eine erinnerung)\b(?P<rest>.*)$")
+    re(r"^(?:jai\s*,?\s*)?(?:please\s+|bitte\s+|can you\s+|could you\s+|kannst du\s+|kannst du mich\s+)?(?:remind me|set a reminder|set reminder|create a reminder|add a reminder|erinnere mich|erinner mich|erinnere|stell eine erinnerung|erstelle eine erinnerung)\b(?P<rest>.*)$")
 });
 
 /// When a time expression in `text` points to, and the text with that expression removed.
@@ -216,7 +216,7 @@ fn clean_message(rest: &str, original: &str) -> String {
                 s = r.trim().to_string();
             }
         }
-        for suffix in [" please", " bitte", " sir", " jarvis"] {
+        for suffix in [" please", " bitte", " sir", " jai"] {
             if let Some(r) = s.strip_suffix(suffix) {
                 s = r.trim().to_string();
             }
@@ -386,7 +386,7 @@ impl ReminderStore {
         let _ = widgets.create_or_update(&json!({ "id": WIDGET_ID, "type": "KeyValueList", "title": "Reminders", "items": rows }));
     }
 
-    /// Announces due reminders (and those that fell due while Jarvis was off).
+    /// Announces due reminders (and those that fell due while JAI was off).
     pub fn start_runtime(&self) {
         let store = self.clone();
         tokio::spawn(async move {
@@ -470,7 +470,7 @@ impl ReminderStore {
 pub fn tool_definition() -> Value {
     json!({"type": "function", "function": {
         "name": "reminders",
-        "description": "Reminders for Sir: action set (text + in_minutes, or at 'HH:MM' / 'tomorrow 9:00'), list, or cancel (id, words of the text, 'next' or 'all'). Jarvis announces them when due.",
+        "description": "Reminders for Sir: action set (text + in_minutes, or at 'HH:MM' / 'tomorrow 9:00'), list, or cancel (id, words of the text, 'next' or 'all'). JAI announces them when due.",
         "parameters": {"type": "object", "properties": {
             "action": {"type": "string", "enum": ["set", "list", "cancel"]},
             "text": {"type": "string", "description": "What to remind Sir of"},
@@ -494,7 +494,7 @@ mod tests {
         let now = at(10, 0);
         let (due, what) = parse_request("Remind me in 10 minutes to check the oven", now).unwrap();
         assert_eq!((due, what.as_str()), (at(10, 10), "check the oven"));
-        let (due, what) = parse_request("Jarvis, remind me in an hour and 15 minutes that the pizza is ready", now).unwrap();
+        let (due, what) = parse_request("JAI, remind me in an hour and 15 minutes that the pizza is ready", now).unwrap();
         assert_eq!((due, what.as_str()), (at(11, 15), "the pizza is ready"));
         let (due, what) = parse_request("Erinnere mich in 5 Minuten an den Tee", now).unwrap();
         assert_eq!((due, what.as_str()), (at(10, 5), "den Tee"));

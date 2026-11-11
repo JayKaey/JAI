@@ -3,7 +3,7 @@
 //!
 //! The layouts are plain geometry on the monitor's work area (the taskbar stays free): columns,
 //! rows, a grid, or one main window with the others stacked beside it. Only ordinary program
-//! windows that are open on that monitor are moved — never a minimised one, never Jarvis' own
+//! windows that are open on that monitor are moved — never a minimised one, never JAI's own
 //! HUD — front-most first, at most nine. A maximised window is restored first so that it takes
 //! its cell.
 
@@ -107,12 +107,12 @@ pub struct Candidate {
     pub rect: [i32; 4],
     pub maximised: bool,
     pub minimised: bool,
-    /// One of Jarvis' own windows.
+    /// One of JAI's own windows.
     pub own: bool,
 }
 
 /// The windows to tile on the monitor `[left, top, right, bottom]`: open there (by their
-/// centre), not minimised, not Jarvis' own, front-most first, at most `MAX_WINDOWS`. With
+/// centre), not minimised, not JAI's own, front-most first, at most `MAX_WINDOWS`. With
 /// `only`, just the programs whose name or title carries one of those words.
 pub fn pick(windows: &[Candidate], monitor: [i32; 4], only: &[String]) -> Vec<Candidate> {
     let wanted = |c: &Candidate| only.is_empty() || only.iter().any(|w| !w.trim().is_empty() && (c.process.to_lowercase().contains(&w.to_lowercase()) || c.title.to_lowercase().contains(&w.to_lowercase())));
@@ -133,7 +133,7 @@ pub fn pick(windows: &[Candidate], monitor: [i32; 4], only: &[String]) -> Vec<Ca
 pub fn tool_definition() -> Value {
     json!({"type": "function", "function": {
         "name": "tile_windows",
-        "description": "Arranges Sir's open program windows on one monitor: layout side_by_side, rows, grid or main_and_stack (default: side by side for up to three, a grid for more); monitor (1, 2, 'left', 'right', 'primary'; default: the monitor of the window in front); apps (only these programs). Jarvis' own HUD and minimised windows are left alone.",
+        "description": "Arranges Sir's open program windows on one monitor: layout side_by_side, rows, grid or main_and_stack (default: side by side for up to three, a grid for more); monitor (1, 2, 'left', 'right', 'primary'; default: the monitor of the window in front); apps (only these programs). JAI's own HUD and minimised windows are left alone.",
         "parameters": {"type": "object", "properties": {
             "layout": {"type": "string", "enum": ["side_by_side", "rows", "grid", "main_and_stack"]},
             "monitor": {"type": "string"},
@@ -257,7 +257,7 @@ mod tests {
             Candidate { maximised: true, ..window(5, "Spotify.exe", [-8, -8, 2576, 1456]) },
         ];
         let picked: Vec<isize> = pick(&windows, main, &[]).iter().map(|c| c.hwnd).collect();
-        assert_eq!(picked, [1, 5], "not the minimised one, not Jarvis, not the one on the other monitor");
+        assert_eq!(picked, [1, 5], "not the minimised one, not JAI, not the one on the other monitor");
         assert_eq!(pick(&windows, [2560, 0, 5120, 1440], &[]).iter().map(|c| c.hwnd).collect::<Vec<_>>(), [4]);
         assert_eq!(pick(&windows, main, &["spotify".to_string()]).iter().map(|c| c.hwnd).collect::<Vec<_>>(), [5]);
         let many: Vec<Candidate> = (0..14).map(|n| window(n, "notepad.exe", [10, 10, 400, 300])).collect();

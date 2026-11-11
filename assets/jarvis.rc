@@ -18,11 +18,11 @@ BEGIN
     BEGIN
         BLOCK "040904b0"
         BEGIN
-            VALUE "FileDescription", "J.A.R.V.I.S."
+            VALUE "FileDescription", "J.A.I."
             VALUE "FileVersion", "3.1.0"
             VALUE "InternalName", "jarvis"
             VALUE "OriginalFilename", "JARVIS.exe"
-            VALUE "ProductName", "J.A.R.V.I.S. local voice assistant"
+            VALUE "ProductName", "J.A.I. local voice assistant"
             VALUE "ProductVersion", "3.1.0"
         END
     END

@@ -2,11 +2,11 @@
 //! grouped into gestures while nobody is talking.
 //!
 //! * **Double clap** — two broadband impulses (strong energy above 2.5 kHz, gone within ~40 ms)
-//!   150-450 ms apart, with nothing right before or after (applause and music don't count): Jarvis
-//!   wakes up like for "Jarvis", or toggles the music.
+//!   150-450 ms apart, with nothing right before or after (applause and music don't count): JAI
+//!   wakes up like for "JAI", or toggles the music.
 //! * **Door knock** — two to six low, percussive impulses (most energy in 100-900 Hz, little
 //!   above 2.5 kHz) 100-550 ms apart, then quiet: while Sir has music on (headphones), the music is
-//!   ducked, the HUD flashes amber and Jarvis says someone is at the door.
+//!   ducked, the HUD flashes amber and JAI says someone is at the door.
 //!
 //! Analysis runs in 8 ms blocks (128 samples at 16 kHz) on the VAD thread: an onset is a block
 //! far above the slowly tracked background; it is kept when its energy falls away fast (an
@@ -81,7 +81,7 @@ impl AcousticRadar {
         self.sensitivity = s.clamp(0.5, 2.0);
     }
 
-    /// Forgets half-seen gestures (Sir started talking, Jarvis is speaking).
+    /// Forgets half-seen gestures (Sir started talking, JAI is speaking).
     pub fn reset_patterns(&mut self) {
         self.onset = None;
         self.claps.clear();

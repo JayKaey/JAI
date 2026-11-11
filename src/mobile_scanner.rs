@@ -1,4 +1,4 @@
-//! The Mobile Scanner: the phone's camera as Jarvis' scanner. QR codes and barcodes are read on the
+//! The Mobile Scanner: the phone's camera as JAI's scanner. QR codes and barcodes are read on the
 //! phone (the browser's BarcodeDetector) and acted on here — links open, Wi-Fi codes show their
 //! password, product codes are looked up; documents are photographed, read with Windows OCR, saved
 //! to Documents\Jarvis_Scans and put on the clipboard.
@@ -85,7 +85,7 @@ pub async fn receive(tools: &ToolContext, body: &Value) -> Value {
                 let _ = std::fs::write(path.with_extension("txt"), &text);
                 let _ = crate::clipboard::write(&text).await;
                 show_window(tools, "mobile_scanner", "Mobile Scanner — Document", &format!("## Scanned document\n`{}`\n\n{text}", path.display()), 600.0, 640.0);
-                format!("Document scanned: {} characters, saved to Jarvis Scans and copied.", text.chars().count())
+                format!("Document scanned: {} characters, saved to JAI Scans and copied.", text.chars().count())
             }
             Ok(_) => format!("The page is saved ({}), but I found no text on it.", path.display()),
             Err(e) => format!("The page is saved, but reading it failed: {e}"),

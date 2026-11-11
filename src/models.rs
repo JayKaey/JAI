@@ -9,7 +9,7 @@
 //! Downloads stream to `<file>.part` and are renamed only after the size checks out, so an
 //! interrupted download never leaves a corrupt model behind.
 
-use crate::config::JarvisConfig;
+use crate::config::JaiConfig;
 use futures_util::StreamExt;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -76,8 +76,8 @@ fn file_name(path: &str) -> String {
         .unwrap_or_default()
 }
 
-/// Every model file Jarvis needs for the current configuration.
-pub fn required_files(cfg: &JarvisConfig) -> Vec<ModelFile> {
+/// Every model file JAI needs for the current configuration.
+pub fn required_files(cfg: &JaiConfig) -> Vec<ModelFile> {
     let mut files = Vec::new();
 
     let whisper_primary = Path::new(&cfg.whisper_model_path);
@@ -146,12 +146,12 @@ fn is_present(f: &ModelFile) -> bool {
     }
 }
 
-pub fn missing(cfg: &JarvisConfig) -> Vec<ModelFile> {
+pub fn missing(cfg: &JaiConfig) -> Vec<ModelFile> {
     required_files(cfg).into_iter().filter(|f| !is_present(f)).collect()
 }
 
 /// Logs the model status; returns false if something required is missing.
-pub fn report(cfg: &JarvisConfig) -> bool {
+pub fn report(cfg: &JaiConfig) -> bool {
     let mut ok = true;
     for f in required_files(cfg) {
         if is_present(&f) {
@@ -200,7 +200,7 @@ pub fn report(cfg: &JarvisConfig) -> bool {
 }
 
 /// Downloads every missing model. Returns the files that are still missing afterwards.
-pub async fn ensure(cfg: &JarvisConfig) -> Vec<ModelFile> {
+pub async fn ensure(cfg: &JaiConfig) -> Vec<ModelFile> {
     let todo = missing(cfg);
     if todo.is_empty() {
         return Vec::new();

@@ -1,4 +1,4 @@
-//! Autonomous Skill Forge: reusable PowerShell (Windows) / Bash (Linux) scripts that Jarvis can
+//! Autonomous Skill Forge: reusable PowerShell (Windows) / Bash (Linux) scripts that JAI can
 //! create, list, run and delete. `skills/<name>.json` is the canonical store (human-editable);
 //! SQLite mirrors it for usage statistics and fast listing.
 
@@ -46,7 +46,7 @@ pub struct SkillParameter {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct JarvisSkill {
+pub struct JaiSkill {
     pub name: String,
     #[serde(default)]
     pub title: String,
@@ -181,7 +181,7 @@ impl SkillManager {
                 }
                 match fs::read_to_string(&path)
                     .map_err(SkillError::from)
-                    .and_then(|raw| serde_json::from_str::<JarvisSkill>(&raw).map_err(SkillError::from))
+                    .and_then(|raw| serde_json::from_str::<JaiSkill>(&raw).map_err(SkillError::from))
                 {
                     Ok(mut skill) => {
                         skill.name = Self::normalize_name(&skill.name);
@@ -220,7 +220,7 @@ impl SkillManager {
 
     /// `{{param}}` placeholders used by the script but missing from `parameters` get declared,
     /// so the LLM knows to supply them.
-    fn declare_placeholders(skill: &mut JarvisSkill) {
+    fn declare_placeholders(skill: &mut JaiSkill) {
         for cap in PLACEHOLDER.captures_iter(&skill.script) {
             let name = cap[1].to_string();
             if !skill.parameters.iter().any(|p| p.name == name) {
@@ -233,7 +233,7 @@ impl SkillManager {
         }
     }
 
-    fn upsert_row(&self, skill: &JarvisSkill) -> Result<(), SkillError> {
+    fn upsert_row(&self, skill: &JaiSkill) -> Result<(), SkillError> {
         let triggers = serde_json::to_string(&skill.trigger_phrases)?;
         let parameters = serde_json::to_string(&skill.parameters)?;
         self.lock().execute(
@@ -253,7 +253,7 @@ impl SkillManager {
     }
 
     /// Saves to `skills/<name>.json` (+ script file for editing) and indexes it.
-    pub fn save(&self, skill: &JarvisSkill) -> Result<JarvisSkill, SkillError> {
+    pub fn save(&self, skill: &JaiSkill) -> Result<JaiSkill, SkillError> {
         let mut s = skill.clone();
         s.name = Self::normalize_name(&s.name);
         if Self::is_placeholder_name(&s.name) {
@@ -284,7 +284,7 @@ impl SkillManager {
         Ok(s)
     }
 
-    pub fn list(&self) -> Result<Vec<JarvisSkill>, SkillError> {
+    pub fn list(&self) -> Result<Vec<JaiSkill>, SkillError> {
         let conn = self.lock();
         let mut stmt = conn.prepare(
             "SELECT name, title, description, trigger_phrases_json, parameters_json, runtime, script, usage_count, last_output, updated_at
@@ -293,7 +293,7 @@ impl SkillManager {
         let rows = stmt.query_map([], |row| {
             let triggers: String = row.get(3)?;
             let parameters: String = row.get(4)?;
-            Ok(JarvisSkill {
+            Ok(JaiSkill {
                 name: row.get(0)?,
                 title: row.get(1)?,
                 description: row.get(2)?,
@@ -309,7 +309,7 @@ impl SkillManager {
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
-    pub fn get(&self, name: &str) -> Result<Option<JarvisSkill>, SkillError> {
+    pub fn get(&self, name: &str) -> Result<Option<JaiSkill>, SkillError> {
         let norm = Self::normalize_name(name);
         Ok(self.list()?.into_iter().find(|s| s.name == norm))
     }
@@ -325,13 +325,13 @@ impl SkillManager {
 
     /// Longest trigger phrase that appears in the utterance on word boundaries.
     /// The text after the phrase becomes the first parameter (e.g. a search query).
-    pub fn match_utterance(&self, utterance: &str) -> Option<(JarvisSkill, Value)> {
+    pub fn match_utterance(&self, utterance: &str) -> Option<(JaiSkill, Value)> {
         let text = utterance
             .trim()
             .trim_matches(|c: char| matches!(c, '.' | '!' | '?'))
             .to_lowercase();
         let padded = format!(" {} ", text);
-        let mut best: Option<(usize, JarvisSkill, usize)> = None;
+        let mut best: Option<(usize, JaiSkill, usize)> = None;
         for skill in self.list().ok()? {
             for phrase in &skill.trigger_phrases {
                 let p = phrase.trim().to_lowercase();
@@ -376,14 +376,14 @@ impl SkillManager {
     }
 
     /// Runs a not-yet-saved skill once (the test step of `create_persistent_skill`).
-    pub async fn test_run(&self, skill: &JarvisSkill, args: &Value) -> Result<String, SkillError> {
+    pub async fn test_run(&self, skill: &JaiSkill, args: &Value) -> Result<String, SkillError> {
         let mut s = skill.clone();
         s.runtime = normalize_runtime(&s.runtime);
         Self::declare_placeholders(&mut s);
         self.run_skill(&s, args, false).await
     }
 
-    async fn run_skill(&self, skill: &JarvisSkill, args: &Value, record: bool) -> Result<String, SkillError> {
+    async fn run_skill(&self, skill: &JaiSkill, args: &Value, record: bool) -> Result<String, SkillError> {
         let mut env_pairs = Vec::new();
         let mut script = skill.script.clone();
         if let Some(obj) = args.as_object() {
@@ -549,7 +549,7 @@ impl SkillManager {
             ),
         ];
         for (name, title, description, triggers, script) in starters {
-            self.save(&JarvisSkill {
+            self.save(&JaiSkill {
                 name: name.to_string(),
                 title: title.to_string(),
                 description: description.to_string(),
@@ -580,7 +580,7 @@ mod tests {
     #[test]
     fn trigger_matching_respects_word_boundaries_and_extracts_argument() {
         let (mgr, root) = temp_manager();
-        mgr.save(&JarvisSkill {
+        mgr.save(&JaiSkill {
             name: "Web Search".into(),
             title: String::new(),
             description: "search".into(),
@@ -606,7 +606,7 @@ mod tests {
     fn undeclared_placeholders_become_parameters_and_disk_is_canonical() {
         let (mgr, root) = temp_manager();
         let saved = mgr
-            .save(&JarvisSkill {
+            .save(&JaiSkill {
                 name: "set_level".into(),
                 title: String::new(),
                 description: "d".into(),
@@ -629,7 +629,7 @@ mod tests {
     #[test]
     fn placeholder_names_are_replaced_by_the_title() {
         let (mgr, root) = temp_manager();
-        let skill = JarvisSkill {
+        let skill = JaiSkill {
             name: "snake_case_name".into(),
             title: "Greet User".into(),
             description: "greets".into(),
@@ -643,7 +643,7 @@ mod tests {
         };
         assert_eq!(mgr.save(&skill).unwrap().name, "greet_user");
         // An old placeholder file on disk is renamed when the skills are loaded.
-        fs::write(root.join("skills").join("snake_case_name.json"), serde_json::to_string(&JarvisSkill { title: "Disk Report".into(), ..skill }).unwrap()).unwrap();
+        fs::write(root.join("skills").join("snake_case_name.json"), serde_json::to_string(&JaiSkill { title: "Disk Report".into(), ..skill }).unwrap()).unwrap();
         mgr.sync_from_disk();
         assert!(mgr.get("disk_report").unwrap().is_some());
         assert!(mgr.get("snake_case_name").unwrap().is_none());

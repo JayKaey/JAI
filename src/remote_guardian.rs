@@ -1,5 +1,5 @@
 //! Authenticated satellite telemetry, observed completion notifications and PC control.
-use crate::app::Jarvis;
+use crate::app::Jai;
 use crate::tools::ToolContext;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -41,7 +41,7 @@ pub fn snapshot() -> GuardianSnapshot {
     state().read().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
-fn notify(app: &Jarvis, message: String) {
+fn notify(app: &Jai, message: String) {
     let mut current = state().write().unwrap_or_else(|e| e.into_inner());
     let id = current.notifications.back().map_or(1, |e| e.id + 1);
     current.notifications.push_back(PagerEvent { id, timestamp: chrono::Local::now().to_rfc3339(), message: message.clone() });
@@ -51,7 +51,7 @@ fn notify(app: &Jarvis, message: String) {
 }
 
 /// Observe only actual changes after startup. A process exiting does not imply success.
-pub fn start(app: Jarvis, shutdown: CancellationToken) {
+pub fn start(app: Jai, shutdown: CancellationToken) {
     let worker_app = app.clone();
     let worker_shutdown = shutdown.clone();
     std::thread::spawn(move || {

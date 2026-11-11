@@ -45,7 +45,7 @@ fn pictures(id: &str) -> Block {
     Block {
         id: id.to_string(),
         title: "Pictures",
-        window_title: "Pictures — J.A.R.V.I.S.",
+        window_title: "Pictures — J.A.I.",
         size: [980.0, 680.0],
         min: [520.0, 380.0],
         open: Arc::new(move || crate::image_viewer::block_ids().contains(&open)),
@@ -58,7 +58,7 @@ fn cameras() -> Block {
     Block {
         id: "webcams".into(),
         title: "Live cameras",
-        window_title: "Live cameras — J.A.R.V.I.S.",
+        window_title: "Live cameras — J.A.I.",
         size: [1040.0, 660.0],
         min: [560.0, 380.0],
         open: Arc::new(crate::webcams::is_open),
@@ -71,7 +71,7 @@ fn street() -> Block {
     Block {
         id: "street_view".into(),
         title: "Street view",
-        window_title: "Street view — J.A.R.V.I.S.",
+        window_title: "Street view — J.A.I.",
         size: [1040.0, 640.0],
         min: [560.0, 380.0],
         open: Arc::new(crate::street_view::is_open),
@@ -322,7 +322,7 @@ fn pictures_body(ui: &mut Ui, rt: &Handle, id: &str) {
         let title = current.as_ref().map(|p| p.title.clone()).unwrap_or_default();
         ui.add(egui::Label::new(RichText::new(format!("{} // {}", album.label.to_uppercase(), title)).font(super::strip_font()).color(accent())).truncate());
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if current.as_ref().is_some_and(|p| p.local.is_none()) && chip(ui, "[ SAVE ]", "Save the full picture to Pictures\\Jarvis") {
+            if current.as_ref().is_some_and(|p| p.local.is_none()) && chip(ui, "[ SAVE ]", "Save the full picture to Pictures\\JAI") {
                 let id = id.to_string();
                 rt.spawn(async move {
                     if let Err(e) = crate::image_viewer::save_current(Some(&id)).await {

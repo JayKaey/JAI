@@ -72,7 +72,7 @@ impl Imagery {
         }
     }
 
-    /// For Jarvis.
+    /// For JAI.
     pub fn spoken(self) -> &'static str {
         match self {
             Self::Esri => "the high-resolution Esri imagery",

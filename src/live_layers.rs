@@ -56,7 +56,7 @@ pub fn offline() -> bool {
 
 // ------------------------------------------------------------------------------- HTTP ----
 
-const USER_AGENT: &str = "JARVIS/3 desktop assistant";
+const USER_AGENT: &str = "JAI/3 desktop assistant";
 
 static HTTP: LazyLock<reqwest::Client> = LazyLock::new(|| {
     reqwest::Client::builder().user_agent(USER_AGENT).timeout(Duration::from_secs(12)).connect_timeout(Duration::from_secs(5)).build().unwrap_or_else(|_| reqwest::Client::new())
@@ -290,7 +290,7 @@ fn local(unix: f64) -> chrono::DateTime<Local> {
     chrono::DateTime::<Utc>::from_timestamp(unix as i64, 0).unwrap_or_default().with_timezone(&Local)
 }
 
-/// (the block, the line Jarvis says) for a satellite's passes.
+/// (the block, the line JAI says) for a satellite's passes.
 pub fn passes_answer(sat: &str, passes: &[Pass], place: &str, now_unix: f64, hours: f64) -> (String, String) {
     let mut display = format!("Visible passes · {sat} · {place}");
     for p in passes.iter().take(8) {
@@ -796,7 +796,7 @@ fn when_label(when: &crate::weather_history::When) -> String {
 // ---------------------------------------------------------------------------- watcher ----
 
 /// The rain and ISS heads-ups. Off in tests and while the live self-test runs.
-pub fn start(app: crate::app::Jarvis, stop: CancellationToken) {
+pub fn start(app: crate::app::Jai, stop: CancellationToken) {
     let _ = TOOLS.set(app.tools().clone());
     if cfg!(test) {
         return;

@@ -1,4 +1,4 @@
-//! "Tell me when …": Jarvis keeps an eye on something and speaks up once it happens.
+//! "Tell me when …": JAI keeps an eye on something and speaks up once it happens.
 //!
 //! * download: the browser download running in the Downloads folder finishes (Chrome and Edge
 //!   `.crdownload`, Firefox `.part`, Safari `.download`, Opera `.opdownload`, `.partial`).
@@ -317,7 +317,7 @@ pub fn definitions() -> Vec<Value> {
 pub fn intent(s: &str) -> Option<Value> {
     const LEADS: &[&str] = &["tell me when ", "let me know when ", "notify me when ", "ping me when ", "alert me when ", "sag mir wenn ", "sag mir bescheid wenn ", "gib mir bescheid wenn ", "sag bescheid wenn ", "gib bescheid wenn ", "melde dich wenn "];
     let rest = LEADS.iter().find_map(|l| s.find(l).map(|i| s[i + l.len()..].trim()))?;
-    let rest = rest.trim_end_matches(" jarvis").trim();
+    let rest = rest.trim_end_matches(" jai").trim();
     if ["download", "herunterladen", "heruntergeladen", "runtergeladen"].iter().any(|w| rest.contains(w)) {
         return Some(json!({ "action": "download" }));
     }

@@ -1,6 +1,6 @@
-//! The live-system-context block injected into every LLM turn, so Jarvis can resolve "close
+//! The live-system-context block injected into every LLM turn, so JAI can resolve "close
 //! that window", "move it to the left" or "put that in a widget": how Sir is talking to him, the
-//! reply mode, the foreground window and running apps, Jarvis' own windows and widgets, and
+//! reply mode, the foreground window and running apps, JAI's own windows and widgets, and
 //! memories relevant to what Sir just said.
 
 use crate::modality::{InputSource, VoiceGate};
@@ -8,7 +8,7 @@ use crate::tools::ToolContext;
 use std::collections::BTreeSet;
 
 pub struct Desktop {
-    /// Title and process of the window Sir is working in (never Jarvis' own).
+    /// Title and process of the window Sir is working in (never JAI's own).
     pub foreground: Option<(String, String)>,
     /// Distinct processes with visible windows.
     pub apps: Vec<String>,
@@ -81,7 +81,7 @@ pub async fn build(tools: &ToolContext, source: InputSource, voice: VoiceGate, r
         }
     };
     // The window Sir was working in before this request (captured at the start of the turn); the
-    // raw foreground is Jarvis' own HUD whenever Sir typed into it.
+    // raw foreground is JAI's own HUD whenever Sir typed into it.
     let foreground = tools.focus.foreground().map(|w| (w.title, w.process)).or(desk.foreground.clone());
     let (windows, widgets) = tools.widgets.describe();
     // The core facts about Sir (per turn here, so the cached system prompt never changes) plus
@@ -123,7 +123,7 @@ pub async fn build(tools: &ToolContext, source: InputSource, voice: VoiceGate, r
         out.push_str(&tools.focus.describe());
         out.push('\n');
     }
-    out.push_str(&format!("Jarvis windows: {windows}\nWidgets: {widgets}\n"));
+    out.push_str(&format!("JAI windows: {windows}\nWidgets: {widgets}\n"));
     // The HUD board: what is on screen, block by block (Sir's questions about it are answered from
     // these figures), with the blocks the question is about pulsing.
     if crate::hud_board::is_active() {
@@ -132,7 +132,7 @@ pub async fn build(tools: &ToolContext, source: InputSource, voice: VoiceGate, r
     out.push_str(&crate::hud_board::live_context());
     // Sir's Discord call while the bridge listens (what the others said, never Sir).
     out.push_str(&crate::discord_bridge::live_context());
-    // Jarvis's own Discord account: the call he is in, unread messages; Away Mode; watches.
+    // JAI's own Discord account: the call he is in, unread messages; Away Mode; watches.
     out.push_str(&crate::discord_bot::live_context());
     out.push_str(&crate::away_mode::live_context());
     out.push_str(&crate::watch_and_tell::live_context());

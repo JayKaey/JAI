@@ -10,7 +10,7 @@
 //! active one goes dead (muted headset) while the other carries signal, capture fails over.
 
 use crate::acoustic_radar::{AcousticEvent, AcousticRadar};
-use crate::config::{AcousticSettings, JarvisConfig};
+use crate::config::{AcousticSettings, JaiConfig};
 use crate::dsp::{self, StreamResampler};
 use crate::vad::{self, EndReason, FrameContext, SileroVad, VadEvent, VadMachine, VadParams, VadPhase, FRAME};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -32,16 +32,16 @@ pub fn is_homecoming_phrase(text: &str) -> bool {
     let normalized = text.to_lowercase().replace(['\'', '’'], "").chars()
         .map(|c| if c.is_alphanumeric() { c } else { ' ' }).collect::<String>();
     let normalized = normalized.split_whitespace().collect::<Vec<_>>().join(" ");
-    matches!(normalized.as_str(), "wake up daddys home" | "daddys home" | "jarvis wake up"
-        | "im home jarvis" | "i am home jarvis" | "i am back" | "jarvis i am back"
-        | "jarvis wake up daddys home" | "jarvis daddys home")
+    matches!(normalized.as_str(), "wake up daddys home" | "daddys home" | "jai wake up"
+        | "im home jai" | "i am home jai" | "i am back" | "jai i am back"
+        | "jai wake up daddys home" | "jai daddys home")
 }
 
 #[cfg(test)]
 mod homecoming_tests {
     #[test]
     fn protocol_requires_the_whole_utterance() {
-        for text in ["Wake up, Daddy's home!", "Daddy’s home", "Jarvis wake up", "I'm home Jarvis", "I am back"] {
+        for text in ["Wake up, Daddy's home!", "Daddy’s home", "JAI wake up", "I'm home JAI", "I am back"] {
             assert!(super::is_homecoming_phrase(text), "{text}");
         }
         for text in ["what happens when I say daddy's home", "play daddy's home", "I am back at school tomorrow"] {
@@ -51,29 +51,29 @@ mod homecoming_tests {
 }
 
 // ------------------------------------------------------------------ addressee detection ----
-// Sir never has to say "Jarvis" when he is obviously talking to him. Four layers decide:
-//   A. the conversation window: for 5 s after Jarvis finished speaking (or carried out a
+// Sir never has to say "JAI" when he is obviously talking to him. Four layers decide:
+//   A. the conversation window: for 5 s after JAI finished speaking (or carried out a
 //      command), and while he asks something; after that, room speech needs a reason again;
-//   B. window focus: one of Jarvis' windows is in front;
+//   B. window focus: one of JAI's windows is in front;
 //   C. direct intent: a command, a question, "can you" / "please" / "you", or anything the
 //      fast path recognises as a request;
 //   D. chatter rejection: with a game or a voice chat (Discord …) in front, fragments, callouts
-//      and talk about third persons are ignored unless they are a clear command for Jarvis.
+//      and talk about third persons are ignored unless they are a clear command for JAI.
 
-/// To whom an utterance was spoken, and why Jarvis thinks so.
+/// To whom an utterance was spoken, and why JAI thinks so.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Addressee {
-    /// Sir said "Jarvis" (anywhere, as a vocative).
+    /// Sir said "JAI" (anywhere, as a vocative).
     WakeWord,
     /// Layer A: inside the conversation window.
     Conversation,
-    /// Layer B: Jarvis' own window is in front.
+    /// Layer B: JAI's own window is in front.
     Focus,
     /// Layer C: a direct command or question.
     DirectIntent,
     /// Hands-free mode and nothing speaks against it.
     HandsFree,
-    /// Layer D: gamer or voice-chat talk not meant for Jarvis (ignored).
+    /// Layer D: gamer or voice-chat talk not meant for JAI (ignored).
     Chatter,
     /// The wake word is required and no layer applies (ignored).
     Unaddressed,
@@ -89,7 +89,7 @@ impl Addressee {
         match self {
             Self::WakeWord => "wake-word",
             Self::Conversation => "follow-up",
-            Self::Focus => "jarvis in focus",
+            Self::Focus => "jai in focus",
             Self::DirectIntent => "direct intent",
             Self::HandsFree => "voice",
             Self::Chatter => "ignored · chatter",
@@ -105,7 +105,7 @@ pub struct AddresseeContext {
     pub wake_required: bool,
     /// The conversation window is open (or a turn is running / Sir is finishing a sentence).
     pub conversation_open: bool,
-    /// One of Jarvis' windows is the foreground window.
+    /// One of JAI's windows is the foreground window.
     pub jarvis_focused: bool,
     /// A game, a full-screen app or a voice chat (Discord, TeamSpeak …) is in front.
     pub gaming: bool,
@@ -124,8 +124,8 @@ fn plain_words(text: &str) -> String {
 }
 
 const FILLERS: &[&str] = &["ok", "okay", "hey", "so", "um", "uh", "ähm", "äh", "also", "und", "and", "na", "well", "alright", "right", "now", "then", "dann", "ja", "yes", "no", "nein", "oh"];
-/// Imperatives Jarvis acts on (English and German).
-const COMMAND_VERBS: &[&str] = &[
+/// Imperatives JAI acts on (English and German).
+pub(crate) const COMMAND_VERBS: &[&str] = &[
     "open", "close", "play", "pause", "stop", "resume", "skip", "next", "show", "hide", "remove", "make", "set", "turn", "put", "move", "start", "launch",
     "search", "find", "look", "check", "tell", "give", "read", "create", "add", "delete", "remind", "schedule", "send", "text", "mute", "unmute",
     "maximize", "maximise", "minimize", "minimise", "switch", "bring", "clean", "declutter", "translate", "explain", "summarize", "summarise",
@@ -141,7 +141,7 @@ const QUESTION_WORDS: &[&str] = &[
     "have", "has", "am", "wie", "wann", "wo", "was", "wer", "warum", "welche", "welcher", "welches", "hab", "habe", "hast", "kannst", "könntest",
     "ist", "sind", "gibt", "hat", "brauche", "muss",
 ];
-/// Words that only make sense spoken to someone: Jarvis, when no game or chat is in front.
+/// Words that only make sense spoken to someone: JAI, when no game or chat is in front.
 const SECOND_PERSON: &[&str] = &["you", "your", "yourself", "please", "du", "dich", "dir", "dein", "deine", "bitte"];
 /// Callouts and banter of a game lobby or a voice chat.
 const CHATTER_WORDS: &[&str] = &[
@@ -153,7 +153,7 @@ const CHATTER_WORDS: &[&str] = &[
 const THIRD_PERSON: &[&str] = &["he", "hes", "she", "shes", "they", "theyre", "him", "her", "them", "his", "er", "ihn", "ihm"];
 
 /// A request the fast path, the integration router or the layout parser recognises: clearly
-/// meant for Jarvis, even over a game.
+/// meant for JAI, even over a game.
 pub fn known_command(text: &str) -> bool {
     crate::intents::parse(text).is_some()
         || crate::intents::ui_layout_command(text).is_some()
@@ -208,7 +208,7 @@ pub fn looks_like_chatter(text: &str) -> bool {
 }
 
 /// "Close", "minimise" on their own: a word anyone in the room or on Discord says. They act on
-/// Jarvis' own window only when he is addressed (his name, an open conversation, his window).
+/// JAI's own window only when he is addressed (his name, an open conversation, his window).
 fn bare_window_word(text: &str) -> bool {
     crate::intents::silent_quick_command(text).is_some_and(|a| matches!(a.tool, "configure_interface" | "window_management"))
 }
@@ -229,7 +229,7 @@ pub fn classify_addressee(text: &str, ctx: &AddresseeContext) -> Addressee {
         if known_command(text) {
             return Addressee::DirectIntent;
         }
-        // "Yes, please" / "no thanks" to what Jarvis just asked.
+        // "Yes, please" / "no thanks" to what JAI just asked.
         if ctx.conversation_open && (crate::intents::is_affirmation(text) || crate::intents::is_negation(text)) {
             return Addressee::Conversation;
         }
@@ -251,7 +251,7 @@ pub fn classify_addressee(text: &str, ctx: &AddresseeContext) -> Addressee {
 }
 
 // ------------------------------------------------------------- hands-free relevance ----
-// Without the wake word Jarvis only reacts to speech that is plausibly meant for him: humming,
+// Without the wake word JAI only reacts to speech that is plausibly meant for him: humming,
 // sung syllables, Whisper's all-caps hallucinations ("HABIT FOOTBALL") and lone fragments are
 // dropped silently (logged as "[Background Speech Ignored]").
 
@@ -259,7 +259,7 @@ pub fn classify_addressee(text: &str, ctx: &AddresseeContext) -> Addressee {
 pub const UNSURE_LOGPROB: f32 = -0.5;
 
 /// A song through the microphone: while a player is playing, words Whisper is unsure of and that
-/// are no command Jarvis knows are the song's, not Sir's. (jarvis.log 2026-11-05 19:45: "Fix that
+/// are no command JAI knows are the song's, not Sir's. (jarvis.log 2026-11-05 19:45: "Fix that
 /// my heart, hope it never stops war. Yeah." was answered as a request.) With the wake word,
 /// push-to-talk or a barge-in this is never asked.
 pub fn sung_not_said(text: &str, avg_logprob: f32, player_playing: bool) -> bool {
@@ -323,7 +323,7 @@ pub fn is_caps_hallucination(text: &str) -> bool {
     letters.len() >= 5 && letters.iter().all(|c| c.is_uppercase()) && !(words.len() == 1 && letters.len() <= 4)
 }
 
-/// Why an utterance without the wake word is not for Jarvis, or `None` when it may be.
+/// Why an utterance without the wake word is not for JAI, or `None` when it may be.
 /// `hands_free`: the stricter checks of hands-free mode (no open conversation): fewer than two
 /// meaningful words (unless it is a quick command) and no plausible link to a request or to the
 /// last two turns (`recent`).
@@ -360,7 +360,7 @@ pub fn background_speech(text: &str, hands_free: bool, recent: &[String]) -> Opt
 }
 
 /// The last few things heard (addressed or not), for the retroactive wake word: "…turn the
-/// music down. Jarvis, do that." acts on the words spoken before the name.
+/// music down. JAI, do that." acts on the words spoken before the name.
 #[derive(Debug, Default)]
 pub struct RollingSpeechTranscriptBuffer {
     segments: std::collections::VecDeque<HeardSegment>,
@@ -370,14 +370,14 @@ pub struct RollingSpeechTranscriptBuffer {
 struct HeardSegment {
     text: String,
     at: Instant,
-    /// Not addressed to Jarvis when it was heard.
+    /// Not addressed to JAI when it was heard.
     ignored: bool,
 }
 
 impl RollingSpeechTranscriptBuffer {
     pub const CAPACITY: usize = 5;
     pub const MAX_AGE: Duration = Duration::from_secs(60);
-    /// "Jarvis, do that" refers back to speech at most this old …
+    /// "JAI, do that" refers back to speech at most this old …
     pub const REFERENCE_WINDOW: Duration = Duration::from_secs(12);
     /// … and stitches everything ignored within this span.
     pub const STITCH_SPAN: Duration = Duration::from_secs(25);
@@ -398,7 +398,7 @@ impl RollingSpeechTranscriptBuffer {
         self.segments.retain(|s| at.duration_since(s.at) <= Self::MAX_AGE);
     }
 
-    /// The ignored speech a bare "Jarvis" / "Jarvis, do that for me" refers to: every ignored
+    /// The ignored speech a bare "JAI" / "JAI, do that for me" refers to: every ignored
     /// segment of the last 25 s (oldest first), when the newest is at most 12 s old. Taken out of
     /// the buffer so it is never acted on twice.
     pub fn take_referenced(&mut self) -> Option<String> {
@@ -428,7 +428,7 @@ impl RollingSpeechTranscriptBuffer {
     }
 }
 
-/// What Sir says after "Jarvis" to mean the words he just spoke: nothing, "do that (for me)",
+/// What Sir says after "JAI" to mean the words he just spoke: nothing, "do that (for me)",
 /// "you heard me", "mach das".
 pub fn is_retro_reference(command: &str) -> bool {
     let w = plain_words(command);
@@ -540,7 +540,7 @@ mod addressee_tests {
         let open = AddresseeContext { conversation_open: true, ..ctx() };
         let text = "Just leave the normal chat window, but remove the Audio Devices tab and the Skills tab, please.";
         assert_eq!(classify_addressee(text, &open), Addressee::Conversation);
-        // Even after the window closed: a direct request is still for Jarvis.
+        // Even after the window closed: a direct request is still for JAI.
         assert_eq!(classify_addressee(text, &ctx()), Addressee::DirectIntent);
         assert_eq!(classify_addressee("Ich bin cool, ich bin cool, ich bin cool.", &ctx()), Addressee::Unaddressed);
         assert_eq!(classify_addressee("What classes do I have tomorrow?", &ctx()), Addressee::DirectIntent);
@@ -564,10 +564,10 @@ mod addressee_tests {
         }
         let open = AddresseeContext { conversation_open: true, ..gaming };
         assert_eq!(classify_addressee("Yes, do that for the whole week", &open), Addressee::Conversation);
-        assert_eq!(classify_addressee("Yes, please.", &open), Addressee::Conversation, "an answer to Jarvis' question");
+        assert_eq!(classify_addressee("Yes, please.", &open), Addressee::Conversation, "an answer to JAI's question");
         assert_eq!(classify_addressee("Yes, please.", &gaming), Addressee::Chatter, "no open question: banter");
         assert!(is_game_or_voice_chat("Discord.exe") && is_game_or_voice_chat("javaw") && !is_game_or_voice_chat("Code"));
-        // "Close" from a Discord friend never hides Jarvis; said to him it does.
+        // "Close" from a Discord friend never hides JAI; said to him it does.
         assert_eq!(classify_addressee("Close", &gaming), Addressee::Chatter);
         let hands_free = AddresseeContext { wake_required: false, ..ctx() };
         assert_eq!(classify_addressee("Minimize", &hands_free), Addressee::Unaddressed);
@@ -597,7 +597,7 @@ pub struct AudioControls {
     deaf: AtomicBool,
     pub ptt_active: AtomicBool,
     pub wake_word_required: AtomicBool,
-    /// IS_SPEAKING: Jarvis audio is being played.
+    /// IS_SPEAKING: JAI audio is being played.
     pub is_speaking: AtomicBool,
     /// An LLM/tool turn is in progress (thinking or speaking).
     pub turn_active: AtomicBool,
@@ -622,7 +622,7 @@ pub struct AudioControls {
 
 const CLAP: u8 = 1;
 const KNOCK: u8 = 2;
-/// How long after Jarvis' audio ends the microphone still counts what it hears as his echo.
+/// How long after JAI's audio ends the microphone still counts what it hears as his echo.
 const ECHO_TAIL_MS: u64 = 350;
 
 fn acoustic_bits(a: &AcousticSettings) -> u8 {
@@ -630,7 +630,7 @@ fn acoustic_bits(a: &AcousticSettings) -> u8 {
 }
 
 impl AudioControls {
-    pub fn new(cfg: &JarvisConfig) -> Self {
+    pub fn new(cfg: &JaiConfig) -> Self {
         Self {
             mic_enabled: AtomicBool::new(true),
             deaf: AtomicBool::new(false),
@@ -687,7 +687,7 @@ impl AudioControls {
     }
 
     /// Marks playback start/stop. Stopping leaves a 350 ms echo-tail guard (room reverb, the
-    /// speaker's last syllable reaching the mic): Jarvis never hears himself as a wake word.
+    /// speaker's last syllable reaching the mic): JAI never hears himself as a wake word.
     pub fn set_speaking(&self, speaking: bool) {
         self.is_speaking.store(speaking, Ordering::Release);
         if !speaking {
@@ -695,7 +695,7 @@ impl AudioControls {
         }
     }
 
-    /// Jarvis makes a short sound of his own (a chime) for `ms`: the microphone treats it and the
+    /// JAI makes a short sound of his own (a chime) for `ms`: the microphone treats it and the
     /// echo tail after it as his voice.
     pub fn guard_echo(&self, ms: u64) {
         self.speech_tail_until.fetch_max(now_ms() + ms + ECHO_TAIL_MS, Ordering::AcqRel);
@@ -990,7 +990,7 @@ struct FeedState {
 }
 
 /// Starts capture + VAD. Events are delivered on `events`.
-pub fn spawn(cfg: &JarvisConfig, controls: Arc<AudioControls>, events: UnboundedSender<AudioEvent>) {
+pub fn spawn(cfg: &JaiConfig, controls: Arc<AudioControls>, events: UnboundedSender<AudioEvent>) {
     let (feeds_tx, feeds_rx) = mpsc::channel::<Vec<DeviceFeed>>();
     let mic_controls = Arc::clone(&controls);
     if let Err(e) = std::thread::Builder::new()
@@ -1011,7 +1011,7 @@ pub fn spawn(cfg: &JarvisConfig, controls: Arc<AudioControls>, events: Unbounded
 }
 
 fn vad_thread(
-    cfg: JarvisConfig,
+    cfg: JaiConfig,
     controls: Arc<AudioControls>,
     feeds_rx: &mpsc::Receiver<Vec<DeviceFeed>>,
     events: UnboundedSender<AudioEvent>,
@@ -1168,7 +1168,7 @@ fn vad_thread(
                 None => vad::energy_probability(rms, machine.noise_floor()),
             };
             let assistant_speaking = controls.speaking_or_tail();
-            // Claps and knocks only count while nobody is talking (Jarvis or Sir).
+            // Claps and knocks only count while nobody is talking (JAI or Sir).
             let flags = controls.acoustic_flags.load(Ordering::Acquire);
             if flags != 0 {
                 radar.set_sensitivity(load_f32(&controls.acoustic_sensitivity));

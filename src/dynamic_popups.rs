@@ -103,7 +103,7 @@ pub enum PopupAction {
     SetVolume { target: String, percent: u8 },
     Confirm(String),
     Cancel(String),
-    /// A data card's button ("Play Clip"): its label goes to Jarvis as a request.
+    /// A data card's button ("Play Clip"): its label goes to JAI as a request.
     Button(String),
 }
 
@@ -308,7 +308,7 @@ pub fn volume(target_name: &str, percent: u8, is_muted: bool) {
 /// "Pin that pop-up", "unpin it", "dismiss pop-ups", "schließ die Pop-ups".
 pub fn voice_command(text: &str) -> Option<Value> {
     let s: String = text.to_lowercase().chars().map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' { c } else { ' ' }).collect();
-    let s = s.split_whitespace().filter(|w| !matches!(*w, "jarvis" | "please" | "bitte" | "sir")).collect::<Vec<_>>().join(" ");
+    let s = s.split_whitespace().filter(|w| !matches!(*w, "jai" | "please" | "bitte" | "sir")).collect::<Vec<_>>().join(" ");
     const POPUP: &str = r"(?:pop-?ups?|pop ups?|popups?|cards?|karten?)";
     static PIN: LazyLock<regex::Regex> = LazyLock::new(|| {
         regex::Regex::new(&format!(r"^(?:pin|pinne|halte|behalte)\s+(?:that|this|the|it|das|die|den)?\s*(?:{POPUP})?(?:\s+(?:fest|offen))?$")).expect("pin expression")
@@ -707,7 +707,7 @@ mod tests {
 
     #[test]
     fn tool_and_voice_commands() {
-        assert_eq!(voice_command("Jarvis, pin that pop-up").unwrap()["action"], "pin");
+        assert_eq!(voice_command("JAI, pin that pop-up").unwrap()["action"], "pin");
         assert_eq!(voice_command("Dismiss pop-ups").unwrap()["action"], "dismiss_all");
         assert_eq!(voice_command("unpin it").unwrap()["action"], "unpin");
         assert!(voice_command("pin the tab in chrome to the left").is_none());

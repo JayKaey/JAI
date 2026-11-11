@@ -52,7 +52,7 @@ pub(super) fn show(ctx: &egui::Context, host: &WidgetHost) {
         return;
     }
     let mut builder = ViewportBuilder::default()
-        .with_title("Mobile Satellite Pairing — J.A.R.V.I.S.")
+        .with_title("Mobile Satellite Pairing — J.A.I.")
         .with_app_id("jarvis")
         .with_inner_size([520.0, 700.0])
         .with_min_inner_size([420.0, 560.0])
@@ -118,7 +118,7 @@ fn frame(ctx: &egui::Context, class: Option<ViewportClass>, host: &WidgetHost) {
     let body = |ui: &mut egui::Ui| {
         ui.vertical_centered(|ui| {
             ui.label(RichText::new("MOBILE SATELLITE").font(bold(18.0)).color(p.accent).extra_letter_spacing(3.0));
-            muted(ui, &p, "J.A.R.V.I.S. on your phone or iPad — anywhere in the world");
+            muted(ui, &p, "J.A.I. on your phone or iPad — anywhere in the world");
             ui.add_space(8.0);
             match &worldwide {
                 Some(url) => {
@@ -177,7 +177,7 @@ fn frame(ctx: &egui::Context, class: Option<ViewportClass>, host: &WidgetHost) {
         if worldwide.is_some() {
             ui.add_space(4.0);
             egui::CollapsingHeader::new(RichText::new("At home: the local Wi-Fi link").size(11.0).color(p.muted)).id_salt("pairing_local").show(ui, |ui| {
-                muted(ui, &p, format!("Same Wi-Fi as this PC ({ip}); accept J.A.R.V.I.S.' own certificate once."));
+                muted(ui, &p, format!("Same Wi-Fi as this PC ({ip}); accept J.A.I.' own certificate once."));
                 ui.add(egui::Label::new(RichText::new(&local).monospace().size(10.5).color(p.muted)).wrap());
                 if ui.small_button("Copy local link").clicked() {
                     ui.output_mut(|o| o.copied_text = local.clone());

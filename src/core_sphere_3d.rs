@@ -1,4 +1,4 @@
-//! "Jarvis, show me your core": every real source file of Jarvis as a node of a rotatable,
+//! "JAI, show me your core": every real source file of JAI as a node of a rotatable,
 //! zoomable 3D sphere, wired to the files it uses, lighting up while it runs.
 //!
 //! * The graph comes from `build.rs` (`CORE_FILES`, `CORE_EDGES`): each `src/*.rs` file, its
@@ -12,7 +12,7 @@
 //!   reference transfer → tts.
 //! * The view: drag to orbit (with inertia), the wheel or the `CORE SCALE` slider to zoom
 //!   (50-300 %), hover or click a node for its readout (file, lines, connected modules, last
-//!   execution). The centre pulses with Jarvis' voice.
+//!   execution). The centre pulses with JAI's voice.
 
 use eframe::egui::{self, pos2, vec2, Align2, Color32, FontId, Pos2, Rect, Rounding, Sense, Shape, Stroke, Ui, Vec2};
 use std::collections::{HashMap, VecDeque};

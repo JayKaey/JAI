@@ -170,8 +170,8 @@ mod tests {
         if before.is_empty() {
             return; // may hold an image: nothing we could restore losslessly
         }
-        super::write("J.A.R.V.I.S. clipboard test \u{2713} äöü").await.unwrap();
-        assert_eq!(super::read().await.unwrap(), "J.A.R.V.I.S. clipboard test \u{2713} äöü");
+        super::write("J.A.I. clipboard test \u{2713} äöü").await.unwrap();
+        assert_eq!(super::read().await.unwrap(), "J.A.I. clipboard test \u{2713} äöü");
         super::write(&before).await.unwrap();
     }
 }

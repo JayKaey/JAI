@@ -1,5 +1,5 @@
 //! Instant-command fast path (< 1 ms, no LLM round-trip) for obvious requests in English,
-//! German or Denglisch: stop, quitting Jarvis, mute/volume, media keys, restyling the HUD,
+//! German or Denglisch: stop, quitting JAI, mute/volume, media keys, restyling the HUD,
 //! open/close apps, window actions, time/date and system status. Everything else goes to the
 //! LLM with native tool calling.
 
@@ -10,7 +10,7 @@ use std::sync::LazyLock;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Intent {
-    /// "Stop", "Sei still", "Halt" – silence Jarvis, nothing else.
+    /// "Stop", "Sei still", "Halt" – silence JAI, nothing else.
     Stop,
     Time,
     Date,
@@ -37,7 +37,7 @@ fn quick_words(text: &str) -> String {
     let words = raw_words(text);
     let kept: Vec<&str> = words
         .split_whitespace()
-        .filter(|w| !matches!(*w, "jarvis" | "please" | "bitte" | "mal" | "now" | "jetzt" | "sir" | "the" | "die" | "den" | "das"))
+        .filter(|w| !matches!(*w, "jai" | "please" | "bitte" | "mal" | "now" | "jetzt" | "sir" | "the" | "die" | "den" | "das"))
         .collect();
     kept.join(" ")
 }
@@ -70,7 +70,7 @@ pub fn silent_quick_command(text: &str) -> Option<SilentAction> {
         return mixer(json!({ "action": "set_master", "level": level }), &format!("{level} %"));
     }
     match s.as_str() {
-        // Whatever is playing — every media session at once — and Jarvis' own voice.
+        // Whatever is playing — every media session at once — and JAI's own voice.
         "pause" | "pause music" | "pause music please" | "pausieren" | "pausiere" | "musik pause" | "musik pausieren" | "pause it" | "pause playback"
         | "pause everything" | "pause all" | "paus" | "pos" | "pause musik" | "pausiere musik" | "musik anhalten" | "halte musik an" => music("stop_all", "Paused"),
         "stop" | "stopp" | "halt" | "stop music" | "stop it" | "stoppe" | "musik stopp" | "musik stoppen" | "stopp musik" | "musik aus" | "stop playing"
@@ -155,7 +155,7 @@ fn volume_follow_up(last: crate::audio_mixer::Step, s: &str) -> Option<Value> {
     }
 }
 
-/// "Stop", "pause", "stopp", "halt", "stop music", "Jarvis, pause" (and Whisper's "post" / "paws",
+/// "Stop", "pause", "stopp", "halt", "stop music", "JAI, pause" (and Whisper's "post" / "paws",
 /// already corrected to "pause"): stop everything that is playing, at once and silently.
 pub fn is_media_stop(text: &str) -> bool {
     silent_quick_command(text).is_some_and(|a| a.tool == "control_music" && a.args["action"] == "stop_all")
@@ -186,7 +186,7 @@ pub fn parse_sentences(text: &str) -> Option<Intent> {
     small_talk.then_some(intent)
 }
 
-/// The tools a garbled sentence may still reach (`parse_misheard`): Jarvis' own HUD, board, views
+/// The tools a garbled sentence may still reach (`parse_misheard`): JAI's own HUD, board, views
 /// and media — never an app launch or close, which a misheard sentence must not trigger.
 const MISHEARD_SAFE_TOOLS: &[&str] = &[
     "configure_interface", "control_jarvis_interface", "hud_board", "open_jarvis_view", "control_orb_mode", "media_and_volume_control", "control_music", "set_listening_mode",
@@ -205,7 +205,7 @@ fn third_person_to_imperative(clause: &str) -> String {
     std::iter::once(head).chain(words.map(String::from)).collect::<Vec<_>>().join(" ")
 }
 
-/// Jarvis' own UI commands behind a garbled opening — the wake word misheard as "now this",
+/// JAI's own UI commands behind a garbled opening — the wake word misheard as "now this",
 /// "now the scan you fit": "Now this opens your settings.", "Now the scan you fit, change the
 /// interface color to red." Tries the clause after the first comma, then the words after one or
 /// two leading noise words, each with a third-person verb made imperative. Only the HUD, board,
@@ -243,12 +243,12 @@ pub fn is_screen_question(text: &str) -> bool {
     (screen && asks) || seeing
 }
 
-/// "Switch to hands-free mode", "Freisprechmodus aktivieren", "only listen when I say Jarvis":
+/// "Switch to hands-free mode", "Freisprechmodus aktivieren", "only listen when I say JAI":
 /// `set_listening_mode` arguments.
 pub fn listening_mode_command(text: &str) -> Option<Value> {
     let s = raw_words(text);
     let hands_free = ["hands free mode", "handsfree mode", "hands free", "handsfree", "freisprechmodus", "freisprech modus", "listen to everything", "always listen", "hör immer zu", "immer zuhören"];
-    let wake = ["wake word mode", "wakeword mode", "wake word", "only listen when i say jarvis", "only when i say jarvis", "only respond when i say jarvis", "only listen to jarvis", "aktivierungswort", "nur wenn ich jarvis sage", "weckwort"];
+    let wake = ["wake word mode", "wakeword mode", "wake word", "only listen when i say jai", "only when i say jai", "only respond when i say jai", "only listen to jai", "aktivierungswort", "nur wenn ich jai sage", "weckwort"];
     let switching = ["switch", "turn on", "activate", "enable", "go", "use", "set", "change", "aktivier", "aktiviere", "schalte", "schalt", "wechsel", "wechsle", "only", "nur", "mode", "modus", "listen", "zuhören", "hör"];
     if !switching.iter().any(|w| s.contains(w)) {
         return None;
@@ -370,7 +370,7 @@ pub fn mixer_command(text: &str) -> Option<Value> {
         .join(" ");
     // "Which apps are playing audio?", "read the mixer": read the real mixer (never guess).
     static LIST: LazyLock<Regex> = LazyLock::new(|| {
-        re(r"^(?:jarvis )?(?:(?:which|what) (?:apps?|programs?|applications?) (?:are|is) (?:playing|making|using) (?:any )?(?:audio|sound|noise)(?: right now| now| at the moment)?|(?:what s|whats|what is) playing (?:any )?(?:audio|sound|noise)|(?:what s|whats|what is|who s|whos|who is) making (?:that |this |the |so much |all that )?(?:sound|noise)|(?:read|check)(?: me)? (?:the |my )?(?:volume |audio )?mixer|(?:what are )?(?:the |my )?app volumes|welche apps (?:spielen|machen|nutzen) (?:gerade )?(?:audio|ton|sound)|was spielt (?:gerade |hier |da )?(?:ton|sound|audio)(?: ab)?|(?:was|wer) macht (?:hier |da |gerade )*(?:so einen |solchen |diesen )?(?:lärm|krach|ton|geräusche?|sound))$")
+        re(r"^(?:jai )?(?:(?:which|what) (?:apps?|programs?|applications?) (?:are|is) (?:playing|making|using) (?:any )?(?:audio|sound|noise)(?: right now| now| at the moment)?|(?:what s|whats|what is) playing (?:any )?(?:audio|sound|noise)|(?:what s|whats|what is|who s|whos|who is) making (?:that |this |the |so much |all that )?(?:sound|noise)|(?:read|check)(?: me)? (?:the |my )?(?:volume |audio )?mixer|(?:what are )?(?:the |my )?app volumes|welche apps (?:spielen|machen|nutzen) (?:gerade )?(?:audio|ton|sound)|was spielt (?:gerade |hier |da )?(?:ton|sound|audio)(?: ab)?|(?:was|wer) macht (?:hier |da |gerade )*(?:so einen |solchen |diesen )?(?:lärm|krach|ton|geräusche?|sound))$")
     });
     if LIST.is_match(&s) {
         return Some(json!({ "action": "list" }));
@@ -583,7 +583,7 @@ pub fn mixer_command(text: &str) -> Option<Value> {
     // "Make everything loud again", "put the volume back", "restore the volume", "mach alles
     // wieder laut": every level the mixer changed goes back to what it was.
     static RESTORE: LazyLock<Regex> = LazyLock::new(|| {
-        re(r"^(?:(?:and |now |ok |okay |jarvis )*(?:make|turn|set|put|get)\s+(?:everything|it all|all of it|the volume|the sound|all the volumes|the volumes)\s+(?:loud|normal|back)(?:\s+again)?(?:\s+to\s+(?:normal|how it was|where it was))?|(?:everything|volume|sound|audio|all)\s+back\s+to\s+normal|(?:restore|reset|undo)\s+(?:the\s+|my\s+|all\s+|all the\s+)?(?:volume|volumes|sound|audio|mixer|that volume|the volume)(?:\s+(?:change|changes|levels?))?|(?:put|set|turn)\s+(?:the\s+|all\s+|all the\s+)?(?:volume|volumes|sound)\s+back(?:\s+to\s+(?:normal|how it was|where it was))?|(?:mach|mache|stell|stelle)\s+(?:alles|die lautstärke)\s+wieder\s+(?:laut|normal|zurück|her)|lautstärke\s+(?:zurücksetzen|wiederherstellen))$")
+        re(r"^(?:(?:and |now |ok |okay |jai )*(?:make|turn|set|put|get)\s+(?:everything|it all|all of it|the volume|the sound|all the volumes|the volumes)\s+(?:loud|normal|back)(?:\s+again)?(?:\s+to\s+(?:normal|how it was|where it was))?|(?:everything|volume|sound|audio|all)\s+back\s+to\s+normal|(?:restore|reset|undo)\s+(?:the\s+|my\s+|all\s+|all the\s+)?(?:volume|volumes|sound|audio|mixer|that volume|the volume)(?:\s+(?:change|changes|levels?))?|(?:put|set|turn)\s+(?:the\s+|all\s+|all the\s+)?(?:volume|volumes|sound)\s+back(?:\s+to\s+(?:normal|how it was|where it was))?|(?:mach|mache|stell|stelle)\s+(?:alles|die lautstärke)\s+wieder\s+(?:laut|normal|zurück|her)|lautstärke\s+(?:zurücksetzen|wiederherstellen))$")
     });
     if RESTORE.is_match(&s) {
         return Some(json!({ "action": "restore" }));
@@ -744,7 +744,7 @@ fn volume_phrase(s: &str) -> Option<Value> {
         return None;
     }
     // Lead-ins: "and you make …", "can you …", "I want you to …", "kannst du mal …".
-    const LEAD: &[&str] = &["jarvis", "hey", "ok", "okay", "please", "can", "could", "would", "will", "you", "and", "now", "then", "also", "just", "yes", "well", "so", "i", "want", "need", "id", "like", "bitte", "kannst", "könntest", "du", "und", "dann", "mal", "ich", "will", "möchte"];
+    const LEAD: &[&str] = &["jai", "hey", "ok", "okay", "please", "can", "could", "would", "will", "you", "and", "now", "then", "also", "just", "yes", "well", "so", "i", "want", "need", "id", "like", "bitte", "kannst", "könntest", "du", "und", "dann", "mal", "ich", "will", "möchte"];
     while words.first().is_some_and(|w| LEAD.contains(w) || (*w == "to" && words.len() > 2)) {
         words.remove(0);
     }
@@ -1272,9 +1272,9 @@ fn normalize(text: &str) -> String {
         .collect::<Vec<_>>()
         .join(" ");
     s = s.trim_end_matches('.').trim().to_string();
-    // His name as a sentence of its own, as Sir types it in the console ("Jarvis. Span over all
+    // His name as a sentence of its own, as Sir types it in the console ("JAI. Span over all
     // three monitors."): the full stop kept it from being taken for the address it is.
-    for lead in ["hey jarvis. ", "ok jarvis. ", "okay jarvis. ", "jarvis. "] {
+    for lead in ["hey jai. ", "ok jai. ", "okay jai. ", "jai. "] {
         if let Some(rest) = s.strip_prefix(lead) {
             s = rest.trim_start().to_string();
             break;
@@ -1285,7 +1285,7 @@ fn normalize(text: &str) -> String {
     for _ in 0..4 {
         let before = s.clone();
         for prefix in [
-            "hey jarvis ", "jarvis ", "please ", "bitte ", "can you ", "could you ", "would you ", "kannst du ",
+            "hey jai ", "jai ", "please ", "bitte ", "can you ", "could you ", "would you ", "kannst du ",
             "könntest du ", "würdest du ", "mal ", "doch mal ", "ok ", "okay ", "so ", "nana ", "na ", "nah ", "no ", "yeah ",
             "yes ", "yep ", "um ", "umm ", "uh ", "uhm ", "äh ", "ähm ", "öhm ", "hmm ", "also ", "well ", "alright ", "right ",
             "and ", "und ", "now ", "then ", "dann ", "ja ", "nein ", "oh ", "ah ", "actually ", "eigentlich ", "hey ",
@@ -1298,7 +1298,7 @@ fn normalize(text: &str) -> String {
         if let Some(rest) = without_lost_can(&s) {
             s = rest;
         }
-        for suffix in [" please", " bitte", " jarvis", " for me", " für mich", " now", " jetzt", " mal", " sofort", " right now"] {
+        for suffix in [" please", " bitte", " jai", " for me", " für mich", " now", " jetzt", " mal", " sofort", " right now"] {
             if let Some(rest) = s.strip_suffix(suffix) {
                 s = rest.to_string();
             }
@@ -1332,7 +1332,7 @@ pub fn ui_layout_command(text: &str) -> Option<Value> {
 
 /// "Open my system stats (in a new window)", "show my telemetry on monitor 2", "open my calendar
 /// in a new window", "open the simulation lab", "show the QR code", "open my gym logs", Whisper's
-/// "open message from stats": `open_jarvis_view` arguments. Jarvis' own views are never programs
+/// "open message from stats": `open_jarvis_view` arguments. JAI's own views are never programs
 /// for the app launcher. Panel words ("hide the system panel", "show the telemetry tab") stay HUD
 /// layout commands.
 pub fn internal_view_command(text: &str) -> Option<Value> {
@@ -1416,7 +1416,7 @@ static WINDOWS_BACK: LazyLock<Regex> = LazyLock::new(|| {
 });
 /// "… the next time I start you", "… at startup", "… when you start", "… beim nächsten Start".
 static NEXT_START: LazyLock<Regex> = LazyLock::new(|| {
-    re(r"\s+(?:again\s+)?(?:(?:the\s+)?next\s+time(?:\s+(?:i\s+start\s+(?:you|jarvis)(?:\s+up)?|you\s+start(?:\s+up)?|i\s+open\s+you))?|(?:at|on|for|after)\s+(?:the\s+|every\s+|each\s+)?(?:next\s+)?(?:start|startup|start-up|launch|boot|restart)|when(?:ever)?\s+(?:you|i)\s+(?:start|restart|boot|launch)(?:\s+(?:you|jarvis|up|again))*(?:\s+(?:the\s+)?next\s+time)?|(?:beim|für\s+den|zum|nach\s+dem)\s+nächsten\s+start)(?:\s+(?:again|wieder))?(?:\s+any\s?more)?$")
+    re(r"\s+(?:again\s+)?(?:(?:the\s+)?next\s+time(?:\s+(?:i\s+start\s+(?:you|jai)(?:\s+up)?|you\s+start(?:\s+up)?|i\s+open\s+you))?|(?:at|on|for|after)\s+(?:the\s+|every\s+|each\s+)?(?:next\s+)?(?:start|startup|start-up|launch|boot|restart)|when(?:ever)?\s+(?:you|i)\s+(?:start|restart|boot|launch)(?:\s+(?:you|jai|up|again))*(?:\s+(?:the\s+)?next\s+time)?|(?:beim|für\s+den|zum|nach\s+dem)\s+nächsten\s+start)(?:\s+(?:again|wieder))?(?:\s+any\s?more)?$")
 });
 static KEEP_VERB: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(dont\s+|do\s+not\s+|never\s+|no\s+longer\s+|stop\s+)?(?:open|opening|show|showing|keep|keeping|bring\s+up|start\s+with|load|display|pin|have|öffne|oeffne|zeig|zeige|behalte|behalt|lade)\s+(.+)$")
@@ -1785,7 +1785,7 @@ fn hud_view_sentence(text: &str) -> Option<Intent> {
     if let Some(intent) = shadow_or_server_command(&s) {
         return Some(intent);
     }
-    // Jarvis's own Discord account (once it is set up): calls as himself, pairing, his inbox.
+    // JAI's own Discord account (once it is set up): calls as himself, pairing, his inbox.
     if let Some(args) = crate::discord_bot::intent(&s) {
         return Some(Intent::Tool { name: "discord_bot", args });
     }
@@ -1808,7 +1808,7 @@ fn hud_view_sentence(text: &str) -> Option<Intent> {
     None
 }
 
-/// Going out: "where can I take my fiancée for a Halloween night?" (Jarvis picks the venue and
+/// Going out: "where can I take my fiancée for a Halloween night?" (JAI picks the venue and
 /// puts it on the board) and "let's go here" (the route to it).
 pub fn outing_command(text: &str) -> Option<Intent> {
     if let Some(request) = crate::venue_guide::venue_request(text) {
@@ -1968,7 +1968,7 @@ pub fn panel_request(text: &str) -> Option<Value> {
 /// the ISS?". A question opens its panel too: every opening action is a `show…` or a `check…`,
 /// which only looks. Closing one is the board's ("close the globe", `intent_engine::block_close`).
 fn panel_command(text: &str, up: PanelsUp) -> Option<Value> {
-    // "Hey Jarvis, check check the network": a word said twice in a row counts once.
+    // "Hey JAI, check check the network": a word said twice in a row counts once.
     let said = normalize(text);
     let mut words: Vec<&str> = Vec::new();
     for w in said.split_whitespace() {
@@ -2057,7 +2057,7 @@ fn earth_layer_switch(s: &str, radar_up: bool) -> Option<Value> {
         // Switching a layer on is only that when nothing else was asked: "show the flights over
         // New York", "show me Starlink" and "the traffic on the A8" are their own requests.
         const SAID: &[&str] = &[
-            "the", "me", "my", "your", "our", "all", "again", "back", "please", "layer", "layers", "markers", "i", "want", "to", "see", "let", "too", "also", "now", "can", "you", "jarvis", "and", "it", "them", "toggle", "umschalten",
+            "the", "me", "my", "your", "our", "all", "again", "back", "please", "layer", "layers", "markers", "i", "want", "to", "see", "let", "too", "also", "now", "can", "you", "jai", "and", "it", "them", "toggle", "umschalten",
             "show", "turn", "switch", "on", "enable", "add", "display", "put", "bring", "zeig", "zeige", "mir", "die", "den", "das", "wieder", "bitte", "an", "ein", "einblenden", "schalte",
         ];
         let named: Vec<&str> = LAYERS.iter().find(|(_, l, _)| *l == layer).map_or(&[][..], |(n, ..)| *n).iter().flat_map(|n| n.split(' ')).collect();
@@ -2645,7 +2645,7 @@ fn disk_path(s: &str) -> Option<String> {
     letters.next().map(|first| first.to_uppercase().chain(letters).collect())
 }
 
-/// The Jarvis view a phrase names (`opening`: Sir wants a window, not a reading in the chat).
+/// The JAI view a phrase names (`opening`: Sir wants a window, not a reading in the chat).
 fn view_named(object: &str, opening: bool) -> Option<&'static str> {
     let o = object.trim();
     static STATS: LazyLock<Regex> = LazyLock::new(|| {
@@ -2684,32 +2684,32 @@ fn view_named(object: &str, opening: bool) -> Option<&'static str> {
 static STOP: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(stop|stopp|halt|enough|cancel|abort|be quiet|quiet|silence|shut up|stop talking|never mind|nevermind|forget it|sei still|sei ruhig|ruhe|still|hör auf|hoer auf|das reicht|abbrechen|schluss|genug|vergiss es|egal|schon gut)$")
 });
-/// Quit Jarvis himself. "Close Jarvis" arrives as "close" (the trailing name is stripped);
+/// Quit JAI himself. "Close JAI" arrives as "close" (the trailing name is stripped);
 /// "shut down the computer" deliberately does not match.
 static SHUTDOWN: LazyLock<Regex> = LazyLock::new(|| {
     let forms = [
         // "Turn down" stays a volume request.
-        r"(?:(?:shut|power)(?:\s+(?:yourself|jarvis))?\s+(?:down|off)|(?:turn|switch)(?:\s+(?:yourself|jarvis))?\s+off)(?:\s+(?:yourself|jarvis|completely|for (?:today|now|the night)))?",
-        r"shutdown(?:\s+(?:yourself|jarvis))?",
-        r"(?:close|quit|exit|terminate|end|kill|stop)\s+(?:yourself|jarvis|your\s+(?:app|application|program|process|self)|the\s+(?:assistant|jarvis app))",
+        r"(?:(?:shut|power)(?:\s+(?:yourself|jai))?\s+(?:down|off)|(?:turn|switch)(?:\s+(?:yourself|jai))?\s+off)(?:\s+(?:yourself|jai|completely|for (?:today|now|the night)))?",
+        r"shutdown(?:\s+(?:yourself|jai))?",
+        r"(?:close|quit|exit|terminate|end|kill|stop)\s+(?:yourself|jai|your\s+(?:app|application|program|process|self)|the\s+(?:assistant|jai app))",
         r"close|quit|exit|terminate|log off|sign off|go offline|self[- ]destruct",
-        r"(?:beende|beend)(?:\s+(?:dich(?:\s+selbst)?|jarvis|dein\s+programm|deine\s+app))?",
+        r"(?:beende|beend)(?:\s+(?:dich(?:\s+selbst)?|jai|dein\s+programm|deine\s+app))?",
         // ("Kannst du dich selbst schließen?" arrives as "dich selbst schließen".)
-        r"(?:dich|jarvis)?\s*(?:selbst\s+)?(?:beenden|ausschalten|abschalten|herunterfahren|runterfahren|schließen|schliessen)",
-        r"(?:schalt|schalte|mach|mache)\s+(?:dich|jarvis)\s+(?:aus|ab)",
-        r"(?:fahr|fahre)\s+(?:dich|jarvis)?\s*(?:herunter|runter)",
-        r"(?:schließ|schließe|schliess|schliesse)(?:\s+(?:dich|jarvis))?",
+        r"(?:dich|jai)?\s*(?:selbst\s+)?(?:beenden|ausschalten|abschalten|herunterfahren|runterfahren|schließen|schliessen)",
+        r"(?:schalt|schalte|mach|mache)\s+(?:dich|jai)\s+(?:aus|ab)",
+        r"(?:fahr|fahre)\s+(?:dich|jai)?\s*(?:herunter|runter)",
+        r"(?:schließ|schließe|schliess|schliesse)(?:\s+(?:dich|jai))?",
     ];
     re(&format!("^(?:{})$", forms.join("|")))
 });
-/// "Close" on its own (Jarvis not named): it means the window, not quitting.
+/// "Close" on its own (JAI not named): it means the window, not quitting.
 static BARE_QUIT: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(?:close|schließ|schließe|schliess|schliesse|schließen|schliessen)$")
 });
 
-/// The raw sentence names Jarvis himself ("close Jarvis", "quit yourself", "beende dich").
+/// The raw sentence names JAI himself ("close JAI", "quit yourself", "beende dich").
 fn names_jarvis(text: &str) -> bool {
-    raw_words(text).split_whitespace().any(|w| matches!(w, "jarvis" | "yourself" | "urself" | "dich" | "jarvi"))
+    raw_words(text).split_whitespace().any(|w| matches!(w, "jai" | "jay" | "yourself" | "urself" | "dich"))
 }
 static MEMORY_COMMAND: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(merk dir|merke dir|merk|notier dir|notiere dir|notiere|notier|speicher|speichere|vergiss nicht|vergiss|lösch die erinnerung|lösche die erinnerung|ich heiße|ich heisse|mein name ist|remember|note that|make a note|keep in mind|don't forget|dont forget|do not forget|forget that|forget about|forget my|my name is|call me)\b")
@@ -2751,10 +2751,10 @@ fn app_switch(s: &str) -> Option<Intent> {
 }
 
 /// A courtesy has one answer, and it takes no model: "thank you" once earned the last explanation
-/// over again, a bare "Jarvis" a goodnight. (Raw words: `normalize` strips both as fillers.)
+/// over again, a bare "JAI" a goodnight. (Raw words: `normalize` strips both as fillers.)
 fn courtesy(text: &str) -> Option<&'static str> {
     static THANKS: LazyLock<Regex> = LazyLock::new(|| {
-        re(r"^(?:(?:ok|okay|great|perfect|nice|good|cool|awesome|brilliant|lovely|super|prima|klasse|toll|gut)\s+)?(?:thanks|thank\s+you|cheers|many\s+thanks|danke|danke\s+dir|danke\s+schön|danke\s+schoen|vielen\s+dank)(?:\s+(?:very\s+much|so\s+much|a\s+lot|a\s+million))?(?:\s+(?:jarvis|sir))?(?:\s+that\s+was\s+(?:perfect|great|good|helpful|nice))?$")
+        re(r"^(?:(?:ok|okay|great|perfect|nice|good|cool|awesome|brilliant|lovely|super|prima|klasse|toll|gut)\s+)?(?:thanks|thank\s+you|cheers|many\s+thanks|danke|danke\s+dir|danke\s+schön|danke\s+schoen|vielen\s+dank)(?:\s+(?:very\s+much|so\s+much|a\s+lot|a\s+million))?(?:\s+(?:jai|sir))?(?:\s+that\s+was\s+(?:perfect|great|good|helpful|nice))?$")
     });
     const REPLIES: [&str; 3] = ["You're welcome, Sir.", "My pleasure, Sir.", "Any time, Sir."];
     static SAID: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -2762,7 +2762,7 @@ fn courtesy(text: &str) -> Option<&'static str> {
         return None;
     }
     let words = raw_words(text);
-    if matches!(words.as_str(), "jarvis" | "hey jarvis" | "hi jarvis" | "ok jarvis" | "okay jarvis") {
+    if matches!(words.as_str(), "jai" | "hey jai" | "hi jai" | "ok jai" | "okay jai") {
         return Some("Yes, Sir?");
     }
     THANKS.is_match(&words).then(|| REPLIES[SAID.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % REPLIES.len()])
@@ -2771,12 +2771,12 @@ fn courtesy(text: &str) -> Option<&'static str> {
 /// "Is my mic muted?", "am I muted?", "are you listening?": the lock's state, as it stands.
 fn microphone_asked(text: &str) -> Option<String> {
     static ASKED: LazyLock<Regex> = LazyLock::new(|| {
-        re(r"^(?:jarvis\s+)?(?:is\s+(?:my|the|your)\s+(?:mic|microphone)\s+(?:muted|on|off|working)|am\s+i\s+muted|are\s+you\s+listening(?:\s+to\s+me)?(?:\s+right\s+now)?|can\s+you\s+hear\s+me|ist\s+(?:mein|das|dein)\s+(?:mikro|mikrofon)\s+(?:stumm|an|aus)|bin\s+ich\s+stumm|(?:hörst|hoerst)\s+du\s+(?:mir\s+)?zu|kannst\s+du\s+mich\s+(?:hören|hoeren))$")
+        re(r"^(?:jai\s+)?(?:is\s+(?:my|the|your)\s+(?:mic|microphone)\s+(?:muted|on|off|working)|am\s+i\s+muted|are\s+you\s+listening(?:\s+to\s+me)?(?:\s+right\s+now)?|can\s+you\s+hear\s+me|ist\s+(?:mein|das|dein)\s+(?:mikro|mikrofon)\s+(?:stumm|an|aus)|bin\s+ich\s+stumm|(?:hörst|hoerst)\s+du\s+(?:mir\s+)?zu|kannst\s+du\s+mich\s+(?:hören|hoeren))$")
     });
     // "Why did you stop listening?": his state, never his record of actions (2026-11-07 it was
     // "I have not changed anything in this session").
     static WHY_NOT: LazyLock<Regex> = LazyLock::new(|| {
-        re(r"^(?:jarvis\s+)?(?:why\s+(?:did\s+you\s+stop|have\s+you\s+stopped|are\s+you\s+not|aren\s?t\s+you|did\s+you\s+quit)\s+listening(?:\s+to\s+me)?|warum\s+(?:hörst|hoerst)\s+du\s+(?:mir\s+)?(?:nicht\s+mehr|nicht)\s+zu|warum\s+hast\s+du\s+(?:aufgehört|aufgehoert)\s+zuzuhören)$")
+        re(r"^(?:jai\s+)?(?:why\s+(?:did\s+you\s+stop|have\s+you\s+stopped|are\s+you\s+not|aren\s?t\s+you|did\s+you\s+quit)\s+listening(?:\s+to\s+me)?|warum\s+(?:hörst|hoerst)\s+du\s+(?:mir\s+)?(?:nicht\s+mehr|nicht)\s+zu|warum\s+hast\s+du\s+(?:aufgehört|aufgehoert)\s+zuzuhören)$")
     });
     let words = raw_words(text);
     if text.len() <= 60 && WHY_NOT.is_match(&words) {
@@ -2794,10 +2794,10 @@ fn microphone_asked(text: &str) -> Option<String> {
 /// want is left to the rest: "don't close the mixer, close the board instead".)
 fn held_back(text: &str) -> bool {
     static ENGLISH: LazyLock<Regex> = LazyLock::new(|| {
-        re(r"^(?:(?:no|nope|wait|please|jarvis)\s+)*(?:don\s?t|do\s+not|never)\s+(?:ever\s+|you\s+dare\s+)?(?:close|quit|exit|kill|end|open|start|launch|run|mute|unmute|stop|pause|turn|change|delete|remove|shut|restart|reboot|send|play|skip|switch|move|hide|lower|raise|set|put|make)\b")
+        re(r"^(?:(?:no|nope|wait|please|jai)\s+)*(?:don\s?t|do\s+not|never)\s+(?:ever\s+|you\s+dare\s+)?(?:close|quit|exit|kill|end|open|start|launch|run|mute|unmute|stop|pause|turn|change|delete|remove|shut|restart|reboot|send|play|skip|switch|move|hide|lower|raise|set|put|make)\b")
     });
     static GERMAN: LazyLock<Regex> = LazyLock::new(|| {
-        re(r"^(?:(?:nein|bitte|jarvis)\s+)*nicht\s+(?:schließen|schliessen|zumachen|aufmachen|öffnen|oeffnen|ausmachen|ausschalten|einschalten|anmachen|stumm\s*schalten|löschen|loeschen|entfernen|stoppen|ändern|aendern|herunterfahren|neu\s+starten|leiser|lauter)(?:\s+machen)?$|^(?:(?:nein|bitte|jarvis)\s+)*(?:schließ|schließe|schliess|schliesse|mach|mache|öffne|oeffne|stell|stelle|dreh|drehe|lösch|lösche|loesch|loesche|entferne|entfern|schalte|schalt|beende|beend|stopp|stoppe)\s+(?:.{1,30}\s+)?nicht(?:\s+(?:zu|auf|aus|an|ab|weg|stumm|leiser|lauter|runter|hoch|leise|laut))?$")
+        re(r"^(?:(?:nein|bitte|jai)\s+)*nicht\s+(?:schließen|schliessen|zumachen|aufmachen|öffnen|oeffnen|ausmachen|ausschalten|einschalten|anmachen|stumm\s*schalten|löschen|loeschen|entfernen|stoppen|ändern|aendern|herunterfahren|neu\s+starten|leiser|lauter)(?:\s+machen)?$|^(?:(?:nein|bitte|jai)\s+)*(?:schließ|schließe|schliess|schliesse|mach|mache|öffne|oeffne|stell|stelle|dreh|drehe|lösch|lösche|loesch|loesche|entferne|entfern|schalte|schalt|beende|beend|stopp|stoppe)\s+(?:.{1,30}\s+)?nicht(?:\s+(?:zu|auf|aus|an|ab|weg|stumm|leiser|lauter|runter|hoch|leise|laut))?$")
     });
     let words = raw_words(text);
     let words = words.as_str();
@@ -2817,17 +2817,17 @@ fn held_back(text: &str) -> bool {
 /// Discord?". A sentence that goes on to an order ("is it open? close it") does not count.
 pub fn only_asks(text: &str) -> bool {
     static ASKING: LazyLock<Regex> = LazyLock::new(|| {
-        re(r"^(?:(?:jarvis|hey|ok|okay|so|well|also|sir|uh|um|und|aber|sag\s+mal)\s+)*(?:is|isn\s?t|are|aren\s?t|am|was|were|did|didn\s?t|does|doesn\s?t|do\s+(?:i|you)|don\s?t\s+(?:i|you)|has|have\s+(?:i|you)|why|what|whats|which|who|whos|whose|when\s+(?:is|are|was|were|did|do|does|will|can|should)|where|wheres|how|hows|should\s+i|shall\s+i|must\s+i|ist|sind|bin|war|waren|hast|hat|hatte|hatten|habe\s+ich|warum|wieso|weshalb|welche|welcher|welches|welchen|wer|wann|wo|wie|läuft|laeuft|soll\s+ich|sollte\s+ich|muss\s+ich|darf\s+ich)\b")
+        re(r"^(?:(?:jai|hey|ok|okay|so|well|also|sir|uh|um|und|aber|sag\s+mal)\s+)*(?:is|isn\s?t|are|aren\s?t|am|was|were|did|didn\s?t|does|doesn\s?t|do\s+(?:i|you)|don\s?t\s+(?:i|you)|has|have\s+(?:i|you)|why|what|whats|which|who|whos|whose|when\s+(?:is|are|was|were|did|do|does|will|can|should)|where|wheres|how|hows|should\s+i|shall\s+i|must\s+i|ist|sind|bin|war|waren|hast|hat|hatte|hatten|habe\s+ich|warum|wieso|weshalb|welche|welcher|welches|welchen|wer|wann|wo|wie|läuft|laeuft|soll\s+ich|sollte\s+ich|muss\s+ich|darf\s+ich)\b")
     });
     static SUGGESTS: LazyLock<Regex> = LazyLock::new(|| {
-        re(r"^(?:(?:jarvis|hey|ok|okay|so|well|also|sir|uh|um|und|aber|sag\s+mal)\s+)*(?:how\s+about|what\s+about|why\s+don\s?t\s+you|why\s+not|do\s+you\s+mind|wie\s+wäre\s+es|wie\s+waere\s+es|was\s+ist\s+mit|warum\s+nicht)\b")
+        re(r"^(?:(?:jai|hey|ok|okay|so|well|also|sir|uh|um|und|aber|sag\s+mal)\s+)*(?:how\s+about|what\s+about|why\s+don\s?t\s+you|why\s+not|do\s+you\s+mind|wie\s+wäre\s+es|wie\s+waere\s+es|was\s+ist\s+mit|warum\s+nicht)\b")
     });
     static GOES_ON: LazyLock<Regex> = LazyLock::new(|| {
         re(r"\b(?:then|dann|if\s+so|if\s+it\s+is|if\s+yes|falls\s+ja|wenn\s+ja|and\s+(?:if|close|open|mute|unmute|turn|play|stop|start|pause|put|set|show|make)|und\s+(?:wenn|falls|schließ|schliess|öffne|oeffne|mach|starte|stopp|zeig|stell))\b")
     });
     // "Why is there no sound?" is a complaint: he wants it back, as with "I can't hear anything".
     static COMPLAINS: LazyLock<Regex> = LazyLock::new(|| {
-        re(r"^(?:(?:jarvis|hey|ok|okay|so|well|sir|uh|um)\s+)*why\s+(?:is\s+there\s+no\s+(?:sound|audio)|(?:can\s?t|don\s?t)\s+i\s+hear|is\s+(?:the\s+|my\s+)?(?:sound|audio)\s+(?:gone|broken|not\s+working))\b|^(?:(?:jarvis|und|aber)\s+)*warum\s+(?:(?:höre|hoere|hör|hoer)\s+ich\s+(?:nichts|keinen|kein)|ist\s+(?:der\s+)?(?:ton|sound)\s+(?:weg|kaputt)|(?:gibt\s+es\s+)?(?:keinen|kein)\s+(?:ton|sound))\b")
+        re(r"^(?:(?:jai|hey|ok|okay|so|well|sir|uh|um)\s+)*why\s+(?:is\s+there\s+no\s+(?:sound|audio)|(?:can\s?t|don\s?t)\s+i\s+hear|is\s+(?:the\s+|my\s+)?(?:sound|audio)\s+(?:gone|broken|not\s+working))\b|^(?:(?:jai|und|aber)\s+)*warum\s+(?:(?:höre|hoere|hör|hoer)\s+ich\s+(?:nichts|keinen|kein)|ist\s+(?:der\s+)?(?:ton|sound)\s+(?:weg|kaputt)|(?:gibt\s+es\s+)?(?:keinen|kein)\s+(?:ton|sound))\b")
     });
     let t = text.trim();
     let words = raw_words(t);
@@ -2839,14 +2839,14 @@ pub fn only_asks(text: &str) -> bool {
 /// order he knows. The answer is the order itself, for when Sir wants it; nothing is done.
 fn how_or_whether(text: &str) -> Option<String> {
     static HOW: LazyLock<Regex> = LazyLock::new(|| {
-        re(r"(?i)^(?:(?:hey\s+)?jarvis[,.]?\s+)?(?:so\s+|ok\s+|okay\s+)?how\s+(?:do|can|could|would|should)\s+(?:i|we)\s+(?:get\s+you\s+to\s+|tell\s+you\s+to\s+|ask\s+you\s+to\s+)?(.{3,60}?)[?.!]*$")
+        re(r"(?i)^(?:(?:hey\s+)?jai[,.]?\s+)?(?:so\s+|ok\s+|okay\s+)?how\s+(?:do|can|could|would|should)\s+(?:i|we)\s+(?:get\s+you\s+to\s+|tell\s+you\s+to\s+|ask\s+you\s+to\s+)?(.{3,60}?)[?.!]*$")
     });
-    static WHETHER: LazyLock<Regex> = LazyLock::new(|| re(r"(?i)^(?:(?:hey\s+)?jarvis[,.]?\s+)?(?:so\s+|ok\s+|okay\s+)?(?:should|shall)\s+i\s+(.{3,60}?)[?.!]*$"));
-    static WIE: LazyLock<Regex> = LazyLock::new(|| re(r"(?i)^(?:jarvis[,.]?\s+)?wie\s+(\w+e)\s+ich\s+(.{2,60}?)[?.!]*$"));
+    static WHETHER: LazyLock<Regex> = LazyLock::new(|| re(r"(?i)^(?:(?:hey\s+)?jai[,.]?\s+)?(?:so\s+|ok\s+|okay\s+)?(?:should|shall)\s+i\s+(.{3,60}?)[?.!]*$"));
+    static WIE: LazyLock<Regex> = LazyLock::new(|| re(r"(?i)^(?:jai[,.]?\s+)?wie\s+(\w+e)\s+ich\s+(.{2,60}?)[?.!]*$"));
     // "Soll ich Firefox schließen?": the infinitive at the end is how he takes the order too.
-    static SOLL: LazyLock<Regex> = LazyLock::new(|| re(r"(?i)^(?:jarvis[,.]?\s+)?(?:soll|sollte)\s+ich\s+(.{2,60}?)[?.!]*$"));
+    static SOLL: LazyLock<Regex> = LazyLock::new(|| re(r"(?i)^(?:jai[,.]?\s+)?(?:soll|sollte)\s+ich\s+(.{2,60}?)[?.!]*$"));
     static WHAT_IF: LazyLock<Regex> =
-        LazyLock::new(|| re(r"(?i)^(?:(?:hey\s+)?jarvis[,.]?\s+)?what\s+(?:happens|would\s+happen|will\s+happen)\s+if\s+(?:i|you|we)\s+(.{3,60}?)[?.!]*$"));
+        LazyLock::new(|| re(r"(?i)^(?:(?:hey\s+)?jai[,.]?\s+)?what\s+(?:happens|would\s+happen|will\s+happen)\s+if\s+(?:i|you|we)\s+(.{3,60}?)[?.!]*$"));
     enum Asked {
         How,
         Whether,
@@ -3011,7 +3011,7 @@ fn looked_up(s: &str) -> Option<Intent> {
 
 /// "More", "weniger" with nothing else said: the word to ask back with.
 pub fn bare_comparative(text: &str) -> Option<&'static str> {
-    match raw_words(text).trim_start_matches("jarvis ").trim_end_matches(" please").trim_end_matches(" bitte") {
+    match raw_words(text).trim_start_matches("jai ").trim_end_matches(" please").trim_end_matches(" bitte") {
         "more" | "mehr" | "noch mehr" => Some("More"),
         "less" | "weniger" => Some("Less"),
         _ => None,
@@ -3123,7 +3123,7 @@ static HUD_PLACE: LazyLock<Regex> = LazyLock::new(|| {
 static HUD_WINDOW_SIZE: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(?:make\s+)?(?:yourself|your window|the hud window|your hud)\s+(bigger|larger|smaller)$|^(?:mach|mache)\s+(?:dich|dein fenster)\s+(größer|groesser|grösser|kleiner)$")
 });
-/// "Exit full screen": Jarvis himself if he is the one in full screen, otherwise the app in focus
+/// "Exit full screen": JAI himself if he is the one in full screen, otherwise the app in focus
 /// (decided by the `window_management` tool).
 static FULLSCREEN_OFF: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(?:exit|leave|stop|quit|end|close|disable|turn off|cancel)\s+full[ -]?screen(?:\s+mode)?$|^full[ -]?screen\s+off$|^vollbild(?:modus)?\s+(?:aus|beenden|verlassen)$|^(?:verlass|verlasse|beende|beend)\s+(?:den\s+)?vollbild(?:modus)?$|^kein vollbild(?:\s+mehr)?$")
@@ -3151,7 +3151,7 @@ static HUD_CORE: LazyLock<Regex> = LazyLock::new(|| {
 static BOARD_RESTORE: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(?:go\s+)?back\s+to\s+(?:the\s+)?(?:board|hud board|screen)$|^(?:bring|put|get)\s+(?:back\s+)?(?:the|my|your)\s+(?:screen|board|hud board|blocks|report)\s*(?:back)?(?:\s+(?:up|on))?$|^(?:bring|get)\s+back\s+(?:the|my|your)\s+(?:screen|board|hud board|blocks)$|^(?:restore|reopen)\s+(?:the|my|your)\s+(?:screen|blocks|last board|hud board)$|^(?:screen|board)\s+(?:back(?:\s+(?:on|up))?|up)$|^(?:turn|switch)\s+(?:the\s+)?screen\s+back\s+on$|^(?:hol|bring)\s+(?:den\s+)?(?:bildschirm|screen)\s+zurück$")
 });
-/// "Dock all windows back inside Jarvis" (the name is stripped by `normalize`), "bring all the
+/// "Dock all windows back inside JAI" (the name is stripped by `normalize`), "bring all the
 /// windows back in".
 static DOCK_ALL: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^dock\s+(?:all\s+)?(?:(?:the|your|my)\s+)?(?:windows|views|blocks)(?:\s+back)?(?:\s+(?:in|into|inside|onto)(?:\s+(?:the\s+)?(?:hud|board|main window|app|yourself))?)?$|^(?:bring|put|move|pull)\s+(?:all\s+)?(?:(?:the|your|my)\s+)?(?:windows|views)\s+back\s+(?:in|into|inside|onto)(?:\s+(?:the\s+)?(?:hud|board|main window|app|yourself))?$|^(?:hol|hole)\s+alle\s+fenster\s+(?:wieder\s+)?(?:rein|zurück)$")
@@ -3177,7 +3177,7 @@ static LLM_REBOOT: LazyLock<Regex> = LazyLock::new(|| {
 });
 /// "Windowed mode", "switch to windowed mode", "Fenstermodus": the HUD board leaves fullscreen.
 static HUD_WINDOWED: LazyLock<Regex> = LazyLock::new(|| {
-    re(r"^(?:(?:switch|go|change)\s+(?:back\s+)?(?:to|into)\s+|use\s+)?(?:windowed|window)\s+mode$|^windowed$|^(?:exit|leave)\s+fullscreen\s+(?:yourself|jarvis|hud|board)$|^(?:wechsel|wechsle|geh|gehe)?\s*(?:in\s+den\s+)?fenstermodus$")
+    re(r"^(?:(?:switch|go|change)\s+(?:back\s+)?(?:to|into)\s+|use\s+)?(?:windowed|window)\s+mode$|^windowed$|^(?:exit|leave)\s+fullscreen\s+(?:yourself|jai|hud|board)$|^(?:wechsel|wechsle|geh|gehe)?\s*(?:in\s+den\s+)?fenstermodus$")
 });
 /// "Open the interface settings", "show me your settings", "Einstellungen öffnen".
 static HUD_SETTINGS: LazyLock<Regex> = LazyLock::new(|| {
@@ -3509,7 +3509,7 @@ fn to_snake(id: &str) -> String {
 
 // ---- Conversational focus ("full screen", "maximize it", "close it", "move it left") --------
 // Without a name these act on the app or website the conversation is about (resolved by the
-// tools through `focus`), never on Jarvis; he is only the target when Sir says so.
+// tools through `focus`), never on JAI; he is only the target when Sir says so.
 
 /// Object words for the app, window or website just talked about.
 const IT: &str = r"(?:it|that|this|that one|this one|that app|this app|the app|that program|this program|the program|that window|this window|the window|es|das|dies|ihn|sie|das fenster|das programm|die app)";
@@ -3541,10 +3541,10 @@ static FOCUS_REMOVE: LazyLock<Regex> = LazyLock::new(|| {
 static FOCUS_CLOSE_TAB: LazyLock<Regex> =
     LazyLock::new(|| re(r"^(?:close|shut)\s+(?:the|that|this)\s+tab$|^(?:schließ|schließe|schliess|schliesse)\s+(?:den|diesen)\s+tab$|^tab\s+(?:schließen|schliessen|zu)$"));
 
-/// Sir explicitly means Jarvis' own window ("maximize Jarvis", "fullscreen yourself", "make the
-/// HUD full screen"). Checked on the raw sentence: normalisation drops a trailing "Jarvis".
+/// Sir explicitly means JAI's own window ("maximize JAI", "fullscreen yourself", "make the
+/// HUD full screen"). Checked on the raw sentence: normalisation drops a trailing "JAI".
 static SELF_WINDOW: LazyLock<Regex> = LazyLock::new(|| {
-    re(r"\b(?:go\s+)?(full ?screen|maximi[sz]e|minimi[sz]e)\s+(?:yourself|jarvis|your\s+(?:own\s+)?(?:window|hud|interface|gui|self)|the\s+(?:hud|interface|gui))\b|\b(?:make|put|set|switch|turn)\s+(?:yourself|jarvis|your\s+(?:window|hud|interface|gui)|the\s+(?:hud|interface|gui))\s+(?:to\s+|in\s+|into\s+)?(full ?screen|maximi[sz]ed|minimi[sz]ed)\b|\bgo\s+(full ?screen)\s+(?:yourself|jarvis)\b|\b(?:mach|mache|schalte|schalt)\s+dich\s+(?:auf\s+|in\s+den\s+)?(vollbild)|\b(maximiere|minimiere)\s+dich\b")
+    re(r"\b(?:go\s+)?(full ?screen|maximi[sz]e|minimi[sz]e)\s+(?:yourself|jai|your\s+(?:own\s+)?(?:window|hud|interface|gui|self)|the\s+(?:hud|interface|gui))\b|\b(?:make|put|set|switch|turn)\s+(?:yourself|jai|your\s+(?:window|hud|interface|gui)|the\s+(?:hud|interface|gui))\s+(?:to\s+|in\s+|into\s+)?(full ?screen|maximi[sz]ed|minimi[sz]ed)\b|\bgo\s+(full ?screen)\s+(?:yourself|jai)\b|\b(?:mach|mache|schalte|schalt)\s+dich\s+(?:auf\s+|in\s+den\s+)?(vollbild)|\b(maximiere|minimiere)\s+dich\b")
 });
 
 /// Lower-case, punctuation-free, but nothing stripped (unlike `normalize`).
@@ -3559,7 +3559,7 @@ fn raw_words(text: &str) -> String {
         .join(" ")
 }
 
-/// "Maximize Jarvis", "fullscreen yourself" → `configure_interface` arguments for the HUD.
+/// "Maximize JAI", "fullscreen yourself" → `configure_interface` arguments for the HUD.
 fn self_window_command(text: &str) -> Option<Value> {
     let words = raw_words(text);
     let c = SELF_WINDOW.captures(&words)?;
@@ -3670,10 +3670,10 @@ fn file_followup(s: &str) -> Option<Intent> {
     Some(Intent::Tool { name: "open_application", args: json!({ "open_last_file": true, "with": with }) })
 }
 
-// ---- Jarvis' extra windows ("make that window transparent", "pin that window") ------------
+// ---- JAI's extra windows ("make that window transparent", "pin that window") ------------
 
 const JARVIS_WINDOW: &str =
-    r"(?:that|this|the new|the second|the other|the extra|the last|your second|your other|your new|the jarvis|that jarvis)\s+window";
+    r"(?:that|this|the new|the second|the other|the extra|the last|your second|your other|your new|the jai|that jai)\s+window";
 
 static WINDOW_STYLE: LazyLock<Regex> = LazyLock::new(|| re(&format!(r"^(?:make|set|turn|switch)\s+{JARVIS_WINDOW}\s+(?:to\s+|into\s+)?(.+)$")));
 static WINDOW_PIN: LazyLock<Regex> = LazyLock::new(|| {
@@ -3724,12 +3724,12 @@ fn nav_normalize(text: &str) -> String {
     let mut s = cleaned.split_whitespace().filter(|w| !matches!(*w, "bitte" | "please" | "mal" | "doch")).collect::<Vec<_>>().join(" ");
     for _ in 0..3 {
         let before = s.clone();
-        for prefix in ["hey jarvis ", "jarvis ", "can you ", "could you ", "would you ", "kannst du ", "könntest du ", "ok ", "okay ", "now ", "and ", "und "] {
+        for prefix in ["hey jai ", "jai ", "can you ", "could you ", "would you ", "kannst du ", "könntest du ", "ok ", "okay ", "now ", "and ", "und "] {
             if let Some(rest) = s.strip_prefix(prefix) {
                 s = rest.to_string();
             }
         }
-        for suffix in [" jarvis", " for me", " für mich", " now", " jetzt", " sir"] {
+        for suffix in [" jai", " for me", " für mich", " now", " jetzt", " sir"] {
             if let Some(rest) = s.strip_suffix(suffix) {
                 s = rest.to_string();
             }
@@ -3869,12 +3869,12 @@ fn looks_like_app_name(name: &str) -> bool {
     let blacklist = [
         "the door", "a ", "my mind", "conversation", "the conversation", "with", "about", "how", "why", "what", "wie",
         "warum", "was", "and ", " und ", "that", "dass", "this", "it ", "es ", "timer", "a timer", "reminder",
-        "meeting", "file", "datei", "folder with", "new", "neue", "skill", "yourself", "your ", "dich", "jarvis",
+        "meeting", "file", "datei", "folder with", "new", "neue", "skill", "yourself", "your ", "dich", "jai",
     ];
     words <= 4 && !blacklist.iter().any(|b| name == b.trim() || name.contains(b))
 }
 
-// ---- Live windows, Jarvis' windows, monitors, music and Stark Protocols --------------------
+// ---- Live windows, JAI's windows, monitors, music and Stark Protocols --------------------
 // These are the requests the small local model tends to *answer* ("I'm creating a window with
 // your PC stats, Sir") without calling a tool, so they never reach it: they run instantly.
 
@@ -3972,7 +3972,7 @@ fn live_window_request(s: &str) -> Option<Value> {
     Some(args)
 }
 
-/// A Jarvis window named in a phrase → the id the window tools resolve ("focus" = the one the
+/// A JAI window named in a phrase → the id the window tools resolve ("focus" = the one the
 /// conversation is about).
 fn jarvis_window_target(phrase: &str) -> Option<String> {
     let p = phrase.trim();
@@ -3982,7 +3982,7 @@ fn jarvis_window_target(phrase: &str) -> Option<String> {
     let name = p.trim_start_matches("the ").trim_start_matches("my ").trim_start_matches("your ");
     let name = name.strip_suffix(" window").or_else(|| name.strip_suffix(" fenster"))?.trim();
     // "The window" / "your window" mean the HUD.
-    (!name.is_empty() && !matches!(name, "hud" | "jarvis" | "main")).then(|| name.to_string())
+    (!name.is_empty() && !matches!(name, "hud" | "jai" | "main")).then(|| name.to_string())
 }
 
 static WINDOW_RESIZE_TO: LazyLock<Regex> = LazyLock::new(|| {
@@ -4150,7 +4150,7 @@ static PLAY_BY: LazyLock<Regex> = LazyLock::new(|| re(&format!(r"^{PLAY_ONLY}\s+
 static PLAY_SONG: LazyLock<Regex> = LazyLock::new(|| re(&format!(r"^{PLAY_VERB}\s+(?:the\s+|my\s+|das\s+)?(?:song|track|lied|title)\s+(.+)$")));
 static PLAY_ANY: LazyLock<Regex> = LazyLock::new(|| re(&format!(r"^{PLAY_ONLY}\s+(?:me\s+|mir\s+)?(?:my\s+|some\s+|the\s+|meine\s+)?(.+?)(?:\s+(?:for me|now|please|ab))?$")));
 
-/// "Pick some good music", "play something", "surprise me": Jarvis chooses (executive initiative).
+/// "Pick some good music", "play something", "surprise me": JAI chooses (executive initiative).
 static PICK_MUSIC: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(?:pick|choose|select|find)\s+(?:me\s+)?(?:(?:some|good|nice|great|the right|something)\s+)*(?:music|songs?|tunes|playlist|something to listen to)(?:\s+for me)?$|^(?:play|put on)\s+(?:me\s+)?(?:something|something good|something nice|something i like|some music|some good music|good music|some songs|some tunes|anything|whatever)$|^surprise me(?:\s+with\s+(?:some\s+)?music)?$|^(?:spiel|leg)\s+(?:mir\s+)?(?:irgendwas|was gutes|etwas gutes|gute musik|irgendeine musik|musik)\s*(?:auf|ab)?$|^(?:such|wähl)\s+(?:mir\s+)?(?:gute\s+)?musik\s+aus$")
 });
@@ -4260,7 +4260,7 @@ fn protocol_command(s: &str) -> Option<Intent> {
 }
 
 static AFFIRM: LazyLock<Regex> = LazyLock::new(|| {
-    re(r"^(?:yes|yeah|yep|yup|yes sir|sure|sure thing|ok|okay|alright|do it|do that|do so|go ahead|go for it|please do|sounds good|make it so|proceed|absolutely|of course|affirmative|why not|lets do it|let s do it|that would be great|that would be nice|ja|jawohl|klar|gerne|gern|mach das|mach es|mach ruhig|los|auf jeden fall|genau|gerne doch|ja gerne|open it|open the window|show me|yes open it|do that for me)(?:\s+(?:sir|jarvis|then|now|bitte|please|thanks|thank you|danke))?$")
+    re(r"^(?:yes|yeah|yep|yup|yes sir|sure|sure thing|ok|okay|alright|do it|do that|do so|go ahead|go for it|please do|sounds good|make it so|proceed|absolutely|of course|affirmative|why not|lets do it|let s do it|that would be great|that would be nice|ja|jawohl|klar|gerne|gern|mach das|mach es|mach ruhig|los|auf jeden fall|genau|gerne doch|ja gerne|open it|open the window|show me|yes open it|do that for me)(?:\s+(?:sir|jai|then|now|bitte|please|thanks|thank you|danke))?$")
 });
 static NEGATE: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(?:no|nope|nah|no thanks|no thank you|not now|no need|thats fine|that s fine|its fine|it s fine|never mind|leave it|nein|nee|nö|lieber nicht|nicht jetzt|nein danke|lass mal|passt schon)$")
@@ -4279,7 +4279,7 @@ pub fn is_affirmation(text: &str) -> bool {
 pub fn is_negation(text: &str) -> bool {
     // Raw words: `normalize` would read "no thanks" as "thanks".
     let s = raw_words(text);
-    let s = s.trim_start_matches("jarvis ").trim_end_matches(" jarvis").trim_end_matches(" sir");
+    let s = s.trim_start_matches("jai ").trim_end_matches(" jai").trim_end_matches(" sir");
     !s.is_empty() && NEGATE.is_match(s)
 }
 
@@ -4288,7 +4288,7 @@ pub fn is_termination(text: &str) -> bool {
     TERMINATE.is_match(&normalize(text))
 }
 
-/// An action a reply of Jarvis' states or offers.
+/// An action a reply of JAI's states or offers.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ReplyAction {
     /// "Shall I …?" (true) or "I'm creating …" / "Opening …" (false).
@@ -4517,14 +4517,14 @@ pub fn parse(text: &str) -> Option<Intent> {
     if STATUS_READING.is_match(&s) {
         return tool("get_system_status", json!({ "reading": reading_asked(&s) }));
     }
-    // The HUD board first: "sign off" puts the screen down (it no longer quits Jarvis), and with
+    // The HUD board first: "sign off" puts the screen down (it no longer quits JAI), and with
     // a board up "maximise that" means a block, not a window.
     if let Some(intent) = board_command(text, crate::hud_board::is_active(), crate::hud_board::spotlight_active()) {
         return Some(intent);
     }
     // Before the close/open rules, which would read "close ur self" or "kill process" as apps.
     if SHUTDOWN.is_match(&s) || is_self_shutdown(&s) {
-        // A bare "close" / "quit" (Jarvis not named) only sends the HUD to the tray.
+        // A bare "close" / "quit" (JAI not named) only sends the HUD to the tray.
         if BARE_QUIT.is_match(&s) && !names_jarvis(text) {
             return tool("configure_interface", json!({ "window": "hide" }));
         }
@@ -4611,7 +4611,7 @@ pub fn parse(text: &str) -> Option<Intent> {
     if let Some(intent) = protocol_command(&s) {
         return Some(intent);
     }
-    // "Maximize Jarvis", "fullscreen yourself": Jarvis only when Sir names him.
+    // "Maximize JAI", "fullscreen yourself": JAI only when Sir names him.
     if let Some(args) = self_window_command(text) {
         return tool("configure_interface", args);
     }
@@ -4690,7 +4690,7 @@ pub fn parse(text: &str) -> Option<Intent> {
             // "Close the Earth, you", "close Spotify for me now": what follows a name is no part
             // of it (2026-11-08: Windows was asked for programs called "Earth You", "Up", "Off").
             let named = strip_article(&c[1]);
-            // ("Close yourself" / "quit you" name Jarvis himself: that stays as it was said.)
+            // ("Close yourself" / "quit you" name JAI himself: that stays as it was said.)
             let app = if crate::tools::names_jarvis(&named) { named } else { strip_article(&crate::intent_engine::strip_close_fillers(&named)) };
             if app.is_empty() {
                 // "Close up", "closed, off": nothing named. Something of his that is up (the view
@@ -4709,7 +4709,7 @@ pub fn parse(text: &str) -> Option<Intent> {
             }
         }
     }
-    // Jarvis' own views are never programs ("open my system stats", "open message from stats").
+    // JAI's own views are never programs ("open my system stats", "open message from stats").
     if let Some(args) = internal_view_command(text) {
         return tool("open_jarvis_view", args);
     }
@@ -4725,12 +4725,12 @@ pub fn parse(text: &str) -> Option<Intent> {
 }
 
 // ---- The HUD board ---------------------------------------------------------------------------
-// "Hey Jarvis, are you there?", "can you do a state of VR report for me?", "yes please, present
+// "Hey JAI, are you there?", "can you do a state of VR report for me?", "yes please, present
 // the report", "bring up that VR report you gave me earlier", "maximise the chart", "back to the
-// board", "show me Tulleys Farm on the map", "thanks Jarvis, you can go to sleep again".
+// board", "show me Tulleys Farm on the map", "thanks JAI, you can go to sleep again".
 
 static BOARD_WAKE: LazyLock<Regex> = LazyLock::new(|| {
-    re(r"^(?:are you (?:there|awake|up|still there|with me)|you there|you awake|bist du (?:da|wach|noch da))(?:\s+jarvis)?$")
+    re(r"^(?:are you (?:there|awake|up|still there|with me)|you there|you awake|bist du (?:da|wach|noch da))(?:\s+jai)?$")
 });
 /// The screen goes down (and the GPU is emptied afterwards). "Clear the board" is not a sign-off:
 /// it only takes the blocks away (`intent_engine::close_command`).
@@ -4801,7 +4801,7 @@ pub fn board_command(text: &str, active: bool, spotlight: bool) -> Option<Intent
         return tool(json!({ "action": "sign_off" }));
     }
     // "Close the HUD board", "close to web search", "close the feature lab", "clear the board":
-    // Jarvis' own blocks, never a program for Windows to look up.
+    // JAI's own blocks, never a program for Windows to look up.
     if let Some(action) = crate::intent_engine::close_command(text) {
         return Some(Intent::Silent(action));
     }
@@ -4917,22 +4917,22 @@ pub fn live_info_query(text: &str) -> Option<String> {
 // `parse` only takes whole, unambiguous commands. `resolve_fuzzy` runs when it found nothing and
 // catches the natural, indirect or misheard forms of a few high-value actions anywhere in the
 // sentence ("can you please close yourself?", "would you mind opening Spotify", "help my
-// browser" for "open my browser"), so Jarvis acts instead of only answering with words.
+// browser" for "open my browser"), so JAI acts instead of only answering with words.
 
-/// Jarvis himself as the object of a quit verb, including Whisper's spellings. ("Close your
+/// JAI himself as the object of a quit verb, including Whisper's spellings. ("Close your
 /// window" hides the HUD instead.)
-const SELF_REF: &str = r"(?:ur ?self|your ?selfe?|urself|yo ?self|yer ?self|jarvis|your (?:app|application|program|process|self))";
+const SELF_REF: &str = r"(?:ur ?self|your ?selfe?|urself|yo ?self|yer ?self|jai|your (?:app|application|program|process|self))";
 
 static SELF_SHUTDOWN_ANY: LazyLock<Regex> = LazyLock::new(|| {
     re(&format!(
         // ("Gliese dich selbst": how the recogniser hears "schließe dich selbst"; "kannst du dich
         // selbst schließen", heard once as "kannte ich selbst schließen".)
-        r"\b(?:close|quit|exit|kill|terminate|end)\s+{SELF_REF}\b|\b(?:shut|turn|switch|power)\s+(?:(?:down|off)\s+{SELF_REF}|{SELF_REF}\s+(?:down|off))\b|\b(?:mach|mache)\s+(?:dich|jarvis)\s+(?:aus|zu|ab)\b|\b(?:schalt|schalte)\s+(?:dich|jarvis)\s+(?:aus|ab)\b|\b(?:fahr|fahre)\s+(?:dich|jarvis)\s+(?:selbst\s+)?(?:runter|herunter)\b|\b(?:beende|beend|schließe|schliesse|schließ|schliese|gliese|gließe|gliesse)\s+(?:dich|jarvis)\b|\b(?:kannst|könntest|koenntest|würdest|wuerdest)\s+du\s+(?:dich|jarvis)\s+(?:selbst\s+|bitte\s+|mal\s+)*(?:schließen|schliessen|beenden|ausschalten|abschalten|ausmachen|zumachen)\b|\b(?:kannte|kannt)\s+(?:ich|du)\s+(?:dich\s+)?selbst\s+(?:schließen|schliessen|beenden)\b"
+        r"\b(?:close|quit|exit|kill|terminate|end)\s+{SELF_REF}\b|\b(?:shut|turn|switch|power)\s+(?:(?:down|off)\s+{SELF_REF}|{SELF_REF}\s+(?:down|off))\b|\b(?:mach|mache)\s+(?:dich|jai)\s+(?:aus|zu|ab)\b|\b(?:schalt|schalte)\s+(?:dich|jai)\s+(?:aus|ab)\b|\b(?:fahr|fahre)\s+(?:dich|jai)\s+(?:selbst\s+)?(?:runter|herunter)\b|\b(?:beende|beend|schließe|schliesse|schließ|schliese|gliese|gließe|gliesse)\s+(?:dich|jai)\b|\b(?:kannst|könntest|koenntest|würdest|wuerdest)\s+du\s+(?:dich|jai)\s+(?:selbst\s+|bitte\s+|mal\s+)*(?:schließen|schliessen|beenden|ausschalten|abschalten|ausmachen|zumachen)\b|\b(?:kannte|kannt)\s+(?:ich|du)\s+(?:dich\s+)?selbst\s+(?:schließen|schliessen|beenden)\b"
     ))
 });
 /// Whole-sentence forms Sir uses for "quit yourself".
 static SELF_SHUTDOWN_EXACT: LazyLock<Regex> = LazyLock::new(|| {
-    re(r"^(?:go away|kill process|kill the process|turn off|switch off|power off|shut off|get lost|geh weg|mach aus|mach zu|feierabend|schluss für heute|bye bye jarvis|goodbye jarvis)$")
+    re(r"^(?:go away|kill process|kill the process|turn off|switch off|power off|shut off|get lost|geh weg|mach aus|mach zu|feierabend|schluss für heute|bye bye jai|goodbye jai)$")
 });
 static NEGATION: LazyLock<Regex> = LazyLock::new(|| re(r"\b(?:dont|do not|don t|never|nicht|nie|kein|keine)\b"));
 static SLEEP_MODE: LazyLock<Regex> = LazyLock::new(|| {
@@ -4950,7 +4950,7 @@ static VOICE_UNMUTE: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(?:unmute yourself|unmute your voice|unmute tts|turn your voice (?:back )?on|you can talk again|you may speak again|deine stimme (?:wieder )?an|du darfst wieder sprechen)$")
 });
 static RESTART: LazyLock<Regex> = LazyLock::new(|| {
-    re(&format!(r"^(?:restart|reboot|reload)(?:\s+{SELF_REF})?$|^(?:starte?|start)\s+(?:dich|jarvis)\s+neu$|^neustart$"))
+    re(&format!(r"^(?:restart|reboot|reload)(?:\s+{SELF_REF})?$|^(?:starte?|start)\s+(?:dich|jai)\s+neu$|^neustart$"))
 });
 /// "Open my browser", "launch web", "starte den Browser" anywhere in a sentence.
 static OPEN_BROWSER_ANY: LazyLock<Regex> = LazyLock::new(|| {
@@ -4966,10 +4966,10 @@ static OPEN_ANY: LazyLock<Regex> = LazyLock::new(|| {
 /// Whisper's usual mishearings of a sentence-initial "open".
 const OPEN_SOUNDALIKES: &[&str] = &["help", "hope", "opel", "oben", "upon", "oven", "opens", "opened", "ope", "obelix", "offen"];
 static WINDOW_FROM_REPLY: LazyLock<Regex> = LazyLock::new(|| {
-    re(r"\b(?:put|show|display|open|move|place|throw|pop)\s+(?:that|this|it|the)(?:\s+(?:answer|result|results|information|info|text|list|data))?(?:\s+out)?\s+(?:in|into|on|to)\s+(?:a|an|the|its)?\s*(?:second|new|separate|another|extra|own|different)?\s*(?:jarvis\s+)?window\b|\b(?:zeig|zeige|pack|leg|mach|öffne|oeffne)\s+(?:das|es|dies|diese infos?)\s+(?:in|im)\s+(?:einem|ein|einen|eigenen|neuen|zweiten|separaten|extra)?\s*(?:neuen|zweiten|separaten|eigenen|extra)?\s*fenster\b")
+    re(r"\b(?:put|show|display|open|move|place|throw|pop)\s+(?:that|this|it|the)(?:\s+(?:answer|result|results|information|info|text|list|data))?(?:\s+out)?\s+(?:in|into|on|to)\s+(?:a|an|the|its)?\s*(?:second|new|separate|another|extra|own|different)?\s*(?:jai\s+)?window\b|\b(?:zeig|zeige|pack|leg|mach|öffne|oeffne)\s+(?:das|es|dies|diese infos?)\s+(?:in|im)\s+(?:einem|ein|einen|eigenen|neuen|zweiten|separaten|extra)?\s*(?:neuen|zweiten|separaten|eigenen|extra)?\s*fenster\b")
 });
 static NEW_WINDOW: LazyLock<Regex> = LazyLock::new(|| {
-    re(r"^(?:open|spawn|create|make|give me)\s+(?:a|an|another|one more)\s+(?:new\s+|second\s+|separate\s+|extra\s+)?(?:jarvis\s+|native\s+)?window$|^(?:öffne|oeffne|mach|erstelle)\s+(?:ein|ein neues|ein zweites|noch ein)\s+(?:neues\s+)?fenster(?:\s+auf)?$|^neues fenster$")
+    re(r"^(?:open|spawn|create|make|give me)\s+(?:a|an|another|one more)\s+(?:new\s+|second\s+|separate\s+|extra\s+)?(?:jai\s+|native\s+)?window$|^(?:öffne|oeffne|mach|erstelle)\s+(?:ein|ein neues|ein zweites|noch ein)\s+(?:neues\s+)?fenster(?:\s+auf)?$|^neues fenster$")
 });
 static WIDGET_FROM_REPLY: LazyLock<Regex> = LazyLock::new(|| {
     re(r"\b(?:put|turn|make|save|pin|add|store)\s+(?:that|this|it|the)(?:\s+(?:answer|result|results|information|info|text|list|data))?\s+(?:in|into|as|to|on)\s+(?:a|an|the|my)?\s*(?:new\s+)?(?:widget|note card|note|card)\b|\b(?:pack|mach|speicher|speichere|leg)\w*\s+(?:das|es|dies)\s+(?:in|als)\s+(?:ein|einen|eine)?\s*(?:neues\s+)?(?:widget|notiz)\b")
@@ -4983,13 +4983,13 @@ static TELEMETRY_WINDOW: LazyLock<Regex> = LazyLock::new(|| {
     re(r"\b(?:show|put|display|open|give me|zeig|zeige)\s+(?:me\s+|mir\s+)?(?:my\s+|the\s+|meinen\s+|den\s+)?(?:system status|system stats|telemetry|system monitor|performance|hardware status|system info|systemstatus)\s+(?:in|into|on|im)\s+(?:a|an|the|einem)?\s*(?:new|second|separate|own|extra|another|neuen|eigenen|separaten)?\s*(?:window|fenster)\b")
 });
 static CLOSE_JARVIS_WINDOW: LazyLock<Regex> = LazyLock::new(|| {
-    re(r"^(?:close|shut)\s+(?:that|this|the|the jarvis|the new|the second|the separate|the extra|the last|the other)\s+(?:jarvis\s+)?window$|^(?:schließ|schließe|schliess|schliesse|mach)\s+(?:das|dieses|dein)\s+(?:neue\s+|zweite\s+)?fenster(?:\s+zu)?$")
+    re(r"^(?:close|shut)\s+(?:that|this|the|the jai|the new|the second|the separate|the extra|the last|the other)\s+(?:jai\s+)?window$|^(?:schließ|schließe|schliess|schliesse|mach)\s+(?:das|dieses|dein)\s+(?:neue\s+|zweite\s+)?fenster(?:\s+zu)?$")
 });
 static CLOSE_ALL_JARVIS_WINDOWS: LazyLock<Regex> = LazyLock::new(|| {
-    re(r"^(?:close|shut)\s+all\s+(?:of\s+)?(?:your|the|jarvis|the jarvis|extra|secondary)?\s*windows$|^(?:schließ|schließe|schliess|schliesse)\s+alle\s+(?:deine\s+|zusätzlichen\s+)?fenster$")
+    re(r"^(?:close|shut)\s+all\s+(?:of\s+)?(?:your|the|jai|the jai|extra|secondary)?\s*windows$|^(?:schließ|schließe|schliess|schliesse)\s+alle\s+(?:deine\s+|zusätzlichen\s+)?fenster$")
 });
 
-/// "Close ur self", "kill process", "mach dich zu" — Jarvis quitting himself (never negated).
+/// "Close ur self", "kill process", "mach dich zu" — JAI quitting himself (never negated).
 fn is_self_shutdown(s: &str) -> bool {
     !NEGATION.is_match(s) && (SELF_SHUTDOWN_EXACT.is_match(s) || SELF_SHUTDOWN_ANY.is_match(s))
 }
@@ -5012,7 +5012,7 @@ pub fn resolve_fuzzy(text: &str) -> Option<Intent> {
         return tool("spawn_native_window", json!({ "title": "System status", "telemetry": true, "width": 460, "height": 420 }));
     }
     if WINDOW_FROM_REPLY.is_match(&s) {
-        return tool("spawn_native_window", json!({ "title": "J.A.R.V.I.S.", "from_last_reply": true }));
+        return tool("spawn_native_window", json!({ "title": "J.A.I.", "from_last_reply": true }));
     }
     if let Some(c) = LIVE_WIDGET.captures(&s) {
         let (source, title) = match &c[1] {
@@ -5065,7 +5065,7 @@ pub fn resolve_fuzzy(text: &str) -> Option<Intent> {
     None
 }
 
-/// Whole-sentence lifecycle and Jarvis-window commands (part of `parse`, ahead of the app rules
+/// Whole-sentence lifecycle and JAI-window commands (part of `parse`, ahead of the app rules
 /// that would read "close the second window" as an application called "second").
 fn lifecycle_or_window_command(s: &str) -> Option<Intent> {
     let tool = |name: &'static str, args: Value| Some(Intent::Tool { name, args });
@@ -5089,7 +5089,7 @@ fn lifecycle_or_window_command(s: &str) -> Option<Intent> {
         return tool("close_native_window", json!({ "id": "last", "fallback_to_active_window": true }));
     }
     if NEW_WINDOW.is_match(s) {
-        return tool("spawn_native_window", json!({ "title": "J.A.R.V.I.S.", "from_last_reply": true }));
+        return tool("spawn_native_window", json!({ "title": "J.A.I.", "from_last_reply": true }));
     }
     None
 }
@@ -5155,7 +5155,7 @@ const CONNECTORS: &[&str] = &[
 ];
 
 /// A transcript that sounds unfinished: trailing "…", a dangling connector, or a short fragment
-/// that is not a complete command on its own. Jarvis waits a little longer for the rest.
+/// that is not a complete command on its own. JAI waits a little longer for the rest.
 pub fn looks_incomplete(text: &str) -> bool {
     let t = text.trim();
     if t.is_empty() {
@@ -5214,17 +5214,17 @@ mod board_tests {
 
     #[test]
     fn the_film_phrases_drive_the_board() {
-        assert_eq!(board("Hey Jarvis, are you there?", false, false), Some(json!({"action": "wake"})));
+        assert_eq!(board("Hey JAI, are you there?", false, false), Some(json!({"action": "wake"})));
         assert_eq!(board("Can you do a state of VR report for me?", false, false), Some(json!({"action": "research", "topic": "state of VR"})));
         assert_eq!(board("Yes please, present the report.", false, false), Some(json!({"action": "present"})));
         assert_eq!(board("Bring up that VR report you gave me earlier", false, false), Some(json!({"action": "recall", "topic": "vr"})));
         assert_eq!(board("Can you maximize the chart please?", true, false), Some(json!({"action": "maximize", "target": "chart"})));
         assert_eq!(board("Maximize that for me", true, false), Some(json!({"action": "maximize", "target": ""})));
         assert_eq!(board("Back to board", true, true), Some(json!({"action": "minimize"})));
-        assert_eq!(board("Thanks Jarvis, you can go to sleep again.", true, false), Some(json!({"action": "sign_off"})));
+        assert_eq!(board("Thanks JAI, you can go to sleep again.", true, false), Some(json!({"action": "sign_off"})));
         assert_eq!(board("Sign off", false, false), Some(json!({"action": "sign_off"})));
         // "Clear the board" takes the blocks away; it is no sign-off (the model stays loaded).
-        for text in ["Clear the board", "Jarvis, clear the HUD", "Clear view", "Board leeren"] {
+        for text in ["Clear the board", "JAI, clear the HUD", "Clear view", "Board leeren"] {
             assert_eq!(board(text, true, false), Some(json!({"action": "clear"})), "{text}");
         }
         assert_eq!(board("Clear my calendar", true, false), None);
@@ -5239,7 +5239,7 @@ mod board_tests {
         assert_eq!(board_command("next", false, false), None);
         assert_eq!(board_command("go back", false, false), None);
         // Voice pagination of a stacked block, and closing the board by name (not as a program).
-        for text in ["Jarvis, next page", "Next slide", "Next result", "Go forward", "Nächste Seite"] {
+        for text in ["JAI, next page", "Next slide", "Next result", "Go forward", "Nächste Seite"] {
             assert_eq!(board(text, true, false), Some(json!({"action": "flip_note", "direction": "next"})), "{text}");
         }
         for text in ["Previous page", "Go back", "previous result", "Zurück"] {
@@ -5254,11 +5254,11 @@ mod board_tests {
             assert_eq!(board(text, true, false), Some(json!({"action": "flip_note", "direction": "next"})), "{text}");
         }
         assert_eq!(board("Next page", false, false), None, "no board up");
-        for text in ["Close the HUD board, please.", "Close the HUD board", "Close web search", "Jarvis close to web search.", "Schließe das HUD Board", "Mach das Board zu", "HUD Board schließen"] {
+        for text in ["Close the HUD board, please.", "Close the HUD board", "Close web search", "JAI close to web search.", "Schließe das HUD Board", "Mach das Board zu", "HUD Board schließen"] {
             assert_eq!(board(text, true, false), Some(json!({"action": "close"})), "{text}");
             assert!(matches!(parse(text), Some(Intent::Silent(SilentAction { tool: "hud_board", .. }))), "never close_application: {text}");
         }
-        // One of Jarvis' own blocks by name: that block closes, the board stays.
+        // One of JAI's own blocks by name: that block closes, the board stays.
         for (text, target) in [
             ("Close the feature lab", "feature lab"),
             ("Close telemetry", "telemetry"),
@@ -5291,9 +5291,9 @@ mod board_tests {
         }
     }
 
-    /// Repro (jarvis.log, 2026-11-08 23:27-23:42): "Jarvis, close the Earth, you." asked Windows
-    /// for a program called "earth you" ("Earth You isn't running, Sir."); "Jarvis close up." and
-    /// "Jarvis closed, off." for programs called "up" and "off".
+    /// Repro (jarvis.log, 2026-11-08 23:27-23:42): "JAI, close the Earth, you." asked Windows
+    /// for a program called "earth you" ("Earth You isn't running, Sir."); "JAI close up." and
+    /// "JAI closed, off." for programs called "up" and "off".
     #[test]
     fn fillers_after_a_close_never_become_a_program() {
         for text in ["close the Earth, you.", "Close the Earth, you", "close the earth please", "close the Earth for me now", "Close the world.", "close the planet, you"] {
@@ -5320,7 +5320,7 @@ mod board_tests {
             }
         }
         assert_eq!(heard("Close Spotify for me now"), Some(Intent::Tool { name: "close_application", args: json!({"app_name": "spotify", "force": true}) }));
-        // "Close yourself" / "quit you" still name Jarvis himself.
+        // "Close yourself" / "quit you" still name JAI himself.
         for text in ["Close yourself", "Quit you", "Close you"] {
             let intent = heard(text);
             assert!(closes_view(text).is_none() && intent != own, "{text}: {intent:?}");
@@ -5353,7 +5353,7 @@ mod board_tests {
         assert_eq!(board("Research solid-state batteries for three hours", false, false), None);
         assert_eq!(board("research quantum computing and bring up the windows", false, false), None, "the knowledge workspace");
         assert_eq!(board("Don't sign off", false, false), None);
-        assert!(matches!(parse("Sign off"), Some(Intent::Tool { name: "hud_board", .. })), "sign off no longer quits Jarvis");
+        assert!(matches!(parse("Sign off"), Some(Intent::Tool { name: "hud_board", .. })), "sign off no longer quits JAI");
     }
 }
 
@@ -5371,7 +5371,7 @@ mod tests {
     #[test]
     fn stop_and_time() {
         assert_eq!(parse("Stop!"), Some(Intent::Stop));
-        assert_eq!(parse("Jarvis, sei still."), Some(Intent::Stop));
+        assert_eq!(parse("JAI, sei still."), Some(Intent::Stop));
         assert_eq!(parse("What time is it?"), Some(Intent::Time));
         assert_eq!(parse("Wie spät ist es?"), Some(Intent::Time));
         assert_eq!(parse("Welcher Tag ist heute?"), Some(Intent::Date));
@@ -5395,7 +5395,7 @@ mod tests {
     #[test]
     fn apps_and_windows() {
         assert_eq!(tool("Open Spotify"), Some(("open_application", json!({"app_name": "spotify"}))));
-        assert_eq!(tool("Jarvis, öffne bitte Discord."), Some(("open_application", json!({"app_name": "discord"}))));
+        assert_eq!(tool("JAI, öffne bitte Discord."), Some(("open_application", json!({"app_name": "discord"}))));
         assert_eq!(tool("Mach mal Spotify auf"), Some(("open_application", json!({"app_name": "spotify"}))));
         assert_eq!(tool("Starte den Browser"), Some(("open_application", json!({"app_name": "browser"}))));
         assert_eq!(tool("VS Code öffnen"), Some(("open_application", json!({"app_name": "vs code"}))));
@@ -5411,7 +5411,7 @@ mod tests {
     #[test]
     fn memory_commands_are_detected() {
         assert!(is_memory_command("Merk dir bitte, dass ich meinen Kaffee schwarz trinke."));
-        assert!(is_memory_command("Jarvis, remember that my sister is called Anna"));
+        assert!(is_memory_command("JAI, remember that my sister is called Anna"));
         assert!(is_memory_command("Mein Name ist Max"));
         assert!(is_memory_command("Vergiss, dass ich Kaffee trinke"));
         assert!(!is_memory_command("Erinnere mich morgen an das Meeting"));
@@ -5435,25 +5435,25 @@ mod tests {
         let quits = |text: &str| tool(text).map(|(name, _)| name) == Some("shutdown_jarvis");
         // Phrases from the log that used to fail ("close_application yourself/your").
         for text in [
-            "Jarvis, please close yourself.",
-            "bitte fahre Jarvis herunter",
-            "Jarvis, kill your app.",
+            "JAI, please close yourself.",
+            "bitte fahre JAI herunter",
+            "JAI, kill your app.",
             "Shut down.",
-            "Jarvis, shut yourself down",
-            "Close Jarvis",
+            "JAI, shut yourself down",
+            "Close JAI",
             "Quit",
             "Turn yourself off",
             "Beende dich",
-            "Jarvis beenden",
+            "JAI beenden",
             "Schalte dich aus",
             "Fahr herunter",
         ] {
             assert!(quits(text), "should quit: {text}");
         }
         for text in ["Shut down the computer", "Fahr den PC herunter", "Turn down", "Turn off the lights", "Close Spotify"] {
-            assert!(!quits(text), "should not quit Jarvis: {text}");
+            assert!(!quits(text), "should not quit JAI: {text}");
         }
-        assert_eq!(parse("Stop, Jarvis"), Some(Intent::Stop), "stop only silences");
+        assert_eq!(parse("Stop, JAI"), Some(Intent::Stop), "stop only silences");
     }
 
     #[test]
@@ -5484,7 +5484,7 @@ mod tests {
             "Span all my screens",
             "Stretch yourself across all monitors",
             "Use both screens",
-            "Jarvis. Span over all three monitors.",
+            "JAI. Span over all three monitors.",
             "Span across all 3 monitors",
             "Spread the HUD over every screen",
             "Extend yourself to all my displays",
@@ -5523,7 +5523,7 @@ mod tests {
         assert_eq!(hud("Move the orb to bottom center"), Some(json!({"orb_board_position": "bottom center"})));
         // The screenshot bug: "back" between the orb and the place fell through to the model.
         for (text, spot) in [
-            ("Jarvis, move your orb back to the middle.", "middle"),
+            ("JAI, move your orb back to the middle.", "middle"),
             ("Move your orb to the top right", "top right"),
             ("Move your orb left", "left"),
             ("Move the orb slightly left", "slightly left"),
@@ -5532,8 +5532,8 @@ mod tests {
         ] {
             assert_eq!(tool(text), Some(("configure_interface", json!({"orb_board_position": spot}))), "{text}");
         }
-        // "Move to my 3rd monitor": Jarvis himself.
-        for (text, n) in [("Move to my 3rd monitor", 3), ("Jarvis, go to monitor 2", 2), ("Move over to the second screen", 2)] {
+        // "Move to my 3rd monitor": JAI himself.
+        for (text, n) in [("Move to my 3rd monitor", 3), ("JAI, go to monitor 2", 2), ("Move over to the second screen", 2)] {
             assert_eq!(tool(text), Some(("move_window_to_monitor", json!({"app_or_window_name": "jarvis", "target_monitor": n}))), "{text}");
         }
     }
@@ -5544,7 +5544,7 @@ mod tests {
             Some(("configure_interface", args)) => Some(args),
             _ => None,
         };
-        assert_eq!(hud("Jarvis, make the interface red"), Some(json!({"accent_color": "red"})));
+        assert_eq!(hud("JAI, make the interface red"), Some(json!({"accent_color": "red"})));
         assert_eq!(hud("Mach das Interface rot"), Some(json!({"accent_color": "rot"})));
         assert_eq!(hud("Ändere die Farbe zu Grün"), Some(json!({"accent_color": "grün"})));
         assert_eq!(hud("Switch to the Iron Man theme"), Some(json!({"theme": "iron man"})));
@@ -5591,7 +5591,7 @@ mod tests {
             ui("Just leave the normal chat window, but remove the Audio Devices tab and the Skills tab, please."),
             Some(json!({"action": "hide_panel", "target_panel": ["audio_devices", "skills"]}))
         );
-        assert_eq!(ui("Jarvis, can you disable the Audio Devices tab from the interface?"), Some(json!({"action": "hide_panel", "target_panel": ["audio_devices"]})));
+        assert_eq!(ui("JAI, can you disable the Audio Devices tab from the interface?"), Some(json!({"action": "hide_panel", "target_panel": ["audio_devices"]})));
         assert_eq!(ui("Bring back the Audio settings"), Some(json!({"action": "show_panel", "target_panel": ["audio_devices"]})));
         assert_eq!(ui("Turn off the telemetry"), Some(json!({"action": "hide_panel", "target_panel": ["telemetry"]})));
         assert_eq!(ui("Make the orb bigger"), Some(json!({"action": "orb_bigger"})));
@@ -5613,7 +5613,7 @@ mod tests {
             Some(("window_management", args)) if args.get("target_window").is_none() => args["action"].as_str().map(String::from),
             other => panic!("{text}: {other:?}"),
         };
-        for text in ["Full screen", "fullscreen", "Jarvis, go full screen", "Make it full screen", "Put that in fullscreen", "Vollbild", "Mach es auf Vollbild", "full screen please"] {
+        for text in ["Full screen", "fullscreen", "JAI, go full screen", "Make it full screen", "Put that in fullscreen", "Vollbild", "Mach es auf Vollbild", "full screen please"] {
             assert_eq!(window(text).as_deref(), Some("fullscreen"), "{text}");
         }
         for text in ["Exit full screen", "Vollbild beenden", "Leave fullscreen mode"] {
@@ -5632,9 +5632,9 @@ mod tests {
         for text in ["Close it", "close that", "Kill it", "Mach es zu", "Schließ das"] {
             assert_eq!(tool(text), Some(("close_application", json!({"app_name": "it", "force": true}))), "{text}");
         }
-        // Jarvis himself only when Sir names him.
-        assert_eq!(tool("Maximize Jarvis"), Some(("configure_interface", json!({"window": "maximize"}))));
-        assert_eq!(tool("Jarvis, minimise yourself"), Some(("configure_interface", json!({"window": "minimize"}))));
+        // JAI himself only when Sir names him.
+        assert_eq!(tool("Maximize JAI"), Some(("configure_interface", json!({"window": "maximize"}))));
+        assert_eq!(tool("JAI, minimise yourself"), Some(("configure_interface", json!({"window": "minimize"}))));
         assert_eq!(tool("Make yourself full screen"), Some(("configure_interface", json!({"fullscreen": true}))));
         assert_eq!(tool("Close yourself").map(|t| t.0), Some("shutdown_jarvis"));
         // Named apps keep working.
@@ -5654,7 +5654,7 @@ mod tests {
         };
         let t = |p: &str, m: &str, q: &str| (p.to_string(), m.to_string(), q.to_string());
         assert_eq!(web("Open BastiGHG on YouTube"), t("youtube", "channel_or_profile", "BastiGHG"), "the handle keeps its capitals");
-        assert_eq!(web("Jarvis, go to BastiGHG's YouTube channel"), t("youtube", "channel_or_profile", "BastiGHG"));
+        assert_eq!(web("JAI, go to BastiGHG's YouTube channel"), t("youtube", "channel_or_profile", "BastiGHG"));
         assert_eq!(web("Open the YouTube channel of BastiGHG"), t("youtube", "channel_or_profile", "BastiGHG"));
         assert_eq!(web("Öffne BastiGHGs YouTube-Kanal"), t("youtube", "channel_or_profile", "BastiGHG"));
         assert_eq!(web("Open BastiGHG on Twitch"), t("twitch", "channel_or_profile", "BastiGHG"));
@@ -5801,7 +5801,7 @@ mod tests {
             "Go away",
             "Exit",
             "Kill process",
-            "Jarvis, turn yourself off now",
+            "JAI, turn yourself off now",
             "Could you power yourself down for today",
         ] {
             assert_eq!(fuzzy(text).map(|(n, _)| n), Some("shutdown_jarvis"), "{text}");
@@ -5853,10 +5853,10 @@ mod tests {
     #[test]
     fn assistant_abilities_are_instant() {
         let name = |text: &str| tool(text).map(|(n, _)| n);
-        assert_eq!(name("Good morning, Jarvis"), Some("run_executive_briefing"));
+        assert_eq!(name("Good morning, JAI"), Some("run_executive_briefing"));
         assert_eq!(name("Brief me"), Some("run_executive_briefing"));
         assert_eq!(name("Was steht heute an?"), Some("run_executive_briefing"));
-        assert_eq!(name("Jarvis, give me my morning briefing"), Some("run_executive_briefing"));
+        assert_eq!(name("JAI, give me my morning briefing"), Some("run_executive_briefing"));
         assert_eq!(name("Update me on my day"), Some("run_executive_briefing"));
         assert_eq!(tool("Give me my evening briefing").unwrap().1["time_of_day"], "evening");
         let (_, r) = tool("Remind me in 10 minutes to check the oven").unwrap();
@@ -5883,7 +5883,7 @@ mod tests {
         assert!(matches!(parse("Convert 5 miles to km"), Some(Intent::Answer(_))));
         assert_eq!(upfront_tool("What's on my screen?"), Some(("inspect_screen_or_selection", json!({"mode": "monitor", "target_monitor": "primary"}))));
         assert_eq!(upfront_tool("Can you explain this error?"), Some(("inspect_screen_or_selection", json!({"mode": "active_window"}))));
-        assert_eq!(upfront_tool("Jarvis, what does this error mean?").unwrap().1["mode"], "active_window");
+        assert_eq!(upfront_tool("JAI, what does this error mean?").unwrap().1["mode"], "active_window");
         assert_eq!(upfront_tool("Look at my second monitor"), Some(("inspect_screen_or_selection", json!({"mode": "monitor", "target_monitor": 2}))));
         assert_eq!(upfront_tool("Summarize what's on monitor 1").unwrap().1["target_monitor"], 1);
         assert_eq!(upfront_tool("Refactor the code I selected"), Some(("inspect_screen_or_selection", json!({"mode": "selection"}))));
@@ -5903,7 +5903,7 @@ mod tests {
             None,
             "no quit request"
         );
-        assert_eq!(claimed_action("As you wish, Sir. Powering down.", "Jarvis you should exit now").map(|(n, _)| n), Some("shutdown_jarvis"));
+        assert_eq!(claimed_action("As you wish, Sir. Powering down.", "JAI you should exit now").map(|(n, _)| n), Some("shutdown_jarvis"));
         assert_eq!(
             claimed_action("Right away, Sir. Opening your browser now.", "could you bring my browser up"),
             Some(("open_application", json!({"app_name": "browser"})))
@@ -5924,7 +5924,7 @@ mod tests {
             Some(("spawn_native_window", a)) => a,
             other => panic!("{text}: {other:?}"),
         };
-        assert_eq!(live("Jarvis, can you create a new window please that shows me my PC stats?"), json!({"live": "pc_stats", "separate_window": true}));
+        assert_eq!(live("JAI, can you create a new window please that shows me my PC stats?"), json!({"live": "pc_stats", "separate_window": true}));
         assert_eq!(live("Please create a new window showing my remaining space on my drives."), json!({"live": "drive_space", "separate_window": true}));
         assert_eq!(live("Show my CPU and GPU usage in a new window on my second monitor"), json!({"live": "pc_stats", "monitor": 2, "separate_window": true}));
         assert_eq!(live("Open a window with my drives and processes")["add_content"], json!(["processes"]));
@@ -6003,7 +6003,7 @@ mod tests {
     fn protocols_capture_and_engage() {
         let _store = crate::protocols::ProtocolStore::in_memory();
         assert_eq!(
-            tool("Jarvis, save my current setup as Gaming Protocol"),
+            tool("JAI, save my current setup as Gaming Protocol"),
             Some(("manage_stark_protocol", json!({"action": "capture_current_workspace", "protocol_name": "gaming"})))
         );
         assert_eq!(tool("Save this layout as movie night").unwrap().1["protocol_name"], "movie night");
@@ -6014,7 +6014,7 @@ mod tests {
 
     #[test]
     fn confirmations_and_reply_claims() {
-        for yes in ["Yeah, do that please?", "do it", "Yes please", "Yes", "mach das", "Ja, bitte", "Go ahead", "Sure, Jarvis"] {
+        for yes in ["Yeah, do that please?", "do it", "Yes please", "Yes", "mach das", "Ja, bitte", "Go ahead", "Sure, JAI"] {
             assert!(is_affirmation(yes), "{yes}");
         }
         for not in ["Yes, but what about the weather?", "Do it later maybe tomorrow", "Open Spotify"] {
@@ -6092,10 +6092,10 @@ mod tests {
         let close = Some(Intent::Tool { name: "configure_interface", args: json!({"core_view": false}) });
         let open = Some(Intent::Tool { name: "configure_interface", args: json!({"core_view": true}) });
         // The transcript in Sir's screenshot.
-        for heard in ["Close your car.", "No. Close your car.", "Right, hide your call.", "Hide your for C-O-R-E.", "Hide your cord", "Jarvis, hide your core", "close your c o r e", "Hide core", "Verstecke deinen Kern"] {
+        for heard in ["Close your car.", "No. Close your car.", "Right, hide your call.", "Hide your for C-O-R-E.", "Hide your cord", "JAI, hide your core", "close your c o r e", "Hide core", "Verstecke deinen Kern"] {
             assert_eq!(routed(heard), close, "{heard}");
         }
-        for heard in ["Show your car", "Open your call", "Jarvis, show me your core", "Show your corps", "open your kor", "Zeig mir deinen Kern"] {
+        for heard in ["Show your car", "Open your call", "JAI, show me your core", "Show your corps", "open your kor", "Zeig mir deinen Kern"] {
             assert_eq!(routed(heard), open, "{heard}");
         }
         // The fast path wins before the layout classifier or the model.
@@ -6116,7 +6116,7 @@ mod tests {
 
     #[test]
     fn going_out_is_routed_to_the_venue_guide() {
-        let venue = parse("Hey Jarvis, where can I take my fiancée for a super serious Halloween night?");
+        let venue = parse("Hey JAI, where can I take my fiancée for a super serious Halloween night?");
         assert!(matches!(&venue, Some(Intent::Tool { name: "venue_guide", args }) if args["action"] == "recommend"), "{venue:?}");
         assert_eq!(parse("Yeah, okay let's go here."), Some(Intent::Tool { name: "venue_guide", args: json!({"action": "go_here"}) }));
         // Location questions stay location questions.
@@ -6144,7 +6144,7 @@ mod tests {
             Some(Intent::Tool { name: "discord_call", args }) => args["action"].as_str().map(String::from),
             _ => None,
         };
-        assert_eq!(call("Jarvis, listen to my Discord call").as_deref(), Some("listen"));
+        assert_eq!(call("JAI, listen to my Discord call").as_deref(), Some("listen"));
         assert_eq!(call("Hör im Discord mit").as_deref(), Some("listen"));
         assert_eq!(call("you can talk to them").as_deref(), Some("converse"));
         assert_eq!(call("Du darfst mit ihnen reden").as_deref(), Some("converse"));
@@ -6165,7 +6165,7 @@ mod tests {
             Some(Intent::Tool { name: "configure_interface", args }) => crate::interface::configure(&crate::interface::InterfaceSettings::default(), &args).map(|d| d.settings.hud_palette).unwrap_or_default(),
             other => panic!("{text}: {other:?}"),
         };
-        for (text, want) in [("change your color to red", "crimson_overdrive"), ("Jarvis, make the interface gold", "stark_gold"), ("change your colour to blue", "arc_cyan"), ("Ändere deine Farbe auf Grün", "emerald_matrix"), ("Mach dich lila", "ultraviolet"), ("change your colour to orange", "solar_orange")] {
+        for (text, want) in [("change your color to red", "crimson_overdrive"), ("JAI, make the interface gold", "stark_gold"), ("change your colour to blue", "arc_cyan"), ("Ändere deine Farbe auf Grün", "emerald_matrix"), ("Mach dich lila", "ultraviolet"), ("change your colour to orange", "solar_orange")] {
             assert_eq!(palette(text), want, "{text}");
         }
         // The colour lands on the whole HUD's palette.
@@ -6198,10 +6198,10 @@ mod tests {
     fn screen_restore_docking_and_detaching_by_voice() {
         let board = |args: Value| Some(Intent::Tool { name: "hud_board", args });
         let iface = |args: Value| Some(Intent::Tool { name: "configure_interface", args });
-        for text in ["Jarvis, bring back the screen", "bring the screen back", "restore the screen", "screen back on", "back to the board"] {
+        for text in ["JAI, bring back the screen", "bring the screen back", "restore the screen", "screen back on", "back to the board"] {
             assert_eq!(parse(text), board(json!({"action": "restore"})), "{text}");
         }
-        assert_eq!(parse("Dock all windows back inside Jarvis"), iface(json!({"dock_windows": true})));
+        assert_eq!(parse("Dock all windows back inside JAI"), iface(json!({"dock_windows": true})));
         assert_eq!(parse("bring all the windows back in"), iface(json!({"dock_windows": true})));
         assert_eq!(parse("Detach the telemetry window"), iface(json!({"detach_window": "telemetry"})));
         assert_eq!(parse("pop out the function plotter"), iface(json!({"detach_window": "function plotter"})));
@@ -6216,7 +6216,7 @@ mod tests {
     #[test]
     fn core_view_and_llm_reboot_by_voice() {
         let open = Some(("configure_interface", json!({"core_view": true})));
-        for text in ["Jarvis, show me your core", "Open your core", "Core view", "Zeig mir deinen Kern"] {
+        for text in ["JAI, show me your core", "Open your core", "Core view", "Zeig mir deinen Kern"] {
             assert_eq!(tool(text), open, "{text}");
         }
         assert_eq!(tool("Close your core"), Some(("configure_interface", json!({"core_view": false}))));
@@ -6224,7 +6224,7 @@ mod tests {
         assert_eq!(tool("Set your core to 200 percent"), Some(("configure_interface", json!({"core_scale": 200.0}))));
         assert_eq!(tool("Rotate your core"), Some(("configure_interface", json!({"core_spin": "faster"}))));
         assert_eq!(tool("Spin faster"), Some(("configure_interface", json!({"core_spin": "faster"}))));
-        for text in ["Jarvis, reboot your language model", "Restart LLM", "Reboot brain", "Starte dein Sprachmodell neu"] {
+        for text in ["JAI, reboot your language model", "Restart LLM", "Reboot brain", "Starte dein Sprachmodell neu"] {
             assert_eq!(tool(text).map(|t| t.0), Some("reboot_language_model"), "{text}");
         }
         // "Restart Spotify" is still an app.
@@ -6235,7 +6235,7 @@ mod tests {
     fn text_console_and_windowed_mode_by_voice() {
         let open = Some(("configure_interface", json!({"text_console": true})));
         let close = Some(("configure_interface", json!({"text_console": false})));
-        for text in ["Open text interface", "Jarvis, open the text interface.", "Show the text console", "Pop up the text field", "Textkonsole öffnen"] {
+        for text in ["Open text interface", "JAI, open the text interface.", "Show the text console", "Pop up the text field", "Textkonsole öffnen"] {
             assert_eq!(tool(text), open, "{text}");
         }
         for text in ["Close text interface", "Close the console", "Hide the text console"] {
@@ -6250,7 +6250,7 @@ mod tests {
     fn silent_quick_commands() {
         let quick = |text: &str| silent_quick_command(text).map(|a| (a.tool, a.args));
         // Stop / pause: everything that plays, at once.
-        for text in ["Pause", "Jarvis, pause.", "Stop", "Stopp!", "Halt", "stop music", "Pause the music", "Jarvis stop", "Musik pausieren", "stop playing"] {
+        for text in ["Pause", "JAI, pause.", "Stop", "Stopp!", "Halt", "stop music", "Pause the music", "JAI stop", "Musik pausieren", "stop playing"] {
             assert_eq!(quick(text), Some(("control_music", json!({"action": "stop_all"}))), "{text}");
             assert!(is_media_stop(text), "{text}");
         }
@@ -6298,9 +6298,9 @@ mod tests {
         for text in ["Change the interface back to default", "Change it back to those default", "back to the defaults", "Reset the interface", "Stell alles wieder auf Standard"] {
             assert_eq!(hud(text), Some(json!({"reset": true})), "{text}");
         }
-        // A bare "close" hides the HUD; quitting needs Jarvis named.
+        // A bare "close" hides the HUD; quitting needs JAI named.
         assert_eq!(tool("Close"), Some(("configure_interface", json!({"window": "hide"}))));
-        assert_eq!(tool("Close Jarvis").map(|(n, _)| n), Some("shutdown_jarvis"));
+        assert_eq!(tool("Close JAI").map(|(n, _)| n), Some("shutdown_jarvis"));
         assert_eq!(tool("Close yourself").map(|(n, _)| n), Some("shutdown_jarvis"));
     }
 
@@ -6315,7 +6315,7 @@ mod tests {
         assert_eq!(tool("Switch to hands-free mode"), Some(("set_listening_mode", json!({"mode": "hands_free"}))));
         assert_eq!(tool("Freisprechmodus aktivieren"), Some(("set_listening_mode", json!({"mode": "hands_free"}))));
         assert_eq!(tool("Switch to wake word mode"), Some(("set_listening_mode", json!({"mode": "wake_word"}))));
-        assert_eq!(tool("Only listen when I say Jarvis"), Some(("set_listening_mode", json!({"mode": "wake_word"}))));
+        assert_eq!(tool("Only listen when I say JAI"), Some(("set_listening_mode", json!({"mode": "wake_word"}))));
         let mix = tool("Set Sonora to 30% and Discord to 100%").unwrap();
         assert_eq!(mix.0, "control_audio_mixer");
         assert_eq!(mix.1["apps"], json!([{"app": "sonora", "level": 30}, {"app": "discord", "level": 100}]));
@@ -6433,7 +6433,7 @@ mod tests {
         let is = |text: &str, up: PanelsUp, view: &str, action: &str| assert_eq!(act(text, up), Some((view.to_string(), action.to_string())), "{text}");
         // Video 1: the network radar.
         for text in [
-            "Hey Jarvis, check check the network.",
+            "Hey JAI, check check the network.",
             "Check the network",
             "scan my network",
             "Scan my home network for devices",
@@ -6474,7 +6474,7 @@ mod tests {
         is("Switch to the satellite view.", none, "earth", "show_satellite");
         is("Switch to satellite view", earth_up, "earth", "show_satellite");
         is("Switch back to the holographic view", earth_up, "earth", "show_holo");
-        let quakes = panel_command("And also Jarvis, show the earthquakes that happened in this area", earth_up).unwrap();
+        let quakes = panel_command("And also JAI, show the earthquakes that happened in this area", earth_up).unwrap();
         assert_eq!((quakes["action"].as_str(), quakes["place"].as_str()), (Some("show_quakes"), Some("here")));
         let quakes = panel_command("Were there any earthquakes near Tokyo recently?", none).unwrap();
         assert_eq!((quakes["action"].as_str(), quakes["place"].as_str()), (Some("show_quakes"), Some("Tokyo")));
@@ -6683,7 +6683,7 @@ mod tests {
         for text in [
             "Bring back my windows",
             "Bring my windows back",
-            "Jarvis, bring back up all recently opened windows.",
+            "JAI, bring back up all recently opened windows.",
             "Reopen my windows",
             "Restore my last session",
             "Reopen the windows from last time",
@@ -6711,7 +6711,7 @@ mod tests {
         // "remove all widgets" hid the panel that holds them, a status question and a plain
         // gauge went to the language model.
         let iface = |args: Value| Some(Intent::Tool { name: "configure_interface", args });
-        for text in ["Open the feature lab", "Show me the feature lab", "Feature lab", "Jarvis, open your feature lab."] {
+        for text in ["Open the feature lab", "Show me the feature lab", "Feature lab", "JAI, open your feature lab."] {
             assert_eq!(parse(text), iface(json!({"feature_lab": true})), "{text}");
         }
         let remove = |id: &str| Some(Intent::Tool { name: "remove_widget", args: json!({"id": id}) });
@@ -6753,10 +6753,10 @@ mod tests {
 
     #[test]
     fn courtesies_are_answered_without_the_model() {
-        for text in ["Thank you", "Thanks", "Thanks, Jarvis.", "Thank you very much", "Thank you, Jarvis, that was perfect.", "Perfect, thanks", "Danke", "Vielen Dank", "Danke schön"] {
+        for text in ["Thank you", "Thanks", "Thanks, JAI.", "Thank you very much", "Thank you, JAI, that was perfect.", "Perfect, thanks", "Danke", "Vielen Dank", "Danke schön"] {
             assert!(matches!(parse(text), Some(Intent::Answer(line)) if line.ends_with("Sir.")), "{text}");
         }
-        for text in ["Jarvis", "Hey Jarvis", "Jarvis!"] {
+        for text in ["JAI", "Hey JAI", "JAI!"] {
             assert_eq!(parse(text), Some(Intent::Answer("Yes, Sir?".into())), "{text}");
         }
         // Thanks with a request, or a declined offer, are no courtesy.
@@ -6849,7 +6849,7 @@ mod tests {
 
     #[test]
     fn whether_he_is_listening_is_answered_from_the_lock() {
-        for text in ["Is my mic muted?", "Is the microphone on?", "Am I muted?", "Are you listening?", "Jarvis, are you listening to me?", "Can you hear me?", "Ist mein Mikro stumm?", "Hörst du mir zu?"] {
+        for text in ["Is my mic muted?", "Is the microphone on?", "Am I muted?", "Are you listening?", "JAI, are you listening to me?", "Can you hear me?", "Ist mein Mikro stumm?", "Hörst du mir zu?"] {
             assert!(matches!(parse(text), Some(Intent::Answer(ref line)) if line.starts_with("I'")), "{text}");
         }
     }
@@ -6862,7 +6862,7 @@ mod tests {
             "Should I close Firefox?",
             "Soll ich Firefox schließen?",
             "Is the orb hidden?",
-            "Jarvis, is the orb hidden?",
+            "JAI, is the orb hidden?",
             "Did you close Firefox?",
             "Why did you mute Discord?",
             "What happens if I close it?",
@@ -6906,7 +6906,7 @@ mod tests {
             assert!(!only_asks(text), "{text}");
         }
         // "Are you there?" wakes the board, and a question may do that.
-        assert!(!beyond_the_question("Hey Jarvis, are you there?", "hud_board", &json!({"action": "wake"})));
+        assert!(!beyond_the_question("Hey JAI, are you there?", "hud_board", &json!({"action": "wake"})));
         assert!(beyond_the_question("Is the board open?", "hud_board", &json!({"action": "close"})));
         assert_eq!(tool("Why is there no sound?"), Some(("control_audio_mixer", json!({"action": "no_sound"}))));
     }
@@ -6941,7 +6941,7 @@ mod tests {
         let ctx = crate::intent_engine::ReflexContext::default();
         for text in [
             "Switch to Ultron mode.",
-            "Jarvis, switch to Ultron.",
+            "JAI, switch to Ultron.",
             "Activate Ultron protocol",
             "Turn on Ultron mode, please",
             "Ultron mode on",
@@ -7105,7 +7105,7 @@ mod tests {
         let step = |name: &str, delta: i64| json!({"action": "change_app", "app": name, "delta": delta});
         let scenarios: Vec<(&str, Value)> = vec![
             // ---- As he said them ----
-            ("Jarvis, lower my browser's volume by 50%.", step("browser", -50)),
+            ("JAI, lower my browser's volume by 50%.", step("browser", -50)),
             ("No, don't, don't mute it, make it 50% louder.", step("it", 50)),
             ("And you make discords, volume 50%.", app("discord", 50)),
             ("Make everything loud again.", json!({"action": "restore"})),
@@ -7174,7 +7174,7 @@ mod tests {
         ];
         let wrong: Vec<String> = scenarios.iter().filter(|(text, wanted)| mixer_command(text).as_ref() != Some(wanted)).map(|(text, wanted)| format!("\"{text}\": wanted {wanted}, got {:?}", mixer_command(text))).collect();
         assert!(wrong.is_empty(), "{} of {} volume requests go wrong:\n  {}", wrong.len(), scenarios.len(), wrong.join("\n  "));
-        // Every one of them is a command Jarvis knows: none is dropped as a song's words while
+        // Every one of them is a command JAI knows: none is dropped as a song's words while
         // music plays, and none reaches the language model.
         for (text, _) in &scenarios {
             assert!(matches!(parse(text), Some(Intent::Tool { name: "control_audio_mixer" | "media_and_volume_control", .. })), "{text}: {:?}", parse(text));

@@ -588,7 +588,7 @@ pub(super) fn show(ctx: &egui::Context, rt: &Handle) {
         }
         return;
     }
-    let mut builder = ViewportBuilder::default().with_title("3D model — J.A.R.V.I.S.").with_app_id("jarvis").with_inner_size([960.0, 700.0]).with_min_inner_size([520.0, 380.0]).with_decorations(false);
+    let mut builder = ViewportBuilder::default().with_title("3D model — J.A.I.").with_app_id("jarvis").with_inner_size([960.0, 700.0]).with_min_inner_size([520.0, 380.0]).with_decorations(false);
     if let Some(icon) = super::window_icon() {
         builder = builder.with_icon(Arc::new(icon));
     }

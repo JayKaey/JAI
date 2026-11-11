@@ -1,7 +1,7 @@
 //! What Sir most likely said, when Whisper wrote a command as other words.
 //!
-//! Sir's accented English reaches Whisper as plausible English that is no command: "Jarvis, told
-//! me the world" (show me the world), "Call me Earth" (close the Earth, said over Jarvis' voice),
+//! Sir's accented English reaches Whisper as plausible English that is no command: "JAI, told
+//! me the world" (show me the world), "Call me Earth" (close the Earth, said over JAI's voice),
 //! "Can you full-screen the off-window?" (the Earth window) — all 2026-11-08. When a short spoken
 //! sentence routes nowhere, it is compared with the commands that make sense on the screen as it
 //! is right now (the views of his that are up, the ones he can open), and rewritten only when one
@@ -25,7 +25,7 @@
 use crate::intent_engine::{sound_key, sound_similarity};
 use crate::intents::Intent;
 
-/// One of Jarvis' views as Sir names it.
+/// One of JAI's views as Sir names it.
 struct View {
     /// Its panel or block id (what is open).
     id: &'static str,
@@ -137,7 +137,7 @@ const VERB_SLIPS: &[(&str, &str)] = &[
 ];
 
 /// Words in front of a verb that change nothing ("can you", "please", "jarvis").
-const LEAD: &[&str] = &["jarvis", "hey", "ok", "okay", "please", "can", "could", "would", "you", "now", "then", "and", "so", "just", "no", "yes", "yeah", "um", "uh", "the"];
+const LEAD: &[&str] = &["jai", "hey", "ok", "okay", "please", "can", "could", "would", "you", "now", "then", "and", "so", "just", "no", "yes", "yeah", "um", "uh", "the"];
 
 /// Commands that make sense on this screen, as (sentence, meaning id).
 fn scene_commands(scene: &Scene) -> Vec<(String, String)> {
@@ -177,11 +177,11 @@ fn untouchable(heard: &str, words: &[String]) -> bool {
     heard.trim_end().ends_with('?') || crate::intents::only_asks(heard) || words.is_empty() || words.len() > 9 || words.first().is_some_and(|w| ASKING.contains(&w.as_str()))
 }
 
-/// The words after a leading "Jarvis", "can you", "please".
+/// The words after a leading "JAI", "can you", "please".
 fn order_words(words: &[String]) -> &[String] {
     let start = words.iter().position(|w| !LEAD.contains(&w.as_str())).unwrap_or(words.len());
     let mut end = words.len();
-    while end > start && matches!(words[end - 1].as_str(), "please" | "jarvis" | "sir" | "now" | "you") {
+    while end > start && matches!(words[end - 1].as_str(), "please" | "jai" | "sir" | "now" | "you") {
         end -= 1;
     }
     &words[start..end]
@@ -226,7 +226,7 @@ fn object_slip(words: &[String], scene: &Scene) -> Option<Correction> {
         // Whisper hyphenates the object onto "window": "off-window".
         let split: Vec<String> = words.iter().flat_map(|w| w.split('-').map(str::to_string).collect::<Vec<_>>()).collect();
         let Some(at) = split.iter().enumerate().position(|(i, w)| {
-            v.misheard.contains(&w.as_str()) && i > 0 && matches!(split[i - 1].as_str(), "the" | "my" | "your" | "screen" | "close" | "hide") && split.get(i + 1).is_none_or(|n| matches!(n.as_str(), "window" | "view" | "please" | "for" | "now" | "jarvis"))
+            v.misheard.contains(&w.as_str()) && i > 0 && matches!(split[i - 1].as_str(), "the" | "my" | "your" | "screen" | "close" | "hide") && split.get(i + 1).is_none_or(|n| matches!(n.as_str(), "window" | "view" | "please" | "for" | "now" | "jai"))
         }) else {
             continue;
         };
@@ -303,11 +303,11 @@ mod tests {
 
     #[test]
     fn misheard_view_commands_from_the_log_are_corrected() {
-        // 23:28:00 "Jarvis told me the world." (the Earth was not up yet).
+        // 23:28:00 "JAI told me the world." (the Earth was not up yet).
         let fixed = correct("told me the world", &Scene::default(), &routes).expect("show me the world");
         assert_eq!(fixed.text, "show me the Earth");
         assert!(matches!(routed_intent(&fixed.text), Some(Intent::Tool { name: "open_jarvis_view", ref args }) if args["view"] == "earth"), "{:?}", routed_intent(&fixed.text));
-        // 23:28:28 "Call me Earth." over Jarvis' voice, with the Earth up: "close the Earth".
+        // 23:28:28 "Call me Earth." over JAI's voice, with the Earth up: "close the Earth".
         let fixed = correct("Call me Earth.", &earth_up(), &routes).expect("close the Earth");
         assert_eq!(fixed.text, "close the Earth");
         assert_eq!(routed_intent(&fixed.text).as_ref().and_then(close_target).as_deref(), Some("earth"));
@@ -331,9 +331,9 @@ mod tests {
 
     #[test]
     fn the_prompt_names_what_is_up_and_nothing_else() {
-        let base = "Hey Jarvis. Orb, HUD, board.";
+        let base = "Hey JAI. Orb, HUD, board.";
         assert_eq!(whisper_prompt(base, &Scene::default()), base);
-        assert_eq!(whisper_prompt(base, &earth_up()), "Hey Jarvis. Orb, HUD, board. Earth, globe, satellite view.");
+        assert_eq!(whisper_prompt(base, &earth_up()), "Hey JAI. Orb, HUD, board. Earth, globe, satellite view.");
         assert_eq!(whisper_prompt("", &earth_up()), "Earth, globe, satellite view.");
         // Never a command sentence in the prompt.
         assert!(!whisper_prompt(base, &Scene { open: VIEWS.iter().map(|v| v.id).collect() }).to_lowercase().contains("close"));

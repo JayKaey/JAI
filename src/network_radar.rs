@@ -245,7 +245,7 @@ impl Device {
         kind.to_string()
     }
 
-    /// The name as Jarvis says it ("Private device 105").
+    /// The name as JAI says it ("Private device 105").
     fn spoken_name(&self) -> String {
         self.name().replace(" \u{b7}", " ").replace('\u{b7}', " ")
     }
@@ -383,7 +383,7 @@ static SWEEP_SESSION: AtomicU64 = AtomicU64::new(u64::MAX);
 /// The opening the latency pings run for.
 static MONITOR_SESSION: AtomicU64 = AtomicU64::new(u64::MAX);
 static STATE: LazyLock<Mutex<Snapshot>> = LazyLock::new(|| Mutex::new(Snapshot::default()));
-/// What Jarvis says when the running sweep ends: (summary, security verdict).
+/// What JAI says when the running sweep ends: (summary, security verdict).
 static ANNOUNCE: Mutex<(bool, bool)> = Mutex::new((false, false));
 /// Held while the store is read, changed and written back (the sweep's end and the names that
 /// arrive after it), so neither overwrites the other.
@@ -522,7 +522,7 @@ pub fn rescan() {
     start_sweep(false, false);
 }
 
-/// Adds to what Jarvis says when the running sweep ends.
+/// Adds to what JAI says when the running sweep ends.
 fn wish(summary: bool, security: bool) {
     let mut a = lock(&ANNOUNCE);
     a.0 |= summary;
@@ -1292,7 +1292,7 @@ fn quality(router_ms: Option<f32>, internet_ms: Option<f32>, loss: f32) -> Quali
     }
 }
 
-/// What Jarvis says when a sweep is done: "Your network is performing excellently, Sir: six
+/// What JAI says when a sweep is done: "Your network is performing excellently, Sir: six
 /// devices, connected by a fast Ethernet cable with very low latency."
 fn spoken_summary(link: Link, speed_bps: u64, devices: usize, router_ms: Option<f32>, internet_ms: Option<f32>, loss: f32, new: &[String]) -> String {
     let state = match quality(router_ms, internet_ms, loss) {

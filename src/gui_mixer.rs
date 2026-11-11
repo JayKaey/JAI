@@ -138,7 +138,7 @@ pub(super) fn show(ctx: &egui::Context, rt: &Handle) {
         }
         return;
     }
-    let mut builder = ViewportBuilder::default().with_title("Mixer — J.A.R.V.I.S.").with_app_id("jarvis").with_inner_size([580.0, 340.0]).with_min_inner_size([480.0, 200.0]).with_decorations(false);
+    let mut builder = ViewportBuilder::default().with_title("Mixer — J.A.I.").with_app_id("jarvis").with_inner_size([580.0, 340.0]).with_min_inner_size([480.0, 200.0]).with_decorations(false);
     if let Some(icon) = super::window_icon() {
         builder = builder.with_icon(Arc::new(icon));
     }

@@ -1,7 +1,7 @@
 //! The working-memory context graph: the people, topics, artifacts, apps and places of the last
 //! 25 turns, across every tool. It is what lets Sir talk the way people talk:
 //!
-//! * "Send that to him on WhatsApp": "that" is the active artifact (the homework Jarvis just
+//! * "Send that to him on WhatsApp": "that" is the active artifact (the homework JAI just
 //!   read, the e-mail summary, the clipboard), "him" the active person.
 //! * "What about the day after?": the last date-based query runs again one day later.
 //! * "Put it on the other screen and make it bigger": "it" is the active app.
@@ -95,7 +95,7 @@ pub struct Artifact {
     pub title: String,
     /// The raw data (message text, tool output, path, URL).
     pub content: String,
-    /// Jarvis' own words about it (his reply right after), the best thing to pass on.
+    /// JAI's own words about it (his reply right after), the best thing to pass on.
     pub summary: String,
     /// Who it came from (a message's sender).
     pub from: Option<String>,
@@ -178,7 +178,7 @@ pub struct WorkingMemoryContextGraph {
     pub reply_target: Option<ReplyTarget>,
     turns: VecDeque<TurnEntities>,
     turn: u64,
-    /// A data tool ran this turn: Jarvis' reply becomes the artifact's summary.
+    /// A data tool ran this turn: JAI's reply becomes the artifact's summary.
     artifact_this_turn: bool,
 }
 
@@ -373,7 +373,7 @@ impl ContextGraph {
         });
     }
 
-    /// Jarvis' reply to a turn that fetched something becomes that thing's summary.
+    /// JAI's reply to a turn that fetched something becomes that thing's summary.
     pub fn note_reply(&self, reply: &str) {
         let reply = reply.trim();
         if reply.is_empty() {
@@ -487,7 +487,7 @@ impl ContextGraph {
             .split_whitespace()
             .collect::<Vec<_>>()
             .join(" ");
-        let s = s.trim_start_matches("jarvis ").trim_end_matches(" jarvis").trim_end_matches('.').trim().to_string();
+        let s = s.trim_start_matches("jai ").trim_end_matches(" jai").trim_end_matches('.').trim().to_string();
         if s.split_whitespace().count() > 8 {
             return None;
         }
@@ -671,16 +671,16 @@ fn contains_word(haystack: &str, needle: &str) -> bool {
 
 static SEND_THAT: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
     regex::Regex::new(
-        r"(?i)^(?:jarvis[,\s]+)?(?:please\s+|bitte\s+)?(?:send|forward|share|text|schick|schicke|leite)\s+(that|this|it|das|es|the message|that message|the summary|the result|the info|that info|those|these|my homework|the homework|the schedule|my schedule)\s+(?:to\s+|an\s+)?(.+?)\s+(?:on|via|over|through|per|über|bei|in)\s+whats\s?app(?:\s+weiter)?[.!]?$",
+        r"(?i)^(?:jai[,\s]+)?(?:please\s+|bitte\s+)?(?:send|forward|share|text|schick|schicke|leite)\s+(that|this|it|das|es|the message|that message|the summary|the result|the info|that info|those|these|my homework|the homework|the schedule|my schedule)\s+(?:to\s+|an\s+)?(.+?)\s+(?:on|via|over|through|per|über|bei|in)\s+whats\s?app(?:\s+weiter)?[.!]?$",
     )
     .expect("valid send-that regex")
 });
 static SEND_HIM_THAT: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
-    regex::Regex::new(r"(?i)^(?:jarvis[,\s]+)?(?:please\s+)?(?:send|text|schick|schicke)\s+(him|her|them|ihm|ihr)\s+(that|this|it|das|es)\s+(?:on|via|over|per|über)\s+whats\s?app[.!]?$")
+    regex::Regex::new(r"(?i)^(?:jai[,\s]+)?(?:please\s+)?(?:send|text|schick|schicke)\s+(him|her|them|ihm|ihr)\s+(that|this|it|das|es)\s+(?:on|via|over|per|über)\s+whats\s?app[.!]?$")
         .expect("valid send-him-that regex")
 });
 static REPLY_THAT: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
-    regex::Regex::new(r"(?i)^(?:jarvis[,\s]+)?(?:please\s+)?(?:reply|respond|answer|write back|text back)\s+(?:to\s+)?(?:him|her|them|the sender)(?:\s+on\s+whats\s?app)?\s*(?:that|saying|with|:)\s+(.+?)[.!]?$")
+    regex::Regex::new(r"(?i)^(?:jai[,\s]+)?(?:please\s+)?(?:reply|respond|answer|write back|text back)\s+(?:to\s+)?(?:him|her|them|the sender)(?:\s+on\s+whats\s?app)?\s*(?:that|saying|with|:)\s+(.+?)[.!]?$")
         .expect("valid reply regex")
 });
 

@@ -1,4 +1,4 @@
-//! "What's on my screen?" — Jarvis reads the window Sir is looking at (or the whole screen) with
+//! "What's on my screen?" — JAI reads the window Sir is looking at (or the whole screen) with
 //! the OCR engine built into Windows (Windows.Media.Ocr, in Sir's own languages) and hands the
 //! text to the language model, which explains, summarises or answers questions about it. Nothing
 //! leaves the machine.
@@ -11,7 +11,7 @@ const MAX_CHARS: usize = 6000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Scope {
-    /// The top application window (not Jarvis' own).
+    /// The top application window (not JAI's own).
     ActiveWindow,
     /// The primary monitor.
     Screen,

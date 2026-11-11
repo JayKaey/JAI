@@ -4,7 +4,7 @@ version = "3.1.0"
 edition = "2021"
 rust-version = "1.87"
 authors = ["Stark Industries <jarvis@stark.local>"]
-description = "J.A.R.V.I.S. - local, offline, low-latency voice assistant in Rust"
+description = "J.A.I. - local, offline, low-latency voice assistant in Rust"
 publish = false
 
 [features]

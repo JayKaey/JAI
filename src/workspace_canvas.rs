@@ -1,4 +1,4 @@
-//! The cinematic spatial workspace: Jarvis fans out up to six borderless, rounded glass
+//! The cinematic spatial workspace: JAI fans out up to six borderless, rounded glass
 //! windows from the orb ("bring up the research workspace", "open all windows", "show me
 //! everything on …") — each a real OS window (an egui viewport) that glides into a balanced
 //! Bento cockpit on spring physics, snaps magnetically to screen and window edges while dragged,
@@ -8,7 +8,7 @@
 //! Window types: the live crawler stream, the executive dossier, the knowledge-graph pinboard,
 //! the code / data / plot inspector, the hardware & VRAM HUD and the schedule & command deck.
 
-use crate::app::Jarvis;
+use crate::app::Jai;
 use crate::deep_research_engine::{self as research, FactRow, MissionSnapshot, TelemetryKind};
 use crate::research_graph_view::{GraphPick, ResearchGraphView, CONTRADICTION, SINGLE, VERIFIED};
 use crate::tools::ToolContext;
@@ -243,7 +243,7 @@ impl SpatialWindow {
     }
 
     fn title(&self) -> String {
-        format!("{} — J.A.R.V.I.S. {}", self.label.as_deref().unwrap_or(self.kind.title()), self.id)
+        format!("{} — J.A.I. {}", self.label.as_deref().unwrap_or(self.kind.title()), self.id)
     }
 
     fn open(&self) -> bool {
@@ -601,7 +601,7 @@ pub fn inspect(content: Inspector) {
 
 /// Registers every workspace window with egui (each HUD frame); egui opens, patches and closes
 /// the OS windows to match.
-pub fn show(ctx: &egui::Context, app: &Jarvis, rt: &Handle) {
+pub fn show(ctx: &egui::Context, app: &Jai, rt: &Handle) {
     let ppp = ctx.pixels_per_point().max(0.25);
     let specs: Vec<(u64, String, Pos2, Vec2, bool, bool)> = {
         let mut c = canvas();
@@ -641,7 +641,7 @@ pub fn show(ctx: &egui::Context, app: &Jarvis, rt: &Handle) {
     }
 }
 
-fn window_frame(ctx: &egui::Context, class: ViewportClass, app: &Jarvis, rt: &Handle, id: u64) {
+fn window_frame(ctx: &egui::Context, class: ViewportClass, app: &Jai, rt: &Handle, id: u64) {
     let mut c = canvas();
     let Some(index) = c.windows.iter().position(|w| w.id == id) else {
         ctx.send_viewport_cmd(ViewportCommand::Visible(false));
@@ -659,7 +659,7 @@ fn window_frame(ctx: &egui::Context, class: ViewportClass, app: &Jarvis, rt: &Ha
 }
 
 /// One frame of a workspace window; false once it has gone into the orb for good.
-fn frame_body(ctx: &egui::Context, class: ViewportClass, app: &Jarvis, rt: &Handle, w: &mut SpatialWindow, c: &mut WorkspaceCanvas) -> bool {
+fn frame_body(ctx: &egui::Context, class: ViewportClass, app: &Jai, rt: &Handle, w: &mut SpatialWindow, c: &mut WorkspaceCanvas) -> bool {
     let now = Instant::now();
     let dt = w.last_step.map(|t| now.duration_since(t).as_secs_f32()).unwrap_or(1.0 / 60.0).min(0.1);
     w.last_step = Some(now);
@@ -983,13 +983,13 @@ fn mission_for(w: &SpatialWindow) -> Option<i64> {
     w.mission_id.or_else(research::latest_mission_id)
 }
 
-fn crawler_view(ui: &mut Ui, w: &mut SpatialWindow, c: &mut WorkspaceCanvas, app: &Jarvis, rt: &Handle, repaint: &mut Duration) {
+fn crawler_view(ui: &mut Ui, w: &mut SpatialWindow, c: &mut WorkspaceCanvas, app: &Jai, rt: &Handle, repaint: &mut Duration) {
     let Some(engine) = research::engine() else {
         muted(ui, "The research engine is not running.");
         return;
     };
     let Some(id) = mission_for(w) else {
-        muted(ui, "No research mission yet — say \"Jarvis, research solid-state batteries for two hours\".");
+        muted(ui, "No research mission yet — say \"JAI, research solid-state batteries for two hours\".");
         return;
     };
     let snap = c.snapshot(id);
@@ -1124,7 +1124,7 @@ fn dossier_view(ui: &mut Ui, w: &mut SpatialWindow, c: &mut WorkspaceCanvas, ctx
     let m = &snap.mission;
     let brief = c.briefs.get(&id).cloned();
     egui::ScrollArea::vertical().id_salt(("dossier", w.id)).auto_shrink([false; 2]).show(ui, |ui| {
-        // A topic workspace: what Jarvis knows, before the research chapters.
+        // A topic workspace: what JAI knows, before the research chapters.
         if let Some(brief) = &brief {
             egui::CollapsingHeader::new(RichText::new("OVERVIEW & FACTS").size(13.0).color(STARK_GOLD)).id_salt((w.id, "brief")).default_open(true).show(ui, |ui| {
                 markdown_lite(ui, brief, ARC_CYAN);
@@ -1284,7 +1284,7 @@ static IDENT_T: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\bt\b").unwrap()
 
 fn inspector_view(ui: &mut Ui, c: &mut WorkspaceCanvas, accent: Color32, repaint: &mut Duration) {
     let Some(item) = c.inspect.clone() else {
-        muted(ui, "Ask Jarvis to inspect code, JSON, CSV or a function to plot — or click a fact or source in the knowledge graph.");
+        muted(ui, "Ask JAI to inspect code, JSON, CSV or a function to plot — or click a fact or source in the knowledge graph.");
         return;
     };
     ui.horizontal(|ui| {
@@ -1580,7 +1580,7 @@ fn want_hardware() {
     });
 }
 
-fn hardware_view(ui: &mut Ui, w: &SpatialWindow, app: &Jarvis, repaint: &mut Duration) {
+fn hardware_view(ui: &mut Ui, w: &SpatialWindow, app: &Jai, repaint: &mut Duration) {
     want_hardware();
     let t = app.tools().monitor.latest();
     let (badge, detail, dormant) = crate::vram_guard::badge();
@@ -1595,7 +1595,7 @@ fn hardware_view(ui: &mut Ui, w: &SpatialWindow, app: &Jarvis, repaint: &mut Dur
     };
     if !compact {
         let shown = badge.clone();
-        let r = pill(ui, &shown, if dormant { EMERALD } else { STARK_GOLD }).on_hover_text(format!("{detail}\nClick to {}", if dormant { "wake Jarvis" } else { "clear the GPU now" }));
+        let r = pill(ui, &shown, if dormant { EMERALD } else { STARK_GOLD }).on_hover_text(format!("{detail}\nClick to {}", if dormant { "wake JAI" } else { "clear the GPU now" }));
         if r.clicked() {
             if dormant {
                 crate::vram_guard::wake("hardware HUD");
@@ -1610,7 +1610,7 @@ fn hardware_view(ui: &mut Ui, w: &SpatialWindow, app: &Jarvis, repaint: &mut Dur
     if total > 0 {
         bar(ui, "VRAM", &format!("{}/{}", gb(used), gb(total)), used as f32 / total as f32, if dormant { EMERALD } else { STARK_GOLD });
         if !compact {
-            bar(ui, "JARVIS", &format!("{ollama_mb} MB"), ollama_mb as f32 / total.max(1) as f32, ARC_CYAN);
+            bar(ui, "JAI", &format!("{ollama_mb} MB"), ollama_mb as f32 / total.max(1) as f32, ARC_CYAN);
         }
     }
     if let Some(g) = &gpu {
@@ -1752,7 +1752,7 @@ fn refresh_schedule(tools: ToolContext, rt: &Handle) {
     });
 }
 
-fn schedule_view(ui: &mut Ui, app: &Jarvis, rt: &Handle) {
+fn schedule_view(ui: &mut Ui, app: &Jai, rt: &Handle) {
     refresh_schedule(app.tools().clone(), rt);
     let now = chrono::Local::now();
     egui::ScrollArea::vertical().id_salt("schedule_deck").auto_shrink([false; 2]).show(ui, |ui| {
@@ -1782,7 +1782,7 @@ fn schedule_view(ui: &mut Ui, app: &Jarvis, rt: &Handle) {
         ui.label(RichText::new("STARK PROTOCOLS").monospace().size(9.5).color(MUTED));
         let protocols = app.tools().protocols.list();
         if protocols.is_empty() {
-            muted(ui, "No protocols yet — \"Jarvis, create a gaming protocol that …\"");
+            muted(ui, "No protocols yet — \"JAI, create a gaming protocol that …\"");
         }
         ui.horizontal_wrapped(|ui| {
             for p in protocols {
@@ -2004,7 +2004,7 @@ mod tests {
                 }
             }
             for w in &c.windows {
-                assert!(w.title().contains("J.A.R.V.I.S."), "never a target of 'close it'");
+                assert!(w.title().contains("J.A.I."), "never a target of 'close it'");
                 assert_eq!(w.mission_id, Some(42));
                 assert_ne!(w.spring.current, w.spring.target, "they glide out of the orb");
             }
@@ -2016,7 +2016,7 @@ mod tests {
             let c = canvas();
             let dossier = c.windows.iter().find(|w| w.kind == SpatialWindowKind::ExecutiveDossier).unwrap();
             assert_eq!(dossier.label.as_deref(), Some("OVERVIEW & FACTS"));
-            assert!(dossier.title().starts_with("OVERVIEW & FACTS — J.A.R.V.I.S."));
+            assert!(dossier.title().starts_with("OVERVIEW & FACTS — J.A.I."));
             assert!(c.briefs.contains_key(&42));
             assert_eq!(c.windows.iter().filter(|w| w.open()).count(), 4);
         }

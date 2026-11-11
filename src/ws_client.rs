@@ -1,6 +1,6 @@
-//! A small WebSocket client (RFC 6455) for Jarvis's own Discord account: the gateway and the
+//! A small WebSocket client (RFC 6455) for JAI's own Discord account: the gateway and the
 //! voice gateway. TLS comes from rustls with ring (the mail client's stack), frames are never
-//! compressed, and every frame Jarvis sends is masked as the RFC requires of a client. Text,
+//! compressed, and every frame JAI sends is masked as the RFC requires of a client. Text,
 //! binary, fragmented messages, ping/pong and the closing handshake: all Discord needs.
 //!
 //! Under `cfg(test)` the server side of the handshake (`accept`) lets the tests run local mock
@@ -111,7 +111,7 @@ pub async fn connect(url: &str) -> Result<(Reader, Writer), String> {
     let default_port = if target.tls { 443 } else { 80 };
     let host = if target.port == default_port { target.host.clone() } else { format!("{}:{}", target.host, target.port) };
     let request = format!(
-        "GET {} HTTP/1.1\r\nHost: {host}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\nUser-Agent: JARVIS\r\n\r\n",
+        "GET {} HTTP/1.1\r\nHost: {host}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\nUser-Agent: JAI\r\n\r\n",
         target.path
     );
     let inner = stream.get_mut();

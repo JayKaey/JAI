@@ -1,4 +1,4 @@
-//! The HUD board: when Jarvis presents something — a research report, a place, a schedule — the
+//! The HUD board: when JAI presents something — a research report, a place, a schedule — the
 //! screen fills with one to thirteen sharp-edged technical "blocks" on a bento grid, and the
 //! emblem docks in the bottom-right corner while he walks Sir through them.
 //!
@@ -127,7 +127,7 @@ pub enum BlockKind {
     /// `RESEARCH // ACTIVE` (bottom-left while an agent runs): the topic, its phase, the 16-cell
     /// segmented progress bar and the live block / source counters.
     ResearchProgress { topic: String, phase: String, elapsed_secs: u64, progress: f32, blocks: usize, sources: usize },
-    /// `COMMS // LIVE RESPONSE`: what Sir said and Jarvis' answer, while it streams and after, so
+    /// `COMMS // LIVE RESPONSE`: what Sir said and JAI's answer, while it streams and after, so
     /// every reply is visible on the board as well as heard.
     DialogueFeed { heard: String, reply: String, streaming: bool },
 }
@@ -184,7 +184,7 @@ impl Block {
             BlockKind::ResearchProgress { topic, phase, progress, blocks, sources, .. } => {
                 format!("researching {topic}: {}, {:.0} % done, {blocks} blocks, {sources} sources", phase.to_lowercase(), progress * 100.0)
             }
-            BlockKind::DialogueFeed { heard, reply, .. } => format!("Sir: {heard} | Jarvis: {reply}"),
+            BlockKind::DialogueFeed { heard, reply, .. } => format!("Sir: {heard} | JAI: {reply}"),
         };
         format!("{} — {body} ({})", self.label, self.source)
     }
@@ -286,11 +286,11 @@ pub fn dialogue_block(heard: &str, reply: &str, streaming: bool, at: &str) -> Op
         return None;
     }
     let tag = if streaming { "LIVE".to_string() } else { at.to_string() };
-    Some(Block::new("COMMS // LIVE RESPONSE", tag, "J.A.R.V.I.S. // VOICE + TEXT", BlockKind::DialogueFeed { heard: heard.to_string(), reply: reply.to_string(), streaming }))
+    Some(Block::new("COMMS // LIVE RESPONSE", tag, "J.A.I. // VOICE + TEXT", BlockKind::DialogueFeed { heard: heard.to_string(), reply: reply.to_string(), streaming }))
 }
 
 /// A question about the board answered straight from its blocks: the best-matching block is
-/// highlighted and its contents read out. What Jarvis says when the language model cannot answer
+/// highlighted and its contents read out. What JAI says when the language model cannot answer
 /// in time (None: no board, or nothing on it matches).
 pub fn answer_from_board(question: &str) -> Option<String> {
     let picked = focus_for_question(question);
@@ -324,7 +324,7 @@ struct Board {
     spotlight: Option<(usize, Instant)>,
     /// The previous board collapsing off the screen.
     leaving: Option<(Arc<Report>, Instant)>,
-    /// Bumped by every sign-off, so a delayed VRAM flush knows whether Sir woke Jarvis since.
+    /// Bumped by every sign-off, so a delayed VRAM flush knows whether Sir woke JAI since.
     sign_off_epoch: u64,
     /// The board the last sign-off took down ("bring back the screen" restores it).
     last: Option<Arc<Report>>,
@@ -558,7 +558,7 @@ pub fn visible_rects(area: Rect) -> Vec<Rect> {
     out
 }
 
-/// Whether Jarvis is still signed off since sign-off `epoch`.
+/// Whether JAI is still signed off since sign-off `epoch`.
 pub fn still_signed_off(epoch: u64) -> bool {
     let b = board();
     b.signed_off && b.sign_off_epoch == epoch && b.shown.is_none()
@@ -756,7 +756,7 @@ pub fn focus_for_question(question: &str) -> Vec<usize> {
 /// The place on the shown board's map: (place, lat, lon).
 /// How many blocks a spoken walk-through covers (about 40 s of speech).
 pub const WALKTHROUGH_BLOCKS: usize = 7;
-/// Jarvis' speaking pace for the cue timing (words per second) and the TTS lead-in.
+/// JAI's speaking pace for the cue timing (words per second) and the TTS lead-in.
 const WORDS_PER_SEC: f32 = 2.6;
 const SPEECH_LEAD_SECS: f32 = 0.9;
 
@@ -935,7 +935,7 @@ pub fn load_report_by_id(path: &str, id: i64) -> Option<Report> {
 
 // ------------------------------------------------------------------------------- speech ----
 
-/// "thirteen", "forty-two" (the counts Jarvis says aloud).
+/// "thirteen", "forty-two" (the counts JAI says aloud).
 pub fn number_words(n: usize) -> String {
     const ONES: [&str; 20] = [
         "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen",
@@ -1237,7 +1237,7 @@ async fn run_action(tools: &ToolContext, args: &Value, action: &str) -> Result<S
         }
         "close" | "close_board" => {
             // A named in-app block ("feature lab", "telemetry", "the plotter", "console"): that
-            // block fades out. Jarvis' own views are never looked up among Windows' programs.
+            // block fades out. JAI's own views are never looked up among Windows' programs.
             let target = arg(args, "target");
             if !target.is_empty() && !is_board_name(target) {
                 let lower = target.to_lowercase();
@@ -1253,7 +1253,7 @@ async fn run_action(tools: &ToolContext, args: &Value, action: &str) -> Result<S
                     }
                 }
                 if closed.is_empty() {
-                    // A window of Jarvis' own that is detached (its own OS window).
+                    // A window of JAI's own that is detached (its own OS window).
                     if let Ok(out) = tools.widgets.close_window(target) {
                         tools.focus.forget_jarvis_window(target);
                         closed.push(out);
@@ -1456,7 +1456,18 @@ fn grid(report: &Report, area: Rect, research: bool) -> Grid {
 /// The rectangles of a report's blocks inside `area` (None: the screen has no cell left for
 /// it). The bottom-right cell is left for the docked emblem, the bottom-left one for a running
 /// research block.
+/// Each block is as big as what it shows (`natural_size`) inside its cell(s), drawn towards the
+/// middle of the board.
 pub fn layout(report: &Report, area: Rect, research: bool) -> Vec<Option<Rect>> {
+    cells(report, area, research)
+        .into_iter()
+        .zip(&report.blocks)
+        .map(|(slot, block)| slot.map(|slot| towards_centre(slot, natural_size(block, slot.size(), picture_size(block)), area)))
+        .collect()
+}
+
+/// The grid cell(s) of each block: the room it may take.
+pub fn cells(report: &Report, area: Rect, research: bool) -> Vec<Option<Rect>> {
     let grid = grid(report, area, research);
     let cw = (area.width() - GRID_GAP * (grid.cols as f32 - 1.0)) / grid.cols as f32;
     let rh = (area.height() - GRID_GAP * (grid.rows as f32 - 1.0)) / grid.rows as f32;
@@ -1469,6 +1480,89 @@ pub fn layout(report: &Report, area: Rect, research: bool) -> Vec<Option<Rect>> 
             })
         })
         .collect()
+}
+
+/// The smallest a content-sized block is drawn.
+const MIN_FIT: [f32; 2] = [190.0, 120.0];
+
+/// What a block needs of its cell for what it shows. In the reference video no two blocks are
+/// the same size: a price is a small tile, a long note a tall one, a photo keeps its shape.
+/// Reckoned from the length of the text with the painter's fonts in mind, a little generous
+/// (text is never cut by it: what does not fit a cell scrolls, as before); never more than the
+/// cell. `picture`: the pixel size of the block's first image once it is here.
+pub fn natural_size(block: &Block, cell: Vec2, picture: Option<[usize; 2]>) -> Vec2 {
+    // The frame round the content: the label row, the source row and the footer, the sides.
+    const TOP: f32 = 30.0;
+    const BOTTOM: f32 = 30.0 + FOOTER_H;
+    const SIDES: f32 = 32.0;
+    let rows = |chars: usize, per_char: f32, width: f32| ((chars as f32 * per_char) / width.max(40.0)).ceil().max(1.0);
+    let size = match &block.kind {
+        BlockKind::NoteStack { notes } => {
+            // The longest page decides, so turning the pages never resizes the block.
+            let paged = if notes.len() > 1 { 22.0 } else { 0.0 };
+            let chars = notes.iter().map(|n| n.body.chars().count()).max().unwrap_or(0);
+            let head = notes.iter().map(|n| n.headline.chars().count()).max().unwrap_or(0);
+            // A few words need no full cell's width.
+            let w = if chars < 110 { (cell.x * 0.8).max(MIN_CELL[0]) } else { cell.x };
+            let inner = w.min(cell.x) - SIDES;
+            let text = if chars == 0 { 0.0 } else { (rows(chars, 7.0, inner - 8.0) + 1.0) * 18.5 };
+            vec2(w, TOP + BOTTOM + paged + rows(head, 12.5, inner).min(3.0) * 24.0 + 8.0 + text)
+        }
+        BlockKind::HeroFigure { header, figure, note } => {
+            let figure_w = figure.chars().count() as f32 * 28.0;
+            let header_w = (header.chars().count() as f32 * 8.0).min(230.0);
+            let w = figure_w.max(header_w).max(170.0) + SIDES + 8.0;
+            let inner = w.min(cell.x) - SIDES;
+            let note_h = if note.trim().is_empty() { 0.0 } else { 8.0 + rows(note.chars().count(), 6.2, inner).min(3.0) * 15.5 };
+            vec2(w, TOP + BOTTOM + rows(header.chars().count(), 8.0, inner).min(2.0) * 16.0 + 6.0 + 56.0 + note_h)
+        }
+        BlockKind::MediaCard { images, .. } => {
+            // A video is 16:9; a photo has its own shape once it is here.
+            let video = images.first().is_some_and(|u| youtube_id(u).is_some());
+            let aspect = if video { Some(16.0 / 9.0) } else { picture.filter(|s| s[0] > 0 && s[1] > 0).map(|s| (s[0] as f32 / s[1] as f32).clamp(0.45, 2.4)) };
+            match aspect {
+                Some(a) => {
+                    let (frame_w, frame_h) = (SIDES - 8.0, TOP + BOTTOM + 12.0);
+                    let by_width = vec2(cell.x, (cell.x - frame_w) / a + frame_h);
+                    if by_width.y <= cell.y {
+                        by_width
+                    } else {
+                        vec2((cell.y - frame_h) * a + frame_w, cell.y)
+                    }
+                }
+                None => cell,
+            }
+        }
+        // A chart, a map, the research and the dialogue blocks fill their room.
+        _ => cell,
+    };
+    vec2(size.x.clamp(MIN_FIT[0].min(cell.x), cell.x), size.y.clamp(MIN_FIT[1].min(cell.y), cell.y))
+}
+
+/// The pixel size of a photo block's first picture, once it has loaded.
+fn picture_size(block: &Block) -> Option<[usize; 2]> {
+    let BlockKind::MediaCard { images, .. } = &block.kind else { return None };
+    match media(images.first()?) {
+        Some(MediaSlot::Ready(image)) => Some(image.size),
+        _ => None,
+    }
+}
+
+/// `slot` cut to `size` and drawn towards the middle of the board: the blocks gather round its
+/// centre and the board's outer edge stays ragged, as in the reference.
+fn towards_centre(slot: Rect, size: Vec2, area: Rect) -> Rect {
+    let pull = |lo: f32, hi: f32, len: f32, mid: f32| {
+        let (centre, quarter) = ((lo + hi) * 0.5, (hi - lo) * 0.25);
+        if centre < mid - quarter {
+            hi - len
+        } else if centre > mid + quarter {
+            lo
+        } else {
+            lo + (hi - lo - len) * 0.5
+        }
+    };
+    let mid = area.center();
+    Rect::from_min_size(pos2(pull(slot.left(), slot.right(), size.x, mid.x), pull(slot.top(), slot.bottom(), size.y, mid.y)), size)
 }
 
 /// The spotlight frame: 780 × 480 in the middle of the board (smaller on small screens).
@@ -2393,7 +2487,7 @@ fn paint_dialogue_body(p: &Painter, inner: Rect, heard: &str, reply: &str, strea
         // The rows that really fit (measured with the font, so the last one is never cut).
         let font = FontId::proportional(15.0);
         let rows = rows_that_fit(p, &font, inner.bottom() - y).max(1);
-        let label = p.text(pos2(inner.left(), y + 2.0), Align2::LEFT_TOP, "J.A.R.V.I.S. //", micro(), active_colour());
+        let label = p.text(pos2(inner.left(), y + 2.0), Align2::LEFT_TOP, "J.A.I. //", micro(), active_colour());
         let text = if streaming { format!("{} ▌", reply.trim()) } else { reply.trim().to_string() };
         wrapped(p, pos2(label.right() + 6.0, y), inner.width() - label.width() - 6.0, &text, font, INK, rows);
     }
@@ -2643,6 +2737,69 @@ mod tests {
 
     fn note(h: &str) -> Note {
         Note { headline: h.into(), body: format!("{h} body") }
+    }
+
+    /// The reference video's board: no two blocks the same size. A price is a small tile, a few
+    /// words a low note, a long text a whole cell, a photo its own shape.
+    #[test]
+    fn blocks_are_as_big_as_what_they_show() {
+        let cell = vec2(300.0, 250.0);
+        let price = Block::new("FIGURE // PRICE", "FACT", "", BlockKind::HeroFigure { header: "List price".into(), figure: "$199".into(), note: "USD at launch.".into() });
+        let few = Block::new("NOTE // 01", "FACT", "", BlockKind::NoteStack { notes: vec![Note { headline: "Battery".into(), body: "Lasts two days.".into() }] });
+        let much = Block::new("NOTE // 02", "FACT", "", BlockKind::NoteStack { notes: vec![Note { headline: "Buttons and sensors".into(), body: "word ".repeat(220) }] });
+        let photo = Block::new("PHOTO // 01", "", "", BlockKind::MediaCard { images: vec!["https://example.org/a.jpg".into()], caption: "The device".into() });
+        let video = Block::new("VIDEO // 01", "", "", BlockKind::MediaCard { images: vec!["https://www.youtube.com/watch?v=dQw4w9WgXcQ".into()], caption: "Hands-on".into() });
+        let chart = Block::new("CHART", "", "", BlockKind::BarChart { unit: "%".into(), bars: vec![Bar { label: "a".into(), value: 1.0 }], caption: String::new() });
+        let tile = natural_size(&price, cell, None);
+        assert!(tile.x <= cell.x * 0.85 && tile.y <= cell.y * 0.8 && tile.x >= MIN_FIT[0] && tile.y >= MIN_FIT[1], "a small tile: {tile:?}");
+        let low = natural_size(&few, cell, None);
+        assert!(low.x < cell.x && low.y < cell.y * 0.8 && low.y > 110.0, "a low note: {low:?}");
+        assert_eq!(natural_size(&much, cell, None), cell, "a long text takes its whole cell (and scrolls)");
+        // A longer text is never given less room than a shorter one.
+        let mut last = 0.0;
+        for words in [3usize, 12, 30, 60, 120] {
+            let note = Block::new("NOTE", "", "", BlockKind::NoteStack { notes: vec![Note { headline: "Displays".into(), body: "word ".repeat(words) }] });
+            let h = natural_size(&note, vec2(300.0, 900.0), None).y;
+            assert!(h >= last, "{words} words: {h} after {last}");
+            last = h;
+        }
+        // A photo: the cell until it is here, then its own shape inside the cell.
+        assert_eq!(natural_size(&photo, cell, None), cell);
+        let upright = natural_size(&photo, cell, Some([600, 1200]));
+        assert!(upright.y == cell.y && upright.x <= cell.x * 0.7, "{upright:?}");
+        let wide = natural_size(&photo, cell, Some([1600, 900]));
+        assert!(wide.x == cell.x && wide.y < cell.y, "{wide:?}");
+        let playing = natural_size(&video, vec2(612.0, 250.0), None);
+        assert!(playing.y == 250.0 && playing.x < 612.0, "16:9 inside two cells: {playing:?}");
+        assert_eq!(natural_size(&chart, cell, None), cell, "a chart fills its room");
+        // On the board: every block inside its own cell (so none overlaps another or leaves the
+        // board), drawn towards the middle.
+        let area = Rect::from_min_size(pos2(40.0, 60.0), vec2(1600.0, 860.0));
+        let report = Report { topic: "busy bar".into(), created_at: String::new(), blocks: vec![chart, price, few, much, photo, video], sources: Vec::new(), id: None };
+        let (rooms, rects) = (cells(&report, area, false), layout(&report, area, false));
+        assert_eq!(rects.len(), 6);
+        let mut smaller = 0;
+        for (room, rect) in rooms.iter().zip(&rects) {
+            let (room, rect) = (room.expect("a cell for every block"), rect.expect("a place for every block"));
+            assert!(room.expand(0.5).contains_rect(rect) && area.expand(0.5).contains_rect(rect), "{rect:?} in {room:?}");
+            if rect.width() < room.width() - 1.0 || rect.height() < room.height() - 1.0 {
+                smaller += 1;
+                // The side nearer the middle of the board is the one it keeps.
+                let mid = area.center();
+                if room.center().x < mid.x - room.width() * 0.25 && rect.width() < room.width() - 1.0 {
+                    assert!((rect.right() - room.right()).abs() < 0.5, "left of the middle: drawn to its right edge ({rect:?} in {room:?})");
+                }
+                if room.center().x > mid.x + room.width() * 0.25 && rect.width() < room.width() - 1.0 {
+                    assert!((rect.left() - room.left()).abs() < 0.5, "right of the middle: drawn to its left edge ({rect:?} in {room:?})");
+                }
+            }
+        }
+        assert!(smaller >= 2, "the tile and the short note are smaller than their cells");
+        for (i, a) in rects.iter().flatten().enumerate() {
+            for b in rects.iter().flatten().skip(i + 1) {
+                assert!(!a.shrink(0.5).intersects(b.shrink(0.5)), "{a:?} over {b:?}");
+            }
+        }
     }
 
     fn report() -> Report {

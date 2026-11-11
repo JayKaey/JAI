@@ -1,18 +1,18 @@
 //! The mobile web satellite: `https://<pc-ip>:8443/satellite?k=<token>` on Sir's phone or iPad
 //! (open it from the QR code in Quick Connections). A small Stark HUD page that streams the
-//! phone's live GPS (`navigator.geolocation.watchPosition`, high accuracy) to Jarvis, lets Sir
-//! type or speak to him, reads his answers aloud on the phone and shows what Jarvis "teleports"
+//! phone's live GPS (`navigator.geolocation.watchPosition`, high accuracy) to JAI, lets Sir
+//! type or speak to him, reads his answers aloud on the phone and shows what JAI "teleports"
 //! there.
 //!
 //! The server is a minimal HTTP/1.1 listener on tokio. Browsers only grant geolocation to secure
 //! pages, so it speaks HTTPS with a self-signed ECDSA P-256 certificate generated here with `ring`
 //! (kept in `satellite_cert.der` / `satellite_key.p8`, renewed when the PC's address changes).
-//! Every request must carry the pairing token (`?k=` or `X-Jarvis-Key`).
+//! Every request must carry the pairing token (`?k=` or `X-JAI-Key`).
 //!
 //! Endpoints: `GET /satellite`, `POST /api/location`, `POST /api/chat`, `GET /api/state`,
 //! `POST /api/whatsapp/incoming` (bridge webhooks), `GET /satellite/cert.der`.
 
-use crate::app::Jarvis;
+use crate::app::Jai;
 use crate::config::ConfigStore;
 use crate::hud::{HudCommand, HudEvent};
 use crate::location_engine::PhoneSample;
@@ -111,7 +111,7 @@ mod cert {
 
     fn name() -> Vec<u8> {
         let rdn = |oid: &[u8], value: &str| tlv(0x31, &seq(&[tlv(0x06, oid), tlv(0x0C, value.as_bytes())]));
-        seq(&[rdn(ORGANIZATION, "Stark Industries"), rdn(COMMON_NAME, "J.A.R.V.I.S. Satellite")])
+        seq(&[rdn(ORGANIZATION, "Stark Industries"), rdn(COMMON_NAME, "J.A.I. Satellite")])
     }
 
     fn utc_time(t: chrono::DateTime<chrono::Utc>) -> Vec<u8> {
@@ -306,7 +306,7 @@ async fn read_request<S: AsyncRead + Unpin>(stream: &mut S, token: Option<&str>)
         .collect();
     let mut request = Request { method, path, query, headers, body: Vec::new() };
     if let Some(token) = token {
-        let given = request.header("X-Jarvis-Key").or_else(|| request.param("token")).or_else(|| request.param("k")).unwrap_or("");
+        let given = request.header("X-JAI-Key").or_else(|| request.header("X-Jarvis-Key")).or_else(|| request.param("token")).or_else(|| request.param("k")).unwrap_or("");
         let public_get = request.method == "GET" && length == 0 && (request.path == "/" || (given.is_empty() && matches!(request.path.as_str(), "/satellite" | "/satellite/")));
         if !public_get && !same_token(given, token) { return Err("pairing key required".into()); }
     }
@@ -340,7 +340,7 @@ fn same_token(a: &str, b: &str) -> bool {
 }
 
 /// Sir typed (or spoke) on the phone: one turn, the reply comes back as text.
-async fn chat(app: &Jarvis, text: &str) -> Value {
+async fn chat(app: &Jai, text: &str) -> Value {
     let mut events = app.subscribe();
     app.handle_command(HudCommand::Chat { text: text.to_string() }).await;
     let wait = async {
@@ -354,11 +354,11 @@ async fn chat(app: &Jarvis, text: &str) -> Value {
     };
     match tokio::time::timeout(Duration::from_secs(90), wait).await {
         Ok(Some(reply)) => json!({ "reply": reply }),
-        _ => json!({ "reply": "", "error": "Jarvis is still working on it." }),
+        _ => json!({ "reply": "", "error": "JAI is still working on it." }),
     }
 }
 
-async fn handle<S: AsyncRead + AsyncWrite + Unpin>(mut stream: S, app: Jarvis, peer: SocketAddr) {
+async fn handle<S: AsyncRead + AsyncWrite + Unpin>(mut stream: S, app: Jai, peer: SocketAddr) {
     // Long enough for a phone photo over Wi-Fi.
     let token = app.config().read(|c| c.satellite.token.clone());
     let req = match tokio::time::timeout(Duration::from_secs(90), read_request(&mut stream, Some(&token))).await {
@@ -370,15 +370,15 @@ async fn handle<S: AsyncRead + AsyncWrite + Unpin>(mut stream: S, app: Jarvis, p
         }
         Err(_) => return,
     };
-    let given = req.header("X-Jarvis-Key").or_else(|| req.param("token")).or_else(|| req.param("k")).unwrap_or("");
+    let given = req.header("X-JAI-Key").or_else(|| req.header("X-Jarvis-Key")).or_else(|| req.param("token")).or_else(|| req.param("k")).unwrap_or("");
     if req.path == "/" || req.path.is_empty() {
-        respond(&mut stream, "200 OK", "text/html; charset=utf-8", b"<!doctype html><meta name=viewport content='width=device-width'><body style='background:#000;color:#5ad;font-family:sans-serif;padding:2em'><h2>J.A.R.V.I.S. Satellite</h2><p>Scan the QR code in the HUD (Integrations &rarr; Quick Connections) to pair this device.</p>").await;
+        respond(&mut stream, "200 OK", "text/html; charset=utf-8", b"<!doctype html><meta name=viewport content='width=device-width'><body style='background:#000;color:#5ad;font-family:sans-serif;padding:2em'><h2>J.A.I. Satellite</h2><p>Scan the QR code in the HUD (Integrations &rarr; Quick Connections) to pair this device.</p>").await;
         return;
     }
     if !same_token(given, &token) {
         if given.is_empty() && req.method == "GET" && matches!(req.path.as_str(), "/satellite" | "/satellite/") {
             // An unpaired request gets only a bootstrap, never data or an embedded secret.
-            respond(&mut stream, "200 OK", "text/html; charset=utf-8", br#"<!doctype html><meta name="viewport" content="width=device-width"><title>Pair with JARVIS</title><p>Scan the pairing QR code in the desktop HUD to authorize this phone.</p><script>try{const k=localStorage.getItem('jarvis_satellite_key');if(k)location.replace('/satellite?token='+encodeURIComponent(k));}catch(e){}</script>"#).await;
+            respond(&mut stream, "200 OK", "text/html; charset=utf-8", br#"<!doctype html><meta name="viewport" content="width=device-width"><title>Pair with JAI</title><p>Scan the pairing QR code in the desktop HUD to authorize this phone.</p><script>try{const k=localStorage.getItem('jarvis_satellite_key');if(k)location.replace('/satellite?token='+encodeURIComponent(k));}catch(e){}</script>"#).await;
             return;
         }
         warn!("[SATELLITE] Rejected {} {} from {peer} (bad or missing pairing key)", req.method, req.path);
@@ -528,7 +528,7 @@ async fn bind_origin(fixed: u16) -> std::io::Result<tokio::net::TcpListener> {
 }
 
 /// Starts the listener (HTTPS unless switched off). Errors are logged, never fatal.
-pub fn start(app: Jarvis, shutdown: tokio_util::sync::CancellationToken) {
+pub fn start(app: Jai, shutdown: tokio_util::sync::CancellationToken) {
     let settings = app.config().read(|c| c.satellite.clone());
     if !settings.enabled {
         info!("[SATELLITE] Disabled in the settings.");
@@ -624,13 +624,13 @@ pub fn is_tool(name: &str) -> bool {
 pub fn tool_definition() -> Value {
     json!({"type": "function", "function": {
         "name": "show_mobile_satellite_instructions",
-        "description": "How Sir uses Jarvis on his phone or iPad (\"how can I use you on my phone\", \"connect my phone\", \"show me the mobile link\"): explains the steps and opens the pairing window with the QR code and the link on the PC. topic \"permanent_address\": what Sir has to do so your web page has one address that never changes (\"use you as a website with a static domain\", \"a permanent link\"): the setup steps for his own domain, on screen and in short aloud.",
+        "description": "How Sir uses JAI on his phone or iPad (\"how can I use you on my phone\", \"connect my phone\", \"show me the mobile link\"): explains the steps and opens the pairing window with the QR code and the link on the PC. topic \"permanent_address\": what Sir has to do so your web page has one address that never changes (\"use you as a website with a static domain\", \"a permanent link\"): the setup steps for his own domain, on screen and in short aloud.",
         "parameters": {"type": "object", "properties": {"topic": {"type": "string", "enum": ["phone", "permanent_address"]}}, "required": []}
     }})
 }
 
 /// What Sir has to do so the phone page has one address that never changes, from where his
-/// settings stand: (the guide as Markdown for a block on the HUD, what Jarvis says). `address`:
+/// settings stand: (the guide as Markdown for a block on the HUD, what JAI says). `address`:
 /// the permanent address when one is configured; `online`: the tunnel serves it right now.
 pub fn permanent_address_guide(settings: &crate::config::SatelliteSettings, token_stored: bool, address: Option<&str>, online: bool) -> (String, String) {
     let port = if settings.tunnel_origin_port == 0 { 8444 } else { settings.tunnel_origin_port };
@@ -652,10 +652,10 @@ pub fn permanent_address_guide(settings: &crate::config::SatelliteSettings, toke
         ""
     };
     let guide = format!(
-        "## One address that never changes\n\nRight now my page uses a quick tunnel: its address is new after every restart. For a static one you need a domain of your own. Three ways; the first is the usual one.\n{missing}\n### A. Your own domain through Cloudflare (free apart from the domain)\n\n1. Have a domain and add it to a free Cloudflare account (Cloudflare then runs its DNS). No domain yet: buy one at any registrar, or at Cloudflare itself.\n2. In the Cloudflare dashboard open **Zero Trust**, then **Networks**, then **Tunnels**, and create a tunnel of the type **Cloudflared**. Name it `jarvis`.\n3. Cloudflare shows an install command with a long token that starts with `eyJ`. Copy it (the whole command is fine). You do not need to install anything: I bring my own cloudflared.\n4. In that tunnel, tab **Public Hostname**, add a hostname: subdomain `jarvis`, your domain, service type **HTTP**, URL `127.0.0.1:{port}`.\n5. Here: {hub}. Set **Tunnel** to Cloudflare, type `https://jarvis.your-domain` into **Permanent address**, paste the token into **Tunnel token**, and save.\n6. Say **\"how can I use you on my phone\"**: the QR code now carries the permanent address. Scan it once and add the page to the home screen; it stays valid for good.\n\n### B. No domain of your own: Tailscale Funnel (free)\n\nInstall Tailscale on this PC, switch **Funnel** on for it in the Tailscale admin console, and set **Tunnel** to Tailscale Funnel in the same section. The address is `https://<this-pc>.<your-tailnet>.ts.net` and never changes.\n\n### C. Your own server\n\nSet **Tunnel** to Own server (SSH), give the SSH target, and put an HTTPS reverse proxy on the server in front of the forwarded port. The permanent address is the proxy's.\n\nWhatever you choose: the page is served from this PC, so it and I must be running. The token is sealed in my vault, never written to the settings file."
+        "## One address that never changes\n\nRight now my page uses a quick tunnel: its address is new after every restart. For a static one you need a domain of your own. Three ways; the first is the usual one.\n{missing}\n### A. Your own domain through Cloudflare (free apart from the domain)\n\n1. Have a domain and add it to a free Cloudflare account (Cloudflare then runs its DNS). No domain yet: buy one at any registrar, or at Cloudflare itself.\n2. In the Cloudflare dashboard open **Zero Trust**, then **Networks**, then **Tunnels**, and create a tunnel of the type **Cloudflared**. Name it `jai`.\n3. Cloudflare shows an install command with a long token that starts with `eyJ`. Copy it (the whole command is fine). You do not need to install anything: I bring my own cloudflared.\n4. In that tunnel, tab **Public Hostname**, add a hostname: subdomain `jai`, your domain, service type **HTTP**, URL `127.0.0.1:{port}`.\n5. Here: {hub}. Set **Tunnel** to Cloudflare, type `https://jarvis.your-domain` into **Permanent address**, paste the token into **Tunnel token**, and save.\n6. Say **\"how can I use you on my phone\"**: the QR code now carries the permanent address. Scan it once and add the page to the home screen; it stays valid for good.\n\n### B. No domain of your own: Tailscale Funnel (free)\n\nInstall Tailscale on this PC, switch **Funnel** on for it in the Tailscale admin console, and set **Tunnel** to Tailscale Funnel in the same section. The address is `https://<this-pc>.<your-tailnet>.ts.net` and never changes.\n\n### C. Your own server\n\nSet **Tunnel** to Own server (SSH), give the SSH target, and put an HTTPS reverse proxy on the server in front of the forwarded port. The permanent address is the proxy's.\n\nWhatever you choose: the page is served from this PC, so it and I must be running. The token is sealed in my vault, never written to the settings file."
     );
     let spoken = if missing.is_empty() {
-        format!("You need a domain of your own, Sir. Add it to a free Cloudflare account, create a tunnel there, point a hostname such as jarvis dot your domain at port {port} on this machine, then paste the tunnel's token and that address into my integrations hub. All six steps are on your screen, with two alternatives that need no domain.")
+        format!("You need a domain of your own, Sir. Add it to a free Cloudflare account, create a tunnel there, point a hostname such as jai dot your domain at port {port} on this machine, then paste the tunnel's token and that address into my integrations hub. All six steps are on your screen, with two alternatives that need no domain.")
     } else {
         "A tunnel token is already stored, Sir. Only the permanent address is missing: enter it in my integrations hub and save. The steps are on your screen.".to_string()
     };
@@ -721,14 +721,14 @@ pub async fn run_tool(tools: &crate::tools::ToolContext) -> Result<String, Strin
     };
     match worldwide {
         Some(link) => Ok(format!(
-            "J.A.R.V.I.S. on your phone, anywhere in the world:\nWorldwide HTTPS link (online and verified): {link}\n{steps}\n\
+            "J.A.I. on your phone, anywhere in the world:\nWorldwide HTTPS link (online and verified): {link}\n{steps}\n\
              The pairing key is remembered on the phone. {stays}\n\
              At home you can also use the local link ({ip}): {local}\n\
-             This PC and Jarvis must stay on.\n\
+             This PC and JAI must stay on.\n\
              Spoken: The worldwide QR code is on your screen, Sir. Scan it with your phone, or open the link. It runs through a secure tunnel, so it works anywhere over 4G or 5G, no shared Wi-Fi required. {stays_spoken} Then tap Add to Home Screen and allow the microphone and location."
         )),
         None => Ok(format!(
-            "J.A.R.V.I.S. on your phone, anywhere in the world:\nThe worldwide HTTPS tunnel is {} — {}. The pairing window shows its QR code the moment it is online.\n{steps}\n\
+            "J.A.I. on your phone, anywhere in the world:\nThe worldwide HTTPS tunnel is {} — {}. The pairing window shows its QR code the moment it is online.\n{steps}\n\
              Meanwhile, on this Wi-Fi ({ip}): {local}\n\
              Spoken: I'm bringing the secure worldwide tunnel online, Sir; its QR code appears on your screen in a moment. Scan it, and it works anywhere over 4G or 5G, no shared Wi-Fi required. Then tap Add to Home Screen and allow the microphone and location.",
             tunnel.state, tunnel.detail
@@ -771,13 +771,13 @@ mod tests {
 
     #[tokio::test]
     async fn requests_parse_with_query_and_body() {
-        let raw = b"POST /api/chat?k=abc%20d HTTP/1.1\r\nHost: x\r\nContent-Length: 14\r\nX-Jarvis-Key: k1\r\n\r\n{\"text\":\"hi!\"}x";
+        let raw = b"POST /api/chat?k=abc%20d HTTP/1.1\r\nHost: x\r\nContent-Length: 14\r\nX-JAI-Key: k1\r\n\r\n{\"text\":\"hi!\"}x";
         let mut stream: &[u8] = raw;
         let req = read_request(&mut stream, None).await.unwrap();
         assert_eq!(req.method, "POST");
         assert_eq!(req.path, "/api/chat");
         assert_eq!(req.param("k"), Some("abc d"));
-        assert_eq!(req.header("x-jarvis-key"), Some("k1"));
+        assert_eq!(req.header("x-jai-key"), Some("k1"));
         assert_eq!(req.json()["text"], "hi!");
         assert!(same_token("abc", "abc") && !same_token("abc", "abd") && !same_token("ab", "abc"));
         let (side, modules) = qr_matrix("https://192.168.1.20:8443/satellite?k=0123456789abcdef01234567").unwrap();
