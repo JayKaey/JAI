@@ -2466,14 +2466,13 @@ impl BoardView {
                 p.rect_stroke(r, Rounding::ZERO, stroke(1.0, border_colour().gamma_multiply(0.6)));
             }
             None => {
+                // The outline of the picture while it loads; one sentence when it will not come.
                 let failed = matches!(media(url), Some(MediaSlot::Failed));
                 p.rect_filled(r, Rounding::ZERO, Color32::from_rgb(8, 14, 20));
-                let label = if failed { "IMAGE UNAVAILABLE" } else { "LOADING IMAGE…" };
-                p.text(r.center(), Align2::CENTER_CENTER, label, micro(), MICRO);
-                if !failed {
-                    let t = (p.ctx().input(|i| i.time) as f32 * 0.8).fract();
-                    let y = r.top() + r.height() * t;
-                    p.line_segment([pos2(r.left(), y), pos2(r.right(), y)], stroke(1.0, active_colour().gamma_multiply(0.4)));
+                if failed {
+                    crate::hud_style::failed_on(p, r, "This picture could not be loaded.");
+                } else {
+                    crate::hud_style::outline_on(p, r.shrink(8.0), crate::hud_style::Outline::Picture);
                 }
             }
         }

@@ -1115,7 +1115,8 @@ fn dossier_view(ui: &mut Ui, w: &mut SpatialWindow, c: &mut WorkspaceCanvas, ctx
         return;
     };
     let Some(snap) = c.snapshot(id) else {
-        muted(ui, "Loading the dossier…");
+        let room = ui.available_rect_before_wrap();
+        crate::hud_style::outline(ui, room.shrink(6.0), crate::hud_style::Outline::Lines);
         return;
     };
     let scroll_to_selection = w.seen_selection != c.selection_revision;
@@ -1262,7 +1263,8 @@ fn graph_view(ui: &mut Ui, w: &mut SpatialWindow, c: &mut WorkspaceCanvas, ctx: 
         return;
     };
     let Some(snap) = c.snapshot(id) else {
-        muted(ui, "Loading the knowledge graph…");
+        let room = ui.available_rect_before_wrap();
+        crate::hud_style::outline(ui, room.shrink(6.0), crate::hud_style::Outline::Lines);
         return;
     };
     let graph = w.graph.get_or_insert_with(ResearchGraphView::new);
@@ -1761,7 +1763,8 @@ fn schedule_view(ui: &mut Ui, app: &Jai, rt: &Handle) {
         let s = schedule();
         ui.label(RichText::new("TIMETABLE (WEBUNTIS)").monospace().size(9.5).color(MUTED));
         if s.loading && s.fetched_at.is_none() {
-            muted(ui, "Loading…");
+            let room = ui.available_rect_before_wrap();
+            crate::hud_style::outline(ui, room.shrink(6.0), crate::hud_style::Outline::Lines);
         }
         for (line, colour) in &s.lessons {
             ui.label(RichText::new(line).monospace().size(11.0).color(*colour));

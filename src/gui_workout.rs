@@ -73,7 +73,10 @@ impl WorkoutWindow {
                 muted(ui, p, "Or just say: \"JAI, log 3 by 10 bench press at 60 kilos\", \"start a 90 second rest timer\".");
                 ui.add_space(6.0);
                 egui::ScrollArea::vertical().max_height(620.0).show(ui, |ui| match &snapshot {
-                    None => muted(ui, p, "Loading workout records..."),
+                    None => {
+                        let room = ui.available_rect_before_wrap();
+                        crate::hud_style::outline(ui, egui::Rect::from_min_size(room.min, egui::vec2(room.width(), room.height().min(160.0))), crate::hud_style::Outline::List);
+                    }
                     Some(Err(e)) => {
                         ui.colored_label(p.red, e);
                     }

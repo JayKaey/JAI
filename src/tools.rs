@@ -1249,6 +1249,7 @@ impl ToolContext {
             if bool_arg(args, "open_settings") == Some(true) {
                 gui::open_interface_settings();
             }
+            crate::hud_feel::apply(args);
             if let Some(open) = bool_arg(args, "text_console") {
                 gui::set_text_console(open);
             }

@@ -391,6 +391,12 @@ fn draw_panel(ui: &mut Ui, snap: &Snapshot) -> Option<Action> {
     let now = ui.input(|i| i.time);
     let p = ui.painter_at(rect);
     let scanning = snap.phase == Phase::Scanning;
+    crate::hud_style::set_light(ID, match snap.phase {
+        Phase::Scanning => crate::hud_style::Light::Busy,
+        Phase::Failed => crate::hud_style::Light::Fault,
+        Phase::Done => crate::hud_style::Light::Good,
+        Phase::Idle => crate::hud_style::Light::Rest,
+    });
     let mut action = None;
     let mut moving = scanning || snap.graft.is_some();
 

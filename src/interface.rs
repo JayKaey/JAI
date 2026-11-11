@@ -263,6 +263,28 @@ pub struct InterfaceSettings {
     /// light on glass (Sir, 2026-11-11: "more realistic, a bit more rough"). "Turn off the scan
     /// lines" / the tool's `display_finish`. Never in OLED mode (true black stays black).
     pub display_finish: bool,
+    /// Calm HUD: the header strip, the telemetry strip and the key hints step back while nothing
+    /// happens and return when the mouse comes near or he has something to do ("calm mode",
+    /// "show everything").
+    pub calm_hud: bool,
+    /// Sir's words appear under the emblem while he speaks (paused while a game runs).
+    pub live_words: bool,
+    /// The power-up sequence at start (short or long by how long he was away and the hour).
+    pub startup_sequence: bool,
+    /// Unused for some minutes, the HUD dims to a clock, the date, the next appointment and
+    /// the weather.
+    pub idle_screen: bool,
+    /// Night mode by the clock (22:00 to 6:00): dimmer, no sounds, quieter and briefer.
+    pub night_mode: bool,
+    /// The screen's edges glow for a moment when something happens.
+    pub edge_light: bool,
+    /// The emblem moves with the music that plays on the PC.
+    pub music_visuals: bool,
+    /// Mini mode: a slim always-on-top strip at the top of a monitor instead of the board.
+    pub mini_strip: bool,
+    /// The emblem, clock and state as the live desktop background of a monitor without the
+    /// board.
+    pub desktop_background: bool,
     /// Name shown in the header.
     pub title: String,
     /// Minimal zen mode: no sidebars, widgets or pills — only the 3D orb and a clean chat.
@@ -334,6 +356,15 @@ impl Default for InterfaceSettings {
             frameless: true,
             animations: true,
             display_finish: true,
+            calm_hud: true,
+            live_words: true,
+            startup_sequence: true,
+            idle_screen: true,
+            night_mode: true,
+            edge_light: true,
+            music_visuals: true,
+            mini_strip: false,
+            desktop_background: false,
             title: DEFAULT_TITLE.to_string(),
             // The clean two-zone studio layout: the orb and the conversation; every technical
             // panel lives in the Settings drawer.
@@ -1742,6 +1773,15 @@ pub fn configure(current: &InterfaceSettings, args: &Value) -> Result<Configured
         ("animations", bool_arg(args, "animations"), &mut s.animations),
         ("display finish", bool_arg(args, "display_finish").or_else(|| bool_arg(args, "scan_lines")).or_else(|| bool_arg(args, "grain")), &mut s.display_finish),
         ("sound cues", bool_arg(args, "sound_cues"), &mut s.sound_cues),
+        ("calm HUD", bool_arg(args, "calm_hud"), &mut s.calm_hud),
+        ("live words", bool_arg(args, "live_words"), &mut s.live_words),
+        ("start-up sequence", bool_arg(args, "startup_sequence"), &mut s.startup_sequence),
+        ("idle screen", bool_arg(args, "idle_screen"), &mut s.idle_screen),
+        ("night mode by the clock", bool_arg(args, "night_mode"), &mut s.night_mode),
+        ("edge light", bool_arg(args, "edge_light"), &mut s.edge_light),
+        ("music visuals", bool_arg(args, "music_visuals"), &mut s.music_visuals),
+        ("mini mode", bool_arg(args, "mini_strip"), &mut s.mini_strip),
+        ("live desktop background", bool_arg(args, "desktop_background"), &mut s.desktop_background),
     ];
     for (label, value, field) in flags {
         if let Some(on) = value {
@@ -1755,6 +1795,13 @@ pub fn configure(current: &InterfaceSettings, args: &Value) -> Result<Configured
     }
     if bool_arg(args, "open_settings") == Some(true) {
         done.push("settings window open".into());
+    }
+    // The requests of the moment (subtitles, lyrics, tonight's night mode, the voice set-up):
+    // carried out by `hud_feel::apply`.
+    for (key, label) in crate::hud_feel::RUNTIME_KEYS {
+        if let Some(on) = bool_arg(args, key) {
+            done.push(format!("{label} {}", if on { "on" } else { "off" }));
+        }
     }
     if let Some(open) = bool_arg(args, "text_console") {
         done.push(format!("text console {}", if open { "open" } else { "closed" }));
@@ -1908,6 +1955,9 @@ pub fn spoken_ack(args: &Value, now: &InterfaceSettings) -> String {
             .map(|p| p.label())
             .collect::<Vec<_>>()
     };
+    if let Some(line) = crate::hud_feel::spoken(args) {
+        return line;
+    }
     if flag("open_settings") == Some(true) {
         return "There you are, Sir. The interface settings are open.".into();
     }
@@ -2702,7 +2752,7 @@ fn capitalise(s: &str) -> String {
 /// The `configure_interface` tool schema.
 pub fn tool_definition() -> Value {
     let panels: Vec<&str> = HudPanel::ALL.iter().map(|p| p.id()).collect();
-    json!({"type": "function", "function": {
+    let mut definition = json!({"type": "function", "function": {
         "name": "configure_interface",
         "description": "Restyle or rearrange YOUR OWN HUD (the J.A.I. window) when Sir asks: colours, theme, zoom, transparency, layout, panels, always on top, fullscreen, title bar, name, or show/hide/move/resize the window. Pass only what changes.",
         "parameters": {"type": "object", "properties": {
@@ -2743,7 +2793,11 @@ pub fn tool_definition() -> Value {
             "window": {"type": "string", "enum": ["show", "hide", "minimize", "maximize", "restore", "center", "bigger", "smaller", "top_left", "top_right", "bottom_left", "bottom_right", "left", "right"]},
             "reset": {"type": "boolean", "description": "Restore the default look (other fields apply on top)."}
         }, "required": []}
-    }})
+    }});
+    for (key, schema) in crate::hud_feel::schema() {
+        definition["function"]["parameters"]["properties"][key] = schema;
+    }
+    definition
 }
 
 #[cfg(test)]

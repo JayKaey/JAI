@@ -31,6 +31,9 @@ mod features_view;
 
 #[path = "gui_theme_studio.rs"]
 mod theme_studio;
+/// Every switch in one searchable panel.
+#[path = "gui_settings.rs"]
+mod settings_panel;
 
 #[path = "gui_mixer.rs"]
 mod mixer_view;
@@ -3450,6 +3453,18 @@ struct HudApp {
     /// the log above it takes what is left, so the input line is never pushed out of the
     /// console when the completions appear or wrap.
     console_foot: f32,
+    /// How much of the edge strips shows (1: all of them; the calm HUD lets them step back).
+    calm: f32,
+}
+
+/// The calm HUD: the edge strips return when the pointer comes this near the top or the bottom
+/// of the screen, and stand at this share of their strength otherwise.
+const CALM_REACH: f32 = 96.0;
+const CALM_REST: f32 = 0.2;
+
+/// Whether the pointer at `at` is near the top or the bottom edge of `screen`.
+fn near_strips(at: Pos2, screen: Rect) -> bool {
+    screen.contains(at) && (at.y < screen.top() + CALM_REACH || at.y > screen.bottom() - CALM_REACH)
 }
 
 /// The emblem's inputs from the HUD's model and the board (`centre_covered`: a block, the
@@ -3571,6 +3586,7 @@ impl HudApp {
             header_menu_next: None,
             board_area_now: Rect::NOTHING,
             console_foot: 46.0,
+            calm: 1.0,
             window_seen: ([0; 4], None),
             header_taken: Vec::new(),
             pill: ("LISTENING", "LISTENING", now),
@@ -3636,6 +3652,9 @@ impl HudApp {
             } else if self.history_open || self.screens_open {
                 self.history_open = false;
                 self.screens_open = false;
+            } else if lock(&self.model).state == "idle" && crate::hud_dock::close_top_block(ctx.pointer_hover_pos()) {
+                // The top block (under the pointer, else the latest): it leaves by its own
+                // [ CLOSE ] in its next frame. While he thinks or speaks, Esc stops him first.
             } else {
                 self.command(HudCommand::Interrupt);
             }
@@ -3965,12 +3984,20 @@ impl HudApp {
             if iface.comms_block {
                 self.comms_block(ui, m, screen);
             }
-            self.header_strip(ui, ctx, iface, screen);
-            header_rule(&ui.painter_at(screen), screen);
+            // (The calm HUD: the strips step back while nothing happens; the pill stays.)
+            let calm = self.calm_level(ctx, m, iface, screen, dt);
+            ui.scope(|ui| {
+                ui.set_opacity(calm);
+                self.header_strip(ui, ctx, iface, screen);
+                header_rule(&ui.painter_at(screen), screen);
+            });
             if iface.status_pill {
                 self.status_pill(ui, m, screen);
             }
-            self.telemetry_strip(ui, m, screen, dt);
+            ui.scope(|ui| {
+                ui.set_opacity(calm);
+                self.telemetry_strip(ui, m, screen, dt);
+            });
             self.screen_card(ui, screen, &frame);
             paint_frost(ctx, screen);
         });
@@ -3989,6 +4016,23 @@ impl HudApp {
         if self.screens_open {
             self.screens_block(ctx);
         }
+    }
+
+    /// The calm HUD: how much of the header strip, the telemetry strip and the key hints shows.
+    /// All of them while he has something to do, a menu or a drawer is open, or the pointer is
+    /// near the top or the bottom of the screen; else they step back.
+    fn calm_level(&mut self, ctx: &egui::Context, m: &HudModel, iface: &InterfaceSettings, screen: Rect, dt: f32) -> f32 {
+        let near = ctx.pointer_hover_pos().is_some_and(|at| near_strips(at, screen));
+        let open = ctx.memory(|mem| mem.any_popup_open()) || self.drawer_open || self.screens_open || self.history_open || self.find_open;
+        let wanted = !iface.calm_hud || windows_still(ctx) || near || open || m.state != "idle";
+        let target = if wanted { 1.0 } else { CALM_REST };
+        if windows_still(ctx) {
+            self.calm = target;
+        } else if self.calm != target {
+            self.calm = crate::hud_style::motion::approach(self.calm, target, dt, crate::hud_style::motion::NORMAL);
+            ctx.request_repaint();
+        }
+        self.calm
     }
 
     /// The strip flush in the top-right corner, as on the reference board: `[THEME] [HISTORY] [VIEW]
@@ -4356,6 +4400,9 @@ impl HudApp {
                 crate::workspace_canvas::unghost_all();
             }
             ui.separator();
+            if item(ui, "ALL SETTINGS — SEARCH") {
+                settings_panel::open(!settings_panel::is_open());
+            }
             if item(ui, "SETTINGS — VOICE, DEVICES, MEMORY") {
                 self.drawer_open = !self.drawer_open;
             }
@@ -5218,6 +5265,25 @@ impl HudApp {
             let hex = crate::interface::hex;
             let spec = serde_json::json!({ "name": t.name, "core_primary": hex(t.core_primary), "core_secondary": hex(t.core_secondary), "window_border": hex(t.window_border), "background_tint": hex(t.background_tint) });
             self.configure_look(&iface, serde_json::json!({ "create_theme": spec }));
+        }
+        // The settings panel ("open settings", VIEW → ALL SETTINGS): what it sets and opens.
+        match settings_panel::show(ctx, &iface) {
+            Some(settings_panel::Out::Set(next)) => self.set_interface(*next),
+            Some(settings_panel::Out::Open(tool)) => {
+                use settings_panel::Tool;
+                match tool {
+                    Tool::Devices => self.drawer_open = true,
+                    Tool::Interface => self.settings_open = true,
+                    Tool::ThemeStudio => show_theme_studio(true),
+                    Tool::Screens => self.screens_open = true,
+                    Tool::Hub => self.hub.open = true,
+                    Tool::FeatureLab => show_features(true),
+                    Tool::Mixer => show_mixer(true),
+                    Tool::VoiceSetup => crate::hud_feel::apply(&serde_json::json!({"voice_setup": true})),
+                    Tool::Missed => crate::hud_feel::apply(&serde_json::json!({"missed": true})),
+                }
+            }
+            None => {}
         }
         mark("mixer");
         mixer_view::show(ctx, &self.rt);
@@ -6498,6 +6564,7 @@ pub(super) fn hud_block_window(ctx: &egui::Context, id: &str, title: &str, size:
         None => window.min_size(Vec2::from(crate::hud_dock::MIN_BLOCK) - frame_pad),
     };
     let mut close_asked = false;
+    let mut header_maximize = false;
     let mut natural = None;
     let shown = window.show(ctx, |ui| {
         let frame_rect = ui.max_rect().expand(BLOCK_MARGIN);
@@ -6549,8 +6616,16 @@ pub(super) fn hud_block_window(ctx: &egui::Context, id: &str, title: &str, size:
         if crate::hud_style::paint_light(ui.painter(), pos2(title_rect.right() + 10.0, mid), crate::hud_style::light(id), ctx.input(|i| i.time), content_alpha) {
             ctx.request_repaint_after(Duration::from_millis(50));
         }
-        ui.interact(title_rect, area.with("title"), Sense::hover())
-            .on_hover_text("Drag to move, drag an edge to resize. Right-click: copy, pin, maximize, export, close. Ctrl+W close, Ctrl+G maximize, Ctrl+P pin, Ctrl+E export.");
+        // (A click-only sense: a drag that begins here still moves the block.)
+        let header = ui
+            .interact(Rect::from_min_max(row.min, pos2(keys_left - 4.0, row.bottom())), area.with("title"), Sense::click())
+            .on_hover_text("Drag to move, drag an edge to resize, double-click for large and back. Right-click: copy, pin, maximize, export, close. Esc or Ctrl+W close, Ctrl+G maximize, Ctrl+P pin, Ctrl+E export.");
+        if header.double_clicked() {
+            header_maximize = true;
+        }
+        if crate::hud_dock::take_esc_close(id) {
+            close_asked = true;
+        }
         let r = ui.cursor();
         ui.painter().line_segment([pos2(r.left(), r.top()), pos2(r.left() + ui.available_width(), r.top())], stroke(1.0, crate::hud_board::border_colour()));
         ui.add_space(6.0);
@@ -6592,12 +6667,49 @@ pub(super) fn hud_block_window(ctx: &egui::Context, id: &str, title: &str, size:
         } else if let Some((home, origin)) = crate::hud_dock::grabbed(id).filter(|_| down || released) {
             let moved = (rect.min - home.min).length() > 0.5 && (rect.size() - home.size()).length() <= 0.5;
             if let Some(at) = at.filter(|_| moved) {
-                crate::hud_dock::hold_once(id, Rect::from_min_size(home.min + (at - origin), home.size()));
+                let free = Rect::from_min_size(home.min + (at - origin), home.size());
+                // It lines up with its neighbours, the emblem and the screen (Alt: freely), and
+                // the lines it snapped to show while it is held.
+                let (alt, velocity) = ctx.input(|i| (i.modifiers.alt, i.pointer.velocity()));
+                let (landed, guides) = if alt || still {
+                    (free, Vec::new())
+                } else {
+                    let mut others: Vec<Rect> = crate::hud_dock::block_rects().into_iter().filter(|o| (o.min - rect.min).length() > 1.0 || (o.size() - rect.size()).length() > 1.0).collect();
+                    others.extend(crate::hud_dock::orb());
+                    crate::hud_style::snap(free, &others, bounds, crate::hud_style::SNAP_REACH)
+                };
+                if down {
+                    crate::hud_style::paint_guides(ctx, &guides);
+                }
+                crate::hud_dock::hold_once(id, landed);
+                // Let go while it moved: it is thrown, and glides on a little.
+                if released && !still && velocity.length() >= crate::hud_style::THROW_FROM && guides.is_empty() {
+                    lock(&THROWN).insert(id.to_string(), (landed, velocity));
+                }
                 ctx.request_repaint();
             }
         }
         if !down {
             crate::hud_dock::let_go(id);
+            // A thrown block glides on until it rests (or is taken hold of again: `pressed`).
+            let mut thrown = lock(&THROWN);
+            if let Some((at, velocity)) = thrown.get(id).copied() {
+                match crate::hud_style::glide_on(at, velocity, bounds, ctx.input(|i| i.stable_dt)) {
+                    Some((next, v)) => {
+                        thrown.insert(id.to_string(), (next, v));
+                        crate::hud_dock::hold_once(id, next);
+                        ctx.request_repaint();
+                    }
+                    None => {
+                        thrown.remove(id);
+                    }
+                }
+            }
+        } else if pressed {
+            lock(&THROWN).remove(id);
+        }
+        if header_maximize && crate::hud_dock::toggle_maximize(id, bounds) {
+            crate::tts::play_cue(crate::jai_voice_dsp::Earcon::Spotlight);
         }
         // An edge dragged by hand: the block keeps Sir's size. Otherwise it takes the size of
         // what it shows (once per content, gliding), like the blocks of the reference video.
@@ -6646,6 +6758,9 @@ pub(super) fn hud_block_window(ctx: &egui::Context, id: &str, title: &str, size:
     }
     action
 }
+
+/// Blocks Sir threw: where each is and how fast it still glides (`hud_style::glide_on`).
+static THROWN: std::sync::LazyLock<Mutex<std::collections::HashMap<String, (Rect, Vec2)>>> = std::sync::LazyLock::new(Default::default);
 
 /// The egui-data key that marks a context whose windows are drawn at rest (offscreen renders:
 /// `ui_snapshot`, the visual verifier): no entrance or exit moves them while they are measured.
@@ -7437,6 +7552,15 @@ mod tests {
         let small = parts.iter().find(|(n, _)| *n == "small views").unwrap().1;
         assert!((small - 6.0).abs() < 0.5, "two stretches of the same part add up: {small}");
         assert!(parts_of(&[], at(5)).is_empty());
+    }
+
+    #[test]
+    fn the_strips_return_when_the_pointer_nears_the_top_or_the_bottom() {
+        let screen = Rect::from_min_size(pos2(0.0, 0.0), vec2(2560.0, 1440.0));
+        assert!(near_strips(pos2(1200.0, 40.0), screen) && near_strips(pos2(30.0, 1400.0), screen));
+        assert!(!near_strips(pos2(1200.0, 700.0), screen));
+        assert!(!near_strips(pos2(3000.0, 20.0), screen), "another monitor's top is not this screen's");
+        assert!(CALM_REST > 0.1 && CALM_REST < 0.5, "stepped back, still findable");
     }
 
     #[test]

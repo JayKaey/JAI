@@ -224,6 +224,19 @@ fn frame_note(p: &Painter, rect: Rect, text: &str) {
     p.text(rect.center(), Align2::CENTER_CENTER, text, FontId::monospace(12.0), super::STRIP_MUTED);
 }
 
+/// A picture frame without its picture: the outline of one while it loads, or what went wrong
+/// with a `[ RETRY ]` key. Returns whether the key was clicked.
+fn frame_state(ui: &mut Ui, rect: Rect, status: Option<(bool, Option<String>)>, what: &str) -> bool {
+    ui.painter_at(rect).rect_filled(rect, Rounding::ZERO, PANEL);
+    match status {
+        Some((false, Some(e))) => crate::hud_style::failed(ui, rect.shrink(12.0), &format!("This {what} could not be loaded ({e}).")),
+        _ => {
+            crate::hud_style::outline(ui, rect.shrink(14.0), crate::hud_style::Outline::Picture);
+            false
+        }
+    }
+}
+
 /// A small label with a dark backing.
 fn tag(p: &Painter, at: Pos2, anchor: Align2, text: &str, colour: Color32) -> Rect {
     let galley = p.layout_no_wrap(text.to_string(), FontId::monospace(10.5), colour);
@@ -345,8 +358,30 @@ fn pictures_body(ui: &mut Ui, rt: &Handle, id: &str) {
     let avail = ui.available_size();
     let main_h = (avail.y - strip_h - 26.0).max(120.0);
     let (rect, _) = ui.allocate_exact_size(vec2(avail.x, main_h), Sense::hover());
+    {
+        use crate::hud_style::Light;
+        crate::hud_style::set_light(id, match &current {
+            None if album.note.ends_with('\u{2026}') => Light::Busy,
+            None => Light::Rest,
+            Some(pic) => match crate::image_viewer::pixels::status(&pic.full_key()) {
+                Some((false, Some(_))) => Light::Fault,
+                Some((false, None)) => Light::Good,
+                _ => Light::Busy,
+            },
+        });
+    }
     match &current {
-        None => frame_note(&ui.painter_at(rect), rect, if album.note.is_empty() { "No pictures yet." } else { &album.note }),
+        // Nothing found yet: the outline of a picture while he searches (the note says where),
+        // one plain sentence when there is nothing.
+        None if album.note.ends_with('\u{2026}') => {
+            ui.painter_at(rect).rect_filled(rect, Rounding::ZERO, PANEL);
+            crate::hud_style::outline(ui, rect.shrink(14.0), crate::hud_style::Outline::Picture);
+            tag(&ui.painter_at(rect), rect.left_bottom() + vec2(8.0, -8.0), Align2::LEFT_BOTTOM, &album.note, super::STRIP_INK);
+        }
+        None => {
+            ui.painter_at(rect).rect_filled(rect, Rounding::ZERO, PANEL);
+            crate::hud_style::empty(ui, rect, if album.note.is_empty() { "No pictures yet." } else { &album.note });
+        }
         Some(pic) => {
             crate::image_viewer::pixels::want(&pic.full_key(), &pic.full_origin(), crate::image_viewer::FULL_SIDE, pic.local.is_none());
             let full = texture(ui.ctx(), &pic.full_key());
@@ -359,12 +394,9 @@ fn pictures_body(ui: &mut Ui, rt: &Handle, id: &str) {
                     }
                 }
                 None => {
-                    let status = crate::image_viewer::pixels::status(&pic.full_key());
-                    let text = match status {
-                        Some((false, Some(e))) => format!("This picture could not be loaded ({e})."),
-                        _ => "Loading…".to_string(),
-                    };
-                    frame_note(&ui.painter_at(rect), rect, &text);
+                    if frame_state(ui, rect, crate::image_viewer::pixels::status(&pic.full_key()), "picture") {
+                        crate::image_viewer::pixels::reload(&pic.full_key(), &pic.full_origin(), crate::image_viewer::FULL_SIDE);
+                    }
                 }
             }
             if !album.note.is_empty() {
@@ -583,11 +615,9 @@ fn street_body(ui: &mut Ui, _rt: &Handle) {
             framed(ui, rect, egui::Id::new("jai_street_photo"), key, &tex, px);
         }
         None => {
-            let text = match crate::image_viewer::pixels::status(&shot.full_key()) {
-                Some((false, Some(e))) => format!("This photo could not be loaded ({e})."),
-                _ => "Loading the photo…".to_string(),
-            };
-            frame_note(&ui.painter_at(rect), rect, &text);
+            if frame_state(ui, rect, crate::image_viewer::pixels::status(&shot.full_key()), "photo") {
+                crate::image_viewer::pixels::reload(&shot.full_key(), &shot.full_origin(), crate::image_viewer::FULL_SIDE);
+            }
         }
     }
     let p = ui.painter_at(rect);

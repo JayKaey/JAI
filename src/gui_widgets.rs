@@ -670,7 +670,9 @@ fn drive_space_view(ui: &mut Ui, p: &Palette, app: &Jai) {
 fn processes_view(ui: &mut Ui, p: &Palette, host: &WidgetHost) {
     let list = host.app.tools().widgets.processes();
     if list.is_empty() {
-        muted(ui, p, "Sampling processes…");
+        // The first sample is on its way: the outline of the list.
+        let room = ui.available_rect_before_wrap();
+        crate::hud_style::outline(ui, room.shrink(4.0), crate::hud_style::Outline::List);
         return;
     }
     let rows = ((ui.available_height() / 2.0 / 22.0).floor() as usize).clamp(5, 15);

@@ -234,6 +234,7 @@ pub fn off_board(id: &str) {
 /// the board at once).
 pub fn forget(id: &str) {
     off_board(id);
+    crate::hud_style::set_light(id, crate::hud_style::Light::Rest);
     with(|s| {
         s.seen.remove(id);
         s.detached.remove(id);
@@ -722,6 +723,37 @@ static OVERLAP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::n
 /// The emblem's rect and the board's visible blocks this frame.
 pub fn publish_obstacles(orb: Option<Rect>, board: Vec<Rect>) {
     *lock(&OBSTACLES) = (orb, board);
+}
+
+/// The block on the board under `at` (the last frame's layout), if any.
+pub fn block_under(at: Pos2) -> Option<String> {
+    with(|s| s.last_blocks.iter().chain(s.blocks.iter()).rev().find(|(id, _, rect)| rect.contains(at) && !s.closing.contains_key(id)).map(|(id, _, _)| id.clone()))
+}
+
+/// Esc asked this block to close (it leaves through its own `[ CLOSE ]` path in its next frame).
+static ESC_CLOSE: Mutex<Option<String>> = Mutex::new(None);
+
+/// Esc closes the top block: the one under the pointer, else the one opened or touched last
+/// that stands on the board. Never a pinned one. Returns whether there was one.
+pub fn close_top_block(pointer: Option<Pos2>) -> bool {
+    let on_board = |id: &str| block_rect(id).is_some() && !is_pinned(id) && closing_progress(id).is_none() && !is_minimized(id);
+    let top = pointer.and_then(block_under).filter(|id| on_board(id)).or_else(|| recent_blocks().into_iter().map(|(id, _)| id).find(|id| on_board(id)));
+    let found = top.is_some();
+    if found {
+        *lock(&ESC_CLOSE) = top;
+    }
+    found
+}
+
+/// Whether Esc asked block `id` to close (asked once).
+pub fn take_esc_close(id: &str) -> bool {
+    let mut asked = lock(&ESC_CLOSE);
+    if asked.as_deref() == Some(id) {
+        *asked = None;
+        true
+    } else {
+        false
+    }
 }
 
 /// The emblem's rect as the last frame published it (it lights the blocks near it).

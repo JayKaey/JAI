@@ -3352,6 +3352,11 @@ fn look_args(name: &str, prefer_layout: bool) -> Option<Value> {
 
 /// Requests to restyle or move the HUD → `configure_interface` arguments.
 fn interface_command(s: &str) -> Option<Value> {
+    // The look-and-feel features by their names ("night mode", "subtitles on", "show the
+    // lyrics", "what did I miss", "learn my voice"), before a "... mode" is taken for a theme.
+    if let Some(args) = crate::hud_feel::command(s) {
+        return Some(args);
+    }
     if HUD_SHOW.is_match(s) {
         return Some(json!({ "window": "show" }));
     }

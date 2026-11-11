@@ -524,7 +524,14 @@ fn summary(snap: &Snapshot) -> String {
 }
 
 fn body(ui: &mut Ui, rt: &Handle) {
+    use crate::hud_style::Light;
     let snap = studio::snapshot();
+    crate::hud_style::set_light(ID, match snap.phase {
+        Phase::Working => Light::Busy,
+        Phase::Failed => Light::Fault,
+        Phase::Ready => Light::Good,
+        Phase::Idle => Light::Rest,
+    });
     if snap.open {
         let line = summary(&snap);
         let changed = {

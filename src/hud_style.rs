@@ -164,6 +164,95 @@ pub fn wear(p: &Painter, r: Rect, fill: Color32, edge: Color32, seed: u64, alpha
     }
 }
 
+// ------------------------------------------------------------------------- drag and throw ----
+
+/// How near (points) a dragged block's edge must come to a line to snap to it, and the gap two
+/// blocks keep when one snaps beside the other.
+pub const SNAP_REACH: f32 = 9.0;
+pub const SNAP_GAP: f32 = 10.0;
+
+/// A dragged block at `free` snapped to what is around it: the edges and middles of the other
+/// blocks (and beside them, a gap apart) and of the screen. Returns where it lands and the
+/// guide lines to draw (each from-to), at most one per axis.
+pub fn snap(free: Rect, others: &[Rect], bounds: Rect, reach: f32) -> (Rect, Vec<[Pos2; 2]>) {
+    // (the line's place, the nearer end of what it belongs to, the farther end)
+    let mut xs: Vec<(f32, f32, f32)> = vec![(bounds.left(), bounds.top(), bounds.bottom()), (bounds.center().x, bounds.top(), bounds.bottom()), (bounds.right(), bounds.top(), bounds.bottom())];
+    let mut ys: Vec<(f32, f32, f32)> = vec![(bounds.top(), bounds.left(), bounds.right()), (bounds.center().y, bounds.left(), bounds.right()), (bounds.bottom(), bounds.left(), bounds.right())];
+    for o in others {
+        for x in [o.left(), o.center().x, o.right(), o.left() - SNAP_GAP, o.right() + SNAP_GAP] {
+            xs.push((x, o.top(), o.bottom()));
+        }
+        for y in [o.top(), o.center().y, o.bottom(), o.top() - SNAP_GAP, o.bottom() + SNAP_GAP] {
+            ys.push((y, o.left(), o.right()));
+        }
+    }
+    // The nearest line within reach of one of the block's own three (two edges and the middle).
+    let nearest = |mine: [f32; 3], lines: &[(f32, f32, f32)]| -> Option<(f32, (f32, f32, f32))> {
+        let mut best: Option<(f32, (f32, f32, f32))> = None;
+        for line in lines {
+            for m in mine {
+                let d = line.0 - m;
+                if d.abs() <= reach && best.is_none_or(|(b, _)| d.abs() < b.abs()) {
+                    best = Some((d, *line));
+                }
+            }
+        }
+        best
+    };
+    let dx = nearest([free.left(), free.center().x, free.right()], &xs);
+    let dy = nearest([free.top(), free.center().y, free.bottom()], &ys);
+    let landed = free.translate(vec2(dx.map_or(0.0, |d| d.0), dy.map_or(0.0, |d| d.0)));
+    let mut guides = Vec::new();
+    if let Some((_, (x, a, b))) = dx {
+        guides.push([pos2(x, a.min(landed.top())), pos2(x, b.max(landed.bottom()))]);
+    }
+    if let Some((_, (y, a, b))) = dy {
+        guides.push([pos2(a.min(landed.left()), y), pos2(b.max(landed.right()), y)]);
+    }
+    (landed, guides)
+}
+
+/// The guide lines of a snap, drawn over everything while the block is held.
+pub fn paint_guides(ctx: &egui::Context, guides: &[[Pos2; 2]]) {
+    if guides.is_empty() {
+        return;
+    }
+    let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("hud_snap_guides")));
+    let colour = crate::hud_board::active_colour();
+    for [from, to] in guides {
+        p.line_segment([*from, *to], stroke(1.0, colour.gamma_multiply(0.75)));
+        for end in [from, to] {
+            p.circle_filled(*end, 2.0, colour);
+        }
+    }
+}
+
+/// A block let go while it moved faster than this (points per second) is thrown.
+pub const THROW_FROM: f32 = 420.0;
+
+/// One frame of a thrown block: it glides on from `rect` at `velocity`, slowing down (it has
+/// lost its way after about a third of a second), and stops at the edge of `bounds`. Returns
+/// where it is now and how fast; None once it rests.
+pub fn glide_on(rect: Rect, velocity: egui::Vec2, bounds: Rect, dt: f32) -> Option<(Rect, egui::Vec2)> {
+    let dt = dt.clamp(0.0, 0.05);
+    let velocity = velocity * (-9.0 * dt).exp();
+    if velocity.length() < 24.0 {
+        return None;
+    }
+    let mut next = rect.translate(velocity * dt);
+    let mut v = velocity;
+    // The edge of the screen stops it (on that axis).
+    if next.left() < bounds.left() || next.right() > bounds.right() {
+        next = next.translate(vec2((bounds.left() - next.left()).max(0.0) + (bounds.right() - next.right()).min(0.0), 0.0));
+        v.x = 0.0;
+    }
+    if next.top() < bounds.top() || next.bottom() > bounds.bottom() {
+        next = next.translate(vec2(0.0, (bounds.top() - next.top()).max(0.0) + (bounds.bottom() - next.bottom()).min(0.0)));
+        v.y = 0.0;
+    }
+    (v.length() >= 24.0).then_some((next, v))
+}
+
 // -------------------------------------------------------------------------------- glass ----
 
 /// A fixed sequence of chance from `seed` (the same glass on every start).
@@ -391,11 +480,16 @@ pub enum Outline {
 /// The outline of what is coming: dim shapes where the content will stand, and a light that
 /// passes over them. Asks for the next frame itself.
 pub fn outline(ui: &Ui, r: Rect, kind: Outline) {
+    outline_on(&ui.painter_at(r), r, kind);
+}
+
+/// `outline` for a painter (the board's blocks).
+pub fn outline_on(p: &Painter, r: Rect, kind: Outline) {
     if r.width() < 40.0 || r.height() < 24.0 {
         return;
     }
-    let p = ui.painter_at(r);
-    let time = ui.input(|i| i.time);
+    let p = p.with_clip_rect(r.intersect(p.clip_rect()));
+    let time = p.ctx().input(|i| i.time);
     let dim = Color32::from_white_alpha(13);
     let mut shapes: Vec<Rect> = Vec::new();
     match kind {
@@ -445,12 +539,17 @@ pub fn outline(ui: &Ui, r: Rect, kind: Outline) {
             p.rect_filled(band, Rounding::ZERO, accent.gamma_multiply(0.10));
         }
     }
-    ui.ctx().request_repaint_after(std::time::Duration::from_millis(33));
+    p.ctx().request_repaint_after(std::time::Duration::from_millis(33));
 }
 
 /// One plain sentence in the middle of a block that has nothing to show.
 pub fn empty(ui: &Ui, r: Rect, sentence: &str) {
-    let p = ui.painter_at(r);
+    empty_on(&ui.painter_at(r), r, sentence);
+}
+
+/// `empty` for a painter.
+pub fn empty_on(p: &Painter, r: Rect, sentence: &str) {
+    let p = p.with_clip_rect(r.intersect(p.clip_rect()));
     let c = r.center();
     // A small empty frame above the words.
     let mark = Rect::from_center_size(c - vec2(0.0, 18.0), vec2(22.0, 16.0));
@@ -465,21 +564,29 @@ pub fn empty(ui: &Ui, r: Rect, sentence: &str) {
 /// the key was clicked.
 pub fn failed(ui: &mut Ui, r: Rect, what: &str) -> bool {
     let c = r.center();
-    {
-        let p = ui.painter_at(r);
-        // A warning triangle in the fault colour.
+    failed_on(&ui.painter_at(r), r, what);
+    let bottom = (c.y + 34.0).min(r.bottom() - 10.0);
+    let width = key_width(ui.painter(), "[ RETRY ]");
+    keys(ui, egui::Id::new(("retry", r.min.x as i32, r.min.y as i32)), c.x + width * 0.5, bottom, &[("[ RETRY ]", true, "Try again")], 1.0).0.is_some()
+}
+
+/// What went wrong, under a warning triangle (a painter's: no `[ RETRY ]`).
+pub fn failed_on(p: &Painter, r: Rect, what: &str) {
+    let p = p.with_clip_rect(r.intersect(p.clip_rect()));
+    let c = r.center();
+    // Short blocks keep the sentence and drop the triangle.
+    let tall = r.height() >= 96.0;
+    if tall {
         let top = c - vec2(0.0, 40.0);
         let tri = [top, top + vec2(11.0, 19.0), top + vec2(-11.0, 19.0)];
         p.add(egui::Shape::closed_line(tri.to_vec(), stroke(1.5, FAULT)));
         p.line_segment([top + vec2(0.0, 7.0), top + vec2(0.0, 13.0)], stroke(1.5, FAULT));
         p.circle_filled(top + vec2(0.0, 16.0), 0.9, FAULT);
-        let font = FontId::proportional(12.5);
-        let galley = p.layout(what.to_string(), font, Color32::from_rgb(0xE6, 0xEE, 0xF6), (r.width() - 24.0).max(60.0));
-        p.galley(pos2(c.x - galley.size().x * 0.5, c.y - 12.0), galley, Color32::PLACEHOLDER);
     }
-    let bottom = (c.y + 34.0).min(r.bottom() - 10.0);
-    let width = key_width(ui.painter(), "[ RETRY ]");
-    keys(ui, egui::Id::new(("retry", r.min.x as i32, r.min.y as i32)), c.x + width * 0.5, bottom, &[("[ RETRY ]", true, "Try again")], 1.0).0.is_some()
+    let font = FontId::proportional(12.5);
+    let galley = p.layout(what.to_string(), font, Color32::from_rgb(0xE6, 0xEE, 0xF6), (r.width() - 24.0).max(60.0));
+    let y = if tall { c.y - 12.0 } else { c.y - galley.size().y * 0.5 };
+    p.galley(pos2(c.x - galley.size().x * 0.5, y), galley, Color32::PLACEHOLDER);
 }
 
 #[cfg(test)]
@@ -522,6 +629,53 @@ mod tests {
         for (corner, _, off, len) in nicks(seed_of("earth")) {
             assert!(corner < 4 && (10.0..44.0).contains(&off) && (2.0..6.0).contains(&len));
         }
+    }
+
+    /// A dragged block lines up with its neighbours and the screen, keeps a gap beside a
+    /// neighbour, and far from every line it stays where the hand has it.
+    #[test]
+    fn a_dragged_block_snaps_to_what_is_near() {
+        let bounds = Rect::from_min_size(pos2(0.0, 0.0), vec2(1600.0, 900.0));
+        let other = Rect::from_min_size(pos2(200.0, 100.0), vec2(300.0, 200.0));
+        // Its top five points under the neighbour's top, its left edge near the gap beside it.
+        let free = Rect::from_min_size(pos2(516.0, 105.0), vec2(270.0, 160.0));
+        let (landed, guides) = snap(free, &[other], bounds, SNAP_REACH);
+        assert_eq!((landed.left(), landed.top()), (other.right() + SNAP_GAP, other.top()));
+        assert_eq!(landed.size(), free.size(), "a snap moves, it never resizes");
+        assert_eq!(guides.len(), 2);
+        // The middle of the screen.
+        let centred = Rect::from_center_size(pos2(803.0, 600.0), vec2(200.0, 100.0));
+        assert_eq!(snap(centred, &[], bounds, SNAP_REACH).0.center().x, 800.0);
+        // Nothing near: it stays, and no line is drawn.
+        let alone = Rect::from_min_size(pos2(1000.0, 500.0), vec2(200.0, 90.0));
+        let (same, none) = snap(alone, &[other], bounds, SNAP_REACH);
+        assert_eq!(same, alone);
+        assert!(none.is_empty());
+    }
+
+    /// A thrown block glides on, slows down, rests within half a second and never leaves the
+    /// screen.
+    #[test]
+    fn a_thrown_block_glides_on_and_comes_to_rest() {
+        let bounds = Rect::from_min_size(pos2(0.0, 0.0), vec2(1600.0, 900.0));
+        let start = Rect::from_min_size(pos2(400.0, 300.0), vec2(300.0, 200.0));
+        let (mut rect, mut v, mut frames) = (start, vec2(1500.0, 0.0), 0);
+        while let Some((r, next)) = glide_on(rect, v, bounds, 1.0 / 60.0) {
+            assert!(next.length() < v.length(), "it only ever slows down");
+            (rect, v, frames) = (r, next, frames + 1);
+            assert!(frames < 60, "still gliding after a second");
+        }
+        let way = rect.left() - start.left();
+        assert!((80.0..260.0).contains(&way), "glided {way} points in {frames} frames");
+        assert!(frames <= 30, "at rest within half a second: {frames} frames");
+        // Thrown at the edge, it stops there.
+        let mut rect = Rect::from_min_size(pos2(1250.0, 300.0), vec2(300.0, 200.0));
+        let mut v = vec2(4000.0, 0.0);
+        while let Some((r, next)) = glide_on(rect, v, bounds, 1.0 / 60.0) {
+            (rect, v) = (r, next);
+        }
+        assert!(rect.right() <= bounds.right() + 0.01, "{rect:?}");
+        assert!(glide_on(start, vec2(10.0, 0.0), bounds, 1.0 / 60.0).is_none(), "a slow release is no throw");
     }
 
     /// The glass is faint (text under it stays sharp), still (it asks for no frame) and the

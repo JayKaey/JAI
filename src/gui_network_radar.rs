@@ -83,6 +83,7 @@ fn body(ui: &mut Ui, rt: &Handle) {
         }
         crate::gui::refresh();
     }
+    crate::hud_style::set_light(ID, if busy { crate::hud_style::Light::Busy } else { crate::hud_style::Light::Good });
     ui.ctx().request_repaint_after(Duration::from_millis(if busy { 16 } else { 33 }));
 }
 
