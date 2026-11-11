@@ -388,6 +388,12 @@ impl VadMachine {
         self.utterance[..self.utterance.len().saturating_sub(trim)].to_vec()
     }
 
+    /// While Sir is speaking: what he has said so far and for how long he has spoken (ms), for
+    /// the live words on the HUD. None between utterances.
+    pub fn so_far(&self) -> Option<(Vec<f32>, u32)> {
+        (self.in_utterance() && self.voiced_frames > 0).then(|| (self.heard_so_far(), self.voiced_frames * FRAME_MS))
+    }
+
     fn push_pre_roll(&mut self, frame: &[f32]) {
         if self.params.pre_roll_frames == 0 {
             return;

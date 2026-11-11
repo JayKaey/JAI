@@ -105,6 +105,41 @@ pub fn command(s: &str) -> Option<Value> {
     Some(json!({ key: on }))
 }
 
+// ---------------------------------------------------------------------- a game in front ----
+
+/// Whether a game (or another program that fills its screen) is in front: the live words and
+/// the subtitles pause then, so they cost the game nothing. Looked up at most every 3 s.
+pub fn game_in_front() -> bool {
+    static SEEN: Mutex<Option<(std::time::Instant, bool)>> = Mutex::new(None);
+    let mut seen = lock(&SEEN);
+    if let Some((at, gaming)) = *seen {
+        if at.elapsed() < std::time::Duration::from_secs(3) {
+            return gaming;
+        }
+    }
+    let gaming = game_in_front_now();
+    *seen = Some((std::time::Instant::now(), gaming));
+    gaming
+}
+
+#[cfg(windows)]
+fn game_in_front_now() -> bool {
+    let (process, own) = crate::win32::foreground_info().unwrap_or_default();
+    !own && (is_game(&process) || crate::win32::foreground_is_fullscreen())
+}
+
+#[cfg(not(windows))]
+fn game_in_front_now() -> bool {
+    false
+}
+
+/// A game's process (the listed games; a voice chat in front is no game).
+pub fn is_game(process: &str) -> bool {
+    let p = process.to_lowercase();
+    let p = p.trim_end_matches(".exe");
+    crate::ears::is_game_or_voice_chat(p) && !["discord", "discordptb", "discordcanary", "teamspeak", "ts3client_win64", "ts3client", "mumble", "guilded"].contains(&p)
+}
+
 // ------------------------------------------------------------------- requests of the moment ----
 
 /// The arguments that are requests of the moment, not settings (`interface::configure` names
@@ -180,6 +215,17 @@ pub fn lyrics() -> bool {
 
 pub fn set_lyrics(on: bool) {
     LYRICS.store(on, Ordering::Release);
+}
+
+/// The playing song's current line, while the lyrics are on (published by the lyrics module).
+static LYRIC_LINE: Mutex<Option<String>> = Mutex::new(None);
+
+pub fn lyric_line() -> Option<String> {
+    lyrics().then(|| lock(&LYRIC_LINE).clone()).flatten()
+}
+
+pub fn publish_lyric_line(line: Option<String>) {
+    *lock(&LYRIC_LINE) = line;
 }
 
 /// "What did I miss?" was asked (once).
@@ -460,6 +506,12 @@ mod tests {
     }
 
     static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn a_voice_chat_in_front_is_no_game() {
+        assert!(is_game("javaw.exe") && is_game("cs2") && is_game("Cyberpunk2077.exe"));
+        assert!(!is_game("Discord.exe") && !is_game("firefox.exe") && !is_game("Code.exe"));
+    }
 
     #[test]
     fn requests_of_the_moment_are_taken_once() {

@@ -569,6 +569,7 @@ impl ToolContext {
         let before = self.snapshot();
         let started = Instant::now();
         info!("[TOOL] {name} {args}");
+        crate::hud_lines::step(name);
         let mut memories_changed = false;
         let mut skills_changed = false;
         let mut shutdown_requested = false;
@@ -1052,6 +1053,7 @@ impl ToolContext {
             }
             Err(err) => {
                 warn!("[TOOL] {name} failed in {duration_ms} ms: {err}");
+                crate::hud_lines::fault();
                 ToolOutcome {
                     tool: name.to_string(),
                     args,

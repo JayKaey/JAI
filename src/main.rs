@@ -87,6 +87,7 @@ mod hud;
 mod hud_dock;
 mod hud_board;
 mod hud_feel;
+mod hud_lines;
 mod hud_style;
 mod hud_suggestions;
 mod hyper_cortex;

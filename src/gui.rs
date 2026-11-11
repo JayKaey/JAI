@@ -3455,6 +3455,10 @@ struct HudApp {
     console_foot: f32,
     /// How much of the edge strips shows (1: all of them; the calm HUD lets them step back).
     calm: f32,
+    /// The utterance Sir is in: since when, and the loudest his voice was (dBFS).
+    mic_speech: Option<(Instant, f32)>,
+    /// What is wrong with the way he hears Sir ("TOO QUIET"), and since when it has been shown.
+    mic_verdict: Option<(&'static str, Instant)>,
 }
 
 /// The calm HUD: the edge strips return when the pointer comes this near the top or the bottom
@@ -3587,6 +3591,8 @@ impl HudApp {
             board_area_now: Rect::NOTHING,
             console_foot: 46.0,
             calm: 1.0,
+            mic_speech: None,
+            mic_verdict: None,
             window_seen: ([0; 4], None),
             header_taken: Vec::new(),
             pill: ("LISTENING", "LISTENING", now),
@@ -3726,6 +3732,17 @@ impl HudApp {
         self.emblem.follow(inputs);
         if self.emblem.state() != before {
             info!("[HUD] Emblem: {:?} → {:?}", before, self.emblem.state());
+        }
+        // Its mood: what he is doing (and one red flash for an order that failed).
+        use crate::rose_emblem_renderer::Mood;
+        self.emblem.set_mood(match m.state.as_str() {
+            "listening" => Mood::Listening,
+            "thinking" => Mood::Thinking,
+            "speaking" => Mood::Speaking,
+            _ => Mood::Rest,
+        });
+        if crate::hud_lines::take_fault() {
+            self.emblem.flash_fault();
         }
         self.emblem.step(dt, self.reactor.emblem_voice().max(welcome_level() * 0.6), inputs.busy());
     }
@@ -3980,6 +3997,14 @@ impl HudApp {
 
             if iface.voice_rim {
                 self.voice_rim(&ui.painter_at(screen), m, &frame, dt);
+            }
+            // The lines under the emblem: his words while he speaks, what JAI is working on,
+            // the song's line, and the offer of an order heard without his name.
+            let lines_top = if frame.dock < 0.5 { pos2(frame.centre.x, frame.centre.y + frame.radius * 1.2 + 10.0) } else { pos2(screen.center().x, screen.bottom() - TELEMETRY_H - 110.0) };
+            let lyric = crate::hud_feel::lyric_line();
+            if let Some(order) = crate::hud_lines::paint(ui, lines_top, (screen.width() * 0.5).min(760.0), &m.state, iface.live_words, lyric.as_deref()) {
+                info!("[HUD] The offered order was taken: '{order}'");
+                self.command(HudCommand::Chat { text: order });
             }
             if iface.comms_block {
                 self.comms_block(ui, m, screen);
@@ -4648,6 +4673,29 @@ impl HudApp {
     /// reference orb (only at home, not docked; the emblem's own rings follow JAI's voice).
     fn voice_rim(&mut self, painter: &egui::Painter, m: &HudModel, frame: &crate::rose_emblem_renderer::EmblemFrame, dt: f32) {
         let phase = m.level.as_ref().map_or("muted", |l| l.phase);
+        // How well he hears Sir: from half a second into an utterance, by the loudest his voice
+        // was and the room's own noise. The ring turns amber and says what is wrong.
+        match m.level.as_ref().filter(|_| matches!(phase, "pre_speech" | "speaking" | "hangover") && m.state != "speaking") {
+            Some(l) => {
+                let (since, peak) = self.mic_speech.map_or((Instant::now(), l.rms_db), |(since, peak)| (since, peak.max(l.rms_db)));
+                self.mic_speech = Some((since, peak));
+                if since.elapsed() > Duration::from_millis(600) {
+                    match crate::hud_lines::mic_verdict(peak, to_db(l.noise_floor)) {
+                        Some(verdict) => self.mic_verdict = Some((verdict, Instant::now())),
+                        // (His voice came up: the label goes with it.)
+                        None => self.mic_verdict = None,
+                    }
+                }
+            }
+            None => self.mic_speech = None,
+        }
+        const VERDICT_STAYS: f32 = 3.0;
+        let verdict = self.mic_verdict.filter(|(_, at)| at.elapsed().as_secs_f32() < VERDICT_STAYS);
+        if let Some((word, at)) = verdict.filter(|_| frame.dock < 0.5) {
+            let strength = (1.0 - (at.elapsed().as_secs_f32() - (VERDICT_STAYS - 0.4)).max(0.0) / 0.4).clamp(0.0, 1.0);
+            crate::hud_lines::paint_mic_label(painter, frame.centre, frame.radius, word, strength);
+            painter.ctx().request_repaint_after(Duration::from_millis(50));
+        }
         let target = rim_target(&m.state, phase, self.reactor.mic, frame.dock);
         let rate: f32 = if target > self.voice_rim { 0.55 } else { 0.9 };
         self.voice_rim += (target - self.voice_rim) * (1.0 - rate.powf(dt * 60.0));
@@ -4657,9 +4705,9 @@ impl HudApp {
         }
         painter.ctx().request_repaint();
         let clock = painter.ctx().input(|i| i.time) as f32;
-        let accent = crate::hud_board::active_colour();
+        let colour = if verdict.is_some() { crate::hud_style::warn_colour() } else { crate::hud_board::active_colour() };
         for (from, to, alpha) in rim_ticks(frame.centre, frame.radius, self.voice_rim, clock) {
-            painter.line_segment([from, to], stroke(1.4, accent.gamma_multiply(alpha)));
+            painter.line_segment([from, to], stroke(1.4, colour.gamma_multiply(alpha)));
         }
     }
 

@@ -782,6 +782,9 @@ pub enum AudioEvent {
     /// A pause that may be the end of the utterance: the words so far, exactly as `Utterance`
     /// will carry them if nothing more is said, so Whisper can start on them now.
     Paused { pcm: Vec<f32>, speech_ms: u32 },
+    /// While Sir is still speaking: the words so far, for the live line on the HUD (sent every
+    /// `hud_lines::LIVE_EVERY`; nothing waits for their transcript).
+    SoFar { pcm: Vec<f32>, speech_ms: u32 },
     /// Sir carried on after such a pause.
     Resumed,
     Utterance(Utterance),
@@ -1040,6 +1043,8 @@ fn vad_thread(
     let mut scratch = vec![0.0f32; 8192];
     let mut mic_test: Option<Vec<f32>> = None;
     let mut last_level = Instant::now();
+    // When the words so far last went to the live line (None between utterances).
+    let mut live_at: Option<Instant> = None;
     let mut started_in_window = false;
     let mut muted_reported = false;
 
@@ -1254,6 +1259,15 @@ fn vad_thread(
             }
             controls.noise_floor.store(machine.noise_floor().to_bits(), Ordering::Relaxed);
             controls.in_speech.store(machine.in_utterance(), Ordering::Release);
+            // The live line: while he speaks, the words so far go out now and then.
+            if !machine.in_utterance() {
+                live_at = None;
+            } else if live_at.get_or_insert_with(Instant::now).elapsed() >= crate::hud_lines::LIVE_EVERY {
+                live_at = Some(Instant::now());
+                if let Some((pcm, speech_ms)) = machine.so_far() {
+                    let _ = events.send(AudioEvent::SoFar { pcm, speech_ms });
+                }
+            }
 
             if last_level.elapsed() >= Duration::from_millis(50) {
                 last_level = Instant::now();

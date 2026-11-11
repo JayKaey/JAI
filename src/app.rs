@@ -137,6 +137,8 @@ struct Inner {
     carry_audio: Mutex<Option<CarryAudio>>,
     /// The words of the current pause, already with Whisper (see `HeadStart`).
     head_start: Mutex<Option<HeadStart>>,
+    /// The live line's decode of the words so far, while it runs (its call-off flag).
+    live_decode: Mutex<Option<Arc<AtomicBool>>>,
     /// The audio of the voice request about to be dispatched (moved into its `ActiveTurn`).
     turn_audio: Mutex<Option<(Vec<f32>, u32)>>,
     /// Utterances decide about stitching one after the other (a later one waits for the earlier).
@@ -235,6 +237,7 @@ impl Jai {
                 carry_seq: AtomicU64::new(0),
                 carry_audio: Mutex::new(None),
                 head_start: Mutex::new(None),
+                live_decode: Mutex::new(None),
                 turn_audio: Mutex::new(None),
                 utterance_order: tokio::sync::Mutex::new(()),
                 stt_pending: AtomicUsize::new(0),
@@ -781,14 +784,22 @@ impl Jai {
                 self.emit(HudEvent::VadEvent { event: "listening_active".into(), detail: if ptt { "ptt".into() } else { String::new() } });
                 self.set_state("listening", if ptt { "Push-to-talk — listening" } else { "listening_active" });
             }
-            AudioEvent::Paused { pcm, speech_ms } => self.start_head_start(pcm, speech_ms),
+            AudioEvent::Paused { pcm, speech_ms } => {
+                self.call_off_live_words();
+                self.start_head_start(pcm, speech_ms)
+            }
+            AudioEvent::SoFar { pcm, speech_ms } => self.live_words_ahead(pcm, speech_ms),
             AudioEvent::Resumed => self.call_off_head_start(),
             AudioEvent::Discarded { speech_ms } => {
                 self.call_off_head_start();
+                self.call_off_live_words();
+                crate::hud_lines::speech_over();
                 self.emit(HudEvent::VadEvent { event: "discarded".into(), detail: format!("{speech_ms} ms") });
                 self.rest_state();
             }
             AudioEvent::Utterance(u) => {
+                // (The sentence itself must never wait behind a guess at half of it.)
+                self.call_off_live_words();
                 let why = match u.reason {
                     EndReason::Silence => format!("{} ms silence", u.silence_ms),
                     EndReason::MaxLength => "length cap".to_string(),
@@ -841,6 +852,9 @@ impl Jai {
         tokio::spawn(async move {
             let result = reply.await.unwrap_or_else(|_| Err("speech recognition worker stopped".to_string()));
             if let Ok(t) = &result {
+                if app.live_words_wanted() {
+                    crate::hud_lines::heard(&t.text);
+                }
                 let wake = app.inner.wake.read().unwrap_or_else(|e| e.into_inner()).evaluate(&t.text);
                 if wake.matched && !wake.command.trim().is_empty() && !crate::listening_lock::is_locked() && !lifecycle::is_sleeping() {
                     crate::hyper_cortex::anticipate(app.tools(), &wake.command);
@@ -848,6 +862,51 @@ impl Jai {
             }
             let _ = ready.send(Some(result));
         });
+    }
+
+    /// Whether Sir's words are shown while he speaks: the setting is on and no game is in front
+    /// (there the extra decodes would cost frames).
+    fn live_words_wanted(&self) -> bool {
+        self.inner.config.read(|c| c.interface.live_words) && !crate::hud_feel::game_in_front() && !crate::platform::in_test_session()
+    }
+
+    /// The words so far, while Sir is still speaking: transcribed for the HUD's live line when
+    /// Whisper has nothing else to do. Called off the moment the utterance pauses or ends.
+    fn live_words_ahead(&self, pcm: Vec<f32>, speech_ms: u32) {
+        if !self.live_words_wanted() || !self.inner.stt.is_ready() || !crate::vram_guard::voice_wake_allowed() {
+            return;
+        }
+        // One decode at a time, and never beside a head start.
+        if self.inner.head_start.lock().unwrap_or_else(|e| e.into_inner()).is_some() {
+            return;
+        }
+        let mut running = self.inner.live_decode.lock().unwrap_or_else(|e| e.into_inner());
+        if running.is_some() {
+            return;
+        }
+        let Some((called_off, reply)) = self.inner.stt.transcribe_ahead(pcm, speech_ms) else { return };
+        *running = Some(Arc::clone(&called_off));
+        drop(running);
+        let app = self.clone();
+        tokio::spawn(async move {
+            let result = reply.await;
+            let mut running = app.inner.live_decode.lock().unwrap_or_else(|e| e.into_inner());
+            if running.as_ref().is_some_and(|flag| Arc::ptr_eq(flag, &called_off)) {
+                *running = None;
+            }
+            drop(running);
+            if let (Ok(Ok(t)), false) = (result, called_off.load(Ordering::Acquire)) {
+                crate::hud_lines::heard(&t.text);
+            }
+        });
+    }
+
+    /// The utterance paused or ended: a guess at the words so far that is still being decoded
+    /// stops, so Whisper is free for the sentence.
+    fn call_off_live_words(&self) {
+        if let Some(flag) = self.inner.live_decode.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            flag.store(true, Ordering::Release);
+        }
     }
 
     /// Sir carried on (or the sound was nothing): the head start is void and Whisper stops.
@@ -1214,6 +1273,16 @@ impl Jai {
                 return;
             }
         }
+        // "Heard: … – do it?" stands on the HUD and Sir says yes: the offered order is his.
+        if !lifecycle::is_sleeping() {
+            if let Some(order) = crate::hud_lines::accept_by_voice(&transcript.text) {
+                info!("[WAKE] Sir confirmed the order on offer: '{order}'");
+                crate::hud_lines::settled(&order);
+                self.emit(HudEvent::Transcript { text: order.clone(), language: transcript.language.clone(), source: "voice".into(), wake_word: Some("confirmed".into()), stt_ms: transcript.stt_ms, audio_ms: transcript.audio_ms });
+                self.dispatch_turn(order, Instant::now(), transcript.stt_ms, InputSource::Voice);
+                return;
+            }
+        }
         let c = &self.inner.controls;
         let homecoming = crate::ears::is_homecoming_phrase(&transcript.text);
         // Sleep mode: nothing but "wake up" gets through.
@@ -1297,6 +1366,12 @@ impl Jai {
         if !addressee.accepted() {
             self.inner.heard.lock().unwrap_or_else(|e| e.into_inner()).push(&transcript.text, true);
             info!("[WAKE] Not addressed to JAI ({addressee:?}, wake score {:.2}): '{}'", wake.score, transcript.text);
+            crate::hud_lines::speech_over();
+            // An order he knows, said without his name: he does not act and does not speak,
+            // the HUD asks ("Heard: … – do it?"; a click or a spoken yes carries it out).
+            if addressee != crate::ears::Addressee::Chatter && !forced && crate::ears::known_command(&transcript.text) && !crate::platform::in_test_session() {
+                crate::hud_lines::offer(&transcript.text);
+            }
             self.emit(HudEvent::Transcript {
                 text: transcript.text,
                 language: transcript.language,
@@ -1314,6 +1389,9 @@ impl Jai {
         if wake.matched {
             info!("[WAKE] '{}' (score {:.2}) → command '{}'", wake.word, wake.score, wake.command);
         }
+        // His words stand under the emblem as they were understood.
+        crate::hud_lines::settled(&transcript.text);
+        crate::hud_lines::dismiss_offer();
         // A bare "JAI" and a breath: since a short burst ends after 160-220 ms of silence, the
         // rest of the sentence often starts a moment later. Wait for it before listening on or
         // acting on words heard earlier (the retroactive wake word).
@@ -1748,6 +1826,7 @@ impl Jai {
             }
             BrainEvent::Done { message_id, text, latency_ms, model, interrupted } => {
                 info!("[TURN] Done in {latency_ms} ms via {model}{}", if interrupted { " (interrupted)" } else { "" });
+                crate::hud_lines::took(latency_ms as u64, interrupted);
                 // JAI asked something (even in writing): Sir may answer without the wake word.
                 // A spoken reply re-opens the window once its audio has finished.
                 if !interrupted && text.trim_end().ends_with('?') && !self.inner.quitting.load(Ordering::Acquire) {

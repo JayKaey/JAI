@@ -84,8 +84,45 @@ pub const CENTRE_RADIUS_SHARE: f32 = 0.17;
 // Every colour comes from the active theme (`theme_engine::current()`, re-read each frame), so a
 // colour change re-themes the rings, the stack and the laser as it cross-fades.
 fn pal() -> crate::theme_engine::ThemePalette {
-    crate::theme_engine::current()
+    let p = crate::theme_engine::current();
+    let (colour, strength) = TINT.with(|t| t.get());
+    if strength <= 0.0 {
+        return p;
+    }
+    let t = |c: [u8; 3]| mix(c, colour, strength);
+    crate::theme_engine::ThemePalette {
+        core_primary: t(p.core_primary),
+        core_secondary: t(p.core_secondary),
+        core_hot_center: t(p.core_hot_center),
+        hud_frame_border: t(p.hud_frame_border),
+        hud_frame_glow: t(p.hud_frame_glow),
+        hud_bracket_color: t(p.hud_bracket_color),
+    }
 }
+
+thread_local! {
+    /// The colour the emblem is tinted with while it is painted, and how strongly (its mood).
+    static TINT: std::cell::Cell<([u8; 3], f32)> = const { std::cell::Cell::new(([0, 0, 0], 0.0)) };
+}
+
+/// What he is doing, as the emblem shows it on top of its pose (Sir, 2026-11-12: "motion and
+/// colour"): it opens up and brightens while he listens, warms towards the theme's second
+/// colour while he thinks, pulses with his voice while he speaks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Mood {
+    #[default]
+    Rest,
+    Listening,
+    Thinking,
+    Speaking,
+}
+
+/// The red a failed order flashes in, and how long the flash takes to die away.
+const FAULT_RGB: [u8; 3] = [0xFF, 0x3B, 0x5C];
+const FAULT_SECS: f32 = 0.7;
+/// How far the rings open while he listens, and how far they swell with his own voice.
+const LISTEN_OPEN: f32 = 0.055;
+const VOICE_PULSE: f32 = 0.03;
 /// `t` of the way from `c` to white.
 fn whiten(c: [u8; 3], t: f32) -> [u8; 3] {
     mix(c, WHITE_RGB, t)
@@ -640,6 +677,12 @@ pub struct RoseEmblem {
     /// (eased towards it; None until the first frame).
     custom_home: Option<Vec2>,
     home_now: Option<Vec2>,
+    /// What he is doing, and how far the emblem has eased into listening and into thinking.
+    mood: Mood,
+    listen: f32,
+    think: f32,
+    /// A failed order's flash (1 right after it, dying away).
+    fault: f32,
 }
 
 impl Default for RoseEmblem {
@@ -667,6 +710,10 @@ impl RoseEmblem {
             idle_morph: IdleMorph::new(0x9E37_79B9),
             custom_home: None,
             home_now: None,
+            mood: Mood::Rest,
+            listen: 0.0,
+            think: 0.0,
+            fault: 0.0,
         }
     }
 
@@ -745,11 +792,41 @@ impl RoseEmblem {
         self.set_state(resolve_state(inputs), inputs.busy());
     }
 
+    /// What he is doing now (the emblem eases into it).
+    pub fn set_mood(&mut self, mood: Mood) {
+        self.mood = mood;
+    }
+
+    pub fn mood(&self) -> Mood {
+        self.mood
+    }
+
+    /// An order failed: one red flash.
+    pub fn flash_fault(&mut self) {
+        self.fault = 1.0;
+    }
+
+    /// The tint of this frame: (colour, strength). A fault's red over everything, else the
+    /// white of listening or the second colour of thinking.
+    pub fn tint(&self) -> ([u8; 3], f32) {
+        if self.fault > 0.01 {
+            (FAULT_RGB, 0.85 * self.fault)
+        } else if self.listen >= self.think {
+            (WHITE_RGB, 0.24 * self.listen)
+        } else {
+            (crate::theme_engine::current().core_secondary, 0.42 * self.think)
+        }
+    }
+
     /// Advances the clock, the ring spins, the stack's spring and the voice envelope (`voice`
     /// 0-1, `busy`: a research agent or the language model is working).
     pub fn step(&mut self, dt: f32, voice: f32, busy: bool) {
         let dt = safe_dt(dt);
         self.clock += dt;
+        let quick = crate::hud_style::motion::NORMAL;
+        self.listen = crate::hud_style::motion::approach(self.listen, if self.mood == Mood::Listening { 1.0 } else { 0.0 }, dt, quick);
+        self.think = crate::hud_style::motion::approach(self.think, if self.mood == Mood::Thinking { 1.0 } else { 0.0 }, dt, quick);
+        self.fault = (self.fault - dt / FAULT_SECS).max(0.0);
         let rate: f32 = if voice > self.voice { 0.45 } else { 0.86 };
         self.voice += (voice.clamp(0.0, 1.0) - self.voice) * (1.0 - rate.powf(dt * 60.0));
         let target = if busy { 1.0 } else { 0.0 };
@@ -768,6 +845,10 @@ impl RoseEmblem {
 
     /// Whether a transition is still running (the HUD repaints at 60 FPS meanwhile).
     pub fn is_animating(&self) -> bool {
+        let easing = |x: f32| x > 0.0 && x < 1.0;
+        if self.fault > 0.0 || easing(self.listen) || easing(self.think) {
+            return true;
+        }
         let settling = (self.spread - (1.0 - self.flat.to)).abs() > 1e-3 || self.spread_v.abs() > 1e-3;
         let gliding = matches!((self.custom_home, self.home_now), (Some(t), Some(n)) if (t - n).length() > 1e-4);
         !self.flat.done(self.clock) || !self.dock.done(self.clock) || settling || gliding
@@ -783,7 +864,9 @@ impl RoseEmblem {
         let home = screen.min + vec2(f.x * screen.width(), f.y * screen.height());
         let centre = home.lerp(docked, dock);
         let radius = home_radius + (DOCKED_DIAMETER / 2.0 - home_radius) * dock;
-        EmblemFrame { centre, radius, flat, dock }
+        // At home the rings open a little while he listens and swell with his own voice.
+        let alive = 1.0 + (1.0 - dock) * (LISTEN_OPEN * self.listen + if self.mood == Mood::Speaking { VOICE_PULSE * self.voice } else { 0.0 });
+        EmblemFrame { centre, radius: radius * alive, flat, dock }
     }
 
     /// The thinking stack for a frame (its breathing spread).
@@ -809,6 +892,8 @@ impl RoseEmblem {
     }
 
     fn paint_frame(&self, painter: &Painter, frame: &EmblemFrame) {
+        // Painted in its mood's tint (every colour of the emblem comes through `pal`).
+        TINT.with(|t| t.set(self.tint()));
         // The front rings fade in as the stack folds onto them, and out as it unfolds.
         let front = smoothstep(0.15, 0.9, frame.flat);
         let stack = 1.0 - front;
@@ -818,6 +903,7 @@ impl RoseEmblem {
         if front > 0.01 {
             self.paint_front(painter, frame, front);
         }
+        TINT.with(|t| t.set(([0, 0, 0], 0.0)));
     }
 
     /// The seven concentric front rings, their fixed markers and the wordmark.
