@@ -1,7 +1,7 @@
 //! Windows resources: app icon (tray, taskbar, Explorer), version info (the name shown in Task
 //! Manager) and a manifest declaring per-monitor DPI awareness and themed common controls.
 //!
-//! The icon is rendered here from `src/app_icon.rs` (the Stark aperture crest, pure Rust) into
+//! The icon is rendered here from `src/app_icon.rs` (the HUD emblem, pure Rust) into
 //! `assets/jarvis_icon.ico` before the resource script embeds it.
 //!
 //! The "show me your core" sphere's module graph is generated here too: every `src/*.rs` file, its
