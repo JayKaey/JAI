@@ -980,9 +980,9 @@ async fn pipeline_probes(app: &Jai) {
         })
     });
 
-    timed("pipeline", "theme: Arc Cyan is the default, saved themes load", LOCAL_BUDGET_MS, || {
+    timed("pipeline", "theme: JAI Gold is the default, saved themes load", LOCAL_BUDGET_MS, || {
         use crate::theme_engine as theme;
-        if theme::DEFAULT_PRESET != "arc_cyan" || theme::preset("arc_cyan").is_none() {
+        if theme::DEFAULT_PRESET != "jai_gold" || theme::preset("jai_gold").is_none() {
             return Err(format!("the default is '{}'", theme::DEFAULT_PRESET));
         }
         let stored = if Path::new(theme::CUSTOM_THEMES_PATH).is_file() { theme::load_custom(Path::new(theme::CUSTOM_THEMES_PATH)).len() } else { 0 };

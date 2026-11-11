@@ -30,7 +30,7 @@ const GREETINGS: &[&str] = &[
     "und", "guten", "morgen", "abend", "tag", "good", "morning", "evening", "bitte", "please", "ey", "he",
 ];
 /// What the name sounds like once spellings are collapsed (`phonetic`).
-const SOUNDS: &[&str] = &["jai", "jay", "jae", "jaye", "jey", "jei"];
+const SOUNDS: &[&str] = &["jai", "jay", "jae", "jaye", "jaey", "jey", "jei"];
 /// Other names and a lone letter the recogniser writes for it: his only in front of a command.
 const NEAR: &[&str] = &["j", "jake", "jade", "jane", "jace", "jayce", "jase", "jayne", "jaya"];
 /// The second half of Sir's handle (JayKaey): with it, "Jay" is Sir, not him.
@@ -138,6 +138,9 @@ impl WakeWordMatcher {
 
     /// The match, and whether the name is the order's own object ("switch back to JAI").
     fn locate(&self, transcript: &str) -> (WakeMatch, bool) {
+        // "Jaymute,", "JaySystem status.": his name and the order written as one word.
+        let unglued = unglue(transcript);
+        let transcript = unglued.as_deref().unwrap_or(transcript);
         let words: Vec<&str> = transcript.split_whitespace().collect();
         let cleaned: Vec<String> = words.iter().map(|w| clean(w)).collect();
         let none = |score: f64| WakeMatch { matched: false, score, word: String::new(), command: transcript.trim().to_string() };
@@ -172,7 +175,7 @@ impl WakeWordMatcher {
             // Keep a trailing '?' (questions read differently), drop '.'/'!'. With his name as
             // the subject the recogniser writes an order as a report ("Jay opened the mixer").
             let rest = words[last + 1..].join(" ");
-            let rest = rest.trim_start_matches(is_punct).trim_end_matches(|c: char| c.is_whitespace() || c == '.' || c == '!');
+            let rest = rest.trim_start_matches(is_punct).trim_end_matches(|c: char| c.is_whitespace() || matches!(c, '.' | '!' | ',' | ';' | ':'));
             // (A stray word counts only before a name that is set off and followed by the order:
             // "close JAI." names him as its object.)
             if i > start && !(paused && form == Form::Sure && !rest.is_empty()) {
@@ -181,7 +184,7 @@ impl WakeWordMatcher {
             let command = crate::typos::imperative_after_name(rest);
             let his = match form {
                 Form::Sure => command.is_empty() || paused || for_him(&command),
-                _ => !command.is_empty() && crate::ears::known_command(&command),
+                _ => !command.is_empty() && his_order(&command),
             };
             if his {
                 return (found(i, n, score, command), false);
@@ -255,7 +258,57 @@ fn for_him(rest: &str) -> bool {
         || (first != "just" && crate::ears::COMMAND_VERBS.contains(&first))
         || ASKS.contains(&first)
         || matches!((first, second), ("can" | "could" | "would" | "will" | "do" | "are" | "have" | "did" | "should" | "may", "you" | "i" | "we") | ("kannst" | "könntest" | "würdest" | "hast" | "bist" | "machst", "du") | ("i", "need" | "want") | ("id", "like") | ("ich", "brauche" | "will" | "möchte"))
-        || crate::ears::known_command(rest)
+        || his_order(rest)
+}
+
+/// "Jaymute," → "Jay mute,": his name written together with the first word of an order, among
+/// the first words of what was heard (the recogniser does that with a one-syllable name said
+/// without a pause: "JaySystem status.", "J-Pause,", "Jmute"). Only in front of an order he
+/// knows: "JayKaey" (Sir's handle), "Jaywalking", "Jaipur", "JList" and "Just open …" stay as
+/// they are.
+fn unglue(transcript: &str) -> Option<String> {
+    // His name as the word begins, longest first; a bare "J" needs more behind it (below).
+    const WRITTEN: &[&str] = &["jaey", "jay", "jai", "j"];
+    let words: Vec<&str> = transcript.split_whitespace().collect();
+    for (i, word) in words.iter().enumerate().take(3) {
+        let lead = word.len() - word.trim_start_matches(|c: char| !c.is_alphanumeric()).len();
+        let core = word[lead..].trim_end_matches(|c: char| !c.is_alphanumeric());
+        let (lower, whole) = (core.to_lowercase(), clean(word));
+        // A word that is a name by itself ("Jay", "Jake", Sir's handle) is not two words.
+        if NOT_HIM.contains(&whole.as_str()) || NEAR.contains(&whole.as_str()) || SOUNDS.contains(&phonetic(&whole).as_str()) {
+            continue;
+        }
+        // (ASCII on both sides: the cut is at the same byte in the word as it was written.)
+        let Some(name) = WRITTEN.iter().find(|n| lower.starts_with(**n) && core.is_char_boundary(n.len())) else { continue };
+        let hyphen = core[name.len()..].starts_with('-');
+        let cut = lead + name.len() + usize::from(hyphen);
+        let tail = clean(&word[cut..]);
+        if tail.chars().count() < 3 || HANDLE_TAIL.contains(&tail.as_str()) || !tail.starts_with(|c: char| c.is_alphabetic()) {
+            continue;
+        }
+        let verb = tail != "just" && crate::ears::COMMAND_VERBS.contains(&tail.as_str());
+        // The order as it goes on after his name (the word keeps its own punctuation).
+        let order = std::iter::once(&word[cut..]).chain(words[i + 1..].iter().copied()).collect::<Vec<_>>().join(" ");
+        let known = || his_order(order.trim_end_matches([',', ';', ':', '.', '!']));
+        let his = match (*name, hyphen) {
+            // "Jmute": one of his verbs, and the whole of it an order ("JList is a Swing class").
+            ("j", false) => verb && known(),
+            // "J-System status.": the recogniser set the name off itself.
+            ("j", true) => known(),
+            _ => verb || (tail.chars().count() >= 4 && known()),
+        };
+        if his {
+            let before = words[..i].join(" ");
+            return Some(format!("{before} {}Jay {order}", &word[..lead]).trim().to_string());
+        }
+    }
+    None
+}
+
+/// An order he knows, as it was heard or as the dispatcher will read it: one the recogniser
+/// misheard ("Tugglespan Mode", "said this called the 80%", "Watts Open") is still an order.
+fn his_order(text: &str) -> bool {
+    crate::ears::known_command(text) || crate::ears::known_command(&crate::typos::normalize_user_input_typos(text))
 }
 
 /// What was heard with his name as it is written for the parsers: "Jay, wake up" and "wake up,
@@ -377,6 +430,56 @@ mod tests {
             let r = m.evaluate(input);
             assert!(!r.matched, "should not match: {input} (word '{}', score {:.2})", r.word, r.score);
             assert_eq!(r.command, input.trim(), "nothing is cut out of {input}");
+            assert_eq!(canon(input), input, "and nothing rewritten");
+        }
+    }
+
+    /// 2026-11-11 (the verifier's spoken commands, stock voices): the recogniser wrote his name
+    /// and the order as one word, or misheard the order after it, and his name "was not heard".
+    #[test]
+    fn his_name_glued_to_the_order_or_in_front_of_a_misheard_one_wakes_him() {
+        let m = matcher();
+        for (input, command) in [
+            ("Jaymute,", "mute"),
+            ("JaySystem status.", "System status"),
+            ("Hey Jayopen the mixer.", "open the mixer"),
+            ("Jay Tugglespan Mode.", "Tugglespan Mode"),
+            ("Jay said this called the 80%.", "said this called the 80%"),
+            ("Jay Watts Open.", "Watts Open"),
+            ("Jay use all Monitons.", "use all Monitons"),
+            // What other prompts made of the same clips (stt::bench::spoken_commands_keep_his_name).
+            ("J-Pause,", "Pause"),
+            ("J-System status.", "System status"),
+            ("J-Mute everything except Discord.", "Mute everything except Discord"),
+            ("Jmute", "mute"),
+            ("Jay-mute.", "mute"),
+            ("Jaey, lower my browser's volume by 50%.", "lower my browser's volume by 50%"),
+            ("Jaey set discord to 80%.", "set discord to 80%"),
+            ("J volume 40.", "volume 40"),
+        ] {
+            let r = m.evaluate(input);
+            assert!(r.matched, "should match: {input}");
+            assert_eq!(r.command, command, "{input}");
+        }
+        assert_eq!(canon("Jaymute,"), "JAI, mute");
+        // One word that only begins like his name, and Sir's handle with an order behind it.
+        for input in [
+            "Jaywalking is illegal here",
+            "Jaipur weather tomorrow",
+            "Jailbreak my phone",
+            "Jayden open Spotify",
+            "JayKaey mute",
+            "JayKaeymute",
+            "Jaymes said hello",
+            "JList is a Swing component",
+            "Just open Spotify",
+            "Join the Discord call",
+            "Jump to the next page",
+            "J-Lo is on tour",
+            "Jaey Kaey, open Spotify",
+        ] {
+            let r = m.evaluate(input);
+            assert!(!r.matched, "should not match: {input} (command '{}')", r.command);
             assert_eq!(canon(input), input, "and nothing rewritten");
         }
     }

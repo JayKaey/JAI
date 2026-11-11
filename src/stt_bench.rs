@@ -9,7 +9,8 @@
 //! variant hears every clip in the same round, interleaved, so a CPU that other programs load
 //! slows all of them alike: compare the numbers within one run.
 //!
-//! `JAI_MODELS` (default `D:/Code/jai V.3/models`), `JAI_ESPEAK` (the eSpeak-NG folder),
+//! `JAI_MODELS` (default: `models` in the project folder), `JAI_ESPEAK` (the eSpeak-NG folder,
+//! default `runtime/espeak-ng` there),
 //! `JAI_BENCH_ROUNDS` (default 2) and `JAI_BENCH_ONLY` (comma list of variant labels).
 //!
 //! 2026-11-09, ggml-small (q8_0), 8 threads, other builds running: v22 844 ms median (783 ms for
@@ -49,7 +50,11 @@ fn env_or(key: &str, default: &str) -> String {
 }
 
 pub(super) fn models_dir() -> PathBuf {
-    PathBuf::from(env_or("JAI_MODELS", "D:/Code/jai V.3/models"))
+    PathBuf::from(env_or("JAI_MODELS", concat!(env!("CARGO_MANIFEST_DIR"), "/models")))
+}
+
+fn espeak_dir() -> String {
+    env_or("JAI_ESPEAK", concat!(env!("CARGO_MANIFEST_DIR"), "/runtime/espeak-ng"))
 }
 
 fn noise(n: usize, level: f32, hum: f32, seed: &mut u32) -> Vec<f32> {
@@ -68,7 +73,7 @@ pub(super) fn synth_clips() -> Vec<Clip> {
     let mut cfg = JaiConfig::default();
     cfg.kokoro_model_path = models.join("kokoro-v1.0.onnx").to_string_lossy().into_owned();
     cfg.kokoro_voices_archive_path = models.join("voices-v1.0.bin").to_string_lossy().into_owned();
-    cfg.espeak_path = Some(env_or("JAI_ESPEAK", "D:/Code/jai V.3/runtime/espeak-ng"));
+    cfg.espeak_path = Some(espeak_dir());
     cfg.tts_gpu = false;
     let cache = models.join("voices").join("voices-v1.0");
     let phonemizer = crate::phonemizer::Phonemizer::new(cfg.espeak_path.as_deref());
@@ -195,6 +200,74 @@ fn variants() -> Vec<Variant> {
         Variant { label: "v22, English only (no detect)", flash: false, tweak: |s| s.languages = vec!["en".into()], scene: &[] },
         Variant { label: "v22, 12 threads", flash: false, tweak: |s| s.threads = 12, scene: &[] },
     ]
+}
+
+/// The verifier's spoken commands (its matrix F: `SPOKEN` said by its stand-ins) through the
+/// recogniser and the wake word alone, decoded as the app decodes them, without the app: what
+/// was heard, whether his name was, and whether the order survived. Minutes instead of a
+/// whole verifier run, for work on the vocabulary prompt (`JAI_BENCH_PROMPT`: one or several,
+/// separated by `|`) and on the wake word; `JAI_BENCH_ADDRESS` has the stand-ins open with
+/// something else than "JAI," ("Hey JAI,"). The verifier's run stays the verdict: only it
+/// sends what was heard through the dispatcher.
+///
+/// `cargo test --release --bin jai spoken_commands -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn spoken_commands_keep_his_name() {
+    use crate::exhaustive_scenario_verifier as verifier;
+    let models = models_dir();
+    let mut cfg = JaiConfig::default();
+    cfg.kokoro_model_path = models.join("kokoro-v1.0.onnx").to_string_lossy().into_owned();
+    cfg.kokoro_voices_archive_path = models.join("voices-v1.0.bin").to_string_lossy().into_owned();
+    cfg.espeak_path = Some(espeak_dir());
+    cfg.tts_gpu = false;
+    let t = Instant::now();
+    let address = env_or("JAI_BENCH_ADDRESS", "");
+    let audio = verifier::spoken_audio(&cfg, &address).expect("the stand-ins say the commands");
+    println!("{} sentences by {} stand-ins synthesised in {} ms (opening: \"{}\")", verifier::SPOKEN.len(), verifier::STAND_INS.len(), t.elapsed().as_millis(), if address.is_empty() { "JAI," } else { &address });
+
+    // The settings `SttEngine::start` takes from the configuration.
+    let mut s = Settings {
+        threads: cfg.whisper_thread_count(),
+        beam_size: cfg.whisper_beam_size,
+        prompt: String::new(),
+        languages: cfg.whisper_languages.clone(),
+        dynamic_ctx: cfg.whisper_dynamic_audio_ctx,
+        min_ctx: cfg.whisper_min_audio_ctx.clamp(64, 1500),
+        fast: cfg.whisper_fast_decode,
+        sot: 0,
+        no_speech: 0,
+        eot: 0,
+    };
+    let model = models.join("ggml-small.bin").to_string_lossy().replace('\\', "/");
+    let mut engine = WhisperEngine::load(&[model], cfg.whisper_flash_attn, &mut s).expect("Whisper loads");
+    let wake = crate::wake::WakeWordMatcher::new(&cfg.wake_words, cfg.wake_word_similarity_threshold);
+    let same_order = |heard: &str, said: &str| {
+        let plain = |t: &str| normalize(&crate::typos::normalize_user_input_typos(&crate::typos::imperative_after_name(t)));
+        plain(heard) == plain(said) || routes_alike(heard, said)
+    };
+    for prompt in env_or("JAI_BENCH_PROMPT", crate::config::WHISPER_DOMAIN_PROMPT).split('|').map(str::trim) {
+        println!("\nprompt \"{prompt}\"");
+        let (mut named, mut kept, mut total, mut ms) = (0, 0, 0, Vec::new());
+        for ((who, ..), clips) in verifier::STAND_INS.iter().zip(&audio) {
+            for (case, clip) in verifier::SPOKEN.iter().zip(clips) {
+                let voiced_ms = (clip.len() * 1000 / SAMPLE_RATE) as u32;
+                let heard = transcribe(&mut engine, clip.clone(), voiced_ms, &s, prompt, None).expect("transcribed");
+                let m = wake.evaluate(&heard.text);
+                let said = case.say.trim_start_matches("JAI,").trim();
+                let same = m.matched && same_order(&m.command, said);
+                total += 1;
+                named += usize::from(m.matched);
+                kept += usize::from(same);
+                ms.push(heard.stt_ms);
+                if !same {
+                    let what = if m.matched { "other words" } else { "NAME NOT HEARD" };
+                    println!("  {what}: {who} '{}' → '{}' [lp {:.2}, {} pass]", case.say, heard.text, heard.avg_logprob, heard.passes);
+                }
+            }
+        }
+        println!("  name heard {named}/{total}, same order {kept}/{total}, median {} ms, p90 {} ms", median(&ms), pct(&ms, 90));
+    }
 }
 
 #[test]

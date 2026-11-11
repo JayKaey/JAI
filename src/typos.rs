@@ -220,7 +220,8 @@ fn misheard(text: &str) -> Option<String> {
         "mude" | "mewed" | "mewt" | "moot" => Some("mute"),
         "pulse" | "poles" | "paws" => Some("pause"),
         "was playing" => Some("what's playing"),
-        "was open" => Some("what's open"),
+        "was open" | "watts open" | "what's opened" => Some("what's open"),
+        "watts playing" => Some("what's playing"),
         _ => None,
     };
     if let Some(command) = whole {
@@ -237,7 +238,9 @@ fn misheard(text: &str) -> Option<String> {
             (r"(?i)^(is|are)\s+(.{1,30}?)\s+mutant$", "$1 $2 muted"),
             (r"(?i)\b(?:tuggle|tugle)[\s-]?span\b|\btoggle-span\b", "toggle span"),
             (r"(?i)^(stop|start|end|quit)\s+panning\b", "$1 spanning"),
-            (r"(?i)^(save|load)\s+(this|the|my)\s+mix's\s+", "$1 $2 mix as "),
+            (r"(?i)^(save|load)\s+(this|the|my)\s+mix(?:'s|\s+his|\s+is)\s+", "$1 $2 mix as "),
+            (r"(?i)\bmonitons?\b", "monitors"),
+            (r"(?i)\b(?:five\s+ocks|fire\s+fox)\b", "Firefox"),
             // "Set Discord to eighty percent" heard as "said Discord the 80%" and "said this
             // called the 80%" (only there: "what's this called?" stays a question).
             (r"(?i)^(?:set|said)\s+this\s+(?:called|cord|chord)\s+(?:the|to|at)\s+(\d{1,3})\s*(?:%|percent|prozent)$", "set discord to $1 %"),
@@ -362,6 +365,11 @@ mod tests {
             ("said this called the 80%.", "set discord to 80 %"),
             ("stop panning.", "stop spanning"),
             ("save this mix's gaming.", "save this mix as gaming"),
+            // 2026-11-11, the same sentences after his name became one syllable.
+            ("save this mix his gaming.", "save this mix as gaming"),
+            ("Watts Open.", "what's open"),
+            ("use all Monitons.", "use all monitors"),
+            ("turn five ocks off.", "turn Firefox off"),
         ] {
             assert_eq!(normalize_user_input_typos(heard), normalize_user_input_typos(meant), "{heard}");
         }

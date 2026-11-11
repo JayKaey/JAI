@@ -544,7 +544,7 @@ async fn launch_target(target: &str, args: &[String]) -> Result<(), String> {
     }
 }
 
-/// Arguments joined for ShellExecute: ones with spaces (paths like `D:\Code\jai V.3\x.rs`)
+/// Arguments joined for ShellExecute: ones with spaces (paths like `D:\Code\my project\x.rs`)
 /// are quoted, already-quoted ones are kept as they are.
 #[cfg(windows)]
 fn windows_command_line(args: &[String]) -> String {

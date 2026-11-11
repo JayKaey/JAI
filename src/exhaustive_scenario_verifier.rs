@@ -1950,14 +1950,16 @@ pub const SPOKEN: &[Spoken] = &[
 /// American, each at its own pace, so a sentence that only one accent gets through shows.
 /// Not his voice: nothing here says how his own accent and microphone fare. (name, voice,
 /// speed)
-const STAND_INS: [(&str, &str, f32); 2] = [("a British voice", crate::tts::LEGACY_VOICE_BLEND, 1.06), ("an American voice", "am_michael", 0.96)];
+pub(crate) const STAND_INS: [(&str, &str, f32); 2] = [("a British voice", crate::tts::LEGACY_VOICE_BLEND, 1.06), ("an American voice", "am_michael", 0.96)];
 
 /// The sentences of `SPOKEN` as each stand-in says them, `[stand-in][sentence]`, as the
 /// microphone would hand them over: 16 kHz, at speech level, room hiss before, under and
 /// after. Synthesised once per process (on the CPU); the recogniser hears them in every run.
 static SPOKEN_AUDIO: Mutex<Option<std::sync::Arc<Vec<Vec<Vec<f32>>>>>> = Mutex::new(None);
 
-fn spoken_audio(cfg: &crate::config::JaiConfig) -> Result<Vec<Vec<Vec<f32>>>, String> {
+/// `address`: what the stand-ins say in place of the "JAI," each sentence opens with (empty:
+/// as written; the recogniser's bench tries "Hey JAI,").
+pub(crate) fn spoken_audio(cfg: &crate::config::JaiConfig, address: &str) -> Result<Vec<Vec<Vec<f32>>>, String> {
     let phonemizer = crate::phonemizer::Phonemizer::new(cfg.espeak_path.as_deref());
     let mut kokoro = crate::tts::Kokoro::load(cfg)?;
     let mut seed = 0x51e_0f26u32;
@@ -1973,8 +1975,9 @@ fn spoken_audio(cfg: &crate::config::JaiConfig) -> Result<Vec<Vec<Vec<f32>>>, St
     for (_, voice, speed) in STAND_INS {
         let mut clips = Vec::new();
         for case in SPOKEN {
-            let ipa = phonemizer.phonemize(&crate::tts::normalize_for_speech(case.say));
-            let audio24 = kokoro.synthesize(&ipa, voice, speed).map_err(|e| format!("\"{}\" in {voice}: {e}", case.say))?;
+            let say = if address.is_empty() { case.say.to_string() } else { case.say.replacen("JAI,", address, 1) };
+            let ipa = phonemizer.phonemize(&crate::tts::normalize_for_speech(&say));
+            let audio24 = kokoro.synthesize(&ipa, voice, speed).map_err(|e| format!("\"{say}\" in {voice}: {e}"))?;
             let mut speech = crate::dsp::resample(&audio24, crate::tts::KOKORO_RATE, 16_000);
             let level = crate::dsp::rms(&speech);
             if level > 1e-6 {
@@ -2004,7 +2007,7 @@ async fn matrix_f(app: &Jai) {
             let mut cfg = app.tools().config.read(|c| c.clone());
             cfg.tts_gpu = false;
             let started = Instant::now();
-            let rendered = tokio::task::spawn_blocking(move || spoken_audio(&cfg)).await.map_err(|e| format!("the synthesis stopped: {e}")).and_then(|r| r);
+            let rendered = tokio::task::spawn_blocking(move || spoken_audio(&cfg, "")).await.map_err(|e| format!("the synthesis stopped: {e}")).and_then(|r| r);
             match rendered {
                 Ok(audio) => {
                     let audio = std::sync::Arc::new(audio);
