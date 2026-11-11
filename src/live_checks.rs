@@ -375,6 +375,11 @@ fn the_installations_vault_reads_every_secret() {
         rows
     };
     let vault = crate::vault::Vault::open(&db).expect("the vault opens");
+    // JAI_VAULT_SEALED_AS=<tag of an earlier build>: what was sealed under it is sealed again
+    // under today's tag first.
+    if let Ok(tag) = std::env::var("JAI_VAULT_SEALED_AS") {
+        eprintln!("vault: {:?} secret(s) sealed again", vault.reseal_from(&tag));
+    }
     let unread: Vec<&(String, String)> = slots.iter().filter(|(service, name)| vault.secret(service, name).is_none()).collect();
     eprintln!("vault: {} of {} secrets read ({})", slots.len() - unread.len(), slots.len(), vault.key_store());
     assert!(unread.is_empty(), "sealed with another key: {unread:?}");

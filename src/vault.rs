@@ -88,8 +88,48 @@ impl Vault {
         &self.inner.key_store
     }
 
+    /// What every secret is sealed together with, in front of its slot. It is part of the
+    /// seal, not a label: a secret sealed under one tag opens under no other. (2026-11-11: a
+    /// rename changed this text and none of Sir's four secrets could be read until they were
+    /// sealed again, `reseal_from`.)
+    const TAG: &'static str = "jai-vault";
+
     fn aad(service: &str, name: &str) -> Vec<u8> {
-        format!("jai-vault|{service}|{name}").into_bytes()
+        Self::aad_under(Self::TAG, service, name)
+    }
+
+    fn aad_under(tag: &str, service: &str, name: &str) -> Vec<u8> {
+        format!("{tag}|{service}|{name}").into_bytes()
+    }
+
+    /// Seals again, under today's tag, every secret that was sealed under `tag` (the tag of an
+    /// earlier build). How many were sealed again; a secret that opens under today's tag
+    /// already, or under neither, stays as it is. Run through the live check
+    /// (`JAI_VAULT_SEALED_AS`), so only test builds carry it.
+    #[cfg(test)]
+    pub fn reseal_from(&self, tag: &str) -> Result<usize, String> {
+        let cipher = self.inner.cipher.as_ref().ok_or("The vault has no master key.")?;
+        let rows: Vec<(String, String, Vec<u8>, Vec<u8>)> = {
+            let conn = self.conn();
+            let mut stmt = conn.prepare("SELECT service, name, nonce, ciphertext FROM vault_secrets").map_err(|e| e.to_string())?;
+            let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).map_err(|e| e.to_string())?.flatten().collect();
+            rows
+        };
+        let mut sealed = 0;
+        for (service, name, nonce, ciphertext) in rows {
+            if nonce.len() != 12 {
+                continue;
+            }
+            let open = |aad: Vec<u8>| cipher.decrypt(Nonce::from_slice(&nonce), Payload { msg: &ciphertext, aad: &aad }).ok();
+            if open(Self::aad(&service, &name)).is_some() {
+                continue;
+            }
+            if let Some(plain) = open(Self::aad_under(tag, &service, &name)).and_then(|p| String::from_utf8(p).ok()) {
+                self.set_secret(&service, &name, &plain)?;
+                sealed += 1;
+            }
+        }
+        Ok(sealed)
     }
 
     pub fn set_secret(&self, service: &str, name: &str, value: &str) -> Result<(), String> {
@@ -209,6 +249,27 @@ mod tests {
     #[test]
     fn the_master_keys_entry_keeps_its_name() {
         assert_eq!((KEYRING_SERVICE, KEYRING_USER), ("J.A.I. Personal Manager", "vault-master-key"));
+    }
+
+    /// 2026-11-11: the tag a secret is sealed with was renamed with everything else, and the
+    /// vault could read none of its four secrets. A secret of an earlier tag is sealed again
+    /// under today's; the tag itself is pinned.
+    #[test]
+    fn a_secret_sealed_under_an_earlier_tag_is_sealed_again() {
+        assert_eq!(Vault::TAG, "jai-vault", "part of every seal: changing it locks every stored secret");
+        let v = Vault::in_memory();
+        v.set_secret("calendar", TOKEN, "today's").unwrap();
+        // One sealed by an earlier build, under its tag.
+        let cipher = v.inner.cipher.as_ref().unwrap();
+        let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
+        let aad = Vault::aad_under("earlier-vault", "webuntis", TOKEN);
+        let sealed = cipher.encrypt(&nonce, Payload { msg: b"geheim!", aad: &aad }).unwrap();
+        v.conn().execute("INSERT INTO vault_secrets (service, name, nonce, ciphertext, updated_at) VALUES ('webuntis', ?1, ?2, ?3, '')", params![TOKEN, nonce.as_slice(), sealed]).unwrap();
+        assert_eq!(v.token("webuntis"), None, "it does not open under today's tag");
+        assert_eq!(v.reseal_from("some-other-vault"), Ok(0), "nor is it touched for a tag it was not sealed under");
+        assert_eq!(v.reseal_from("earlier-vault"), Ok(1));
+        assert_eq!((v.token("webuntis").as_deref(), v.token("calendar").as_deref()), (Some("geheim!"), Some("today's")));
+        assert_eq!(v.reseal_from("earlier-vault"), Ok(0), "once");
     }
 
     #[test]
