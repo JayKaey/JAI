@@ -1341,7 +1341,8 @@ impl Palette {
         let (text, muted) = if light {
             ([11, 23, 38], [74, 99, 120])
         } else {
-            (interface::mix([230, 247, 255], accent, 0.08), interface::mix([125, 159, 189], accent, 0.15))
+            // Cool white for what is read, whatever the theme: colour is for his own things.
+            ([232, 242, 252], interface::mix([128, 152, 176], accent, 0.06))
         };
         let semantic = |dark: [u8; 3], bright: [u8; 3]| rgb(if light { dark } else { bright });
         Self {
@@ -1356,8 +1357,10 @@ impl Palette {
             track: if light { Color32::from_black_alpha(22) } else { Color32::from_white_alpha(18) },
             text: rgb(text),
             muted: rgb(muted),
-            green: semantic([0, 150, 100], [0, 255, 170]),
-            amber: semantic([190, 110, 0], [255, 176, 32]),
+            // A calm green for "all is well", and a warning that never looks like the theme's
+            // own colour (amber, or orange under a yellow theme); red is for what failed.
+            green: semantic([0, 150, 100], [120, 232, 176]),
+            amber: if light { rgb([190, 110, 0]) } else { crate::hud_style::warn_colour() },
             red: semantic([210, 30, 60], [255, 59, 92]),
             violet: rgb(theme.core_secondary),
             sky: rgb(theme.core_secondary),
@@ -1464,10 +1467,24 @@ fn visuals(p: &Palette) -> egui::Visuals {
     v
 }
 
-/// Segoe UI (+ Semibold for headings, Segoe UI Symbol for icons) and Cascadia Mono when
-/// available, with egui's bundled fonts as fallbacks.
+/// The HUD's own faces, compiled in (Open Font Licence, `assets/fonts`): Rajdhani for titles and
+/// labels, Share Tech Mono for numbers and the small technical print. Rajdhani is drawn small on
+/// its em, so it is scaled up to stand level with Segoe UI at the same size.
+const HUD_FACES: [(&str, &[u8], f32); 3] = [
+    ("rajdhani-semibold", include_bytes!("../assets/fonts/Rajdhani-SemiBold.ttf"), 1.16),
+    ("rajdhani-medium", include_bytes!("../assets/fonts/Rajdhani-Medium.ttf"), 1.16),
+    ("share-tech-mono", include_bytes!("../assets/fonts/ShareTechMono-Regular.ttf"), 1.04),
+];
+
+/// Titles and labels in Rajdhani, numbers in Share Tech Mono (both compiled in), long text in
+/// Segoe UI (+ Semibold for emphasis, Segoe UI Symbol for icons) with Cascadia Mono and egui's
+/// bundled fonts as fallbacks.
 pub(crate) fn install_fonts(ctx: &egui::Context) {
     let mut fonts = FontDefinitions::default();
+    for (name, bytes, scale) in HUD_FACES {
+        fonts.font_data.insert(name.to_string(), FontData::from_static(bytes).tweak(egui::FontTweak { scale, ..Default::default() }));
+    }
+    let own = |name: &str| vec![name.to_string()];
     let defaults = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
     let mut loaded: Vec<(&str, Vec<u8>)> = Vec::new();
     #[cfg(windows)]
@@ -1490,9 +1507,12 @@ pub(crate) fn install_fonts(ctx: &egui::Context) {
     let pick = |names: &[&str]| -> Vec<String> { names.iter().filter(|n| has(n)).map(|n| n.to_string()).collect() };
     let proportional = [pick(&["segoe", "symbols"]), defaults.clone()].concat();
     let bold = [pick(&["segoe-semibold", "segoe", "symbols"]), defaults].concat();
-    let monospace = [pick(&["mono", "symbols"]), fonts.families.get(&FontFamily::Monospace).cloned().unwrap_or_default()].concat();
-    // Always registered (the board and the emblem use it); Semibold when Bahnschrift is missing.
-    let display = [pick(&["display", "segoe-semibold", "segoe", "symbols"]), bold.clone()].concat();
+    // What a compiled-in face has no glyph for (box drawing, arrows, symbols) comes from the next.
+    let monospace = [own("share-tech-mono"), pick(&["mono", "symbols"]), fonts.families.get(&FontFamily::Monospace).cloned().unwrap_or_default()].concat();
+    // Always registered (the board and the emblem use it).
+    let display = [own("rajdhani-semibold"), pick(&["display", "segoe-semibold", "segoe", "symbols"]), bold.clone()].concat();
+    // Buttons, menu entries and small labels.
+    let label = [own("rajdhani-medium"), proportional.clone()].concat();
     for (name, bytes) in loaded {
         fonts.font_data.insert(name.to_string(), FontData::from_owned(bytes));
     }
@@ -1500,7 +1520,12 @@ pub(crate) fn install_fonts(ctx: &egui::Context) {
     fonts.families.insert(FontFamily::Monospace, monospace);
     fonts.families.insert(bold_family(), bold);
     fonts.families.insert(FontFamily::Name("display".into()), display);
+    fonts.families.insert(label_family(), label);
     ctx.set_fonts(fonts);
+}
+
+fn label_family() -> FontFamily {
+    FontFamily::Name("label".into())
 }
 
 fn bold_family() -> FontFamily {
@@ -1531,8 +1556,8 @@ fn configure_style(ctx: &egui::Context, font_scale: f32) {
         s.text_styles = [
             (TextStyle::Small, FontId::proportional(10.5 * f)),
             (TextStyle::Body, FontId::proportional(13.5 * f)),
-            (TextStyle::Button, FontId::proportional(12.5 * f)),
-            (TextStyle::Heading, FontId::new(17.0 * f, bold_family())),
+            (TextStyle::Button, FontId::new(13.0 * f, label_family())),
+            (TextStyle::Heading, FontId::new(17.0 * f, FontFamily::Name("display".into()))),
             (TextStyle::Monospace, FontId::monospace(12.0 * f)),
         ]
         .into();
@@ -3863,7 +3888,7 @@ impl HudApp {
             let board_rects = crate::hud_board::visible_rects(area);
             self.centre_covered = iface.orb_aside || crate::hud_dock::centre_covered(screen, &board_rects) || crate::hud_dock::stage_covers_centre(screen);
             // The board fades out while the core sphere fades in over it.
-            let core_t = ctx.animate_bool_with_time(egui::Id::new("hud_core_view"), self.core_open, 0.35);
+            let core_t = ctx.animate_bool_with_time(egui::Id::new("hud_core_view"), self.core_open, crate::hud_style::motion::SLOW.as_secs_f32());
             if core_t < 1.0 {
                 let (board_click, board_moving) = ui.scope(|ui| {
                     ui.set_opacity(1.0 - core_t);
@@ -5155,6 +5180,7 @@ impl HudApp {
     /// rate: everything after the HUD's own canvas.
     fn after_body(&mut self, ctx: &egui::Context, iface: &InterfaceSettings) {
         let iface = iface.clone();
+        mark("dialogs");
         self.dialogs(ctx);
         if SETTINGS_REQUEST.swap(false, Ordering::AcqRel) {
             self.settings_open = true;
@@ -5173,10 +5199,13 @@ impl HudApp {
         crate::hud_dock::begin_frame();
         // "Move it to the middle", "full screen the Earth": where his views go, this frame.
         apply_arrangements(ctx);
+        mark("his windows");
         widget_view::show_windows(ctx, &self.widget_host);
         // The Simulation Lab's windows (60 FPS while they animate).
+        mark("simulation lab");
         simlab_view::show_simulations(ctx, &self.widget_host);
         // The phone pairing window (QR code), when open.
+        mark("small views");
         pairing_view::show(ctx, &self.widget_host);
         // The Feature Lab (`[ FEATURES ]`), when open.
         features_view::show(ctx, &self.app, &self.rt);
@@ -5190,21 +5219,29 @@ impl HudApp {
             let spec = serde_json::json!({ "name": t.name, "core_primary": hex(t.core_primary), "core_secondary": hex(t.core_secondary), "window_border": hex(t.window_border), "background_tint": hex(t.background_tint) });
             self.configure_look(&iface, serde_json::json!({ "create_theme": spec }));
         }
+        mark("mixer");
         mixer_view::show(ctx, &self.rt);
         // The network radar, the disk map and the Earth, when open.
+        mark("radar");
         radar_view::show(ctx, &self.rt);
+        mark("disk map");
         disk_map_view::show(ctx, &self.rt);
+        mark("earth");
         earth_view::show(ctx, &self.rt);
         // Pictures, live cameras and street view, when open.
+        mark("pictures");
         media_view::show(ctx, &self.rt);
         // The 3D studio, when open (and its GPU memory let go once closed).
+        mark("3D studio");
         model3d_view::show(ctx, &self.rt);
+        mark("small views");
         departures_view::show(ctx, &self.rt); // live layers (C1)
         // The spatial workspace: floating glass windows.
         crate::workspace_canvas::show(ctx, &self.app, &self.rt);
         self.workout.show(ctx, &self.palette, &self.app, &self.rt);
         // The views Sir put away ("minimise it"), as chips over the bottom strip.
         block_tray(ctx);
+        mark("end");
 
         let ptt = self.ptt_button || self.ptt_key;
         if ptt != self.ptt_sent {
@@ -5892,13 +5929,45 @@ fn comms_placement(screen: Rect, console_width: f32) -> (f32, f32) {
     (width, centre_x)
 }
 
-/// Frame-time diagnostics: a frame over 120 ms is logged (at most every 5 s), and with
-/// `JAI_LOG=jai=debug` the frame rate every 2 s.
-fn frame_stats(took: Duration) {
+thread_local! {
+    /// The parts of the frame being drawn, each with when it began (`mark`).
+    static FRAME_PARTS: std::cell::RefCell<Vec<(&'static str, Instant)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// A part of the frame begins (the GUI thread's): a slow frame's log line names the parts that
+/// took it, so a freeze is found by reading the log, not by guessing.
+pub(crate) fn mark(part: &'static str) {
+    FRAME_PARTS.with(|p| p.borrow_mut().push((part, Instant::now())));
+}
+
+/// The parts of the frame that ended at `end` and what each took (ms), the longest first.
+fn frame_parts(end: Instant) -> Vec<(&'static str, f32)> {
+    let marks = FRAME_PARTS.with(|p| std::mem::take(&mut *p.borrow_mut()));
+    parts_of(&marks, end)
+}
+
+fn parts_of(marks: &[(&'static str, Instant)], end: Instant) -> Vec<(&'static str, f32)> {
+    let mut parts: Vec<(&'static str, f32)> = Vec::new();
+    for (k, (name, at)) in marks.iter().enumerate() {
+        let until = marks.get(k + 1).map_or(end, |next| next.1);
+        let ms = until.saturating_duration_since(*at).as_secs_f32() * 1000.0;
+        match parts.iter_mut().find(|(n, _)| n == name) {
+            Some(part) => part.1 += ms,
+            None => parts.push((name, ms)),
+        }
+    }
+    parts.sort_by(|a, b| b.1.total_cmp(&a.1));
+    parts
+}
+
+/// Frame-time diagnostics: a frame over 120 ms is logged with the parts that took most of it
+/// (at most every 5 s), and with `JAI_LOG=jai=debug` the frame rate every 2 s.
+fn frame_stats(took: Duration, parts: &[(&'static str, f32)]) {
     let mut clock = lock(&FRAME_CLOCK);
     if took > Duration::from_millis(120) && clock.last_slow.is_none_or(|t| t.elapsed() > Duration::from_secs(5)) {
         clock.last_slow = Some(Instant::now());
-        warn!("[HUD] Slow frame: {} ms", took.as_millis());
+        let named: Vec<String> = parts.iter().take(3).filter(|(_, ms)| *ms >= 1.0).map(|(name, ms)| format!("{name} {ms:.0}")).collect();
+        warn!("[HUD] Slow frame: {} ms ({})", took.as_millis(), if named.is_empty() { "outside the HUD's own parts".to_string() } else { named.join(", ") });
     }
     if clock.recent.len() >= FRAME_HISTORY {
         clock.recent.pop_front();
@@ -6068,6 +6137,8 @@ fn console_foot(ui: &mut Ui, line: &mut String, completions: &[String], focus: &
 
 /// `#050A10`: the canvas of an in-app tool block.
 const BLOCK_SLATE: Color32 = Color32::from_rgb(0x05, 0x0A, 0x10);
+/// The same under the pointer: the block Sir is using stands a little brighter than the rest.
+const BLOCK_SLATE_LIFTED: Color32 = Color32::from_rgb(0x0A, 0x12, 0x1C);
 
 /// What a detached window shows outside its frame while the frame unfolds or folds: an OS window
 /// cannot be see-through, so it is a pane darker than the slate (the frame draws itself out of
@@ -6430,7 +6501,18 @@ pub(super) fn hud_block_window(ctx: &egui::Context, id: &str, title: &str, size:
     let mut natural = None;
     let shown = window.show(ctx, |ui| {
         let frame_rect = ui.max_rect().expand(BLOCK_MARGIN);
-        paint_block_frame(ui.painter(), frame_rect, &motion, BLOCK_SLATE.gamma_multiply(dim), edge.gamma_multiply(dim), if found { 2.0 } else { 1.0 });
+        // Depth: the block floats on a shadow, the one under the pointer is lifted, and the
+        // emblem lights the edge that faces it. Wear on the frame once it stands.
+        let using = ctx.animate_bool_with_time(area.with("using"), !still && ctx.pointer_hover_pos().is_some_and(|at| frame_rect.contains(at)), crate::hud_style::motion::FAST.as_secs_f32());
+        let accent = crate::hud_board::active_colour();
+        crate::hud_style::shadow(&ui.painter().with_clip_rect(frame_rect.expand(48.0)), motion_band(frame_rect, &motion), motion.frame * dim);
+        paint_block_frame(ui.painter(), frame_rect, &motion, mix(BLOCK_SLATE, BLOCK_SLATE_LIFTED, using).gamma_multiply(dim), mix(edge, accent, using * 0.6).gamma_multiply(dim), if found { 2.0 } else { 1.0 });
+        if !motion.moving() {
+            crate::hud_style::wear(ui.painter(), frame_rect, BLOCK_SLATE, edge, crate::hud_style::seed_of(id), dim);
+            if let Some(orb) = crate::hud_dock::orb() {
+                crate::hud_style::emblem_light(ui.painter(), frame_rect, orb, accent, dim);
+            }
+        }
         // Only what the frame has unfolded to, down to the scan edge, shows (and takes clicks).
         if motion.moving() {
             let clip = ui.clip_rect().intersect(motion_content_clip(frame_rect, &motion));
@@ -6441,34 +6523,34 @@ pub(super) fn hud_block_window(ctx: &egui::Context, id: &str, title: &str, size:
         }
         // The block keeps the size it was given (or dragged to), however short its content.
         ui.set_min_size(ui.available_size());
-        ui.horizontal(|ui| {
-            // Not selectable: a drag that begins on the title moves the block (selectable text
-            // would take the drag for a selection).
-            ui.add(egui::Label::new(RichText::new(title.to_uppercase()).font(strip_font()).color(crate::hud_board::active_colour())).truncate().selectable(false))
-                .on_hover_text("Drag to move, drag an edge to resize. Right-click: copy, pin, maximize, export, close. Ctrl+W close, Ctrl+G maximize, Ctrl+P pin, Ctrl+E export.");
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let chip = |ui: &mut Ui, text: &str, hint: &str| {
-                    ui.add(egui::Button::new(RichText::new(text).font(strip_font()).color(STRIP_INK)).fill(rgba([3, 7, 12], 0.9)).stroke(stroke(1.0, crate::hud_board::border_colour())).rounding(Rounding::ZERO))
-                        .on_hover_text(hint)
-                        .clicked()
-                };
-                if chip(ui, "[ CLOSE ]", "Close (Ctrl+W closes the block under the pointer)") {
-                    close_asked = true;
-                }
-                if chip(ui, "[ DETACH ]", "Open in its own window (say \"dock all windows\" to bring it back)") {
-                    // The block plays its exit first; the new window comes up after it.
-                    if still {
-                        action.detach = true;
-                    } else {
-                        crate::hud_dock::begin_detach(id);
-                    }
-                }
-                if pinned {
-                    ui.add(egui::Label::new(RichText::new("PINNED").font(strip_font()).color(crate::hud_board::active_colour())).selectable(false))
-                        .on_hover_text("Stays through \"close the windows\" and keeps its place. Right-click to unpin.");
-                }
-            });
-        });
+        // The header every block wears: its title and state light on the left, its keys on the
+        // right. A drag that begins on the title moves the block.
+        let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), crate::hud_style::HEADER_H), Sense::hover());
+        let mid = row.center().y;
+        let labels = [
+            ("[ CLOSE ]", false, "Close (Ctrl+W closes the block under the pointer)"),
+            ("[ DETACH ]", false, "Open in its own window (say \"dock all windows\" to bring it back)"),
+            ("[ PIN ]", pinned, "Pinned, it stays through \"close the windows\" and keeps its place (Ctrl+P)"),
+        ];
+        let (key, keys_left) = crate::hud_style::keys(ui, area.with("header"), row.right(), mid, &labels, content_alpha);
+        match key {
+            Some(0) => close_asked = true,
+            // The block plays its exit first; the new window comes up after it.
+            Some(1) if still => action.detach = true,
+            Some(1) => crate::hud_dock::begin_detach(id),
+            Some(2) => {
+                crate::hud_dock::toggle_pin(id);
+            }
+            _ => {}
+        }
+        let font = crate::hud_style::title_font(ts(13.5));
+        let shown_title = fit_width(ui.painter(), &title.to_uppercase(), &font, (keys_left - row.left() - 22.0).max(20.0));
+        let title_rect = ui.painter().text(pos2(row.left(), mid), Align2::LEFT_CENTER, shown_title, font, accent.gamma_multiply(content_alpha));
+        if crate::hud_style::paint_light(ui.painter(), pos2(title_rect.right() + 10.0, mid), crate::hud_style::light(id), ctx.input(|i| i.time), content_alpha) {
+            ctx.request_repaint_after(Duration::from_millis(50));
+        }
+        ui.interact(title_rect, area.with("title"), Sense::hover())
+            .on_hover_text("Drag to move, drag an edge to resize. Right-click: copy, pin, maximize, export, close. Ctrl+W close, Ctrl+G maximize, Ctrl+P pin, Ctrl+E export.");
         let r = ui.cursor();
         ui.painter().line_segment([pos2(r.left(), r.top()), pos2(r.left() + ui.available_width(), r.top())], stroke(1.0, crate::hud_board::border_colour()));
         ui.add_space(6.0);
@@ -6627,11 +6709,11 @@ pub(crate) struct WindowMotion {
 }
 
 /// The entrance's beats, in ms of `hud_dock::OPEN_ANIM`.
-const IN_LINE: (f32, f32) = (0.0, 90.0);
-const IN_UNFOLD: (f32, f32) = (90.0, 250.0);
-const IN_BRACKETS: (f32, f32) = (80.0, 210.0);
-const IN_RESOLVE: (f32, f32) = (250.0, 370.0);
-const IN_SETTLE: (f32, f32) = (250.0, 400.0);
+const IN_LINE: (f32, f32) = (0.0, 56.0);
+const IN_UNFOLD: (f32, f32) = (56.0, 156.0);
+const IN_BRACKETS: (f32, f32) = (50.0, 131.0);
+const IN_RESOLVE: (f32, f32) = (156.0, 231.0);
+const IN_SETTLE: (f32, f32) = (156.0, 250.0);
 /// The exit's beats, in ms of `hud_dock::CLOSE_FADE`.
 const OUT_CONTENT: (f32, f32) = (0.0, 70.0);
 const OUT_FOLD: (f32, f32) = (40.0, 130.0);
@@ -7152,6 +7234,11 @@ pub(crate) fn paint_finish(ctx: &egui::Context) {
     let mut mesh = egui::Mesh::with_texture(grain.id());
     mesh.add_rect_with_uv(rect, Rect::from_min_size(pos2(shift.x, shift.y), rect.size() / GRAIN_TILE as f32), Color32::WHITE);
     painter.add(Shape::mesh(mesh));
+    // The glass itself: uneven light, darker edges, dust and hairline scratches (per screen
+    // of a HUD that spans several).
+    for screen in monitor_regions(ctx) {
+        crate::hud_style::glass(&painter, screen);
+    }
 }
 
 /// The obsidian canvas: `#020408` with a radial vignette of the theme's colour in the centre
@@ -7214,7 +7301,7 @@ impl eframe::App for HudApp {
             self.last_frame = Instant::now();
             ctx.request_repaint_after(Duration::from_millis(100));
         }
-        frame_stats(started.elapsed());
+        frame_stats(started.elapsed(), &frame_parts(Instant::now()));
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
@@ -7230,6 +7317,7 @@ impl eframe::App for HudApp {
 impl HudApp {
     fn frame(&mut self, ctx: &egui::Context) {
         ROOT_FRAMES.fetch_add(1, Ordering::AcqRel);
+        mark("start");
         crate::live_shots::tick(ctx);
         // `--window-drill`: its next step, from what the previous frame drew.
         if let Some(drill) = self.drill.as_mut() {
@@ -7310,7 +7398,9 @@ impl HudApp {
                     .frame(drawer)
                     .show_animated(ctx, self.drawer_open, |ui| self.settings_drawer(ui, &m, &iface));
             }
+            mark("board and emblem");
             self.canvas(ctx, &m, &iface, dt);
+            mark("overlays");
             self.toasts(ctx, &m);
             self.popups(ctx, dt);
             self.room_alert_overlay(ctx, &m);
@@ -7335,6 +7425,20 @@ mod tests {
 
     /// A frame is judged by the median of its neighbours: frames the scheduler held up do not
     /// make a fast HUD slow, and a HUD slow itself stays slow.
+    /// A slow frame's parts: each from its mark to the next (the last to the frame's end),
+    /// a part marked twice added up, the longest first.
+    #[test]
+    fn a_frames_parts_add_up_and_the_longest_leads() {
+        let t0 = Instant::now();
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        let parts = parts_of(&[("start", at(0)), ("board", at(2)), ("small views", at(10)), ("earth", at(12)), ("small views", at(600)), ("end", at(604))], at(605));
+        assert_eq!(parts[0].0, "earth");
+        assert!((parts[0].1 - 588.0).abs() < 0.5, "{parts:?}");
+        let small = parts.iter().find(|(n, _)| *n == "small views").unwrap().1;
+        assert!((small - 6.0).abs() < 0.5, "two stretches of the same part add up: {small}");
+        assert!(parts_of(&[], at(5)).is_empty());
+    }
+
     #[test]
     fn frame_costs_are_judged_on_the_median() {
         assert_eq!(frame_summary(&[]), None);

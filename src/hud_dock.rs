@@ -154,9 +154,10 @@ pub const CLOSE_FADE: Duration = Duration::from_millis(200);
 /// A block's entrance takes this long: a hairline draws out of its middle, the frame unfolds
 /// from it with the corner brackets leading, the content resolves top to bottom behind a scan
 /// edge and one faint glow settles on the border (`gui::WindowMotion`).
-pub const OPEN_ANIM: Duration = Duration::from_millis(400);
+/// (Quick and crisp: a quarter of a second, `hud_style::motion::SLOW`.)
+pub const OPEN_ANIM: Duration = crate::hud_style::motion::SLOW;
 /// How long a block glides to where it was told to go ("move it to the middle").
-pub const GLIDE: Duration = Duration::from_millis(280);
+pub const GLIDE: Duration = Duration::from_millis(220);
 /// A frame later than this after the one before moves an entrance's start on by the wait: a
 /// HUD held up (a new OS window, a heavy first frame) never skips the motion it was playing.
 const STALL: Duration = Duration::from_millis(50);
@@ -721,6 +722,11 @@ static OVERLAP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::n
 /// The emblem's rect and the board's visible blocks this frame.
 pub fn publish_obstacles(orb: Option<Rect>, board: Vec<Rect>) {
     *lock(&OBSTACLES) = (orb, board);
+}
+
+/// The emblem's rect as the last frame published it (it lights the blocks near it).
+pub fn orb() -> Option<Rect> {
+    lock(&OBSTACLES).0
 }
 
 /// Where the emblem goes when it docks (bottom right, left of the console while that is out):

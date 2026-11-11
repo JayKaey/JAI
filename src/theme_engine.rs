@@ -14,7 +14,7 @@ use std::sync::{LazyLock, RwLock};
 use std::time::{Duration, Instant};
 
 /// How long a colour change cross-fades.
-pub const FADE: Duration = Duration::from_millis(350);
+pub const FADE: Duration = Duration::from_millis(250);
 
 /// The colour channels of one theme (RGB).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -622,7 +622,7 @@ mod tests {
         assert!((h - 300.0).abs() < 2.0 && s > 0.99 && v > 0.99, "{mid:?}");
         assert_eq!(lerp_color_hsv(red, blue, 0.0), red);
         assert_eq!(lerp_color_hsv(red, blue, 1.0), blue);
-        assert_eq!(FADE, Duration::from_millis(350));
+        assert_eq!(FADE, Duration::from_millis(250));
         // The live fade.
         let _g = test_lock();
         follow("arc_cyan");

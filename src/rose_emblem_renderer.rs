@@ -73,9 +73,9 @@ pub const REAR_FOG: f32 = 0.35;
 /// The spring that breathes the stack out of the flat emblem (rad/s; critically damped).
 pub const SPREAD_OMEGA: f32 = 9.0;
 /// Seconds the stack needs to fold flat (and to unfold again).
-pub const UNFOLD_SECS: f32 = 0.45;
+pub const UNFOLD_SECS: f32 = 0.25;
 /// Seconds of the glide between the centre and the corner.
-pub const DOCK_SECS: f32 = 0.6;
+pub const DOCK_SECS: f32 = 0.25;
 pub const DOCKED_DIAMETER: f32 = 130.0;
 /// The centred front emblem's radius as a share of the screen's shorter side (compact, like the
 /// reference board's emblem).

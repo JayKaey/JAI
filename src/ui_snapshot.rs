@@ -24,6 +24,10 @@ struct Texture {
 
 impl Texture {
     fn sample(&self, u: f32, v: f32) -> [f32; 4] {
+        // A coordinate past the texture repeats it (the grain's tile); the font atlas and
+        // pictures never leave 0-1.
+        let wrap = |t: f32| if (0.0..=1.0).contains(&t) { t } else { t.rem_euclid(1.0) };
+        let (u, v) = (wrap(u), wrap(v));
         let x = (u * self.width as f32 - 0.5).clamp(0.0, (self.width - 1) as f32);
         let y = (v * self.height as f32 - 0.5).clamp(0.0, (self.height - 1) as f32);
         let (x0, y0) = (x.floor() as usize, y.floor() as usize);
@@ -242,6 +246,30 @@ mod tests {
             let corner = Rect::from_min_size(pos2(10.0, 10.0), vec2(120.0, 120.0));
             assert!(canvas.brightness(around) > canvas.brightness(corner) + 4.0, "{name}: the emblem is drawn");
         }
+    }
+
+    /// The display's finish over the emblem: scan lines, grain and the glass (uneven light,
+    /// darker edges, dust, hairline scratches). It darkens the corners and leaves the middle.
+    #[test]
+    fn snapshot_display_finish() {
+        let emblem = RoseEmblem::new(RoseEmblemState::AwakeFrontEmblem);
+        let paint = |finish: bool| {
+            let mut snap = Snapshot::new(vec2(W, H));
+            snap.render(3, |ctx| {
+                crate::gui::paint_canvas(ctx);
+                egui::CentralPanel::default().frame(egui::Frame::none()).show(ctx, |ui| emblem.paint(&ui.painter_at(screen()), screen()));
+                if finish {
+                    crate::gui::paint_finish(ctx);
+                }
+            })
+        };
+        let (bare, finished) = (paint(false), paint(true));
+        finished.save("display_finish");
+        let corner = Rect::from_min_size(pos2(0.0, 0.0), vec2(90.0, 60.0));
+        let beside = Rect::from_center_size(screen().center() - vec2(260.0, 0.0), vec2(90.0, 60.0));
+        let middle = Rect::from_center_size(screen().center(), vec2(200.0, 200.0));
+        assert!(finished.brightness(corner) < finished.brightness(beside), "the corners fall off");
+        assert!(finished.brightness(middle) > bare.brightness(middle) * 0.8, "the middle keeps its light");
     }
 
     fn sample_report() -> hud_board::Report {

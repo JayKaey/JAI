@@ -265,7 +265,7 @@ impl VirtualHud {
         });
         self.cost = working.elapsed();
         // (The same frame clock as the window's: the self-test's frame-time probe reads it.)
-        frame_stats(self.cost);
+        frame_stats(self.cost, &super::frame_parts(Instant::now()));
         crate::visual_ui_verifier::capture(output, screen)
     }
 

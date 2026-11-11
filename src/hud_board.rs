@@ -30,6 +30,8 @@ use tracing::{info, warn};
 // ------------------------------------------------------------------------------ colours ----
 
 pub const BLOCK_FILL: Color32 = Color32::from_rgba_premultiplied(5, 9, 15, 235);
+/// The same for the block in use (under the pointer, highlighted, found): a little brighter.
+const BLOCK_FILL_LIFTED: Color32 = Color32::from_rgba_premultiplied(10, 17, 26, 240);
 /// The sharp 1 px block border, in the active theme (`theme_engine`; re-read every frame).
 pub fn border_colour() -> Color32 {
     crate::theme_engine::current().border().gamma_multiply(0.82)
@@ -60,13 +62,13 @@ pub const RESEARCH_CELLS: usize = 30;
 /// The research block first sits in the middle of the screen, larger, for this long ("starting
 /// research agent"), then glides into its corner slot.
 pub const RESEARCH_INTRO_SECS: f32 = 3.0;
-pub const RESEARCH_GLIDE_SECS: f32 = 0.7;
+pub const RESEARCH_GLIDE_SECS: f32 = 0.25;
 /// The footer line under every block: "ADDED JUST NOW" left, "SOURCE: META · 0x04A3" right.
 pub const FOOTER_H: f32 = 13.0;
 /// A key of the suggestion bar under the spotlight (width, height).
 pub const SUGGESTION_KEY: [f32; 2] = [150.0, 24.0];
-const APPEAR_SECS: f32 = 0.26;
-const LEAVE_SECS: f32 = 0.38;
+const APPEAR_SECS: f32 = 0.22;
+const LEAVE_SECS: f32 = 0.22;
 const HIGHLIGHT_SECS: f32 = 4.5;
 
 // -------------------------------------------------------------------------------- model ----
@@ -1686,12 +1688,12 @@ impl UiAnimState {
     pub fn step(&mut self, dt: f32) -> f32 {
         let dt = dt.clamp(0.0, 0.1);
         if self.target_open {
-            self.t += (1.0 - self.t) * (1.0 - (-16.0 * dt).exp());
+            self.t += (1.0 - self.t) * (1.0 - (-22.0 * dt).exp());
             if self.t > 0.995 {
                 self.t = 1.0;
             }
         } else {
-            self.t -= self.t * (1.0 - (-18.0 * dt).exp());
+            self.t -= self.t * (1.0 - (-24.0 * dt).exp());
             if self.t <= 0.005 {
                 self.t = 0.0;
             }
@@ -1901,6 +1903,50 @@ fn nav_key_hit(block: &Block, front: usize, slot: Rect, pointer: Option<Pos2>) -
     }
 }
 
+/// A report block's header keys in its front frame `r`: `[ CLOSE ]`, then `[ PIN ]` left of it.
+fn header_keys(p: &Painter, r: Rect) -> [Rect; 2] {
+    let mid = r.top() + 16.0;
+    let mut right = r.right() - 8.0;
+    ["[ CLOSE ]", "[ PIN ]"].map(|label| {
+        let w = crate::hud_style::key_width(p, label);
+        let key = Rect::from_min_size(pos2(right - w, mid - 8.0), vec2(w, 16.0));
+        right -= w + 4.0;
+        key
+    })
+}
+
+/// A report block shows its `[ CLOSE ]` from this width on, and its `[ PIN ]` too from the next.
+const KEYS_FROM: f32 = 200.0;
+const PIN_FROM: f32 = 330.0;
+
+/// A header key of a report block.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HeaderKey {
+    Close,
+    Pin,
+}
+
+/// Which header key (if any) of `block` in `slot` the pointer is on.
+fn header_key_hit(p: &Painter, block: &Block, front: usize, slot: Rect, pointer: Option<Pos2>) -> Option<HeaderKey> {
+    let stack = match &block.kind {
+        BlockKind::NoteStack { notes } => Some((front.min(notes.len().saturating_sub(1)), notes.len())),
+        _ => None,
+    };
+    let r = front_rect(slot, stack);
+    if r.width() < KEYS_FROM {
+        return None;
+    }
+    let [close, pin] = header_keys(p, r);
+    let at = pointer?;
+    if close.contains(at) {
+        Some(HeaderKey::Close)
+    } else if r.width() >= PIN_FROM && pin.contains(at) {
+        Some(HeaderKey::Pin)
+    } else {
+        None
+    }
+}
+
 /// The front frame of a block in `slot` (stacked notes give up 4 px per back frame).
 fn front_rect(slot: Rect, stack: Option<(usize, usize)>) -> Rect {
     let body = Rect::from_min_max(slot.min, pos2(slot.right(), slot.bottom() - FOOTER_H));
@@ -1961,7 +2007,7 @@ fn glow_frame(p: &Painter, r: Rect, colour: Color32, strength: f32) {
 
 /// The sharp block frame with its glow, micro header, note page dots and the footer line under
 /// it (`footer`: "ADDED JUST NOW"; None for blocks outside the grid); returns the content rect.
-fn frame(p: &Painter, slot: Rect, block: &Block, active: bool, stack: Option<(usize, usize)>, footer: Option<&str>) -> Rect {
+fn frame(p: &Painter, slot: Rect, block: &Block, active: bool, stack: Option<(usize, usize)>, footer: Option<&str>, keys: Option<bool>) -> Rect {
     let body = if footer.is_some() { Rect::from_min_max(slot.min, pos2(slot.right(), slot.bottom() - FOOTER_H)) } else { slot };
     // Notes stacked at the back: offset back-frames, all inside the block's slot (the front frame
     // gives up 4 px per frame at its top and right).
@@ -1973,15 +2019,54 @@ fn frame(p: &Painter, slot: Rect, block: &Block, active: bool, stack: Option<(us
         p.rect_stroke(back, Rounding::ZERO, stroke(1.0, border_colour().gamma_multiply(0.45)));
     }
     let edge = if active { active_colour() } else { border_colour() };
+    // Depth: the block floats on a shadow, the one in use is lifted, the emblem lights the edge
+    // that faces it; wear on the frame.
+    crate::hud_style::shadow(&p.with_clip_rect(r.expand(48.0)), r, 1.0);
     glow_frame(p, r, edge, if active { 1.6 } else { 1.0 });
-    p.rect_filled(r, Rounding::ZERO, BLOCK_FILL);
+    p.rect_filled(r, Rounding::ZERO, if active { BLOCK_FILL_LIFTED } else { BLOCK_FILL });
     p.rect_stroke(r, Rounding::ZERO, stroke(1.2, edge));
+    crate::hud_style::wear(p, r, BLOCK_FILL, edge, crate::hud_style::seed_of(&block.label), 1.0);
+    if let Some(orb) = crate::hud_dock::orb() {
+        crate::hud_style::emblem_light(p, r, orb, active_colour(), 1.0);
+    }
     brackets(p, r, bracket_colour());
     let pad = 12.0;
-    let tag = block.tag.clone();
-    let tag_rect = p.text(r.right_top() + vec2(-pad, pad - 2.0), Align2::RIGHT_TOP, &tag, micro(), MICRO);
-    let label_width = (tag_rect.left() - r.left() - pad * 2.0).max(20.0);
-    wrapped(p, r.left_top() + vec2(pad, pad - 2.0), label_width, &block.label, micro(), MICRO, 1);
+    // The header every block wears: its label and state light, then its tag and its keys.
+    let mid = r.top() + pad + 4.0;
+    let mut right = r.right() - pad;
+    if let Some(pinned) = keys.filter(|_| r.width() >= KEYS_FROM) {
+        let (hover, down) = p.ctx().input(|i| (i.pointer.hover_pos(), i.pointer.primary_down()));
+        // A narrow block keeps its [ CLOSE ] alone (the pin is in its menu), so its title has room.
+        let shown = if r.width() >= PIN_FROM { 2 } else { 1 };
+        for (key, (label, lit)) in header_keys(p, r).into_iter().zip([("[ CLOSE ]", false), ("[ PIN ]", pinned)]).take(shown) {
+            let hot = hover.is_some_and(|at| key.contains(at));
+            crate::hud_style::key(p, key.right(), key.center().y, label, hot, hot && down, lit, 1.0);
+            right = key.left() - 8.0;
+        }
+    }
+    let title = crate::hud_style::title_font(13.0);
+    // The tag ("FACT", "SOURCE: STEAM") only where the whole title still fits beside it.
+    let room = right - r.left() - pad - 18.0;
+    let natural = p.layout_no_wrap(block.label.to_uppercase(), title.clone(), Color32::PLACEHOLDER).size().x;
+    let tag_width = p.layout_no_wrap(block.tag.clone(), micro(), MICRO).size().x + 10.0;
+    let tagged = !block.tag.trim().is_empty() && natural + tag_width <= room;
+    if tagged {
+        p.text(pos2(right, mid), Align2::RIGHT_CENTER, &block.tag, micro(), MICRO);
+    }
+    let label_width = (room - if tagged { tag_width } else { 0.0 }).max(20.0);
+    let mut job = egui::text::LayoutJob::simple(block.label.to_uppercase(), title, active_colour(), label_width);
+    job.wrap.max_rows = 1;
+    job.wrap.break_anywhere = true;
+    job.wrap.overflow_character = Some('\u{2026}');
+    let label = p.layout_job(job);
+    let label_right = r.left() + pad + label.size().x;
+    p.galley(pos2(r.left() + pad, mid - label.size().y * 0.5), label, Color32::PLACEHOLDER);
+    let light = match &block.kind {
+        BlockKind::DarkVectorMap { pending: true, .. } => crate::hud_style::Light::Busy,
+        _ if keys.is_none() && active => crate::hud_style::Light::Busy,
+        _ => crate::hud_style::Light::Good,
+    };
+    crate::hud_style::paint_light(p, pos2(label_right + 9.0, mid), light, p.ctx().input(|i| i.time), 1.0);
     let foot = r.bottom() - pad + 1.0;
     let paged = stack.filter(|(_, n)| *n > 1);
     let inner = if stack.is_some() {
@@ -2173,9 +2258,6 @@ impl BoardView {
                     p.rect_stroke(r.expand(2.0), Rounding::ZERO, stroke(2.0, active_colour().gamma_multiply(glow * (1.0 - s / HIGHLIGHT_SECS))));
                 }
                 let pinned = is_pinned(block);
-                if pinned {
-                    p.text(pos2(r.right() - 8.0, r.bottom() - FOOTER_H - 6.0), Align2::RIGHT_BOTTOM, "PINNED", micro(), active_colour());
-                }
                 // Right-click: copy, pin, maximize, export, close (the same menu as a window's).
                 let mut chosen = None;
                 response.context_menu(|ui| chosen = crate::block_actions::menu(ui, pinned, false));
@@ -2185,7 +2267,14 @@ impl BoardView {
                     click = Some(BoardClick::Menu(chosen));
                 }
                 let key = nav_key_hit(block, shown.fronts[i], r, response.interact_pointer_pos());
-                if response.clicked() && key.is_some() {
+                let header = header_key_hit(&p, block, shown.fronts[i], r, response.interact_pointer_pos());
+                if let Some(header) = header.filter(|_| response.clicked()) {
+                    // Its [ CLOSE ] and [ PIN ]: the same as the menu's.
+                    let chosen = if header == HeaderKey::Close { crate::block_actions::BlockAction::Close } else { crate::block_actions::BlockAction::Pin };
+                    block_menu(ui.ctx(), i, block, chosen);
+                    animating = true;
+                    click = Some(BoardClick::Menu(chosen));
+                } else if response.clicked() && key.is_some() {
                     let _ = turn_page(key.unwrap_or(Page::Next));
                     animating = true;
                     click = Some(BoardClick::Flipped);
@@ -2275,7 +2364,9 @@ impl BoardView {
             _ => None,
         };
         let added = std::mem::take(&mut self.added);
-        let inner = frame(p, r, block, active, stack, Some(&added));
+        // (A block of a board that is leaving has no index: it takes no keys.)
+        let keys = (index != usize::MAX).then(|| is_pinned(block));
+        let inner = frame(p, r, block, active, stack, Some(&added), keys);
         self.added = added;
         let p = p.with_clip_rect(inner.expand(2.0).intersect(p.clip_rect()));
         let scale = if spotlit { 1.25 } else { 1.0 };
@@ -2465,7 +2556,7 @@ impl BoardView {
 /// telemetry strip, outside the report grid).
 pub fn paint_dialogue(p: &Painter, r: Rect, block: &Block) {
     if let BlockKind::DialogueFeed { heard, reply, streaming } = &block.kind {
-        let inner = frame(p, r, block, *streaming, None, None);
+        let inner = frame(p, r, block, *streaming, None, None, None);
         // The border breathes with his voice while he speaks.
         let voice = (crate::tts::output_level() * 6.0).clamp(0.0, 1.0);
         if voice > 0.02 {

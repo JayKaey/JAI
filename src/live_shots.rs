@@ -32,11 +32,17 @@ pub fn tick(ctx: &egui::Context) {
         for event in &i.raw.events {
             if let egui::Event::Screenshot { viewport_id, image } = event {
                 let name = format!("{:06}_{:016x}.png", started.elapsed().as_millis(), viewport_id.0.value());
-                let [w, h] = image.size;
-                let bytes: Vec<u8> = image.pixels.iter().flat_map(|c| c.to_array()).collect();
-                if let Err(e) = image::save_buffer(dir.join(name), &bytes, w as u32, h as u32, image::ExtendedColorType::Rgba8) {
-                    tracing::warn!("[SHOTS] Not saved: {e}");
-                }
+                // Encoded and written off the GUI thread: the PNG of a whole screen takes several
+                // hundred milliseconds, and done here it froze the very frames the session was
+                // run to look at (the "0.9 s freeze when a block opens" of 2026-11-11 was this).
+                let (image, path) = (std::sync::Arc::clone(image), dir.join(name));
+                std::thread::spawn(move || {
+                    let [w, h] = image.size;
+                    let bytes: Vec<u8> = image.pixels.iter().flat_map(|c| c.to_array()).collect();
+                    if let Err(e) = image::save_buffer(path, &bytes, w as u32, h as u32, image::ExtendedColorType::Rgba8) {
+                        tracing::warn!("[SHOTS] Not saved: {e}");
+                    }
+                });
             }
         }
     });

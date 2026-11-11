@@ -539,9 +539,12 @@ pub fn check_emblem(screen: Rect, pass: usize) -> Vec<String> {
             radius.push(f.radius);
         }
         let after = orb.frame(screen);
-        // No frame moves a pose more than a sixth of the way (the eased peak at 30 FPS), no
-        // frame moves the emblem more than a sixth of the screen's diagonal.
-        let step = (9.0 / fps).clamp(0.06, 0.34);
+        // No frame moves a pose further than its eased peak allows: the quickest pose change
+        // (quick and crisp, a quarter of a second) runs at 3.3 times its mean speed at most;
+        // anything faster in one frame is a jump. The emblem's place is held to the same share
+        // of the screen's diagonal.
+        let peak = 3.3 / crate::rose_emblem_renderer::UNFOLD_SECS.min(crate::rose_emblem_renderer::DOCK_SECS);
+        let step = (peak / fps).clamp(peak / 150.0, 0.5);
         for (what, series, limit) in [("flatness", &flat, step), ("docking", &dock, step), ("x", &x, diagonal * step), ("y", &y, diagonal * step), ("radius", &radius, (before.radius - after.radius).abs().max(40.0) * step.max(0.12))] {
             if let Some((frame, by)) = jumps(series, limit).first() {
                 findings.push(format!("{name} at {fps} FPS: {what} jumps by {by:.3} in frame {frame} (limit {limit:.3})"));
