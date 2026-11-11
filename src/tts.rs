@@ -1144,6 +1144,10 @@ fn cue_due(kind: jai_voice_dsp::Earcon, now: std::time::Instant) -> bool {
 /// A HUD micro-interaction's cue (a block materialising, the spotlight, a mode change, an
 /// alert): played like an earcon, unless Sir turned the cues off or it has just sounded.
 pub fn play_cue(kind: jai_voice_dsp::Earcon) {
+    // At night the board makes no sound (the edge light and the cards say it).
+    if crate::hud_feel::night_active() {
+        return;
+    }
     if cue_due(kind, std::time::Instant::now()) {
         play_earcon(kind);
     }
@@ -1261,7 +1265,8 @@ where
             if flush.swap(false, Ordering::AcqRel) {
                 consumer.clear();
             }
-            let gain = volume.load(Ordering::Relaxed) as f32 / 100.0;
+            // (At night he speaks more quietly.)
+            let gain = volume.load(Ordering::Relaxed) as f32 / 100.0 * crate::hud_feel::night_gain();
             let mut energy = 0.0f32;
             let mut frames = 0usize;
             for frame in data.chunks_mut(channels) {

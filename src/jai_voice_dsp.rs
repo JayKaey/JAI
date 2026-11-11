@@ -498,66 +498,75 @@ fn bell(out: &mut [f32], rate: f32, start: f32, freq: f32, amp: f32, decay: f32)
     }
 }
 
-/// The earcon at `rate` (mono, peak ≈ 0.12, raised-cosine tail).
+/// One note of the family every cue is made of: a struck glass (the fundamental, a soft
+/// octave above it and the inharmonic partial of glass at ×2.76), ringing off at `decay`.
+fn note(out: &mut [f32], rate: f32, start: f32, freq: f32, amp: f32, decay: f32) {
+    bell(out, rate, start, freq, amp, decay);
+    bell(out, rate, start, freq * 2.0, amp * 0.22, decay * 1.5);
+    bell(out, rate, start, freq * 2.76, amp * 0.08, decay * 2.2);
+}
+
+/// The notes the cues are tuned to (one pentatonic scale, so any two of them agree): D5, F♯5,
+/// A5, B5, D6.
+const D5: f32 = 587.33;
+const FS5: f32 = 739.99;
+const A5: f32 = 880.0;
+const B5: f32 = 987.77;
+const D6: f32 = 1174.66;
+
+/// The earcon at `rate` (mono, peak ≈ 0.08, raised-cosine tail). The seven are one family
+/// (Sir, 2026-11-12: "the same seven remade so they belong together, softer and shorter"):
+/// the same struck-glass voice, the same scale, a third of a second at most but for the
+/// report's chime.
 pub fn earcon(kind: Earcon, rate: u32) -> Vec<f32> {
     let r = rate.max(8_000) as f32;
     let secs = match kind {
-        Earcon::ReportChime => 0.9,
-        Earcon::Confirm => 0.16,
-        Earcon::PowerDown => 0.6,
-        Earcon::Materialize => 0.22,
-        Earcon::Spotlight => 0.34,
-        Earcon::Alert => 0.42,
-        Earcon::Dismiss => 0.2,
+        Earcon::ReportChime => 0.5,
+        Earcon::Confirm => 0.12,
+        Earcon::PowerDown => 0.42,
+        Earcon::Materialize => 0.18,
+        Earcon::Spotlight => 0.3,
+        Earcon::Alert => 0.34,
+        Earcon::Dismiss => 0.18,
     };
     let mut out = vec![0.0f32; (r * secs) as usize];
     match kind {
+        // A report is ready: a third, then the octave over it.
         Earcon::ReportChime => {
-            // E6 then B6, each with the inharmonic partial of a struck glass (×2.76).
-            for (start, freq) in [(0.0, 1318.5f32), (0.14, 1975.5)] {
-                bell(&mut out, r, start, freq, 0.07, 6.5);
-                bell(&mut out, r, start, freq * 2.76, 0.018, 14.0);
-                bell(&mut out, r, start, freq * 0.5, 0.012, 9.0);
-            }
+            note(&mut out, r, 0.0, FS5, 0.04, 9.0);
+            note(&mut out, r, 0.0, A5, 0.04, 9.0);
+            note(&mut out, r, 0.13, D6, 0.05, 8.0);
         }
-        Earcon::Confirm => {
-            bell(&mut out, r, 0.0, 1760.0, 0.06, 38.0);
-            bell(&mut out, r, 0.045, 2637.0, 0.05, 42.0);
-        }
+        // Done: one clean tick.
+        Earcon::Confirm => note(&mut out, r, 0.0, B5, 0.055, 36.0),
+        // Signing off: down the chord.
         Earcon::PowerDown => {
-            // A glide from 880 Hz to 196 Hz with a falling level.
-            let mut phase = 0.0f32;
-            let n = out.len();
-            for (i, s) in out.iter_mut().enumerate() {
-                let t = i as f32 / n as f32;
-                let freq = 880.0 * (196.0f32 / 880.0).powf(t.powf(0.7));
-                phase = (phase + TAU * freq / r).rem_euclid(TAU);
-                let env = (1.0 - t).powf(1.6) * (t * 40.0).min(1.0);
-                *s = (phase.sin() * 0.8 + (2.0 * phase).sin() * 0.15) * 0.08 * env;
-            }
+            note(&mut out, r, 0.0, D6, 0.05, 14.0);
+            note(&mut out, r, 0.09, A5, 0.05, 12.0);
+            note(&mut out, r, 0.18, D5, 0.055, 9.0);
         }
+        // A block arrives: a fourth up.
         Earcon::Materialize => {
-            // A fifth sliding up into a glass tick: something assembling itself.
-            glide(&mut out, r, 0.0, 0.16, 740.0, 1480.0, 0.035, |t| (t * 12.0).min(1.0) * (1.0 - t).powf(1.4));
-            glide(&mut out, r, 0.0, 0.16, 1110.0, 2220.0, 0.018, |t| (t * 12.0).min(1.0) * (1.0 - t).powf(1.8));
-            bell(&mut out, r, 0.11, 2960.0, 0.03, 46.0);
+            note(&mut out, r, 0.0, A5, 0.05, 30.0);
+            note(&mut out, r, 0.07, D6, 0.055, 24.0);
         }
+        // A block takes the spotlight: up the chord, the top note held.
         Earcon::Spotlight => {
-            // An octave sweep that opens into a held, brighter pair.
-            glide(&mut out, r, 0.0, 0.2, 520.0, 1040.0, 0.045, |t| (t * 10.0).min(1.0) * (1.0 - 0.5 * t));
-            bell(&mut out, r, 0.17, 1560.0, 0.04, 16.0);
-            bell(&mut out, r, 0.19, 2080.0, 0.028, 20.0);
+            note(&mut out, r, 0.0, D5, 0.045, 26.0);
+            note(&mut out, r, 0.06, A5, 0.045, 22.0);
+            note(&mut out, r, 0.12, D6, 0.055, 9.0);
         }
+        // Something is wrong: two level pips (the one cue that does not ring off).
         Earcon::Alert => {
-            // Two pips a minor second apart: unmistakable, never shrill.
-            for (start, freq) in [(0.0, 932.3f32), (0.17, 987.8)] {
-                glide(&mut out, r, start, 0.11, freq, freq, 0.06, |t| (t * 30.0).min(1.0) * ((1.0 - t) * 30.0).min(1.0));
-                glide(&mut out, r, start, 0.11, freq * 2.0, freq * 2.0, 0.015, |t| (t * 30.0).min(1.0) * ((1.0 - t) * 30.0).min(1.0));
+            for start in [0.0, 0.17] {
+                glide(&mut out, r, start, 0.11, A5, A5, 0.06, |t| (t * 30.0).min(1.0) * ((1.0 - t) * 30.0).min(1.0));
+                glide(&mut out, r, start, 0.11, A5 * 2.0, A5 * 2.0, 0.013, |t| (t * 30.0).min(1.0) * ((1.0 - t) * 30.0).min(1.0));
             }
         }
+        // A block leaves: the fourth, down.
         Earcon::Dismiss => {
-            glide(&mut out, r, 0.0, 0.17, 1480.0, 620.0, 0.03, |t| (t * 14.0).min(1.0) * (1.0 - t).powf(1.5));
-            glide(&mut out, r, 0.0, 0.17, 2220.0, 930.0, 0.012, |t| (t * 14.0).min(1.0) * (1.0 - t).powf(2.0));
+            note(&mut out, r, 0.0, D6, 0.05, 34.0);
+            note(&mut out, r, 0.07, A5, 0.055, 24.0);
         }
     }
     let fade = (r * 0.03) as usize;
@@ -739,6 +748,23 @@ mod tests {
         let (a, b) = ((e.len() as f32 * from) as usize, (e.len() as f32 * to) as usize);
         let n = e[a..b].windows(2).filter(|w| w[0] <= 0.0 && w[1] > 0.0).count() as f32;
         n / ((b - a) as f32 / 48_000.0)
+    }
+
+    /// One family: none longer than half a second, none louder than a tenth of full scale, and
+    /// softer and shorter than the set they replace (which peaked at 0.12 and ran to 0.9 s).
+    #[test]
+    fn the_cues_are_one_soft_short_family() {
+        for kind in Earcon::ALL {
+            let e = earcon(kind, 48_000);
+            let peak = e.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+            assert!(peak <= 0.1, "{kind:?} peaks at {peak}");
+            assert!(e.len() <= 24_000, "{kind:?} lasts {} ms", e.len() / 48);
+        }
+        // Every pitch is on the one scale.
+        for f in [D5, FS5, A5, B5, D6] {
+            let steps = 12.0 * (f / D5).log2();
+            assert!((steps - steps.round()).abs() < 0.02 && [0, 4, 7, 9, 12].contains(&(steps.round() as i32)), "{f}");
+        }
     }
 
     #[test]

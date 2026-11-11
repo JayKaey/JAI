@@ -918,6 +918,7 @@ struct ToolLine {
 struct Toast {
     text: String,
     error: bool,
+    since: Instant,
     until: Instant,
 }
 
@@ -1271,8 +1272,10 @@ impl HudModel {
     }
 
     fn toast(&mut self, text: String, error: bool) {
-        let until = Instant::now() + Duration::from_secs(if error { 7 } else { 4 });
-        self.toasts.push_back(Toast { text, error, until });
+        // Into the history ("what did I miss?"), and the screen's edges light up.
+        crate::hud_notify::record(&text, error);
+        let since = Instant::now();
+        self.toasts.push_back(Toast { text, error, since, until: since + crate::hud_notify::stays(error, crate::hud_feel::night_active()) });
         while self.toasts.len() > 4 {
             self.toasts.pop_front();
         }
@@ -2708,37 +2711,20 @@ impl HudApp {
         }
     }
 
+    /// The notifications: one stack at the top right of the home screen, under the header
+    /// strip and clear of the text console (`hud_notify`).
     fn toasts(&self, ctx: &egui::Context, m: &HudModel) {
         if m.toasts.is_empty() {
             return;
         }
-        let p = self.palette;
-        // (At the bottom right of the home screen: the window's own corner is no monitor's on a
-        // board that spans several.)
         let home = home_screen(ctx);
-        egui::Area::new(egui::Id::new("hud_toasts"))
-            .pivot(Align2::RIGHT_BOTTOM)
-            .fixed_pos(pos2(home.right() - 150.0, home.bottom() - (TELEMETRY_H + 30.0)))
-            .order(egui::Order::Foreground)
-            .interactable(false)
-            .show(ctx, |ui| {
-                for t in &m.toasts {
-                    // Sharp technical notices, like the board's blocks.
-                    let shown = Frame::none()
-                        .fill(crate::hud_board::BLOCK_FILL)
-                        .stroke(stroke(1.0, if t.error { p.red } else { crate::hud_board::border_colour() }))
-                        .rounding(Rounding::ZERO)
-                        .inner_margin(Margin::symmetric(13.0, 9.0))
-                        .show(ui, |ui| {
-                            ui.set_max_width(380.0);
-                            ui.label(RichText::new(if t.error { "ALERT //" } else { "NOTICE //" }).font(FontId::monospace(10.0)).color(if t.error { p.red } else { STRIP_MUTED }));
-                            let colour = if t.error { blend(p.red, p.text, 0.45) } else { p.text };
-                            ui.add(egui::Label::new(RichText::new(&t.text).size(ts(11.5)).color(colour)).wrap());
-                        });
-                    crate::hud_board::brackets(ui.painter(), shown.response.rect, crate::hud_board::bracket_colour());
-                    ui.add_space(6.0);
-                }
-            });
+        let right = crate::dynamic_popups::card_column_right(home, 360.0, console_rect());
+        let area = Rect::from_min_max(pos2(home.left(), home.top() + HEADER_H + 34.0), pos2(right, home.bottom()));
+        let now = Instant::now();
+        let cards: Vec<crate::hud_notify::Card<'_>> = m.toasts.iter().map(|t| crate::hud_notify::Card { text: &t.text, alert: t.error, age: now.saturating_duration_since(t.since).as_secs_f32(), left: t.until.saturating_duration_since(now).as_secs_f32() }).collect();
+        if crate::hud_notify::paint_stack(ctx, area, &cards) {
+            ctx.request_repaint();
+        }
     }
 
     fn dialogs(&mut self, ctx: &egui::Context) {
@@ -3455,11 +3441,16 @@ struct HudApp {
     console_foot: f32,
     /// How much of the edge strips shows (1: all of them; the calm HUD lets them step back).
     calm: f32,
+    /// How far night mode has dimmed the HUD (0 day … 1 night).
+    night: f32,
     /// The utterance Sir is in: since when, and the loudest his voice was (dBFS).
     mic_speech: Option<(Instant, f32)>,
     /// What is wrong with the way he hears Sir ("TOO QUIET"), and since when it has been shown.
     mic_verdict: Option<(&'static str, Instant)>,
 }
+
+/// How dark night mode makes the HUD (the share of black laid over it).
+const NIGHT_DIM: f32 = 0.42;
 
 /// The calm HUD: the edge strips return when the pointer comes this near the top or the bottom
 /// of the screen, and stand at this share of their strength otherwise.
@@ -3591,6 +3582,7 @@ impl HudApp {
             board_area_now: Rect::NOTHING,
             console_foot: 46.0,
             calm: 1.0,
+            night: 0.0,
             mic_speech: None,
             mic_verdict: None,
             window_seen: ([0; 4], None),
@@ -5333,6 +5325,8 @@ impl HudApp {
             }
             None => {}
         }
+        // "What did I miss?": the notifications of the last hours.
+        crate::hud_notify::show(ctx);
         mark("mixer");
         mixer_view::show(ctx, &self.rt);
         // The network radar, the disk map and the Earth, when open.
@@ -7564,6 +7558,20 @@ impl HudApp {
             mark("board and emblem");
             self.canvas(ctx, &m, &iface, dt);
             mark("overlays");
+            // Night mode: the HUD dims (by the clock or because Sir said so).
+            crate::hud_feel::set_night_by_clock(iface.night_mode);
+            let night = crate::hud_feel::night_active() && !windows_still(ctx);
+            self.night = crate::hud_style::motion::approach(self.night, if night { 1.0 } else { 0.0 }, dt, Duration::from_millis(900));
+            if self.night > 0.0 {
+                let dim = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("hud_night")));
+                dim.rect_filled(ctx.screen_rect(), Rounding::ZERO, Color32::from_black_alpha((NIGHT_DIM * 255.0 * self.night) as u8));
+                if self.night < 1.0 {
+                    ctx.request_repaint();
+                }
+            }
+            if iface.edge_light && !windows_still(ctx) {
+                crate::hud_notify::paint_edge(ctx, home_screen(ctx), 1.0 - 0.5 * self.night);
+            }
             self.toasts(ctx, &m);
             self.popups(ctx, dt);
             self.room_alert_overlay(ctx, &m);

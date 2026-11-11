@@ -196,6 +196,36 @@ pub fn night(by_clock: bool) -> bool {
     night_at(chrono::Local::now().naive_local(), by_clock)
 }
 
+/// Whether night mode goes by the clock (the setting, as the HUD last saw it), and whether it
+/// is night right now as of the last look (`night_active`): the sound thread reads the latter.
+static NIGHT_BY_CLOCK: AtomicBool = AtomicBool::new(true);
+static NIGHT_NOW: AtomicBool = AtomicBool::new(false);
+
+pub fn set_night_by_clock(on: bool) {
+    NIGHT_BY_CLOCK.store(on, Ordering::Release);
+}
+
+/// Whether it is night for him right now (looked up, and noted for `night_gain`). Never in a
+/// test session: what a scripted session checks does not depend on the hour it runs at.
+pub fn night_active() -> bool {
+    let night = !crate::platform::in_test_session() && night(NIGHT_BY_CLOCK.load(Ordering::Acquire));
+    NIGHT_NOW.store(night, Ordering::Release);
+    night
+}
+
+/// How loud he is at night against the day (his voice and nothing else: the cues are off).
+pub const NIGHT_GAIN: f32 = 0.6;
+
+/// The share of his voice's volume right now (as of the last `night_active`).
+pub fn night_gain() -> f32 {
+    if NIGHT_NOW.load(Ordering::Relaxed) { NIGHT_GAIN } else { 1.0 }
+}
+
+/// What the language model is told at night.
+pub fn live_context() -> String {
+    if night_active() { "NIGHT MODE: it is late and Sir wants quiet. Answer in one short sentence.\n".to_string() } else { String::new() }
+}
+
 pub fn set_night(on: bool, now: NaiveDateTime) {
     *lock(&NIGHT_OVERRIDE) = Some((on, next_morning(now)));
 }

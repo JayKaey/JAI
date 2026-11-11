@@ -136,6 +136,7 @@ pub async fn build(tools: &ToolContext, source: InputSource, voice: VoiceGate, r
     out.push_str(&crate::discord_bot::live_context());
     out.push_str(&crate::away_mode::live_context());
     out.push_str(&crate::watch_and_tell::live_context());
+    out.push_str(&crate::hud_feel::live_context());
     let reminders = tools.reminders.list();
     if !reminders.is_empty() {
         let list: Vec<String> = reminders
