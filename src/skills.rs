@@ -520,9 +520,9 @@ impl SkillManager {
                 "Captures the primary monitor and saves a PNG to the Desktop.",
                 vec!["take a screenshot", "capture the screen", "mach einen screenshot", "bildschirmfoto"],
                 if windows {
-                    "Add-Type -AssemblyName System.Windows.Forms,System.Drawing\n$b=[System.Windows.Forms.Screen]::PrimaryScreen.Bounds\n$bmp=New-Object System.Drawing.Bitmap($b.Width,$b.Height)\n$g=[System.Drawing.Graphics]::FromImage($bmp)\n$g.CopyFromScreen($b.Location,[System.Drawing.Point]::Empty,$b.Size)\n$f=Join-Path ([Environment]::GetFolderPath('Desktop')) (\"jarvis_screenshot_\" + (Get-Date -Format 'yyyyMMdd_HHmmss') + \".png\")\n$bmp.Save($f,[System.Drawing.Imaging.ImageFormat]::Png); $g.Dispose(); $bmp.Dispose()\nWrite-Output \"Saved screenshot to $f\""
+                    "Add-Type -AssemblyName System.Windows.Forms,System.Drawing\n$b=[System.Windows.Forms.Screen]::PrimaryScreen.Bounds\n$bmp=New-Object System.Drawing.Bitmap($b.Width,$b.Height)\n$g=[System.Drawing.Graphics]::FromImage($bmp)\n$g.CopyFromScreen($b.Location,[System.Drawing.Point]::Empty,$b.Size)\n$f=Join-Path ([Environment]::GetFolderPath('Desktop')) (\"jai_screenshot_\" + (Get-Date -Format 'yyyyMMdd_HHmmss') + \".png\")\n$bmp.Save($f,[System.Drawing.Imaging.ImageFormat]::Png); $g.Dispose(); $bmp.Dispose()\nWrite-Output \"Saved screenshot to $f\""
                 } else {
-                    "f=~/Desktop/jarvis_screenshot_$(date +%Y%m%d_%H%M%S).png; mkdir -p ~/Desktop; (grim \"$f\" || scrot \"$f\" || gnome-screenshot -f \"$f\") 2>/dev/null && echo \"Saved screenshot to $f\""
+                    "f=~/Desktop/jai_screenshot_$(date +%Y%m%d_%H%M%S).png; mkdir -p ~/Desktop; (grim \"$f\" || scrot \"$f\" || gnome-screenshot -f \"$f\") 2>/dev/null && echo \"Saved screenshot to $f\""
                 },
             ),
             (

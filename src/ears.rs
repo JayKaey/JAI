@@ -265,7 +265,7 @@ pub fn classify_addressee(text: &str, ctx: &AddresseeContext) -> Addressee {
 pub const UNSURE_LOGPROB: f32 = -0.5;
 
 /// A song through the microphone: while a player is playing, words Whisper is unsure of and that
-/// are no command JAI knows are the song's, not Sir's. (jarvis.log 2026-11-05 19:45: "Fix that
+/// are no command JAI knows are the song's, not Sir's. (jai.log 2026-11-05 19:45: "Fix that
 /// my heart, hope it never stops war. Yeah." was answered as a request.) With the wake word,
 /// push-to-talk or a barge-in this is never asked.
 pub fn sung_not_said(text: &str, avg_logprob: f32, player_playing: bool) -> bool {
@@ -454,7 +454,7 @@ mod relevance_tests {
 
     #[test]
     fn lyrics_through_the_microphone_are_the_songs_not_sirs() {
-        // jarvis.log 2026-11-05 19:45:25-29, with Whisper's own log-probabilities.
+        // jai.log 2026-11-05 19:45:25-29, with Whisper's own log-probabilities.
         for (text, logprob) in [
             ("Fix that lahat how it never stops war.", -0.63),
             ("Fix that my heart, hope it never stops war. Yeah.", -0.57),

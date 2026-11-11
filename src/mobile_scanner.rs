@@ -1,7 +1,7 @@
 //! The Mobile Scanner: the phone's camera as JAI's scanner. QR codes and barcodes are read on the
 //! phone (the browser's BarcodeDetector) and acted on here — links open, Wi-Fi codes show their
 //! password, product codes are looked up; documents are photographed, read with Windows OCR, saved
-//! to Documents\Jarvis_Scans and put on the clipboard.
+//! to Documents\JAI_Scans and put on the clipboard.
 
 use crate::features::{show_window, spoken, str_arg, user_folder};
 use crate::tools::ToolContext;
@@ -74,7 +74,7 @@ pub async fn receive(tools: &ToolContext, body: &Value) -> Value {
             Ok(b) => b,
             Err(e) => return json!({ "ok": false, "error": e.to_string() }),
         };
-        let dir = user_folder("Documents").join("Jarvis_Scans");
+        let dir = user_folder("Documents").join("JAI_Scans");
         let _ = std::fs::create_dir_all(&dir);
         let path = dir.join(format!("scan_{}.jpg", crate::features::stamp()));
         if let Err(e) = std::fs::write(&path, &bytes) {
@@ -127,7 +127,7 @@ pub async fn receive(tools: &ToolContext, body: &Value) -> Value {
 pub fn tool_definition() -> Value {
     json!({"type": "function", "function": {
         "name": "scan_with_phone",
-        "description": "Mobile Scanner: open the camera scanner on Sir's phone (satellite). mode code (QR / barcode: links open on the PC, Wi-Fi passwords, product prices) or document (photo → OCR → text on the PC clipboard + Documents\\Jarvis_Scans); last = the latest result.",
+        "description": "Mobile Scanner: open the camera scanner on Sir's phone (satellite). mode code (QR / barcode: links open on the PC, Wi-Fi passwords, product prices) or document (photo → OCR → text on the PC clipboard + Documents\\JAI_Scans); last = the latest result.",
         "parameters": {"type": "object", "properties": {
             "mode": {"type": "string", "enum": ["code", "document", "last"]}
         }, "required": ["mode"]}

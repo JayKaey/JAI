@@ -75,7 +75,7 @@ impl LlmRuntime {
             engine,
             models_dir: absolute(Path::new(&cfg.llm_models_dir)),
             external_url: cfg.ollama_url.trim_end_matches('/').to_string(),
-            log_path: Path::new(&cfg.log_file).with_file_name("jarvis-llm.log"),
+            log_path: Path::new(&cfg.log_file).with_file_name("jai-llm.log"),
             status,
             child: Mutex::new(None),
             #[cfg(windows)]

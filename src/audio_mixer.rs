@@ -98,10 +98,10 @@ const ALIASES: &[(&str, &[&str])] = &[
     ("game", &[GAME]),
     ("spiel", &[GAME]),
     ("das spiel", &[GAME]),
-    // (His session carries the program's file name.)
-    ("jai", &["jarvis"]),
-    ("jay", &["jarvis"]),
-    ("jarvis", &["jarvis"]),
+    // (His session carries the program's file name: JAI.exe, or jarvis.exe from a build folder.)
+    ("jai", &["jai", "jarvis"]),
+    ("jay", &["jai", "jarvis"]),
+    ("jarvis", &["jai", "jarvis"]),
     ("system sounds", &["system sounds"]),
     ("systemsounds", &["system sounds"]),
 ];
@@ -210,7 +210,7 @@ fn spoken(name: &str) -> String {
 /// session would silence the app that was to stay).
 fn keeps_playing(session: &str) -> bool {
     let s = session.to_lowercase();
-    ["jarvis", "wavelink", "elgato", "voicemeeter", "sonar", "goxlr", "audiorelay", "vb-audio"].iter().any(|k| s.contains(k))
+    matches!(s.as_str(), "jai" | "jai.exe") || ["jarvis", "wavelink", "elgato", "voicemeeter", "sonar", "goxlr", "audiorelay", "vb-audio"].iter().any(|k| s.contains(k))
 }
 
 /// A change to a volume: a level (0-1), a step from where it is (a signed fraction) and/or a
@@ -2511,7 +2511,7 @@ mod tests {
         // Several apps in one name, and the sessions that are never muted with "everything".
         assert_eq!(targets("Discord and Spotify"), vec!["discord", "discordptb", "discordcanary", "spotify"]);
         assert_eq!(spoken("my browser and discord"), "Browser and Discord");
-        assert!(keeps_playing("Elgato.WaveLink") && keeps_playing("JARVIS") && !keeps_playing("firefox"));
+        assert!(keeps_playing("Elgato.WaveLink") && keeps_playing("JARVIS") && keeps_playing("JAI") && !keeps_playing("firefox") && !keeps_playing("jailbreak"));
     }
 
     #[test]

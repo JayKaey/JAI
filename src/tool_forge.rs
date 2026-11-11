@@ -7,7 +7,7 @@
 //!   SQLite database, launch a process (no shells, no window), act on a window, call an HTTP API,
 //!   compile and run a small Rust plugin with `rustc -O`, or call one of JAI's own tools.
 //! * Forging runs the tool straight away with Sir's own arguments; only a run that succeeds is
-//!   saved (`forged_tools` in `jarvis_memory.db` + `skills/forged_tools/<name>.json`). A failed
+//!   saved (`forged_tools` in `jai_memory.db` + `skills/forged_tools/<name>.json`). A failed
 //!   run is reported back so the model can repair the spec (the brain retries once).
 //! * Its triggers are matched before the model on every later turn, and a correction replaces
 //!   the definition (version + 1, the correction kept) — so the fix is permanent.

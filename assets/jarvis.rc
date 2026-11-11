@@ -1,4 +1,4 @@
-// Windows resources for JARVIS.exe (compiled by build.rs).
+// Windows resources for JAI.exe (compiled by build.rs).
 
 1 ICON "jarvis_icon.ico"
 
@@ -20,8 +20,8 @@ BEGIN
         BEGIN
             VALUE "FileDescription", "J.A.I."
             VALUE "FileVersion", "3.1.0"
-            VALUE "InternalName", "jarvis"
-            VALUE "OriginalFilename", "JARVIS.exe"
+            VALUE "InternalName", "jai"
+            VALUE "OriginalFilename", "JAI.exe"
             VALUE "ProductName", "J.A.I. local voice assistant"
             VALUE "ProductVersion", "3.1.0"
         END

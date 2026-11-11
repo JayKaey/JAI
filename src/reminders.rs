@@ -1,6 +1,6 @@
 //! Reminders in plain English or German: "remind me in 10 minutes to check the oven", "remind
 //! me at 6 pm to call Mum", "erinnere mich morgen um 9 an den Zahnarzt". Persisted in
-//! `jarvis_memory.db`, shown as a live "Reminders" widget in the HUD, and announced as alerts
+//! `jai_memory.db`, shown as a live "Reminders" widget in the HUD, and announced as alerts
 //! when due (also the ones that fell due while JAI was offline).
 
 use crate::widgets::WidgetEngine;

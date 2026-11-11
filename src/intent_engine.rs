@@ -1932,7 +1932,7 @@ mod tests {
     #[test]
     fn the_emblem_moves_wherever_sir_says() {
         let moved = |place: &str| Some(("orb", json!({"tool": "configure_interface", "args": {"orb_board_position": place}})));
-        // jarvis.log 2026-11-04 00:53:46: this went to window snapping ("Your Orb A Little Bit").
+        // jai.log 2026-11-04 00:53:46: this went to window snapping ("Your Orb A Little Bit").
         assert_eq!(reflex("JAI, move your orb a little bit to the left.", &IDLE), moved("a little bit to the left"));
         // The screenshot sentence, and its siblings.
         assert_eq!(reflex("JAI, move your orb back to the middle.", &IDLE), moved("back to the middle"));
@@ -2046,7 +2046,7 @@ mod tests {
         assert!((sound_similarity("hiteko", "hiteko") - 1.0).abs() < 1e-6);
         assert!(sound_similarity("fiteko", "hiteko") > 0.9, "f and h are easily confused");
         assert!(sound_similarity("nekstwik", "nekstpej") < 0.75, "week is no page");
-        // jarvis.log 2026-11-03 22:47-22:52: what Whisper wrote, and what Sir had said.
+        // jai.log 2026-11-03 22:47-22:52: what Whisper wrote, and what Sir had said.
         assert_eq!(phonetic_rescue("Fight the core.", &IDLE), Some("hide your core"));
         assert_eq!(phonetic_rescue("disabled the car.", &IDLE), Some("hide your core"));
         assert_eq!(phonetic_rescue("10 discord call on.", &IDLE), Some("turn on the discord call"));
@@ -2067,9 +2067,9 @@ mod tests {
 
     /// Never fires on real chatter: every transcript in Sir's own log, if it is here.
     #[test]
-    #[ignore = "reads jarvis.log from the working directory"]
+    #[ignore = "reads jai.log from the working directory"]
     fn rescue_stays_silent_on_the_real_log() {
-        let Ok(log) = std::fs::read_to_string("jarvis.log") else { return };
+        let Ok(log) = std::fs::read_to_string("jai.log") else { return };
         let mut heard = 0;
         let mut rescued: Vec<(String, &'static str)> = Vec::new();
         for line in log.lines().filter(|l| l.contains("[STT] Transcribed")) {

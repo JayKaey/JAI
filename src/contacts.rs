@@ -1,4 +1,4 @@
-//! Sir's contacts (`contacts` in `jarvis_memory.db`): name, nickname, e-mail, phone number and
+//! Sir's contacts (`contacts` in `jai_memory.db`): name, nickname, e-mail, phone number and
 //! WhatsApp display name, so "send that to Max", "reply to Herr Müller" and "text +49 151 …"
 //! all reach the right person. Older databases are upgraded in place (missing columns are added).
 //! People who write to Sir on WhatsApp are added automatically (without a number until Sir gives

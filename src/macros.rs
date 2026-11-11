@@ -2,7 +2,7 @@
 //! open my physics folder, start a 45 minute focus timer and play my lo-fi playlist"). Each step is
 //! an ordinary request, run one after the other through the full pipeline (fast path, LLM,
 //! tools) as if Sir had said it, so a step can be anything JAI understands. Stored in
-//! `voice_macros` (`jarvis_memory.db`); the trigger phrase runs it from the fast path.
+//! `voice_macros` (`jai_memory.db`); the trigger phrase runs it from the fast path.
 
 use crate::stark::StarkEvent;
 use crate::tools::{str_arg, ToolContext};

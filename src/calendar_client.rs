@@ -1,5 +1,5 @@
 //! Apple Calendar (iCloud) or any CalDAV server (RFC 4791) plus read-only iCalendar feeds
-//! (RFC 5545), mirrored into `calendar_events` (`jarvis_memory.db`) so the schedule also works
+//! (RFC 5545), mirrored into `calendar_events` (`jai_memory.db`) so the schedule also works
 //! offline.
 //!
 //! * Reading: calendars are discovered (current-user-principal → calendar-home-set → the VEVENT

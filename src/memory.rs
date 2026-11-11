@@ -1,4 +1,4 @@
-//! Long-term memory in SQLite (`jarvis_memory.db`): WAL journaling, an FTS5 index (BM25 ranking)
+//! Long-term memory in SQLite (`jai_memory.db`): WAL journaling, an FTS5 index (BM25 ranking)
 //! kept in sync by triggers, and a `LIKE`-scoring fallback when FTS5 is unavailable.
 
 use chrono::Utc;
@@ -585,7 +585,7 @@ mod tests {
         (MemoryManager::open(&path).expect("open db"), path)
     }
 
-    /// Repro (jarvis.log, 2026-11-08 23:3x): "Call me Earth." — heard over JAI's own voice —
+    /// Repro (jai.log, 2026-11-08 23:3x): "Call me Earth." — heard over JAI's own voice —
     /// replaced how Sir is addressed.
     #[test]
     fn a_change_of_his_name_or_title_is_recognised() {

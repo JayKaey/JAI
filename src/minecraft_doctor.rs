@@ -327,7 +327,7 @@ pub async fn run_tool(tools: &ToolContext, args: &Value) -> Result<String, Strin
         "rcon" | "command" => {
             let command = arg.ok_or("Which server command, Sir?")?;
             if settings.rcon_address.trim().is_empty() || settings.rcon_password.is_empty() {
-                return Err("RCON is not set up: add features.rcon_address and features.rcon_password to jarvis_config.json (and enable-rcon in server.properties).".into());
+                return Err("RCON is not set up: add features.rcon_address and features.rcon_password to jai_config.json (and enable-rcon in server.properties).".into());
             }
             let reply = rcon(&settings.rcon_address, &settings.rcon_password, command).await?;
             Ok(spoken(format!("/{} → {}", command.trim_start_matches('/'), if reply.is_empty() { "(no output)" } else { &reply }), if reply.is_empty() { "Done, Sir.".to_string() } else { reply.chars().take(240).collect() }))

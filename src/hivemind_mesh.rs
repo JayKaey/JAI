@@ -1,5 +1,5 @@
 //! The Stark multi-node hivemind: Sir's other machines — a Raspberry Pi 5, a Linux VPS, a
-//! Minecraft server — registered in `remote_nodes` (`jarvis_memory.db`) and commanded over SSH
+//! Minecraft server — registered in `remote_nodes` (`jai_memory.db`) and commanded over SSH
 //! (Windows ships OpenSSH; key-based login, `BatchMode` so nothing ever waits for a password).
 //!
 //! `manage_remote_node` registers and lists nodes, checks them (TCP reachability, uptime / memory

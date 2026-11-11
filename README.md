@@ -6,9 +6,10 @@ engine) and the egui HUD all run on the PC; there is no cloud speech or text-to-
 
 His name is J.A.I., said "Jay". He answers to it said or spelt a little wrong ("Jai", "Jae",
 "J A I", "Hey Jay"); what the letters stand for is yours to set (`name_meaning` in
-`jarvis_config.json`). The program file, the settings file, the database and the folders he
-writes to keep the names they had (`JARVIS.exe`, `jarvis_config.json`, ...), so nothing that
-points at them breaks.
+`jai_config.json`). His files carry his name too: `JAI.exe`, `jai_config.json`,
+`jai_memory.db`, `jai.log` and his folders (`Documents\JAI Models`, `Documents\JAI_Research`,
+...). Files and folders from before the rename take the new names at the next start, with
+everything in them.
 
 ## Build
 
@@ -21,24 +22,24 @@ build.bat
 ```
 
 That runs `cargo build --release` and then `tools\package.ps1`, which copies
-`target\release\jarvis.exe` to `JARVIS.exe` together with the DLLs it needs.
+`target\release\jarvis.exe` to `JAI.exe` together with the DLLs it needs.
 
 ## First start
 
 The models and runtimes are too large for git and are not in this repository:
 
-- `models\`: Whisper, Kokoro and Silero. `JARVIS.exe --download-models` installs what is missing;
+- `models\`: Whisper, Kokoro and Silero. `JAI.exe --download-models` installs what is missing;
   `--check-models` only reports.
 - `runtime\ollama` and `runtime\espeak-ng`: `tools\package.ps1` copies them from local installs of
   Ollama and eSpeak NG when they are missing.
 - `bin\cloudflared.exe`: downloaded on first use for the phone page's tunnel (SHA-256 verified).
 
-The app writes `jarvis_config.json` and `jarvis_memory.db` next to the executable. They hold
+The app writes `jai_config.json` and `jai_memory.db` next to the executable. They hold
 personal data (settings, the phone pairing key, conversations, sealed account tokens), so git
 ignores them, as it does the logs, the phone page's TLS key and the packaged executables.
 
 The film-voice reference recording is not included either. To calibrate the voice, put your own
-clip at `assets\jarvis_voice_reference.mp3` and run `JARVIS.exe --voice-calibrate`.
+clip at `assets\jarvis_voice_reference.mp3` and run `JAI.exe --voice-calibrate`.
 
 JAI speaks Received Pronunciation through a dry studio chain. This is an approximation built
 from stock voices, not a clone of an actor. Besides the similarity of the voice to its clip, the
@@ -227,14 +228,14 @@ back up" are watched until they happen (eight at a time, twelve hours at most).
 
 ```
 cargo test --release
-JARVIS.exe --selftest --no-llm     # silent TTS -> VAD -> Whisper check, no language model
-JARVIS.exe --live-test             # every probe in the running app; nothing is sent or changed
-JARVIS.exe --live-test --headless  # the same with the HUD drawn offscreen (no window)
-JARVIS.exe --exhaustive 5          # the live test plus the exhaustive matrices, five runs in a row
-JARVIS.exe --silent --chat "..."   # ask him for real, unseen and unheard; answers go to jarvis.log
-JARVIS.exe --silent --show --monitor 2 --chat "..."   # the same in the real window, on monitor 2
-JARVIS.exe --live-test --monitor 2   # the live test with its window on monitor 2
-JARVIS.exe --silent --show --window-drill --chat "What time is it?"   # SCREENS buttons and F11 in the real window
+JAI.exe --selftest --no-llm     # silent TTS -> VAD -> Whisper check, no language model
+JAI.exe --live-test             # every probe in the running app; nothing is sent or changed
+JAI.exe --live-test --headless  # the same with the HUD drawn offscreen (no window)
+JAI.exe --exhaustive 5          # the live test plus the exhaustive matrices, five runs in a row
+JAI.exe --silent --chat "..."   # ask him for real, unseen and unheard; answers go to jai.log
+JAI.exe --silent --show --monitor 2 --chat "..."   # the same in the real window, on monitor 2
+JAI.exe --live-test --monitor 2   # the live test with its window on monitor 2
+JAI.exe --silent --show --window-drill --chat "What time is it?"   # SCREENS buttons and F11 in the real window
 ```
 
 `--monitor <n>` opens a test session's window on monitor n (1 = the primary) for that session
@@ -245,7 +246,7 @@ window to the front with an Alt tap), and none of its windows asks to be brought
 
 `--window-drill` clicks every SCREENS button (each monitor, the span and back, CLOSE) and
 presses F11 out of and back into the fullscreen board, in the real window, one step at a time,
-and checks where Windows really put the window after each (`[DRILL]` lines in `jarvis.log`).
+and checks where Windows really put the window after each (`[DRILL]` lines in `jai.log`).
 The clicks go into the window's own input and F11 is a key message to the window, so the cursor
 and keyboard are never touched. The checks that change real things on the PC (the real mixer, a
 shutdown that is scheduled and cancelled, the lock screen, voice samples) are ignored tests in
@@ -271,7 +272,7 @@ the whole run, whatever its switch says. Requests are dry runs: tool calls are r
 carried out, except reads and what only draws inside the HUD. The settings file and the
 conversation log stay untouched. The report is `exhaustive_report.json`.
 
-A test session runs where nobody sees it, so it gives way: starting JARVIS.exe while one is
+A test session runs where nobody sees it, so it gives way: starting JAI.exe while one is
 running ends it and starts him normally. Its tray tip says so, and a run cut short exits with a
 failure code.
 
@@ -282,7 +283,7 @@ the second pass on. Only the time is forgiven: a wrong result in that first pass
 that follows, and the probes that were late in it are named in the log and in the report
 (`first_pass_late`).
 
-`JARVIS.exe --help` lists all options.
+`JAI.exe --help` lists all options.
 
 ## Workbench
 

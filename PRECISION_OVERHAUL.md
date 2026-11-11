@@ -15,7 +15,7 @@ The desktop remains a native Rust/egui application. The existing mobile satellit
 
 When the satellite is enabled, JAI starts a separate loopback-only HTTP origin, then a managed HTTPS tunnel. The LAN listener retains its own TLS certificate. Every control and data request requires the saved pairing token. Scan the Worldwide QR code in the desktop pairing window; the phone remembers its token in local storage. Treat the QR code as a password.
 
-New fields within `satellite` in `jarvis_config.json`:
+New fields within `satellite` in `jai_config.json`:
 
 | Field | Default | Meaning |
 | --- | --- | --- |

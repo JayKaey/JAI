@@ -136,7 +136,7 @@ fn untouchable(name: &str) -> bool {
     let n = name.to_lowercase();
     matches!(
         n.as_str(),
-        "system" | "registry" | "memory compression" | "dwm" | "csrss" | "svchost" | "explorer" | "jarvis" | "ollama" | "ollama_llama_server"
+        "system" | "registry" | "memory compression" | "dwm" | "csrss" | "svchost" | "explorer" | "jarvis" | "jai" | "ollama" | "ollama_llama_server"
             | "msmpeng" | "wininit" | "services" | "lsass" | "searchindexer" | "audiodg"
     ) || n.starts_with("ollama")
 }

@@ -268,7 +268,7 @@ impl FocusTracker {
             let window = crate::context::desktop()
                 .await
                 .foreground
-                .filter(|(title, process)| !title.contains("J.A.I.") && !process.eq_ignore_ascii_case("jarvis"))
+                .filter(|(title, process)| !title.contains("J.A.I.") && !process.eq_ignore_ascii_case("jarvis") && !process.eq_ignore_ascii_case("jai"))
                 .map(|(title, process)| ForegroundWindow { handle: 0, title, process });
             if let Some(w) = window {
                 self.note_foreground(w);

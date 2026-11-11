@@ -582,7 +582,7 @@ pub fn probe_margin_db(captured: &[f32], rate: f32) -> f32 {
 pub fn probe_candidates(outputs: &[String], discord_output: Option<&str>) -> Vec<String> {
     let rank = |n: &str| {
         let l = n.to_lowercase();
-        let spare = ["jarvis", "sfx", "aux"].iter().any(|w| l.contains(w));
+        let spare = ["jarvis", "jai", "sfx", "aux"].iter().any(|w| l.contains(w));
         if spare { 0 } else if l.contains("music") { 1 } else if l.contains("browser") { 2 } else if l.contains("system") { 3 } else if l.contains("microphone") { 5 } else { 4 }
     };
     let mut out: Vec<String> = outputs
@@ -709,7 +709,7 @@ fn room_level(name: &str) -> Option<f32> {
     Some(20.0 * rms.log10())
 }
 
-/// `JARVIS.exe --call-check`: where Discord plays, which Wave Link channel reaches the Chat Mix
+/// `JAI.exe --call-check`: where Discord plays, which Wave Link channel reaches the Chat Mix
 /// (the silent probe), and whether JAI's voice really arrives there — a short sentence played on
 /// that channel while the Chat Mix is recorded. Nothing in Wave Link is changed. The sentence is
 /// audible (headset, and the call if one is running).

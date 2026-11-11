@@ -533,7 +533,7 @@ mod tests {
         assert!(slot.take_within(Duration::from_secs(120)).is_none(), "an older change stays");
     }
 
-    /// Repro (jarvis.log, 2026-11-08 23:3x): "Call me Earth." — misheard over JAI's voice —
+    /// Repro (jai.log, 2026-11-08 23:3x): "Call me Earth." — misheard over JAI's voice —
     /// overwrote the seed "Always address the user respectfully as 'Sir'." (persona, 10) with
     /// "Sir should be addressed as Earth.", and nothing could take it back.
     #[test]

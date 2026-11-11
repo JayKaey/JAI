@@ -1,5 +1,5 @@
 //! Voice or text replies. Every input is tagged with where it came from (`InputSource`), and
-//! Sir's `VoiceResponseMode` (persisted in `jarvis_memory.db`) decides per turn whether JAI
+//! Sir's `VoiceResponseMode` (persisted in `jai_memory.db`) decides per turn whether JAI
 //! answers out loud (TTS + chat) or silently in the HUD chat only.
 //!
 //! Sir switches modes by voice or text ("only talk when I talk to you", "sei leise und schreib

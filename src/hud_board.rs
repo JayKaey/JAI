@@ -1191,7 +1191,7 @@ async fn run_action(tools: &ToolContext, args: &Value, action: &str) -> Result<S
                 }
                 "export" => {
                     let path = crate::block_actions::export(&title, &text, detail.as_ref(), format)?;
-                    Ok(spoken(format!("Exported: {}", path.display()), format!("Exported as {}, Sir. It's in your Jarvis Exports folder.", if as_json { "JSON" } else { "Markdown" })))
+                    Ok(spoken(format!("Exported: {}", path.display()), format!("Exported as {}, Sir. It's in your JAI Exports folder.", if as_json { "JSON" } else { "Markdown" })))
                 }
                 _ => {
                     let pinned = match (&on_board, &window) {

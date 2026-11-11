@@ -2010,7 +2010,7 @@ fn panel_command(text: &str, up: PanelsUp) -> Option<Value> {
 
 /// A layer of the Earth on or off, said any way, while the Earth is up: "I don't want to see the
 /// satellites anymore", "turn the trains back on", "toggle the clouds", "no more flights",
-/// "keine Satelliten mehr", "hide everything". (jarvis.log 2026-11-09: "I don't want to see the
+/// "keine Satelliten mehr", "hide everything". (jai.log 2026-11-09: "I don't want to see the
 /// satellites anymore" turned the orb off.)
 fn earth_layer_switch(s: &str, radar_up: bool) -> Option<Value> {
     const LAYERS: &[(&[&str], &str, &str)] = &[
@@ -5292,7 +5292,7 @@ mod board_tests {
         }
     }
 
-    /// Repro (jarvis.log, 2026-11-08 23:27-23:42): "JAI, close the Earth, you." asked Windows
+    /// Repro (jai.log, 2026-11-08 23:27-23:42): "JAI, close the Earth, you." asked Windows
     /// for a program called "earth you" ("Earth You isn't running, Sir."); "JAI close up." and
     /// "JAI closed, off." for programs called "up" and "off".
     #[test]
@@ -7099,7 +7099,7 @@ mod tests {
         }
     }
 
-    /// The volume requests of jarvis.log 2026-11-06 15:08 (each went to the language model,
+    /// The volume requests of jai.log 2026-11-06 15:08 (each went to the language model,
     /// which set the whole PC to 0 with the music tool, then ignored "system volume one hundred
     /// percent") and the ways Sir might say the same things.
     fn volume_scenarios() {

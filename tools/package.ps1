@@ -1,12 +1,14 @@
-# Packages target\release\jarvis.exe as JARVIS.exe in the project folder (next to models\ and
+# Packages target\release\jarvis.exe as JAI.exe in the project folder (next to models\ and
 # runtime\), together with the DLLs it loads, so the app does not depend on anything installed
 # system-wide. Called by build.bat.
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $src = Join-Path $root 'target\release\jarvis.exe'
-$dst = Join-Path $root 'JARVIS.exe'
+$dst = Join-Path $root 'JAI.exe'
+# The program file's name from before he was renamed.
+$before = Join-Path $root 'JARVIS.exe'
 
-if (Get-Process -Name 'JARVIS' -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $dst }) {
+if (Get-Process -Name 'JAI', 'JARVIS' -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $dst -or $_.Path -eq $before }) {
     throw 'J.A.I. is running. Quit it first ("JAI, shut down", or tray icon > Quit).'
 }
 
@@ -18,7 +20,9 @@ if ([BitConverter]::ToUInt32($bytes, $pe) -ne 0x00004550) { throw "$src is not a
 $subsystem = [BitConverter]::ToUInt16($bytes, $pe + 4 + 20 + 68)   # "PE\0\0" + COFF header + Subsystem offset
 if ($subsystem -ne 2) { throw "$src is a console program (subsystem $subsystem); it would open a terminal window" }
 Copy-Item $src $dst -Force
-Write-Host "JARVIS.exe        $([math]::Round($bytes.Length / 1MB, 1)) MB (native window, no console)"
+# One program file: the one with his old name leaves once the new one is in place.
+if (Test-Path $before) { Remove-Item $before -Force }
+Write-Host "JAI.exe           $([math]::Round($bytes.Length / 1MB, 1)) MB (native window, no console)"
 
 # 2. DirectML (ONNX Runtime GPU provider) and the Visual C++ runtime, deployed app-locally.
 Copy-Item (Join-Path $root 'target\release\DirectML.dll') $root -Force
@@ -30,7 +34,7 @@ if ($crt) {
     }
     Write-Host "runtime DLLs      DirectML + Visual C++ ($($crt.Parent.Parent.Name))"
 } else {
-    Write-Warning 'Visual C++ redistributable files not found; JARVIS.exe will use the system-wide runtime.'
+    Write-Warning 'Visual C++ redistributable files not found; JAI.exe will use the system-wide runtime.'
 }
 
 # 3. Built-in engines, copied once from local installs when missing.

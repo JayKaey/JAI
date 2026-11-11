@@ -170,7 +170,7 @@ fn toolbar(ui: &mut Ui, snap: &Snapshot, rt: &Handle) {
         if snap.scene.is_some() {
             ui.add_space(6.0);
             for (label, format) in [("STL", "stl"), ("OBJ", "obj"), ("GLB", "glb")] {
-                if chip(ui, &format!("⤓ {label}"), false, &format!("Save it as {label} in Documents\\JARVIS Models (\"save it as {label}\")")) {
+                if chip(ui, &format!("⤓ {label}"), false, &format!("Save it as {label} in Documents\\JAI Models (\"save it as {label}\")")) {
                     studio::export_in_background(rt, format, None);
                 }
             }

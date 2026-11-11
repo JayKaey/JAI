@@ -38,7 +38,7 @@ pub fn project_root() -> Result<PathBuf, String> {
         }
         dir = d.parent();
     }
-    Err("My source code is not on this machine (no Cargo.toml and src/ next to JARVIS.exe), so I cannot change or rebuild myself.".into())
+    Err("My source code is not on this machine (no Cargo.toml and src/ next to JAI.exe), so I cannot change or rebuild myself.".into())
 }
 
 /// `src/brain.rs`, `brain.rs`, `brain` → the file inside the project; nothing outside `src/`

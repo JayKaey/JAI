@@ -258,7 +258,7 @@ pub fn palette_name_for(word: &str, colour: [u8; 3]) -> String {
 
 /// `hud_palette` of a saved theme: "theme:" + its name.
 pub const CUSTOM_PREFIX: &str = "theme:";
-/// Where saved themes live (next to JARVIS.exe); mirrored into the memory database.
+/// Where saved themes live (next to JAI.exe); mirrored into the memory database.
 pub const CUSTOM_THEMES_PATH: &str = "config/custom_themes.json";
 
 /// A theme Sir built in `[ + CREATE THEME ]` or JAI designed from a description.

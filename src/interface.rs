@@ -1,7 +1,7 @@
 //! The HUD's look and layout, which JAI changes himself when Sir asks ("make the interface
 //! red", "hide the system panel", "zoom in", "stay on top", "go minimal").
 //!
-//! The settings live in `jarvis_config.json` (`interface`) and the native window re-applies
+//! The settings live in `jai_config.json` (`interface`) and the native window re-applies
 //! them live whenever they change. `configure` turns `configure_interface` tool arguments (from
 //! the LLM or the instant-command fast path) into new settings plus an optional one-shot window
 //! action (show, hide, move, resize).
@@ -236,7 +236,7 @@ impl HudPanel {
 
 // ---------------------------------------------------------------------------- settings ----
 
-/// Persisted under `interface` in `jarvis_config.json`.
+/// Persisted under `interface` in `jai_config.json`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct InterfaceSettings {

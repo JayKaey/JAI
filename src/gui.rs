@@ -97,7 +97,7 @@ enum Wake {
     Quit,
 }
 
-/// Lets the tray, voice commands and a second `JARVIS.exe` reach the window from any thread.
+/// Lets the tray, voice commands and a second `JAI.exe` reach the window from any thread.
 struct Shared {
     wake: Mutex<Option<mpsc::Sender<Wake>>>,
     /// egui context while a window exists (repaints, viewport commands).
@@ -261,7 +261,7 @@ fn wake(signal: Wake) {
 }
 
 /// Shows the HUD: brings the window to the front or opens it (tray click, "show yourself", a
-/// second `JARVIS.exe`, restyling requests). Does nothing in headless mode.
+/// second `JAI.exe`, restyling requests). Does nothing in headless mode.
 pub fn show() {
     if !SHARED.running.load(Ordering::Acquire) {
         return;

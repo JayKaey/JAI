@@ -1,7 +1,7 @@
 //! The Deep Researcher: "do some deep research on solid-state batteries." Runs in the background:
 //! plans sub-questions, searches the web for each, reads the best pages, takes notes, and writes a
 //! Stark Research Dossier (summary, findings, details, open questions, sources) — saved to
-//! Documents\Jarvis_Research and opened in its own window, with a spoken heads-up when done.
+//! Documents\JAI_Research and opened in its own window, with a spoken heads-up when done.
 
 use crate::features::{safe_name, show_window, spoken, str_arg, user_folder};
 use crate::stark::StarkEvent;
@@ -104,7 +104,7 @@ async fn research(tools: ToolContext, topic: String, depth: String) {
         sources.len(),
         sources.iter().enumerate().map(|(i, s)| format!("{}. {s}", i + 1)).collect::<Vec<_>>().join("\n")
     );
-    let dir = user_folder("Documents").join("Jarvis_Research");
+    let dir = user_folder("Documents").join("JAI_Research");
     let file = dir.join(format!("{} {}.md", chrono::Local::now().format("%Y-%m-%d"), safe_name(&topic)));
     let saved = std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(&file, &md)).is_ok();
     show_window(&tools, "research_dossier", &format!("Stark Research Dossier — {}", topic.chars().take(40).collect::<String>()), &md, 760.0, 720.0);
@@ -119,7 +119,7 @@ pub fn run_tool(tools: &ToolContext, args: &Value) -> Result<String, String> {
     let (q, p) = budget(&depth);
     tokio::spawn(research(tools.clone(), topic.clone(), depth.clone()));
     Ok(spoken(
-        format!("Background research started: \"{topic}\" (depth {depth}: {q} searches, up to {p} pages). The dossier opens in its own window and is saved to Documents\\Jarvis_Research."),
+        format!("Background research started: \"{topic}\" (depth {depth}: {q} searches, up to {p} pages). The dossier opens in its own window and is saved to Documents\\JAI_Research."),
         format!("I'm on it, Sir. I'll research {topic} in the background and let you know when the dossier is ready."),
     ))
 }

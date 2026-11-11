@@ -1368,7 +1368,7 @@ pub(crate) async fn save_current(id: Option<&str>) -> Result<String, String> {
         set_note("Saving failed: the picture could not be downloaded.");
         return Err("The picture could not be downloaded, so nothing was saved.".into());
     };
-    let dir = folder("Pictures").join("Jarvis");
+    let dir = folder("Pictures").join("JAI");
     tokio::fs::create_dir_all(&dir).await.map_err(|e| format!("Could not create {}: {e}", dir.display()))?;
     let stem: String = crate::features::safe_name(&pic.title).chars().take(70).collect();
     let path = free_name(&dir, stem.trim(), sniff_extension(&bytes));

@@ -173,7 +173,7 @@ async fn bench_stt(cfg: &JaiConfig, pcm: &[f32], voiced_ms: u32) {
     }
 }
 
-/// `--selftest --bench`: Sir's own sentences from jarvis.log (among them those Whisper got wrong
+/// `--selftest --bench`: Sir's own sentences from jai.log (among them those Whisper got wrong
 /// on 2026-11-09), said by another voice into a room with a fan, music or people talking: the
 /// share of words each Whisper setting gets right, so the defaults are picked by measurement.
 async fn bench_noise(cfg: &JaiConfig, kokoro: &mut Kokoro, phonemizer: &Phonemizer, seed: &mut u32) {

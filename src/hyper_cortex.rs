@@ -578,7 +578,7 @@ mod tests {
 
     #[test]
     fn failures_with_an_obvious_cure_are_repaired() {
-        // jarvis.log 2026-11-03 23:05:30: "Hud Board doesn't appear to be running."
+        // jai.log 2026-11-03 23:05:30: "Hud Board doesn't appear to be running."
         assert_eq!(
             repair("close_application", &json!({"app_name": "hud board", "force": true}), "Hud Board doesn't appear to be running."),
             Some(Repair::Instead("hud_board", json!({"action": "close"})))

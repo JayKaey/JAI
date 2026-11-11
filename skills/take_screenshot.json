@@ -12,7 +12,7 @@
   ],
   "parameters": [],
   "runtime": "powershell",
-  "script": "Add-Type -AssemblyName System.Windows.Forms\nAdd-Type -AssemblyName System.Drawing\n$bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds\n$bmp = New-Object System.Drawing.Bitmap($bounds.Width, $bounds.Height)\n$graphics = [System.Drawing.Graphics]::FromImage($bmp)\n$graphics.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)\n$desktop = [Environment]::GetFolderPath('Desktop')\n$ts = Get-Date -Format 'yyyyMMdd_HHmmss'\n$file = Join-Path $desktop \"jarvis_screenshot_$ts.png\"\n$bmp.Save($file, [System.Drawing.Imaging.ImageFormat]::Png)\n$graphics.Dispose()\n$bmp.Dispose()\nWrite-Output \"Saved full-resolution desktop screenshot to $file\"",
+  "script": "Add-Type -AssemblyName System.Windows.Forms\nAdd-Type -AssemblyName System.Drawing\n$bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds\n$bmp = New-Object System.Drawing.Bitmap($bounds.Width, $bounds.Height)\n$graphics = [System.Drawing.Graphics]::FromImage($bmp)\n$graphics.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)\n$desktop = [Environment]::GetFolderPath('Desktop')\n$ts = Get-Date -Format 'yyyyMMdd_HHmmss'\n$file = Join-Path $desktop \"jai_screenshot_$ts.png\"\n$bmp.Save($file, [System.Drawing.Imaging.ImageFormat]::Png)\n$graphics.Dispose()\n$bmp.Dispose()\nWrite-Output \"Saved full-resolution desktop screenshot to $file\"",
   "usage_count": 0,
   "last_output": "",
   "updated_at": "2026-10-19 13:53:15"

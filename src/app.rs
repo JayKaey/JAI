@@ -2235,7 +2235,7 @@ mod tests {
         assert_eq!(long[long.len() - 1], 2.0, "the newest audio stays");
     }
 
-    /// Repro (jarvis.log, 2026-11-08 23:3x): "told me the world" was held, and "JAI show me the
+    /// Repro (jai.log, 2026-11-08 23:3x): "told me the world" was held, and "JAI show me the
     /// world" became "[STITCH] Joined: 'told me the world show me the world'".
     #[test]
     fn a_fresh_command_with_his_name_drops_a_held_fragment() {

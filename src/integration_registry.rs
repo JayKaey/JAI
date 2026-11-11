@@ -3,7 +3,7 @@
 //! location, the hivemind nodes and the language engine itself — and can verify them all at once.
 //!
 //! `diagnose_integrations` (the tool, the hub's "Test & Diagnose All Connections" button and
-//! `JARVIS.exe --diagnose`) runs every check concurrently and reports, per service, the exact
+//! `JAI.exe --diagnose`) runs every check concurrently and reports, per service, the exact
 //! HTTP status (or protocol result), timing and a preview of the data it read — so a broken
 //! integration fails loudly instead of JAI quietly answering from imagination.
 
@@ -316,7 +316,7 @@ async fn check_llm(tools: &ToolContext) -> ServiceReport {
             )
         }
         Ok(r) => ServiceReport::new(name, "error", format!("HTTP {}", r.status().as_u16()), format!("model '{}' not available", cfg.primary_model), Vec::new(), started),
-        Err(_) => ServiceReport::new(name, "off", "not running", format!("the engine at {base} is not running (start JARVIS.exe)"), Vec::new(), started),
+        Err(_) => ServiceReport::new(name, "off", "not running", format!("the engine at {base} is not running (start JAI.exe)"), Vec::new(), started),
     }
 }
 
@@ -367,7 +367,7 @@ pub async fn run_tool(tools: &ToolContext) -> Result<String, String> {
     Ok(text)
 }
 
-/// `JARVIS.exe --diagnose`: the same checks from the command line (read-only; no audio, no HUD).
+/// `JAI.exe --diagnose`: the same checks from the command line (read-only; no audio, no HUD).
 pub async fn cli(cfg: &crate::config::JaiConfig) -> std::process::ExitCode {
     let store = crate::config::ConfigStore::new(cfg.clone());
     let memory = match crate::memory::MemoryManager::open(&cfg.memory_db_path) {

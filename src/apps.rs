@@ -198,7 +198,7 @@ pub static APPS: &[AppSpec] = &[
 const PROTECTED: &[&str] = &[
     "system", "idle", "registry", "smss", "csrss", "wininit", "winlogon", "services", "lsass", "svchost",
     "dwm", "explorer", "fontdrvhost", "sihost", "taskhostw", "ctfmon", "conhost", "runtimebroker",
-    "jarvis", "ollama", "ollama app", "ollama_llama_server", "systemd", "init", "kthreadd", "xorg",
+    "jarvis", "jai", "ollama", "ollama app", "ollama_llama_server", "systemd", "init", "kthreadd", "xorg",
     "xwayland", "gnome-shell", "plasmashell", "kwin_x11", "kwin_wayland", "hyprland", "sway",
     "pipewire", "wireplumber", "pulseaudio", "dbus-daemon", "sshd", "login",
 ];

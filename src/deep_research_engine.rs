@@ -13,7 +13,7 @@
 //! 4. a telemetry stream every second for the workspace windows and a live multi-chapter
 //!    dossier, rewritten every minute and finished by the language model once the GPU is free.
 //!
-//! Every page, fact and counter is checkpointed in `jarvis_memory.db`; a mission interrupted by a
+//! Every page, fact and counter is checkpointed in `jai_memory.db`; a mission interrupted by a
 //! crash or shutdown resumes on the next start.
 
 use crate::features::{safe_name, spoken, str_arg, user_folder};
@@ -2138,7 +2138,7 @@ async fn run_mission(tools: ToolContext, mission_id: i64, control: Arc<AtomicU8>
     let final_status = if outcome == "stopped" { "stopped" } else { "completed" };
     m.db.set_status(mission_id, final_status);
     let md = m.write_dossier(summary.as_deref()).unwrap_or_default();
-    let dir = user_folder("Documents").join("Jarvis_Research");
+    let dir = user_folder("Documents").join("JAI_Research");
     let file = dir.join(format!("{} {} (deep research).md", chrono::Local::now().format("%Y-%m-%d"), safe_name(&row.topic)));
     let saved = std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(&file, &md)).is_ok();
     let (pages, facts, _, _) = m.db.counts(mission_id);
@@ -2240,7 +2240,7 @@ pub fn run_tool(tools: &ToolContext, args: &Value) -> Result<String, String> {
             let hours = if minutes >= 120 { format!("{:.1} hours", minutes as f32 / 60.0) } else { format!("{minutes} minutes") };
             Ok(spoken(
                 format!(
-                    "Deep research mission #{id} started: \"{topic}\" for {hours}{}. Crawling DuckDuckGo, Wikipedia, arXiv, Hacker News and GitHub; checkpointed in jarvis_memory.db; dossier saved to Documents\\Jarvis_Research when done.",
+                    "Deep research mission #{id} started: \"{topic}\" for {hours}{}. Crawling DuckDuckGo, Wikipedia, arXiv, Hacker News and GitHub; checkpointed in jai_memory.db; dossier saved to Documents\\JAI_Research when done.",
                     if focus.is_empty() { String::new() } else { format!(", focus: {}", focus.join(", ")) }
                 ),
                 format!("Deep research on {topic} is under way, Sir. I'll keep at it for {hours}{}.", if gaming { " — quietly, on the CPU, while you play" } else { "" }),

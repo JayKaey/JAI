@@ -1,6 +1,6 @@
 //! The background change notifier: lightweight `tokio` timers that refresh WebUntis, itslearning
 //! or a registered web feed every few minutes, compare the result with the last snapshot in
-//! `watch_state` (`jarvis_memory.db`), light up the service's node in the HUD's core on every
+//! `watch_state` (`jai_memory.db`), light up the service's node in the HUD's core on every
 //! check, and tell Sir proactively the moment a class is cancelled or moved, or something new is
 //! posted. The first check only records the baseline. Watchers are saved in the PIM settings and
 //! restart with JAI.

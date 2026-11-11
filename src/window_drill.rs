@@ -14,7 +14,7 @@
 //!
 //! It runs in a silent session with the real window (`--silent --show --window-drill --chat
 //! "…"`): the settings file is never written, nothing is heard. Every step is a `[DRILL]` line
-//! in jarvis.log, and the session ends when the drill is through.
+//! in jai.log, and the session ends when the drill is through.
 
 use eframe::egui;
 use std::sync::atomic::{AtomicBool, Ordering};

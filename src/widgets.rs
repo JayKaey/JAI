@@ -1,7 +1,7 @@
 //! Dynamic native widgets and extra native windows, created and changed by JAI at runtime.
 //!
 //! * [`DynamicWidgetSpec`]: a serde-described widget (gauge, chart, timer, table, note, checklist,
-//!   buttons, live command output …). Specs are persisted in `jarvis_memory.db` (`widgets`
+//!   buttons, live command output …). Specs are persisted in `jai_memory.db` (`widgets`
 //!   table), so custom widgets survive restarts; live values (telemetry samples, command output)
 //!   are refreshed in memory by the runtime task.
 //! * [`NativeWindowSpec`]: an additional real OS window (egui deferred viewport, drawn by

@@ -105,7 +105,7 @@ chacha20poly1305 = "0.10"
 
 [target.'cfg(windows)'.dependencies]
 # The prebuilt Windows ONNX Runtime always ships with DirectML; this only exposes the API so
-# Kokoro can optionally run on the GPU (`tts_gpu` in jarvis_config.json).
+# Kokoro can optionally run on the GPU (`tts_gpu` in jai_config.json).
 ort = { version = "=2.0.0-rc.15", features = ["directml"] }
 # The HUD's native window handle (show/hide from the tray, placement, quit message).
 raw-window-handle = "0.6"

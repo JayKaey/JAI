@@ -329,7 +329,7 @@ pub(crate) fn names_jarvis(app: &str) -> bool {
     let n = n.strip_prefix("the ").unwrap_or(n);
     matches!(
         n,
-        "jai" | "jay" | "jarvis" | "jarvisexe" | "jai app" | "yourself" | "you" | "your app" | "your application" | "your program"
+        "jai" | "jay" | "jarvis" | "jaiexe" | "jarvisexe" | "jai app" | "yourself" | "you" | "your app" | "your application" | "your program"
             | "your process" | "your window" | "assistant" | "jai assistant" | "dich" | "dich selbst" | "urself" | "ur self"
             | "your self" | "yourselfe" | "yo self" | "self"
     )
@@ -2147,7 +2147,7 @@ mod tests {
 
     #[test]
     fn closing_jarvis_means_quitting() {
-        for name in ["JAI", "J.A.I.", "JARVIS.exe", "yourself", "your app", "dich"] {
+        for name in ["JAI", "J.A.I.", "JAI.exe", "yourself", "your app", "dich"] {
             assert!(names_jarvis(name), "{name}");
         }
         for name in ["spotify", "discord", "jarvis-notes", "your browser"] {
@@ -2155,7 +2155,7 @@ mod tests {
         }
     }
 
-    /// Repro (jarvis.log, 2026-11-08): close_application "earth you", "up" and "off" reached
+    /// Repro (jai.log, 2026-11-08): close_application "earth you", "up" and "off" reached
     /// Windows ("Earth You isn't running, Sir."). Whoever made the call (the parser or the
     /// model), a filler is no program and his own view closes as his.
     #[test]

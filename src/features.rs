@@ -48,7 +48,7 @@ impl Features {
             crate::smart_alarm::AlarmClock::in_memory()
         });
         let dir = db.parent().filter(|p| !p.as_os_str().is_empty()).map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
-        Self::with(deals, finance, alarm, crate::file_janitor::Janitor::new(dir.join("jarvis_cleanup")), crate::workbench::Workbench::open(db))
+        Self::with(deals, finance, alarm, crate::file_janitor::Janitor::new(dir.join("jai_cleanup")), crate::workbench::Workbench::open(db))
     }
 
     pub fn in_memory() -> Self {
@@ -56,7 +56,7 @@ impl Features {
             crate::deal_sniper::DealSniper::in_memory(),
             crate::finance_tracker::Finance::in_memory(),
             crate::smart_alarm::AlarmClock::in_memory(),
-            crate::file_janitor::Janitor::new(std::env::temp_dir().join("jarvis_cleanup_test")),
+            crate::file_janitor::Janitor::new(std::env::temp_dir().join("jai_cleanup_test")),
             crate::workbench::Workbench::in_memory(),
         )
     }

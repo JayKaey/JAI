@@ -1,7 +1,7 @@
 //! Protocols — named multi-step routines, the way Tony Stark has his "House Party Protocol":
 //! "engage gaming protocol" opens Steam and Discord, sets the volume and keeps JAI quiet in
 //! full-screen games. Sir creates his own by voice or chat ("create a protocol called …");
-//! they are persisted in `jarvis_memory.db` and run through the normal tools — steps on
+//! they are persisted in `jai_memory.db` and run through the normal tools — steps on
 //! different things (each application, the music, JAI's own windows) side by side, steps on
 //! the same thing in their order (`plan`).
 //!

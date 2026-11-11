@@ -38,7 +38,7 @@ pub fn signal(s: Signal) {
 pub enum Restart {
     /// The running executable again.
     Same,
-    /// A new build in `target/release`; on Windows it is packaged as `JARVIS.exe` first when
+    /// A new build in `target/release`; on Windows it is packaged as `JAI.exe` first when
     /// that is what Sir started.
     Rebuilt { project: PathBuf },
 }
@@ -91,10 +91,10 @@ fn spawn(plan: &Restart) -> Result<(), String> {
             if !built.exists() {
                 return Err(format!("{} does not exist", built.display()));
             }
-            let packaged = project.join("JARVIS.exe");
-            let started_packaged = cfg!(windows) && exe.file_name().is_some_and(|n| n.eq_ignore_ascii_case("JARVIS.exe"));
+            let packaged = project.join("JAI.exe");
+            let started_packaged = cfg!(windows) && exe.file_name().is_some_and(|n| n.eq_ignore_ascii_case("JAI.exe"));
             if started_packaged {
-                // JARVIS.exe is locked while it runs: a hidden helper waits for this process to
+                // JAI.exe is locked while it runs: a hidden helper waits for this process to
                 // end, copies the new build over it (tools/package.ps1) and starts it.
                 package_after_exit(project, &packaged, &args)
             } else {

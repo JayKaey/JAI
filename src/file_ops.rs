@@ -7,7 +7,7 @@
 //!   searched live with ripgrep's parallel, .gitignore-aware walker (`ignore`).
 //! * `search_inside_files`: parallel grep (binary files skipped) with line numbers and context.
 //! * `read_text_file`, `create_or_overwrite_file`, `edit_file_surgical`, `undo_last_file_edit`:
-//!   every write first copies the old version to `.jarvis_backups/` (next to JARVIS.exe), so
+//!   every write first copies the old version to `.jai_backups/` (next to JAI.exe), so
 //!   nothing is ever lost and "undo that edit" always works. Snippets match across `\r\n` / `\n`
 //!   and trailing-whitespace or indentation differences.
 
@@ -35,7 +35,7 @@ const MAX_TEXT_BYTES: u64 = 8 * 1024 * 1024;
 const READ_LIMIT_LINES: usize = 400;
 const READ_LIMIT_CHARS: usize = 16_000;
 const DIFF_LINES: usize = 60;
-pub const BACKUP_DIR: &str = ".jarvis_backups";
+pub const BACKUP_DIR: &str = ".jai_backups";
 
 /// Folder names that are never walked (lower-case). Hidden (`.x`) and `$x` folders are skipped too.
 const JUNK_DIRS: &[&str] = &[
@@ -832,7 +832,7 @@ fn save_text(path: &Path, text: &str, crlf: bool, bom: bool) -> Result<(), Strin
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct BackupEntry {
     original: String,
-    /// File name inside `.jarvis_backups/`; `None` when the file did not exist (it was created).
+    /// File name inside `.jai_backups/`; `None` when the file did not exist (it was created).
     backup: Option<String>,
     op: String,
     at: String,
@@ -855,7 +855,7 @@ fn backup_name(path: &Path, tag: &str) -> String {
     format!("{}_{:08x}_{tag}_{name}.bak", chrono::Local::now().format("%Y%m%d_%H%M%S_%3f"), h.finish() as u32)
 }
 
-/// Copies the current version (if any) into `.jarvis_backups/` and records it for undo.
+/// Copies the current version (if any) into `.jai_backups/` and records it for undo.
 fn record_backup(path: &Path, op: &str) -> Result<Option<PathBuf>, String> {
     let _guard = BACKUP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let dir = backup_dir();
@@ -1127,7 +1127,7 @@ pub async fn edit_tool(args: &Value, focus_dir: Option<&Path>) -> Result<EditOut
 }
 
 /// `undo_last_file_edit`: puts the newest backup of a file back (a file JAI created is moved
-/// to the backups). The version being replaced is kept in `.jarvis_backups/` too.
+/// to the backups). The version being replaced is kept in `.jai_backups/` too.
 pub async fn undo_tool(args: &Value, focus_file: Option<PathBuf>) -> Result<EditOutcome, String> {
     let path = match str_arg(args, &["file_path", "path", "file", "name"]) {
         Some(raw) => match resolve_existing(raw, focus_file.as_deref().and_then(Path::parent)).await {

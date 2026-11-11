@@ -14,7 +14,7 @@
 //!   Windows lets the PC sleep.
 //! - `lock_locks_the_pc` (JARVIS_REAL_LOCK=1): the lock JAI runs, and the lock screen taking
 //!   the input desktop.
-//! - `a_test_session_gives_way_to_the_jarvis_sir_starts` (JARVIS_EXE=<JARVIS.exe>): a hidden
+//! - `a_test_session_gives_way_to_the_jarvis_sir_starts` (JARVIS_EXE=<JAI.exe>): a hidden
 //!   silent session is started and asked to give way as Sir's JAI asks it.
 //! - `his_words_for_the_route_reader` (JARVIS_HIS_WORDS=<file>): Sir's own lines from the
 //!   conversation log (read-only), one per line, for `where_these_sentences_go`.
@@ -293,7 +293,7 @@ fn lock_locks_the_pc() {
     }
 }
 
-/// What jarvis.log gained since `from` bytes.
+/// What jai.log gained since `from` bytes.
 fn log_since(log: &Path, from: u64) -> String {
     use std::io::{Read, Seek, SeekFrom};
     let mut text = String::new();
@@ -308,16 +308,16 @@ fn log_since(log: &Path, from: u64) -> String {
 }
 
 #[test]
-#[ignore = "starts a hidden silent JAI and asks it to give way: JARVIS_EXE=<path to JARVIS.exe>"]
+#[ignore = "starts a hidden silent JAI and asks it to give way: JARVIS_EXE=<path to JAI.exe>"]
 fn a_test_session_gives_way_to_the_jarvis_sir_starts() {
     let Ok(exe) = std::env::var("JARVIS_EXE") else {
-        return skipped("JARVIS_EXE=<path to JARVIS.exe>");
+        return skipped("JARVIS_EXE=<path to JAI.exe>");
     };
     #[cfg(windows)]
     {
         assert!(!crate::platform::test_session_running(), "a test session is running already");
         assert!(crate::platform::SingleInstance::acquire().is_some(), "a JAI is running: this check needs his place free");
-        let log = Path::new("jarvis.log");
+        let log = Path::new("jai.log");
         let from = std::fs::metadata(log).map(|m| m.len()).unwrap_or(0);
         let mut child = std::process::Command::new(&exe).args(["--silent", "--chat", "What time is it?", "--chat-delay", "120"]).spawn().expect("the test session starts");
         let started = Instant::now();
@@ -354,18 +354,39 @@ fn a_test_session_gives_way_to_the_jarvis_sir_starts() {
         eprintln!("PASS it gave way {:.1} s after it was asked ({status})", asked.elapsed().as_secs_f32());
         assert!(crate::platform::SingleInstance::acquire().is_some(), "its single-instance place is still held");
         assert!(!crate::platform::test_session_running(), "its test-session marker is still there");
-        assert!(log_since(log, from).contains("this test session gives way"), "jarvis.log has no give-way line");
+        assert!(log_since(log, from).contains("this test session gives way"), "jai.log has no give-way line");
         eprintln!("PASS the place is free for the JAI Sir started, and the log says why it went");
     }
 }
 
+/// 2026-11-11: a rename changed the name of the vault key's entry, the next start made a new
+/// key and could read no secret. This installation's vault, opened as the app opens it: every
+/// stored secret decrypts. Counts and slot names only; no secret is printed.
 #[test]
-#[ignore = "reads Sir's own lines from jarvis_memory.db (read-only) into a file: JARVIS_HIS_WORDS=<file>"]
+#[ignore = "opens this installation's vault with its real key: JARVIS_VAULT_DB=<path to the memory database>"]
+fn the_installations_vault_reads_every_secret() {
+    let Ok(db) = std::env::var("JARVIS_VAULT_DB") else {
+        return skipped("JARVIS_VAULT_DB=<path to the memory database>");
+    };
+    let slots: Vec<(String, String)> = {
+        let conn = rusqlite::Connection::open_with_flags(&db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).expect("the memory database");
+        let mut stmt = conn.prepare("SELECT service, name FROM vault_secrets").expect("the vault's table");
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).expect("its rows").flatten().collect();
+        rows
+    };
+    let vault = crate::vault::Vault::open(&db).expect("the vault opens");
+    let unread: Vec<&(String, String)> = slots.iter().filter(|(service, name)| vault.secret(service, name).is_none()).collect();
+    eprintln!("vault: {} of {} secrets read ({})", slots.len() - unread.len(), slots.len(), vault.key_store());
+    assert!(unread.is_empty(), "sealed with another key: {unread:?}");
+}
+
+#[test]
+#[ignore = "reads Sir's own lines from jai_memory.db (read-only) into a file: JARVIS_HIS_WORDS=<file>"]
 fn his_words_for_the_route_reader() {
     let Ok(out) = std::env::var("JARVIS_HIS_WORDS") else {
         return skipped("JARVIS_HIS_WORDS=<file>");
     };
-    let conn = rusqlite::Connection::open_with_flags("jarvis_memory.db", rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).expect("the memory database");
+    let conn = rusqlite::Connection::open_with_flags("jai_memory.db", rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).expect("the memory database");
     let mut roles = conn.prepare("SELECT role, COUNT(*) FROM conversation_logs GROUP BY role").expect("roles");
     let counts: Vec<(String, i64)> = roles.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).expect("roles").flatten().collect();
     eprintln!("conversation_logs: {counts:?}");

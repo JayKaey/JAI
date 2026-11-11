@@ -1,8 +1,8 @@
-//! The reference voice: a recording of the film's J.A.I. (`Voicy_J.A.I..mp3`, "Formally
+//! The reference voice: a recording of the film's J.A.R.V.I.S. (`Voicy_J.A.R.V.I.S..mp3`, "Formally
 //! known as Just A Rather Very Intelligent System…").
 //!
-//! Drop the clip at `assets/jarvis_voice_reference.mp3` (or keep `Voicy_J.A.I..mp3` /
-//! `jarvis voice.mp3` next to JARVIS.exe). This module finds it, decodes it (MP3 or WAV, pure
+//! Drop the clip at `assets/jarvis_voice_reference.mp3` (or keep `Voicy_J.A.R.V.I.S..mp3` /
+//! `jarvis voice.mp3` next to JAI.exe). This module finds it, decodes it (MP3 or WAV, pure
 //! Rust via `symphonia`) and measures the level side of a voice: speech RMS, crest factor and a
 //! coarse six-band balance. `fish_zero_shot_tts` builds the 128-band envelope transfer, the F0
 //! analysis and the level lock on top of it.
@@ -10,12 +10,12 @@
 use crate::jarvis_voice_dsp::{gain_to_db, Bq};
 use std::path::{Path, PathBuf};
 
-/// Where the clip is looked for, in order (relative to the folder JARVIS.exe runs from).
+/// Where the clip is looked for, in order (relative to the folder JAI.exe runs from).
 pub const REFERENCE_PATHS: [&str; 5] = [
     "assets/jarvis_voice_reference.mp3",
     "assets/jarvis_voice_reference.wav",
-    "Voicy_J.A.I..mp3",
-    "jai voice.mp3",
+    "Voicy_J.A.R.V.I.S..mp3",
+    "jarvis voice.mp3",
     "jarvis_voice_reference.mp3",
 ];
 /// Band centres of the spectral envelope (Hz).
@@ -184,7 +184,7 @@ mod tests {
     #[test]
     fn decodes_a_wav_and_knows_where_to_look() {
         assert_eq!(REFERENCE_PATHS[0], "assets/jarvis_voice_reference.mp3");
-        assert!(REFERENCE_PATHS.contains(&"Voicy_J.A.I..mp3"));
+        assert!(REFERENCE_PATHS.contains(&"Voicy_J.A.R.V.I.S..mp3"));
         // A 16-bit stereo WAV written by hand decodes to the mono average.
         let dir = std::env::temp_dir().join(format!("jarvis_ref_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();

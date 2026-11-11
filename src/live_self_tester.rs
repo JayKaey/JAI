@@ -1,5 +1,5 @@
 //! The live self-test: every capability exercised in the running app, for real, against a
-//! latency budget (`JARVIS.exe --live-test`, and `[ TEST ALL PROBES ]` in the Feature Lab).
+//! latency budget (`JAI.exe --live-test`, and `[ TEST ALL PROBES ]` in the Feature Lab).
 //!
 //! * **Pipelines**: the reflex router's latency over its corpus, the whole deterministic path,
 //!   the cortex (reads side by side, a read served from speculation, checked figures), the

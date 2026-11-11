@@ -56,7 +56,7 @@ const BEAM_SAMPLES: usize = SAMPLE_RATE * 6 / 5;
 /// The beam search's patience (whisper.cpp's -1 means its default 1.0; stated explicitly).
 const BEAM_PATIENCE: f32 = 1.0;
 /// German only with this much certainty when English is allowed too: Sir's accented English
-/// scores up to 0.87 as German, his real German 0.92 and more (jarvis.log, 2026-10-23/24).
+/// scores up to 0.87 as German, his real German 0.92 and more (jai.log, 2026-10-23/24).
 const GERMAN_CERTAINTY: f32 = 0.9;
 const MIN_SAMPLES: usize = SAMPLE_RATE * 13 / 10;
 /// Less voiced audio than this is breath, hiss or a click, never a word.
@@ -1013,13 +1013,13 @@ pub fn normalize_stt_transcript(text: &str) -> String {
             (r"(?i)\bclose (?:the )?(?:windows|window's) (?:you|u) (?:opened|open)\b", "close the windows you opened"),
             (r"(?i)\bsci[- ]?fi\b|\bscifi\b|\bsigh fi\b", "Sci-Fi"),
             (r"(?i)\bo led\b|\bo-led\b", "OLED"),
-            // "3D" heard as "three" / "3" before what the studio shows (jarvis.log 2026-11-09:
+            // "3D" heard as "three" / "3" before what the studio shows (jai.log 2026-11-09:
             // "Close the three model.", "Tommy is 3 model").
             (r"(?i)\b(?:three|3)[- ]?(?:d[- ])?(model|modell|studio|viewer|render|rendering|printer)\b", "3D $1"),
             (r"(?i)\bthree[- ]?d\b", "3D"),
             (r"(?i)\biron and (suit|armou?r)\b", "Iron Man $1"),
             (r"(?i)\beiffel?\s*tower\b|\beifel\s*tower\b|\bi\s?full tower\b|\beye full tower\b", "Eiffel Tower"),
-            // "Show" heard as "solve" before a thing one shows (jarvis.log 2026-11-09: "Can you
+            // "Show" heard as "solve" before a thing one shows (jai.log 2026-11-09: "Can you
             // solve the weather in Germany?" went to a web search of that very sentence).
             (r"(?i)\bsolve (me )?(the|my|a|all the) (weather|forecast|earth|globe|world|radar|satellites?|stats|schedule|calendar|timetable|images?|pictures?|photos?|news|mixer|storage|board|core|map)\b", "show $1$2 $3"),
             // (The noise bench, fan and chatter: "Save it to my desk call.")

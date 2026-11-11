@@ -1,4 +1,4 @@
-//! Persistent configuration (`jarvis_config.json`).
+//! Persistent configuration (`jai_config.json`).
 //!
 //! * Every field has a default (`#[serde(default)]`), so older or partial files load cleanly.
 //! * `config_version` drives one-time migrations of tuned parameters (VAD timings etc.)
@@ -13,9 +13,57 @@ use std::sync::{Arc, OnceLock, RwLock};
 use std::time::Duration;
 use tracing::{error, info, warn};
 
-pub const CONFIG_FILE: &str = "jarvis_config.json";
+pub const CONFIG_FILE: &str = "jai_config.json";
 /// Bump whenever tuned defaults change and old persisted values must be migrated.
-pub const CONFIG_VERSION: u32 = 24;
+pub const CONFIG_VERSION: u32 = 25;
+
+/// What his own files and folders next to the program were called while he was Jarvis, and
+/// what they are called now: (then, now).
+pub const RENAMED_FILES: &[(&str, &str)] = &[
+    ("jarvis_config.json", CONFIG_FILE),
+    ("jarvis_config.json.broken", "jai_config.json.broken"),
+    ("jarvis_memory.db", "jai_memory.db"),
+    ("jarvis_memory.db-wal", "jai_memory.db-wal"),
+    ("jarvis_memory.db-shm", "jai_memory.db-shm"),
+    ("jarvis.log", "jai.log"),
+    ("jarvis.log.1", "jai.log.1"),
+    ("jarvis-llm.log", "jai-llm.log"),
+    (".jarvis_backups", ".jai_backups"),
+    ("jarvis_cleanup", "jai_cleanup"),
+    ("jarvis_vault.key", "jai_vault.key"),
+];
+/// And in Sir's own folders: (the folder, then, now).
+pub const RENAMED_FOLDERS: &[(&str, &str, &str)] = &[
+    ("Documents", "JARVIS Models", "JAI Models"),
+    ("Documents", "Jarvis_Research", "JAI_Research"),
+    ("Documents", "Jarvis_Scans", "JAI_Scans"),
+    ("Documents", "Jarvis Exports", "JAI Exports"),
+    ("Videos", "Jarvis_Clips", "JAI_Clips"),
+    ("Downloads", "Jarvis_AirDrop", "JAI_AirDrop"),
+    ("Pictures", "Jarvis", "JAI"),
+];
+
+/// Gives every file and folder that still carries his old name its new one (2026-11-11: Sir
+/// wanted them renamed too), at the start, before anything is opened under the new names.
+/// Nothing is renamed over something that already has the new name, and what cannot be renamed
+/// (a folder open in another program) keeps its name. What happened, for the log.
+pub fn adopt_old_names(home: &Path, user_folder: impl Fn(&str) -> std::path::PathBuf) -> Vec<String> {
+    let files = RENAMED_FILES.iter().map(|(then, now)| (home.join(then), home.join(now)));
+    let folders = RENAMED_FOLDERS.iter().map(|(folder, then, now)| {
+        let base = user_folder(folder);
+        (base.join(then), base.join(now))
+    });
+    let mut done = Vec::new();
+    for (then, now) in files.chain(folders) {
+        if then.exists() && !now.exists() {
+            done.push(match std::fs::rename(&then, &now) {
+                Ok(()) => format!("{} is {} now", then.display(), now.display()),
+                Err(e) => format!("{} keeps its name: {e}", then.display()),
+            });
+        }
+    }
+    done
+}
 
 /// His name as the settings list it (`wake::WakeWordMatcher` knows how it is misheard and spelt;
 /// further names may be added here).
@@ -700,15 +748,15 @@ impl Default for JaiConfig {
             vram_guard: crate::vram_guard::VramGuardConfig::default(),
             live_layers: crate::live_layers::LiveLayerSettings::default(), // live layers (C1)
 
-            memory_db_path: env("JARVIS_MEMORY_DB", "jarvis_memory.db"),
+            memory_db_path: env("JARVIS_MEMORY_DB", "jai_memory.db"),
             skills_dir: "skills".to_string(),
-            log_file: "jarvis.log".to_string(),
+            log_file: "jai.log".to_string(),
         }
     }
 }
 
 impl JaiConfig {
-    /// Loads `jarvis_config.json` (or defaults), migrates old versions and clamps ranges.
+    /// Loads `jai_config.json` (or defaults), migrates old versions and clamps ranges.
     /// The (possibly migrated) result is written back so the file always reflects reality.
     pub fn load() -> Self {
         let path = Path::new(CONFIG_FILE);
@@ -930,6 +978,16 @@ impl JaiConfig {
                 }
             }
             self.interface.renamed_v24();
+        }
+        if self.config_version < 25 {
+            // v25 (2026-11-11): his files carry his name too (`adopt_old_names` renames them at
+            // the start). The stock paths follow; a path Sir chose himself stays.
+            if self.memory_db_path == "jarvis_memory.db" {
+                self.memory_db_path = defaults.memory_db_path.clone();
+            }
+            if self.log_file == "jarvis.log" {
+                self.log_file = defaults.log_file.clone();
+            }
         }
         if self.config_version < 22 && self.pre_roll_ms == 320 {
             // v22: 500 ms of audio before the onset, so "JAI" / "Move" keep their first
@@ -1224,6 +1282,49 @@ mod tests {
         let mut own: JaiConfig = serde_json::from_str(r#"{ "config_version": 20, "keep_alive": 45, "vram_guard": { "idle_secs": 600 } }"#).unwrap();
         own.migrate();
         assert_eq!((own.keep_alive, own.vram_guard.idle_secs), (45, 600));
+    }
+
+    /// 2026-11-11, "they should be renamed": his files and folders take his new name at the
+    /// start, once, with what is in them; the settings then point at them.
+    #[test]
+    fn files_and_folders_take_his_new_name_once() {
+        let root = std::env::temp_dir().join(format!("jai_adopt_{}", uuid::Uuid::new_v4()));
+        let (home, user) = (root.join("app"), root.join("user"));
+        std::fs::create_dir_all(home.join(".jarvis_backups")).unwrap();
+        std::fs::create_dir_all(user.join("Documents").join("Jarvis_Research")).unwrap();
+        std::fs::create_dir_all(user.join("Pictures").join("Jarvis")).unwrap();
+        for name in ["jarvis_config.json", "jarvis_memory.db", "jarvis_memory.db-wal", "jarvis.log"] {
+            std::fs::write(home.join(name), name).unwrap();
+        }
+        std::fs::write(user.join("Documents").join("Jarvis_Research").join("dossier.md"), "kept").unwrap();
+        // Something that already has the new name is never overwritten.
+        std::fs::write(home.join("jarvis-llm.log"), "then").unwrap();
+        std::fs::write(home.join("jai-llm.log"), "now").unwrap();
+        let folder = |name: &str| user.join(name);
+        let done = adopt_old_names(&home, &folder);
+        assert_eq!(done.len(), 7, "four files, the backups and two of his folders: {done:?}");
+        assert!(done.iter().all(|line| line.contains(" now")), "{done:?}");
+        for name in ["jai_config.json", "jai_memory.db", "jai_memory.db-wal", "jai.log", ".jai_backups"] {
+            assert!(home.join(name).exists(), "{name}");
+        }
+        for name in ["jarvis_config.json", "jarvis_memory.db", "jarvis_memory.db-wal", "jarvis.log", ".jarvis_backups"] {
+            assert!(!home.join(name).exists(), "{name}");
+        }
+        assert_eq!(std::fs::read_to_string(home.join("jai_config.json")).unwrap(), "jarvis_config.json", "what was in it came along");
+        assert_eq!(std::fs::read_to_string(user.join("Documents").join("JAI_Research").join("dossier.md")).unwrap(), "kept");
+        assert!(user.join("Pictures").join("JAI").is_dir() && !user.join("Documents").join("Jarvis_Research").exists());
+        assert_eq!(std::fs::read_to_string(home.join("jai-llm.log")).unwrap(), "now");
+        assert_eq!(std::fs::read_to_string(home.join("jarvis-llm.log")).unwrap(), "then");
+        assert!(adopt_old_names(&home, &folder).is_empty(), "a second start finds nothing to do");
+        let _ = std::fs::remove_dir_all(root);
+        // The settings follow the stock paths; a path Sir chose himself stays.
+        let mut cfg: JaiConfig = serde_json::from_str(r#"{ "config_version": 24, "memory_db_path": "jarvis_memory.db", "log_file": "jarvis.log" }"#).unwrap();
+        cfg.migrate();
+        assert_eq!((cfg.memory_db_path.as_str(), cfg.log_file.as_str(), cfg.config_version), ("jai_memory.db", "jai.log", CONFIG_VERSION));
+        let mut own: JaiConfig = serde_json::from_str(r#"{ "config_version": 24, "memory_db_path": "D:/data/mine.db" }"#).unwrap();
+        own.migrate();
+        assert_eq!(own.memory_db_path, "D:/data/mine.db");
+        assert_eq!(CONFIG_FILE, "jai_config.json");
     }
 
     /// v24 (2026-11-11): Sir renamed him J.A.I. ("Jay"). The settings of 2026-11-09, as they

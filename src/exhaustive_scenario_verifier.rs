@@ -1,4 +1,4 @@
-//! The exhaustive scenario verifier (`JARVIS.exe --exhaustive [runs]`): every command family
+//! The exhaustive scenario verifier (`JAI.exe --exhaustive [runs]`): every command family
 //! in five passes, the whole interface inspected as geometry, JAI's voice on five kinds of
 //! sentence, the privacy lock, the monitors and the two audio sinks, and every button of the
 //! Feature Lab pressed five times — all of it in the running app, silently, with the HUD drawn
@@ -299,7 +299,7 @@ pub const CASES: &[Case] = &[
     c("arrange", 2, "Mach die Erde größer.", "arrange_jarvis_window", r#"{"target": "erde", "action": "resize", "size": "bigger"}"#),
     c("arrange", 3, "uh centre the earth", "arrange_jarvis_window", r#"{"target": "earth", "action": "move", "position": "centre"}"#),
     c("arrange", 3, "full screen the globe", "arrange_jarvis_window", r#"{"target": "globe", "action": "fullscreen"}"#),
-    // (jarvis.log 2026-11-08: fillers after a close were asked of Windows as programs.)
+    // (jai.log 2026-11-08: fillers after a close were asked of Windows as programs.)
     c("panels", 1, "JAI, close the Earth, you.", "hud_board", r#"{"action": "close", "target": "earth"}"#),
     c("panels", 3, "close the world please", "hud_board", r#"{"action": "close", "target": "earth"}"#),
     c("blocks", 1, "JAI close up.", "close_application", r#"{"app_name": "it", "own_only": true}"#),
@@ -2301,7 +2301,7 @@ mod tests {
     #[ignore = "reads, and on request changes, the real memory database"]
     fn saved_widgets() {
         // (Read straight from the tables: opening the widget engine would start a session.)
-        let conn = rusqlite::Connection::open("jarvis_memory.db").expect("the memory database");
+        let conn = rusqlite::Connection::open("jai_memory.db").expect("the memory database");
         let rows = |sql: &str| -> Vec<String> {
             let Ok(mut stmt) = conn.prepare(sql) else { return vec!["(no such table yet)".to_string()] };
             let found = stmt.query_map([], |r| r.get::<_, String>(0)).map(|rows| rows.flatten().collect()).unwrap_or_default();

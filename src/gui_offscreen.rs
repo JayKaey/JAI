@@ -1,7 +1,7 @@
 //! The HUD without a window: the real `HudApp` drawn into a private `egui::Context` that no
 //! display ever sees.
 //!
-//! `JARVIS.exe --live-test --headless` and `--exhaustive` run the whole interface this way. The
+//! `JAI.exe --live-test --headless` and `--exhaustive` run the whole interface this way. The
 //! same `HudApp::frame` the window runs is stepped here, at any resolution, with a simulated
 //! pointer and keyboard; what it paints comes back as shapes (`visual_ui_verifier::Frame`)
 //! instead of pixels on a monitor. Tools that open windows work as they do with the real HUD

@@ -1,6 +1,6 @@
 //! Notification-area (tray) icon: shows that JAI is running in the background and offers
 //! Open HUD, a microphone toggle and Quit. Runs its own Win32 message loop on a dedicated thread,
-//! which also receives the "show your HUD" request of a second `JARVIS.exe`.
+//! which also receives the "show your HUD" request of a second `JAI.exe`.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrayAction {
@@ -56,9 +56,9 @@ mod win {
 
     const WM_TRAY: u32 = WM_APP + 1;
     const CLASS: PCWSTR = w!("JaiTrayWindow");
-    /// Posted by a second `JARVIS.exe` so the running instance shows its HUD.
+    /// Posted by a second `JAI.exe` so the running instance shows its HUD.
     const SHOW_HUD_MESSAGE: PCWSTR = w!("JARVIS_SHOW_HUD");
-    /// Posted by the `JARVIS.exe` Sir started while a test session holds the place: it ends.
+    /// Posted by the `JAI.exe` Sir started while a test session holds the place: it ends.
     const GIVE_WAY_MESSAGE: PCWSTR = w!("JARVIS_GIVE_WAY");
     const ICON_ID: u32 = 1;
     const CMD_OPEN: usize = 1;

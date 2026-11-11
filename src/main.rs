@@ -238,7 +238,7 @@ struct Cli {
     no_mic: bool,
     /// `--silent`: a scripted `--chat` session nobody sees, hears or finds in the history. The
     /// voice is at 0, the HUD is drawn offscreen, the microphone is deaf, the settings file and
-    /// the conversation log stay as they are; every answer is written to jarvis.log (`[CLI]`),
+    /// the conversation log stay as they are; every answer is written to jai.log (`[CLI]`),
     /// and JAI quits after the last request.
     silent: bool,
     /// `--show` with `--silent`: the session runs in the real HUD window (what a monitor
@@ -367,7 +367,7 @@ impl Cli {
 
 const HELP: &str = "J.A.I. — local voice assistant
 
-USAGE: JARVIS.exe [OPTIONS]
+USAGE: JAI.exe [OPTIONS]
 
   (no options)        start JAI with his HUD window (closing it keeps him in the tray)
   --hidden            start in the tray only (click the tray icon for the HUD)
@@ -387,11 +387,11 @@ USAGE: JARVIS.exe [OPTIONS]
   --no-mic            start with the microphone muted (unmute in the HUD)
   --silent            with --chat: a session nobody sees or hears (voice at 0, the HUD drawn
                       offscreen, settings file and conversation log untouched); every answer
-                      goes to jarvis.log as [CLI] lines, then JAI quits; with --show the
+                      goes to jai.log as [CLI] lines, then JAI quits; with --show the
                       session runs in the real HUD window instead of offscreen
   --window-drill      with --silent --show: click the SCREENS buttons and press F11 in the real
                       window (posted messages, your mouse untouched), check where Windows put it
-                      on every monitor ([DRILL] lines in jarvis.log), then quit
+                      on every monitor ([DRILL] lines in jai.log), then quit
   --monitor <n>       with --silent --show or --live-test: the test window opens on monitor n
                       (1 = the primary), this session only; e.g. --monitor 2 while you play
   --diagnose         test every integration (WebUntis, calendar, e-mail, WhatsApp …) and exit
@@ -507,6 +507,9 @@ fn main() -> ExitCode {
         }
     };
     ensure_working_directory();
+    // His files and folders from before he was renamed take their new names, before the log and
+    // the settings are opened under them.
+    let adopted = config::adopt_old_names(Path::new("."), features::user_folder);
 
     // Starting JAI again only brings the running instance's HUD to the front. After a restart
     // the previous instance may still be finishing its shutdown, so wait for it. A test session
@@ -532,7 +535,10 @@ fn main() -> ExitCode {
         }
     };
 
-    init_logging("jarvis.log");
+    init_logging("jai.log");
+    for renamed in &adopted {
+        info!("[NAMES] {renamed}");
+    }
     whisper_rs::install_whisper_tracing_trampoline();
 
     // A self-test (or a silent scripted session) leaves the settings file as it is from the
@@ -775,7 +781,7 @@ async fn start(cli: &Cli, cfg: JaiConfig) -> Started {
         }
     }
     if !models::report(&cfg) {
-        warn!("[MODELS] Some models are missing; JAI installs what it can (or run `JARVIS.exe --download-models`).");
+        warn!("[MODELS] Some models are missing; JAI installs what it can (or run `JAI.exe --download-models`).");
     }
     if cli.selftest {
         return Started::Done(selftest::run(&cfg, cli.speak, cli.bench, !cli.no_llm).await);

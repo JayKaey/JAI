@@ -1755,7 +1755,7 @@ fn export_dir() -> PathBuf {
     if demo_mode() {
         std::env::temp_dir().join("jarvis_3d_export_demo")
     } else {
-        crate::features::user_folder("Documents").join("JARVIS Models")
+        crate::features::user_folder("Documents").join("JAI Models")
     }
 }
 
@@ -1834,7 +1834,7 @@ async fn export(args: &Value) -> Result<String, String> {
     let (where_, said) = if demo_mode() {
         ("the temp folder (test run)".to_string(), "the temp folder".to_string())
     } else if dir == export_dir() {
-        ("Documents\\JARVIS Models".to_string(), "JARVIS Models".to_string())
+        ("Documents\\JAI Models".to_string(), "JAI Models".to_string())
     } else {
         let last = out.path.parent().and_then(Path::file_name).map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| folder.clone());
         (folder.clone(), last)

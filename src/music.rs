@@ -5,7 +5,7 @@
 //!   "Jay's Rock", "jayrock" or "chase rock" all find the playlist "Jays Rock".
 //! * The library is what Sir already has: the Spotify library Sonora (his Spotify client) keeps in
 //!   `%LOCALAPPDATA%\sonora\cache.sqlite`, aliases Sir taught JAI (`music_library` table in
-//!   `jarvis_memory.db`), and local playlists / audio files from the file index.
+//!   `jai_memory.db`), and local playlists / audio files from the file index.
 //! * Sonora receives local paths and provider links directly through its supported single-
 //!   instance command-line handoff. Spotify uses its own URI handler. The selected player's
 //!   Windows media session verifies playback; opening a search never counts as playing.

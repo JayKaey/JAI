@@ -2,7 +2,7 @@
 //! school timetable (WebUntis), LMS (itslearning), custom web feeds, background watchers and the
 //! study folder.
 //!
-//! Every service is one row of `service_configs` (`jarvis_memory.db`): its settings as JSON plus
+//! Every service is one row of `service_configs` (`jai_memory.db`): its settings as JSON plus
 //! the last connection status shown in the Integrations hub. App tokens and passwords never go
 //! there; they are sealed in the vault (`vault.rs`).
 

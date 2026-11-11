@@ -60,7 +60,7 @@ pub const DEFAULT_F0_FLATTEN: f32 = 0.35;
 const GATE_DB: f32 = -45.0;
 const RELATIVE_GATE_DB: f32 = 35.0;
 /// The clip's own words (the closed-loop test synthesises them).
-pub const REFERENCE_TRANSCRIPT: &str = "Formally known as Just A Rather Very Intelligent System, JAI, it was Tony Stark's organic user interface software platform.";
+pub const REFERENCE_TRANSCRIPT: &str = "Formally known as Just A Rather Very Intelligent System, JARVIS, it was Tony Stark's organic user interface software platform.";
 /// A sentence the transfer never saw (generalisation check).
 pub const HELD_OUT_SENTENCE: &str = "Good evening, Sir. The research agent has finished, and the report is ready whenever you are.";
 /// Where the clip's analysis is cached.

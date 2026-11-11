@@ -6,7 +6,7 @@
 //! The capture is a plain `SRCCOPY` of the composed desktop: never `CAPTUREBLT` (which makes
 //! Windows hide and redraw the hardware mouse cursor on every frame — a visible cursor flicker)
 //! and never the cursor icon itself. Saving writes the frames
-//! to `Videos\Jarvis_Clips\<time>\` as an MP4 (ffmpeg fed through an image pipe) or, without
+//! to `Videos\JAI_Clips\<time>\` as an MP4 (ffmpeg fed through an image pipe) or, without
 //! ffmpeg, as a Motion-JPEG AVI, checks that a real video came out, and adds the transcript.
 
 use crate::config::ConfigStore;
@@ -140,7 +140,7 @@ impl Replay {
         };
         if frames.len() < 2 {
             return Err(if !settings.replay_enabled {
-                "Instant Replay is switched off (features.replay_enabled in jarvis_config.json).".into()
+                "Instant Replay is switched off (features.replay_enabled in jai_config.json).".into()
             } else if self.is_running() {
                 "The replay buffer is still filling, Sir; give it a few seconds.".into()
             } else {
@@ -149,7 +149,7 @@ impl Replay {
         }
         // The real capture rate (a busy machine drops frames): the video plays in real time.
         let fps = if covered > 0.5 { ((frames.len() - 1) as f32 / covered).clamp(1.0, 30.0) } else { settings.replay_fps.clamp(1.0, 5.0) };
-        let folder = user_folder("Videos").join("Jarvis_Clips").join(crate::features::stamp());
+        let folder = user_folder("Videos").join("JAI_Clips").join(crate::features::stamp());
         std::fs::create_dir_all(&folder).map_err(|e| format!("{} could not be created: {e}", folder.display()))?;
         let mut notes = Vec::new();
         let mut video: Option<PathBuf> = None;
@@ -522,7 +522,7 @@ pub fn mjpeg_avi(frames: &[Vec<u8>], fps: f32) -> Option<Vec<u8>> {
 pub fn tool_definition() -> Value {
     json!({"type": "function", "function": {
         "name": "save_instant_replay",
-        "description": "Instant Replay: save the last minute (or `seconds`) of the screen as a real video (MP4, or AVI without ffmpeg) plus the conversation's transcript in Videos\\Jarvis_Clips. Use for 'clip that', 'clip the last 30 seconds', 'save that', 'instant replay'.",
+        "description": "Instant Replay: save the last minute (or `seconds`) of the screen as a real video (MP4, or AVI without ffmpeg) plus the conversation's transcript in Videos\\JAI_Clips. Use for 'clip that', 'clip the last 30 seconds', 'save that', 'instant replay'.",
         "parameters": {"type": "object", "properties": {
             "seconds": {"type": "integer", "description": "How far back (default: the whole buffer, 60 s)"}
         }}

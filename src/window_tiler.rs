@@ -251,7 +251,7 @@ mod tests {
         let windows = vec![
             window(1, "chrome.exe", [100, 100, 1200, 800]),
             Candidate { minimised: true, ..window(2, "Discord.exe", [200, 200, 900, 700]) },
-            Candidate { own: true, ..window(3, "JARVIS.exe", [0, 0, 2560, 1440]) },
+            Candidate { own: true, ..window(3, "JAI.exe", [0, 0, 2560, 1440]) },
             window(4, "Code.exe", [2600, 50, 1500, 900]),
             // Maximised on the main monitor: it hangs 8 px over every edge.
             Candidate { maximised: true, ..window(5, "Spotify.exe", [-8, -8, 2576, 1456]) },

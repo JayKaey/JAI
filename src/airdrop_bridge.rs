@@ -1,7 +1,7 @@
 //! Stark Air-Drop: content between the PC and Sir's phone through the mobile satellite. "Send this
 //! to my phone" beams the clipboard, the highlighted text, a screenshot or a file (the phone gets a
 //! download card); from the phone, text and links open on the PC, files land in
-//! Downloads\Jarvis_AirDrop, and a photo can be read (OCR) straight into the clipboard.
+//! Downloads\JAI_AirDrop, and a photo can be read (OCR) straight into the clipboard.
 
 use crate::features::{show_window, spoken, str_arg, user_folder};
 use crate::tools::ToolContext;
@@ -169,7 +169,7 @@ pub async fn receive(tools: &ToolContext, body: &Value) -> Value {
         Err(e) => return json!({ "ok": false, "error": format!("bad base64: {e}") }),
     };
     let name = crate::features::safe_name(body["name"].as_str().unwrap_or("from_phone.jpg"));
-    let dir = user_folder("Downloads").join("Jarvis_AirDrop");
+    let dir = user_folder("Downloads").join("JAI_AirDrop");
     if let Err(e) = std::fs::create_dir_all(&dir) {
         return json!({ "ok": false, "error": e.to_string() });
     }

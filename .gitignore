@@ -11,13 +11,15 @@
 /*.dll
 *.pdb
 
-# --- Large downloads (JARVIS.exe --download-models and tools/package.ps1 fetch them) ----
+# --- Large downloads (JAI.exe --download-models and tools/package.ps1 fetch them) ----
 /models/
 /runtime/
 /bin/
 
 # --- Personal and machine-specific data: never commit ------------------------------------
 # Settings: they hold the phone pairing key and the addresses of the accounts.
+/jai_config.json
+/jai_config.json.*
 /jarvis_config.json
 /jarvis_config.json.*
 # The memory database: conversations, memories, calendar, sealed account tokens.
@@ -27,7 +29,7 @@
 *.sqlite
 *.sqlite3
 # Logs and test reports (they name the public IP, the location and account results).
-# jarvis.log starts afresh past 10 MB; the old one is kept as jarvis.log.1.
+# jai.log starts afresh past 10 MB; the old one is kept as jai.log.1.
 *.log
 *.log.*
 /live_selftest_report.json

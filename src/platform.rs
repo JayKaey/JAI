@@ -21,7 +21,7 @@ pub fn raise_thread_priority(audio: bool) {
 
 /// While it lives the whole process runs above normal priority. whisper.cpp starts its own
 /// worker threads at normal priority whatever the thread that called it has, so with a compile
-/// or a game on every core a half-second decode took one to three seconds (jarvis.log,
+/// or a game on every core a half-second decode took one to three seconds (jai.log,
 /// 2026-11-09, rustc at 99 %). Above normal, all of them are served first for the half second
 /// a decode lasts. A process started below normal on purpose (a test run beside Sir's game)
 /// stays where it was put.
@@ -167,7 +167,7 @@ pub fn alert(text: &str) {
     }
 }
 
-/// Held for the lifetime of the app; a second `JARVIS.exe` sees it and only brings up the HUD.
+/// Held for the lifetime of the app; a second `JAI.exe` sees it and only brings up the HUD.
 pub struct SingleInstance {
     #[cfg(windows)]
     handle: windows::Win32::Foundation::HANDLE,

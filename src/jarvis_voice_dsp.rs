@@ -1,5 +1,5 @@
 //! The film voice's mastering chain, matched to the reference clip of the film's J.A.I.
-//! (`Voicy_J.A.I..mp3`): an ultra-clean, dry, intimate close-mic studio voice — calm
+//! (`Voicy_J.A.R.V.I.S..mp3`): an ultra-clean, dry, intimate close-mic studio voice — calm
 //! baritone, crisp non-rhotic RP diction, no chorus and no echo. Every synthesised clause runs
 //! through these stages at 48 kHz (f32) before it reaches the speaker.
 //!

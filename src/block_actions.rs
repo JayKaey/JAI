@@ -41,8 +41,8 @@ impl BlockAction {
             BlockAction::Copy => "The block's text goes to the clipboard.",
             BlockAction::Pin => "A pinned block stays through \"close the windows\" and a new report, and keeps its place when the others are tidied.",
             BlockAction::Maximize => "Fills the board; again to put it back.",
-            BlockAction::ExportMarkdown => "Saves the block as a Markdown file in Documents\\Jarvis Exports.",
-            BlockAction::ExportJson => "Saves the block as a JSON file in Documents\\Jarvis Exports.",
+            BlockAction::ExportMarkdown => "Saves the block as a Markdown file in Documents\\JAI Exports.",
+            BlockAction::ExportJson => "Saves the block as a JSON file in Documents\\JAI Exports.",
             BlockAction::Close => "Closes the block.",
         }
     }
@@ -102,7 +102,7 @@ pub fn set_export_dir(dir: Option<PathBuf>) {
 }
 
 pub fn export_dir() -> PathBuf {
-    EXPORT_DIR.lock().unwrap_or_else(|e| e.into_inner()).clone().unwrap_or_else(|| crate::features::user_folder("Documents").join("Jarvis Exports"))
+    EXPORT_DIR.lock().unwrap_or_else(|e| e.into_inner()).clone().unwrap_or_else(|| crate::features::user_folder("Documents").join("JAI Exports"))
 }
 
 /// Writes the block to `export_dir()` as `<title>_<time>.md` / `.json`; the file's path.
