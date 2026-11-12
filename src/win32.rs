@@ -243,6 +243,54 @@ pub fn own_window(title: &str) -> Option<isize> {
     search.found.map(|h| h.0)
 }
 
+/// Makes one of our own windows an overlay: over every other window, letting clicks through
+/// to what is under it, never taking the focus and absent from Alt+Tab.
+pub fn make_overlay(hwnd: isize) -> Result<(), String> {
+    use windows::Win32::Foundation::COLORREF;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetWindowLongPtrW, SetLayeredWindowAttributes, SetWindowLongPtrW, GWL_EXSTYLE, HWND_TOPMOST, LWA_ALPHA, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+        WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
+    };
+    // SAFETY: style changes and a z-order change on a window of our own.
+    unsafe {
+        let style = GetWindowLongPtrW(HWND(hwnd), GWL_EXSTYLE);
+        let wanted = style | (WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW).0 as isize;
+        if wanted != style {
+            SetWindowLongPtrW(HWND(hwnd), GWL_EXSTYLE, wanted);
+            // (A layered window shows nothing until it is told how: fully, here.)
+            SetLayeredWindowAttributes(HWND(hwnd), COLORREF(0), 255, LWA_ALPHA).map_err(|e| e.message().to_string())?;
+        }
+        SetWindowPos(HWND(hwnd), HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW).map_err(|e| e.message().to_string())
+    }
+}
+
+/// Our own top-level windows, each in a few words (title, place, shown or hidden): for the log
+/// when one that should be there is not.
+pub fn own_windows() -> Vec<String> {
+    use windows::Win32::UI::WindowsAndMessaging::IsWindowVisible;
+    unsafe extern "system" fn each(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        // SAFETY: lparam is the &mut Vec passed below and outlives EnumWindows; the rest are
+        // plain queries on a handle from the enumeration.
+        unsafe {
+            let found = &mut *(lparam.0 as *mut Vec<String>);
+            let mut pid = 0u32;
+            GetWindowThreadProcessId(hwnd, Some(&mut pid));
+            if pid == std::process::id() {
+                let mut r = RECT::default();
+                let _ = GetWindowRect(hwnd, &mut r);
+                found.push(format!("'{}' at {},{} {}x{} {}", window_text(hwnd), r.left, r.top, r.right - r.left, r.bottom - r.top, if IsWindowVisible(hwnd).as_bool() { "shown" } else { "hidden" }));
+            }
+        }
+        TRUE
+    }
+    let mut found: Vec<String> = Vec::new();
+    // SAFETY: the callback only touches `found` through the provided pointer.
+    unsafe {
+        let _ = EnumWindows(Some(each), LPARAM(&mut found as *mut Vec<String> as isize));
+    }
+    found
+}
+
 /// Hands window `hwnd` (one of ours) to the desktop as its live background on the monitor
 /// `[left, top, right, bottom]`: it becomes a child of the layer between the wallpaper and the
 /// icons (the `WorkerW` that `Progman` creates when asked with message 0x052C), so the icons

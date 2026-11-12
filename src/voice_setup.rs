@@ -252,7 +252,9 @@ pub fn show(ctx: &egui::Context, mic: f32) {
     let ink = Color32::from_rgb(0xE8, 0xF2, 0xFC);
     let muted = Color32::from_rgb(0x8E, 0xA4, 0xB8);
     let closed = crate::gui::block(ctx, ID, "Voice set-up // learn my voice", [620.0, 330.0], |ui| {
-        let rect = ui.available_rect_before_wrap();
+        // (Its body is painted, not laid out: it claims its room, or the block, which takes the
+        // size of what it shows, shrinks to nothing round it. Seen live 2026-11-12.)
+        let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width().max(580.0), 262.0), egui::Sense::hover());
         let p = ui.painter_at(rect);
         // How far it is: six marks.
         for k in 0..LINES.len() {

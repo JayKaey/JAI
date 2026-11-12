@@ -89,40 +89,44 @@ pub fn lines() -> Vec<(String, f32)> {
     lines.iter().map(|l| (l.text.clone(), 1.0 - ((l.at.elapsed().as_secs_f32() - (LINE_STAYS.as_secs_f32() - 0.5)) / 0.5).clamp(0.0, 1.0))).collect()
 }
 
-/// Keeps the subtitles going while they are on (asked every HUD frame): starts the listener,
-/// and shows the bar while there is a line.
-pub fn show(ctx: &egui::Context, app: &crate::app::Jai, rt: &tokio::runtime::Handle) {
-    if crate::hud_feel::subtitles().is_none() {
-        return;
-    }
-    let (shown, monitor) = if crate::platform::in_test_session() {
+/// What the bar shows right now and on which monitor (it starts the listener while the
+/// subtitles are on); None while there is nothing to show.
+fn bar_now(app: &crate::app::Jai, rt: &tokio::runtime::Handle) -> Option<(Vec<(String, f32)>, [i32; 4])> {
+    crate::hud_feel::subtitles()?;
+    if crate::platform::in_test_session() {
         // A scripted session neither listens to the PC nor writes over the screen Sir works on:
         // asked to (`JAI_DEMO=subtitles`), it shows two lines of its own on the monitor it names
         // (`JAI_BACKDROP_MONITOR=2`).
-        let Some(monitor) = demo_monitor() else { return };
-        (vec![("So the first thing we need is a plan for the weekend.".to_string(), 0.7), ("And then we look at the weather, because nobody wants to stand in the rain.".to_string(), 1.0)], monitor)
-    } else {
-        if !RUNNING.swap(true, Ordering::AcqRel) {
-            let app = app.clone();
-            rt.spawn(async move {
-                listen(app).await;
-                RUNNING.store(false, Ordering::Release);
-            });
-        }
-        let shown = lines();
-        if shown.is_empty() {
-            return;
-        }
-        let Some(monitor) = bar_monitor() else { return };
-        (shown, monitor)
+        let monitor = demo_monitor()?;
+        return Some((vec![("So the first thing we need is a plan for the weekend.".to_string(), 0.7), ("And then we look at the weather, because nobody wants to stand in the rain.".to_string(), 1.0)], monitor));
+    }
+    if !RUNNING.swap(true, Ordering::AcqRel) {
+        let app = app.clone();
+        rt.spawn(async move {
+            listen(app).await;
+            RUNNING.store(false, Ordering::Release);
+        });
+    }
+    let shown = lines();
+    if shown.is_empty() {
+        return None;
+    }
+    Some((shown, bar_monitor()?))
+}
+
+/// Keeps the subtitles going while they are on (asked every HUD frame) and shows the bar while
+/// there is a line.
+pub fn show(ctx: &egui::Context, app: &crate::app::Jai, rt: &tokio::runtime::Handle) {
+    let Some((shown, monitor)) = bar_now(app, rt) else {
+        BAR_OPEN.store(false, Ordering::Release);
+        return;
     };
     let [l, t, r, b] = monitor;
     let ppp = ctx.native_pixels_per_point().unwrap_or(1.0).max(0.5);
-    let (width, height) = (((r - l) as f32 / ppp * 0.62).min(1500.0), 104.0);
-    let at = pos2(((l + r) as f32 / 2.0) / ppp - width / 2.0, b as f32 / ppp - height - 70.0);
-    let _ = t;
+    let (width, height) = (((r - l) as f32 / ppp * 0.62).min(1500.0), BAR_HEIGHT);
+    let at = pos2(((l + r) as f32 / 2.0) / ppp - width / 2.0, b as f32 / ppp - height - BAR_LIFT);
     let builder = ViewportBuilder::default()
-        .with_title("J.A.I. // subtitles")
+        .with_title(TITLE)
         .with_decorations(false)
         .with_transparent(true)
         .with_always_on_top()
@@ -132,18 +136,76 @@ pub fn show(ctx: &egui::Context, app: &crate::app::Jai, rt: &tokio::runtime::Han
         .with_active(false)
         .with_position(at)
         .with_inner_size(vec2(width, height));
-    ctx.show_viewport_immediate(ViewportId::from_hash_of("jai_subtitles"), builder, |ctx, _class| {
-        paint_bar(ctx, &shown);
+    // (Said once per showing, so the log tells where the bar stands and that its window drew.)
+    if !BAR_OPEN.swap(true, Ordering::AcqRel) {
+        BAR_DRAWN.store(false, Ordering::Release);
+        *lock(&BAR_SINCE) = Some(Instant::now());
+        tracing::info!("[SUBTITLES] The bar opens at {:.0},{:.0} ({:.0}x{:.0}) on the monitor at {l},{t}", at.x * ppp, at.y * ppp, width * ppp, height * ppp);
+    }
+    ctx.show_viewport_immediate(ViewportId::from_hash_of("jai_subtitles"), builder, |ctx, class| {
+        let embedded = class == egui::ViewportClass::Embedded;
+        if !BAR_DRAWN.swap(true, Ordering::AcqRel) {
+            tracing::info!("[SUBTITLES] The bar draws ({:.0}x{:.0}, {})", ctx.screen_rect().width(), ctx.screen_rect().height(), if embedded { "inside the HUD: it got no window of its own" } else { "in its own window" });
+        }
+        if embedded {
+            paint_embedded(ctx, &shown);
+        } else {
+            paint_bar(ctx, &shown);
+        }
         ctx.request_repaint_after(Duration::from_millis(100));
     });
+    // Once its window stands: over everything, clicks pass through it, and it never takes the
+    // focus. (Set by hand as well: what a window is asked to be at its creation is not always
+    // what it gets.)
+    let stands = lock(&BAR_SINCE).is_some_and(|at| at.elapsed() > Duration::from_millis(400));
+    if stands && lock(&BAR_SINCE).take().is_some() {
+        dress();
+    }
     ctx.request_repaint_after(Duration::from_millis(200));
 }
+
+/// The bar's window: its title (it is found by it), its height and how far it stands above the
+/// screen's bottom edge (points).
+const TITLE: &str = "J.A.I. // subtitles";
+const BAR_HEIGHT: f32 = 104.0;
+const BAR_LIFT: f32 = 70.0;
+
+/// The bar is on show (its window was asked for in the last frame), it has drawn, and when it
+/// opened (until its window was dressed).
+static BAR_OPEN: AtomicBool = AtomicBool::new(false);
+static BAR_DRAWN: AtomicBool = AtomicBool::new(false);
+static BAR_SINCE: Mutex<Option<Instant>> = Mutex::new(None);
+
+#[cfg(windows)]
+fn dress() {
+    crate::win32::run_detached(|| match crate::win32::own_window(TITLE) {
+        Some(hwnd) => match crate::win32::make_overlay(hwnd) {
+            Ok(()) => tracing::info!("[SUBTITLES] The bar's window stands over everything and lets clicks through"),
+            Err(why) => tracing::warn!("[SUBTITLES] The bar's window could not be made an overlay: {why}"),
+        },
+        None => tracing::warn!("[SUBTITLES] The bar has no window of its own; my windows: {}", crate::win32::own_windows().join("; ")),
+    });
+}
+
+#[cfg(not(windows))]
+fn dress() {}
 
 /// Paints the subtitles into the bar's own window: the newest line at the bottom, the one
 /// before it above and fainter, each on a dark band so it reads over any picture.
 pub fn paint_bar(ctx: &egui::Context, shown: &[(String, f32)]) {
-    let rect = ctx.screen_rect();
-    let p = ctx.layer_painter(egui::LayerId::background());
+    paint_lines(&ctx.layer_painter(egui::LayerId::background()), ctx.screen_rect(), shown);
+}
+
+/// The same inside the HUD's own window, for when the bar cannot have a window of its own: at
+/// the bottom of the screen the HUD is on, over everything it shows.
+fn paint_embedded(ctx: &egui::Context, shown: &[(String, f32)]) {
+    let home = ctx.screen_rect();
+    let size = vec2((home.width() * 0.62).min(1500.0), BAR_HEIGHT);
+    let rect = egui::Rect::from_min_size(pos2(home.center().x - size.x / 2.0, home.bottom() - size.y - BAR_LIFT), size);
+    paint_lines(&ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("hud_subtitles"))), rect, shown);
+}
+
+fn paint_lines(p: &egui::Painter, rect: egui::Rect, shown: &[(String, f32)]) {
     let font = FontId::new(25.0, FontFamily::Name("display".into()));
     let mut y = rect.bottom() - 8.0;
     for (k, (text, strength)) in shown.iter().rev().enumerate() {

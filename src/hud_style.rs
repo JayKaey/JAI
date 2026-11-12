@@ -94,13 +94,16 @@ pub fn surface(p: &Painter, r: Rect, fill: Color32, alpha: f32) {
     mesh.colored_vertex(r.left_bottom(), bottom);
     mesh.add_triangle(0, 1, 2);
     mesh.add_triangle(0, 2, 3);
-    // The sheen: light caught in the upper left corner of the glass.
-    let sheen = white(0.03 * alpha);
-    mesh.colored_vertex(r.left_top(), sheen);
-    mesh.colored_vertex(r.left_top() + vec2((r.width() * 0.55).min(340.0), 0.0), Color32::TRANSPARENT);
-    mesh.colored_vertex(r.left_top() + vec2(0.0, (r.height() * 0.8).min(240.0)), Color32::TRANSPARENT);
-    mesh.add_triangle(4, 5, 6);
+    // (The surface is a mesh of its own, four corners and nothing else: the verifier reads a
+    // plain quad as the fill it is, and measures a block's unfolding by it.)
     p.add(egui::Shape::mesh(mesh));
+    // The sheen: light caught in the upper left corner of the glass.
+    let mut light = egui::Mesh::default();
+    light.colored_vertex(r.left_top(), white(0.03 * alpha));
+    light.colored_vertex(r.left_top() + vec2((r.width() * 0.55).min(340.0), 0.0), Color32::TRANSPARENT);
+    light.colored_vertex(r.left_top() + vec2(0.0, (r.height() * 0.8).min(240.0)), Color32::TRANSPARENT);
+    light.add_triangle(0, 1, 2);
+    p.add(egui::Shape::mesh(light));
     // The hairline of light along the top edge (inside the border).
     if r.height() > 6.0 && r.width() > 6.0 {
         p.rect_filled(Rect::from_min_max(pos2(r.left() + 1.0, r.top() + 1.0), pos2(r.right() - 1.0, r.top() + 2.0)), Rounding::ZERO, white(0.055 * alpha));

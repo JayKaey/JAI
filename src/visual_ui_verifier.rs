@@ -187,6 +187,15 @@ fn collect(frame: &mut Frame, clip: Rect, shape: &epaint::Shape) {
             if mesh.texture_id != egui::TextureId::default() || mesh.vertices.is_empty() {
                 return;
             }
+            // A plain quad (a gradient laid over a rect: a block's surface) is a fill like any
+            // rect's, and covers what lies under it as much as its faintest corner does.
+            if let [a, b, c, d] = mesh.vertices.as_slice() {
+                let r = Rect::from_min_max(a.pos, c.pos);
+                if r.is_positive() && b.pos == r.right_top() && d.pos == r.left_bottom() {
+                    let order = frame.texts.len() + frame.fills.len();
+                    frame.fills.push(FillItem { rect: r, clip, cover: mesh.vertices.iter().map(|v| v.color.a()).min().unwrap_or(0), order });
+                }
+            }
             let area = mesh.calc_bounds();
             let mut seen: HashSet<[u8; 4]> = HashSet::new();
             for v in &mesh.vertices {
