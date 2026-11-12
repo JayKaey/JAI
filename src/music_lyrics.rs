@@ -17,6 +17,8 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 pub struct Track {
     pub title: String,
     pub artist: String,
+    /// The program that plays it, as Windows' media session names it ("sonora.exe").
+    pub app: String,
     pub playing: bool,
     /// Where in the song it was (seconds) when it was last looked up, and when that was.
     position: Option<f32>,
@@ -64,8 +66,7 @@ fn wanted() -> bool {
 /// A music player is making sound right now (looked up by `follow`).
 static PLAYING: AtomicBool = AtomicBool::new(false);
 
-/// Music is playing: a music player is making sound right now (or a browser, while Windows'
-/// media session says it plays a track).
+/// Music is playing: a music player is making sound right now.
 pub fn playing() -> bool {
     PLAYING.load(Ordering::Acquire)
 }
@@ -75,7 +76,6 @@ const PLAYERS: [&str; 22] = [
     "sonora", "spotify", "musicbee", "foobar2000", "aimp", "winamp", "itunes", "applemusic", "apple music", "tidal", "deezer", "amazon music", "cider", "qobuz", "plexamp", "audacious", "clementine",
     "strawberry", "youtube music", "music.ui", "mediamonkey", "vlc",
 ];
-const BROWSERS: [&str; 7] = ["firefox", "chrome", "msedge", "opera", "brave", "vivaldi", "zen"];
 
 fn one_of(process: &str, names: &[&str]) -> bool {
     let p = process.to_lowercase();
@@ -83,18 +83,26 @@ fn one_of(process: &str, names: &[&str]) -> bool {
     names.iter().any(|n| p == *n || p.starts_with(n))
 }
 
-/// Which of the programs making sound plays the music: a music player before anything, a
-/// browser only while Windows' media session says a track is playing (a video is one too).
-pub fn music_app(audible: &[String], track_playing: bool) -> Option<&str> {
-    audible.iter().map(String::as_str).find(|a| one_of(a, &PLAYERS)).or_else(|| audible.iter().map(String::as_str).find(|a| track_playing && one_of(a, &BROWSERS)))
+/// Which of the programs making sound plays the music: a music player, and nothing else. (A
+/// browser never: what it plays is as often a video as a song, and nothing tells the two
+/// apart. Seen live 2026-11-12: the emblem moved to a video's talk, and the video's title
+/// went to the lyrics service.)
+pub fn music_app(audible: &[String]) -> Option<&str> {
+    audible.iter().map(String::as_str).find(|a| is_music_player(a))
+}
+
+/// A program that plays music (Sonora, Spotify, …), by its process or by the name Windows'
+/// media session gives it.
+pub fn is_music_player(app: &str) -> bool {
+    one_of(app, &PLAYERS)
 }
 
 /// Where the music is: the output device of the program that plays it (on a PC with a mixer
 /// in front of the speakers, its own channel, with nothing else in it), else nowhere.
-async fn music_source(track_playing: bool) -> crate::pc_audio::Source {
+async fn music_source() -> crate::pc_audio::Source {
     use crate::pc_audio::Source;
     let audible: Vec<String> = crate::audio_mixer::audible_apps().await.into_iter().map(|(name, _)| name).collect();
-    let Some(app) = music_app(&audible, track_playing).map(str::to_string) else { return Source::Nothing };
+    let Some(app) = music_app(&audible).map(str::to_string) else { return Source::Nothing };
     match crate::audio_mixer::app_output_device(&app).await {
         Some(device) => Source::Device(device),
         None => Source::Default,
@@ -108,7 +116,7 @@ pub fn track() -> Option<Track> {
 
 /// "Back in Black — AC/DC" for the line under the emblem.
 pub fn title_line() -> Option<String> {
-    let t = track()?;
+    let t = track().filter(|t| is_music_player(&t.app))?;
     Some(if t.artist.trim().is_empty() { t.title } else { format!("{} \u{2014} {}", t.title, t.artist) })
 }
 
@@ -198,12 +206,12 @@ async fn follow() {
         let now = tokio::time::timeout(Duration::from_millis(800), crate::music::now_playing()).await.ok().flatten();
         let track = now.filter(|n| !n.title.trim().is_empty()).map(|n| {
             let known = lock(&TRACK).clone().filter(|t| t.title == n.title && t.artist == n.artist);
-            Track { title: n.title, artist: n.artist, playing: n.playing, position: n.position, looked: Instant::now(), since: known.map_or_else(Instant::now, |t| t.since) }
+            Track { title: n.title, artist: n.artist, app: n.app, playing: n.playing, position: n.position, looked: Instant::now(), since: known.map_or_else(Instant::now, |t| t.since) }
         });
         *lock(&TRACK) = track.clone();
         // Where the music is right now: the emblem listens there, and nowhere while none plays.
         if WANT_VISUALS.load(Ordering::Acquire) {
-            let source = music_source(track.as_ref().is_some_and(|t| t.playing)).await;
+            let source = music_source().await;
             // (The silence between two songs, or a rest in one, is not the end of the music: it
             // is over once nothing has played for a few seconds.)
             if source != crate::pc_audio::Source::Nothing {
@@ -215,7 +223,9 @@ async fn follow() {
             }
         }
         if WANT_LYRICS.load(Ordering::Acquire) {
-            match track.filter(|t| t.playing) {
+            // (Only a music player's songs are looked up: a browser's "track" is as often a
+            // video, and its title is nobody's business.)
+            match track.filter(|t| t.playing && is_music_player(&t.app)) {
                 Some(t) => {
                     let known = lock(&LYRICS).as_ref().is_some_and(|(title, artist, _)| *title == t.title && *artist == t.artist);
                     if !known {
@@ -248,7 +258,8 @@ async fn follow() {
 
 /// Whether lyrics were looked for and none were found for the playing track (he says so once).
 pub fn none_found() -> bool {
-    lock(&LYRICS).as_ref().is_some_and(|(_, _, lines)| lines.is_none()) && track().is_some()
+    let Some(t) = track().filter(|t| is_music_player(&t.app)) else { return false };
+    lock(&LYRICS).as_ref().is_some_and(|(title, artist, lines)| lines.is_none() && *title == t.title && *artist == t.artist)
 }
 
 #[cfg(test)]
@@ -293,7 +304,7 @@ mod tests {
         let (audible, track, source) = rt.block_on(async {
             let audible = crate::audio_mixer::audible_apps().await;
             let track = tokio::time::timeout(Duration::from_millis(1500), crate::music::now_playing()).await.ok().flatten();
-            let source = music_source(track.as_ref().is_some_and(|t| t.playing)).await;
+            let source = music_source().await;
             (audible, track, source)
         });
         println!("making sound: {:?}", audible.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>());
@@ -308,7 +319,7 @@ mod tests {
     fn the_emblem_hears_the_music() {
         use crate::pc_audio::{self, Use};
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
-        let source = rt.block_on(music_source(true));
+        let source = rt.block_on(music_source());
         println!("listening to {source:?}");
         pc_audio::listen_to(Use::Spectrum, source);
         let (mut loudest, mut beats, mut seen) = (0.0f32, 0.0f32, [0.0f32; pc_audio::BANDS]);
@@ -330,13 +341,14 @@ mod tests {
     #[test]
     fn the_music_is_what_a_player_plays_not_everything_that_sounds() {
         let apps = |names: &[&str]| names.iter().map(|n| n.to_string()).collect::<Vec<_>>();
-        assert_eq!(music_app(&apps(&["Discord", "sonora", "firefox"]), false), Some("sonora"));
-        assert_eq!(music_app(&apps(&["Spotify.exe"]), false), Some("Spotify.exe"));
-        // A browser counts only while the media session says a track plays; a call or a game never.
-        assert_eq!(music_app(&apps(&["firefox", "Discord"]), false), None);
-        assert_eq!(music_app(&apps(&["firefox", "Discord"]), true), Some("firefox"));
-        assert_eq!(music_app(&apps(&["Discord", "JAI", "javaw"]), true), None);
-        assert_eq!(music_app(&[], true), None);
+        assert_eq!(music_app(&apps(&["Discord", "sonora", "firefox"])), Some("sonora"));
+        assert_eq!(music_app(&apps(&["Spotify.exe"])), Some("Spotify.exe"));
+        // A browser never counts (a video is no song), nor a call or a game.
+        assert_eq!(music_app(&apps(&["firefox", "Discord"])), None);
+        assert_eq!(music_app(&apps(&["Discord", "JAI", "javaw"])), None);
+        assert_eq!(music_app(&[]), None);
+        // The media session's names for them: lyrics are looked up for a player's songs only.
+        assert!(is_music_player("sonora.exe") && is_music_player("Spotify.exe") && !is_music_player("firefox.exe") && !is_music_player("308046B0AF4A39CB"));
     }
 
     #[test]
@@ -357,7 +369,7 @@ mod tests {
     #[test]
     fn a_track_keeps_time_by_the_players_clock_or_its_own() {
         let now = Instant::now();
-        let with_timeline = Track { title: "x".into(), artist: "y".into(), playing: true, position: Some(60.0), looked: now - Duration::from_secs(2), since: now - Duration::from_secs(500) };
+        let with_timeline = Track { title: "x".into(), artist: "y".into(), app: "sonora.exe".into(), playing: true, position: Some(60.0), looked: now - Duration::from_secs(2), since: now - Duration::from_secs(500) };
         assert!((with_timeline.position() - 62.0).abs() < 0.2);
         let paused = Track { playing: false, ..with_timeline.clone() };
         assert!((paused.position() - 60.0).abs() < 0.01, "a paused song stands still");
