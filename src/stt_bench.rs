@@ -366,3 +366,47 @@ fn bench_command_clips() {
         }
     }
 }
+
+/// The voice lock on the verifier's two stand-in voices (the real speaker model, on the clips
+/// the recogniser's bench uses): a print made of six sentences of one voice passes that voice's
+/// other sentences and turns every sentence of the other voice away. Prints the likenesses.
+///
+/// `cargo test --release --bin jai stand_in_voices -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn stand_in_voices_are_told_apart() {
+    use crate::exhaustive_scenario_verifier as verifier;
+    let models = models_dir();
+    let mut cfg = JaiConfig::default();
+    cfg.kokoro_model_path = models.join("kokoro-v1.0.onnx").to_string_lossy().into_owned();
+    cfg.kokoro_voices_archive_path = models.join("voices-v1.0.bin").to_string_lossy().into_owned();
+    cfg.espeak_path = Some(espeak_dir());
+    cfg.tts_gpu = false;
+    crate::speaker_id::set_models_dir(&models);
+    assert!(crate::speaker_id::available(), "models/speaker holds {}", crate::speaker_id::MODEL);
+    let audio = verifier::spoken_audio(&cfg, "").expect("the stand-ins say the commands");
+    let t = Instant::now();
+    let prints: Vec<Vec<Vec<f32>>> = audio.iter().map(|voice| voice.iter().map(|clip| crate::speaker_id::print_of(clip).expect("a print of the clip")).collect()).collect();
+    let clips: usize = prints.iter().map(Vec::len).sum();
+    println!("{clips} prints in {} ms ({} ms each, {} numbers)", t.elapsed().as_millis(), t.elapsed().as_millis() as usize / clips.max(1), prints[0][0].len());
+    for (who, other) in [(0usize, 1usize), (1, 0)] {
+        let print = crate::speaker_id::enrol(&prints[who][..6]).expect("six clips make a print");
+        let his: Vec<f32> = prints[who][6..].iter().map(|c| print.is_his(c, 2500).1).collect();
+        let strangers: Vec<f32> = prints[other].iter().map(|c| print.is_his(c, 2500).1).collect();
+        let (low, high) = (his.iter().copied().fold(f32::INFINITY, f32::min), strangers.iter().copied().fold(f32::NEG_INFINITY, f32::max));
+        let mean = |v: &[f32]| v.iter().sum::<f32>() / v.len().max(1) as f32;
+        println!(
+            "{}: his from {:.2}; his own other sentences {:.2} … (mean {:.2}); the other voice … {:.2} (mean {:.2})",
+            verifier::STAND_INS[who].0,
+            print.threshold,
+            low,
+            mean(&his),
+            high,
+            mean(&strangers)
+        );
+        let passed = his.iter().filter(|s| **s >= print.threshold).count();
+        let turned = strangers.iter().filter(|s| **s < print.threshold).count();
+        assert!(passed * 10 >= his.len() * 9, "{} of {} of his own sentences pass", passed, his.len());
+        assert_eq!(turned, strangers.len(), "every sentence of the other voice is turned away");
+    }
+}

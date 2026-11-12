@@ -3480,8 +3480,9 @@ struct HudApp {
     calm: f32,
     /// How far night mode has dimmed the HUD (0 day … 1 night).
     night: f32,
-    /// The start-up sequence while it plays: since when, and whether its sound has played.
-    boot: Option<(Instant, bool)>,
+    /// The start-up sequence while it plays: since when, whether its sound has played, and
+    /// which one it is.
+    boot: Option<(Instant, bool, crate::startup_sequence::Kind)>,
     /// How far the idle screen has come up (0 in use … 1 idle).
     idle: f32,
     /// The utterance Sir is in: since when, and the loudest his voice was (dBFS).
@@ -3524,6 +3525,18 @@ fn paint_spectrum_ring(painter: &egui::Painter, frame: &crate::rose_emblem_rende
 /// `a` → `b` by `t` (opaque colours).
 fn mix_colour(a: Color32, b: Color32, t: f32) -> Color32 {
     mix(a, b, t)
+}
+
+/// Whether a scripted session was asked to show `what` (`JAI_DEMO=boot-long,idle,night`), so
+/// that it can be looked at there. Never outside a scripted session.
+fn demo(what: &str) -> bool {
+    crate::platform::in_test_session() && std::env::var("JAI_DEMO").is_ok_and(|v| v.split(',').any(|d| d.trim() == what))
+}
+
+/// How long the HUD has been drawing (seconds).
+fn hud_age() -> f32 {
+    static BORN: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+    BORN.get_or_init(Instant::now).elapsed().as_secs_f32()
 }
 
 /// How dark night mode makes the HUD (the share of black laid over it).
@@ -4195,25 +4208,35 @@ impl HudApp {
     /// The start-up sequence (on the first frames of a start that has one) and the idle screen
     /// (once nothing was touched or said for five minutes), both over the whole home screen.
     fn presence(&mut self, ctx: &egui::Context, m: &HudModel, iface: &InterfaceSettings, dt: f32) {
+        // A scripted session shows what it is asked to (`JAI_DEMO=boot-long,idle,night`: the
+        // sequence at its start, the idle screen from its 20th to its 32nd second, night mode
+        // from its 34th to its 46th), so each can be looked at; otherwise it shows none of them.
+        let age = hud_age();
+        let demo = |what: &str| !windows_still(ctx) && demo(what);
         let still = windows_still(ctx) || crate::platform::in_test_session();
         let home = home_screen(ctx);
         let frame = self.emblem.frame(home);
-        if self.frames <= 2 && self.boot.is_none() && iface.startup_sequence && !still && crate::startup_sequence::current().is_some() {
-            self.boot = Some((Instant::now(), false));
+        if self.frames <= 2 && self.boot.is_none() {
+            use crate::startup_sequence::Kind;
+            let shown = [("boot-quick", Kind::Quick), ("boot-short", Kind::Short), ("boot-long", Kind::Long)].into_iter().find(|(name, _)| demo(name)).map(|(_, kind)| kind);
+            let planned = crate::startup_sequence::current().filter(|_| iface.startup_sequence && !still).map(|plan| plan.kind);
+            if let Some(kind) = shown.or(planned) {
+                self.boot = Some((Instant::now(), false, kind));
+            }
         }
-        if let (Some((started, sounded)), Some(plan)) = (self.boot, crate::startup_sequence::current()) {
+        if let Some((started, sounded, kind)) = self.boot {
             // Any key or click skips it.
             let skipped = ctx.input(|i| i.pointer.any_click() || !i.keys_down.is_empty());
-            if !sounded && started.elapsed() >= plan.kind.ignition() {
-                self.boot = Some((started, true));
-                crate::tts::play_cue(if plan.kind == crate::startup_sequence::Kind::Long { crate::jai_voice_dsp::Earcon::Spotlight } else { crate::jai_voice_dsp::Earcon::Materialize });
+            if !sounded && started.elapsed() >= kind.ignition() {
+                self.boot = Some((started, true, kind));
+                crate::tts::play_cue(if kind == crate::startup_sequence::Kind::Long { crate::jai_voice_dsp::Earcon::Spotlight } else { crate::jai_voice_dsp::Earcon::Materialize });
             }
-            if skipped || !crate::startup_sequence::paint(ctx, home, frame.centre, frame.radius, plan.kind, started.elapsed()) {
+            if skipped || !crate::startup_sequence::paint(ctx, home, frame.centre, frame.radius, kind, started.elapsed()) {
                 self.boot = None;
                 self.last_activity = Instant::now();
             }
         }
-        let idle = self.boot.is_none() && !still && crate::idle_screen::is_idle(iface.idle_screen, self.last_activity.elapsed(), &m.state);
+        let idle = self.boot.is_none() && ((!still && crate::idle_screen::is_idle(iface.idle_screen, self.last_activity.elapsed(), &m.state)) || (demo("idle") && (20.0..32.0).contains(&age)));
         if idle {
             crate::idle_screen::refresh(&self.app, &self.rt);
         }
@@ -7767,7 +7790,8 @@ impl HudApp {
             mark("overlays");
             // Night mode: the HUD dims (by the clock or because Sir said so).
             crate::hud_feel::set_night_by_clock(iface.night_mode);
-            let night = crate::hud_feel::night_active() && !windows_still(ctx);
+            // (A scripted session shows the dimming from its 34th to its 46th second on request.)
+            let night = (crate::hud_feel::night_active() || (demo("night") && (34.0..46.0).contains(&hud_age()))) && !windows_still(ctx);
             self.night = crate::hud_style::motion::approach(self.night, if night { 1.0 } else { 0.0 }, dt, Duration::from_millis(900));
             if self.night > 0.0 {
                 let dim = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("hud_night")));

@@ -75,7 +75,10 @@ pub fn show(ctx: &egui::Context, on: bool, hud: isize, spanning: bool, state: &s
     let mut guard = lock(&BACKDROP);
     if guard.is_none() {
         let monitors: Vec<([i32; 4], bool)> = displays();
-        let Some(monitor) = (!spanning).then(|| target(&monitors, monitor_of(hud))).flatten() else {
+        // (A scripted session sends it to the monitor it names, `JAI_BACKDROP_MONITOR=2`: its
+        // own test screen, never the one Sir works on.)
+        let named = crate::platform::in_test_session().then(|| std::env::var("JAI_BACKDROP_MONITOR").ok()).flatten().and_then(|n| n.trim().parse::<usize>().ok()).and_then(|n| monitors.get(n.saturating_sub(1)).map(|(rect, _)| *rect));
+        let Some(monitor) = named.or_else(|| (!spanning).then(|| target(&monitors, monitor_of(hud))).flatten()) else {
             return Some(Refused(if spanning { "My board is across every monitor: there is no desktop left for me to stand behind.".into() } else { "I need a second monitor for that: this one holds my board.".into() }));
         };
         tracing::info!("[DESKTOP] The live background opens on the monitor at {},{} ({}×{})", monitor[0], monitor[1], monitor[2] - monitor[0], monitor[3] - monitor[1]);
