@@ -1482,6 +1482,16 @@ const HUD_FACES: [(&str, &[u8], f32); 3] = [
     ("share-tech-mono", include_bytes!("../assets/fonts/ShareTechMono-Regular.ttf"), 1.04),
 ];
 
+/// One of the HUD's own faces as a file ("display": Rajdhani SemiBold, "mono": Share Tech
+/// Mono), for the phone page.
+pub(crate) fn hud_face(name: &str) -> Option<&'static [u8]> {
+    match name {
+        "display" => Some(HUD_FACES[0].1),
+        "mono" => Some(HUD_FACES[2].1),
+        _ => None,
+    }
+}
+
 /// Titles and labels in Rajdhani, numbers in Share Tech Mono (both compiled in), long text in
 /// Segoe UI (+ Semibold for emphasis, Segoe UI Symbol for icons) with Cascadia Mono and egui's
 /// bundled fonts as fallbacks.

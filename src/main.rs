@@ -92,6 +92,7 @@ mod hud_notify;
 mod idle_screen;
 mod live_subtitles;
 mod music_lyrics;
+mod object_sizes;
 mod pc_audio;
 mod desktop_backdrop;
 mod startup_sequence;

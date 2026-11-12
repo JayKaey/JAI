@@ -725,6 +725,19 @@ pub fn publish_obstacles(orb: Option<Rect>, board: Vec<Rect>) {
     *lock(&OBSTACLES) = (orb, board);
 }
 
+/// The blocks on the board right now: (id, title), the one opened first first.
+pub fn open_blocks() -> Vec<(String, String)> {
+    with(|s| {
+        let mut out: Vec<(String, String)> = Vec::new();
+        for (id, title, _) in s.last_blocks.iter().chain(s.blocks.iter()) {
+            if !s.closing.contains_key(id) && !out.iter().any(|(known, _)| known == id) {
+                out.push((id.clone(), title.clone()));
+            }
+        }
+        out
+    })
+}
+
 /// The block on the board under `at` (the last frame's layout), if any.
 pub fn block_under(at: Pos2) -> Option<String> {
     with(|s| s.last_blocks.iter().chain(s.blocks.iter()).rev().find(|(id, _, rect)| rect.contains(at) && !s.closing.contains_key(id)).map(|(id, _, _)| id.clone()))

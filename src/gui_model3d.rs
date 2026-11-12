@@ -226,6 +226,22 @@ fn turn(snap: &Snapshot, v: &View) -> math::M4 {
     math::mul(&math::scaling([snap.view.scale; 3]), &tilted)
 }
 
+/// The stage under a model whose footprint has the radius `footprint` on the floor at height
+/// `y`: (two rings round it, twenty-four ticks on the outer one), as edges in the view's world.
+fn stage(y: f32, footprint: f32) -> (Vec<[[f32; 3]; 2]>, Vec<[[f32; 3]; 2]>) {
+    let base = footprint.max(0.2);
+    let on = |r: f32, a: f32| [r * a.cos(), y, r * a.sin()];
+    let mut rings = Vec::new();
+    for r in [base * 1.35, base * 1.8] {
+        for k in 0..72 {
+            let (a, b) = (k as f32 / 72.0 * TAU, (k + 1) as f32 / 72.0 * TAU);
+            rings.push([on(r, a), on(r, b)]);
+        }
+    }
+    let ticks = (0..24).map(|k| k as f32 / 24.0 * TAU).map(|a| [on(base * 1.8, a), on(base * 1.9, a)]).collect();
+    (rings, ticks)
+}
+
 fn view_area(ui: &mut Ui, snap: &Snapshot, rect: Rect, rt: &Handle) {
     let accent = crate::hud_board::active_colour();
     let response = ui.allocate_rect(rect, Sense::click_and_drag());
@@ -276,6 +292,14 @@ fn view_area(ui: &mut Ui, snap: &Snapshot, rect: Rect, rt: &Handle) {
     let animated = moving || snap.phase == Phase::Working || snap.view.look == Look::Hologram || snap.scene.as_ref().is_some_and(|s| s.planet);
     if animated {
         super::next_animation_frame(ui.ctx());
+    }
+    // The stage it stands on: two rings on the floor under it, the outer one ticked.
+    if let Some(scene) = snap.scene.as_ref().filter(|s| !s.planet) {
+        let size = scene.bounds.size();
+        let footprint = (size[0].hypot(size[2]) * 0.5 / scene.bounds.radius().max(1e-9)) * snap.view.scale * 0.8;
+        let (rings, ticks) = stage(scene.ground_y() * snap.view.scale, footprint);
+        draw_edges(&painter, rect, &viewproj, &rings, accent.gamma_multiply(0.34), 1.0);
+        draw_edges(&painter, rect, &viewproj, &ticks, accent.gamma_multiply(0.6), 1.0);
     }
     // The model.
     if let Some(scene) = &snap.scene {

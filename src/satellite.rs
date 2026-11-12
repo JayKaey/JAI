@@ -291,7 +291,7 @@ async fn read_request<S: AsyncRead + Unpin>(stream: &mut S, token: Option<&str>)
         Some((_, value)) => value.parse::<usize>().map_err(|_| "invalid Content-Length")?,
         None => 0,
     };
-    let upload = target.starts_with("/api/airdrop") || target.starts_with("/api/scan");
+    let upload = target.starts_with("/api/airdrop") || target.starts_with("/api/scan") || target.starts_with("/api/voice");
     if length > if upload { MAX_UPLOAD } else { MAX_BODY } {
         return Err("body too large".into());
     }
@@ -307,7 +307,7 @@ async fn read_request<S: AsyncRead + Unpin>(stream: &mut S, token: Option<&str>)
     let mut request = Request { method, path, query, headers, body: Vec::new() };
     if let Some(token) = token {
         let given = request.header("X-JAI-Key").or_else(|| request.param("token")).or_else(|| request.param("k")).unwrap_or("");
-        let public_get = request.method == "GET" && length == 0 && (request.path == "/" || (given.is_empty() && matches!(request.path.as_str(), "/satellite" | "/satellite/")));
+        let public_get = request.method == "GET" && length == 0 && (request.path == "/" || request.path.starts_with(STATIC) || (given.is_empty() && matches!(request.path.as_str(), "/satellite" | "/satellite/")));
         if !public_get && !same_token(given, token) { return Err("pairing key required".into()); }
     }
     // Authenticate before allocating or receiving a potentially large photo/file upload.
@@ -340,6 +340,38 @@ fn same_token(a: &str, b: &str) -> bool {
 }
 
 /// Sir typed (or spoke) on the phone: one turn, the reply comes back as text.
+/// Where the page's own files are served from (fonts, icon): no pairing key needed.
+const STATIC: &str = "/satellite/static/";
+/// The report board's id in the phone's list of what is open.
+const REPORT_BOARD: &str = "board";
+
+/// One of the page's own files: (content type, bytes).
+fn static_asset(path: &str) -> Option<(&'static str, Vec<u8>)> {
+    static ICONS: std::sync::OnceLock<(Vec<u8>, Vec<u8>)> = std::sync::OnceLock::new();
+    let icon = |size: u32| crate::app_icon::encode_png(size, size, &crate::app_icon::render_icon_rgba(size));
+    match path.strip_prefix(STATIC)? {
+        "display.ttf" => crate::gui::hud_face("display").map(|b| ("font/ttf", b.to_vec())),
+        "mono.ttf" => crate::gui::hud_face("mono").map(|b| ("font/ttf", b.to_vec())),
+        "icon.png" => Some(("image/png", ICONS.get_or_init(|| (icon(512), icon(192))).0.clone())),
+        "icon-192.png" => Some(("image/png", ICONS.get_or_init(|| (icon(512), icon(192))).1.clone())),
+        _ => None,
+    }
+}
+
+/// What is on his board right now, for the phone: each block's id, title and first words.
+fn board() -> Vec<Value> {
+    let first_words = |text: &str| text.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(120).collect::<String>();
+    let mut items: Vec<Value> = Vec::new();
+    if crate::hud_board::is_active() {
+        items.push(json!({ "id": REPORT_BOARD, "title": "Report board", "text": first_words(&crate::hud_board::live_context()) }));
+    }
+    for (id, title) in crate::hud_dock::open_blocks() {
+        let text = crate::hud_dock::block_content(&id).map(|t| first_words(&t)).unwrap_or_default();
+        items.push(json!({ "id": id, "title": title, "text": text }));
+    }
+    items
+}
+
 async fn chat(app: &Jai, text: &str) -> Value {
     let mut events = app.subscribe();
     app.handle_command(HudCommand::Chat { text: text.to_string() }).await;
@@ -375,6 +407,13 @@ async fn handle<S: AsyncRead + AsyncWrite + Unpin>(mut stream: S, app: Jai, peer
         respond(&mut stream, "200 OK", "text/html; charset=utf-8", b"<!doctype html><meta name=viewport content='width=device-width'><body style='background:#000;color:#5ad;font-family:sans-serif;padding:2em'><h2>J.A.I. Satellite</h2><p>Scan the QR code in the HUD (Integrations &rarr; Quick Connections) to pair this device.</p>").await;
         return;
     }
+    // The page's own fonts and icon: the same for everybody, no key needed.
+    if req.method == "GET" {
+        if let Some((kind, bytes)) = static_asset(&req.path) {
+            respond(&mut stream, "200 OK", kind, &bytes).await;
+            return;
+        }
+    }
     if !same_token(given, &token) {
         if given.is_empty() && req.method == "GET" && matches!(req.path.as_str(), "/satellite" | "/satellite/") {
             // An unpaired request gets only a bootstrap, never data or an embedded secret.
@@ -393,6 +432,60 @@ async fn handle<S: AsyncRead + AsyncWrite + Unpin>(mut stream: S, app: Jai, peer
             respond(&mut stream, "200 OK", "text/html; charset=utf-8", page.as_bytes()).await;
             tools.stark.pulse(&["hivemind", "brain"], false);
             info!("[SATELLITE] {peer} opened the satellite");
+        }
+        // "Add to Home screen": the page as an app (its own icon, no browser bar, opened paired).
+        ("GET", "/satellite/manifest.webmanifest") => {
+            let manifest = json!({
+                "name": "J.A.I.",
+                "short_name": "J.A.I.",
+                "description": "J.A.I. on the phone",
+                "start_url": format!("/satellite?k={}", urlencoding::encode(&token)),
+                "scope": "/satellite",
+                "display": "standalone",
+                "orientation": "portrait",
+                "background_color": "#020408",
+                "theme_color": "#020408",
+                "icons": [
+                    {"src": format!("{STATIC}icon-192.png"), "sizes": "192x192", "type": "image/png", "purpose": "any"},
+                    {"src": format!("{STATIC}icon.png"), "sizes": "512x512", "type": "image/png", "purpose": "any"},
+                ],
+            });
+            respond(&mut stream, "200 OK", "application/manifest+json", manifest.to_string().as_bytes()).await;
+        }
+        // Hold to talk: the phone's microphone (16 kHz, 16 bit), heard by his own recogniser.
+        ("POST", "/api/voice") => {
+            let pcm: Vec<f32> = req.body.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]]) as f32 / 32768.0).collect();
+            if pcm.len() < 16_000 * 3 / 10 {
+                respond_json(&mut stream, "400 Bad Request", &json!({ "error": "That was too short to be a sentence." })).await;
+                return;
+            }
+            tools.stark.pulse(&["hivemind", "brain"], false);
+            match app.hear_clip(pcm).await {
+                Ok(heard) if !heard.trim().is_empty() => {
+                    info!("[SATELLITE] Spoken on the phone at {peer}: {heard}");
+                    let mut reply = chat(&app, &heard).await;
+                    reply["heard"] = json!(heard);
+                    respond_json(&mut stream, "200 OK", &reply).await;
+                }
+                Ok(_) => respond_json(&mut stream, "200 OK", &json!({ "heard": "", "reply": "", "error": "I did not catch that, Sir." })).await,
+                Err(e) => respond_json(&mut stream, "200 OK", &json!({ "heard": "", "reply": "", "error": e })).await,
+            }
+        }
+        // The live board: a block is closed from the phone as by its own [ CLOSE ].
+        ("POST", "/api/board") => {
+            let id = req.json()["id"].as_str().unwrap_or("").to_string();
+            let closed = if id == REPORT_BOARD {
+                crate::hud_board::close_board()
+            } else if crate::jai_views::is_panel(&id) {
+                crate::jai_views::close_panel(&id).is_some()
+            } else if crate::hud_dock::open_blocks().iter().any(|(open, _)| *open == id) {
+                crate::hud_dock::begin_close(&id);
+                true
+            } else {
+                false
+            };
+            info!("[SATELLITE] {peer} closed '{id}' on the board: {}", if closed { "done" } else { "not open" });
+            respond_json(&mut stream, "200 OK", &json!({ "ok": closed })).await;
         }
         ("GET", "/satellite/cert.der") => {
             let cert = std::fs::read(CERT_FILE).unwrap_or_default();
@@ -439,6 +532,7 @@ async fn handle<S: AsyncRead + AsyncWrite + Unpin>(mut stream: S, app: Jai, peer
                     "workout": tools.workout.snapshot(tools.pim.calendar()).ok(),
                     "protocols": tools.protocols.list().iter().map(|p| p.name.clone()).collect::<Vec<_>>(),
                     "wake_relay_url": tools.config.read(|c| c.satellite.wake_relay_url.clone()),
+                    "board": board(),
                 }),
             )
             .await;

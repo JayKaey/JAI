@@ -436,7 +436,11 @@ fn deliver(job: u64, model: Model, d: Delivery) -> bool {
         return false;
     }
     s.base = Some(model);
-    s.size_m = Some(size_m);
+    // A downloaded model's own unit is anybody's guess (an apple came 79 cm tall): its size is
+    // that of the kind of thing Sir asked for, and is left unsaid for a kind there is no size
+    // for. What JAI builds himself (built-in, composed, a planet) knows its own size.
+    let downloaded = d.credit.is_some() && d.planet.is_none();
+    s.size_m = if downloaded { crate::object_sizes::real_size(&s.query, size_m) } else { Some(size_m) };
     s.model_id = next_id();
     s.wire = wire;
     s.planet = d.planet;

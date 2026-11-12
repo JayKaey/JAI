@@ -958,6 +958,14 @@ impl Jai {
         self.speak_standalone(&line, true, Trigger::Input(InputSource::Voice));
     }
 
+    /// A clip of Sir's voice recorded elsewhere (the phone's hold-to-talk; 16 kHz): its words,
+    /// as he hears them at the PC.
+    pub async fn hear_clip(&self, pcm: Vec<f32>) -> Result<String, String> {
+        let ms = (pcm.len() / 16) as u32;
+        let heard = self.inner.stt.transcribe(pcm, ms).await?;
+        Ok(crate::wake::canon(&heard.text))
+    }
+
     /// A clip of what the PC plays, for the live subtitles (`live_subtitles`): the flag that
     /// calls it off and the words to come. None while Whisper sleeps or is not loaded.
     pub fn subtitle_ahead(&self, pcm: Vec<f32>, translate: bool) -> Option<(Arc<AtomicBool>, tokio::sync::oneshot::Receiver<Result<crate::stt::Transcript, String>>)> {
