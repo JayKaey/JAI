@@ -81,8 +81,17 @@ fn lerp_colour(a: Color32, b: Color32, t: f32) -> Color32 {
 /// bottom, a hairline of light runs along its top edge, and a faint sheen lies across its upper
 /// left corner. `alpha`: the block's own opacity (its entrance, a search that dims it).
 pub fn surface(p: &Painter, r: Rect, fill: Color32, alpha: f32) {
+    for shape in surface_shapes(r, fill, alpha) {
+        p.add(shape);
+    }
+}
+
+/// The same as shapes, for a frame that is painted behind content laid out before its size
+/// is known.
+pub fn surface_shapes(r: Rect, fill: Color32, alpha: f32) -> Vec<egui::Shape> {
+    let mut shapes: Vec<egui::Shape> = Vec::new();
     if !r.is_positive() || alpha <= 0.0 || fill.a() == 0 {
-        return;
+        return shapes;
     }
     let a = fill.a();
     let top = lerp_colour(fill, Color32::from_rgba_premultiplied(20, 30, 42, a), 0.5).gamma_multiply(alpha);
@@ -96,18 +105,19 @@ pub fn surface(p: &Painter, r: Rect, fill: Color32, alpha: f32) {
     mesh.add_triangle(0, 2, 3);
     // (The surface is a mesh of its own, four corners and nothing else: the verifier reads a
     // plain quad as the fill it is, and measures a block's unfolding by it.)
-    p.add(egui::Shape::mesh(mesh));
+    shapes.push(egui::Shape::mesh(mesh));
     // The sheen: light caught in the upper left corner of the glass.
     let mut light = egui::Mesh::default();
     light.colored_vertex(r.left_top(), white(0.03 * alpha));
     light.colored_vertex(r.left_top() + vec2((r.width() * 0.55).min(340.0), 0.0), Color32::TRANSPARENT);
     light.colored_vertex(r.left_top() + vec2(0.0, (r.height() * 0.8).min(240.0)), Color32::TRANSPARENT);
     light.add_triangle(0, 1, 2);
-    p.add(egui::Shape::mesh(light));
+    shapes.push(egui::Shape::mesh(light));
     // The hairline of light along the top edge (inside the border).
     if r.height() > 6.0 && r.width() > 6.0 {
-        p.rect_filled(Rect::from_min_max(pos2(r.left() + 1.0, r.top() + 1.0), pos2(r.right() - 1.0, r.top() + 2.0)), Rounding::ZERO, white(0.055 * alpha));
+        shapes.push(egui::Shape::rect_filled(Rect::from_min_max(pos2(r.left() + 1.0, r.top() + 1.0), pos2(r.right() - 1.0, r.top() + 2.0)), Rounding::ZERO, white(0.055 * alpha)));
     }
+    shapes
 }
 
 /// The dark band a line of text stands on over the board: solid under the text, running out to
@@ -147,6 +157,27 @@ pub fn ripple(p: &Painter, centre: Pos2, radius: f32, age: f32, colour: Color32)
         p.circle_stroke(centre, radius * (1.04 + 0.55 * out), stroke(0.8 + 2.2 * (1.0 - t), colour.gamma_multiply(0.75 * fade)));
     }
     true
+}
+
+/// A block's title as it fits `width`: whole when it does; else, of a "FAMILY // NAME" title,
+/// the name alone, else the family alone; and only then cut with an ellipsis. (Seen live
+/// 2026-11-12: a narrow block read "BRIEFING //…".)
+pub fn fitted_title(p: &Painter, text: &str, size: f32, colour: Color32, width: f32) -> std::sync::Arc<egui::Galley> {
+    let whole = title_galley(p, text, size, colour, f32::INFINITY);
+    if whole.size().x <= width {
+        return whole;
+    }
+    if let Some((family, name)) = text.split_once("//") {
+        for part in [name.trim(), family.trim()] {
+            if !part.is_empty() {
+                let short = title_galley(p, part, size, colour, f32::INFINITY);
+                if short.size().x <= width {
+                    return short;
+                }
+            }
+        }
+    }
+    title_galley(p, text, size, colour, width)
 }
 
 /// A title as the HUD letters it: the display face, upper case, the letters a little apart, on
@@ -239,6 +270,115 @@ fn nicks(seed: u64) -> [(usize, bool, f32, f32); 5] {
 /// A name's seed for `wear`.
 pub fn seed_of(name: &str) -> u64 {
     name.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ b as u64).wrapping_mul(0x0100_0000_01b3))
+}
+
+/// A block's frame as a thing that was made and has aged: its line `width` wide in `edge`,
+/// brighter here and fainter there along its length, a bevel just inside it (lit from the
+/// upper left) and a rivet in each corner. `seed` keeps each block's wear its own, the same on
+/// every start.
+#[allow(clippy::too_many_arguments)]
+pub fn worn_frame(p: &Painter, r: Rect, edge: Color32, width: f32, seed: u64, alpha: f32, grip: bool) {
+    if !r.is_positive() || alpha <= 0.0 {
+        return;
+    }
+    let mut next = chance(seed as u32 ^ (seed >> 32) as u32 ^ 0x0F4A_11E5);
+    let mut mesh = egui::Mesh::default();
+    let w = width.max(1.0);
+    // The line, piece by piece: each piece as strong as its place has stayed (neighbours alike,
+    // so it reads as wear, not as dashes).
+    let mut level = 0.75 + 0.25 * next();
+    let side = |mesh: &mut egui::Mesh, from: Pos2, to: Pos2, next: &mut dyn FnMut() -> f32, level: &mut f32| {
+        let length = (to - from).length();
+        let pieces = (length / 16.0).ceil().max(1.0) as usize;
+        let dir = (to - from) / pieces as f32;
+        let horizontal = dir.x.abs() > dir.y.abs();
+        for k in 0..pieces {
+            *level = (*level + (next() - 0.5) * 0.3).clamp(0.5, 1.0);
+            let (a, b) = (from + dir * k as f32, from + dir * (k + 1) as f32);
+            let piece = if horizontal { Rect::from_min_max(pos2(a.x.min(b.x), a.y - w * 0.5), pos2(a.x.max(b.x), a.y + w * 0.5)) } else { Rect::from_min_max(pos2(a.x - w * 0.5, a.y.min(b.y)), pos2(a.x + w * 0.5, a.y.max(b.y))) };
+            mesh.add_colored_rect(piece, edge.gamma_multiply(*level * alpha));
+        }
+    };
+    let line = r.shrink(w * 0.5);
+    side(&mut mesh, line.left_top(), line.right_top(), &mut next, &mut level);
+    side(&mut mesh, line.right_top(), line.right_bottom(), &mut next, &mut level);
+    side(&mut mesh, line.right_bottom(), line.left_bottom(), &mut next, &mut level);
+    side(&mut mesh, line.left_bottom(), line.left_top(), &mut next, &mut level);
+    // The bevel inside the line: a hair of light where it faces the light, shadow where not.
+    let inner = r.shrink(w + 0.5);
+    let (lit, dark) = (white(0.07 * alpha), Color32::from_black_alpha((90.0 * alpha) as u8));
+    mesh.add_colored_rect(Rect::from_min_max(inner.left_top(), pos2(inner.right(), inner.top() + 1.0)), lit);
+    mesh.add_colored_rect(Rect::from_min_max(inner.left_top(), pos2(inner.left() + 1.0, inner.bottom())), lit);
+    mesh.add_colored_rect(Rect::from_min_max(pos2(inner.left(), inner.bottom() - 1.0), inner.right_bottom()), dark);
+    mesh.add_colored_rect(Rect::from_min_max(pos2(inner.right() - 1.0, inner.top()), inner.right_bottom()), dark);
+    p.add(egui::Shape::mesh(mesh));
+    // A rivet in each corner (on blocks large enough to have been bolted together).
+    if r.width() >= 180.0 && r.height() >= 110.0 {
+        // (`grip`: the block has its resize grip in the bottom right corner, where no rivet goes.)
+        for corner in [r.left_top() + vec2(8.5, 8.5), r.right_top() + vec2(-8.5, 8.5), r.left_bottom() + vec2(8.5, -8.5), r.right_bottom() + vec2(-8.5, -8.5)].into_iter().take(if grip { 3 } else { 4 }) {
+            p.circle_filled(corner + vec2(0.5, 0.8), 2.6, Color32::from_black_alpha((120.0 * alpha) as u8));
+            p.circle_filled(corner, 2.1, Color32::from_rgb(34, 36, 41).gamma_multiply(alpha));
+            p.circle_stroke(corner, 2.1, stroke(0.8, white(0.2 * alpha)));
+            p.circle_filled(corner - vec2(0.6, 0.6), 0.6, white(0.35 * alpha));
+        }
+    }
+}
+
+/// What use leaves on a block's surface: grime along its edges, a smudge or two, hairline
+/// scratches and a few specks. Faint (the text over it stays sharp), each block its own,
+/// the same on every start.
+pub fn patina(p: &Painter, r: Rect, seed: u64, alpha: f32) {
+    if r.width() < 120.0 || r.height() < 70.0 || alpha <= 0.0 {
+        return;
+    }
+    let mut next = chance(seed as u32 ^ (seed >> 32) as u32 ^ 0x9A71_AA05);
+    let mut mesh = egui::Mesh::default();
+    // Grime: darker along the edges, most in the corners.
+    let depth = 14.0f32.min(r.height() * 0.2);
+    let inner = r.shrink(depth);
+    let ring = |q: Rect| [q.left_top(), q.right_top(), q.right_bottom(), q.left_bottom()];
+    let base = mesh.vertices.len() as u32;
+    for at in ring(r) {
+        mesh.colored_vertex(at, Color32::from_black_alpha((70.0 * alpha) as u8));
+    }
+    for at in ring(inner) {
+        mesh.colored_vertex(at, Color32::TRANSPARENT);
+    }
+    for k in 0..4u32 {
+        let n = (k + 1) % 4;
+        mesh.add_triangle(base + k, base + n, base + 4 + n);
+        mesh.add_triangle(base + k, base + 4 + n, base + 4 + k);
+    }
+    // Smudges: where a hand has been, the surface is a shade lighter.
+    for _ in 0..2 {
+        let centre = pos2(r.left() + r.width() * (0.15 + 0.7 * next()), r.top() + r.height() * (0.2 + 0.6 * next()));
+        let (rx, ry) = (r.width() * (0.12 + 0.16 * next()), r.height() * (0.1 + 0.14 * next()));
+        let hub = mesh.vertices.len() as u32;
+        mesh.colored_vertex(centre, white(0.022 * alpha));
+        for k in 0..12 {
+            let a = std::f32::consts::TAU * k as f32 / 12.0;
+            mesh.colored_vertex(centre + vec2(a.cos() * rx, a.sin() * ry), Color32::TRANSPARENT);
+        }
+        for k in 0..12u32 {
+            mesh.add_triangle(hub, hub + 1 + k, hub + 1 + (k + 1) % 12);
+        }
+    }
+    // Specks.
+    for _ in 0..((r.width() * r.height() / 9000.0) as usize).clamp(4, 40) {
+        let at = pos2(r.left() + 3.0 + (r.width() - 6.0) * next(), r.top() + 3.0 + (r.height() - 6.0) * next());
+        let light = next() < 0.6;
+        mesh.add_colored_rect(Rect::from_min_size(pos2(at.x.round(), at.y.round()), vec2(1.0, 1.0)), if light { white((0.03 + 0.06 * next()) * alpha) } else { Color32::from_black_alpha((60.0 * alpha) as u8) });
+    }
+    let clipped = p.with_clip_rect(r);
+    clipped.add(egui::Shape::mesh(mesh));
+    // Hairline scratches, most of them leaning the way a cloth is wiped.
+    for _ in 0..((r.width() / 150.0) as usize).clamp(2, 6) {
+        let from = pos2(r.left() + r.width() * next(), r.top() + r.height() * next());
+        let lean = if next() < 0.7 { -0.45 + 0.3 * next() } else { 1.1 + 1.0 * next() };
+        let len = 18.0 + 90.0 * next() * next();
+        let to = from + vec2(lean.cos(), lean.sin()) * len;
+        clipped.line_segment([from, to], stroke(1.0, white((0.025 + 0.04 * next()) * alpha)));
+    }
 }
 
 /// Wear on a frame: a few nicks in its border near the corners, where a real panel is handled,
@@ -374,7 +514,7 @@ const SCRATCHES: usize = 16;
 /// quite even across it, it falls off towards the edges, and dust and a few hairline scratches
 /// lie on it. All of it is still (it asks for no frame) and faint enough that text under it
 /// stays sharp.
-pub fn glass(p: &Painter, rect: Rect) {
+pub fn glass(p: &Painter, rect: Rect, lift: bool) {
     if rect.width() < 200.0 || rect.height() < 120.0 {
         return;
     }
@@ -386,7 +526,8 @@ pub fn glass(p: &Painter, rect: Rect) {
         for i in 0..=cols {
             let at = pos2(rect.left() + rect.width() * i as f32 / cols as f32, rect.top() + rect.height() * j as f32 / rows as f32);
             let v = next();
-            let colour = if v < 0.5 { Color32::from_black_alpha((v * 2.0 * 16.0) as u8) } else { white((v - 0.5) * 2.0 * 0.02) };
+            // (`lift` off: the lighter patches are left out, so black stays black.)
+            let colour = if v < 0.5 { Color32::from_black_alpha((v * 2.0 * 16.0) as u8) } else if lift { white((v - 0.5) * 2.0 * 0.02) } else { Color32::TRANSPARENT };
             mesh.colored_vertex(at, colour);
         }
     }
@@ -808,7 +949,7 @@ mod tests {
         let run = || {
             ctx.run(egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1280.0, 720.0))), ..Default::default() }, |ctx| {
                 let painter = ctx.layer_painter(egui::LayerId::background());
-                glass(&painter, ctx.screen_rect());
+                glass(&painter, ctx.screen_rect(), true);
             })
         };
         let _ = (run(), run());

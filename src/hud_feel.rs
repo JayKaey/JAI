@@ -83,7 +83,7 @@ static PHRASES: LazyLock<Vec<(Regex, Value)>> = LazyLock::new(|| {
         // What he showed while Sir was not looking.
         p(r"^(?:what\s+did\s+i\s+miss|did\s+i\s+miss\s+(?:anything|something)|(?:show|open)\s+(?:me\s+)?(?:my\s+|the\s+)?(?:notifications|notification\s+history|missed\s+notifications)|was\s+habe\s+ich\s+verpasst)$", json!({"missed": true})),
         // His voice.
-        p(r"^(?:learn\s+my\s+voice|(?:start\s+|run\s+|open\s+)?(?:the\s+)?voice\s+set\s*-?\s*up|calibrate\s+(?:to\s+)?my\s+voice|tune\s+(?:in\s+)?to\s+my\s+voice|lern\s+meine\s+stimme)$", json!({"voice_setup": true})),
+        p(r"^(?:l(?:ea|e|a)r?n(?:e)?\s+(?:to\s+know\s+)?my\s+voice|(?:start\s+|run\s+|open\s+)?(?:the\s+)?voice\s+set\s*-?\s*up|calibrate\s+(?:to\s+)?my\s+voice|tune\s+(?:in\s+)?to\s+my\s+voice|lerne?\s+meine\s+stimme(?:\s+kennen)?)$", json!({"voice_setup": true})),
         p(r"^(?:only\s+(?:obey|listen\s+to|answer(?:\s+to)?)\s+me|(?:obey|listen\s+to)\s+(?:only\s+)?(?:me|my\s+voice)\s+(?:only|alone)|listen\s+only\s+to\s+(?:me|my\s+voice)|voice\s+lock(?:\s+on)?|h(?:ö|oe)r\s+nur\s+auf\s+mich)$", json!({"voice_lock": true})),
         p(r"^(?:obey\s+(?:everyone|everybody|anyone)|listen\s+to\s+(?:everyone|everybody|anyone)(?:\s+again)?|voice\s+lock\s+off|h(?:ö|oe)r\s+auf\s+alle)$", json!({"voice_lock": false})),
         // Everything in one place.
@@ -465,6 +465,9 @@ mod tests {
             ("what did i miss", json!({"missed": true})),
             ("show my notifications", json!({"missed": true})),
             ("learn my voice", json!({"voice_setup": true})),
+            // (Typed in a hurry: seen live 2026-11-12, where it went to the model and came back as another tool.)
+            ("lern my voice", json!({"voice_setup": true})),
+            ("lerne meine stimme", json!({"voice_setup": true})),
             ("voice setup", json!({"voice_setup": true})),
             ("only obey me", json!({"voice_lock": true})),
             ("listen only to my voice", json!({"voice_lock": true})),

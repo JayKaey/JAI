@@ -222,6 +222,8 @@ pub fn close_secondary_windows(tools: &ToolContext) -> usize {
     let started = std::time::Instant::now();
     // First, while the native windows are still among the published blocks.
     let blocks = crate::hud_dock::close_all_blocks();
+    // The board's own report blocks are windows to Sir like any other (the pinned ones stay).
+    let board = crate::hud_board::close_unpinned();
     let spatial = crate::workspace_canvas::close_all_now();
     // His windows and the simulations: those in windows of their own close now (each plays its
     // exit as it goes); those on the board are fading with the other blocks and close
@@ -250,11 +252,11 @@ pub fn close_secondary_windows(tools: &ToolContext) -> usize {
     tools.focus.forget_jai_window("all");
     crate::gui::refresh();
     info!(
-        "[WINDOWS] Closed {blocks} in-app block(s), {spatial} workspace, {native} native, {simulations} simulation window(s), {panels} panel window(s) and {popups} pop-up(s) in {:.2} ms",
+        "[WINDOWS] Closed {blocks} in-app block(s), {board} board block(s), {spatial} workspace, {native} native, {simulations} simulation window(s), {panels} panel window(s) and {popups} pop-up(s) in {:.2} ms",
         started.elapsed().as_secs_f64() * 1000.0
     );
     // Docked native windows and simulations are in-app blocks too: counted once.
-    blocks.max(native + simulations) + spatial + popups + panels
+    blocks.max(native + simulations) + board + spatial + popups + panels
 }
 
 

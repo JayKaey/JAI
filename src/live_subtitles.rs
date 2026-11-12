@@ -290,10 +290,37 @@ fn bar_monitor() -> Option<[i32; 4]> {
     None
 }
 
+/// Where the speech to write along is played: the output device of the app in front, else of
+/// a player, browser or call that is making sound, else everything the PC plays. (On a PC
+/// with a mixer in front of the speakers each app has a channel of its own, with nothing else
+/// in it; the mix of everything carries Sir's own microphone on his.)
+async fn speech_source() -> crate::pc_audio::Source {
+    use crate::pc_audio::Source;
+    let stem = |process: &str| process.trim_end_matches(".exe").trim_end_matches(".EXE").to_string();
+    #[cfg(windows)]
+    let front = crate::win32::foreground_info().map(|(process, _)| stem(&process));
+    #[cfg(not(windows))]
+    let front: Option<String> = None;
+    if let Some(app) = front {
+        if let Some(device) = crate::audio_mixer::app_output_device(&app).await {
+            return Source::Device(device);
+        }
+    }
+    for (app, _) in crate::audio_mixer::audible_apps().await {
+        if crate::hud_feel::is_player(&app) || crate::ears::is_game_or_voice_chat(&stem(&app).to_lowercase()) && !crate::hud_feel::is_game(&app) {
+            if let Some(device) = crate::audio_mixer::app_output_device(&stem(&app)).await {
+                return Source::Device(device);
+            }
+        }
+    }
+    Source::Default
+}
+
 async fn listen(app: crate::app::Jai) {
     tracing::info!("[SUBTITLES] On");
     let mut heard: Vec<f32> = Vec::new();
     let mut said_first = false;
+    let mut looked: Option<Instant> = None;
     while let Some(translate) = crate::hud_feel::subtitles() {
         // Not beside a game, and not his own voice.
         if crate::hud_feel::game_in_front() || app.hud_state().state == "speaking" {
@@ -302,6 +329,11 @@ async fn listen(app: crate::app::Jai) {
             let _ = crate::pc_audio::take_speech();
             tokio::time::sleep(Duration::from_millis(500)).await;
             continue;
+        }
+        // Where the speech is: looked up once a second.
+        if looked.is_none_or(|at: Instant| at.elapsed() > Duration::from_secs(1)) {
+            looked = Some(Instant::now());
+            crate::pc_audio::listen_to(crate::pc_audio::Use::Speech, speech_source().await);
         }
         crate::pc_audio::want(crate::pc_audio::Use::Speech, true);
         tokio::time::sleep(Duration::from_millis(200)).await;

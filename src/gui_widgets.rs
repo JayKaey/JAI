@@ -77,6 +77,40 @@ pub(super) fn widget_card(ui: &mut Ui, p: &Palette, spec: &DynamicWidgetSpec, ho
     ui.add_space(6.0);
 }
 
+/// A widget inside a block that is its frame and carries its title: its content alone, with
+/// its two keys above it on the right. (In the block of the board's left column the card's own
+/// rounded frame and second title stood inside the block's: a frame in a frame.)
+pub(super) fn widget_bare(ui: &mut Ui, p: &Palette, spec: &DynamicWidgetSpec, host: &WidgetHost) {
+    let accent = accent_of(spec, p);
+    let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), 16.0), Sense::hover());
+    let labels = [("[ REMOVE ]", false, "Remove this widget"), ("[ POP OUT ]", false, "Open it in its own window")];
+    match crate::hud_style::keys(ui, ui.id().with(("widget_keys", &spec.id)), row.right(), row.center().y, &labels, 0.85).0 {
+        Some(0) => host.command(HudCommand::WidgetRemove { id: spec.id.clone() }),
+        Some(1) => host.command(HudCommand::WidgetPopOut { id: spec.id.clone() }),
+        _ => {}
+    }
+    ui.add_space(4.0);
+    widget_body(ui, p, spec, host, accent);
+}
+
+/// The kind as a block's tag.
+pub(super) fn short_type_upper(kind: &WidgetKind) -> &'static str {
+    match short_type(kind) {
+        "gauge" => "GAUGE",
+        "progress" => "PROGRESS",
+        "chart" => "CHART",
+        "sparkline" => "SPARKLINE",
+        "timer" => "TIMER",
+        "stopwatch" => "STOPWATCH",
+        "list" => "LIST",
+        "table" => "TABLE",
+        "note" => "NOTE",
+        "checklist" => "CHECKLIST",
+        "actions" => "ACTIONS",
+        _ => "LIVE",
+    }
+}
+
 fn short_type(kind: &WidgetKind) -> &'static str {
     match kind {
         WidgetKind::MetricGauge { .. } => "gauge",

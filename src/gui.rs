@@ -2003,6 +2003,9 @@ impl HudApp {
         }
         self.theme_generation = generation;
         self.emblem.set_custom_home(current.orb_board_pos.map(|[x, y]| vec2(x, y)));
+        if let Some([x, y]) = current.orb_board_pos.filter(|_| self.applied.is_none()) {
+            info!("[HUD] Emblem home: Sir's spot at {:.0} %, {:.0} % of the screen (double-click it, or \"center your orb\", for the middle)", x * 100.0, y * 100.0);
+        }
         crate::hud_dock::set_orb_aside(current.orb_aside);
         crate::hud_dock::set_overlap_allowed(current.allow_window_overlap);
         crate::tts::set_cues(current.sound_cues);
@@ -3521,10 +3524,9 @@ fn paint_spectrum_ring(painter: &egui::Painter, frame: &crate::rose_emblem_rende
         let band = at * (crate::pc_audio::BANDS - 1) as f32;
         let (low, mix) = (band.floor() as usize, band.fract());
         let value = bands[low] * (1.0 - mix) + bands[(low + 1).min(crate::pc_audio::BANDS - 1)] * mix;
-        if value < 0.02 {
-            continue;
-        }
-        let colour = mix_colour(accent, Color32::WHITE, ((value - 0.8) * 4.0).clamp(0.0, 0.8)).gamma_multiply(0.3 + 0.7 * value);
+        // (Every tick stands, however quiet its band: a whole ring that breathes, not a scatter
+        // of dashes where a band happens to sound.)
+        let colour = mix_colour(accent, Color32::WHITE, ((value - 0.8) * 4.0).clamp(0.0, 0.8)).gamma_multiply(0.2 + 0.8 * value);
         for side in [1.0f32, -1.0] {
             // From straight down (the bass) up to straight up (the highs).
             let angle = std::f32::consts::FRAC_PI_2 - side * at * std::f32::consts::PI;
@@ -3611,6 +3613,10 @@ fn hud_age() -> f32 {
     static BORN: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
     BORN.get_or_init(Instant::now).elapsed().as_secs_f32()
 }
+
+/// A dragged emblem let go this near the middle of the screen (a share of its shorter side)
+/// takes the middle.
+const EMBLEM_SNAP: f32 = 0.09;
 
 /// How dark night mode makes the HUD (the share of black laid over it).
 const NIGHT_DIM: f32 = 0.42;
@@ -4160,12 +4166,17 @@ impl HudApp {
             crate::pc_audio::want(crate::pc_audio::Use::Spectrum, music_on);
             crate::music_lyrics::want(music_on, crate::hud_feel::lyrics(), &self.rt);
             let (bass, level) = if music_on { crate::pc_audio::bass_and_level() } else { (0.0, 0.0) };
-            let music = music_on && level > 0.05 && m.state != "speaking";
+            // (Only while a music player is making sound: what else the PC plays is not music.)
+            let music = music_on && crate::music_lyrics::playing() && level > 0.05 && m.state != "speaking";
             self.emblem.set_music(if music { bass } else { 0.0 });
             // The emblem (drawn over the board; its corner cell is kept free), wherever Sir put it.
             self.emblem.glide(screen, dt);
             self.emblem.paint(&ui.painter_at(screen), screen);
             let frame = self.emblem.frame(screen);
+            // (Said once, a moment after the start: where the emblem stands, in the log.)
+            if self.frames == 150 {
+                info!("[HUD] Emblem at {:.0},{:.0} (radius {:.0}) on a screen of {:.0}×{:.0} at {:.0},{:.0}", frame.centre.x, frame.centre.y, frame.radius, screen.width(), screen.height(), screen.left(), screen.top());
+            }
             // New windows open around the orb and the board's blocks, never on them.
             crate::hud_dock::publish_obstacles(Some(Rect::from_center_size(frame.centre, Vec2::splat(frame.radius * 2.3))), board_rects);
             let docked = crate::hud_dock::docked_centre(screen, self.console_reserve());
@@ -4173,14 +4184,22 @@ impl HudApp {
             let hit = Rect::from_center_size(frame.centre, vec2(frame.radius * 1.6, frame.radius * 1.6));
             let emblem = ui.interact(hit, ui.id().with("hud_emblem"), Sense::click_and_drag());
             // Drag the emblem anywhere on the board; it stays there (and windows open around it).
+            // (Near the middle of the screen it takes the middle: its home. The two centre lines
+            // show while it is held, so the middle is easy to find again.)
+            let middle = screen.center();
+            let near_middle = |p: Pos2| (p - middle).length() <= EMBLEM_SNAP * screen.width().min(screen.height());
             if let Some(p) = emblem.interact_pointer_pos().filter(|_| emblem.dragged_by(egui::PointerButton::Primary)) {
+                let p = if near_middle(p) { middle } else { p };
                 self.emblem.drag_to(vec2((p.x - screen.left()) / screen.width(), (p.y - screen.top()) / screen.height()));
+                crate::hud_style::paint_guides(ctx, &[[pos2(middle.x, screen.top()), pos2(middle.x, screen.bottom())], [pos2(screen.left(), middle.y), pos2(screen.right(), middle.y)]]);
                 ctx.request_repaint();
             }
             if emblem.drag_stopped() {
                 if let Some(f) = self.emblem.custom_home() {
+                    let at = screen.min + vec2(f.x * screen.width(), f.y * screen.height());
                     let mut next = iface.clone();
-                    next.orb_board_pos = Some([f.x, f.y]);
+                    next.orb_board_pos = if near_middle(at) { None } else { Some([f.x, f.y]) };
+                    info!("[HUD] Emblem home: {}", match next.orb_board_pos { None => "the middle of the screen".to_string(), Some([x, y]) => format!("Sir's spot at {:.0} %, {:.0} % of the screen", x * 100.0, y * 100.0) });
                     self.set_interface(next);
                 }
             }
@@ -4222,7 +4241,7 @@ impl HudApp {
             // Under it: the line being sung (lyrics on), else what plays.
             let lyric = crate::hud_feel::lyric_line()
                 .or_else(|| (crate::hud_feel::lyrics() && crate::music_lyrics::none_found()).then(|| "no synced lyrics for this song".to_string()))
-                .or_else(|| music.then(crate::music_lyrics::title_line).flatten());
+                .or_else(|| music.then(crate::music_lyrics::new_title_line).flatten());
             if let Some(order) = crate::hud_lines::paint(ui, lines_top, (screen.width() * 0.5).min(760.0), &m.state, iface.live_words, lyric.as_deref()) {
                 info!("[HUD] The offered order was taken: '{order}'");
                 self.command(HudCommand::Chat { text: order });
@@ -5289,7 +5308,7 @@ impl HudApp {
                     }
                     for spec in &widgets {
                         let label = format!("WIDGET // {}", spec.title.to_uppercase());
-                        sharp_block(ui, &label, "LIVE", |ui| widget_view::widget_card(ui, &p, spec, &self.widget_host, false));
+                        sharp_block(ui, &label, short_type_upper(spec), |ui| widget_view::widget_bare(ui, &p, spec, &self.widget_host));
                     }
                 });
             });
@@ -6910,7 +6929,7 @@ pub(super) fn hud_block_window(ctx: &egui::Context, id: &str, title: &str, size:
         // never showed, and a block was brackets round a dark patch. The shell is painted on the
         // whole of the block's rect.)
         shell.set_clip_rect(frame_rect);
-        paint_block_frame(&shell, frame_rect, &motion, mix(BLOCK_SLATE, BLOCK_SLATE_LIFTED, using).gamma_multiply(dim), mix(edge, accent, using * 0.6).gamma_multiply(dim), if found { 2.0 } else { 1.0 });
+        paint_block_frame_of(&shell, frame_rect, &motion, mix(BLOCK_SLATE, BLOCK_SLATE_LIFTED, using).gamma_multiply(dim), mix(edge, accent, using * 0.6).gamma_multiply(dim), if found { 2.0 } else { 1.0 }, Some(crate::hud_style::seed_of(id)));
         if !motion.moving() {
             crate::hud_style::wear(&shell, frame_rect, BLOCK_SLATE, edge, crate::hud_style::seed_of(id), dim);
             if let Some(orb) = crate::hud_dock::orb() {
@@ -6951,7 +6970,7 @@ pub(super) fn hud_block_window(ctx: &egui::Context, id: &str, title: &str, size:
             }
             _ => {}
         }
-        let lettered = crate::hud_style::title_galley(ui.painter(), title, ts(14.0), accent.gamma_multiply(content_alpha), (keys_left - row.left() - 22.0).max(20.0));
+        let lettered = crate::hud_style::fitted_title(ui.painter(), title, ts(14.0), accent.gamma_multiply(content_alpha), (keys_left - row.left() - 22.0).max(20.0));
         let title_rect = Rect::from_min_size(pos2(row.left(), mid - lettered.size().y * 0.5), lettered.size());
         ui.painter().galley(title_rect.min, lettered, Color32::PLACEHOLDER);
         if crate::hud_style::paint_light(ui.painter(), pos2(title_rect.right() + 10.0, mid), crate::hud_style::light(id), ctx.input(|i| i.time), content_alpha) {
@@ -7308,6 +7327,12 @@ pub(crate) fn inner_border(painter: &egui::Painter, rect: Rect, width: f32, colo
 /// the frame has unfolded to. The edges run white-hot while they travel and cool as they land;
 /// `found` (the search lights the block) draws the border two pixels wide.
 fn paint_block_frame(painter: &egui::Painter, rect: Rect, m: &WindowMotion, fill: Color32, edge: Color32, width: f32) {
+    paint_block_frame_of(painter, rect, m, fill, edge, width, None);
+}
+
+/// The same for a block that stands: with its own wear (`seed`: the block's, so each has its
+/// own and keeps it), a frame that has aged and what use leaves on its surface.
+fn paint_block_frame_of(painter: &egui::Painter, rect: Rect, m: &WindowMotion, fill: Color32, edge: Color32, width: f32, seed: Option<u64>) {
     let band = motion_band(rect, m);
     if band.height() < 0.5 || m.frame <= 0.0 {
         return;
@@ -7315,7 +7340,15 @@ fn paint_block_frame(painter: &egui::Painter, rect: Rect, m: &WindowMotion, fill
     // (Glass lit from above: `hud_style::surface`.)
     crate::hud_style::surface(painter, band, fill, m.frame);
     let heat = (1.0 - m.unfold).clamp(0.0, 1.0);
-    inner_border(painter, band, width, mix(edge, Color32::WHITE, heat * 0.7).gamma_multiply(m.frame.max(heat)));
+    let colour = mix(edge, Color32::WHITE, heat * 0.7).gamma_multiply(m.frame.max(heat));
+    match seed.filter(|_| !m.moving() && fill.a() > 0) {
+        Some(seed) => {
+            crate::hud_style::patina(painter, band, seed, m.frame);
+            crate::hud_style::worn_frame(painter, band, colour, width, seed, 1.0, true);
+        }
+        // (While it unfolds or folds, and for a frame without a surface: the plain line.)
+        None => inner_border(painter, band, width, colour),
+    }
 }
 
 /// The two short diagonals in a resizable block's bottom-right corner (inside its border).
@@ -7618,22 +7651,31 @@ fn screens_menu(ui: &mut Ui, monitors: &[crate::monitors::Monitor], spanning: bo
 
 /// A sharp technical block for egui content: dark slate fill, 1 px cyan frame, white L-brackets
 /// and the micro header (label left, tag right).
+/// What kind of widget this is, as its block's tag ("NOTE", "GAUGE").
+fn short_type_upper(spec: &crate::widgets::DynamicWidgetSpec) -> &'static str {
+    widget_view::short_type_upper(&spec.kind)
+}
+
 fn sharp_block<R>(ui: &mut Ui, label: &str, tag: &str, body: impl FnOnce(&mut Ui) -> R) -> R {
-    let shown = Frame::none()
-        .fill(crate::hud_board::BLOCK_FILL)
-        .stroke(stroke(1.0, crate::hud_board::border_colour()))
-        .rounding(Rounding::ZERO)
-        .inner_margin(Margin::same(12.0))
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.horizontal(|ui| {
-                ui.add(egui::Label::new(RichText::new(label).font(strip_font()).color(STRIP_MUTED)).truncate());
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| ui.label(RichText::new(tag).font(strip_font()).color(STRIP_MUTED)));
-            });
-            ui.add_space(4.0);
-            body(ui)
-        });
-    crate::hud_board::brackets(ui.painter(), shown.response.rect, crate::hud_board::bracket_colour());
+    // (The frame every block wears, `hud_style`: its surface goes behind the content once the
+    // content has said how tall it is.)
+    let back = ui.painter().add(egui::Shape::Noop);
+    let shown = Frame::none().inner_margin(Margin::same(12.0)).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), 18.0), Sense::hover());
+        let tag = ui.painter().layout_no_wrap(tag.to_string(), strip_font(), STRIP_MUTED);
+        let title = crate::hud_style::fitted_title(ui.painter(), label, ts(13.0), crate::hud_board::active_colour(), (row.width() - tag.size().x - 14.0).max(20.0));
+        ui.painter().galley(pos2(row.left(), row.center().y - title.size().y * 0.5), title, Color32::PLACEHOLDER);
+        ui.painter().galley(pos2(row.right() - tag.size().x, row.center().y - tag.size().y * 0.5), tag, STRIP_MUTED);
+        ui.painter().line_segment([pos2(row.left(), row.bottom() + 3.0), pos2(row.right(), row.bottom() + 3.0)], stroke(1.0, crate::hud_board::border_colour()));
+        ui.add_space(8.0);
+        body(ui)
+    });
+    let rect = shown.response.rect;
+    let mut frame = crate::hud_style::surface_shapes(rect, crate::hud_board::BLOCK_FILL, 1.0);
+    frame.push(egui::Shape::rect_stroke(rect.shrink(0.5), Rounding::ZERO, stroke(1.0, crate::hud_board::border_colour())));
+    ui.painter().set(back, egui::Shape::Vec(frame));
+    crate::hud_board::brackets(ui.painter(), rect, crate::hud_board::bracket_colour());
     ui.add_space(10.0);
     shown.inner
 }
@@ -7675,7 +7717,7 @@ fn grain_image() -> egui::ColorImage {
 /// light on glass and not as flat vector art (Sir, 2026-11-11: "more realistic, a bit more
 /// rough"). Two meshes on the topmost layer; the grain shifts twelve times a second, but only
 /// on frames that are painted anyway (it never asks for one).
-pub(crate) fn paint_finish(ctx: &egui::Context) {
+pub(crate) fn paint_finish(ctx: &egui::Context, oled: bool) {
     let rect = ctx.screen_rect();
     let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("hud_finish")));
     let mut lines = egui::Mesh::default();
@@ -7696,12 +7738,19 @@ pub(crate) fn paint_finish(ctx: &egui::Context) {
     let tick = (ctx.input(|i| i.time) * 12.0) as u32;
     let shift = vec2((tick.wrapping_mul(0x9E37) % 97) as f32 / 97.0, (tick.wrapping_mul(0x85EB) % 89) as f32 / 89.0);
     let mut mesh = egui::Mesh::with_texture(grain.id());
-    mesh.add_rect_with_uv(rect, Rect::from_min_size(pos2(shift.x, shift.y), rect.size() / GRAIN_TILE as f32), Color32::WHITE);
+    // (Under the OLED look the grain only darkens: black stays black, what is lit gets the
+    // grain.)
+    mesh.add_rect_with_uv(rect, Rect::from_min_size(pos2(shift.x, shift.y), rect.size() / GRAIN_TILE as f32), if oled { Color32::BLACK } else { Color32::WHITE });
     painter.add(Shape::mesh(mesh));
-    // The glass itself: uneven light, darker edges, dust and hairline scratches (per screen
-    // of a HUD that spans several).
-    for screen in monitor_regions(ctx) {
-        crate::hud_style::glass(&painter, screen);
+    // The glass itself: uneven light, darker edges, dust and hairline scratches, per screen of
+    // a HUD that spans several, else over the one it is on. (It was only drawn on a spanned
+    // HUD: on a single screen there was no glass at all.)
+    let screens = monitor_regions(ctx);
+    if screens.is_empty() {
+        crate::hud_style::glass(&painter, rect, !oled);
+    }
+    for screen in screens {
+        crate::hud_style::glass(&painter, screen, !oled);
     }
 }
 
@@ -7831,8 +7880,10 @@ impl HudApp {
         } else {
             paint_canvas(ctx);
             // (Offscreen renders stay clean: the verifier reads their colours.)
-            if iface.display_finish && !self.palette.oled && !windows_still(ctx) {
-                paint_finish(ctx);
+            // (Under the OLED look too, in a form that keeps black black: Sir, 2026-11-12, wants
+            // the HUD to look built and used, not drawn.)
+            if iface.display_finish && !windows_still(ctx) {
+                paint_finish(ctx, self.palette.oled);
             }
             // The Settings drawer slides in from the right (VIEW → SETTINGS).
             let p = self.palette;
@@ -8058,6 +8109,18 @@ mod tests {
         crate::hud_lines::speech_over();
     }
 
+    /// The emblem close up: its housing, its uneven light, the glass over it.
+    #[test]
+    fn gallery_emblem_close_up() {
+        let emblem = emblem_at_rest();
+        gallery("gallery_emblem", vec2(900.0, 900.0), 2, |ctx| {
+            egui::CentralPanel::default().frame(Frame::none()).show(ctx, |ui| {
+                let screen = ctx.screen_rect();
+                emblem.paint_in(&ui.painter_at(screen), screen);
+            });
+        });
+    }
+
     #[test]
     fn gallery_idle_screen_and_startup() {
         use crate::startup_sequence::Kind;
@@ -8177,7 +8240,7 @@ mod tests {
         // A frame with the finish paints, and asks for no frame of its own.
         // (A new context paints twice before it settles, and the grain's texture is new once.)
         let ctx = egui::Context::default();
-        let frame = || ctx.run(egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(640.0, 360.0))), ..Default::default() }, |ctx| paint_finish(ctx));
+        let frame = || ctx.run(egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(640.0, 360.0))), ..Default::default() }, |ctx| paint_finish(ctx, false));
         let _ = (frame(), frame(), frame());
         let out = frame();
         assert!(!out.shapes.is_empty());

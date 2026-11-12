@@ -333,6 +333,13 @@ impl Jai {
         (recorded, started.elapsed())
     }
 
+    /// An order JAI gives himself whose answer Sir is to hear (the catch-up after a long time
+    /// away): carried out like a spoken order, so it is answered aloud where a typed one is
+    /// answered in writing.
+    pub fn run_spoken(&self, order: &str) {
+        self.dispatch_turn(order.to_string(), Instant::now(), 0, InputSource::Voice);
+    }
+
     /// The barge-in pass of the exhaustive verifier: JAI starts saying `line`, then `commands`
     /// arrive `gap` apart through the real dispatcher (each cancels the turn before it). What
     /// had happened once everything settled, or after `limit`. Meant for a process in which

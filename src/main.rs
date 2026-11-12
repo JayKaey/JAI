@@ -98,6 +98,7 @@ mod desktop_backdrop;
 mod startup_sequence;
 mod speaker_id;
 mod voice_setup;
+mod emblem_hardware;
 mod hud_style;
 mod hud_suggestions;
 mod hyper_cortex;
@@ -490,8 +491,12 @@ fn init_logging(log_file: &str) {
                 .with_writer(std::sync::Mutex::new(f))
         });
     let console_layer = fmt::layer().with_ansi(enable_ansi()).with_timer(LocalTimer).with_target(false);
+    // (A decode that was called off makes Whisper log "failed to decode" as an error: it is none.)
+    let quiet_call_offs =
+        tracing_subscriber::filter::dynamic_filter_fn(|meta, _| !(meta.target().starts_with("whisper_rs") && *meta.level() == tracing::Level::ERROR && stt::just_called_off()));
     tracing_subscriber::registry()
         .with(filter)
+        .with(quiet_call_offs)
         .with(console_layer)
         .with(file_layer)
         .init();
@@ -627,11 +632,13 @@ fn main() -> ExitCode {
                 line.push_str(&away);
             }
             if catch_up {
-                line.push_str(" Here is what is new.");
+                line.push_str(" Let me bring you up to date.");
             }
             app.speak_standalone(&line, false, modality::Trigger::System);
             if catch_up {
-                // After a long time away, once the greeting is said: his day, his mail, the news.
+                // After a long time away, once the greeting is said: his day, his mail, the news,
+                // told aloud. (Sent as a typed order it was answered in writing only: seen live
+                // 2026-11-12. It follows a greeting, so it does not greet again.)
                 tokio::time::sleep(Duration::from_secs(3)).await;
                 for _ in 0..60 {
                     if app.hud_state().state == "idle" {
@@ -639,7 +646,8 @@ fn main() -> ExitCode {
                     }
                     tokio::time::sleep(Duration::from_millis(500)).await;
                 }
-                app.handle_command(hud::HudCommand::Chat { text: "Brief me".into() }).await;
+                briefing::after_a_greeting();
+                app.run_spoken("Brief me");
             }
         });
     }

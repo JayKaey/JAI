@@ -105,6 +105,12 @@ pub fn silent_quick_command(text: &str) -> Option<SilentAction> {
             act("hud_board", json!({ "action": "minimize" }), "Back to the board")
         }
         "minimize" | "minimise" | "minimieren" => act("window_management", json!({ "action": "minimize" }), "Minimised"),
+        // What is up on his board goes first; only with nothing up is it the HUD itself that
+        // goes to the tray. (Seen live 2026-11-12: "close" with the briefing on the board sent
+        // the whole HUD away.)
+        "close" | "schließen" | "schliessen" if crate::hud_board::is_active() || !crate::hud_dock::open_blocks().is_empty() => {
+            act("close_all_secondary_windows", json!({}), "Closed")
+        }
         "close" | "schließen" | "schliessen" => act("configure_interface", json!({ "window": "hide" }), "To the tray"),
         "orb mode" | "orb" | "orb only" | "only orb" | "orbmodus" | "orb modus" | "pure orb" => act("control_orb_mode", json!({ "enabled": true }), "Orb mode"),
         "normal mode" | "full mode" | "show chat" | "full view" | "normaler modus" | "normalmodus" | "exit orb mode" => {

@@ -505,6 +505,44 @@ pub fn close_board() -> bool {
     true
 }
 
+/// "Close the windows": every block of the board that is not pinned leaves (and the board with
+/// them when none is pinned). How many left.
+pub fn close_unpinned() -> usize {
+    let (total, pinned): (usize, Vec<usize>) = {
+        let b = board();
+        let Some(shown) = b.shown.as_ref() else { return 0 };
+        let blocks = &shown.report.blocks;
+        (blocks.len(), (0..blocks.len()).filter(|i| b.pinned.contains(&blocks[*i])).collect())
+    };
+    if pinned.is_empty() {
+        close_board();
+        return total;
+    }
+    // (From the back, so the indices before a closed one stay true.)
+    (0..total).rev().filter(|i| !pinned.contains(i)).filter_map(remove_block).count()
+}
+
+/// Closes what a spoken target names on the board by its header: "the briefing" (every block
+/// of the briefing, or the whole report when that is its topic), "the timetable" (that one).
+/// The headers of what left.
+pub fn close_matching(target: &str) -> Vec<String> {
+    let words = crate::deep_research_engine::terms(&target.to_lowercase());
+    let Some(report) = board().shown.as_ref().map(|s| Arc::clone(&s.report)) else { return Vec::new() };
+    if words.is_empty() {
+        return Vec::new();
+    }
+    let named = |text: &str| {
+        let text = text.to_lowercase();
+        words.iter().all(|w| text.contains(w.as_str()))
+    };
+    if named(&report.topic) {
+        close_board();
+        return report.blocks.iter().map(|b| b.label.clone()).collect();
+    }
+    let which: Vec<usize> = report.blocks.iter().enumerate().filter(|(_, b)| named(&format!("{} {} {}", b.label, b.tag, b.source))).map(|(i, _)| i).collect();
+    which.into_iter().rev().filter_map(remove_block).collect()
+}
+
 /// "Are you there?": the state before waking (the gyroscope unfolds into the front emblem).
 pub fn wake() -> ScreenState {
     let before = screen_state();
@@ -614,7 +652,8 @@ pub fn find_block(report: &Report, target: &str) -> Option<usize> {
         .iter()
         .enumerate()
         .map(|(i, b)| {
-            let label = b.label.to_lowercase();
+            // (Its header and what it is tagged as: "the briefing" names a block tagged BRIEFING.)
+            let label = format!("{} {}", b.label, b.tag).to_lowercase();
             (i, words.iter().filter(|w| label.contains(w.as_str())).count())
         })
         .filter(|(_, n)| *n > 0)
@@ -625,7 +664,8 @@ pub fn find_block(report: &Report, target: &str) -> Option<usize> {
 /// Whether a spoken target names a block on the board ("headset share").
 pub fn names_block(target: &str) -> bool {
     let shown = board().shown.as_ref().map(|s| Arc::clone(&s.report));
-    shown.is_some_and(|r| !target.trim().is_empty() && find_block(&r, target).is_some())
+    let words = crate::deep_research_engine::terms(&target.to_lowercase());
+    shown.is_some_and(|r| !target.trim().is_empty() && (find_block(&r, target).is_some() || (!words.is_empty() && words.iter().all(|w| r.topic.to_lowercase().contains(w.as_str())))))
 }
 
 /// Maximises a block (None target: the block Sir last asked about, else the first photo of a
@@ -1261,6 +1301,8 @@ async fn run_action(tools: &ToolContext, args: &Value, action: &str) -> Result<S
                         closed.push(out);
                     }
                 }
+                // What is called that on the board itself: "the briefing", "the timetable".
+                closed.extend(close_matching(target));
                 if closed.is_empty() {
                     return Ok(spoken(format!("No block '{target}' is open."), format!("The {target} isn't open, Sir.")));
                 }
@@ -2025,9 +2067,12 @@ fn frame(p: &Painter, slot: Rect, block: &Block, active: bool, stack: Option<(us
     // that faces it; wear on the frame.
     crate::hud_style::shadow(&p.with_clip_rect(r.expand(48.0)), r, 1.0);
     glow_frame(p, r, edge, if active { 1.6 } else { 1.0 });
+    // (A frame that has aged, and what use leaves on its surface: `hud_style`.)
+    let seed = crate::hud_style::seed_of(&block.label);
     crate::hud_style::surface(p, r, if active { BLOCK_FILL_LIFTED } else { BLOCK_FILL }, 1.0);
-    p.rect_stroke(r, Rounding::ZERO, stroke(1.2, edge));
-    crate::hud_style::wear(p, r, BLOCK_FILL, edge, crate::hud_style::seed_of(&block.label), 1.0);
+    crate::hud_style::patina(p, r, seed, 1.0);
+    crate::hud_style::worn_frame(p, r, edge, 1.2, seed, 1.0, false);
+    crate::hud_style::wear(p, r, BLOCK_FILL, edge, seed, 1.0);
     if let Some(orb) = crate::hud_dock::orb() {
         crate::hud_style::emblem_light(p, r, orb, active_colour(), 1.0);
     }
@@ -2054,7 +2099,7 @@ fn frame(p: &Painter, slot: Rect, block: &Block, active: bool, stack: Option<(us
     if tagged {
         p.text(pos2(right, mid), Align2::RIGHT_CENTER, &block.tag, micro(), MICRO);
     }
-    let label = crate::hud_style::title_galley(p, &block.label, 13.5, active_colour(), (room - if tagged { tag_width } else { 0.0 }).max(20.0));
+    let label = crate::hud_style::fitted_title(p, &block.label, 13.5, active_colour(), (room - if tagged { tag_width } else { 0.0 }).max(20.0));
     let label_right = r.left() + pad + label.size().x;
     p.galley(pos2(r.left() + pad, mid - label.size().y * 0.5), label, Color32::PLACEHOLDER);
     let light = match &block.kind {

@@ -28,38 +28,77 @@ pub enum Use {
     Speech,
 }
 
-static WANT_SPECTRUM: AtomicBool = AtomicBool::new(false);
-static WANT_SPEECH: AtomicBool = AtomicBool::new(false);
-static RUNNING: AtomicBool = AtomicBool::new(false);
-/// The last time a consumer said it still wants the capture (it closes when nobody has for a
-/// few seconds, so a consumer that goes away without a word costs nothing).
-static WANTED_AT: Mutex<Option<Instant>> = Mutex::new(None);
+/// Where a use listens.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Source {
+    /// Nowhere: nothing it should hear is playing.
+    Nothing,
+    /// Windows' default output: everything the PC plays, mixed (with whatever a mixer adds to
+    /// it: on Sir's PC his own microphone's monitor).
+    Default,
+    /// One output device by its name: the one the music player, or the video, plays to.
+    Device(String),
+}
+
+/// One use's tap: whether it is wanted, when that was last said, whether its capture runs,
+/// and where it listens.
+struct Tap {
+    want: AtomicBool,
+    running: AtomicBool,
+    wanted_at: Mutex<Option<Instant>>,
+    source: Mutex<Source>,
+}
+
+/// (The music's tap listens nowhere until `music_lyrics` has found what plays music; the
+/// speech tap to everything until the subtitles name a device.)
+static SPECTRUM_TAP: Tap = Tap { want: AtomicBool::new(false), running: AtomicBool::new(false), wanted_at: Mutex::new(None), source: Mutex::new(Source::Nothing) };
+static SPEECH_TAP: Tap = Tap { want: AtomicBool::new(false), running: AtomicBool::new(false), wanted_at: Mutex::new(None), source: Mutex::new(Source::Default) };
+
+fn tap(user: Use) -> &'static Tap {
+    match user {
+        Use::Spectrum => &SPECTRUM_TAP,
+        Use::Speech => &SPEECH_TAP,
+    }
+}
 
 static SPECTRUM: Mutex<[f32; BANDS]> = Mutex::new([0.0; BANDS]);
 static BASS: AtomicU32 = AtomicU32::new(0);
 static LEVEL: AtomicU32 = AtomicU32::new(0);
 static SPEECH: Mutex<VecDeque<f32>> = Mutex::new(VecDeque::new());
 
-/// `user` wants (or no longer wants) what the PC plays. Asked for every frame it is used; the
+/// `user` wants (or no longer wants) what the PC plays. Asked for every frame it is used; its
 /// capture opens on the first wish and closes a few seconds after the last.
 pub fn want(user: Use, on: bool) {
-    match user {
-        Use::Spectrum => WANT_SPECTRUM.store(on, Ordering::Release),
-        Use::Speech => WANT_SPEECH.store(on, Ordering::Release),
-    }
+    let t = tap(user);
+    t.want.store(on, Ordering::Release);
     if on {
-        *lock(&WANTED_AT) = Some(Instant::now());
-        if !RUNNING.swap(true, Ordering::AcqRel) {
-            let _ = std::thread::Builder::new().name("jai-pc-audio".into()).spawn(|| {
-                capture();
-                RUNNING.store(false, Ordering::Release);
+        *lock(&t.wanted_at) = Some(Instant::now());
+        if !t.running.swap(true, Ordering::AcqRel) {
+            let _ = std::thread::Builder::new().name("jai-pc-audio".into()).spawn(move || {
+                capture(user);
+                tap(user).running.store(false, Ordering::Release);
             });
         }
     }
 }
 
-fn wanted() -> bool {
-    (WANT_SPECTRUM.load(Ordering::Acquire) || WANT_SPEECH.load(Ordering::Acquire)) && lock(&WANTED_AT).is_some_and(|at| at.elapsed() < Duration::from_secs(4))
+/// Where `user` listens from now on (its capture moves there by itself).
+pub fn listen_to(user: Use, source: Source) {
+    let mut now = lock(&tap(user).source);
+    if *now != source {
+        tracing::debug!("[AUDIO] {user:?} listens to {source:?}");
+        *now = source;
+    }
+}
+
+/// Where `user` listens right now.
+pub fn source(user: Use) -> Source {
+    lock(&tap(user).source).clone()
+}
+
+fn wanted(user: Use) -> bool {
+    let t = tap(user);
+    t.want.load(Ordering::Acquire) && lock(&t.wanted_at).is_some_and(|at| at.elapsed() < Duration::from_secs(4))
 }
 
 /// The spectrum right now: `BANDS` values 0-1, low to high (zeros while nothing plays).
@@ -139,14 +178,55 @@ pub fn to_speech_rate(samples: &[f32], rate: usize, carry: &mut (f32, f32, f32))
     out
 }
 
-fn capture() {
-    use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+/// The output device a source names, with its name (the default one when the named one is
+/// gone).
+fn device_for(source: &Source) -> Option<(cpal::Device, String)> {
+    use cpal::traits::{DeviceTrait, HostTrait};
     let host = cpal::default_host();
-    let Some(device) = host.default_output_device() else {
-        tracing::warn!("[AUDIO] No output device to listen to");
-        return;
+    let named = match source {
+        Source::Device(name) => host.output_devices().ok().and_then(|mut all| all.find(|d| d.name().is_ok_and(|n| n == *name))),
+        _ => None,
     };
-    let Ok(config) = device.default_output_config() else { return };
+    let device = named.or_else(|| host.default_output_device())?;
+    let name = device.name().unwrap_or_else(|_| "the output".to_string());
+    Some((device, name))
+}
+
+/// One use's capture: it listens where its tap says, for as long as it is wanted.
+fn capture(user: Use) {
+    while wanted(user) {
+        let source = source(user);
+        if source == Source::Nothing {
+            if user == Use::Spectrum {
+                silence();
+            }
+            std::thread::sleep(Duration::from_millis(200));
+            continue;
+        }
+        if !listen(user, &source) {
+            // (The device could not be opened: not asked again at once.)
+            std::thread::sleep(Duration::from_secs(2));
+        }
+    }
+    match user {
+        Use::Spectrum => silence(),
+        Use::Speech => lock(&SPEECH).clear(),
+    }
+}
+
+/// What was last said in the log about each use's device (the HUD's capture closes whenever
+/// it rests and opens again with its next frame: said once per device, not every time).
+static SAID: Mutex<[Option<String>; 2]> = Mutex::new([None, None]);
+
+/// Listens to `source` until the tap names another one or is no longer wanted. False when the
+/// device could not be opened.
+fn listen(user: Use, source: &Source) -> bool {
+    use cpal::traits::{DeviceTrait, StreamTrait};
+    let Some((device, name)) = device_for(source) else {
+        tracing::warn!("[AUDIO] No output device to listen to");
+        return false;
+    };
+    let Ok(config) = device.default_output_config() else { return false };
     let (rate, channels) = (config.sample_rate().0 as usize, config.channels() as usize);
     let (tx, rx) = std::sync::mpsc::channel::<Vec<f32>>();
     let mono = move |d: &[f32]| -> Vec<f32> { if channels <= 1 { d.to_vec() } else { d.chunks(channels).map(|f| f.iter().sum::<f32>() / channels as f32).collect() } };
@@ -163,67 +243,81 @@ fn capture() {
             err,
             None,
         ),
-        _ => return,
+        _ => return false,
     };
     let Ok(stream) = stream else {
-        tracing::warn!("[AUDIO] Could not listen to what the PC plays");
-        return;
+        tracing::warn!("[AUDIO] Could not listen to '{name}'");
+        return false;
     };
     if stream.play().is_err() {
-        return;
+        return false;
     }
-    tracing::info!("[AUDIO] Listening to what the PC plays ({rate} Hz, loopback; read only)");
+    let what = match user {
+        Use::Spectrum => "the music",
+        Use::Speech => "what is said",
+    };
+    {
+        let mut said = lock(&SAID);
+        let slot = &mut said[user as usize];
+        if slot.as_deref() != Some(name.as_str()) {
+            tracing::info!("[AUDIO] Listening to {what} on '{name}' ({rate} Hz, loopback; read only)");
+            *slot = Some(name.clone());
+        }
+    }
     let mut window: VecDeque<f32> = VecDeque::with_capacity(FFT * 2);
     let mut shown = [0.0f32; BANDS];
     let mut carry = (0.0f32, 0.0f32, 0.0f32);
     let mut last = Instant::now();
     let mut bass_avg = 0.0f32;
-    while wanted() {
+    while wanted(user) && *lock(&tap(user).source) == *source {
         let chunk = match rx.recv_timeout(Duration::from_millis(200)) {
             Ok(chunk) => chunk,
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                 // Nothing plays: WASAPI's loopback delivers nothing then.
-                silence();
-                shown = [0.0; BANDS];
+                if user == Use::Spectrum {
+                    silence();
+                    shown = [0.0; BANDS];
+                }
                 continue;
             }
             Err(_) => break,
         };
-        if WANT_SPEECH.load(Ordering::Acquire) {
-            let speech = to_speech_rate(&chunk, rate, &mut carry);
-            let mut tap = lock(&SPEECH);
-            tap.extend(speech);
-            let over = tap.len().saturating_sub(SPEECH_KEEP);
-            tap.drain(..over);
-        }
-        if WANT_SPECTRUM.load(Ordering::Acquire) {
-            window.extend(chunk.iter().copied());
-            let over = window.len().saturating_sub(FFT);
-            window.drain(..over);
-            // Sixty spectra a second at most.
-            if window.len() == FFT && last.elapsed() >= Duration::from_millis(16) {
-                let dt = last.elapsed().as_secs_f32().min(0.1);
-                last = Instant::now();
-                let frame: Vec<f32> = window.iter().copied().collect();
-                let measured = spectrum(&frame, rate as f32);
-                settle(&mut shown, &measured, dt);
-                *lock(&SPECTRUM) = shown;
-                // The bass: the three lowest bands, against their own average of the last second
-                // (so a beat stands out of a constant hum).
-                let bass = (measured[0] + measured[1] + measured[2]) / 3.0;
-                bass_avg += (bass - bass_avg) * (dt / 1.0).min(1.0);
-                let beat = ((bass - bass_avg * 0.85) * 3.0).clamp(0.0, 1.0) * bass;
-                let held = f32::from_bits(BASS.load(Ordering::Relaxed));
-                BASS.store((if beat > held { beat } else { (held - 3.5 * dt).max(beat) }).to_bits(), Ordering::Relaxed);
-                let rms = (frame.iter().map(|s| s * s).sum::<f32>() / frame.len() as f32).sqrt();
-                LEVEL.store((((20.0 * rms.max(1e-7).log10()) + 60.0) / 50.0).clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
+        match user {
+            Use::Speech => {
+                let speech = to_speech_rate(&chunk, rate, &mut carry);
+                let mut tap = lock(&SPEECH);
+                tap.extend(speech);
+                let over = tap.len().saturating_sub(SPEECH_KEEP);
+                tap.drain(..over);
+            }
+            Use::Spectrum => {
+                window.extend(chunk.iter().copied());
+                let over = window.len().saturating_sub(FFT);
+                window.drain(..over);
+                // Sixty spectra a second at most.
+                if window.len() == FFT && last.elapsed() >= Duration::from_millis(16) {
+                    let dt = last.elapsed().as_secs_f32().min(0.1);
+                    last = Instant::now();
+                    let frame: Vec<f32> = window.iter().copied().collect();
+                    let measured = spectrum(&frame, rate as f32);
+                    settle(&mut shown, &measured, dt);
+                    *lock(&SPECTRUM) = shown;
+                    // The bass: the three lowest bands, against their own average of the last
+                    // second (so a beat stands out of a constant hum).
+                    let bass = (measured[0] + measured[1] + measured[2]) / 3.0;
+                    bass_avg += (bass - bass_avg) * (dt / 1.0).min(1.0);
+                    let beat = ((bass - bass_avg * 0.85) * 3.0).clamp(0.0, 1.0) * bass;
+                    let held = f32::from_bits(BASS.load(Ordering::Relaxed));
+                    BASS.store((if beat > held { beat } else { (held - 3.5 * dt).max(beat) }).to_bits(), Ordering::Relaxed);
+                    let rms = (frame.iter().map(|s| s * s).sum::<f32>() / frame.len() as f32).sqrt();
+                    LEVEL.store((((20.0 * rms.max(1e-7).log10()) + 60.0) / 50.0).clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
+                }
             }
         }
     }
     drop(stream);
-    silence();
-    lock(&SPEECH).clear();
-    tracing::info!("[AUDIO] No longer listening to what the PC plays");
+    tracing::debug!("[AUDIO] No longer listening to {what} on '{name}'");
+    true
 }
 
 #[cfg(test)]
@@ -246,6 +340,9 @@ mod tests {
     #[test]
     #[ignore]
     fn the_loopback_opens_and_hears_what_plays() {
+        // (Both to everything the PC plays, as a check of the capture itself.)
+        listen_to(Use::Spectrum, Source::Default);
+        listen_to(Use::Speech, Source::Default);
         want(Use::Spectrum, true);
         want(Use::Speech, true);
         let (mut loudest, mut speech) = (0.0f32, 0usize);
@@ -255,7 +352,7 @@ mod tests {
             loudest = loudest.max(bass_and_level().1);
             speech += take_speech().len();
         }
-        let up = RUNNING.load(Ordering::Acquire);
+        let up = SPECTRUM_TAP.running.load(Ordering::Acquire) && SPEECH_TAP.running.load(Ordering::Acquire);
         println!("capture up: {up}; loudest level {loudest:.3}; {speech} speech samples in 2 s; bands {:?}", bands().map(|b| (b * 100.0) as u32));
         want(Use::Spectrum, false);
         want(Use::Speech, false);
@@ -312,9 +409,15 @@ mod tests {
 
     #[test]
     fn nobody_wanting_it_closes_it() {
-        *lock(&WANTED_AT) = Some(Instant::now() - Duration::from_secs(10));
-        WANT_SPECTRUM.store(true, Ordering::Release);
-        assert!(!wanted(), "a wish nobody has renewed for seconds has lapsed");
-        WANT_SPECTRUM.store(false, Ordering::Release);
+        *lock(&SPEECH_TAP.wanted_at) = Some(Instant::now() - Duration::from_secs(10));
+        SPEECH_TAP.want.store(true, Ordering::Release);
+        assert!(!wanted(Use::Speech), "a wish nobody has renewed for seconds has lapsed");
+        SPEECH_TAP.want.store(false, Ordering::Release);
+        // The music's tap listens nowhere until something plays music; the speech tap to
+        // everything until the subtitles name a device.
+        assert_eq!(source(Use::Spectrum), Source::Nothing);
+        listen_to(Use::Spectrum, Source::Device("Music".into()));
+        assert_eq!(source(Use::Spectrum), Source::Device("Music".into()));
+        listen_to(Use::Spectrum, Source::Nothing);
     }
 }

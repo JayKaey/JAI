@@ -129,7 +129,22 @@ pub const CALLED_OFF: &str = "called off: Sir carried on";
 /// callback a pointer of the wrong type, so the flag is passed directly.)
 unsafe extern "C" fn called_off_callback(data: *mut std::ffi::c_void) -> bool {
     // SAFETY: `data` is `Arc::as_ptr` of an `Arc<AtomicBool>` that outlives `WhisperState::full`.
-    !data.is_null() && unsafe { &*(data as *const AtomicBool) }.load(Ordering::Relaxed)
+    let off = !data.is_null() && unsafe { &*(data as *const AtomicBool) }.load(Ordering::Relaxed);
+    if off {
+        CALLED_OFF_AT.store(crate::ears::now_ms().max(1), Ordering::Relaxed);
+    }
+    off
+}
+
+/// When a decode was last called off (`ears::now_ms`; 0: never).
+static CALLED_OFF_AT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// A decode was called off a moment ago: what Whisper says about it in its own log ("failed to
+/// decode", as an error) is no error. (Seen live 2026-11-12: one such line for every sentence
+/// Sir spoke, from the words shown while he speaks.)
+pub fn just_called_off() -> bool {
+    let at = CALLED_OFF_AT.load(Ordering::Relaxed);
+    at != 0 && crate::ears::now_ms().saturating_sub(at) < 600
 }
 
 #[derive(Clone)]

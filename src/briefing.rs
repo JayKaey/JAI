@@ -184,9 +184,53 @@ fn lms_lines(updates: &[CourseUpdate], day: NaiveDate) -> (Option<String>, Vec<S
     (spoken, details)
 }
 
+/// A lesson as a card of the timetable stack: when and what, then where and with whom. What
+/// WebUntis leaves empty is left out (seen live 2026-11-12: a substitution without subject,
+/// room or teacher read "09:25 ·" and "Changed: room · , , ,").
+fn lesson_note(l: &Lesson) -> crate::hud_board::Note {
+    use crate::hud_board::Note;
+    let list = |items: &[String]| {
+        let mut named: Vec<&str> = items.iter().map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+        named.dedup();
+        named.join(", ")
+    };
+    let (rooms, teachers, note) = (list(&l.rooms), list(&l.teachers), l.note.trim());
+    let mut details: Vec<String> = Vec::new();
+    if !rooms.is_empty() {
+        details.push(format!("Room {rooms}"));
+    }
+    if !teachers.is_empty() {
+        details.push(teachers);
+    }
+    if !note.is_empty() {
+        details.push(note.to_string());
+    }
+    let details = details.join(" · ");
+    Note {
+        headline: format!("{} – {} · {}", l.start.format("%H:%M"), l.end.format("%H:%M"), l.subject_name()),
+        body: match l.status {
+            LessonStatus::Cancelled => "Cancelled — free period.".into(),
+            LessonStatus::Irregular if details.is_empty() => "Changed (a substitution or another room).".into(),
+            LessonStatus::Irregular => format!("Changed: {details}"),
+            LessonStatus::Regular if details.is_empty() => "As planned.".into(),
+            LessonStatus::Regular => details,
+        },
+    }
+}
+
+/// The next briefing follows a greeting (the catch-up at the start): it does not greet again.
+static GREETED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The next briefing comes right after a greeting: it opens with the time, not with another
+/// "Good evening, Sir".
+pub fn after_a_greeting() {
+    GREETED.store(true, std::sync::atomic::Ordering::Release);
+}
+
 /// The briefing as speakable prose; the details go to the HUD card.
 pub async fn executive(tools: &ToolContext, time_of_day: Option<&str>) -> String {
     let now = Local::now();
+    let greeted = GREETED.swap(false, std::sync::atomic::Ordering::AcqRel);
     let pim = &tools.pim;
     let when = period(time_of_day, now.hour());
     // The evening briefing looks ahead to tomorrow.
@@ -228,10 +272,10 @@ pub async fn executive(tools: &ToolContext, time_of_day: Option<&str>) -> String
         now.naive_local(),
     );
 
-    let mut spoken = vec![
-        greeting(now.hour()).to_string(),
-        format!("It's {} on {}, the {} of {}.", crate::brain::spoken_time(now), now.format("%A"), ordinal(now.day()), now.format("%B")),
-    ];
+    let mut spoken = vec![format!("It's {} on {}, the {} of {}.", crate::brain::spoken_time(now), now.format("%A"), ordinal(now.day()), now.format("%B"))];
+    if !greeted {
+        spoken.insert(0, greeting(now.hour()).to_string());
+    }
     let mut md = vec![format!("## {} briefing — {}", match when { Period::Morning => "Morning", Period::Afternoon => "Afternoon", Period::Evening => "Evening" }, now.format("%A %-d %B, %H:%M"))];
 
     match school {
@@ -377,14 +421,7 @@ pub fn board_report(
         ));
         let notes: Vec<Note> = lessons
             .iter()
-            .map(|l| Note {
-                headline: format!("{} · {}", l.start.format("%H:%M"), if l.subject_long.is_empty() { &l.subject } else { &l.subject_long }),
-                body: match l.status {
-                    LessonStatus::Cancelled => "Cancelled — free period.".into(),
-                    LessonStatus::Irregular => format!("Changed: room {} · {}", l.rooms.join(", "), l.teachers.join(", ")),
-                    LessonStatus::Regular => format!("Room {} · {}", l.rooms.join(", "), l.teachers.join(", ")),
-                },
-            })
+            .map(lesson_note)
             .collect();
         if !notes.is_empty() {
             blocks.push(Block::new("WEBUNTIS // TIMETABLE", day.format("%a %d %b").to_string(), "SOURCE: WEBUNTIS", BlockKind::NoteStack { notes }));

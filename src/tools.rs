@@ -356,6 +356,12 @@ fn own_close(name: &str, args: &Value) -> Option<(&'static str, Value)> {
     if crate::intent_engine::is_own_view(cleaned) {
         return Some(("hud_board", json!({ "action": "close", "target": crate::intent_engine::own_view_name(cleaned) })));
     }
+    // Something that is up on his own board under that name ("the briefing", "the timetable")
+    // is his before it is a program of Windows'. (Seen live 2026-11-12: "close the briefing"
+    // looked for a program called Briefing.)
+    if crate::hud_board::names_block(cleaned) || !crate::hud_dock::blocks_named(cleaned).is_empty() {
+        return Some(("hud_board", json!({ "action": "close", "target": cleaned })));
+    }
     None
 }
 
