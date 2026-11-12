@@ -334,7 +334,9 @@ pub fn attach_behind_desktop_icons(hwnd: isize, [left, top, right, bottom]: [i32
         if SetParent(HWND(hwnd), worker).0 == 0 {
             return Err("the desktop did not take the window".to_string());
         }
-        SetWindowPos(HWND(hwnd), HWND(0), left - origin.left, top - origin.top, right - left, bottom - top, SWP_NOACTIVATE | SWP_NOZORDER | SWP_SHOWWINDOW).map_err(|e| e.message().to_string())
+        // (On top of whatever else lives in that layer: a wallpaper program's own window, as on
+        // Sir's PC, would otherwise cover it. HWND(0) is the top of the layer's own order.)
+        SetWindowPos(HWND(hwnd), HWND(0), left - origin.left, top - origin.top, right - left, bottom - top, SWP_NOACTIVATE | SWP_SHOWWINDOW).map_err(|e| e.message().to_string())
     }
 }
 

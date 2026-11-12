@@ -304,7 +304,7 @@ fn music_mark(p: &egui::Painter, left_middle: Pos2, colour: Color32) {
 /// Where the lines stand under an emblem at `centre` with `radius` (the first row's middle):
 /// clear of its outermost ring and of the music's ticks round it.
 pub fn top_under(centre: Pos2, radius: f32) -> Pos2 {
-    pos2(centre.x, centre.y + radius * 1.3 + 26.0)
+    pos2(centre.x, centre.y + radius * 1.34 + 26.0)
 }
 
 fn stroke(width: f32, colour: Color32) -> Stroke {

@@ -3495,6 +3495,8 @@ struct HudApp {
     night: f32,
     /// The start-up sequence while it plays: since when, whether its sound has played, and
     /// which one it is.
+    /// Where the left column (widgets, cards waiting for an answer) stands, while it shows.
+    system_column_rect: Option<Rect>,
     boot: Option<(Instant, bool, crate::startup_sequence::Kind)>,
     /// The sequence has just ended: the notifications that waited behind it start their time.
     boot_done: bool,
@@ -3516,7 +3518,8 @@ const MINI_STRIP_HEIGHT: f32 = 40.0;
 fn paint_spectrum_ring(painter: &egui::Painter, frame: &crate::rose_emblem_renderer::EmblemFrame, bands: &[f32; crate::pc_audio::BANDS]) {
     const PER_SIDE: usize = 2 * crate::pc_audio::BANDS;
     let accent = crate::hud_board::active_colour();
-    let inner = frame.radius * 1.1;
+    // (Clear of the housing's rim and of the four marks on its diagonals.)
+    let inner = frame.radius * 1.15;
     let reach = 30.0 * (frame.radius / 175.0).clamp(0.5, 1.6);
     for k in 0..PER_SIDE {
         let at = (k as f32 + 0.5) / PER_SIDE as f32;
@@ -3752,6 +3755,7 @@ impl HudApp {
             console_foot: 46.0,
             calm: 1.0,
             night: 0.0,
+            system_column_rect: None,
             boot: None,
             boot_done: false,
             idle: 0.0,
@@ -4178,7 +4182,9 @@ impl HudApp {
                 info!("[HUD] Emblem at {:.0},{:.0} (radius {:.0}) on a screen of {:.0}×{:.0} at {:.0},{:.0}", frame.centre.x, frame.centre.y, frame.radius, screen.width(), screen.height(), screen.left(), screen.top());
             }
             // New windows open around the orb and the board's blocks, never on them.
-            crate::hud_dock::publish_obstacles(Some(Rect::from_center_size(frame.centre, Vec2::splat(frame.radius * 2.3))), board_rects);
+            let mut taken = board_rects;
+            taken.extend(self.system_column_rect.filter(|_| system));
+            crate::hud_dock::publish_obstacles(Some(Rect::from_center_size(frame.centre, Vec2::splat(frame.radius * 2.3))), taken);
             let docked = crate::hud_dock::docked_centre(screen, self.console_reserve());
             crate::hud_dock::publish_docked_spot(Some(Rect::from_center_size(docked, Vec2::splat(crate::rose_emblem_renderer::DOCKED_DIAMETER + 8.0))));
             let hit = Rect::from_center_size(frame.centre, vec2(frame.radius * 1.6, frame.radius * 1.6));
@@ -5287,11 +5293,12 @@ impl HudApp {
         let clip = m.messages.iter().rev().take(6).find_map(|l| l.clip.clone());
         let widgets: Vec<crate::widgets::DynamicWidgetSpec> = self.app.tools().widgets.widgets().into_iter().filter(|w| w.dock == crate::widgets::Dock::Panel).collect();
         if power.is_empty() && cards.is_empty() && clip.is_none() && widgets.is_empty() {
+            self.system_column_rect = None;
             return false;
         }
         let p = self.palette;
         let top = screen.top() + 12.0 + HEADER_H + 14.0;
-        egui::Area::new(egui::Id::new("hud_system_column"))
+        let column = egui::Area::new(egui::Id::new("hud_system_column"))
             .default_pos(pos2(screen.left() + 24.0, top))
             .order(egui::Order::Middle)
             .show(ctx, |ui| {
@@ -5312,6 +5319,9 @@ impl HudApp {
                     }
                 });
             });
+        // (Where the column stands: new blocks open beside it, not over it. Seen live
+        // 2026-11-12: a widget in the column under a block that opened in the same corner.)
+        self.system_column_rect = Some(column.response.rect);
         true
     }
 

@@ -30,10 +30,18 @@ pub struct Outcome {
     pub spellings: Vec<String>,
     /// The ear's gate before and after, when it was changed.
     pub gate: Option<(f32, f32)>,
+    /// Everyday words his name is written as in Sir's voice ("they", "day"): taken for it at
+    /// the start of an order from now on.
+    pub soft: Vec<String>,
     /// A voice print was made (the voice lock can be switched on).
     pub print: bool,
     /// Why no print was made, when none was.
     pub no_print: Option<String>,
+}
+
+fn capitalised(word: &str) -> String {
+    let mut c = word.chars();
+    c.next().map_or(String::new(), |first| first.to_uppercase().chain(c).collect())
 }
 
 impl Outcome {
@@ -49,6 +57,10 @@ impl Outcome {
             [] => {}
             [one] => line.push_str(&format!(" I will also answer to \"{one}\", which is how your name for me reaches my ears.")),
             many => line.push_str(&format!(" I will also answer to {}.", many.iter().map(|s| format!("\"{s}\"")).collect::<Vec<_>>().join(" and "))),
+        }
+        if !self.soft.is_empty() {
+            let words = self.soft.iter().map(|s| format!("\"{}\"", capitalised(s))).collect::<Vec<_>>().join(" and ");
+            line.push_str(&format!(" In your voice my name often reaches me as {words}: at the start of an order I will take that for it."));
         }
         if let Some((from, to)) = self.gate {
             line.push_str(if to < from { " Your voice is on the quiet side here, so I have opened my ears further." } else { " Your voice carries well here, so I have narrowed my ears against the room." });
@@ -122,6 +134,27 @@ const NEVER: [&str; 22] = ["day", "they", "hey", "say", "way", "may", "pay", "th
 /// The spellings worth learning from what was heard for the lines: written like the name at
 /// least twice (once is a slip of the recogniser), short, sounding like it, not a common word,
 /// and not one he answers to already (`known`).
+/// The everyday words the recogniser writes for his name in Sir's voice ("They open the
+/// mixer", "Day what time is it?"): written in at least two of the lines and rhyming with the
+/// name. Too common to be names; kept as soft names (`wake`), his name only as the first word
+/// of a short order he knows.
+pub fn soft_names(heard: &[String]) -> Vec<String> {
+    let mut counts: Vec<(String, usize)> = Vec::new();
+    for (text, line) in heard.iter().zip(LINES) {
+        let Some(name) = name_as_written(text, line) else { continue };
+        match counts.iter_mut().find(|(n, _)| *n == name) {
+            Some(entry) => entry.1 += 1,
+            None => counts.push((name, 1)),
+        }
+    }
+    let soft: Vec<(String, usize)> = counts.into_iter().filter(|(name, _)| NEVER.contains(&name.as_str()) && (name.ends_with("ay") || name.ends_with("ey"))).collect();
+    // (One such line can be chance; two say it is how his name comes through.)
+    if soft.iter().map(|(_, n)| n).sum::<usize>() < 2 {
+        return Vec::new();
+    }
+    soft.into_iter().map(|(name, _)| name).collect()
+}
+
 pub fn learnt_spellings(heard: &[String], known: impl Fn(&str) -> bool) -> Vec<String> {
     let mut counts: Vec<(String, usize)> = Vec::new();
     for (text, line) in heard.iter().zip(LINES) {
@@ -289,7 +322,14 @@ pub fn show(ctx: &egui::Context, mic: f32) {
                     y += h + 10.0;
                 };
                 say(if o.print { "I know your voice now. Say \u{201C}only obey me\u{201D} and I answer to you alone.".to_string() } else { format!("No voice print: {}.", o.no_print.clone().unwrap_or_else(|| "the lines were too short".into())) }, if o.print { ink } else { crate::hud_style::warn_colour() });
-                say(if o.spellings.is_empty() { "Your name for me reaches my ears as I knew it: nothing new to learn there.".to_string() } else { format!("I will also answer to: {}.", o.spellings.join(", ")) }, ink);
+                say(
+                    match (o.spellings.is_empty(), o.soft.is_empty()) {
+                        (true, true) => "Your name for me reaches my ears as I knew it: nothing new to learn there.".to_string(),
+                        (false, _) => format!("I will also answer to: {}.", o.spellings.join(", ")),
+                        (true, false) => format!("In your voice my name often reaches me as {}: at the start of an order I take that for it now.", o.soft.iter().map(|s| format!("\u{201C}{}\u{201D}", capitalised(s))).collect::<Vec<_>>().join(" and ")),
+                    },
+                    ink,
+                );
                 say(match o.gate { Some((from, to)) => format!("My ears' gate went from {from:.1} to {to:.1} times the room's noise."), None => "My ears' gate fits your voice and your room as it is.".to_string() }, ink);
             }
         }
@@ -308,6 +348,20 @@ pub fn show(ctx: &egui::Context, mic: f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Sir's own set-up of 2026-11-12, as the recogniser wrote it.
+    #[test]
+    fn everyday_words_his_name_comes_through_as_are_soft_names() {
+        let heard: Vec<String> =
+            ["Day what time is it?", "They open the mixer.", "JAI, show me my calendar", "They mute everything except this card.", "They what is the weather tomorrow?", "JAI, go to meet you"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(soft_names(&heard), ["day", "they"]);
+        // They are no spellings of the name (too common), and one stray line teaches nothing.
+        assert!(learnt_spellings(&heard, |_| false).is_empty());
+        let once: Vec<String> = ["They what time is it?", "Jay, open the mixer.", "Hey Jay, show me my calendar.", "Jay, mute everything except Discord.", "Jay, what is the weather tomorrow?", "Jay, good to meet you."].iter().map(|s| s.to_string()).collect();
+        assert!(soft_names(&once).is_empty());
+        let said = Outcome { soft: vec!["they".into(), "day".into()], print: true, ..Default::default() }.spoken();
+        assert!(said.contains("\"They\" and \"Day\""), "{said}");
+    }
 
     #[test]
     fn a_line_is_known_by_its_words_whatever_the_name_was_heard_as() {
@@ -369,7 +423,7 @@ mod tests {
         assert!(take_finished().is_none() && !active(), "taken once; nothing more is listened to");
         finished(Outcome { print: true, ..Outcome::default() });
         assert!(lock(&SETUP).as_ref().unwrap().outcome.as_ref().unwrap().print);
-        let all = Outcome { spellings: vec!["jey".into()], gate: Some((3.0, 1.8)), print: true, no_print: None };
+        let all = Outcome { spellings: vec!["jey".into()], gate: Some((3.0, 1.8)), soft: Vec::new(), print: true, no_print: None };
         assert!(all.spoken().contains("only obey me") && all.spoken().contains("\"jey\"") && all.spoken().contains("opened my ears"));
         cancel();
         assert!(!active());

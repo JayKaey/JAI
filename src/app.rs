@@ -938,6 +938,21 @@ impl Jai {
             *self.inner.wake.write().unwrap_or_else(|e| e.into_inner()) = self.inner.config.read(|c| WakeWordMatcher::new(&c.wake_words, c.wake_word_similarity_threshold));
         }
         outcome.spellings = spellings;
+        // The everyday words his name is written as in his voice ("They ...", "Day ..."): soft
+        // names from now on.
+        let soft = crate::voice_setup::soft_names(&heard);
+        if !soft.is_empty() {
+            self.inner.config.update(|c| {
+                for s in &soft {
+                    let entry = format!("~{s}");
+                    if !c.wake_words.iter().any(|w| w.eq_ignore_ascii_case(&entry)) {
+                        c.wake_words.push(entry);
+                    }
+                }
+            });
+            *self.inner.wake.write().unwrap_or_else(|e| e.into_inner()) = self.inner.config.read(|c| WakeWordMatcher::new(&c.wake_words, c.wake_word_similarity_threshold));
+        }
+        outcome.soft = soft;
         // The gate: by how far his voice stands over the room in the middle line of the six.
         let mut over: Vec<f32> = levels.iter().map(|(peak, floor)| peak - floor).filter(|d| d.is_finite()).collect();
         over.sort_by(f32::total_cmp);
@@ -959,7 +974,7 @@ impl Jai {
             },
             None => outcome.no_print = Some(if crate::speaker_id::available() { "too few lines came through clearly".to_string() } else { "the voice model is not installed".to_string() }),
         }
-        info!("[VOICE] Set-up done: spellings {:?}, gate {:?}, print {}", outcome.spellings, outcome.gate, outcome.print);
+        info!("[VOICE] Set-up done: spellings {:?}, soft names {:?}, gate {:?}, print {}", outcome.spellings, outcome.soft, outcome.gate, outcome.print);
         let line = outcome.spoken();
         crate::voice_setup::finished(outcome);
         self.speak_standalone(&line, true, Trigger::Input(InputSource::Voice));

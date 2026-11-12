@@ -52,8 +52,14 @@ const NAMED_IN_ORDER: &[&str] = &[
 pub struct WakeWordMatcher {
     /// Further names from the settings (cleaned, with their sound).
     extra: Vec<(String, String)>,
+    /// Soft names (written "~they" in the settings): everyday words the recogniser writes for
+    /// his name in Sir's voice. His name only as the first word of a short order he knows.
+    soft: Vec<String>,
     threshold: f64,
 }
+
+/// A soft name counts in an utterance of this many words at most.
+const SOFT_WORDS: usize = 10;
 
 /// How surely a word is his name.
 #[derive(Clone, Copy, PartialEq, PartialOrd)]
@@ -66,14 +72,20 @@ enum Form {
 
 impl WakeWordMatcher {
     pub fn new(variants: &[String], threshold: f64) -> Self {
-        let extra = variants.iter().map(|v| clean(v)).filter(|v| !v.is_empty() && !SOUNDS.contains(&v.as_str())).map(|v| { let p = phonetic(&v); (v, p) }).collect();
-        Self { extra, threshold }
+        let soft: Vec<String> = variants.iter().filter_map(|v| v.trim().strip_prefix('~')).map(clean).filter(|v| !v.is_empty()).collect();
+        let extra = variants.iter().filter(|v| !v.trim().starts_with('~')).map(|v| clean(v)).filter(|v| !v.is_empty() && !SOUNDS.contains(&v.as_str())).map(|v| { let p = phonetic(&v); (v, p) }).collect();
+        Self { extra, soft, threshold }
     }
 
     /// One word (cleaned) as his name, and how close it is.
     fn form(&self, token: &str) -> (Form, f64) {
         if token.is_empty() || NOT_HIM.contains(&token) {
             return (Form::None, 0.0);
+        }
+        // (A soft name: like the near ones, only in front of an order he knows; `locate` asks
+        // more of it.)
+        if self.soft.iter().any(|s| s == token) {
+            return (Form::Near, 0.8);
         }
         let p = phonetic(token);
         let j_spelt = token.starts_with('j') || token.starts_with("dsch") || token.starts_with("dj");
@@ -169,6 +181,10 @@ impl WakeWordMatcher {
         // name that is set off ("In Jay, can you show me my storage?").
         for i in start..(start + 2).min(words.len()) {
             let Some((n, form, score)) = self.name_at(&cleaned, i).filter(|_| !possessive(i)) else { continue };
+            // (A soft name is the very first word of something short, or it is the word it is.)
+            if self.soft.contains(&cleaned[i]) && (i != start || words.len() - start > SOFT_WORDS) {
+                continue;
+            }
             best = best.max(score);
             let last = i + n - 1;
             let paused = set_off_after(last);
@@ -363,6 +379,22 @@ pub fn phonetic(word: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_soft_name_is_his_only_at_the_start_of_a_short_order_he_knows() {
+        let m = WakeWordMatcher::new(&["~they".to_string(), "~day".to_string()], 0.8);
+        let hit = m.evaluate("They open the mixer.");
+        assert!(hit.matched, "an order he knows after the soft name");
+        assert_eq!(hit.command.to_lowercase(), "open the mixer");
+        assert!(m.evaluate("Day what time is it?").matched);
+        // Not an order; not the first word; a long sentence; and without the set-up, never.
+        assert!(!m.evaluate("They said the film was better than the book.").matched);
+        assert!(!m.evaluate("I think they open the mixer.").matched);
+        assert!(!m.evaluate("They open the mixer and then they all went home because it was late already.").matched);
+        assert!(!WakeWordMatcher::new(&[], 0.8).evaluate("They open the mixer.").matched);
+        // His real name is as sure as ever.
+        assert!(m.evaluate("Jay, open the mixer.").matched);
+    }
 
     fn matcher() -> WakeWordMatcher {
         let variants: Vec<String> = ["jai", "jay"].iter().map(|s| s.to_string()).collect();

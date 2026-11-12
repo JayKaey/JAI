@@ -108,15 +108,25 @@ pub fn silent_quick_command(text: &str) -> Option<SilentAction> {
         // What is up on his board goes first; only with nothing up is it the HUD itself that
         // goes to the tray. (Seen live 2026-11-12: "close" with the briefing on the board sent
         // the whole HUD away.)
-        "close" | "schließen" | "schliessen" if crate::hud_board::is_active() || !crate::hud_dock::open_blocks().is_empty() => {
-            act("close_all_secondary_windows", json!({}), "Closed")
+        "close" | "schließen" | "schliessen" => {
+            let (tool, args, label) = close_alone(crate::hud_board::is_active() || !crate::hud_dock::open_blocks().is_empty());
+            act(tool, args, label)
         }
-        "close" | "schließen" | "schliessen" => act("configure_interface", json!({ "window": "hide" }), "To the tray"),
         "orb mode" | "orb" | "orb only" | "only orb" | "orbmodus" | "orb modus" | "pure orb" => act("control_orb_mode", json!({ "enabled": true }), "Orb mode"),
         "normal mode" | "full mode" | "show chat" | "full view" | "normaler modus" | "normalmodus" | "exit orb mode" => {
             act("control_orb_mode", json!({ "enabled": false }), "Full HUD")
         }
         _ => None,
+    }
+}
+
+/// What a bare "close" does: with something of his up on the board, that goes; with nothing up,
+/// the HUD itself goes to the tray.
+fn close_alone(something_up: bool) -> (&'static str, Value, &'static str) {
+    if something_up {
+        ("close_all_secondary_windows", json!({}), "Closed")
+    } else {
+        ("configure_interface", json!({ "window": "hide" }), "To the tray")
     }
 }
 
@@ -6279,7 +6289,11 @@ mod tests {
         assert_eq!(quick("Lautstärke 30"), Some(("control_audio_mixer", json!({"action": "set_master", "level": 30}))));
         assert_eq!(quick("Orb mode"), Some(("control_orb_mode", json!({"enabled": true}))));
         assert_eq!(quick("Normal mode"), Some(("control_orb_mode", json!({"enabled": false}))));
-        assert_eq!(quick("Close"), Some(("configure_interface", json!({"window": "hide"}))));
+        // (What "close" alone does depends on what is up on the board: asked of the rule itself,
+        // since other tests put blocks up while this one runs.)
+        assert!(quick("Close").is_some());
+        assert_eq!(close_alone(false), ("configure_interface", json!({"window": "hide"}), "To the tray"));
+        assert_eq!(close_alone(true), ("close_all_secondary_windows", json!({}), "Closed"));
         assert_eq!(quick("Minimize"), Some(("window_management", json!({"action": "minimize"}))));
         // Whole short commands only.
         assert!(quick("Pause the video I was watching on YouTube please").is_none());
