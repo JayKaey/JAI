@@ -3653,6 +3653,11 @@ static NOT_WHAT_I_SAID: LazyLock<Regex> = LazyLock::new(|| {
 /// How long after a change "that's not what I said" still takes it back.
 pub const MISHEARD_UNDO_SECS: u64 = 120;
 
+/// "That's not what I said", "you misheard me": Sir says his words were heard wrong.
+pub fn says_misheard(text: &str) -> bool {
+    NOT_WHAT_I_SAID.is_match(&normalize(text))
+}
+
 /// "Undo that", "change it back": the sentence the last change is taken back with.
 #[cfg(test)]
 pub fn is_undo(text: &str) -> bool {

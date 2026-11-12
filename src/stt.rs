@@ -119,6 +119,9 @@ struct Job {
     /// A clip of what the PC plays, for the live subtitles (Some(translate into English)): it
     /// is decoded as speech in any language, not as a command of Sir's.
     subtitle: Option<bool>,
+    /// A second, careful hearing of a clip whose words led nowhere (Some(the names worth
+    /// giving the recogniser)): `transcribe_carefully`.
+    careful: Option<String>,
 }
 
 /// What a transcription that was called off returns.
@@ -154,6 +157,7 @@ pub struct SttEngine {
     model: Arc<std::sync::Mutex<String>>,
 }
 
+#[derive(Clone)]
 struct Settings {
     threads: i32,
     beam_size: i32,
@@ -292,7 +296,10 @@ impl SttEngine {
                                 let _urgent = (boost && job.subtitle.is_none()).then(crate::platform::urgent);
                                 crate::crash_guard::guard("Whisper transcription", || match job.subtitle {
                                     Some(translate) => subtitle_pass(e, &job.pcm, translate, &settings, job.called_off.as_ref()),
-                                    None => transcribe(e, job.pcm, job.voiced_ms, &settings, &settings.prompt, job.called_off.as_ref()),
+                                    None => match &job.careful {
+                                        Some(hint) => transcribe_carefully(e, &job.pcm, job.voiced_ms, &settings, hint),
+                                        None => transcribe(e, job.pcm, job.voiced_ms, &settings, &settings.prompt, job.called_off.as_ref()),
+                                    },
                                 })
                                 .unwrap_or_else(|| {
                                     engine = None;
@@ -341,7 +348,18 @@ impl SttEngine {
     pub async fn transcribe(&self, pcm: Vec<f32>, voiced_ms: u32) -> Result<Transcript, String> {
         let (reply, rx) = oneshot::channel();
         self.tx
-            .send(Job { pcm, voiced_ms, reply, called_off: None, subtitle: None })
+            .send(Job { pcm, voiced_ms, reply, called_off: None, subtitle: None, careful: None })
+            .map_err(|_| "speech recognition worker is not running".to_string())?;
+        rx.await.map_err(|_| "speech recognition worker stopped".to_string())?
+    }
+
+    /// A second, careful hearing of a clip whose words led nowhere (`ear`): slower and wider
+    /// than the first, with `hint` (the names of Sir's applications and views) after the usual
+    /// prompt. What it makes of the clip is only taken when that is an order he knows.
+    pub async fn transcribe_carefully(&self, pcm: Vec<f32>, voiced_ms: u32, hint: String) -> Result<Transcript, String> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(Job { pcm, voiced_ms, reply, called_off: None, subtitle: None, careful: Some(hint) })
             .map_err(|_| "speech recognition worker is not running".to_string())?;
         rx.await.map_err(|_| "speech recognition worker stopped".to_string())?
     }
@@ -352,7 +370,7 @@ impl SttEngine {
     pub fn transcribe_ahead(&self, pcm: Vec<f32>, voiced_ms: u32) -> Option<(Arc<AtomicBool>, oneshot::Receiver<Result<Transcript, String>>)> {
         let (reply, rx) = oneshot::channel();
         let called_off = Arc::new(AtomicBool::new(false));
-        self.tx.send(Job { pcm, voiced_ms, reply, called_off: Some(Arc::clone(&called_off)), subtitle: None }).ok()?;
+        self.tx.send(Job { pcm, voiced_ms, reply, called_off: Some(Arc::clone(&called_off)), subtitle: None, careful: None }).ok()?;
         Some((called_off, rx))
     }
 
@@ -362,7 +380,7 @@ impl SttEngine {
     pub fn subtitle(&self, pcm: Vec<f32>, translate: bool) -> Option<(Arc<AtomicBool>, oneshot::Receiver<Result<Transcript, String>>)> {
         let (reply, rx) = oneshot::channel();
         let called_off = Arc::new(AtomicBool::new(false));
-        self.tx.send(Job { pcm, voiced_ms: 0, reply, called_off: Some(Arc::clone(&called_off)), subtitle: Some(translate) }).ok()?;
+        self.tx.send(Job { pcm, voiced_ms: 0, reply, called_off: Some(Arc::clone(&called_off)), subtitle: Some(translate), careful: None }).ok()?;
         Some((called_off, rx))
     }
 }
@@ -901,6 +919,33 @@ fn transcribe(
         no_speech,
         passes,
     })
+}
+
+/// The second hearing's beam, and its encoder window: at least 15 s of context, where the first
+/// hearing takes the clip's own length.
+const CAREFUL_BEAM: i32 = 5;
+const CAREFUL_MIN_CTX: i32 = 768;
+
+/// A second, careful hearing of a clip whose words led nowhere (`ear`, 2026-11-13): the beam
+/// search with five beams, a wide encoder window, the temperature fallback, and the names
+/// worth knowing (`hint`: Sir's applications and views) after the usual prompt. Slower than the
+/// first hearing by design; in the language the first one heard. (The first hearing stays as
+/// it is: a list of names in its prompt made Whisper invent them, and every sentence would
+/// pay for the beam.)
+fn transcribe_carefully(engine: &mut WhisperEngine, pcm: &[f32], voiced_ms: u32, s: &Settings, hint: &str) -> Result<Transcript, String> {
+    let started = Instant::now();
+    let audio_ms = (pcm.len() * 1000 / SAMPLE_RATE) as u64;
+    let audio = preprocess(pcm).ok_or("nothing to hear")?;
+    let careful = Settings { beam_size: CAREFUL_BEAM, fast: false, ..s.clone() };
+    let prompt = format!("{} {}", s.prompt.trim(), hint.trim());
+    let language = engine.prior;
+    let ctx = audio_ctx_for(audio.len(), CAREFUL_MIN_CTX);
+    let decoded = run_full(&mut engine.state, &audio, &careful, prompt.trim(), Some(language), Some(ctx), true, None)?;
+    let no_speech = if decoded.text.is_empty() { 0.0 } else { sot_step(&mut engine.state, s).map_or(0.0, |st| st.no_speech) };
+    let text = if discarded(no_speech, decoded.avg_logprob) { String::new() } else { normalize_stt_transcript(&filter_hallucinations(&decoded.text, &prompt, voiced_ms < 1500)) };
+    let stt_ms = started.elapsed().as_millis() as u64;
+    info!("[STT] Heard again, carefully: {audio_ms} ms of audio in {stt_ms} ms [{language}, no-speech {no_speech:.2}, logprob {:.2}, beam {CAREFUL_BEAM}]: '{text}'", decoded.avg_logprob);
+    Ok(Transcript { text, language: language.to_string(), language_prob: 1.0, stt_ms, audio_ms, avg_logprob: decoded.avg_logprob, no_speech, passes: 1 })
 }
 
 fn normalize(s: &str) -> String {

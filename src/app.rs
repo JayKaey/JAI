@@ -53,6 +53,9 @@ struct CarryAudio {
 const STITCH_GAP_SAMPLES: usize = 16_000 * 150 / 1000;
 /// Whisper hears at most 30 s: stitched audio keeps its newest 28 s.
 const STITCH_MAX_SAMPLES: usize = 16_000 * 28;
+/// A clip longer than this (8 s) gets no second hearing: that is talk, not an order.
+const SECOND_HEARING_MOST: usize = 16_000 * 8;
+
 /// A dispatched voice turn this young is re-heard with the rest of the sentence; older ones are
 /// stitched as text.
 const STITCH_AUDIO_MAX_AGE: Duration = Duration::from_secs(6);
@@ -918,6 +921,32 @@ impl Jai {
         }
     }
 
+    /// A word his name arrives as in Sir's voice ("they") has stood in front of his orders
+    /// often enough: a soft name from now on, the print's word for the voice or not.
+    fn learn_soft_name(&self, word: &str) {
+        let entry = format!("~{word}");
+        self.inner.config.update(|c| {
+            if !c.wake_words.iter().any(|w| w.eq_ignore_ascii_case(&entry)) {
+                c.wake_words.push(entry.clone());
+            }
+        });
+        *self.inner.wake.write().unwrap_or_else(|e| e.into_inner()) = self.inner.config.read(|c| WakeWordMatcher::new(&c.wake_words, c.wake_word_similarity_threshold));
+        info!("[EAR] In Sir's voice his name arrives as '{word}': he answers to it from now on, at the start of an order he knows");
+        let mut shown = word.chars();
+        let shown: String = shown.next().map_or(String::new(), |first| first.to_uppercase().chain(shown).collect());
+        crate::hud_notify::record(&format!("Learnt: in your voice my name reaches me as \u{201C}{shown}\u{201D}. I answer to it now."), false);
+    }
+
+    /// An order given by name while no print of Sir's voice is known: its voice is gathered,
+    /// and once enough of them are one voice, that is his print (the lock holds from then on).
+    fn gather_voice(&self, db: &str, clip: Vec<f32>, speech_ms: u32) {
+        if let Some(print) = crate::speaker_id::gather(db, clip, speech_ms, true) {
+            crate::hud_feel::set_voice_known(true);
+            info!("[VOICE] Sir's voice print was gathered from {} orders given by name (a voice is his from a likeness of {:.2})", print.clips, print.threshold);
+            crate::hud_notify::record("I know your voice now, Sir, from the orders you gave me. I answer to you alone; say \u{201C}listen to everyone\u{201D} to change that.", false);
+        }
+    }
+
     /// The voice set-up's six lines are read: what JAI learns from them. The spellings the
     /// recogniser wrote for his name join the names he answers to, the ear's gate is set to
     /// Sir's voice over his room, and the clips' mean becomes his voice print.
@@ -974,6 +1003,7 @@ impl Jai {
             },
             None => outcome.no_print = Some(if crate::speaker_id::available() { "too few lines came through clearly".to_string() } else { "the voice model is not installed".to_string() }),
         }
+        outcome.lock = self.inner.config.read(|c| c.interface.voice_lock);
         info!("[VOICE] Set-up done: spellings {:?}, soft names {:?}, gate {:?}, print {}", outcome.spellings, outcome.soft, outcome.gate, outcome.print);
         let line = outcome.spoken();
         crate::voice_setup::finished(outcome);
@@ -1298,13 +1328,21 @@ impl Jai {
         let kept = stitching_enabled.then(|| pcm.clone());
         // Whose voice it is (for the voice lock and the voice set-up): worked out on the
         // processor while Whisper hears the words.
-        let lock_on = !u.ptt && self.inner.config.read(|c| c.interface.voice_lock);
+        // (A scripted session speaks with stand-in voices and learns nothing that is kept: the
+        // lock is the affair of Sir's own sessions. Nor does it hold while guests are welcome.)
+        let scripted = crate::platform::in_test_session();
+        let lock_on = !u.ptt && !scripted && self.inner.config.read(|c| c.interface.voice_lock) && !crate::speaker_id::guests_welcome();
         let in_setup = crate::voice_setup::active();
         let voice_levels = (crate::voice_setup::peak_db(&pcm), crate::dsp::to_dbfs(self.inner.controls.noise_floor_now()));
-        let voice_print = (lock_on || in_setup).then(|| {
+        // (Lock or no lock: his print learns from every sentence that is his.)
+        let voice_print = (crate::speaker_id::available() && (in_setup || (!u.ptt && !scripted))).then(|| {
             let clip = pcm.clone();
             tokio::task::spawn_blocking(move || crate::speaker_id::print_of(&clip))
         });
+        // The clip once more, for a second and careful hearing should its words lead nowhere,
+        // and to be kept with what it was taken for (`voice_clips`).
+        let again_audio = (self.inner.config.read(|c| c.whisper_second_hearing) && pcm.len() <= SECOND_HEARING_MOST).then(|| pcm.clone());
+        let clip_audio = (!scripted && pcm.len() <= SECOND_HEARING_MOST && self.inner.config.read(|c| c.keep_voice_clips)).then(|| pcm.clone());
         crate::core_sphere_3d::pulse("stt.rs");
         // With a head start the transcript is already on its way (or here): only the rest of the
         // decode is waited for.
@@ -1414,7 +1452,59 @@ impl Jai {
         let wake_required = c.wake_word_required.load(Ordering::Relaxed);
         let stitching = self.has_carry() || joined;
         let in_window = u.in_window || stitching || c.window_remaining_ms() > 0 || c.turn_active.load(Ordering::Acquire);
-        let wake = self.inner.wake.read().unwrap_or_else(|e| e.into_inner()).evaluate(&transcript.text);
+        // Whose voice it is by Sir's print, and what the print learns from this sentence.
+        let db = self.inner.config.read(|c| c.memory_db_path.clone());
+        let judged = match &voice {
+            Some(Ok(clip)) => crate::speaker_id::hear(&db, clip, speech_ms, !scripted),
+            _ => None,
+        };
+        let his_voice = judged.is_some_and(|j| j.sure);
+        let (jai_focused, gaming) = foreground_context().await;
+        // His ear for Sir's words (`ear`): what he has learnt to take them for, what sounds
+        // like a name where a name belongs, and for words spoken to him that lead nowhere, a
+        // second and careful hearing of the clip.
+        let named = {
+            let matcher = self.inner.wake.read().unwrap_or_else(|e| e.into_inner());
+            matcher.evaluate(&transcript.text).matched || transcript.text.split_whitespace().next().is_some_and(crate::wake::name_word)
+        };
+        let spoken_to_him = homecoming || u.ptt || u.barge_in || named || in_window || jai_focused;
+        let first_heard = transcript.text.clone();
+        let mut reading = crate::ear::read(&transcript.text, spoken_to_him, &crate::ear::is_order);
+        if reading.is_none() && spoken_to_him && crate::ear::worth_hearing_again(&transcript.text, transcript.avg_logprob, &crate::ear::is_order) {
+            if let Some(clip) = again_audio {
+                match self.inner.stt.transcribe_carefully(clip, speech_ms, crate::ear::hint()).await {
+                    Ok(again) => {
+                        let text = crate::wake::canon(&again.text);
+                        let second = crate::ear::read(&text, true, &crate::ear::is_order);
+                        let led = second.as_ref().map_or_else(|| text.clone(), |r| r.text.clone());
+                        if !text.is_empty() && crate::ear::leads_somewhere(&led, &crate::ear::is_order) {
+                            info!("[EAR] Heard again, carefully: '{}' is '{led}'", transcript.text);
+                            if !scripted {
+                                crate::ear::heard_again(&transcript.text, &led);
+                            }
+                            transcript.text = text;
+                            transcript.avg_logprob = again.avg_logprob;
+                            transcript.no_speech = again.no_speech;
+                            transcript.stt_ms += again.stt_ms;
+                            reading = second;
+                        } else {
+                            info!("[EAR] Heard again, carefully: '{text}' is no order he knows either; the first hearing stands");
+                        }
+                    }
+                    Err(e) => tracing::debug!("[EAR] No second hearing: {e}"),
+                }
+            }
+        }
+        if let Some(r) = &reading {
+            info!("[EAR] '{}' → '{}' ({})", transcript.text, r.text, r.why());
+            transcript.text = r.text.clone();
+        }
+        // His name: as it is written, and in Sir's own voice also as it arrives there ("They
+        // open the mixer.").
+        let (wake, new_name) = {
+            let matcher = self.inner.wake.read().unwrap_or_else(|e| e.into_inner());
+            if his_voice { matcher.evaluate_in_his_voice(&transcript.text) } else { (matcher.evaluate(&transcript.text), None) }
+        };
         // Who is Sir talking to? Push-to-talk, a barge-in and the welcome phrase are always for
         // JAI; everything else goes through the four-layer addressee detector.
         let addressee = if homecoming || u.ptt || u.barge_in {
@@ -1422,7 +1512,6 @@ impl Jai {
         } else if !wake_required && !self.inner.config.read(|c| c.addressee_detection) {
             crate::ears::Addressee::HandsFree
         } else {
-            let (jai_focused, gaming) = foreground_context().await;
             let ctx = crate::ears::AddresseeContext { wake_word: wake.matched, wake_required, conversation_open: in_window, jai_focused, gaming };
             crate::ears::classify_addressee(&transcript.text, &ctx)
         };
@@ -1505,28 +1594,24 @@ impl Jai {
         // and the keyboard are his hands; a voice that cannot be judged is let through and
         // logged, so a fault of the lock never locks Sir out.)
         if lock_on {
-            let db = self.inner.config.read(|c| c.memory_db_path.clone());
-            match (crate::speaker_id::known(&db), &voice) {
-                (Some(print), Some(Ok(clip))) => {
-                    let (his, score) = print.is_his(clip, speech_ms);
-                    if !his {
-                        info!("[VOICE LOCK] Not Sir's voice (likeness {score:.2}, his from {:.2}): '{}' is not carried out", print.threshold, transcript.text);
-                        crate::hud_lines::speech_over();
-                        crate::hud_lines::turned_away();
-                        self.emit(HudEvent::Transcript {
-                            text: transcript.text,
-                            language: transcript.language,
-                            source: "ignored".into(),
-                            wake_word: Some("voice lock".into()),
-                            stt_ms: transcript.stt_ms,
-                            audio_ms: transcript.audio_ms,
-                        });
-                        self.rest_state();
-                        return;
-                    }
-                    tracing::debug!("[VOICE LOCK] Sir's voice (likeness {score:.2})");
+            match (&judged, &voice) {
+                (Some(j), _) if !j.his => {
+                    info!("[VOICE LOCK] Not Sir's voice (likeness {:.2}, his from {:.2}): '{}' is not carried out", j.score, j.bar, transcript.text);
+                    crate::hud_lines::speech_over();
+                    crate::hud_lines::turned_away();
+                    self.emit(HudEvent::Transcript {
+                        text: transcript.text,
+                        language: transcript.language,
+                        source: "ignored".into(),
+                        wake_word: Some("voice lock".into()),
+                        stt_ms: transcript.stt_ms,
+                        audio_ms: transcript.audio_ms,
+                    });
+                    self.rest_state();
+                    return;
                 }
-                (Some(_), Some(Err(why))) => warn!("[VOICE LOCK] The voice could not be judged ({why}): the order is carried out"),
+                (Some(j), _) => info!("[VOICE LOCK] Sir's voice (likeness {:.2}, his from {:.2}{})", j.score, j.bar, if j.sure { "" } else { "; taken on trust, moments after a sentence that was surely his" }),
+                (None, Some(Err(why))) if crate::speaker_id::known(&db).is_some() => warn!("[VOICE LOCK] The voice could not be judged ({why}): the order is carried out"),
                 _ => {}
             }
         }
@@ -1627,6 +1712,27 @@ impl Jai {
                 self.emit(HudEvent::Retracted { message_id: String::new() });
                 self.stitch_rest(kept, speech_ms, u.barge_in, u.ptt, carried, command);
                 return;
+            }
+        }
+        // What this sentence teaches him, now that it is carried out: a rewrite that stood, his
+        // name as it arrives in Sir's voice, and (while no print of that voice is known) the
+        // voice of an order given by name.
+        if !scripted {
+            if let Some(r) = &reading {
+                crate::ear::stood(r);
+            }
+            if let Some(word) = new_name.filter(|w| crate::ear::name_heard(w)) {
+                self.learn_soft_name(&word);
+            }
+            if judged.is_none() && wake.matched && wake.score >= 0.95 && !u.ptt {
+                if let Some(Ok(clip)) = &voice {
+                    self.gather_voice(&db, clip.clone(), speech_ms);
+                }
+            }
+            // The clip itself, with what it was heard as and taken for: Sir's voice only (by
+            // his print, or by his name while no print is known).
+            if let Some(pcm) = clip_audio.filter(|_| judged.map_or(wake.matched || u.ptt, |j| j.his)) {
+                crate::voice_clips::keep(pcm, first_heard, command.clone(), crate::ear::leads_somewhere(&command, &crate::ear::is_order), transcript.avg_logprob, judged.map_or(0.0, |j| j.score));
             }
         }
         self.inner.barge_in_turn.store(u.barge_in, Ordering::Release);

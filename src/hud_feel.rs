@@ -91,10 +91,46 @@ static PHRASES: LazyLock<Vec<(Regex, Value)>> = LazyLock::new(|| {
     ]
 });
 
+/// Guests are welcome for this many minutes when Sir names no time.
+pub const GUEST_MINUTES: u64 = 10;
+
+/// People he may be told to answer to for a while.
+const GUEST: &str = r"friends?|guests?|brother|sister|mother|father|mum|mom|dad|parents|family|girlfriend|boyfriend|wife|husband|mates?|buddy|buddies|kumpel|freund|freundin|bruder|schwester|mama|papa";
+
+/// "Guest mode", "let my friend speak", "let Tom talk to you for half an hour": with the voice
+/// lock on, he answers to anyone for a while.
+static GUESTS: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(&format!(
+        r"^(?:guest\s+mode(?:\s+on)?|gastmodus(?:\s+an)?|(?:let|allow)\s+(?P<who>my\s+(?:{GUEST})|[a-zäöüß]+)\s+(?:speak|talk)(?:\s+to\s+you)?(?:\s+too|\s+as\s+well)?|(?:you\s+(?:can|may)\s+)?(?:listen|answer)\s+to\s+(?:him|her|them|my\s+(?:{GUEST}))(?:\s+too|\s+as\s+well)?)(?:\s+for\s+(?P<span>.+))?$"
+    ))
+    .expect("valid guest regex")
+});
+static GUESTS_OFF: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(?:guest\s+mode\s+off|end\s+guest\s+mode|no\s+more\s+guests|(?:only|just)\s+me\s+again|gastmodus\s+aus)$").expect("valid guest regex"));
+
+/// The request for guests in `s`, as arguments: on with its minutes, or off.
+fn guest_command(s: &str) -> Option<Value> {
+    if GUESTS_OFF.is_match(s) {
+        return Some(json!({"voice_guest": false}));
+    }
+    let c = GUESTS.captures(s)?;
+    // ("Let me speak", "let it talk": no guest.)
+    if c.name("who").is_some_and(|who| matches!(who.as_str(), "me" | "us" | "it" | "that" | "this" | "you" | "the" | "a")) {
+        return None;
+    }
+    let minutes = match c.name("span") {
+        Some(span) => (crate::listening_lock::duration_in(span.as_str())?.as_secs() / 60).clamp(1, 720),
+        None => GUEST_MINUTES,
+    };
+    Some(json!({"voice_guest": true, "voice_guest_minutes": minutes}))
+}
+
 /// A request for one of these features as `configure_interface` arguments (`s`: the fast
 /// path's normalised phrase).
 pub fn command(s: &str) -> Option<Value> {
     let s = s.trim();
+    if let Some(args) = guest_command(s) {
+        return Some(args);
+    }
     if let Some((_, args)) = PHRASES.iter().find(|(pattern, _)| pattern.is_match(s)) {
         return Some(args.clone());
     }
@@ -317,6 +353,18 @@ pub fn apply(args: &Value) {
     if flag(args, "settings_panel") == Some(true) {
         open_settings_panel();
     }
+    if let Some(on) = flag(args, "voice_guest") {
+        if on {
+            let minutes = args.get("voice_guest_minutes").and_then(Value::as_u64).unwrap_or(GUEST_MINUTES);
+            crate::speaker_id::welcome_guests(std::time::Duration::from_secs(minutes * 60));
+        } else {
+            crate::speaker_id::end_guests();
+        }
+    }
+    // ("Only obey me" ends a guest's welcome with it.)
+    if flag(args, "voice_lock") == Some(true) {
+        crate::speaker_id::end_guests();
+    }
 }
 
 // ------------------------------------------------------------------------- what he says ----
@@ -370,9 +418,19 @@ pub fn spoken(args: &Value) -> Option<String> {
     if on("voice_setup") == Some(true) {
         return Some("Let us get acquainted, Sir. Read me the lines on the screen.".to_string());
     }
+    if let Some(v) = on("voice_guest") {
+        let minutes = args.get("voice_guest_minutes").and_then(Value::as_u64).unwrap_or(GUEST_MINUTES);
+        let span = match minutes {
+            1 => "minute".to_string(),
+            60 => "hour".to_string(),
+            m if m % 60 == 0 => format!("{} hours", m / 60),
+            m => format!("{m} minutes"),
+        };
+        return Some(if v { format!("For the next {span} I'll answer to anyone, Sir. After that to you alone again.") } else { "Only you again, Sir.".to_string() });
+    }
     if let Some(v) = on("voice_lock") {
         if v && !voice_known() {
-            return Some("I don't know your voice yet, Sir. Say \"learn my voice\" and read me six lines first.".to_string());
+            return Some("I'll answer to your voice alone, Sir, as soon as I know it. A few more orders by name will do, or say \"learn my voice\" and read me six lines.".to_string());
         }
         return say("From now on I answer to your voice alone, Sir.", "I'll answer to anyone again, Sir.", v);
     }
@@ -564,6 +622,23 @@ mod tests {
         // The lock needs a voice to lock to.
         set_voice_known(false);
         assert!(spoken(&json!({"voice_lock": true})).unwrap().contains("learn my voice"));
+        // Guests: for a while, with the time Sir names or ten minutes.
+        for (text, minutes) in [("guest mode", 10), ("let my friend speak", 10), ("let tom talk to you for half an hour", 30), ("you can listen to my brother too for 2 hours", 120), ("guest mode for 5 minutes", 5)] {
+            assert_eq!(command(text), Some(json!({"voice_guest": true, "voice_guest_minutes": minutes})), "{text}");
+        }
+        for text in ["guest mode off", "only me again", "no more guests"] {
+            assert_eq!(command(text), Some(json!({"voice_guest": false})), "{text}");
+        }
+        for text in ["let me speak", "let it talk", "listen to my music", "let my friend know", "answer to my email"] {
+            assert_eq!(command(text), None, "{text}");
+        }
+        assert!(spoken(&json!({"voice_guest": true, "voice_guest_minutes": 30})).unwrap().contains("next 30 minutes"));
+        assert!(spoken(&json!({"voice_guest": true, "voice_guest_minutes": 60})).unwrap().contains("next hour"));
+        assert!(!crate::speaker_id::guests_welcome());
+        apply(&json!({"voice_guest": true, "voice_guest_minutes": 10}));
+        assert!(crate::speaker_id::guests_welcome());
+        apply(&json!({"voice_lock": true}));
+        assert!(!crate::speaker_id::guests_welcome(), "only obey me ends the welcome");
         set_voice_known(true);
         assert!(spoken(&json!({"voice_lock": true})).unwrap().contains("your voice alone"));
         set_voice_known(false);

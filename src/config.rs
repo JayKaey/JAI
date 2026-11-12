@@ -15,7 +15,7 @@ use tracing::{error, info, warn};
 
 pub const CONFIG_FILE: &str = "jai_config.json";
 /// Bump whenever tuned defaults change and old persisted values must be migrated.
-pub const CONFIG_VERSION: u32 = 26;
+pub const CONFIG_VERSION: u32 = 27;
 
 /// His name as the settings list it (`wake::WakeWordMatcher` knows how it is misheard and spelt;
 /// further names may be added here).
@@ -242,6 +242,12 @@ pub struct JaiConfig {
     /// same pass, the beam search only for an unsure sentence (`stt::one_pass`). False = the v22
     /// decoding (separate language detection, beam search for every sentence).
     pub whisper_fast_decode: bool,
+    /// Words spoken to him that lead nowhere get a second, careful hearing of their clip (the
+    /// beam search, a wide window, the names of Sir's applications): `stt::transcribe_carefully`.
+    pub whisper_second_hearing: bool,
+    /// The last clips of Sir's own orders are kept on this PC (`voice_clips`: his hearing is
+    /// tested on them; never sent anywhere). Sir, 2026-11-13: "Keep them".
+    pub keep_voice_clips: bool,
     pub kokoro_model_path: String,
     /// `voices.bin` (npz) from the kokoro-onnx v0.19 release; voices are extracted on demand.
     pub kokoro_voices_archive_path: String,
@@ -659,6 +665,8 @@ impl Default for JaiConfig {
             whisper_flash_attn: false,
             whisper_priority_boost: true,
             whisper_fast_decode: true,
+            whisper_second_hearing: true,
+            keep_voice_clips: true,
             kokoro_model_path: env("KOKORO_MODEL", crate::models::KOKORO_V1_MODEL),
             kokoro_voices_archive_path: crate::models::KOKORO_V1_VOICES.to_string(),
             kokoro_voice: env("KOKORO_VOICE", crate::tts::JAI_VOICE),
@@ -932,6 +940,12 @@ impl JaiConfig {
         if self.config_version < 26 && fingerprint(self.kokoro_voice.trim()) == STOCK_VOICE_ALIAS {
             // v26: the film voice's alias carries his name of today.
             self.kokoro_voice = crate::tts::JAI_VOICE.to_string();
+        }
+        if self.config_version < 27 {
+            // v27 (Sir, 2026-11-13: "he only answers to me except if I tell him otherwise"): the
+            // voice lock is on. It holds as soon as his voice is known, and the bar for it is
+            // read anew from the print (`speaker_id`).
+            self.interface.voice_lock = true;
         }
         if self.config_version < 22 && self.pre_roll_ms == 320 {
             // v22: 500 ms of audio before the onset, so "JAI" / "Move" keep their first

@@ -148,6 +148,23 @@ impl WakeWordMatcher {
         self.locate(transcript).0
     }
 
+    /// `evaluate` for a sentence in Sir's own voice (the voice print says so): the word his
+    /// name arrives as in an accented voice ("They open the mixer.") is his name too, where a
+    /// soft name would be: the first word of a short order he knows. The match, and that word
+    /// when it was one he does not answer to yet (it is counted: `ear::name_heard`).
+    pub fn evaluate_in_his_voice(&self, transcript: &str) -> (WakeMatch, Option<String>) {
+        let plain = self.evaluate(transcript);
+        if plain.matched {
+            return (plain, None);
+        }
+        let cleaned: Vec<String> = transcript.split_whitespace().map(clean).collect();
+        let start = cleaned.iter().take(3).take_while(|w| GREETINGS.contains(&w.as_str())).count();
+        let Some(first) = cleaned.get(start).filter(|w| accent_form(w) && !self.soft.contains(w)) else { return (plain, None) };
+        let with = WakeWordMatcher { extra: self.extra.clone(), soft: self.soft.iter().cloned().chain(std::iter::once(first.clone())).collect(), threshold: self.threshold };
+        let again = with.evaluate(transcript);
+        if again.matched { (again, Some(first.clone())) } else { (plain, None) }
+    }
+
     /// The match, and whether the name is the order's own object ("switch back to JAI").
     fn locate(&self, transcript: &str) -> (WakeMatch, bool) {
         // "Jaymute,", "JaySystem status.": his name and the order written as one word.
@@ -258,6 +275,22 @@ impl WakeWordMatcher {
         };
         (found(i, 1, 1.0, command.trim_end_matches(|c: char| c.is_whitespace() || c == '.' || c == '!').to_string()), false)
     }
+}
+
+/// A word the recogniser writes for his name in an accented voice: a "th", "d", "t", "ch", "sh"
+/// or "z" where the "J" was, and the same vowel ("They", "Day", "Tay", "Chay", "Shay"). Seen in
+/// Sir's voice on 2026-11-12: "They" eleven times, "Day" once.
+pub fn accent_form(word: &str) -> bool {
+    static FORM: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"^(?:th|d|t|ch|sh|tsch|dsch|z|dz)(?:ay|ey|ai|ei|ae|aye)$").expect("the accent forms"));
+    FORM.is_match(word)
+}
+
+/// Whether a word can stand where his name stands: his name, a near miss of it, or how it
+/// arrives in an accented voice.
+pub fn name_word(word: &str) -> bool {
+    static BUILT_IN: std::sync::LazyLock<WakeWordMatcher> = std::sync::LazyLock::new(|| WakeWordMatcher::new(&[], 0.8));
+    let w = clean(word);
+    !w.is_empty() && (BUILT_IN.form(&w).0 != Form::None || accent_form(&w))
 }
 
 /// What follows the name without a pause is plainly for him: an order, a question to him, a
@@ -379,6 +412,36 @@ pub fn phonetic(word: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn in_sirs_own_voice_his_name_is_known_as_it_arrives() {
+        let m = matcher();
+        // Without the voice print's word for it: never.
+        assert!(!m.evaluate("They open the mixer.").matched);
+        // In his voice: the first word of a short order he knows.
+        let (hit, word) = m.evaluate_in_his_voice("They open the mixer.");
+        assert!(hit.matched && word.as_deref() == Some("they"), "{hit:?}");
+        assert_eq!(hit.command.to_lowercase(), "open the mixer");
+        let (hit, word) = m.evaluate_in_his_voice("Day what time is it?");
+        assert!(hit.matched && word.as_deref() == Some("day"));
+        // His voice does not make talk an order, nor a word in the middle his name.
+        for text in ["They said the film was better than the book.", "I think they open the mixer.", "Day after day it rains.", "They are late again."] {
+            assert!(!m.evaluate_in_his_voice(text).0.matched, "{text}");
+        }
+        // His real name needs no such help, and a soft name he has is not counted again.
+        assert_eq!(m.evaluate_in_his_voice("Jay, open the mixer.").1, None);
+        let knows = WakeWordMatcher::new(&["~they".to_string()], 0.8);
+        let (hit, word) = knows.evaluate_in_his_voice("They open the mixer.");
+        assert!(hit.matched && word.is_none());
+        // The forms: the J as another consonant, the same vowel.
+        for word in ["they", "day", "dey", "tay", "chay", "shay", "zay"] {
+            assert!(accent_form(word) && name_word(word), "{word}");
+        }
+        for word in ["the", "hey", "play", "say", "today", "okay", "way", "kay", "yay", "tea", "die"] {
+            assert!(!accent_form(word), "{word}");
+        }
+        assert!(name_word("Jay") && name_word("J") && name_word("Jake") && !name_word("open") && !name_word("JayKaey"));
+    }
 
     #[test]
     fn a_soft_name_is_his_only_at_the_start_of_a_short_order_he_knows() {

@@ -1001,6 +1001,15 @@ impl Brain {
         if text != typed {
             info!("[NLU] Read '{typed}' as '{text}'");
         }
+        // "No, I said open the mixer" after an order that led nowhere: that order is what he
+        // carries out, and the words that led nowhere are his for it from now on (`ear`).
+        let text = match (!crate::live_self_tester::dry()).then(|| crate::ear::meant_instead(&text, &crate::ear::is_order)).flatten() {
+            Some(meant) => {
+                info!("[EAR] '{text}': Sir says what he meant, '{meant}'");
+                meant
+            }
+            None => text,
+        };
         let step = Instant::now();
         let history_mark = self.inner.history.lock().await.messages.len();
         // A dry run (the live self-test) decides everything and leaves no trace.
@@ -1103,6 +1112,11 @@ impl Brain {
             }
             info!("[CANCEL] '{text}': conversation, offers and working memory cleared");
             Some(Intent::Answer(crate::intent_engine::CANCEL_REPLY.to_string()))
+        } else if crate::ear::about_his_words(&text) {
+            // "When I say this card I mean Discord", "what have you learnt about my
+            // pronunciation", "forget how I speak": his ear, taught and asked in so many words.
+            self.inner.tools.focus.clear_offer();
+            Some(Intent::Answer(if dry { "Understood, Sir.".to_string() } else { crate::ear::command(&text).unwrap_or_else(|| "Understood, Sir.".to_string()) }))
         } else if let Some(intent) = intents::outing_command(&text) {
             // "Where can I take my fiancée for a Halloween night?" → JAI picks the venue and
             // maps it; "let's go here" → the route. Before the location rules ("where …").
@@ -1247,6 +1261,21 @@ impl Brain {
         };
         let routed = routed.filter(|route| taught(route.tool) || !intents::beyond_the_question(&text, route.tool, &route.args));
         let verbatim = routed.as_ref().is_some_and(|r| r.mode == RouteMode::Verbatim);
+        // What a spoken order teaches his ear (`ear`): one that leads somewhere joins Sir's
+        // phrase book and is paired with the one that led nowhere moments before; "that's not
+        // what I said" takes the last rewrite back. (A dry run teaches nothing.)
+        if req.source == InputSource::Voice && !dry {
+            if intents::says_misheard(&text) {
+                if let Some(what) = crate::ear::taken_back() {
+                    info!("[EAR] Taken back on Sir's word: {what}");
+                }
+            }
+            let led = fast_intent.is_some() || compound.is_some() || routed.is_some() || modality::parse_command(&text).is_some();
+            let unsure = req.link.heard().is_some_and(|h| h.avg_logprob < -0.35);
+            if let Some((nowhere, somewhere)) = crate::ear::turn(&text, led, unsure) {
+                info!("[EAR] Learnt from Sir saying it again: '{nowhere}' is '{somewhere}'");
+            }
+        }
         // A dry run ends where the language model (or the read it would phrase) would begin.
         if dry && fast_intent.is_none() && compound.is_none() && modality::parse_command(&text).is_none() && crate::live_self_tester::intercept_model(routed.as_ref().map(|r| (r.tool, &r.args))) {
             // A turn that came through the dispatcher (the whole process is dry) still ends as

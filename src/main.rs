@@ -68,6 +68,8 @@ mod discord_voice;
 mod wave_link;
 mod dsp;
 mod dynamic_popups;
+mod ear;
+mod ear_check;
 mod ears;
 mod email_client;
 mod exam_coach;
@@ -97,6 +99,7 @@ mod pc_audio;
 mod desktop_backdrop;
 mod startup_sequence;
 mod speaker_id;
+mod voice_clips;
 mod voice_setup;
 mod emblem_light;
 mod hud_style;
@@ -269,6 +272,10 @@ struct Cli {
     voice_verify: bool,
     /// Check that JAI's voice reaches Sir's Discord microphone (plays one sentence), then exit.
     call_check: bool,
+    /// Hear Sir's kept voice clips again as the app hears them today, print the count, exit.
+    ear_check: bool,
+    /// The same three stages of hearing on stand-in voices with a German speaker's sounds.
+    ear_bench: bool,
     /// Start JAI, run the live self-test in the running app (silent), write the report, exit.
     live_test: bool,
     /// `--exhaustive [runs]`: the live self-test and the exhaustive matrices, that many runs in
@@ -290,6 +297,8 @@ impl Cli {
             voice_calibrate: false,
             voice_verify: false,
             call_check: false,
+            ear_check: false,
+            ear_bench: false,
             speak: false,
             bench: false,
             no_llm: false,
@@ -318,6 +327,8 @@ impl Cli {
                 "--voice-calibrate" => cli.voice_calibrate = true,
                 "--voice-verify" => cli.voice_verify = true,
                 "--call-check" => cli.call_check = true,
+                "--ear-check" => cli.ear_check = true,
+                "--ear-bench" => cli.ear_bench = true,
                 "--speak" => cli.speak = true,
                 "--bench" => cli.bench = true,
                 "--no-llm" => cli.no_llm = true,
@@ -375,7 +386,7 @@ impl Cli {
 
     /// One-shot diagnostics that print and exit (no tray icon, no single-instance lock).
     fn is_diagnostic(&self) -> bool {
-        self.check_models || self.download_models || self.selftest || self.diagnose || self.voice_calibrate || self.voice_verify || self.call_check
+        self.check_models || self.download_models || self.selftest || self.diagnose || self.voice_calibrate || self.voice_verify || self.call_check || self.ear_check || self.ear_bench
     }
 }
 
@@ -396,6 +407,8 @@ USAGE: JAI.exe [OPTIONS]
   --voice-calibrate   pick the Kokoro blend closest to the reference clip (silent)
   --voice-verify      measure the voice chain against the reference clip (silent)
   --call-check        check that JAI's voice reaches your Discord mic (Wave Link Chat Mix; plays one sentence)
+  --ear-check         hear your kept voice clips again as he hears today and count what comes out right (silent)
+  --ear-bench         the same count on stand-in voices with a German speaker's sounds (silent)
   --chat \"<text>\"     type a request into JAI once he is up (repeatable)
   --chat-delay <secs> pause after each --chat answer (default 2), e.g. to look at a new window
   --no-mic            start with the microphone muted (unmute in the HUD)
@@ -600,6 +613,27 @@ fn main() -> ExitCode {
         let (models, db) = session.app.config().read(|c| (c.silero_vad_model_path.clone(), c.memory_db_path.clone()));
         speaker_id::set_models_dir(std::path::Path::new(&models).parent().unwrap_or(std::path::Path::new("models")));
         hud_feel::set_voice_known(speaker_id::known(&db).is_some());
+        // What he has learnt about how Sir's words reach him: kept beside it. (A scripted
+        // session learns for its own run only and reads nothing of Sir's.)
+        if !platform::in_test_session() {
+            ear::set_db(&db);
+            // The last clips of his own orders, when Sir has them kept (`voice_clips`).
+            if session.app.config().read(|c| c.keep_voice_clips) {
+                voice_clips::set_home(&db);
+                let (clips, mb) = voice_clips::kept();
+                info!("[EAR] {clips} clips of Sir's own orders are kept on this PC ({mb:.1} MB; the newest {} stay, \"delete my voice clips\" removes them)", voice_clips::KEPT);
+            }
+            let learnt = ear::learnt();
+            let held = |kind: ear::Kind| learnt.iter().filter(|e| e.kind == kind && e.trusted()).count();
+            info!(
+                "[EAR] {}; of Sir's words he has learnt {} by himself and {} from Sir's teaching, {} of his orders by the way he puts them, {} of the ways his name arrives",
+                speaker_id::known_in_words(&db),
+                held(ear::Kind::Words) + held(ear::Kind::Order),
+                held(ear::Kind::Taught),
+                held(ear::Kind::Said),
+                held(ear::Kind::Name)
+            );
+        }
     }
     // How he powers up this time: by how long Sir has not spoken with him, and the hour. (A
     // scripted session, the self-test and a restart of his own come up without ceremony.)
@@ -841,6 +875,12 @@ async fn start(cli: &Cli, cfg: JaiConfig) -> Started {
     }
     if cli.call_check {
         return Started::Done(discord_bridge::call_check(&cfg).await);
+    }
+    if cli.ear_check {
+        return Started::Done(ear_check::check(&cfg).await);
+    }
+    if cli.ear_bench {
+        return Started::Done(ear_check::bench(&cfg).await);
     }
     if cli.voice_calibrate || cli.voice_verify {
         fish_zero_shot_tts::set_f0_flatten(cfg.voice_f0_flatten);

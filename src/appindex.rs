@@ -123,6 +123,12 @@ pub fn lookup(name: &str) -> Option<AppEntry> {
     hit.map(|(_, e)| e)
 }
 
+/// What the installed applications are called (their shortcuts and registered programs: the
+/// names Sir would say).
+pub fn names() -> Vec<String> {
+    INDEX.read().unwrap_or_else(|e| e.into_inner()).entries.iter().filter(|e| !matches!(e.kind, EntryKind::Program | EntryKind::PathBin)).map(|e| e.name.clone()).collect()
+}
+
 /// In-memory check used by the intent parser: an installed app with (nearly) this exact name.
 pub fn is_known(name: &str) -> bool {
     let query = normalize(name);

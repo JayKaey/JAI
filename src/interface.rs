@@ -368,7 +368,8 @@ impl Default for InterfaceSettings {
             music_visuals: true,
             mini_strip: false,
             desktop_background: false,
-            voice_lock: false,
+            // (On: he answers to Sir alone once Sir's voice is known, unless told otherwise.)
+            voice_lock: true,
             title: DEFAULT_TITLE.to_string(),
             // The clean two-zone studio layout: the orb and the conversation; every technical
             // panel lives in the Settings drawer.
@@ -1786,12 +1787,14 @@ pub fn configure(current: &InterfaceSettings, args: &Value) -> Result<Configured
         ("music visuals", bool_arg(args, "music_visuals"), &mut s.music_visuals),
         ("mini mode", bool_arg(args, "mini_strip"), &mut s.mini_strip),
         ("live desktop background", bool_arg(args, "desktop_background"), &mut s.desktop_background),
-        // (Only once his voice is known: there is nothing to lock to before the set-up.)
-        ("voice lock", bool_arg(args, "voice_lock").filter(|on| !*on || crate::hud_feel::voice_known()), &mut s.voice_lock),
+        // (Before his voice is known it holds nothing back: the print is gathered from the
+        // orders given by name, and the lock holds from then on.)
+        ("voice lock", bool_arg(args, "voice_lock"), &mut s.voice_lock),
     ];
-    // Asked for without a voice print: said so (`hud_feel::spoken`), and it counts as heard.
-    if bool_arg(args, "voice_lock") == Some(true) && !crate::hud_feel::voice_known() {
-        done.push("voice lock not on (the voice set-up comes first)".into());
+    // Guests ("guest mode", "let my friend speak for half an hour"): a request of the moment,
+    // carried out by `hud_feel::apply`.
+    if let Some(on) = bool_arg(args, "voice_guest") {
+        done.push(format!("guest mode {}", if on { "on" } else { "off" }));
     }
     for (label, value, field) in flags {
         if let Some(on) = value {

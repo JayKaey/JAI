@@ -33,8 +33,10 @@ pub struct Outcome {
     /// Everyday words his name is written as in Sir's voice ("they", "day"): taken for it at
     /// the start of an order from now on.
     pub soft: Vec<String>,
-    /// A voice print was made (the voice lock can be switched on).
+    /// A voice print was made (the voice lock has something to hold to).
     pub print: bool,
+    /// The voice lock is on (he answers to that voice alone from now on).
+    pub lock: bool,
     /// Why no print was made, when none was.
     pub no_print: Option<String>,
 }
@@ -48,7 +50,9 @@ impl Outcome {
     /// What he says when it is done.
     pub fn spoken(&self) -> String {
         let mut line = String::from("Thank you, Sir.");
-        if self.print {
+        if self.print && self.lock {
+            line.push_str(" I know your voice now and answer to you alone, and I keep learning it as you speak. Say \"listen to everyone\" to change that.");
+        } else if self.print {
             line.push_str(" I know your voice now: say \"only obey me\" whenever I should answer to you alone.");
         } else if let Some(why) = &self.no_print {
             line.push_str(&format!(" I could not take a print of your voice: {why}."));
@@ -321,7 +325,16 @@ pub fn show(ctx: &egui::Context, mic: f32) {
                     p.galley(pos2(rect.left(), y), galley, colour);
                     y += h + 10.0;
                 };
-                say(if o.print { "I know your voice now. Say \u{201C}only obey me\u{201D} and I answer to you alone.".to_string() } else { format!("No voice print: {}.", o.no_print.clone().unwrap_or_else(|| "the lines were too short".into())) }, if o.print { ink } else { crate::hud_style::warn_colour() });
+                say(
+                    if o.print && o.lock {
+                        "I know your voice now and answer to you alone. Say \u{201C}listen to everyone\u{201D} to change that.".to_string()
+                    } else if o.print {
+                        "I know your voice now. Say \u{201C}only obey me\u{201D} and I answer to you alone.".to_string()
+                    } else {
+                        format!("No voice print: {}.", o.no_print.clone().unwrap_or_else(|| "the lines were too short".into()))
+                    },
+                    if o.print { ink } else { crate::hud_style::warn_colour() },
+                );
                 say(
                     match (o.spellings.is_empty(), o.soft.is_empty()) {
                         (true, true) => "Your name for me reaches my ears as I knew it: nothing new to learn there.".to_string(),
@@ -423,8 +436,10 @@ mod tests {
         assert!(take_finished().is_none() && !active(), "taken once; nothing more is listened to");
         finished(Outcome { print: true, ..Outcome::default() });
         assert!(lock(&SETUP).as_ref().unwrap().outcome.as_ref().unwrap().print);
-        let all = Outcome { spellings: vec!["jey".into()], gate: Some((3.0, 1.8)), soft: Vec::new(), print: true, no_print: None };
+        let all = Outcome { spellings: vec!["jey".into()], gate: Some((3.0, 1.8)), soft: Vec::new(), print: true, lock: false, no_print: None };
         assert!(all.spoken().contains("only obey me") && all.spoken().contains("\"jey\"") && all.spoken().contains("opened my ears"));
+        let locked = Outcome { lock: true, ..all };
+        assert!(locked.spoken().contains("answer to you alone") && locked.spoken().contains("listen to everyone") && !locked.spoken().contains("only obey me"));
         cancel();
         assert!(!active());
     }

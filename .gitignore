@@ -22,6 +22,8 @@
 # Settings: they hold the phone pairing key and the addresses of the accounts.
 /jai_config.json
 /jai_config.json.*
+# Clips of Sir's own voice (`voice_clips`): never commit.
+/voice_clips/
 # The memory database: conversations, memories, calendar, sealed account tokens.
 *.db
 *.db-shm

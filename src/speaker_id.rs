@@ -4,6 +4,21 @@
 //! database on this PC. With the voice lock on, a spoken order is carried out only when its
 //! voice is close enough to that print.
 //!
+//! He learns the voice as Sir speaks (Sir, 2026-11-13: "while I am talking to him he learns my
+//! voice"). The set-up's six read lines are one way of speaking; the day after it the lock
+//! turned Sir's own sentences away at a likeness of 0.32 and 0.43 against a bar of 0.55
+//! (jai.log, 2026-11-12 23:35). So:
+//! * a print is made of the stretches of a clip that carry a voice, not of its silence;
+//! * every sentence that is his joins a second print, the voice as it has grown since the
+//!   set-up (`grown`), and a clip is as like him as it is like the nearer of the two;
+//! * the bar starts no higher than 0.42 and rises (to 0.50 at most) only once his own
+//!   sentences have shown how alike they are (`own`);
+//! * for half a minute after a sentence that was surely his, one that falls a little short
+//!   still passes: the same person goes on talking;
+//! * without a set-up the print is gathered from the orders given to him by name.
+//! Nothing is learnt from a voice that is not his, and what grows never leaves the voice of
+//! the set-up (`ANCHOR_HOLD`).
+//!
 //! The features are Kaldi's filter bank as the model was trained on it: 16 kHz, 25 ms frames
 //! every 10 ms, a Hamming window, 80 mel bins from 20 Hz, the samples at 16-bit scale, and the
 //! mean of every bin over the clip taken off.
@@ -103,6 +118,34 @@ pub fn fbank(pcm: &[f32]) -> Vec<[f32; MELS]> {
     rows
 }
 
+/// The stretches of a clip that carry a voice: its 20 ms windows that stand clearly above the
+/// room (the clip's quietest tenth) and are not far below the voice at its loudest, each with
+/// 40 ms either side. What the ear cuts a sentence out with (the half second before it, the
+/// pauses, the wait after it) says nothing about a voice and dilutes its print. The whole clip
+/// when too little is left.
+pub fn voiced(pcm: &[f32]) -> Vec<f32> {
+    const WIN: usize = RATE / 50;
+    if pcm.len() < WIN * 10 {
+        return pcm.to_vec();
+    }
+    let levels: Vec<f32> = pcm.chunks(WIN).map(|c| (c.iter().map(|s| s * s).sum::<f32>() / c.len() as f32).sqrt()).collect();
+    let mut sorted = levels.clone();
+    sorted.sort_by(f32::total_cmp);
+    let room = sorted[sorted.len() / 10].max(1e-5);
+    let top = sorted[(sorted.len() * 95 / 100).min(sorted.len() - 1)];
+    let gate = (room * 3.0).max(top * 0.08);
+    let mut keep = vec![false; levels.len()];
+    for (i, level) in levels.iter().enumerate() {
+        if *level >= gate {
+            for k in keep.iter_mut().take((i + 3).min(levels.len())).skip(i.saturating_sub(2)) {
+                *k = true;
+            }
+        }
+    }
+    let out: Vec<f32> = pcm.chunks(WIN).zip(&keep).filter(|(_, k)| **k).flat_map(|(c, _)| c.iter().copied()).collect();
+    if out.len() >= MIN_SAMPLES { out } else { pcm.to_vec() }
+}
+
 fn normalised(mut v: Vec<f32>) -> Vec<f32> {
     let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt();
     if norm > 0.0 {
@@ -135,6 +178,11 @@ pub fn available() -> bool {
 /// The voice print of a clip of speech (16 kHz): 256 numbers of unit length. Loads the model on
 /// first use. Runs for a tenth of a second or two on the processor: never on the GUI thread.
 pub fn print_of(pcm: &[f32]) -> Result<Vec<f32>, String> {
+    print_of_samples(&voiced(pcm))
+}
+
+/// The print of the samples as they are (`print_of` takes the voiced stretches first).
+pub fn print_of_samples(pcm: &[f32]) -> Result<Vec<f32>, String> {
     if pcm.len() < MIN_SAMPLES {
         return Err("too short to tell a voice by".to_string());
     }
@@ -167,19 +215,58 @@ pub fn print_of(pcm: &[f32]) -> Result<Vec<f32>, String> {
 /// Sir's voice as JAI knows it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct VoicePrint {
+    /// The voice of the set-up (or of the orders it was gathered from): it never changes
+    /// without a new one.
     pub print: Vec<f32>,
     /// How many clips it was made of.
     pub clips: usize,
-    /// A voice at least this like it is his.
+    /// A voice at least this like it is his (before his own sentences say more: `bar`).
     pub threshold: f32,
+    /// His voice as it has shown itself since: the mean of the sentences that were his (unit
+    /// length; empty before the first), weighted towards the latest `GROWN_WINDOW` of them.
+    pub grown: Vec<f32>,
+    /// How many sentences went into `grown`.
+    pub grown_clips: usize,
+    /// How alike his own sentences have been lately (their running mean; 0 before any).
+    pub own: f32,
 }
 
-/// The least a voice must be like the print, whatever the set-up's clips say, and the most.
+/// The least a voice must be like the print, whatever the set-up's clips say, and the most
+/// the set-up may ask for. (Six lines read off the screen are closer to each other than to
+/// what Sir says the next day: at 0.55 his own sentences were turned away.)
 const THRESHOLD_FLOOR: f32 = 0.30;
-const THRESHOLD_CEILING: f32 = 0.55;
+const THRESHOLD_CEILING: f32 = 0.42;
+/// The most the bar rises to once his own sentences have shown how alike they are.
+const BAR_CEILING: f32 = 0.50;
+/// The bar stands this far under the mean likeness of his own sentences …
+const OWN_MARGIN: f32 = 0.28;
+/// … once this many of them have been learnt from.
+const SETTLED_AFTER: usize = 12;
 /// A short order ("stop", "mute") says less about a voice: it passes this much lower.
 const SHORT_MS: u32 = 1100;
 const SHORT_ALLOWANCE: f32 = 0.10;
+/// For this long after a sentence that was surely his, one that falls this far short of the
+/// bar still passes: the same person goes on talking.
+pub const TRUST_LASTS: std::time::Duration = std::time::Duration::from_secs(30);
+const TRUST_ALLOWANCE: f32 = 0.10;
+/// A sentence shorter than this teaches nothing about a voice.
+const LEARN_MS: u32 = 1000;
+/// The grown print weighs its latest sentences: this many count.
+const GROWN_WINDOW: usize = 40;
+/// What grows stays this like the voice of the set-up, or the sentence is not learnt from.
+const ANCHOR_HOLD: f32 = 0.50;
+
+/// What the lock makes of a sentence's voice.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Judged {
+    /// It is taken for Sir's.
+    pub his: bool,
+    /// By its own likeness (not by the moment of trust after another sentence).
+    pub sure: bool,
+    /// How like his print it is, and how like it had to be.
+    pub score: f32,
+    pub bar: f32,
+}
 
 /// Sir's print from the clips of his set-up: their mean, and a threshold set below the clip
 /// that is least like it (his own voice varies; a stranger's is far below). None without at
@@ -196,25 +283,197 @@ pub fn enrol(clips: &[Vec<f32>]) -> Option<VoicePrint> {
     }
     let print = normalised(mean);
     let least = clips.iter().map(|c| likeness(c, &print)).fold(f32::INFINITY, f32::min);
-    Some(VoicePrint { threshold: (least - 0.22).clamp(THRESHOLD_FLOOR, THRESHOLD_CEILING), print, clips: clips.len() })
+    Some(VoicePrint { threshold: (least - 0.25).clamp(THRESHOLD_FLOOR, THRESHOLD_CEILING), print, clips: clips.len(), grown: Vec::new(), grown_clips: 0, own: 0.0 })
 }
 
 impl VoicePrint {
-    /// Whether a clip's print is Sir's voice, and how alike they are. `speech_ms`: how long he
-    /// spoke (a short order passes a little lower).
-    pub fn is_his(&self, clip: &[f32], speech_ms: u32) -> (bool, f32) {
-        let score = likeness(clip, &self.print);
-        let bar = if speech_ms < SHORT_MS { self.threshold - SHORT_ALLOWANCE } else { self.threshold };
-        (score >= bar, score)
+    /// How like Sir's voice a clip's print is: like the set-up's print or like the voice as it
+    /// has grown since, whichever is nearer.
+    pub fn likeness_of(&self, clip: &[f32]) -> f32 {
+        let anchor = likeness(clip, &self.print);
+        if self.grown.is_empty() { anchor } else { anchor.max(likeness(clip, &self.grown)) }
     }
+
+    /// How like his print a sentence must be: the set-up's bar, raised (never lowered) once his
+    /// own sentences have shown how alike they are.
+    pub fn bar(&self) -> f32 {
+        if self.grown_clips >= SETTLED_AFTER && self.own > 0.0 { self.threshold.max((self.own - OWN_MARGIN).min(BAR_CEILING)) } else { self.threshold }
+    }
+
+    /// What the lock makes of a clip's print. `speech_ms`: how long he spoke (a short order
+    /// passes a little lower); `trusted`: a sentence was surely his a moment ago.
+    pub fn judge(&self, clip: &[f32], speech_ms: u32, trusted: bool) -> Judged {
+        let score = self.likeness_of(clip);
+        let bar = self.bar() - if speech_ms < SHORT_MS { SHORT_ALLOWANCE } else { 0.0 };
+        let sure = score >= bar;
+        Judged { his: sure || (trusted && score >= bar - TRUST_ALLOWANCE), sure, score, bar }
+    }
+
+    /// Whether a clip's print is Sir's voice by its own likeness, and how alike they are.
+    #[cfg(test)]
+    pub fn is_his(&self, clip: &[f32], speech_ms: u32) -> (bool, f32) {
+        let judged = self.judge(clip, speech_ms, false);
+        (judged.sure, judged.score)
+    }
+
+    /// Learns from a sentence that was his (`judged`): it joins the grown print (with half the
+    /// weight when it passed on trust), unless that would lead away from the voice of the
+    /// set-up. Whether anything was learnt.
+    pub fn learn(&mut self, clip: &[f32], speech_ms: u32, judged: Judged) -> bool {
+        if !judged.his || speech_ms < LEARN_MS || clip.len() != self.print.len() {
+            return false;
+        }
+        let weight = if judged.sure { 1.0 } else { 0.5 };
+        let before = self.grown_clips.min(GROWN_WINDOW) as f32;
+        let next = if self.grown.is_empty() { clip.to_vec() } else { self.grown.iter().zip(clip).map(|(g, c)| g * before + c * weight).collect() };
+        let next = normalised(next);
+        if likeness(&next, &self.print) < ANCHOR_HOLD {
+            return false;
+        }
+        self.grown = next;
+        self.grown_clips += 1;
+        self.own = if self.own <= 0.0 { judged.score } else { self.own * 0.9 + judged.score * 0.1 };
+        true
+    }
+}
+
+/// When a sentence was last surely Sir's.
+static LAST_SURE: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+/// How many sentences the grown print has learnt from since it was last written down.
+static UNSAVED: Mutex<(usize, Option<std::time::Instant>)> = Mutex::new((0, None));
+/// The grown print is written down after this many sentences, or this long after the last.
+const SAVE_EVERY: usize = 4;
+const SAVE_AFTER: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Whether a sentence was surely Sir's within the last half minute.
+pub fn trusted_now() -> bool {
+    lock(&LAST_SURE).is_some_and(|at| at.elapsed() < TRUST_LASTS)
+}
+
+/// A sentence's voice against Sir's print, and what is learnt from it: judged (with the moment
+/// of trust), and when it is his, taken into the grown print. `keep`: write what was learnt
+/// to the database now and then (never from a scripted session). None while no print is known.
+pub fn hear(db: &str, clip: &[f32], speech_ms: u32, keep: bool) -> Option<Judged> {
+    let mut print = known(db)?;
+    let judged = print.judge(clip, speech_ms, trusted_now());
+    if judged.sure {
+        *lock(&LAST_SURE) = Some(std::time::Instant::now());
+    }
+    if print.learn(clip, speech_ms, judged) {
+        *lock(&KNOWN) = Some(Some(print.clone()));
+        let due = {
+            let mut unsaved = lock(&UNSAVED);
+            unsaved.0 += 1;
+            let due = unsaved.0 >= SAVE_EVERY || unsaved.1.is_none_or(|at| at.elapsed() > SAVE_AFTER);
+            if due && keep {
+                *unsaved = (0, Some(std::time::Instant::now()));
+            }
+            due
+        };
+        if due && keep {
+            if let Err(e) = keep_grown(db, &print) {
+                tracing::warn!("[VOICE] What was learnt of Sir's voice was not written down: {e}");
+            }
+        }
+    }
+    Some(judged)
+}
+
+// ------------------------------------------------------------------------------ guests ----
+
+/// Until when he answers to anyone although the lock is on ("guest mode", "let my friend
+/// speak for half an hour"). Not kept across a restart: a guest's welcome ends with the day.
+static GUESTS_UNTIL: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+
+pub fn welcome_guests(span: std::time::Duration) {
+    *lock(&GUESTS_UNTIL) = Some(std::time::Instant::now() + span);
+    tracing::info!("[VOICE LOCK] Guests are welcome for {} min", span.as_secs() / 60);
+}
+
+pub fn end_guests() {
+    if lock(&GUESTS_UNTIL).take().is_some() {
+        tracing::info!("[VOICE LOCK] Guests are no longer answered");
+    }
+}
+
+/// Whether he answers to anyone right now on Sir's word.
+pub fn guests_welcome() -> bool {
+    lock(&GUESTS_UNTIL).is_some_and(|until| std::time::Instant::now() < until)
+}
+
+// ------------------------------------------------------------ a print without a set-up ----
+
+/// The prints of the orders given to him by name while no print is known.
+static GATHERED: Mutex<Vec<Vec<f32>>> = Mutex::new(Vec::new());
+/// This many are looked at together …
+const GATHER_ENOUGH: usize = 8;
+/// … two of them are one voice when they are this alike …
+const PAIR_ALIKE: f32 = 0.35;
+/// … and this many must be one voice for a print.
+const GATHER_KEEP: usize = 6;
+/// No more than this are held (the oldest goes).
+const GATHER_MOST: usize = 14;
+
+/// The print of the clips that are one voice: the clip most of the others are like, and those
+/// that are like it. (Likeness to the mean of all would not do: the mean of two voices is 0.7
+/// like each of them.) None when too few agree.
+pub fn agreed(clips: &[Vec<f32>]) -> Option<VoicePrint> {
+    if clips.len() < GATHER_ENOUGH || clips.iter().any(|c| c.len() != clips[0].len() || c.is_empty()) {
+        return None;
+    }
+    let company = |i: usize| -> Vec<usize> { (0..clips.len()).filter(|j| *j == i || likeness(&clips[i], &clips[*j]) >= PAIR_ALIKE).collect() };
+    let seed = (0..clips.len()).max_by_key(|i| company(*i).len())?;
+    let members = company(seed);
+    if members.len() < GATHER_KEEP {
+        return None;
+    }
+    let alike: Vec<Vec<f32>> = members.iter().map(|i| clips[*i].clone()).collect();
+    enrol(&alike)
+}
+
+/// An order given to him by name while no print is known: its voice is gathered, and once
+/// enough of them agree they become Sir's print (kept in the database when `keep`). The print,
+/// the moment it is made.
+pub fn gather(db: &str, clip: Vec<f32>, speech_ms: u32, keep_it: bool) -> Option<VoicePrint> {
+    if speech_ms < LEARN_MS || known(db).is_some() {
+        return None;
+    }
+    let mut gathered = lock(&GATHERED);
+    gathered.push(clip);
+    while gathered.len() > GATHER_MOST {
+        gathered.remove(0);
+    }
+    let print = agreed(&gathered)?;
+    gathered.clear();
+    drop(gathered);
+    if keep_it {
+        if let Err(e) = keep(db, &print) {
+            tracing::warn!("[VOICE] The print gathered from Sir's orders was not kept: {e}");
+            return None;
+        }
+    } else {
+        *lock(&KNOWN) = Some(Some(print.clone()));
+    }
+    Some(print)
 }
 
 // ------------------------------------------------------------------------- the database ----
 
 fn open(db: &str) -> rusqlite::Result<rusqlite::Connection> {
     let conn = rusqlite::Connection::open(db)?;
-    conn.execute_batch("CREATE TABLE IF NOT EXISTS voice_print (id INTEGER PRIMARY KEY CHECK (id = 1), print BLOB NOT NULL, clips INTEGER NOT NULL, threshold REAL NOT NULL, made TEXT NOT NULL);")?;
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS voice_print (id INTEGER PRIMARY KEY CHECK (id = 1), print BLOB NOT NULL, clips INTEGER NOT NULL, threshold REAL NOT NULL, made TEXT NOT NULL);
+         CREATE TABLE IF NOT EXISTS voice_grown (id INTEGER PRIMARY KEY CHECK (id = 1), print BLOB NOT NULL, clips INTEGER NOT NULL, own REAL NOT NULL, updated TEXT NOT NULL);",
+    )?;
     Ok(conn)
+}
+
+fn floats(bytes: &[u8]) -> Vec<f32> {
+    bytes.chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect()
+}
+
+fn bytes(values: &[f32]) -> Vec<u8> {
+    values.iter().flat_map(|v| v.to_le_bytes()).collect()
 }
 
 /// Sir's print as it is kept (read from the database once, then from here).
@@ -226,28 +485,62 @@ pub fn known(db: &str) -> Option<VoicePrint> {
     if known.is_none() {
         // (Read only: looking for a print never writes to the database.)
         let read = rusqlite::Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).ok().and_then(|conn| {
-            conn.query_row("SELECT print, clips, threshold FROM voice_print WHERE id = 1", [], |r| {
-                let bytes: Vec<u8> = r.get(0)?;
-                Ok(VoicePrint { print: bytes.chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect(), clips: r.get::<_, i64>(1)? as usize, threshold: r.get::<_, f64>(2)? as f32 })
-            })
-            .ok()
+            let mut print = conn
+                .query_row("SELECT print, clips, threshold FROM voice_print WHERE id = 1", [], |r| {
+                    let raw: Vec<u8> = r.get(0)?;
+                    // (A bar from before 2026-11-13 may stand higher than a set-up may ask for.)
+                    Ok(VoicePrint { print: floats(&raw), clips: r.get::<_, i64>(1)? as usize, threshold: (r.get::<_, f64>(2)? as f32).min(THRESHOLD_CEILING), grown: Vec::new(), grown_clips: 0, own: 0.0 })
+                })
+                .ok()?;
+            // (What has grown since: absent before the first sentence, and in an older database.)
+            if let Ok((grown, clips, own)) = conn.query_row("SELECT print, clips, own FROM voice_grown WHERE id = 1", [], |r| Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, i64>(1)?, r.get::<_, f64>(2)?))) {
+                let grown = floats(&grown);
+                if grown.len() == print.print.len() {
+                    (print.grown, print.grown_clips, print.own) = (grown, clips as usize, own as f32);
+                }
+            }
+            Some(print)
         });
         *known = Some(read.filter(|p| !p.print.is_empty()));
     }
     known.clone().flatten()
 }
 
-/// Keeps Sir's print (replacing an older one).
+/// Keeps Sir's print (replacing an older one, and with it what had grown from that one).
 pub fn keep(db: &str, print: &VoicePrint) -> Result<(), String> {
-    let bytes: Vec<u8> = print.print.iter().flat_map(|v| v.to_le_bytes()).collect();
     let conn = open(db).map_err(|e| e.to_string())?;
     conn.execute(
         "INSERT INTO voice_print (id, print, clips, threshold, made) VALUES (1, ?1, ?2, ?3, ?4) ON CONFLICT(id) DO UPDATE SET print = ?1, clips = ?2, threshold = ?3, made = ?4",
-        rusqlite::params![bytes, print.clips as i64, print.threshold as f64, chrono::Utc::now().to_rfc3339()],
+        rusqlite::params![bytes(&print.print), print.clips as i64, print.threshold as f64, chrono::Utc::now().to_rfc3339()],
     )
     .map_err(|e| e.to_string())?;
-    *lock(&KNOWN) = Some(Some(print.clone()));
+    conn.execute("DELETE FROM voice_grown", []).map_err(|e| e.to_string())?;
+    *lock(&KNOWN) = Some(Some(VoicePrint { grown: Vec::new(), grown_clips: 0, own: 0.0, ..print.clone() }));
+    *lock(&LAST_SURE) = None;
     Ok(())
+}
+
+/// Writes down what Sir's voice has grown into since the set-up.
+pub fn keep_grown(db: &str, print: &VoicePrint) -> Result<(), String> {
+    if print.grown.is_empty() {
+        return Ok(());
+    }
+    let conn = open(db).map_err(|e| e.to_string())?;
+    conn.execute(
+        "INSERT INTO voice_grown (id, print, clips, own, updated) VALUES (1, ?1, ?2, ?3, ?4) ON CONFLICT(id) DO UPDATE SET print = ?1, clips = ?2, own = ?3, updated = ?4",
+        rusqlite::params![bytes(&print.grown), print.grown_clips as i64, print.own as f64, chrono::Utc::now().to_rfc3339()],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// What he knows of Sir's voice, in a sentence (for "what have you learnt about my voice").
+pub fn known_in_words(db: &str) -> String {
+    match known(db) {
+        None => "I have no print of your voice yet".to_string(),
+        Some(p) if p.grown_clips == 0 => format!("I know your voice from {} sentences of the set-up", p.clips),
+        Some(p) => format!("I know your voice from {} sentences of the set-up and {} more you have said to me since", p.clips, p.grown_clips),
+    }
 }
 
 #[cfg(test)]
@@ -313,6 +606,108 @@ mod tests {
         assert_eq!(likeness(&his[0], &[1.0]), 0.0, "prints of different models never match");
     }
 
+    fn unit(v: Vec<f32>) -> Vec<f32> {
+        normalised(v)
+    }
+
+    /// A print as the set-up of 2026-11-12 left it: six read lines close together.
+    fn setup_print() -> VoicePrint {
+        enrol(&[unit(vec![1.0, 0.05, 0.0, 0.0]), unit(vec![1.0, -0.05, 0.0, 0.0]), unit(vec![1.0, 0.0, 0.05, 0.0]), unit(vec![1.0, 0.0, -0.05, 0.0])]).expect("a print")
+    }
+
+    #[test]
+    fn the_bar_starts_low_and_sirs_own_sentences_pass_it() {
+        let print = setup_print();
+        // The clips of a set-up are close to their mean: the bar is the ceiling, and that is
+        // 0.42, not 0.55.
+        assert!((print.threshold - THRESHOLD_CEILING).abs() < 1e-6, "{}", print.threshold);
+        // 23:35:41 on 2026-11-12: a sentence of Sir's at a likeness of 0.43 was turned away.
+        let his_next_day = unit(vec![0.43, 0.9028, 0.0, 0.0]);
+        let judged = print.judge(&his_next_day, 2900, false);
+        assert!((judged.score - 0.43).abs() < 0.01 && judged.his && judged.sure, "{judged:?}");
+        // 23:35:32: one at 0.32 falls short by itself, and passes in the half minute after a
+        // sentence that was surely his.
+        let weaker = unit(vec![0.33, 0.944, 0.0, 0.0]);
+        assert!(!print.judge(&weaker, 4300, false).his);
+        let on_trust = print.judge(&weaker, 4300, true);
+        assert!(on_trust.his && !on_trust.sure, "{on_trust:?}");
+        // A stranger stays out, trust or not.
+        let stranger = unit(vec![0.1, 0.3, 0.95, 0.0]);
+        assert!(!print.judge(&stranger, 2500, true).his);
+    }
+
+    #[test]
+    fn his_voice_is_learnt_as_he_speaks() {
+        let mut print = setup_print();
+        // How he speaks every day: a way off the read lines, but his.
+        let everyday = |k: usize| unit(vec![0.62, 0.74 + 0.01 * (k % 3) as f32, 0.2, 0.05]);
+        let first = print.judge(&everyday(0), 2400, false);
+        assert!(first.sure && first.score < 0.7, "{first:?}");
+        for k in 0..14 {
+            let clip = everyday(k);
+            let judged = print.judge(&clip, 2400, false);
+            assert!(judged.his, "sentence {k}: {judged:?}");
+            assert!(print.learn(&clip, 2400, judged));
+        }
+        // He is known by his everyday voice now: the same sentence is far more like him …
+        let later = print.judge(&everyday(1), 2400, false);
+        assert!(later.score > 0.95 && later.score > first.score + 0.25, "{later:?}");
+        assert_eq!(print.grown_clips, 14);
+        // … the bar has risen with it, but never over its ceiling …
+        assert!(print.bar() > print.threshold && print.bar() <= BAR_CEILING, "{}", print.bar());
+        // … and a stranger is no nearer than before.
+        let stranger = unit(vec![0.05, -0.3, 0.95, 0.0]);
+        assert!(!print.judge(&stranger, 2500, true).his);
+        // Nothing is learnt from a short word, from a voice that is not his, or from one that
+        // would lead away from the voice of the set-up.
+        let before = print.clone();
+        let judged = print.judge(&everyday(2), 600, false);
+        assert!(!print.learn(&everyday(2), 600, judged), "too short");
+        let judged = print.judge(&stranger, 2500, false);
+        assert!(!print.learn(&stranger, 2500, judged), "not his");
+        let mut fresh = setup_print();
+        let far = unit(vec![0.3, 0.2, 0.93, 0.0]);
+        assert!(!fresh.learn(&far, 2500, Judged { his: true, sure: true, score: 0.5, bar: 0.4 }), "away from the set-up's voice");
+        assert_eq!(print, before);
+    }
+
+    #[test]
+    fn a_print_is_gathered_from_orders_that_agree() {
+        let his = |k: usize| unit(vec![1.0, 0.1 + 0.02 * k as f32, 0.0, 0.05]);
+        let other = unit(vec![0.0, 0.2, 1.0, 0.1]);
+        let mut clips: Vec<Vec<f32>> = (0..6).map(his).collect();
+        assert!(agreed(&clips).is_none(), "six are too few to look at");
+        clips.push(other.clone());
+        clips.push(his(6));
+        let print = agreed(&clips).expect("seven of eight agree");
+        assert_eq!(print.clips, 7, "the other voice is left out");
+        assert!(print.judge(&his(3), 2000, false).his && !print.judge(&other, 2000, false).his);
+        // Two voices by turns agree on nothing.
+        let mixed: Vec<Vec<f32>> = (0..8).map(|k| if k % 2 == 0 { his(k) } else { other.clone() }).collect();
+        assert!(agreed(&mixed).is_none());
+    }
+
+    #[test]
+    fn the_voiced_stretches_are_what_a_print_is_made_of() {
+        let hush: Vec<f32> = (0..RATE / 2).map(|i| 0.001 * ((i * 7919) % 13) as f32 / 13.0).collect();
+        let mut clip = hush.clone();
+        clip.extend(tone(220.0, 1.2));
+        clip.extend(hush.iter().copied());
+        clip.extend(tone(330.0, 0.8));
+        clip.extend(hush.iter().copied());
+        let kept = voiced(&clip);
+        // The two seconds of voice stay (with their edges), the 1.5 s of room go.
+        let secs = kept.len() as f32 / RATE as f32;
+        assert!((1.95..2.4).contains(&secs), "{secs} s kept of {} s", clip.len() as f32 / RATE as f32);
+        // Speech from the first sample to the last is kept whole; a blip too short for a print
+        // comes back as it was.
+        let steady = tone(200.0, 1.5);
+        assert_eq!(voiced(&steady).len(), steady.len());
+        let mut blip = vec![0.0f32; RATE];
+        blip.extend(tone(300.0, 0.2));
+        assert_eq!(voiced(&blip).len(), blip.len());
+    }
+
     #[test]
     fn the_print_survives_the_database() {
         let dir = std::env::temp_dir().join(format!("jai-voice-print-{}", std::process::id()));
@@ -321,14 +716,26 @@ mod tests {
         let db = db.to_string_lossy().to_string();
         *lock(&KNOWN) = None;
         assert_eq!(known(&db), None);
-        let print = VoicePrint { print: normalised(vec![0.3, -0.2, 0.9]), clips: 6, threshold: 0.41 };
+        let print = VoicePrint { print: normalised(vec![0.3, -0.2, 0.9]), clips: 6, threshold: 0.41, grown: Vec::new(), grown_clips: 0, own: 0.0 };
         keep(&db, &print).unwrap();
         *lock(&KNOWN) = None;
         assert_eq!(known(&db), Some(print.clone()));
-        let second = VoicePrint { clips: 5, ..print };
+        // What has grown since is kept beside it and read back with it.
+        let grown = VoicePrint { grown: normalised(vec![0.35, -0.1, 0.9]), grown_clips: 9, own: 0.71, ..print.clone() };
+        keep_grown(&db, &grown).unwrap();
+        *lock(&KNOWN) = None;
+        assert_eq!(known(&db), Some(grown.clone()));
+        assert!(known_in_words(&db).contains("9 more"));
+        // A new set-up replaces the old print, and what grew from that one goes with it.
+        let second = VoicePrint { clips: 5, ..grown };
         keep(&db, &second).unwrap();
         *lock(&KNOWN) = None;
-        assert_eq!(known(&db).map(|p| p.clips), Some(5), "a new set-up replaces the old print");
+        let read = known(&db).expect("the second print");
+        assert_eq!((read.clips, read.grown_clips, read.grown.len()), (5, 0, 0), "a new set-up replaces the old print");
+        // A bar kept before the ceiling was lowered is read at the ceiling.
+        rusqlite::Connection::open(&db).unwrap().execute("UPDATE voice_print SET threshold = 0.55", []).unwrap();
+        *lock(&KNOWN) = None;
+        assert!((known(&db).unwrap().threshold - THRESHOLD_CEILING).abs() < 1e-6);
         *lock(&KNOWN) = None;
         let _ = std::fs::remove_dir_all(&dir);
     }
