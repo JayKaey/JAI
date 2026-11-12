@@ -123,7 +123,12 @@ pub fn show(ctx: &egui::Context, app: &crate::app::Jai, rt: &tokio::runtime::Han
     };
     let [l, t, r, b] = monitor;
     let ppp = ctx.native_pixels_per_point().unwrap_or(1.0).max(0.5);
-    let (width, height) = (((r - l) as f32 / ppp * 0.62).min(1500.0), BAR_HEIGHT);
+    // The bar hugs its lines: its window is a plain dark box (a see-through window is not to be
+    // had everywhere), so over a picture it covers as little as it can.
+    let widest = ((r - l) as f32 / ppp * 0.62).min(1500.0);
+    let wrap = widest - 48.0;
+    let size = bar_size(ctx, &shown, wrap);
+    let (width, height) = (size.x, size.y);
     let at = pos2(((l + r) as f32 / 2.0) / ppp - width / 2.0, b as f32 / ppp - height - BAR_LIFT);
     let builder = ViewportBuilder::default()
         .with_title(TITLE)
@@ -148,9 +153,9 @@ pub fn show(ctx: &egui::Context, app: &crate::app::Jai, rt: &tokio::runtime::Han
             tracing::info!("[SUBTITLES] The bar draws ({:.0}x{:.0}, {})", ctx.screen_rect().width(), ctx.screen_rect().height(), if embedded { "inside the HUD: it got no window of its own" } else { "in its own window" });
         }
         if embedded {
-            paint_embedded(ctx, &shown);
+            paint_embedded(ctx, &shown, size, wrap);
         } else {
-            paint_bar(ctx, &shown);
+            paint_bar(ctx, &shown, Some(wrap));
         }
         ctx.request_repaint_after(Duration::from_millis(100));
     });
@@ -164,11 +169,11 @@ pub fn show(ctx: &egui::Context, app: &crate::app::Jai, rt: &tokio::runtime::Han
     ctx.request_repaint_after(Duration::from_millis(200));
 }
 
-/// The bar's window: its title (it is found by it), its height and how far it stands above the
-/// screen's bottom edge (points).
+/// The bar's window: its title (it is found by it), how far it stands above the screen's bottom
+/// edge (points), and how much of what is under it shows through (of 255: a little).
 const TITLE: &str = "J.A.I. // subtitles";
-const BAR_HEIGHT: f32 = 104.0;
 const BAR_LIFT: f32 = 70.0;
+const BAR_ALPHA: u8 = 228;
 
 /// The bar is on show (its window was asked for in the last frame), it has drawn, and when it
 /// opened (until its window was dressed).
@@ -179,7 +184,7 @@ static BAR_SINCE: Mutex<Option<Instant>> = Mutex::new(None);
 #[cfg(windows)]
 fn dress() {
     crate::win32::run_detached(|| match crate::win32::own_window(TITLE) {
-        Some(hwnd) => match crate::win32::make_overlay(hwnd) {
+        Some(hwnd) => match crate::win32::make_overlay(hwnd, BAR_ALPHA) {
             Ok(()) => tracing::info!("[SUBTITLES] The bar's window stands over everything and lets clicks through"),
             Err(why) => tracing::warn!("[SUBTITLES] The bar's window could not be made an overlay: {why}"),
         },
@@ -192,34 +197,56 @@ fn dress() {}
 
 /// Paints the subtitles into the bar's own window: the newest line at the bottom, the one
 /// before it above and fainter, each on a dark band so it reads over any picture.
-pub fn paint_bar(ctx: &egui::Context, shown: &[(String, f32)]) {
-    paint_lines(&ctx.layer_painter(egui::LayerId::background()), ctx.screen_rect(), shown);
+pub fn paint_bar(ctx: &egui::Context, shown: &[(String, f32)], wrap: Option<f32>) {
+    let rect = ctx.screen_rect();
+    paint_lines(&ctx.layer_painter(egui::LayerId::background()), rect, shown, wrap.unwrap_or(rect.width() - 48.0));
 }
 
 /// The same inside the HUD's own window, for when the bar cannot have a window of its own: at
 /// the bottom of the screen the HUD is on, over everything it shows.
-fn paint_embedded(ctx: &egui::Context, shown: &[(String, f32)]) {
+fn paint_embedded(ctx: &egui::Context, shown: &[(String, f32)], size: egui::Vec2, wrap: f32) {
     let home = ctx.screen_rect();
-    let size = vec2((home.width() * 0.62).min(1500.0), BAR_HEIGHT);
     let rect = egui::Rect::from_min_size(pos2(home.center().x - size.x / 2.0, home.bottom() - size.y - BAR_LIFT), size);
-    paint_lines(&ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("hud_subtitles"))), rect, shown);
+    paint_lines(&ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("hud_subtitles"))), rect, shown, wrap);
 }
 
-fn paint_lines(p: &egui::Painter, rect: egui::Rect, shown: &[(String, f32)]) {
-    let font = FontId::new(25.0, FontFamily::Name("display".into()));
+/// One line of the bar: `wrap` wide at most, two rows at most.
+fn line_job(text: &str, strength: f32, wrap: f32) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob::default();
+    job.append(text, 0.0, egui::TextFormat { font_id: FontId::new(25.0, FontFamily::Name("display".into())), color: Color32::WHITE.gamma_multiply(strength), extra_letter_spacing: 0.4, ..Default::default() });
+    job.wrap.max_width = wrap;
+    job.wrap.max_rows = 2;
+    job.wrap.overflow_character = Some('…');
+    job.halign = egui::Align::Center;
+    job
+}
+
+/// How strongly line `k` (0: the newest) stands.
+fn line_strength(k: usize, strength: f32) -> f32 {
+    strength * if k == 0 { 1.0 } else { 0.72 }
+}
+
+/// How large the bar is for these lines (it hugs them), each `wrap` wide at most.
+fn bar_size(ctx: &egui::Context, shown: &[(String, f32)], wrap: f32) -> egui::Vec2 {
+    // (As `paint_lines` lays them: 6 under the newest line's band and over the oldest's, each
+    // band 8 taller than its text, 4 between two.)
+    let mut size = vec2(0.0f32, 12.0);
+    for (k, (text, strength)) in shown.iter().rev().enumerate() {
+        let line = ctx.fonts(|f| f.layout_job(line_job(text, line_strength(k, *strength), wrap))).size();
+        size.x = size.x.max(line.x + 32.0);
+        size.y += line.y + 8.0 + if k > 0 { 4.0 } else { 0.0 };
+    }
+    vec2((size.x + 16.0).clamp(160.0, wrap + 48.0), size.y.max(44.0))
+}
+
+fn paint_lines(p: &egui::Painter, rect: egui::Rect, shown: &[(String, f32)], wrap: f32) {
     let mut y = rect.bottom() - 8.0;
     for (k, (text, strength)) in shown.iter().rev().enumerate() {
-        let strength = strength * if k == 0 { 1.0 } else { 0.72 };
-        let mut job = egui::text::LayoutJob::default();
-        job.append(text, 0.0, egui::TextFormat { font_id: font.clone(), color: Color32::WHITE.gamma_multiply(strength), extra_letter_spacing: 0.4, ..Default::default() });
-        job.wrap.max_width = rect.width() - 48.0;
-        job.wrap.max_rows = 2;
-        job.wrap.overflow_character = Some('…');
-        job.halign = egui::Align::Center;
-        let galley = p.layout_job(job);
+        let strength = line_strength(k, *strength);
+        let galley = p.layout_job(line_job(text, strength, wrap));
         let size = galley.size();
         let back = egui::Rect::from_min_size(pos2(rect.center().x - size.x / 2.0 - 16.0, y - size.y - 6.0), vec2(size.x + 32.0, size.y + 8.0));
-        if back.top() < rect.top() {
+        if back.top() < rect.top() - 0.5 {
             break;
         }
         p.rect_filled(back, Rounding::same(3.0), Color32::from_black_alpha((215.0 * strength) as u8));

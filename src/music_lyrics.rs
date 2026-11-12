@@ -190,6 +190,18 @@ pub fn none_found() -> bool {
 mod tests {
     use super::*;
 
+    /// The lyrics service for real: one request with a famous song's title and artist, and
+    /// what came back in numbers. `cargo test --bin jai the_lyrics_service -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn the_lyrics_service_answers_with_timed_lines() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let lines = rt.block_on(fetch("What a Wonderful World", "Louis Armstrong")).expect("timed lyrics for a famous song");
+        println!("{} lines, the first at {:.1} s, the last at {:.1} s", lines.len(), lines[0].0, lines[lines.len() - 1].0);
+        assert!(lines.len() > 8 && lines.windows(2).all(|w| w[0].0 <= w[1].0), "timed and in order");
+        assert!(line_at(&lines, lines[3].0 + 0.1).is_some());
+    }
+
     #[test]
     fn synced_lyrics_are_read_and_the_sung_line_found() {
         let lrc = "[ar: Somebody]\n[00:12.50] First line\n[00:17.00]Second line\n\n[00:21.10][01:02.00] The chorus\nno time on this one\n[00:30.00]\n";

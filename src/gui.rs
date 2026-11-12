@@ -8095,7 +8095,7 @@ mod tests {
             });
         });
         let lines = [("So the first thing we need is a plan for the weekend.".to_string(), 0.7), ("And then we look at the weather, because nobody wants to stand in the rain.".to_string(), 1.0)];
-        gallery("gallery_subtitles", vec2(1000.0, 110.0), 2, |ctx| crate::live_subtitles::paint_bar(ctx, &lines));
+        gallery("gallery_subtitles", vec2(1000.0, 110.0), 2, |ctx| crate::live_subtitles::paint_bar(ctx, &lines, None));
     }
 
     #[test]

@@ -230,6 +230,38 @@ fn capture() {
 mod tests {
     use super::*;
 
+    /// Where the sound is right now: every output device with its meter (read only).
+    /// `cargo test --bin jai where_the_sound_is -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn where_the_sound_is() {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        for d in rt.block_on(crate::audio_mixer::output_devices()).unwrap_or_default() {
+            println!("{} {}: meter {:.3}, {} app(s) with a session", if d.default { "*" } else { " " }, d.name, d.peak, d.apps.len());
+        }
+    }
+
+    /// The loopback for real, two seconds of it (it only listens, and says what it heard in
+    /// numbers): `cargo test --bin jai the_loopback_opens -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn the_loopback_opens_and_hears_what_plays() {
+        want(Use::Spectrum, true);
+        want(Use::Speech, true);
+        let (mut loudest, mut speech) = (0.0f32, 0usize);
+        for _ in 0..20 {
+            std::thread::sleep(Duration::from_millis(100));
+            want(Use::Spectrum, true);
+            loudest = loudest.max(bass_and_level().1);
+            speech += take_speech().len();
+        }
+        let up = RUNNING.load(Ordering::Acquire);
+        println!("capture up: {up}; loudest level {loudest:.3}; {speech} speech samples in 2 s; bands {:?}", bands().map(|b| (b * 100.0) as u32));
+        want(Use::Spectrum, false);
+        want(Use::Speech, false);
+        assert!(up, "the capture did not open (or closed again)");
+    }
+
     fn tone(freq: f32, amp: f32, rate: f32) -> Vec<f32> {
         (0..FFT).map(|i| amp * (std::f32::consts::TAU * freq * i as f32 / rate).sin()).collect()
     }

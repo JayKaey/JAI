@@ -244,8 +244,9 @@ pub fn own_window(title: &str) -> Option<isize> {
 }
 
 /// Makes one of our own windows an overlay: over every other window, letting clicks through
-/// to what is under it, never taking the focus and absent from Alt+Tab.
-pub fn make_overlay(hwnd: isize) -> Result<(), String> {
+/// to what is under it, never taking the focus and absent from Alt+Tab. `alpha`: how solid it
+/// is (255: fully; less lets what is under it show through).
+pub fn make_overlay(hwnd: isize, alpha: u8) -> Result<(), String> {
     use windows::Win32::Foundation::COLORREF;
     use windows::Win32::UI::WindowsAndMessaging::{
         GetWindowLongPtrW, SetLayeredWindowAttributes, SetWindowLongPtrW, GWL_EXSTYLE, HWND_TOPMOST, LWA_ALPHA, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
@@ -257,9 +258,9 @@ pub fn make_overlay(hwnd: isize) -> Result<(), String> {
         let wanted = style | (WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW).0 as isize;
         if wanted != style {
             SetWindowLongPtrW(HWND(hwnd), GWL_EXSTYLE, wanted);
-            // (A layered window shows nothing until it is told how: fully, here.)
-            SetLayeredWindowAttributes(HWND(hwnd), COLORREF(0), 255, LWA_ALPHA).map_err(|e| e.message().to_string())?;
         }
+        // (A layered window shows nothing until it is told how solid it is.)
+        SetLayeredWindowAttributes(HWND(hwnd), COLORREF(0), alpha, LWA_ALPHA).map_err(|e| e.message().to_string())?;
         SetWindowPos(HWND(hwnd), HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW).map_err(|e| e.message().to_string())
     }
 }
