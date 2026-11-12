@@ -98,7 +98,7 @@ mod desktop_backdrop;
 mod startup_sequence;
 mod speaker_id;
 mod voice_setup;
-mod emblem_hardware;
+mod emblem_light;
 mod hud_style;
 mod hud_suggestions;
 mod hyper_cortex;

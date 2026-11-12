@@ -259,7 +259,7 @@ mod tests {
                 crate::gui::paint_canvas(ctx);
                 egui::CentralPanel::default().frame(egui::Frame::none()).show(ctx, |ui| emblem.paint(&ui.painter_at(screen()), screen()));
                 if finish {
-                    crate::gui::paint_finish(ctx, false);
+                    crate::gui::paint_finish(ctx);
                 }
             })
         };

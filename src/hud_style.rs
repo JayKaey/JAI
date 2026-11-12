@@ -1,5 +1,5 @@
 //! The HUD's shared look (Sir, 2026-11-12: "look and feel better"): one motion table, one shell
-//! for every block (the shadow it floats on, the wear on its frame, the emblem's light on the
+//! for every block (the shadow it floats on, its frame line of light, the emblem's light on the
 //! edge that faces it), the header every block wears (title, state light, its keys) and what a
 //! block shows while it loads, has nothing to show, or failed. The board's report blocks and the
 //! tool blocks (`gui::hud_block_window`) both draw with these, so they read as one system.
@@ -253,47 +253,31 @@ pub fn emblem_light(p: &Painter, r: Rect, orb: Rect, colour: Color32, alpha: f32
     p.add(egui::Shape::mesh(mesh));
 }
 
-/// Places along a frame that depend on `seed` alone (a block's name), so they hold still from
-/// frame to frame: each a corner (0-3), which of its two sides, how far from the corner and how
-/// long.
-fn nicks(seed: u64) -> [(usize, bool, f32, f32); 5] {
-    let mut s = seed | 1;
-    let mut next = || {
-        s ^= s << 13;
-        s ^= s >> 7;
-        s ^= s << 17;
-        (s >> 16) as u32
-    };
-    std::array::from_fn(|_| ((next() % 4) as usize, next() % 2 == 0, 10.0 + (next() % 34) as f32, 2.0 + (next() % 4) as f32))
-}
-
-/// A name's seed for `wear`.
+/// A name's seed: what makes one block's frame line its own.
 pub fn seed_of(name: &str) -> u64 {
     name.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ b as u64).wrapping_mul(0x0100_0000_01b3))
 }
 
-/// A block's frame as a thing that was made and has aged: its line `width` wide in `edge`,
-/// brighter here and fainter there along its length, a bevel just inside it (lit from the
-/// upper left) and a rivet in each corner. `seed` keeps each block's wear its own, the same on
-/// every start.
-#[allow(clippy::too_many_arguments)]
-pub fn worn_frame(p: &Painter, r: Rect, edge: Color32, width: f32, seed: u64, alpha: f32, grip: bool) {
+/// A block's frame line, `width` wide in `edge`: a line of light, a little stronger here and a
+/// little softer there along its length, as light is (Sir, 2026-11-12: natural, and simple;
+/// rivets and a bevel, tried the same evening, he did not want). `seed` keeps each block's line
+/// its own, the same on every start.
+pub fn worn_frame(p: &Painter, r: Rect, edge: Color32, width: f32, seed: u64, alpha: f32) {
     if !r.is_positive() || alpha <= 0.0 {
         return;
     }
     let mut next = chance(seed as u32 ^ (seed >> 32) as u32 ^ 0x0F4A_11E5);
     let mut mesh = egui::Mesh::default();
     let w = width.max(1.0);
-    // The line, piece by piece: each piece as strong as its place has stayed (neighbours alike,
-    // so it reads as wear, not as dashes).
-    let mut level = 0.75 + 0.25 * next();
+    let mut level = 0.92 + 0.08 * next();
     let side = |mesh: &mut egui::Mesh, from: Pos2, to: Pos2, next: &mut dyn FnMut() -> f32, level: &mut f32| {
         let length = (to - from).length();
-        let pieces = (length / 16.0).ceil().max(1.0) as usize;
+        let pieces = (length / 24.0).ceil().max(1.0) as usize;
         let dir = (to - from) / pieces as f32;
         let horizontal = dir.x.abs() > dir.y.abs();
         for k in 0..pieces {
-            *level = (*level + (next() - 0.5) * 0.3).clamp(0.5, 1.0);
+            // (Neighbours alike: it reads as one line, not as dashes.)
+            *level = (*level + (next() - 0.5) * 0.08).clamp(0.84, 1.0);
             let (a, b) = (from + dir * k as f32, from + dir * (k + 1) as f32);
             let piece = if horizontal { Rect::from_min_max(pos2(a.x.min(b.x), a.y - w * 0.5), pos2(a.x.max(b.x), a.y + w * 0.5)) } else { Rect::from_min_max(pos2(a.x - w * 0.5, a.y.min(b.y)), pos2(a.x + w * 0.5, a.y.max(b.y))) };
             mesh.add_colored_rect(piece, edge.gamma_multiply(*level * alpha));
@@ -304,102 +288,31 @@ pub fn worn_frame(p: &Painter, r: Rect, edge: Color32, width: f32, seed: u64, al
     side(&mut mesh, line.right_top(), line.right_bottom(), &mut next, &mut level);
     side(&mut mesh, line.right_bottom(), line.left_bottom(), &mut next, &mut level);
     side(&mut mesh, line.left_bottom(), line.left_top(), &mut next, &mut level);
-    // The bevel inside the line: a hair of light where it faces the light, shadow where not.
-    let inner = r.shrink(w + 0.5);
-    let (lit, dark) = (white(0.07 * alpha), Color32::from_black_alpha((90.0 * alpha) as u8));
-    mesh.add_colored_rect(Rect::from_min_max(inner.left_top(), pos2(inner.right(), inner.top() + 1.0)), lit);
-    mesh.add_colored_rect(Rect::from_min_max(inner.left_top(), pos2(inner.left() + 1.0, inner.bottom())), lit);
-    mesh.add_colored_rect(Rect::from_min_max(pos2(inner.left(), inner.bottom() - 1.0), inner.right_bottom()), dark);
-    mesh.add_colored_rect(Rect::from_min_max(pos2(inner.right() - 1.0, inner.top()), inner.right_bottom()), dark);
     p.add(egui::Shape::mesh(mesh));
-    // A rivet in each corner (on blocks large enough to have been bolted together).
-    if r.width() >= 180.0 && r.height() >= 110.0 {
-        // (`grip`: the block has its resize grip in the bottom right corner, where no rivet goes.)
-        for corner in [r.left_top() + vec2(8.5, 8.5), r.right_top() + vec2(-8.5, 8.5), r.left_bottom() + vec2(8.5, -8.5), r.right_bottom() + vec2(-8.5, -8.5)].into_iter().take(if grip { 3 } else { 4 }) {
-            p.circle_filled(corner + vec2(0.5, 0.8), 2.6, Color32::from_black_alpha((120.0 * alpha) as u8));
-            p.circle_filled(corner, 2.1, Color32::from_rgb(34, 36, 41).gamma_multiply(alpha));
-            p.circle_stroke(corner, 2.1, stroke(0.8, white(0.2 * alpha)));
-            p.circle_filled(corner - vec2(0.6, 0.6), 0.6, white(0.35 * alpha));
-        }
-    }
 }
 
-/// What use leaves on a block's surface: grime along its edges, a smudge or two, hairline
-/// scratches and a few specks. Faint (the text over it stays sharp), each block its own,
-/// the same on every start.
-pub fn patina(p: &Painter, r: Rect, seed: u64, alpha: f32) {
+/// The shade inside a block's frame: its surface is a little darker along its edges, as a
+/// pane lit from in front is. Faint, and nothing else (no scratches, no specks).
+pub fn patina(p: &Painter, r: Rect, alpha: f32) {
     if r.width() < 120.0 || r.height() < 70.0 || alpha <= 0.0 {
         return;
     }
-    let mut next = chance(seed as u32 ^ (seed >> 32) as u32 ^ 0x9A71_AA05);
     let mut mesh = egui::Mesh::default();
-    // Grime: darker along the edges, most in the corners.
-    let depth = 14.0f32.min(r.height() * 0.2);
+    let depth = 12.0f32.min(r.height() * 0.2);
     let inner = r.shrink(depth);
     let ring = |q: Rect| [q.left_top(), q.right_top(), q.right_bottom(), q.left_bottom()];
-    let base = mesh.vertices.len() as u32;
     for at in ring(r) {
-        mesh.colored_vertex(at, Color32::from_black_alpha((70.0 * alpha) as u8));
+        mesh.colored_vertex(at, Color32::from_black_alpha((46.0 * alpha) as u8));
     }
     for at in ring(inner) {
         mesh.colored_vertex(at, Color32::TRANSPARENT);
     }
     for k in 0..4u32 {
         let n = (k + 1) % 4;
-        mesh.add_triangle(base + k, base + n, base + 4 + n);
-        mesh.add_triangle(base + k, base + 4 + n, base + 4 + k);
+        mesh.add_triangle(k, n, 4 + n);
+        mesh.add_triangle(k, 4 + n, 4 + k);
     }
-    // Smudges: where a hand has been, the surface is a shade lighter.
-    for _ in 0..2 {
-        let centre = pos2(r.left() + r.width() * (0.15 + 0.7 * next()), r.top() + r.height() * (0.2 + 0.6 * next()));
-        let (rx, ry) = (r.width() * (0.12 + 0.16 * next()), r.height() * (0.1 + 0.14 * next()));
-        let hub = mesh.vertices.len() as u32;
-        mesh.colored_vertex(centre, white(0.022 * alpha));
-        for k in 0..12 {
-            let a = std::f32::consts::TAU * k as f32 / 12.0;
-            mesh.colored_vertex(centre + vec2(a.cos() * rx, a.sin() * ry), Color32::TRANSPARENT);
-        }
-        for k in 0..12u32 {
-            mesh.add_triangle(hub, hub + 1 + k, hub + 1 + (k + 1) % 12);
-        }
-    }
-    // Specks.
-    for _ in 0..((r.width() * r.height() / 9000.0) as usize).clamp(4, 40) {
-        let at = pos2(r.left() + 3.0 + (r.width() - 6.0) * next(), r.top() + 3.0 + (r.height() - 6.0) * next());
-        let light = next() < 0.6;
-        mesh.add_colored_rect(Rect::from_min_size(pos2(at.x.round(), at.y.round()), vec2(1.0, 1.0)), if light { white((0.03 + 0.06 * next()) * alpha) } else { Color32::from_black_alpha((60.0 * alpha) as u8) });
-    }
-    let clipped = p.with_clip_rect(r);
-    clipped.add(egui::Shape::mesh(mesh));
-    // Hairline scratches, most of them leaning the way a cloth is wiped.
-    for _ in 0..((r.width() / 150.0) as usize).clamp(2, 6) {
-        let from = pos2(r.left() + r.width() * next(), r.top() + r.height() * next());
-        let lean = if next() < 0.7 { -0.45 + 0.3 * next() } else { 1.1 + 1.0 * next() };
-        let len = 18.0 + 90.0 * next() * next();
-        let to = from + vec2(lean.cos(), lean.sin()) * len;
-        clipped.line_segment([from, to], stroke(1.0, white((0.025 + 0.04 * next()) * alpha)));
-    }
-}
-
-/// Wear on a frame: a few nicks in its border near the corners, where a real panel is handled,
-/// and a faint scuff inside each. `fill` is what lies under the border.
-pub fn wear(p: &Painter, r: Rect, fill: Color32, edge: Color32, seed: u64, alpha: f32) {
-    if r.width() < 120.0 || r.height() < 90.0 || alpha <= 0.0 {
-        return;
-    }
-    let corners = [(r.left_top(), 1.0, 1.0), (r.right_top(), -1.0, 1.0), (r.left_bottom(), 1.0, -1.0), (r.right_bottom(), -1.0, -1.0)];
-    for (corner, horizontal, off, len) in nicks(seed) {
-        let (at, dx, dy) = corners[corner];
-        let (from, to, inward) = if horizontal {
-            (at + vec2(dx * off, 0.0), at + vec2(dx * (off + len), 0.0), vec2(0.0, dy))
-        } else {
-            (at + vec2(0.0, dy * off), at + vec2(0.0, dy * (off + len)), vec2(dx, 0.0))
-        };
-        // Where the border is worn thin (not cut: a gap reads as a fault of the drawing), and
-        // the scuff the knock left just inside it.
-        p.line_segment([from, to], stroke(2.4, fill.gamma_multiply(0.6 * alpha)));
-        p.line_segment([from + inward * 3.0, to + inward * 3.0 + (to - from) * 0.6], stroke(1.0, edge.gamma_multiply(0.10 * alpha)));
-    }
+    p.with_clip_rect(r).add(egui::Shape::mesh(mesh));
 }
 
 // ------------------------------------------------------------------------- drag and throw ----
@@ -514,7 +427,7 @@ const SCRATCHES: usize = 16;
 /// quite even across it, it falls off towards the edges, and dust and a few hairline scratches
 /// lie on it. All of it is still (it asks for no frame) and faint enough that text under it
 /// stays sharp.
-pub fn glass(p: &Painter, rect: Rect, lift: bool) {
+pub fn glass(p: &Painter, rect: Rect) {
     if rect.width() < 200.0 || rect.height() < 120.0 {
         return;
     }
@@ -526,8 +439,7 @@ pub fn glass(p: &Painter, rect: Rect, lift: bool) {
         for i in 0..=cols {
             let at = pos2(rect.left() + rect.width() * i as f32 / cols as f32, rect.top() + rect.height() * j as f32 / rows as f32);
             let v = next();
-            // (`lift` off: the lighter patches are left out, so black stays black.)
-            let colour = if v < 0.5 { Color32::from_black_alpha((v * 2.0 * 16.0) as u8) } else if lift { white((v - 0.5) * 2.0 * 0.02) } else { Color32::TRANSPARENT };
+            let colour = if v < 0.5 { Color32::from_black_alpha((v * 2.0 * 16.0) as u8) } else { white((v - 0.5) * 2.0 * 0.02) };
             mesh.colored_vertex(at, colour);
         }
     }
@@ -885,15 +797,6 @@ mod tests {
         assert!(light_strength(middle, orb) < light_strength(beside, orb) && light_strength(middle, orb) > 0.0);
     }
 
-    #[test]
-    fn wear_holds_still_and_differs_between_blocks() {
-        assert_eq!(nicks(seed_of("mixer")), nicks(seed_of("mixer")));
-        assert_ne!(nicks(seed_of("mixer")), nicks(seed_of("telemetry")));
-        for (corner, _, off, len) in nicks(seed_of("earth")) {
-            assert!(corner < 4 && (10.0..44.0).contains(&off) && (2.0..6.0).contains(&len));
-        }
-    }
-
     /// A dragged block lines up with its neighbours and the screen, keeps a gap beside a
     /// neighbour, and far from every line it stays where the hand has it.
     #[test]
@@ -949,7 +852,7 @@ mod tests {
         let run = || {
             ctx.run(egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1280.0, 720.0))), ..Default::default() }, |ctx| {
                 let painter = ctx.layer_painter(egui::LayerId::background());
-                glass(&painter, ctx.screen_rect(), true);
+                glass(&painter, ctx.screen_rect());
             })
         };
         let _ = (run(), run());

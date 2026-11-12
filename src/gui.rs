@@ -6941,7 +6941,6 @@ pub(super) fn hud_block_window(ctx: &egui::Context, id: &str, title: &str, size:
         shell.set_clip_rect(frame_rect);
         paint_block_frame_of(&shell, frame_rect, &motion, mix(BLOCK_SLATE, BLOCK_SLATE_LIFTED, using).gamma_multiply(dim), mix(edge, accent, using * 0.6).gamma_multiply(dim), if found { 2.0 } else { 1.0 }, Some(crate::hud_style::seed_of(id)));
         if !motion.moving() {
-            crate::hud_style::wear(&shell, frame_rect, BLOCK_SLATE, edge, crate::hud_style::seed_of(id), dim);
             if let Some(orb) = crate::hud_dock::orb() {
                 crate::hud_style::emblem_light(&shell, frame_rect, orb, accent, dim);
             }
@@ -7353,8 +7352,8 @@ fn paint_block_frame_of(painter: &egui::Painter, rect: Rect, m: &WindowMotion, f
     let colour = mix(edge, Color32::WHITE, heat * 0.7).gamma_multiply(m.frame.max(heat));
     match seed.filter(|_| !m.moving() && fill.a() > 0) {
         Some(seed) => {
-            crate::hud_style::patina(painter, band, seed, m.frame);
-            crate::hud_style::worn_frame(painter, band, colour, width, seed, 1.0, true);
+            crate::hud_style::patina(painter, band, m.frame);
+            crate::hud_style::worn_frame(painter, band, colour, width, seed, 1.0);
         }
         // (While it unfolds or folds, and for a frame without a surface: the plain line.)
         None => inner_border(painter, band, width, colour),
@@ -7727,7 +7726,7 @@ fn grain_image() -> egui::ColorImage {
 /// light on glass and not as flat vector art (Sir, 2026-11-11: "more realistic, a bit more
 /// rough"). Two meshes on the topmost layer; the grain shifts twelve times a second, but only
 /// on frames that are painted anyway (it never asks for one).
-pub(crate) fn paint_finish(ctx: &egui::Context, oled: bool) {
+pub(crate) fn paint_finish(ctx: &egui::Context) {
     let rect = ctx.screen_rect();
     let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("hud_finish")));
     let mut lines = egui::Mesh::default();
@@ -7748,19 +7747,17 @@ pub(crate) fn paint_finish(ctx: &egui::Context, oled: bool) {
     let tick = (ctx.input(|i| i.time) * 12.0) as u32;
     let shift = vec2((tick.wrapping_mul(0x9E37) % 97) as f32 / 97.0, (tick.wrapping_mul(0x85EB) % 89) as f32 / 89.0);
     let mut mesh = egui::Mesh::with_texture(grain.id());
-    // (Under the OLED look the grain only darkens: black stays black, what is lit gets the
-    // grain.)
-    mesh.add_rect_with_uv(rect, Rect::from_min_size(pos2(shift.x, shift.y), rect.size() / GRAIN_TILE as f32), if oled { Color32::BLACK } else { Color32::WHITE });
+    mesh.add_rect_with_uv(rect, Rect::from_min_size(pos2(shift.x, shift.y), rect.size() / GRAIN_TILE as f32), Color32::WHITE);
     painter.add(Shape::mesh(mesh));
     // The glass itself: uneven light, darker edges, dust and hairline scratches, per screen of
     // a HUD that spans several, else over the one it is on. (It was only drawn on a spanned
     // HUD: on a single screen there was no glass at all.)
     let screens = monitor_regions(ctx);
     if screens.is_empty() {
-        crate::hud_style::glass(&painter, rect, !oled);
+        crate::hud_style::glass(&painter, rect);
     }
     for screen in screens {
-        crate::hud_style::glass(&painter, screen, !oled);
+        crate::hud_style::glass(&painter, screen);
     }
 }
 
@@ -7890,10 +7887,8 @@ impl HudApp {
         } else {
             paint_canvas(ctx);
             // (Offscreen renders stay clean: the verifier reads their colours.)
-            // (Under the OLED look too, in a form that keeps black black: Sir, 2026-11-12, wants
-            // the HUD to look built and used, not drawn.)
-            if iface.display_finish && !windows_still(ctx) {
-                paint_finish(ctx, self.palette.oled);
+            if iface.display_finish && !self.palette.oled && !windows_still(ctx) {
+                paint_finish(ctx);
             }
             // The Settings drawer slides in from the right (VIEW → SETTINGS).
             let p = self.palette;
@@ -8250,7 +8245,7 @@ mod tests {
         // A frame with the finish paints, and asks for no frame of its own.
         // (A new context paints twice before it settles, and the grain's texture is new once.)
         let ctx = egui::Context::default();
-        let frame = || ctx.run(egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(640.0, 360.0))), ..Default::default() }, |ctx| paint_finish(ctx, false));
+        let frame = || ctx.run(egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(640.0, 360.0))), ..Default::default() }, |ctx| paint_finish(ctx));
         let _ = (frame(), frame(), frame());
         let out = frame();
         assert!(!out.shapes.is_empty());

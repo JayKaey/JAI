@@ -2067,12 +2067,11 @@ fn frame(p: &Painter, slot: Rect, block: &Block, active: bool, stack: Option<(us
     // that faces it; wear on the frame.
     crate::hud_style::shadow(&p.with_clip_rect(r.expand(48.0)), r, 1.0);
     glow_frame(p, r, edge, if active { 1.6 } else { 1.0 });
-    // (A frame that has aged, and what use leaves on its surface: `hud_style`.)
+    // (A line of light, gently uneven, and the shade inside it: `hud_style`.)
     let seed = crate::hud_style::seed_of(&block.label);
     crate::hud_style::surface(p, r, if active { BLOCK_FILL_LIFTED } else { BLOCK_FILL }, 1.0);
-    crate::hud_style::patina(p, r, seed, 1.0);
-    crate::hud_style::worn_frame(p, r, edge, 1.2, seed, 1.0, false);
-    crate::hud_style::wear(p, r, BLOCK_FILL, edge, seed, 1.0);
+    crate::hud_style::patina(p, r, 1.0);
+    crate::hud_style::worn_frame(p, r, edge, 1.2, seed, 1.0);
     if let Some(orb) = crate::hud_dock::orb() {
         crate::hud_style::emblem_light(p, r, orb, active_colour(), 1.0);
     }

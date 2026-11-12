@@ -915,9 +915,10 @@ impl RoseEmblem {
     /// The seven concentric front rings, their fixed markers and the wordmark.
     fn paint_front(&self, painter: &Painter, frame: &EmblemFrame, alpha: f32) {
         let scale = frame.unit().clamp(0.35, 1.8);
-        // The housing the rings of light sit in (`emblem_hardware`): under them.
+        // The glow the bright ring throws into the dark round it (`emblem_light`): light as
+        // light behaves, and nothing else round the emblem.
         let burning = (0.75 + 0.25 * self.voice + 0.15 * self.busy).clamp(0.0, 1.0);
-        crate::emblem_hardware::paint_under(painter, frame.centre, frame.unit(), alpha, torus_deep(), burning);
+        crate::emblem_light::paint_glow(painter, frame.centre, frame.unit(), alpha, torus_deep(), burning);
         for i in 0..RING_COUNT {
             let mut mesh = Mesh::default();
             self.ring_mesh(&mut mesh, frame, i, scale, alpha);
@@ -951,18 +952,13 @@ impl RoseEmblem {
         // The wordmark on its dark core disc.
         let a = alpha;
         let disc = 0.52 * frame.radius;
-        // (Dark glass over the plate's middle: a little of the metal's sheen shows through it.)
-        painter.circle_filled(frame.centre, disc, Color32::from_rgba_unmultiplied(4, 3, 6, (214.0 * a) as u8));
+        painter.circle_filled(frame.centre, disc, Color32::from_rgba_unmultiplied(4, 2, 6, (235.0 * a) as u8));
         let size = (frame.radius * 0.17).clamp(8.0, 46.0);
         let font = FontId::new(size, FontFamily::Name("bold".into()));
         let halo = glow(crimson_rgb(), 0.5 * a * (0.55 + 0.45 * self.voice));
         let wordmark = "J.A.I.";
-        // The wordmark is lit from behind the glass: its light under it, its own shadow in it.
         painter.text(frame.centre + vec2(0.0, 1.5), Align2::CENTER_CENTER, wordmark, font.clone(), halo);
-        painter.text(frame.centre + vec2(0.8, 1.2) * scale.max(0.6), Align2::CENTER_CENTER, wordmark, font.clone(), Color32::from_black_alpha((150.0 * a) as u8));
-        painter.text(frame.centre, Align2::CENTER_CENTER, wordmark, font, Color32::from_rgb(0xF2, 0xF0, 0xEA).gamma_multiply(a));
-        // The glass it all sits behind, and what the years left on it.
-        crate::emblem_hardware::paint_over(painter, frame.centre, frame.unit(), a);
+        painter.text(frame.centre, Align2::CENTER_CENTER, wordmark, font, Color32::WHITE.gamma_multiply(a));
     }
 
     fn ring_mesh(&self, mesh: &mut Mesh, frame: &EmblemFrame, i: usize, scale: f32, alpha: f32) {
@@ -987,9 +983,9 @@ impl RoseEmblem {
             // The blazing magenta torus, breathing with his voice.
             1 => {
                 let gain = 0.85 + 0.3 * voice + 0.15 * self.busy;
-                // (No ring of light is even, and an old one less so: brighter and tired
-                // stretches that stay where they are, and a hair of flicker.)
-                let uneven: Vec<f32> = points.iter().zip(&fog).map(|(p, f)| f * crate::emblem_hardware::unevenness((*p - frame.centre).angle(), self.clock)).collect();
+                // (No ring of light is perfectly even: a little brighter here, a little softer
+                // there, and a hair of flicker.)
+                let uneven: Vec<f32> = points.iter().zip(&fog).map(|(p, f)| f * crate::emblem_light::unevenness((*p - frame.centre).angle(), self.clock)).collect();
                 let soft: Vec<f32> = uneven.iter().map(|f| f * 0.6).collect();
                 haze(mesh, &points, &soft, torus_deep(), 0.16 * SOFT_BLOOM_GAIN, 22.0 * scale, true);
                 neon(mesh, &points, &uneven, torus_deep(), torus_hot(), gain, scale * 1.25, true);
@@ -1003,7 +999,7 @@ impl RoseEmblem {
             }
             // A thinner rose ring inside the torus, with two white glints.
             3 => {
-                let uneven: Vec<f32> = points.iter().zip(&fog).map(|(p, f)| f * crate::emblem_hardware::unevenness((*p - frame.centre).angle() + 2.1, self.clock)).collect();
+                let uneven: Vec<f32> = points.iter().zip(&fog).map(|(p, f)| f * crate::emblem_light::unevenness((*p - frame.centre).angle() + 2.1, self.clock)).collect();
                 neon(mesh, &points, &uneven, crimson_rgb(), torus_hot(), 0.55, scale * 0.6, true);
                 for start in [0.2, 0.7] {
                     let (p, l) = lit(&arc_of(&points, start, 0.06));
