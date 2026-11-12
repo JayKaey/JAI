@@ -802,10 +802,6 @@ impl RoseEmblem {
         self.mood = mood;
     }
 
-    pub fn mood(&self) -> Mood {
-        self.mood
-    }
-
     /// The music's bass right now (0 while nothing plays): the emblem moves with it.
     pub fn set_music(&mut self, bass: f32) {
         self.music = bass.clamp(0.0, 1.0);
@@ -1558,6 +1554,43 @@ mod tests {
         assert_eq!(resolve_state(EmblemInputs { idle: false, ..base }), RoseEmblemState::AwakeFrontEmblem);
         assert_eq!(resolve_state(EmblemInputs { centre_covered: true, ..base }), RoseEmblemState::CornerDocked);
         assert!(!base.busy(), "idling never spins the rings up");
+    }
+
+    #[test]
+    /// His mood shows on top of the pose: the rings open while he listens, a failed order is
+    /// one red flash that is gone within a second, and at rest nothing is tinted.
+    fn the_mood_opens_tints_and_passes() {
+        let screen = Rect::from_min_size(pos2(0.0, 0.0), vec2(1920.0, 1080.0));
+        let mut emblem = RoseEmblem::new(RoseEmblemState::AwakeFrontEmblem);
+        let rest = emblem.frame(screen).radius;
+        assert_eq!(emblem.tint().1, 0.0, "nothing at rest");
+        emblem.set_mood(Mood::Listening);
+        for _ in 0..30 {
+            emblem.step(1.0 / 60.0, 0.0, false);
+        }
+        let open = emblem.frame(screen).radius;
+        assert!(open > rest * 1.04 && open < rest * 1.07, "the rings open a little: {rest} -> {open}");
+        assert_eq!(emblem.tint().0, WHITE_RGB);
+        emblem.set_mood(Mood::Thinking);
+        for _ in 0..30 {
+            emblem.step(1.0 / 60.0, 0.0, false);
+        }
+        assert_eq!(emblem.tint().0, crate::theme_engine::current().core_secondary, "thinking warms to the second colour");
+        emblem.flash_fault();
+        assert_eq!(emblem.tint().0, FAULT_RGB, "a fault is red over everything");
+        assert!(emblem.is_animating());
+        for _ in 0..60 {
+            emblem.step(1.0 / 60.0, 0.0, false);
+        }
+        assert_ne!(emblem.tint().0, FAULT_RGB, "gone within a second");
+        emblem.set_mood(Mood::Rest);
+        emblem.set_music(0.8);
+        assert!(emblem.frame(screen).radius > rest, "the rings swell with the bass");
+        emblem.set_music(0.0);
+        for _ in 0..60 {
+            emblem.step(1.0 / 60.0, 0.0, false);
+        }
+        assert!((emblem.frame(screen).radius - rest).abs() < 0.01 && emblem.tint().1 == 0.0, "and at rest it is as it was");
     }
 
     #[test]

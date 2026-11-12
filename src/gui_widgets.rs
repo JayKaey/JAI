@@ -707,6 +707,12 @@ fn network_view(ui: &mut Ui, p: &Palette, app: &Jai, window: &str) {
     let down = history(ui, (window, "down"), t.net_down_kbps);
     let up = history(ui, (window, "up"), t.net_up_kbps);
     let h = ((ui.available_height() - 80.0) / 2.0).clamp(50.0, 180.0);
+    // The first seconds have nothing to plot: the outline of the chart to come.
+    if down.len() < 3 {
+        let room = ui.available_rect_before_wrap();
+        crate::hud_style::outline(ui, egui::Rect::from_min_size(room.min, vec2(room.width(), (2.0 * h + 60.0).min(room.height()))), crate::hud_style::Outline::Chart);
+        return;
+    }
     section(ui, p, &format!("DOWNLOAD · {}", super::rate(t.net_down_kbps)), |ui| line_chart(ui, p, &down, "KB/s", Some(0.0), None, h, true, p.accent));
     section(ui, p, &format!("UPLOAD · {}", super::rate(t.net_up_kbps)), |ui| line_chart(ui, p, &up, "KB/s", Some(0.0), None, h, true, p.accent));
 }
@@ -792,6 +798,12 @@ pub(super) fn show_windows(ctx: &egui::Context, host: &WidgetHost) {
             // (stored again only when it changes).
             let text: Vec<&str> = spec.blocks.iter().flat_map(|b| [b.title.as_str(), b.body.as_str()]).filter(|s| !s.trim().is_empty()).collect();
             crate::hud_dock::describe_block(&spec.id, &text.join("\n"));
+            // A live window's light: all is well, or (the system's figures) something runs hot.
+            if !spec.live_kinds().is_empty() {
+                let t = host.app.telemetry();
+                let hot = spec.live_kinds().contains(&"pc_stats") && (t.cpu_usage_pct > 85.0 || t.ram_usage_pct > 90.0 || t.gpu.as_ref().and_then(|g| g.temperature_c).is_some_and(|c| c >= 80.0));
+                crate::hud_style::set_light(&spec.id, if hot { crate::hud_style::Light::Warn } else { crate::hud_style::Light::Good });
+            }
             let action = super::hud_block_window(ctx, &spec.id, &spec.title, [spec.width, spec.height], |ui| {
                 fast = window_content(ui, &p, &spec, host);
             });
