@@ -188,8 +188,12 @@ async fn fetch(title: &str, artist: &str) -> Option<Vec<(f32, String)>> {
     (!lines.is_empty()).then_some(lines)
 }
 
+/// How long the music counts as playing after the player last made a sound.
+const MUSIC_LINGERS: Duration = Duration::from_secs(6);
+
 async fn follow() {
     tracing::debug!("[MUSIC] Following what plays");
+    let mut heard_music: Option<Instant> = None;
     while wanted() {
         let now = tokio::time::timeout(Duration::from_millis(800), crate::music::now_playing()).await.ok().flatten();
         let track = now.filter(|n| !n.title.trim().is_empty()).map(|n| {
@@ -200,8 +204,15 @@ async fn follow() {
         // Where the music is right now: the emblem listens there, and nowhere while none plays.
         if WANT_VISUALS.load(Ordering::Acquire) {
             let source = music_source(track.as_ref().is_some_and(|t| t.playing)).await;
-            PLAYING.store(source != crate::pc_audio::Source::Nothing, Ordering::Release);
-            crate::pc_audio::listen_to(crate::pc_audio::Use::Spectrum, source);
+            // (The silence between two songs, or a rest in one, is not the end of the music: it
+            // is over once nothing has played for a few seconds.)
+            if source != crate::pc_audio::Source::Nothing {
+                heard_music = Some(Instant::now());
+            }
+            if source != crate::pc_audio::Source::Nothing || heard_music.is_none_or(|at| at.elapsed() > MUSIC_LINGERS) {
+                PLAYING.store(source != crate::pc_audio::Source::Nothing, Ordering::Release);
+                crate::pc_audio::listen_to(crate::pc_audio::Use::Spectrum, source);
+            }
         }
         if WANT_LYRICS.load(Ordering::Acquire) {
             match track.filter(|t| t.playing) {

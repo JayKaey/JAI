@@ -4172,9 +4172,11 @@ impl HudApp {
             let music_on = iface.music_visuals && !windows_still(ctx) && (!crate::platform::in_test_session() || demo("music"));
             crate::pc_audio::want(crate::pc_audio::Use::Spectrum, music_on);
             crate::music_lyrics::want(music_on, crate::hud_feel::lyrics(), &self.rt);
-            let (bass, level) = if music_on { crate::pc_audio::bass_and_level() } else { (0.0, 0.0) };
-            // (Only while a music player is making sound: what else the PC plays is not music.)
-            let music = music_on && crate::music_lyrics::playing() && level > 0.05 && m.state != "speaking";
+            let (bass, _) = if music_on { crate::pc_audio::bass_and_level() } else { (0.0, 0.0) };
+            // (While a music player is making sound: what else the PC plays is not music. Not by
+            // how loud it is: a quiet passage, or a player's channel set low, is music too. Seen
+            // live 2026-11-12: the ring came and went with the song's loudness.)
+            let music = music_on && crate::music_lyrics::playing() && m.state != "speaking";
             self.emblem.set_music(if music { bass } else { 0.0 });
             // The emblem (drawn over the board; its corner cell is kept free), wherever Sir put it.
             self.emblem.glide(screen, dt);
