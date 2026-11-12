@@ -34,9 +34,11 @@ static ATTACHED: Mutex<Option<Result<(), String>>> = Mutex::new(None);
 
 /// The monitor the background takes: the first that the board (`hud`, its monitor's rect) is not
 /// on, a secondary one before the primary. None with a single monitor (the board needs it).
-pub fn target(monitors: &[([i32; 4], bool)], hud: Option<[i32; 4]>) -> Option<[i32; 4]> {
-    let free = |primary: bool| monitors.iter().find(|(rect, p)| *p == primary && Some(*rect) != hud).map(|(rect, _)| *rect);
-    if monitors.len() < 2 {
+pub fn target(monitors: &[([i32; 4], bool)], hud: Option<[i32; 4]>, board: bool) -> Option<[i32; 4]> {
+    let free = |primary: bool| monitors.iter().find(|(rect, p)| *p == primary && (!board || Some(*rect) != hud)).map(|(rect, _)| *rect);
+    // (`board` off: he is the orb or the slim strip and holds no monitor, so even the only one
+    // is free for it.)
+    if monitors.len() < 2 && board {
         return None;
     }
     free(false).or_else(|| free(true))
@@ -60,7 +62,7 @@ fn monitor_of(_hwnd: isize) -> Option<[i32; 4]> {
 /// Shows the background while `on` (each HUD frame). `hud`: the HUD's own window (the monitor
 /// it is on is left alone); `spanning`: the board is across all of them; `state`: what he is
 /// doing.
-pub fn show(ctx: &egui::Context, on: bool, hud: isize, spanning: bool, state: &str) -> Option<Refused> {
+pub fn show(ctx: &egui::Context, on: bool, hud: isize, spanning: bool, board: bool, state: &str) -> Option<Refused> {
     if !on {
         if lock(&BACKDROP).take().is_some() {
             *lock(&ATTACHED) = None;
@@ -78,7 +80,7 @@ pub fn show(ctx: &egui::Context, on: bool, hud: isize, spanning: bool, state: &s
         // (A scripted session sends it to the monitor it names, `JAI_BACKDROP_MONITOR=2`: its
         // own test screen, never the one Sir works on.)
         let named = crate::platform::in_test_session().then(|| std::env::var("JAI_BACKDROP_MONITOR").ok()).flatten().and_then(|n| n.trim().parse::<usize>().ok()).and_then(|n| monitors.get(n.saturating_sub(1)).map(|(rect, _)| *rect));
-        let Some(monitor) = named.or_else(|| (!spanning).then(|| target(&monitors, monitor_of(hud))).flatten()) else {
+        let Some(monitor) = named.or_else(|| (!spanning).then(|| target(&monitors, monitor_of(hud), board)).flatten()) else {
             return Some(Refused(if spanning { "My board is across every monitor: there is no desktop left for me to stand behind.".into() } else { "I need a second monitor for that: this one holds my board.".into() }));
         };
         tracing::info!("[DESKTOP] The live background opens on the monitor at {},{} ({}×{})", monitor[0], monitor[1], monitor[2] - monitor[0], monitor[3] - monitor[1]);
@@ -175,10 +177,13 @@ mod tests {
     fn it_takes_a_monitor_the_board_is_not_on() {
         let (main, side) = ([0, 0, 2560, 1440], [2560, 0, 4480, 1080]);
         let both = [(main, true), (side, false)];
-        assert_eq!(target(&both, Some(main)), Some(side), "the board is on the main monitor");
-        assert_eq!(target(&both, Some(side)), Some(main), "the board is on the second one");
-        assert_eq!(target(&both, None), Some(side), "a secondary one before the primary");
-        assert_eq!(target(&[(main, true)], Some(main)), None, "one monitor holds the board");
-        assert_eq!(target(&[], None), None);
+        assert_eq!(target(&both, Some(main), true), Some(side), "the board is on the main monitor");
+        assert_eq!(target(&both, Some(side), true), Some(main), "the board is on the second one");
+        assert_eq!(target(&both, None, true), Some(side), "a secondary one before the primary");
+        assert_eq!(target(&[(main, true)], Some(main), true), None, "one monitor holds the board");
+        assert_eq!(target(&[], None, true), None);
+        // As the orb or the slim strip he holds no monitor: the only one is free for it too.
+        assert_eq!(target(&[(main, true)], None, false), Some(main));
+        assert_eq!(target(&both, None, false), Some(side));
     }
 }

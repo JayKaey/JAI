@@ -150,6 +150,18 @@ pub fn spectrum(window: &[f32], rate: f32) -> [f32; BANDS] {
     })
 }
 
+/// The least the top of the scale ever is: quieter than this is quiet, not music to be blown up.
+const LEAST_TOP: f32 = 0.22;
+
+/// The spectrum on a scale whose top is the loudest band of the last seconds (`top`, which
+/// rises at once and sinks slowly): a player's channel set low moves the ring as much as one
+/// set high.
+pub fn scaled(measured: [f32; BANDS], top: &mut f32, dt: f32) -> [f32; BANDS] {
+    let loudest = measured.iter().copied().fold(0.0f32, f32::max);
+    *top = (*top - 0.03 * dt).max(loudest).max(LEAST_TOP);
+    measured.map(|b| (b / *top).clamp(0.0, 1.0))
+}
+
 /// One step of the shown spectrum towards the measured one: up at once, down slowly (the bars
 /// of a level meter).
 pub fn settle(shown: &mut [f32; BANDS], measured: &[f32; BANDS], dt: f32) {
@@ -269,6 +281,9 @@ fn listen(user: Use, source: &Source) -> bool {
     let mut carry = (0.0f32, 0.0f32, 0.0f32);
     let mut last = Instant::now();
     let mut bass_avg = 0.0f32;
+    // The loudest band of the last seconds: the top of the scale, however quiet the player's
+    // channel is set (measured on Sir's PC: the loudest band at 0.28 of full scale).
+    let mut top = LEAST_TOP;
     while wanted(user) && *lock(&tap(user).source) == *source {
         let chunk = match rx.recv_timeout(Duration::from_millis(200)) {
             Ok(chunk) => chunk,
@@ -299,7 +314,7 @@ fn listen(user: Use, source: &Source) -> bool {
                     let dt = last.elapsed().as_secs_f32().min(0.1);
                     last = Instant::now();
                     let frame: Vec<f32> = window.iter().copied().collect();
-                    let measured = spectrum(&frame, rate as f32);
+                    let measured = scaled(spectrum(&frame, rate as f32), &mut top, dt);
                     settle(&mut shown, &measured, dt);
                     *lock(&SPECTRUM) = shown;
                     // The bass: the three lowest bands, against their own average of the last
@@ -405,6 +420,24 @@ mod tests {
         assert!((rms - 0.5 / 2f32.sqrt()).abs() < 0.03, "a 300 Hz tone keeps its level: {rms}");
         let mut carry = (0.0, 0.0, 0.0);
         assert!((1599..=1600).contains(&to_speech_rate(&vec![0.1; 4410], 44_100, &mut carry).len()));
+    }
+
+    #[test]
+    fn a_quiet_channel_moves_the_ring_as_much_as_a_loud_one() {
+        let mut quiet = [0.0f32; BANDS];
+        quiet[3] = 0.28;
+        quiet[9] = 0.14;
+        let mut top = LEAST_TOP;
+        let shown = scaled(quiet, &mut top, 0.016);
+        assert!((shown[3] - 1.0).abs() < 1e-5 && (shown[9] - 0.5).abs() < 1e-5, "{shown:?}");
+        // The scale's top sinks slowly once it gets quieter, and never under its floor.
+        let later = scaled([0.05; BANDS], &mut top, 1.0);
+        assert!(top < 0.28 && top >= LEAST_TOP && later[0] < 0.25);
+        // A loud channel is not clipped away: its loudest band is the top too.
+        let mut top = LEAST_TOP;
+        let mut loud = [0.3f32; BANDS];
+        loud[0] = 0.9;
+        assert!((scaled(loud, &mut top, 0.016)[1] - 1.0 / 3.0).abs() < 1e-4);
     }
 
     #[test]

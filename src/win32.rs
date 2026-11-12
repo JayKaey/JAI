@@ -366,6 +366,19 @@ pub fn attach_behind_desktop_icons(hwnd: isize, [left, top, right, bottom]: [i32
         }
         let mut result = 0usize;
         let _ = SendMessageTimeoutW(progman, 0x052C, WPARAM(0xD), LPARAM(0x1), SMTO_NORMAL, 1000, Some(&mut result));
+        // Windows 11 from 24H2: the icons' view hangs in Progman itself, and the desktop's
+        // background is whatever hangs there beside it, under it. Ours goes right under the
+        // icons: over the desktop's own layer and over a wallpaper program's windows (seen on
+        // Sir's PC 2026-11-12: Wallpaper Engine's two "Clone View" windows hang there).
+        let icons = FindWindowExW(progman, HWND(0), w!("SHELLDLL_DefView"), PCWSTR::null());
+        if icons.0 != 0 {
+            let mut origin = RECT::default();
+            GetWindowRect(progman, &mut origin).map_err(|e| e.message().to_string())?;
+            if SetParent(HWND(hwnd), progman).0 == 0 {
+                return Err("the desktop did not take the window".to_string());
+            }
+            return SetWindowPos(HWND(hwnd), icons, left - origin.left, top - origin.top, right - left, bottom - top, SWP_NOACTIVATE | SWP_SHOWWINDOW).map_err(|e| e.message().to_string());
+        }
         let mut worker = HWND(0);
         let _ = EnumWindows(Some(layer), LPARAM(&mut worker as *mut HWND as isize));
         // (Windows 11 from 24H2: the layer is a child of Progman itself.)

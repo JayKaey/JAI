@@ -4167,7 +4167,9 @@ impl HudApp {
             // The music: while something plays on the PC the emblem moves with it (he only
             // listens to the sound; never while a game is in front, never to his own voice).
             // (A scripted session listens only when it was asked to show the music: `JAI_DEMO=music`.)
-            let music_on = iface.music_visuals && !windows_still(ctx) && (!crate::platform::in_test_session() || demo("music")) && !crate::hud_feel::game_in_front();
+            // (Also while a game is in front: music beside a game is what Sir listens to. It
+            // then draws at a lower rate.)
+            let music_on = iface.music_visuals && !windows_still(ctx) && (!crate::platform::in_test_session() || demo("music"));
             crate::pc_audio::want(crate::pc_audio::Use::Spectrum, music_on);
             crate::music_lyrics::want(music_on, crate::hud_feel::lyrics(), &self.rt);
             let (bass, level) = if music_on { crate::pc_audio::bass_and_level() } else { (0.0, 0.0) };
@@ -4243,7 +4245,7 @@ impl HudApp {
             // The spectrum as a ring of ticks round the emblem (when Sir's own voice is not there).
             if music && frame.dock < 0.5 && self.voice_rim < 0.05 {
                 paint_spectrum_ring(&ui.painter_at(screen), &frame, &crate::pc_audio::bands());
-                ctx.request_repaint_after(Duration::from_millis(16));
+                ctx.request_repaint_after(Duration::from_millis(if crate::hud_feel::game_in_front() { 40 } else { 16 }));
             }
             // Under it: the line being sung (lyrics on), else what plays.
             let lyric = crate::hud_feel::lyric_line()
@@ -5645,7 +5647,8 @@ impl HudApp {
         crate::live_subtitles::show(ctx, &self.app, &self.rt);
         // The live desktop background, on a monitor the board is not on.
         let state = lock(&self.model).state.clone();
-        if let Some(crate::desktop_backdrop::Refused(why)) = crate::desktop_backdrop::show(ctx, iface.desktop_background && !windows_still(ctx) && !iface.orb_mode, self.hwnd, iface.span_all_monitors, &state) {
+        // (As the orb or the slim strip he holds no monitor: any of them can be his background.)
+        if let Some(crate::desktop_backdrop::Refused(why)) = crate::desktop_backdrop::show(ctx, iface.desktop_background && !windows_still(ctx), if iface.orb_mode { 0 } else { self.hwnd }, iface.span_all_monitors && !iface.orb_mode, !iface.orb_mode, &state) {
             lock(&self.model).toast(why, true);
             self.app.config().update(|c| c.interface.desktop_background = false);
         }
