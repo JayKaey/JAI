@@ -383,25 +383,29 @@ pub fn spoken(args: &Value) -> Option<String> {
 
 /// The tool schema's lines for these arguments (appended to `configure_interface`'s).
 pub fn schema() -> Vec<(&'static str, Value)> {
+    // Each has its spoken phrase on the fast path; the model needs the names, and a word only
+    // where a name does not say it. (Every character here is in every prompt: with a line of
+    // description each, the prompt no longer fitted the fallback's window.)
+    let plain = || json!({"type": "boolean"});
     let b = |description: &str| json!({"type": "boolean", "description": description});
     vec![
-        ("calm_hud", b("Calm HUD: the edge readouts step back until the mouse comes near.")),
-        ("live_words", b("Sir's words appear while he speaks.")),
-        ("startup_sequence", b("The power-up sequence at start.")),
-        ("idle_screen", b("Dim to a clock when unused for some minutes.")),
-        ("night_mode", b("Go into night mode by the clock (22:00-6:00).")),
-        ("night_now", b("Night mode for tonight (dim, quiet, brief), or off for tonight.")),
-        ("edge_light", b("The screen's edges glow for a moment when something happens.")),
-        ("music_visuals", b("The emblem moves with the music that plays on the PC.")),
-        ("mini_strip", b("Mini mode: a slim strip at the top of a screen instead of the board.")),
-        ("desktop_background", b("The emblem and clock as the live desktop background.")),
-        ("subtitles", b("Live subtitles of what is said in a video, stream or call.")),
-        ("subtitles_translate", b("Translate the live subtitles into English.")),
-        ("lyrics", b("The playing song's lyrics, line by line, under the emblem.")),
-        ("missed", b("Show the notifications of the last hours ('what did I miss?').")),
-        ("voice_setup", b("The one-minute set-up that tunes him to Sir's voice.")),
-        ("voice_lock", b("Only obey Sir's own voice (false: obey everyone).")),
-        ("settings_panel", b("Open the settings panel (every switch, searchable).")),
+        ("calm_hud", plain()),
+        ("live_words", plain()),
+        ("startup_sequence", plain()),
+        ("idle_screen", plain()),
+        ("night_mode", b("Night mode by the clock.")),
+        ("night_now", b("Night mode now.")),
+        ("edge_light", plain()),
+        ("music_visuals", plain()),
+        ("mini_strip", plain()),
+        ("desktop_background", plain()),
+        ("subtitles", plain()),
+        ("subtitles_translate", plain()),
+        ("lyrics", plain()),
+        ("missed", b("What Sir missed.")),
+        ("voice_setup", plain()),
+        ("voice_lock", b("Obey only Sir's voice.")),
+        ("settings_panel", plain()),
     ]
 }
 

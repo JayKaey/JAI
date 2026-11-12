@@ -77,12 +77,14 @@ fn singular(word: &str) -> String {
 /// apple", "a red sports car"): the thing named last (an "apple tree" is a tree), a name of two
 /// or three words before one of one. None for a thing not in the table.
 pub fn typical_size_m(request: &str) -> Option<f32> {
-    let w: Vec<String> = words(request).iter().map(|w| singular(w)).collect();
+    // (Each word as it was said and in its singular: "apples" is an apple, "tennis" stays tennis.)
+    let said = words(request);
+    let w: Vec<String> = said.iter().map(|w| singular(w)).collect();
     let mut best: Option<(usize, usize, f32)> = None;
     for (name, size) in SIZES {
         let parts: Vec<&str> = name.split(' ').collect();
         for at in 0..w.len().saturating_sub(parts.len() - 1) {
-            if w[at..at + parts.len()].iter().zip(&parts).all(|(a, b)| a == b) {
+            if (0..parts.len()).all(|k| w[at + k] == parts[k] || said[at + k] == parts[k]) {
                 let end = at + parts.len();
                 // The one that ends last wins; of two that end at the same word, the longer name.
                 if best.is_none_or(|(e, n, _)| end > e || (end == e && parts.len() > n)) {

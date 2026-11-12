@@ -49,10 +49,11 @@ pub fn cut(heard: &[f32]) -> Option<usize> {
 
 /// What Whisper writes for music, noise and silence when asked for words: never a subtitle.
 pub fn phantom(text: &str) -> bool {
-    let t: String = text.to_lowercase().chars().filter(|c| c.is_alphanumeric() || c.is_whitespace()).collect();
+    // (A mark between two words parts them: "Amara.org-Community" is "amara org community".)
+    let t: String = text.to_lowercase().chars().map(|c| if c.is_alphanumeric() { c } else { ' ' }).collect();
     let t = t.split_whitespace().collect::<Vec<_>>().join(" ");
     t.is_empty()
-        || ["thank you", "thanks for watching", "thank you for watching", "thanks for watching and see you next time", "bye", "you", "music", "applause", "untertitel der amaraorg community", "untertitel im auftrag des zdf", "untertitelung des zdf 2020", "vielen dank", "bis zum nächsten mal", "subtitles by the amaraorg community"]
+        || ["thank you", "thanks for watching", "thank you for watching", "thanks for watching and see you next time", "bye", "you", "music", "applause", "untertitel der amara org community", "untertitel im auftrag des zdf", "untertitelung des zdf 2020", "vielen dank", "bis zum nächsten mal", "subtitles by the amara org community"]
             .contains(&t.as_str())
 }
 
@@ -91,21 +92,31 @@ pub fn lines() -> Vec<(String, f32)> {
 /// Keeps the subtitles going while they are on (asked every HUD frame): starts the listener,
 /// and shows the bar while there is a line.
 pub fn show(ctx: &egui::Context, app: &crate::app::Jai, rt: &tokio::runtime::Handle) {
-    if crate::hud_feel::subtitles().is_none() || crate::platform::in_test_session() {
+    if crate::hud_feel::subtitles().is_none() {
         return;
     }
-    if !RUNNING.swap(true, Ordering::AcqRel) {
-        let app = app.clone();
-        rt.spawn(async move {
-            listen(app).await;
-            RUNNING.store(false, Ordering::Release);
-        });
-    }
-    let shown = lines();
-    if shown.is_empty() {
-        return;
-    }
-    let Some([l, t, r, b]) = bar_monitor() else { return };
+    let (shown, monitor) = if crate::platform::in_test_session() {
+        // A scripted session neither listens to the PC nor writes over the screen Sir works on:
+        // asked to (`JAI_DEMO=subtitles`), it shows two lines of its own on the monitor it names
+        // (`JAI_BACKDROP_MONITOR=2`).
+        let Some(monitor) = demo_monitor() else { return };
+        (vec![("So the first thing we need is a plan for the weekend.".to_string(), 0.7), ("And then we look at the weather, because nobody wants to stand in the rain.".to_string(), 1.0)], monitor)
+    } else {
+        if !RUNNING.swap(true, Ordering::AcqRel) {
+            let app = app.clone();
+            rt.spawn(async move {
+                listen(app).await;
+                RUNNING.store(false, Ordering::Release);
+            });
+        }
+        let shown = lines();
+        if shown.is_empty() {
+            return;
+        }
+        let Some(monitor) = bar_monitor() else { return };
+        (shown, monitor)
+    };
+    let [l, t, r, b] = monitor;
     let ppp = ctx.native_pixels_per_point().unwrap_or(1.0).max(0.5);
     let (width, height) = (((r - l) as f32 / ppp * 0.62).min(1500.0), 104.0);
     let at = pos2(((l + r) as f32 / 2.0) / ppp - width / 2.0, b as f32 / ppp - height - 70.0);
@@ -155,6 +166,21 @@ pub fn paint_bar(ctx: &egui::Context, shown: &[(String, f32)]) {
     }
 }
 
+/// The monitor a scripted session shows the bar on, when it was asked to show it.
+#[cfg(windows)]
+fn demo_monitor() -> Option<[i32; 4]> {
+    if !std::env::var("JAI_DEMO").is_ok_and(|v| v.split(',').any(|d| d.trim() == "subtitles")) {
+        return None;
+    }
+    let n = std::env::var("JAI_BACKDROP_MONITOR").ok()?.trim().parse::<usize>().ok()?;
+    crate::win32::displays().get(n.checked_sub(1)?).map(|d| d.rect)
+}
+
+#[cfg(not(windows))]
+fn demo_monitor() -> Option<[i32; 4]> {
+    None
+}
+
 /// The monitor the bar stands on: the one the window in front is on.
 #[cfg(windows)]
 fn bar_monitor() -> Option<[i32; 4]> {
@@ -178,6 +204,7 @@ fn bar_monitor() -> Option<[i32; 4]> {
 async fn listen(app: crate::app::Jai) {
     tracing::info!("[SUBTITLES] On");
     let mut heard: Vec<f32> = Vec::new();
+    let mut said_first = false;
     while let Some(translate) = crate::hud_feel::subtitles() {
         // Not beside a game, and not his own voice.
         if crate::hud_feel::game_in_front() || app.hud_state().state == "speaking" {
@@ -204,6 +231,11 @@ async fn listen(app: crate::app::Jai) {
         *lock(&DECODING) = None;
         if let Ok(Ok(t)) = result {
             if !phantom(&t.text) && crate::hud_feel::subtitles().is_some() {
+                // (Once per switching on, so the log says the path works; never what was said.)
+                if !said_first {
+                    said_first = true;
+                    tracing::info!("[SUBTITLES] The first line stands ({} characters, heard in {} ms)", t.text.chars().count(), t.stt_ms);
+                }
                 push(&t.text);
             }
         }

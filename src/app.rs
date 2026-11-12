@@ -1490,6 +1490,7 @@ impl Jai {
                     if !his {
                         info!("[VOICE LOCK] Not Sir's voice (likeness {score:.2}, his from {:.2}): '{}' is not carried out", print.threshold, transcript.text);
                         crate::hud_lines::speech_over();
+                        crate::hud_lines::turned_away();
                         self.emit(HudEvent::Transcript {
                             text: transcript.text,
                             language: transcript.language,

@@ -197,7 +197,8 @@ mod tests {
         assert_eq!(lines.iter().map(|(t, l)| (*t, l.as_str())).collect::<Vec<_>>(), [(12.5, "First line"), (17.0, "Second line"), (21.1, "The chorus"), (62.0, "The chorus")]);
         assert_eq!(line_at(&lines, 5.0), None, "before the first line");
         assert_eq!(line_at(&lines, 12.3), Some("First line"), "a moment early");
-        assert_eq!(line_at(&lines, 16.9), Some("First line"));
+        assert_eq!(line_at(&lines, 16.7), Some("First line"));
+        assert_eq!(line_at(&lines, 16.9), Some("Second line"), "a moment early, like every line");
         assert_eq!(line_at(&lines, 17.0), Some("Second line"));
         assert_eq!(line_at(&lines, 40.0), None, "ten seconds after a line with nothing behind it for a while");
         assert_eq!(line_at(&lines, 63.0), Some("The chorus"));

@@ -4,7 +4,7 @@
 //! name ("Heard: … – do it?"). Also the microphone's verdict for the voice ring ("too quiet").
 //! The pipeline reports here (`heard`, `settled`, `step`, `took`, `offer`); the HUD paints.
 
-use eframe::egui::{self, pos2, vec2, Align2, Color32, FontId, Pos2, Rect, Rounding, Stroke, Ui};
+use eframe::egui::{self, pos2, vec2, Color32, FontId, Pos2, Rect, Rounding, Stroke, Ui};
 use regex::Regex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, Mutex};
@@ -288,6 +288,19 @@ const INK: Color32 = Color32::from_rgb(0xE8, 0xF2, 0xFC);
 const MUTED: Color32 = Color32::from_rgb(0x8E, 0xA4, 0xB8);
 const ROW: f32 = 26.0;
 
+/// The mark of the song's line: three small bars that move with what plays, the lows on the
+/// left (they stand low while nothing does). Drawn: the fonts' note is a pictograph.
+fn music_mark(p: &egui::Painter, left_middle: Pos2, colour: Color32) {
+    let bands = crate::pc_audio::bands();
+    let third = crate::pc_audio::BANDS / 3;
+    let foot = left_middle.y + 6.0;
+    for k in 0..3 {
+        let level = bands[k * third..(k + 1) * third].iter().sum::<f32>() / third as f32;
+        let x = left_middle.x + k as f32 * 4.5;
+        p.rect_filled(Rect::from_min_max(pos2(x, foot - 3.0 - 9.0 * level.clamp(0.0, 1.0)), pos2(x + 2.5, foot)), Rounding::ZERO, colour);
+    }
+}
+
 /// Where the lines stand under an emblem at `centre` with `radius` (the first row's middle):
 /// clear of its outermost ring and of the music's ticks round it.
 pub fn top_under(centre: Pos2, radius: f32) -> Pos2 {
@@ -358,7 +371,8 @@ pub fn paint(ui: &mut Ui, top: Pos2, width: f32, state: &str, live_words: bool, 
     }
     // Row two: the song's line.
     if let Some(lyric) = lyrics.filter(|l| !l.trim().is_empty()) {
-        line(&p, pos2(top.x, y), &format!("♪  {lyric}"), FontId::new(15.5, egui::FontFamily::Name("label".into())), accent.gamma_multiply(0.95), width, 0.5);
+        let rect = line(&p, pos2(top.x, y), lyric, FontId::new(15.5, egui::FontFamily::Name("label".into())), accent.gamma_multiply(0.95), width, 0.5);
+        music_mark(&p, pos2(rect.left() - 5.0, rect.center().y), accent);
         y += ROW;
     }
     // The offer: what was heard without his name, and its two keys.
@@ -407,9 +421,42 @@ pub fn fit(p: &egui::Painter, text: &str, font: &FontId, width: f32) -> String {
 
 /// The microphone's verdict as a label over the voice ring (amber), `strength` 0-1.
 pub fn paint_mic_label(p: &egui::Painter, centre: Pos2, radius: f32, verdict: &str, strength: f32) {
-    let colour = crate::hud_style::warn_colour().gamma_multiply(strength);
-    let at = pos2(centre.x, centre.y - radius * 1.2 - 8.0);
-    let rect = p.text(at, Align2::CENTER_CENTER, verdict, FontId::monospace(10.5), colour).expand2(vec2(7.0, 3.0));
+    paint_label(p, centre, radius, verdict, crate::hud_style::warn_colour(), strength);
+}
+
+/// When the voice lock last turned an order away (it was not Sir's voice).
+static TURNED_AWAY: Mutex<Option<Instant>> = Mutex::new(None);
+/// How long the emblem says so (seconds).
+const TURNED_AWAY_STAYS: f32 = 3.0;
+
+/// The voice lock turned an order away: the emblem says why nothing happens.
+pub fn turned_away() {
+    *lock(&TURNED_AWAY) = Some(Instant::now());
+}
+
+/// How strongly the lock's word shows right now (it fades over its last moments), while it does.
+pub fn turned_away_strength() -> Option<f32> {
+    let mut at = lock(&TURNED_AWAY);
+    let age = at.as_ref()?.elapsed().as_secs_f32();
+    if age >= TURNED_AWAY_STAYS {
+        *at = None;
+        return None;
+    }
+    Some(((TURNED_AWAY_STAYS - age) / 0.4).clamp(0.0, 1.0))
+}
+
+/// The voice lock's word over the emblem.
+pub fn paint_lock_label(p: &egui::Painter, centre: Pos2, radius: f32, strength: f32) {
+    paint_label(p, centre, radius, "VOICE LOCK  ·  NOT YOUR VOICE", crate::hud_style::FAULT, strength);
+}
+
+fn paint_label(p: &egui::Painter, centre: Pos2, radius: f32, verdict: &str, colour: Color32, strength: f32) {
+    let colour = colour.gamma_multiply(strength);
+    let galley = p.layout_no_wrap(verdict.to_string(), FontId::monospace(10.5), colour);
+    let rect = Rect::from_center_size(pos2(centre.x, centre.y - radius * 1.2 - 8.0), galley.size()).expand2(vec2(7.0, 3.0));
+    // (On a dark plate, so it reads over the voice ring's ticks.)
+    p.rect_filled(rect, Rounding::ZERO, Color32::from_black_alpha((150.0 * strength) as u8));
+    p.galley(rect.min + vec2(7.0, 3.0), galley, colour);
     p.rect_stroke(rect, Rounding::ZERO, stroke(1.0, colour.gamma_multiply(0.7)));
 }
 

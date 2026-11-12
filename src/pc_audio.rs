@@ -14,7 +14,9 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 
 /// How many bands the spectrum has (low to high, logarithmic from 40 Hz to 12 kHz).
 pub const BANDS: usize = 24;
-const FFT: usize = 1024;
+/// (4096 samples: at 48 kHz a bin is 12 Hz wide, so each band from 40 Hz up has one of its own.
+/// With 1024 the four lowest bands shared one bin and the bass moved as a block.)
+const FFT: usize = 4096;
 /// The speech tap's rate, and how much it holds at most.
 pub const SPEECH_RATE: usize = 16_000;
 const SPEECH_KEEP: usize = SPEECH_RATE * 30;
@@ -101,7 +103,8 @@ pub fn spectrum(window: &[f32], rate: f32) -> [f32; BANDS] {
     let edges = band_edges();
     let bin = rate / FFT as f32;
     std::array::from_fn(|b| {
-        let (from, to) = (((edges[b] / bin).floor() as usize).max(1), ((edges[b + 1] / bin).ceil() as usize).min(FFT / 2));
+        // (From the first bin at or above the band's lower edge up to the next band's first.)
+        let (from, to) = (((edges[b] / bin).ceil() as usize).max(1), ((edges[b + 1] / bin).ceil() as usize).min(FFT / 2));
         let peak = (from..to.max(from + 1)).map(|k| (re[k] * re[k] + im[k] * im[k]).sqrt() / (FFT as f32 / 4.0)).fold(0.0f32, f32::max);
         let db = 20.0 * peak.max(1e-7).log10();
         ((db + 70.0) / 55.0).clamp(0.0, 1.0)

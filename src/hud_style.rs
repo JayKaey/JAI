@@ -540,6 +540,22 @@ pub fn key_width(p: &Painter, label: &str) -> f32 {
 /// The header keys of a block, right to left from `right`: each (label, lit, hint). Returns
 /// which was clicked this frame and where the leftmost key begins. They light up under the
 /// pointer and give under the press.
+/// How many of a header's keys leave a title `title` wide its room in a row `row` wide: all of
+/// them when it fits, else the last ones go first (a narrow block keeps its title whole), and
+/// the first always stays.
+pub fn keys_that_fit(p: &Painter, labels: &[(&str, bool, &str)], row: f32, title: f32) -> usize {
+    let mut used = 0.0;
+    let mut fit = 0;
+    for (k, (label, _, _)) in labels.iter().enumerate() {
+        used += key_width(p, label) + 4.0;
+        if k > 0 && row - used < title {
+            break;
+        }
+        fit = k + 1;
+    }
+    fit
+}
+
 pub fn keys(ui: &mut Ui, id: egui::Id, right: f32, mid: f32, labels: &[(&str, bool, &str)], alpha: f32) -> (Option<usize>, f32) {
     let mut clicked = None;
     let mut x = right;
@@ -814,6 +830,27 @@ mod tests {
         let mut a = chance(7);
         let mut b = chance(7);
         assert!((0..50).all(|_| a() == b()) && (0..50).all(|_| (0.0..1.0).contains(&a())));
+    }
+
+    /// A narrow block keeps its title whole: its keys go, the last first, and the first stays.
+    #[test]
+    fn a_narrow_header_lets_its_keys_go_before_its_title() {
+        let ctx = egui::Context::default();
+        let labels = [("[ CLOSE ]", false, ""), ("[ DETACH ]", false, ""), ("[ PIN ]", false, "")];
+        let mut fits = Vec::new();
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            let p = ctx.layer_painter(egui::LayerId::background());
+            let all: f32 = labels.iter().map(|(l, _, _)| key_width(&p, l) + 4.0).sum();
+            let close = key_width(&p, "[ CLOSE ]") + 4.0;
+            fits = vec![
+                keys_that_fit(&p, &labels, 200.0 + all, 200.0),
+                keys_that_fit(&p, &labels, 199.0 + all, 200.0),
+                keys_that_fit(&p, &labels, 200.0 + close, 200.0),
+                keys_that_fit(&p, &labels, 40.0, 200.0),
+                keys_that_fit(&p, &labels[..0], 400.0, 200.0),
+            ];
+        });
+        assert_eq!(fits, [3, 2, 1, 1, 0], "all, without the last, the first alone, the first even when the title is cut, none of none");
     }
 
     #[test]

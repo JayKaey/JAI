@@ -6088,7 +6088,8 @@ mod tests {
         assert!(parse_sentences("Open Spotify. Then open Discord.").is_none(), "two commands are the compound parser's");
         assert!(parse_sentences("Open Spotify").is_none(), "one sentence is parse()'s");
         assert_eq!(tool("Open the interface settings"), Some(("configure_interface", json!({"open_settings": true}))));
-        assert_eq!(tool("Einstellungen öffnen"), Some(("configure_interface", json!({"open_settings": true}))));
+        // ("Settings" alone is the panel with every switch; the interface's own window by its name.)
+        assert_eq!(tool("Einstellungen öffnen"), Some(("configure_interface", json!({"settings_panel": true}))));
         assert_eq!(silent_quick_command("Weitermachen.").map(|a| a.args), Some(json!({"action": "resume"})));
     }
 
@@ -6189,7 +6190,7 @@ mod tests {
     #[test]
     fn a_misheard_wake_word_still_reaches_the_hud_command() {
         // Sir's 23:37 voice turns that ended in the fallback line.
-        assert_eq!(parse_misheard("Now this opens your settings."), Some(Intent::Tool { name: "configure_interface", args: json!({"open_settings": true}) }));
+        assert_eq!(parse_misheard("Now this opens your settings."), Some(Intent::Tool { name: "configure_interface", args: json!({"settings_panel": true}) }));
         assert!(matches!(parse_misheard("Now the scan you fit, change the interface color to red."), Some(Intent::Tool { name: "configure_interface", .. })));
         // Never an app action from a garbled sentence, and nothing from plain chatter.
         assert_eq!(parse_misheard("Now this opens the door to spotify"), None);

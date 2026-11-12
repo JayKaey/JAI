@@ -1271,6 +1271,16 @@ impl HudModel {
         }
     }
 
+    /// The notifications waited behind the start-up sequence: their time starts now.
+    fn restart_toasts(&mut self) {
+        let now = Instant::now();
+        for t in &mut self.toasts {
+            let life = t.until.saturating_duration_since(t.since);
+            t.since = now;
+            t.until = now + life;
+        }
+    }
+
     fn toast(&mut self, text: String, error: bool) {
         // Into the history ("what did I miss?"), and the screen's edges light up.
         crate::hud_notify::record(&text, error);
@@ -3483,6 +3493,8 @@ struct HudApp {
     /// The start-up sequence while it plays: since when, whether its sound has played, and
     /// which one it is.
     boot: Option<(Instant, bool, crate::startup_sequence::Kind)>,
+    /// The sequence has just ended: the notifications that waited behind it start their time.
+    boot_done: bool,
     /// How far the idle screen has come up (0 in use … 1 idle).
     idle: f32,
     /// The utterance Sir is in: since when, and the loudest his voice was (dBFS).
@@ -3735,6 +3747,7 @@ impl HudApp {
             calm: 1.0,
             night: 0.0,
             boot: None,
+            boot_done: false,
             idle: 0.0,
             mic_speech: None,
             mic_verdict: None,
@@ -4193,6 +4206,11 @@ impl HudApp {
             if iface.voice_rim {
                 self.voice_rim(&ui.painter_at(screen), m, &frame, dt);
             }
+            // The voice lock turned an order away: the emblem says why nothing happens.
+            if let Some(strength) = crate::hud_lines::turned_away_strength().filter(|_| frame.dock < 0.5) {
+                crate::hud_lines::paint_lock_label(&ui.painter_at(screen), frame.centre, frame.radius, strength);
+                ctx.request_repaint_after(Duration::from_millis(50));
+            }
             // The lines under the emblem: his words while he speaks, what JAI is working on,
             // the song's line, and the offer of an order heard without his name.
             let lines_top = if frame.dock < 0.5 { crate::hud_lines::top_under(frame.centre, frame.radius) } else { pos2(screen.center().x, screen.bottom() - TELEMETRY_H - 110.0) };
@@ -4274,6 +4292,7 @@ impl HudApp {
             }
             if skipped || !crate::startup_sequence::paint(ctx, home, frame.centre, frame.radius, kind, started.elapsed()) {
                 self.boot = None;
+                self.boot_done = true;
                 self.last_activity = Instant::now();
             }
         }
@@ -6874,6 +6893,7 @@ pub(super) fn hud_block_window(ctx: &egui::Context, id: &str, title: &str, size:
     };
     let mut close_asked = false;
     let mut header_maximize = false;
+    let mut header_menu = None;
     let mut natural = None;
     let shown = window.show(ctx, |ui| {
         let frame_rect = ui.max_rect().expand(BLOCK_MARGIN);
@@ -6916,8 +6936,11 @@ pub(super) fn hud_block_window(ctx: &egui::Context, id: &str, title: &str, size:
             ("[ DETACH ]", false, "Open in its own window (say \"dock all windows\" to bring it back)"),
             ("[ PIN ]", pinned, "Pinned, it stays through \"close the windows\" and keeps its place (Ctrl+P)"),
         ];
-        // (The keys are quiet until the pointer is over their block.)
-        let (key, keys_left) = crate::hud_style::keys(ui, area.with("header"), row.right(), mid, &labels, content_alpha * (0.62 + 0.38 * using));
+        // (A narrow block keeps its title whole and lets its keys go, [ PIN ] first: the menu
+        // and Ctrl+P still pin. The keys are quiet until the pointer is over their block.)
+        let wanted = crate::hud_style::title_galley(ui.painter(), title, ts(14.0), accent, f32::INFINITY).size().x + 26.0;
+        let fit = crate::hud_style::keys_that_fit(ui.painter(), &labels, row.width(), wanted);
+        let (key, keys_left) = crate::hud_style::keys(ui, area.with("header"), row.right(), mid, &labels[..fit], content_alpha * (0.62 + 0.38 * using));
         match key {
             Some(0) => close_asked = true,
             // The block plays its exit first; the new window comes up after it.
@@ -6941,6 +6964,9 @@ pub(super) fn hud_block_window(ctx: &egui::Context, id: &str, title: &str, size:
         if header.double_clicked() {
             header_maximize = true;
         }
+        // (The title row takes the right click itself: the block's menu hangs on it too, or a
+        // right click on the title opened nothing.)
+        header.context_menu(|ui| header_menu = crate::block_actions::menu(ui, pinned, maximized));
         if crate::hud_dock::take_esc_close(id) {
             close_asked = true;
         }
@@ -7037,7 +7063,7 @@ pub(super) fn hud_block_window(ctx: &egui::Context, id: &str, title: &str, size:
             crate::hud_dock::fit_to_content(id, natural, bounds);
         }
         // Ctrl+W / Ctrl+M / Ctrl+P on the block under the pointer; right-click: the block menu.
-        let mut chosen = inner.response.contains_pointer().then(|| block_shortcut(ctx)).flatten();
+        let mut chosen = inner.response.contains_pointer().then(|| block_shortcut(ctx)).flatten().or(header_menu);
         inner.response.context_menu(|ui| chosen = chosen.or(crate::block_actions::menu(ui, pinned, maximized)));
         if let Some(chosen) = chosen {
             use crate::block_actions::{BlockAction as Menu, Format};
@@ -7855,7 +7881,10 @@ impl HudApp {
                 crate::hud_notify::paint_edge(ctx, home_screen(ctx), 1.0 - 0.5 * self.night);
             }
             self.presence(ctx, &m, &iface, dt);
-            self.toasts(ctx, &m);
+            // (The power-up sequence stands alone on its dark: what the start has to say waits.)
+            if self.boot.is_none() {
+                self.toasts(ctx, &m);
+            }
             self.popups(ctx, dt);
             self.room_alert_overlay(ctx, &m);
             // (Neither the fullscreen board nor the one across the monitors is resized by hand.)
@@ -7867,6 +7896,9 @@ impl HudApp {
             self.offline_overlay(ctx);
         }
         drop(m);
+        if std::mem::take(&mut self.boot_done) {
+            lock(&self.model).restart_toasts();
+        }
         self.after_body(ctx, &iface);
         settle_new_areas(ctx);
         self.last_frame = now;

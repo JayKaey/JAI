@@ -430,7 +430,21 @@ pub async fn run_tool(tools: &ToolContext, args: &Value) -> Result<String, Strin
         },
         "digest" | "missed" => {
             let session = lock(&AWAY).clone().or_else(|| lock(&LAST).clone());
-            let Some(s) = session else { return Ok(spoken("Away Mode: nothing kept", "I haven't been minding things for you lately, Sir, so nothing's waiting.")) };
+            // What came up on the HUD in the last hours goes on the board with it ("what did I
+            // miss?" means both: what Away Mode kept and what he announced while Sir looked away).
+            let notices = crate::hud_notify::recent(chrono::Local::now()).len();
+            if notices > 0 {
+                crate::hud_feel::apply(&json!({ "missed": true }));
+            }
+            let Some(s) = session else {
+                return Ok(match notices {
+                    0 => spoken("Notifications: none in the last twelve hours; Away Mode kept nothing", "Nothing came up, Sir. All quiet."),
+                    n => spoken(
+                        format!("Notifications: {n} in the last twelve hours (on the board); Away Mode kept nothing"),
+                        format!("{n} notice{} in the last hours, Sir. {} on your board.", if n == 1 { "" } else { "s" }, if n == 1 { "It is" } else { "They are" }),
+                    ),
+                });
+            };
             let (display, aloud) = digest(&s);
             Ok(spoken(display, aloud))
         }

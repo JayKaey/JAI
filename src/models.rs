@@ -196,6 +196,12 @@ pub fn report(cfg: &JaiConfig) -> bool {
     if espeak.is_file() {
         info!("[MODELS] OK   {:<26} {}", "eSpeak NG (built-in)", espeak.display());
     }
+    // The voice lock's model ("only obey me"): optional, there is no lock without it.
+    let speaker = Path::new(&cfg.silero_vad_model_path).parent().unwrap_or(Path::new("models")).join("speaker").join(crate::speaker_id::MODEL);
+    match std::fs::metadata(&speaker) {
+        Ok(m) if m.len() > 64 * 1024 => info!("[MODELS] OK   {:<26} {} ({:.1} MB)", "Voice lock (speaker)", speaker.display(), m.len() as f64 / 1e6),
+        _ => info!("[MODELS] --   {:<26} {} (optional: \"only obey me\" needs it)", "Voice lock (speaker)", speaker.display()),
+    }
     ok
 }
 
