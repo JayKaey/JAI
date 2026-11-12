@@ -60,8 +60,102 @@ pub fn shadow(p: &Painter, r: Rect, alpha: f32) {
     if alpha <= 0.0 || !r.is_positive() {
         return;
     }
-    let s = egui::epaint::Shadow { offset: vec2(0.0, 7.0), blur: 22.0, spread: 1.0, color: Color32::from_black_alpha((150.0 * alpha.min(1.0)) as u8) };
+    let s = egui::epaint::Shadow { offset: vec2(0.0, 6.0), blur: 18.0, spread: 0.0, color: Color32::from_black_alpha((140.0 * alpha.min(1.0)) as u8) };
     p.add(s.as_shape(r, Rounding::ZERO));
+}
+
+/// White at `share` of its strength as the eye sees it: laid over a dark surface it lifts it by
+/// that share. (`Color32::from_white_alpha` counts in linear light: its 15 of 255 is a line a
+/// quarter as bright as white, not a sixteenth.)
+pub fn white(share: f32) -> Color32 {
+    Color32::WHITE.gamma_multiply(share.clamp(0.0, 1.0))
+}
+
+/// `a` to `b` by `t`, channel by channel (both as they are stored: premultiplied).
+fn lerp_colour(a: Color32, b: Color32, t: f32) -> Color32 {
+    let ch = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t.clamp(0.0, 1.0)).round() as u8;
+    Color32::from_rgba_premultiplied(ch(a.r(), b.r()), ch(a.g(), b.g()), ch(a.b(), b.b()), ch(a.a(), b.a()))
+}
+
+/// A block's surface: glass lit from above. The fill is a shade lighter at the top than at the
+/// bottom, a hairline of light runs along its top edge, and a faint sheen lies across its upper
+/// left corner. `alpha`: the block's own opacity (its entrance, a search that dims it).
+pub fn surface(p: &Painter, r: Rect, fill: Color32, alpha: f32) {
+    if !r.is_positive() || alpha <= 0.0 || fill.a() == 0 {
+        return;
+    }
+    let a = fill.a();
+    let top = lerp_colour(fill, Color32::from_rgba_premultiplied(20, 30, 42, a), 0.5).gamma_multiply(alpha);
+    let bottom = lerp_colour(fill, Color32::from_rgba_premultiplied(1, 3, 6, a), 0.6).gamma_multiply(alpha);
+    let mut mesh = egui::Mesh::default();
+    mesh.colored_vertex(r.left_top(), top);
+    mesh.colored_vertex(r.right_top(), top);
+    mesh.colored_vertex(r.right_bottom(), bottom);
+    mesh.colored_vertex(r.left_bottom(), bottom);
+    mesh.add_triangle(0, 1, 2);
+    mesh.add_triangle(0, 2, 3);
+    // The sheen: light caught in the upper left corner of the glass.
+    let sheen = white(0.03 * alpha);
+    mesh.colored_vertex(r.left_top(), sheen);
+    mesh.colored_vertex(r.left_top() + vec2((r.width() * 0.55).min(340.0), 0.0), Color32::TRANSPARENT);
+    mesh.colored_vertex(r.left_top() + vec2(0.0, (r.height() * 0.8).min(240.0)), Color32::TRANSPARENT);
+    mesh.add_triangle(4, 5, 6);
+    p.add(egui::Shape::mesh(mesh));
+    // The hairline of light along the top edge (inside the border).
+    if r.height() > 6.0 && r.width() > 6.0 {
+        p.rect_filled(Rect::from_min_max(pos2(r.left() + 1.0, r.top() + 1.0), pos2(r.right() - 1.0, r.top() + 2.0)), Rounding::ZERO, white(0.055 * alpha));
+    }
+}
+
+/// The dark band a line of text stands on over the board: solid under the text, running out to
+/// nothing at both ends (no box round it).
+pub fn caption_band(p: &Painter, r: Rect, alpha: f32) {
+    let dark = Color32::from_black_alpha((165.0 * alpha.clamp(0.0, 1.0)) as u8);
+    let fade = (r.height() * 1.6).clamp(18.0, 60.0);
+    let mut mesh = egui::Mesh::default();
+    for (x, colour) in [(r.left() - fade, Color32::TRANSPARENT), (r.left() + 4.0, dark), (r.right() - 4.0, dark), (r.right() + fade, Color32::TRANSPARENT)] {
+        mesh.colored_vertex(pos2(x, r.top()), colour);
+        mesh.colored_vertex(pos2(x, r.bottom()), colour);
+    }
+    for k in 0..3u32 {
+        let i = 2 * k;
+        mesh.add_triangle(i, i + 2, i + 3);
+        mesh.add_triangle(i, i + 3, i + 1);
+    }
+    p.add(egui::Shape::mesh(mesh));
+}
+
+/// How long the emblem's ripple runs (seconds).
+pub const RIPPLE_SECS: f32 = 0.65;
+
+/// The emblem's ripple when he hears his name: two rings that leave it and fade, `age` seconds
+/// after it (his silent "yes?"). Returns whether it is still running.
+pub fn ripple(p: &Painter, centre: Pos2, radius: f32, age: f32, colour: Color32) -> bool {
+    if !(0.0..RIPPLE_SECS).contains(&age) {
+        return false;
+    }
+    for delay in [0.0, 0.16] {
+        let t = (age - delay) / (RIPPLE_SECS - delay);
+        if !(0.0..1.0).contains(&t) {
+            continue;
+        }
+        let out = motion::ease_out(t);
+        let fade = (1.0 - t) * (1.0 - t);
+        p.circle_stroke(centre, radius * (1.04 + 0.55 * out), stroke(0.8 + 2.2 * (1.0 - t), colour.gamma_multiply(0.75 * fade)));
+    }
+    true
+}
+
+/// A title as the HUD letters it: the display face, upper case, the letters a little apart, on
+/// one line (cut with an ellipsis where it is too long for `width`).
+pub fn title_galley(p: &Painter, text: &str, size: f32, colour: Color32, width: f32) -> std::sync::Arc<egui::Galley> {
+    let mut job = egui::text::LayoutJob::default();
+    job.append(&text.to_uppercase(), 0.0, egui::TextFormat { font_id: title_font(size), color: colour, extra_letter_spacing: size * 0.085, ..Default::default() });
+    job.wrap.max_width = width.max(10.0);
+    job.wrap.max_rows = 1;
+    job.wrap.break_anywhere = true;
+    job.wrap.overflow_character = Some('…');
+    p.layout_job(job)
 }
 
 /// How strongly the emblem (`orb`, its rect) lights a block at `r`: 1 right beside it, 0 from
@@ -158,8 +252,9 @@ pub fn wear(p: &Painter, r: Rect, fill: Color32, edge: Color32, seed: u64, alpha
         } else {
             (at + vec2(0.0, dy * off), at + vec2(0.0, dy * (off + len)), vec2(dx, 0.0))
         };
-        // The gap in the border, and the scuff the knock left just inside it.
-        p.line_segment([from, to], stroke(2.4, fill.gamma_multiply(alpha)));
+        // Where the border is worn thin (not cut: a gap reads as a fault of the drawing), and
+        // the scuff the knock left just inside it.
+        p.line_segment([from, to], stroke(2.4, fill.gamma_multiply(0.6 * alpha)));
         p.line_segment([from + inward * 3.0, to + inward * 3.0 + (to - from) * 0.6], stroke(1.0, edge.gamma_multiply(0.10 * alpha)));
     }
 }
@@ -288,7 +383,7 @@ pub fn glass(p: &Painter, rect: Rect) {
         for i in 0..=cols {
             let at = pos2(rect.left() + rect.width() * i as f32 / cols as f32, rect.top() + rect.height() * j as f32 / rows as f32);
             let v = next();
-            let colour = if v < 0.5 { Color32::from_black_alpha((v * 2.0 * 16.0) as u8) } else { Color32::from_white_alpha(((v - 0.5) * 2.0 * 5.0) as u8) };
+            let colour = if v < 0.5 { Color32::from_black_alpha((v * 2.0 * 16.0) as u8) } else { white((v - 0.5) * 2.0 * 0.02) };
             mesh.colored_vertex(at, colour);
         }
     }
@@ -320,7 +415,7 @@ pub fn glass(p: &Painter, rect: Rect) {
     for _ in 0..DUST {
         let at = pos2(rect.left() + rect.width() * next(), rect.top() + rect.height() * next());
         let size = if next() < 0.15 { 2.0 } else { 1.0 };
-        mesh.add_colored_rect(Rect::from_min_size(pos2(at.x.round(), at.y.round()), vec2(size, size)), Color32::from_white_alpha(10 + (next() * 22.0) as u8));
+        mesh.add_colored_rect(Rect::from_min_size(pos2(at.x.round(), at.y.round()), vec2(size, size)), white(0.04 + next() * 0.085));
     }
     p.add(egui::Shape::mesh(mesh));
     // Hairline scratches: short, nearly straight, most of them leaning the same way (a cloth
@@ -332,8 +427,8 @@ pub fn glass(p: &Painter, rect: Rect) {
         let len = 26.0 + 130.0 * next() * next();
         let to = from + vec2(lean.cos(), lean.sin()) * len;
         let bend = vec2(-lean.sin(), lean.cos()) * (len * 0.03 * (next() - 0.5));
-        let alpha = 7 + (next() * 9.0) as u8;
-        p.add(egui::Shape::line(vec![from, from + (to - from) * 0.5 + bend, to], stroke(1.0, Color32::from_white_alpha(alpha))));
+        let strength = 0.03 + next() * 0.045;
+        p.add(egui::Shape::line(vec![from, from + (to - from) * 0.5 + bend, to], stroke(1.0, white(strength))));
     }
 }
 
@@ -425,9 +520,11 @@ pub fn key(p: &Painter, right: f32, mid: f32, label: &str, hot: bool, down: bool
     } else if hot {
         (accent.gamma_multiply(0.14), accent, Color32::WHITE)
     } else if lit {
-        (accent.gamma_multiply(0.08), accent.gamma_multiply(0.9), accent)
+        (accent.gamma_multiply(0.10), accent.gamma_multiply(0.9), accent)
     } else {
-        (Color32::from_rgba_unmultiplied(3, 7, 12, 230), crate::hud_board::border_colour(), Color32::from_rgb(0xD4, 0xEC, 0xF5))
+        // At rest a key is quiet: a hairline box and grey letters. It lights up under the
+        // pointer, and the whole row comes up when the pointer is over its block.
+        (Color32::from_rgba_unmultiplied(3, 7, 12, 150), crate::hud_board::border_colour().gamma_multiply(0.7), Color32::from_rgb(0xA9, 0xC0, 0xCE))
     };
     p.rect_filled(r, Rounding::ZERO, fill.gamma_multiply(alpha));
     p.rect_stroke(r.shrink(0.5), Rounding::ZERO, stroke(1.0, edge.gamma_multiply(alpha)));
@@ -490,7 +587,7 @@ pub fn outline_on(p: &Painter, r: Rect, kind: Outline) {
     }
     let p = p.with_clip_rect(r.intersect(p.clip_rect()));
     let time = p.ctx().input(|i| i.time);
-    let dim = Color32::from_white_alpha(13);
+    let dim = white(0.045);
     let mut shapes: Vec<Rect> = Vec::new();
     match kind {
         Outline::Lines => {
@@ -526,8 +623,14 @@ pub fn outline_on(p: &Painter, r: Rect, kind: Outline) {
             }
         }
     }
-    for s in &shapes {
-        p.rect_filled(*s, Rounding::ZERO, dim);
+    for (k, s) in shapes.iter().enumerate() {
+        // (A picture to come is a frame, not a grey slab.)
+        if kind == Outline::Picture && k == 0 {
+            p.rect_filled(*s, Rounding::ZERO, white(0.018));
+            p.rect_stroke(s.shrink(0.5), Rounding::ZERO, stroke(1.0, white(0.12)));
+        } else {
+            p.rect_filled(*s, Rounding::ZERO, dim);
+        }
     }
     // The passing light: a soft band that crosses the block every 1.4 s.
     let t = ((time / 1.4).fract()) as f32;
@@ -536,7 +639,7 @@ pub fn outline_on(p: &Painter, r: Rect, kind: Outline) {
     for s in &shapes {
         let band = Rect::from_min_max(pos2(x - 40.0, s.top()), pos2(x + 40.0, s.bottom())).intersect(*s);
         if band.is_positive() {
-            p.rect_filled(band, Rounding::ZERO, accent.gamma_multiply(0.10));
+            p.rect_filled(band, Rounding::ZERO, accent.gamma_multiply(0.08));
         }
     }
     p.ctx().request_repaint_after(std::time::Duration::from_millis(33));
@@ -553,8 +656,8 @@ pub fn empty_on(p: &Painter, r: Rect, sentence: &str) {
     let c = r.center();
     // A small empty frame above the words.
     let mark = Rect::from_center_size(c - vec2(0.0, 18.0), vec2(22.0, 16.0));
-    p.rect_stroke(mark, Rounding::ZERO, stroke(1.0, Color32::from_white_alpha(50)));
-    p.line_segment([mark.left_bottom(), mark.right_top()], stroke(1.0, Color32::from_white_alpha(30)));
+    p.rect_stroke(mark, Rounding::ZERO, stroke(1.0, white(0.3)));
+    p.line_segment([mark.left_bottom(), mark.right_top()], stroke(1.0, white(0.16)));
     let font = FontId::proportional(12.5);
     let galley = p.layout(sentence.to_string(), font, Color32::from_rgb(0x9F, 0xB4, 0xC4), (r.width() - 24.0).max(60.0));
     p.galley(pos2(c.x - galley.size().x * 0.5, c.y), galley, Color32::PLACEHOLDER);
@@ -703,7 +806,9 @@ mod tests {
         };
         let shapes: Vec<_> = out.shapes.iter().map(|s| strongest(&s.shape)).collect();
         assert_eq!(shapes.len(), 1 + SCRATCHES, "one mesh and the scratches");
-        assert!(shapes[0] <= EDGE_FALLOFF && shapes[1..].iter().all(|a| *a > 0 && *a <= 16), "{shapes:?}");
+        assert!(shapes[0] <= EDGE_FALLOFF && shapes[1..].iter().all(|a| *a > 0 && *a <= 20), "{shapes:?}");
+        // "White at a share" is what it says: a twentieth lifts a dark surface by a twentieth.
+        assert_eq!(white(0.05), Color32::from_rgba_premultiplied(13, 13, 13, 13));
         let wait = out.viewport_output.values().map(|v| v.repaint_delay).min().unwrap_or(Duration::MAX);
         assert!(wait > Duration::from_millis(500), "the glass never drives the frame rate: {wait:?}");
         let mut a = chance(7);

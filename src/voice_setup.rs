@@ -197,9 +197,49 @@ pub fn finished(outcome: Outcome) {
 /// The set-up's block id.
 pub const ID: &str = "voice_setup";
 
+/// The voice as the block hears it: the microphone's level of the last seconds (0 … 1, the
+/// newest last) and when the last one was taken (the frame clock).
+static TRACE: Mutex<(f64, std::collections::VecDeque<f32>)> = Mutex::new((0.0, std::collections::VecDeque::new()));
+const TRACE_LEN: usize = 72;
+
+/// Takes the microphone's level into the trace, twenty times a second.
+fn trace(now: f64, level: f32) -> Vec<f32> {
+    let mut t = lock(&TRACE);
+    if now - t.0 >= 0.05 {
+        t.0 = now;
+        t.1.push_back(level.clamp(0.0, 1.0));
+        while t.1.len() > TRACE_LEN {
+            t.1.pop_front();
+        }
+    }
+    t.1.iter().copied().collect()
+}
+
+/// The trace set by hand (the gallery).
+#[cfg(test)]
+pub fn show_trace(levels: &[f32]) {
+    *lock(&TRACE) = (f64::MAX, levels.iter().copied().collect());
+}
+
+/// Paints the trace: one bar per twentieth of a second, the newest on the right, mirrored
+/// about its middle line.
+fn paint_trace(p: &egui::Painter, centre: egui::Pos2, levels: &[f32], accent: Color32) {
+    const STEP: f32 = 4.0;
+    let left = centre.x - TRACE_LEN as f32 * STEP / 2.0;
+    p.line_segment([pos2(left, centre.y), pos2(left + TRACE_LEN as f32 * STEP, centre.y)], Stroke::new(1.0f32, crate::hud_style::white(0.08)));
+    let offset = TRACE_LEN - levels.len().min(TRACE_LEN);
+    for (k, level) in levels.iter().rev().take(TRACE_LEN).rev().enumerate() {
+        let half = 1.0 + 11.0 * level.sqrt();
+        let x = left + (offset + k) as f32 * STEP + 1.0;
+        // (Older bars fade towards the left.)
+        let age = 0.35 + 0.65 * (offset + k) as f32 / TRACE_LEN as f32;
+        p.rect_filled(egui::Rect::from_min_max(pos2(x, centre.y - half), pos2(x + 2.0, centre.y + half)), Rounding::ZERO, accent.gamma_multiply((0.3 + 0.7 * level) * age));
+    }
+}
+
 /// The set-up's block while it runs and for a while after: the line to read, large; what was
 /// heard; how far it is.
-pub fn show(ctx: &egui::Context) {
+pub fn show(ctx: &egui::Context, mic: f32) {
     if crate::hud_feel::take_voice_setup() {
         begin();
         crate::hud_dock::cancel_close(ID);
@@ -217,7 +257,7 @@ pub fn show(ctx: &egui::Context) {
         // How far it is: six marks.
         for k in 0..LINES.len() {
             let mark = egui::Rect::from_min_size(pos2(rect.left() + k as f32 * 30.0, rect.top() + 4.0), vec2(24.0, 4.0));
-            p.rect_filled(mark, Rounding::ZERO, if k < step { accent } else { Color32::from_white_alpha(28) });
+            p.rect_filled(mark, Rounding::ZERO, if k < step { accent } else { crate::hud_style::white(0.12) });
         }
         let centre = pos2(rect.center().x, rect.top() + rect.height() * 0.42);
         match &outcome {
@@ -231,6 +271,9 @@ pub fn show(ctx: &egui::Context) {
                     p.text(pos2(rect.center().x, rect.bottom() - 34.0), Align2::CENTER_CENTER, format!("{mark}:  \u{201C}{text}\u{201D}"), FontId::monospace(11.0), colour);
                 }
                 p.text(pos2(rect.center().x, rect.bottom() - 12.0), Align2::CENTER_CENTER, "Speak as you always do. Close the block to stop.", FontId::proportional(11.5), muted);
+                // His voice as it comes in.
+                let levels = trace(ctx.input(|i| i.time), mic);
+                paint_trace(&p, pos2(rect.center().x, rect.bottom() - 66.0), &levels, accent);
             }
             Some(o) if *o == Outcome::default() => {
                 p.text(centre, Align2::CENTER_CENTER, "LEARNING…", FontId::new(22.0, FontFamily::Name("display".into())), accent);
@@ -256,7 +299,7 @@ pub fn show(ctx: &egui::Context) {
         crate::hud_dock::forget(ID);
     }
     if outcome.is_none() {
-        ctx.request_repaint_after(std::time::Duration::from_millis(200));
+        ctx.request_repaint_after(std::time::Duration::from_millis(50));
     }
 }
 

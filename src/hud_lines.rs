@@ -288,21 +288,49 @@ const INK: Color32 = Color32::from_rgb(0xE8, 0xF2, 0xFC);
 const MUTED: Color32 = Color32::from_rgb(0x8E, 0xA4, 0xB8);
 const ROW: f32 = 26.0;
 
+/// Where the lines stand under an emblem at `centre` with `radius` (the first row's middle):
+/// clear of its outermost ring and of the music's ticks round it.
+pub fn top_under(centre: Pos2, radius: f32) -> Pos2 {
+    pos2(centre.x, centre.y + radius * 1.3 + 26.0)
+}
+
 fn stroke(width: f32, colour: Color32) -> Stroke {
     Stroke::new(width, colour)
 }
 
-/// Text centred on `at` with a soft dark backing, so it reads over whatever is behind it.
-fn line(p: &egui::Painter, at: Pos2, text: &str, font: FontId, colour: Color32, width: f32) -> Rect {
-    let mut job = egui::text::LayoutJob::simple(text.to_string(), font, colour, width);
+/// Text centred on `at` on a soft dark band, so it reads over whatever is behind it. `apart`:
+/// how far its letters stand apart.
+fn line(p: &egui::Painter, at: Pos2, text: &str, font: FontId, colour: Color32, width: f32, apart: f32) -> Rect {
+    let mut job = egui::text::LayoutJob::default();
+    job.append(text, 0.0, egui::TextFormat { font_id: font, color: colour, extra_letter_spacing: apart, ..Default::default() });
+    job.wrap.max_width = width;
     job.wrap.max_rows = 2;
-    job.wrap.overflow_character = Some('\u{2026}');
+    job.wrap.overflow_character = Some('…');
     job.halign = egui::Align::Center;
     let galley = p.layout_job(job);
-    let rect = Rect::from_center_size(at, galley.size()).expand2(vec2(10.0, 3.0));
-    p.rect_filled(rect, Rounding::same(2.0), Color32::from_black_alpha((150.0 * colour.a() as f32 / 255.0) as u8));
+    let rect = Rect::from_center_size(at, galley.size()).expand2(vec2(12.0, 4.0));
+    crate::hud_style::caption_band(p, rect, colour.a() as f32 / 255.0);
     p.galley(pos2(at.x, at.y - galley.size().y * 0.5), galley, colour);
     rect
+}
+
+/// When he last heard his name (the emblem answers with a ripple instead of a sound).
+static WOKE: Mutex<Option<Instant>> = Mutex::new(None);
+
+/// He heard his name.
+pub fn woke() {
+    *lock(&WOKE) = Some(Instant::now());
+}
+
+/// How long ago he heard his name (seconds), while the ripple it starts is still running.
+pub fn woke_age() -> Option<f32> {
+    let mut woke = lock(&WOKE);
+    let age = woke.as_ref()?.elapsed().as_secs_f32();
+    if age >= crate::hud_style::RIPPLE_SECS {
+        *woke = None;
+        return None;
+    }
+    Some(age)
 }
 
 /// Paints the lines under the emblem, top row centred on `top`, within `width`. `state`: what
@@ -319,18 +347,18 @@ pub fn paint(ui: &mut Ui, top: Pos2, width: f32, state: &str, live_words: bool, 
     let step = step_now(state);
     if let Some((text, working)) = &step {
         let dots = if *working { ".".repeat(1 + ((time * 2.5) as usize) % 3) } else { String::new() };
-        line(&p, pos2(top.x, y), &format!("{text}{dots}"), FontId::new(14.5, egui::FontFamily::Name("label".into())), if *working { accent } else { MUTED }, width);
+        line(&p, pos2(top.x, y), &format!("{}{dots}", text.to_uppercase()), FontId::new(13.5, egui::FontFamily::Name("label".into())), if *working { accent } else { MUTED }, width, 1.6);
         y += ROW;
         moving = true;
     } else if let Some((text, settled, strength)) = words_now().filter(|_| live_words) {
         let colour = if settled { INK } else { INK.gamma_multiply(0.82) };
-        line(&p, pos2(top.x, y), &text, FontId::new(17.0, egui::FontFamily::Name("display".into())), colour.gamma_multiply(strength), width);
+        line(&p, pos2(top.x, y), &text, FontId::new(18.0, egui::FontFamily::Name("display".into())), colour.gamma_multiply(strength), width, 0.6);
         y += ROW + 2.0;
         moving = true;
     }
     // Row two: the song's line.
     if let Some(lyric) = lyrics.filter(|l| !l.trim().is_empty()) {
-        line(&p, pos2(top.x, y), &format!("\u{266A}  {lyric}"), FontId::new(15.0, egui::FontFamily::Name("label".into())), accent.gamma_multiply(0.95), width);
+        line(&p, pos2(top.x, y), &format!("♪  {lyric}"), FontId::new(15.5, egui::FontFamily::Name("label".into())), accent.gamma_multiply(0.95), width, 0.5);
         y += ROW;
     }
     // The offer: what was heard without his name, and its two keys.

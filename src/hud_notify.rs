@@ -140,9 +140,11 @@ pub fn paint_stack(ctx: &egui::Context, area: Rect, cards: &[Card<'_>]) -> bool 
         let tag = if card.alert { "ALERT //" } else { "NOTICE //" };
         let galley = p.layout(card.text.to_string(), FontId::proportional(12.0), Color32::from_rgb(0xE8, 0xF2, 0xFC), CARD_WIDTH - 26.0);
         let height = galley.size().y + 34.0;
-        let x = area.right() - CARD_WIDTH * enter + (1.0 - enter) * 24.0;
-        let rect = Rect::from_min_size(pos2(x, y), vec2(CARD_WIDTH, height));
-        let mut q = p.clone();
+        // It unfolds downwards from its top edge as it comes, and folds up as it goes: the cards
+        // under it make room and close the gap at the same pace, so no two ever overlap.
+        let open = enter.min(1.0) * (card.left / SLIDE).clamp(0.0, 1.0);
+        let rect = Rect::from_min_size(pos2(area.right() - CARD_WIDTH, y), vec2(CARD_WIDTH, height));
+        let mut q = p.with_clip_rect(Rect::from_min_max(pos2(rect.left() - 40.0, y - 6.0), pos2(rect.right() + 40.0, y + (height + 8.0) * open + if open >= 1.0 { 30.0 } else { 0.0 })));
         q.set_opacity(strength);
         crate::hud_style::shadow(&q, rect, 0.8);
         q.rect_filled(rect, Rounding::ZERO, crate::hud_board::BLOCK_FILL);
@@ -157,8 +159,7 @@ pub fn paint_stack(ctx: &egui::Context, area: Rect, cards: &[Card<'_>]) -> bool 
         // Its time runs out along the bottom edge.
         let total = (card.age + card.left).max(0.1);
         q.rect_filled(Rect::from_min_size(pos2(rect.left(), rect.bottom() - 1.5), vec2(rect.width() * (card.left / total).clamp(0.0, 1.0), 1.5)), Rounding::ZERO, edge.gamma_multiply(0.8));
-        // (A card that fades gives its room up as it goes: the ones below close the gap.)
-        y += (height + 8.0) * strength;
+        y += (height + 8.0) * open;
     }
     moving
 }
@@ -181,7 +182,7 @@ const EDGE_RISE: f32 = 0.12;
 const EDGE_HOLD: f32 = 0.3;
 const EDGE_FALL: f32 = 0.9;
 /// How far the glow reaches into the screen (points).
-const EDGE_REACH: f32 = 46.0;
+const EDGE_REACH: f32 = 30.0;
 
 /// The screen's edges light up once.
 pub fn edge(kind: Edge) {
@@ -220,8 +221,9 @@ pub fn paint_edge(ctx: &egui::Context, screen: Rect, dim: f32) -> bool {
         Edge::Notice => crate::hud_board::active_colour(),
         Edge::Alert => crate::hud_style::FAULT,
     };
-    let lit = colour.gamma_multiply(0.5 * strength);
-    let line = colour.gamma_multiply(0.9 * strength);
+    // (A glow, not a frame: soft at the very edge, gone a finger's width in.)
+    let lit = colour.gamma_multiply(0.26 * strength);
+    let line = colour.gamma_multiply(0.5 * strength);
     let clear = Color32::TRANSPARENT;
     let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("hud_edge_light")));
     let mut mesh = egui::Mesh::default();
@@ -240,7 +242,7 @@ pub fn paint_edge(ctx: &egui::Context, screen: Rect, dim: f32) -> bool {
         mesh.add_triangle(k, 4 + n, 4 + k);
     }
     p.add(egui::Shape::mesh(mesh));
-    p.rect_stroke(screen.shrink(1.0), Rounding::ZERO, stroke(2.0, line));
+    p.rect_stroke(screen.shrink(0.75), Rounding::ZERO, stroke(1.5, line));
     ctx.request_repaint();
     true
 }
@@ -292,6 +294,9 @@ mod tests {
         assert_eq!((enter, strength), (1.0, 1.0));
         let (enter, strength) = card_motion(4.95, 0.05);
         assert!(enter == 1.0 && strength < 0.3, "leaving: {strength}");
+        // The room a card takes grows with it and never exceeds its own height.
+        let open = |age: f32, left: f32| card_motion(age, left).0.min(1.0) * (left / SLIDE).clamp(0.0, 1.0);
+        assert!(open(0.0, 5.0) < 0.05 && open(0.1, 4.9) > 0.5 && open(1.0, 4.0) == 1.0 && open(4.95, 0.05) < 0.3);
         assert!(stays(true, false) > stays(false, false) && stays(false, true) <= stays(false, false));
     }
 

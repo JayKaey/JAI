@@ -512,15 +512,16 @@ fn ring(ui: &mut Ui, p: &Palette, size: f32, fraction: f32, colour: Color32, big
     if fraction > 0.0 {
         painter.add(Shape::line(super::arc_points(c, radius, start, start + sweep * fraction.clamp(0.0, 1.0)), stroke(size * 0.07, colour)));
     }
-    painter.text(c - vec2(0.0, size * 0.04), egui::Align2::CENTER_CENTER, big, FontId::new(size * 0.2, super::bold_family()), p.text);
+    painter.text(c - vec2(0.0, size * 0.04), egui::Align2::CENTER_CENTER, big, FontId::new(size * 0.23, egui::FontFamily::Name("display".into())), p.text);
     painter.text(c + vec2(0.0, size * 0.16), egui::Align2::CENTER_CENTER, small, FontId::proportional((size * 0.085).max(ts(9.5))), p.muted);
 }
 
 /// A titled section frame inside a live window.
 fn section(ui: &mut Ui, p: &Palette, title: &str, body: impl FnOnce(&mut Ui)) {
-    Frame::none().fill(p.card).stroke(stroke(1.0, p.line)).rounding(Rounding::same(7.0)).inner_margin(Margin::same(10.0)).show(ui, |ui| {
+    // (Sharp like the block it stands in: a hairline box, its title lettered as the block's is.)
+    Frame::none().fill(Color32::from_rgba_unmultiplied(9, 15, 23, 150)).stroke(stroke(1.0, p.line.gamma_multiply(0.7))).rounding(Rounding::ZERO).inner_margin(Margin::same(10.0)).show(ui, |ui| {
         ui.set_width(ui.available_width());
-        ui.label(RichText::new(title).font(bold(11.5)).color(p.accent).extra_letter_spacing(1.2));
+        ui.label(RichText::new(title.to_uppercase()).font(FontId::new(ts(12.5), egui::FontFamily::Name("display".into()))).color(p.accent).extra_letter_spacing(1.3));
         ui.add_space(4.0);
         body(ui);
     });

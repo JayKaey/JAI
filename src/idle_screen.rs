@@ -98,8 +98,16 @@ pub fn is_idle(on: bool, since_activity: Duration, state: &str) -> bool {
     on && state == "idle" && since_activity >= AFTER
 }
 
-/// Paints the idle screen over `screen` at `strength` (0 … 1, eased by the HUD), with the
-/// breathing ring at the emblem (`centre`, `radius`).
+/// Where the sixty marks of the minute stand round the ring: mark `k`'s angle (the first at
+/// the top, clockwise).
+pub fn minute_mark(k: usize) -> f32 {
+    -std::f32::consts::FRAC_PI_2 + k as f32 / 60.0 * std::f32::consts::TAU
+}
+
+/// Paints the idle screen over `screen` at `strength` (0 … 1, eased by the HUD). The ring
+/// stands at `centre` with `radius` (where the emblem is) and breathes; the time stands inside
+/// it, the minute's seconds run round it as sixty marks, and the date, the next appointment and
+/// the weather stand under it.
 pub fn paint(ctx: &egui::Context, screen: Rect, centre: Pos2, radius: f32, strength: f32) {
     if strength <= 0.0 {
         return;
@@ -109,29 +117,49 @@ pub fn paint(ctx: &egui::Context, screen: Rect, centre: Pos2, radius: f32, stren
     let accent = crate::hud_board::active_colour();
     let now = Local::now().naive_local();
     let time = ctx.input(|i| i.time) as f32;
-    // The ring breathes where the emblem is: once in six seconds.
-    let breath = 0.5 + 0.5 * (time * std::f32::consts::TAU / 6.0).sin();
-    for (share, width, alpha) in [(1.0f32, 1.6f32, 0.5f32), (0.86, 1.0, 0.28)] {
-        p.circle_stroke(centre, radius * share * (0.985 + 0.03 * breath), Stroke::new(width, accent.gamma_multiply(alpha * (0.55 + 0.45 * breath) * strength)));
-    }
-    let shift = drift(now.minute());
+    let centre = centre + drift(now.minute());
     let ink = Color32::from_rgb(0xE8, 0xF2, 0xFC);
     let muted = Color32::from_rgb(0x8E, 0xA4, 0xB8);
-    // Under the emblem while it stands in the upper two thirds; else in the middle of the screen.
-    let top = if centre.y + radius * 1.3 + 230.0 < screen.bottom() { pos2(centre.x, centre.y + radius * 1.3) } else { pos2(screen.center().x, screen.top() + screen.height() * 0.3) } + shift;
+    // The ring breathes where the emblem is (once in six seconds); what is inside it goes dark,
+    // so the time stands alone.
+    p.circle_filled(centre, radius * 0.93, Color32::from_black_alpha((250.0 * strength) as u8));
+    let breath = 0.5 + 0.5 * (time * std::f32::consts::TAU / 6.0).sin();
+    for (share, width, alpha) in [(1.0f32, 1.6f32, 0.55f32), (0.93, 1.0, 0.25)] {
+        p.circle_stroke(centre, radius * share * (0.99 + 0.02 * breath), Stroke::new(width, accent.gamma_multiply(alpha * (0.6 + 0.4 * breath) * strength)));
+    }
+    // The minute as it passes: sixty marks round the ring, lit up to the second.
+    let second = now.second() as usize;
+    for k in 0..60 {
+        let angle = minute_mark(k);
+        let dir = vec2(angle.cos(), angle.sin());
+        let (from, to) = (radius * 1.07, radius * if k % 5 == 0 { 1.125 } else { 1.1 });
+        let colour = if k <= second { accent.gamma_multiply(0.9 * strength) } else { crate::hud_style::white(0.14 * strength) };
+        p.line_segment([centre + dir * from, centre + dir * to], Stroke::new(if k % 5 == 0 { 1.6f32 } else { 1.0 }, colour));
+    }
     let display = |size: f32| FontId::new(size, FontFamily::Name("display".into()));
-    let clock = p.text(top, Align2::CENTER_TOP, now.format("%H:%M").to_string(), display(104.0), ink.gamma_multiply(strength));
-    let mut y = clock.bottom() + 2.0;
-    y = p.text(pos2(top.x, y), Align2::CENTER_TOP, date_line(now).to_uppercase(), FontId::monospace(13.0), accent.gamma_multiply(0.9 * strength)).bottom() + 20.0;
+    // Inside: what this is, the time, and the date under it.
+    p.text(centre - vec2(0.0, radius * 0.42), Align2::CENTER_CENTER, "STANDING BY", FontId::monospace((radius * 0.05).clamp(8.5, 12.0)), muted.gamma_multiply(0.8 * strength));
+    p.text(centre - vec2(0.0, radius * 0.07), Align2::CENTER_CENTER, now.format("%H:%M").to_string(), display((radius * 0.5).clamp(36.0, 150.0)), ink.gamma_multiply(strength));
+    p.text(centre + vec2(0.0, radius * 0.33), Align2::CENTER_CENTER, date_line(now).to_uppercase(), FontId::monospace((radius * 0.062).clamp(9.5, 15.0)), accent.gamma_multiply(0.9 * strength));
+    // Under it (above it where the ring stands low): the next appointment and the weather.
     let glance = glance();
+    let lines = glance.next.is_some() as u8 + glance.weather.is_some() as u8;
+    let below = centre.y + radius * 1.22 + lines as f32 * 30.0 < screen.bottom();
+    let mut y = if below { centre.y + radius * 1.22 } else { centre.y - radius * 1.22 - lines as f32 * 30.0 };
     if let Some((title, start, place)) = &glance.next {
-        y = p.text(pos2(top.x, y), Align2::CENTER_TOP, next_line(title, *start, place, now), display(19.0), ink.gamma_multiply(0.92 * strength)).bottom() + 8.0;
+        y = p.text(pos2(centre.x, y), Align2::CENTER_TOP, next_line(title, *start, place, now), display(19.0), ink.gamma_multiply(0.92 * strength)).bottom() + 6.0;
     }
     if let Some((degrees, sky)) = &glance.weather {
-        p.text(pos2(top.x, y), Align2::CENTER_TOP, format!("{degrees:.0}°  ·  {sky}"), FontId::new(15.0, FontFamily::Name("label".into())), muted.gamma_multiply(strength));
+        p.text(pos2(centre.x, y), Align2::CENTER_TOP, format!("{degrees:.0}°  ·  {sky}"), FontId::new(15.0, FontFamily::Name("label".into())), muted.gamma_multiply(strength));
     }
-    // (The ring breathes: fifteen frames a second are plenty; the clock needs one a minute.)
+    // (The ring breathes: fifteen frames a second are plenty.)
     ctx.request_repaint_after(Duration::from_millis(66));
+}
+
+/// What the idle screen shows of the calendar and the weather, set by hand (the gallery).
+#[cfg(test)]
+pub fn show_glance(glance: Glance) {
+    *lock(&GLANCE) = Some((Instant::now(), glance));
 }
 
 #[cfg(test)]
@@ -162,5 +190,7 @@ mod tests {
         assert_eq!(places.len(), 25, "twenty-five places before one repeats");
         assert!((0..59).all(|m| drift(m) != drift(m + 1)), "a new place every minute");
         assert!((0..60).all(|m| drift(m).x.abs() <= 14.0 && drift(m).y.abs() <= 10.0));
+        // The minute's marks: the first at the top, the sixteenth on the right.
+        assert!((minute_mark(0).sin() + 1.0).abs() < 1e-5 && (minute_mark(15).cos() - 1.0).abs() < 1e-5);
     }
 }

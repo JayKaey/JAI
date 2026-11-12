@@ -1963,8 +1963,9 @@ fn micro() -> FontId {
     FontId::monospace(10.0)
 }
 
+/// Headlines and labels: the display face (Rajdhani), as on every title of the HUD.
 fn bold(size: f32) -> FontId {
-    FontId::new(size, FontFamily::Name("bold".into()))
+    FontId::new(size, FontFamily::Name("display".into()))
 }
 
 fn display(size: f32) -> FontId {
@@ -2000,7 +2001,8 @@ pub fn brackets(p: &Painter, r: Rect, colour: Color32) {
 
 /// A soft glow around a frame edge (three widening, fading strokes).
 fn glow_frame(p: &Painter, r: Rect, colour: Color32, strength: f32) {
-    for (w, a) in [(9.0, 0.035), (5.0, 0.08), (2.5, 0.18)] {
+    // (Tight to the edge: light that comes off a line, not a second frame round it.)
+    for (w, a) in [(6.0, 0.028), (3.0, 0.07), (1.5, 0.16)] {
         p.rect_stroke(r.expand(w * 0.5), Rounding::ZERO, stroke(w, colour.gamma_multiply(a * strength)));
     }
 }
@@ -2023,7 +2025,7 @@ fn frame(p: &Painter, slot: Rect, block: &Block, active: bool, stack: Option<(us
     // that faces it; wear on the frame.
     crate::hud_style::shadow(&p.with_clip_rect(r.expand(48.0)), r, 1.0);
     glow_frame(p, r, edge, if active { 1.6 } else { 1.0 });
-    p.rect_filled(r, Rounding::ZERO, if active { BLOCK_FILL_LIFTED } else { BLOCK_FILL });
+    crate::hud_style::surface(p, r, if active { BLOCK_FILL_LIFTED } else { BLOCK_FILL }, 1.0);
     p.rect_stroke(r, Rounding::ZERO, stroke(1.2, edge));
     crate::hud_style::wear(p, r, BLOCK_FILL, edge, crate::hud_style::seed_of(&block.label), 1.0);
     if let Some(orb) = crate::hud_dock::orb() {
@@ -2040,25 +2042,19 @@ fn frame(p: &Painter, slot: Rect, block: &Block, active: bool, stack: Option<(us
         let shown = if r.width() >= PIN_FROM { 2 } else { 1 };
         for (key, (label, lit)) in header_keys(p, r).into_iter().zip([("[ CLOSE ]", false), ("[ PIN ]", pinned)]).take(shown) {
             let hot = hover.is_some_and(|at| key.contains(at));
-            crate::hud_style::key(p, key.right(), key.center().y, label, hot, hot && down, lit, 1.0);
+            crate::hud_style::key(p, key.right(), key.center().y, label, hot, hot && down, lit, if active { 1.0 } else { 0.62 });
             right = key.left() - 8.0;
         }
     }
-    let title = crate::hud_style::title_font(13.0);
     // The tag ("FACT", "SOURCE: STEAM") only where the whole title still fits beside it.
     let room = right - r.left() - pad - 18.0;
-    let natural = p.layout_no_wrap(block.label.to_uppercase(), title.clone(), Color32::PLACEHOLDER).size().x;
+    let natural = crate::hud_style::title_galley(p, &block.label, 13.5, active_colour(), f32::INFINITY).size().x;
     let tag_width = p.layout_no_wrap(block.tag.clone(), micro(), MICRO).size().x + 10.0;
     let tagged = !block.tag.trim().is_empty() && natural + tag_width <= room;
     if tagged {
         p.text(pos2(right, mid), Align2::RIGHT_CENTER, &block.tag, micro(), MICRO);
     }
-    let label_width = (room - if tagged { tag_width } else { 0.0 }).max(20.0);
-    let mut job = egui::text::LayoutJob::simple(block.label.to_uppercase(), title, active_colour(), label_width);
-    job.wrap.max_rows = 1;
-    job.wrap.break_anywhere = true;
-    job.wrap.overflow_character = Some('\u{2026}');
-    let label = p.layout_job(job);
+    let label = crate::hud_style::title_galley(p, &block.label, 13.5, active_colour(), (room - if tagged { tag_width } else { 0.0 }).max(20.0));
     let label_right = r.left() + pad + label.size().x;
     p.galley(pos2(r.left() + pad, mid - label.size().y * 0.5), label, Color32::PLACEHOLDER);
     let light = match &block.kind {

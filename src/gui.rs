@@ -3527,6 +3527,67 @@ fn mix_colour(a: Color32, b: Color32, t: f32) -> Color32 {
     mix(a, b, t)
 }
 
+/// What the mini strip shows.
+struct MiniStrip {
+    /// What he is doing, as the status pill words it.
+    word: &'static str,
+    /// Sir's last words and his last answer.
+    sir: String,
+    jai: String,
+    /// The running timers ("TIMER  04:32").
+    timers: Vec<String>,
+    clock: String,
+}
+
+/// Paints the mini strip over the whole of `ui` (a bar some forty points tall): on the left a
+/// small emblem that turns, his name and what he is doing; in the middle Sir's last words and
+/// his last answer; on the right the running timers, the time and the key back to the board.
+/// Returns whether that key was clicked.
+fn paint_mini_strip(ui: &mut Ui, s: &MiniStrip) -> bool {
+    let accent = crate::hud_board::active_colour();
+    let rect = ui.max_rect();
+    let p = ui.painter().clone();
+    let mid = rect.center().y;
+    crate::hud_style::surface(&p, rect, Color32::from_rgb(5, 9, 15), 1.0);
+    p.rect_filled(Rect::from_min_size(pos2(rect.left(), rect.bottom() - 1.0), vec2(rect.width(), 1.0)), Rounding::ZERO, accent.gamma_multiply(0.85));
+    // The emblem in small: two arcs that turn against each other round a lamp in the colour of
+    // what he is doing.
+    let lamp = pill_colours(s.word)[0];
+    let centre = pos2(rect.left() + 20.0, mid);
+    let turn = ui.input(|i| i.time) as f32 * if matches!(s.word, "THINKING" | "SPEAKING") { 2.4 } else { 0.5 };
+    p.add(Shape::line(arc_points(centre, 10.5, turn, turn + 4.2), stroke(1.4, accent)));
+    p.add(Shape::line(arc_points(centre, 7.0, -turn * 1.3, -turn * 1.3 + 3.4), stroke(1.0, Color32::WHITE.gamma_multiply(0.8))));
+    p.circle_filled(centre, 2.6, lamp);
+    p.circle_filled(centre, 5.0, lamp.gamma_multiply(0.2));
+    let name = crate::hud_style::title_galley(&p, "J.A.I.", 15.0, accent, 120.0);
+    let name_right = centre.x + 18.0 + name.size().x;
+    p.galley(pos2(centre.x + 18.0, mid - name.size().y * 0.5), name, Color32::PLACEHOLDER);
+    let mut x = p.text(pos2(name_right + 12.0, mid + 0.5), Align2::LEFT_CENTER, s.word, FontId::monospace(10.5), lamp).right() + 26.0;
+    // On the right: the key back to the board, the time, the running timers.
+    let (key, keys_left) = crate::hud_style::keys(ui, egui::Id::new("mini_strip"), rect.right() - 10.0, mid, &[("[ BOARD ]", false, "Back to the full board (or say: mini mode off)")], 1.0);
+    let mut right = p.text(pos2(keys_left - 14.0, mid + 0.5), Align2::RIGHT_CENTER, &s.clock, FontId::monospace(13.0), STRIP_INK).left() - 18.0;
+    for timer in &s.timers {
+        right = p.text(pos2(right, mid + 0.5), Align2::RIGHT_CENTER, timer, FontId::monospace(11.0), accent).left() - 18.0;
+    }
+    // In between: his last words and JAI's last answer, each on one line and cut to its room.
+    let room = (right - x).max(0.0);
+    let font = FontId::proportional(12.5);
+    if room > 180.0 {
+        let one_line = |text: &str| text.split_whitespace().collect::<Vec<_>>().join(" ");
+        if !s.sir.trim().is_empty() {
+            let tag = p.text(pos2(x, mid + 0.5), Align2::LEFT_CENTER, "YOU", FontId::monospace(9.5), STRIP_MUTED).right() + 8.0;
+            let shown = fit_width(&p, &one_line(&s.sir), &font, (room * 0.36 - 40.0).max(40.0));
+            x = p.text(pos2(tag, mid), Align2::LEFT_CENTER, shown, font.clone(), STRIP_INK).right() + 24.0;
+        }
+        if !s.jai.trim().is_empty() && right - x > 90.0 {
+            let tag = p.text(pos2(x, mid + 0.5), Align2::LEFT_CENTER, "J.A.I.", FontId::monospace(9.5), accent.gamma_multiply(0.85)).right() + 8.0;
+            let shown = fit_width(&p, &one_line(&s.jai), &font, (right - tag).max(40.0));
+            p.text(pos2(tag, mid), Align2::LEFT_CENTER, shown, font, Color32::WHITE);
+        }
+    }
+    key.is_some()
+}
+
 /// Whether a scripted session was asked to show `what` (`JAI_DEMO=boot-long,idle,night`), so
 /// that it can be looked at there. Never outside a scripted session.
 fn demo(what: &str) -> bool {
@@ -3916,58 +3977,32 @@ impl HudApp {
     /// what he is doing, Sir's last words, his last answer, the running timers and the time.
     /// `[ BOARD ]` (or "mini mode off") brings the board back.
     fn mini_strip(&mut self, ctx: &egui::Context, m: &HudModel) {
-        let accent = crate::hud_board::active_colour();
-        let mut leave = false;
-        egui::CentralPanel::default().frame(Frame::none()).show(ctx, |ui| {
-            let rect = ui.max_rect();
-            let p = ui.painter().clone();
-            p.rect_filled(rect, Rounding::ZERO, Color32::from_rgb(3, 6, 10));
-            p.rect_filled(Rect::from_min_size(pos2(rect.left(), rect.bottom() - 1.0), vec2(rect.width(), 1.0)), Rounding::ZERO, accent.gamma_multiply(0.85));
-            let mid = rect.center().y;
-            // What he is doing: a lamp and the word.
-            let muted = m.level.as_ref().is_none_or(|l| l.phase == "muted") || m.cfg.as_ref().is_some_and(|c| !c.mic_enabled) || crate::listening_lock::is_locked();
-            let asleep = m.cfg.as_ref().is_some_and(|c| c.sleeping) || crate::vram_guard::is_dormant();
-            let word = pill_word(&m.state, muted, asleep);
-            let lamp = pill_colours(word)[0];
-            p.circle_filled(pos2(rect.left() + 16.0, mid), 4.0, lamp);
-            p.circle_filled(pos2(rect.left() + 16.0, mid), 8.0, lamp.gamma_multiply(0.18));
-            let mut x = p.text(pos2(rect.left() + 30.0, mid), Align2::LEFT_CENTER, format!("J.A.I.  {word}"), crate::hud_style::title_font(13.5), accent).right() + 22.0;
-            // On the right: the key back to the board, the time, the running timers.
-            let (key, keys_left) = crate::hud_style::keys(ui, egui::Id::new("mini_strip"), rect.right() - 10.0, mid, &[("[ BOARD ]", false, "Back to the full board (or say \"mini mode off\")")], 1.0);
-            leave = key.is_some();
-            let mut right = p.text(pos2(keys_left - 14.0, mid), Align2::RIGHT_CENTER, chrono::Local::now().format("%H:%M").to_string(), FontId::monospace(12.0), STRIP_INK).left() - 18.0;
-            let now_ms = chrono::Utc::now().timestamp_millis();
-            for w in self.app.tools().widgets.widgets().iter().rev() {
-                let crate::widgets::WidgetKind::CountdownOrStopwatch { running: true, .. } = &w.kind else { continue };
-                let Some((elapsed, remaining)) = crate::widgets::timer_state(&w.kind, now_ms) else { continue };
+        let muted = m.level.as_ref().is_none_or(|l| l.phase == "muted") || m.cfg.as_ref().is_some_and(|c| !c.mic_enabled) || crate::listening_lock::is_locked();
+        let asleep = m.cfg.as_ref().is_some_and(|c| c.sleeping) || crate::vram_guard::is_dormant();
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let timers = self
+            .app
+            .tools()
+            .widgets
+            .widgets()
+            .iter()
+            .rev()
+            .filter_map(|w| {
+                let crate::widgets::WidgetKind::CountdownOrStopwatch { running: true, .. } = &w.kind else { return None };
+                let (elapsed, remaining) = crate::widgets::timer_state(&w.kind, now_ms)?;
                 let secs = remaining.unwrap_or(elapsed) / 1000;
-                let label = format!("{}  {:02}:{:02}", if remaining.is_some() { "TIMER" } else { "STOPWATCH" }, secs / 60, secs % 60);
-                right = p.text(pos2(right, mid), Align2::RIGHT_CENTER, label, FontId::monospace(11.0), accent).left() - 18.0;
-            }
-            // In between: his last words and JAI's last answer, each cut to its half.
-            let sir = m.messages.iter().rev().find(|l| l.who == Speaker::Sir).map(|l| l.text.clone()).unwrap_or_default();
-            let jai = m.messages.iter().rev().find(|l| l.who == Speaker::Jai).map(|l| l.text.clone()).unwrap_or_default();
-            let room = (right - x).max(0.0);
-            let font = FontId::proportional(12.5);
-            if room > 160.0 {
-                let one_line = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
-                if !sir.is_empty() {
-                    let tag = p.text(pos2(x, mid), Align2::LEFT_CENTER, "YOU", FontId::monospace(10.0), STRIP_MUTED).right() + 8.0;
-                    let shown = fit_width(&p, &one_line(&sir), &font, room * 0.38 - 40.0);
-                    x = p.text(pos2(tag, mid), Align2::LEFT_CENTER, shown, font.clone(), STRIP_INK).right() + 22.0;
-                }
-                if !jai.is_empty() {
-                    let tag = p.text(pos2(x, mid), Align2::LEFT_CENTER, "J.A.I.", FontId::monospace(10.0), accent.gamma_multiply(0.8)).right() + 8.0;
-                    let shown = fit_width(&p, &one_line(&jai), &font, (right - tag).max(40.0));
-                    p.text(pos2(tag, mid), Align2::LEFT_CENTER, shown, font, Color32::WHITE);
-                }
-            }
-        });
+                Some(format!("{}  {:02}:{:02}", if remaining.is_some() { "TIMER" } else { "STOPWATCH" }, secs / 60, secs % 60))
+            })
+            .collect();
+        let last = |who: Speaker| m.messages.iter().rev().find(|l| l.who == who).map(|l| l.text.clone()).unwrap_or_default();
+        let strip = MiniStrip { word: pill_word(&m.state, muted, asleep), sir: last(Speaker::Sir), jai: last(Speaker::Jai), timers, clock: chrono::Local::now().format("%H:%M").to_string() };
+        let mut leave = false;
+        egui::CentralPanel::default().frame(Frame::none()).show(ctx, |ui| leave = paint_mini_strip(ui, &strip));
         if leave {
             self.app.config().update(|c| c.interface.mini_strip = false);
         }
-        // (The time and the timers tick.)
-        ctx.request_repaint_after(Duration::from_millis(500));
+        // (The time, the timers and the little emblem move.)
+        ctx.request_repaint_after(Duration::from_millis(if m.state == "idle" { 250 } else { 50 }));
     }
 
     fn pure_orb(&mut self, ctx: &egui::Context, m: &HudModel, iface: &InterfaceSettings) {
@@ -4149,12 +4184,18 @@ impl HudApp {
                 }
             }
 
+            // He heard his name: the emblem answers with a ripple (his silent "yes?").
+            if let Some(age) = crate::hud_lines::woke_age().filter(|_| frame.dock < 0.5) {
+                if crate::hud_style::ripple(&ui.painter_at(screen), frame.centre, frame.radius, age, crate::hud_board::active_colour()) {
+                    ctx.request_repaint();
+                }
+            }
             if iface.voice_rim {
                 self.voice_rim(&ui.painter_at(screen), m, &frame, dt);
             }
             // The lines under the emblem: his words while he speaks, what JAI is working on,
             // the song's line, and the offer of an order heard without his name.
-            let lines_top = if frame.dock < 0.5 { pos2(frame.centre.x, frame.centre.y + frame.radius * 1.2 + 10.0) } else { pos2(screen.center().x, screen.bottom() - TELEMETRY_H - 110.0) };
+            let lines_top = if frame.dock < 0.5 { crate::hud_lines::top_under(frame.centre, frame.radius) } else { pos2(screen.center().x, screen.bottom() - TELEMETRY_H - 110.0) };
             // The spectrum as a ring of ticks round the emblem (when Sir's own voice is not there).
             if music && frame.dock < 0.5 && self.voice_rim < 0.05 {
                 paint_spectrum_ring(&ui.painter_at(screen), &frame, &crate::pc_audio::bands());
@@ -4246,7 +4287,9 @@ impl HudApp {
             self.idle = crate::hud_style::motion::approach(self.idle, target, dt, if idle { Duration::from_millis(1200) } else { crate::hud_style::motion::SLOW });
             ctx.request_repaint();
         }
-        crate::idle_screen::paint(ctx, home, frame.centre, frame.radius, self.idle);
+        // (Its ring stands where the emblem is; with the emblem in its corner, in the middle.)
+        let (ring_at, ring) = if frame.dock < 0.5 { (frame.centre, frame.radius) } else { (home.center(), home.width().min(home.height()) * 0.17) };
+        crate::idle_screen::paint(ctx, home, ring_at, ring, self.idle);
     }
 
     /// The calm HUD: how much of the header strip, the telemetry strip and the key hints shows.
@@ -5541,8 +5584,8 @@ impl HudApp {
         }
         // "What did I miss?": the notifications of the last hours.
         crate::hud_notify::show(ctx);
-        // "Learn my voice": the set-up's block.
-        crate::voice_setup::show(ctx);
+        // "Learn my voice": the set-up's block (with his voice's level as it comes in).
+        crate::voice_setup::show(ctx, self.reactor.mic);
         // The live subtitles' bar, while they are on.
         crate::live_subtitles::show(ctx, &self.app, &self.rt);
         // The live desktop background, on a monitor the board is not on.
@@ -6838,12 +6881,20 @@ pub(super) fn hud_block_window(ctx: &egui::Context, id: &str, title: &str, size:
         // emblem lights the edge that faces it. Wear on the frame once it stands.
         let using = ctx.animate_bool_with_time(area.with("using"), !still && ctx.pointer_hover_pos().is_some_and(|at| frame_rect.contains(at)), crate::hud_style::motion::FAST.as_secs_f32());
         let accent = crate::hud_board::active_colour();
-        crate::hud_style::shadow(&ui.painter().with_clip_rect(frame_rect.expand(48.0)), motion_band(frame_rect, &motion), motion.frame * dim);
-        paint_block_frame(ui.painter(), frame_rect, &motion, mix(BLOCK_SLATE, BLOCK_SLATE_LIFTED, using).gamma_multiply(dim), mix(edge, accent, using * 0.6).gamma_multiply(dim), if found { 2.0 } else { 1.0 });
+        // (`with_clip_rect` only ever narrows a clip: the shell's painter gets its own.)
+        let mut shell = ui.painter().clone();
+        shell.set_clip_rect(frame_rect.expand(48.0));
+        crate::hud_style::shadow(&shell, motion_band(frame_rect, &motion), motion.frame * dim);
+        // (The window clips what its content draws to the content's own room, a margin inside
+        // the frame: painted with that, the frame's border and the outer strip of its surface
+        // never showed, and a block was brackets round a dark patch. The shell is painted on the
+        // whole of the block's rect.)
+        shell.set_clip_rect(frame_rect);
+        paint_block_frame(&shell, frame_rect, &motion, mix(BLOCK_SLATE, BLOCK_SLATE_LIFTED, using).gamma_multiply(dim), mix(edge, accent, using * 0.6).gamma_multiply(dim), if found { 2.0 } else { 1.0 });
         if !motion.moving() {
-            crate::hud_style::wear(ui.painter(), frame_rect, BLOCK_SLATE, edge, crate::hud_style::seed_of(id), dim);
+            crate::hud_style::wear(&shell, frame_rect, BLOCK_SLATE, edge, crate::hud_style::seed_of(id), dim);
             if let Some(orb) = crate::hud_dock::orb() {
-                crate::hud_style::emblem_light(ui.painter(), frame_rect, orb, accent, dim);
+                crate::hud_style::emblem_light(&shell, frame_rect, orb, accent, dim);
             }
         }
         // Only what the frame has unfolded to, down to the scan edge, shows (and takes clicks).
@@ -6865,7 +6916,8 @@ pub(super) fn hud_block_window(ctx: &egui::Context, id: &str, title: &str, size:
             ("[ DETACH ]", false, "Open in its own window (say \"dock all windows\" to bring it back)"),
             ("[ PIN ]", pinned, "Pinned, it stays through \"close the windows\" and keeps its place (Ctrl+P)"),
         ];
-        let (key, keys_left) = crate::hud_style::keys(ui, area.with("header"), row.right(), mid, &labels, content_alpha);
+        // (The keys are quiet until the pointer is over their block.)
+        let (key, keys_left) = crate::hud_style::keys(ui, area.with("header"), row.right(), mid, &labels, content_alpha * (0.62 + 0.38 * using));
         match key {
             Some(0) => close_asked = true,
             // The block plays its exit first; the new window comes up after it.
@@ -6876,9 +6928,9 @@ pub(super) fn hud_block_window(ctx: &egui::Context, id: &str, title: &str, size:
             }
             _ => {}
         }
-        let font = crate::hud_style::title_font(ts(13.5));
-        let shown_title = fit_width(ui.painter(), &title.to_uppercase(), &font, (keys_left - row.left() - 22.0).max(20.0));
-        let title_rect = ui.painter().text(pos2(row.left(), mid), Align2::LEFT_CENTER, shown_title, font, accent.gamma_multiply(content_alpha));
+        let lettered = crate::hud_style::title_galley(ui.painter(), title, ts(14.0), accent.gamma_multiply(content_alpha), (keys_left - row.left() - 22.0).max(20.0));
+        let title_rect = Rect::from_min_size(pos2(row.left(), mid - lettered.size().y * 0.5), lettered.size());
+        ui.painter().galley(title_rect.min, lettered, Color32::PLACEHOLDER);
         if crate::hud_style::paint_light(ui.painter(), pos2(title_rect.right() + 10.0, mid), crate::hud_style::light(id), ctx.input(|i| i.time), content_alpha) {
             ctx.request_repaint_after(Duration::from_millis(50));
         }
@@ -7234,9 +7286,8 @@ fn paint_block_frame(painter: &egui::Painter, rect: Rect, m: &WindowMotion, fill
     if band.height() < 0.5 || m.frame <= 0.0 {
         return;
     }
-    if fill.a() > 0 {
-        painter.rect_filled(band, Rounding::ZERO, fill.gamma_multiply(m.frame));
-    }
+    // (Glass lit from above: `hud_style::surface`.)
+    crate::hud_style::surface(painter, band, fill, m.frame);
     let heat = (1.0 - m.unfold).clamp(0.0, 1.0);
     inner_border(painter, band, width, mix(edge, Color32::WHITE, heat * 0.7).gamma_multiply(m.frame.max(heat)));
 }
@@ -7840,6 +7891,194 @@ mod tests {
         let small = parts.iter().find(|(n, _)| *n == "small views").unwrap().1;
         assert!((small - 6.0).abs() < 0.5, "two stretches of the same part add up: {small}");
         assert!(parts_of(&[], at(5)).is_empty());
+    }
+
+    // ---- The gallery: what the look-and-feel pieces of 2026-11-12 draw, rendered offscreen as
+    // PNGs (target/ui-snapshots/gallery_*.png) to be looked at. Each asserts only that it drew.
+
+    fn gallery(name: &str, size: Vec2, frames: usize, mut ui: impl FnMut(&egui::Context)) {
+        let mut snap = crate::ui_snapshot::Snapshot::new(size);
+        let canvas = snap.render(frames, |ctx| {
+            paint_canvas(ctx);
+            ui(ctx);
+        });
+        canvas.save(name);
+        assert!(canvas.brightness(Rect::from_min_size(Pos2::ZERO, size)) > 1.0, "{name}: nothing was drawn");
+    }
+
+    const GALLERY: Vec2 = Vec2::new(1280.0, 760.0);
+
+    fn emblem_at_rest() -> RoseEmblem {
+        let mut emblem = RoseEmblem::new(crate::rose_emblem_renderer::RoseEmblemState::AwakeFrontEmblem);
+        emblem.step(1.0 / 60.0, 0.0, false);
+        emblem
+    }
+
+    /// Tool blocks: the header every block wears, and what a block shows while it loads, has
+    /// nothing to show, or failed.
+    #[test]
+    fn gallery_blocks_and_their_states() {
+        use crate::hud_style::{Light, Outline};
+        let _g = crate::hud_dock::test_lock();
+        let ids = ["gallery_stats", "gallery_picture", "gallery_failed", "gallery_empty", "gallery_list", "gallery_chart"];
+        for (id, light) in ids.iter().zip([Light::Good, Light::Busy, Light::Fault, Light::Rest, Light::Busy, Light::Warn]) {
+            crate::hud_style::set_light(id, light);
+        }
+        gallery("gallery_blocks", GALLERY, 8, |ctx| {
+            crate::hud_dock::begin_frame();
+            let p = Palette::new(&InterfaceSettings::default());
+            hud_block_window(ctx, ids[0], "System telemetry", [400.0, 240.0], |ui| {
+                for (key, value, share) in [("CPU", "23.4% · 16 threads", 0.23), ("RAM", "18.2 / 31.9 GB", 0.57), ("RTX 4070", "52°C · 12%", 0.12), ("VRAM", "3.1 / 12.0 GB", 0.26)] {
+                    row(ui, &p, key, value.to_string());
+                    meter(ui, &p, share, 6.0, p.accent, &[]);
+                }
+            });
+            hud_block_window(ctx, ids[1], "Pictures // Eiffel Tower", [400.0, 240.0], |ui| {
+                let room = ui.available_rect_before_wrap();
+                crate::hud_style::outline(ui, room.shrink(6.0), Outline::Picture);
+            });
+            hud_block_window(ctx, ids[2], "3D studio // apple", [400.0, 240.0], |ui| {
+                let room = ui.available_rect_before_wrap();
+                crate::hud_style::failed(ui, room, "The model could not be downloaded (no connection).");
+            });
+            hud_block_window(ctx, ids[3], "Notes", [400.0, 220.0], |ui| {
+                let room = ui.available_rect_before_wrap();
+                crate::hud_style::empty(ui, room, "No notes yet. Say: add a note saying call Tom at five.");
+            });
+            hud_block_window(ctx, ids[4], "Processes", [400.0, 220.0], |ui| {
+                let room = ui.available_rect_before_wrap();
+                crate::hud_style::outline(ui, room.shrink(6.0), Outline::List);
+            });
+            hud_block_window(ctx, ids[5], "Network", [400.0, 220.0], |ui| {
+                let room = ui.available_rect_before_wrap();
+                crate::hud_style::outline(ui, room.shrink(6.0), Outline::Chart);
+            });
+        });
+        for id in ids {
+            crate::hud_dock::forget(id);
+        }
+    }
+
+    #[test]
+    fn gallery_settings_panel() {
+        let _g = crate::hud_dock::test_lock();
+        settings_panel::open(true);
+        gallery("gallery_settings", GALLERY, 8, |ctx| {
+            crate::hud_dock::begin_frame();
+            let _ = settings_panel::show(ctx, &InterfaceSettings::default());
+        });
+        settings_panel::open(false);
+        crate::hud_dock::forget(settings_panel::ID);
+    }
+
+    #[test]
+    fn gallery_notifications_and_edge_light() {
+        use crate::hud_notify::{Card, Edge};
+        crate::hud_notify::edge(Edge::Notice);
+        std::thread::sleep(Duration::from_millis(220));
+        gallery("gallery_notifications", GALLERY, 2, |ctx| {
+            let area = Rect::from_min_max(pos2(0.0, 56.0), pos2(GALLERY.x - 16.0, GALLERY.y));
+            let cards = [
+                Card { text: "Timer done: tea.", alert: false, age: 3.2, left: 1.8 },
+                Card { text: "The GPU is at 91 °C. I have turned the fans up and closed the benchmark.", alert: true, age: 1.0, left: 7.0 },
+                Card { text: "New mail from the school office: the timetable changes on Friday.", alert: false, age: 0.09, left: 4.9 },
+            ];
+            crate::hud_notify::paint_stack(ctx, area, &cards);
+            crate::hud_notify::paint_edge(ctx, ctx.screen_rect(), 1.0);
+        });
+    }
+
+    /// The emblem with Sir's words under it, the music's spectrum round it and the
+    /// microphone's verdict over it; then what he is working on, the song's line and an offer.
+    #[test]
+    fn gallery_lines_under_the_emblem() {
+        let emblem = emblem_at_rest();
+        let mut bands = [0.0f32; crate::pc_audio::BANDS];
+        for (k, b) in bands.iter_mut().enumerate() {
+            *b = (0.92 - k as f32 * 0.03) * (0.55 + 0.45 * (k as f32 * 1.7).sin().abs());
+        }
+        crate::hud_lines::dismiss_offer();
+        crate::hud_lines::heard("Jay, open the mixer and turn the music");
+        let draw = |ctx: &egui::Context, state: &'static str, lyric: Option<&str>, spectrum: bool| {
+            egui::CentralPanel::default().frame(Frame::none()).show(ctx, |ui| {
+                let screen = ctx.screen_rect();
+                let painter = ui.painter_at(screen);
+                emblem.paint(&painter, screen);
+                let frame = emblem.frame(screen);
+                if spectrum {
+                    paint_spectrum_ring(&painter, &frame, &bands);
+                    crate::hud_lines::paint_mic_label(&painter, frame.centre, frame.radius, "TOO QUIET", 1.0);
+                } else {
+                    crate::hud_style::ripple(&painter, frame.centre, frame.radius, 0.2, crate::hud_board::active_colour());
+                }
+                crate::hud_lines::paint(ui, crate::hud_lines::top_under(frame.centre, frame.radius), 640.0, state, true, lyric);
+            });
+        };
+        gallery("gallery_live_words", GALLERY, 3, |ctx| draw(ctx, "listening", Some("And I think to myself, what a wonderful world"), true));
+        // (A step shows once the turn has run a moment.)
+        crate::hud_lines::step("get_calendar_schedule");
+        gallery("gallery_tmp", GALLERY, 1, |ctx| draw(ctx, "thinking", None, false));
+        std::thread::sleep(Duration::from_millis(420));
+        crate::hud_lines::offer("open Spotify");
+        gallery("gallery_steps_and_offer", GALLERY, 2, |ctx| draw(ctx, "thinking", None, false));
+        crate::hud_lines::dismiss_offer();
+        crate::hud_lines::took(0, true);
+        crate::hud_lines::speech_over();
+    }
+
+    #[test]
+    fn gallery_idle_screen_and_startup() {
+        use crate::startup_sequence::Kind;
+        let emblem = emblem_at_rest();
+        let base = |ctx: &egui::Context| -> crate::rose_emblem_renderer::EmblemFrame {
+            let screen = ctx.screen_rect();
+            egui::CentralPanel::default().frame(Frame::none()).show(ctx, |ui| emblem.paint(&ui.painter_at(screen), screen));
+            emblem.frame(screen)
+        };
+        crate::idle_screen::show_glance(crate::idle_screen::Glance { next: Some(("Physics".into(), chrono::Local::now().naive_local() + chrono::Duration::minutes(25), "204".into())), weather: Some((7.0, "light rain".into())) });
+        gallery("gallery_idle", GALLERY, 2, |ctx| {
+            let f = base(ctx);
+            crate::idle_screen::paint(ctx, ctx.screen_rect(), f.centre, f.radius, 1.0);
+        });
+        for (name, kind, ms) in [("gallery_startup_long_a", Kind::Long, 2400), ("gallery_startup_long_b", Kind::Long, 3950), ("gallery_startup_short", Kind::Short, 900)] {
+            gallery(name, GALLERY, 2, |ctx| {
+                let f = base(ctx);
+                crate::startup_sequence::paint(ctx, ctx.screen_rect(), f.centre, f.radius, kind, Duration::from_millis(ms));
+            });
+        }
+    }
+
+    #[test]
+    fn gallery_mini_strip_and_subtitles() {
+        let strip = MiniStrip {
+            word: "SPEAKING",
+            sir: "Jay, what is on my calendar tomorrow?".into(),
+            jai: "Two things, Sir: physics at 8:35 in room 204 and the dentist at half past two.".into(),
+            timers: vec!["TIMER  04:32".into()],
+            clock: "15:42".into(),
+        };
+        gallery("gallery_mini_strip", vec2(1600.0, MINI_STRIP_HEIGHT), 2, |ctx| {
+            egui::CentralPanel::default().frame(Frame::none()).show(ctx, |ui| {
+                paint_mini_strip(ui, &strip);
+            });
+        });
+        let lines = [("So the first thing we need is a plan for the weekend.".to_string(), 0.7), ("And then we look at the weather, because nobody wants to stand in the rain.".to_string(), 1.0)];
+        gallery("gallery_subtitles", vec2(1000.0, 110.0), 2, |ctx| crate::live_subtitles::paint_bar(ctx, &lines));
+    }
+
+    #[test]
+    fn gallery_voice_setup() {
+        let _g = crate::hud_dock::test_lock();
+        crate::voice_setup::begin();
+        crate::voice_setup::heard("Jay, what time is it?", None, (-20.0, -50.0));
+        crate::voice_setup::heard("Jay open the mix", None, (-20.0, -50.0));
+        crate::voice_setup::show_trace(&(0..72).map(|k| (0.5 + 0.5 * (k as f32 * 0.55).sin()) * (0.25 + 0.75 * (k as f32 / 72.0))).collect::<Vec<f32>>());
+        gallery("gallery_voice_setup", GALLERY, 8, |ctx| {
+            crate::hud_dock::begin_frame();
+            crate::voice_setup::show(ctx, 0.0);
+        });
+        crate::voice_setup::cancel();
+        crate::hud_dock::forget(crate::voice_setup::ID);
     }
 
     #[test]

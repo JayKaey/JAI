@@ -1,12 +1,12 @@
 //! Every switch in one place (Sir, 2026-11-12: "one panel with search"): a block with a search
-//! field and the settings in groups, each with one line that says what it does. What used to be
-//! spread over the VIEW, SCREENS and THEME menus, the drawer, the Theme Studio, the Feature Lab
-//! and the Integrations hub is found here; the deeper tools open from their row. "Open
-//! settings", VIEW → ALL SETTINGS.
+//! field, the groups as keys under it, and the settings in groups, each with one line that says
+//! what it does. What used to be spread over the VIEW, SCREENS and THEME menus, the drawer, the
+//! Theme Studio, the Feature Lab and the Integrations hub is found here; the deeper tools open
+//! from their row. "Open settings", VIEW → ALL SETTINGS.
 
 use super::{mix, stroke, strip_font, ts, STRIP_INK, STRIP_MUTED};
 use crate::interface::InterfaceSettings;
-use eframe::egui::{self, pos2, vec2, Align, Color32, FontId, Layout, Rect, RichText, Rounding, Sense, Ui};
+use eframe::egui::{self, pos2, vec2, Align, Align2, Color32, FontId, Layout, Rect, RichText, Rounding, Sense, Ui};
 use serde_json::json;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -56,8 +56,10 @@ enum Control {
     Switch(fn(&InterfaceSettings) -> bool, fn(&mut InterfaceSettings, bool)),
     /// A state of the moment (`hud_feel::apply` with this key).
     Moment(fn(&InterfaceSettings) -> bool, &'static str),
-    /// A size: (get, set, least, most).
+    /// A size, changed a step at a time: (get, set, least, most).
     Size(fn(&InterfaceSettings) -> f32, fn(&mut InterfaceSettings, f32), f32, f32),
+    /// The HUD's colours: a swatch for each ready-made theme.
+    Theme,
     /// A deeper tool, behind a key with this label.
     Open(Tool, &'static str),
 }
@@ -76,8 +78,12 @@ const fn row(group: &'static str, name: &'static str, explain: &'static str, wor
     Row { group, name, explain, words, control }
 }
 
-static ROWS: [Row; 31] = [
-    row("LOOK", "Theme", "The HUD's colours: pick one, or build and save your own.", "colour color palette gold cyan studio", Control::Open(Tool::ThemeStudio, "[ THEME STUDIO ]")),
+/// The groups, in the order they stand (each is also a key that shows it alone).
+const GROUPS: [&str; 5] = ["LOOK", "SCREENS", "VOICE", "PRESENCE", "TOOLS"];
+
+static ROWS: [Row; 33] = [
+    row("LOOK", "Theme", "The HUD's colours: one click on a swatch changes them.", "colour color palette gold cyan red green", Control::Theme),
+    row("LOOK", "Your own theme", "Build a theme from your own colours, name it and save it.", "theme studio custom create", Control::Open(Tool::ThemeStudio, "[ THEME STUDIO ]")),
     row("LOOK", "Colours, opacity and panels", "The accent and background colour, how see-through the HUD is, which panels show.", "interface accent background transparency", Control::Open(Tool::Interface, "[ OPEN ]")),
     row("LOOK", "Display finish", "Scan lines, grain, dust and hairline scratches: the HUD reads as light on glass.", "rough grain scan lines glass scratches", Control::Switch(|s| s.display_finish, |s, v| s.display_finish = v)),
     row("LOOK", "Animations", "Blocks unfold, glide and fold away. Off: everything appears at once.", "motion movement", Control::Switch(|s| s.animations, |s, v| s.animations = v)),
@@ -108,13 +114,11 @@ static ROWS: [Row; 31] = [
     row("PRESENCE", "Night mode tonight", "On or off for this night only; the clock decides again in the morning.", "now", Control::Moment(|s| crate::hud_feel::night(s.night_mode), "night_now")),
     row("PRESENCE", "What did I miss?", "The notifications of the last hours.", "notifications history missed", Control::Open(Tool::Missed, "[ SHOW ]")),
     row("TOOLS", "Accounts and services", "E-mail, calendar, school, Discord, the phone link: the Integrations hub.", "integrations hub webuntis itslearning whatsapp", Control::Open(Tool::Hub, "[ HUB ]")),
+    row("TOOLS", "Everything he can do", "The Feature Lab: every ability, each with a button to try it.", "features lab abilities help", Control::Open(Tool::FeatureLab, "[ FEATURE LAB ]")),
 ];
 
-/// The one row outside the table (it needs no settings): everything he can do.
-const FEATURE_LAB: Row = row("TOOLS", "Everything he can do", "The Feature Lab: every ability, each with a button to try it.", "features lab abilities help", Control::Open(Tool::FeatureLab, "[ FEATURE LAB ]"));
-
 fn rows() -> impl Iterator<Item = &'static Row> {
-    ROWS.iter().chain(std::iter::once(&FEATURE_LAB))
+    ROWS.iter()
 }
 
 /// Whether `row` answers the search: every word typed is found in its group, name, line or
@@ -124,35 +128,75 @@ fn answers(row: &Row, needle: &str) -> bool {
     needle.to_lowercase().split_whitespace().all(|word| hay.contains(word))
 }
 
-/// A switch: a small track with a knob that slides (it lights up under the pointer).
+/// A size one step on (`up`) or back, kept between `least` and `most`: steps of five percent.
+fn stepped(value: f32, up: bool, least: f32, most: f32) -> f32 {
+    let step = ((value * 20.0).round() + if up { 1.0 } else { -1.0 }) / 20.0;
+    step.clamp(least, most)
+}
+
+/// A switch: the word ON or OFF and a small track with a knob that slides. The whole of it is
+/// the target; it lights up under the pointer.
 fn switch(ui: &mut Ui, id: egui::Id, on: bool) -> bool {
-    let (rect, response) = ui.allocate_exact_size(vec2(38.0, 18.0), Sense::click());
+    let (rect, response) = ui.allocate_exact_size(vec2(70.0, 20.0), Sense::click());
     let t = ui.ctx().animate_bool_with_time(id, on, crate::hud_style::motion::FAST.as_secs_f32());
     let accent = crate::hud_board::active_colour();
     let p = ui.painter();
-    p.rect_filled(rect, Rounding::same(2.0), mix(Color32::from_rgb(6, 12, 18), accent.gamma_multiply(0.35), t));
-    let edge = if response.hovered() { accent } else { mix(crate::hud_board::border_colour(), accent, t) };
-    p.rect_stroke(rect.shrink(0.5), Rounding::same(2.0), stroke(1.0, edge));
-    let x = rect.left() + 9.0 + (rect.width() - 18.0) * crate::hud_style::motion::ease_out(t);
-    let press = if response.is_pointer_button_down_on() { 1.0 } else { 0.0 };
-    p.rect_filled(Rect::from_center_size(pos2(x, rect.center().y), vec2(12.0 - press, 12.0 - press)), Rounding::same(1.0), mix(STRIP_MUTED, Color32::WHITE, t));
+    let mid = rect.center().y;
+    let track = Rect::from_min_size(pos2(rect.right() - 36.0, mid - 7.0), vec2(36.0, 14.0));
+    p.text(pos2(track.left() - 9.0, mid + 0.5), Align2::RIGHT_CENTER, if on { "ON" } else { "OFF" }, FontId::monospace(9.5), mix(STRIP_MUTED, accent, t));
+    p.rect_filled(track, Rounding::ZERO, mix(Color32::from_rgb(5, 10, 16), accent.gamma_multiply(0.24), t));
+    let edge = if response.hovered() { accent } else { mix(crate::hud_board::border_colour().gamma_multiply(0.7), accent, t) };
+    p.rect_stroke(track.shrink(0.5), Rounding::ZERO, stroke(1.0, edge));
+    let x = track.left() + 7.0 + (track.width() - 14.0) * crate::hud_style::motion::ease_out(t);
+    let press = if response.is_pointer_button_down_on() { 1.5 } else { 0.0 };
+    p.rect_filled(Rect::from_center_size(pos2(x, mid), vec2(9.0 - press, 9.0 - press)), Rounding::ZERO, mix(STRIP_MUTED, accent, t));
     response.clicked()
 }
 
-fn key(ui: &mut Ui, label: &str) -> bool {
-    ui.add(egui::Button::new(RichText::new(label).font(strip_font()).color(STRIP_INK)).fill(Color32::from_rgba_unmultiplied(3, 7, 12, 230)).stroke(stroke(1.0, crate::hud_board::border_colour())).rounding(Rounding::ZERO)).clicked()
+/// A key in the quiet style of the block headers (`lit`: it stands for what is chosen now).
+fn key(ui: &mut Ui, label: &str, lit: bool) -> bool {
+    let width = crate::hud_style::key_width(ui.painter(), label);
+    let (rect, response) = ui.allocate_exact_size(vec2(width, 18.0), Sense::click());
+    crate::hud_style::key(ui.painter(), rect.right(), rect.center().y, label, response.hovered(), response.is_pointer_button_down_on(), lit, 1.0);
+    response.clicked()
+}
+
+/// The search field: a sharp box with the word SEARCH in it, as the HUD's own inputs are.
+fn search(ui: &mut Ui, needle: &mut String) {
+    let accent = crate::hud_board::active_colour();
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 28.0), Sense::hover());
+    let tag = ui.painter().text(pos2(rect.left() + 10.0, rect.center().y + 0.5), Align2::LEFT_CENTER, "SEARCH", FontId::monospace(9.5), STRIP_MUTED);
+    let field = Rect::from_min_max(pos2(tag.right() + 10.0, rect.top() + 3.0), pos2(rect.right() - 6.0, rect.bottom() - 3.0));
+    let response = ui.put(field, egui::TextEdit::singleline(needle).frame(false).hint_text("a word: night, voice, colour …").font(FontId::proportional(ts(13.5))).text_color(Color32::from_rgb(0xE8, 0xF2, 0xFC)));
+    if FOCUS.swap(false, Ordering::AcqRel) {
+        response.request_focus();
+    }
+    let edge = if response.has_focus() { accent } else { crate::hud_board::border_colour().gamma_multiply(0.7) };
+    let p = ui.painter();
+    p.rect_stroke(rect.shrink(0.5), Rounding::ZERO, stroke(1.0, edge));
+    p.line_segment([pos2(tag.right() + 5.0, rect.top() + 6.0), pos2(tag.right() + 5.0, rect.bottom() - 6.0)], stroke(1.0, edge.gamma_multiply(0.6)));
 }
 
 fn body(ui: &mut Ui, iface: &InterfaceSettings) -> Option<Out> {
     let mut out = None;
     let text_id = egui::Id::new("jai_settings_search");
     let mut needle = ui.data(|d| d.get_temp::<String>(text_id)).unwrap_or_default();
-    let field = ui.add(egui::TextEdit::singleline(&mut needle).hint_text("Search the settings…").desired_width(f32::INFINITY).font(FontId::proportional(ts(13.5))));
-    if FOCUS.swap(false, Ordering::AcqRel) {
-        field.request_focus();
-    }
-    ui.data_mut(|d| d.insert_temp(text_id, needle.clone()));
+    search(ui, &mut needle);
     ui.add_space(6.0);
+    // The groups as keys: one click shows a group alone, ALL shows everything.
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        if key(ui, "[ ALL ]", needle.trim().is_empty()) {
+            needle.clear();
+        }
+        for group in GROUPS {
+            if key(ui, &format!("[ {group} ]"), needle.trim().eq_ignore_ascii_case(group)) {
+                needle = group.to_lowercase();
+            }
+        }
+    });
+    ui.data_mut(|d| d.insert_temp(text_id, needle.clone()));
+    ui.add_space(4.0);
     let shown: Vec<&Row> = rows().filter(|r| answers(r, &needle)).collect();
     if shown.is_empty() {
         let room = ui.available_rect_before_wrap();
@@ -165,18 +209,26 @@ fn body(ui: &mut Ui, iface: &InterfaceSettings) -> Option<Out> {
         for (k, row) in shown.iter().enumerate() {
             if row.group != group {
                 group = row.group;
-                ui.add_space(if k == 0 { 2.0 } else { 10.0 });
-                ui.label(RichText::new(group).font(crate::hud_style::title_font(ts(12.5))).color(accent));
-                let r = ui.cursor();
-                ui.painter().line_segment([pos2(r.left(), r.top()), pos2(r.left() + ui.available_width(), r.top())], stroke(1.0, crate::hud_board::border_colour().gamma_multiply(0.6)));
-                ui.add_space(4.0);
+                ui.add_space(if k == 0 { 4.0 } else { 12.0 });
+                let (line, _) = ui.allocate_exact_size(vec2(ui.available_width(), 18.0), Sense::hover());
+                let title = crate::hud_style::title_galley(ui.painter(), group, ts(13.0), accent, line.width());
+                let right = line.left() + title.size().x + 10.0;
+                ui.painter().galley(pos2(line.left(), line.center().y - title.size().y * 0.5), title, Color32::PLACEHOLDER);
+                ui.painter().line_segment([pos2(right, line.center().y), pos2(line.right(), line.center().y)], stroke(1.0, crate::hud_board::border_colour().gamma_multiply(0.45)));
+                ui.add_space(2.0);
+            }
+            // The row under the pointer stands out a little.
+            let band = Rect::from_min_size(ui.cursor().min - vec2(4.0, 1.0), vec2(ui.available_width() + 8.0, 40.0));
+            if ui.rect_contains_pointer(band) {
+                ui.painter().rect_filled(band, Rounding::ZERO, accent.gamma_multiply(0.05));
             }
             ui.horizontal(|ui| {
                 ui.set_min_height(38.0);
                 let width = ui.available_width();
-                ui.allocate_ui_with_layout(vec2((width - 150.0).max(120.0), 38.0), Layout::top_down(Align::Min), |ui| {
+                let wide = matches!(row.control, Control::Theme);
+                ui.allocate_ui_with_layout(vec2((width - if wide { 250.0 } else { 150.0 }).max(120.0), 38.0), Layout::top_down(Align::Min), |ui| {
                     ui.spacing_mut().item_spacing.y = 1.0;
-                    ui.label(RichText::new(row.name).font(FontId::new(ts(14.0), super::label_family())).color(Color32::from_rgb(0xE8, 0xF2, 0xFC)));
+                    ui.label(RichText::new(row.name).font(FontId::new(ts(14.5), super::label_family())).color(Color32::from_rgb(0xE8, 0xF2, 0xFC)));
                     ui.add(egui::Label::new(RichText::new(row.explain).size(ts(11.0)).color(STRIP_MUTED)).wrap());
                 });
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| match row.control {
@@ -195,26 +247,45 @@ fn body(ui: &mut Ui, iface: &InterfaceSettings) -> Option<Out> {
                         }
                     }
                     Control::Size(get, set, least, most) => {
-                        // Applied when the handle is let go, so the panel holds still while it
-                        // is dragged.
-                        let id = egui::Id::new(("jai_setting_size", row.name));
-                        let mut value = ui.data(|d| d.get_temp::<f32>(id)).unwrap_or_else(|| get(iface));
-                        let response = ui.add(egui::Slider::new(&mut value, least..=most).show_value(false));
-                        ui.label(RichText::new(format!("{:.0}%", value * 100.0)).font(strip_font()).color(STRIP_INK));
-                        if response.dragged() {
-                            ui.data_mut(|d| d.insert_temp(id, value));
-                        } else {
-                            ui.data_mut(|d| d.remove::<f32>(id));
-                            if (value - get(iface)).abs() > 0.004 {
+                        // A step at a time: the panel never jumps under a dragged handle.
+                        ui.spacing_mut().item_spacing.x = 4.0;
+                        let value = get(iface);
+                        let up = key(ui, "[ + ]", false);
+                        ui.label(RichText::new(format!("{:>3.0}%", value * 100.0)).font(strip_font()).color(STRIP_INK));
+                        let down = key(ui, "[ - ]", false);
+                        if up != down {
+                            let stepped = stepped(value, up, least, most);
+                            if (stepped - value).abs() > 0.001 {
                                 let mut next = iface.clone();
-                                set(&mut next, value);
+                                set(&mut next, stepped);
                                 next.sanitize();
                                 out = Some(Out::Set(Box::new(next)));
                             }
                         }
                     }
+                    Control::Theme => {
+                        // A swatch for each ready-made theme; the one in use is framed in white.
+                        ui.spacing_mut().item_spacing.x = 5.0;
+                        for (name, palette) in crate::theme_engine::PRESETS.iter().rev() {
+                            let (rect, response) = ui.allocate_exact_size(vec2(20.0, 20.0), Sense::click());
+                            let colour = Color32::from_rgb(palette.core_primary[0], palette.core_primary[1], palette.core_primary[2]);
+                            let chosen = iface.hud_palette == *name;
+                            let p = ui.painter();
+                            p.rect_filled(rect.shrink(if response.hovered() || chosen { 2.0 } else { 4.0 }), Rounding::ZERO, colour);
+                            if chosen {
+                                p.rect_stroke(rect.shrink(0.5), Rounding::ZERO, stroke(1.0, Color32::WHITE));
+                            }
+                            let label = name.replace('_', " ").to_uppercase();
+                            if response.on_hover_text(label).clicked() && !chosen {
+                                let mut next = iface.clone();
+                                next.hud_palette = name.to_string();
+                                next.accent = crate::interface::hex(palette.core_primary);
+                                out = Some(Out::Set(Box::new(next)));
+                            }
+                        }
+                    }
                     Control::Open(tool, label) => {
-                        if key(ui, label) {
+                        if key(ui, label, false) {
                             out = Some(Out::Open(tool));
                         }
                     }
@@ -236,7 +307,7 @@ pub(super) fn show(ctx: &egui::Context, iface: &InterfaceSettings) -> Option<Out
         return None;
     }
     let mut out = None;
-    let action = super::hud_block_window(ctx, ID, TITLE, [600.0, 660.0], |ui| out = body(ui, iface));
+    let action = super::hud_block_window(ctx, ID, TITLE, [620.0, 680.0], |ui| out = body(ui, iface));
     if action.close {
         open(false);
         crate::hud_dock::forget(ID);
@@ -258,6 +329,13 @@ mod tests {
         assert!(found("voice").len() >= 4, "the whole group answers to its name");
         assert!(found("quantum flux").is_empty());
         assert_eq!(found("").len(), rows().count(), "an empty search shows everything");
+        // A group's key shows that group (a setting of another group that mentions the word
+        // may come with it, never fewer than the group itself).
+        for group in GROUPS {
+            let own = rows().filter(|r| r.group == group).count();
+            assert!(own > 0 && found(&group.to_lowercase()).len() >= own, "{group}");
+        }
+        assert!(rows().all(|r| GROUPS.contains(&r.group)), "every row stands in a group that has a key");
     }
 
     /// Every switch is found under one name, says in a line what it does, and really sets what
@@ -287,12 +365,22 @@ mod tests {
                     set(&mut s, most);
                     assert_eq!(get(&s), most);
                 }
-                Control::Moment(..) | Control::Open(..) => {}
+                Control::Moment(..) | Control::Open(..) | Control::Theme => {}
             }
         }
         // The features of 2026-11-12 are all here.
-        for name in ["Calm HUD", "Live words", "Start-up sequence", "Idle screen", "Night mode by the clock", "Edge light", "Music visuals", "Mini mode", "Live desktop background"] {
+        for name in ["Calm HUD", "Live words", "Start-up sequence", "Idle screen", "Night mode by the clock", "Edge light", "Music visuals", "Mini mode", "Live desktop background", "Only obey me"] {
             assert!(names.contains(&name), "{name}");
         }
+    }
+
+    #[test]
+    fn a_size_goes_a_step_at_a_time_and_stays_in_its_range() {
+        assert!((stepped(1.0, true, 0.8, 1.6) - 1.05).abs() < 1e-5);
+        assert!((stepped(1.0, false, 0.8, 1.6) - 0.95).abs() < 1e-5);
+        assert_eq!(stepped(1.6, true, 0.8, 1.6), 1.6);
+        assert_eq!(stepped(0.8, false, 0.8, 1.6), 0.8);
+        // From an odd value (Ctrl + Plus zooms by tenths of itself) it lands on a whole step.
+        assert!((stepped(1.1 * 1.1, true, 0.7, 1.6) - 1.25).abs() < 1e-5);
     }
 }

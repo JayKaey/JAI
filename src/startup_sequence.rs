@@ -4,13 +4,13 @@
 //! sequence plays and whether a catch-up follows the greeting; `paint` draws it over the HUD.
 
 use chrono::{DateTime, Local, Timelike};
-use eframe::egui::{self, pos2, vec2, Align2, Color32, FontFamily, FontId, Rect, Rounding, Shape, Stroke};
+use eframe::egui::{self, pos2, vec2, Align2, Color32, FontId, Rect, Rounding, Shape, Stroke};
 use std::f32::consts::TAU;
 use std::sync::OnceLock;
 use std::time::Duration;
 
 /// Which sequence plays.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Kind {
     /// Back within a couple of hours: the rings assemble, and he is there.
     Quick,
@@ -149,9 +149,11 @@ pub fn paint(ctx: &egui::Context, screen: Rect, centre: egui::Pos2, radius: f32,
     // The dark the HUD comes out of: solid until the emblem ignites, then it clears.
     let cover = 1.0 - crate::hud_style::motion::ease_out(((t - ignite) / (total - ignite)).clamp(0.0, 1.0));
     p.rect_filled(screen, Rounding::ZERO, Color32::from_rgba_unmultiplied(2, 4, 8, (255.0 * cover) as u8));
-    let alpha = cover.min(1.0);
-    // The rings draw themselves, one after the other, until the ignition.
-    let radii = [0.31, 0.56, 0.64, 0.75, 0.87, 1.0];
+    // (After the ignition the drawn rings give way to the emblem's own as the dark clears.)
+    let alpha = cover.min(1.0) * cover.min(1.0);
+    // The rings draw themselves, one after the other, until the ignition: the emblem's own
+    // seven, at their own radii.
+    let radii = [0.314, 0.4, 0.56, 0.64, 0.743, 0.869, 1.0];
     let assembly = (t / ignite).clamp(0.0, 1.0);
     for (k, share) in radii.iter().enumerate() {
         let progress = ring_progress(k, radii.len(), assembly);
@@ -159,7 +161,7 @@ pub fn paint(ctx: &egui::Context, screen: Rect, centre: egui::Pos2, radius: f32,
             continue;
         }
         let from = -TAU / 4.0 + k as f32 * 0.9 + t * if k % 2 == 0 { 0.5 } else { -0.35 };
-        let width = if k == 2 || k == 5 { 2.4 } else { 1.2 };
+        let width = if k == 2 || k == 6 { 2.4 } else { 1.2 };
         let colour = if k % 3 == 1 { Color32::WHITE } else { accent };
         p.add(Shape::line(arc(centre, radius * *share, from, TAU * progress), stroke(width, colour.gamma_multiply((0.35 + 0.65 * progress) * alpha))));
         // The point that draws the ring is white-hot.
@@ -185,7 +187,13 @@ pub fn paint(ctx: &egui::Context, screen: Rect, centre: egui::Pos2, radius: f32,
     if !lines.is_empty() {
         let font = FontId::monospace(11.0);
         let left = centre.x - 150.0;
-        let top = centre.y + radius * 1.25;
+        // (Under the emblem's outermost ring, which stands at 1.28 of its radius.)
+        let top = centre.y + radius * 1.3 + 46.0;
+        let head = crate::hud_style::title_galley(&p, "J.A.I. // power-up", 13.0, accent.gamma_multiply(alpha), 300.0);
+        p.galley(pos2(left, top - 30.0), head, Color32::PLACEHOLDER);
+        // How far it is, and the word once it is there.
+        let (reading, ink) = if assembly >= 1.0 { ("ONLINE".to_string(), Color32::WHITE) } else { (format!("{:.0} %", assembly * 100.0), accent) };
+        p.text(pos2(left + 300.0, top - 21.0), Align2::RIGHT_CENTER, reading, font.clone(), ink.gamma_multiply(alpha));
         let per = ignite / lines.len() as f32;
         for (k, text) in lines.iter().enumerate() {
             let begun = t - k as f32 * per;
@@ -204,11 +212,6 @@ pub fn paint(ctx: &egui::Context, screen: Rect, centre: egui::Pos2, radius: f32,
             p.rect_filled(bar, Rounding::ZERO, accent.gamma_multiply(0.2 * alpha));
             p.rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * assembly, bar.height())), Rounding::ZERO, accent.gamma_multiply(alpha));
         }
-    }
-    // His name comes up with the ignition.
-    if since > 0.0 {
-        let up = crate::hud_style::motion::ease_out((since / 0.3).clamp(0.0, 1.0));
-        p.text(centre, Align2::CENTER_CENTER, "J.A.I.", FontId::new(radius * 0.2, FontFamily::Name("display".into())), Color32::WHITE.gamma_multiply(up * alpha));
     }
     ctx.request_repaint();
     true

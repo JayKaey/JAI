@@ -5,7 +5,7 @@
 //! that hears Sir: a clip is called off the moment Sir speaks, so his words never wait behind
 //! a video's. Paused while a game is in front and while JAI himself is speaking.
 
-use eframe::egui::{self, pos2, vec2, Align2, Color32, FontFamily, FontId, Rounding, ViewportBuilder, ViewportId};
+use eframe::egui::{self, pos2, vec2, Color32, FontFamily, FontId, Rounding, ViewportBuilder, ViewportId};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -122,25 +122,37 @@ pub fn show(ctx: &egui::Context, app: &crate::app::Jai, rt: &tokio::runtime::Han
         .with_position(at)
         .with_inner_size(vec2(width, height));
     ctx.show_viewport_immediate(ViewportId::from_hash_of("jai_subtitles"), builder, |ctx, _class| {
-        let rect = ctx.screen_rect();
-        let p = ctx.layer_painter(egui::LayerId::background());
-        let font = FontId::new(24.0, FontFamily::Name("display".into()));
-        let mut y = rect.bottom() - 10.0;
-        for (text, strength) in shown.iter().rev() {
-            let galley = p.layout(text.clone(), font.clone(), Color32::WHITE, rect.width() - 40.0);
-            let size = galley.size();
-            let back = egui::Rect::from_min_size(pos2(rect.center().x - size.x / 2.0 - 14.0, y - size.y - 6.0), vec2(size.x + 28.0, size.y + 8.0));
-            if back.top() < rect.top() {
-                break;
-            }
-            p.rect_filled(back, Rounding::same(3.0), Color32::from_black_alpha((205.0 * strength) as u8));
-            p.galley(pos2(rect.center().x - size.x / 2.0, y - size.y - 2.0), galley, Color32::WHITE.gamma_multiply(*strength));
-            y = back.top() - 4.0;
-        }
-        let _ = Align2::CENTER_CENTER;
+        paint_bar(ctx, &shown);
         ctx.request_repaint_after(Duration::from_millis(100));
     });
     ctx.request_repaint_after(Duration::from_millis(200));
+}
+
+/// Paints the subtitles into the bar's own window: the newest line at the bottom, the one
+/// before it above and fainter, each on a dark band so it reads over any picture.
+pub fn paint_bar(ctx: &egui::Context, shown: &[(String, f32)]) {
+    let rect = ctx.screen_rect();
+    let p = ctx.layer_painter(egui::LayerId::background());
+    let font = FontId::new(25.0, FontFamily::Name("display".into()));
+    let mut y = rect.bottom() - 8.0;
+    for (k, (text, strength)) in shown.iter().rev().enumerate() {
+        let strength = strength * if k == 0 { 1.0 } else { 0.72 };
+        let mut job = egui::text::LayoutJob::default();
+        job.append(text, 0.0, egui::TextFormat { font_id: font.clone(), color: Color32::WHITE.gamma_multiply(strength), extra_letter_spacing: 0.4, ..Default::default() });
+        job.wrap.max_width = rect.width() - 48.0;
+        job.wrap.max_rows = 2;
+        job.wrap.overflow_character = Some('…');
+        job.halign = egui::Align::Center;
+        let galley = p.layout_job(job);
+        let size = galley.size();
+        let back = egui::Rect::from_min_size(pos2(rect.center().x - size.x / 2.0 - 16.0, y - size.y - 6.0), vec2(size.x + 32.0, size.y + 8.0));
+        if back.top() < rect.top() {
+            break;
+        }
+        p.rect_filled(back, Rounding::same(3.0), Color32::from_black_alpha((215.0 * strength) as u8));
+        p.galley(pos2(rect.center().x, y - size.y - 2.0), galley, Color32::WHITE);
+        y = back.top() - 4.0;
+    }
 }
 
 /// The monitor the bar stands on: the one the window in front is on.

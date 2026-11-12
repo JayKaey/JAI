@@ -1476,6 +1476,8 @@ impl Jai {
         }
         if wake.matched {
             info!("[WAKE] '{}' (score {:.2}) → command '{}'", wake.word, wake.score, wake.command);
+            // (His silent "yes?": the emblem ripples.)
+            crate::hud_lines::woke();
         }
         // The voice lock: a spoken order is carried out only in Sir's own voice. (Push-to-talk
         // and the keyboard are his hands; a voice that cannot be judged is let through and
