@@ -26,11 +26,16 @@ struct Backdrop {
     last_frame: Instant,
     /// Asked the desktop to take it (once the window exists).
     asked: bool,
+    /// When its place under the icons was last looked at.
+    kept: Instant,
 }
 
 static BACKDROP: Mutex<Option<Backdrop>> = Mutex::new(None);
-/// What came of asking the desktop: Ok once it is its background, or why not.
-static ATTACHED: Mutex<Option<Result<(), String>>> = Mutex::new(None);
+/// What came of asking the desktop: Ok (its window) once it is its background, or why not.
+static ATTACHED: Mutex<Option<Result<isize, String>>> = Mutex::new(None);
+/// How often its place under the icons is looked at (a wallpaper program may re-order its own
+/// windows there, over it).
+const KEEP_EVERY: Duration = Duration::from_secs(5);
 
 /// The monitor the background takes: the first that the board (`hud`, its monitor's rect) is not
 /// on, a secondary one before the primary. None with a single monitor (the board needs it).
@@ -84,7 +89,7 @@ pub fn show(ctx: &egui::Context, on: bool, hud: isize, spanning: bool, board: bo
             return Some(Refused(if spanning { "My board is across every monitor: there is no desktop left for me to stand behind.".into() } else { "I need a second monitor for that: this one holds my board.".into() }));
         };
         tracing::info!("[DESKTOP] The live background opens on the monitor at {},{} ({}×{})", monitor[0], monitor[1], monitor[2] - monitor[0], monitor[3] - monitor[1]);
-        *guard = Some(Backdrop { emblem: RoseEmblem::new(RoseEmblemState::AwakeFrontEmblem), monitor, opened: Instant::now(), last_frame: Instant::now(), asked: false });
+        *guard = Some(Backdrop { emblem: RoseEmblem::new(RoseEmblemState::AwakeFrontEmblem), monitor, opened: Instant::now(), last_frame: Instant::now(), asked: false, kept: Instant::now() });
     }
     let Some(b) = guard.as_mut() else { return None };
     let ppp = ctx.native_pixels_per_point().unwrap_or(1.0).max(0.5);
@@ -112,6 +117,13 @@ pub fn show(ctx: &egui::Context, on: bool, hud: isize, spanning: bool, board: bo
         let monitor = b.monitor;
         attach(monitor);
     }
+    // Every few seconds: is it still the first thing under the icons?
+    if b.kept.elapsed() > KEEP_EVERY {
+        b.kept = Instant::now();
+        if let Some(Ok(hwnd)) = *lock(&ATTACHED) {
+            keep(hwnd);
+        }
+    }
     None
 }
 
@@ -129,16 +141,30 @@ fn displays() -> Vec<([i32; 4], bool)> {
 fn attach(monitor: [i32; 4]) {
     crate::win32::run_detached(move || {
         let result = match crate::win32::own_window(TITLE) {
-            Some(hwnd) => crate::win32::attach_behind_desktop_icons(hwnd, monitor),
+            Some(hwnd) => crate::win32::attach_behind_desktop_icons(hwnd, monitor).map(|()| hwnd),
             None => Err("its window did not open".to_string()),
         };
         match &result {
-            Ok(()) => tracing::info!("[DESKTOP] The desktop took the live background behind its icons"),
+            Ok(hwnd) => tracing::info!("[DESKTOP] The desktop took the live background behind its icons ({})", crate::win32::backdrop_standing(*hwnd)),
             Err(why) => tracing::warn!("[DESKTOP] The live background was not taken: {why}"),
         }
         *lock(&ATTACHED) = Some(result);
     });
 }
+
+/// Looks whether the background is still the first thing under the icons, and puts it back
+/// there when it is not.
+#[cfg(windows)]
+fn keep(hwnd: isize) {
+    crate::win32::run_detached(move || match crate::win32::keep_behind_desktop_icons(hwnd) {
+        Ok(true) => tracing::info!("[DESKTOP] Something had come between the icons and the live background; it is right under them again"),
+        Ok(false) => {}
+        Err(why) => tracing::debug!("[DESKTOP] The live background's place was not looked at: {why}"),
+    });
+}
+
+#[cfg(not(windows))]
+fn keep(_hwnd: isize) {}
 
 #[cfg(not(windows))]
 fn attach(_monitor: [i32; 4]) {

@@ -344,7 +344,10 @@ pub fn own_windows() -> Vec<String> {
 /// stay in front of it and it never takes a click or the focus. Synchronous: on the Win32
 /// worker. Fails when the desktop has no such layer (a shell replacement).
 pub fn attach_behind_desktop_icons(hwnd: isize, [left, top, right, bottom]: [i32; 4]) -> Result<(), String> {
-    use windows::Win32::UI::WindowsAndMessaging::{FindWindowExW, SendMessageTimeoutW, SetParent, SMTO_NORMAL, SWP_SHOWWINDOW};
+    use windows::Win32::Foundation::COLORREF;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        FindWindowExW, SendMessageTimeoutW, SetLayeredWindowAttributes, SetParent, SetWindowLongPtrW, LWA_ALPHA, SMTO_NORMAL, SWP_FRAMECHANGED, SWP_SHOWWINDOW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TRANSPARENT,
+    };
     /// The layer: the `WorkerW` that follows the top-level window holding the icons' view.
     unsafe extern "system" fn layer(top: HWND, lparam: LPARAM) -> BOOL {
         // SAFETY: lparam is the &mut HWND passed below and outlives EnumWindows; the queries
@@ -377,7 +380,17 @@ pub fn attach_behind_desktop_icons(hwnd: isize, [left, top, right, bottom]: [i32
             if SetParent(HWND(hwnd), progman).0 == 0 {
                 return Err("the desktop did not take the window".to_string());
             }
-            return SetWindowPos(HWND(hwnd), icons, left - origin.left, top - origin.top, right - left, bottom - top, SWP_NOACTIVATE | SWP_SHOWWINDOW).map_err(|e| e.message().to_string());
+            // That Progman has no surface of its own for its children to draw into (it is made
+            // with WS_EX_NOREDIRECTIONBITMAP): a plain child stands in the right place and
+            // shows nothing. Seen on Sir's PC 2026-11-12: the desktop, asked to print itself,
+            // showed his wallpaper where the emblem should be, and the emblem as soon as the
+            // window was made a layered one, which has a surface of its own (the icons' view
+            // is one too). Clicks pass through it and it is never the active window, like the
+            // desktop's own layer under it.
+            let style = GetWindowLongPtrW(HWND(hwnd), GWL_EXSTYLE);
+            SetWindowLongPtrW(HWND(hwnd), GWL_EXSTYLE, style | (WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE).0 as isize);
+            SetLayeredWindowAttributes(HWND(hwnd), COLORREF(0), 255, LWA_ALPHA).map_err(|e| format!("the window could not be made a layered one: {}", e.message()))?;
+            return SetWindowPos(HWND(hwnd), icons, left - origin.left, top - origin.top, right - left, bottom - top, SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_FRAMECHANGED).map_err(|e| e.message().to_string());
         }
         let mut worker = HWND(0);
         let _ = EnumWindows(Some(layer), LPARAM(&mut worker as *mut HWND as isize));
@@ -396,6 +409,45 @@ pub fn attach_behind_desktop_icons(hwnd: isize, [left, top, right, bottom]: [i32
         // (On top of whatever else lives in that layer: a wallpaper program's own window, as on
         // Sir's PC, would otherwise cover it. HWND(0) is the top of the layer's own order.)
         SetWindowPos(HWND(hwnd), HWND(0), left - origin.left, top - origin.top, right - left, bottom - top, SWP_NOACTIVATE | SWP_SHOWWINDOW).map_err(|e| e.message().to_string())
+    }
+}
+
+/// Puts the live background (`hwnd`, hung into the desktop's window by
+/// `attach_behind_desktop_icons`) back right under the desktop's icons when something else has
+/// come between (a wallpaper program that re-orders its own windows there). Whether it had to;
+/// an error when the desktop or the window is gone.
+pub fn keep_behind_desktop_icons(hwnd: isize) -> Result<bool, String> {
+    use windows::Win32::UI::WindowsAndMessaging::{FindWindowExW, GA_PARENT, GW_HWNDNEXT, SWP_NOMOVE, SWP_NOSIZE};
+    // SAFETY: lookups by class name and a z-order change of our own window.
+    unsafe {
+        if !IsWindow(HWND(hwnd)).as_bool() {
+            return Err("the background's window is gone".to_string());
+        }
+        let progman = FindWindowW(w!("Progman"), PCWSTR::null());
+        // (The older desktop keeps it in a layer of its own: nothing comes between there.)
+        if progman.0 == 0 || GetAncestor(HWND(hwnd), GA_PARENT) != progman {
+            return Ok(false);
+        }
+        let icons = FindWindowExW(progman, HWND(0), w!("SHELLDLL_DefView"), PCWSTR::null());
+        if icons.0 == 0 || GetWindow(icons, GW_HWNDNEXT) == HWND(hwnd) {
+            return Ok(false);
+        }
+        SetWindowPos(HWND(hwnd), icons, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE).map_err(|e| e.message().to_string())?;
+        Ok(true)
+    }
+}
+
+/// How the live background's window stands in the desktop, in a few words for the log: whether
+/// it has a surface of its own to be drawn on and whether it is the first thing under the icons.
+pub fn backdrop_standing(hwnd: isize) -> String {
+    use windows::Win32::UI::WindowsAndMessaging::{FindWindowExW, GW_HWNDNEXT, WS_EX_LAYERED};
+    // SAFETY: plain queries on our own window and the desktop's.
+    unsafe {
+        let layered = GetWindowLongPtrW(HWND(hwnd), GWL_EXSTYLE) & WS_EX_LAYERED.0 as isize != 0;
+        let progman = FindWindowW(w!("Progman"), PCWSTR::null());
+        let icons = FindWindowExW(progman, HWND(0), w!("SHELLDLL_DefView"), PCWSTR::null());
+        let under = icons.0 != 0 && GetWindow(icons, GW_HWNDNEXT) == HWND(hwnd);
+        format!("{}, {}", if layered { "a layer of its own" } else { "no layer of its own" }, if under { "right under the icons" } else if icons.0 != 0 { "not the first thing under the icons" } else { "in the desktop's older layer" })
     }
 }
 
