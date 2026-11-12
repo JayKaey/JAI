@@ -236,6 +236,12 @@ pub fn in_test_session() -> bool {
     IN_TEST_SESSION.load(std::sync::atomic::Ordering::Acquire)
 }
 
+/// Whether a scripted session was asked to show `what` (`JAI_DEMO=boot-long,idle,night,music`),
+/// so that it can be looked at there. Never outside a scripted session.
+pub fn demo(what: &str) -> bool {
+    in_test_session() && std::env::var("JAI_DEMO").is_ok_and(|v| v.split(',').any(|d| d.trim() == what))
+}
+
 /// A scripted session that never moves the focus, its own windows' or anyone else's: Sir may
 /// be playing on another monitor. Every test session but the window drill's, which drives the
 /// HUD's own keys.

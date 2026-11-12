@@ -258,7 +258,7 @@ fn paint_lines(p: &egui::Painter, rect: egui::Rect, shown: &[(String, f32)], wra
 /// The monitor a scripted session shows the bar on, when it was asked to show it.
 #[cfg(windows)]
 fn demo_monitor() -> Option<[i32; 4]> {
-    if !std::env::var("JAI_DEMO").is_ok_and(|v| v.split(',').any(|d| d.trim() == "subtitles")) {
+    if !crate::platform::demo("subtitles") {
         return None;
     }
     let n = std::env::var("JAI_BACKDROP_MONITOR").ok()?.trim().parse::<usize>().ok()?;

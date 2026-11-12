@@ -46,7 +46,7 @@ static RUNNING: AtomicBool = AtomicBool::new(false);
 pub fn want(visuals: bool, lyrics: bool, rt: &tokio::runtime::Handle) {
     WANT_VISUALS.store(visuals, Ordering::Release);
     WANT_LYRICS.store(lyrics, Ordering::Release);
-    if (visuals || lyrics) && !crate::platform::in_test_session() {
+    if (visuals || lyrics) && (!crate::platform::in_test_session() || crate::platform::demo("music")) {
         *lock(&WANTED_AT) = Some(Instant::now());
         if !RUNNING.swap(true, Ordering::AcqRel) {
             rt.spawn(async {

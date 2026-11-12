@@ -3608,7 +3608,7 @@ fn paint_mini_strip(ui: &mut Ui, s: &MiniStrip) -> bool {
 /// Whether a scripted session was asked to show `what` (`JAI_DEMO=boot-long,idle,night`), so
 /// that it can be looked at there. Never outside a scripted session.
 fn demo(what: &str) -> bool {
-    crate::platform::in_test_session() && std::env::var("JAI_DEMO").is_ok_and(|v| v.split(',').any(|d| d.trim() == what))
+    crate::platform::demo(what)
 }
 
 /// How long the HUD has been drawing (seconds).
@@ -4166,7 +4166,8 @@ impl HudApp {
 
             // The music: while something plays on the PC the emblem moves with it (he only
             // listens to the sound; never while a game is in front, never to his own voice).
-            let music_on = iface.music_visuals && !windows_still(ctx) && !crate::platform::in_test_session() && !crate::hud_feel::game_in_front();
+            // (A scripted session listens only when it was asked to show the music: `JAI_DEMO=music`.)
+            let music_on = iface.music_visuals && !windows_still(ctx) && (!crate::platform::in_test_session() || demo("music")) && !crate::hud_feel::game_in_front();
             crate::pc_audio::want(crate::pc_audio::Use::Spectrum, music_on);
             crate::music_lyrics::want(music_on, crate::hud_feel::lyrics(), &self.rt);
             let (bass, level) = if music_on { crate::pc_audio::bass_and_level() } else { (0.0, 0.0) };
@@ -4326,6 +4327,12 @@ impl HudApp {
             crate::idle_screen::refresh(&self.app, &self.rt);
         }
         let target = if idle { 1.0 } else { 0.0 };
+        // (Back from a long rest: what Windows took out of memory meanwhile comes back in one
+        // go, not page by page under the first thing Sir opens.)
+        #[cfg(windows)]
+        if !idle && self.idle >= 1.0 {
+            crate::win32::warm_own_code("back from a long rest");
+        }
         if self.idle != target {
             // It comes up slowly and is gone at once.
             self.idle = crate::hud_style::motion::approach(self.idle, target, dt, if idle { Duration::from_millis(1200) } else { crate::hud_style::motion::SLOW });

@@ -2999,6 +2999,36 @@ mod tests {
         assert_eq!(ResearchStatus { topic: "VR".into(), phase: "x".into(), started: Instant::now(), blocks: 0, sources: 0, progress: 0.0 }.block(Instant::now()).label, "RESEARCH //");
     }
 
+    /// Sir's evening of 2026-11-12: the briefing on the board, "close the briefing" (a program
+    /// was looked for), "close the windows" ("nothing is open").
+    #[test]
+    fn what_the_board_calls_by_a_name_closes_by_that_name() {
+        let _one = test_lock();
+        sign_off();
+        let stat = |label: &str, tag: &str| Block::new(label, tag, "SOURCE: WEBUNTIS", BlockKind::HeroFigure { header: "Lessons tomorrow".into(), figure: "3".into(), note: String::new() });
+        let briefing = || Report { topic: "Tomorrow".into(), created_at: String::new(), blocks: vec![stat("BRIEFING // SCHOOL TOMORROW", "WEBUNTIS"), stat("WEBUNTIS // TIMETABLE", "FRI 13 NOV"), stat("CALENDAR // TOMORROW", "2 EVENTS")], sources: vec![], id: None };
+        present(briefing());
+        // "The briefing" names the block tagged so; "the timetable" that one; a program's name none.
+        assert!(names_block("briefing") && names_block("timetable") && !names_block("spotify"));
+        assert_eq!(close_matching("briefing"), ["BRIEFING // SCHOOL TOMORROW"]);
+        assert_eq!(board().shown.as_ref().map(|s| s.report.blocks.len()), Some(2));
+        assert_eq!(close_matching("the timetable"), ["WEBUNTIS // TIMETABLE"]);
+        assert!(close_matching("spotify").is_empty());
+        // "Close the windows": what is left goes, a pinned block stays.
+        assert_eq!(close_unpinned(), 1);
+        assert!(!is_active() && close_unpinned() == 0);
+        present(briefing());
+        assert_eq!(toggle_pin(1), Some(true));
+        assert_eq!(close_unpinned(), 2);
+        assert_eq!(board().shown.as_ref().map(|s| s.report.blocks.iter().map(|b| b.label.clone()).collect::<Vec<_>>()), Some(vec!["WEBUNTIS // TIMETABLE".to_string()]));
+        // A report whose topic is the name goes whole.
+        toggle_pin(0);
+        present(Report { topic: "Evening briefing".into(), ..briefing() });
+        assert_eq!(close_matching("briefing").len(), 3);
+        assert!(!is_active());
+        sign_off();
+    }
+
     #[test]
     fn walkthrough_place_and_highlight_for_the_shown_board() {
         let _one = test_lock();

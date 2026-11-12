@@ -707,6 +707,10 @@ fn main() -> ExitCode {
             }
         });
     }
+    // His own code comes off the disk in one go, in the background, instead of page by page
+    // the first time each view is opened (he runs from a hard disk).
+    #[cfg(windows)]
+    win32::warm_own_code("at the start");
     // Every command path is run once as a dry run, so the first real command of each kind does
     // not pay for compiling its patterns.
     {

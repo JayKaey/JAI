@@ -243,6 +243,52 @@ pub fn own_window(title: &str) -> Option<isize> {
     search.found.map(|h| h.0)
 }
 
+/// Brings this program's own code into memory: the pages of the exe (and of the big DLLs it
+/// loads) that nothing has touched yet, read in one go instead of one by one when they are
+/// first needed. J.A.I. runs from a hard disk, where each untouched page is a seek of some ten
+/// milliseconds: the first opening of a block stalled the HUD for 0.7 to 0.9 s (seen live
+/// 2026-11-12, "his windows 719 ms", "small views 905 ms"). Blocking: called off the HUD's
+/// thread. The megabytes asked for.
+pub fn prefetch_own_code() -> Result<f64, String> {
+    use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows::Win32::System::Memory::{PrefetchVirtualMemory, WIN32_MEMORY_RANGE_ENTRY};
+    use windows::Win32::System::Threading::GetCurrentProcess;
+    let mut ranges: Vec<WIN32_MEMORY_RANGE_ENTRY> = Vec::new();
+    for name in [PCWSTR::null(), w!("DirectML.dll"), w!("onnxruntime.dll")] {
+        // SAFETY: a module loaded in this process; its headers are mapped and readable for as
+        // long as it is loaded (none of these is ever unloaded).
+        unsafe {
+            let Ok(module) = GetModuleHandleW(name) else { continue };
+            let base = module.0 as *const u8;
+            if base.is_null() {
+                continue;
+            }
+            let pe = std::ptr::read_unaligned(base.add(0x3C) as *const u32) as usize;
+            // ("PE  ", the COFF header's 20 bytes, then the optional header: SizeOfImage at 56.)
+            let size = std::ptr::read_unaligned(base.add(pe + 4 + 20 + 56) as *const u32) as usize;
+            if size > 0 {
+                ranges.push(WIN32_MEMORY_RANGE_ENTRY { VirtualAddress: base as *mut std::ffi::c_void, NumberOfBytes: size });
+            }
+        }
+    }
+    let total: usize = ranges.iter().map(|r| r.NumberOfBytes).sum();
+    // SAFETY: each range is a whole image mapped in this process.
+    unsafe { PrefetchVirtualMemory(GetCurrentProcess(), &ranges, 0).map_err(|e| e.message().to_string())? };
+    Ok(total as f64 / 1_048_576.0)
+}
+
+/// `prefetch_own_code` on a thread of its own, said in the log (`why`: "at the start", "back
+/// from a long rest").
+pub fn warm_own_code(why: &'static str) {
+    let _ = std::thread::Builder::new().name("jai-warm-code".into()).spawn(move || {
+        let started = std::time::Instant::now();
+        match prefetch_own_code() {
+            Ok(mb) => tracing::info!("[START] Own code brought into memory {why} ({mb:.0} MB in {} ms)", started.elapsed().as_millis()),
+            Err(e) => tracing::debug!("[START] Own code not prefetched {why}: {e}"),
+        }
+    });
+}
+
 /// Makes one of our own windows an overlay: over every other window, letting clicks through
 /// to what is under it, never taking the focus and absent from Alt+Tab. `alpha`: how solid it
 /// is (255: fully; less lets what is under it show through).
