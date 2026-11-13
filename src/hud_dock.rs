@@ -407,6 +407,13 @@ fn open_windows() -> Vec<(String, String)> {
     windows.iter().map(|(id, (title, _))| (id.clone(), title.clone())).collect()
 }
 
+/// Whether `name` is what he calls block `id` ("privacy board" for `kit_privacy`).
+fn called(id: &str, name: &str) -> bool {
+    let spoken = crate::window_commands::spoken_name(id).to_lowercase();
+    let spoken = spoken.trim_start_matches("the ").trim_start_matches("your ");
+    !name.is_empty() && spoken == name.trim().trim_start_matches("the ").trim_start_matches("my ")
+}
+
 /// The open in-app blocks a spoken name means, as `(id, title)`: "feature lab", "the telemetry
 /// window", "plotter", "QR code". A title that carries the name wins; a view's id prefix
 /// (`id_prefix_for`) is only tried when no title does, so "feature lab" never closes a
@@ -428,7 +435,9 @@ pub fn blocks_named(name: &str) -> Vec<(String, String)> {
             }
             out
         };
-        let by_title = pick(&|id, title| title.contains(n.as_str()) || id == n || id.replace('_', " ") == n);
+        // (By its title, its id, or what he calls it: "the privacy board" is the block titled
+        // "Privacy // what I keep about you".)
+        let by_title = pick(&|id, title| title.contains(n.as_str()) || id == n || id.replace('_', " ") == n || called(id, &n));
         if !by_title.is_empty() {
             return by_title;
         }
@@ -628,7 +637,7 @@ pub fn detach_named(name: &str) -> Result<String, String> {
     let open: Vec<(String, String)> = with(|s| {
         s.last_blocks
             .iter()
-            .filter(|(id, title, _)| prefix.is_some_and(|p| id.starts_with(p)) || (!n.trim().is_empty() && title.to_lowercase().contains(n.trim())))
+            .filter(|(id, title, _)| prefix.is_some_and(|p| id.starts_with(p)) || (!n.trim().is_empty() && (title.to_lowercase().contains(n.trim()) || called(id, n.trim()))))
             .map(|(id, title, _)| (id.clone(), title.clone()))
             .collect()
     });
@@ -1411,6 +1420,28 @@ pub(crate) fn test_lock() -> std::sync::MutexGuard<'static, ()> {
 mod tests {
     /// Windows the size of what they show: the Drive Space block of 2026-11-09 stood 640 × 306
     /// round three short rows.
+    /// "Close the privacy board", "detach the changes list": the kit's blocks answer to what Sir
+    /// calls them, whatever their titles say (seen live 2026-11-13: neither was found).
+    #[test]
+    fn a_block_answers_to_what_sir_calls_it() {
+        let _one = test_lock();
+        begin_frame();
+        let at = Rect::from_min_size(Pos2::new(40.0, 60.0), eframe::egui::vec2(460.0, 320.0));
+        publish_block("kit_privacy", "Privacy // what I keep about you", at);
+        publish_block("changes", "Changes // what is new, better, fixed", at.translate(eframe::egui::vec2(500.0, 0.0)));
+        begin_frame();
+        let ids = |name: &str| blocks_named(name).into_iter().map(|(id, _)| id).collect::<Vec<_>>();
+        assert_eq!(ids("the privacy board"), ["kit_privacy"]);
+        assert_eq!(ids("privacy"), ["kit_privacy"]);
+        assert_eq!(ids("the changes list"), ["changes"]);
+        assert!(ids("the weather").is_empty());
+        assert!(called("kit_hearing", "hearing log") && called("kit_privacy", "the privacy board") && !called("kit_privacy", "board"));
+        forget("kit_privacy");
+        forget("changes");
+        begin_frame();
+        begin_frame();
+    }
+
     #[test]
     fn a_block_glides_to_the_size_of_what_it_shows() {
         use super::{fitted_rect, MIN_BLOCK};
