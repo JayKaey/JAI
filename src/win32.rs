@@ -390,7 +390,21 @@ pub fn attach_behind_desktop_icons(hwnd: isize, [left, top, right, bottom]: [i32
             let style = GetWindowLongPtrW(HWND(hwnd), GWL_EXSTYLE);
             SetWindowLongPtrW(HWND(hwnd), GWL_EXSTYLE, style | (WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE).0 as isize);
             SetLayeredWindowAttributes(HWND(hwnd), COLORREF(0), 255, LWA_ALPHA).map_err(|e| format!("the window could not be made a layered one: {}", e.message()))?;
-            return SetWindowPos(HWND(hwnd), icons, left - origin.left, top - origin.top, right - left, bottom - top, SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_FRAMECHANGED).map_err(|e| e.message().to_string());
+            SetWindowPos(HWND(hwnd), icons, left - origin.left, top - origin.top, right - left, bottom - top, SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_FRAMECHANGED).map_err(|e| e.message().to_string())?;
+            // Its new surface starts out dark, not white: until his first frame reaches it (and
+            // when the desktop is uncovered before one does) there is no white flash. (Seen
+            // 2026-11-13 with every monitor covered by a maximised window: the desktop, asked
+            // to print itself, showed white where the background's window stood.)
+            {
+                use windows::Win32::Graphics::Gdi::{FillRect, GetDC, GetStockObject, ReleaseDC, BLACK_BRUSH, HBRUSH};
+                let dc = GetDC(HWND(hwnd));
+                if !dc.is_invalid() {
+                    let area = RECT { left: 0, top: 0, right: right - left, bottom: bottom - top };
+                    FillRect(dc, &area, HBRUSH(GetStockObject(BLACK_BRUSH).0));
+                    ReleaseDC(HWND(hwnd), dc);
+                }
+            }
+            return Ok(());
         }
         let mut worker = HWND(0);
         let _ = EnumWindows(Some(layer), LPARAM(&mut worker as *mut HWND as isize));
