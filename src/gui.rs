@@ -5344,7 +5344,7 @@ impl HudApp {
             .order(egui::Order::Middle)
             .show(ctx, |ui| {
                 ui.set_width(SYSTEM_COLUMN);
-                egui::ScrollArea::vertical().max_height(screen.height() - top - 90.0).auto_shrink([false, true]).show(ui, |ui| {
+                column_scroll(ui, screen.height() - top - 90.0, |ui| {
                     for card in &power {
                         sharp_block(ui, "SYSTEM POWER // CONFIRMATION", "PENDING", |ui| self.power_card(ui, &p, card));
                     }
@@ -5378,6 +5378,8 @@ impl HudApp {
             .order(egui::Order::Foreground)
             .show(ctx, |ui| {
                 ui.set_width(size.x);
+                // (An area hands on only the height it had before: `column_scroll`.)
+                ui.set_max_height(size.y + 120.0);
                 sharp_block(ui, "HISTORY // CONVERSATION & REPORTS", "[ CLOSE ]", |ui| {
                     if ui.add(egui::Button::new(RichText::new("[ CLOSE ]").font(strip_font()).color(STRIP_MUTED)).frame(false)).clicked() {
                         close = true;
@@ -7998,6 +8000,38 @@ fn short_type_upper(spec: &crate::widgets::DynamicWidgetSpec) -> &'static str {
     widget_view::short_type_upper(&spec.kind)
 }
 
+/// The scroll area of a column of blocks: as tall as its blocks, up to `room`. (An area hands
+/// its content the height it had the frame before, 400 px to begin with, and a scroll area
+/// takes no more than it is handed: left to itself the column could only ever shrink, and a
+/// long note was cut off half-way with no lower edge. Sir, 2026-11-13, of the briefing's
+/// widget: "this window's border is still broken".) Where the blocks are taller than the
+/// screen has room for, the cut edge fades out: a block that goes on below is not one that
+/// lost its frame.
+fn column_scroll(ui: &mut Ui, room: f32, blocks: impl FnOnce(&mut Ui)) {
+    let room = room.max(120.0);
+    ui.set_max_height(room);
+    let out = egui::ScrollArea::vertical().max_height(room).auto_shrink([false, true]).show(ui, blocks);
+    let (view, above) = (out.inner_rect, out.state.offset.y);
+    let below = out.content_size.y - view.height() - above;
+    let fade = |edge: Rect, solid_at_bottom: bool| {
+        let (top, bottom) = if solid_at_bottom { (Color32::TRANSPARENT, OBSIDIAN) } else { (OBSIDIAN, Color32::TRANSPARENT) };
+        let mut mesh = egui::Mesh::default();
+        for (at, colour) in [(edge.left_top(), top), (edge.right_top(), top), (edge.left_bottom(), bottom), (edge.right_bottom(), bottom)] {
+            mesh.colored_vertex(at, colour);
+        }
+        mesh.add_triangle(0, 1, 2);
+        mesh.add_triangle(1, 2, 3);
+        ui.painter().add(egui::Shape::mesh(mesh));
+    };
+    const FADE: f32 = 34.0;
+    if below > 1.0 {
+        fade(Rect::from_min_max(pos2(view.left() - 2.0, view.bottom() - FADE), pos2(view.right() + 2.0, view.bottom() + 1.0)), true);
+    }
+    if above > 1.0 {
+        fade(Rect::from_min_max(pos2(view.left() - 2.0, view.top() - 1.0), pos2(view.right() + 2.0, view.top() + FADE)), false);
+    }
+}
+
 fn sharp_block<R>(ui: &mut Ui, label: &str, tag: &str, body: impl FnOnce(&mut Ui) -> R) -> R {
     // (The frame every block wears, `hud_style`: its surface goes behind the content once the
     // content has said how tall it is.)
@@ -8523,6 +8557,46 @@ mod tests {
         });
         crate::kit_insight::open_for_picture(false);
         crate::hud_dock::forget(crate::kit_voice::HEARING);
+    }
+
+    /// The column of system blocks as the HUD lays it out (`system_column`): a long note and a
+    /// short one, where everything fits and where it is taller than the screen.
+    #[test]
+    fn gallery_system_column() {
+        let _g = crate::hud_dock::test_lock();
+        let lines = [
+            "Afternoon briefing: Friday 13 November, 14:49",
+            "School (today)",
+            "• 08:00 - 09:30: Physics (Room 12)",
+            "• 09:45 - 12:00: Lesson [SUBSTITUTION / ROOM CHANGE], note: Assembly Hall / Assembly Hall / Assembly Hall",
+            "• 09:45 - 11:15: German, basic course (Room 14) [CANCELLED]",
+            "• 11:30 - 12:15: Art, basic course (Room 21) [CANCELLED]",
+            "• 12:20 - 13:05: Art, basic course (Room 21)",
+            "itslearning",
+            "• Unavailable: signed in through the school's single sign-on, but the course data refused the session: it has to be opened in the browser once.",
+            "Calendar",
+            "• Nothing else today.",
+        ];
+        for (name, height) in [("gallery_system_column_fits", 900.0), ("gallery_system_column_tall", 420.0)] {
+            gallery(name, vec2(700.0, height), 6, |ctx| {
+                let screen = ctx.screen_rect();
+                let top = screen.top() + 12.0 + HEADER_H + 14.0;
+                egui::Area::new(egui::Id::new("hud_system_column")).default_pos(pos2(screen.left() + 24.0, top)).order(egui::Order::Middle).show(ctx, |ui| {
+                    ui.set_width(SYSTEM_COLUMN);
+                    column_scroll(ui, screen.height() - top - 90.0, |ui| {
+                        sharp_block(ui, "WIDGET // DAILY BRIEFING SUMMARY", "NOTE", |ui| {
+                            for line in lines {
+                                ui.add(egui::Label::new(RichText::new(line).size(13.5).color(STRIP_INK)).wrap());
+                                ui.add_space(4.0);
+                            }
+                        });
+                        sharp_block(ui, "WIDGET // A SHORT ONE", "NOTE", |ui| {
+                            ui.label(RichText::new("One line.").size(13.5).color(STRIP_INK));
+                        });
+                    });
+                });
+            });
+        }
     }
 
     #[test]
