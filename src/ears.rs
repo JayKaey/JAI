@@ -161,7 +161,7 @@ const THIRD_PERSON: &[&str] = &["he", "hes", "she", "shes", "they", "theyre", "h
 /// A request the fast path, the integration router or the layout parser recognises: clearly
 /// meant for JAI, even over a game.
 pub fn known_command(text: &str) -> bool {
-    crate::intents::parse(text).is_some()
+    crate::intents::parse_as_said(text).is_some()
         || crate::intents::ui_layout_command(text).is_some()
         || crate::integration_router::route_text(text).is_some()
         || crate::integration_router::calendar_creation_intent(text)
@@ -171,6 +171,12 @@ pub fn known_command(text: &str) -> bool {
         || crate::intents::is_memory_command(text)
         || is_homecoming_phrase(text)
         || music_request(text)
+}
+
+/// A request he knows in the words it was written for, or said another way (`ways`). (Over a
+/// game only the first counts: `classify_addressee`.)
+pub fn his_order(text: &str) -> bool {
+    known_command(text) || crate::brain::another_way(text).is_some()
 }
 
 /// "Play Highway to Hell", "spiel Back in Black": a play verb and something to play.
@@ -235,7 +241,7 @@ pub fn classify_addressee(text: &str, ctx: &AddresseeContext) -> Addressee {
         // His window in front makes a sentence his to hear, but not every word in the room:
         // a fragment, a callout or talk about a third person ("he said he'd come later") that
         // is no order he knows, no question and no address stays with whoever it was for.
-        let for_someone_else = !ctx.conversation_open && !known_command(text) && !direct_intent(text) && looks_like_chatter(text);
+        let for_someone_else = !ctx.conversation_open && !his_order(text) && !direct_intent(text) && looks_like_chatter(text);
         return if for_someone_else { Addressee::Chatter } else { Addressee::Focus };
     }
     if bare_window_word(text) && !ctx.conversation_open {
@@ -262,7 +268,7 @@ pub fn classify_addressee(text: &str, ctx: &AddresseeContext) -> Addressee {
     if by_name_only {
         return Addressee::Unaddressed;
     }
-    if known_command(text) || direct_intent(text) {
+    if his_order(text) || direct_intent(text) {
         return Addressee::DirectIntent;
     }
     if !ctx.wake_required {

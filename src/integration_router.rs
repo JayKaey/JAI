@@ -309,7 +309,8 @@ pub fn route_text(text: &str) -> Option<Route> {
         return route("check_whatsapp_messages", json!({ "unread_only": !lower.contains("recent") && !lower.contains("last") }), Mode::Phrase);
     }
     let mail = fuzzy_has(&ws, &["email", "emails", "e-mail", "e-mails", "mail", "mails", "inbox", "posteingang", "gmail"]);
-    if mail && !sending && (asks || fuzzy_has(&ws, &["new", "unread", "neue", "ungelesene"])) && !lower.contains("summar") {
+    // ("Give me the main points" has no mail in it: "main" only sounds like one.)
+    if mail && !sending && (asks || fuzzy_has(&ws, &["new", "unread", "neue", "ungelesene"])) && !lower.contains("summar") && !lower.contains("main point") {
         return route("check_unread_emails", json!({ "limit": 5 }), Mode::Phrase);
     }
     if has_phrase(&lower, &["all my messages", "any messages", "any new messages", "check my messages", "neue nachrichten", "all communications", "everything new"]) && !sending {

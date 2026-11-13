@@ -113,6 +113,7 @@ pub const RELEASES: &[Release] = &[
             new("The changes list", "This list, with an explanation window for every feature.", "changes"),
             better_see("The voice lock learns your voice", "It grows with every sentence that is yours and no longer turns you away.", "voice_lock"),
             better_see("His ear for your words", "He learns how your words arrive and puts them right before acting.", "ear"),
+            better("Orders in your own words", "One order, many wordings: \"I need the mixer\", \"mach das Diktat an\", \"it's too bright\"."),
             better("A second, careful hearing", "An order that leads nowhere is listened to again, slower and wider."),
             better("Your name for him as it arrives", "\"They open the mixer\" in your own voice is an order for him."),
             better("Guest mode", "\"Let my friend speak for half an hour\": he answers to anyone for a while."),

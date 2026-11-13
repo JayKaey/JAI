@@ -69,6 +69,7 @@ mod discord_bridge;
 mod discord_bot;
 mod discord_voice;
 mod wave_link;
+mod ways;
 mod dsp;
 mod dynamic_popups;
 mod ear;
@@ -153,6 +154,8 @@ mod omni_inbox;
 mod persona;
 mod phonemizer;
 mod photo3d;
+#[cfg(test)]
+mod phrasings;
 mod pim;
 mod pim_config;
 mod plain_errors;

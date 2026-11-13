@@ -50,6 +50,11 @@ static READING: Mutex<Vec<String>> = Mutex::new(Vec::new());
 const PART: usize = 900;
 
 /// Text in parts of about `PART` characters, each ending with a sentence.
+/// Whether a reading is under way with more of it to come ("the rest" then means its rest).
+pub fn reading_pending() -> bool {
+    !lock(&READING).is_empty()
+}
+
 pub fn parts(text: &str) -> Vec<String> {
     let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
     let mut out: Vec<String> = Vec::new();
@@ -160,10 +165,11 @@ pub fn selection_ask(s: &str) -> Option<String> {
 
 /// A request about Sir's selection, made whole: the instruction and the selected text, for the
 /// language model. `Err`: nothing is selected (what he says then). None: no such request.
-pub async fn about_selection(ctx: &ToolContext, text: &str) -> Option<Result<(String, String), String>> {
+/// (`another`: what the request asks when it was made in other words, `ways`.)
+pub async fn about_selection(ctx: &ToolContext, text: &str, another: Option<String>) -> Option<Result<(String, String), String>> {
     let said = crate::ear::words(text).join(" ");
     let said = said.trim_start_matches("jai ").trim_start_matches("jay ");
-    let ask = selection_ask(said)?;
+    let ask = selection_ask(said).or(another)?;
     Some(match selected(ctx).await {
         Ok(Some(selection)) => {
             tracing::info!("[SELECTION] '{}' about {} selected characters", text.trim(), selection.chars().count());

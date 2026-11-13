@@ -1031,10 +1031,21 @@ impl Brain {
         // (Sir's own words stay what is routed. The selection is someone else's text and may
         // say anything: the language model reads it alone, with no tools and outside the
         // conversation, and what comes back is his answer.)
+        // The same order said another way ("could you kill that sleep timer"): found once, for
+        // the selection and for the fast path below. (What Sir taught as a trigger is his order
+        // as it stands, and an answer in an oral exam is an answer.)
+        let reworded: Option<(String, Fast)> = another_way(&text).filter(|_| {
+            let stark = &self.inner.tools.stark;
+            stark.macros.match_trigger(&text).is_none() && !(crate::exam_coach::route_answer(&stark.features.exam, &text).is_some() && !is_command_not_answer(&text))
+        });
+        let asked_another_way = match &reworded {
+            Some((_, Fast::Selection(ask))) => Some(ask.clone()),
+            _ => None,
+        };
         let selection_answer: Option<String> = if crate::live_self_tester::dry() {
             None
         } else {
-            match crate::kit_voice::about_selection(&self.inner.tools, &text).await {
+            match crate::kit_voice::about_selection(&self.inner.tools, &text, asked_another_way).await {
                 Some(Ok((ask, selection))) => Some(match one_shot(&self.inner.llm, &self.inner.config.snapshot(), &ask, &selection, 600).await {
                     Some(answer) => answer,
                     None => "I could not put that into words just now, Sir: my language model is not answering.".to_string(),
@@ -1137,6 +1148,20 @@ impl Brain {
             // pronunciation", "forget how I speak": his ear, taught and asked in so many words.
             self.inner.tools.focus.clear_offer();
             Some(Intent::Answer(if dry { "Understood, Sir.".to_string() } else { crate::ear::command(&text).unwrap_or_else(|| "Understood, Sir.".to_string()) }))
+        } else if let Some((wording, found)) = reworded {
+            // "Could you kill that sleep timer", "mach das Diktat an", "it's way too bright":
+            // an order he knows, said another way (`ways`). It is carried out as the wording
+            // it was written for is.
+            self.inner.tools.focus.clear_offer();
+            info!("[WAYS] '{text}' is '{wording}'");
+            match found {
+                Fast::Intent(intent) => Some(intent),
+                Fast::Route(route) => {
+                    routed = Some(route);
+                    None
+                }
+                Fast::Selection(_) | Fast::Other => None,
+            }
         } else if let Some(intent) = intents::outing_command(&text) {
             // "Where can I take my fiancée for a Halloween night?" → JAI picks the venue and
             // maps it; "let's go here" → the route. Before the location rules ("where …").
@@ -3631,7 +3656,7 @@ Your previous tool failed its test run: {}. Fix it.", outcome.output);
 /// yourself", "pause", "open Spotify"): those still run (a calculation stays an answer).
 fn is_command_not_answer(text: &str) -> bool {
     intents::silent_quick_command(text).is_some()
-        || matches!(intents::parse(text), Some(Intent::Stop | Intent::Tool { .. } | Intent::Silent(_)))
+        || matches!(intents::parse_as_said(text), Some(Intent::Stop | Intent::Tool { .. } | Intent::Silent(_)))
         || matches!(intents::resolve_fuzzy(text), Some(Intent::Tool { name: "shutdown_jai" | "control_jai_lifecycle", .. }))
 }
 
@@ -3666,6 +3691,184 @@ fn skill_name_from(text: &str) -> String {
 }
 
 /// Route tools that run on the fast path (names as `'static` for `Intent::Tool`).
+/// What the fast path makes of a sentence without the language model (`fast_as_said`).
+pub(crate) enum Fast {
+    /// An order, carried out as it is.
+    Intent(Intent),
+    /// A read the language model phrases, or one read out as it stands.
+    Route(Route),
+    /// A request about the text he has selected: what it asks of that text.
+    Selection(String),
+    /// Understood by something that is no order with a tool of its own (a cancel, his ear, the
+    /// privacy lock, a reply mode).
+    Other,
+}
+
+impl Fast {
+    /// The weakest reading there is: a rule that takes any words for a name.
+    pub(crate) fn takes_any_name(&self) -> bool {
+        matches!(self, Fast::Intent(intent) if intents::takes_any_name(intent))
+    }
+}
+
+/// Where a sentence goes on the fast path as it was said: the routers that need nothing of the
+/// conversation, in the order `Brain::run_turn` asks them. (A router added there belongs here
+/// too: `another_way` decides by this whether a sentence is understood as it stands.)
+pub(crate) fn fast_as_said(text: &str) -> Option<Fast> {
+    fast_before_the_parser(text).or_else(|| intents::parse_as_said(text).map(Fast::Intent))
+}
+
+/// The routers `Brain::run_turn` asks before the parser, in its order.
+fn fast_before_the_parser(text: &str) -> Option<Fast> {
+    let tool = |name: &'static str, args: Value| Some(Fast::Intent(Intent::Tool { name, args }));
+    let said = crate::ear::words(text).join(" ");
+    if let Some(ask) = crate::kit_voice::selection_ask(said.trim_start_matches("jai ").trim_start_matches("jay ")) {
+        return Some(Fast::Selection(ask));
+    }
+    match crate::intent_engine::route(text, &crate::intent_engine::ReflexContext::live()).map(|routed| routed.reflex) {
+        Some(crate::intent_engine::Reflex::Silent(action)) => return Some(Fast::Intent(Intent::Silent(action))),
+        Some(crate::intent_engine::Reflex::Privacy(_)) => return Some(Fast::Other),
+        None => {}
+    }
+    if let Some(action) = crate::intent_engine::deterministic_action(text) {
+        return tool(
+            match action {
+                crate::intent_engine::IntentAction::CloseSecondaryWindows => "close_all_secondary_windows",
+                crate::intent_engine::IntentAction::ExitJaiApplication => "shutdown_jai",
+            },
+            json!({}),
+        );
+    }
+    if crate::intent_engine::is_cancel(text) || crate::ear::about_his_words(text) {
+        return Some(Fast::Other);
+    }
+    if let Some(intent) = intents::outing_command(text).or_else(|| intents::hud_view_command(text)) {
+        return Some(Fast::Intent(intent));
+    }
+    if let Some(topic) = crate::intent_engine::knowledge_workspace_topic(text) {
+        return tool("spawn_topic_knowledge_workspace", json!({ "topic": topic }));
+    }
+    if let Some(args) = crate::oled_minimal_ui::voice_command(text) {
+        return tool("configure_interface", args);
+    }
+    if let Some(args) = crate::dynamic_popups::voice_command(text) {
+        return tool("control_popups", args);
+    }
+    if let Some(action) = intents::silent_quick_command(text) {
+        return Some(Fast::Intent(Intent::Silent(action)));
+    }
+    if let Some((spec, args)) = crate::tool_forge::forge().and_then(|f| f.match_utterance(text)) {
+        return tool("run_forged_tool", json!({ "name": spec.name, "args": args }));
+    }
+    if crate::ears::is_homecoming_phrase(text) {
+        return tool("control_music", json!({ "action": "welcome_home" }));
+    }
+    if let Some(args) = intents::orb_mode_command(text) {
+        return tool("control_orb_mode", args);
+    }
+    if let Some(args) = intents::listening_mode_command(text) {
+        return tool("set_listening_mode", args);
+    }
+    if let Some(args) = intents::mixer_command(text) {
+        return tool("control_audio_mixer", args);
+    }
+    if let Some(topic) = integration_router::capability_topic(text) {
+        return tool("list_jai_features", json!({ "topic": topic }));
+    }
+    if let Some(intent) = precision_music_intent(text) {
+        return Some(Fast::Intent(intent));
+    }
+    if let Some(line) = crate::simulation_lab::quick_physics_answer(text) {
+        return Some(Fast::Intent(Intent::Answer(line)));
+    }
+    if let Some(args) = intents::internal_view_command(text) {
+        return tool("open_jai_view", args);
+    }
+    if let Some(args) = intents::ui_layout_command(text) {
+        return tool("control_jai_interface", args);
+    }
+    if modality::parse_command(text).is_some() {
+        return Some(Fast::Other);
+    }
+    if let Some(route) = crate::features::route_text(text).or_else(|| integration_router::route_text(text)).filter(|route| crate::compound_planner::route_allowed(text, route.tool)) {
+        return Some(match (route.mode, static_route_tool(route.tool)) {
+            (RouteMode::Act, Some(name)) => Fast::Intent(Intent::Tool { name, args: route.args }),
+            _ => Fast::Route(route),
+        });
+    }
+    None
+}
+
+thread_local! {
+    /// Set while `another_way` is at work on this thread: the routers it asks may ask the
+    /// parser, which asks it.
+    static REWORDING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// The sentences of the last moments that were no order said another way (and whether a
+    /// coach, a reading or a dictation was going on): one turn asks about the same sentence
+    /// several times (who it is for, whether it is an order, the fast path itself). Moments
+    /// only: what he keeps (a snippet, a layout) may make the same words an order next time.
+    static NOT_ANOTHER_WAY: std::cell::RefCell<Vec<(String, u8, Instant)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// What a sentence's reading may hang on besides its words (`ways`: "that's enough" means the
+/// coach only while he coaches).
+fn going_on() -> u8 {
+    u8::from(crate::kit_voice::coach_active()) | u8::from(crate::kit_voice::reading_pending()) << 1 | u8::from(crate::kit_typing::dictating()) << 2
+}
+
+/// The same order said another way ("could you kill that sleep timer", "mach das Diktat an",
+/// "it's way too bright"): the wording it was written for, and where that leads. None for a
+/// sentence the fast path understands as it stands (by anything but a rule that takes any
+/// words for a name), and for one that is no order said another way (`ways`).
+pub(crate) fn another_way(text: &str) -> Option<(String, Fast)> {
+    another_way_knowing(text, None)
+}
+
+/// (`parsed`: what the parser made of the sentence as it stands, where the caller has asked it
+/// already: it is the costliest router to ask twice.)
+pub(crate) fn another_way_knowing(text: &str, parsed: Option<&Option<Intent>>) -> Option<(String, Fast)> {
+    if REWORDING.with(|inside| inside.replace(true)) {
+        return None;
+    }
+    let now = going_on();
+    if !cfg!(test) && NOT_ANOTHER_WAY.with(|known| known.borrow().iter().any(|(said, then, at)| said == text && *then == now && at.elapsed() < Duration::from_secs(2))) {
+        REWORDING.with(|inside| inside.set(false));
+        return None;
+    }
+    let found = (|| {
+        let wordings = crate::ways::wordings(&intents::normalize_phrase(text), text);
+        if wordings.is_empty() {
+            return None;
+        }
+        let understood = match fast_before_the_parser(text) {
+            Some(found) => !found.takes_any_name(),
+            None => match parsed {
+                Some(known) => known.as_ref().is_some_and(|intent| !intents::takes_any_name(intent)),
+                None => intents::parse_as_said(text).is_some_and(|intent| !intents::takes_any_name(&intent)),
+            },
+        };
+        if understood {
+            return None;
+        }
+        wordings.into_iter().find_map(|wording| match fast_as_said(&wording) {
+            Some(Fast::Other) | None => None,
+            Some(found) => Some((wording, found)),
+        })
+    })();
+    REWORDING.with(|inside| inside.set(false));
+    if found.is_none() {
+        NOT_ANOTHER_WAY.with(|known| {
+            let mut known = known.borrow_mut();
+            known.retain(|(said, _, _)| said != text);
+            known.push((text.to_string(), now, Instant::now()));
+            if known.len() > 4 {
+                known.remove(0);
+            }
+        });
+    }
+    found
+}
+
 fn static_route_tool(name: &str) -> Option<&'static str> {
     const NAMES: &[&str] = &["show_mobile_satellite_instructions", "create_calendar_event", "manage_deep_research"];
     NAMES.iter().copied().find(|n| *n == name).or_else(|| crate::features::static_name(name))
@@ -3688,7 +3891,7 @@ fn precision_music_intent(text: &str) -> Option<Intent> {
         }
         return Some(Intent::Tool { name: "control_music", args });
     }
-    if let Some(intent @ Intent::Tool { name: "control_music", .. }) = intents::parse(text) { return Some(intent); }
+    if let Some(intent @ Intent::Tool { name: "control_music", .. }) = intents::parse_as_said(text) { return Some(intent); }
     static PLAY: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(
         r"^(?:play|spiel|spiele|put on)\s+(?:the song\s+|the track\s+|das lied\s+)?(.+?)(?:\s+(?:on|auf|in)\s+(spotify|sonora))?$"
     ).expect("music request expression"));

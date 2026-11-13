@@ -4451,6 +4451,7 @@ fn placed_by_sir(mut args: Value, request: &str) -> Value {
 pub fn warm_up() {
     crate::music::warm_up();
     let _ = parse("warm up the parser");
+    crate::ways::warm_up();
     let _ = crate::typos::normalize_user_input_typos("warm up your core");
     let _ = crate::intent_engine::deterministic_action("warm up the windows");
     let _ = resolve_fuzzy("warm up the fuzzy parser and open it");
@@ -4471,7 +4472,42 @@ fn ultron_retired(s: &str) -> Option<Intent> {
     ULTRON.is_match(s).then(|| Intent::Answer("Ultron mode has been retired, Sir.".to_string()))
 }
 
+/// An order in Sir's words: by the fast path's own rules, and where those do not know it (or
+/// know it only as the name of an app or a window: "start the dictation" was an app called
+/// "dictation"), the same order said another way (`ways`).
 pub fn parse(text: &str) -> Option<Intent> {
+    let direct = parse_as_said(text);
+    if direct.as_ref().is_some_and(|found| !takes_any_name(found)) {
+        return direct;
+    }
+    match crate::brain::another_way_knowing(text, Some(&direct)) {
+        Some((_, crate::brain::Fast::Intent(intent))) => Some(intent),
+        _ => direct,
+    }
+}
+
+/// Whether an order comes from a rule that takes whatever words follow for the name of an app,
+/// a window, a widget or a thing to look for: the weakest reading a sentence can have, and the
+/// only one another way of saying an order may take the place of.
+pub fn takes_any_name(intent: &Intent) -> bool {
+    let (tool, args) = match intent {
+        Intent::Tool { name, args } => (*name, args),
+        Intent::Silent(action) => (action.tool, &action.args),
+        _ => return false,
+    };
+    match tool {
+        "open_application" | "close_application" | "find_files" | "remove_widget" => true,
+        "window_management" => args.get("target_window").is_some(),
+        "create_or_update_widget" => args.get("remove_item").is_some() || args.get("add_item").is_some(),
+        "hud_board" => args["action"] == "research",
+        // ("Can you turn the music back on?" was taken for a question about what he can do.)
+        "list_jai_features" => args["topic"] != "all",
+        _ => false,
+    }
+}
+
+/// An order in Sir's words as they stand, by the fast path's own rules.
+pub fn parse_as_said(text: &str) -> Option<Intent> {
     if let Some(line) = courtesy(text) {
         return Some(Intent::Answer(line.to_string()));
     }

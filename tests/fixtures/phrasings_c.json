@@ -1,0 +1,678 @@
+{
+  "dev": {
+    "app.open": [
+      "fire up Spotify",
+      "could you start Spotify for me",
+      "I want to open Spotify",
+      "can you open up Spotify?",
+      "start Spotify",
+      "okay so, get Spotify running",
+      "mach Spotify auf",
+      "kannst du mal Spotify starten",
+      "Spotify öffnen"
+    ],
+    "app.close": [
+      "shut Spotify down",
+      "would you close Spotify please",
+      "I want Spotify closed",
+      "can you kill Spotify?",
+      "exit Spotify",
+      "uh, I'm done with Spotify, close it",
+      "mach Spotify zu",
+      "ich brauch Spotify nicht mehr, schließ das mal",
+      "Spotify beenden"
+    ],
+    "app.switch": [
+      "go to Spotify",
+      "could you bring Spotify to the front",
+      "I want Spotify in the foreground",
+      "can you switch over to the Spotify window?",
+      "Spotify to the front",
+      "okay, jump to Spotify",
+      "wechsel zu Spotify",
+      "kannst du Spotify nach vorne holen",
+      "geh mal auf Spotify"
+    ],
+    "vol.up": [
+      "make it louder",
+      "could you turn the volume up a bit",
+      "I need it a little louder",
+      "can you raise the volume?",
+      "louder",
+      "um, turn it up a little",
+      "mach lauter",
+      "kannst du ein bisschen lauter machen",
+      "Lautstärke hoch"
+    ],
+    "vol.down": [
+      "lower the volume",
+      "would you mind turning it down a little",
+      "I want it a bit quieter",
+      "can you make it quieter?",
+      "turn it down",
+      "okay that's too loud, turn the volume down",
+      "mach mal leiser",
+      "könntest du die Lautstärke runterdrehen",
+      "leiser bitte"
+    ],
+    "vol.set": [
+      "put the volume at 30 percent",
+      "could you turn the volume to 30 percent",
+      "I want the sound on 30 percent",
+      "can I get the volume at 30 percent?",
+      "volume 30 percent",
+      "okay so, make the volume 30 percent",
+      "dreh die Lautstärke auf 30 Prozent",
+      "kannst du die Lautstärke auf 30 Prozent stellen",
+      "Lautstärke auf 30 Prozent"
+    ],
+    "vol.mute": [
+      "mute the sound",
+      "please mute the audio",
+      "I want the PC muted",
+      "can you turn the sound off?",
+      "sound off",
+      "uh, mute everything",
+      "mach den Ton aus",
+      "kannst du den Sound stummschalten",
+      "stumm"
+    ],
+    "music.pause": [
+      "pause the track",
+      "could you pause the music for a sec",
+      "I want the music to stop for a second",
+      "can you pause what's playing?",
+      "stop the music",
+      "wait, put the song on pause",
+      "warte, stopp die Musik",
+      "kannst du die Musik kurz pausieren",
+      "Musik Pause"
+    ],
+    "music.resume": [
+      "play the music again",
+      "could you unpause the music",
+      "I'd like the music to continue",
+      "can you turn the music back on?",
+      "unpause",
+      "okay, you can keep playing now",
+      "mach die Musik wieder an",
+      "die Musik kann weiterlaufen",
+      "Musik weiter"
+    ],
+    "music.next": [
+      "skip this song",
+      "would you mind skipping this one",
+      "I want the next one",
+      "can you jump to the next track?",
+      "skip",
+      "alright, go to the next song",
+      "nächstes Lied",
+      "kannst du das Lied überspringen",
+      "mach das nächste Lied an"
+    ],
+    "music.previous": [
+      "go back a song",
+      "could you put the last song back on",
+      "I want the song before this one",
+      "can you play the previous one again?",
+      "previous track",
+      "uh, back to the song before",
+      "vorheriges Lied",
+      "geh mal ein Lied zurück",
+      "ich will das Lied davor nochmal hören"
+    ],
+    "music.what": [
+      "tell me what song this is",
+      "could you tell me which song is on right now",
+      "I want to know what this song is called",
+      "what am I listening to?",
+      "what's this song",
+      "um, which track is this",
+      "was läuft gerade",
+      "kannst du mir sagen welches Lied das ist",
+      "wie heißt das Lied"
+    ],
+    "time": [
+      "tell me the time",
+      "could you check the time for me",
+      "I need to know the time",
+      "do you know what time it is?",
+      "the time please",
+      "uh, what's the time right now",
+      "wie spät ist es",
+      "kannst du mir sagen wie viel Uhr es ist",
+      "Uhrzeit"
+    ],
+    "win.minimize_all": [
+      "show the desktop",
+      "would you minimize all my windows",
+      "I want to see my desktop",
+      "can you hide all the windows?",
+      "minimize all",
+      "okay, get all the windows out of the way",
+      "minimier alles",
+      "kannst du alle Fenster minimieren",
+      "zeig den Desktop"
+    ],
+    "win.snap_left": [
+      "put Chrome on the left side",
+      "could you snap Chrome to the left half of the screen",
+      "I want Chrome on the left half",
+      "can you dock Chrome on the left?",
+      "Chrome to the left",
+      "okay so, move Chrome over to the left side of the screen",
+      "schieb Chrome nach links",
+      "kannst du Chrome auf die linke Hälfte packen",
+      "Chrome links andocken"
+    ],
+    "view.stats": [
+      "show me the system stats",
+      "could you pull up my PC stats",
+      "I wanna see my system stats",
+      "can I see the system statistics?",
+      "system stats",
+      "so, bring up the stats panel",
+      "mach die Systemstatistik auf",
+      "ich will meine System Stats sehen",
+      "Systemstatistiken anzeigen"
+    ],
+    "view.settings": [
+      "show me the settings",
+      "would you open up your settings",
+      "I need to get into the settings",
+      "can I see the settings?",
+      "settings",
+      "um, bring up the settings menu",
+      "öffne die Einstellungen",
+      "kannst du mal die Einstellungen aufmachen",
+      "Einstellungen"
+    ],
+    "view.mixer": [
+      "show me the mixer",
+      "could you open the audio mixer",
+      "I need the mixer",
+      "can I get the audio mixer?",
+      "mixer please",
+      "hey, pull up the sound mixer",
+      "öffne den Mixer",
+      "ich brauch den Mixer",
+      "Mixer anzeigen"
+    ],
+    "view.console": [
+      "show me the text console",
+      "would you open the console please",
+      "I want to type something, open the console",
+      "can I get the text console?",
+      "text console",
+      "uh, bring up the text console",
+      "öffne die Textkonsole",
+      "kannst du mal die Textkonsole aufmachen",
+      "Konsole öffnen"
+    ],
+    "theme": [
+      "switch the theme to Arc Cyan",
+      "could you set your theme to Arc Cyan",
+      "I want the Arc Cyan theme",
+      "can you use the Arc Cyan theme?",
+      "theme Arc Cyan",
+      "okay so, change your color scheme to Arc Cyan",
+      "stell das Theme auf Arc Cyan",
+      "kannst du das Theme zu Arc Cyan ändern",
+      "Theme auf Arc Cyan"
+    ],
+    "protocol.run": [
+      "run the study protocol",
+      "would you start the study protocol please",
+      "I need the study protocol",
+      "can you activate my study protocol?",
+      "study protocol",
+      "alright, launch the study protocol now",
+      "okay, starte das study Protokoll",
+      "ich brauch jetzt das study Protokoll",
+      "study Protokoll aktivieren"
+    ],
+    "system.status": [
+      "give me a status report",
+      "could you tell me how the system is doing",
+      "I want to know how my PC is doing",
+      "how's the PC doing?",
+      "status report",
+      "so, how is the system running right now",
+      "wie geht's dem PC",
+      "kannst du mir sagen wie das System läuft",
+      "Systemstatus"
+    ],
+    "features": [
+      "tell me what you can do",
+      "could you show me a list of your features",
+      "I want to know what you're able to do",
+      "which features do you have?",
+      "what can you do",
+      "okay so, what are your features",
+      "was kannst du alles",
+      "zähl mal deine Funktionen auf",
+      "welche Features hast du"
+    ],
+    "windows.close": [
+      "close everything you opened",
+      "do me a favor and close all the panels you opened",
+      "I want your windows closed",
+      "can you close your windows again?",
+      "close your windows",
+      "okay, get rid of the stuff you opened",
+      "schließ die Fenster die du aufgemacht hast",
+      "kannst du deine Fenster wieder zumachen",
+      "mach deine Panels zu"
+    ],
+    "hud.calm": [
+      "go into calm mode",
+      "could you switch the HUD to calm mode",
+      "I want it calmer, hide the readouts",
+      "can you turn calm mode on?",
+      "calm mode please",
+      "um, make the interface calmer",
+      "geh in den Calm Mode",
+      "kannst du den ruhigen Modus anmachen",
+      "Calm Mode an"
+    ],
+    "hud.mini": [
+      "switch to mini mode",
+      "would you shrink down to the small strip",
+      "I want you in mini mode",
+      "can you go mini?",
+      "mini mode on",
+      "uh, make yourself small",
+      "geh in den Mini Modus",
+      "kannst du dich klein machen",
+      "Mini Mode an"
+    ],
+    "subs.on": [
+      "turn on subtitles",
+      "could you switch on the live subtitles",
+      "I want subtitles",
+      "can I get subtitles?",
+      "subtitles please",
+      "hey, turn on the live captions",
+      "mach die Untertitel an",
+      "ich will Untertitel haben",
+      "Untertitel an"
+    ],
+    "lyrics.on": [
+      "pull up the lyrics",
+      "would you show me the lyrics to this song",
+      "I'd like to see the lyrics",
+      "can I see the lyrics?",
+      "lyrics on",
+      "uh, put the lyrics on screen",
+      "zeig mir den Songtext",
+      "kannst du die Lyrics anzeigen",
+      "Lyrics an"
+    ],
+    "image": [
+      "pull up a photo of the Eiffel Tower",
+      "could you show me an image of the Eiffel Tower",
+      "I want to see a picture of the Eiffel Tower",
+      "can I see a photo of the Eiffel Tower?",
+      "picture of the Eiffel Tower",
+      "um, find me a pic of the Eiffel Tower",
+      "zeig mir ein Bild vom Eiffelturm",
+      "kannst du mir ein Foto vom Eiffelturm zeigen",
+      "Bild vom Eiffelturm"
+    ],
+    "undo": [
+      "take that back",
+      "would you undo what you just did",
+      "I want that undone",
+      "can you reverse that?",
+      "undo",
+      "uh no, put it back how it was",
+      "mach das rückgängig",
+      "kannst du das wieder zurücknehmen",
+      "rückgängig"
+    ],
+    "timer.set": [
+      "start a timer for 10 minutes",
+      "could you put a timer on for 10 minutes",
+      "I need a timer for 10 minutes",
+      "can I get a timer for 10 minutes?",
+      "timer 10 minutes",
+      "okay so, count down 10 minutes",
+      "ähm, stell einen Timer auf 10 Minuten",
+      "ich brauch einen Timer für 10 Minuten",
+      "Timer 10 Minuten"
+    ],
+    "calendar": [
+      "open my calendar",
+      "would you pull up my calendar",
+      "I want to check my calendar",
+      "can I see my calendar?",
+      "my calendar please",
+      "hey, bring up the calendar",
+      "zeig mir meinen Kalender",
+      "kannst du meinen Kalender aufmachen",
+      "Kalender anzeigen"
+    ],
+    "earth.show": [
+      "open the earth view",
+      "could you bring up the globe",
+      "I wanna see the earth",
+      "can I see the 3D earth?",
+      "earth view",
+      "uh, pull up the earth",
+      "hey, zeig mir die Erde",
+      "kannst du die Erdansicht öffnen",
+      "Erde anzeigen"
+    ],
+    "zoom.out": [
+      "zoom out a bit",
+      "could you zoom out for me",
+      "I want to zoom out",
+      "can you zoom further out?",
+      "further out",
+      "um, pull the view back",
+      "zoom raus",
+      "kannst du ein bisschen rauszoomen",
+      "rauszoomen"
+    ],
+    "mic.stop": [
+      "stop listening to me",
+      "could you turn your mic off for now",
+      "I don't want you listening right now",
+      "can you stop listening for a while?",
+      "mic off",
+      "uh, don't listen for a moment",
+      "okay, hör jetzt auf zuzuhören",
+      "kannst du kurz nicht zuhören",
+      "Mikro aus"
+    ]
+  },
+  "heldout": {
+    "app.open": [
+      "launch Spotify",
+      "would you mind opening Spotify",
+      "hey, I need Spotify open",
+      "öffne mal Spotify",
+      "ich brauch Spotify, mach das mal an"
+    ],
+    "app.close": [
+      "could you close down Spotify for me?",
+      "quit Spotify",
+      "I don't need Spotify anymore, turn it off",
+      "schließ Spotify bitte",
+      "kannst du Spotify wieder zumachen"
+    ],
+    "app.switch": [
+      "would you put Spotify in front for me",
+      "focus Spotify",
+      "hey, take me over to Spotify",
+      "hol Spotify in den Vordergrund",
+      "ähm, zeig mir mal das Spotify Fenster"
+    ],
+    "vol.up": [
+      "increase the volume",
+      "can I get it a bit louder?",
+      "it's too quiet, turn up the sound",
+      "dreh mal lauter",
+      "etwas lauter bitte"
+    ],
+    "vol.down": [
+      "bring the volume down a bit",
+      "could you turn the sound down a little",
+      "quieter please",
+      "dreh die Lautstärke ein bisschen runter",
+      "das ist mir zu laut, mach das leiser"
+    ],
+    "vol.set": [
+      "change the volume to 30 percent",
+      "would you bring the volume to 30 percent please",
+      "uh, volume to 30 percent",
+      "mach die Lautstärke auf 30 Prozent",
+      "ich will die Lautstärke auf 30 Prozent haben"
+    ],
+    "vol.mute": [
+      "could you mute the PC for me",
+      "mute the volume",
+      "okay, kill the sound",
+      "stell mal auf stumm",
+      "Ton aus bitte"
+    ],
+    "music.pause": [
+      "pause this song",
+      "would you mind pausing the music?",
+      "okay, stop the song for a moment",
+      "halt mal die Musik an",
+      "mach die Musik mal kurz aus"
+    ],
+    "music.resume": [
+      "carry on with the music",
+      "would you mind resuming the song",
+      "uh, hit play again",
+      "spiel die Musik weiter",
+      "kannst du die Musik wieder laufen lassen"
+    ],
+    "music.next": [
+      "play the next song",
+      "could you skip this track for me",
+      "okay, next one please",
+      "nächster Song bitte",
+      "skip mal das Lied"
+    ],
+    "music.previous": [
+      "would you go back to the previous track",
+      "one song back",
+      "hey, play the last song again",
+      "ein Lied zurück",
+      "kannst du nochmal den Song von davor anmachen"
+    ],
+    "music.what": [
+      "what song is playing right now",
+      "can you tell me the name of this song?",
+      "hey, what is this track called",
+      "welcher Song ist das",
+      "sag mal, was hör ich da gerade"
+    ],
+    "time": [
+      "give me the current time",
+      "do you have the time?",
+      "hey, how late is it",
+      "ey, wie viel Uhr haben wir",
+      "sag mir mal die Uhrzeit"
+    ],
+    "win.minimize_all": [
+      "minimize all the windows",
+      "can I see the desktop?",
+      "uh, I need everything minimized",
+      "mach alle Fenster klein",
+      "ich will den Desktop sehen"
+    ],
+    "win.snap_left": [
+      "pin Chrome to the left half of the screen",
+      "would you move Chrome to the left side for me",
+      "hey, I need Chrome snapped left",
+      "mach Chrome auf die linke Seite",
+      "Chrome bitte auf die linke Bildschirmhälfte"
+    ],
+    "view.stats": [
+      "open the system stats panel",
+      "would you show me my system statistics",
+      "okay, let me see the system stats",
+      "öffne meine Systemstatistiken",
+      "kannst du mir mal die System Stats zeigen"
+    ],
+    "view.settings": [
+      "could you pull up the settings for me",
+      "go to settings",
+      "okay, I want to open the settings",
+      "zeig mir die Einstellungen",
+      "ich will in die Einstellungen"
+    ],
+    "view.mixer": [
+      "bring up the mixer",
+      "can you open the mixer panel?",
+      "I want to see the audio mixer",
+      "mach mal den Mixer auf",
+      "kannst du mir den Audiomixer zeigen"
+    ],
+    "view.console": [
+      "pull up the console",
+      "could you open up the text console for me",
+      "okay, I'd rather type, give me the console",
+      "zeig mir die Textkonsole",
+      "ich will was schreiben, mach die Konsole auf"
+    ],
+    "theme": [
+      "put on the Arc Cyan theme",
+      "would you switch to the Arc Cyan theme?",
+      "uh, I'd like Arc Cyan as the theme",
+      "wechsel das Theme auf Arc Cyan",
+      "ich will Arc Cyan als Theme"
+    ],
+    "protocol.run": [
+      "kick off the study protocol",
+      "could you run my study routine",
+      "okay, let's do the study protocol",
+      "mach das study Protokoll an",
+      "kannst du das study Protokoll ausführen"
+    ],
+    "system.status": [
+      "tell me the status of the system",
+      "can you check how my computer is doing?",
+      "hey, how's the system holding up",
+      "gib mir mal einen Statusbericht",
+      "wie läuft der Rechner gerade"
+    ],
+    "features": [
+      "give me a list of what you can do",
+      "can you tell me everything you can do?",
+      "uh, what kind of stuff can you do",
+      "was hast du für Funktionen",
+      "kannst du mir sagen was du alles kannst"
+    ],
+    "windows.close": [
+      "shut all the windows you opened",
+      "could you close your panels for me",
+      "uh, close all of your stuff again",
+      "mach alles zu was du geöffnet hast",
+      "okay, schließ mal deine Fenster"
+    ],
+    "hud.calm": [
+      "activate calm mode",
+      "would you calm the HUD down a bit",
+      "okay, hide the readouts",
+      "blende mal die Anzeigen aus",
+      "ich will das Interface ruhiger haben"
+    ],
+    "hud.mini": [
+      "enter mini mode",
+      "could you shrink yourself to the strip at the top",
+      "hey, turn the mini mode on",
+      "schalt in den Mini Modus",
+      "mach dich mal klein, nur die Leiste oben"
+    ],
+    "subs.on": [
+      "enable subtitles",
+      "would you put the subtitles on for me",
+      "okay, I need subtitles for this",
+      "schalt die Untertitel ein",
+      "kannst du mir Untertitel anzeigen"
+    ],
+    "lyrics.on": [
+      "display the lyrics",
+      "could you bring up the lyrics for this song",
+      "hey, I need the lyrics",
+      "mach mal die Lyrics an",
+      "ich will den Text vom Lied sehen"
+    ],
+    "image": [
+      "get me a picture of the Eiffel Tower",
+      "would you show me what the Eiffel Tower looks like",
+      "okay, I'd like to see an image of the Eiffel Tower",
+      "such mir mal ein Bild vom Eiffelturm raus",
+      "ich will ein Foto vom Eiffelturm sehen"
+    ],
+    "undo": [
+      "revert that",
+      "could you undo the last thing please",
+      "wait, I didn't want that, change it back",
+      "nimm das zurück",
+      "nee, mach das wieder so wie vorher"
+    ],
+    "timer.set": [
+      "give me a timer for 10 minutes",
+      "would you start a countdown for 10 minutes",
+      "uh, 10 minutes on the timer please",
+      "mach mal einen Timer für 10 Minuten",
+      "kannst du einen Countdown von 10 Minuten starten"
+    ],
+    "calendar": [
+      "display my calendar",
+      "could you open up my calendar for me",
+      "okay, I need to look at my calendar",
+      "öffne mal meinen Kalender",
+      "ich will in meinen Kalender schauen"
+    ],
+    "earth.show": [
+      "show the globe",
+      "would you switch to the earth view",
+      "okay, let's look at the earth",
+      "mach mal den Globus auf",
+      "ich will die Erde sehen"
+    ],
+    "zoom.out": [
+      "zoom back out",
+      "would you move the camera back a bit",
+      "okay, that's too close, give me a wider view",
+      "zoom mal weiter raus",
+      "ich will weiter raus"
+    ],
+    "mic.stop": [
+      "mute your microphone",
+      "would you mind not listening for a bit",
+      "okay, quit listening for now",
+      "hör mal nicht mehr zu",
+      "mach dein Mikro aus"
+    ]
+  },
+  "not_commands": [
+    "bro can you close the door, I can hear your sister screaming",
+    "wait, there's a chest behind the waterfall, open it",
+    "I'm gonna mute myself for a sec, my mom just walked in",
+    "next round I'm buying the sniper, trust me",
+    "stop running into the middle, you die every single time",
+    "show him where the base is, he joined like two minutes ago",
+    "hold on, I have to pause, someone's at the door",
+    "dude your mic volume is way too low, I can barely hear you",
+    "the timer on the bomb is almost at zero, defuse it",
+    "that was so close, I had like one HP left",
+    "skip the cutscene, we've all seen it ten times",
+    "can you switch to the healer, we need one",
+    "turn left at the bridge and then go back to spawn",
+    "we had to open our books on page 30 and I didn't even have mine",
+    "my teacher told me to stop talking like five times today",
+    "I set a timer for the pizza and still burned it",
+    "the next bus didn't come for 10 minutes so I was late again",
+    "I think the bakery closes at six on Saturdays",
+    "that new show everybody talks about is actually kind of boring",
+    "my calendar for next week is completely full with tests",
+    "how loud is a rocket launch compared to a concert",
+    "what time does the sun go down in Iceland in the summer",
+    "why is the Eiffel Tower a few centimeters taller when it's hot",
+    "how do they make subtitles for live TV so fast",
+    "how long does the earth need to go around the sun",
+    "who came up with the idea for Spotify in the first place",
+    "how do you calculate the volume of a cylinder again",
+    "is cyan closer to blue or to green",
+    "mach mal die Tür zu, es zieht total",
+    "ich mach kurz Pause, ich muss was essen",
+    "nächste Runde gehen wir alle über rechts rein",
+    "Digga, stell dich mal stumm, man hört deine Tastatur",
+    "mach die Kiste auf, da ist bestimmt was Gutes drin",
+    "hör auf zu campen, das ist so langweilig",
+    "wir schreiben morgen Mathe und ich hab noch gar nichts gelernt",
+    "der Timer vom Backofen hat schon wieder nicht geklingelt",
+    "das Fenster in meinem Zimmer geht nicht mehr richtig zu",
+    "wie spät ist es jetzt eigentlich in New York",
+    "wie laut darf man nachts eigentlich noch Musik hören",
+    "zeig mal her, was hast du da gebaut"
+  ]
+}

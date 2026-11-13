@@ -324,6 +324,7 @@ pub fn is_order(text: &str) -> bool {
         || crate::intents::silent_quick_command(&t).is_some()
         || crate::intents::orb_mode_command(&t).is_some()
         || about_his_words(&t)
+        || crate::brain::another_way(&t).is_some()
 }
 
 /// Whether Sir is speaking about his own words: teaching, asking what was learnt, having it

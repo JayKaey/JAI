@@ -1,0 +1,796 @@
+{
+  "dev": {
+    "read.on": [
+      "keep reading",
+      "would you mind continuing with the text",
+      "okay so go on with the next part",
+      "next part",
+      "i'd like to hear the next bit",
+      "can you carry on reading?",
+      "lies weiter",
+      "kannst du bitte weiterlesen",
+      "okay weiter mit dem nächsten Teil"
+    ],
+    "read.stop": [
+      "quit reading",
+      "could you stop reading that out loud please",
+      "okay that's enough reading for now",
+      "i don't want you to read any further",
+      "can you end the reading here?",
+      "you don't need to read the rest",
+      "hör auf vorzulesen",
+      "kannst du das Vorlesen bitte beenden",
+      "okay stopp, nicht weiterlesen"
+    ],
+    "coach.start": [
+      "start the pronunciation practice",
+      "could you run the pronunciation coach with me please",
+      "i want to work on my pronunciation",
+      "can we do some pronunciation training?",
+      "pronunciation practice",
+      "hey let's train my english pronunciation",
+      "ich will meine Aussprache üben",
+      "starte das Aussprachetraining",
+      "können wir mal meine Aussprache trainieren"
+    ],
+    "coach.stop": [
+      "end the pronunciation practice",
+      "could you close the pronunciation coach please",
+      "i'm done practicing",
+      "can we stop the pronunciation training now?",
+      "coach off",
+      "okay that's enough pronunciation for today",
+      "beende das Aussprachetraining",
+      "ich will nicht mehr üben",
+      "kannst du den Coach bitte ausmachen"
+    ],
+    "hearing.show": [
+      "open the hearing log",
+      "could you show me what you've heard lately",
+      "i want to see the log of what you heard",
+      "can i see what you've picked up from me lately?",
+      "hearing log",
+      "okay so pull up the list of what you understood from me recently",
+      "zeig mir das Hörprotokoll",
+      "kannst du mir zeigen, was du in letzter Zeit gehört hast",
+      "ich will sehen, was du zuletzt alles von mir verstanden hast"
+    ],
+    "hearing.last": [
+      "what did you understand just now",
+      "could you tell me how you understood my last sentence",
+      "i want to know what you heard a second ago",
+      "what was the last thing you heard?",
+      "what did you catch there",
+      "uh what do you think i just said",
+      "was hast du gerade gehört",
+      "was hast du eben verstanden",
+      "sag mir mal, was du gerade von mir gehört hast"
+    ],
+    "guest.learn": [
+      "this is Tom, learn his voice",
+      "could you learn my friend Tom's voice please",
+      "i want you to remember Tom's voice, he's a friend of mine",
+      "can you get to know my friend Tom's voice?",
+      "learn Tom's voice",
+      "okay so my friend Tom is here, save his voice",
+      "das ist mein Freund Tom, merk dir seine Stimme",
+      "kannst du dir bitte die Stimme von meinem Freund Tom merken",
+      "lern mal die Stimme von Tom, das ist ein Kumpel von mir"
+    ],
+    "guest.music_only": [
+      "the only thing Tom gets to control is the music",
+      "only let Tom control the music",
+      "could you limit Tom to the music please",
+      "i want Tom to be allowed to do the music and nothing else",
+      "Tom music only",
+      "okay so Tom is just allowed to change the music",
+      "Tom darf nur die Musik steuern",
+      "kannst du einstellen, dass Tom nur die Musik bedienen darf",
+      "Tom soll nur Musik machen dürfen, sonst nichts"
+    ],
+    "guest.everything": [
+      "let Tom do anything he wants",
+      "could you give Tom full access please",
+      "i want Tom to be allowed to do everything",
+      "can Tom have full control?",
+      "Tom full access",
+      "okay so Tom is allowed to control everything now",
+      "Tom darf alles",
+      "kannst du Tom bitte alles erlauben",
+      "ich will, dass Tom alles machen darf"
+    ],
+    "guest.forget": [
+      "delete Tom's voice",
+      "would you mind forgetting Tom again",
+      "i want you to remove Tom's voice",
+      "can you erase Tom's voice from your memory?",
+      "remove Tom",
+      "okay so you can forget what Tom sounds like",
+      "vergiss die Stimme von Tom",
+      "kannst du Toms Stimme bitte wieder löschen",
+      "du musst dir Tom nicht mehr merken, vergiss seine Stimme"
+    ],
+    "guest.list": [
+      "whose voices do you know",
+      "could you tell me which voices you know",
+      "i want to know whose voices you have learned",
+      "which people do you recognise?",
+      "known voices",
+      "okay so who can you recognize by voice",
+      "wen kennst du alles",
+      "welche Stimmen kennst du",
+      "kannst du mir sagen, wessen Stimmen du gespeichert hast"
+    ],
+    "guest.who": [
+      "who's talking right now",
+      "who was that just now",
+      "could you tell me who just spoke",
+      "i want to know whose voice that was",
+      "who said that?",
+      "uh do you recognise who is talking",
+      "wer spricht gerade",
+      "wer war das eben",
+      "kannst du mir sagen, wer da gerade geredet hat"
+    ],
+    "recap": [
+      "give me a recap of my day",
+      "would you mind summarising what i did on the pc today",
+      "i'd like a summary of today",
+      "what have i been doing all day?",
+      "today's recap",
+      "uh what was i up to on the computer today",
+      "was hab ich heute gemacht",
+      "fass mal zusammen, was ich heute am PC gemacht hab",
+      "kannst du mir einen Rückblick auf meinen Tag geben"
+    ],
+    "doctor": [
+      "find out why my internet is slow",
+      "could you check why the internet is so slow please",
+      "my internet is super slow, what's wrong with it",
+      "what's slowing down my connection?",
+      "diagnose my internet",
+      "okay so the internet is lagging like crazy, can you figure out why",
+      "warum ist mein Internet so langsam",
+      "kannst du mal schauen, warum das Internet so lahm ist",
+      "ähm mein Internet hängt total, find mal raus, woran das liegt"
+    ],
+    "privacy.show": [
+      "open the privacy board",
+      "could you show me everything you store about me",
+      "i want to see what data you have on me",
+      "what do you store about me?",
+      "privacy overview",
+      "okay so what exactly are you saving about me, show me",
+      "zeig mir mal das Privacy Board",
+      "kannst du mir zeigen, was du alles über mich speicherst",
+      "ich will sehen, welche Daten du von mir hast"
+    ],
+    "privacy.clips_off": [
+      "don't save my voice clips anymore",
+      "could you stop storing recordings of my voice please",
+      "i don't want you to keep my voice recordings",
+      "can you quit saving audio of me?",
+      "no more voice clips",
+      "okay so from now on don't store any clips of my voice",
+      "speicher meine Sprachaufnahmen nicht mehr",
+      "kannst du bitte aufhören, Aufnahmen von meiner Stimme zu behalten",
+      "ich will nicht, dass du Clips von meiner Stimme aufhebst"
+    ],
+    "privacy.clips_on": [
+      "you can save my voice clips again",
+      "could you start storing my voice recordings again please",
+      "i want you to keep recordings of my voice again",
+      "can you go back to saving my voice clips?",
+      "voice clips back on",
+      "okay so it's fine to store clips of my voice again",
+      "du darfst meine Sprachaufnahmen wieder speichern",
+      "kannst du die Aufnahmen von meiner Stimme bitte wieder behalten",
+      "ich will, dass du wieder Clips von meiner Stimme aufhebst"
+    ],
+    "changes.show": [
+      "show me what's new",
+      "could you open the changelog please",
+      "i want to see what changed in you lately",
+      "can i see the list of changes?",
+      "changes list",
+      "okay so pull up all the new features and fixes",
+      "zeig mir die Änderungen",
+      "was ist neu bei dir",
+      "kannst du mal die Liste mit den neuen Funktionen aufmachen"
+    ],
+    "changes.explain": [
+      "how does the sleep timer work",
+      "could you explain to me how the sleep timer works",
+      "i want to know what the sleep timer does",
+      "what is the sleep timer?",
+      "tell me about the sleep timer",
+      "okay so what's this sleep timer thing and how do i use it",
+      "erklär mir den sleep timer",
+      "wie funktioniert der sleep timer",
+      "kannst du mir sagen, was der sleep timer genau macht"
+    ],
+    "backup.now": [
+      "make a backup of your memory",
+      "would you mind saving a backup of your memory",
+      "i want you to do a backup right now",
+      "can you run a memory backup?",
+      "backup now",
+      "okay so create a backup of everything you remember",
+      "mach ein Backup von deinem Gedächtnis",
+      "kannst du bitte jetzt eine Sicherung machen",
+      "hey sicher mal dein Gedächtnis"
+    ],
+    "backup.status": [
+      "when did you last back up",
+      "could you tell me when the last backup was made",
+      "i want to know when you backed up your memory the last time",
+      "how old is the last backup?",
+      "last backup?",
+      "uh when did the most recent backup happen",
+      "wann war das letzte Backup",
+      "wann hast du zuletzt eine Sicherung gemacht",
+      "kannst du mir sagen, wie alt das letzte Backup ist"
+    ],
+    "subs.top": [
+      "put the subtitles at the top",
+      "would you mind moving the subtitle bar up to the top of the screen",
+      "i want the subtitles at the top of the screen",
+      "can i have the subtitles up top?",
+      "subtitles top",
+      "okay so show the captions at the top",
+      "Untertitel nach oben",
+      "kannst du die Untertitel bitte oben anzeigen",
+      "ich will die Untertitelleiste oben am Bildschirm haben"
+    ],
+    "subs.monitor": [
+      "move the subtitles to monitor 2",
+      "could you show the subtitle bar on monitor 2 please",
+      "i want the subtitles on monitor 2",
+      "can i get the subtitles on monitor 2?",
+      "subtitles on monitor 2",
+      "okay so the captions should go on monitor 2",
+      "zeig die Untertitel auf Monitor 2",
+      "kannst du die Untertitel bitte auf Monitor 2 schieben",
+      "ich hätte die Untertitel gern auf Monitor 2"
+    ],
+    "subs.follow": [
+      "make the subtitles follow the active window",
+      "could you let the subtitle bar follow whatever window i'm using",
+      "i want the subtitles to stick to the window i'm in",
+      "can the subtitles move along with my window?",
+      "subtitles follow window",
+      "okay so the captions should always be on the window i'm working in",
+      "die Untertitel sollen meinem Fenster folgen",
+      "kannst du die Untertitel immer bei meinem aktiven Fenster anzeigen",
+      "lass die Untertitel mit meinem Fenster mitwandern"
+    ],
+    "subs.where": [
+      "where do the subtitles show up",
+      "could you tell me where the subtitles are right now",
+      "i can't find the subtitles, where did they go",
+      "which screen are the subtitles on?",
+      "where's the subtitle bar",
+      "hey where did you put the captions",
+      "wo sind die Untertitel",
+      "auf welchem Bildschirm sind die Untertitel gerade",
+      "kannst du mir sagen, wo die Untertitel angezeigt werden"
+    ],
+    "places.forget": [
+      "forget the window positions",
+      "could you forget where your panels were please",
+      "i want you to reset where your windows go",
+      "can you clear the saved window positions?",
+      "reset window positions",
+      "okay so don't remember where the panels stood anymore",
+      "vergiss, wo die Fenster waren",
+      "kannst du die gespeicherten Fensterpositionen bitte löschen",
+      "ähm merk dir nicht mehr, wo deine Fenster standen"
+    ],
+    "notifications.clear": [
+      "delete my notifications",
+      "would you mind clearing the notification history",
+      "i want all my notifications gone",
+      "can you wipe the notifications?",
+      "remove all notifications",
+      "uh get rid of all the old notifications",
+      "lösch meine Benachrichtigungen",
+      "kannst du bitte den Benachrichtigungsverlauf leeren",
+      "ich will, dass alle Benachrichtigungen weg sind"
+    ],
+    "selection.explain": [
+      "explain what i've selected",
+      "could you explain the selected text please",
+      "i'd like an explanation of this",
+      "what does this mean?",
+      "explain the selection",
+      "okay so can you explain the bit i highlighted",
+      "erklär mir das",
+      "was bedeutet der markierte Text",
+      "kannst du mir bitte erklären, was ich da markiert hab"
+    ],
+    "selection.translate": [
+      "translate the selected text into German",
+      "could you put this into German for me please",
+      "i need this in German",
+      "what does this say in German?",
+      "translate to German",
+      "okay so can you translate what i highlighted to German",
+      "übersetz das auf Deutsch",
+      "kannst du mir den markierten Text bitte ins Deutsche übersetzen",
+      "was heißt das auf Deutsch"
+    ],
+    "selection.summarise": [
+      "summarise the selected text",
+      "could you give me a quick summary of what i highlighted",
+      "i want the short version of this",
+      "what's the gist of this?",
+      "sum this up",
+      "okay so this is way too long, give me the main points",
+      "fass das zusammen",
+      "kannst du mir den markierten Text bitte zusammenfassen",
+      "ich will eine kurze Zusammenfassung davon"
+    ],
+    "guestmode.on": [
+      "turn on guest mode",
+      "could you switch to guest mode please",
+      "i want you to answer to anyone for a while",
+      "can you listen to my guests too for now?",
+      "guest mode on",
+      "okay so friends are over, let everybody talk to you for a bit",
+      "Gastmodus an",
+      "kannst du bitte in den Gastmodus wechseln",
+      "hör für eine Weile auf alle, nicht nur auf mich"
+    ],
+    "guestmode.off": [
+      "turn off guest mode",
+      "could you end guest mode please",
+      "i want you to leave guest mode",
+      "can you stop guest mode now?",
+      "exit guest mode",
+      "okay so my guests are gone, guest mode can go off again",
+      "Gastmodus aus",
+      "kannst du den Gastmodus bitte wieder ausschalten",
+      "der Besuch ist weg, du kannst den Gastmodus beenden"
+    ],
+    "lock.on": [
+      "only listen to me",
+      "would you mind only taking commands from me",
+      "i want you to obey just my voice",
+      "can you ignore everyone except me?",
+      "lock to my voice",
+      "okay so from now on don't react to anybody but me",
+      "hör nur auf mich",
+      "kannst du bitte nur noch auf meine Stimme reagieren",
+      "ich will, dass du nur mir gehorchst"
+    ],
+    "lock.off": [
+      "obey everyone",
+      "could you take commands from anybody again please",
+      "i want you to listen to all voices",
+      "can you start obeying everybody again?",
+      "unlock for everyone",
+      "okay so you don't have to obey only me anymore",
+      "hör auf alle",
+      "kannst du bitte wieder auf jeden reagieren",
+      "du musst nicht mehr nur auf mich hören"
+    ],
+    "voice.learn": [
+      "start the voice setup",
+      "could you learn what my voice sounds like please",
+      "i want to teach you my voice",
+      "can we do the voice training?",
+      "voice setup",
+      "uh get to know my voice",
+      "lern meine Stimme",
+      "können wir das Stimmtraining starten",
+      "ich will dir meine Stimme beibringen"
+    ],
+    "night.on": [
+      "turn on night mode",
+      "would you mind switching to night mode",
+      "i'd like night mode now",
+      "can you go into night mode?",
+      "night mode on",
+      "okay so it's late, go dim and quiet for the night",
+      "Nachtmodus",
+      "kannst du bitte in den Nachtmodus schalten",
+      "mach den Nachtmodus an"
+    ],
+    "night.off": [
+      "turn off night mode",
+      "could you leave night mode please",
+      "i don't need night mode anymore",
+      "can you get out of night mode?",
+      "exit night mode",
+      "okay so it's morning, end the night mode",
+      "Nachtmodus aus",
+      "kannst du den Nachtmodus bitte wieder ausmachen",
+      "ich brauch den Nachtmodus nicht mehr"
+    ],
+    "background.on": [
+      "turn on the live desktop",
+      "could you be my desktop background please",
+      "i want you as my live wallpaper",
+      "can you become the live desktop background?",
+      "live wallpaper on",
+      "okay so go live on my desktop background",
+      "Live-Desktop an",
+      "kannst du bitte mein Live-Hintergrund werden",
+      "ich will dich als Live-Hintergrundbild auf dem Desktop"
+    ],
+    "background.off": [
+      "turn off the live desktop",
+      "could you stop being my desktop background please",
+      "i don't want the live wallpaper anymore",
+      "can you get off my desktop background?",
+      "live wallpaper off",
+      "okay so stop the live background, i want my normal wallpaper back",
+      "Live-Desktop aus",
+      "kannst du bitte aufhören, mein Desktophintergrund zu sein",
+      "ich will den Live-Hintergrund nicht mehr"
+    ],
+    "missed": [
+      "what happened while i was away",
+      "could you tell me what i missed while i was gone",
+      "i want to know which notifications came in when i was away",
+      "did i miss anything?",
+      "missed notifications",
+      "hey i'm back, what came up while i was out",
+      "was hab ich verpasst",
+      "kannst du mir sagen, was los war, während ich weg war",
+      "welche Benachrichtigungen kamen, als ich nicht da war"
+    ],
+    "bright.side": [
+      "make the side monitors darker",
+      "could you dim just the two side screens please",
+      "i want the left and right monitors dimmed",
+      "can you turn down the brightness on the side monitors?",
+      "dim side screens",
+      "okay so only the outer two monitors should be dim",
+      "dimm die seitlichen Monitore",
+      "kannst du bitte nur die beiden Seitenmonitore dunkler machen",
+      "ich will die zwei äußeren Bildschirme gedimmt haben"
+    ]
+  },
+  "heldout": {
+    "read.on": [
+      "alright, read me the next part",
+      "could you go on reading please",
+      "keep going",
+      "lies mal den nächsten Abschnitt vor",
+      "ähm mach weiter mit dem Vorlesen"
+    ],
+    "read.stop": [
+      "uh that's it, don't read any more",
+      "would you mind not reading on",
+      "no more reading",
+      "Vorlesen stopp",
+      "ähm das reicht, lies nicht mehr weiter"
+    ],
+    "coach.start": [
+      "help me improve my pronunciation",
+      "would you mind starting the pronunciation coach",
+      "uh give me some sentences to practise pronouncing",
+      "Aussprachetraining bitte",
+      "hey ich möchte an meiner englischen Aussprache arbeiten"
+    ],
+    "coach.stop": [
+      "quit the coach",
+      "uh i want to stop practising my pronunciation",
+      "would you mind ending the pronunciation session",
+      "Aussprache üben beenden",
+      "okay Schluss mit dem Aussprachetraining"
+    ],
+    "hearing.show": [
+      "bring up the hearing log",
+      "i'd like to look at what you've been hearing from me",
+      "uh show me the history of what you heard me say",
+      "mach mal das Hörprotokoll auf",
+      "ähm zeig mal die Liste mit dem, was du gehört hast"
+    ],
+    "hearing.last": [
+      "tell me what you just heard",
+      "what did you hear me say just then",
+      "can you repeat what you understood from that?",
+      "was ist bei dir gerade angekommen",
+      "ähm was hab ich deiner Meinung nach gerade gesagt"
+    ],
+    "guest.learn": [
+      "hey say hi to my friend Tom and memorise his voice",
+      "i'd like to introduce my friend Tom so you know his voice",
+      "my friend Tom is going to talk now, remember what he sounds like",
+      "hey das hier ist Tom, speicher seine Stimme",
+      "ich möchte dir meinen Freund Tom vorstellen, lern seine Stimme"
+    ],
+    "guest.music_only": [
+      "restrict Tom to music",
+      "uh Tom should only be able to do music stuff",
+      "can you make it so Tom can only handle the music?",
+      "Tom nur Musik",
+      "ähm gib Tom nur die Rechte für die Musik"
+    ],
+    "guest.everything": [
+      "give Tom all permissions",
+      "uh no limits for Tom, he can use everything",
+      "would you mind allowing Tom to do everything",
+      "gib Tom alle Rechte",
+      "okay Tom darf ab jetzt alles steuern"
+    ],
+    "guest.forget": [
+      "wipe Tom's voice",
+      "uh i don't want you to know Tom's voice anymore",
+      "could you drop Tom from the voices you know please",
+      "lösch Tom wieder",
+      "ähm ich will, dass du Toms Stimme vergisst"
+    ],
+    "guest.list": [
+      "list the voices you know",
+      "hey who's on your list of voices",
+      "can you tell me everyone whose voice you remember?",
+      "wessen Stimmen hast du gelernt",
+      "ähm zeig mal, wen du alles an der Stimme erkennst"
+    ],
+    "guest.who": [
+      "whose voice is this",
+      "hey can you tell who this is by the voice?",
+      "tell me who you think just spoke",
+      "wessen Stimme ist das",
+      "ähm erkennst du, wer gerade spricht"
+    ],
+    "recap": [
+      "recap my day",
+      "okay so tell me what i got done today",
+      "can i get a rundown of what i did at the computer today?",
+      "Tagesrückblick bitte",
+      "ähm womit hab ich heute am Rechner meine Zeit verbracht"
+    ],
+    "doctor": [
+      "check what's wrong with my internet",
+      "i need to know why my connection is so slow",
+      "hey what's making my internet so slow right now",
+      "wieso lädt hier alles so langsam, check mal mein Internet",
+      "okay was ist mit meinem Internet los, das ist mega langsam"
+    ],
+    "privacy.show": [
+      "pull up the privacy panel",
+      "i'd like to check what data of mine you're keeping",
+      "uh can i see everything you've saved about me?",
+      "mach mal die Datenschutzübersicht auf",
+      "ähm was hast du eigentlich alles über mich gespeichert, zeig mal her"
+    ],
+    "privacy.clips_off": [
+      "turn off voice clip saving",
+      "uh i'd rather you didn't hold on to recordings of my voice",
+      "would you mind not keeping my voice clips from now on",
+      "keine Sprachaufnahmen mehr speichern",
+      "hey hör auf, meine Stimme aufzunehmen und zu speichern"
+    ],
+    "privacy.clips_on": [
+      "turn voice clip saving back on",
+      "uh you're allowed to hold on to my voice recordings again",
+      "i'm okay with you keeping audio of my voice again",
+      "Sprachaufnahmen wieder speichern",
+      "okay du kannst meine Stimme ab jetzt wieder aufnehmen und speichern"
+    ],
+    "changes.show": [
+      "open the list of updates",
+      "uh what got changed in the last update, show me",
+      "i'd like to look at everything that's been updated in you",
+      "mach mal die Änderungsliste auf",
+      "ähm ich will sehen, was sich bei dir alles geändert hat"
+    ],
+    "changes.explain": [
+      "walk me through the sleep timer",
+      "uh i don't get the sleep timer, can you explain it?",
+      "sleep timer, how does that work",
+      "was ist der sleep timer",
+      "ähm ich versteh den sleep timer nicht, erklär mal"
+    ],
+    "backup.now": [
+      "do a backup",
+      "uh i need a fresh backup of your memory",
+      "could you back up what you've remembered right now please",
+      "Backup jetzt",
+      "okay ich will, dass du dein Gedächtnis jetzt sicherst"
+    ],
+    "backup.status": [
+      "backup status",
+      "okay so when was your memory backed up last",
+      "is there a recent backup, when was it made?",
+      "wann wurde zuletzt gesichert",
+      "ähm von wann ist dein letztes Backup"
+    ],
+    "subs.top": [
+      "move the subtitle bar to the top",
+      "uh the subtitles should be at the top edge of the screen",
+      "could you put the captions up at the top please",
+      "pack die Untertitel ganz nach oben",
+      "ähm mach die Untertitel mal an den oberen Rand"
+    ],
+    "subs.monitor": [
+      "send the subtitles over to monitor 2",
+      "uh display the subtitle bar on monitor 2",
+      "would you mind moving the captions onto monitor 2",
+      "Untertitel auf Monitor 2",
+      "ähm pack die Untertitelleiste mal auf Monitor 2"
+    ],
+    "subs.follow": [
+      "have the subtitles track my active window",
+      "uh keep the subtitles with whichever window is active",
+      "i need the subtitles to go wherever my window goes",
+      "Untertitel ans aktive Fenster hängen",
+      "ähm ich will, dass die Untertitel immer bei dem Fenster sind, das ich gerade benutze"
+    ],
+    "subs.where": [
+      "where am i supposed to see the subtitles",
+      "okay so i want to know where the subtitles are being displayed",
+      "do you know where the captions are showing right now?",
+      "wo ist die Untertitelleiste",
+      "ähm wo werden die Untertitel gerade eingeblendet"
+    ],
+    "places.forget": [
+      "forget your window layout",
+      "uh i don't want you to remember where your windows used to be",
+      "would you mind forgetting the positions of your panels",
+      "Fensterpositionen vergessen",
+      "okay vergiss mal die Plätze von deinen Fenstern"
+    ],
+    "notifications.clear": [
+      "empty the notification list",
+      "okay so dismiss all my notifications",
+      "could you clear out the notification log please",
+      "Benachrichtigungen löschen",
+      "ähm räum mal die ganzen Mitteilungen weg"
+    ],
+    "selection.explain": [
+      "tell me what the highlighted text means",
+      "uh i need this explained",
+      "can you break down what i marked here?",
+      "was heißt das hier",
+      "ähm ich versteh den markierten Abschnitt nicht, erklär den mal"
+    ],
+    "selection.translate": [
+      "German translation of this please",
+      "uh turn the selection into German",
+      "i'd like the marked text translated into German",
+      "das hier bitte auf Deutsch",
+      "ähm ich brauch das Markierte auf Deutsch"
+    ],
+    "selection.summarise": [
+      "give me the tldr of this",
+      "uh summarize the highlighted part",
+      "would you mind boiling this down for me",
+      "Zusammenfassung von dem hier bitte",
+      "ähm sag mir kurz, worum es in dem markierten Text geht"
+    ],
+    "guestmode.on": [
+      "activate guest mode",
+      "hey i've got people over, start guest mode",
+      "for the time being, just answer whoever talks to you",
+      "starte den Gastmodus",
+      "ähm ich hab Besuch, hör mal vorübergehend auf jeden"
+    ],
+    "guestmode.off": [
+      "disable guest mode",
+      "uh we're done with guest mode",
+      "would you mind switching guest mode back off",
+      "Gastmodus beenden",
+      "ähm ich brauch den Gastmodus nicht mehr, schalt ihn ab"
+    ],
+    "lock.on": [
+      "take orders only from me",
+      "uh i need you to listen to my voice only",
+      "don't let anyone else give you commands",
+      "nur noch auf mich hören",
+      "ähm ignorier alle anderen, hör nur auf das, was ich sage"
+    ],
+    "lock.off": [
+      "let anyone give you commands",
+      "uh stop ignoring the others, listen to everybody",
+      "i'd like you to obey whoever is talking",
+      "jeder darf dir was sagen",
+      "ähm heb die Sperre auf, du darfst auf alle hören"
+    ],
+    "voice.learn": [
+      "train on my voice",
+      "okay so let's set up my voice so you recognise me",
+      "i need you to memorise my voice",
+      "Stimme einrichten",
+      "ähm merk dir mal, wie meine Stimme klingt"
+    ],
+    "night.on": [
+      "activate night mode",
+      "uh time for night mode",
+      "could you go to nighttime mode please",
+      "Nachtmodus einschalten",
+      "ähm es ist spät, geh mal in den Nachtmodus"
+    ],
+    "night.off": [
+      "disable night mode",
+      "uh stop the night mode, back to normal",
+      "would you mind ending night mode",
+      "Nachtmodus beenden",
+      "ähm geh mal wieder raus aus dem Nachtmodus"
+    ],
+    "background.on": [
+      "enable live desktop",
+      "uh set yourself as the live wallpaper",
+      "i'd like the live desktop background switched on",
+      "mach den Live Desktop an",
+      "ähm sei mal mein animierter Desktophintergrund"
+    ],
+    "background.off": [
+      "disable live desktop",
+      "uh quit being the live wallpaper",
+      "would you mind switching the live desktop background off",
+      "mach den Live Desktop wieder aus",
+      "ähm geh mal wieder runter von meinem Desktophintergrund"
+    ],
+    "missed": [
+      "catch me up on what i missed",
+      "okay so did any notifications pop up while i was gone?",
+      "tell me what came in when i wasn't here",
+      "hab ich was verpasst",
+      "ähm bin wieder da, was ist in der Zwischenzeit reingekommen"
+    ],
+    "bright.side": [
+      "lower the brightness of the side monitors",
+      "uh darken the two monitors on the sides, not the middle one",
+      "i need the side screens dimmed",
+      "Seitenmonitore dimmen",
+      "ähm mach mal links und rechts die Bildschirme dunkler, den mittleren nicht"
+    ]
+  },
+  "not_commands": [
+    "Tom's voice got so deep over the summer",
+    "i told Tom he can only pick the music at the party",
+    "we had guests over all weekend and i barely slept",
+    "your voice keeps cutting out, i think it's your mic",
+    "Tom can do whatever he wants at home, his parents never say anything",
+    "guest mode on the school laptops blocks pretty much everything",
+    "the last backup of my minecraft world got corrupted",
+    "what's the difference between a backup and a sync",
+    "my mum keeps telling me to back up my phone",
+    "the subtitles in that anime were way too fast to read",
+    "do you guys watch it with subtitles or dubbed",
+    "i always turn the subtitles off in games",
+    "privacy is basically dead on social media",
+    "does anyone actually read the privacy policy before clicking accept",
+    "they keep recordings of every call at that company, that's kind of creepy",
+    "is it true that smart speakers listen to everyone all the time",
+    "our internet went down twice during the storm",
+    "his internet is so slow that he lags out of every round",
+    "is fibre really that much faster than normal internet",
+    "the teacher made a lot of changes to the timetable this week",
+    "that patch had so many changes nobody read the notes",
+    "i was up all night finishing the presentation",
+    "night mode on my phone makes everything look orange",
+    "we're reading a really boring book in english class right now",
+    "i stopped reading that manga after chapter fifty",
+    "that streamer reads every donation out loud, it's so annoying",
+    "my pronunciation of the th sound is still terrible",
+    "the teacher said my pronunciation got a lot better",
+    "why do americans pronounce aluminium so weirdly",
+    "i couldn't tell who was speaking in that voice message, it sounded like your brother",
+    "you missed, he's behind the wall on the left",
+    "what did you do today, anything fun",
+    "i set a sleep timer on the tv and it turned off in the middle of the episode",
+    "the coach stopped the training early because of the rain",
+    "i need to summarise three chapters for history by friday",
+    "Tom hat gestern die ganze Zeit dazwischengeredet",
+    "bei der Serie hinken die Untertitel immer zwei Sekunden hinterher",
+    "bei Oma ist das Internet so langsam, dass nicht mal YouTube lädt",
+    "ich hab heute Nacht kaum geschlafen",
+    "wir müssen für Deutsch ein ganzes Buch lesen",
+    "meine Aussprache in Französisch ist echt peinlich",
+    "hast du eigentlich ein Backup von deinem Handy gemacht, bevor es kaputtgegangen ist",
+    "Datenschutz ist bei uns in der Schule gerade ein riesiges Thema",
+    "was hat sich eigentlich beim neuen Update von Fortnite geändert",
+    "wir kriegen am Wochenende Gäste, da muss ich mein Zimmer aufräumen",
+    "unser Lehrer hat eine richtig laute Stimme",
+    "im Voicechat reden immer alle gleichzeitig, man versteht keinen",
+    "die Engländer können Eichhörnchen einfach nicht aussprechen",
+    "in dem Spiel muss man nachts aufpassen, da kommen die Zombies",
+    "warum ist Datenschutz in Deutschland eigentlich so streng"
+  ]
+}

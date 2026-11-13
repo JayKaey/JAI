@@ -98,7 +98,7 @@ pub fn routed_intent(text: &str) -> Option<Intent> {
     let t = crate::typos::normalize_user_input_typos(text);
     crate::intents::hud_view_command(&t)
         .or_else(|| crate::intents::internal_view_command(&t).map(|args| Intent::Tool { name: "open_jai_view", args }))
-        .or_else(|| crate::intents::parse(&t))
+        .or_else(|| crate::intents::parse_as_said(&t))
         .or_else(|| match crate::intent_engine::route(&t, &crate::intent_engine::ReflexContext::live()).map(|r| r.reflex) {
             Some(crate::intent_engine::Reflex::Silent(action)) => Some(Intent::Silent(action)),
             _ => None,

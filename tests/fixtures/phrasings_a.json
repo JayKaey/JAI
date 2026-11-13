@@ -1,0 +1,814 @@
+{
+  "dev": {
+    "dictation.start": [
+      "begin dictation",
+      "Could you start typing what I say?",
+      "I want to dictate something",
+      "can I dictate now?",
+      "dictation on",
+      "okay so type out everything I say from now on",
+      "starte das Diktat",
+      "kannst du mal mittippen, was ich sage",
+      "ich will was diktieren"
+    ],
+    "dictation.stop": [
+      "end dictation",
+      "would you stop typing what I say now please",
+      "I'm done dictating",
+      "Can you turn dictation off?",
+      "dictation off",
+      "okay that's it, quit the dictation",
+      "beende das Diktat",
+      "kannst du bitte aufhören mitzutippen",
+      "ich bin fertig mit Diktieren"
+    ],
+    "snippet.save_clipboard": [
+      "store the clipboard as a snippet called address",
+      "could you save what I just copied as a snippet named address",
+      "I want to keep my clipboard as the snippet address",
+      "can you make a snippet called address from my clipboard?",
+      "clipboard to snippet address",
+      "okay so take what I copied and save it as snippet address",
+      "speicher meine Zwischenablage als Snippet address",
+      "kannst du das, was ich gerade kopiert hab, als Snippet address speichern",
+      "ich will die Zwischenablage als Snippet namens address behalten"
+    ],
+    "snippet.type": [
+      "write out my address",
+      "would you mind typing in the address snippet for me",
+      "I need my address typed in here",
+      "can you fill in my address?",
+      "insert snippet address",
+      "okay so put my address snippet in here",
+      "tipp das Snippet address ein",
+      "kannst du mal das address Snippet hier reinschreiben",
+      "ich brauch hier mein Snippet address"
+    ],
+    "snippet.list": [
+      "show me my snippets",
+      "could you tell me which snippets I have",
+      "I'd like to see all my snippets",
+      "What snippets do I have?",
+      "my snippets please",
+      "okay so which snippets are saved right now",
+      "zeig mir meine Snippets",
+      "Welche Snippets hab ich?",
+      "kannst du mir mal alle Snippets auflisten"
+    ],
+    "snippet.delete": [
+      "throw away the address snippet",
+      "could you get rid of the snippet called address",
+      "I want the address snippet gone",
+      "can you erase the snippet address?",
+      "remove snippet address",
+      "uh delete my address snippet please",
+      "lösch das Snippet address",
+      "kannst du das address Snippet entfernen",
+      "ich will das Snippet address loswerden"
+    ],
+    "keys.next_tab": [
+      "go to the next tab",
+      "could you switch to the next tab please",
+      "I want the tab to the right of this one",
+      "can you jump one tab ahead?",
+      "one tab forward",
+      "okay uh move on to the tab after this",
+      "nächster Tab",
+      "geh mal einen Tab weiter",
+      "kannst du zum nächsten Tab wechseln"
+    ],
+    "keys.previous_tab": [
+      "go to the previous tab",
+      "would you mind switching back one tab",
+      "I want the tab to the left of this one",
+      "can you show me the tab before this?",
+      "one tab back",
+      "okay so jump to the tab on the left",
+      "vorheriger Tab",
+      "geh mal einen Tab zurück",
+      "kannst du zum Tab davor wechseln"
+    ],
+    "keys.new_tab": [
+      "open a new tab",
+      "could you open up another tab for me",
+      "I need a fresh tab",
+      "Can I get a new tab?",
+      "another tab please",
+      "okay so make me a new browser tab",
+      "neuer Tab",
+      "mach mal einen neuen Tab auf",
+      "kannst du mir einen neuen Tab öffnen"
+    ],
+    "keys.reopen_tab": [
+      "bring back the tab I just closed",
+      "could you restore my last closed tab",
+      "I want the tab I closed back",
+      "is there a way to get my closed tab back?",
+      "undo close tab",
+      "oops I closed that tab by accident, get it back",
+      "öffne den geschlossenen Tab wieder",
+      "hol den Tab zurück, den ich gerade zugemacht hab",
+      "kannst du den zuletzt geschlossenen Tab wiederherstellen"
+    ],
+    "keys.scroll_down": [
+      "scroll down a bit",
+      "could you scroll the page down please",
+      "I want to see what's further down the page",
+      "can you move the page down a little?",
+      "scroll further down",
+      "okay uh go down a bit on this page",
+      "scroll runter",
+      "kannst du mal nach unten scrollen",
+      "geh auf der Seite ein Stück weiter runter"
+    ],
+    "keys.scroll_up": [
+      "scroll up a bit",
+      "would you mind scrolling the page up",
+      "I want to go back up a little on this page",
+      "can you scroll upwards?",
+      "scroll back up",
+      "alright move the page up a bit",
+      "scroll hoch",
+      "kannst du mal nach oben scrollen",
+      "geh auf der Seite ein Stück weiter rauf"
+    ],
+    "keys.top": [
+      "jump to the top of the page",
+      "could you take me back to the very top",
+      "I want to get back to the start of the page",
+      "can you scroll all the way up?",
+      "back to top",
+      "okay so scroll right to the beginning of the page",
+      "geh ganz nach oben",
+      "spring an den Anfang der Seite",
+      "kannst du ganz hoch scrollen"
+    ],
+    "keys.bottom": [
+      "jump to the bottom of the page",
+      "would you take me down to the very bottom please",
+      "I want to get to the end of the page",
+      "can we go all the way down?",
+      "end of page",
+      "okay so scroll right down to the end of this page",
+      "geh ganz nach unten",
+      "spring ans Ende der Seite",
+      "kannst du ganz runter scrollen"
+    ],
+    "keys.page_back": [
+      "go back a page",
+      "could you go back to the previous page",
+      "I want to get back to the page I was on before",
+      "can you hit the back button?",
+      "browser back",
+      "um take me back one page",
+      "eine Seite zurück",
+      "geh mal zurück zur vorherigen Seite",
+      "kannst du im Browser zurückgehen"
+    ],
+    "keys.page_forward": [
+      "go forward a page",
+      "could you press forward in the browser please",
+      "I want to go one page forward again",
+      "can you hit the forward button?",
+      "browser forward",
+      "okay uh take me forward one page",
+      "eine Seite vor",
+      "geh mal wieder eine Seite vorwärts",
+      "kannst du im Browser vorwärts gehen"
+    ],
+    "keys.reload": [
+      "refresh the page",
+      "could you reload this site for me",
+      "I need this page refreshed",
+      "can you load the page again?",
+      "hit refresh",
+      "uh this page looks stuck, refresh it",
+      "lad die Seite neu",
+      "kannst du die Seite mal aktualisieren",
+      "die Seite braucht mal einen Refresh"
+    ],
+    "keys.select_all": [
+      "select everything",
+      "would you mind selecting all the text",
+      "I want everything selected",
+      "can you mark everything?",
+      "highlight all",
+      "okay so highlight the whole thing",
+      "alles markieren",
+      "markier mal den ganzen Text",
+      "kannst du bitte alles auswählen"
+    ],
+    "keys.paste": [
+      "paste the clipboard",
+      "could you paste that in here",
+      "I want to paste what I copied",
+      "can you put my clipboard in here?",
+      "paste here",
+      "okay uh insert what I just copied",
+      "füg das ein",
+      "kannst du die Zwischenablage einfügen",
+      "einfügen bitte"
+    ],
+    "keys.enter": [
+      "hit enter",
+      "could you please press the enter key",
+      "I need you to hit return",
+      "can you push enter for me?",
+      "enter key",
+      "okay now tap the enter key",
+      "drück Enter",
+      "Kannst du mal die Eingabetaste drücken?",
+      "einmal Enter bitte"
+    ],
+    "keys.find": [
+      "find photosynthesis on this page",
+      "could you look for the word photosynthesis on the page",
+      "I want to know where photosynthesis shows up on this page",
+      "where does it say photosynthesis on this page?",
+      "page search photosynthesis",
+      "okay so search this site for the word photosynthesis",
+      "such auf der Seite nach photosynthesis",
+      "kannst du mal auf der Seite das Wort photosynthesis suchen",
+      "wo steht hier auf der Seite photosynthesis"
+    ],
+    "note.add": [
+      "take a note, buy milk on Friday",
+      "would you mind writing down buy milk on Friday",
+      "I want a note that says buy milk on Friday",
+      "can you add buy milk on Friday to my notes?",
+      "new note buy milk on Friday",
+      "okay so jot this down, buy milk on Friday",
+      "Notiz: buy milk on Friday",
+      "schreib dir auf: buy milk on Friday",
+      "kannst du mal notieren, buy milk on Friday"
+    ],
+    "note.show": [
+      "open my notes",
+      "could you pull up my notes",
+      "I want to see my notes",
+      "what's in my notes?",
+      "notes please",
+      "okay uh bring up the notebook",
+      "zeig mir meine Notizen",
+      "kannst du mal meine Notizen aufmachen",
+      "Was steht in meinen Notizen?"
+    ],
+    "note.search": [
+      "search my notes for the test",
+      "can you please check what I wrote down about the test",
+      "I need my notes about the test",
+      "did I note anything about the test?",
+      "notes about the test",
+      "wait what do my notes say about the test",
+      "was hab ich mir zum Test notiert",
+      "such in meinen Notizen nach dem Test",
+      "kannst du mal schauen, was ich über den Test aufgeschrieben hab"
+    ],
+    "note.delete_last": [
+      "remove my last note",
+      "could you delete the note I just made",
+      "I want the most recent note gone",
+      "can you erase the latest note?",
+      "undo last note",
+      "uh get rid of the newest note",
+      "lösch die letzte Notiz",
+      "kannst du die neueste Notiz wieder entfernen",
+      "die letzte Notiz kann weg"
+    ],
+    "sleep.set": [
+      "set a sleep timer for 20 minutes",
+      "would you mind stopping the music in 20 minutes",
+      "I want the music to turn off in 20 minutes",
+      "can you put the sleep timer on 20 minutes?",
+      "music off in 20 minutes",
+      "okay so I'm going to bed, kill the music after 20 minutes",
+      "stell den Sleeptimer auf 20 Minuten",
+      "mach die Musik in 20 Minuten aus",
+      "kannst du die Musik nach 20 Minuten stoppen"
+    ],
+    "sleep.cancel": [
+      "stop the sleep timer",
+      "could you turn off the sleep timer",
+      "I don't want the sleep timer anymore",
+      "can you call off the sleep timer?",
+      "sleep timer off",
+      "okay forget the sleep timer, I'm staying up",
+      "brich den Sleeptimer ab",
+      "kannst du den Sleep-Timer wieder ausmachen",
+      "ich will den Sleeptimer doch nicht"
+    ],
+    "sleep.status": [
+      "tell me how much time is left on the sleep timer",
+      "could you tell me how long the sleep timer still has",
+      "I want to know when the sleep timer runs out",
+      "when does the sleep timer go off?",
+      "sleep timer status",
+      "okay so how many minutes until the sleep timer ends",
+      "Wie lange läuft der Sleeptimer noch?",
+      "wie viel Zeit ist noch auf dem Sleep-Timer",
+      "kannst du mir sagen, wann der Sleeptimer abläuft"
+    ],
+    "rule.add_start": [
+      "every time discord starts, mute the music",
+      "could you mute the music whenever discord opens",
+      "I want you to mute the music each time discord launches",
+      "can you set up a rule, when discord starts mute the music?",
+      "discord starts, mute the music",
+      "okay so from now on, as soon as discord comes up, mute the music",
+      "immer wenn discord startet, mute the music",
+      "neue Regel: sobald discord aufgeht, mute the music",
+      "kannst du dir merken, jedes Mal wenn ich discord starte, mute the music"
+    ],
+    "rule.list": [
+      "show all the rules",
+      "would you tell me which rules I've set up",
+      "I need to see what rules I've got",
+      "which rules are active right now?",
+      "rules overview",
+      "uh what automatic rules did I make again",
+      "zeig mal meine Regeln",
+      "was für Regeln hab ich eingerichtet",
+      "kannst du mir sagen, welche Regeln es gibt"
+    ],
+    "rule.delete": [
+      "take rule 2 off the list",
+      "could you get rid of rule number 2",
+      "I want rule 2 gone",
+      "can you erase rule number 2?",
+      "drop rule 2",
+      "uh I don't need rule 2 anymore, remove it",
+      "lösch Regel 2",
+      "kannst du die Regel Nummer 2 entfernen",
+      "ich will Regel 2 nicht mehr haben"
+    ],
+    "bright.set": [
+      "set the brightness to 40 percent",
+      "could you put my monitors at 40 percent brightness please",
+      "I want the screen brightness at 40 percent",
+      "can I have the brightness on 40 percent?",
+      "40 percent brightness",
+      "alright dim the monitors to 40 percent",
+      "stell die Helligkeit auf 40 Prozent",
+      "kannst du die Monitore auf 40 Prozent Helligkeit setzen",
+      "Helligkeit 40 Prozent"
+    ],
+    "bright.up": [
+      "turn the brightness up",
+      "could you brighten my monitors a bit",
+      "I want it brighter on all three monitors",
+      "can I get a bit more brightness?",
+      "brightness up",
+      "uh the monitors are too dim, turn them up a notch",
+      "mach die Bildschirme heller",
+      "kannst du die Helligkeit ein bisschen hochdrehen",
+      "Helligkeit hoch"
+    ],
+    "bright.down": [
+      "turn the brightness down",
+      "would you mind dimming my monitors a bit",
+      "I need less brightness on the monitors",
+      "can you lower the brightness?",
+      "brightness down",
+      "okay my eyes hurt, take the screen brightness down a little",
+      "mach die Bildschirme dunkler",
+      "kannst du die Helligkeit ein bisschen runterdrehen",
+      "Helligkeit runter"
+    ],
+    "bright.status": [
+      "what's the brightness of my screens",
+      "could you tell me the current monitor brightness",
+      "I want to know how bright the screens are set",
+      "what percent brightness am I on?",
+      "brightness status",
+      "okay so how bright is everything set at the moment",
+      "Wie hell sind meine Monitore?",
+      "auf wie viel Prozent steht die Helligkeit",
+      "kannst du mir sagen, wie hell die Bildschirme gerade sind"
+    ],
+    "layout.restore": [
+      "load the study layout",
+      "could you bring back my study layout",
+      "I want my windows like in the study layout",
+      "can you switch to the layout study?",
+      "study layout please",
+      "okay uh arrange everything like in my study layout",
+      "stell das study Layout wieder her",
+      "kannst du das Layout study laden",
+      "ich will meine Fenster wie im study Layout"
+    ],
+    "layout.list": [
+      "show me my layouts",
+      "could you list the layouts I've saved",
+      "I'd like to see my saved desk layouts",
+      "what layouts do I have?",
+      "saved layouts",
+      "um which window layouts are there",
+      "zeig mir meine Layouts",
+      "welche Layouts hab ich gespeichert",
+      "kannst du mal alle Layouts auflisten"
+    ],
+    "layout.delete": [
+      "remove the study layout",
+      "would you delete the layout named study for me",
+      "I don't need the study layout anymore",
+      "can you take the study layout off the list?",
+      "scrap the study layout",
+      "okay so the layout called study is old, get rid of it",
+      "lösch das study Layout",
+      "kannst du das Layout study wieder entfernen",
+      "das Layout study brauch ich nicht mehr"
+    ],
+    "dashboard.on": [
+      "turn on the portrait dashboard",
+      "could you show the dashboard on the vertical monitor",
+      "I want the dashboard on my upright screen",
+      "Can I get the portrait dashboard?",
+      "portrait dashboard on",
+      "alright put the dashboard up on the portrait monitor",
+      "mach das Hochkant-Dashboard an",
+      "kannst du das Dashboard auf dem Hochkant-Monitor anzeigen",
+      "Portrait-Dashboard an"
+    ],
+    "dashboard.off": [
+      "turn off the portrait dashboard",
+      "would you mind hiding the dashboard on the vertical monitor",
+      "I don't need the dashboard on my upright screen anymore",
+      "can you close the portrait dashboard?",
+      "hide portrait dashboard",
+      "okay so take the dashboard off the portrait monitor",
+      "mach das Hochkant-Dashboard aus",
+      "kannst du das Dashboard auf dem Hochkant-Monitor wieder ausblenden",
+      "Portrait-Dashboard aus"
+    ],
+    "read.selection": [
+      "read the selected text aloud",
+      "could you read out what I've highlighted",
+      "I want to hear the text I selected",
+      "can you read the selection to me?",
+      "read this out",
+      "okay so read me the part I marked",
+      "lies mir das vor",
+      "kannst du den markierten Text vorlesen",
+      "lies mal vor, was ich markiert hab"
+    ],
+    "read.clipboard": [
+      "read out the clipboard",
+      "could you please read me what I just copied",
+      "I want to hear what's in my clipboard",
+      "can you tell me what's on the clipboard?",
+      "read copied text",
+      "okay so read the stuff I copied out loud",
+      "lies meine Zwischenablage vor",
+      "kannst du mir vorlesen, was ich kopiert hab",
+      "sag mir, was in meiner Zwischenablage steht"
+    ]
+  },
+  "heldout": {
+    "dictation.start": [
+      "take dictation please",
+      "hey I'm gonna dictate now, type along",
+      "I'd like to switch to dictation mode",
+      "Diktiermodus an",
+      "ähm ich diktier dir jetzt was, schreib das bitte mit"
+    ],
+    "dictation.stop": [
+      "finish dictation please",
+      "uh you can stop typing along now",
+      "I want to leave dictation mode",
+      "Diktiermodus aus",
+      "okay das reicht, hör auf mitzuschreiben"
+    ],
+    "snippet.save_clipboard": [
+      "create a snippet named address from what's in my clipboard",
+      "hey remember the copied text as snippet address",
+      "I need a new snippet called address with the stuff I just copied",
+      "Zwischenablage als Snippet address sichern",
+      "ähm mach aus dem kopierten Text ein Snippet mit dem Namen address"
+    ],
+    "snippet.type": [
+      "drop my address snippet in here",
+      "hey type out the snippet called address",
+      "would you mind entering my address here",
+      "Snippet address einfügen",
+      "äh schreib bitte mein address Snippet rein"
+    ],
+    "snippet.list": [
+      "pull up the snippet list",
+      "hey what snippets have I got saved",
+      "I want an overview of my snippets",
+      "Snippets anzeigen",
+      "sag mal, was für Snippets hab ich eigentlich gespeichert"
+    ],
+    "snippet.delete": [
+      "wipe the snippet named address",
+      "hey I don't need the address snippet anymore, remove it",
+      "do me a favor and delete the address snippet",
+      "Snippet address löschen",
+      "ey schmeiß das Snippet namens address bitte raus"
+    ],
+    "keys.next_tab": [
+      "flip to the next tab",
+      "hey can you go one tab to the right",
+      "I need the next tab over",
+      "einen Tab nach rechts",
+      "ähm wechsel bitte auf den nächsten Tab"
+    ],
+    "keys.previous_tab": [
+      "flip back to the previous tab",
+      "hey move one tab to the left",
+      "I need the tab just before this one",
+      "einen Tab nach links",
+      "äh geh bitte wieder auf den vorigen Tab"
+    ],
+    "keys.new_tab": [
+      "create a new tab",
+      "yo give me an empty tab",
+      "I'd like to open one more tab",
+      "noch ein Tab",
+      "also ich brauch einen leeren Tab im Browser"
+    ],
+    "keys.reopen_tab": [
+      "get the closed tab back",
+      "hey I didn't mean to close that tab, open it again",
+      "I need the last tab I closed back please",
+      "letzten Tab wieder aufmachen",
+      "ups, den Tab wollte ich nicht schließen, mach den wieder auf"
+    ],
+    "keys.scroll_down": [
+      "scroll a little lower",
+      "hey keep going down the page",
+      "would you scroll down a little please",
+      "weiter runter scrollen",
+      "ähm scroll bitte ein bisschen nach unten"
+    ],
+    "keys.scroll_up": [
+      "scroll a little higher",
+      "hey take the page up a little",
+      "can you please scroll upward a little",
+      "weiter hoch scrollen",
+      "okay scroll mal wieder ein bisschen nach oben"
+    ],
+    "keys.top": [
+      "scroll to the very top",
+      "alright go right back up to where the page starts",
+      "I need the top of the page",
+      "zum Seitenanfang",
+      "ähm scroll bitte bis ganz nach oben"
+    ],
+    "keys.bottom": [
+      "scroll down until the page ends",
+      "um skip to the very end of this page",
+      "I need the bottom of the page",
+      "zum Seitenende",
+      "also scroll mal bis ganz nach unten"
+    ],
+    "keys.page_back": [
+      "back to the last page",
+      "hey go back to the site I was just on",
+      "I need the previous page again",
+      "Seite zurück",
+      "ähm geh bitte auf die Seite davor zurück"
+    ],
+    "keys.page_forward": [
+      "go forwards again",
+      "hey I went back too far, go forward one",
+      "I'd like to move forward a page in the browser",
+      "Seite vor",
+      "äh geh bitte wieder eine Seite nach vorne"
+    ],
+    "keys.reload": [
+      "refresh this tab",
+      "um give this page a reload",
+      "would you mind refreshing the website",
+      "einmal neu laden bitte",
+      "ey die Seite hängt, lad die nochmal"
+    ],
+    "keys.select_all": [
+      "select the whole page",
+      "hey highlight everything in here",
+      "I need the entire text selected",
+      "mach mal Steuerung A",
+      "ähm markier bitte einfach alles, was da steht"
+    ],
+    "keys.paste": [
+      "paste that",
+      "hey drop the copied text in here",
+      "do you mind pasting what's in the clipboard",
+      "das Kopierte einfügen",
+      "so, füg mal hier ein, was ich kopiert hab"
+    ],
+    "keys.enter": [
+      "press return",
+      "hey smash the enter key",
+      "would you mind hitting enter for me",
+      "hau mal auf Enter",
+      "ähm bestätige mal mit Enter"
+    ],
+    "keys.find": [
+      "check this page for photosynthesis",
+      "hey do a control f for photosynthesis",
+      "I need to find the word photosynthesis on here",
+      "Seite nach photosynthesis durchsuchen",
+      "ey find mir mal photosynthesis hier auf der Seite"
+    ],
+    "note.add": [
+      "make a note saying buy milk on Friday",
+      "hey put buy milk on Friday in my notebook",
+      "please note down for me, buy milk on Friday",
+      "neue Notiz, buy milk on Friday",
+      "ähm pack mal buy milk on Friday in meine Notizen"
+    ],
+    "note.show": [
+      "display my notebook",
+      "alright let me see all my notes",
+      "I'd like to look at what I've noted down",
+      "Notizen anzeigen",
+      "also ich will mal meine Notizen sehen"
+    ],
+    "note.search": [
+      "find my notes on the test",
+      "hey what did I write down about the test",
+      "I'd like to know what I noted about the test",
+      "Notizen zum Test",
+      "ähm steht in meinen Notizen irgendwas über den Test"
+    ],
+    "note.delete_last": [
+      "throw out the most recent note",
+      "hey the last note was wrong, delete it",
+      "could you please take out the latest note",
+      "letzte Notiz wieder raus",
+      "äh streich bitte die Notiz, die ich zuletzt gemacht hab"
+    ],
+    "sleep.set": [
+      "sleep timer on, 20 minutes",
+      "hey let the music run for another 20 minutes and then stop it",
+      "I want you to shut the music off 20 minutes from now",
+      "Einschlaftimer auf 20 Minuten",
+      "ähm ich geh gleich schlafen, in 20 Minuten Musik aus"
+    ],
+    "sleep.cancel": [
+      "no sleep timer after all",
+      "oh and scrap the sleep timer",
+      "I changed my mind about the sleep timer, turn it off",
+      "Sleeptimer aus",
+      "ach vergiss den Einschlaftimer wieder"
+    ],
+    "sleep.status": [
+      "what's left on the sleep timer",
+      "hey how long till the sleep timer stops the music",
+      "I'd like a quick update on the sleep timer",
+      "Restzeit vom Sleeptimer",
+      "sag mal, wie viele Minuten hat der Einschlaftimer noch"
+    ],
+    "rule.add_start": [
+      "each time I open discord, mute the music",
+      "hey add a rule that says when discord starts up, mute the music",
+      "I need a rule: as soon as discord launches, mute the music",
+      "bei jedem discord Start: mute the music",
+      "ähm mach mal ne Regel, wenn discord gestartet wird, mute the music"
+    ],
+    "rule.list": [
+      "give me the list of rules",
+      "hey tell me what rules I have",
+      "I want to look at my automatic rules",
+      "Regeln auflisten",
+      "also welche automatischen Regeln laufen gerade"
+    ],
+    "rule.delete": [
+      "throw out rule number 2",
+      "hey cancel rule 2",
+      "would you mind deleting the rule with the number 2",
+      "Regel Nummer 2 streichen",
+      "ey schmeiß mal die Regel 2 raus"
+    ],
+    "bright.set": [
+      "change the monitor brightness to 40 percent",
+      "hey make all my screens 40 percent bright",
+      "I need the display brightness on 40 percent",
+      "Bildschirmhelligkeit auf 40 Prozent",
+      "ähm dreh die Helligkeit von den Monitoren auf 40 Prozent"
+    ],
+    "bright.up": [
+      "increase the monitor brightness",
+      "hey bump the screen brightness up a step",
+      "I'd like my monitors a bit brighter",
+      "Monitore heller",
+      "boah ist das dunkel, stell die Monitore mal eine Stufe heller"
+    ],
+    "bright.down": [
+      "decrease the monitor brightness",
+      "hey the screens are blinding me, dim them a step",
+      "I'd like my monitors a bit darker",
+      "Monitore dunkler",
+      "ey das blendet voll, stell die Monitore mal eine Stufe dunkler"
+    ],
+    "bright.status": [
+      "check the monitor brightness",
+      "um what brightness are the displays on",
+      "I'd like to know the brightness level of my monitors",
+      "wie ist die Helligkeit gerade",
+      "ähm auf welcher Helligkeit laufen die Monitore eigentlich"
+    ],
+    "layout.restore": [
+      "apply the layout called study",
+      "hey put all my windows back to the study layout",
+      "I'd like the study layout back up",
+      "Layout study aufrufen",
+      "also ordne die Fenster mal wieder so an wie im study Layout"
+    ],
+    "layout.list": [
+      "bring up all my layouts",
+      "wait which layouts have I got stored",
+      "I need an overview of the desk layouts",
+      "Layouts anzeigen",
+      "ähm was für Layouts gibt es eigentlich"
+    ],
+    "layout.delete": [
+      "erase my study layout",
+      "hey forget the layout study",
+      "I want to delete the layout I saved as study",
+      "Layout study löschen",
+      "äh das study Layout kann weg, lösch das mal"
+    ],
+    "dashboard.on": [
+      "start the dashboard on the portrait screen",
+      "hey bring up the vertical monitor dashboard",
+      "I'd like the portrait dashboard switched on",
+      "Portrait-Dashboard einschalten",
+      "ähm zeig mal das Dashboard auf dem hochkant Monitor"
+    ],
+    "dashboard.off": [
+      "stop the dashboard on the portrait screen",
+      "hey get rid of the vertical monitor dashboard",
+      "I'd like the portrait dashboard switched off",
+      "Portrait-Dashboard ausschalten",
+      "okay nimm mal das Dashboard vom hochkant Monitor wieder weg"
+    ],
+    "read.selection": [
+      "speak the selection",
+      "hey say what I just selected out loud",
+      "could you please read me the marked text",
+      "Markierung vorlesen",
+      "ähm lies mir mal den ausgewählten Text laut vor"
+    ],
+    "read.clipboard": [
+      "read the copied text to me",
+      "um say out loud what's in my clipboard",
+      "I'd like the clipboard read aloud",
+      "kopierten Text vorlesen",
+      "ey lies mal laut vor, was gerade in der Zwischenablage ist"
+    ]
+  },
+  "not_commands": [
+    "I forgot my notes at school again",
+    "we had a dictation in English today and I messed it up completely",
+    "bro I had like fifty tabs open and my laptop just died",
+    "the brightness on my phone keeps changing by itself, it's so annoying",
+    "do you know how the sleep timer on a tv actually works",
+    "I saw a snippet of the new trailer and it looks insane",
+    "there's a rule at home that nobody games after ten",
+    "I was reading until two in the morning last night",
+    "the layout of the new school building is so confusing",
+    "he was scrolling on his phone the whole lesson",
+    "my mom always leaves little notes on the fridge",
+    "why is it even called a clipboard",
+    "he closed the tab right before the teacher walked past",
+    "the timer ran out before I could defuse the bomb",
+    "the rules of that card game make no sense to me",
+    "in the tutorial the guy just says select all and then copy",
+    "she said press enter and then the whole thing crashed",
+    "Tom pasted the wrong link into the group chat",
+    "the page kept reloading during the online test",
+    "our teacher said the test is going to be about photosynthesis",
+    "my mom told me to buy milk on Friday",
+    "discord was so laggy yesterday that nobody could hear me",
+    "he muted himself and kept talking for like five minutes",
+    "those 20 minutes of homework turned into two hours",
+    "the screens in the computer room are way too bright",
+    "is it actually bad for your eyes to read in the dark",
+    "the last note of that song is ridiculously high",
+    "they changed the keyboard layout on the school laptops",
+    "the dashboard in that racing game shows the wrong speed",
+    "what's the difference between a tab and a window anyway",
+    "I think the sleep timer on my speaker is broken",
+    "we had to run from the bottom of the hill to the top three times",
+    "I told him to delete the last note but he deleted everything",
+    "when I say next tab he always clicks the wrong one",
+    "my grandpa still dictates his messages into his phone",
+    "wir haben heute in Deutsch ein Diktat geschrieben",
+    "ich hab meine Notizen im Bus liegen lassen",
+    "bei mir waren gestern so viele Tabs offen, dass der Browser abgestürzt ist",
+    "warum ist die Helligkeit bei meinem Handy draußen immer so niedrig",
+    "der Timer in dem Spiel läuft viel zu schnell ab",
+    "bei uns zu Hause gibt es die Regel, dass um zehn Schluss ist",
+    "unsere Lehrerin hat uns das ganze Kapitel vorgelesen",
+    "ich hab gestern bis Mitternacht auf TikTok gescrollt statt zu lernen",
+    "das Layout von der neuen Schulwebsite ist echt hässlich",
+    "er hat ein Snippet von seinem neuen Song gepostet",
+    "meine Mutter hat gesagt, ich soll am Freitag Milch kaufen",
+    "Tom hat sich im Call gemutet und es nicht gemerkt",
+    "er meinte, ich soll einfach die Seite neu laden, hat aber nichts gebracht",
+    "ich muss für den Test morgen noch Photosynthese lernen",
+    "ich hab aus Versehen den falschen Text in den Chat eingefügt"
+  ]
+}
