@@ -725,6 +725,14 @@ impl JaiConfig {
             }
         };
 
+        // Before an update changes the settings, the file as Sir left it is kept beside it
+        // (`jai_config.json.v26`): one copy per version, so there is a way back.
+        if !cfg!(test) && path.is_file() && cfg.config_version < CONFIG_VERSION {
+            let kept = format!("{CONFIG_FILE}.v{}", cfg.config_version);
+            if !Path::new(&kept).exists() && fs::copy(path, &kept).is_ok() {
+                info!("The settings as they were before this update are kept in {kept}.");
+            }
+        }
         cfg.migrate();
         cfg.sanitize();
         if let Err(e) = cfg.save() {

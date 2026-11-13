@@ -160,6 +160,12 @@ impl WakeWordMatcher {
         let cleaned: Vec<String> = transcript.split_whitespace().map(clean).collect();
         let start = cleaned.iter().take(3).take_while(|w| GREETINGS.contains(&w.as_str())).count();
         let Some(first) = cleaned.get(start).filter(|w| accent_form(w) && !self.soft.contains(w)) else { return (plain, None) };
+        // What follows must be an order as it was said: "They stopped the music" is a report
+        // about others, which his name's own rule would turn into an order.
+        let rest = transcript.split_whitespace().skip(start + 1).collect::<Vec<_>>().join(" ");
+        if rest.trim().is_empty() || crate::typos::imperative_after_name(&rest) != rest {
+            return (plain, None);
+        }
         let with = WakeWordMatcher { extra: self.extra.clone(), soft: self.soft.iter().cloned().chain(std::iter::once(first.clone())).collect(), threshold: self.threshold };
         let again = with.evaluate(transcript);
         if again.matched { (again, Some(first.clone())) } else { (plain, None) }
@@ -283,6 +289,14 @@ impl WakeWordMatcher {
 pub fn accent_form(word: &str) -> bool {
     static FORM: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"^(?:th|d|t|ch|sh|tsch|dsch|z|dz)(?:ay|ey|ai|ei|ae|aye)$").expect("the accent forms"));
     FORM.is_match(word)
+}
+
+/// Whether a word is his name as it is written, or a near miss of it (not a word that merely
+/// stands for it in an accented voice: "They", "Day").
+pub fn real_name_word(word: &str) -> bool {
+    static BUILT_IN: std::sync::LazyLock<WakeWordMatcher> = std::sync::LazyLock::new(|| WakeWordMatcher::new(&[], 0.8));
+    let w = clean(word);
+    !w.is_empty() && BUILT_IN.form(&w).0 != Form::None
 }
 
 /// Whether a word can stand where his name stands: his name, a near miss of it, or how it

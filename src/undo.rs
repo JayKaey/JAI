@@ -208,7 +208,8 @@ pub fn way_back(tool: &str, args: &Value, said: &str, before: &Snapshot, after: 
             step.calls.push(("take_dictation", json!({ "action": "stop" })));
             step.done = "dictation is off";
         }
-        ("type_snippet", "save") => {
+        // (A snippet that replaced an older one of its name is not taken back by deleting it.)
+        ("type_snippet", "save") if !said.contains("\" replaced (") => {
             if let Some(name) = args["name"].as_str().filter(|n| !n.is_empty()) {
                 step.calls.push(("type_snippet", json!({ "action": "delete", "name": name })));
                 step.done = "that snippet is forgotten again";

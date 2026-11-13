@@ -82,40 +82,40 @@ const fn row(group: &'static str, name: &'static str, explain: &'static str, wor
 const GROUPS: [&str; 5] = ["LOOK", "SCREENS", "VOICE", "PRESENCE", "TOOLS"];
 
 static ROWS: [Row; 34] = [
-    row("LOOK", "Theme", "The HUD's colours: one click on a swatch changes them.", "colour color palette gold cyan red green", Control::Theme),
+    row("LOOK", "Theme", "The HUD's colours: one click on a swatch changes them.", "colour color palette gold cyan red green farbe farben design", Control::Theme),
     row("LOOK", "Your own theme", "Build a theme from your own colours, name it and save it.", "theme studio custom create", Control::Open(Tool::ThemeStudio, "[ THEME STUDIO ]")),
     row("LOOK", "Colours, opacity and panels", "The accent and background colour, how see-through the HUD is, which panels show.", "interface accent background transparency", Control::Open(Tool::Interface, "[ OPEN ]")),
     row("LOOK", "Display finish", "Scan lines, grain, dust and hairline scratches: the HUD reads as light on glass.", "rough grain scan lines glass scratches", Control::Switch(|s| s.display_finish, |s, v| s.display_finish = v)),
-    row("LOOK", "Animations", "Blocks unfold, glide and fold away. Off: everything appears at once.", "motion movement", Control::Switch(|s| s.animations, |s, v| s.animations = v)),
+    row("LOOK", "Animations", "Blocks unfold, glide and fold away. Off: everything appears at once.", "motion movement animation bewegung", Control::Switch(|s| s.animations, |s, v| s.animations = v)),
     row("LOOK", "Calm HUD", "The readouts at the top and bottom step back until the mouse comes near.", "quiet dense readouts header telemetry", Control::Switch(|s| s.calm_hud, |s, v| s.calm_hud = v)),
     row("LOOK", "Status pill", "The word at the top that says what he is doing: LISTENING, THINKING, SPEAKING.", "state", Control::Switch(|s| s.status_pill, |s, v| s.status_pill = v)),
     row("LOOK", "Voice ring", "Your voice as a ring of ticks round the emblem while you speak.", "rim microphone level", Control::Switch(|s| s.voice_rim, |s, v| s.voice_rim = v)),
     row("LOOK", "Conversation block", "What you said and what he answers, in a block above the bottom strip.", "comms captions", Control::Switch(|s| s.comms_block, |s, v| s.comms_block = v)),
     row("LOOK", "Edge light", "The screen's edges glow for a moment when something happens.", "glow notification alert", Control::Switch(|s| s.edge_light, |s, v| s.edge_light = v)),
     row("LOOK", "Music visuals", "The emblem moves with the music that plays on the PC.", "visualiser visualizer spectrum song", Control::Switch(|s| s.music_visuals, |s, v| s.music_visuals = v)),
-    row("LOOK", "Text size", "How large the text is.", "font bigger smaller", Control::Size(|s| s.font_scale, |s, v| s.font_scale = v, 0.8, 1.6)),
+    row("LOOK", "Text size", "How large the text is.", "font bigger smaller schrift größer kleiner", Control::Size(|s| s.font_scale, |s, v| s.font_scale = v, 0.8, 1.6)),
     row("LOOK", "Zoom", "How large everything is.", "scale bigger smaller", Control::Size(|s| s.scale, |s, v| s.scale = v, 0.7, 1.6)),
-    row("SCREENS", "Fullscreen board", "The HUD fills its monitor. Off: a window you can move and size.", "full screen window f11", Control::Switch(|s| s.fullscreen, |s, v| s.fullscreen = v)),
-    row("SCREENS", "One board across all monitors", "The board spans every screen; the HUD proper stays on the first.", "span monitors", Control::Switch(|s| s.span_all_monitors, |s, v| s.span_all_monitors = v)),
+    row("SCREENS", "Fullscreen board", "The HUD fills its monitor. Off: a window you can move and size.", "full screen window f11 vollbild fenster", Control::Switch(|s| s.fullscreen, |s, v| s.fullscreen = v)),
+    row("SCREENS", "One board across all monitors", "The board spans every screen; the HUD proper stays on the first.", "span monitors bildschirme", Control::Switch(|s| s.span_all_monitors, |s, v| s.span_all_monitors = v)),
     row("SCREENS", "Always on top", "The HUD stays in front of other programs.", "front", Control::Switch(|s| s.always_on_top, |s, v| s.always_on_top = v)),
     row("SCREENS", "Windows may overlap", "New windows of his may open over each other instead of beside each other.", "stack cascade", Control::Switch(|s| s.allow_window_overlap, |s, v| s.allow_window_overlap = v)),
-    row("SCREENS", "Mini mode", "A slim strip at the top of a screen instead of the board, for gaming or work.", "strip bar small compact", Control::Switch(|s| s.mini_strip, |s, v| s.mini_strip = v)),
-    row("SCREENS", "Live desktop background", "The emblem, the clock and his state behind your desktop icons.", "wallpaper desktop", Control::Switch(|s| s.desktop_background, |s, v| s.desktop_background = v)),
-    row("SCREENS", "Monitors", "Which monitor the board is on.", "screens display", Control::Open(Tool::Screens, "[ SCREENS ]")),
-    row("VOICE", "Live words", "Your words appear under the emblem while you speak (paused while a game runs).", "captions transcript", Control::Switch(|s| s.live_words, |s, v| s.live_words = v)),
-    row("VOICE", "Learn my voice", "One minute of reading aloud: he tunes his hearing to your voice and microphone.", "set-up setup calibrate wake name jay", Control::Open(Tool::VoiceSetup, "[ START ]")),
-    row("VOICE", "Only obey me", "He answers to your voice alone, and learns it as you speak.", "lock speaker stranger everyone guest", Control::Switch(|s| s.voice_lock, |s, v| s.voice_lock = v)),
-    row("VOICE", "Short confirmations", "After an order he says it is done, without repeating what you just said.", "brief acknowledge talk less echo", Control::Switch(|s| s.brief_confirmations, |s, v| s.brief_confirmations = v)),
-    row("VOICE", "Sound cues", "The short sounds when a block opens or closes, a report is ready, something fails.", "sounds earcons beep", Control::Switch(|s| s.sound_cues, |s, v| s.sound_cues = v)),
-    row("VOICE", "Microphone, devices and memory", "Pick the microphone and speaker, the wake word's strictness, what he remembers.", "audio input output drawer", Control::Open(Tool::Devices, "[ OPEN ]")),
-    row("VOICE", "Mixer", "A fader for the master volume and for every program that plays sound.", "volume loud quiet", Control::Open(Tool::Mixer, "[ MIXER ]")),
-    row("PRESENCE", "Start-up sequence", "He powers up with a short sequence, a longer one after a long time away.", "boot greeting", Control::Switch(|s| s.startup_sequence, |s, v| s.startup_sequence = v)),
-    row("PRESENCE", "Idle screen", "Unused for five minutes, the HUD dims to the clock, your next appointment and the weather.", "screensaver away dim clock", Control::Switch(|s| s.idle_screen, |s, v| s.idle_screen = v)),
-    row("PRESENCE", "Night mode by the clock", "From 22:00 to 6:00 he is dimmer, makes no sounds and speaks quietly and briefly.", "evening late dark", Control::Switch(|s| s.night_mode, |s, v| s.night_mode = v)),
+    row("SCREENS", "Mini mode", "A slim strip at the top of a screen instead of the board, for gaming or work.", "strip bar small compact leiste klein", Control::Switch(|s| s.mini_strip, |s, v| s.mini_strip = v)),
+    row("SCREENS", "Live desktop background", "The emblem, the clock and his state behind your desktop icons.", "wallpaper desktop hintergrund hintergrundbild", Control::Switch(|s| s.desktop_background, |s, v| s.desktop_background = v)),
+    row("SCREENS", "Monitors", "Which monitor the board is on.", "screens display bildschirm monitor", Control::Open(Tool::Screens, "[ SCREENS ]")),
+    row("VOICE", "Live words", "Your words appear under the emblem while you speak (paused while a game runs).", "captions transcript mitschrift worte", Control::Switch(|s| s.live_words, |s, v| s.live_words = v)),
+    row("VOICE", "Learn my voice", "One minute of reading aloud: he tunes his hearing to your voice and microphone.", "set-up setup calibrate wake name jay stimme lernen einrichten", Control::Open(Tool::VoiceSetup, "[ START ]")),
+    row("VOICE", "Only obey me", "He answers to your voice alone, and learns it as you speak.", "lock speaker stranger everyone guest stimme sperre gast gäste", Control::Switch(|s| s.voice_lock, |s, v| s.voice_lock = v)),
+    row("VOICE", "Short confirmations", "After an order he says it is done, without repeating what you just said.", "brief acknowledge talk less echo kurz bestätigung", Control::Switch(|s| s.brief_confirmations, |s, v| s.brief_confirmations = v)),
+    row("VOICE", "Sound cues", "The short sounds when a block opens or closes, a report is ready, something fails.", "sounds earcons beep töne klänge", Control::Switch(|s| s.sound_cues, |s, v| s.sound_cues = v)),
+    row("VOICE", "Microphone, devices and memory", "Pick the microphone and speaker, the wake word's strictness, what he remembers.", "audio input output drawer mikrofon lautsprecher geräte", Control::Open(Tool::Devices, "[ OPEN ]")),
+    row("VOICE", "Mixer", "A fader for the master volume and for every program that plays sound.", "volume loud quiet lautstärke laut leise", Control::Open(Tool::Mixer, "[ MIXER ]")),
+    row("PRESENCE", "Start-up sequence", "He powers up with a short sequence, a longer one after a long time away.", "boot greeting start begrüßung", Control::Switch(|s| s.startup_sequence, |s, v| s.startup_sequence = v)),
+    row("PRESENCE", "Idle screen", "Unused for five minutes, the HUD dims to the clock, your next appointment and the weather.", "screensaver away dim clock ruhebildschirm uhr", Control::Switch(|s| s.idle_screen, |s, v| s.idle_screen = v)),
+    row("PRESENCE", "Night mode by the clock", "From 22:00 to 6:00 he is dimmer, makes no sounds and speaks quietly and briefly.", "evening late dark nacht nachtmodus abend", Control::Switch(|s| s.night_mode, |s, v| s.night_mode = v)),
     row("PRESENCE", "Night mode tonight", "On or off for this night only; the clock decides again in the morning.", "now", Control::Moment(|s| crate::hud_feel::night(s.night_mode), "night_now")),
-    row("PRESENCE", "What did I miss?", "The notifications of the last hours.", "notifications history missed", Control::Open(Tool::Missed, "[ SHOW ]")),
+    row("PRESENCE", "What did I miss?", "The notifications of the last hours.", "notifications history missed benachrichtigungen verpasst", Control::Open(Tool::Missed, "[ SHOW ]")),
     row("TOOLS", "Accounts and services", "E-mail, calendar, school, Discord, the phone link: the Integrations hub.", "integrations hub webuntis itslearning whatsapp", Control::Open(Tool::Hub, "[ HUB ]")),
-    row("TOOLS", "Everything he can do", "The Feature Lab: every ability, each with a button to try it.", "features lab abilities help", Control::Open(Tool::FeatureLab, "[ FEATURE LAB ]")),
+    row("TOOLS", "Everything he can do", "The Feature Lab: every ability, each with a button to try it.", "features lab abilities help funktionen hilfe", Control::Open(Tool::FeatureLab, "[ FEATURE LAB ]")),
 ];
 
 fn rows() -> impl Iterator<Item = &'static Row> {
@@ -329,6 +329,11 @@ mod tests {
         assert_eq!(found("only obey"), vec!["Only obey me"]);
         assert!(found("voice").len() >= 4, "the whole group answers to its name");
         assert!(found("quantum flux").is_empty());
+        // The search understands German words for the same things.
+        assert_eq!(found("nachtmodus"), vec!["Night mode by the clock"]);
+        assert_eq!(found("hintergrund"), vec!["Live desktop background"]);
+        assert!(found("stimme").contains(&"Only obey me") && found("stimme").contains(&"Learn my voice"));
+        assert_eq!(found("lautstärke"), vec!["Mixer"]);
         assert_eq!(found("").len(), rows().count(), "an empty search shows everything");
         // A group's key shows that group (a setting of another group that mentions the word
         // may come with it, never fewer than the group itself).

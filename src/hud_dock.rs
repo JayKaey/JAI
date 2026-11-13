@@ -385,6 +385,28 @@ fn spoken_block_name(name: &str) -> String {
     words.join(" ")
 }
 
+/// Blocks that stand in windows of their own (`gui::block` draws them): their title and when
+/// they were last drawn. They are no part of the board's layout, but "close the windows" and
+/// "close the notebook" mean them too.
+static WINDOWS: std::sync::LazyLock<Mutex<HashMap<String, (String, Instant)>>> = std::sync::LazyLock::new(Default::default);
+
+/// A block was drawn in a window of its own this frame.
+pub fn publish_window(id: &str, title: &str) {
+    WINDOWS.lock().unwrap_or_else(|e| e.into_inner()).insert(id.to_string(), (title.to_string(), Instant::now()));
+}
+
+/// That window is gone (closed, or back on the board).
+pub fn window_gone(id: &str) {
+    WINDOWS.lock().unwrap_or_else(|e| e.into_inner()).remove(id);
+}
+
+/// The blocks that stand in windows of their own right now, as `(id, title)`.
+fn open_windows() -> Vec<(String, String)> {
+    let mut windows = WINDOWS.lock().unwrap_or_else(|e| e.into_inner());
+    windows.retain(|_, (_, seen)| seen.elapsed() < Duration::from_millis(1500));
+    windows.iter().map(|(id, (title, _))| (id.clone(), title.clone())).collect()
+}
+
 /// The open in-app blocks a spoken name means, as `(id, title)`: "feature lab", "the telemetry
 /// window", "plotter", "QR code". A title that carries the name wins; a view's id prefix
 /// (`id_prefix_for`) is only tried when no title does, so "feature lab" never closes a
@@ -394,8 +416,9 @@ pub fn blocks_named(name: &str) -> Vec<(String, String)> {
     if n.len() < 2 {
         return Vec::new();
     }
+    let windows: Vec<(String, String, Rect)> = open_windows().into_iter().map(|(id, title)| (id, title, Rect::NOTHING)).collect();
     with(|s| {
-        let open: Vec<&(String, String, Rect)> = s.last_blocks.iter().chain(s.blocks.iter()).collect();
+        let open: Vec<&(String, String, Rect)> = s.last_blocks.iter().chain(s.blocks.iter()).chain(windows.iter()).collect();
         let pick = |test: &dyn Fn(&str, &str) -> bool| {
             let mut out: Vec<(String, String)> = Vec::new();
             for (id, title, _) in open.iter().copied() {
@@ -452,13 +475,15 @@ pub fn close_named(name: &str) -> Vec<String> {
 /// drawer); returns how many.
 pub fn close_all_blocks() -> usize {
     let now = Instant::now();
+    let windows = open_windows();
     let n = with(|s| {
-        // (Blocks waiting in the tray close with them.)
+        // (Blocks waiting in the tray close with them, and those in windows of their own.)
         let ids: HashSet<String> = s
             .last_blocks
             .iter()
             .chain(s.blocks.iter())
             .map(|(id, _, _)| id.clone())
+            .chain(windows.iter().map(|(id, _)| id.clone()))
             .chain(s.minimized.iter().map(|(id, _)| id.clone()))
             .filter(|id| id != "console" && !s.pinned.contains(id))
             .collect();

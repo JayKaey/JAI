@@ -39,6 +39,7 @@ pub const TOOLS: &[&str] = &[
     "memory_backup",
     "subtitle_place",
     "block_places",
+    "notification_history",
 ];
 
 pub fn is_tool(name: &str) -> bool {
@@ -70,6 +71,7 @@ pub fn command(s: &str, original: &str) -> Option<(&'static str, Value)> {
         .or_else(|| crate::backups::command(s).map(|a| ("memory_backup", a)))
         .or_else(|| crate::live_subtitles::place_command(s).map(|a| ("subtitle_place", a)))
         .or_else(|| crate::block_places::command(s).map(|a| ("block_places", a)))
+        .or_else(|| crate::hud_notify::command(s).map(|a| ("notification_history", a)))
 }
 
 /// Carries out a kit tool.
@@ -95,6 +97,7 @@ pub async fn run_tool(ctx: &ToolContext, name: &str, args: &Value) -> Result<Str
         "memory_backup" => crate::backups::run(args).await,
         "subtitle_place" => crate::live_subtitles::place_tool(args),
         "block_places" => crate::block_places::run(args),
+        "notification_history" => crate::hud_notify::run(args),
         other => Err(format!("The kit has no tool called '{other}'.")),
     }
 }
@@ -109,7 +112,13 @@ pub fn only_looks(name: &str, args: &Value) -> bool {
 
 pub fn stays_inside(name: &str, args: &Value) -> bool {
     let action = args["action"].as_str().unwrap_or("");
-    only_looks(name, args) || matches!(name, "notebook" | "privacy_board" | "pronunciation_coach" | "known_guest" | "subtitle_place" | "block_places") || (matches!(name, "type_snippet" | "whenever_rule" | "desk_layout") && matches!(action, "save" | "add" | "delete" | "remove"))
+    only_looks(name, args) || matches!(name, "notebook" | "privacy_board" | "pronunciation_coach" | "known_guest" | "subtitle_place" | "block_places" | "notification_history") || (matches!(name, "type_snippet" | "whenever_rule" | "desk_layout") && matches!(action, "save" | "add" | "delete" | "remove"))
+}
+
+/// Tools that press keys or type in the app in front, or answer aloud about who is in the
+/// room: without his name they are carried out for no one (`ears::classify_addressee`).
+pub fn acts_for_whoever_speaks(name: &str) -> bool {
+    matches!(name, "press_keys" | "type_snippet" | "take_dictation" | "read_aloud" | "known_guest")
 }
 
 /// A tool's answer: what stands in the chat, and the one line he says.

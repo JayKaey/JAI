@@ -51,6 +51,11 @@ pub fn notebook_command(s: &str, original: &str) -> Option<Value> {
     if NOTE_CLEAR.is_match(s) {
         return Some(json!({"action": "clear"}));
     }
+    // ("Note that my locker code is 4512", "make a note that …": what he is to remember for
+    // good is the older order, his long-term memory.)
+    if crate::intents::is_memory_command(original) || crate::intents::is_memory_command(s) {
+        return None;
+    }
     let text = NOTE_ADD.captures(original)?.name("text")?.as_str().trim();
     // ("Note that down" is about something said before, not a note of three words.)
     (text.chars().count() >= 3 && !matches!(crate::ear::words(text).join(" ").as_str(), "that" | "this" | "it" | "down" | "that down" | "this down" | "it down" | "das" | "das auf" | "auf")).then(|| json!({"action": "add", "text": text}))
@@ -185,7 +190,7 @@ pub fn sleep_timer(args: &Value) -> Result<String, String> {
                 if lock(&SLEEPING).as_ref().is_none_or(|(now, _, _)| *now != id) {
                     return;
                 }
-                fall_silent(&ends).await;
+                fall_silent(&ends, move || lock(&SLEEPING).as_ref().is_some_and(|(now, _, _)| *now == id)).await;
                 let mut running = lock(&SLEEPING);
                 if running.as_ref().is_some_and(|(now, _, _)| *now == id) {
                     *running = None;
@@ -203,7 +208,7 @@ pub fn sleep_timer(args: &Value) -> Result<String, String> {
 
 /// The timer is up: the volume sinks, every player is paused (with "everything", J.A.I.'s own
 /// voice too), and the volume stands again where it stood. A test touches nothing.
-async fn fall_silent(what: &str) {
+async fn fall_silent(what: &str, still_wanted: impl Fn() -> bool) {
     if crate::platform::hands_off() {
         tracing::info!("[SLEEP TIMER] Up: a test session leaves Sir's players and his volume alone");
         return;
@@ -214,6 +219,12 @@ async fn fall_silent(what: &str) {
     if let Some(level) = stood.filter(|l| *l > 0.02) {
         let steps = 24;
         for k in 1..=steps {
+            // (Cancelled, or set anew, while the volume sinks: it stands again, nothing is paused.)
+            if !still_wanted() {
+                let _ = crate::win32::call(move || crate::win32::set_volume(level)).await;
+                tracing::info!("[SLEEP TIMER] Called off while the volume sank: it stands where it stood");
+                return;
+            }
             let to = level * (1.0 - 0.9 * k as f32 / steps as f32);
             let _ = crate::win32::call(move || crate::win32::set_volume(to)).await;
             tokio::time::sleep(FADE / steps).await;
@@ -422,7 +433,10 @@ fn is_app(app: &str, process: &str) -> bool {
     }
     let compact: String = named.chars().filter(|c| c.is_alphanumeric()).collect();
     let running: String = process.chars().filter(|c| c.is_alphanumeric()).collect();
-    compact.len() >= 3 && (running == compact || (compact.len() >= 5 && running.contains(&compact)) || (named == "minecraft" && running == "javaw"))
+    // (The program itself or a build of it, "discordptb", "codeinsiders": not a helper whose
+    // name merely begins the same, "steamwebhelper".)
+    const BUILDS: &[&str] = &["ptb", "canary", "beta", "dev", "development", "nightly", "insiders", "preview", "x64", "64", "32", "portable"];
+    compact.len() >= 3 && (running == compact || running.strip_prefix(compact.as_str()).is_some_and(|rest| BUILDS.contains(&rest)) || (named == "minecraft" && running == "javaw"))
 }
 
 /// The orders of the rules that fire: for the programs that have just started and closed, and
@@ -461,6 +475,10 @@ pub fn start(tools: crate::tools::ToolContext, stop: tokio_util::sync::Cancellat
             // (What the dashboard on the upright monitor shows, while it is on; and, once a
             // minute, the names of the desk layouts for the fast path.)
             crate::kit_screen::gather(&tools);
+            // The guests' time is up: said on the board, not aloud.
+            if crate::speaker_id::guests_just_left() {
+                crate::hud_notify::record("Guest mode is over: I answer to you alone again.", false);
+            }
             if ticks % 15 == 0 {
                 crate::kit_screen::sync_layouts(&tools);
             }
@@ -507,8 +525,13 @@ mod tests {
         let _one = crate::kit::test_lock();
         let said = "Jay, note: Maths test on Friday, chapters 3 and 4.";
         assert_eq!(notebook_command(&plain(said), said), Some(json!({"action": "add", "text": "Maths test on Friday, chapters 3 and 4."})), "the note keeps its capitals and commas");
-        for (said, text) in [("Take a note that the bike needs air", "the bike needs air"), ("write down buy milk", "buy milk"), ("Notiere dir, dass Oma am Sonntag kommt", "Oma am Sonntag kommt"), ("Notiz: Zahnarzt anrufen", "Zahnarzt anrufen")] {
+        for (said, text) in [("Take a note that the bike needs air", "the bike needs air"), ("write down buy milk", "buy milk"), ("Notiz: Zahnarzt anrufen", "Zahnarzt anrufen")] {
             assert_eq!(notebook_command(&plain(said), said), Some(json!({"action": "add", "text": text})), "{said}");
+        }
+        // What he is to remember for good is the older order: his long-term memory, not a note.
+        for said in ["Notiere dir, dass Oma am Sonntag kommt", "Note that my locker code is 4512"] {
+            assert!(crate::intents::is_memory_command(said), "{said}");
+            assert_eq!(notebook_command(&plain(said), said), None, "{said}");
         }
         assert_eq!(notebook_command("show my notes", "x"), Some(json!({"action": "show"})));
         assert_eq!(notebook_command("what did i note about the test", "x"), Some(json!({"action": "show", "query": "the test"})));

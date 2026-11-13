@@ -81,7 +81,7 @@ const SCREENS: &str = r"(?:(?:the\s+|my\s+|all\s+(?:the\s+|my\s+)?)?(?:side\s+|o
 
 static BRIGHT_SET: LazyLock<Regex> = LazyLock::new(|| {
     re(&format!(
-        r"^(?:set\s+|put\s+|turn\s+|stell\s+)?(?:the\s+|my\s+|die\s+)?(?:monitor\s+|screen\s+|display\s+)?(?:brightness|helligkeit)(?:\s+(?:of|on|for|von)\s+(?P<which>{SCREENS}))?\s+(?:to\s+|at\s+|auf\s+)?(?P<n>\d{{1,3}})(?:\s*(?:percent|prozent))?$|^(?:set\s+|put\s+|turn\s+)?(?P<which2>{SCREENS})\s+(?:to|at|auf)\s+(?P<n2>\d{{1,3}})(?:\s*(?:percent|prozent))?(?:\s+brightness)?$"
+        r"^(?:set\s+|put\s+|turn\s+|stell\s+)?(?:the\s+|my\s+|die\s+)?(?:monitor\s+|screen\s+|display\s+)?(?:brightness|helligkeit)(?:\s+(?:of|on|for|von)\s+(?P<which>{SCREENS}))?\s+(?:to\s+|at\s+|auf\s+)?(?P<n>\d{{1,3}})(?:\s*(?:percent|prozent|%))?$|^(?:set\s+|put\s+|turn\s+)?(?P<which2>{SCREENS})\s+(?:to|at|auf)\s+(?P<n2>\d{{1,3}})(?:\s*(?:percent|prozent|%))?(?:\s+brightness)?$"
     ))
 });
 static BRIGHT_DIM: LazyLock<Regex> = LazyLock::new(|| re(&format!(r"^(?:(?P<dim>dim|darken|dimme?)|(?P<bright>brighten|light\s+up))\s+(?P<which>{SCREENS})$")));
@@ -373,7 +373,10 @@ pub fn layout_command(s: &str) -> Option<Value> {
     if let Some(name) = LAYOUT_DELETE.captures(s).as_ref().and_then(first).filter(|name| crate::kit::get(LAYOUT, &layout_key(name)).is_some()) {
         return Some(json!({"action": "delete", "name": name}));
     }
-    if let Some(name) = LAYOUT_RESTORE.captures(s).as_ref().and_then(first) {
+    // ("Restore the default layout", "give me the compact layout" are the HUD's own: a name
+    // of its layouts is no desk layout unless Sir saved one under it.)
+    const THE_HUDS: &[&str] = &["default", "compact", "full", "orb", "normal", "standard", "minimal", "zen", "previous", "last", "old", "original", "usual", "same"];
+    if let Some(name) = LAYOUT_RESTORE.captures(s).as_ref().and_then(first).filter(|name| !THE_HUDS.contains(&layout_key(name).as_str()) || crate::kit::get(LAYOUT, &layout_key(name)).is_some()) {
         return Some(json!({"action": "restore", "name": name}));
     }
     // The bare "<name> layout": only for a layout that exists ("compact layout" is the HUD's).
@@ -549,6 +552,8 @@ mod tests {
         assert_eq!(layout_command("restore my study layout"), Some(json!({"action": "restore", "name": "study"})));
         assert_eq!(layout_command("arrange my windows like study"), Some(json!({"action": "restore", "name": "study"})));
         // The bare name: "compact layout" is the HUD's own, "study layout" his once it exists.
+        assert_eq!(layout_command("restore the default layout"), None);
+        assert_eq!(layout_command("give me the compact layout"), None);
         assert_eq!(layout_command("compact layout"), None);
         assert_eq!(layout_command("study layout"), None);
         assert_eq!(layout_command("delete the study layout"), None);

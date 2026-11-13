@@ -1028,13 +1028,20 @@ impl Brain {
         // "Explain this", "translate this", "summarise this": about the text Sir has selected
         // there. The request goes to the model with that text, past the fast path (the
         // selection's own words are no orders); with nothing selected he says so.
-        let (text, about_selection, nothing_selected) = match (!crate::live_self_tester::dry()).then(|| crate::kit_voice::selection_ask(&crate::ear::words(&text).join(" "))).flatten() {
-            Some(_) => match crate::kit_voice::about_selection(&self.inner.tools, &text).await {
-                Some(Ok(request)) => (request, true, None),
-                Some(Err(why)) => (text, false, Some(why)),
-                None => (text, false, None),
-            },
-            None => (text, false, None),
+        // (Sir's own words stay what is routed. The selection is someone else's text and may
+        // say anything: the language model reads it alone, with no tools and outside the
+        // conversation, and what comes back is his answer.)
+        let selection_answer: Option<String> = if crate::live_self_tester::dry() {
+            None
+        } else {
+            match crate::kit_voice::about_selection(&self.inner.tools, &text).await {
+                Some(Ok((ask, selection))) => Some(match one_shot(&self.inner.llm, &self.inner.config.snapshot(), &ask, &selection, 600).await {
+                    Some(answer) => answer,
+                    None => "I could not put that into words just now, Sir: my language model is not answering.".to_string(),
+                }),
+                Some(Err(why)) => Some(why),
+                None => None,
+            }
         };
         // The people and topics he names become the working memory's active ones.
         if !dry {
@@ -1089,7 +1096,7 @@ impl Brain {
         // clause a command of its own. Planned before any single parser takes the sentence for
         // its first clause. (Privacy clauses are the dispatcher's; it sends the rest.)
         let compound: Option<Vec<crate::compound_planner::Call>> = crate::compound_planner::plan(&text, &crate::intent_engine::ReflexContext::live())
-            .filter(|plan| plan.privacy.is_none() && plan.calls.len() >= 2 && !about_selection)
+            .filter(|plan| plan.privacy.is_none() && plan.calls.len() >= 2 && selection_answer.is_none())
             .map(|plan| plan.calls);
         // Integration questions go to their tool deterministically ("what classes do I have
         // tomorrow", "any new emails", "yes" to "shall I check your timetable?").
@@ -1099,10 +1106,8 @@ impl Brain {
         // says it over him (the dispatcher already silenced him and paused every player).
         let silent = intents::silent_quick_command(&text);
         crate::core_sphere_3d::CoreActivityBus::chain(&["intents.rs", "intent_engine.rs", "brain.rs"]);
-        let fast_intent = if let Some(why) = &nothing_selected {
-            Some(Intent::Answer(why.clone()))
-        } else if about_selection {
-            None
+        let fast_intent = if let Some(answer) = &selection_answer {
+            Some(Intent::Answer(answer.clone()))
         } else if compound.is_some() {
             self.inner.tools.focus.clear_offer();
             None

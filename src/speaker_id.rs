@@ -253,8 +253,12 @@ const TRUST_ALLOWANCE: f32 = 0.10;
 const LEARN_MS: u32 = 1000;
 /// The grown print weighs its latest sentences: this many count.
 const GROWN_WINDOW: usize = 40;
-/// What grows stays this like the voice of the set-up, or the sentence is not learnt from.
-const ANCHOR_HOLD: f32 = 0.50;
+/// Sentences by name that fall this far short of the bar are near misses; this many in a row
+/// (within `NEAR_MISS_WITHIN`) and the bar goes back to the set-up's, to be learnt afresh: a
+/// cold or another microphone must not lock Sir out for good.
+const NEAR_MISS: f32 = 0.15;
+const NEAR_MISSES: u32 = 3;
+const NEAR_MISS_WITHIN: std::time::Duration = std::time::Duration::from_secs(180);
 
 /// What the lock makes of a sentence's voice.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -266,6 +270,11 @@ pub struct Judged {
     /// How like his print it is, and how like it had to be.
     pub score: f32,
     pub bar: f32,
+    /// A sentence of full length that passed by its own likeness with no allowance: only such
+    /// a one teaches the print and opens the moment of trust.
+    pub plain: bool,
+    /// How like the voice of the set-up alone it is (not what has grown since).
+    pub anchor: f32,
 }
 
 /// Sir's print from the clips of his set-up: their mean, and a threshold set below the clip
@@ -304,9 +313,10 @@ impl VoicePrint {
     /// passes a little lower); `trusted`: a sentence was surely his a moment ago.
     pub fn judge(&self, clip: &[f32], speech_ms: u32, trusted: bool) -> Judged {
         let score = self.likeness_of(clip);
-        let bar = self.bar() - if speech_ms < SHORT_MS { SHORT_ALLOWANCE } else { 0.0 };
+        let full = self.bar();
+        let bar = full - if speech_ms < SHORT_MS { SHORT_ALLOWANCE } else { 0.0 };
         let sure = score >= bar;
-        Judged { his: sure || (trusted && score >= bar - TRUST_ALLOWANCE), sure, score, bar }
+        Judged { his: sure || (trusted && score >= bar - TRUST_ALLOWANCE), sure, score, bar, plain: speech_ms >= SHORT_MS && score >= full, anchor: likeness(clip, &self.print) }
     }
 
     /// Whether a clip's print is Sir's voice by its own likeness, and how alike they are.
@@ -316,20 +326,23 @@ impl VoicePrint {
         (judged.sure, judged.score)
     }
 
-    /// Learns from a sentence that was his (`judged`): it joins the grown print (with half the
-    /// weight when it passed on trust), unless that would lead away from the voice of the
-    /// set-up. Whether anything was learnt.
+    /// Learns from a sentence that was surely his (`judged.plain`: full length, by its own
+    /// likeness, no allowance) and that is itself like the voice of the set-up: it joins the
+    /// grown print. A sentence that passed on trust, a short one, and one that is only like
+    /// what has grown since teach nothing: what grows is made of sentences each of which the
+    /// set-up's print would have let in, so it cannot wander to another voice. Whether
+    /// anything was learnt.
     pub fn learn(&mut self, clip: &[f32], speech_ms: u32, judged: Judged) -> bool {
-        if !judged.his || speech_ms < LEARN_MS || clip.len() != self.print.len() {
+        if !judged.plain || speech_ms < LEARN_MS || clip.len() != self.print.len() {
             return false;
         }
-        let weight = if judged.sure { 1.0 } else { 0.5 };
+        if judged.anchor < self.threshold {
+            tracing::debug!("[VOICE] Not learnt from: like what has grown ({:.2}) but only {:.2} like the voice of the set-up (from {:.2})", judged.score, judged.anchor, self.threshold);
+            return false;
+        }
         let before = self.grown_clips.min(GROWN_WINDOW) as f32;
-        let next = if self.grown.is_empty() { clip.to_vec() } else { self.grown.iter().zip(clip).map(|(g, c)| g * before + c * weight).collect() };
+        let next = if self.grown.is_empty() { clip.to_vec() } else { self.grown.iter().zip(clip).map(|(g, c)| g * before + c).collect() };
         let next = normalised(next);
-        if likeness(&next, &self.print) < ANCHOR_HOLD {
-            return false;
-        }
         self.grown = next;
         self.grown_clips += 1;
         self.own = if self.own <= 0.0 { judged.score } else { self.own * 0.9 + judged.score * 0.1 };
@@ -355,11 +368,25 @@ pub fn trusted_now() -> bool {
 /// to the database now and then (never from a scripted session). None while no print is known.
 pub fn hear(db: &str, clip: &[f32], speech_ms: u32, keep: bool) -> Option<Judged> {
     let mut print = known(db)?;
-    let judged = print.judge(clip, speech_ms, trusted_now());
-    if judged.sure {
-        *lock(&LAST_SURE) = Some(std::time::Instant::now());
+    // A print that cannot be compared with this clip (another length, a number that is none)
+    // judges nothing: the voice is then unknown, not "not his".
+    if clip.len() != print.print.len() || clip.iter().chain(print.print.iter()).any(|x| !x.is_finite()) {
+        static SAID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if !SAID.swap(true, std::sync::atomic::Ordering::AcqRel) {
+            tracing::warn!("[VOICE LOCK] The stored voice print cannot be compared with what the model gives now ({} against {} numbers): voices are not judged until the set-up is done again", print.print.len(), clip.len());
+        }
+        return None;
     }
-    if print.learn(clip, speech_ms, judged) {
+    let judged = print.judge(clip, speech_ms, trusted_now());
+    // Only a full sentence that was surely his opens the moment of trust.
+    if judged.plain {
+        *lock(&LAST_SURE) = Some(std::time::Instant::now());
+        *lock(&MISSES) = (0, None);
+    }
+    // While guests are welcome or one is being introduced, other voices speak: nothing is
+    // learnt about Sir's.
+    let others_speak = guests_welcome() || crate::kit_voice::guest_learning();
+    if !others_speak && print.learn(clip, speech_ms, judged) {
         *lock(&KNOWN) = Some(Some(print.clone()));
         let due = {
             let mut unsaved = lock(&UNSAVED);
@@ -379,6 +406,41 @@ pub fn hear(db: &str, clip: &[f32], speech_ms: u32, keep: bool) -> Option<Judged
     Some(judged)
 }
 
+/// Near misses by name in a row, and when the last was.
+static MISSES: Mutex<(u32, Option<std::time::Instant>)> = Mutex::new((0, None));
+
+/// The lock turned a sentence away. `named`: it was an order by his name. Sentences by name
+/// that fall just short, three in a row, mean the bar stands too high for Sir's voice as it is
+/// today (a cold, another microphone): it goes back to the set-up's and is learnt afresh from
+/// his next sentences. Whether it did.
+pub fn turned_away(db: &str, judged: Judged, named: bool, keep: bool) -> bool {
+    if !named || judged.score < judged.bar - NEAR_MISS {
+        return false;
+    }
+    let reached = {
+        let mut misses = lock(&MISSES);
+        let fresh = misses.1.is_none_or(|at| at.elapsed() > NEAR_MISS_WITHIN);
+        *misses = (if fresh { 1 } else { misses.0 + 1 }, Some(std::time::Instant::now()));
+        misses.0 >= NEAR_MISSES
+    };
+    if !reached {
+        return false;
+    }
+    *lock(&MISSES) = (0, None);
+    let Some(mut print) = known(db) else { return false };
+    if print.bar() <= print.threshold {
+        return false;
+    }
+    let was = print.bar();
+    print.own = 0.0;
+    tracing::info!("[VOICE LOCK] Three orders by name fell just short of {was:.2}: the bar goes back to the set-up's {:.2} and follows Sir's voice afresh", print.threshold);
+    *lock(&KNOWN) = Some(Some(print.clone()));
+    if keep {
+        let _ = keep_grown(db, &print);
+    }
+    true
+}
+
 // ------------------------------------------------------------------------------ guests ----
 
 /// Until when he answers to anyone although the lock is on ("guest mode", "let my friend
@@ -394,6 +456,17 @@ pub fn end_guests() {
     if lock(&GUESTS_UNTIL).take().is_some() {
         tracing::info!("[VOICE LOCK] Guests are no longer answered");
     }
+}
+
+/// Whether the guests' time has just run out (once per welcome): the moment to say so.
+pub fn guests_just_left() -> bool {
+    let mut until = lock(&GUESTS_UNTIL);
+    if until.is_some_and(|at| std::time::Instant::now() >= at) {
+        *until = None;
+        tracing::info!("[VOICE LOCK] The guests' time is up: he answers to Sir alone again");
+        return true;
+    }
+    false
 }
 
 /// Whether he answers to anyone right now on Sir's word.
@@ -584,14 +657,27 @@ pub fn known(db: &str) -> Option<VoicePrint> {
     let mut known = lock(&KNOWN);
     if known.is_none() {
         // (Read only: looking for a print never writes to the database.)
-        let read = rusqlite::Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).ok().and_then(|conn| {
-            let mut print = conn
-                .query_row("SELECT print, clips, threshold FROM voice_print WHERE id = 1", [], |r| {
-                    let raw: Vec<u8> = r.get(0)?;
-                    // (A bar from before 2026-11-13 may stand higher than a set-up may ask for.)
-                    Ok(VoicePrint { print: floats(&raw), clips: r.get::<_, i64>(1)? as usize, threshold: (r.get::<_, f64>(2)? as f32).min(THRESHOLD_CEILING), grown: Vec::new(), grown_clips: 0, own: 0.0 })
-                })
-                .ok()?;
+        // (A database that cannot be read right now is asked again the next time: "no print"
+        // is only remembered when the database said so.)
+        let conn = match rusqlite::Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY) {
+            Ok(conn) => conn,
+            Err(_) => return None,
+        };
+        let stored = conn.query_row("SELECT print, clips, threshold FROM voice_print WHERE id = 1", [], |r| {
+            let raw: Vec<u8> = r.get(0)?;
+            // (A bar from before 2026-11-13 may stand higher than a set-up may ask for.)
+            Ok(VoicePrint { print: floats(&raw), clips: r.get::<_, i64>(1)? as usize, threshold: (r.get::<_, f64>(2)? as f32).min(THRESHOLD_CEILING), grown: Vec::new(), grown_clips: 0, own: 0.0 })
+        });
+        let stored = match stored {
+            Ok(print) => Some(print),
+            Err(rusqlite::Error::QueryReturnedNoRows) => None,
+            Err(e) if e.to_string().contains("no such table") => None,
+            Err(e) => {
+                tracing::warn!("[VOICE] Sir's voice print could not be read just now: {e}");
+                return None;
+            }
+        };
+        let read = stored.and_then(|mut print| {
             // (What has grown since: absent before the first sentence, and in an older database.)
             if let Ok((grown, clips, own)) = conn.query_row("SELECT print, clips, own FROM voice_grown WHERE id = 1", [], |r| Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, i64>(1)?, r.get::<_, f64>(2)?))) {
                 let grown = floats(&grown);
@@ -778,8 +864,22 @@ mod tests {
         assert!(!print.learn(&stranger, 2500, judged), "not his");
         let mut fresh = setup_print();
         let far = unit(vec![0.3, 0.2, 0.93, 0.0]);
-        assert!(!fresh.learn(&far, 2500, Judged { his: true, sure: true, score: 0.5, bar: 0.4 }), "away from the set-up's voice");
+        assert!(!fresh.learn(&far, 2500, Judged { his: true, sure: true, score: 0.5, bar: 0.4, plain: true, anchor: 0.2 }), "like what has grown, but not like the voice of the set-up");
         assert_eq!(print, before);
+        // A sentence that only passed in the moment of trust after another teaches nothing,
+        // and opens no trust of its own: what grows is made of sentences that were surely his.
+        let mut fresh = setup_print();
+        let weaker = unit(vec![0.33, 0.944, 0.0, 0.0]);
+        let on_trust = fresh.judge(&weaker, 4300, true);
+        assert!(on_trust.his && !on_trust.plain && !fresh.learn(&weaker, 4300, on_trust), "{on_trust:?}");
+        // A short order that passed with the short allowance is his, and teaches nothing either.
+        let short = fresh.judge(&unit(vec![0.36, 0.933, 0.0, 0.0]), 800, false);
+        assert!(!short.plain, "{short:?}");
+        // The sentence of the log, 0.43 like the set-up: his by itself, and the first one learnt
+        // from (it was not: the grown print had to be 0.50 like the set-up from its first clip).
+        let his_next_day = unit(vec![0.43, 0.9028, 0.0, 0.0]);
+        let judged = fresh.judge(&his_next_day, 2900, false);
+        assert!(judged.plain && fresh.learn(&his_next_day, 2900, judged) && fresh.grown_clips == 1, "{judged:?}");
     }
 
     #[test]

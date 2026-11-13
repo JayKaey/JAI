@@ -501,6 +501,9 @@ fn init_logging(log_file: &str) {
 
     // Simple size-based rotation: keep one previous log.
     if std::fs::metadata(log_file).map(|m| m.len() > 10 * 1024 * 1024).unwrap_or(false) {
+        // The three logs before this one stay (.1 the newest): weeks to look back on, not days.
+        let _ = std::fs::rename(format!("{log_file}.2"), format!("{log_file}.3"));
+        let _ = std::fs::rename(format!("{log_file}.1"), format!("{log_file}.2"));
         let _ = std::fs::rename(log_file, format!("{log_file}.1"));
     }
     let file_layer = std::fs::OpenOptions::new()
@@ -531,7 +534,17 @@ fn init_logging(log_file: &str) {
     }));
 }
 
+/// When the process began, for the start-up timeline.
+static PROCESS_START: std::sync::LazyLock<std::time::Instant> = std::sync::LazyLock::new(std::time::Instant::now);
+
+/// A mark on the start-up timeline: how long after the process began a stage was reached. The
+/// `[START]` lines of one start, read together, say where its time went.
+pub(crate) fn start_mark(stage: &str) {
+    info!("[START] +{} ms: {stage}", PROCESS_START.elapsed().as_millis());
+}
+
 fn main() -> ExitCode {
+    std::sync::LazyLock::force(&PROCESS_START);
     let parsed = Cli::parse();
     match &parsed {
         Ok(cli) if cli.console => platform::open_console(),
@@ -607,6 +620,11 @@ fn main() -> ExitCode {
     if cli.window_drill {
         window_drill::enable();
     }
+    // The window's icon is drawn, not loaded: it is drawn now, beside the start, so that the
+    // window does not wait for it later on the main thread.
+    let _ = std::thread::Builder::new().name("jai-icon".into()).spawn(|| {
+        let _ = gui::window_icon();
+    });
     let runtime = match crash_guard::runtime_builder().build() {
         Ok(rt) => rt,
         Err(e) => {
@@ -620,6 +638,7 @@ fn main() -> ExitCode {
         Started::Running(session) => session,
         Started::Done(code) => return code,
     };
+    start_mark("the engines are started");
     // Whose voice it is: where the speaker model lives, and whether Sir's print is known.
     {
         let (models, db) = session.app.config().read(|c| (c.silero_vad_model_path.clone(), c.memory_db_path.clone()));
@@ -632,21 +651,29 @@ fn main() -> ExitCode {
             kit::set_db(&db);
             ear::set_db(&db);
             // The last clips of his own orders, when Sir has them kept (`voice_clips`).
-            if session.app.config().read(|c| c.keep_voice_clips) {
+            let keeps = session.app.config().read(|c| c.keep_voice_clips);
+            if keeps {
                 voice_clips::set_home(&db);
-                let (clips, mb) = voice_clips::kept();
-                info!("[EAR] {clips} clips of Sir's own orders are kept on this PC ({mb:.1} MB; the newest {} stay, \"delete my voice clips\" removes them)", voice_clips::KEPT);
             }
-            let learnt = ear::learnt();
-            let held = |kind: ear::Kind| learnt.iter().filter(|e| e.kind == kind && e.trusted()).count();
-            info!(
-                "[EAR] {}; of Sir's words he has learnt {} by himself and {} from Sir's teaching, {} of his orders by the way he puts them, {} of the ways his name arrives",
-                speaker_id::known_in_words(&db),
-                held(ear::Kind::Words) + held(ear::Kind::Order),
-                held(ear::Kind::Taught),
-                held(ear::Kind::Said),
-                held(ear::Kind::Name)
-            );
+            // What is kept and learnt, said in the log: counted beside the start (a folder
+            // and two tables are read), not before the window.
+            let db = db.clone();
+            let _ = std::thread::Builder::new().name("jai-ear-summary".into()).spawn(move || {
+                if keeps {
+                    let (clips, mb) = voice_clips::kept();
+                    info!("[EAR] {clips} clips of Sir's own orders are kept on this PC ({mb:.1} MB; the newest {} stay, \"delete my voice clips\" removes them)", voice_clips::KEPT);
+                }
+                let learnt = ear::learnt();
+                let held = |kind: ear::Kind| learnt.iter().filter(|e| e.kind == kind && e.trusted()).count();
+                info!(
+                    "[EAR] {}; of Sir's words he has learnt {} by himself and {} from Sir's teaching, {} of his orders by the way he puts them, {} of the ways his name arrives",
+                    speaker_id::known_in_words(&db),
+                    held(ear::Kind::Words) + held(ear::Kind::Order),
+                    held(ear::Kind::Taught),
+                    held(ear::Kind::Said),
+                    held(ear::Kind::Name)
+                );
+            });
         }
     }
     // How he powers up this time: by how long Sir has not spoken with him, and the hour. (A
@@ -803,6 +830,7 @@ fn main() -> ExitCode {
         });
     }
     if let Some(hud) = hud {
+        start_mark("the window is asked for");
         // The window system wants the main thread; the HUD keeps it until JAI quits.
         hud.run(session.show_hud && !cli.hidden);
     }

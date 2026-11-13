@@ -630,7 +630,8 @@ pub fn send_chord(modifiers: &[VIRTUAL_KEY], key: VIRTUAL_KEY) -> Result<(), Str
 }
 
 /// Types `text` into whatever has the keyboard focus, as Unicode key strokes (a line break is
-/// the Enter key): the letters arrive whatever keyboard layout is set. How many characters
+/// Shift+Enter: a new line in an editor and in a chat alike, where Enter alone would send the
+/// half-written message): the letters arrive whatever keyboard layout is set. How many characters
 /// went out. Synchronous: on the Win32 worker. A test and a scripted session type nothing.
 pub fn type_text(text: &str) -> Result<usize, String> {
     use windows::Win32::UI::Input::KeyboardAndMouse::KEYEVENTF_UNICODE;
@@ -641,7 +642,7 @@ pub fn type_text(text: &str) -> Result<usize, String> {
     for c in text.chars() {
         match c {
             '\r' => continue,
-            '\n' => send_chord(&[], VK_RETURN)?,
+            '\n' => send_chord(&[VK_SHIFT], VK_RETURN)?,
             _ => {
                 let mut units = [0u16; 2];
                 for unit in c.encode_utf16(&mut units) {

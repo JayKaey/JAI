@@ -34,8 +34,70 @@ static HISTORY: Mutex<VecDeque<Note>> = Mutex::new(VecDeque::new());
 
 /// A notification was shown: it goes into the history, and the edges light up.
 pub fn record(text: &str, alert: bool) {
+    load_once();
     record_at(text, alert, Local::now());
     edge(if alert { Edge::Alert } else { Edge::Notice });
+    keep();
+}
+
+/// The history survives a restart: it is read from the kit's store once (what is still news),
+/// and written there after each change, off the caller's thread. A test keeps to its own lines.
+fn load_once() {
+    static LOADED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if cfg!(test) || LOADED.swap(true, std::sync::atomic::Ordering::AcqRel) {
+        return;
+    }
+    let Some(serde_json::Value::Array(kept)) = crate::kit::get("notifications", "history") else { return };
+    let now = Local::now();
+    let mut history = lock(&HISTORY);
+    let mut before: VecDeque<Note> = kept
+        .iter()
+        .filter_map(|n| {
+            let at = DateTime::parse_from_rfc3339(n["at"].as_str()?).ok()?.with_timezone(&Local);
+            Some(Note { text: n["text"].as_str()?.to_string(), alert: n["alert"].as_bool().unwrap_or(false), at })
+        })
+        .filter(|n| (now - n.at).num_hours() < RECENT_HOURS)
+        .collect();
+    before.extend(history.drain(..));
+    while before.len() > KEPT {
+        before.pop_front();
+    }
+    *history = before;
+}
+
+fn keep() {
+    if cfg!(test) {
+        return;
+    }
+    let notes: Vec<serde_json::Value> = lock(&HISTORY).iter().map(|n| serde_json::json!({ "text": n.text, "alert": n.alert, "at": n.at.to_rfc3339() })).collect();
+    let _ = std::thread::Builder::new().name("jai-notes".into()).spawn(move || {
+        let _ = crate::kit::put("notifications", "history", &serde_json::Value::Array(notes));
+    });
+}
+
+/// "Clear my notifications": the history is empty from now on.
+pub fn clear() -> usize {
+    let n = {
+        let mut history = lock(&HISTORY);
+        let n = history.len();
+        history.clear();
+        n
+    };
+    keep();
+    n
+}
+
+/// The kit's phrase for it.
+pub fn command(s: &str) -> Option<serde_json::Value> {
+    static CLEAR: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"^(?:clear|delete|empty|forget)\s+(?:my\s+|the\s+|all\s+(?:my\s+|the\s+)?)?(?:notifications|notification\s+history)$|^(?:lösche?|leere?)\s+(?:die\s+|meine\s+|alle\s+)?benachrichtigungen$|^benachrichtigungen\s+(?:löschen|leeren)$").expect("valid regex")
+    });
+    CLEAR.is_match(s.trim()).then(|| serde_json::json!({ "action": "clear" }))
+}
+
+pub fn run(_args: &serde_json::Value) -> Result<String, String> {
+    let n = clear();
+    Ok(crate::kit::say(format!("Cleared {n} notification{} from the history.", if n == 1 { "" } else { "s" }), if n == 0 { "There was nothing in it, Sir." } else { "Cleared, Sir." }))
 }
 
 fn record_at(text: &str, alert: bool, at: DateTime<Local>) {
@@ -56,6 +118,7 @@ fn record_at(text: &str, alert: bool, at: DateTime<Local>) {
 
 /// The notifications of the last hours, the latest first.
 pub fn recent(now: DateTime<Local>) -> Vec<Note> {
+    load_once();
     lock(&HISTORY).iter().rev().filter(|n| (now - n.at).num_hours() < RECENT_HOURS).cloned().collect()
 }
 
@@ -151,7 +214,14 @@ pub fn show(ctx: &egui::Context) {
     if !MISSED_OPEN.load(Ordering::Acquire) {
         return;
     }
-    if crate::gui::text_block(ctx, MISSED_ID, "What you missed // notifications", [460.0, 420.0], &missed_text(Local::now())) {
+    // (The title says how many there are.)
+    let count = recent(Local::now()).len();
+    let title = match count {
+        0 => "What you missed // nothing".to_string(),
+        1 => "What you missed // 1 notification".to_string(),
+        n => format!("What you missed // {n} notifications"),
+    };
+    if crate::gui::text_block(ctx, MISSED_ID, &title, [460.0, 420.0], &missed_text(Local::now())) {
         MISSED_OPEN.store(false, Ordering::Release);
         crate::hud_dock::forget(MISSED_ID);
     }

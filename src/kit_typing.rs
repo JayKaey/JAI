@@ -39,6 +39,21 @@ static DICTATE: LazyLock<Regex> = LazyLock::new(|| {
 static DICTATE_STOP: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(?:(?:jai|jay)\s+)?(?:(?:stop|end|finish|quit)\s+(?:the\s+)?dictat(?:ing|ion|e)|dictation\s+(?:off|over|done|finished|end)|(?:thats|that\s+is)\s+all\s+for\s+the\s+dictation|diktat\s+(?:beenden|aus|ende|stopp?|fertig)|stopp?\s+(?:das\s+)?diktat|(?:hör|hoer)\s+auf\s+zu\s+(?:diktieren|schreiben))$")
 });
+/// What ends a dictation while one is running: the same, and the short ways of saying it. (A
+/// bare "stop" ends it too: better one word too few on the page than no way out.)
+static DICTATE_END: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"^(?:(?:stop|end|finish|quit)(?:\s+(?:the\s+|my\s+)?(?:dictat(?:ing|ion|e)|typing|writing))?|dictation\s+(?:off|over|done|finished|end)|(?:thats|that\s+is)\s+(?:all|it|enough)(?:\s+for\s+the\s+dictation)?|diktat\s+(?:beenden|aus|ende|stopp?|fertig)|stopp?(?:\s+(?:das\s+)?diktat)?|(?:hör|hoer)\s+auf(?:\s+zu\s+(?:diktieren|schreiben|tippen))?|ende|fertig)$")
+});
+
+/// Whether the words end the dictation: one of its stop phrases, with or without his name
+/// and the small words around an order ("Okay, stop dictating, please.").
+fn ends_dictation(said: &str) -> bool {
+    const AROUND: &[&str] = &["ok", "okay", "jai", "jay", "and", "so", "now", "please", "thanks", "thank", "you", "bitte", "danke", "jetzt"];
+    let words: Vec<&str> = said.split_whitespace().collect();
+    let from = words.iter().take_while(|w| AROUND.contains(*w)).count();
+    let to = words.len() - words[from..].iter().rev().take_while(|w| AROUND.contains(*w)).count();
+    from < to && DICTATE_END.is_match(&words[from..to].join(" "))
+}
 
 fn plain(text: &str) -> String {
     crate::ear::words(text).join(" ")
@@ -102,7 +117,7 @@ pub enum Dictated {
 /// What a sentence heard during dictation is: text to type, or one of its few orders.
 pub fn dictated(text: &str) -> Dictated {
     let said = plain(text);
-    if DICTATE_STOP.is_match(&said) {
+    if ends_dictation(&said) {
         return Dictated::Stop;
     }
     match said.as_str() {
@@ -117,7 +132,6 @@ pub fn dictated(text: &str) -> Dictated {
 /// out again, or the end of the dictation. What the HUD shows for it; `Err` when nothing
 /// could be typed. `own_window`: J.A.I.'s own window has the keyboard.
 pub async fn dictate(text: &str, own_window: bool) -> Result<String, String> {
-    *lock(&HEARD_AT) = Some(Instant::now());
     match dictated(text) {
         Dictated::Stop => {
             set_dictating(false);
@@ -132,6 +146,8 @@ pub async fn dictate(text: &str, own_window: bool) -> Result<String, String> {
         }
         Dictated::Type(typed) => {
             let n = type_out(typed.clone()).await?;
+            // (The five minutes count from the last sentence that was typed, not from any sound.)
+            *lock(&HEARD_AT) = Some(Instant::now());
             lock(&TYPED).push(n);
             tracing::info!("[DICTATION] Typed {n} characters");
             Ok(typed.trim().to_string())
@@ -329,7 +345,8 @@ const KEYS: &[Keys] = &[
         done: "Forward.",
     },
     Keys {
-        phrase: r"^(?:(?:reload|refresh)(?:\s+(?:the\s+|this\s+)?(?:page|tab|site))?|(?:seite\s+)?(?:neu\s+laden|aktualisieren))$",
+        // (A bare "reload" is the older order that restarts him.)
+        phrase: r"^(?:(?:reload|refresh)\s+(?:the\s+|this\s+)?(?:page|tab|site)|seite\s+(?:neu\s+laden|aktualisieren))$",
         name: "reload",
         strokes: &[stroke(Key::F5, false, false, false, 1)],
         done: "Reloaded.",
@@ -456,8 +473,9 @@ pub async fn snippet(ctx: &ToolContext, args: &Value) -> Result<String, String> 
             if name.is_empty() || text.trim().is_empty() {
                 return Err(if text.trim().is_empty() { "There is nothing to keep, Sir: the text is empty.".to_string() } else { "What shall the snippet be called, Sir?".to_string() });
             }
+            let replaced = crate::kit::get(SNIPPET, &snippet_key(name)).is_some();
             crate::kit::put(SNIPPET, &snippet_key(name), &json!({"name": name, "text": text}))?;
-            Ok(say(format!("Snippet \"{name}\" kept ({} characters). Say \"type my {name}\".", text.chars().count()), format!("Kept, Sir. Say \"type my {name}\" whenever you need it.")))
+            Ok(say(format!("Snippet \"{name}\" {} ({} characters). Say \"type my {name}\".", if replaced { "replaced" } else { "kept" }, text.chars().count()), format!("Kept, Sir. Say \"type my {name}\" whenever you need it.")))
         }
         "type" => {
             let kept = crate::kit::get(SNIPPET, &snippet_key(name)).ok_or_else(|| format!("I have no snippet called \"{name}\", Sir."))?;
@@ -482,8 +500,15 @@ mod tests {
         for text in ["stop dictating", "end the dictation", "dictation off", "diktat beenden", "stopp das diktat"] {
             assert_eq!(dictation_command(text), Some(json!({"action": "stop"})), "{text}");
         }
-        for text in ["dictate me a letter to my teacher", "what is a dictation", "stop", "stop the music"] {
+        for text in ["dictate me a letter to my teacher", "what is a dictation", "stop", "stop the music", "quit"] {
             assert_eq!(dictation_command(text), None, "{text}");
+        }
+        // While one runs, the short ways end it too, with the small words around an order.
+        for text in ["Stop dictating, please.", "Okay, stop dictating.", "Stop the dictation now", "Stop.", "Stop typing", "That's all.", "Jay, stop dictating.", "Diktat beenden", "Fertig."] {
+            assert_eq!(dictated(text), Dictated::Stop, "{text}");
+        }
+        for text in ["Stop the car at the corner.", "The end of the story is sad.", "I am finished with school at two."] {
+            assert!(matches!(dictated(text), Dictated::Type(_)), "{text}");
         }
     }
 

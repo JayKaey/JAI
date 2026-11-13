@@ -219,6 +219,13 @@ fn bare_window_word(text: &str) -> bool {
     crate::intents::silent_quick_command(text).is_some_and(|a| matches!(a.tool, "configure_interface" | "window_management"))
 }
 
+/// An order of the kit that presses keys or types in the app in front, or answers aloud about
+/// the room: "reload the page", "press enter", "paste it", "who was that?" are things people
+/// say to each other. Without his name, his window or an open conversation they are not his.
+fn needs_his_name(text: &str) -> bool {
+    matches!(crate::intents::parse(text), Some(crate::intents::Intent::Tool { name, .. }) if crate::kit::acts_for_whoever_speaks(name))
+}
+
 /// The four layers: who Sir is talking to.
 pub fn classify_addressee(text: &str, ctx: &AddresseeContext) -> Addressee {
     if ctx.wake_word {
@@ -234,9 +241,10 @@ pub fn classify_addressee(text: &str, ctx: &AddresseeContext) -> Addressee {
     if bare_window_word(text) && !ctx.conversation_open {
         return if ctx.gaming { Addressee::Chatter } else { Addressee::Unaddressed };
     }
+    let by_name_only = needs_his_name(text);
     if ctx.gaming {
         // Over a game or a voice chat only clear commands, and follow-ups that are not banter.
-        if known_command(text) {
+        if known_command(text) && !by_name_only {
             return Addressee::DirectIntent;
         }
         // "Yes, please" / "no thanks" to what JAI just asked.
@@ -250,6 +258,9 @@ pub fn classify_addressee(text: &str, ctx: &AddresseeContext) -> Addressee {
     }
     if ctx.conversation_open {
         return Addressee::Conversation;
+    }
+    if by_name_only {
+        return Addressee::Unaddressed;
     }
     if known_command(text) || direct_intent(text) {
         return Addressee::DirectIntent;

@@ -118,7 +118,14 @@ pub fn start(db: &str, config: &str, stop: tokio_util::sync::CancellationToken) 
                 if !days(&folder(&db)).contains(&today) {
                     match tokio::task::spawn_blocking(move || make(&db, &config, today)).await {
                         Ok(Ok(file)) => info!("[BACKUP] Today's copy of the memory and the settings is in {} (the last {KEPT_DAYS} days stay)", file.display()),
-                        Ok(Err(why)) => warn!("[BACKUP] No backup today: {why}"),
+                        Ok(Err(why)) => {
+                            warn!("[BACKUP] No backup today: {why}");
+                            // (Once a day at most: the next look is twenty minutes away, the note is not repeated.)
+                            static SAID: Mutex<Option<NaiveDate>> = Mutex::new(None);
+                            if SAID.lock().unwrap_or_else(|e| e.into_inner()).replace(today) != Some(today) {
+                                crate::hud_notify::record(&format!("Backup: today's copy of my memory could not be made ({why})."), true);
+                            }
+                        }
                         Err(e) => warn!("[BACKUP] The backup task ended early: {e}"),
                     }
                 }
@@ -126,6 +133,30 @@ pub fn start(db: &str, config: &str, stop: tokio_util::sync::CancellationToken) 
             tokio::select! { _ = stop.cancelled() => return, _ = tokio::time::sleep(CHECK_EVERY) => {} }
         }
     });
+}
+
+/// How many days of backups stand and how large they are together, for the privacy board.
+pub fn kept() -> (usize, f64) {
+    let Some((db, _)) = home() else { return (0, 0.0) };
+    let folder = folder(&db);
+    let days = days(&folder);
+    let bytes: u64 = days.iter().flat_map(|day| [db_name(*day), config_name(*day)]).filter_map(|name| std::fs::metadata(folder.join(name)).ok()).map(|m| m.len()).sum();
+    (days.len(), bytes as f64 / 1_048_576.0)
+}
+
+/// Every backup leaves (the privacy board's key, on Sir's second click).
+pub fn delete_all() -> usize {
+    let Some((db, _)) = home() else { return 0 };
+    let folder = folder(&db);
+    let mut gone = 0;
+    for day in days(&folder) {
+        for name in [db_name(day), config_name(day)] {
+            if std::fs::remove_file(folder.join(name)).is_ok() {
+                gone += 1;
+            }
+        }
+    }
+    gone
 }
 
 /// "Back up your memory", "when was the last backup": the kit's phrases for it.

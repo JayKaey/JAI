@@ -427,10 +427,10 @@ pub fn explanation(id: &str) -> Option<&'static Explanation> {
 // ----------------------------------------------------------------------------- asking ----
 
 static SHOW: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^(?:(?:show|open)\s+(?:me\s+)?(?:the\s+|your\s+)?(?:changes|change\s*log|changelog|release\s+notes|list\s+of\s+changes|update\s+history)|what\s+has\s+changed|what\s+changed|(?:the\s+)?changes\s+list|change\s*log|was\s+hat\s+sich\s+geändert|zeig\s+(?:mir\s+)?die\s+änderungen)$").expect("a valid phrase")
+    Regex::new(r"^(?:(?:show|open)\s+(?:me\s+)?(?:the\s+|your\s+)?(?:changes|change\s*log|changelog|release\s+notes|list\s+of\s+changes|update\s+history)|what\s+(?:has\s+)?changed\s+(?:in|about|with)\s+you|what\s+is\s+new\s+(?:in|about|with)\s+you|(?:the\s+)?changes\s+list|change\s*log|was\s+hat\s+sich\s+geändert|zeig\s+(?:mir\s+)?die\s+änderungen)$").expect("a valid phrase")
 });
 static EXPLAIN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^(?:explain|how\s+does|how\s+do\s+i\s+use|tell\s+me\s+about|what\s+is|erkläre?(?:\s+mir)?)\s+(?:the\s+|your\s+|my\s+|a\s+|den\s+|die\s+|das\s+)?(.+?)(?:\s+(?:work|works|feature|funktion))?$").expect("a valid phrase")
+    Regex::new(r"^(?:explain|how\s+does|how\s+do\s+i\s+use|tell\s+me\s+about|erkläre?(?:\s+mir)?)\s+(?:the\s+|your\s+|my\s+|a\s+|den\s+|die\s+|das\s+)?(.+?)(?:\s+(?:work|works|feature|funktion))?$").expect("a valid phrase")
 });
 
 /// The explanation Sir names ("the sleep timer", "dictation"), by its title or id.
@@ -438,7 +438,9 @@ fn named(what: &str) -> Option<&'static Explanation> {
     let wanted = crate::ear::words(what).join(" ");
     EXPLANATIONS.iter().find(|e| {
         let title = crate::ear::words(e.title).join(" ");
-        wanted == title || wanted == e.id.replace('_', " ") || wanted == format!("{title}s") || (wanted.len() >= 6 && title.starts_with(&wanted))
+        // (By its title as the list shows it, nothing shorter: "how does the ear work" and
+        // "what is a monitor" are questions about the world.)
+        wanted == title || wanted == format!("{title}s") || format!("{wanted}s") == title
     })
 }
 
@@ -482,9 +484,32 @@ pub fn is_open() -> bool {
     OPEN.load(Ordering::Acquire)
 }
 
+/// The newest release Sir has opened this list for ("2026-11-13"), read from the kit's store
+/// once. None: not read yet.
+static SEEN: Mutex<Option<String>> = Mutex::new(None);
+
+/// Whether there is a release Sir has not opened the list for yet: the header's box glows
+/// until he does.
+pub fn unseen() -> bool {
+    let newest = RELEASES.first().map_or("", |r| r.date);
+    let mut seen = SEEN.lock().unwrap_or_else(|e| e.into_inner());
+    let seen = seen.get_or_insert_with(|| crate::kit::get("changes", "seen").and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default());
+    seen.as_str() < newest
+}
+
+fn mark_seen() {
+    let newest = RELEASES.first().map_or("", |r| r.date).to_string();
+    let mut seen = SEEN.lock().unwrap_or_else(|e| e.into_inner());
+    if seen.as_deref() != Some(newest.as_str()) {
+        *seen = Some(newest.clone());
+        let _ = crate::kit::put("changes", "seen", &serde_json::json!(newest));
+    }
+}
+
 pub fn open(on: bool) {
     OPEN.store(on, Ordering::Release);
     if on {
+        mark_seen();
         crate::hud_dock::cancel_close(ID);
     } else {
         crate::hud_dock::forget(ID);
@@ -686,7 +711,11 @@ mod tests {
         assert!(matching(latest, "no such thing anywhere", None).is_empty());
         assert!(matching(latest, "2026-11-13 dictation", None).len() == 1, "a date finds its day");
         assert_eq!(command("show the changes"), Some(json!({"action": "show"})));
-        assert_eq!(command("what has changed"), Some(json!({"action": "show"})));
+        assert_eq!(command("what has changed about you"), Some(json!({"action": "show"})));
+        // (Questions about the world and about what just happened are not about this list.)
+        for said in ["what has changed", "what changed", "what is a monitor", "how does the ear work", "what is the internet", "explain the rules of chess"] {
+            assert_eq!(command(said), None, "{said}");
+        }
         assert_eq!(command("explain the sleep timer"), Some(json!({"action": "show", "explain": "sleep_timer"})));
         assert_eq!(command("how does dictation work"), Some(json!({"action": "show", "explain": "dictation"})));
         assert_eq!(command("tell me about the privacy board"), Some(json!({"action": "show", "explain": "privacy"})));

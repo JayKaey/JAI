@@ -228,7 +228,17 @@ static PRIVACY_SHOW: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(?:(?:show|open)\s+(?:me\s+)?(?:the\s+|my\s+)?privacy\s+(?:board|panel|page)|privacy\s+board|what\s+do\s+you\s+(?:keep|store|save)\s+(?:about|on|of)\s+me|what\s+data\s+do\s+you\s+(?:keep|store|have)(?:\s+(?:about|on)\s+me)?|was\s+speicherst\s+du\s+über\s+mich)$")
 });
 
+/// "Stop keeping my voice clips" / "keep my voice clips again".
+static CLIPS_OFF: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:stop\s+keeping|don'?t\s+keep|do\s+not\s+keep|keep\s+no(?:\s+more)?)\s+(?:my\s+|the\s+|any\s+)?(?:voice\s+clips|clips\s+of\s+my\s+voice|recordings\s+of\s+(?:me|my\s+voice))$|^(?:behalte?|speichere?)\s+keine\s+(?:sprachclips|aufnahmen)(?:\s+mehr)?(?:\s+von\s+mir)?$"));
+static CLIPS_ON: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:keep|start\s+keeping)\s+(?:my\s+|the\s+)?(?:voice\s+clips|clips\s+of\s+my\s+voice)(?:\s+again)?$|^(?:behalte?|speichere?)\s+(?:wieder\s+)?(?:meine\s+)?(?:sprachclips|aufnahmen)(?:\s+wieder)?$"));
+
 pub fn privacy_command(s: &str) -> Option<Value> {
+    if CLIPS_OFF.is_match(s) {
+        return Some(json!({"action": "keep_clips", "on": false}));
+    }
+    if CLIPS_ON.is_match(s) {
+        return Some(json!({"action": "keep_clips", "on": true}));
+    }
     PRIVACY_SHOW.is_match(s).then(|| json!({"action": "show"}))
 }
 
@@ -262,9 +272,12 @@ pub fn gather(db: &str, log: &str) -> Vec<Kept> {
     let guests = crate::speaker_id::guests(db);
     let n = |kind: &str| crate::kit::list(kind).len();
     let plural = |n: usize, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
+    let typed = crate::kit::get("console", "history").and_then(|v| v.as_array().map(Vec::len)).unwrap_or(0);
+    let notes = crate::hud_notify::recent(chrono::Local::now()).len();
+    let (backup_days, backup_mb) = crate::backups::kept();
     vec![
         Kept { what: "Your voice print", detail: capitalised(&crate::speaker_id::known_in_words(db).replace("I have ", "").replace("I know your voice ", "")), delete: crate::speaker_id::known(db).map(|_| "voice_print") },
-        Kept { what: "Clips of your voice", detail: format!("{} ({clips_mb:.1} MB), the newest {} stay", plural(clips, "clip", "clips"), crate::voice_clips::KEPT), delete: (clips > 0).then_some("voice_clips") },
+        Kept { what: "Clips of your voice", detail: format!("{} ({clips_mb:.1} MB), the newest {} stay; \"stop keeping my voice clips\" ends it", plural(clips, "clip", "clips"), crate::voice_clips::KEPT), delete: (clips > 0).then_some("voice_clips") },
         Kept { what: "Guests' voices", detail: if guests.is_empty() { "none".to_string() } else { guests.iter().map(|g| g.name.clone()).collect::<Vec<_>>().join(", ") }, delete: (!guests.is_empty()).then_some("guests") },
         Kept {
             what: "What I learnt of your words",
@@ -274,7 +287,12 @@ pub fn gather(db: &str, log: &str) -> Vec<Kept> {
         Kept { what: "Notes", detail: plural(n("note"), "note", "notes"), delete: (n("note") > 0).then_some("note") },
         Kept { what: "Snippets", detail: plural(n("snippet"), "snippet", "snippets"), delete: (n("snippet") > 0).then_some("snippet") },
         Kept { what: "Rules", detail: plural(n("rule"), "rule", "rules"), delete: (n("rule") > 0).then_some("rule") },
-        Kept { what: "Desk layouts", detail: plural(n("layout"), "layout", "layouts"), delete: (n("layout") > 0).then_some("layout") },
+        // (A layout is a saved workspace: deleted by name, "delete the study layout".)
+        Kept { what: "Desk layouts", detail: format!("{}; \"delete the … layout\" removes one", plural(n("layout"), "layout", "layouts")), delete: None },
+        Kept { what: "Typed lines", detail: format!("{} the console recalls with the arrow keys", plural(typed, "line", "lines")), delete: (typed > 0).then_some("console") },
+        Kept { what: "Notifications", detail: format!("{} of the last twelve hours", plural(notes, "note", "notes")), delete: (notes > 0).then_some("notifications") },
+        Kept { what: "Window places", detail: format!("where {} stood", plural(n("place"), "block", "blocks")), delete: (n("place") > 0).then_some("place") },
+        Kept { what: "Backups", detail: format!("{} ({backup_mb:.1} MB), copies of my memory and the settings", plural(backup_days, "day", "days")), delete: (backup_days > 0).then_some("backups") },
         Kept { what: "Memory database", detail: format!("{} (conversations, memories, screen time, accounts sealed)", megabytes(db)), delete: None },
         Kept { what: "Log file", detail: format!("{} (starts afresh past 10 MB)", megabytes(log)), delete: None },
     ]
@@ -302,12 +320,44 @@ pub fn delete(db: &str, what: &str) -> bool {
             crate::kit::clear(what);
             true
         }
+        "console" => {
+            crate::gui::forget_console_history();
+            true
+        }
+        "notifications" => {
+            crate::hud_notify::clear();
+            true
+        }
+        "place" => {
+            crate::block_places::forget_all();
+            true
+        }
+        "backups" => {
+            crate::backups::delete_all();
+            true
+        }
         _ => false,
     }
 }
 
-pub fn privacy(ctx: &ToolContext, _args: &Value) -> Result<String, String> {
+pub fn privacy(ctx: &ToolContext, args: &Value) -> Result<String, String> {
     let (db, log) = ctx.config.read(|c| (c.memory_db_path.clone(), c.log_file.clone()));
+    // Whether clips of his voice are kept at all: his word switches it, now and for later starts.
+    if args["action"].as_str() == Some("keep_clips") {
+        let on = args["on"].as_bool().unwrap_or(false);
+        ctx.config.update(|c| c.keep_voice_clips = on);
+        if on && !crate::platform::in_test_session() {
+            crate::voice_clips::set_home(&db);
+        } else if !on {
+            crate::voice_clips::stop_keeping();
+        }
+        tracing::info!("[PRIVACY] Clips of Sir's voice are {} from now on", if on { "kept" } else { "no longer kept" });
+        return Ok(if on {
+            say("Clips of your orders are kept again: the newest two hundred, on this PC only.", "I keep clips of your orders again, Sir. On this PC only.")
+        } else {
+            say("No more clips of your voice are kept. The ones that are there stay until you delete them (the privacy board has the key).", "No more clips from now on, Sir. The ones I have stay until you delete them.")
+        });
+    }
     let rows = gather(&db, &log);
     let text = rows.iter().map(|r| format!("{}: {}", r.what, r.detail)).collect::<Vec<_>>().join("\n");
     {

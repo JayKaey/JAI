@@ -51,6 +51,11 @@ pub fn set_home(db: &str) {
     *lock(&HOME) = Some((db.to_string(), dir));
 }
 
+/// No more clips are kept from now on (what is there stays until it is deleted).
+pub fn stop_keeping() {
+    *lock(&HOME) = None;
+}
+
 fn home() -> Option<(String, PathBuf)> {
     lock(&HOME).clone()
 }

@@ -3690,6 +3690,7 @@ impl HudApp {
             0
         };
         info!("[HUD] Native window open (HUD board)");
+        crate::start_mark("the window is open");
         crate::camera_feed::refresh_devices();
         Self::build(app, rt, model, hwnd)
     }
@@ -4392,7 +4393,8 @@ impl HudApp {
             phone: pairing_view::is_open(),
             core: self.core_open,
             features: features_view::is_open(),
-            changes: crate::changes::is_open(),
+            // (It glows too while there is a release Sir has not opened the list for.)
+            changes: crate::changes::is_open() || crate::changes::unseen(),
             history: self.history_open,
             console: self.console_open,
             rebooting,
@@ -4400,6 +4402,7 @@ impl HudApp {
             screens: self.screens_open,
             mic_muted: !self.app.config_state().mic_enabled || crate::listening_lock::is_locked(),
             voice: VoiceLock::of(iface.voice_lock, crate::speaker_id::guests_welcome(), crate::hud_feel::voice_known()),
+            dictating: crate::kit_typing::dictating(),
         };
         let items = header_items(&lit, reboot_label.trim_start_matches("[ ").trim_end_matches(" ]"), &source);
         let y = screen.top() + 10.0;
@@ -4534,6 +4537,10 @@ impl HudApp {
                 ui.memory_mut(|mem| mem.toggle_popup(source_id));
             }
             Some("screens") => self.screens_open = !self.screens_open,
+            Some("mic") if lit.dictating && !lit.mic_muted => {
+                // Dictating: one click ends it (the microphone stays as it is).
+                let _ = crate::kit_typing::dictation(&serde_json::json!({ "action": "stop" }));
+            }
             Some("mic") => {
                 // Muted (or "stop listening"): one click and he listens again.
                 let unmute = lit.mic_muted;
@@ -5678,7 +5685,12 @@ impl HudApp {
         // (As the orb or the slim strip he holds no monitor: any of them can be his background.)
         if let Some(crate::desktop_backdrop::Refused(why)) = crate::desktop_backdrop::show(ctx, (iface.desktop_background || iface.portrait_dashboard) && !windows_still(ctx), if iface.orb_mode { 0 } else { self.hwnd }, iface.span_all_monitors && !iface.orb_mode, !iface.orb_mode, iface.portrait_dashboard, &state) {
             lock(&self.model).toast(why, true);
-            self.app.config().update(|c| c.interface.desktop_background = false);
+            // (Whichever of the two was asked for: both are off, or the refusal would come
+            // again with every frame.)
+            self.app.config().update(|c| {
+                c.interface.desktop_background = false;
+                c.interface.portrait_dashboard = false;
+            });
         }
         mark("mixer");
         mixer_view::show(ctx, &self.rt);
@@ -6329,6 +6341,8 @@ struct HeaderState {
     mic_muted: bool,
     /// Whose voice he answers to.
     voice: VoiceLock,
+    /// Dictation is on: what is said is typed into the app in front.
+    dictating: bool,
 }
 
 /// Whose voice he answers to, as the header strip says it.
@@ -6389,7 +6403,8 @@ fn header_items(lit: &HeaderState, reboot: &str, source: &str) -> Vec<HeaderItem
         item("source", source, false, true),
         item("screens", "SCREENS", lit.screens, true),
         item("voice", lit.voice.label(), lit.voice.open(), true),
-        item("mic", if lit.mic_muted { "MIC: MUTED" } else { "MIC: ON" }, lit.mic_muted, true),
+        // (While he types what is said, the box says so and is lit: one click ends it.)
+        item("mic", if lit.mic_muted { "MIC: MUTED" } else if lit.dictating { "MIC: DICTATING" } else { "MIC: ON" }, lit.mic_muted || lit.dictating, true),
     ]
 }
 
@@ -6629,6 +6644,13 @@ impl ConsoleHistory {
     }
 }
 
+/// The console's remembered lines are forgotten (the privacy board's key).
+pub(crate) fn forget_console_history() {
+    let mut history = lock(&CONSOLE_HISTORY);
+    (history.sent, history.at, history.draft, history.loaded) = (Vec::new(), None, String::new(), true);
+    crate::kit::clear("console");
+}
+
 /// The caret of a single-line field goes behind its last character (the line was replaced
 /// from outside: a completion, a recalled line).
 fn caret_to_end(ctx: &egui::Context, id: egui::Id, line: &str) {
@@ -6692,6 +6714,12 @@ fn console_foot(ui: &mut Ui, line: &mut String, completions: &[String], focus: &
     // Arrow up and down walk through what Sir sent before (this session's lines and the last
     // sessions'), as a shell does; the line he was writing waits below the newest.
     let input_id = egui::Id::new(CONSOLE_INPUT_ID);
+    // Escape empties a line that has something on it (and leaves the history where it began).
+    if ui.memory(|m| m.has_focus(input_id)) && !line.is_empty() && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Escape)) {
+        line.clear();
+        let mut history = lock(&CONSOLE_HISTORY);
+        (history.at, history.draft) = (None, String::new());
+    }
     if ui.memory(|m| m.has_focus(input_id)) {
         let recalled = if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::ArrowUp)) {
             lock(&CONSOLE_HISTORY).back(line)
@@ -7739,7 +7767,10 @@ pub(crate) fn text_block(ctx: &egui::Context, id: &str, title: &str, size: [f32;
 /// it closes them": these blocks had the key and threw the detach away.)
 pub(crate) fn block(ctx: &egui::Context, id: &str, title: &str, size: [f32; 2], body: impl FnOnce(&mut Ui)) -> bool {
     let viewport = ViewportId::from_hash_of(format!("jai_block_{id}"));
-    if !crate::hud_dock::adopt(id) {
+    // (Where the HUD has no windows of its own to give, an offscreen session, every block
+    // stays on the board.)
+    if !crate::hud_dock::adopt(id) || ctx.embed_viewports() {
+        crate::hud_dock::window_gone(id);
         // (On the board: nothing of an earlier window of its own counts for the next one.)
         detached_keep(ctx, viewport, true);
         let action = hud_block_window(ctx, id, title, size, body);
@@ -7750,7 +7781,7 @@ pub(crate) fn block(ctx: &egui::Context, id: &str, title: &str, size: [f32; 2], 
     }
     detached_keep(ctx, viewport, true);
     let name = title.split("//").next().unwrap_or(title).trim();
-    let mut builder = egui::ViewportBuilder::default().with_title(format!("{name}\u{2014} J.A.I.")).with_app_id("jai").with_inner_size(size).with_min_inner_size([320.0, 180.0]).with_decorations(false);
+    let mut builder = egui::ViewportBuilder::default().with_title(format!("{name} \u{2014} J.A.I.")).with_app_id("jai").with_inner_size(size).with_min_inner_size([320.0, 180.0]).with_decorations(false);
     if let Some(icon) = window_icon() {
         builder = builder.with_icon(Arc::new(icon));
     }
@@ -7758,7 +7789,10 @@ pub(crate) fn block(ctx: &egui::Context, id: &str, title: &str, size: [f32; 2], 
         builder = builder.with_position(at).with_inner_size(size);
     }
     let builder = for_test_session(builder);
-    let (mut closed, mut docked) = (false, false);
+    // In a window of its own it is still one of his blocks: "close the windows", "close it" and
+    // its name mean it too (`hud_dock::close_named`, `close_all_blocks`).
+    crate::hud_dock::publish_window(id, title);
+    let (mut closed, mut docked) = (crate::hud_dock::closing_progress(id).is_some(), false);
     // (The viewport's callback may be asked for more than once; the body is drawn once.)
     let mut body = Some(body);
     ctx.show_viewport_immediate(viewport, builder, |ctx, class| {
@@ -7780,6 +7814,7 @@ pub(crate) fn block(ctx: &egui::Context, id: &str, title: &str, size: [f32; 2], 
     if closed || docked {
         // (Docked: back on the board from the next frame. Closed: on the board when it is
         // next asked for.)
+        crate::hud_dock::window_gone(id);
         crate::hud_dock::dock(id);
         lock(&DETACHED_MOTIONS).forget(viewport);
         if docked {
@@ -9211,6 +9246,8 @@ mod tests {
             assert!(items.iter().any(|i| i.id == "voice" && i.text == text && i.on == lit), "{lock_on} {guests} {known}");
         }
         assert_eq!((rest_fps(false), rest_fps(true)), (30.0, 10.0));
+        let dictating = header_items(&HeaderState { dictating: true, ..HeaderState::default() }, "X", "X");
+        assert!(dictating.iter().any(|i| i.id == "mic" && i.text == "MIC: DICTATING" && i.on));
         let measure = |t: &str| t.chars().count() as f32 * 6.0;
         let row = header_layout(&items, 12.0, 2548.0, 10.0, measure);
         let rects = &row.placed;

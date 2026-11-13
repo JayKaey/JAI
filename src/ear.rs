@@ -292,8 +292,10 @@ fn core(w: &[String]) -> (usize, usize) {
     while from < w.len().min(3) && (LEAD.contains(&w[from].as_str()) || crate::wake::name_word(&w[from])) {
         from += 1;
     }
+    // (At the end only his name as it is written: "play Green Day" ends in a word that can
+    // stand for his name at the front of a sentence, and is a band.)
     let mut to = w.len();
-    while to > from + 1 && (TAIL.contains(&w[to - 1].as_str()) || crate::wake::name_word(&w[to - 1])) {
+    while to > from + 1 && (TAIL.contains(&w[to - 1].as_str()) || crate::wake::real_name_word(&w[to - 1])) {
         to -= 1;
     }
     (from, to)
@@ -332,14 +334,19 @@ pub fn about_his_words(text: &str) -> bool {
 }
 
 /// Orders that take something away or cannot be taken back: sound alone never leads to one.
-const TAKES_AWAY: &[&str] = &[
-    "close", "quit", "kill", "exit", "delete", "remove", "shut", "shutdown", "restart", "reboot", "clear", "end", "terminate", "forget", "yourself", "lock", "sleep", "uninstall", "send", "text", "email",
-    "buy", "pay", "schließ", "schließe", "beende", "lösche",
+const TAKES_AWAY: &[&str] = &["end", "text", "off", "yourself", "everyone", "everybody", "anyone", "aus", "alle", "weg"];
+/// The same by the beginning of a word, so that every form of it counts ("closing", "closed",
+/// "schließen", "löscht").
+const TAKES_AWAY_STEMS: &[&str] = &[
+    "clos", "quit", "kill", "exit", "delet", "remov", "shut", "restart", "reboot", "clear", "terminat", "forget", "lock", "sleep", "uninstall", "send", "email", "mail", "buy", "pay", "purchas", "order",
+    "stop", "paus", "minimi", "hide", "hid", "eras", "wipe", "reset", "cancel", "disabl", "hibernat", "standby", "power", "log", "sign", "obey", "listen", "learn", "schließ", "schliess",
+    "beend", "lösch", "loesch", "stopp", "sperr", "vergiss", "entfern", "kauf", "bezahl", "schick", "send", "herunterfahr", "neustart",
 ];
 
 fn takes_away(w: &[String]) -> bool {
-    w.iter().any(|x| TAKES_AWAY.contains(&x.as_str()))
+    w.iter().any(|x| TAKES_AWAY.contains(&x.as_str()) || TAKES_AWAY_STEMS.iter().any(|stem| x.starts_with(stem)))
 }
+
 
 // ------------------------------------------------------------------------ the reading ----
 
@@ -391,10 +398,14 @@ const PHRASE_ALIKE: f32 = 0.86;
 const PHRASE_MARGIN: f32 = 0.05;
 const PHRASE_SAME: f32 = 0.96;
 
-/// Verbs that are given something by name ("open …", "mute everything except …").
-const GIVEN_A_NAME: &[&str] = &[
-    "open", "launch", "start", "run", "show", "focus", "switch", "bring", "mute", "unmute", "go", "turn", "set", "lower", "raise", "make", "put", "move", "öffne", "starte", "zeig", "zeige",
-];
+/// Verbs that are given an application by name ("open …", "switch to …"). Only these: after
+/// "run", "show me", "put" or "set" a noun that sounds like an application is far more often
+/// just that noun ("run this code", "show me the brief").
+const GIVEN_A_NAME: &[&str] = &["open", "launch", "start", "focus", "switch", "bring", "mute", "unmute", "öffne", "starte"];
+/// Words that stand for something Sir points at: a sentence that differs from an order of his
+/// only by one of these means that thing, not the order ("show me that" is not "show me the
+/// Earth").
+const POINTING: &[&str] = &["that", "this", "it", "them", "there", "those", "these", "one", "here", "him", "her", "das", "es", "dies", "dieses", "den", "sie", "ihn"];
 /// Words that name nothing.
 const HOLLOW: &[&str] = &[
     "the", "my", "your", "a", "an", "to", "up", "me", "everything", "all", "except", "but", "for", "and", "on", "in", "of", "it", "this", "that", "please", "now", "can", "you", "could", "would", "volume",
@@ -422,7 +433,13 @@ fn vocabulary() -> Vec<Term> {
             out.push(Term { said, display: display.to_string(), key, id: id.to_string() });
         }
     };
+    // The built-in applications that are installed here (all of them while the index of
+    // installed programs is still being made: nothing is known yet then).
+    let indexed = !crate::appindex::names().is_empty();
     for spec in crate::apps::APPS {
+        if indexed && !(crate::appindex::is_known(spec.display) || crate::appindex::is_known(spec.id)) {
+            continue;
+        }
         add(spec.display, spec.display, spec.id);
         for alias in spec.aliases {
             add(alias, spec.display, spec.id);
@@ -493,7 +510,18 @@ fn by_phrase(toks: &[Tok], w: &[String], entries: &[Learnt], routes: &dyn Fn(&st
     scored.sort_by(|a, b| b.0.total_cmp(&a.0));
     let &(score, phrase) = scored.first()?;
     let rival = scored.iter().skip(1).find(|(_, p)| *p != phrase).map_or(0.0, |(s, _)| *s);
-    let needed = if takes_away(&words(phrase)) { PHRASE_SAME } else { PHRASE_ALIKE };
+    // Where the words differ from the order only by a word that points at something ("show me
+    // that"), Sir means that thing.
+    let said = &w[from..to];
+    let meant = words(phrase);
+    let shorter = said.len().min(meant.len());
+    let front = (0..shorter).take_while(|i| said[*i] == meant[*i]).count();
+    let back = (0..shorter - front).take_while(|i| said[said.len() - 1 - i] == meant[meant.len() - 1 - i]).count();
+    let differing = &said[front..said.len() - back];
+    if !differing.is_empty() && differing.iter().all(|word| POINTING.contains(&word.as_str())) {
+        return None;
+    }
+    let needed = if takes_away(&meant) { PHRASE_SAME } else { PHRASE_ALIKE };
     if score < needed || score - rival < PHRASE_MARGIN || entries.iter().any(|e| e.kind == Kind::Order && e.heard == heard && e.refused()) {
         return None;
     }
@@ -583,15 +611,12 @@ const PAIR_ALIKE: f32 = 0.45;
 /// … and count double when they sound this alike.
 const PAIR_CLOSE: f32 = 0.7;
 
-/// A rewrite was carried out: counted (a rewrite by sound is kept once it was made twice), and
-/// remembered for "that's not what I said".
+/// A rewrite was carried out: remembered for "that's not what I said", and one from the
+/// phrase book counted. (An application read by sound is read by sound each time: it becomes
+/// no rule of its own, which would hold without his name and for "close …" too.)
 pub fn stood(reading: &Reading) {
     match reading.by {
-        By::Sound(_) => {
-            for (heard, meant) in &reading.swaps {
-                count(heard, meant, Kind::Words, 1);
-            }
-        }
+        By::Sound(_) => {}
         By::PhraseBook(_) => {
             for (heard, meant) in &reading.swaps {
                 count(heard, meant, Kind::Order, 1);
@@ -645,13 +670,17 @@ fn pair(nowhere: &[String], somewhere: &[String], same_clip: bool, unsure: bool)
     let front = (0..shorter).take_while(|i| nowhere[*i] == somewhere[*i]).count();
     let back = (0..shorter - front).take_while(|i| nowhere[nowhere.len() - 1 - i] == somewhere[somewhere.len() - 1 - i]).count();
     let (x, y) = (&nowhere[front..nowhere.len() - back], &somewhere[front..somewhere.len() - back]);
-    if x.is_empty() || y.is_empty() || x.len() > 3 || y.len() > 3 || y.iter().all(|word| HOLLOW.contains(&word.as_str())) {
+    let hollow = |stretch: &[String]| stretch.iter().all(|word| HOLLOW.contains(&word.as_str()) || POINTING.contains(&word.as_str()));
+    if x.is_empty() || y.is_empty() || x.len() > 3 || y.len() > 3 || hollow(x) || hollow(y) {
         return None;
     }
     let (heard, meant) = (x.join(" "), y.join(" "));
     let alike = sound_similarity(&sound_key(&heard), &sound_key(&meant));
-    let whole = sound_similarity(&sound_key(&nowhere.join(" ")), &sound_key(&somewhere.join(" ")));
-    if !(same_clip || alike >= PAIR_ALIKE || (unsure && whole >= 0.5)) {
+    // Two orders said one after the other are one order said twice only when the words in
+    // which they differ sound alike ("show me the news", then "show me the weather" are two
+    // orders). Two hearings of one clip are one order whatever they sound like.
+    let _ = unsure;
+    if !(same_clip || alike >= PAIR_ALIKE) {
         return None;
     }
     let by = if alike >= PAIR_CLOSE { 2 } else { 1 };
@@ -700,6 +729,36 @@ pub fn heard_again(first: &str, second: &str) -> Option<(String, String)> {
     pair(&a[af..at], &b[bf..bt], true, true)
 }
 
+/// A second hearing must still be the same sentence: this like the first by sound.
+const SECOND_ALIKE: f32 = 0.5;
+
+/// Whether a second hearing may stand for the first: it sounds like it (a recogniser that
+/// was given names to listen for sometimes writes one of them for anything), it takes nothing
+/// away, and Sir has not refused this very pair before.
+pub fn second_hearing_fits(first: &str, second: &str) -> bool {
+    let (a, b) = (words(first), words(second));
+    if a.is_empty() || b.is_empty() || takes_away(&b) {
+        return false;
+    }
+    let ((af, at), (bf, bt)) = (core(&a), core(&b));
+    let (was, now) = (a[af..at].join(" "), b[bf..bt].join(" "));
+    let refused = learnt().iter().any(|e| e.kind == Kind::Order && e.heard == was && e.meant == now && e.refused());
+    !refused && sound_similarity(&sound_key(&was), &sound_key(&now)) >= SECOND_ALIKE
+}
+
+/// A second hearing was carried out, in Sir's voice: learnt, and remembered for "that's not
+/// what I said".
+pub fn second_hearing_stood(first: &str, second: &str) {
+    heard_again(first, second);
+    *lock(&LAST_REWRITE) = Some((Reading { heard: first.to_string(), text: second.to_string(), by: By::Learnt, swaps: Vec::new() }, Instant::now()));
+}
+
+/// A spoken sentence was taken as it was written: "that's not what I said" after it is about
+/// that sentence, not about a rewrite from before.
+pub fn no_rewrite() {
+    *lock(&LAST_REWRITE) = None;
+}
+
 /// Sir put a line of the hearing log right: what was heard was `meant`. The order is his for
 /// it at once, and so are the words in which the two differ.
 pub fn corrected(heard: &str, meant: &str) -> bool {
@@ -717,15 +776,6 @@ pub fn corrected(heard: &str, meant: &str) -> bool {
     }
     tracing::info!("[EAR] Sir put a line right: '{}' is '{}'", was.join(" "), is.join(" "));
     true
-}
-
-/// The pronunciation coach heard `heard` where the sentence on the board says `meant`: counted
-/// as words for words (the answer was to hand, so twice makes it hold).
-pub fn count_words(heard: &str, meant: &str) {
-    let (heard, meant) = (words(heard).join(" "), words(meant).join(" "));
-    if !heard.is_empty() && !meant.is_empty() && heard != meant {
-        count(&heard, &meant, Kind::Words, 1);
-    }
 }
 
 /// Sir teaches him: `heard` is to be taken for `meant`, from now on and everywhere.
@@ -856,9 +906,9 @@ pub fn worth_hearing_again(text: &str, avg_logprob: f32, routes: &dyn Fn(&str) -
     }
     const ASKING: &[&str] = &["what", "whats", "why", "how", "who", "whos", "when", "where", "which", "is", "are", "do", "does", "did", "was", "were", "should", "wie", "was", "warum", "wer", "wann", "wo", "welche"];
     let question = ASKING.contains(&w[0].as_str()) && w.len() > 3;
-    let skip = usize::from(matches!(w, [a, b, ..] if matches!(a.as_str(), "can" | "could" | "would" | "will") && b == "you"));
-    let order = w.get(skip * 2).is_some_and(|first| first != "just" && crate::ears::COMMAND_VERBS.contains(&first.as_str()));
-    !question && (order || w.len() <= 4 || avg_logprob < -0.45)
+    // (A request that merely begins with a verb, "tell me a joke about school", is one for the
+    // language model: a second hearing of every such sentence would hold the next one up.)
+    !question && (w.len() <= 4 || avg_logprob < -0.45)
 }
 
 /// The names worth giving the recogniser for a careful hearing: the applications Sir has, and
@@ -868,7 +918,10 @@ pub fn hint() -> String {
     if names.is_empty() {
         names = vec!["Discord", "Spotify", "Firefox", "Steam"];
     }
-    format!("{}, Earth, mixer, calendar, radar, settings, zoom in, zoom out.", names.join(", "))
+    // His own names for things (snippets, desk layouts) are words no dictionary has.
+    let own: Vec<String> = crate::kit::list("snippet").into_iter().chain(crate::kit::list("layout")).map(|(name, _, _)| name).filter(|n| n.chars().count() >= 3).take(8).collect();
+    let own = if own.is_empty() { String::new() } else { format!(", {}", own.join(", ")) };
+    format!("{}, Earth, mixer, calendar, radar, settings, zoom in, zoom out{own}.", names.join(", "))
 }
 
 /// Orders every phrase book starts with: the everyday ones, as Sir says them.
@@ -890,14 +943,17 @@ const SEEDS: &[&str] = &[
     "show my notifications",
     "mini mode",
     "night mode",
-    "learn my voice",
-    "only obey me",
-    "listen to everyone",
-    "minimize everything",
     "open discord",
     "open spotify",
     "volume up",
     "volume down",
+    // The same everyday orders as he says them in German.
+    "wie spät ist es",
+    "nächstes lied",
+    "öffne discord",
+    "öffne spotify",
+    "nachtmodus",
+    "was habe ich verpasst",
 ];
 
 #[cfg(test)]
@@ -951,18 +1007,20 @@ mod tests {
         reset();
         let first = read("Jay, open this card.", true, &routes).expect("by sound");
         stood(&first);
-        assert!(!learnt().iter().any(|e| e.kind == Kind::Words && e.trusted()), "once is not learnt yet");
-        // Not spoken to him and not learnt: nothing. (Sound is for words spoken to him.)
+        // Not spoken to him: nothing. (Sound is for words spoken to him.)
         assert_eq!(read("open this card", false, &routes), None);
         let second = read("Jay, open this card please.", true, &routes).expect("by sound again");
         stood(&second);
-        let entry = learnt().into_iter().find(|e| e.kind == Kind::Words).expect("learnt");
-        assert_eq!((entry.heard.as_str(), entry.meant.as_str(), entry.seen, entry.trusted()), ("this card", "discord", 2, true));
-        // Learnt: it holds without his name, and for an order that takes something away.
-        let learnt_now = read("close this card", false, &routes).expect("learnt words");
-        assert_eq!((learnt_now.text.as_str(), learnt_now.by), ("close discord", By::Learnt));
-        // … but only where it makes an order he knows.
+        // An application read by sound is read by sound each time: it becomes no rule of its
+        // own, which would hold without his name and for an order that takes something away.
+        assert!(!learnt().iter().any(|e| e.kind == Kind::Words), "{:?}", learnt());
+        assert_eq!(read("close this card", false, &routes), None);
         assert_eq!(read("I lost this card in the game.", false, &routes), None);
+        // What Sir teaches holds everywhere, for "close" too.
+        assert!(teach("this card", "Discord"));
+        let taught = read("close this card", false, &routes).expect("taught words");
+        assert_eq!((taught.text.as_str(), taught.by), ("close discord", By::Taught));
+        reset();
         // "That's not what I said" takes the last rewrite back: three times, and it is refused.
         for _ in 0..3 {
             let again = read("Jay, open this card.", true, &routes);
@@ -984,16 +1042,25 @@ mod tests {
         // They sound the same: counted double, so it holds at once, as words and as an order.
         let reading = read("Jay, show me the Erth.", true, &routes).expect("learnt");
         assert_eq!((reading.text.as_str(), reading.by), ("Jay, show me the earth.", By::Learnt));
-        // "The rough" for "the Earth" (2026-11-12) sounds nothing like it. Such a pair is made
-        // only when the recogniser was unsure of the words, and holds the second time.
-        assert_eq!(turn("show me the rough", false, false), None);
-        assert_eq!(turn("show me the earth", true, false), None, "sure of other words: another order, not the same one again");
+        // "The rough" for "the Earth" (2026-11-12) sounds nothing like it: said one after the
+        // other, the two are two orders, sure of the words or not ("show me the news", then
+        // "show me the weather" are two as well).
         assert_eq!(turn("show me the rough", false, true), None);
-        assert!(turn("show me the earth", true, false).is_some());
-        assert_eq!(read("Jay, show me the rough", true, &routes), None, "once is not learnt yet");
-        assert_eq!(turn("show me the rough", false, true), None);
-        assert!(turn("show me the earth", true, false).is_some());
+        assert_eq!(turn("show me the earth", true, true), None, "other words: another order, not the same one again");
+        assert_eq!(turn("show me the news", false, true), None);
+        assert_eq!(turn("show me the weather", true, true), None);
+        assert_eq!(read("Jay, show me the rough", true, &routes), None);
+        // What pairs them is one clip heard twice: the careful second hearing made "the Earth"
+        // of it, and that was carried out. Twice, and it is read right at once.
+        assert!(second_hearing_fits("show me the rough", "show me the earth") || sound_similarity(&sound_key("show me the rough"), &sound_key("show me the earth")) < SECOND_ALIKE);
+        second_hearing_stood("show me the rough", "show me the earth");
+        second_hearing_stood("show me the rough", "show me the earth");
         assert_eq!(read("Jay, show me the rough", true, &routes).map(|r| r.text).as_deref(), Some("Jay, show me the earth"));
+        // A second hearing that sounds nothing like the first, or that takes something away,
+        // does not stand for it.
+        assert!(!second_hearing_fits("what a lovely day it is", "zoom out"));
+        assert!(!second_hearing_fits("prost yourself", "close yourself"));
+        assert!(second_hearing_fits("sum out", "zoom out"));
         // An order that sounds like one Sir has given before needs none of that: the phrase
         // book reads it right the first time.
         assert!(matches!(read("Jay, show me the erf", true, &routes), Some(Reading { by: By::PhraseBook(_), ref text, .. }) if text == "Jay, show me the earth"));
@@ -1004,7 +1071,7 @@ mod tests {
         assert_eq!(turn("zoom out", true, false), None);
         // Every order that led somewhere is in the phrase book, with how often it was given.
         let book: Vec<(String, u32)> = learnt().into_iter().filter(|e| e.kind == Kind::Said).map(|e| (e.heard, e.seen)).collect();
-        assert_eq!(book, [("show me the earth".to_string(), 4), ("open the mixer".to_string(), 1), ("zoom out".to_string(), 1)]);
+        assert_eq!(book, [("show me the earth".to_string(), 2), ("show me the weather".to_string(), 1), ("open the mixer".to_string(), 1), ("zoom out".to_string(), 1)]);
         // A line of the hearing log put right holds at once.
         assert!(corrected("Jay, open the mix up.", "open the mixer"));
         assert_eq!(read("Jay, open the mix up", true, &routes).map(|r| r.text).as_deref(), Some("Jay, open the mixer"));
@@ -1083,8 +1150,8 @@ mod tests {
 
     #[test]
     fn a_second_hearing_is_for_orders_that_lead_nowhere() {
-        assert!(worth_hearing_again("Jay, can you open this card?", -0.1, &routes), "an order by its shape");
         assert!(worth_hearing_again("Jay, sum out.", -0.4, &routes), "a few words");
+        assert!(!worth_hearing_again("Jay, tell me a joke about my school and my teachers", -0.1, &routes), "a request for the model, heard well");
         assert!(worth_hearing_again("Jay, show me dear us in the big window now", -0.62, &routes), "unsure");
         assert!(!worth_hearing_again("Jay, open Discord.", -0.1, &routes), "it leads somewhere");
         assert!(!worth_hearing_again("Jay, what is the capital of France?", -0.2, &routes), "a question for the model");

@@ -961,6 +961,8 @@ impl ToolContext {
             },
             "manage_stark_protocol" | "protocols" => {
                 let (out, effects) = self.protocols_tool(&args).await;
+                // (A workspace just captured is a desk layout by name at once.)
+                crate::kit_screen::sync_layouts(self);
                 modality_changed |= effects.0;
                 state_changed |= effects.1;
                 shutdown_requested |= effects.2;

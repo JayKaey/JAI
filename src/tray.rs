@@ -66,7 +66,7 @@ mod win {
         AllowSetForegroundWindow, AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu,
         DispatchMessageW, FindWindowW, GetCursorPos, GetMessageW, GetSystemMetrics, LoadIconW, LoadImageW, PostMessageW,
         PostQuitMessage, RegisterClassW, RegisterWindowMessageW, SetForegroundWindow, SetMenuDefaultItem, TrackPopupMenu,
-        TranslateMessage, HICON, HMENU, IDI_APPLICATION, IMAGE_ICON, LR_DEFAULTCOLOR, MF_CHECKED, MF_SEPARATOR, MF_STRING,
+        TranslateMessage, HICON, HMENU, IDI_APPLICATION, IMAGE_ICON, LR_DEFAULTCOLOR, MF_CHECKED, MF_GRAYED, MF_SEPARATOR, MF_STRING,
         MF_UNCHECKED, MSG, SM_CXSMICON, SM_CYSMICON, TPM_BOTTOMALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON, WINDOW_EX_STYLE,
         WM_APP, WM_CONTEXTMENU, WM_DESTROY, WM_ENDSESSION, WM_LBUTTONUP, WM_NULL, WM_QUERYENDSESSION, WM_RBUTTONUP,
         WNDCLASSW, WS_OVERLAPPED,
@@ -239,6 +239,11 @@ mod win {
         let Ok(menu) = CreatePopupMenu() else { return };
         let now = TRAY.get().map(|t| (t.state)()).unwrap_or(TrayState { mic_on: true, ..TrayState::default() });
         let tick = |on: bool| MF_STRING | if on { MF_CHECKED } else { MF_UNCHECKED };
+        // The first line says who is running and since when (greyed: it is no command).
+        static SINCE: OnceLock<String> = OnceLock::new();
+        let since = SINCE.get_or_init(|| chrono::Local::now().format("%a %H:%M").to_string());
+        let head: Vec<u16> = format!("J.A.I. {} \u{2014} running since {since}", env!("CARGO_PKG_VERSION")).encode_utf16().chain(std::iter::once(0)).collect();
+        let _ = AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, PCWSTR(head.as_ptr()));
         let _ = AppendMenuW(menu, MF_STRING, CMD_OPEN, w!("Open HUD"));
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
         let _ = AppendMenuW(menu, tick(now.mic_on), CMD_MIC, w!("Microphone on"));
