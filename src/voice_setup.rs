@@ -190,6 +190,25 @@ pub fn gate_for(over_db: f32, current: f32) -> Option<f32> {
     ((wanted - current).abs() / current.max(0.1) > 0.2).then_some((wanted * 10.0).round() / 10.0)
 }
 
+/// How many of his last sentences the gate is read from, and how often it is looked at.
+pub const GATE_SENTENCES: usize = 8;
+/// The furthest one look moves the gate: a single odd evening does not swing it.
+const GATE_STEP: f32 = 0.4;
+
+/// The gate following his voice: from how far his last sentences stood over the room (dB), the
+/// gate that fits their middle, one step from where it stands. None: too few sentences, or the
+/// gate fits already.
+pub fn gate_step(over_db: &[f32], current: f32) -> Option<f32> {
+    if over_db.len() < GATE_SENTENCES {
+        return None;
+    }
+    let mut sorted = over_db.to_vec();
+    sorted.sort_by(|a, b| a.total_cmp(b));
+    let wanted = gate_for(sorted[sorted.len() / 2], current)?;
+    let gate = (wanted.clamp(current - GATE_STEP, current + GATE_STEP) * 10.0).round() / 10.0;
+    ((gate - current).abs() >= 0.1).then_some(gate)
+}
+
 /// The loudest a clip's voice is (the loudest tenth of a second, dBFS).
 pub fn peak_db(pcm: &[f32]) -> f32 {
     let loudest = pcm.chunks(1600).map(|c| (c.iter().map(|s| s * s).sum::<f32>() / c.len().max(1) as f32).sqrt()).fold(0.0f32, f32::max);
@@ -414,6 +433,15 @@ mod tests {
         assert_eq!(gate_for(24.0, 3.0), None, "a voice that fits the gate leaves it alone");
         assert_eq!(gate_for(40.0, 2.5), Some(4.0), "a strong voice: narrowed against the room");
         assert_eq!(gate_for(22.0, 2.5), None);
+        // Following his voice sentence by sentence: from the middle of the last eight, one step.
+        assert_eq!(gate_step(&[16.0; 7], 3.0), None, "too few sentences say nothing yet");
+        assert_eq!(gate_step(&[16.0; 8], 3.0), Some(2.6), "a quiet voice opens the gate, a step at a time");
+        assert_eq!(gate_step(&[16.0; 8], 2.0), Some(1.6));
+        assert_eq!(gate_step(&[16.0; 8], 1.6), None, "close enough is left alone");
+        assert_eq!(gate_step(&[40.0; 8], 2.2), Some(2.6), "a strong voice narrows it, a step at a time");
+        assert_eq!(gate_step(&[24.0; 8], 3.0), None, "a gate that fits stays");
+        // One shout among quiet sentences changes nothing: the middle counts.
+        assert_eq!(gate_step(&[24.0, 24.0, 60.0, 24.0, 23.0, 25.0, 24.0, 24.0], 3.0), None);
         let loud: Vec<f32> = (0..16_000).map(|i| 0.5 * (i as f32 * 0.2).sin()).collect();
         assert!((peak_db(&loud) + 9.0).abs() < 0.5, "{}", peak_db(&loud));
     }

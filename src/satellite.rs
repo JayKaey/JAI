@@ -839,6 +839,20 @@ pub fn has_certificate() -> bool {
 mod tests {
     use super::*;
 
+    /// The phone page's control buttons send orders he carries out on the fast path, without
+    /// the language model: each one is an order the parser knows.
+    #[test]
+    fn the_phone_pages_control_buttons_are_orders_he_knows() {
+        let row = PAGE.split("<div class=\"quick controls\">").nth(1).and_then(|rest| rest.split("</div>").next()).expect("the controls row");
+        let orders: Vec<&str> = row.split("data-q=\"").skip(1).filter_map(|rest| rest.split('"').next()).collect();
+        assert!(orders.len() >= 8, "{orders:?}");
+        for order in orders {
+            assert!(crate::intents::parse(order).is_some(), "'{order}' is no order of the fast path");
+        }
+        assert!(row.contains("data-fill=\"Note: \""));
+        assert!(crate::intents::parse("Note: buy milk").is_some());
+    }
+
     /// "What do I have to do so that I can use you as a website with a static domain?": the
     /// steps with his own port and the hub's own labels; what is missing when he is half way;
     /// the address itself once it is set up.

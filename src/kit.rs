@@ -36,6 +36,9 @@ pub const TOOLS: &[&str] = &[
     "internet_doctor",
     "privacy_board",
     "show_changes",
+    "memory_backup",
+    "subtitle_place",
+    "block_places",
 ];
 
 pub fn is_tool(name: &str) -> bool {
@@ -64,6 +67,9 @@ pub fn command(s: &str, original: &str) -> Option<(&'static str, Value)> {
         .or_else(|| crate::kit_insight::doctor_command(s).map(|a| ("internet_doctor", a)))
         .or_else(|| crate::kit_insight::privacy_command(s).map(|a| ("privacy_board", a)))
         .or_else(|| crate::changes::command(s).map(|a| ("show_changes", a)))
+        .or_else(|| crate::backups::command(s).map(|a| ("memory_backup", a)))
+        .or_else(|| crate::live_subtitles::place_command(s).map(|a| ("subtitle_place", a)))
+        .or_else(|| crate::block_places::command(s).map(|a| ("block_places", a)))
 }
 
 /// Carries out a kit tool.
@@ -86,6 +92,9 @@ pub async fn run_tool(ctx: &ToolContext, name: &str, args: &Value) -> Result<Str
         "internet_doctor" => crate::kit_insight::doctor().await,
         "privacy_board" => crate::kit_insight::privacy(ctx, args),
         "show_changes" => crate::changes::run(args),
+        "memory_backup" => crate::backups::run(args).await,
+        "subtitle_place" => crate::live_subtitles::place_tool(args),
+        "block_places" => crate::block_places::run(args),
         other => Err(format!("The kit has no tool called '{other}'.")),
     }
 }
@@ -100,7 +109,7 @@ pub fn only_looks(name: &str, args: &Value) -> bool {
 
 pub fn stays_inside(name: &str, args: &Value) -> bool {
     let action = args["action"].as_str().unwrap_or("");
-    only_looks(name, args) || matches!(name, "notebook" | "privacy_board" | "pronunciation_coach" | "known_guest") || (matches!(name, "type_snippet" | "whenever_rule" | "desk_layout") && matches!(action, "save" | "add" | "delete" | "remove"))
+    only_looks(name, args) || matches!(name, "notebook" | "privacy_board" | "pronunciation_coach" | "known_guest" | "subtitle_place" | "block_places") || (matches!(name, "type_snippet" | "whenever_rule" | "desk_layout") && matches!(action, "save" | "add" | "delete" | "remove"))
 }
 
 /// A tool's answer: what stands in the chat, and the one line he says.

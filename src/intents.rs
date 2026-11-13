@@ -3175,7 +3175,7 @@ static DOCK_ALL: LazyLock<Regex> = LazyLock::new(|| {
 });
 /// "Detach the telemetry window", "pop out the plotter", "undock the schedule".
 static DETACH: LazyLock<Regex> = LazyLock::new(|| {
-    re(r"^(?:detach|pop out|undock|float)\s+(?:the\s+|my\s+|your\s+|that\s+)?(.+?)(?:\s+(?:window|block|view))?(?:\s+(?:into|in|as)\s+(?:a\s+|its\s+)?(?:separate|new|own)\s+window)?$|^(?:put|move)\s+(?:the\s+|my\s+|your\s+)?(.+?)\s+(?:into|in)\s+(?:a\s+|its\s+)?(?:separate|new|own)\s+window$")
+    re(r"^(?:detach|pop out|undock|float)\s+(?:the\s+|my\s+|your\s+|that\s+)?(.+?)(?:\s+(?:window|block|view))?(?:\s+(?:into|in|as)\s+(?:a\s+|its\s+)?(?:separate|new|own)\s+window)?$|^(?:put|move|pack|packe|schieb|schiebe|mach)\s+(?:the\s+|my\s+|your\s+|das\s+|den\s+|die\s+)?(.+?)\s+(?:into|in|zu)\s+(?:a\s+|its\s+|ein\s+|einem\s+)?(?:separate|new|own|eigenes|eigenen|neues|separates)\s+(?:window|fenster)$")
 });
 /// A navigation dock tab named on its own: "home view", "go to the sim lab", "HUD board".
 static NAV_VIEW: LazyLock<Regex> = LazyLock::new(|| {
@@ -3243,7 +3243,7 @@ static THEME_SAVE: LazyLock<Regex> = LazyLock::new(|| {
 });
 static THEME_LOAD: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:load|lade)\s+(?:my|the|mein|meine|das)?\s*(.+?)\s+(?:theme|seam|steam|scheme|thema)$"));
 static WINDOWS_OVERLAP: LazyLock<Regex> = LazyLock::new(|| {
-    re(r"^(?:(?:overlap|stack|cascade)\s+(?:the\s+|my\s+|all\s+|your\s+)?(?:windows|blocks|panels|them)|let\s+(?:the\s+)?windows\s+overlap)$")
+    re(r"^(?:(?:overlap|stack|cascade)\s+(?:the\s+|my\s+|all\s+|your\s+)?(?:windows|blocks|panels|them)|let\s+(?:the\s+)?windows\s+overlap|(?:überlappe?|staple|stapel)\s+(?:die\s+|meine\s+|alle\s+)?(?:fenster|blöcke)|(?:lass\s+)?(?:die\s+)?fenster\s+überlappen)$")
 });
 static WINDOWS_APART: LazyLock<Regex> = LazyLock::new(|| {
     // ("Don't make the windows overlap", "the windows shouldn't overlap": a setting, not a "don't".)
@@ -4813,7 +4813,7 @@ static BLOCK_TIDY: LazyLock<Regex> = LazyLock::new(|| {
 static BLOCK_FIND: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(?:(?:find|search for|look for|highlight|filter for)\s+(.+?)\s+(?:on|in|across)\s+(?:all\s+)?(?:the\s+|my\s+|your\s+)?(?:board|blocks|windows|hud|panels|report)|(?:search|filter)\s+(?:all\s+)?(?:the\s+|my\s+|your\s+)?(?:board|blocks|windows|hud|panels|report)\s+for\s+(.+))$")
 });
-static BLOCK_FIND_CLEAR: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:clear|reset|stop|end|cancel|remove)\s+(?:the\s+|that\s+)?(?:block\s+|board\s+)?(?:search|filter|highlight(?:ing)?)$"));
+static BLOCK_FIND_CLEAR: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:clear|reset|stop|end|cancel|remove)\s+(?:the\s+|that\s+)?(?:block\s+|board\s+)?(?:search|filter|highlight(?:ing)?)$|^(?:suche|filter|hervorhebung)\s+(?:beenden|löschen|aufheben|zurücksetzen|aus)$"));
 /// "Pin the chart", "unpin it", "copy the first note (to the clipboard)", "export the map as JSON".
 static BLOCK_MENU: LazyLock<Regex> = LazyLock::new(|| re(r"^(pin|unpin|copy|export)\s+(.+?)(?:\s+to\s+(?:the\s+|my\s+)?clipboard)?(?:\s+(?:as|to|in)\s+(?:a\s+)?(markdown|json|md)(?:\s+file)?)?$"));
 

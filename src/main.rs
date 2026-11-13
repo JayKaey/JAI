@@ -21,7 +21,9 @@ mod audio_tags;
 mod appindex;
 mod audio_mixer;
 mod away_mode;
+mod backups;
 mod block_actions;
+mod block_places;
 mod board_research;
 mod apps;
 mod brain;
@@ -153,6 +155,7 @@ mod phonemizer;
 mod photo3d;
 mod pim;
 mod pim_config;
+mod plain_errors;
 mod platform;
 mod pronunciation_lexicon;
 mod proactive_butler;
@@ -461,7 +464,9 @@ struct LocalTimer;
 
 impl tracing_subscriber::fmt::time::FormatTime for LocalTimer {
     fn format_time(&self, w: &mut tracing_subscriber::fmt::format::Writer<'_>) -> std::fmt::Result {
-        write!(w, "{}", chrono::Local::now().format("%H:%M:%S%.3f"))
+        // The day stands on every line: a log that runs past midnight, or is read a week
+        // later, says when a thing happened without counting back from the file's date.
+        write!(w, "{}", chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f"))
     }
 }
 
@@ -1063,6 +1068,8 @@ async fn start(cli: &Cli, cfg: JaiConfig) -> Started {
     away_mode::start(app.tools().clone(), shutdown.clone());
     watch_and_tell::start(shutdown.clone());
     kit_notes::start(app.tools().clone(), shutdown.clone());
+    // Once a day: a whole copy of the memory database and the settings, the last seven kept.
+    backups::start(&cfg.memory_db_path, config::CONFIG_FILE, shutdown.clone());
     // live layers (C1): the rain note and the ISS heads-up.
     live_layers::start(app.clone(), shutdown.clone());
     // What his own jobs have to say once done (the radar's sweep, the disk map's scan), spoken
@@ -1109,8 +1116,14 @@ async fn start(cli: &Cli, cfg: JaiConfig) -> Started {
     });
 
     let (tray_tx, tray_rx) = tokio::sync::mpsc::unbounded_channel();
-    let mic = Arc::clone(&controls);
-    tray::spawn(tray_tx, move || mic.mic_enabled.load(Ordering::Relaxed));
+    let (mic, of_tray) = (Arc::clone(&controls), app.clone());
+    tray::spawn(tray_tx, move || tray::TrayState {
+        mic_on: mic.mic_enabled.load(Ordering::Relaxed),
+        voice_lock: of_tray.config().read(|c| c.interface.voice_lock),
+        guests: speaker_id::guests_welcome(),
+        night: hud_feel::night_active(),
+        dormant: vram_guard::is_dormant(),
+    });
     spawn_tray_handler(tray_rx, app.clone(), shutdown.clone());
 
     info!("[READY] Say \"JAI …\". Quit by voice (\"JAI, shut down\"), from the tray icon or the HUD.");
@@ -1148,12 +1161,24 @@ async fn shutdown_sequence(app: app::Jai, store: ConfigStore, llm: Arc<runtime::
 }
 
 /// Tray menu actions → app.
+/// A switch of the tray menu: the interface setting changes, silently.
+async fn tray_switch(app: &app::Jai, args: serde_json::Value) {
+    let outcome = app.tools().execute("configure_interface", &args).await;
+    info!("[TRAY] {args} -> {}", outcome.output.lines().next().unwrap_or(""));
+}
+
 fn spawn_tray_handler(mut actions: UnboundedReceiver<TrayAction>, app: app::Jai, shutdown: CancellationToken) {
     tokio::spawn(async move {
         while let Some(action) = actions.recv().await {
             match action {
                 TrayAction::OpenHud => gui::show(),
                 TrayAction::WakeJai => vram_guard::wake("tray"),
+                TrayAction::Standby => vram_guard::flush_with_reason("tray"),
+                // The switches of the tray menu: the same settings his words change, without
+                // a word from him.
+                TrayAction::VoiceLock(on) => tray_switch(&app, serde_json::json!({ "voice_lock": on })).await,
+                TrayAction::Guests(on) => tray_switch(&app, serde_json::json!({ "voice_guest": on, "voice_guest_minutes": 30 })).await,
+                TrayAction::Night(on) => tray_switch(&app, serde_json::json!({ "night_now": on })).await,
                 TrayAction::ToggleMic => {
                     let enabled = !app.config_state().mic_enabled;
                     app.handle_command(hud::HudCommand::SetMic { enabled }).await;

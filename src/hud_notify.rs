@@ -68,15 +68,71 @@ fn ago(secs: i64) -> String {
     }
 }
 
-/// The history as the "what did I miss?" block shows it.
+/// Within this long, notifications from one source stand together.
+const GROUP_SECS: i64 = 300;
+/// A grouped card shows this many of its newest lines.
+const GROUP_LINES: usize = 3;
+
+/// Who a notification is from, how many it stands for, and what it says: its words before the
+/// first colon ("Discord", "WhatsApp from Max"; "Discord (3)" is three). None: a line without
+/// such a head.
+fn source(text: &str) -> Option<(&str, u32, &str)> {
+    let (head, rest) = text.split_once(": ")?;
+    if head.is_empty() || head.chars().count() > 36 || head.contains('\n') || rest.trim().is_empty() {
+        return None;
+    }
+    Some(match head.rsplit_once(" (").and_then(|(name, n)| Some((name, n.strip_suffix(')')?.parse::<u32>().ok()?))) {
+        Some((name, n)) => (name, n, rest),
+        None => (head, 1, rest),
+    })
+}
+
+/// A notice that follows another from the same source joins it: the source, how many there
+/// were, and its newest lines (newest first). None: they are from different sources.
+pub fn grouped(shown: &str, new: &str) -> Option<String> {
+    let (was, count, lines) = source(shown)?;
+    let (is, _, line) = source(new)?;
+    if !was.eq_ignore_ascii_case(is) {
+        return None;
+    }
+    let line = line.trim();
+    let mut newest = vec![line];
+    newest.extend(lines.lines().map(str::trim).filter(|l| !l.is_empty() && *l != line));
+    newest.truncate(GROUP_LINES);
+    Some(format!("{is} ({}): {}", count + 1, newest.join("\n")))
+}
+
+/// The history as the "what did I miss?" block shows it: newest first, and what one source
+/// sent in a row (five messages from one chat) as one entry with its lines.
 pub fn missed_text(now: DateTime<Local>) -> String {
     let notes = recent(now);
     if notes.is_empty() {
         return "Nothing came up in the last twelve hours, Sir.".to_string();
     }
-    notes
+    // (the newest note of the entry, the oldest moment in it, further lines from the same source)
+    let mut entries: Vec<(Note, DateTime<Local>, Vec<String>)> = Vec::new();
+    for note in notes {
+        let from = source(&note.text).map(|(name, _, rest)| (name.to_lowercase(), rest.trim().to_string()));
+        if let (Some((name, rest)), Some((head, oldest, more))) = (&from, entries.last_mut()) {
+            let same = source(&head.text).is_some_and(|(n, _, _)| n.to_lowercase() == *name);
+            if same && head.alert == note.alert && (*oldest - note.at).num_seconds().abs() < GROUP_SECS {
+                more.push(rest.clone());
+                *oldest = note.at;
+                continue;
+            }
+        }
+        let at = note.at;
+        entries.push((note, at, Vec::new()));
+    }
+    entries
         .iter()
-        .map(|n| format!("{}  ·  {}{}\n{}", n.at.format("%H:%M"), ago((now - n.at).num_seconds()), if n.alert { "  ·  ALERT" } else { "" }, n.text))
+        .map(|(n, _, more)| {
+            let stamp = format!("{}  ·  {}{}", n.at.format("%H:%M"), ago((now - n.at).num_seconds()), if n.alert { "  ·  ALERT" } else { "" });
+            match source(&n.text).filter(|_| !more.is_empty()) {
+                Some((name, _, rest)) => format!("{stamp}\n{name} ({})\n  {}\n  {}", more.len() + 1, rest.trim(), more.join("\n  ")),
+                None => format!("{stamp}\n{}", n.text),
+            }
+        })
         .collect::<Vec<_>>()
         .join("\n\n")
 }
@@ -284,6 +340,31 @@ mod tests {
         lock(&HISTORY).clear();
         assert_eq!(missed_text(at(10, 0)), "Nothing came up in the last twelve hours, Sir.");
         assert_eq!((ago(12), ago(300), ago(7300)), ("12 s ago".to_string(), "5 min ago".to_string(), "2 h ago".to_string()));
+    }
+
+    #[test]
+    fn what_one_source_sends_in_a_row_is_one_entry() {
+        let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
+        lock(&HISTORY).clear();
+        let at = |h: u32, m: u32| Local.with_ymd_and_hms(2026, 11, 12, h, m, 0).unwrap();
+        record_at("Discord: Alex is online", false, at(9, 0));
+        record_at("Discord: Alex: are you there?", false, at(9, 1));
+        record_at("Discord: Alex: hello?", false, at(9, 2));
+        record_at("Timer done.", false, at(9, 3));
+        record_at("Discord: Sam joined the call", false, at(9, 40));
+        let text = missed_text(at(10, 0));
+        assert!(text.contains("09:02  ·  58 min ago\nDiscord (3)\n  Alex: hello?\n  Alex: are you there?\n  Alex is online"), "{text}");
+        assert!(text.contains("09:40  ·  20 min ago\nDiscord: Sam joined the call"), "a later one stands alone: {text}");
+        assert!(text.contains("Timer done."), "{text}");
+        lock(&HISTORY).clear();
+        // On screen: the card of a source takes the next line from it and counts.
+        let two = grouped("Discord: Alex is online", "Discord: Alex: are you there?").expect("same source");
+        assert_eq!(two, "Discord (2): Alex: are you there?\nAlex is online");
+        let four = grouped(&grouped(&two, "discord: third").expect("three"), "Discord: fourth").expect("four");
+        assert_eq!(four, "Discord (4): fourth\nthird\nAlex: are you there?", "the three newest lines stay");
+        assert_eq!(grouped("Discord: a", "WhatsApp from Alex: b"), None);
+        assert_eq!(grouped("Timer done.", "Timer done."), None, "a line without a source joins nothing");
+        assert_eq!(grouped("Discord: same", "Discord: same").as_deref(), Some("Discord (2): same"));
     }
 
     #[test]

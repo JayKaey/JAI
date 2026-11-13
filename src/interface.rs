@@ -291,6 +291,9 @@ pub struct InterfaceSettings {
     /// The dashboard on an upright monitor (`desktop_backdrop` draws it there, behind his
     /// windows): "portrait dashboard".
     pub portrait_dashboard: bool,
+    /// A confirmation leaves out what Sir just said himself: "Done, Sir." instead of "Done,
+    /// Sir. Discord is on Monitor 2." What he did not say (which song was picked) is still said.
+    pub brief_confirmations: bool,
     /// Name shown in the header.
     pub title: String,
     /// Minimal zen mode: no sidebars, widgets or pills — only the 3D orb and a clean chat.
@@ -374,6 +377,7 @@ impl Default for InterfaceSettings {
             // (On: he answers to Sir alone once Sir's voice is known, unless told otherwise.)
             voice_lock: true,
             portrait_dashboard: false,
+            brief_confirmations: true,
             title: DEFAULT_TITLE.to_string(),
             // The clean two-zone studio layout: the orb and the conversation; every technical
             // panel lives in the Settings drawer.

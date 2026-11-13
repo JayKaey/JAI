@@ -1285,7 +1285,19 @@ impl HudModel {
         // Into the history ("what did I miss?"), and the screen's edges light up.
         crate::hud_notify::record(&text, error);
         let since = Instant::now();
-        self.toasts.push_back(Toast { text, error, since, until: since + crate::hud_notify::stays(error, crate::hud_feel::night_active()) });
+        let stays = crate::hud_notify::stays(error, crate::hud_feel::night_active());
+        // A notice from the source of the card still on screen joins that card (its newest
+        // lines, and how many there were) instead of stacking another one on it.
+        if !error {
+            if let Some(last) = self.toasts.back_mut().filter(|t| !t.error && t.until > since) {
+                if let Some(joined) = crate::hud_notify::grouped(&last.text, &text) {
+                    last.text = joined;
+                    last.until = since + stays;
+                    return;
+                }
+            }
+        }
+        self.toasts.push_back(Toast { text, error, since, until: since + stays });
         while self.toasts.len() > 4 {
             self.toasts.pop_front();
         }
@@ -4387,6 +4399,7 @@ impl HudApp {
             camera: self.camera_open,
             screens: self.screens_open,
             mic_muted: !self.app.config_state().mic_enabled || crate::listening_lock::is_locked(),
+            voice: VoiceLock::of(iface.voice_lock, crate::speaker_id::guests_welcome(), crate::hud_feel::voice_known()),
         };
         let items = header_items(&lit, reboot_label.trim_start_matches("[ ").trim_end_matches(" ]"), &source);
         let y = screen.top() + 10.0;
@@ -4528,6 +4541,14 @@ impl HudApp {
                     crate::listening_lock::apply(crate::listening_lock::LockCommand::Resume);
                 }
                 self.command(HudCommand::SetMic { enabled: unmute });
+            }
+            Some("voice") => {
+                // Guests in: one click and he answers to Sir alone again. Else the lock itself.
+                let args = if crate::speaker_id::guests_welcome() { serde_json::json!({ "voice_guest": false }) } else { serde_json::json!({ "voice_lock": !iface.voice_lock }) };
+                let app = self.app.clone();
+                self.rt.spawn(async move {
+                    let _ = app.tools().execute("configure_interface", &args).await;
+                });
             }
             _ => {}
         }
@@ -5701,7 +5722,9 @@ impl HudApp {
         };
         let moving = self.emblem.is_animating() || crate::hud_board::researching() || self.camera_open;
         let active = busy || pointer || moving || iface.orb_mode || welcome_level() > 0.0 || self.reactor.voice > 0.02;
-        let fps = target_fps(iface.animations, active, attended, display_hz());
+        // At rest with nobody looking closely (no key or pointer for minutes, or the models
+        // in standby for a game) a third of the frames is enough: the hours he is away.
+        let fps = if active || !iface.animations { target_fps(iface.animations, active, attended, display_hz()) } else { rest_fps(nobody_watching()) };
         ctx.request_repaint_after(Duration::from_secs_f32(1.0 / fps));
     }
 }
@@ -5719,6 +5742,34 @@ pub fn target_fps(animations: bool, active: bool, attended: bool, display_hz: f3
         (true, true, false) => 60.0,
         (true, true, true) => display_hz.clamp(60.0, MAX_FPS),
     }
+}
+
+/// The HUD's frame rate at rest: 30 while Sir is at the PC, 10 when nobody is looking closely.
+pub fn rest_fps(unwatched: bool) -> f32 {
+    if unwatched {
+        10.0
+    } else {
+        30.0
+    }
+}
+
+/// After this long without a key or the pointer, nobody is taken to be watching.
+const AWAY_AFTER_SECS: u64 = 120;
+
+/// Whether nobody is looking closely: no key or pointer for two minutes, or the models are in
+/// standby for a game. Windows is asked once a second; a scripted session is always watched
+/// (its frames are counted on).
+fn nobody_watching() -> bool {
+    static STARTED: std::sync::LazyLock<Instant> = std::sync::LazyLock::new(Instant::now);
+    static ASK_AGAIN_MS: AtomicU64 = AtomicU64::new(0);
+    static UNWATCHED: AtomicBool = AtomicBool::new(false);
+    let now = STARTED.elapsed().as_millis() as u64;
+    if now >= ASK_AGAIN_MS.load(Ordering::Relaxed) {
+        ASK_AGAIN_MS.store(now + 1_000, Ordering::Relaxed);
+        let unwatched = !crate::platform::in_test_session() && (crate::vram_guard::is_dormant() || crate::win32::idle_seconds().is_some_and(|idle| idle >= AWAY_AFTER_SECS));
+        UNWATCHED.store(unwatched, Ordering::Relaxed);
+    }
+    UNWATCHED.load(Ordering::Relaxed)
 }
 
 /// The fastest connected monitor's refresh rate (Hz); 60 until it is known. Windows is asked
@@ -6276,6 +6327,47 @@ struct HeaderState {
     screens: bool,
     /// The microphone is off or the privacy lock holds ("stop listening").
     mic_muted: bool,
+    /// Whose voice he answers to.
+    voice: VoiceLock,
+}
+
+/// Whose voice he answers to, as the header strip says it.
+#[derive(Clone, Copy, Default, PartialEq, Debug)]
+enum VoiceLock {
+    /// The lock is on and he knows Sir's voice.
+    #[default]
+    Yours,
+    /// The lock is on and he is still learning the voice (he answers to his name meanwhile).
+    Learning,
+    /// Guests may speak for a while.
+    Guests,
+    /// The lock is off.
+    Anyone,
+}
+
+impl VoiceLock {
+    fn of(lock_on: bool, guests: bool, voice_known: bool) -> Self {
+        match (lock_on, guests, voice_known) {
+            (false, ..) => Self::Anyone,
+            (true, true, _) => Self::Guests,
+            (true, false, true) => Self::Yours,
+            (true, false, false) => Self::Learning,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Yours => "VOICE: YOURS",
+            Self::Learning => "VOICE: LEARNING",
+            Self::Guests => "VOICE: GUESTS",
+            Self::Anyone => "VOICE: ANYONE",
+        }
+    }
+
+    /// Others are answered too: the box is lit, as an open door is.
+    fn open(self) -> bool {
+        matches!(self, Self::Guests | Self::Anyone)
+    }
 }
 
 fn header_items(lit: &HeaderState, reboot: &str, source: &str) -> Vec<HeaderItem> {
@@ -6296,6 +6388,7 @@ fn header_items(lit: &HeaderState, reboot: &str, source: &str) -> Vec<HeaderItem
         item("source_label", "CAMERA SOURCE", false, false),
         item("source", source, false, true),
         item("screens", "SCREENS", lit.screens, true),
+        item("voice", lit.voice.label(), lit.voice.open(), true),
         item("mic", if lit.mic_muted { "MIC: MUTED" } else { "MIC: ON" }, lit.mic_muted, true),
     ]
 }
@@ -6469,6 +6562,83 @@ pub(super) struct BlockAction {
     pub detach: bool,
 }
 
+/// How many sent lines the console remembers (across restarts too).
+const CONSOLE_HISTORY_KEPT: usize = 60;
+
+/// What Sir sent from the console, oldest first, and where the arrow keys stand in it (None:
+/// on the line he is writing, which is kept while he looks back).
+#[derive(Default)]
+struct ConsoleHistory {
+    sent: Vec<String>,
+    at: Option<usize>,
+    draft: String,
+    loaded: bool,
+}
+
+static CONSOLE_HISTORY: Mutex<ConsoleHistory> = Mutex::new(ConsoleHistory { sent: Vec::new(), at: None, draft: String::new(), loaded: false });
+
+impl ConsoleHistory {
+    /// The lines of earlier sessions (the kit's store), once.
+    fn load(&mut self) {
+        if !self.loaded {
+            self.loaded = true;
+            if let Some(serde_json::Value::Array(lines)) = crate::kit::get("console", "history") {
+                let mut kept: Vec<String> = lines.iter().filter_map(|l| l.as_str().map(str::to_string)).collect();
+                kept.append(&mut self.sent);
+                self.sent = kept;
+            }
+        }
+    }
+
+    /// A line was sent: it is the newest (once, however often it was sent).
+    fn push(&mut self, line: &str) {
+        self.load();
+        self.sent.retain(|l| l != line);
+        self.sent.push(line.to_string());
+        let over = self.sent.len().saturating_sub(CONSOLE_HISTORY_KEPT);
+        self.sent.drain(..over);
+        (self.at, self.draft) = (None, String::new());
+        let _ = crate::kit::put("console", "history", &serde_json::json!(self.sent));
+    }
+
+    /// One line back (arrow up). None: there is none further back.
+    fn back(&mut self, current: &str) -> Option<String> {
+        self.load();
+        let at = match self.at {
+            None => self.sent.len().checked_sub(1)?,
+            Some(0) => return None,
+            Some(n) => n - 1,
+        };
+        if self.at.is_none() {
+            self.draft = current.to_string();
+        }
+        self.at = Some(at);
+        self.sent.get(at).cloned()
+    }
+
+    /// One line forward (arrow down); past the newest, the line he was writing.
+    fn forward(&mut self) -> Option<String> {
+        let at = self.at?;
+        if at + 1 < self.sent.len() {
+            self.at = Some(at + 1);
+            self.sent.get(at + 1).cloned()
+        } else {
+            self.at = None;
+            Some(std::mem::take(&mut self.draft))
+        }
+    }
+}
+
+/// The caret of a single-line field goes behind its last character (the line was replaced
+/// from outside: a completion, a recalled line).
+fn caret_to_end(ctx: &egui::Context, id: egui::Id, line: &str) {
+    if let Some(mut state) = egui::TextEdit::load_state(ctx, id) {
+        let end = egui::text::CCursor::new(line.chars().count());
+        state.cursor.set_char_range(Some(egui::text::CCursorRange::one(end)));
+        state.store(ctx, id);
+    }
+}
+
 /// What Sir did in the text console this frame.
 #[derive(Default)]
 struct ConsoleActions {
@@ -6519,6 +6689,22 @@ pub(crate) fn console_rect() -> Option<Rect> {
 /// - TRANSMIT took the focus off the line: after sending, by Enter or the button, the line has
 ///   it again for the next command (JAI thinking or speaking never takes it).
 fn console_foot(ui: &mut Ui, line: &mut String, completions: &[String], focus: &mut bool) -> Option<String> {
+    // Arrow up and down walk through what Sir sent before (this session's lines and the last
+    // sessions'), as a shell does; the line he was writing waits below the newest.
+    let input_id = egui::Id::new(CONSOLE_INPUT_ID);
+    if ui.memory(|m| m.has_focus(input_id)) {
+        let recalled = if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::ArrowUp)) {
+            lock(&CONSOLE_HISTORY).back(line)
+        } else if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::ArrowDown)) {
+            lock(&CONSOLE_HISTORY).forward()
+        } else {
+            None
+        };
+        if let Some(text) = recalled {
+            *line = text;
+            caret_to_end(ui.ctx(), input_id, line);
+        }
+    }
     if !completions.is_empty() {
         let mut taken: Option<String> = None;
         if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Tab)) {
@@ -6536,6 +6722,7 @@ fn console_foot(ui: &mut Ui, line: &mut String, completions: &[String], focus: &
         if let Some(text) = taken {
             *line = text;
             *focus = true;
+            caret_to_end(ui.ctx(), input_id, line);
         }
         ui.add_space(4.0);
     }
@@ -6569,6 +6756,7 @@ fn console_foot(ui: &mut Ui, line: &mut String, completions: &[String], focus: &
         if enter || transmit {
             let text = line.trim().to_string();
             if !text.is_empty() {
+                lock(&CONSOLE_HISTORY).push(&text);
                 sent = Some(text);
             }
             // Enter and TRANSMIT alike leave the line focused for the next command.
@@ -6934,7 +7122,7 @@ pub(super) fn hud_block_window(ctx: &egui::Context, id: &str, title: &str, size:
     // no place to give.)
     let fits = bounds.width() >= crate::hud_dock::MIN_BLOCK[0] + 20.0 && bounds.height() >= crate::hud_dock::MIN_BLOCK[1] + 20.0;
     let fresh = ctx.memory(|m| m.area_rect(area)).is_none_or(|old| (fits && !bounds.expand(2.0).contains_rect(old)) || (!crate::hud_dock::is_open(id) && crate::hud_dock::collides(id, old)));
-    let held = crate::hud_dock::take_forced(id).or_else(|| full.then_some(home)).or_else(|| fresh.then(|| new_block_rect(ctx, id, &regions, size + frame_pad)));
+    let held = crate::hud_dock::take_forced(id).or_else(|| full.then_some(home)).or_else(|| fresh.then(|| crate::block_places::remembered(id, &regions).unwrap_or_else(|| new_block_rect(ctx, id, &regions, size + frame_pad))));
     // A place the dock gave on another monitor makes that monitor the block's screen.
     if let Some(r) = held {
         bounds = region_at(&regions, r.center());
@@ -7077,6 +7265,10 @@ pub(super) fn hud_block_window(ctx: &egui::Context, id: &str, title: &str, size:
         }
         if crate::hud_dock::publish_block(id, title, rect) {
             crate::tts::play_cue(crate::jai_voice_dsp::Earcon::Materialize);
+        }
+        // Where it stands at rest is where it comes back to, after a restart too.
+        if !motion.moving() && !full && !maximized && !gliding && !ctx.input(|i| i.pointer.primary_down()) {
+            crate::block_places::note(id, rect);
         }
         // Moved with the mouse, a block stays exactly under the pointer: where it stood when
         // the button went down plus the whole way the pointer has come since. (egui's own
@@ -8437,6 +8629,28 @@ mod tests {
     /// completions row comes and goes above it, through Tab (which takes a completion and must
     /// not move the focus on) and after a command was sent.
     #[test]
+    fn the_arrow_keys_walk_through_what_was_sent() {
+        let mut history = ConsoleHistory { loaded: true, ..Default::default() };
+        assert_eq!(history.back("draft"), None, "nothing was sent yet");
+        for line in ["open the notebook", "volume 30", "open the notebook", "what did I miss"] {
+            history.push(line);
+        }
+        assert_eq!(history.sent, ["volume 30", "open the notebook", "what did I miss"], "a line sent again is the newest, once");
+        assert_eq!(history.back("half a li").as_deref(), Some("what did I miss"));
+        assert_eq!(history.back("what did I miss").as_deref(), Some("open the notebook"));
+        assert_eq!(history.back("x").as_deref(), Some("volume 30"));
+        assert_eq!(history.back("x"), None, "the oldest is the end");
+        assert_eq!(history.forward().as_deref(), Some("open the notebook"));
+        assert_eq!(history.forward().as_deref(), Some("what did I miss"));
+        assert_eq!(history.forward().as_deref(), Some("half a li"), "past the newest: the line he was writing");
+        assert_eq!(history.forward(), None);
+        for n in 0..(CONSOLE_HISTORY_KEPT + 5) {
+            history.push(&format!("line {n}"));
+        }
+        assert_eq!(history.sent.len(), CONSOLE_HISTORY_KEPT);
+    }
+
+    #[test]
     fn the_console_line_keeps_its_focus_while_completions_come_and_go() {
         fn frame(ctx: &egui::Context, events: Vec<egui::Event>, line: &mut String, completions: &[String], focus: &mut bool) -> Option<String> {
             let input = egui::RawInput { events, screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(900.0, 600.0))), ..Default::default() };
@@ -8982,7 +9196,7 @@ mod tests {
         let names: Vec<&str> = items.iter().map(|i| i.text.as_str()).collect();
         assert_eq!(
             names,
-["THEME", "PHONE QR", "CORE", "MODULES", "FEATURES", "CHANGES", "HISTORY", "VIEW", "CLEAR VIEW", "CONSOLE", "REBOOT LLM", "CAMERA", "CAMERA SOURCE", "DEFAULT CAMERA", "SCREENS", "MIC: ON"]
+["THEME", "PHONE QR", "CORE", "MODULES", "FEATURES", "CHANGES", "HISTORY", "VIEW", "CLEAR VIEW", "CONSOLE", "REBOOT LLM", "CAMERA", "CAMERA SOURCE", "DEFAULT CAMERA", "SCREENS", "VOICE: YOURS", "MIC: ON"]
         );
         assert!(items.iter().filter(|i| !i.boxed).map(|i| i.id).eq(["source_label"]), "only the source caption is unboxed");
         let on = |items: &[HeaderItem], id: &str| items.iter().find(|i| i.id == id).unwrap().on;
@@ -8991,6 +9205,12 @@ mod tests {
         assert!(["console", "phone", "core", "features"].iter().all(|id| on(&lit, id)), "a box lights while its panel is open");
         let muted = header_items(&HeaderState { mic_muted: true, ..HeaderState::default() }, "X", "X");
         assert!(muted.iter().any(|i| i.id == "mic" && i.text == "MIC: MUTED" && i.on));
+        // Whose voice he answers to: lit while others are answered too.
+        for (lock_on, guests, known, text, lit) in [(true, false, true, "VOICE: YOURS", false), (true, false, false, "VOICE: LEARNING", false), (true, true, true, "VOICE: GUESTS", true), (false, false, true, "VOICE: ANYONE", true), (false, true, false, "VOICE: ANYONE", true)] {
+            let items = header_items(&HeaderState { voice: VoiceLock::of(lock_on, guests, known), ..HeaderState::default() }, "X", "X");
+            assert!(items.iter().any(|i| i.id == "voice" && i.text == text && i.on == lit), "{lock_on} {guests} {known}");
+        }
+        assert_eq!((rest_fps(false), rest_fps(true)), (30.0, 10.0));
         let measure = |t: &str| t.chars().count() as f32 * 6.0;
         let row = header_layout(&items, 12.0, 2548.0, 10.0, measure);
         let rects = &row.placed;

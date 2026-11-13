@@ -93,6 +93,7 @@
   .block button { flex:none; min-height:36px; padding:6px 12px; }
   .quick { display:flex; gap:7px; overflow-x:auto; padding-bottom:4px; scrollbar-width:none; }
   .quick::-webkit-scrollbar { display:none; }
+  .quick.controls { margin-top:6px; }
   .quick button { flex:none; font-size:11px; padding:8px 10px; min-height:38px; text-transform:none; letter-spacing:.2px; }
   label { font-size:12.5px; color:var(--muted); display:flex; align-items:center; gap:7px; }
   input[type=checkbox] { accent-color:var(--accent); width:18px; height:18px; }
@@ -135,6 +136,18 @@
     <button data-q="When do I need to leave for school tomorrow?">🎒 Leave for school</button>
     <button data-q="Check all my messages">✉ Messages</button>
     <button data-q="Where am I?">⌖ Where am I</button>
+  </div>
+  <div class="quick controls">
+    <button data-q="Pause the music">⏸ Pause</button>
+    <button data-q="Resume the music">▶ Play</button>
+    <button data-q="Next song">⏭ Next</button>
+    <button data-q="Volume down">− Quieter</button>
+    <button data-q="Volume up">+ Louder</button>
+    <button data-q="What song is this?">♪ Playing</button>
+    <button data-q="Sleep timer 30 minutes">☾ Sleep 30</button>
+    <button data-q="What did I miss?">◷ Missed</button>
+    <button data-q="Night mode">◐ Night</button>
+    <button data-fill="Note: ">✎ Note</button>
   </div>
   <div id="log" style="margin-top:10px"></div>
   <div class="row">
@@ -427,6 +440,8 @@ setInterval(poll, 3000); poll();
 $("send").onclick = () => chat($("text").value);
 $("text").addEventListener("keydown", (e) => { if (e.key === "Enter") chat($("text").value); });
 document.querySelectorAll(".quick button[data-q]").forEach(b => b.onclick = () => chat(b.dataset.q));
+// A button that starts a line for him to finish ("Note: …").
+document.querySelectorAll(".quick button[data-fill]").forEach(b => b.onclick = () => { const t = $("text"); t.value = b.dataset.fill; t.focus(); t.setSelectionRange(t.value.length, t.value.length); });
 
 // ---- hold to talk: the phone's microphone, heard by JAI's own recogniser on the PC --------
 let talk = null;

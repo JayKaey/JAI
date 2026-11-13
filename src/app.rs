@@ -939,6 +939,41 @@ impl Jai {
 
     /// An order given by name while no print of Sir's voice is known: its voice is gathered,
     /// and once enough of them are one voice, that is his print (the lock holds from then on).
+    /// The ear's gate follows his voice. How far each of his sentences stood over the room is
+    /// kept for the last eight; every fourth sentence the gate is read from their middle and
+    /// moved one step: opened when his voice arrives quietly (a tired evening, the microphone
+    /// further away), narrowed when it arrives strong. The set-up does this once; this keeps it
+    /// true.
+    fn gate_follows(&self, (peak_db, floor_db): (f32, f32)) {
+        static OVER: Mutex<(std::collections::VecDeque<f32>, u32)> = Mutex::new((std::collections::VecDeque::new(), 0));
+        let over = peak_db - floor_db;
+        if !over.is_finite() || !(0.0..=90.0).contains(&over) {
+            return;
+        }
+        let kept: Vec<f32> = {
+            let mut guard = OVER.lock().unwrap_or_else(|e| e.into_inner());
+            guard.0.push_back(over);
+            while guard.0.len() > crate::voice_setup::GATE_SENTENCES {
+                guard.0.pop_front();
+            }
+            guard.1 += 1;
+            if guard.1 % 4 != 0 {
+                return;
+            }
+            guard.0.iter().copied().collect()
+        };
+        let current = self.inner.config.read(|c| c.vad_noise_multiplier);
+        if let Some(gate) = crate::voice_setup::gate_step(&kept, current) {
+            self.inner.config.update(|c| c.vad_noise_multiplier = gate);
+            self.inner.controls.set_vad(None, None, None, Some(gate));
+            info!("[EAR] The gate follows his voice: {current:.1} -> {gate:.1} (the middle of his last {} sentences stands {:.0} dB over the room)", kept.len(), {
+                let mut sorted = kept.clone();
+                sorted.sort_by(|a, b| a.total_cmp(b));
+                sorted[sorted.len() / 2]
+            });
+        }
+    }
+
     fn gather_voice(&self, db: &str, clip: Vec<f32>, speech_ms: u32) {
         if let Some(print) = crate::speaker_id::gather(db, clip, speech_ms, true) {
             crate::hud_feel::set_voice_known(true);
@@ -1799,6 +1834,11 @@ impl Jai {
                 if let Some(Ok(clip)) = &voice {
                     self.gather_voice(&db, clip.clone(), speech_ms);
                 }
+            }
+            // The ear's gate follows his voice: sentences that were surely his (by his print,
+            // or by his name while no print is known), spoken to the open microphone.
+            if !u.ptt && judged.map_or(wake.matched && wake.score >= 0.95, |j| j.sure) {
+                self.gate_follows(voice_levels);
             }
             // The clip itself, with what it was heard as and taken for: Sir's voice only (by
             // his print, or by his name while no print is known).

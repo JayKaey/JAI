@@ -264,7 +264,7 @@ pub fn prefetch_own_code() -> Result<f64, String> {
                 continue;
             }
             let pe = std::ptr::read_unaligned(base.add(0x3C) as *const u32) as usize;
-            // ("PE  ", the COFF header's 20 bytes, then the optional header: SizeOfImage at 56.)
+            // ("PE" and two zero bytes, the COFF header's 20 bytes, then the optional header: SizeOfImage at 56.)
             let size = std::ptr::read_unaligned(base.add(pe + 4 + 20 + 56) as *const u32) as usize;
             if size > 0 {
                 ranges.push(WIN32_MEMORY_RANGE_ENTRY { VirtualAddress: base as *mut std::ffi::c_void, NumberOfBytes: size });

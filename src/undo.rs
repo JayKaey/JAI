@@ -185,6 +185,25 @@ pub fn way_back(tool: &str, args: &Value, said: &str, before: &Snapshot, after: 
             step.calls.push(("whenever_rule", json!({ "action": "remove", "last": true })));
             step.done = "that rule is gone";
         }
+        ("subtitle_place", "set") => {
+            step.calls.push(("subtitle_place", json!({ "action": "back" })));
+            step.done = "the subtitles are back where they were";
+        }
+        // A reminder he just set ("Reminder #7 set …"): cancelled by its number.
+        ("reminders", "set" | "add" | "create") => {
+            if let Some(id) = said.strip_prefix("Reminder #").and_then(|rest| rest.split(' ').next()).filter(|id| !id.is_empty() && id.chars().all(|c| c.is_ascii_digit())) {
+                step.calls.push(("reminders", json!({ "action": "cancel", "id": id })));
+                step.done = "that reminder is cancelled";
+            }
+        }
+        // How he listens: back to the other of the two modes.
+        ("set_listening_mode", _) => {
+            let was = if said.contains("WAKE-WORD") { Some("hands_free") } else if said.contains("HANDS-FREE") { Some("wake_word") } else { None };
+            if let Some(mode) = was {
+                step.calls.push(("set_listening_mode", json!({ "mode": mode })));
+                step.done = "I listen as I did before";
+            }
+        }
         ("take_dictation", "start") => {
             step.calls.push(("take_dictation", json!({ "action": "stop" })));
             step.done = "dictation is off";

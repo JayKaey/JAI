@@ -129,7 +129,7 @@ pub fn show(ctx: &egui::Context, app: &crate::app::Jai, rt: &tokio::runtime::Han
     let wrap = widest - 48.0;
     let size = bar_size(ctx, &shown, wrap);
     let (width, height) = (size.x, size.y);
-    let at = pos2(((l + r) as f32 / 2.0) / ppp - width / 2.0, b as f32 / ppp - height - BAR_LIFT);
+    let at = pos2(((l + r) as f32 / 2.0) / ppp - width / 2.0, bar_top(place().0, t as f32 / ppp, b as f32 / ppp, height));
     let builder = ViewportBuilder::default()
         .with_title(TITLE)
         .with_decorations(false)
@@ -167,6 +167,135 @@ pub fn show(ctx: &egui::Context, app: &crate::app::Jai, rt: &tokio::runtime::Han
         dress();
     }
     ctx.request_repaint_after(Duration::from_millis(200));
+}
+
+// ----------------------------------------------------------------- where the bar stands ----
+
+/// Where the bar stands on its screen: at the bottom (as films have it), at the top, or across
+/// the middle.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Place {
+    #[default]
+    Bottom,
+    Top,
+    Middle,
+}
+
+impl Place {
+    fn id(self) -> &'static str {
+        match self {
+            Self::Bottom => "bottom",
+            Self::Top => "top",
+            Self::Middle => "middle",
+        }
+    }
+
+    fn of(word: &str) -> Option<Self> {
+        match word {
+            "bottom" | "unten" => Some(Self::Bottom),
+            "top" | "oben" => Some(Self::Top),
+            "middle" | "centre" | "center" | "mitte" => Some(Self::Middle),
+            _ => None,
+        }
+    }
+}
+
+/// (Where on the screen, on which monitor: None follows the window in front.) Read from the
+/// kit's store once; the place before the last change, for "undo that".
+static PLACE: Mutex<Option<(Place, Option<usize>)>> = Mutex::new(None);
+static PLACE_BEFORE: Mutex<Option<(Place, Option<usize>)>> = Mutex::new(None);
+
+pub fn place() -> (Place, Option<usize>) {
+    *lock(&PLACE).get_or_insert_with(|| {
+        let kept = crate::kit::get("subtitles", "place");
+        let place = kept.as_ref().and_then(|v| v["place"].as_str()).and_then(Place::of).unwrap_or_default();
+        let monitor = kept.as_ref().and_then(|v| v["monitor"].as_u64()).map(|n| n as usize).filter(|n| *n >= 1);
+        (place, monitor)
+    })
+}
+
+fn set_place(to: (Place, Option<usize>)) {
+    *lock(&PLACE_BEFORE) = Some(place());
+    *lock(&PLACE) = Some(to);
+    let _ = crate::kit::put("subtitles", "place", &serde_json::json!({ "place": to.0.id(), "monitor": to.1 }));
+}
+
+/// The bar's top edge on a screen that reaches from `top` to `bottom` (points), for a bar
+/// `height` high.
+fn bar_top(place: Place, top: f32, bottom: f32, height: f32) -> f32 {
+    match place {
+        Place::Bottom => bottom - height - BAR_LIFT,
+        Place::Top => top + BAR_LIFT,
+        Place::Middle => (top + bottom - height) / 2.0,
+    }
+}
+
+/// "Subtitles to the top", "put the subtitles on monitor 2", "subtitles follow my window",
+/// "where are the subtitles": the kit's phrases for the bar's place.
+pub fn place_command(s: &str) -> Option<serde_json::Value> {
+    use regex::Regex;
+    use std::sync::LazyLock;
+    const BAR: &str = r"(?:the\s+|die\s+)?(?:subtitles?|captions?|subtitle\s+bar|untertitel)";
+    static WHERE: LazyLock<Regex> = LazyLock::new(|| Regex::new(&format!(r"^(?:(?:put|move|show|place|set|have|schieb|schiebe|setz|setze|zeig)\s+)?{BAR}\s+(?:(?:to|at|on|in|nach|in\s+die|in\s+der)\s+)?(?:the\s+)?(?P<place>top|bottom|middle|centre|center|oben|unten|mitte)(?:\s+of\s+(?:the|my)\s+screen)?$")).expect("valid regex"));
+    static MONITOR: LazyLock<Regex> = LazyLock::new(|| Regex::new(&format!(r"^(?:(?:put|move|show|place|have|schieb|schiebe|zeig)\s+)?{BAR}\s+(?:on|to|onto|auf)\s+(?:my\s+|the\s+|den\s+|dem\s+)?(?:monitor|screen|display|bildschirm)\s+(?P<n>\d)$")).expect("valid regex"));
+    static FOLLOW: LazyLock<Regex> = LazyLock::new(|| Regex::new(&format!(r"^{BAR}\s+(?:follow|should\s+follow)\s+(?:my\s+window|me|the\s+window\s+in\s+front)$|^(?:(?:put|move|show)\s+)?{BAR}\s+(?:on|to)\s+(?:the\s+)?(?:(?:monitor|screen)\s+(?:in\s+front|i\s+am\s+(?:on|using))|(?:monitor|screen)\s+of\s+the\s+window\s+in\s+front)$|^untertitel\s+folgen\s+(?:meinem\s+fenster|mir)$")).expect("valid regex"));
+    static ASKED: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^where\s+(?:are|do)\s+the\s+subtitles(?:\s+(?:stand|show|appear))?$|^wo\s+(?:sind|stehen)\s+die\s+untertitel$").expect("valid regex"));
+    let s = s.trim();
+    if let Some(c) = WHERE.captures(s) {
+        return Some(serde_json::json!({ "action": "set", "place": Place::of(&c["place"])?.id() }));
+    }
+    if let Some(c) = MONITOR.captures(s) {
+        return Some(serde_json::json!({ "action": "set", "monitor": c["n"].parse::<u64>().ok()? }));
+    }
+    if FOLLOW.is_match(s) {
+        return Some(serde_json::json!({ "action": "set", "monitor": 0 }));
+    }
+    ASKED.is_match(s).then(|| serde_json::json!({ "action": "status" }))
+}
+
+fn place_in_words((place, monitor): (Place, Option<usize>)) -> String {
+    let at = match place {
+        Place::Bottom => "at the bottom",
+        Place::Top => "at the top",
+        Place::Middle => "across the middle",
+    };
+    match monitor {
+        Some(n) => format!("{at} of monitor {n}"),
+        None => format!("{at} of the screen your window is on"),
+    }
+}
+
+/// Carries out `place_command`'s arguments.
+pub fn place_tool(args: &serde_json::Value) -> Result<String, String> {
+    let now = place();
+    match args["action"].as_str().unwrap_or("status") {
+        "set" => {
+            let to_place = args["place"].as_str().and_then(Place::of).unwrap_or(now.0);
+            let to_monitor = match args["monitor"].as_u64() {
+                Some(0) => None,
+                Some(n) => {
+                    let monitors = crate::monitors::list().len();
+                    if n as usize > monitors {
+                        return Err(format!("You have {monitors} monitor{}, Sir.", if monitors == 1 { "" } else { "s" }));
+                    }
+                    Some(n as usize)
+                }
+                None => now.1,
+            };
+            set_place((to_place, to_monitor));
+            let words = place_in_words((to_place, to_monitor));
+            Ok(crate::kit::say(format!("The subtitles stand {words}."), format!("Subtitles {words}, Sir.")))
+        }
+        "back" => {
+            let before = lock(&PLACE_BEFORE).take().ok_or("The subtitles stand where they stood, Sir.")?;
+            set_place(before);
+            Ok(crate::kit::say(format!("The subtitles stand {} again.", place_in_words(before)), "Back where they were, Sir."))
+        }
+        _ => {
+            let words = place_in_words(now);
+            Ok(crate::kit::say(format!("The subtitles stand {words}. Say \"subtitles to the top\", \"subtitles on monitor 2\" or \"subtitles follow my window\"."), format!("They stand {words}, Sir.")))
+        }
+    }
 }
 
 /// The bar's window: its title (it is found by it), how far it stands above the screen's bottom
@@ -280,7 +409,9 @@ fn bar_monitor() -> Option<[i32; 4]> {
             return rect;
         }
     }
-    let rect = crate::win32::foreground_monitor().or_else(|| crate::win32::displays().first().map(|d| d.rect));
+    // The monitor Sir chose for the bar, else the one of the window in front.
+    let chosen = place().1.and_then(|n| crate::monitors::list().into_iter().find(|m| m.index == n).map(|m| m.rect));
+    let rect = chosen.or_else(crate::win32::foreground_monitor).or_else(|| crate::win32::displays().first().map(|d| d.rect));
     *seen = Some((Instant::now(), rect));
     rect
 }
@@ -369,6 +500,34 @@ async fn listen(app: crate::app::Jai) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_bar_is_placed_by_plain_words() {
+        use serde_json::json;
+        for (said, want) in [
+            ("subtitles to the top", json!({"action": "set", "place": "top"})),
+            ("put the subtitles at the bottom", json!({"action": "set", "place": "bottom"})),
+            ("move the captions to the middle of the screen", json!({"action": "set", "place": "middle"})),
+            ("untertitel nach oben", json!({"action": "set", "place": "top"})),
+            ("untertitel in die mitte", json!({"action": "set", "place": "middle"})),
+            ("put the subtitles on monitor 2", json!({"action": "set", "monitor": 2})),
+            ("untertitel auf bildschirm 1", json!({"action": "set", "monitor": 1})),
+            ("subtitles follow my window", json!({"action": "set", "monitor": 0})),
+            ("where are the subtitles", json!({"action": "status"})),
+        ] {
+            assert_eq!(place_command(said), Some(want), "{said}");
+        }
+        // Switching them on and off, and translating, are the older orders.
+        for said in ["subtitles on", "subtitles off", "untertitel an", "subtitles", "subtitles in english", "caption this", "move the window to the top"] {
+            assert_eq!(place_command(said), None, "{said}");
+        }
+        // On a screen from 0 to 1080: lifted off the bottom edge, the same off the top, or centred.
+        assert_eq!(bar_top(Place::Bottom, 0.0, 1080.0, 60.0), 1080.0 - 60.0 - BAR_LIFT);
+        assert_eq!(bar_top(Place::Top, 0.0, 1080.0, 60.0), BAR_LIFT);
+        assert_eq!(bar_top(Place::Middle, 0.0, 1080.0, 60.0), 510.0);
+        // A monitor above the main one has a negative top.
+        assert_eq!(bar_top(Place::Top, -1080.0, 0.0, 60.0), -1080.0 + BAR_LIFT);
+    }
 
     fn speech(secs: f32) -> Vec<f32> {
         (0..(RATE as f32 * secs) as usize).map(|i| 0.1 * (i as f32 * 0.3).sin()).collect()

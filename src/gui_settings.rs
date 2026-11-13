@@ -81,7 +81,7 @@ const fn row(group: &'static str, name: &'static str, explain: &'static str, wor
 /// The groups, in the order they stand (each is also a key that shows it alone).
 const GROUPS: [&str; 5] = ["LOOK", "SCREENS", "VOICE", "PRESENCE", "TOOLS"];
 
-static ROWS: [Row; 33] = [
+static ROWS: [Row; 34] = [
     row("LOOK", "Theme", "The HUD's colours: one click on a swatch changes them.", "colour color palette gold cyan red green", Control::Theme),
     row("LOOK", "Your own theme", "Build a theme from your own colours, name it and save it.", "theme studio custom create", Control::Open(Tool::ThemeStudio, "[ THEME STUDIO ]")),
     row("LOOK", "Colours, opacity and panels", "The accent and background colour, how see-through the HUD is, which panels show.", "interface accent background transparency", Control::Open(Tool::Interface, "[ OPEN ]")),
@@ -105,6 +105,7 @@ static ROWS: [Row; 33] = [
     row("VOICE", "Live words", "Your words appear under the emblem while you speak (paused while a game runs).", "captions transcript", Control::Switch(|s| s.live_words, |s, v| s.live_words = v)),
     row("VOICE", "Learn my voice", "One minute of reading aloud: he tunes his hearing to your voice and microphone.", "set-up setup calibrate wake name jay", Control::Open(Tool::VoiceSetup, "[ START ]")),
     row("VOICE", "Only obey me", "He answers to your voice alone, and learns it as you speak.", "lock speaker stranger everyone guest", Control::Switch(|s| s.voice_lock, |s, v| s.voice_lock = v)),
+    row("VOICE", "Short confirmations", "After an order he says it is done, without repeating what you just said.", "brief acknowledge talk less echo", Control::Switch(|s| s.brief_confirmations, |s, v| s.brief_confirmations = v)),
     row("VOICE", "Sound cues", "The short sounds when a block opens or closes, a report is ready, something fails.", "sounds earcons beep", Control::Switch(|s| s.sound_cues, |s, v| s.sound_cues = v)),
     row("VOICE", "Microphone, devices and memory", "Pick the microphone and speaker, the wake word's strictness, what he remembers.", "audio input output drawer", Control::Open(Tool::Devices, "[ OPEN ]")),
     row("VOICE", "Mixer", "A fader for the master volume and for every program that plays sound.", "volume loud quiet", Control::Open(Tool::Mixer, "[ MIXER ]")),

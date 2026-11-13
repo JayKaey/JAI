@@ -8,14 +8,32 @@ pub enum TrayAction {
     ToggleMic,
     /// Leave the zero-VRAM gaming standby (models load again).
     WakeJai,
+    /// Enter it: the models leave the graphics memory.
+    Standby,
+    /// Obey only Sir's voice, on or off.
+    VoiceLock(bool),
+    /// Guests may speak for half an hour, or no longer.
+    Guests(bool),
+    /// Night mode now, or day.
+    Night(bool),
     Quit,
+}
+
+/// What the tray menu ticks, read when the menu opens.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TrayState {
+    pub mic_on: bool,
+    pub voice_lock: bool,
+    pub guests: bool,
+    pub night: bool,
+    pub dormant: bool,
 }
 
 #[cfg(windows)]
 pub use win::{ask_test_session_to_give_way, remove, show_running_instance, spawn};
 
 #[cfg(not(windows))]
-pub fn spawn(_actions: tokio::sync::mpsc::UnboundedSender<TrayAction>, _mic_on: impl Fn() -> bool + Send + Sync + 'static) {}
+pub fn spawn(_actions: tokio::sync::mpsc::UnboundedSender<TrayAction>, _state: impl Fn() -> TrayState + Send + Sync + 'static) {}
 
 #[cfg(not(windows))]
 pub fn remove() {}
@@ -35,7 +53,7 @@ pub fn ask_test_session_to_give_way() -> bool {
 
 #[cfg(windows)]
 mod win {
-    use super::TrayAction;
+    use super::{TrayAction, TrayState};
     use std::sync::atomic::{AtomicIsize, AtomicU32, Ordering};
     use std::sync::OnceLock;
     use tokio::sync::mpsc::UnboundedSender;
@@ -65,10 +83,14 @@ mod win {
     const CMD_MIC: usize = 2;
     const CMD_QUIT: usize = 3;
     const CMD_WAKE: usize = 4;
+    const CMD_LOCK: usize = 5;
+    const CMD_GUESTS: usize = 6;
+    const CMD_NIGHT: usize = 7;
+    const CMD_STANDBY: usize = 8;
 
     struct Tray {
         actions: UnboundedSender<TrayAction>,
-        mic_on: Box<dyn Fn() -> bool + Send + Sync>,
+        state: Box<dyn Fn() -> TrayState + Send + Sync>,
     }
 
     static TRAY: OnceLock<Tray> = OnceLock::new();
@@ -98,8 +120,8 @@ mod win {
         }
     }
 
-    pub fn spawn(actions: UnboundedSender<TrayAction>, mic_on: impl Fn() -> bool + Send + Sync + 'static) {
-        if TRAY.set(Tray { actions, mic_on: Box::new(mic_on) }).is_err() {
+    pub fn spawn(actions: UnboundedSender<TrayAction>, state: impl Fn() -> TrayState + Send + Sync + 'static) {
+        if TRAY.set(Tray { actions, state: Box::new(state) }).is_err() {
             return;
         }
         if let Err(e) = std::thread::Builder::new().name("jai-tray".into()).spawn(run) {
@@ -215,10 +237,21 @@ mod win {
 
     unsafe fn show_menu(hwnd: HWND) {
         let Ok(menu) = CreatePopupMenu() else { return };
-        let mic_on = TRAY.get().map(|t| (t.mic_on)()).unwrap_or(true);
+        let now = TRAY.get().map(|t| (t.state)()).unwrap_or(TrayState { mic_on: true, ..TrayState::default() });
+        let tick = |on: bool| MF_STRING | if on { MF_CHECKED } else { MF_UNCHECKED };
         let _ = AppendMenuW(menu, MF_STRING, CMD_OPEN, w!("Open HUD"));
-        let _ = AppendMenuW(menu, MF_STRING | if mic_on { MF_CHECKED } else { MF_UNCHECKED }, CMD_MIC, w!("Microphone on"));
-        let _ = AppendMenuW(menu, MF_STRING, CMD_WAKE, w!("Wake JAI (load models)"));
+        let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
+        let _ = AppendMenuW(menu, tick(now.mic_on), CMD_MIC, w!("Microphone on"));
+        let _ = AppendMenuW(menu, tick(now.voice_lock), CMD_LOCK, w!("Obey only my voice"));
+        let _ = AppendMenuW(menu, tick(now.guests), CMD_GUESTS, w!("Guests may speak (30 minutes)"));
+        let _ = AppendMenuW(menu, tick(now.night), CMD_NIGHT, w!("Night mode"));
+        let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
+        // One line for the standby, saying what a click does from where he stands.
+        if now.dormant {
+            let _ = AppendMenuW(menu, MF_STRING, CMD_WAKE, w!("Wake JAI (load models)"));
+        } else {
+            let _ = AppendMenuW(menu, MF_STRING, CMD_STANDBY, w!("Standby (free the graphics memory)"));
+        }
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
         let _ = AppendMenuW(menu, MF_STRING, CMD_QUIT, w!("Quit J.A.I."));
         let _ = SetMenuDefaultItem(menu, CMD_OPEN as u32, 0);
@@ -233,6 +266,10 @@ mod win {
             CMD_OPEN => send(TrayAction::OpenHud),
             CMD_MIC => send(TrayAction::ToggleMic),
             CMD_WAKE => send(TrayAction::WakeJai),
+            CMD_STANDBY => send(TrayAction::Standby),
+            CMD_LOCK => send(TrayAction::VoiceLock(!now.voice_lock)),
+            CMD_GUESTS => send(TrayAction::Guests(!now.guests)),
+            CMD_NIGHT => send(TrayAction::Night(!now.night)),
             CMD_QUIT => send(TrayAction::Quit),
             _ => {}
         }

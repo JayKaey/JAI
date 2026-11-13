@@ -1800,7 +1800,10 @@ impl Brain {
                 "get_calendar_schedule" => "your calendar",
                 _ => "that",
             };
-            let line = format!("I couldn't read {what}, Sir: {}", first_sentence(why));
+            let line = match crate::plain_errors::plain(why) {
+                Some(plain) => format!("I couldn't read {what}, Sir. {plain}"),
+                None => format!("I couldn't read {what}, Sir: {}", first_sentence(why)),
+            };
             return (line.clone(), line);
         }
         let (display, spoken) = match output.rsplit_once("\nSpoken: ") {
@@ -1978,7 +1981,7 @@ impl Brain {
                         st.say_display(&display, &spoken);
                     }
                     hist_msgs.push(json!({ "role": "assistant", "content": spoken }));
-                } else if let Some(line) = self.acknowledge(name, &args, &outcome).map(|l| self.vary(l)) {
+                } else if let Some(line) = self.acknowledge(name, &args, &outcome).map(|l| if outcome.success && self.inner.tools.config.read(|c| c.interface.brief_confirmations) { brief_ack(&l, text) } else { l }).map(|l| self.vary(l)) {
                     st.say(&line);
                     hist_msgs.push(json!({ "role": "assistant", "content": line }));
                 }
@@ -2218,7 +2221,8 @@ impl Brain {
                     format!("There's no {} on the panel, Sir.", args["id"].as_str().unwrap_or("such widget"))
                 }
                 "create_or_update_widget" if err.starts_with("No item") => "That's not on the list, Sir.".to_string(),
-                _ => format!("I'm afraid that didn't work, Sir. {}", first_sentence(err)),
+                // The kinds that come up again and again are said in plain words (`plain_errors`).
+                _ => format!("I'm afraid that didn't work, Sir. {}", crate::plain_errors::plain(err).unwrap_or_else(|| first_sentence(err))),
             });
         }
         // Every confirmation starts with a pre-rendered opener ("Right away, Sir.") so audio
@@ -2662,7 +2666,11 @@ impl Brain {
             // 4B answered German questions in German through both retries). When Sir spoke German
             // without asking for German, his message ends with the reply language, in this round's
             // copy only: never stored in the history, where a note teaches the model to write notes.
-            if !st.german_ok && looks_german(request) {
+            // German in what this turn's tools returned (a song title, a timetable, a message)
+            // pulls a small model into German just the same: the line stands then too.
+            let german_in_view = looks_german(request)
+                || messages.iter().rev().take_while(|m| m["role"] != "user").any(|m| m["role"] == "tool" && m["content"].as_str().is_some_and(looks_german));
+            if !st.german_ok && german_in_view {
                 if let Some(m) = messages.iter_mut().rev().find(|m| m["role"] == "user") {
                     if let Some(content) = m["content"].as_str() {
                         m["content"] = json!(format!("{content}\n\nAnswer in English."));
@@ -3934,10 +3942,40 @@ const GERMAN_REPLY_WORDS: &[&str] = &[
     "dass", "wenn", "aber", "oder", "wie", "keine", "kein", "mein", "dein", "ja", "nein", "erledigt", "gemacht", "verstanden",
 ];
 
+/// The text without what stands in double quotation marks ("…", “…”, „…“, «…»). A mark that
+/// never closes quotes nothing.
+fn without_quotes(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut quoted: Option<(String, &[char])> = None;
+    for c in text.chars() {
+        match &mut quoted {
+            Some((_, ends)) if ends.contains(&c) => {
+                quoted = None;
+                out.push(' ');
+            }
+            Some((held, _)) => held.push(c),
+            None => match c {
+                '"' => quoted = Some((String::new(), &['"'])),
+                '\u{201C}' => quoted = Some((String::new(), &['\u{201D}'])),
+                '\u{201E}' => quoted = Some((String::new(), &['\u{201C}', '\u{201D}'])),
+                '\u{00AB}' => quoted = Some((String::new(), &['\u{00BB}'])),
+                _ => out.push(c),
+            },
+        }
+    }
+    if let Some((held, _)) = quoted {
+        out.push_str(&held);
+    }
+    out
+}
+
 /// A reply (or its opening) written in German: two German function words, or an umlaut together
 /// with one. German names alone ("Herr Müller in Raum 204") do not count.
 fn looks_german_reply(text: &str) -> bool {
-    let lower = text.to_lowercase();
+    // What stands in quotation marks is someone else's words: an English reply that names a
+    // German song or reads a German message out is no German reply (the one false start in
+    // the log of 2026-11-12 was exactly that).
+    let lower = without_quotes(text).to_lowercase();
     let hits = lower.split(|c: char| !c.is_alphanumeric()).filter(|w| GERMAN_REPLY_WORDS.contains(w)).count();
     let umlaut = lower.chars().any(|c| matches!(c, 'ä' | 'ö' | 'ü' | 'ß'));
     hits >= 2 || (umlaut && hits >= 1)
@@ -4011,6 +4049,41 @@ fn speaks_for_itself(tool: &str) -> bool {
         || crate::street_view::is_tool(tool)
         || crate::model3d::is_tool(tool)
         || crate::kit::is_tool(tool)
+}
+
+/// The courtesies a confirmation may consist of on its own.
+const ACK_OPENERS: &[&str] = &["done", "right away", "very good", "very well", "certainly", "of course", "as you wish", "at once", "consider it done", "with pleasure", "allow me"];
+
+/// A confirmation without what Sir just said himself: after "move Discord to monitor 2",
+/// "Done, Sir. Discord is on Monitor 2." is "Done, Sir." A second sentence that tells him
+/// something he did not say (which song was picked, which monitor "the other one" was, what a
+/// thing was saved as) stays as it is.
+fn brief_ack(line: &str, request: &str) -> String {
+    let Some((opener, rest)) = line.split_once(", Sir. ") else { return line.to_string() };
+    if !ACK_OPENERS.contains(&opener.to_lowercase().as_str()) || rest.trim().is_empty() {
+        return line.to_string();
+    }
+    let words = |text: &str| -> Vec<String> { text.to_lowercase().split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).map(str::to_string).collect() };
+    let said = words(request);
+    // A word of the reply is his own when he said it (in any form: open / opening, move /
+    // moved, maximise / maximised), or when it is one of the small words a sentence is held
+    // together with. A number has to be the number he said.
+    let his_own = |word: &String| {
+        let letters = word.chars().count();
+        if word.chars().all(|c| c.is_ascii_digit()) {
+            return said.contains(word);
+        }
+        if letters < 4 {
+            return true;
+        }
+        let stem: String = word.chars().take(4).collect();
+        said.iter().any(|s| s.starts_with(&stem))
+    };
+    if words(rest).iter().all(his_own) {
+        format!("{opener}, Sir.")
+    } else {
+        line.to_string()
+    }
 }
 
 fn first_sentence(s: &str) -> String {
@@ -4339,6 +4412,22 @@ mod tests {
         assert!(looks_german_reply("Ich habe das erledigt."));
         assert!(!looks_german_reply("Your next lesson is Mathe with Herr Müller in Raum 204, Sir."));
         assert!(!looks_german_reply("Certainly, Sir. The Audio Devices panel is hidden."));
+        // A confirmation leaves out what Sir said himself, and keeps what he did not say.
+        assert_eq!(brief_ack("Done, Sir. Discord is on Monitor 2.", "move discord to monitor 2"), "Done, Sir.");
+        assert_eq!(brief_ack("Right away, Sir. Opening Discord.", "Open Discord"), "Right away, Sir.");
+        assert_eq!(brief_ack("Done, Sir. It is maximised.", "maximise it"), "Done, Sir.");
+        assert_eq!(brief_ack("Done, Sir. Discord is on Monitor 2.", "move discord to the other monitor"), "Done, Sir. Discord is on Monitor 2.", "which monitor it was is news");
+        assert_eq!(brief_ack("Allow me, Sir. Playing Thunderstruck by AC/DC.", "play something"), "Allow me, Sir. Playing Thunderstruck by AC/DC.");
+        assert_eq!(brief_ack("Very good, Sir. Your current setup is saved as the Movie Night Protocol.", "save this layout as movie night"), "Very good, Sir. Your current setup is saved as the Movie Night Protocol.");
+        assert_eq!(brief_ack("Paused, Sir.", "pause the music"), "Paused, Sir.");
+        assert_eq!(brief_ack("Volume at 45 percent, Sir.", "louder"), "Volume at 45 percent, Sir.");
+        // A quoted German title or message in an English reply is someone else's words.
+        assert!(!looks_german_reply("Now playing \"Ich und mein Holz\" by 257ers, Sir."));
+        assert!(!looks_german_reply("The message reads \u{201E}Das ist nicht gut, ich komme morgen\u{201C}, Sir."));
+        assert!(looks_german_reply("Ich habe \"Thunderstruck\" gestartet."));
+        // A mark that never closes quotes nothing.
+        assert!(looks_german_reply("\"Natürlich, das ist erledigt"));
+        assert_eq!(without_quotes("He said \"guten Tag\" and left"), "He said   and left");
         assert!(german_requested("Speak German for this sentence"));
         assert!(german_requested("Sag das bitte auf Deutsch"));
         assert!(!german_requested("Wie spät ist es?"));

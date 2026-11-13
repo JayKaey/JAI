@@ -24,6 +24,8 @@
 /jai_config.json.*
 # Clips of Sir's own voice (`voice_clips`): never commit.
 /voice_clips/
+# The nightly copies of the memory database and the settings (`backups`): never commit.
+/backups/
 # The memory database: conversations, memories, calendar, sealed account tokens.
 *.db
 *.db-shm

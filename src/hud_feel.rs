@@ -60,26 +60,26 @@ static PHRASES: LazyLock<Vec<(Regex, Value)>> = LazyLock::new(|| {
         // Calm or dense.
         // ("Show everything" is the older order that brings every panel back: not this one's.)
         p(r"^(?:show\s+(?:me\s+)?(?:all\s+(?:the\s+)?readouts|the\s+readouts)|dense\s+(?:mode|hud)|busy\s+(?:mode|hud)|zeig\s+(?:mir\s+)?(?:alle\s+)?anzeigen)$", json!({"calm_hud": false})),
-        p(r"^(?:hide\s+the\s+readouts|calm\s+(?:the\s+hud|down\s+the\s+hud|it\s+down)|less\s+on\s+(?:the\s+)?screen)$", json!({"calm_hud": true})),
-        p(r"^(?:stop\s+showing\s+my\s+words|don'?t\s+show\s+my\s+words)$", json!({"live_words": false})),
-        p(r"^show\s+(?:me\s+)?my\s+words(?:\s+(?:while|as)\s+i\s+(?:speak|talk))?$", json!({"live_words": true})),
+        p(r"^(?:hide\s+the\s+readouts|calm\s+(?:the\s+hud|down\s+the\s+hud|it\s+down)|less\s+on\s+(?:the\s+)?screen|blende?\s+die\s+anzeigen\s+aus|anzeigen\s+ausblenden|weniger\s+auf\s+dem\s+bildschirm)$", json!({"calm_hud": true})),
+        p(r"^(?:stop\s+showing\s+my\s+words|don'?t\s+show\s+my\s+words|zeig\s+meine\s+worte\s+nicht(?:\s+mehr)?(?:\s+an)?|meine\s+worte\s+nicht\s+(?:mehr\s+)?(?:an)?zeigen)$", json!({"live_words": false})),
+        p(r"^(?:show\s+(?:me\s+)?my\s+words(?:\s+(?:while|as)\s+i\s+(?:speak|talk))?|zeig\s+(?:mir\s+)?meine\s+worte(?:\s+(?:beim\s+sprechen|während\s+ich\s+(?:spreche|rede)))?)$", json!({"live_words": true})),
         // Night.
         p(r"^(?:day\s+mode|it'?s\s+(?:day|morning)|tagmodus)$", json!({"night_now": false})),
-        p(r"^(?:never\s+(?:use|go\s+(?:in)?to)\s+night\s+mode|no\s+night\s+mode\s+by\s+(?:yourself|itself))$", json!({"night_mode": false})),
+        p(r"^(?:never\s+(?:use|go\s+(?:in)?to)\s+night\s+mode|no\s+night\s+mode\s+by\s+(?:yourself|itself)|nie(?:mals)?\s+(?:von\s+(?:selbst|allein)\s+)?(?:in\s+den\s+)?nachtmodus|kein(?:en)?\s+nachtmodus\s+von\s+(?:selbst|allein))$", json!({"night_mode": false})),
         // Music.
-        p(r"^(?:move|dance|pulse)\s+(?:with|to)\s+the\s+music$", json!({"music_visuals": true})),
-        p(r"^(?:stop|don'?t)\s+(?:moving|dancing|pulsing|move|dance|pulse)\s+(?:with|to)\s+the\s+music$", json!({"music_visuals": false})),
+        p(r"^(?:(?:move|dance|pulse)\s+(?:with|to)\s+the\s+music|(?:beweg|bewege|tanz|tanze|pulsiere?)\s+(?:dich\s+)?(?:mit|zu)\s+der\s+musik)$", json!({"music_visuals": true})),
+        p(r"^(?:(?:stop|don'?t)\s+(?:moving|dancing|pulsing|move|dance|pulse)\s+(?:with|to)\s+the\s+music|(?:beweg|bewege|tanz|tanze)\s+(?:dich\s+)?nicht\s+(?:mehr\s+)?(?:mit|zu)\s+der\s+musik|h(?:ö|oe)r\s+auf\s+(?:dich\s+)?(?:mit|zu)\s+der\s+musik\s+zu\s+(?:bewegen|tanzen))$", json!({"music_visuals": false})),
         // Mini mode and the desktop.
-        p(r"^(?:go\s+mini|shrink\s+to\s+(?:a|the)\s+strip)$", json!({"mini_strip": true})),
-        p(r"^(?:be|become)\s+my\s+(?:desktop\s+)?(?:background|wallpaper)$", json!({"desktop_background": true})),
-        p(r"^(?:stop\s+being|leave)\s+my\s+(?:desktop\s+)?(?:background|wallpaper)$", json!({"desktop_background": false})),
+        p(r"^(?:go\s+mini|shrink\s+to\s+(?:a|the)\s+strip|(?:werde?|mach\s+dich)\s+(?:klein|mini)|schrumpfe?\s+zur\s+leiste)$", json!({"mini_strip": true})),
+        p(r"^(?:(?:be|become)\s+my\s+(?:desktop\s+)?(?:background|wallpaper)|(?:sei|werde?)\s+mein\s+(?:desktop\s*)?hintergrund(?:bild)?)$", json!({"desktop_background": true})),
+        p(r"^(?:(?:stop\s+being|leave)\s+my\s+(?:desktop\s+)?(?:background|wallpaper)|sei\s+nicht\s+mehr\s+mein\s+(?:desktop\s*)?hintergrund(?:bild)?|verlass\s+meinen\s+(?:desktop\s*)?hintergrund)$", json!({"desktop_background": false})),
         // Subtitles.
-        p(r"^(?:caption|subtitle)\s+(?:this|that|it|the\s+video|the\s+stream|the\s+call)$", json!({"subtitles": true})),
+        p(r"^(?:(?:caption|subtitle)\s+(?:this|that|it|the\s+video|the\s+stream|the\s+call)|untertitel\s+(?:für\s+)?(?:das|dieses\s+video|das\s+video|den\s+stream|den\s+anruf)|untertitle\s+das)$", json!({"subtitles": true})),
         p(r"^(?:translate\s+(?:the\s+)?subtitles|(?:english\s+subtitles|subtitles\s+in\s+english)|translated\s+subtitles|(?:caption|subtitle)\s+(?:this|that|it)\s+in\s+english|untertitel\s+auf\s+englisch)$", json!({"subtitles": true, "subtitles_translate": true})),
-        p(r"^(?:stop\s+translating(?:\s+the\s+subtitles)?|subtitles\s+in\s+the\s+original|original\s+subtitles)$", json!({"subtitles": true, "subtitles_translate": false})),
+        p(r"^(?:stop\s+translating(?:\s+the\s+subtitles)?|subtitles\s+in\s+the\s+original|original\s+subtitles|h(?:ö|oe)r\s+auf\s+zu\s+(?:ü|ue)bersetzen|nicht\s+mehr\s+(?:ü|ue)bersetzen|untertitel\s+im\s+original|originale?\s+untertitel)$", json!({"subtitles": true, "subtitles_translate": false})),
         // Lyrics.
         p(r"^(?:(?:show|display|give)\s+(?:me\s+)?(?:the\s+)?lyrics|lyrics(?:\s+on|\s+please)?|sing\s+along|zeig\s+(?:mir\s+)?(?:den\s+)?(?:songtext|liedtext))$", json!({"lyrics": true})),
-        p(r"^(?:(?:hide|stop|close|remove)\s+(?:the\s+)?lyrics|lyrics\s+off|no\s+(?:more\s+)?lyrics)$", json!({"lyrics": false})),
+        p(r"^(?:(?:hide|stop|close|remove)\s+(?:the\s+)?lyrics|lyrics\s+off|no\s+(?:more\s+)?lyrics|(?:songtext|liedtext)\s+(?:aus|weg|ausblenden)|kein(?:en)?\s+(?:songtext|liedtext)(?:\s+mehr)?)$", json!({"lyrics": false})),
         // What he showed while Sir was not looking.
         p(r"^(?:what\s+did\s+i\s+miss|did\s+i\s+miss\s+(?:anything|something)|(?:show|open)\s+(?:me\s+)?(?:my\s+|the\s+)?(?:notifications|notification\s+history|missed\s+notifications)|was\s+habe\s+ich\s+verpasst)$", json!({"missed": true})),
         // His voice.
@@ -105,12 +105,26 @@ static GUESTS: LazyLock<Regex> = LazyLock::new(|| {
     ))
     .expect("valid guest regex")
 });
-static GUESTS_OFF: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(?:guest\s+mode\s+off|end\s+guest\s+mode|no\s+more\s+guests|(?:only|just)\s+me\s+again|gastmodus\s+aus)$").expect("valid guest regex"));
+static GUESTS_OFF: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(?:guest\s+mode\s+off|end\s+guest\s+mode|no\s+more\s+guests|(?:only|just)\s+me\s+again|gastmodus\s+aus|keine\s+g(?:ä|ae)ste\s+mehr|nur\s+(?:noch\s+)?ich\s+wieder|wieder\s+nur\s+ich)$").expect("valid guest regex"));
+/// The same in German: "lass meinen Bruder sprechen", "du darfst auch auf sie hören".
+static GUESTS_DE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(&format!(
+        r"^(?:(?:lass|lasse)\s+(?P<who>mein(?:e|en)?\s+(?:{GUEST})|[a-zäöüß]+)\s+(?:auch\s+)?(?:mit\s+dir\s+)?(?:sprechen|reden)|(?:du\s+(?:kannst|darfst)\s+)?(?:auch\s+)?auf\s+(?:ihn|sie|mein(?:e|en)?\s+(?:{GUEST}))\s+h(?:ö|oe)ren)$"
+    ))
+    .expect("valid guest regex")
+});
 
 /// The request for guests in `s`, as arguments: on with its minutes, or off.
 fn guest_command(s: &str) -> Option<Value> {
     if GUESTS_OFF.is_match(s) {
         return Some(json!({"voice_guest": false}));
+    }
+    if let Some(c) = GUESTS_DE.captures(s) {
+        // ("Lass mich sprechen", "lass es reden": no guest.)
+        if c.name("who").is_some_and(|who| matches!(who.as_str(), "mich" | "uns" | "es" | "das" | "dich" | "ihn" | "sie")) {
+            return None;
+        }
+        return Some(json!({"voice_guest": true, "voice_guest_minutes": GUEST_MINUTES}));
     }
     let c = GUESTS.captures(s)?;
     // ("Let me speak", "let it talk": no guest.)
@@ -538,6 +552,35 @@ mod tests {
     }
 
     /// Talk about these things is not an order for them.
+    #[test]
+    fn the_same_orders_in_german() {
+        for (said, want) in [
+            ("blende die anzeigen aus", json!({"calm_hud": true})),
+            ("zeig meine worte nicht mehr", json!({"live_words": false})),
+            ("zeig mir meine worte beim sprechen", json!({"live_words": true})),
+            ("nie von selbst in den nachtmodus", json!({"night_mode": false})),
+            ("beweg dich mit der musik", json!({"music_visuals": true})),
+            ("tanz nicht mehr zu der musik", json!({"music_visuals": false})),
+            ("mach dich klein", json!({"mini_strip": true})),
+            ("sei mein hintergrund", json!({"desktop_background": true})),
+            ("werde mein desktophintergrund", json!({"desktop_background": true})),
+            ("sei nicht mehr mein hintergrund", json!({"desktop_background": false})),
+            ("untertitel für das video", json!({"subtitles": true})),
+            ("hör auf zu übersetzen", json!({"subtitles": true, "subtitles_translate": false})),
+            ("songtext aus", json!({"lyrics": false})),
+            ("gastmodus", json!({"voice_guest": true, "voice_guest_minutes": GUEST_MINUTES})),
+            ("lass meinen bruder sprechen", json!({"voice_guest": true, "voice_guest_minutes": GUEST_MINUTES})),
+            ("du darfst auch auf sie hören", json!({"voice_guest": true, "voice_guest_minutes": GUEST_MINUTES})),
+            ("keine gäste mehr", json!({"voice_guest": false})),
+        ] {
+            assert_eq!(command(said), Some(want), "{said}");
+        }
+        // No guests: himself, and things.
+        for said in ["lass mich sprechen", "lass es reden", "lass das", "hör auf", "sei still"] {
+            assert_eq!(command(said), None, "{said}");
+        }
+    }
+
     #[test]
     fn talk_about_them_is_no_order() {
         for text in [

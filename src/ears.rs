@@ -225,7 +225,11 @@ pub fn classify_addressee(text: &str, ctx: &AddresseeContext) -> Addressee {
         return Addressee::WakeWord;
     }
     if ctx.jai_focused {
-        return Addressee::Focus;
+        // His window in front makes a sentence his to hear, but not every word in the room:
+        // a fragment, a callout or talk about a third person ("he said he'd come later") that
+        // is no order he knows, no question and no address stays with whoever it was for.
+        let for_someone_else = !ctx.conversation_open && !known_command(text) && !direct_intent(text) && looks_like_chatter(text);
+        return if for_someone_else { Addressee::Chatter } else { Addressee::Focus };
     }
     if bare_window_word(text) && !ctx.conversation_open {
         return if ctx.gaming { Addressee::Chatter } else { Addressee::Unaddressed };
@@ -555,6 +559,17 @@ mod addressee_tests {
         assert_eq!(classify_addressee("Can you create a new event in my calendar?", &ctx()), Addressee::DirectIntent);
         let focused = AddresseeContext { jai_focused: true, ..ctx() };
         assert_eq!(classify_addressee("the weather in Paris", &focused), Addressee::Focus);
+        // With his window in front: orders, questions and anything said to "you" are his;
+        // talk about someone else and loose fragments are not.
+        for his in ["Next song", "Stop", "What time is it?", "Can you open Discord", "Mach die Musik leiser", "Tell me a joke about school"] {
+            assert_eq!(classify_addressee(his, &focused), Addressee::Focus, "{his}");
+        }
+        for theirs in ["He said he would come later", "She is not at home right now", "Oh man", "Yeah right"] {
+            assert_eq!(classify_addressee(theirs, &focused), Addressee::Chatter, "{theirs}");
+        }
+        // In an open conversation everything is his, as before.
+        let talking = AddresseeContext { jai_focused: true, conversation_open: true, ..ctx() };
+        assert_eq!(classify_addressee("He said he would come later", &talking), Addressee::Focus);
         let hands_free = AddresseeContext { wake_required: false, ..ctx() };
         assert_eq!(classify_addressee("I was thinking about the holidays", &hands_free), Addressee::HandsFree);
     }
