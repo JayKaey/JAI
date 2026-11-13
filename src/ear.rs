@@ -210,6 +210,20 @@ pub fn forget_all() -> usize {
     })
 }
 
+/// Forgets everything his ear has learnt, his names in Sir's voice too (the privacy board).
+pub fn forget_everything() -> usize {
+    with(|store| {
+        let n = store.entries.len();
+        store.entries.clear();
+        if let Some(db) = &store.db {
+            if let Err(e) = open(db).and_then(|conn| conn.execute("DELETE FROM ear_learnt", [])) {
+                tracing::warn!("[EAR] What was to be forgotten is still written down: {e}");
+            }
+        }
+        n
+    })
+}
+
 #[cfg(test)]
 fn reset() {
     let mut store = lock(&STORE);
@@ -686,6 +700,34 @@ pub fn heard_again(first: &str, second: &str) -> Option<(String, String)> {
     pair(&a[af..at], &b[bf..bt], true, true)
 }
 
+/// Sir put a line of the hearing log right: what was heard was `meant`. The order is his for
+/// it at once, and so are the words in which the two differ.
+pub fn corrected(heard: &str, meant: &str) -> bool {
+    let (a, b) = (words(heard), words(meant));
+    let ((af, at), (bf, bt)) = (core(&a), core(&b));
+    let (was, is) = (a[af..at].to_vec(), b[bf..bt].to_vec());
+    if was.is_empty() || is.is_empty() || was == is {
+        return false;
+    }
+    // (Sir said so himself: twice over, so that it holds from now on.)
+    for _ in 0..2 {
+        if pair(&was, &is, true, true).is_none() {
+            count(&was.join(" "), &is.join(" "), Kind::Order, 1);
+        }
+    }
+    tracing::info!("[EAR] Sir put a line right: '{}' is '{}'", was.join(" "), is.join(" "));
+    true
+}
+
+/// The pronunciation coach heard `heard` where the sentence on the board says `meant`: counted
+/// as words for words (the answer was to hand, so twice makes it hold).
+pub fn count_words(heard: &str, meant: &str) {
+    let (heard, meant) = (words(heard).join(" "), words(meant).join(" "));
+    if !heard.is_empty() && !meant.is_empty() && heard != meant {
+        count(&heard, &meant, Kind::Words, 1);
+    }
+}
+
 /// Sir teaches him: `heard` is to be taken for `meant`, from now on and everywhere.
 pub fn teach(heard: &str, meant: &str) -> bool {
     let (heard, meant) = (words(heard).join(" "), words(meant).join(" "));
@@ -963,6 +1005,10 @@ mod tests {
         // Every order that led somewhere is in the phrase book, with how often it was given.
         let book: Vec<(String, u32)> = learnt().into_iter().filter(|e| e.kind == Kind::Said).map(|e| (e.heard, e.seen)).collect();
         assert_eq!(book, [("show me the earth".to_string(), 4), ("open the mixer".to_string(), 1), ("zoom out".to_string(), 1)]);
+        // A line of the hearing log put right holds at once.
+        assert!(corrected("Jay, open the mix up.", "open the mixer"));
+        assert_eq!(read("Jay, open the mix up", true, &routes).map(|r| r.text).as_deref(), Some("Jay, open the mixer"));
+        assert!(!corrected("open the mixer", "Jay, open the mixer."), "nothing to put right");
         // A second hearing of the same clip is paired whatever it sounds like.
         assert_eq!(heard_again("Jay, prost yourself.", "Jay, close yourself."), Some(("prost yourself".to_string(), "close yourself".to_string())));
     }

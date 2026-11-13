@@ -4380,6 +4380,7 @@ impl HudApp {
             phone: pairing_view::is_open(),
             core: self.core_open,
             features: features_view::is_open(),
+            changes: crate::changes::is_open(),
             history: self.history_open,
             console: self.console_open,
             rebooting,
@@ -4487,6 +4488,7 @@ impl HudApp {
             Some("core") => core_command(crate::core_sphere_3d::CoreCommand::Open(!self.core_open)),
             Some("modules") => ui.memory_mut(|mem| mem.toggle_popup(modules_id)),
             Some("features") => features_view::toggle(),
+            Some("changes") => crate::changes::toggle(),
             Some("reboot") if !rebooting => crate::llm_reboot::reboot_from_button(&self.rt),
             Some("history") => {
                 self.history_open = !self.history_open;
@@ -5643,6 +5645,9 @@ impl HudApp {
         }
         // "What did I miss?": the notifications of the last hours.
         crate::hud_notify::show(ctx);
+        // The kit's blocks: the notebook, the hearing log, the coach, the privacy board, the
+        // changes list and its explanations.
+        crate::kit::show(ctx);
         // "Learn my voice": the set-up's block (with his voice's level as it comes in).
         crate::voice_setup::show(ctx, self.reactor.mic);
         // The live subtitles' bar, while they are on.
@@ -5650,7 +5655,7 @@ impl HudApp {
         // The live desktop background, on a monitor the board is not on.
         let state = lock(&self.model).state.clone();
         // (As the orb or the slim strip he holds no monitor: any of them can be his background.)
-        if let Some(crate::desktop_backdrop::Refused(why)) = crate::desktop_backdrop::show(ctx, iface.desktop_background && !windows_still(ctx), if iface.orb_mode { 0 } else { self.hwnd }, iface.span_all_monitors && !iface.orb_mode, !iface.orb_mode, &state) {
+        if let Some(crate::desktop_backdrop::Refused(why)) = crate::desktop_backdrop::show(ctx, (iface.desktop_background || iface.portrait_dashboard) && !windows_still(ctx), if iface.orb_mode { 0 } else { self.hwnd }, iface.span_all_monitors && !iface.orb_mode, !iface.orb_mode, iface.portrait_dashboard, &state) {
             lock(&self.model).toast(why, true);
             self.app.config().update(|c| c.interface.desktop_background = false);
         }
@@ -6262,6 +6267,8 @@ struct HeaderState {
     phone: bool,
     core: bool,
     features: bool,
+    /// The changes list is up.
+    changes: bool,
     history: bool,
     console: bool,
     rebooting: bool,
@@ -6279,6 +6286,7 @@ fn header_items(lit: &HeaderState, reboot: &str, source: &str) -> Vec<HeaderItem
         item("core", "CORE", lit.core, true),
         item("modules", "MODULES", false, true),
         item("features", "FEATURES", lit.features, true),
+        item("changes", "CHANGES", lit.changes, true),
         item("history", "HISTORY", lit.history, true),
         item("view", "VIEW", false, true),
         item("clear", "CLEAR VIEW", false, true),
@@ -6674,26 +6682,36 @@ fn reveal_when_drawn(ctx: &egui::Context) {
     let mut motions = lock(&DETACHED_MOTIONS);
     if motions.revealed.insert(viewport) {
         ctx.send_viewport_cmd(ViewportCommand::Visible(true));
+        info!("[HUD] A window of its own shows itself, its first frame drawn ({viewport:?})");
     }
 }
 
 /// The top row of a borderless detached window: its title (drag it to move the window) and
 /// `[ X ]`; true when Sir closed it (once its exit has played).
 pub(super) fn detached_title_bar(ui: &mut Ui, ctx: &egui::Context, title: &str) -> bool {
-    let mut clicked = false;
+    detached_bar(ui, ctx, title, false).0
+}
+
+/// The top row of a borderless detached window: its title (drag it to move the window),
+/// `[ CLOSE ]`, and with `dock` a `[ DOCK ]` key that brings the view back onto the board.
+/// Returns (Sir closed it, once its exit has played; he asked it back onto the board).
+fn detached_bar(ui: &mut Ui, ctx: &egui::Context, title: &str, dock: bool) -> (bool, bool) {
+    let (mut clicked, mut docked) = (false, false);
     ui.horizontal(|ui| {
         let label = ui.add(egui::Label::new(RichText::new(title.to_uppercase()).font(strip_font()).color(crate::hud_board::active_colour())).sense(Sense::drag()));
         if label.drag_started() {
             ctx.send_viewport_cmd(ViewportCommand::StartDrag);
         }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            clicked = ui
-                .add(egui::Button::new(RichText::new("[ CLOSE ]").font(strip_font()).color(STRIP_INK)).fill(rgba([3, 7, 12], 0.9)).stroke(stroke(1.0, crate::hud_board::border_colour())).rounding(Rounding::ZERO))
-                .clicked();
+            let key = |ui: &mut Ui, text: &str| ui.add(egui::Button::new(RichText::new(text).font(strip_font()).color(STRIP_INK)).fill(rgba([3, 7, 12], 0.9)).stroke(stroke(1.0, crate::hud_board::border_colour())).rounding(Rounding::ZERO));
+            clicked = key(ui, "[ CLOSE ]").clicked();
+            if dock {
+                docked = key(ui, "[ DOCK ]").on_hover_text("Back onto the board").clicked();
+            }
         });
     });
     if clicked && windows_still(ctx) {
-        return true;
+        return (true, false);
     }
     let viewport = ctx.viewport_id();
     let mut motions = lock(&DETACHED_MOTIONS);
@@ -6704,7 +6722,7 @@ pub(super) fn detached_title_bar(ui: &mut Ui, ctx: &egui::Context, title: &str) 
         ctx.request_repaint();
     }
     // The exit its [ CLOSE ] started has played: now it closes.
-    motions.leaving.get(&viewport).is_some_and(|(at, by_hand)| *by_hand && at.elapsed() >= crate::hud_dock::CLOSE_FADE)
+    (motions.leaving.get(&viewport).is_some_and(|(at, by_hand)| *by_hand && at.elapsed() >= crate::hud_dock::CLOSE_FADE), docked)
 }
 
 /// The detached windows' entrances and exits, by viewport.
@@ -6756,7 +6774,16 @@ impl DetachedMotions {
 /// From the HUD's frame: a window that exists and has still not shown itself after a few of the
 /// HUD's frames and a third of a second (it never drew while hidden) is shown anyway.
 fn reveal_overdue(ctx: &egui::Context, motions: &mut DetachedMotions, viewport: ViewportId) {
-    if motions.revealed.contains(&viewport) || !ctx.input(|i| i.raw.viewports.contains_key(&viewport)) {
+    if !ctx.input(|i| i.raw.viewports.contains_key(&viewport)) {
+        // No such window (the view is on the board): what an earlier showing left behind must
+        // not count for the next one. (A view docked and popped out again stayed hidden for
+        // good: it was "revealed" from its first time and never drew while hidden.)
+        motions.revealed.remove(&viewport);
+        motions.hidden.remove(&viewport);
+        motions.owned.remove(&viewport);
+        return;
+    }
+    if motions.revealed.contains(&viewport) {
         return;
     }
     let (frames, since) = motions.hidden.entry(viewport).or_insert((0, Instant::now()));
@@ -6768,6 +6795,17 @@ fn reveal_overdue(ctx: &egui::Context, motions: &mut DetachedMotions, viewport: 
         motions.revealed.insert(viewport);
         motions.hidden.remove(&viewport);
         ctx.send_viewport_cmd_to(viewport, ViewportCommand::Visible(true));
+        // (It has no frame of its own yet to make the board its owner in: done from here, or
+        // the fullscreen board could cover it.)
+        #[cfg(windows)]
+        {
+            let hud = SHARED.hwnd.load(Ordering::Acquire);
+            let title = ctx.input(|i| i.raw.viewports.get(&viewport).and_then(|v| v.title.clone()));
+            if hud != 0 && title.is_some_and(|title| crate::win32::own_window_titled(&title, hud)) {
+                motions.owned.insert(viewport);
+            }
+        }
+        info!("[HUD] A window of its own had not drawn after a third of a second: shown from the board ({viewport:?})");
     }
     ctx.request_repaint_after(Duration::from_millis(60));
 }
@@ -6985,7 +7023,10 @@ pub(super) fn hud_block_window(ctx: &egui::Context, id: &str, title: &str, size:
             Some(0) => close_asked = true,
             // The block plays its exit first; the new window comes up after it.
             Some(1) if still => action.detach = true,
-            Some(1) => crate::hud_dock::begin_detach(id),
+            Some(1) => {
+                info!("[HUD] '{id}': its [ DETACH ] asks it into a window of its own");
+                crate::hud_dock::begin_detach(id);
+            }
             Some(2) => {
                 crate::hud_dock::toggle_pin(id);
             }
@@ -7492,18 +7533,68 @@ pub(crate) fn board_area(screen: Rect, left_reserve: f32, right_reserve: f32) ->
 /// the block; `content` is what `Copy Content` and the search read. True when it was closed.
 pub(crate) fn text_block(ctx: &egui::Context, id: &str, title: &str, size: [f32; 2], content: &str) -> bool {
     crate::hud_dock::describe_block(id, content);
-    hud_block_window(ctx, id, title, size, |ui| {
+    block(ctx, id, title, size, |ui| {
         egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
             ui.add(egui::Label::new(RichText::new(content).size(13.5).color(STRIP_INK)).wrap());
         });
     })
-    .close
 }
 
 /// A block of the board for a module outside the GUI (`body` draws its content). Returns
-/// whether it was closed.
+/// whether it was closed. Its `[ DETACH ]` makes it a window of its own with the same body
+/// (drawn inside the HUD's frame, so `body` may borrow what its caller holds), and that
+/// window's `[ DOCK ]` brings it back. (2026-11-13, Sir: "detaching windows doesn't work but
+/// it closes them": these blocks had the key and threw the detach away.)
 pub(crate) fn block(ctx: &egui::Context, id: &str, title: &str, size: [f32; 2], body: impl FnOnce(&mut Ui)) -> bool {
-    hud_block_window(ctx, id, title, size, body).close
+    let viewport = ViewportId::from_hash_of(format!("jai_block_{id}"));
+    if !crate::hud_dock::adopt(id) {
+        // (On the board: nothing of an earlier window of its own counts for the next one.)
+        detached_keep(ctx, viewport, true);
+        let action = hud_block_window(ctx, id, title, size, body);
+        if action.detach {
+            crate::hud_dock::detach(id);
+        }
+        return action.close;
+    }
+    detached_keep(ctx, viewport, true);
+    let name = title.split("//").next().unwrap_or(title).trim();
+    let mut builder = egui::ViewportBuilder::default().with_title(format!("{name}\u{2014} J.A.I.")).with_app_id("jai").with_inner_size(size).with_min_inner_size([320.0, 180.0]).with_decorations(false);
+    if let Some(icon) = window_icon() {
+        builder = builder.with_icon(Arc::new(icon));
+    }
+    if let Some((at, size)) = detached_placement(ctx, id) {
+        builder = builder.with_position(at).with_inner_size(size);
+    }
+    let builder = for_test_session(builder);
+    let (mut closed, mut docked) = (false, false);
+    // (The viewport's callback may be asked for more than once; the body is drawn once.)
+    let mut body = Some(body);
+    ctx.show_viewport_immediate(viewport, builder, |ctx, class| {
+        if ctx.input(|i| i.viewport().close_requested()) {
+            closed = true;
+            return;
+        }
+        let Some(body) = body.take() else { return };
+        if class == egui::ViewportClass::Embedded {
+            egui::Window::new(title).id(egui::Id::new(("jai_embedded_block", id))).show(ctx, |ui| body(ui));
+            return;
+        }
+        egui::CentralPanel::default().frame(Frame::none().fill(BLOCK_SLATE).inner_margin(Margin::same(14.0))).show(ctx, |ui| {
+            (closed, docked) = detached_bar(ui, ctx, title, true);
+            body(ui);
+        });
+        paint_window_border(ctx);
+    });
+    if closed || docked {
+        // (Docked: back on the board from the next frame. Closed: on the board when it is
+        // next asked for.)
+        crate::hud_dock::dock(id);
+        lock(&DETACHED_MOTIONS).forget(viewport);
+        if docked {
+            info!("[HUD] '{id}' is back on the board (its window's [ DOCK ])");
+        }
+    }
+    closed
 }
 
 /// The keyboard shortcut for the block under the pointer, if one was pressed this frame:
@@ -8891,7 +8982,7 @@ mod tests {
         let names: Vec<&str> = items.iter().map(|i| i.text.as_str()).collect();
         assert_eq!(
             names,
-            ["THEME", "PHONE QR", "CORE", "MODULES", "FEATURES", "HISTORY", "VIEW", "CLEAR VIEW", "CONSOLE", "REBOOT LLM", "CAMERA", "CAMERA SOURCE", "DEFAULT CAMERA", "SCREENS", "MIC: ON"]
+["THEME", "PHONE QR", "CORE", "MODULES", "FEATURES", "CHANGES", "HISTORY", "VIEW", "CLEAR VIEW", "CONSOLE", "REBOOT LLM", "CAMERA", "CAMERA SOURCE", "DEFAULT CAMERA", "SCREENS", "MIC: ON"]
         );
         assert!(items.iter().filter(|i| !i.boxed).map(|i| i.id).eq(["source_label"]), "only the source caption is unboxed");
         let on = |items: &[HeaderItem], id: &str| items.iter().find(|i| i.id == id).unwrap().on;

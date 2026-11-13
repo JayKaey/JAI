@@ -60,7 +60,7 @@ pub fn parse_ping(output: &str) -> Vec<f64> {
     TIME.captures_iter(output).filter_map(|c| c[1].replace(',', ".").parse().ok()).collect()
 }
 
-async fn ping(host: &str, label: &str, count: usize) -> PingStats {
+pub(crate) async fn ping(host: &str, label: &str, count: usize) -> PingStats {
     let n = count.to_string();
     let args: Vec<&str> = if cfg!(windows) { vec!["-n", &n, "-w", "1000", host] } else { vec!["-c", &n, "-W", "1", host] };
     let out = run(Path::new("ping"), &args, None, Duration::from_secs(count as u64 * 2 + 5)).await;
@@ -68,7 +68,7 @@ async fn ping(host: &str, label: &str, count: usize) -> PingStats {
     PingStats { host: host.to_string(), label: label.to_string(), sent: count, times }
 }
 
-async fn gateway() -> Option<String> {
+pub(crate) async fn gateway() -> Option<String> {
     if !cfg!(windows) {
         return None;
     }

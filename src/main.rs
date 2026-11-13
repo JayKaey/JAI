@@ -30,6 +30,7 @@ mod calc;
 mod calendar_client;
 mod camera_feed;
 mod change_notifier;
+mod changes;
 mod chem_helper;
 mod clipboard;
 mod clipboard_history;
@@ -114,6 +115,12 @@ mod intents;
 mod itslearning_bw_sso;
 mod interface;
 mod jai_voice_dsp;
+mod kit;
+mod kit_insight;
+mod kit_notes;
+mod kit_screen;
+mod kit_typing;
+mod kit_voice;
 mod jai_views;
 mod lifecycle;
 mod live_self_tester;
@@ -616,6 +623,8 @@ fn main() -> ExitCode {
         // What he has learnt about how Sir's words reach him: kept beside it. (A scripted
         // session learns for its own run only and reads nothing of Sir's.)
         if !platform::in_test_session() {
+            // (The kit's notes, snippets, rules and layouts: in the same database.)
+            kit::set_db(&db);
             ear::set_db(&db);
             // The last clips of his own orders, when Sir has them kept (`voice_clips`).
             if session.app.config().read(|c| c.keep_voice_clips) {
@@ -1053,6 +1062,7 @@ async fn start(cli: &Cli, cfg: JaiConfig) -> Started {
     // Away Mode's eye on the PC (lock, drives, Sir's return) and the "tell me when …" watches.
     away_mode::start(app.tools().clone(), shutdown.clone());
     watch_and_tell::start(shutdown.clone());
+    kit_notes::start(app.tools().clone(), shutdown.clone());
     // live layers (C1): the rain note and the ISS heads-up.
     live_layers::start(app.clone(), shutdown.clone());
     // What his own jobs have to say once done (the radar's sweep, the disk map's scan), spoken

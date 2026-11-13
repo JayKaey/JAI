@@ -28,6 +28,8 @@ struct Backdrop {
     asked: bool,
     /// When its place under the icons was last looked at.
     kept: Instant,
+    /// It is the dashboard on the upright monitor (not the plain background).
+    dashboard: bool,
 }
 
 static BACKDROP: Mutex<Option<Backdrop>> = Mutex::new(None);
@@ -64,11 +66,20 @@ fn monitor_of(_hwnd: isize) -> Option<[i32; 4]> {
     None
 }
 
+/// The upright monitor the dashboard takes: the first that is taller than wide and does not
+/// hold the board.
+pub fn upright(monitors: &[([i32; 4], bool)], hud: Option<[i32; 4]>, board: bool) -> Option<[i32; 4]> {
+    monitors.iter().map(|(rect, _)| *rect).find(|rect| rect[3] - rect[1] > rect[2] - rect[0] && (!board || Some(*rect) != hud))
+}
+
 /// Shows the background while `on` (each HUD frame). `hud`: the HUD's own window (the monitor
-/// it is on is left alone); `spanning`: the board is across all of them; `state`: what he is
-/// doing.
-pub fn show(ctx: &egui::Context, on: bool, hud: isize, spanning: bool, board: bool, state: &str) -> Option<Refused> {
-    if !on {
+/// it is on is left alone); `spanning`: the board is across all of them; `dashboard`: it is
+/// the dashboard on the upright monitor; `state`: what he is doing.
+pub fn show(ctx: &egui::Context, on: bool, hud: isize, spanning: bool, board: bool, dashboard: bool, state: &str) -> Option<Refused> {
+    // (Switched between the plain background and the dashboard: it closes and opens anew,
+    // on the monitor the other one belongs on.)
+    let other = lock(&BACKDROP).as_ref().is_some_and(|b| b.dashboard != dashboard);
+    if !on || other {
         if lock(&BACKDROP).take().is_some() {
             *lock(&ATTACHED) = None;
             tracing::info!("[DESKTOP] The live background is off");
@@ -85,11 +96,18 @@ pub fn show(ctx: &egui::Context, on: bool, hud: isize, spanning: bool, board: bo
         // (A scripted session sends it to the monitor it names, `JAI_BACKDROP_MONITOR=2`: its
         // own test screen, never the one Sir works on.)
         let named = crate::platform::in_test_session().then(|| std::env::var("JAI_BACKDROP_MONITOR").ok()).flatten().and_then(|n| n.trim().parse::<usize>().ok()).and_then(|n| monitors.get(n.saturating_sub(1)).map(|(rect, _)| *rect));
-        let Some(monitor) = named.or_else(|| (!spanning).then(|| target(&monitors, monitor_of(hud), board)).flatten()) else {
-            return Some(Refused(if spanning { "My board is across every monitor: there is no desktop left for me to stand behind.".into() } else { "I need a second monitor for that: this one holds my board.".into() }));
+        let free = if dashboard { (!spanning).then(|| upright(&monitors, monitor_of(hud), board)).flatten() } else { (!spanning).then(|| target(&monitors, monitor_of(hud), board)).flatten() };
+        let Some(monitor) = named.or(free) else {
+            return Some(Refused(if spanning {
+                "My board is across every monitor: there is no desktop left for me to stand behind.".into()
+            } else if dashboard {
+                "The dashboard needs an upright monitor my board is not on.".into()
+            } else {
+                "I need a second monitor for that: this one holds my board.".into()
+            }));
         };
-        tracing::info!("[DESKTOP] The live background opens on the monitor at {},{} ({}×{})", monitor[0], monitor[1], monitor[2] - monitor[0], monitor[3] - monitor[1]);
-        *guard = Some(Backdrop { emblem: RoseEmblem::new(RoseEmblemState::AwakeFrontEmblem), monitor, opened: Instant::now(), last_frame: Instant::now(), asked: false, kept: Instant::now() });
+        tracing::info!("[DESKTOP] The live {} opens on the monitor at {},{} ({}×{})", if dashboard { "dashboard" } else { "background" }, monitor[0], monitor[1], monitor[2] - monitor[0], monitor[3] - monitor[1]);
+        *guard = Some(Backdrop { emblem: RoseEmblem::new(RoseEmblemState::AwakeFrontEmblem), monitor, opened: Instant::now(), last_frame: Instant::now(), asked: false, kept: Instant::now(), dashboard });
     }
     let Some(b) = guard.as_mut() else { return None };
     let ppp = ctx.native_pixels_per_point().unwrap_or(1.0).max(0.5);
@@ -107,8 +125,13 @@ pub fn show(ctx: &egui::Context, on: bool, hud: isize, spanning: bool, board: bo
     b.emblem.step(dt, 0.0, false);
     let emblem = &b.emblem;
     let gaming = crate::hud_feel::game_in_front();
+    let as_dashboard = b.dashboard;
     ctx.show_viewport_immediate(ViewportId::from_hash_of("jai_desktop_backdrop"), builder, |ctx, _class| {
-        paint(ctx, emblem, state);
+        if as_dashboard {
+            paint_dashboard(ctx, emblem, state, &crate::kit_screen::dash());
+        } else {
+            paint(ctx, emblem, state);
+        }
         ctx.request_repaint_after(Duration::from_millis(if gaming { 1000 } else { 100 }));
     });
     // Once the window exists: the desktop is asked to take it behind its icons.
@@ -195,9 +218,81 @@ fn paint(ctx: &egui::Context, emblem: &RoseEmblem, state: &str) {
     }
 }
 
+/// The dashboard's picture for an upright monitor: the emblem and the clock in the upper
+/// part, and under them what the day holds, section by section.
+pub fn paint_dashboard(ctx: &egui::Context, emblem: &RoseEmblem, state: &str, dash: &crate::kit_screen::Dash) {
+    crate::gui::paint_canvas(ctx);
+    let screen = ctx.screen_rect();
+    let p = ctx.layer_painter(egui::LayerId::background());
+    let head = egui::Rect::from_min_max(screen.min, pos2(screen.right(), screen.top() + screen.height() * 0.40));
+    emblem.paint(&p, head);
+    let frame = emblem.frame(head);
+    let now = Local::now().naive_local();
+    let accent = crate::hud_board::active_colour();
+    let ink = Color32::from_rgb(0xE8, 0xF2, 0xFC);
+    let muted = Color32::from_rgb(0x8E, 0xA4, 0xB8);
+    let top = pos2(frame.centre.x, frame.centre.y + frame.radius * 1.3);
+    let clock = p.text(top, Align2::CENTER_TOP, now.format("%H:%M").to_string(), FontId::new(84.0, FontFamily::Name("display".into())), ink);
+    let date = p.text(pos2(top.x, clock.bottom() + 2.0), Align2::CENTER_TOP, crate::idle_screen::date_line(now).to_uppercase(), FontId::monospace(13.0), accent.gamma_multiply(0.9));
+    let word = match state {
+        "listening" => "LISTENING",
+        "thinking" => "THINKING",
+        "speaking" => "SPEAKING",
+        _ => "",
+    };
+    let mut y = date.bottom() + 12.0;
+    if !word.is_empty() {
+        y = p.text(pos2(top.x, y), Align2::CENTER_TOP, word, FontId::monospace(11.0), Color32::WHITE).bottom() + 8.0;
+    }
+    // The sections: a column with the same margin left and right.
+    let margin = (screen.width() * 0.09).clamp(28.0, 110.0);
+    let (left, right) = (screen.left() + margin, screen.right() - margin);
+    y += 34.0;
+    let section = |title: &str, lines: &[String], y: &mut f32| {
+        if lines.is_empty() || *y > screen.bottom() - 120.0 {
+            return;
+        }
+        p.text(pos2(left, *y), Align2::LEFT_TOP, title, FontId::monospace(11.0), accent);
+        *y += 18.0;
+        p.line_segment([pos2(left, *y), pos2(right, *y)], egui::Stroke::new(1.0f32, crate::hud_style::white(0.10)));
+        *y += 10.0;
+        for line in lines {
+            let galley = p.layout(line.clone(), FontId::new(19.0, FontFamily::Name("label".into())), ink, right - left);
+            if *y + galley.size().y > screen.bottom() - 70.0 {
+                break;
+            }
+            let h = galley.size().y;
+            p.galley(pos2(left, *y), galley, ink);
+            *y += h + 6.0;
+        }
+        *y += 22.0;
+    };
+    section("NOW PLAYING", &dash.playing.clone().into_iter().collect::<Vec<_>>(), &mut y);
+    section("NEXT", &dash.next, &mut y);
+    section("NOTES", &dash.notes, &mut y);
+    if let Some((total, apps)) = &dash.day {
+        let mut lines = vec![format!("{total} at the screen today")];
+        lines.extend(apps.iter().map(|(app, span)| format!("{app}  \u{00B7}  {span}")));
+        section("TODAY", &lines, &mut y);
+    }
+    section("LATELY", &dash.notices, &mut y);
+    // Whom he answers to, and the other short states, along the foot.
+    p.text(pos2(screen.center().x, screen.bottom() - 44.0), Align2::CENTER_CENTER, dash.states.join("     \u{00B7}     "), FontId::monospace(11.0), muted);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_dashboard_takes_the_upright_monitor_the_board_is_not_on() {
+        let (main, side, tall) = ([0, 0, 2560, 1440], [2560, 0, 5120, 1440], [-1080, -290, 0, 1630]);
+        let all = [(main, true), (side, false), (tall, false)];
+        assert_eq!(upright(&all, Some(main), true), Some(tall));
+        assert_eq!(upright(&all, Some(tall), true), None, "the board is on it");
+        assert_eq!(upright(&all, Some(tall), false), Some(tall), "as the orb he holds no monitor");
+        assert_eq!(upright(&[(main, true), (side, false)], Some(main), true), None, "no monitor stands upright");
+    }
 
     #[test]
     fn it_takes_a_monitor_the_board_is_not_on() {

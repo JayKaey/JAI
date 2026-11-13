@@ -104,6 +104,8 @@ pub fn keep(pcm: Vec<f32>, heard: String, meant: String, led: bool, logprob: f32
         if let Err(e) = keep_now(&db, &dir, &pcm, &heard, &meant, led, logprob, likeness) {
             tracing::warn!("[EAR] A clip of Sir's voice was not kept: {e}");
         }
+        // (The hearing log shows it, should it be up.)
+        crate::kit_voice::hearing_reload();
     });
 }
 

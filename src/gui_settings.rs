@@ -307,8 +307,8 @@ pub(super) fn show(ctx: &egui::Context, iface: &InterfaceSettings) -> Option<Out
         return None;
     }
     let mut out = None;
-    let action = super::hud_block_window(ctx, ID, TITLE, [620.0, 680.0], |ui| out = body(ui, iface));
-    if action.close {
+    // (`block`: on the board, or after its [ DETACH ] a window of its own.)
+    if super::block(ctx, ID, TITLE, [620.0, 680.0], |ui| out = body(ui, iface)) {
         open(false);
         crate::hud_dock::forget(ID);
     }

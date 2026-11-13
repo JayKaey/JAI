@@ -176,7 +176,9 @@ pub fn is_detached(id: &str) -> bool {
 
 /// Window `id` opens as its own OS window from now on.
 pub fn detach(id: &str) {
-    with(|s| s.detached.insert(id.to_string()));
+    if with(|s| s.detached.insert(id.to_string())) {
+        tracing::info!("[DOCK] '{id}' is a window of its own from now on");
+    }
     crate::gui::refresh();
 }
 

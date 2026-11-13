@@ -401,6 +401,106 @@ pub fn guests_welcome() -> bool {
     lock(&GUESTS_UNTIL).is_some_and(|until| std::time::Instant::now() < until)
 }
 
+/// Until what time of day guests are welcome ("21:40"), while they are.
+pub fn guests_until() -> Option<String> {
+    let until = (*lock(&GUESTS_UNTIL))?;
+    let left = until.checked_duration_since(std::time::Instant::now())?;
+    Some((chrono::Local::now() + chrono::Duration::from_std(left).ok()?).format("%H:%M").to_string())
+}
+
+// ------------------------------------------------------------------- guests he knows ----
+
+/// A guest Sir introduced by name ("this is my friend Tom, remember his voice").
+#[derive(Clone, Debug, PartialEq)]
+pub struct Guest {
+    pub name: String,
+    pub print: Vec<f32>,
+    pub clips: usize,
+    /// What the guest may ask for: "everything", or "music" (players and volume only).
+    pub may: String,
+}
+
+/// A voice is a known guest's from this likeness to the guest's print.
+pub const GUEST_BAR: f32 = 0.45;
+/// A guest's print is made of this many sentences.
+pub const GUEST_CLIPS: usize = 3;
+
+static GUESTS: Mutex<Option<Vec<Guest>>> = Mutex::new(None);
+
+fn open_guests(db: &str) -> rusqlite::Result<rusqlite::Connection> {
+    let conn = rusqlite::Connection::open(db)?;
+    conn.execute_batch("CREATE TABLE IF NOT EXISTS voice_guests (name TEXT PRIMARY KEY, print BLOB NOT NULL, clips INTEGER NOT NULL, may TEXT NOT NULL, made TEXT NOT NULL);")?;
+    Ok(conn)
+}
+
+/// The guests he knows (read from the database once, then from here).
+pub fn guests(db: &str) -> Vec<Guest> {
+    let mut known = lock(&GUESTS);
+    if known.is_none() {
+        let read = rusqlite::Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .ok()
+            .and_then(|conn| {
+                let mut rows = conn.prepare("SELECT name, print, clips, may FROM voice_guests ORDER BY made").ok()?;
+                let read = rows.query_map([], |r| Ok(Guest { name: r.get(0)?, print: floats(&r.get::<_, Vec<u8>>(1)?), clips: r.get::<_, i64>(2)? as usize, may: r.get(3)? })).ok()?;
+                Some(read.flatten().collect::<Vec<Guest>>())
+            })
+            .unwrap_or_default();
+        *known = Some(read);
+    }
+    known.clone().unwrap_or_default()
+}
+
+/// Keeps a guest (a guest of that name is replaced). `keep`: in the database too.
+pub fn keep_guest(db: &str, guest: &Guest, keep: bool) -> Result<(), String> {
+    if keep {
+        let conn = open_guests(db).map_err(|e| e.to_string())?;
+        conn.execute(
+            "INSERT INTO voice_guests (name, print, clips, may, made) VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT(name) DO UPDATE SET print = ?2, clips = ?3, may = ?4",
+            rusqlite::params![guest.name, bytes(&guest.print), guest.clips as i64, guest.may, chrono::Utc::now().to_rfc3339()],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    let mut all = guests(db);
+    all.retain(|g| !g.name.eq_ignore_ascii_case(&guest.name));
+    all.push(guest.clone());
+    *lock(&GUESTS) = Some(all);
+    Ok(())
+}
+
+/// Forgets a guest; whether there was one of that name.
+pub fn forget_guest(db: &str, name: &str, keep: bool) -> bool {
+    let mut all = guests(db);
+    let before = all.len();
+    all.retain(|g| !g.name.eq_ignore_ascii_case(name));
+    let gone = all.len() != before;
+    *lock(&GUESTS) = Some(all);
+    if gone && keep {
+        if let Ok(conn) = open_guests(db) {
+            let _ = conn.execute("DELETE FROM voice_guests WHERE lower(name) = lower(?1)", [name]);
+        }
+    }
+    gone
+}
+
+/// The known guest whose voice a clip's print is, and how alike they are.
+pub fn guest_of(db: &str, clip: &[f32]) -> Option<(Guest, f32)> {
+    guests(db).into_iter().map(|g| { let score = likeness(clip, &g.print); (g, score) }).filter(|(_, score)| *score >= GUEST_BAR).max_by(|a, b| a.1.total_cmp(&b.1))
+}
+
+/// A guest's print from the sentences he or she said for it: their mean.
+pub fn guest_print(name: &str, clips: &[Vec<f32>]) -> Option<Guest> {
+    if clips.len() < GUEST_CLIPS || clips.iter().any(|c| c.len() != clips[0].len() || c.is_empty()) {
+        return None;
+    }
+    let mut mean = vec![0.0f32; clips[0].len()];
+    for clip in clips {
+        for (m, v) in mean.iter_mut().zip(clip) {
+            *m += v;
+        }
+    }
+    Some(Guest { name: name.to_string(), print: normalised(mean), clips: clips.len(), may: "everything".to_string() })
+}
+
 // ------------------------------------------------------------ a print without a set-up ----
 
 /// The prints of the orders given to him by name while no print is known.
@@ -517,6 +617,17 @@ pub fn keep(db: &str, print: &VoicePrint) -> Result<(), String> {
     conn.execute("DELETE FROM voice_grown", []).map_err(|e| e.to_string())?;
     *lock(&KNOWN) = Some(Some(VoicePrint { grown: Vec::new(), grown_clips: 0, own: 0.0, ..print.clone() }));
     *lock(&LAST_SURE) = None;
+    Ok(())
+}
+
+/// Forgets Sir's voice: the print of the set-up and what grew from it (the privacy board).
+pub fn forget(db: &str) -> Result<(), String> {
+    let conn = open(db).map_err(|e| e.to_string())?;
+    conn.execute_batch("DELETE FROM voice_print; DELETE FROM voice_grown;").map_err(|e| e.to_string())?;
+    *lock(&KNOWN) = Some(None);
+    *lock(&LAST_SURE) = None;
+    lock(&GATHERED).clear();
+    tracing::info!("[VOICE] Sir's voice print is forgotten on his word");
     Ok(())
 }
 
@@ -685,6 +796,40 @@ mod tests {
         // Two voices by turns agree on nothing.
         let mixed: Vec<Vec<f32>> = (0..8).map(|k| if k % 2 == 0 { his(k) } else { other.clone() }).collect();
         assert!(agreed(&mixed).is_none());
+    }
+
+    #[test]
+    fn a_guest_is_known_by_name_and_forgotten_on_sirs_word() {
+        let dir = std::env::temp_dir().join(format!("jai-voice-guests-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let db = dir.join("guests.db").to_string_lossy().to_string();
+        *lock(&GUESTS) = None;
+        assert!(guests(&db).is_empty());
+        let said = |k: usize| unit(vec![0.1, 1.0, 0.05 * k as f32, 0.0]);
+        assert!(guest_print("Tom", &[said(0), said(1)]).is_none(), "two sentences are too few");
+        let tom = guest_print("Tom", &[said(0), said(1), said(2)]).expect("three make a print");
+        assert_eq!((tom.name.as_str(), tom.clips, tom.may.as_str()), ("Tom", 3, "everything"));
+        keep_guest(&db, &tom, true).unwrap();
+        keep_guest(&db, &Guest { may: "music".into(), ..tom.clone() }, true).unwrap();
+        *lock(&GUESTS) = None;
+        let read = guests(&db);
+        assert_eq!(read.len(), 1, "a guest of the same name is replaced");
+        assert_eq!(read[0].may, "music");
+        // His voice is his; another is nobody's.
+        let (who, score) = guest_of(&db, &said(1)).expect("Tom's voice");
+        assert!(who.name == "Tom" && score > 0.9);
+        assert!(guest_of(&db, &unit(vec![1.0, 0.0, 0.0, 0.3])).is_none());
+        assert!(forget_guest(&db, "tom", true) && !forget_guest(&db, "tom", true));
+        *lock(&GUESTS) = None;
+        assert!(guests(&db).is_empty());
+        *lock(&GUESTS) = None;
+        let _ = std::fs::remove_dir_all(&dir);
+        // Until when guests are welcome is a time of day while they are.
+        end_guests();
+        assert_eq!(guests_until(), None);
+        welcome_guests(std::time::Duration::from_secs(600));
+        assert!(guests_until().is_some_and(|t| t.len() == 5 && t.contains(':')));
+        end_guests();
     }
 
     #[test]

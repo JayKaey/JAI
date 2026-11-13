@@ -288,6 +288,9 @@ pub struct InterfaceSettings {
     /// The voice lock: a spoken order is carried out only in Sir's own voice (after the voice
     /// set-up; push-to-talk and the keyboard are his hands and always work).
     pub voice_lock: bool,
+    /// The dashboard on an upright monitor (`desktop_backdrop` draws it there, behind his
+    /// windows): "portrait dashboard".
+    pub portrait_dashboard: bool,
     /// Name shown in the header.
     pub title: String,
     /// Minimal zen mode: no sidebars, widgets or pills — only the 3D orb and a clean chat.
@@ -370,6 +373,7 @@ impl Default for InterfaceSettings {
             desktop_background: false,
             // (On: he answers to Sir alone once Sir's voice is known, unless told otherwise.)
             voice_lock: true,
+            portrait_dashboard: false,
             title: DEFAULT_TITLE.to_string(),
             // The clean two-zone studio layout: the orb and the conversation; every technical
             // panel lives in the Settings drawer.

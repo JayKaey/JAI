@@ -1460,6 +1460,59 @@ impl Jai {
         };
         let his_voice = judged.is_some_and(|j| j.sure);
         let (jai_focused, gaming) = foreground_context().await;
+        // A guest Sir has just introduced is saying the sentences his or her print is made of.
+        if !scripted && crate::kit_voice::guest_learning() && !his_voice {
+            if let Some(Ok(clip)) = &voice {
+                match crate::kit_voice::guest_heard(clip.clone(), speech_ms) {
+                    Ok(guest) => {
+                        let line = match crate::speaker_id::keep_guest(&db, &guest, true) {
+                            Ok(()) => {
+                                info!("[VOICE] A guest's voice is known now: {} ({} sentences)", guest.name, guest.clips);
+                                format!("Thank you, {0}. I know your voice now. Sir, say \"{0} may only control the music\" if that is all {0} should do.", guest.name)
+                            }
+                            Err(e) => format!("I could not keep {}'s voice, Sir: {e}", guest.name),
+                        };
+                        self.speak_standalone(&line, true, Trigger::Input(InputSource::Voice));
+                    }
+                    Err(left) => {
+                        info!("[VOICE] A guest's sentence is taken; {left} more wanted");
+                        crate::hud_notify::record(&format!("Heard. {left} more sentence{} in that voice, please.", if left == 1 { "" } else { "s" }), false);
+                    }
+                }
+                crate::hud_lines::speech_over();
+                self.rest_state();
+                return;
+            }
+        }
+        // Dictation: what Sir says is typed into the app in front, not taken as an order. (In
+        // his own voice only, when the lock holds.)
+        if crate::kit_typing::dictating() && (!lock_on || judged.is_none_or(|j| j.his)) {
+            crate::hud_lines::speech_over();
+            match crate::kit_typing::dictate(&transcript.text, jai_focused).await {
+                Ok(shown) if !crate::kit_typing::dictating() => {
+                    self.emit(HudEvent::Transcript { text: transcript.text.clone(), language: transcript.language.clone(), source: "dictation".into(), wake_word: None, stt_ms: transcript.stt_ms, audio_ms: transcript.audio_ms });
+                    self.speak_standalone(&format!("{shown}, Sir."), true, Trigger::Input(InputSource::Voice));
+                    return;
+                }
+                Ok(shown) => {
+                    crate::hud_lines::settled(&shown);
+                    self.emit(HudEvent::Transcript { text: shown, language: transcript.language.clone(), source: "dictation".into(), wake_word: None, stt_ms: transcript.stt_ms, audio_ms: transcript.audio_ms });
+                }
+                Err(why) => {
+                    warn!("[DICTATION] Not typed: {why}");
+                    self.emit(HudEvent::Error { message: why });
+                }
+            }
+            self.rest_state();
+            return;
+        }
+        // The pronunciation coach: what Sir says is the sentence on the board, read to him.
+        if crate::kit_voice::coach_active() && crate::kit_voice::coach_heard(&transcript.text) {
+            crate::hud_lines::speech_over();
+            crate::hud_lines::settled(&transcript.text);
+            self.rest_state();
+            return;
+        }
         // His ear for Sir's words (`ear`): what he has learnt to take them for, what sounds
         // like a name where a name belongs, and for words spoken to him that lead nowhere, a
         // second and careful hearing of the clip.
@@ -1593,7 +1646,25 @@ impl Jai {
         // The voice lock: a spoken order is carried out only in Sir's own voice. (Push-to-talk
         // and the keyboard are his hands; a voice that cannot be judged is let through and
         // logged, so a fault of the lock never locks Sir out.)
-        if lock_on {
+        // (Whose voice it was, for "who is speaking?".)
+        let guest = match (&judged, &voice) {
+            (Some(j), Some(Ok(clip))) if !j.his => crate::speaker_id::guest_of(&db, clip),
+            _ => None,
+        };
+        crate::kit_voice::note_speaker(match (&judged, &guest) {
+            (Some(j), _) if j.his => "you",
+            (_, Some((guest, _))) => guest.name.as_str(),
+            (Some(_), None) => "a voice I do not know",
+            (None, _) => "someone whose voice I could not judge",
+        });
+        // A guest Sir introduced may speak: everything, or the music and the volume only.
+        let guest_may = guest.as_ref().is_some_and(|(guest, score)| {
+            let order = if wake.matched { wake.command.as_str() } else { transcript.text.as_str() };
+            let may = guest.may != "music" || crate::kit_voice::music_order(order);
+            info!("[VOICE LOCK] {}'s voice (likeness {score:.2}), a guest who may {}: '{order}' is {}", guest.name, if guest.may == "music" { "control the music" } else { "ask for everything" }, if may { "carried out" } else { "not carried out" });
+            may
+        });
+        if lock_on && !guest_may {
             match (&judged, &voice) {
                 (Some(j), _) if !j.his => {
                     info!("[VOICE LOCK] Not Sir's voice (likeness {:.2}, his from {:.2}): '{}' is not carried out", j.score, j.bar, transcript.text);

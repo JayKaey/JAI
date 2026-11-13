@@ -4495,6 +4495,11 @@ pub fn parse(text: &str) -> Option<Intent> {
     }
     let tool = |name: &'static str, args: Value| Some(Intent::Tool { name, args });
     let media = |action: &str| json!({ "action": action });
+    // The kit of 2026-11-13 (dictation, the notebook, rules, monitor brightness, the changes
+    // list …): each asked for in its own words, before a general rule takes a word of theirs.
+    if let Some((name, args)) = crate::kit::command(&s, text) {
+        return tool(name, args);
+    }
 
     if STOP.is_match(&s) {
         return Some(Intent::Stop);

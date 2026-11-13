@@ -629,6 +629,42 @@ pub fn send_chord(modifiers: &[VIRTUAL_KEY], key: VIRTUAL_KEY) -> Result<(), Str
     }
 }
 
+/// Types `text` into whatever has the keyboard focus, as Unicode key strokes (a line break is
+/// the Enter key): the letters arrive whatever keyboard layout is set. How many characters
+/// went out. Synchronous: on the Win32 worker. A test and a scripted session type nothing.
+pub fn type_text(text: &str) -> Result<usize, String> {
+    use windows::Win32::UI::Input::KeyboardAndMouse::KEYEVENTF_UNICODE;
+    if crate::platform::hands_off() {
+        return Err("A test session types into nothing.".into());
+    }
+    let mut sent = 0usize;
+    for c in text.chars() {
+        match c {
+            '\r' => continue,
+            '\n' => send_chord(&[], VK_RETURN)?,
+            _ => {
+                let mut units = [0u16; 2];
+                for unit in c.encode_utf16(&mut units) {
+                    let inputs = [KEYEVENTF_UNICODE, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP].map(|flags| INPUT {
+                        r#type: INPUT_KEYBOARD,
+                        Anonymous: INPUT_0 { ki: KEYBDINPUT { wVk: VIRTUAL_KEY(0), wScan: *unit, dwFlags: flags, time: 0, dwExtraInfo: 0 } },
+                    });
+                    // SAFETY: a valid INPUT array with matching element size.
+                    if unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) } != inputs.len() as u32 {
+                        return Err("Windows did not take the key strokes (is a window with higher rights in front?)".into());
+                    }
+                }
+            }
+        }
+        sent += 1;
+        // (A breath now and then: some apps drop letters that arrive in one burst.)
+        if sent % 24 == 0 {
+            std::thread::sleep(std::time::Duration::from_millis(4));
+        }
+    }
+    Ok(sent)
+}
+
 /// The window in front right now: its process name and whether it belongs to JAI himself
 /// (the addressee detector: his HUD in front means Sir is talking to him).
 pub fn foreground_info() -> Option<(String, bool)> {

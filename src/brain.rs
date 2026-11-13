@@ -1025,6 +1025,17 @@ impl Brain {
         }
         // The window Sir was working in before he spoke or typed ("full screen" may mean it).
         self.inner.tools.focus.capture_foreground().await;
+        // "Explain this", "translate this", "summarise this": about the text Sir has selected
+        // there. The request goes to the model with that text, past the fast path (the
+        // selection's own words are no orders); with nothing selected he says so.
+        let (text, about_selection, nothing_selected) = match (!crate::live_self_tester::dry()).then(|| crate::kit_voice::selection_ask(&crate::ear::words(&text).join(" "))).flatten() {
+            Some(_) => match crate::kit_voice::about_selection(&self.inner.tools, &text).await {
+                Some(Ok(request)) => (request, true, None),
+                Some(Err(why)) => (text, false, Some(why)),
+                None => (text, false, None),
+            },
+            None => (text, false, None),
+        };
         // The people and topics he names become the working memory's active ones.
         if !dry {
             self.inner.tools.stark.graph.note_turn(&text, &self.inner.tools.stark.contacts);
@@ -1078,7 +1089,7 @@ impl Brain {
         // clause a command of its own. Planned before any single parser takes the sentence for
         // its first clause. (Privacy clauses are the dispatcher's; it sends the rest.)
         let compound: Option<Vec<crate::compound_planner::Call>> = crate::compound_planner::plan(&text, &crate::intent_engine::ReflexContext::live())
-            .filter(|plan| plan.privacy.is_none() && plan.calls.len() >= 2)
+            .filter(|plan| plan.privacy.is_none() && plan.calls.len() >= 2 && !about_selection)
             .map(|plan| plan.calls);
         // Integration questions go to their tool deterministically ("what classes do I have
         // tomorrow", "any new emails", "yes" to "shall I check your timetable?").
@@ -1088,7 +1099,11 @@ impl Brain {
         // says it over him (the dispatcher already silenced him and paused every player).
         let silent = intents::silent_quick_command(&text);
         crate::core_sphere_3d::CoreActivityBus::chain(&["intents.rs", "intent_engine.rs", "brain.rs"]);
-        let fast_intent = if compound.is_some() {
+        let fast_intent = if let Some(why) = &nothing_selected {
+            Some(Intent::Answer(why.clone()))
+        } else if about_selection {
+            None
+        } else if compound.is_some() {
             self.inner.tools.focus.clear_offer();
             None
         } else if let Some(action) = crate::intent_engine::deterministic_action(&text) {
@@ -3995,6 +4010,7 @@ fn speaks_for_itself(tool: &str) -> bool {
         || crate::webcams::is_tool(tool)
         || crate::street_view::is_tool(tool)
         || crate::model3d::is_tool(tool)
+        || crate::kit::is_tool(tool)
 }
 
 fn first_sentence(s: &str) -> String {

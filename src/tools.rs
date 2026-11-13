@@ -248,6 +248,9 @@ pub fn stays_inside(name: &str, args: &Value) -> bool {
     if crate::hyper_cortex::is_read_only(name, args) {
         return true;
     }
+    if crate::kit::is_tool(name) {
+        return crate::kit::stays_inside(name, args);
+    }
     let action = args["action"].as_str().unwrap_or("");
     match name {
         "configure_interface" | "control_jai_interface" | "control_gui_aspect" | "customize_hud_and_windows" | "control_orb_mode" | "spawn_native_window" | "update_native_window"
@@ -288,6 +291,7 @@ pub fn only_looks(name: &str, args: &Value) -> bool {
     crate::hyper_cortex::is_read_only(name, args)
         || BY_NAME.iter().any(|prefix| name.starts_with(prefix))
         || LOOKING.contains(&name)
+        || crate::kit::only_looks(name, args)
         // ("Are you there?" wakes the board: that is the answer.)
         || (name == "hud_board" && args["action"] == "wake")
         || args["action"].as_str().is_some_and(|action| READ_ACTIONS.iter().any(|read| action == *read || action.strip_prefix(read).is_some_and(|rest| rest.starts_with('_'))))
@@ -601,6 +605,7 @@ impl ToolContext {
             name if crate::discord_bot::is_tool(name) => Box::pin(crate::discord_bot::run_tool(self, &args)).await,
             name if crate::away_mode::is_tool(name) => Box::pin(crate::away_mode::run_tool(self, &args)).await,
             name if crate::watch_and_tell::is_tool(name) => Box::pin(crate::watch_and_tell::run_tool(self, &args)).await,
+            name if crate::kit::is_tool(name) => Box::pin(crate::kit::run_tool(self, name, &args)).await,
             name if crate::shadow_memory::is_tool(name) => Box::pin(crate::shadow_memory::run_tool(self, &args)).await,
             name if crate::aegis_server_deck::is_tool(name) => Box::pin(crate::aegis_server_deck::run_tool(self, &args)).await,
             name if crate::llm_reboot::is_tool(name) => crate::llm_reboot::run_tool().await,

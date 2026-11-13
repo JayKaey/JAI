@@ -132,7 +132,8 @@ pub fn way_back(tool: &str, args: &Value, said: &str, before: &Snapshot, after: 
     }
     // What the window shows but the settings do not hold.
     if tool == "configure_interface" {
-        for key in ["core_view", "feature_lab", "theme_studio", "mixer_view", "text_console"] {
+        // (And the requests of the moment: tonight's night mode, subtitles, lyrics, guests.)
+        for key in ["core_view", "feature_lab", "theme_studio", "mixer_view", "text_console", "night_now", "subtitles", "lyrics", "voice_guest"] {
             if let Some(on) = args.get(key).and_then(Value::as_bool) {
                 step.calls.push(("configure_interface", json!({ key: !on })));
                 if step.done.is_empty() {
@@ -166,6 +167,33 @@ pub fn way_back(tool: &str, args: &Value, said: &str, before: &Snapshot, after: 
         ("hud_board", "close" | "close_board" | "clear" | "clear_view" | "clear_board") if said.contains("Board closed") || said.contains("and the board") => {
             step.calls.push(("hud_board", json!({ "action": "restore" })));
             step.done = "the board is back";
+        }
+        // The kit (2026-11-13): what it changed is taken back by its own tools.
+        ("monitor_brightness", "set" | "step") => {
+            step.calls.push(("monitor_brightness", json!({ "action": "back" })));
+            step.done = "the monitors are as bright as they were";
+        }
+        ("notebook", "add") => {
+            step.calls.push(("notebook", json!({ "action": "delete_last" })));
+            step.done = "that note is gone";
+        }
+        ("sleep_timer", "set") => {
+            step.calls.push(("sleep_timer", json!({ "action": "cancel" })));
+            step.done = "the sleep timer is off";
+        }
+        ("whenever_rule", "add") => {
+            step.calls.push(("whenever_rule", json!({ "action": "remove", "last": true })));
+            step.done = "that rule is gone";
+        }
+        ("take_dictation", "start") => {
+            step.calls.push(("take_dictation", json!({ "action": "stop" })));
+            step.done = "dictation is off";
+        }
+        ("type_snippet", "save") => {
+            if let Some(name) = args["name"].as_str().filter(|n| !n.is_empty()) {
+                step.calls.push(("type_snippet", json!({ "action": "delete", "name": name })));
+                step.done = "that snippet is forgotten again";
+            }
         }
         // A fact he stored or corrected (2026-11-08: "Call me Earth." became the user_title).
         ("remember_fact", _) => {
@@ -402,6 +430,25 @@ fn listed(items: &[&str]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What the kit changes has its way back, and so have the requests of the moment.
+    #[test]
+    fn the_kits_changes_and_the_requests_of_the_moment_are_taken_back() {
+        let s = snapshot();
+        let back = |tool: &str, args: Value| way_back(tool, &args, "", &s, &s).map(|step| (step.calls, step.done));
+        assert_eq!(back("monitor_brightness", json!({"action": "set", "level": 40})), Some((vec![("monitor_brightness", json!({"action": "back"}))], "the monitors are as bright as they were")));
+        assert_eq!(back("notebook", json!({"action": "add", "text": "x"})), Some((vec![("notebook", json!({"action": "delete_last"}))], "that note is gone")));
+        assert_eq!(back("sleep_timer", json!({"action": "set", "minutes": 30})), Some((vec![("sleep_timer", json!({"action": "cancel"}))], "the sleep timer is off")));
+        assert_eq!(back("whenever_rule", json!({"action": "add"})), Some((vec![("whenever_rule", json!({"action": "remove", "last": true}))], "that rule is gone")));
+        assert_eq!(back("type_snippet", json!({"action": "save", "name": "address"})).map(|(calls, _)| calls), Some(vec![("type_snippet", json!({"action": "delete", "name": "address"}))]));
+        // Looking takes nothing back, nor does typing.
+        assert_eq!(back("notebook", json!({"action": "show"})), None);
+        assert_eq!(back("monitor_brightness", json!({"action": "status"})), None);
+        assert_eq!(back("type_snippet", json!({"action": "type", "name": "address"})), None);
+        // Guest mode and tonight's night mode are requests of the moment.
+        assert_eq!(back("configure_interface", json!({"voice_guest": true})).map(|(calls, _)| calls), Some(vec![("configure_interface", json!({"voice_guest": false}))]));
+        assert_eq!(back("configure_interface", json!({"night_now": false})).map(|(calls, _)| calls), Some(vec![("configure_interface", json!({"night_now": true}))]));
+    }
 
     fn snapshot() -> Snapshot {
         Snapshot { interface: InterfaceSettings::default(), windows: Vec::new(), widgets: Vec::new(), volume_changes: 0, volume_undoable: false }

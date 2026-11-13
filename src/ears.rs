@@ -573,8 +573,12 @@ mod addressee_tests {
         assert_eq!(classify_addressee("Yes, please.", &open), Addressee::Conversation, "an answer to JAI's question");
         assert_eq!(classify_addressee("Yes, please.", &gaming), Addressee::Chatter, "no open question: banter");
         assert!(is_game_or_voice_chat("Discord.exe") && is_game_or_voice_chat("javaw") && !is_game_or_voice_chat("Code"));
-        // "Close" from a Discord friend never hides JAI; said to him it does.
-        assert_eq!(classify_addressee("Close", &gaming), Addressee::Chatter);
+        // "Close" from a Discord friend never hides JAI; said to him it does. (With nothing of
+        // his up: a block another test has on the board makes a bare "close" an order for it.)
+        let (_dock, _board) = (crate::hud_dock::test_lock(), crate::hud_board::test_lock());
+        if !crate::hud_board::is_active() && crate::hud_dock::open_blocks().is_empty() {
+            assert_eq!(classify_addressee("Close", &gaming), Addressee::Chatter);
+        }
         let hands_free = AddresseeContext { wake_required: false, ..ctx() };
         assert_eq!(classify_addressee("Minimize", &hands_free), Addressee::Unaddressed);
         assert_eq!(classify_addressee("Close", &AddresseeContext { wake_word: true, ..ctx() }), Addressee::WakeWord);
