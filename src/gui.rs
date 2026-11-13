@@ -8496,6 +8496,32 @@ mod tests {
         gallery("gallery_subtitles", vec2(1000.0, 110.0), 2, |ctx| crate::live_subtitles::paint_bar(ctx, &lines, None));
     }
 
+    /// The kit's blocks as they stand on the board: the changes list and the coach, then the
+    /// privacy board, the hearing log and an explanation (pictures for the eye, and the checks
+    /// every block is held to).
+    #[test]
+    fn gallery_kit() {
+        let _g = crate::hud_dock::test_lock();
+        let _k = crate::kit::test_lock();
+        crate::changes::open(true);
+        let _ = crate::kit_voice::coach(&serde_json::json!({"action": "start"}));
+        crate::kit_voice::coach_heard("They open this card.");
+        gallery("gallery_kit_changes_coach", vec2(1920.0, 1080.0), 10, |ctx| {
+            crate::hud_dock::begin_frame();
+            crate::kit::show(ctx);
+        });
+        crate::changes::open(false);
+        let _ = crate::kit_voice::coach(&serde_json::json!({"action": "stop"}));
+        crate::kit_insight::open_for_picture(true);
+        let _ = crate::kit_voice::hearing(&serde_json::json!({"action": "show"}));
+        gallery("gallery_kit_privacy_hearing", vec2(1920.0, 1080.0), 10, |ctx| {
+            crate::hud_dock::begin_frame();
+            crate::kit::show(ctx);
+        });
+        crate::kit_insight::open_for_picture(false);
+        crate::hud_dock::forget(crate::kit_voice::HEARING);
+    }
+
     #[test]
     fn gallery_voice_setup() {
         let _g = crate::hud_dock::test_lock();

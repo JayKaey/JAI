@@ -370,6 +370,18 @@ pub fn privacy(ctx: &ToolContext, args: &Value) -> Result<String, String> {
     Ok(say(text, "Everything I keep about you is on the board, Sir, each with a key to delete it. None of it leaves this PC."))
 }
 
+/// The board as it stands with nothing kept yet, for a picture of it (the gallery test).
+#[cfg(test)]
+pub(crate) fn open_for_picture(open: bool) {
+    let rows = if open { gather("no-such.db", "no-such.log") } else { Vec::new() };
+    let mut ui = lock(&PRIVACY_UI);
+    (ui.open, ui.rows, ui.asked) = (open, rows, None);
+    if !open {
+        drop(ui);
+        crate::hud_dock::forget(PRIVACY);
+    }
+}
+
 /// The database and the log, for the board's own keys.
 static PATHS: Mutex<Option<(String, String)>> = Mutex::new(None);
 /// A delete key asks "sure?" for this long.
@@ -392,7 +404,10 @@ fn privacy_block(ctx: &egui::Context) {
         egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
             for row in &rows {
                 ui.horizontal(|ui| {
-                    ui.add_sized([190.0, 20.0], egui::Label::new(RichText::new(row.what).color(ink).size(14.0)).halign(egui::Align::LEFT));
+                    // (A column of its own width, its words at the left edge.)
+                    ui.allocate_ui_with_layout(egui::vec2(196.0, 20.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        ui.add(egui::Label::new(RichText::new(row.what).color(ink).size(14.0)).truncate());
+                    });
                     if let Some(key) = row.delete {
                         let sure = asked.is_some_and(|(k, _)| k == key);
                         let label = if sure { "[ SURE? ]" } else { "[ DELETE ]" };
