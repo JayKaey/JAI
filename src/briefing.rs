@@ -59,8 +59,8 @@ fn ordinal(day: u32) -> String {
     format!("{day}{suffix}")
 }
 
-fn reminders_on(items: &[Reminder], day: NaiveDate) -> Option<String> {
-    let todays: Vec<&Reminder> = items.iter().filter(|r| r.due().date_naive() == day).collect();
+fn reminders_on(items: &[Reminder], day: NaiveDate, now: chrono::DateTime<Local>) -> Option<String> {
+    let todays: Vec<&Reminder> = items.iter().filter(|r| r.due().date_naive() == day && r.due() > now).collect();
     if todays.is_empty() {
         return None;
     }
@@ -124,9 +124,49 @@ fn spoken_clock(t: chrono::NaiveTime) -> String {
     }
 }
 
-fn school_lines(lessons: &[Lesson], day_word: &str) -> (String, Vec<String>) {
+/// The lessons a briefing tells of: the ones still ahead.
+#[derive(Debug, Clone, PartialEq)]
+struct Ahead {
+    /// The day they are on: the briefing's own, or the next one that has lessons.
+    day: NaiveDate,
+    lessons: Vec<Lesson>,
+    /// How many of that day's are over already (and so left out).
+    over: usize,
+}
+
+/// What is still ahead of `now` among `all` (the briefing's `day` and the days after it): that
+/// day's lessons that have not ended; and when none of today's is left, the next day's that has
+/// any. (Sir, 2026-11-13, at 14:49 before a list of the morning's lessons: "only tell me about
+/// classes that are in the future, not about classes that I already had".)
+fn lessons_ahead(all: &[Lesson], day: NaiveDate, now: chrono::NaiveDateTime) -> Ahead {
+    let mut sorted: Vec<&Lesson> = all.iter().filter(|l| l.date >= day).collect();
+    sorted.sort_by_key(|l| (l.date, l.start));
+    let on_day: Vec<&Lesson> = sorted.iter().copied().filter(|l| l.date == day).collect();
+    let left: Vec<Lesson> = on_day.iter().copied().filter(|l| l.date > now.date() || l.end > now.time()).cloned().collect();
+    if !left.is_empty() || day != now.date() {
+        return Ahead { day, over: on_day.len() - left.len(), lessons: left };
+    }
+    match sorted.iter().copied().find(|l| l.date > day) {
+        Some(next) => Ahead { day: next.date, lessons: sorted.iter().copied().filter(|l| l.date == next.date).cloned().collect(), over: 0 },
+        None => Ahead { day, lessons: Vec::new(), over: on_day.len() },
+    }
+}
+
+/// A day as a briefing says it and as a card heads it: ("today", "today"), ("on Monday",
+/// "Monday").
+fn day_words(day: NaiveDate, today: NaiveDate) -> (String, String) {
+    let word = crate::pim::spoken_day(day, today);
+    if day == today || day == today + ChronoDuration::days(1) {
+        (word.clone(), word)
+    } else {
+        (format!("on {word}"), word)
+    }
+}
+
+/// (`some_over`: part of the day's lessons are behind him and left out.)
+fn school_lines(lessons: &[Lesson], day_word: &str, some_over: bool) -> (String, Vec<String>) {
     if lessons.is_empty() {
-        return (format!("No lessons {day_word} on WebUntis."), vec!["No lessons.".into()]);
+        return if some_over { (format!("No more lessons {day_word}."), vec![format!("No more lessons {day_word}.")]) } else { (format!("No lessons {day_word} on WebUntis."), vec!["No lessons.".into()]) };
     }
     let changes: Vec<String> = lessons
         .iter()
@@ -142,7 +182,15 @@ fn school_lines(lessons: &[Lesson], day_word: &str) -> (String, Vec<String>) {
         })
         .collect();
     let first = &lessons[0];
-    let spoken = if changes.is_empty() {
+    let spoken = if changes.is_empty() && some_over {
+        format!(
+            "Still ahead {day_word}: {} lesson{}, the next at {} with {}.",
+            lessons.len(),
+            if lessons.len() == 1 { "" } else { "s" },
+            spoken_clock(first.start),
+            first.subject_name()
+        )
+    } else if changes.is_empty() {
         format!(
             "Your timetable {day_word} runs as planned: {} lesson{}, starting at {} with {}.",
             lessons.len(),
@@ -161,7 +209,7 @@ fn lms_lines(updates: &[CourseUpdate], day: NaiveDate) -> (Option<String>, Vec<S
     let fresh: Vec<&CourseUpdate> = updates.iter().filter(|u| u.kind != "assignment" && u.when.is_some_and(|w| now - w < ChronoDuration::hours(36))).collect();
     let due: Vec<&CourseUpdate> = updates
         .iter()
-        .filter(|u| u.due.is_some_and(|d| d.date() >= day && d.date() <= day + ChronoDuration::days(3)))
+        .filter(|u| u.due.is_some_and(|d| d > now && d.date() <= day + ChronoDuration::days(3)))
         .collect();
     let mut details: Vec<String> = fresh.iter().take(6).map(|u| u.line()).collect();
     details.extend(due.iter().map(|u| u.line()));
@@ -249,7 +297,9 @@ pub async fn executive(tools: &ToolContext, time_of_day: Option<&str>) -> String
     let place = crate::websearch::home_location().unwrap_or_default();
     let quick = Duration::from_secs(6);
     let (school, lms, (events, cal_note), mail, weather, news) = tokio::join!(
-        async { if school_on { Some(pim.lessons(day, day).await) } else { None } },
+        // (Three days on from today: when today's lessons are over the next school day is what
+        // is told, and a weekend may lie in between.)
+        async { if school_on { Some(pim.lessons(day, if day == now.date_naive() { day + ChronoDuration::days(3) } else { day }).await) } else { None } },
         async { if lms_on { Some(pim.course_updates(None).await) } else { None } },
         pim.schedule(day, day),
         async { if mail_on { Some(pim.unread_mail(3, None).await) } else { None } },
@@ -262,15 +312,17 @@ pub async fn executive(tools: &ToolContext, time_of_day: Option<&str>) -> String
             }
         }
     );
+    // Only what is still ahead: the lessons that have not ended (or the next school day's), the
+    // appointments that are not over.
+    let ahead = school.as_ref().and_then(|r| r.as_ref().ok()).map(|all| lessons_ahead(all, day, now.naive_local()));
+    let appointments = events.len();
+    let events: Vec<_> = events.into_iter().filter(|e| e.all_day || day != now.date_naive() || e.end > now.naive_local()).collect();
     // The same picture on the HUD board: timetable, itslearning deadlines and appointments.
-    let board = board_report(
-        day,
-        day_word,
-        school.as_ref().and_then(|r| r.as_ref().ok()).map(|v| v.as_slice()),
-        lms.as_ref().and_then(|r| r.as_ref().ok()).map(|v| v.as_slice()),
-        &events,
-        now.naive_local(),
-    );
+    let mut board = board_report(day, day_word, None, lms.as_ref().and_then(|r| r.as_ref().ok()).map(|v| v.as_slice()), &events, now.naive_local());
+    if let Some(ahead) = ahead.as_ref().filter(|a| !a.lessons.is_empty() || a.over == 0) {
+        let school_board = board_report(ahead.day, &day_words(ahead.day, now.date_naive()).0, Some(&ahead.lessons), None, &[], now.naive_local());
+        board.blocks.splice(0..0, school_board.blocks);
+    }
 
     let mut spoken = vec![format!("It's {} on {}, the {} of {}.", crate::brain::spoken_time(now), now.format("%A"), ordinal(now.day()), now.format("%B"))];
     if !greeted {
@@ -279,10 +331,12 @@ pub async fn executive(tools: &ToolContext, time_of_day: Option<&str>) -> String
     let mut md = vec![format!("## {} briefing — {}", match when { Period::Morning => "Morning", Period::Afternoon => "Afternoon", Period::Evening => "Evening" }, now.format("%A %-d %B, %H:%M"))];
 
     match school {
-        Some(Ok(lessons)) => {
-            let (line, details) = school_lines(&lessons, day_word);
+        Some(Ok(_)) => {
+            let ahead = ahead.clone().unwrap_or(Ahead { day, lessons: Vec::new(), over: 0 });
+            let (said, headed) = day_words(ahead.day, now.date_naive());
+            let (line, details) = school_lines(&ahead.lessons, &said, ahead.over > 0);
             spoken.push(line);
-            md.push(format!("### School ({day_word})"));
+            md.push(format!("### School ({headed})"));
             md.extend(details.into_iter().map(|d| format!("- {d}")));
         }
         Some(Err(e)) => {
@@ -313,7 +367,10 @@ pub async fn executive(tools: &ToolContext, time_of_day: Option<&str>) -> String
 
     md.push(format!("### Calendar ({day_word})"));
     let timed: Vec<_> = events.iter().filter(|e| !e.all_day).collect();
-    if events.is_empty() {
+    if events.is_empty() && appointments > 0 {
+        spoken.push(format!("Nothing more on your calendar {day_word}."));
+        md.push("- Nothing more scheduled.".into());
+    } else if events.is_empty() {
         spoken.push(format!("Your calendar is clear {day_word}."));
         md.push("- Nothing scheduled.".into());
     } else {
@@ -365,7 +422,7 @@ pub async fn executive(tools: &ToolContext, time_of_day: Option<&str>) -> String
         md.extend(["### Weather".to_string(), format!("- {line}")]);
         spoken.push(line);
     }
-    if let Some(line) = reminders_on(&tools.reminders.list(), day) {
+    if let Some(line) = reminders_on(&tools.reminders.list(), day, now) {
         md.extend(["### Reminders".to_string(), format!("- {line}")]);
         spoken.push(line);
     }
@@ -517,10 +574,59 @@ mod tests {
             status,
             note: String::new(),
         };
-        let (line, details) = school_lines(&[lesson(t(8, 0), "Physik", LessonStatus::Cancelled), lesson(t(9, 50), "Mathe", LessonStatus::Irregular), lesson(t(11, 0), "Englisch", LessonStatus::Regular)], "tomorrow");
+        let (line, details) = school_lines(&[lesson(t(8, 0), "Physik", LessonStatus::Cancelled), lesson(t(9, 50), "Mathe", LessonStatus::Irregular), lesson(t(11, 0), "Englisch", LessonStatus::Regular)], "tomorrow", false);
         assert_eq!(line, "On WebUntis tomorrow: Physik at 8 is cancelled, a free period and Mathe at 9:50 has a substitution in room 101.");
         assert_eq!(details.len(), 3);
-        let (calm, _) = school_lines(&[lesson(t(8, 0), "Physik", LessonStatus::Regular)], "today");
+        let (calm, _) = school_lines(&[lesson(t(8, 0), "Physik", LessonStatus::Regular)], "today", false);
         assert_eq!(calm, "Your timetable today runs as planned: 1 lesson, starting at 8 with Physik.");
+    }
+
+    /// Sir at 14:49 before a list of the morning's lessons: only what is still ahead is told.
+    #[test]
+    fn a_briefing_tells_only_of_the_lessons_still_ahead() {
+        let friday = NaiveDate::from_ymd_opt(2026, 11, 13).unwrap();
+        let monday = friday + ChronoDuration::days(3);
+        let t = |h, m| NaiveTime::from_hms_opt(h, m, 0).unwrap();
+        let lesson = |date, start: NaiveTime, end, subject: &str| Lesson {
+            date,
+            start,
+            end,
+            subject: String::new(),
+            subject_long: subject.into(),
+            teachers: vec![],
+            rooms: vec![],
+            original_rooms: vec![],
+            original_teachers: vec![],
+            status: LessonStatus::Regular,
+            note: String::new(),
+        };
+        // (As WebUntis hands them over: in no particular order.)
+        let all = vec![
+            lesson(monday, t(7, 40), t(9, 15), "Mathe"),
+            lesson(friday, t(12, 10), t(12, 55), "Kunst"),
+            lesson(friday, t(7, 40), t(9, 15), "Physik"),
+            lesson(friday, t(9, 25), t(11, 0), "Deutsch"),
+        ];
+        let names = |a: &Ahead| a.lessons.iter().map(|l| l.subject_long.clone()).collect::<Vec<_>>();
+        // Before school: the whole day, in its order.
+        let early = lessons_ahead(&all, friday, friday.and_time(t(6, 30)));
+        assert_eq!((early.day, names(&early), early.over), (friday, vec!["Physik".to_string(), "Deutsch".into(), "Kunst".into()], 0));
+        // In the second lesson: that one (it has not ended) and what follows.
+        let midday = lessons_ahead(&all, friday, friday.and_time(t(10, 0)));
+        assert_eq!((midday.day, names(&midday), midday.over), (friday, vec!["Deutsch".to_string(), "Kunst".into()], 1));
+        assert_eq!(school_lines(&midday.lessons, "today", true).0, "Still ahead today: 2 lessons, the next at 9:25 with Deutsch.");
+        // At 14:49 the day is over: Monday's lessons, not the morning's.
+        let after = lessons_ahead(&all, friday, friday.and_time(t(14, 49)));
+        assert_eq!((after.day, names(&after), after.over), (monday, vec!["Mathe".to_string()], 0));
+        assert_eq!(day_words(after.day, friday), ("on Monday".to_string(), "Monday".to_string()));
+        assert_eq!(school_lines(&after.lessons, "on Monday", false).0, "Your timetable on Monday runs as planned: 1 lesson, starting at 7:40 with Mathe.");
+        // Nothing in reach after today's: said in one line, with no list of what is behind him.
+        let last = lessons_ahead(&all[1..], friday, friday.and_time(t(14, 49)));
+        assert_eq!((last.day, last.lessons.len(), last.over), (friday, 0, 3));
+        assert_eq!(school_lines(&last.lessons, "today", true), ("No more lessons today.".to_string(), vec!["No more lessons today.".to_string()]));
+        // The evening's briefing looks at tomorrow as a whole.
+        let evening = lessons_ahead(&all, monday, friday.and_time(t(20, 0)));
+        assert_eq!((evening.day, names(&evening), evening.over), (monday, vec!["Mathe".to_string()], 0));
+        assert_eq!(day_words(friday + ChronoDuration::days(1), friday).0, "tomorrow");
     }
 }
