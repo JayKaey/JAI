@@ -4742,6 +4742,12 @@ pub fn parse(text: &str) -> Option<Intent> {
             if crate::intent_engine::is_own_view(&app) {
                 return Some(Intent::Silent(SilentAction { tool: "hud_board", args: json!({ "action": "close", "target": crate::intent_engine::own_view_name(&app) }), label: "CLOSED".to_string() }));
             }
+            // One of his blocks that is up, by its title or by what Sir calls it, whatever the
+            // words are ("the changes list" is no program's name, so no rule took it and the
+            // language model tidied the interface instead: seen live 2026-11-13).
+            if !MACHINE.contains(&app.as_str()) && !crate::hud_dock::blocks_named(&app).is_empty() {
+                return Some(Intent::Silent(SilentAction { tool: "hud_board", args: json!({ "action": "close", "target": app }), label: "CLOSED".to_string() }));
+            }
             if looks_like_app_name(&app) && !MACHINE.contains(&app.as_str()) {
                 return tool("close_application", json!({ "app_name": app, "force": true }));
             }
@@ -5404,6 +5410,27 @@ mod tests {
             Some(Intent::Tool { name, args }) => Some((name, args)),
             _ => None,
         }
+    }
+
+    #[test]
+    fn the_changes_list_is_closed_by_its_name() {
+        let _dock = crate::hud_dock::test_lock();
+        crate::hud_dock::begin_frame();
+        let at = eframe::egui::Rect::from_min_size(eframe::egui::pos2(40.0, 60.0), eframe::egui::vec2(720.0, 660.0));
+        crate::hud_dock::publish_block("changes", "Changes // what is new, better, fixed", at);
+        crate::hud_dock::begin_frame();
+        // (No program is called "changes list": only the open block makes it an order.)
+        let closes = |said: &str| {
+            let intent = hud_view_command(said).or_else(|| parse(said));
+            matches!(&intent, Some(Intent::Tool { name: "hud_board", args }) | Some(Intent::Silent(SilentAction { tool: "hud_board", args, .. })) if args["action"] == "close")
+                || matches!(&intent, Some(Intent::Tool { name: "close_application", .. }))
+        };
+        assert!(closes("Close the changes list."), "close the changes list");
+        assert!(closes("Close the changes."), "close the changes");
+        crate::hud_dock::forget("changes");
+        crate::hud_dock::begin_frame();
+        crate::hud_dock::begin_frame();
+        assert!(!matches!(parse("Close the changes list."), Some(Intent::Silent(_))), "with no such block up it is no order for the board");
     }
 
     #[test]
