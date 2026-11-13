@@ -396,6 +396,8 @@ impl Way {
                 "text" if self.canon.starts_with("search the page") => as_said(original, ["the word ", "the term ", "das wort ", "dem wort "].iter().find_map(|lead| value.strip_prefix(*lead)).unwrap_or(value.as_str())),
                 "text" => as_said(original, value),
                 "span" => span_in_english(value),
+                // (An app's name as it was said: "7-Zip" keeps its hyphen.)
+                "app" => as_said(original, value).to_lowercase(),
                 "place" => place(value).to_string(),
                 "lang" => language(value).to_string(),
                 _ => counted(value),
@@ -2185,6 +2187,13 @@ fn by_idea() -> Vec<Way> {
 /// fast path's normalised phrase; `original`: the words as they were said. Empty: not one of
 /// them, or a sentence that tells of something instead of asking for it.
 pub fn wordings(s: &str, original: &str) -> Vec<String> {
+    candidates(s, original).into_iter().map(|(wording, _)| wording).collect()
+}
+
+/// The same, each with whether it comes from a way that takes any name for an app or a window
+/// ("fire up X" is "open X"): such a wording adds nothing to a sentence the fast path already
+/// reads that way as it stands ("open 7-Zip" stays "open 7-Zip", hyphen and all).
+pub fn candidates(s: &str, original: &str) -> Vec<(String, bool)> {
     #[cfg(test)]
     if SILENT.with(|silent| silent.get()) {
         return Vec::new();
@@ -2201,7 +2210,7 @@ pub fn wordings(s: &str, original: &str) -> Vec<String> {
     if !(2..=3).contains(&clauses.len()) {
         return Vec::new();
     }
-    let found: Vec<(usize, Vec<String>)> = clauses.iter().enumerate().map(|(i, clause)| (i, of_sentence(&crate::intents::normalize_phrase(clause), clause, false))).filter(|(_, wordings)| !wordings.is_empty()).collect();
+    let found: Vec<(usize, Vec<(String, bool)>)> = clauses.iter().enumerate().map(|(i, clause)| (i, of_sentence(&crate::intents::normalize_phrase(clause), clause, false))).filter(|(_, wordings)| !wordings.is_empty()).collect();
     for (at, wordings) in found.iter().rev() {
         let leads_up = |(i, clause): (usize, &&str)| {
             i == *at || found.iter().any(|(j, other)| *j == i && other.first() == wordings.first()) || clause.split_whitespace().count() <= 3 || !crate::ears::direct_intent(clause)
@@ -2214,7 +2223,7 @@ pub fn wordings(s: &str, original: &str) -> Vec<String> {
 }
 
 /// The wordings for one sentence (`whole`) or one clause of it.
-fn of_sentence(s: &str, original: &str, whole: bool) -> Vec<String> {
+fn of_sentence(s: &str, original: &str, whole: bool) -> Vec<(String, bool)> {
     // ("No more voice clips": the fast path's phrase drops a "no" in front, which here is half
     // of what is said.)
     let kept = if original.trim().to_lowercase().starts_with("no more ") && !s.starts_with("no ") { format!("no {s}") } else { s.to_string() };
@@ -2224,14 +2233,14 @@ fn of_sentence(s: &str, original: &str, whole: bool) -> Vec<String> {
     }
     let (people, world) = (PEOPLE.is_match(&sentence), WORLD.is_match(&sentence));
     let shapes = variants(&sentence);
-    let mut found: Vec<String> = Vec::new();
+    let mut found: Vec<(String, bool)> = Vec::new();
     for way in WAYS.iter() {
         if (people && !way.people) || (world && !way.asks) || (way.any && !whole) || way.when.is_some_and(|holds| !holds() && !assumed()) {
             continue;
         }
         if let Some(wording) = shapes.iter().find_map(|shape| way.wording(shape, original)) {
-            if !found.contains(&wording) {
-                found.push(wording);
+            if !found.iter().any(|(known, _)| *known == wording) {
+                found.push((wording, way.any));
                 if found.len() == 4 {
                     break;
                 }
@@ -2243,7 +2252,7 @@ fn of_sentence(s: &str, original: &str, whole: bool) -> Vec<String> {
     // closed" is "close spotify". The fast path may read those as they stand.
     if whole && !people && !world {
         let minded = kept.starts_with("mind ") || kept.contains(" mind ");
-        found.extend(shapes.iter().skip(if minded { 0 } else { 1 }).filter(|shape| !shape.starts_with("give me ") && shape.as_str() != s).take(3).cloned());
+        found.extend(shapes.iter().skip(if minded { 0 } else { 1 }).filter(|shape| !shape.starts_with("give me ") && shape.as_str() != s).take(3).map(|shape| (shape.clone(), true)));
     }
     found
 }
@@ -2416,6 +2425,19 @@ mod tests {
         ] {
             assert_eq!(first(said).as_deref(), Some(wording), "{said}");
         }
+    }
+
+    /// "Open Spotify" was understood before, if only by the rule that takes any name for an
+    /// app: it stays exactly what it was. What that rule did not know is added.
+    #[test]
+    fn an_app_asked_for_in_the_old_words_is_left_as_it_was() {
+        let _dock = crate::hud_dock::test_lock();
+        let _kit = crate::kit::test_lock();
+        for said in ["Open Spotify.", "Close Spotify.", "open 7-Zip", "switch to Spotify"] {
+            assert_eq!(taken(said), None, "{said}");
+        }
+        assert_eq!(taken("get 7-Zip running").as_deref(), Some("open 7-zip"));
+        assert_eq!(taken("I want Spotify closed").as_deref(), Some("close spotify"));
     }
 
     #[test]

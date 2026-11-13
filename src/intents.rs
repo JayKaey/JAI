@@ -4506,6 +4506,17 @@ pub fn takes_any_name(intent: &Intent) -> bool {
     }
 }
 
+/// The name such a rule took, with its tool: ("open_application", "spotify").
+pub fn name_taken(intent: &Intent) -> Option<(&'static str, String)> {
+    let Intent::Tool { name, args } = intent else { return None };
+    let key = match *name {
+        "open_application" | "close_application" => "app_name",
+        "window_management" => "target_window",
+        _ => return None,
+    };
+    Some((name, args[key].as_str()?.to_lowercase()))
+}
+
 /// An order in Sir's words as they stand, by the fast path's own rules.
 pub fn parse_as_said(text: &str) -> Option<Intent> {
     if let Some(line) = courtesy(text) {

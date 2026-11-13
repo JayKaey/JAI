@@ -3836,23 +3836,51 @@ pub(crate) fn another_way_knowing(text: &str, parsed: Option<&Option<Intent>>) -
         return None;
     }
     let found = (|| {
-        let wordings = crate::ways::wordings(&intents::normalize_phrase(text), text);
+        let wordings = crate::ways::candidates(&intents::normalize_phrase(text), text);
         if wordings.is_empty() {
             return None;
         }
-        let understood = match fast_before_the_parser(text) {
-            Some(found) => !found.takes_any_name(),
-            None => match parsed {
-                Some(known) => known.as_ref().is_some_and(|intent| !intents::takes_any_name(intent)),
-                None => intents::parse_as_said(text).is_some_and(|intent| !intents::takes_any_name(&intent)),
-            },
+        // How the sentence is read as it stands: not at all, by a rule that takes any words
+        // for a name (weakly, and with which name), or for good.
+        let name_in = |found: &Fast| match found {
+            Fast::Intent(intent) => intents::name_taken(intent),
+            _ => None,
         };
-        if understood {
+        let own;
+        let (weakly, said_name): (Option<bool>, Option<(&'static str, String)>) = match fast_before_the_parser(text) {
+            Some(found) => (Some(found.takes_any_name()), name_in(&found)),
+            None => {
+                let known = match parsed {
+                    Some(known) => known,
+                    None => {
+                        own = intents::parse_as_said(text);
+                        &own
+                    }
+                };
+                (known.as_ref().map(intents::takes_any_name), known.as_ref().and_then(intents::name_taken))
+            }
+        };
+        if weakly == Some(false) {
             return None;
         }
-        wordings.into_iter().find_map(|wording| match fast_as_said(&wording) {
-            Some(Fast::Other) | None => None,
-            Some(found) => Some((wording, found)),
+        wordings.into_iter().find_map(|(wording, any_name)| {
+            let found = match fast_as_said(&wording) {
+                Some(Fast::Other) | None => return None,
+                Some(found) => found,
+            };
+            // One reading that takes any name in place of another: only where it is the same
+            // order with the name cleaner ("open up Spotify for me" named an app "up spotify").
+            // "Open 7-Zip" stays what it was.
+            if any_name && weakly == Some(true) {
+                let cleaner = match (&said_name, name_in(&found)) {
+                    (Some((tool, was)), Some((same, now))) => *tool == same && now != *was && was.contains(&now),
+                    _ => false,
+                };
+                if !cleaner {
+                    return None;
+                }
+            }
+            Some((wording, found))
         })
     })();
     REWORDING.with(|inside| inside.set(false));
