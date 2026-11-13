@@ -94,6 +94,8 @@ mod win {
     }
 
     static TRAY: OnceLock<Tray> = OnceLock::new();
+    /// When he started ("Fri 06:40"), for the menu's first line.
+    static SINCE: OnceLock<String> = OnceLock::new();
     static WINDOW: AtomicIsize = AtomicIsize::new(0);
     static TASKBAR_CREATED: AtomicU32 = AtomicU32::new(0);
     static SHOW_HUD: AtomicU32 = AtomicU32::new(0);
@@ -124,6 +126,7 @@ mod win {
         if TRAY.set(Tray { actions, state: Box::new(state) }).is_err() {
             return;
         }
+        let _ = SINCE.set(chrono::Local::now().format("%a %H:%M").to_string());
         if let Err(e) = std::thread::Builder::new().name("jai-tray".into()).spawn(run) {
             warn!("[TRAY] Could not start the tray icon: {e}");
         }
@@ -240,8 +243,7 @@ mod win {
         let now = TRAY.get().map(|t| (t.state)()).unwrap_or(TrayState { mic_on: true, ..TrayState::default() });
         let tick = |on: bool| MF_STRING | if on { MF_CHECKED } else { MF_UNCHECKED };
         // The first line says who is running and since when (greyed: it is no command).
-        static SINCE: OnceLock<String> = OnceLock::new();
-        let since = SINCE.get_or_init(|| chrono::Local::now().format("%a %H:%M").to_string());
+        let since = SINCE.get().map_or("a moment ago", String::as_str);
         let head: Vec<u16> = format!("J.A.I. {} \u{2014} running since {since}", env!("CARGO_PKG_VERSION")).encode_utf16().chain(std::iter::once(0)).collect();
         let _ = AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, PCWSTR(head.as_ptr()));
         let _ = AppendMenuW(menu, MF_STRING, CMD_OPEN, w!("Open HUD"));

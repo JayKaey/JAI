@@ -7806,7 +7806,10 @@ pub(crate) fn block(ctx: &egui::Context, id: &str, title: &str, size: [f32; 2], 
             return;
         }
         egui::CentralPanel::default().frame(Frame::none().fill(BLOCK_SLATE).inner_margin(Margin::same(14.0))).show(ctx, |ui| {
-            (closed, docked) = detached_bar(ui, ctx, title, true);
+            // (Its own keys, on top of a close that was asked for by word.)
+            let (by_key, to_board) = detached_bar(ui, ctx, title, true);
+            closed |= by_key;
+            docked |= to_board;
             body(ui);
         });
         paint_window_border(ctx);

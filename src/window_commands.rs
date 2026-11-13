@@ -865,6 +865,14 @@ pub fn spoken_name(id: &str) -> String {
         "webcams" => "the live camera".into(),
         "street_view" => "street view".into(),
         id if id.starts_with("sim:") => "the simulation".into(),
+        // The kit's blocks by what they are, not by their ids ("the kit privacy", seen live).
+        "kit_privacy" => "the privacy board".into(),
+        "kit_hearing" => "the hearing log".into(),
+        "kit_coach" => "the pronunciation coach".into(),
+        "changes" => "the changes list".into(),
+        "missed" => "the notifications".into(),
+        id if id.starts_with("explain:") => "the explanation".into(),
+        id if id.starts_with("kit_") => format!("the {}", id["kit_".len()..].replace('_', " ")),
         other => format!("the {}", other.replace('_', " ")),
     }
 }

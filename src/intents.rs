@@ -1610,6 +1610,12 @@ fn timer_control(s: &str) -> Option<Value> {
 /// A sentence about the widgets on his panel: the stopwatch, a note, a checklist, a live chart,
 /// or one of them by its kind. `text` is the sentence as he said it (a note keeps his words).
 fn widget_sentence(s: &str, text: &str) -> Option<Intent> {
+    // (The kit's own things are no widgets on the panel: "delete the last note" is his
+    // notebook's, "cancel the sleep timer" the sleep timer's. Seen live 2026-11-13: both were
+    // answered with "there's no … on the panel".)
+    if crate::kit::command(s, text).is_some() {
+        return None;
+    }
     let widget = |args: Value| Some(Intent::Tool { name: "create_or_update_widget", args });
     if STOPWATCH.is_match(s) {
         return widget(json!({
@@ -5398,6 +5404,17 @@ mod tests {
             Some(Intent::Tool { name, args }) => Some((name, args)),
             _ => None,
         }
+    }
+
+    #[test]
+    fn the_kits_own_things_are_no_widgets_on_the_panel() {
+        // Seen live 2026-11-13: both were answered with "there's no … on the panel".
+        for (said, tool) in [("Delete the last note.", "notebook"), ("Cancel the sleep timer.", "sleep_timer")] {
+            assert!(hud_view_command(said).is_none(), "{said}: {:?}", hud_view_command(said));
+            assert!(matches!(parse(said), Some(Intent::Tool { name, .. }) if name == tool), "{said}: {:?}", parse(said));
+        }
+        // A widget is still taken off the panel by its name.
+        assert!(matches!(hud_view_command("Close the timer."), Some(Intent::Tool { name: "remove_widget", .. }) | Some(Intent::Tool { name: "hud_board", .. }) | Some(Intent::Silent(_))), "{:?}", hud_view_command("Close the timer."));
     }
 
     #[test]

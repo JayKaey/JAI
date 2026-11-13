@@ -2241,7 +2241,11 @@ impl Brain {
         let unnamed = app.is_empty() || crate::focus::is_pronoun(app_raw);
         let it = if unnamed { "It".to_string() } else { app.clone() };
         // "… Monitor 2 …" in a tool result.
-        let monitor_in = |s: &str| s.split("Monitor ").nth(1).and_then(|r| r.split(|c: char| !c.is_ascii_digit()).next()).filter(|n| !n.is_empty()).map(String::from);
+        // (However it is written: "Monitor 2", "is on monitor 2, Sir.")
+        let monitor_in = |s: &str| s.to_lowercase().split("monitor ").nth(1).and_then(|r| r.split(|c: char| !c.is_ascii_digit()).next().map(str::to_string)).filter(|n| !n.is_empty());
+        // "… on Monitor 2", or with no number in the result "… on the other monitor" (seen
+        // live 2026-11-13: "It is on Monitor the other.").
+        let on_monitor = |s: &str| monitor_in(s).map_or_else(|| "on the other monitor".to_string(), |n| format!("on Monitor {n}"));
         match tool {
             "spawn_native_window" if out.contains("already open") => Some("It's already open, Sir. I've brought it to the front.".into()),
             "spawn_native_window" if args.get("live").is_some() => {
@@ -2256,7 +2260,7 @@ impl Brain {
             "update_native_window" => Some(if args.get("add_content").is_some() {
                 "Done, Sir. It's in the window now.".into()
             } else if args.get("monitor").is_some() {
-                format!("Done, Sir. It's on Monitor {}.", monitor_in(out).unwrap_or_else(|| "the other".into()))
+                format!("Done, Sir. It's {}.", on_monitor(out))
             } else if args.get("size").is_some() || args.get("width").is_some() {
                 "Done, Sir. Resized.".into()
             } else {
@@ -2273,11 +2277,11 @@ impl Brain {
                 } else {
                     crate::apps::display_name(named)
                 };
-                let n = monitor_in(out).unwrap_or_else(|| "the other".into());
+                let on = on_monitor(out);
                 Some(if out.contains("already on") {
-                    format!("{who} {} already on Monitor {n}, Sir.", if who == "I" { "am" } else { "is" })
+                    format!("{who} {} already {on}, Sir.", if who == "I" { "am" } else { "is" })
                 } else {
-                    format!("Done, Sir. {who} {} on Monitor {n}.", if who == "I" { "am" } else { "is" })
+                    format!("Done, Sir. {who} {} {on}.", if who == "I" { "am" } else { "is" })
                 })
             }
             "control_music" => {
