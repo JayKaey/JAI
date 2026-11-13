@@ -663,13 +663,28 @@ pub fn known(db: &str) -> Option<VoicePrint> {
             Ok(conn) => conn,
             Err(_) => return None,
         };
-        let stored = conn.query_row("SELECT print, clips, threshold FROM voice_print WHERE id = 1", [], |r| {
+        let stored = conn.query_row("SELECT print, clips, threshold, made FROM voice_print WHERE id = 1", [], |r| {
             let raw: Vec<u8> = r.get(0)?;
+            let made: String = r.get(3)?;
             // (A bar from before 2026-11-13 may stand higher than a set-up may ask for.)
-            Ok(VoicePrint { print: floats(&raw), clips: r.get::<_, i64>(1)? as usize, threshold: (r.get::<_, f64>(2)? as f32).min(THRESHOLD_CEILING), grown: Vec::new(), grown_clips: 0, own: 0.0 })
+            Ok((VoicePrint { print: floats(&raw), clips: r.get::<_, i64>(1)? as usize, threshold: (r.get::<_, f64>(2)? as f32).min(THRESHOLD_CEILING), grown: Vec::new(), grown_clips: 0, own: 0.0 }, made))
         });
         let stored = match stored {
-            Ok(print) => Some(print),
+            // A print from before clips were cut to their voiced stretches was made of other
+            // stuff than what it would be compared with now, and the lock is on by default
+            // since: such a print is set aside (it stays in the database until a new one
+            // replaces it), and Sir's voice is gathered afresh from his orders by name, or
+            // read in with "learn my voice". Until then he answers to his name, as before.
+            Ok((_, made)) if made_before_trimming(&made) => {
+                if !SET_ASIDE.swap(true, std::sync::atomic::Ordering::AcqRel) {
+                    tracing::info!("[VOICE LOCK] The stored voice print ({made}) is from before clips were trimmed to their voiced stretches: it is set aside, and Sir's voice is learnt afresh from his orders by name");
+                    if !crate::platform::in_test_session() {
+                        crate::hud_notify::record("Voice lock: my print of your voice is from an older build. I am learning your voice afresh from the orders you give me by name; \"learn my voice\" does it in a minute.", false);
+                    }
+                }
+                None
+            }
+            Ok((print, _)) => Some(print),
             Err(rusqlite::Error::QueryReturnedNoRows) => None,
             Err(e) if e.to_string().contains("no such table") => None,
             Err(e) => {
@@ -692,6 +707,24 @@ pub fn known(db: &str) -> Option<VoicePrint> {
     known.clone().flatten()
 }
 
+/// Prints made before this moment came from whole clips, silence and all (`print_of` cuts a
+/// clip to its voiced stretches since).
+const TRIMMED_SINCE: &str = "2026-11-13T05:00:00+00:00";
+/// A stored print was set aside as older than that (said once, and told when he is asked).
+static SET_ASIDE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Whether an older print lies set aside in the database (the privacy board can delete it).
+pub fn set_aside() -> bool {
+    SET_ASIDE.load(std::sync::atomic::Ordering::Acquire)
+}
+
+fn made_before_trimming(made: &str) -> bool {
+    match (chrono::DateTime::parse_from_rfc3339(made), chrono::DateTime::parse_from_rfc3339(TRIMMED_SINCE)) {
+        (Ok(made), Ok(since)) => made < since,
+        _ => false,
+    }
+}
+
 /// Keeps Sir's print (replacing an older one, and with it what had grown from that one).
 pub fn keep(db: &str, print: &VoicePrint) -> Result<(), String> {
     let conn = open(db).map_err(|e| e.to_string())?;
@@ -703,6 +736,7 @@ pub fn keep(db: &str, print: &VoicePrint) -> Result<(), String> {
     conn.execute("DELETE FROM voice_grown", []).map_err(|e| e.to_string())?;
     *lock(&KNOWN) = Some(Some(VoicePrint { grown: Vec::new(), grown_clips: 0, own: 0.0, ..print.clone() }));
     *lock(&LAST_SURE) = None;
+    SET_ASIDE.store(false, std::sync::atomic::Ordering::Release);
     Ok(())
 }
 
@@ -712,6 +746,7 @@ pub fn forget(db: &str) -> Result<(), String> {
     conn.execute_batch("DELETE FROM voice_print; DELETE FROM voice_grown;").map_err(|e| e.to_string())?;
     *lock(&KNOWN) = Some(None);
     *lock(&LAST_SURE) = None;
+    SET_ASIDE.store(false, std::sync::atomic::Ordering::Release);
     lock(&GATHERED).clear();
     tracing::info!("[VOICE] Sir's voice print is forgotten on his word");
     Ok(())
@@ -734,6 +769,7 @@ pub fn keep_grown(db: &str, print: &VoicePrint) -> Result<(), String> {
 /// What he knows of Sir's voice, in a sentence (for "what have you learnt about my voice").
 pub fn known_in_words(db: &str) -> String {
     match known(db) {
+        None if SET_ASIDE.load(std::sync::atomic::Ordering::Acquire) => "I have set aside my older print of your voice and am learning it afresh from your orders by name".to_string(),
         None => "I have no print of your voice yet".to_string(),
         Some(p) if p.grown_clips == 0 => format!("I know your voice from {} sentences of the set-up", p.clips),
         Some(p) => format!("I know your voice from {} sentences of the set-up and {} more you have said to me since", p.clips, p.grown_clips),
@@ -880,6 +916,14 @@ mod tests {
         let his_next_day = unit(vec![0.43, 0.9028, 0.0, 0.0]);
         let judged = fresh.judge(&his_next_day, 2900, false);
         assert!(judged.plain && fresh.learn(&his_next_day, 2900, judged) && fresh.grown_clips == 1, "{judged:?}");
+    }
+
+    #[test]
+    fn a_print_from_before_the_trimming_is_set_aside() {
+        assert!(made_before_trimming("2026-11-12T22:35:15.378922200+00:00"), "the print of the evening before");
+        assert!(!made_before_trimming("2026-11-13T06:50:00+00:00"));
+        assert!(!made_before_trimming(&chrono::Utc::now().to_rfc3339()), "what is kept now is kept");
+        assert!(!made_before_trimming("no date at all"), "a date that cannot be read sets nothing aside");
     }
 
     #[test]

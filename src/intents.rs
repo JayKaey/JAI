@@ -5820,6 +5820,11 @@ mod tests {
 
     #[test]
     fn hud_rules_leave_other_requests_alone() {
+        // (With none of his blocks on the board: "show the desktop" means Sir's windows then.
+        // Another test's blocks, drawn at the same moment, made it mean his own.)
+        let _dock = crate::hud_dock::test_lock();
+        crate::hud_dock::begin_frame();
+        crate::hud_dock::begin_frame();
         assert_eq!(tool("Turn off the microphone"), None, "muting is not hiding the mic panel");
         assert_eq!(tool("Close Discord"), Some(("close_application", json!({"app_name": "discord", "force": true}))));
         assert_eq!(tool("Switch to Spotify").unwrap().1, json!({"action": "focus", "target_window": "spotify"}));

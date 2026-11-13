@@ -276,7 +276,7 @@ pub fn gather(db: &str, log: &str) -> Vec<Kept> {
     let notes = crate::hud_notify::recent(chrono::Local::now()).len();
     let (backup_days, backup_mb) = crate::backups::kept();
     vec![
-        Kept { what: "Your voice print", detail: capitalised(&crate::speaker_id::known_in_words(db).replace("I have ", "").replace("I know your voice ", "")), delete: crate::speaker_id::known(db).map(|_| "voice_print") },
+        Kept { what: "Your voice print", detail: capitalised(&crate::speaker_id::known_in_words(db).replace("I have ", "").replace("I know your voice ", "")), delete: (crate::speaker_id::known(db).is_some() || crate::speaker_id::set_aside()).then_some("voice_print") },
         Kept { what: "Clips of your voice", detail: format!("{} ({clips_mb:.1} MB), the newest {} stay; \"stop keeping my voice clips\" ends it", plural(clips, "clip", "clips"), crate::voice_clips::KEPT), delete: (clips > 0).then_some("voice_clips") },
         Kept { what: "Guests' voices", detail: if guests.is_empty() { "none".to_string() } else { guests.iter().map(|g| g.name.clone()).collect::<Vec<_>>().join(", ") }, delete: (!guests.is_empty()).then_some("guests") },
         Kept {
