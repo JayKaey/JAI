@@ -1036,7 +1036,9 @@ impl Brain {
         // as it stands, and an answer in an oral exam is an answer.)
         let reworded: Option<(String, Fast)> = another_way(&text).filter(|_| {
             let stark = &self.inner.tools.stark;
-            stark.macros.match_trigger(&text).is_none() && !(crate::exam_coach::route_answer(&stark.features.exam, &text).is_some() && !is_command_not_answer(&text))
+            stark.macros.match_trigger(&text).is_none()
+                && crate::tool_forge::forge().and_then(|forge| forge.match_utterance(&text)).is_none()
+                && !(crate::exam_coach::route_answer(&stark.features.exam, &text).is_some() && !is_command_not_answer(&text))
         });
         let asked_another_way = match &reworded {
             Some((_, Fast::Selection(ask))) => Some(ask.clone()),
@@ -3757,9 +3759,9 @@ fn fast_before_the_parser(text: &str) -> Option<Fast> {
     if let Some(action) = intents::silent_quick_command(text) {
         return Some(Fast::Intent(Intent::Silent(action)));
     }
-    if let Some((spec, args)) = crate::tool_forge::forge().and_then(|f| f.match_utterance(text)) {
-        return tool("run_forged_tool", json!({ "name": spec.name, "args": args }));
-    }
+    // (Not asked here: the tools he forged. Their list is read from the database on every
+    // call, which is right once a turn and was 10 ms a sentence here. `Brain::run_turn` asks
+    // them itself before it takes a sentence for an order said another way.)
     if crate::ears::is_homecoming_phrase(text) {
         return tool("control_music", json!({ "action": "welcome_home" }));
     }
@@ -3803,11 +3805,12 @@ thread_local! {
     /// Set while `another_way` is at work on this thread: the routers it asks may ask the
     /// parser, which asks it.
     static REWORDING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    /// The sentences of the last moments that were no order said another way (and whether a
-    /// coach, a reading or a dictation was going on): one turn asks about the same sentence
-    /// several times (who it is for, whether it is an order, the fast path itself). Moments
-    /// only: what he keeps (a snippet, a layout) may make the same words an order next time.
-    static NOT_ANOTHER_WAY: std::cell::RefCell<Vec<(String, u8, Instant)>> = const { std::cell::RefCell::new(Vec::new()) };
+    /// The sentences of the last moments with the wording each was taken for (None: no order
+    /// said another way), and whether a coach, a reading or a dictation was going on: one turn
+    /// asks about the same sentence several times (who it is for, whether it is an order, the
+    /// fast path itself). Moments only: what he keeps (a snippet, a layout) may make the same
+    /// words an order next time.
+    static NOT_ANOTHER_WAY: std::cell::RefCell<Vec<(String, u8, Option<String>, Instant)>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// What a sentence's reading may hang on besides its words (`ways`: "that's enough" means the
@@ -3831,12 +3834,21 @@ pub(crate) fn another_way_knowing(text: &str, parsed: Option<&Option<Intent>>) -
         return None;
     }
     let now = going_on();
-    if !cfg!(test) && NOT_ANOTHER_WAY.with(|known| known.borrow().iter().any(|(said, then, at)| said == text && *then == now && at.elapsed() < Duration::from_secs(2))) {
+    let known = if cfg!(test) { None } else { NOT_ANOTHER_WAY.with(|known| known.borrow().iter().find(|(said, then, _, at)| said == text && *then == now && at.elapsed() < Duration::from_secs(2)).map(|(_, _, wording, _)| wording.clone())) };
+    if let Some(wording) = known {
+        // (The wording is remembered, where it leads is asked again: that is one cheap pass.)
+        let found = wording.and_then(|wording| match fast_as_said(&wording) {
+            Some(Fast::Other) | None => None,
+            Some(found) => Some((wording, found)),
+        });
         REWORDING.with(|inside| inside.set(false));
-        return None;
+        return found;
     }
+    let started = Instant::now();
+    let mut stages = [Duration::ZERO; 2];
     let found = (|| {
         let wordings = crate::ways::candidates(&intents::normalize_phrase(text), text);
+        stages[0] = started.elapsed();
         if wordings.is_empty() {
             return None;
         }
@@ -3860,6 +3872,7 @@ pub(crate) fn another_way_knowing(text: &str, parsed: Option<&Option<Intent>>) -
                 (known.as_ref().map(intents::takes_any_name), known.as_ref().and_then(intents::name_taken))
             }
         };
+        stages[1] = started.elapsed();
         if weakly == Some(false) {
             return None;
         }
@@ -3884,16 +3897,30 @@ pub(crate) fn another_way_knowing(text: &str, parsed: Option<&Option<Intent>>) -
         })
     })();
     REWORDING.with(|inside| inside.set(false));
-    if found.is_none() {
-        NOT_ANOTHER_WAY.with(|known| {
-            let mut known = known.borrow_mut();
-            known.retain(|(said, _, _)| said != text);
-            known.push((text.to_string(), now, Instant::now()));
-            if known.len() > 4 {
-                known.remove(0);
-            }
-        });
+    // (The whole fast path has 1.5 ms: a sentence that takes several here says in which part.)
+    let took = started.elapsed();
+    if took > Duration::from_millis(4) {
+        static LAST: AtomicU64 = AtomicU64::new(0);
+        let now_s = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+        if now_s.saturating_sub(LAST.swap(now_s, Ordering::Relaxed)) >= 20 {
+            warn!(
+                "[WAYS] Slow: '{}' took {} µs (its wordings {} µs, how it reads as it stands {} µs, how the wordings read {} µs)",
+                text.chars().take(60).collect::<String>(),
+                took.as_micros(),
+                stages[0].as_micros(),
+                stages[1].saturating_sub(stages[0]).as_micros(),
+                took.saturating_sub(stages[1].max(stages[0])).as_micros()
+            );
+        }
     }
+    NOT_ANOTHER_WAY.with(|known| {
+        let mut known = known.borrow_mut();
+        known.retain(|(said, _, _, _)| said != text);
+        known.push((text.to_string(), now, found.as_ref().map(|(wording, _)| wording.clone()), Instant::now()));
+        if known.len() > 4 {
+            known.remove(0);
+        }
+    });
     found
 }
 

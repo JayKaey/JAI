@@ -274,6 +274,12 @@ struct Way {
 static BROKEN: AtomicUsize = AtomicUsize::new(0);
 
 fn pattern(canon: &str, source: &str) -> Option<Regex> {
+    // ("[a-z ]{2,30}" is thirty copies of the class to the engine, which then gives up its
+    // quick automaton for a slow one: the verifier measured 6 ms a sentence. The class may
+    // run on; how long a name may be is checked where it is read, `Way::wording`.)
+    static COUNTED: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\]\{\d+,\d+\}").expect("a counted class"));
+    let source = COUNTED.replace_all(source, "]+");
+    let source = source.as_ref();
     match Regex::new(source) {
         Ok(regex) => Some(regex),
         Err(e) => {
@@ -352,10 +358,17 @@ impl Way {
     /// The order's own wording for `sentence`, when the sentence is one of its ways.
     fn wording(&self, sentence: &str, original: &str) -> Option<String> {
         let mut slots: Vec<(&str, String)> = Vec::new();
-        if let Some(captures) = self.shapes.iter().find_map(|shape| shape.captures(sentence)) {
-            for name in ["n", "span", "text", "name", "app", "then", "place", "lang"] {
-                if let Some(found) = captures.name(name) {
-                    slots.push((name, found.as_str().trim().to_string()));
+        // (Whether a shape is it at all is asked first and costs next to nothing; what it
+        // holds is only read out of the one that is, and only where the wording has a place
+        // for it. Reading every shape's captures took 6 ms a sentence where this takes a
+        // fraction of one: the verifier's own budget for the whole fast path is 1.5 ms.)
+        if let Some(shape) = self.shapes.iter().find(|shape| shape.is_match(sentence)) {
+            if self.canon.contains('{') {
+                let captures = shape.captures(sentence)?;
+                for name in ["n", "span", "text", "name", "app", "then", "place", "lang"] {
+                    if let Some(found) = captures.name(name) {
+                        slots.push((name, found.as_str().trim().to_string()));
+                    }
                 }
             }
         } else {
@@ -371,6 +384,10 @@ impl Way {
             if let Some(found) = PLACE.captures(sentence).and_then(|c| c.name("place")) {
                 slots.push(("place", found.as_str().to_string()));
             }
+        }
+        // (A name is a word or a few, not a sentence: see `pattern`.)
+        if slots.iter().any(|(name, value)| matches!(*name, "name" | "app") && !(2..=30).contains(&value.chars().count())) || slots.iter().any(|(name, value)| *name == "text" && value.chars().count() > 160) {
+            return None;
         }
         // ("Go to the left" names no app called "go".)
         const NO_APP: &[&str] = &[
@@ -472,20 +489,33 @@ fn language(value: &str) -> &'static str {
     }
 }
 
-/// The words of `found` as they stand in what was said (their capitals, commas and
-/// apostrophes), when they can be found there.
+/// The words of `found` as they stand in what was said (their capitals, commas, hyphens and
+/// apostrophes), when they can be found there. (By going through what was said word by word:
+/// a pattern made for the purpose cost 10 ms to build, every time.)
 fn as_said(original: &str, found: &str) -> String {
-    // (A word the phrase holds as "dont" was said as "don't"; between two words there may
-    // have stood a comma.)
-    let word = |w: &str| w.chars().map(|c| regex::escape(&c.to_string())).collect::<Vec<_>>().join("['’]?");
-    let words: Vec<String> = found.split_whitespace().map(word).collect();
-    if words.is_empty() || words.len() > 40 {
+    let wanted: Vec<&str> = found.split_whitespace().collect();
+    if wanted.is_empty() {
         return found.to_string();
     }
-    match Regex::new(&format!(r"(?i){}", words.join(r"[^\p{L}\p{N}]+"))) {
-        Ok(span) => span.find(original).map_or_else(|| found.to_string(), |m| m.as_str().trim().to_string()),
-        Err(_) => found.to_string(),
+    // Each word of what was said: where it stands, and as the phrase holds it ("don't" is
+    // "dont" there).
+    let mut words: Vec<(usize, usize, String)> = Vec::new();
+    let mut start: Option<usize> = None;
+    for (at, c) in original.char_indices().chain(std::iter::once((original.len(), ' '))) {
+        let inside = c.is_alphanumeric() || c == '\'' || c == '’';
+        match (inside, start) {
+            (true, None) => start = Some(at),
+            (false, Some(from)) => {
+                words.push((from, at, original[from..at].to_lowercase().replace(['\'', '’'], "")));
+                start = None;
+            }
+            _ => {}
+        }
     }
+    words
+        .windows(wanted.len())
+        .find(|window| window.iter().zip(&wanted).all(|((_, _, word), want)| word == want))
+        .map_or_else(|| found.to_string(), |window| original[window[0].0..window[wanted.len() - 1].1].to_string())
 }
 
 /// Sentences that tell of something: nobody's order, whatever words of an order they hold.
@@ -2438,6 +2468,67 @@ mod tests {
         }
         assert_eq!(taken("get 7-Zip running").as_deref(), Some("open 7-zip"));
         assert_eq!(taken("I want Spotify closed").as_deref(), Some("close spotify"));
+    }
+
+    /// (Where the time of a sentence goes; `cargo test where_the_time_goes -- --ignored --nocapture`.)
+    #[test]
+    #[ignore]
+    fn where_the_time_goes() {
+        let _dock = crate::hud_dock::test_lock();
+        let _kit = crate::kit::test_lock();
+        let _ = WAYS.len();
+        for said in ["tell me a joke about cats", "open the pod bay doors please", "could you kill that sleep timer", "what is the capital of france", "kannst du mal meine Notizen aufmachen"] {
+            let phrase = crate::intents::normalize_phrase(said);
+            let time = |what: &mut dyn FnMut()| {
+                what();
+                let started = std::time::Instant::now();
+                for _ in 0..20 {
+                    what();
+                }
+                started.elapsed().as_micros() / 20
+            };
+            let bare_us = time(&mut || {
+                let _ = variants(&bare(&phrase));
+            });
+            let sentence = bare(&phrase);
+            let shapes = variants(&sentence);
+            let (mut by_shape, mut by_idea) = (0u128, 0u128);
+            for way in WAYS.iter() {
+                let started = std::time::Instant::now();
+                for _ in 0..20 {
+                    let _ = shapes.iter().find_map(|shape| way.wording(shape, said));
+                }
+                let took = started.elapsed().as_micros();
+                if way.ideas.is_empty() { by_shape += took } else { by_idea += took }
+            }
+            let all_us = time(&mut || {
+                let _ = candidates(&phrase, said);
+            });
+            let parse_us = time(&mut || {
+                let _ = crate::intents::parse_as_said(said);
+            });
+            let fast_us = time(&mut || {
+                let _ = crate::brain::fast_as_said(said);
+            });
+            let normal_us = time(&mut || {
+                let _ = crate::intents::normalize_phrase(said);
+            });
+            eprintln!("{said}: normalize {normal_us} µs, bare+variants {bare_us} µs ({} variants), shapes {} µs, ideas {} µs, candidates {all_us} µs | parse_as_said {parse_us} µs, fast_as_said {fast_us} µs", shapes.len(), by_shape / 20, by_idea / 20);
+        }
+        let mut slowest: Vec<(u128, &str, usize)> = WAYS
+            .iter()
+            .map(|way| {
+                let started = std::time::Instant::now();
+                for _ in 0..50 {
+                    let _ = way.wording("open the pod bay doors", "open the pod bay doors");
+                }
+                (started.elapsed().as_micros() / 50, way.canon, way.shapes.len())
+            })
+            .collect();
+        slowest.sort_by_key(|(took, _, _)| std::cmp::Reverse(*took));
+        for (took, canon, shapes) in slowest.iter().take(12) {
+            eprintln!("  {took} µs  {canon} ({shapes} shapes)");
+        }
     }
 
     #[test]
