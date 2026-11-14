@@ -81,7 +81,7 @@ const fn row(group: &'static str, name: &'static str, explain: &'static str, wor
 /// The groups, in the order they stand (each is also a key that shows it alone).
 const GROUPS: [&str; 5] = ["LOOK", "SCREENS", "VOICE", "PRESENCE", "TOOLS"];
 
-static ROWS: [Row; 34] = [
+static ROWS: [Row; 35] = [
     row("LOOK", "Theme", "The HUD's colours: one click on a swatch changes them.", "colour color palette gold cyan red green farbe farben design", Control::Theme),
     row("LOOK", "Your own theme", "Build a theme from your own colours, name it and save it.", "theme studio custom create", Control::Open(Tool::ThemeStudio, "[ THEME STUDIO ]")),
     row("LOOK", "Colours, opacity and panels", "The accent and background colour, how see-through the HUD is, which panels show.", "interface accent background transparency", Control::Open(Tool::Interface, "[ OPEN ]")),
@@ -100,7 +100,8 @@ static ROWS: [Row; 34] = [
     row("SCREENS", "Always on top", "The HUD stays in front of other programs.", "front", Control::Switch(|s| s.always_on_top, |s, v| s.always_on_top = v)),
     row("SCREENS", "Windows may overlap", "New windows of his may open over each other instead of beside each other.", "stack cascade", Control::Switch(|s| s.allow_window_overlap, |s, v| s.allow_window_overlap = v)),
     row("SCREENS", "Mini mode", "A slim strip at the top of a screen instead of the board, for gaming or work.", "strip bar small compact leiste klein", Control::Switch(|s| s.mini_strip, |s, v| s.mini_strip = v)),
-    row("SCREENS", "Live desktop background", "The emblem, the clock and his state behind your desktop icons.", "wallpaper desktop hintergrund hintergrundbild", Control::Switch(|s| s.desktop_background, |s, v| s.desktop_background = v)),
+    row("SCREENS", "Live desktop background", "He is your desktop's background: the board behind your icons, his views as windows.", "wallpaper desktop hintergrund hintergrundbild background mode", Control::Switch(|s| s.desktop_background, |s, v| s.desktop_background = v)),
+    row("SCREENS", "Background on every monitor", "As the background he covers all your monitors; off: your first one only.", "wallpaper all monitors every screen alle monitore hintergrund", Control::Switch(|s| s.background_all_monitors, |s, v| s.background_all_monitors = v)),
     row("SCREENS", "Monitors", "Which monitor the board is on.", "screens display bildschirm monitor", Control::Open(Tool::Screens, "[ SCREENS ]")),
     row("VOICE", "Live words", "Your words appear under the emblem while you speak (paused while a game runs).", "captions transcript mitschrift worte", Control::Switch(|s| s.live_words, |s, v| s.live_words = v)),
     row("VOICE", "Learn my voice", "One minute of reading aloud: he tunes his hearing to your voice and microphone.", "set-up setup calibrate wake name jay stimme lernen einrichten", Control::Open(Tool::VoiceSetup, "[ START ]")),
@@ -331,7 +332,7 @@ mod tests {
         assert!(found("quantum flux").is_empty());
         // The search understands German words for the same things.
         assert_eq!(found("nachtmodus"), vec!["Night mode by the clock"]);
-        assert_eq!(found("hintergrund"), vec!["Live desktop background"]);
+        assert_eq!(found("hintergrund"), vec!["Live desktop background", "Background on every monitor"]);
         assert!(found("stimme").contains(&"Only obey me") && found("stimme").contains(&"Learn my voice"));
         assert_eq!(found("lautstärke"), vec!["Mixer"]);
         assert_eq!(found("").len(), rows().count(), "an empty search shows everything");

@@ -275,6 +275,22 @@ pub fn after_a_greeting() {
     GREETED.store(true, std::sync::atomic::Ordering::Release);
 }
 
+/// The lesson that runs now or comes next, within three days: its subject, when it starts and
+/// its room. None without a timetable or when none is in reach. (For the glance on the idle
+/// screen and on the background; a school server that does not answer is no news there. A
+/// scripted session never asks Sir's school.)
+pub async fn next_lesson(tools: &ToolContext) -> Option<(String, chrono::NaiveDateTime, String)> {
+    let pim = &tools.pim;
+    if pim.config().missing(WEBUNTIS).is_some() || crate::platform::in_test_session() {
+        return None;
+    }
+    let now = Local::now().naive_local();
+    let all = pim.lessons(now.date(), now.date() + ChronoDuration::days(3)).await.ok()?;
+    let ahead = lessons_ahead(&all, now.date(), now);
+    let next = ahead.lessons.iter().find(|l| l.status != LessonStatus::Cancelled)?;
+    Some((next.subject_name().to_string(), next.date.and_time(next.start), next.rooms.first().cloned().unwrap_or_default()))
+}
+
 /// The briefing as speakable prose; the details go to the HUD card.
 pub async fn executive(tools: &ToolContext, time_of_day: Option<&str>) -> String {
     let now = Local::now();

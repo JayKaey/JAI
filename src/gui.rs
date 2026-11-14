@@ -269,6 +269,13 @@ pub fn show() {
     if !SHARED.running.load(Ordering::Acquire) {
         return;
     }
+    // As the desktop's background there is no window to bring up (raising it would put the
+    // desktop itself in front of what Sir is working in): his views open as windows of their
+    // own, and a frame is all they need.
+    if crate::wallpaper::in_use() {
+        request_repaint();
+        return;
+    }
     #[cfg(windows)]
     {
         let hwnd = SHARED.hwnd.load(Ordering::Acquire);
@@ -327,6 +334,49 @@ pub fn set_text_console(open: bool) {
         show();
     }
     request_repaint();
+}
+
+/// His windows on call (Sir's key for it, "show your windows"): every window of his comes in
+/// front of the other programs' windows, in their own order, and none takes the keyboard. How
+/// many there are. (The board itself and the corner orb are not among them.)
+pub fn windows_on_call() -> usize {
+    #[cfg(windows)]
+    {
+        let board = SHARED.hwnd.load(Ordering::Acquire);
+        let own: Vec<_> = crate::win32_desktop::own_windows().into_iter().filter(|w| w.hwnd != board && w.title != "J.A.I. // orb").collect();
+        let n = own.len();
+        info!("[HUD] His windows on call: {n} brought to the front");
+        // (And their list, to pick one from, move it or close it.)
+        WINDOWS_LIST.store(true, Ordering::Release);
+        request_repaint();
+        crate::win32::run_detached(move || {
+            // (From the lowest up: they keep the order they had among themselves.)
+            for w in own.iter().rev() {
+                crate::win32_desktop::raise(w.hwnd);
+            }
+        });
+        n
+    }
+    #[cfg(not(windows))]
+    0
+}
+
+/// The list of his windows is open ("show your windows", his key for it).
+static WINDOWS_LIST: AtomicBool = AtomicBool::new(false);
+
+/// `JAI_DEMO=desk-click`: where the header's `[ CHANGES ]` key stands (window points), for a
+/// scripted session's stand-in for Sir's click on the desktop.
+static DEMO_KEY: Mutex<Option<Rect>> = Mutex::new(None);
+
+/// One of his global keys was pressed (`win32_desktop::start`): 0 his windows to the front,
+/// 1 the console to type to him.
+pub fn on_global_key(key: usize) {
+    match key {
+        0 => {
+            windows_on_call();
+        }
+        _ => set_text_console(true),
+    }
 }
 
 /// Text the console's input line takes on its next frame (the Feature Lab's `[ TRY ]`).
@@ -601,6 +651,21 @@ impl Hud {
             }
             // On Windows the window only ends when JAI quits. Elsewhere closing it lands here,
             // and the tray (or "show yourself") opens a new one.
+            // As the desktop's background his window goes down with the desktop (when Explorer
+            // starts again): once the desktop is back, the window is opened anew and handed to
+            // it again. He himself never stopped.
+            #[cfg(windows)]
+            if !SHARED.quitting.load(Ordering::Acquire) && crate::wallpaper::in_use() {
+                crate::wallpaper::lost();
+                warn!("[DESKTOP] The desktop took my window down with it (Explorer starting again?); I open it anew once the desktop is back");
+                let deadline = Instant::now() + Duration::from_secs(90);
+                while !crate::win32_desktop::desktop_exists() && Instant::now() < deadline && !SHARED.quitting.load(Ordering::Acquire) {
+                    std::thread::sleep(Duration::from_millis(500));
+                }
+                // (The new desktop gets a moment to stand before it is asked to take a window.)
+                std::thread::sleep(Duration::from_millis(2500));
+                open = true;
+            }
         }
         SHARED.running.store(false, Ordering::Release);
         lock(&SHARED.wake).take();
@@ -657,6 +722,13 @@ pub fn start_on_monitor(n: usize) {
     START_MONITOR.store(n, Ordering::Release);
 }
 
+/// In a scripted session: the monitor it was given (`--monitor`, 1-based; 0: none). None in a
+/// session of Sir's own. Whatever a scripted session puts on a screen goes on that monitor
+/// and on no other.
+pub fn test_session_monitor() -> Option<usize> {
+    crate::platform::in_test_session().then(|| START_MONITOR.load(Ordering::Acquire))
+}
+
 /// The monitor `--monitor` asked for, in logical points; None without one (or when there is no
 /// such monitor: then everything opens where it would anyway). Cheap enough for every frame.
 fn start_monitor_points() -> Option<Rect> {
@@ -679,11 +751,26 @@ pub(crate) fn for_test_session(builder: egui::ViewportBuilder) -> egui::Viewport
     // Every window of JAI's own passes here: it comes up hidden and shows itself once it has
     // drawn its first frame (`reveal_when_drawn`, `reveal_overdue`), so Windows never shows its
     // empty client area (a white or black flash) before the window's entrance.
-    let builder = builder.with_visible(false);
+    // It comes up without the keyboard, in every session: what Sir is typing or playing in
+    // keeps it, and a click on the window gives it the focus. (Sir, 2026-11-13: "the HOW IT
+    // WORKS buttons don't do anything", "when I detach a window it closes". Seen from outside
+    // in his running session: the windows existed, had drawn their frames, and were hidden. A
+    // scripted session's windows, which never took the focus as they were shown, had shown
+    // every time; his took it. Why taking it left them hidden is not known, so `keep_shown`
+    // looks after every one of them besides.)
+    let mut builder = builder.with_visible(false).with_active(false);
+    // (One icon for all of them, the same `Arc` in every frame: egui tells icons apart by
+    // their `Arc`, and with a fresh one per frame each window had its icon set anew sixty
+    // times a second.)
+    builder.icon = shared_icon();
     if !crate::platform::in_test_session() {
-        return builder;
+        // A window with no place of its own opens on the monitor Sir is using, not always on
+        // his first one. (His choice of 2026-11-13: "Windows open where you work".)
+        return match builder.position.is_none().then(|| place_where_sir_works(&builder)).flatten() {
+            Some(at) => builder.with_position(at),
+            None => builder,
+        };
     }
-    let builder = builder.with_active(false);
     match (builder.position, start_monitor_points()) {
         (None, Some(m)) => {
             let size = builder.inner_size.unwrap_or(vec2(800.0, 600.0)).min(m.size());
@@ -691,6 +778,50 @@ pub(crate) fn for_test_session(builder: egui::ViewportBuilder) -> egui::Viewport
         }
         _ => builder,
     }
+}
+
+/// Where a window of JAI's own that has no place yet opens (points): in the middle of the
+/// monitor Sir is using, a step aside for each window of his that opened just before; beside a
+/// game, on a monitor the game is not on ("A game is left alone"). The same place for as long
+/// as the window is asked for (by its title), so a window Sir has moved is never pulled back.
+fn place_where_sir_works(builder: &egui::ViewportBuilder) -> Option<Pos2> {
+    static PLACES: std::sync::LazyLock<Mutex<std::collections::HashMap<String, (Pos2, Instant)>>> = std::sync::LazyLock::new(Default::default);
+    let title = builder.title.clone()?;
+    let mut places = lock(&PLACES);
+    let now = Instant::now();
+    // (Not asked for during a second and no such window left: it was closed, and its next
+    // opening is placed anew. A window that is still there keeps its place however long a
+    // frame of the board took: placed anew it would jump.)
+    places.retain(|title, (_, seen)| {
+        let fresh = now.duration_since(*seen) < Duration::from_secs(1);
+        #[cfg(windows)]
+        let fresh = fresh || crate::win32::own_window(title).is_some();
+        let _ = title;
+        fresh
+    });
+    if let Some((at, seen)) = places.get_mut(&title) {
+        *seen = now;
+        return Some(*at);
+    }
+    let monitors = crate::monitors::recent();
+    let mut on = crate::wallpaper::monitor_in_use(&monitors)?;
+    if crate::hud_feel::game_in_front() {
+        if let Some(other) = monitors.iter().find(|m| m.rect != on.rect && m.primary).or_else(|| monitors.iter().find(|m| m.rect != on.rect)) {
+            on = other.clone();
+        }
+    }
+    #[cfg(windows)]
+    let scale = crate::win32::primary_screen().2;
+    #[cfg(not(windows))]
+    let scale = 1.0;
+    let scale = (scale * context().map_or(1.0, |ctx| ctx.zoom_factor())).max(0.1);
+    let work = Rect::from_min_max(pos2(on.work[0] as f32, on.work[1] as f32) / scale, pos2(on.work[2] as f32, on.work[3] as f32) / scale);
+    let size = builder.inner_size.unwrap_or(vec2(800.0, 600.0)).min(work.size());
+    let step = (places.len() % 6) as f32 - 1.0;
+    let at = work.center() - size / 2.0 + vec2(34.0, 30.0) * step;
+    let at = pos2(at.x.clamp(work.left(), (work.right() - size.x).max(work.left())), at.y.clamp(work.top(), (work.bottom() - size.y).max(work.top())));
+    places.insert(title, (at, now));
+    Some(at)
 }
 
 fn open_window(app: &Jai, rt: &Handle, model: &Arc<Mutex<HudModel>>) -> Result<(), String> {
@@ -705,6 +836,9 @@ fn open_window(app: &Jai, rt: &Handle, model: &Arc<Mutex<HudModel>>) -> Result<(
     }
     let geometry = startup_geometry(&iface, size, start_on);
     let fullscreen = geometry.fullscreen;
+    // He starts as the desktop's background (when there is a rect for it: a scripted session
+    // without a monitor of its own has none and starts as the board).
+    let background = iface.desktop_background && !iface.orb_mode && background_rect(&iface).is_some();
     // A test session's window never takes the focus (the window drill's does: it drives the
     // window's own keys). Its board covers the monitor as a plain borderless window: winit
     // forces a window it creates fullscreen to the front (an Alt tap and SetForegroundWindow,
@@ -720,12 +854,13 @@ fn open_window(app: &Jai, rt: &Handle, model: &Arc<Mutex<HudModel>>) -> Result<(
         // but on Windows a transparent window does not take the whole monitor in fullscreen (it
         // stayed a ~60 % rectangle in the top-left corner): the fullscreen board is opaque.
         .with_transparent(geometry.transparent)
-        .with_decorations(!iface.frameless && !iface.orb_mode && !fullscreen && !iface.span_all_monitors)
+        .with_decorations(!iface.frameless && !iface.orb_mode && !fullscreen && !iface.span_all_monitors && !background)
         .with_fullscreen(fullscreen && !quiet)
-        .with_maximized(maximized && !fullscreen && !quiet)
-        .with_window_level(level)
+        .with_maximized(maximized && !fullscreen && !quiet && !background)
+        .with_window_level(if background { egui::viewport::WindowLevel::Normal } else { level })
         .with_icon(Arc::new(window_icon().unwrap_or_default()))
-        .with_active(!quiet);
+        // (As the background he never takes the keyboard.)
+        .with_active(!quiet && !background);
     // Fullscreen: pinned to its monitor's full resolution (the primary's at (0, 0), or the one
     // `--monitor` named) from the first frame.
     let viewport = match geometry.position {
@@ -746,7 +881,7 @@ fn open_window(app: &Jai, rt: &Handle, model: &Arc<Mutex<HudModel>>) -> Result<(
     if let Some(on) = start_on {
         info!("[HUD] This session opens on monitor {} (--monitor), at ({:.0}, {:.0})", START_MONITOR.load(Ordering::Acquire), on.left(), on.top());
     }
-    let restore = placement.filter(|_| !maximized && !fullscreen && !iface.orb_mode && start_on.is_none());
+    let restore = placement.filter(|_| !maximized && !fullscreen && !iface.orb_mode && start_on.is_none() && !background);
     let (app, rt, model) = (app.clone(), rt.clone(), Arc::clone(model));
     eframe::run_native(
         "J.A.I.",
@@ -789,6 +924,12 @@ pub(crate) fn window_icon() -> Option<egui::IconData> {
     Some(ICON.get_or_init(crate::app_icon::generate_rose_gyro_app_icon).clone())
 }
 
+/// That icon as the one `Arc` every window of JAI's own carries (`for_test_session`).
+fn shared_icon() -> Option<Arc<egui::IconData>> {
+    static ICON: std::sync::OnceLock<Option<Arc<egui::IconData>>> = std::sync::OnceLock::new();
+    ICON.get_or_init(|| window_icon().map(Arc::new)).clone()
+}
+
 /// How the HUD window starts.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct StartupGeometry {
@@ -804,6 +945,15 @@ struct StartupGeometry {
 /// monitor a test session opens on (`--monitor`, logical points): the board covers that one, a
 /// window starts in its middle.
 fn startup_geometry(iface: &InterfaceSettings, windowed: Vec2, on: Option<Rect>) -> StartupGeometry {
+    // As the desktop's background: the plain, opaque, borderless window that the desktop is
+    // handed before it is first shown (`HudApp::new`).
+    if let Some([l, t, r, b]) = (iface.desktop_background && !iface.orb_mode).then(|| background_rect(iface)).flatten() {
+        #[cfg(windows)]
+        let scale = crate::win32::primary_screen().2.max(0.1);
+        #[cfg(not(windows))]
+        let scale = 1.0;
+        return StartupGeometry { fullscreen: false, transparent: false, size: vec2((r - l) as f32 / scale, (b - t) as f32 / scale), position: Some([l as f32 / scale, t as f32 / scale]) };
+    }
     let spanning = iface.span_all_monitors && !iface.orb_mode;
     let fullscreen = iface.fullscreen && !iface.orb_mode && !spanning;
     if !fullscreen && !spanning {
@@ -820,6 +970,19 @@ fn startup_geometry(iface: &InterfaceSettings, windowed: Vec2, on: Option<Rect>)
     // (never winit's fullscreen); `enforce_fullscreen` stretches it over the others at once.
     let (w, h) = primary_screen_points().unwrap_or((windowed.x, windowed.y));
     StartupGeometry { fullscreen, transparent: false, size: vec2(w, h), position: Some([0.0, 0.0]) }
+}
+
+/// The screen rect (left, top, right, bottom, physical pixels) he covers as the desktop's
+/// background: every monitor or Sir's first, as he has it set. A scripted session's covers
+/// only the monitor that session was given (`--monitor`, or `JAI_BACKDROP_MONITOR`): never one
+/// Sir works on; without one it has no background.
+fn background_rect(iface: &InterfaceSettings) -> Option<[i32; 4]> {
+    let monitors = crate::monitors::recent();
+    if crate::platform::in_test_session() {
+        let named = std::env::var("JAI_BACKDROP_MONITOR").ok().and_then(|n| n.trim().parse::<usize>().ok()).unwrap_or_else(|| START_MONITOR.load(Ordering::Acquire));
+        return monitors.iter().find(|m| m.index == named && named > 0).map(|m| m.rect);
+    }
+    crate::wallpaper::rect_for(iface.background_all_monitors, &monitors)
 }
 
 /// The primary monitor in logical points (`GetSystemMetrics` pixels over the system DPI scale).
@@ -1949,6 +2112,10 @@ impl HudApp {
     /// another one, or a window. winit makes a window fullscreen on the monitor it is on, so
     /// the window is put there as a small plain window first.
     fn fullscreen_on(&mut self, ctx: &egui::Context, index: Option<usize>) {
+        // (A scripted session's board goes on that session's own monitor and on no other: on
+        // 2026-11-13 a test's board, back from being the background, stood on Sir's main
+        // monitor for a quarter of a minute.)
+        let index = index.or_else(|| test_session_monitor().filter(|n| *n > 0));
         let monitors = crate::monitors::list();
         let Some(m) = index.and_then(|i| monitors.iter().find(|m| m.index == i)).or_else(|| crate::monitors::primary(&monitors)) else {
             ctx.send_viewport_cmd(ViewportCommand::Fullscreen(true));
@@ -2035,7 +2202,10 @@ impl HudApp {
             }
             // A turn of the mouse wheel over the orb is no news for the log.
             let quiet = InterfaceSettings { orb_scale: prev.orb_scale, ..current.clone() } == prev;
-            if prev.always_on_top != current.always_on_top {
+            // (As the desktop's background he has no level, frame or size of a window: what is
+            // set meanwhile applies when he is a window again.)
+            let in_desktop = current.desktop_background && !current.orb_mode && self.as_background();
+            if prev.always_on_top != current.always_on_top && !in_desktop {
                 let level = if current.always_on_top {
                     egui::viewport::WindowLevel::AlwaysOnTop
                 } else {
@@ -2045,10 +2215,48 @@ impl HudApp {
             }
             // The window's three shapes: one board across every monitor, the fullscreen board on
             // one monitor, a (maximised) window. Each change of shape has one way through.
-            let shape = |i: &InterfaceSettings| (i.span_all_monitors, i.fullscreen);
+            // (And a fourth: the desktop's background, which is no window at all. Coming back from
+            // it is like coming back from the span: `wallpaper::tick` has taken the window out
+            // of the desktop by the time these commands are carried out.)
+            let background = |i: &InterfaceSettings| i.desktop_background && !i.orb_mode && background_rect(i).is_some();
+            let shape = |i: &InterfaceSettings| (background(i), i.span_all_monitors, i.fullscreen);
+            let (to_background, from_background) = (background(&current), background(&prev));
             if shape(&prev) != shape(&current) && !current.orb_mode {
                 let target = lock(&HUD_MONITOR).take();
-                if current.span_all_monitors {
+                if to_background {
+                    if !from_background {
+                        // Behind every other window at once, before it becomes a plain window
+                        // where it is to stand: it never lies over Sir's windows on the way.
+                        // (Not hidden for that moment: a hidden window draws no frames, and
+                        // the frames are what hand it to the desktop. Seen 2026-11-14: hidden,
+                        // it waited eight seconds for the next order, and was hidden again by
+                        // the helper that wakes a board hidden in the tray.)
+                        #[cfg(windows)]
+                        crate::win32_desktop::sink(self.hwnd);
+                        ctx.send_viewport_cmd(ViewportCommand::Fullscreen(false));
+                        ctx.send_viewport_cmd(ViewportCommand::Maximized(false));
+                        ctx.send_viewport_cmd(ViewportCommand::Decorations(false));
+                        ctx.send_viewport_cmd(ViewportCommand::WindowLevel(egui::viewport::WindowLevel::Normal));
+                        if let Some([l, t, r, b]) = background_rect(&current) {
+                            let ppp = ctx.pixels_per_point();
+                            ctx.send_viewport_cmd(ViewportCommand::OuterPosition(pos2(l as f32 / ppp, t as f32 / ppp)));
+                            ctx.send_viewport_cmd(ViewportCommand::InnerSize(vec2((r - l) as f32 / ppp, (b - t) as f32 / ppp)));
+                        }
+                    }
+                } else if from_background && !current.span_all_monitors && !current.fullscreen {
+                    // Back as a window: where a plain window of the layout's size belongs.
+                    ctx.send_viewport_cmd(ViewportCommand::Decorations(!current.frameless));
+                    let monitors = crate::monitors::list();
+                    let own = test_session_monitor().and_then(|n| monitors.iter().find(|m| m.index == n));
+                    if let Some(m) = own.or_else(|| crate::monitors::primary(&monitors)) {
+                        let ppp = ctx.pixels_per_point();
+                        ctx.send_viewport_cmd(ViewportCommand::OuterPosition(pos2((m.rect[0] + 80) as f32 / ppp, (m.rect[1] + 60) as f32 / ppp)));
+                        ctx.send_viewport_cmd(ViewportCommand::InnerSize(layout_size(current.layout) / current.scale));
+                    }
+                    if current.always_on_top {
+                        ctx.send_viewport_cmd(ViewportCommand::WindowLevel(egui::viewport::WindowLevel::AlwaysOnTop));
+                    }
+                } else if current.span_all_monitors {
                     // "Use all monitors": borderless and not maximised; `enforce_fullscreen`
                     // stretches the window over the virtual desktop (now, and whenever it drifts).
                     ctx.send_viewport_cmd(ViewportCommand::Fullscreen(false));
@@ -2066,9 +2274,9 @@ impl HudApp {
                     self.fullscreen_check = Instant::now().checked_sub(Duration::from_millis(1300)).unwrap_or_else(Instant::now);
                     info!("[HUD] One board across every monitor");
                 } else if current.fullscreen {
-                    // Back from spanning: Sir's first monitor (or the one he named). From a
-                    // window: the monitor the window is on.
-                    if prev.span_all_monitors || target.is_some() {
+                    // Back from spanning (or from the desktop): Sir's first monitor (or the one
+                    // he named). From a window: the monitor the window is on.
+                    if prev.span_all_monitors || from_background || target.is_some() {
                         self.fullscreen_on(ctx, target);
                     } else {
                         ctx.send_viewport_cmd(ViewportCommand::Decorations(false));
@@ -2111,14 +2319,14 @@ impl HudApp {
             } else if let Some(index) = take_monitor_request(&current) {
                 self.fullscreen_on(ctx, Some(index));
             }
-            if prev.frameless != current.frameless {
+            if prev.frameless != current.frameless && !in_desktop {
                 ctx.send_viewport_cmd(ViewportCommand::Decorations(!current.frameless));
             }
             if prev.title != current.title {
                 ctx.send_viewport_cmd(ViewportCommand::Title(window_title(&current)));
             }
             let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
-            if prev.layout != current.layout && !current.fullscreen && !maximized {
+            if prev.layout != current.layout && !current.fullscreen && !maximized && !in_desktop {
                 ctx.send_viewport_cmd(ViewportCommand::InnerSize(layout_size(current.layout) / current.scale));
             }
             if !quiet {
@@ -2785,11 +2993,8 @@ impl HudApp {
     fn dialogs(&mut self, ctx: &egui::Context) {
         let p = self.palette;
         if self.confirm_shutdown {
-            egui::Window::new("Shut down?")
-                .collapsible(false)
-                .resizable(false)
-                .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
-                .show(ctx, |ui| {
+            let mut open = true;
+            board_window(ctx, "confirm_shutdown", "Shut down // are you sure", [380.0, 190.0], &mut open, |ui| {
                     ui.label("Shut down J.A.I. completely?");
                     muted(ui, &p, "Closing the window only hides him in the tray.");
                     ui.add_space(6.0);
@@ -2803,13 +3008,16 @@ impl HudApp {
                         }
                     });
                 });
+            if !open {
+                self.confirm_shutdown = false;
+            }
+            if !self.confirm_shutdown {
+                crate::hud_dock::forget("confirm_shutdown");
+            }
         }
         if let Some(name) = self.confirm_delete_skill.clone() {
-            egui::Window::new("Delete skill?")
-                .collapsible(false)
-                .resizable(false)
-                .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
-                .show(ctx, |ui| {
+            let mut open = true;
+            board_window(ctx, "confirm_delete_skill", "Delete skill // are you sure", [380.0, 170.0], &mut open, |ui| {
                     ui.label(format!("Delete the skill \"{name}\"?"));
                     ui.add_space(6.0);
                     ui.horizontal(|ui| {
@@ -2822,6 +3030,12 @@ impl HudApp {
                         }
                     });
                 });
+            if !open {
+                self.confirm_delete_skill = None;
+            }
+            if self.confirm_delete_skill.is_none() {
+                crate::hud_dock::forget("confirm_delete_skill");
+            }
         }
     }
 
@@ -2830,12 +3044,7 @@ impl HudApp {
         let p = self.palette;
         let mut open = self.settings_open;
         let mut s = iface.clone();
-        egui::Window::new(RichText::new("Interface").font(bold(14.0)).color(p.accent))
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .default_width(340.0)
-            .show(ctx, |ui| {
+        board_window(ctx, "interface_settings", "Interface // look and layout", [400.0, 640.0], &mut open, |ui| {
                 muted(ui, &p, "Or just ask: “JAI, make the interface gold”, “hide the system panel”, “zoom in”, “stay on top”.");
                 ui.add_space(4.0);
                 egui::Grid::new("hud_interface").num_columns(2).spacing([14.0, 8.0]).show(ui, |ui| {
@@ -3518,6 +3727,146 @@ struct HudApp {
     mic_speech: Option<(Instant, f32)>,
     /// What is wrong with the way he hears Sir ("TOO QUIET"), and since when it has been shown.
     mic_verdict: Option<(&'static str, Instant)>,
+    /// Where he stands as the desktop's background (`wallpaper::tick`), as the last frame saw it.
+    backdrop: crate::wallpaper::Standing,
+    /// The orb that leaves the background for a corner of the monitor Sir is using.
+    corner_orb: crate::wallpaper::Orb,
+    /// The monitor the corner orb is out on (its work area) and how large it is there.
+    orb_out_on: Option<([i32; 4], i32)>,
+    /// What had been said when the corner orb last set out: (Sir's last line, JAI's last line).
+    /// Only what is said after that stands beside it.
+    orb_words: (String, String, Instant),
+    /// Where the emblem stands on the board in this frame (its centre and radius, points).
+    emblem_spot: (Pos2, f32),
+    /// The console's own window is to take the keyboard as soon as it is up (Sir called it).
+    console_wants_keys: bool,
+    /// `JAI_DEMO=desk-click`: how far the stand-in for a click on the desktop has got (frames).
+    demo_click: u8,
+    /// The shape the corner orb's window was last given (orb, width, height in pixels).
+    orb_shape: (i32, i32, i32),
+}
+
+/// What the corner orb's window shows in a frame.
+struct CornerOrbContent {
+    /// The orb's diameter (physical pixels).
+    orb_px: f32,
+    /// What he is at for longer: Some(share done) for a timer, Some(None) for a search.
+    progress: Option<Option<f32>>,
+    /// The plate beside the orb is up.
+    words: bool,
+    said: String,
+    answered: String,
+    timer: Option<String>,
+    state: String,
+    live_words: bool,
+    /// A question of his that waits for yes or no.
+    question: Option<String>,
+    /// The orders he offers for one he did not know.
+    choices: Vec<String>,
+}
+
+/// What Sir did with the corner orb or the plate beside it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum OrbClick {
+    Nothing,
+    /// A click on the orb: the console to type to him.
+    Console,
+    /// A double click: the board comes back.
+    Board,
+    /// He took hold of it: its window follows his hand.
+    Drag,
+    Yes,
+    No,
+    /// One of the orders offered (0-based).
+    Choice(usize),
+}
+
+/// The corner orb's window: the emblem in its disc with the ring of what he is at, and beside
+/// it the plate with what is being said, his question or the orders he offers.
+fn corner_orb_ui(ui: &mut Ui, emblem: &RoseEmblem, c: &CornerOrbContent) -> OrbClick {
+    let mut did = OrbClick::Nothing;
+    let all = ui.max_rect();
+    let orb = Rect::from_min_size(all.min, Vec2::splat(all.height().min(c.orb_px / ui.ctx().pixels_per_point())));
+    let response = ui.allocate_rect(orb, Sense::click_and_drag());
+    if response.drag_started_by(egui::PointerButton::Primary) {
+        did = OrbClick::Drag;
+    } else if response.double_clicked() {
+        did = OrbClick::Board;
+    } else if response.clicked() {
+        did = OrbClick::Console;
+    }
+    // A dark disc behind it: over a bright window the emblem's fine lines would be lost.
+    ui.painter().circle_filled(orb.center(), orb.width() * 0.5, rgba([3, 7, 12], 0.82));
+    emblem.paint_in(&ui.painter().with_clip_rect(orb), orb);
+    if let Some(share) = c.progress {
+        let (centre, r) = (orb.center(), orb.width() * 0.5 - 3.0);
+        let (from, sweep) = match share {
+            Some(done) => (-TAU / 4.0, TAU * done.clamp(0.0, 1.0)),
+            None => ((ui.input(|i| i.time) as f32 * 2.2) % TAU, TAU * 0.22),
+        };
+        let arc: Vec<Pos2> = (0..=48).map(|k| from + sweep * k as f32 / 48.0).map(|a| centre + vec2(a.cos(), a.sin()) * r).collect();
+        ui.painter().add(Shape::line(arc, stroke(2.5, crate::hud_board::active_colour())));
+    }
+    response.on_hover_text("Drag to move · click for the console · double-click for the board");
+    if !c.words {
+        return did;
+    }
+    let plate = Rect::from_min_max(pos2(orb.right() + 12.0, all.top()), all.max);
+    let p = ui.painter().with_clip_rect(plate);
+    p.rect_filled(plate, Rounding::ZERO, rgba([3, 7, 12], 0.9));
+    inner_border(&p, plate, 1.0, crate::hud_board::border_colour());
+    let inner = plate.shrink2(vec2(12.0, 9.0));
+    let mut y = inner.top();
+    if let Some(label) = &c.timer {
+        p.text(inner.right_bottom(), Align2::RIGHT_BOTTOM, label, strip_font(), crate::hud_board::active_colour());
+    }
+    if !c.said.is_empty() {
+        let line = crate::hud_lines::fit(&p, &c.said, &strip_font(), inner.width());
+        y = p.text(pos2(inner.left(), y), Align2::LEFT_TOP, line, strip_font(), STRIP_MUTED).bottom() + 5.0;
+    }
+    let key = |ui: &mut Ui, at: Pos2, text: &str, lit: bool| -> (bool, f32) {
+        let ink = if lit { crate::hud_board::active_colour() } else { STRIP_INK };
+        let galley = ui.painter().layout_no_wrap(text.to_string(), strip_font(), ink);
+        let rect = Rect::from_min_size(at, galley.size() + vec2(14.0, 8.0));
+        let response = ui.interact(rect, ui.id().with(("corner_orb_key", text.to_string())), Sense::click());
+        ui.painter().rect_filled(rect, Rounding::ZERO, rgba([3, 7, 12], 0.9));
+        ui.painter().rect_stroke(rect, Rounding::ZERO, stroke(1.0, if response.hovered() || lit { crate::hud_board::active_colour() } else { crate::hud_board::border_colour() }));
+        ui.painter().galley(rect.min + vec2(7.0, 4.0), galley, ink);
+        (response.clicked(), rect.right())
+    };
+    if let Some(question) = &c.question {
+        // His question before a guess is carried out, and its two keys.
+        let galley = p.layout(crate::crash_guard::clip(question, 160).to_string(), FontId::proportional(13.5), STRIP_INK, inner.width());
+        let h = galley.size().y;
+        p.galley(pos2(inner.left(), y), galley, STRIP_INK);
+        let row = pos2(inner.left(), (y + h + 7.0).min(inner.bottom() - 24.0));
+        let (yes, right) = key(ui, row, "[ YES ]", true);
+        let (no, _) = key(ui, pos2(right + 8.0, row.y), "[ NO ]", false);
+        if yes {
+            did = OrbClick::Yes;
+        } else if no {
+            did = OrbClick::No;
+        }
+    } else if !c.choices.is_empty() {
+        // The orders closest to the one he did not know: a click (or "the first one") takes one.
+        p.text(pos2(inner.left(), y), Align2::LEFT_TOP, "DID YOU MEAN", FontId::monospace(10.0), crate::hud_board::active_colour());
+        let mut at = pos2(inner.left(), y + 16.0);
+        for (k, label) in c.choices.iter().enumerate().take(3) {
+            let text = crate::hud_lines::fit(&p, label, &strip_font(), inner.width() - 20.0);
+            let (clicked, _) = key(ui, at, &text, false);
+            if clicked {
+                did = OrbClick::Choice(k);
+            }
+            at.y += 27.0;
+        }
+    } else if !c.answered.is_empty() {
+        let galley = p.layout(crate::crash_guard::clip(&c.answered, 220).to_string(), FontId::proportional(13.5), STRIP_INK, inner.width());
+        p.with_clip_rect(Rect::from_min_max(pos2(inner.left(), y), inner.max)).galley(pos2(inner.left(), y), galley, STRIP_INK);
+    } else if c.state != "idle" {
+        // (What he is at, and Sir's words as he speaks, as under the emblem.)
+        let _ = crate::hud_lines::paint(ui, pos2(inner.center().x, y + 2.0), inner.width(), &c.state, c.live_words, None);
+    }
+    did
 }
 
 /// Mini mode's place among the orb window's anchors (the window is a strip then), and how tall
@@ -3683,6 +4032,12 @@ impl HudApp {
             for command in lock(&SHARED.pending).drain(..) {
                 crate::win32::run_detached(move || apply_window_command(hwnd, command));
             }
+            // He starts as the desktop's background: the desktop is handed the window before
+            // it is first shown, so the board never lies over Sir's windows on its way there.
+            let iface = app.config().read(|c| c.interface.clone());
+            if let Some(rect) = (iface.desktop_background && !iface.orb_mode).then(|| background_rect(&iface)).flatten() {
+                crate::wallpaper::arrive(hwnd, rect, cc.egui_ctx.native_pixels_per_point().unwrap_or(1.0));
+            }
         }
         #[cfg(not(windows))]
         let hwnd = {
@@ -3778,7 +4133,45 @@ impl HudApp {
             header_taken: Vec::new(),
             pill: ("LISTENING", "LISTENING", now),
             voice_rim: 0.0,
+            backdrop: crate::wallpaper::Standing::Off,
+            corner_orb: Default::default(),
+            orb_out_on: None,
+            orb_words: (String::new(), String::new(), now),
+            emblem_spot: (Pos2::ZERO, 0.0),
+            console_wants_keys: false,
+            demo_click: 0,
+            orb_shape: (0, 0, 0),
         }
+    }
+
+    /// Whether the board is (or is becoming) the desktop's background: then it is no window,
+    /// and none of a window's ways (fullscreen, a title bar, a move) is its own.
+    fn as_background(&self) -> bool {
+        matches!(self.backdrop, crate::wallpaper::Standing::Arriving | crate::wallpaper::Standing::On)
+    }
+
+    /// He as the desktop's background (`wallpaper`): the board's window is handed to the
+    /// desktop once it stands, plain, where it is to be, and taken back when the switch goes
+    /// off. A refusal puts the switch back and says why. While he is the background every view
+    /// of his is a window of its own (`hud_dock::all_own`).
+    fn sync_background(&mut self, ctx: &egui::Context, iface: &InterfaceSettings) {
+        use crate::wallpaper::Standing;
+        let rect = (iface.desktop_background && !iface.orb_mode && self.hwnd != 0 && !ctx.embed_viewports()).then(|| background_rect(iface)).flatten();
+        let now = crate::wallpaper::tick(self.hwnd, rect, ctx.native_pixels_per_point().unwrap_or(1.0), crate::hud_feel::game_in_front());
+        if now == self.backdrop {
+            return;
+        }
+        if let Standing::Refused(why) = &now {
+            lock(&self.model).toast(format!("The desktop would not take me as its background ({why})."), true);
+            self.app.config().update(|c| c.interface.desktop_background = false);
+        }
+        self.backdrop = now;
+        crate::hud_dock::set_all_own(self.as_background());
+        if !self.as_background() {
+            self.corner_orb = Default::default();
+            self.orb_out_on = None;
+        }
+        ctx.request_repaint();
     }
 
     /// Files dropped on the HUD (the reference's "+ DROP A FILE"): the last one is what the
@@ -3941,7 +4334,17 @@ impl HudApp {
             self.window_seen = (now, Some(Instant::now()));
         } else if since.is_some_and(|s| s.elapsed() > Duration::from_millis(500)) {
             self.window_seen.1 = None;
-            let shape = if iface.orb_mode { "the floating orb" } else if iface.span_all_monitors { "one board across every monitor" } else if iface.fullscreen { "the fullscreen board" } else { "a window" };
+            let shape = if self.as_background() {
+                "the desktop's background"
+            } else if iface.orb_mode {
+                "the floating orb"
+            } else if iface.span_all_monitors {
+                "one board across every monitor"
+            } else if iface.fullscreen {
+                "the fullscreen board"
+            } else {
+                "a window"
+            };
             info!("[HUD] Window at {},{} {}×{} ({shape})", now[0], now[1], now[2], now[3]);
         }
     }
@@ -3950,6 +4353,10 @@ impl HudApp {
     /// 1.5 s a check that the window really covers the monitor (re-applied when it does not).
     fn enforce_fullscreen(&mut self, ctx: &egui::Context, iface: &InterfaceSettings) {
         self.frames += 1;
+        // (As the desktop's background its place is the desktop's affair: `wallpaper::tick`.)
+        if self.as_background() || (iface.desktop_background && !iface.orb_mode && background_rect(iface).is_some()) {
+            return;
+        }
         // "Use all monitors": the window covers the box around every monitor.
         #[cfg(windows)]
         if iface.span_all_monitors && !iface.orb_mode && self.hwnd != 0 && (self.frames == 2 || self.fullscreen_check.elapsed() > Duration::from_millis(1500)) {
@@ -4100,14 +4507,23 @@ impl HudApp {
         egui::CentralPanel::default().frame(Frame::none()).show(ctx, |ui| {
             // The empty canvas moves the frameless window (not the fullscreen board, nor the one
             // that spans the monitors); a double-click toggles fullscreen.
-            let canvas = ui.interact(ui.max_rect(), ui.id().with("hud_canvas"), Sense::click_and_drag());
-            if canvas.drag_started_by(egui::PointerButton::Primary) && !iface.fullscreen && !iface.span_all_monitors {
-                ctx.send_viewport_cmd(ViewportCommand::StartDrag);
-            }
-            if canvas.double_clicked() {
-                let mut next = iface.clone();
-                next.fullscreen = !iface.fullscreen;
-                self.set_interface(next);
+            // (As the desktop's background the empty canvas is the desktop's: a click on it is a
+            // click on the desktop, and only his keys are his.)
+            if !self.as_background() {
+                let canvas = ui.interact(ui.max_rect(), ui.id().with("hud_canvas"), Sense::click_and_drag());
+                if canvas.drag_started_by(egui::PointerButton::Primary) && !iface.fullscreen && !iface.span_all_monitors {
+                    ctx.send_viewport_cmd(ViewportCommand::StartDrag);
+                }
+                // (Not on the board across every monitor: there a double click ended the span,
+                // which no one who double-clicks an empty spot means. In Sir's log of 2026-11-13
+                // the span he had just asked for was gone a second and a half later with no
+                // order in between; whether a double click did it is not known, it is the one
+                // way an empty spot could.)
+                if canvas.double_clicked() && !iface.span_all_monitors {
+                    let mut next = iface.clone();
+                    next.fullscreen = !iface.fullscreen;
+                    self.set_interface(next);
+                }
             }
             // Everything of the HUD proper is laid out on its home screen: the window, or Sir's
             // first monitor while one board spans them all.
@@ -4193,8 +4609,12 @@ impl HudApp {
             self.emblem.set_music(if music { bass } else { 0.0 });
             // The emblem (drawn over the board; its corner cell is kept free), wherever Sir put it.
             self.emblem.glide(screen, dt);
-            self.emblem.paint(&ui.painter_at(screen), screen);
+            // (While the orb is out in a corner the background has no emblem: it has left it.)
+            if self.corner_orb.is_home() {
+                self.emblem.paint(&ui.painter_at(screen), screen);
+            }
             let frame = self.emblem.frame(screen);
+            self.emblem_spot = (frame.centre, frame.radius);
             // (Said once, a moment after the start: where the emblem stands, in the log.)
             if self.frames == 150 {
                 info!("[HUD] Emblem at {:.0},{:.0} (radius {:.0}) on a screen of {:.0}×{:.0} at {:.0},{:.0}", frame.centre.x, frame.centre.y, frame.radius, screen.width(), screen.height(), screen.left(), screen.top());
@@ -4208,14 +4628,13 @@ impl HudApp {
             let hit = Rect::from_center_size(frame.centre, vec2(frame.radius * 1.6, frame.radius * 1.6));
             let emblem = ui.interact(hit, ui.id().with("hud_emblem"), Sense::click_and_drag());
             // Drag the emblem anywhere on the board; it stays there (and windows open around it).
-            // (Near the middle of the screen it takes the middle: its home. The two centre lines
-            // show while it is held, so the middle is easy to find again.)
+            // (Near the middle of the screen it takes the middle: its home. No lines are drawn
+            // for it any more: Sir wants no alignment help on his screen, 2026-11-13.)
             let middle = screen.center();
             let near_middle = |p: Pos2| (p - middle).length() <= EMBLEM_SNAP * screen.width().min(screen.height());
             if let Some(p) = emblem.interact_pointer_pos().filter(|_| emblem.dragged_by(egui::PointerButton::Primary)) {
                 let p = if near_middle(p) { middle } else { p };
                 self.emblem.drag_to(vec2((p.x - screen.left()) / screen.width(), (p.y - screen.top()) / screen.height()));
-                crate::hud_style::paint_guides(ctx, &[[pos2(middle.x, screen.top()), pos2(middle.x, screen.bottom())], [pos2(screen.left(), middle.y), pos2(screen.right(), middle.y)]]);
                 ctx.request_repaint();
             }
             if emblem.drag_stopped() {
@@ -4339,9 +4758,15 @@ impl HudApp {
                 self.last_activity = Instant::now();
             }
         }
-        let idle = self.boot.is_none() && ((!still && crate::idle_screen::is_idle(iface.idle_screen, self.last_activity.elapsed(), &m.state)) || (demo("idle") && (20.0..32.0).contains(&age)));
-        if idle {
+        // (As the desktop's background he never dims to the idle screen: nobody touches a
+        // background, and it would be the idle screen for good.)
+        let idle = self.boot.is_none() && !self.as_background() && ((!still && crate::idle_screen::is_idle(iface.idle_screen, self.last_activity.elapsed(), &m.state)) || (demo("idle") && (20.0..32.0).contains(&age)));
+        if idle || self.as_background() {
             crate::idle_screen::refresh(&self.app, &self.rt);
+        }
+        // As the background: the day beside the emblem (his choice of 2026-11-13).
+        if self.as_background() && self.boot.is_none() {
+            self.day_panel(ctx, home, frame.centre, frame.radius);
         }
         let target = if idle { 1.0 } else { 0.0 };
         // (Back from a long rest: what Windows took out of memory meanwhile comes back in one
@@ -4403,6 +4828,7 @@ impl HudApp {
             mic_muted: !self.app.config_state().mic_enabled || crate::listening_lock::is_locked(),
             voice: VoiceLock::of(iface.voice_lock, crate::speaker_id::guests_welcome(), crate::hud_feel::voice_known()),
             dictating: crate::kit_typing::dictating(),
+            lock_left: crate::listening_lock::remaining(),
         };
         let items = header_items(&lit, reboot_label.trim_start_matches("[ ").trim_end_matches(" ]"), &source);
         let y = screen.top() + 10.0;
@@ -4470,6 +4896,10 @@ impl HudApp {
             }
             if crate::window_drill::enabled() {
                 crate::window_drill::mark(&format!("header:{id}"), rect);
+            }
+            // (A scripted session's stand-in for a click on the desktop aims at this key.)
+            if id == "changes" && demo("desk-click") {
+                *lock(&DEMO_KEY) = Some(rect);
             }
             let response = ui.interact(rect, ui.id().with(("hud_strip", id)), Sense::click());
             let hot = response.hovered() || item.on;
@@ -5160,6 +5590,18 @@ impl HudApp {
                 builder = builder.with_position(at).with_inner_size(size);
             }
             let builder = for_test_session(builder);
+            // Asked for to type in (his key, a click on the corner orb): once its window is
+            // up it takes the keyboard. (His windows come up without it; this one is the
+            // exception, and only when Sir himself called it. Never in a scripted session.)
+            if self.console_focus {
+                self.console_wants_keys = !crate::platform::in_test_session();
+            }
+            let console = ViewportId::from_hash_of("jai_text_console");
+            if self.console_wants_keys && lock(&DETACHED_MOTIONS).revealed.contains(&console) {
+                self.console_wants_keys = false;
+                self.console_focus = true;
+                ctx.send_viewport_cmd_to(console, ViewportCommand::Focus);
+            }
             ctx.show_viewport_immediate(ViewportId::from_hash_of("jai_text_console"), builder, |ctx, _| {
                 if ctx.input(|i| i.viewport().close_requested()) {
                     act.close = true;
@@ -5630,6 +6072,11 @@ impl HudApp {
         if self.hub.open {
             self.hub.show(ctx, &self.palette, &self.app, &self.rt);
         }
+        // His windows of their own that are on their way somewhere ("tidy the windows", "move
+        // it to my second monitor"): one step of their glide.
+        if crate::own_windows::step() {
+            ctx.request_repaint();
+        }
         // JAI's tool views: ROSE blocks inside the HUD, or their own OS windows when detached.
         crate::hud_dock::begin_frame();
         // "Move it to the middle", "full screen the Earth": where his views go, this frame.
@@ -5678,21 +6125,22 @@ impl HudApp {
         // The kit's blocks: the notebook, the hearing log, the coach, the privacy board, the
         // changes list and its explanations.
         crate::kit::show(ctx);
+        // "Show your windows": their list.
+        self.windows_list(ctx);
         // "Learn my voice": the set-up's block (with his voice's level as it comes in).
         crate::voice_setup::show(ctx, self.reactor.mic);
         // The live subtitles' bar, while they are on.
         crate::live_subtitles::show(ctx, &self.app, &self.rt);
-        // The live desktop background, on a monitor the board is not on.
+        // The dashboard on an upright monitor the board is not on, behind the desktop's icons.
+        // (He as the whole desktop's background is the board's own window: `sync_background`.
+        // Then the upright monitor is part of him, and the dashboard is drawn on it there.)
         let state = lock(&self.model).state.clone();
-        // (As the orb or the slim strip he holds no monitor: any of them can be his background.)
-        if let Some(crate::desktop_backdrop::Refused(why)) = crate::desktop_backdrop::show(ctx, (iface.desktop_background || iface.portrait_dashboard) && !windows_still(ctx), if iface.orb_mode { 0 } else { self.hwnd }, iface.span_all_monitors && !iface.orb_mode, !iface.orb_mode, iface.portrait_dashboard, &state) {
+        let own_backdrop = iface.portrait_dashboard && !(iface.desktop_background && !iface.orb_mode) && !self.as_background();
+        // (As the orb or the slim strip he holds no monitor: any of them can hold it.)
+        if let Some(crate::desktop_backdrop::Refused(why)) = crate::desktop_backdrop::show(ctx, own_backdrop && !windows_still(ctx), if iface.orb_mode { 0 } else { self.hwnd }, iface.span_all_monitors && !iface.orb_mode, !iface.orb_mode, true, &state) {
             lock(&self.model).toast(why, true);
-            // (Whichever of the two was asked for: both are off, or the refusal would come
-            // again with every frame.)
-            self.app.config().update(|c| {
-                c.interface.desktop_background = false;
-                c.interface.portrait_dashboard = false;
-            });
+            // (Off, or the refusal would come again with every frame.)
+            self.app.config().update(|c| c.interface.portrait_dashboard = false);
         }
         mark("mixer");
         mixer_view::show(ctx, &self.rt);
@@ -5739,6 +6187,19 @@ impl HudApp {
         // At rest with nobody looking closely (no key or pointer for minutes, or the models
         // in standby for a game) a third of the frames is enough: the hours he is away.
         let fps = if active || !iface.animations { target_fps(iface.animations, active, attended, display_hz()) } else { rest_fps(nobody_watching()) };
+        // As the desktop's background he mostly draws for nobody: at rest, or while a window
+        // covers his emblem, twelve frames a second are plenty, and two beside a game. (The
+        // corner orb asks for its own frames while it is out, the pointer over the desktop
+        // for one with every move.)
+        let fps = if self.as_background() && (!active || (crate::wallpaper::hidden() && self.corner_orb.is_home())) {
+            if crate::hud_feel::game_in_front() {
+                2.0
+            } else {
+                fps.min(12.0)
+            }
+        } else {
+            fps
+        };
         ctx.request_repaint_after(Duration::from_secs_f32(1.0 / fps));
     }
 }
@@ -6345,6 +6806,18 @@ struct HeaderState {
     voice: VoiceLock,
     /// Dictation is on: what is said is typed into the app in front.
     dictating: bool,
+    /// "Don't listen for ten minutes": how long until he listens again by himself.
+    lock_left: Option<Duration>,
+}
+
+/// How long is left, as the header's box says it: "45 S", "9 MIN", "1 H 20".
+fn left_words(left: Duration) -> String {
+    let secs = left.as_secs();
+    match secs {
+        0..=89 => format!("{} S", secs.max(1)),
+        90..=3599 => format!("{} MIN", (secs + 30) / 60),
+        _ => format!("{} H {:02}", secs / 3600, (secs % 3600) / 60),
+    }
 }
 
 /// Whose voice he answers to, as the header strip says it.
@@ -6406,7 +6879,13 @@ fn header_items(lit: &HeaderState, reboot: &str, source: &str) -> Vec<HeaderItem
         item("screens", "SCREENS", lit.screens, true),
         item("voice", lit.voice.label(), lit.voice.open(), true),
         // (While he types what is said, the box says so and is lit: one click ends it.)
-        item("mic", if lit.mic_muted { "MIC: MUTED" } else if lit.dictating { "MIC: DICTATING" } else { "MIC: ON" }, lit.mic_muted || lit.dictating, true),
+        // (Told not to listen for a while: the box counts the time down.)
+        item("mic", &match (lit.mic_muted, lit.lock_left) {
+            (true, Some(left)) => format!("MIC: MUTED {}", left_words(left)),
+            (true, None) => "MIC: MUTED".to_string(),
+            _ if lit.dictating => "MIC: DICTATING".to_string(),
+            _ => "MIC: ON".to_string(),
+        }, lit.mic_muted || lit.dictating, true),
     ]
 }
 
@@ -6958,6 +7437,9 @@ struct DetachedMotions {
     hidden: std::collections::HashMap<ViewportId, (u32, Instant)>,
     /// Windows the HUD owns already (`keep_above_hud`).
     owned: std::collections::HashSet<ViewportId>,
+    /// When each shown window was last looked at from outside, and how often it had to be
+    /// shown again (`keep_shown`).
+    looked: std::collections::HashMap<ViewportId, (Instant, u32)>,
 }
 
 impl DetachedMotions {
@@ -6986,7 +7468,52 @@ impl DetachedMotions {
         self.revealed.remove(&viewport);
         self.hidden.remove(&viewport);
         self.owned.remove(&viewport);
+        self.looked.remove(&viewport);
     }
+}
+
+/// How often a window that has shown itself is looked at from outside.
+const LOOK_EVERY: Duration = Duration::from_millis(400);
+
+/// From the HUD's frame: a window that has shown itself is looked at from outside a few times
+/// a second, and one that Windows calls hidden is shown through Windows itself (and through
+/// egui again, so that both agree). The log says so the first times: it names a fault that is
+/// papered over here, not cured. (Sir's session of 2026-11-13: three explanation windows
+/// existed, had drawn, had "shown themselves", and were hidden.)
+fn keep_shown(ctx: &egui::Context, motions: &mut DetachedMotions, viewport: ViewportId) {
+    #[cfg(windows)]
+    {
+        // (Windows hides a minimised board's own windows with it and brings them back with it:
+        // that is not this fault.)
+        if !motions.revealed.contains(&viewport) || motions.leaving.contains_key(&viewport) || ctx.input(|i| i.viewport().minimized.unwrap_or(false)) {
+            return;
+        }
+        let now = Instant::now();
+        let (last, _) = motions.looked.entry(viewport).or_insert((now, 0));
+        if now.duration_since(*last) < LOOK_EVERY {
+            return;
+        }
+        *last = now;
+        let Some(title) = ctx.input(|i| i.raw.viewports.get(&viewport).and_then(|v| v.title.clone())) else { return };
+        let ctx = ctx.clone();
+        crate::win32::run_detached(move || {
+            let Some(hwnd) = crate::win32::own_window(&title) else { return };
+            if crate::win32::is_visible(hwnd) {
+                return;
+            }
+            crate::win32::show_no_activate(hwnd);
+            ctx.send_viewport_cmd_to(viewport, ViewportCommand::Visible(true));
+            let mut motions = lock(&DETACHED_MOTIONS);
+            // (Closed in the meantime: nothing to count.)
+            let Some((_, times)) = motions.looked.get_mut(&viewport) else { return };
+            *times += 1;
+            if *times <= 3 || times.is_multiple_of(50) {
+                warn!("[HUD] '{title}' had shown itself and Windows called it hidden: shown through Windows ({times}×)");
+            }
+        });
+    }
+    #[cfg(not(windows))]
+    let _ = (ctx, motions, viewport);
 }
 
 /// From the HUD's frame: a window that exists and has still not shown itself after a few of the
@@ -7043,6 +7570,7 @@ pub(super) fn detached_keep(ctx: &egui::Context, viewport: ViewportId, open: boo
             ctx.send_viewport_cmd_to(viewport, egui::ViewportCommand::Visible(true));
         }
         reveal_overdue(ctx, &mut motions, viewport);
+        keep_shown(ctx, &mut motions, viewport);
         return true;
     }
     match motions.leaving.get(&viewport).copied() {
@@ -7151,13 +7679,19 @@ pub(super) fn hud_block_window(ctx: &egui::Context, id: &str, title: &str, size:
     // (Only where a block fits the board at all: in a window smaller than one block there is
     // no place to give.)
     let fits = bounds.width() >= crate::hud_dock::MIN_BLOCK[0] + 20.0 && bounds.height() >= crate::hud_dock::MIN_BLOCK[1] + 20.0;
-    let fresh = ctx.memory(|m| m.area_rect(area)).is_none_or(|old| (fits && !bounds.expand(2.0).contains_rect(old)) || (!crate::hud_dock::is_open(id) && crate::hud_dock::collides(id, old)));
+    // In Sir's hand (or gliding on from his throw) a block belongs to no one screen: it crosses
+    // from one monitor's part to the next as his hand moves, and is neither placed afresh nor
+    // pushed back inside on the way. (Until 2026-11-13 it jumped to the other monitor the
+    // moment the pointer crossed the bezel. Sir: "I should be able to move JAI's own windows
+    // between monitors smoothly".)
+    let in_hand = dragged.is_some() || lock(&THROWN).contains_key(id);
+    let fresh = !in_hand && ctx.memory(|m| m.area_rect(area)).is_none_or(|old| (fits && !bounds.expand(2.0).contains_rect(old)) || (!crate::hud_dock::is_open(id) && crate::hud_dock::collides(id, old)));
     let held = crate::hud_dock::take_forced(id).or_else(|| full.then_some(home)).or_else(|| fresh.then(|| crate::block_places::remembered(id, &regions).unwrap_or_else(|| new_block_rect(ctx, id, &regions, size + frame_pad))));
     // A place the dock gave on another monitor makes that monitor the block's screen.
     if let Some(r) = held {
         bounds = region_at(&regions, r.center());
     }
-    let constrain = if full || gliding { ctx.screen_rect() } else { bounds };
+    let constrain = if full || gliding || in_hand { ctx.screen_rect() } else { bounds };
     if full {
         bounds = home;
     }
@@ -7314,24 +7848,24 @@ pub(super) fn hud_block_window(ctx: &egui::Context, id: &str, title: &str, size:
         } else if let Some((home, origin)) = crate::hud_dock::grabbed(id).filter(|_| down || released) {
             let moved = (rect.min - home.min).length() > 0.5 && (rect.size() - home.size()).length() <= 0.5;
             if let Some(at) = at.filter(|_| moved) {
-                let free = Rect::from_min_size(home.min + (at - origin), home.size());
-                // It lines up with its neighbours, the emblem and the screen (Alt: freely), and
-                // the lines it snapped to show while it is held.
-                let (alt, velocity) = ctx.input(|i| (i.modifiers.alt, i.pointer.velocity()));
-                let (landed, guides) = if alt || still {
-                    (free, Vec::new())
-                } else {
-                    let mut others: Vec<Rect> = crate::hud_dock::block_rects().into_iter().filter(|o| (o.min - rect.min).length() > 1.0 || (o.size() - rect.size()).length() > 1.0).collect();
-                    others.extend(crate::hud_dock::orb());
-                    crate::hud_style::snap(free, &others, bounds, crate::hud_style::SNAP_REACH)
-                };
-                if down {
-                    crate::hud_style::paint_guides(ctx, &guides);
-                }
+                // It goes where the hand has it, and nowhere else. (Until 2026-11-13 it lined
+                // itself up with its neighbours, the emblem and the screen, and drew the lines
+                // it had snapped to. Sir: "I don't want that feature that adds help to align
+                // the windows".)
+                let landed = Rect::from_min_size(home.min + (at - origin), home.size());
+                let velocity = ctx.input(|i| i.pointer.velocity());
                 crate::hud_dock::hold_once(id, landed);
                 // Let go while it moved: it is thrown, and glides on a little.
-                if released && !still && velocity.length() >= crate::hud_style::THROW_FROM && guides.is_empty() {
+                if released && !still && velocity.length() >= crate::hud_style::THROW_FROM {
                     lock(&THROWN).insert(id.to_string(), (landed, velocity));
+                } else if released && !still {
+                    // Let go across a bezel (or where no screen shows): it glides the rest of
+                    // the way onto the screen its middle is on, it does not jump there.
+                    let screen = region_at(&regions, landed.center());
+                    let inside = moved_inside(landed, screen);
+                    if (inside.min - landed.min).length() > 1.0 || (inside.size() - landed.size()).length() > 1.0 {
+                        crate::hud_dock::glide_to(id, landed, inside);
+                    }
                 }
                 ctx.request_repaint();
             }
@@ -7829,6 +8363,24 @@ pub(crate) fn block(ctx: &egui::Context, id: &str, title: &str, size: [f32; 2], 
     closed
 }
 
+/// A window of the board's own (the interface settings, the hub, a question to Sir) as one of
+/// his blocks: on the board, or a window of its own (`[ DETACH ]`, and always while he is the
+/// desktop's background). `open` goes false when Sir closes it. (Until 2026-11-13 these were
+/// plain windows inside the board and nowhere else. Sir: "there should be none windows that
+/// are exclusive to JAI's UI".)
+pub(crate) fn board_window(ctx: &egui::Context, id: &str, title: &str, size: [f32; 2], open: &mut bool, body: impl FnOnce(&mut Ui)) {
+    if !*open {
+        crate::hud_dock::forget(id);
+        return;
+    }
+    if block(ctx, id, title, size, |ui| {
+        egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, body);
+    }) {
+        *open = false;
+        crate::hud_dock::forget(id);
+    }
+}
+
 /// The keyboard shortcut for the block under the pointer, if one was pressed this frame:
 /// Ctrl+W closes it, Ctrl+G grows it to the full board (and back), Ctrl+P pins it, Ctrl+E
 /// exports it as Markdown. (Ctrl+M is the microphone's.)
@@ -7923,6 +8475,13 @@ fn block_regions(ctx: &egui::Context) -> Vec<Rect> {
 /// The region `at` lies in, else the nearest one (`regions` is never empty).
 fn region_at(regions: &[Rect], at: Pos2) -> Rect {
     regions.iter().copied().min_by(|a, b| a.distance_sq_to_pos(at).total_cmp(&b.distance_sq_to_pos(at))).unwrap_or(Rect::NOTHING)
+}
+
+/// `rect` moved the shortest way into `screen` (and made smaller only where it is larger).
+fn moved_inside(rect: Rect, screen: Rect) -> Rect {
+    let size = rect.size().min(screen.size());
+    let min = pos2(rect.min.x.clamp(screen.min.x, screen.max.x - size.x), rect.min.y.clamp(screen.min.y, screen.max.y - size.y));
+    Rect::from_min_size(min, size)
 }
 
 /// The SCREENS menu's width (it narrows on a screen that is narrower).
@@ -8179,6 +8738,8 @@ impl eframe::App for HudApp {
     /// `--window-drill`: its clicks arrive as the window's own pointer input.
     fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
         crate::window_drill::feed(raw_input);
+        // As the desktop's background: the pointer over the bare desktop is his pointer.
+        crate::wallpaper::feed(raw_input);
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
@@ -8225,6 +8786,7 @@ impl HudApp {
         OLED_MOTION.store(self.palette.oled, Ordering::Relaxed);
         // (The console publishes where it stands again if it is drawn this frame.)
         publish_console_rect(None);
+        self.sync_background(ctx, &iface);
         self.enforce_fullscreen(ctx, &iface);
         self.sync_orb_window(ctx, &iface);
         self.note_window(ctx, &iface);
@@ -8310,10 +8872,13 @@ impl HudApp {
             }
             self.popups(ctx, dt);
             self.room_alert_overlay(ctx, &m);
-            // (Neither the fullscreen board nor the one across the monitors is resized by hand.)
-            if iface.frameless && !iface.fullscreen && !iface.span_all_monitors && !maximized {
+            // (Neither the fullscreen board nor the one across the monitors is resized by hand,
+            // nor the desktop's background.)
+            if iface.frameless && !iface.fullscreen && !iface.span_all_monitors && !maximized && !self.as_background() {
                 self.resize_grips(ctx);
             }
+            // As the desktop's background: the orb that leaves it when Sir speaks to him unseen.
+            self.corner_orb_frame(ctx, &m, &iface);
         }
         if m.offline {
             self.offline_overlay(ctx);
@@ -8324,7 +8889,340 @@ impl HudApp {
         }
         self.after_body(ctx, &iface);
         settle_new_areas(ctx);
+        // (Which of his keys the pointer over the desktop is on, for the mouse hook.)
+        crate::wallpaper::after_frame(ctx);
+        // A scripted session's stand-in for Sir's mouse on the desktop (`JAI_DEMO=desk-click`):
+        // from its 16th second the pointer comes to rest on `[ CHANGES ]`, presses it and lets
+        // go, by the way the hook's events take from `wallpaper::took` on. The log says
+        // whether the press was his.
+        if self.backdrop == crate::wallpaper::Standing::On && demo("desk-click") && self.demo_click < 40 && hud_age() > 16.0 {
+            let key = *lock(&DEMO_KEY);
+            if let (Some(key), Some(origin)) = (key, ctx.input(|i| i.viewport().inner_rect.map(|r| r.min))) {
+                let ppp = ctx.pixels_per_point();
+                let (x, y) = (((origin.x + key.center().x) * ppp).round() as i32, ((origin.y + key.center().y) * ppp).round() as i32);
+                self.demo_click += 1;
+                match self.demo_click {
+                    1 | 10 => {
+                        crate::wallpaper::demo_mouse(0, x, y);
+                    }
+                    20 => info!("[DESKTOP] demo: a press on [ CHANGES ] at {x},{y} on the desktop: his = {:?}", crate::wallpaper::demo_mouse(1, x, y)),
+                    24 => {
+                        crate::wallpaper::demo_mouse(2, x, y);
+                    }
+                    _ => {}
+                }
+                ctx.request_repaint();
+            }
+        }
         self.last_frame = now;
+    }
+
+    /// "Show your windows" (or his key for it): the list of his windows of their own, each
+    /// with its keys: in front of the others, onto the monitor Sir is using, closed.
+    fn windows_list(&mut self, ctx: &egui::Context) {
+        if !WINDOWS_LIST.load(Ordering::Acquire) {
+            return;
+        }
+        #[cfg(windows)]
+        {
+            // (Looked up twice a second, not in every frame.)
+            static SEEN: Mutex<Option<(Instant, Vec<crate::win32_desktop::OwnWindow>)>> = Mutex::new(None);
+            let own = {
+                let mut seen = lock(&SEEN);
+                if seen.as_ref().is_none_or(|(at, _)| at.elapsed() > Duration::from_millis(500)) {
+                    *seen = Some((Instant::now(), crate::own_windows::list()));
+                }
+                seen.as_ref().map(|(_, own)| own.clone()).unwrap_or_default()
+            };
+            // (Not called "Windows": while it was, "close the windows" meant this one block.
+            // Seen in a silent session, 2026-11-14.)
+            const TITLE: &str = "On call // what I have open";
+            let mut act: Option<(isize, u8, [i32; 4])> = None;
+            let closed = block(ctx, "on_call", TITLE, [470.0, 300.0], |ui| {
+                let rows: Vec<_> = own.iter().filter(|w| !w.title.starts_with("On call")).collect();
+                if rows.is_empty() {
+                    ui.label(RichText::new("No window of mine is open, Sir.").size(13.5).color(STRIP_MUTED));
+                }
+                egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
+                    for w in rows {
+                        ui.horizontal(|ui| {
+                            let name = w.title.trim_end_matches("J.A.I.").trim_end_matches([' ', '\u{2014}', '-']).to_string();
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                let key = |ui: &mut Ui, text: &str, hint: &str| ui.add(egui::Button::new(RichText::new(text).font(strip_font()).color(STRIP_INK)).fill(rgba([3, 7, 12], 0.9)).stroke(stroke(1.0, crate::hud_board::border_colour())).rounding(Rounding::ZERO)).on_hover_text(hint).clicked();
+                                if key(ui, "[ CLOSE ]", "Close it") {
+                                    act = Some((w.hwnd, 2, w.rect));
+                                }
+                                if key(ui, "[ HERE ]", "Onto the monitor you are using") {
+                                    act = Some((w.hwnd, 1, w.rect));
+                                }
+                                if key(ui, "[ FRONT ]", "In front of the other windows") {
+                                    act = Some((w.hwnd, 0, w.rect));
+                                }
+                                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                                    ui.add(egui::Label::new(RichText::new(name).size(13.5).color(STRIP_INK)).truncate());
+                                });
+                            });
+                        });
+                        ui.add_space(3.0);
+                    }
+                });
+            });
+            match act {
+                Some((hwnd, 0, _)) => crate::win32_desktop::raise(hwnd),
+                Some((hwnd, 1, [l, t, r, b])) => {
+                    let monitors = crate::monitors::recent();
+                    if let Some(on) = crate::wallpaper::monitor_in_use(&monitors) {
+                        let (w, h) = ((r - l).min(on.work[2] - on.work[0]), (b - t).min(on.work[3] - on.work[1]));
+                        crate::own_windows::glide(hwnd, [l, t, r - l, b - t], [(on.work[0] + on.work[2] - w) / 2, (on.work[1] + on.work[3] - h) / 2, w, h]);
+                        crate::win32_desktop::raise(hwnd);
+                    }
+                }
+                Some((hwnd, _, _)) => crate::win32_desktop::close(hwnd),
+                None => {}
+            }
+            if closed {
+                WINDOWS_LIST.store(false, Ordering::Release);
+            }
+        }
+        #[cfg(not(windows))]
+        let _ = ctx;
+    }
+
+    /// The timers that run: what the strip says of each ("TIMER  04:12"), and the share of its
+    /// time that has passed (None for a stopwatch, which has no end).
+    fn running_timers(&self) -> Vec<(String, Option<f32>)> {
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        self.app
+            .tools()
+            .widgets
+            .widgets()
+            .iter()
+            .rev()
+            .filter_map(|w| {
+                let crate::widgets::WidgetKind::CountdownOrStopwatch { running: true, .. } = &w.kind else { return None };
+                let (elapsed, remaining) = crate::widgets::timer_state(&w.kind, now_ms)?;
+                let secs = remaining.unwrap_or(elapsed) / 1000;
+                let share = remaining.map(|left| elapsed as f32 / (elapsed + left).max(1) as f32);
+                Some((format!("{}  {:02}:{:02}", if remaining.is_some() { "TIMER" } else { "STOPWATCH" }, secs / 60, secs % 60), share))
+            })
+            .collect()
+    }
+
+    /// The day beside the emblem while he is the desktop's background: the lesson and the
+    /// appointment that come next, the reminders after them, the timers that run and the song
+    /// that plays. Left of the emblem; right of it while his widgets' column stands on the left.
+    fn day_panel(&self, ctx: &egui::Context, home: Rect, centre: Pos2, radius: f32) {
+        let now = chrono::Local::now().naive_local();
+        let glance = crate::idle_screen::glance();
+        let dash = crate::kit_screen::dash();
+        let mut sections: Vec<(&str, Vec<String>)> = Vec::new();
+        let mut next: Vec<String> = Vec::new();
+        if let Some((subject, start, room)) = &glance.lesson {
+            next.push(crate::idle_screen::next_line(subject, *start, room, now));
+        }
+        if let Some((title, start, place)) = glance.next.as_ref().filter(|(_, start, _)| *start > now) {
+            next.push(crate::idle_screen::next_line(title, *start, place, now));
+        }
+        next.extend(dash.next.iter().take(2).cloned());
+        if !next.is_empty() {
+            sections.push(("NEXT", next));
+        }
+        let timers: Vec<String> = self.running_timers().into_iter().map(|(line, _)| line).collect();
+        if !timers.is_empty() {
+            sections.push(("TIMERS", timers));
+        }
+        // The orders he was told to carry out later ("play music in one minute").
+        let planned: Vec<String> = crate::later::planned().into_iter().take(3).map(|(due, order)| format!("{}  {}", due.format("%H:%M"), order)).collect();
+        if !planned.is_empty() {
+            sections.push(("PLANNED", planned));
+        }
+        if let Some(song) = dash.playing {
+            sections.push(("NOW PLAYING", vec![song]));
+        }
+        if sections.is_empty() {
+            return;
+        }
+        let width = (home.width() * 0.2).clamp(240.0, 380.0);
+        let x = if self.system_column_rect.is_none() { (centre.x - radius * 1.55 - width).max(home.left() + 28.0) } else { (centre.x + radius * 1.55).min(home.right() - 28.0 - width) };
+        let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Background, egui::Id::new("hud_day"))).with_clip_rect(home);
+        let (accent, ink) = (crate::hud_board::active_colour(), Color32::from_rgb(0xE8, 0xF2, 0xFC));
+        let line_font = FontId::new(15.5, egui::FontFamily::Name("label".into()));
+        // (Laid out first: the whole of it stands level with the emblem's middle.)
+        let laid: Vec<(&str, Vec<Arc<egui::Galley>>)> = sections.iter().map(|(title, lines)| (*title, lines.iter().map(|l| p.layout(l.clone(), line_font.clone(), ink, width)).collect())).collect();
+        let height: f32 = laid.iter().map(|(_, lines)| 30.0 + lines.iter().map(|g| g.size().y + 5.0).sum::<f32>() + 14.0).sum();
+        let mut y = (centre.y - height / 2.0).max(home.top() + HEADER_H + 30.0);
+        for (title, lines) in laid {
+            p.text(pos2(x, y), Align2::LEFT_TOP, title, FontId::monospace(10.5), accent);
+            y += 17.0;
+            p.line_segment([pos2(x, y), pos2(x + width, y)], egui::Stroke::new(1.0f32, crate::hud_style::white(0.10)));
+            y += 13.0;
+            for galley in lines {
+                let h = galley.size().y;
+                p.galley(pos2(x, y), galley, ink);
+                y += h + 5.0;
+            }
+            y += 14.0;
+        }
+        // (The minutes on it count down.)
+        ctx.request_repaint_after(Duration::from_secs(1));
+    }
+
+    /// The orb that leaves the background (`wallpaper::Orb`). Spoken to while another program's
+    /// window covers the emblem, it flies from the emblem's place to a corner of the monitor
+    /// Sir is using, smaller, in front of everything, with what is being said beside it; five
+    /// seconds after the last of it, it flies back and is part of the background again. Sir
+    /// can drag it anywhere (it comes out there on that monitor from then on); a click opens
+    /// the console, a double click brings the board back.
+    fn corner_orb_frame(&mut self, ctx: &egui::Context, m: &HudModel, iface: &InterfaceSettings) {
+        use crate::wallpaper::{OrbPhase, Standing};
+        let (centre, radius) = self.emblem_spot;
+        if self.backdrop != Standing::On || self.boot.is_some() || radius <= 0.0 {
+            return;
+        }
+        let viewport = ViewportId::from_hash_of("jai_corner_orb");
+        let ppp = ctx.pixels_per_point();
+        let Some(origin) = ctx.input(|i| i.viewport().inner_rect.map(|r| r.min)) else { return };
+        let px = |p: Pos2| pos2(((origin.x + p.x) * ppp).round(), ((origin.y + p.y) * ppp).round());
+        let home = Rect::from_center_size(px(centre), Vec2::splat((radius * 2.0 * ppp).round()));
+        crate::wallpaper::look_at([home.left() as i32, home.top() as i32, home.right() as i32, home.bottom() as i32]);
+        let now = Instant::now();
+        // Spoken to (his name was heard, he thinks or speaks, or the conversation is open), or
+        // at work on something that shows (a badge, an offer waiting for an answer).
+        let talking = matches!(m.state.as_str(), "thinking" | "speaking") || (m.state == "listening" && m.window_until.is_some_and(|t| t > now)) || crate::hud_lines::woke_age().is_some_and(|age| age < 2.5);
+        // What he is at for longer shows as a ring round the orb: it fills as a timer runs out,
+        // and turns while a search runs on (which has no end to count to). ("Progress on the
+        // orb", his choice of 2026-11-13: for that long the orb stays out.)
+        let timers = self.running_timers();
+        let timer_label = timers.first().map(|(line, _)| line.clone());
+        let progress: Option<Option<f32>> = timers.first().map(|(_, share)| *share).or_else(|| crate::hud_board::researching().then_some(None));
+        let working = m.quick.as_ref().is_some_and(|(_, _, until)| *until > now)
+            || crate::hud_lines::offered().is_some()
+            || progress.is_some()
+            // (A question of his, or orders he offers, wait for Sir's word.)
+            || crate::ask_first::pending().is_some()
+            || crate::did_you_mean::current().is_some();
+        let gaming = crate::hud_feel::game_in_front();
+        // (A bit smaller than on the background, and smaller still beside a game.)
+        let size = ((radius * 2.0 * ppp) * if gaming { 0.3 } else { 0.42 }).clamp(96.0, 168.0).round() as i32;
+        let was_home = self.corner_orb.is_home();
+        let mut out_on = self.orb_out_on;
+        // (A scripted session can ask to see it fly although nothing covers its emblem: `JAI_DEMO=orb`.)
+        let hidden = crate::wallpaper::hidden() || demo("orb");
+        // The monitor it would come out on (a scripted session's: only its own).
+        let in_use = if was_home { crate::wallpaper::monitor_in_use(&crate::monitors::recent()) } else { None };
+        if was_home && in_use.is_none() {
+            return;
+        }
+        let frame = self.corner_orb.step(now, talking || working, hidden, home, || {
+            let work = in_use.map_or([0, 0, 1920, 1040], |m| m.work);
+            out_on = Some((work, size));
+            crate::wallpaper::corner(work, size, crate::wallpaper::spot_on(work))
+        });
+        self.orb_out_on = out_on;
+        let Some(frame) = frame else {
+            if !was_home {
+                info!("[DESKTOP] The orb is back in the background");
+                lock(&DETACHED_MOTIONS).forget(viewport);
+            }
+            return;
+        };
+        let last = |who: Speaker| m.messages.iter().rev().find(|l| l.who == who && !l.text.trim().is_empty()).map(|l| l.text.trim().to_string()).unwrap_or_default();
+        if was_home {
+            if let Some((work, _)) = self.orb_out_on {
+                info!("[DESKTOP] The orb leaves the background for the monitor at {},{} (the emblem is covered)", work[0], work[1]);
+            }
+            // (What was said before it came out is not what it comes out for.)
+            self.orb_words = (last(Speaker::Sir), last(Speaker::Jai), now);
+        }
+        // What is being said, beside it once it rests: Sir's line and his answer, when they are
+        // of this exchange.
+        let (said, answered) = (last(Speaker::Sir), last(Speaker::Jai));
+        let said = if said != self.orb_words.0 { said } else { String::new() };
+        let answered = if answered != self.orb_words.1 { answered } else { String::new() };
+        let resting = frame.phase == OrbPhase::Out;
+        let asked = crate::ask_first::pending().is_some() || crate::did_you_mean::current().is_some();
+        let words = resting && !gaming && (!(said.is_empty() && answered.is_empty() && m.state == "idle") || timer_label.is_some() || asked);
+        let orb_px = frame.rect.width().round();
+        const WORDS_WIDTH: f32 = 380.0;
+        let window_px = if words { vec2(orb_px + (12.0 + WORDS_WIDTH) * ppp, orb_px.max(96.0 * ppp)) } else { Vec2::splat(orb_px) };
+        // Sir moved it by hand: it rests where he let go, and comes out there on that monitor.
+        if resting && !ctx.input(|i| i.pointer.any_down()) {
+            if let Some(actual) = ctx.input(|i| i.raw.viewports.get(&viewport).and_then(|v| v.outer_rect)) {
+                let at = pos2((actual.min.x * ppp).round(), (actual.min.y * ppp).round());
+                if (at - frame.rect.min).length() > 3.0 && lock(&DETACHED_MOTIONS).revealed.contains(&viewport) {
+                    let moved = Rect::from_min_size(at, frame.rect.size());
+                    self.corner_orb.held_at(moved);
+                    let monitors = crate::monitors::recent();
+                    if let Some(on) = monitors.iter().find(|m| m.contains(moved.center().x as i32, moved.center().y as i32)) {
+                        crate::wallpaper::remember_spot(on.work, crate::wallpaper::spot_of(on.work, orb_px as i32, at));
+                        info!("[DESKTOP] Sir put the orb at {:.0},{:.0}: its place on that monitor from now on", at.x, at.y);
+                    }
+                }
+            }
+        }
+        let at = self.corner_orb.resting().map_or(frame.rect.min, |r| r.min);
+        let builder = egui::ViewportBuilder::default()
+            .with_title("J.A.I. // orb")
+            .with_app_id("jai")
+            .with_decorations(false)
+            .with_transparent(true)
+            .with_taskbar(false)
+            .with_resizable(false)
+            .with_window_level(egui::viewport::WindowLevel::AlwaysOnTop)
+            // (Beside a game it takes no click: the game keeps its mouse.)
+            .with_mouse_passthrough(gaming)
+            .with_position(pos2(at.x / ppp, at.y / ppp))
+            .with_inner_size(window_px / ppp);
+        let builder = for_test_session(builder);
+        detached_keep(ctx, viewport, true);
+        // The window's shape: a disc for the orb and the plate beside it. (Whether its surface
+        // can be see-through depends on the graphics set-up; its shape does not.)
+        #[cfg(windows)]
+        {
+            let shape = (orb_px as i32, window_px.x.round() as i32, window_px.y.round() as i32);
+            if shape != self.orb_shape && lock(&DETACHED_MOTIONS).revealed.contains(&viewport) {
+                self.orb_shape = shape;
+                crate::win32::run_detached(move || {
+                    if let Some(hwnd) = crate::win32::own_window("J.A.I. // orb") {
+                        crate::win32_desktop::shape_orb(hwnd, shape.0, shape.1, shape.2);
+                    }
+                });
+            }
+        }
+        let content = CornerOrbContent {
+            orb_px,
+            progress,
+            words,
+            said,
+            answered,
+            timer: timer_label,
+            state: m.state.clone(),
+            live_words: iface.live_words,
+            // What waits for his word: a question before a guess is carried out, or the
+            // orders closest to one he did not know.
+            question: crate::ask_first::pending().map(|(question, _)| question),
+            choices: crate::did_you_mean::current().map(|offer| offer.choices.into_iter().map(|c| c.label).collect()).unwrap_or_default(),
+        };
+        let mut did = OrbClick::Nothing;
+        let emblem = &self.emblem;
+        ctx.show_viewport_immediate(viewport, builder, |ctx, _class| {
+            egui::CentralPanel::default().frame(Frame::none()).show(ctx, |ui| did = corner_orb_ui(ui, emblem, &content));
+            reveal_when_drawn(ctx);
+        });
+        match did {
+            OrbClick::Board => self.app.config().update(|c| c.interface.desktop_background = false),
+            OrbClick::Console => {
+                self.console_open = true;
+                self.console_focus = true;
+            }
+            OrbClick::Drag => ctx.send_viewport_cmd_to(viewport, ViewportCommand::StartDrag),
+            OrbClick::Yes => self.command(HudCommand::Chat { text: "yes".into() }),
+            OrbClick::No => crate::ask_first::drop_it(),
+            OrbClick::Choice(k) => crate::did_you_mean::pick(k),
+            OrbClick::Nothing => {}
+        }
+        // (It moves, or waits to go back: the board draws on while it is out.)
+        ctx.request_repaint_after(Duration::from_millis(if resting { 50 } else { 8 }));
     }
 }
 
@@ -8502,7 +9400,7 @@ mod tests {
             egui::CentralPanel::default().frame(Frame::none()).show(ctx, |ui| emblem.paint(&ui.painter_at(screen), screen));
             emblem.frame(screen)
         };
-        crate::idle_screen::show_glance(crate::idle_screen::Glance { next: Some(("Physics".into(), chrono::Local::now().naive_local() + chrono::Duration::minutes(25), "204".into())), weather: Some((7.0, "light rain".into())) });
+        crate::idle_screen::show_glance(crate::idle_screen::Glance { next: Some(("Physics".into(), chrono::Local::now().naive_local() + chrono::Duration::minutes(25), "204".into())), weather: Some((7.0, "light rain".into())), lesson: None });
         gallery("gallery_idle", GALLERY, 2, |ctx| {
             let f = base(ctx);
             crate::idle_screen::paint(ctx, ctx.screen_rect(), f.centre, f.radius, 1.0);
@@ -8531,6 +9429,32 @@ mod tests {
         });
         let lines = [("So the first thing we need is a plan for the weekend.".to_string(), 0.7), ("And then we look at the weather, because nobody wants to stand in the rain.".to_string(), 1.0)];
         gallery("gallery_subtitles", vec2(1000.0, 110.0), 2, |ctx| crate::live_subtitles::paint_bar(ctx, &lines, None));
+        // The corner orb with what is being said beside it, with a question of his, and with
+        // the orders he offers (over a light ground, as over a bright window of Sir's).
+        let emblem = RoseEmblem::new(crate::rose_emblem_renderer::RoseEmblemState::AwakeFrontEmblem);
+        let orb = |name: &str, c: CornerOrbContent| {
+            gallery(name, vec2(560.0, 168.0), 2, |ctx| {
+                ctx.layer_painter(egui::LayerId::background()).rect_filled(ctx.screen_rect(), Rounding::ZERO, Color32::from_rgb(0xD8, 0xDC, 0xE0));
+                egui::CentralPanel::default().frame(Frame::none()).show(ctx, |ui| {
+                    corner_orb_ui(ui, &emblem, &c);
+                });
+            });
+        };
+        let content = |said: &str, answered: &str| CornerOrbContent {
+            orb_px: 168.0,
+            progress: None,
+            words: true,
+            said: said.into(),
+            answered: answered.into(),
+            timer: None,
+            state: "speaking".into(),
+            live_words: false,
+            question: None,
+            choices: Vec::new(),
+        };
+        orb("gallery_corner_orb_words", CornerOrbContent { progress: Some(Some(0.35)), timer: Some("TIMER  03:12".into()), ..content("Jay, what is on my calendar tomorrow?", "Two things, Sir: physics at 8:35 in room 204 and the dentist at half past two.") });
+        orb("gallery_corner_orb_question", CornerOrbContent { question: Some("Did you mean: create a protocol called 'evening', Sir?".into()), ..content("Jay, save that as evening.", "") });
+        orb("gallery_corner_orb_choices", CornerOrbContent { choices: vec!["save this desk layout as evening".into(), "show my desk layouts".into(), "restore the desk layout evening".into()], ..content("Jay, keep the desk like this.", "") });
     }
 
     /// The kit's blocks as they stand on the board: the changes list and the coach, then the

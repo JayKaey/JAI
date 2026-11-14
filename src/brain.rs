@@ -1010,6 +1010,29 @@ impl Brain {
             }
             None => text,
         };
+        // "The first one", "number two" while he offers the orders he does know for one he
+        // did not (`did_you_mean`): the order picked is what Sir said, from here on. "None of
+        // them" takes the offer down, and so does any other sentence: it is his next order.
+        let mut none_of_them = false;
+        let text = match (!crate::live_self_tester::dry()).then(|| crate::did_you_mean::answer(&text)) {
+            Some(Some(crate::did_you_mean::Answer::Order(order))) => {
+                info!("[MEANT] '{text}': Sir takes '{order}'");
+                order
+            }
+            Some(Some(crate::did_you_mean::Answer::None)) => {
+                none_of_them = true;
+                text
+            }
+            Some(None) => {
+                crate::did_you_mean::dismiss();
+                text
+            }
+            None => text,
+        };
+        // "Did you mean: create a protocol called 'no think', Sir?" (`ask_first`): yes carries
+        // the call out, no drops it. Anything else dropped it just now, and is this turn's
+        // order as it stands.
+        let answered = (!crate::live_self_tester::dry()).then(|| crate::ask_first::answer(&text)).flatten();
         let step = Instant::now();
         let history_mark = self.inner.history.lock().await.messages.len();
         // A dry run (the live self-test) decides everything and leaves no trace.
@@ -1105,11 +1128,23 @@ impl Brain {
         // commands, then (unless Sir is asking for a skill or a memory) the natural / misheard
         // variants of the high-value actions.
         let stark = &self.inner.tools.stark;
+        // "Play music in one minute", "close the board at 18:30", "in ten minutes show the
+        // briefing": an order he knows and when it is to be carried out; "cancel that" right
+        // after one; "what is scheduled" (`later`). Read before every other router: on
+        // 2026-11-13 the music rule took "music in one minute" for a song and played "One".
+        // (What Sir taught as a trigger is his order as it stands, and an answer in an oral
+        // exam is an answer.)
+        let put_off: Option<Value> = crate::later::route(&text).filter(|_| {
+            selection_answer.is_none()
+                && stark.macros.match_trigger(&text).is_none()
+                && crate::tool_forge::forge().and_then(|forge| forge.match_utterance(&text)).is_none()
+                && !(crate::exam_coach::route_answer(&stark.features.exam, &text).is_some() && !is_command_not_answer(&text))
+        });
         // "Set the theme to Arc Cyan, move the orb to the top right and open my schedule": every
         // clause a command of its own. Planned before any single parser takes the sentence for
         // its first clause. (Privacy clauses are the dispatcher's; it sends the rest.)
         let compound: Option<Vec<crate::compound_planner::Call>> = crate::compound_planner::plan(&text, &crate::intent_engine::ReflexContext::live())
-            .filter(|plan| plan.privacy.is_none() && plan.calls.len() >= 2 && selection_answer.is_none())
+            .filter(|plan| plan.privacy.is_none() && plan.calls.len() >= 2 && selection_answer.is_none() && put_off.is_none())
             .map(|plan| plan.calls);
         // Integration questions go to their tool deterministically ("what classes do I have
         // tomorrow", "any new emails", "yes" to "shall I check your timetable?").
@@ -1124,7 +1159,7 @@ impl Brain {
         } else if compound.is_some() {
             self.inner.tools.focus.clear_offer();
             None
-        } else if let Some(action) = crate::intent_engine::deterministic_action(&text) {
+        } else if let Some(action) = crate::intent_engine::deterministic_action(&text).filter(|_| put_off.is_none()) {
             // "No. Just can you close the windows you opened?", "schließ dich": carried out in
             // Rust at once — the model never gets to roleplay them.
             self.inner.tools.focus.clear_offer();
@@ -1137,6 +1172,36 @@ impl Brain {
             // "Shut down my PC" → "please confirm"; "yes" → goodbye and shutdown; "no" → aborted.
             self.inner.tools.focus.clear_offer();
             Some(intent)
+        } else if let Some(args) = put_off {
+            // (After the PC's power dialogue, so that a question of its own still open is
+            // withdrawn by this order as by any other; before "cancel that" is taken for the
+            // conversation's.)
+            self.inner.tools.focus.clear_offer();
+            info!("[LATER] '{text}' → {args}");
+            Some(Intent::Tool { name: crate::later::TOOL, args })
+        } else if let Some(answer) = answered {
+            // His answer to "Did you mean …?": the call he held back is carried out, or not.
+            self.inner.tools.focus.clear_offer();
+            match answer {
+                crate::ask_first::Answer::Yes(held) => {
+                    info!("[ASK] '{text}': yes. {} {} is carried out", held.tool, held.args);
+                    Some(Intent::Tool { name: crate::ask_first::lasting_name(&held.tool), args: held.args })
+                }
+                crate::ask_first::Answer::No => {
+                    info!("[ASK] '{text}': no. The call is dropped");
+                    Some(Intent::Answer("Very well, Sir. Nothing is changed.".to_string()))
+                }
+            }
+        } else if none_of_them {
+            // "None of them": the orders he offered are taken down, and that is all.
+            self.inner.tools.focus.clear_offer();
+            Some(Intent::Answer("Very well, Sir.".to_string()))
+        } else if let Some((name, args)) = crate::just_did::follow_up(&text) {
+            // "Throw it on all monitors" a moment after the live background was switched on,
+            // "turn it off again" after a switch: "it" is what he just did (`just_did`).
+            self.inner.tools.focus.clear_offer();
+            info!("[IT] '{text}' is said of what he just switched: {name} {args}");
+            Some(Intent::Tool { name, args })
         } else if crate::intent_engine::is_cancel(&text) {
             // "Forget that", "never mind", "vergiss es" (also "no fool forgets that idea"):
             // everything pending is dropped and the model is never asked.
@@ -1346,6 +1411,18 @@ impl Brain {
             model_used = "instant".to_string();
             interrupted = self.fast_path_compound(steps, &text, &mut st).await;
         } else {
+            // An order he does not know (it begins like one, and no rule of his reads it): the
+            // closest ones he does know are offered at once, on the board and beside the
+            // emblem (`did_you_mean`). The language model's turn is not held up by it; if the
+            // model then does something about the order, the offer is taken down again below.
+            let his_own_business = routed.is_some()
+                || intents::is_memory_command(&text)
+                || is_skill_creation_request(&text)
+                || crate::tool_forge::is_forge_request(&text)
+                || intents::live_info_query(&text).is_some()
+                || intents::upfront_tool(&text).is_some()
+                || crate::location_engine::upfront(&text).is_some();
+            let offered = !dry && !his_own_business && crate::did_you_mean::looks_like_an_order(&text) && crate::did_you_mean::offer_for(&text);
             let caps = self.caps(&cfg.primary_model).await;
             // A sum, a logic question or "think hard" on a thinking model reasons; everything else
             // keeps Qwen3's switch off (`intent_engine::wants_thinking`).
@@ -1446,6 +1523,11 @@ impl Brain {
                     model_used = model;
                     interrupted = was_interrupted;
                 }
+            }
+            // The language model did something about it after all: what was offered beside
+            // it is no longer wanted. (A guess he asked about first has done nothing yet.)
+            if offered && st.acted {
+                crate::did_you_mean::dismiss();
             }
         }
 
@@ -1570,6 +1652,11 @@ impl Brain {
         if crate::compound_planner::plan(&text, &ctx).is_some() {
             return false;
         }
+        // An order with a delay is the full turn's too: "pause in five minutes" is no pause now.
+        // So are his answer to a question that waits, and a sentence about what he just did.
+        if crate::later::route(&text).is_some() || crate::ask_first::would_answer(&text) || crate::did_you_mean::would_answer(&text) || crate::just_did::follow_up(&text).is_some() {
+            return false;
+        }
         let routed = crate::intent_engine::route(&text, &ctx);
         let (action, stage) = match &routed {
             Some(r) => match &r.reflex {
@@ -1604,6 +1691,9 @@ impl Brain {
         }
         self.inner.tools.focus.clear_offer();
         if !crate::live_self_tester::dry() {
+            // (His next order: a question that waited for a yes and the orders on offer go.)
+            crate::ask_first::drop_it();
+            crate::did_you_mean::dismiss();
             self.inner.tools.memory.log_turn("user", req.text.trim());
         }
         info!("[REFLEX] '{text}' → {} {} ({stage}, routed in {routed_us} µs, {} ms after it arrived)", action.tool, action.args, req.started.elapsed().as_millis());
@@ -2349,6 +2439,8 @@ impl Brain {
                     Some(format!("Your protocols are {}, Sir.", join_and(&names)))
                 }
                 "delete" => Some("Done, Sir. That protocol is gone.".into()),
+                // (Reached by Sir's yes to "Did you mean: create a protocol called …?".)
+                "create" | "save" | "add" | "update" => Some(format!("Done, Sir. The {} is saved.", crate::protocols::display_name(args["protocol_name"].as_str().or(args["name"].as_str()).unwrap_or("new")))),
                 _ => {
                     let name = args["protocol_name"].as_str().or(args["name"].as_str()).unwrap_or("the");
                     let display = crate::protocols::display_name(&self.inner.tools.protocols.get(name).map(|p| p.name).unwrap_or_else(|| name.to_string()));
@@ -2602,6 +2694,8 @@ impl Brain {
                     format!("I found {count} matches, Sir. The best is {file}, in {folder}; the list is in the chat.")
                 })
             }
+            // (One order of several in a sentence was put off: its own line, "In one minute, Sir.")
+            later if later == crate::later::TOOL => Some(out.rsplit_once("\nSpoken: ").map(|(_, s)| s.trim().to_string()).unwrap_or_else(|| first_sentence(out))),
             _ => Some("Done, Sir.".into()),
         }
     }
@@ -2792,6 +2886,11 @@ impl Brain {
                         let class = crate::intent_engine::classify(request);
                         if !crate::intent_engine::fulfilled(&class, st.grounding.tools_run()) {
                             info!("[GROUND] '{request}' ({class:?}) ended without a matching tool");
+                            // An order nothing was done about: the closest ones he does know
+                            // are offered (`did_you_mean`), where there are any.
+                            if crate::did_you_mean::current().is_none() {
+                                crate::did_you_mean::offer_for(request);
+                            }
                         }
                         // "Shall I open the drive space window?": Sir's "yes" will do it.
                         if let Some((name, args)) = intents::offered_action(&st.spoken) {
@@ -2838,8 +2937,15 @@ impl Brain {
                         const LOOK: &[&str] = &["theme", "preset", "style", "accent_color", "accent_colour", "accent", "color", "colour", "highlight_color", "background_color", "background_colour", "background", "backdrop"];
                         painted.is_some() && name == "configure_interface" && LOOK.iter().any(|k| args.get(*k).is_some_and(|v| !v.is_null()))
                     };
-                    let any_held = calls.iter().any(|(name, args)| held_back(name, args) || unconfirmed(name, args) || not_his(name, args));
-                    let all_held = calls.iter().all(|(name, args)| held_back(name, args) || not_his(name, args));
+                    // A guess: a call that creates, deletes or switches something, for an order
+                    // that holds none of that tool's own words (2026-11-13: "save that desk
+                    // layout as standard" made a protocol called "no_think", "throw it on all
+                    // monitors" stretched the board). He asks first; Sir's yes carries it out
+                    // (`ask_first`). Typed orders are held to the same rule.
+                    let guessed: Vec<Option<String>> = calls.iter().map(|(name, args)| if held_back(name, args) || unconfirmed(name, args) || not_his(name, args) { None } else { crate::ask_first::question(request, name, args) }).collect();
+                    let mut asked: Option<(String, Value, String)> = None;
+                    let any_held = guessed.iter().any(Option::is_some) || calls.iter().any(|(name, args)| held_back(name, args) || unconfirmed(name, args) || not_his(name, args));
+                    let all_held = calls.iter().zip(&guessed).all(|((name, args), guess)| guess.is_some() || held_back(name, args) || not_his(name, args));
                     // Several reads in one round (timetable + mail + weather) run side by side;
                     // anything with an effect keeps its order. Every call goes through the cortex:
                     // a read started ahead is taken from memory, an obvious failure healed once.
@@ -2850,7 +2956,17 @@ impl Brain {
                         }
                     } else {
                         let mut done = Vec::with_capacity(calls.len());
-                        for (name, args) in &calls {
+                        for ((name, args), guess) in calls.iter().zip(&guessed) {
+                            if let Some(question) = guess {
+                                warn!("[ASK] '{request}' holds none of {name}'s own words: {name} {args} is held, and he asks first");
+                                let mut held = tools::only_asked(name, args);
+                                held.output = crate::ask_first::HELD.to_string();
+                                done.push(held);
+                                if asked.is_none() {
+                                    asked = Some((name.clone(), args.clone(), question.clone()));
+                                }
+                                continue;
+                            }
                             if held_back(name, args) {
                                 warn!("[ASKED] '{request}' is a question: {name} {args} left undone");
                                 done.push(tools::only_asked(name, args));
@@ -2891,12 +3007,24 @@ impl Brain {
                     }
                     for (outcome, call) in outcomes.iter().zip(&r.tool_calls) {
                         report(outcome, st.events);
-                        if outcome.output != tools::ONLY_ASKED {
+                        if outcome.output != tools::ONLY_ASKED && outcome.output != crate::ask_first::HELD {
                             self.after_tool(outcome, st);
                         }
                         // Under the name the model called: its tool message must answer that call.
-                        let asked = call["function"]["name"].as_str().unwrap_or(outcome.tool.as_str());
-                        self.inner.history.lock().await.push(tool_message(asked, &outcome.output));
+                        let called = call["function"]["name"].as_str().unwrap_or(outcome.tool.as_str());
+                        self.inner.history.lock().await.push(tool_message(called, &outcome.output));
+                    }
+                    // He asks before the guess changes anything, and the turn ends on his
+                    // question: Sir's answer is the next thing said. The orders he does know
+                    // that are close to it stand beside the question.
+                    if let Some((name, args, question)) = asked {
+                        crate::ask_first::hold(request, &name, &args, &question);
+                        if crate::did_you_mean::current().is_none() {
+                            crate::did_you_mean::offer_for(request);
+                        }
+                        st.say(&question);
+                        self.inner.history.lock().await.push(json!({ "role": "assistant", "content": question }));
+                        return (model, st.req.cancel.is_cancelled());
                     }
                     round += 1;
                 }
@@ -3723,6 +3851,21 @@ pub(crate) fn fast_as_said(text: &str) -> Option<Fast> {
 /// The routers `Brain::run_turn` asks before the parser, in its order.
 fn fast_before_the_parser(text: &str) -> Option<Fast> {
     let tool = |name: &'static str, args: Value| Some(Fast::Intent(Intent::Tool { name, args }));
+    // An order with a delay ("play music in one minute"), the one just put off dropped again
+    // ("cancel that"), the list of what waits: before every router that would take the
+    // sentence's words for a song, the calendar or the conversation (`later`).
+    if let Some(args) = crate::later::route(text) {
+        return tool(crate::later::TOOL, args);
+    }
+    // His answer to a question of his own that waits ("Did you mean …?": `ask_first`) or to
+    // the orders he offers (`did_you_mean`): understood, by no tool of its own.
+    if crate::ask_first::would_answer(text) || crate::did_you_mean::would_answer(text) {
+        return Some(Fast::Other);
+    }
+    // "Throw it on all monitors" a moment after the live background was switched on (`just_did`).
+    if let Some((name, args)) = crate::just_did::follow_up(text) {
+        return tool(name, args);
+    }
     let said = crate::ear::words(text).join(" ");
     if let Some(ask) = crate::kit_voice::selection_ask(said.trim_start_matches("jai ").trim_start_matches("jay ")) {
         return Some(Fast::Selection(ask));
@@ -3813,6 +3956,22 @@ thread_local! {
     static NOT_ANOTHER_WAY: std::cell::RefCell<Vec<(String, u8, Option<String>, Instant)>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
+/// Set while the parsers are built at start-up (`intents::warm_up`).
+static WARMING: AtomicBool = AtomicBool::new(false);
+
+/// The start-up's warm-up begins or is over: what is read meanwhile builds the patterns, half
+/// a second of it and meant to be, and is no slow sentence.
+pub(crate) fn warming_up(on: bool) {
+    WARMING.store(on, Ordering::Release);
+}
+
+/// Whether a sentence that took `took` to be read another way is worth a warning in the log:
+/// several milliseconds where the whole fast path has one and a half, outside the warm-up.
+/// (Every start warned "[WAYS] Slow: 'warm up the parser' took 513007 µs": Sir, 2026-11-13.)
+fn worth_a_warning(took: Duration, warming: bool) -> bool {
+    !warming && took > Duration::from_millis(4)
+}
+
 /// What a sentence's reading may hang on besides its words (`ways`: "that's enough" means the
 /// coach only while he coaches).
 fn going_on() -> u8 {
@@ -3830,11 +3989,19 @@ pub(crate) fn another_way(text: &str) -> Option<(String, Fast)> {
 /// (`parsed`: what the parser made of the sentence as it stands, where the caller has asked it
 /// already: it is the costliest router to ask twice.)
 pub(crate) fn another_way_knowing(text: &str, parsed: Option<&Option<Intent>>) -> Option<(String, Fast)> {
+    // An order with a delay ("open the mixer in ten minutes") is understood as it stands: by
+    // the first router there is (`later`), which is asked here because nothing is while a
+    // sentence is being read another way.
+    if !rewording() && crate::later::order(text).is_some() {
+        return None;
+    }
     if REWORDING.with(|inside| inside.replace(true)) {
         return None;
     }
     let now = going_on();
-    let known = if cfg!(test) { None } else { NOT_ANOTHER_WAY.with(|known| known.borrow().iter().find(|(said, then, _, at)| said == text && *then == now && at.elapsed() < Duration::from_secs(2)).map(|(_, _, wording, _)| wording.clone())) };
+    // (What `later` asks to learn how a sentence reads without it is no answer to remember.)
+    let unremembered = cfg!(test) || crate::later::asking();
+    let known = if unremembered { None } else { NOT_ANOTHER_WAY.with(|known| known.borrow().iter().find(|(said, then, _, at)| said == text && *then == now && at.elapsed() < Duration::from_secs(2)).map(|(_, _, wording, _)| wording.clone())) };
     if let Some(wording) = known {
         // (The wording is remembered, where it leads is asked again: that is one cheap pass.)
         let found = wording.and_then(|wording| match fast_as_said(&wording) {
@@ -3899,7 +4066,7 @@ pub(crate) fn another_way_knowing(text: &str, parsed: Option<&Option<Intent>>) -
     REWORDING.with(|inside| inside.set(false));
     // (The whole fast path has 1.5 ms: a sentence that takes several here says in which part.)
     let took = started.elapsed();
-    if took > Duration::from_millis(4) {
+    if worth_a_warning(took, WARMING.load(Ordering::Acquire)) {
         static LAST: AtomicU64 = AtomicU64::new(0);
         let now_s = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
         if now_s.saturating_sub(LAST.swap(now_s, Ordering::Relaxed)) >= 20 {
@@ -3913,15 +4080,22 @@ pub(crate) fn another_way_knowing(text: &str, parsed: Option<&Option<Intent>>) -
             );
         }
     }
-    NOT_ANOTHER_WAY.with(|known| {
-        let mut known = known.borrow_mut();
-        known.retain(|(said, _, _, _)| said != text);
-        known.push((text.to_string(), now, found.as_ref().map(|(wording, _)| wording.clone()), Instant::now()));
-        if known.len() > 4 {
-            known.remove(0);
-        }
-    });
+    if !unremembered {
+        NOT_ANOTHER_WAY.with(|known| {
+            let mut known = known.borrow_mut();
+            known.retain(|(said, _, _, _)| said != text);
+            known.push((text.to_string(), now, found.as_ref().map(|(wording, _)| wording.clone()), Instant::now()));
+            if known.len() > 4 {
+                known.remove(0);
+            }
+        });
+    }
     found
+}
+
+/// Whether this thread is in the middle of reading a sentence another way (`another_way`).
+pub(crate) fn rewording() -> bool {
+    REWORDING.with(std::cell::Cell::get)
 }
 
 fn static_route_tool(name: &str) -> Option<&'static str> {
@@ -4819,6 +4993,64 @@ mod tests {
         let tools = crate::tools::definitions_with(Vec::new());
         std::fs::write(format!("{dir}/system_prompt.txt"), Brain::system_prompt(&cfg)).unwrap();
         std::fs::write(format!("{dir}/tools.json"), serde_json::to_string_pretty(&tools).unwrap()).unwrap();
+    }
+
+    /// Building the ways of saying an order takes half a second, once, at start-up: every start
+    /// logged it as a slow sentence ("[WAYS] Slow: 'warm up the parser' took 513007 µs").
+    #[test]
+    fn the_warm_up_is_no_slow_sentence() {
+        assert!(!worth_a_warning(Duration::from_micros(513_007), true), "the warm-up builds the patterns: it is meant to take that long");
+        assert!(worth_a_warning(Duration::from_millis(5), false), "a sentence that takes five milliseconds is said so");
+        assert!(!worth_a_warning(Duration::from_millis(3), false) && !worth_a_warning(Duration::from_millis(3), true));
+    }
+
+    /// The evening of 2026-11-13 again, as the fast path reads it now: the live background is
+    /// switched on, "throw it in all monitors" puts the background on all of them, and "turn it
+    /// off again" takes the background away.
+    #[test]
+    fn it_is_what_he_just_did_before_any_other_router_is_asked() {
+        let _dock = crate::hud_dock::test_lock();
+        let _kit = crate::kit::test_lock();
+        crate::hud_dock::begin_frame();
+        crate::hud_dock::begin_frame();
+        let call = |said: &str| match fast_as_said(&crate::wake::canon(said)).or_else(|| another_way(said).map(|(_, found)| found)) {
+            Some(Fast::Intent(Intent::Tool { name, args })) => Some((name, args)),
+            _ => None,
+        };
+        // With nothing behind it, "it" is not the background (the language model's, as it was).
+        assert_ne!(call("Throw it in all monitors."), Some(("configure_interface", json!({"background_all_monitors": true}))));
+        let background = another_way("show me your live desktop background").map(|(_, found)| found);
+        let Some(Fast::Intent(Intent::Tool { name: "configure_interface", args })) = background else { panic!("the live background is switched on by these words") };
+        assert_eq!(args, json!({"desktop_background": true}));
+        // (What the tools note once the call has gone through.)
+        crate::just_did::note("configure_interface", &args);
+        assert_eq!(call("Throw it in all monitors."), Some(("configure_interface", json!({"background_all_monitors": true}))));
+        assert_eq!(call("Jay, put it on every monitor."), Some(("configure_interface", json!({"background_all_monitors": true}))));
+        assert!(another_way("Throw it in all monitors.").is_none(), "understood as it stands");
+        crate::just_did::note("configure_interface", &json!({"background_all_monitors": true}));
+        assert_eq!(call("Only on one monitor."), Some(("configure_interface", json!({"background_all_monitors": false}))));
+        assert_eq!(call("Turn it off again."), Some(("configure_interface", json!({"desktop_background": false}))));
+        // The older orders about monitors are what they were.
+        crate::just_did::note("configure_interface", &json!({"desktop_background": true}));
+        assert_eq!(call("Use all monitors."), Some(("configure_interface", json!({"span_all_monitors": true}))));
+        assert_eq!(call("Undo that."), Some(("undo_last_action", json!({}))));
+    }
+
+    /// His answer to a question of his own, and to the orders he offers, is understood before
+    /// anything else is asked what "yes" or "the first one" might be.
+    #[test]
+    fn an_answer_to_what_he_asked_is_nobodys_order() {
+        let _dock = crate::hud_dock::test_lock();
+        let _kit = crate::kit::test_lock();
+        assert!(!matches!(fast_as_said("yes"), Some(Fast::Other)) && !matches!(fast_as_said("the first one"), Some(Fast::Other)), "nothing waits for an answer");
+        crate::ask_first::hold("save that desk layout as standard", "manage_stark_protocol", &json!({"action": "create", "protocol_name": "no_think"}), "Did you mean: create a protocol called 'no think', Sir?");
+        assert!(matches!(fast_as_said("yes"), Some(Fast::Other)) && matches!(fast_as_said("No."), Some(Fast::Other)));
+        assert!(!matches!(fast_as_said("open the mixer"), Some(Fast::Other)), "anything else is his next order");
+        crate::ask_first::drop_it();
+        assert!(crate::did_you_mean::offer_for("Throw it in all monitors."));
+        assert!(matches!(fast_as_said("the first one"), Some(Fast::Other)) && matches!(fast_as_said("none of them"), Some(Fast::Other)));
+        crate::did_you_mean::dismiss();
+        assert!(!matches!(fast_as_said("the first one"), Some(Fast::Other)));
     }
 
     /// Live against a running engine (one token each, unloaded right after). Only while Sir is not

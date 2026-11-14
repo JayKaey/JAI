@@ -148,6 +148,10 @@ fn resolve(clause: &str, ctx: &ReflexContext) -> Option<Resolved> {
 /// views and look, quick commands, the mixer, the deterministic routes, then the exact command
 /// grammar.
 fn resolve_any(clause: &str, ctx: &ReflexContext) -> Option<Resolved> {
+    // "… and play music in one minute": this clause is put off, the others are not (`later`).
+    if let Some(args) = crate::later::order(clause) {
+        return Some(Resolved::Call(crate::later::TOOL, args));
+    }
     if let Some(routed) = crate::intent_engine::route(clause, ctx) {
         return Some(match routed.reflex {
             Reflex::Privacy(cmd) => Resolved::Privacy(cmd),

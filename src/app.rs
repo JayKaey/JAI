@@ -46,7 +46,36 @@ struct CarryAudio {
     speech_ms: u32,
     barge_in: bool,
     ptt: bool,
+    /// The piece was spoken to him (`held_for_him`): only then does the sentence it becomes
+    /// part of count as said in a conversation with him.
+    addressed: bool,
     at: Instant,
+}
+
+/// Whether a piece of speech that is held for the rest of its sentence was spoken to him. One
+/// that was judged and accepted was (his name, his window, an order he knows: `judged`); one
+/// that was held before anything was known of it (Sir was already speaking again, or Whisper
+/// found no words in it) was only if it began inside a conversation with him, with the
+/// push-to-talk key held, or over his own voice; and a piece joined to an earlier one inherits
+/// what that one was (`earlier`).
+fn held_for_him(judged: bool, earlier: Option<bool>, began_in_window: bool, ptt: bool, barge_in: bool) -> bool {
+    judged || earlier == Some(true) || began_in_window || ptt || barge_in
+}
+
+/// Layer A of the addressee detector for one sentence: whether it is heard as part of a
+/// conversation with him. It began inside the conversation window (or during a turn), words of
+/// his are held for it (`held_words`: always from a sentence that was his to hear), the window
+/// is open or a turn is running right now, or it was stitched from held audio that was itself
+/// spoken to him (`held_audio`: Some(whether it was) for a sentence heard together with a held
+/// piece).
+///
+/// (2026-11-13, 18:11: a song played in the room. Whisper found no words in a first piece, the
+/// song went on, and the piece was held "for the rest". Stitched to the next one it counted as
+/// said in a conversation for being stitched alone: with the window closed for a minute and no
+/// name in it, a lyric went to the model as a follow-up, without a `[WAKE]` line. A stitched
+/// sentence is judged like any other; the stitching proves nothing about whom it was for.)
+fn in_conversation(began_in_window: bool, held_words: bool, held_audio: Option<bool>, window_open: bool, turn_active: bool) -> bool {
+    began_in_window || held_words || held_audio == Some(true) || window_open || turn_active
 }
 
 /// Silence put between two stitched pieces of audio (16 kHz samples, 150 ms).
@@ -685,6 +714,24 @@ impl Jai {
             }
         });
 
+        // The orders Sir put off ("play music in one minute", `later`): when one falls due it
+        // is carried out as if he had just said it, one after the other.
+        let app = self.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                // (An order Sir took from the ones on offer by a click: `did_you_mean::pick`.)
+                for order in crate::did_you_mean::picked() {
+                    info!("[MEANT] Carrying out the order Sir picked: '{order}'");
+                    app.emit(HudEvent::Transcript { text: order.clone(), language: "text".into(), source: "chat".into(), wake_word: None, stt_ms: 0, audio_ms: 0 });
+                    app.dispatch_turn(order, Instant::now(), 0, InputSource::TextGui);
+                }
+                for order in crate::later::fall_due(chrono::Local::now()) {
+                    app.run_put_off(order).await;
+                }
+            }
+        });
+
         // WhatsApp message cards (prepared, sent, cancelled) for the HUD chat.
         let app = self.clone();
         let mut cards = self.tools().stark.whatsapp.subscribe_cards();
@@ -750,6 +797,9 @@ impl Jai {
         let app = self.clone();
         tokio::spawn(async move {
             let mut was_open = false;
+            // (The switches as they stood at the last look: one that goes on while the privacy
+            // lock is on is Sir's explicit word that he wants to see what is heard.)
+            let mut showed = (true, true);
             let mut tick = tokio::time::interval(Duration::from_millis(250));
             loop {
                 tick.tick().await;
@@ -759,6 +809,52 @@ impl Jai {
                     app.rest_state();
                 }
                 was_open = open;
+                // "Don't listen for ten minutes", "until eight": the time is up.
+                if crate::listening_lock::take_lapsed() {
+                    app.listening_again();
+                }
+                let shows = (app.inner.config.read(|c| c.interface.live_words), crate::hud_feel::subtitles().is_some());
+                if (shows.0 && !showed.0) || (shows.1 && !showed.1) {
+                    crate::listening_lock::show_asked();
+                }
+                showed = shows;
+            }
+        });
+    }
+
+    /// A lock with an end has run out by itself ("don't listen for ten minutes", "until eight"):
+    /// he listens again and says so, as a notice on the HUD and in a short line of his own (once
+    /// he is free to speak; never over an answer). When something else still keeps him from
+    /// hearing, the notice says that instead and he claims nothing.
+    fn listening_again(&self) {
+        info!("[PRIVACY] The time is up: the lock is lifted");
+        self.emit(HudEvent::ConfigState(self.config_state()));
+        crate::gui::refresh();
+        let kept_from_hearing = if !self.inner.controls.mic_enabled.load(Ordering::Acquire) {
+            Some("the microphone is switched off")
+        } else if lifecycle::is_sleeping() {
+            Some("I am asleep until you wake me")
+        } else if !crate::vram_guard::voice_wake_allowed() {
+            Some("I am in standby")
+        } else {
+            None
+        };
+        if let Some(why) = kept_from_hearing {
+            self.notice(format!("The time you gave me is up, Sir, but {why}."));
+            return;
+        }
+        let line = crate::listening_lock::reply(crate::listening_lock::LockCommand::Resume);
+        self.notice(line.clone());
+        let app = self.clone();
+        tokio::spawn(async move {
+            // (As an alert waits: an answer under way is never cut short.)
+            let deadline = Instant::now() + Duration::from_secs(45);
+            while app.busy() && Instant::now() < deadline {
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
+            // (Told not to listen again in the meantime: then he does not say that he listens.)
+            if !crate::listening_lock::is_locked() && !app.busy() {
+                app.speak_standalone(&line, false, Trigger::System);
             }
         });
     }
@@ -877,9 +973,12 @@ impl Jai {
     }
 
     /// Whether Sir's words are shown while he speaks: the setting is on and no game is in front
-    /// (there the extra decodes would cost frames).
+    /// (there the extra decodes would cost frames). Not while he is told not to listen: what
+    /// the microphone hears then is neither decoded for the screen nor put on it (2026-11-13:
+    /// after "don't listen" the song in the room went on appearing under the emblem), unless
+    /// Sir asks to see it while the lock is on.
     fn live_words_wanted(&self) -> bool {
-        self.inner.config.read(|c| c.interface.live_words) && !crate::hud_feel::game_in_front() && !crate::platform::in_test_session()
+        self.inner.config.read(|c| c.interface.live_words) && crate::listening_lock::may_show_heard() && !crate::hud_feel::game_in_front() && !crate::platform::in_test_session()
     }
 
     /// The words so far, while Sir is still speaking: transcribed for the HUD's live line when
@@ -1158,6 +1257,32 @@ impl Jai {
         });
     }
 
+    /// An order Sir put off has fallen due (`later`): it runs as if he had just said it, once
+    /// he and whatever is running are done. One that is carried out without a word ("pause",
+    /// "close the board") gets a short word first, so that what happens is no surprise.
+    async fn run_put_off(&self, order: String) {
+        // (A scripted session carries it out only where every tool that reaches outside
+        // J.A.I. is noted and left undone; any other test session leaves the PC alone.)
+        if !crate::later::may_run_here() {
+            info!("[LATER] '{order}' fell due: noted, not carried out (a test session leaves the PC alone)");
+            return;
+        }
+        let deadline = Instant::now() + Duration::from_secs(120);
+        while (self.busy() || self.inner.macro_running.load(Ordering::Acquire)) && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+        info!("[LATER] Due now: '{order}'");
+        crate::hud_notify::record(&format!("As planned: {order}"), false);
+        if crate::later::runs_without_a_word(&order) {
+            self.speak_standalone("As planned, Sir.", false, Trigger::System);
+            self.wait_idle(Duration::from_secs(10)).await;
+        }
+        let source = *self.inner.last_source.lock().unwrap_or_else(|e| e.into_inner());
+        self.emit(HudEvent::Transcript { text: order.clone(), language: "later".into(), source: "planned".into(), wake_word: None, stt_ms: 0, audio_ms: 0 });
+        self.dispatch_turn(order, Instant::now(), 0, source);
+        self.wait_idle(Duration::from_secs(90)).await;
+    }
+
     /// Waits until the running turn (and its audio) is over, at most `limit`.
     async fn wait_idle(&self, limit: Duration) {
         let deadline = Instant::now() + limit;
@@ -1192,7 +1317,8 @@ impl Jai {
         match t.audio.filter(|_| t.started.elapsed() < STITCH_AUDIO_MAX_AGE) {
             Some((pcm, speech_ms)) => {
                 info!("[STITCH] Sir kept talking; '{text}' is heard again with the rest of the sentence");
-                self.keep_audio_for_stitching(pcm, speech_ms, false, false);
+                // (It had become a turn: it was his to hear.)
+                self.keep_audio_for_stitching(pcm, speech_ms, false, false, true);
             }
             None => {
                 info!("[STITCH] Sir kept talking; holding '{text}' for the rest of the sentence");
@@ -1204,17 +1330,18 @@ impl Jai {
     }
 
     /// Holds the audio of an unfinished sentence; the next utterance is transcribed together with
-    /// it. If nothing follows (the new sound was a cough), it is heard on its own.
-    fn keep_audio_for_stitching(&self, pcm: Vec<f32>, speech_ms: u32, barge_in: bool, ptt: bool) {
+    /// it. If nothing follows (the new sound was a cough), it is heard on its own. `addressed`:
+    /// the piece was spoken to him (`held_for_him`).
+    fn keep_audio_for_stitching(&self, pcm: Vec<f32>, speech_ms: u32, barge_in: bool, ptt: bool, addressed: bool) {
         let id = self.inner.carry_seq.fetch_add(1, Ordering::AcqRel) + 1;
         {
             let mut carry = self.inner.carry_audio.lock().unwrap_or_else(|e| e.into_inner());
-            // Two pauses in one sentence: all of it, in order.
-            let (pcm, speech_ms) = match carry.take() {
-                Some(previous) if previous.at.elapsed() < CARRY_MAX_AGE => (join_audio(previous.pcm, pcm), previous.speech_ms + speech_ms),
-                _ => (pcm, speech_ms),
+            // Two pauses in one sentence: all of it, in order (and his to hear if a part was).
+            let (pcm, speech_ms, addressed) = match carry.take() {
+                Some(previous) if previous.at.elapsed() < CARRY_MAX_AGE => (join_audio(previous.pcm, pcm), previous.speech_ms + speech_ms, addressed || previous.addressed),
+                _ => (pcm, speech_ms, addressed),
             };
-            *carry = Some(CarryAudio { id, pcm, speech_ms, barge_in, ptt, at: Instant::now() });
+            *carry = Some(CarryAudio { id, pcm, speech_ms, barge_in, ptt, addressed, at: Instant::now() });
         }
         let app = self.clone();
         tokio::spawn(async move {
@@ -1242,7 +1369,9 @@ impl Jai {
                     reason: EndReason::Silence,
                     barge_in: c.barge_in,
                     ptt: c.ptt,
-                    in_window: true,
+                    // (In a conversation only if it was his to hear: a piece that was held
+                    // before anything was known of it is judged like any other sentence.)
+                    in_window: c.addressed,
                     ended_at: c.at,
                 };
                 let epoch = app.inner.speech_epoch.load(Ordering::Acquire);
@@ -1314,20 +1443,23 @@ impl Jai {
         let stitching_enabled = self.inner.config.read(|c| c.utterance_stitching);
         let superseded = || self.inner.speech_epoch.load(Ordering::Acquire) != epoch;
         // The first half of a sentence Sir paused in: Whisper hears both halves together.
+        // (`joined`: Some(whether the held piece was spoken to him) for a stitched sentence.)
         let (pcm, speech_ms, joined) = match self.take_carry_audio() {
             Some(previous) => {
                 info!("[STITCH] Hearing {} ms + {} ms of speech as one sentence", previous.speech_ms, u.speech_ms);
-                (join_audio(previous.pcm, u.pcm), previous.speech_ms + u.speech_ms, true)
+                (join_audio(previous.pcm, u.pcm), previous.speech_ms + u.speech_ms, Some(previous.addressed))
             }
-            None => (u.pcm, u.speech_ms, false),
+            None => (u.pcm, u.speech_ms, None),
         };
         // The head start Whisper got at the pause (void for audio joined with an earlier piece).
-        let ahead = if joined {
+        let ahead = if joined.is_some() {
             self.call_off_head_start();
             None
         } else {
             self.take_head_start(pcm.len(), speech_ms)
         };
+        // What this audio is when it is held before anything is known of its words.
+        let unjudged = held_for_him(false, joined, u.in_window, u.ptt, u.barge_in);
         // Sir is already speaking again: the rest of the sentence follows, so this part is not
         // transcribed on its own.
         if stitching_enabled && superseded() {
@@ -1335,7 +1467,7 @@ impl Jai {
                 head.called_off.store(true, Ordering::Release);
             }
             info!("[STITCH] Sir carried on after {speech_ms} ms of speech; holding the audio for the rest");
-            self.keep_audio_for_stitching(pcm, speech_ms, u.barge_in, u.ptt);
+            self.keep_audio_for_stitching(pcm, speech_ms, u.barge_in, u.ptt, unjudged);
             return;
         }
         // Zero-VRAM standby with voice wake off: only the hotkey, the standby button or push-to-talk wake JAI.
@@ -1405,7 +1537,7 @@ impl Jai {
             // the sentence it may well be words.
             if let Some(pcm) = kept.filter(|_| stitching_enabled && superseded()) {
                 info!("[STITCH] Nothing clear in {speech_ms} ms on its own; hearing it again with the rest");
-                self.keep_audio_for_stitching(pcm, speech_ms, u.barge_in, u.ptt);
+                self.keep_audio_for_stitching(pcm, speech_ms, u.barge_in, u.ptt, unjudged);
                 return;
             }
             self.rest_state();
@@ -1413,16 +1545,31 @@ impl Jai {
         }
 
         // Sir's privacy lock ("stop listening"): nothing gets through — no command, no question,
-        // not even "JAI" — but "you can listen again". Nor do words that were recorded just
-        // before the microphone was switched off. The words are not logged.
+        // not even "JAI" — but "you can listen again", and the question how long the lock still
+        // holds. Nor do words that were recorded just before the microphone was switched off.
+        // The words are not logged (nor by the recogniser: `stt::words_for_the_log`), and
+        // nothing of them stays on screen.
         match crate::listening_lock::verdict(&transcript.text, u.ptt || self.inner.controls.mic_enabled.load(Ordering::Acquire)) {
             crate::listening_lock::Verdict::Heard => {}
             crate::listening_lock::Verdict::Resumes => {
+                crate::hud_lines::speech_over();
                 self.set_listening_lock(crate::listening_lock::LockCommand::Resume, Trigger::Input(InputSource::Voice));
+                return;
+            }
+            crate::listening_lock::Verdict::Asks => {
+                let line = crate::listening_lock::how_long();
+                info!("[PRIVACY] Asked how long he does not listen: '{line}' (the lock stays)");
+                crate::hud_lines::speech_over();
+                self.speak_standalone(&line, false, Trigger::Input(InputSource::Voice));
                 return;
             }
             crate::listening_lock::Verdict::Ignored => {
                 info!("[PRIVACY] Not listening: {} words ignored", transcript.text.split_whitespace().count());
+                // (Nothing of them stays on screen. Where Sir asked to see what is heard under
+                // the lock, the words stand their moment and fade, as a guess does.)
+                if !crate::listening_lock::may_show_heard() {
+                    crate::hud_lines::speech_over();
+                }
                 self.rest_state();
                 return;
             }
@@ -1449,6 +1596,16 @@ impl Jai {
                 self.dispatch_turn(order, Instant::now(), transcript.stt_ms, InputSource::Voice);
                 return;
             }
+            // He asked "Did you mean …?" (`ask_first`) or offers the orders he does know
+            // (`did_you_mean`), and Sir answers ("yes", "no", "the second one"): the answer is
+            // his to hear, with or without his name in it.
+            if crate::ask_first::would_answer(&transcript.text) || crate::did_you_mean::would_answer(&transcript.text) {
+                info!("[WAKE] Sir answers what he was asked: '{}'", transcript.text);
+                crate::hud_lines::settled(&transcript.text);
+                self.emit(HudEvent::Transcript { text: transcript.text.clone(), language: transcript.language.clone(), source: "voice".into(), wake_word: Some("answer".into()), stt_ms: transcript.stt_ms, audio_ms: transcript.audio_ms });
+                self.dispatch_turn(transcript.text.clone(), Instant::now(), transcript.stt_ms, InputSource::Voice);
+                return;
+            }
         }
         let c = &self.inner.controls;
         let homecoming = crate::ears::is_homecoming_phrase(&transcript.text);
@@ -1469,8 +1626,8 @@ impl Jai {
             }
         }
         let wake_required = c.wake_word_required.load(Ordering::Relaxed);
-        let stitching = self.has_carry() || joined;
-        let in_window = u.in_window || stitching || c.window_remaining_ms() > 0 || c.turn_active.load(Ordering::Acquire);
+        // (A stitched sentence is in a conversation only if a piece of it was spoken to him.)
+        let in_window = in_conversation(u.in_window, self.has_carry(), joined, c.window_remaining_ms() > 0, c.turn_active.load(Ordering::Acquire));
         // Whose voice it is by Sir's print, and what the print learns from this sentence.
         let db = self.inner.config.read(|c| c.memory_db_path.clone());
         let judged = match &voice {
@@ -1554,7 +1711,11 @@ impl Jai {
         let mut reading = crate::ear::read(&transcript.text, spoken_to_him, &crate::ear::is_order);
         // (first hearing, second hearing) when a second hearing stood for the first.
         let mut heard_twice: Option<(String, String)> = None;
-        if reading.is_none() && spoken_to_him && crate::ear::worth_hearing_again(&transcript.text, transcript.avg_logprob, &crate::ear::is_order) {
+        // (Only for a first hearing the recogniser itself was unsure of, and never for an order
+        // he knows, the dispatcher's own included: 2026-11-13 "Jay, don't listen." was heard
+        // twice, and the lock came 1.7 s later for it.)
+        let first_hearing = crate::stt::HeardQuality { avg_logprob: transcript.avg_logprob, language_prob: transcript.language_prob, no_speech: transcript.no_speech };
+        if reading.is_none() && spoken_to_him && crate::ear::worth_hearing_again(&transcript.text, first_hearing, &crate::ear::is_order) {
             if let Some(clip) = again_audio {
                 match self.inner.stt.transcribe_carefully(clip, speech_ms, crate::ear::hint()).await {
                     Ok(again) => {
@@ -1671,8 +1832,15 @@ impl Jai {
             self.rest_state();
             return;
         }
-        if !wake.matched && !matches!(addressee, crate::ears::Addressee::Conversation | crate::ears::Addressee::HandsFree) {
-            info!("[WAKE] Addressed without the wake word ({addressee:?}): '{}'", transcript.text);
+        if !wake.matched {
+            // (Every sentence that becomes a turn without his name says here why it was his to
+            // hear, a follow-up too: on 2026-11-13 a lyric went through as one and left no line.)
+            let stitched = match joined {
+                Some(true) => ", stitched to words that were his to hear",
+                Some(false) => ", stitched to audio that was never judged",
+                None => "",
+            };
+            info!("[WAKE] Addressed without the wake word ({addressee:?}{stitched}): '{}'", transcript.text);
         }
         if wake.matched {
             info!("[WAKE] '{}' (score {:.2}) → command '{}'", wake.word, wake.score, wake.command);
@@ -1753,7 +1921,8 @@ impl Jai {
                 });
                 self.emit(HudEvent::Retracted { message_id: String::new() });
                 match kept {
-                    Some(pcm) => self.keep_audio_for_stitching(pcm, speech_ms, u.barge_in, u.ptt),
+                    // (Said with his name: his to hear.)
+                    Some(pcm) => self.keep_audio_for_stitching(pcm, speech_ms, u.barge_in, u.ptt, true),
                     None => self.keep_for_stitching(transcript.text),
                 }
                 return;
@@ -1798,7 +1967,7 @@ impl Jai {
         // The request is known: whatever it only needs to read is fetched from this moment on,
         // while the turn is still being set up (and while an unfinished thought is waited for).
         crate::hyper_cortex::anticipate(self.tools(), &command);
-        let stitched = carried.is_some() || joined;
+        let stitched = carried.is_some() || joined.is_some();
         self.emit(HudEvent::Transcript {
             text: if carried.is_some() { command.clone() } else { transcript.text },
             language: transcript.language,
@@ -1871,14 +2040,15 @@ impl Jai {
     }
 
     /// The first half of a sentence waits for the rest: as audio (heard again together with it),
-    /// with any older text still in front; as text when there is no audio.
+    /// with any older text still in front; as text when there is no audio. (Only for a first
+    /// half that was judged and found to be his to hear.)
     fn stitch_rest(&self, kept: Option<Vec<f32>>, speech_ms: u32, barge_in: bool, ptt: bool, carried: Option<String>, command: String) {
         match kept {
             Some(pcm) => {
                 if let Some(earlier) = carried {
                     self.keep_for_stitching(earlier);
                 }
-                self.keep_audio_for_stitching(pcm, speech_ms, barge_in, ptt);
+                self.keep_audio_for_stitching(pcm, speech_ms, barge_in, ptt, true);
             }
             None => self.keep_for_stitching(command),
         }
@@ -2707,6 +2877,79 @@ mod tests {
         let both = |text: &str| matches!(text, "close" | "turn it down close");
         assert!(!supersedes("turn it down", "close", true, &both));
         assert!(!supersedes("", "close it", true, &routes));
+    }
+
+    /// Repro (jai.log, 2026-11-13 18:11, a song in the room): "[STITCH] Nothing clear in 1536 ms
+    /// on its own; hearing it again with the rest", "[STITCH] Hearing 1536 ms + 4864 ms of
+    /// speech as one sentence", and then a turn with no `[WAKE]` line before it. He was idle and
+    /// the conversation window had closed a minute before: being stitched alone had made the
+    /// sentence a follow-up.
+    #[test]
+    fn a_stitched_sentence_is_judged_like_any_other() {
+        use crate::ears::{classify_addressee, Addressee, AddresseeContext};
+        // The first piece: Whisper found no words in it while the song went on, so it was held
+        // before anything was known of it. It began outside any conversation, without the
+        // push-to-talk key, and not over his voice.
+        let held = held_for_him(false, None, false, false, false);
+        assert!(!held, "nothing made the held piece his to hear");
+        // The sentence it was stitched into: the window closed, no turn running, no words held.
+        let open = in_conversation(false, false, Some(held), false, false);
+        assert!(!open, "being stitched opens no conversation");
+        let idle = |conversation_open: bool, jai_focused: bool| AddresseeContext { wake_word: false, wake_required: true, conversation_open, jai_focused, gaming: false };
+        // A line of that song which no layer takes for his: ignored, stitched or in one piece.
+        let line = "The river keeps the count of all my wanderings too.";
+        assert_eq!(classify_addressee(line, &idle(open, false)), Addressee::Unaddressed);
+        // A line that opens like a question: judged by its own words, as it is unstitched, with his
+        // window in front or not. (It opens with "When", which layers B and C take for a
+        // question: that is theirs to judge, and no longer the stitching's to wave through.)
+        let lyric = "When apart, how I passed my days just mending the nets of the morning.";
+        for focused in [false, true] {
+            let judged = classify_addressee(lyric, &idle(open, focused));
+            assert_ne!(judged, Addressee::Conversation, "no follow-up: nobody was talking to him");
+            assert_eq!(judged, classify_addressee(lyric, &idle(false, focused)), "as the same words are judged in one piece");
+        }
+        // What was his to hear stays his when the sentence goes on: a turn that was pulled
+        // back, his name with a breath after it, a first half that was accepted.
+        assert!(in_conversation(false, false, Some(held_for_him(true, None, false, false, false)), false, false));
+        // A piece held unjudged that began inside a conversation, with the key held, or over
+        // his voice.
+        for (window, ptt, barge_in) in [(true, false, false), (false, true, false), (false, false, true)] {
+            assert!(held_for_him(false, None, window, ptt, barge_in));
+        }
+        // Two pauses in one sentence: his to hear if an earlier part was.
+        assert!(held_for_him(false, Some(true), false, false, false));
+        assert!(!held_for_him(false, Some(false), false, false, false));
+        // And as ever: the window, a running turn, words held from before.
+        assert!(in_conversation(true, false, None, false, false));
+        assert!(in_conversation(false, true, None, false, false));
+        assert!(in_conversation(false, false, None, true, false));
+        assert!(in_conversation(false, false, None, false, true));
+        assert!(!in_conversation(false, false, None, false, false));
+    }
+
+    /// A "don't listen" with an end is the dispatcher's own, like the plain one: admitted before
+    /// any turn exists, in English and German. The question about it is a turn (it is answered,
+    /// and lifts nothing).
+    #[test]
+    fn the_dispatcher_admits_a_lock_with_an_end() {
+        use crate::listening_lock::LockCommand;
+        let pause = |secs: u64| Admission::Privacy(LockCommand::Pause(Duration::from_secs(secs)));
+        for (said, want) in [
+            ("Don't listen for ten minutes", pause(600)),
+            ("JAI, stop listening for an hour.", pause(3600)),
+            ("Hör zehn Minuten nicht zu", pause(600)),
+            ("Mic off for 20 minutes", pause(1200)),
+            ("Jay, don't listen.", Admission::Privacy(LockCommand::Lock)),
+            ("You can listen again", Admission::Privacy(LockCommand::Resume)),
+        ] {
+            assert_eq!(Jai::admit(said), want, "{said}");
+        }
+        for said in ["Don't listen until eight", "Hör bis acht nicht zu", "Mic off until 8 pm"] {
+            assert!(matches!(Jai::admit(said), Admission::Privacy(LockCommand::Until(_, 0))), "{said}: {:?}", Jai::admit(said));
+        }
+        for said in ["How long until you listen again?", "When will you listen again?", "Wann hörst du wieder zu?", "Is my mic off?", "Hör dem Lehrer nicht zu"] {
+            assert_eq!(Jai::admit(said), Admission::Turn, "{said}");
+        }
     }
 
     /// The real router: the log's newer words are one of his commands on their own.

@@ -90,6 +90,33 @@ const fn fixed(title: &'static str, what: &'static str) -> Entry {
 /// Every change, newest first.
 pub const RELEASES: &[Release] = &[
     Release {
+        date: "2026-11-14",
+        name: "He in the background",
+        entries: &[
+            new("He as your desktop's background", "The board behind your icons, his views as real windows, the orb in a corner when you call.", "desktop_background"),
+            better("His windows on call", "Ctrl+Alt+J or \"show your windows\": all of them in front, with a list to move or close each."),
+            better("Windows open where you work", "A new window of his opens on the monitor you are using; beside a game, on another one."),
+            better("Tidy on your word", "\"Tidy the windows\" lines his windows up; nothing lines up by itself any more."),
+            better("Across monitors without a jump", "A block in your hand crosses from one monitor to the next; let go on the gap, it glides in."),
+            better("The day on the background", "Next lesson, next appointment, running timers and the song, beside the emblem."),
+            better("Words and progress on the orb", "Beside the corner orb: what was said. Round it: a ring for a running timer or a search."),
+            better("The orb where you want it", "Drag the corner orb anywhere; it comes out there on that monitor. A click opens the console."),
+            better("A game is left alone", "Beside a game: no mouse hook, a smaller click-through orb, windows on another monitor."),
+            better("Orders with a delay", "\"Play music in one minute\", \"close the board at 18:30\"; \"what is scheduled\", \"cancel that\"."),
+            better("He asks before a guess changes anything", "\"Did you mean: create a protocol called 'no think', Sir?\" Yes does it, anything else drops it."),
+            better("Did you mean", "For an order he does not know, the closest ones he does: \"the first one\", or a click."),
+            better("\"It\" is what you just did", "After the live background: \"throw it on all monitors\". After a switch: \"turn it off again\"."),
+            better("Desk layouts and the coach by more names", "\"Save that desk layout as standard\", \"layout standard\", \"open your pronunciation coach\"."),
+            better("Quicker when he is sure", "The careful second hearing only runs when the first was unsure. \"Don't listen\" acts at once."),
+            better("\"Don't listen\" with an end", "\"Don't listen for ten minutes\" or \"until eight\": he listens again by himself and says so."),
+            fixed("Windows that never showed", "\"How it works\" and detached windows stayed hidden. They are shown a surer way now."),
+            fixed("Shown while not listening", "Under \"don't listen\" nothing he hears is put on screen, unless you ask for the subtitles."),
+            fixed("A lyric taken for an order", "A song line stitched to a noise went to the model without your name. Not any more."),
+            fixed("\"Subtitles off\" by voice", "The recogniser's filter threw away every sentence with \"subtitles\" in it."),
+            fixed("Alignment help", "Gone, as you asked: no snapping and no guide lines when you move a block."),
+        ],
+    },
+    Release {
         date: "2026-11-13",
         name: "His ear, the kit, and this list",
         entries: &[
@@ -450,9 +477,9 @@ pub const EXPLANATIONS: &[Explanation] = &[
     Explanation {
         id: "desktop_background",
         title: "Live desktop background",
-        what: "On a monitor his board is not on, the desktop's background becomes his: the emblem, the clock and what he is doing, behind your icons. It takes no clicks and never the focus.",
-        say: &["live desktop on", "be my desktop background", "live desktop off"],
-        know: "It sits in front of a wallpaper program's picture and behind everything else.",
+        what: "He is your desktop's background: the board itself stands behind your icons, on every monitor or on your first, and looks as it does across all monitors. Every view of his, the console too, opens as a window of its own that you move like any other. Speak to him while a window covers his emblem, and the orb leaves the background for the lower left corner of the monitor you are using: smaller, in front of everything, with what is being said beside it. Five seconds after the last of it, it glides back. His keys on the background take your clicks; everything else on the desktop is yours as before.",
+        say: &["background mode", "be my desktop background", "background on all monitors", "background only on the main monitor", "show your windows", "tidy the windows", "board mode"],
+        know: "Ctrl+Alt+J brings his windows to the front, Ctrl+Alt+K the console to type to him. Drag the corner orb where you want it (he remembers the spot for each monitor); a click on it opens the console, a double click brings the board back. Beside a game he leaves the mouse alone. It sits in front of a wallpaper program's picture and behind everything else. Should Explorer start again, he opens his background anew by himself.",
     },
 ];
 
@@ -740,7 +767,7 @@ mod tests {
 
     #[test]
     fn the_list_is_searched_and_filtered_and_asked_for_by_name() {
-        let latest = &RELEASES[0];
+        let latest = RELEASES.iter().find(|r| r.date == "2026-11-13").expect("that day's release");
         assert!(matching(latest, "", None).len() == latest.entries.len());
         assert_eq!(matching(latest, "sleep timer", None).iter().map(|e| e.title).collect::<Vec<_>>(), ["Sleep timer", "Phone quick buttons"]);
         assert!(matching(latest, "", Some(Kind::Fixed)).iter().all(|e| e.kind == Kind::Fixed) && !matching(latest, "", Some(Kind::Fixed)).is_empty());

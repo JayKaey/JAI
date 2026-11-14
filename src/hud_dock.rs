@@ -169,9 +169,26 @@ fn with<R>(f: impl FnOnce(&mut DockState) -> R) -> R {
     f(g.get_or_insert_with(DockState::default))
 }
 
+/// While he is the desktop's background every view of his is a window of its own: there is no
+/// board window for a block to stand on. (Sir, 2026-11-13: "all the windows he can create …
+/// should be detached windows so that I can always move them in front of other windows", "there
+/// should be none windows that are exclusive to JAI's UI".)
+static ALL_OWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_all_own(on: bool) {
+    if ALL_OWN.swap(on, std::sync::atomic::Ordering::AcqRel) != on {
+        tracing::info!("[DOCK] {}", if on { "Every view is a window of its own from now on (he is the desktop's background)" } else { "Views open on the board again" });
+        crate::gui::refresh();
+    }
+}
+
+pub fn all_own() -> bool {
+    ALL_OWN.load(std::sync::atomic::Ordering::Acquire)
+}
+
 /// Whether window `id` is its own OS window.
 pub fn is_detached(id: &str) -> bool {
-    with(|s| s.detached.contains(id))
+    all_own() || with(|s| s.detached.contains(id))
 }
 
 /// Window `id` opens as its own OS window from now on.
@@ -218,6 +235,10 @@ pub fn adopt(id: &str) -> bool {
                 s.pending.remove(k);
                 s.detached.insert(id.to_string());
             }
+        }
+        // (As the desktop's background: every view, and as one of the windows he can name.)
+        if all_own() {
+            s.detached.insert(id.to_string());
         }
         s.detached.contains(id)
     })
@@ -1049,10 +1070,13 @@ pub fn collides(id: &str, rect: Rect) -> bool {
     with(|s| s.last_blocks.iter().chain(s.blocks.iter()).filter(|(other, _, _)| other != id).map(|(other, _, r)| s.forced.get(other).map_or(*r, |(to, _)| *to)).chain(orb).any(|r| r.shrink(0.5).intersects(rect.shrink(0.5))))
 }
 
-/// "Tidy the windows": every open, unpinned block into one grid around the orb. How many moved.
+/// "Tidy the windows": every open, unpinned block into one grid around the orb, and his
+/// windows of their own into one grid on the monitor Sir is using (they glide there). How many
+/// moved.
 pub fn retile_all(bounds: Rect) -> usize {
     let orb = lock(&OBSTACLES).0;
-    with(|s| {
+    let windows = crate::own_windows::tidy_now();
+    windows + with(|s| {
         let mut ids: Vec<String> = Vec::new();
         for (id, _, _) in s.last_blocks.iter().chain(s.blocks.iter()) {
             if !s.pinned.contains(id) && !ids.contains(id) {

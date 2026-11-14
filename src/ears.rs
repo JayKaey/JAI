@@ -171,6 +171,10 @@ pub fn known_command(text: &str) -> bool {
         || crate::intents::is_memory_command(text)
         || is_homecoming_phrase(text)
         || music_request(text)
+        // ("Throw it on all monitors" a moment after the live background was switched on, and
+        // "cancel that" right after an order was put off: his while they mean something.)
+        || crate::just_did::follow_up(text).is_some()
+        || crate::later::cancel_just_made(text).is_some()
 }
 
 /// A request he knows in the words it was written for, or said another way (`ways`). (Over a

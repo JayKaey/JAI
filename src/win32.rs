@@ -1242,6 +1242,16 @@ pub fn is_visible(hwnd: isize) -> bool {
     unsafe { IsWindowVisible(HWND(hwnd)).as_bool() }
 }
 
+/// Shows a window where it stands, without giving it the focus (asynchronous, safe from any
+/// thread).
+pub fn show_no_activate(hwnd: isize) {
+    use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNOACTIVATE;
+    // SAFETY: plain window state change on a handle; a stale one just fails.
+    unsafe {
+        let _ = ShowWindowAsync(HWND(hwnd), SW_SHOWNOACTIVATE);
+    }
+}
+
 /// Puts a hidden window on the taskbar, minimised and without taking focus, so its frame loop
 /// runs (Windows does not paint hidden windows). Asynchronous, safe from any thread.
 pub fn show_minimized_no_activate(hwnd: isize) {

@@ -44,8 +44,13 @@ pub fn clean(text: &str, settled: bool) -> Option<String> {
     (text.chars().any(char::is_alphanumeric)).then_some(text)
 }
 
-/// A guess at the words so far (while he is still speaking).
+/// A guess at the words so far (while he is still speaking). Not while Sir has told him not to
+/// listen: what the microphone hears then is not put on screen (`listening_lock::may_show_heard`;
+/// 2026-11-13: after "don't listen" a song in the room went on appearing here, line by line).
 pub fn heard(text: &str) {
+    if !crate::listening_lock::may_show_heard() {
+        return;
+    }
     if let Some(text) = clean(text, false) {
         let mut words = lock(&WORDS);
         // A settled sentence is never replaced by a late guess at part of it.
@@ -72,6 +77,12 @@ pub fn speech_over() {
 fn words_now() -> Option<(String, bool, f32)> {
     let mut words = lock(&WORDS);
     let w = words.as_ref()?;
+    // A guess that was on screen when Sir said "don't listen" goes with the lock: only the
+    // sentence he was understood to say (the order itself) fades in its own time.
+    if !w.settled && !crate::listening_lock::may_show_heard() {
+        *words = None;
+        return None;
+    }
     let age = w.at.elapsed();
     // A guess nobody followed up on (the microphone went quiet) goes after a few seconds.
     let stay = if w.settled { WORDS_STAY } else { Duration::from_secs(4) };
@@ -395,6 +406,57 @@ pub fn paint(ui: &mut Ui, top: Pos2, width: f32, state: &str, live_words: bool, 
             Some(1) => taken = accept(),
             _ => {}
         }
+        y += 34.0;
+        moving = true;
+    }
+    // "Did you mean: create a protocol called 'no think', Sir?" (`ask_first`): the question he
+    // asked aloud before a guess changed anything, with its two keys. Yes is said for Sir.
+    if let Some((question, left)) = crate::ask_first::pending() {
+        let text = format!("{}?", question.trim_end_matches('?').trim_end_matches(", Sir").to_uppercase());
+        let font = FontId::monospace(11.0);
+        let galley = p.layout_no_wrap(fit(&p, &text, &font, width - 150.0), font.clone(), INK);
+        let keys = crate::hud_style::key_width(&p, "[ YES ]") + crate::hud_style::key_width(&p, "[ NO ]") + 4.0;
+        let chip = Rect::from_center_size(pos2(top.x, y + 6.0), vec2(galley.size().x + keys + 34.0, 26.0));
+        p.rect_filled(chip, Rounding::ZERO, Color32::from_rgba_unmultiplied(4, 8, 13, 240));
+        p.rect_stroke(chip.shrink(0.5), Rounding::ZERO, stroke(1.0, accent));
+        crate::hud_board::brackets(&p, chip.shrink(0.75), crate::hud_board::bracket_colour());
+        p.galley(pos2(chip.left() + 10.0, chip.center().y - galley.size().y * 0.5), galley, INK);
+        p.rect_filled(Rect::from_min_size(pos2(chip.left(), chip.bottom() - 2.0), vec2(chip.width() * left.clamp(0.0, 1.0), 2.0)), Rounding::ZERO, accent.gamma_multiply(0.8));
+        let (clicked, _) = crate::hud_style::keys(ui, egui::Id::new("hud_ask_first"), chip.right() - 8.0, chip.center().y, &[("[ NO ]", false, "Leave it as it is"), ("[ YES ]", true, "Carry it out")], 1.0);
+        match clicked {
+            Some(0) => crate::ask_first::drop_it(),
+            Some(1) => taken = Some("yes".to_string()),
+            _ => {}
+        }
+        y += 34.0;
+        moving = true;
+    }
+    // "Did you mean" (`did_you_mean`): the orders he does know that are closest to one he did
+    // not, each a key of its own (a click carries it out), and one that takes them all down.
+    if let Some(offer) = crate::did_you_mean::current() {
+        let head = p.layout_no_wrap("DID YOU MEAN".to_string(), FontId::monospace(11.0), MUTED);
+        let labels: Vec<String> = offer.choices.iter().enumerate().map(|(k, choice)| format!("[ {}  {} ]", k + 1, fit(&p, &choice.label.to_uppercase(), &FontId::monospace(10.0), (width - 90.0).max(120.0)))).collect();
+        let none = crate::hud_style::key_width(&p, "[ NONE ]");
+        let widest = labels.iter().map(|label| crate::hud_style::key_width(&p, label)).fold(head.size().x + none + 24.0, f32::max);
+        let rows = labels.len() as f32;
+        let chip = Rect::from_min_size(pos2(top.x - widest * 0.5 - 14.0, y - 7.0), vec2(widest + 28.0, 30.0 + rows * 22.0));
+        p.rect_filled(chip, Rounding::ZERO, Color32::from_rgba_unmultiplied(4, 8, 13, 240));
+        p.rect_stroke(chip.shrink(0.5), Rounding::ZERO, stroke(1.0, accent.gamma_multiply(0.7)));
+        crate::hud_board::brackets(&p, chip.shrink(0.75), crate::hud_board::bracket_colour());
+        let first_row = chip.top() + 13.0;
+        p.galley(pos2(chip.left() + 10.0, first_row - head.size().y * 0.5), head, MUTED);
+        // Its time runs out along the bottom edge.
+        p.rect_filled(Rect::from_min_size(pos2(chip.left(), chip.bottom() - 2.0), vec2(chip.width() * offer.left(), 2.0)), Rounding::ZERO, accent.gamma_multiply(0.8));
+        if crate::hud_style::keys(ui, egui::Id::new("hud_meant_none"), chip.right() - 8.0, first_row, &[("[ NONE ]", false, "None of them")], 1.0).0.is_some() {
+            crate::did_you_mean::dismiss();
+        }
+        for (k, label) in labels.iter().enumerate() {
+            let right = chip.left() + 10.0 + crate::hud_style::key_width(&p, label);
+            let clicked = crate::hud_style::keys(ui, egui::Id::new(("hud_meant", k)), right, first_row + 22.0 * (k as f32 + 1.0), &[(label.as_str(), true, "Carry this one out")], 1.0).0;
+            if clicked.is_some() {
+                taken = crate::did_you_mean::take(k);
+            }
+        }
         moving = true;
     }
     if moving {
@@ -478,6 +540,9 @@ mod tests {
 
     #[test]
     fn a_guess_is_replaced_and_a_settled_sentence_stays() {
+        // (He is listening throughout: the privacy lock's own tests switch it meanwhile.)
+        let _listening = crate::listening_lock::test_lock();
+        crate::listening_lock::apply(crate::listening_lock::LockCommand::Resume);
         let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
         *lock(&WORDS) = None;
         heard("Jay open");
@@ -490,6 +555,39 @@ mod tests {
         heard("something");
         speech_over();
         assert!(words_now().is_none(), "a blip leaves nothing");
+    }
+
+    /// Sir, 2026-11-13: after "don't listen" what the microphone heard (a song in the room)
+    /// went on appearing under the emblem. Not while he is told not to listen, unless Sir asks
+    /// to see it while the lock is on.
+    #[test]
+    fn nothing_he_hears_is_shown_while_he_is_told_not_to_listen() {
+        use crate::listening_lock::{apply, show_asked, LockCommand};
+        let _listening = crate::listening_lock::test_lock();
+        apply(LockCommand::Resume);
+        let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
+        *lock(&WORDS) = None;
+        // His order stands as he said it, and fades in its own time; a guess that was up goes.
+        settled("JAI, don't listen.");
+        apply(LockCommand::Lock);
+        assert_eq!(words_now().map(|(t, s, _)| (t, s)), Some(("JAI, don't listen.".to_string(), true)));
+        *lock(&WORDS) = Some(Words { text: "a guess from before".into(), at: Instant::now(), settled: false });
+        assert!(words_now().is_none(), "a guess goes with the lock");
+        // What is heard under the lock never gets there.
+        heard("The river keeps the count of all my wanderings");
+        assert!(lock(&WORDS).is_none() && words_now().is_none());
+        // "Subtitles on" / "show my words" while the lock is on: Sir's explicit word.
+        show_asked();
+        heard("you can see this");
+        assert_eq!(words_now().map(|(t, _, _)| t).as_deref(), Some("you can see this"));
+        // The lock ends: everything is as his settings say; the next lock hides again.
+        apply(LockCommand::Resume);
+        heard("and this");
+        assert_eq!(words_now().map(|(t, _, _)| t).as_deref(), Some("and this"));
+        apply(LockCommand::Lock);
+        assert!(words_now().is_none());
+        apply(LockCommand::Resume);
+        *lock(&WORDS) = None;
     }
 
     #[test]

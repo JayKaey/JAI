@@ -317,66 +317,9 @@ pub fn patina(p: &Painter, r: Rect, alpha: f32) {
 
 // ------------------------------------------------------------------------- drag and throw ----
 
-/// How near (points) a dragged block's edge must come to a line to snap to it, and the gap two
-/// blocks keep when one snaps beside the other.
-pub const SNAP_REACH: f32 = 9.0;
-pub const SNAP_GAP: f32 = 10.0;
-
-/// A dragged block at `free` snapped to what is around it: the edges and middles of the other
-/// blocks (and beside them, a gap apart) and of the screen. Returns where it lands and the
-/// guide lines to draw (each from-to), at most one per axis.
-pub fn snap(free: Rect, others: &[Rect], bounds: Rect, reach: f32) -> (Rect, Vec<[Pos2; 2]>) {
-    // (the line's place, the nearer end of what it belongs to, the farther end)
-    let mut xs: Vec<(f32, f32, f32)> = vec![(bounds.left(), bounds.top(), bounds.bottom()), (bounds.center().x, bounds.top(), bounds.bottom()), (bounds.right(), bounds.top(), bounds.bottom())];
-    let mut ys: Vec<(f32, f32, f32)> = vec![(bounds.top(), bounds.left(), bounds.right()), (bounds.center().y, bounds.left(), bounds.right()), (bounds.bottom(), bounds.left(), bounds.right())];
-    for o in others {
-        for x in [o.left(), o.center().x, o.right(), o.left() - SNAP_GAP, o.right() + SNAP_GAP] {
-            xs.push((x, o.top(), o.bottom()));
-        }
-        for y in [o.top(), o.center().y, o.bottom(), o.top() - SNAP_GAP, o.bottom() + SNAP_GAP] {
-            ys.push((y, o.left(), o.right()));
-        }
-    }
-    // The nearest line within reach of one of the block's own three (two edges and the middle).
-    let nearest = |mine: [f32; 3], lines: &[(f32, f32, f32)]| -> Option<(f32, (f32, f32, f32))> {
-        let mut best: Option<(f32, (f32, f32, f32))> = None;
-        for line in lines {
-            for m in mine {
-                let d = line.0 - m;
-                if d.abs() <= reach && best.is_none_or(|(b, _)| d.abs() < b.abs()) {
-                    best = Some((d, *line));
-                }
-            }
-        }
-        best
-    };
-    let dx = nearest([free.left(), free.center().x, free.right()], &xs);
-    let dy = nearest([free.top(), free.center().y, free.bottom()], &ys);
-    let landed = free.translate(vec2(dx.map_or(0.0, |d| d.0), dy.map_or(0.0, |d| d.0)));
-    let mut guides = Vec::new();
-    if let Some((_, (x, a, b))) = dx {
-        guides.push([pos2(x, a.min(landed.top())), pos2(x, b.max(landed.bottom()))]);
-    }
-    if let Some((_, (y, a, b))) = dy {
-        guides.push([pos2(a.min(landed.left()), y), pos2(b.max(landed.right()), y)]);
-    }
-    (landed, guides)
-}
-
-/// The guide lines of a snap, drawn over everything while the block is held.
-pub fn paint_guides(ctx: &egui::Context, guides: &[[Pos2; 2]]) {
-    if guides.is_empty() {
-        return;
-    }
-    let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("hud_snap_guides")));
-    let colour = crate::hud_board::active_colour();
-    for [from, to] in guides {
-        p.line_segment([*from, *to], stroke(1.0, colour.gamma_multiply(0.75)));
-        for end in [from, to] {
-            p.circle_filled(*end, 2.0, colour);
-        }
-    }
-}
+// (A dragged block used to line itself up with its neighbours and the screen, with guide lines
+// while it was held. Gone on 2026-11-13: Sir wants no alignment help. A block goes where the
+// hand has it.)
 
 /// A block let go while it moved faster than this (points per second) is thrown.
 pub const THROW_FROM: f32 = 420.0;
@@ -795,28 +738,6 @@ mod tests {
         assert_eq!(light_strength(over, orb), 0.0, "a block that covers the emblem is not lit by it");
         let middle = Rect::from_min_size(pos2(750.0, 300.0), vec2(300.0, 200.0));
         assert!(light_strength(middle, orb) < light_strength(beside, orb) && light_strength(middle, orb) > 0.0);
-    }
-
-    /// A dragged block lines up with its neighbours and the screen, keeps a gap beside a
-    /// neighbour, and far from every line it stays where the hand has it.
-    #[test]
-    fn a_dragged_block_snaps_to_what_is_near() {
-        let bounds = Rect::from_min_size(pos2(0.0, 0.0), vec2(1600.0, 900.0));
-        let other = Rect::from_min_size(pos2(200.0, 100.0), vec2(300.0, 200.0));
-        // Its top five points under the neighbour's top, its left edge near the gap beside it.
-        let free = Rect::from_min_size(pos2(516.0, 105.0), vec2(270.0, 160.0));
-        let (landed, guides) = snap(free, &[other], bounds, SNAP_REACH);
-        assert_eq!((landed.left(), landed.top()), (other.right() + SNAP_GAP, other.top()));
-        assert_eq!(landed.size(), free.size(), "a snap moves, it never resizes");
-        assert_eq!(guides.len(), 2);
-        // The middle of the screen.
-        let centred = Rect::from_center_size(pos2(803.0, 600.0), vec2(200.0, 100.0));
-        assert_eq!(snap(centred, &[], bounds, SNAP_REACH).0.center().x, 800.0);
-        // Nothing near: it stays, and no line is drawn.
-        let alone = Rect::from_min_size(pos2(1000.0, 500.0), vec2(200.0, 90.0));
-        let (same, none) = snap(alone, &[other], bounds, SNAP_REACH);
-        assert_eq!(same, alone);
-        assert!(none.is_empty());
     }
 
     /// A thrown block glides on, slows down, rests within half a second and never leaves the

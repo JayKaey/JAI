@@ -26,6 +26,8 @@ pub struct Glance {
     pub next: Option<(String, NaiveDateTime, String)>,
     /// The weather outside: degrees and a word for the sky.
     pub weather: Option<(f64, String)>,
+    /// The lesson that runs or comes next: its subject, when it starts and its room.
+    pub lesson: Option<(String, NaiveDateTime, String)>,
 }
 
 static GLANCE: Mutex<Option<(Instant, Glance)>> = Mutex::new(None);
@@ -54,12 +56,14 @@ pub fn refresh(app: &crate::app::Jai, rt: &tokio::runtime::Handle) {
             Ok(Ok(report)) => Some((report.current.temperature, crate::location_engine::weather_code_text(report.current.code).to_string())),
             _ => None,
         };
-        *lock(&GLANCE) = Some((Instant::now(), Glance { next, weather }));
+        let lesson = tokio::time::timeout(Duration::from_secs(12), crate::briefing::next_lesson(tools)).await.ok().flatten();
+        *lock(&GLANCE) = Some((Instant::now(), Glance { next, weather, lesson }));
         LOOKING.store(false, Ordering::Release);
     });
 }
 
-fn glance() -> Glance {
+/// The last glance at the calendar, the timetable and the weather (`refresh` keeps it fresh).
+pub fn glance() -> Glance {
     lock(&GLANCE).as_ref().map(|(_, g)| g.clone()).unwrap_or_default()
 }
 

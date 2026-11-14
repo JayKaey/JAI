@@ -40,6 +40,7 @@ pub const TOOLS: &[&str] = &[
     "subtitle_place",
     "block_places",
     "notification_history",
+    "scheduled_order",
 ];
 
 pub fn is_tool(name: &str) -> bool {
@@ -72,6 +73,9 @@ pub fn command(s: &str, original: &str) -> Option<(&'static str, Value)> {
         .or_else(|| crate::live_subtitles::place_command(s).map(|a| ("subtitle_place", a)))
         .or_else(|| crate::block_places::command(s).map(|a| ("block_places", a)))
         .or_else(|| crate::hud_notify::command(s).map(|a| ("notification_history", a)))
+        // (Putting an order off is not asked here: `later::order` reads the whole sentence,
+        // before every other rule. These are the list and the orders that drop one.)
+        .or_else(|| crate::later::command(s).map(|a| (crate::later::TOOL, a)))
 }
 
 /// Carries out a kit tool.
@@ -98,6 +102,7 @@ pub async fn run_tool(ctx: &ToolContext, name: &str, args: &Value) -> Result<Str
         "subtitle_place" => crate::live_subtitles::place_tool(args),
         "block_places" => crate::block_places::run(args),
         "notification_history" => crate::hud_notify::run(args),
+        "scheduled_order" => crate::later::run(args),
         other => Err(format!("The kit has no tool called '{other}'.")),
     }
 }
@@ -112,7 +117,9 @@ pub fn only_looks(name: &str, args: &Value) -> bool {
 
 pub fn stays_inside(name: &str, args: &Value) -> bool {
     let action = args["action"].as_str().unwrap_or("");
-    only_looks(name, args) || matches!(name, "notebook" | "privacy_board" | "pronunciation_coach" | "known_guest" | "subtitle_place" | "block_places" | "notification_history") || (matches!(name, "type_snippet" | "whenever_rule" | "desk_layout") && matches!(action, "save" | "add" | "delete" | "remove"))
+    // (An order put off is a line in his own store; what it does when it falls due goes
+    // through this same door, call by call.)
+    only_looks(name, args) || matches!(name, "notebook" | "privacy_board" | "pronunciation_coach" | "known_guest" | "subtitle_place" | "block_places" | "notification_history" | "scheduled_order") || (matches!(name, "type_snippet" | "whenever_rule" | "desk_layout") && matches!(action, "save" | "add" | "delete" | "remove"))
 }
 
 /// Tools that press keys or type in the app in front, or answer aloud about who is in the

@@ -324,7 +324,17 @@ pub fn is_order(text: &str) -> bool {
         || crate::intents::silent_quick_command(&t).is_some()
         || crate::intents::orb_mode_command(&t).is_some()
         || about_his_words(&t)
+        || dispatchers_own(&t)
         || crate::brain::another_way(&t).is_some()
+}
+
+/// An order the dispatcher carries out itself, before any turn exists (`Jai::admit`): the
+/// privacy lock and its lifting ("don't listen", "you can listen again"), also as one clause of
+/// a longer sentence. No parser of the fast path knows these, so "Jay, don't listen" counted as
+/// words that lead nowhere: it was heard a second time, and waited for like an unfinished
+/// thought, before the lock came (2026-11-13).
+pub fn dispatchers_own(text: &str) -> bool {
+    crate::app::Jai::admit(text) != crate::app::Admission::Turn
 }
 
 /// Whether Sir is speaking about his own words: teaching, asking what was learnt, having it
@@ -895,21 +905,55 @@ fn capitalised(word: &str) -> String {
 
 // ------------------------------------------------------------------ a second hearing ----
 
+/// The bar a first hearing must clear to stand without a second one, by the recogniser's own
+/// numbers: the mean log-probability of its words at least this, and the probability that the
+/// clip holds no speech at most that.
+pub struct Sure {
+    pub logprob_at_least: f32,
+    pub no_speech_at_most: f32,
+}
+
+/// When the first hearing is sure enough that a second, careful one is not worth its second
+/// and a half (Sir, 2026-11-13: quicker when he is sure).
+///
+/// From Sir's own log: his clear sentences score -0.01 … -0.30 (`stt::BEAM_RETRY_LOGPROB`'s
+/// note), and "Jay, don't listen." that evening -0.18 with no-speech 0.11: sure. What the
+/// second hearing is for scored "They loud nothing." -0.42 and "Jay Layout Standard." -0.47
+/// with no-speech 0.59: unsure, by either number. The line between them is drawn at -0.35,
+/// where the brain already draws it for what his ear may learn from a sentence and where
+/// `stt::HeardQuality::confident` draws it for a change of Sir's name; and at 0.40 for
+/// no-speech, as there. (The language's probability is left out on purpose: Sir's accented
+/// English scores low as English even when every word is right, and a second hearing listens
+/// in the same language anyway.)
+pub const SURE: Sure = Sure { logprob_at_least: -0.35, no_speech_at_most: 0.40 };
+
+/// Whether the recogniser was sure of its first hearing (`SURE`).
+pub fn heard_surely(heard: crate::stt::HeardQuality) -> bool {
+    heard.avg_logprob >= SURE.logprob_at_least && heard.no_speech <= SURE.no_speech_at_most
+}
+
 /// Whether words spoken to him that lead nowhere deserve a second, careful hearing of their
 /// clip: an order by its shape, a few words, or words the recogniser was unsure of. Not a
-/// question that is plainly one for the language model.
-pub fn worth_hearing_again(text: &str, avg_logprob: f32, routes: &dyn Fn(&str) -> bool) -> bool {
+/// question that is plainly one for the language model, never an order he knows (`routes`: the
+/// dispatcher's own count, `is_order`), and not what the recogniser was sure of the first time
+/// (`heard`: its numbers for the first hearing).
+pub fn worth_hearing_again(text: &str, heard: crate::stt::HeardQuality, routes: &dyn Fn(&str) -> bool) -> bool {
     let all = words(text);
     let (from, to) = core(&all);
     let w = &all[from..to];
     if w.is_empty() || w.len() > 10 || leads_somewhere(text, routes) {
         return false;
     }
+    // (What it was sure of it would write again: the careful hearing of "Jay, don't listen."
+    // took 1.7 s to say "Jay, don't listen.")
+    if heard_surely(heard) {
+        return false;
+    }
     const ASKING: &[&str] = &["what", "whats", "why", "how", "who", "whos", "when", "where", "which", "is", "are", "do", "does", "did", "was", "were", "should", "wie", "was", "warum", "wer", "wann", "wo", "welche"];
     let question = ASKING.contains(&w[0].as_str()) && w.len() > 3;
     // (A request that merely begins with a verb, "tell me a joke about school", is one for the
     // language model: a second hearing of every such sentence would hold the next one up.)
-    !question && (w.len() <= 4 || avg_logprob < -0.45)
+    !question && (w.len() <= 4 || heard.avg_logprob < -0.45)
 }
 
 /// The names worth giving the recogniser for a careful hearing: the applications Sir has, and
@@ -1149,15 +1193,68 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// The recogniser's numbers for a first hearing (the language is not asked).
+    fn heard(avg_logprob: f32, no_speech: f32) -> crate::stt::HeardQuality {
+        crate::stt::HeardQuality { avg_logprob, language_prob: 0.9, no_speech }
+    }
+
     #[test]
     fn a_second_hearing_is_for_orders_that_lead_nowhere() {
-        assert!(worth_hearing_again("Jay, sum out.", -0.4, &routes), "a few words");
-        assert!(!worth_hearing_again("Jay, tell me a joke about my school and my teachers", -0.1, &routes), "a request for the model, heard well");
-        assert!(worth_hearing_again("Jay, show me dear us in the big window now", -0.62, &routes), "unsure");
-        assert!(!worth_hearing_again("Jay, open Discord.", -0.1, &routes), "it leads somewhere");
-        assert!(!worth_hearing_again("Jay, what is the capital of France?", -0.2, &routes), "a question for the model");
-        assert!(!worth_hearing_again("Jay, I think the film we saw yesterday was better than the book", -0.2, &routes), "talk");
+        assert!(worth_hearing_again("Jay, sum out.", heard(-0.4, 0.1), &routes), "a few words");
+        assert!(!worth_hearing_again("Jay, tell me a joke about my school and my teachers", heard(-0.1, 0.1), &routes), "a request for the model, heard well");
+        assert!(worth_hearing_again("Jay, show me dear us in the big window now", heard(-0.62, 0.1), &routes), "unsure");
+        assert!(!worth_hearing_again("Jay, open Discord.", heard(-0.1, 0.1), &routes), "it leads somewhere");
+        assert!(!worth_hearing_again("Jay, what is the capital of France?", heard(-0.2, 0.1), &routes), "a question for the model");
+        assert!(!worth_hearing_again("Jay, I think the film we saw yesterday was better than the book", heard(-0.2, 0.1), &routes), "talk");
         assert!(hint().contains("Discord") && hint().contains("zoom out"));
+    }
+
+    /// Sir, 2026-11-13: a careful second hearing only when the first was unsure. The numbers
+    /// are his log's of that evening.
+    #[test]
+    fn a_second_hearing_is_only_for_a_first_one_that_was_unsure() {
+        // 18:12:20 "Jay, don't listen." (log-probability -0.18, no-speech 0.11): sure. Whatever
+        // the words are, a second hearing would write them again.
+        assert!(heard_surely(heard(-0.18, 0.11)));
+        assert!(!worth_hearing_again("JAI, don't listen", heard(-0.18, 0.11), &routes), "sure of the words: heard once");
+        assert!(!worth_hearing_again("Jay, sum out.", heard(-0.2, 0.05), &routes), "a few words that lead nowhere, but heard surely");
+        // 18:09 "Jay Layout Standard." (-0.47, no-speech 0.59) and "They loud nothing." (-0.42):
+        // unsure, and still heard twice.
+        assert!(!heard_surely(heard(-0.47, 0.59)) && !heard_surely(heard(-0.42, 0.1)));
+        assert!(worth_hearing_again("Jay Layout Standard.", heard(-0.47, 0.59), &routes));
+        assert!(worth_hearing_again("They loud nothing.", heard(-0.42, 0.1), &routes));
+        // Either number alone makes a hearing unsure: words Whisper liked in a clip it took
+        // for no speech, and the other way round.
+        assert!(worth_hearing_again("Jay, sum out.", heard(-0.2, 0.59), &routes));
+        assert!(worth_hearing_again("Jay, sum out.", heard(-0.36, 0.05), &routes));
+        assert!(!worth_hearing_again("Jay, sum out.", heard(-0.35, 0.40), &routes), "the bar itself is sure");
+        // A longer sentence is heard again only when it was very unsure, as before.
+        assert!(!worth_hearing_again("Jay, show me dear us in the big window now", heard(-0.40, 0.1), &routes));
+        assert!(worth_hearing_again("Jay, show me dear us in the big window now", heard(-0.46, 0.1), &routes));
+    }
+
+    /// The dispatcher's own orders are orders he knows: never heard twice, however unsure,
+    /// and never rewritten by sound. (The real router.)
+    #[test]
+    fn what_the_dispatcher_carries_out_is_an_order_he_knows() {
+        let _one = lock(&ONE);
+        reset();
+        let unsure = heard(-0.7, 0.5);
+        // The privacy lock and its lifting, and the stop that silences everything.
+        for order in ["JAI, don't listen", "Jay, stop listening.", "Stop listening for ten minutes", "You can listen again", "JAI, hör zehn Minuten nicht zu", "Mic off for 20 minutes", "Jay, stop.", "Jay, pause."] {
+            assert!(leads_somewhere(order, &is_order), "{order}");
+            assert!(!worth_hearing_again(order, unsure, &is_order), "{order}: an order he knows is heard once");
+            assert_eq!(read(order, true, &is_order), None, "{order}: taken as it was said");
+        }
+        // The lock as one clause of a longer sentence is the dispatcher's too.
+        assert!(is_order("Stop listening and open the mixer"));
+        assert!(dispatchers_own("don't listen") && dispatchers_own("you can listen again") && !dispatchers_own("open the mixer") && !dispatchers_own("what a lovely evening"));
+        // Words that lead nowhere are still heard again when the recogniser was unsure of them,
+        // and only then.
+        assert!(worth_hearing_again("Jay, flurb the wozzle.", unsure, &is_order));
+        assert!(!worth_hearing_again("Jay, flurb the wozzle.", heard(-0.18, 0.11), &is_order));
+        // A question about the lock is no order of the lock's (it holds "listen again").
+        assert!(!dispatchers_own("How long until you listen again?"));
     }
 
     /// The real router: every order a phrase book starts with leads somewhere, and Sir's

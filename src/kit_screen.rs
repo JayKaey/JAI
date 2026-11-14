@@ -333,7 +333,11 @@ const LAYOUT: &str = "layout";
 static LAYOUT_RESTORE: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(?:restore|load|apply|bring\s+back|set\s+up)\s+(?:the\s+|my\s+)?(?:layout|desk)\s+(.+)$|^(?:restore|load|apply|bring\s+back|set\s+up|give\s+me)\s+(?:the\s+|my\s+)?(.+?)\s+(?:layout|desk)$|^arrange\s+(?:my\s+)?windows\s+(?:like|as|for)\s+(.+)$|^stell\s+(?:das\s+)?layout\s+(.+?)\s+wieder\s+her$")
 });
-static LAYOUT_BARE: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:the\s+|my\s+)?(.+?)\s+layout$|^layout\s+(.+)$"));
+/// "Restore the desk layout standard": asked for as a desk layout in so many words.
+static LAYOUT_DESK: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:restore|load|apply|bring\s+back|set\s+up)\s+(?:the\s+|my\s+)?desk\s+layout\s+(.+)$"));
+/// "Switch to my standard layout", "use the study layout": his once he has kept one of that name.
+static LAYOUT_SWITCH: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:switch\s+to|go\s+to|change\s+to|use|activate)\s+(?:the\s+|my\s+)?(.+?)\s+(?:desk\s+)?layout$"));
+static LAYOUT_BARE: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:the\s+|my\s+)?(.+?)\s+layout$|^layout\s+(?P<first>.+)$"));
 static LAYOUT_LIST: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:list|show)\s+(?:me\s+)?(?:my\s+|the\s+|all\s+)?(?:desk\s+|window\s+)?layouts$|^what\s+layouts\s+do\s+i\s+have$|^(?:zeig\s+(?:mir\s+)?)?meine\s+layouts$"));
 static LAYOUT_DELETE: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:delete|remove|forget)\s+(?:the\s+|my\s+)?(?:desk\s+)?layout\s+(.+)$|^(?:delete|remove|forget)\s+(?:the\s+|my\s+)?(.+?)\s+(?:desk\s+)?layout$|^lösche?\s+das\s+layout\s+(.+)$"));
 
@@ -376,13 +380,33 @@ pub fn layout_command(s: &str) -> Option<Value> {
     // ("Restore the default layout", "give me the compact layout" are the HUD's own: a name
     // of its layouts is no desk layout unless Sir saved one under it.)
     const THE_HUDS: &[&str] = &["default", "compact", "full", "orb", "normal", "standard", "minimal", "zen", "previous", "last", "old", "original", "usual", "same"];
+    // ("Apply the desk layout standard": he says whose layout it is, so the name is his own
+    // whatever the HUD calls its layouts. Sir, 2026-11-13.)
+    if let Some(name) = LAYOUT_DESK.captures(s).as_ref().and_then(first).filter(|name| layout_key(name).split(' ').count() <= 3) {
+        return Some(json!({"action": "restore", "name": name}));
+    }
     if let Some(name) = LAYOUT_RESTORE.captures(s).as_ref().and_then(first).filter(|name| !THE_HUDS.contains(&layout_key(name).as_str()) || crate::kit::get(LAYOUT, &layout_key(name)).is_some()) {
+        return Some(json!({"action": "restore", "name": name}));
+    }
+    // "Switch to my standard layout": a layout he has kept under that name (until he has, it
+    // is the HUD's own "standard" as it always was).
+    if let Some(name) = LAYOUT_SWITCH.captures(s).as_ref().and_then(first).filter(|name| crate::kit::get(LAYOUT, &layout_key(name)).is_some()) {
         return Some(json!({"action": "restore", "name": name}));
     }
     // The bare "<name> layout": only for a layout that exists ("compact layout" is the HUD's).
     let c = LAYOUT_BARE.captures(s)?;
     let name = first(&c)?;
-    crate::kit::get(LAYOUT, &layout_key(name)).map(|_| json!({"action": "restore", "name": name}))
+    if crate::kit::get(LAYOUT, &layout_key(name)).is_some() {
+        return Some(json!({"action": "restore", "name": name}));
+    }
+    // "Layout standard", the name last (2026-11-13: the language model made a protocol called
+    // "jay_layout_standard" of it): a desk layout by its name, kept or not; he says so when
+    // there is none. The HUD's own layouts keep their meaning ("layout compact"), all but
+    // "standard", which is what Sir calls his desk. (One word: "layout study laden" and
+    // "layout of the page" are no names.)
+    let key = layout_key(name);
+    let the_huds_own = key != "standard" && (crate::interface::HudLayout::parse(&key).is_some() || THE_HUDS.contains(&key.as_str()));
+    (c.name("first").is_some() && !the_huds_own && !key.contains(' ') && key.chars().count() >= 2).then(|| json!({"action": "restore", "name": name}))
 }
 
 pub async fn layout(ctx: &ToolContext, args: &Value) -> Result<String, String> {
@@ -490,7 +514,8 @@ pub fn lock_state(lock_on: bool, voice_known: bool) -> String {
 
 /// Gathers what the dashboard shows (called every few seconds from the kit's background task).
 pub fn gather(tools: &ToolContext) {
-    if !tools.config.read(|c| c.interface.portrait_dashboard) {
+    // (For the dashboard on the upright monitor, and for the day on the background.)
+    if !tools.config.read(|c| c.interface.portrait_dashboard || c.interface.desktop_background) {
         *lock(&DASH) = None;
         return;
     }
@@ -557,6 +582,15 @@ mod tests {
         assert_eq!(layout_command("compact layout"), None);
         assert_eq!(layout_command("study layout"), None);
         assert_eq!(layout_command("delete the study layout"), None);
+        // Asked for as a desk layout in so many words, or with the name last ("Jay Layout
+        // Standard", 2026-11-13): his by that name, kept or not. The HUD's own keep their meaning.
+        assert_eq!(layout_command("restore the desk layout standard"), Some(json!({"action": "restore", "name": "standard"})));
+        assert_eq!(layout_command("apply my desk layout work"), Some(json!({"action": "restore", "name": "work"})));
+        assert_eq!(layout_command("layout standard"), Some(json!({"action": "restore", "name": "standard"})));
+        assert_eq!(layout_command("layout gaming"), Some(json!({"action": "restore", "name": "gaming"})));
+        for said in ["layout compact", "layout full", "layout orb", "layout default", "layout of the page", "layout study laden", "layout", "standard layout"] {
+            assert_eq!(layout_command(said), None, "{said}");
+        }
         crate::kit::put(LAYOUT, "study", &json!({"name": "study"})).unwrap();
         assert_eq!(layout_command("study layout"), Some(json!({"action": "restore", "name": "study"})));
         assert_eq!(layout_command("delete the study layout"), Some(json!({"action": "delete", "name": "study"})));

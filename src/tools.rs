@@ -1061,6 +1061,9 @@ impl ToolContext {
                 }
                 if !crate::hyper_cortex::is_read_only(name, &outcome.args) {
                     crate::undo::note_done(&outcome.output);
+                    // … and what "it" means for a moment: "throw it on all monitors" right
+                    // after the live background was switched on (`just_did`).
+                    crate::just_did::note(name, &outcome.args);
                 }
                 outcome
             }
@@ -1265,6 +1268,11 @@ impl ToolContext {
                 gui::open_interface_settings();
             }
             crate::hud_feel::apply(args);
+            // "Subtitles on", "show my words" while the privacy lock is on: Sir's explicit word
+            // that he wants to see what is heard (it stays hidden under the lock otherwise).
+            if bool_arg(args, "subtitles") == Some(true) || bool_arg(args, "live_words") == Some(true) {
+                crate::listening_lock::show_asked();
+            }
             if let Some(open) = bool_arg(args, "text_console") {
                 gui::set_text_console(open);
             }
@@ -1670,6 +1678,9 @@ impl ToolContext {
                             steps,
                         })
                         .map(|p| {
+                            // (A desk layout just kept is his by its name at once: "the
+                            // standard layout" a moment later is this one, not the HUD's.)
+                            crate::kit_screen::sync_layouts(self);
                             format!(
                                 "Saved the current workspace as the {} ({} steps): {}{}{}.",
                                 protocols::display_name(&p.name),

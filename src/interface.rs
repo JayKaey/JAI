@@ -282,9 +282,15 @@ pub struct InterfaceSettings {
     pub music_visuals: bool,
     /// Mini mode: a slim always-on-top strip at the top of a monitor instead of the board.
     pub mini_strip: bool,
-    /// The emblem, clock and state as the live desktop background of a monitor without the
-    /// board.
+    /// He is the desktop's background: the board itself stands behind the desktop's icons (as it
+    /// looks across every monitor), every view of his is a window of its own, and the orb comes
+    /// out to a corner when Sir speaks to him and the background is covered. (Until 2026-11-13
+    /// this was an emblem and a clock on a monitor the board was not on. Sir: "I want Jay to
+    /// basically only be my PC background".)
     pub desktop_background: bool,
+    /// As the background he covers every monitor (off: Sir's first one only). ("I want the live
+    /// background to be on all monitors if I want it to".)
+    pub background_all_monitors: bool,
     /// The voice lock: a spoken order is carried out only in Sir's own voice (after the voice
     /// set-up; push-to-talk and the keyboard are his hands and always work).
     pub voice_lock: bool,
@@ -374,6 +380,7 @@ impl Default for InterfaceSettings {
             music_visuals: true,
             mini_strip: false,
             desktop_background: false,
+            background_all_monitors: true,
             // (On: he answers to Sir alone once Sir's voice is known, unless told otherwise.)
             voice_lock: true,
             portrait_dashboard: false,
@@ -411,6 +418,29 @@ impl InterfaceSettings {
     /// other: whichever of the two was just switched on (compared with `before`) wins, so F11,
     /// the SCREENS menu, a settings checkbox and JAI's own tools can never leave both set.
     pub fn reconcile(&mut self, before: &InterfaceSettings) {
+        // As the desktop's background he has one more shape, and it excludes the floating orb
+        // and the mini strip: whichever was just asked for stands.
+        if self.desktop_background && (self.orb_mode || self.mini_strip) {
+            if before.desktop_background {
+                self.desktop_background = false;
+            } else {
+                self.orb_mode = false;
+                self.mini_strip = false;
+            }
+        }
+        if self.desktop_background && before.desktop_background {
+            if self.span_all_monitors != before.span_all_monitors {
+                // "Use all monitors" said to the background means the background (Sir, 2026-11-13,
+                // right after switching it on: "throw it on all monitors"); the board's own
+                // shape stays what it was for when he comes back to it.
+                self.background_all_monitors = self.span_all_monitors;
+                self.span_all_monitors = before.span_all_monitors;
+                self.fullscreen = before.fullscreen;
+            } else if self.fullscreen != before.fullscreen {
+                // "Full screen", F11: he wants the board.
+                self.desktop_background = false;
+            }
+        }
         if self.span_all_monitors && self.fullscreen {
             if before.span_all_monitors && !before.fullscreen {
                 self.span_all_monitors = false;
@@ -1795,6 +1825,7 @@ pub fn configure(current: &InterfaceSettings, args: &Value) -> Result<Configured
         ("music visuals", bool_arg(args, "music_visuals"), &mut s.music_visuals),
         ("mini mode", bool_arg(args, "mini_strip"), &mut s.mini_strip),
         ("live desktop background", bool_arg(args, "desktop_background"), &mut s.desktop_background),
+        ("background on every monitor", bool_arg(args, "background_all_monitors"), &mut s.background_all_monitors),
         // (Before his voice is known it holds nothing back: the print is gathered from the
         // orders given by name, and the lock holds from then on.)
         ("voice lock", bool_arg(args, "voice_lock"), &mut s.voice_lock),

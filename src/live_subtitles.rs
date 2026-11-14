@@ -89,10 +89,24 @@ pub fn lines() -> Vec<(String, f32)> {
     lines.iter().map(|l| (l.text.clone(), 1.0 - ((l.at.elapsed().as_secs_f32() - (LINE_STAYS.as_secs_f32() - 0.5)) / 0.5).clamp(0.0, 1.0))).collect()
 }
 
+/// Whether speech heard at `source` may be written along right now. What one app plays (a
+/// video, a call, on a channel of its own) always; the mix of everything the PC plays carries
+/// the microphone wherever a mixer adds its monitor to it (on Sir's PC it does), so while Sir
+/// has told him not to listen that mix is neither heard nor written, unless Sir asks for
+/// subtitles while the lock is on (`listening_lock::may_show_heard`).
+fn may_caption(source: &crate::pc_audio::Source) -> bool {
+    crate::listening_lock::may_show_heard() || matches!(source, crate::pc_audio::Source::Device(_))
+}
+
 /// What the bar shows right now and on which monitor (it starts the listener while the
 /// subtitles are on); None while there is nothing to show.
 fn bar_now(app: &crate::app::Jai, rt: &tokio::runtime::Handle) -> Option<(Vec<(String, f32)>, [i32; 4])> {
     crate::hud_feel::subtitles()?;
+    // "Don't listen": lines that came from a mix with the microphone in it go at once.
+    if !may_caption(&crate::pc_audio::source(crate::pc_audio::Use::Speech)) {
+        lock(&LINES).clear();
+        return None;
+    }
     if crate::platform::in_test_session() {
         // A scripted session neither listens to the PC nor writes over the screen Sir works on:
         // asked to (`JAI_DEMO=subtitles`), it shows two lines of its own on the monitor it names
@@ -466,6 +480,14 @@ async fn listen(app: crate::app::Jai) {
             looked = Some(Instant::now());
             crate::pc_audio::listen_to(crate::pc_audio::Use::Speech, speech_source().await);
         }
+        // "Don't listen": the mix that carries his microphone is not even heard meanwhile.
+        if !may_caption(&crate::pc_audio::source(crate::pc_audio::Use::Speech)) {
+            crate::pc_audio::want(crate::pc_audio::Use::Speech, false);
+            heard.clear();
+            let _ = crate::pc_audio::take_speech();
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            continue;
+        }
         crate::pc_audio::want(crate::pc_audio::Use::Speech, true);
         tokio::time::sleep(Duration::from_millis(200)).await;
         heard.extend(crate::pc_audio::take_speech());
@@ -482,7 +504,8 @@ async fn listen(app: crate::app::Jai) {
         let result = reply.await;
         *lock(&DECODING) = None;
         if let Ok(Ok(t)) = result {
-            if !phantom(&t.text) && crate::hud_feel::subtitles().is_some() {
+            // (Still wanted, and still his to see: the lock may have come while Whisper heard it.)
+            if !phantom(&t.text) && crate::hud_feel::subtitles().is_some() && may_caption(&crate::pc_audio::source(crate::pc_audio::Use::Speech)) {
                 // (Once per switching on, so the log says the path works; never what was said.)
                 if !said_first {
                     said_first = true;
@@ -561,6 +584,26 @@ mod tests {
         for text in ["Thank you for the flowers, they are lovely.", "And that is how the engine works.", "Danke, das reicht."] {
             assert!(!phantom(text), "{text}");
         }
+    }
+
+    /// While Sir has told him not to listen, the mix that carries the microphone is not written
+    /// along; what one app plays on its own channel is (a video's sound is no listening to the
+    /// room). Asked for under the lock, both are.
+    #[test]
+    fn under_the_privacy_lock_only_an_apps_own_sound_is_written_along() {
+        use crate::listening_lock::{apply, show_asked, LockCommand};
+        use crate::pc_audio::Source;
+        let _listening = crate::listening_lock::test_lock();
+        apply(LockCommand::Resume);
+        let (mix, video) = (Source::Default, Source::Device("Browser".into()));
+        assert!(may_caption(&mix) && may_caption(&video));
+        apply(LockCommand::Lock);
+        assert!(!may_caption(&mix), "the mix carries his microphone");
+        assert!(may_caption(&video), "an app's own channel does not");
+        show_asked();
+        assert!(may_caption(&mix), "\"subtitles on\" while the lock is on");
+        apply(LockCommand::Resume);
+        assert!(may_caption(&mix) && may_caption(&video));
     }
 
     #[test]

@@ -68,6 +68,8 @@ mod streamdeck_bridge;
 mod discord_bridge;
 mod discord_bot;
 mod discord_voice;
+mod own_windows;
+mod wallpaper;
 mod wave_link;
 mod ways;
 mod dsp;
@@ -125,6 +127,10 @@ mod kit_screen;
 mod kit_typing;
 mod kit_voice;
 mod jai_views;
+mod ask_first;
+mod did_you_mean;
+mod just_did;
+mod later;
 mod lifecycle;
 mod live_self_tester;
 mod listening_lock;
@@ -233,6 +239,8 @@ mod ws_client;
 mod live_checks;
 #[cfg(windows)]
 mod win32;
+#[cfg(windows)]
+mod win32_desktop;
 mod winctl;
 
 use crate::config::{ConfigStore, JaiConfig};
@@ -652,6 +660,9 @@ fn main() -> ExitCode {
         if !platform::in_test_session() {
             // (The kit's notes, snippets, rules and layouts: in the same database.)
             kit::set_db(&db);
+            // The orders Sir put off before he was last closed: what is still ahead waits on,
+            // what fell due meanwhile is dropped and told once.
+            later::load();
             ear::set_db(&db);
             // The last clips of his own orders, when Sir has them kept (`voice_clips`).
             let keeps = session.app.config().read(|c| c.keep_voice_clips);
@@ -831,6 +842,14 @@ fn main() -> ExitCode {
             LIVE_TEST_FAILED.store(failed, Ordering::Release);
             app.handle_command(hud::HudCommand::Shutdown).await;
         });
+    }
+    // His two global keys (Ctrl+Alt+J: his windows to the front; Ctrl+Alt+K: the console to
+    // type to him) and the thread the mouse is followed on while he is the desktop's
+    // background. A scripted session takes no key of Sir's keyboard.
+    #[cfg(windows)]
+    if hud.is_some() {
+        const KEYS: &[(u32, u32)] = &[(0x0001 | 0x0002, 0x4A), (0x0001 | 0x0002, 0x4B)];
+        win32_desktop::start(if platform::in_test_session() { &[] } else { KEYS }, wallpaper::on_mouse, gui::on_global_key);
     }
     if let Some(hud) = hud {
         start_mark("the window is asked for");

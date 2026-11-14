@@ -2809,6 +2809,11 @@ fn microphone_asked(text: &str) -> Option<String> {
             "I haven't stopped, Sir. I'm listening.".to_string()
         });
     }
+    // "How long until you listen again?", "wann hörst du wieder zu?": what is left of a lock
+    // with an end (typed while it holds; by voice the lock itself answers it).
+    if text.len() <= 70 && crate::listening_lock::asks_how_long(text) {
+        return Some(crate::listening_lock::how_long());
+    }
     (text.len() <= 50 && ASKED.is_match(&words)).then(crate::listening_lock::spoken_state)
 }
 
@@ -4450,8 +4455,13 @@ fn placed_by_sir(mut args: Value, request: &str) -> Value {
 /// Compiles every pattern up front (first use otherwise costs ~0.5 s on the first command).
 pub fn warm_up() {
     crate::music::warm_up();
-    let _ = parse("warm up the parser");
+    // The ways of saying an order are several hundred patterns: building them takes half a
+    // second, once, and it is meant to. They are built before the first sentence is read, and
+    // nothing read while warming up counts as a slow sentence (every start logged the warning
+    // "[WAYS] Slow: 'warm up the parser' took 513007 µs").
+    crate::brain::warming_up(true);
     crate::ways::warm_up();
+    let _ = parse("warm up the parser");
     let _ = crate::typos::normalize_user_input_typos("warm up your core");
     let _ = crate::intent_engine::deterministic_action("warm up the windows");
     let _ = resolve_fuzzy("warm up the fuzzy parser and open it");
@@ -4461,6 +4471,7 @@ pub fn warm_up() {
     let _ = upfront_tool("warm up the selected text on monitor 2");
     let _ = reply_actions("I'm warming up. Shall I open a window?");
     let _ = is_affirmation("warm up");
+    crate::brain::warming_up(false);
 }
 
 /// "Switch to Ultron mode", "Ultron-Modus aktivieren", "are you in Ultron mode?": the mode is
@@ -4519,6 +4530,12 @@ pub fn name_taken(intent: &Intent) -> Option<(&'static str, String)> {
 
 /// An order in Sir's words as they stand, by the fast path's own rules.
 pub fn parse_as_said(text: &str) -> Option<Intent> {
+    // An order with a delay ("play music in one minute", "close the board at 18:30") is the
+    // order and when: read as a whole before any rule below takes the time for part of a
+    // name (`later`, which leaves alone whatever is understood as it stands).
+    if let Some(args) = crate::later::order(text) {
+        return Some(Intent::Tool { name: crate::later::TOOL, args });
+    }
     if let Some(line) = courtesy(text) {
         return Some(Intent::Answer(line.to_string()));
     }
@@ -5261,13 +5278,22 @@ pub fn looks_incomplete(text: &str) -> bool {
         .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase())
         .unwrap_or_default();
     if CONNECTORS.contains(&last.as_str()) {
-        return true;
+        // ("Hör nicht zu", "Mikro an": there the "zu" and the "an" close a German verb, and the
+        // order is whole, the dispatcher's own. "Don't listen for an …" still waits.)
+        let german_lock = matches!(last.as_str(), "zu" | "an")
+            && t.to_lowercase().split(|c: char| !c.is_alphanumeric()).any(|w| matches!(w, "hör" | "hoer" | "höre" | "hoere" | "mikro" | "mikrofon"))
+            && crate::ear::dispatchers_own(t);
+        if !german_lock {
+            return true;
+        }
     }
     if t.ends_with('?') || t.ends_with('!') {
         return false;
     }
     let words = t.split_whitespace().filter(|w| w.chars().any(char::is_alphanumeric)).count();
-    words < 4 && parse(t).is_none() && resolve_fuzzy(t).is_none() && crate::modality::parse_command(t).is_none()
+    // (What the dispatcher carries out itself is whole as it stands: "don't listen" waited
+    // here for the rest of a thought, 0.4 s, before the lock came. 2026-11-13.)
+    words < 4 && parse(t).is_none() && resolve_fuzzy(t).is_none() && crate::modality::parse_command(t).is_none() && !crate::ear::dispatchers_own(t)
 }
 
 fn strip_article(s: &str) -> String {
@@ -6181,6 +6207,42 @@ mod tests {
         assert!(!looks_incomplete("Stop!"));
         assert!(!looks_incomplete("What is the weather like in Berlin today?"));
         assert!(!looks_incomplete("Make the interface green."));
+    }
+
+    /// 2026-11-13: "Jay, don't listen." was whole, and the lock still waited 0.4 s for the rest
+    /// of a thought: no parser here knows the orders the dispatcher carries out itself.
+    #[test]
+    fn the_privacy_lock_is_no_unfinished_thought() {
+        for whole in ["don't listen", "stop listening", "Mic off", "mute my mic", "listen again", "Hör nicht zu", "Hör zehn Minuten nicht zu", "Mikro an", "Hör wieder zu"] {
+            assert!(!looks_incomplete(whole), "{whole}");
+        }
+        // What does wait, as before: a fragment, a lock whose end is still to come, and a
+        // German sentence that stops at its preposition.
+        assert!(looks_incomplete("don't listen for"));
+        assert!(looks_incomplete("don't listen for an"));
+        assert!(looks_incomplete("Change it to"));
+        assert!(looks_incomplete("Ich gehe zu"));
+        assert!(looks_incomplete("Hör mal zu"), "no order of the lock's: he waits for the rest as ever");
+    }
+
+    /// "How long until you listen again?" is answered from the lock's own clock, typed or
+    /// spoken, and by nothing that stands before the parser on the fast path.
+    #[test]
+    fn how_long_the_lock_still_holds_is_answered_without_the_model() {
+        let _lock = crate::listening_lock::test_lock();
+        crate::listening_lock::apply(crate::listening_lock::LockCommand::Resume);
+        for asked in ["How long until you listen again?", "JAI, when will you listen again?", "Wie lange hörst du noch nicht zu?", "Wann hörst du wieder zu?"] {
+            assert_eq!(parse_as_said(asked), Some(Intent::Answer("I'm listening now, Sir.".to_string())), "{asked}");
+            assert!(matches!(crate::brain::fast_as_said(asked), Some(crate::brain::Fast::Intent(Intent::Answer(_)))), "{asked}: the parser's, as it was said");
+            assert!(only_asks(asked), "{asked}: a question, which changes nothing");
+        }
+        crate::listening_lock::apply(crate::listening_lock::LockCommand::Lock);
+        assert_eq!(parse_as_said("how long until you listen again"), Some(Intent::Answer("Until you tell me I can listen again, Sir.".to_string())));
+        crate::listening_lock::apply(crate::listening_lock::LockCommand::Pause(std::time::Duration::from_secs(600)));
+        assert_eq!(parse_as_said("How long until you listen again?"), Some(Intent::Answer("Another 10 minutes, Sir.".to_string())));
+        crate::listening_lock::apply(crate::listening_lock::LockCommand::Resume);
+        // The older questions about the microphone keep their answers.
+        assert_eq!(parse_as_said("Are you listening?"), Some(Intent::Answer("I'm listening, Sir.".to_string())));
     }
 
     #[test]

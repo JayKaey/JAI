@@ -185,6 +185,11 @@ pub fn way_back(tool: &str, args: &Value, said: &str, before: &Snapshot, after: 
             step.calls.push(("whenever_rule", json!({ "action": "remove", "last": true })));
             step.done = "that rule is gone";
         }
+        // An order he put off ("play music in one minute"): dropped again.
+        ("scheduled_order", "set") => {
+            step.calls.push(("scheduled_order", json!({ "action": "cancel", "which": "last" })));
+            step.done = "that order is no longer planned";
+        }
         ("subtitle_place", "set") => {
             step.calls.push(("subtitle_place", json!({ "action": "back" })));
             step.done = "the subtitles are back where they were";
@@ -460,6 +465,8 @@ mod tests {
         assert_eq!(back("notebook", json!({"action": "add", "text": "x"})), Some((vec![("notebook", json!({"action": "delete_last"}))], "that note is gone")));
         assert_eq!(back("sleep_timer", json!({"action": "set", "minutes": 30})), Some((vec![("sleep_timer", json!({"action": "cancel"}))], "the sleep timer is off")));
         assert_eq!(back("whenever_rule", json!({"action": "add"})), Some((vec![("whenever_rule", json!({"action": "remove", "last": true}))], "that rule is gone")));
+        assert_eq!(back("scheduled_order", json!({"action": "set", "order": "play music", "in_s": 60})), Some((vec![("scheduled_order", json!({"action": "cancel", "which": "last"}))], "that order is no longer planned")));
+        assert_eq!(back("scheduled_order", json!({"action": "list"})), None);
         assert_eq!(back("type_snippet", json!({"action": "save", "name": "address"})).map(|(calls, _)| calls), Some(vec![("type_snippet", json!({"action": "delete", "name": "address"}))]));
         // Looking takes nothing back, nor does typing.
         assert_eq!(back("notebook", json!({"action": "show"})), None);

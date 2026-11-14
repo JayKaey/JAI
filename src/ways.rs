@@ -791,6 +791,34 @@ fn first_half() -> Vec<Way> {
                 r"(?:back to|zurück zum|zurück zu)(?: the| my| dem| meinem)? (?P<name>[a-zäöüß0-9]{2,20}(?: [a-zäöüß0-9]{2,20})?) (?:layout|anordnung)",
             ],
         ),
+        // ("Save that desk layout as standard", "save my desk as gaming": Sir, 2026-11-13. The
+        // language model made a protocol called "no_think" of the first.)
+        shape(
+            "save this layout as {name}",
+            &[
+                r"(?:save|store|keep|capture|remember|record|snapshot|speicher|speichere|sichere|merk dir|merke dir) <ART>(?:current |whole |aktuelle |aktuelles |aktuellen )?(?:desk ?layout|desk setup|desk arrangement|desk|window layout|window arrangement|window setup|windows|layout|setup|workspace|arrangement|schreibtisch ?layout|schreibtisch|fensterlayout|fenster ?anordnung|anordnung|fenster) (?:as|under|als|unter)(?: the| a| my| mein| meine)? (?P<name>[a-zäöüß0-9]{2,20}(?: [a-zäöüß0-9]{2,20})??)(?: desk layout| layout| setup)?",
+                r"(?:save|store|keep|capture|speicher|speichere|sichere) (?:this|that|it|das|dies|es) (?:as|als)(?: the| a| my| mein| meine| ein| eine)? (?P<name>[a-zäöüß0-9]{2,20}) (?:desk ?|window ?)?(?:layout|anordnung)",
+            ],
+        ),
+        // (A desk layout asked for as his own, by "desk" or "my": his by that name, kept or
+        // not. He says so when there is none; the HUD's own "standard" is not meant.)
+        shape(
+            "restore the desk layout {name}",
+            &[
+                r"(?:switch to|go to|change to|use|load|apply|activate|restore|bring back|bring up|set up|give me|i need|i want|wechsle zu|wechsel zu|wechsle auf|wechsel auf|nimm|lade|lad|aktiviere|stell|stelle)(?: me| mir)? <ART>(?:saved |gespeicherte |gespeichertes )?(?:desk ?layout|schreibtisch ?layout)(?: called| named| namens)? (?P<name>[a-zäöüß0-9]{2,20})(?: again| back| wieder| her| wieder her| wiederherstellen| laden)*",
+                r"<ART>(?:desk ?layout|schreibtisch ?layout)(?: called| named| namens)? (?P<name>[a-zäöüß0-9]{2,20})(?: laden| wiederherstellen)?",
+                r"(?:switch to|go to|change to|use|load|apply|activate|restore|bring back|give me|wechsle zu|wechsel zu|wechsle auf|nimm|lade|lad|aktiviere) (?:my|mein|meine|meinem|meinen) (?:saved |old |gespeichertes )?(?P<name>[a-zäöüß0-9]{2,20})(?: |-)?(?:desk ?layout|layout|anordnung)",
+                r"<ART>(?P<name>[a-zäöüß0-9]{2,20}) (?:desk ?layout|schreibtisch ?layout)",
+            ],
+        ),
+        // ("Jay Layout Standard": the name first, as he said it on 2026-11-13.)
+        shape(
+            "layout {name}",
+            &[
+                r"(?:window |fenster ?)?layout (?P<name>[a-zäöüß0-9]{2,20})",
+                r"(?:switch to|go to|change to|use|load|apply|activate|restore|wechsle zu|wechsel zu|nimm|lade|lad|aktiviere) <ART>(?:window |fenster ?)?(?:layout|anordnung)(?: called| named| namens)? (?P<name>[a-zäöüß0-9]{2,20})(?: again| wieder| laden| wiederherstellen)?",
+            ],
+        ),
         // ----------------------------------------------------------------- dashboard ----
         shape("portrait dashboard off", &[r"(?:<STOP>|hide|remove|take away|take down|get rid of|turn off|switch off|blende|verstecke|entferne)(?: aus)? <ART>(?:portrait |upright |vertical |side |hochkant ?|hochformat ?)?(?:dashboard|dash board|info ?board)(?: aus| ab| weg)?", r"(?:portrait |upright |vertical |side |hochkant ?)?(?:dashboard|dash board) (?:off|aus|weg|away|ausblenden|ausschalten|schließen|hide|close)", r"(?:turn|switch|schalte|schalt|mach|mache) <ART>(?:portrait |upright |vertical |hochkant ?)?(?:dashboard|dash board) (?:off|aus|weg|zu)", r"(?:no more|kein|i dont need the|i dont want the) (?:portrait |upright )?dashboard(?: anymore| mehr)?"]),
         shape("portrait dashboard", &[r"(?:<START>|show|show me|put|put up|display|zeig|zeige|zeig mir|blende)(?: me| mir| up| on| ein)? <ART>(?:portrait |upright |vertical |side |hochkant ?|hochformat ?)?(?:dashboard|dash board|info ?board)(?: on| an| ein| einblenden| einschalten| anzeigen)?(?: (?:on|auf) (?:the |my |dem |den |meinem )?(?:upright|vertical|portrait|side|third|hochkant|hochformat|vertikalen|seitlichen|dritten) ?(?:monitor|screen|bildschirm))?(?: an| ein)?", r"(?:portrait |upright |vertical |side |hochkant ?)?(?:dashboard|dash board) (?:on|an|ein|bitte|einblenden|einschalten|anzeigen|show|up)", r"(?:turn|switch|schalte|schalt|mach|mache) <ART>(?:portrait |upright |vertical |hochkant ?)?(?:dashboard|dash board) (?:on|an|ein|auf)", r"(?:upright|vertical|portrait|hochkant) (?:monitor|screen|bildschirm) dashboard(?: on| an)?"]),
@@ -830,6 +858,9 @@ fn second_half() -> Vec<Way> {
             "practise my pronunciation",
             &[
                 r"<START> <ART>(?:pronunciation |speech |accent |speaking )?(?:coach|coaching|trainer|practice|practise|training|lesson|exercise)(?: session| mode)?",
+                // ("Jay opened your pronunciation code", 2026-11-13: the coach as the recogniser
+                // wrote it. After "pronunciation" nothing else is meant.)
+                r"<START> <ART>(?:pronunciation|aussprache) (?:code|codes|couch|coat|coats|coast|coke|coach|coaches)",
                 r"(?:coach me|lets practise|lets practice|lets train|practise with me|practice with me|übe mit mir|lass uns üben|trainiere mit mir|trainier mit mir)",
                 r"(?:starte|öffne|beginne|mach|aktiviere)(?: mal)? <ART>(?:aussprachetraining|aussprachetrainer|aussprachecoach|aussprache training|aussprache coach|sprechtraining|ausspracheübung|aussprache übung)(?: an| auf)?",
                 r"(?:aussprachetraining|aussprachetrainer|aussprachecoach|aussprache training|aussprache üben|sprechtraining)(?: starten| an| beginnen)?",
@@ -1234,7 +1265,12 @@ fn second_half() -> Vec<Way> {
     ways.extend(switch("live desktop on", "live desktop off", "live desktop|live background|live wallpaper|desktop backdrop|animated background|animated wallpaper|animated desktop|live hintergrund|live desktop hintergrund|lebendiger hintergrund|animierter hintergrund|live backdrop"));
     ways.push(shape(
         "live desktop on",
-        &[r"(?:show|put|display|zeig|zeige|setz|setze) (?:yourself|your emblem|the emblem|your core|dich|dein emblem) (?:on|as|auf|als) (?:my|the|meinem|meinen|dem|den) (?:desktop|wallpaper|background|desktop background|hintergrund|desktophintergrund)", r"(?:be|become|sei|werde) my (?:wallpaper|desktop background|background|hintergrund)"],
+        &[
+            r"(?:show|put|display|zeig|zeige|setz|setze) (?:yourself|your emblem|the emblem|your core|dich|dein emblem) (?:on|as|auf|als) (?:my|the|meinem|meinen|dem|den) (?:desktop|wallpaper|background|desktop background|hintergrund|desktophintergrund)",
+            r"(?:be|become|sei|werde) my (?:wallpaper|desktop background|background|hintergrund)",
+            // ("Show me your live desktop background": Sir, 2026-11-13.)
+            r"(?:show|show me|display|let me see|zeig|zeige|zeig mir|zeige mir) <ART>(?:live desktop(?: background)?|live background|live wallpaper|live backdrop|desktop backdrop|animated background|animated wallpaper|live hintergrund|live desktop hintergrund)",
+        ],
     ));
     ways
 }
@@ -1488,6 +1524,13 @@ fn everyday() -> Vec<Way> {
             ],
         )
         .asks(),
+        // ("In ten minutes show the briefing", "um 18:30 zeig mir das Briefing": Sir's own
+        // examples of an order with a delay, 2026-11-13. The briefing was known as "brief me"
+        // and "give me my briefing" only.)
+        shape(
+            "brief me",
+            &[r"(?:<SHOW>|start|run|do|begin|starte|mach|hol)(?: me| mir)? <ART>(?:morning |evening |daily |executive |tages ?|morgen ?|abend ?)?(?:briefing|rundown|daily update|lagebericht|tagesbriefing|morgenbriefing)(?: now| jetzt| an)?"],
+        ),
         shape(
             "show me the earth",
             &[
@@ -2215,7 +2258,9 @@ fn by_idea() -> Vec<Way> {
 /// The orders' own wordings for a sentence that says one of them another way, the likeliest
 /// first (the caller takes the first one the fast path reads: `brain::another_way`). `s`: the
 /// fast path's normalised phrase; `original`: the words as they were said. Empty: not one of
-/// them, or a sentence that tells of something instead of asking for it.
+/// them, or a sentence that tells of something instead of asking for it. (For the tests and the
+/// corpus report; the brain asks `candidates`.)
+#[cfg(test)]
 pub fn wordings(s: &str, original: &str) -> Vec<String> {
     candidates(s, original).into_iter().map(|(wording, _)| wording).collect()
 }
@@ -2231,6 +2276,28 @@ pub fn candidates(s: &str, original: &str) -> Vec<(String, bool)> {
     let whole = of_sentence(s, original, true);
     if !whole.is_empty() {
         return whole;
+    }
+    // "They open your pronunciation coach", "Jay Layout Standard", "The Jay layout standard"
+    // (Sir, 2026-11-13, each of them taken to the language model, which made a protocol of
+    // one and woke him up for another): his name stands in front as the recogniser writes
+    // it, and the order is what follows.
+    if let Some((order, written)) = after_his_name(s) {
+        // After his name as it is written, an order the fast path reads for good as it stands
+        // is its own wording (never one that only takes words for the name of an app). After
+        // a word that merely sounds like it, only an order with a way of its own counts:
+        // "they play football on Sundays" names no song.
+        let stands = written
+            && matches!(
+                crate::brain::fast_as_said(&order),
+                Some(ref found @ (crate::brain::Fast::Intent(crate::intents::Intent::Tool { .. } | crate::intents::Intent::Silent(_)) | crate::brain::Fast::Route(_))) if !found.takes_any_name()
+            );
+        if stands {
+            return vec![(order, false)];
+        }
+        let said_another_way = of_sentence(&order, original, false);
+        if !said_another_way.is_empty() {
+            return said_another_way;
+        }
     }
     // "Okay my eyes hurt, take the brightness down a little", "that's it, quit the dictation":
     // the order is one clause of what was said, and the others only lead up to it (they say
@@ -2250,6 +2317,31 @@ pub fn candidates(s: &str, original: &str) -> Vec<(String, bool)> {
         }
     }
     Vec::new()
+}
+
+/// What follows his name where it stands in front as the recogniser writes it and the name's
+/// own rules did not take it for the address it is (`wake::canon`): "jay layout standard",
+/// "the jay layout standard", and in an accented voice "they open the mixer" (`wake`'s soft
+/// names, `~they`). After his name as it is written an order heard as a report is the order
+/// ("jay opened the mixer"); after a word that only sounds like it, what follows must be an
+/// order as it was said: "they stopped the music" tells of other people. With whether the
+/// name stood there as it is written.
+fn after_his_name(s: &str) -> Option<(String, bool)> {
+    // (As it is written, not the names of other people it is near to: "Jane", "Jake".)
+    const WRITTEN: &[&str] = &["jai", "jay", "jae", "jey", "jei", "jaye"];
+    let words: Vec<&str> = s.split(' ').collect();
+    let at = usize::from(words.first() == Some(&"the") && words.get(1).is_some_and(|w| WRITTEN.contains(w)));
+    let name = *words.get(at)?;
+    let rest = words.get(at + 1..)?.join(" ");
+    if rest.is_empty() {
+        return None;
+    }
+    if WRITTEN.contains(&name) {
+        return Some((crate::typos::imperative_after_name(&rest), true));
+    }
+    let first = words[at + 1];
+    let an_order = rest.contains(' ') && first != "just" && crate::ears::COMMAND_VERBS.contains(&first);
+    (at == 0 && crate::wake::accent_form(name) && an_order).then_some((rest, false))
 }
 
 /// The wordings for one sentence (`whole`) or one clause of it.
@@ -2287,9 +2379,11 @@ fn of_sentence(s: &str, original: &str, whole: bool) -> Vec<(String, bool)> {
     found
 }
 
-/// Builds the patterns before the first order needs them.
+/// Builds the patterns before the first order needs them: the ways themselves, and what a
+/// sentence is asked before them (whether it tells of something, who it is about).
 pub fn warm_up() {
     let _ = WAYS.len();
+    let _ = of_sentence("warm up the ways of saying an order", "warm up the ways of saying an order", true);
 }
 
 #[cfg(test)]
@@ -2455,6 +2549,99 @@ mod tests {
         ] {
             assert_eq!(first(said).as_deref(), Some(wording), "{said}");
         }
+    }
+
+    /// What Sir said to his new build on 2026-11-13 and the language model guessed at (a
+    /// protocol called "no_think", another called "jay_layout_standard", the orb layout, a
+    /// wake-up): each sentence as Whisper wrote it, by the road the dispatcher takes.
+    #[test]
+    fn the_orders_of_the_thirteenth_that_went_to_the_model_are_understood() {
+        use serde_json::json;
+        let _dock = crate::hud_dock::test_lock();
+        let _kit = crate::kit::test_lock();
+        let road = |said: &str| crate::phrasings::route(&crate::wake::canon(said));
+        // The pronunciation coach.
+        let coach = Some(("pronunciation_coach".to_string(), json!({"action": "start"})));
+        for said in [
+            "Jay opened your pronunciation code.",
+            "They open your pronunciation coach.",
+            "Open your pronunciation coach.",
+            "open the pronunciation coach",
+            "open my pronunciation coach",
+            "start the coach",
+            "Jay, start your pronunciation coach.",
+            "Day open your pronunciation coach",
+            "Öffne deinen Aussprachecoach.",
+            "Starte das Aussprachetraining",
+        ] {
+            assert_eq!(road(said), coach, "{said}");
+        }
+        // Keeping a desk layout: the workspace is captured under that name.
+        let kept = |name: &str| Some(("manage_stark_protocol".to_string(), json!({"action": "capture_current_workspace", "protocol_name": name})));
+        for (said, name) in [
+            ("Jay, save that desk layout as standard.", "standard"),
+            ("save this layout as work", "work"),
+            ("save my desk as gaming", "gaming"),
+            ("Save this as my gaming layout", "gaming"),
+            ("Speichere dieses Layout als Arbeit.", "arbeit"),
+            ("Speicher das Schreibtisch-Layout als Standard", "standard"),
+        ] {
+            assert_eq!(road(said), kept(name), "{said}");
+        }
+        // Bringing one back by its name. None is kept under "standard" here: the order is the
+        // desk layouts' all the same, and their tool says that there is none of that name.
+        let back = |name: &str| Some(("desk_layout".to_string(), json!({"action": "restore", "name": name})));
+        for (said, name) in [
+            ("Jay Layout Standard.", "standard"),
+            ("The Jay layout standard.", "standard"),
+            ("layout standard", "standard"),
+            ("apply the desk layout standard", "standard"),
+            ("switch to my gaming layout", "gaming"),
+            ("Lade das Layout Standard", "standard"),
+            ("Layout Standard laden", "standard"),
+            ("wechsle zu meinem Gaming-Layout", "gaming"),
+        ] {
+            assert_eq!(road(said), back(name), "{said}");
+        }
+        // The HUD's own layouts keep their meaning, whichever way round they are said.
+        assert_eq!(road("compact layout"), Some(("configure_interface".to_string(), json!({"layout": "compact"}))));
+        for said in ["the standard layout", "switch to my standard layout"] {
+            assert_eq!(road(said), Some(("configure_interface".to_string(), json!({"layout": "full"}))), "{said}: no desk layout is called that yet, and the fast path read it so before");
+        }
+        for said in ["layout compact", "layout orb", "load the layout compact"] {
+            assert!(!matches!(road(said), Some((tool, _)) if tool == "desk_layout"), "{said}");
+        }
+        // Once he has kept one under that name, the name is his.
+        let _ = crate::kit::put("layout", "standard", &json!({ "name": "standard" }));
+        for said in ["the standard layout", "standard layout", "Jay, the standard layout.", "layout standard", "switch to my standard layout", "use the standard layout"] {
+            assert_eq!(road(said), back("standard"), "{said}");
+        }
+        crate::kit::remove("layout", "standard");
+    }
+
+    /// A word that only sounds like his name in front of talk makes no order of it.
+    #[test]
+    fn talk_that_begins_like_his_name_stays_talk() {
+        let _dock = crate::hud_dock::test_lock();
+        let _kit = crate::kit::test_lock();
+        for said in [
+            "They open the shop at eight.",
+            "They stopped the music at the party.",
+            "They play football on Sundays.",
+            "They opened your pronunciation coach in the next town.",
+            "Day off tomorrow, finally.",
+            "They said open the mixer.",
+            "Jane opened the mixer in her room.",
+            "The jay is a clever bird.",
+            "Layout is the hardest part of web design.",
+        ] {
+            assert_eq!(taken(said), None, "{said}");
+        }
+        assert_eq!(after_his_name("they open your pronunciation coach"), Some(("open your pronunciation coach".to_string(), false)));
+        assert_eq!(after_his_name("the jay layout standard"), Some(("layout standard".to_string(), true)));
+        assert_eq!(after_his_name("jay opened the mixer"), Some(("open the mixer".to_string(), true)));
+        assert_eq!(after_his_name("they stopped the music"), None, "a report about other people");
+        assert_eq!(after_his_name("the layout standard"), None);
     }
 
     /// "Open Spotify" was understood before, if only by the rule that takes any name for an

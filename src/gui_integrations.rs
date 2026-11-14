@@ -247,12 +247,7 @@ impl Hub {
             self.untis_session.clear();
         }
         let mut open = self.open;
-        egui::Window::new(RichText::new("Integrations & Productivity Hub").font(bold(14.0)).color(p.accent))
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(true)
-            .default_width(560.0)
-            .show(ctx, |ui| {
+        super::board_window(ctx, "integrations_hub", "Hub // integrations and productivity", [600.0, 700.0], &mut open, |ui| {
                 muted(ui, p, "Or just ask: “JAI, check my school schedule”, “any new emails?”, “give me my morning briefing”.");
                 // One button that verifies every connection, with status codes and previews.
                 let registry = app.tools().stark.integrations.clone();

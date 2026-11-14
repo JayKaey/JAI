@@ -93,7 +93,9 @@ async fn stages(stt: &SttEngine, matcher: &WakeWordMatcher, pcm: &[f32], voiced_
     let mut again = None;
     let mut careful_ms = 0;
     let leads = with_ear.as_deref().is_some_and(crate::ear::is_order);
-    if !leads && crate::ear::worth_hearing_again(&first, heard.avg_logprob, &crate::ear::is_order) {
+    // (As the app decides it: only a first hearing the recogniser was unsure of is heard again.)
+    let quality = crate::stt::HeardQuality { avg_logprob: heard.avg_logprob, language_prob: heard.language_prob, no_speech: heard.no_speech };
+    if !leads && crate::ear::worth_hearing_again(&first, quality, &crate::ear::is_order) {
         let second = stt.transcribe_carefully(pcm.to_vec(), voiced_ms, crate::ear::hint()).await?;
         careful_ms = second.stt_ms;
         again = read(&crate::wake::canon(&second.text)).filter(|order| crate::ear::is_order(order));

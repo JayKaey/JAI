@@ -71,8 +71,29 @@ static PHRASES: LazyLock<Vec<(Regex, Value)>> = LazyLock::new(|| {
         p(r"^(?:(?:stop|don'?t)\s+(?:moving|dancing|pulsing|move|dance|pulse)\s+(?:with|to)\s+the\s+music|(?:beweg|bewege|tanz|tanze)\s+(?:dich\s+)?nicht\s+(?:mehr\s+)?(?:mit|zu)\s+der\s+musik|h(?:ö|oe)r\s+auf\s+(?:dich\s+)?(?:mit|zu)\s+der\s+musik\s+zu\s+(?:bewegen|tanzen))$", json!({"music_visuals": false})),
         // Mini mode and the desktop.
         p(r"^(?:go\s+mini|shrink\s+to\s+(?:a|the)\s+strip|(?:werde?|mach\s+dich)\s+(?:klein|mini)|schrumpfe?\s+zur\s+leiste)$", json!({"mini_strip": true})),
-        p(r"^(?:(?:be|become)\s+my\s+(?:desktop\s+)?(?:background|wallpaper)|(?:sei|werde?)\s+mein\s+(?:desktop\s*)?hintergrund(?:bild)?)$", json!({"desktop_background": true})),
-        p(r"^(?:(?:stop\s+being|leave)\s+my\s+(?:desktop\s+)?(?:background|wallpaper)|sei\s+nicht\s+mehr\s+mein\s+(?:desktop\s*)?hintergrund(?:bild)?|verlass\s+meinen\s+(?:desktop\s*)?hintergrund)$", json!({"desktop_background": false})),
+        // (The background on every monitor or on one comes first: "background on all monitors"
+        // is more than "background on".)
+        p(
+            r"^(?:(?:(?:put|show|throw|have|use|be)\s+)?(?:the\s+|your\s+|my\s+|your\s+live\s+|the\s+live\s+)?(?:desktop\s+)?(?:background|wallpaper)\s+(?:on|across|over|onto)\s+(?:all|every|each|all\s+(?:of\s+)?(?:the|my)|all\s+(?:two|three|four))\s+(?:monitors?|screens?|displays?)|(?:be\s+my\s+)?background\s+everywhere|(?:den\s+)?hintergrund\s+auf\s+(?:allen|alle|jedem)\s+(?:monitoren?|bildschirmen?|monitor|bildschirm))$",
+            json!({"desktop_background": true, "background_all_monitors": true}),
+        ),
+        p(
+            r"^(?:(?:(?:put|show|have|use|be)\s+)?(?:the\s+|your\s+|my\s+)?(?:desktop\s+)?(?:background|wallpaper)\s+(?:only\s+)?on\s+(?:one|the\s+main|my\s+main|the\s+first|my\s+first|the\s+primary|just\s+one|only\s+one)\s+(?:monitor|screen|display)(?:\s+only)?|(?:den\s+)?hintergrund\s+nur\s+auf\s+(?:einem|dem\s+ersten|meinem\s+ersten|dem\s+haupt)\s*(?:monitor|bildschirm))$",
+            json!({"background_all_monitors": false}),
+        ),
+        p(
+            r"^(?:(?:be|become)\s+(?:only\s+|just\s+)?my\s+(?:desktop\s+|pc\s+)?(?:background|wallpaper)|background\s+mode(?:\s+on)?|(?:go|get|move)\s+(?:back\s+)?(?:in)?to\s+the\s+background|live\s+in\s+the\s+background|(?:sei|werde?)\s+(?:nur\s+)?mein\s+(?:desktop\s*)?hintergrund(?:bild)?|hintergrundmodus(?:\s+an)?|geh\s+(?:wieder\s+)?in\s+den\s+hintergrund)$",
+            json!({"desktop_background": true}),
+        ),
+        p(
+            r"^(?:(?:stop\s+being|leave)\s+(?:my\s+|the\s+)(?:desktop\s+)?(?:background|wallpaper)|background\s+mode\s+off|board\s+mode|window\s+mode|be\s+a\s+window\s+again|(?:come\s+)?back\s+(?:to|as)\s+(?:the|a)\s+(?:board\s+)?window|come\s+out\s+of\s+the\s+background|sei\s+nicht\s+mehr\s+mein\s+(?:desktop\s*)?hintergrund(?:bild)?|verlass\s+(?:meinen|den)\s+(?:desktop\s*)?hintergrund|hintergrundmodus\s+aus|komm\s+aus\s+dem\s+hintergrund|sei\s+wieder\s+ein\s+fenster)$",
+            json!({"desktop_background": false}),
+        ),
+        // His windows on call: all of them in front of the other programs' windows.
+        p(
+            r"^(?:(?:show|bring|get|give)\s+(?:me\s+)?(?:all\s+)?(?:of\s+)?your\s+windows(?:\s+(?:to\s+the\s+front|forward|up|back|here))?|your\s+windows\s+to\s+the\s+front|windows\s+to\s+the\s+front|(?:zeig|hol|bring)\s+(?:mir\s+)?(?:alle\s+)?deine\s+fenster(?:\s+(?:nach\s+vorne?|her|hervor))?|deine\s+fenster\s+nach\s+vorne?)$",
+            json!({"windows_on_call": true}),
+        ),
         // Subtitles.
         p(r"^(?:(?:caption|subtitle)\s+(?:this|that|it|the\s+video|the\s+stream|the\s+call)|untertitel\s+(?:für\s+)?(?:das|dieses\s+video|das\s+video|den\s+stream|den\s+anruf)|untertitle\s+das)$", json!({"subtitles": true})),
         p(r"^(?:translate\s+(?:the\s+)?subtitles|(?:english\s+subtitles|subtitles\s+in\s+english)|translated\s+subtitles|(?:caption|subtitle)\s+(?:this|that|it)\s+in\s+english|untertitel\s+auf\s+englisch)$", json!({"subtitles": true, "subtitles_translate": true})),
@@ -202,7 +223,7 @@ pub fn is_game(process: &str) -> bool {
 
 /// The arguments that are requests of the moment, not settings (`interface::configure` names
 /// them in its summary; `apply` carries them out).
-pub const RUNTIME_KEYS: [(&str, &str); 7] = [
+pub const RUNTIME_KEYS: [(&str, &str); 8] = [
     ("night_now", "night mode"),
     ("subtitles", "subtitles"),
     ("subtitles_translate", "subtitle translation"),
@@ -210,7 +231,14 @@ pub const RUNTIME_KEYS: [(&str, &str); 7] = [
     ("missed", "notification history"),
     ("voice_setup", "voice set-up"),
     ("settings_panel", "settings panel"),
+    ("windows_on_call", "his windows in front"),
 ];
+
+/// Arguments that have a phrase and no line in the tool's schema: the model's prompt is full
+/// (`brain::tests::the_whole_prompt_fits_the_context_window`), and these are said in words the
+/// fast path knows.
+#[cfg(test)]
+pub const UNLISTED: [&str; 2] = ["background_all_monitors", "windows_on_call"];
 
 /// Tonight's night mode as Sir set it by hand: (on, the morning it lapses).
 static NIGHT_OVERRIDE: Mutex<Option<(bool, NaiveDateTime)>> = Mutex::new(None);
@@ -367,6 +395,9 @@ pub fn apply(args: &Value) {
     if flag(args, "settings_panel") == Some(true) {
         open_settings_panel();
     }
+    if flag(args, "windows_on_call") == Some(true) {
+        crate::gui::windows_on_call();
+    }
     if let Some(on) = flag(args, "voice_guest") {
         if on {
             let minutes = args.get("voice_guest_minutes").and_then(Value::as_u64).unwrap_or(GUEST_MINUTES);
@@ -414,8 +445,14 @@ pub fn spoken(args: &Value) -> Option<String> {
     if let Some(v) = on("mini_strip") {
         return say("Mini mode, Sir. I'm the strip at the top of your screen.", "Back to the full board, Sir.", v);
     }
+    if let (Some(all), None | Some(true)) = (on("background_all_monitors"), on("desktop_background")) {
+        return say("On every monitor, Sir.", "On your first monitor only, Sir.", all);
+    }
     if let Some(v) = on("desktop_background") {
-        return say("I'm your desktop background now, Sir.", "Your desktop is your own again, Sir.", v);
+        return say("I'm your desktop background now, Sir. My windows are yours to move, and I come out when you call.", "Back on the board, Sir.", v);
+    }
+    if on("windows_on_call") == Some(true) {
+        return Some("My windows, Sir, in front of the rest.".to_string());
     }
     if let Some(v) = on("subtitles_translate").filter(|_| on("subtitles") != Some(false)) {
         return say("Subtitles in English, Sir.", "Subtitles in the language spoken, Sir.", v);
@@ -522,7 +559,23 @@ mod tests {
             ("mini mode off", json!({"mini_strip": false})),
             ("live desktop on", json!({"desktop_background": true})),
             ("be my desktop background", json!({"desktop_background": true})),
+            ("be only my pc background", json!({"desktop_background": true})),
+            ("background mode", json!({"desktop_background": true})),
+            ("go back to the background", json!({"desktop_background": true})),
+            ("geh in den hintergrund", json!({"desktop_background": true})),
             ("desktop background off", json!({"desktop_background": false})),
+            ("board mode", json!({"desktop_background": false})),
+            ("be a window again", json!({"desktop_background": false})),
+            ("komm aus dem hintergrund", json!({"desktop_background": false})),
+            // (Sir, 2026-11-13, as Whisper heard him: "… enables the background on all three monitors".)
+            ("the background on all three monitors", json!({"desktop_background": true, "background_all_monitors": true})),
+            ("put your background on every monitor", json!({"desktop_background": true, "background_all_monitors": true})),
+            ("hintergrund auf allen monitoren", json!({"desktop_background": true, "background_all_monitors": true})),
+            ("background only on the main monitor", json!({"background_all_monitors": false})),
+            ("hintergrund nur auf einem monitor", json!({"background_all_monitors": false})),
+            ("show your windows", json!({"windows_on_call": true})),
+            ("bring all your windows to the front", json!({"windows_on_call": true})),
+            ("zeig mir deine fenster", json!({"windows_on_call": true})),
             ("subtitles on", json!({"subtitles": true})),
             ("turn on subtitles", json!({"subtitles": true})),
             ("subtitles off", json!({"subtitles": false})),
@@ -611,10 +664,10 @@ mod tests {
         }
         for (_, args) in PHRASES.iter() {
             assert!(spoken(args).is_some(), "{args}");
-            assert!(args.as_object().unwrap().keys().all(|k| keys.contains(&k.as_str())), "{args}");
+            assert!(args.as_object().unwrap().keys().all(|k| keys.contains(&k.as_str()) || UNLISTED.contains(&k.as_str())), "{args}");
         }
         for (key, _) in RUNTIME_KEYS {
-            assert!(keys.contains(&key), "{key}");
+            assert!(keys.contains(&key) || UNLISTED.contains(&key), "{key}");
         }
         assert_eq!(spoken(&json!({"accent_color": "red"})), None);
     }

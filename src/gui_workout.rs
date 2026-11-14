@@ -64,12 +64,7 @@ impl WorkoutWindow {
         }
         let snapshot = self.snapshot.lock().unwrap_or_else(|e| e.into_inner()).clone();
         let mut open = self.open;
-        egui::Window::new(RichText::new("Gym & Workout PR Coach").font(bold(14.0)).color(p.accent))
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(true)
-            .default_width(540.0)
-            .show(ctx, |ui| {
+        super::board_window(ctx, "workout_coach", "Gym // workout and PR coach", [580.0, 700.0], &mut open, |ui| {
                 muted(ui, p, "Or just say: \"JAI, log 3 by 10 bench press at 60 kilos\", \"start a 90 second rest timer\".");
                 ui.add_space(6.0);
                 egui::ScrollArea::vertical().max_height(620.0).show(ui, |ui| match &snapshot {

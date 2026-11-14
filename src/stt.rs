@@ -75,6 +75,19 @@ fn discarded(no_speech: f32, logprob: f32) -> bool {
     (no_speech > NO_SPEECH_THOLD && logprob < CONFIDENT_LOGPROB) || logprob < GARBLED_LOGPROB
 }
 
+/// Heard words as the log gets them: in quotes, or, while Sir has told him not to listen, only
+/// how many there were. (He must still hear them, for the words that lift the lock; he writes
+/// none of them down. 2026-11-13: under "don't listen" every line of a song in the room stood
+/// in jai.log.)
+fn words_for_the_log(text: &str) -> String {
+    if crate::listening_lock::is_locked() {
+        let words = text.split_whitespace().count();
+        format!("({words} word{}, not written down: not listening)", if words == 1 { "" } else { "s" })
+    } else {
+        format!("'{text}'")
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Transcript {
     pub text: String,
@@ -831,7 +844,7 @@ fn one_pass(engine: &mut WhisperEngine, audio: &[f32], spoken: usize, ctx: Optio
                 (true, false) => false,
                 _ => beam.avg_logprob >= decoded.avg_logprob,
             };
-        tracing::debug!("[STT] Unsure '{}' ({:.2}) → beam search '{}' ({:.2}){}", decoded.text, decoded.avg_logprob, beam.text, beam.avg_logprob, if take { "" } else { ", kept the first" });
+        tracing::debug!("[STT] Unsure {} ({:.2}) → beam search {} ({:.2}){}", words_for_the_log(&decoded.text), decoded.avg_logprob, words_for_the_log(&beam.text), beam.avg_logprob, if take { "" } else { ", kept the first" });
         if take {
             decoded = beam;
         }
@@ -891,7 +904,8 @@ fn transcribe(
     let raw = decoded.text;
     if discarded(no_speech, decoded.avg_logprob) {
         info!(
-            "[STT] Discarded '{raw}' from {audio_ms} ms of audio: no-speech {no_speech:.2}, log-probability {:.2} (in {} ms)",
+            "[STT] Discarded {} from {audio_ms} ms of audio: no-speech {no_speech:.2}, log-probability {:.2} (in {} ms)",
+            words_for_the_log(&raw),
             decoded.avg_logprob,
             started.elapsed().as_millis()
         );
@@ -904,10 +918,11 @@ fn transcribe(
         .unwrap_or_else(|| "auto".into());
     let stt_ms = started.elapsed().as_millis() as u64;
     info!(
-        "[STT] Transcribed {audio_ms} ms of audio in {stt_ms} ms [{lang} p={language_prob:.2}, no-speech {no_speech:.2}, logprob {:.2}, {passes} pass{}]: '{text}'{}",
+        "[STT] Transcribed {audio_ms} ms of audio in {stt_ms} ms [{lang} p={language_prob:.2}, no-speech {no_speech:.2}, logprob {:.2}, {passes} pass{}]: {}{}",
         decoded.avg_logprob,
         if passes == 1 { "" } else { "es" },
-        if text.is_empty() && !raw.is_empty() { format!(" (filtered '{raw}')") } else { String::new() }
+        words_for_the_log(&text),
+        if text.is_empty() && !raw.is_empty() { format!(" (filtered {})", words_for_the_log(&raw)) } else { String::new() }
     );
     Ok(Transcript {
         text,
@@ -944,7 +959,7 @@ fn transcribe_carefully(engine: &mut WhisperEngine, pcm: &[f32], voiced_ms: u32,
     let no_speech = if decoded.text.is_empty() { 0.0 } else { sot_step(&mut engine.state, s).map_or(0.0, |st| st.no_speech) };
     let text = if discarded(no_speech, decoded.avg_logprob) { String::new() } else { normalize_stt_transcript(&filter_hallucinations(&decoded.text, &prompt, voiced_ms < 1500)) };
     let stt_ms = started.elapsed().as_millis() as u64;
-    info!("[STT] Heard again, carefully: {audio_ms} ms of audio in {stt_ms} ms [{language}, no-speech {no_speech:.2}, logprob {:.2}, beam {CAREFUL_BEAM}]: '{text}'", decoded.avg_logprob);
+    info!("[STT] Heard again, carefully: {audio_ms} ms of audio in {stt_ms} ms [{language}, no-speech {no_speech:.2}, logprob {:.2}, beam {CAREFUL_BEAM}]: {}", decoded.avg_logprob, words_for_the_log(&text));
     Ok(Transcript { text, language: language.to_string(), language_prob: 1.0, stt_ms, audio_ms, avg_logprob: decoded.avg_logprob, no_speech, passes: 1 })
 }
 
@@ -996,11 +1011,15 @@ pub fn filter_hallucinations(raw: &str, prompt: &str, strict: bool) -> String {
     if ALWAYS.contains(&norm.as_str()) || (strict && STRICT.contains(&norm.as_str())) {
         return String::new();
     }
+    // (The credits Whisper invents, by their own words. Not every sentence with "subtitles" in
+    // it: since 2026-11-12 the live subtitles are a thing Sir orders, and on 2026-11-13 his
+    // spoken order to switch them off was dropped here every time he gave it, six times in a
+    // row. The bare word alone still goes, above.)
     const CONTAINS: &[&str] = &[
-        "untertitel im auftrag", "untertitel der amara", "untertitelung", "amara org", "subtitles by",
-        "transcribed by", "thanks for watching", "thank you for watching", "vielen dank fürs zuschauen",
+        "untertitel im auftrag", "untertitel der amara", "untertitel von", "untertitelung", "amara org", "subtitles by", "subtitle by", "subtitled by",
+        "subtitles made by", "subtitles created by", "ard text", "transcribed by", "thanks for watching", "thank you for watching", "vielen dank fürs zuschauen",
         "vielen dank für s zuschauen", "swr 2020", "zdf 2020", "bis zum nächsten video", "abonniert den kanal",
-        "please subscribe", "subtitles", "untertitel", "mbc 뉴스", "mbc news",
+        "please subscribe", "mbc 뉴스", "mbc news",
     ];
     if CONTAINS.iter().any(|h| norm.contains(h)) {
         return String::new();
@@ -1078,12 +1097,19 @@ fn dedupe_sentences(text: &str) -> String {
     if start < text.len() {
         pieces.push(&text[start..]);
     }
-    for piece in pieces {
+    let last = pieces.len().saturating_sub(1);
+    for (i, piece) in pieces.into_iter().enumerate() {
         let key = normalize(piece);
         if key.is_empty() {
             continue;
         }
         if key == last_key && key.split_whitespace().count() >= 2 {
+            continue;
+        }
+        // (The decoder started the sentence over and ran out of sound: a last, unfinished
+        // piece that only begins the sentence before it again, "Jay make everything loud
+        // again. Jay make everything".)
+        if i == last && !piece.trim_end().ends_with(['.', '!', '?']) && key.split_whitespace().count() >= 2 && last_key.starts_with(&format!("{key} ")) {
             continue;
         }
         last_key = key;
@@ -1322,6 +1348,11 @@ mod tests {
         assert_eq!(dedupe_sentences("Make the interface right. Make the interface right."), "Make the interface right.");
         assert_eq!(dedupe_sentences("Open the interface settings. Open the interface settings."), "Open the interface settings.");
         assert_eq!(dedupe_sentences("Stop. Stop."), "Stop. Stop.", "a single word may be said twice");
+        // The decoder started the sentence over and ran out of sound (the verifier's stand-in
+        // voice, 2026-11-14): the cut-off second start goes.
+        assert_eq!(dedupe_sentences("Jay make everything loud again. Jay make everything"), "Jay make everything loud again.");
+        assert_eq!(dedupe_sentences("Open the mixer. Open the door."), "Open the mixer. Open the door.", "a sentence of its own stays");
+        assert_eq!(dedupe_sentences("Play it again. Play"), "Play it again. Play", "one word begins many sentences");
         assert_eq!(dedupe_sentences("Hey JAI. What's up? Can you change the interface to red?"), "Hey JAI. What's up? Can you change the interface to red?");
         assert_eq!(normalize_stt_transcript("Top."), "Stop.");
         assert_eq!(normalize_stt_transcript("Boss."), "Pause.");
@@ -1375,9 +1406,33 @@ mod tests {
             assert_eq!(f(phantom), "", "{phantom}");
         }
         assert_eq!(f("Thank you, JAI, that was perfect."), "Thank you, JAI, that was perfect.", "real thanks stay");
+        // The credits Whisper invents go; Sir's orders about his subtitles stay (2026-11-13: an
+        // order to switch them off was dropped every time he gave it).
+        for phantom in ["Subtitles made by the community", "Untertitel der Amara.org-Community", "Untertitelung des ZDF, 2020", "Subtitles.", "Untertitel"] {
+            assert_eq!(f(phantom), "", "{phantom}");
+        }
+        for order in ["Switch the subtitles off.", "Jay, turn the subtitles off, please.", "Subtitles on.", "Translate the subtitles.", "Put the subtitles on monitor 2.", "Untertitel an.", "Mach die Untertitel aus."] {
+            assert_eq!(f(order), order, "{order}");
+        }
         assert_eq!(f("Open the the the browser"), "Open the browser");
         assert_eq!(f("Play the the music"), "Play the music");
         assert_eq!(f("That is very very good"), "That is very very good");
+    }
+
+    /// "Don't listen": he still hears (for the words that lift the lock), and writes nothing of
+    /// it into the log.
+    #[test]
+    fn under_the_privacy_lock_the_log_gets_no_heard_words() {
+        use crate::listening_lock::{apply, LockCommand};
+        let _listening = crate::listening_lock::test_lock();
+        apply(LockCommand::Resume);
+        assert_eq!(words_for_the_log("Jay, don't listen."), "'Jay, don't listen.'");
+        apply(LockCommand::Lock);
+        let logged = words_for_the_log("The river keeps the count of all my wanderings too.");
+        assert_eq!(logged, "(10 words, not written down: not listening)");
+        assert!(!logged.contains("wanderings"));
+        apply(LockCommand::Resume);
+        assert_eq!(words_for_the_log("You can listen again."), "'You can listen again.'");
     }
 
     #[test]
