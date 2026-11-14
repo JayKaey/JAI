@@ -103,6 +103,12 @@ fn pal() -> crate::theme_engine::ThemePalette {
 thread_local! {
     /// The colour the emblem is tinted with while it is painted, and how strongly (its mood).
     static TINT: std::cell::Cell<([u8; 3], f32)> = const { std::cell::Cell::new(([0, 0, 0], 0.0)) };
+    /// Painted without the light its lines throw round themselves (`paint_in_crisp`).
+    static CRISP: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn crisp() -> bool {
+    CRISP.with(|c| c.get())
 }
 
 /// What he is doing, as the emblem shows it on top of its pose (Sir, 2026-11-12: "motion and
@@ -561,6 +567,10 @@ fn neon(mesh: &mut Mesh, points: &[Pos2], light: &[f32], base: [u8; 3], _hot: [u
     use crate::theme_engine::{hdr_neon_color, NeonLayer, NEON_PASSES};
     let hot_centre = whiten(base, 0.9);
     for (k, (width, alpha, layer)) in NEON_PASSES.iter().enumerate() {
+        // (Crisp: the line and its filament, without the aura and the halo round them.)
+        if k < 2 && crisp() {
+            continue;
+        }
         let rgb = if *layer == NeonLayer::HotCenter { hot_centre } else { base };
         let colours: Vec<Color32> = light.iter().map(|l| {
             let a = (*alpha as f32 * gain * l).clamp(0.0, 255.0) as u8;
@@ -578,6 +588,9 @@ fn line(mesh: &mut Mesh, points: &[Pos2], light: &[f32], rgb: [u8; 3], alpha: f3
 
 /// A soft band (haze) with per-vertex light.
 fn haze(mesh: &mut Mesh, points: &[Pos2], light: &[f32], rgb: [u8; 3], alpha: f32, width: f32, closed: bool) {
+    if crisp() {
+        return;
+    }
     let colours: Vec<Color32> = light.iter().map(|l| glow(rgb, alpha * l)).collect();
     ribbon(mesh, points, &colours, width, closed, true);
 }
@@ -897,6 +910,16 @@ impl RoseEmblem {
         self.paint_frame(painter, &frame);
     }
 
+    /// As `paint_in`, without the light the lines throw round themselves: the lines, the
+    /// markers and the core alone. For a window whose black Windows sees through (the corner
+    /// orb): faint light on black would stand in it as a dark veil, the background colour Sir
+    /// did not want behind the orb (2026-11-14).
+    pub fn paint_in_crisp(&self, painter: &Painter, rect: Rect) {
+        CRISP.with(|c| c.set(true));
+        self.paint_in(painter, rect);
+        CRISP.with(|c| c.set(false));
+    }
+
     fn paint_frame(&self, painter: &Painter, frame: &EmblemFrame) {
         // Painted in its mood's tint (every colour of the emblem comes through `pal`).
         TINT.with(|t| t.set(self.tint()));
@@ -918,7 +941,9 @@ impl RoseEmblem {
         // The glow the bright ring throws into the dark round it (`emblem_light`): light as
         // light behaves, and nothing else round the emblem.
         let burning = (0.75 + 0.25 * self.voice + 0.15 * self.busy).clamp(0.0, 1.0);
-        crate::emblem_light::paint_glow(painter, frame.centre, frame.unit(), alpha, torus_deep(), burning);
+        if !crisp() {
+            crate::emblem_light::paint_glow(painter, frame.centre, frame.unit(), alpha, torus_deep(), burning);
+        }
         for i in 0..RING_COUNT {
             let mut mesh = Mesh::default();
             self.ring_mesh(&mut mesh, frame, i, scale, alpha);

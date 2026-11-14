@@ -37,7 +37,9 @@ static LOOKING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::n
 /// idle screen shows what is there).
 pub fn refresh(app: &crate::app::Jai, rt: &tokio::runtime::Handle) {
     use std::sync::atomic::Ordering;
-    if lock(&GLANCE).as_ref().is_some_and(|(at, _)| at.elapsed() < FRESH) || LOOKING.swap(true, Ordering::AcqRel) {
+    // (A scripted session never looks at Sir's day by itself: no sign-in at his school, none
+    // of his appointments on a test's screen.)
+    if crate::platform::in_test_session() || lock(&GLANCE).as_ref().is_some_and(|(at, _)| at.elapsed() < FRESH) || LOOKING.swap(true, Ordering::AcqRel) {
         return;
     }
     let app = app.clone();

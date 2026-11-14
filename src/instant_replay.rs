@@ -230,6 +230,9 @@ async fn encode_mp4(ffmpeg: &Path, frames: &[Vec<u8>], fps: f32, out: &Path) -> 
     }
 }
 
+#[cfg(all(test, windows))]
+pub(crate) use capture::screen_pixels;
+
 /// GDI capture of the primary monitor and WIC JPEG encoding, on the recorder's own thread.
 #[cfg(windows)]
 mod capture {
@@ -329,6 +332,14 @@ mod capture {
                 let _ = ReleaseDC(HWND(0), self.screen);
             }
         }
+    }
+
+    /// What the composed screen shows in `rect` (left, top, right, bottom) right now, as
+    /// 24-bit BGR rows: for the probe that measures whether a window of his is see-through.
+    /// (Held in memory to be compared, never saved: it is Sir's screen.)
+    #[cfg(test)]
+    pub(crate) fn screen_pixels(rect: [i32; 4]) -> Option<Vec<u8>> {
+        Surface::new(rect, (rect[2] - rect[0]).max(2) as u32)?.grab()
     }
 
     /// A JPEG of `bgr` (24-bit rows, top-down) through WIC.

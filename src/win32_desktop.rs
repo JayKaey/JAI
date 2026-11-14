@@ -149,6 +149,21 @@ fn shell_class(class: &str) -> bool {
     matches!(class, "Progman" | "WorkerW" | "Shell_TrayWnd" | "Shell_SecondaryTrayWnd")
 }
 
+/// A window that lies there and covers nothing, by its extended style: one that lets clicks
+/// through, or a layered one that never takes the focus (a graphics driver's or a game
+/// launcher's overlay over a whole monitor, see-through until it has something to show).
+fn overlay(ex: isize) -> bool {
+    let has = |bit: u32| ex & bit as isize != 0;
+    has(WS_EX_TRANSPARENT.0) || (has(WS_EX_LAYERED.0) && has(WS_EX_NOACTIVATE.0))
+}
+
+/// Whether the left mouse button is held down right now.
+pub fn left_button_down() -> bool {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON};
+    // SAFETY: a plain query of a key's state.
+    unsafe { GetAsyncKeyState(VK_LBUTTON.0 as i32) as u16 & 0x8000 != 0 }
+}
+
 struct Seen {
     own: u32,
     windows: Vec<(HWND, [i32; 4], bool)>,
@@ -168,7 +183,7 @@ fn top_level_windows() -> Vec<(HWND, [i32; 4], bool)> {
             let mut cloaked = 0u32;
             let _ = DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &mut cloaked as *mut u32 as *mut _, 4);
             let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-            if cloaked != 0 || style & WS_EX_TRANSPARENT.0 as isize != 0 || shell_class(&class_of(hwnd)) {
+            if cloaked != 0 || overlay(style) || shell_class(&class_of(hwnd)) {
                 return TRUE;
             }
             let Some(rect) = rect_of(hwnd) else { return TRUE };
@@ -264,25 +279,57 @@ pub fn raise(hwnd: isize) {
     }
 }
 
-/// Gives the corner orb's window its shape: a disc of `orb` pixels for the orb and, where the
-/// window is wider, the plate beside it (from 12 pixels right of the disc). The window's own
-/// surface may or may not be see-through; cut to this shape it looks the same either way.
-pub fn shape_orb(hwnd: isize, orb: i32, width: i32, height: i32) {
-    use windows::Win32::Graphics::Gdi::{CombineRgn, CreateEllipticRgn, CreateRectRgn, DeleteObject, SetWindowRgn, RGN_OR};
-    // SAFETY: regions made here; the one handed to the window is the system's from then on, the
-    // other is deleted.
+/// Looks after the corner orb's window, past the windowing library (which writes a window's
+/// whole style anew, its layer with it, whenever one of its own flags changes; so it is told
+/// of nothing here): the window's pure black is see-through and lets clicks through (`pass`:
+/// all of it does, beside a game), and once it has `drawn` it is shown, without the focus.
+/// (The see-through surface the library asks for is not shown on Sir's machine. Measured
+/// 2026-11-14 from outside: an empty window of the orb's stood solid black, with either
+/// surface format, with a window region and without. A black that is keyed out is seen
+/// through, and the emblem goes on being drawn in it.)
+pub fn tend_orb(hwnd: isize, pass: bool, drawn: bool) {
+    use windows::Win32::Foundation::COLORREF;
+    use windows::Win32::UI::WindowsAndMessaging::{GetLayeredWindowAttributes, SetLayeredWindowAttributes, LAYERED_WINDOW_ATTRIBUTES_FLAGS, LWA_COLORKEY};
+    // SAFETY: the style and the layer attributes of a window handle; a stale one just fails.
     unsafe {
         if !IsWindow(HWND(hwnd)).as_bool() {
             return;
         }
-        let shape = CreateEllipticRgn(0, 0, orb + 1, orb + 1);
-        if width > orb + 12 {
-            let plate = CreateRectRgn(orb + 12, 0, width, height);
-            CombineRgn(shape, shape, plate, RGN_OR);
-            let _ = DeleteObject(plate);
+        let ex = GetWindowLongPtrW(HWND(hwnd), GWL_EXSTYLE);
+        let wanted = orb_style(ex, pass);
+        if wanted != ex {
+            SetWindowLongPtrW(HWND(hwnd), GWL_EXSTYLE, wanted);
         }
-        SetWindowRgn(HWND(hwnd), shape, TRUE);
+        let mut flags = LAYERED_WINDOW_ATTRIBUTES_FLAGS(0);
+        if GetLayeredWindowAttributes(HWND(hwnd), None, None, Some(&mut flags)).is_err() || flags.0 & LWA_COLORKEY.0 == 0 {
+            let _ = SetLayeredWindowAttributes(HWND(hwnd), COLORREF(0), 0, LWA_COLORKEY);
+        }
+        let on_show = IsWindowVisible(HWND(hwnd)).as_bool();
+        ORB_ON_SHOW.store(on_show, Ordering::Release);
+        if drawn && !on_show {
+            crate::win32::show_no_activate(hwnd);
+        }
     }
+}
+
+/// Whether the corner orb's window was on show when it was last looked after.
+static ORB_ON_SHOW: AtomicBool = AtomicBool::new(false);
+
+/// Whether the corner orb's window is on show (as `tend_orb` last saw it).
+pub fn orb_on_show() -> bool {
+    ORB_ON_SHOW.load(Ordering::Acquire)
+}
+
+/// The corner orb sets out anew: its window of before is gone.
+pub fn orb_sets_out() {
+    ORB_ON_SHOW.store(false, Ordering::Release);
+}
+
+/// The corner orb's extended style out of the one it has: layered always, click-through as a
+/// whole only while `pass`.
+fn orb_style(ex: isize, pass: bool) -> isize {
+    let through = WS_EX_TRANSPARENT.0 as isize;
+    (ex & !through) | WS_EX_LAYERED.0 as isize | if pass { through } else { 0 }
 }
 
 /// Asks window `hwnd` to close, as its own close key would (it plays its exit and goes).
@@ -426,5 +473,200 @@ mod tests {
     fn the_shell_covers_nothing() {
         assert!(shell_class("Progman") && shell_class("Shell_TrayWnd") && shell_class("WorkerW"));
         assert!(!shell_class("Chrome_WidgetWin_1"));
+    }
+
+    /// 2026-11-14, Sir's main display with nothing open on it: the graphics driver's overlay lay
+    /// over all of it (layered, never active, a tool window, extended style 0x08080080), counted
+    /// as a window covering the emblem, and the orb came out to the corner whenever he spoke.
+    #[test]
+    fn an_overlay_nobody_sees_covers_nothing() {
+        assert!(overlay(0x0808_0080), "layered and never active: an overlay");
+        assert!(overlay(WS_EX_TRANSPARENT.0 as isize), "lets clicks through");
+        // (A browser, two Electron programs, a player: as they stood beside it that day.)
+        for ex in [0x0000_0000, 0x0028_0100, 0x0020_0100, 0x0024_0100] {
+            assert!(!overlay(ex), "{ex:#010x} is a window that covers what is under it");
+        }
+        // (Layered alone is a window like any other; never active alone is a palette.)
+        assert!(!overlay(WS_EX_LAYERED.0 as isize) && !overlay(WS_EX_NOACTIVATE.0 as isize));
+    }
+
+    /// The corner orb's window is a layered one whatever else it is, and lets every click
+    /// through only beside a game.
+    #[test]
+    fn the_orbs_window_is_layered_and_passes_clicks_only_beside_a_game() {
+        let (layered, through, topmost) = (WS_EX_LAYERED.0 as isize, WS_EX_TRANSPARENT.0 as isize, 0x8);
+        // (As the windowing library makes it: on top, no layer.)
+        let made = 0x0004_0118;
+        assert_eq!(orb_style(made, false), made | layered);
+        assert_eq!(orb_style(made, true), made | layered | through);
+        assert_eq!(orb_style(made | layered | through, false), made | layered, "the game is gone: it takes clicks again");
+        assert_eq!(orb_style(orb_style(made, false), false), orb_style(made, false), "tended again, nothing changes");
+        assert!(orb_style(made, true) & topmost != 0, "what else it is stays");
+    }
+
+    /// His windows as Windows has them, watched from outside for a while (`JAI_WATCH=seconds
+    /// cargo test --bin jai his_windows_from_outside -- --ignored --nocapture`): every window
+    /// of a process called "jai", top-level or inside the desktop, each time it changes (its
+    /// title, rect, whether it is shown, its extended style, its owner); a window that moves
+    /// more than three times in a second is counted, not listed. With
+    /// `JAI_WATCH_THROUGH=left,top,right,bottom` (several: `;` between them) it also says,
+    /// whenever that changes, how much of each square spot of the screen still shows what it
+    /// showed when the watch began, and how bright its middle and its corners are: a
+    /// see-through window that came to stand there leaves it as it was. (The pixels are
+    /// compared and dropped; no picture of Sir's screen is kept.)
+    #[test]
+    #[ignore]
+    fn his_windows_from_outside() {
+        use std::collections::HashMap;
+        use std::time::{Duration, Instant};
+        use windows::Win32::UI::WindowsAndMessaging::{EnumChildWindows, GetWindow, GW_OWNER};
+        type Row = (u32, String, String, [i32; 4], bool, isize, isize);
+        struct Found {
+            jai: HashMap<u32, bool>,
+            rows: Vec<(isize, Row)>,
+        }
+        unsafe extern "system" fn each(hwnd: HWND, lparam: LPARAM) -> BOOL {
+            // SAFETY: lparam is the &mut Found passed below and outlives the enumeration; plain queries.
+            unsafe {
+                let found = &mut *(lparam.0 as *mut Found);
+                let mut pid = 0u32;
+                GetWindowThreadProcessId(hwnd, Some(&mut pid));
+                let jai = *found.jai.entry(pid).or_insert_with(|| pid != std::process::id() && crate::win32::process_name(pid).is_some_and(|n| n.eq_ignore_ascii_case("jai")));
+                let class = class_of(hwnd);
+                if jai && !matches!(class.as_str(), "IME" | "MSCTFIME UI" | "NVOpenGLPbuffer" | "JaiTrayWindow") && !class.starts_with("Winit Thread") {
+                    if let Some(rect) = rect_of(hwnd) {
+                        found.rows.push((hwnd.0, (pid, class, title_of(hwnd), rect, IsWindowVisible(hwnd).as_bool(), GetWindowLongPtrW(hwnd, GWL_EXSTYLE), GetWindow(hwnd, GW_OWNER).0)));
+                    }
+                }
+            }
+            TRUE
+        }
+        let seconds: u64 = std::env::var("JAI_WATCH").ok().and_then(|s| s.parse().ok()).unwrap_or(20);
+        // (Each spot with what it showed when the watch began.)
+        let spots: Vec<([i32; 4], Vec<u8>)> = std::env::var("JAI_WATCH_THROUGH")
+            .unwrap_or_default()
+            .split(';')
+            .filter_map(|spot| <[i32; 4]>::try_from(spot.split(',').filter_map(|n| n.trim().parse().ok()).collect::<Vec<i32>>()).ok())
+            .filter_map(|spot| Some((spot, crate::instant_replay::screen_pixels(spot)?)))
+            .collect();
+        let (mut looked, mut said) = (0, Vec::<String>::new());
+        let key_out = std::env::var("JAI_WATCH_KEY_OUT").ok();
+        // (`JAI_WATCH_HIT=x,y;x,y`: whose window a click at each of these points would go to.)
+        let hits: Vec<[i32; 2]> = std::env::var("JAI_WATCH_HIT").unwrap_or_default().split(';').filter_map(|at| <[i32; 2]>::try_from(at.split(',').filter_map(|n| n.trim().parse().ok()).collect::<Vec<i32>>()).ok()).collect();
+        let mut hit_said = vec![String::new(); hits.len()];
+        let (start, mut found) = (Instant::now(), Found { jai: HashMap::new(), rows: Vec::new() });
+        let mut last: HashMap<isize, Row> = HashMap::new();
+        let mut moves: HashMap<isize, (u64, u32)> = HashMap::new();
+        while start.elapsed() < Duration::from_secs(seconds) {
+            found.rows.clear();
+            // SAFETY: the callback only touches `found` through the provided pointer.
+            unsafe {
+                let _ = EnumWindows(Some(each), LPARAM(&mut found as *mut Found as isize));
+                let _ = EnumChildWindows(FindWindowW(w!("Progman"), PCWSTR::null()), Some(each), LPARAM(&mut found as *mut Found as isize));
+            }
+            let (ms, second) = (start.elapsed().as_millis(), start.elapsed().as_secs());
+            for (hwnd, row) in &found.rows {
+                if last.get(hwnd) == Some(row) {
+                    continue;
+                }
+                let (at, count) = moves.entry(*hwnd).or_insert((second, 0));
+                if *at != second {
+                    if *count > 3 {
+                        println!("{ms:>6} ms  {hwnd:#x} '{}' moved {count} times in second {at}", row.2);
+                    }
+                    (*at, *count) = (second, 0);
+                }
+                *count += 1;
+                if *count <= 3 {
+                    let (pid, class, title, rect, shown, ex, owner) = row;
+                    println!("{ms:>6} ms  {hwnd:#x} pid {pid} {class:<24} '{title}' {rect:?} {} ex {ex:#010x} owner {owner:#x}", if *shown { "shown" } else { "HIDDEN" });
+                }
+                // An experiment (`JAI_WATCH_KEY_OUT=<title>`): that window of his made a layered
+                // one whose pure black Windows sees through, from here.
+                if key_out.as_deref() == Some(row.2.as_str()) && row.4 && row.5 & WS_EX_LAYERED.0 as isize == 0 {
+                    use windows::Win32::Foundation::COLORREF;
+                    use windows::Win32::UI::WindowsAndMessaging::{SetLayeredWindowAttributes, LWA_COLORKEY};
+                    // SAFETY: style and layer attributes of a window handle from the enumeration.
+                    let done = unsafe {
+                        SetWindowLongPtrW(HWND(*hwnd), GWL_EXSTYLE, row.5 | WS_EX_LAYERED.0 as isize);
+                        SetLayeredWindowAttributes(HWND(*hwnd), COLORREF(0), 0, LWA_COLORKEY)
+                    };
+                    println!("{ms:>6} ms  {hwnd:#x} '{}': its black keyed out ({done:?})", row.2);
+                }
+                last.insert(*hwnd, row.clone());
+            }
+            let gone: Vec<isize> = last.keys().filter(|h| !found.rows.iter().any(|(hwnd, _)| hwnd == *h)).copied().collect();
+            for hwnd in gone {
+                println!("{ms:>6} ms  {hwnd:#x} '{}' is gone", last.remove(&hwnd).map(|r| r.2).unwrap_or_default());
+            }
+            if second > looked {
+                looked = second;
+                for (k, at) in hits.iter().enumerate() {
+                    // SAFETY: plain queries on the window under a point.
+                    let line = unsafe {
+                        let hwnd = WindowFromPoint(POINT { x: at[0], y: at[1] });
+                        let mut pid = 0u32;
+                        GetWindowThreadProcessId(hwnd, Some(&mut pid));
+                        let program = crate::win32::process_name(pid).unwrap_or_default();
+                        let own = if program.eq_ignore_ascii_case("jai") { format!(" '{}'", title_of(hwnd)) } else { String::new() };
+                        format!("point {} ({},{}): a click would go to {program} [{}]{own}", k + 1, at[0], at[1], class_of(hwnd))
+                    };
+                    if hit_said[k] != line {
+                        println!("{ms:>6} ms  {line}");
+                        hit_said[k] = line;
+                    }
+                }
+                for (k, (spot, before)) in spots.iter().enumerate() {
+                    let Some(now) = crate::instant_replay::screen_pixels(*spot) else { continue };
+                    let pixels = (before.len() / 3).max(1);
+                    let same = before.chunks_exact(3).zip(now.chunks_exact(3)).filter(|(a, b)| a.iter().zip(*b).all(|(x, y)| x.abs_diff(*y) <= 6)).count();
+                    // (How bright its middle and its four corners are, of 255: now, and before.)
+                    let side = (pixels as f64).sqrt() as usize;
+                    let light = |bgr: &[u8], middle: bool| {
+                        let (mut sum, mut n) = (0u64, 0u64);
+                        for (i, p) in bgr.chunks_exact(3).enumerate() {
+                            let (x, y) = ((i % side) as f64 / side as f64 - 0.5, (i / side) as f64 / side as f64 - 0.5);
+                            let r = (x * x + y * y).sqrt();
+                            if (middle && r < 0.3) || (!middle && r > 0.56) {
+                                sum += p.iter().map(|c| *c as u64).sum::<u64>();
+                                n += 3;
+                            }
+                        }
+                        sum as f64 / n.max(1) as f64
+                    };
+                    let line = format!("spot {}: {} % as it was; middle {:.1} (was {:.1}), corners {:.1} (were {:.1})", k + 1, 100 * same / pixels, light(&now, true), light(before, true), light(&now, false), light(before, false));
+                    // (Said when it changes, not every second.)
+                    if said.get(k) != Some(&line) {
+                        println!("{ms:>6} ms  {line}");
+                        said.resize(spots.len(), String::new());
+                        said[k] = line;
+                    }
+                }
+            }
+            std::thread::sleep(Duration::from_millis(40));
+        }
+        for (hwnd, (at, count)) in moves {
+            if count > 3 {
+                println!("   end  {hwnd:#x} moved {count} times in second {at}");
+            }
+        }
+    }
+
+    /// A look at the live desktop, for when the orb says the emblem is covered and Sir sees
+    /// nothing on it (`cargo test --bin jai what_counts_as_lying_on_the_screen -- --ignored
+    /// --nocapture`): every window that counts, from the top down, with its program, its class
+    /// and its extended style. (No titles: they are Sir's.)
+    #[test]
+    #[ignore]
+    fn what_counts_as_lying_on_the_screen() {
+        for (hwnd, rect, _) in top_level_windows() {
+            let mut pid = 0u32;
+            // SAFETY: plain queries on a handle from the enumeration.
+            let ex = unsafe {
+                GetWindowThreadProcessId(hwnd, Some(&mut pid));
+                GetWindowLongPtrW(hwnd, GWL_EXSTYLE)
+            };
+            println!("{:<30} {:<36} {rect:?} ex {ex:#010x}", crate::win32::process_name(pid).unwrap_or_default(), class_of(hwnd));
+        }
     }
 }

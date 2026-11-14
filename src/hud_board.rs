@@ -1868,6 +1868,68 @@ pub struct BoardView {
     /// The suggestion bar's keys for the block in the spotlight, and the generation of Sir's
     /// habits they were ranked at (asked again only when the block or the habits change).
     suggested: Option<(crate::hud_suggestions::Subject, u64, Vec<crate::hud_suggestions::Suggestion>)>,
+    /// The blocks that stand in windows of their own (he is the desktop's background).
+    cards: HashMap<egui::ViewportId, Card>,
+    /// A block's window was made in this frame: the next block's waits for the next frame.
+    /// (Making a window takes a quarter of a second; five in one frame froze the board for
+    /// more than two. One a frame, they come up one after the other.)
+    card_made: bool,
+}
+
+/// A block of the board in a window of its own.
+struct Card {
+    title: String,
+    /// Where its window came up (screen points). Never changed after: it is Sir's to move.
+    place: Rect,
+    /// When its window showed itself (its entrance counts from there).
+    drawn: Option<Instant>,
+    /// Where its window stood before it grew into the spotlight (x, y, w, h in pixels).
+    small: Option<[i32; 4]>,
+    /// Asked for in this frame.
+    seen: bool,
+}
+
+/// The room round a block in a window of its own: its glow, and the grips its window is sized by.
+const CARD_MARGIN: f32 = 10.0;
+/// The room under a block in the spotlight for the keys of what Sir may want next.
+const CARD_KEYS: f32 = SUGGESTION_KEY[1] + 14.0;
+
+/// Where a block's window stands grown into the spotlight (x, y, w, h in pixels): in the middle
+/// of the work area `work` (left, top, right, bottom) of the monitor it is on, the spotlight's
+/// size with the room for its keys under it (a window of `size` that is larger already stays
+/// as large: the spotlight never makes a block smaller), never larger than that monitor has
+/// room for.
+fn spotlight_window(work: [i32; 4], ppp: f32, size: [i32; 2]) -> [i32; 4] {
+    let (room_w, room_h) = ((work[2] - work[0]) as f32, (work[3] - work[1]) as f32);
+    let w = ((SPOTLIGHT_SIZE[0] + 2.0 * CARD_MARGIN) * ppp).max(size[0] as f32).min(room_w * 0.92).round();
+    let h = ((SPOTLIGHT_SIZE[1] + 2.0 * CARD_MARGIN) * ppp).max(size[1] as f32).min(room_h * 0.9 - CARD_KEYS * ppp).round() + (CARD_KEYS * ppp).round();
+    [work[0] + ((room_w - w) / 2.0).round() as i32, work[1] + ((room_h - h) / 2.0).round() as i32, w as i32, h as i32]
+}
+
+/// A click on the block in the open spotlight: a video opens in the browser, a stack of notes
+/// turns its page, anything else goes back to its place.
+fn spotlight_click(block: &Block, rt: &tokio::runtime::Handle) -> BoardClick {
+    let video = match &block.kind {
+        BlockKind::MediaCard { images, .. } => images.first().and_then(|u| youtube_id(u)),
+        _ => None,
+    };
+    if let Some(id) = video {
+        let url = format!("https://www.youtube.com/watch?v={id}");
+        let open = url.clone();
+        rt.spawn(async move {
+            if let Err(e) = crate::apps::open_default_browser(&open).await {
+                warn!("[BOARD] Could not open the video: {e}");
+            }
+        });
+        crate::tts::play_earcon(Earcon::Confirm);
+        BoardClick::Watched(url)
+    } else if matches!(&block.kind, BlockKind::NoteStack { notes } if notes.len() > 1) {
+        let _ = flip_note(true);
+        BoardClick::Flipped
+    } else {
+        minimize();
+        BoardClick::Minimized
+    }
 }
 
 /// What the suggestion bar needs to know about block `index` of a report (`front`: the page of
@@ -2177,6 +2239,117 @@ impl BoardView {
         chosen
     }
 
+    /// Block `i` of the shown report in a window of its own (he is the desktop's background;
+    /// Sir, 2026-11-14: "real Windows windows and not only in-app windows"): the same frame,
+    /// keys and picture as on the board, where the board would have put it. A drag moves its
+    /// window, and the spotlight is its window grown large on the monitor it stands on.
+    /// Returns what a click did and whether it is still moving.
+    #[allow(clippy::too_many_arguments)]
+    fn card(&mut self, ui: &Ui, i: usize, block: &Block, slot: Rect, shown: &Shown, spot: bool, needle: &str, rt: &tokio::runtime::Handle) -> (Option<BoardClick>, bool) {
+        let ctx = ui.ctx();
+        let now = Instant::now();
+        let nth = shown.report.blocks[..i].iter().filter(|b| b.label == block.label).count();
+        let viewport = egui::ViewportId::from_hash_of(("jai_board_block", shown.at, &block.label, nth));
+        if !self.cards.contains_key(&viewport) && std::mem::replace(&mut self.card_made, true) {
+            return (None, true);
+        }
+        let card = self.cards.entry(viewport).or_insert_with(|| Card {
+            title: format!("{}{} \u{2014} J.A.I.", block.label, if nth > 0 { format!(" ({})", nth + 1) } else { String::new() }),
+            place: Rect::from_min_size(crate::gui::board_to_screen(ctx, slot.min), slot.size()).expand(CARD_MARGIN),
+            drawn: None,
+            small: None,
+            seen: true,
+        });
+        card.seen = true;
+        // The spotlight: its window grows on the monitor it stands on, and goes back to where
+        // it stood.
+        #[cfg(windows)]
+        if spot != card.small.is_some() {
+            if let Some(window) = crate::own_windows::list().into_iter().find(|w| w.title == card.title) {
+                let [l, t, r, b] = window.rect;
+                let here = [l, t, r - l, b - t];
+                let to = card.small.take().or_else(|| {
+                    let monitors = crate::monitors::recent();
+                    let on = monitors.iter().find(|m| m.contains((l + r) / 2, (t + b) / 2)).or_else(|| crate::monitors::primary(&monitors))?;
+                    card.small = Some(here);
+                    Some(spotlight_window(on.work, ctx.pixels_per_point(), [r - l, b - t]))
+                });
+                if let Some(to) = to {
+                    crate::own_windows::glide(window.hwnd, here, to);
+                }
+            }
+        }
+        let (title, place, mut drawn) = (card.title.clone(), card.place, card.drawn);
+        let front = shown.fronts[i];
+        let pulse = shown.highlights[i].map(|h| h.elapsed().as_secs_f32()).filter(|s| *s < HIGHLIGHT_SECS);
+        let found = !needle.is_empty() && crate::hud_dock::search_matches(needle, &block.label, &block.text());
+        let (mut click, mut animating) = (None, pulse.is_some());
+        crate::gui::piece_window(ctx, viewport, &title, place, |ui| {
+            let ctx = ui.ctx().clone();
+            // Its entrance (it rises, fades in and springs up to its size, as on the board)
+            // counts from the frame its window shows itself in.
+            let t = if ctx.cumulative_pass_nr() < 1 { 0.0 } else { (now.saturating_duration_since(*drawn.get_or_insert(now)).as_secs_f32() / APPEAR_SECS).min(1.0) };
+            animating |= t < 1.0;
+            let slot = ui.max_rect().shrink(CARD_MARGIN);
+            // (In the spotlight the keys of what Sir may want next stand under it.)
+            let slot = if spot { Rect::from_min_max(slot.min, slot.max - vec2(0.0, CARD_KEYS)) } else { slot };
+            let e = ease_out(t);
+            let mut p = ui.painter().clone();
+            p.set_opacity(e * e * if needle.is_empty() || found { 1.0 } else { SEARCH_DIM });
+            let r = scale_rect(slot, 0.88 + 0.12 * ease_out_back(t)).translate(vec2(0.0, 18.0 * (1.0 - e)));
+            let response = ui.interact(r, ui.id().with(("hud_block", i)), Sense::click_and_drag());
+            if response.drag_started() {
+                ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+            }
+            if response.hovered() {
+                let dy = ui.input(|inp| inp.smooth_scroll_delta.y);
+                if dy != 0.0 {
+                    *self.scroll.entry((i, front)).or_default() -= dy;
+                    animating = true;
+                }
+            }
+            let active = pulse.is_some() || response.hovered() || found || spot;
+            self.paint_block(&p, r, block, (i, front), active, spot, rt);
+            if let Some(s) = pulse {
+                let glow = 0.5 + 0.5 * (s * 7.0).cos();
+                p.rect_stroke(r.expand(2.0), Rounding::ZERO, stroke(2.0, active_colour().gamma_multiply(glow * (1.0 - s / HIGHLIGHT_SECS))));
+            }
+            // Its keys, its menu and a click, as on the board.
+            let mut chosen = None;
+            let pinned = is_pinned(block);
+            response.context_menu(|ui| chosen = crate::block_actions::menu(ui, pinned, false));
+            let at = response.interact_pointer_pos();
+            let header = header_key_hit(&p, block, front, r, at).filter(|_| response.clicked());
+            let header = header.map(|key| if key == HeaderKey::Close { crate::block_actions::BlockAction::Close } else { crate::block_actions::BlockAction::Pin });
+            if let Some(chosen) = chosen.or(header) {
+                block_menu(&ctx, i, block, chosen);
+                animating = true;
+                click = Some(BoardClick::Menu(chosen));
+            } else if let Some(page) = nav_key_hit(block, front, r, at).filter(|_| response.clicked()) {
+                let _ = turn_page(page);
+                animating = true;
+                click = Some(BoardClick::Flipped);
+            } else if response.clicked() && spot {
+                click = Some(spotlight_click(block, rt));
+            } else if response.clicked() {
+                board().spotlight = Some((i, Instant::now()));
+                crate::tts::play_cue(Earcon::Spotlight);
+                click = Some(BoardClick::Maximized(block.label.clone()));
+            }
+            if spot && t >= 1.0 {
+                let subject = subject_of(&shown.report, i, front);
+                let (kind, all) = (subject.kind, ui.max_rect());
+                if let Some(chosen) = self.suggestion_bar(ui, &p, r, all, subject) {
+                    click = Some(BoardClick::Suggested(kind, chosen));
+                }
+            }
+        });
+        if let Some(card) = self.cards.get_mut(&viewport) {
+            card.drawn = drawn;
+        }
+        (click, animating)
+    }
+
     /// Paints the research block, the board (cascade, spotlight, collapse) and handles clicks.
     /// Returns what a click did and whether something is still animating.
     pub fn paint(&mut self, ui: &mut Ui, area: Rect, rt: &tokio::runtime::Handle) -> (Option<BoardClick>, bool) {
@@ -2191,9 +2364,14 @@ impl BoardView {
         let mut animating = research.is_some();
         let painter = ui.painter_at(area.expand(8.0));
         let mut click = None;
+        // As the desktop's background every block stands in a window of its own (`card`).
+        let own = crate::gui::pieces_in_windows(ui.ctx());
+        self.cards.values_mut().for_each(|card| card.seen = false);
+        self.card_made = false;
 
-        // The previous board collapsing: fading and sinking, last block first.
-        if let Some((report, at)) = &leaving {
+        // The previous board collapsing: fading and sinking, last block first. (Windows of
+        // their own simply close.)
+        if let Some((report, at)) = leaving.as_ref().filter(|_| !own) {
             let rects = layout(report, area, false);
             let n = report.blocks.len();
             self.added = added_label(0);
@@ -2239,6 +2417,17 @@ impl BoardView {
             let needle = crate::hud_dock::search();
             for (i, (block, rect)) in shown.report.blocks.iter().zip(&rects).enumerate() {
                 let Some(rect) = *rect else { continue };
+                if own {
+                    // (One after the other, as the cascade on the board.)
+                    if now >= shown.at + CASCADE_STEP * i as u32 {
+                        let (did, moving) = self.card(ui, i, block, rect, shown, spot.is_some_and(|(s, _)| s == i), &needle, rt);
+                        click = did.or(click);
+                        animating |= moving;
+                    } else {
+                        animating = true;
+                    }
+                    continue;
+                }
                 if spot_shown == Some(i) {
                     continue;
                 }
@@ -2329,8 +2518,9 @@ impl BoardView {
                     click = Some(BoardClick::Minimized);
                 }
             }
-            // The spotlight frame, gliding between the block's grid slot and the centre.
-            if let Some(i) = spot_shown {
+            // The spotlight frame, gliding between the block's grid slot and the centre. (A
+            // block in a window of its own grows where it stands.)
+            if let Some(i) = spot_shown.filter(|_| !own) {
                 let from = rects[i].unwrap_or_else(|| spotlight_rect(area).shrink(120.0));
                 let r = lerp_rect(from, spotlight_rect(area), spot_t);
                 let backdrop = painter.clone();
@@ -2359,27 +2549,7 @@ impl BoardView {
                     animating = true;
                     click = Some(BoardClick::Flipped);
                 } else if response.clicked() && spot.is_some() {
-                    let video = match &shown.report.blocks[i].kind {
-                        BlockKind::MediaCard { images, .. } => images.first().and_then(|u| youtube_id(u)),
-                        _ => None,
-                    };
-                    if let Some(id) = video {
-                        let url = format!("https://www.youtube.com/watch?v={id}");
-                        let open = url.clone();
-                        rt.spawn(async move {
-                            if let Err(e) = crate::apps::open_default_browser(&open).await {
-                                warn!("[BOARD] Could not open the video: {e}");
-                            }
-                        });
-                        crate::tts::play_earcon(Earcon::Confirm);
-                        click = Some(BoardClick::Watched(url));
-                    } else if matches!(&shown.report.blocks[i].kind, BlockKind::NoteStack { notes } if notes.len() > 1) {
-                        let _ = flip_note(true);
-                        click = Some(BoardClick::Flipped);
-                    } else {
-                        minimize();
-                        click = Some(BoardClick::Minimized);
-                    }
+                    click = Some(spotlight_click(&shown.report.blocks[i], rt));
                 }
             }
         }
@@ -2391,8 +2561,32 @@ impl BoardView {
             let rect = if shown.is_some() { slot } else { research_rect_at(slot, area, age) };
             // Bigger text while it sits in the middle (it scales with its rectangle).
             let scale = (rect.width() / slot.width().max(1.0)).clamp(1.0, 1.6);
-            paint_research(&painter, rect, &r.block(now), scale, Some(&added_label(age as u64)));
+            if own {
+                // (In a window of its own, where its slot is.)
+                let ctx = ui.ctx();
+                let viewport = egui::ViewportId::from_hash_of(("jai_board_research", r.started));
+                let place = Rect::from_min_size(crate::gui::board_to_screen(ctx, slot.min), slot.size()).expand(CARD_MARGIN);
+                let card = self.cards.entry(viewport).or_insert_with(|| Card { title: "RESEARCH \u{2014} J.A.I.".into(), place, drawn: None, small: None, seen: true });
+                card.seen = true;
+                let (block, added) = (r.block(now), added_label(age as u64));
+                crate::gui::piece_window(ctx, viewport, &card.title, card.place, |ui| {
+                    let inner = ui.max_rect().shrink(CARD_MARGIN);
+                    if ui.interact(inner, ui.id().with("hud_research"), Sense::drag()).drag_started() {
+                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                    }
+                    paint_research(ui.painter(), inner, &block, 1.0, Some(&added));
+                });
+            } else {
+                paint_research(&painter, rect, &r.block(now), scale, Some(&added_label(age as u64)));
+            }
         }
+        // A block that left the board takes its window with it.
+        self.cards.retain(|viewport, card| {
+            if !card.seen {
+                crate::gui::piece_window_gone(*viewport);
+            }
+            card.seen
+        });
         let loading = shown.as_ref().is_some_and(|s| s.report.blocks.iter().any(|b| matches!(b.kind, BlockKind::DarkVectorMap { pending: true, .. })));
         (click, animating || loading)
     }
@@ -2800,6 +2994,28 @@ pub(crate) fn test_lock() -> MutexGuard<'static, ()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A block in a window of its own grows into the spotlight on the monitor it stands on:
+    /// in the middle of its work area, never larger than that monitor has room for.
+    #[test]
+    fn a_blocks_window_grows_in_the_middle_of_its_own_monitor() {
+        // A monitor to the right of the first, the taskbar at its bottom.
+        let [x, y, w, h] = spotlight_window([2560, 0, 5120, 1392], 1.0, [620, 150]);
+        assert_eq!((w, h), (800, 538), "the spotlight, the room round it and its keys under it");
+        assert_eq!((x + w / 2, y + h / 2), (3840, 696), "in the middle of that monitor");
+        // A small monitor: it keeps inside.
+        let [x, y, w, h] = spotlight_window([0, 0, 800, 600], 1.0, [300, 200]);
+        assert_eq!((w, h), (736, 538));
+        assert!(x >= 0 && x + w <= 800 && y >= 0 && y + h <= 600, "{x},{y} {w}x{h}");
+        // A scaled screen: as many pixels more.
+        assert_eq!(spotlight_window([0, 0, 3840, 2160], 1.5, [600, 300])[2], 1200);
+        // A block that stands larger than the spotlight is not made smaller by it (seen live
+        // 2026-11-14: "maximise the chart" shrank a 1691 by 848 window to 802 by 539).
+        let [_, _, w, h] = spotlight_window([2560, 0, 5120, 1392], 1.0, [1691, 848]);
+        assert_eq!((w, h), (1691, 848 + 38), "as large as it was, and its keys under it");
+        let [_, y, _, h] = spotlight_window([2560, 0, 5120, 1392], 1.0, [1691, 1392]);
+        assert!(y >= 0 && y + h <= 1392, "never taller than the monitor: {y} + {h}");
+    }
 
     #[test]
     fn windows_animate_open_and_closed_over_several_frames() {

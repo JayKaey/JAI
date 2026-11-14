@@ -12,7 +12,7 @@
 //! stand.
 
 use eframe::egui::{self, pos2, vec2, Rect};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -58,15 +58,23 @@ static ASKED: Mutex<Option<Result<(), String>>> = Mutex::new(None);
 static ON: AtomicBool = AtomicBool::new(false);
 static HOT: AtomicBool = AtomicBool::new(false);
 static GAME: AtomicBool = AtomicBool::new(false);
-/// The share of the background's emblem that another program's window covers (f32 bits).
-static COVERED: AtomicU32 = AtomicU32::new(0);
+/// Another program's window hides the background's emblem (`hidden_now`).
+static HIDDEN: AtomicBool = AtomicBool::new(false);
 
 /// How long the window is given to become plain and stand in place before the desktop is asked.
 const SETTLE: Duration = Duration::from_millis(350);
 /// How often its place in the desktop is looked at.
 const LOOK_EVERY: Duration = Duration::from_secs(2);
-/// The emblem counts as hidden when one window covers more than this share of it.
+/// The emblem counts as hidden when one window covers more than this share of it, and as
+/// seen again once less than `SEEN_BELOW` of it is covered. (Between the two it stays what it
+/// was: a window half over it does not send the orb to and fro.)
 const HIDDEN_FROM: f32 = 0.3;
+const SEEN_BELOW: f32 = 0.12;
+
+/// Whether the emblem is hidden, with the `share` of it (0 to 1) that a window covers now.
+fn hidden_now(was: bool, share: f32) -> bool {
+    share > HIDDEN_FROM || (was && share >= SEEN_BELOW)
+}
 
 /// The rect (left, top, right, bottom) the background covers: the box around every monitor, or
 /// Sir's first one. None without a monitor.
@@ -395,7 +403,7 @@ pub fn look_at(emblem: [i32; 4]) {
         return;
     }
     *last = Some(Instant::now());
-    crate::win32::run_detached(move || COVERED.store(crate::win32_desktop::covered_share(emblem).to_bits(), Ordering::Release));
+    crate::win32::run_detached(move || HIDDEN.store(hidden_now(HIDDEN.load(Ordering::Acquire), crate::win32_desktop::covered_share(emblem)), Ordering::Release));
 }
 
 #[cfg(not(windows))]
@@ -403,7 +411,7 @@ pub fn look_at(_emblem: [i32; 4]) {}
 
 /// Whether the background's emblem is hidden behind another program's window.
 pub fn hidden() -> bool {
-    f32::from_bits(COVERED.load(Ordering::Acquire)) > HIDDEN_FROM
+    HIDDEN.load(Ordering::Acquire)
 }
 
 /// The monitor Sir is using: the one the window in front is on (another program's), else the
@@ -422,6 +430,14 @@ pub fn monitor_in_use(monitors: &[crate::monitors::Monitor]) -> Option<crate::mo
 #[cfg(not(windows))]
 pub fn monitor_in_use(monitors: &[crate::monitors::Monitor]) -> Option<crate::monitors::Monitor> {
     crate::monitors::primary(monitors).cloned()
+}
+
+/// Whether Sir holds the left mouse button down right now.
+pub fn button_down() -> bool {
+    #[cfg(windows)]
+    return crate::win32_desktop::left_button_down();
+    #[cfg(not(windows))]
+    false
 }
 
 /// How long the orb takes from the background to its corner (and back).
@@ -487,6 +503,10 @@ pub struct Orb {
     to: Rect,
     /// Since when nothing is going on (while it is out).
     quiet: Option<Instant>,
+    /// Sir has hold of it, or has just let go (`grabbed`, `let_go`).
+    in_hand: bool,
+    /// Where Windows last said its window stands, while it is in his hand.
+    seen_at: Option<egui::Pos2>,
 }
 
 /// One frame of the orb: where its window stands on the screen (pixels), and how far out of
@@ -500,7 +520,7 @@ pub struct OrbFrame {
 
 impl Default for Orb {
     fn default() -> Self {
-        Self { phase: OrbPhase::Home, since: Instant::now(), from: Rect::NOTHING, to: Rect::NOTHING, quiet: None }
+        Self { phase: OrbPhase::Home, since: Instant::now(), from: Rect::NOTHING, to: Rect::NOTHING, quiet: None, in_hand: false, seen_at: None }
     }
 }
 
@@ -521,6 +541,16 @@ impl Orb {
                     return None;
                 }
                 (self.phase, self.since, self.from, self.to, self.quiet) = (OrbPhase::Leaving, now, home, corner(), None);
+            }
+            // (The emblem is seen again: back to it at once, from where it is, busy or not. Sir,
+            // 2026-11-14: "the orb should only move to the corner when the big orb is blocked by
+            // something. If not then it should show the original big orb." Not out of his hand.)
+            OrbPhase::Leaving if !hidden => {
+                let here = between(self.from, self.to, ease(flown(self.since)));
+                (self.phase, self.since, self.from) = (OrbPhase::Returning, now, here);
+            }
+            OrbPhase::Out if !hidden && !self.in_hand => {
+                (self.phase, self.since, self.from) = (OrbPhase::Returning, now, self.to);
             }
             OrbPhase::Leaving => {
                 if flown(self.since) >= 1.0 {
@@ -561,12 +591,43 @@ impl Orb {
         })
     }
 
-    /// Sir dragged the orb: it rests at `at` from now on (and its quiet time starts again).
-    pub fn held_at(&mut self, at: Rect) {
-        if self.phase == OrbPhase::Out {
-            self.to = at;
-            self.quiet = None;
+    /// Its window is not on show yet: the flight out of the background waits for it, so it
+    /// leaves from the emblem and does not appear half-way to its corner.
+    pub fn wait(&mut self, now: Instant) {
+        if self.phase == OrbPhase::Leaving {
+            self.since = now;
         }
+    }
+
+    /// Sir takes hold of the orb: where he lets go of it counts. False while it flies (then
+    /// it is not his to drag).
+    pub fn grabbed(&mut self) -> bool {
+        if self.phase == OrbPhase::Out {
+            (self.in_hand, self.seen_at, self.quiet) = (true, None, None);
+        }
+        self.phase == OrbPhase::Out
+    }
+
+    /// Once a frame while it is out: `reported` is where Windows says its window stands
+    /// (pixels), `button_down` whether Sir holds the mouse button. Some: he moved it by hand
+    /// and let go there, where it rests from now on. Only after he took hold of it, and only
+    /// a place the window has come to rest at: Windows tells of a move a frame or two late,
+    /// and what it tells of the orb's own flight is not Sir's hand.
+    pub fn let_go(&mut self, reported: egui::Pos2, button_down: bool) -> Option<Rect> {
+        if self.phase != OrbPhase::Out || !self.in_hand {
+            return None;
+        }
+        // (In his hand it does not go back into the background.)
+        self.quiet = None;
+        if button_down || self.seen_at.replace(reported) != Some(reported) {
+            return None;
+        }
+        (self.in_hand, self.seen_at) = (false, None);
+        if (reported - self.to.min).length() <= 3.0 {
+            return None;
+        }
+        self.to = Rect::from_min_size(reported, self.to.size());
+        Some(self.to)
     }
 
     /// Where it rests while it is out.
@@ -697,7 +758,7 @@ mod tests {
         orb.step(ms(540), true, true, home, || rest);
         let out = orb.step(ms(560), true, true, home, || rest).unwrap();
         assert_eq!((out.rect, out.out, out.phase), (rest, 1.0, OrbPhase::Out));
-        assert_eq!(orb.step(ms(60_000), true, false, home, || rest).unwrap().phase, OrbPhase::Out, "busy for a minute: still out");
+        assert_eq!(orb.step(ms(60_000), true, true, home, || rest).unwrap().phase, OrbPhase::Out, "busy for a minute: still out");
         // Quiet: five seconds more, then back.
         assert_eq!(orb.step(ms(60_100), false, true, home, || rest).unwrap().phase, OrbPhase::Out);
         assert_eq!(orb.step(ms(64_900), false, true, home, || rest).unwrap().phase, OrbPhase::Out);
@@ -717,6 +778,82 @@ mod tests {
         // Left alone it is home again, and has no window.
         assert_eq!(orb.step(ms(75_200), false, true, home, || rest), None);
         assert!(orb.is_home());
+        // While its window is not on show yet the flight waits: it leaves from the emblem.
+        let mut waiting = Orb::default();
+        waiting.step(ms(0), true, true, home, || rest);
+        waiting.wait(ms(300));
+        let still = waiting.step(ms(310), true, true, home, || rest).unwrap();
+        assert!((still.rect.center() - home.center()).length() < 1.0 && still.out < 0.01, "{still:?}");
+        assert_eq!(waiting.step(ms(900), true, true, home, || rest).unwrap().phase, OrbPhase::Out, "and then it flies as ever");
+    }
+
+    /// Sir, 2026-11-14: "the orb should only move to the corner when the big orb is blocked by
+    /// something. If not then it should show the original big orb" (wherever on his desktop he
+    /// has put it: `home` is where it stands).
+    #[test]
+    fn the_orb_is_out_only_while_the_emblem_is_hidden() {
+        // (The emblem where Sir dragged it: low on the right of his first monitor.)
+        let home = Rect::from_center_size(pos2(1920.0, 1094.0), vec2(400.0, 400.0));
+        let rest = corner([0, 0, 2560, 1392], 168, None);
+        let t0 = Instant::now();
+        let ms = |n: u64| t0 + Duration::from_millis(n);
+        // Spoken to while the emblem is seen: nothing leaves it, however long he is busy.
+        let mut orb = Orb::default();
+        assert!((0..100).all(|n| orb.step(ms(n * 100), true, false, home, || rest).is_none()));
+        // A window covers it and he is spoken to: out, from where the emblem stands.
+        assert_eq!(orb.step(ms(10_000), true, true, home, || rest).unwrap().rect, home);
+        assert_eq!(orb.step(ms(10_600), true, true, home, || rest).unwrap().phase, OrbPhase::Out);
+        // The window goes: back at once, though he is still speaking, and home again.
+        let back = orb.step(ms(10_700), true, false, home, || rest).unwrap();
+        assert_eq!((back.phase, back.rect), (OrbPhase::Returning, rest));
+        assert!(orb.step(ms(11_300), true, false, home, || rest).is_none() && orb.is_home());
+        // Uncovered while it is still on its way out: it turns back where it is.
+        orb.step(ms(20_000), true, true, home, || rest);
+        let mid = orb.step(ms(20_260), true, true, home, || rest).unwrap();
+        let turned = orb.step(ms(20_262), true, false, home, || rest).unwrap();
+        assert_eq!(turned.phase, OrbPhase::Returning);
+        assert!((turned.rect.center() - mid.rect.center()).length() < 60.0, "no jump: {:?} from {:?}", turned.rect, mid.rect);
+        assert!(orb.step(ms(20_900), true, false, home, || rest).is_none());
+        // In his hand it is not pulled away, seen emblem or not.
+        orb.step(ms(30_000), true, true, home, || rest);
+        orb.step(ms(30_600), true, true, home, || rest);
+        assert!(orb.grabbed());
+        assert_eq!(orb.step(ms(30_700), false, false, home, || rest).unwrap().phase, OrbPhase::Out);
+    }
+
+    /// A window half over the emblem does not send the orb to and fro: hidden from more than
+    /// three tenths of it, seen again under an eighth.
+    #[test]
+    fn the_emblem_is_hidden_or_seen_with_room_between() {
+        assert!(!hidden_now(false, 0.0) && !hidden_now(false, 0.29) && hidden_now(false, 0.31) && hidden_now(false, 1.0));
+        assert!(hidden_now(true, 0.2) && hidden_now(true, 0.12), "still hidden while a good part of it is covered");
+        assert!(!hidden_now(true, 0.1) && !hidden_now(true, 0.0), "seen again");
+        assert!(!hidden_now(false, 0.2), "and not hidden by as much, coming from seen");
+    }
+
+    /// 2026-11-14, Sir's own session: the flight's last frames came 59 ms apart, Windows told
+    /// of the window's place a frame late, and that late word of his own flight was taken for
+    /// Sir's hand: the orb hopped between two spots 5 px apart for good (and wrote each down as
+    /// "where Sir put it"), and never went back into the background.
+    #[test]
+    fn a_late_report_of_its_own_flight_is_not_sirs_hand() {
+        let home = Rect::from_center_size(pos2(1184.0, 781.0), vec2(400.0, 400.0));
+        let rest = corner([2560, 0, 5120, 1392], 168, None);
+        let mut orb = Orb::default();
+        let t0 = Instant::now();
+        // Each frame the window is put where the orb is, and Windows reports where it was put
+        // the frame before (whole pixels).
+        let (mut reported, mut places) = (home.min, Vec::new());
+        for n in (0..7_500).step_by(59) {
+            let Some(frame) = orb.step(t0 + Duration::from_millis(n), n < 1_000, true, home, || rest) else { break };
+            if frame.phase == OrbPhase::Out {
+                assert_eq!(orb.let_go(reported, false), None, "nobody touched it ({n} ms, reported at {reported:?})");
+                places.push(orb.resting().unwrap().min);
+            }
+            reported = orb.resting().map_or(frame.rect.min, |r| r.min).round();
+        }
+        assert!(places.len() > 50 && places.iter().all(|p| *p == rest.min), "it rests in its corner and stays there");
+        assert!(orb.is_home(), "five seconds after he fell silent it is back in the background");
     }
 
     #[test]
@@ -728,8 +865,31 @@ mod tests {
         orb.step(t0, true, true, home, || rest);
         orb.step(t0 + Duration::from_millis(600), true, true, home, || rest);
         let put = Rect::from_min_size(pos2(2000.0, 200.0), vec2(132.0, 132.0));
-        orb.held_at(put);
+        // Not in his hand: wherever its window is said to stand, it rests where it was.
+        assert_eq!(orb.let_go(put.min, false), None);
+        assert_eq!(orb.let_go(put.min, false), None);
+        assert_eq!(orb.resting(), Some(rest));
+        // He takes hold of it and drags: nothing counts while the button is down, nor while
+        // its window is still on its way.
+        orb.grabbed();
+        assert_eq!(orb.let_go(pos2(900.0, 700.0), true), None);
+        assert_eq!(orb.let_go(pos2(900.0, 700.0), true), None, "held still for a moment, the button down");
+        assert_eq!(orb.let_go(pos2(1990.0, 204.0), false), None, "let go: the window's place is told late");
+        assert_eq!(orb.let_go(put.min, false), None);
+        // At rest where he let go: there it stays, told once.
+        assert_eq!(orb.let_go(put.min, false), Some(put));
+        assert_eq!(orb.let_go(put.min, false), None);
         assert_eq!(orb.resting(), Some(put));
         assert_eq!(orb.step(t0 + Duration::from_millis(700), true, true, home, || rest).unwrap().rect, put);
+        // A click that moved nothing leaves it where it is.
+        orb.grabbed();
+        assert_eq!((orb.let_go(put.min, false), orb.let_go(put.min, false)), (None, None));
+        assert_eq!(orb.resting(), Some(put));
+        // While it is in his hand it does not go back into the background under it.
+        orb.grabbed();
+        for n in 0..200u64 {
+            orb.let_go(pos2(n as f32, 0.0), true);
+            assert_eq!(orb.step(t0 + Duration::from_secs(1 + n), false, true, home, || rest).unwrap().phase, OrbPhase::Out);
+        }
     }
 }

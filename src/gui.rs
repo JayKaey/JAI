@@ -2392,7 +2392,7 @@ impl HudApp {
     /// Resize handles on all eight edges and corners of the frameless window (winit gives an
     /// undecorated window no resize border of its own). Each claims the cursor only while it is
     /// hovered or dragged.
-    fn resize_grips(&self, ctx: &egui::Context) {
+    fn resize_grips(ctx: &egui::Context) {
         use egui::viewport::ResizeDirection as Dir;
         use egui::CursorIcon as Cursor;
         let r = ctx.screen_rect();
@@ -3742,8 +3742,8 @@ struct HudApp {
     console_wants_keys: bool,
     /// `JAI_DEMO=desk-click`: how far the stand-in for a click on the desktop has got (frames).
     demo_click: u8,
-    /// The shape the corner orb's window was last given (orb, width, height in pixels).
-    orb_shape: (i32, i32, i32),
+    /// When the corner orb's window came up, and when it was last looked after (`tend_orb`).
+    orb_tended: (Instant, Instant),
 }
 
 /// What the corner orb's window shows in a frame.
@@ -3795,9 +3795,10 @@ fn corner_orb_ui(ui: &mut Ui, emblem: &RoseEmblem, c: &CornerOrbContent) -> OrbC
     } else if response.clicked() {
         did = OrbClick::Console;
     }
-    // A dark disc behind it: over a bright window the emblem's fine lines would be lost.
-    ui.painter().circle_filled(orb.center(), orb.width() * 0.5, rgba([3, 7, 12], 0.82));
-    emblem.paint_in(&ui.painter().with_clip_rect(orb), orb);
+    // Nothing behind it (Sir, 2026-11-14: "the orb in the corner shouldn't have a background
+    // colour"): the window's black is see-through (`win32_desktop::key_out_black`), and the
+    // emblem is painted without the light round its lines, which on black would be a dark veil.
+    emblem.paint_in_crisp(&ui.painter().with_clip_rect(orb), orb);
     if let Some(share) = c.progress {
         let (centre, r) = (orb.center(), orb.width() * 0.5 - 3.0);
         let (from, sweep) = match share {
@@ -4140,7 +4141,7 @@ impl HudApp {
             emblem_spot: (Pos2::ZERO, 0.0),
             console_wants_keys: false,
             demo_click: 0,
-            orb_shape: (0, 0, 0),
+            orb_tended: (Instant::now(), Instant::now()),
         }
     }
 
@@ -5781,27 +5782,43 @@ impl HudApp {
         }
         let p = self.palette;
         let top = screen.top() + 12.0 + HEADER_H + 14.0;
-        let column = egui::Area::new(egui::Id::new("hud_system_column"))
-            .default_pos(pos2(screen.left() + 24.0, top))
-            .order(egui::Order::Middle)
-            .show(ctx, |ui| {
-                ui.set_width(SYSTEM_COLUMN);
-                column_scroll(ui, screen.height() - top - 90.0, |ui| {
-                    for card in &power {
-                        sharp_block(ui, "SYSTEM POWER // CONFIRMATION", "PENDING", |ui| self.power_card(ui, &p, card));
-                    }
-                    for card in &cards {
-                        sharp_block(ui, "WHATSAPP // MESSAGE CARD", "PENDING", |ui| self.message_card(ui, &p, card));
-                    }
-                    if let Some(clip) = &clip {
-                        sharp_block(ui, "INSTANT REPLAY // CLIP", &format!("{} S", clip.seconds), |ui| clip_card(ui, &p, clip));
-                    }
-                    for spec in &widgets {
-                        let label = format!("WIDGET // {}", spec.title.to_uppercase());
-                        sharp_block(ui, &label, short_type_upper(spec), |ui| widget_view::widget_bare(ui, &p, spec, &self.widget_host));
-                    }
-                });
+        let room = screen.height() - top - 90.0;
+        let blocks = |this: &mut Self, ui: &mut Ui| {
+            ui.set_width(SYSTEM_COLUMN);
+            column_scroll(ui, room, |ui| {
+                for card in &power {
+                    sharp_block(ui, "SYSTEM POWER // CONFIRMATION", "PENDING", |ui| this.power_card(ui, &p, card));
+                }
+                for card in &cards {
+                    sharp_block(ui, "WHATSAPP // MESSAGE CARD", "PENDING", |ui| this.message_card(ui, &p, card));
+                }
+                if let Some(clip) = &clip {
+                    sharp_block(ui, "INSTANT REPLAY // CLIP", &format!("{} S", clip.seconds), |ui| clip_card(ui, &p, clip));
+                }
+                for spec in &widgets {
+                    let label = format!("WIDGET // {}", spec.title.to_uppercase());
+                    sharp_block(ui, &label, short_type_upper(spec), |ui| widget_view::widget_bare(ui, &p, spec, &this.widget_host));
+                }
             });
+        };
+        // As the desktop's background the column stands in a window of its own, where it would
+        // stand on the board: as tall as its blocks, Sir's to move (a drag on its ground).
+        if pieces_in_windows(ctx) {
+            const MARGIN: f32 = 10.0;
+            let place = Rect::from_min_size(board_to_screen(ctx, pos2(screen.left() + 24.0, top)), vec2(SYSTEM_COLUMN, 220.0)).expand(MARGIN);
+            piece_window(ctx, ViewportId::from_hash_of("jai_system_column"), "System \u{2014} J.A.I.", place, |ui| {
+                if ui.interact(ui.max_rect(), ui.id().with("system_column_ground"), Sense::drag()).drag_started() {
+                    ui.ctx().send_viewport_cmd(ViewportCommand::StartDrag);
+                }
+                let used = Frame::none().inner_margin(Margin::same(MARGIN)).show(ui, |ui| blocks(self, ui)).response.rect;
+                if (used.height() - ui.ctx().screen_rect().height()).abs() > 2.0 {
+                    ui.ctx().send_viewport_cmd(ViewportCommand::InnerSize(vec2(SYSTEM_COLUMN + 2.0 * MARGIN, used.height())));
+                }
+            });
+            self.system_column_rect = None;
+            return false;
+        }
+        let column = egui::Area::new(egui::Id::new("hud_system_column")).default_pos(pos2(screen.left() + 24.0, top)).order(egui::Order::Middle).show(ctx, |ui| blocks(self, ui));
         // (Where the column stands: new blocks open beside it, not over it. Seen live
         // 2026-11-12: a widget in the column under a block that opened in the same corner.)
         self.system_column_rect = Some(column.response.rect);
@@ -5815,10 +5832,8 @@ impl HudApp {
         let mut present: Option<i64> = None;
         let mut close = false;
         let mut open_window: Option<String> = None;
-        egui::Area::new(egui::Id::new("hud_history"))
-            .default_pos(pos2(screen.right() - 24.0 - size.x, screen.top() + 12.0 + HEADER_H + 14.0))
-            .order(egui::Order::Foreground)
-            .show(ctx, |ui| {
+        floating_block(ctx, "hud_history", "History", pos2(screen.right() - 24.0 - size.x, screen.top() + 12.0 + HEADER_H + 14.0), vec2(size.x, size.y + 120.0), |ui| {
+            {
                 ui.set_width(size.x);
                 // (An area hands on only the height it had before: `column_scroll`.)
                 ui.set_max_height(size.y + 120.0);
@@ -5856,7 +5871,8 @@ impl HudApp {
                         }
                     });
                 });
-            });
+            }
+        });
         if close {
             self.history_open = false;
         }
@@ -5891,10 +5907,8 @@ impl HudApp {
         let name = devices.get(self.camera_device).cloned().unwrap_or_else(|| "DEFAULT CAMERA".into()).to_uppercase();
         let status = crate::camera_feed::status();
         let mut close = false;
-        egui::Area::new(egui::Id::new("hud_camera"))
-            .default_pos(pos2(screen.center().x - 200.0, screen.top() + 12.0 + HEADER_H + 14.0))
-            .order(egui::Order::Foreground)
-            .show(ctx, |ui| {
+        floating_block(ctx, "hud_camera", "Camera", pos2(screen.center().x - 200.0, screen.top() + 12.0 + HEADER_H + 14.0), vec2(400.0, 330.0), |ui| {
+            {
                 ui.set_width(400.0);
                 sharp_block(ui, &format!("CAMERA // {name}"), &status, |ui| {
                     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 225.0), Sense::hover());
@@ -5911,7 +5925,8 @@ impl HudApp {
                         close = true;
                     }
                 });
-            });
+            }
+        });
         if close {
             self.camera_open = false;
             crate::camera_feed::stop();
@@ -7359,13 +7374,75 @@ fn keep_above_hud(ctx: &egui::Context) {
     #[cfg(windows)]
     {
         let (viewport, hud) = (ctx.viewport_id(), SHARED.hwnd.load(Ordering::Acquire));
-        if viewport == ViewportId::ROOT || hud == 0 || lock(&DETACHED_MOTIONS).owned.contains(&viewport) {
+        // (As the desktop's background he owns none of them: an owned window has no key in the
+        // taskbar and no place in Alt+Tab. Sir, 2026-11-14: "real windows like Discord".)
+        let wanted = !crate::wallpaper::in_use();
+        if viewport == ViewportId::ROOT || hud == 0 || lock(&DETACHED_MOTIONS).owned.contains(&viewport) == wanted {
             return;
         }
-        if ctx.input(|i| i.viewport().title.clone()).is_some_and(|title| crate::win32::own_window_titled(&title, hud)) {
-            lock(&DETACHED_MOTIONS).owned.insert(viewport);
+        if ctx.input(|i| i.viewport().title.clone()).is_some_and(|title| crate::win32::own_window_titled(&title, if wanted { hud } else { 0 })) {
+            let mut motions = lock(&DETACHED_MOTIONS);
+            if wanted {
+                motions.owned.insert(viewport);
+            } else {
+                motions.owned.remove(&viewport);
+            }
         }
     }
+}
+
+/// A piece of the board (a block of a report, the column of his system blocks) in a window of
+/// its own, while he is the desktop's background: no frame of Windows', none of his bars (the
+/// piece wears its own header), his icon, a key in the taskbar and a place in Alt+Tab. It
+/// comes up at `place` (screen points) and is Sir's to move, to size and to put in front of
+/// other programs from then on; `body` draws it and may start a drag of the window
+/// (`ViewportCommand::StartDrag`). Never where the HUD has no windows to give
+/// (`Context::embed_viewports`). (Sir, 2026-11-14: "all windows that Jay opens including the
+/// briefing should be real windows like Discord", "not only in-app windows".)
+pub(crate) fn piece_window(ctx: &egui::Context, viewport: ViewportId, title: &str, place: Rect, body: impl FnOnce(&mut Ui)) {
+    detached_keep(ctx, viewport, true);
+    let builder = egui::ViewportBuilder::default().with_title(title).with_app_id("jai").with_decorations(false).with_position(place.min).with_inner_size(place.size()).with_min_inner_size([200.0, 110.0]);
+    let mut body = Some(body);
+    ctx.show_viewport_immediate(viewport, for_test_session(builder), |ctx, _class| {
+        let Some(body) = body.take() else { return };
+        egui::CentralPanel::default().frame(Frame::none().fill(OBSIDIAN)).show(ctx, body);
+        HudApp::resize_grips(ctx);
+        reveal_when_drawn(ctx);
+    });
+}
+
+/// A block of the board's own that floats over it (the history, the camera): an area on the
+/// board at `at`, or, while he is the desktop's background, a window of its own of `size`
+/// that comes up there and is moved by a drag on its ground.
+fn floating_block(ctx: &egui::Context, id: &str, title: &str, at: Pos2, size: Vec2, body: impl FnOnce(&mut Ui)) {
+    if !pieces_in_windows(ctx) {
+        egui::Area::new(egui::Id::new(id)).default_pos(at).order(egui::Order::Foreground).show(ctx, body);
+        return;
+    }
+    const MARGIN: f32 = 10.0;
+    let place = Rect::from_min_size(board_to_screen(ctx, at), size).expand(MARGIN);
+    piece_window(ctx, ViewportId::from_hash_of(("jai_floating_block", id)), &format!("{title} \u{2014} J.A.I."), place, |ui| {
+        if ui.interact(ui.max_rect(), ui.id().with("floating_block_ground"), Sense::drag()).drag_started() {
+            ui.ctx().send_viewport_cmd(ViewportCommand::StartDrag);
+        }
+        Frame::none().inner_margin(Margin::same(MARGIN)).show(ui, body);
+    });
+}
+
+/// The piece's window is gone (its piece left the board): nothing of it counts for a next one.
+pub(crate) fn piece_window_gone(viewport: ViewportId) {
+    lock(&DETACHED_MOTIONS).forget(viewport);
+}
+
+/// Whether the board's pieces stand in windows of their own: while he is the desktop's
+/// background, where the HUD has windows to give.
+pub(crate) fn pieces_in_windows(ctx: &egui::Context) -> bool {
+    crate::wallpaper::in_use() && !ctx.embed_viewports()
+}
+
+/// Where the point `at` of the board (its own points) is on the screen (points).
+pub(crate) fn board_to_screen(ctx: &egui::Context, at: Pos2) -> Pos2 {
+    ctx.input(|i| i.viewport().inner_rect).map_or(at, |r| r.min + at.to_vec2())
 }
 
 /// A window of JAI's own comes up hidden (`for_test_session`) and shows once it has drawn a
@@ -7546,7 +7623,7 @@ fn reveal_overdue(ctx: &egui::Context, motions: &mut DetachedMotions, viewport: 
         {
             let hud = SHARED.hwnd.load(Ordering::Acquire);
             let title = ctx.input(|i| i.raw.viewports.get(&viewport).and_then(|v| v.title.clone()));
-            if hud != 0 && title.is_some_and(|title| crate::win32::own_window_titled(&title, hud)) {
+            if hud != 0 && !crate::wallpaper::in_use() && title.is_some_and(|title| crate::win32::own_window_titled(&title, hud)) {
                 motions.owned.insert(viewport);
             }
         }
@@ -8875,7 +8952,7 @@ impl HudApp {
             // (Neither the fullscreen board nor the one across the monitors is resized by hand,
             // nor the desktop's background.)
             if iface.frameless && !iface.fullscreen && !iface.span_all_monitors && !maximized && !self.as_background() {
-                self.resize_grips(ctx);
+                Self::resize_grips(ctx);
             }
             // As the desktop's background: the orb that leaves it when Sir speaks to him unseen.
             self.corner_orb_frame(ctx, &m, &iface);
@@ -8891,6 +8968,19 @@ impl HudApp {
         settle_new_areas(ctx);
         // (Which of his keys the pointer over the desktop is on, for the mouse hook.)
         crate::wallpaper::after_frame(ctx);
+        // A scripted session's board to look at (`JAI_DEMO=board`): the verifier's sample
+        // report, put up once in its 10th second (nothing of Sir's is in it).
+        if demo("board") && hud_age() > 10.0 {
+            static SHOWN: std::sync::Once = std::sync::Once::new();
+            SHOWN.call_once(|| {
+                crate::hud_board::present(crate::visual_ui_verifier::sample_report(5, 0));
+            });
+        }
+        // (`JAI_DEMO=history`: the history, which only a click on its key opens, in its 12th second.)
+        if demo("history") && hud_age() > 12.0 {
+            static OPENED: std::sync::Once = std::sync::Once::new();
+            OPENED.call_once(|| self.history_open = true);
+        }
         // A scripted session's stand-in for Sir's mouse on the desktop (`JAI_DEMO=desk-click`):
         // from its 16th second the pointer comes to rest on `[ CHANGES ]`, presses it and lets
         // go, by the way the hook's events take from `wallpaper::took` on. The log says
@@ -9122,7 +9212,6 @@ impl HudApp {
         let Some(frame) = frame else {
             if !was_home {
                 info!("[DESKTOP] The orb is back in the background");
-                lock(&DETACHED_MOTIONS).forget(viewport);
             }
             return;
         };
@@ -9146,17 +9235,13 @@ impl HudApp {
         const WORDS_WIDTH: f32 = 380.0;
         let window_px = if words { vec2(orb_px + (12.0 + WORDS_WIDTH) * ppp, orb_px.max(96.0 * ppp)) } else { Vec2::splat(orb_px) };
         // Sir moved it by hand: it rests where he let go, and comes out there on that monitor.
-        if resting && !ctx.input(|i| i.pointer.any_down()) {
-            if let Some(actual) = ctx.input(|i| i.raw.viewports.get(&viewport).and_then(|v| v.outer_rect)) {
-                let at = pos2((actual.min.x * ppp).round(), (actual.min.y * ppp).round());
-                if (at - frame.rect.min).length() > 3.0 && lock(&DETACHED_MOTIONS).revealed.contains(&viewport) {
-                    let moved = Rect::from_min_size(at, frame.rect.size());
-                    self.corner_orb.held_at(moved);
-                    let monitors = crate::monitors::recent();
-                    if let Some(on) = monitors.iter().find(|m| m.contains(moved.center().x as i32, moved.center().y as i32)) {
-                        crate::wallpaper::remember_spot(on.work, crate::wallpaper::spot_of(on.work, orb_px as i32, at));
-                        info!("[DESKTOP] Sir put the orb at {:.0},{:.0}: its place on that monitor from now on", at.x, at.y);
-                    }
+        if let Some(actual) = ctx.input(|i| i.raw.viewports.get(&viewport).and_then(|v| v.outer_rect)) {
+            let at = pos2((actual.min.x * ppp).round(), (actual.min.y * ppp).round());
+            if let Some(moved) = self.corner_orb.let_go(at, crate::wallpaper::button_down()) {
+                let monitors = crate::monitors::recent();
+                if let Some(on) = monitors.iter().find(|m| m.contains(moved.center().x as i32, moved.center().y as i32)) {
+                    crate::wallpaper::remember_spot(on.work, crate::wallpaper::spot_of(on.work, orb_px as i32, at));
+                    info!("[DESKTOP] Sir put the orb at {:.0},{:.0}: its place on that monitor from now on", at.x, at.y);
                 }
             }
         }
@@ -9169,22 +9254,31 @@ impl HudApp {
             .with_taskbar(false)
             .with_resizable(false)
             .with_window_level(egui::viewport::WindowLevel::AlwaysOnTop)
-            // (Beside a game it takes no click: the game keeps its mouse.)
-            .with_mouse_passthrough(gaming)
             .with_position(pos2(at.x / ppp, at.y / ppp))
             .with_inner_size(window_px / ppp);
+        // (It comes up hidden, as every window of his.)
         let builder = for_test_session(builder);
-        detached_keep(ctx, viewport, true);
-        // The window's shape: a disc for the orb and the plate beside it. (Whether its surface
-        // can be see-through depends on the graphics set-up; its shape does not.)
+        // Its window is looked after from here, not through the viewport's own commands
+        // (`win32_desktop::tend_orb`): its black is see-through, beside a game it takes no click
+        // (the game keeps its mouse), and it shows itself once it has drawn. Every frame while
+        // it is new, then a few times a second.
         #[cfg(windows)]
         {
-            let shape = (orb_px as i32, window_px.x.round() as i32, window_px.y.round() as i32);
-            if shape != self.orb_shape && lock(&DETACHED_MOTIONS).revealed.contains(&viewport) {
-                self.orb_shape = shape;
+            if was_home {
+                self.orb_tended = (now, now.checked_sub(Duration::from_secs(1)).unwrap_or(now));
+                crate::win32_desktop::orb_sets_out();
+            }
+            let (born, last) = self.orb_tended;
+            // (Its flight out begins once its window is on show; it waits a second for that at most.)
+            if !crate::win32_desktop::orb_on_show() && now.duration_since(born) < Duration::from_secs(1) {
+                self.corner_orb.wait(now);
+            }
+            if now.duration_since(born) < Duration::from_millis(1500) || now.duration_since(last) > Duration::from_millis(300) {
+                self.orb_tended.1 = now;
+                let drawn = ctx.cumulative_pass_nr_for(viewport) > 0;
                 crate::win32::run_detached(move || {
                     if let Some(hwnd) = crate::win32::own_window("J.A.I. // orb") {
-                        crate::win32_desktop::shape_orb(hwnd, shape.0, shape.1, shape.2);
+                        crate::win32_desktop::tend_orb(hwnd, gaming, drawn);
                     }
                 });
             }
@@ -9207,7 +9301,6 @@ impl HudApp {
         let emblem = &self.emblem;
         ctx.show_viewport_immediate(viewport, builder, |ctx, _class| {
             egui::CentralPanel::default().frame(Frame::none()).show(ctx, |ui| did = corner_orb_ui(ui, emblem, &content));
-            reveal_when_drawn(ctx);
         });
         match did {
             OrbClick::Board => self.app.config().update(|c| c.interface.desktop_background = false),
@@ -9215,7 +9308,8 @@ impl HudApp {
                 self.console_open = true;
                 self.console_focus = true;
             }
-            OrbClick::Drag => ctx.send_viewport_cmd_to(viewport, ViewportCommand::StartDrag),
+            OrbClick::Drag if self.corner_orb.grabbed() => ctx.send_viewport_cmd_to(viewport, ViewportCommand::StartDrag),
+            OrbClick::Drag => {}
             OrbClick::Yes => self.command(HudCommand::Chat { text: "yes".into() }),
             OrbClick::No => crate::ask_first::drop_it(),
             OrbClick::Choice(k) => crate::did_you_mean::pick(k),
