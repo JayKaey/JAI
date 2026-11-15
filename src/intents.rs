@@ -1027,7 +1027,7 @@ static SELECTION: LazyLock<Regex> = LazyLock::new(|| {
 });
 /// A specific monitor to look at.
 static LOOK_MONITOR: LazyLock<Regex> = LazyLock::new(|| {
-    re(r"\b(?:look at|check|read|scan|what(?:s| is) on|whats happening on|summari[sz]e(?: what(?:s| is) on)?|describe|schau (?:dir )?|schau auf|was ist auf|was passiert auf|lies)\s+((?:the\s+|my\s+|den\s+|meinen\s+|dem\s+|meinem\s+)?(?:(?:first|second|third|other|left|right|primary|main|erste[nm]?|zweite[nm]?|dritte[nm]?|andere[nm]?|linke[nm]?|rechte[nm]?|haupt)\s*(?:monitor|screen|display|bildschirm)|(?:monitor|screen|display|bildschirm)\s*(?:\d|one|two|three|eins|zwei|drei)))\b")
+    re(r"\b(?:look at|check|read|scan|what(?:s| is) on|whats happening on|what (?:can|do) you see on|what(?:s| is) (?:visible|shown|showing|open) on|summari[sz]e(?: what(?:s| is) on)?|describe|schau (?:dir )?|schau auf|was ist auf|was passiert auf|was siehst du auf|lies)\s+((?:the\s+|my\s+|den\s+|meinen\s+|dem\s+|meinem\s+)?(?:(?:first|second|third|other|left|right|primary|main|erste[nm]?|zweite[nm]?|dritte[nm]?|andere[nm]?|linke[nm]?|rechte[nm]?|haupt)\s*(?:monitor|screen|display|bildschirm)|(?:monitor|screen|display|bildschirm)\s*(?:\d|one|two|three|eins|zwei|drei)))\b")
 });
 /// "What does this error mean?", "what's that error?", "explain this code".
 static SCREEN_ERROR: LazyLock<Regex> = LazyLock::new(|| {
@@ -1342,6 +1342,11 @@ pub fn normalize_phrase(text: &str) -> String {
 pub fn ui_layout_command(text: &str) -> Option<Value> {
     let s = normalize(text);
     if s.is_empty() || s.split_whitespace().count() > 32 {
+        return None;
+    }
+    // A feature asked for in its own words is that feature's ("hide the words beside the orb"
+    // hid the orb's panel, seen live 2026-11-14: these are asked before the fast path).
+    if crate::hud_feel::command(&s).is_some() {
         return None;
     }
     interface::layout_command(&s)
@@ -5687,6 +5692,47 @@ mod tests {
         }
     }
 
+    /// 2026-11-14, Sir's session: "Can you show me a clock?" had no answer. The clock on the
+    /// desktop, the plate beside the corner orb and what comes next are asked for in words; a
+    /// question about what comes next is answered by showing it, and changes nothing.
+    #[test]
+    fn the_desktop_clock_and_what_comes_next_are_asked_for_in_words() {
+        let hud = |text: &str| match tool(text) {
+            Some(("configure_interface", args)) => Some(args),
+            _ => None,
+        };
+        assert_eq!(hud("Can you show me a clock?"), Some(json!({"desk_clock": true})));
+        assert_eq!(hud("JAI, hide the clock"), Some(json!({"desk_clock": false})));
+        assert_eq!(hud("Clock with seconds"), Some(json!({"desk_clock_seconds": true})));
+        assert_eq!(hud("Hide the words beside the orb"), Some(json!({"orb_words": false})));
+        assert_eq!(hud("Make the corner orb smaller"), Some(json!({"corner_orb_size": "smaller"})));
+        // What comes next is his to say from a glance at Sir's day that tells it; where none
+        // does, the model asks the calendar and the timetable.
+        let _turn = crate::idle_screen::GLANCE_TURN.lock().unwrap_or_else(|e| e.into_inner());
+        crate::idle_screen::show_glance(crate::idle_screen::Glance::default());
+        assert_eq!(tool("What's next?"), None);
+        crate::idle_screen::show_glance(crate::idle_screen::Glance { next: Some(("Physics".into(), chrono::Local::now().naive_local() + chrono::Duration::minutes(25), "204".into())), ..Default::default() });
+        for asked in ["What's next?", "JAI, what comes next today?", "What is next?"] {
+            assert_eq!(hud(asked), Some(json!({"next_now": true})), "{asked}");
+            assert!(!beyond_the_question(asked, "configure_interface", &json!({"next_now": true})), "{asked}");
+        }
+        assert!(!beyond_the_question("What did I miss?", "configure_interface", &json!({"missed": true})));
+        // Seen live 2026-11-14: "hide the words beside the orb" hid the orb's panel. The
+        // layout's words are asked before the fast path, and took "hide … orb" for theirs.
+        for said in ["Hide the words beside the orb", "JAI, show the words next to the orb", "Make the corner orb smaller", "Hide the clock"] {
+            assert_eq!(ui_layout_command(said), None, "{said}");
+        }
+        assert!(ui_layout_command("Hide the system panel").is_some() && ui_layout_command("Make the orb bigger").is_some(), "the layout keeps its own words");
+        // Nor does any other router that is asked before the fast path take the new words.
+        for said in ["Show me a clock", "Hide the clock", "Clock with seconds", "12 hour clock", "What's next?", "What comes next today?", "Hide the words beside the orb", "Make the corner orb smaller", "Keep the console on top", "Put the console on the left half", "Move the text console to another monitor"] {
+            assert!(mixer_command(said).is_none() && internal_view_command(said).is_none() && ui_layout_command(said).is_none(), "{said}");
+            assert!(crate::integration_router::capability_topic(said).is_none() && crate::integration_router::route_text(said).is_none() && crate::features::route_text(said).is_none(), "{said}");
+        }
+        // What time it is stays a reading; the next song stays the music's.
+        assert_ne!(hud("What time is it?"), Some(json!({"desk_clock": true})));
+        assert_eq!(hud("Next song"), None);
+    }
+
     #[test]
     fn restyling_the_hud() {
         let hud = |text: &str| match tool(text) {
@@ -6040,6 +6086,10 @@ mod tests {
         assert_eq!(upfront_tool("JAI, what does this error mean?").unwrap().1["mode"], "active_window");
         assert_eq!(upfront_tool("Look at my second monitor"), Some(("inspect_screen_or_selection", json!({"mode": "monitor", "target_monitor": 2}))));
         assert_eq!(upfront_tool("Summarize what's on monitor 1").unwrap().1["target_monitor"], 1);
+        // (Sir, 2026-11-14: he was told what his first monitor showed.)
+        assert_eq!(upfront_tool("What can you see on my second monitor?"), Some(("inspect_screen_or_selection", json!({"mode": "monitor", "target_monitor": 2}))));
+        assert_eq!(upfront_tool("What do you see on the left screen?").unwrap().1["target_monitor"], "left");
+        assert_eq!(upfront_tool("Was siehst du auf dem zweiten Bildschirm?").unwrap().1["target_monitor"], 2);
         assert_eq!(upfront_tool("Refactor the code I selected"), Some(("inspect_screen_or_selection", json!({"mode": "selection"}))));
         assert_eq!(upfront_tool("Translate the highlighted text").unwrap().1["mode"], "selection");
         assert_eq!(upfront_tool("Erklär mir den markierten Code").unwrap().1["mode"], "selection");

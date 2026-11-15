@@ -316,6 +316,8 @@ pub struct EmblemFrame {
     pub centre: Pos2,
     /// Radius of the outermost front ring.
     pub radius: f32,
+    /// That radius at rest: without the rings' swell with his listening, his voice, the music.
+    pub rest: f32,
     /// 0 = thinking stack, 1 = front emblem.
     pub flat: f32,
     /// 0 = centre, 1 = corner.
@@ -692,6 +694,9 @@ pub struct RoseEmblem {
     /// (eased towards it; None until the first frame).
     custom_home: Option<Vec2>,
     home_now: Option<Vec2>,
+    /// Each monitor's part of a canvas that reaches over more than one (empty: one screen):
+    /// Sir's spot may lie in any of them.
+    rooms: Vec<Rect>,
     /// What he is doing, and how far the emblem has eased into listening and into thinking.
     mood: Mood,
     listen: f32,
@@ -727,6 +732,7 @@ impl RoseEmblem {
             idle_morph: IdleMorph::new(0x9E37_79B9),
             custom_home: None,
             home_now: None,
+            rooms: Vec::new(),
             mood: Mood::Rest,
             listen: 0.0,
             think: 0.0,
@@ -735,10 +741,26 @@ impl RoseEmblem {
         }
     }
 
-    /// Puts the emblem anywhere on the canvas (`at`: fractions 0-1, None = back home); it glides
-    /// there from wherever it is.
+    /// Puts the emblem anywhere on the canvas (`at`: fractions of the screen it is drawn for,
+    /// beyond 0-1 on another monitor of a canvas that reaches there; None = back home); it
+    /// glides there from wherever it is.
     pub fn set_custom_home(&mut self, at: Option<Vec2>) {
-        self.custom_home = at.map(|f| vec2(f.x.clamp(0.0, 1.0), f.y.clamp(0.0, 1.0)));
+        self.custom_home = at.map(|f| vec2(f.x.clamp(-8.0, 8.0), f.y.clamp(-8.0, 8.0)));
+    }
+
+    /// Each monitor's part of the canvas, when it reaches over more than one: the emblem may
+    /// stand on any of them. (Sir, 2026-11-14: "I want to be able to move the orb between
+    /// monitors too".)
+    pub fn set_rooms(&mut self, rooms: &[Rect]) {
+        if self.rooms != rooms {
+            self.rooms = rooms.to_vec();
+        }
+    }
+
+    /// The monitor's part the point `p` of the canvas lies in (else the nearest one; `screen`
+    /// on a canvas of one screen).
+    pub fn room_at(&self, screen: Rect, p: Pos2) -> Rect {
+        self.rooms.iter().copied().min_by(|a, b| a.distance_sq_to_pos(p).total_cmp(&b.distance_sq_to_pos(p))).unwrap_or(screen)
     }
 
     pub fn custom_home(&self) -> Option<Vec2> {
@@ -751,16 +773,17 @@ impl RoseEmblem {
         self.home_now = self.custom_home;
     }
 
-    /// The undocked centre and radius on `screen`: Sir's spot (kept a radius inside the canvas),
-    /// else the middle (left of the text console when it would cut in).
+    /// The undocked centre and radius on `screen`: Sir's spot (kept a radius inside the monitor
+    /// it lies on), else the middle (left of the text console when it would cut in).
     fn home_target(&self, screen: Rect) -> (Vec2, f32) {
         let (home, radius) = home_pose(screen, self.console_width);
         let to_frac = |p: Pos2| vec2((p.x - screen.left()) / screen.width().max(1.0), (p.y - screen.top()) / screen.height().max(1.0));
         match self.custom_home {
             Some(f) => {
-                let r = centre_radius(screen);
                 let p = screen.min + vec2(f.x * screen.width(), f.y * screen.height());
-                let p = pos2(p.x.clamp(screen.left() + r, (screen.right() - r).max(screen.left() + r)), p.y.clamp(screen.top() + r, (screen.bottom() - r).max(screen.top() + r)));
+                let room = self.room_at(screen, p);
+                let r = centre_radius(room);
+                let p = pos2(p.x.clamp(room.left() + r, (room.right() - r).max(room.left() + r)), p.y.clamp(room.top() + r, (room.bottom() - r).max(room.top() + r)));
                 (to_frac(p), r)
             }
             None => (to_frac(home), radius),
@@ -885,7 +908,7 @@ impl RoseEmblem {
         let radius = home_radius + (DOCKED_DIAMETER / 2.0 - home_radius) * dock;
         // At home the rings open a little while he listens and swell with his own voice.
         let alive = 1.0 + (1.0 - dock) * (LISTEN_OPEN * self.listen + MUSIC_PULSE * self.music + if self.mood == Mood::Speaking { VOICE_PULSE * self.voice } else { 0.0 });
-        EmblemFrame { centre, radius: radius * alive, flat, dock }
+        EmblemFrame { centre, radius: radius * alive, rest: radius, flat, dock }
     }
 
     /// The thinking stack for a frame (its breathing spread).
@@ -1247,9 +1270,22 @@ mod tests {
         }
     }
 
+    /// What is sized by the emblem (the corner orb, the clock under it) goes by its size at rest:
+    /// with the music's bass in it every frame, the orb glided to a new size without end.
+    #[test]
+    fn its_size_at_rest_does_not_swell() {
+        let screen = Rect::from_min_size(Pos2::ZERO, vec2(1920.0, 1080.0));
+        let mut emblem = RoseEmblem::new(RoseEmblemState::AwakeFrontEmblem);
+        let still = emblem.frame(screen);
+        emblem.set_music(1.0);
+        let swollen = emblem.frame(screen);
+        assert!(swollen.radius > still.radius, "it swells with the bass");
+        assert_eq!((swollen.rest, still.rest), (still.radius, still.radius));
+    }
+
     #[test]
     fn front_state_is_seven_flat_concentric_rings() {
-        let f = EmblemFrame { centre: pos2(100.0, 100.0), radius: 50.0, flat: 1.0, dock: 0.0 };
+        let f = EmblemFrame { centre: pos2(100.0, 100.0), radius: 50.0, rest: 50.0, flat: 1.0, dock: 0.0 };
         for (i, radius_px) in RING_RADII_PX.iter().enumerate() {
             for p in ring_points(&f, i, 0.3, 32) {
                 let r = (p - f.centre).length();
@@ -1652,6 +1688,31 @@ mod tests {
         assert_eq!(safe_dt(5.0), 0.033);
         assert_eq!(safe_dt(f32::NAN), 0.016);
         assert!((approach(0.3, 1.0, 14.0, 0.016) - 0.3).abs() > 0.0, "eases from the mid-flight value");
+    }
+
+    /// 2026-11-14, Sir: "I want to be able to move the orb between monitors too". Its spot
+    /// was a share of his first screen between 0 and 1, and it was kept on that screen.
+    #[test]
+    fn the_emblem_stands_on_any_monitor_of_a_canvas_over_several() {
+        let s = screen();
+        let second = Rect::from_min_size(pos2(s.right(), 0.0), s.size());
+        let mut e = RoseEmblem::new(RoseEmblemState::AwakeFrontEmblem);
+        e.set_rooms(&[s, second]);
+        e.drag_to(vec2(1.5, 0.5));
+        assert!((e.frame(s).centre - second.center()).length() < 1.0, "in the middle of the second monitor: {:?}", e.frame(s).centre);
+        // Let go beyond its far corner: kept a radius inside that monitor.
+        e.set_custom_home(Some(vec2(2.4, 1.3)));
+        for _ in 0..240 {
+            e.glide(s, 1.0 / 60.0);
+        }
+        let (at, r) = (e.frame(s).centre, centre_radius(second));
+        assert!((at - pos2(second.right() - r, second.bottom() - r)).length() < 2.0, "{at:?}");
+        // A canvas of one screen: the same spot is kept on it.
+        e.set_rooms(&[]);
+        for _ in 0..240 {
+            e.glide(s, 1.0 / 60.0);
+        }
+        assert!(s.contains(e.frame(s).centre), "{:?}", e.frame(s).centre);
     }
 
     #[test]

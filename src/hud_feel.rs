@@ -109,6 +109,33 @@ static PHRASES: LazyLock<Vec<(Regex, Value)>> = LazyLock::new(|| {
         p(r"^(?:obey\s+(?:everyone|everybody|anyone)|listen\s+to\s+(?:everyone|everybody|anyone)(?:\s+again)?|voice\s+lock\s+off|h(?:ö|oe)r\s+auf\s+alle)$", json!({"voice_lock": false})),
         // Everything in one place.
         p(r"^(?:(?:open|show)\s+(?:me\s+)?(?:the\s+|your\s+|all\s+)?settings(?:\s+panel)?|settings|einstellungen(?:\s+(?:öffnen|zeigen))?)$", json!({"settings_panel": true})),
+        // What is being said, beside the corner orb or not. (Sir, 2026-11-14.)
+        p(
+            r"^(?:show\s+(?:me\s+)?(?:the\s+)?(?:words|text|info(?:rmation)?(?:\s+window)?)\s+(?:beside|next\s+to|by|at)\s+(?:the\s+|your\s+)?orb|(?:corner\s+)?orb\s+(?:words|text|info(?:rmation)?)\s+on|(?:the\s+)?info(?:rmation)?\s+window\s+on|zeig\s+(?:mir\s+)?(?:den\s+)?text\s+neben\s+(?:der\s+kugel|dem\s+orb))$",
+            json!({"orb_words": true}),
+        ),
+        p(
+            r"^(?:hide\s+(?:the\s+)?(?:words|text|info(?:rmation)?(?:\s+window)?)\s+(?:beside|next\s+to|by|at)\s+(?:the\s+|your\s+)?orb|(?:corner\s+)?orb\s+(?:words|text|info(?:rmation)?)\s+off|(?:the\s+)?info(?:rmation)?\s+window\s+off|(?:the\s+)?(?:corner\s+)?orb\s+without\s+(?:the\s+|its\s+)?(?:words|text)|kein(?:en)?\s+text\s+neben\s+(?:der\s+kugel|dem\s+orb))$",
+            json!({"orb_words": false}),
+        ),
+        // The clock on the desktop: there or not, its seconds, twelve hours or twenty-four, its date.
+        p(r"^(?:(?:show|give)\s+(?:me\s+)?(?:a|the|your)\s+clock|(?:show|put)\s+(?:a|the)\s+clock\s+on\s+(?:the|my)\s+(?:desktop|screen|background)|(?:desktop\s+)?clock\s+on|zeig\s+(?:mir\s+)?(?:eine|die)\s+uhr|uhr\s+an)$", json!({"desk_clock": true})),
+        p(r"^(?:(?:hide|remove)\s+the\s+clock|(?:desktop\s+)?clock\s+off|no\s+clock|blende?\s+die\s+uhr\s+aus|uhr\s+aus|keine\s+uhr)$", json!({"desk_clock": false})),
+        p(r"^(?:(?:the\s+)?clock\s+with\s+(?:the\s+)?seconds|show\s+(?:me\s+)?the\s+seconds|(?:clock\s+)?seconds\s+on|uhr\s+mit\s+sekunden|sekunden\s+an)$", json!({"desk_clock_seconds": true})),
+        p(r"^(?:(?:the\s+)?clock\s+without\s+(?:the\s+)?seconds|hide\s+the\s+seconds|no\s+seconds|(?:clock\s+)?seconds\s+off|uhr\s+ohne\s+sekunden|sekunden\s+aus)$", json!({"desk_clock_seconds": false})),
+        p(r"^(?:(?:a\s+|the\s+)?(?:12|twelve)\s*-?\s*hour\s+clock|(?:the\s+)?clock\s+in\s+(?:12|twelve)\s+hours|am\s*pm\s+clock|(?:12|zw(?:ö|oe)lf)\s*-?\s*stunden\s*-?\s*uhr)$", json!({"desk_clock_12h": true})),
+        p(r"^(?:(?:a\s+|the\s+)?(?:24|twenty\s*-?\s*four)\s*-?\s*hour\s+clock|(?:the\s+)?clock\s+in\s+(?:24|twenty\s*-?\s*four)\s+hours|24\s*-?\s*stunden\s*-?\s*uhr)$", json!({"desk_clock_12h": false})),
+        p(r"^(?:(?:show\s+(?:me\s+)?)?the\s+date\s+(?:under|with|on|by)\s+the\s+clock|(?:the\s+)?clock\s+with\s+(?:the\s+)?date|(?:clock\s+)?date\s+on|uhr\s+mit\s+datum|datum\s+an)$", json!({"desk_clock_date": true})),
+        p(r"^(?:hide\s+the\s+date|(?:the\s+)?clock\s+without\s+(?:the\s+)?date|no\s+date|(?:clock\s+)?date\s+off|uhr\s+ohne\s+datum|datum\s+aus)$", json!({"desk_clock_date": false})),
+        // What comes next stands beside the emblem only when he is asked.
+        p(
+            r"^(?:what(?:'?s|\s+s|\s+is|\s+comes)\s+(?:up\s+)?next(?:\s+(?:today|for\s+me|on\s+my\s+(?:day|schedule)))?|what\s+do\s+i\s+have\s+next|show\s+(?:me\s+)?what(?:'?s|\s+s|\s+is|\s+comes)\s+next|was\s+(?:kommt|steht)\s+als\s+n(?:ä|ae)chstes(?:\s+an)?|was\s+steht\s+an)$",
+            json!({"next_now": true}),
+        ),
+        // The corner orb's size.
+        p(r"^(?:(?:make\s+)?(?:the\s+|your\s+)?corner\s+orb\s+(?:bigger|larger)|(?:a\s+)?(?:bigger|larger)\s+corner\s+orb)$", json!({"corner_orb_size": "bigger"})),
+        p(r"^(?:(?:make\s+)?(?:the\s+|your\s+)?corner\s+orb\s+smaller|(?:a\s+)?smaller\s+corner\s+orb)$", json!({"corner_orb_size": "smaller"})),
+        p(r"^(?:(?:the\s+|your\s+)?corner\s+orb\s+(?:size\s+)?(?:normal|back\s+to\s+normal)|reset\s+(?:the\s+|your\s+)?corner\s+orb(?:\s+size)?)$", json!({"corner_orb_size": "normal"})),
     ]
 });
 
@@ -167,6 +194,10 @@ pub fn command(s: &str) -> Option<Value> {
         return Some(args);
     }
     if let Some((_, args)) = PHRASES.iter().find(|(pattern, _)| pattern.is_match(s)) {
+        // (What comes next is his to say only from a glance at Sir's day that tells it.)
+        if args["next_now"] == true && next_now().is_none() {
+            return None;
+        }
         return Some(args.clone());
     }
     let c = SWITCH.captures(s)?;
@@ -182,6 +213,11 @@ pub fn command(s: &str) -> Option<Value> {
 /// Whether a game (or another program that fills its screen) is in front: the live words and
 /// the subtitles pause then, so they cost the game nothing. Looked up at most every 3 s.
 pub fn game_in_front() -> bool {
+    // (A scripted session can ask to be looked at as it is with no game in front, while Sir
+    // plays on his other monitor: `JAI_DEMO=no-game`.)
+    if crate::platform::demo("no-game") {
+        return false;
+    }
     static SEEN: Mutex<Option<(std::time::Instant, bool)>> = Mutex::new(None);
     let mut seen = lock(&SEEN);
     if let Some((at, gaming)) = *seen {
@@ -223,7 +259,8 @@ pub fn is_game(process: &str) -> bool {
 
 /// The arguments that are requests of the moment, not settings (`interface::configure` names
 /// them in its summary; `apply` carries them out).
-pub const RUNTIME_KEYS: [(&str, &str); 8] = [
+pub const RUNTIME_KEYS: [(&str, &str); 9] = [
+    ("next_now", "what comes next"),
     ("night_now", "night mode"),
     ("subtitles", "subtitles"),
     ("subtitles_translate", "subtitle translation"),
@@ -238,7 +275,35 @@ pub const RUNTIME_KEYS: [(&str, &str); 8] = [
 /// (`brain::tests::the_whole_prompt_fits_the_context_window`), and these are said in words the
 /// fast path knows.
 #[cfg(test)]
-pub const UNLISTED: [&str; 2] = ["background_all_monitors", "windows_on_call"];
+pub const UNLISTED: [&str; 9] = ["background_all_monitors", "windows_on_call", "orb_words", "desk_clock", "desk_clock_seconds", "desk_clock_12h", "desk_clock_date", "next_now", "corner_orb_size"];
+
+/// How long what comes next stands beside the emblem once Sir asked for it.
+const NEXT_SHOWN: std::time::Duration = std::time::Duration::from_secs(10);
+/// Until when it stands there. (Sir, 2026-11-14: "I don't want the next thing on my screen".)
+static NEXT_UNTIL: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+
+/// Whether what comes next is on show right now ("what's next?").
+pub fn next_shown() -> bool {
+    lock(&NEXT_UNTIL).is_some_and(|until| std::time::Instant::now() < until)
+}
+
+/// What comes next as he says it: the lesson and the appointment of a glance at Sir's day, all
+/// still ahead at `now`. None where the glance cannot tell: nothing in it, or a lesson or an
+/// appointment in it has begun since and hides the one after it (the model asks the calendar
+/// and the timetable).
+pub fn next_spoken(glance: &crate::idle_screen::Glance, now: NaiveDateTime) -> Option<String> {
+    let known: Vec<_> = [&glance.lesson, &glance.next].into_iter().flatten().collect();
+    if known.is_empty() || known.iter().any(|(_, start, _)| *start <= now) {
+        return None;
+    }
+    let ahead: Vec<String> = known.iter().map(|(title, start, place)| crate::idle_screen::next_line(title, *start, place, now).replace("  ·  ", ", ")).collect();
+    Some(format!("Next, Sir: {}.", ahead.join("; then ")))
+}
+
+/// What comes next, from the last glance at Sir's day while it is fresh.
+fn next_now() -> Option<String> {
+    next_spoken(&crate::idle_screen::fresh_glance()?, chrono::Local::now().naive_local())
+}
 
 /// Tonight's night mode as Sir set it by hand: (on, the morning it lapses).
 static NIGHT_OVERRIDE: Mutex<Option<(bool, NaiveDateTime)>> = Mutex::new(None);
@@ -398,6 +463,10 @@ pub fn apply(args: &Value) {
     if flag(args, "windows_on_call") == Some(true) {
         crate::gui::windows_on_call();
     }
+    if flag(args, "next_now") == Some(true) {
+        *lock(&NEXT_UNTIL) = Some(std::time::Instant::now() + NEXT_SHOWN);
+        crate::gui::refresh();
+    }
     if let Some(on) = flag(args, "voice_guest") {
         if on {
             let minutes = args.get("voice_guest_minutes").and_then(Value::as_u64).unwrap_or(GUEST_MINUTES);
@@ -488,6 +557,32 @@ pub fn spoken(args: &Value) -> Option<String> {
     if on("settings_panel") == Some(true) {
         return Some("Everything I can be set to, Sir, in one place.".to_string());
     }
+    if let Some(v) = on("orb_words") {
+        return say("What is said stands beside the orb again, Sir.", "Just the orb from now on, Sir.", v);
+    }
+    if let Some(v) = on("desk_clock_seconds") {
+        return say("With its seconds, Sir.", "Without the seconds, Sir.", v);
+    }
+    if let Some(v) = on("desk_clock_12h") {
+        return say("Twelve hours it is, Sir.", "Twenty-four hours it is, Sir.", v);
+    }
+    if let Some(v) = on("desk_clock_date") {
+        return say("The date stands under the clock, Sir.", "The clock alone, Sir.", v);
+    }
+    if let Some(v) = on("desk_clock") {
+        return say("The clock is on your desktop, Sir. Drag it wherever you like.", "The clock is gone, Sir.", v);
+    }
+    if on("next_now") == Some(true) {
+        return Some(next_now().unwrap_or_else(|| "I can't tell from here what comes next, Sir.".to_string()));
+    }
+    if let Some(size) = args.get("corner_orb_size").and_then(Value::as_str) {
+        return Some(match size {
+            "normal" => "The corner orb is its usual size, Sir.",
+            "smaller" => "Smaller, Sir.",
+            _ => "Larger, Sir.",
+        }
+        .to_string());
+    }
     None
 }
 
@@ -529,6 +624,9 @@ mod tests {
 
     #[test]
     fn the_features_answer_to_their_names() {
+        // ("What's next" with a fresh glance at Sir's day that tells it.)
+        let _turn = crate::idle_screen::GLANCE_TURN.lock().unwrap_or_else(|e| e.into_inner());
+        crate::idle_screen::show_glance(crate::idle_screen::Glance { lesson: Some(("Physics".into(), chrono::Local::now().naive_local() + chrono::Duration::minutes(25), "204".into())), ..Default::default() });
         for (text, want) in [
             ("night mode", json!({"night_now": true})),
             ("turn on night mode", json!({"night_now": true})),
@@ -599,9 +697,65 @@ mod tests {
             ("obey everyone", json!({"voice_lock": false})),
             ("open settings", json!({"settings_panel": true})),
             ("show me all settings", json!({"settings_panel": true})),
+            // 2026-11-14: the plate beside the corner orb, the desktop clock, what comes next
+            // only when asked, the corner orb's size.
+            ("hide the words beside the orb", json!({"orb_words": false})),
+            ("the orb without its words", json!({"orb_words": false})),
+            ("info window off", json!({"orb_words": false})),
+            ("show the words next to the orb", json!({"orb_words": true})),
+            ("the information window on", json!({"orb_words": true})),
+            ("show me a clock", json!({"desk_clock": true})),
+            ("clock on", json!({"desk_clock": true})),
+            ("hide the clock", json!({"desk_clock": false})),
+            ("uhr aus", json!({"desk_clock": false})),
+            ("clock with seconds", json!({"desk_clock_seconds": true})),
+            ("seconds off", json!({"desk_clock_seconds": false})),
+            ("12 hour clock", json!({"desk_clock_12h": true})),
+            ("twenty four hour clock", json!({"desk_clock_12h": false})),
+            ("clock with the date", json!({"desk_clock_date": true})),
+            ("clock without the date", json!({"desk_clock_date": false})),
+            ("what's next", json!({"next_now": true})),
+            ("whats next", json!({"next_now": true})),
+            ("what comes next today", json!({"next_now": true})),
+            ("was steht an", json!({"next_now": true})),
+            ("make the corner orb smaller", json!({"corner_orb_size": "smaller"})),
+            ("bigger corner orb", json!({"corner_orb_size": "bigger"})),
+            ("corner orb size normal", json!({"corner_orb_size": "normal"})),
         ] {
             assert_eq!(says(text), Some(want), "{text}");
         }
+    }
+
+    /// What comes next is said from the last glance at Sir's day, and only what is still ahead.
+    #[test]
+    fn what_comes_next_is_what_is_still_ahead() {
+        let at = |h: u32, m: u32| chrono::NaiveDate::from_ymd_opt(2026, 11, 12).unwrap().and_hms_opt(h, m, 0).unwrap();
+        let glance = crate::idle_screen::Glance { lesson: Some(("Physics".into(), at(8, 35), "204".into())), next: Some(("Dentist".into(), at(14, 30), String::new())), weather: None };
+        assert_eq!(next_spoken(&glance, at(8, 10)).as_deref(), Some("Next, Sir: Physics in 25 min, 204; then Dentist at 14:30."));
+        let appointment = crate::idle_screen::Glance { lesson: None, ..glance.clone() };
+        assert_eq!(next_spoken(&appointment, at(9, 0)).as_deref(), Some("Next, Sir: Dentist at 14:30."));
+        // Physics has begun, and the lesson after it is not in the glance: no answer from it.
+        assert_eq!(next_spoken(&glance, at(9, 0)), None);
+        assert_eq!(next_spoken(&glance, at(15, 0)), None);
+        assert_eq!(next_spoken(&crate::idle_screen::Glance::default(), at(8, 0)), None);
+        // Asked where the last glance cannot tell (a lesson in it has begun, and the one after
+        // it is not in it), it is not his to say: the model asks the calendar and the timetable.
+        let _turn = crate::idle_screen::GLANCE_TURN.lock().unwrap_or_else(|e| e.into_inner());
+        let now = chrono::Local::now().naive_local();
+        crate::idle_screen::show_glance(crate::idle_screen::Glance { lesson: Some(("Physics".into(), now - chrono::Duration::minutes(5), "204".into())), ..Default::default() });
+        assert_eq!(says("what's next"), None);
+        crate::idle_screen::show_glance(crate::idle_screen::Glance { lesson: Some(("Physics".into(), now + chrono::Duration::minutes(25), "204".into())), ..Default::default() });
+        assert_eq!(says("what's next"), Some(json!({"next_now": true})));
+        // The next thing on a list is the list's.
+        assert_ne!(says("what's next on my list"), Some(json!({"next_now": true})));
+        // Asked for, it stands for a few seconds; nobody asked: it is not on the screen.
+        let _one = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        *lock(&NEXT_UNTIL) = None;
+        assert!(!next_shown());
+        apply(&json!({"next_now": true}));
+        assert!(next_shown());
+        *lock(&NEXT_UNTIL) = Some(std::time::Instant::now());
+        assert!(!next_shown(), "its time is up");
     }
 
     /// Talk about these things is not an order for them.
@@ -650,6 +804,16 @@ mod tests {
             "my voice is hoarse",
             "mini golf",
             "calm down",
+            "what time is it",
+            "the clock is wrong",
+            "what is the next song",
+            "next",
+            "set an alarm clock",
+            "make the orb smaller",
+            "what is an orb",
+            // ("Just the orb" is the older order for the floating orb: not this one's.)
+            "just the orb",
+            "orb only",
         ] {
             assert_eq!(says(text), None, "{text}");
         }

@@ -69,6 +69,11 @@ pub fn glance() -> Glance {
     lock(&GLANCE).as_ref().map(|(_, g)| g.clone()).unwrap_or_default()
 }
 
+/// The last glance while it is fresh (`FRESH`): what it tells of Sir's day still holds.
+pub fn fresh_glance() -> Option<Glance> {
+    lock(&GLANCE).as_ref().filter(|(at, _)| at.elapsed() < FRESH).map(|(_, g)| g.clone())
+}
+
 /// "Physics in 25 min · 204", "Dentist tomorrow at 14:30 · Main Street 4".
 pub fn next_line(title: &str, start: NaiveDateTime, place: &str, now: NaiveDateTime) -> String {
     let minutes = (start - now).num_minutes();
@@ -90,6 +95,60 @@ pub fn next_line(title: &str, start: NaiveDateTime, place: &str, now: NaiveDateT
 /// "Thursday, 12 November".
 pub fn date_line(now: NaiveDateTime) -> String {
     format!("{}, {} {}", now.format("%A"), now.day(), now.format("%B"))
+}
+
+/// The desktop clock's time as Sir set it: twenty-four hours or twelve, its seconds or not.
+/// (Sir, 2026-11-14: "I want the desktop view to have a clock".)
+pub fn clock_text(now: NaiveDateTime, seconds: bool, twelve: bool) -> String {
+    now.format(match (twelve, seconds) {
+        (false, false) => "%H:%M",
+        (false, true) => "%H:%M:%S",
+        (true, false) => "%-I:%M %p",
+        (true, true) => "%-I:%M:%S %p",
+    })
+    .to_string()
+}
+
+/// The sizes of the desktop clock's letters under an emblem of `radius`: the time's, the
+/// date's and the weather's.
+pub fn clock_sizes(radius: f32) -> [f32; 3] {
+    [(radius * 0.42).clamp(40.0, 110.0), (radius * 0.07).clamp(10.5, 15.0), 14.0]
+}
+
+/// How far under the top of its time the desktop clock's next line begins, in the time's size.
+const CLOCK_LEAD: f32 = 1.14;
+
+/// How tall the desktop clock stands: the time, the date under it, the weather under that.
+pub fn clock_height(radius: f32, date: bool, weather: bool) -> f32 {
+    let [time, small, sky] = clock_sizes(radius);
+    time * CLOCK_LEAD + if date { small + 10.0 } else { 0.0 } + if weather { sky + 8.0 } else { 0.0 }
+}
+
+fn display(size: f32) -> FontId {
+    FontId::new(size, FontFamily::Name("display".into()))
+}
+
+/// The room the desktop clock takes under an emblem of `radius`: as wide as its time (and
+/// never narrower than the emblem's core), as tall as its lines.
+pub fn clock_size(ctx: &egui::Context, radius: f32, time: &str, date: bool, weather: bool) -> egui::Vec2 {
+    let width = ctx.fonts(|f| f.layout_no_wrap(time.to_string(), display(clock_sizes(radius)[0]), Color32::WHITE)).size().x;
+    vec2(width.max(radius * 1.2), clock_height(radius, date, weather))
+}
+
+/// Paints the desktop clock into `rect` (`clock_size`): the time, the date under it and the
+/// weather under that, where each is given.
+pub fn paint_clock(p: &egui::Painter, rect: Rect, radius: f32, time: &str, date: Option<&str>, weather: Option<&(f64, String)>) {
+    let [time_size, small, sky] = clock_sizes(radius);
+    let x = rect.center().x;
+    p.text(pos2(x, rect.top()), Align2::CENTER_TOP, time, display(time_size), Color32::from_rgb(0xE8, 0xF2, 0xFC));
+    let mut y = rect.top() + time_size * CLOCK_LEAD;
+    if let Some(date) = date {
+        p.text(pos2(x, y), Align2::CENTER_TOP, date, FontId::monospace(small), crate::hud_board::active_colour().gamma_multiply(0.9));
+        y += small + 10.0;
+    }
+    if let Some((degrees, sky_word)) = weather {
+        p.text(pos2(x, y), Align2::CENTER_TOP, format!("{degrees:.0}°  ·  {sky_word}"), FontId::new(sky, FontFamily::Name("label".into())), Color32::from_rgb(0x8E, 0xA4, 0xB8));
+    }
 }
 
 /// Where the figures stand this minute, off their place by a few pixels (it changes every
@@ -142,7 +201,6 @@ pub fn paint(ctx: &egui::Context, screen: Rect, centre: Pos2, radius: f32, stren
         let colour = if k <= second { accent.gamma_multiply(0.9 * strength) } else { crate::hud_style::white(0.14 * strength) };
         p.line_segment([centre + dir * from, centre + dir * to], Stroke::new(if k % 5 == 0 { 1.6f32 } else { 1.0 }, colour));
     }
-    let display = |size: f32| FontId::new(size, FontFamily::Name("display".into()));
     // Inside: what this is, the time, and the date under it.
     p.text(centre - vec2(0.0, radius * 0.42), Align2::CENTER_CENTER, "STANDING BY", FontId::monospace((radius * 0.05).clamp(8.5, 12.0)), muted.gamma_multiply(0.8 * strength));
     p.text(centre - vec2(0.0, radius * 0.07), Align2::CENTER_CENTER, now.format("%H:%M").to_string(), display((radius * 0.5).clamp(36.0, 150.0)), ink.gamma_multiply(strength));
@@ -161,6 +219,10 @@ pub fn paint(ctx: &egui::Context, screen: Rect, centre: Pos2, radius: f32, stren
     // (The ring breathes: fifteen frames a second are plenty.)
     ctx.request_repaint_after(Duration::from_millis(66));
 }
+
+/// The glance is one for the whole test process: tests that set it take turns.
+#[cfg(test)]
+pub static GLANCE_TURN: Mutex<()> = Mutex::new(());
 
 /// What the idle screen shows of the calendar and the weather, set by hand (the gallery).
 #[cfg(test)]
@@ -185,6 +247,20 @@ mod tests {
         assert_eq!(next_line("Exam", at(16, 9, 0), "", now), "Exam Monday at 09:00");
         assert_eq!(next_line("Call", at(12, 8, 10), "", now), "Call now");
         assert_eq!(date_line(now), "Thursday, 12 November");
+    }
+
+    #[test]
+    fn the_desktop_clock_reads_as_sir_set_it() {
+        assert_eq!(clock_text(at(12, 8, 5), false, false), "08:05");
+        assert_eq!(clock_text(at(12, 8, 5), true, false), "08:05:00");
+        assert_eq!(clock_text(at(12, 8, 5), false, true), "8:05 AM");
+        assert_eq!(clock_text(at(12, 14, 30), true, true), "2:30:00 PM");
+        assert_eq!(clock_text(at(12, 0, 15), false, true), "12:15 AM");
+        // The time alone is shorter than with its date and the weather; a small emblem's
+        // clock is still readable, a large one's not a poster.
+        assert!(clock_height(200.0, false, false) < clock_height(200.0, true, false) && clock_height(200.0, true, false) < clock_height(200.0, true, true));
+        assert_eq!(clock_sizes(40.0)[0], 40.0);
+        assert_eq!(clock_sizes(900.0)[0], 110.0);
     }
 
     #[test]

@@ -3,6 +3,7 @@
 //! a jump. (Sir, 2026-11-13: "he shouldn't teleport windows and his orb and so around, he should
 //! move them with smooth animations".)
 
+use crate::window_commands::{Position, Size};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -122,9 +123,377 @@ pub fn tidy_now() -> usize {
     0
 }
 
+// ----------------------------------------------------------------- one of them, by name ----
+
+/// A window's title, or what Sir called it, down to its words: lower case, without his own name
+/// in it, its marks and the words that say nothing ("the", "window").
+fn words_of(text: &str) -> String {
+    let text = text.to_lowercase().replace("j.a.i.", " ");
+    text.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty() && !matches!(*w, "the" | "my" | "your" | "window" | "das" | "die" | "der" | "dein" | "deine" | "fenster")).collect::<Vec<_>>().join(" ")
+}
+
+/// Whether `name`, as Sir said it, means the window titled `title`: words of it in their order
+/// ("the text console" for "Text Console — J.A.I."), or the one word that ends a part of it
+/// ("console", "timetable" for "WEBUNTIS // TIMETABLE — J.A.I."; never "text": "make the text
+/// bigger" is the HUD's).
+pub fn names(title: &str, name: &str) -> bool {
+    let name = words_of(name);
+    if !name.contains(' ') {
+        return !name.is_empty() && title.split(['\u{2014}', '/', '|', ':']).any(|part| words_of(part).rsplit(' ').next() == Some(name.as_str()));
+    }
+    format!(" {} ", words_of(title)).contains(&format!(" {name} "))
+}
+
+/// The one of his windows Sir means by `name` ("it": the one in front, when that is his).
+#[cfg(windows)]
+pub fn find(name: &str) -> Option<crate::win32_desktop::OwnWindow> {
+    let own = list();
+    if matches!(words_of(name).as_str(), "it" | "that" | "this" | "that one" | "this one" | "es" | "") {
+        let front = crate::win32_desktop::foreground_own()?;
+        return own.into_iter().find(|w| w.hwnd == front);
+    }
+    // (Its whole name before a part of it: "console" among "Text Console" and "Console log".)
+    own.iter().find(|w| words_of(&w.title) == words_of(name)).or_else(|| own.iter().find(|w| names(&w.title, name))).cloned()
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The titles of the windows the test on this thread has open.
+    static OPEN: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// A test's own windows: these titles are open, for the test on this thread.
+#[cfg(test)]
+pub fn pretend(titles: &[&str]) {
+    OPEN.with(|open| *open.borrow_mut() = titles.iter().map(|t| t.to_string()).collect());
+}
+
+/// Whether one of his windows is open that Sir means by `name`.
+pub fn open(name: &str) -> bool {
+    #[cfg(test)]
+    return OPEN.with(|open| open.borrow().iter().any(|title| names(title, name)));
+    #[cfg(all(windows, not(test)))]
+    return find(name).is_some();
+    #[cfg(not(any(windows, test)))]
+    false
+}
+
+/// Where (x, y, w, h) a window standing at `rect` (left, top, right, bottom) goes for a place
+/// and a size in the work area `work`, the gap round it: the views' own geometry, in pixels.
+fn within(work: [i32; 4], rect: [i32; 4], position: Option<Position>, size: Option<Size>) -> [i32; 4] {
+    let px = |[l, t, r, b]: [i32; 4]| eframe::egui::Rect::from_min_max(eframe::egui::pos2(l as f32, t as f32), eframe::egui::pos2(r as f32, b as f32));
+    let to = crate::window_commands::target_rect(px(work).shrink(GAP as f32), px(rect), position, size);
+    [to.min.x.round() as i32, to.min.y.round() as i32, to.width().round() as i32, to.height().round() as i32]
+}
+
+/// What a window is called in a sentence: its title without his name after it.
+pub fn called(title: &str) -> &str {
+    title.split('\u{2014}').next().unwrap_or(title).trim()
+}
+
+/// "Put the console on the left half", "make the timetable bigger": the window Sir names
+/// glides to that part of the monitor it stands on, or to that size. Its title; None: none of
+/// his windows is called that (the order is another program's).
+#[cfg(windows)]
+pub fn arrange(name: &str, position: Option<Position>, size: Option<Size>) -> Option<String> {
+    let window = find(name)?;
+    let monitors = crate::monitors::recent();
+    let [l, t, r, b] = window.rect;
+    let on = monitors.iter().find(|m| m.contains((l + r) / 2, (t + b) / 2)).or_else(|| crate::monitors::primary(&monitors))?;
+    glide(window.hwnd, [l, t, r - l, b - t], within(on.work, window.rect, position, size));
+    Some(window.title)
+}
+
+/// "Move the text console to another monitor": the window Sir names glides to the middle of
+/// that monitor (`monitor`: 1, 2, "left", "next" …), at its own size. None: none of his windows
+/// is called that.
+#[cfg(windows)]
+pub fn to_monitor(name: &str, monitor: &serde_json::Value) -> Option<Result<String, String>> {
+    let window = find(name)?;
+    let monitors = crate::monitors::recent();
+    let [l, t, r, b] = window.rect;
+    let current = crate::monitors::monitor_at(&monitors, (l + r) / 2, (t + b) / 2);
+    let Some(index) = crate::monitors::resolve(monitor, current, &monitors) else {
+        return Some(Err(format!("There is no such monitor; Sir has {}.", monitors.len())));
+    };
+    let on = monitors.iter().find(|m| m.index == index)?;
+    if current == Some(index) {
+        return Some(Ok(format!("My window '{}' is already on Monitor {index}.", called(&window.title))));
+    }
+    glide(window.hwnd, [l, t, r - l, b - t], within(on.work, window.rect, Some(Position::Centre), None));
+    Some(Ok(format!("My window '{}' is on Monitor {index} now.\nSpoken: On monitor {index}, Sir.", called(&window.title))))
+}
+
+// ------------------------------------------------------------ on top, and where they were ----
+
+/// The titles of the windows Sir pinned on top, and where each window last stood by its title
+/// (x, y, w, h), as the kit's store keeps them ("windows": "pinned", "places").
+/// (The newest last, `PLACES_KEPT` at most: cards are titled by what they show.)
+static PINNED: Mutex<Option<Vec<String>>> = Mutex::new(None);
+static PLACES: Mutex<Option<Vec<(String, [i32; 4])>>> = Mutex::new(None);
+const PLACES_KEPT: usize = 48;
+/// Each window of his as it opened (`opening_place`), by title: its code's own position and
+/// size for it then, and the place it opened at (none: it had none, an order placed it, or the
+/// code has moved or sized it since). Let go once the window is gone (`look_after`).
+static OPENED: Mutex<Vec<(String, [Option<[f32; 2]>; 2], Option<[i32; 4]>)>> = Mutex::new(Vec::new());
+/// Where each stood at the last look, and the windows whose place is not theirs for now (grown
+/// into the spotlight).
+static LOOKED: Mutex<Vec<(String, [i32; 4])>> = Mutex::new(Vec::new());
+static HELD: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Whether his windows' places and pins go to the kit's store and come from it: in Sir's own
+/// sessions (a scripted session neither reads where his windows stood nor writes where its own
+/// do).
+fn stored() -> bool {
+    !crate::platform::in_test_session()
+}
+
+/// Whether their places are kept at all: also in a scripted session that asks for it
+/// (`JAI_DEMO=places`), for as long as it runs.
+fn kept() -> bool {
+    stored() || crate::platform::demo("places")
+}
+
+fn pinned_titles() -> Vec<String> {
+    lock(&PINNED)
+        .get_or_insert_with(|| if stored() { crate::kit::get("windows", "pinned").and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default() } else { Vec::new() })
+        .clone()
+}
+
+/// Whether the window titled `title` is pinned on top.
+pub fn is_pinned(title: &str) -> bool {
+    pinned_titles().iter().any(|t| t == title)
+}
+
+/// "Keep the console on top", "unpin it": the window Sir names stays above other programs'
+/// windows, or no longer. None: none of his windows is called that.
+#[cfg(windows)]
+pub fn pin(name: &str, on: bool) -> Option<String> {
+    let window = find(name)?;
+    pin_titled(&window.title, on);
+    // (Pins go by title: every window by this one goes up, or down.)
+    for same in list().iter().filter(|w| w.title == window.title) {
+        crate::win32_desktop::topmost(same.hwnd, on);
+    }
+    let called = called(&window.title);
+    Some(if on { format!("My window '{called}' stays on top now.\nSpoken: {called} stays on top, Sir.") } else { format!("My window '{called}' no longer stays on top.\nSpoken: {called} is no longer on top, Sir.") })
+}
+
+/// The window titled `title` is pinned on top from now on, or no longer (its key in its bar).
+pub fn pin_titled(title: &str, on: bool) {
+    let mut titles = pinned_titles();
+    titles.retain(|t| t != title);
+    if on {
+        titles.push(title.to_string());
+    }
+    if stored() {
+        let _ = crate::kit::put("windows", "pinned", &serde_json::json!(titles));
+    }
+    *lock(&PINNED) = Some(titles);
+}
+
+/// The window titled `title` is somewhere it does not live (grown into the spotlight): where
+/// it stands is not kept until it is let go again.
+pub fn hold(title: &str, on: bool) {
+    let mut held = lock(&HELD);
+    held.retain(|t| t != title);
+    if on {
+        held.push(title.to_string());
+    }
+}
+
+/// Where the window titled `title` last stood (x, y, w, h), when that is still on a monitor.
+pub fn place_of(title: &str) -> Option<[i32; 4]> {
+    let place = lock(&PLACES).get_or_insert_with(|| if stored() { crate::kit::get("windows", "places").and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default() } else { Vec::new() }).iter().find(|(t, _)| t == title)?.1;
+    on_a_monitor(place, &crate::monitors::recent()).then_some(place)
+}
+
+/// Where the window titled `title` stands (x, y, w, h) as it opens and after: where it last
+/// stood, unless an order of Sir's placed it (`by_order`), for as long as the code asks no other
+/// place or size of it (`code`: its own position and size for it, as given each frame). (Given
+/// anew each frame, the place kept every move and size of the code's from the window.)
+pub fn opening_place(title: &str, code: [Option<[f32; 2]>; 2], by_order: bool) -> Option<[i32; 4]> {
+    opened_at(&mut lock(&OPENED), title, code, || if by_order { None } else { place_of(title) })
+}
+
+fn opened_at(opened: &mut Vec<(String, [Option<[f32; 2]>; 2], Option<[i32; 4]>)>, title: &str, code: [Option<[f32; 2]>; 2], place: impl FnOnce() -> Option<[i32; 4]>) -> Option<[i32; 4]> {
+    let at = match opened.iter().position(|(t, _, _)| t == title) {
+        Some(at) => at,
+        None => {
+            opened.push((title.to_string(), code, place()));
+            opened.len() - 1
+        }
+    };
+    let (_, was, place) = &mut opened[at];
+    if *was != code {
+        *place = None;
+    }
+    *place
+}
+
+/// `moved` kept, each as the newest, and of all only the newest `PLACES_KEPT`.
+fn keep(places: &mut Vec<(String, [i32; 4])>, moved: Vec<(String, [i32; 4])>) {
+    for (title, rect) in moved {
+        places.retain(|(t, _)| *t != title);
+        places.push((title, rect));
+    }
+    let over = places.len().saturating_sub(PLACES_KEPT);
+    places.drain(..over);
+}
+
+/// Whether the middle of the top edge of `place` (x, y, w, h), where a window is taken hold
+/// of, is on one of the monitors.
+fn on_a_monitor([x, y, w, h]: [i32; 4], monitors: &[crate::monitors::Monitor]) -> bool {
+    w >= 120 && h >= 80 && monitors.iter().any(|m| m.contains(x + w / 2, y + 12))
+}
+
+/// What a look at his windows changes in what is kept: a window that stands where it stood at
+/// the look before, and not where it is kept, is kept there. (One look is a window on its way.)
+/// (Two of his windows by one title have no place of their own: neither is kept.)
+fn settled(looked: &[(String, [i32; 4])], now: &[(String, [i32; 4])], kept: &[(String, [i32; 4])]) -> Vec<(String, [i32; 4])> {
+    let at = |list: &[(String, [i32; 4])], title: &String, rect: &[i32; 4]| list.iter().any(|(t, r)| t == title && r == rect);
+    now.iter().filter(|(title, rect)| now.iter().filter(|(t, _)| t == title).count() == 1 && at(looked, title, rect) && !at(kept, title, rect)).cloned().collect()
+}
+
+/// Looks after his windows, every couple of seconds from the Win32 worker: those pinned on top
+/// stay there, and where each stands is kept by its title for the next time it opens. (Sir,
+/// 2026-11-14: "Windows remember their place", "Pin on top".)
+#[cfg(windows)]
+pub fn look_after() {
+    let own = list();
+    for window in own.iter().filter(|w| is_pinned(&w.title)) {
+        crate::win32_desktop::topmost(window.hwnd, true);
+    }
+    // (One that is gone opens anew, at its place again.)
+    lock(&OPENED).retain(|(t, _, _)| own.iter().any(|w| w.title == *t));
+    if !kept() {
+        return;
+    }
+    let gliding: Vec<isize> = lock(&GLIDES).iter().map(|g| g.0).collect();
+    let held = lock(&HELD).clone();
+    let now: Vec<(String, [i32; 4])> = own.iter().filter(|w| !gliding.contains(&w.hwnd) && !held.contains(&w.title)).map(|w| (w.title.clone(), [w.rect[0], w.rect[1], w.rect[2] - w.rect[0], w.rect[3] - w.rect[1]])).collect();
+    let looked = std::mem::replace(&mut *lock(&LOOKED), now.clone());
+    let _ = place_of("");
+    let saved = {
+        let mut places = lock(&PLACES);
+        let Some(places) = places.as_mut() else { return };
+        let moved = settled(&looked, &now, places);
+        if moved.is_empty() {
+            return;
+        }
+        keep(places, moved);
+        serde_json::json!(places)
+    };
+    // (Written with the lock let go: a window that opens meanwhile asks for its place.)
+    if stored() {
+        let _ = crate::kit::put("windows", "places", &saved);
+    }
+}
+
+/// From the HUD's frame: his windows are looked after every couple of seconds, on the Win32
+/// worker.
+#[cfg(windows)]
+pub fn tend() {
+    static LAST: Mutex<Option<Instant>> = Mutex::new(None);
+    let mut last = lock(&LAST);
+    if last.is_some_and(|at| at.elapsed() < Duration::from_secs(2)) {
+        return;
+    }
+    *last = Some(Instant::now());
+    crate::win32::run_detached(look_after);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 2026-11-14, Sir's session: "Move the text console to another monitor" found "no open
+    /// window" (his own windows were looked for among other programs'), and "close all
+    /// windows" left the console standing. His windows answer to their names.
+    #[test]
+    fn his_windows_answer_to_their_names() {
+        for (title, name) in [
+            ("Text Console \u{2014} J.A.I.", "the text console"),
+            ("Text Console \u{2014} J.A.I.", "text console window"),
+            ("Text Console \u{2014} J.A.I.", "console"),
+            ("WEBUNTIS // TIMETABLE \u{2014} J.A.I.", "the timetable"),
+            ("Projectile \u{2014} J.A.I. Simulation Lab", "the simulation lab"),
+            ("Changes \u{2014} J.A.I.", "Changes"),
+        ] {
+            assert!(names(title, name), "{name:?} is {title:?}");
+        }
+        // (A word inside a name is not the name: "make the text bigger" is the HUD's text, and
+        // "discord" Sir's program.)
+        for (title, name) in [("Text Console \u{2014} J.A.I.", "discord"), ("Changes \u{2014} J.A.I.", "exchange"), ("Changes \u{2014} J.A.I.", ""), ("History \u{2014} J.A.I.", "the window"), ("Text Console \u{2014} J.A.I.", "console text"), ("Text Console \u{2014} J.A.I.", "the text"), ("Discord Audio \u{2014} J.A.I.", "discord")] {
+            assert!(!names(title, name), "{name:?} is not {title:?}");
+        }
+    }
+
+    #[test]
+    fn a_window_is_sent_to_a_half_a_quarter_or_the_middle_of_its_monitor() {
+        // A monitor to the right of the first, its taskbar under it; a window standing on it.
+        let work = [2560, 0, 5120, 1392];
+        let rect = [2700, 200, 3140, 840];
+        assert_eq!(within(work, rect, Some(Position::Left), None), [2574, 14, 1266, 1364]);
+        assert_eq!(within(work, rect, Some(Position::Right), None), [3840, 14, 1266, 1364]);
+        assert_eq!(within(work, rect, Some(Position::TopRight), None), [3840, 14, 1266, 682]);
+        assert_eq!(within(work, rect, Some(Position::BottomLeft), None), [2574, 696, 1266, 682]);
+        assert_eq!(within(work, rect, Some(Position::Centre), None), [3620, 376, 440, 640], "in the middle at its own size");
+        assert_eq!(within(work, rect, None, Some(Size::Percent(100.0))), [2574, 14, 2532, 1364], "the whole screen");
+        assert_eq!(within(work, rect, None, Some(Size::Bigger)), [2645, 120, 550, 800], "larger about its middle");
+        // Wherever it is sent, at whatever size, it stays inside the work area.
+        for position in Position::ALL {
+            let [x, y, w, h] = within(work, [0, 0, 9000, 9000], Some(position), None);
+            assert!(x >= work[0] && y >= work[1] && x + w <= work[2] && y + h <= work[3], "{position:?}: {x},{y} {w}x{h}");
+        }
+    }
+
+    #[test]
+    fn where_a_window_stood_is_kept_once_it_has_stood_there_for_two_looks() {
+        let at = |x: i32| [x, 100, 440, 640];
+        let kept = vec![("Text Console \u{2014} J.A.I.".to_string(), at(100))];
+        let console = |x: i32| vec![("Text Console \u{2014} J.A.I.".to_string(), at(x))];
+        assert!(settled(&console(100), &console(100), &kept).is_empty(), "where it is kept already");
+        assert!(settled(&console(100), &console(700), &kept).is_empty(), "on its way: one look is no place");
+        assert_eq!(settled(&console(700), &console(700), &kept), console(700), "it stands: kept");
+        assert_eq!(settled(&[], &console(700), &kept), vec![], "a window that has only just opened");
+        // Two of his windows by one title (two simulations of a kind) have no place of their own.
+        let two = vec![("Projectile \u{2014} J.A.I. Simulation Lab".to_string(), at(100)), ("Projectile \u{2014} J.A.I. Simulation Lab".to_string(), at(700))];
+        assert!(settled(&two, &two, &kept).is_empty(), "neither is kept");
+        // A place is good for the next opening only while a monitor shows it.
+        let monitors = vec![crate::monitors::Monitor { index: 1, name: "one".into(), rect: [0, 0, 2560, 1440], work: [0, 0, 2560, 1392], primary: true }];
+        assert!(on_a_monitor([100, 100, 440, 640], &monitors));
+        assert!(!on_a_monitor([2600, 100, 440, 640], &monitors), "its monitor is gone");
+        assert!(!on_a_monitor([100, 100, 40, 20], &monitors), "no size to speak of");
+        // The places kept are those of the windows moved last, a few dozen at most (cards are
+        // titled by what they show: their titles came without end).
+        let mut places = Vec::new();
+        keep(&mut places, (0..60).map(|k| (format!("CARD {k}"), at(k))).collect());
+        assert_eq!((places.len(), places.last().map(|(t, _)| t.as_str())), (PLACES_KEPT, Some("CARD 59")));
+        keep(&mut places, vec![("CARD 20".to_string(), at(5))]);
+        assert_eq!(places.iter().filter(|(t, _)| t == "CARD 20").count(), 1, "one place to a title");
+        assert_eq!(places.last(), Some(&("CARD 20".to_string(), at(5))), "moved again: the newest");
+    }
+
+    /// A window opens where it last stood, and then does what it is told: given anew each frame,
+    /// the place kept every move and size the code asked of it from the window ("make the timer
+    /// window bigger" answered "Updated", and nothing changed). An order's place stands.
+    #[test]
+    fn a_window_opens_at_its_place_and_then_does_as_it_is_told() {
+        let mut opened = Vec::new();
+        let place = Some([300, 200, 640, 480]);
+        let code = [Some([10.0, 10.0]), Some([400.0, 300.0])];
+        for _ in 0..3 {
+            assert_eq!(opened_at(&mut opened, "Timer \u{2014} J.A.I.", code, || place), place, "while the code asks nothing else");
+        }
+        let bigger = [Some([10.0, 10.0]), Some([500.0, 375.0])];
+        assert_eq!(opened_at(&mut opened, "Timer \u{2014} J.A.I.", bigger, || place), None, "the code sizes it: done");
+        assert_eq!(opened_at(&mut opened, "Timer \u{2014} J.A.I.", code, || place), None, "and its place is not taken up again");
+        assert_eq!(opened_at(&mut opened, "Radar \u{2014} J.A.I.", code, || None), None, "placed by an order, or never placed");
+        // Closed, it opens at its place again.
+        opened.clear();
+        assert_eq!(opened_at(&mut opened, "Timer \u{2014} J.A.I.", bigger, || place), place);
+    }
 
     #[test]
     fn a_glide_starts_fast_ends_slow_and_arrives_exactly() {

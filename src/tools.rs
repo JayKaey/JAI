@@ -268,8 +268,10 @@ pub fn stays_inside(name: &str, args: &Value) -> bool {
         // Pictures, live cameras and street view are his blocks; saving writes into Pictures.
         "show_live_camera" | "show_street_view" => true,
         "show_image" => action != "save",
-        // Himself to another monitor, nobody else's window.
-        "move_window_to_monitor" => args["app_or_window_name"].as_str().is_some_and(|n| names_jai(n) || matches!(n.to_lowercase().as_str(), "hud" | "the hud" | "your hud" | "your window" | "your interface")),
+        // Himself or a window of his own to another monitor, nobody else's window.
+        "move_window_to_monitor" => args["app_or_window_name"].as_str().is_some_and(|n| names_jai(n) || matches!(n.to_lowercase().as_str(), "hud" | "the hud" | "your hud" | "your window" | "your interface") || (crate::apps::find_spec(n).is_none() && crate::own_windows::open(n))),
+        // A simulation is a window of his own.
+        "launch_interactive_simulation" => true,
         // The 3D studio is his own block; saving a model writes a file of Sir's.
         "show_3d_model" => action != "export",
         _ => false,
@@ -294,6 +296,8 @@ pub fn only_looks(name: &str, args: &Value) -> bool {
         || crate::kit::only_looks(name, args)
         // ("Are you there?" wakes the board: that is the answer.)
         || (name == "hud_board" && args["action"] == "wake")
+        // ("What's next?", "what did I miss?": he shows it, and that is the answer.)
+        || (name == "configure_interface" && args.as_object().is_some_and(|asked| !asked.is_empty() && asked.iter().all(|(key, on)| matches!(key.as_str(), "next_now" | "missed") && on == true)))
         || args["action"].as_str().is_some_and(|action| READ_ACTIONS.iter().any(|read| action == *read || action.strip_prefix(read).is_some_and(|rest| rest.starts_with('_'))))
 }
 
@@ -1528,6 +1532,15 @@ impl ToolContext {
             let index = self.widgets.find_window_named(&w.id).and_then(|w| w.monitor).unwrap_or(1);
             return Ok(format!("Moved your window '{}' to Monitor {index}. {out}", w.title));
         }
+        // One of his windows by its title (the text console, a report, the system column):
+        // "No open window matches 'Text Console'" was the answer on 2026-11-14. A program of
+        // that name comes first.
+        #[cfg(windows)]
+        if !focus::is_pronoun(name) && apps::find_spec(name).is_none() {
+            if let Some(done) = crate::own_windows::to_monitor(name, &monitor) {
+                return done;
+            }
+        }
         if !focus::is_pronoun(name) {
             let out = monitors::move_app(WindowTarget::Named(name.to_string()), monitor).await?;
             self.focus.note_app(name);
@@ -1553,6 +1566,13 @@ impl ToolContext {
                 return Err("My HUD window is not open.".into());
             }
             let monitors = monitors::list();
+            // As the desktop's background he is on every monitor: his emblem goes ("the other
+            // monitor": the other than the one it stands on).
+            if crate::wallpaper::in_use() {
+                let on = gui::emblem_monitor(&self.config, &monitors);
+                let index = monitors::resolve(monitor, on, &monitors).ok_or_else(|| format!("There is no monitor {monitor}."))?;
+                return gui::send_emblem_to_monitor(&self.config, &monitors, index);
+            }
             let current = crate::win32::window_display_rect(hwnd).and_then(|r| monitors::monitor_at(&monitors, (r[0] + r[2]) / 2, (r[1] + r[3]) / 2));
             let index = monitors::resolve(monitor, current, &monitors).ok_or_else(|| format!("There is no monitor {monitor}."))?;
             // The fullscreen board (also one that spans every monitor) goes there as the
@@ -2085,9 +2105,23 @@ mod tests {
             ("control_music", json!({"action": "what_is_playing"})),
             ("move_window_to_monitor", json!({"app_or_window_name": "yourself", "target_monitor": 2})),
             ("show_mobile_satellite_instructions", json!({"topic": "permanent_address"})),
+            // A simulation is a window of his own.
+            ("launch_interactive_simulation", json!({"sim_type": "pendulum"})),
         ] {
             assert!(stays_inside(name, &args), "{name} {args}");
         }
+        // One of his own windows goes to another monitor; a program of Sir's never does.
+        let console = json!({"app_or_window_name": "text console", "target_monitor": 2});
+        assert!(!stays_inside("move_window_to_monitor", &console), "no such window of his is open");
+        crate::own_windows::pretend(&["Text Console \u{2014} J.A.I."]);
+        assert!(stays_inside("move_window_to_monitor", &console));
+        // A program's name stays the program's, as its move does, even where a window of his
+        // has it in its title.
+        crate::own_windows::pretend(&["Discord Audio \u{2014} J.A.I.", "Spotify \u{2014} J.A.I."]);
+        for app in ["discord", "spotify"] {
+            assert!(!stays_inside("move_window_to_monitor", &json!({"app_or_window_name": app, "target_monitor": 2})), "{app}");
+        }
+        crate::own_windows::pretend(&[]);
         for (name, args) in [
             ("open_application", json!({"app_name": "spotify"})),
             ("close_application", json!({"app_name": "spotify", "force": true})),
@@ -2128,6 +2162,9 @@ mod tests {
             ("manage_flashcards", json!({"action": "stats"})),
             (crate::venue_guide::TOOL, json!({"action": "recommend", "request": "x"})),
             ("clipboard", json!({"action": "read"})),
+            // "What's next?", "what did I miss?": he shows it, and that is the answer.
+            ("configure_interface", json!({"next_now": true})),
+            ("configure_interface", json!({"missed": true})),
         ] {
             assert!(only_looks(name, &args), "{name} {args}");
         }
@@ -2139,6 +2176,8 @@ mod tests {
             ("control_audio_mixer", json!({"action": "no_sound"})),
             ("control_music", json!({"action": "stop_all"})),
             ("configure_interface", json!({"mixer_view": true})),
+            ("configure_interface", json!({"next_now": true, "desk_clock": false})),
+            ("configure_interface", json!({})),
             ("window_management", json!({"action": "minimize_all"})),
             ("manage_stark_protocol", json!({"action": "execute_protocol", "protocol_name": "gaming"})),
             ("run_shell_command", json!({"command": "x"})),

@@ -209,12 +209,56 @@ fn overlap([l, t, r, b]: [i32; 4], [ol, ot, or, ob]: [i32; 4]) -> i64 {
     w * h
 }
 
-/// The share (0 to 1) of the screen rect `[left, top, right, bottom]` that the one window of
-/// another program covering most of it covers. His own windows do not count.
+/// The share (0 to 1) of the screen rect `[left, top, right, bottom]` that the one window
+/// covering most of it covers: another program's, or one of his own (`covers`).
 pub fn covered_share(rect: [i32; 4]) -> f32 {
     let area = ((rect[2] - rect[0]).max(1) as i64) * ((rect[3] - rect[1]).max(1) as i64);
-    let most = top_level_windows().into_iter().filter(|(_, _, own)| !own).map(|(_, r, _)| overlap(rect, r)).max().unwrap_or(0);
+    let most = top_level_windows().into_iter().filter(|(hwnd, _, own)| covers(*own, &title_of(*hwnd))).map(|(_, r, _)| overlap(rect, r)).max().unwrap_or(0);
     most as f32 / area as f32
+}
+
+/// Whether a window counts as lying on the emblem: every other program's, and of his own
+/// those that carry a name (a block, a card, the console), never the corner orb itself. (Sir,
+/// 2026-11-14, a window of his over the emblem: "something is blocking the orb and the orb is
+/// still in the middle". Until then his own windows covered nothing.)
+fn covers(own: bool, title: &str) -> bool {
+    !own || !(title.is_empty() || title == ORB_TITLE)
+}
+
+/// The corner orb's window, by its title.
+pub const ORB_TITLE: &str = "J.A.I. // orb";
+
+/// The window in front, when it is one of his own.
+pub fn foreground_own() -> Option<isize> {
+    // SAFETY: plain queries on the foreground window's handle.
+    unsafe {
+        let hwnd = GetForegroundWindow();
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(hwnd, Some(&mut pid));
+        (hwnd.0 != 0 && pid == std::process::id()).then_some(hwnd.0)
+    }
+}
+
+/// Window `hwnd` stays above other programs' windows from now on, or no longer: where it
+/// stands, without the focus. Nothing is touched when it stands that way already.
+pub fn topmost(hwnd: isize, on: bool) {
+    use windows::Win32::UI::WindowsAndMessaging::WS_EX_TOPMOST;
+    // SAFETY: a query and a z-order change on a window handle; a stale one just fails.
+    unsafe {
+        if (GetWindowLongPtrW(HWND(hwnd), GWL_EXSTYLE) & WS_EX_TOPMOST.0 as isize != 0) != on {
+            let _ = SetWindowPos(HWND(hwnd), if on { HWND_TOPMOST } else { HWND_NOTOPMOST }, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        }
+    }
+}
+
+/// Tells window `hwnd` to paint now, by a message sent to it: that waits for no turn among
+/// its thread's windows, as a paint asked for in the usual way does. From any thread.
+pub fn paint_now(hwnd: isize) {
+    use windows::Win32::Graphics::Gdi::{RedrawWindow, RDW_INTERNALPAINT, RDW_UPDATENOW};
+    // SAFETY: a paint request for a window handle; a stale one just fails.
+    unsafe {
+        let _ = RedrawWindow(HWND(hwnd), None, None, RDW_INTERNALPAINT | RDW_UPDATENOW);
+    }
 }
 
 /// The window in front, when it is another program's: its rect. None for the desktop, the
@@ -279,10 +323,30 @@ pub fn raise(hwnd: isize) {
     }
 }
 
+/// What the window animations on Sir's PC (the Windhawk mod "Windows Animations": it hooks
+/// `DestroyWindow` and `ShowWindow` in every program and plays a snapshot of a closing or
+/// hidden window) mark a window with whose close they must not play: they play none for it.
+/// A snapshot of a window of his is a flat pane, dark or pale (his windows draw with OpenGL):
+/// seen from outside 2026-11-15, a "Static" window from a thread started in the mod's DLL over
+/// every window of his that closed, the orb's landing too. His "it turned black" of 2026-11-14.
+const OWN_EXIT: PCWSTR = w!("windows-animations.CloseBypass");
+
+/// A window of his closes and hides with his own exit only, never with another program's
+/// animation of a snapshot of it (`OWN_EXIT`).
+pub fn own_exit(hwnd: isize) {
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::UI::WindowsAndMessaging::SetPropW;
+    // SAFETY: a property of a window handle; a stale one just fails.
+    unsafe {
+        let _ = SetPropW(HWND(hwnd), OWN_EXIT, HANDLE(1));
+    }
+}
+
 /// Looks after the corner orb's window, past the windowing library (which writes a window's
 /// whole style anew, its layer with it, whenever one of its own flags changes; so it is told
 /// of nothing here): the window's pure black is see-through and lets clicks through (`pass`:
-/// all of it does, beside a game), and once it has `drawn` it is shown, without the focus.
+/// all of it does, beside a game), once it has `drawn` it is shown, without the focus, and it
+/// goes with no other program's animation of it (`own_exit`).
 /// (The see-through surface the library asks for is not shown on Sir's machine. Measured
 /// 2026-11-14 from outside: an empty window of the orb's stood solid black, with either
 /// surface format, with a window region and without. A black that is keyed out is seen
@@ -295,6 +359,7 @@ pub fn tend_orb(hwnd: isize, pass: bool, drawn: bool) {
         if !IsWindow(HWND(hwnd)).as_bool() {
             return;
         }
+        own_exit(hwnd);
         let ex = GetWindowLongPtrW(HWND(hwnd), GWL_EXSTYLE);
         let wanted = orb_style(ex, pass);
         if wanted != ex {
@@ -490,6 +555,16 @@ mod tests {
         assert!(!overlay(WS_EX_LAYERED.0 as isize) && !overlay(WS_EX_NOACTIVATE.0 as isize));
     }
 
+    /// Any window over the emblem hides it, his own too; only the corner orb itself and his
+    /// windows without a name (the tray's, a tool tip) hide nothing.
+    #[test]
+    fn his_own_windows_hide_the_emblem_as_any_other_does() {
+        assert!(covers(false, "") && covers(false, "A film"), "another program's, named or not");
+        assert!(covers(true, "Changes \u{2014} J.A.I.") && covers(true, "Projectile \u{2014} J.A.I. Simulation Lab"));
+        assert!(!covers(true, ORB_TITLE), "the orb does not hide what it left");
+        assert!(!covers(true, ""));
+    }
+
     /// The corner orb's window is a layered one whatever else it is, and lets every click
     /// through only beside a game.
     #[test]
@@ -502,6 +577,23 @@ mod tests {
         assert_eq!(orb_style(made | layered | through, false), made | layered, "the game is gone: it takes clicks again");
         assert_eq!(orb_style(orb_style(made, false), false), orb_style(made, false), "tended again, nothing changes");
         assert!(orb_style(made, true) & topmost != 0, "what else it is stays");
+    }
+
+    /// A window of his carries the mark the window animations on Sir's PC leave alone: it goes
+    /// with its own exit, not as a snapshot of it played by another program.
+    #[test]
+    fn a_window_of_his_goes_with_its_own_exit() {
+        use windows::Win32::Foundation::HINSTANCE;
+        use windows::Win32::UI::WindowsAndMessaging::{CreateWindowExW, DestroyWindow, GetPropW, HMENU, WINDOW_EX_STYLE, WS_POPUP};
+        // SAFETY: a hidden window owned by this test thread, destroyed below; plain queries on it.
+        unsafe {
+            let hwnd = CreateWindowExW(WINDOW_EX_STYLE(0), w!("STATIC"), w!("jai exit test"), WS_POPUP, 0, 0, 120, 80, HWND(0), HMENU(0), HINSTANCE(0), None);
+            assert_ne!(hwnd.0, 0, "test window");
+            assert_eq!(GetPropW(hwnd, OWN_EXIT).0, 0, "unmarked as it comes");
+            own_exit(hwnd.0);
+            assert_eq!(GetPropW(hwnd, OWN_EXIT).0, 1, "the mark the animations look for");
+            let _ = DestroyWindow(hwnd);
+        }
     }
 
     /// His windows as Windows has them, watched from outside for a while (`JAI_WATCH=seconds
@@ -541,6 +633,66 @@ mod tests {
             }
             TRUE
         }
+        /// Who made a window seen for the first time: its thread (its name, and the module its
+        /// start address lies in), and the module of its instance (kernel32's `K32…` exports,
+        /// ntdll's thread query).
+        fn made_by(hwnd: isize, pid: u32) -> String {
+            use windows::Win32::System::Threading::{OpenProcess, OpenThread, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ, THREAD_QUERY_INFORMATION, THREAD_QUERY_LIMITED_INFORMATION};
+            use windows::Win32::UI::WindowsAndMessaging::GWLP_HINSTANCE;
+            #[repr(C)]
+            struct ModuleInfo {
+                base: usize,
+                size: u32,
+                entry: usize,
+            }
+            #[link(name = "kernel32")]
+            extern "system" {
+                fn K32EnumProcessModules(process: isize, modules: *mut isize, cb: u32, needed: *mut u32) -> i32;
+                fn K32GetModuleFileNameExW(process: isize, module: isize, name: *mut u16, size: u32) -> u32;
+                fn K32GetModuleInformation(process: isize, module: isize, info: *mut ModuleInfo, cb: u32) -> i32;
+                fn GetThreadDescription(thread: isize, description: *mut *mut u16) -> i32;
+                fn LocalFree(memory: isize) -> isize;
+            }
+            #[link(name = "ntdll")]
+            extern "system" {
+                fn NtQueryInformationThread(thread: isize, class: u32, info: *mut usize, length: u32, returned: *mut u32) -> i32;
+            }
+            // SAFETY: plain queries; buffers go with their lengths; every handle is closed and the
+            // thread's description freed.
+            unsafe {
+                let tid = GetWindowThreadProcessId(HWND(hwnd), None);
+                let instance = GetWindowLongPtrW(HWND(hwnd), GWLP_HINSTANCE) as usize;
+                let (mut name, mut start) = (String::new(), 0usize);
+                if let Ok(thread) = OpenThread(THREAD_QUERY_INFORMATION | THREAD_QUERY_LIMITED_INFORMATION, false, tid) {
+                    let mut text: *mut u16 = std::ptr::null_mut();
+                    if GetThreadDescription(thread.0, &mut text) >= 0 && !text.is_null() {
+                        let length = (0..).take_while(|&i| *text.add(i) != 0).count();
+                        name = String::from_utf16_lossy(std::slice::from_raw_parts(text, length));
+                        LocalFree(text as isize);
+                    }
+                    // (Class 9: the thread's start address as Win32 knows it.)
+                    let _ = NtQueryInformationThread(thread.0, 9, &mut start, std::mem::size_of::<usize>() as u32, std::ptr::null_mut());
+                    let _ = windows::Win32::Foundation::CloseHandle(thread);
+                }
+                let Ok(process) = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, false, pid) else { return format!("  thread {tid} '{name}'") };
+                let (mut modules, mut needed) = (vec![0isize; 2048], 0u32);
+                let listed = K32EnumProcessModules(process.0, modules.as_mut_ptr(), (modules.len() * 8) as u32, &mut needed) != 0;
+                let module_of = |address: usize| -> String {
+                    for &module in &modules[..(needed as usize / 8).min(modules.len())] {
+                        let mut info = ModuleInfo { base: 0, size: 0, entry: 0 };
+                        if K32GetModuleInformation(process.0, module, &mut info, std::mem::size_of::<ModuleInfo>() as u32) != 0 && address >= info.base && address < info.base + info.size as usize {
+                            let mut buf = [0u16; 512];
+                            let n = K32GetModuleFileNameExW(process.0, module, buf.as_mut_ptr(), buf.len() as u32) as usize;
+                            return String::from_utf16_lossy(&buf[..n.min(buf.len())]).rsplit('\\').next().unwrap_or_default().to_string();
+                        }
+                    }
+                    format!("{address:#x}")
+                };
+                let line = if listed { format!("  thread {tid} '{name}' started in {} instance of {}", module_of(start), module_of(instance)) } else { format!("  thread {tid} '{name}' start {start:#x}") };
+                let _ = windows::Win32::Foundation::CloseHandle(process);
+                line
+            }
+        }
         let seconds: u64 = std::env::var("JAI_WATCH").ok().and_then(|s| s.parse().ok()).unwrap_or(20);
         // (Each spot with what it showed when the watch began.)
         let spots: Vec<([i32; 4], Vec<u8>)> = std::env::var("JAI_WATCH_THROUGH")
@@ -554,6 +706,27 @@ mod tests {
         // (`JAI_WATCH_HIT=x,y;x,y`: whose window a click at each of these points would go to.)
         let hits: Vec<[i32; 2]> = std::env::var("JAI_WATCH_HIT").unwrap_or_default().split(';').filter_map(|at| <[i32; 2]>::try_from(at.split(',').filter_map(|n| n.trim().parse().ok()).collect::<Vec<i32>>()).ok()).collect();
         let mut hit_said = vec![String::new(); hits.len()];
+        // (`JAI_WATCH_CLICK=part of a title|x,y|second;…`: at that second a click is put into
+        // that window of his, at x,y of its client area, counted from its right or bottom edge
+        // where negative. Sir's own pointer is not moved.)
+        let mut clicks: Vec<(String, [i32; 2], u64)> = std::env::var("JAI_WATCH_CLICK")
+            .unwrap_or_default()
+            .split(';')
+            .filter_map(|click| {
+                let mut parts = click.split('|');
+                let (title, at, when) = (parts.next()?, parts.next()?, parts.next()?);
+                // (`close` in place of x,y: Windows' own close, as Alt+F4 or the taskbar ask it.)
+                let at = if at.trim() == "close" { [i32::MIN, 0] } else { <[i32; 2]>::try_from(at.split(',').filter_map(|n| n.trim().parse().ok()).collect::<Vec<i32>>()).ok()? };
+                Some((title.to_string(), at, when.trim().parse().ok()?))
+            })
+            .collect();
+        // (`JAI_WATCH_PAINT=second`: from that second on the board is told to paint with every
+        // look, by a message sent to it and not by its turn in the queue: whether a board
+        // that had stopped drawing draws again that way.)
+        let paint_from: Option<u64> = std::env::var("JAI_WATCH_PAINT").ok().and_then(|s| s.parse().ok());
+        let fast = std::env::var("JAI_WATCH_FAST").is_ok();
+        // (How often it looks, in milliseconds: 40, or `JAI_WATCH_MS` to count a motion's frames.)
+        let every = Duration::from_millis(std::env::var("JAI_WATCH_MS").ok().and_then(|s| s.parse().ok()).unwrap_or(40));
         let (start, mut found) = (Instant::now(), Found { jai: HashMap::new(), rows: Vec::new() });
         let mut last: HashMap<isize, Row> = HashMap::new();
         let mut moves: HashMap<isize, (u64, u32)> = HashMap::new();
@@ -565,6 +738,13 @@ mod tests {
                 let _ = EnumChildWindows(FindWindowW(w!("Progman"), PCWSTR::null()), Some(each), LPARAM(&mut found as *mut Found as isize));
             }
             let (ms, second) = (start.elapsed().as_millis(), start.elapsed().as_secs());
+            if let Some((hwnd, _)) = found.rows.iter().find(|(_, row)| paint_from.is_some_and(|from| second >= from) && row.2 == "J.A.I. HUD") {
+                use windows::Win32::Graphics::Gdi::{RedrawWindow, RDW_INTERNALPAINT, RDW_UPDATENOW};
+                // SAFETY: a paint request for a window handle from the enumeration.
+                unsafe {
+                    let _ = RedrawWindow(HWND(*hwnd), None, None, RDW_INTERNALPAINT | RDW_UPDATENOW);
+                }
+            }
             for (hwnd, row) in &found.rows {
                 if last.get(hwnd) == Some(row) {
                     continue;
@@ -579,7 +759,8 @@ mod tests {
                 *count += 1;
                 if *count <= 3 {
                     let (pid, class, title, rect, shown, ex, owner) = row;
-                    println!("{ms:>6} ms  {hwnd:#x} pid {pid} {class:<24} '{title}' {rect:?} {} ex {ex:#010x} owner {owner:#x}", if *shown { "shown" } else { "HIDDEN" });
+                    let made = if last.contains_key(hwnd) { String::new() } else { made_by(*hwnd, *pid) };
+                    println!("{ms:>6} ms  {hwnd:#x} pid {pid} {class:<24} '{title}' {rect:?} {} ex {ex:#010x} owner {owner:#x}{made}", if *shown { "shown" } else { "HIDDEN" });
                 }
                 // An experiment (`JAI_WATCH_KEY_OUT=<title>`): that window of his made a layered
                 // one whose pure black Windows sees through, from here.
@@ -599,7 +780,34 @@ mod tests {
             for hwnd in gone {
                 println!("{ms:>6} ms  {hwnd:#x} '{}' is gone", last.remove(&hwnd).map(|r| r.2).unwrap_or_default());
             }
-            if second > looked {
+            clicks.retain(|(title, at, when)| {
+                if second < *when {
+                    return true;
+                }
+                let Some((hwnd, row)) = found.rows.iter().find(|(_, row)| row.4 && row.2.contains(title.as_str())) else { return second < *when + 5 };
+                if at[0] == i32::MIN {
+                    // SAFETY: a close request posted to a window handle from the enumeration.
+                    unsafe {
+                        let _ = windows::Win32::UI::WindowsAndMessaging::PostMessageW(HWND(*hwnd), windows::Win32::UI::WindowsAndMessaging::WM_CLOSE, WPARAM(0), LPARAM(0));
+                    }
+                    println!("{ms:>6} ms  '{}' asked to close, as by Windows", row.2);
+                    return false;
+                }
+                let (w, h) = (row.3[2] - row.3[0], row.3[3] - row.3[1]);
+                let (x, y) = (if at[0] < 0 { w + at[0] } else { at[0] }, if at[1] < 0 { h + at[1] } else { at[1] });
+                let place = LPARAM(((y as isize) << 16) | (x as isize & 0xFFFF));
+                // SAFETY: mouse messages posted to a window handle from the enumeration.
+                unsafe {
+                    use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
+                    for (message, keys) in [(WM_MOUSEMOVE, 0), (WM_LBUTTONDOWN, 1), (WM_LBUTTONUP, 0)] {
+                        let _ = PostMessageW(HWND(*hwnd), message, WPARAM(keys), place);
+                    }
+                }
+                println!("{ms:>6} ms  a click put into '{}' at {x},{y}", row.2);
+                false
+            });
+            // (Once a second; with `JAI_WATCH_FAST` with every look, for what shows for a moment.)
+            if second > looked || fast {
                 looked = second;
                 for (k, at) in hits.iter().enumerate() {
                     // SAFETY: plain queries on the window under a point.
@@ -643,7 +851,7 @@ mod tests {
                     }
                 }
             }
-            std::thread::sleep(Duration::from_millis(40));
+            std::thread::sleep(every);
         }
         for (hwnd, (at, count)) in moves {
             if count > 3 {

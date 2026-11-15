@@ -2274,6 +2274,8 @@ impl BoardView {
                     card.small = Some(here);
                     Some(spotlight_window(on.work, ctx.pixels_per_point(), [r - l, b - t]))
                 });
+                // (Grown large it is not where it lives: that place is not the one to keep.)
+                crate::own_windows::hold(&card.title, card.small.is_some());
                 if let Some(to) = to {
                     crate::own_windows::glide(window.hwnd, here, to);
                 }
@@ -2284,7 +2286,7 @@ impl BoardView {
         let pulse = shown.highlights[i].map(|h| h.elapsed().as_secs_f32()).filter(|s| *s < HIGHLIGHT_SECS);
         let found = !needle.is_empty() && crate::hud_dock::search_matches(needle, &block.label, &block.text());
         let (mut click, mut animating) = (None, pulse.is_some());
-        crate::gui::piece_window(ctx, viewport, &title, place, |ui| {
+        let closed = crate::gui::piece_window(ctx, viewport, &title, place, |ui| {
             let ctx = ui.ctx().clone();
             // Its entrance (it rises, fades in and springs up to its size, as on the board)
             // counts from the frame its window shows itself in.
@@ -2344,6 +2346,11 @@ impl BoardView {
                 }
             }
         });
+        // (Closed through Windows itself, Alt+F4 or its key in the taskbar: as by its own key.)
+        if closed {
+            block_menu(ctx, i, block, crate::block_actions::BlockAction::Close);
+            (click, animating) = (Some(BoardClick::Menu(crate::block_actions::BlockAction::Close)), true);
+        }
         if let Some(card) = self.cards.get_mut(&viewport) {
             card.drawn = drawn;
         }
@@ -2584,6 +2591,8 @@ impl BoardView {
         self.cards.retain(|viewport, card| {
             if !card.seen {
                 crate::gui::piece_window_gone(*viewport);
+                // (Gone while grown into the spotlight: its title's place is kept again.)
+                crate::own_windows::hold(&card.title, false);
             }
             card.seen
         });

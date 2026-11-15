@@ -874,6 +874,7 @@ pub(super) fn show_windows(ctx: &egui::Context, host: &WidgetHost) {
         }
         if let Some(pos) = position(&spec, native_ppp) {
             builder = builder.with_position(pos);
+            super::placed_by_order();
         } else if let Some((at, size)) = super::detached_placement(ctx, &spec.id) {
             builder = builder.with_position(at).with_inner_size(size);
         }
@@ -929,19 +930,17 @@ fn window_frame(ctx: &egui::Context, class: ViewportClass, host: &WidgetHost, id
     TEXT_SCALE.with(|s| s.set(scale));
     // The toolbar shows while the pointer is over the window (always when borderless and hovered).
     let hovered = ctx.input(|i| i.pointer.has_pointer());
-    let borderless = true;
     let mut fast = false;
     let body = |ui: &mut Ui| {
+        // (Borderless, in a window of its own: its bare ground moves it.)
+        if class != ViewportClass::Embedded {
+            super::window_ground(ui);
+        }
         for font in ui.style_mut().text_styles.values_mut() {
             font.size *= scale;
         }
         ui.horizontal(|ui| {
-            let title = RichText::new(&spec.title).font(bold(16.0)).color(p.accent).extra_letter_spacing(1.5);
-            let title = ui.add(egui::Label::new(title).sense(if borderless { Sense::drag() } else { Sense::hover() }));
-            // Borderless: the title moves the window.
-            if borderless && title.drag_started() {
-                ctx.send_viewport_cmd(ViewportCommand::StartDrag);
-            }
+            ui.add(egui::Label::new(RichText::new(&spec.title).font(bold(16.0)).color(p.accent).extra_letter_spacing(1.5)).selectable(false));
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if hovered {
                     window_toolbar(ui, ctx, host, &spec);

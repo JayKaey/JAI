@@ -249,14 +249,17 @@ pub fn close_secondary_windows(tools: &ToolContext) -> usize {
     let popups = crate::dynamic_popups::dismiss_all(true);
     // The radar, the disk map and the Earth in their own OS windows.
     let panels = crate::jai_views::close_detached_panels();
+    // His text console, the history and the camera, while they are windows of their own.
+    let pieces = crate::gui::close_piece_windows();
     tools.focus.forget_jai_window("all");
     crate::gui::refresh();
     info!(
-        "[WINDOWS] Closed {blocks} in-app block(s), {board} board block(s), {spatial} workspace, {native} native, {simulations} simulation window(s), {panels} panel window(s) and {popups} pop-up(s) in {:.2} ms",
+        "[WINDOWS] Closed {blocks} in-app block(s), {board} board block(s), {spatial} workspace, {native} native, {simulations} simulation window(s), {panels} panel window(s), {pieces} of his console, history and camera and {popups} pop-up(s) in {:.2} ms",
         started.elapsed().as_secs_f64() * 1000.0
     );
-    // Docked native windows and simulations are in-app blocks too: counted once.
-    blocks.max(native + simulations) + board + spatial + popups + panels
+    // Docked native windows and simulations are in-app blocks too, and a simulation or a panel
+    // in a window of its own is known to the dock by its bar: counted once.
+    blocks.max(native + simulations + panels) + board + spatial + popups + pieces
 }
 
 

@@ -220,6 +220,19 @@ pub(super) fn show_simulations(ctx: &egui::Context, host: &WidgetHost) {
 /// builders): one that was closed keeps its window while its exit plays, drawn from here.
 static SHOWN: Mutex<Vec<(Simulation, ViewportBuilder)>> = Mutex::new(Vec::new());
 
+/// Sir closed a simulation's own window: the simulation comes back onto the HUD, or, where
+/// every view is a window of its own (he is the desktop's background), it is closed. (There
+/// it stayed open, its window asked for again in every frame and standing as its exit's last
+/// one: "I tried closing a window JAI opened and it turned black", 2026-11-14.)
+fn closed_by_hand(lab: &simulation_lab::SimulationLab, id: &str) {
+    if crate::hud_dock::all_own() {
+        lab.close(id);
+        crate::hud_dock::forget(&dock_key(id));
+    } else {
+        crate::hud_dock::dock(&dock_key(id));
+    }
+}
+
 fn sim_frame(ctx: &egui::Context, class: ViewportClass, host: &WidgetHost, id: &str) {
     let lab = &host.app.tools().stark.simlab;
     // (Closed and playing its exit: drawn as it was.)
@@ -232,8 +245,7 @@ fn sim_frame(ctx: &egui::Context, class: ViewportClass, host: &WidgetHost, id: &
         return;
     };
     if !leaving && ctx.input(|i| i.viewport().close_requested()) {
-        // Closing the detached window brings the simulation back onto the HUD.
-        crate::hud_dock::dock(&dock_key(id));
+        closed_by_hand(lab, id);
         ctx.send_viewport_cmd(ViewportCommand::Visible(false));
         ctx.request_repaint_of(ViewportId::ROOT);
         return;
@@ -245,9 +257,8 @@ fn sim_frame(ctx: &egui::Context, class: ViewportClass, host: &WidgetHost, id: &
         egui::Window::new(&sim.title).id(egui::Id::new(("jai_sim_embedded", id))).default_size([900.0, 560.0]).show(ctx, body);
     } else {
         egui::CentralPanel::default().frame(Frame::none().inner_margin(Margin::same(12.0))).show(ctx, |ui| {
-            // Closing the borderless window brings the simulation back onto the HUD.
-            if super::detached_title_bar(ui, ctx, &sim.title) {
-                crate::hud_dock::dock(&dock_key(id));
+            if super::detached_title_bar(ui, ctx, &sim.title) && !leaving {
+                closed_by_hand(lab, id);
             }
             body(ui);
         });

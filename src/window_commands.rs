@@ -603,8 +603,13 @@ fn view_name(o: &str) -> Option<String> {
         .collect();
     let says_window = words.last().is_some_and(|w| matches!(*w, "window" | "fenster" | "block" | "panel" | "view" | "ansicht"));
     let name = words.iter().filter(|w| !matches!(**w, "window" | "fenster" | "block" | "panel" | "view" | "ansicht")).copied().collect::<Vec<_>>().join(" ");
-    if name.len() < 3 || names_himself(&name) {
+    if name.len() < 3 {
         return None;
+    }
+    // (His text console is himself while it is part of the HUD; in a window of its own it is
+    // one of his windows.)
+    if names_himself(&name) {
+        return (matches!(name.as_str(), "console" | "text console") && crate::own_windows::open(&name)).then_some(name);
     }
     use crate::jai_views::JaiSubWindow as View;
     // The panels by their own names: never an app of his.
@@ -620,10 +625,13 @@ fn view_name(o: &str) -> Option<String> {
         return None;
     }
     // "The drive space window": a window of the window engine, which sizes its own.
-    if says_window && crate::hud_dock::find_open(&name).is_none() {
+    // (One of his windows by its title: a report, the system column, the history.)
+    let own = crate::own_windows::open(&name);
+    if says_window && !own && crate::hud_dock::find_open(&name).is_none() {
         return None;
     }
     let known = matches!(name.as_str(), "feature lab" | "features" | "theme studio" | "mixer" | "audio mixer" | "volume mixer" | "telemetry" | "system telemetry" | "simulation lab" | "sim lab" | "plotter" | "qr code" | "schedule" | "calendar" | "stundenplan" | "kalender")
+        || own
         || crate::hud_dock::find_open(&name).is_some();
     known.then_some(name)
 }
@@ -648,7 +656,7 @@ fn target_of(o: &str) -> Option<Target> {
 /// Bildschirm"): the phrase for `monitors::resolve`.
 fn monitor_of(w: &str) -> Option<Value> {
     static MONITOR: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"^(?:(?:my|the|your|meinen|meinem|den|dem|mein)\s+)?(?:(\d)(?:st|nd|rd|th)?|first|second|third|fourth|other|left|right|primary|main|next|erste[nm]?|zweite[nm]?|dritte[nm]?|andere[nm]?|linke[nm]?|rechte[nm]?|haupt)\s*(?:monitor|screen|display|bildschirm)$|^(?:monitor|screen|display|bildschirm)\s+(\d)$").expect("monitor regex")
+        Regex::new(r"^(?:(?:my|the|your|meinen|meinem|den|dem|mein)\s+)?(?:(\d)(?:st|nd|rd|th)?|first|second|third|fourth|other|another|left|right|primary|main|next|erste[nm]?|zweite[nm]?|dritte[nm]?|andere[nm]?|linke[nm]?|rechte[nm]?|haupt)\s*(?:monitor|screen|display|bildschirm)$|^(?:monitor|screen|display|bildschirm)\s+(\d)$").expect("monitor regex")
     });
     MONITOR.is_match(w.trim()).then(|| {
         let digits: String = w.chars().filter(char::is_ascii_digit).collect();
@@ -688,6 +696,15 @@ static DOCK: LazyLock<Regex> = LazyLock::new(|| {
 static SWAP: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^(?:swap|exchange|switch around|tausch|tausche|vertausch|vertausche)\s+(.+?)(?:\s+(?:around|places|positions|die plätze|die positionen|um))?$").expect("swap regex")
 });
+/// "Keep the console on top", "pin the timetable on top", of a window of his that is open.
+/// ("Put it on top" stays the top half.)
+static ON_TOP: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^(?:keep|pin|hold|leave|halt|halte|lass|lasse)\s+(.+?)\s+(?:always\s+|immer\s+)?(?:on top|in front|above everything|im vordergrund|oben)(?:\s+of everything)?$|^(?:make|put|set)\s+(.+?)\s+always on top$").expect("on top regex")
+});
+/// "Take the console off the top", "unpin it from the top", "the console no longer on top".
+static OFF_TOP: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^(?:unpin|release)\s+(.+?)\s+from the top$|^(?:take|get)\s+(.+?)\s+off the top$|^(?:do not|don't|dont|no longer|stop)\s+keep(?:ing)?\s+(.+?)\s+on top(?:\s+any ?more)?$|^(.+?)\s+(?:no longer|not)\s+on top(?:\s+any ?more)?$").expect("off top regex")
+});
 
 /// The arguments of `arrange_jai_window` for a sentence that says to move or size one of his
 /// views, or None (nothing for this tool: an app, himself, or a phrase another rule has).
@@ -714,6 +731,16 @@ pub fn parse(text: &str) -> Option<Value> {
         }
         Some(call)
     };
+    // One of his windows kept above other programs' windows, or no longer.
+    for (said, on) in [(&ON_TOP, true), (&OFF_TOP, false)] {
+        if let Some(c) = said.captures(s) {
+            // (By its name: "pin it always on top" keeps its rule, the window the talk is about.)
+            return match target_of(c.iter().skip(1).flatten().next()?.as_str())? {
+                Target::Named(name) if crate::own_windows::open(&name) => Some(json!({ "target": name, "action": if on { "on_top" } else { "off_top" } })),
+                _ => None,
+            };
+        }
+    }
     // A pair or "them": side by side, swapped.
     if let Some(c) = SIDE_BY_SIDE.captures(s) {
         let target = match (c.get(1), c.get(2), c.get(3)) {
@@ -904,6 +931,17 @@ fn latest_two() -> Option<(String, String)> {
 /// `arrange_jai_window`. The HUD carries it out in its next frame; the result ends with a
 /// "Spoken:" line.
 pub async fn run_tool(ctx: &ToolContext, args: &Value) -> Result<String, String> {
+    // "Keep the console on top", "take the console off the top" (said, never the model's): one
+    // of his windows by its title ("it": the one of his in front).
+    #[cfg(windows)]
+    if let Some(on) = str_arg(args, &["action"]).and_then(|a| match a {
+        "on_top" => Some(true),
+        "off_top" => Some(false),
+        _ => None,
+    }) {
+        let raw = str_arg(args, &["target", "view", "name", "id"]).unwrap_or("it");
+        return crate::own_windows::pin(raw, on).ok_or_else(|| format!("None of my windows is called '{raw}', Sir."));
+    }
     let action = str_arg(args, &["action"]).and_then(Action::parse).ok_or("arrange_jai_window needs an action (move, resize, fullscreen, exit_fullscreen, maximize, restore, minimize, detach, dock, to_monitor, side_by_side, swap).")?;
     let position = str_arg(args, &["position", "where", "place"]).map(|p| Position::parse(p).ok_or(format!("'{p}' is not a place I know (centre, left, right, top, bottom, a corner, a third)."))).transpose()?;
     let size = str_arg(args, &["size"]).map(|s| Size::parse(s).ok_or(format!("'{s}' is not a size I know (bigger, smaller, half, 60%, 900x600)."))).transpose()?;
@@ -916,6 +954,14 @@ pub async fn run_tool(ctx: &ToolContext, args: &Value) -> Result<String, String>
     }
     let raw = str_arg(args, &["target", "view", "name", "id"]).unwrap_or("it").to_string();
     let lower = raw.to_lowercase();
+    // One of his windows that is no view of the dock (the text console, a report, the system
+    // column): moved and sized as the window it is.
+    #[cfg(windows)]
+    if !is_it(&lower) && !is_them(&lower) && crate::hud_dock::find_open(&raw).is_none() {
+        if let Some(done) = own_window(&raw, action, position, size, monitor.as_ref()) {
+            return done;
+        }
+    }
     if names_himself(&lower) {
         return Err("arrange_jai_window arranges my views; my own HUD moves with configure_interface (\"full screen yourself\").".into());
     }
@@ -980,6 +1026,29 @@ pub async fn run_tool(ctx: &ToolContext, args: &Value) -> Result<String, String>
     };
     let detail = [position.map(|p| format!("position {}", p.name())), size.map(|s| format!("size {}", s.name())), other.as_ref().map(|o| format!("with '{o}'"))].into_iter().flatten().collect::<Vec<_>>().join(", ");
     Ok(format!("Arranging '{id}': {}{}{}.\nSpoken: {spoken}", action.name(), if detail.is_empty() { "" } else { " " }, detail))
+}
+
+/// One of his windows that is no view of the dock, told by its title where to go or how large
+/// to be. None: none of his windows is called that.
+#[cfg(windows)]
+fn own_window(name: &str, action: Action, position: Option<Position>, size: Option<Size>, monitor: Option<&Value>) -> Option<Result<String, String>> {
+    use crate::own_windows as own;
+    let the = format!("The {}", name.to_lowercase().trim_start_matches("the "));
+    let (position, size, spoken) = match action {
+        Action::ToMonitor => return own::to_monitor(name, monitor?),
+        Action::Move => {
+            let position = position.unwrap_or(Position::Centre);
+            (Some(position), size, format!("{the} is {}, Sir.", position.spoken()))
+        }
+        Action::Resize => {
+            let size = size.unwrap_or(Size::Bigger);
+            (position, Some(size), format!("{the} is {} now, Sir.", size.spoken()))
+        }
+        Action::Maximize | Action::Fullscreen => (None, Some(Size::Percent(100.0)), format!("{the} fills the screen, Sir.")),
+        _ => return own::find(name).map(|_| Err(format!("{the} is a window of its own, Sir: I can move it, size it, send it to a monitor or keep it on top."))),
+    };
+    let title = own::arrange(name, position, size)?;
+    Some(Ok(format!("Arranged my window '{}': {}.\nSpoken: {spoken}", own::called(&title), action.name())))
 }
 
 fn capitalised(s: &str) -> String {
@@ -1173,6 +1242,41 @@ mod tests {
         ] {
             assert_eq!(p(keep), None, "{keep}");
         }
+    }
+
+    /// 2026-11-14, Sir's session: "Move the text console to another monitor" went to the
+    /// model, which looked for the console among other programs' windows ("No open window
+    /// matches 'Text Console'"). His own windows answer to their titles: moved, sized, sent to
+    /// a monitor, kept on top.
+    #[test]
+    fn his_windows_are_arranged_and_kept_on_top_by_their_titles() {
+        let p = |text: &str| parse(text);
+        // No such window is open: nothing of this tool's (the console in the HUD is himself).
+        for said in ["Move the text console to another monitor", "Put the console on the left half", "Keep the console on top", "Move the timetable to the middle"] {
+            assert_eq!(p(said), None, "{said}");
+        }
+        crate::own_windows::pretend(&["Text Console \u{2014} J.A.I.", "WEBUNTIS // TIMETABLE \u{2014} J.A.I."]);
+        assert_eq!(p("Move the text console to another monitor"), Some(json!({ "target": "text console", "action": "to_monitor", "monitor": "another monitor" })));
+        assert_eq!(p("Put the console on the left half"), Some(json!({ "target": "console", "action": "move", "position": "left" })));
+        assert_eq!(p("Move the timetable to the top right corner"), Some(json!({ "target": "timetable", "action": "move", "position": "top_right" })));
+        assert_eq!(p("Make the timetable window bigger"), Some(json!({ "target": "timetable", "action": "resize", "size": "bigger" })));
+        assert_eq!(p("Maximise the text console"), Some(json!({ "target": "text console", "action": "maximize" })));
+        // Kept above other programs' windows, and let go again.
+        assert_eq!(p("Keep the console on top"), Some(json!({ "target": "console", "action": "on_top" })));
+        assert_eq!(p("Pin the timetable on top"), Some(json!({ "target": "timetable", "action": "on_top" })));
+        assert_eq!(p("Take the console off the top"), Some(json!({ "target": "console", "action": "off_top" })));
+        assert_eq!(p("Unpin the timetable from the top"), Some(json!({ "target": "timetable", "action": "off_top" })));
+        // ("On top" alone stays the top half.)
+        assert_eq!(p("Put the timetable on top"), Some(json!({ "target": "timetable", "action": "move", "position": "top" })));
+        // Another program's window, and himself, stay what they were.
+        // Nor do a word inside one of their names ("make the text bigger" is the HUD's text) and
+        // a view of his that is not one of these windows.
+        for keep in ["Keep Discord on top", "Put the board on the left", "Move the orb to the middle", "Keep the HUD on top", "Move Discord to another monitor", "Pin it always on top", "Make the text bigger", "Mach den Text größer", "Keep the earth on top"] {
+            assert_eq!(p(keep), None, "{keep}");
+        }
+        crate::own_windows::pretend(&[]);
+        assert_eq!(p("Put the console on the left half"), None, "closed again: himself again");
+        assert_eq!(monitor_of("another monitor"), Some(json!("another monitor")));
     }
 
     #[test]

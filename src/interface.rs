@@ -349,6 +349,20 @@ pub struct InterfaceSettings {
     pub span_all_monitors: bool,
     /// "Overlap the windows" / "stack them": new windows cascade instead of packing side by side.
     pub allow_window_overlap: bool,
+    /// As the background: what is being said stands beside the corner orb. (Sir, 2026-11-14: "I
+    /// should be able to toggle if the information window next to his orb should show or not".)
+    pub orb_words: bool,
+    /// The corner orb's size, of its usual one (0.6-1.8): the wheel over it, "smaller orb".
+    pub corner_orb_scale: f32,
+    /// As the background: the clock under the emblem, with its seconds, in twelve hours, with
+    /// the date under it. ("I want the desktop view to have a clock".)
+    pub desk_clock: bool,
+    pub desk_clock_seconds: bool,
+    pub desk_clock_12h: bool,
+    pub desk_clock_date: bool,
+    /// Where Sir dragged that clock (fractions of his first screen, beyond 0-1 on another
+    /// monitor; None: under the emblem, and with it wherever that goes).
+    pub desk_clock_pos: Option<[f32; 2]>,
     /// Sir told the emblem to get out of the way: it waits in its corner until he calls it back
     /// (or moves it). Never saved: at the next start it is in the middle again.
     #[serde(skip)]
@@ -408,6 +422,13 @@ impl Default for InterfaceSettings {
             orb_board_pos: None,
             span_all_monitors: false,
             allow_window_overlap: false,
+            orb_words: true,
+            corner_orb_scale: 1.0,
+            desk_clock: true,
+            desk_clock_seconds: false,
+            desk_clock_12h: false,
+            desk_clock_date: true,
+            desk_clock_pos: None,
             orb_aside: false,
         }
     }
@@ -520,6 +541,7 @@ impl InterfaceSettings {
         self.opacity = self.opacity.clamp(MIN_OPACITY, 100);
         let round = |x: f32, lo: f32, hi: f32| if x.is_finite() { ((x * 100.0).round() / 100.0).clamp(lo, hi) } else { 1.0 };
         self.orb_scale = round(self.orb_scale, MIN_ORB_SCALE, MAX_ORB_SCALE);
+        self.corner_orb_scale = round(self.corner_orb_scale, 0.6, 1.8);
         self.font_scale = round(self.font_scale, MIN_FONT_SCALE, MAX_FONT_SCALE);
         if parse_hex(&self.accent).is_none() {
             self.accent = defaults.accent;
@@ -850,6 +872,11 @@ pub fn control(current: &InterfaceSettings, args: &Value) -> Result<Controlled, 
             s.layout = HudLayout::Full;
             "every panel is back".to_string()
         }
+        // (While the orb is out in its corner, it is the one Sir sees and means.)
+        "orb_bigger" | "orb_larger" | "bigger_orb" | "orb_smaller" | "smaller_orb" if crate::wallpaper::orb_out() => {
+            s.corner_orb_scale = corner_orb_scale(s.corner_orb_scale, if action.contains("smaller") { "smaller" } else { "bigger" });
+            "corner orb resized".to_string()
+        }
         "orb_bigger" | "orb_larger" | "bigger_orb" => {
             s.orb_scale *= LAYOUT_STEP;
             s.show(HudPanel::Reactor);
@@ -958,6 +985,9 @@ pub fn control_ack(args: &Value, now: &InterfaceSettings) -> String {
         "zen_mode_off" | "zen_off" | "exit_zen" => "Very good, Sir. The full workspace is back.".into(),
         "toggle_zen" => if now.zen_mode { "Zen mode, Sir.".into() } else { "The full workspace is back, Sir.".into() },
         "restore_all" | "show_all" | "reset_layout" | "everything" => "There you are, Sir. Every panel is back.".into(),
+        "orb_bigger" | "orb_larger" | "bigger_orb" | "orb_smaller" | "smaller_orb" if crate::wallpaper::orb_out() => {
+            format!("Done, Sir. The corner orb is at {:.0} percent.", now.corner_orb_scale * 100.0)
+        }
         "orb_bigger" | "orb_larger" | "bigger_orb" | "orb_smaller" | "smaller_orb" | "set_orb_scale" | "orb_size" | "orb_scale" => {
             format!("Done, Sir. The orb is at {:.0} percent.", now.orb_scale * 100.0)
         }
@@ -1826,6 +1856,11 @@ pub fn configure(current: &InterfaceSettings, args: &Value) -> Result<Configured
         ("mini mode", bool_arg(args, "mini_strip"), &mut s.mini_strip),
         ("live desktop background", bool_arg(args, "desktop_background"), &mut s.desktop_background),
         ("background on every monitor", bool_arg(args, "background_all_monitors"), &mut s.background_all_monitors),
+        ("words beside the corner orb", bool_arg(args, "orb_words"), &mut s.orb_words),
+        ("desktop clock", bool_arg(args, "desk_clock"), &mut s.desk_clock),
+        ("clock seconds", bool_arg(args, "desk_clock_seconds"), &mut s.desk_clock_seconds),
+        ("twelve-hour clock", bool_arg(args, "desk_clock_12h"), &mut s.desk_clock_12h),
+        ("clock date", bool_arg(args, "desk_clock_date"), &mut s.desk_clock_date),
         // (Before his voice is known it holds nothing back: the print is gathered from the
         // orders given by name, and the lock holds from then on.)
         ("voice lock", bool_arg(args, "voice_lock"), &mut s.voice_lock),
@@ -1840,6 +1875,15 @@ pub fn configure(current: &InterfaceSettings, args: &Value) -> Result<Configured
             *field = on;
             done.push(format!("{label} {}", if on { "on" } else { "off" }));
         }
+    }
+    // "Smaller orb", "bigger orb", "orb size normal": the corner orb, a fifth at a time.
+    if let Some(step) = str_arg(args, &["corner_orb_size"]) {
+        s.corner_orb_scale = corner_orb_scale(s.corner_orb_scale, step);
+        done.push(format!("corner orb at {:.0} % of its size", s.corner_orb_scale * 100.0));
+    }
+    // (Any setting of the clock but its hiding shows it: "show seconds" with no clock is no answer.)
+    if ["desk_clock_seconds", "desk_clock_12h", "desk_clock_date"].iter().any(|key| bool_arg(args, key).is_some()) && bool_arg(args, "desk_clock").is_none() {
+        s.desk_clock = true;
     }
     if let Some(title) = str_arg(args, &["title", "display_name", "name"]) {
         s.title = title.to_string();
@@ -2280,7 +2324,10 @@ pub fn apply_orb_move(m: OrbMove, from: Option<[f32; 2]>) -> Option<[f32; 2]> {
         OrbMove::Spot(at) => Some(at),
         OrbMove::Step([dx, dy]) => {
             let [x, y] = from.unwrap_or([0.5, 0.5]);
-            Some([(x + dx).clamp(0.08, 0.92), (y + dy).clamp(0.12, 0.88)])
+            // (On the monitor it stands on: Sir's first is 0-1, the next to the right 1-2 …)
+            let cell = |v: f32| if (0.0..=1.0).contains(&v) { 0.0 } else { v.floor() };
+            let (cx, cy) = (cell(x), cell(y));
+            Some([(x + dx).clamp(cx + 0.08, cx + 0.92), (y + dy).clamp(cy + 0.12, cy + 0.88)])
         }
     }
 }
@@ -2335,6 +2382,18 @@ pub fn monitor_number(v: &Value) -> Option<u8> {
         "current" | "this" | "same" => 0,
         n => n.parse::<u8>().ok()?.min(9),
     })
+}
+
+/// The corner orb's size after "smaller", "bigger" or "normal" (a fifth at a time, between six
+/// tenths and not quite twice its usual size); anything else leaves it.
+pub fn corner_orb_scale(now: f32, step: &str) -> f32 {
+    let next = match words(step).as_str() {
+        "smaller" | "small" | "kleiner" | "klein" => now / 1.2,
+        "bigger" | "larger" | "big" | "large" | "größer" | "groesser" | "gross" | "groß" => now * 1.2,
+        "normal" | "default" | "reset" | "usual" => 1.0,
+        _ => now,
+    };
+    next.clamp(0.6, 1.8)
 }
 
 /// The board's own layout, accepted by `configure_interface` and `control_orb_mode` alike: where
@@ -3042,6 +3101,39 @@ mod tests {
         assert_eq!(nudge("top left", None), None);
         assert_eq!(board_spot("middle"), Some(None));
         assert_eq!(board_spot("slightly left"), None);
+    }
+
+    /// 2026-11-14: whether what is said stands beside the corner orb, that orb's size and the
+    /// desktop clock are settings of his; a step from a spot on another monitor stays there.
+    #[test]
+    fn the_corner_orb_and_the_desktop_clock_are_settings() {
+        let now = InterfaceSettings::default();
+        assert!(now.orb_words && now.desk_clock && now.desk_clock_date && !now.desk_clock_seconds && !now.desk_clock_12h && now.desk_clock_pos.is_none());
+        assert!(!configure(&now, &json!({"orb_words": false})).unwrap().settings.orb_words);
+        // Any setting of the clock but its hiding shows it.
+        let hidden = configure(&now, &json!({"desk_clock": false})).unwrap().settings;
+        assert!(!hidden.desk_clock);
+        let seconds = configure(&hidden, &json!({"desk_clock_seconds": true})).unwrap().settings;
+        assert!(seconds.desk_clock && seconds.desk_clock_seconds);
+        // The corner orb: a fifth at a time, within its range.
+        assert!((corner_orb_scale(1.0, "bigger") - 1.2).abs() < 1e-5 && (corner_orb_scale(1.0, "smaller") - 1.0 / 1.2).abs() < 1e-5);
+        assert_eq!(corner_orb_scale(1.7, "bigger"), 1.8);
+        assert_eq!(corner_orb_scale(0.61, "smaller"), 0.6);
+        assert_eq!(corner_orb_scale(1.44, "normal"), 1.0);
+        assert_eq!(corner_orb_scale(1.44, "purple"), 1.44);
+        let smaller = configure(&now, &json!({"corner_orb_size": "smaller"})).unwrap().settings;
+        assert!((smaller.corner_orb_scale - 0.83).abs() < 0.01 && smaller.orb_scale == now.orb_scale, "{}", smaller.corner_orb_scale);
+        // A step from a spot on another monitor (beyond 0-1) stays on that monitor; on the
+        // first one it keeps to the screen.
+        let [x, y] = apply_orb_move(OrbMove::Step([-0.1, 0.0]), Some([1.5, 0.5])).unwrap();
+        assert!((x - 1.4).abs() < 1e-5 && y == 0.5, "{x} {y}");
+        assert_eq!(apply_orb_move(OrbMove::Step([0.5, 0.0]), Some([0.9, 0.5])), Some([0.92, 0.5]));
+        // Step after step on another monitor never runs off it (past it, the emblem fell back
+        // to the first, and the steps back seemed to do nothing).
+        for (step, from, want) in [(0.5, 1.85, 1.92), (-0.5, 1.2, 1.08), (-0.5, -0.85, -0.92)] {
+            let [x, _] = apply_orb_move(OrbMove::Step([step, 0.0]), Some([from, 0.5])).unwrap();
+            assert!((x - want).abs() < 1e-5, "{step} from {from}: {x}");
+        }
     }
 
     #[test]

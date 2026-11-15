@@ -409,9 +409,21 @@ pub fn look_at(emblem: [i32; 4]) {
 #[cfg(not(windows))]
 pub fn look_at(_emblem: [i32; 4]) {}
 
-/// Whether the background's emblem is hidden behind another program's window.
+/// Whether the background's emblem is hidden behind a window.
 pub fn hidden() -> bool {
     HIDDEN.load(Ordering::Acquire)
+}
+
+/// Whether the orb is out of the background right now (in its corner, or on its way): then
+/// "make the orb smaller" means that one.
+static ORB_OUT: AtomicBool = AtomicBool::new(false);
+
+pub fn orb_out() -> bool {
+    ORB_OUT.load(Ordering::Acquire)
+}
+
+pub fn set_orb_out(out: bool) {
+    ORB_OUT.store(out, Ordering::Release);
 }
 
 /// The monitor Sir is using: the one the window in front is on (another program's), else the
@@ -449,12 +461,12 @@ const CORNER_MARGIN: i32 = 26;
 
 /// Where the orb rests on a monitor (its work area `work`: left, top, right, bottom): the spot
 /// Sir dragged it to there (`spot`: its corner as a share of the work area), else the lower
-/// left corner. Always wholly on that monitor.
+/// right corner. Always wholly on that monitor.
 pub fn corner(work: [i32; 4], size: i32, spot: Option<[f32; 2]>) -> Rect {
     let (w, h) = ((work[2] - work[0]).max(size), (work[3] - work[1]).max(size));
     let (x, y) = match spot {
         Some([fx, fy]) => (work[0] + (fx.clamp(0.0, 1.0) * (w - size) as f32).round() as i32, work[1] + (fy.clamp(0.0, 1.0) * (h - size) as f32).round() as i32),
-        None => (work[0] + CORNER_MARGIN, work[3] - CORNER_MARGIN - size),
+        None => (work[2] - CORNER_MARGIN - size, work[3] - CORNER_MARGIN - size),
     };
     let (x, y) = (x.clamp(work[0], work[0] + w - size), y.clamp(work[1], work[1] + h - size));
     Rect::from_min_size(pos2(x as f32, y as f32), vec2(size as f32, size as f32))
@@ -599,6 +611,16 @@ impl Orb {
         }
     }
 
+    /// Sir went to another monitor while it is out: it glides to its place there (`to`), from
+    /// where it rests. Not out of his hand. (His choice of 2026-11-14: "Orb follows you".)
+    pub fn follow(&mut self, now: Instant, to: Rect) {
+        // (A pixel of rounding is no other place.)
+        let elsewhere = (to.min - self.to.min).length() > 2.0 || (to.width() - self.to.width()).abs() > 0.5;
+        if self.phase == OrbPhase::Out && !self.in_hand && elsewhere {
+            (self.phase, self.since, self.from, self.to) = (OrbPhase::Leaving, now, self.to, to);
+        }
+    }
+
     /// Sir takes hold of the orb: where he lets go of it counts. False while it flies (then
     /// it is not his to drag).
     pub fn grabbed(&mut self) -> bool {
@@ -710,14 +732,15 @@ mod tests {
     }
 
     #[test]
-    fn the_orb_rests_in_the_lower_left_corner_or_where_sir_put_it() {
+    fn the_orb_rests_in_the_lower_right_corner_or_where_sir_put_it() {
+        // (Sir, 2026-11-14: "in the right down corner … on standard". Until then: the left.)
         let work = [0, 0, 2560, 1392];
         let at = corner(work, 132, None);
-        assert_eq!((at.left(), at.bottom()), (26.0, 1392.0 - 26.0), "the lower left corner, off the taskbar");
+        assert_eq!((at.right(), at.bottom()), (2560.0 - 26.0, 1392.0 - 26.0), "the lower right corner, off the taskbar");
         assert_eq!(at.size(), vec2(132.0, 132.0));
         // The upright monitor to the left: its own corner.
         let tall = corner([-1080, -290, 0, 1582], 132, None);
-        assert_eq!((tall.left(), tall.bottom()), (-1054.0, 1556.0));
+        assert_eq!((tall.right(), tall.bottom()), (-26.0, 1556.0));
         // Where Sir dragged it, as a share of the screen: found again, also after the screen changed size.
         let dragged = pos2(1900.0, 300.0);
         let spot = spot_of(work, 132, dragged);
@@ -819,6 +842,35 @@ mod tests {
         orb.step(ms(30_600), true, true, home, || rest);
         assert!(orb.grabbed());
         assert_eq!(orb.step(ms(30_700), false, false, home, || rest).unwrap().phase, OrbPhase::Out);
+    }
+
+    /// While it is out and Sir goes to another monitor, it glides to its corner there, without
+    /// a jump, and rests there; never out of his hand, and not while it flies.
+    #[test]
+    fn the_orb_follows_sir_to_another_monitor() {
+        let home = Rect::from_center_size(pos2(1280.0, 720.0), vec2(400.0, 400.0));
+        let (here, there) = (corner([0, 0, 2560, 1392], 168, None), corner([2560, 0, 5120, 1392], 168, None));
+        let t0 = Instant::now();
+        let ms = |n: u64| t0 + Duration::from_millis(n);
+        let mut orb = Orb::default();
+        orb.step(ms(0), true, true, home, || here);
+        orb.follow(ms(100), there);
+        assert_eq!(orb.step(ms(600), true, true, home, || here).unwrap().rect, here, "on its way out it keeps its course");
+        orb.follow(ms(700), there);
+        let first = orb.step(ms(700), true, true, home, || here).unwrap();
+        assert_eq!((first.phase, first.rect), (OrbPhase::Leaving, here), "it sets out from where it rested");
+        let mut last = first.rect;
+        for n in (700..=1_260).step_by(16) {
+            let f = orb.clone().step(ms(n), true, true, home, || here).unwrap();
+            assert!((f.rect.center() - last.center()).length() < 260.0, "a jump at {n} ms");
+            last = f.rect;
+        }
+        let arrived = orb.step(ms(1_300), true, true, home, || here).unwrap();
+        assert_eq!((arrived.phase, arrived.rect), (OrbPhase::Out, there));
+        // In his hand it stays where he holds it.
+        assert!(orb.grabbed());
+        orb.follow(ms(1_400), here);
+        assert_eq!(orb.resting(), Some(there));
     }
 
     /// A window half over the emblem does not send the orb to and fro: hidden from more than
