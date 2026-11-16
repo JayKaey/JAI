@@ -92,7 +92,11 @@ static FILE_NAME: LazyLock<Regex> = LazyLock::new(|| Regex::new(&format!(r"\b([\
 
 /// "src/brain.rs" → "brain dot R S", "C:\Users\…" → "your user folder".
 fn paths(s: &str) -> String {
-    let s = USER_PATH.replace_all(s, "your user folder");
+    // (The folder under his own: "your Documents folder"; never his user name.)
+    let s = USER_PATH.replace_all(s, |c: &Captures| match c[0].split('\\').nth(3).filter(|f| !f.is_empty() && !f.contains('.')) {
+        Some(folder) => format!("your {folder} folder"),
+        None => "your user folder".to_string(),
+    });
     let s = WINDOWS_PATH.replace_all(&s, |c: &Captures| {
         let last = c[0].trim_end_matches('\\').rsplit('\\').next().unwrap_or("").to_string();
         match last.rsplit_once('.') {
@@ -275,10 +279,16 @@ static UNITS: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| {
 static WORD_SLASH: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\b([A-Za-z]{2,})/([A-Za-z]{2,})\b").unwrap());
 const UNIT_TOKENS: [&str; 20] = ["km", "kg", "wh", "kwh", "kb", "mb", "gb", "tb", "mi", "ms", "hr", "sec", "min", "mbit", "gbit", "fps", "rpm", "eur", "usd", "ml"];
 
-/// "read/write" → "read or write" ("Wh/kg" stays a unit).
+/// "a/b/c" and "a::b::c" are paths: "a slash b slash c", "a b c".
+static PATH_CHAIN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\b\w+(?:/\w+){2,}\b|\b\w+(?:::\w+)+\b").unwrap());
+
+/// "read/write" → "read or write" ("Wh/kg" stays a unit); a path of three parts or more is
+/// read part by part.
 fn slashes(s: &str) -> String {
+    // (A date, "12/05/2026", is no path.)
+    let s = PATH_CHAIN.replace_all(s, |c: &Captures| if c[0].contains(char::is_alphabetic) { c[0].replace("::", " ").replace('/', " slash ") } else { c[0].to_string() });
     WORD_SLASH
-        .replace_all(s, |c: &Captures| {
+        .replace_all(&s, |c: &Captures| {
             if UNIT_TOKENS.contains(&c[1].to_lowercase().as_str()) || UNIT_TOKENS.contains(&c[2].to_lowercase().as_str()) {
                 c[0].to_string()
             } else {
@@ -426,7 +436,13 @@ mod tests {
     #[test]
     fn paths_and_identifiers_are_never_read_raw() {
         assert_eq!(say("I patched src/brain.rs"), "I patched brain dot R S");
-        assert_eq!(say(r"Saved to C:\Users\max\Documents\notes.txt"), "Saved to your user folder");
+        assert_eq!(say(r"Saved to C:\Users\max\Documents\notes.txt"), "Saved to your Documents folder");
+        assert_eq!(say(r"Saved to C:\Users\max\notes.txt"), "Saved to your user folder");
+        assert_eq!(say(r"Saved to C:\Users\max"), "Saved to your user folder");
+        // A path of three parts is read part by part, a Rust path word by word; a date stays.
+        assert_eq!(say("look in assets/fonts/display"), "look in assets slash fonts slash display");
+        assert_eq!(say("call kit::say first"), "call kit say first");
+        assert!(!say("on 12/05/2026").contains("slash"));
         assert_eq!(say(r"It is in D:\Code\jai_config.json"), "It is in jai config dot Jason");
         assert_eq!(say("hands_free_mode is on, see camelCase and SpatialWindowKind"), "hands free mode is on, see camel Case and Spatial Window Kind");
         assert_eq!(say("WhatsApp and YouTube stay"), "WhatsApp and YouTube stay");

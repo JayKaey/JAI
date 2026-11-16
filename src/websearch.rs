@@ -57,6 +57,34 @@ pub fn searching() -> bool {
     SEARCHING.is_set()
 }
 
+/// What was searched or read in the last 15 minutes: a repeated or narrowed search reuses it
+/// instead of fetching it again. shortcut: 32 entries each, oldest out first; more when long
+/// research runs re-read pages.
+struct Recent(std::sync::Mutex<Vec<(String, std::time::Instant, String)>>);
+const KEPT_FOR: Duration = Duration::from_secs(15 * 60);
+
+impl Recent {
+    const fn new() -> Self {
+        Self(std::sync::Mutex::new(Vec::new()))
+    }
+    fn get(&self, key: &str) -> Option<String> {
+        let mut kept = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        kept.retain(|(_, at, _)| at.elapsed() < KEPT_FOR);
+        kept.iter().find(|(k, _, _)| k == key).map(|(_, _, v)| v.clone())
+    }
+    fn put(&self, key: &str, value: &str) {
+        let mut kept = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        kept.retain(|(k, _, _)| k != key);
+        if kept.len() >= 32 {
+            kept.remove(0);
+        }
+        kept.push((key.to_string(), std::time::Instant::now(), value.to_string()));
+    }
+}
+
+static SEARCHED: Recent = Recent::new();
+static PAGES: Recent = Recent::new();
+
 pub async fn search(query: &str) -> Result<String, String> {
     let _searching = SEARCHING.engage();
     let query = query
@@ -65,6 +93,11 @@ pub async fn search(query: &str) -> Result<String, String> {
         .trim();
     if query.is_empty() {
         return Err("The search query is empty.".into());
+    }
+    let key = query.to_lowercase();
+    if let Some(kept) = SEARCHED.get(&key) {
+        info!("[TOOL] Web search: '{query}' (read in the last 15 minutes)");
+        return Ok(kept);
     }
     info!("[TOOL] Web search: '{query}'");
 
@@ -108,6 +141,7 @@ pub async fn search(query: &str) -> Result<String, String> {
     if out.trim().is_empty() {
         Err(format!("No live results found for '{query}' (offline or blocked)."))
     } else {
+        SEARCHED.put(&key, out.trim());
         Ok(out.trim().to_string())
     }
 }
@@ -163,6 +197,9 @@ fn error_chain(e: &dyn std::error::Error) -> String {
 /// Downloads a page's HTML, once more after a dropped connection (a reset mid-body otherwise
 /// fails the whole answer).
 async fn fetch_html(url: &str) -> Result<String, String> {
+    if let Some(html) = PAGES.get(url) {
+        return Ok(html);
+    }
     let mut last = String::new();
     for attempt in 0..2 {
         if attempt > 0 {
@@ -185,7 +222,10 @@ async fn fetch_html(url: &str) -> Result<String, String> {
             return Err(format!("not a web page ({content_type})"));
         }
         match resp.text().await {
-            Ok(html) => return Ok(html),
+            Ok(html) => {
+                PAGES.put(url, &html);
+                return Ok(html);
+            }
             Err(e) => last = error_chain(&e),
         }
     }

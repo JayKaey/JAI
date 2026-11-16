@@ -640,6 +640,24 @@ mod imp {
         device_of(app, eCapture)
     }
 
+    /// Windows' default microphone: (name, level, muted, peak right now). Read only.
+    pub fn microphone_state() -> Result<Option<super::MicState>, String> {
+        ensure_com();
+        // SAFETY: COM is initialised on this thread; the interfaces come from the enumerator.
+        unsafe {
+            let enumerator: IMMDeviceEnumerator = CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL).map_err(err)?;
+            let Ok(device) = enumerator.GetDefaultAudioEndpoint(eCapture, eConsole).or_else(|_| enumerator.GetDefaultAudioEndpoint(eCapture, eMultimedia)) else { return Ok(None) };
+            let volume = device.Activate::<IAudioEndpointVolume>(CLSCTX_ALL, None).map_err(err)?;
+            let peak = device.Activate::<IAudioMeterInformation>(CLSCTX_ALL, None).ok().and_then(|m| m.GetPeakValue().ok()).unwrap_or(0.0);
+            Ok(Some(super::MicState {
+                name: friendly_name(&device).unwrap_or_else(|| "the default microphone".to_string()),
+                level: volume.GetMasterVolumeLevelScalar().map_err(err)?,
+                muted: volume.GetMute().map_err(err)?.as_bool(),
+                peak,
+            }))
+        }
+    }
+
     fn device_of(app: &str, flow: EDataFlow) -> Result<Option<String>, String> {
         let mut fallback: Option<String> = None;
         for device in endpoints(flow)? {
@@ -845,6 +863,9 @@ mod imp {
         Ok(None)
     }
     pub fn input_device_of(_: &str) -> Result<Option<String>, String> {
+        Ok(None)
+    }
+    pub fn microphone_state() -> Result<Option<super::MicState>, String> {
         Ok(None)
     }
     pub fn master_state() -> Result<(f32, bool), String> {
@@ -1808,6 +1829,21 @@ pub async fn app_output_device(app: &str) -> Option<String> {
 pub async fn app_input_device(app: &str) -> Option<String> {
     let app = app.to_string();
     com(move || imp::input_device_of(&app)).await.ok().flatten()
+}
+
+/// Windows' default microphone as the mixer reads it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MicState {
+    pub name: String,
+    /// 0-1, the device's own level slider.
+    pub level: f32,
+    pub muted: bool,
+    /// 0-1, what it hears right now (0 while nothing records from it).
+    pub peak: f32,
+}
+
+pub async fn microphone_state() -> Option<MicState> {
+    com(imp::microphone_state).await.ok().flatten()
 }
 
 /// (process name, pid) of every app making sound right now (empty when unknown).

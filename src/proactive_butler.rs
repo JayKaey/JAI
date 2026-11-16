@@ -34,6 +34,8 @@ pub const LEAD_MINUTES: i64 = 15;
 const POLL: Duration = Duration::from_secs(10);
 /// The timetable is read from WebUntis this often, during the school day.
 const LESSON_REFRESH: Duration = Duration::from_secs(60 * 60);
+/// The birthday notes already given ("2026-03-03|today").
+const BIRTHDAY_TOLD: &str = "birthday_told";
 /// A card's buttons work this long after it appeared.
 const FIX_LIFE: Duration = Duration::from_secs(30 * 60);
 /// At most this much of a build log is read at once.
@@ -215,7 +217,18 @@ impl Agenda {
         let fresh: Vec<&Upcoming> = due(now, &items).into_iter().filter(|u| self.announced.insert(format!("{}@{}", u.title, u.start))).collect();
         let mut starts: Vec<NaiveDateTime> = fresh.iter().map(|u| u.start).collect();
         starts.dedup();
-        starts.into_iter().filter_map(|at| upcoming_card(now, &fresh.iter().copied().filter(|u| u.start == at).collect::<Vec<_>>())).collect()
+        let mut cards: Vec<Card> = starts.into_iter().filter_map(|at| upcoming_card(now, &fresh.iter().copied().filter(|u| u.start == at).collect::<Vec<_>>())).collect();
+        if matches!(now.hour(), 7..=11 | 19..=22) {
+            let (from, to) = (today.and_hms_opt(0, 0, 0).unwrap_or(now), (today + chrono::Duration::days(2)).and_hms_opt(0, 0, 0).unwrap_or(now));
+            let all_day: Vec<(NaiveDate, String)> = pim.calendar().events_between(from, to).into_iter().filter(|e| e.all_day).map(|e| (e.start.date(), e.title)).collect();
+            // Told once per day and time of day, kept in his store so a restart does not repeat it.
+            if let Some((key, title, body, spoken)) = crate::kit_notes::birthday_note(now, &crate::kit_notes::birthdays(), &all_day) {
+                if crate::kit::get(BIRTHDAY_TOLD, &key).is_none() && crate::kit::put(BIRTHDAY_TOLD, &key, &json!(true)).is_ok() {
+                    cards.push(Card { title, body, fixes: Vec::new(), spoken: Some(spoken) });
+                }
+            }
+        }
+        cards
     }
 }
 

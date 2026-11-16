@@ -173,6 +173,8 @@ impl Pim {
             tick.tick().await;
             loop {
                 tick.tick().await;
+                // (The holidays are known before anyone asks: the bedtime nudge cannot wait for WebUntis.)
+                let _ = pim.holidays().await;
                 let cfg = pim.config().read(|s| s.lms.clone());
                 // A Schule@BW account has no REST password login to keep warm (its cached SSO
                 // session is renewed on use).
@@ -196,6 +198,51 @@ impl Pim {
         let out = timed(self.untis().lessons(&cfg, auth, from, to)).await;
         self.record(WEBUNTIS, &out.as_ref().map(|l| format!("{} lessons read", l.len())));
         out
+    }
+
+    /// The school's holidays, read from WebUntis at most twice a day (kept in
+    /// `webuntis_client::HOLIDAYS`); none without WebUntis.
+    pub async fn holidays(&self) -> Vec<webuntis_client::Holiday> {
+        const FRESH: Duration = Duration::from_secs(12 * 3600);
+        let kept = webuntis_client::HOLIDAYS.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        if let Some((at, all)) = &kept {
+            if at.elapsed() < FRESH {
+                return all.clone();
+            }
+        }
+        // (A failed read is tried again after half an hour, not on every minute's tick.)
+        static FAILED: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+        let failed_lately = FAILED.lock().unwrap_or_else(|e| e.into_inner()).is_some_and(|t| t.elapsed() < Duration::from_secs(1800));
+        if self.config().missing(WEBUNTIS).is_some() || failed_lately {
+            return kept.map(|(_, all)| all).unwrap_or_default();
+        }
+        let cfg = self.config().read(|s| s.webuntis.clone());
+        let (password, session) = self.untis_auth();
+        let auth = Auth { password: password.as_deref(), session: session.as_deref() };
+        match timed(self.untis().holidays(&cfg, auth)).await {
+            Ok(all) => {
+                *webuntis_client::HOLIDAYS.lock().unwrap_or_else(|e| e.into_inner()) = Some((std::time::Instant::now(), all.clone()));
+                all
+            }
+            Err(e) => {
+                warn!("[UNTIS] Holidays unavailable: {e}");
+                *FAILED.lock().unwrap_or_else(|e| e.into_inner()) = Some(std::time::Instant::now());
+                kept.map(|(_, all)| all).unwrap_or_default()
+            }
+        }
+    }
+
+    /// Why `day` has no school, if it has none: a holiday, or a weekday whose lessons are all
+    /// cancelled. None when there is school or WebUntis cannot tell.
+    pub async fn no_school(&self, day: NaiveDate) -> Option<String> {
+        if let Some(h) = webuntis_client::holiday_on(&self.holidays().await, day) {
+            return Some(webuntis_client::holiday_line(h));
+        }
+        if matches!(day.weekday(), Weekday::Sat | Weekday::Sun) {
+            return None;
+        }
+        let lessons = self.lessons(day, day).await.ok()?;
+        (!lessons.is_empty() && lessons.iter().all(|l| l.status == webuntis_client::LessonStatus::Cancelled)).then(|| format!("every lesson on {} is cancelled.", day.format("%A")))
     }
 
     pub async fn course_updates(&self, filter: Option<&str>) -> Result<Vec<lms_client::CourseUpdate>, String> {
@@ -898,16 +945,13 @@ pub async fn run_tool(tools: &ToolContext, name: &str, args: &Value) -> Result<S
             let mut ev = CalEvent::new(title, start, end, all_day);
             ev.location = str_arg(args, &["location", "place", "where"]).unwrap_or("").to_string();
             ev.description = str_arg(args, &["description", "notes", "details"]).unwrap_or("").to_string();
-            let clashes: Vec<String> = pim
-                .calendar()
-                .events_between(ev.start, ev.end)
-                .into_iter()
-                .filter(|o| o.overlaps(&ev))
-                .map(|o| format!("'{}' ({})", o.title, o.line()))
-                .collect();
+            // (The calendar as it stands now: an event added on the phone an hour ago clashes too.)
+            let _ = pim.schedule(start.date(), end.date()).await;
+            let overlapping: Vec<CalEvent> = pim.calendar().events_between(ev.start, ev.end).into_iter().filter(|o| o.overlaps(&ev)).collect();
+            let clashes: Vec<String> = overlapping.iter().map(|o| format!("'{}' ({})", o.title, o.line())).collect();
             let cfg = pim.config().read(|s| s.calendar.clone());
             let token = pim.config().token(CALENDAR).filter(|_| cfg.enabled);
-            let spoken = calendar_client::confirmation(&ev);
+            let spoken = calendar_client::confirmation(&ev) + &calendar_client::clash_line(&overlapping);
             let mut out = timed(pim.calendar().create(&cfg, token.as_deref(), ev)).await?;
             if !clashes.is_empty() {
                 out.push_str(&format!(" Note: it overlaps {}.", clashes.join(", ")));

@@ -727,12 +727,26 @@ fn vram_short() -> Option<u64> {
 static SQUEEZED: AtomicBool = AtomicBool::new(false);
 
 /// Once a second: notes when JAI speaks; every `poll_secs`: the game and idle checks.
+/// Input idle this long is "away" (the PC locked, a walk to the kitchen).
+const AWAY_SECS: u64 = 300;
+
+/// (away now, back this moment): away once input rests `AWAY_SECS`, back when the idle time
+/// falls again (input came).
+fn came_back(away: bool, last_idle: u64, idle: u64) -> (bool, bool) {
+    match (away, idle >= AWAY_SECS) {
+        (_, true) => (true, false),
+        (true, false) => (false, idle < last_idle),
+        (false, false) => (false, false),
+    }
+}
+
 async fn watchdog(controls: Arc<AudioControls>, config: VramGuardConfig) {
     let mut sys = System::new();
     let mut tick = tokio::time::interval(Duration::from_secs(1));
     let poll = config.poll_secs.max(1);
     // The first tick looks at once: JAI started during a game never loads the GPU.
     let mut n: u64 = poll - 1;
+    let (mut away, mut last_idle) = (false, 0u64);
     loop {
         tick.tick().await;
         n += 1;
@@ -799,6 +813,15 @@ async fn watchdog(controls: Arc<AudioControls>, config: VramGuardConfig) {
         crate::kit_games::poll();
         if is_dormant() && !in_game() && !crate::platform::in_test_session() && morning_due() {
             wake("the morning warm-up");
+        }
+        // Back at the PC after a while away (an unlock, a hand on the mouse): the brain warms
+        // up while he sits down, not when he first speaks.
+        let idle = crate::win32::idle_seconds().unwrap_or(0);
+        let back;
+        (away, back) = came_back(away, last_idle, idle);
+        last_idle = idle;
+        if back && is_dormant() && !in_game() && !crate::platform::in_test_session() {
+            wake("Sir is back at the PC");
         }
         // Mid-turn the switch waits for the turn to finish (a reply is never cut off).
         if want_game && !in_game() && !busy {
@@ -1019,6 +1042,18 @@ mod hotkeys {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn he_is_back_when_input_comes_after_a_while_away() {
+        // At the PC all along: never "back".
+        assert_eq!(came_back(false, 3, 8), (false, false));
+        assert_eq!(came_back(false, 8, 1), (false, false));
+        // Five minutes without input: away; the hand on the mouse: back, once.
+        assert_eq!(came_back(false, 299, 300), (true, false));
+        assert_eq!(came_back(true, 300, 1800), (true, false));
+        assert_eq!(came_back(true, 1800, 2), (false, true));
+        assert_eq!(came_back(false, 2, 0), (false, false));
+    }
 
     /// Repro 2026-11-03: every LLM turn after a pause hit a cold model (keep_alive 90 s, idle
     /// eviction 90 s), and BatmanAK.exe filled the GPU without counting as a game.

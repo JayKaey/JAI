@@ -39,9 +39,9 @@ impl When {
     }
 }
 
-const MONTHS: &str = r"(january|januar|jänner|jan|february|februar|feb|march|märz|maerz|marz|april|apr|may|mai|june|juni|jun|july|juli|jul|august|aug|september|sept|sep|october|oktober|oct|okt|november|nov|december|dezember|dec|dez)";
+pub(crate) const MONTHS: &str = r"(january|januar|jänner|jan|february|februar|feb|march|märz|maerz|marz|april|apr|may|mai|june|juni|jun|july|juli|jul|august|aug|september|sept|sep|october|oktober|oct|okt|november|nov|december|dezember|dec|dez)";
 
-fn month_of(word: &str) -> Option<u32> {
+pub(crate) fn month_of(word: &str) -> Option<u32> {
     Some(match word.trim_end_matches('.') {
         "january" | "januar" | "jänner" | "jan" => 1,
         "february" | "februar" | "feb" => 2,

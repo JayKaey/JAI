@@ -203,6 +203,43 @@ const PROTECTED: &[&str] = &[
     "pipewire", "wireplumber", "pulseaudio", "dbus-daemon", "sshd", "login",
 ];
 
+/// The part an app plays for him, and the apps that may play it: (process name, said name). The
+/// one running now plays it, else the first.
+const ROLES: &[(&str, &[(&str, &str)])] = &[
+    ("music", &[("sonora", "Sonora"), ("spotify", "Spotify"), ("musicbee", "MusicBee"), ("foobar2000", "foobar2000"), ("vlc", "VLC")]),
+    ("chat", &[("discord", "Discord"), ("whatsapp", "WhatsApp"), ("telegram", "Telegram"), ("signal", "Signal"), ("ms-teams", "Teams")]),
+    ("editor", &[("code", "VS Code"), ("notepad++", "Notepad++"), ("sublime_text", "Sublime Text"), ("notepad", "Notepad")]),
+];
+
+/// "The music app", "die Musik-App", "my chat app", "den Messenger", "my editor", "the code
+/// editor". ("The chat" and "the editor" alone may be his own blocks: not these.)
+static ROLE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(r"(?i)\b(?:the|my|die|den|der|meine?n?)\s+(?:(?P<music>music|musik)[\s-]?(?:app|player|programm)|(?P<chat>chat[\s-]?(?:app|programm)|messaging\s+app|messenger)|(?P<editor>code\s+editor|editor[\s-]?(?:app|programm))|(?P<my_editor>editor))\b").expect("role pattern")
+});
+
+/// Which app plays `role` given the processes running now (lower case, no ".exe").
+fn role_pick(role: &str, running: &[String]) -> Option<&'static str> {
+    let apps = ROLES.iter().find(|(r, _)| *r == role)?.1;
+    apps.iter().find(|(process, _)| running.iter().any(|p| p == process)).or(apps.first()).map(|(_, said)| *said)
+}
+
+/// An order with the part an app plays put as that app's name: "open the music app" → "open
+/// Sonora", "schließ den Messenger" → "schließ Discord".
+pub fn with_roles(text: &str) -> std::borrow::Cow<'_, str> {
+    if !ROLE.is_match(text) {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    let running: Vec<String> = crate::win32::app_windows().iter().map(|w| w.process.to_lowercase().trim_end_matches(".exe").to_string()).collect();
+    with_roles_among(text, &running)
+}
+
+fn with_roles_among<'a>(text: &'a str, running: &[String]) -> std::borrow::Cow<'a, str> {
+    ROLE.replace_all(text, |c: &regex::Captures| {
+        let role = ["music", "chat", "editor"].into_iter().find(|r| c.name(r).is_some()).or_else(|| (c.name("my_editor").is_some() && c[0].to_lowercase().starts_with("my")).then_some("editor"));
+        role.and_then(|r| role_pick(r, running)).map_or_else(|| c[0].to_string(), str::to_string)
+    })
+}
+
 pub fn normalize(name: &str) -> String {
     let lower = name.trim().to_lowercase();
     let cleaned: String = lower
@@ -1006,6 +1043,23 @@ pub async fn close(name: &str, force: bool) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_part_an_app_plays_is_that_app() {
+        let none: Vec<String> = Vec::new();
+        let spotify_on = vec!["spotify".to_string(), "explorer".to_string()];
+        assert_eq!(with_roles_among("open the music app", &none), "open Sonora");
+        assert_eq!(with_roles_among("open the music app", &spotify_on), "open Spotify", "the one running plays it");
+        assert_eq!(with_roles_among("Schließ die Musik-App", &none), "Schließ Sonora");
+        assert_eq!(with_roles_among("close my chat app", &none), "close Discord");
+        assert_eq!(with_roles_among("öffne den Messenger", &["whatsapp".to_string()]), "öffne WhatsApp");
+        assert_eq!(with_roles_among("move my editor to the left", &none), "move VS Code to the left");
+        assert_eq!(with_roles_among("focus the code editor", &none), "focus VS Code");
+        // His own blocks and plain words stay.
+        for said in ["close the editor", "open the chat", "play some music", "the music is too loud"] {
+            assert_eq!(with_roles_among(said, &none), said);
+        }
+    }
 
     #[test]
     fn resolves_aliases_fuzzy_names_and_fillers() {

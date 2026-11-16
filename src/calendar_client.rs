@@ -863,6 +863,21 @@ pub fn confirmation(ev: &CalEvent) -> String {
     format!("Done, Sir. I have scheduled '{}' for {day} at {}.", ev.title, ev.start.format("%H:%M"))
 }
 
+/// What the confirmation adds when the new event clashes: " It clashes with 'Dentist' at
+/// 14:30." Nothing when it does not.
+pub fn clash_line(overlapping: &[CalEvent]) -> String {
+    let said: Vec<String> = overlapping
+        .iter()
+        .take(2)
+        .map(|o| if o.all_day { format!("'{}'", o.title) } else { format!("'{}' at {}", o.title, o.start.format("%H:%M")) })
+        .collect();
+    match overlapping.len() {
+        0 => String::new(),
+        1 | 2 => format!(" It clashes with {}.", said.join(" and ")),
+        n => format!(" It clashes with {} and {} more.", said.join(", "), n - 2),
+    }
+}
+
 /// The schedule of a range, grouped by day, with clashes marked.
 pub fn schedule_text(events: &[CalEvent], from: NaiveDate, to: NaiveDate) -> String {
     let today = Local::now().date_naive();
@@ -1441,7 +1456,13 @@ mod tests {
         let a = CalEvent::new("A", dt("2026-10-22 09:00"), dt("2026-10-22 10:00"), false);
         let b = CalEvent::new("B", dt("2026-10-22 09:30"), dt("2026-10-22 11:00"), false);
         let c = CalEvent::new("C", dt("2026-10-22 10:00"), dt("2026-10-22 10:30"), false);
-        assert_eq!(conflicts(&[a, b, c]), vec![("A".to_string(), "B".to_string()), ("B".to_string(), "C".to_string())]);
+        assert_eq!(conflicts(&[a.clone(), b.clone(), c.clone()]), vec![("A".to_string(), "B".to_string()), ("B".to_string(), "C".to_string())]);
+        // The spoken confirmation names what a new event clashes with.
+        assert_eq!(clash_line(&[]), "");
+        assert_eq!(clash_line(std::slice::from_ref(&a)), " It clashes with 'A' at 09:00.");
+        let holiday = CalEvent::new("Holiday", dt("2026-10-22 00:00"), dt("2026-10-23 00:00"), true);
+        assert_eq!(clash_line(&[holiday, b.clone()]), " It clashes with 'Holiday' and 'B' at 09:30.");
+        assert_eq!(clash_line(&[a, b, c.clone(), c]), " It clashes with 'A' at 09:00, 'B' at 09:30 and 2 more.");
     }
 
     #[test]

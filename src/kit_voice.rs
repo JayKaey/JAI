@@ -645,6 +645,76 @@ pub fn say_like(args: &Value) -> Result<String, String> {
     Ok(say(format!("\"{word}\" is said \"{way}\" from now on."), format!("Understood, Sir: {word}.")))
 }
 
+// --------------------------------------------------------------------------- spelling ----
+
+static SPELL: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"(?i)^(?:how\s+do\s+(?:you|i|we)\s+spell|how\s+is|spell(?:\s+out)?(?:\s+for\s+me)?|(?:what\s+is|whats)\s+the\s+spelling\s+of|wie\s+(?:schreibt|buchstabiert)\s+man|wie\s+wird|buchstabier(?:e)?(?:\s+mir)?(?:\s+mal)?)\s+(?:the\s+word\s+|das\s+wort\s+)?(?P<w>[\p{L}\d'-]+(?:\s+[\p{L}\d'-]+){0,2}?)(?:\s+(?:spelled|spelt|geschrieben|buchstabiert))?$")
+});
+
+/// "How do you spell rhythm", "spell Nguyen", "wie schreibt man Rhythmus": the word, with the
+/// capitals he wrote it with when the order was typed. Not "spell check this".
+pub fn spell_command(s: &str, original: &str) -> Option<Value> {
+    let clean = |t: &str| t.trim().trim_end_matches(['?', '.', '!']).trim().to_string();
+    let (typed, heard) = (clean(original), clean(s));
+    let word = SPELL.captures(&typed).or_else(|| SPELL.captures(&heard))?.name("w")?.as_str().to_string();
+    // "how is it spelled" is about a word said before; "how is your day" is no spelling.
+    let asked_how = s.starts_with("how is") || s.starts_with("wie wird");
+    let said_spelled = ["spelled", "spelt", "geschrieben", "buchstabiert"].iter().any(|w| s.ends_with(w));
+    let first = word.split_whitespace().next().unwrap_or("").to_lowercase();
+    if (asked_how && !said_spelled) || matches!(first.as_str(), "check" | "it" | "that" | "this" | "es" | "das") {
+        return None;
+    }
+    let german = ["wie ", "buchstabier"].iter().any(|w| s.starts_with(w));
+    Some(json!({"word": word, "german": german}))
+}
+
+/// The letters of `word` by their names, as they are said in English or German: "double m"
+/// for two alike, "a umlaut" / "Ä", "sharp s" / "Eszett", "space" / "Leerzeichen".
+pub fn letter_names(word: &str, german: bool) -> Vec<String> {
+    let name = |c: char| -> String {
+        let lower = c.to_lowercase().next().unwrap_or(c);
+        let names: (&str, &str) = match lower {
+            'a' => ("A", "A"), 'b' => ("B", "Be"), 'c' => ("C", "Ce"), 'd' => ("D", "De"), 'e' => ("E", "E"), 'f' => ("F", "Eff"),
+            'g' => ("G", "Ge"), 'h' => ("H", "Ha"), 'i' => ("I", "I"), 'j' => ("J", "Jott"), 'k' => ("K", "Ka"), 'l' => ("L", "Ell"),
+            'm' => ("M", "Emm"), 'n' => ("N", "Enn"), 'o' => ("O", "O"), 'p' => ("P", "Pe"), 'q' => ("Q", "Ku"), 'r' => ("R", "Err"),
+            's' => ("S", "Ess"), 't' => ("T", "Te"), 'u' => ("U", "U"), 'v' => ("V", "Fau"), 'w' => ("W", "We"), 'x' => ("X", "Ix"),
+            'y' => ("Y", "Ypsilon"), 'z' => ("Z", "Zett"), 'ä' => ("A umlaut", "Ä"), 'ö' => ("O umlaut", "Ö"), 'ü' => ("U umlaut", "Ü"),
+            'ß' => ("sharp S", "Eszett"), ' ' => ("space", "Leerzeichen"), '-' => ("hyphen", "Bindestrich"), '\'' => ("apostrophe", "Apostroph"),
+            _ => return c.to_string(),
+        };
+        let said = if german { names.1 } else { names.0 }.to_string();
+        if c.is_uppercase() && word.chars().any(char::is_lowercase) && c.is_alphabetic() && c != 'ß' {
+            if german { format!("großes {said}") } else { format!("capital {said}") }
+        } else {
+            said
+        }
+    };
+    let mut out = Vec::new();
+    let chars: Vec<char> = word.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let twice = chars.get(i + 1).is_some_and(|n| *n == chars[i] && chars[i].is_alphabetic());
+        out.push(match twice {
+            true if german => format!("Doppel-{}", name(chars[i])),
+            true => format!("double {}", name(chars[i])),
+            false => name(chars[i]),
+        });
+        i += if twice { 2 } else { 1 };
+    }
+    out
+}
+
+pub fn spell(args: &Value) -> Result<String, String> {
+    let word = args["word"].as_str().unwrap_or("").trim();
+    if word.is_empty() {
+        return Err("Which word, Sir?".into());
+    }
+    let german = args["german"] == true;
+    let letters = letter_names(word, german).join(", ");
+    let shown = word.chars().map(|c| if c == 'ß' { c.to_string() } else { c.to_uppercase().to_string() }).collect::<Vec<_>>().join("-");
+    Ok(say(format!("{word}: {shown}"), if german { format!("{word}: {letters}.") } else { format!("{word}, Sir: {letters}.") }))
+}
+
 // --------------------------------------------------------------------------- guests ----
 
 const FAMILY: &str = r"friend|brother|sister|mother|father|mum|mom|dad|girlfriend|boyfriend|wife|husband|cousin|mate|buddy|kumpel|freund|freundin|bruder|schwester|mama|papa";
@@ -812,6 +882,34 @@ pub fn show(ctx: &egui::Context) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_word_is_spelled_by_its_letter_names() {
+        let asked = |said: &str| spell_command(&crate::intents::normalize_phrase(said), said);
+        for (said, word, german) in [
+            ("How do you spell rhythm?", "rhythm", false),
+            ("Spell Nguyen", "Nguyen", false),
+            ("how is necessary spelled", "necessary", false),
+            ("How do you spell New York?", "New York", false),
+            ("Wie schreibt man Rhythmus?", "Rhythmus", true),
+            ("Buchstabiere mir Straße", "Straße", true),
+            ("wie wird Portemonnaie geschrieben", "Portemonnaie", true),
+        ] {
+            assert_eq!(asked(said), Some(json!({"word": word, "german": german})), "{said}");
+        }
+        for said in ["spell check this", "how is your day", "how is it spelled", "spell it out", "how do you write a cover letter", "what is the weather"] {
+            assert_eq!(asked(said), None, "{said}");
+        }
+        assert_eq!(letter_names("rhythm", false), ["R", "H", "Y", "T", "H", "M"]);
+        assert_eq!(letter_names("necessary", false), ["N", "E", "C", "E", "double S", "A", "R", "Y"]);
+        assert_eq!(letter_names("Straße", true), ["großes Ess", "Te", "Err", "A", "Eszett", "E"]);
+        assert_eq!(letter_names("Müll", true), ["großes Emm", "Ü", "Doppel-Ell"]);
+        assert_eq!(letter_names("Müll", false), ["capital M", "U umlaut", "double L"]);
+        assert_eq!(letter_names("New York", false), ["capital N", "E", "W", "space", "capital Y", "O", "R", "K"]);
+        assert_eq!(letter_names("NASA", false), ["N", "A", "S", "A"], "a word in capitals has no capital letters to name");
+        let told = spell(&json!({"word": "Straße", "german": true})).unwrap();
+        assert!(told.contains("S-T-R-A-ß-E"), "{told}");
+    }
 
     #[test]
     fn reading_is_asked_for_and_long_text_comes_in_parts() {

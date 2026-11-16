@@ -44,6 +44,15 @@ pub const TOOLS: &[&str] = &[
     "scheduled_order",
     "games",
     "next_lesson",
+    "grades",
+    "school_day",
+    "pc_helper",
+    "code_helper",
+    "spell_word",
+    "put_away",
+    "equation",
+    "what_to_wear",
+    "birthdays",
 ];
 
 /// "What's my next lesson?", "wann ist meine nächste Stunde?": WebUntis, without the model.
@@ -71,10 +80,19 @@ pub fn command(s: &str, original: &str) -> Option<(&'static str, Value)> {
     // (Games first: "whenever I start GTA, …" is a game's routine, not a whenever-rule.)
     None.or_else(|| crate::kit_games::command(s).map(|a| ("games", a)))
         .or_else(|| NEXT_LESSON.is_match(s.trim_end_matches(['?', '.', '!'])).then(|| ("next_lesson", serde_json::json!({}))))
+        .or_else(|| crate::calc::equation_command(original).map(|a| ("equation", a)))
+        .or_else(|| crate::commute_advisor::wear_command(s).map(|a| ("what_to_wear", a)))
+        .or_else(|| crate::kit_school::grades_command(s).map(|a| ("grades", a)))
+        .or_else(|| crate::kit_school::school_command(s).map(|a| ("school_day", a)))
+        .or_else(|| crate::kit_pc::command(s).map(|a| ("pc_helper", a)))
+        .or_else(|| crate::kit_code::command(s).map(|a| ("code_helper", a)))
         .or_else(|| crate::kit_typing::dictation_command(s).map(|a| ("take_dictation", a)))
         .or_else(|| crate::kit_typing::snippet_command(s, original).map(|a| ("type_snippet", a)))
         .or_else(|| crate::kit_typing::keys_command(s).map(|a| ("press_keys", a)))
         .or_else(|| crate::kit_notes::notebook_command(s, original).map(|a| ("notebook", a)))
+        .or_else(|| crate::kit_notes::place_command(s).map(|a| ("put_away", a)))
+        .or_else(|| crate::kit_notes::birthday_command(original).map(|a| ("birthdays", a)))
+        .or_else(|| crate::kit_voice::spell_command(s, original).map(|a| ("spell_word", a)))
         .or_else(|| crate::kit_notes::sleep_command(s).map(|a| ("sleep_timer", a)))
         .or_else(|| crate::kit_notes::rule_command(s).map(|a| ("whenever_rule", a)))
         .or_else(|| crate::kit_screen::brightness_command(s).map(|a| ("monitor_brightness", a)))
@@ -126,6 +144,15 @@ pub async fn run_tool(ctx: &ToolContext, name: &str, args: &Value) -> Result<Str
         "scheduled_order" => crate::later::run(args),
         "games" => crate::kit_games::run(args).await,
         "next_lesson" => next_lesson(ctx).await,
+        "grades" => crate::kit_school::grades(args),
+        "school_day" => crate::kit_school::school(ctx, args).await,
+        "pc_helper" => crate::kit_pc::run(args).await,
+        "code_helper" => crate::kit_code::run(ctx, args).await,
+        "spell_word" => crate::kit_voice::spell(args),
+        "put_away" => crate::kit_notes::place(args),
+        "birthdays" => crate::kit_notes::birthday(args),
+        "equation" => crate::calc::equation(args),
+        "what_to_wear" => crate::commute_advisor::wear(ctx, args).await,
         other => Err(format!("The kit has no tool called '{other}'.")),
     }
 }
@@ -137,8 +164,12 @@ pub fn only_looks(name: &str, args: &Value) -> bool {
     let action = args["action"].as_str().unwrap_or("");
     is_tool(name)
         && (matches!(action, "show" | "list" | "status" | "check" | "report")
-            || matches!(name, "evening_recap" | "internet_doctor" | "show_changes" | "hearing_log" | "next_lesson")
-            || (name == "games" && matches!(action, "playtime" | "news" | "free" | "vram" | "download" | "routines")))
+            || matches!(name, "evening_recap" | "internet_doctor" | "show_changes" | "hearing_log" | "next_lesson" | "spell_word" | "equation" | "what_to_wear")
+            || (matches!(name, "put_away" | "birthdays") && matches!(action, "where" | "when"))
+            || (name == "games" && matches!(action, "playtime" | "news" | "free" | "vram" | "download" | "routines" | "unplayed"))
+            || (name == "school_day" && crate::kit_school::school_only_looks(args))
+            || (name == "pc_helper" && crate::kit_pc::only_looks(args))
+            || (name == "code_helper" && crate::kit_code::only_looks(args)))
 }
 
 pub fn stays_inside(name: &str, args: &Value) -> bool {
@@ -147,7 +178,8 @@ pub fn stays_inside(name: &str, args: &Value) -> bool {
     // through this same door, call by call.)
     only_looks(name, args)
         || (name == "games" && matches!(action, "after" | "routine" | "forget_routine" | "bedtime" | "watch_download"))
-        || matches!(name, "notebook" | "privacy_board" | "pronunciation_coach" | "say_like" | "known_guest" | "subtitle_place" | "block_places" | "notification_history" | "scheduled_order") || (matches!(name, "type_snippet" | "whenever_rule" | "desk_layout") && matches!(action, "save" | "add" | "delete" | "remove"))
+        || matches!(name, "notebook" | "privacy_board" | "pronunciation_coach" | "say_like" | "known_guest" | "subtitle_place" | "block_places" | "notification_history" | "scheduled_order" | "grades" | "put_away" | "birthdays")
+        || (name == "school_day" && matches!(action, "teach_pack" | "homework_done")) || (matches!(name, "type_snippet" | "whenever_rule" | "desk_layout") && matches!(action, "save" | "add" | "delete" | "remove"))
 }
 
 /// Tools that press keys or type in the app in front, or answer aloud about who is in the

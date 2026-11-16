@@ -1108,6 +1108,8 @@ impl ToolContext {
             }
         };
 
+        // (An online read keeps its answer; without internet the last one stands in, with its time.)
+        let result = crate::diagnostics::kept_answer(name, &args, result);
         let duration_ms = started.elapsed().as_millis() as u64;
         match result {
             Ok(output) => {

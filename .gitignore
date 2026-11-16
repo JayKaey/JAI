@@ -8,6 +8,8 @@
 /target/
 *.exe
 *.exe.bak_*
+*.exe.part
+/jai_starts.txt
 /*.dll
 *.pdb
 

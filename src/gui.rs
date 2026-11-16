@@ -3918,12 +3918,25 @@ struct HudApp {
     clock_drag: Option<Pos2>,
 }
 
+/// A running timer's word in the strip and by the orb: its own name ("pasta timer" → "PASTA"),
+/// else TIMER or STOPWATCH ("5 minute timer" has no name).
+fn timer_word(title: &str, countdown: bool) -> String {
+    let name = title.trim().trim_end_matches(" timer").trim_end_matches(" Timer");
+    match name.to_lowercase().as_str() {
+        n if !n.is_empty() && !n.starts_with(|c: char| c.is_ascii_digit()) && !matches!(n, "timer" | "stopwatch" | "countdown") => name.to_uppercase(),
+        _ if countdown => "TIMER".to_string(),
+        _ => "STOPWATCH".to_string(),
+    }
+}
+
 /// What the corner orb's window shows in a frame.
 struct CornerOrbContent {
     /// The orb's diameter (physical pixels).
     orb_px: f32,
     /// What he is at for longer: Some(share done) for a timer, Some(None) for a search.
     progress: Option<Option<f32>>,
+    /// The second and third running timers' shares: thinner rings inside the first.
+    more_rings: Vec<f32>,
     /// The plate beside the orb is up.
     words: bool,
     /// The plate stands left of the orb (the orb rests in the right half of its monitor).
@@ -4023,6 +4036,11 @@ fn corner_orb_ui(ui: &mut Ui, emblem: &RoseEmblem, c: &CornerOrbContent) -> OrbC
         };
         let arc: Vec<Pos2> = (0..=48).map(|k| from + sweep * k as f32 / 48.0).map(|a| centre + vec2(a.cos(), a.sin()) * r).collect();
         ui.painter().add(Shape::line(arc, stroke(2.5, crate::hud_board::active_colour())));
+        for (k, done) in c.more_rings.iter().enumerate() {
+            let r = r - 5.0 * (k + 1) as f32;
+            let arc: Vec<Pos2> = (0..=48).map(|i| -TAU / 4.0 + TAU * done.clamp(0.0, 1.0) * i as f32 / 48.0).map(|a| centre + vec2(a.cos(), a.sin()) * r).collect();
+            ui.painter().add(Shape::line(arc, stroke(1.5, crate::hud_board::active_colour().gamma_multiply(0.75 - 0.2 * k as f32))));
+        }
     }
     if c.game {
         // Game mode's badge: his mind waits in RAM, the game has the whole GPU.
@@ -4669,21 +4687,7 @@ impl HudApp {
     fn mini_strip(&mut self, ctx: &egui::Context, m: &HudModel) {
         let muted = m.level.as_ref().is_none_or(|l| l.phase == "muted") || m.cfg.as_ref().is_some_and(|c| !c.mic_enabled) || crate::listening_lock::is_locked();
         let asleep = m.cfg.as_ref().is_some_and(|c| c.sleeping) || crate::vram_guard::is_dormant();
-        let now_ms = chrono::Utc::now().timestamp_millis();
-        let timers = self
-            .app
-            .tools()
-            .widgets
-            .widgets()
-            .iter()
-            .rev()
-            .filter_map(|w| {
-                let crate::widgets::WidgetKind::CountdownOrStopwatch { running: true, .. } = &w.kind else { return None };
-                let (elapsed, remaining) = crate::widgets::timer_state(&w.kind, now_ms)?;
-                let secs = remaining.unwrap_or(elapsed) / 1000;
-                Some(format!("{}  {:02}:{:02}", if remaining.is_some() { "TIMER" } else { "STOPWATCH" }, secs / 60, secs % 60))
-            })
-            .collect();
+        let timers = self.running_timers().into_iter().map(|(line, _)| line).collect();
         let last = |who: Speaker| m.messages.iter().rev().find(|l| l.who == who).map(|l| l.text.clone()).unwrap_or_default();
         let strip = MiniStrip { word: pill_word(&m.state, muted, asleep), sir: last(Speaker::Sir), jai: last(Speaker::Jai), timers, clock: chrono::Local::now().format("%H:%M").to_string() };
         let mut leave = false;
@@ -7286,11 +7290,14 @@ fn parts_of(marks: &[(&'static str, Instant)], end: Instant) -> Vec<(&'static st
     parts
 }
 
-/// Frame-time diagnostics: a frame over 120 ms is logged with the parts that took most of it
-/// (at most every 5 s), and with `JAI_LOG=jai=debug` the frame rate every 2 s.
+/// A frame slower than this is a hitch he sees: logged, and a failure in the verifiers.
+pub const SLOW_FRAME_MS: f64 = 50.0;
+
+/// Frame-time diagnostics: a frame over `SLOW_FRAME_MS` is logged with the parts that took
+/// most of it (at most every 5 s), and with `JAI_LOG=jai=debug` the frame rate every 2 s.
 fn frame_stats(took: Duration, parts: &[(&'static str, f32)]) {
     let mut clock = lock(&FRAME_CLOCK);
-    if took > Duration::from_millis(120) && clock.last_slow.is_none_or(|t| t.elapsed() > Duration::from_secs(5)) {
+    if took.as_secs_f64() * 1000.0 > SLOW_FRAME_MS && clock.last_slow.is_none_or(|t| t.elapsed() > Duration::from_secs(5)) {
         clock.last_slow = Some(Instant::now());
         let named: Vec<String> = parts.iter().take(3).filter(|(_, ms)| *ms >= 1.0).map(|(name, ms)| format!("{name} {ms:.0}")).collect();
         warn!("[HUD] Slow frame: {} ms ({})", took.as_millis(), if named.is_empty() { "outside the HUD's own parts".to_string() } else { named.join(", ") });
@@ -9497,7 +9504,7 @@ impl HudApp {
                 let (elapsed, remaining) = crate::widgets::timer_state(&w.kind, now_ms)?;
                 let secs = remaining.unwrap_or(elapsed) / 1000;
                 let share = remaining.map(|left| elapsed as f32 / (elapsed + left).max(1) as f32);
-                Some((format!("{}  {:02}:{:02}", if remaining.is_some() { "TIMER" } else { "STOPWATCH" }, secs / 60, secs % 60), share))
+                Some((format!("{}  {:02}:{:02}", timer_word(&w.title, remaining.is_some()), secs / 60, secs % 60), share))
             })
             .collect()
     }
@@ -9655,7 +9662,9 @@ impl HudApp {
         // and turns while a search runs on (which has no end to count to). ("Progress on the
         // orb", his choice of 2026-11-13: for that long the orb stays out.)
         let timers = self.running_timers();
-        let timer_label = timers.first().map(|(line, _)| line.clone());
+        // (Up to three timers, a ring and a line each: "PASTA  04:12".)
+        let timer_label = (!timers.is_empty()).then(|| timers.iter().take(3).map(|(line, _)| line.as_str()).collect::<Vec<_>>().join("\n"));
+        let more_rings: Vec<f32> = timers.iter().skip(1).take(2).filter_map(|(_, share)| *share).collect();
         let progress: Option<Option<f32>> = timers.first().map(|(_, share)| *share).or_else(|| crate::hud_board::researching().then_some(None));
         let working = m.quick.as_ref().is_some_and(|(_, _, until)| *until > now)
             || crate::hud_lines::offered().is_some()
@@ -9804,6 +9813,7 @@ impl HudApp {
         let content = CornerOrbContent {
             orb_px,
             progress,
+            more_rings,
             words,
             words_left,
             menu,
@@ -10066,6 +10076,16 @@ mod tests {
     /// The wheel over the corner orb steps by whole notches: a touchpad's small turns add up to
     /// one (each frame with a turn in it was a whole step, and it ran to its largest at once).
     #[test]
+    fn a_timer_of_his_own_name_says_it() {
+        assert_eq!(timer_word("pasta timer", true), "PASTA");
+        assert_eq!(timer_word("nudel timer", true), "NUDEL");
+        assert_eq!(timer_word("5 minute timer", true), "TIMER");
+        assert_eq!(timer_word("Timer", true), "TIMER");
+        assert_eq!(timer_word("", false), "STOPWATCH");
+        assert_eq!(timer_word("Stopwatch", false), "STOPWATCH");
+    }
+
+    #[test]
     fn the_orb_wheel_steps_by_whole_notches() {
         let wheel = |unit, y: f32| egui::Event::MouseWheel { unit, delta: vec2(0.0, y), modifiers: egui::Modifiers::NONE };
         assert_eq!(wheel_turn(0.0, &[wheel(egui::MouseWheelUnit::Line, 1.0)]), (0.0, Some(true)));
@@ -10163,6 +10183,7 @@ mod tests {
         let content = |said: &str, answered: &str| CornerOrbContent {
             orb_px: 168.0,
             progress: None,
+            more_rings: Vec::new(),
             words: true,
             words_left: false,
             menu: false,
@@ -10176,7 +10197,7 @@ mod tests {
             game: false,
         };
         orb("gallery_corner_orb_game", CornerOrbContent { words: false, game: true, ..content("", "") });
-        orb("gallery_corner_orb_words", CornerOrbContent { progress: Some(Some(0.35)), timer: Some("TIMER  03:12".into()), ..content("Jay, what is on my calendar tomorrow?", "Two things, Sir: physics at 8:35 in room 204 and the dentist at half past two.") });
+        orb("gallery_corner_orb_words", CornerOrbContent { progress: Some(Some(0.35)), more_rings: vec![0.7, 0.1], timer: Some("TIMER  03:12\nPASTA  07:40\nPIZZA  11:02".into()), ..content("Jay, what is on my calendar tomorrow?", "Two things, Sir: physics at 8:35 in room 204 and the dentist at half past two.") });
         orb("gallery_corner_orb_question", CornerOrbContent { question: Some("Did you mean: create a protocol called 'evening', Sir?".into()), ..content("Jay, save that as evening.", "") });
         orb("gallery_corner_orb_choices", CornerOrbContent { choices: vec!["save this desk layout as evening".into(), "show my desk layouts".into(), "restore the desk layout evening".into()], ..content("Jay, keep the desk like this.", "") });
         // In the right half of its monitor the plate stands left of it; a right click on the

@@ -190,6 +190,91 @@ pub fn is_tool(name: &str) -> bool {
     name == "check_ride_and_commute_status"
 }
 
+// ---------------------------------------------------------------------- what to wear ----
+
+static WEAR: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(r"^(?:do\s+i\s+need|should\s+i\s+(?:take|bring|wear)|will\s+i\s+need)\s+(?:a\s+|an\s+|my\s+)?(?P<item>jacket|coat|umbrella|brolly|raincoat|rain\s+jacket|scarf|gloves|hoodie|sweater|jumper)(?:\s+(?P<when>today|tomorrow))?$|^what\s+should\s+i\s+wear(?:\s+(?P<when2>today|tomorrow))?$|^brauche\s+ich\s+(?:eine\s+|einen\s+|meine\s+|meinen\s+)?(?P<item_de>jacke|regenjacke|schirm|regenschirm|mantel|schal|handschuhe)(?:\s+(?P<when_de>heute|morgen))?$|^was\s+(?:soll|sollte)\s+ich\s+(?:heute\s+|morgen\s+)?anziehen$").expect("wear pattern")
+});
+
+/// "Do I need a jacket?", "should I take an umbrella tomorrow", "was soll ich anziehen":
+/// answered from the forecast in Rust, without the model.
+pub fn wear_command(s: &str) -> Option<Value> {
+    let s = s.trim().trim_end_matches(['?', '.', '!']);
+    let c = WEAR.captures(s)?;
+    let item = c.name("item").or(c.name("item_de")).map(|m| m.as_str());
+    let kind = match item {
+        Some(i) if ["umbrella", "brolly", "raincoat", "rain jacket", "schirm", "regenschirm", "regenjacke"].contains(&i) => "rain",
+        Some(_) => "warm",
+        None => "both",
+    };
+    let tomorrow = [c.name("when"), c.name("when2"), c.name("when_de")].into_iter().flatten().any(|m| matches!(m.as_str(), "tomorrow" | "morgen")) || s.contains("morgen anziehen");
+    Some(json!({"kind": kind, "tomorrow": tomorrow}))
+}
+
+/// The coldest it feels (°C) with the wind: the wind-chill formula below 10 °C.
+fn feels_like(temp: f64, wind_kmh: f64) -> f64 {
+    if temp > 10.0 || wind_kmh < 4.8 {
+        return temp;
+    }
+    let v = wind_kmh.powf(0.16);
+    13.12 + 0.6215 * temp - 11.37 * v + 0.3965 * temp * v
+}
+
+/// The answer for the hours he is out: `kind` "warm", "rain" or "both"; `coldest` feels-like °C,
+/// `rain` the highest chance (%).
+pub fn wear_answer(kind: &str, coldest: f64, rain: f64) -> String {
+    let warm = match coldest {
+        c if c < 5.0 => Some("a warm coat"),
+        c if c < 12.0 => Some("a jacket"),
+        c if c < 17.0 => Some("a light jacket"),
+        _ => None,
+    };
+    let wet = match rain {
+        r if r >= 50.0 => Some("an umbrella"),
+        r if r >= 30.0 => Some("an umbrella to be safe"),
+        _ => None,
+    };
+    let why = format!("it feels like {coldest:.0} degrees at the coldest and rain is {rain:.0} percent likely");
+    match (kind, warm, wet) {
+        ("warm", Some(w), _) => format!("Yes, Sir, {w}: {why}."),
+        ("warm", None, _) => format!("No jacket needed, Sir: {why}."),
+        ("rain", _, Some(u)) => format!("Yes, Sir, take {u}: {why}."),
+        ("rain", _, None) => format!("No umbrella needed, Sir: {why}."),
+        (_, Some(w), Some(u)) => format!("{} and {u}, Sir: {why}.", capitalise_first(w)),
+        (_, Some(w), None) => format!("{}, Sir; no umbrella: {why}.", capitalise_first(w)),
+        (_, None, Some(u)) => format!("T-shirt weather, Sir, but take {u}: {why}."),
+        _ => format!("T-shirt weather, Sir: {why}."),
+    }
+}
+
+fn capitalise_first(s: &str) -> String {
+    let mut c = s.chars();
+    c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default()
+}
+
+/// The `what_to_wear` kit tool: the hours he is out (from now, or 7 to 16 tomorrow).
+pub async fn wear(tools: &ToolContext, args: &Value) -> Result<String, String> {
+    let fix = tools.stark.location.current(tools).await?;
+    let (current, hourly) = location_engine::fetch_weather(tools.stark.location.http(), fix.lat, fix.lon).await?;
+    let now = Local::now().naive_local();
+    let tomorrow = args["tomorrow"] == true;
+    let (from, to) = if tomorrow {
+        let day = now.date() + ChronoDuration::days(1);
+        (day.and_hms_opt(7, 0, 0).unwrap_or(now), day.and_hms_opt(16, 0, 0).unwrap_or(now))
+    } else {
+        (now, now + ChronoDuration::hours(8))
+    };
+    let hours: Vec<&HourWeather> = hourly.iter().filter(|h| h.time + ChronoDuration::minutes(59) >= from && h.time <= to).collect();
+    let mut coldest = hours.iter().map(|h| feels_like(h.temperature, h.wind_kmh)).fold(f64::MAX, f64::min);
+    if !tomorrow {
+        coldest = coldest.min(current.apparent);
+    }
+    let coldest = if coldest == f64::MAX { current.apparent } else { coldest };
+    let rain = hours.iter().map(|h| h.precip_probability).fold(0.0, f64::max);
+    let line = wear_answer(args["kind"].as_str().unwrap_or("both"), coldest, rain);
+    Ok(crate::kit::say(&line, &line))
+}
+
 pub fn tool_definition() -> Value {
     json!({"type": "function", "function": {
         "name": "check_ride_and_commute_status",
@@ -326,6 +411,28 @@ pub async fn run_tool(tools: &ToolContext, args: &Value) -> Result<String, Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn what_to_wear_is_answered_from_the_forecast() {
+        let heard = |said: &str| wear_command(&crate::intents::normalize_phrase(said));
+        assert_eq!(heard("Do I need a jacket?"), Some(json!({"kind": "warm", "tomorrow": false})));
+        assert_eq!(heard("Should I take an umbrella tomorrow?"), Some(json!({"kind": "rain", "tomorrow": true})));
+        assert_eq!(heard("What should I wear today"), Some(json!({"kind": "both", "tomorrow": false})));
+        assert_eq!(heard("Brauche ich eine Jacke morgen?"), Some(json!({"kind": "warm", "tomorrow": true})));
+        assert_eq!(heard("Brauche ich einen Regenschirm?"), Some(json!({"kind": "rain", "tomorrow": false})));
+        assert_eq!(heard("Was soll ich morgen anziehen?"), Some(json!({"kind": "both", "tomorrow": true})));
+        for said in ["do i need a break", "what should i watch", "brauche ich hilfe"] {
+            assert_eq!(heard(said), None, "{said}");
+        }
+        assert_eq!(wear_answer("warm", 6.2, 10.0), "Yes, Sir, a jacket: it feels like 6 degrees at the coldest and rain is 10 percent likely.");
+        assert_eq!(wear_answer("warm", 21.0, 10.0), "No jacket needed, Sir: it feels like 21 degrees at the coldest and rain is 10 percent likely.");
+        assert!(wear_answer("rain", 21.0, 35.0).starts_with("Yes, Sir, take an umbrella to be safe"));
+        assert!(wear_answer("rain", 21.0, 20.0).starts_with("No umbrella needed"));
+        assert!(wear_answer("both", 2.0, 80.0).starts_with("A warm coat and an umbrella, Sir"));
+        assert!(wear_answer("both", 25.0, 0.0).starts_with("T-shirt weather, Sir:"));
+        // The wind makes the cold colder; a warm day stays as it is.
+        assert!(feels_like(2.0, 30.0) < -2.0 && feels_like(20.0, 30.0) == 20.0 && feels_like(5.0, 2.0) == 5.0);
+    }
 
     fn hour(h: u32, temp: f64, rain: f64, mm: f64, gust: f64) -> HourWeather {
         HourWeather {

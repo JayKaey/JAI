@@ -121,12 +121,16 @@ mod itslearning_bw_sso;
 mod interface;
 mod jai_voice_dsp;
 mod kit;
+mod kit_code;
 mod kit_games;
 mod kit_insight;
 mod kit_notes;
+mod kit_pc;
+mod kit_school;
 mod kit_screen;
 mod kit_typing;
 mod kit_voice;
+mod kit_wit;
 mod jai_views;
 mod ask_first;
 mod did_you_mean;
@@ -269,6 +273,8 @@ struct Cli {
     no_llm: bool,
     /// Started by JAI himself (restart): wait for the old instance to let go.
     restarted: bool,
+    /// The last version that ran well, started because the new JAI.exe failed twice to get going.
+    fallback: bool,
     /// Typed requests to run once JAI is up (diagnostics, scripted demos).
     chat: Vec<String>,
     /// Pause after each scripted request's answer.
@@ -325,6 +331,7 @@ impl Cli {
             bench: false,
             no_llm: false,
             restarted: false,
+            fallback: false,
             chat: Vec::new(),
             chat_delay: Duration::from_secs(2),
             no_mic: false,
@@ -355,6 +362,7 @@ impl Cli {
                 "--bench" => cli.bench = true,
                 "--no-llm" => cli.no_llm = true,
                 "--restarted" => cli.restarted = true,
+                "--fallback" => cli.fallback = true,
                 "--no-mic" => cli.no_mic = true,
                 "--silent" => cli.silent = true,
                 "--show" => cli.show = true,
@@ -602,6 +610,29 @@ fn main() -> ExitCode {
 
     init_logging("jai.log");
     whisper_rs::install_whisper_tracing_trampoline();
+
+    // A packaged JAI.exe that twice did not get going hands over to the last version that ran
+    // well (JAI.prev.exe); a start that runs 30 s keeps itself as that version.
+    let counted = !cli.is_diagnostic() && !cli.live_test && !cli.silent && !cli.fallback;
+    if counted {
+        if let Some(prev) = lifecycle::count_start() {
+            drop(instance);
+            return match lifecycle::launch_fallback(&prev) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(e) => {
+                    error!("[LIFE] The last good version did not start: {e}");
+                    ExitCode::FAILURE
+                }
+            };
+        }
+        let _ = std::thread::Builder::new().name("jai-start-check".into()).spawn(|| {
+            std::thread::sleep(lifecycle::HEALTHY_AFTER);
+            lifecycle::start_went_well();
+        });
+    }
+    if cli.fallback {
+        announcements::say("Sir, the new build of me failed to start twice, so this is the previous version. Rebuild me when you have a moment.");
+    }
 
     // A self-test (or a silent scripted session) leaves the settings file as it is from the
     // first read on (loading writes the file back otherwise): whatever is switched, is switched
@@ -1119,8 +1150,12 @@ async fn start(cli: &Cli, cfg: JaiConfig) -> Started {
     away_mode::start(app.tools().clone(), shutdown.clone());
     watch_and_tell::start(shutdown.clone());
     kit_notes::start(app.tools().clone(), shutdown.clone());
+    // A dry line now and then (a long stretch at the PC, a hot GPU).
+    kit_wit::start(app.tools().monitor.subscribe());
     // Once a day: a whole copy of the memory database and the settings, the last seven kept.
-    backups::start(&cfg.memory_db_path, config::CONFIG_FILE, shutdown.clone());
+    backups::start(&cfg.memory_db_path, config::CONFIG_FILE, &cfg.features.minecraft_dir, shutdown.clone());
+    // The internet's drop and return, told once each; online reads answer from their last copy.
+    diagnostics::start_link_watch(shutdown.clone());
     // live layers (C1): the rain note and the ISS heads-up.
     live_layers::start(app.clone(), shutdown.clone());
     // What his own jobs have to say once done (the radar's sweep, the disk map's scan), spoken
@@ -1197,6 +1232,8 @@ async fn shutdown_sequence(app: app::Jai, store: ConfigStore, llm: Arc<runtime::
         }
     }
     shutdown.cancel();
+    // (Quitting is not failing to start.)
+    lifecycle::clear_start_count();
     info!("Shutting down — goodbye, Sir.");
     app.announce_shutdown();
     gui::remember_placement(&store);

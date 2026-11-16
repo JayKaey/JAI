@@ -1058,7 +1058,11 @@ fn visual_matrix(hud: &mut crate::gui::offscreen::VirtualHud, tools: &ToolContex
                     }
                 }
                 let (median, average, worst) = costs;
-                let found = if median <= FRAME_BUDGET_MS { Vec::new() } else { vec![format!("the HUD's own work takes {median:.2} ms a frame with twelve blocks (median of 40; average {average:.2} ms, worst {worst:.2} ms); a 180 Hz frame is {FRAME_BUDGET_MS} ms")] };
+                let mut found = if median <= FRAME_BUDGET_MS { Vec::new() } else { vec![format!("the HUD's own work takes {median:.2} ms a frame with twelve blocks (median of 40; average {average:.2} ms, worst {worst:.2} ms); a 180 Hz frame is {FRAME_BUDGET_MS} ms")] };
+                // (Past the warm-up no single frame may stall: one over 50 ms is a hitch he sees.)
+                if worst > crate::gui::SLOW_FRAME_MS {
+                    found.push(format!("one frame took {worst:.0} ms with twelve blocks (over {} ms)", crate::gui::SLOW_FRAME_MS));
+                }
                 row(&mut rows, format!("{name}: a frame's own work with twelve blocks fits 180 Hz"), started, found, format!("median {median:.2} ms, average {average:.2} ms, worst {worst:.2} ms over 40 frames"));
             }
             close_blocks(hud, *count);

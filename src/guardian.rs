@@ -29,6 +29,7 @@ pub const VRAM_LIMIT_PCT: f32 = 95.0;
 pub const RAM_LIMIT_PCT: f32 = 90.0;
 pub const CPU_LIMIT_PCT: f32 = 95.0;
 pub const DISK_FREE_LIMIT_GB: f32 = 5.0;
+pub const DISK_FREE_SHARE: f32 = 0.10;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Kind {
@@ -108,7 +109,8 @@ impl Guardian {
         if t.cpu_usage_pct > CPU_LIMIT_PCT {
             out.push(Anomaly { kind: Kind::CpuPegged, value: t.cpu_usage_pct });
         }
-        for d in t.disks.iter().filter(|d| !d.removable && d.total_gb > 16.0 && d.free_gb < DISK_FREE_LIMIT_GB) {
+        // (Under a tenth free, or under 5 GB on a small drive: a 2 TB drive is full long before 5 GB.)
+        for d in t.disks.iter().filter(|d| !d.removable && d.total_gb > 16.0 && (d.free_gb < DISK_FREE_LIMIT_GB || d.free_gb < d.total_gb * DISK_FREE_SHARE)) {
             out.push(Anomaly { kind: Kind::DiskLow(d.letter()), value: d.free_gb });
         }
         out
@@ -120,8 +122,11 @@ impl Guardian {
         self.since.retain(|k, _| current.iter().any(|a| a.kind == *k));
         let mut due = Vec::new();
         for a in current {
+            let fresh = !self.since.contains_key(&a.kind);
             let since = *self.since.entry(a.kind.clone()).or_insert(now);
             let cooled = self.last_alert.get(&a.kind).is_none_or(|last| now.duration_since(*last) >= COOLDOWN);
+            // A drive is said once each time it falls below the line, not every cooldown again.
+            let cooled = cooled && (fresh || !matches!(a.kind, Kind::DiskLow(_)));
             if now.duration_since(since) >= a.kind.sustain() && cooled {
                 self.last_alert.insert(a.kind.clone(), now);
                 due.push(a);
@@ -305,6 +310,15 @@ mod tests {
         let (msg, offer) = compose(&due[0], None, &t);
         assert!(msg.contains("drive C: is down to 3.2 gigabytes"), "{msg}");
         assert_eq!(offer.primary.1["live"], "drive_space");
+        // Said once per fall below the line: not again while it stays low, again after it rose.
+        let t0 = Instant::now() + COOLDOWN * 2;
+        assert!(g.check(&t, t0).is_empty(), "still low: not said again");
+        let roomy = SystemTelemetry { disks: vec![DiskInfo { mount: "C:\\".into(), total_gb: 930.0, free_gb: 200.0, ..Default::default() }], ..Default::default() };
+        assert!(g.check(&roomy, t0 + Duration::from_secs(1)).is_empty());
+        assert_eq!(g.check(&t, t0 + COOLDOWN * 2).len(), 1, "below the line again");
+        // A big drive under a tenth free is low long before 5 GB.
+        let big = SystemTelemetry { disks: vec![DiskInfo { mount: "D:\\".into(), total_gb: 1800.0, free_gb: 150.0, ..Default::default() }], ..Default::default() };
+        assert_eq!(Guardian::new().check(&big, Instant::now()), vec![Anomaly { kind: Kind::DiskLow("D:".into()), value: 150.0 }]);
     }
 
     #[test]

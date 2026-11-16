@@ -476,7 +476,10 @@ impl Jai {
             return "I'm back online, Sir.".into();
         }
         let now = chrono::Local::now();
-        let mut line = crate::briefing::startup_line(now.hour(), now.timestamp_subsec_micros() as usize);
+        // One look before the greeting: what is wrong is said instead of "all systems online".
+        let missing: Vec<&str> = crate::models::missing(&self.inner.config.snapshot()).iter().map(|f| f.label).collect();
+        let problem = crate::briefing::startup_problem(&missing, &self.tools().monitor.latest().disks);
+        let mut line = crate::briefing::startup_line_with(now.hour(), now.timestamp_subsec_micros() as usize, problem.as_deref());
         let today = self.tools().reminders.list().into_iter().filter(|r| r.due().date_naive() == now.date_naive()).count();
         match today {
             0 => {}

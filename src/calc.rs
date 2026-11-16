@@ -587,6 +587,106 @@ fn sentence(spoken: &str, value: &str) -> String {
     format!("{head} is {value}, Sir.")
 }
 
+// ------------------------------------------------------------------- linear equations ----
+
+static EQUATION: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"^(?:jai\s*,?\s*)?(?:(?:is|ist)\s+x\s*=\s*(?P<v>-?[\d.]+)\s+(?:right|correct|a\s+solution|the\s+solution|richtig|korrekt|eine\s+lösung|die\s+lösung)\s+(?:for|of|to|in|für|von|bei)\s+|(?:check|prüfe?|teste?)\s+x\s*=\s*(?P<w>-?[\d.]+)\s+(?:for|in|against|für|bei)\s+|(?:solve|löse|loese|(?:what\s+is|whats)\s+x\s+(?:if|when|in|for)|was\s+ist\s+x\s+(?:wenn|bei|in|für))\s+(?:the\s+equation\s+|die\s+gleichung\s+)?)(?P<eq>[^=]+=[^=]+?)[?.!]*$")
+});
+
+/// "3x + 5 = 20" as the parser reads it: words to signs, "3x" → "3*x", "2(x+1)" → "2*(x+1)".
+fn equation_signs(text: &str) -> String {
+    static TIMES_X: LazyLock<Regex> = LazyLock::new(|| re(r"(\d|\))\s*(x|\()"));
+    let mut s = format!(" {} ", fix_commas(&text.to_lowercase()));
+    for (from, to) in [
+        (" is equal to ", " = "), (" equal to ", " = "), (" equals ", " = "), (" ist gleich ", " = "), (" gleich ", " = "), (" plus ", " + "), (" minus ", " - "),
+        (" times ", " * "), (" mal ", " * "), (" divided by ", " / "), (" geteilt durch ", " / "), (" durch ", " / "), ("×", "*"), ("·", "*"), ("−", "-"), ("÷", "/"),
+    ] {
+        s = s.replace(from, to);
+    }
+    TIMES_X.replace_all(s.trim(), "$1*$2").into_owned()
+}
+
+/// "Is x = 5 right for 3x + 5 = 20", "solve 2(x + 1) = x + 7", "ist x = 4 richtig für 3x + 5 = 20":
+/// the equation, and the value to check. Only equations in x, of numbers and + - * / ^ ( ).
+pub fn equation_command(original: &str) -> Option<serde_json::Value> {
+    let lower = original.to_lowercase();
+    if !lower.contains('=') && !lower.contains("equal") && !lower.contains("gleich") {
+        return None;
+    }
+    let signs = equation_signs(original.trim());
+    let c = EQUATION.captures(&signs)?;
+    let eq = c.name("eq")?.as_str().trim().to_string();
+    let fits = eq.contains('x') && eq.chars().all(|ch| ch.is_ascii_digit() || " .+-*/^()x=".contains(ch));
+    let check = c.name("v").or(c.name("w")).and_then(|v| v.as_str().parse::<f64>().ok());
+    let german = ["ist ", "prüf", "test", "lös", "loes", "was "].iter().any(|w| signs.starts_with(w));
+    fits.then(|| serde_json::json!({"equation": eq, "check": check, "german": german}))
+}
+
+/// One side `a·x + b` of an equation: (a, b), or None when it is not of the first degree.
+fn linear(side: &str) -> Option<(f64, f64)> {
+    let at = |x: f64| evaluate(&side.replace('x', &format!("({x})"))).ok();
+    let (b, one) = (at(0.0)?, at(1.0)?);
+    let a = one - b;
+    let near = |p: f64, q: f64| (p - q).abs() <= 1e-9 * (1.0 + p.abs().max(q.abs()));
+    (near(at(2.0)?, 2.0 * a + b) && near(at(-3.0)?, b - 3.0 * a)).then_some((a, b))
+}
+
+/// "3x", "-x", "x", "0.5x".
+fn times_x(a: f64) -> String {
+    match format_number(a).as_str() {
+        "1" => "x".to_string(),
+        "-1" => "-x".to_string(),
+        n => format!("{n}x"),
+    }
+}
+
+/// Solves or checks a linear equation in x: (the steps, one line to say).
+pub fn solve_equation(eq: &str, check: Option<f64>, german: bool) -> Result<(String, String), String> {
+    let (left, right) = eq.split_once('=').ok_or("That is no equation, Sir.")?;
+    let ((al, bl), (ar, br)) = linear(left).zip(linear(right)).ok_or("I solve equations of the first degree only, Sir: x may not be squared or divided by.")?;
+    let (a, rest) = (al - ar, br - bl);
+    let mut steps = vec![eq.replace("*x", "x").replace("*(", "(").replace('*', "·")];
+    if bl != 0.0 || ar != 0.0 {
+        steps.push(format!("{} = {}", times_x(a), format_number(rest)));
+    }
+    if a == 0.0 {
+        let line = match (rest == 0.0, german) {
+            (true, false) => "Every x solves it, Sir: both sides are always equal.",
+            (true, true) => "Jedes x ist eine Lösung, Sir.",
+            (false, false) => "No x solves it, Sir: the x cancels out and the numbers disagree.",
+            (false, true) => "Kein x löst sie, Sir.",
+        };
+        return Ok((steps.join("\n"), line.to_string()));
+    }
+    let x = rest / a;
+    if a != 1.0 {
+        steps.push(format!("x = {}   (÷ {})", format_number(x), format_number(a)));
+    }
+    let Some(v) = check else {
+        let line = if german { format!("x ist {}, Sir.", format_number(x)) } else { format!("x is {}, Sir.", format_number(x)) };
+        return Ok((steps.join("\n"), line));
+    };
+    let (l, r) = (al * v + bl, ar * v + br);
+    let (lv, rv, xv, vv) = (format_number(l), format_number(r), format_number(x), format_number(v));
+    let right_one = (l - r).abs() <= 1e-9 * (1.0 + l.abs().max(r.abs()));
+    steps.insert(0, format!("x = {vv}:  left {lv}, right {rv}  ({})", if right_one { "equal" } else { "not equal" }));
+    let line = match (right_one, german) {
+        (true, false) => format!("Yes, Sir: {vv} is right. Both sides come to {lv}."),
+        (true, true) => format!("Ja, Sir: {vv} stimmt. Beide Seiten ergeben {lv}."),
+        (false, false) => format!("No, Sir: with {vv} the left side is {lv} and the right {rv}. x is {xv}."),
+        (false, true) => format!("Nein, Sir: mit {vv} ist links {lv} und rechts {rv}. x ist {xv}."),
+    };
+    Ok((steps.join("\n"), line))
+}
+
+/// The `equation` kit tool: the steps on the board, one line said.
+pub fn equation(args: &serde_json::Value) -> Result<String, String> {
+    let eq = args["equation"].as_str().unwrap_or("");
+    let (steps, line) = solve_equation(eq, args["check"].as_f64(), args["german"] == true)?;
+    crate::kit::show_text("equation", "EQUATION // STEPS", &steps, [380.0, 150.0]);
+    Ok(crate::kit::say(format!("{steps}\n{line}"), line))
+}
+
 /// The `calculate` tool: an expression, or a conversion "5 miles to km".
 pub fn tool(expression: &str) -> Result<String, String> {
     if let Some(line) = answer_conversion(expression) {
@@ -600,6 +700,36 @@ pub fn tool(expression: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_linear_equation_is_checked_and_solved_with_its_steps() {
+        let asked = |said: &str| equation_command(said);
+        let eq = |said: &str| asked(said).and_then(|a| a["equation"].as_str().map(str::to_string)).unwrap_or_else(|| panic!("{said}"));
+        assert_eq!(asked("Is x = 5 right for 3x + 5 = 20?"), Some(serde_json::json!({"equation": "3*x + 5 = 20", "check": 5.0, "german": false})));
+        assert_eq!(asked("Ist x gleich 4 richtig für 3x plus 5 gleich 20"), Some(serde_json::json!({"equation": "3*x + 5 = 20", "check": 4.0, "german": true})));
+        assert_eq!(eq("solve 2(x + 1) = x + 7"), "2*(x + 1) = x + 7");
+        assert_eq!(eq("What is x if 4x minus 3 equals 2x plus 9?"), "4*x - 3 = 2*x + 9");
+        assert_eq!(eq("Löse 0,5x + 1 = 3"), "0.5*x + 1 = 3");
+        for said in ["what is 3 + 5", "solve my problems", "is it right for me", "x = 5", "solve a = 5", "check the weather = good", "is x = 5 right for y + 2 = 7"] {
+            assert_eq!(asked(said), None, "{said}");
+        }
+        let solved = |eq: &str, check: Option<f64>| solve_equation(eq, check, false).unwrap();
+        assert_eq!(solved("3*x + 5 = 20", None), ("3x + 5 = 20\n3x = 15\nx = 5   (÷ 3)".to_string(), "x is 5, Sir.".to_string()));
+        assert_eq!(solved("2*(x + 1) = x + 7", None).1, "x is 5, Sir.");
+        assert_eq!(solved("4*x - 3 = 2*x + 9", None).0, "4x - 3 = 2x + 9\n2x = 12\nx = 6   (÷ 2)");
+        assert_eq!(solved("x = 7", None), ("x = 7".to_string(), "x is 7, Sir.".to_string()), "nothing to move, nothing to divide");
+        assert_eq!(solved("0.5*x + 1 = 3", None).1, "x is 4, Sir.");
+        assert_eq!(solved("-x = 4", None).1, "x is -4, Sir.");
+        assert_eq!(solved("3*x + 5 = 20", Some(5.0)).1, "Yes, Sir: 5 is right. Both sides come to 20.");
+        assert_eq!(solved("3*x + 5 = 20", Some(4.0)).1, "No, Sir: with 4 the left side is 17 and the right 20. x is 5.");
+        assert!(solved("3*x + 5 = 20", Some(4.0)).0.starts_with("x = 4:  left 17, right 20  (not equal)"));
+        assert_eq!(solve_equation("3*x + 5 = 20", Some(5.0), true).unwrap().1, "Ja, Sir: 5 stimmt. Beide Seiten ergeben 20.");
+        assert!(solved("x + 1 = x + 1", None).1.starts_with("Every x"));
+        assert!(solved("x + 1 = x + 2", None).1.starts_with("No x"));
+        for not_linear in ["x^2 = 4", "1/x = 2", "x*x + 1 = 5"] {
+            assert!(solve_equation(not_linear, None, false).is_err(), "{not_linear}");
+        }
+    }
 
     #[test]
     fn evaluates_expressions() {

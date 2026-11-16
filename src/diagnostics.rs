@@ -188,9 +188,117 @@ pub fn tool_definitions() -> Vec<serde_json::Value> {
     ]
 }
 
+// ------------------------------------------------------------------ offline, and back ----
+// One cheap handshake every 30 s; two misses in a row mean the internet is gone, told once, and
+// its return is told once. Meanwhile the online read tools answer from their last answer.
+
+static OFFLINE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+const PROBE_EVERY: Duration = Duration::from_secs(30);
+const MISSES_FOR_OFFLINE: u32 = 2;
+/// The online read tools whose last answer is kept for a time without internet.
+const KEPT_ANSWERS: &[&str] = &["web_search", "get_precise_location_weather", "check_ride_and_commute_status"];
+const KEPT: &str = "last_answer";
+
+pub fn is_offline() -> bool {
+    OFFLINE.load(std::sync::atomic::Ordering::Acquire)
+}
+
+/// One probe's step: (offline, misses so far) after it, and Some(new state) when it turned.
+pub fn link_step(offline: bool, misses: u32, reached: bool) -> (bool, u32, Option<bool>) {
+    match (reached, offline) {
+        (true, true) => (false, 0, Some(false)),
+        (true, false) => (false, 0, None),
+        (false, false) if misses + 1 >= MISSES_FOR_OFFLINE => (true, misses + 1, Some(true)),
+        (false, _) => (offline, misses + 1, None),
+    }
+}
+
+async fn reachable() -> bool {
+    for addr in ["1.1.1.1:443", "9.9.9.9:443"] {
+        let Ok(addr) = addr.parse::<SocketAddr>() else { continue };
+        if matches!(tokio::time::timeout(Duration::from_secs(3), tokio::net::TcpStream::connect(addr)).await, Ok(Ok(_))) {
+            return true;
+        }
+    }
+    false
+}
+
+pub fn start_link_watch(stop: tokio_util::sync::CancellationToken) {
+    if cfg!(test) || crate::platform::in_test_session() {
+        return;
+    }
+    tokio::spawn(async move {
+        let (mut offline, mut misses) = (false, 0);
+        loop {
+            tokio::select! { _ = stop.cancelled() => return, _ = tokio::time::sleep(PROBE_EVERY) => {} }
+            let step = link_step(offline, misses, reachable().await);
+            (offline, misses) = (step.0, step.1);
+            OFFLINE.store(offline, std::sync::atomic::Ordering::Release);
+            match step.2 {
+                Some(true) => {
+                    tracing::warn!("[NET] Offline: two handshakes in a row failed");
+                    crate::announcements::say("The internet has dropped, Sir. Until it is back I answer from what I last looked up.");
+                }
+                Some(false) => {
+                    tracing::info!("[NET] Back online");
+                    crate::announcements::say("We're back online, Sir.");
+                }
+                None => {}
+            }
+        }
+    });
+}
+
+/// Whether a tool's error reads like an unreachable server.
+fn unreachable(err: &str) -> bool {
+    let e = err.to_lowercase();
+    ["error sending request", "dns", "connect", "timed out", "timeout", "network", "unreachable", "no internet", "resolve"].iter().any(|w| e.contains(w))
+}
+
+/// The tool call's result, kept when it is an online read that worked; when it failed without
+/// internet, the last kept answer with its time instead.
+pub fn kept_answer(tool: &str, args: &serde_json::Value, result: Result<String, String>) -> Result<String, String> {
+    if !KEPT_ANSWERS.contains(&tool) {
+        return result;
+    }
+    let key = format!("{tool} {args}");
+    match result {
+        Ok(output) => {
+            let _ = crate::kit::put(KEPT, &key, &serde_json::json!({"output": output, "at": chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string()}));
+            Ok(output)
+        }
+        Err(err) if is_offline() || unreachable(&err) => match crate::kit::get(KEPT, &key) {
+            Some(kept) => Ok(offline_copy(kept["output"].as_str().unwrap_or(""), kept["at"].as_str().unwrap_or(""), chrono::Local::now().naive_local())),
+            None => Err(err),
+        },
+        Err(err) => Err(err),
+    }
+}
+
+/// The kept answer, marked as such with its time.
+pub fn offline_copy(output: &str, at: &str, now: chrono::NaiveDateTime) -> String {
+    format!("{output}\n\n(No internet right now: this is what I found {}.)", crate::kit_notes::when_said(at, now))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_internet_is_gone_after_two_misses_and_told_once_each_way() {
+        let (mut offline, mut misses, mut told) = (false, 0, Vec::new());
+        for reached in [true, false, true, false, false, false, false, true, true, false] {
+            let step = link_step(offline, misses, reached);
+            (offline, misses) = (step.0, step.1);
+            told.extend(step.2);
+        }
+        assert_eq!(told, [true, false], "one miss is a blip; the drop and the return are told once each");
+        assert!(!offline && misses == 1);
+        assert!(unreachable("error sending request for url (https://api.example.com/)") && unreachable("DNS lookup failed") && !unreachable("No results for that query"));
+        let now = chrono::NaiveDate::from_ymd_opt(2026, 11, 16).unwrap().and_hms_opt(18, 0, 0).unwrap();
+        assert_eq!(offline_copy("Rain at 17:00.", "2026-11-16 14:05:09", now), "Rain at 17:00.\n\n(No internet right now: this is what I found today at 14:05.)");
+        assert_eq!(kept_answer("calculate", &serde_json::json!({}), Err("timed out".into())), Err("timed out".to_string()), "only the online reads are kept");
+    }
 
     #[test]
     fn process_reports() {

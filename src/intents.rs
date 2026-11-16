@@ -979,7 +979,7 @@ static CANCEL_REMINDERS: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(?:cancel|delete|remove|clear)\s+(?:all\s+)?(?:of\s+)?(?:my\s+|the\s+)?reminders?(?:\s+(?:about|for|to)\s+(.+))?$|^(?:lösche|lösch|entferne)\s+(?:alle\s+)?(?:meine\s+)?erinnerung(?:en)?$")
 });
 static TIMER: LazyLock<Regex> = LazyLock::new(|| {
-    re(r"^(?:(?:set|start|create|make)\s+(?:a\s+|an\s+)?)?(?:timer|countdown)\s+(?:for\s+|of\s+)?(\d+|a|an|one|two|three|four|five|ten|fifteen|twenty|thirty|forty|fifty|sixty)\s+(seconds?|minutes?|mins?|hours?)$|^(?:(?:set|start)\s+(?:a\s+|an\s+)?)?(\d+)[\s-]*(second|minute|min|hour)s?\s+(?:timer|countdown)$|^(?:stell|stelle|starte|start)\s+(?:einen\s+|ein\s+)?(?:timer|countdown)\s+(?:auf|für|fuer|von)\s+(\d+|eine|einen|zwei|drei|fünf|zehn|fünfzehn|zwanzig|dreißig)\s+(sekunden?|minuten?|stunden?)$|^timer\s+(\d+)\s+(sekunden?|minuten?|stunden?|seconds?|minutes?)$")
+    re(r"^(?:(?:set|start|create|make)\s+(?:a\s+|an\s+)?)?(?:(?P<n1>[a-z]+)\s+)?(?:timer|countdown)\s+(?:for\s+|of\s+)?(\d+|a|an|one|two|three|four|five|ten|fifteen|twenty|thirty|forty|fifty|sixty)\s+(seconds?|minutes?|mins?|hours?)$|^(?:(?:set|start)\s+)?(?:a\s+|an\s+)?(\d+)[\s-]*(second|minute|min|hour)s?\s+(?:(?P<n2>[a-z]+)\s+)?(?:timer|countdown)$|^(?:stell|stelle|starte|start)\s+(?:einen\s+|ein\s+)?(?:(?P<n3>[a-zäöüß]+?)[\s-]?)?(?:timer|countdown)\s+(?:auf|für|fuer|von)\s+(\d+|eine|einen|zwei|drei|fünf|zehn|fünfzehn|zwanzig|dreißig)\s+(sekunden?|minuten?|stunden?)$|^timer\s+(\d+)\s+(sekunden?|minuten?|stunden?|seconds?|minutes?)$")
 });
 static FOCUS_START: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(?:(?:start|engage|enter|activate|begin|turn on|switch to|starte|aktiviere)\s+)?(?:a\s+|the\s+|den\s+)?(?:focus|deep work|fokus|konzentration)(?:\s*(?:mode|session|time|modus|zeit))?(?:\s+(?:for|für)\s+(\d+)\s*(?:minutes?|mins?|minuten?))?$|^(?:i need to|let me|ich muss mich)\s+(?:focus|konzentrieren)(?:\s+for\s+(\d+)\s*minutes)?$")
@@ -1111,7 +1111,9 @@ fn small_number(word: &str) -> Option<f64> {
 /// "Set a timer for 5 minutes" → a countdown widget.
 fn timer_command(s: &str) -> Option<Value> {
     let c = TIMER.captures(s)?;
-    let groups: Vec<&str> = c.iter().skip(1).flatten().map(|m| m.as_str()).collect();
+    // "a 10 minute pasta timer", "stell einen Nudeltimer auf 10 Minuten": the timer's own name.
+    let named = ["n1", "n2", "n3"].iter().find_map(|n| c.name(n)).filter(|n| !matches!(n.as_str(), "a" | "an" | "the" | "my" | "new" | "another" | "kitchen" | "egg" | "countdown" | "den" | "der" | "die" | "das" | "ein" | "einen" | "mein" | "meinen" | "neuen"));
+    let groups: Vec<&str> = c.iter().skip(1).flatten().filter(|m| !["n1", "n2", "n3"].iter().any(|n| c.name(n).is_some_and(|g| g.range() == m.range()))).map(|m| m.as_str()).collect();
     let (n, unit) = (small_number(groups.first()?)?, *groups.get(1)?);
     let secs = n * if unit.starts_with("sec") || unit.starts_with("sek") {
         1.0
@@ -1126,8 +1128,12 @@ fn timer_command(s: &str) -> Option<Value> {
         s if s % 60 == 0 => format!("{} minute timer", s / 60),
         s => format!("{s} second timer"),
     };
+    let (id, label) = match named {
+        Some(name) => (format!("timer_{}", name.as_str()), format!("{} timer", name.as_str())),
+        None => (format!("timer_{}", secs as u64), label),
+    };
     Some(json!({
-        "id": format!("timer_{}", secs as u64),
+        "id": id,
         "type": "CountdownOrStopwatch",
         "title": label,
         "mode": "countdown",
@@ -4492,6 +4498,9 @@ fn ultron_retired(s: &str) -> Option<Intent> {
 /// know it only as the name of an app or a window: "start the dictation" was an app called
 /// "dictation"), the same order said another way (`ways`).
 pub fn parse(text: &str) -> Option<Intent> {
+    // "The music app", "my chat app": the app of his that plays that part.
+    let named = crate::apps::with_roles(text);
+    let text: &str = &named;
     let direct = parse_as_said(text);
     if direct.as_ref().is_some_and(|found| !takes_any_name(found)) {
         return direct;
@@ -6080,6 +6089,18 @@ mod tests {
         assert_eq!((timer["type"].as_str(), timer["duration_secs"].as_f64()), (Some("CountdownOrStopwatch"), Some(300.0)));
         assert_eq!(tool("Start a timer for ten minutes").unwrap().1["duration_secs"], 600.0);
         assert_eq!(tool("Stell einen Timer auf 3 Minuten").unwrap().1["duration_secs"], 180.0);
+        // A timer of his own name: its own ring, its own line when it rings.
+        for (said, id, title, secs) in [
+            ("Set a 10 minute pasta timer", "timer_pasta", "pasta timer", 600.0),
+            ("Start a pizza timer for 12 minutes", "timer_pizza", "pizza timer", 720.0),
+            ("Stell einen Nudeltimer auf 8 Minuten", "timer_nudel", "nudel timer", 480.0),
+            ("Set the timer for 5 minutes", "timer_300", "5 minute timer", 300.0),
+            ("Stell den Timer auf 2 Minuten", "timer_120", "2 minute timer", 120.0),
+            ("set an egg timer for 4 minutes", "timer_240", "4 minute timer", 240.0),
+        ] {
+            let t = tool(said).unwrap_or_else(|| panic!("{said}")).1;
+            assert_eq!((t["id"].as_str(), t["title"].as_str(), t["duration_secs"].as_f64()), (Some(id), Some(title), Some(secs)), "{said}");
+        }
         assert_eq!(tool("Focus mode for 45 minutes").unwrap().1, json!({"action": "start", "minutes": 45.0}));
         assert_eq!(tool("Engage focus mode").unwrap().1["minutes"], 25.0);
         assert_eq!(tool("Stop focus mode").unwrap().1["action"], "stop");

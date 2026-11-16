@@ -58,13 +58,35 @@ static EMOJI: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"[\x{1F000}-\x{1FAFF}\x{2600}-\x{27BF}\x{FE0F}\x{200D}]").expect("regex")
 });
 
+/// A list item or heading without an end of its own: it gets a full stop, so the voice pauses
+/// after it as after a sentence instead of running the lines together.
+static LIST_LINE_END: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?mR)^([ \t]*(?:[-*+•]|\d+[.)]|#{1,6})[ \t]+.*?[^.!?:;,\s])[ \t]*$").expect("regex"));
+
+/// A link as one says it: its site with "dot", and its first path part when that is a name
+/// ("https://github.com/example/repo?x=1" → "github dot com slash example").
+fn spoken_link(url: &str) -> String {
+    let rest = url.split_once("://").map_or(url, |(_, r)| r);
+    let rest = rest.strip_prefix("www.").unwrap_or(rest);
+    let (host, path) = rest.split_once('/').unwrap_or((rest, ""));
+    let site = host.split(':').next().unwrap_or(host).replace('.', " dot ");
+    let first = path.split(['/', '?', '#']).next().unwrap_or("");
+    match first.chars().count() {
+        1..=24 if first.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') => format!("{site} slash {first}"),
+        _ => site,
+    }
+}
+
 /// Removes markdown and symbols that must never be read aloud.
 pub fn strip_markdown(text: &str) -> String {
     let s = MD_LINK.replace_all(text, "$1");
-    let s = URL.replace_all(&s, "$2");
+    let s = URL.replace_all(&s, |c: &regex::Captures| {
+        let core = c[0].trim_end_matches(['.', ',', ';', ':', '!', '?']);
+        format!("{}{}", spoken_link(core), &c[0][core.len()..])
+    });
+    let s = EMOJI.replace_all(&s, "");
+    let s = LIST_LINE_END.replace_all(&s, "$1.");
     let s = HEADING.replace_all(&s, "");
     let s = LIST_MARKER.replace_all(&s, "");
-    let s = EMOJI.replace_all(&s, "");
     let s: String = s
         .chars()
         .filter(|c| !matches!(c, '*' | '#' | '`' | '~' | '|' | '>' | '<'))
@@ -1141,6 +1163,9 @@ fn cue_due(kind: jai_voice_dsp::Earcon, now: std::time::Instant) -> bool {
     true
 }
 
+/// His tempo at night, against the day's.
+const NIGHT_TEMPO: f32 = 0.94;
+
 /// A HUD micro-interaction's cue (a block materialising, the spotlight, a mode change, an
 /// alert): played like an earcon, unless Sir turned the cues off or it has just sounded.
 pub fn play_cue(kind: jai_voice_dsp::Earcon) {
@@ -1922,7 +1947,8 @@ fn synth_worker(cfg: JaiConfig, inner: Arc<Inner>, rx: &mpsc::Receiver<Job>, eve
                 let t0 = Instant::now();
                 let speech = normalize_for_speech(&text);
                 let voice = inner.voice.read().unwrap_or_else(|e| e.into_inner()).clone();
-                let speed = f32::from_bits(inner.speed.load(Ordering::Relaxed));
+                // At night he speaks a little slower, as one does late in the evening.
+                let speed = f32::from_bits(inner.speed.load(Ordering::Relaxed)) * if crate::hud_feel::night_active() { NIGHT_TEMPO } else { 1.0 };
                 let Some(audio48) = render_clause(&mut engine, &phonemizer, &mut cache, &speech, &voice, speed)
                 else {
                     continue;
@@ -2377,7 +2403,15 @@ mod tests {
         assert_eq!(normalize_for_speech("GPU at 48°C, 6.5 GB VRAM"), "G P U at 48 degrees Celsius, 6.5 gigabytes V-Ram");
         assert_eq!(normalize_for_speech("**Spotify** at 15:00 on the RTX 3060 Ti"), "Spot-ify at three P M on the R T X thirty sixty T I");
         assert_eq!(normalize_for_speech("J.A.I. online & ready"), "Jay online and ready");
-        assert_eq!(strip_markdown("## Status\n* **CPU**: 12% \u{1F680}"), "Status CPU: 12%");
+        // A heading and each list line end like a sentence: the voice pauses after each.
+        assert_eq!(strip_markdown("## Status\n* **CPU**: 12% \u{1F680}"), "Status. CPU: 12%.");
+        assert_eq!(strip_markdown("Three things:\r\n- milk\r\n- eggs!\r\n1. bread"), "Three things: milk. eggs! bread.");
+        assert_eq!(strip_markdown("A sentence that wraps\nonto a second line"), "A sentence that wraps onto a second line", "a wrapped line is no list");
+        // A link is its site and its first part, said with "dot" and "slash".
+        assert_eq!(strip_markdown("See https://github.com/example/repo?tab=1 now"), "See github dot com slash example now");
+        assert_eq!(strip_markdown("At https://www.example.org."), "At example dot org.");
+        assert_eq!(strip_markdown("Open http://localhost:8080/"), "Open localhost");
+        assert_eq!(spoken_link("https://news.example.de/a-very-long-article-title-that-goes-on"), "news dot example dot de");
     }
 
     #[test]

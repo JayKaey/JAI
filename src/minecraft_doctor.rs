@@ -103,8 +103,12 @@ pub fn description(log: &str) -> Option<String> {
 /// Every Minecraft instance folder a launcher has made on this machine (the configured one
 /// first).
 fn instance_roots(tools: &ToolContext) -> Vec<PathBuf> {
+    instance_roots_from(&tools.config.read(|c| c.features.minecraft_dir.clone()))
+}
+
+/// The same from the configured folder (empty: the launchers' own places only).
+pub(crate) fn instance_roots_from(configured: &str) -> Vec<PathBuf> {
     let mut roots: Vec<PathBuf> = Vec::new();
-    let configured = tools.config.read(|c| c.features.minecraft_dir.clone());
     if !configured.trim().is_empty() {
         roots.push(PathBuf::from(crate::apps::expand_env(configured.trim())));
     }

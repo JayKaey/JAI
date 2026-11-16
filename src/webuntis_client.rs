@@ -198,6 +198,53 @@ fn parse_date(v: &Value) -> Option<NaiveDate> {
     NaiveDate::parse_from_str(&n.to_string(), "%Y%m%d").ok()
 }
 
+/// A holiday of the school: its long name and its first and last day.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Holiday {
+    pub name: String,
+    pub from: NaiveDate,
+    pub to: NaiveDate,
+}
+
+pub fn parse_holidays(v: &Value) -> Vec<Holiday> {
+    let mut out: Vec<Holiday> = v
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|h| {
+            let name = h["longName"].as_str().filter(|n| !n.trim().is_empty()).or_else(|| h["name"].as_str())?.trim().to_string();
+            let (from, to) = (parse_date(&h["startDate"])?, parse_date(&h["endDate"])?);
+            (from <= to).then_some(Holiday { name, from, to })
+        })
+        .collect();
+    out.sort_by_key(|h| h.from);
+    out
+}
+
+/// The holiday `day` falls in, if any.
+pub fn holiday_on(holidays: &[Holiday], day: NaiveDate) -> Option<&Holiday> {
+    holidays.iter().find(|h| h.from <= day && day <= h.to)
+}
+
+/// The holidays last read (`Pim::holidays` keeps them), for those who cannot wait for WebUntis.
+pub static HOLIDAYS: std::sync::Mutex<Option<(std::time::Instant, Vec<Holiday>)>> = std::sync::Mutex::new(None);
+
+/// The holiday `day` falls in, from the last read only (no call to WebUntis).
+pub fn known_holiday(day: NaiveDate) -> Option<Holiday> {
+    HOLIDAYS.lock().unwrap_or_else(|e| e.into_inner()).as_ref().and_then(|(_, all)| holiday_on(all, day).cloned())
+}
+
+/// "The Christmas holidays: no school until Monday 11 January." — the day after a holiday's last
+/// day that is not a weekend is when school starts again.
+pub fn holiday_line(h: &Holiday) -> String {
+    use chrono::Datelike;
+    let mut back = h.to + chrono::Duration::days(1);
+    while matches!(back.weekday(), chrono::Weekday::Sat | chrono::Weekday::Sun) {
+        back += chrono::Duration::days(1);
+    }
+    format!("{}: no school until {}.", h.name, back.format("%A %-d %B"))
+}
+
 fn parse_time(v: &Value) -> Option<NaiveTime> {
     let n = v.as_i64().or_else(|| v.as_str()?.parse().ok())?;
     NaiveTime::from_hms_opt((n / 100) as u32, (n % 100) as u32, 0)
@@ -482,6 +529,11 @@ impl WebUntis {
             }
         }
         Err("WebUntis did not say whose timetable to read; enter your class (e.g. 10b) or student id in the Integrations hub".into())
+    }
+
+    /// The school's holidays (JSON-RPC `getHolidays`).
+    pub async fn holidays(&self, cfg: &WebUntisSettings, auth: Auth<'_>) -> Result<Vec<Holiday>, String> {
+        self.rpc(cfg, auth, "getHolidays", json!({})).await.map(|v| parse_holidays(&v))
     }
 
     /// Exams and homework due in [from, to] (each best effort: schools switch them off).
@@ -816,6 +868,26 @@ pub fn schedule_text(lessons: &[Lesson], from: NaiveDate, to: NaiveDate, only_ch
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn holidays_are_read_and_say_when_school_starts_again() {
+        let v = json!([
+            {"id": 2, "name": "Weihn", "longName": "Weihnachtsferien", "startDate": 20261221, "endDate": 20270108},
+            {"id": 1, "name": "Herbst", "longName": "", "startDate": "20261026", "endDate": 20261030},
+            {"id": 3, "name": "Broken", "longName": "Broken", "startDate": 20261201, "endDate": 20261130},
+            {"id": 4, "name": "NoDate", "longName": "No date"}
+        ]);
+        let all = parse_holidays(&v);
+        assert_eq!(all.iter().map(|h| h.name.as_str()).collect::<Vec<_>>(), ["Herbst", "Weihnachtsferien"], "sorted, an empty long name falls back to the short one, a reversed or missing range is left out");
+        let d = |y: i32, m: u32, day: u32| NaiveDate::from_ymd_opt(y, m, day).unwrap();
+        assert_eq!(holiday_on(&all, d(2026, 12, 21)).map(|h| h.name.as_str()), Some("Weihnachtsferien"), "the first day");
+        assert_eq!(holiday_on(&all, d(2027, 1, 8)).map(|h| h.name.as_str()), Some("Weihnachtsferien"), "the last day");
+        assert_eq!(holiday_on(&all, d(2027, 1, 11)), None);
+        assert_eq!(holiday_on(&all, d(2026, 11, 16)), None);
+        assert_eq!(holiday_line(&all[1]), "Weihnachtsferien: no school until Monday 11 January.", "a Friday's end: school on the Monday");
+        assert_eq!(holiday_line(&all[0]), "Herbst: no school until Monday 2 November.");
+        assert!(parse_holidays(&json!({"error": "no"})).is_empty());
+    }
 
     #[test]
     fn periods_are_classified_and_merged() {

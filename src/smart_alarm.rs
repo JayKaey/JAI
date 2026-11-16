@@ -192,6 +192,15 @@ impl AlarmClock {
                     let planned = a.date.and_time(a.wake);
                     // Dawn check: are the first lessons cancelled?
                     if a.adjust && a.shifted.is_none() && now >= planned - ChronoDuration::minutes(DAWN_CHECK_MIN) && now < planned {
+                        // No school at all that day (holidays, every lesson cancelled): a repeating
+                        // school alarm keeps quiet. (One set for that very day still rings.)
+                        let free = if a.repeat == "once" { None } else { tools.pim.no_school(a.date).await };
+                        if let Some(why) = free {
+                            info!("[ALARM] Not ringing on {}: {why}", a.date);
+                            me.advance(&a);
+                            let _ = tools.stark.events.send(StarkEvent::Notice(format!("School alarm off today: {why}")));
+                            continue;
+                        }
                         match tools.pim.lessons(a.date, a.date).await {
                             Ok(lessons) => match shifted_wake(a.wake, &lessons) {
                                 Some((to, reason)) => {

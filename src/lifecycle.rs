@@ -76,6 +76,82 @@ pub fn spawn_pending_restart() {
     }
 }
 
+// ------------------------------------------------------- the last version that ran well ----
+// A packaged JAI.exe counts its starts in `jai_starts.txt` beside it, for its own build only
+// (length and write time). A start that runs `HEALTHY_AFTER` clears the count and keeps a copy
+// of its exe as JAI.prev.exe; quitting clears it too. With two starts of this build that never
+// got going, the next hands over to that copy, and keeps doing so until JAI.exe is replaced.
+
+const STARTS_FILE: &str = "jai_starts.txt";
+const PREV_EXE: &str = "JAI.prev.exe";
+pub const HEALTHY_AFTER: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Only the packaged JAI.exe counts (a dev build or the copy itself does not).
+fn packaged_exe() -> Option<PathBuf> {
+    std::env::current_exe().ok().filter(|exe| exe.file_name().is_some_and(|n| n.eq_ignore_ascii_case("JAI.exe")))
+}
+
+/// A build's stamp: its length and write time.
+fn build_stamp(exe: &std::path::Path) -> String {
+    std::fs::metadata(exe)
+        .map(|m| format!("{}-{}", m.len(), m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_secs())))
+        .unwrap_or_default()
+}
+
+/// (failed starts before this one, the count's file text for this start, hand over).
+pub fn tally(file_text: &str, stamp: &str, copy_exists: bool) -> (u32, Option<String>, bool) {
+    let mut parts = file_text.split_whitespace();
+    let before = match (parts.next().and_then(|n| n.parse::<u32>().ok()), parts.next()) {
+        (Some(n), Some(s)) if s == stamp => n,
+        _ => 0,
+    };
+    let hand_over = before >= 2 && copy_exists;
+    (before, (!hand_over).then(|| format!("{} {stamp}", before + 1)), hand_over)
+}
+
+/// Counts this start; the copy to start instead when this build failed twice.
+pub fn count_start() -> Option<PathBuf> {
+    let exe = packaged_exe()?;
+    let dir = exe.parent()?;
+    let (file, prev) = (dir.join(STARTS_FILE), dir.join(PREV_EXE));
+    let (before, write, hand_over) = tally(&std::fs::read_to_string(&file).unwrap_or_default(), &build_stamp(&exe), prev.is_file());
+    if let Some(text) = write {
+        let _ = std::fs::write(&file, text);
+    }
+    if hand_over {
+        warn!("[LIFE] This build did not get going {before} times: handing over to {}", prev.display());
+    }
+    hand_over.then_some(prev)
+}
+
+pub fn launch_fallback(prev: &std::path::Path) -> Result<(), String> {
+    launch(prev, &["--fallback".to_string()])
+}
+
+pub fn clear_start_count() {
+    if let Some(dir) = packaged_exe().as_deref().and_then(std::path::Path::parent) {
+        let _ = std::fs::remove_file(dir.join(STARTS_FILE));
+    }
+}
+
+/// This start went well: the count goes, and this build becomes the one to fall back to.
+pub fn start_went_well() {
+    clear_start_count();
+    let Some(exe) = packaged_exe() else { return };
+    let Some(dir) = exe.parent() else { return };
+    let (prev, part) = (dir.join(PREV_EXE), dir.join(format!("{PREV_EXE}.part")));
+    if build_stamp(&prev) == build_stamp(&exe) {
+        return;
+    }
+    match std::fs::copy(&exe, &part).and_then(|_| std::fs::rename(&part, &prev)) {
+        Ok(()) => info!("[LIFE] This build ran well: kept as {}", prev.display()),
+        Err(e) => {
+            let _ = std::fs::remove_file(&part);
+            warn!("[LIFE] Could not keep this build as {}: {e}", prev.display());
+        }
+    }
+}
+
 fn current_args() -> Vec<String> {
     std::env::args().skip(1).filter(|a| a != "--restarted").collect()
 }
@@ -156,5 +232,27 @@ mod tests {
         assert!(is_wake_up_phrase("JAI, wake up."));
         assert!(is_wake_up_phrase("Wach auf, JAI"));
         assert!(!is_wake_up_phrase("What's the weather?"));
+    }
+
+    #[test]
+    fn two_starts_that_never_got_going_hand_over_to_the_last_good_build() {
+        let stamp = "104857600-1789000000";
+        assert_eq!(tally("", stamp, true), (0, Some(format!("1 {stamp}")), false), "the first start");
+        assert_eq!(tally(&format!("1 {stamp}"), stamp, true), (1, Some(format!("2 {stamp}")), false), "one failure is not enough");
+        assert_eq!(tally(&format!("2 {stamp}"), stamp, true), (2, None, true), "the third start hands over and the count stays");
+        assert_eq!(tally(&format!("2 {stamp}"), stamp, false), (2, Some(format!("3 {stamp}")), false), "no copy: nothing to hand over to");
+        assert_eq!(tally("5 104857600-1700000000", stamp, true), (0, Some(format!("1 {stamp}")), false), "a new build starts its own count");
+        assert_eq!(tally("garbage", stamp, true).0, 0);
+
+        // The copy keeps the build's stamp, so a well-run build is copied once, not on every start.
+        let dir = std::env::temp_dir().join(format!("jai_prev_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("dir");
+        let (exe, copy) = (dir.join("JAI.exe"), dir.join(PREV_EXE));
+        std::fs::write(&exe, vec![1u8; 4096]).expect("exe");
+        std::fs::copy(&exe, &copy).expect("copy");
+        assert_eq!(build_stamp(&copy), build_stamp(&exe));
+        assert!(!build_stamp(&exe).is_empty() && build_stamp(&dir.join("missing.exe")).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

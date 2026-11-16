@@ -1170,7 +1170,12 @@ async fn hud_probes(app: &Jai) {
                 // (`gui::frame_summary`).
                 5.5,
                 median_ms,
-                Ok(format!("{frames} frames: median {median_ms:.2} ms, average {average_ms:.2} ms, worst {worst_ms:.2} ms")),
+                // (The last 240 frames, long past the warm-up: one over 50 ms is a hitch.)
+                if worst_ms > crate::gui::SLOW_FRAME_MS {
+                    Err(format!("{frames} frames: one took {worst_ms:.0} ms (over {} ms); median {median_ms:.2} ms", crate::gui::SLOW_FRAME_MS))
+                } else {
+                    Ok(format!("{frames} frames: median {median_ms:.2} ms, average {average_ms:.2} ms, worst {worst_ms:.2} ms"))
+                },
             ),
             None => skip("hud", "frame time (the HUD's own work per frame)", "no frames painted yet"),
         }

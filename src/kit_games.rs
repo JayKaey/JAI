@@ -217,6 +217,9 @@ static VRAM: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:what|who)(?:'s|s| is)\s
 static DOWNLOAD_WATCH: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:tell me|let me know|notify me|say)\s+when\s+(?:the\s+|my\s+)?(?P<g>.+?)\s+download\s+(?:is\s+)?(?:done|finished|finishes|complete|completes|is complete)$"));
 static DOWNLOAD_ASK: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:how far is|how's|how is)\s+(?:the|my)\s+(?:(?P<g>.+?)\s+)?download$|^is\s+(?:the|my)\s+(?:(?P<h>.+?)\s+)?download\s+(?:done|finished)$"));
 static BEDTIME: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:remind me to |tell me to )?stop (?:gaming|playing) at (?P<t>.+?) on school nights$"));
+static UNPLAYED: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"^(?:which|what)\s+games\s+(?:(?:havent|haven\s+t|haven't|have\s+not|didnt|didn\s+t|didn't|did\s+not)\s+i|(?:have|did)\s+i\s+not)\s+(?:played|play|touched|opened)(?:\s+(?:in|for)\s+(?:months|a\s+while|ages|a\s+long\s+time|a\s+year))?$|^(?:show|list)\s+(?:me\s+)?(?:my\s+)?(?:unplayed|forgotten|untouched)\s+games$|^welche\s+spiele\s+(?:habe|hab)\s+ich\s+(?:lange|seit\s+monaten|ewig|nie)\s+nicht\s+(?:mehr\s+)?gespielt$")
+});
 static BEDTIME_OFF: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:turn off|stop|cancel|no more|switch off)\s+the school night (?:reminder|nudge)$"));
 
 /// "22:00", "10", "10 pm", "half past ten" is not understood: a school-night hour (an hour
@@ -279,6 +282,9 @@ pub fn command(s: &str) -> Option<Value> {
     if BEDTIME_OFF.is_match(s) {
         return Some(json!({"action": "bedtime", "at": ""}));
     }
+    if UNPLAYED.is_match(s) {
+        return Some(json!({"action": "unplayed"}));
+    }
     // Last: "start X" only where X is one of his games ("start the timer" is not).
     let game = find(START.captures(s)?.get(1)?.as_str())?;
     Some(json!({"action": "start", "game": game.name}))
@@ -311,6 +317,24 @@ pub async fn run(args: &Value) -> Result<String, String> {
             Ok(say(format!("{} games: {}", names.len(), names.join(", ")), format!("You have {} games installed, Sir; they're on the board.", names.len())))
         }
         "playtime" => Ok(playtime_answer(args["span"].as_str() == Some("week"), chrono::Local::now())),
+        "unplayed" => {
+            let rows: Vec<(String, u64, u64)> = steam_libraries()
+                .iter()
+                .flat_map(|lib| std::fs::read_dir(lib).into_iter().flatten().flatten().map(|e| e.path()))
+                .filter(|p| p.file_name().is_some_and(|f| f.to_string_lossy().starts_with("appmanifest_")))
+                .filter_map(|p| std::fs::read_to_string(p).ok())
+                .filter_map(|text| {
+                    let num = |k: &str| vdf_value(&text, k).and_then(|v| v.parse().ok()).unwrap_or(0u64);
+                    let name = vdf_value(&text, "name")?;
+                    (!not_a_game(&name)).then(|| (name, num("LastPlayed"), num("SizeOnDisk")))
+                })
+                .collect();
+            let (text, spoken) = unplayed_answer(&rows, chrono::Local::now().timestamp().max(0) as u64);
+            if !text.is_empty() {
+                crate::kit::show_text("games_unplayed", "GAMES // NOT PLAYED IN 3 MONTHS", &text, [420.0, 380.0]);
+            }
+            Ok(say(if text.is_empty() { spoken.clone() } else { text }, spoken))
+        }
         "after" => {
             let text = args["text"].as_str().unwrap_or("").trim().to_string();
             let mut list: Vec<Value> = crate::kit::get("games", "after").and_then(|v| v.as_array().cloned()).unwrap_or_default();
@@ -400,8 +424,52 @@ pub fn on_change(was: Option<String>, now: Option<String>) {
         }
         if !crate::platform::hands_off() {
             tokio::spawn(news_at_start(game));
+            // (A pending restart could cut the game short: told once, as it starts.)
+            if let Some(line) = crate::kit_pc::restart_note_for_game() {
+                crate::announcements::say(line);
+            }
+            // The memory the game wants, held by programs open beside it: named once, the
+            // biggest closed after his yes.
+            tokio::spawn(async {
+                let list = tokio::task::spawn_blocking(crate::diagnostics::top_processes).await.unwrap_or_default();
+                if let Some((line, order)) = hogs_line(&hogs(&list)) {
+                    crate::hud_lines::offer(&order);
+                    crate::announcements::say(line);
+                }
+            });
         }
     }
+}
+
+/// Programs that are safe to close for a game (never his players, Discord, a launcher, the game
+/// itself or Windows), with the name to say.
+const CLOSABLE: &[(&str, &str)] = &[
+    ("chrome", "Chrome"), ("msedge", "Edge"), ("firefox", "Firefox"), ("opera", "Opera"), ("brave", "Brave"),
+    ("code", "VS Code"), ("devenv", "Visual Studio"), ("idea64", "IntelliJ"), ("rider64", "Rider"), ("blender", "Blender"),
+    ("photoshop", "Photoshop"), ("afterfx", "After Effects"), ("resolve", "DaVinci Resolve"), ("teams", "Teams"), ("ms-teams", "Teams"),
+    ("slack", "Slack"), ("obsidian", "Obsidian"), ("notion", "Notion"), ("vmware-vmx", "VMware"), ("virtualboxvm", "VirtualBox"),
+];
+/// Below this a program is not worth closing for a game.
+const HOG_MB: f64 = 800.0;
+
+/// The closable programs holding the most memory: (name to say, process, MB), up to three.
+pub fn hogs(list: &[crate::diagnostics::ProcessUsage]) -> Vec<(&'static str, String, f64)> {
+    let mut out: Vec<(&'static str, String, f64)> = list
+        .iter()
+        .filter(|p| p.memory_mb >= HOG_MB)
+        .filter_map(|p| CLOSABLE.iter().find(|(stem, _)| p.name.eq_ignore_ascii_case(stem)).map(|(_, said)| (*said, p.name.to_lowercase(), p.memory_mb)))
+        .collect();
+    out.sort_by(|a, b| b.2.total_cmp(&a.2));
+    out.truncate(3);
+    out
+}
+
+/// "Chrome holds 3.2 GB and VS Code 1.8 GB beside the game, Sir. Shall I close Chrome?" and the
+/// order his yes runs.
+pub fn hogs_line(hogs: &[(&str, String, f64)]) -> Option<(String, String)> {
+    let (said, process, _) = hogs.first()?;
+    let parts: Vec<String> = hogs.iter().enumerate().map(|(i, (n, _, mb))| format!("{n}{} {:.1} GB", if i == 0 { " holds" } else { "" }, mb / 1024.0)).collect();
+    Some((format!("{} beside the game, Sir. Shall I close {said}?", crate::briefing::join_and(&parts)), format!("close {process}")))
 }
 
 fn finish(game: &str, at: chrono::DateTime<chrono::Local>) {
@@ -445,7 +513,8 @@ fn finish_left(now: chrono::DateTime<chrono::Local>) {
 pub fn poll() {
     let now = chrono::Local::now();
     finish_left(now);
-    if let Some(line) = nudge_due(now, crate::vram_guard::game_now().is_some(), crate::kit::get("games", "bedtime").and_then(|v| v.as_str().map(str::to_string)), &mut lock(&NUDGED)) {
+    let free_tomorrow = crate::webuntis_client::known_holiday(now.date_naive() + chrono::Duration::days(1)).is_some();
+    if let Some(line) = nudge_due(now, crate::vram_guard::game_now().is_some() && !free_tomorrow, crate::kit::get("games", "bedtime").and_then(|v| v.as_str().map(str::to_string)), &mut lock(&NUDGED)) {
         alert(line);
     }
     let mut watched = lock(&WATCHED);
@@ -471,6 +540,32 @@ fn nudge_due(now: chrono::DateTime<chrono::Local>, playing: bool, at: Option<Str
     }
     *last = Some(now.date_naive());
     Some(format!("It's {}, Sir: school tomorrow. Time to wrap up the game.", now.format("%H:%M")))
+}
+
+/// Steam games not started for 90 days (or never), biggest first: (the board list, one line
+/// to say). `rows`: (name, LastPlayed in Unix seconds, 0 = never; SizeOnDisk in bytes).
+fn unplayed_answer(rows: &[(String, u64, u64)], now: u64) -> (String, String) {
+    const STALE: u64 = 90 * 86_400;
+    let mut stale: Vec<&(String, u64, u64)> = rows.iter().filter(|(_, last, _)| now.saturating_sub(*last) >= STALE).collect();
+    stale.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| a.0.cmp(&b.0)));
+    if stale.is_empty() {
+        return (String::new(), "You've played every Steam game of yours in the last three months, Sir.".to_string());
+    }
+    let gb = |bytes: u64| bytes as f64 / 1e9;
+    let when = |last: u64| match last {
+        0 => "never".to_string(),
+        _ => chrono::DateTime::from_timestamp(last as i64, 0).map(|t| t.with_timezone(&chrono::Local).format("%b %Y").to_string()).unwrap_or_default(),
+    };
+    let lines: Vec<String> = stale.iter().map(|(name, last, size)| format!("{:>6.1} GB   {:<9} {}", gb(*size), when(*last), plain(name))).collect();
+    let total: u64 = stale.iter().map(|r| r.2).sum();
+    let spoken = format!(
+        "{} game{} you haven't played in three months, Sir, {:.0} gigabytes together. The biggest is {}.",
+        stale.len(),
+        if stale.len() == 1 { "" } else { "s" },
+        gb(total),
+        plain(&stale[0].0)
+    );
+    (lines.join("\n"), spoken)
 }
 
 fn playtime_answer(week: bool, now: chrono::DateTime<chrono::Local>) -> String {
@@ -839,6 +934,41 @@ mod tests {
         assert!(nudge_due(at(15, 22, 5), true, Some("22:00".into()), &mut last).is_none(), "once a night");
         assert!(nudge_due(at(13, 23, 0), true, Some("22:00".into()), &mut None).is_none(), "Friday is no school night");
         assert!(nudge_due(at(16, 22, 30), false, Some("22:00".into()), &mut None).is_none(), "only while he plays");
+    }
+
+    #[test]
+    fn memory_hogs_beside_a_game_are_named_and_only_closable_ones() {
+        let p = |name: &str, mb: f64| crate::diagnostics::ProcessUsage { name: name.into(), cpu_pct: 1.0, memory_mb: mb, count: 1 };
+        let list = [p("chrome", 3276.8), p("javaw", 6100.0), p("Discord", 1500.0), p("Code", 1843.2), p("Sonora", 900.0), p("msedge", 700.0), p("slack", 1000.0), p("blender", 900.0), p("jai", 2500.0), p("svchost", 2000.0)];
+        let found = hogs(&list);
+        assert_eq!(found.iter().map(|h| h.0).collect::<Vec<_>>(), ["Chrome", "VS Code", "Slack"], "biggest first, three at most; never the game, Discord, his player, JAI or Windows; Edge under the floor");
+        let (line, order) = hogs_line(&found).expect("a line");
+        assert_eq!(line, "Chrome holds 3.2 GB, VS Code 1.8 GB and Slack 1.0 GB beside the game, Sir. Shall I close Chrome?");
+        assert_eq!(order, "close chrome");
+        assert_eq!(hogs_line(&hogs(&[p("javaw", 6100.0), p("msedge", 500.0)])), None, "nothing worth closing: nothing said");
+    }
+
+    #[test]
+    fn games_he_has_not_played_for_months_come_biggest_first() {
+        for said in ["Which games haven't I played in months?", "what games have i not played in a while", "show my unplayed games", "Welche Spiele habe ich lange nicht mehr gespielt?"] {
+            assert_eq!(command(&crate::intents::normalize_phrase(said)), Some(json!({"action": "unplayed"})), "{said}");
+        }
+        assert_eq!(command("which games have i played"), None);
+        let now = 1_800_000_000;
+        let day = 86_400;
+        let rows = vec![
+            ("Small Old".to_string(), now - 200 * day, 2_000_000_000),
+            ("Fresh".to_string(), now - 10 * day, 90_000_000_000),
+            ("Never Started".to_string(), 0, 5_500_000_000),
+            ("Big Old".to_string(), now - 95 * day, 120_000_000_000),
+        ];
+        let (text, spoken) = unplayed_answer(&rows, now);
+        let names: Vec<&str> = text.lines().map(|l| l.rsplit("   ").next().unwrap_or("").trim()).collect();
+        assert!(text.lines().count() == 3 && !text.contains("Fresh"), "{text}");
+        assert!(text.lines().next().unwrap().contains("Big Old") && text.lines().last().unwrap().contains("Small Old"), "biggest first: {names:?}");
+        assert!(text.contains("never") && text.contains("120.0 GB"), "{text}");
+        assert_eq!(spoken, "3 games you haven't played in three months, Sir, 128 gigabytes together. The biggest is Big Old.");
+        assert!(unplayed_answer(&rows[1..2], now).0.is_empty());
     }
 
     #[test]

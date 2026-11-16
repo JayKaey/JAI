@@ -125,6 +125,273 @@ pub fn notebook(args: &Value) -> Result<String, String> {
     }
 }
 
+// ------------------------------------------------------------------- where things are ----
+
+/// Where Sir said a thing is: the thing (lower case) → {said, at}.
+const PLACE: &str = "put_away";
+const PREP: &str = r"in|on|under|behind|inside|next\s+to|at|im|in\s+der|in\s+den|auf|auf\s+dem|auf\s+der|unter|unterm|hinter|neben|am";
+
+static PUT: LazyLock<Regex> = LazyLock::new(|| {
+    re(&format!(
+        r"^i\s+(?:put|left|placed|stored|hid|have\s+put|ve\s+put)\s+(?:my\s+|the\s+)?(?P<a>.+?)\s+(?P<pa>{PREP})\s+(?P<wa>.+)$|^my\s+(?P<b>.+?)\s+(?P<vb>is|are|s)\s+(?P<pb>{PREP})\s+(?P<wb>.+)$|^ich\s+habe?\s+(?:mein(?:e|en)?\s+|die\s+|den\s+|das\s+)?(?P<c>.+?)\s+(?P<pc>{PREP})\s+(?P<wc>.+?)\s+(?:gelegt|getan|gestellt|gepackt|versteckt|gelassen)$|^mein(?:e)?\s+(?P<d>.+?)\s+(?P<vd>ist|sind|liegt|liegen|steht|stehen)\s+(?P<pd>{PREP})\s+(?P<wd>.+)$"
+    ))
+});
+static WHERE: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"^where\s+(?:did|have)\s+i\s+(?:put|left|leave|placed|place|stored|store|hid|hide)\s+(?:my\s+|the\s+)?(?P<a>.+)$|^wo\s+habe?\s+ich\s+(?:mein(?:e|en)?\s+|die\s+|den\s+|das\s+)?(?P<b>.+?)\s+(?:hingelegt|gelegt|gelassen|hingetan|hingestellt|versteckt)$")
+});
+static WHERE_IS: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:where\s+(?:is|are|s)|wheres|wo\s+(?:ist|sind|liegt|liegen))\s+(?:my|mein|meine)\s+(?P<a>.+)$"));
+
+/// The thing as it is kept: without a plural "s" a question may drop or add.
+fn thing_key(thing: &str) -> String {
+    let thing = thing.trim().to_lowercase();
+    thing.strip_suffix('s').filter(|t| t.chars().count() >= 3).unwrap_or(&thing).to_string()
+}
+
+fn kept_place(thing: &str) -> Option<(Value, String)> {
+    let key = thing_key(thing);
+    crate::kit::list(PLACE).into_iter().rev().find(|(k, _, _)| *k == key || k.contains(&key) || key.contains(k.as_str())).map(|(_, v, at)| (v, at))
+}
+
+/// "My keys are in the top drawer", "I put the charger behind the TV", "ich habe den Schlüssel
+/// in die Schublade gelegt"; "where did I put my keys", "wo ist mein Ladekabel". "Where is my
+/// X" is only his when he told J.A.I. where X is: else it is a question for the rest of him.
+pub fn place_command(s: &str) -> Option<Value> {
+    let s = s.trim_end_matches(['?', '.', '!']);
+    let pick = |c: &regex::Captures, names: &[&str]| names.iter().find_map(|n| c.name(n)).map(|m| m.as_str().trim().to_string());
+    if let Some(c) = WHERE.captures(s) {
+        return Some(json!({"action": "where", "thing": pick(&c, &["a", "b"])?}));
+    }
+    if let Some(c) = WHERE_IS.captures(s) {
+        let thing = pick(&c, &["a"])?;
+        return kept_place(&thing).map(|_| json!({"action": "where", "thing": thing}));
+    }
+    let c = PUT.captures(s)?;
+    let thing = pick(&c, &["a", "b", "c", "d"])?;
+    let mut place = pick(&c, &["wa", "wb", "wc", "wd"])?;
+    let prep = pick(&c, &["pa", "pb", "pc", "pd"])?;
+    // A place is "the drawer", "my bag", "im Auto": "my phone is on silent", "my PC is in game
+    // mode" and "my name is in the credits" are not a thing put somewhere.
+    const ARTICLE: &[&str] = &["the", "my", "a", "his", "her", "our", "der", "die", "das", "dem", "den", "meinem", "meiner", "meine", "meinen", "einer", "einem"];
+    let placed = matches!(prep.as_str(), "im" | "am" | "unterm") || place.split_whitespace().next().is_some_and(|w| ARTICLE.contains(&w));
+    if !placed || thing.split_whitespace().count() > 4 || matches!(thing.as_str(), "name" | "turn" | "birthday" | "head" | "life" | "mind" | "heart") {
+        return None;
+    }
+    let german = c.name("c").or(c.name("d")).is_some();
+    if c.name("c").is_some() {
+        // ("… in die Schublade gelegt": where it lies now is "in der Schublade".)
+        for (to, now) in [("die ", "der "), ("den ", "dem ")] {
+            if let Some(rest) = place.strip_prefix(to) {
+                place = format!("{now}{rest}");
+            }
+        }
+    }
+    let verb = pick(&c, &["vb", "vd"]).map(|v| if v == "s" { "is".to_string() } else { v }).unwrap_or_else(|| (if german { "liegt" } else if thing.ends_with('s') { "are" } else { "is" }).to_string());
+    let said = if german { format!("{thing} {verb} {prep} {place}") } else { format!("your {thing} {verb} {prep} {place}") };
+    Some(json!({"action": "put", "thing": thing, "said": said, "german": german}))
+}
+
+/// "today at 18:04", "yesterday at 7:30", "on Monday", "on 3 November".
+pub(crate) fn when_said(at: &str, now: chrono::NaiveDateTime) -> String {
+    let Ok(at) = chrono::NaiveDateTime::parse_from_str(at.get(..19).unwrap_or(at), "%Y-%m-%d %H:%M:%S") else { return "earlier".to_string() };
+    match (now.date() - at.date()).num_days() {
+        0 => format!("today at {}", at.format("%H:%M")),
+        1 => format!("yesterday at {}", at.format("%H:%M")),
+        2..=6 => format!("on {}", at.format("%A")),
+        _ => format!("on {}", at.format("%-d %B")),
+    }
+}
+
+pub fn place(args: &Value) -> Result<String, String> {
+    let thing = args["thing"].as_str().unwrap_or("").trim();
+    if thing.is_empty() {
+        return Err("Which thing, Sir?".to_string());
+    }
+    if args["action"] == "put" {
+        let said = args["said"].as_str().unwrap_or(thing);
+        crate::kit::put(PLACE, &thing_key(thing), &json!({"said": said}))?;
+        return Ok(say(format!("Kept: {said}."), if args["german"] == true { "Gemerkt, Sir." } else { "Noted, Sir." }));
+    }
+    match kept_place(thing) {
+        Some((v, at)) => {
+            let said = v["said"].as_str().unwrap_or("").to_string();
+            let when = when_said(&at, chrono::Local::now().naive_local());
+            Ok(say(format!("{said} (you told me {when})"), format!("You said {said}, Sir. That was {when}.")))
+        }
+        None => Ok(say(format!("You haven't told me where {thing} is."), format!("You haven't told me where you put {thing}, Sir."))),
+    }
+}
+
+// --------------------------------------------------------------------------- birthdays ----
+// "Max's birthday is on 3 March" / "Max hat am 3. März Geburtstag" keeps the day; "when is
+// Max's birthday?" reads it; the butler notes it the evening before and on the morning.
+
+const BIRTHDAY: &str = "birthday";
+const WHO: &str = r"(?P<who>\p{L}[\p{L}.' -]{0,40}?)";
+
+/// (pattern, German): the orders that keep a birthday; `who` and `date` are captured.
+static BIRTHDAY_SET: LazyLock<Vec<(Regex, bool)>> = LazyLock::new(|| {
+    [
+        (r"^(?:remember |note )?(?:that )?{WHO}(?:'s|') birthday is (?:on )?(?P<date>.+)$", false),
+        (r"^{WHO} has (?:(?:his|her|their) )?birthday on (?P<date>.+)$", false),
+        (r"^(?:merk dir,? (?:dass )?)?{WHO} hat am (?P<date>.+?) geburtstag$", true),
+        (r"^(?:der )?geburtstag von {WHO} ist am (?P<date>.+)$", true),
+        (r"^{WHO}'? geburtstag ist am (?P<date>.+)$", true),
+    ]
+    .into_iter()
+    .map(|(p, german)| (re(&p.replace("{WHO}", WHO)), german))
+    .collect()
+});
+static BIRTHDAY_ASK: LazyLock<Vec<Regex>> = LazyLock::new(|| {
+    [r"^when(?:'s| is) {WHO}(?:'s|') birthday$", r"^when does {WHO} have (?:(?:his|her|their) )?birthday$", r"^when(?:'s| is) the birthday of {WHO}$", r"^wann hat {WHO} geburtstag$", r"^wann ist {WHO}'? geburtstag$", r"^wann ist der geburtstag von {WHO}$"]
+        .into_iter()
+        .map(|p| re(&p.replace("{WHO}", WHO)))
+        .collect()
+});
+static DAY_MONTH: LazyLock<Vec<Regex>> = LazyLock::new(|| {
+    let months = crate::weather_history::MONTHS;
+    [
+        format!(r"^(?:the )?(?P<d>\d{{1,2}})(?:st|nd|rd|th|\.)?(?: of)? (?P<m>{months})\.?(?:,? (?P<y>\d{{4}}))?$"),
+        format!(r"^(?P<m>{months})\.? (?:the )?(?P<d>\d{{1,2}})(?:st|nd|rd|th)?(?:,? (?P<y>\d{{4}}))?$"),
+        r"^(?P<d>\d{1,2})\.(?P<n>\d{1,2})\.(?P<y>\d{4})?$".to_string(),
+    ]
+    .iter()
+    .map(|p| re(p))
+    .collect()
+});
+
+/// "3 March", "March 3rd, 2008", "the 3rd of March", "3. März", "03.03.2008" as (month, day, year).
+pub fn day_month(text: &str) -> Option<(u32, u32, Option<i32>)> {
+    let text = text.trim().trim_end_matches(['.', ',']).trim();
+    let text = if text.ends_with(|c: char| c.is_ascii_digit()) && text.matches('.').count() == 1 { format!("{text}.") } else { text.to_string() };
+    let c = DAY_MONTH.iter().find_map(|r| r.captures(&text))?;
+    let month = match c.name("m") {
+        Some(m) => crate::weather_history::month_of(m.as_str())?,
+        None => c.name("n")?.as_str().parse().ok()?,
+    };
+    let day: u32 = c.name("d")?.as_str().parse().ok()?;
+    let year = c.name("y").and_then(|y| y.as_str().parse().ok());
+    chrono::NaiveDate::from_ymd_opt(year.unwrap_or(2024), month, day).map(|_| (month, day, year))
+}
+
+/// The birthday's next day from `today` on (29 February falls on the 28th in other years).
+pub fn next_birthday(today: chrono::NaiveDate, month: u32, day: u32) -> chrono::NaiveDate {
+    use chrono::Datelike;
+    let on = |y: i32| chrono::NaiveDate::from_ymd_opt(y, month, day).or_else(|| chrono::NaiveDate::from_ymd_opt(y, month, day.saturating_sub(1))).unwrap_or(today);
+    let this = on(today.year());
+    if this >= today { this } else { on(today.year() + 1) }
+}
+
+/// The name as he typed it (its own capitals), from the lowercase match.
+fn name_as_typed(original: &str, lower: &str, who: regex::Match) -> String {
+    match original.get(who.range()).filter(|_| original.len() == lower.len()) {
+        Some(typed) => typed.trim().to_string(),
+        None => who.as_str().split_whitespace().map(capitalised).collect::<Vec<_>>().join(" "),
+    }
+}
+
+pub fn birthday_command(original: &str) -> Option<Value> {
+    let typed = original.trim().trim_end_matches(['?', '!']).trim().replace('’', "'");
+    let lower = typed.to_lowercase();
+    let not_a_name = |who: &str| matches!(who.split_whitespace().next().unwrap_or(""), "my" | "your" | "his" | "her" | "their" | "its" | "our" | "the" | "a" | "mein" | "meine" | "dein" | "deine" | "sein" | "seine" | "ihr" | "ihre" | "unser" | "der" | "die" | "das" | "it" | "es");
+    for (r, german) in BIRTHDAY_SET.iter() {
+        let Some(c) = r.captures(&lower) else { continue };
+        let (who, date) = (c.name("who")?, c.name("date")?.as_str());
+        if not_a_name(who.as_str()) {
+            return None;
+        }
+        let (month, day, year) = day_month(date)?;
+        return Some(json!({"action": "set", "name": name_as_typed(&typed, &lower, who), "month": month, "day": day, "year": year, "german": german}));
+    }
+    let c = BIRTHDAY_ASK.iter().find_map(|r| r.captures(&lower))?;
+    let who = c.name("who")?;
+    (!not_a_name(who.as_str())).then(|| json!({"action": "when", "name": name_as_typed(&typed, &lower, who)}))
+}
+
+/// Every kept birthday: (name, month, day, year).
+pub fn birthdays() -> Vec<(String, u32, u32, Option<i32>)> {
+    crate::kit::list(BIRTHDAY)
+        .into_iter()
+        .filter_map(|(_, v, _)| Some((v["name"].as_str()?.to_string(), v["month"].as_u64()? as u32, v["day"].as_u64()? as u32, v["year"].as_i64().map(|y| y as i32))))
+        .collect()
+}
+
+/// A kept birthday by name: the same name, or one with a genitive "s" more or less ("Pauls").
+fn birthday_of(name: &str) -> Option<(String, u32, u32, Option<i32>)> {
+    let want = name.to_lowercase();
+    birthdays().into_iter().find(|(n, ..)| {
+        let n = n.to_lowercase();
+        n == want || n.strip_suffix('s') == Some(want.as_str()) || want.strip_suffix('s') == Some(n.as_str())
+    })
+}
+
+/// "3 March, Sir: in 107 days. He turns 18." (the answer's middle part).
+pub fn birthday_when(today: chrono::NaiveDate, name: &str, month: u32, day: u32, year: Option<i32>) -> String {
+    use chrono::Datelike;
+    let next = next_birthday(today, month, day);
+    let when = match (next - today).num_days() {
+        0 => "That's today".to_string(),
+        1 => "That's tomorrow".to_string(),
+        n => format!("That's in {n} days"),
+    };
+    let turns = year.filter(|y| *y < next.year()).map(|y| format!(": {name} turns {}", next.year() - y)).unwrap_or_default();
+    format!("{name}'s birthday is on {}, Sir. {when}{turns}.", next.format("%-d %B"))
+}
+
+pub fn birthday(args: &Value) -> Result<String, String> {
+    let name = args["name"].as_str().unwrap_or("").trim();
+    if name.is_empty() {
+        return Err("Whose birthday, Sir?".to_string());
+    }
+    let today = chrono::Local::now().date_naive();
+    if args["action"] == "set" {
+        let (month, day) = (args["month"].as_u64().unwrap_or(0) as u32, args["day"].as_u64().unwrap_or(0) as u32);
+        let shown = chrono::NaiveDate::from_ymd_opt(2024, month, day).ok_or("That is no day of the year, Sir.")?.format("%-d %B");
+        crate::kit::put(BIRTHDAY, &name.to_lowercase(), &json!({"name": name, "month": month, "day": day, "year": args["year"]}))?;
+        let line = format!("Noted, Sir: {name}'s birthday is on {shown}.");
+        return Ok(say(line.clone(), if args["german"] == true { "Gemerkt, Sir.".to_string() } else { line }));
+    }
+    match birthday_of(name) {
+        Some((name, month, day, year)) => {
+            let line = birthday_when(today, &name, month, day, year);
+            Ok(say(line.clone(), line))
+        }
+        None => Ok(say(format!("You haven't told me {name}'s birthday yet. Say \"{name}'s birthday is on 3 March\"."), format!("You haven't told me {name}'s birthday yet, Sir."))),
+    }
+}
+
+/// The butler's birthday note when one is due: the evening before (19-23 h) or the morning of
+/// the day (7-12 h). `calendar`: all-day events (day, title); those with "birthday" or
+/// "Geburtstag" in the title count. (key that marks it told, card title, card body, spoken).
+pub fn birthday_note(now: chrono::NaiveDateTime, people: &[(String, u32, u32, Option<i32>)], calendar: &[(chrono::NaiveDate, String)]) -> Option<(String, String, String, String)> {
+    use chrono::Datelike;
+    let today = now.date();
+    let (day, when) = match now.hour() {
+        7..=11 => (today, "today"),
+        19..=22 => (today + chrono::Duration::days(1), "tomorrow"),
+        _ => return None,
+    };
+    let mut labels: Vec<String> = people
+        .iter()
+        .filter(|(_, m, d, _)| next_birthday(day, *m, *d) == day)
+        .map(|(name, _, _, year)| match year.filter(|y| *y < day.year()) {
+            Some(y) => format!("{name}, who turns {}", day.year() - y),
+            None => name.clone(),
+        })
+        .collect();
+    for (_, title) in calendar.iter().filter(|(on, _)| *on == day) {
+        let low = title.to_lowercase();
+        let named = people.iter().any(|(n, ..)| low.contains(&n.to_lowercase()));
+        if (low.contains("birthday") || low.contains("geburtstag")) && !named && !labels.contains(title) {
+            labels.push(title.clone());
+        }
+    }
+    if labels.is_empty() {
+        return None;
+    }
+    let spoken = format!("{} {when}, Sir: {}.", if labels.len() == 1 { "A birthday" } else { "Birthdays" }, crate::briefing::join_and(&labels));
+    Some((format!("{day}|{when}"), format!("BIRTHDAY // {}", when.to_uppercase()), labels.join("\n"), spoken))
+}
+
 // ------------------------------------------------------------------------- sleep timer ----
 
 static SLEEP_SET: LazyLock<Regex> = LazyLock::new(|| {
@@ -551,6 +818,82 @@ mod tests {
         assert!(notebook(&json!({"action": "clear"})).unwrap().contains("1 notes deleted"));
         assert!(notebook(&json!({"action": "delete_last"})).is_err());
         crate::kit::close_text(NOTEBOOK);
+    }
+
+    #[test]
+    fn birthdays_are_kept_by_voice_and_noted_the_evening_before() {
+        let set = |m: u32, d: u32, y: Option<i32>, name: &str, german: bool| Some(json!({"action": "set", "name": name, "month": m, "day": d, "year": y, "german": german}));
+        for (said, want) in [
+            ("Max's birthday is on 3 March", set(3, 3, None, "Max", false)),
+            ("Remember that Max Mustermann's birthday is on March 3rd, 2008.", set(3, 3, Some(2008), "Max Mustermann", false)),
+            ("Anna has her birthday on the 29th of February", set(2, 29, None, "Anna", false)),
+            ("Thomas’ birthday is 12.10.", set(10, 12, None, "Thomas", false)),
+            ("Max hat am 3. März Geburtstag", set(3, 3, None, "Max", true)),
+            ("Der Geburtstag von Herr Müller ist am 03.03.1970", set(3, 3, Some(1970), "Herr Müller", true)),
+            ("Pauls Geburtstag ist am 1. Mai", set(5, 1, None, "Pauls", true)),
+        ] {
+            assert_eq!(birthday_command(said), want, "{said}");
+        }
+        for (said, name) in [("When is Max's birthday?", "Max"), ("when does Anna have her birthday", "Anna"), ("Wann hat Paul Geburtstag?", "Paul"), ("wann ist Thomas' Geburtstag", "Thomas")] {
+            assert_eq!(birthday_command(said), Some(json!({"action": "when", "name": name})), "{said}");
+        }
+        for not in ["my birthday is on 3 March", "his birthday is on 3 March", "Max's birthday is on Friday", "Max's birthday is on 31 February", "when is the birthday party", "the birthday cake is in the fridge", "wann hat die Bäckerei geöffnet"] {
+            assert_eq!(birthday_command(not), None, "{not}");
+        }
+        let day = |y: i32, m: u32, d: u32| chrono::NaiveDate::from_ymd_opt(y, m, d).unwrap();
+        assert_eq!(next_birthday(day(2026, 11, 16), 3, 3), day(2027, 3, 3), "past this year: next year");
+        assert_eq!(next_birthday(day(2026, 3, 3), 3, 3), day(2026, 3, 3), "today is today");
+        assert_eq!(next_birthday(day(2026, 11, 16), 2, 29), day(2027, 2, 28), "29 February outside a leap year");
+        assert_eq!(next_birthday(day(2027, 11, 16), 2, 29), day(2028, 2, 29));
+        assert_eq!(birthday_when(day(2026, 11, 16), "Max", 3, 3, Some(2008)), "Max's birthday is on 3 March, Sir. That's in 107 days: Max turns 19.");
+        assert_eq!(birthday_when(day(2026, 3, 2), "Anna", 3, 3, None), "Anna's birthday is on 3 March, Sir. That's tomorrow.");
+
+        let at = |d: u32, h: u32| day(2026, 3, d).and_hms_opt(h, 0, 0).unwrap();
+        let people = [("Max".to_string(), 3, 3, Some(2008)), ("Anna".to_string(), 3, 4, None)];
+        let calendar = [(day(2026, 3, 3), "Geburtstag Oma".to_string()), (day(2026, 3, 3), "Max's Birthday".to_string()), (day(2026, 3, 3), "Dentist".to_string())];
+        let (key, title, body, spoken) = birthday_note(at(2, 20), &people, &calendar).expect("the evening before");
+        assert_eq!((key.as_str(), title.as_str()), ("2026-03-03|tomorrow", "BIRTHDAY // TOMORROW"));
+        assert_eq!(body, "Max, who turns 18\nGeburtstag Oma", "a calendar birthday of a kept name is not doubled; other events are not birthdays");
+        assert_eq!(spoken, "Birthdays tomorrow, Sir: Max, who turns 18 and Geburtstag Oma.");
+        assert_eq!(birthday_note(at(3, 8), &people, &[]).map(|n| n.3), Some("A birthday today, Sir: Max, who turns 18.".to_string()));
+        assert_eq!(birthday_note(at(3, 20), &people, &[]).map(|n| n.0), Some("2026-03-04|tomorrow".to_string()), "Anna's is the next evening's");
+        for quiet in [at(2, 18), at(2, 23), at(3, 6), at(3, 12), at(10, 20)] {
+            assert_eq!(birthday_note(quiet, &people, &calendar), None, "{quiet}");
+        }
+    }
+
+    #[test]
+    fn where_he_put_a_thing_is_kept_and_told() {
+        let _one = crate::kit::test_lock();
+        let heard = |said: &str| place_command(&crate::intents::normalize_phrase(said));
+        let said = |said: &str| heard(said).and_then(|a| a["said"].as_str().map(str::to_string));
+        assert_eq!(said("My keys are in the top drawer.").as_deref(), Some("your keys are in the top drawer"));
+        assert_eq!(said("I put the charger behind the TV").as_deref(), Some("your charger is behind the tv"));
+        assert_eq!(said("Ich habe den Schlüssel in die Schublade gelegt").as_deref(), Some("schlüssel liegt in der schublade"));
+        assert_eq!(said("Meine Brille liegt auf dem Schreibtisch").as_deref(), Some("brille liegt auf dem schreibtisch"));
+        assert_eq!(said("Mein Handy liegt im Auto").as_deref(), Some("handy liegt im auto"));
+        // Not a thing put somewhere: a mode, a state, a name, a question.
+        for said in ["my phone is on silent", "my pc is in game mode", "my name is in the credits", "my next lesson is in room 3", "what is in my notes", "where is the iss", "the weather is in the news"] {
+            assert_eq!(heard(said), None, "{said}");
+        }
+        // "Where did I put …" is always his; "where is my …" only once he told J.A.I.
+        assert_eq!(heard("where is my wallet"), None);
+        assert!(place(&json!({"action": "where", "thing": "wallet"})).unwrap().contains("haven't told me"));
+        for said in ["My keys are in the top drawer.", "Ich habe meinen Ladekabel in die Tasche gelegt"] {
+            place(&heard(said).unwrap()).unwrap();
+        }
+        for (asked, answer) in [("Where did I put my keys?", "your keys are in the top drawer"), ("where are my key", "your keys are in the top drawer"), ("Wo ist mein Ladekabel?", "ladekabel liegt in der tasche"), ("wo habe ich mein ladekabel hingelegt", "ladekabel liegt in der tasche")] {
+            let args = heard(asked).unwrap_or_else(|| panic!("{asked}"));
+            let told = place(&args).unwrap();
+            assert!(told.contains(answer) && told.contains("today at"), "{asked}: {told}");
+        }
+        // The newest place wins; the day is said as he would.
+        place(&heard("my keys are on the kitchen table").unwrap()).unwrap();
+        assert!(place(&json!({"action": "where", "thing": "keys"})).unwrap().contains("kitchen table"));
+        let now = chrono::NaiveDate::from_ymd_opt(2026, 11, 16).unwrap().and_hms_opt(9, 0, 0).unwrap();
+        assert_eq!(when_said("2026-11-15 18:04:00.000", now), "yesterday at 18:04");
+        assert_eq!(when_said("2026-11-12 07:00:00.000", now), "on Thursday");
+        assert_eq!(when_said("2026-10-03 07:00:00.000", now), "on 3 October");
     }
 
     #[test]

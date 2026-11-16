@@ -28,6 +28,29 @@ pub fn greeting(hour: u32) -> &'static str {
     }
 }
 
+/// The one thing wrong at start-up, said in place of "all systems are online": a model file
+/// that is missing, else a drive with under 5 GB free. None when all is well.
+pub fn startup_problem(missing_models: &[&str], disks: &[crate::telemetry::DiskInfo]) -> Option<String> {
+    if let Some(label) = missing_models.first() {
+        return Some(format!("One thing first: the {label} is missing, so part of me will not work until it is back."));
+    }
+    let tight = disks.iter().filter(|d| d.total_gb > 0.0 && d.free_gb < 5.0).min_by(|a, b| a.free_gb.total_cmp(&b.free_gb))?;
+    Some(format!("One thing first: drive {} has only {:.1} gigabytes free.", tight.mount.trim_end_matches(['\\', '/', ':']), tight.free_gb))
+}
+
+/// The start-up line with `problem` in place of the systems report, when there is one.
+pub fn startup_line_with(hour: u32, seed: usize, problem: Option<&str>) -> String {
+    let line = startup_line(hour, seed);
+    match problem {
+        // (The greeting is the line up to its first full stop or question mark.)
+        Some(problem) => {
+            let hello = line.find(['.', '?']).map_or(line.as_str(), |end| &line[..=end]);
+            format!("{hello} {problem}")
+        }
+        None => line,
+    }
+}
+
 /// The start-up line, different each time: a time-of-day greeting and a systems report, both
 /// picked by `seed`.
 pub fn startup_line(hour: u32, seed: usize) -> String {
@@ -347,7 +370,14 @@ pub async fn executive(tools: &ToolContext, time_of_day: Option<&str>) -> String
     }
     let mut md = vec![format!("## {} briefing — {}", match when { Period::Morning => "Morning", Period::Afternoon => "Afternoon", Period::Evening => "Evening" }, now.format("%A %-d %B, %H:%M"))];
 
+    // In the holidays the school part is one line: until when.
+    let holiday = if school_on { crate::webuntis_client::holiday_on(&pim.holidays().await, day).cloned() } else { None };
     match school {
+        _ if holiday.is_some() => {
+            let line = holiday.as_ref().map(crate::webuntis_client::holiday_line).unwrap_or_default();
+            spoken.push(line.clone());
+            md.extend(["### School".to_string(), format!("- {line}")]);
+        }
         Some(Ok(_)) => {
             let ahead = ahead.clone().unwrap_or(Ahead { day, lessons: Vec::new(), over: 0 });
             let (said, headed) = day_words(ahead.day, now.date_naive());
@@ -575,6 +605,14 @@ mod tests {
             assert!(lines.len() == 18 && lines.iter().all(|l| l.contains("Sir")), "{lines:?}");
         }
         assert!(startup_line(8, 0).starts_with("Good morning") && startup_line(2, 0).starts_with("Burning"));
+        // One problem replaces the systems report; nothing is added when all is well.
+        let disk = |mount: &str, free_gb: f32| crate::telemetry::DiskInfo { mount: mount.into(), total_gb: 500.0, free_gb, ..Default::default() };
+        assert_eq!(startup_problem(&[], &[disk("C:\\", 120.0), disk("D:\\", 40.0)]), None);
+        assert_eq!(startup_problem(&[], &[disk("C:\\", 120.0), disk("D:\\", 3.24)]).as_deref(), Some("One thing first: drive D has only 3.2 gigabytes free."));
+        assert!(startup_problem(&["Whisper speech model"], &[disk("C:\\", 1.0)]).unwrap().contains("the Whisper speech model is missing"));
+        assert_eq!(startup_line_with(8, 2, Some("One thing first: x.")), "Good morning, Sir. One thing first: x.");
+        assert_eq!(startup_line_with(2, 0, Some("One thing first: x.")), "Burning the midnight oil, Sir? One thing first: x.");
+        assert_eq!(startup_line_with(20, 4, None), startup_line(20, 4));
         assert_eq!(join_and(&["a".into(), "b".into(), "c".into()]), "a, b and c");
         assert_eq!(ordinal(21), "21st");
         assert!(period(Some("evening"), 8) == Period::Evening && period(None, 9) == Period::Morning);
