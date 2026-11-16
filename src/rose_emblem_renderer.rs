@@ -556,20 +556,16 @@ fn mote(mesh: &mut Mesh, at: Pos2, radius: f32, colour: Color32) {
     }
 }
 
-/// The soft passes are lit this much brighter than their nominal alpha: added light on obsidian
-/// needs it to read as bloom rather than a faint smudge.
-pub const SOFT_BLOOM_GAIN: f32 = 2.5;
-
-/// The four HDR bloom passes along a line: the aura, the halo and the body in `base` at full
-/// saturation (`theme_engine::hdr_neon_color`), then the 1.5 px filament in its white-hot centre
-/// (90 % white + 10 % base). `light[i]`: per-vertex light (fog, taper) times `gain`. (`_hot`: the
-/// old inner-glow colour, kept for the call sites.)
+/// A ring of light along a line (`theme_engine::NEON_PASSES`): two faint narrow strokes in
+/// `base` under the thin bright line itself, which is `base` lifted halfway to white.
+/// `light[i]`: per-vertex light (fog, taper) times `gain`. (`_hot`: the old inner-glow colour,
+/// kept for the call sites.)
 #[allow(clippy::too_many_arguments)]
 fn neon(mesh: &mut Mesh, points: &[Pos2], light: &[f32], base: [u8; 3], _hot: [u8; 3], gain: f32, scale: f32, closed: bool) {
     use crate::theme_engine::{hdr_neon_color, NeonLayer, NEON_PASSES};
-    let hot_centre = whiten(base, 0.9);
+    let hot_centre = whiten(base, 0.5);
     for (k, (width, alpha, layer)) in NEON_PASSES.iter().enumerate() {
-        // (Crisp: the line and its filament, without the aura and the halo round them.)
+        // (Crisp: the line alone, without the faint strokes under it.)
         if k < 2 && crisp() {
             continue;
         }
@@ -586,15 +582,6 @@ fn neon(mesh: &mut Mesh, points: &[Pos2], light: &[f32], base: [u8; 3], _hot: [u
 fn line(mesh: &mut Mesh, points: &[Pos2], light: &[f32], rgb: [u8; 3], alpha: f32, width: f32, closed: bool) {
     let colours: Vec<Color32> = light.iter().map(|l| glow(rgb, alpha * l)).collect();
     ribbon(mesh, points, &colours, width, closed, false);
-}
-
-/// A soft band (haze) with per-vertex light.
-fn haze(mesh: &mut Mesh, points: &[Pos2], light: &[f32], rgb: [u8; 3], alpha: f32, width: f32, closed: bool) {
-    if crisp() {
-        return;
-    }
-    let colours: Vec<Color32> = light.iter().map(|l| glow(rgb, alpha * l)).collect();
-    ribbon(mesh, points, &colours, width, closed, true);
 }
 
 /// The slice of a closed ring from `start` for `length` (fractions of a turn).
@@ -958,15 +945,10 @@ impl RoseEmblem {
         TINT.with(|t| t.set(([0, 0, 0], 0.0)));
     }
 
-    /// The seven concentric front rings, their fixed markers and the wordmark.
+    /// The seven concentric front rings, their fixed markers and the wordmark: thin lines of
+    /// light, nothing added round them.
     fn paint_front(&self, painter: &Painter, frame: &EmblemFrame, alpha: f32) {
         let scale = frame.unit().clamp(0.35, 1.8);
-        // The glow the bright ring throws into the dark round it (`emblem_light`): light as
-        // light behaves, and nothing else round the emblem.
-        let burning = (0.75 + 0.25 * self.voice + 0.15 * self.busy).clamp(0.0, 1.0);
-        if !crisp() {
-            crate::emblem_light::paint_glow(painter, frame.centre, frame.unit(), alpha, torus_deep(), burning);
-        }
         for i in 0..RING_COUNT {
             let mut mesh = Mesh::default();
             self.ring_mesh(&mut mesh, frame, i, scale, alpha);
@@ -983,30 +965,27 @@ impl RoseEmblem {
             let (radial, tangent) = (vec2(a.cos(), a.sin()), vec2(-a.sin(), a.cos()));
             for off in [-2.2f32, 2.2] {
                 let c = frame.centre + radial * (outer * 1.09 + off * scale);
-                line(&mut marks, &[c - tangent * 4.5 * scale, c + tangent * 4.5 * scale], &[alpha, alpha], WHITE_RGB, 0.85, 1.3 * scale.max(0.6), false);
+                line(&mut marks, &[c - tangent * 4.5 * scale, c + tangent * 4.5 * scale], &[alpha, alpha], WHITE_RGB, 0.55, 0.9 * scale.max(0.6), false);
             }
         }
-        // A fixed red arc under the rim.
+        // A fixed arc under the rim, a thin line of the theme's light.
         let arc: Vec<Pos2> = (0..=24).map(|k| {
             let a = PI * 0.5 - 0.42 + 0.84 * k as f32 / 24.0;
             frame.centre + vec2(a.cos(), a.sin()) * outer * 1.04
         }).collect();
-        neon(&mut marks, &arc, &vec![alpha; arc.len()], crimson_rgb(), torus_hot(), 0.9, scale * 0.7, false);
+        neon(&mut marks, &arc, &vec![alpha; arc.len()], crimson_rgb(), torus_hot(), 0.8, scale * 0.7, false);
         painter.add(Shape::mesh(marks));
         if frame.radius > 90.0 && frame.dock < 0.5 {
             let font = FontId::monospace((frame.radius * 0.05).clamp(6.5, 9.0));
-            painter.text(frame.centre + vec2(0.0, outer * 0.93), Align2::CENTER_CENTER, "TR 2003 // 3500", font, glow(WHITE_RGB, 0.7 * alpha));
+            painter.text(frame.centre + vec2(0.0, outer * 0.93), Align2::CENTER_CENTER, "TR 2003 // 3500", font, crate::hud_style::MUTED.gamma_multiply(0.8 * alpha));
         }
-        // The wordmark on its dark core disc.
+        // The wordmark on its dark core, which breathes softly (a slow rise and fall of its light).
         let a = alpha;
-        let disc = 0.52 * frame.radius;
-        painter.circle_filled(frame.centre, disc, Color32::from_rgba_unmultiplied(4, 2, 6, (235.0 * a) as u8));
+        let breath = 0.5 + 0.5 * (self.clock * 1.1).sin();
+        painter.circle_filled(frame.centre, 0.52 * frame.radius, Color32::from_rgba_unmultiplied(3, 6, 10, (235.0 * a) as u8));
         let size = (frame.radius * 0.17).clamp(8.0, 46.0);
         let font = FontId::new(size, FontFamily::Name("bold".into()));
-        let halo = glow(crimson_rgb(), 0.5 * a * (0.55 + 0.45 * self.voice));
-        let wordmark = "J.A.I.";
-        painter.text(frame.centre + vec2(0.0, 1.5), Align2::CENTER_CENTER, wordmark, font.clone(), halo);
-        painter.text(frame.centre, Align2::CENTER_CENTER, wordmark, font, Color32::WHITE.gamma_multiply(a));
+        painter.text(frame.centre, Align2::CENTER_CENTER, "J.A.I.", font, crate::hud_style::TEXT.gamma_multiply(a * (0.86 + 0.14 * breath.max(self.voice))));
     }
 
     fn ring_mesh(&self, mesh: &mut Mesh, frame: &EmblemFrame, i: usize, scale: f32, alpha: f32) {
@@ -1023,67 +1002,68 @@ impl RoseEmblem {
         let cross = |mesh: &mut Mesh, a: f32, from: f32, to: f32, rgb: [u8; 3]| {
             let r = RING_RADII_PX[i] * frame.unit();
             let dir = vec2(a.cos(), a.sin());
-            line(mesh, &[frame.centre + dir * r * from, frame.centre + dir * r * to], &[alpha, alpha], rgb, 0.9, 1.2 * scale.max(0.6), false);
+            line(mesh, &[frame.centre + dir * r * from, frame.centre + dir * r * to], &[alpha, alpha], rgb, 0.75, 0.9 * scale.max(0.6), false);
         };
+        // (Every ring a hairline: the films draw rings of light thin, and only the bright ring
+        // lays its two faint strokes under itself.)
+        let hair = 0.75 * scale.max(0.8);
         match i {
-            // The core's edge: a faint crimson hairline.
-            0 => line(mesh, &points, &fog, crimson_rgb(), 0.45, 0.9 * scale.max(0.7), true),
-            // The blazing magenta torus, breathing with his voice.
+            // The core's edge: a hairline whose light breathes slowly (the softly breathing core).
+            0 => line(mesh, &points, &fog, crimson_rgb(), 0.3 + 0.18 * (0.5 + 0.5 * (self.clock * 1.1).sin()), hair, true),
+            // The bright ring: his voice drawn as a ring of light (it swells and brightens as he
+            // speaks).
             1 => {
-                let gain = 0.85 + 0.3 * voice + 0.15 * self.busy;
+                let gain = 0.75 + 0.45 * voice + 0.12 * self.busy;
                 // (No ring of light is perfectly even: a little brighter here, a little softer
                 // there, and a hair of flicker.)
                 let uneven: Vec<f32> = points.iter().zip(&fog).map(|(p, f)| f * crate::emblem_light::unevenness((*p - frame.centre).angle(), self.clock)).collect();
-                let soft: Vec<f32> = uneven.iter().map(|f| f * 0.6).collect();
-                haze(mesh, &points, &soft, torus_deep(), 0.16 * SOFT_BLOOM_GAIN, 22.0 * scale, true);
-                neon(mesh, &points, &uneven, torus_deep(), torus_hot(), gain, scale * 1.25, true);
+                neon(mesh, &points, &uneven, torus_deep(), torus_hot(), gain, scale, true);
             }
             // The fine dotted rim.
             2 => {
                 for k in 0..120 {
                     let p = points[(k * steps) / 120];
-                    mote(mesh, p, 1.1 * scale.max(0.6), glow(mix(crimson_rgb(), WHITE_RGB, if k % 10 == 0 { 0.7 } else { 0.0 }), 0.55 * alpha));
+                    mote(mesh, p, 0.8 * scale.max(0.6), glow(mix(crimson_rgb(), WHITE_RGB, if k % 10 == 0 { 0.7 } else { 0.2 }), 0.45 * alpha));
                 }
             }
-            // A thinner rose ring inside the torus, with two white glints.
+            // A thinner ring inside the bright one, with two white glints.
             3 => {
-                let uneven: Vec<f32> = points.iter().zip(&fog).map(|(p, f)| f * crate::emblem_light::unevenness((*p - frame.centre).angle() + 2.1, self.clock)).collect();
-                neon(mesh, &points, &uneven, crimson_rgb(), torus_hot(), 0.55, scale * 0.6, true);
+                line(mesh, &points, &fog, crimson_rgb(), 0.4, hair, true);
                 for start in [0.2, 0.7] {
                     let (p, l) = lit(&arc_of(&points, start, 0.06));
-                    line(mesh, &p, &l, WHITE_RGB, 0.8, 1.3 * scale, false);
+                    line(mesh, &p, &l, WHITE_RGB, 0.7, 1.0 * scale.max(0.7), false);
                 }
             }
-            // The tick ring: pink ticks, every sixth a long white one, pulsing with the voice;
-            // crosshair marks at top and bottom.
+            // The tick ring: fine ticks, every sixth a longer white one, stirring with the
+            // voice; crosshair marks at top and bottom.
             4 => {
-                line(mesh, &points, &fog, crimson_rgb(), 0.35, 0.8 * scale.max(0.7), true);
+                line(mesh, &points, &fog, crimson_rgb(), 0.22, hair, true);
                 let ticks = 72;
                 let outer = ring_points(frame, i, spin, ticks);
-                let short = ring_points_at(frame, i, spin, ticks, 1.0 - (0.05 + 0.04 * voice) * (1.0 + 0.3 * pulse));
-                let long = ring_points_at(frame, i, spin, ticks, 1.0 - 0.11 - 0.05 * voice);
+                let short = ring_points_at(frame, i, spin, ticks, 1.0 - (0.04 + 0.04 * voice) * (1.0 + 0.3 * pulse));
+                let long = ring_points_at(frame, i, spin, ticks, 1.0 - 0.09 - 0.05 * voice);
                 for k in 0..ticks {
                     let major = k % 6 == 0;
-                    let (from, rgb, a, w) = if major { (long[k], WHITE_RGB, 0.95, 1.4) } else { (short[k], crimson_rgb(), 0.6 + 0.3 * voice, 1.0) };
-                    line(mesh, &[from, outer[k]], &[alpha, alpha], rgb, a, w * scale.max(0.7), false);
+                    let (from, rgb, a) = if major { (long[k], WHITE_RGB, 0.75) } else { (short[k], crimson_rgb(), 0.4 + 0.35 * voice) };
+                    line(mesh, &[from, outer[k]], &[alpha, alpha], rgb, a, hair, false);
                 }
                 cross(mesh, -PI / 2.0, 0.84, 1.08, WHITE_RGB);
                 // The bottom mark stops at the ring so it never runs through the "TR 2003" label below.
                 cross(mesh, PI / 2.0, 0.84, 1.0, WHITE_RGB);
             }
-            // Three white technical arcs on a pink hairline.
+            // Three white technical arcs on a hairline.
             5 => {
-                line(mesh, &points, &fog, crimson_rgb(), 0.3, 0.7 * scale.max(0.7), true);
+                line(mesh, &points, &fog, crimson_rgb(), 0.18, hair, true);
                 for (k, (start, length)) in [(0.05f32, 0.14f32), (0.36, 0.1), (0.62, 0.18)].into_iter().enumerate() {
                     // The segmented sweeps breathe out and back with his voice.
                     let length = length * (1.0 + 1.2 * voice * (self.clock * 7.0 + k as f32 * 2.1).sin().abs());
                     let (p, l) = lit(&arc_of(&points, start, length));
-                    line(mesh, &p, &l, WHITE_RGB, 0.92, 2.2 * scale.max(0.6), false);
+                    line(mesh, &p, &l, WHITE_RGB, 0.7, 1.2 * scale.max(0.7), false);
                 }
             }
             // The inner ring with its vertical crosshair ticks.
             _ => {
-                neon(mesh, &points, &fog, crimson_rgb(), torus_hot(), 0.45, scale * 0.5, true);
+                line(mesh, &points, &fog, crimson_rgb(), 0.45, hair, true);
                 cross(mesh, -PI / 2.0, 0.78, 1.18, mix(crimson_rgb(), WHITE_RGB, 0.5));
                 cross(mesh, PI / 2.0, 0.78, 1.18, mix(crimson_rgb(), WHITE_RGB, 0.5));
             }
@@ -1110,47 +1090,43 @@ impl RoseEmblem {
                 0 => {
                     for s in 0..5 {
                         let seg = arc_of(&ring, s as f32 / 5.0, 0.2 - 0.04);
-                        let l = light_of(&seg, 1.0);
-                        haze(&mut mesh, &pos(&seg), &l, stack_ice(), 0.22, 7.0 * scale, false);
-                        line(&mut mesh, &pos(&seg), &l, stack_ice(), 0.95, 2.2 * scale.max(0.6), false);
+                        line(&mut mesh, &pos(&seg), &light_of(&seg, 1.0), stack_ice(), 0.8, 1.2 * scale.max(0.6), false);
                     }
                 }
                 // Ring 2: a cyan-white wireframe hairline, three bright white arcs, orbital dots.
                 1 => {
                     let l = light_of(&ring, 1.0);
-                    line(&mut mesh, &pos(&ring), &l, stack_wire(), 0.55, 0.9 * scale.max(0.7), true);
+                    line(&mut mesh, &pos(&ring), &l, stack_wire(), 0.45, 0.75 * scale.max(0.8), true);
                     for start in [0.05, 0.38, 0.71] {
                         let seg = arc_of(&ring, start, 0.09);
-                        line(&mut mesh, &pos(&seg), &light_of(&seg, 1.0), WHITE_RGB, 0.95, 3.0 * scale.max(0.5), false);
+                        line(&mut mesh, &pos(&seg), &light_of(&seg, 1.0), WHITE_RGB, 0.8, 1.4 * scale.max(0.6), false);
                     }
                     for (k, (p, d)) in sf.ring(axial, r * 1.07, spin, 8).into_iter().enumerate() {
                         let a = alpha * depth_fog(d, fog_radius) * if k % 2 == 0 { 0.9 } else { 0.55 };
-                        mote(&mut mesh, p, 2.0 * scale.max(0.6), glow(stack_wire(), a));
-                        mote(&mut mesh, p, 0.8 * scale.max(0.6), glow(WHITE_RGB, a));
+                        mote(&mut mesh, p, 1.1 * scale.max(0.6), glow(WHITE_RGB, a));
                     }
                 }
-                // Rings 3 and 4: the twin magenta-rose core rings in their pink-violet haze; a
-                // crisp cyan-white ring hugs the inside of ring 4.
+                // Rings 3 and 4: the twin core rings, thin rings of light that pulse while he
+                // thinks; a crisp cyan-white ring hugs the inside of ring 4.
                 2 | 3 => {
                     let l = light_of(&ring, 1.0);
-                    haze(&mut mesh, &pos(&ring), &l, core_pink(), 0.14 * SOFT_BLOOM_GAIN * pulse, 28.0 * scale, true);
-                    neon(&mut mesh, &pos(&ring), &l, core_pink(), core_hot(), 0.95 * pulse, scale, true);
+                    neon(&mut mesh, &pos(&ring), &l, core_pink(), core_hot(), 0.85 * pulse, scale, true);
                     if i == 3 {
                         let inner = sf.ring(axial, STACK_INNER_CYAN, spin * 0.5, steps);
                         let li = light_of(&inner, 1.0);
-                        line(&mut mesh, &pos(&inner), &li, mix(cyan_rgb(), WHITE_RGB, 0.6), 0.9, 1.2 * scale.max(0.6), true);
+                        line(&mut mesh, &pos(&inner), &li, mix(cyan_rgb(), WHITE_RGB, 0.6), 0.7, 0.8 * scale.max(0.8), true);
                     }
                 }
                 // Ring 5: the precision tachometer: a hairline, white ticks every 10° and three
-                // glowing red-pink tick clusters 120° apart on the same grid.
+                // tick clusters 120° apart on the same grid.
                 4 => {
                     let l = light_of(&ring, 1.0);
-                    line(&mut mesh, &pos(&ring), &l, ice_rgb(), 0.7, 1.1 * scale.max(0.7), true);
+                    line(&mut mesh, &pos(&ring), &l, ice_rgb(), 0.5, 0.75 * scale.max(0.8), true);
                     let outer = sf.ring(axial, r, spin, 36);
                     let inner = sf.ring(axial, r * 0.92, spin, 36);
                     for k in 0..36 {
                         let f = alpha * depth_fog(outer[k].1, fog_radius);
-                        line(&mut mesh, &[inner[k].0, outer[k].0], &[f, f], WHITE_RGB, 0.85, 1.1 * scale.max(0.6), false);
+                        line(&mut mesh, &[inner[k].0, outer[k].0], &[f, f], WHITE_RGB, 0.7, 0.8 * scale.max(0.8), false);
                     }
                     // The rose clusters are a voice equaliser: louder speech (Sir's or his) spikes
                     // the ticks outward from the rim, brighter, the middle ones furthest.
@@ -1169,35 +1145,35 @@ impl RoseEmblem {
                 // Ring 6: the dotted rear halo (depth-fogged to 0.35).
                 _ => {
                     for (p, d) in sf.ring(axial, r, spin, 120) {
-                        let a = 0.35 * alpha * depth_fog(d, fog_radius).max(0.6);
-                        mote(&mut mesh, p, 1.1 * scale.max(0.6), glow(stack_wire(), a));
+                        let a = 0.3 * alpha * depth_fog(d, fog_radius).max(0.6);
+                        mote(&mut mesh, p, 0.8 * scale.max(0.6), glow(stack_wire(), a));
                     }
                     let fine_o = sf.ring(axial, r * 0.97, spin, 72);
                     let fine_i = sf.ring(axial, r * 0.94, spin, 72);
                     for k in 0..72 {
                         let f = 0.35 * alpha;
-                        line(&mut mesh, &[fine_i[k].0, fine_o[k].0], &[f, f], ice_rgb(), 0.6, 0.7 * scale.max(0.6), false);
+                        line(&mut mesh, &[fine_i[k].0, fine_o[k].0], &[f, f], ice_rgb(), 0.5, 0.7 * scale.max(0.8), false);
                     }
-                    // The red-white telemetry arc orbiting the halo, and its counter-rotating tracer.
+                    // The telemetry arc orbiting the halo, and its counter-rotating tracer.
                     let (main, span, tracer, tracer_span) = halo_arcs(self.clock);
                     for (start, len) in [(main, span), (tracer, tracer_span)] {
                         let arc: Vec<(Pos2, f32)> = (0..=40).map(|k| sf.point(axial, r * 1.03, start + len * k as f32 / 40.0)).collect();
                         let l = light_of(&arc, 1.0);
-                        neon(&mut mesh, &pos(&arc), &l, crimson_rgb(), mix(core_hot(), WHITE_RGB, 0.5), 0.9, scale * 0.8, false);
+                        neon(&mut mesh, &pos(&arc), &l, crimson_rgb(), mix(core_hot(), WHITE_RGB, 0.5), 0.8, scale * 0.7, false);
                     }
                 }
             }
             items.push((sf.ring_centre(i).1, mesh));
         }
-        // The laser, one depth-sorted piece per segment so it threads through the rings.
+        // The laser, one depth-sorted piece per segment so it threads through the rings: a thin
+        // line of light.
         let laser = sf.spindle();
         let beam = 0.85 + 0.15 * (self.clock * 3.1).sin() + 0.2 * self.busy;
         for w in laser.windows(2) {
             let (a, b) = (w[0], w[1]);
             let light = [a.2 * alpha * beam * depth_fog(a.1, fog_radius), b.2 * alpha * beam * depth_fog(b.1, fog_radius)];
             let mut mesh = Mesh::default();
-            haze(&mut mesh, &[a.0, b.0], &light, laser_glow(), 0.55, 8.0 * scale, false);
-            line(&mut mesh, &[a.0, b.0], &light, laser_core(), 1.0, 1.4 * scale.max(0.6), false);
+            neon(&mut mesh, &[a.0, b.0], &light, laser_glow(), laser_core(), 0.8, scale * 0.8, false);
             items.push(((a.1 + b.1) * 0.5, mesh));
         }
         // Pinpoint sparks.
@@ -1206,8 +1182,7 @@ impl RoseEmblem {
             let (p, d) = sf.point(axial, r, angle);
             let a = bright * alpha * depth_fog(d, fog_radius);
             let mut mesh = Mesh::default();
-            mote(&mut mesh, p, 2.2 * scale.max(0.6), glow(if pink { core_hot() } else { ice_rgb() }, 0.5 * a));
-            mote(&mut mesh, p, 0.75 * scale.max(0.6), glow(WHITE_RGB, a));
+            mote(&mut mesh, p, 0.9 * scale.max(0.6), glow(if pink { core_hot() } else { WHITE_RGB }, 0.8 * a));
             items.push((d, mesh));
         }
         // Back to front.
@@ -1224,7 +1199,7 @@ impl RoseEmblem {
             let (main, span, _, _) = halo_arcs(self.clock);
             let (p, _) = sf.point(STACK_AXIAL[5], STACK_RADII[5] * 1.13, main + span * 0.5);
             let align = if p.x < sf.ring_centre(5).0.x { Align2::RIGHT_CENTER } else { Align2::LEFT_CENTER };
-            let colour = Color32::from_rgb(0xFF, 0x9A, 0xB4).gamma_multiply(0.8 * alpha);
+            let colour = crate::hud_style::MUTED.gamma_multiply(0.9 * alpha);
             let telemetry = painter.layout_no_wrap("TR 2003 // 3500".to_string(), font.clone(), colour);
             let telemetry_at = align.anchor_size(p, telemetry.size());
             // The dial's numbers turn under it: one that would cross the label is left out until
@@ -1426,18 +1401,20 @@ mod tests {
         assert!(depth_fog(40.0, 175.0) < 1.0 && depth_fog(40.0, 175.0) > REAR_FOG);
     }
 
+    /// (The film look: a thin bright line with two faint narrow strokes under it; the 22 px aura
+    /// and the white-hot filament went.)
     #[test]
-    fn bloom_has_four_additive_passes_ending_in_a_white_core() {
-        assert_eq!(crate::theme_engine::NEON_PASSES.map(|p| (p.0, p.1)), [(22.0, 28), (10.0, 75), (4.2, 220), (1.5, 255)]);
+    fn a_ring_of_light_is_a_thin_line_with_two_faint_strokes_under_it() {
+        assert_eq!(crate::theme_engine::NEON_PASSES.map(|p| (p.0, p.1)), [(5.0, 24), (2.4, 70), (1.1, 245)]);
         let c = glow(WHITE_RGB, 245.0 / 255.0);
         assert_eq!(c.a(), 0, "additive: zero alpha");
         assert_eq!(c.r(), 245);
         let mut mesh = Mesh::default();
         let pts = [pos2(0.0, 0.0), pos2(10.0, 0.0), pos2(20.0, 0.0)];
         neon(&mut mesh, &pts, &[1.0, 1.0, 1.0], torus_deep(), torus_hot(), 1.0, 1.0, false);
-        assert_eq!(mesh.vertices.len(), 3 * (4 + 4 + 4 + 4));
+        assert_eq!(mesh.vertices.len(), 3 * (4 + 4 + 4));
         let widest = mesh.vertices.iter().map(|v| v.pos.y.abs()).fold(0.0, f32::max);
-        assert!((widest - 11.0).abs() < 1e-3, "the aura is 22 px wide: {widest}");
+        assert!((widest - 2.5).abs() < 1e-3, "the faintest stroke is 5 px wide: {widest}");
         assert!(mesh.vertices.iter().all(|v| v.color.a() == 0));
     }
 

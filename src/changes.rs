@@ -93,6 +93,10 @@ pub const RELEASES: &[Release] = &[
         date: "2026-11-16",
         name: "A hundred small things",
         entries: &[
+            better("A film look", "Hairline frames on whole pixels with corner brackets, and no halos round the blocks."),
+            better("A calmer emblem", "Thinner rings, and a core whose light breathes slowly at rest."),
+            better("A quieter canvas", "Less grain and dust on the glass, and no scratches."),
+            better("A steady desk clock", "Its digits are even-width, so the time does not shift as the minutes turn."),
             added("Tomorrow at school", "\"What do I need tomorrow?\": the lessons in order, what to pack, and the exam's lesson."),
             added("Your homework, ticked off", "\"What homework is left?\"; \"maths homework done\" ticks it."),
             added("Points and averages", "\"I got 13 points in physics\": kept, with the average per subject and overall."),

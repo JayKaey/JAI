@@ -131,7 +131,7 @@ fn display(size: f32) -> FontId {
 /// The room the desktop clock takes under an emblem of `radius`: as wide as its time (and
 /// never narrower than the emblem's core), as tall as its lines.
 pub fn clock_size(ctx: &egui::Context, radius: f32, time: &str, date: bool, weather: bool) -> egui::Vec2 {
-    let width = ctx.fonts(|f| f.layout_no_wrap(time.to_string(), display(clock_sizes(radius)[0]), Color32::WHITE)).size().x;
+    let width = ctx.fonts(|f| crate::hud_style::figure_galley(f, time, display(clock_sizes(radius)[0]), Color32::WHITE)).size().x;
     vec2(width.max(radius * 1.2), clock_height(radius, date, weather))
 }
 
@@ -140,7 +140,10 @@ pub fn clock_size(ctx: &egui::Context, radius: f32, time: &str, date: bool, weat
 pub fn paint_clock(p: &egui::Painter, rect: Rect, radius: f32, time: &str, date: Option<&str>, weather: Option<&(f64, String)>) {
     let [time_size, small, sky] = clock_sizes(radius);
     let x = rect.center().x;
-    p.text(pos2(x, rect.top()), Align2::CENTER_TOP, time, display(time_size), Color32::from_rgb(0xE8, 0xF2, 0xFC));
+    // Even-width digits, so the time does not shuffle sideways as the minutes turn.
+    let time_colour = Color32::from_rgb(0xE8, 0xF2, 0xFC);
+    let g = p.fonts(|f| crate::hud_style::figure_galley(f, time, display(time_size), time_colour));
+    p.galley(pos2(x - g.size().x * 0.5, rect.top()), g, time_colour);
     let mut y = rect.top() + time_size * CLOCK_LEAD;
     if let Some(date) = date {
         p.text(pos2(x, y), Align2::CENTER_TOP, date, FontId::monospace(small), crate::hud_board::active_colour().gamma_multiply(0.9));

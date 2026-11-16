@@ -948,7 +948,10 @@ pub fn check_board_themes(size: Vec2, pass: usize, rt: &tokio::runtime::Handle) 
         // first block's own frame (the largest outline in its slot; the footer line sits
         // under it), sampled along its four edges.
         if let Some(slot) = first.filter(|_| n % 3 == pass % 3) {
-            let framed = frame.strokes.iter().map(|s| s.rect).filter(|r| slot.expand(1.0).contains_rect(*r) && r.width() >= slot.width() * 0.8 && r.height() >= slot.height() * 0.6).max_by(|a, b| (a.width() * a.height()).total_cmp(&(b.width() * b.height())));
+            let big = |r: &Rect| slot.expand(1.0).contains_rect(*r) && r.width() >= slot.width() * 0.8 && r.height() >= slot.height() * 0.6;
+            // (A frame on the pixel grid is four filled sides a pixel or two thick, not a stroke.)
+            let sides = frame.fills.iter().map(|f| f.rect).filter(|r| f32::min(r.width(), r.height()) <= 2.5 && slot.expand(1.0).contains_rect(*r)).fold(Rect::NOTHING, |all, r| all.union(r));
+            let framed = frame.strokes.iter().map(|s| s.rect).filter(big).max_by(|a, b| (a.width() * a.height()).total_cmp(&(b.width() * b.height()))).or(Some(sides).filter(big));
             match framed {
                 None => findings.push(format!("{label}: the first block has no frame outline")),
                 Some(block) => {

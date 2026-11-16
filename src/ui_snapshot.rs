@@ -105,7 +105,15 @@ impl Snapshot {
 
     /// Runs `frames` frames of `ui` (fonts and animations settle) and rasterises the last one.
     #[cfg(test)]
-    pub fn render(&mut self, frames: usize, mut ui: impl FnMut(&egui::Context)) -> Canvas {
+    pub fn render(&mut self, frames: usize, ui: impl FnMut(&egui::Context)) -> Canvas {
+        self.render_scaled(frames, 1.0, ui)
+    }
+
+    /// `render` at `ppp` physical pixels per point (Windows' 125 % is 1.25): the picture is
+    /// that many times larger.
+    #[cfg(test)]
+    pub fn render_scaled(&mut self, frames: usize, ppp: f32, mut ui: impl FnMut(&egui::Context)) -> Canvas {
+        self.ctx.set_pixels_per_point(ppp);
         let mut last = None;
         for k in 0..frames.max(1) {
             let input = egui::RawInput { screen_rect: Some(self.screen()), time: Some(k as f64 / 60.0), predicted_dt: 1.0 / 60.0, ..Default::default() };
@@ -115,14 +123,24 @@ impl Snapshot {
         self.rasterise(output.shapes, output.pixels_per_point)
     }
 
-    /// Tessellates a frame's shapes and fills the triangles into a canvas of this size.
+    /// Tessellates a frame's shapes and fills the triangles into a canvas of this size (in
+    /// physical pixels: points times `pixels_per_point`).
     pub fn rasterise(&self, shapes: Vec<epaint::ClippedShape>, pixels_per_point: f32) -> Canvas {
         let primitives = self.ctx.tessellate(shapes, pixels_per_point);
-        let (w, h) = (self.size.x as usize, self.size.y as usize);
+        let ppp = pixels_per_point;
+        let (w, h) = ((self.size.x * ppp).round() as usize, (self.size.y * ppp).round() as usize);
         let mut canvas = Canvas { width: w, height: h, pixels: vec![[0.0, 0.0, 0.0, 1.0]; w * h] };
         for p in primitives {
             if let epaint::Primitive::Mesh(mesh) = &p.primitive {
-                canvas.fill(mesh, p.clip_rect, self.textures.get(&mesh.texture_id));
+                // (epaint hands points; a GPU backend scales them to pixels, so does this.)
+                if ppp == 1.0 {
+                    canvas.fill(mesh, p.clip_rect, self.textures.get(&mesh.texture_id));
+                } else {
+                    let mut mesh = mesh.clone();
+                    mesh.vertices.iter_mut().for_each(|v| v.pos = pos2(v.pos.x * ppp, v.pos.y * ppp));
+                    let clip = Rect::from_min_max(pos2(p.clip_rect.min.x * ppp, p.clip_rect.min.y * ppp), pos2(p.clip_rect.max.x * ppp, p.clip_rect.max.y * ppp));
+                    canvas.fill(&mesh, clip, self.textures.get(&mesh.texture_id));
+                }
             }
         }
         canvas
@@ -198,9 +216,11 @@ impl Canvas {
         if n == 0 { 0.0 } else { sum / n as f32 }
     }
 
+    /// Writes the picture to `target/ui-snapshots/` (in the folder of its colour set when it was
+    /// taken in the look's colours: `theme_engine::look_for_pictures`).
     #[cfg(test)]
     pub fn save(&self, name: &str) -> PathBuf {
-        let dir = PathBuf::from("target").join("ui-snapshots");
+        let dir = PathBuf::from("target").join("ui-snapshots").join(crate::theme_engine::picture_set().unwrap_or(""));
         let _ = std::fs::create_dir_all(&dir);
         let mut img = image::RgbaImage::new(self.width as u32, self.height as u32);
         for (i, p) in img.pixels_mut().enumerate() {
@@ -230,6 +250,7 @@ mod tests {
     /// The emblem in each state, on the obsidian canvas.
     #[test]
     fn snapshot_emblem_states() {
+        let _look = crate::theme_engine::look_for_pictures();
         for (state, name, steps) in [(RoseEmblemState::AwakeFrontEmblem, "emblem_front", 1), (RoseEmblemState::ThinkingGyroscope, "emblem_gyroscope", 40), (RoseEmblemState::CornerDocked, "emblem_docked", 1)] {
             let mut emblem = RoseEmblem::new(state);
             for _ in 0..steps {
@@ -252,6 +273,7 @@ mod tests {
     /// darker edges, dust, hairline scratches). It darkens the corners and leaves the middle.
     #[test]
     fn snapshot_display_finish() {
+        let _look = crate::theme_engine::look_for_pictures();
         let emblem = RoseEmblem::new(RoseEmblemState::AwakeFrontEmblem);
         let paint = |finish: bool| {
             let mut snap = Snapshot::new(vec2(W, H));
@@ -299,6 +321,7 @@ mod tests {
     #[test]
     fn snapshot_board_blocks_stay_inside_their_frames() {
         let _one = hud_board::test_lock();
+        let _look = crate::theme_engine::look_for_pictures();
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         // The video's stills without the network: two pictures, two YouTube does not have.
         for (k, url) in hud_board::video_frames("dQw4w9WgXcQ").iter().enumerate() {
@@ -312,16 +335,20 @@ mod tests {
         let mut view = hud_board::BoardView::default();
         let area = Rect::from_min_max(pos2(24.0, 42.0), pos2(W - 24.0, H - 150.0));
         let comms = hud_board::dialogue_block("what does the chart say about the quest three and how does it compare to the index", "The Quest 2 still leads at 38.2 percent, Sir, with the Quest 3 on 24.1 percent and the Index at 11 percent — and this answer is long enough that it must wrap onto a second line and then stop.", true, "18:00:00").unwrap();
-        let mut snap = Snapshot::new(vec2(W, H));
         let handle = rt.handle().clone();
-        let canvas = snap.render(30, |ctx| {
+        let mut paint = |ctx: &egui::Context| {
             crate::gui::paint_canvas(ctx);
             egui::CentralPanel::default().frame(egui::Frame::none()).show(ctx, |ui| {
                 view.paint(ui, area, &handle);
                 hud_board::paint_dialogue(&ui.painter_at(screen()), Rect::from_min_size(pos2(W / 2.0 - 380.0, H - 140.0), vec2(760.0, 116.0)), &comms);
             });
-        });
+        };
+        let canvas = Snapshot::new(vec2(W, H)).render(30, &mut paint);
         canvas.save("board_blocks");
+        // Sharp at 125 and 150 % as well (Windows' display scaling).
+        for (ppp, name) in [(1.25, "board_blocks_125"), (1.5, "board_blocks_150")] {
+            Snapshot::new(vec2(W, H)).render_scaled(30, ppp, &mut paint).save(name);
+        }
         hud_board::set_research(None);
         hud_board::sign_off();
         // Nothing is painted in the gutters between the grid and the comms block.
@@ -335,6 +362,7 @@ mod tests {
     #[test]
     fn snapshot_itslearning_board_and_core_sphere() {
         let _one = hud_board::test_lock();
+        let _look = crate::theme_engine::look_for_pictures();
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         let now = chrono::NaiveDate::from_ymd_opt(2026, 11, 2).unwrap().and_hms_opt(18, 0, 0).unwrap();
         let at = |d: u32| chrono::NaiveDate::from_ymd_opt(2026, 11, d).unwrap().and_hms_opt(8, 0, 0);

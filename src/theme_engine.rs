@@ -3,11 +3,11 @@
 //! re-themes the whole HUD — board frames and brackets, the text console, the core sphere and the
 //! emblem's rings — at once, cross-fading through HSV over 0.35 s.
 //!
-//! Nine hyper-saturated presets (`PRESETS`, `jai_gold` the default) and any custom colour:
-//! a colour word or #RRGGBB becomes a palette with its saturation and value pushed to 1.0
-//! (`derive`). The neon itself is premultiplied-additive light (`hdr_neon_color`): four passes
-//! from a wide 22 px aura to a 1.5 px white-hot filament (`NEON_PASSES`), so the rings glow
-//! instead of turning muddy under alpha blending.
+//! Nine presets (`PRESETS`, `jai_gold` the default) and any custom colour: a colour word or
+//! #RRGGBB becomes a palette in that colour, lifted only as far as it needs to read on the dark
+//! glass (`derive`; an ice blue stays ice). The rings' light is premultiplied-additive
+//! (`hdr_neon_color`): a thin bright line with two faint, narrow strokes under it
+//! (`NEON_PASSES`), light as the films draw it, not a neon tube.
 
 use eframe::egui::Color32;
 use std::sync::{LazyLock, RwLock};
@@ -220,13 +220,20 @@ pub fn lerp_palette(a: &ThemePalette, b: &ThemePalette, t: f32) -> ThemePalette 
     }
 }
 
-/// A palette for any colour: saturated primary, its complement as the contrast accent, the
-/// border in the primary, a lighter glow, white-hot centre and near-white brackets.
+/// A palette for any colour: the colour itself as the primary (lifted only until it reads on
+/// the lightest glass, 3:1), the border in it, a lighter glow, white-hot centre and near-white
+/// brackets; a vivid colour takes its complement as the contrast accent, a pale one a paler
+/// tint of itself (an ice blue stays one cool family).
 pub fn derive(colour: [u8; 3]) -> ThemePalette {
-    let primary = saturate(colour);
+    let (h, s, mut v) = to_hsv(colour);
+    let glass = Color32::from_rgb(crate::interface::LIGHTEST_BACKGROUND[0], crate::interface::LIGHTEST_BACKGROUND[1], crate::interface::LIGHTEST_BACKGROUND[2]);
+    while v < 1.0 && crate::hud_style::contrast(c32(from_hsv(h, s, v)), glass) < 3.0 {
+        v = (v + 0.02).min(1.0);
+    }
+    let primary = if s < 0.15 { saturate(colour) } else { from_hsv(h, s, v) };
     let (h, s, _) = to_hsv(primary);
-    let secondary = if s < 0.15 { [0xA5, 0xF3, 0xFC] } else { from_hsv(h + 180.0, 1.0, 1.0) };
-    let glow = if s < 0.15 { [255, 255, 255] } else { from_hsv(h, 0.62, 1.0) };
+    let secondary = if s < 0.15 { [0xA5, 0xF3, 0xFC] } else if s < 0.6 { from_hsv(h, s * 0.5, 1.0) } else { from_hsv(h + 180.0, 1.0, 1.0) };
+    let glow = if s < 0.15 { [255, 255, 255] } else { from_hsv(h, 0.62 * s, 1.0) };
     ThemePalette { core_primary: primary, core_secondary: secondary, core_hot_center: mix_const(primary, 0.10), hud_frame_border: primary, hud_frame_glow: glow, hud_bracket_color: mix_bracket(primary) }
 }
 
@@ -477,6 +484,10 @@ fn eased(t: f32) -> f32 {
 
 /// The palette right now (mid-fade while a change runs). Every renderer calls this per frame.
 pub fn current() -> ThemePalette {
+    #[cfg(test)]
+    if let Some((look, _)) = LOOK.with(|l| l.get()) {
+        return look;
+    }
     let f = ACTIVE.read().unwrap_or_else(|e| e.into_inner());
     let t = f.start.elapsed().as_secs_f32() / FADE.as_secs_f32();
     if t >= 1.0 {
@@ -529,16 +540,15 @@ pub enum NeonLayer {
     HotCenter,
 }
 
-/// The four additive passes of every neon stroke: (width px at the reference size, alpha, layer):
-/// the wide ambient aura, the outer halo, the vibrant body and the white-hot laser filament.
-pub const NEON_PASSES: [(f32, u8, NeonLayer); 4] = [(22.0, 28, NeonLayer::Primary), (10.0, 75, NeonLayer::Primary), (4.2, 220, NeonLayer::Primary), (1.5, 255, NeonLayer::HotCenter)];
+/// The additive passes of every ring of light: (width px at the reference size, alpha, layer):
+/// two faint, narrow strokes under the line and the thin bright line itself (no aura, no halo).
+pub const NEON_PASSES: [(f32, u8, NeonLayer); 3] = [(5.0, 24, NeonLayer::Primary), (2.4, 70, NeonLayer::Primary), (1.1, 245, NeonLayer::HotCenter)];
 
-/// Premultiplied-additive light of `colour` at `alpha` (0-255), its saturation pushed to 1.0:
-/// zero alpha, so it adds to what is under it instead of greying it.
+/// Premultiplied-additive light of `colour` at `alpha` (0-255), in the colour as it is (an ice
+/// blue stays ice): zero alpha, so it adds to what is under it instead of greying it.
 pub fn hdr_neon_color(colour: [u8; 3], alpha: u8) -> Color32 {
-    let vivid = saturate(colour);
     let a = alpha as f32 / 255.0;
-    Color32::from_rgba_premultiplied((vivid[0] as f32 * a) as u8, (vivid[1] as f32 * a) as u8, (vivid[2] as f32 * a) as u8, 0)
+    Color32::from_rgba_premultiplied((colour[0] as f32 * a) as u8, (colour[1] as f32 * a) as u8, (colour[2] as f32 * a) as u8, 0)
 }
 
 /// The active palette is global: tests that change it (here and in the visual verifier) run
@@ -547,6 +557,39 @@ pub fn hdr_neon_color(colour: [u8; 3], alpha: u8) -> Color32 {
 pub(crate) fn test_lock() -> std::sync::MutexGuard<'static, ()> {
     static L: std::sync::Mutex<()> = std::sync::Mutex::new(());
     L.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The colours this thread takes its pictures in (`look_for_pictures`), whatever another
+    /// test does to the global palette meanwhile, and the name of their set.
+    static LOOK: std::cell::Cell<Option<(ThemePalette, &'static str)>> = const { std::cell::Cell::new(None) };
+}
+
+/// Test pictures in the look's colours until the guard goes: his own yellow (`custom:#FFD400`),
+/// or with `JAI_LOOK=ice` a film ice blue (`custom:#8FD8FF`). They are saved in a folder of
+/// that set's name (`ui_snapshot::Canvas::save`), so the two sets lie side by side.
+#[cfg(test)]
+pub(crate) fn look_for_pictures() -> LookGuard {
+    let (name, colour) = if std::env::var("JAI_LOOK").is_ok_and(|v| v.eq_ignore_ascii_case("ice")) { ("ice", "custom:#8FD8FF") } else { ("yellow", "custom:#FFD400") };
+    LOOK.with(|l| l.set(Some((resolve(colour), name))));
+    LookGuard
+}
+
+/// The set this thread's pictures are taken in, if any.
+#[cfg(test)]
+pub(crate) fn picture_set() -> Option<&'static str> {
+    LOOK.with(|l| l.get()).map(|(_, name)| name)
+}
+
+#[cfg(test)]
+pub(crate) struct LookGuard;
+
+#[cfg(test)]
+impl Drop for LookGuard {
+    fn drop(&mut self) {
+        LOOK.with(|l| l.set(None));
+    }
 }
 
 #[cfg(test)]
@@ -580,9 +623,9 @@ mod tests {
         for (name, p) in PRESETS.iter().filter(|(n, _)| *n != "ice_monochrome") {
             let (_, s, v) = to_hsv(p.core_primary);
             assert!(s > 0.8 && v > 0.95, "{name}: s {s} v {v}");
-            // On screen every pass is pushed to full saturation.
+            // On screen the light is the preset's own colour (the film look: no forced neon).
             let lit = hdr_neon_color(p.core_primary, 255);
-            assert!(to_hsv([lit.r(), lit.g(), lit.b()]).1 > 0.99, "{name} glows at full saturation");
+            assert_eq!([lit.r(), lit.g(), lit.b()], p.core_primary, "{name} glows in its own colour");
             // 90 % white + 10 % primary: bright, faintly tinted.
             let (_, hs, hv) = to_hsv(p.core_hot_center);
             assert!(hv > 0.99 && hs < 0.12 && hs > 0.0, "{name} hot centre {:?}", p.core_hot_center);
@@ -602,12 +645,20 @@ mod tests {
 
     #[test]
     fn a_custom_colour_becomes_a_vivid_palette() {
+        // (Since the film look a custom colour keeps its hue and saturation and is only lifted
+        // until it reads on the glass: brown stays brown, an ice blue stays ice.)
         let p = resolve("custom:#8B4513");
         let (h, s, v) = to_hsv(p.core_primary);
-        assert!((h - 25.0).abs() < 2.0 && s > 0.99 && v > 0.99, "{h} {s} {v}");
+        assert!((h - 25.0).abs() < 2.0 && (s - 0.86).abs() < 0.02 && v > 0.545 && v < 0.8, "{h} {s} {v}");
+        let glass = c32(crate::interface::LIGHTEST_BACKGROUND);
+        assert!(crate::hud_style::contrast(c32(p.core_primary), glass) >= 3.0);
         assert_eq!(p.hud_frame_border, p.core_primary);
         let (hs, _, _) = to_hsv(p.core_secondary);
         assert!(((hs - h).rem_euclid(360.0) - 180.0).abs() < 2.0, "the complement");
+        assert_eq!(resolve("custom:#FFD400").core_primary, [0xFF, 0xD4, 0x00]);
+        let ice = resolve("custom:#8FD8FF");
+        assert_eq!(ice.core_primary, [0x8F, 0xD8, 0xFF]);
+        assert!((to_hsv(ice.core_secondary).0 - to_hsv(ice.core_primary).0).abs() < 3.0, "a pale colour keeps one family");
         assert_eq!(resolve("nonsense"), preset(DEFAULT_PRESET).unwrap());
         assert_eq!(resolve("emerald_matrix"), preset("emerald_matrix").unwrap());
     }
@@ -640,16 +691,45 @@ mod tests {
 
     #[test]
     fn hdr_neon_is_additive_full_saturation_light() {
-        assert_eq!(NEON_PASSES.map(|p| (p.0, p.1)), [(22.0, 28), (10.0, 75), (4.2, 220), (1.5, 255)]);
-        assert_eq!(NEON_PASSES[3].2, NeonLayer::HotCenter);
-        // A dull rose (s 0.6, v 0.7) comes out as pure neon at full alpha.
+        // (The film look: a thin line with two faint narrow strokes under it, in the colour as
+        // it is; the 22 px aura and the forced saturation went.)
+        assert_eq!(NEON_PASSES.map(|p| (p.0, p.1)), [(5.0, 24), (2.4, 70), (1.1, 245)]);
+        assert_eq!(NEON_PASSES[2].2, NeonLayer::HotCenter);
         let c = hdr_neon_color([180, 72, 108], 255);
         assert_eq!(c.a(), 0, "premultiplied additive");
-        let (_, s, v) = to_hsv([c.r(), c.g(), c.b()]);
-        assert!(s > 0.99 && v > 0.99, "{c:?}");
-        // The aura pass is faint light, scaled by its alpha.
-        let aura = hdr_neon_color([255, 0, 85], 28);
-        assert!(aura.r() <= 28 && aura.r() > 20 && aura.a() == 0);
+        assert_eq!([c.r(), c.g(), c.b()], [180, 72, 108], "the colour as it is");
+        // The faint pass is faint light, scaled by its alpha.
+        let aura = hdr_neon_color([255, 0, 85], 24);
+        assert!(aura.r() <= 24 && aura.r() > 20 && aura.a() == 0);
+    }
+
+    /// Text stays readable on every theme: body text and secondary text reach 4.5:1 on every
+    /// canvas a theme can give, labels and large figures in the theme's own colour 3:1 (WCAG),
+    /// in every preset, every interface theme, every mood and his custom yellow.
+    #[test]
+    fn text_and_labels_read_on_every_theme() {
+        use crate::hud_style::{contrast, MUTED, TEXT};
+        let mut canvases = vec![[2u8, 4, 8], crate::interface::LIGHTEST_BACKGROUND, crate::interface::DEEPEST_BACKGROUND];
+        let mut accents: Vec<(String, [u8; 3])> = PRESETS.iter().flat_map(|(n, p)| [(n.to_string(), p.core_primary), (format!("{n} glow"), p.hud_frame_glow)]).collect();
+        for t in crate::interface::THEMES {
+            canvases.push(crate::interface::dark_glass(crate::interface::parse_hex(t.background).unwrap()));
+            let p = resolve(&format!("custom:{}", t.accent));
+            accents.extend([(t.name.to_string(), p.core_primary), (format!("{} glow", t.name), p.hud_frame_glow)]);
+        }
+        for (mood, ..) in MOODS {
+            let t = design_theme(None, mood).unwrap();
+            canvases.push(crate::interface::dark_glass(t.background_tint));
+            accents.extend([(mood.to_string(), t.palette().core_primary), (format!("{mood} glow"), t.palette().hud_frame_glow)]);
+        }
+        for custom in ["custom:#FFD400", "custom:#8FD8FF"] {
+            accents.extend([(custom.to_string(), resolve(custom).core_primary), (format!("{custom} glow"), resolve(custom).hud_frame_glow)]);
+        }
+        for canvas in canvases.iter().map(|c| c32(*c)) {
+            assert!(contrast(TEXT, canvas) >= 4.5 && contrast(MUTED, canvas) >= 4.5, "text on {canvas:?}");
+            for (name, accent) in &accents {
+                assert!(contrast(c32(*accent), canvas) >= 3.0, "{name} {accent:?} on {canvas:?}: {}", contrast(c32(*accent), canvas));
+            }
+        }
     }
 
     #[test]

@@ -29,12 +29,14 @@ use tracing::{info, warn};
 
 // ------------------------------------------------------------------------------ colours ----
 
-pub const BLOCK_FILL: Color32 = Color32::from_rgba_premultiplied(5, 9, 15, 235);
+/// A block's glass: a faint, flat, cool lift off the obsidian canvas.
+pub const BLOCK_FILL: Color32 = Color32::from_rgba_premultiplied(6, 11, 18, 205);
 /// The same for the block in use (under the pointer, highlighted, found): a little brighter.
-const BLOCK_FILL_LIFTED: Color32 = Color32::from_rgba_premultiplied(10, 17, 26, 240);
-/// The sharp 1 px block border, in the active theme (`theme_engine`; re-read every frame).
+pub const BLOCK_FILL_LIFTED: Color32 = Color32::from_rgba_premultiplied(9, 16, 25, 215);
+/// The 1 px block border: a faint tint of the active theme (`theme_engine`; re-read every
+/// frame). The film look keeps the full colour for what is live or selected.
 pub fn border_colour() -> Color32 {
-    crate::theme_engine::current().border().gamma_multiply(0.82)
+    crate::theme_engine::current().border().gamma_multiply(0.3)
 }
 
 /// The active / highlighted border and every frame's glow.
@@ -47,8 +49,8 @@ pub fn bracket_colour() -> Color32 {
     crate::theme_engine::current().bracket()
 }
 pub const PIN_RED: Color32 = Color32::from_rgb(0xFF, 0x2A, 0x55);
-const INK: Color32 = Color32::from_rgb(0xF4, 0xFA, 0xFF);
-const MICRO: Color32 = Color32::from_rgb(0xA8, 0xC9, 0xD6);
+const INK: Color32 = crate::hud_style::TEXT;
+const MICRO: Color32 = crate::hud_style::MUTED;
 const WATER: Color32 = Color32::from_rgb(0x2A, 0x2F, 0x36);
 
 /// Opacity of every other block while one is in the spotlight.
@@ -2138,21 +2140,9 @@ fn wrapped(p: &Painter, at: Pos2, width: f32, text: &str, font: FontId, colour: 
     h
 }
 
-/// The four white L-shaped corner brackets.
+/// The four L-shaped corner brackets, on the pixel grid (`hud_style::corners`).
 pub fn brackets(p: &Painter, r: Rect, colour: Color32) {
-    let (arm, s) = (6.0, stroke(1.5, colour));
-    for (corner, dx, dy) in [(r.left_top(), 1.0, 1.0), (r.right_top(), -1.0, 1.0), (r.left_bottom(), 1.0, -1.0), (r.right_bottom(), -1.0, -1.0)] {
-        p.line_segment([corner, corner + vec2(arm * dx, 0.0)], s);
-        p.line_segment([corner, corner + vec2(0.0, arm * dy)], s);
-    }
-}
-
-/// A soft glow around a frame edge (three widening, fading strokes).
-fn glow_frame(p: &Painter, r: Rect, colour: Color32, strength: f32) {
-    // (Tight to the edge: light that comes off a line, not a second frame round it.)
-    for (w, a) in [(6.0, 0.028), (3.0, 0.07), (1.5, 0.16)] {
-        p.rect_stroke(r.expand(w * 0.5), Rounding::ZERO, stroke(w, colour.gamma_multiply(a * strength)));
-    }
+    crate::hud_style::corners(p, r, crate::hud_style::BRACKET_ARM, colour, 0.0);
 }
 
 /// The sharp block frame with its glow, micro header, note page dots and the footer line under
@@ -2165,23 +2155,16 @@ fn frame(p: &Painter, slot: Rect, block: &Block, active: bool, stack: Option<(us
     let r = if footer.is_some() { front_rect(slot, stack) } else { Rect::from_min_max(pos2(body.left(), body.top() + 4.0 * depth), pos2(body.right() - 4.0 * depth, body.bottom())) };
     for k in (1..=depth as usize).rev() {
         let back = r.translate(vec2(4.0 * k as f32, -4.0 * k as f32));
-        p.rect_filled(back, Rounding::ZERO, Color32::from_rgba_premultiplied(4, 8, 12, 200));
-        p.rect_stroke(back, Rounding::ZERO, stroke(1.0, border_colour().gamma_multiply(0.45)));
+        p.rect_filled(back, Rounding::ZERO, BLOCK_FILL);
+        crate::hud_style::border(p, back, 1.0, border_colour().gamma_multiply(0.6));
     }
-    let edge = if active { active_colour() } else { border_colour() };
-    // Depth: the block floats on a shadow, the one in use is lifted, the emblem lights the edge
-    // that faces it; wear on the frame.
+    // Depth: the block floats on a shadow and the emblem lights the edge that faces it; the
+    // shell is glass, a hairline and the corner brackets (`hud_style::shell`).
     crate::hud_style::shadow(&p.with_clip_rect(r.expand(48.0)), r, 1.0);
-    glow_frame(p, r, edge, if active { 1.6 } else { 1.0 });
-    // (A line of light, gently uneven, and the shade inside it: `hud_style`.)
-    let seed = crate::hud_style::seed_of(&block.label);
-    crate::hud_style::surface(p, r, if active { BLOCK_FILL_LIFTED } else { BLOCK_FILL }, 1.0);
-    crate::hud_style::patina(p, r, 1.0);
-    crate::hud_style::worn_frame(p, r, edge, 1.2, seed, 1.0);
+    crate::hud_style::shell(p, r, active, 1.0);
     if let Some(orb) = crate::hud_dock::orb() {
         crate::hud_style::emblem_light(p, r, orb, active_colour(), 1.0);
     }
-    brackets(p, r, bracket_colour());
     let pad = 12.0;
     // The header every block wears: its label and state light, then its tag and its keys.
     let mid = r.top() + pad + 4.0;
@@ -2937,10 +2920,8 @@ pub fn research_cells(progress: f32, clock: f32, running: bool) -> Vec<f32> {
 fn paint_research(p: &Painter, r: Rect, block: &Block, scale: f32, footer: Option<&str>) {
     let BlockKind::ResearchProgress { topic, phase, elapsed_secs, progress, blocks, sources } = &block.kind else { return };
     let body = if footer.is_some() { Rect::from_min_max(r.min, pos2(r.right(), r.bottom() - FOOTER_H)) } else { r };
-    glow_frame(p, body, active_colour(), 2.2);
-    p.rect_filled(body, Rounding::ZERO, BLOCK_FILL);
-    p.rect_stroke(body, Rounding::ZERO, stroke(1.6, active_colour()));
-    brackets(p, body, bracket_colour());
+    // (It is live: the shell of the block in use, its brackets in the theme's colour.)
+    crate::hud_style::shell(p, body, true, 1.0);
     let pad = 12.0 * scale;
     let secs = *elapsed_secs;
     let label = p.text(body.left_top() + vec2(pad, pad - 2.0), Align2::LEFT_TOP, &block.label, bold(10.0 * scale), INK.gamma_multiply(0.85));

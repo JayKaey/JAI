@@ -1,16 +1,9 @@
 //! The emblem's light as light behaves (Sir, 2026-11-12: "simpler, more natural and realistic";
 //! a housing of metal round it, tried the same evening, he did not want). Nothing is added to
-//! the emblem: its rings of light are a little uneven, as every ring of light is, they flicker
-//! by a hair, and they throw a soft glow into the dark round them. Sizes are in the emblem's
-//! reference pixels (its rim at 175), scaled by `unit`.
+//! the emblem: its rings of light are a little uneven, as every ring of light is, and they
+//! flicker by a hair.
 
-use eframe::egui::{vec2, Color32, Mesh, Painter, Pos2, Shape};
 use std::f32::consts::TAU;
-
-fn rgba(rgb: [f32; 3], alpha: f32) -> Color32 {
-    let a = alpha.clamp(0.0, 1.0);
-    Color32::from_rgba_premultiplied((rgb[0].clamp(0.0, 255.0) * a) as u8, (rgb[1].clamp(0.0, 255.0) * a) as u8, (rgb[2].clamp(0.0, 255.0) * a) as u8, (255.0 * a) as u8)
-}
 
 /// A number 0 … 1 that belongs to `n` (the same on every start).
 pub fn chance(n: u32) -> f32 {
@@ -43,41 +36,8 @@ pub fn unevenness(theta: f32, clock: f32) -> f32 {
     (0.88 + 0.09 * slow + 0.03 * fine + breath + flicker).clamp(0.84, 1.0)
 }
 
-/// A band between two radii, shaded per corner: `shade(theta, t)` with `t` 0 at the inner
-/// edge and 1 at the outer one.
-fn band(mesh: &mut Mesh, centre: Pos2, inner: f32, outer: f32, steps: usize, shade: impl Fn(f32, f32) -> Color32) {
-    let base = mesh.vertices.len() as u32;
-    for k in 0..=steps {
-        let theta = TAU * k as f32 / steps as f32;
-        let dir = vec2(theta.cos(), theta.sin());
-        mesh.colored_vertex(centre + dir * inner, shade(theta, 0.0));
-        mesh.colored_vertex(centre + dir * outer, shade(theta, 1.0));
-    }
-    for k in 0..steps as u32 {
-        let i = base + k * 2;
-        mesh.add_triangle(i, i + 1, i + 2);
-        mesh.add_triangle(i + 1, i + 3, i + 2);
-    }
-}
-
-/// The light the bright ring throws into the dark round it: strongest at the ring, gone a
-/// little beyond the rim outside and before the middle inside. `accent`: the light's colour;
-/// `glow`: how strongly the ring burns right now (0 … 1).
-pub fn paint_glow(p: &Painter, centre: Pos2, unit: f32, alpha: f32, accent: [u8; 3], glow: f32) {
-    if alpha <= 0.01 || unit <= 0.0 {
-        return;
-    }
-    let u = unit;
-    let acc = [accent[0] as f32, accent[1] as f32, accent[2] as f32];
-    let strength = alpha * (0.6 + 0.4 * glow.clamp(0.0, 1.0));
-    let steps = 96;
-    let mut mesh = Mesh::default();
-    // (The bright ring stands at 112: three bands outwards, each fainter, and one inwards.)
-    for (inner, outer, from, to) in [(112.0f32, 150.0f32, 0.085f32, 0.045f32), (150.0, 215.0, 0.045, 0.014), (215.0, 300.0, 0.014, 0.0), (64.0, 112.0, 0.0, 0.06)] {
-        band(&mut mesh, centre, inner * u, outer * u, steps, |theta, t| rgba(acc, (from + (to - from) * t) * strength * unevenness(theta, 0.0)));
-    }
-    p.add(Shape::mesh(mesh));
-}
+// (The glow the bright ring threw into the dark round it went with the film look: nothing is
+// added round the emblem, its lines carry their own faint light.)
 
 #[cfg(test)]
 mod tests {

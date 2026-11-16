@@ -4056,7 +4056,7 @@ fn corner_orb_ui(ui: &mut Ui, emblem: &RoseEmblem, c: &CornerOrbContent) -> OrbC
     let plate = if c.words_left { Rect::from_min_max(all.min, pos2(orb.left() - 12.0, all.bottom())) } else { Rect::from_min_max(pos2(orb.right() + 12.0, all.top()), all.max) };
     let p = ui.painter().with_clip_rect(plate);
     p.rect_filled(plate, Rounding::ZERO, rgba([3, 7, 12], 0.9));
-    inner_border(&p, plate, 1.0, crate::hud_board::border_colour());
+    crate::hud_style::border(&p, plate, 1.0, crate::hud_board::border_colour());
     let inner = plate.shrink2(vec2(12.0, 9.0));
     let mut y = inner.top();
     let key = |ui: &mut Ui, at: Pos2, text: &str, lit: bool| -> (bool, f32) {
@@ -5919,7 +5919,7 @@ impl HudApp {
                 let rect = inner.response.rect;
                 self.console_at_edge = rect.right() >= screen.right() - 40.0;
                 let painter = ctx.layer_painter(inner.response.layer_id);
-                inner_border(&painter, rect, 1.0, crate::hud_board::border_colour().gamma_multiply(slide));
+                crate::hud_style::border(&painter, rect, 1.0, crate::hud_board::border_colour().gamma_multiply(slide));
                 crate::hud_board::brackets(&painter, rect.shrink(0.75), crate::hud_board::bracket_colour().gamma_multiply(slide));
                 crate::hud_dock::publish_block(CONSOLE_ID, "Text console", rect);
                 publish_console_rect(Some(rect));
@@ -7642,7 +7642,7 @@ pub(super) fn paint_window_border(ctx: &egui::Context) {
         }
         paint_block_frame(&painter, screen, &motion, Color32::TRANSPARENT, crate::hud_board::border_colour(), 1.0);
     } else {
-        inner_border(&painter, screen, 1.0, crate::hud_board::border_colour());
+        crate::hud_style::border(&painter, screen, 1.0, crate::hud_board::border_colour());
     }
     paint_window_motion(&painter, screen, &motion);
     // Esc in a view he put in full screen ("full screen the Earth") brings its window back.
@@ -8192,7 +8192,7 @@ pub(super) fn hud_block_window(ctx: &egui::Context, id: &str, title: &str, size:
         // never showed, and a block was brackets round a dark patch. The shell is painted on the
         // whole of the block's rect.)
         shell.set_clip_rect(frame_rect);
-        paint_block_frame_of(&shell, frame_rect, &motion, mix(BLOCK_SLATE, BLOCK_SLATE_LIFTED, using).gamma_multiply(dim), mix(edge, accent, using * 0.6).gamma_multiply(dim), if found { 2.0 } else { 1.0 }, Some(crate::hud_style::seed_of(id)));
+        paint_block_frame(&shell, frame_rect, &motion, mix(BLOCK_SLATE, BLOCK_SLATE_LIFTED, using).gamma_multiply(dim), mix(edge, accent.gamma_multiply(0.45), using).gamma_multiply(dim), if found { 2.0 } else { 1.0 });
         if !motion.moving() {
             if let Some(orb) = crate::hud_dock::orb() {
                 crate::hud_style::emblem_light(&shell, frame_rect, orb, accent, dim);
@@ -8572,57 +8572,18 @@ pub(crate) fn motion_content_clip(rect: Rect, m: &WindowMotion) -> Rect {
     Rect::from_min_max(band.min, pos2(band.max.x, band.top() + band.height() * m.resolve.max(0.0)))
 }
 
-/// A frame's border drawn inside `rect`: `width` points rounded to whole physical pixels (at
-/// least one), on the pixel grid. Nothing of it lies outside the rect, so a window flush with
-/// its clip or the screen's edge keeps all four sides at any DPI (a stroke is centred on its
-/// line: half of it was cut off there).
-pub(crate) fn inner_border(painter: &egui::Painter, rect: Rect, width: f32, colour: Color32) {
-    if colour.a() == 0 || !rect.is_positive() {
-        return;
-    }
-    let ppp = painter.ctx().pixels_per_point();
-    let t = (width * ppp).round().max(1.0) / ppp;
-    let r = painter.round_rect_to_pixels(rect);
-    if r.width() <= 2.0 * t || r.height() <= 2.0 * t {
-        painter.rect_filled(r, Rounding::ZERO, colour);
-        return;
-    }
-    for side in [
-        Rect::from_min_max(r.min, pos2(r.max.x, r.min.y + t)),
-        Rect::from_min_max(pos2(r.min.x, r.max.y - t), r.max),
-        Rect::from_min_max(pos2(r.min.x, r.min.y + t), pos2(r.min.x + t, r.max.y - t)),
-        Rect::from_min_max(pos2(r.max.x - t, r.min.y + t), r.max - vec2(0.0, t)),
-    ] {
-        painter.rect_filled(side, Rounding::ZERO, colour);
-    }
-}
-
-/// A block's frame in this frame of its motion: the slate fill and the border, both on the band
-/// the frame has unfolded to. The edges run white-hot while they travel and cool as they land;
-/// `found` (the search lights the block) draws the border two pixels wide.
+/// A block's frame in this frame of its motion: the glass and the hairline border (`width`
+/// whole pixels), both on the band the frame has unfolded to. The edges run white-hot while they
+/// travel and cool as they land; `found` (the search lights the block) draws the border two
+/// pixels wide.
 fn paint_block_frame(painter: &egui::Painter, rect: Rect, m: &WindowMotion, fill: Color32, edge: Color32, width: f32) {
-    paint_block_frame_of(painter, rect, m, fill, edge, width, None);
-}
-
-/// The same for a block that stands: with its own wear (`seed`: the block's, so each has its
-/// own and keeps it), a frame that has aged and what use leaves on its surface.
-fn paint_block_frame_of(painter: &egui::Painter, rect: Rect, m: &WindowMotion, fill: Color32, edge: Color32, width: f32, seed: Option<u64>) {
     let band = motion_band(rect, m);
     if band.height() < 0.5 || m.frame <= 0.0 {
         return;
     }
-    // (Glass lit from above: `hud_style::surface`.)
     crate::hud_style::surface(painter, band, fill, m.frame);
     let heat = (1.0 - m.unfold).clamp(0.0, 1.0);
-    let colour = mix(edge, Color32::WHITE, heat * 0.7).gamma_multiply(m.frame.max(heat));
-    match seed.filter(|_| !m.moving() && fill.a() > 0) {
-        Some(seed) => {
-            crate::hud_style::patina(painter, band, m.frame);
-            crate::hud_style::worn_frame(painter, band, colour, width, seed, 1.0);
-        }
-        // (While it unfolds or folds, and for a frame without a surface: the plain line.)
-        None => inner_border(painter, band, width, colour),
-    }
+    crate::hud_style::border(painter, band, width, mix(edge, Color32::WHITE, heat * 0.7).gamma_multiply(m.frame.max(heat)));
 }
 
 /// The two short diagonals in a resizable block's bottom-right corner (inside its border).
@@ -8697,7 +8658,7 @@ pub(crate) fn paint_window_motion_on(painter: &egui::Painter, rect: Rect, m: &Wi
         painter.rect_filled(Rect::from_min_max(pos2(inner.left(), y - px), pos2(inner.right(), y)), Rounding::ZERO, mix(accent, Color32::WHITE, 0.4).gamma_multiply(0.85));
     }
     if m.glow > 0.0 {
-        inner_border(painter, rect, 1.0, accent.gamma_multiply(0.75 * m.glow));
+        crate::hud_style::border(painter, rect, 1.0, accent.gamma_multiply(0.75 * m.glow));
         if soft {
             painter.rect_stroke(rect.expand(1.5), Rounding::ZERO, stroke(2.0, accent.gamma_multiply(0.14 * m.glow)));
         }
@@ -9153,7 +9114,7 @@ pub(crate) fn paint_finish(ctx: &egui::Context) {
     let mut mesh = egui::Mesh::with_texture(grain.id());
     mesh.add_rect_with_uv(rect, Rect::from_min_size(pos2(shift.x, shift.y), rect.size() / GRAIN_TILE as f32), Color32::WHITE);
     painter.add(Shape::mesh(mesh));
-    // The glass itself: uneven light, darker edges, dust and hairline scratches, per screen of
+    // The glass itself: uneven light, darker edges and a little dust, per screen of
     // a HUD that spans several, else over the one it is on. (It was only drawn on a spanned
     // HUD: on a single screen there was no glass at all.)
     let screens = monitor_regions(ctx);
@@ -9897,6 +9858,7 @@ mod tests {
     // PNGs (target/ui-snapshots/gallery_*.png) to be looked at. Each asserts only that it drew.
 
     fn gallery(name: &str, size: Vec2, frames: usize, mut ui: impl FnMut(&egui::Context)) {
+        let _look = crate::theme_engine::look_for_pictures();
         let mut snap = crate::ui_snapshot::Snapshot::new(size);
         let canvas = snap.render(frames, |ctx| {
             paint_canvas(ctx);
@@ -9984,6 +9946,7 @@ mod tests {
         let _g = crate::hud_dock::test_lock();
         settings_panel::open(true);
         *settings_panel::GAMES.lock().unwrap() = Some(vec![("Stand-in Racer".into(), "StandInRacer".into()), ("Stand-in Quest".into(), "StandInQuest".into())]);
+        let _look = crate::theme_engine::look_for_pictures();
         let mut snap = crate::ui_snapshot::Snapshot::new(GALLERY);
         let mut last = None;
         for k in 0..40 {
@@ -10422,7 +10385,7 @@ mod tests {
             let rect = Rect::from_min_size(Pos2::ZERO, vec2(300.0, 200.0));
             let out = ctx.run(egui::RawInput::default(), |ctx| {
                 let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("border_test")));
-                inner_border(&painter, rect, 1.0, Color32::WHITE);
+                crate::hud_style::border(&painter, rect, 1.0, Color32::WHITE);
             });
             let shapes: Vec<Rect> = out.shapes.iter().map(|c| c.shape.visual_bounding_rect()).filter(|r| r.is_positive()).collect();
             assert_eq!(shapes.len(), 4, "four sides at {ppp}");

@@ -1,24 +1,23 @@
-//! "What's new?": what this build does that the last one did not, the way Sir would ask for it.
+//! "What's new?": the newest day of the changes list (`changes::RELEASES`), spoken. (It was a
+//! list of its own, kept by hand, and a week later still called the network radar new.)
 
-/// One sentence each, spoken as they stand.
-pub const NOTES: &[&str] = &[
-    "\"Check the network\" opens the network radar and sweeps it, and \"who is on my wifi?\" names the devices.",
-    "\"Is my network secure?\" looks over the devices on the radar and tells you what stands out.",
-    "\"What is taking up space?\" maps your drive as a treemap, and \"map my D drive\" maps D.",
-    "\"Show me the earth\" opens the globe, \"switch to satellite view\" changes it, and \"fly to Tokyo\" goes there.",
-    "Earthquakes near a place, the flights over a city, storms, fires and the space station show on the globe.",
-    "\"Close the globe\" closes it, also when it has a window of its own.",
-    "My windows open with a holographic entrance and leave with an exit, by voice or by hand.",
-    "A status pill at the top shows whether I am listening, thinking or speaking.",
-    "While you speak, your voice shows as a ring of ticks round my emblem; the VIEW menu turns it off.",
-    "F1 mutes the microphone, and the key hints at the bottom right can be clicked.",
-    "\"Explain what's on my screen\" reads what is behind my own windows, and a card offers quick actions.",
-    "Drop a file on the HUD and ask about it, for example \"summarize this file\".",
-];
+use crate::changes::{Kind, RELEASES};
+
+/// How many of the newest day's new things are read out; the changes list shows the rest.
+const READ_OUT: usize = 3;
 
 /// The answer to "what's new?".
 pub fn spoken() -> String {
-    format!("New in this build, Sir. {}", NOTES.join(" "))
+    let Some(latest) = RELEASES.first() else { return "Nothing new in this build, Sir.".to_string() };
+    let new: Vec<&str> = latest.entries.iter().filter(|e| e.kind == Kind::New).map(|e| e.what).collect();
+    let rest = latest.entries.len() - new.len();
+    let mut line = format!("New in this build, Sir: {} new {} and {rest} improvements.", new.len(), if new.len() == 1 { "thing" } else { "things" });
+    for what in new.iter().take(READ_OUT) {
+        line.push(' ');
+        line.push_str(what);
+    }
+    line.push_str(" \"Show the changes\" lists them all.");
+    line
 }
 
 #[cfg(test)]
@@ -26,8 +25,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_notes_can_be_spoken() {
-        assert!(!NOTES.is_empty());
-        assert!(NOTES.iter().all(|note| note.ends_with('.') && note.len() < 140), "one short sentence each");
+    fn whats_new_is_the_newest_day_of_the_changes_list() {
+        let line = spoken();
+        let first_new = RELEASES[0].entries.iter().find(|e| e.kind == Kind::New).expect("the newest day brought something new");
+        assert!(line.starts_with("New in this build, Sir: ") && line.contains(first_new.what), "{line}");
+        assert!(RELEASES[1].entries.iter().all(|e| !line.contains(e.what)), "an older day's news: {line}");
+        assert!(line.split_whitespace().count() < 120, "short enough to hear: {line}");
+        assert!(crate::changes::command("show the changes").is_some(), "the line it ends on opens the list");
     }
 }

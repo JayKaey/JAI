@@ -4,7 +4,7 @@
 //! block shows while it loads, has nothing to show, or failed. The board's report blocks and the
 //! tool blocks (`gui::hud_block_window`) both draw with these, so they read as one system.
 
-use eframe::egui::{self, pos2, vec2, Color32, FontFamily, FontId, Painter, Pos2, Rect, Rounding, Sense, Stroke, Ui};
+use eframe::egui::{self, pos2, vec2, Color32, FontFamily, FontId, Painter, Pos2, Rect, Rounding, Sense, Stroke, Ui, Vec2};
 use std::collections::HashMap;
 use std::sync::Mutex;
 
@@ -70,6 +70,100 @@ pub fn shadow(p: &Painter, r: Rect, alpha: f32) {
 pub fn white(share: f32) -> Color32 {
     Color32::WHITE.gamma_multiply(share.clamp(0.0, 1.0))
 }
+
+/// The film's lettering colours, whatever the theme: a cool white for what is read and a
+/// blue-grey for what explains it (the accent is kept for what is live or selected).
+pub const TEXT: Color32 = Color32::from_rgb(0xE8, 0xF2, 0xFF);
+pub const MUTED: Color32 = Color32::from_rgb(0x8F, 0xA4, 0xB8);
+
+// ----------------------------------------------------------------------------- hairlines ----
+
+/// `v` (points) moved onto the nearest edge between two physical pixels at `ppp` pixels per
+/// point: a line one physical pixel wide from there covers whole pixels and never blurs.
+pub fn snap(v: f32, ppp: f32) -> f32 {
+    (v * ppp).round() / ppp
+}
+
+/// One physical pixel, in points.
+pub fn px(p: &Painter) -> f32 {
+    1.0 / p.ctx().pixels_per_point()
+}
+
+/// `r` with its edges on the pixel grid.
+fn snapped(r: Rect, ppp: f32) -> Rect {
+    Rect::from_min_max(pos2(snap(r.left(), ppp), snap(r.top(), ppp)), pos2(snap(r.right(), ppp), snap(r.bottom(), ppp)))
+}
+
+/// A border `pixels` whole physical pixels wide, inside `r` and on the pixel grid: nothing of
+/// it lies outside the rect, so a frame flush with the screen's edge keeps all four sides.
+pub fn border(p: &Painter, r: Rect, pixels: f32, colour: Color32) {
+    if colour.a() == 0 || !r.is_positive() {
+        return;
+    }
+    let ppp = p.ctx().pixels_per_point();
+    let t = pixels.round().max(1.0) / ppp;
+    let r = snapped(r, ppp);
+    if r.width() <= 2.0 * t || r.height() <= 2.0 * t {
+        p.rect_filled(r, Rounding::ZERO, colour);
+        return;
+    }
+    for side in [
+        Rect::from_min_max(r.min, pos2(r.max.x, r.min.y + t)),
+        Rect::from_min_max(pos2(r.min.x, r.max.y - t), r.max),
+        Rect::from_min_max(pos2(r.min.x, r.min.y + t), pos2(r.min.x + t, r.max.y - t)),
+        Rect::from_min_max(pos2(r.max.x - t, r.min.y + t), r.max - vec2(0.0, t)),
+    ] {
+        p.rect_filled(side, Rounding::ZERO, colour);
+    }
+}
+
+/// Light round the brightest strokes only: two wider, faint copies of `r` under it, gone a few
+/// pixels out (never a halo round a whole block).
+pub fn glow(p: &Painter, r: Rect, colour: Color32, strength: f32) {
+    if strength <= 0.0 {
+        return;
+    }
+    for (grow, a) in [(1.0, 0.20), (2.5, 0.07)] {
+        p.rect_filled(r.expand(grow), Rounding::same(grow), colour.gamma_multiply(a * strength.min(1.0)));
+    }
+}
+
+/// The four L-shaped corner brackets inside `r`: `arm` long, whole pixels thick (two at any
+/// scale), on the pixel grid; `lit` lays their light round them (the block in use).
+pub fn corners(p: &Painter, r: Rect, arm: f32, colour: Color32, lit: f32) {
+    if !r.is_positive() || colour.a() == 0 {
+        return;
+    }
+    let ppp = p.ctx().pixels_per_point();
+    let t = (1.5 * ppp).round().max(1.0) / ppp;
+    let r = snapped(r, ppp);
+    let arm = snap(arm.min(r.width() * 0.5).min(r.height() * 0.5), ppp);
+    for (x, y, dx, dy) in [(r.left(), r.top(), 1.0, 1.0), (r.right(), r.top(), -1.0, 1.0), (r.left(), r.bottom(), 1.0, -1.0), (r.right(), r.bottom(), -1.0, -1.0)] {
+        let across = Rect::from_two_pos(pos2(x, y), pos2(x + arm * dx, y + t * dy));
+        let down = Rect::from_two_pos(pos2(x, y), pos2(x + t * dx, y + arm * dy));
+        glow(p, across, colour, lit);
+        glow(p, down, colour, lit);
+        p.rect_filled(across, Rounding::ZERO, colour);
+        p.rect_filled(down, Rounding::ZERO, colour);
+    }
+}
+
+/// A block's shell, as the films draw a panel: faint flat glass, a hairline frame in a faint
+/// tint of the theme, and bright corner brackets (the theme's own colour, and lit, on the block
+/// in use). `alpha`: the block's own opacity (its entrance, a search that dims it).
+pub fn shell(p: &Painter, r: Rect, active: bool, alpha: f32) {
+    if !r.is_positive() || alpha <= 0.0 {
+        return;
+    }
+    surface(p, r, if active { crate::hud_board::BLOCK_FILL_LIFTED } else { crate::hud_board::BLOCK_FILL }, alpha);
+    let edge = if active { crate::hud_board::active_colour().gamma_multiply(0.45) } else { crate::hud_board::border_colour() };
+    border(p, r, 1.0, edge.gamma_multiply(alpha));
+    let (bracket, lit) = if active { (crate::hud_board::active_colour(), 0.8) } else { (crate::hud_board::bracket_colour().gamma_multiply(0.85), 0.0) };
+    corners(p, r, BRACKET_ARM, bracket.gamma_multiply(alpha), lit * alpha);
+}
+
+/// How long a corner bracket's arms are.
+pub const BRACKET_ARM: f32 = 9.0;
 
 /// `a` to `b` by `t`, channel by channel (both as they are stored: premultiplied).
 fn lerp_colour(a: Color32, b: Color32, t: f32) -> Color32 {
@@ -139,13 +233,13 @@ pub fn faded_into<R>(ui: &mut Ui, area: egui::ScrollArea, fill: Color32, add: im
     }
     let h = (r.height() * r.height() / full).max(14.0);
     let y = r.top() + (r.height() - h) * (offset / (full - inner.height()).max(1.0)).clamp(0.0, 1.0);
-    p.rect_filled(Rect::from_min_size(pos2(r.right() - 2.0, y), vec2(2.0, h)), Rounding::ZERO, crate::hud_board::active_colour().gamma_multiply(0.45));
+    let ppp = ui.ctx().pixels_per_point();
+    p.rect_filled(Rect::from_min_size(pos2(snap(r.right() - 2.0, ppp), y), vec2(1.0 / ppp, h)), Rounding::ZERO, crate::hud_board::active_colour().gamma_multiply(0.6));
     out
 }
 
-/// A block's surface: glass lit from above. The fill is a shade lighter at the top than at the
-/// bottom, a hairline of light runs along its top edge, and a faint sheen lies across its upper
-/// left corner. `alpha`: the block's own opacity (its entrance, a search that dims it).
+/// A block's surface: faint glass, flat (no sheen, no gradient). `alpha`: the block's own
+/// opacity (its entrance, a search that dims it).
 pub fn surface(p: &Painter, r: Rect, fill: Color32, alpha: f32) {
     for shape in surface_shapes(r, fill, alpha) {
         p.add(shape);
@@ -155,35 +249,14 @@ pub fn surface(p: &Painter, r: Rect, fill: Color32, alpha: f32) {
 /// The same as shapes, for a frame that is painted behind content laid out before its size
 /// is known.
 pub fn surface_shapes(r: Rect, fill: Color32, alpha: f32) -> Vec<egui::Shape> {
-    let mut shapes: Vec<egui::Shape> = Vec::new();
     if !r.is_positive() || alpha <= 0.0 || fill.a() == 0 {
-        return shapes;
+        return Vec::new();
     }
-    let a = fill.a();
-    let top = lerp_colour(fill, Color32::from_rgba_premultiplied(20, 30, 42, a), 0.5).gamma_multiply(alpha);
-    let bottom = lerp_colour(fill, Color32::from_rgba_premultiplied(1, 3, 6, a), 0.6).gamma_multiply(alpha);
-    let mut mesh = egui::Mesh::default();
-    mesh.colored_vertex(r.left_top(), top);
-    mesh.colored_vertex(r.right_top(), top);
-    mesh.colored_vertex(r.right_bottom(), bottom);
-    mesh.colored_vertex(r.left_bottom(), bottom);
-    mesh.add_triangle(0, 1, 2);
-    mesh.add_triangle(0, 2, 3);
     // (The surface is a mesh of its own, four corners and nothing else: the verifier reads a
     // plain quad as the fill it is, and measures a block's unfolding by it.)
-    shapes.push(egui::Shape::mesh(mesh));
-    // The sheen: light caught in the upper left corner of the glass.
-    let mut light = egui::Mesh::default();
-    light.colored_vertex(r.left_top(), white(0.03 * alpha));
-    light.colored_vertex(r.left_top() + vec2((r.width() * 0.55).min(340.0), 0.0), Color32::TRANSPARENT);
-    light.colored_vertex(r.left_top() + vec2(0.0, (r.height() * 0.8).min(240.0)), Color32::TRANSPARENT);
-    light.add_triangle(0, 1, 2);
-    shapes.push(egui::Shape::mesh(light));
-    // The hairline of light along the top edge (inside the border).
-    if r.height() > 6.0 && r.width() > 6.0 {
-        shapes.push(egui::Shape::rect_filled(Rect::from_min_max(pos2(r.left() + 1.0, r.top() + 1.0), pos2(r.right() - 1.0, r.top() + 2.0)), Rounding::ZERO, white(0.055 * alpha)));
-    }
-    shapes
+    let mut mesh = egui::Mesh::default();
+    mesh.add_colored_rect(r, fill.gamma_multiply(alpha));
+    vec![egui::Shape::mesh(mesh)]
 }
 
 /// The dark band a line of text stands on over the board: solid under the text, running out to
@@ -220,7 +293,8 @@ pub fn ripple(p: &Painter, centre: Pos2, radius: f32, age: f32, colour: Color32)
         }
         let out = motion::ease_out(t);
         let fade = (1.0 - t) * (1.0 - t);
-        p.circle_stroke(centre, radius * (1.04 + 0.55 * out), stroke(0.8 + 2.2 * (1.0 - t), colour.gamma_multiply(0.75 * fade)));
+        // (A ring of light, a hairline: thin as every line of the HUD.)
+        p.circle_stroke(centre, radius * (1.04 + 0.55 * out), stroke(px(p).max(0.8), colour.gamma_multiply(0.85 * fade)));
     }
     true
 }
@@ -246,16 +320,45 @@ pub fn fitted_title(p: &Painter, text: &str, size: f32, colour: Color32, width: 
     title_galley(p, text, size, colour, width)
 }
 
-/// A title as the HUD letters it: the display face, upper case, the letters a little apart, on
-/// one line (cut with an ellipsis where it is too long for `width`).
+/// A title as the HUD letters it: the display face, upper case, the letters spaced apart as the
+/// films track them, on one line (cut with an ellipsis where it is too long for `width`).
 pub fn title_galley(p: &Painter, text: &str, size: f32, colour: Color32, width: f32) -> std::sync::Arc<egui::Galley> {
+    tracked(p, text, title_font(size), 0.14, colour, width)
+}
+
+/// A label as the films letter it: small capitals in the label face, tracked wide.
+pub fn label_galley(p: &Painter, text: &str, size: f32, colour: Color32) -> std::sync::Arc<egui::Galley> {
+    tracked(p, text, label_font(size), 0.16, colour, f32::INFINITY)
+}
+
+/// `text` in capitals, its letters `spacing` ems apart, on one line of at most `width`.
+fn tracked(p: &Painter, text: &str, font: FontId, spacing: f32, colour: Color32, width: f32) -> std::sync::Arc<egui::Galley> {
     let mut job = egui::text::LayoutJob::default();
-    job.append(&text.to_uppercase(), 0.0, egui::TextFormat { font_id: title_font(size), color: colour, extra_letter_spacing: size * 0.085, ..Default::default() });
+    let size = font.size;
+    job.append(&text.to_uppercase(), 0.0, egui::TextFormat { font_id: font, color: colour, extra_letter_spacing: size * spacing, ..Default::default() });
     job.wrap.max_width = width.max(10.0);
     job.wrap.max_rows = 1;
     job.wrap.break_anywhere = true;
     job.wrap.overflow_character = Some('…');
     p.layout_job(job)
+}
+
+/// A readout as the films set large figures: every digit as wide as the widest, so a changing
+/// number (a clock's seconds) never jitters.
+pub fn figure_galley(fonts: &egui::text::Fonts, text: &str, font: FontId, colour: Color32) -> std::sync::Arc<egui::Galley> {
+    let widest = ('0'..='9').map(|d| fonts.glyph_width(&font, d)).fold(0.0f32, f32::max);
+    let mut job = egui::text::LayoutJob::default();
+    let format = egui::TextFormat { font_id: font.clone(), color: colour, ..Default::default() };
+    // (Each digit stands in the middle of a cell the widest digit's width: the room it lacks
+    // goes half before it and half after it.)
+    let mut owed = 0.0;
+    let mut buf = [0u8; 4];
+    for c in text.chars() {
+        let pad = if c.is_ascii_digit() { (widest - fonts.glyph_width(&font, c)) * 0.5 } else { 0.0 };
+        job.append(c.encode_utf8(&mut buf), owed + pad, format.clone());
+        owed = pad;
+    }
+    fonts.layout_job(job)
 }
 
 /// How strongly the emblem (`orb`, its rect) lights a block at `r`: 1 right beside it, 0 from
@@ -307,7 +410,8 @@ pub fn emblem_light(p: &Painter, r: Rect, orb: Rect, colour: Color32, alpha: f32
             let over = coord(q).clamp(low, high) - coord(q);
             q += along * over;
             let a = strength * (1.0 - t * t).powi(2);
-            mesh.colored_vertex(q, colour.gamma_multiply(0.55 * a));
+            // (Faint: light the emblem throws, not a glow of the block's own.)
+            mesh.colored_vertex(q, colour.gamma_multiply(0.3 * a));
             mesh.colored_vertex(q + into * depth, Color32::TRANSPARENT);
         }
         for k in 0..STEPS as u32 {
@@ -317,68 +421,6 @@ pub fn emblem_light(p: &Painter, r: Rect, orb: Rect, colour: Color32, alpha: f32
         }
     }
     p.add(egui::Shape::mesh(mesh));
-}
-
-/// A name's seed: what makes one block's frame line its own.
-pub fn seed_of(name: &str) -> u64 {
-    name.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ b as u64).wrapping_mul(0x0100_0000_01b3))
-}
-
-/// A block's frame line, `width` wide in `edge`: a line of light, a little stronger here and a
-/// little softer there along its length, as light is (Sir, 2026-11-12: natural, and simple;
-/// rivets and a bevel, tried the same evening, he did not want). `seed` keeps each block's line
-/// its own, the same on every start.
-pub fn worn_frame(p: &Painter, r: Rect, edge: Color32, width: f32, seed: u64, alpha: f32) {
-    if !r.is_positive() || alpha <= 0.0 {
-        return;
-    }
-    let mut next = chance(seed as u32 ^ (seed >> 32) as u32 ^ 0x0F4A_11E5);
-    let mut mesh = egui::Mesh::default();
-    let w = width.max(1.0);
-    let mut level = 0.92 + 0.08 * next();
-    let side = |mesh: &mut egui::Mesh, from: Pos2, to: Pos2, next: &mut dyn FnMut() -> f32, level: &mut f32| {
-        let length = (to - from).length();
-        let pieces = (length / 24.0).ceil().max(1.0) as usize;
-        let dir = (to - from) / pieces as f32;
-        let horizontal = dir.x.abs() > dir.y.abs();
-        for k in 0..pieces {
-            // (Neighbours alike: it reads as one line, not as dashes.)
-            *level = (*level + (next() - 0.5) * 0.08).clamp(0.84, 1.0);
-            let (a, b) = (from + dir * k as f32, from + dir * (k + 1) as f32);
-            let piece = if horizontal { Rect::from_min_max(pos2(a.x.min(b.x), a.y - w * 0.5), pos2(a.x.max(b.x), a.y + w * 0.5)) } else { Rect::from_min_max(pos2(a.x - w * 0.5, a.y.min(b.y)), pos2(a.x + w * 0.5, a.y.max(b.y))) };
-            mesh.add_colored_rect(piece, edge.gamma_multiply(*level * alpha));
-        }
-    };
-    let line = r.shrink(w * 0.5);
-    side(&mut mesh, line.left_top(), line.right_top(), &mut next, &mut level);
-    side(&mut mesh, line.right_top(), line.right_bottom(), &mut next, &mut level);
-    side(&mut mesh, line.right_bottom(), line.left_bottom(), &mut next, &mut level);
-    side(&mut mesh, line.left_bottom(), line.left_top(), &mut next, &mut level);
-    p.add(egui::Shape::mesh(mesh));
-}
-
-/// The shade inside a block's frame: its surface is a little darker along its edges, as a
-/// pane lit from in front is. Faint, and nothing else (no scratches, no specks).
-pub fn patina(p: &Painter, r: Rect, alpha: f32) {
-    if r.width() < 120.0 || r.height() < 70.0 || alpha <= 0.0 {
-        return;
-    }
-    let mut mesh = egui::Mesh::default();
-    let depth = 12.0f32.min(r.height() * 0.2);
-    let inner = r.shrink(depth);
-    let ring = |q: Rect| [q.left_top(), q.right_top(), q.right_bottom(), q.left_bottom()];
-    for at in ring(r) {
-        mesh.colored_vertex(at, Color32::from_black_alpha((46.0 * alpha) as u8));
-    }
-    for at in ring(inner) {
-        mesh.colored_vertex(at, Color32::TRANSPARENT);
-    }
-    for k in 0..4u32 {
-        let n = (k + 1) % 4;
-        mesh.add_triangle(k, n, 4 + n);
-        mesh.add_triangle(k, 4 + n, 4 + k);
-    }
-    p.with_clip_rect(r).add(egui::Shape::mesh(mesh));
 }
 
 // ------------------------------------------------------------------------- drag and throw ----
@@ -427,15 +469,13 @@ fn chance(seed: u32) -> impl FnMut() -> f32 {
 }
 
 /// How dark the display gets towards its corners (alpha of 255), and how many specks of dust
-/// and hairline scratches lie on a screen.
-const EDGE_FALLOFF: u8 = 58;
-const DUST: usize = 90;
-const SCRATCHES: usize = 16;
+/// lie on a screen.
+const EDGE_FALLOFF: u8 = 44;
+const DUST: usize = 40;
 
-/// The glass the HUD is seen through ("medium" roughness: Sir, 2026-11-12): the light is not
-/// quite even across it, it falls off towards the edges, and dust and a few hairline scratches
-/// lie on it. All of it is still (it asks for no frame) and faint enough that text under it
-/// stays sharp.
+/// The glass the HUD is seen through: the light is not quite even across it, it falls off
+/// towards the edges, and a little fine dust lies on it (no scratches: nothing ornamental). All
+/// of it is still (it asks for no frame) and faint enough that text under it stays sharp.
 pub fn glass(p: &Painter, rect: Rect) {
     if rect.width() < 200.0 || rect.height() < 120.0 {
         return;
@@ -448,7 +488,7 @@ pub fn glass(p: &Painter, rect: Rect) {
         for i in 0..=cols {
             let at = pos2(rect.left() + rect.width() * i as f32 / cols as f32, rect.top() + rect.height() * j as f32 / rows as f32);
             let v = next();
-            let colour = if v < 0.5 { Color32::from_black_alpha((v * 2.0 * 16.0) as u8) } else { white((v - 0.5) * 2.0 * 0.02) };
+            let colour = if v < 0.5 { Color32::from_black_alpha((v * 2.0 * 8.0) as u8) } else { white((v - 0.5) * 2.0 * 0.01) };
             mesh.colored_vertex(at, colour);
         }
     }
@@ -475,26 +515,14 @@ pub fn glass(p: &Painter, rect: Rect) {
         mesh.add_triangle(base + k, base + n, base + 8 + n);
         mesh.add_triangle(base + k, base + 8 + n, base + 8 + k);
     }
-    // Dust: single pixels, a few of them two.
+    // Dust: single physical pixels, faint.
     let mut next = chance(0x0D57_C0DE);
+    let ppp = p.ctx().pixels_per_point();
     for _ in 0..DUST {
-        let at = pos2(rect.left() + rect.width() * next(), rect.top() + rect.height() * next());
-        let size = if next() < 0.15 { 2.0 } else { 1.0 };
-        mesh.add_colored_rect(Rect::from_min_size(pos2(at.x.round(), at.y.round()), vec2(size, size)), white(0.04 + next() * 0.085));
+        let at = pos2(snap(rect.left() + rect.width() * next(), ppp), snap(rect.top() + rect.height() * next(), ppp));
+        mesh.add_colored_rect(Rect::from_min_size(at, Vec2::splat(1.0 / ppp)), white(0.025 + next() * 0.035));
     }
     p.add(egui::Shape::mesh(mesh));
-    // Hairline scratches: short, nearly straight, most of them leaning the same way (a cloth
-    // wiped across the glass).
-    let mut next = chance(0x5C2A_7C4B);
-    for _ in 0..SCRATCHES {
-        let from = pos2(rect.left() + rect.width() * next(), rect.top() + rect.height() * next());
-        let lean = if next() < 0.75 { -0.5 + 0.35 * next() } else { 1.2 + 1.2 * next() };
-        let len = 26.0 + 130.0 * next() * next();
-        let to = from + vec2(lean.cos(), lean.sin()) * len;
-        let bend = vec2(-lean.sin(), lean.cos()) * (len * 0.03 * (next() - 0.5));
-        let strength = 0.03 + next() * 0.045;
-        p.add(egui::Shape::line(vec![from, from + (to - from) * 0.5 + bend, to], stroke(1.0, white(strength))));
-    }
 }
 
 // ------------------------------------------------------------------------------- header ----
@@ -553,15 +581,35 @@ pub fn light_colour(light: Light) -> Color32 {
     }
 }
 
-/// The state light: a small lamp with a halo (pulsing while busy). Returns whether it moves.
+/// The state mark, as the films mark a state (no coloured lamps): a small steady tick for all
+/// is well, a square that blinks slowly while busy, a diamond for trouble (amber; red when it
+/// failed), nothing at rest. Returns whether it moves.
 pub fn paint_light(p: &Painter, centre: Pos2, light: Light, time: f64, alpha: f32) -> bool {
-    let colour = light_colour(light);
-    let pulse = if light == Light::Busy { 0.55 + 0.45 * ((time * 5.0).sin() as f32 * 0.5 + 0.5) } else { 1.0 };
-    if light != Light::Rest {
-        p.circle_filled(centre, 5.5, colour.gamma_multiply(0.16 * pulse * alpha));
+    let ppp = p.ctx().pixels_per_point();
+    let c = pos2(snap(centre.x, ppp), snap(centre.y, ppp));
+    match light {
+        Light::Rest => {}
+        Light::Good => {
+            let s = stroke(1.2, TEXT.gamma_multiply(0.6 * alpha));
+            p.line_segment([c + vec2(-3.0, 0.0), c + vec2(-1.0, 2.5)], s);
+            p.line_segment([c + vec2(-1.0, 2.5), c + vec2(3.5, -2.5)], s);
+        }
+        Light::Busy => {
+            // (A slow blink, eased: on, off, on, about once a second and a half.)
+            let on = 0.5 + 0.5 * (time * std::f64::consts::TAU / 1.4).sin() as f32;
+            p.rect_filled(Rect::from_center_size(c, Vec2::splat(4.0)), Rounding::ZERO, light_colour(light).gamma_multiply((0.2 + 0.8 * on) * alpha));
+        }
+        Light::Warn | Light::Fault => {
+            let diamond = vec![c + vec2(0.0, -4.0), c + vec2(4.0, 0.0), c + vec2(0.0, 4.0), c + vec2(-4.0, 0.0)];
+            p.add(egui::Shape::convex_polygon(diamond, light_colour(light).gamma_multiply(alpha), Stroke::NONE));
+        }
     }
-    p.circle_filled(centre, 2.6, colour.gamma_multiply(pulse * alpha));
     light == Light::Busy
+}
+
+/// The label face (Rajdhani Medium): small capitals and the lighter large figures.
+pub fn label_font(size: f32) -> FontId {
+    FontId::new(size, FontFamily::Name("label".into()))
 }
 
 /// Titles and labels: the display face.
@@ -576,40 +624,38 @@ pub const HEADER_H: f32 = 24.0;
 /// `lit` keeps it in the theme's colour (a pinned block's `[ PIN ]`). Returns its rect; the
 /// caller asks whether it was clicked.
 pub fn key(p: &Painter, right: f32, mid: f32, label: &str, hot: bool, down: bool, lit: bool, alpha: f32) -> Rect {
-    let font = FontId::monospace(KEY_FONT);
-    let galley = p.layout_no_wrap(label.to_string(), font, Color32::PLACEHOLDER);
+    key_lit(p, right, mid, label, if hot { 1.0 } else { 0.0 }, if down { 1.0 } else { 0.0 }, lit, alpha)
+}
+
+/// A key made of light: its bracketed word and no box. At rest it is quiet blue-grey; under the
+/// pointer (`hot` 0 … 1 as it comes up) its letters brighten and a hairline runs under them; a
+/// press flashes it once (`flash` 1 … 0 as the press fades).
+#[allow(clippy::too_many_arguments)]
+fn key_lit(p: &Painter, right: f32, mid: f32, label: &str, hot: f32, flash: f32, lit: bool, alpha: f32) -> Rect {
+    let galley = label_galley(p, label, KEY_FONT, Color32::PLACEHOLDER);
     let r = Rect::from_min_size(pos2(right - galley.size().x - 10.0, mid - KEY_H / 2.0), vec2(galley.size().x + 10.0, KEY_H));
     let accent = crate::hud_board::active_colour();
-    if hot || down {
-        // A glow round it under the pointer.
-        for (grow, a) in [(1.5, 0.35), (3.0, 0.12)] {
-            p.rect_stroke(r.expand(grow), Rounding::ZERO, stroke(1.0, accent.gamma_multiply(a * alpha)));
-        }
+    let rest = if lit { accent } else { MUTED };
+    let ink = lerp_colour(lerp_colour(rest, TEXT, hot), Color32::WHITE, flash);
+    let text = Rect::from_min_size(pos2(r.left() + 5.0, mid - galley.size().y * 0.5), galley.size());
+    let under = (0.7 * hot).max(if lit { 0.4 } else { 0.0 }).max(flash);
+    if under > 0.0 {
+        let ppp = p.ctx().pixels_per_point();
+        let line = Rect::from_min_size(pos2(snap(text.left(), ppp), snap(text.bottom() + 1.0, ppp)), vec2(snap(text.width(), ppp), 1.0 / ppp));
+        glow(p, line, accent, flash * alpha);
+        p.rect_filled(line, Rounding::ZERO, accent.gamma_multiply(under * alpha));
     }
-    let (fill, edge, ink) = if down {
-        (accent.gamma_multiply(0.30), accent, Color32::WHITE)
-    } else if hot {
-        (accent.gamma_multiply(0.14), accent, Color32::WHITE)
-    } else if lit {
-        (accent.gamma_multiply(0.10), accent.gamma_multiply(0.9), accent)
-    } else {
-        // At rest a key is quiet: a hairline box and grey letters. It lights up under the
-        // pointer, and the whole row comes up when the pointer is over its block.
-        (Color32::from_rgba_unmultiplied(3, 7, 12, 150), crate::hud_board::border_colour().gamma_multiply(0.7), Color32::from_rgb(0xA9, 0xC0, 0xCE))
-    };
-    p.rect_filled(r, Rounding::ZERO, fill.gamma_multiply(alpha));
-    p.rect_stroke(r.shrink(0.5), Rounding::ZERO, stroke(1.0, edge.gamma_multiply(alpha)));
-    p.galley_with_override_text_color(pos2(r.left() + 5.0, mid - galley.size().y * 0.5 + if down { 0.5 } else { 0.0 }), galley, ink.gamma_multiply(alpha));
+    p.galley_with_override_text_color(text.min, galley, ink.gamma_multiply(alpha));
     r
 }
 
 /// A header key's width.
 pub fn key_width(p: &Painter, label: &str) -> f32 {
-    p.layout_no_wrap(label.to_string(), FontId::monospace(KEY_FONT), Color32::PLACEHOLDER).size().x + 10.0
+    label_galley(p, label, KEY_FONT, Color32::PLACEHOLDER).size().x + 10.0
 }
 
 /// A header key's lettering and height (larger since 2026-11-15: readable at a glance).
-const KEY_FONT: f32 = 11.0;
+const KEY_FONT: f32 = 11.5;
 pub const KEY_H: f32 = 18.0;
 
 /// The header keys of a block, right to left from `right`: each (label, lit, hint). Returns
@@ -638,7 +684,18 @@ pub fn keys(ui: &mut Ui, id: egui::Id, right: f32, mid: f32, labels: &[(&str, bo
         let width = key_width(ui.painter(), label);
         let r = Rect::from_min_size(pos2(x - width, mid - KEY_H / 2.0), vec2(width, KEY_H));
         let response = ui.interact(r, id.with(("key", k)), Sense::click());
-        key(ui.painter(), x, mid, label, response.hovered(), response.is_pointer_button_down_on(), *lit, alpha);
+        let hot = ui.ctx().animate_bool_with_time(id.with(("hot", k)), response.hovered(), motion::FAST.as_secs_f32());
+        // The flash: full while pressed, gone a FAST beat after the press ends.
+        let (now, pressed) = (ui.input(|i| i.time), id.with(("pressed", k)));
+        if response.is_pointer_button_down_on() {
+            ui.data_mut(|d| d.insert_temp(pressed, now));
+        }
+        let since = ui.data(|d| d.get_temp::<f64>(pressed)).map_or(1.0, |t| (now - t) as f32);
+        let flash = (1.0 - since / motion::FAST.as_secs_f32()).clamp(0.0, 1.0);
+        if flash > 0.0 {
+            ui.ctx().request_repaint();
+        }
+        key_lit(ui.painter(), x, mid, label, hot, flash, *lit, alpha);
         if response.clicked() {
             clicked = Some(k);
         }
@@ -678,7 +735,7 @@ pub fn outline_on(p: &Painter, r: Rect, kind: Outline) {
     }
     let p = p.with_clip_rect(r.intersect(p.clip_rect()));
     let time = p.ctx().input(|i| i.time);
-    let dim = white(0.045);
+    let dim = white(0.035);
     let mut shapes: Vec<Rect> = Vec::new();
     match kind {
         Outline::Lines => {
@@ -715,32 +772,31 @@ pub fn outline_on(p: &Painter, r: Rect, kind: Outline) {
         }
     }
     for (k, s) in shapes.iter().enumerate() {
-        // (A picture to come is a frame, not a grey slab.)
+        // (A picture to come is a hairline frame, not a grey slab.)
         if kind == Outline::Picture && k == 0 {
-            p.rect_filled(*s, Rounding::ZERO, white(0.018));
-            p.rect_stroke(s.shrink(0.5), Rounding::ZERO, stroke(1.0, white(0.12)));
+            border(&p, *s, 1.0, white(0.10));
         } else {
             p.rect_filled(*s, Rounding::ZERO, dim);
         }
     }
-    // The passing light, the shimmer that tells "still loading" from "empty": a soft band,
-    // brightest in its middle, that crosses the block every 1.4 s.
+    // The scan that tells "still loading" from "empty": a thin line of light that sweeps across
+    // the block every 1.4 s, a faint wake behind it.
+    let ppp = p.ctx().pixels_per_point();
     let t = ((time / 1.4).fract()) as f32;
-    let x = r.left() - 80.0 + (r.width() + 160.0) * t;
-    let glow = crate::hud_board::active_colour().gamma_multiply(0.12);
-    for s in &shapes {
-        let mut mesh = egui::Mesh::default();
-        for (dx, c) in [(-60.0, Color32::TRANSPARENT), (0.0, glow), (60.0, Color32::TRANSPARENT)] {
-            mesh.colored_vertex(pos2(x + dx, s.top()), c);
-            mesh.colored_vertex(pos2(x + dx, s.bottom()), c);
-        }
-        for k in [0, 2] {
-            mesh.add_triangle(k, k + 1, k + 2);
-            mesh.add_triangle(k + 1, k + 3, k + 2);
-        }
-        p.with_clip_rect(s.intersect(p.clip_rect())).add(egui::Shape::mesh(mesh));
+    let x = snap(r.left() + r.width() * t, ppp);
+    let accent = crate::hud_board::active_colour();
+    let mut wake = egui::Mesh::default();
+    for (wx, c) in [(x - 48.0, Color32::TRANSPARENT), (x, accent.gamma_multiply(0.07))] {
+        wake.colored_vertex(pos2(wx, r.top()), c);
+        wake.colored_vertex(pos2(wx, r.bottom()), c);
     }
-    p.ctx().request_repaint_after(std::time::Duration::from_millis(33));
+    wake.add_triangle(0, 1, 2);
+    wake.add_triangle(1, 3, 2);
+    p.add(egui::Shape::mesh(wake));
+    let line = Rect::from_min_max(pos2(x, r.top()), pos2(x + 1.0 / ppp, r.bottom()));
+    glow(&p, line, accent, 0.5);
+    p.rect_filled(line, Rounding::ZERO, accent.gamma_multiply(0.7));
+    p.ctx().request_repaint_after(std::time::Duration::from_millis(16));
 }
 
 /// One plain sentence in the middle of a block that has nothing to show.
@@ -752,12 +808,12 @@ pub fn empty(ui: &Ui, r: Rect, sentence: &str) {
 pub fn empty_on(p: &Painter, r: Rect, sentence: &str) {
     let p = p.with_clip_rect(r.intersect(p.clip_rect()));
     let c = r.center();
-    // A small empty frame above the words.
+    // A small empty frame above the words, in hairlines.
     let mark = Rect::from_center_size(c - vec2(0.0, 18.0), vec2(22.0, 16.0));
-    p.rect_stroke(mark, Rounding::ZERO, stroke(1.0, white(0.3)));
-    p.line_segment([mark.left_bottom(), mark.right_top()], stroke(1.0, white(0.16)));
+    border(&p, mark, 1.0, white(0.3));
+    p.line_segment([mark.left_bottom(), mark.right_top()], stroke(px(&p), white(0.16)));
     let font = FontId::proportional(12.5);
-    let galley = p.layout(sentence.to_string(), font, Color32::from_rgb(0x9F, 0xB4, 0xC4), (r.width() - 24.0).max(60.0));
+    let galley = p.layout(sentence.to_string(), font, MUTED, (r.width() - 24.0).max(60.0));
     p.galley(pos2(c.x - galley.size().x * 0.5, c.y), galley, Color32::PLACEHOLDER);
 }
 
@@ -771,21 +827,21 @@ pub fn failed(ui: &mut Ui, r: Rect, what: &str) -> bool {
     keys(ui, egui::Id::new(("retry", r.min.x as i32, r.min.y as i32)), c.x + width * 0.5, bottom, &[("[ RETRY ]", true, "Try again")], 1.0).0.is_some()
 }
 
-/// What went wrong, under a warning triangle (a painter's: no `[ RETRY ]`).
+/// What went wrong, under the trouble mark: a diamond in hairlines (a painter's: no `[ RETRY ]`).
 pub fn failed_on(p: &Painter, r: Rect, what: &str) {
     let p = p.with_clip_rect(r.intersect(p.clip_rect()));
     let c = r.center();
-    // Short blocks keep the sentence and drop the triangle.
+    // Short blocks keep the sentence and drop the mark.
     let tall = r.height() >= 96.0;
     if tall {
-        let top = c - vec2(0.0, 40.0);
-        let tri = [top, top + vec2(11.0, 19.0), top + vec2(-11.0, 19.0)];
-        p.add(egui::Shape::closed_line(tri.to_vec(), stroke(1.5, FAULT)));
-        p.line_segment([top + vec2(0.0, 7.0), top + vec2(0.0, 13.0)], stroke(1.5, FAULT));
-        p.circle_filled(top + vec2(0.0, 16.0), 0.9, FAULT);
+        let m = c - vec2(0.0, 30.0);
+        let diamond = vec![m + vec2(0.0, -11.0), m + vec2(11.0, 0.0), m + vec2(0.0, 11.0), m + vec2(-11.0, 0.0)];
+        p.add(egui::Shape::closed_line(diamond, stroke(1.2, FAULT)));
+        p.line_segment([m + vec2(0.0, -5.0), m + vec2(0.0, 1.5)], stroke(1.2, FAULT));
+        p.circle_filled(m + vec2(0.0, 4.5), 0.9, FAULT);
     }
     let font = FontId::proportional(12.5);
-    let galley = p.layout(what.to_string(), font, Color32::from_rgb(0xE6, 0xEE, 0xF6), (r.width() - 24.0).max(60.0));
+    let galley = p.layout(what.to_string(), font, TEXT, (r.width() - 24.0).max(60.0));
     let y = if tall { c.y - 12.0 } else { c.y - galley.size().y * 0.5 };
     p.galley(pos2(c.x - galley.size().x * 0.5, y), galley, Color32::PLACEHOLDER);
 }
@@ -885,8 +941,9 @@ mod tests {
             }
         };
         let shapes: Vec<_> = out.shapes.iter().map(|s| strongest(&s.shape)).collect();
-        assert_eq!(shapes.len(), 1 + SCRATCHES, "one mesh and the scratches");
-        assert!(shapes[0] <= EDGE_FALLOFF && shapes[1..].iter().all(|a| *a > 0 && *a <= 20), "{shapes:?}");
+        // (One mesh: the scratches went with the film look, nothing ornamental on the glass.)
+        assert_eq!(shapes.len(), 1, "one mesh");
+        assert!(shapes[0] <= EDGE_FALLOFF, "{shapes:?}");
         // "White at a share" is what it says: a twentieth lifts a dark surface by a twentieth.
         assert_eq!(white(0.05), Color32::from_rgba_premultiplied(13, 13, 13, 13));
         let wait = out.viewport_output.values().map(|v| v.repaint_delay).min().unwrap_or(Duration::MAX);
@@ -896,10 +953,41 @@ mod tests {
         assert!((0..50).all(|_| a() == b()) && (0..50).all(|_| (0.0..1.0).contains(&a())));
     }
 
+    /// Sharp at any scaling: frames and brackets sit on whole physical pixels at 100,
+    /// 125 and 150 %, one pixel thin (brackets two).
+    #[test]
+    fn hairlines_sit_on_whole_pixels_at_any_scaling() {
+        for ppp in [1.0f32, 1.25, 1.5] {
+            for v in [0.0f32, 0.3, 10.49, 117.77] {
+                let at = snap(v, ppp) * ppp;
+                assert!((at - at.round()).abs() < 1e-3 && (snap(v, ppp) - v).abs() <= 0.5 / ppp + 1e-4, "{v} at {ppp}");
+            }
+            let ctx = egui::Context::default();
+            ctx.set_pixels_per_point(ppp);
+            let out = ctx.run(egui::RawInput::default(), |ctx| {
+                let p = ctx.layer_painter(egui::LayerId::background());
+                let r = Rect::from_min_max(pos2(10.3, 20.6), pos2(210.45, 140.2));
+                border(&p, r, 1.0, Color32::WHITE);
+                corners(&p, r, BRACKET_ARM, Color32::WHITE, 0.0);
+            });
+            let rects: Vec<Rect> = out.shapes.iter().filter_map(|s| if let egui::Shape::Rect(r) = &s.shape { Some(r.rect) } else { None }).collect();
+            assert_eq!(rects.len(), 4 + 8, "four sides, eight arms at {ppp}");
+            for (k, r) in rects.iter().enumerate() {
+                for edge in [r.left(), r.right(), r.top(), r.bottom()] {
+                    assert!((edge * ppp - (edge * ppp).round()).abs() < 1e-3, "{r:?} off the pixel grid at {ppp}");
+                }
+                let thin = (r.width().min(r.height()) * ppp).round();
+                assert_eq!(thin, if k < 4 { 1.0 } else { 2.0 }, "{r:?} at {ppp}");
+            }
+        }
+    }
+
     /// A narrow block keeps its title whole: its keys go, the last first, and the first stays.
     #[test]
     fn a_narrow_header_lets_its_keys_go_before_its_title() {
         let ctx = egui::Context::default();
+        // (The keys are lettered in the HUD's own label face.)
+        crate::gui::install_fonts(&ctx);
         let labels = [("[ CLOSE ]", false, ""), ("[ DETACH ]", false, ""), ("[ PIN ]", false, "")];
         let mut fits = Vec::new();
         let _ = ctx.run(egui::RawInput::default(), |ctx| {
