@@ -372,6 +372,17 @@ fn board() -> Vec<Value> {
     items
 }
 
+/// His checklists (shopping, to-do), for the phone: each list's id, title and items.
+fn lists(widgets: Vec<crate::widgets::DynamicWidgetSpec>) -> Vec<Value> {
+    widgets
+        .into_iter()
+        .filter_map(|w| match w.kind {
+            crate::widgets::WidgetKind::Checklist { items } => Some(json!({ "id": w.id, "title": w.title, "items": items })),
+            _ => None,
+        })
+        .collect()
+}
+
 async fn chat(app: &Jai, text: &str) -> Value {
     let mut events = app.subscribe();
     app.handle_command(HudCommand::Chat { text: text.to_string() }).await;
@@ -533,9 +544,22 @@ async fn handle<S: AsyncRead + AsyncWrite + Unpin>(mut stream: S, app: Jai, peer
                     "protocols": tools.protocols.list().iter().map(|p| p.name.clone()).collect::<Vec<_>>(),
                     "wake_relay_url": tools.config.read(|c| c.satellite.wake_relay_url.clone()),
                     "board": board(),
+                    "lists": lists(tools.widgets.widgets()),
                 }),
             )
             .await;
+        }
+        // A tick on the phone: the item at `index` of the list `id` flips, as a click on the PC does.
+        ("POST", "/api/list") => {
+            let body = req.json();
+            let (id, index) = (body["id"].as_str().unwrap_or("").to_string(), body["index"].as_u64());
+            let known = lists(tools.widgets.widgets()).iter().any(|l| l["id"] == id.as_str() && index.is_some_and(|i| (i as usize) < l["items"].as_array().map_or(0, Vec::len)));
+            if let (true, Some(i)) = (known, index) {
+                tools.widgets.toggle_item(&id, i as usize);
+                crate::gui::refresh();
+                info!("[SATELLITE] {peer} ticked item {i} of '{id}'");
+            }
+            respond_json(&mut stream, "200 OK", &json!({ "ok": known })).await;
         }
         ("GET", "/api/tunnel-health") => {
             respond_json(&mut stream, "200 OK", &json!({"service":"jai-satellite"})).await;
@@ -838,6 +862,22 @@ pub fn has_certificate() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// His checklists reach the phone with their items; other widgets stay on the PC.
+    #[test]
+    fn his_lists_go_to_the_phone_and_nothing_else() {
+        let path = std::env::temp_dir().join(format!("jai_phone_lists_{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        {
+            let e = crate::widgets::WidgetEngine::open(&path).unwrap();
+            e.create_or_update(&json!({"type": "Checklist", "title": "Shopping list", "items": ["Milk", "Eggs"]})).unwrap();
+            e.create_or_update(&json!({"type": "gauge", "title": "CPU load", "source": "CPU", "unit": "%"})).unwrap();
+            e.toggle_item("shopping_list", 1);
+            assert_eq!(lists(e.widgets()), vec![json!({"id": "shopping_list", "title": "Shopping list", "items": [{"text": "Milk", "done": false}, {"text": "Eggs", "done": true}]})]);
+            assert!(PAGE.contains("renderLists(j.lists") && PAGE.contains("\"/api/list\""), "the page shows them and sends its ticks");
+        }
+        let _ = std::fs::remove_file(&path);
+    }
 
     /// The phone page's control buttons send orders he carries out on the fast path, without
     /// the language model: each one is an order the parser knows.

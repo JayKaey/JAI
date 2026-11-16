@@ -361,10 +361,10 @@ pub fn convert(value: f64, from: &str, to: &str) -> Result<(f64, &'static str, &
 }
 
 static CONVERT: LazyLock<Regex> = LazyLock::new(|| {
-    re(r"^(?:jai\s*,?\s*)?(?:(?:please\s+)?(?:convert|change|turn|rechne|umrechnen|wandle)\s+|what(?:'s| is)\s+|whats\s+|how much is\s+|wie ?viel (?:sind|ist)\s+|was sind\s+)?(-?[\d.,]+)\s*([a-zäöüß°²/ ]{1,24}?)\s+(?:to|in|into|as|nach|zu|in)\s+([a-zäöüß°²/ ]{1,24}?)(?:\s+(?:um|umrechnen|please|bitte))?[?.!]*$")
+    re(r"^(?:jai\s*,?\s*)?(?:(?:please\s+)?(?:convert|change|turn|rechne|umrechnen|wandle)\s+|what(?:'s| is)\s+|whats\s+|how much is\s+|wie ?viel (?:sind|ist)\s+|was sind\s+)?(-?[\d.,]+)\s*([a-zäöüß°²/ €£$]{1,24}?)\s+(?:to|in|into|as|nach|zu|in)\s+([a-zäöüß°²/ €£$]{1,24}?)(?:\s+(?:um|umrechnen|please|bitte))?[?.!]*$")
 });
 static HOW_MANY: LazyLock<Regex> = LazyLock::new(|| {
-    re(r"^(?:jai\s*,?\s*)?(?:how many|wie ?viele?)\s+([a-zäöüß°²/ ]{1,24}?)\s+(?:are\s+in|are|in|sind in|sind|hat|haben)\s+(?:a\s+|an\s+|one\s+|ein\s+|einer\s+|einem\s+)?(-?[\d.,]*)\s*([a-zäöüß°²/ ]{1,24}?)[?.!]*$")
+    re(r"^(?:jai\s*,?\s*)?(?:how many|wie ?viele?)\s+([a-zäöüß°²/ €£$]{1,24}?)\s+(?:are\s+in|are|in|sind in|sind|hat|haben)\s+(?:a\s+|an\s+|one\s+|ein\s+|einer\s+|einem\s+)?(-?[\d.,]*)\s*([a-zäöüß°²/ €£$]{1,24}?)[?.!]*$")
 });
 
 /// "convert 5 miles to km", "100 F in C", "how many grams in 3 pounds".
@@ -377,6 +377,9 @@ pub fn answer_conversion(text: &str) -> Option<String> {
         let v = if c[2].is_empty() { 1.0 } else { c[2].parse::<f64>().ok()? };
         (v, c[3].trim().to_string(), c[1].trim().to_string())
     };
+    if let Some(line) = money(value, &from, &to, chrono::Local::now().date_naive()) {
+        return Some(line);
+    }
     let (out, from_name, to_name) = convert(value, &from, &to).ok()?;
     let plural = |n: f64, name: &str| if (n - 1.0).abs() < 1e-9 { name.trim_end_matches('s').to_string() } else { name.to_string() };
     // (A temperature to a tenth of a degree: "22.222 degrees" is nothing anyone says.)
@@ -388,6 +391,78 @@ pub fn answer_conversion(text: &str) -> Option<String> {
         format_number((out * digits).round() / digits),
         if to_name.starts_with("degrees") || to_name == "kelvin" { to_name.to_string() } else { plural(out, to_name) },
     ))
+}
+
+// ----------------------------------------------------------------------- currencies ----
+
+/// (ECB code, the names he says, the name said back.) "Pounds" is money only beside another currency.
+const CURRENCIES: &[(&str, &[&str], &str)] = &[
+    ("EUR", &["eur", "euro", "euros", "€"], "euros"),
+    ("USD", &["usd", "dollar", "dollars", "us dollar", "us dollars", "$", "us-dollar"], "US dollars"),
+    ("GBP", &["gbp", "pound", "pounds", "british pounds", "pound sterling", "pfund", "britische pfund", "£"], "pounds"),
+    ("CHF", &["chf", "swiss franc", "swiss francs", "franken", "schweizer franken"], "Swiss francs"),
+    ("JPY", &["jpy", "yen"], "yen"),
+    ("CNY", &["cny", "yuan", "renminbi"], "yuan"),
+    ("PLN", &["pln", "zloty", "złoty"], "zloty"),
+    ("CZK", &["czk", "czech koruna", "czech crowns", "tschechische kronen"], "Czech crowns"),
+    ("SEK", &["sek", "swedish krona", "swedish kronor", "schwedische kronen"], "Swedish kronor"),
+    ("NOK", &["nok", "norwegian krone", "norwegian kroner", "norwegische kronen"], "Norwegian kroner"),
+    ("DKK", &["dkk", "danish krone", "danish kroner", "dänische kronen"], "Danish kroner"),
+    ("CAD", &["cad", "canadian dollar", "canadian dollars", "kanadische dollar"], "Canadian dollars"),
+    ("AUD", &["aud", "australian dollar", "australian dollars", "australische dollar"], "Australian dollars"),
+    ("TRY", &["lira", "turkish lira", "türkische lira"], "Turkish lira"),
+    ("HUF", &["huf", "forint"], "forint"),
+    ("INR", &["inr", "rupee", "rupees", "rupien"], "rupees"),
+    ("KRW", &["krw", "won"], "won"),
+];
+
+/// The European Central Bank's reference rates: the day they are for, and units per euro.
+static RATES: std::sync::RwLock<Option<(chrono::NaiveDate, Vec<(String, f64)>)>> = std::sync::RwLock::new(None);
+
+fn currency(name: &str) -> Option<(&'static str, &'static str)> {
+    let n = name.trim().trim_end_matches(['.', '?', '!']).to_lowercase();
+    let n = n.strip_prefix("the ").unwrap_or(&n).trim();
+    CURRENCIES.iter().find(|(_, names, _)| names.contains(&n)).map(|(code, _, said)| (*code, *said))
+}
+
+/// The day and rates of `eurofxref-daily.xml`.
+pub fn parse_ecb(xml: &str) -> Option<(chrono::NaiveDate, Vec<(String, f64)>)> {
+    static DAY: LazyLock<Regex> = LazyLock::new(|| re(r"time='(\d{4}-\d{2}-\d{2})'"));
+    static RATE: LazyLock<Regex> = LazyLock::new(|| re(r"currency='([A-Z]{3})'\s+rate='([\d.]+)'"));
+    let day = chrono::NaiveDate::parse_from_str(&DAY.captures(xml)?[1], "%Y-%m-%d").ok()?;
+    let rates: Vec<(String, f64)> = RATE.captures_iter(xml).filter_map(|c| Some((c[1].to_string(), c[2].parse().ok().filter(|r: &f64| *r > 0.0)?))).collect();
+    (!rates.is_empty()).then_some((day, rates))
+}
+
+/// Keeps the rates for the conversions (and in the kit store, for the next start offline).
+pub fn set_rates(day: chrono::NaiveDate, rates: Vec<(String, f64)>, keep: bool) {
+    if keep {
+        let _ = crate::kit::put("fx_rates", "ecb", &serde_json::json!({ "day": day.to_string(), "rates": rates }));
+    }
+    *RATES.write().unwrap_or_else(|e| e.into_inner()) = Some((day, rates));
+}
+
+/// The day of the rates at hand (loaded from the kit store the first time).
+pub fn rates_day() -> Option<chrono::NaiveDate> {
+    if RATES.read().unwrap_or_else(|e| e.into_inner()).is_none() {
+        let kept = crate::kit::get("fx_rates", "ecb")?;
+        let day = chrono::NaiveDate::parse_from_str(kept["day"].as_str()?, "%Y-%m-%d").ok()?;
+        let rates = serde_json::from_value(kept["rates"].clone()).ok()?;
+        set_rates(day, rates, false);
+    }
+    RATES.read().unwrap_or_else(|e| e.into_inner()).as_ref().map(|(day, _)| *day)
+}
+
+/// "50 dollars in euros" at the ECB's rate; the rate's day is said once it is days old.
+fn money(value: f64, from: &str, to: &str, today: chrono::NaiveDate) -> Option<String> {
+    let ((from_code, from_said), (to_code, to_said)) = (currency(from)?, currency(to)?);
+    let day = rates_day()?;
+    let per_euro = |code: &str| -> Option<f64> { if code == "EUR" { Some(1.0) } else { RATES.read().ok()?.as_ref()?.1.iter().find(|(c, _)| c == code).map(|(_, r)| *r) } };
+    let out = value / per_euro(from_code)? * per_euro(to_code)?;
+    // (Fridays' rates serve the weekend; older than that is worth saying.)
+    let when = if (today - day).num_days() > 3 { format!(", at the rate of {}", day.format("%-d %B")) } else { String::new() };
+    let one = if (value - 1.0).abs() < 1e-9 { from_said.trim_end_matches('s') } else { from_said };
+    Some(format!("{} {one} is {out:.2} {to_said}{when}, Sir.", format_number(value)))
 }
 
 // ---------------------------------------------------------------------------- dates ----
@@ -817,5 +892,23 @@ mod tests {
         for question in ["How many people are in the room?", "How many planets are there?", "What is the first thing to do?", "Which day is the best one?"] {
             assert_eq!(try_answer(question), None, "{question}");
         }
+    }
+
+    /// Money at the ECB's rate (a copy of its daily file); weight stays weight.
+    #[test]
+    fn money_is_converted_at_the_central_bank_s_rate() {
+        let xml = "<Cube><Cube time='2026-11-13'>\n<Cube currency='USD' rate='1.1000'/>\n<Cube currency='GBP' rate='0.8000'/>\n<Cube currency='JPY' rate='175.00'/></Cube></Cube>";
+        let (day, rates) = parse_ecb(xml).unwrap();
+        assert_eq!((day.to_string(), rates.len()), ("2026-11-13".to_string(), 3));
+        set_rates(day, rates, false);
+        let friday = chrono::NaiveDate::from_ymd_opt(2026, 11, 13).unwrap();
+        assert_eq!(money(50.0, "dollars", "euros", friday).as_deref(), Some("50 US dollars is 45.45 euros, Sir."));
+        assert_eq!(money(1.0, "€", "pounds", friday + chrono::Duration::days(3)).as_deref(), Some("1 euro is 0.80 pounds, Sir."), "Monday: Friday's rate");
+        assert_eq!(money(100.0, "pfund", "dollar", friday + chrono::Duration::days(6)).as_deref(), Some("100 pounds is 137.50 US dollars, at the rate of 13 November, Sir."));
+        assert!(answer_conversion("how much is 50 dollars in euros").is_some_and(|l| l.starts_with("50 US dollars is ")));
+        assert_eq!(crate::phrasings::route("How much is 50 dollars in euros?").map(|r| r.0).as_deref(), Some("(answer)"), "answered at once, not searched");
+        assert_eq!(answer_conversion("convert 3 pounds to kilograms").as_deref(), Some("3 pounds is 1.361 kilograms, Sir."));
+        assert_eq!(money(5.0, "dollars", "rubles", friday), None, "not on the ECB's list");
+        assert_eq!(parse_ecb("<html>down</html>"), None);
     }
 }

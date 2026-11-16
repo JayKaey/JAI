@@ -91,6 +91,11 @@
   .block b { display:block; font:600 15px var(--display); letter-spacing:1.2px; color:var(--text); text-transform:uppercase; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .block span { display:block; font-size:12px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .block button { flex:none; min-height:36px; padding:6px 12px; }
+  /* His lists: a box to tick on each line, the list's name above them. */
+  .listname { display:block; font:600 15px var(--display); letter-spacing:1.2px; color:var(--text); text-transform:uppercase; margin-top:8px; }
+  .tick { display:flex; gap:10px; align-items:center; min-height:40px; border-bottom:1px solid var(--line); }
+  .tick input { width:22px; height:22px; accent-color:var(--accent); }
+  .tick.done span { color:var(--muted); text-decoration:line-through; }
   .quick { display:flex; gap:7px; overflow-x:auto; padding-bottom:4px; scrollbar-width:none; }
   .quick::-webkit-scrollbar { display:none; }
   .quick.controls { margin-top:6px; }
@@ -161,6 +166,11 @@
 <details class="card" open>
   <summary class="title">On his board</summary>
   <div class="inner"><div id="board" class="note">Nothing is open.</div></div>
+</details>
+
+<details class="card" open>
+  <summary class="title">His lists</summary>
+  <div class="inner"><div id="lists" class="note">No lists yet.</div></div>
 </details>
 
 <details class="card">
@@ -406,6 +416,24 @@ function renderBoard(items) {
   }));
 }
 
+// ---- his lists: a tick here ticks it on the PC ----------------------------------------
+function renderLists(lists) {
+  const now = JSON.stringify(lists);
+  if ($("lists").dataset.now === now) return;
+  $("lists").dataset.now = now;
+  if (!lists.length) { $("lists").textContent = "No lists yet."; return; }
+  $("lists").replaceChildren(...lists.flatMap(l => {
+    const name = document.createElement("b"); name.className = "listname"; name.textContent = l.title || "List";
+    return [name, ...l.items.map((item, index) => {
+      const row = document.createElement("label"); row.className = "tick" + (item.done ? " done" : "");
+      const box = document.createElement("input"); box.type = "checkbox"; box.checked = item.done;
+      box.onchange = async () => { box.disabled = true; try { await post("/api/list", { id: l.id, index }); } catch (e) {} setTimeout(poll, 300); };
+      const text = document.createElement("span"); text.textContent = item.text;
+      row.append(box, text); return row;
+    })];
+  }));
+}
+
 // ---- state & pushed content ---------------------------------------------------------
 async function poll() {
   try {
@@ -430,6 +458,7 @@ async function poll() {
     if(j.wake_relay_url){try{const u=new URL(j.wake_relay_url);if(u.protocol==="https:"){$("wakeRelay").href=u.href;$("wakeRelay").classList.remove("hidden");}}catch(e){}}
     renderWorkout(j.workout);
     renderBoard(j.board || []);
+    renderLists(j.lists || []);
     for (const m of j.outbox || []) { since = Math.max(since, m.id); pushed(m.text); }
     if ($("linkBadge").textContent !== "LINK ONLINE") { $("linkBadge").textContent = "LINK ONLINE"; $("linkBadge").className = "badge on"; }
   } catch (e) { $("linkBadge").textContent = "LINK LOST"; $("linkBadge").className = "badge warn"; }

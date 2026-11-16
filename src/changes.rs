@@ -147,6 +147,10 @@ pub const RELEASES: &[Release] = &[
             added("Copy a window's text", "\"Copy the text of this window\": read by Windows' own OCR onto the clipboard."),
             added("Flashcards from a screenshot", "\"Make flashcards from my latest screenshot\": one card per vocabulary line."),
             better("Reading the screen without PowerShell", "Windows' own OCR is called directly: faster, and no window flashes."),
+            added("Your Steam wishlist on sale", "A new discount is told once; \"anything on my wishlist on sale?\" lists them."),
+            added("Money in other currencies", "\"50 dollars in euros\" at the central bank's daily rate, offline from the last copy."),
+            added("Official weather warnings", "The weather service's warnings for your area, each told once; \"turn off the weather warnings\"."),
+            added("Your lists on the phone", "Shopping and to-do lists on the phone page; a tick there ticks it on the PC."),
         ],
     },
     Release {

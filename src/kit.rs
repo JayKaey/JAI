@@ -166,7 +166,7 @@ pub fn only_looks(name: &str, args: &Value) -> bool {
         && (matches!(action, "show" | "list" | "status" | "check" | "report")
             || matches!(name, "evening_recap" | "internet_doctor" | "show_changes" | "hearing_log" | "next_lesson" | "spell_word" | "equation" | "what_to_wear")
             || (matches!(name, "put_away" | "birthdays") && matches!(action, "where" | "when"))
-            || (name == "games" && matches!(action, "playtime" | "news" | "free" | "vram" | "download" | "routines" | "unplayed"))
+            || (name == "games" && matches!(action, "playtime" | "news" | "free" | "vram" | "download" | "routines" | "unplayed" | "wishlist"))
             || (name == "school_day" && crate::kit_school::school_only_looks(args))
             || (name == "pc_helper" && crate::kit_pc::only_looks(args))
             || (name == "code_helper" && crate::kit_code::only_looks(args)))

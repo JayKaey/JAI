@@ -41,11 +41,14 @@ pub struct LiveLayerSettings {
     pub rain_heads_up_spoken: bool,
     /// A word five minutes before a bright ISS pass over Sir.
     pub iss_heads_up: bool,
+    /// The German weather service's official warnings for his position (moderate and worse),
+    /// each told once.
+    pub weather_warnings: bool,
 }
 
 impl Default for LiveLayerSettings {
     fn default() -> Self {
-        Self { rain_heads_up: true, rain_heads_up_spoken: false, iss_heads_up: false }
+        Self { rain_heads_up: true, rain_heads_up_spoken: false, iss_heads_up: false, weather_warnings: true }
     }
 }
 
@@ -68,6 +71,11 @@ pub async fn get_json(url: &str) -> Result<Value, String> {
 }
 
 pub async fn get_json_within(url: &str, timeout: Duration) -> Result<Value, String> {
+    let body = get_body(url, timeout).await?;
+    serde_json::from_slice(&body).map_err(|e| format!("unreadable answer: {e}"))
+}
+
+async fn get_body(url: &str, timeout: Duration) -> Result<Vec<u8>, String> {
     if offline() {
         return Err("offline".into());
     }
@@ -77,8 +85,7 @@ pub async fn get_json_within(url: &str, timeout: Duration) -> Result<Value, Stri
         debug!("[LIVE] {url} → HTTP {status}");
         return Err(format!("the service answered HTTP {}", status.as_u16()));
     }
-    let body = response.bytes().await.map_err(|e| e.to_string())?;
-    serde_json::from_slice(&body).map_err(|e| format!("unreadable answer: {e}"))
+    Ok(response.bytes().await.map_err(|e| e.to_string())?.to_vec())
 }
 
 // --------------------------------------------------------------------------- geometry ----
@@ -456,22 +463,32 @@ fn alerts_tool(tools: &ToolContext, args: &Value) -> Result<(String, String), St
             change(|s| s.iss_heads_up = false);
             "No more space station alerts, Sir."
         }
+        "warnings_on" => {
+            change(|s| s.weather_warnings = true);
+            "I'll pass on the weather service's warnings for your area, Sir."
+        }
+        "warnings_off" => {
+            change(|s| s.weather_warnings = false);
+            "No more weather warnings, Sir."
+        }
         _ => "",
     };
     let s = tools.config.read(|c| c.live_layers.clone());
     let on_off = |b: bool| if b { "on" } else { "off" };
     let display = format!(
-        "Live heads-ups\nRain note: {}{}\nISS pass: {}",
+        "Live heads-ups\nRain note: {}{}\nISS pass: {}\nWeather warnings: {}",
         on_off(s.rain_heads_up),
         if s.rain_heads_up_spoken { " (spoken)" } else { "" },
-        on_off(s.iss_heads_up)
+        on_off(s.iss_heads_up),
+        on_off(s.weather_warnings)
     );
     let spoken = if spoken.is_empty() {
         format!(
-            "The rain note is {}{}, and the space station alert is {}, Sir.",
+            "The rain note is {}{}, the space station alert is {}, and the weather warnings are {}, Sir.",
             on_off(s.rain_heads_up),
             if s.rain_heads_up && s.rain_heads_up_spoken { " and spoken" } else { "" },
-            on_off(s.iss_heads_up)
+            on_off(s.iss_heads_up),
+            on_off(s.weather_warnings)
         )
     } else {
         spoken.to_string()
@@ -582,6 +599,10 @@ fn voice_call(text: &str) -> Option<(&'static str, Value)> {
     let rainy = has(&["rain", "regen", "regnet", "regnen", "shower", "schauer", "niesel", "drizzle"]);
     let alert_words = has(&["warn me", "tell me before", "let me know before", "alert me", "heads-up", "heads up", "notify me", "warne mich", "bescheid bevor", "benachrichtige", "rain alert", "rain warning", "regenwarnung", "regen-warnung", "iss alert", "pass alert", "tell me when the iss", "tell me when the space station", "let me know when the iss", "sag mir wenn die iss", "sag mir bescheid wenn die iss"]);
     let off = word(&["stop", "off", "disable", "aus", "deactivate", "no", "keine", "nicht"]) || has(&["dont", "do not", "no more", "turn off", "switch off", "nicht mehr", "keine mehr"]);
+    // "Turn off the weather warnings", "warn me about severe weather" (a question about them is not a switch).
+    if has(&["weather warning", "weather alert", "storm warning", "severe weather", "unwetter", "wetterwarnung", "dwd warning"]) && (off || alert_words || word(&["on", "enable", "an", "ein"]) || has(&["turn on", "switch on"])) {
+        return Some(("live_alerts", json!({ "action": if off { "warnings_off" } else { "warnings_on" } })));
+    }
     if alert_words {
         if satellite_named(&s).is_some_and(|(_, iss)| iss) {
             return Some(("live_alerts", json!({ "action": if off { "iss_off" } else { "iss_on" } })));
@@ -795,7 +816,41 @@ fn when_label(when: &crate::weather_history::When) -> String {
 
 // ---------------------------------------------------------------------------- watcher ----
 
-/// The rain and ISS heads-ups. Off in tests and while the live self-test runs.
+/// Official warnings (DWD, through Bright Sky) not told yet: moderate and worse, still in
+/// force, each told once (marked in the kit store, so a restart does not tell it again).
+fn untold_warnings(v: &Value, now: chrono::DateTime<Local>) -> Vec<String> {
+    let at = |a: &Value, key: &str| chrono::DateTime::parse_from_rfc3339(a[key].as_str()?).ok().map(|t| t.with_timezone(&Local));
+    let mut lines = Vec::new();
+    for a in v["alerts"].as_array().into_iter().flatten().filter(|a| matches!(a["severity"].as_str(), Some("moderate" | "severe" | "extreme"))) {
+        let (Some(event), Some(onset)) = (a["event_en"].as_str(), at(a, "onset")) else { continue };
+        let expires = at(a, "expires");
+        // (Renewed warnings get new ids: the event and its first day are the warning.)
+        let key = format!("{}:{}", a["event_code"], onset.date_naive());
+        if expires.is_some_and(|e| e <= now) || crate::kit::get("weather_warning_told", &key).is_some() {
+            continue;
+        }
+        if !crate::platform::in_test_session() {
+            let _ = crate::kit::put("weather_warning_told", &key, &json!(true));
+        }
+        let clock = |t: chrono::DateTime<Local>| {
+            let days = (t.date_naive() - now.date_naive()).num_days();
+            format!("{}{}", t.format("%H:%M"), if days == 0 { String::new() } else if days == 1 { " tomorrow".into() } else { t.format(" on %A").to_string() })
+        };
+        // (00:00 ends the day before: "until the end of Thursday", not "00:00 on Friday".)
+        let day_end = |e: chrono::DateTime<Local>| match (e.date_naive() - now.date_naive()).num_days() {
+            1 => "midnight".to_string(),
+            2 => "the end of tomorrow".to_string(),
+            _ => format!("the end of {}", (e - chrono::Duration::days(1)).format("%A")),
+        };
+        let from = if onset > now { format!(" from {}", clock(onset)) } else { String::new() };
+        let until = expires.map(|e| format!(" until {}", if e.format("%H:%M").to_string() == "00:00" { day_end(e) } else { clock(e) })).unwrap_or_default();
+        lines.push(format!("Weather warning, Sir: {event}{from}{until}."));
+    }
+    lines
+}
+
+/// The rain and ISS heads-ups, the weather warnings, and the daily look-ups that answer offline
+/// later (exchange rates, his wishlist's sales). Off in tests and while the live self-test runs.
 pub fn start(app: crate::app::Jai, stop: CancellationToken) {
     let _ = TOOLS.set(app.tools().clone());
     if cfg!(test) {
@@ -813,6 +868,9 @@ pub fn start(app: crate::app::Jai, stop: CancellationToken) {
         let mut iss_checked: Option<Instant> = None;
         let mut iss_passes: Vec<Pass> = Vec::new();
         let mut iss_said: Vec<i64> = Vec::new();
+        let mut warnings_checked: Option<Instant> = None;
+        let (mut rates_tried, mut rates_fetched): (Option<Instant>, Option<NaiveDate>) = (None, None);
+        let mut wishlist_checked: Option<Instant> = None;
         loop {
             tokio::select! {
                 _ = stop.cancelled() => return,
@@ -840,6 +898,36 @@ pub fn start(app: crate::app::Jai, stop: CancellationToken) {
                         }
                     }
                 }
+            }
+            // The weather service's warnings: every quarter of an hour, each told once.
+            if settings.weather_warnings && warnings_checked.is_none_or(|t| t.elapsed() >= Duration::from_secs(900)) {
+                warnings_checked = Some(Instant::now());
+                if let Ok(spot) = here().await {
+                    if let Ok(v) = get_json(&format!("https://api.brightsky.dev/alerts?lat={:.3}&lon={:.3}", spot.lat, spot.lon)).await {
+                        for line in untold_warnings(&v, Local::now()) {
+                            info!("[LIVE] {line}");
+                            if proactive {
+                                crate::announcements::say(line);
+                            } else {
+                                app.notice(line);
+                            }
+                        }
+                    }
+                }
+            }
+            // The ECB's rates for "50 dollars in euros": once a day (an hour between tries).
+            let today = Local::now().date_naive();
+            if rates_fetched != Some(today) && rates_tried.is_none_or(|t| t.elapsed() >= Duration::from_secs(3600)) {
+                rates_tried = Some(Instant::now());
+                if let Some((day, rates)) = get_body("https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml", Duration::from_secs(12)).await.ok().and_then(|xml| crate::calc::parse_ecb(&String::from_utf8_lossy(&xml))) {
+                    rates_fetched = Some(today);
+                    crate::calc::set_rates(day, rates, true);
+                }
+            }
+            // His Steam wishlist's sales: every six hours.
+            if wishlist_checked.is_none_or(|t| t.elapsed() >= Duration::from_secs(6 * 3600)) {
+                wishlist_checked = Some(Instant::now());
+                crate::kit_games::check_wishlist().await;
             }
             // The ISS: the next twelve hours' passes every half hour; a word five minutes
             // before a bright one (high in a dark sky).
@@ -917,6 +1005,31 @@ mod tests {
         assert_eq!(said("Where is the ISS?"), None);
         assert_eq!(said("Switch to satellite view."), None);
         assert_eq!(said("Show me the satellite link for my phone."), None);
+    }
+
+    /// Bright Sky's answer (its real shape, 2026-11-16): the moderate storm warning is told once,
+    /// with its hours; a minor or an expired one never.
+    #[test]
+    fn a_weather_warning_is_told_once_with_its_hours() {
+        use chrono::TimeZone;
+        let now = Local.with_ymd_and_hms(2026, 11, 16, 7, 0, 0).unwrap();
+        let at = |h: i64| (now + chrono::Duration::hours(h)).to_rfc3339();
+        let v = json!({"alerts": [
+            {"event_code": 9053, "event_en": "storm-force gusts", "severity": "moderate", "onset": at(1), "expires": at(20)},
+            {"event_code": 9022, "event_en": "frost", "severity": "minor", "onset": at(0), "expires": at(5)},
+            {"event_code": 9057, "event_en": "gale-force gusts", "severity": "severe", "onset": at(-10), "expires": at(-1)}
+        ]});
+        assert_eq!(untold_warnings(&v, now), vec!["Weather warning, Sir: storm-force gusts from 08:00 until 03:00 tomorrow.".to_string()]);
+        assert!(untold_warnings(&v, now).is_empty(), "told once");
+        let midnight = Local.with_ymd_and_hms(2026, 11, 19, 0, 0, 0).unwrap().to_rfc3339();
+        let v = json!({"alerts": [{"event_code": 9031, "event_en": "thunderstorms", "severity": "moderate", "onset": at(-1), "expires": midnight}]});
+        assert_eq!(untold_warnings(&v, now), vec!["Weather warning, Sir: thunderstorms until the end of Wednesday.".to_string()]);
+        assert_eq!(said("Turn off the weather warnings."), Some(("live_alerts", json!({"action": "warnings_off"}))));
+        assert_eq!(said("Warn me about severe weather."), Some(("live_alerts", json!({"action": "warnings_on"}))));
+        assert_eq!(said("Keine Unwetterwarnungen mehr."), Some(("live_alerts", json!({"action": "warnings_off"}))));
+        assert_eq!(said("Are there any weather warnings?"), None);
+        let road = crate::phrasings::route("Turn off the weather warnings.");
+        assert_eq!(road.as_ref().map(|(tool, args)| (tool.as_str(), args["set"].as_str())), Some(("open_jai_view", Some("warnings_off"))), "{road:?}");
     }
 
     #[test]

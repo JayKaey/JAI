@@ -213,7 +213,9 @@ static NEWS: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(?:any|is there any|are there any|what's the|whats the|read me the|show me the)?\s*(?:news|updates?|patch notes)\s+(?:for|about|on)\s+(?P<a>.+)$|^(?:is there|was there)\s+(?:an?\s+)?(?:new\s+)?(?:update|patch)\s+(?:for|to)\s+(?P<b>.+)$|^(?P<c>.+?)\s+patch notes$")
 });
 static FREE: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:any|are there any|what are the|show me the|which)?\s*free games(?:\s+(?:this week|on epic|today|right now|are there))?$|^what(?:'s| is) free on epic(?: this week)?$"));
-static VRAM: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:what|who)(?:'s|s| is)\s+(?:using|eating|taking|filling|hogging)\s+(?:up\s+)?(?:all\s+)?(?:of\s+)?(?:my\s+|the\s+)?(?:vram|video memory|gpu memory|graphics memory)$|^vram report$"));
+/// "Anything on my wishlist on sale?", "ist was auf meiner Wunschliste im Angebot?"
+static WISHLIST: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:is\s+)?(?:anything|something|what(?:'s| is)?|which games?)\s+(?:on|from)\s+my\s+(?:steam\s+)?wishlist\s+(?:is\s+)?(?:on sale|discounted|cheaper|reduced)(?:\s+(?:right now|today|now))?$|^(?:steam\s+)?wishlist\s+(?:sales?|deals)$|^(?:ist\s+)?(?:was|etwas|irgendwas)\s+(?:auf|von)\s+meiner\s+(?:steam\s+)?wunschliste\s+(?:im angebot|reduziert|günstiger)$"));
+static VRAM: LazyLock<Regex> =LazyLock::new(|| re(r"^(?:what|who)(?:'s|s| is)\s+(?:using|eating|taking|filling|hogging)\s+(?:up\s+)?(?:all\s+)?(?:of\s+)?(?:my\s+|the\s+)?(?:vram|video memory|gpu memory|graphics memory)$|^vram report$"));
 static DOWNLOAD_WATCH: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:tell me|let me know|notify me|say)\s+when\s+(?:the\s+|my\s+)?(?P<g>.+?)\s+download\s+(?:is\s+)?(?:done|finished|finishes|complete|completes|is complete)$"));
 static DOWNLOAD_ASK: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:how far is|how's|how is)\s+(?:the|my)\s+(?:(?P<g>.+?)\s+)?download$|^is\s+(?:the|my)\s+(?:(?P<h>.+?)\s+)?download\s+(?:done|finished)$"));
 static BEDTIME: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:remind me to |tell me to )?stop (?:gaming|playing) at (?P<t>.+?) on school nights$"));
@@ -266,6 +268,9 @@ pub fn command(s: &str) -> Option<Value> {
     }
     if FREE.is_match(s) {
         return Some(json!({"action": "free"}));
+    }
+    if WISHLIST.is_match(s) {
+        return Some(json!({"action": "wishlist"}));
     }
     if VRAM.is_match(s) {
         return Some(json!({"action": "vram"}));
@@ -363,6 +368,7 @@ pub async fn run(args: &Value) -> Result<String, String> {
         }
         "news" => news(game).await,
         "free" => free_games().await,
+        "wishlist" => wishlist_answer().await,
         "vram" => Ok(vram_report()),
         "watch_download" => {
             let g = find(game).filter(|g| g.manifest.is_some()).ok_or_else(|| format!("I can't find a Steam download of {game}, Sir."))?;
@@ -694,17 +700,131 @@ pub async fn epic_free_now() -> Result<Vec<String>, String> {
     Ok(free_titles(&v))
 }
 
-/// For the briefing: Epic's free games (listed every time) and a line on those not told of yet.
+/// For the briefing: Epic's free games (listed every time) and a line on those, and on his
+/// wishlist's sales, not told of yet.
 pub async fn briefing_free_games() -> (Vec<String>, Option<String>) {
-    let titles = tokio::time::timeout(std::time::Duration::from_secs(6), epic_free_now()).await.ok().and_then(Result::ok).unwrap_or_default();
+    let quick = std::time::Duration::from_secs(6);
+    let (titles, sales) = tokio::join!(tokio::time::timeout(quick, epic_free_now()), tokio::time::timeout(quick, wishlist_sales()));
+    let titles = titles.ok().and_then(Result::ok).unwrap_or_default();
     let new: Vec<&String> = titles.iter().filter(|t| crate::kit::get("free_games_told", t).is_none()).collect();
     if !crate::platform::in_test_session() {
         for t in &new {
             let _ = crate::kit::put("free_games_told", t, &json!(true));
         }
     }
-    let line = (!new.is_empty()).then(|| format!("Free on Epic this week: {}.", new.iter().map(|t| t.as_str()).collect::<Vec<_>>().join(" and ")));
-    (titles, line)
+    let free = (!new.is_empty()).then(|| format!("Free on Epic this week: {}.", new.iter().map(|t| t.as_str()).collect::<Vec<_>>().join(" and ")));
+    let on_sale = sales.ok().and_then(Result::ok).and_then(|sales| sale_line(&untold(&sales)));
+    let line = [free, on_sale].into_iter().flatten().collect::<Vec<_>>().join(" ");
+    (titles, (!line.is_empty()).then_some(line))
+}
+
+// ---------------------------------------------------------------------- the wishlist ----
+
+/// The Steam account last signed in on this PC (`config/loginusers.vdf`: "MostRecent" "1").
+fn steam_id_from(loginusers: &str) -> Option<String> {
+    static USER: LazyLock<Regex> = LazyLock::new(|| re(r#""(\d{17})"\s*\{([^}]*)\}"#));
+    let users: Vec<(String, bool)> = USER.captures_iter(loginusers).map(|c| (c[1].to_string(), vdf_value(&c[2], "MostRecent").as_deref() == Some("1"))).collect();
+    users.iter().find(|(_, recent)| *recent).or(users.first()).map(|(id, _)| id.clone())
+}
+
+/// A discounted game on his wishlist.
+#[derive(Clone, Debug, PartialEq)]
+struct Sale {
+    appid: u64,
+    name: String,
+    pct: u64,
+    price: String,
+    was: String,
+    /// When the discount ends (Unix seconds; 0 when Steam does not say).
+    ends: i64,
+}
+
+/// The discounted ones among `IStoreBrowseService/GetItems`' store items.
+fn sales_from(items: &Value) -> Vec<Sale> {
+    items["response"]["store_items"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|item| {
+            let offer = &item["best_purchase_option"];
+            Some(Sale {
+                appid: item["appid"].as_u64()?,
+                name: item["name"].as_str()?.to_string(),
+                pct: offer["discount_pct"].as_u64().filter(|p| *p > 0)?,
+                price: offer["formatted_final_price"].as_str().unwrap_or("").to_string(),
+                was: offer["formatted_original_price"].as_str().unwrap_or("").to_string(),
+                ends: offer["active_discounts"][0]["discount_end_date"].as_i64().unwrap_or(0),
+            })
+        })
+        .collect()
+}
+
+/// What on his public wishlist is discounted now, the biggest discount first.
+async fn wishlist_sales() -> Result<Vec<Sale>, String> {
+    let id = tokio::task::spawn_blocking(|| steam_path_from_registry().and_then(|root| std::fs::read_to_string(root.join("config").join("loginusers.vdf")).ok()).and_then(|text| steam_id_from(&text)))
+        .await
+        .ok()
+        .flatten()
+        .ok_or("I can't find your Steam account on this PC, Sir.")?;
+    let get = |url: String| async move { http().get(url).send().await.map_err(|e| e.to_string())?.json::<Value>().await.map_err(|e| e.to_string()) };
+    let list = get(format!("https://api.steampowered.com/IWishlistService/GetWishlist/v1/?steamid={id}")).await.map_err(|e| format!("Steam didn't answer: {e}"))?;
+    let ids: Vec<Value> = list["response"]["items"].as_array().into_iter().flatten().filter_map(|i| i["appid"].as_u64()).map(|appid| json!({ "appid": appid })).collect();
+    if ids.is_empty() {
+        return Err("Your Steam wishlist is empty or private, Sir. Steam only shows a public one.".into());
+    }
+    let mut sales = Vec::new();
+    for chunk in ids.chunks(100) {
+        let input = json!({ "ids": chunk, "context": { "language": "english", "country_code": "DE" }, "data_request": { "include_basic_info": false } });
+        let items = get(format!("https://api.steampowered.com/IStoreBrowseService/GetItems/v1?input_json={}", urlencoding::encode(&input.to_string()))).await?;
+        sales.extend(sales_from(&items));
+    }
+    sales.sort_by(|a, b| b.pct.cmp(&a.pct));
+    Ok(sales)
+}
+
+/// The sales not told of yet, marked told (a discount that comes back later is news again).
+fn untold(sales: &[Sale]) -> Vec<&Sale> {
+    let key = |s: &Sale| format!("{}:{}", s.appid, s.ends);
+    let new: Vec<&Sale> = sales.iter().filter(|s| crate::kit::get("wishlist_told", &key(s)).is_none()).collect();
+    if !crate::platform::in_test_session() {
+        for s in &new {
+            let _ = crate::kit::put("wishlist_told", &key(s), &json!(true));
+        }
+    }
+    new
+}
+
+fn sale_line(sales: &[&Sale]) -> Option<String> {
+    let named: Vec<String> = sales.iter().take(3).map(|s| format!("{} at {} percent off", plain(&s.name), s.pct)).collect();
+    let more = sales.len().saturating_sub(3);
+    (!named.is_empty()).then(|| format!("On sale from your Steam wishlist: {}{}.", named.join(", "), if more > 0 { format!(", and {more} more") } else { String::new() }))
+}
+
+/// "…, and 9 more, Sir.": the line said to him.
+fn to_sir(line: &str) -> String {
+    format!("{}, Sir.", line.trim_end_matches('.'))
+}
+
+/// The watcher's look (every few hours): new sales as an alert.
+pub async fn check_wishlist() {
+    if let Ok(sales) = wishlist_sales().await {
+        if let Some(line) = sale_line(&untold(&sales)) {
+            alert(to_sir(&line));
+        }
+    }
+}
+
+/// "Anything on my wishlist on sale?"
+async fn wishlist_answer() -> Result<String, String> {
+    let sales = wishlist_sales().await?;
+    if sales.is_empty() {
+        return Ok(say("Nothing on the wishlist is discounted.", "Nothing on your wishlist is on sale right now, Sir."));
+    }
+    let _ = untold(&sales);
+    let rows: Vec<String> = sales.iter().map(|s| format!("{} — {} % off: {} (was {})", s.name, s.pct, s.price, s.was)).collect();
+    crate::kit::show_text("games_wishlist", "STEAM // WISHLIST ON SALE", &rows.join("\n"), [460.0, 360.0]);
+    let all: Vec<&Sale> = sales.iter().collect();
+    Ok(say(rows.join("\n"), sale_line(&all).map(|l| to_sir(&l)).unwrap_or_default()))
 }
 
 fn free_titles(v: &Value) -> Vec<String> {
@@ -946,6 +1066,31 @@ mod tests {
         assert_eq!(line, "Chrome holds 3.2 GB, VS Code 1.8 GB and Slack 1.0 GB beside the game, Sir. Shall I close Chrome?");
         assert_eq!(order, "close chrome");
         assert_eq!(hogs_line(&hogs(&[p("javaw", 6100.0), p("msedge", 500.0)])), None, "nothing worth closing: nothing said");
+    }
+
+    /// His account from Steam's sign-in list, the sales from the store's answer (its real shape,
+    /// 2026-11-16), and the line said about them.
+    #[test]
+    fn the_wishlist_s_sales_are_told_biggest_first() {
+        let users = r#""users" { "76561190000000001" { "AccountName" "max" "MostRecent" "0" } "76561190000000002" { "AccountName" "maxi" "MostRecent" "1" } }"#;
+        assert_eq!(steam_id_from(users).as_deref(), Some("76561190000000002"));
+        assert_eq!(steam_id_from(r#""users" { }"#), None);
+        let items = json!({"response": {"store_items": [
+            {"appid": 620, "name": "Portal 2", "best_purchase_option": {"formatted_final_price": "9,69€"}},
+            {"appid": 489830, "name": "The Elder Scrolls V: Skyrim Special Edition", "best_purchase_option": {"formatted_final_price": "7,99€", "formatted_original_price": "39,99€", "discount_pct": 80, "active_discounts": [{"discount_end_date": 1795024800}]}},
+            {"appid": 570, "name": "Dota 2", "is_free": true}
+        ]}});
+        let sales = sales_from(&items);
+        assert_eq!(sales, vec![Sale { appid: 489830, name: "The Elder Scrolls V: Skyrim Special Edition".into(), pct: 80, price: "7,99€".into(), was: "39,99€".into(), ends: 1795024800 }]);
+        let many: Vec<&Sale> = std::iter::repeat_n(&sales[0], 5).collect();
+        assert_eq!(sale_line(&many).unwrap(), format!("On sale from your Steam wishlist: {0}, {0}, {0}, and 2 more.", format!("{} at 80 percent off", plain(&sales[0].name))));
+        assert_eq!(sale_line(&[]), None);
+        assert_eq!(to_sir("On sale from your Steam wishlist: Portal 2 at 80 percent off, and 9 more."), "On sale from your Steam wishlist: Portal 2 at 80 percent off, and 9 more, Sir.");
+        for said in ["Anything on my wishlist on sale?", "is something on my steam wishlist discounted", "Ist was auf meiner Wunschliste im Angebot?"] {
+            assert_eq!(command(&crate::intents::normalize_phrase(said)), Some(json!({"action": "wishlist"})), "{said}");
+        }
+        let road = crate::phrasings::route("Anything on my wishlist on sale?");
+        assert_eq!(road.as_ref().map(|(tool, args)| (tool.as_str(), args["action"].as_str())), Some(("games", Some("wishlist"))), "{road:?}");
     }
 
     #[test]
