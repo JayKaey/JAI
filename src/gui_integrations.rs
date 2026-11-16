@@ -283,7 +283,7 @@ impl Hub {
                     }
                 });
                 ui.separator();
-                egui::ScrollArea::vertical().max_height(470.0).auto_shrink([false, true]).show(ui, |ui| match self.tab {
+                crate::hud_style::faded(ui, egui::ScrollArea::vertical().max_height(470.0).auto_shrink([false, true]), |ui| match self.tab {
                     Tab::Email => self.email_tab(ui, p, pim),
                     Tab::Calendar => self.calendar_tab(ui, p, pim),
                     Tab::WebUntis => self.webuntis_tab(ui, p, pim),
@@ -594,7 +594,7 @@ impl Hub {
                 let quiet = 4.0 * cell;
                 let size = *side as f32 * cell + 2.0 * quiet;
                 let (rect, _) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
-                ui.painter().rect_filled(rect, egui::Rounding::same(4.0), egui::Color32::WHITE);
+                ui.painter().rect_filled(rect, egui::Rounding::ZERO, egui::Color32::WHITE);
                 for (i, dark) in modules.iter().enumerate() {
                     if *dark {
                         let (x, y) = ((i % side) as f32, (i / side) as f32);
@@ -605,7 +605,7 @@ impl Hub {
             }
             ui.vertical(|ui| {
                 ui.label(RichText::new("Scan with your phone's camera:").size(11.5));
-                ui.add(egui::Label::new(RichText::new(&url).monospace().size(10.5).color(p.accent)).wrap());
+                ui.add(egui::Label::new(RichText::new(&url).monospace().size(11.0).color(p.accent)).wrap());
                 if ui.small_button("Copy link").clicked() {
                     ui.output_mut(|o| o.copied_text = url.clone());
                 }
@@ -1026,7 +1026,7 @@ impl Hub {
         muted(ui, p, "Any page or JSON endpoint: give it a name, a CSS selector (.status, #news li) or JSON path ($.data.items[0].title) and how often a watcher may check it.");
         let mut remove = None;
         for (i, f) in d.feeds.iter_mut().enumerate() {
-            egui::Frame::none().stroke(super::stroke(1.0, p.line)).rounding(egui::Rounding::same(6.0)).inner_margin(egui::Margin::same(8.0)).show(ui, |ui| {
+            egui::Frame::none().stroke(super::stroke(1.0, p.line)).rounding(egui::Rounding::ZERO).inner_margin(egui::Margin::same(8.0)).show(ui, |ui| {
                 egui::Grid::new(("hub_feed", i)).num_columns(2).spacing([12.0, 5.0]).show(ui, |ui| {
                     ui.label("Name");
                     text_field(ui, &mut f.name, "Mensa plan");

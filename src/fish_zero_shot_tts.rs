@@ -693,11 +693,16 @@ impl SpectralTransfer {
     /// Transfers the envelope onto a mastered clause and locks its level (stays under the
     /// −1 dBFS limiter).
     pub fn process(&mut self, audio: &mut Vec<f32>, rate: u32) {
-        let Some((env, secs)) = mel_envelope(audio, rate) else { return };
-        let gains = self.gains_for(&env, secs);
-        *audio = apply_band_gains(audio, rate, &gains);
-        if let Some(now) = crate::voice_reference::analyze(audio, rate) {
-            let gain = db_to_gain((self.target_rms_db - now.rms_db).clamp(-MAX_LEVEL_DB, MAX_LEVEL_DB));
+        // A clause too short to measure ("Sir,", "On it.") gets the filter of the ones before it.
+        let gains = match mel_envelope(audio, rate) {
+            Some((env, secs)) => Some(self.gains_for(&env, secs)),
+            None => self.average.map(|average| self.gains_for(&average, 0.0)),
+        };
+        if let Some(gains) = gains {
+            *audio = apply_band_gains(audio, rate, &gains);
+        }
+        if let Some(now) = crate::voice_reference::speech_rms_db(audio, rate) {
+            let gain = db_to_gain((self.target_rms_db - now).clamp(-MAX_LEVEL_DB, MAX_LEVEL_DB));
             audio.iter_mut().for_each(|s| *s = limit(*s * gain));
         }
     }
@@ -1194,6 +1199,18 @@ mod tests {
         }
         assert!(last > first && last > 0.97, "similarity {first:.3} → {last:.3}");
         assert!(SpectralTransfer::new(&reference).target_rms_db() >= MIN_TARGET_RMS_DB);
+    }
+
+    #[test]
+    fn a_clause_too_short_to_measure_is_levelled_like_the_rest() {
+        let reference = ReferenceProfile::analyze(&vowel(3.0, 48_000, |_| 118.0), 48_000, (0, 0)).unwrap();
+        let mut t = SpectralTransfer::new(&reference);
+        t.process(&mut vowel(1.5, 48_000, |_| 118.0), 48_000);
+        // "Sir,": a fifth of a second, 4.4 dB under the clip.
+        let mut sir: Vec<f32> = vowel(0.2, 48_000, |_| 118.0).iter().map(|s| s * 0.6).collect();
+        t.process(&mut sir, 48_000);
+        let level = crate::voice_reference::speech_rms_db(&sir, 48_000).unwrap();
+        assert!((level - t.target_rms_db()).abs() < 1.0, "{level:.1} dB, the others {:.1} dB", t.target_rms_db());
     }
 
     #[test]

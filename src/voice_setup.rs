@@ -320,7 +320,7 @@ pub fn show(ctx: &egui::Context, mic: f32) {
         let centre = pos2(rect.center().x, rect.top() + rect.height() * 0.42);
         match &outcome {
             None => {
-                p.text(pos2(rect.left(), rect.top() + 26.0), Align2::LEFT_TOP, format!("READ THIS ALOUD  ·  {} OF {}", (step + 1).min(LINES.len()), LINES.len()), FontId::monospace(10.5), muted);
+                p.text(pos2(rect.left(), rect.top() + 26.0), Align2::LEFT_TOP, format!("READ THIS ALOUD  ·  {} OF {}", (step + 1).min(LINES.len()), LINES.len()), FontId::monospace(11.0), muted);
                 let line = LINES.get(step).copied().unwrap_or("");
                 let galley = p.layout(line.to_string(), FontId::new(30.0, FontFamily::Name("display".into())), ink, rect.width() - 20.0);
                 p.galley(pos2(centre.x - galley.size().x / 2.0, centre.y - galley.size().y / 2.0), galley, ink);

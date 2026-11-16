@@ -16,6 +16,8 @@ pub enum TrayAction {
     Guests(bool),
     /// Night mode now, or day.
     Night(bool),
+    /// Game mode on (the model to RAM) or off.
+    GameMode(bool),
     Quit,
 }
 
@@ -27,6 +29,8 @@ pub struct TrayState {
     pub guests: bool,
     pub night: bool,
     pub dormant: bool,
+    pub game: bool,
+    pub thinking: bool,
 }
 
 #[cfg(windows)]
@@ -87,6 +91,7 @@ mod win {
     const CMD_GUESTS: usize = 6;
     const CMD_NIGHT: usize = 7;
     const CMD_STANDBY: usize = 8;
+    const CMD_GAME: usize = 9;
 
     struct Tray {
         actions: UnboundedSender<TrayAction>,
@@ -199,6 +204,8 @@ mod win {
             } else {
                 warn!("[TRAY] Could not add the tray icon");
             }
+            // (The icon's dot follows his state: `refresh_icon`.)
+            windows::Win32::UI::WindowsAndMessaging::SetTimer(hwnd, 1, 1000, None);
             let mut msg = MSG::default();
             while GetMessageW(&mut msg, HWND(0), 0, 0).as_bool() {
                 let _ = TranslateMessage(&msg);
@@ -238,6 +245,85 @@ mod win {
         LoadIconW(HINSTANCE(0), IDI_APPLICATION).unwrap_or_default()
     }
 
+    /// The colour of the dot the icon shows (0xRRGGBB, 0: none yet).
+    static DOT: AtomicU32 = AtomicU32::new(0);
+    static DOTTED: AtomicIsize = AtomicIsize::new(0);
+
+    /// Violet in game mode, grey in standby or with the microphone off, amber while he thinks,
+    /// green while he listens.
+    pub(super) fn dot_colour(s: TrayState) -> u32 {
+        if s.game {
+            0x9B6BFF
+        } else if s.dormant || !s.mic_on {
+            0x8A96A3
+        } else if s.thinking {
+            0xFFA530
+        } else {
+            0x3EE07A
+        }
+    }
+
+    /// Once a second: a new icon when his state's colour has changed.
+    unsafe fn refresh_icon(hwnd: HWND) {
+        let Some(tray) = TRAY.get() else { return };
+        let colour = dot_colour((tray.state)());
+        if DOT.load(Ordering::Acquire) == colour {
+            return;
+        }
+        let Some(icon) = dotted_icon(colour) else { return };
+        let data = NOTIFYICONDATAW { cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32, hWnd: hwnd, uID: ICON_ID, uFlags: NIF_ICON, hIcon: icon, ..Default::default() };
+        // (Kept only once Windows took it: a refused icon is tried again next second.)
+        if !Shell_NotifyIconW(windows::Win32::UI::Shell::NIM_MODIFY, &data).as_bool() {
+            let _ = windows::Win32::UI::WindowsAndMessaging::DestroyIcon(icon);
+            return;
+        }
+        DOT.store(colour, Ordering::Release);
+        let old = DOTTED.swap(icon.0, Ordering::AcqRel);
+        if old != 0 {
+            let _ = windows::Win32::UI::WindowsAndMessaging::DestroyIcon(HICON(old));
+        }
+    }
+
+    /// The app icon with a dot of `rgb` in its lower right corner (a dark rim keeps it apart).
+    unsafe fn dotted_icon(rgb: u32) -> Option<HICON> {
+        use windows::Win32::Graphics::Gdi::{CreateBitmap, DeleteObject, GetDC, GetDIBits, ReleaseDC, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS};
+        use windows::Win32::UI::WindowsAndMessaging::{CreateIconIndirect, DestroyIcon, GetIconInfo, ICONINFO};
+        let base = load_icon();
+        let mut info = ICONINFO::default();
+        let got = GetIconInfo(base, &mut info);
+        let _ = DestroyIcon(base);
+        got.ok()?;
+        let size = GetSystemMetrics(SM_CXSMICON);
+        let header = BITMAPINFOHEADER { biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32, biWidth: size, biHeight: -size, biPlanes: 1, biBitCount: 32, biCompression: BI_RGB.0, ..Default::default() };
+        let mut bmi = BITMAPINFO { bmiHeader: header, ..Default::default() };
+        let mut px = vec![0u32; (size * size) as usize];
+        let dc = GetDC(HWND(0));
+        let read = GetDIBits(dc, info.hbmColor, 0, size as u32, Some(px.as_mut_ptr().cast()), &mut bmi, DIB_RGB_COLORS);
+        ReleaseDC(HWND(0), dc);
+        DeleteObject(info.hbmColor);
+        DeleteObject(info.hbmMask);
+        if read != size {
+            return None;
+        }
+        let r = size as f32 * 0.22;
+        let c = size as f32 - r - 0.5;
+        for (i, p) in px.iter_mut().enumerate() {
+            let (x, y) = ((i as i32 % size) as f32 + 0.5, (i as i32 / size) as f32 + 0.5);
+            let d = ((x - c).powi(2) + (y - c).powi(2)).sqrt();
+            if d <= r {
+                *p = 0xFF00_0000 | rgb;
+            } else if d <= r + 1.2 {
+                *p = 0xFF10_1418;
+            }
+        }
+        let colour = CreateBitmap(size, size, 1, 32, Some(px.as_ptr().cast()));
+        let mask = CreateBitmap(size, size, 1, 1, None);
+        let icon = CreateIconIndirect(&ICONINFO { fIcon: true.into(), hbmMask: mask, hbmColor: colour, ..Default::default() });
+        DeleteObject(colour);
+        DeleteObject(mask);
+        icon.ok()
+    }
+
     unsafe fn show_menu(hwnd: HWND) {
         let Ok(menu) = CreatePopupMenu() else { return };
         let now = TRAY.get().map(|t| (t.state)()).unwrap_or(TrayState { mic_on: true, ..TrayState::default() });
@@ -253,8 +339,11 @@ mod win {
         let _ = AppendMenuW(menu, tick(now.guests), CMD_GUESTS, w!("Guests may speak (30 minutes)"));
         let _ = AppendMenuW(menu, tick(now.night), CMD_NIGHT, w!("Night mode"));
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
+        let _ = AppendMenuW(menu, tick(now.game), CMD_GAME, w!("Game mode (brain in RAM, GPU free)"));
         // One line for the standby, saying what a click does from where he stands.
-        if now.dormant {
+        if now.game {
+            // (In game mode the GPU is free already: no standby line.)
+        } else if now.dormant {
             let _ = AppendMenuW(menu, MF_STRING, CMD_WAKE, w!("Wake JAI (load models)"));
         } else {
             let _ = AppendMenuW(menu, MF_STRING, CMD_STANDBY, w!("Standby (free the graphics memory)"));
@@ -277,6 +366,7 @@ mod win {
             CMD_LOCK => send(TrayAction::VoiceLock(!now.voice_lock)),
             CMD_GUESTS => send(TrayAction::Guests(!now.guests)),
             CMD_NIGHT => send(TrayAction::Night(!now.night)),
+            CMD_GAME => send(TrayAction::GameMode(!now.game)),
             CMD_QUIT => send(TrayAction::Quit),
             _ => {}
         }
@@ -306,9 +396,14 @@ mod win {
                 PostQuitMessage(0);
                 LRESULT(0)
             }
+            windows::Win32::UI::WindowsAndMessaging::WM_TIMER => {
+                refresh_icon(hwnd);
+                LRESULT(0)
+            }
             _ if msg != 0 && msg == TASKBAR_CREATED.load(Ordering::Acquire) => {
-                // Explorer restarted: the icon has to be added again.
+                // Explorer restarted: the icon has to be added again (and its dot).
                 add_icon(hwnd);
+                DOT.store(0, Ordering::Release);
                 LRESULT(0)
             }
             _ if msg != 0 && msg == SHOW_HUD.load(Ordering::Acquire) => {

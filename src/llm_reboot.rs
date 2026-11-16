@@ -90,7 +90,13 @@ pub fn unload_payload(model: &str) -> Value {
 
 /// The one-token warm-up that loads the model back.
 pub fn warm_payload(model: &str, keep_alive: Value) -> Value {
-    json!({ "model": model, "prompt": "ok", "stream": false, "keep_alive": keep_alive, "options": { "num_predict": 1 } })
+    let mut payload = json!({ "model": model, "prompt": "ok", "stream": false, "keep_alive": keep_alive, "options": { "num_predict": 1 } });
+    // (In a game or standby the model warms in RAM, mapped: the GPU stays free.)
+    if crate::vram_guard::in_game() || crate::vram_guard::is_dormant() {
+        payload["options"]["num_gpu"] = json!(0);
+        payload["options"]["use_mmap"] = json!(true);
+    }
+    payload
 }
 
 /// What a reboot did.

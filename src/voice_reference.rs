@@ -33,6 +33,14 @@ pub struct VoiceProfile {
     pub speech_secs: f32,
 }
 
+/// The level (dBFS) of the speech frames of a clause of any length ("Sir,"); None when silent.
+pub fn speech_rms_db(samples: &[f32], rate: u32) -> Option<f32> {
+    let frames: Vec<&[f32]> = samples.chunks(((FRAME_MS / 1000.0) * rate as f32).max(1.0) as usize).collect();
+    let loudest = frames.iter().map(|c| gain_to_db(crate::dsp::rms(c))).fold(f32::MIN, f32::max);
+    let speech: Vec<f32> = frames.iter().filter(|c| gain_to_db(crate::dsp::rms(c)) > GATE_DB.max(loudest - RELATIVE_GATE_DB)).flat_map(|c| c.iter().copied()).collect();
+    (!speech.is_empty()).then(|| gain_to_db(crate::dsp::rms(&speech)))
+}
+
 /// The speech profile of `samples` (mono) at `rate`; None when there is under 0.25 s of speech.
 pub fn analyze(samples: &[f32], rate: u32) -> Option<VoiceProfile> {
     let frame = ((FRAME_MS / 1000.0) * rate as f32) as usize;

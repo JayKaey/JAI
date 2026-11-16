@@ -272,9 +272,9 @@ fn hearing_block(ctx: &egui::Context) {
             ui.label(RichText::new("Nothing yet. Every order you give by voice appears here with what I took it for.").color(muted).size(13.5));
             return;
         }
-        ui.label(RichText::new("WHAT ARRIVED  →  WHAT I TOOK IT FOR      click a line to tell me what you meant").font(FontId::monospace(10.0)).color(muted));
+        ui.label(RichText::new("WHAT ARRIVED  →  WHAT I TOOK IT FOR      click a line to tell me what you meant").font(FontId::monospace(11.0)).color(muted));
         ui.add_space(4.0);
-        egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
+        crate::hud_style::faded(ui, egui::ScrollArea::vertical().auto_shrink([false; 2]), |ui| {
             for clip in &clips {
                 let same = crate::ear::words(&clip.heard).join(" ").ends_with(&crate::ear::words(&clip.meant).join(" "));
                 let mark = if clip.led { crate::hud_style::GOOD } else { crate::hud_style::warn_colour() };
@@ -295,7 +295,7 @@ fn hearing_block(ctx: &egui::Context) {
                             ui.label(RichText::new(&clip.meant).color(ink).size(13.5));
                         }
                         if clip.likeness > 0.0 {
-                            ui.label(RichText::new(format!("voice {:.2}", clip.likeness)).font(FontId::monospace(10.0)).color(muted));
+                            ui.label(RichText::new(format!("voice {:.2}", clip.likeness)).font(FontId::monospace(11.0)).color(muted));
                         }
                     })
                     .response
@@ -306,18 +306,18 @@ fn hearing_block(ctx: &egui::Context) {
                 }
                 if let Some((id, text)) = editing.as_mut().filter(|(id, _)| *id == clip.id) {
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new("I MEANT").font(FontId::monospace(10.0)).color(accent));
+                        ui.label(RichText::new("I MEANT").font(FontId::monospace(11.0)).color(accent));
                         let field = ui.add(egui::TextEdit::singleline(text).desired_width(360.0).font(FontId::proportional(13.5)));
                         let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                        if ui.button(RichText::new("[ TEACH ]").font(FontId::monospace(10.5))).clicked() || enter {
+                        if ui.button(RichText::new("[ TEACH ]").font(FontId::monospace(11.0))).clicked() || enter {
                             taught = Some((*id, clip.heard.clone(), text.trim().to_string()));
                         }
-                        if ui.button(RichText::new("[ CANCEL ]").font(FontId::monospace(10.5))).clicked() {
+                        if ui.button(RichText::new("[ CANCEL ]").font(FontId::monospace(11.0))).clicked() {
                             cancel = true;
                         }
                     });
                 }
-                ui.add_space(3.0);
+                ui.add_space(4.0);
             }
         });
     });
@@ -533,7 +533,7 @@ fn coach_block(ctx: &egui::Context) {
     let closed = crate::gui::block(ctx, COACH, "Pronunciation coach // read it aloud", [640.0, 340.0], |ui| {
         let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width().max(600.0), 236.0), Sense::hover());
         let p = ui.painter_at(rect);
-        p.text(pos2(rect.left(), rect.top() + 4.0), Align2::LEFT_TOP, format!("SENTENCE {} OF {}   ·   {} OF {} RIGHT AT THE FIRST GO", at + 1, SENTENCES.len(), right, read), FontId::monospace(10.5), muted);
+        p.text(pos2(rect.left(), rect.top() + 4.0), Align2::LEFT_TOP, format!("SENTENCE {} OF {}   ·   {} OF {} RIGHT AT THE FIRST GO", at + 1, SENTENCES.len(), right, read), FontId::monospace(11.0), muted);
         let sentence = SENTENCES[at];
         let galley = p.layout(sentence.to_string(), FontId::new(28.0, FontFamily::Name("display".into())), ink, rect.width() - 20.0);
         let top = rect.top() + 40.0;
@@ -544,7 +544,7 @@ fn coach_block(ctx: &egui::Context) {
                 p.text(pos2(rect.center().x, y), Align2::CENTER_TOP, "Read it as you would say it. I am listening.", FontId::proportional(13.0), muted);
             }
             Some((heard, words)) => {
-                p.text(pos2(rect.left(), y), Align2::LEFT_TOP, "WHAT ARRIVED", FontId::monospace(10.0), muted);
+                p.text(pos2(rect.left(), y), Align2::LEFT_TOP, "WHAT ARRIVED", FontId::monospace(11.0), muted);
                 y += 16.0;
                 // Word by word: right in the good colour, wrong in the warning one with what
                 // arrived for it under it.
@@ -556,7 +556,7 @@ fn coach_block(ctx: &egui::Context) {
                         Word::Wrong(word, got) => (word.as_str(), crate::hud_style::warn_colour(), Some(if got.is_empty() { "(not heard)".to_string() } else { got.clone() })),
                     };
                     let galley = p.layout_no_wrap(text.to_string(), font.clone(), colour);
-                    let under_galley = under.map(|u| p.layout_no_wrap(u, FontId::monospace(10.5), muted));
+                    let under_galley = under.map(|u| p.layout_no_wrap(u, FontId::monospace(11.0), muted));
                     let width = galley.size().x.max(under_galley.as_ref().map_or(0.0, |g| g.size().x));
                     if x + width > rect.right() {
                         x = rect.left();
@@ -574,10 +574,10 @@ fn coach_block(ctx: &egui::Context) {
             }
         }
         ui.horizontal(|ui| {
-            if ui.button(RichText::new("[ HEAR IT ]").font(FontId::monospace(10.5)).color(accent)).on_hover_text("I say the sentence").clicked() {
+            if ui.button(RichText::new("[ HEAR IT ]").font(FontId::monospace(11.0)).color(accent)).on_hover_text("I say the sentence").clicked() {
                 say_it = true;
             }
-            if ui.button(RichText::new("[ NEXT ]").font(FontId::monospace(10.5))).clicked() {
+            if ui.button(RichText::new("[ NEXT ]").font(FontId::monospace(11.0))).clicked() {
                 if let Some(c) = lock(&COACHING).as_mut() {
                     (c.at, c.last, c.tries, c.since) = ((c.at + 1) % SENTENCES.len(), None, 0, Instant::now());
                 }
@@ -594,6 +594,55 @@ fn coach_block(ctx: &egui::Context) {
     } else if last.as_ref().is_some_and(|(_, words)| score(words) >= 0.99) {
         ctx.request_repaint_after(std::time::Duration::from_millis(200));
     }
+}
+
+// ------------------------------------------------------------- words he says Sir's way ----
+
+/// Words Sir taught him to say his way, kept on the PC: the word (lower case) → how it is said.
+pub const SAY_LIKE: &str = "say_like";
+
+const WAY: &str = r"[\p{L}\d'-]+";
+static TEACH_SAY: LazyLock<Regex> = LazyLock::new(|| {
+    re(&format!(r"^(?:say|pronounce)\s+(?P<w>{WAY})\s+like\s+(?P<a>{WAY}(?:\s+{WAY}){{0,2}})$|^pronounce\s+(?P<w2>{WAY})\s+as\s+(?P<a2>{WAY}(?:\s+{WAY}){{0,2}})$|^(?:sprich|sag)\s+(?P<w3>{WAY})\s+wie\s+(?P<a3>{WAY}(?:\s+{WAY}){{0,2}}?)(?:\s+aus)?$"))
+});
+static FORGET_SAY: LazyLock<Regex> =
+    LazyLock::new(|| re(&format!(r"^forget\s+how\s+to\s+(?:say|pronounce)\s+(?P<w>{WAY})$|^(?:say|pronounce)\s+(?P<w2>{WAY})\s+normally(?:\s+again)?$|^sprich\s+(?P<w3>{WAY})\s+wieder\s+normal\s+aus$")));
+
+/// "Say Arkham like ark-um", "pronounce Nguyen as win", "sprich Musterstadt wie Laar aus"; "forget how
+/// to say Arkham". Not "say it like you mean it" or "say hello like a pirate".
+pub fn say_like_command(s: &str) -> Option<Value> {
+    // Pronouns and fillers ("sag mal, wie …"), and what follows a question's "wie" ("wie spät").
+    const NOT_A_WORD: &[&str] = &[
+        "a", "an", "the", "it", "that", "this", "something", "anything", "everything", "nothing", "you", "me", "him", "her", "them", "us", "i", "we", "they", "my",
+        "your", "his", "our", "their", "ein", "eine", "einen", "einem", "der", "die", "das", "es", "du", "ich", "er", "etwas",
+        "mir", "dir", "uns", "euch", "ihm", "ihr", "ihnen", "mich", "dich", "mal", "bitte", "doch", "einfach", "nochmal", "kurz", "schnell",
+        "spät", "viel", "viele", "lange", "weit", "geht", "gehts", "geht's", "alt", "oft", "ist", "sind", "war", "man", "heißt", "läuft", "kann",
+    ];
+    let pick = |c: &regex::Captures, names: [&str; 3]| names.iter().find_map(|n| c.name(n)).map(|m| m.as_str().to_string());
+    if let Some(c) = FORGET_SAY.captures(s) {
+        return Some(json!({"action": "forget", "word": pick(&c, ["w", "w2", "w3"])?}));
+    }
+    let c = TEACH_SAY.captures(s)?;
+    let (word, way) = (pick(&c, ["w", "w2", "w3"])?, pick(&c, ["a", "a2", "a3"])?);
+    let first = way.split_whitespace().next().unwrap_or("");
+    (!NOT_A_WORD.contains(&word.as_str()) && !NOT_A_WORD.contains(&first)).then(|| json!({"action": "teach", "word": word, "as": way}))
+}
+
+pub fn say_like(args: &Value) -> Result<String, String> {
+    let word = args["word"].as_str().unwrap_or("").to_lowercase();
+    if word.is_empty() {
+        return Err("Which word, Sir?".into());
+    }
+    if args["action"] == "forget" {
+        return Ok(match crate::kit::remove(SAY_LIKE, &word) {
+            true => say(format!("\"{word}\" is said the usual way again."), format!("Understood, Sir. {word}, the usual way.")),
+            false => say(format!("I say \"{word}\" the usual way already."), format!("I say {word} the usual way already, Sir.")),
+        });
+    }
+    let way = args["as"].as_str().unwrap_or("").to_lowercase();
+    crate::kit::put(SAY_LIKE, &word, &json!(way))?;
+    // (The spoken answer goes through the lexicon: he says it the new way at once.)
+    Ok(say(format!("\"{word}\" is said \"{way}\" from now on."), format!("Understood, Sir: {word}.")))
 }
 
 // --------------------------------------------------------------------------- guests ----
@@ -861,6 +910,37 @@ mod tests {
         assert_eq!(lock(&COACHING).as_ref().map(|c| (c.read, c.right)), Some((2, 1)));
         assert!(coach_heard("Jay, stop the coach."));
         assert!(!coach_active());
+    }
+
+    #[test]
+    fn a_taught_word_is_said_his_way_until_it_is_forgotten() {
+        let _one = crate::kit::test_lock();
+        let speech = crate::pronunciation_lexicon::PronunciationLexicon::normalize_for_speech;
+        for (said, want) in [
+            ("say arkham like ark-um", Some(json!({"action": "teach", "word": "arkham", "as": "ark-um"}))),
+            ("pronounce nguyen as win", Some(json!({"action": "teach", "word": "nguyen", "as": "win"}))),
+            ("sprich musterstadt wie laar aus", Some(json!({"action": "teach", "word": "musterstadt", "as": "laar"}))),
+            ("forget how to say arkham", Some(json!({"action": "forget", "word": "arkham"}))),
+            ("say it like you mean it", None),
+            ("say hello like a pirate", None),
+            ("say yes as well", None),
+        ] {
+            assert_eq!(say_like_command(said), want, "{said}");
+        }
+        say_like(&say_like_command("say arkham like ark-um").unwrap()).unwrap();
+        assert_eq!(speech("Arkham Knight is running, Sir."), "ark-um Knight is running, Sir.");
+        say_like(&say_like_command("forget how to say arkham").unwrap()).unwrap();
+        assert_eq!(speech("Arkham Knight is running, Sir."), "Arkham Knight is running, Sir.");
+    }
+
+    #[test]
+    fn a_question_to_him_is_no_word_to_teach() {
+        // "Sag mir, wie spät es ist" taught "mir" to be said "spät es ist" instead of telling the time.
+        let typed = crate::intents::normalize_phrase("Sag mir, wie spät es ist?");
+        for said in ["sag mir wie spät es ist", "sag mir, wie spät es ist", typed.as_str(), "sag mal wie spät ist es", "sag mal wie geht's", "sag max wie spät es ist", "sag bitte wie viel es kostet"] {
+            assert_eq!(say_like_command(said), None, "{said}");
+        }
+        assert_eq!(say_like_command("sag musterstadt wie laar"), Some(json!({"action": "teach", "word": "musterstadt", "as": "laar"})), "a real teaching sentence");
     }
 
     #[test]

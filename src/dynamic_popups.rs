@@ -511,8 +511,8 @@ fn card_body(ui: &mut egui::Ui, p: &mut DynamicHudPopup, style: &CardStyle, acti
             let from = playlist.as_ref().map(|l| format!("{player_name} · {l}")).unwrap_or_else(|| player_name.clone());
             ui.label(RichText::new(from).small().color(style.muted));
             let (bar, _) = ui.allocate_exact_size(vec2(ui.available_width(), 3.0), Sense::hover());
-            ui.painter().rect_filled(bar, Rounding::same(2.0), style.border);
-            ui.painter().rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * progress.clamp(0.0, 1.0), bar.height())), Rounding::same(2.0), style.accent);
+            ui.painter().rect_filled(bar, Rounding::ZERO, style.border);
+            ui.painter().rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * progress.clamp(0.0, 1.0), bar.height())), Rounding::ZERO, style.accent);
             ui.horizontal(|ui| {
                 for (label, action) in [("PREV", PopupAction::MediaPrevious), (if *is_playing { "PAUSE" } else { "PLAY" }, PopupAction::MediaPlayPause), ("NEXT", PopupAction::MediaNext)] {
                     if ui.add(egui::Button::new(RichText::new(label).size(16.0).color(style.text)).frame(false)).clicked() {
@@ -555,11 +555,11 @@ fn card_body(ui: &mut egui::Ui, p: &mut DynamicHudPopup, style: &CardStyle, acti
             header(ui, title, dismiss, pins);
             ui.label(RichText::new(description).color(style.muted));
             ui.horizontal(|ui| {
-                if ui.add(egui::Button::new(RichText::new("Confirm").color(Color32::BLACK)).fill(style.accent).rounding(Rounding::same(10.0))).clicked() {
+                if ui.add(egui::Button::new(RichText::new("Confirm").color(crate::hud_style::ink_on(style.accent))).fill(style.accent).rounding(Rounding::ZERO)).clicked() {
                     actions.push(PopupAction::Confirm(confirm_action_id.clone()));
                     dismiss.push(p.id);
                 }
-                if ui.add(egui::Button::new(RichText::new("Cancel").color(style.text)).stroke(Stroke::new(1.0_f32, style.border)).fill(Color32::TRANSPARENT).rounding(Rounding::same(10.0))).clicked() {
+                if ui.add(egui::Button::new(RichText::new("Cancel").color(style.text)).stroke(Stroke::new(1.0_f32, style.border)).fill(Color32::TRANSPARENT).rounding(Rounding::ZERO)).clicked() {
                     actions.push(PopupAction::Cancel(confirm_action_id.clone()));
                     dismiss.push(p.id);
                 }

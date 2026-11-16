@@ -3071,7 +3071,7 @@ fn reading_asked(s: &str) -> &'static str {
 /// One reading of his machine: "show me my RAM usage", "how much RAM am I using", "what's my CPU
 /// at", "how hot is my GPU", "wie heiß ist die Grafikkarte". ("What is the CPU?" is a question.)
 static STATUS_READING: LazyLock<Regex> = LazyLock::new(|| {
-    re(r"^(?:(?:show|tell|give|check)(?: me)?\s+(?:my\s+|the\s+|our\s+)(?:current\s+)?(?:cpu|gpu|ram|memory|vram|processor)(?:\s+(?:usage|load|temperature|temp|status|utili[sz]ation))?|(?:whats|what is|how is|hows)\s+(?:my\s+(?:cpu|gpu|ram|memory|vram)(?:\s+(?:usage|load|temperature|temp|at|doing))?|(?:the\s+)?(?:cpu|gpu|ram|memory|vram)\s+(?:usage|load|temperature|temp|at|doing))|how (?:much|many)\s+(?:ram|memory|vram)\s+(?:am i using|is (?:in use|used|free|left|being used)|do i have(?:\s+(?:left|free))?|have i got(?:\s+left)?)|how (?:hot|warm)\s+is\s+(?:my\s+|the\s+)?(?:gpu|cpu|graphics card|pc|computer)|(?:zeig|zeige)\s+(?:mir\s+)?(?:meine|die|meinen|den)\s+(?:cpu|gpu|ram)(?:[\s-]*(?:auslastung|last|temperatur|nutzung))?|wie (?:hoch|viel) ist (?:meine |die )?(?:cpu|gpu|ram)(?:[\s-]*(?:auslastung|last|temperatur))?|wie viel (?:ram|arbeitsspeicher) (?:nutze|brauche|verbrauche) ich|wie (?:heiß|heiss|warm) ist (?:meine |die |mein )?(?:gpu|cpu|grafikkarte|pc|rechner))$")
+    re(r"^(?:(?:show|tell|give|check)(?: me)?\s+(?:my\s+|the\s+|our\s+)(?:current\s+)?(?:cpu|gpu|ram|memory|vram|processor)(?:\s+(?:usage|load|temperature|temp|status|utili[sz]ation))?|(?:whats|what is|how is|hows)\s+(?:my\s+(?:cpu|gpu|ram|memory|vram)(?:\s+(?:usage|load|temperature|temp|at|doing))?|(?:the\s+)?(?:cpu|gpu|ram|memory|vram)\s+(?:usage|load|temperature|temp|at|doing))|how (?:much|many)\s+(?:ram|memory|vram)\s+(?:am i using|is (?:in use|used|free|left|being used)|do i have(?:\s+(?:left|free))?|have i got(?:\s+left)?)|how (?:hot|warm)\s+is\s+(?:my\s+|the\s+)?(?:gpu|cpu|graphics card|pc|computer)|(?:zeig|zeige)\s+(?:mir\s+)?(?:meine|die|meinen|den)\s+(?:cpu|gpu|ram)(?:[\s-]*(?:auslastung|last|temperatur|nutzung))?|wie (?:hoch|viel) ist (?:meine |die )?(?:cpu|gpu|ram)(?:[\s-]*(?:auslastung|last|temperatur))?|wie viel (?:ram|arbeitsspeicher) (?:nutze|brauche|verbrauche) ich|wie (?:heiß|heiss|warm) ist (?:meine |die |mein )?(?:gpu|cpu|grafikkarte|pc|rechner)|(?:whats|what s|what are|how are|hows|how s|show me|tell me|check)\s+(?:my\s+|the\s+)?(?:pc\s+|pcs\s+|computer\s+|system\s+)?(?:temperatures|temps|temperature)(?:\s+(?:now|right now|at))?|wie (?:sind|hoch sind) (?:meine |die )?temperaturen)$")
 });
 static VOLUME_SET: LazyLock<Regex> = LazyLock::new(|| {
     // ("My PC's volume" arrives here as "my pcs volume".)
@@ -4641,6 +4641,13 @@ pub fn parse_as_said(text: &str) -> Option<Intent> {
     if VRAM_FLUSH.is_match(&s) {
         return tool("manage_vram", json!({ "action": "flush" }));
     }
+    if GAME_MODE_ASKED.is_match(&s) {
+        return tool("manage_vram", json!({ "action": "game_status" }));
+    }
+    if GAME_MODE.is_match(&s) {
+        let off =["off", "stop", "disable", "deactivate", "end ", "leave", "exit", "quit", " aus", "beende"].iter().any(|w| s.contains(w));
+        return tool("manage_vram", json!({ "action": if off { "game_off" } else { "game_on" } }));
+    }
     // "Open the integrations hub" (Whisper: "the integration sub").
     if INTEGRATIONS_HUB.is_match(&s) {
         return tool("configure_productivity_service", json!({ "service_name": "all", "action": "open" }));
@@ -5053,6 +5060,12 @@ static SLEEP_MODE: LazyLock<Regex> = LazyLock::new(|| {
 });
 /// "Clear the VRAM", "free up my VRAM", "can you move out of my VRAM?", "mach die Grafikkarte
 /// frei": every model off the GPU at once (the zero-VRAM standby; Alt+J or a word wakes him).
+/// "Game mode on/off" (the VRAM guard's switch; "gaming mode" stays the gaming protocol).
+static GAME_MODE: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"^(?:(?:turn|switch|put)\s+(?:on|off)\s+(?:the\s+)?game\s?mode|(?:turn|switch|put)\s+(?:the\s+)?game\s?mode\s+(?:on|off)|game\s?mode\s+(?:on|off)|(?:start|enable|activate|enter|go into|switch to|stop|disable|deactivate|end|leave|exit|quit)\s+(?:the\s+)?game\s?mode|spielmodus\s+(?:an|aus|ein)|(?:starte|beende)\s+(?:den\s+)?spielmodus)(?:\s+please)?$")
+});
+/// "Is game mode on?", "ist der Spielmodus an?": asked, not ordered.
+static GAME_MODE_ASKED: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:is|ist)\s+(?:the\s+|der\s+)?(?:game\s?mode|gaming mode|spielmodus)\s+(?:on|active|running|an|aktiv|ein)$|^(?:am i|are we|bin ich)\s+in\s+(?:the\s+)?(?:game\s?mode|spielmodus)$"));
 static VRAM_FLUSH: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(?:clear|free|free up|flush|empty|release|unload|clean|clean up|purge)\s+(?:up\s+)?(?:out\s+)?(?:my\s+|the\s+|your\s+|all\s+(?:of\s+)?(?:my\s+|the\s+)?)?(?:vram|gpu memory|video memory|graphics memory|gpu|graphics card)(?:\s+(?:for me|now|again))?$|^(?:get|move|go|stay|step)\s+out\s+of\s+(?:my\s+|the\s+)?(?:vram|gpu|graphics card|video memory|gpu memory)(?:\s+(?:for me|now|for a while))?$|^(?:leave|give me back)\s+(?:my\s+|the\s+)?(?:vram|gpu|graphics card)(?:\s+(?:alone|free|back))?$|^(?:mach|mache|räum|räume|raeum|leere|leer|gib)\s+(?:meinen\s+|meine\s+|den\s+|die\s+|mir\s+(?:den\s+|die\s+)?)?(?:vram|grafikspeicher|grafikkarte|gpu)\s+(?:frei|leer|zurück|zurueck)$")
 });
@@ -7533,6 +7546,30 @@ mod tests {
             assert_eq!(tool(text), Some(("manage_vram", json!({"action": "flush"}))), "{text}");
         }
         assert_eq!(fuzzy("go to standby").map(|t| t.1["action"].clone()), Some(json!("sleep_mode")));
+        // Game mode by voice (2026-11-15); "gaming mode" stays the protocol.
+        for text in ["game mode on", "turn on game mode", "switch to game mode", "start game mode please", "Spielmodus an"] {
+            assert_eq!(tool(text), Some(("manage_vram", json!({"action": "game_on"}))), "{text}");
+        }
+        for text in ["game mode off", "turn game mode off", "leave game mode", "stop the game mode", "Spielmodus aus", "beende den Spielmodus"] {
+            assert_eq!(tool(text), Some(("manage_vram", json!({"action": "game_off"}))), "{text}");
+        }
+        assert_ne!(tool("gaming mode").map(|t| t.0), Some("manage_vram"));
+        // The games kit through the whole fast path (no older rule takes these words).
+        for (text, action) in [
+            ("Start Batman.", "start"),
+            ("launch gta 5", "start"),
+            ("remind me after the game to do my homework", "after"),
+            ("When GTA starts, set the volume to 40 and open Discord.", "routine"),
+            ("how long have I played today?", "playtime"),
+            ("any news for GTA?", "news"),
+            ("Are there any free games this week?", "free"),
+            ("What's using my VRAM?", "vram"),
+            ("Tell me when the GTA download is done.", "watch_download"),
+            ("stop gaming at 10 on school nights", "bedtime"),
+            ("what games do I have", "list"),
+        ] {
+            assert_eq!(tool(text).map(|(name, args)| (name, args["action"].clone())), Some(("games", json!(action))), "{text}");
+        }
         // The rose palette, as said and as heard.
         for text in ["make the interface rose", "make the theme rose", "switch to the rose theme", "make the interface rows", "Make the entire face a rose"] {
             assert_eq!(tool(text), Some(("configure_interface", json!({"hud_palette": "rose_crimson"}))), "{text}");
@@ -7589,5 +7626,32 @@ mod tests {
         }
         // A real title stays the title.
         assert_eq!(route_text("Füge Elternabend am Freitag um 19 Uhr zu meinem Kalender hinzu").unwrap().args["title"], "Elternabend");
+    }
+}
+
+
+#[cfg(test)]
+mod instant_answers {
+    use super::*;
+
+    /// 2026-11-15, game mode: the questions he asks in a game that need no model (the probe
+    /// before: temperatures, the next lesson and "is game mode on" went to the CPU brain).
+    #[test]
+    fn instant_answers_need_no_model() {
+        let tool = |q: &str| match parse(q) {
+            Some(Intent::Tool { name, args }) => Some((name, args)),
+            _ => None,
+        };
+        assert_eq!(tool("what are my temperatures"), Some(("get_system_status", json!({"reading": "all"}))));
+        assert_eq!(tool("how are my PC temps"), Some(("get_system_status", json!({"reading": "all"}))));
+        assert_eq!(tool("is game mode on"), Some(("manage_vram", json!({"action": "game_status"}))));
+        assert_eq!(tool("am I in game mode"), Some(("manage_vram", json!({"action": "game_status"}))));
+        for q in ["what's my next lesson", "when is my next class", "Was ist meine nächste Stunde?", "which lesson do I have next"] {
+            assert_eq!(tool(q), Some(("next_lesson", json!({}))), "{q}");
+        }
+        for q in ["what's playing", "what's the volume", "how hot is my GPU"] {
+            assert!(tool(q).is_some(), "{q}");
+        }
+        assert_eq!(parse("what's the date"), Some(Intent::Date));
     }
 }

@@ -659,18 +659,18 @@ pub fn show(ctx: &egui::Context) {
         let mut asked: Option<&'static str> = None;
         let closed = crate::gui::block(ctx, ID, "Changes // what is new, better, fixed", [700.0, 640.0], |ui| {
             ui.horizontal(|ui| {
-                ui.label(RichText::new("FIND").font(FontId::monospace(10.0)).color(muted));
+                ui.label(RichText::new("FIND").font(FontId::monospace(11.0)).color(muted));
                 ui.add(egui::TextEdit::singleline(&mut search).desired_width(220.0).hint_text("a word, a date").font(FontId::proportional(13.5)));
                 ui.add_space(10.0);
                 for (label, kind) in [("ALL", None), ("NEW", Some(Kind::New)), ("BETTER", Some(Kind::Better)), ("FIXED", Some(Kind::Fixed))] {
                     let lit = only == kind;
-                    if ui.add(egui::Label::new(RichText::new(format!("[ {label} ]")).font(FontId::monospace(10.5)).color(if lit { accent } else { muted })).sense(Sense::click())).clicked() {
+                    if ui.add(egui::Label::new(RichText::new(format!("[ {label} ]")).font(FontId::monospace(11.0)).color(if lit { accent } else { muted })).sense(Sense::click())).clicked() {
                         only = kind;
                     }
                 }
             });
             ui.add_space(6.0);
-            egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
+            crate::hud_style::faded(ui, egui::ScrollArea::vertical().auto_shrink([false; 2]), |ui| {
                 let mut shown = 0;
                 for release in RELEASES {
                     let entries = matching(release, &search, only);
@@ -680,12 +680,12 @@ pub fn show(ctx: &egui::Context) {
                     shown += entries.len();
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new(day_words(release.date)).font(FontId::monospace(10.5)).color(accent));
+                        ui.label(RichText::new(day_words(release.date)).font(FontId::monospace(11.0)).color(accent));
                         ui.label(RichText::new(release.name).font(FontId::new(17.0, FontFamily::Name("display".into()))).color(ink));
                     });
                     let rule = ui.cursor();
                     ui.painter().line_segment([rule.left_top(), egui::pos2(rule.left() + ui.available_width(), rule.top())], egui::Stroke::new(1.0f32, crate::hud_style::white(0.10)));
-                    ui.add_space(5.0);
+                    ui.add_space(4.0);
                     for entry in entries {
                         let tag_colour = match entry.kind {
                             Kind::New => accent,
@@ -693,10 +693,10 @@ pub fn show(ctx: &egui::Context) {
                             Kind::Fixed => muted,
                         };
                         ui.horizontal_wrapped(|ui| {
-                            ui.add_sized([54.0, 16.0], egui::Label::new(RichText::new(entry.kind.tag()).font(FontId::monospace(9.5)).color(tag_colour)).halign(egui::Align::LEFT));
+                            ui.add_sized([54.0, 16.0], egui::Label::new(RichText::new(entry.kind.tag()).font(FontId::monospace(11.0)).color(tag_colour)).halign(egui::Align::LEFT));
                             ui.label(RichText::new(entry.title).color(ink).size(14.0).family(FontFamily::Name("label".into())));
                             if let Some(id) = entry.explain {
-                                let link = ui.add(egui::Label::new(RichText::new("HOW IT WORKS").font(FontId::monospace(9.5)).color(accent).underline()).sense(Sense::click())).on_hover_text("Opens the explanation in a window of its own");
+                                let link = ui.add(egui::Label::new(RichText::new("HOW IT WORKS").font(FontId::monospace(11.0)).color(accent).underline()).sense(Sense::click())).on_hover_text("Opens the explanation in a window of its own");
                                 if link.clicked() {
                                     asked = Some(id);
                                 }
@@ -706,7 +706,7 @@ pub fn show(ctx: &egui::Context) {
                             ui.add_space(62.0);
                             ui.label(RichText::new(entry.what).color(muted).size(12.5));
                         });
-                        ui.add_space(3.0);
+                        ui.add_space(4.0);
                     }
                 }
                 if shown == 0 {
@@ -733,20 +733,20 @@ pub fn show(ctx: &egui::Context) {
         let Some(e) = explanation(id) else { continue };
         let block = explain_id(id);
         let closed = crate::gui::block(ctx, &block, &format!("{} // how it works", e.title), [520.0, 460.0], |ui| {
-            egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
+            crate::hud_style::faded(ui, egui::ScrollArea::vertical().auto_shrink([false; 2]), |ui| {
                 ui.add_space(4.0);
                 ui.label(RichText::new(e.title).font(FontId::new(24.0, FontFamily::Name("display".into()))).color(ink));
                 ui.add_space(8.0);
                 ui.add(egui::Label::new(RichText::new(e.what).color(ink).size(14.0)).wrap());
                 ui.add_space(14.0);
-                ui.label(RichText::new("WHAT TO SAY").font(FontId::monospace(10.0)).color(accent));
+                ui.label(RichText::new("WHAT TO SAY").font(FontId::monospace(11.0)).color(accent));
                 ui.add_space(4.0);
                 for line in e.say {
                     ui.add(egui::Label::new(RichText::new(*line).font(FontId::monospace(12.5)).color(ink)).wrap());
                     ui.add_space(2.0);
                 }
                 ui.add_space(12.0);
-                ui.label(RichText::new("GOOD TO KNOW").font(FontId::monospace(10.0)).color(accent));
+                ui.label(RichText::new("GOOD TO KNOW").font(FontId::monospace(11.0)).color(accent));
                 ui.add_space(4.0);
                 ui.add(egui::Label::new(RichText::new(e.know).color(muted).size(13.0)).wrap());
                 ui.add_space(8.0);

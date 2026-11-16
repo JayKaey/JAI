@@ -98,9 +98,31 @@ fn may_caption(source: &crate::pc_audio::Source) -> bool {
     crate::listening_lock::may_show_heard() || matches!(source, crate::pc_audio::Source::Device(_))
 }
 
+/// A line over a game (an alert while game mode is on), at the top for `TOAST_STAYS`.
+static TOAST: Mutex<Option<(String, Instant)>> = Mutex::new(None);
+const TOAST_STAYS: Duration = Duration::from_secs(7);
+
+pub fn toast(text: &str) {
+    // (Never over his game from a test session.)
+    if crate::platform::in_test_session() {
+        return;
+    }
+    *lock(&TOAST) = Some((text.trim().to_string(), Instant::now()));
+    crate::gui::refresh();
+}
+
+fn toast_now() -> Option<(String, f32)> {
+    let toast = lock(&TOAST);
+    let (text, at) = toast.as_ref().filter(|(_, at)| at.elapsed() < TOAST_STAYS)?;
+    Some((text.clone(), 1.0 - ((at.elapsed().as_secs_f32() - (TOAST_STAYS.as_secs_f32() - 0.5)) / 0.5).clamp(0.0, 1.0)))
+}
+
 /// What the bar shows right now and on which monitor (it starts the listener while the
 /// subtitles are on); None while there is nothing to show.
 fn bar_now(app: &crate::app::Jai, rt: &tokio::runtime::Handle) -> Option<(Vec<(String, f32)>, [i32; 4])> {
+    if let Some(line) = toast_now() {
+        return Some((vec![line], bar_monitor()?));
+    }
     crate::hud_feel::subtitles()?;
     // "Don't listen": lines that came from a mix with the microphone in it go at once.
     if !may_caption(&crate::pc_audio::source(crate::pc_audio::Use::Speech)) {
@@ -143,7 +165,8 @@ pub fn show(ctx: &egui::Context, app: &crate::app::Jai, rt: &tokio::runtime::Han
     let wrap = widest - 48.0;
     let size = bar_size(ctx, &shown, wrap);
     let (width, height) = (size.x, size.y);
-    let at = pos2(((l + r) as f32 / 2.0) / ppp - width / 2.0, bar_top(place().0, t as f32 / ppp, b as f32 / ppp, height));
+    let spot = if toast_now().is_some() { Place::Top } else { place().0 };
+    let at = pos2(((l + r) as f32 / 2.0) / ppp - width / 2.0, bar_top(spot, t as f32 / ppp, b as f32 / ppp, height));
     let builder = ViewportBuilder::default()
         .with_title(TITLE)
         .with_decorations(false)
@@ -392,7 +415,7 @@ fn paint_lines(p: &egui::Painter, rect: egui::Rect, shown: &[(String, f32)], wra
         if back.top() < rect.top() - 0.5 {
             break;
         }
-        p.rect_filled(back, Rounding::same(3.0), Color32::from_black_alpha((215.0 * strength) as u8));
+        p.rect_filled(back, Rounding::ZERO, Color32::from_black_alpha((215.0 * strength) as u8));
         p.galley(pos2(rect.center().x, y - size.y - 2.0), galley, Color32::WHITE);
         y = back.top() - 4.0;
     }

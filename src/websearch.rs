@@ -50,7 +50,15 @@ fn selector(css: &str) -> Selector {
     Selector::parse(css).expect("valid CSS selector")
 }
 
+/// Web searches running now (the status pill says so).
+static SEARCHING: LazyLock<crate::thinking_guard::ThinkingFlag> = LazyLock::new(Default::default);
+
+pub fn searching() -> bool {
+    SEARCHING.is_set()
+}
+
 pub async fn search(query: &str) -> Result<String, String> {
+    let _searching = SEARCHING.engage();
     let query = query
         .trim()
         .trim_matches(|c: char| matches!(c, '"' | '\'' | '.' | '!' | '?'))

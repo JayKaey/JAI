@@ -186,7 +186,7 @@ async fn run(tools: &ToolContext, topic: &str) -> Result<Report, String> {
         if blocks.len() >= MAX_BLOCKS {
             break;
         }
-        let words: String = title.split_whitespace().take(5).collect::<Vec<_>>().join(" ").to_uppercase();
+        let words: String = hud_board::video_length(&title).0.split_whitespace().take(5).collect::<Vec<_>>().join(" ").to_uppercase();
         blocks.push(Block::new(format!("VIDEO // {words}"), "SOURCE: YOUTUBE", format!("youtube.com/watch?v={id}"), BlockKind::MediaCard { images: hud_board::video_frames(&id), caption: title }));
     }
     blocks.truncate(MAX_BLOCKS);
@@ -223,6 +223,12 @@ pub fn parse_youtube_results(html: &str, limit: usize) -> Vec<(String, String)> 
             continue;
         }
         let title = chunk.split("\"title\":{\"runs\":[{\"text\":\"").nth(1).map(json_string_prefix).unwrap_or_default();
+        // Its running time ("12:34") rides at the end of the title, for the tile's corner.
+        let length = chunk.split("\"lengthText\":").nth(1).and_then(|l| l.split("\"simpleText\":\"").nth(1)).map(json_string_prefix);
+        let title = match length {
+            Some(len) if (4..=8).contains(&len.len()) && len.bytes().all(|b| b.is_ascii_digit() || b == b':') => format!("{title} · {len}"),
+            _ => title,
+        };
         out.push((id.to_string(), title));
         if out.len() >= limit {
             break;
@@ -940,9 +946,14 @@ pub(crate) fn decode_image(bytes: &[u8]) -> Option<eframe::egui::ColorImage> {
 mod tests {
     #[test]
     fn youtube_results_give_ids_and_titles() {
-        let html = r#"…"videoRenderer":{"videoId":"dQw4w9WgXcQ","thumbnail":{},"title":{"runs":[{"text":"Quest 3 \u0026 Vision Pro: \"hands-on\""}]}}…"videoRenderer":{"videoId":"dQw4w9WgXcQ","title":{"runs":[{"text":"dup"}]}}…"videoRenderer":{"videoId":"abcdefghijk","title":{"runs":[{"text":"Second"}]}}…"videoRenderer":{"videoId":"zzzzzzzzzzz","title":{"runs":[{"text":"Third"}]}}"#;
+        let html = r#"…"videoRenderer":{"videoId":"dQw4w9WgXcQ","thumbnail":{},"title":{"runs":[{"text":"Quest 3 \u0026 Vision Pro: \"hands-on\""}]},"lengthText":{"accessibility":{"accessibilityData":{"label":"12 minutes, 34 seconds"}},"simpleText":"12:34"}}…"videoRenderer":{"videoId":"dQw4w9WgXcQ","title":{"runs":[{"text":"dup"}]}}…"videoRenderer":{"videoId":"abcdefghijk","title":{"runs":[{"text":"Second"}]}}…"videoRenderer":{"videoId":"zzzzzzzzzzz","title":{"runs":[{"text":"Third"}]}}"#;
         let videos = parse_youtube_results(html, 2);
-        assert_eq!(videos, vec![("dQw4w9WgXcQ".to_string(), "Quest 3 & Vision Pro: \"hands-on\"".to_string()), ("abcdefghijk".to_string(), "Second".to_string())]);
+        assert_eq!(videos, vec![("dQw4w9WgXcQ".to_string(), "Quest 3 & Vision Pro: \"hands-on\" · 12:34".to_string()), ("abcdefghijk".to_string(), "Second".to_string())]);
+        assert_eq!(crate::hud_board::video_length(&videos[0].1), ("Quest 3 & Vision Pro: \"hands-on\"", Some("12:34")));
+        assert_eq!(crate::hud_board::video_length("Second"), ("Second", None));
+        assert_eq!(crate::hud_board::video_length("Rock · Paper"), ("Rock · Paper", None), "only a running time is taken off");
+        assert_eq!(crate::hud_board::video_length("F1 Highlights · 2024"), ("F1 Highlights · 2024", None), "a year is no running time");
+        assert_eq!(crate::hud_board::video_length("Live · 1:02:03"), ("Live", Some("1:02:03")));
         assert!(parse_youtube_results("<html>no results</html>", 2).is_empty());
     }
 

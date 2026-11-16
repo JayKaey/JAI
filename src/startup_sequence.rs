@@ -6,6 +6,7 @@
 use chrono::{DateTime, Local, Timelike};
 use eframe::egui::{self, pos2, vec2, Align2, Color32, FontId, Rect, Rounding, Shape, Stroke};
 use std::f32::consts::TAU;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -116,8 +117,40 @@ pub fn away_line(plan: &Plan) -> Option<String> {
 
 // --------------------------------------------------------------------------------- paint ----
 
-/// What the long sequence reads out as it powers up (what really happens at a start).
-const STEPS: [&str; 8] = ["WAKING THE CORE", "OPENING THE EARS", "TUNING THE VOICE", "READING MEMORY", "LINKING THE DISPLAYS", "CHECKING THE CALENDAR", "SWEEPING THE NETWORK", "STANDING BY"];
+/// What a start really waits for, in the order it comes up; each line says READY only once its
+/// part is (Sir's choice of 2026-11-15: real progress, not a fixed animation).
+const PARTS: [&str; 4] = ["LANGUAGE ENGINE", "EARS · WHISPER", "VOICE · KOKORO", "BRAIN · MODEL"];
+static UP: [AtomicBool; 4] = [const { AtomicBool::new(false) }; 4];
+
+/// Part `k` of `PARTS` is up: 0 the language engine, 1 the ears, 2 the voice, 3 the brain.
+pub fn up(k: usize) {
+    if let Some(part) = UP.get(k) {
+        part.store(true, Ordering::Relaxed);
+    }
+}
+
+/// Blocks a background thread until the brain is loaded, `max` at most: the indexers' walks wait
+/// for the model's cold load, which reads gigabytes from the same disk.
+pub fn wait_for_brain(max: Duration) {
+    let until = std::time::Instant::now() + max;
+    while !UP[3].load(Ordering::Relaxed) && std::time::Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(500));
+    }
+}
+
+/// How much is up, not counting the brain: its cold load outlasts the sequence.
+fn share_up(up: [bool; 4]) -> f32 {
+    up[..3].iter().filter(|u| **u).count() as f32 / 3.0
+}
+
+/// Line `k`'s word: READY once its part is up, LOADING for the brain until then, else a tick.
+fn line_state(k: usize, done: bool, begun: f32) -> &'static str {
+    match (done, k) {
+        (true, _) => "READY",
+        (false, 3) => "LOADING",
+        _ => ["·", "··", "···"][((begun * 9.0) as usize) % 3],
+    }
+}
 
 fn stroke(width: f32, colour: Color32) -> Stroke {
     Stroke::new(width, colour)
@@ -177,13 +210,9 @@ pub fn paint(ctx: &egui::Context, screen: Rect, centre: egui::Pos2, radius: f32,
         p.circle_filled(centre, radius * (0.2 + 0.9 * (1.0 - flash)), Color32::WHITE.gamma_multiply(0.18 * flash * flash));
         p.circle_stroke(centre, radius * (1.0 + 0.5 * (1.0 - flash)), stroke(2.0, accent.gamma_multiply(0.6 * flash)));
     }
-    // What is coming up, line by line (the short one ticks through four, the long one reads
-    // all of them with a bar; the quick one has no time for words).
-    let lines: &[&str] = match kind {
-        Kind::Quick => &[],
-        Kind::Short => &STEPS[..4],
-        Kind::Long => &STEPS,
-    };
+    // What is coming up, line by line: the real parts, each READY once it is (the quick one has
+    // no time for words; the long one adds a bar).
+    let lines: &[&str] = if kind == Kind::Quick { &[] } else { &PARTS };
     if !lines.is_empty() {
         let font = FontId::monospace(11.0);
         let left = centre.x - 150.0;
@@ -191,8 +220,10 @@ pub fn paint(ctx: &egui::Context, screen: Rect, centre: egui::Pos2, radius: f32,
         let top = centre.y + radius * 1.3 + 46.0;
         let head = crate::hud_style::title_galley(&p, "J.A.I. // power-up", 13.0, accent.gamma_multiply(alpha), 300.0);
         p.galley(pos2(left, top - 30.0), head, Color32::PLACEHOLDER);
-        // How far it is, and the word once it is there.
-        let (reading, ink) = if assembly >= 1.0 { ("ONLINE".to_string(), Color32::WHITE) } else { (format!("{:.0} %", assembly * 100.0), accent) };
+        // How much is really up, and the word once all of it is.
+        let up: [bool; 4] = std::array::from_fn(|k| UP[k].load(Ordering::Relaxed));
+        let share = share_up(up);
+        let (reading, ink) = if share >= 1.0 { ("ONLINE".to_string(), Color32::WHITE) } else { (format!("{:.0} %", share * 100.0), accent) };
         p.text(pos2(left + 300.0, top - 21.0), Align2::RIGHT_CENTER, reading, font.clone(), ink.gamma_multiply(alpha));
         let per = ignite / lines.len() as f32;
         for (k, text) in lines.iter().enumerate() {
@@ -200,17 +231,17 @@ pub fn paint(ctx: &egui::Context, screen: Rect, centre: egui::Pos2, radius: f32,
             if begun < 0.0 {
                 break;
             }
-            let done = begun >= per;
+            let done = up[k];
             let y = top + k as f32 * 17.0;
             let ink = if done { Color32::from_rgb(0x9A, 0xB0, 0xC2) } else { Color32::WHITE };
             p.text(pos2(left, y), Align2::LEFT_CENTER, *text, font.clone(), ink.gamma_multiply(alpha));
-            let state = if done { "READY" } else { ["·", "··", "···"][((begun * 9.0) as usize) % 3] };
+            let state = line_state(k, done, begun);
             p.text(pos2(left + 300.0, y), Align2::RIGHT_CENTER, state, font.clone(), if done { accent.gamma_multiply(alpha) } else { ink.gamma_multiply(alpha) });
         }
         if kind == Kind::Long {
             let bar = Rect::from_min_size(pos2(left, top + lines.len() as f32 * 17.0 + 6.0), vec2(300.0, 2.0));
             p.rect_filled(bar, Rounding::ZERO, accent.gamma_multiply(0.2 * alpha));
-            p.rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * assembly, bar.height())), Rounding::ZERO, accent.gamma_multiply(alpha));
+            p.rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * share, bar.height())), Rounding::ZERO, accent.gamma_multiply(alpha));
         }
     }
     ctx.request_repaint();
@@ -271,5 +302,17 @@ mod tests {
         assert_eq!(ring_progress(0, 6, 0.0), 0.0);
         assert!(ring_progress(0, 6, 0.3) > ring_progress(3, 6, 0.3));
         assert_eq!(ring_progress(5, 6, 1.0), 1.0);
+    }
+
+    #[test]
+    fn the_counter_fills_with_what_the_start_waits_for_and_the_brain_says_it_is_loading() {
+        // The brain's cold load outlasts the sequence: it is not counted, so the rest reach 100 %.
+        assert_eq!(share_up([true, true, true, false]), 1.0);
+        assert_eq!(share_up([true, false, false, true]), 1.0 / 3.0);
+        assert_eq!(share_up([false; 4]), 0.0);
+        assert_eq!(line_state(3, false, 0.5), "LOADING");
+        // Each line says READY once its part is up; the others tick meanwhile.
+        assert_eq!((line_state(3, true, 0.5), line_state(1, true, 0.5)), ("READY", "READY"));
+        assert_eq!(line_state(1, false, 0.5), "··");
     }
 }

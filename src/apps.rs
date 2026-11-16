@@ -403,8 +403,19 @@ pub async fn open(name: &str, args: &[String]) -> Result<String, String> {
         launch_target(&format!("aumid:{aumid}"), args).await?;
         return Ok(format!("Opened {app_name}."));
     }
+    // Nothing by that name: the closest installed name is suggested, not started ("open teams" → Steam).
+    let q = query.clone();
+    let closest = tokio::task::spawn_blocking(move || crate::appindex::nearest(&q)).await.ok().flatten();
+    Err(not_found(&label, closest.as_ref().map(|e| e.name.as_str())))
+}
 
-    Err(format!("I could not find an application called '{label}' on this machine."))
+/// The answer when no app has that name: the closest one only as a suggestion, never launched;
+/// it starts when Sir says its name himself (Sir, 2026-11-15).
+pub(crate) fn not_found(label: &str, closest: Option<&str>) -> String {
+    match closest {
+        Some(name) => format!("No {label} here, Sir. The closest is {name}.\nAsk Sir which app he meant; open one only when he names it himself."),
+        None => format!("I could not find an application called '{label}' on this machine."),
+    }
 }
 
 const HOME_PAGE: &str = "https://www.google.com";

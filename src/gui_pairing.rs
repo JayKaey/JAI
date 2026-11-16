@@ -88,7 +88,7 @@ pub(super) fn paint_qr(ui: &mut egui::Ui, url: &str, size: f32) {
     let cell = (size / (side as f32 + 2.0 * quiet)).floor().max(2.0);
     let total = cell * (side as f32 + 2.0 * quiet);
     let (rect, _) = ui.allocate_exact_size(vec2(total, total), Sense::hover());
-    ui.painter().rect_filled(rect, Rounding::same(6.0), Color32::WHITE);
+    ui.painter().rect_filled(rect, Rounding::ZERO, Color32::WHITE);
     for (i, dark) in modules.iter().enumerate() {
         if *dark {
             let (x, y) = ((i % side) as f32, (i / side) as f32);
@@ -145,7 +145,7 @@ fn frame(ctx: &egui::Context, class: Option<ViewportClass>, host: &WidgetHost) {
                     ui.add_space(6.0);
                     paint_qr(ui, &local, 220.0);
                     ui.add_space(6.0);
-                    ui.add(egui::Label::new(RichText::new(&local).monospace().size(10.5).color(p.muted)).wrap());
+                    ui.add(egui::Label::new(RichText::new(&local).monospace().size(11.0).color(p.muted)).wrap());
                     ui.horizontal(|ui| {
                         if ui.button("Copy local link").clicked() {
                             ui.output_mut(|o| o.copied_text = local.clone());
@@ -178,7 +178,7 @@ fn frame(ctx: &egui::Context, class: Option<ViewportClass>, host: &WidgetHost) {
             ui.add_space(4.0);
             egui::CollapsingHeader::new(RichText::new("At home: the local Wi-Fi link").size(11.0).color(p.muted)).id_salt("pairing_local").show(ui, |ui| {
                 muted(ui, &p, format!("Same Wi-Fi as this PC ({ip}); accept J.A.I.' own certificate once."));
-                ui.add(egui::Label::new(RichText::new(&local).monospace().size(10.5).color(p.muted)).wrap());
+                ui.add(egui::Label::new(RichText::new(&local).monospace().size(11.0).color(p.muted)).wrap());
                 if ui.small_button("Copy local link").clicked() {
                     ui.output_mut(|o| o.copied_text = local.clone());
                 }

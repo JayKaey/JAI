@@ -191,9 +191,17 @@ fn texture(ctx: &egui::Context, key: &str) -> Option<(TextureHandle, Vec2)> {
     }
 }
 
-/// Textures nobody drew for 20 s are let go (the decoded pictures stay in `pixels` a while).
+/// Textures nobody drew for 20 s are let go; the decoded pictures, the board's too, after an
+/// hour (looked at once a minute).
 fn forget_unused_textures() {
     super::lock(&TEXTURES).retain(|_, t| t.used.elapsed() < Duration::from_secs(20));
+    static SWEPT: Mutex<Option<Instant>> = Mutex::new(None);
+    let mut swept = super::lock(&SWEPT);
+    if swept.is_none_or(|t| t.elapsed() >= Duration::from_secs(60)) {
+        *swept = Some(Instant::now());
+        crate::image_viewer::pixels::forget_unused(Duration::from_secs(3600));
+        crate::hud_board::forget_unused_media(Duration::from_secs(3600));
+    }
 }
 
 fn hash_of(text: &str) -> u64 {
@@ -239,7 +247,7 @@ fn frame_state(ui: &mut Ui, rect: Rect, status: Option<(bool, Option<String>)>, 
 
 /// A small label with a dark backing.
 fn tag(p: &Painter, at: Pos2, anchor: Align2, text: &str, colour: Color32) -> Rect {
-    let galley = p.layout_no_wrap(text.to_string(), FontId::monospace(10.5), colour);
+    let galley = p.layout_no_wrap(text.to_string(), FontId::monospace(11.0), colour);
     let rect = anchor.anchor_size(at, galley.size()).expand2(vec2(5.0, 2.0));
     p.rect_filled(rect, Rounding::ZERO, Color32::from_rgba_unmultiplied(2, 5, 9, 210));
     p.galley(rect.min + vec2(5.0, 2.0), galley, colour);
@@ -506,7 +514,7 @@ fn cameras_body(ui: &mut Ui, _rt: &Handle) {
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(list).layout(Layout::top_down(Align::Min)));
         egui::ScrollArea::vertical().id_salt("jai_cam_list").show(&mut child, |ui| {
             for (i, (cam, km)) in view.cams.iter().enumerate() {
-                let text = RichText::new(format!("{}\n{} · {:.1} km", cam.title(), cam.area, km)).font(FontId::monospace(10.5)).color(if i == view.index { accent() } else { super::STRIP_INK });
+                let text = RichText::new(format!("{}\n{} · {:.1} km", cam.title(), cam.area, km)).font(FontId::monospace(11.0)).color(if i == view.index { accent() } else { super::STRIP_INK });
                 if ui.add(egui::SelectableLabel::new(i == view.index, text)).clicked() {
                     crate::webcams::select(i);
                 }

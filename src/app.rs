@@ -440,6 +440,10 @@ impl Jai {
         // While Sir is away: kept for his digest and sent to his phone (Discord DM).
         crate::away_mode::relay_alert(&message);
         self.emit(HudEvent::Notice { message: message.clone() });
+        // In a game: a line over it as well, which takes no focus and no click.
+        if crate::vram_guard::in_game() {
+            crate::live_subtitles::toast(&message);
+        }
         // Sir's phone shows it too (the mobile satellite).
         self.tools().stark.push_to_satellite(&message);
         if !self.busy() || self.inner.quitting.load(Ordering::Acquire) {
@@ -729,6 +733,14 @@ impl Jai {
                 for order in crate::later::fall_due(chrono::Local::now()) {
                     app.run_put_off(order).await;
                 }
+                // Games: after-game reminders, the school-night nudge, a download done; a game's
+                // routine when it starts.
+                for line in crate::kit_games::due_alerts() {
+                    app.raise_alert(line);
+                }
+                for order in crate::kit_games::due_orders() {
+                    app.run_put_off(order).await;
+                }
             }
         });
 
@@ -984,7 +996,9 @@ impl Jai {
     /// The words so far, while Sir is still speaking: transcribed for the HUD's live line when
     /// Whisper has nothing else to do. Called off the moment the utterance pauses or ends.
     fn live_words_ahead(&self, pcm: Vec<f32>, speech_ms: u32) {
-        if !self.live_words_wanted() || !self.inner.stt.is_ready() || !crate::vram_guard::voice_wake_allowed() {
+        // In standby his name in the words so far starts loading the model before he has finished.
+        let warm_up = crate::vram_guard::is_dormant() && !crate::vram_guard::in_game();
+        if !(warm_up || self.live_words_wanted()) || !self.inner.stt.is_ready() || !crate::vram_guard::voice_wake_allowed() {
             return;
         }
         // One decode at a time, and never beside a head start.
@@ -1007,7 +1021,12 @@ impl Jai {
             }
             drop(running);
             if let (Ok(Ok(t)), false) = (result, called_off.load(Ordering::Acquire)) {
-                crate::hud_lines::heard(&t.text);
+                if warm_up && crate::vram_guard::is_dormant() && app.wake_command(&t.text).is_some() {
+                    crate::vram_guard::wake("his name, mid-sentence");
+                }
+                if app.live_words_wanted() {
+                    crate::hud_lines::heard(&t.text);
+                }
             }
         });
     }

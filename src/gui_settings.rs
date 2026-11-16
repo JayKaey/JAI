@@ -20,6 +20,7 @@ static FOCUS: AtomicBool = AtomicBool::new(false);
 pub(super) fn open(open: bool) {
     if open && !OPEN.swap(true, Ordering::AcqRel) {
         FOCUS.store(true, Ordering::Release);
+        *GAMES.lock().unwrap_or_else(|e| e.into_inner()) = None;
         crate::hud_dock::cancel_close(ID);
     } else if !open {
         OPEN.store(false, Ordering::Release);
@@ -62,7 +63,13 @@ enum Control {
     Theme,
     /// A deeper tool, behind a key with this label.
     Open(Tool, &'static str),
+    /// Game mode now (the switch), and under it every installed game with its own switch.
+    Games,
 }
+
+/// The installed games for the list: (name, the folder title detection knows it by); None until
+/// read (again each time the panel opens), off the HUD's thread.
+pub(super) static GAMES: std::sync::Mutex<Option<Vec<(String, String)>>> = std::sync::Mutex::new(None);
 
 struct Row {
     group: &'static str,
@@ -79,9 +86,9 @@ const fn row(group: &'static str, name: &'static str, explain: &'static str, wor
 }
 
 /// The groups, in the order they stand (each is also a key that shows it alone).
-const GROUPS: [&str; 5] = ["LOOK", "SCREENS", "VOICE", "PRESENCE", "TOOLS"];
+const GROUPS: [&str; 6] = ["LOOK", "SCREENS", "VOICE", "PRESENCE", "GAMES", "TOOLS"];
 
-static ROWS: [Row; 41] = [
+static ROWS: [Row; 42] = [
     row("LOOK", "Theme", "The HUD's colours: one click on a swatch changes them.", "colour color palette gold cyan red green farbe farben design", Control::Theme),
     row("LOOK", "Your own theme", "Build a theme from your own colours, name it and save it.", "theme studio custom create", Control::Open(Tool::ThemeStudio, "[ THEME STUDIO ]")),
     row("LOOK", "Colours, opacity and panels", "The accent and background colour, how see-through the HUD is, which panels show.", "interface accent background transparency", Control::Open(Tool::Interface, "[ OPEN ]")),
@@ -121,6 +128,7 @@ static ROWS: [Row; 41] = [
     row("PRESENCE", "Night mode by the clock", "From 22:00 to 6:00 he is dimmer, makes no sounds and speaks quietly and briefly.", "evening late dark nacht nachtmodus abend", Control::Switch(|s| s.night_mode, |s, v| s.night_mode = v)),
     row("PRESENCE", "Night mode tonight", "On or off for this night only; the clock decides again in the morning.", "now", Control::Moment(|s| crate::hud_feel::night(s.night_mode), "night_now")),
     row("PRESENCE", "What did I miss?", "The notifications of the last hours.", "notifications history missed benachrichtigungen verpasst", Control::Open(Tool::Missed, "[ SHOW ]")),
+    row("GAMES", "Game mode", "In a game his mind moves to RAM (0 MB VRAM). Below: what counts as a game.", "gaming spiele spielmodus steam epic vram batman gta minecraft", Control::Games),
     row("TOOLS", "Accounts and services", "E-mail, calendar, school, Discord, the phone link: the Integrations hub.", "integrations hub webuntis itslearning whatsapp", Control::Open(Tool::Hub, "[ HUB ]")),
     row("TOOLS", "Everything he can do", "The Feature Lab: every ability, each with a button to try it.", "features lab abilities help funktionen hilfe", Control::Open(Tool::FeatureLab, "[ FEATURE LAB ]")),
 ];
@@ -151,7 +159,7 @@ fn switch(ui: &mut Ui, id: egui::Id, on: bool) -> bool {
     let p = ui.painter();
     let mid = rect.center().y;
     let track = Rect::from_min_size(pos2(rect.right() - 36.0, mid - 7.0), vec2(36.0, 14.0));
-    p.text(pos2(track.left() - 9.0, mid + 0.5), Align2::RIGHT_CENTER, if on { "ON" } else { "OFF" }, FontId::monospace(9.5), mix(STRIP_MUTED, accent, t));
+    p.text(pos2(track.left() - 9.0, mid + 0.5), Align2::RIGHT_CENTER, if on { "ON" } else { "OFF" }, FontId::monospace(11.0), mix(STRIP_MUTED, accent, t));
     p.rect_filled(track, Rounding::ZERO, mix(Color32::from_rgb(5, 10, 16), accent.gamma_multiply(0.24), t));
     let edge = if response.hovered() { accent } else { mix(crate::hud_board::border_colour().gamma_multiply(0.7), accent, t) };
     p.rect_stroke(track.shrink(0.5), Rounding::ZERO, stroke(1.0, edge));
@@ -173,7 +181,7 @@ fn key(ui: &mut Ui, label: &str, lit: bool) -> bool {
 fn search(ui: &mut Ui, needle: &mut String) {
     let accent = crate::hud_board::active_colour();
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 28.0), Sense::hover());
-    let tag = ui.painter().text(pos2(rect.left() + 10.0, rect.center().y + 0.5), Align2::LEFT_CENTER, "SEARCH", FontId::monospace(9.5), STRIP_MUTED);
+    let tag = ui.painter().text(pos2(rect.left() + 10.0, rect.center().y + 0.5), Align2::LEFT_CENTER, "SEARCH", FontId::monospace(11.0), STRIP_MUTED);
     let field = Rect::from_min_max(pos2(tag.right() + 10.0, rect.top() + 3.0), pos2(rect.right() - 6.0, rect.bottom() - 3.0));
     let response = ui.put(field, egui::TextEdit::singleline(needle).frame(false).hint_text("a word: night, voice, colour …").font(FontId::proportional(ts(13.5))).text_color(Color32::from_rgb(0xE8, 0xF2, 0xFC)));
     if FOCUS.swap(false, Ordering::AcqRel) {
@@ -212,32 +220,32 @@ fn body(ui: &mut Ui, iface: &InterfaceSettings) -> Option<Out> {
         return None;
     }
     let accent = crate::hud_board::active_colour();
-    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+    let kept = crate::hud_style::faded(ui, egui::ScrollArea::vertical().auto_shrink([false, false]), |ui| {
         let mut group = "";
+        // Where each group's name stands (for the one kept at the top).
+        let mut headers: Vec<(&str, f32)> = Vec::new();
         for (k, row) in shown.iter().enumerate() {
             if row.group != group {
                 group = row.group;
-                ui.add_space(if k == 0 { 4.0 } else { 12.0 });
-                let (line, _) = ui.allocate_exact_size(vec2(ui.available_width(), 18.0), Sense::hover());
-                let title = crate::hud_style::title_galley(ui.painter(), group, ts(13.0), accent, line.width());
-                let right = line.left() + title.size().x + 10.0;
-                ui.painter().galley(pos2(line.left(), line.center().y - title.size().y * 0.5), title, Color32::PLACEHOLDER);
-                ui.painter().line_segment([pos2(right, line.center().y), pos2(line.right(), line.center().y)], stroke(1.0, crate::hud_board::border_colour().gamma_multiply(0.45)));
-                ui.add_space(2.0);
+                ui.add_space(if k == 0 { 4.0 } else { 14.0 });
+                let (line, _) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::hover());
+                group_title(ui.painter(), line, group, accent);
+                headers.push((group, line.top()));
+                ui.add_space(4.0);
             }
             // The row under the pointer stands out a little.
-            let band = Rect::from_min_size(ui.cursor().min - vec2(4.0, 1.0), vec2(ui.available_width() + 8.0, 40.0));
+            let band = Rect::from_min_size(ui.cursor().min - vec2(4.0, 2.0), vec2(ui.available_width() + 8.0, 48.0));
             if ui.rect_contains_pointer(band) {
                 ui.painter().rect_filled(band, Rounding::ZERO, accent.gamma_multiply(0.05));
             }
             ui.horizontal(|ui| {
-                ui.set_min_height(38.0);
+                ui.set_min_height(44.0);
                 let width = ui.available_width();
                 let wide = matches!(row.control, Control::Theme);
-                ui.allocate_ui_with_layout(vec2((width - if wide { 250.0 } else { 150.0 }).max(120.0), 38.0), Layout::top_down(Align::Min), |ui| {
-                    ui.spacing_mut().item_spacing.y = 1.0;
-                    ui.label(RichText::new(row.name).font(FontId::new(ts(14.5), super::label_family())).color(Color32::from_rgb(0xE8, 0xF2, 0xFC)));
-                    ui.add(egui::Label::new(RichText::new(row.explain).size(ts(11.0)).color(STRIP_MUTED)).wrap());
+                ui.allocate_ui_with_layout(vec2((width - if wide { 250.0 } else { 150.0 }).max(120.0), 44.0), Layout::top_down(Align::Min), |ui| {
+                    ui.spacing_mut().item_spacing.y = 2.0;
+                    ui.label(lit(row.name, &needle, FontId::new(ts(14.5), super::label_family()), Color32::from_rgb(0xE8, 0xF2, 0xFC), accent));
+                    ui.add(egui::Label::new(lit(row.explain, &needle, FontId::proportional(ts(11.5)), STRIP_MUTED, accent)).wrap());
                 });
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| match row.control {
                     Control::Switch(get, set) => {
@@ -297,12 +305,109 @@ fn body(ui: &mut Ui, iface: &InterfaceSettings) -> Option<Out> {
                             out = Some(Out::Open(tool));
                         }
                     }
+                    Control::Games => {
+                        let on = crate::vram_guard::in_game();
+                        if switch(ui, egui::Id::new(("jai_setting", row.name)), on) {
+                            crate::vram_guard::set_game_mode(Some(!on));
+                        }
+                    }
                 });
             });
+            if matches!(row.control, Control::Games) {
+                games_list(ui);
+            }
+            ui.add_space(ROW_GAP);
         }
         ui.add_space(8.0);
+        // The group of the rows at the top stays named there while they scroll by.
+        let top = ui.clip_rect().top();
+        headers.iter().rev().find(|(_, y)| *y < top - 1.0).map(|&(group, _)| (group, top))
     });
+    // (Painted after the scroll area: over its fade, which would dim it.)
+    if let Some((group, top)) = kept.inner {
+        let band = Rect::from_min_size(pos2(kept.inner_rect.left(), top), vec2(kept.inner_rect.width(), 22.0));
+        // (It takes the clicks too: the half-hidden row under it is not there to be pressed.)
+        ui.interact(band, ui.id().with("kept_group_title"), Sense::click());
+        ui.painter().rect_filled(band, Rounding::ZERO, super::BLOCK_SLATE);
+        group_title(ui.painter(), band, group, accent);
+    }
     out
+}
+
+/// Space between two rows.
+const ROW_GAP: f32 = 6.0;
+
+/// A group's name and a hairline after it, in `line`.
+fn group_title(p: &egui::Painter, line: Rect, group: &str, accent: Color32) {
+    let title = crate::hud_style::title_galley(p, group, ts(13.0), accent, line.width());
+    let right = line.left() + title.size().x + 10.0;
+    p.galley(pos2(line.left(), line.center().y - title.size().y * 0.5), title, Color32::PLACEHOLDER);
+    p.line_segment([pos2(right, line.center().y), pos2(line.right(), line.center().y)], stroke(1.0, crate::hud_board::border_colour().gamma_multiply(0.45)));
+}
+
+/// `text` with each word of the search lit in the accent (the panel's search highlight).
+fn lit(text: &str, needle: &str, font: FontId, colour: Color32, accent: Color32) -> egui::text::LayoutJob {
+    let lower = text.to_lowercase();
+    let mut marks = vec![false; text.len()];
+    // (A letter whose small form is longer, rare outside Turkish, leaves the line unlit.)
+    if lower.len() == text.len() {
+        for word in needle.to_lowercase().split_whitespace() {
+            for (at, _) in lower.match_indices(word) {
+                marks[at..at + word.len()].fill(true);
+            }
+        }
+    }
+    let mut job = egui::text::LayoutJob::default();
+    let mut i = 0;
+    while i < text.len() {
+        let on = marks[i];
+        let mut j = i + 1;
+        while j < text.len() && (marks[j] == on || !text.is_char_boundary(j)) {
+            j += 1;
+        }
+        let format = egui::TextFormat { font_id: font.clone(), color: if on { accent } else { colour }, background: if on { accent.gamma_multiply(0.16) } else { Color32::TRANSPARENT }, ..Default::default() };
+        job.append(&text[i..j], 0.0, format);
+        i = j;
+    }
+    job
+}
+
+/// Under "Game mode": what it is doing now, and each installed game with its switch ("counts as
+/// a game"; off: its start no longer brings game mode).
+fn games_list(ui: &mut Ui) {
+    let now = match crate::vram_guard::game_now() {
+        Some((game, time)) => format!("NOW: {} · {} MIN · {}", game.to_uppercase(), time.as_secs() / 60, if crate::vram_guard::in_game() { "BRAIN IN RAM" } else { "GAME MODE OFF FOR IT" }),
+        None if crate::vram_guard::in_game() => "NOW: GAME MODE ON · BRAIN IN RAM".to_string(),
+        None => "NOW: NO GAME RUNNING · IT SWITCHES ITSELF ON WHEN ONE STARTS".to_string(),
+    };
+    ui.label(RichText::new(now).font(FontId::monospace(ts(11.0))).color(STRIP_INK));
+    let games = {
+        let mut games = GAMES.lock().unwrap_or_else(|e| e.into_inner());
+        if games.is_none() {
+            *games = Some(Vec::new());
+            let ctx = ui.ctx().clone();
+            std::thread::spawn(move || {
+                let found = crate::kit_games::library().into_iter().map(|g| (g.name, g.folder)).collect();
+                // (Reads the "not a game" list here, off the window thread, before a row asks.)
+                let _ = crate::vram_guard::counts_as_game("");
+                *GAMES.lock().unwrap_or_else(|e| e.into_inner()) = Some(found);
+                ctx.request_repaint();
+            });
+        }
+        games.clone().unwrap_or_default()
+    };
+    for (name, folder) in games {
+        ui.horizontal(|ui| {
+            ui.set_min_height(24.0);
+            ui.label(RichText::new(&name).size(ts(12.5)).color(Color32::from_rgb(0xE8, 0xF2, 0xFC)));
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                let counts = crate::vram_guard::counts_as_game(&folder);
+                if switch(ui, egui::Id::new(("jai_game_counts", &folder)), counts) {
+                    crate::vram_guard::set_counts_as_game(&folder, !counts);
+                }
+            });
+        });
+    }
 }
 
 /// The settings panel while it is open: a block on the board. Returns what it asks of the HUD.
@@ -378,13 +483,28 @@ mod tests {
                     set(&mut s, most);
                     assert_eq!(get(&s), most);
                 }
-                Control::Moment(..) | Control::Open(..) | Control::Theme => {}
+                Control::Moment(..) | Control::Open(..) | Control::Theme | Control::Games => {}
             }
         }
         // The features of 2026-11-12 are all here.
         for name in ["Calm HUD", "Live words", "Start-up sequence", "Idle screen", "Night mode by the clock", "Edge light", "Music visuals", "Mini mode", "Live desktop background", "Only obey me"] {
             assert!(names.contains(&name), "{name}");
         }
+    }
+
+    #[test]
+    fn the_search_lights_the_words_it_found() {
+        let job = lit("Night mode by the clock", "night clock", FontId::monospace(11.0), Color32::WHITE, Color32::RED);
+        let lit: Vec<&str> = job.sections.iter().filter(|s| s.format.color == Color32::RED).map(|s| &job.text[s.byte_range.clone()]).collect();
+        assert_eq!(lit, vec!["Night", "clock"]);
+        assert_eq!(job.text, "Night mode by the clock", "the words stay as they were");
+        let german = lit_text("Größer: die Schrift", "schrift");
+        assert_eq!(german, vec!["Schrift"]);
+    }
+
+    fn lit_text(text: &str, needle: &str) -> Vec<String> {
+        let job = lit(text, needle, FontId::monospace(11.0), Color32::WHITE, Color32::RED);
+        job.sections.iter().filter(|s| s.format.color == Color32::RED).map(|s| job.text[s.byte_range.clone()].to_string()).collect()
     }
 
     #[test]

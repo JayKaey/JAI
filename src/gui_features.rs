@@ -301,7 +301,7 @@ fn body(ui: &mut Ui, app: &crate::app::Jai, rt: &Handle) {
     *FILTER.lock().unwrap_or_else(|e| e.into_inner()) = filter.clone();
     let needle = filter.trim().to_lowercase();
     ui.add_space(4.0);
-    egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
+    crate::hud_style::faded(ui, egui::ScrollArea::vertical().auto_shrink([false; 2]), |ui| {
         // What the live suite found wrong or slow, first; then its pipeline and HUD probes.
         let outcomes = suite::results();
         for (heading, wanted) in [("LIVE SUITE // FAILED OR SLOW", true), ("LIVE SUITE // PIPELINES · ROUTING · HUD", false)] {

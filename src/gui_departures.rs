@@ -43,13 +43,7 @@ fn pill_colour(d: &Departure) -> Color32 {
     }
 }
 
-fn ink_on(c: Color32) -> Color32 {
-    if 0.3 * c.r() as f32 + 0.59 * c.g() as f32 + 0.11 * c.b() as f32 > 150.0 {
-        Color32::from_rgb(0x05, 0x0A, 0x10)
-    } else {
-        Color32::WHITE
-    }
-}
+use crate::hud_style::ink_on;
 
 /// What Sir clicked this frame.
 #[derive(Default)]
@@ -74,9 +68,9 @@ fn body(ui: &mut Ui, rt: &Handle) {
         ui.label(egui::RichText::new(name.to_uppercase()).font(bold(15.0)).color(STRIP_INK));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let (tag, colour) = if board.demo { ("DEMO", STRIP_MUTED) } else if board.loading { ("…", STRIP_MUTED) } else { ("LIVE", crate::hud_board::PIN_RED) };
-            ui.label(egui::RichText::new(tag).font(mono(10.0)).color(colour));
+            ui.label(egui::RichText::new(tag).font(mono(11.0)).color(colour));
             if !board.updated.is_empty() {
-                ui.label(egui::RichText::new(format!("UPDATED {}", board.updated)).font(mono(10.0)).color(STRIP_MUTED));
+                ui.label(egui::RichText::new(format!("UPDATED {}", board.updated)).font(mono(11.0)).color(STRIP_MUTED));
             }
         });
     });
@@ -94,12 +88,12 @@ fn body(ui: &mut Ui, rt: &Handle) {
     let head = ui.allocate_exact_size(vec2(full, 18.0), Sense::hover()).0;
     let p = ui.painter();
     for (x, h) in cols.iter().zip(["TIME", "LINE", "DESTINATION", "PLATF.", "STATUS"]) {
-        p.text(pos2(head.left() + x, head.center().y), Align2::LEFT_CENTER, h, mono(9.0), STRIP_MUTED);
+        p.text(pos2(head.left() + x, head.center().y), Align2::LEFT_CENTER, h, mono(11.0), STRIP_MUTED);
     }
     p.line_segment([head.left_bottom(), head.right_bottom()], stroke(1.0, accent.gamma_multiply(0.35)));
 
     let footer = 34.0;
-    egui::ScrollArea::vertical().max_height((ui.available_height() - footer).max(60.0)).auto_shrink([false, false]).show(ui, |ui| {
+    crate::hud_style::faded(ui, egui::ScrollArea::vertical().max_height((ui.available_height() - footer).max(60.0)).auto_shrink([false, false]), |ui| {
         for (i, d) in board.rows.iter().enumerate() {
             let (rect, resp) = ui.allocate_exact_size(vec2(full, ROW_H), Sense::click());
             let p = ui.painter();
@@ -120,7 +114,7 @@ fn body(ui: &mut Ui, rt: &Handle) {
             let pill_c = pill_colour(d).gamma_multiply(fade);
             let galley = p.layout_no_wrap(d.line.clone(), bold(11.0), ink_on(pill_c));
             let pill = Rect::from_min_size(pos2(rect.left() + cols[1], y - 9.0), vec2((galley.size().x + 12.0).min(cols[2] - cols[1] - 6.0), 18.0));
-            p.rect_filled(pill, Rounding::same(3.0), pill_c);
+            p.rect_filled(pill, Rounding::ZERO, pill_c);
             p.with_clip_rect(pill).galley(pos2(pill.left() + 6.0, y - galley.size().y / 2.0), galley, ink_on(pill_c));
             // The destination.
             let dest_w = cols[3] - cols[2] - 8.0;
@@ -161,7 +155,7 @@ fn body(ui: &mut Ui, rt: &Handle) {
     ui.add_space(4.0);
     ui.horizontal(|ui| {
         let button = |ui: &mut Ui, text: &str, enabled: bool| {
-            ui.add_enabled(enabled, egui::Button::new(egui::RichText::new(text).font(mono(10.0)).color(if enabled { accent } else { STRIP_MUTED })).fill(BLOCK_SLATE).stroke(stroke(1.0, accent.gamma_multiply(if enabled { 0.7 } else { 0.25 }))))
+            ui.add_enabled(enabled, egui::Button::new(egui::RichText::new(text).font(mono(11.0)).color(if enabled { accent } else { STRIP_MUTED })).fill(BLOCK_SLATE).stroke(stroke(1.0, accent.gamma_multiply(if enabled { 0.7 } else { 0.25 }))))
         };
         if button(ui, "SHOW ON EARTH", transit::focused().is_some()).on_hover_text("Follow the selected train on the Earth").clicked() {
             actions.show_on_earth = true;
@@ -170,7 +164,7 @@ fn body(ui: &mut Ui, rt: &Handle) {
             actions.refresh = true;
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label(egui::RichText::new("Transitous \u{b7} open data").font(mono(9.0)).color(STRIP_MUTED));
+            ui.label(egui::RichText::new("Transitous \u{b7} open data").font(mono(11.0)).color(STRIP_MUTED));
         });
     });
 

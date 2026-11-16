@@ -763,19 +763,19 @@ fn frame_body(ctx: &egui::Context, class: ViewportClass, app: &Jai, rt: &Handle,
         ui.set_opacity(fade);
         let full = ui.max_rect();
         let painter = ui.painter().clone();
-        painter.rect(full.shrink(0.6), Rounding::same(18.0), fill, Stroke::new(1.2_f32, accent.gamma_multiply(0.85)));
-        painter.rect_stroke(full.shrink(3.0), Rounding::same(15.5), Stroke::new(3.0_f32, accent.gamma_multiply(0.07)));
+        painter.rect(full.shrink(0.6), Rounding::ZERO, fill, Stroke::new(1.2_f32, accent.gamma_multiply(0.85)));
+        painter.rect_stroke(full.shrink(3.0), Rounding::ZERO, Stroke::new(3.0_f32, accent.gamma_multiply(0.07)));
         header(ui, ctx, w, full, accent);
         let body = Rect::from_min_max(pos2(full.left() + 12.0, full.top() + HEADER_H + 8.0), pos2(full.right() - 12.0, full.bottom() - 12.0));
         ui.allocate_new_ui(UiBuilder::new().max_rect(body), |ui| {
             ui.set_clip_rect(body);
             match w.kind {
-                SpatialWindowKind::LiveCrawlerStream => crawler_view(ui, w, c, app, rt, &mut repaint_after),
-                SpatialWindowKind::ExecutiveDossier => dossier_view(ui, w, c, ctx),
+                SpatialWindowKind::LiveCrawlerStream => crawler_view(ui, w, c, app, rt, &mut repaint_after, fill),
+                SpatialWindowKind::ExecutiveDossier => dossier_view(ui, w, c, ctx, fill),
                 SpatialWindowKind::KnowledgeGraphPinboard => graph_view(ui, w, c, ctx, accent),
                 SpatialWindowKind::CodeAndSandboxInspector => inspector_view(ui, c, accent, &mut repaint_after),
                 SpatialWindowKind::HardwareAndVramHud => hardware_view(ui, w, app, &mut repaint_after),
-                SpatialWindowKind::ScheduleAndCommandDeck => schedule_view(ui, app, rt),
+                SpatialWindowKind::ScheduleAndCommandDeck => schedule_view(ui, app, rt, fill),
             }
         });
         // Alignment guides of the last snap, fading out.
@@ -856,7 +856,7 @@ fn icon_button(ui: &mut Ui, rect: Rect, icon: Icon, active: bool, accent: Color3
     };
     let p = ui.painter();
     if hot || active {
-        p.rect_filled(rect.shrink(1.0), Rounding::same(6.0), col.gamma_multiply(0.14));
+        p.rect_filled(rect.shrink(1.0), Rounding::ZERO, col.gamma_multiply(0.14));
     }
     let c = rect.center();
     let s = Stroke::new(1.4_f32, col);
@@ -898,7 +898,7 @@ fn header(ui: &mut Ui, ctx: &egui::Context, w: &mut SpatialWindow, full: Rect, a
     let galley = painter.layout_no_wrap(w.label.clone().unwrap_or_else(|| w.kind.title().to_string()), FontId::proportional(12.5), accent);
     let title_w = galley.size().x;
     painter.galley(pos2(bar.left() + 20.0, bar.center().y - galley.size().y / 2.0), galley, accent);
-    painter.text(pos2(bar.left() + 26.0 + title_w, bar.center().y), Align2::LEFT_CENTER, format!("// {}{}", w.kind.tag(), if w.ghost { " · GHOST" } else { "" }), FontId::monospace(9.5), MUTED);
+    painter.text(pos2(bar.left() + 26.0 + title_w, bar.center().y), Align2::LEFT_CENTER, format!("// {}{}", w.kind.tag(), if w.ghost { " · GHOST" } else { "" }), FontId::monospace(11.0), MUTED);
     painter.line_segment([pos2(full.left() + 14.0, full.top() + HEADER_H + 3.0), pos2(full.right() - 14.0, full.top() + HEADER_H + 3.0)], Stroke::new(1.0_f32, accent.gamma_multiply(0.22)));
 
     let size = vec2(24.0, 22.0);
@@ -949,22 +949,22 @@ fn muted(ui: &mut Ui, text: &str) {
 
 fn stat(ui: &mut Ui, label: &str, value: String, colour: Color32) {
     ui.vertical(|ui| {
-        ui.label(RichText::new(label).monospace().size(8.5).color(MUTED));
+        ui.label(RichText::new(label).monospace().size(11.0).color(MUTED));
         ui.label(RichText::new(value).monospace().size(13.0).color(colour));
     });
 }
 
 fn bar(ui: &mut Ui, label: &str, value: &str, frac: f32, colour: Color32) {
     ui.horizontal(|ui| {
-        ui.add_sized([62.0, 14.0], egui::Label::new(RichText::new(label).monospace().size(9.5).color(MUTED)));
+        ui.add_sized([62.0, 14.0], egui::Label::new(RichText::new(label).monospace().size(11.0).color(MUTED)));
         let width = (ui.available_width() - 96.0).max(40.0);
         let (rect, _) = ui.allocate_exact_size(vec2(width, 9.0), Sense::hover());
         let p = ui.painter();
-        p.rect_filled(rect, Rounding::same(4.5), Color32::from_white_alpha(14));
+        p.rect_filled(rect, Rounding::ZERO, Color32::from_white_alpha(14));
         let filled = Rect::from_min_size(rect.min, vec2(rect.width() * frac.clamp(0.0, 1.0), rect.height()));
-        p.rect_filled(filled, Rounding::same(4.5), colour);
-        p.rect_filled(filled, Rounding::same(4.5), colour.gamma_multiply(0.25));
-        ui.label(RichText::new(value).monospace().size(9.5).color(TEXT));
+        p.rect_filled(filled, Rounding::ZERO, colour);
+        p.rect_filled(filled, Rounding::ZERO, colour.gamma_multiply(0.25));
+        ui.label(RichText::new(value).monospace().size(11.0).color(TEXT));
     });
 }
 
@@ -972,9 +972,9 @@ fn pill(ui: &mut Ui, text: &str, colour: Color32) -> egui::Response {
     Frame::none()
         .fill(colour.gamma_multiply(0.12))
         .stroke(Stroke::new(1.0_f32, colour.gamma_multiply(0.55)))
-        .rounding(Rounding::same(8.0))
+        .rounding(Rounding::ZERO)
         .inner_margin(Margin::symmetric(8.0, 2.0))
-        .show(ui, |ui| ui.label(RichText::new(text).monospace().size(9.5).color(colour)))
+        .show(ui, |ui| ui.label(RichText::new(text).monospace().size(11.0).color(colour)))
         .response
         .interact(Sense::click())
 }
@@ -983,7 +983,7 @@ fn mission_for(w: &SpatialWindow) -> Option<i64> {
     w.mission_id.or_else(research::latest_mission_id)
 }
 
-fn crawler_view(ui: &mut Ui, w: &mut SpatialWindow, c: &mut WorkspaceCanvas, app: &Jai, rt: &Handle, repaint: &mut Duration) {
+fn crawler_view(ui: &mut Ui, w: &mut SpatialWindow, c: &mut WorkspaceCanvas, app: &Jai, rt: &Handle, repaint: &mut Duration, fill: Color32) {
     let Some(engine) = research::engine() else {
         muted(ui, "The research engine is not running.");
         return;
@@ -1003,7 +1003,7 @@ fn crawler_view(ui: &mut Ui, w: &mut SpatialWindow, c: &mut WorkspaceCanvas, app
             ui.label(RichText::new(&s.mission.topic).strong().size(14.0).color(ARC_CYAN));
             pill(ui, &s.mission.status.to_uppercase(), if running { VERIFIED } else { MUTED });
             if let Some(tick) = engine.last_progress(id).filter(|_| running) {
-                ui.label(RichText::new(format!("LIVE {}", tick.at)).monospace().size(9.0).color(VERIFIED));
+                ui.label(RichText::new(format!("LIVE {}", tick.at)).monospace().size(11.0).color(VERIFIED));
             }
         });
     }
@@ -1043,7 +1043,7 @@ fn crawler_view(ui: &mut Ui, w: &mut SpatialWindow, c: &mut WorkspaceCanvas, app
         }
     });
     ui.add_space(4.0);
-    egui::ScrollArea::vertical().id_salt(("crawl_feed", w.id)).stick_to_bottom(true).auto_shrink([false; 2]).show(ui, |ui| {
+    crate::hud_style::faded_into(ui, egui::ScrollArea::vertical().id_salt(("crawl_feed", w.id)).stick_to_bottom(true).auto_shrink([false; 2]), fill, |ui| {
         for e in engine.recent_events(Some(id), 180) {
             let (tag, colour, text) = match &e.kind {
                 TelemetryKind::Fetch { url, status, ms, bytes } => (
@@ -1065,9 +1065,9 @@ fn crawler_view(ui: &mut Ui, w: &mut SpatialWindow, c: &mut WorkspaceCanvas, app
             };
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
-                ui.label(RichText::new(&e.at).monospace().size(9.5).color(MUTED));
-                ui.label(RichText::new(tag).monospace().size(9.5).color(colour));
-                ui.add(egui::Label::new(RichText::new(text).monospace().size(9.5).color(TEXT)).wrap());
+                ui.label(RichText::new(&e.at).monospace().size(11.0).color(MUTED));
+                ui.label(RichText::new(tag).monospace().size(11.0).color(colour));
+                ui.add(egui::Label::new(RichText::new(text).monospace().size(11.0).color(TEXT)).wrap());
             });
         }
     });
@@ -1092,24 +1092,24 @@ fn fact_row(ui: &mut Ui, f: &FactRow, selected: bool, related: bool) -> egui::Re
     } else {
         Color32::TRANSPARENT
     };
-    let inner = Frame::none().fill(fill).rounding(Rounding::same(6.0)).inner_margin(Margin::symmetric(6.0, 3.0)).show(ui, |ui| {
+    let inner = Frame::none().fill(fill).rounding(Rounding::ZERO).inner_margin(Margin::symmetric(6.0, 4.0)).show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new("-").size(9.0).color(fact_colour(f)));
+            ui.label(RichText::new("-").size(11.0).color(fact_colour(f)));
             ui.add(egui::Label::new(RichText::new(&f.claim).size(12.0).color(TEXT)).wrap());
-            ui.label(RichText::new(format!("[S{}]", f.source_id)).monospace().size(9.5).color(ARC_CYAN));
+            ui.label(RichText::new(format!("[S{}]", f.source_id)).monospace().size(11.0).color(ARC_CYAN));
             if f.corroborating > 0 {
-                ui.label(RichText::new(format!("OK {}×", f.corroborating + 1)).size(9.5).color(VERIFIED));
+                ui.label(RichText::new(format!("OK {}×", f.corroborating + 1)).size(11.0).color(VERIFIED));
             }
             if f.contradicting_source.is_some() {
-                ui.label(RichText::new("WARN: disputed").size(9.5).color(CONTRADICTION));
+                ui.label(RichText::new("WARN: disputed").size(11.0).color(CONTRADICTION));
             }
         });
     });
     inner.response.interact(Sense::click())
 }
 
-fn dossier_view(ui: &mut Ui, w: &mut SpatialWindow, c: &mut WorkspaceCanvas, ctx: &egui::Context) {
+fn dossier_view(ui: &mut Ui, w: &mut SpatialWindow, c: &mut WorkspaceCanvas, ctx: &egui::Context, fill: Color32) {
     let Some(id) = mission_for(w) else {
         muted(ui, "No dossier yet — start a deep research mission and it writes itself here, chapter by chapter.");
         return;
@@ -1124,7 +1124,7 @@ fn dossier_view(ui: &mut Ui, w: &mut SpatialWindow, c: &mut WorkspaceCanvas, ctx
     let mut clicked: Option<(i64, i64)> = None;
     let m = &snap.mission;
     let brief = c.briefs.get(&id).cloned();
-    egui::ScrollArea::vertical().id_salt(("dossier", w.id)).auto_shrink([false; 2]).show(ui, |ui| {
+    crate::hud_style::faded_into(ui, egui::ScrollArea::vertical().id_salt(("dossier", w.id)).auto_shrink([false; 2]), fill, |ui| {
         // A topic workspace: what JAI knows, before the research chapters.
         if let Some(brief) = &brief {
             egui::CollapsingHeader::new(RichText::new("OVERVIEW & FACTS").size(13.0).color(STARK_GOLD)).id_salt((w.id, "brief")).default_open(true).show(ui, |ui| {
@@ -1136,11 +1136,11 @@ fn dossier_view(ui: &mut Ui, w: &mut SpatialWindow, c: &mut WorkspaceCanvas, ctx
         ui.label(
             RichText::new(format!("Mission #{} · started {} · {} · {} of {} min · {} pages · {} facts · {} sources", m.id, m.created_at, m.status, m.elapsed_secs / 60, m.target_secs / 60, m.pages, m.facts, snap.sources.len()))
                 .monospace()
-                .size(9.5)
+                .size(11.0)
                 .color(MUTED),
         );
         ui.add_space(6.0);
-        ui.label(RichText::new("EXECUTIVE SUMMARY").monospace().size(10.0).color(STARK_GOLD));
+        ui.label(RichText::new("EXECUTIVE SUMMARY").monospace().size(11.0).color(STARK_GOLD));
         if m.executive_summary.trim().is_empty() {
             let mut top: Vec<&FactRow> = snap.facts.iter().filter(|f| f.contradicting_source.is_none()).collect();
             top.sort_by(|a, b| b.corroborating.cmp(&a.corroborating).then(b.confidence.partial_cmp(&a.confidence).unwrap_or(std::cmp::Ordering::Equal)));
@@ -1187,13 +1187,13 @@ fn dossier_view(ui: &mut Ui, w: &mut SpatialWindow, c: &mut WorkspaceCanvas, ctx
             egui::CollapsingHeader::new(RichText::new(format!("Chapter 7 — Contradictions  ({})", conflicts.len())).size(13.0).color(CONTRADICTION)).id_salt((w.id, "conflicts")).default_open(true).show(ui, |ui| {
                 egui::Grid::new(("conflict_grid", w.id)).striped(true).num_columns(3).show(ui, |ui| {
                     for h in ["CLAIM", "SOURCE", "DISPUTED BY"] {
-                        ui.label(RichText::new(h).monospace().size(9.0).color(MUTED));
+                        ui.label(RichText::new(h).monospace().size(11.0).color(MUTED));
                     }
                     ui.end_row();
                     for f in conflicts {
                         ui.add(egui::Label::new(RichText::new(&f.claim).size(11.0)).wrap());
-                        ui.label(RichText::new(snap.source(f.source_id).map(|s| s.domain.clone()).unwrap_or_default()).size(10.5).color(ARC_CYAN));
-                        ui.label(RichText::new(f.contradicting_source.and_then(|s| snap.source(s)).map(|s| s.domain.clone()).unwrap_or_default()).size(10.5).color(CONTRADICTION));
+                        ui.label(RichText::new(snap.source(f.source_id).map(|s| s.domain.clone()).unwrap_or_default()).size(11.0).color(ARC_CYAN));
+                        ui.label(RichText::new(f.contradicting_source.and_then(|s| snap.source(s)).map(|s| s.domain.clone()).unwrap_or_default()).size(11.0).color(CONTRADICTION));
                         ui.end_row();
                     }
                 });
@@ -1203,11 +1203,11 @@ fn dossier_view(ui: &mut Ui, w: &mut SpatialWindow, c: &mut WorkspaceCanvas, ctx
             egui::Grid::new(("source_grid", w.id)).striped(true).num_columns(3).show(ui, |ui| {
                 for s in snap.sources.iter().take(80) {
                     let selected = c.selected_source == Some(s.id);
-                    ui.label(RichText::new(format!("S{}", s.id)).monospace().size(9.5).color(if selected { STARK_GOLD } else { MUTED }));
+                    ui.label(RichText::new(format!("S{}", s.id)).monospace().size(11.0).color(if selected { STARK_GOLD } else { MUTED }));
                     ui.hyperlink_to(RichText::new(s.title.chars().take(70).collect::<String>()).size(11.0), &s.url).on_hover_text(format!("{} · crawled {} · link depth {}", s.domain, s.crawled_at, s.depth));
                     let (rect, _) = ui.allocate_exact_size(vec2(60.0, 8.0), Sense::hover());
-                    ui.painter().rect_filled(rect, Rounding::same(4.0), Color32::from_white_alpha(14));
-                    ui.painter().rect_filled(Rect::from_min_size(rect.min, vec2(60.0 * s.reliability, 8.0)), Rounding::same(4.0), VERIFIED.gamma_multiply(0.4 + 0.6 * s.reliability));
+                    ui.painter().rect_filled(rect, Rounding::ZERO, Color32::from_white_alpha(14));
+                    ui.painter().rect_filled(Rect::from_min_size(rect.min, vec2(60.0 * s.reliability, 8.0)), Rounding::ZERO, VERIFIED.gamma_multiply(0.4 + 0.6 * s.reliability));
                     ui.end_row();
                 }
             });
@@ -1386,7 +1386,7 @@ fn markdown_lite(ui: &mut Ui, text: &str, accent: Color32) {
         if line.trim_start().starts_with("```") {
             match code.take() {
                 Some(block) => {
-                    Frame::none().fill(Color32::from_white_alpha(8)).rounding(Rounding::same(6.0)).inner_margin(Margin::same(6.0)).show(ui, |ui| {
+                    Frame::none().fill(Color32::from_white_alpha(8)).rounding(Rounding::ZERO).inner_margin(Margin::same(6.0)).show(ui, |ui| {
                         ui.label(highlighted(&block, 11.0));
                     });
                 }
@@ -1401,7 +1401,7 @@ fn markdown_lite(ui: &mut Ui, text: &str, accent: Color32) {
         }
         let t = line.trim();
         if t.is_empty() {
-            ui.add_space(3.0);
+            ui.add_space(4.0);
         } else if let Some(h) = t.strip_prefix("# ") {
             ui.label(RichText::new(h).strong().size(16.0).color(accent));
         } else if let Some(h) = t.strip_prefix("## ") {
@@ -1417,7 +1417,7 @@ fn markdown_lite(ui: &mut Ui, text: &str, accent: Color32) {
             ui.add(egui::Label::new(RichText::new(q).italics().size(12.5).color(VERIFIED)).wrap());
         } else if t.starts_with('|') {
             if !t.contains("---") {
-                ui.label(RichText::new(t).monospace().size(10.0).color(TEXT));
+                ui.label(RichText::new(t).monospace().size(11.0).color(TEXT));
             }
         } else if t == "---" {
             ui.separator();
@@ -1464,7 +1464,7 @@ fn csv_view(ui: &mut Ui, body: &str) {
         egui::Grid::new("inspector_csv_grid").striped(true).num_columns(width).show(ui, |ui| {
             for (i, row) in rows.iter().enumerate() {
                 for cell in row {
-                    let text = RichText::new(cell).monospace().size(10.5);
+                    let text = RichText::new(cell).monospace().size(11.0);
                     ui.label(if i == 0 { text.strong().color(STARK_GOLD) } else { text.color(TEXT) });
                 }
                 ui.end_row();
@@ -1518,7 +1518,7 @@ fn plot_view(ui: &mut Ui, body: &str, accent: Color32, repaint: &mut Duration) {
     }
     let inner = rect.shrink2(vec2(36.0, 16.0));
     let to = |x: f64, y: f64| pos2(inner.left() + ((x - x0) / (x1 - x0).max(1e-9)) as f32 * inner.width(), inner.bottom() - ((y - y0) / (y1 - y0)) as f32 * inner.height());
-    p.rect_stroke(inner, Rounding::same(4.0), Stroke::new(1.0_f32, Color32::from_white_alpha(25)));
+    p.rect_stroke(inner, Rounding::ZERO, Stroke::new(1.0_f32, Color32::from_white_alpha(25)));
     if y0 < 0.0 && y1 > 0.0 {
         p.line_segment([to(x0, 0.0), to(x1, 0.0)], Stroke::new(1.0_f32, Color32::from_white_alpha(40)));
     }
@@ -1529,10 +1529,10 @@ fn plot_view(ui: &mut Ui, body: &str, accent: Color32, repaint: &mut Duration) {
     p.add(egui::Shape::line(line.clone(), Stroke::new(4.0_f32, accent.gamma_multiply(0.15))));
     p.add(egui::Shape::line(line, Stroke::new(1.6_f32, accent)));
     let fmt = |v: f64| crate::calc::format_number(v);
-    p.text(inner.left_top() + vec2(-4.0, 0.0), Align2::RIGHT_TOP, fmt(y1), FontId::monospace(9.0), MUTED);
-    p.text(inner.left_bottom() + vec2(-4.0, 0.0), Align2::RIGHT_BOTTOM, fmt(y0), FontId::monospace(9.0), MUTED);
-    p.text(inner.left_bottom() + vec2(0.0, 3.0), Align2::LEFT_TOP, fmt(x0), FontId::monospace(9.0), MUTED);
-    p.text(inner.right_bottom() + vec2(0.0, 3.0), Align2::RIGHT_TOP, fmt(x1), FontId::monospace(9.0), MUTED);
+    p.text(inner.left_top() + vec2(-4.0, 0.0), Align2::RIGHT_TOP, fmt(y1), FontId::monospace(11.0), MUTED);
+    p.text(inner.left_bottom() + vec2(-4.0, 0.0), Align2::RIGHT_BOTTOM, fmt(y0), FontId::monospace(11.0), MUTED);
+    p.text(inner.left_bottom() + vec2(0.0, 3.0), Align2::LEFT_TOP, fmt(x0), FontId::monospace(11.0), MUTED);
+    p.text(inner.right_bottom() + vec2(0.0, 3.0), Align2::RIGHT_TOP, fmt(x1), FontId::monospace(11.0), MUTED);
 }
 
 /// Ping and the busiest processes, sampled off the UI thread while a hardware HUD is open.
@@ -1625,14 +1625,14 @@ fn hardware_view(ui: &mut Ui, w: &SpatialWindow, app: &Jai, repaint: &mut Durati
                 g.power_w.map(|p| format!("{p:.0} W")).unwrap_or_else(|| "—".into())
             ))
             .monospace()
-            .size(9.5)
+            .size(11.0)
             .color(TEXT),
         );
     }
     ui.label(
         RichText::new(format!("NET ↓ {:.0} KB/s  ↑ {:.0} KB/s  · PING {}", t.net_down_kbps, t.net_up_kbps, ping_now.map(|p| format!("{p:.0} ms")).unwrap_or_else(|| "—".into())))
             .monospace()
-            .size(9.5)
+            .size(11.0)
             .color(TEXT),
     );
     if compact {
@@ -1649,9 +1649,9 @@ fn hardware_view(ui: &mut Ui, w: &SpatialWindow, app: &Jai, repaint: &mut Durati
         for (i, load) in t.cpu_per_core.iter().enumerate() {
             let h = rect.height() * (load / 100.0).clamp(0.02, 1.0);
             let r = Rect::from_min_max(pos2(rect.left() + i as f32 * bw + 1.0, rect.bottom() - h), pos2(rect.left() + (i + 1) as f32 * bw - 1.0, rect.bottom()));
-            p.rect_filled(r, Rounding::same(1.5), STARK_GOLD.gamma_multiply(0.35 + 0.65 * load / 100.0));
+            p.rect_filled(r, Rounding::ZERO, STARK_GOLD.gamma_multiply(0.35 + 0.65 * load / 100.0));
         }
-        p.text(rect.left_top(), Align2::LEFT_TOP, "CORES", FontId::monospace(8.5), MUTED);
+        p.text(rect.left_top(), Align2::LEFT_TOP, "CORES", FontId::monospace(11.0), MUTED);
         // Ping radar.
         let (rect, _) = ui.allocate_exact_size(vec2(120.0, 86.0), Sense::hover());
         let p = ui.painter_at(rect);
@@ -1675,14 +1675,14 @@ fn hardware_view(ui: &mut Ui, w: &SpatialWindow, app: &Jai, repaint: &mut Durati
                 }
             }
         }
-        p.text(rect.left_top(), Align2::LEFT_TOP, "PING", FontId::monospace(8.5), MUTED);
+        p.text(rect.left_top(), Align2::LEFT_TOP, "PING", FontId::monospace(11.0), MUTED);
     });
     ui.add_space(4.0);
-    ui.label(RichText::new("TOP PROCESSES (RAM)").monospace().size(9.0).color(MUTED));
+    ui.label(RichText::new("TOP PROCESSES (RAM)").monospace().size(11.0).color(MUTED));
     for (name, mb) in procs {
         ui.horizontal(|ui| {
-            ui.label(RichText::new(format!("{mb:>7.0} MB")).monospace().size(9.5).color(STARK_GOLD));
-            ui.label(RichText::new(name).monospace().size(9.5).color(TEXT));
+            ui.label(RichText::new(format!("{mb:>7.0} MB")).monospace().size(11.0).color(STARK_GOLD));
+            ui.label(RichText::new(name).monospace().size(11.0).color(TEXT));
         });
     }
 }
@@ -1754,14 +1754,14 @@ fn refresh_schedule(tools: ToolContext, rt: &Handle) {
     });
 }
 
-fn schedule_view(ui: &mut Ui, app: &Jai, rt: &Handle) {
+fn schedule_view(ui: &mut Ui, app: &Jai, rt: &Handle, fill: Color32) {
     refresh_schedule(app.tools().clone(), rt);
     let now = chrono::Local::now();
-    egui::ScrollArea::vertical().id_salt("schedule_deck").auto_shrink([false; 2]).show(ui, |ui| {
+    crate::hud_style::faded_into(ui, egui::ScrollArea::vertical().id_salt("schedule_deck").auto_shrink([false; 2]), fill, |ui| {
         ui.label(RichText::new(now.format("%A, %d %B · %H:%M").to_string()).strong().size(14.0).color(EMERALD));
         ui.add_space(6.0);
         let s = schedule();
-        ui.label(RichText::new("TIMETABLE (WEBUNTIS)").monospace().size(9.5).color(MUTED));
+        ui.label(RichText::new("TIMETABLE (WEBUNTIS)").monospace().size(11.0).color(MUTED));
         if s.loading && s.fetched_at.is_none() {
             let room = ui.available_rect_before_wrap();
             crate::hud_style::outline(ui, room.shrink(6.0), crate::hud_style::Outline::Lines);
@@ -1773,7 +1773,7 @@ fn schedule_view(ui: &mut Ui, app: &Jai, rt: &Handle) {
             muted(ui, note);
         }
         ui.add_space(8.0);
-        ui.label(RichText::new("CALENDAR").monospace().size(9.5).color(MUTED));
+        ui.label(RichText::new("CALENDAR").monospace().size(11.0).color(MUTED));
         for line in &s.events {
             ui.label(RichText::new(line).monospace().size(11.0).color(TEXT));
         }
@@ -1782,7 +1782,7 @@ fn schedule_view(ui: &mut Ui, app: &Jai, rt: &Handle) {
         }
         drop(s);
         ui.add_space(10.0);
-        ui.label(RichText::new("STARK PROTOCOLS").monospace().size(9.5).color(MUTED));
+        ui.label(RichText::new("STARK PROTOCOLS").monospace().size(11.0).color(MUTED));
         let protocols = app.tools().protocols.list();
         if protocols.is_empty() {
             muted(ui, "No protocols yet — \"JAI, create a gaming protocol that …\"");
@@ -1799,7 +1799,7 @@ fn schedule_view(ui: &mut Ui, app: &Jai, rt: &Handle) {
             }
         });
         ui.add_space(8.0);
-        ui.label(RichText::new("MISSION PROFILES").monospace().size(9.5).color(MUTED));
+        ui.label(RichText::new("MISSION PROFILES").monospace().size(11.0).color(MUTED));
         ui.horizontal_wrapped(|ui| {
             for scene in crate::spatial_scenes::builtin_scenes() {
                 if pill(ui, &scene.name.to_uppercase(), ARC_CYAN).on_hover_text(&scene.description).clicked() {
@@ -1910,6 +1910,7 @@ pub fn run_tool(tools: &ToolContext, name: &str, args: &Value) -> Result<String,
                     started.map(|m| format!("; deep research on \"{}\" started for {m} minutes", topic.clone().unwrap_or_default())).unwrap_or_default()
                 ),
                 match started {
+                    Some(_) if crate::vram_guard::in_game() => "Spreading out the workspace, Sir — the research starts once your game is over.".to_string(),
                     Some(_) => "Spreading out the workspace, Sir — and the research is under way.".to_string(),
                     None => "Spreading out the workspace, Sir.".to_string(),
                 },

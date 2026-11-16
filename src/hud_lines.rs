@@ -435,7 +435,7 @@ pub fn paint(ui: &mut Ui, top: Pos2, width: f32, state: &str, live_words: bool, 
     // not, each a key of its own (a click carries it out), and one that takes them all down.
     if let Some(offer) = crate::did_you_mean::current() {
         let head = p.layout_no_wrap("DID YOU MEAN".to_string(), FontId::monospace(11.0), MUTED);
-        let labels: Vec<String> = offer.choices.iter().enumerate().map(|(k, choice)| format!("[ {}  {} ]", k + 1, fit(&p, &choice.label.to_uppercase(), &FontId::monospace(10.0), (width - 90.0).max(120.0)))).collect();
+        let labels: Vec<String> = offer.choices.iter().enumerate().map(|(k, choice)| format!("[ {}  {} ]", k + 1, fit(&p, &choice.label.to_uppercase(), &FontId::monospace(11.0), (width - 90.0).max(120.0)))).collect();
         let none = crate::hud_style::key_width(&p, "[ NONE ]");
         let widest = labels.iter().map(|label| crate::hud_style::key_width(&p, label)).fold(head.size().x + none + 24.0, f32::max);
         let rows = labels.len() as f32;
@@ -514,7 +514,7 @@ pub fn paint_lock_label(p: &egui::Painter, centre: Pos2, radius: f32, strength: 
 
 fn paint_label(p: &egui::Painter, centre: Pos2, radius: f32, verdict: &str, colour: Color32, strength: f32) {
     let colour = colour.gamma_multiply(strength);
-    let galley = p.layout_no_wrap(verdict.to_string(), FontId::monospace(10.5), colour);
+    let galley = p.layout_no_wrap(verdict.to_string(), FontId::monospace(11.0), colour);
     let rect = Rect::from_center_size(pos2(centre.x, centre.y - radius * 1.2 - 8.0), galley.size()).expand2(vec2(7.0, 3.0));
     // (On a dark plate, so it reads over the voice ring's ticks.)
     p.rect_filled(rect, Rounding::ZERO, Color32::from_black_alpha((150.0 * strength) as u8));

@@ -145,6 +145,7 @@ windows = { version = "0.54", features = [
     "Win32_System_Memory",
     "Win32_System_Ole",
     # Background helpers: anonymous pipes read without blocking (`shell::quiet`).
+    "Win32_System_Performance",
     "Win32_System_Pipes",
     "Win32_System_Registry",
     "Win32_System_Threading",

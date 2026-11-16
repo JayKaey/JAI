@@ -312,7 +312,7 @@ pub async fn executive(tools: &ToolContext, time_of_day: Option<&str>) -> String
     crate::websearch::set_home_location(crate::websearch::place_from_memories(&tools.memory.list(200).unwrap_or_default()));
     let place = crate::websearch::home_location().unwrap_or_default();
     let quick = Duration::from_secs(6);
-    let (school, lms, (events, cal_note), mail, weather, news) = tokio::join!(
+    let (school, lms, (events, cal_note), mail, weather, news, free) = tokio::join!(
         // (Three days on from today: when today's lessons are over the next school day is what
         // is told, and a weekend may lie in between.)
         async { if school_on { Some(pim.lessons(day, if day == now.date_naive() { day + ChronoDuration::days(3) } else { day }).await) } else { None } },
@@ -326,7 +326,8 @@ pub async fn executive(tools: &ToolContext, time_of_day: Option<&str>) -> String
             } else {
                 tokio::time::timeout(quick, crate::websearch::headlines(&feed, 2)).await.unwrap_or_default()
             }
-        }
+        },
+        crate::kit_games::briefing_free_games()
     );
     // Only what is still ahead: the lessons that have not ended (or the next school day's), the
     // appointments that are not over.
@@ -451,6 +452,12 @@ pub async fn executive(tools: &ToolContext, time_of_day: Option<&str>) -> String
         md.extend(headlines.iter().map(|h| format!("- {h}")));
         spoken.push(format!("In the headlines: {}.", headlines.join(". ")));
     }
+    let (free, told) = free;
+    if !free.is_empty() {
+        md.push("### Free on Epic".into());
+        md.extend(free.iter().map(|t| format!("- {t}")));
+    }
+    spoken.extend(told);
 
     if !board.blocks.is_empty() {
         crate::hud_board::present(board);

@@ -1048,6 +1048,30 @@ async fn apps_apply(wanted: Vec<String>, others: bool, change: Change) -> Result
     com(move || retrying(|| imp::apply(&wanted, others, change))).await
 }
 
+/// While JAI speaks in a game, the game's channel (process `pid`'s sessions) dips to a third;
+/// `false` puts each back where it was, unless Sir moved it meanwhile.
+pub async fn dip_game(pid: u32, on: bool) {
+    static DIPPED: std::sync::Mutex<Vec<(String, f32, f32)>> = std::sync::Mutex::new(Vec::new());
+    let dipped = || DIPPED.lock().unwrap_or_else(|e| e.into_inner());
+    // Already dipped, or nothing to put back (the quit asks every time).
+    if on != dipped().is_empty() {
+        return;
+    }
+    let Ok(apps) = list_audio_apps().await else { return };
+    let moves: Vec<(String, f32, f32)> = if on {
+        apps.iter().filter(|a| pid != 0 && a.pid == pid && !a.muted && a.level > 0.05).map(|a| (a.name.clone(), a.level, a.level * 0.35)).collect()
+    } else {
+        let was = std::mem::take(&mut *dipped());
+        was.into_iter().filter(|(name, _, low)| apps.iter().any(|a| &a.name == name && (a.level - low).abs() < 0.02)).map(|(name, was, low)| (name, low, was)).collect()
+    };
+    for (name, _, to) in &moves {
+        let _ = apps_apply(vec![name.to_lowercase()], false, Change { level: Some(*to), ..Change::default() }).await;
+    }
+    if on {
+        *dipped() = moves;
+    }
+}
+
 /// A master-volume change through the three layers; `describe` phrases the result of layer 1
 /// or 2 from the level and mute state afterwards.
 async fn master_change(level: Option<f32>, mute: Option<bool>, delta: Option<f32>, describe: fn(f32, bool) -> String) -> Result<String, String> {
@@ -2067,6 +2091,18 @@ pub async fn scenarios() -> Vec<(String, Result<(), String>)> {
         slide("Master", percent).await;
     }
     out.push(("a slider's drag ends on its last level".to_string(), if master() == Some((51, false)) { Ok(()) } else { Err(format!("the master volume is at {:?}", master())) }));
+    // In a game its channel dips under JAI's voice and comes back; one Sir moved meanwhile stays.
+    let mut desk = scenario_bench();
+    desk.apps.push(AppSession { name: "BatmanAK".into(), pid: 42, level: 0.8, muted: false, labels: Vec::new() });
+    set_bench(Some(desk));
+    dip_game(42, true).await;
+    let low = (level("BatmanAK"), level("firefox"));
+    dip_game(42, false).await;
+    out.push(("the game dips under his voice and comes back".to_string(), if low == (Some((28, false)), Some((100, false))) && level("BatmanAK") == Some((80, false)) { Ok(()) } else { Err(format!("dipped to {low:?}, back at {:?}", level("BatmanAK"))) }));
+    dip_game(42, true).await;
+    let _ = apps_apply(vec!["batmanak".into()], false, Change { level: Some(0.6), ..Change::default() }).await;
+    dip_game(42, false).await;
+    out.push(("a game volume he moved during the dip stays".to_string(), if level("BatmanAK") == Some((60, false)) { Ok(()) } else { Err(format!("BatmanAK is at {:?}", level("BatmanAK"))) }));
     // With no player running the music tool's volume is the master's.
     set_bench(Some(Bench { master: (0.6, false), apps: Vec::new() }));
     let answer = player_volume(&json!("-50")).await;

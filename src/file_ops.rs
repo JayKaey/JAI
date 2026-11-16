@@ -148,7 +148,13 @@ fn is_junk_file(name: &str) -> bool {
 pub fn start() {
     let spawned = std::thread::Builder::new().name("jai-fileindex".into()).spawn(|| {
         crate::platform::lower_thread_priority();
+        crate::startup_sequence::wait_for_brain(Duration::from_secs(150));
         loop {
+            // (A game gets the disk: the walk waits until it has closed.)
+            if crate::vram_guard::in_game() {
+                std::thread::sleep(Duration::from_secs(60));
+                continue;
+            }
             rebuild();
             std::thread::sleep(REINDEX_EVERY);
         }
@@ -209,6 +215,8 @@ struct Query {
     words: Vec<String>,
     exts: Vec<String>,
     dirs_only: bool,
+    /// The retry when nothing matched: the closest names, whatever letter they start with.
+    loose: bool,
 }
 
 /// "my tax pdf" → words ["tax"], exts [pdf]; "kinetic horizon modpack folder" → words
@@ -265,7 +273,7 @@ fn parse_query(query: &str, extension: Option<&str>) -> Query {
 }
 
 /// How well a lower-case file name matches the words (0..1, ≥ 0.82 counts).
-fn score(name: &str, words: &[String]) -> f64 {
+fn score(name: &str, words: &[String], loose: bool) -> f64 {
     // Only a kind ("my pdfs", "recent photos"): every file of that kind, newest first.
     if words.is_empty() {
         return 0.9;
@@ -284,7 +292,7 @@ fn score(name: &str, words: &[String]) -> f64 {
         } else {
             // Typos keep their first letter; comparing only those keeps 250k names under 50 ms.
             let first = w.chars().next();
-            tokens.iter().filter(|t| t.chars().next() == first).map(|t| jaro_winkler(t, w)).fold(0.0, f64::max)
+            tokens.iter().filter(|t| loose || t.chars().next() == first).map(|t| jaro_winkler(t, w)).fold(0.0, f64::max)
         };
         total += best;
     }
@@ -298,6 +306,8 @@ pub struct Hit {
     pub size: u64,
     pub modified: SystemTime,
     score: f64,
+    /// Found by the loose retry: the nearest name, not the one said.
+    loose: bool,
 }
 
 fn wanted(q: &Query, name: &str, is_dir: bool) -> Option<f64> {
@@ -310,8 +320,8 @@ fn wanted(q: &Query, name: &str, is_dir: bool) -> Option<f64> {
             return None;
         }
     }
-    let s = score(name, &q.words);
-    (s >= 0.82).then_some(s)
+    let s = score(name, &q.words, q.loose);
+    (s >= if q.loose { 0.75 } else { 0.82 }).then_some(s)
 }
 
 /// Where `find_files` should look.
@@ -405,7 +415,7 @@ fn search_index(q: &Query, scope: &Scope) -> Option<Vec<Hit>> {
                         .filter_map(|e| {
                             let score = wanted(q, &e.name, e.is_dir)?;
                             in_scope(scope, &e.path)
-                                .then(|| Hit { path: e.path.clone(), is_dir: e.is_dir, size: e.size, modified: e.modified, score })
+                                .then(|| Hit { path: e.path.clone(), is_dir: e.is_dir, size: e.size, modified: e.modified, score, loose: q.loose })
                         })
                         .collect::<Vec<_>>()
                 })
@@ -453,6 +463,7 @@ fn search_live(q: &Query, roots: &[PathBuf], scope: &Scope) -> Vec<Hit> {
                     size: meta.as_ref().filter(|_| !is_dir).map(|m| m.len()).unwrap_or(0),
                     modified: meta.and_then(|m| m.modified().ok()).unwrap_or(SystemTime::UNIX_EPOCH),
                     score,
+                    loose: q.loose,
                 });
             }
             ignore::WalkState::Continue
@@ -463,7 +474,13 @@ fn search_live(q: &Query, roots: &[PathBuf], scope: &Scope) -> Vec<Hit> {
 
 /// The best matches for a request, most relevant and most recent first.
 pub fn find(query: &str, extension: Option<&str>, hint: Option<&str>, limit: usize) -> Vec<Hit> {
-    let q = parse_query(query, extension);
+    find_in(query, extension, hint, limit, false)
+}
+
+/// [`find`]; with `nearest`, nothing by that name gives the closest names (marked loose). Only
+/// for Sir's own search: the loose pass reads every name without the first-letter cut.
+fn find_in(query: &str, extension: Option<&str>, hint: Option<&str>, limit: usize, nearest: bool) -> Vec<Hit> {
+    let mut q = parse_query(query, extension);
     if q.words.is_empty() && q.exts.is_empty() {
         return Vec::new();
     }
@@ -478,6 +495,11 @@ pub fn find(query: &str, extension: Option<&str>, hint: Option<&str>, limit: usi
             search_live(&q, &roots, &scope)
         }
     };
+    // Nothing by that name: the closest names in the index, once ("kalender" → calendar.ics).
+    if nearest && hits.is_empty() && !q.words.is_empty() {
+        q.loose = true;
+        hits = search_index(&q, &scope).unwrap_or_default();
+    }
     hits.sort_by(|a, b| b.score.total_cmp(&a.score).then(b.modified.cmp(&a.modified)));
     hits.truncate(limit);
     hits
@@ -556,6 +578,11 @@ pub struct FileOutcome {
     pub path: Option<PathBuf>,
 }
 
+/// The hit find_files opens at once: a name as said, never a nearest name (a guess, listed and asked about).
+fn to_open(hits: &[Hit], open: bool) -> Option<&Hit> {
+    hits.first().filter(|h| open && !h.loose)
+}
+
 /// The `find_files` tool.
 pub async fn find_tool(args: &Value) -> Result<FileOutcome, String> {
     let query = str_arg(args, &["query", "name", "file", "filename"]).ok_or("find_files needs 'query'.")?.to_string();
@@ -564,7 +591,7 @@ pub async fn find_tool(args: &Value) -> Result<FileOutcome, String> {
     let open = bool_arg(args, "open_immediately").or_else(|| bool_arg(args, "open")).unwrap_or(false);
     let started = Instant::now();
     let (q, e, h) = (query.clone(), extension.clone(), hint.clone());
-    let hits = tokio::task::spawn_blocking(move || find(&q, e.as_deref(), h.as_deref(), MAX_RESULTS)).await.map_err(|e| e.to_string())?;
+    let hits = tokio::task::spawn_blocking(move || find_in(&q, e.as_deref(), h.as_deref(), MAX_RESULTS, true)).await.map_err(|e| e.to_string())?;
     let ms = started.elapsed().as_millis();
     if hits.is_empty() {
         let indexing = BUILDING.load(Ordering::Acquire) && INDEX.read().unwrap_or_else(|e| e.into_inner()).built.is_none();
@@ -574,16 +601,26 @@ pub async fn find_tool(args: &Value) -> Result<FileOutcome, String> {
             if indexing { " (the file index is still being built; the search covered what it could)" } else { "" }
         ));
     }
-    let best = hits[0].path.clone();
-    if open {
+    if let Some(hit) = to_open(&hits, open) {
+        let best = hit.path.clone();
         let opened = open_with(&best, str_arg(args, &["open_with", "with", "app"])).await?;
         let others = if hits.len() > 1 { format!(" {} other match(es), e.g. {}.", hits.len() - 1, hits[1].path.display()) } else { String::new() };
         return Ok(FileOutcome { text: format!("{opened}{others}"), path: Some(best) });
     }
-    Ok(FileOutcome {
-        text: format!("{} match(es) in {ms} ms:\n{}", hits.len(), hits.iter().map(describe).collect::<Vec<_>>().join("\n")),
-        path: Some(best),
-    })
+    // Nearest names are an error, not a success: a success is confirmed as "Opening …" and its first path becomes "that file".
+    if hits[0].loose {
+        return Err(nearest_names(&query, &hits));
+    }
+    let list = hits.iter().map(describe).collect::<Vec<_>>().join("\n");
+    Ok(FileOutcome { text: format!("{} match(es) in {ms} ms:\n{list}", hits.len()), path: Some(hits[0].path.clone()) })
+}
+
+/// Only nearest names: the closest is named (its first line is what he says), all are listed,
+/// none is opened; it opens when Sir names it himself (as `apps::not_found`).
+fn nearest_names(query: &str, hits: &[Hit]) -> String {
+    let closest = hits[0].path.file_name().map_or_else(|| hits[0].path.display().to_string(), |n| n.to_string_lossy().into_owned());
+    let list = hits.iter().map(describe).collect::<Vec<_>>().join("\n");
+    format!("Nothing is called '{query}', Sir. The closest is {closest}.\nThe nearest names:\n{list}\nAsk Sir which file he meant; open one only when he names it himself.")
 }
 
 // ----------------------------------------------------------------------------- grep ----
@@ -1247,10 +1284,27 @@ mod tests {
         assert_eq!((q.words.clone(), q.dirs_only), (vec!["kinetic".to_string(), "horizon".to_string()], true));
         let q = parse_query("resume", Some(".pdf, docx"));
         assert_eq!(q.exts, vec!["pdf".to_string(), "docx".to_string()]);
-        assert!(score("tax_return_2025.pdf", &["tax".into(), "return".into()]) > 0.99);
-        assert!(score("kinetic horizon", &["kinetic".into(), "horizon".into()]) > 1.0, "exact names rank first");
-        assert!(score("kinetic horizon 1.20.1", &["kinetc".into(), "horizon".into()]) > 0.9, "typos still match");
-        assert!(score("invoice.pdf", &["tax".into()]) < 0.82);
+        assert!(score("tax_return_2025.pdf", &["tax".into(), "return".into()], false) > 0.99);
+        assert!(score("kinetic horizon", &["kinetic".into(), "horizon".into()], false) > 1.0, "exact names rank first");
+        assert!(score("kinetic horizon 1.20.1", &["kinetc".into(), "horizon".into()], false) > 0.9, "typos still match");
+        assert!(score("invoice.pdf", &["tax".into()], false) < 0.82);
+        // The retry when nothing matched: the closest name, whatever letter it starts with.
+        let (strict, loose) = (Query { words: vec!["kalender".into()], ..Default::default() }, Query { words: vec!["kalender".into()], loose: true, ..Default::default() });
+        assert_eq!(wanted(&strict, "calendar.ics", false), None);
+        assert!(wanted(&loose, "calendar.ics", false).is_some());
+        assert_eq!(wanted(&Query { words: vec!["tax".into()], loose: true, ..Default::default() }, "invoice.pdf", false), None);
+    }
+
+    #[test]
+    fn a_nearest_name_is_listed_not_opened() {
+        // "Open my kalender file" opened a Blender installer, the nearest name (0.869).
+        let hit = |loose| Hit { path: PathBuf::from("C:\\Users\\max\\Downloads\\blender-4.2.0-windows-x64.msi"), is_dir: false, size: 1, modified: SystemTime::UNIX_EPOCH, score: 0.869, loose };
+        assert!(to_open(&[hit(true)], true).is_none(), "a nearest name is never opened by itself");
+        assert!(to_open(&[hit(false)], true).is_some(), "a name as said still opens");
+        assert!(to_open(&[hit(false)], false).is_none());
+        let said = nearest_names("kalender.ics", &[hit(true)]);
+        assert_eq!(said.lines().next(), Some("Nothing is called 'kalender.ics', Sir. The closest is blender-4.2.0-windows-x64.msi."), "what he says");
+        assert!(said.contains("C:\\Users\\max\\Downloads\\blender-4.2.0-windows-x64.msi (") && !said.contains("Opening"), "listed for the model, not opened");
     }
 
     #[test]

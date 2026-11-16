@@ -67,7 +67,7 @@ impl WorkoutWindow {
         super::board_window(ctx, "workout_coach", "Gym // workout and PR coach", [580.0, 700.0], &mut open, |ui| {
                 muted(ui, p, "Or just say: \"JAI, log 3 by 10 bench press at 60 kilos\", \"start a 90 second rest timer\".");
                 ui.add_space(6.0);
-                egui::ScrollArea::vertical().max_height(620.0).show(ui, |ui| match &snapshot {
+                crate::hud_style::faded(ui, egui::ScrollArea::vertical().max_height(620.0), |ui| match &snapshot {
                     None => {
                         let room = ui.available_rect_before_wrap();
                         crate::hud_style::outline(ui, egui::Rect::from_min_size(room.min, egui::vec2(room.width(), room.height().min(160.0))), crate::hud_style::Outline::List);
@@ -95,7 +95,7 @@ impl WorkoutWindow {
                         ui.label(RichText::new(&event.title).font(bold(12.0)).color(p.text));
                         ui.label(RichText::new(&event.date).monospace().size(11.0).color(p.muted));
                         if event.all_day {
-                            ui.label(RichText::new("all day").size(10.5).color(p.muted));
+                            ui.label(RichText::new("all day").size(11.0).color(p.muted));
                         }
                     });
                 });
@@ -124,8 +124,8 @@ impl WorkoutWindow {
                         ui.label(RichText::new(format!("{} × {}", log.sets, log.reps)).monospace().size(11.5).color(p.accent));
                         ui.label(RichText::new(&log.exercise).size(12.0).color(p.text));
                         ui.label(RichText::new(format!("{:.1} kg", log.weight_kg)).size(11.5).color(p.text));
-                        ui.label(RichText::new(format!("1RM ≈ {:.1} kg", log.estimated_1rm)).size(10.5).color(p.muted));
-                        ui.label(RichText::new(crate::crash_guard::clip(&log.logged_at, 16)).monospace().size(10.0).color(p.muted));
+                        ui.label(RichText::new(format!("1RM ≈ {:.1} kg", log.estimated_1rm)).size(11.0).color(p.muted));
+                        ui.label(RichText::new(crate::crash_guard::clip(&log.logged_at, 16)).monospace().size(11.0).color(p.muted));
                     });
                 });
             }
@@ -250,7 +250,7 @@ impl WorkoutWindow {
                     let y = inner.top() + inner.height() * i as f32 / 4.0;
                     painter.line_segment([pos2(inner.left(), y), pos2(inner.right(), y)], Stroke::new(0.6_f32, p.line));
                     let value = hi - span * f64::from(i) / 4.0;
-                    painter.text(pos2(inner.left() + 2.0, y - 1.0), egui::Align2::LEFT_BOTTOM, format!("{value:.0}"), egui::FontId::monospace(8.0), p.muted);
+                    painter.text(pos2(inner.left() + 2.0, y - 1.0), egui::Align2::LEFT_BOTTOM, format!("{value:.0}"), egui::FontId::monospace(11.0), p.muted);
                 }
                 let step = if points.len() > 1 { inner.width() / (points.len() - 1) as f32 } else { 0.0 };
                 let mut previous: Option<egui::Pos2> = None;
@@ -263,7 +263,7 @@ impl WorkoutWindow {
                     }
                     painter.circle_filled(at, 2.6, p.green);
                     if i == 0 || i + 1 == points.len() || points.len() <= 8 {
-                        painter.text(pos2(x, inner.bottom() + 2.0), egui::Align2::CENTER_TOP, &point.date[5..point.date.len().min(10)], egui::FontId::monospace(8.0), p.muted);
+                        painter.text(pos2(x, inner.bottom() + 2.0), egui::Align2::CENTER_TOP, &point.date[5..point.date.len().min(10)], egui::FontId::monospace(11.0), p.muted);
                     }
                     previous = Some(at);
                 }

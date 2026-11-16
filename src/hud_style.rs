@@ -77,6 +77,72 @@ fn lerp_colour(a: Color32, b: Color32, t: f32) -> Color32 {
     Color32::from_rgba_premultiplied(ch(a.r(), b.r()), ch(a.g(), b.g()), ch(a.b(), b.b()), ch(a.a(), b.a()))
 }
 
+/// The ink for text on a coloured `fill`: dark or light, whichever reads better (WCAG contrast;
+/// one of the two always reaches 4.58:1, on the white and yellow themes too; the HUD's own
+/// near-black would leave a mid grey at 4.49).
+pub fn ink_on(fill: Color32) -> Color32 {
+    if contrast(fill, Color32::BLACK) >= contrast(fill, Color32::WHITE) { Color32::BLACK } else { Color32::WHITE }
+}
+
+/// The WCAG contrast ratio of two opaque colours (1 to 21).
+pub fn contrast(a: Color32, b: Color32) -> f32 {
+    let lum = |c: Color32| {
+        let ch = |v: u8| {
+            let v = v as f32 / 255.0;
+            if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+        };
+        0.2126 * ch(c.r()) + 0.7152 * ch(c.g()) + 0.0722 * ch(c.b())
+    };
+    let (x, y) = (lum(a), lum(b));
+    (x.max(y) + 0.05) / (x.min(y) + 0.05)
+}
+
+/// The surface's `fill` at `from`, fading to nothing at `to`, from `left` to `right`: text under
+/// it fades into the block.
+pub fn fade_band(p: &Painter, fill: Color32, left: f32, right: f32, from: f32, to: f32) {
+    let mut mesh = egui::Mesh::default();
+    let (a, b) = (fill, Color32::TRANSPARENT);
+    mesh.colored_vertex(pos2(left, from), a);
+    mesh.colored_vertex(pos2(right, from), a);
+    mesh.colored_vertex(pos2(left, to), b);
+    mesh.colored_vertex(pos2(right, to), b);
+    mesh.add_triangle(0, 1, 2);
+    mesh.add_triangle(1, 3, 2);
+    p.add(egui::Shape::mesh(mesh));
+}
+
+/// A vertical scroll area whose content fades into the block at an edge it goes on past (the
+/// top once scrolled, the bottom while more follows), with a slim mark of where it stands:
+/// rows are never cut off hard.
+pub fn faded<R>(ui: &mut Ui, area: egui::ScrollArea, add: impl FnOnce(&mut Ui) -> R) -> egui::scroll_area::ScrollAreaOutput<R> {
+    faded_into(ui, area, crate::hud_board::BLOCK_FILL, add)
+}
+
+/// [`faded`] on a surface of another `fill` (a see-through workspace window: the block's fill
+/// would lay dark bars over it).
+pub fn faded_into<R>(ui: &mut Ui, area: egui::ScrollArea, fill: Color32, add: impl FnOnce(&mut Ui) -> R) -> egui::scroll_area::ScrollAreaOutput<R> {
+    let out = area.show(ui, add);
+    let (inner, offset, full) = (out.inner_rect, out.state.offset.y, out.content_size.y);
+    if full <= inner.height() + 1.0 || inner.height() < 30.0 {
+        return out;
+    }
+    // Where rows can be seen: egui lets them paint a margin past the area, a block's frame may cut it short.
+    let r = inner.expand(ui.visuals().clip_rect_margin).intersect(ui.clip_rect());
+    let p = ui.painter_at(r);
+    let band = (r.height() / 5.0).min(22.0);
+    let fade = |from: f32, to: f32| fade_band(&p, fill, r.left(), r.right(), from, to);
+    if offset > 1.0 {
+        fade(r.top(), r.top() + band);
+    }
+    if offset + inner.height() < full - 1.0 || r.bottom() < inner.bottom() - 1.0 {
+        fade(r.bottom(), r.bottom() - band);
+    }
+    let h = (r.height() * r.height() / full).max(14.0);
+    let y = r.top() + (r.height() - h) * (offset / (full - inner.height()).max(1.0)).clamp(0.0, 1.0);
+    p.rect_filled(Rect::from_min_size(pos2(r.right() - 2.0, y), vec2(2.0, h)), Rounding::ZERO, crate::hud_board::active_colour().gamma_multiply(0.45));
+    out
+}
+
 /// A block's surface: glass lit from above. The fill is a shade lighter at the top than at the
 /// bottom, a hairline of light runs along its top edge, and a faint sheen lies across its upper
 /// left corner. `alpha`: the block's own opacity (its entrance, a search that dims it).
@@ -510,10 +576,16 @@ pub const HEADER_H: f32 = 24.0;
 /// `lit` keeps it in the theme's colour (a pinned block's `[ PIN ]`). Returns its rect; the
 /// caller asks whether it was clicked.
 pub fn key(p: &Painter, right: f32, mid: f32, label: &str, hot: bool, down: bool, lit: bool, alpha: f32) -> Rect {
-    let font = FontId::monospace(10.0);
+    let font = FontId::monospace(KEY_FONT);
     let galley = p.layout_no_wrap(label.to_string(), font, Color32::PLACEHOLDER);
-    let r = Rect::from_min_size(pos2(right - galley.size().x - 10.0, mid - 8.0), vec2(galley.size().x + 10.0, 16.0));
+    let r = Rect::from_min_size(pos2(right - galley.size().x - 10.0, mid - KEY_H / 2.0), vec2(galley.size().x + 10.0, KEY_H));
     let accent = crate::hud_board::active_colour();
+    if hot || down {
+        // A glow round it under the pointer.
+        for (grow, a) in [(1.5, 0.35), (3.0, 0.12)] {
+            p.rect_stroke(r.expand(grow), Rounding::ZERO, stroke(1.0, accent.gamma_multiply(a * alpha)));
+        }
+    }
     let (fill, edge, ink) = if down {
         (accent.gamma_multiply(0.30), accent, Color32::WHITE)
     } else if hot {
@@ -533,8 +605,12 @@ pub fn key(p: &Painter, right: f32, mid: f32, label: &str, hot: bool, down: bool
 
 /// A header key's width.
 pub fn key_width(p: &Painter, label: &str) -> f32 {
-    p.layout_no_wrap(label.to_string(), FontId::monospace(10.0), Color32::PLACEHOLDER).size().x + 10.0
+    p.layout_no_wrap(label.to_string(), FontId::monospace(KEY_FONT), Color32::PLACEHOLDER).size().x + 10.0
 }
+
+/// A header key's lettering and height (larger since 2026-11-15: readable at a glance).
+const KEY_FONT: f32 = 11.0;
+pub const KEY_H: f32 = 18.0;
 
 /// The header keys of a block, right to left from `right`: each (label, lit, hint). Returns
 /// which was clicked this frame and where the leftmost key begins. They light up under the
@@ -560,7 +636,7 @@ pub fn keys(ui: &mut Ui, id: egui::Id, right: f32, mid: f32, labels: &[(&str, bo
     let mut x = right;
     for (k, (label, lit, hint)) in labels.iter().enumerate() {
         let width = key_width(ui.painter(), label);
-        let r = Rect::from_min_size(pos2(x - width, mid - 8.0), vec2(width, 16.0));
+        let r = Rect::from_min_size(pos2(x - width, mid - KEY_H / 2.0), vec2(width, KEY_H));
         let response = ui.interact(r, id.with(("key", k)), Sense::click());
         key(ui.painter(), x, mid, label, response.hovered(), response.is_pointer_button_down_on(), *lit, alpha);
         if response.clicked() {
@@ -647,15 +723,22 @@ pub fn outline_on(p: &Painter, r: Rect, kind: Outline) {
             p.rect_filled(*s, Rounding::ZERO, dim);
         }
     }
-    // The passing light: a soft band that crosses the block every 1.4 s.
+    // The passing light, the shimmer that tells "still loading" from "empty": a soft band,
+    // brightest in its middle, that crosses the block every 1.4 s.
     let t = ((time / 1.4).fract()) as f32;
     let x = r.left() - 80.0 + (r.width() + 160.0) * t;
-    let accent = crate::hud_board::active_colour();
+    let glow = crate::hud_board::active_colour().gamma_multiply(0.12);
     for s in &shapes {
-        let band = Rect::from_min_max(pos2(x - 40.0, s.top()), pos2(x + 40.0, s.bottom())).intersect(*s);
-        if band.is_positive() {
-            p.rect_filled(band, Rounding::ZERO, accent.gamma_multiply(0.08));
+        let mut mesh = egui::Mesh::default();
+        for (dx, c) in [(-60.0, Color32::TRANSPARENT), (0.0, glow), (60.0, Color32::TRANSPARENT)] {
+            mesh.colored_vertex(pos2(x + dx, s.top()), c);
+            mesh.colored_vertex(pos2(x + dx, s.bottom()), c);
         }
+        for k in [0, 2] {
+            mesh.add_triangle(k, k + 1, k + 2);
+            mesh.add_triangle(k + 1, k + 3, k + 2);
+        }
+        p.with_clip_rect(s.intersect(p.clip_rect())).add(egui::Shape::mesh(mesh));
     }
     p.ctx().request_repaint_after(std::time::Duration::from_millis(33));
 }
@@ -711,6 +794,19 @@ pub fn failed_on(p: &Painter, r: Rect, what: &str) {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    /// Text on a theme's own colour reads on every theme, the white and yellow ones too.
+    #[test]
+    fn text_on_every_theme_colour_reaches_four_and_a_half_to_one() {
+        let mut fills: Vec<Color32> = crate::theme_engine::PRESETS.iter().map(|(_, p)| Color32::from_rgb(p.core_primary[0], p.core_primary[1], p.core_primary[2])).collect();
+        fills.extend([Color32::WHITE, Color32::from_rgb(255, 214, 0), Color32::from_rgb(20, 40, 160), Color32::from_rgb(120, 120, 120)]);
+        for fill in fills {
+            assert!(contrast(fill, ink_on(fill)) >= 4.5, "{fill:?}: {}", contrast(fill, ink_on(fill)));
+        }
+        assert_eq!(ink_on(Color32::WHITE), Color32::BLACK);
+        assert_eq!(ink_on(Color32::from_rgb(20, 40, 160)), Color32::WHITE);
+        assert!((contrast(Color32::BLACK, Color32::WHITE) - 21.0).abs() < 0.01);
+    }
 
     #[test]
     fn motion_is_quick_and_settles_just_past_its_mark() {

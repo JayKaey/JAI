@@ -286,7 +286,7 @@ mod tests {
                 }),
                 Block::new("NOTE // 01 — HARDWARE & PRICING", "FACT", "SOURCE: META", BlockKind::NoteStack { notes: vec![note("Quest 3S costs 299 dollars and ships with the Snapdragon XR2 Gen 2 and pancake-free fresnel lenses", "A deliberately long body text that has to wrap inside the block and be cut off with an ellipsis instead of running out of the frame. It keeps going for a while so the clipping is visible in the snapshot."), note("Index is discontinued", "Valve stopped production.")] }),
                 Block::new("FIGURE // 2026", "FACT", "SOURCE: IDC", BlockKind::HeroFigure { header: "Headsets shipped worldwide in 2026 (estimate)".into(), figure: "≈20m".into(), note: "IDC estimate, consumer and enterprise combined, all form factors.".into() }),
-                Block::new("VIDEO // STEAM FRAME HANDS-ON", "SOURCE: YOUTUBE", "", BlockKind::MediaCard { images: vec!["https://invalid.example/a.jpg".into()], caption: "Hands-on with the new headset at the event".into() }),
+                Block::new("VIDEO // STEAM FRAME HANDS-ON", "SOURCE: YOUTUBE", "", BlockKind::MediaCard { images: hud_board::video_frames("dQw4w9WgXcQ"), caption: "Hands-on with the new headset at the event · 12:34".into() }),
                 Block::new("MAP // TULLEYS FARM, CRAWLEY", "", "SOURCE: OSM", BlockKind::DarkVectorMap { place: "Tulleys Farm, Crawley".into(), lat: 51.1, lon: -0.17, span: 0.02, roads: vec![hud_board::Road { class: 1, points: vec![[51.095, -0.18], [51.105, -0.16]] }], water: vec![], pending: false }),
                 Block::new("NOTE // 02 — SOFTWARE", "FACT", "SOURCE: VALVE", BlockKind::NoteStack { notes: vec![note("SteamVR 3", "New compositor.")] }),
             ],
@@ -300,6 +300,11 @@ mod tests {
     fn snapshot_board_blocks_stay_inside_their_frames() {
         let _one = hud_board::test_lock();
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        // The video's stills without the network: two pictures, two YouTube does not have.
+        for (k, url) in hud_board::video_frames("dQw4w9WgXcQ").iter().enumerate() {
+            let still = egui::ColorImage::from_rgb([64, 36], &(0..64 * 36).flat_map(|i| [(i % 64 * 3) as u8, 60 + k as u8 * 40, (i / 64 * 6) as u8]).collect::<Vec<u8>>());
+            hud_board::put_media(url, if k < 2 { hud_board::MediaSlot::Ready(std::sync::Arc::new(still)) } else { hud_board::MediaSlot::Failed });
+        }
         hud_board::present(sample_report());
         // The cascade runs on the wall clock.
         std::thread::sleep(std::time::Duration::from_millis(700));

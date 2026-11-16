@@ -144,6 +144,16 @@ static NAMES: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| {
     .collect()
 });
 
+/// The words Sir taught him ("say Arkham like ark-um"), said his way, before every other rule.
+fn taught(s: &str) -> String {
+    crate::kit::list(crate::kit_voice::SAY_LIKE).into_iter().fold(s.to_string(), |s, (word, way, _)| {
+        match (Regex::new(&format!(r"(?i)\b{}\b", regex::escape(&word))), way.as_str()) {
+            (Ok(re), Some(way)) => re.replace_all(&s, regex::NoExpand(way)).into_owned(),
+            _ => s,
+        }
+    })
+}
+
 static GPU_MODEL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\b(RTX|GTX|RX)\s?(\d{4})(\s?(?:Ti|XT|Super))?\b").unwrap());
 static RESOLUTION: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\b(360|480|540|720|900|1080|1200|1440|1600|2160|4320)p\b").unwrap());
 
@@ -322,7 +332,7 @@ fn homographs(s: &str) -> String {
 impl PronunciationLexicon {
     /// The text as the voice should say it.
     pub fn normalize_for_speech(text: &str) -> String {
-        let mut s = homographs(&paths(text));
+        let mut s = homographs(&paths(&taught(text)));
         for (re, rep) in NAMES.iter() {
             s = re.replace_all(&s, *rep).into_owned();
         }

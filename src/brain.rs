@@ -77,11 +77,40 @@ enum BrainError {
 /// answered without it. JAI waits quietly (the emblem shows the thinking gyroscope): a cold
 /// load from the HDD (up to ≈ 120 s) or a GPU shared with a game must still end in a real answer.
 pub const COLD_START_WINDOW: Duration = Duration::from_secs(180);
+/// The tools the CPU brain keeps in game mode (`Brain::turn_prompt`).
+const GAME_TOOLS: &[&str] = &[
+    "control_music", "media_and_volume_control", "control_audio_mixer", "open_application", "close_application", "open_website",
+    "web_search", "read_webpage", "get_precise_location_weather", "calculate", "reminders", "remember_fact", "recall_memories",
+    "control_jai_lifecycle", "set_response_modality", "manage_vram",
+];
 
 /// Qwen's tokens for `chars` of prompt text and tool JSON: 4 chars each, rounded up (live
 /// 2026-11-03 the 87k-char prefix was ≈ 19k tokens, 4.6 chars each).
 fn estimate_tokens(chars: usize) -> usize {
     chars / 4 + 1
+}
+
+/// The model is loading (a prime runs): the status pill says so.
+static LOADING: AtomicBool = AtomicBool::new(false);
+
+pub fn loading() -> bool {
+    LOADING.load(Ordering::Acquire)
+}
+
+/// In a game: where the newest turns that fit ≈ 2k tokens begin, always at one of Sir's turns
+/// (the current one even when longer), so the game prompt and the reply fit the 8k window.
+fn game_history_start(messages: &[Value]) -> usize {
+    let (mut chars, mut from) = (0, messages.len());
+    for (i, m) in messages.iter().enumerate().rev() {
+        chars += m.to_string().len();
+        if chars > 8_000 && from < messages.len() {
+            break;
+        }
+        if m["role"] == "user" {
+            from = i;
+        }
+    }
+    from
 }
 /// The answer when the model stayed silent and the board has nothing on the question.
 pub const COLD_START_FALLBACK: &str = "Forgive me, Sir, my language engine gave me no answer in time. Ask me once more and I'll try again.";
@@ -818,6 +847,16 @@ impl Brain {
         if cfg.num_thread > 0 {
             options["num_thread"] = json!(cfg.num_thread);
         }
+        // Game mode: the model lives in RAM and answers on the CPU, with a few threads and the
+        // short game prompt (`turn_prompt`), so the GPU stays the game's.
+        if crate::vram_guard::in_game() {
+            options["num_gpu"] = json!(0);
+            options["num_thread"] = json!(crate::vram_guard::GAME_THREADS);
+            options["num_ctx"] = json!(crate::vram_guard::GAME_CTX.min(cfg.num_ctx));
+            // Mapped, not copied: the game can reclaim the pages without the page file, and the
+            // reload into VRAM afterwards reads them from RAM (Ollama copies on CPU loads).
+            options["use_mmap"] = json!(true);
+        }
         options
     }
 
@@ -900,6 +939,23 @@ impl Brain {
         self.inner.primed_hash.store(0, Ordering::Release);
     }
 
+    /// The instructions and tools of a turn. In game mode the CPU brain gets the persona, the
+    /// output rules and the few tools a game needs: the full ≈30k-token prompt would take
+    /// minutes to read on the CPU.
+    fn turn_prompt(&self, cfg: &JaiConfig) -> (String, Vec<Value>) {
+        let system = Self::system_prompt(cfg);
+        if !crate::vram_guard::in_game() {
+            return (system, self.inner.tools.prompt_definitions());
+        }
+        Self::game_prompt(&system, self.inner.tools.definitions())
+    }
+
+    fn game_prompt(system: &str, tools: Vec<Value>) -> (String, Vec<Value>) {
+        let persona = system.split("EXECUTIVE INITIATIVE").next().unwrap_or(system);
+        let tools = tools.into_iter().filter(|t| GAME_TOOLS.contains(&t["function"]["name"].as_str().unwrap_or(""))).collect();
+        (format!("{persona}GAME MODE: Sir is playing a game and you run on the CPU. Answer in one short sentence. Act only through your tools; never claim an action you did not call a tool for."), tools)
+    }
+
     /// Loads the model (keep_alive) and caches the prompt prefix. Also used as start-up warm-up.
     pub async fn prime(&self) {
         if let Err(status) = self.inner.llm.wait_ready(Duration::from_secs(5)).await {
@@ -910,8 +966,7 @@ impl Brain {
         let cfg = self.inner.config.snapshot();
         let model = cfg.primary_model.clone();
         let caps = self.caps(&model).await;
-        let system = Self::system_prompt(&cfg);
-        let tools = self.inner.tools.definitions();
+        let (system, tools) = self.turn_prompt(&cfg);
         let hash = Self::prefix_hash(&system, &tools, &model);
         if hash == self.inner.primed_hash.load(Ordering::Acquire) && self.inner.history.lock().await.messages.is_empty() {
             debug!("[LLM] Prompt prefix already primed; skipping.");
@@ -929,18 +984,15 @@ impl Brain {
             "options": Self::options(&cfg, 1),
         });
         let started = Instant::now();
-        match self
-            .inner
-            .client
-            .post(self.url("/api/chat"))
-            .json(&payload)
-            .timeout(Duration::from_secs(300))
-            .send()
-            .await
-        {
+        LOADING.store(true, Ordering::Release);
+        crate::gui::refresh();
+        let sent = self.inner.client.post(self.url("/api/chat")).json(&payload).timeout(Duration::from_secs(300)).send().await;
+        LOADING.store(false, Ordering::Release);
+        match sent {
             Ok(resp) if resp.status().is_success() => {
                 let body: Value = resp.json().await.unwrap_or_default();
                 self.inner.primed_hash.store(hash, Ordering::Release);
+                crate::startup_sequence::up(3);
                 info!(
                     "[LLM] '{model}' primed in {} ms (load {} ms, {} prompt tokens evaluated, keep_alive {})",
                     started.elapsed().as_millis(),
@@ -956,7 +1008,8 @@ impl Brain {
 
     async fn history_for(&self, caps: &ModelCaps) -> Vec<Value> {
         let hist = self.inner.history.lock().await;
-        hist.messages
+        let from = if crate::vram_guard::in_game() { game_history_start(&hist.messages) } else { 0 };
+        hist.messages[from..]
             .iter()
             .map(|m| {
                 // Drop the Qwen3 control token for models that would read it literally.
@@ -1603,8 +1656,8 @@ impl Brain {
             }
         }
         if !interrupted {
-            let system = Self::system_prompt(&cfg);
-            let hash = Self::prefix_hash(&system, &self.inner.tools.definitions(), &cfg.primary_model);
+            let (system, tools) = self.turn_prompt(&cfg);
+            let hash = Self::prefix_hash(&system, &tools, &cfg.primary_model);
             if hash != self.inner.primed_hash.load(Ordering::Acquire) {
                 debug!("[LLM] Prompt prefix changed (memories/skills); re-priming in the background.");
                 self.request_prime();
@@ -2321,6 +2374,8 @@ impl Brain {
         let err = outcome.output.trim_start_matches("Error: ");
         if !outcome.success {
             return Some(match tool {
+                // "No Teams here, Sir. The closest is Steam.": a suggestion, nothing started (the second line is for the model).
+                "open_application" | "find_files" if err.contains(". The closest is ") => err.lines().next().unwrap_or(err).to_string(),
                 "open_application" => format!("I'm afraid I couldn't find {app} on this machine, Sir."),
                 "close_native_window" => "I don't have a window open at the moment, Sir.".to_string(),
                 "run_forged_tool" => format!("My forged routine failed, Sir: {}", first_sentence(err)),
@@ -2736,6 +2791,11 @@ impl Brain {
         crate::core_sphere_3d::CoreActivityBus::chain(&["brain.rs", "context.rs", "runtime.rs"]);
         let gear = crate::intent_engine::reasoning_gear(request);
         info!("[GEAR] {gear:?} for '{}'", crate::crash_guard::clip(request, 60));
+        // Game mode with RAM short: loading the model now would make the game swap.
+        if crate::vram_guard::ram_tight() {
+            st.say("Your game needs the memory just now, Sir, so my mind is out of RAM until it has room. Orders still work.");
+            return (cfg.primary_model.clone(), false);
+        }
         if let Err(status) = self.inner.llm.wait_ready(COLD_START_WINDOW).await {
             warn!("[LLM] Language engine not ready: {}", status.detail);
             let _ = st.events.send(BrainEvent::Error { error: format!("Language engine: {}", status.detail) });
@@ -2753,8 +2813,8 @@ impl Brain {
             }
             return (cfg.primary_model.clone(), false);
         }
-        let tools = self.inner.tools.definitions();
-        let system = Self::system_prompt(cfg);
+        tools::new_turn();
+        let (system, tools) = self.turn_prompt(cfg);
         let mut model = cfg.primary_model.clone();
         let mut caps = caps;
         let mut announced_slow = false;
@@ -3425,7 +3485,7 @@ impl Brain {
         let payload = json!({
             "model": cfg.primary_model,
             "messages": messages,
-            "tools": self.inner.tools.definitions(),
+            "tools": self.inner.tools.prompt_definitions(),
             "stream": true,
             "think": false,
             "keep_alive": crate::vram_guard::keep_alive_value(&cfg),
@@ -4946,10 +5006,45 @@ mod tests {
     /// Live 2026-11-03: every prompt (20.5k-22k tokens) overran `num_ctx` 20480, and Ollama
     /// silently kept only its last half: the system prompt and the tool rules were cut off and
     /// the prompt cache never hit. The static prefix plus a full live context and the reply must fit.
+    /// The game prompt, a short history, the game context and the reply fit the CPU brain's
+    /// window: Ollama would silently cut the start (the persona) of a longer one.
+    #[test]
+    fn the_game_prompt_fits_the_game_window() {
+        let cfg = JaiConfig::default();
+        let (system, tools) = Brain::game_prompt(&Brain::system_prompt(&cfg), crate::tools::definitions_with(Vec::new()));
+        let tokens = estimate_tokens(system.len() + serde_json::to_string(&tools).unwrap().len());
+        println!("game prompt: {} chars of system prompt, {} tools ≈ {tokens} tokens", system.len(), tools.len());
+        assert_eq!(tools.len(), GAME_TOOLS.len(), "every game tool exists");
+        assert!(tokens + 2_000 + cfg.max_reply_tokens as usize <= crate::vram_guard::GAME_CTX as usize, "{tokens} tokens leave no room in {}", crate::vram_guard::GAME_CTX);
+        // Twenty turns before the game would not fit: the newest ones that do, from Sir's turn.
+        let say = |role: &str, n: usize| json!({ "role": role, "content": "x".repeat(n) });
+        let history = [say("user", 5_000), say("assistant", 100), say("user", 5_000), say("assistant", 100), say("tool", 100)];
+        assert_eq!(game_history_start(&history), 2);
+        assert_eq!(game_history_start(&[say("user", 9_000)]), 0, "the current turn always goes");
+    }
+
+    /// The door keeps the prompt lean; the game's tools stay in sight. (One the system prompt
+    /// names may be called unseen: a failed call answers with its parameters.)
+    #[test]
+    fn rare_tools_wait_behind_the_door() {
+        let all = crate::tools::definitions_with(Vec::new());
+        let names: Vec<&str> = all.iter().filter_map(|t| t["function"]["name"].as_str()).collect();
+        let system = Brain::system_prompt(&JaiConfig::default());
+        for name in crate::tools::BEHIND_DOOR {
+            assert!(names.contains(name), "{name} is a tool");
+            assert!(!GAME_TOOLS.contains(name), "{name} is a game tool");
+        }
+        let shown = crate::tools::prompt_definitions_from(all.clone());
+        assert_eq!(shown.len(), all.len() - crate::tools::BEHIND_DOOR.len() + 1);
+        let tokens = estimate_tokens(system.len() + serde_json::to_string(&shown).unwrap().len());
+        // 19k, plus ≈810 for the five everyday tools back in sight (3,321 chars, less 93 off the door's list).
+        assert!(tokens <= 19_810, "the lean prompt is {tokens} tokens");
+    }
+
     #[test]
     fn the_whole_prompt_fits_the_context_window() {
         let cfg = JaiConfig::default();
-        let tools = crate::tools::definitions_with(Vec::new());
+        let tools = crate::tools::prompt_definitions_from(crate::tools::definitions_with(Vec::new()));
         let system = Brain::system_prompt(&cfg).len();
         let chars = system + serde_json::to_string(&tools).unwrap().len();
         let prefix = estimate_tokens(chars);

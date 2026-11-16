@@ -222,8 +222,9 @@ pub fn capture(output: egui::FullOutput, screen: Rect) -> Frame {
 impl Frame {
     /// Every text row on screen whose words contain `needle` (case-insensitive): its bounds.
     pub fn find_text(&self, needle: &str) -> Vec<Rect> {
+        // (A no-break space reads as a space: "Flights: OpenSky Network" kept whole on its line.)
         let needle = needle.to_lowercase();
-        self.texts.iter().flat_map(|t| t.rows.iter().filter(|(rect, said)| said.to_lowercase().contains(&needle) && t.clip.intersects(*rect)).map(|(rect, _)| *rect)).collect()
+        self.texts.iter().flat_map(|t| t.rows.iter().filter(|(rect, said)| said.to_lowercase().replace('\u{a0}', " ").contains(&needle) && t.clip.intersects(*rect)).map(|(rect, _)| *rect)).collect()
     }
 
     /// Every text row on screen that reads exactly `label` (a menu entry, a chip): its bounds.

@@ -16,6 +16,7 @@ use tracing::{debug, info};
 /// Rebuilt on a miss when older than this (new installs show up without a restart).
 const MAX_AGE: Duration = Duration::from_secs(300);
 const MIN_SCORE: f64 = 0.88;
+const NEAREST_SCORE: f64 = 0.8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EntryKind {
@@ -121,6 +122,16 @@ pub fn lookup(name: &str) -> Option<AppEntry> {
         debug!("[APPS] '{query}' → {} ({:?}, score {s:.2})", e.name, e.kind);
     }
     hit.map(|(_, e)| e)
+}
+
+/// The suggestion when no app has that name: the closest shortcut name, if it is close ("spotfy").
+pub fn nearest(name: &str) -> Option<AppEntry> {
+    closest(&INDEX.read().unwrap_or_else(|e| e.into_inner()).entries, &normalize(name))
+}
+
+fn closest(entries: &[AppEntry], query: &str) -> Option<AppEntry> {
+    let named: Vec<AppEntry> = entries.iter().filter(|e| !matches!(e.kind, EntryKind::Program | EntryKind::PathBin)).cloned().collect();
+    (query.len() >= 3).then(|| best(&named, query, NEAREST_SCORE)).flatten().map(|(_, e)| e)
 }
 
 /// What the installed applications are called (their shortcuts and registered programs: the
@@ -406,5 +417,22 @@ mod tests {
         assert_eq!(find("code").as_deref(), Some("Visual Studio Code"));
         assert_eq!(find("photoshop"), None);
         assert!(is_noise("Uninstall Blender"));
+        // The retry when nothing has that name: the closest shortcut, if it is close.
+        let near = |q: &str| closest(&entries, &normalize(q)).map(|e| e.name);
+        assert_eq!((find("gimpy"), near("gimpy").as_deref()), (None, Some("GIMP 2.10")));
+        assert_eq!(near("photoshop"), None);
+        assert_eq!(near("obs studios"), None, "only names Sir would say, not raw executables");
+    }
+
+    #[test]
+    fn a_nearest_name_is_only_suggested() {
+        // "open teams" with no Teams installed launched Steam (0.867): now it names Steam and starts nothing.
+        let entries = vec![e("Steam", EntryKind::Shortcut, None), e("Spotify", EntryKind::Shortcut, None)];
+        let near = |q: &str| closest(&entries, &normalize(q)).map(|e| e.name);
+        assert_eq!(near("teams").as_deref(), Some("Steam"));
+        assert_eq!(near("spotfy").as_deref(), Some("Spotify"));
+        let reply = crate::apps::not_found("Teams", near("teams").as_deref());
+        assert!(reply.starts_with("No Teams here, Sir. The closest is Steam."), "{reply}");
+        assert!(!reply.to_lowercase().contains("opened"), "nothing was started: {reply}");
     }
 }

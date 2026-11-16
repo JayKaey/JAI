@@ -55,7 +55,7 @@ pub(super) fn widget_card(ui: &mut Ui, p: &Palette, spec: &DynamicWidgetSpec, ho
     Frame::none()
         .fill(p.well)
         .stroke(stroke(1.0, accent.gamma_multiply(0.35)))
-        .rounding(Rounding::same(7.0))
+        .rounding(Rounding::ZERO)
         .inner_margin(Margin::symmetric(10.0, 8.0))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
@@ -249,9 +249,9 @@ fn widget_body(ui: &mut Ui, p: &Palette, spec: &DynamicWidgetSpec, host: &Widget
                     muted(ui, p, format!("every {interval_secs} s · {age}"));
                 });
             });
-            Frame::none().fill(p.well_solid).rounding(Rounding::same(4.0)).inner_margin(Margin::same(6.0)).show(ui, |ui| {
+            Frame::none().fill(p.well_solid).rounding(Rounding::ZERO).inner_margin(Margin::same(6.0)).show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                egui::ScrollArea::vertical().id_salt(("widget_output", &spec.id)).max_height(170.0).show(ui, |ui| {
+                crate::hud_style::faded(ui, egui::ScrollArea::vertical().id_salt(("widget_output", &spec.id)).max_height(170.0), |ui| {
                     let colour = if *ok { p.text } else { p.red };
                     ui.add(egui::Label::new(RichText::new(if output.is_empty() { "…" } else { output }).monospace().size(ts(10.5)).color(colour)).wrap());
                 });
@@ -296,7 +296,7 @@ fn line_chart(ui: &mut Ui, p: &Palette, series: &[f64], unit: &str, min: Option<
     let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
     let painter = ui.painter();
     if grid {
-        painter.rect_filled(rect, Rounding::same(4.0), p.well_solid);
+        painter.rect_filled(rect, Rounding::ZERO, p.well_solid);
         for i in 1..4 {
             let y = rect.top() + rect.height() * i as f32 / 4.0;
             painter.line_segment([pos2(rect.left(), y), pos2(rect.right(), y)], stroke(1.0, p.track));
@@ -432,7 +432,7 @@ pub(super) fn markdown_view(ui: &mut Ui, p: &Palette, markdown: &str, accent: Co
 }
 
 fn code_block(ui: &mut Ui, p: &Palette, code: &str) {
-    Frame::none().fill(p.well_solid).stroke(stroke(1.0, p.line)).rounding(Rounding::same(4.0)).inner_margin(Margin::same(8.0)).show(ui, |ui| {
+    Frame::none().fill(p.well_solid).stroke(stroke(1.0, p.line)).rounding(Rounding::ZERO).inner_margin(Margin::same(8.0)).show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.horizontal(|ui| {
             ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
@@ -672,7 +672,7 @@ fn drive_space_view(ui: &mut Ui, p: &Palette, app: &Jai) {
         for (i, d) in t.disks.iter().enumerate() {
             let ui = &mut cols[i % columns];
             let colour = capacity_colour(p, d.used_pct);
-            Frame::none().fill(p.card).stroke(stroke(1.0, colour.gamma_multiply(0.45))).rounding(Rounding::same(7.0)).inner_margin(Margin::same(10.0)).show(ui, |ui| {
+            Frame::none().fill(p.card).stroke(stroke(1.0, colour.gamma_multiply(0.45))).rounding(Rounding::ZERO).inner_margin(Margin::same(10.0)).show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(d.letter()).font(bold(18.0)).color(colour));
@@ -982,7 +982,7 @@ fn window_content(ui: &mut Ui, p: &Palette, spec: &NativeWindowSpec, host: &Widg
     let id = spec.id.as_str();
     let p = *p;
     let mut fast = false;
-    egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
+    crate::hud_style::faded(ui, egui::ScrollArea::vertical().auto_shrink([false; 2]), |ui| {
         for block in &spec.blocks {
             if !block.title.is_empty() {
                 ui.label(RichText::new(&block.title).font(bold(12.0)).color(p.accent));
@@ -1000,7 +1000,7 @@ fn window_content(ui: &mut Ui, p: &Palette, spec: &NativeWindowSpec, host: &Widg
                 }
                 BlockKind::Telemetry => {
                     fast = true;
-                    Frame::none().fill(p.card).stroke(stroke(1.0, p.line)).rounding(Rounding::same(7.0)).inner_margin(Margin::same(10.0)).show(ui, |ui| {
+                    Frame::none().fill(p.card).stroke(stroke(1.0, p.line)).rounding(Rounding::ZERO).inner_margin(Margin::same(10.0)).show(ui, |ui| {
                         ui.set_width(ui.available_width());
                         telemetry_view(ui, &p, &host.app);
                     });

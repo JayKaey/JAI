@@ -30,6 +30,7 @@ pub const TOOLS: &[&str] = &[
     "portrait_dashboard",
     "read_aloud",
     "pronunciation_coach",
+    "say_like",
     "hearing_log",
     "known_guest",
     "evening_recap",
@@ -41,7 +42,22 @@ pub const TOOLS: &[&str] = &[
     "block_places",
     "notification_history",
     "scheduled_order",
+    "games",
+    "next_lesson",
 ];
+
+/// "What's my next lesson?", "wann ist meine nächste Stunde?": WebUntis, without the model.
+static NEXT_LESSON: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(r"(?i)^(?:whats|what s|what is|when is|when s|whens|where is|wheres|where s|was ist|wann ist|wo ist|was hab ich|was habe ich)\s+(?:my\s+|the\s+|meine\s+|die\s+)?(?:next|nächste|naechste)\s+(?:lesson|class|period|stunde|unterrichtsstunde|schulstunde)(?:\s+(?:today|tomorrow|heute|morgen))?$|^(?:what|which)\s+(?:lesson|class)\s+(?:do i have|have i got|is)\s+next$")
+        .expect("next lesson pattern")
+});
+
+async fn next_lesson(ctx: &ToolContext) -> Result<String, String> {
+    let (subject, at, room) = crate::briefing::next_lesson(ctx).await.ok_or("No lesson ahead in the next three days, or WebUntis isn't set up.")?;
+    let when = if at.date() == chrono::Local::now().date_naive() { format!("at {}", at.format("%H:%M")) } else { format!("on {} at {}", at.format("%A"), at.format("%H:%M")) };
+    let room = if room.is_empty() { String::new() } else { format!(" in {room}") };
+    Ok(say(format!("Next lesson: {subject} {when}{room}"), format!("Your next lesson is {subject} {when}{room}, Sir.")))
+}
 
 pub fn is_tool(name: &str) -> bool {
     TOOLS.contains(&name)
@@ -52,7 +68,10 @@ pub fn is_tool(name: &str) -> bool {
 /// to be kept, a note's text, keeps its capitals and its commas).
 pub fn command(s: &str, original: &str) -> Option<(&'static str, Value)> {
     let s = s.trim();
-    None.or_else(|| crate::kit_typing::dictation_command(s).map(|a| ("take_dictation", a)))
+    // (Games first: "whenever I start GTA, …" is a game's routine, not a whenever-rule.)
+    None.or_else(|| crate::kit_games::command(s).map(|a| ("games", a)))
+        .or_else(|| NEXT_LESSON.is_match(s.trim_end_matches(['?', '.', '!'])).then(|| ("next_lesson", serde_json::json!({}))))
+        .or_else(|| crate::kit_typing::dictation_command(s).map(|a| ("take_dictation", a)))
         .or_else(|| crate::kit_typing::snippet_command(s, original).map(|a| ("type_snippet", a)))
         .or_else(|| crate::kit_typing::keys_command(s).map(|a| ("press_keys", a)))
         .or_else(|| crate::kit_notes::notebook_command(s, original).map(|a| ("notebook", a)))
@@ -63,6 +82,7 @@ pub fn command(s: &str, original: &str) -> Option<(&'static str, Value)> {
         .or_else(|| crate::kit_screen::dashboard_command(s).map(|a| ("portrait_dashboard", a)))
         .or_else(|| crate::kit_voice::read_command(s).map(|a| ("read_aloud", a)))
         .or_else(|| crate::kit_voice::coach_command(s).map(|a| ("pronunciation_coach", a)))
+        .or_else(|| crate::kit_voice::say_like_command(s).map(|a| ("say_like", a)))
         .or_else(|| crate::kit_voice::hearing_command(s).map(|a| ("hearing_log", a)))
         .or_else(|| crate::kit_voice::guest_command(s).map(|a| ("known_guest", a)))
         .or_else(|| crate::kit_insight::recap_command(s).map(|a| ("evening_recap", a)))
@@ -92,6 +112,7 @@ pub async fn run_tool(ctx: &ToolContext, name: &str, args: &Value) -> Result<Str
         "portrait_dashboard" => crate::kit_screen::dashboard(ctx, args),
         "read_aloud" => crate::kit_voice::read_aloud(ctx, args).await,
         "pronunciation_coach" => crate::kit_voice::coach(args),
+        "say_like" => crate::kit_voice::say_like(args),
         "hearing_log" => crate::kit_voice::hearing(args),
         "known_guest" => crate::kit_voice::guest(ctx, args),
         "evening_recap" => crate::kit_insight::recap(ctx).await,
@@ -103,6 +124,8 @@ pub async fn run_tool(ctx: &ToolContext, name: &str, args: &Value) -> Result<Str
         "block_places" => crate::block_places::run(args),
         "notification_history" => crate::hud_notify::run(args),
         "scheduled_order" => crate::later::run(args),
+        "games" => crate::kit_games::run(args).await,
+        "next_lesson" => next_lesson(ctx).await,
         other => Err(format!("The kit has no tool called '{other}'.")),
     }
 }
@@ -112,14 +135,19 @@ pub async fn run_tool(ctx: &ToolContext, name: &str, args: &Value) -> Result<Str
 /// his own or keeps a line in his own store.
 pub fn only_looks(name: &str, args: &Value) -> bool {
     let action = args["action"].as_str().unwrap_or("");
-    is_tool(name) && (matches!(action, "show" | "list" | "status" | "check" | "report") || matches!(name, "evening_recap" | "internet_doctor" | "show_changes" | "hearing_log"))
+    is_tool(name)
+        && (matches!(action, "show" | "list" | "status" | "check" | "report")
+            || matches!(name, "evening_recap" | "internet_doctor" | "show_changes" | "hearing_log" | "next_lesson")
+            || (name == "games" && matches!(action, "playtime" | "news" | "free" | "vram" | "download" | "routines")))
 }
 
 pub fn stays_inside(name: &str, args: &Value) -> bool {
     let action = args["action"].as_str().unwrap_or("");
     // (An order put off is a line in his own store; what it does when it falls due goes
     // through this same door, call by call.)
-    only_looks(name, args) || matches!(name, "notebook" | "privacy_board" | "pronunciation_coach" | "known_guest" | "subtitle_place" | "block_places" | "notification_history" | "scheduled_order") || (matches!(name, "type_snippet" | "whenever_rule" | "desk_layout") && matches!(action, "save" | "add" | "delete" | "remove"))
+    only_looks(name, args)
+        || (name == "games" && matches!(action, "after" | "routine" | "forget_routine" | "bedtime" | "watch_download"))
+        || matches!(name, "notebook" | "privacy_board" | "pronunciation_coach" | "say_like" | "known_guest" | "subtitle_place" | "block_places" | "notification_history" | "scheduled_order") || (matches!(name, "type_snippet" | "whenever_rule" | "desk_layout") && matches!(action, "save" | "add" | "delete" | "remove"))
 }
 
 /// Tools that press keys or type in the app in front, or answer aloud about who is in the

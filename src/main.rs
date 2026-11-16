@@ -121,6 +121,7 @@ mod itslearning_bw_sso;
 mod interface;
 mod jai_voice_dsp;
 mod kit;
+mod kit_games;
 mod kit_insight;
 mod kit_notes;
 mod kit_screen;
@@ -1154,6 +1155,7 @@ async fn start(cli: &Cli, cfg: JaiConfig) -> Started {
         let (warm, engine) = (brain.clone(), Arc::clone(&llm));
         tokio::spawn(async move {
             if engine.settled().await {
+                startup_sequence::up(0);
                 warm.prime().await;
             }
         });
@@ -1173,6 +1175,8 @@ async fn start(cli: &Cli, cfg: JaiConfig) -> Started {
         guests: speaker_id::guests_welcome(),
         night: hud_feel::night_active(),
         dormant: vram_guard::is_dormant(),
+        game: vram_guard::in_game(),
+        thinking: thinking_guard::is_thinking(),
     });
     spawn_tray_handler(tray_rx, app.clone(), shutdown.clone());
 
@@ -1201,6 +1205,8 @@ async fn shutdown_sequence(app: app::Jai, store: ConfigStore, llm: Arc<runtime::
     // Lets the HUD show that JAI is going offline.
     tokio::time::sleep(Duration::from_millis(250)).await;
     llm.shutdown();
+    // A game dipped under his voice gets its level back (the dip's own way back needs 0.9 s of quiet).
+    let _ = tokio::time::timeout(Duration::from_secs(2), audio_mixer::dip_game(0, false)).await;
     gui::quit();
     // Safety net: a window that cannot be closed must not keep the process alive.
     std::thread::spawn(|| {
@@ -1224,6 +1230,7 @@ fn spawn_tray_handler(mut actions: UnboundedReceiver<TrayAction>, app: app::Jai,
                 TrayAction::OpenHud => gui::show(),
                 TrayAction::WakeJai => vram_guard::wake("tray"),
                 TrayAction::Standby => vram_guard::flush_with_reason("tray"),
+                TrayAction::GameMode(on) => vram_guard::set_game_mode(Some(on)),
                 // The switches of the tray menu: the same settings his words change, without
                 // a word from him.
                 TrayAction::VoiceLock(on) => tray_switch(&app, serde_json::json!({ "voice_lock": on })).await,

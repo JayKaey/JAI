@@ -1246,6 +1246,29 @@ fn select_output_device(preferred: Option<&str>) -> Option<(cpal::Device, String
     })
 }
 
+/// A stop under way at the speaker: `left` of `total` frames of the fade to go, then the `drop`
+/// frames of the old speech still queued behind them are skipped (speech queued after the stop
+/// stays).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct SoftStop {
+    left: usize,
+    total: usize,
+    drop: usize,
+}
+
+impl SoftStop {
+    /// `queued` frames were waiting when the stop came; the fade takes `fade` of them.
+    fn new(queued: usize, fade: usize) -> Option<Self> {
+        let total = fade.min(queued);
+        (total > 0).then_some(SoftStop { left: total, total, drop: queued - total })
+    }
+
+    /// The next frame's gain, and the stop after it (None: the fade is over).
+    fn step(self) -> (f32, Option<Self>) {
+        (self.left as f32 / self.total as f32, (self.left > 1).then_some(SoftStop { left: self.left - 1, ..self }))
+    }
+}
+
 fn build_output<T>(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
@@ -1259,18 +1282,29 @@ where
     T: SizedSample + FromSample<f32> + Send + 'static,
 {
     let channels = config.channels.max(1) as usize;
+    // A stop fades what is playing out over 50 ms (a hard cut clicks in a headset).
+    let fade = (config.sample_rate.0 as usize / 20).max(1);
+    let mut fading: Option<SoftStop> = None;
     device.build_output_stream(
         config,
         move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
             if flush.swap(false, Ordering::AcqRel) {
-                consumer.clear();
+                fading = SoftStop::new(consumer.len(), fade);
             }
             // (At night he speaks more quietly.)
             let gain = volume.load(Ordering::Relaxed) as f32 / 100.0 * crate::hud_feel::night_gain();
             let mut energy = 0.0f32;
             let mut frames = 0usize;
             for frame in data.chunks_mut(channels) {
-                let s = consumer.pop().map(|v| dsp::soft_clip(v * gain)).unwrap_or(0.0);
+                let mut s = consumer.pop().map(|v| dsp::soft_clip(v * gain)).unwrap_or(0.0);
+                if let Some(stop) = fading {
+                    let (fade_gain, next) = stop.step();
+                    s *= fade_gain;
+                    if next.is_none() {
+                        consumer.skip(stop.drop);
+                    }
+                    fading = next;
+                }
                 energy += s * s;
                 frames += 1;
                 let v = T::from_sample(s);
@@ -1606,7 +1640,7 @@ const WARM_PHRASES: &[&str] = &[
     "Done, Sir.", "Working on it, Sir.", "Leave it with me, Sir.", "Sound restored, Sir.", "Is this better, Sir?",
     "Good day, Sir.", "All systems are online.", "There you are, Sir.", "I'm afraid not, Sir.",
     "Noted, Sir.", "Understood, Sir.", "Consider it forgotten, Sir.", "As you wish, Sir.", "Powering down.",
-    "Shutting down now. Goodbye, Sir.", "Right away, Sir. All secondary windows have been closed.",
+    "Shutting down now. Goodbye, Sir.", "All secondary windows have been closed.",
     "I'm back online, Sir.",
     // The rotating acknowledgements of the anti-repetition engine, and the Stark systems' lines.
     "On it.", "At once.", "Consider it done, Sir.", "Straight away, Sir.", "Reply sent, Sir.", "Welcome home, Sir.",
@@ -1645,6 +1679,61 @@ impl ClauseCache {
             }
         }
     }
+
+    /// The common phrases as rendered last time, kept beside the model: a start (one during a
+    /// game too) plays them at once instead of synthesising them all again. Their first entry
+    /// is the build and voice that rendered them (`phrase_stamp`): another's may sound different.
+    fn load(&mut self, path: &Path, build: &str) -> usize {
+        let bytes = std::fs::read(path).unwrap_or_default();
+        let mut rest = bytes.as_slice();
+        let mut kept = Vec::new();
+        while let Some((key, audio, next)) = next_phrase(rest) {
+            kept.push((key, audio));
+            rest = next;
+        }
+        if kept.first().is_none_or(|(key, _)| key != build) {
+            return 0;
+        }
+        let n = kept.len() - 1;
+        for (key, audio) in kept.into_iter().skip(1) {
+            self.insert(key, Arc::new(audio));
+        }
+        n
+    }
+
+    fn save(&self, path: &Path, build: &str, keys: &[String]) -> std::io::Result<()> {
+        let mut out = Vec::new();
+        let kept = keys.iter().filter_map(|k| Some((k.as_str(), self.map.get(k)?.as_slice())));
+        for (key, audio) in std::iter::once((build, &[][..])).chain(kept) {
+            out.extend((key.len() as u32).to_le_bytes());
+            out.extend(key.as_bytes());
+            out.extend((audio.len() as u32).to_le_bytes());
+            out.extend(audio.iter().flat_map(|s| s.to_le_bytes()));
+        }
+        let part = path.with_extension("part");
+        std::fs::write(&part, out)?;
+        std::fs::rename(part, path)
+    }
+}
+
+/// One phrase of the phrase file: its key, its samples and what follows.
+fn next_phrase(b: &[u8]) -> Option<(String, Vec<f32>, &[u8])> {
+    let n = u32::from_le_bytes(b.get(..4)?.try_into().ok()?) as usize;
+    let key = String::from_utf8(b.get(4..4 + n)?.to_vec()).ok()?;
+    let b = &b[4 + n..];
+    let m = u32::from_le_bytes(b.get(..4)?.try_into().ok()?) as usize * 4;
+    let audio = b.get(4..4 + m)?.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
+    Some((key, audio, &b[4 + m..]))
+}
+
+/// This build, as its exe's size and time: the phrase file of another build is not used.
+fn build_stamp() -> String {
+    std::env::current_exe().and_then(std::fs::metadata).map(|m| format!("{} {:?}", m.len(), m.modified().ok())).unwrap_or_default()
+}
+
+/// The phrases' stamp: the build, model and voice (flattening, calibration, clip) that rendered them.
+fn phrase_stamp(build: &str, cfg: &JaiConfig, voice: Option<&crate::fish_zero_shot_tts::ReferenceProfile>) -> String {
+    format!("{build} {} {} {:?}", cfg.kokoro_model_path, cfg.voice_f0_flatten, voice.map(|p| (&p.blend, p.flatten, p.source)))
 }
 
 /// Phonemise + synthesise + post-process one clause (cache-aware).
@@ -1737,6 +1826,7 @@ fn synth_worker(cfg: JaiConfig, inner: Arc<Inner>, rx: &mpsc::Receiver<Job>, eve
             Ok(_) => info!("[TTS] Kokoro warm-up {} ms (G2P: {})", t0.elapsed().as_millis(), phonemizer.backend_name()),
             Err(e) => warn!("[TTS] Kokoro warm-up failed for voice '{voice}': {e}"),
         }
+        crate::vram_guard::report_tts(true);
     }
     *inner.status.write().unwrap_or_else(|e| e.into_inner()) = match &engine {
         Engine::Kokoro(_) => format!("kokoro + {}", phonemizer.backend_name()),
@@ -1745,6 +1835,8 @@ fn synth_worker(cfg: JaiConfig, inner: Arc<Inner>, rx: &mpsc::Receiver<Job>, eve
     };
 
     let mut cache = ClauseCache { map: HashMap::new(), order: std::collections::VecDeque::new() };
+    let (phrase_file, build) = (Path::new(&cfg.kokoro_model_path).with_file_name("jai_phrases.cache"), phrase_stamp(&build_stamp(), &cfg, crate::fish_zero_shot_tts::profile()));
+    let (mut warm_keys, mut warm_rendered) = (Vec::new(), false);
     let mut warm_voice = String::new();
     let mut warm_next = 0usize;
     let mut started_generation = 0u64;
@@ -1795,13 +1887,27 @@ fn synth_worker(cfg: JaiConfig, inner: Arc<Inner>, rx: &mpsc::Receiver<Job>, eve
                     warm_voice = voice.clone();
                     warm_next = 0;
                 }
+                let kokoro = matches!(engine, Engine::Kokoro(_));
                 if let Some(phrase) = WARM_PHRASES.get(warm_next) {
+                    if warm_next == 0 && kokoro {
+                        let kept = cache.load(&phrase_file, &build);
+                        tracing::debug!("[TTS] {kept} common phrases read from {}", phrase_file.display());
+                        (warm_keys, warm_rendered) = (Vec::new(), false);
+                    }
                     warm_next += 1;
                     let speech = normalize_for_speech(phrase);
                     let speed = f32::from_bits(inner.speed.load(Ordering::Relaxed));
+                    let key = ClauseCache::key(&voice, speed, &speech);
+                    warm_rendered |= cache.get(&key).is_none();
                     let _ = render_clause(&mut engine, &phonemizer, &mut cache, &speech, &voice, speed);
+                    warm_keys.push(key);
                     if warm_next == WARM_PHRASES.len() {
                         tracing::debug!("[TTS] {} common phrases pre-rendered for '{voice}'", WARM_PHRASES.len());
+                        if warm_rendered && kokoro {
+                            if let Err(e) = cache.save(&phrase_file, &build, &warm_keys) {
+                                warn!("[TTS] The common phrases could not be kept on disk: {e}");
+                            }
+                        }
                     }
                 }
                 continue;
@@ -1949,6 +2055,83 @@ pub fn dual_sink_probe() -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Talked over, his voice fades out over 50 ms instead of stopping dead, and only the speech
+    /// that was queued then is dropped.
+    /// A warm phrase too long to keep was "new" at every start and rewrote the phrase file.
+    #[test]
+    fn every_warm_phrase_can_be_kept() {
+        for phrase in WARM_PHRASES {
+            assert!(ClauseCache::cacheable(&normalize_for_speech(phrase)), "{phrase}");
+        }
+    }
+
+    #[test]
+    fn common_phrases_are_kept_on_disk_for_this_build_only() {
+        let path = std::env::temp_dir().join(format!("jai_phrases_test_{}.cache", std::process::id()));
+        let mut cache = ClauseCache { map: HashMap::new(), order: std::collections::VecDeque::new() };
+        let (yes, done) = (ClauseCache::key("bf_fable", 1.0, "Yes, Sir?"), ClauseCache::key("bf_fable", 1.0, "Done, Sir."));
+        cache.insert(yes.clone(), Arc::new(vec![0.25, -0.5, 1.0]));
+        cache.insert(done.clone(), Arc::new(vec![0.125; 3]));
+        cache.save(&path, "build 1", &[yes.clone(), done.clone(), "not rendered".into()]).unwrap();
+        let mut fresh = ClauseCache { map: HashMap::new(), order: std::collections::VecDeque::new() };
+        assert_eq!(fresh.load(&path, "build 2"), 0, "another build's voice is not used");
+        assert_eq!(fresh.load(&path, "build 1"), 2);
+        assert_eq!(fresh.get(&yes).as_deref(), Some(&vec![0.25, -0.5, 1.0]));
+        assert_eq!(fresh.get(&done).as_deref(), Some(&vec![0.125; 3]));
+        // A file cut short keeps what is whole.
+        let bytes = std::fs::read(&path).unwrap();
+        std::fs::write(&path, &bytes[..bytes.len() - 2]).unwrap();
+        let mut cut = ClauseCache { map: HashMap::new(), order: std::collections::VecDeque::new() };
+        assert_eq!(cut.load(&path, "build 1"), 1);
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(cut.load(&path, "build 1"), 0, "no file, nothing kept");
+    }
+
+    #[test]
+    fn kept_phrases_belong_to_the_voice_and_model_that_rendered_them() {
+        use crate::fish_zero_shot_tts::{F0Stats, ReferenceProfile, MEL_BANDS};
+        let measured = |blend: &str, modified: u64| ReferenceProfile {
+            envelope_db: [-30.0; MEL_BANDS],
+            rms_db: -20.0,
+            crest_db: 12.0,
+            speech_secs: 4.0,
+            f0: F0Stats { mean_hz: 110.0, median_hz: 108.0, std_st: 2.0, voiced_ratio: 0.6 },
+            blend: Some(blend.to_string()),
+            flatten: Some(0.3),
+            source: (96_000, modified),
+        };
+        let cfg = JaiConfig { kokoro_model_path: crate::models::KOKORO_V1_MODEL.to_string(), ..JaiConfig::default() };
+        let clip = measured("bm_fable:0.5+bm_lewis:0.5", 1_763_000_000);
+        let stamp = phrase_stamp("build 1", &cfg, Some(&clip));
+        assert_eq!(stamp, phrase_stamp("build 1", &cfg, Some(&measured("bm_fable:0.5+bm_lewis:0.5", 1_763_000_000))), "the same build and voice keep their phrases");
+        assert_ne!(stamp, phrase_stamp("build 2", &cfg, Some(&clip)), "another build");
+        assert_ne!(stamp, phrase_stamp("build 1", &cfg, Some(&measured("bm_fable:0.75+bm_george:0.25", 1_763_000_000))), "a new calibration");
+        assert_ne!(stamp, phrase_stamp("build 1", &cfg, Some(&measured("bm_fable:0.5+bm_lewis:0.5", 1_763_086_400))), "another clip");
+        assert_ne!(stamp, phrase_stamp("build 1", &cfg, None), "no clip");
+        let other = JaiConfig { kokoro_model_path: crate::models::KOKORO_V019_MODEL.to_string(), ..cfg.clone() };
+        assert_ne!(stamp, phrase_stamp("build 1", &other, Some(&clip)), "another model");
+        let other = JaiConfig { voice_f0_flatten: 0.5, ..cfg.clone() };
+        assert_ne!(stamp, phrase_stamp("build 1", &other, Some(&clip)), "Sir's own flattening");
+    }
+
+    #[test]
+    fn a_stop_fades_out_and_drops_only_the_old_speech() {
+        assert_eq!(SoftStop::new(0, 2400), None, "nothing playing: nothing to fade");
+        let mut stop = SoftStop::new(100_000, 2400);
+        assert_eq!(stop.map(|s| s.drop), Some(97_600));
+        let mut gains = Vec::new();
+        while let Some(s) = stop {
+            let (gain, next) = s.step();
+            gains.push(gain);
+            stop = next;
+        }
+        assert_eq!(gains.len(), 2400, "50 ms at 48 kHz");
+        assert_eq!(gains[0], 1.0);
+        assert!(gains.windows(2).all(|w| w[1] < w[0]) && gains[2399] < 0.001, "an even ramp down to silence");
+        // A clip shorter than the fade fades over what is left of it.
+        assert_eq!(SoftStop::new(300, 2400), Some(SoftStop { left: 300, total: 300, drop: 0 }));
+    }
 
     #[test]
     fn the_discord_copy_gets_every_clause_at_its_own_rate_and_stops_with_him() {

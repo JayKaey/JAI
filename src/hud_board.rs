@@ -48,7 +48,7 @@ pub fn bracket_colour() -> Color32 {
 }
 pub const PIN_RED: Color32 = Color32::from_rgb(0xFF, 0x2A, 0x55);
 const INK: Color32 = Color32::from_rgb(0xF4, 0xFA, 0xFF);
-const MICRO: Color32 = Color32::from_rgb(0x8F, 0xB8, 0xC8);
+const MICRO: Color32 = Color32::from_rgb(0xA8, 0xC9, 0xD6);
 const WATER: Color32 = Color32::from_rgb(0x2A, 0x2F, 0x36);
 
 /// Opacity of every other block while one is in the spotlight.
@@ -1700,6 +1700,15 @@ pub fn tilted_quad(r: Rect, lean: f32, amount: f32) -> [Pos2; 4] {
     }
 }
 
+/// A video's title and its running time, which the research keeps at the end of its caption
+/// (" · 12:34").
+pub fn video_length(caption: &str) -> (&str, Option<&str>) {
+    match caption.rsplit_once(" · ") {
+        Some((title, len)) if len.contains(':') && len.bytes().all(|b| b.is_ascii_digit() || b == b':') => (title, Some(len)),
+        _ => (caption, None),
+    }
+}
+
 pub fn video_frames(id: &str) -> Vec<String> {
     let mut out = vec![format!("https://i.ytimg.com/vi/{id}/hqdefault.jpg")];
     out.extend((1..=3).map(|k| format!("https://i.ytimg.com/vi/{id}/{k}.jpg")));
@@ -1773,10 +1782,26 @@ pub enum MediaSlot {
     Failed,
 }
 
-static MEDIA: LazyLock<Mutex<HashMap<String, MediaSlot>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+/// The pictures by URL, and when they were last drawn.
+static MEDIA: LazyLock<Mutex<HashMap<String, (MediaSlot, Instant)>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
+/// A picture (asking for it counts as drawing it).
 pub fn media(url: &str) -> Option<MediaSlot> {
-    MEDIA.lock().unwrap_or_else(|e| e.into_inner()).get(url).cloned()
+    MEDIA.lock().unwrap_or_else(|e| e.into_inner()).get_mut(url).map(|(slot, used)| {
+        *used = Instant::now();
+        slot.clone()
+    })
+}
+
+/// A picture as if it had been fetched (pictures of the board without the network).
+#[cfg(test)]
+pub fn put_media(url: &str, slot: MediaSlot) {
+    MEDIA.lock().unwrap_or_else(|e| e.into_inner()).insert(url.to_string(), (slot, Instant::now()));
+}
+
+/// Pictures nobody drew for `unused` are let go: research after research, his memory stays flat.
+pub fn forget_unused_media(unused: Duration) {
+    MEDIA.lock().unwrap_or_else(|e| e.into_inner()).retain(|_, (slot, used)| matches!(slot, MediaSlot::Loading) || used.elapsed() < unused);
 }
 
 /// Fetches and decodes a photo in the background (once).
@@ -1786,7 +1811,7 @@ pub fn request_media(url: &str, rt: &tokio::runtime::Handle) {
         if m.contains_key(url) {
             return;
         }
-        m.insert(url.to_string(), MediaSlot::Loading);
+        m.insert(url.to_string(), (MediaSlot::Loading, Instant::now()));
     }
     let url = url.to_string();
     rt.spawn(async move {
@@ -1794,7 +1819,7 @@ pub fn request_media(url: &str, rt: &tokio::runtime::Handle) {
             Some(image) => MediaSlot::Ready(Arc::new(image)),
             None => MediaSlot::Failed,
         };
-        MEDIA.lock().unwrap_or_else(|e| e.into_inner()).insert(url, slot);
+        MEDIA.lock().unwrap_or_else(|e| e.into_inner()).insert(url, (slot, Instant::now()));
         changed();
     });
 }
@@ -2013,7 +2038,7 @@ fn header_keys(p: &Painter, r: Rect) -> [Rect; 2] {
     let mut right = r.right() - 8.0;
     ["[ CLOSE ]", "[ PIN ]"].map(|label| {
         let w = crate::hud_style::key_width(p, label);
-        let key = Rect::from_min_size(pos2(right - w, mid - 8.0), vec2(w, 16.0));
+        let key = Rect::from_min_size(pos2(right - w, mid - crate::hud_style::KEY_H / 2.0), vec2(w, crate::hud_style::KEY_H));
         right -= w + 4.0;
         key
     })
@@ -2064,7 +2089,7 @@ fn stroke(width: f32, colour: Color32) -> Stroke {
 }
 
 fn micro() -> FontId {
-    FontId::monospace(10.0)
+    FontId::monospace(11.0)
 }
 
 /// Headlines and labels: the display face (Rajdhani), as on every title of the HUD.
@@ -2074,6 +2099,25 @@ fn bold(size: f32) -> FontId {
 
 fn display(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name("display".into()))
+}
+
+/// The pointer is on `r` of this painter's layer (not on a block in front of it).
+fn hovered(p: &Painter, r: Rect) -> bool {
+    p.ctx().pointer_hover_pos().is_some_and(|at| r.contains(at) && on_top_at(p, at))
+}
+
+/// Nothing of another layer lies over `at`. (egui names only Areas there: the home board paints
+/// on the background layer, under no Area at all.)
+fn on_top_at(p: &Painter, at: Pos2) -> bool {
+    match p.ctx().layer_id_at(at) {
+        Some(layer) => layer == p.layer_id(),
+        None => p.layer_id().order == egui::Order::Background,
+    }
+}
+
+/// A tooltip at the pointer for what the board paints (it has no widgets of its own).
+fn tip(p: &Painter, text: &str) {
+    egui::show_tooltip_text(p.ctx(), p.layer_id(), egui::Id::new(("jai_board_tip", text)), text);
 }
 
 /// How many whole rows of `font` fit into `height` (none when not even one does).
@@ -2147,8 +2191,17 @@ fn frame(p: &Painter, slot: Rect, block: &Block, active: bool, stack: Option<(us
         // A narrow block keeps its [ CLOSE ] alone (the pin is in its menu), so its title has room.
         let shown = if r.width() >= PIN_FROM { 2 } else { 1 };
         for (key, (label, lit)) in header_keys(p, r).into_iter().zip([("[ CLOSE ]", false), ("[ PIN ]", pinned)]).take(shown) {
-            let hot = hover.is_some_and(|at| key.contains(at));
+            let hot = hover.is_some() && hovered(p, key);
             crate::hud_style::key(p, key.right(), key.center().y, label, hot, hot && down, lit, if active { 1.0 } else { 0.62 });
+            if hot {
+                tip(p, if label == "[ CLOSE ]" {
+                    "Close this block · say: \"close the board\" for all of them"
+                } else if lit {
+                    "Pinned: it leads the next report too (a click lets it go)"
+                } else {
+                    "Pin it: it leads the next report too"
+                });
+            }
             right = key.left() - 8.0;
         }
     }
@@ -2160,8 +2213,13 @@ fn frame(p: &Painter, slot: Rect, block: &Block, active: bool, stack: Option<(us
     if tagged {
         p.text(pos2(right, mid), Align2::RIGHT_CENTER, &block.tag, micro(), MICRO);
     }
-    let label = crate::hud_style::fitted_title(p, &block.label, 13.5, active_colour(), (room - if tagged { tag_width } else { 0.0 }).max(20.0));
+    let title_room = (room - if tagged { tag_width } else { 0.0 }).max(20.0);
+    let label = crate::hud_style::fitted_title(p, &block.label, 13.5, active_colour(), title_room);
     let label_right = r.left() + pad + label.size().x;
+    // A title cut short shows whole under the pointer.
+    if natural > title_room + 0.5 && hovered(p, Rect::from_min_max(pos2(r.left() + pad, mid - 9.0), pos2(label_right, mid + 9.0))) {
+        tip(p, &block.label);
+    }
     p.galley(pos2(r.left() + pad, mid - label.size().y * 0.5), label, Color32::PLACEHOLDER);
     let light = match &block.kind {
         BlockKind::DarkVectorMap { pending: true, .. } => crate::hud_style::Light::Busy,
@@ -2181,9 +2239,9 @@ fn frame(p: &Painter, slot: Rect, block: &Block, active: bool, stack: Option<(us
             for (key, label) in nav_keys(r).into_iter().zip(["[ < PREV ]", "[ NEXT > ]"]) {
                 p.rect_filled(key, Rounding::ZERO, Color32::from_rgba_premultiplied(6, 12, 18, 220));
                 p.rect_stroke(key, Rounding::ZERO, stroke(1.0, active_colour().gamma_multiply(0.8)));
-                p.text(key.center(), Align2::CENTER_CENTER, label, FontId::monospace(10.0), INK);
+                p.text(key.center(), Align2::CENTER_CENTER, label, FontId::monospace(11.0), INK);
             }
-            p.text(pos2(r.center().x, nav_keys(r)[0].center().y), Align2::CENTER_CENTER, format!("{:02} / {:02}", front + 1, n), FontId::monospace(10.0), MICRO);
+            p.text(pos2(r.center().x, nav_keys(r)[0].center().y), Align2::CENTER_CENTER, format!("{:02} / {:02}", front + 1, n), FontId::monospace(11.0), MICRO);
         }
         inset.shrink(8.0)
     } else {
@@ -2195,13 +2253,13 @@ fn frame(p: &Painter, slot: Rect, block: &Block, active: bool, stack: Option<(us
         let y = r.bottom() + 3.0;
         let code = block_code(&block.label);
         let right = if block.source.trim().is_empty() { code } else { format!("{} · {code}", block.source.trim()) };
-        let right_rect = p.text(pos2(r.right(), y), Align2::RIGHT_TOP, right, micro(), MICRO.gamma_multiply(0.8));
+        let right_rect = p.text(pos2(r.right(), y), Align2::RIGHT_TOP, right, micro(), MICRO);
         let room = (right_rect.left() - r.left() - 10.0).max(0.0);
         if room > 60.0 {
-            wrapped(p, pos2(r.left(), y), room, added, micro(), MICRO.gamma_multiply(0.8), 1);
+            wrapped(p, pos2(r.left(), y), room, added, micro(), MICRO, 1);
         }
     } else if !block.source.trim().is_empty() {
-        wrapped(p, pos2(r.left() + pad, foot - 10.0), r.width() * 0.55, &block.source, micro(), MICRO.gamma_multiply(0.75), 1);
+        wrapped(p, pos2(r.left() + pad, foot - 10.0), r.width() * 0.55, &block.source, micro(), MICRO, 1);
     }
     inner
 }
@@ -2231,7 +2289,7 @@ impl BoardView {
             let lit = response.hovered();
             p.rect_filled(rect, Rounding::ZERO, Color32::from_rgba_premultiplied(6, 12, 18, 230));
             p.rect_stroke(rect, Rounding::ZERO, stroke(if lit { 1.6 } else { 1.0 }, active_colour().gamma_multiply(if lit { 1.0 } else { 0.7 })));
-            p.text(rect.center(), Align2::CENTER_CENTER, format!("[ {} ]", key.label), FontId::monospace(10.0), if lit { INK } else { INK.gamma_multiply(0.85) });
+            p.text(rect.center(), Align2::CENTER_CENTER, format!("[ {} ]", key.label), FontId::monospace(11.0), if lit { INK } else { INK.gamma_multiply(0.85) });
             if response.clicked() {
                 chosen = Some(key.clone());
             }
@@ -2361,6 +2419,11 @@ impl BoardView {
     /// Returns what a click did and whether something is still animating.
     pub fn paint(&mut self, ui: &mut Ui, area: Rect, rt: &tokio::runtime::Handle) -> (Option<BoardClick>, bool) {
         let now = Instant::now();
+        // The textures of pictures let go (`forget_unused_media`) leave the GPU too.
+        {
+            let kept = MEDIA.lock().unwrap_or_else(|e| e.into_inner());
+            self.textures.retain(|url, _| kept.contains_key(url));
+        }
         let (shown, spotlight, leaving, research) = {
             let mut b = board();
             if b.leaving.as_ref().is_some_and(|(_, at)| at.elapsed().as_secs_f32() > LEAVE_SECS + 0.6) {
@@ -2621,6 +2684,8 @@ impl BoardView {
                 // need: a short block shows less of its headline and more of what it says.
                 let (head_font, body_font) = (bold(20.0 * scale), FontId::proportional(14.5 * scale));
                 let (head_row, body_row) = p.fonts(|f| (f.row_height(&head_font), f.row_height(&body_font)));
+                // (epaint lays rows out whole pixels apart: a step of the unrounded height drifts.)
+                let body_row = p.round_to_pixel(body_row);
                 let head_rows = if note.body.trim().is_empty() { 3 } else { (((inner.height() - 8.0 - 3.0 * body_row) / head_row).floor().max(1.0) as usize).min(3) };
                 let h = wrapped(&p, inner.min, inner.width(), &note.headline.to_uppercase(), head_font, INK, head_rows);
                 // The whole text, never clipped mid-sentence: what does not fit scrolls (wheel).
@@ -2629,15 +2694,30 @@ impl BoardView {
                 let room = (inner.bottom() - top).max(0.0);
                 // (A block too short for even one row of text under its headline shows none.)
                 if room >= body_row {
-                    let galley = p.layout_job(egui::text::LayoutJob::simple(note.body.clone(), body_font, colour, (inner.width() - 8.0).max(10.0)));
-                    let max = (galley.size().y - room).max(0.0);
-                    let offset = self.scroll.get(&(index, page)).copied().unwrap_or(0.0).clamp(0.0, max);
-                    self.scroll.insert((index, page), offset);
-                    let view = Rect::from_min_max(pos2(inner.left(), top), inner.max);
-                    p.with_clip_rect(view.intersect(p.clip_rect())).galley(pos2(inner.left(), top - offset), galley, colour);
+                    // Whole rows only (Sir's choice of 2026-11-15): turned a row at a time, and
+                    // unturned what does not fit ends in "…", fading into the block.
+                    let rows = (room / body_row).floor();
+                    let room = rows * body_row;
+                    let width = (inner.width() - 8.0).max(10.0);
+                    let mut galley = p.layout_job(egui::text::LayoutJob::simple(note.body.clone(), body_font.clone(), colour, width));
+                    let max = ((galley.size().y - room) / body_row).ceil().max(0.0) * body_row;
+                    let turned = self.scroll.get(&(index, page)).copied().unwrap_or(0.0).clamp(0.0, max);
+                    self.scroll.insert((index, page), turned);
+                    let offset = (turned / body_row).round() * body_row;
+                    if offset == 0.0 && max > 0.0 {
+                        let mut job = egui::text::LayoutJob::simple(note.body.clone(), body_font, colour, width);
+                        job.wrap.max_rows = rows as usize;
+                        galley = p.layout_job(job);
+                    }
+                    let view = Rect::from_min_max(pos2(inner.left(), top), pos2(inner.right(), top + room));
+                    let view_p = p.with_clip_rect(view.intersect(p.clip_rect()));
+                    view_p.galley(pos2(inner.left(), top - offset), galley, colour);
+                    if offset < max {
+                        crate::hud_style::fade_band(&view_p, BLOCK_FILL, view.left(), view.right() - 4.0, view.bottom(), view.bottom() - body_row * 0.6);
+                    }
                     if max > 0.0 {
                         // The track, faint, and on it how far the text has been turned.
-                        let track = Rect::from_min_max(pos2(inner.right() - 2.0, top), pos2(inner.right(), inner.bottom()));
+                        let track = Rect::from_min_max(pos2(inner.right() - 2.0, top), pos2(inner.right(), view.bottom()));
                         p.rect_filled(track, Rounding::ZERO, active_colour().gamma_multiply(0.16));
                         let len = ((room / (room + max)) * track.height()).max(track.height().min(12.0));
                         let y = track.top() + offset / max * (track.height() - len);
@@ -2684,15 +2764,9 @@ impl BoardView {
     }
 
     fn texture(&mut self, ctx: &egui::Context, url: &str, rt: &tokio::runtime::Handle) -> Option<egui::TextureHandle> {
-        if let Some(t) = self.textures.get(url) {
-            return Some(t.clone());
-        }
+        // (Asked every frame it is drawn: a picture on the board is never forgotten.)
         match media(url) {
-            Some(MediaSlot::Ready(image)) => {
-                let t = ctx.load_texture(format!("board:{url}"), (*image).clone(), egui::TextureOptions::LINEAR);
-                self.textures.insert(url.to_string(), t.clone());
-                Some(t)
-            }
+            Some(MediaSlot::Ready(image)) => Some(self.textures.entry(url.to_string()).or_insert_with(|| ctx.load_texture(format!("board:{url}"), (*image).clone(), egui::TextureOptions::LINEAR)).clone()),
             Some(_) => None,
             None => {
                 request_media(url, rt);
@@ -2756,7 +2830,12 @@ impl BoardView {
     /// A video block: its cover and YouTube's automatic stills cross-fading every 1.6 s (a moving
     /// preview), a play badge, and in the spotlight the hint that a click opens it.
     fn paint_video(&mut self, p: &Painter, r: Rect, id: &str, caption: &str, spotlit: bool, rt: &tokio::runtime::Handle) {
-        let frames = video_frames(id);
+        // (Stills YouTube does not have are left out: one would flash an error between the others.)
+        let mut frames: Vec<String> = video_frames(id).into_iter().filter(|u| !matches!(media(u), Some(MediaSlot::Failed))).collect();
+        if frames.is_empty() {
+            frames = video_frames(id);
+            frames.truncate(1);
+        }
         let screen = Rect::from_min_max(r.min, r.max - vec2(0.0, 18.0));
         let clock = p.ctx().input(|i| i.time) as f32 / 1.6;
         let (k, fade) = ((clock.floor() as usize) % frames.len(), (clock.fract() - 0.8).max(0.0) / 0.2);
@@ -2766,15 +2845,22 @@ impl BoardView {
             next.set_opacity(fade);
             self.paint_image(&next, screen, &frames[(k + 1) % frames.len()], rt);
         }
-        // The play badge and a thin progress line along the bottom of the picture.
-        let badge = Rect::from_min_size(screen.left_bottom() + vec2(8.0, -26.0), vec2(18.0, 18.0));
-        p.rect_filled(badge, Rounding::ZERO, Color32::from_black_alpha(170));
-        p.rect_stroke(badge, Rounding::ZERO, stroke(1.0, INK));
-        let c = badge.center();
-        p.add(Shape::convex_polygon(vec![c + vec2(-3.0, -5.0), c + vec2(5.0, 0.0), c + vec2(-3.0, 5.0)], INK, Stroke::NONE));
+        // The play mark in the middle, its running time in the corner, and a thin progress line
+        // along the bottom of the picture.
+        let c = screen.center();
+        p.circle_filled(c, 17.0, Color32::from_black_alpha(170));
+        p.circle_stroke(c, 17.0, stroke(1.0, INK));
+        p.add(Shape::convex_polygon(vec![c + vec2(-5.0, -8.0), c + vec2(8.0, 0.0), c + vec2(-5.0, 8.0)], INK, Stroke::NONE));
+        let (title, length) = video_length(caption);
+        if let Some(length) = length {
+            let galley = p.layout_no_wrap(length.to_string(), micro(), Color32::WHITE);
+            let plate = Rect::from_min_size(screen.right_bottom() - galley.size() - vec2(14.0, 12.0), galley.size() + vec2(8.0, 4.0));
+            p.rect_filled(plate, Rounding::ZERO, Color32::from_black_alpha(200));
+            p.galley(plate.min + vec2(4.0, 2.0), galley, Color32::WHITE);
+        }
         let progress = (clock / frames.len() as f32).fract();
         p.line_segment([screen.left_bottom() - vec2(0.0, 2.0), pos2(screen.left() + screen.width() * progress, screen.bottom() - 2.0)], stroke(2.0, PIN_RED));
-        let line = if spotlit { "CLICK TO WATCH ON YOUTUBE".to_string() } else { caption.to_uppercase() };
+        let line = if spotlit { "CLICK TO WATCH ON YOUTUBE".to_string() } else { title.to_uppercase() };
         wrapped(p, pos2(r.left(), r.bottom() - 14.0), r.width(), &line, micro(), INK.gamma_multiply(0.85), 1);
     }
 
@@ -2860,25 +2946,31 @@ fn paint_research(p: &Painter, r: Rect, block: &Block, scale: f32, footer: Optio
     let label = p.text(body.left_top() + vec2(pad, pad - 2.0), Align2::LEFT_TOP, &block.label, bold(10.0 * scale), INK.gamma_multiply(0.85));
     p.text(body.right_top() + vec2(-pad, pad - 2.0), Align2::RIGHT_TOP, format!("{:02}:{:02}", secs / 60, secs % 60), bold(10.0 * scale), INK);
     let title = p.with_clip_rect(body.shrink(pad * 0.5));
-    let title_h = wrapped(&title, pos2(body.left() + pad, label.bottom() + 6.0 * scale), body.width() - 2.0 * pad, &topic.to_uppercase(), display(26.0 * scale), Color32::WHITE, 1);
+    let at = pos2(body.left() + pad, label.bottom() + 6.0 * scale);
+    let title_h = wrapped(&title, at, body.width() - 2.0 * pad, &topic.to_uppercase(), display(26.0 * scale), Color32::WHITE, 1);
+    if hovered(p, Rect::from_min_size(at, vec2(body.width() - 2.0 * pad, title_h))) && p.layout_no_wrap(topic.to_uppercase(), display(26.0 * scale), Color32::WHITE).size().x > body.width() - 2.0 * pad {
+        tip(p, topic);
+    }
     let phase_rect = p.text(pos2(body.left() + pad, label.bottom() + 10.0 * scale + title_h), Align2::LEFT_TOP, phase.to_uppercase(), bold(11.5 * scale), INK.gamma_multiply(0.9));
+    p.text(pos2(body.right() - pad, phase_rect.top()), Align2::RIGHT_TOP, format!("{:.0}%", progress.clamp(0.0, 1.0) * 100.0), bold(11.5 * scale), active_colour());
     // Thin cells: the share done, and a bright run sweeping over the rest while it works.
     let clock = p.ctx().input(|i| i.time) as f32;
     let cells = research_cells(*progress, clock, *progress < 1.0);
-    let bar_y = phase_rect.bottom() + 8.0 * scale;
+    let bar_y = phase_rect.bottom() + 5.0 * scale;
     let gap = 2.0 * scale;
     let cell_w = (body.width() - 2.0 * pad - (RESEARCH_CELLS as f32 - 1.0) * gap) / RESEARCH_CELLS as f32;
     for (k, light) in cells.iter().enumerate() {
         let cell = Rect::from_min_size(pos2(body.left() + pad + k as f32 * (cell_w + gap), bar_y), vec2(cell_w, 9.0 * scale));
         p.rect_filled(cell, Rounding::ZERO, INK.gamma_multiply(*light));
     }
-    let foot = body.bottom() - pad * 0.8;
-    p.text(pos2(body.left() + pad, foot), Align2::LEFT_BOTTOM, format!("{blocks} BLOCKS"), bold(11.5 * scale), INK);
-    p.text(pos2(body.right() - pad, foot), Align2::RIGHT_BOTTOM, format!("{sources} SOURCES"), bold(11.5 * scale), INK);
+    // (Under the cells, never on them.)
+    let foot = bar_y + 13.0 * scale;
+    p.text(pos2(body.left() + pad, foot), Align2::LEFT_TOP, format!("{blocks} BLOCKS"), bold(11.5 * scale), INK);
+    p.text(pos2(body.right() - pad, foot), Align2::RIGHT_TOP, format!("{sources} SOURCES"), bold(11.5 * scale), INK);
     if let Some(added) = footer {
         let y = body.bottom() + 3.0;
-        p.text(pos2(body.left(), y), Align2::LEFT_TOP, added, micro(), MICRO.gamma_multiply(0.85));
-        p.text(pos2(body.right(), y), Align2::RIGHT_TOP, format!("{} · {:02}.{}", block_code(topic), secs / 60, (secs % 60) / 6), micro(), MICRO.gamma_multiply(0.85));
+        p.text(pos2(body.left(), y), Align2::LEFT_TOP, added, micro(), MICRO);
+        p.text(pos2(body.right(), y), Align2::RIGHT_TOP, format!("{} · {:02}.{}", block_code(topic), secs / 60, (secs % 60) / 6), micro(), MICRO);
     }
 }
 
@@ -2913,14 +3005,30 @@ fn paint_chart(p: &Painter, r: Rect, unit: &str, bars: &[Bar], caption: &str, sc
     let n = bars.len() as f32;
     let slot = plot.width() / n;
     let width = (slot * 0.52).min(64.0 * scale);
+    // The pointer over this block (not over a block in front of it).
+    let hover = p.ctx().pointer_hover_pos().filter(|at| p.clip_rect().contains(*at) && on_top_at(p, *at));
+    let mut tip = None;
     for (k, bar) in bars.iter().enumerate() {
         let x = plot.left() + slot * (k as f32 + 0.5);
         let h = plot.height() * (bar.value / top.max(1e-3)).clamp(0.0, 1.0);
         let rect = Rect::from_min_max(pos2(x - width / 2.0, plot.bottom() - h), pos2(x + width / 2.0, plot.bottom()));
-        p.rect_filled(rect, Rounding::ZERO, Color32::WHITE);
+        let lit = hover.is_some_and(|at| (at.x - x).abs() < slot / 2.0 && at.y > plot.top() && at.y < plot.bottom() + label_h);
+        p.rect_filled(rect, Rounding::ZERO, if lit { active_colour() } else { active_colour().gamma_multiply(0.8) });
         p.text(pos2(x, rect.top() - 3.0), Align2::CENTER_BOTTOM, format!("{}{unit}", trim_number(bar.value)), micro(), INK);
         let label: String = bar.label.to_uppercase().chars().take(12).collect();
         p.text(pos2(x, plot.bottom() + 5.0), Align2::CENTER_TOP, label, micro(), INK.gamma_multiply(0.9));
+        if lit {
+            tip = Some((format!("{} · {}{unit}", bar.label.to_uppercase(), bar.value), x, rect.top()));
+        }
+    }
+    // The bar under the pointer: its whole name and exact value.
+    if let Some((text, x, y)) = tip {
+        let galley = p.layout_no_wrap(text, micro(), Color32::WHITE);
+        let size = galley.size() + vec2(10.0, 6.0);
+        let plate = Rect::from_min_size(pos2((x - size.x / 2.0).clamp(r.left(), (r.right() - size.x).max(r.left())), (y - size.y - 4.0).max(r.top())), size);
+        p.rect_filled(plate, Rounding::ZERO, BLOCK_FILL);
+        p.rect_stroke(plate, Rounding::ZERO, stroke(1.0, active_colour()));
+        p.galley(plate.min + vec2(5.0, 3.0), galley, Color32::WHITE);
     }
     // The two-line caption box.
     let cap = Rect::from_min_max(pos2(r.left(), r.bottom() - caption_h), r.max);
@@ -3003,6 +3111,29 @@ pub(crate) fn test_lock() -> MutexGuard<'static, ()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The home board paints in the central panel (the background layer, no Area): the pointer
+    /// on a block there hovers it; a window in front of it takes the hover away.
+    #[test]
+    fn a_block_on_the_home_board_is_hovered() {
+        let ctx = egui::Context::default();
+        let screen = Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0));
+        let block = Rect::from_min_size(pos2(100.0, 100.0), vec2(200.0, 100.0));
+        let mut seen = Vec::new();
+        for at in [pos2(150.0, 150.0), pos2(150.0, 150.0), pos2(500.0, 150.0), pos2(250.0, 180.0), pos2(250.0, 180.0)] {
+            let input = egui::RawInput { screen_rect: Some(screen), events: vec![egui::Event::PointerMoved(at)], ..Default::default() };
+            let _ = ctx.run(input, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| seen.push(hovered(ui.painter(), block)));
+                // A window over the block's right half.
+                egui::Area::new(egui::Id::new("in_front")).fixed_pos(pos2(240.0, 160.0)).show(ctx, |ui| {
+                    ui.allocate_exact_size(vec2(100.0, 60.0), egui::Sense::hover());
+                });
+            });
+        }
+        assert_eq!(seen[1], true, "on the block, nothing in front");
+        assert_eq!(seen[2], false, "beside the block");
+        assert_eq!(seen[4], false, "a window in front of the block");
+    }
 
     /// A block in a window of its own grows into the spotlight on the monitor it stands on:
     /// in the middle of its work area, never larger than that monitor has room for.
@@ -3088,6 +3219,39 @@ mod tests {
         }
         assert!(!view.spot.visible());
         sign_off();
+    }
+
+    /// A long note turned twenty rows still shows its top row whole: it turns by the pitch epaint
+    /// really lays its rows out at (whole pixels), not by the font's unrounded row height (Segoe
+    /// UI at 14.5: 19.29 against 19 px, its top row 5.7 px cut after twenty rows).
+    #[test]
+    fn a_long_note_turned_twenty_rows_shows_its_top_row_whole() {
+        let ctx = egui::Context::default();
+        crate::gui::install_fonts(&ctx);
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let body = "word ".repeat(600);
+        let block = Block::new("NOTE // 01", "FACT", "", BlockKind::NoteStack { notes: vec![Note { headline: "Battery".into(), body: body.clone() }] });
+        let screen = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0));
+        let mut view = BoardView::default();
+        let out = ctx.run(egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ctx| {
+            // Twenty rows as far apart as the body's rows really are.
+            let pitch = ctx.fonts(|f| f.layout_no_wrap("a\nb".into(), FontId::proportional(14.5), INK)).rows[1].rect.min.y;
+            view.scroll.insert((usize::MAX, 0), 20.0 * pitch);
+            let p = Painter::new(ctx.clone(), egui::LayerId::background(), screen);
+            view.paint_block(&p, Rect::from_min_size(pos2(40.0, 40.0), vec2(320.0, 300.0)), &block, (usize::MAX, 0), false, false, rt.handle());
+        });
+        let (shown, text) = out
+            .shapes
+            .iter()
+            .find_map(|c| match &c.shape {
+                Shape::Text(t) if t.galley.text() == body => Some((c.clip_rect, t.clone())),
+                _ => None,
+            })
+            .expect("the note's text is painted");
+        let pitch = text.galley.rows[1].rect.min.y - text.galley.rows[0].rect.min.y;
+        let turned = shown.top() - text.pos.y;
+        assert_eq!((turned / pitch).round(), 20.0, "turned twenty rows: {turned} px, rows {pitch} px apart");
+        assert!((turned - 20.0 * pitch).abs() < 0.01, "its top row is cut by {} px ({turned} px turned, rows {pitch} px apart)", turned - 20.0 * pitch);
     }
 
     fn note(h: &str) -> Note {

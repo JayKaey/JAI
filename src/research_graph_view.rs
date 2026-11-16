@@ -426,25 +426,25 @@ impl ResearchGraphView {
         let mut y = rect.top() + 10.0;
         for (label, colour) in [("Verified (2+ sources)", VERIFIED), ("Single source", SINGLE), ("Contradiction", CONTRADICTION)] {
             painter.circle_filled(pos2(rect.left() + 14.0, y + 6.0), 4.0, colour);
-            painter.text(pos2(rect.left() + 24.0, y + 6.0), Align2::LEFT_CENTER, label, FontId::proportional(10.5), Color32::from_gray(190));
+            painter.text(pos2(rect.left() + 24.0, y + 6.0), Align2::LEFT_CENTER, label, FontId::proportional(11.0), Color32::from_gray(190));
             y += 16.0;
         }
-        painter.text(rect.right_bottom() + vec2(-8.0, -6.0), Align2::RIGHT_BOTTOM, format!("{} nodes · zoom {:.0}%", self.nodes.len(), self.zoom * 100.0), FontId::monospace(9.5), Color32::from_gray(120));
+        painter.text(rect.right_bottom() + vec2(-8.0, -6.0), Align2::RIGHT_BOTTOM, format!("{} nodes · zoom {:.0}%", self.nodes.len(), self.zoom * 100.0), FontId::monospace(11.0), Color32::from_gray(120));
         // The selected node's card.
         if let Some(n) = highlighted.and_then(|i| self.nodes.get(i)) {
             let card = Rect::from_min_size(pos2(rect.left() + 10.0, rect.bottom() - 96.0), vec2((rect.width() - 20.0).min(520.0), 86.0));
-            painter.add(Shape::rect_filled(card, Rounding::same(10.0), Color32::from_rgba_unmultiplied(6, 10, 18, 230)));
-            painter.rect_stroke(card, Rounding::same(10.0), Stroke::new(1.0_f32, n.colour.gamma_multiply(0.8)));
+            painter.add(Shape::rect_filled(card, Rounding::ZERO, Color32::from_rgba_unmultiplied(6, 10, 18, 230)));
+            painter.rect_stroke(card, Rounding::ZERO, Stroke::new(1.0_f32, n.colour.gamma_multiply(0.8)));
             let kind = match n.kind {
                 NodeKind::Hub => "TOPIC",
                 NodeKind::Question => "SUB-QUESTION",
                 NodeKind::Source => "SOURCE",
                 NodeKind::Fact => "FACT",
             };
-            painter.text(card.min + vec2(10.0, 8.0), Align2::LEFT_TOP, kind, FontId::monospace(9.5), n.colour);
+            painter.text(card.min + vec2(10.0, 8.0), Align2::LEFT_TOP, kind, FontId::monospace(11.0), n.colour);
             let galley = painter.layout(short(&n.label, 220), FontId::proportional(11.5), Color32::from_gray(225), card.width() - 20.0);
             painter.galley(card.min + vec2(10.0, 22.0), galley, Color32::WHITE);
-            painter.text(card.left_bottom() + vec2(10.0, -8.0), Align2::LEFT_BOTTOM, short(n.detail.lines().next().unwrap_or(""), 90), FontId::proportional(9.5), Color32::from_gray(150));
+            painter.text(card.left_bottom() + vec2(10.0, -8.0), Align2::LEFT_BOTTOM, short(n.detail.lines().next().unwrap_or(""), 90), FontId::proportional(11.0), Color32::from_gray(150));
         }
         if self.animating() {
             ui.ctx().request_repaint();

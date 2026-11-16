@@ -1169,28 +1169,71 @@ pub fn fitted_rect(current: Rect, natural: eframe::egui::Vec2, bounds: Rect) -> 
     Some(Rect::from_min_size(min, size))
 }
 
+/// What keeps block `id` where it stands: it opens, closes, glides or is held, or Sir pinned,
+/// maximised or sized it by hand.
+fn busy(s: &DockState, id: &str) -> bool {
+    let held = |open: &Option<(String, Rect)>| open.as_ref().is_some_and(|(open, _)| open == id);
+    s.glides.contains_key(id)
+        || s.forced.contains_key(id)
+        || s.closing.contains_key(id)
+        || s.pinned.contains(id)
+        || s.hand_sized.contains(id)
+        || s.minimizing.contains(id)
+        || s.detaching.contains(id)
+        || s.grab.as_ref().is_some_and(|(held, _, _)| held == id)
+        || held(&s.maximized)
+        || held(&s.fullscreen)
+        || s.opened.get(id).is_some_and(|(at, _)| at.elapsed() < OPEN_ANIM)
+}
+
+/// Block `id` shrank from `from` to `to`: the free blocks after it on its screen (`bounds`) that
+/// stood against the room it left are placed again, top-left first, each in the first free spot
+/// above or left of where it stands (`fixed`: the orb and the board's own blocks). They glide
+/// there with it, or are held there at once when it is (`at_once`).
+fn close_up(s: &mut DockState, id: &str, from: Rect, to: Rect, bounds: Rect, fixed: &[Rect], at_once: bool) {
+    // shortcut: a block that grows again later finds its old room taken (growing stops at a neighbour), push the blocks after it down if one stays cut off.
+    // Every other block where it is going to be (one the dock is moving counts at its destination).
+    let mut stand: Vec<(String, Rect)> = Vec::new();
+    for (other, _, r) in s.last_blocks.iter().chain(s.blocks.iter()) {
+        if other != id && !stand.iter().any(|(k, _)| k == other) {
+            let dest = s.glides.get(other).map(|(_, end, _)| *end).or_else(|| s.forced.get(other).map(|(end, _)| *end));
+            stand.push((other.clone(), dest.unwrap_or(*r)));
+        }
+    }
+    stand.sort_by(|a, b| a.1.top().total_cmp(&b.1.top()).then(a.1.left().total_cmp(&b.1.left())));
+    let mut freed = vec![from];
+    for i in 0..stand.len() {
+        let (other, r) = stand[i].clone();
+        // (The text console never takes a place from the dock, and a panel keeps the centre stage.)
+        let stays = busy(s, &other) || other == "console" || is_stage_block(&other);
+        if stays || (r.top(), r.left()) <= (from.top(), from.left()) || !bounds.expand(0.5).contains_rect(r) || !freed.iter().any(|f| f.expand(TILE_GAP + 1.0).intersects(r)) {
+            continue;
+        }
+        let taken: Vec<Rect> = stand.iter().enumerate().filter(|(j, _)| *j != i).map(|(_, (_, rect))| *rect).chain([to]).chain(fixed.iter().copied()).collect();
+        let Some(at) = find_non_overlapping_slot(bounds, r.size(), &taken, TILE_GAP).filter(|at| (at.y, at.x) < (r.top(), r.left())) else { continue };
+        let moved = Rect::from_min_size(at, r.size());
+        stand[i].1 = moved;
+        freed.push(r);
+        if at_once {
+            s.forced.insert(other, (moved, FORCED_FRAMES));
+        } else {
+            s.glides.insert(other, (r, moved, Instant::now()));
+        }
+    }
+}
+
 /// Content-sized blocks: block `id` shows something that needs `natural` (the whole block, frame
 /// included), and glides to that size at its place. Once per content; never while it opens,
 /// closes, glides or is held, nor a block Sir pinned, maximised or sized by hand. Growing stops
-/// at a neighbour or the emblem.
-pub fn fit_to_content(id: &str, natural: eframe::egui::Vec2, bounds: Rect) {
+/// at a neighbour or the emblem; the blocks after a shrinking one close up (until 2026-11-15 they
+/// kept their slots: 170 px gaps). `at_once`: without motion (animations off, offscreen pictures)
+/// it takes the size at once (until 2026-11-15 such blocks never fitted and stood half empty).
+pub fn fit_to_content(id: &str, natural: eframe::egui::Vec2, bounds: Rect, at_once: bool) {
     use std::hash::{Hash, Hasher};
-    let orb = lock(&OBSTACLES).0;
+    let (orb, board) = lock(&OBSTACLES).clone();
     let moved = with(|s| {
         let current = *s.last_rect.get(id)?;
-        let held = |open: &Option<(String, Rect)>| open.as_ref().is_some_and(|(open, _)| open == id);
-        let busy = s.glides.contains_key(id)
-            || s.forced.contains_key(id)
-            || s.closing.contains_key(id)
-            || s.pinned.contains(id)
-            || s.hand_sized.contains(id)
-            || s.minimizing.contains(id)
-            || s.detaching.contains(id)
-            || s.grab.as_ref().is_some_and(|(held, _, _)| held == id)
-            || held(&s.maximized)
-            || held(&s.fullscreen)
-            || s.opened.get(id).is_some_and(|(at, _)| at.elapsed() < OPEN_ANIM);
-        if busy {
+        if busy(s, id) {
             return None;
         }
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -1217,7 +1260,15 @@ pub fn fit_to_content(id: &str, natural: eframe::egui::Vec2, bounds: Rect) {
                 return None;
             }
         }
-        s.glides.insert(id.to_string(), (current, to, Instant::now()));
+        if at_once {
+            s.forced.insert(id.to_string(), (to, FORCED_FRAMES));
+        } else {
+            s.glides.insert(id.to_string(), (current, to, Instant::now()));
+        }
+        // ("Overlap the windows": his cascade stays a cascade.)
+        if !overlap_allowed() && (to.bottom() < current.bottom() - FIT_SLACK || to.right() < current.right() - FIT_SLACK) {
+            close_up(s, id, current, to, bounds, &orb.into_iter().chain(board).collect::<Vec<_>>(), at_once);
+        }
         Some(())
     });
     if moved.is_some() {
@@ -1761,6 +1812,78 @@ mod tests {
         begin_frame();
         begin_frame();
         publish_obstacles(None, Vec::new());
+    }
+
+    /// A fitted block leaves no hole: the blocks under it close up (they kept their slots: 170 px gaps).
+    #[test]
+    fn fitted_blocks_close_up_and_leave_no_gaps() {
+        let _g = test_lock();
+        set_overlap_allowed(false);
+        publish_obstacles(None, Vec::new());
+        begin_frame();
+        begin_frame();
+        with(|s| s.forced.clear());
+        // One block wide: three blocks open stacked, each at the size it asks for.
+        let bounds = Rect::from_min_max(pos2(8.0, 60.0), pos2(908.0, 1380.0));
+        let ids = ["fit_gap_a", "fit_gap_b", "fit_gap_c"];
+        let frame = |rects: &mut Vec<Rect>| {
+            begin_frame();
+            for (id, rect) in ids.iter().zip(rects.iter_mut()) {
+                *rect = take_forced(id).unwrap_or(*rect);
+                publish_block(id, "Fit test", *rect);
+            }
+        };
+        let mut rects: Vec<Rect> = Vec::new();
+        for id in ids {
+            let (at, size) = place_new_block(id, bounds, &[], vec2(820.0, 400.0), pos2(40.0, 80.0));
+            rects.push(Rect::from_min_size(at, size));
+            frame(&mut rects);
+        }
+        for _ in 0..FORCED_FRAMES + 1 {
+            frame(&mut rects);
+        }
+        let opened = rects.clone();
+        // The top block shows less than it has room for.
+        fit_to_content("fit_gap_a", vec2(820.0, 230.0), bounds, true);
+        for _ in 0..FORCED_FRAMES + 1 {
+            frame(&mut rects);
+        }
+        // (Off the board before the checks: a failing check leaves no block behind for the other tests.)
+        for id in ids {
+            forget(id);
+        }
+        begin_frame();
+        begin_frame();
+        assert!(opened.windows(2).all(|w| (w[1].top() - w[0].bottom() - TILE_GAP).abs() < 0.5), "stacked {TILE_GAP} px apart: {opened:?}");
+        assert_eq!(rects[0].size(), vec2(820.0, 230.0), "the top block takes the size of what it shows");
+        assert!(rects[1..].iter().all(|r| r.size() == vec2(820.0, 400.0)) && overlapping(&rects).is_empty(), "{rects:?}");
+        let gaps: Vec<f32> = rects.windows(2).map(|w| w[1].top() - w[0].bottom()).collect();
+        assert!(gaps.iter().all(|gap| (gap - TILE_GAP).abs() < 0.5), "the blocks under a fitted block close up to {TILE_GAP} px: gaps {gaps:?} in {rects:?}");
+    }
+
+    /// The text console (it never reads a place from the dock) and a panel on the centre stage
+    /// stay where they stand when the block above them shrinks.
+    #[test]
+    fn the_console_and_a_stage_panel_never_close_up() {
+        let _g = test_lock();
+        set_overlap_allowed(false);
+        publish_obstacles(None, Vec::new());
+        begin_frame();
+        begin_frame();
+        with(|s| s.forced.clear());
+        let bounds = Rect::from_min_max(pos2(8.0, 60.0), pos2(1736.0, 1380.0));
+        let top = Rect::from_min_size(pos2(8.0, 60.0), vec2(820.0, 400.0));
+        publish_block("fit_still_top", "Fit test", top);
+        publish_block("console", "Text console", top.translate(vec2(0.0, 412.0)));
+        publish_block("earth", "Earth", top.translate(vec2(832.0, 412.0)));
+        fit_to_content("fit_still_top", vec2(820.0, 230.0), bounds, true);
+        let moved: Vec<String> = with(|s| s.forced.keys().filter(|id| id.as_str() != "fit_still_top").cloned().collect());
+        for id in ["fit_still_top", "console", "earth"] {
+            forget(id);
+        }
+        begin_frame();
+        begin_frame();
+        assert!(moved.is_empty(), "moved by the dock: {moved:?}");
     }
 
     #[test]

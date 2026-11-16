@@ -285,6 +285,7 @@ impl SttEngine {
             };
             *model_w.lock().unwrap_or_else(|e| e.into_inner()) = first.path.clone();
             ready_w.store(true, Ordering::Release);
+            crate::vram_guard::report_stt(true);
 
             // Zero-VRAM standby: the guard sets this to `None` (Drop frees every whisper.cpp
             // buffer) and the next clip or wake-up re-creates it.
@@ -597,7 +598,7 @@ fn run_full(
         SamplingStrategy::Greedy { best_of: 2 }
     };
     let mut params = FullParams::new(strategy);
-    params.set_n_threads(s.threads);
+    params.set_n_threads(crate::vram_guard::ears_threads(s.threads));
     params.set_language(language);
     params.set_translate(false);
     params.set_no_context(true);
@@ -668,7 +669,7 @@ fn run_full(
 fn subtitle_pass(engine: &mut WhisperEngine, pcm: &[f32], translate: bool, s: &Settings, called_off: Option<&Arc<AtomicBool>>) -> Result<Transcript, String> {
     let started = Instant::now();
     let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-    params.set_n_threads(s.threads);
+    params.set_n_threads(crate::vram_guard::ears_threads(s.threads));
     params.set_language(Some("auto"));
     params.set_translate(translate);
     params.set_no_context(true);

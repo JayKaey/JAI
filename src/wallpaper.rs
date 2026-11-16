@@ -436,7 +436,10 @@ pub fn monitor_in_use(monitors: &[crate::monitors::Monitor]) -> Option<crate::mo
         return monitors.iter().find(|m| m.index == own).cloned();
     }
     let at = crate::win32_desktop::foreground_rect().map(|[l, t, r, b]| ((l + r) / 2, (t + b) / 2)).or_else(crate::win32_desktop::cursor);
-    at.and_then(|(x, y)| monitors.iter().find(|m| m.contains(x, y))).or_else(|| crate::monitors::primary(monitors)).cloned()
+    let in_use = at.and_then(|(x, y)| monitors.iter().find(|m| m.contains(x, y))).or_else(|| crate::monitors::primary(monitors));
+    // A game fills that monitor: his orb and windows wait on another one until it closes.
+    let other = in_use.filter(|_| crate::hud_feel::game_in_front()).and_then(|game| monitors.iter().find(|m| m.index != game.index));
+    other.or(in_use).cloned()
 }
 
 #[cfg(not(windows))]

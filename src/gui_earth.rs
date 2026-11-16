@@ -282,7 +282,7 @@ fn view_with(ui: &mut Ui, st: &mut Earth, rt: &Handle, fetch: bool) {
         return;
     }
     let ink = ink();
-    let credits = ui.painter().layout(credits_line(st), mono(9.0), STRIP_MUTED, full.width());
+    let credits = ui.painter().layout(credits_line(st), mono(11.0), STRIP_MUTED, full.width());
     let lay = Layout::new(full, st.area.is_some(), credits.size().y);
     ui.allocate_rect(full, Sense::hover());
     let map_resp = ui.interact(lay.map, ui.id().with("earth_map"), Sense::click_and_drag());
@@ -348,6 +348,9 @@ fn view_with(ui: &mut Ui, st: &mut Earth, rt: &Handle, fetch: bool) {
     // halo's beat and the aircraft, one a second for the clock.
     if moving || st.globe_fade.progress(now) < 1.0 || map_resp.dragged() || (gpu && gl::proven() && gl::busy()) {
         super::next_animation_frame(&ctx);
+    } else if crate::vram_guard::in_game() {
+        // (In a game the globe rests: the GPU is the game's.)
+        ctx.request_repaint_after(Duration::from_secs(1));
     } else if pulsing || (st.overlays.radar && st.overlays.animate) {
         ctx.request_repaint_after(Duration::from_millis(90));
     } else if movers {
@@ -394,7 +397,8 @@ fn credits_line(st: &Earth) -> String {
     }
     parts.extend(crate::earth_layers::credits()); // live layers (C1)
     parts.push("Weather & places: Open-Meteo, BigDataCloud");
-    parts.join(" \u{b7} ")
+    // (Each credit stays whole on its line: only the dots between them may wrap.)
+    parts.iter().map(|p| p.replace(' ', "\u{a0}")).collect::<Vec<_>>().join(" \u{b7} ")
 }
 
 /// A drag turns the globe (pans the map) and, let go, the map glides on a little; the wheel
@@ -970,7 +974,7 @@ fn paint_layers(p: &Painter, st: &Earth, geo: &Geo, ink: &Ink, now: f64, placer:
             let Some((at, vis)) = proj.at(e.lat, e.lon).filter(|(at, _)| inside(*at, 12.0)) else { continue };
             spiral(p, at, 9.0, STORM.gamma_multiply(vis));
             glyphs.push(Rect::from_center_size(at, Vec2::splat(18.0)));
-            labels.push(Label { at, gap: 12.0, text: e.label.clone(), font: mono(10.0), colour: STORM_TEXT.gamma_multiply(vis), rank: 1.0 });
+            labels.push(Label { at, gap: 12.0, text: e.label.clone(), font: mono(11.0), colour: STORM_TEXT.gamma_multiply(vis), rank: 1.0 });
             picker.consider(at, 9.0, || Hover::Event(e.clone()));
         }
     }
@@ -1004,7 +1008,7 @@ fn paint_layers(p: &Painter, st: &Earth, geo: &Geo, ink: &Ink, now: f64, placer:
                 }
                 pulsing = true;
             }
-            labels.push(Label { at, gap: r + 4.0, text: format!("{:.1}", q.mag), font: mono(10.0), colour: WHITE_INK.gamma_multiply(0.92 * vis), rank: 10.0 - q.mag as f32 });
+            labels.push(Label { at, gap: r + 4.0, text: format!("{:.1}", q.mag), font: mono(11.0), colour: WHITE_INK.gamma_multiply(0.92 * vis), rank: 10.0 - q.mag as f32 });
             picker.consider(at, r, || Hover::Quake(q.clone()));
         }
     }
@@ -1023,7 +1027,7 @@ fn paint_layers(p: &Painter, st: &Earth, geo: &Geo, ink: &Ink, now: f64, placer:
         let view = crate::earth_layers::MapView { map, alt_km: st.cam.alt, centre: (st.cam.lat, st.cam.lon), px_per_km: proj.px_per_km(), at: &|lat, lon| proj.at(lat, lon), runs: &|pts| proj.runs(pts), pointer: picker.pointer, rim: ink.rim, accent: ink.accent, iss_layer: iss.is_some() };
         let live = crate::earth_layers::paint(p, &view);
         glyphs.extend(live.glyphs);
-        labels.extend(live.labels.into_iter().map(|l| Label { at: l.at, gap: l.gap, text: l.text, font: mono(10.0), colour: l.colour, rank: l.rank }));
+        labels.extend(live.labels.into_iter().map(|l| Label { at: l.at, gap: l.gap, text: l.text, font: mono(11.0), colour: l.colour, rank: l.rank }));
         if let Some((at, r, hit)) = live.hover {
             picker.consider(at, r, || Hover::Live(hit));
         }
@@ -1034,7 +1038,7 @@ fn paint_layers(p: &Painter, st: &Earth, geo: &Geo, ink: &Ink, now: f64, placer:
             p.circle_filled(at, 11.0, light(ink.rim, 0.3 * vis));
             iss_glyph(p, at, 7.0, WHITE_INK.gamma_multiply(vis));
             glyphs.push(Rect::from_center_size(at, vec2(14.0, 8.0)));
-            labels.push(Label { at, gap: 12.0, text: "ISS".into(), font: mono(10.0), colour: WHITE_INK.gamma_multiply(vis), rank: 0.5 });
+            labels.push(Label { at, gap: 12.0, text: "ISS".into(), font: mono(11.0), colour: WHITE_INK.gamma_multiply(vis), rank: 0.5 });
             picker.consider(at, 9.0, || Hover::Iss(iss));
         }
         movers = true;
@@ -1058,7 +1062,7 @@ fn paint_layers(p: &Painter, st: &Earth, geo: &Geo, ink: &Ink, now: f64, placer:
             let c = WHITE_INK.gamma_multiply(vis);
             p.add(Shape::convex_polygon(vec![at + vec2(0.0, -4.5), at + vec2(4.0, 3.0), at + vec2(-4.0, 3.0)], c, Stroke::NONE));
             glyphs.push(Rect::from_center_size(at, Vec2::splat(9.0)));
-            labels.push(Label { at, gap: 7.0, text: format!("{} {} m", peak.name, model::group_digits(peak.ele_m.round() as i64)), font: mono(10.0), colour: c, rank: 2.0 + shown as f32 * 0.01 });
+            labels.push(Label { at, gap: 7.0, text: format!("{} {} m", peak.name, model::group_digits(peak.ele_m.round() as i64)), font: mono(11.0), colour: c, rank: 2.0 + shown as f32 * 0.01 });
         }
     }
     // Sir himself: a beating dot in the accent, his accuracy around it.
@@ -1444,12 +1448,12 @@ fn plan_cards(p: &Painter, st: &Earth, geo: &Geo, controls: &Controls, placer: &
     let text = |s: String, font: FontId, colour: Color32| p.layout_no_wrap(s, font, colour);
 
     // The time and place in view.
-    let mut rows = vec![vec![Piece::text(text(local.format("%H:%M").to_string(), display(22.0), WHITE_INK)), Piece::text(text(model::utc_offset_label(offset), mono(10.0), STRIP_MUTED))]];
+    let mut rows = vec![vec![Piece::text(text(local.format("%H:%M").to_string(), display(22.0), WHITE_INK)), Piece::text(text(model::utc_offset_label(offset), mono(11.0), STRIP_MUTED))]];
     if !compact {
-        rows.push(vec![Piece::text(text(local.format("%a %-d %b %Y").to_string().to_uppercase(), mono(10.0), STRIP_MUTED))]);
+        rows.push(vec![Piece::text(text(local.format("%a %-d %b %Y").to_string().to_uppercase(), mono(11.0), STRIP_MUTED))]);
     }
-    rows.push(vec![Piece::with(Icon::Dot(ink.accent), text(model::coords_label(st.cam.lat, st.cam.lon), mono(10.0), STRIP_INK))]);
-    rows.push(vec![Piece::with(Icon::UpDown, text(format!("{} km", model::group_digits(st.cam.alt.round() as i64)), mono(10.0), STRIP_INK))]);
+    rows.push(vec![Piece::with(Icon::Dot(ink.accent), text(model::coords_label(st.cam.lat, st.cam.lon), mono(11.0), STRIP_INK))]);
+    rows.push(vec![Piece::with(Icon::UpDown, text(format!("{} km", model::group_digits(st.cam.alt.round() as i64)), mono(11.0), STRIP_INK))]);
     let info = Card::new(rows, map.min + vec2(10.0, 10.0), Align2::LEFT_TOP, true);
     let info_rect = placer.take(info.rect).then_some(info.rect);
     if info_rect.is_some() {
@@ -1463,26 +1467,26 @@ fn plan_cards(p: &Painter, st: &Earth, geo: &Geo, controls: &Controls, placer: &
     let right = pos2(controls.area.left() - 6.0, map.top() + 10.0);
     let place = if flat && (name.is_some() || st.weather.is_some()) {
         let mut rows = vec![vec![Piece::text(elided(p, name.as_deref().unwrap_or("\u{2014}"), super::bold(13.0), WHITE_INK, name_width))]];
-        rows.push(vec![Piece::text(text(format!("{} {}", local.format("%H:%M"), model::utc_offset_label(offset)), mono(10.0), STRIP_MUTED))]);
+        rows.push(vec![Piece::text(text(format!("{} {}", local.format("%H:%M"), model::utc_offset_label(offset)), mono(11.0), STRIP_MUTED))]);
         if let Some(w) = &st.weather {
-            rows.push(vec![Piece::text(text(format!("{:.1} \u{b0}C", w.temp), display(18.0), WHITE_INK)), Piece::text(text(format!("\u{2248} {:.1} \u{b0}C", w.feels), mono(10.0), STRIP_MUTED))]);
+            rows.push(vec![Piece::text(text(format!("{:.1} \u{b0}C", w.temp), display(18.0), WHITE_INK)), Piece::text(text(format!("\u{2248} {:.1} \u{b0}C", w.feels), mono(11.0), STRIP_MUTED))]);
             let mut air = Vec::new();
             if let Some(h) = w.humidity {
-                air.push(Piece::text(text(format!("{h:.0} %"), mono(10.0), STRIP_INK)));
+                air.push(Piece::text(text(format!("{h:.0} %"), mono(11.0), STRIP_INK)));
             }
             if let Some(v) = w.wind_kmh {
-                air.push(Piece::with(Icon::Wind(w.wind_from.unwrap_or(0.0) as f32), text(format!("{v:.0} km/h"), mono(10.0), STRIP_INK)));
+                air.push(Piece::with(Icon::Wind(w.wind_from.unwrap_or(0.0) as f32), text(format!("{v:.0} km/h"), mono(11.0), STRIP_INK)));
             }
             if !air.is_empty() {
                 rows.push(air);
             }
             if let (Some(rise), Some(set)) = (&w.sunrise, &w.sunset) {
-                rows.push(vec![Piece::with(Icon::Sun(true), text(rise.clone(), mono(10.0), STRIP_INK)), Piece::with(Icon::Sun(false), text(set.clone(), mono(10.0), STRIP_INK))]);
+                rows.push(vec![Piece::with(Icon::Sun(true), text(rise.clone(), mono(11.0), STRIP_INK)), Piece::with(Icon::Sun(false), text(set.clone(), mono(11.0), STRIP_INK))]);
             }
         }
         Some(Card::new(rows, right, Align2::RIGHT_TOP, true))
     } else {
-        name.map(|n| Card::new(vec![vec![Piece::with(Icon::Dot(ink.accent), elided(p, &n.to_uppercase(), mono(10.0), STRIP_INK, name_width))]], right, Align2::RIGHT_TOP, false))
+        name.map(|n| Card::new(vec![vec![Piece::with(Icon::Dot(ink.accent), elided(p, &n.to_uppercase(), mono(11.0), STRIP_INK, name_width))]], right, Align2::RIGHT_TOP, false))
     };
     if let Some(card) = place.filter(|c| placer.take(c.rect)) {
         list.push(card);
@@ -1490,7 +1494,7 @@ fn plan_cards(p: &Painter, st: &Earth, geo: &Geo, controls: &Controls, placer: &
 
     // How the imagery is doing (or "ZOOM IN FOR FLIGHTS", the day or the radar's time shown).
     if let Some(status) = st.status(p.ctx().input(|i| i.time)) {
-        let rows = vec![vec![Piece::text(text(status, mono(10.0), ink.accent))]];
+        let rows = vec![vec![Piece::text(text(status, mono(11.0), ink.accent))]];
         let mut spots = vec![(pos2(map.center().x, map.top() + 10.0), Align2::CENTER_TOP)];
         if let Some(info) = info_rect {
             spots.push((pos2(info.left(), info.bottom() + 6.0), Align2::LEFT_TOP));
@@ -1505,7 +1509,7 @@ fn plan_cards(p: &Painter, st: &Earth, geo: &Geo, controls: &Controls, placer: &
     // The scale, then the legend beside it.
     let max_px = (map.width() * 0.16).clamp(60.0, 130.0) as f64;
     let scale = model::nice_scale(geo.proj().px_per_km(), max_px).and_then(|(km, px)| {
-        let label = text(model::distance_label(km), mono(10.0), STRIP_INK);
+        let label = text(model::distance_label(km), mono(11.0), STRIP_INK);
         let size = vec2((px as f32).max(label.size().x) + 12.0, label.size().y + 14.0);
         let rect = Align2::RIGHT_BOTTOM.anchor_size(pos2(controls.area.left() - 6.0, map.bottom() - 10.0), size);
         placer.take(rect).then_some(Scale { rect, px: px as f32, label })
@@ -1531,9 +1535,9 @@ fn plan_tour_card(p: &Painter, st: &Earth, geo: &Geo, placer: &mut Placer) -> Op
     let width = (map.width() * 0.5).clamp(140.0, 420.0);
     let head = format!("WORLD TOUR {}/{} \u{b7} {}", tour.index + 1, tour.stops.len(), stop.kind.label());
     let rows = vec![
-        vec![Piece::text(p.layout_no_wrap(head, mono(10.0), STRIP_MUTED))],
+        vec![Piece::text(p.layout_no_wrap(head, mono(11.0), STRIP_MUTED))],
         vec![Piece::text(elided(p, &stop.title, super::bold(13.0), WHITE_INK, width))],
-        vec![Piece::text(elided(p, &stop.caption, mono(10.0), STRIP_INK, width))],
+        vec![Piece::text(elided(p, &stop.caption, mono(11.0), STRIP_INK, width))],
     ];
     let spots = [(pos2(map.center().x, map.bottom() - 10.0), Align2::CENTER_BOTTOM), (pos2(map.center().x, map.bottom() - 60.0), Align2::CENTER_BOTTOM), (pos2(map.center().x, map.top() + 40.0), Align2::CENTER_TOP)];
     let card = spots.into_iter().map(|(at, align)| Card::new(rows.clone(), at, align, true)).find(|c| placer.fits(c.rect))?;
@@ -1543,7 +1547,7 @@ fn plan_tour_card(p: &Painter, st: &Earth, geo: &Geo, placer: &mut Placer) -> Op
 
 /// The legend's pieces: each layer that is on with its count.
 fn legend(p: &Painter, st: &Earth) -> Vec<Piece> {
-    let text = |s: String| p.layout_no_wrap(s, mono(10.0), STRIP_INK);
+    let text = |s: String| p.layout_no_wrap(s, mono(11.0), STRIP_INK);
     let mut pieces = Vec::new();
     if st.layers.quakes {
         let mags = st.quakes.items.iter().map(|q| q.mag);
@@ -1577,20 +1581,20 @@ fn callout(p: &Painter, hover: &Hover, at: Pos2, map: Rect, ink: &Ink) {
     let line = |s: &str, font: FontId, colour: Color32| elided(p, s, font, colour, width);
     let now_ms = chrono::Utc::now().timestamp_millis();
     let rows: Vec<Vec<Piece>> = match hover {
-        Hover::Plane(f) => vec![vec![Piece::with(Icon::Plane, line(&f.callsign, super::bold(12.0), WHITE_INK))], vec![Piece::text(line(&f.details(), mono(10.0), STRIP_INK))]],
+        Hover::Plane(f) => vec![vec![Piece::with(Icon::Plane, line(&f.callsign, super::bold(12.0), WHITE_INK))], vec![Piece::text(line(&f.details(), mono(11.0), STRIP_INK))]],
         Hover::Quake(q) => vec![
             vec![Piece::with(Icon::Quake, line(&format!("M{:.1} \u{b7} {}", q.mag, model::ago((now_ms - q.time_ms) / 1000)), super::bold(12.0), WHITE_INK))],
-            vec![Piece::text(line(if q.place.is_empty() { "Unnamed place" } else { &q.place }, mono(10.0), STRIP_INK))],
-            vec![Piece::text(line(&format!("depth {:.0} km", q.depth_km), mono(10.0), STRIP_MUTED))],
+            vec![Piece::text(line(if q.place.is_empty() { "Unnamed place" } else { &q.place }, mono(11.0), STRIP_INK))],
+            vec![Piece::text(line(&format!("depth {:.0} km", q.depth_km), mono(11.0), STRIP_MUTED))],
         ],
-        Hover::Event(e) if e.kind == EventKind::Storm => vec![vec![Piece::with(Icon::Storm, line(&e.label, super::bold(12.0), WHITE_INK))], vec![Piece::text(line(&e.title, mono(10.0), STRIP_INK))]],
-        Hover::Event(e) => vec![vec![Piece::with(Icon::Fire, line(&e.title, super::bold(12.0), WHITE_INK))], vec![Piece::text(line("Wildfire \u{b7} NASA EONET", mono(10.0), STRIP_MUTED))]],
+        Hover::Event(e) if e.kind == EventKind::Storm => vec![vec![Piece::with(Icon::Storm, line(&e.label, super::bold(12.0), WHITE_INK))], vec![Piece::text(line(&e.title, mono(11.0), STRIP_INK))]],
+        Hover::Event(e) => vec![vec![Piece::with(Icon::Fire, line(&e.title, super::bold(12.0), WHITE_INK))], vec![Piece::text(line("Wildfire \u{b7} NASA EONET", mono(11.0), STRIP_MUTED))]],
         Hover::Iss(iss) => vec![
             vec![Piece::with(Icon::Iss, line("ISS", super::bold(12.0), WHITE_INK))],
-            vec![Piece::text(line(&format!("{} km \u{b7} {} km/h", iss.alt_km.round(), model::group_digits(iss.speed_kmh.round() as i64)), mono(10.0), STRIP_INK))],
+            vec![Piece::text(line(&format!("{} km \u{b7} {} km/h", iss.alt_km.round(), model::group_digits(iss.speed_kmh.round() as i64)), mono(11.0), STRIP_INK))],
         ],
         // live layers (C1): a satellite, a train or a road incident.
-        Hover::Live(hit) => hit.lines().iter().enumerate().map(|(i, s)| vec![if i == 0 { Piece::with(Icon::Dot(ink.accent), line(s, super::bold(12.0), WHITE_INK)) } else { Piece::text(line(s, mono(10.0), STRIP_INK)) }]).collect(),
+        Hover::Live(hit) => hit.lines().iter().enumerate().map(|(i, s)| vec![if i == 0 { Piece::with(Icon::Dot(ink.accent), line(s, super::bold(12.0), WHITE_INK)) } else { Piece::text(line(s, mono(11.0), STRIP_INK)) }]).collect(),
     };
     let size = Card::size(&rows);
     let mut min = at + vec2(14.0, 14.0);
@@ -1759,7 +1763,7 @@ fn drawer(ui: &mut Ui, rect: Rect, st: &mut Earth, ink: &Ink) {
     let header = Rect::from_min_size(rect.min, vec2(rect.width(), 24.0));
     let mid = header.center().y;
     p.circle_filled(pos2(header.left() + 12.0, mid), 3.5, ink.accent);
-    let title = p.layout_no_wrap(area.header(), mono(10.0), ink.accent);
+    let title = p.layout_no_wrap(area.header(), mono(11.0), ink.accent);
     let title_right = header.left() + 22.0 + title.size().x;
     p.galley(pos2(header.left() + 22.0, mid - title.size().y / 2.0), title, ink.accent);
     let close = Rect::from_center_size(pos2(header.right() - 14.0, mid), vec2(18.0, 18.0));
@@ -1769,7 +1773,7 @@ fn drawer(ui: &mut Ui, rect: Rect, st: &mut Earth, ink: &Ink) {
     p.line_segment([close.center() + vec2(-k, -k), close.center() + vec2(k, k)], x_ink);
     p.line_segment([close.center() + vec2(-k, k), close.center() + vec2(k, -k)], x_ink);
     let count = area.results.as_ref().map(|list| format!("{} FOUND  ", list.len())).unwrap_or_default();
-    let asked = p.layout_no_wrap(format!("{count}{}", area.asked), mono(10.0), STRIP_MUTED);
+    let asked = p.layout_no_wrap(format!("{count}{}", area.asked), mono(11.0), STRIP_MUTED);
     let asked_x = close.left() - 8.0 - asked.size().x;
     if asked_x > title_right + 12.0 {
         p.galley(pos2(asked_x, mid - asked.size().y / 2.0), asked, STRIP_MUTED);
@@ -1777,7 +1781,7 @@ fn drawer(ui: &mut Ui, rect: Rect, st: &mut Earth, ink: &Ink) {
     p.line_segment([pos2(rect.left(), header.bottom()), pos2(rect.right(), header.bottom())], stroke(1.0, ink.border));
     let body = Rect::from_min_max(pos2(rect.left() + 8.0, header.bottom() + 4.0), pos2(rect.right() - 8.0, rect.bottom() - 4.0));
     let note = |text: &str, colour: Color32| {
-        let galley = elided(&p, text, mono(10.0), colour, body.width());
+        let galley = elided(&p, text, mono(11.0), colour, body.width());
         p.galley(pos2(body.center().x - galley.size().x / 2.0, body.top() + 6.0), galley, colour);
     };
     match (&area.results, &area.failed) {
@@ -1797,12 +1801,12 @@ fn drawer(ui: &mut Ui, rect: Rect, st: &mut Earth, ink: &Ink) {
                     }
                     let mid = row.center().y;
                     p.circle_filled(pos2(row.left() + 6.0, mid), 4.0, quake_colour(q.mag));
-                    let mag = p.layout_no_wrap(format!("{:.1}", q.mag), mono(10.0), WHITE_INK);
+                    let mag = p.layout_no_wrap(format!("{:.1}", q.mag), mono(11.0), WHITE_INK);
                     p.galley(pos2(row.left() + 16.0, mid - mag.size().y / 2.0), mag, WHITE_INK);
-                    let ago = p.layout_no_wrap(model::ago((now_ms - q.time_ms) / 1000), mono(10.0), STRIP_MUTED);
+                    let ago = p.layout_no_wrap(model::ago((now_ms - q.time_ms) / 1000), mono(11.0), STRIP_MUTED);
                     let ago_x = row.right() - ago.size().x - 4.0;
                     p.galley(pos2(ago_x, mid - ago.size().y / 2.0), ago, STRIP_MUTED);
-                    let place = elided(p, if q.place.is_empty() { "Unnamed place" } else { &q.place }, mono(10.0), STRIP_INK, ago_x - 10.0 - (row.left() + 50.0));
+                    let place = elided(p, if q.place.is_empty() { "Unnamed place" } else { &q.place }, mono(11.0), STRIP_INK, ago_x - 10.0 - (row.left() + 50.0));
                     p.galley(pos2(row.left() + 50.0, mid - place.size().y / 2.0), place, STRIP_INK);
                     if resp.on_hover_text("Fly there").clicked() {
                         let alt = st.target().alt;
@@ -2055,7 +2059,7 @@ mod tests {
             egui::CentralPanel::default().frame(Frame::none()).show(ctx, |ui| view(ui, &mut earth, rt.handle()));
         });
         assert!(earth.layers.flights, "the flights key did nothing");
-        assert!(!frame.find_text("Flights: OpenSky Network").is_empty());
+        assert!(!frame.find_text("Flights: OpenSky Network").is_empty(), "the credit, whole on one line");
         // The photo globe is the default: its key switches to the hologram.
         let (_, satellite) = column.buttons.iter().find(|(c, _)| *c == Control::Satellite).copied().expect("a satellite key");
         assert_eq!(earth.look, Look::Satellite);

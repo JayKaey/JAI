@@ -98,6 +98,44 @@ pub fn lower_thread_priority() {
     }
 }
 
+/// Game mode: JAI and the language engine (`ollama*`; a runner it starts later inherits the
+/// class) drop below normal so the game always wins the CPU; `false` puts back what was lowered.
+pub fn game_priority(low: bool) {
+    #[cfg(windows)]
+    {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use windows::Win32::Foundation::CloseHandle;
+        use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcess, SetPriorityClass, BELOW_NORMAL_PRIORITY_CLASS, NORMAL_PRIORITY_CLASS, PROCESS_SET_INFORMATION};
+        static LOWERED: AtomicBool = AtomicBool::new(false);
+        let class = if low { BELOW_NORMAL_PRIORITY_CLASS } else { NORMAL_PRIORITY_CLASS };
+        // (A process started below normal on purpose, a test run beside his game, stays so.)
+        if low != LOWERED.load(Ordering::Acquire) && (!low || priority_class() == NORMAL_PRIORITY_CLASS.0) {
+            // SAFETY: sets this process's own priority class.
+            if unsafe { SetPriorityClass(GetCurrentProcess(), class) }.is_ok() {
+                LOWERED.store(low, Ordering::Release);
+            }
+        }
+        if hands_off() {
+            return;
+        }
+        let mut sys = sysinfo::System::new();
+        sys.refresh_processes_specifics(sysinfo::ProcessesToUpdate::All, sysinfo::ProcessRefreshKind::new());
+        for (pid, p) in sys.processes() {
+            if p.name().to_string_lossy().to_lowercase().starts_with("ollama") {
+                // SAFETY: a handle with only the right to set the priority, closed at once.
+                unsafe {
+                    if let Ok(h) = OpenProcess(PROCESS_SET_INFORMATION, false, pid.as_u32()) {
+                        let _ = SetPriorityClass(h, class);
+                        let _ = CloseHandle(h);
+                    }
+                }
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = low;
+}
+
 /// `--console`: the live log in the terminal JAI was started from, or else in a new console
 /// window (JAI itself never opens one).
 pub fn open_console() {

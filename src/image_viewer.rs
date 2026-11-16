@@ -393,6 +393,11 @@ pub mod pixels {
         }
     }
 
+    /// Pictures nobody looked at for `unused` are let go: his memory stays flat over days.
+    pub fn forget_unused(unused: Duration) {
+        lock(&SLOTS).retain(|_, s| s.loading || s.used.elapsed() < unused);
+    }
+
     /// The least recently used pictures go once there are too many or they take too much memory.
     fn evict(slots: &mut HashMap<String, Slot>) {
         let bytes = |s: &Slot| s.frame.as_ref().map_or(0, |f| f.image.size[0] * f.image.size[1] * 4);

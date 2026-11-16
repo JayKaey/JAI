@@ -53,6 +53,58 @@ pub const JAI_CAPABILITY_MANIFEST: &[CapabilityCategory] = &[
     CapabilityCategory { name: "Workbench", summary: "Spaced-repetition flashcards, the maths/physics/chemistry formula sheet, molar masses and mole conversion, keyboard-shortcut sheets for the program in front, screen time with a break coach, routines learned from what Sir asks for, an hour of temperatures with a fan-curve verdict, clipboard history (in memory only), tiling program windows on a monitor and predictive command completion in the console.", tools: &["manage_flashcards", "lookup_formula", "chemistry_helper", "show_app_shortcuts", "screen_time_report", "suggest_routine", "thermal_advisor", "clipboard_history", "tile_windows", "suggest_commands"] },
 ];
 
+/// Tools few requests need, behind the `more_tools` door: the prompt is ≈7k tokens lighter (room
+/// for the conversation, quicker loads). Each is still carried out when called by name.
+pub const BEHIND_DOOR: &[&str] = &[
+    "discord_bot", "teleport_content", "spawn_multi_window_workspace", "manage_remote_node", "manage_stark_protocol", "forge_tool",
+    "edit_file_surgical", "download_or_extract_media", "manage_voice_macro", "set_smart_morning_alarm", "manage_location_settings",
+    "manage_workout", "show_mobile_satellite_instructions", "patch_own_source", "watch_and_tell", "chemistry_helper", "spawn_coding_project",
+    "manage_finances_and_goals", "sync_study_materials_and_deadlines", "diagnose_minecraft_or_server", "manage_contacts", "adjust_simulation",
+    "control_spatial_window", "shadow_memory", "run_sandbox_calculation_or_script", "manage_spatial_scene", "smart_folder_cleanup", "start_oral_exam_session",
+    "lookup_formula", "configure_productivity_service", "show_app_shortcuts", "manage_schedule_watcher", "spawn_topic_knowledge_workspace",
+    "diagnose_network_and_ping", "clipboard_history", "beam_to_device", "control_remote_pc", "suggest_routine", "scan_with_phone",
+    "thermal_advisor", "inspect_own_source", "stress_test_idea_or_code", "diagnose_integrations", "show_live_camera", "server_deck",
+];
+
+fn door_definition() -> Value {
+    json!({"type":"function","function":{
+        "name":"more_tools",
+        "description":format!("Tools not listed above, for less common requests: {}. Call this with the names a request needs; it answers with their parameters, then call those tools by name.", BEHIND_DOOR.join(", ")),
+        "parameters":{"type":"object","properties":{"names":{"type":"array","items":{"type":"string"},"description":"Tool names from the list"}},"required":["names"]}
+    }})
+}
+
+pub fn prompt_definitions_from(all: Vec<Value>) -> Vec<Value> {
+    let mut shown: Vec<Value> = all.into_iter().filter(|t| !BEHIND_DOOR.contains(&t["function"]["name"].as_str().unwrap_or(""))).collect();
+    shown.push(door_definition());
+    shown
+}
+
+/// The door's answer: the parameters of the tools asked for.
+fn more_tools(all: &[Value], args: &Value) -> Result<String, String> {
+    let door: Vec<String> = BEHIND_DOOR.iter().map(|n| n.to_string()).collect();
+    let asked: Vec<String> = args["names"].as_array().into_iter().flatten().filter_map(Value::as_str).filter_map(|n| canonical_tool_name(n, &door)).collect();
+    let shown: Vec<&Value> = all.iter().map(|t| &t["function"]).filter(|f| asked.iter().any(|n| f["name"] == n.as_str())).collect();
+    if shown.is_empty() {
+        return Err(format!("Name the tools you need; behind the door are: {}.", BEHIND_DOOR.join(", ")));
+    }
+    Ok(format!("Call these by name: {}", serde_json::to_string(&shown).unwrap_or_default()))
+}
+
+/// Door tools that failed this turn: only the first failure carries the parameters (a second one
+/// has another cause, such as the other PC being off, and the model read them as "try again").
+// shortcut: one list for the whole process, so a background mission failing the same door tool during Sir's turn uses up his first failure; keep it per turn if missions call door tools.
+static DOOR_FAILED: std::sync::Mutex<std::collections::BTreeSet<String>> = std::sync::Mutex::new(std::collections::BTreeSet::new());
+
+/// A new turn: each door tool's first failure carries its parameters again.
+pub fn new_turn() {
+    DOOR_FAILED.lock().unwrap_or_else(|e| e.into_inner()).clear();
+}
+
+fn first_failure(name: &str) -> bool {
+    DOOR_FAILED.lock().unwrap_or_else(|e| e.into_inner()).insert(name.to_string())
+}
+
 fn capability_tool_definition() -> Value {
     json!({"type":"function","function":{
         "name":"list_jai_features",
@@ -255,7 +307,8 @@ pub fn stays_inside(name: &str, args: &Value) -> bool {
     match name {
         "configure_interface" | "control_jai_interface" | "control_gui_aspect" | "customize_hud_and_windows" | "control_orb_mode" | "spawn_native_window" | "update_native_window"
         | "close_native_window" | "close_all_secondary_windows" | "create_or_update_widget" | "remove_widget" | "hud_board" | "open_jai_view" | "control_popups"
-        | "set_response_modality" | "set_listening_mode" | "listening_lock" | "control_audio_mixer" | "thermal_advisor" | "undo_last_action" | "lookup_formula" | "chemistry_helper" => true,
+        | "set_response_modality" | "set_listening_mode" | "listening_lock" | "control_audio_mixer" | "thermal_advisor" | "undo_last_action" | "lookup_formula" | "chemistry_helper"
+        | "more_tools" => true,
         // His own views moved and sized (with "it" an app, it hands over to the window tools,
         // which a silent session stops in their turn).
         "arrange_jai_window" => true,
@@ -288,7 +341,7 @@ pub const ONLY_ASKED: &str = "Nothing was done: Sir asked a question and gave no
 /// works something out or shows it. A tool with actions goes by the action.
 pub fn only_looks(name: &str, args: &Value) -> bool {
     const BY_NAME: &[&str] = &["check_", "diagnose_", "find_", "get_", "inspect_", "list_", "lookup_", "read_", "recall_", "search_", "show_", "suggest_", "summarize_"];
-    const LOOKING: &[&str] = &["chemistry_helper", "pop_up_ui_card", "run_executive_briefing", "run_sandbox_calculation_or_script", "screen_time_report", "spawn_topic_knowledge_workspace", "stress_test_idea_or_code", "thermal_advisor"];
+    const LOOKING: &[&str] = &["more_tools", "chemistry_helper", "pop_up_ui_card", "run_executive_briefing", "run_sandbox_calculation_or_script", "screen_time_report", "spawn_topic_knowledge_workspace", "stress_test_idea_or_code", "thermal_advisor"];
     const READ_ACTIONS: &[&str] = &["check", "due", "find", "get", "history", "info", "list", "overview", "query", "read", "recap", "recent", "recommend", "report", "search", "show", "stats", "status", "summary", "view"];
     crate::hyper_cortex::is_read_only(name, args)
         || BY_NAME.iter().any(|prefix| name.starts_with(prefix))
@@ -497,6 +550,11 @@ impl ToolContext {
         definitions_with(self.skills.tool_definitions())
     }
 
+    /// What the model is shown: every tool but those behind the door, and the door.
+    pub fn prompt_definitions(&self) -> Vec<Value> {
+        prompt_definitions_from(self.definitions())
+    }
+
     pub async fn execute(&self, name: &str, raw_args: &Value) -> ToolOutcome {
         // Some models send arguments as a JSON string.
         let mut args = match raw_args {
@@ -591,6 +649,7 @@ impl ToolContext {
         let mut state_changed = false;
 
         let result: Result<String, String> = match name {
+            "more_tools" => more_tools(&self.definitions(), &args),
             "list_jai_features" => Ok(self.feature_manifest(str_arg(&args, &["topic"]))),
             "open_jai_view" => crate::jai_views::run(self, &args).await,
             "manage_workout" => crate::workout_coach::run_tool(self, &args),
@@ -950,7 +1009,18 @@ impl ToolContext {
                 Some(q) => {
                     // Weather without a place means Sir's home town, when memory knows it.
                     websearch::set_home_location(websearch::place_from_memories(&self.memory.list(200).unwrap_or_default()));
-                    websearch::search(q).await
+                    // In a game "how do I beat this boss?" is about that game: its name goes
+                    // with the search, and the sources stay on the board for later.
+                    match crate::kit_games::with_game(q) {
+                        Some((query, game)) => {
+                            let out = websearch::search(&query).await;
+                            if let Ok(found) = &out {
+                                crate::kit::show_text("games_wiki", &format!("GAME WIKI // {}", game.to_uppercase()), &found.chars().take(1800).collect::<String>(), [460.0, 340.0]);
+                            }
+                            out
+                        }
+                        None => websearch::search(q).await,
+                    }
                 }
                 None => Err("web_search needs 'query'.".into()),
             },
@@ -1074,10 +1144,12 @@ impl ToolContext {
             Err(err) => {
                 warn!("[TOOL] {name} failed in {duration_ms} ms: {err}");
                 crate::hud_lines::fault();
+                // (A tool behind the door was called unseen: its parameters, for the next try.)
+                let door = if BEHIND_DOOR.contains(&name) && first_failure(name) { more_tools(&self.definitions(), &json!({"names": [name]})).map(|p| format!(" {p}")).unwrap_or_default() } else { String::new() };
                 ToolOutcome {
                     tool: name.to_string(),
                     args,
-                    output: format!("Error: {err}"),
+                    output: format!("Error: {err}{door}"),
                     success: false,
                     duration_ms,
                     memories_changed: false,
@@ -2189,6 +2261,57 @@ mod tests {
             assert!(!only_looks(name, &args), "{name} {args}");
         }
         assert_eq!(only_asked("close_application", &json!({})).output, ONLY_ASKED);
+    }
+
+    /// Live 2026-11-15: the question guard dropped "is game mode on" (game_status was no reading
+    /// action), and the model answered "Game mode engaged" with game mode off.
+    #[test]
+    fn a_question_about_game_mode_reads_it() {
+        for said in ["is game mode on", "am I in game mode"] {
+            assert!(!crate::intents::beyond_the_question(said, "manage_vram", &json!({"action": "game_status"})), "{said}");
+        }
+        assert!(crate::intents::beyond_the_question("is game mode on", "manage_vram", &json!({"action": "game_on"})), "a question never switches it on");
+    }
+
+    #[test]
+    fn the_door_answers_with_the_parameters_asked_for() {
+        let all = definitions_with(Vec::new());
+        let shown = more_tools(&all, &json!({"names": ["chemistry_helper", "Lookup Formula"]})).unwrap();
+        assert!(shown.contains("\"chemistry_helper\"") && shown.contains("\"lookup_formula\"") && shown.contains("parameters"), "{shown}");
+        assert!(!shown.contains("\"discord_bot\""), "only what was asked for");
+        assert!(more_tools(&all, &json!({})).unwrap_err().contains("chemistry_helper"), "no name: the list");
+        assert!(only_looks("more_tools", &json!({"names": ["chemistry_helper"]})) && stays_inside("more_tools", &json!({})));
+    }
+
+    /// Live 2026-11-15: behind the door all five went worse (made-up arguments for flashcards, the
+    /// auto-reply and the price watch, another tool for a restaurant, and "screen time today"
+    /// answered with an invented 8 h 23 min).
+    #[test]
+    fn everyday_tools_stay_in_sight() {
+        let shown = prompt_definitions_from(definitions_with(Vec::new()));
+        let names: Vec<&str> = shown.iter().filter_map(|t| t["function"]["name"].as_str()).collect();
+        for name in ["screen_time_report", "set_auto_responder", "manage_price_sniper", "manage_flashcards", crate::venue_guide::TOOL] {
+            assert!(names.contains(&name), "{name} waits behind the door");
+        }
+        assert!(names.contains(&"more_tools") && !names.contains(&"discord_bot"), "the door stays, with the rare ones behind it");
+    }
+
+    /// Live 2026-11-15: a door tool that failed for another reason (the other PC was off) came back
+    /// with "Call these by name now", and the model called it six times, each one a timeout.
+    #[test]
+    fn the_door_gives_parameters_not_orders() {
+        let shown = more_tools(&definitions_with(Vec::new()), &json!({"names": ["beam_to_device"]})).unwrap();
+        let said = shown.split('[').next().unwrap_or_default();
+        assert!(!said.contains("now"), "{said}");
+        assert!(shown.contains("\"beam_to_device\"") && shown.contains("parameters"), "{shown}");
+    }
+
+    /// Live 2026-11-15: the other PC was off, and each failure handed the model the parameters again.
+    #[test]
+    fn a_door_tool_failing_again_carries_no_parameters() {
+        // (A name no other test fails: the set is shared by the whole process.)
+        assert!(first_failure("door_test_only_tool"), "the first failure carries its parameters");
+        assert!(!first_failure("door_test_only_tool"), "the second in the same turn carries none");
     }
 
     #[test]

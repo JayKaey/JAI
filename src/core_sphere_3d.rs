@@ -549,7 +549,7 @@ impl CoreSphereView {
             self.readout(&painter, rect, i, now);
         }
         self.scale_slider(ui, rect);
-        painter.text(rect.left_top() + vec2(4.0, 2.0), Align2::LEFT_TOP, format!("CORE // {} MODULES · {} LINKS · DRAG TO ORBIT · WHEEL TO ZOOM", self.graph.nodes.len(), self.graph.edges.len()), FontId::monospace(10.0), Color32::from_rgb(0x8F, 0xB8, 0xC8));
+        painter.text(rect.left_top() + vec2(4.0, 2.0), Align2::LEFT_TOP, format!("CORE // {} MODULES · {} LINKS · DRAG TO ORBIT · WHEEL TO ZOOM", self.graph.nodes.len(), self.graph.edges.len()), FontId::monospace(11.0), Color32::from_rgb(0x8F, 0xB8, 0xC8));
         if hot_anything(&self.graph, now) || self.velocity.length() > 0.01 || (self.zoom - self.zoom_target).abs() > 1e-3 || self.spin.abs() > 0.0 {
             ui.ctx().request_repaint_after(Duration::from_millis(16));
         }
@@ -587,8 +587,8 @@ impl CoreSphereView {
                 y += h + 4.0;
                 continue;
             }
-            clip.text(pos2(block.left() + 12.0, y), Align2::LEFT_TOP, label, FontId::monospace(10.0), Color32::from_rgb(0x8F, 0xB8, 0xC8));
-            clip.text(pos2(block.right() - 12.0, y), Align2::RIGHT_TOP, value, FontId::monospace(10.5), Color32::WHITE);
+            clip.text(pos2(block.left() + 12.0, y), Align2::LEFT_TOP, label, FontId::monospace(11.0), Color32::from_rgb(0x8F, 0xB8, 0xC8));
+            clip.text(pos2(block.right() - 12.0, y), Align2::RIGHT_TOP, value, FontId::monospace(11.0), Color32::WHITE);
             y += 16.0;
         }
     }
@@ -599,7 +599,7 @@ impl CoreSphereView {
         let track = Rect::from_min_size(pos2(rect.right() - 230.0, rect.bottom() - 30.0), vec2(150.0, 14.0));
         let painter = ui.painter_at(rect);
         let label = format!("CORE SCALE: {:.0} %", self.zoom_target * 100.0);
-        painter.text(pos2(track.left(), track.top() - 4.0), Align2::LEFT_BOTTOM, label, FontId::monospace(10.0), Color32::from_rgb(0xD4, 0xEC, 0xF5));
+        painter.text(pos2(track.left(), track.top() - 4.0), Align2::LEFT_BOTTOM, label, FontId::monospace(11.0), Color32::from_rgb(0xD4, 0xEC, 0xF5));
         painter.rect_stroke(track, Rounding::ZERO, Stroke::new(1.0f32, crate::hud_board::border_colour()));
         let t = (self.zoom_target - MIN_ZOOM) / (MAX_ZOOM - MIN_ZOOM);
         painter.rect_filled(Rect::from_min_size(track.min, vec2(track.width() * t, track.height())), Rounding::ZERO, crate::hud_board::border_colour().gamma_multiply(0.5));

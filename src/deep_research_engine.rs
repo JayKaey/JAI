@@ -1979,6 +1979,15 @@ pub fn build_dossier(s: &MissionSnapshot, summary: Option<&str>) -> String {
     md
 }
 
+/// The status a held mission writes when it changes: only Sir's own pause is written down (it outlives a restart), a game's hold is not.
+fn hold_status(held: &mut bool, sir_paused: bool) -> Option<&'static str> {
+    if *held == sir_paused {
+        return None;
+    }
+    *held = sir_paused;
+    Some(if sir_paused { "paused" } else { "running" })
+}
+
 async fn run_mission(tools: ToolContext, mission_id: i64, control: Arc<AtomicU8>) {
     let Some(engine) = engine() else { return };
     let db = match MissionDb::open(&engine.db_path) {
@@ -2033,20 +2042,25 @@ async fn run_mission(tools: ToolContext, mission_id: i64, control: Arc<AtomicU8>
     let mut pages_since_query = PAGES_PER_QUERY;
     let mut outcome = "completed";
     let mut paused = false;
+    let mut held = false;
     loop {
         let now = Instant::now();
+        // A game pauses the mission (its time doesn't count) until it has closed.
+        let gaming = crate::vram_guard::in_game();
         match control.load(Ordering::Acquire) {
             STOPPING => {
                 outcome = "stopped";
                 break;
             }
-            PAUSED => {
+            state if state == PAUSED || gaming => {
                 last_tick = now;
                 if !paused {
                     paused = true;
-                    m.db.set_status(mission_id, "paused");
                     m.db.checkpoint(mission_id, elapsed);
-                    m.emit(TelemetryKind::Stage { stage: "paused".into(), detail: "Mission paused".into() });
+                    m.emit(TelemetryKind::Stage { stage: "paused".into(), detail: if gaming { "Mission paused while Sir plays" } else { "Mission paused" }.into() });
+                }
+                if let Some(status) = hold_status(&mut held, state == PAUSED) {
+                    m.db.set_status(mission_id, status);
                 }
                 m.refresh_counts(elapsed, target, "paused");
                 tokio::time::sleep(Duration::from_millis(500)).await;
@@ -2056,6 +2070,7 @@ async fn run_mission(tools: ToolContext, mission_id: i64, control: Arc<AtomicU8>
         }
         if paused {
             paused = false;
+            held = false;
             m.db.set_status(mission_id, "running");
             m.emit(TelemetryKind::Stage { stage: "resumed".into(), detail: "Mission resumed".into() });
         }
@@ -2212,7 +2227,7 @@ pub fn is_tool(name: &str) -> bool {
 pub fn definitions() -> Vec<Value> {
     vec![json!({"type": "function", "function": {
         "name": "manage_deep_research",
-        "description": "Deep Research missions (10 minutes to 12 hours) that crawl the web, Wikipedia, arXiv, Hacker News and GitHub in the background, also while Sir games (no GPU), and write a live dossier with a knowledge graph. action start (topic, duration_minutes, focus_areas), pause, resume, stop, status, open_workspace.",
+        "description": "Deep Research missions (10 minutes to 12 hours) that crawl the web, Wikipedia, arXiv, Hacker News and GitHub in the background (paused while Sir games) and write a live dossier with a knowledge graph. action start (topic, duration_minutes, focus_areas), pause, resume, stop, status, open_workspace.",
         "parameters": {"type": "object", "properties": {
             "action": {"type": "string", "enum": ["start", "pause", "resume", "stop", "status", "open_workspace"]},
             "topic": {"type": "string"},
@@ -2233,7 +2248,7 @@ pub fn run_tool(tools: &ToolContext, args: &Value) -> Result<String, String> {
             let focus = focus_arg(args);
             let id = create_mission(&topic, minutes, &focus)?;
             launch(tools, id);
-            let gaming = !crate::vram_guard::llm_allowed();
+            let gaming = crate::vram_guard::in_game();
             if !gaming && args["open_workspace"].as_bool() != Some(false) {
                 crate::workspace_canvas::spawn_research_workspace(Some(id));
             }
@@ -2243,7 +2258,7 @@ pub fn run_tool(tools: &ToolContext, args: &Value) -> Result<String, String> {
                     "Deep research mission #{id} started: \"{topic}\" for {hours}{}. Crawling DuckDuckGo, Wikipedia, arXiv, Hacker News and GitHub; checkpointed in jai_memory.db; dossier saved to Documents\\JAI_Research when done.",
                     if focus.is_empty() { String::new() } else { format!(", focus: {}", focus.join(", ")) }
                 ),
-                format!("Deep research on {topic} is under way, Sir. I'll keep at it for {hours}{}.", if gaming { " — quietly, on the CPU, while you play" } else { "" }),
+                format!("Deep research on {topic} {}, Sir. I'll keep at it for {hours}.", if gaming { "starts once your game is over" } else { "is under way" }),
             ))
         }
         "pause" | "resume" | "stop" | "cancel" => {
@@ -2397,6 +2412,8 @@ mod tests {
         assert!(snap.queries.iter().any(|q| q.status == "done"));
         let md = build_dossier(&snap, None);
         assert!(md.contains("## Chapter 3 — Benchmarks & Numbers") && md.contains("500 Wh/kg"), "{md}");
+        reopened.set_status(id, "paused");
+        assert!(interrupted_missions(&conn).unwrap().is_empty(), "Sir's own pause outlives a restart");
         reopened.set_status(id, "completed");
         assert!(interrupted_missions(&conn).unwrap().is_empty());
         drop((conn, reopened));
@@ -2425,5 +2442,25 @@ mod tests {
         assert_eq!(normalize_url("https://x.org/"), "https://x.org/");
         let rules = parse_robots("User-agent: Googlebot\nDisallow: /g\n\nUser-agent: *\nDisallow: /private\nDisallow: /tmp*\n");
         assert_eq!(rules, vec!["/private".to_string(), "/tmp".to_string()]);
+    }
+
+    /// Repro 2026-11-15: a game pauses every mission, yet the tool promised to crawl while Sir games.
+    #[test]
+    fn a_game_pauses_missions_and_the_tool_says_so() {
+        let defs = definitions();
+        let d = defs[0]["function"]["description"].as_str().unwrap();
+        assert!(d.contains("paused while Sir games") && !d.contains("also while Sir games"), "{d}");
+        assert!(d.contains("pause, resume, stop, status, open_workspace"), "the actions stay: {d}");
+    }
+
+    /// A game's hold leaves the mission "running" (a restart resumes it); Sir's pause and resume are written even mid-game.
+    #[test]
+    fn only_sirs_own_pause_is_written_down() {
+        let mut held = false;
+        assert_eq!(hold_status(&mut held, false), None, "a game holds the mission");
+        assert_eq!(hold_status(&mut held, true), Some("paused"), "Sir pauses while the game holds it");
+        assert_eq!(hold_status(&mut held, true), None, "written once");
+        assert_eq!(hold_status(&mut held, false), Some("running"), "Sir resumes before the game is over");
+        assert!(!held);
     }
 }

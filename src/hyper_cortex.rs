@@ -105,7 +105,7 @@ const READ_ONLY: &[(&str, &[&str])] = &[
     ("control_orb_mode", &["status"]),
     ("control_music", &["what_is_playing", "list_playlists"]),
     ("reminders", &["list"]),
-    ("manage_vram", &["status"]),
+    ("manage_vram", &["status", "game_status"]),
     ("manage_deep_research", &["status"]),
     ("discord_call", &["status", "recap"]),
     ("discord_bot", &["status", "read", "recap", "summary", "who"]),

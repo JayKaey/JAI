@@ -714,8 +714,15 @@ fn spawn_track_indexer(db_path: PathBuf) {
             }
         }
         let spawned = std::thread::Builder::new().name("jai-track-index".into()).spawn(move || {
+            crate::platform::lower_thread_priority();
             std::thread::sleep(Duration::from_secs(20));
+            crate::startup_sequence::wait_for_brain(Duration::from_secs(150));
             loop {
+                // (A game gets the disk: the scan waits until it has closed.)
+                if crate::vram_guard::in_game() {
+                    std::thread::sleep(Duration::from_secs(60));
+                    continue;
+                }
                 let started = std::time::Instant::now();
                 let tracks = build_track_index();
                 let local = tracks.iter().filter(|t| !t.path.starts_with("spotify:")).count();

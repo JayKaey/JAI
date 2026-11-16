@@ -302,7 +302,7 @@ fn draw_body(ui: &mut egui::Ui, p: &Palette, sim: &Simulation, host: &WidgetHost
     let (controls_rect, plot_rect) = split_layout(avail);
     ui.allocate_new_ui(egui::UiBuilder::new().max_rect(controls_rect), |ui| {
         ui.set_width(controls_rect.width());
-        egui::ScrollArea::vertical().id_salt(("sim_controls", &sim.id)).max_height(controls_rect.height()).show(ui, |ui| controls(ui, p, sim, host));
+        crate::hud_style::faded(ui, egui::ScrollArea::vertical().id_salt(("sim_controls", &sim.id)).max_height(controls_rect.height()), |ui| controls(ui, p, sim, host));
     });
     let response = ui.allocate_rect(plot_rect, Sense::hover());
     let painter = ui.painter_at(plot_rect.expand(2.0));
@@ -402,7 +402,7 @@ impl View {
             let mag = 10f64.powf(raw.abs().log10().floor());
             [1.0, 2.0, 5.0, 10.0].iter().map(|m| m * mag).find(|s| *s >= raw).unwrap_or(raw)
         };
-        let font = FontId::proportional(10.0);
+        let font = FontId::proportional(11.0);
         let (sx, sy) = (step(self.x1 - self.x0), step(self.y1 - self.y0));
         let mut x = (self.x0 / sx).ceil() * sx;
         while x <= self.x1 {
@@ -650,7 +650,7 @@ fn draw_collision(painter: &egui::Painter, rect: Rect, p: &Palette, sim: &Simula
     for (x, rad, m, v, colour, name) in [(rt.x1, r1, m1, rt.v1, p.accent, "m₁"), (rt.x2, r2, m2, rt.v2, p.amber, "m₂")] {
         let c = pos2(view.to_screen(x, 0.0).x, track_y - rad as f32 * px_per_m);
         painter.circle_filled(c, rad as f32 * px_per_m, colour.gamma_multiply(0.85));
-        painter.text(c, Align2::CENTER_CENTER, format!("{name}\n{m:.1} kg"), FontId::proportional(11.0), Color32::BLACK);
+        painter.text(c, Align2::CENTER_CENTER, format!("{name}\n{m:.1} kg"), FontId::proportional(11.0), crate::hud_style::ink_on(colour));
         if v.abs() > 0.01 {
             painter.arrow(c - vec2(0.0, rad as f32 * px_per_m + 14.0), vec2(v as f32 * px_per_m * 0.6, 0.0), stroke(2.0, p.green));
         }
@@ -755,7 +755,7 @@ fn draw_sorting(painter: &egui::Painter, rect: Rect, p: &Palette, sim: &Simulati
         } else {
             p.accent.gamma_multiply(0.75)
         };
-        painter.rect_filled(bar, Rounding::same(1.5), colour);
+        painter.rect_filled(bar, Rounding::ZERO, colour);
     }
     readout(painter, rect, 8.0, &format!("{} sort · step {} of {}{}", sim.algorithm, rt.sort_pos as usize, rt.sort.len() - 1, if done { " · sorted" } else { "" }), p.text);
 }

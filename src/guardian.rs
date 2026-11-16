@@ -217,13 +217,27 @@ pub fn wants_processes(a: &[Anomaly]) -> bool {
     a.iter().any(|x| x.kind.needs_culprit())
 }
 
+#[cfg(feature = "desktop-gpu")]
+fn nvml() -> Option<&'static nvml_wrapper::Nvml> {
+    static NVML: std::sync::OnceLock<Option<nvml_wrapper::Nvml>> = std::sync::OnceLock::new();
+    NVML.get_or_init(|| nvml_wrapper::Nvml::init().ok()).as_ref()
+}
+
+/// Free VRAM of the first GPU in MB (NVML; `None` without it).
+pub fn vram_free_mb() -> Option<u64> {
+    #[cfg(feature = "desktop-gpu")]
+    {
+        nvml()?.device_by_index(0).ok()?.memory_info().ok().map(|m| m.free / 1_048_576)
+    }
+    #[cfg(not(feature = "desktop-gpu"))]
+    None
+}
+
 /// Names of the processes using the GPU (NVML; empty without it).
 pub fn gpu_process_names() -> Vec<String> {
     #[cfg(feature = "desktop-gpu")]
     {
-        use std::sync::OnceLock;
-        static NVML: OnceLock<Option<nvml_wrapper::Nvml>> = OnceLock::new();
-        let Some(nvml) = NVML.get_or_init(|| nvml_wrapper::Nvml::init().ok()).as_ref() else { return Vec::new() };
+        let Some(nvml) = nvml() else { return Vec::new() };
         let Ok(dev) = nvml.device_by_index(0) else { return Vec::new() };
         let mut procs = dev.running_compute_processes().unwrap_or_default();
         procs.extend(dev.running_graphics_processes().unwrap_or_default());

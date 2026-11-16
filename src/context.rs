@@ -103,6 +103,14 @@ pub async fn build(tools: &ToolContext, source: InputSource, voice: VoiceGate, r
         mode.display(),
         if tools.modality.voice_muted() { " (voice muted)" } else { "" }
     ));
+    if let Some((game, played)) = crate::vram_guard::game_now() {
+        out.push_str(&format!("Sir is playing {game} (for {} min); a question about a game, level or item means this one.\n", played.as_secs() / 60));
+    }
+    // Game mode: the CPU brain reads only these lines (every token costs it time).
+    if crate::vram_guard::in_game() {
+        out.push_str("END OF LIVE SYSTEM CONTEXT");
+        return out;
+    }
     match &foreground {
         Some((title, process)) if !title.is_empty() => out.push_str(&format!(
             "Sir's window (before this request): \"{}\"{}\n",

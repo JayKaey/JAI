@@ -280,7 +280,7 @@ pub fn paint_stack(ctx: &egui::Context, area: Rect, cards: &[Card<'_>]) -> bool 
             q.rect_filled(Rect::from_min_size(rect.min, vec2(3.0, rect.height())), Rounding::ZERO, crate::hud_style::FAULT);
         }
         crate::hud_board::brackets(&q, rect.shrink(0.75), crate::hud_board::bracket_colour());
-        q.text(rect.min + vec2(13.0, 9.0), egui::Align2::LEFT_TOP, tag, FontId::monospace(10.0), if card.alert { crate::hud_style::FAULT } else { Color32::from_rgb(0x7F, 0xA6, 0xB6) });
+        q.text(rect.min + vec2(13.0, 9.0), egui::Align2::LEFT_TOP, tag, FontId::monospace(11.0), if card.alert { crate::hud_style::FAULT } else { Color32::from_rgb(0x7F, 0xA6, 0xB6) });
         q.galley(rect.min + vec2(13.0, 24.0), galley, Color32::PLACEHOLDER);
         // Its time runs out along the bottom edge.
         let total = (card.age + card.left).max(0.1);

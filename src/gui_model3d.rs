@@ -140,7 +140,7 @@ fn chip(ui: &mut Ui, text: &str, on: bool, hint: &str) -> bool {
     let accent = crate::hud_board::active_colour();
     let ink = if on { accent } else { STRIP_INK };
     let edge = if on { accent } else { crate::hud_board::border_colour() };
-    ui.add(egui::Button::new(RichText::new(text).font(mono(10.5)).color(ink)).fill(CARD).stroke(stroke(1.0, edge)).rounding(Rounding::ZERO)).on_hover_text(hint).clicked()
+    ui.add(egui::Button::new(RichText::new(text).font(mono(11.0)).color(ink)).fill(CARD).stroke(stroke(1.0, edge)).rounding(Rounding::ZERO)).on_hover_text(hint).clicked()
 }
 
 /// The chips over the model.
@@ -290,8 +290,12 @@ fn view_area(ui: &mut Ui, snap: &Snapshot, rect: Rect, rt: &Handle) {
     let v = view_of(&cam, rect);
     let viewproj = math::mul(&v.proj, &v.view);
     let animated = moving || snap.phase == Phase::Working || snap.view.look == Look::Hologram || snap.scene.as_ref().is_some_and(|s| s.planet);
-    if animated {
+    // In a game the view rests (the GPU is the game's) unless Sir holds it; once a second it
+    // looks whether the game is over.
+    if animated && (holding || !crate::vram_guard::in_game()) {
         super::next_animation_frame(ui.ctx());
+    } else if animated {
+        ui.ctx().request_repaint_after(std::time::Duration::from_secs(1));
     }
     // The stage it stands on: two rings on the floor under it, the outer one ticked.
     if let Some(scene) = snap.scene.as_ref().filter(|s| !s.planet) {
@@ -351,17 +355,17 @@ fn view_area(ui: &mut Ui, snap: &Snapshot, rect: Rect, rt: &Handle) {
     } else if snap.phase == Phase::Failed {
         painter.text(c, Align2::CENTER_CENTER, wrap_line(&snap.status, 60), mono(12.0), super::STRIP_MUTED);
     } else if !snap.status.is_empty() {
-        painter.text(pos2(rect.left() + 12.0, rect.bottom() - 14.0), Align2::LEFT_BOTTOM, &snap.status, mono(10.5), STRIP_MUTED);
+        painter.text(pos2(rect.left() + 12.0, rect.bottom() - 14.0), Align2::LEFT_BOTTOM, &snap.status, mono(11.0), STRIP_MUTED);
     }
     // The Sketchfab match (without Sir's token, or while it downloads).
     if let Some(preview) = &snap.preview {
         preview_card(ui, &painter, rect, preview, snap.note.as_deref());
     } else if let Some(note) = &snap.note {
-        painter.text(pos2(rect.left() + 12.0, rect.top() + 12.0), Align2::LEFT_TOP, wrap_line(note, 70), mono(10.5), STRIP_MUTED);
+        painter.text(pos2(rect.left() + 12.0, rect.top() + 12.0), Align2::LEFT_TOP, wrap_line(note, 70), mono(11.0), STRIP_MUTED);
     }
     if gpu3d::status() == gpu3d::Status::Unsupported && snap.scene.is_some() {
         let why = gpu3d::unsupported_reason().unwrap_or_default();
-        painter.text(pos2(rect.right() - 10.0, rect.top() + 10.0), Align2::RIGHT_TOP, format!("EDGES ONLY: {why}"), mono(9.5), STRIP_MUTED);
+        painter.text(pos2(rect.right() - 10.0, rect.top() + 10.0), Align2::RIGHT_TOP, format!("EDGES ONLY: {why}"), mono(11.0), STRIP_MUTED);
     }
     // Files dropped on the studio open in it.
     let (dropped, hovering, pointer) = ui.input(|i| (i.raw.dropped_files.iter().filter_map(|f| f.path.clone()).collect::<Vec<_>>(), !i.raw.hovered_files.is_empty(), i.pointer.latest_pos()));
@@ -424,11 +428,11 @@ fn preview_card(ui: &Ui, painter: &Painter, rect: Rect, p: &studio::Preview, not
         painter.image(t.id(), r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
         y += thumb_h + 4.0;
     }
-    painter.text(pos2(card.left() + 6.0, y), Align2::LEFT_TOP, "SKETCHFAB // BEST MATCH", mono(9.0), accent);
+    painter.text(pos2(card.left() + 6.0, y), Align2::LEFT_TOP, "SKETCHFAB // BEST MATCH", mono(11.0), accent);
     painter.text(pos2(card.left() + 6.0, y + 13.0), Align2::LEFT_TOP, truncate(&p.title, 34), mono(11.0), STRIP_INK);
-    painter.text(pos2(card.left() + 6.0, y + 28.0), Align2::LEFT_TOP, truncate(&format!("by {} · {}", p.author, p.license), 44), mono(9.5), STRIP_MUTED);
+    painter.text(pos2(card.left() + 6.0, y + 28.0), Align2::LEFT_TOP, truncate(&format!("by {} · {}", p.author, p.license), 44), mono(11.0), STRIP_MUTED);
     if let Some(n) = note {
-        painter.text(pos2(card.left() + 6.0, y + 44.0), Align2::LEFT_TOP, wrap_line(n, ((w / 6.2) as usize).max(20)), mono(9.0), STRIP_MUTED);
+        painter.text(pos2(card.left() + 6.0, y + 44.0), Align2::LEFT_TOP, wrap_line(n, ((w / 6.2) as usize).max(20)), mono(11.0), STRIP_MUTED);
     }
 }
 
@@ -473,7 +477,7 @@ fn footer_lines(facts: &str, credit: Option<&str>, width: f32, char_w: f32) -> (
 
 /// The footer laid out for the width at hand: (facts, credit, stacked).
 fn footer_for(ui: &Ui, snap: &Snapshot) -> (String, Option<String>, bool) {
-    let char_w = ui.fonts(|f| f.glyph_width(&mono(9.5), 'M'));
+    let char_w = ui.fonts(|f| f.glyph_width(&mono(11.0), 'M'));
     let credit = snap.credit.as_ref().map(|c| truncate(&c.line(), 90));
     footer_lines(&facts_of(snap), credit.as_deref(), ui.available_width() - 2.0, char_w)
 }
@@ -482,7 +486,7 @@ fn footer_for(ui: &Ui, snap: &Snapshot) -> (String, Option<String>, bool) {
 fn footer(ui: &mut Ui, snap: &Snapshot) {
     let (facts, credit, stacked) = footer_for(ui, snap);
     let credit_label = |ui: &mut Ui, text: String| {
-        let text = RichText::new(text).font(mono(9.5)).color(STRIP_MUTED);
+        let text = RichText::new(text).font(mono(11.0)).color(STRIP_MUTED);
         match &snap.credit {
             Some(c) if c.url.starts_with("https://") => {
                 ui.hyperlink_to(text, &c.url);
@@ -493,7 +497,7 @@ fn footer(ui: &mut Ui, snap: &Snapshot) {
         }
     };
     ui.horizontal(|ui| {
-        ui.label(RichText::new(facts).font(mono(9.5)).color(STRIP_MUTED));
+        ui.label(RichText::new(facts).font(mono(11.0)).color(STRIP_MUTED));
         if let Some(c) = credit.clone().filter(|_| !stacked) {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| credit_label(ui, c));
         }
