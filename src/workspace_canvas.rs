@@ -773,7 +773,7 @@ fn frame_body(ctx: &egui::Context, class: ViewportClass, app: &Jai, rt: &Handle,
                 SpatialWindowKind::LiveCrawlerStream => crawler_view(ui, w, c, app, rt, &mut repaint_after, fill),
                 SpatialWindowKind::ExecutiveDossier => dossier_view(ui, w, c, ctx, fill),
                 SpatialWindowKind::KnowledgeGraphPinboard => graph_view(ui, w, c, ctx, accent),
-                SpatialWindowKind::CodeAndSandboxInspector => inspector_view(ui, c, accent, &mut repaint_after),
+                SpatialWindowKind::CodeAndSandboxInspector => inspector_view(ui, c, accent, &mut repaint_after, fill),
                 SpatialWindowKind::HardwareAndVramHud => hardware_view(ui, w, app, &mut repaint_after),
                 SpatialWindowKind::ScheduleAndCommandDeck => schedule_view(ui, app, rt, fill),
             }
@@ -1284,7 +1284,7 @@ fn graph_view(ui: &mut Ui, w: &mut SpatialWindow, c: &mut WorkspaceCanvas, ctx: 
 static IDENT_X: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\bx\b").unwrap());
 static IDENT_T: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\bt\b").unwrap());
 
-fn inspector_view(ui: &mut Ui, c: &mut WorkspaceCanvas, accent: Color32, repaint: &mut Duration) {
+fn inspector_view(ui: &mut Ui, c: &mut WorkspaceCanvas, accent: Color32, repaint: &mut Duration, fill: Color32) {
     let Some(item) = c.inspect.clone() else {
         muted(ui, "Ask JAI to inspect code, JSON, CSV or a function to plot — or click a fact or source in the knowledge graph.");
         return;
@@ -1299,9 +1299,9 @@ fn inspector_view(ui: &mut Ui, c: &mut WorkspaceCanvas, accent: Color32, repaint
     ui.add_space(4.0);
     match item.format {
         InspectFormat::Plot => plot_view(ui, &item.body, accent, repaint),
-        InspectFormat::Csv => csv_view(ui, &item.body),
+        InspectFormat::Csv => csv_view(ui, &item.body, fill),
         _ => {
-            egui::ScrollArea::both().id_salt("inspector_body").auto_shrink([false; 2]).show(ui, |ui| match item.format {
+            crate::hud_style::faded_into(ui, egui::ScrollArea::both().id_salt("inspector_body").auto_shrink([false; 2]), fill, |ui| match item.format {
                 InspectFormat::Code => {
                     ui.label(highlighted(&item.body, 11.5));
                 }
@@ -1456,11 +1456,11 @@ fn csv_delimiter(body: &str) -> char {
     [',', ';', '\t', '|'].into_iter().max_by_key(|d| first.matches(*d).count()).unwrap_or(',')
 }
 
-fn csv_view(ui: &mut Ui, body: &str) {
+fn csv_view(ui: &mut Ui, body: &str, fill: Color32) {
     let delim = csv_delimiter(body);
     let rows: Vec<Vec<String>> = body.lines().filter(|l| !l.trim().is_empty()).take(500).map(|l| csv_fields(l, delim)).collect();
     let width = rows.iter().map(Vec::len).max().unwrap_or(0);
-    egui::ScrollArea::both().id_salt("inspector_csv").auto_shrink([false; 2]).show(ui, |ui| {
+    crate::hud_style::faded_into(ui, egui::ScrollArea::both().id_salt("inspector_csv").auto_shrink([false; 2]), fill, |ui| {
         egui::Grid::new("inspector_csv_grid").striped(true).num_columns(width).show(ui, |ui| {
             for (i, row) in rows.iter().enumerate() {
                 for cell in row {

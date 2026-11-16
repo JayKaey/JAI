@@ -1844,6 +1844,12 @@ pub enum BoardClick {
 
 /// How far a block that does not answer the search steps back.
 const SEARCH_DIM: f32 = 0.22;
+thread_local! {
+    /// How far the title of the block being painted has decoded (1: whole).
+    static DECODING: std::cell::Cell<f32> = const { std::cell::Cell::new(1.0) };
+}
+/// Opacity of the other blocks while the pointer rests on one.
+const HOVER_DIM: f32 = 0.85;
 
 /// Carries out an entry of the right-click menu on block `index` of the board.
 fn block_menu(ctx: &egui::Context, index: usize, block: &Block, chosen: crate::block_actions::BlockAction) {
@@ -1892,6 +1898,9 @@ pub struct BoardView {
     drag_from: Option<(usize, Vec2)>,
     /// How far a long note is scrolled, per (block, page).
     scroll: HashMap<(usize, usize), f32>,
+    /// The block the pointer rests on (the last one, while the others come back) and how far
+    /// the others have stepped back from it (0..1).
+    hover: (Option<usize>, f32),
     /// The suggestion bar's keys for the block in the spotlight, and the generation of Sir's
     /// habits they were ranked at (asked again only when the block or the habits change).
     suggested: Option<(crate::hud_suggestions::Subject, u64, Vec<crate::hud_suggestions::Suggestion>)>,
@@ -2197,7 +2206,7 @@ fn frame(p: &Painter, slot: Rect, block: &Block, active: bool, stack: Option<(us
         p.text(pos2(right, mid), Align2::RIGHT_CENTER, &block.tag, micro(), MICRO);
     }
     let title_room = (room - if tagged { tag_width } else { 0.0 }).max(20.0);
-    let label = crate::hud_style::fitted_title(p, &block.label, 13.5, active_colour(), title_room);
+    let label = crate::hud_style::fitted_title(p, &crate::hud_style::decode(&block.label, DECODING.get(), p.ctx().input(|i| i.time)), 13.5, active_colour(), title_room);
     let label_right = r.left() + pad + label.size().x;
     // A title cut short shows whole under the pointer.
     if natural > title_room + 0.5 && hovered(p, Rect::from_min_max(pos2(r.left() + pad, mid - 9.0), pos2(label_right, mid + 9.0))) {
@@ -2468,6 +2477,13 @@ impl BoardView {
                 animating = true;
             }
             let needle = crate::hud_dock::search();
+            // The pointer resting on a block: the others step back a little (to 85 %).
+            let pointer = ui.input(|inp| inp.pointer.hover_pos()).filter(|_| !own && spot_shown.is_none() && self.drag_from.is_none());
+            let over = pointer.and_then(|at| rects.iter().enumerate().find_map(|(i, r)| r.filter(|r| r.translate(self.moved.get(&i).copied().unwrap_or_default()).contains(at)).map(|_| i)));
+            let (last, eased) = self.hover;
+            let eased = crate::hud_style::motion::approach(eased, if over.is_some() { 1.0 } else { 0.0 }, ui.input(|inp| inp.stable_dt), crate::hud_style::motion::NORMAL);
+            self.hover = (over.or(if eased > 0.0 { last } else { None }), eased);
+            animating |= eased > 0.0 && eased < 1.0;
             for (i, (block, rect)) in shown.report.blocks.iter().zip(&rects).enumerate() {
                 let Some(rect) = *rect else { continue };
                 if own {
@@ -2484,7 +2500,7 @@ impl BoardView {
                 if spot_shown == Some(i) {
                     continue;
                 }
-                // Cascade: 30 ms per block; each rises, fades in and springs up to full size.
+                // Cascade: 30 ms per block, each with its entrance.
                 let start = shown.at + CASCADE_STEP * i as u32;
                 let t = if now < start { 0.0 } else { (now.duration_since(start).as_secs_f32() / APPEAR_SECS).min(1.0) };
                 if t < 1.0 {
@@ -2497,11 +2513,18 @@ impl BoardView {
                 // The search across the blocks: what answers it stays lit, the rest steps back.
                 let found = !needle.is_empty() && crate::hud_dock::search_matches(&needle, &block.label, &block.text());
                 let dim = if needle.is_empty() || found { dim } else { dim * SEARCH_DIM };
-                let mut p = painter.clone();
-                let e = ease_out(t);
-                p.set_opacity(e * e * dim);
+                let dim = if self.hover.0.is_some_and(|h| h != i) { dim * (1.0 - (1.0 - HOVER_DIM) * self.hover.1) } else { dim };
+                // The entrance every window of his plays: a hairline across its middle, the
+                // frame unfolding from it, the title decoding as the content resolves.
+                let motion = crate::gui::WindowMotion::of(Some(t), None);
                 let moved = self.moved.get(&i).copied().unwrap_or_default();
-                let r = scale_rect(rect, 0.88 + 0.12 * ease_out_back(t)).translate(vec2(0.0, 18.0 * (1.0 - e)) + moved);
+                let r = rect.translate(moved);
+                let mut p = painter.clone();
+                p.set_opacity(motion.frame * dim);
+                p.set_clip_rect(crate::gui::motion_band(r.expand(4.0), &motion).intersect(painter.clip_rect()));
+                if let Some((width, alpha)) = motion.line {
+                    painter.rect_filled(Rect::from_center_size(r.center(), vec2(r.width() * width, 1.0)), Rounding::ZERO, Color32::WHITE.gamma_multiply(alpha * dim));
+                }
                 let pulse = shown.highlights[i].map(|h| h.elapsed().as_secs_f32()).filter(|s| *s < HIGHLIGHT_SECS);
                 if pulse.is_some() {
                     animating = true;
@@ -2534,7 +2557,10 @@ impl BoardView {
                     }
                 }
                 let active = pulse.is_some() || response.hovered() || found;
+                // Its title decodes itself as it comes up.
+                DECODING.set(motion.resolve);
                 self.paint_block(&p, r, block, (i, shown.fronts[i]), active, false, rt);
+                DECODING.set(1.0);
                 if let Some(s) = pulse {
                     let glow = 0.5 + 0.5 * (s * 7.0).cos();
                     p.rect_stroke(r.expand(2.0), Rounding::ZERO, stroke(2.0, active_colour().gamma_multiply(glow * (1.0 - s / HIGHLIGHT_SECS))));
@@ -2698,6 +2724,10 @@ impl BoardView {
                     if offset < max {
                         crate::hud_style::fade_band(&view_p, BLOCK_FILL, view.left(), view.right() - 4.0, view.bottom(), view.bottom() - body_row * 0.6);
                     }
+                    if offset > 0.0 {
+                        // Turned: a faint edge on top says there is more above (the top row stays readable).
+                        crate::hud_style::fade_band(&view_p, BLOCK_FILL, view.left(), view.right() - 4.0, view.top(), view.top() + body_row * 0.35);
+                    }
                     if max > 0.0 {
                         // The track, faint, and on it how far the text has been turned.
                         let track = Rect::from_min_max(pos2(inner.right() - 2.0, top), pos2(inner.right(), view.bottom()));
@@ -2742,7 +2772,9 @@ impl BoardView {
             }
             BlockKind::DarkVectorMap { place, lat, lon, span, roads, water, pending } => paint_map(&p, inner.expand(6.0), place, *lat, *lon, *span, roads, water, *pending),
             BlockKind::ResearchProgress { .. } => paint_research(&p, r, block, 1.0, None),
-            BlockKind::DialogueFeed { heard, reply, streaming } => paint_dialogue_body(&p, inner, heard, reply, *streaming),
+            BlockKind::DialogueFeed { heard, reply, streaming } => {
+                paint_dialogue_body(&p, inner, heard, reply, *streaming);
+            }
         }
     }
 
@@ -2864,8 +2896,9 @@ impl BoardView {
 }
 
 /// The `COMMS // LIVE RESPONSE` block on its own (the HUD paints it in the band above the
-/// telemetry strip, outside the report grid).
-pub fn paint_dialogue(p: &Painter, r: Rect, block: &Block) {
+/// telemetry strip, outside the report grid). Returns the row of the heard words, if shown (a
+/// click there opens the hearing log to put them right).
+pub fn paint_dialogue(p: &Painter, r: Rect, block: &Block) -> Option<Rect> {
     if let BlockKind::DialogueFeed { heard, reply, streaming } = &block.kind {
         let inner = frame(p, r, block, *streaming, None, None, None);
         // The border breathes with his voice while he speaks.
@@ -2874,15 +2907,18 @@ pub fn paint_dialogue(p: &Painter, r: Rect, block: &Block) {
             p.rect_stroke(r.expand(1.5), Rounding::ZERO, stroke(1.0 + 1.5 * voice, active_colour().gamma_multiply(0.25 + 0.6 * voice)));
         }
         let p = p.with_clip_rect(inner.expand(2.0).intersect(p.clip_rect()));
-        paint_dialogue_body(&p, inner, heard, reply, *streaming);
+        return paint_dialogue_body(&p, inner, heard, reply, *streaming);
     }
+    None
 }
 
-fn paint_dialogue_body(p: &Painter, inner: Rect, heard: &str, reply: &str, streaming: bool) {
+fn paint_dialogue_body(p: &Painter, inner: Rect, heard: &str, reply: &str, streaming: bool) -> Option<Rect> {
     let mut y = inner.top();
+    let mut heard_row = None;
     if !heard.trim().is_empty() {
         let label = p.text(pos2(inner.left(), y), Align2::LEFT_TOP, "HEARD //", micro(), active_colour());
         let h = wrapped(p, pos2(label.right() + 6.0, y - 1.0), inner.width() - label.width() - 6.0, heard.trim(), FontId::proportional(13.0), MICRO, 1);
+        heard_row = Some(Rect::from_min_max(pos2(inner.left(), y - 1.0), pos2(inner.right(), y + h.max(12.0))));
         y += h.max(12.0) + 5.0;
     }
     if !reply.trim().is_empty() {
@@ -2893,6 +2929,7 @@ fn paint_dialogue_body(p: &Painter, inner: Rect, heard: &str, reply: &str, strea
         let text = if streaming { format!("{} ▌", reply.trim()) } else { reply.trim().to_string() };
         wrapped(p, pos2(label.right() + 6.0, y), inner.width() - label.width() - 6.0, &text, font, INK, rows);
     }
+    heard_row
 }
 
 /// Lit cells of the research bar at `clock`: the filled share of the progress, plus a run of

@@ -507,6 +507,17 @@ fn prefill_console(text: String) {
     set_text_console(true);
 }
 
+/// Orders a block hands to the HUD, carried out on its next frame as if typed (so they pass
+/// the same checks: a question only reads, anything outside JAI asks first).
+static ORDERS: Mutex<Vec<(String, bool)>> = Mutex::new(Vec::new());
+
+/// `text` is carried out as an order on the HUD's next frame; `undo_first`: what a misheard
+/// order changed in the last two minutes is taken back first.
+pub fn run_order(text: String, undo_first: bool) {
+    lock(&ORDERS).push((text, undo_first));
+    refresh();
+}
+
 /// HUD controls the Feature Lab's `[ TRY ]` can open (`open_control`).
 #[cfg(test)]
 const CONTROL_IDS: &[&str] = &["screens", "theme_studio", "mixer"];
@@ -2155,11 +2166,11 @@ fn row(ui: &mut Ui, p: &Palette, key: &str, value: impl Into<String>) -> egui::R
 
 /// Horizontal meter (0..1) with vertical markers at fractions.
 fn meter(ui: &mut Ui, p: &Palette, fraction: f32, height: f32, fill: Color32, markers: &[(f32, Color32)]) {
-    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
+    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
     let painter = ui.painter();
     let rounding = Rounding::same(height / 2.0);
     painter.rect_filled(rect, rounding, p.track);
-    let f = fraction.clamp(0.0, 1.0);
+    let f = crate::hud_style::motion::glide(ui.ctx(), response.id.with("glide"), fraction.clamp(0.0, 1.0));
     if f > 0.0 {
         let mut filled = rect;
         filled.set_width((rect.width() * f).max(height));
@@ -3128,6 +3139,30 @@ impl HudApp {
         if crate::hud_notify::paint_stack(ctx, area, &cards) {
             ctx.request_repaint();
         }
+    }
+
+    /// `[ UNDO ]` by the notices for a few seconds after a change of his own: a click takes
+    /// it back, as "undo that" does. (Not beside a game: nothing pops up over it.)
+    fn undo_chip(&self, ctx: &egui::Context) {
+        let Some(age) = crate::undo::kept_for().filter(|age| *age < UNDO_CHIP_FOR) else { return };
+        if crate::vram_guard::in_game() {
+            return;
+        }
+        let home = home_screen(ctx);
+        let right = crate::dynamic_popups::card_column_right(home, 360.0, console_rect());
+        // In its last 0.4 s it fades away.
+        let alpha = ((UNDO_CHIP_FOR - age).as_secs_f32() / 0.4).min(1.0);
+        let label = "[ UNDO ]";
+        let width = crate::hud_style::key_width(&ctx.layer_painter(egui::LayerId::background()), label);
+        let at = pos2(right - width, home.top() + HEADER_H + 10.0);
+        egui::Area::new(egui::Id::new("hud_undo_chip")).order(egui::Order::Foreground).fixed_pos(at).show(ctx, |ui| {
+            let (rect, response) = ui.allocate_exact_size(vec2(width, crate::hud_style::KEY_H), Sense::click());
+            crate::hud_style::key(ui.painter(), rect.right(), rect.center().y, label, response.hovered(), response.is_pointer_button_down_on(), true, alpha);
+            if response.on_hover_text("Take the last change back (\"undo that\")").clicked() {
+                self.run_calls(vec![("undo_last_action", serde_json::json!({}))]);
+            }
+        });
+        ctx.request_repaint_after(Duration::from_millis(if alpha < 1.0 { 16 } else { 250 }));
     }
 
     fn dialogs(&mut self, ctx: &egui::Context) {
@@ -5771,7 +5806,16 @@ impl HudApp {
         }
         let mut painter = ui.painter_at(screen);
         painter.set_opacity(fade);
-        crate::hud_board::paint_dialogue(&painter, rect, &block);
+        // A click on the heard words opens the hearing log, that line ready to be put right.
+        if let Some(row) = crate::hud_board::paint_dialogue(&painter, rect, &block) {
+            let heard = ui.interact(row, egui::Id::new("hud_comms_heard"), Sense::click()).on_hover_text("Misheard? Click to tell me what you meant");
+            if heard.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+            if heard.clicked() {
+                crate::kit_voice::correct_last();
+            }
+        }
     }
 
     /// Ctrl+F: one line that searches every open block (the board's tiles and the in-app
@@ -6384,6 +6428,20 @@ impl HudApp {
         discord_view::show(ctx, self.app.tools(), &self.rt);
         if SCREENS_REQUEST.swap(false, Ordering::AcqRel) {
             self.screens_open = true;
+        }
+        // Orders a block gave (the hearing log's corrected words): carried out as if typed,
+        // after what the misheard words changed in the last two minutes is taken back.
+        for (text, undo_first) in std::mem::take(&mut *lock(&ORDERS)) {
+            let (app, tools, model) = (self.app.clone(), self.app.tools().clone(), Arc::clone(&self.model));
+            self.rt.spawn(async move {
+                if undo_first {
+                    let _ = tools.execute("undo_last_action", &serde_json::json!({ "within_s": 120 })).await;
+                }
+                if let Some(reply) = app.handle_command(HudCommand::Chat { text }).await {
+                    lock(&model).apply(reply);
+                    request_repaint();
+                }
+            });
         }
         // The Theme Studio; `[ SAVE THEME ]` saves and applies the theme.
         if let Some(t) = theme_studio::show(ctx, &iface) {
@@ -7016,9 +7074,12 @@ fn block_tray(ctx: &egui::Context) {
         ui.horizontal(|ui| {
             for (id, title) in &tray {
                 let name = title.split(" // ").next().unwrap_or(title).trim().to_uppercase();
+                // A closed block waits here dim for ten minutes; one put away stands bright.
+                let parked = crate::hud_dock::is_parked(id);
+                let ink = if parked { STRIP_INK.gamma_multiply(0.5) } else { STRIP_INK };
                 let chip = ui
-                    .add(egui::Button::new(RichText::new(format!("[ {name} ]")).font(strip_font()).color(STRIP_INK)).fill(rgba([3, 7, 12], 0.9)).stroke(stroke(1.0, crate::hud_board::border_colour())).rounding(Rounding::ZERO))
-                    .on_hover_text("Put away. Click, or say \"restore it\", to bring it back.");
+                    .add(egui::Button::new(RichText::new(format!("[ {name} ]")).font(strip_font()).color(ink)).fill(rgba([3, 7, 12], 0.9)).stroke(stroke(1.0, crate::hud_board::border_colour().gamma_multiply(if parked { 0.5 } else { 1.0 }))).rounding(Rounding::ZERO))
+                    .on_hover_text(if parked { "Closed. Click within ten minutes to bring it back." } else { "Put away. Click, or say \"restore it\", to bring it back." });
                 if chip.clicked() {
                     crate::hud_dock::restore(id);
                 }
@@ -8082,13 +8143,16 @@ pub(super) fn hud_block_window(ctx: &egui::Context, id: &str, title: &str, size:
         crate::hud_dock::off_board(id);
         if crate::hud_dock::take_detaching(id) {
             action.detach = true;
-        } else if !crate::hud_dock::take_minimizing(id, title) {
+        } else if !crate::hud_dock::take_minimizing(id, title) && (tray || !crate::hud_dock::park(id, title)) {
+            // (Closed from the tray, or for real: gone. Otherwise it waits in the tray, dim.)
             action.close = true;
         }
         return action;
     }
-    // Put away in the tray: nothing on the board until it is restored (with its entrance).
+    // Put away in the tray: nothing on the board until it is restored (with its entrance). A
+    // closed one waits there for ten minutes, then closes for real.
     if tray {
+        action.close = crate::hud_dock::parked_out(id);
         return action;
     }
     // On the board (and not on its way out): a window of its own opens where it stands again,
@@ -8151,6 +8215,10 @@ pub(super) fn hud_block_window(ctx: &egui::Context, id: &str, title: &str, size:
     let needle = crate::hud_dock::search();
     let found = !needle.is_empty() && crate::hud_dock::search_matches(&needle, title, &crate::hud_dock::block_content(id).unwrap_or_default());
     let dim = if needle.is_empty() || found { 1.0 } else { SEARCH_DIM };
+    // The pointer resting on another block: this one steps back a little (to 85 %).
+    let mine = ctx.memory(|m| m.area_rect(area));
+    let elsewhere = !still && ctx.pointer_hover_pos().is_some_and(|at| !mine.is_some_and(|r| r.contains(at)) && crate::hud_dock::block_rects().iter().any(|b| b.contains(at)));
+    let dim = dim * (1.0 - 0.15 * ctx.animate_bool_with_time(area.with("others_used"), elsewhere, crate::hud_style::motion::NORMAL.as_secs_f32()));
     let content_alpha = motion.content * dim;
     let (pinned, maximized) = (crate::hud_dock::is_pinned(id), crate::hud_dock::is_maximized(id));
     let edge = if found { crate::hud_board::active_colour() } else { crate::hud_board::border_colour() };
@@ -8240,7 +8308,8 @@ pub(super) fn hud_block_window(ctx: &egui::Context, id: &str, title: &str, size:
         let title_room = (keys_left - row.left() - 22.0).max(20.0);
         // A title cut short shows whole under the pointer.
         let cut = wanted - 26.0 > title_room + 0.5;
-        let lettered = crate::hud_style::fitted_title(ui.painter(), title, ts(14.0), accent.gamma_multiply(content_alpha), title_room);
+        // The title decodes itself as the block opens, and back as it leaves.
+        let lettered = crate::hud_style::fitted_title(ui.painter(), &crate::hud_style::decode(title, motion.resolve.min(motion.content), ctx.input(|i| i.time)), ts(14.0), accent.gamma_multiply(content_alpha), title_room);
         let title_rect = Rect::from_min_size(pos2(row.left(), mid - lettered.size().y * 0.5), lettered.size());
         ui.painter().galley(title_rect.min, lettered, Color32::PLACEHOLDER);
         if crate::hud_style::paint_light(ui.painter(), pos2(title_rect.right() + 10.0, mid), crate::hud_style::light(id), ctx.input(|i| i.time), content_alpha) {
@@ -8682,6 +8751,8 @@ fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
 
 /// How far a block that does not answer the search steps back.
 const SEARCH_DIM: f32 = 0.22;
+/// How long `[ UNDO ]` stands after a change.
+const UNDO_CHIP_FOR: Duration = Duration::from_secs(6);
 /// The margin between a block's frame and its content, on every side.
 const BLOCK_MARGIN: f32 = 12.0;
 /// The search bar's width (it sits centred under the header strip).
@@ -9318,6 +9389,7 @@ impl HudApp {
             // (The power-up sequence stands alone on its dark: what the start has to say waits.)
             if self.boot.is_none() {
                 self.toasts(ctx, &m);
+                self.undo_chip(ctx);
             }
             self.popups(ctx, dt);
             self.room_alert_overlay(ctx, &m);

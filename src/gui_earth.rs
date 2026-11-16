@@ -1791,7 +1791,7 @@ fn drawer(ui: &mut Ui, rect: Rect, st: &mut Earth, ink: &Ink) {
         (Some(list), _) => {
             let now_ms = chrono::Utc::now().timestamp_millis();
             let mut child = ui.new_child(UiBuilder::new().max_rect(body));
-            egui::ScrollArea::vertical().id_salt("earth_area_rows").auto_shrink([false; 2]).show(&mut child, |ui| {
+            crate::hud_style::faded_into(&mut child, egui::ScrollArea::vertical().id_salt("earth_area_rows").auto_shrink([false; 2]), CARD, |ui| {
                 let width = ui.available_width();
                 for q in list {
                     let (row, resp) = ui.allocate_exact_size(vec2(width, 18.0), Sense::click());

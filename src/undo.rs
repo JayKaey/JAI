@@ -280,6 +280,12 @@ pub fn take_within(max: Duration) -> Option<Step> {
     LAST.lock().unwrap_or_else(|e| e.into_inner()).take_within(max)
 }
 
+/// How long ago the kept step was made, while one is kept and fresh (the [ UNDO ] chip shows
+/// for a few seconds after a change).
+pub fn kept_for() -> Option<Duration> {
+    LAST.lock().unwrap_or_else(|e| e.into_inner()).0.as_ref().map(|(_, at)| at.elapsed()).filter(|age| *age < FRESH)
+}
+
 /// Marks the start and the end of an undo.
 pub fn set_undoing(on: bool) {
     UNDOING.store(on, Ordering::Release);

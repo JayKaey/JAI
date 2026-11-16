@@ -111,7 +111,7 @@ pub(super) fn show(ctx: &egui::Context, iface: &InterfaceSettings) -> Option<Cus
         // (Its rows keep their width: in a block the dock made narrower, the studio scrolls
         // sideways instead of squeezing its hex fields shut.)
         let action = super::hud_block_window(ctx, ID, "Theme Studio // create theme", [560.0, 300.0], |ui| {
-            egui::ScrollArea::both().auto_shrink([false; 2]).show(ui, |ui| {
+            crate::hud_style::faded(ui, egui::ScrollArea::both().auto_shrink([false; 2]), |ui| {
                 ui.set_min_width(MIN_WIDTH);
                 body(ui);
             });
@@ -169,7 +169,7 @@ mod tests {
         let mut stage = Stage::new(egui::vec2(900.0, 600.0));
         let frame = stage.frames(4, &mut |ctx| {
             egui::Window::new("studio").title_bar(false).fixed_pos(egui::pos2(20.0, 20.0)).fixed_size(egui::vec2(560.0, 300.0)).show(ctx, |ui| {
-                egui::ScrollArea::both().auto_shrink([false; 2]).show(ui, |ui| {
+                crate::hud_style::faded(ui, egui::ScrollArea::both().auto_shrink([false; 2]), |ui| {
                     ui.set_min_width(MIN_WIDTH);
                     body(ui);
                 });

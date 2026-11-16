@@ -134,6 +134,11 @@ struct DockState {
     minimized: Vec<(String, String)>,
     /// Blocks whose exit is playing on the way to the tray.
     minimizing: HashSet<String>,
+    /// Closed blocks waiting in the tray, dim, since when: a click brings one back, after
+    /// `PARKED_FOR` it closes for real.
+    parked: HashMap<String, Instant>,
+    /// Blocks closing for real ("close the windows"): they skip the tray.
+    for_real: HashSet<String>,
     /// Blocks whose exit is playing on the way into a window of their own.
     detaching: HashSet<String>,
     /// When each block or window was opened, moved by hand or arranged by voice: "it" means
@@ -277,6 +282,8 @@ pub fn forget(id: &str) {
         }
         s.minimized.retain(|(open, _)| open != id);
         s.minimizing.remove(id);
+        s.parked.remove(id);
+        s.for_real.remove(id);
         s.detaching.remove(id);
         s.touched.remove(id);
         s.fitted.remove(id);
@@ -519,6 +526,7 @@ pub fn close_all_blocks() -> usize {
             .collect();
         for id in &ids {
             s.closing.entry(id.clone()).or_insert(now);
+            s.for_real.insert(id.clone());
         }
         ids.len()
     });
@@ -1359,10 +1367,49 @@ pub fn is_minimized(id: &str) -> bool {
     with(|s| s.minimized.iter().any(|(open, _)| open == id))
 }
 
+/// How long a closed block waits in the tray before it closes for real.
+pub const PARKED_FOR: Duration = Duration::from_secs(600);
+
+/// Block `id`'s exit as it closed has played: unless it closes for real ("close the windows"),
+/// it waits in the tray, dim, for `PARKED_FOR` (a click brings it back). True when it waits.
+pub fn park(id: &str, title: &str) -> bool {
+    with(|s| {
+        if s.for_real.remove(id) {
+            return false;
+        }
+        s.minimized.retain(|(open, _)| open != id);
+        s.minimized.push((id.to_string(), title.to_string()));
+        s.parked.insert(id.to_string(), Instant::now());
+        true
+    })
+}
+
+/// Whether block `id` waits in the tray because it was closed (not put away).
+pub fn is_parked(id: &str) -> bool {
+    with(|s| s.parked.contains_key(id))
+}
+
+/// A parked block whose time is up leaves the tray: true when it must close for real now.
+pub fn parked_out(id: &str) -> bool {
+    parked_out_after(id, PARKED_FOR)
+}
+
+fn parked_out_after(id: &str, wait: Duration) -> bool {
+    with(|s| {
+        let out = s.parked.get(id).is_some_and(|at| at.elapsed() >= wait);
+        if out {
+            s.parked.remove(id);
+            s.minimized.retain(|(open, _)| open != id);
+        }
+        out
+    })
+}
+
 /// "Restore it", its tray chip: block `id` comes back where it was (with its entrance). False
 /// when it was not in the tray.
 pub fn restore(id: &str) -> bool {
     let back = with(|s| {
+        s.parked.remove(id);
         let before = s.minimized.len();
         s.minimized.retain(|(open, _)| open != id);
         if s.minimized.len() < before {
@@ -1422,7 +1469,8 @@ pub fn latest_block() -> Option<(String, Duration)> {
 pub fn recent_blocks() -> Vec<(String, Duration)> {
     with(|s| {
         let mut out: Vec<(String, Duration)> = Vec::new();
-        let open = s.last_blocks.iter().chain(s.blocks.iter()).map(|(id, _, _)| id).chain(s.minimized.iter().map(|(id, _)| id)).chain(s.detached.iter().filter(|id| s.seen.contains(*id)));
+        // (A closed block waiting in the tray is closed.)
+        let open = s.last_blocks.iter().chain(s.blocks.iter()).map(|(id, _, _)| id).chain(s.minimized.iter().map(|(id, _)| id).filter(|id| !s.parked.contains_key(*id))).chain(s.detached.iter().filter(|id| s.seen.contains(*id)));
         for id in open.filter(|id| id.as_str() != "console") {
             if let Some(at) = s.touched.get(id) {
                 if !out.iter().any(|(known, _)| known == id) {
@@ -1450,7 +1498,9 @@ pub enum Whereabouts {
 
 pub fn whereabouts(id: &str) -> Whereabouts {
     with(|s| {
-        if s.minimized.iter().any(|(open, _)| open == id) {
+        if s.parked.contains_key(id) {
+            Whereabouts::Closed
+        } else if s.minimized.iter().any(|(open, _)| open == id) {
             Whereabouts::Tray
         } else if s.detached.contains(id) && s.seen.contains(id) {
             Whereabouts::Window
@@ -1475,7 +1525,7 @@ pub fn find_open(name: &str) -> Option<String> {
     }
     let prefix = id_prefix_for(&n);
     with(|s| {
-        let tray = s.minimized.iter().find(|(id, title)| title.to_lowercase().contains(n.as_str()) || prefix.is_some_and(|p| id.starts_with(p))).map(|(id, _)| id.clone());
+        let tray = s.minimized.iter().filter(|(id, _)| !s.parked.contains_key(id)).find(|(id, title)| title.to_lowercase().contains(n.as_str()) || prefix.is_some_and(|p| id.starts_with(p))).map(|(id, _)| id.clone());
         tray.or_else(|| {
             let mut windows: Vec<&String> = s.detached.iter().filter(|id| s.seen.contains(*id) && (prefix.is_some_and(|p| id.starts_with(p)) || id.replace('_', " ") == n)).collect();
             windows.sort();
@@ -1493,6 +1543,25 @@ pub(crate) fn test_lock() -> std::sync::MutexGuard<'static, ()> {
 
 #[cfg(test)]
 mod tests {
+    /// A closed block waits in the tray, dim, and counts as closed; a click brings it back,
+    /// its time running out closes it; "close the windows" closes for real.
+    #[test]
+    fn a_closed_block_waits_in_the_tray_for_ten_minutes() {
+        let _one = test_lock();
+        forget("park_a");
+        assert!(park("park_a", "Parked // test"));
+        assert!(is_minimized("park_a") && is_parked("park_a"));
+        assert_eq!(whereabouts("park_a"), Whereabouts::Closed, "closed, though it waits");
+        assert!(!recent_blocks().iter().any(|(id, _)| id == "park_a"), "not 'it'");
+        assert!(!parked_out("park_a"), "ten minutes are not up");
+        assert!(restore("park_a") && !is_parked("park_a") && !is_minimized("park_a"), "a click brings it back");
+        assert!(park("park_a", "Parked // test"));
+        assert!(parked_out_after("park_a", Duration::ZERO) && !is_minimized("park_a"), "its time up, it closes for real");
+        with(|s| s.for_real.insert("park_a".to_string()));
+        assert!(!park("park_a", "Parked // test") && !is_minimized("park_a"), "'close the windows' skips the tray");
+        forget("park_a");
+    }
+
     /// Windows the size of what they show: the Drive Space block of 2026-11-09 stood 640 × 306
     /// round three short rows.
     /// "Close the privacy board", "detach the changes list": the kit's blocks answer to what Sir

@@ -51,6 +51,15 @@ pub mod motion {
         let next = to + (from - to) * (-rate * dt.clamp(0.0, 0.1)).exp();
         if (next - to).abs() < 0.002 { to } else { next }
     }
+
+    /// A reading (a gauge, a meter, a percentage) that glides to `value` in a quarter of a
+    /// second instead of jumping; at once with the animations off.
+    pub fn glide(ctx: &eframe::egui::Context, id: eframe::egui::Id, value: f32) -> f32 {
+        if !crate::gui::motion_enabled() {
+            return value;
+        }
+        ctx.animate_value_with_time(id, value, SLOW.as_secs_f32())
+    }
 }
 
 // -------------------------------------------------------------------------------- shell ----
@@ -359,6 +368,63 @@ pub fn figure_galley(fonts: &egui::text::Fonts, text: &str, font: FontId, colour
         owed = pad;
     }
     fonts.layout_job(job)
+}
+
+/// A title decoding itself, `progress` 0 … 1: its letters settle left to right and the rest
+/// flicker through other letters (`clock` in seconds); spaces and marks stand from the start.
+/// Played backwards as a block leaves.
+pub fn decode(text: &str, progress: f32, clock: f64) -> std::borrow::Cow<'_, str> {
+    if progress >= 1.0 {
+        return text.into();
+    }
+    const POOL: &[u8] = b"ABCDEFGHJKLMNPRSTUVWXYZ0123456789";
+    let settled = (progress.max(0.0) * text.chars().count() as f32) as usize;
+    let tick = (clock * 30.0) as usize;
+    text.chars().enumerate().map(|(i, c)| if i < settled || !c.is_alphanumeric() { c } else { POOL[(i * 7 + tick * 13 + i * tick) % POOL.len()] as char }).collect::<String>().into()
+}
+
+/// How long a changed digit takes to roll in.
+const ROLL_SECS: f64 = 0.22;
+
+/// Paints `text` as even-width figures with its top-left at `at`; a figure that changed since
+/// the last frame (per `id`) rolls up into place, the old one leaving above it. Returns the size.
+pub fn rolling_figures(p: &Painter, id: egui::Id, at: Pos2, text: &str, font: FontId, colour: Color32) -> Vec2 {
+    let ctx = p.ctx();
+    let now = ctx.input(|i| i.time);
+    let (old, since) = ctx.data_mut(|d| {
+        let slot = d.get_temp_mut_or_insert_with(id, || (text.to_string(), String::new(), f64::MIN));
+        if slot.0 != text {
+            let old = std::mem::replace(&mut slot.0, text.to_string());
+            (slot.1, slot.2) = (old, now);
+        }
+        (slot.1.clone(), slot.2)
+    });
+    let new = p.fonts(|f| figure_galley(f, text, font.clone(), colour));
+    let size = new.size();
+    let t = ((now - since) / ROLL_SECS) as f32;
+    if t >= 1.0 || !crate::gui::motion_enabled() || old.chars().count() != text.chars().count() {
+        p.galley(at, new, colour);
+        return size;
+    }
+    let old = p.fonts(|f| figure_galley(f, &old, font, colour));
+    let e = motion::ease_out(t);
+    let glyphs = &new.rows[0].glyphs;
+    let old_glyphs = &old.rows[0].glyphs;
+    for (i, g) in glyphs.iter().enumerate() {
+        // Each figure's column runs halfway to its neighbours.
+        let left = if i == 0 { 0.0 } else { (glyphs[i - 1].pos.x + glyphs[i - 1].advance_width + g.pos.x) * 0.5 };
+        let right = glyphs.get(i + 1).map_or(size.x, |next| (g.pos.x + g.advance_width + next.pos.x) * 0.5);
+        let column = Rect::from_min_max(pos2(at.x + left, at.y), pos2(at.x + right, at.y + size.y));
+        let clipped = p.with_clip_rect(column.intersect(p.clip_rect()));
+        if old_glyphs.get(i).is_some_and(|o| o.chr == g.chr) {
+            clipped.galley(at, new.clone(), colour);
+        } else {
+            clipped.galley_with_override_text_color(at - vec2(0.0, size.y * e), old.clone(), colour.gamma_multiply(1.0 - e));
+            clipped.galley_with_override_text_color(at + vec2(0.0, size.y * (1.0 - e)), new.clone(), colour.gamma_multiply(e));
+        }
+    }
+    ctx.request_repaint();
+    size
 }
 
 /// How strongly the emblem (`orb`, its rect) lights a block at `r`: 1 right beside it, 0 from
@@ -951,6 +1017,40 @@ mod tests {
         let mut a = chance(7);
         let mut b = chance(7);
         assert!((0..50).all(|_| a() == b()) && (0..50).all(|_| (0.0..1.0).contains(&a())));
+    }
+
+    /// A title decodes left to right: as long as the title, its marks and spaces standing from
+    /// the start, the settled letters its own, whole at the end.
+    #[test]
+    fn a_title_decodes_left_to_right() {
+        let start = decode("CHART // 2026", 0.0, 0.5);
+        assert_eq!(start.chars().count(), 13);
+        assert_eq!(start.chars().nth(5), Some(' '));
+        assert_eq!(start.chars().nth(6), Some('/'));
+        assert!(decode("CHART // 2026", 0.5, 0.5).starts_with("CHART "));
+        assert_eq!(decode("CHART // 2026", 1.0, 0.5), "CHART // 2026");
+    }
+
+    /// "12:40" turning "12:41": the four figures that stay stand still, the changed one draws
+    /// the old figure leaving and the new arriving, and a quarter of a second later it is one
+    /// readout again.
+    #[test]
+    fn a_changed_digit_rolls_into_place_and_the_rest_stand() {
+        let ctx = egui::Context::default();
+        crate::gui::install_fonts(&ctx);
+        let shapes = |text: &str, time: f64| {
+            let input = egui::RawInput { time: Some(time), ..Default::default() };
+            ctx.run(input, |ctx| {
+                let p = ctx.layer_painter(egui::LayerId::background());
+                rolling_figures(&p, egui::Id::new("roll_test"), pos2(10.0, 10.0), text, FontId::monospace(20.0), Color32::WHITE);
+            })
+            .shapes
+            .len()
+        };
+        assert_eq!(shapes("12:40", 0.0), 1, "at rest: one readout");
+        assert_eq!(shapes("12:41", 1.0), 4 + 2, "four stand, one rolls (old and new)");
+        assert_eq!(shapes("12:41", 1.1), 4 + 2, "still rolling");
+        assert_eq!(shapes("12:41", 1.5), 1, "settled");
     }
 
     /// Sharp at any scaling: frames and brackets sit on whole physical pixels at 100,

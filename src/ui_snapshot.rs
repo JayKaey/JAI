@@ -340,7 +340,7 @@ mod tests {
             crate::gui::paint_canvas(ctx);
             egui::CentralPanel::default().frame(egui::Frame::none()).show(ctx, |ui| {
                 view.paint(ui, area, &handle);
-                hud_board::paint_dialogue(&ui.painter_at(screen()), Rect::from_min_size(pos2(W / 2.0 - 380.0, H - 140.0), vec2(760.0, 116.0)), &comms);
+                let _ = hud_board::paint_dialogue(&ui.painter_at(screen()), Rect::from_min_size(pos2(W / 2.0 - 380.0, H - 140.0), vec2(760.0, 116.0)), &comms);
             });
         };
         let canvas = Snapshot::new(vec2(W, H)).render(30, &mut paint);

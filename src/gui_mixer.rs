@@ -110,7 +110,7 @@ fn body(ui: &mut Ui, rt: &Handle) {
         return;
     }
     // (A block the dock made narrower scrolls sideways instead of squeezing its faders.)
-    egui::ScrollArea::both().auto_shrink([false; 2]).show(ui, |ui| rows(ui, &mut channels, rt));
+    crate::hud_style::faded(ui, egui::ScrollArea::both().auto_shrink([false; 2]), |ui| rows(ui, &mut channels, rt));
 }
 
 fn rows(ui: &mut Ui, channels: &mut [Channel], rt: &Handle) {

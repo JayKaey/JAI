@@ -512,7 +512,7 @@ fn cameras_body(ui: &mut Ui, _rt: &Handle) {
     if side > 0.0 {
         let list = Rect::from_min_max(pos2(rect.right() - side, rect.top()), rect.max);
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(list).layout(Layout::top_down(Align::Min)));
-        egui::ScrollArea::vertical().id_salt("jai_cam_list").show(&mut child, |ui| {
+        crate::hud_style::faded(&mut child, egui::ScrollArea::vertical().id_salt("jai_cam_list"), |ui| {
             for (i, (cam, km)) in view.cams.iter().enumerate() {
                 let text = RichText::new(format!("{}\n{} · {:.1} km", cam.title(), cam.area, km)).font(FontId::monospace(11.0)).color(if i == view.index { accent() } else { super::STRIP_INK });
                 if ui.add(egui::SelectableLabel::new(i == view.index, text)).clicked() {

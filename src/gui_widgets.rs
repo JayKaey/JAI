@@ -168,7 +168,11 @@ fn widget_body(ui: &mut Ui, p: &Palette, spec: &DynamicWidgetSpec, host: &Widget
             let shown = remaining.unwrap_or(elapsed);
             let colour = if *alerted { p.green } else if *running { accent } else { p.muted };
             ui.vertical_centered(|ui| {
-                ui.label(RichText::new(clock(shown)).font(FontId::monospace(ts(30.0))).color(colour));
+                // Each digit that changes rolls up into place.
+                let (text, font) = (clock(shown), FontId::monospace(ts(30.0)));
+                let size = ui.painter().layout_no_wrap(text.clone(), font.clone(), colour).size();
+                let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
+                crate::hud_style::rolling_figures(ui.painter(), response.id.with("roll"), rect.min, &text, font, colour);
             });
             if *mode == TimerMode::Countdown && *duration_secs > 0.0 {
                 meter(ui, p, 1.0 - shown as f32 / (*duration_secs as f32 * 1000.0), 5.0, colour, &[]);
@@ -273,16 +277,18 @@ fn clock(ms: i64) -> String {
 /// A 270° arc gauge with the value in the middle.
 fn gauge(ui: &mut Ui, p: &Palette, value: f64, min: f64, max: f64, unit: &str, colour: Color32) {
     let size = ui.available_width().min(170.0);
-    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), size * 0.78), Sense::hover());
+    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), size * 0.78), Sense::hover());
     let painter = ui.painter();
     let c = pos2(rect.center().x, rect.top() + size * 0.46);
     let radius = size * 0.38;
     let (start, sweep) = (0.75 * PI, 1.5 * PI);
-    let f = ((value - min) / (max - min).max(f64::EPSILON)).clamp(0.0, 1.0) as f32;
+    // The arc glides to a new reading (the number shows the reading itself).
+    let f = crate::hud_style::motion::glide(ui.ctx(), response.id.with("glide"), ((value - min) / (max - min).max(f64::EPSILON)).clamp(0.0, 1.0) as f32);
     let arc = |from: f32, to: f32| super::arc_points(c, radius, from, to);
-    painter.add(Shape::line(arc(start, start + sweep), stroke(9.0, p.track)));
+    // Thin lines of light (the film look): a faint track, the reading on it.
+    painter.add(Shape::line(arc(start, start + sweep), stroke(2.0, p.track)));
     if f > 0.0 {
-        painter.add(Shape::line(arc(start, start + sweep * f), stroke(9.0, colour)));
+        painter.add(Shape::line(arc(start, start + sweep * f), stroke(2.0, colour)));
     }
     painter.text(c, egui::Align2::CENTER_CENTER, fmt_value(value), FontId::new(size * 0.17, super::bold_family()), p.text);
     painter.text(c + vec2(0.0, size * 0.15), egui::Align2::CENTER_CENTER, unit, FontId::proportional(ts(11.0)), p.muted);
@@ -537,14 +543,16 @@ fn history(ui: &Ui, key: (&str, &str), value: f32) -> Vec<f64> {
 
 /// A ring gauge sized to `size`, value in the middle.
 fn ring(ui: &mut Ui, p: &Palette, size: f32, fraction: f32, colour: Color32, big: &str, small: &str) {
-    let (rect, _) = ui.allocate_exact_size(vec2(size, size), Sense::hover());
+    let (rect, response) = ui.allocate_exact_size(vec2(size, size), Sense::hover());
     let painter = ui.painter();
     let c = rect.center();
     let radius = size * 0.42;
     let (start, sweep) = (0.75 * PI, 1.5 * PI);
-    painter.add(Shape::line(super::arc_points(c, radius, start, start + sweep), stroke(size * 0.07, p.track)));
+    let fraction = crate::hud_style::motion::glide(ui.ctx(), response.id.with("glide"), fraction.clamp(0.0, 1.0));
+    let width = (size * 0.02).clamp(1.5, 2.5);
+    painter.add(Shape::line(super::arc_points(c, radius, start, start + sweep), stroke(width, p.track)));
     if fraction > 0.0 {
-        painter.add(Shape::line(super::arc_points(c, radius, start, start + sweep * fraction.clamp(0.0, 1.0)), stroke(size * 0.07, colour)));
+        painter.add(Shape::line(super::arc_points(c, radius, start, start + sweep * fraction), stroke(width, colour)));
     }
     painter.text(c - vec2(0.0, size * 0.04), egui::Align2::CENTER_CENTER, big, FontId::new(size * 0.23, egui::FontFamily::Name("display".into())), p.text);
     painter.text(c + vec2(0.0, size * 0.16), egui::Align2::CENTER_CENTER, small, FontId::proportional((size * 0.085).max(ts(9.5))), p.muted);

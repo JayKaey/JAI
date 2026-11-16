@@ -568,7 +568,7 @@ fn card_body(ui: &mut egui::Ui, p: &mut DynamicHudPopup, style: &CardStyle, acti
         PopupPayload::VisualDataCard { title, markdown_or_code, chart_points, action_buttons } => {
             header(ui, title, dismiss, pins);
             if !markdown_or_code.is_empty() {
-                egui::ScrollArea::vertical().max_height(220.0).id_salt(("popup_text", p.id)).show(ui, |ui| {
+                crate::hud_style::faded_into(ui, egui::ScrollArea::vertical().max_height(220.0).id_salt(("popup_text", p.id)), style.surface, |ui| {
                     let mono = markdown_or_code.contains("```") || markdown_or_code.lines().any(|l| l.starts_with("    "));
                     let text = markdown_or_code.replace("```", "");
                     ui.label(if mono { RichText::new(text.trim()).monospace().color(style.text) } else { RichText::new(text.trim()).color(style.text) });

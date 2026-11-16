@@ -140,10 +140,11 @@ pub fn clock_size(ctx: &egui::Context, radius: f32, time: &str, date: bool, weat
 pub fn paint_clock(p: &egui::Painter, rect: Rect, radius: f32, time: &str, date: Option<&str>, weather: Option<&(f64, String)>) {
     let [time_size, small, sky] = clock_sizes(radius);
     let x = rect.center().x;
-    // Even-width digits, so the time does not shuffle sideways as the minutes turn.
-    let time_colour = Color32::from_rgb(0xE8, 0xF2, 0xFC);
-    let g = p.fonts(|f| crate::hud_style::figure_galley(f, time, display(time_size), time_colour));
-    p.galley(pos2(x - g.size().x * 0.5, rect.top()), g, time_colour);
+    // Even-width digits, so the time does not shuffle sideways as the minutes turn; a digit that
+    // changes rolls up into place.
+    let font = display(time_size);
+    let width = p.fonts(|f| crate::hud_style::figure_galley(f, time, font.clone(), Color32::WHITE)).size().x;
+    crate::hud_style::rolling_figures(p, egui::Id::new("jai_desk_clock"), pos2(x - width * 0.5, rect.top()), time, font, Color32::from_rgb(0xE8, 0xF2, 0xFC));
     let mut y = rect.top() + time_size * CLOCK_LEAD;
     if let Some(date) = date {
         p.text(pos2(x, y), Align2::CENTER_TOP, date, FontId::monospace(small), crate::hud_board::active_colour().gamma_multiply(0.9));

@@ -199,6 +199,12 @@ pub fn hearing_command(s: &str) -> Option<Value> {
     HEAR_SHOW.is_match(s).then(|| json!({"action": "show"}))
 }
 
+/// How many seconds ago a clip stamped `at` ("2026-11-16 14:02:09", local time) was heard.
+fn clip_age(at: &str) -> Option<i64> {
+    let at = chrono::NaiveDateTime::parse_from_str(at, "%Y-%m-%d %H:%M:%S").ok()?;
+    Some((chrono::Local::now().naive_local() - at).num_seconds())
+}
+
 /// The newest clip that is not the question about it itself.
 fn last_heard() -> Option<crate::voice_clips::Clip> {
     let plain = |text: &str| text.to_lowercase().chars().filter(|c| c.is_alphanumeric() || c.is_whitespace()).collect::<String>().split_whitespace().collect::<Vec<_>>().join(" ");
@@ -251,6 +257,22 @@ pub fn hearing(args: &Value) -> Result<String, String> {
     } else {
         say(format!("The hearing log is on the board: the last {n} things I heard. Click a line to tell me what you meant."), "My hearing log, Sir. Click a line to put it right.")
     })
+}
+
+/// A click on the heard words (the COMMS block): the hearing log opens with its newest line
+/// ready to be put right.
+pub fn correct_last() {
+    lock(&HEARING_UI).open = true;
+    crate::hud_dock::cancel_close(HEARING);
+    // (Off the HUD's thread: the database is on a hard disk.)
+    let _ = std::thread::Builder::new().name("jai-hearing-open".into()).spawn(|| {
+        let clips = crate::voice_clips::list(HEARING_LINES);
+        let mut ui = lock(&HEARING_UI);
+        ui.editing = clips.first().map(|clip| (clip.id, clip.meant.clone()));
+        ui.clips = clips;
+        drop(ui);
+        crate::gui::refresh();
+    });
 }
 
 fn hearing_block(ctx: &egui::Context) {
@@ -323,13 +345,19 @@ fn hearing_block(ctx: &egui::Context) {
     });
     if let Some((id, heard, meant)) = taught.filter(|(_, _, meant)| !meant.is_empty()) {
         editing = None;
+        // The newest line put right within two minutes: what the misheard words did is taken
+        // back and the corrected words are carried out (an older line only teaches the ear).
+        let fresh = clips.first().is_some_and(|newest| newest.id == id && clip_age(&newest.at).is_some_and(|age| age < 120));
+        if fresh {
+            crate::gui::run_order(meant.clone(), true);
+        }
         // (Off the HUD's thread: the database is on a hard disk.)
         let _ = std::thread::Builder::new().name("jai-hearing-teach".into()).spawn(move || {
             crate::ear::corrected(&heard, &meant);
             crate::voice_clips::correct(id, &meant);
             hearing_reload();
         });
-        crate::hud_notify::record("Learnt from your correction in the hearing log.", false);
+        crate::hud_notify::record(if fresh { "Learnt from your correction; doing what you meant." } else { "Learnt from your correction in the hearing log." }, false);
     }
     if cancel {
         editing = None;

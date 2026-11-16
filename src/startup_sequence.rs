@@ -143,13 +143,28 @@ fn share_up(up: [bool; 4]) -> f32 {
     up[..3].iter().filter(|u| **u).count() as f32 / 3.0
 }
 
-/// Line `k`'s word: READY once its part is up, LOADING for the brain until then, else a tick.
-fn line_state(k: usize, done: bool, begun: f32) -> &'static str {
-    match (done, k) {
-        (true, _) => "READY",
-        (false, 3) => "LOADING",
+/// Line `k`'s word until its part is up (then a drawn tick stands there): LOADING for the
+/// brain, running dots for the rest.
+fn line_state(k: usize, begun: f32) -> &'static str {
+    match k {
+        3 => "LOADING",
         _ => ["·", "··", "···"][((begun * 9.0) as usize) % 3],
     }
+}
+
+/// Seconds per letter as a line types itself on.
+const TYPE_PER_CHAR: f32 = 0.022;
+
+/// How much of `text` has typed itself on `begun` seconds after its line began (one letter at
+/// least, the whole line at most).
+fn typed(text: &str, begun: f32) -> &str {
+    let n = ((begun / TYPE_PER_CHAR) as usize + 1).min(text.chars().count());
+    text.char_indices().nth(n).map_or(text, |(at, _)| &text[..at])
+}
+
+/// A small tick, its right end at `right`, on the line through `y`.
+fn tick(p: &egui::Painter, right: f32, y: f32, colour: Color32) {
+    p.add(Shape::line(vec![pos2(right - 9.0, y), pos2(right - 6.0, y + 3.0), pos2(right, y - 4.0)], stroke(1.4, colour)));
 }
 
 fn stroke(width: f32, colour: Color32) -> Stroke {
@@ -234,9 +249,13 @@ pub fn paint(ctx: &egui::Context, screen: Rect, centre: egui::Pos2, radius: f32,
             let done = up[k];
             let y = top + k as f32 * 17.0;
             let ink = if done { Color32::from_rgb(0x9A, 0xB0, 0xC2) } else { Color32::WHITE };
-            p.text(pos2(left, y), Align2::LEFT_CENTER, *text, font.clone(), ink.gamma_multiply(alpha));
-            let state = line_state(k, done, begun);
-            p.text(pos2(left + 300.0, y), Align2::RIGHT_CENTER, state, font.clone(), if done { accent.gamma_multiply(alpha) } else { ink.gamma_multiply(alpha) });
+            // Each line types itself on; once its part is up a tick stands at its end.
+            p.text(pos2(left, y), Align2::LEFT_CENTER, typed(text, begun), font.clone(), ink.gamma_multiply(alpha));
+            if done {
+                tick(&p, left + 300.0, y, accent.gamma_multiply(alpha));
+            } else {
+                p.text(pos2(left + 300.0, y), Align2::RIGHT_CENTER, line_state(k, begun), font.clone(), ink.gamma_multiply(alpha));
+            }
         }
         if kind == Kind::Long {
             let bar = Rect::from_min_size(pos2(left, top + lines.len() as f32 * 17.0 + 6.0), vec2(300.0, 2.0));
@@ -310,9 +329,16 @@ mod tests {
         assert_eq!(share_up([true, true, true, false]), 1.0);
         assert_eq!(share_up([true, false, false, true]), 1.0 / 3.0);
         assert_eq!(share_up([false; 4]), 0.0);
-        assert_eq!(line_state(3, false, 0.5), "LOADING");
-        // Each line says READY once its part is up; the others tick meanwhile.
-        assert_eq!((line_state(3, true, 0.5), line_state(1, true, 0.5)), ("READY", "READY"));
-        assert_eq!(line_state(1, false, 0.5), "··");
+        assert_eq!(line_state(3, 0.5), "LOADING");
+        assert_eq!(line_state(1, 0.5), "··");
+    }
+
+    /// A line types itself on, a letter every 22 ms: one letter at once, never past its end,
+    /// and whole letters only (the middle dot is two bytes).
+    #[test]
+    fn a_line_types_itself_on() {
+        assert_eq!(typed("EARS · WHISPER", 0.0), "E");
+        assert_eq!(typed("EARS · WHISPER", 0.12), "EARS ·");
+        assert_eq!(typed("EARS · WHISPER", 5.0), "EARS · WHISPER");
     }
 }
