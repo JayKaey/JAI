@@ -636,7 +636,7 @@ static TEACH_SAY: LazyLock<Regex> = LazyLock::new(|| {
 static FORGET_SAY: LazyLock<Regex> =
     LazyLock::new(|| re(&format!(r"^forget\s+how\s+to\s+(?:say|pronounce)\s+(?P<w>{WAY})$|^(?:say|pronounce)\s+(?P<w2>{WAY})\s+normally(?:\s+again)?$|^sprich\s+(?P<w3>{WAY})\s+wieder\s+normal\s+aus$")));
 
-/// "Say Arkham like ark-um", "pronounce Nguyen as win", "sprich Musterstadt wie Laar aus"; "forget how
+/// "Say Arkham like ark-um", "pronounce Nguyen as win", "sprich Mainz wie Meinz aus"; "forget how
 /// to say Arkham". Not "say it like you mean it" or "say hello like a pirate".
 pub fn say_like_command(s: &str) -> Option<Value> {
     // Pronouns and fillers ("sag mal, wie …"), and what follows a question's "wie" ("wie spät").
@@ -1045,7 +1045,7 @@ mod tests {
         for (said, want) in [
             ("say arkham like ark-um", Some(json!({"action": "teach", "word": "arkham", "as": "ark-um"}))),
             ("pronounce nguyen as win", Some(json!({"action": "teach", "word": "nguyen", "as": "win"}))),
-            ("sprich musterstadt wie laar aus", Some(json!({"action": "teach", "word": "musterstadt", "as": "laar"}))),
+            ("sprich mainz wie meinz aus", Some(json!({"action": "teach", "word": "mainz", "as": "meinz"}))),
             ("forget how to say arkham", Some(json!({"action": "forget", "word": "arkham"}))),
             ("say it like you mean it", None),
             ("say hello like a pirate", None),
@@ -1066,7 +1066,7 @@ mod tests {
         for said in ["sag mir wie spät es ist", "sag mir, wie spät es ist", typed.as_str(), "sag mal wie spät ist es", "sag mal wie geht's", "sag max wie spät es ist", "sag bitte wie viel es kostet"] {
             assert_eq!(say_like_command(said), None, "{said}");
         }
-        assert_eq!(say_like_command("sag musterstadt wie laar"), Some(json!({"action": "teach", "word": "musterstadt", "as": "laar"})), "a real teaching sentence");
+        assert_eq!(say_like_command("sag mainz wie meinz"), Some(json!({"action": "teach", "word": "mainz", "as": "meinz"})), "a real teaching sentence");
     }
 
     #[test]

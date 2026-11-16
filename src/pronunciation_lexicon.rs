@@ -3,7 +3,7 @@
 //! "15h" aloud, or butchers app names, acronyms, units and times.
 //!
 //! German words stay German: the phonemizer gives them German pronunciation in the same voice;
-//! `is_german_term` adds the local places and school words it should recognise.
+//! `is_german_term` adds the places and school words it should recognise.
 
 use regex::{Captures, Regex};
 use std::sync::LazyLock;
@@ -464,16 +464,24 @@ impl PronunciationLexicon {
     }
 }
 
-/// Local places and school words the phonemizer must read in German ("Musterstadt", "Beispielheim",
-/// "Gymnasium", "Oberstufe").
-const GERMAN_PLACES_AND_TERMS: [&str; 34] = [
-    "musterstadt", "beispielheim", "musterburg", "freiburg", "karlsruhe", "nebenheim", "musterheim", "musterberg", "ringheim", "musterbach", "mustertal", "musterhafen",
-    "musteringen", "stuttgart", "münchen", "muenchen", "köln", "koeln", "schwarzwald", "musterkreis", "württemberg", "gymnasium", "oberstufe", "kursstufe",
+/// Places and school words the phonemizer must read in German ("Freiburg", "Gymnasium",
+/// "Oberstufe"). Sir's own town is not written here (no private data in the code): it comes
+/// from his home (`home_reads_german`), the towns round it from their German endings
+/// (`phonemizer::is_german_word`).
+const GERMAN_PLACES_AND_TERMS: [&str; 22] = [
+    "freiburg", "karlsruhe", "stuttgart", "münchen", "muenchen", "köln", "koeln", "schwarzwald", "württemberg", "gymnasium", "oberstufe", "kursstufe",
     "mündlich", "schriftlich", "lehrerzimmer", "mensa", "aula", "sekretariat", "referat", "notenschnitt", "deutschprobeklausur", "probeklausur",
 ];
 
 pub fn is_german_term(key: &str) -> bool {
-    GERMAN_PLACES_AND_TERMS.contains(&key)
+    GERMAN_PLACES_AND_TERMS.contains(&key) || crate::location_engine::known_home().is_some_and(|home| home_reads_german(&home, key))
+}
+
+/// His home town is read in German where home lies in the German-speaking countries.
+fn home_reads_german(home: &crate::location_engine::Home, key: &str) -> bool {
+    // shortcut: a box round Germany, Austria and Switzerland (it takes in a few border towns of
+    // the neighbours); the geocoder's country code when that matters.
+    (45.8..=55.1).contains(&home.lat) && (5.8..=17.2).contains(&home.lon) && home.town.as_deref().is_some_and(|t| t.to_lowercase() == key)
 }
 
 #[cfg(test)]
@@ -569,15 +577,25 @@ mod tests {
     #[test]
     fn german_words_keep_german_pronunciation() {
         // The lexicon leaves German words alone …
-        let text = "Your Deutschprobeklausur in LK Mathematik is in Raum 204 in Musterstadt, Beispielheim is close.";
+        let text = "Your Deutschprobeklausur in LK Mathematik is in Raum 204 in Freiburg, Musterheim is close.";
         assert_eq!(say(text), text);
-        // … and the phonemizer reads them in German with the same voice.
-        let runs = language_runs("Your Deutschprobeklausur in LK Mathematik is in Raum 204 near Musterstadt and Beispielheim");
+        // … and the phonemizer reads them in German with the same voice (a town by its ending).
+        let runs = language_runs("Your Deutschprobeklausur in LK Mathematik is in Raum 204 near Freiburg and Musterheim");
         let german: Vec<&str> = runs.iter().filter(|(l, _)| *l == Lang::De).map(|(_, t)| t.as_str()).collect();
         let joined = german.join(" ");
-        for word in ["Deutschprobeklausur", "Mathematik", "Raum", "Musterstadt", "Beispielheim"] {
+        for word in ["Deutschprobeklausur", "Mathematik", "Raum", "Freiburg", "Musterheim"] {
             assert!(joined.contains(word), "{word} should be German: {runs:?}");
         }
         assert!(!joined.contains("Your"));
+    }
+
+    /// His own town is German by his home, not by a list in the code.
+    #[test]
+    fn his_home_town_is_read_in_german_where_home_is_german_speaking() {
+        let home = crate::location_engine::Home { lat: 48.3, lon: 7.9, accuracy_m: 25.0, town: Some("Musterstadt".into()), source: "home", confirmed: true };
+        assert!(home_reads_german(&home, "musterstadt"));
+        assert!(!home_reads_german(&home, "london"));
+        let abroad = crate::location_engine::Home { lat: 51.5, lon: -0.1, town: Some("Musterstadt".into()), ..home };
+        assert!(!home_reads_german(&abroad, "musterstadt"));
     }
 }

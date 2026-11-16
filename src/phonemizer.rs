@@ -369,7 +369,9 @@ fn is_german_word(word: &str) -> bool {
     let compound = ["klausur", "arbeit", "unterricht", "stunde", "plan", "kurs", "termin", "schule", "lehrer"].iter().any(|tail| key.len() > tail.len() + 3 && key.ends_with(tail));
     let morphology = capital && key.chars().count() >= 7 && ["ung", "heit", "keit", "schaft"].iter().any(|s| key.ends_with(s));
     let name = capital && (key.starts_with("sch") && key.chars().nth(3).is_some_and(|c| "lmnrw".contains(c)) || key.ends_with("mann") && key.len() > 5);
-    (compound && capital) || morphology || name
+    // German towns by their endings ("Musterheim", "Offenbach", "Tübingen", "Neudorf").
+    let town = capital && key.chars().count() >= 7 && ["heim", "bach", "ingen", "hausen", "dorf", "burg"].iter().any(|s| key.ends_with(s));
+    (compound && capital) || morphology || name || town
 }
 
 /// A whole German sentence (or reply): at least two unambiguous German words, or one with
