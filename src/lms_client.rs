@@ -38,9 +38,9 @@ impl CourseUpdate {
     pub fn line(&self) -> String {
         let mut s = String::new();
         if !self.course.is_empty() {
-            s.push_str(&format!("[{}] ", self.course));
+            s.push_str(&format!("[{}] ", crate::english::in_english(&self.course)));
         }
-        s.push_str(&self.title);
+        s.push_str(&crate::english::in_english(&self.title));
         if let Some(due) = self.due {
             s.push_str(&format!(" — due {}", due.format("%a %d %b %H:%M")));
         }
@@ -435,7 +435,8 @@ mod tests {
         let t = parse_tasks(&json!({"EntityArray": [{"TaskId": 5, "Title": "Lab report", "Deadline": "2026-10-23T22:00:00Z", "LocationTitle": "Chemie"}]}));
         assert_eq!((t[0].kind, t[0].title.as_str()), ("assignment", "Lab report"));
         assert!(t[0].due.is_some());
-        assert!(updates_text(&items, 5).contains("New materials:\n- [Physik 10b] New file: Arbeitsblatt Optik.pdf"));
+        let text = updates_text(&items, 5);
+        assert!(text.contains("New materials:\n- [Physics 10b] New file: worksheet Optik.pdf"), "{text}");
     }
 
     #[test]

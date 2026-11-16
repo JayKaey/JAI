@@ -77,8 +77,8 @@ pub fn shifted_wake(wake: NaiveTime, lessons: &[Lesson]) -> Option<(NaiveTime, S
         Some(first) if first.start > planned => {
             let buffer = planned.signed_duration_since(wake);
             let to = (first.start - buffer).min(latest.max(wake));
-            let dropped: Vec<String> = day.iter().take_while(|l| l.start < first.start).map(|l| l.subject_name()).collect();
-            (to > wake).then(|| (to, format!("{} cancelled; first real lesson {} at {}", dropped.join(", "), first.subject_name(), first.start.format("%H:%M"))))
+            let dropped: Vec<String> = day.iter().take_while(|l| l.start < first.start).map(|l| l.display_subject()).collect();
+            (to > wake).then(|| (to, format!("{} cancelled; first real lesson {} at {}", dropped.join(", "), first.display_subject(), first.start.format("%H:%M"))))
         }
         _ => None,
     }

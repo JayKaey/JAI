@@ -10310,7 +10310,7 @@ mod tests {
         // seconds in twelve hours, and with the date and the weather.
         let noon = chrono::NaiveDate::from_ymd_opt(2026, 11, 14).unwrap().and_hms_opt(21, 41, 7).unwrap();
         for (name, time, date, weather) in [
-            ("gallery_desk_clock", crate::idle_screen::clock_text(noon, false, false), Some(crate::idle_screen::date_line(noon).to_uppercase()), Some((7.0, "light rain".to_string()))),
+            ("gallery_desk_clock", crate::idle_screen::clock_text(noon, false, false), Some(crate::idle_screen::date_line(noon).to_uppercase()), Some((7.0, "light rain  ·  sunset 16:52".to_string()))),
             ("gallery_desk_clock_plain", crate::idle_screen::clock_text(noon, true, true), None, None),
         ] {
             gallery(name, GALLERY, 2, |ctx| {

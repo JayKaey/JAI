@@ -460,9 +460,29 @@ fn allow_form(html: &str, page: &str) -> Option<FormPost> {
     let form = doc.select(&sel("form")).next()?;
     let allow = form.select(&sel("input[type=submit], button")).find(|b| {
         let t = text_of(*b);
-        t.contains("allow") || t.contains("erlauben") || t.contains("zulassen") || t.contains("accept")
+        // (itslearning's own consent page has unlabelled buttons: "SaveOrCancel$SB" saves, i.e.
+        // allows; without it pressed the page only comes back. Seen 2026-11-16.)
+        b.value().attr("name").is_some_and(|n| n.ends_with("$SB")) || t.contains("allow") || t.contains("erlauben") || t.contains("zulassen") || t.contains("accept")
     });
     Some(FormPost { action: form_action(form, page), fields: form_fields(form, allow) })
+}
+
+/// What a page offers to press, for the sign-in trail: its title and its buttons' words and
+/// names (nothing typed in, no hidden values).
+fn controls(html: &str) -> String {
+    let doc = Html::parse_document(html);
+    let short = |s: String, n: usize| s.chars().take(n).collect::<String>();
+    let title = doc.select(&sel("title")).next().map(|t| short(text_of(t), 40)).unwrap_or_default();
+    let pressable: Vec<String> = doc
+        .select(&sel("input[type=submit], input[type=button], button, a[href*='__doPostBack'], a[onclick*='__doPostBack']"))
+        .take(6)
+        .map(|b| {
+            let v = b.value();
+            let js = if v.attr("onclick").is_some() { " onclick" } else { "" };
+            format!("'{}' [{} {}{js} {}]", short(text_of(b), 30), v.name(), v.attr("type").unwrap_or("-"), v.attr("name").or(v.attr("id")).unwrap_or(""))
+        })
+        .collect();
+    format!("\"{title}\", {}", if pressable.is_empty() { "nothing to press".to_string() } else { pressable.join(", ") })
 }
 
 /// The app's OAuth code for the signed-in session, exchanged for an access token.
@@ -470,7 +490,11 @@ async fn app_token(s: &BwSession) -> Result<String, String> {
     let client = client_for(&s.jar, false)?;
     let mut url = format!("{}/oauth2/authorize.aspx?client_id={CLIENT_ID}&state=jai&response_type=code&redirect_uri={}", s.base, urlencoding::encode(APP_REDIRECT));
     let mut code = None;
+    // Where the authorize step went (host and path only: the queries carry the session's state).
+    let mut trail: Vec<String> = Vec::new();
+    let hop = |u: &str| reqwest::Url::parse(u).map(|u| format!("{}{}", u.host_str().unwrap_or(""), u.path())).unwrap_or_else(|_| "?".into());
     for _ in 0..8 {
+        trail.push(hop(&url));
         let resp = client.get(&url).send().await.map_err(crate::web_connector::err_chain)?;
         if resp.status().is_redirection() {
             let location = resp.headers().get("location").and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
@@ -482,8 +506,14 @@ async fn app_token(s: &BwSession) -> Result<String, String> {
             continue;
         }
         // An "allow access" page: confirm it once.
+        let status = resp.status();
         let (page, html) = read(resp).await?;
-        let Some(post) = allow_form(&html, &page) else { break };
+        let Some(post) = allow_form(&html, &page) else {
+            trail.push(format!("{} (HTTP {}, no form)", hop(&page), status.as_u16()));
+            break;
+        };
+        let names: Vec<&str> = post.fields.iter().map(|(n, _)| n.as_str()).collect();
+        trail.push(format!("form to {} ({}; posting {})", hop(&post.action), controls(&html), names.join(", ")));
         let resp = client.post(&post.action).form(&post.fields).send().await.map_err(crate::web_connector::err_chain)?;
         match resp.headers().get("location").and_then(|v| v.to_str().ok()) {
             Some(l) if l.starts_with("itsl-itslearning:") => {
@@ -491,10 +521,15 @@ async fn app_token(s: &BwSession) -> Result<String, String> {
                 break;
             }
             Some(l) => url = resolve(&post.action, l),
-            None => break,
+            None => {
+                let status = resp.status().as_u16();
+                let (_, html) = read(resp).await?;
+                trail.push(format!("HTTP {status} after the form ({})", controls(&html)));
+                break;
+            }
         }
     }
-    let code = code.ok_or("itslearning did not hand out an app code for the session")?;
+    let code = code.ok_or_else(|| format!("itslearning did not hand out an app code for the session ({})", trail.join(" → ")))?;
     let resp = s
         .client
         .post(format!("{}/restapi/oauth2/token", s.base))
@@ -898,6 +933,28 @@ mod tests {
     const SAML_POST: &str = r#"<html><body onload="document.forms[0].submit()"><form method="post" action="https://bws.itslearning.com/Saml/AssertionConsumerService.aspx">
         <input type="hidden" name="SAMLResponse" value="PHNhbWxwOlJlc3BvbnNlPg=="><input type="hidden" name="RelayState" value="rs-42">
         <noscript><input type="submit" value="Continue"></noscript></form></body></html>"#;
+
+    /// The sign-in trail names a page's buttons, never what its hidden fields hold.
+    #[test]
+    fn the_trail_names_what_a_page_offers_to_press() {
+        let page = r#"<html><head><title>Allow access</title></head><body><form><input type="hidden" name="__VIEWSTATE" value="secret">
+            <input type="submit" name="ctl00$Allow" value="Erlauben"></form></body></html>"#;
+        assert_eq!(controls(page), "\"allow access\", 'erlauben' [input submit ctl00$Allow]");
+        // (A button inside <noscript> is text to the parser: nothing to press.)
+        assert_eq!(controls(SAML_POST), "\"\", nothing to press");
+    }
+
+    /// itslearning's consent page (2026-11-16): unlabelled save and cancel buttons; the post
+    /// must press save, or the page only comes back and no app code is handed out.
+    #[test]
+    fn the_consent_page_is_saved_with_its_unlabelled_save_button() {
+        let page = r#"<html><head><title>OAuth 2.0 Authorization Code</title></head><body><form method="post" action="./authorize.aspx?client_id=x">
+            <input type="hidden" name="__VIEWSTATE" value="vs"><button type="button" id="SaveOrCancel_CNB"></button>
+            <input type="submit" name="SaveOrCancel$SB" value=""></form></body></html>"#;
+        let post = allow_form(page, "https://myschool.itslearning.com/oauth2/authorize.aspx?client_id=x").expect("a form");
+        assert_eq!(post.action, "https://myschool.itslearning.com/oauth2/authorize.aspx?client_id=x");
+        assert_eq!(post.fields, [("__VIEWSTATE".to_string(), "vs".to_string()), ("SaveOrCancel$SB".to_string(), String::new())]);
+    }
 
     #[test]
     fn the_portal_page_leads_to_schule_bw_by_asp_net_postback() {

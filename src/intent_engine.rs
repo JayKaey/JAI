@@ -132,10 +132,11 @@ pub const NO_WINDOWS_REPLY: &str = "There are no secondary windows open, Sir.";
 
 /// Corrections, courtesy and hesitation in front of the real command ("No. Just can you …",
 /// "Nein, einfach …", "Wait, JAI, could you please …").
-const LEAD_FILLERS: [&str; 40] = [
+// ("Thank you, can you close all the windows?" went to the model, 2026-11-16.)
+const LEAD_FILLERS: [&str; 46] = [
     "no", "nope", "nah", "nein", "wait", "warte", "just", "einfach", "actually", "eigentlich", "okay", "ok", "jai", "please", "bitte", "hey", "um", "uh",
     "ähm", "äh", "so", "also", "then", "dann", "sir", "well", "oh", "can", "could", "would", "will", "you", "kannst", "könntest", "würdest", "du", "mal",
-    "now", "jetzt", "and",
+    "now", "jetzt", "and", "thank", "thanks", "danke", "alright", "great", "perfect",
 ];
 /// Courtesy after the command ("… for me, please", "… bitte jetzt").
 const TAIL_FILLERS: [&str; 12] = ["please", "bitte", "jai", "sir", "now", "jetzt", "mal", "too", "as", "well", "for", "me"];
@@ -251,15 +252,17 @@ pub fn close_secondary_windows(tools: &ToolContext) -> usize {
     let panels = crate::jai_views::close_detached_panels();
     // His text console, the history and the camera, while they are windows of their own.
     let pieces = crate::gui::close_piece_windows();
+    // The cards on the panel (his lists and running timers stay).
+    let cards = tools.widgets.close_cards();
     tools.focus.forget_jai_window("all");
     crate::gui::refresh();
     info!(
-        "[WINDOWS] Closed {blocks} in-app block(s), {board} board block(s), {spatial} workspace, {native} native, {simulations} simulation window(s), {panels} panel window(s), {pieces} of his console, history and camera and {popups} pop-up(s) in {:.2} ms",
+        "[WINDOWS] Closed {blocks} in-app block(s), {board} board block(s), {spatial} workspace, {native} native, {simulations} simulation window(s), {panels} panel window(s), {pieces} of his console, history and camera, {cards} card(s) and {popups} pop-up(s) in {:.2} ms",
         started.elapsed().as_secs_f64() * 1000.0
     );
     // Docked native windows and simulations are in-app blocks too, and a simulation or a panel
     // in a window of its own is known to the dock by its bar: counted once.
-    blocks.max(native + simulations + panels) + board + spatial + popups + pieces
+    blocks.max(native + simulations + panels) + board + spatial + popups + pieces + cards
 }
 
 
@@ -1716,7 +1719,10 @@ mod tests {
         let started = std::time::Instant::now();
         assert_eq!(deterministic_action("No. Just can you close the windows you opened?"), Some(IntentAction::CloseSecondaryWindows));
         assert!(started.elapsed() < Duration::from_millis(15), "decided in {:?}", started.elapsed());
+        assert_eq!(crate::phrasings::route("JAI, Thank you, Can you close all the windows?").map(|(name, _)| name), Some("close_all_secondary_windows".to_string()));
         for yes in [
+            // (2026-11-16: went to the model, which answered "Three windows shut down.")
+            "JAI, Thank you, Can you close all the windows?",
             "close the windows you opened",
             "Close those windows.",
             "close all windows",

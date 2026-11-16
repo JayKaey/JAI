@@ -1197,6 +1197,10 @@ pub fn upfront_tool(text: &str) -> Option<(&'static str, Value)> {
 /// The new assistant abilities as instant commands (part of `parse`).
 fn assistant_command(s: &str, original: &str) -> Option<Intent> {
     let tool = |name: &'static str, args: Value| Some(Intent::Tool { name, args });
+    // "Leave the news out of my briefing", "put the free games back in".
+    if let Some(parts) = crate::briefing::part_order(s) {
+        return tool("run_executive_briefing", parts);
+    }
     if BRIEFING.is_match(s) {
         let time_of_day = if s.contains("evening") { "evening" } else if s.contains("morning") || s.contains("morgen") { "morning" } else { "" };
         return tool("run_executive_briefing", if time_of_day.is_empty() { json!({}) } else { json!({ "time_of_day": time_of_day }) });

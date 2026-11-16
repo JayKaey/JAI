@@ -286,6 +286,8 @@ pub struct JaiConfig {
     pub proactive_alerts: bool,
     /// RSS feed for the headlines of the daily briefing ("" = no headlines).
     pub briefing_news_feed: String,
+    /// The parts Sir left out of his briefing ("news", "weather" …: `briefing::PARTS`).
+    pub briefing_skip: Vec<String>,
 
     // ---- Stark systems --------------------------------------------------------------------
     /// WhatsApp: desktop URI handler, notification listener and the optional local bridge.
@@ -686,6 +688,7 @@ impl Default for JaiConfig {
             name_meaning: String::new(),
             proactive_alerts: true,
             briefing_news_feed: crate::briefing::DEFAULT_FEED.to_string(),
+            briefing_skip: Vec::new(),
 
             whatsapp: WhatsAppSettings::default(),
             discord_bot: DiscordBotSettings::default(),

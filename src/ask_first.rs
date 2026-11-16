@@ -241,9 +241,10 @@ fn deletes(tool: &str, action: &str) -> bool {
 /// The question he asks before a call the language model made for an order the fast path
 /// did not understand: "Did you mean: create a protocol called 'no think', Sir?". None: the
 /// call runs as it always did (it only looks; the order holds a word that is the tool's own;
-/// the tool is not one a wrong guess does harm with; or the order is his yes to something).
+/// the tool is not one a wrong guess does harm with). A bare yes is asked about like any other
+/// order: the brain lets it through only as the answer to a question of his.
 pub fn question(order: &str, tool: &str, args: &Value) -> Option<String> {
-    if crate::tools::only_looks(tool, args) || crate::intents::is_affirmation(order) {
+    if crate::tools::only_looks(tool, args) {
         return None;
     }
     let said = crate::ear::words(order);
@@ -381,6 +382,16 @@ mod tests {
         }
     }
 
+    /// 2026-11-16, Sir's console: "Yes, sir." after "There are no secondary windows open"
+    /// closed Firefox. A yes to nothing he asked is asked about too (the brain lets a yes
+    /// through only after a question of his).
+    #[test]
+    fn a_bare_yes_is_asked_about_before_it_closes_a_program() {
+        let asked = question("Yes, sir.", "close_application", &json!({"app_name": "Firefox"})).expect("asked");
+        assert!(asked.starts_with("Did you mean: ") && asked.to_lowercase().contains("firefox"), "{asked}");
+        assert_eq!(question("Yes, sir.", "web_search", &json!({"query": "weather"})), None, "a look needs no question");
+    }
+
     /// An order that holds the tool's own words is carried out as it always was.
     #[test]
     fn an_order_in_the_tools_own_words_is_not_asked_about() {
@@ -425,8 +436,8 @@ mod tests {
             ("something nice please", "control_music", json!({"action": "play", "playlist_name": "chill"})),
             ("tell Max I'm late", "send_whatsapp_message", json!({"recipient_name_or_phone": "Max", "message_text": "I'm late"})),
             ("louder", "media_and_volume_control", json!({"action": "volume_up"})),
-            // His yes to what was offered a moment ago is no guess.
-            ("yes, do that", "manage_stark_protocol", json!({"action": "create", "protocol_name": "movie_night"})),
+            // (His yes to a question he was just asked never reaches here: brain's
+            // `yes_to_his_question`. A yes to nothing is asked about, see below.)
         ] {
             assert_eq!(question(order, tool, &args), None, "{order} → {tool} {args}");
         }

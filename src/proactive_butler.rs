@@ -123,6 +123,34 @@ pub fn hardware(anomaly: &Anomaly, message: &str, offer: &Offer) -> Card {
     Card { title, body: facts(message), fixes, spoken: Some(message.to_string()) }
 }
 
+// ---------------------------------------------------------------------- integrations ----
+
+/// A service the briefing could not read (`service`: "itslearning", "WebUntis", "Email";
+/// `site`: its web page): what is wrong in one plain sentence (the card's body, also what he
+/// says) and the one fix as a button. The raw error stays in the log. (Sir, 2026-11-16: the
+/// briefing card showed itslearning's REST paths and HTTP codes.)
+pub fn integration_trouble(service: &str, error: &str, site: Option<&str>) -> Card {
+    let e = error.to_lowercase();
+    let has = |words: &[&str]| words.iter().any(|w| e.contains(w));
+    let hub = Fix { label: "OPEN THE INTEGRATIONS HUB".into(), tool: "configure_productivity_service", args: json!({ "service_name": service, "action": "open" }) };
+    let browser = site.filter(|s| s.starts_with("https://")).map(|url| Fix { label: format!("OPEN {} IN THE BROWSER", service.to_uppercase()), tool: "open_website", args: json!({ "url": url }) });
+    let (body, fixes) = if has(&["refused the session", "app code"]) {
+        // (2026-11-16: itslearning's own server fails at the app's consent step, HTTP 500.)
+        (format!("{service} signs you in, but its server won't hand your course data to me; it's all there in the browser."), browser.into_iter().collect())
+    } else if has(&["needs your", "enter it once", "no password"]) {
+        (format!("{service} needs your password once."), vec![hub])
+    } else if has(&["401", "403", "password", "credentials", "authentication", "sign-in failed", "login failed"]) {
+        (format!("{service} turned the sign-in down: the password may have changed."), vec![hub])
+    } else if has(&["timed out", "timeout", "not reachable", "dns", "connect", "network"]) {
+        (format!("{service} didn't answer: the connection or its server is down. I'll try again later."), Vec::new())
+    } else if has(&["http 500", "http 502", "http 503", "http 504"]) {
+        (format!("{service}'s server is having trouble right now."), Vec::new())
+    } else {
+        (format!("{service} didn't work this time."), vec![hub])
+    };
+    Card { title: format!("{} // NEEDS A HAND", service.to_uppercase()), body: body.clone(), fixes, spoken: Some(body) }
+}
+
 // --------------------------------------------------------------------------- agenda ----
 
 /// A lesson or an event with a start time.
@@ -499,6 +527,21 @@ pub fn start(app: crate::app::Jai) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 2026-11-16: the briefing card read "Unavailable: … /restapi/personal/tasks/v1?… HTTP 401
+    /// Unauthorized; …". Now one plain sentence, and the fix that fits as a button.
+    #[test]
+    fn a_failing_service_is_told_plainly_with_its_fix() {
+        let site = Some("https://myschool.itslearning.com");
+        let refused = integration_trouble("itslearning", "signed in through Schule@BW, but itslearning's course data refused the session: /restapi/personal/tasks/v1?PageIndex=0&PageSize=40: HTTP 401 Unauthorized", site);
+        assert!(!refused.body.contains("restapi") && !refused.body.contains("401"), "{}", refused.body);
+        assert_eq!(refused.fixes.iter().map(|f| (f.tool, f.args["url"].as_str())).collect::<Vec<_>>(), [("open_website", site)]);
+        let password = integration_trouble("itslearning", "itslearning needs your Schule@BW password — enter it once in the Integrations Hub (it is kept encrypted)", site);
+        assert_eq!((password.body.as_str(), password.fixes[0].tool), ("itslearning needs your password once.", "configure_productivity_service"));
+        let down = integration_trouble("Email", "imap.example.com: connection timed out", None);
+        assert!(down.fixes.is_empty() && down.body.contains("didn't answer"), "{}", down.body);
+        assert!(integration_trouble("WebUntis", "HTTP 401 Unauthorized", None).body.contains("password may have changed"));
+    }
 
     fn at(h: u32, m: u32) -> NaiveDateTime {
         NaiveDate::from_ymd_opt(2026, 11, 5).unwrap().and_hms_opt(h, m, 0).unwrap()

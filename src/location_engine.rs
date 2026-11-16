@@ -51,10 +51,43 @@ enum Fence {
     Away,
 }
 
+/// Where Sir lives, as JAI worked it out.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Home {
+    pub lat: f64,
+    pub lon: f64,
+    pub accuracy_m: f64,
+    /// The town ("Berlin"), not a district or village of it.
+    pub town: Option<String>,
+    /// "home (no phone GPS)", "Windows location", "IP geolocation" …
+    pub source: &'static str,
+    /// Sir set or said it himself: never asked about.
+    pub confirmed: bool,
+}
+
+static KNOWN_HOME: RwLock<Option<Home>> = RwLock::new(None);
+
+/// The home last worked out (the desk clock's sunrise and sunset).
+pub fn known_home() -> Option<Home> {
+    KNOWN_HOME.read().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+/// The town a Nominatim address lies in, without its region ("Musterstadt/Schwarzwald" →
+/// "Musterstadt"): a district or village of it only where no town is named. (2026-11-16: the
+/// briefing named the district wttr.in found nearest, not Sir's town.)
+fn town_of(address: &Value) -> Option<String> {
+    ["city", "town", "village", "municipality"]
+        .iter()
+        .find_map(|k| address[*k].as_str())
+        .map(|t| t.split('/').next().unwrap_or(t).trim().to_string())
+        .filter(|t| !t.is_empty())
+}
+
 struct Inner {
     phone: RwLock<Option<GeoFix>>,
     ip: Mutex<Option<(GeoFix, Instant)>>,
     addresses: Mutex<HashMap<(i64, i64), String>>,
+    towns: Mutex<HashMap<(i64, i64), String>>,
     fence: Mutex<Fence>,
     http: reqwest::Client,
 }
@@ -133,7 +166,7 @@ pub struct CurrentWeather {
     pub gusts_kmh: f64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct HourWeather {
     pub time: NaiveDateTime,
     pub temperature: f64,
@@ -164,7 +197,7 @@ impl LocationEngine {
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
         Self {
-            inner: Arc::new(Inner { phone: RwLock::new(None), ip: Mutex::new(None), addresses: Mutex::new(HashMap::new()), fence: Mutex::new(Fence::Unknown), http }),
+            inner: Arc::new(Inner { phone: RwLock::new(None), ip: Mutex::new(None), addresses: Mutex::new(HashMap::new()), towns: Mutex::new(HashMap::new()), fence: Mutex::new(Fence::Unknown), http }),
         }
     }
 
@@ -253,7 +286,7 @@ impl LocationEngine {
         let a = &v["address"];
         let road = a["road"].as_str().or(a["pedestrian"].as_str()).or(a["footway"].as_str()).unwrap_or("");
         let number = a["house_number"].as_str().unwrap_or("");
-        let town = a["city"].as_str().or(a["town"].as_str()).or(a["village"].as_str()).or(a["suburb"].as_str()).unwrap_or("");
+        let town = town_of(a).or_else(|| a["suburb"].as_str().map(str::to_string)).unwrap_or_default();
         let street = format!("{road} {number}").trim().to_string();
         let text = match (street.is_empty(), town.is_empty()) {
             (false, false) => format!("{street}, {town}"),
@@ -264,6 +297,50 @@ impl LocationEngine {
         let key = ((lat * 1000.0).round() as i64, (lon * 1000.0).round() as i64);
         self.inner.addresses.lock().unwrap_or_else(|e| e.into_inner()).insert(key, text.clone());
         Some(text)
+    }
+
+    /// The town a coordinate lies in ("Musterstadt"), never a district of it (Nominatim at
+    /// town level, cached to the kilometre).
+    pub async fn town(&self, lat: f64, lon: f64) -> Option<String> {
+        let key = ((lat * 100.0).round() as i64, (lon * 100.0).round() as i64);
+        if let Some(t) = self.inner.towns.lock().unwrap_or_else(|e| e.into_inner()).get(&key).cloned() {
+            return Some(t);
+        }
+        let url = format!("https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat={lat:.5}&lon={lon:.5}&zoom=10&addressdetails=1");
+        let v: Value = self.inner.http.get(url).send().await.ok()?.json().await.ok()?;
+        let town = town_of(&v["address"])?;
+        self.inner.towns.lock().unwrap_or_else(|e| e.into_inner()).insert(key, town.clone());
+        Some(town)
+    }
+
+    /// Where Sir lives: the home in the settings, the town he told me ("I live in …"), else
+    /// where this PC stands — the Windows location service, then the connection's address
+    /// (a desktop PC stands at home) — named by its town.
+    pub async fn home(&self, tools: &ToolContext) -> Result<Home, String> {
+        let cfg = tools.config.read(|c| c.location.clone());
+        let label = |l: &str| l.split(',').next().map(str::trim).filter(|t| !t.is_empty() && *t != "home").map(str::to_string);
+        // (`named`: his own word for it; `known`: what the source called it, when no town is found.)
+        let (lat, lon, accuracy_m, named, known, source, confirmed) = if let (Some(lat), Some(lon)) = (cfg.home_lat, cfg.home_lon) {
+            (lat, lon, 30.0, None, label(&cfg.home_label), "home (no phone GPS)", true)
+        } else if let Some(place) = crate::websearch::home_location().filter(|p| !p.trim().is_empty()) {
+            let (lat, lon, _) = self.geocode(&place, None).await?;
+            (lat, lon, 3000.0, label(&place), None, "the town you told me", true)
+        } else if let Some(fix) = crate::earth_locate::device_fix().await {
+            (fix.lat, fix.lon, fix.accuracy_m, None, None, "Windows location", false)
+        } else if cfg.ip_fallback {
+            let fix = self.ip_location().await?;
+            tools.stark.graph.set_location(fix.clone());
+            (fix.lat, fix.lon, fix.accuracy_m, None, fix.address.as_deref().and_then(label), "IP geolocation", false)
+        } else {
+            return Err("I don't know where you are, Sir: open the satellite on your phone, or tell me your home address (\"set my home to …\").".into());
+        };
+        let town = match named {
+            Some(t) => Some(t),
+            None => self.town(lat, lon).await.or(known),
+        };
+        let home = Home { lat, lon, accuracy_m, town, source, confirmed };
+        *KNOWN_HOME.write().unwrap_or_else(|e| e.into_inner()) = Some(home.clone());
+        Ok(home)
     }
 
     /// A place name or address → coordinates (biased towards Sir's position).
@@ -320,31 +397,23 @@ impl LocationEngine {
         Ok(fix)
     }
 
-    /// Where Sir is right now: phone GPS → home → IP.
+    /// Where Sir is right now: phone GPS, else his home (`home`).
     pub async fn current(&self, tools: &ToolContext) -> Result<GeoFix, String> {
         if let Some(f) = self.phone_fix() {
             return Ok(f);
         }
-        let cfg = tools.config.read(|c| c.location.clone());
-        if let (Some(lat), Some(lon)) = (cfg.home_lat, cfg.home_lon) {
-            return Ok(GeoFix {
-                lat,
-                lon,
-                accuracy_m: 30.0,
-                speed_kmh: None,
-                altitude_m: None,
-                heading: None,
-                address: Some(if cfg.home_label.is_empty() { "home".into() } else { cfg.home_label.clone() }),
-                source: "home (no phone GPS)".into(),
-                at: Instant::now(),
-            });
-        }
-        if cfg.ip_fallback {
-            let fix = self.ip_location().await?;
-            tools.stark.graph.set_location(fix.clone());
-            return Ok(fix);
-        }
-        Err("I don't know where you are, Sir: open the satellite on your phone, or tell me your home address (\"set my home to …\").".into())
+        let home = self.home(tools).await?;
+        Ok(GeoFix {
+            lat: home.lat,
+            lon: home.lon,
+            accuracy_m: home.accuracy_m,
+            speed_kmh: None,
+            altitude_m: None,
+            heading: None,
+            address: home.town,
+            source: home.source.into(),
+            at: Instant::now(),
+        })
     }
 }
 
@@ -453,15 +522,64 @@ pub async fn weather_report(tools: &ToolContext, hours: usize, day: Option<Naive
             first_rain.map(|h| format!(" (likely from about {})", h.time.format("%H:%M"))).unwrap_or_default()
         ),
         None => format!(
-            "It's {:.0} degrees and {} where you are{}{}.",
+            "It's {:.0} degrees and {} {}{}{}.",
             current.temperature,
             weather_code_text(current.code),
+            fix.address.as_deref().filter(|_| fix.source != "phone GPS").map(|t| format!("in {t}")).unwrap_or_else(|| "where you are".into()),
             if max_rain >= 30.0 { format!("; up to {:.0} percent chance of rain in the next hours", max_rain) } else { "; it should stay dry".into() },
             first_rain.map(|h| format!(", most likely from about {}", h.time.format("%H:%M"))).unwrap_or_default()
         ),
     };
     text.push_str(&format!("\nSummary: {short}"));
     Ok(WeatherReport { fix, current, text, short })
+}
+
+/// The weather at Sir's home: where that is, now, and the next three days by the hour.
+pub async fn home_weather(tools: &ToolContext) -> Result<(Home, CurrentWeather, Vec<HourWeather>), String> {
+    let engine = &tools.stark.location;
+    let home = engine.home(tools).await?;
+    let (current, hourly) = fetch_weather(engine.http(), home.lat, home.lon).await?;
+    Ok((home, current, hourly))
+}
+
+/// Sunrise and sunset at a place on a day, in its local time (`utc_offset_min` east of UTC):
+/// the sun's upper edge on the horizon, refraction included (NOAA's equations, worked out here
+/// and offline). None in the polar day or night.
+pub fn sun_times(lat: f64, lon: f64, date: NaiveDate, utc_offset_min: i32) -> Option<(chrono::NaiveTime, chrono::NaiveTime)> {
+    use chrono::Datelike;
+    use std::f64::consts::PI;
+    let g = 2.0 * PI / 365.0 * (date.ordinal() as f64 - 0.5);
+    let eqtime = 229.18 * (0.000075 + 0.001868 * g.cos() - 0.032077 * g.sin() - 0.014615 * (2.0 * g).cos() - 0.040849 * (2.0 * g).sin());
+    let decl = 0.006918 - 0.399912 * g.cos() + 0.070257 * g.sin() - 0.006758 * (2.0 * g).cos() + 0.000907 * (2.0 * g).sin() - 0.002697 * (3.0 * g).cos() + 0.00148 * (3.0 * g).sin();
+    let phi = lat.to_radians();
+    let cos_ha = 90.833f64.to_radians().cos() / (phi.cos() * decl.cos()) - phi.tan() * decl.tan();
+    if !(-1.0..=1.0).contains(&cos_ha) {
+        return None;
+    }
+    let ha = cos_ha.acos().to_degrees();
+    let local = |utc_min: f64| {
+        let m = (utc_min.round() as i64 + utc_offset_min as i64).rem_euclid(24 * 60) as u32;
+        chrono::NaiveTime::from_hms_opt(m / 60, m % 60, 0)
+    };
+    Some((local(720.0 - 4.0 * (lon + ha) - eqtime)?, local(720.0 - 4.0 * (lon - ha) - eqtime)?))
+}
+
+/// "sunset 16:52" or "sunrise 07:48", whichever comes next at his home (the desk clock).
+pub fn next_sun(now: NaiveDateTime) -> Option<String> {
+    let (rise, set) = home_sun(now.date())?;
+    Some(match now.time() {
+        t if t < rise => format!("sunrise {}", rise.format("%H:%M")),
+        t if t < set => format!("sunset {}", set.format("%H:%M")),
+        _ => format!("sunrise {}", home_sun(now.date() + ChronoDuration::days(1))?.0.format("%H:%M")),
+    })
+}
+
+/// Sunrise and sunset at Sir's home on a day, by his clock (None until his home is known).
+pub fn home_sun(day: NaiveDate) -> Option<(chrono::NaiveTime, chrono::NaiveTime)> {
+    use chrono::{Offset, TimeZone};
+    let home = known_home()?;
+    let offset = Local.from_local_datetime(&day.and_hms_opt(12, 0, 0)?).single()?.offset().fix().local_minus_utc() / 60;
+    sun_times(home.lat, home.lon, day, offset)
 }
 
 // --------------------------------------------------------------- nearby & routes ----
@@ -777,7 +895,11 @@ async fn settings_tool(tools: &ToolContext, args: &Value) -> Result<String, Stri
         }
         "set_home" | "set_school" => {
             let address = str_arg(args, &["address", "value", "place"]).ok_or("Which address?")?;
-            let (lat, lon, label) = engine.geocode(address, None).await?;
+            // (With its coordinates: the home he found himself and Sir said yes to.)
+            let (lat, lon, label) = match (args["lat"].as_f64(), args["lon"].as_f64()) {
+                (Some(lat), Some(lon)) => (lat, lon, address.to_string()),
+                _ => engine.geocode(address, None).await?,
+            };
             let home = action == "set_home";
             tools.config.update(|c| {
                 if home {
@@ -848,6 +970,30 @@ async fn settings_tool(tools: &ToolContext, args: &Value) -> Result<String, Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 2026-11-16: the briefing said the district the weather service found nearest. Home is
+    /// named by its town, without the region after a slash; a district only where no town is.
+    #[test]
+    fn home_is_named_by_its_town_not_a_district() {
+        let district = json!({"suburb": "Nordviertel", "village": "Kleindorf", "town": "Musterstadt/Schwarzwald", "county": "Musterkreis"});
+        assert_eq!(town_of(&district).as_deref(), Some("Musterstadt"));
+        assert_eq!(town_of(&json!({"city": "Berlin", "suburb": "Mitte"})).as_deref(), Some("Berlin"));
+        assert_eq!(town_of(&json!({"village": "Kleindorf"})).as_deref(), Some("Kleindorf"));
+        assert_eq!(town_of(&json!({"suburb": "Mitte"})), None, "a district alone names no town");
+    }
+
+    /// Berlin on midsummer's day (CEST) and in midwinter (CET), against the almanac's times
+    /// within three minutes; the polar night has none.
+    #[test]
+    fn sunrise_and_sunset_are_worked_out_offline() {
+        let at = |h: u32, m: u32| chrono::NaiveTime::from_hms_opt(h, m, 0).unwrap();
+        let near = |a: chrono::NaiveTime, b: chrono::NaiveTime| (a - b).num_minutes().abs() <= 3;
+        let (rise, set) = sun_times(52.52, 13.405, NaiveDate::from_ymd_opt(2026, 6, 21).unwrap(), 120).unwrap();
+        assert!(near(rise, at(4, 43)) && near(set, at(21, 33)), "{rise} {set}");
+        let (rise, set) = sun_times(52.52, 13.405, NaiveDate::from_ymd_opt(2026, 12, 21).unwrap(), 60).unwrap();
+        assert!(near(rise, at(8, 15)) && near(set, at(15, 54)), "{rise} {set}");
+        assert_eq!(sun_times(78.2, 15.6, NaiveDate::from_ymd_opt(2026, 12, 21).unwrap(), 60), None);
+    }
 
     #[test]
     fn landmarks_lose_their_article_places_keep_it() {

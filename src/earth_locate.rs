@@ -140,6 +140,30 @@ pub async fn locate(offline: bool) -> Result<Fix, String> {
     Ok(fix)
 }
 
+static NO_DEVICE: Mutex<Option<Instant>> = Mutex::new(None);
+
+/// The Windows location service's fix alone (the last one while fresh). None while it is off
+/// or gave nothing in the last ten minutes: no question waits on it twice.
+pub async fn device_fix() -> Option<Fix> {
+    if let Some(fix) = cached().filter(|f| f.source == Source::Device) {
+        return Some(fix);
+    }
+    if crate::crash_guard::lock(&NO_DEVICE).is_some_and(|at| at.elapsed() < Duration::from_secs(600)) {
+        return None;
+    }
+    match device().await {
+        Ok(fix) => {
+            *crate::crash_guard::lock(&LAST) = Some((fix.clone(), Instant::now()));
+            Some(fix)
+        }
+        Err(e) => {
+            debug!("[EARTH] No fix from the Windows location service: {e}");
+            *crate::crash_guard::lock(&NO_DEVICE) = Some(Instant::now());
+            None
+        }
+    }
+}
+
 /// The Windows location service, on a thread of its own (WinRT wants its apartment), waited for
 /// `DEVICE_TIMEOUT` at most.
 async fn device() -> Result<Fix, String> {

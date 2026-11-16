@@ -542,15 +542,16 @@ fn weather_location(query: &str) -> Option<String> {
 
 async fn weather(query: &str) -> Option<String> {
     let mut place = weather_location(query)?;
-    // "What's the weather?" with no place: Sir's home (from memory) beats IP geolocation.
+    // "What's the weather?" with no place: Sir's home (from memory, else the town JAI found him
+    // in) beats IP geolocation, whose nearest place can be a district of his town.
     if place.is_empty() {
-        place = home_location().unwrap_or_default();
+        place = home_location().or_else(|| crate::location_engine::known_home().and_then(|h| h.town)).unwrap_or_default();
     }
     format_weather(&weather_json(&place).await?)
 }
 
 /// wttr.in's JSON for a place ("" = where Sir's IP is).
-pub async fn weather_json(place: &str) -> Option<Value> {
+async fn weather_json(place: &str) -> Option<Value> {
     let mut url = reqwest::Url::parse("https://wttr.in/").ok()?;
     if !place.is_empty() {
         url.path_segments_mut().ok()?.pop_if_empty().push(place);
@@ -562,32 +563,6 @@ pub async fn weather_json(place: &str) -> Option<Value> {
         return None;
     }
     resp.json().await.ok()
-}
-
-/// One spoken sentence for the briefing: "In Berlin it's 9 degrees and overcast; today 5 to 13
-/// degrees with up to 16 percent chance of rain."
-pub fn spoken_weather(j: &Value) -> Option<String> {
-    let now = &j["current_condition"][0];
-    let temp = now["temp_C"].as_str()?;
-    let desc = now["weatherDesc"][0]["value"].as_str().unwrap_or("").trim().to_lowercase();
-    let place = j["nearest_area"][0]["areaName"][0]["value"].as_str().unwrap_or("").trim().to_string();
-    let today = &j["weather"][0];
-    let rain = today["hourly"]
-        .as_array()
-        .map(|h| h.iter().filter_map(|x| x["chanceofrain"].as_str()?.parse::<u32>().ok()).max().unwrap_or(0))
-        .unwrap_or(0);
-    let mut line = if place.is_empty() { format!("It's {temp} degrees") } else { format!("In {place} it's {temp} degrees") };
-    if !desc.is_empty() {
-        line.push_str(&format!(" and {desc}"));
-    }
-    if let (Some(lo), Some(hi)) = (today["mintempC"].as_str(), today["maxtempC"].as_str()) {
-        line.push_str(&format!("; today {lo} to {hi} degrees"));
-        if rain >= 20 {
-            line.push_str(&format!(" with up to {rain} percent chance of rain"));
-        }
-    }
-    line.push('.');
-    Some(line)
 }
 
 static HOME: std::sync::RwLock<Option<String>> = std::sync::RwLock::new(None);

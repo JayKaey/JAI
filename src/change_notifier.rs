@@ -195,8 +195,8 @@ async fn check(pim: &Pim, watchers: &Watchers, key: &str) -> Result<Vec<String>,
                 .map(|l| {
                     let when = format!("{} at {}", pim::spoken_day(l.date, today), l.start.format("%H:%M"));
                     let what = match l.status {
-                        LessonStatus::Cancelled => format!("{} {when} has been cancelled.", l.subject_name()),
-                        _ => format!("{} {when} has a substitution or room change{}.", l.subject_name(), if l.rooms.is_empty() { String::new() } else { format!(": room {}", l.rooms.join(", ")) }),
+                        LessonStatus::Cancelled => format!("{} {when} has been cancelled.", l.display_subject()),
+                        _ => format!("{} {when} has a substitution or room change{}.", l.display_subject(), if l.rooms.is_empty() { String::new() } else { format!(": room {}", l.rooms.join(", ")) }),
                     };
                     (l.key(), what)
                 })

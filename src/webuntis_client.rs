@@ -72,7 +72,7 @@ impl Lesson {
     /// The subject in English when it is a known school subject ("Physik" → "Physics").
     pub fn display_subject(&self) -> String {
         let long = if self.subject_long.trim().is_empty() { self.subject.trim() } else { self.subject_long.trim() };
-        crate::pim::english_subject(long).or_else(|| crate::pim::english_subject(self.subject.trim())).unwrap_or_else(|| self.subject_name())
+        crate::pim::english_subject(long).or_else(|| crate::pim::english_subject(self.subject.trim())).unwrap_or_else(|| crate::english::in_english(&self.subject_name()))
     }
 
     /// "07:50 - 08:35: Physics (Room 204) with MÜL [CANCELLED]".

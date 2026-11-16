@@ -390,7 +390,7 @@ pub fn plain_text(s: &str) -> String {
 }
 
 /// School subjects in English and German (codes last).
-const SUBJECTS: &[&[&str]] = &[
+pub(crate) const SUBJECTS: &[&[&str]] = &[
     &["physics", "physik", "ph"],
     &["mathematics", "maths", "math", "mathe", "mathematik", "ma"],
     &["chemistry", "chemie", "ch"],
@@ -802,7 +802,11 @@ pub fn tool_definitions() -> Vec<Value> {
         json!({"type": "function", "function": {
             "name": "run_executive_briefing",
             "description": "Sir's unified daily briefing: cancelled classes (WebUntis), course uploads and due dates (itslearning), today's calendar with conflicts, unread e-mail, weather, reminders and system status. Use for 'good morning', 'morning briefing', 'update me on my day'.",
-            "parameters": {"type": "object", "properties": {"time_of_day": {"type": "string", "enum": ["morning", "afternoon", "evening"]}}, "required": []}
+            "parameters": {"type": "object", "properties": {
+                "time_of_day": {"type": "string", "enum": ["morning", "afternoon", "evening"]},
+                "leave_out": {"type": "array", "items": {"type": "string"}, "description": "Parts to leave out from now on: weather, school, itslearning, calendar, email, news, games, reminders, system"},
+                "put_back": {"type": "array", "items": {"type": "string"}}
+            }, "required": []}
         }}),
         json!({"type": "function", "function": {
             "name": "sync_study_materials_and_deadlines",
@@ -1081,6 +1085,7 @@ pub async fn run_tool(tools: &ToolContext, name: &str, args: &Value) -> Result<S
             let settings = pim.config().settings();
             timed(pim.web().query(&settings, site, str_arg(args, &["css_selector_or_topic", "selector", "topic", "query"]))).await
         }
+        "run_executive_briefing" if ["leave_out", "put_back", "parts"].iter().any(|k| args.get(*k).is_some()) => Ok(crate::briefing::set_parts(tools, args)),
         "run_executive_briefing" => Ok(crate::briefing::executive(tools, str_arg(args, &["time_of_day", "time"])).await),
         "sync_study_materials_and_deadlines" => crate::study_assistant::run(tools, args).await,
         "manage_schedule_watcher" => crate::change_notifier::tool(pim, args),

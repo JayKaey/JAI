@@ -150,7 +150,7 @@ async fn next_lesson(tools: &ToolContext, day: NaiveDate, now: NaiveDateTime) ->
     let first = list.first()?;
     let last_today = list.iter().filter(|l| l.date == first.date).map(|l| l.end).max();
     Some(Appointment {
-        what: format!("{} (first lesson)", first.subject_name()),
+        what: format!("{} (first lesson)", first.display_subject()),
         start: first.date.and_time(first.start),
         end: last_today.map(|t| first.date.and_time(t)),
         location: first.rooms.join(", "),

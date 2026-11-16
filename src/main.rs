@@ -78,6 +78,7 @@ mod ear;
 mod ear_check;
 mod ears;
 mod email_client;
+mod english;
 mod exam_coach;
 mod exhaustive_scenario_verifier;
 mod features;

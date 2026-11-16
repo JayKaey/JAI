@@ -1006,6 +1006,14 @@ impl WidgetEngine {
         self.inner.widgets.read().unwrap_or_else(|e| e.into_inner()).iter().find(|w| w.id == id).cloned()
     }
 
+    /// "Close all windows": the cards on the panel (the briefing, notes, gauges, tables) close
+    /// and stay within reach of "bring back my windows"; his lists and what still runs (timers,
+    /// reminders) stay. How many closed. (Sir, 2026-11-16: the briefing card stayed up.)
+    pub fn close_cards(&self) -> usize {
+        let cards: Vec<String> = self.widgets().into_iter().filter(|w| w.dock == Dock::Panel && !passing(w) && !matches!(w.kind, WidgetKind::Checklist { .. })).map(|w| w.id).collect();
+        cards.iter().filter(|id| self.remove(id)).count()
+    }
+
     pub fn windows(&self) -> Vec<NativeWindowSpec> {
         self.inner.windows.read().unwrap_or_else(|e| e.into_inner()).clone()
     }
@@ -2076,6 +2084,21 @@ pub fn tool_definitions() -> Vec<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 2026-11-16, Sir's screen: "close all windows" left the briefing card up, and the next
+    /// ask said no windows were open. The cards close; his list and a running timer stay.
+    #[test]
+    fn close_all_windows_closes_the_cards_but_not_his_lists() {
+        let e = WidgetEngine::in_memory();
+        e.create_or_update(&json!({"id": "daily_briefing", "type": "MarkdownNoteCard", "title": "Daily Briefing Summary", "markdown": "## Morning"})).unwrap();
+        e.create_or_update(&json!({"id": "cpu", "type": "MetricGauge", "title": "CPU", "source": "cpu"})).unwrap();
+        e.create_or_update(&json!({"type": "Checklist", "title": "Shopping list", "add_items": [{"text": "milk"}]})).unwrap();
+        e.create_or_update(&json!({"id": "tea", "type": "CountdownOrStopwatch", "title": "Tea", "duration_secs": 180})).unwrap();
+        assert_eq!(e.close_cards(), 2);
+        let left: Vec<String> = e.widgets().into_iter().map(|w| w.kind.type_name().to_string()).collect();
+        assert_eq!(left, ["Checklist", "CountdownOrStopwatch"]);
+        assert_eq!(e.close_cards(), 0, "nothing more to close");
+    }
 
     /// "Check off milk", "the timer": Sir names a kind, not an id. What is not there is said,
     /// and never made.

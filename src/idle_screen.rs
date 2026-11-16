@@ -53,9 +53,16 @@ pub fn refresh(app: &crate::app::Jai, rt: &tokio::runtime::Handle) {
             .into_iter()
             .filter(|e| !e.all_day && e.start > now)
             .min_by_key(|e| e.start)
-            .map(|e| (e.title, e.start, e.location));
+            .map(|e| (crate::english::in_english(&e.title), e.start, e.location));
         let weather = match tokio::time::timeout(Duration::from_secs(8), crate::location_engine::weather_report(tools, 1, None)).await {
-            Ok(Ok(report)) => Some((report.current.temperature, crate::location_engine::weather_code_text(report.current.code).to_string())),
+            Ok(Ok(report)) => {
+                let mut sky = crate::location_engine::weather_code_text(report.current.code).to_string();
+                // The sunrise or sunset that comes next, worked out offline for his home.
+                if let Some(sun) = crate::location_engine::next_sun(now) {
+                    sky.push_str(&format!("  ·  {sun}"));
+                }
+                Some((report.current.temperature, sky))
+            }
             _ => None,
         };
         let lesson = tokio::time::timeout(Duration::from_secs(12), crate::briefing::next_lesson(tools)).await.ok().flatten();

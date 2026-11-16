@@ -75,11 +75,13 @@ impl CalEvent {
 
     /// "09:00–10:30 Dentist (Main Street)" / "all day: Mum's birthday".
     pub fn line(&self) -> String {
-        let place = if self.location.trim().is_empty() { String::new() } else { format!(" ({})", self.location.trim()) };
+        // (In English: he reads and hears his calendar in English.)
+        let place = if self.location.trim().is_empty() { String::new() } else { format!(" ({})", crate::english::in_english(self.location.trim())) };
+        let title = crate::english::in_english(&self.title);
         if self.all_day {
-            format!("all day: {}{place}", self.title)
+            format!("all day: {title}{place}")
         } else {
-            format!("{}–{} {}{place}", self.start.format("%H:%M"), self.end.format("%H:%M"), self.title)
+            format!("{}–{} {title}{place}", self.start.format("%H:%M"), self.end.format("%H:%M"))
         }
     }
 }

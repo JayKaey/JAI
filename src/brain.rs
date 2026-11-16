@@ -376,7 +376,7 @@ fn static_tool(name: &str) -> Option<&'static str> {
         "control_audio_mixer", "set_listening_mode", "save_instant_replay", "open_jai_view",
         "spawn_multi_window_workspace", "control_spatial_window", "manage_spatial_scene", "manage_vram", "spawn_topic_knowledge_workspace",
         "hud_board", "undo_last_action", "discord_bot", "away_mode", "arrange_jai_window",
-        "show_image", "show_live_camera", "show_street_view",
+        "show_image", "show_live_camera", "show_street_view", "manage_location_settings",
     ];
     NAMES.iter().copied().find(|n| *n == name).or_else(|| crate::features::static_name(name))
 }
@@ -2687,6 +2687,8 @@ impl Brain {
             "close_all_secondary_windows" => Some(crate::intent_engine::WINDOWS_CLOSED_REPLY.into()),
             "close_native_window" if out.starts_with("Closed ") && !out.starts_with("Closed 1 ") => Some("Done, Sir. All my windows are closed.".into()),
             "close_native_window" => Some("Done, Sir. The window is closed.".into()),
+            // (Not its coordinates read aloud.)
+            "manage_location_settings" if action == "set_home" && out.starts_with("Home set to ") => Some(format!("Noted, Sir: {} is home.", args["address"].as_str().unwrap_or("that"))),
             "reminders" => Some(self.reminder_ack(args)),
             // The briefing is its own reply.
             "daily_briefing" | "run_executive_briefing" => Some(outcome.output.clone()),
@@ -2816,6 +2818,10 @@ impl Brain {
             return (cfg.primary_model.clone(), false);
         }
         tools::new_turn();
+        // A bare yes is an answer only to a question of his: to nothing asked, whatever the model
+        // does with it is a guess and asked about first (2026-11-16: "Yes, sir." after "There
+        // are no secondary windows open" closed Firefox).
+        let yes_to_his_question = intents::is_affirmation(request) && self.last_reply().await.is_some_and(|r| r.trim_end().ends_with('?'));
         let (system, tools) = self.turn_prompt(cfg);
         let mut model = cfg.primary_model.clone();
         let mut caps = caps;
@@ -3004,7 +3010,10 @@ impl Brain {
                     // layout as standard" made a protocol called "no_think", "throw it on all
                     // monitors" stretched the board). He asks first; Sir's yes carries it out
                     // (`ask_first`). Typed orders are held to the same rule.
-                    let guessed: Vec<Option<String>> = calls.iter().map(|(name, args)| if held_back(name, args) || unconfirmed(name, args) || not_his(name, args) { None } else { crate::ask_first::question(request, name, args) }).collect();
+                    let guessed: Vec<Option<String>> = calls
+                        .iter()
+                        .map(|(name, args)| if held_back(name, args) || unconfirmed(name, args) || not_his(name, args) || yes_to_his_question { None } else { crate::ask_first::question(request, name, args) })
+                        .collect();
                     let mut asked: Option<(String, Value, String)> = None;
                     let any_held = guessed.iter().any(Option::is_some) || calls.iter().any(|(name, args)| held_back(name, args) || unconfirmed(name, args) || not_his(name, args));
                     let all_held = calls.iter().zip(&guessed).all(|((name, args), guess)| guess.is_some() || held_back(name, args) || not_his(name, args));
