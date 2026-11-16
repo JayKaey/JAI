@@ -102,6 +102,7 @@ pub const RELEASES: &[Release] = &[
             fixed("The weather in your own town", "The briefing named a district near you; it now finds your town and asks Open-Meteo."),
             fixed("Close all windows closes the cards", "Widget cards close too, but not your lists or a running timer; \"thank you\" first works."),
             fixed("A bare yes closes nothing", "A \"yes\" when he asked nothing no longer closes or opens a program on a guess."),
+            fixed("No orb while not listening", "Under \"stop listening\" the corner orb no longer flies out for every noise; it stays in the background."),
             better("A film look", "Hairline frames on whole pixels with corner brackets, and no halos round the blocks."),
             better("A calmer emblem", "Thinner rings, and a core whose light breathes slowly at rest."),
             better("A quieter canvas", "Less grain and dust on the glass, and no scratches."),

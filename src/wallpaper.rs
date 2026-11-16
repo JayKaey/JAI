@@ -414,6 +414,13 @@ pub fn hidden() -> bool {
     HIDDEN.load(Ordering::Acquire)
 }
 
+/// Whether the orb is called out of the background: its emblem is `covered` and he listens.
+/// Not listening he does not show himself either (Sir, 2026-11-16): every noise is still
+/// transcribed then, and that read as him thinking.
+pub fn orb_called(covered: bool) -> bool {
+    covered && !crate::listening_lock::is_locked()
+}
+
 /// Whether the orb is out of the background right now (in its corner, or on its way): then
 /// "make the orb smaller" means that one.
 static ORB_OUT: AtomicBool = AtomicBool::new(false);
@@ -845,6 +852,34 @@ mod tests {
         orb.step(ms(30_600), true, true, home, || rest);
         assert!(orb.grabbed());
         assert_eq!(orb.step(ms(30_700), false, false, home, || rest).unwrap().phase, OrbPhase::Out);
+    }
+
+    /// Sir, 2026-11-16: "when jai is in not listening mode his orb shouldnt show either". Under
+    /// the lock every noise is still transcribed (and thrown away), which the HUD reads as busy.
+    #[test]
+    fn not_listening_the_orb_stays_in_the_background() {
+        use crate::listening_lock::{apply, LockCommand};
+        let _g = crate::listening_lock::test_lock();
+        let home = Rect::from_center_size(pos2(1280.0, 720.0), vec2(400.0, 400.0));
+        let rest = corner([0, 0, 2560, 1392], 168, None);
+        let t0 = Instant::now();
+        let ms = |n: u64| t0 + Duration::from_millis(n);
+        let mut orb = Orb::default();
+        // Out for "stop listening" itself, the emblem covered by his video...
+        apply(LockCommand::Resume);
+        orb.step(ms(0), true, orb_called(true), home, || rest);
+        assert_eq!(orb.step(ms(600), true, orb_called(true), home, || rest).unwrap().phase, OrbPhase::Out);
+        // ...the lock goes on while he still answers: back at once, and home.
+        apply(LockCommand::Lock);
+        assert_eq!(orb.step(ms(700), true, orb_called(true), home, || rest).unwrap().phase, OrbPhase::Returning);
+        assert!(orb.step(ms(1_300), true, orb_called(true), home, || rest).is_none() && orb.is_home());
+        // A minute of noises transcribed and thrown away: never out, nor under a timed pause.
+        assert!((0..600).all(|n| orb.step(ms(2_000 + n * 100), true, orb_called(true), home, || rest).is_none()));
+        apply(LockCommand::Pause(Duration::from_secs(600)));
+        assert!((0..100).all(|n| orb.step(ms(62_000 + n * 100), true, orb_called(true), home, || rest).is_none()));
+        // Listening again: out for the next word, as ever.
+        apply(LockCommand::Resume);
+        assert!(orb.step(ms(80_000), true, orb_called(true), home, || rest).is_some());
     }
 
     /// While it is out and Sir goes to another monitor, it glides to its corner there, without

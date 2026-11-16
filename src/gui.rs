@@ -9847,7 +9847,7 @@ impl HudApp {
         let was_home = at_home && self.orb_landed == 0;
         let mut out_on = self.orb_out_on;
         // (A scripted session can ask to see it fly although nothing covers its emblem: `JAI_DEMO=orb`.)
-        let hidden = crate::wallpaper::hidden() || demo("orb");
+        let hidden = crate::wallpaper::orb_called(crate::wallpaper::hidden() || demo("orb"));
         // The monitor it would come out on (a scripted session's: only its own).
         let in_use = if at_home { crate::wallpaper::monitor_in_use(&crate::monitors::recent()) } else { None };
         if was_home && in_use.is_none() {
