@@ -232,6 +232,8 @@ async fn encode_mp4(ffmpeg: &Path, frames: &[Vec<u8>], fps: f32, out: &Path) -> 
 
 #[cfg(all(test, windows))]
 pub(crate) use capture::screen_pixels;
+#[cfg(windows)]
+pub(crate) use capture::screen_bgra;
 
 /// GDI capture of the primary monitor and WIC JPEG encoding, on the recorder's own thread.
 #[cfg(windows)]
@@ -291,6 +293,11 @@ mod capture {
 
         /// The current screen as 24-bit BGR rows, top-down.
         fn grab(&self) -> Option<Vec<u8>> {
+            Some(self.bgra()?.chunks_exact(4).flat_map(|px| [px[0], px[1], px[2]]).collect())
+        }
+
+        /// The current screen as 32-bit BGRA rows, top-down.
+        fn bgra(&self) -> Option<Vec<u8>> {
             let (w, h) = self.size;
             let [l, t, r, b] = self.source;
             // SAFETY: valid DCs and bitmap owned by `self`; the buffer holds w*h*4 bytes.
@@ -317,7 +324,7 @@ mod capture {
                 if lines != h {
                     return None;
                 }
-                Some(bgra.chunks_exact(4).flat_map(|px| [px[0], px[1], px[2]]).collect())
+                Some(bgra)
             }
         }
     }
@@ -340,6 +347,14 @@ mod capture {
     #[cfg(test)]
     pub(crate) fn screen_pixels(rect: [i32; 4]) -> Option<Vec<u8>> {
         Surface::new(rect, (rect[2] - rect[0]).max(2) as u32)?.grab()
+    }
+
+    /// The screen in `rect` (left, top, right, bottom) as 32-bit BGRA rows, at most `width`
+    /// pixels wide (scaled, halftone): (pixels, width, height). For reading it (OCR).
+    pub(crate) fn screen_bgra(rect: [i32; 4], width: u32) -> Option<(Vec<u8>, u32, u32)> {
+        let surface = Surface::new(rect, width)?;
+        let (w, h) = surface.size;
+        Some((surface.bgra()?, w as u32, h as u32))
     }
 
     /// A JPEG of `bgr` (24-bit rows, top-down) through WIC.

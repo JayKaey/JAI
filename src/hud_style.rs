@@ -497,6 +497,8 @@ pub fn emblem_light(p: &Painter, r: Rect, orb: Rect, colour: Color32, alpha: f32
 
 /// A block let go while it moved faster than this (points per second) is thrown.
 pub const THROW_FROM: f32 = 420.0;
+/// Flung away faster than this, a block closes (it waits dim in the tray for ten minutes).
+pub const FLING_AWAY: f32 = 3000.0;
 
 /// One frame of a thrown block: it glides on from `rect` at `velocity`, slowing down (it has
 /// lost its way after about a third of a second), and stops at the edge of `bounds`. Returns
@@ -765,12 +767,32 @@ pub fn keys(ui: &mut Ui, id: egui::Id, right: f32, mid: f32, labels: &[(&str, bo
         if response.clicked() {
             clicked = Some(k);
         }
-        if !hint.is_empty() {
-            response.on_hover_text(*hint);
+        let tip = tip_with_sentence(label, hint);
+        if !tip.is_empty() {
+            response.on_hover_text(tip);
         }
         x -= width + 4.0;
     }
     (clicked, x + 4.0)
+}
+
+/// What Sir can say instead of pressing a key: its tip names it (`tip_with_sentence`).
+pub const SAY_INSTEAD: &[(&str, &str)] = &[
+    ("[ DETACH ]", "detach it"),
+    ("[ POP OUT ]", "detach it"),
+    ("[ UNDO ]", "undo that"),
+    ("[ YES ]", "yes"),
+    ("[ NO ]", "no"),
+    ("[ NONE ]", "none of them"),
+];
+
+/// A key's tip with the sentence that does the same, unless the tip names it already.
+pub fn tip_with_sentence(label: &str, hint: &str) -> String {
+    match SAY_INSTEAD.iter().find(|(key, said)| *key == label && !hint.contains(said)) {
+        Some((_, said)) if hint.is_empty() => format!("Say “{said}”."),
+        Some((_, said)) => format!("{}. Or say “{said}”.", hint.trim_end_matches('.')),
+        None => hint.to_string(),
+    }
 }
 
 // ------------------------------------------------------------- loading, empty and failed ----
@@ -1029,6 +1051,30 @@ mod tests {
         assert_eq!(start.chars().nth(6), Some('/'));
         assert!(decode("CHART // 2026", 0.5, 0.5).starts_with("CHART "));
         assert_eq!(decode("CHART // 2026", 1.0, 0.5), "CHART // 2026");
+    }
+
+    /// Every key's sentence does what the key does, without the language model; [ YES ], [ NO ]
+    /// and [ NONE ] answer the question their chip asks and are no orders of their own.
+    #[test]
+    fn a_key_s_sentence_takes_the_key_s_road() {
+        let roads = [("[ DETACH ]", "configure_interface"), ("[ POP OUT ]", "configure_interface"), ("[ UNDO ]", "undo_last_action")];
+        let wrong: Vec<String> = SAY_INSTEAD
+            .iter()
+            .filter(|(key, _)| !matches!(*key, "[ YES ]" | "[ NO ]" | "[ NONE ]"))
+            .filter_map(|(key, said)| {
+                let tool = roads.iter().find(|(k, _)| k == key).map(|(_, t)| *t);
+                let got = crate::phrasings::route(said);
+                (got.as_ref().map(|(t, _)| t.as_str()) != tool).then(|| format!("{key} \"{said}\": {got:?}"))
+            })
+            .collect();
+        assert!(wrong.is_empty(), "{wrong:#?}");
+        // A block's [ PIN ] names the block ("pin it" pins a pop-up): its tip says so itself.
+        // (An open block's own name routes the same way: `hud_dock::blocks_named`.)
+        let pinned = crate::phrasings::route("pin the chart");
+        assert!(pinned.as_ref().is_some_and(|(tool, args)| tool == "hud_board" && args["action"] == "pin"), "{pinned:?}");
+        assert_eq!(tip_with_sentence("[ DETACH ]", "Own window."), "Own window. Or say “detach it”.");
+        assert_eq!(tip_with_sentence("[ UNDO ]", ""), "Say “undo that”.");
+        assert_eq!(tip_with_sentence("[ CLOSE ]", "Close"), "Close", "no sentence of its own: the tip as it was");
     }
 
     /// "12:40" turning "12:41": the four figures that stay stand still, the changed one draws

@@ -73,6 +73,8 @@ pub fn rebuild() {
     let count = entries.len();
     *INDEX.write().unwrap_or_else(|e| e.into_inner()) = Index { entries, built: Some(Instant::now()) };
     info!("[APPS] Indexed {count} installed applications in {} ms", started.elapsed().as_millis());
+    // His voice learns how to say their titles, and his games'.
+    crate::pronunciation_lexicon::learn_titles(names().into_iter().chain(crate::kit_games::library().into_iter().map(|g| g.name)));
 }
 
 fn score(query: &str, key: &str) -> f64 {

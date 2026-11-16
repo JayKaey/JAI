@@ -2343,8 +2343,9 @@ impl Jai {
                     }
                 };
                 if let Some((first_audio_ms, stt_ms, first_token_ms)) = metrics {
+                    let (clause_ms, missed) = crate::tts::first_sound().unwrap_or_default();
                     info!(
-                        "[TTS] First audio {first_audio_ms} ms after end of speech (STT {stt_ms} ms, first token {} , synth {synth_ms} ms)",
+                        "[TTS] First audio {first_audio_ms} ms after end of speech (STT {stt_ms} ms, first token {} , synth {synth_ms} ms; first clause to sound: median {clause_ms} ms, {missed} over 250 ms)",
                         first_token_ms.map(|m| format!("{m} ms")).unwrap_or_else(|| "n/a".into())
                     );
                     self.emit(HudEvent::TurnMetrics { stt_ms, first_token_ms, first_audio_ms });

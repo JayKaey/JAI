@@ -2419,6 +2419,8 @@ impl Brain {
         // live 2026-11-13: "It is on Monitor the other.").
         let on_monitor = |s: &str| monitor_in(s).map_or_else(|| "on the other monitor".to_string(), |n| format!("on Monitor {n}"));
         match tool {
+            // "Copied, Sir: 12 lines from "Notepad" are on the clipboard.": the count is the news.
+            "inspect_screen_or_selection" if args["mode"] == "copy_text" => Some(out.to_string()),
             "spawn_native_window" if out.contains("already open") => Some("It's already open, Sir. I've brought it to the front.".into()),
             "spawn_native_window" if args.get("live").is_some() => {
                 let on = monitor_in(out).map(|m| format!(" on Monitor {m}")).unwrap_or_default();

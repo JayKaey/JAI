@@ -15,7 +15,8 @@
 //! lit by the real sun (day and night, a twilight band, city lights, a glint on the water) under
 //! an atmosphere in the theme's tint. The holographic look is drawn from the same data: the coast
 //! is the 0.5 line of the land mask and the borders a distance to their raster lines, both
-//! measured in screen pixels, so they stay one pixel thin at any zoom; the land carries a dot grid
+//! measured in screen pixels, so they stay one pixel thin at any zoom (the coast with a soft glow
+//! a few pixels either side); the land carries a dot grid
 //! whose spacing follows the zoom. Below ~1 600 km the same pass draws the base of the flat
 //! Web Mercator map (its tiles are egui images on top).
 //!
@@ -850,7 +851,8 @@ vec3 ground(vec2 ll, vec2 dllx, vec2 dlly, vec2 uv, vec2 dux, vec2 duy, vec2 mer
     photo += vec3(1.0, 0.94, 0.82) * pow(max(dot(n, h), 0.0), 160.0) * water * daylight * u_glint * 0.65;
     photo = mix(photo, vec3(1.0, 0.96, 0.86) * mix(1.0, 0.35 + 0.65 * daylight, u_night), line * 0.55);
 
-    // The holographic look: crisp coasts and borders, a dot grid on the land.
+    // The holographic look: crisp coasts with a soft glow either side, borders, a dot grid on
+    // the land.
     float l = lum(day);
     // (The holo look's day is the shaded relief: the shelves are a lighter blue.)
     vec3 ocean = mix(u_ocean_deep, u_ocean_shallow, smoothstep(0.10, 0.42, l) * 0.7);
@@ -860,6 +862,7 @@ vec3 ground(vec2 ll, vec2 dllx, vec2 dlly, vec2 uv, vec2 dux, vec2 duy, vec2 mer
     }
     vec3 holo = mix(ocean, land, land_a);
     holo = mix(holo, u_dot, dots(ll, dllx, dlly) * land_a * 0.5);
+    holo += u_coast * 0.16 * exp(-0.45 * coast_px);
     holo = mix(holo, u_coast, 1.0 - smoothstep(0.5, 1.5, coast_px));
     holo = mix(holo, u_border, line);
     holo *= mix(1.0, 0.62 + 0.38 * pow(max(dot(n, to_eye), 0.0), 0.6), globe);

@@ -3165,6 +3165,44 @@ impl HudApp {
         ctx.request_repaint_after(Duration::from_millis(if alpha < 1.0 { 16 } else { 250 }));
     }
 
+    /// Where part `part` of the tour (`TOUR`) stands on the home screen; None while it shows
+    /// nothing (no block open, an empty tray, the console closed).
+    fn tour_rect(&self, ctx: &egui::Context, part: &str) -> Option<Rect> {
+        let home = home_screen(ctx);
+        match part {
+            "emblem" => Some(self.emblem_spot).filter(|(_, r, _)| *r > 0.0).map(|(c, r, _)| Rect::from_center_size(c, Vec2::splat(r * 2.2))),
+            "header" => Some(Rect::from_min_max(pos2(home.left() + 6.0, home.top() + 5.0), pos2(home.right() - 6.0, home.top() + 16.0 + HEADER_H))),
+            "comms" => ctx.data(|d| d.get_temp::<(u64, Rect)>(egui::Id::new("jai_tour_comms"))).filter(|(frame, _)| frame + 2 >= ctx.cumulative_pass_nr()).map(|(_, r)| r.expand(4.0)),
+            "board" => crate::hud_dock::block_rects().into_iter().reduce(|a, b| a.union(b)).map(|r| r.expand(6.0)),
+            "tray" => ctx.memory(|m| m.area_rect(egui::Id::new("jai_block_tray"))).filter(|_| !crate::hud_dock::minimized_blocks().is_empty()).map(|r| r.expand(4.0)),
+            "telemetry" => Some(Rect::from_min_max(pos2(home.left() + 6.0, home.bottom() - 16.0 - TELEMETRY_H), pos2(home.right() - 6.0, home.bottom() - 4.0))),
+            "console" => console_rect(),
+            _ => None,
+        }
+    }
+
+    /// The tour's light: a soft outline round the part his sentence is about, gliding from part
+    /// to part, gone a moment after the last.
+    fn tour_outline(&self, ctx: &egui::Context) {
+        let Some((began, cues)) = lock(&TOUR_CUES).clone() else { return };
+        let t = began.elapsed().as_secs_f32();
+        if cues.last().is_none_or(|(_, at)| t > at + TOUR_LAST_SECS) {
+            *lock(&TOUR_CUES) = None;
+            return;
+        }
+        ctx.request_repaint();
+        let now = cues.iter().rev().find(|(_, at)| *at <= t).and_then(|(k, _)| self.tour_rect(ctx, TOUR[*k].0));
+        let id = egui::Id::new("jai_tour_light");
+        let alpha = ctx.animate_bool_with_time(id, now.is_some(), crate::hud_style::motion::NORMAL.as_secs_f32());
+        // (Where nothing is lit it glides on from its last place.)
+        let last = ctx.data(|d| d.get_temp::<Rect>(id)).or(now);
+        let Some(target) = now.or(last) else { return };
+        ctx.data_mut(|d| d.insert_temp(id, target));
+        let edge = |k: usize, v: f32| ctx.animate_value_with_time(id.with(k), v, 0.35);
+        let r = Rect::from_min_max(pos2(edge(0, target.left()), edge(1, target.top())), pos2(edge(2, target.right()), edge(3, target.bottom())));
+        tour_light(&ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, id)), r, crate::hud_board::active_colour().gamma_multiply(alpha));
+    }
+
     fn dialogs(&mut self, ctx: &egui::Context) {
         let p = self.palette;
         if self.confirm_shutdown {
@@ -5799,6 +5837,7 @@ impl HudApp {
         let (width, centre_x) = comms_placement(screen, self.console_reserve());
         let bottom = screen.bottom() - 12.0 - TELEMETRY_H - 6.0;
         let rect = Rect::from_min_size(pos2(centre_x - width / 2.0, bottom - (CAPTION_BAND - 8.0)), vec2(width, CAPTION_BAND - 8.0)).translate(self.comms_offset);
+        ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("jai_tour_comms"), (ui.ctx().cumulative_pass_nr(), rect)));
         // Like every block, it moves with the mouse.
         let drag = ui.interact(rect, egui::Id::new("hud_comms_drag"), Sense::drag());
         if drag.dragged() {
@@ -6319,6 +6358,7 @@ impl HudApp {
     fn switch_view(&mut self, mode: crate::hud_dock::HudViewMode, toggle: bool) {
         use crate::hud_dock::{is_detached, HudViewMode as V};
         info!("[HUD] Navigation: {}{}", mode.id(), if toggle { " (click)" } else { "" });
+        *lock(&VIEW_ZOOM) = Some(Instant::now());
         let tools = self.app.tools().clone();
         let lab = &tools.stark.simlab;
         let engine = &tools.widgets;
@@ -6512,6 +6552,7 @@ impl HudApp {
         self.workout.show(ctx, &self.palette, &self.app, &self.rt);
         // The views Sir put away ("minimise it"), as chips over the bottom strip.
         block_tray(ctx);
+        self.tour_outline(ctx);
         mark("end");
 
         let ptt = self.ptt_button || self.ptt_key;
@@ -6560,24 +6601,25 @@ pub fn background_fps(fps: f32, active: bool, unseen: bool, gaming: bool) -> f32
     }
 }
 
-/// The HUD's frame rate: with animations off 8; at rest 30; while something moves 60 — or the
+/// The HUD's frame rate: with animations off 8; at rest 60; while something moves 60 — or the
 /// display's own refresh rate (60 … `MAX_FPS`) when Sir is at the HUD (it has the focus or the
 /// pointer), so dragging a block is as smooth as his monitor is fast.
 pub fn target_fps(animations: bool, active: bool, attended: bool, display_hz: f32) -> f32 {
     match (animations, active, attended) {
         (false, ..) => 8.0,
-        (true, false, _) => 30.0,
+        (true, false, _) => 60.0,
         (true, true, false) => 60.0,
         (true, true, true) => display_hz.clamp(60.0, MAX_FPS),
     }
 }
 
-/// The HUD's frame rate at rest: 30 while Sir is at the PC, 10 when nobody is looking closely.
+/// The HUD's frame rate at rest: 60 while Sir is at the PC (the rings and clock turn without a
+/// stutter), 10 when nobody is looking closely.
 pub fn rest_fps(unwatched: bool) -> f32 {
     if unwatched {
         10.0
     } else {
-        30.0
+        60.0
     }
 }
 
@@ -7710,6 +7752,7 @@ pub(super) fn paint_window_border(ctx: &egui::Context) {
     if ctx.input(|i| i.key_pressed(egui::Key::Escape) && i.viewport().fullscreen == Some(true)) {
         ctx.send_viewport_cmd(ViewportCommand::Fullscreen(false));
     }
+    esc_closes_window(ctx);
     reveal_when_drawn(ctx);
     keep_above_hud(ctx);
 }
@@ -7756,6 +7799,7 @@ pub(crate) fn piece_window(ctx: &egui::Context, viewport: ViewportId, title: &st
         let Some(body) = body.take() else { return };
         egui::CentralPanel::default().frame(Frame::none().fill(OBSIDIAN)).show(ctx, body);
         HudApp::resize_grips(ctx);
+        esc_closes_window(ctx);
         reveal_when_drawn(ctx);
     });
     closed
@@ -7827,8 +7871,10 @@ pub(super) fn detached_title_bar(ui: &mut Ui, ctx: &egui::Context, title: &str) 
 /// then lies on top of it. (Sir, 2026-11-14: "I want to be able to drag the windows JAI
 /// creates"; only the letters of their titles took a drag.)
 pub(super) fn window_ground(ui: &Ui) {
-    let ground = ui.interact(ui.max_rect(), ui.id().with("window_ground"), Sense::drag());
-    if !ground.drag_started() {
+    let ground = ui.interact(ui.max_rect(), ui.id().with("window_ground"), Sense::click_and_drag());
+    // A double-click on its title row: large and back, as on an in-app block's header.
+    let title_row = ground.interact_pointer_pos().is_some_and(|at| at.y < ui.max_rect().top() + WINDOW_TITLE_ROW);
+    if !ground.drag_started() && !(ground.double_clicked() && title_row) {
         return;
     }
     // A press on one of the window's keys, sliders or lines of text is theirs: egui gives the
@@ -7836,8 +7882,29 @@ pub(super) fn window_ground(ui: &Ui) {
     // the click. (Seen live 2026-11-14: `[ CLOSE ]` did nothing in a window that had the focus.)
     let ctx = ui.ctx();
     let under: Vec<egui::Id> = ctx.interaction_snapshot(|s| s.contains_pointer.iter().copied().collect());
-    if !under.into_iter().any(|id| id != ground.id && ctx.read_response(id).is_some_and(|r| r.sense.click || r.sense.drag)) {
+    if under.into_iter().any(|id| id != ground.id && ctx.read_response(id).is_some_and(|r| r.sense.click || r.sense.drag)) {
+        return;
+    }
+    if ground.drag_started() {
         ctx.send_viewport_cmd(ViewportCommand::StartDrag);
+    } else {
+        let maximized = ctx.input(|i| i.viewport().maximized == Some(true));
+        ctx.send_viewport_cmd(ViewportCommand::Maximized(!maximized));
+    }
+}
+
+/// How far down a window of his own its title row reaches (points).
+const WINDOW_TITLE_ROW: f32 = 36.0;
+
+/// Esc in a window of his own closes it, as Esc closes the top in-app block, unless Esc only
+/// leaves a line he was typing in (focus as of the last frame: egui drops it on that same Esc)
+/// or a full screen (`paint_window_border`).
+fn esc_closes_window(ctx: &egui::Context) {
+    let typed = egui::Id::new("jai_window_typing").with(ctx.viewport_id());
+    let was_typing = ctx.data(|d| d.get_temp::<bool>(typed)).unwrap_or(false);
+    ctx.data_mut(|d| d.insert_temp(typed, ctx.memory(|m| m.focused().is_some())));
+    if ctx.viewport_id() != ViewportId::ROOT && !was_typing && ctx.input(|i| i.key_pressed(egui::Key::Escape) && i.viewport().fullscreen != Some(true)) {
+        ctx.send_viewport_cmd(ViewportCommand::Close);
     }
 }
 
@@ -8281,11 +8348,13 @@ pub(super) fn hud_block_window(ctx: &egui::Context, id: &str, title: &str, size:
         let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), crate::hud_style::HEADER_H), Sense::hover());
         let mid = row.center().y;
         // (Its tooltip names the words that close it: blocks answer to their name.)
-        let close_hint = format!("Close · say: \"close the {}\" · Ctrl+W: the block under the pointer", title.split(" // ").next().unwrap_or(title).trim().to_lowercase());
+        let name = title.split(" // ").next().unwrap_or(title).trim().to_lowercase();
+        let close_hint = format!("Close · say: \"close the {name}\" · Ctrl+W: the block under the pointer");
+        let pin_hint = format!("Pinned, it stays through \"close the windows\" and keeps its place (Ctrl+P, or say \"pin the {name}\")");
         let labels = [
             ("[ CLOSE ]", false, close_hint.as_str()),
             ("[ DETACH ]", false, "Open in its own window (say \"dock all windows\" to bring it back)"),
-            ("[ PIN ]", pinned, "Pinned, it stays through \"close the windows\" and keeps its place (Ctrl+P)"),
+            ("[ PIN ]", pinned, pin_hint.as_str()),
         ];
         // (A narrow block keeps its title whole and lets its keys go, [ PIN ] first: the menu
         // and Ctrl+P still pin. The keys are quiet until the pointer is over their block.)
@@ -8318,7 +8387,7 @@ pub(super) fn hud_block_window(ctx: &egui::Context, id: &str, title: &str, size:
         // (A click-only sense: a drag that begins here still moves the block.)
         let header = ui
             .interact(Rect::from_min_max(row.min, pos2(keys_left - 4.0, row.bottom())), area.with("title"), Sense::click())
-            .on_hover_text(format!("{}Drag to move, drag an edge to resize, double-click for large and back. Right-click: copy, pin, maximize, export, close. Esc or Ctrl+W close, Ctrl+G maximize, Ctrl+P pin, Ctrl+E export.", if cut { format!("{title}\n\n") } else { String::new() }));
+            .on_hover_text(format!("{}Drag to move, drag an edge to resize, double-click for large and back, fling it away to close. Right-click: copy, pin, maximize, export, close. Esc or Ctrl+W close, Ctrl+G maximize, Ctrl+P pin, Ctrl+E export.", if cut { format!("{title}\n\n") } else { String::new() }));
         if header.double_clicked() {
             header_maximize = true;
         }
@@ -8380,8 +8449,11 @@ pub(super) fn hud_block_window(ctx: &egui::Context, id: &str, title: &str, size:
                 let landed = Rect::from_min_size(home.min + (at - origin), home.size());
                 let velocity = ctx.input(|i| i.pointer.velocity());
                 crate::hud_dock::hold_once(id, landed);
-                // Let go while it moved: it is thrown, and glides on a little.
-                if released && !still && velocity.length() >= crate::hud_style::THROW_FROM {
+                // Let go while it moved: it is thrown, and glides on a little; flung away, it
+                // closes (and waits in the tray, so a slip of the hand loses nothing).
+                if released && !still && velocity.length() >= crate::hud_style::FLING_AWAY && !crate::hud_dock::is_pinned(id) {
+                    crate::hud_dock::begin_close(id);
+                } else if released && !still && velocity.length() >= crate::hud_style::THROW_FROM {
                     lock(&THROWN).insert(id.to_string(), (landed, velocity));
                 } else if released && !still {
                     // Let go across a bezel (or where no screen shows): it glides the rest of
@@ -8753,6 +8825,37 @@ fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
 const SEARCH_DIM: f32 = 0.22;
 /// How long `[ UNDO ]` stands after a change.
 const UNDO_CHIP_FOR: Duration = Duration::from_secs(6);
+
+/// "Show me around": the HUD's parts in the order the tour names them, a sentence each.
+pub const TOUR: [(&str, &str); 7] = [
+    ("emblem", "In the middle stands my emblem: that's me. It answers when I hear my name, and you can drag it anywhere."),
+    ("header", "Along the top runs the header. Its boxes open my views, the console and the list of changes."),
+    ("comms", "Below me, COMMS shows what I heard and what I answered. Click what I heard to put it right."),
+    ("board", "My answers open as blocks. Drag them, double-click a title for large, fling one away to close it."),
+    ("tray", "Blocks you put away wait in the tray at the bottom, closed ones for ten minutes."),
+    ("telemetry", "The bottom strip is your microphone: its level, its peak and how I listen."),
+    ("console", "And the text console is there when you would rather type than talk."),
+];
+/// The tour under way: when it began, and when each part's sentence starts.
+static TOUR_CUES: Mutex<Option<(Instant, Vec<(usize, f32)>)>> = Mutex::new(None);
+/// How long the light stays on the last part after its sentence began.
+const TOUR_LAST_SECS: f32 = 5.0;
+
+/// Starts the tour: its spoken line; the light moves from part to part as he says it.
+/// The tour's light round one part: a hairline with two faint rims outside it.
+fn tour_light(p: &egui::Painter, r: Rect, colour: Color32) {
+    for (grow, a) in [(6.0, 0.06f32), (3.0, 0.14), (0.0, 0.9)] {
+        p.rect_stroke(r.expand(grow), Rounding::ZERO, Stroke::new(1.0_f32, colour.gamma_multiply(a)));
+    }
+}
+
+pub fn start_tour() -> String {
+    let script: Vec<(usize, String)> = TOUR.iter().enumerate().map(|(k, (_, line))| (k, line.to_string())).collect();
+    let (line, cues) = crate::hud_board::walkthrough_schedule("Here's the tour, Sir.", &script, TOUR.len());
+    *lock(&TOUR_CUES) = Some((Instant::now(), cues));
+    refresh();
+    line
+}
 /// The margin between a block's frame and its content, on every side.
 const BLOCK_MARGIN: f32 = 12.0;
 /// The search bar's width (it sits centred under the header strip).
@@ -9197,6 +9300,30 @@ pub(crate) fn paint_finish(ctx: &egui::Context) {
     }
 }
 
+/// When the view last changed: the canvas behind the views rushes towards the middle and back
+/// for `VIEW_ZOOM_SECS` (the views play their own entrances; nothing with text is scaled).
+static VIEW_ZOOM: Mutex<Option<Instant>> = Mutex::new(None);
+const VIEW_ZOOM_SECS: f32 = 0.25;
+
+/// The canvas's scale about its centre in this frame of a view change (1: at rest).
+fn view_zoom(ctx: &egui::Context) -> f32 {
+    let Some(t) = lock(&VIEW_ZOOM).map(|at| at.elapsed().as_secs_f32() / VIEW_ZOOM_SECS).filter(|t| *t < 1.0 && motion_enabled()) else { return 1.0 };
+    ctx.request_repaint();
+    1.0 + 0.2 * (t * std::f32::consts::PI).sin()
+}
+
+/// How far the canvas has drifted against the pointer: a hundredth of the pointer's way from the
+/// home screen's centre (some 13 px at the edge of a 1440p screen), eased, in whole pixels; it
+/// settles back with the pointer away, and stays put with the animations off.
+fn canvas_drift(ctx: &egui::Context, home: Rect) -> Vec2 {
+    if !motion_enabled() {
+        return Vec2::ZERO;
+    }
+    let want = ctx.pointer_hover_pos().filter(|at| home.contains(*at)).map_or(Vec2::ZERO, |at| (home.center() - at) * 0.01);
+    let id = egui::Id::new("jai_canvas_drift");
+    vec2(ctx.animate_value_with_time(id.with(0), want.x, 0.6), ctx.animate_value_with_time(id.with(1), want.y, 0.6)).round()
+}
+
 /// The obsidian canvas: `#020408` with a radial vignette of the theme's colour in the centre
 /// (fading to black at the edges) and the 28 px dot matrix at 6 %.
 pub(crate) fn paint_canvas(ctx: &egui::Context) {
@@ -9205,8 +9332,12 @@ pub(crate) fn paint_canvas(ctx: &egui::Context) {
     painter.rect_filled(rect, Rounding::ZERO, OBSIDIAN);
     let mut mesh = egui::Mesh::default();
     let home = home_screen(ctx);
-    let centre = home.center();
-    let reach = home.size() * 0.75;
+    // Depth: the dots and the vignette drift a little against the pointer, in whole pixels so
+    // they stay sharp; the blocks stand still.
+    let drift = canvas_drift(ctx, home);
+    let centre = home.center() + drift;
+    let zoom = view_zoom(ctx);
+    let reach = home.size() * 0.75 * zoom;
     let vignette = vignette_for(crate::hud_board::active_colour());
     let mid = blend(vignette, OBSIDIAN, 0.55);
     mesh.colored_vertex(centre, vignette);
@@ -9229,11 +9360,12 @@ pub(crate) fn paint_canvas(ctx: &egui::Context) {
     let dot = Color32::from_white_alpha((255.0 * DOT_ALPHA) as u8);
     // Round the blocks the dots fade out: what they show stands out (Sir's choice of 2026-11-15).
     let blocks = crate::hud_dock::block_rects();
-    let mut y = rect.top() + DOT_SPACING / 2.0;
+    let mut y = rect.top() + DOT_SPACING / 2.0 + drift.y.rem_euclid(DOT_SPACING) - DOT_SPACING;
     while y < rect.bottom() {
-        let mut x = rect.left() + DOT_SPACING / 2.0;
+        let mut x = rect.left() + DOT_SPACING / 2.0 + drift.x.rem_euclid(DOT_SPACING) - DOT_SPACING;
         while x < rect.right() {
-            let at = pos2(x.round(), y.round());
+            let at = centre + (pos2(x, y) - centre) * zoom;
+            let at = pos2(at.x.round(), at.y.round());
             let fade = (blocks.iter().map(|b| b.distance_to_pos(at)).fold(f32::INFINITY, f32::min) / 48.0).clamp(0.0, 1.0);
             if fade > 0.0 {
                 dots.add_colored_rect(Rect::from_min_size(at, vec2(1.0, 1.0)), dot.gamma_multiply(fade));
@@ -10146,6 +10278,19 @@ mod tests {
         });
     }
 
+    /// The tour lighting the emblem, as "In the middle stands my emblem" is said.
+    #[test]
+    fn gallery_tour_light() {
+        let emblem = emblem_at_rest();
+        gallery("gallery_tour", GALLERY, 2, |ctx| {
+            egui::CentralPanel::default().frame(Frame::none()).show(ctx, |ui| {
+                let screen = ctx.screen_rect();
+                emblem.paint(&ui.painter_at(screen), screen);
+                tour_light(&ui.painter_at(screen), Rect::from_center_size(screen.center(), vec2(300.0, 300.0)), crate::hud_board::active_colour());
+            });
+        });
+    }
+
     #[test]
     fn gallery_idle_screen_and_startup() {
         use crate::startup_sequence::Kind;
@@ -10690,6 +10835,17 @@ mod tests {
     /// 2026-11-14, Sir: "Some animations are stuttery". As the desktop's background every
     /// frame at rest was held to twelve a second, also while his emblem was in plain sight:
     /// its rings went round in steps. Seen, he draws as the board does.
+    /// "Show me around": one sentence per part, said in order, each part lit as its sentence
+    /// starts.
+    #[test]
+    fn the_tour_lights_each_part_as_its_sentence_starts() {
+        let line = start_tour();
+        let (_, cues) = lock(&TOUR_CUES).take().unwrap();
+        assert_eq!(cues.iter().map(|(k, _)| *k).collect::<Vec<_>>(), (0..TOUR.len()).collect::<Vec<_>>());
+        assert!(cues.windows(2).all(|w| w[0].1 < w[1].1));
+        assert!(line.starts_with("Here's the tour, Sir.") && TOUR.iter().all(|(_, said)| line.contains(said)));
+    }
+
     #[test]
     fn seen_on_the_desktop_he_draws_as_smoothly_as_the_board() {
         let rest = rest_fps(false);
@@ -11115,7 +11271,7 @@ mod tests {
         // Animations off: a slow tick, whatever happens.
         assert_eq!(target_fps(false, true, true, 180.0), 8.0);
         // At rest: 30, even on a fast display with the pointer on the HUD.
-        assert_eq!(target_fps(true, false, true, 180.0), 30.0);
+        assert_eq!(target_fps(true, false, true, 180.0), 60.0);
         // Something moves while Sir is elsewhere (in a game): 60, the GPU is his.
         assert_eq!(target_fps(true, true, false, 180.0), 60.0);
         // He is at the HUD: the display's own rate, between 60 and `MAX_FPS`.
@@ -11251,7 +11407,7 @@ mod tests {
             let items = header_items(&HeaderState { voice: VoiceLock::of(lock_on, guests, known), ..HeaderState::default() }, "X", "X");
             assert!(items.iter().any(|i| i.id == "voice" && i.text == text && i.on == lit), "{lock_on} {guests} {known}");
         }
-        assert_eq!((rest_fps(false), rest_fps(true)), (30.0, 10.0));
+        assert_eq!((rest_fps(false), rest_fps(true)), (60.0, 10.0));
         let dictating = header_items(&HeaderState { dictating: true, ..HeaderState::default() }, "X", "X");
         assert!(dictating.iter().any(|i| i.id == "mic" && i.text == "MIC: DICTATING" && i.on));
         let measure = |t: &str| t.chars().count() as f32 * 6.0;

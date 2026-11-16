@@ -394,17 +394,23 @@ const PRE_GAIN_RMS: f32 = 0.089;
 /// The chain up to the reference transfer: the F0 flattening (`fish_zero_shot_tts::flatten_f0`,
 /// 35 % by default), stage 1 (24 kHz → 48 kHz, −0.55 st), a loudness pre-gain and stages 2-4.
 /// Returns 48 kHz audio.
-pub fn master_dry(input: &[f32], from: u32) -> Vec<f32> {
+pub fn master_dry(input: &[f32], from: u32, question: bool) -> Vec<f32> {
     // JAI's clauses are locked to his clip's median F0.
-    master_dry_to(input, from, crate::fish_zero_shot_tts::profile().map(|p| p.f0.median_hz))
+    master_dry_to(input, from, crate::fish_zero_shot_tts::profile().map(|p| p.f0.median_hz), question)
+}
+
+/// Whether a clause asks (its end rises: `fish_zero_shot_tts::QUESTION_RISE_ST`).
+pub fn is_question(clause: &str) -> bool {
+    clause.trim_end().trim_end_matches(['"', '\'', ')', '”']).ends_with('?')
 }
 
 /// `master_dry` with the F0 lock stated: `lock_to_hz` is the median F0 the finished clause
-/// should have (the reference clip's), None for no lock.
-pub fn master_dry_to(input: &[f32], from: u32, lock_to_hz: Option<f32>) -> Vec<f32> {
+/// should have (the reference clip's), None for no lock. `question`: its end rises.
+pub fn master_dry_to(input: &[f32], from: u32, lock_to_hz: Option<f32>, question: bool) -> Vec<f32> {
     // Stage 1 lowers the pitch after this stage: the lock aims that much higher.
     let target = lock_to_hz.filter(|hz| *hz > 0.0).map(|hz| hz / pitch_ratio());
-    let flat = crate::fish_zero_shot_tts::lock_f0(input, from, crate::fish_zero_shot_tts::f0_flatten(), target);
+    let rise = if question { crate::fish_zero_shot_tts::QUESTION_RISE_ST } else { 0.0 };
+    let flat = crate::fish_zero_shot_tts::lock_f0(input, from, crate::fish_zero_shot_tts::f0_flatten(), target, rise);
     let mut audio = pitch_lock(&flat, from);
     let level = crate::dsp::rms(&audio);
     if level > 1e-4 {
@@ -417,8 +423,8 @@ pub fn master_dry_to(input: &[f32], from: u32, lock_to_hz: Option<f32>) -> Vec<f
 
 /// The whole chain for one clause: `master_dry` and the reference transfer (stage 5: the clip's
 /// 128-band envelope and speech level). Returns 48 kHz audio.
-pub fn master(input: &[f32], from: u32) -> Vec<f32> {
-    let mut audio = master_dry(input, from);
+pub fn master(input: &[f32], from: u32, question: bool) -> Vec<f32> {
+    let mut audio = master_dry(input, from, question);
     crate::fish_zero_shot_tts::transfer_clause(&mut audio, MASTER_RATE);
     audio
 }
@@ -703,7 +709,7 @@ mod tests {
                 ((TAU * 124.0 * t).sin() * 0.3 + (TAU * 2600.0 * t).sin() * 0.05) * (1.0 - (TAU * 3.0 * t).cos()) * 0.5
             })
             .collect();
-        let out = master(&input, 24_000);
+        let out = master(&input, 24_000, false);
         let expected = 24_000.0 / pitch_ratio();
         assert!((out.len() as f32 - expected).abs() < 40.0, "{}", out.len());
         assert!(out.iter().all(|s| s.is_finite() && s.abs() <= 0.9));

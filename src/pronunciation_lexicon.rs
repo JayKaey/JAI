@@ -56,6 +56,10 @@ pub fn clock(h: u32, m: u32) -> String {
     let hour = two_digits(h12);
     match m {
         0 => format!("{hour} {suffix}"),
+        // (As "what time is it" says them: `brain::spoken_time`.)
+        15 => format!("a quarter past {hour} {suffix}"),
+        30 => format!("half past {hour} {suffix}"),
+        45 => format!("a quarter to {}", clock((h + 1) % 24, 0)),
         1..=9 => format!("{hour} oh {} {suffix}", ONES[m as usize]),
         _ => format!("{hour} {} {suffix}", two_digits(m)),
     }
@@ -339,10 +343,113 @@ fn homographs(s: &str) -> String {
     READ_PAST.replace_all(&out, "${1}${2} red").into_owned()
 }
 
+/// A sentence each, with what ends it and the space after.
+static SENTENCE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?s).+?(?:[.!?]+(?:\s+|$)|$)").unwrap());
+static DE_TIME: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\b([01]?\d|2[0-3]):([0-5]\d)(\s?Uhr\b)?").unwrap());
+static DE_UNITS: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| {
+    [
+        (r"\s?°\s?C\b", " Grad"),
+        (r"(\d)\s?%", "$1 Prozent"),
+        (r"\s?%", " Prozent"),
+        (r"(\d+(?:[.,]\d+)?)\s?(?:EUR\b|€)", "$1 Euro"),
+        (r"(?:\bEUR|€)\s?(\d+(?:[.,]\d+)?)", "$1 Euro"),
+        (r"\s*&\s*", " und "),
+    ]
+    .into_iter()
+    .map(|(p, r)| (Regex::new(p).expect("valid unit pattern"), r))
+    .collect()
+});
+
+/// A time as a German sentence says it, in digits (eSpeak reads them in German inside a German
+/// sentence): 10:30 → "halb 11", 9:15 → "Viertel nach 9", 14:20 → "14 Uhr 20".
+fn de_clock(h: u32, m: u32) -> String {
+    let h12 = |h: u32| match h % 12 {
+        0 => 12,
+        x => x,
+    };
+    match (h, m) {
+        (0, 0) => "Mitternacht".into(),
+        (_, 0) => format!("{h} Uhr"),
+        (_, 15) => format!("Viertel nach {}", h12(h)),
+        (_, 30) => format!("halb {}", h12(h + 1)),
+        (_, 45) => format!("Viertel vor {}", h12(h + 1)),
+        _ => format!("{h} Uhr {m}"),
+    }
+}
+
+/// A German sentence's times and units in German, before the English rules see them.
+fn german(s: &str) -> String {
+    let mut s = DE_TIME
+        .replace_all(s, |c: &Captures| {
+            let m = c.get(0).expect("whole match");
+            // ("1:00:00" is a duration.)
+            if s[..m.start()].ends_with(':') || s[m.end()..].starts_with(':') {
+                return m.as_str().to_string();
+            }
+            de_clock(c[1].parse().unwrap_or(0), c[2].parse().unwrap_or(0))
+        })
+        .into_owned();
+    for (re, rep) in DE_UNITS.iter() {
+        s = re.replace_all(&s, *rep).into_owned();
+    }
+    s
+}
+
+/// His apps' and games' titles a reader would stumble over, as they are said ("Civilization
+/// VI" → "Civilization six"). Learnt whenever the apps are indexed (`learn_titles`).
+static TITLES: std::sync::RwLock<Vec<(String, String)>> = std::sync::RwLock::new(Vec::new());
+
+/// A title's spoken form when it ends on a Roman numeral; None when it reads as it stands.
+fn title_spoken(title: &str) -> Option<String> {
+    const ROMAN: [&str; 14] = ["II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X", "XI", "XII", "XIII", "XIV", "XV"];
+    let (head, last) = title.trim().rsplit_once(' ')?;
+    let n = ROMAN.iter().position(|r| *r == last)? as u32 + 2;
+    Some(format!("{head} {}", two_digits(n)))
+}
+
+/// Learns the titles of his apps and games that need another spelling to be said right.
+pub fn learn_titles(titles: impl IntoIterator<Item = String>) {
+    *TITLES.write().unwrap_or_else(|e| e.into_inner()) = learnable(titles);
+}
+
+/// The titles to learn, with how each is said; the longest first ("Final Fantasy XIV" before a
+/// "Final Fantasy X").
+fn learnable(titles: impl IntoIterator<Item = String>) -> Vec<(String, String)> {
+    let mut learnt: Vec<(String, String)> = titles.into_iter().filter_map(|t| title_spoken(&t).map(|said| (t, said))).collect();
+    learnt.sort_by_key(|(t, _)| std::cmp::Reverse(t.len()));
+    learnt.dedup();
+    learnt
+}
+
+/// The titles he knows, said as they are said.
+fn titles(s: &str) -> String {
+    titles_with(&TITLES.read().unwrap_or_else(|e| e.into_inner()), s)
+}
+
+fn titles_with(learnt: &[(String, String)], s: &str) -> String {
+    let mut s = s.to_string();
+    for (title, said) in learnt.iter() {
+        let mut from = 0;
+        while let Some(at) = s[from..].find(title.as_str()).map(|i| i + from) {
+            let end = at + title.len();
+            // (Whole words only: "GTA V" is not in "GTA Vice City".)
+            if s[..at].ends_with(char::is_alphanumeric) || s[end..].starts_with(char::is_alphanumeric) {
+                from = end;
+            } else {
+                s.replace_range(at..end, said);
+                from = at + said.len();
+            }
+        }
+    }
+    s
+}
+
 impl PronunciationLexicon {
     /// The text as the voice should say it.
     pub fn normalize_for_speech(text: &str) -> String {
-        let mut s = homographs(&paths(&taught(text)));
+        // Times and units follow the language of their sentence.
+        let text: String = SENTENCE.find_iter(text).map(|m| if crate::phonemizer::sentence_is_german(m.as_str()) { german(m.as_str()) } else { m.as_str().to_string() }).collect();
+        let mut s = homographs(&paths(&taught(&titles(&text))));
         for (re, rep) in NAMES.iter() {
             s = re.replace_all(&s, *rep).into_owned();
         }
@@ -425,7 +532,18 @@ mod tests {
     #[test]
     fn times_numbers_and_symbols() {
         assert_eq!(say("Lesson at 15:00, bus at 07:50, lunch 12:00"), "Lesson at three P M, bus at seven fifty A M, lunch noon");
-        assert_eq!(say("meeting at 9h30"), "meeting at nine thirty A M");
+        assert_eq!(say("meeting at 9h30"), "meeting at half past nine A M");
+        assert_eq!(title_spoken("Civilization VI").as_deref(), Some("Civilization six"));
+        assert_eq!(title_spoken("Final Fantasy XIV").as_deref(), Some("Final Fantasy fourteen"));
+        assert_eq!((title_spoken("Battlefield 2042"), title_spoken("Portal")), (None, None));
+        let learnt = learnable(["GTA V".to_string(), "Civilization VI".to_string(), "Portal".to_string()]);
+        assert_eq!(learnt.len(), 2, "only what needs another spelling");
+        assert_eq!(titles_with(&learnt, "Civilization VI and GTA V, not GTA Vice City."), "Civilization six and GTA five, not GTA Vice City.");
+        assert_eq!(say("at 10:15, 22:45 and 11:45"), "at a quarter past ten A M, a quarter to eleven P M and a quarter to noon");
+        // A German sentence keeps its times and units German.
+        assert_eq!(say("Der Bus fährt um 10:30 Uhr, es sind 22°C und 85% Akku."), "Der Bus fährt um halb 11, es sind 22 Grad und 85 Prozent Akku.");
+        assert_eq!(say("Die Stunde beginnt um 9:15 und kostet 5€ & mehr."), "Die Stunde beginnt um Viertel nach 9 und kostet 5 Euro und mehr.");
+        assert_eq!(say("Lunch at 12:30. Der Termin ist um 14:20."), "Lunch at half past twelve P M. Der Termin ist um 14 Uhr 20.");
         assert_eq!(say("it took 8h and 1:00:00 total"), "it took 8 hours and 1:00:00 total");
         assert_eq!(say("22°C, 85% load, 30 EUR, 5€ & tips"), "22 degrees Celsius, 85 percent load, 30 Euros, 5 Euros and tips");
         assert_eq!(say("read/write access, 25 Wh/kg"), "read or write access, 25 Wh/kg");

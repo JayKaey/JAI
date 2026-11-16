@@ -118,7 +118,11 @@ windows = { version = "0.54", features = [
     # WinRT: the system media session (what is playing, play/pause/skip per app).
     "Foundation",
     "Foundation_Collections",
+    # WinRT: Windows' own OCR, called without PowerShell ("what's on my screen").
+    "Graphics_Imaging",
     "Media_Control",
+    "Media_Ocr",
+    "Storage_Streams",
     "Win32_Foundation",
     "Win32_Graphics_Dwm",
     "Win32_Graphics_Gdi",

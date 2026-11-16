@@ -806,8 +806,7 @@ const SPEECH_LEAD_SECS: f32 = 0.9;
 
 /// The spoken walk-through of `script` (at most `max` blocks) and, per block, when its sentence
 /// starts (seconds after the reply begins) so the block can pulse with it.
-pub fn walkthrough_schedule(script: &[(usize, String)], max: usize) -> (String, Vec<(usize, f32)>) {
-    let intro = "Here's the walk-through, Sir.";
+pub fn walkthrough_schedule(intro: &str, script: &[(usize, String)], max: usize) -> (String, Vec<(usize, f32)>) {
     let mut line = intro.to_string();
     let mut at = SPEECH_LEAD_SECS + intro.split_whitespace().count() as f32 / WORDS_PER_SEC;
     let mut cues = Vec::new();
@@ -1040,11 +1039,11 @@ pub fn definitions() -> Vec<Value> {
         "type": "function",
         "function": {
             "name": TOOL,
-            "description": "Your HUD board of blocks (notes, charts, figures, photos, maps). research (topic): a research agent reads 20-50 web sources into a report, announced when done; present: shows it; recall (topic): an earlier report. show_map (place): a dark map with photos, for a venue you picked when Sir asks where to go. maximize / minimize / pin / copy / export (target: a block or words of its header; export format markdown or json), flip_note, find (target: words in every block; empty clears), tidy (windows in a grid around the orb), walkthrough ('walk me through it'), close (target: an in-app block such as 'feature lab'; none: the board), remove (one block), clear (everything leaves, screen stays), sign_off (screen down), restore ('bring back the screen'), wake, status. Questions about the board are answered from the live context.",
+            "description": "Your HUD board of blocks (notes, charts, figures, photos, maps). research (topic): a research agent reads 20-50 web sources into a report, announced when done; present: shows it; recall (topic): an earlier report. show_map (place): a dark map with photos, for a venue you picked when Sir asks where to go. maximize / minimize / pin / copy / export (target: a block or words of its header; export format markdown or json), flip_note, find (target: words in every block; empty clears), tidy (windows in a grid around the orb), walkthrough ('walk me through it'), tour ('show me around': the HUD's own parts, one by one), close (target: an in-app block such as 'feature lab'; none: the board), remove (one block), clear (everything leaves, screen stays), sign_off (screen down), restore ('bring back the screen'), wake, status. Questions about the board are answered from the live context.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "action": {"type": "string", "enum": ["research", "present", "walkthrough", "recall", "show_map", "maximize", "minimize", "flip_note", "pin", "copy", "export", "find", "tidy", "close", "remove", "clear", "sign_off", "wake", "restore", "status"]},
+                    "action": {"type": "string", "enum": ["research", "present", "walkthrough", "tour", "recall", "show_map", "maximize", "minimize", "flip_note", "pin", "copy", "export", "find", "tidy", "close", "remove", "clear", "sign_off", "wake", "restore", "status"]},
                     "topic": {"type": "string", "description": "research / recall: the subject."},
                     "place": {"type": "string", "description": "show_map: the place or venue."},
                     "target": {"type": "string", "description": "maximize / close / remove / pin / copy / export: which block. find: the words to look for."},
@@ -1128,6 +1127,7 @@ async fn run_action(tools: &ToolContext, args: &Value, action: &str) -> Result<S
             crate::board_research::start(tools.clone(), topic.to_string());
             Ok(spoken(format!("Research agent started: {topic}"), format!("Checking. Research agent's on {topic}, Sir. I'll chime when the report's assembled.")))
         }
+        "tour" => Ok(spoken(format!("HUD tour: {} parts", crate::gui::TOUR.len()), crate::gui::start_tour())),
         "walkthrough" | "walk_through" | "walk" => {
             // On the board first (the waiting report, else the newest saved one).
             if !is_active() && present_pending().is_none() {
@@ -1136,7 +1136,7 @@ async fn run_action(tools: &ToolContext, args: &Value, action: &str) -> Result<S
                 }
             }
             let script = walkthrough().filter(|s| !s.is_empty()).ok_or("There's nothing on the board to walk you through yet, Sir.")?;
-            let (line, cues) = walkthrough_schedule(&script, WALKTHROUGH_BLOCKS);
+            let (line, cues) = walkthrough_schedule("Here's the walk-through, Sir.", &script, WALKTHROUGH_BLOCKS);
             // Each block pulses as his sentence about it begins.
             tokio::spawn(async move {
                 let t0 = tokio::time::Instant::now();
@@ -3690,13 +3690,13 @@ mod tests {
     #[test]
     fn the_walk_through_pulses_each_block_as_its_sentence_starts() {
         let script = vec![(0, "Quest 3 costs 499 dollars".to_string()), (2, "".to_string()), (3, "About 20 million headsets were sold.".to_string()), (5, "Steam shows the Quest 2 ahead".to_string())];
-        let (line, cues) = walkthrough_schedule(&script, 7);
+        let (line, cues) = walkthrough_schedule("Here's the walk-through, Sir.", &script, 7);
         assert!(line.starts_with("Here's the walk-through, Sir. Quest 3 costs 499 dollars. About 20 million"), "{line}");
         assert!(line.ends_with("Quest 2 ahead."));
         assert_eq!(cues.iter().map(|c| c.0).collect::<Vec<_>>(), [0, 3, 5], "empty sentences are skipped");
         assert!(cues.windows(2).all(|w| w[1].1 > w[0].1), "in speaking order");
         assert!(cues[0].1 > SPEECH_LEAD_SECS, "after the intro");
-        let (_, capped) = walkthrough_schedule(&script, 1);
+        let (_, capped) = walkthrough_schedule("Intro.", &script, 1);
         assert_eq!(capped.len(), 1);
     }
 

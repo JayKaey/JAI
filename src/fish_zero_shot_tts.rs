@@ -354,22 +354,16 @@ pub fn f0_stats(track: &PitchTrack) -> Option<F0Stats> {
 }
 
 /// Layer C: compresses the F0 movement around the clause's median by `amount` (0 = unchanged,
-/// 0.35 = 35 % flatter) with TD-PSOLA, keeping the duration. Unvoiced sound passes through.
-pub fn flatten_f0(input: &[f32], rate: u32, amount: f32) -> Vec<f32> {
-    reshape_f0(input, rate, amount, 1.0)
+/// 0.35 = 35 % flatter) with TD-PSOLA, keeping the duration, and lifts a question's end by
+/// `rise_st`. Unvoiced sound passes through.
+pub fn flatten_f0(input: &[f32], rate: u32, amount: f32, rise_st: f32) -> Vec<f32> {
+    reshape_with(input, rate, amount, rise_st, |_| 1.0)
 }
 
-/// TD-PSOLA on the pitch alone: the F0 movement around the clause's median is compressed by
-/// `amount` and the whole contour moved by `ratio` (0.8 = a major third lower). Duration and
-/// the spectral envelope stay — the vowels keep their formants, which a resampling shift drags
-/// along with the pitch. Unvoiced sound passes through.
-pub fn reshape_f0(input: &[f32], rate: u32, amount: f32, ratio: f32) -> Vec<f32> {
-    let ratio = ratio.clamp(0.5, 2.0);
-    if amount <= 0.0 && (ratio - 1.0).abs() < 1e-3 {
-        return input.to_vec();
-    }
-    reshape_with(input, rate, amount, |_| ratio)
-}
+/// How far a question's last syllables rise (semitones): the flattening lets go over the
+/// clause's last `RISE_TAIL_SECS` and the voice glides up this much by its end.
+pub const QUESTION_RISE_ST: f32 = 1.5;
+const RISE_TAIL_SECS: f32 = 0.4;
 
 /// How much of the distance between a JAI clause's median F0 and the clip's the lock closes
 /// (1 = every clause exactly on the clip's median; a little less keeps a trace of the
@@ -389,16 +383,20 @@ pub fn lock_step(clause_hz: f32, target_hz: f32) -> f32 {
 
 /// Layer C for the JAI voice: the flattening, and with `target_hz` (the clip's median F0 as
 /// this stage must produce it) the F0 lock — the clause's whole contour moved so that its
-/// median sits on the clip's. One pitch track serves both.
-pub fn lock_f0(input: &[f32], rate: u32, amount: f32, target_hz: Option<f32>) -> Vec<f32> {
+/// median sits on the clip's. One pitch track serves both. `rise_st`: a question's end rise
+/// (`QUESTION_RISE_ST`; 0 for a statement).
+pub fn lock_f0(input: &[f32], rate: u32, amount: f32, target_hz: Option<f32>, rise_st: f32) -> Vec<f32> {
     match target_hz {
-        Some(target) => reshape_with(input, rate, amount, |clause| lock_step(clause.median_hz, target)),
-        None => flatten_f0(input, rate, amount),
+        Some(target) => reshape_with(input, rate, amount, rise_st, |clause| lock_step(clause.median_hz, target)),
+        None => flatten_f0(input, rate, amount, rise_st),
     }
 }
 
-/// `reshape_f0` with the pitch step chosen from the clause's own F0 statistics.
-pub fn reshape_with(input: &[f32], rate: u32, amount: f32, step: impl Fn(&F0Stats) -> f32) -> Vec<f32> {
+/// TD-PSOLA on the pitch alone: the F0 movement around the clause's median is compressed by
+/// `amount` and the whole contour moved by the step chosen from the clause's own F0 statistics
+/// (0.8 = a major third lower). Duration and the spectral envelope stay: the vowels keep their
+/// formants, which a resampling shift drags along with the pitch.
+pub fn reshape_with(input: &[f32], rate: u32, amount: f32, rise_st: f32, step: impl Fn(&F0Stats) -> f32) -> Vec<f32> {
     let n = input.len();
     if n < rate as usize / 5 {
         return input.to_vec();
@@ -406,7 +404,7 @@ pub fn reshape_with(input: &[f32], rate: u32, amount: f32, step: impl Fn(&F0Stat
     let track = pitch_track(input, rate);
     let Some(stats) = f0_stats(&track) else { return input.to_vec() };
     let ratio = step(&stats).clamp(0.5, 2.0);
-    if amount <= 0.0 && (ratio - 1.0).abs() < 1e-3 {
+    if amount <= 0.0 && (ratio - 1.0).abs() < 1e-3 && rise_st <= 0.0 {
         return input.to_vec();
     }
     let hop = track.hop.max(1);
@@ -414,7 +412,13 @@ pub fn reshape_with(input: &[f32], rate: u32, amount: f32, step: impl Fn(&F0Stat
         let k = (i / hop).min(track.f0.len().saturating_sub(1));
         track.f0.get(k).copied().unwrap_or(0.0)
     };
-    let target = |f: f32| -> f32 { ratio * stats.median_hz * 2f32.powf(semitones(f, stats.median_hz) * (1.0 - amount.clamp(0.0, 1.0)) / 12.0) };
+    let tail = (RISE_TAIL_SECS * rate as f32) as usize;
+    let target = |f: f32, at: usize| -> f32 {
+        // A question's end: the flattening lets go and the voice glides up.
+        let end = if rise_st > 0.0 { ((at + tail) as f32 - n as f32) / tail as f32 } else { 0.0 }.clamp(0.0, 1.0);
+        let flat = amount.clamp(0.0, 1.0) * (1.0 - end);
+        ratio * stats.median_hz * 2f32.powf((semitones(f, stats.median_hz) * (1.0 - flat) + rise_st * end * end) / 12.0)
+    };
     // Analysis marks: pitch-synchronous in voiced runs (snapped to the waveform's peaks), every
     // 5 ms elsewhere. (position, half-width, voiced)
     let unvoiced_step = (rate as usize / 200).max(8);
@@ -457,7 +461,7 @@ pub fn reshape_with(input: &[f32], rate: u32, amount: f32, step: impl Fn(&F0Stat
             out[dst as usize] += input[src as usize] * w;
             weight[dst as usize] += w;
         }
-        let step = if voiced { rate as f32 / target(f0_at(a)).max(F0_MIN * 0.75) } else { half as f32 };
+        let step = if voiced { rate as f32 / target(f0_at(a), a).max(F0_MIN * 0.75) } else { half as f32 };
         s += step.max(4.0);
     }
     for (o, w) in out.iter_mut().zip(&weight) {
@@ -853,7 +857,7 @@ pub fn candidate_blends() -> Vec<String> {
 pub(crate) fn synth_dry(kokoro: &mut crate::tts::Kokoro, phonemizer: &crate::phonemizer::Phonemizer, text: &str, voice: &str, speed: f32, lock_to_hz: Option<f32>) -> Result<Vec<f32>, String> {
     let ipa = phonemizer.phonemize(&crate::tts::normalize_for_speech(text));
     let audio = kokoro.synthesize(&ipa, voice, crate::jai_voice_dsp::synthesis_speed(speed))?;
-    Ok(crate::jai_voice_dsp::master_dry_to(&audio, crate::tts::KOKORO_RATE, lock_to_hz))
+    Ok(crate::jai_voice_dsp::master_dry_to(&audio, crate::tts::KOKORO_RATE, lock_to_hz, crate::jai_voice_dsp::is_question(text)))
 }
 
 /// What another setting must be closer by before it replaces the calibrated one: the voice Sir
@@ -1124,7 +1128,7 @@ mod tests {
         let contour = |t: f32| 125.0 * 2f32.powf(0.27 * (TAU * 1.5 * t).sin());
         let x = vowel(2.0, R, contour);
         let before = f0_stats(&pitch_track(&x, R)).unwrap();
-        let y = flatten_f0(&x, R, 0.35);
+        let y = flatten_f0(&x, R, 0.35, 0.0);
         assert_eq!(y.len(), x.len(), "same duration");
         assert!(y.iter().all(|s| s.is_finite()));
         let after = f0_stats(&pitch_track(&y, R)).unwrap();
@@ -1134,7 +1138,7 @@ mod tests {
         let level = crate::dsp::rms(&y) / crate::dsp::rms(&x);
         assert!((0.85..1.15).contains(&level), "loudness kept: {level}");
         // Off: bit-exact.
-        assert_eq!(flatten_f0(&x, R, 0.0), x);
+        assert_eq!(flatten_f0(&x, R, 0.0, 0.0), x);
     }
 
     #[test]
@@ -1143,7 +1147,7 @@ mod tests {
         let contour = |t: f32| 105.5 * 2f32.powf(0.08 * (TAU * 1.2 * t).sin());
         let x = vowel(2.0, R, contour);
         let before = f0_stats(&pitch_track(&x, R)).unwrap();
-        let y = lock_f0(&x, R, 0.0, Some(115.0));
+        let y = lock_f0(&x, R, 0.0, Some(115.0), 0.0);
         assert_eq!(y.len(), x.len(), "same duration");
         let after = f0_stats(&pitch_track(&y, R)).unwrap();
         // Nine tenths of the way to the clip: within a fifth of a semitone of it.
@@ -1153,12 +1157,32 @@ mod tests {
         // A clause already on the clip's median is left alone, bit for bit.
         let on_it = vowel(1.0, R, |_| 115.0);
         let median = f0_stats(&pitch_track(&on_it, R)).unwrap().median_hz;
-        assert_eq!(lock_f0(&on_it, R, 0.0, Some(median)), on_it);
+        assert_eq!(lock_f0(&on_it, R, 0.0, Some(median), 0.0), on_it);
         // No clip: the flattening alone. A wild measurement is never followed further than 2.5 st.
-        assert_eq!(lock_f0(&x, R, 0.0, None), x);
+        assert_eq!(lock_f0(&x, R, 0.0, None, 0.0), x);
         assert!((semitones(lock_step(60.0, 115.0), 1.0) - F0_LOCK_MAX_ST).abs() < 1e-3);
         assert!((semitones(lock_step(100.0, 115.0), 1.0) - semitones(115.0, 100.0) * F0_LOCK).abs() < 1e-3);
         assert_eq!((lock_step(0.0, 115.0), lock_step(115.0, 0.0)), (1.0, 1.0));
+    }
+
+    /// A question keeps its rise: the flattening lets go at its end and the voice glides up;
+    /// a statement's end stays level.
+    #[test]
+    fn a_question_rises_at_its_end() {
+        let x = vowel(1.5, R, |_| 115.0);
+        let f0_in = |y: &[f32], from: f32, to: f32| {
+            let t = pitch_track(y, R);
+            let frame = |s: f32| ((s * R as f32) as usize / t.hop.max(1)).min(t.f0.len());
+            let voiced: Vec<f32> = t.f0[frame(from)..frame(to)].iter().copied().filter(|f| *f > 0.0).collect();
+            voiced.iter().sum::<f32>() / voiced.len().max(1) as f32
+        };
+        let asked = lock_f0(&x, R, 0.35, Some(115.0), QUESTION_RISE_ST);
+        let told = lock_f0(&x, R, 0.35, Some(115.0), 0.0);
+        assert_eq!(asked.len(), x.len(), "same duration");
+        let rise = semitones(f0_in(&asked, 1.38, 1.46), f0_in(&asked, 0.2, 0.8));
+        assert!(rise > 0.6 && rise < QUESTION_RISE_ST + 0.3, "the end rises: {rise:.2} st");
+        assert!(semitones(f0_in(&told, 1.38, 1.46), f0_in(&told, 0.2, 0.8)).abs() < 0.3, "a statement stays level");
+        assert!(semitones(f0_in(&asked, 0.2, 0.8), 115.0).abs() < 0.3, "only the end moves");
     }
 
     #[test]

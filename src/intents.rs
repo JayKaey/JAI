@@ -990,6 +990,10 @@ static FOCUS_STOP: LazyLock<Regex> = LazyLock::new(|| {
 static COPY_THAT: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(?:copy (?:that|this|it)(?: (?:to|into) (?:the |my )?clipboard)?|copy (?:your|the) (?:answer|reply|last answer)(?: (?:to|into) (?:the |my )?clipboard)?|put (?:that|it) (?:in|into|on) (?:the |my )?clipboard|kopier das|kopiere das|kopier es|in die zwischenablage)$")
 });
+/// "Copy the text of this window", "kopier den Text vom Bildschirm": read by OCR onto the clipboard.
+static COPY_TEXT: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"^(?:copy (?:the |all the )?text (?:of|from|in|on) (?:this|the|my) (window|screen|monitor)|kopier(?:e)? (?:den |alle[nr]? )?text (?:aus dem|aus diesem|vom|von diesem|auf dem|auf meinem) (fenster|bildschirm|monitor))$")
+});
 static NETWORK: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(?:am i online|are we online|are we connected|is (?:my |the )?internet (?:working|down|up|ok|okay)|check (?:my |the )?(?:internet|connection|network|wifi|wlan)(?: connection)?|hows? my (?:internet|connection|network|wifi)|how is my (?:internet|connection|network)|what(?:s| is) my (?:public )?ip(?: address)?|ping|(?:(?:show|check|give|tell)(?: me)? (?:the |my )?|(?:whats|what is) (?:the |my )?)?(?:network|internet|connection) status|bin ich online|sind wir online|geht (?:mein |das )?internet|internet check|(?:zeig(?:e)?(?: mir)? (?:den |meinen )?)?netzwerkstatus|wie ist meine verbindung|wie ist mein internet)$")
 });
@@ -1222,6 +1226,10 @@ fn assistant_command(s: &str, original: &str) -> Option<Intent> {
     }
     if COPY_THAT.is_match(s) {
         return tool("clipboard", json!({ "action": "write", "from_last_reply": true }));
+    }
+    if let Some(c) = COPY_TEXT.captures(s) {
+        let window = c.get(1).or(c.get(2)).is_some_and(|m| matches!(m.as_str(), "window" | "fenster"));
+        return tool("inspect_screen_or_selection", if window { json!({ "mode": "copy_text" }) } else { json!({ "mode": "copy_text", "target_monitor": "primary" }) });
     }
     if NETWORK.is_match(s) {
         return tool("network_status", json!({}));
@@ -4566,6 +4574,14 @@ pub fn parse_as_said(text: &str) -> Option<Intent> {
     if s.is_empty() {
         return None;
     }
+    // "Go on": what he was cut off saying (talked over, stopped) half a minute ago or less,
+    // from the start of that sentence. (Bare "continue" and "weiter" resume the music.)
+    static GO_ON: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:go on|carry on|go on talking|keep talking|finish what you were saying|what were you saying|sprich weiter|red weiter|rede weiter|erzähl weiter)$"));
+    if GO_ON.is_match(&s) {
+        if let Some(rest) = crate::tts::cut_off(std::time::Duration::from_secs(30)) {
+            return Some(Intent::Answer(rest));
+        }
+    }
     // "Soll ich Firefox schließen?": he asks himself, he tells nobody to.
     static ASKS_HIMSELF: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:soll|sollte|sollen|muss|müsste|darf)\s+ich\b|^(?:should|shall|must)\s+i\b"));
     if ASKS_HIMSELF.is_match(&s) {
@@ -4870,6 +4886,11 @@ static BOARD_PRESENT: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(?:(?:yes|yeah|yep|sure|ja)\s+)?(?:go ahead\s+(?:and\s+)?)?(?:present|show|put up|bring up|pull up|display|put)\s+(?:me\s+)?(?:the|that|your|it)?\s*(?:report|it)(?:\s+(?:up|on (?:the )?(?:screen|board|hud)))?(?:\s+and walk me through it)?$|^walk me through (?:it|the report)$|^(?:zeig|zeige)\s+(?:mir\s+)?(?:den|deinen)?\s*bericht$")
 });
 static BOARD_WALK: LazyLock<Regex> = LazyLock::new(|| re(r"\bwalk\s+(?:me|us)\s+through\s+(?:it|that|this|the report|the board|the blocks)\b|\bgo\s+through\s+(?:it|the report|the board)\s+with\s+me\b|^(?:führ|fuehr)\s+mich\s+durch"));
+/// "Show me around (the HUD)", "give me a tour", "zeig mir alles", "führ mich herum". (Not
+/// "zeig mir alles über …": that is a question.)
+static HUD_TOUR: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"^(?:(?:can|could|would|will)\s+you\s+)?(?:show\s+me\s+around|give\s+me\s+a\s+(?:quick\s+)?tour|take\s+me\s+on\s+a\s+tour)(?:\s+(?:of\s+)?(?:the\s+|your\s+)?(?:hud|interface|screen|here))?$|^zeig\s+mir\s+alles$|^(?:führ|fuehr)\s+mich\s+herum$|^(?:mach|gib\s+mir)\s+(?:eine|einen)\s+(?:tour|führung|rundgang)$")
+});
 static BOARD_RECALL: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(?:bring up|pull up|show me|show|open|put up|get)\s+(?:that|the|my|your)\s+(.+?)\s+report(?:\s+(?:again|from (?:earlier|yesterday|before)|(?:that\s+)?you\s+(?:gave|made|did|showed)\s+(?:me\s+)?(?:earlier|before|yesterday)?))*$")
 });
@@ -4934,6 +4955,10 @@ pub fn board_command(text: &str, active: bool, spotlight: bool) -> Option<Intent
     if let Some(action) = crate::intent_engine::close_command(text) {
         return Some(Intent::Silent(action));
     }
+    // "Show me around": the HUD's own parts, one by one, each lit as he names it.
+    if HUD_TOUR.is_match(&s) {
+        return tool(json!({ "action": "tour" }));
+    }
     // "Walk me through it" (also "yes, put it up and walk me through it"): narrated block by block.
     if BOARD_WALK.is_match(&s) {
         return tool(json!({ "action": "walkthrough" }));
@@ -4968,7 +4993,8 @@ pub fn board_command(text: &str, active: bool, spotlight: bool) -> Option<Intent
             return tool(json!({ "action": "find", "target": words }));
         }
     }
-    if let Some(c) = BLOCK_MENU.captures(&s) {
+    // ("Copy the text of this window" is his window, read by OCR: not a block.)
+    if let Some(c) = BLOCK_MENU.captures(&s).filter(|_| !COPY_TEXT.is_match(&s)) {
         let verb = &c[1];
         let target = c[2].trim().trim_start_matches("the ").trim();
         // Only what is a block: a board noun, a block header's words or an open in-app window;
@@ -6105,6 +6131,10 @@ mod tests {
         assert_eq!(tool("Engage focus mode").unwrap().1["minutes"], 25.0);
         assert_eq!(tool("Stop focus mode").unwrap().1["action"], "stop");
         assert_eq!(name("Copy that"), Some("clipboard"));
+        assert_eq!(tool("Copy the text of this window").unwrap(), ("inspect_screen_or_selection", json!({"mode": "copy_text"})));
+        assert_eq!(tool("Copy the text on my screen.").unwrap().1, json!({"mode": "copy_text", "target_monitor": "primary"}));
+        assert_eq!(tool("Kopier den Text aus dem Fenster").unwrap().1, json!({"mode": "copy_text"}));
+        assert_eq!(name("Copy the text of this window into an email"), None);
         assert_eq!(name("Am I online?"), Some("network_status"));
         assert_eq!(name("What's my IP address"), Some("network_status"));
         assert_eq!(name("What's slowing down my PC?"), Some("top_processes"));
@@ -6387,6 +6417,12 @@ mod tests {
             assert_eq!(parse(text), walk, "{text}");
         }
         assert_eq!(parse("Please present the report."), Some(Intent::Tool { name: "hud_board", args: json!({"action": "present"}) }));
+        // The HUD's own tour, not the board's.
+        let tour = Some(Intent::Tool { name: "hud_board", args: json!({"action": "tour"}) });
+        for text in ["Show me around", "Can you show me around the HUD?", "Give me a tour of your interface", "Zeig mir alles", "Führ mich herum"] {
+            assert_eq!(parse(text), tour, "{text}");
+        }
+        assert_ne!(parse("Zeig mir alles über Rom"), tour, "a question about Rome is no tour");
     }
 
     #[test]

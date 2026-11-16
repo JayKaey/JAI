@@ -202,6 +202,17 @@ pub async fn run_tool(tools: &ToolContext, name: &str, args: &Value) -> Result<S
     let bench = &tools.stark.features.bench;
     tools.stark.pulse(&["brain", "context"], false);
     match name {
+        "manage_flashcards" if args["action"] == "from_screenshot" => {
+            let path = match str_arg(args, &["path"]) {
+                Some(p) => std::path::PathBuf::from(p),
+                None => tokio::task::spawn_blocking(crate::image_viewer::latest_screenshot).await.ok().flatten().ok_or("I can't find a screenshot on this PC, Sir.")?,
+            };
+            let text = crate::screen::ocr_file(&path).await?;
+            let mut import = args.clone();
+            import["action"] = json!("import");
+            import["text"] = json!(text);
+            bench.cards.tool(tools, &import)
+        }
         "manage_flashcards" => bench.cards.tool(tools, args),
         "lookup_formula" => {
             let said = crate::formula_sheet::run_tool(args)?;
@@ -290,7 +301,9 @@ fn core(text: &str) -> String {
 }
 
 static CARD_ADD: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:add|create|make|new|neue|erstelle|füge)\s+(?:a\s+|an\s+|eine\s+)?(?:new\s+|neue\s+)?(?:flash\s?card|karteikarte|card)(?:\s+hinzu)?(?:\s+(?:to|in|for|zu|für)\s+(?:my\s+|the\s+|meinem\s+|dem\s+)?(.+?)(?:\s+deck|\s+stapel)?)?\s*[:,]\s*(.+?)\s+(?:means|is|equals|are|bedeutet|ist|heißt|sind)\s+(.+)$"));
-static CARD_QUIZ: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:quiz me on|test me on|study|learn|review|start|lets do|let's do|do)\s+(?:my\s+|the\s+|some\s+)?(?:(.+?)\s+)?(?:flash\s?cards|cards|karteikarten)(?:\s+quiz)?$|^(?:flash\s?card|karteikarten)\s?(?:quiz|abfrage|time)$|^(?:frag|frage)\s+mich\s+(?:meine\s+|die\s+)?karteikarten\s+ab$|^karteikarten\s+(?:lernen|abfragen|üben)$"));
+/// "Make flashcards from my latest screenshot (for Spanish)", "mach Karteikarten aus meinem letzten Screenshot".
+static CARD_SHOT: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:make|create|turn|build)\s+(?:me\s+)?(?:some\s+)?(?:flash\s?cards|cards)\s+(?:from|out of|of)\s+(?:my|the|this)\s+(?:latest\s+|last\s+|newest\s+)?screenshot(?:\s+(?:for|in|into|to)\s+(?:my\s+|the\s+)?(.+?)(?:\s+deck)?)?$|^(?:mach|erstelle)\s+(?:mir\s+)?karteikarten\s+(?:aus|von)\s+(?:meinem|dem)\s+(?:letzten\s+|neuesten\s+)?screenshot$"));
+static CARD_QUIZ: LazyLock<Regex> =LazyLock::new(|| re(r"^(?:quiz me on|test me on|study|learn|review|start|lets do|let's do|do)\s+(?:my\s+|the\s+|some\s+)?(?:(.+?)\s+)?(?:flash\s?cards|cards|karteikarten)(?:\s+quiz)?$|^(?:flash\s?card|karteikarten)\s?(?:quiz|abfrage|time)$|^(?:frag|frage)\s+mich\s+(?:meine\s+|die\s+)?karteikarten\s+ab$|^karteikarten\s+(?:lernen|abfragen|üben)$"));
 static CARD_DUE: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:how many|which|what)\s+(?:flash\s?cards|cards)\s+(?:are|is)\s+due(?:\s+today)?$|^(?:wie viele|welche)\s+karteikarten\s+sind\s+(?:heute\s+)?fällig$|^(?:flash\s?card|karteikarten)\s?(?:stats|status|statistik)$"));
 static CARD_ANSWER: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:the answer is|answer is|answer|my answer is|its|it's|it is|that is|that's|thats|die antwort ist|antwort|das ist|es ist)\s*[:,]?\s+(.+)$"));
 static FORMULA: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:(?:what is|what's|whats|show me|show|give me|tell me|whats|remind me of)\s+)?(?:the\s+)?(?:formula|equation)\s+(?:for|of|to calculate)\s+(?:the\s+)?(.+)$|^(?:show me|show|give me|what is|what's)\s+(?:the\s+)?(.+?)\s+(?:formula|equation)$|^(?:wie lautet|zeig mir|zeig|nenn mir|was ist)\s+(?:die\s+)?(?:formel|gleichung)\s+(?:für|der|von|zur)\s+(?:die\s+|den\s+|das\s+|der\s+)?(.+)$|^(?:die\s+)?(?:formel|gleichung)\s+(?:für|der|von)\s+(?:die\s+|den\s+|das\s+|der\s+)?(.+)$"));
@@ -371,11 +384,14 @@ pub fn route_text(text: &str) -> Option<Route> {
     }
 
     // ---- Flashcards ----
+    // Sir's own capitals for the card ("Mitosis", "ATP") and the deck ("Spanish").
+    let original = |part: &str| text.to_lowercase().find(part).and_then(|i| text.get(i..i + part.len())).unwrap_or(part).trim().trim_end_matches(['.', '!']).to_string();
     if let Some(c) = CARD_ADD.captures(&s) {
-        // Sir's own capitals for the card ("Mitosis", "ATP").
-        let original = |part: &str| text.to_lowercase().find(part).and_then(|i| text.get(i..i + part.len())).unwrap_or(part).trim().trim_end_matches(['.', '!']).to_string();
         let deck = c.get(1).map(|m| original(m.as_str()));
         return verbatim("manage_flashcards", json!({ "action": "add", "front": original(&c[2]), "back": original(&c[3]), "deck": deck }));
+    }
+    if let Some(c) = CARD_SHOT.captures(&s) {
+        return verbatim("manage_flashcards", json!({ "action": "from_screenshot", "deck": c.get(1).map(|m| original(m.as_str())) }));
     }
     if let Some(c) = CARD_QUIZ.captures(&s) {
         let deck = c.get(1).map(|m| m.as_str().trim()).filter(|d| !matches!(*d, "my" | "the" | "all" | "some"));
@@ -533,6 +549,11 @@ mod tests {
         expect("Quiz me on my flashcards", "manage_flashcards", json!({"action": "quiz"}));
         expect("study my biology flashcards", "manage_flashcards", json!({"action": "quiz", "deck": "biology"}));
         expect("How many flashcards are due?", "manage_flashcards", json!({"action": "due"}));
+        expect("Make flashcards from my latest screenshot for Spanish.", "manage_flashcards", json!({"action": "from_screenshot", "deck": "Spanish"}));
+        // The whole road, not the workbench alone: the picture viewer must not take the screenshot.
+        for (said, road) in [("Make flashcards from my latest screenshot.", "manage_flashcards"), ("Copy the text of this window.", "inspect_screen_or_selection")] {
+            assert_eq!(crate::phrasings::route(said).map(|r| r.0).as_deref(), Some(road), "{said}");
+        }
         expect("Show me the formula for kinetic energy", "lookup_formula", json!({"query": "kinetic energy"}));
         expect("What is the formula for the pq formula?", "lookup_formula", json!({}));
         expect("What is the molar mass of H2SO4?", "chemistry_helper", json!({"action": "molar_mass", "formula": "h2so4"}));
@@ -569,6 +590,7 @@ mod tests {
         expect("Neue Karteikarte: Mitose bedeutet Zellteilung in zwei identische Zellen", "manage_flashcards", json!({"action": "add", "front": "Mitose", "back": "Zellteilung in zwei identische Zellen"}));
         expect("Frag mich meine Karteikarten ab", "manage_flashcards", json!({"action": "quiz"}));
         expect("Wie viele Karteikarten sind fällig?", "manage_flashcards", json!({"action": "due"}));
+        expect("Mach mir Karteikarten aus meinem letzten Screenshot", "manage_flashcards", json!({"action": "from_screenshot", "deck": null}));
         expect("Zeig mir die Formel für die kinetische Energie", "lookup_formula", json!({}));
         expect("Wie lautet die Formel für die Kettenregel?", "lookup_formula", json!({"query": "kettenregel"}));
         expect("Molare Masse von Kochsalz", "chemistry_helper", json!({"action": "molar_mass", "formula": "kochsalz"}));

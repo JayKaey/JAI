@@ -106,6 +106,15 @@ async fn powershell_encoded(script: &str) -> std::io::Result<crate::shell::Helpe
 /// OCR of an image file (a phone photo or scan: JPEG, PNG, BMP …), in Sir's own languages.
 #[cfg(windows)]
 pub async fn ocr_file(path: &std::path::Path) -> Result<String, String> {
+    let owned = path.to_path_buf();
+    match tokio::task::spawn_blocking(move || native::file(&owned)).await.unwrap_or_else(|e| Err(e.to_string())) {
+        Ok(text) => {
+            info!("[SCREEN] OCR of {}: {} characters", path.display(), text.len());
+            return Ok(text);
+        }
+        Err(why) if why == NO_OCR => return Err("Windows has no OCR language installed.".into()),
+        Err(why) => info!("[SCREEN] Native OCR of {} failed ({why}): through PowerShell instead", path.display()),
+    }
     let script = recognise_script("", &path.display().to_string());
     let out = powershell_encoded(&script).await.map_err(|e| if e.kind() == std::io::ErrorKind::TimedOut { "Reading the image timed out.".to_string() } else { e.to_string() })?;
     let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
@@ -145,27 +154,91 @@ pub async fn read(scope: Scope) -> Result<String, String> {
     ocr(rect, label).await
 }
 
+/// Windows' own OCR called from Rust (no PowerShell starting up): a GDI capture or a decoded
+/// image handed to Windows.Media.Ocr as a bitmap. Blocking (WinRT's async is waited on).
+#[cfg(windows)]
+mod native {
+    use windows::Graphics::Imaging::{BitmapAlphaMode, BitmapPixelFormat, SoftwareBitmap};
+    use windows::Media::Ocr::OcrEngine;
+    use windows::Storage::Streams::DataWriter;
+
+    fn err(e: windows::core::Error) -> String {
+        e.message().to_string()
+    }
+
+    /// The largest side Windows' OCR takes (bigger pictures are scaled down to it).
+    fn max_side() -> u32 {
+        OcrEngine::MaxImageDimension().unwrap_or(2600).max(64)
+    }
+
+    /// The lines Windows reads in BGRA rows (top-down), in Sir's languages.
+    pub(super) fn pixels(bgra: &[u8], width: u32, height: u32) -> Result<String, String> {
+        let engine = OcrEngine::TryCreateFromUserProfileLanguages().map_err(|_| super::NO_OCR.to_string())?;
+        let writer = DataWriter::new().map_err(err)?;
+        writer.WriteBytes(bgra).map_err(err)?;
+        let bitmap = SoftwareBitmap::CreateCopyWithAlphaFromBuffer(&writer.DetachBuffer().map_err(err)?, BitmapPixelFormat::Bgra8, width as i32, height as i32, BitmapAlphaMode::Ignore).map_err(err)?;
+        let lines = engine.RecognizeAsync(&bitmap).map_err(err)?.get().map_err(err)?.Lines().map_err(err)?;
+        Ok(lines.into_iter().filter_map(|line| line.Text().ok()).map(|text| text.to_string()).collect::<Vec<_>>().join("\n"))
+    }
+
+    /// `rect` (left, top, width, height in physical pixels; None: the primary screen).
+    pub fn screen(rect: Option<[i32; 4]>) -> Result<String, String> {
+        use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN};
+        // SAFETY: plain metric queries.
+        let [x, y, w, h] = rect.unwrap_or_else(|| unsafe { [0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN)] });
+        let side = max_side() as i64;
+        let width = (w as i64).min(side).min(side * w as i64 / (h as i64).max(1)).max(2);
+        let (bgra, width, height) = crate::instant_replay::screen_bgra([x, y, x + w, y + h], width as u32).ok_or("the screen could not be captured")?;
+        pixels(&bgra, width, height)
+    }
+
+    /// An image file (PNG, JPEG, WebP).
+    pub fn file(path: &std::path::Path) -> Result<String, String> {
+        let image = image::open(path).map_err(|e| e.to_string())?;
+        let side = max_side();
+        let image = if image.width() > side || image.height() > side { image.resize(side, side, image::imageops::FilterType::Triangle) } else { image };
+        let rgba = image.to_rgba8();
+        let (width, height) = rgba.dimensions();
+        let mut bgra = rgba.into_raw();
+        bgra.chunks_exact_mut(4).for_each(|px| px.swap(0, 2));
+        pixels(&bgra, width, height)
+    }
+}
+
+#[cfg(windows)]
+const NO_OCR: &str = "Windows has no OCR language installed (Settings → Time & language → Language → add the language's optional 'Optical character recognition').";
+
 /// OCR of `rect` (left, top, width, height in physical pixels; None = primary screen).
 #[cfg(windows)]
 async fn ocr(rect: Option<[i32; 4]>, label: String) -> Result<String, String> {
-    let png = std::env::temp_dir().join(format!("jai_ocr_{}.png", std::process::id()));
-    let script = ocr_script(rect, &png.display().to_string());
     let started = std::time::Instant::now();
     // His own windows stay out of the picture while he looks (he reads what is behind them;
     // they stay on the monitor), and the HUD frosts over meanwhile.
     let looking = crate::screen_context::look().await;
-    let out = powershell_encoded(&script).await.map_err(|e| if e.kind() == std::io::ErrorKind::TimedOut { "Reading the screen timed out.".to_string() } else { e.to_string() });
-    drop(looking);
-    let _ = std::fs::remove_file(&png);
-    let out = out?;
-    let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if !out.success() {
-        let err = String::from_utf8_lossy(&out.stderr);
-        return Err(format!("Windows OCR failed: {}", err.lines().find(|l| !l.trim().is_empty()).unwrap_or("unknown error")));
-    }
-    if text == "JAI_NO_OCR" {
-        return Err("Windows has no OCR language installed (Settings → Time & language → Language → add the language's optional 'Optical character recognition').".into());
-    }
+    let text = match tokio::task::spawn_blocking(move || native::screen(rect)).await.unwrap_or_else(|e| Err(e.to_string())) {
+        Ok(text) => {
+            drop(looking);
+            text
+        }
+        Err(why) if why == NO_OCR => return Err(why),
+        Err(why) => {
+            info!("[SCREEN] Native OCR failed ({why}): through PowerShell instead");
+            let png = std::env::temp_dir().join(format!("jai_ocr_{}.png", std::process::id()));
+            let out = powershell_encoded(&ocr_script(rect, &png.display().to_string())).await.map_err(|e| if e.kind() == std::io::ErrorKind::TimedOut { "Reading the screen timed out.".to_string() } else { e.to_string() });
+            drop(looking);
+            let _ = std::fs::remove_file(&png);
+            let out = out?;
+            let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if !out.success() {
+                let err = String::from_utf8_lossy(&out.stderr);
+                return Err(format!("Windows OCR failed: {}", err.lines().find(|l| !l.trim().is_empty()).unwrap_or("unknown error")));
+            }
+            if text == "JAI_NO_OCR" {
+                return Err(NO_OCR.into());
+            }
+            text
+        }
+    };
     info!("[SCREEN] OCR of {label}: {} characters in {} ms", text.len(), started.elapsed().as_millis());
     if text.is_empty() {
         return Ok(format!("No readable text was found on {label}."));
@@ -189,6 +262,7 @@ pub async fn inspect(args: &serde_json::Value, foreground: Option<isize>) -> Res
     match mode.as_str() {
         "selection" | "selected" | "highlighted" | "selected_text" | "selection_text" => selection(foreground).await,
         "clipboard" | "copied" => crate::clipboard::tool(&serde_json::json!({ "action": "read" })).await,
+        "copy_text" | "copy" => copy_text(monitor).await,
         "active_window" | "window" | "app" if monitor.is_none() => read(Scope::ActiveWindow).await,
         _ => match monitor {
             Some(m) => monitor_text(m).await,
@@ -300,12 +374,45 @@ async fn monitor_text(_target: &serde_json::Value) -> Result<String, String> {
     read(Scope::Screen).await
 }
 
+/// "Copy the text of this window": what Windows reads in the window in front (or on a monitor)
+/// put on the clipboard as plain text.
+#[cfg(windows)]
+async fn copy_text(monitor: Option<&serde_json::Value>) -> Result<String, String> {
+    let (label, rect) = match monitor {
+        Some(target) => {
+            let monitors = crate::monitors::list();
+            let index = crate::monitors::resolve(target, None, &monitors).ok_or_else(|| format!("There is no monitor {target}; {} are connected.", monitors.len()))?;
+            let m = &monitors[index - 1];
+            (format!("monitor {index}"), [m.rect[0], m.rect[1], m.width(), m.height()])
+        }
+        None => match crate::win32::call(crate::win32::top_app_window).await? {
+            Some((title, rect)) => (format!("\"{}\"", title.chars().take(70).collect::<String>()), rect),
+            None => return Err("No window of yours is in front.".into()),
+        },
+    };
+    let looking = crate::screen_context::look().await;
+    let text = tokio::task::spawn_blocking(move || native::screen(Some(rect))).await.unwrap_or_else(|e| Err(e.to_string()));
+    drop(looking);
+    let text = text?;
+    if text.trim().is_empty() {
+        return Ok(format!("I found no text to copy in {label}, Sir."));
+    }
+    crate::clipboard::write(&text).await?;
+    info!("[SCREEN] Copied {} characters read in {label}", text.len());
+    Ok(format!("Copied, Sir: {} lines from {label} are on the clipboard.", text.lines().count()))
+}
+
+#[cfg(not(windows))]
+async fn copy_text(_monitor: Option<&serde_json::Value>) -> Result<String, String> {
+    Err("Copying a window's text needs Windows' own OCR.".into())
+}
+
 pub fn inspect_tool_definition() -> serde_json::Value {
     serde_json::json!({"type": "function", "function": {
         "name": "inspect_screen_or_selection",
-        "description": "See what Sir sees: mode selection (the text he highlighted — for 'explain/translate/refactor/debug the code I selected'), clipboard, active_window (the app in front: 'what does this error mean'), or monitor with target_monitor (1, 2, left, right: 'look at my second monitor', 'summarise what's on my screen'). Returns the text (OCR) and window titles; then answer from it.",
+        "description": "See what Sir sees: mode selection (the text he highlighted — for 'explain/translate/refactor/debug the code I selected'), clipboard, active_window (the app in front: 'what does this error mean'), or monitor with target_monitor (1, 2, left, right: 'look at my second monitor', 'summarise what's on my screen'). Returns the text (OCR) and window titles; then answer from it. copy_text: the text read in the window in front (or target_monitor) onto the clipboard ('copy the text of this window').",
         "parameters": {"type": "object", "properties": {
-            "mode": {"type": "string", "enum": ["selection", "clipboard", "active_window", "monitor"]},
+            "mode": {"type": "string", "enum": ["selection", "clipboard", "active_window", "monitor", "copy_text"]},
             "target_monitor": {"type": "string", "description": "1, 2, 3, left, right, primary"}
         }, "required": ["mode"]}
     }})
@@ -332,6 +439,41 @@ pub async fn read(_scope: Scope) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Windows reads text from Rust alone: black words drawn by GDI on white, handed over as
+    /// BGRA rows. (Skipped where Windows has no OCR language.)
+    #[cfg(windows)]
+    #[test]
+    fn windows_reads_text_without_powershell() {
+        use windows::core::w;
+        use windows::Win32::Graphics::Gdi::*;
+        let (w, h) = (900i32, 160i32);
+        let mut bits: *mut core::ffi::c_void = std::ptr::null_mut();
+        let info = BITMAPINFO { bmiHeader: BITMAPINFOHEADER { biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32, biWidth: w, biHeight: -h, biPlanes: 1, biBitCount: 32, biCompression: BI_RGB.0, ..Default::default() }, ..Default::default() };
+        // SAFETY: a memory DC with a DIB section of w×h×4 bytes; everything is released below.
+        let bgra = unsafe {
+            let dc = CreateCompatibleDC(None);
+            let bitmap = CreateDIBSection(dc, &info, DIB_RGB_COLORS, &mut bits, None, 0).unwrap();
+            let old = SelectObject(dc, bitmap);
+            std::slice::from_raw_parts_mut(bits.cast::<u8>(), (w * h * 4) as usize).fill(255);
+            let font = CreateFontW(72, 0, 0, 0, 400, 0, 0, 0, 0, 0, 0, 0, 0, w!("Arial"));
+            let old_font = SelectObject(dc, font);
+            SetBkMode(dc, TRANSPARENT);
+            let _ = TextOutW(dc, 30, 40, &"HELLO WORLD 2026".encode_utf16().collect::<Vec<_>>());
+            let _ = GdiFlush();
+            let copy = std::slice::from_raw_parts(bits.cast::<u8>(), (w * h * 4) as usize).to_vec();
+            SelectObject(dc, old_font);
+            SelectObject(dc, old);
+            let _ = DeleteObject(font);
+            let _ = DeleteObject(bitmap);
+            let _ = DeleteDC(dc);
+            copy
+        };
+        match native::pixels(&bgra, w as u32, h as u32) {
+            Err(why) if why == NO_OCR => eprintln!("skipped: no OCR language on this PC"),
+            read => assert_eq!(read.map(|t| t.to_uppercase()).as_deref(), Ok("HELLO WORLD 2026")),
+        }
+    }
 
     #[test]
     fn base64_matches_reference() {

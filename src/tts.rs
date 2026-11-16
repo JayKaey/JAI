@@ -1006,7 +1006,7 @@ pub(crate) fn finish_clause_audio(mut audio: Vec<f32>, text: &str) -> Vec<f32> {
     if start < end {
         audio = audio[start..end].to_vec();
     }
-    let mut audio = jai_voice_dsp::master(&audio, KOKORO_RATE);
+    let mut audio = jai_voice_dsp::master(&audio, KOKORO_RATE, jai_voice_dsp::is_question(text));
     let rate = jai_voice_dsp::MASTER_RATE as usize;
     let fade = (rate * jai_voice_dsp::CROSSFADE_MS / 1000).min(audio.len() / 4);
     for (i, s) in audio.iter_mut().take(fade).enumerate() {
@@ -1165,6 +1165,21 @@ fn cue_due(kind: jai_voice_dsp::Earcon, now: std::time::Instant) -> bool {
 
 /// His tempo at night, against the day's.
 const NIGHT_TEMPO: f32 = 0.94;
+
+/// A clause's tempo by its tone: a warning a little slower and weightier, good news a touch
+/// brighter, anything else as it is. Cue words only; "no errors" is no warning.
+fn tone_tempo(clause: &str) -> f32 {
+    static WARNING: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\b(?:warning|careful|critical|danger|overheating|too hot|failed|battery (?:is )?low|achtung|vorsicht|warnung|kritisch|fehlgeschlagen)\b").expect("valid tone pattern"));
+    static GOOD: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\b(?:good news|great news|all done|all set|well done|congratulations|geschafft|gute nachrichten|glückwunsch)\b").expect("valid tone pattern"));
+    static NO_HARM: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\b(?:no|nothing|never|without|kein|keine|nichts)\b[^.!?]{0,20}\b(?:warning|critical|danger|failed|warnung|kritisch|fehlgeschlagen)").expect("valid tone pattern"));
+    if WARNING.is_match(clause) && !NO_HARM.is_match(clause) {
+        0.95
+    } else if GOOD.is_match(clause) {
+        1.03
+    } else {
+        1.0
+    }
+}
 
 /// A HUD micro-interaction's cue (a block materialising, the spotlight, a mode change, an
 /// alert): played like an earcon, unless Sir turned the cues off or it has just sounded.
@@ -1438,8 +1453,56 @@ pub enum TtsEvent {
 }
 
 enum Job {
-    Clause { text: String, generation: u64 },
+    /// `released`: when the reply let the clause go (the gap to its first sound is measured).
+    Clause { text: String, generation: u64, released: Instant },
     Finish { generation: u64 },
+}
+
+/// The most a reply's first clause should wait for its first sound.
+pub const FIRST_SOUND_BUDGET: Duration = Duration::from_millis(250);
+/// The last replies' gaps from first clause to first sound (ms), newest last.
+static FIRST_SOUNDS: Mutex<Vec<u32>> = Mutex::new(Vec::new());
+
+fn note_first_sound(gap: Duration) {
+    let ms = gap.as_millis().min(u32::MAX as u128) as u32;
+    let mut kept = FIRST_SOUNDS.lock().unwrap_or_else(|e| e.into_inner());
+    if kept.len() >= 20 {
+        kept.remove(0);
+    }
+    kept.push(ms);
+    tracing::debug!("[TTS] First clause to first sound {ms} ms (budget {} ms)", FIRST_SOUND_BUDGET.as_millis());
+}
+
+/// The median gap from a reply's first clause to its first sound over the last replies (ms),
+/// and how many of them missed `FIRST_SOUND_BUDGET`.
+pub fn first_sound() -> Option<(u32, usize)> {
+    let mut kept = FIRST_SOUNDS.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    if kept.is_empty() {
+        return None;
+    }
+    kept.sort_unstable();
+    Some((kept[kept.len() / 2], kept.iter().filter(|ms| u128::from(**ms) > FIRST_SOUND_BUDGET.as_millis()).count()))
+}
+
+/// The reply being spoken: its clauses, each with when its sound ends (None: not yet played).
+static SAID: Mutex<(u64, Vec<(String, Option<Instant>)>)> = Mutex::new((0, Vec::new()));
+/// What a stop cut off, and when ("go on" says it again: `cut_off`).
+static CUT: Mutex<Option<(Instant, String)>> = Mutex::new(None);
+
+/// The text a stop at `now` cut off: from the start of the sentence that was playing to the end
+/// of the reply. None when everything had been heard.
+fn cut_from(clauses: &[(String, Option<Instant>)], now: Instant) -> Option<String> {
+    let mut first = clauses.iter().position(|(_, end)| end.is_none_or(|end| end > now))?;
+    while first > 0 && !clauses[first - 1].0.trim_end().ends_with(['.', '!', '?', '…']) {
+        first -= 1;
+    }
+    Some(clauses[first..].iter().map(|(text, _)| text.trim()).collect::<Vec<_>>().join(" "))
+}
+
+/// What he was cut off saying within the last `within`, taken (said once).
+pub fn cut_off(within: Duration) -> Option<String> {
+    let mut cut = CUT.lock().unwrap_or_else(|e| e.into_inner());
+    cut.take_if(|(at, _)| at.elapsed() <= within).map(|(_, text)| text)
 }
 
 struct Inner {
@@ -1523,6 +1586,10 @@ impl TtsController {
 
     /// Barge-in / interrupt: drops everything queued or playing. Returns the new generation.
     pub fn stop(&self) -> u64 {
+        let said = SAID.lock().unwrap_or_else(|e| e.into_inner()).1.clone();
+        if let Some(text) = cut_from(&said, Instant::now()) {
+            *CUT.lock().unwrap_or_else(|e| e.into_inner()) = Some((Instant::now(), text));
+        }
         let next = self.inner.generation.fetch_add(1, Ordering::AcqRel) + 1;
         self.inner.output.flush.store(true, Ordering::Release);
         self.inner.mirror.flush.store(true, Ordering::Release);
@@ -1549,7 +1616,14 @@ impl TtsController {
             }
             *last = (generation, key);
         }
-        let _ = self.inner.jobs.send(Job::Clause { text, generation });
+        {
+            let mut said = SAID.lock().unwrap_or_else(|e| e.into_inner());
+            if said.0 != generation {
+                *said = (generation, Vec::new());
+            }
+            said.1.push((text.clone(), None));
+        }
+        let _ = self.inner.jobs.send(Job::Clause { text, generation, released: Instant::now() });
     }
 
     /// Splits a complete text into clauses and queues them.
@@ -1865,6 +1939,8 @@ fn synth_worker(cfg: JaiConfig, inner: Arc<Inner>, rx: &mpsc::Receiver<Job>, eve
     let mut warm_voice = String::new();
     let mut warm_next = 0usize;
     let mut started_generation = 0u64;
+    // When the sound queued so far will have played (for what a stop cuts off: `SAID`).
+    let mut plays_until = Instant::now();
     let mut joiner = ClauseJoiner::default();
     // Zero-VRAM standby: Kokoro is dropped (`Engine::None`, its ONNX session and any DirectML
     // buffers freed) and re-created on the next clause or wake-up.
@@ -1921,7 +1997,8 @@ fn synth_worker(cfg: JaiConfig, inner: Arc<Inner>, rx: &mpsc::Receiver<Job>, eve
                     }
                     warm_next += 1;
                     let speech = normalize_for_speech(phrase);
-                    let speed = f32::from_bits(inner.speed.load(Ordering::Relaxed));
+                    // (At the tempo a reply will ask for it: "All done, Sir." is good news.)
+                    let speed = f32::from_bits(inner.speed.load(Ordering::Relaxed)) * tone_tempo(phrase);
                     let key = ClauseCache::key(&voice, speed, &speech);
                     warm_rendered |= cache.get(&key).is_none();
                     let _ = render_clause(&mut engine, &phonemizer, &mut cache, &speech, &voice, speed);
@@ -1940,7 +2017,7 @@ fn synth_worker(cfg: JaiConfig, inner: Arc<Inner>, rx: &mpsc::Receiver<Job>, eve
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         };
         match job {
-            Job::Clause { text, generation } => {
+            Job::Clause { text, generation, released } => {
                 if generation != inner.generation.load(Ordering::Acquire) {
                     continue;
                 }
@@ -1948,7 +2025,7 @@ fn synth_worker(cfg: JaiConfig, inner: Arc<Inner>, rx: &mpsc::Receiver<Job>, eve
                 let speech = normalize_for_speech(&text);
                 let voice = inner.voice.read().unwrap_or_else(|e| e.into_inner()).clone();
                 // At night he speaks a little slower, as one does late in the evening.
-                let speed = f32::from_bits(inner.speed.load(Ordering::Relaxed)) * if crate::hud_feel::night_active() { NIGHT_TEMPO } else { 1.0 };
+                let speed = f32::from_bits(inner.speed.load(Ordering::Relaxed)) * if crate::hud_feel::night_active() { NIGHT_TEMPO } else { 1.0 } * tone_tempo(&text);
                 let Some(audio48) = render_clause(&mut engine, &phonemizer, &mut cache, &speech, &voice, speed)
                 else {
                     continue;
@@ -1966,6 +2043,15 @@ fn synth_worker(cfg: JaiConfig, inner: Arc<Inner>, rx: &mpsc::Receiver<Job>, eve
                     audio.fill(0.0);
                 }
                 tracing::debug!("[TTS] '{speech}' → {:.2}s audio in {synth_ms} ms", audio48.len() as f32 / jai_voice_dsp::MASTER_RATE as f32);
+                plays_until = plays_until.max(Instant::now()) + Duration::from_secs_f32(audio.len() as f32 / rate.max(1) as f32);
+                {
+                    let mut said = SAID.lock().unwrap_or_else(|e| e.into_inner());
+                    if said.0 == generation {
+                        if let Some(clause) = said.1.iter_mut().find(|(said, end)| end.is_none() && *said == text) {
+                            clause.1 = Some(plays_until);
+                        }
+                    }
+                }
 
                 let mut offset = 0;
                 let mut announced = started_generation == generation;
@@ -1985,6 +2071,7 @@ fn synth_worker(cfg: JaiConfig, inner: Arc<Inner>, rx: &mpsc::Receiver<Job>, eve
                     if pushed > 0 && !announced {
                         announced = true;
                         started_generation = generation;
+                        note_first_sound(released.elapsed());
                         inner.controls.set_speaking(true);
                         let _ = events.send(TtsEvent::PlaybackStarted { generation, synth_ms });
                     }
@@ -2081,6 +2168,44 @@ pub fn dual_sink_probe() -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Cut off mid-reply, he keeps what was not heard from the start of the sentence that was
+    /// playing; a reply heard to its end leaves nothing.
+    #[test]
+    fn a_stop_keeps_the_rest_from_the_start_of_its_sentence() {
+        let now = Instant::now();
+        let (past, later) = (now - Duration::from_secs(1), now + Duration::from_secs(1));
+        let reply = |ends: [Option<Instant>; 4]| ["Your calendar is clear.", "Tomorrow at nine,", "you have maths,", "then sport."].into_iter().map(str::to_string).zip(ends).collect::<Vec<_>>();
+        assert_eq!(cut_from(&reply([Some(past), Some(past), Some(later), None]), now).as_deref(), Some("Tomorrow at nine, you have maths, then sport."));
+        assert_eq!(cut_from(&reply([Some(later), None, None, None]), now).as_deref(), Some("Your calendar is clear. Tomorrow at nine, you have maths, then sport."));
+        assert_eq!(cut_from(&reply([Some(past); 4]), now), None);
+        *CUT.lock().unwrap() = Some((now, "then sport.".into()));
+        assert_eq!(cut_off(Duration::from_secs(30)).as_deref(), Some("then sport."));
+        assert_eq!(cut_off(Duration::from_secs(30)), None, "said once");
+    }
+
+    #[test]
+    fn a_warning_is_said_slower_and_good_news_brighter() {
+        assert_eq!(tone_tempo("Warning, Sir: the GPU is overheating."), 0.95);
+        assert_eq!(tone_tempo("Achtung, der Akku ist fast leer."), 0.95);
+        assert_eq!(tone_tempo("Good news, Sir: the build passed."), 1.03);
+        assert_eq!(tone_tempo("No errors, nothing failed, all clear."), 1.0, "a warning word denied is no warning");
+        assert_eq!(tone_tempo("Your calendar is clear."), 1.0);
+    }
+
+    /// A reply's first clause to its first sound: the median of the last twenty, and how many
+    /// missed the 250 ms budget.
+    #[test]
+    fn the_gap_to_the_first_sound_is_kept_against_its_budget() {
+        for ms in [120, 180, 900, 200, 240] {
+            note_first_sound(Duration::from_millis(ms));
+        }
+        assert_eq!(first_sound(), Some((200, 1)));
+        for _ in 0..30 {
+            note_first_sound(Duration::from_millis(100));
+        }
+        assert_eq!(first_sound(), Some((100, 0)), "only the last twenty count");
+    }
 
     /// Talked over, his voice fades out over 50 ms instead of stopping dead, and only the speech
     /// that was queued then is dropped.

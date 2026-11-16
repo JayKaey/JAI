@@ -893,6 +893,13 @@ impl Renderer {
         gl.uniform_matrix_4_f32_slice(p.u("u_tri"), false, tri);
     }
 
+    /// The hologram's own light: a cool cyan-white, as projected light looks, with a quarter of
+    /// the theme's colour in it (a gold theme still warms it a little).
+    fn holo_light(accent: [f32; 3]) -> [f32; 3] {
+        const COOL: [f32; 3] = [0.62, 0.9, 1.0];
+        [0, 1, 2].map(|k| COOL[k] * 0.75 + accent[k] * 0.25)
+    }
+
     /// Camera-relative studio lights (world space).
     fn lights(f: &Frame) -> ([f32; 3], [f32; 3], [f32; 3]) {
         let turn = math::rot_y(f.cam_yaw);
@@ -994,7 +1001,8 @@ impl Renderer {
         gl.use_program(Some(p.id));
         let (key, _, _) = Self::lights(f);
         gl.uniform_1_i32(p.u("u_mode"), mode);
-        gl.uniform_3_f32(p.u("u_color"), f.accent[0], f.accent[1], f.accent[2]);
+        let c = Self::holo_light(f.accent);
+        gl.uniform_3_f32(p.u("u_color"), c[0], c[1], c[2]);
         gl.uniform_1_f32(p.u("u_strength"), 1.0);
         gl.uniform_1_f32(p.u("u_time"), f.time);
         gl.uniform_3_f32(p.u("u_eye"), f.eye[0], f.eye[1], f.eye[2]);
@@ -1030,7 +1038,7 @@ impl Renderer {
         let p = &self.holo;
         gl.use_program(Some(p.id));
         gl.uniform_1_i32(p.u("u_mode"), 1);
-        let c = if additive { f.accent } else { [f.accent[0] * 0.6 + 0.4, f.accent[1] * 0.6 + 0.4, f.accent[2] * 0.6 + 0.4] };
+        let c = if additive { Self::holo_light(f.accent) } else { [f.accent[0] * 0.6 + 0.4, f.accent[1] * 0.6 + 0.4, f.accent[2] * 0.6 + 0.4] };
         gl.uniform_3_f32(p.u("u_color"), c[0], c[1], c[2]);
         gl.uniform_1_f32(p.u("u_strength"), strength);
         gl.polygon_mode(glow::FRONT_AND_BACK, glow::LINE);
@@ -1087,7 +1095,8 @@ impl Renderer {
         gl.uniform_matrix_4_f32_slice(p.u("u_viewproj"), false, viewproj);
         gl.uniform_1_f32(p.u("u_y"), f.ground_y - 0.002);
         gl.uniform_1_f32(p.u("u_size"), 2.6);
-        gl.uniform_3_f32(p.u("u_accent"), f.accent[0], f.accent[1], f.accent[2]);
+        let c = if holo { Self::holo_light(f.accent) } else { f.accent };
+        gl.uniform_3_f32(p.u("u_accent"), c[0], c[1], c[2]);
         gl.uniform_1_f32(p.u("u_shadow"), f.footprint.clamp(0.08, 1.4));
         gl.uniform_1_f32(p.u("u_holo"), if holo { 1.0 } else { 0.0 });
         gl.uniform_1_f32(p.u("u_time"), f.time);

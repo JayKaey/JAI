@@ -650,9 +650,11 @@ pub fn approach(value: f32, target: f32, rate: f32, dt: f32) -> f32 {
     value + (target - value) * (1.0 - (-rate * dt).exp())
 }
 
-/// A frame time safe to animate with: a wake-up frame after an idle second never jumps.
+/// A frame time safe to animate with: a wake-up frame after an idle second never jumps, and at
+/// ten frames a second the rings still turn with the clock (at a 33 ms cap they turned at a third
+/// of their speed).
 pub fn safe_dt(dt: f32) -> f32 {
-    if dt.is_finite() { dt.clamp(0.001, 0.033) } else { 0.016 }
+    if dt.is_finite() { dt.clamp(0.001, 0.1) } else { 0.016 }
 }
 
 // ------------------------------------------------------------------------------ emblem ----
@@ -781,7 +783,8 @@ impl RoseEmblem {
     pub fn glide(&mut self, screen: Rect, dt: f32) {
         let (target, _) = self.home_target(screen);
         let now = self.home_now.unwrap_or(target);
-        let dt = safe_dt(dt);
+        // (A move takes a few frames however few are drawn: never three-quarters in one.)
+        let dt = safe_dt(dt).min(1.0 / 30.0);
         self.home_now = Some(vec2(approach(now.x, target.x, 14.0, dt), approach(now.y, target.y, 14.0, dt)));
     }
 
@@ -1385,6 +1388,7 @@ mod tests {
     #[test]
     fn the_stack_paints_back_to_front_meshes() {
         let ctx = eframe::egui::Context::default();
+        crate::gui::install_fonts(&ctx);
         let mut e = RoseEmblem::new(RoseEmblemState::ThinkingGyroscope);
         e.step(0.016, 0.3, true);
         let _ = ctx.run(Default::default(), |ctx| {
@@ -1662,7 +1666,8 @@ mod tests {
         // Dragging follows the pointer at once.
         e.drag_to(vec2(0.75, 0.6));
         assert!((e.frame(s).centre - pos2(0.75 * 1920.0, 0.6 * 1080.0)).length() < 1.0);
-        assert_eq!(safe_dt(5.0), 0.033);
+        assert_eq!(safe_dt(5.0), 0.1);
+        assert_eq!(safe_dt(0.09), 0.09, "ten frames a second keep the rings' speed");
         assert_eq!(safe_dt(f32::NAN), 0.016);
         assert!((approach(0.3, 1.0, 14.0, 0.016) - 0.3).abs() > 0.0, "eases from the mid-flight value");
     }

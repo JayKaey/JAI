@@ -220,6 +220,20 @@ impl Deck {
                 let (_, total) = self.counts(None, at);
                 Ok(Reply::say(format!("Card added to {}: {front} → {back} ({total} cards)", deck.unwrap_or("General")), format!("Card added, Sir. That makes {total}.")))
             }
+            "import" => {
+                let found = pairs(str_arg(args, &["text"]).unwrap_or(""));
+                if found.is_empty() {
+                    return Err("I found no word and meaning there, Sir. Each line needs a dash, an equals sign or a colon between them.".to_string());
+                }
+                let deck = deck.unwrap_or("General");
+                for (front, back) in &found {
+                    self.add(deck, front, back, at)?;
+                }
+                let preview = found.iter().take(12).map(|(f, b)| format!("- {f} → {b}")).collect::<Vec<_>>().join("\n");
+                let more = if found.len() > 12 { format!("\n- … and {} more", found.len() - 12) } else { String::new() };
+                let n = found.len();
+                Ok(Reply::say(format!("{n} cards added to {deck}."), format!("{n} card{} added to {deck}, Sir.", if n == 1 { "" } else { "s" })).with_board(format!("### {deck}: {n} new\n{preview}{more}")))
+            }
             "quiz" | "start" | "study" | "next" | "skip" => {
                 if matches!(action.as_str(), "next" | "skip") {
                     // Skipped: it stays due and goes to the back of the queue.
@@ -290,12 +304,24 @@ pub fn quiz_running() -> bool {
     ASKING.load(std::sync::atomic::Ordering::Acquire)
 }
 
+/// Word and meaning on each line of a vocabulary list read by OCR: "house - das Haus",
+/// "der Hund = the dog", "Mitose: Zellteilung". A line without a divider is skipped.
+fn pairs(text: &str) -> Vec<(String, String)> {
+    text.lines()
+        // The leftmost divider: "Mitose: Zellteilung - cell division" is Mitose.
+        .filter_map(|line| [" - ", " – ", " — ", "=", ":", "\t"].iter().filter_map(|sep| line.find(sep).map(|at| (at, at + sep.len()))).min().map(|(at, past)| (&line[..at], &line[past..])))
+        .map(|(front, back)| (front.trim().to_string(), back.trim().to_string()))
+        .filter(|(front, back)| !front.is_empty() && !back.is_empty() && front.chars().count() <= 80 && back.chars().count() <= 160)
+        .collect()
+}
+
 pub fn tool_definition() -> Value {
     json!({"type": "function", "function": {
         "name": "manage_flashcards",
-        "description": "Flashcards with spaced repetition (five boxes; a right answer returns after 1, 2, 4, 8, 16 days, a wrong one after ten minutes). action add (front, back, deck), quiz (asks the next due card; deck optional), answer (answer: Sir's words, or correct: true/false when he judges himself), reveal (shows the back), next (skips), stop, due (what is due per deck).",
+        "description": "Flashcards with spaced repetition (five boxes; a right answer returns after 1, 2, 4, 8, 16 days, a wrong one after ten minutes). action add (front, back, deck), quiz (asks the next due card; deck optional), answer (answer: Sir's words, or correct: true/false when he judges himself), reveal (shows the back), next (skips), stop, due (what is due per deck), from_screenshot (reads a vocabulary list in his latest screenshot, or the picture at path, and adds a card per line: 'make flashcards from my screenshot').",
         "parameters": {"type": "object", "properties": {
-            "action": {"type": "string", "enum": ["add", "quiz", "answer", "reveal", "next", "stop", "due"]},
+            "action": {"type": "string", "enum": ["add", "quiz", "answer", "reveal", "next", "stop", "due", "from_screenshot"]},
+            "path": {"type": "string", "description": "from_screenshot: a picture instead of the latest screenshot."},
             "front": {"type": "string", "description": "add: the question or term."},
             "back": {"type": "string", "description": "add: the answer."},
             "deck": {"type": "string", "description": "The deck or subject (default General)."},
@@ -366,6 +392,18 @@ mod tests {
         // German: inflected forms count.
         assert!(matches("die Zellteilung in zwei identische Zellen", "Zellteilung in zwei identische Zellen"));
         assert!(matches("Spannung gleich Widerstand mal Stromstärke", "Spannung ist Widerstand mal Stromstärke"));
+    }
+
+    #[test]
+    fn a_vocabulary_list_read_from_a_picture_becomes_cards() {
+        let deck = Deck::in_memory();
+        let t = 1_800_000_000;
+        let ocr = "Unit 4 vocabulary\nhouse - das Haus\nder Hund = the dog\nMitose: Zellteilung - cell division\nto run\tlaufen\nPage 12\n - \n";
+        let reply = deck.run(&json!({"action": "import", "text": ocr, "deck": "English"}), t).unwrap();
+        assert_eq!(reply.line, "4 cards added to English, Sir.");
+        assert!(reply.board.as_deref().is_some_and(|b| b.contains("- Mitose → Zellteilung - cell division")), "{:?}", reply.board);
+        assert_eq!(deck.counts(Some("English"), t), (4, 4));
+        assert!(deck.run(&json!({"action": "import", "text": "Page 12\nno dividers here"}), t).is_err());
     }
 
     #[test]

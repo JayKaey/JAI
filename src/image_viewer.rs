@@ -1077,6 +1077,11 @@ fn local_picture(path: &Path, modified: SystemTime) -> Picture {
     }
 }
 
+/// Sir's newest screenshot (blocking: walks folders).
+pub fn latest_screenshot() -> Option<PathBuf> {
+    collect_local(&LocalAsk::LatestScreenshot).ok()?.into_iter().next()?.local
+}
+
 /// Sir's pictures for a request, newest first (blocking: walks folders).
 fn collect_local(ask: &LocalAsk) -> Result<Vec<Picture>, String> {
     let onedrive = std::env::var_os("OneDrive").map(PathBuf::from);

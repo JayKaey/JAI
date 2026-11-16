@@ -907,8 +907,8 @@ async fn pipeline_probes(app: &Jai) {
         use crate::gui::{target_fps, MAX_FPS};
         let hz = crate::monitors::fastest_refresh_hz().map(|hz| hz as f32).unwrap_or(60.0);
         let got = [target_fps(false, true, true, hz), target_fps(true, false, true, hz), target_fps(true, true, false, hz), target_fps(true, true, true, hz)];
-        if got[..3] == [8.0, 30.0, 60.0] && got[3] == hz.clamp(60.0, MAX_FPS) {
-            Ok(format!("fastest monitor {hz:.0} Hz: {:.0} FPS while Sir is at the HUD, 60 busy elsewhere, 30 at rest", got[3]))
+        if got[..3] == [8.0, 60.0, 60.0] && got[3] == hz.clamp(60.0, MAX_FPS) {
+            Ok(format!("fastest monitor {hz:.0} Hz: {:.0} FPS while Sir is at the HUD, 60 busy elsewhere, 60 at rest", got[3]))
         } else {
             Err(format!("{got:?} at {hz} Hz"))
         }
