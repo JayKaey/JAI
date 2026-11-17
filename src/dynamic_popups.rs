@@ -431,7 +431,7 @@ pub fn show(ctx: &egui::Context, style: CardStyle, dt: f32) -> Vec<PopupAction> 
             egui::Frame::none()
                 .fill(style.surface)
                 .stroke(Stroke::new(1.0_f32, hovered_border))
-                .rounding(Rounding::same(if p.collapsed { 18.0 } else { style.rounding }))
+                .rounding(Rounding::same(style.rounding))
                 .inner_margin(egui::Margin::symmetric(14.0, if p.collapsed { 8.0 } else { 12.0 }))
                 .show(ui, |ui| {
                     ui.set_width(width - 28.0);

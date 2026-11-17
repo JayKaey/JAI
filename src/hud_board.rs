@@ -2206,7 +2206,8 @@ fn frame(p: &Painter, slot: Rect, block: &Block, active: bool, stack: Option<(us
         p.text(pos2(right, mid), Align2::RIGHT_CENTER, &block.tag, micro(), MICRO);
     }
     let title_room = (room - if tagged { tag_width } else { 0.0 }).max(20.0);
-    let label = crate::hud_style::fitted_title(p, &crate::hud_style::decode(&block.label, DECODING.get(), p.ctx().input(|i| i.time)), 13.5, active_colour(), title_room);
+    // (White, as a Stark panel is titled: the theme's colour is the tab's and the live things'.)
+    let label = crate::hud_style::fitted_title(p, &crate::hud_style::decode(&block.label, DECODING.get(), p.ctx().input(|i| i.time)), 13.5, crate::hud_style::TEXT, title_room);
     let label_right = r.left() + pad + label.size().x;
     // A title cut short shows whole under the pointer.
     if natural > title_room + 0.5 && hovered(p, Rect::from_min_max(pos2(r.left() + pad, mid - 9.0), pos2(label_right, mid + 9.0))) {

@@ -4085,7 +4085,10 @@ pub(crate) fn another_way_knowing(text: &str, parsed: Option<&Option<Intent>>) -
     let started = Instant::now();
     let mut stages = [Duration::ZERO; 2];
     let found = (|| {
-        let wordings = crate::ways::candidates(&intents::normalize_phrase(text), text);
+        let phrase = intents::normalize_phrase(text);
+        // (A wording that is the sentence's own phrase is no other way of saying it: reading it
+        // again cost a whole fast-path pass, "explain in detail how …" 0.8 ms.)
+        let wordings: Vec<_> = crate::ways::candidates(&phrase, text).into_iter().filter(|(wording, _)| *wording != phrase).collect();
         stages[0] = started.elapsed();
         if wordings.is_empty() {
             return None;

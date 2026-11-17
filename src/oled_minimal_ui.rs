@@ -1,7 +1,7 @@
-//! The True-OLED minimal look (the default since config v14): pure `#000000` pixels-off black,
-//! cards on `#09090B` with 18 px corners and a 1 px `#18181B` hairline that glows in Sir's
-//! accent when active — and no grid, scan lines or glass tint. The classic sci-fi HUD stays one
-//! voice command ("switch to sci-fi UI") or one click on the title-bar pill away.
+//! The True-OLED minimal look (the default since config v14) in the Stark way (v28): pure
+//! `#000000` pixels-off black, blue-black cards with sharp 2 px corners and a 1 px steel hairline
+//! that glows in Sir's accent when active, no scan lines or glass tint. The classic sci-fi HUD
+//! stays one voice command ("switch to sci-fi UI") or one click on the title-bar pill away.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -51,6 +51,7 @@ impl UiDesignParadigm {
 
 /// The accent presets of the OLED look (name, #RRGGBB).
 pub const ACCENTS: &[(&str, &str)] = &[
+    ("Stark Red", "#FF2B3E"),
     ("Ice White", "#E4E4E7"),
     ("Electric Blue", "#3B82F6"),
     ("Stark Gold", "#F5B841"),
@@ -64,6 +65,7 @@ pub const ACCENTS: &[(&str, &str)] = &[
 pub fn accent_preset(raw: &str) -> Option<(&'static str, &'static str)> {
     let s: String = raw.to_lowercase().chars().filter(|c| c.is_alphanumeric()).collect();
     let alias = match s.as_str() {
+        "stark" | "starkred" => "starkred",
         "white" | "icewhite" | "eisweiss" | "eisweiß" | "weiss" | "weiß" => "icewhite",
         "blue" | "electricblue" | "blau" | "elektrischblau" => "electricblue",
         "gold" | "starkgold" | "golden" => "starkgold",
@@ -89,13 +91,14 @@ pub struct OledPalette {
 }
 
 pub const BACKGROUND: [u8; 3] = [0, 0, 0];
-pub const SURFACE: [u8; 3] = [9, 9, 11];
-pub const BORDER_IDLE: [u8; 3] = [24, 24, 27];
-pub const CARD_ROUNDING: f32 = 18.0;
+pub const SURFACE: [u8; 3] = [6, 8, 12];
+pub const BORDER_IDLE: [u8; 3] = [32, 40, 52];
+/// Sharp, as a Stark panel is cut (the rounded 18 px cards of v14-v27 read as a phone app).
+pub const CARD_ROUNDING: f32 = 2.0;
 
 impl OledPalette {
     pub fn new(accent: [u8; 3]) -> Self {
-        Self { background: BACKGROUND, surface: SURFACE, well: [15, 15, 18], border_idle: BORDER_IDLE, accent, text: [244, 244, 245], muted: [161, 161, 170] }
+        Self { background: BACKGROUND, surface: SURFACE, well: [10, 13, 19], border_idle: BORDER_IDLE, accent, text: [232, 242, 252], muted: [138, 156, 176] }
     }
 
     /// The hairline: idle zinc, the accent (softened) on hover/active.
@@ -143,10 +146,15 @@ mod tests {
         assert_eq!(s.ui_paradigm, UiDesignParadigm::ModernOledMinimal);
         let p = OledPalette::new(s.accent_rgb());
         assert_eq!(p.background, [0, 0, 0]);
-        assert_eq!(p.surface, [9, 9, 11]);
-        assert_eq!(p.border(false), [24, 24, 27]);
+        assert_eq!(p.surface, [6, 8, 12]);
+        assert_eq!(p.border(false), [32, 40, 52]);
         assert_ne!(p.border(true), p.border(false));
-        assert_eq!(CARD_ROUNDING, 18.0);
+        assert_eq!(CARD_ROUNDING, 2.0, "Stark panels are cut sharp");
+        // Text and secondary text read on the cards (WCAG 4.5:1).
+        let c = |c: [u8; 3]| eframe::egui::Color32::from_rgb(c[0], c[1], c[2]);
+        for ink in [p.text, p.muted] {
+            assert!(crate::hud_style::contrast(c(ink), c(p.well)) >= 4.5, "{ink:?}");
+        }
         // Old configs without the field get the new default.
         let old: InterfaceSettings = serde_json::from_value(json!({"theme": "stark"})).unwrap();
         assert_eq!(old.ui_paradigm, UiDesignParadigm::ModernOledMinimal);
@@ -179,8 +187,9 @@ mod tests {
 
     #[test]
     fn accent_presets_cover_the_spec() {
-        for name in ["Ice White", "Electric Blue", "Stark Gold", "Emerald", "Violet", "Crimson", "Sunset Orange"] {
+        for name in ["Stark Red", "Ice White", "Electric Blue", "Stark Gold", "Emerald", "Violet", "Crimson", "Sunset Orange"] {
             assert_eq!(accent_preset(name).map(|a| a.0), Some(name));
         }
+        assert_eq!(accent_preset("Stark").map(|a| a.1), Some("#FF2B3E"));
     }
 }

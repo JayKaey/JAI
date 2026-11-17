@@ -6480,7 +6480,7 @@ mod tests {
             Some(Intent::Tool { name: "configure_interface", args }) => crate::interface::configure(&crate::interface::InterfaceSettings::default(), &args).map(|d| d.settings.hud_palette).unwrap_or_default(),
             other => panic!("{text}: {other:?}"),
         };
-        for (text, want) in [("change your color to red", "crimson_overdrive"), ("JAI, make the interface gold", "stark_gold"), ("change your colour to blue", "arc_cyan"), ("Ändere deine Farbe auf Grün", "emerald_matrix"), ("Mach dich lila", "ultraviolet"), ("change your colour to orange", "solar_orange")] {
+        for (text, want) in [("change the theme to Stark", "stark_red"), ("JAI, switch to the Stark look", "stark_red"), ("make the interface yellow", "jai_gold"), ("change your color to red", "crimson_overdrive"),("JAI, make the interface gold", "stark_gold"), ("change your colour to blue", "arc_cyan"), ("Ändere deine Farbe auf Grün", "emerald_matrix"), ("Mach dich lila", "ultraviolet"), ("change your colour to orange", "solar_orange")] {
             assert_eq!(palette(text), want, "{text}");
         }
         // The colour lands on the whole HUD's palette.

@@ -1728,11 +1728,12 @@ impl Palette {
             track: Color32::from_white_alpha(14),
             text: rgb(p.text),
             muted: rgb(p.muted),
-            green: rgb([52, 211, 153]),
-            amber: rgb([251, 191, 36]),
-            red: rgb([248, 113, 113]),
-            violet: rgb([167, 139, 250]),
-            sky: rgb([96, 165, 250]),
+            // The HUD's own state colours, and the theme's hologram blue (one system, as in the films).
+            green: crate::hud_style::GOOD,
+            amber: crate::hud_style::warn_colour(),
+            red: crate::hud_style::FAULT,
+            violet: rgb(crate::theme_engine::current().core_secondary),
+            sky: rgb(crate::theme_engine::current().core_secondary),
             light: false,
             radius: crate::oled_minimal_ui::CARD_ROUNDING,
             oled: true,
@@ -1741,7 +1742,7 @@ impl Palette {
 
     /// The pop-up cards' look in either design.
     fn card_style(&self) -> crate::dynamic_popups::CardStyle {
-        crate::dynamic_popups::CardStyle { surface: self.card_solid, border: self.line, accent: self.accent, text: self.text, muted: self.muted, rounding: self.r_panel().max(12.0) }
+        crate::dynamic_popups::CardStyle { surface: self.card_solid, border: self.line, accent: self.accent, text: self.text, muted: self.muted, rounding: self.r_panel() }
     }
 
     /// Panels and cards (16 at the default 18).
@@ -3613,6 +3614,11 @@ const TELEMETRY_H: f32 = 14.0;
 /// The dot matrix: 1 px dots every 28 px at 6 %.
 const DOT_SPACING: f32 = 28.0;
 const DOT_ALPHA: f32 = 0.06;
+/// The Stark workshop's registration marks: every fourth dot is a small "+" (arms 3 px), a
+/// little brighter, fixed to the canvas while it drifts.
+const CROSS_EVERY: i64 = 4;
+const CROSS_ARM: f32 = 3.0;
+const CROSS_ALPHA: f32 = 0.13;
 /// The COMMS block (what Sir said, what JAI answers) fades this long after the last word.
 const CAPTION_SECS: f32 = 20.0;
 /// The band above the telemetry strip the board leaves to the COMMS block (its frame, a heard
@@ -8378,7 +8384,7 @@ pub(super) fn hud_block_window(ctx: &egui::Context, id: &str, title: &str, size:
         // A title cut short shows whole under the pointer.
         let cut = wanted - 26.0 > title_room + 0.5;
         // The title decodes itself as the block opens, and back as it leaves.
-        let lettered = crate::hud_style::fitted_title(ui.painter(), &crate::hud_style::decode(title, motion.resolve.min(motion.content), ctx.input(|i| i.time)), ts(14.0), accent.gamma_multiply(content_alpha), title_room);
+        let lettered = crate::hud_style::fitted_title(ui.painter(), &crate::hud_style::decode(title, motion.resolve.min(motion.content), ctx.input(|i| i.time)), ts(14.0), crate::hud_style::TEXT.gamma_multiply(content_alpha), title_room);
         let title_rect = Rect::from_min_size(pos2(row.left(), mid - lettered.size().y * 0.5), lettered.size());
         ui.painter().galley(title_rect.min, lettered, Color32::PLACEHOLDER);
         if crate::hud_style::paint_light(ui.painter(), pos2(title_rect.right() + 10.0, mid), crate::hud_style::light(id), ctx.input(|i| i.time), content_alpha) {
@@ -8725,6 +8731,10 @@ fn paint_block_frame(painter: &egui::Painter, rect: Rect, m: &WindowMotion, fill
     crate::hud_style::surface(painter, band, fill, m.frame);
     let heat = (1.0 - m.unfold).clamp(0.0, 1.0);
     crate::hud_style::border(painter, band, width, mix(edge, Color32::WHITE, heat * 0.7).gamma_multiply(m.frame.max(heat)));
+    // The Stark tab, as on the board's blocks (`hud_style::shell`), once the frame stands.
+    if let Some(tab) = crate::hud_style::tab_rect(band, crate::hud_style::px(painter)) {
+        painter.rect_filled(tab, Rounding::ZERO, crate::theme_engine::current().primary().gamma_multiply(0.85 * m.frame * (1.0 - heat)));
+    }
 }
 
 /// The two short diagonals in a resizable block's bottom-right corner (inside its border).
@@ -9212,7 +9222,7 @@ fn sharp_block<R>(ui: &mut Ui, label: &str, tag: &str, body: impl FnOnce(&mut Ui
         ui.set_width(ui.available_width());
         let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), 18.0), Sense::hover());
         let tag = ui.painter().layout_no_wrap(tag.to_string(), strip_font(), STRIP_MUTED);
-        let title = crate::hud_style::fitted_title(ui.painter(), label, ts(13.0), crate::hud_board::active_colour(), (row.width() - tag.size().x - 14.0).max(20.0));
+        let title = crate::hud_style::fitted_title(ui.painter(), label, ts(13.0), crate::hud_style::TEXT, (row.width() - tag.size().x - 14.0).max(20.0));
         ui.painter().galley(pos2(row.left(), row.center().y - title.size().y * 0.5), title, Color32::PLACEHOLDER);
         ui.painter().galley(pos2(row.right() - tag.size().x, row.center().y - tag.size().y * 0.5), tag, STRIP_MUTED);
         ui.painter().line_segment([pos2(row.left(), row.bottom() + 3.0), pos2(row.right(), row.bottom() + 3.0)], stroke(1.0, crate::hud_board::border_colour()));
@@ -9326,6 +9336,13 @@ fn canvas_drift(ctx: &egui::Context, home: Rect) -> Vec2 {
 
 /// The obsidian canvas: `#020408` with a radial vignette of the theme's colour in the centre
 /// (fading to black at the edges) and the 28 px dot matrix at 6 %.
+/// Whether the dot at `offset` from the canvas's own origin (the drift taken out) is one of the
+/// "+" marks: whole grid steps, so a mark stays on its dot as the canvas drifts.
+fn is_cross(offset: Vec2) -> bool {
+    let step = |v: f32| ((v - DOT_SPACING / 2.0) / DOT_SPACING).round() as i64;
+    step(offset.x).rem_euclid(CROSS_EVERY) == 0 && step(offset.y).rem_euclid(CROSS_EVERY) == 0
+}
+
 pub(crate) fn paint_canvas(ctx: &egui::Context) {
     let rect = ctx.screen_rect();
     let painter = ctx.layer_painter(egui::LayerId::background());
@@ -9358,6 +9375,7 @@ pub(crate) fn paint_canvas(ctx: &egui::Context) {
     painter.add(Shape::mesh(mesh));
     let mut dots = egui::Mesh::default();
     let dot = Color32::from_white_alpha((255.0 * DOT_ALPHA) as u8);
+    let cross = Color32::from_white_alpha((255.0 * CROSS_ALPHA) as u8);
     // Round the blocks the dots fade out: what they show stands out (Sir's choice of 2026-11-15).
     let blocks = crate::hud_dock::block_rects();
     let mut y = rect.top() + DOT_SPACING / 2.0 + drift.y.rem_euclid(DOT_SPACING) - DOT_SPACING;
@@ -9367,7 +9385,11 @@ pub(crate) fn paint_canvas(ctx: &egui::Context) {
             let at = centre + (pos2(x, y) - centre) * zoom;
             let at = pos2(at.x.round(), at.y.round());
             let fade = (blocks.iter().map(|b| b.distance_to_pos(at)).fold(f32::INFINITY, f32::min) / 48.0).clamp(0.0, 1.0);
-            if fade > 0.0 {
+            if fade > 0.0 && is_cross(pos2(x, y) - rect.left_top() - drift) {
+                for arm in [vec2(2.0 * CROSS_ARM + 1.0, 1.0), vec2(1.0, 2.0 * CROSS_ARM + 1.0)] {
+                    dots.add_colored_rect(Rect::from_center_size(at + vec2(0.5, 0.5), arm), cross.gamma_multiply(fade));
+                }
+            } else if fade > 0.0 {
                 dots.add_colored_rect(Rect::from_min_size(at, vec2(1.0, 1.0)), dot.gamma_multiply(fade));
             }
             x += DOT_SPACING;

@@ -90,6 +90,18 @@ const fn fixed(title: &'static str, what: &'static str) -> Entry {
 /// Every change, newest first.
 pub const RELEASES: &[Release] = &[
     Release {
+        date: "2026-11-17",
+        name: "The Stark look",
+        entries: &[
+            new("The Stark look", "Stark red and hologram blue on black glass, steel frames, crosshair marks: his workshop.", "stark_look"),
+            better("White titles, a red tab", "Every block is titled in white; a short red tab on its frame carries the colour."),
+            better("Sharp panels everywhere", "Cards, pop-ups and panels are cut sharp, with steel hairlines instead of rounded grey."),
+            better("Blue light in the emblem", "The emblem's inner counter-rings glow hologram blue inside its red rings."),
+            fixed("Questions go on sooner", "Some questions were read twice on the fast path; now once, up to a millisecond sooner."),
+            better("Icon and phone page","The taskbar icon and the phone page wear the same red and blue."),
+        ],
+    },
+    Release {
         date: "2026-11-16",
         name: "A hundred small things",
         entries: &[
@@ -102,7 +114,7 @@ pub const RELEASES: &[Release] = &[
             fixed("The weather in your own town", "The briefing named a district near you; it now finds your town and asks Open-Meteo."),
             fixed("Close all windows closes the cards", "Widget cards close too, but not your lists or a running timer; \"thank you\" first works."),
             fixed("A bare yes closes nothing", "A \"yes\" when he asked nothing no longer closes or opens a program on a guess."),
-            fixed("No orb while not listening", "Under \"stop listening\" the corner orb no longer flies out for every noise; it stays in the background."),
+            fixed("No orb while not listening", "Under \"stop listening\" the corner orb no longer flies out at every noise; it stays put."),
             better("A film look", "Hairline frames on whole pixels with corner brackets, and no halos round the blocks."),
             better("A calmer emblem", "Thinner rings, and a core whose light breathes slowly at rest."),
             better("A quieter canvas", "Less grain and dust on the glass, and no scratches."),
@@ -429,6 +441,13 @@ pub const RELEASES: &[Release] = &[
 
 /// The explanations, by id.
 pub const EXPLANATIONS: &[Explanation] = &[
+    Explanation {
+        id: "stark_look",
+        title: "The Stark look",
+        what: "The whole HUD is drawn the way Tony Stark's workshop draws its screens: black glass, Stark red for whatever is live, hologram blue for the counter-rings and the 3D light, steel hairline frames with white corner brackets, white titles with a short red tab, and small crosshair marks on the grid behind it all. The taskbar icon and the phone page wear the same colours.",
+        say: &["Jay, change the theme to Stark.", "Jay, make the interface yellow.   (your yellow, any time)", "[ THEME ] at the top left cycles every theme"],
+        know: "Your settings moved to it once, because they still held the stock yellow; a colour you choose yourself always stays. Every other theme keeps the white titles and the tab in its own colour. The minimal OLED design keeps its pure black. Panels are cut sharp; in the Sci-Fi design the corner slider in the settings still rounds them.",
+    },
     Explanation {
         id: "dictation",
         title: "Dictation",

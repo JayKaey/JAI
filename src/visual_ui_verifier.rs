@@ -1378,9 +1378,9 @@ mod tests {
         let found = off_theme(&frame, "Crimson Overdrive", &red);
         assert_eq!(found.len(), 2, "{found:?}");
         assert!(found[0].contains("#2B7A9E") && found[1].contains("#3DF59B"), "{found:?}");
-        // The matrix has twelve themes.
+        // The matrix has every preset and three custom themes.
         let list = themes();
-        assert_eq!(list.len(), 12, "{list:?}");
+        assert_eq!(list.len(), theme_engine::PRESETS.len() + 3, "{list:?}");
         assert!(list.iter().any(|(name, _)| name == theme_engine::DEFAULT_PRESET));
         let found = jumps(&[0.0, 0.1, 0.9, 1.0], 0.5);
         assert!(found.len() == 1 && found[0].0 == 2 && (found[0].1 - 0.8).abs() < 1e-5, "{found:?}");

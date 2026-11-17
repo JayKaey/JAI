@@ -169,10 +169,24 @@ pub fn shell(p: &Painter, r: Rect, active: bool, alpha: f32) {
     border(p, r, 1.0, edge.gamma_multiply(alpha));
     let (bracket, lit) = if active { (crate::hud_board::active_colour(), 0.8) } else { (crate::hud_board::bracket_colour().gamma_multiply(0.85), 0.0) };
     corners(p, r, BRACKET_ARM, bracket.gamma_multiply(alpha), lit * alpha);
+    if let Some(tab) = tab_rect(r, px(p)) {
+        let colour = crate::theme_engine::current().primary().gamma_multiply(if active { 1.0 } else { 0.8 } * alpha);
+        glow(p, tab, colour, if active { 0.8 } else { 0.3 } * alpha);
+        p.rect_filled(tab, Rounding::ZERO, colour);
+    }
 }
 
 /// How long a corner bracket's arms are.
 pub const BRACKET_ARM: f32 = 9.0;
+/// The Stark panel's tab: a short bar of the theme's colour on the top edge, just past the
+/// top-left bracket (as the films mark a panel). Narrow blocks go without it.
+pub const TAB_W: f32 = 22.0;
+
+/// Where the tab of a block at `r` lies (two whole pixels high, on its top edge), if it has room.
+pub fn tab_rect(r: Rect, pixel: f32) -> Option<Rect> {
+    let ppp = 1.0 / pixel;
+    (r.width() >= 6.0 * TAB_W).then(|| Rect::from_min_size(pos2(snap(r.left() + BRACKET_ARM + 6.0, ppp), snap(r.top(), ppp)), vec2(TAB_W, 2.0 * pixel)))
+}
 
 /// `a` to `b` by `t`, channel by channel (both as they are stored: premultiplied).
 fn lerp_colour(a: Color32, b: Color32, t: f32) -> Color32 {

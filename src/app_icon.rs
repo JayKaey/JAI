@@ -1,9 +1,10 @@
 //! The application icon: JAI's HUD emblem on a deep-space glass squircle. It reads at 256 × 256 px
 //! and stays unmistakable at 16-24 px on the Windows taskbar.
 //!
-//! From the outside in: a hairline rim with a 72-tick scale (long ticks every 30°), a bold cyan ring
-//! cut into four arcs, a slim ice-white ring of three long arcs, an amber arc-reactor ring of three
-//! short arcs and a white-hot core in a cyan / amber halo, all lit over a `#0A1E33` → `#02060C`
+//! From the outside in (the Stark look, v28): a hairline rim with a 72-tick scale (long ticks
+//! every 30°), a bold Stark-red ring cut into four arcs, a slim ice-white ring of three long arcs,
+//! a hologram-blue arc-reactor ring of three short arcs and a white-hot core in a blue / red halo,
+//! all lit over a `#0A1E33` → `#02060C`
 //! radial gradient with a cold rim light. The fine parts (ticks, hairline, core ring) only appear
 //! from about 64 px up; the bold rings carry the taskbar frames on their own.
 //!
@@ -39,20 +40,21 @@ pub struct Ring {
 const fn deg(d: f32) -> f32 {
     d * PI / 180.0
 }
-/// The bold cyan ring: four 62° arcs, centred on the diagonals.
+/// The bold Stark-red ring: four 62° arcs, centred on the diagonals.
 pub const OUTER: Ring = Ring { radius: 0.68, half: 0.055, arcs: 4, span: deg(62.0), phase: deg(-45.0) };
 /// The slim ice ring: three 100° arcs, the first at the bottom.
 pub const MIDDLE: Ring = Ring { radius: 0.50, half: 0.030, arcs: 3, span: deg(100.0), phase: deg(90.0) };
-/// The amber arc-reactor ring: three 50° arcs, the first at the top.
+/// The hologram-blue arc-reactor ring: three 50° arcs, the first at the top.
 pub const INNER: Ring = Ring { radius: 0.36, half: 0.050, arcs: 3, span: deg(50.0), phase: deg(-90.0) };
 pub const CORE_RADIUS: f32 = 0.15;
 
 const SPACE_EDGE: [f32; 3] = rgb(0x02060C);
 const SPACE_MID: [f32; 3] = rgb(0x0A1E33);
 const BEVEL: [f32; 3] = rgb(0x1A3550);
-const CYAN: [f32; 3] = rgb(0x22D3FF);
+/// The Stark look's own two colours (`theme_engine`'s `stark_red`).
+const RED: [f32; 3] = rgb(0xFF2B3E);
 const ICE: [f32; 3] = rgb(0xCFF6FF);
-const AMBER: [f32; 3] = rgb(0xFFB347);
+const HOLO: [f32; 3] = rgb(0x62C8FF);
 const WHITE: [f32; 3] = [1.0; 3];
 
 const fn rgb(hex: u32) -> [f32; 3] {
@@ -134,15 +136,15 @@ fn sample(x: f32, y: f32, px: f32) -> ([f32; 3], f32) {
         let reach = cover((r - (inner + outer) / 2.0).abs(), (outer - inner) / 2.0, px);
         over(&mut c, ICE, cover(across, if long { 0.007 } else { 0.004 }, px) * reach * if long { 0.8 } else { 0.4 });
     }
-    ring(&mut c, &OUTER, CYAN, r, theta, px, glow);
+    ring(&mut c, &OUTER, RED, r, theta, px, glow);
     ring(&mut c, &MIDDLE, ICE, r, theta, px, glow);
-    ring(&mut c, &INNER, AMBER, r, theta, px, glow);
-    // The white-hot core in its amber / cyan halo, and (large frames) a fine cyan ring around it.
+    ring(&mut c, &INNER, HOLO, r, theta, px, glow);
+    // The white-hot core in its blue / red halo, and (large frames) a fine blue ring around it.
     let off_core = (r - CORE_RADIUS).max(0.0);
-    add(&mut c, AMBER, (-(off_core / 0.07).powi(2)).exp() * 0.55 * glow);
-    add(&mut c, CYAN, (-(off_core / 0.18).powi(2)).exp() * 0.16 * glow);
+    add(&mut c, HOLO, (-(off_core / 0.07).powi(2)).exp() * 0.55 * glow);
+    add(&mut c, RED, (-(off_core / 0.18).powi(2)).exp() * 0.16 * glow);
     if fine {
-        over(&mut c, CYAN, cover((r - 0.235).abs(), 0.008, px) * 0.8);
+        over(&mut c, HOLO, cover((r - 0.235).abs(), 0.008, px) * 0.8);
     }
     over(&mut c, WHITE, cover(r, CORE_RADIUS.max(px * 0.9), px));
     (c, alpha)
@@ -312,16 +314,16 @@ mod tests {
         pixel(rgba, 256, (128.0 + radius * c) as usize, (128.0 + radius * s) as usize)
     }
 
-    fn is_cyan(p: [u8; 4]) -> bool {
-        p[0] < 80 && p[1] > 190 && p[2] > 230
+    fn is_red(p: [u8; 4]) -> bool {
+        p[0] > 220 && p[1] < 100 && p[2] < 120
     }
 
     fn is_ice(p: [u8; 4]) -> bool {
         p[0] > 170 && p[1] > 220 && p[2] > 230
     }
 
-    fn is_amber(p: [u8; 4]) -> bool {
-        p[0] > 220 && p[1] > 140 && p[1] < 210 && p[2] < 120
+    fn is_holo(p: [u8; 4]) -> bool {
+        p[0] < 150 && p[1] > 170 && p[2] > 230
     }
 
     fn is_dark(p: [u8; 4]) -> bool {
@@ -338,7 +340,7 @@ mod tests {
     }
 
     #[test]
-    fn icon_is_a_glass_squircle_with_cyan_ice_and_amber_rings_and_a_white_core() {
+    fn icon_is_a_glass_squircle_with_red_ice_and_hologram_blue_rings_and_a_white_core() {
         let icon = generate_rose_gyro_app_icon();
         assert_eq!((icon.width, icon.height), (256, 256));
         let rgba = &icon.rgba;
@@ -350,7 +352,7 @@ mod tests {
         // The cold rim light just inside the top edge.
         let bevel = px(128, 1);
         assert!(bevel[2] > 40 && bevel[2] < 100 && bevel[0] < 50, "bevel {bevel:?}");
-        for (ring, is_ring, name) in [(&OUTER, is_cyan as fn([u8; 4]) -> bool, "cyan"), (&MIDDLE, is_ice, "ice"), (&INNER, is_amber, "amber")] {
+        for (ring, is_ring, name) in [(&OUTER, is_red as fn([u8; 4]) -> bool, "red"), (&MIDDLE, is_ice, "ice"), (&INNER, is_holo, "hologram blue")] {
             for k in 0..ring.arcs {
                 let (arc, gap) = (arc_centre(ring, k), arc_centre(ring, k) + 180.0 / ring.arcs as f32);
                 assert!(is_ring(polar(rgba, at(ring), arc)), "{name} arc at {arc}°: {:?}", polar(rgba, at(ring), arc));
@@ -414,9 +416,9 @@ mod tests {
             let px = |x: usize, y: usize| pixel(&rgba, size, x, y);
             assert!(px(0, 0)[3] < 16, "transparent corner at {size} px: {:?}", px(0, 0));
             let all: Vec<[u8; 4]> = (0..size).flat_map(|y| (0..size).map(move |x| (x, y))).map(|(x, y)| px(x, y)).collect();
-            // Cyan and amber survive at taskbar size, the core is bright, the dark dominates.
-            assert!(all.iter().any(|p| p[2] > 150 && p[1] > 140 && p[0] < 110), "cyan at {size} px");
-            assert!(all.iter().any(|p| p[0] > 150 && p[1] > 100 && p[2] < 110), "amber at {size} px");
+            // Red and hologram blue survive at taskbar size, the core is bright, the dark dominates.
+            assert!(all.iter().any(|p| p[2] > 150 && p[1] > 120 && p[0] < 130), "hologram blue at {size} px");
+            assert!(all.iter().any(|p| p[0] > 150 && p[1] < 90 && p[2] < 110), "red at {size} px");
             let c = px(size / 2, size / 2).iter().take(3).map(|v| *v as u32).sum::<u32>().max(px(size / 2 - 1, size / 2 - 1).iter().take(3).map(|v| *v as u32).sum());
             assert!(c > 450, "bright core at {size} px: {c}");
             let dark = all.iter().filter(|p| p[3] == 255 && is_dark(**p)).count();

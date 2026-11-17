@@ -1030,8 +1030,9 @@ impl RoseEmblem {
                 }
             }
             // A thinner ring inside the bright one, with two white glints.
+            // (The counter-rings 3, 5 and 6 are hologram blue: red outside, blue light within.)
             3 => {
-                line(mesh, &points, &fog, crimson_rgb(), 0.4, hair, true);
+                line(mesh, &points, &fog, cyan_rgb(), 0.75, hair, true);
                 for start in [0.2, 0.7] {
                     let (p, l) = lit(&arc_of(&points, start, 0.06));
                     line(mesh, &p, &l, WHITE_RGB, 0.7, 1.0 * scale.max(0.7), false);
@@ -1056,7 +1057,7 @@ impl RoseEmblem {
             }
             // Three white technical arcs on a hairline.
             5 => {
-                line(mesh, &points, &fog, crimson_rgb(), 0.18, hair, true);
+                line(mesh, &points, &fog, cyan_rgb(), 0.45, hair, true);
                 for (k, (start, length)) in [(0.05f32, 0.14f32), (0.36, 0.1), (0.62, 0.18)].into_iter().enumerate() {
                     // The segmented sweeps breathe out and back with his voice.
                     let length = length * (1.0 + 1.2 * voice * (self.clock * 7.0 + k as f32 * 2.1).sin().abs());
@@ -1066,9 +1067,9 @@ impl RoseEmblem {
             }
             // The inner ring with its vertical crosshair ticks.
             _ => {
-                line(mesh, &points, &fog, crimson_rgb(), 0.45, hair, true);
-                cross(mesh, -PI / 2.0, 0.78, 1.18, mix(crimson_rgb(), WHITE_RGB, 0.5));
-                cross(mesh, PI / 2.0, 0.78, 1.18, mix(crimson_rgb(), WHITE_RGB, 0.5));
+                line(mesh, &points, &fog, cyan_rgb(), 0.5, hair, true);
+                cross(mesh, -PI / 2.0, 0.78, 1.18, ice_rgb());
+                cross(mesh, PI / 2.0, 0.78, 1.18, ice_rgb());
             }
         }
     }

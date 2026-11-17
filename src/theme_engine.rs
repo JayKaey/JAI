@@ -3,7 +3,8 @@
 //! re-themes the whole HUD — board frames and brackets, the text console, the core sphere and the
 //! emblem's rings — at once, cross-fading through HSV over 0.35 s.
 //!
-//! Nine presets (`PRESETS`, `jai_gold` the default) and any custom colour: a colour word or
+//! Ten presets (`PRESETS`, `stark_red` the default: Stark red with hologram blue, as the films'
+//! workshop draws it; the style guide is in CLAUDE.md) and any custom colour: a colour word or
 //! #RRGGBB becomes a palette in that colour, lifted only as far as it needs to read on the dark
 //! glass (`derive`; an ice blue stays ice). The rings' light is premultiplied-additive
 //! (`hdr_neon_color`): a thin bright line with two faint, narrow strokes under it
@@ -89,8 +90,10 @@ fn c32(c: [u8; 3]) -> Color32 {
     Color32::from_rgb(c[0], c[1], c[2])
 }
 
-/// The presets: his own yellow first (the default since v24), then the eight Stark ones.
-pub const PRESETS: [(&str, ThemePalette); 9] = [
+/// The presets: the Stark look first (the default since v28: red for what is live, hologram blue
+/// for the counter-rings, steel hairlines), his yellow (the default of v24-v27), then the others.
+pub const PRESETS: [(&str, ThemePalette); 10] = [
+    ("stark_red", ThemePalette::new(0xFF2B3E, 0x62C8FF, 0x8FA6BD, 0xFF5E6C)),
     ("jai_gold", ThemePalette::new(0xFFD400, 0xFF9A00, 0xFFC400, 0xFFE873)),
     ("rose_crimson", ThemePalette::new(0xFF0055, 0x00F5FF, 0x00D8FF, 0xFF1E6E)),
     ("arc_cyan", ThemePalette::new(0x00F0FF, 0x38B6FF, 0x00E5FF, 0x80F8FF)),
@@ -102,7 +105,7 @@ pub const PRESETS: [(&str, ThemePalette); 9] = [
     ("ice_monochrome", ThemePalette::new(0xFFFFFF, 0xA5F3FC, 0xE2E8F0, 0xFFFFFF)),
 ];
 
-pub const DEFAULT_PRESET: &str = "jai_gold";
+pub const DEFAULT_PRESET: &str = "stark_red";
 
 /// A preset by name ("rose_crimson", "Arc Cyan", "stark-gold").
 pub fn preset(name: &str) -> Option<ThemePalette> {
@@ -135,7 +138,9 @@ pub fn preset_for_word(word: &str) -> Option<&'static str> {
         "rose" | "roses" | "rows" | "pink" | "magenta" | "rosa" | "pinke" | "rose crimson" => "rose_crimson",
         "cyan" | "blue" | "blau" | "türkis" | "tuerkis" | "turquoise" | "aqua" | "arc reactor" | "arc" | "hellblau" => "arc_cyan",
         "yellow" | "gelb" | "golden yellow" | "goldgelb" | "jai" | "jai gold" | "jai yellow" => "jai_gold",
-        "gold" | "golden" | "stark" => "stark_gold",
+        // ("Iron Man" is the red-and-gold Mark 42 theme's, `interface::THEMES`.)
+        "stark" | "stark red" | "tony stark" | "stark hud" | "default" | "standard" => "stark_red",
+        "gold" | "golden" => "stark_gold",
         "green" | "grün" | "gruen" | "emerald" | "smaragd" | "matrix" => "emerald_matrix",
         "purple" | "violet" | "lila" | "violett" | "lilac" | "vibranium" => "ultraviolet",
         "orange" | "amber" | "bernstein" | "solar" => "solar_orange",
@@ -566,12 +571,17 @@ thread_local! {
     static LOOK: std::cell::Cell<Option<(ThemePalette, &'static str)>> = const { std::cell::Cell::new(None) };
 }
 
-/// Test pictures in the look's colours until the guard goes: his own yellow (`custom:#FFD400`),
-/// or with `JAI_LOOK=ice` a film ice blue (`custom:#8FD8FF`). They are saved in a folder of
-/// that set's name (`ui_snapshot::Canvas::save`), so the two sets lie side by side.
+/// Test pictures in the look's colours until the guard goes: the Stark default (`stark_red`),
+/// or with `JAI_LOOK=yellow` his yellow (`custom:#FFD400`), with `JAI_LOOK=ice` a film ice blue
+/// (`custom:#8FD8FF`). They are saved in a folder of that set's name
+/// (`ui_snapshot::Canvas::save`), so the sets lie side by side.
 #[cfg(test)]
 pub(crate) fn look_for_pictures() -> LookGuard {
-    let (name, colour) = if std::env::var("JAI_LOOK").is_ok_and(|v| v.eq_ignore_ascii_case("ice")) { ("ice", "custom:#8FD8FF") } else { ("yellow", "custom:#FFD400") };
+    let (name, colour) = match std::env::var("JAI_LOOK").unwrap_or_default().to_lowercase().as_str() {
+        "ice" => ("ice", "custom:#8FD8FF"),
+        "yellow" => ("yellow", "custom:#FFD400"),
+        _ => ("stark", DEFAULT_PRESET),
+    };
     LOOK.with(|l| l.set(Some((resolve(colour), name))));
     LookGuard
 }
@@ -604,18 +614,23 @@ mod tests {
             name = next_preset(name);
             seen.push(name);
         }
-        assert_eq!(seen, PRESETS.map(|(n, _)| n), "JAI Gold → Rose Crimson → Arc Cyan → … → Ice Monochrome");
-        assert_eq!(next_preset("ice_monochrome"), "jai_gold", "and round again");
-        assert_eq!(next_preset("custom:#123456"), "jai_gold");
+        assert_eq!(seen, PRESETS.map(|(n, _)| n), "Stark Red → JAI Gold → Rose Crimson → … → Ice Monochrome");
+        assert_eq!(next_preset("ice_monochrome"), "stark_red", "and round again");
+        assert_eq!(next_preset("custom:#123456"), "stark_red");
         assert_eq!(label("stark_gold"), "STARK GOLD");
     }
 
     #[test]
     fn the_presets_are_fully_saturated_with_white_hot_centres() {
-        assert_eq!(PRESETS.len(), 9);
-        // His own yellow is the default: yellow, not the gold preset's orange.
-        let own = preset(DEFAULT_PRESET).unwrap();
-        assert_eq!((DEFAULT_PRESET, own.core_primary), ("jai_gold", [0xFF, 0xD4, 0x00]));
+        assert_eq!(PRESETS.len(), 10);
+        // The Stark look is the default: red for what is live, hologram blue, steel hairlines.
+        let stark = preset(DEFAULT_PRESET).unwrap();
+        assert_eq!((DEFAULT_PRESET, stark.core_primary, stark.core_secondary), ("stark_red", [0xFF, 0x2B, 0x3E], [0x62, 0xC8, 0xFF]));
+        let (_, steel, _) = to_hsv(stark.hud_frame_border);
+        assert!(steel < 0.35, "the frames are steel, not red: {:?}", stark.hud_frame_border);
+        // His yellow stays: yellow, not the gold preset's orange.
+        let own = preset("jai_gold").unwrap();
+        assert_eq!(own.core_primary, [0xFF, 0xD4, 0x00]);
         assert!(own.core_primary[1] > preset("stark_gold").unwrap().core_primary[1], "more yellow than Stark Gold");
         assert_eq!(preset("rose_crimson").unwrap().core_primary, [0xFF, 0x00, 0x55]);
         assert_eq!(preset("Arc Cyan").unwrap().hud_frame_border, [0x00, 0xE5, 0xFF]);
@@ -635,7 +650,7 @@ mod tests {
 
     #[test]
     fn colour_words_pick_presets_in_english_and_german() {
-        for (word, want) in [("red", "crimson_overdrive"), ("Rot", "crimson_overdrive"), ("blue", "arc_cyan"), ("cyan", "arc_cyan"), ("gold", "stark_gold"), ("gelb", "jai_gold"), ("yellow", "jai_gold"), ("green", "emerald_matrix"), ("grün", "emerald_matrix"), ("purple", "ultraviolet"), ("lila", "ultraviolet"), ("orange", "solar_orange"), ("pink", "rose_crimson"), ("white", "ice_monochrome"), ("weiß", "ice_monochrome"), ("ultraviolet", "ultraviolet")] {
+        for (word, want) in [("red", "crimson_overdrive"), ("Rot", "crimson_overdrive"), ("blue", "arc_cyan"), ("cyan", "arc_cyan"), ("gold", "stark_gold"), ("gelb", "jai_gold"), ("yellow", "jai_gold"), ("green", "emerald_matrix"), ("grün", "emerald_matrix"), ("purple", "ultraviolet"), ("lila", "ultraviolet"), ("orange", "solar_orange"), ("pink", "rose_crimson"), ("white", "ice_monochrome"), ("weiß", "ice_monochrome"), ("ultraviolet", "ultraviolet"), ("Stark", "stark_red"), ("Tony Stark", "stark_red"), ("stark red", "stark_red")] {
             assert_eq!(preset_for_word(word), Some(want), "{word}");
         }
         assert_eq!(preset_for_word("teal-ish brown"), None);

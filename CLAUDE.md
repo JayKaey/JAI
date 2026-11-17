@@ -79,6 +79,27 @@ The owner uses the PC while tests run. Put test windows on `--monitor 2` and nev
 
 Code that acts outside JAI, writes the settings file, or writes the conversation or routine logs must check these guards.
 
+## The Stark look (style guide)
+
+Everything JAI shows must look as if Tony Stark built it for his workshop and his helmet: black glass, red and hologram blue light, steel hairlines, technical type. The owner's reference videos (2026-11-17) show red-on-black radial HUDs, hologram projection tables, and particle "AI cores". This applies to the HUD, every block and window, the icon (`app_icon.rs`) and the phone page (`assets/satellite.html`). Before you build a look change, render it offscreen (`cargo test --release gallery_ snapshot_`; pictures in `target/ui-snapshots/stark/`) and send the owner a picture.
+
+- **Colour comes only from `theme_engine::current()`.** Never hard-code it. The default preset `stark_red` defines:
+  - **Primary `#FF2B3E` (Stark red):** what is live, active or selected, the busy light, the panel tab, the main rings.
+  - **Secondary `#62C8FF` (hologram blue):** the counter-rings, 3D and hologram light, and a chart's second series.
+  - **Frame border:** steel `#8FA6BD` at 30 %.
+  - **Corner brackets:** near-white.
+
+  Text is `hud_style::TEXT` (cool white) and `MUTED`. States use `GOOD`, `warn_colour()` and `FAULT`. The canvas is near-black `OBSIDIAN`; the Minimal OLED design uses pure black.
+- **Shapes:** sharp corners (0–2 px), 1 px hairlines on the pixel grid (`hud_style::border`), L-shaped corner brackets (`corners`), and a short red tab on each panel's top edge (`tab_rect`). The canvas has a dot grid with a "+" crosshair on every fourth dot (`paint_canvas`). Radial pieces are segmented arcs with tick marks.
+- **Light, not objects:** a thin bright line with two faint strokes under it (`NEON_PASSES`). Use no gradients-as-decoration, bevels, metal housings, rivets, wear or rounded "app" cards; the owner rejected these, and nothing is ever built round the orb. The emblem is light: rings in primary and secondary.
+- **Type:**
+  - Titles: white, uppercase and tracked, in Rajdhani (`title_font`).
+  - Labels, figures and keys: Share Tech Mono or `label_font`. Keys look like `[ CLOSE ]`.
+  - Sections are joined with `//` (`COMMS // LIVE RESPONSE`).
+  - Body text stays plain and readable (4.5:1 contrast, tested in `text_and_labels_read_on_every_theme`).
+- **Motion:** 250 ms or less. Titles decode in, panels unfold from a hairline and fold into a line on exit (`hud_style`, `WindowMotion`).
+- **New UI** uses the existing pieces (`hud_style::shell`, the block header, `keys`, `paint_light`, the `Palette` in `gui.rs`). It should not invent its own colours or chrome.
+
 ## Conventions and traps
 
 - Line endings: `.gitattributes` is `* -text`, and files mix CRLF and LF. The Edit tool keeps each file as it is, but `sed -i` in Git Bash strips every CR. After any scripted edit, check `git diff --numstat` for whole-file churn.

@@ -405,7 +405,7 @@ impl Default for InterfaceSettings {
             zen_mode: true,
             orb_scale: 1.0,
             font_scale: 1.0,
-            corner_rounding: 18.0,
+            corner_rounding: 2.0,
             header_telemetry: true,
             orb_mode: false,
             orb_size_px: 260.0,
@@ -528,6 +528,25 @@ impl InterfaceSettings {
         }
     }
 
+    /// v28 (Sir, 2026-11-17: "the whole UI tony stark styled"): the stock yellow of v24-v27 becomes
+    /// the Stark look; a colour he chose himself stays.
+    pub fn stark_v28(&mut self) {
+        if self.theme == "stark" {
+            self.theme = "arc_cyan".to_string();
+        }
+        // The stock 18 px corners become Stark's sharp cut; a rounding he chose stays.
+        if self.corner_rounding == 18.0 {
+            self.corner_rounding = Self::default().corner_rounding;
+        }
+        if self.hud_palette == "jai_gold" && self.accent.eq_ignore_ascii_case("#ffd400") {
+            let defaults = Self::default();
+            self.theme = defaults.theme;
+            self.accent = defaults.accent;
+            self.background = defaults.background;
+            self.hud_palette = defaults.hud_palette;
+        }
+    }
+
     pub fn sanitize(&mut self) {
         let defaults = Self::default();
         let known = crate::theme_engine::preset(&self.hud_palette).is_some()
@@ -550,7 +569,7 @@ impl InterfaceSettings {
             Some(rgb) => self.background = hex(dark_glass(rgb)),
             None => self.background = defaults.background.clone(),
         }
-        self.corner_rounding = if self.corner_rounding.is_finite() { self.corner_rounding.round().clamp(MIN_ROUNDING, MAX_ROUNDING) } else { 18.0 };
+        self.corner_rounding = if self.corner_rounding.is_finite() { self.corner_rounding.round().clamp(MIN_ROUNDING, MAX_ROUNDING) } else { 2.0 };
         self.orb_size_px = if self.orb_size_px.is_finite() { self.orb_size_px.round().clamp(MIN_ORB_PX, MAX_ORB_PX) } else { 260.0 };
         self.orb_opacity = if self.orb_opacity.is_finite() { ((self.orb_opacity * 100.0).round() / 100.0).clamp(0.15, 1.0) } else { 1.0 };
         self.orb_anchor = anchor_id(&self.orb_anchor).unwrap_or("bottom-right").to_string();
@@ -1168,16 +1187,26 @@ pub struct Theme {
 
 pub const THEMES: &[Theme] = &[
     Theme {
+        name: "stark_red",
+        display: "Stark",
+        accent: "#ff2b3e",
+        // Blue-black workshop glass.
+        background: "#05070b",
+        hint: "red and blue, the default",
+        aliases: &["stark", "stark red", "tony stark", "stark hud", "stark look", "default", "standard", "original", "normal"],
+    },
+    Theme {
         name: "jai",
         display: "JAI Gold",
         accent: "#ffd400",
         // Warm obsidian glass.
         background: "#0a0804",
-        hint: "yellow, the default",
-        aliases: &["jai", "jai gold", "jai yellow", "default", "standard", "classic", "original", "normal"],
+        hint: "yellow",
+        aliases: &["jai", "jai gold", "jai yellow", "classic"],
     },
     Theme {
-        name: "stark",
+        // ("stark" until v28, which moves a stored "stark" here: the word means the Stark look now.)
+        name: "arc_cyan",
         display: "Arc Cyan",
         accent: "#00e5ff",
         // Deep obsidian glass.
@@ -1268,9 +1297,8 @@ pub const THEMES: &[Theme] = &[
 pub fn theme(name: &str) -> Option<&'static Theme> {
     let n = words(name);
     let compact = n.replace(' ', "");
-    THEMES
-        .iter()
-        .find(|t| t.name == compact || t.display.to_lowercase() == n || t.aliases.contains(&n.as_str()))
+    // A theme's own name first, then its display name and aliases.
+    THEMES.iter().find(|t| t.name == compact || t.name == n.replace(' ', "_")).or_else(|| THEMES.iter().find(|t| t.display.to_lowercase() == n || t.aliases.contains(&n.as_str())))
 }
 
 fn theme_list() -> String {
@@ -2600,7 +2628,6 @@ pub struct GuiMasterConfig {
 impl GuiMasterConfig {
     pub fn of(s: &InterfaceSettings) -> Self {
         let accent_theme = match s.theme.as_str() {
-            "stark" => "arc_cyan".to_string(),
             "stealth" => "stealth_obsidian".to_string(),
             "emerald" => "emerald_matrix".to_string(),
             other => other.to_string(),
@@ -2881,7 +2908,7 @@ pub fn tool_definition() -> Value {
             "fullscreen": {"type": "boolean"},
             "core_view": {"type": "boolean", "description": "The 3D sphere of your source modules ('show me your core')."},
             "dock_windows": {"type": "boolean", "description": "Bring every detached view back inside the HUD."},
-            "hud_palette": {"type": "string", "enum": ["jai_gold", "rose_crimson", "arc_cyan", "stark_gold", "emerald_matrix", "ultraviolet", "crimson_overdrive", "solar_orange", "ice_monochrome"], "description": "The whole HUD's colour theme; a plain colour is accent_color."},
+            "hud_palette": {"type": "string", "enum": ["stark_red", "jai_gold", "rose_crimson", "arc_cyan", "stark_gold", "emerald_matrix", "ultraviolet", "crimson_overdrive", "solar_orange", "ice_monochrome"], "description": "The whole HUD's colour theme; a plain colour is accent_color."},
             "detach_window": {"type": "string", "description": "Pop a view out into its own OS window."},
             "create_theme": {"type": "object", "description": "Design, save and apply a named theme ('a theme called Cyberpunk with neon yellow borders').", "properties": {"name": {"type": "string"}, "description": {"type": "string", "description": "Sir's colours per role and/or a mood."}, "core_primary": {"type": "string"}, "core_secondary": {"type": "string"}, "window_border": {"type": "string"}, "background_tint": {"type": "string"}}},
             "save_theme": {"type": "string", "description": "Save the current look under this name."},
@@ -2943,7 +2970,9 @@ mod tests {
         assert_eq!(theme("light").map(|t| t.name), Some("arctic"), "light names stay dark glass");
         assert_eq!(theme("stark_gold").map(|t| t.name), Some("stark_gold"));
         assert_eq!(theme("crimson_mk42").map(|t| t.name), Some("crimson_mk42"));
-        assert_eq!(theme("arc_cyan").map(|t| t.name), Some("stark"));
+        assert_eq!(theme("arc_cyan").map(|t| t.name), Some("arc_cyan"));
+        assert_eq!(theme("Stark").map(|t| t.name), Some("stark_red"), "the word is the Stark look's now");
+        assert_eq!(theme("default").map(|t| t.name), Some("stark_red"));
         assert_eq!(theme("stealth_obsidian").map(|t| t.name), Some("stealth"));
         assert_eq!(theme("emerald_matrix").map(|t| t.name), Some("emerald"));
         assert!(theme("red").is_none(), "plain colours are accents, not themes");
@@ -2972,7 +3001,7 @@ mod tests {
         assert_eq!((s.accent.as_str(), s.background.as_str()), ("#ffc233", "#170507"));
         // "Make the interface black" darkens the background instead of hiding the accent.
         let s = apply(json!({"accent_color": "black"}));
-        assert_eq!((s.accent.as_str(), s.background.as_str()), ("#ffd400", "#000000"));
+        assert_eq!((s.accent.as_str(), s.background.as_str()), ("#ff2b3e", "#000000"));
         let s = apply(json!({"background_color": "red"}));
         assert_eq!(s.background, hex(scale_rgb([255, 59, 59], 0.14)));
         let done = configure(&InterfaceSettings::default(), &json!({"accent_color": "red", "opacity": "nonsense"})).unwrap();
