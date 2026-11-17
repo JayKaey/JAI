@@ -12,7 +12,7 @@ The owner states only the task. Follow these rules on every task without being t
 2. **Assumptions first.** Inspect surgically: `graphify query` or `Grep` first, then `Read` with `offset`/`limit` of 40–80 lines. Never read a large `.rs` file top to bottom. Before changing code, post a short bulleted list of **Technical Assumptions**. If any part of the task is unclear, ask before writing code. Otherwise, go straight on.
 3. **Minimum code.** Make the smallest `Edit` diffs and reuse existing helpers. Remove dead, unused or duplicate code you find in the modules you touch. Write no chatter between tool calls; when the app asks for a status, give one short line.
 4. **Reproduce before fixing.** For every reported bug, first write a Rust test or probe that reproduces it and shows why it happens. Then fix it minimally. Also fix adjacent visual or logic glitches you spot in the same modules.
-5. **Verify in several scenarios.** Test each fix and feature across edge cases. Where they apply, include visual layout and geometry checks (offscreen HUD, `ui_snapshot`) and phonetic or STT variations (misheard, German, compound sentences). Repeat `cargo test --release` and `cargo build --release` until both pass with 0 errors and 0 warnings.
+5. **Verify in several scenarios.** Test each fix and feature across edge cases. Where they apply, include visual layout and geometry checks (offscreen HUD, `ui_snapshot`) and phonetic or STT variations (misheard, German, compound sentences). Test only what the task added or changed (owner, 2026-11-17: "always only test the new added features"): name those tests as filters, e.g. `cargo test --release -- theme_engine:: gallery_`, never the whole suite unless asked. Repeat that and `cargo build --release` until both pass with 0 errors and 0 warnings.
 
 Finish every task with this checklist:
 1. Update JAI's changes page in `src/changes.rs`. Add a line to `RELEASES` under today's date, newest day first, one line per entry, using `added` / `better` / `fixed`. A feature that needs explaining uses `new(…)` plus an `EXPLANATIONS` entry. Then run `cargo test --release changes`, which checks the links.
@@ -81,17 +81,17 @@ Code that acts outside JAI, writes the settings file, or writes the conversation
 
 ## The Stark look (style guide)
 
-Everything JAI shows must look as if Tony Stark built it for his workshop and his helmet: black glass, red and hologram blue light, steel hairlines, technical type. The owner's reference videos (2026-11-17) show red-on-black radial HUDs, hologram projection tables, and particle "AI cores". This applies to the HUD, every block and window, the icon (`app_icon.rs`) and the phone page (`assets/satellite.html`). Before you build a look change, render it offscreen (`cargo test --release gallery_ snapshot_`; pictures in `target/ui-snapshots/stark/`) and send the owner a picture.
+Everything JAI shows must look as if Tony Stark designed it for his workshop and his helmet: black glass, thin lines of light, technical type, radial readouts, in the owner's yellow. The owner's reference videos (2026-11-17) show radial HUDs, hologram projection tables, and particle "AI cores"; he wants their design, not their red ("the colors should still remain yellow"). This applies to the HUD, every block and window, the emblem, the corner orb, the core sphere, the icon (`app_icon.rs`) and the phone page (`assets/satellite.html`). Before you build a look change, render it offscreen (`cargo test --release gallery_ snapshot_`; pictures in `target/ui-snapshots/yellow/`, `JAI_LOOK=red` for Stark Red) and send the owner a picture.
 
-- **Colour comes only from `theme_engine::current()`.** Never hard-code it. The default preset `stark_red` defines:
-  - **Primary `#FF2B3E` (Stark red):** what is live, active or selected, the busy light, the panel tab, the main rings.
-  - **Secondary `#62C8FF` (hologram blue):** the counter-rings, 3D and hologram light, and a chart's second series.
-  - **Frame border:** steel `#8FA6BD` at 30 %.
-  - **Corner brackets:** near-white.
+- **Colour comes only from `theme_engine::current()`.** Never hard-code it. The default preset `jai_gold` (his yellow) defines:
+  - **Primary `#FFD400`:** what is live, active or selected, the busy light, the panel tab, the main rings.
+  - **Secondary `#FF9A00`:** the counter-rings, the turning readouts, 3D light, and a chart's second series.
+  - **Frame border** `#FFC400`, faint; **corner brackets** near-white.
 
-  Text is `hud_style::TEXT` (cool white) and `MUTED`. States use `GOOD`, `warn_colour()` and `FAULT`. The canvas is near-black `OBSIDIAN`; the Minimal OLED design uses pure black.
-- **Shapes:** sharp corners (0–2 px), 1 px hairlines on the pixel grid (`hud_style::border`), L-shaped corner brackets (`corners`), and a short red tab on each panel's top edge (`tab_rect`). The canvas has a dot grid with a "+" crosshair on every fourth dot (`paint_canvas`). Radial pieces are segmented arcs with tick marks.
-- **Light, not objects:** a thin bright line with two faint strokes under it (`NEON_PASSES`). Use no gradients-as-decoration, bevels, metal housings, rivets, wear or rounded "app" cards; the owner rejected these, and nothing is ever built round the orb. The emblem is light: rings in primary and secondary.
+  `stark_red` (red `#FF2B3E`, hologram blue `#62C8FF`, steel frames) is an optional theme, never the default. Text is `hud_style::TEXT` (cool white) and `MUTED`. States use `GOOD`, `warn_colour()` and `FAULT`. The canvas is near-black `OBSIDIAN`; the Minimal OLED design uses pure black.
+- **Lines are thin.** Draw through `hud_style::stroke`, which thins anything wider than a hairline; frames are 1 px on the pixel grid (`hud_style::border`). Corner brackets are one point thick with long arms (`corners`, `BRACKET_ARM`).
+- **Shapes:** sharp corners (0–2 px). Each panel's edges carry the Stark marks (`hud_style::marks`): a hairline tab with a dash and a tick ruler on the top edge, a secondary-colour mark on the bottom edge. Blocks float apart (`GRID_GAP` 32, `TILE_GAP` 28), never touching. The canvas has a dot grid with a "+" crosshair on every fourth dot (`paint_canvas`). Radial pieces are segmented arcs with tick marks and bearings.
+- **Light, not objects:** a thin bright line with two faint strokes under it (`NEON_PASSES`); chart bars are hologram light (hairline edge, scan lines, bright cap); nodes are rings of light. Rings, segments and readouts of light round the emblem are fine. Use no bevels, metal housings, rivets, wear or rounded "app" cards; the owner rejected these.
 - **Type:**
   - Titles: white, uppercase and tracked, in Rajdhani (`title_font`).
   - Labels, figures and keys: Share Tech Mono or `label_font`. Keys look like `[ CLOSE ]`.
@@ -104,6 +104,7 @@ Everything JAI shows must look as if Tony Stark built it for his workshop and hi
 
 - Line endings: `.gitattributes` is `* -text`, and files mix CRLF and LF. The Edit tool keeps each file as it is, but `sed -i` in Git Bash strips every CR. After any scripted edit, check `git diff --numstat` for whole-file churn.
 - Bash heredocs mangle backslashes (a regex `\b` became 0x08). Write patch content with the Write tool.
+- egui's context lock is not re-entrant. Never call the context (`ctx.…`, `ui.ctx().…`) inside a `ctx.data_mut` / `memory` / `input` / … closure: read the value first. Two such calls froze the whole HUD on 2026-11-16; `no_context_call_waits_inside_the_contexts_own_lock` in `gui.rs` guards it.
 - Values fed into a cipher, hash or stored id must never change in a rename sweep. That covers `vault.rs` `KEYRING_SERVICE` and `Vault::TAG` (sealed secrets), the `STOCK_*` fingerprints in `config.rs` (`config::fingerprint`) and the zlib test bytes in `mesh_io.rs`. Renaming them once made the real vault unreadable.
 - The assistant is "J.A.I." / "JAI" in UI text, prompts and identifiers. His former name must not reappear in tracked files.
 - Keep no personal data in tracked files, even though the remote is private. Use placeholder names in fixtures and tests: `Max Mustermann`, `Musterstadt`, `12345`, `myschool.webuntis.com`. Personal values live only in the untracked `jai_config.json` and `jai_memory.db`. Invent test data rather than copying it from the owner's screenshots or logs.

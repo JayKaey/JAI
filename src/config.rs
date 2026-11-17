@@ -1282,22 +1282,22 @@ mod tests {
         let mishap = r##"{ "config_version": 23, "interface": { "theme": "custom", "accent": "#ffe14d", "background": "#0f0507", "hud_palette": "stark_gold" } }"##;
         let mut cfg: JaiConfig = serde_json::from_str(mishap).unwrap();
         cfg.migrate();
-        assert_eq!((cfg.interface.theme.as_str(), cfg.interface.hud_palette.as_str(), cfg.interface.accent.as_str(), cfg.interface.title.as_str()), ("stark_red", "stark_red", "#ff2b3e", "J.A.I."));
+        assert_eq!((cfg.interface.theme.as_str(), cfg.interface.hud_palette.as_str(), cfg.interface.accent.as_str(), cfg.interface.title.as_str()), ("jai", "jai_gold", "#ffd400", "J.A.I."));
         // A fresh install is his from the start.
         let fresh = JaiConfig::default();
-        assert_eq!((fresh.wake_words.as_slice(), fresh.interface.hud_palette.as_str()), (["jai".to_string(), "jay".to_string()].as_slice(), "stark_red"));
+        assert_eq!((fresh.wake_words.as_slice(), fresh.interface.hud_palette.as_str()), (["jai".to_string(), "jay".to_string()].as_slice(), "jai_gold"));
         assert!(fresh.name_meaning.is_empty(), "what the name stands for is Sir's to set, not the code's");
         assert_eq!(CONFIG_FILE, "jai_config.json");
     }
 
     #[test]
-    fn the_stock_yellow_becomes_the_stark_look_and_a_chosen_colour_stays() {
+    fn the_stark_design_keeps_his_yellow_and_cuts_the_stock_corners_sharp() {
         // The look v24-v27 left on his PC (custom theme, the stock yellow, the stock palette).
         let stock = r##"{ "config_version": 27, "interface": { "theme": "custom", "accent": "#ffd400", "background": "#070b12", "hud_palette": "jai_gold", "ui_paradigm": "modern_oled_minimal", "corner_rounding": 18.0 } }"##;
         let mut cfg: JaiConfig = serde_json::from_str(stock).unwrap();
         cfg.migrate();
         let i = &cfg.interface;
-        assert_eq!((i.theme.as_str(), i.accent.as_str(), i.background.as_str(), i.hud_palette.as_str()), ("stark_red", "#ff2b3e", "#05070b", "stark_red"));
+        assert_eq!((i.theme.as_str(), i.accent.as_str(), i.background.as_str(), i.hud_palette.as_str()), ("custom", "#ffd400", "#070b12", "jai_gold"));
         assert_eq!(i.corner_rounding, 2.0, "the stock round corners are cut sharp");
         assert_eq!(i.ui_paradigm, crate::oled_minimal_ui::UiDesignParadigm::ModernOledMinimal, "his design stays");
         // A colour he picked himself after v24 is his.
@@ -1307,7 +1307,7 @@ mod tests {
             cfg.migrate();
             assert_eq!((cfg.interface.hud_palette.as_str(), cfg.interface.accent.as_str(), cfg.interface.corner_rounding), (palette, accent, 9.0));
         }
-        // Arc Cyan was stored as "stark": the word is the Stark look's now, so it moves.
+        // Arc Cyan was stored as "stark": the word names the Stark Red theme now, so it moves.
         let cyan = r##"{ "config_version": 27, "interface": { "theme": "stark", "accent": "#00e5ff", "hud_palette": "arc_cyan" } }"##;
         let mut cfg: JaiConfig = serde_json::from_str(cyan).unwrap();
         cfg.migrate();

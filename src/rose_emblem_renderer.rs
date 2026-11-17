@@ -977,10 +977,21 @@ impl RoseEmblem {
             frame.centre + vec2(a.cos(), a.sin()) * outer * 1.04
         }).collect();
         neon(&mut marks, &arc, &vec![alpha; arc.len()], crimson_rgb(), torus_hot(), 0.8, scale * 0.7, false);
+        // Stark's radial readout: hologram-blue segments turning slowly against the red rings.
+        let halo = outer * 1.15;
+        let turn = -self.clock * 0.12;
+        for (start, length) in [(0.1f32, 1.3f32), (2.2, 0.5), (3.3, 1.6), (5.3, 0.6)] {
+            let points: Vec<Pos2> = (0..=32).map(|k| frame.centre + Vec2::angled(turn + start + length * k as f32 / 32.0) * halo).collect();
+            line(&mut marks, &points, &vec![alpha; points.len()], cyan_rgb(), 0.5, 0.8 * scale.max(0.6), false);
+        }
         painter.add(Shape::mesh(marks));
         if frame.radius > 90.0 && frame.dock < 0.5 {
             let font = FontId::monospace((frame.radius * 0.05).clamp(6.5, 9.0));
-            painter.text(frame.centre + vec2(0.0, outer * 0.93), Align2::CENTER_CENTER, "TR 2003 // 3500", font, crate::hud_style::MUTED.gamma_multiply(0.8 * alpha));
+            painter.text(frame.centre + vec2(0.0, outer * 0.93), Align2::CENTER_CENTER, "TR 2003 // 3500", font.clone(), crate::hud_style::MUTED.gamma_multiply(0.8 * alpha));
+            // The four bearings just outside the readout, as on a radial HUD.
+            for (bearing, at) in [("000", vec2(0.0, -1.0)), ("090", vec2(1.0, 0.0)), ("180", vec2(0.0, 1.0)), ("270", vec2(-1.0, 0.0))] {
+                painter.text(frame.centre + at * outer * 1.25, Align2::CENTER_CENTER, bearing, font.clone(), crate::hud_style::MUTED.gamma_multiply(0.55 * alpha));
+            }
         }
         // The wordmark on its dark core, which breathes softly (a slow rise and fall of its light).
         let a = alpha;
@@ -1410,7 +1421,7 @@ mod tests {
     /// and the white-hot filament went.)
     #[test]
     fn a_ring_of_light_is_a_thin_line_with_two_faint_strokes_under_it() {
-        assert_eq!(crate::theme_engine::NEON_PASSES.map(|p| (p.0, p.1)), [(5.0, 24), (2.4, 70), (1.1, 245)]);
+        assert_eq!(crate::theme_engine::NEON_PASSES.map(|p| (p.0, p.1)), [(3.6, 20), (1.8, 64), (0.9, 245)]);
         let c = glow(WHITE_RGB, 245.0 / 255.0);
         assert_eq!(c.a(), 0, "additive: zero alpha");
         assert_eq!(c.r(), 245);
@@ -1419,7 +1430,7 @@ mod tests {
         neon(&mut mesh, &pts, &[1.0, 1.0, 1.0], torus_deep(), torus_hot(), 1.0, 1.0, false);
         assert_eq!(mesh.vertices.len(), 3 * (4 + 4 + 4));
         let widest = mesh.vertices.iter().map(|v| v.pos.y.abs()).fold(0.0, f32::max);
-        assert!((widest - 2.5).abs() < 1e-3, "the faintest stroke is 5 px wide: {widest}");
+        assert!((widest - 1.8).abs() < 1e-3, "the faintest stroke is 3.6 px wide: {widest}");
         assert!(mesh.vertices.iter().all(|v| v.color.a() == 0));
     }
 

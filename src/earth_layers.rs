@@ -1059,9 +1059,7 @@ impl Hit {
 
 const WHITE: Color32 = Color32::from_rgb(0xF2, 0xF8, 0xFF);
 
-fn stroke(width: f32, colour: Color32) -> Stroke {
-    Stroke::new(width, colour)
-}
+use crate::hud_style::stroke;
 const JAM_RED: Color32 = Color32::from_rgb(0xFF, 0x4D, 0x4D);
 const AMBER: Color32 = Color32::from_rgb(0xFF, 0xC1, 0x4D);
 const WORKS: Color32 = Color32::from_rgb(0xFF, 0x9A, 0x3C);

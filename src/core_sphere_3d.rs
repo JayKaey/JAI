@@ -54,8 +54,9 @@ impl Category {
         match self {
             Self::Core => crate::theme_engine::current().primary(),
             Self::Voice => crate::theme_engine::current().secondary(),
-            Self::Interface => Color32::from_rgb(0xDD, 0xF8, 0xFF),
-            Self::Integration => Color32::from_rgb(0xFF, 0xC2, 0x4A),
+            Self::Interface => crate::hud_style::TEXT,
+            // (Stark's light is red, hologram blue and white: no amber.)
+            Self::Integration => crate::hud_style::lerp_colour(crate::theme_engine::current().secondary(), Color32::WHITE, 0.5),
             Self::System => Color32::from_rgb(0x7F, 0xA6, 0xB6),
         }
     }
@@ -471,7 +472,22 @@ impl CoreSphereView {
         for (k, a) in [(2.6, 0.035), (1.6, 0.08), (1.0, 0.4)] {
             painter.circle_filled(centre, core_r * k, crate::theme_engine::hdr_neon_color(crate::theme_engine::current().core_primary, (255.0 * a) as u8));
         }
-        painter.circle_stroke(centre, radius * (0.5 + 0.02 * voice), Stroke::new(1.0f32, Color32::from_rgba_premultiplied(0, 40, 48, 0)));
+        // The Stark radial frame round the sphere: a hairline ring of hologram light with its tick
+        // ruler (every 30° a longer red mark), and three segmented arcs turning with the sphere.
+        let theme = crate::theme_engine::current();
+        let (red, blue) = (theme.primary(), theme.secondary());
+        let ring = radius * 1.1;
+        painter.circle_stroke(centre, ring, Stroke::new(1.0f32, blue.gamma_multiply(0.3)));
+        for k in 0..120 {
+            let dir = Vec2::angled(k as f32 * TAU / 120.0);
+            let (inner, colour) = if k % 10 == 0 { (ring - 9.0, red.gamma_multiply(0.8)) } else { (ring - 4.0, blue.gamma_multiply(0.3)) };
+            painter.line_segment([centre + dir * inner, centre + dir * ring], Stroke::new(1.0f32, colour));
+        }
+        for (r, start, length, colour, turn) in [(ring + 8.0, 0.2, 1.1, red, 0.5), (ring + 8.0, 3.4, 0.6, red, 0.5), (ring + 14.0, 1.6, 1.8, blue, -0.8)] {
+            let a0 = start + self.yaw * turn;
+            let points: Vec<Pos2> = (0..=40).map(|i| centre + Vec2::angled(a0 + length * i as f32 / 40.0) * r).collect();
+            painter.add(Shape::line(points, Stroke::new(1.0f32, colour.gamma_multiply(0.75))));
+        }
 
         // Splines, back to front by their midpoint.
         let mut edges: Vec<(f32, usize, usize)> = self
@@ -494,7 +510,7 @@ impl CoreSphereView {
             }
             let colour = if lit { Category::Voice.colour() } else if hot > 0.0 { self.graph.nodes[a].category.colour() } else { crate::hud_board::border_colour() };
             let points: Vec<Pos2> = arc(self.graph.nodes[a].pos, self.graph.nodes[b].pos, ARC_STEPS).into_iter().map(|p| self.project(p, centre, radius).0).collect();
-            painter.add(Shape::line(points, Stroke::new(if lit { 1.4f32 } else { 0.8 }, additive(colour, alpha))));
+            painter.add(Shape::line(points, Stroke::new(if lit { 1.0f32 } else { 0.6 }, additive(colour, alpha))));
         }
 
         // Packets of energy travelling between modules.
@@ -537,8 +553,11 @@ impl CoreSphereView {
                 painter.circle_filled(p, r * 3.2, additive(colour, 0.18 * g));
                 painter.circle_filled(p, r * 1.8, additive(colour, 0.35 * g));
             }
-            painter.circle_filled(p, r, colour.gamma_multiply(0.85 * fog(d) * dim));
-            painter.circle_stroke(p, r + 1.5, Stroke::new(if focused || near { 1.2f32 } else { 0.6 }, Color32::WHITE.gamma_multiply((if focused || near { 0.9 } else { 0.25 }) * fog(d) * dim)));
+            // A hologram node: faint light inside a hairline ring of its colour, a bright centre.
+            let a = fog(d) * dim;
+            painter.circle_filled(p, r, colour.gamma_multiply(0.22 * a));
+            painter.circle_stroke(p, r, Stroke::new(1.0f32, colour.gamma_multiply((if focused || near { 1.0 } else { 0.8 }) * a)));
+            painter.circle_filled(p, (r * 0.3).clamp(0.8, 2.2), crate::hud_style::lerp_colour(colour, Color32::WHITE, 0.6).gamma_multiply(a));
             let labelled = focused || near || hot > 0.05 || (d < -0.2 && (node.loc > 700 || self.zoom > 1.7));
             if labelled {
                 painter.text(p + vec2(r + 4.0, 0.0), Align2::LEFT_CENTER, node.name, label_font.clone(), Color32::WHITE.gamma_multiply((0.55 + 0.45 * hot.max(if focused { 1.0 } else { 0.0 })) * fog(d).max(0.5) * dim.max(0.6)));
@@ -549,7 +568,7 @@ impl CoreSphereView {
             self.readout(&painter, rect, i, now);
         }
         self.scale_slider(ui, rect);
-        painter.text(rect.left_top() + vec2(4.0, 2.0), Align2::LEFT_TOP, format!("CORE // {} MODULES · {} LINKS · DRAG TO ORBIT · WHEEL TO ZOOM", self.graph.nodes.len(), self.graph.edges.len()), FontId::monospace(11.0), Color32::from_rgb(0x8F, 0xB8, 0xC8));
+        painter.text(rect.left_top() + vec2(4.0, 2.0), Align2::LEFT_TOP, format!("CORE // {} MODULES · {} LINKS · DRAG TO ORBIT · WHEEL TO ZOOM", self.graph.nodes.len(), self.graph.edges.len()), FontId::monospace(11.0), crate::hud_style::MUTED);
         if hot_anything(&self.graph, now) || self.velocity.length() > 0.01 || (self.zoom - self.zoom_target).abs() > 1e-3 || self.spin.abs() > 0.0 {
             ui.ctx().request_repaint_after(Duration::from_millis(16));
         }
@@ -574,20 +593,18 @@ impl CoreSphereView {
             ("LAST EXECUTION", last),
         ];
         let block = Rect::from_min_size(rect.left_top() + vec2(4.0, 22.0), vec2(330.0, 132.0));
-        painter.rect_filled(block, Rounding::ZERO, crate::hud_board::BLOCK_FILL);
-        painter.rect_stroke(block, Rounding::ZERO, Stroke::new(1.0f32, crate::hud_board::active_colour()));
-        crate::hud_board::brackets(painter, block, crate::hud_board::bracket_colour());
+        crate::hud_style::shell(painter, block, true, 1.0);
         let clip = painter.with_clip_rect(block.shrink(4.0));
         let mut y = block.top() + 10.0;
         for (label, value) in rows {
             if label.is_empty() {
-                let galley = clip.layout(value, FontId::proportional(11.0), Color32::from_rgb(0xDD, 0xF8, 0xFF), block.width() - 24.0);
+                let galley = clip.layout(value, FontId::proportional(11.0), crate::hud_style::TEXT, block.width() - 24.0);
                 let h = galley.size().y.min(30.0);
                 clip.galley(pos2(block.left() + 12.0, y), galley, Color32::WHITE);
                 y += h + 4.0;
                 continue;
             }
-            clip.text(pos2(block.left() + 12.0, y), Align2::LEFT_TOP, label, FontId::monospace(11.0), Color32::from_rgb(0x8F, 0xB8, 0xC8));
+            clip.text(pos2(block.left() + 12.0, y), Align2::LEFT_TOP, label, FontId::monospace(11.0), crate::hud_style::MUTED);
             clip.text(pos2(block.right() - 12.0, y), Align2::RIGHT_TOP, value, FontId::monospace(11.0), Color32::WHITE);
             y += 16.0;
         }
@@ -599,12 +616,18 @@ impl CoreSphereView {
         let track = Rect::from_min_size(pos2(rect.right() - 230.0, rect.bottom() - 30.0), vec2(150.0, 14.0));
         let painter = ui.painter_at(rect);
         let label = format!("CORE SCALE: {:.0} %", self.zoom_target * 100.0);
-        painter.text(pos2(track.left(), track.top() - 4.0), Align2::LEFT_BOTTOM, label, FontId::monospace(11.0), Color32::from_rgb(0xD4, 0xEC, 0xF5));
-        painter.rect_stroke(track, Rounding::ZERO, Stroke::new(1.0f32, crate::hud_board::border_colour()));
+        painter.text(pos2(track.left(), track.top() - 4.0), Align2::LEFT_BOTTOM, label, FontId::monospace(11.0), crate::hud_style::TEXT);
+        // A hairline scale with ticks, lit red up to the knob (a fine bar of light).
+        let y = painter.round_to_pixel(track.center().y);
         let t = (self.zoom_target - MIN_ZOOM) / (MAX_ZOOM - MIN_ZOOM);
-        painter.rect_filled(Rect::from_min_size(track.min, vec2(track.width() * t, track.height())), Rounding::ZERO, crate::hud_board::border_colour().gamma_multiply(0.5));
-        let knob = Rect::from_center_size(pos2(track.left() + track.width() * t, track.center().y), vec2(6.0, 18.0));
-        painter.rect_filled(knob, Rounding::ZERO, Color32::WHITE);
+        let at = track.left() + track.width() * t;
+        painter.line_segment([pos2(track.left(), y), pos2(track.right(), y)], Stroke::new(1.0f32, crate::hud_board::border_colour()));
+        for k in 0..=10 {
+            let x = painter.round_to_pixel(track.left() + track.width() * k as f32 / 10.0);
+            painter.line_segment([pos2(x, y - if k % 5 == 0 { 5.0 } else { 3.0 }), pos2(x, y)], Stroke::new(1.0f32, crate::hud_style::MUTED.gamma_multiply(0.6)));
+        }
+        painter.line_segment([pos2(track.left(), y), pos2(at, y)], Stroke::new(1.0f32, crate::hud_board::active_colour()));
+        painter.rect_filled(Rect::from_center_size(pos2(at, y), vec2(2.0, 14.0)), Rounding::ZERO, Color32::WHITE);
         let response = ui.interact(track.expand(4.0), ui.id().with("core_scale"), Sense::click_and_drag());
         if let Some(p) = response.interact_pointer_pos().filter(|_| response.dragged() || response.clicked()) {
             let t = ((p.x - track.left()) / track.width()).clamp(0.0, 1.0);

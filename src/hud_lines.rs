@@ -4,7 +4,7 @@
 //! name ("Heard: … – do it?"). Also the microphone's verdict for the voice ring ("too quiet").
 //! The pipeline reports here (`heard`, `settled`, `step`, `took`, `offer`); the HUD paints.
 
-use eframe::egui::{self, pos2, vec2, Color32, FontId, Pos2, Rect, Rounding, Stroke, Ui};
+use eframe::egui::{self, pos2, vec2, Color32, FontId, Pos2, Rect, Rounding, Ui};
 use regex::Regex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, Mutex};
@@ -318,9 +318,7 @@ pub fn top_under(centre: Pos2, radius: f32) -> Pos2 {
     pos2(centre.x, centre.y + radius * 1.34 + 26.0)
 }
 
-fn stroke(width: f32, colour: Color32) -> Stroke {
-    Stroke::new(width, colour)
-}
+use crate::hud_style::stroke;
 
 /// Text centred on `at` on a soft dark band, so it reads over whatever is behind it. `apart`:
 /// how far its letters stand apart.

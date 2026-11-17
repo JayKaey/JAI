@@ -4,7 +4,7 @@
 //! happens, so it is noticed without a sound.
 
 use chrono::{DateTime, Local};
-use eframe::egui::{self, pos2, vec2, Color32, FontId, Rect, Rounding, Stroke};
+use eframe::egui::{self, pos2, vec2, Color32, FontId, Rect, Rounding};
 use std::collections::VecDeque;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -13,9 +13,7 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-fn stroke(width: f32, colour: Color32) -> Stroke {
-    Stroke::new(width, colour)
-}
+use crate::hud_style::stroke;
 
 // ------------------------------------------------------------------------------ history ----
 

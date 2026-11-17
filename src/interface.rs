@@ -371,11 +371,11 @@ pub struct InterfaceSettings {
 
 impl Default for InterfaceSettings {
     fn default() -> Self {
-        let stark = &THEMES[0];
+        let own = &THEMES[0];
         Self {
-            theme: stark.name.to_string(),
-            accent: stark.accent.to_string(),
-            background: stark.background.to_string(),
+            theme: own.name.to_string(),
+            accent: own.accent.to_string(),
+            background: own.background.to_string(),
             scale: 1.0,
             opacity: 100,
             layout: HudLayout::Full,
@@ -528,22 +528,15 @@ impl InterfaceSettings {
         }
     }
 
-    /// v28 (Sir, 2026-11-17: "the whole UI tony stark styled"): the stock yellow of v24-v27 becomes
-    /// the Stark look; a colour he chose himself stays.
+    /// v28 (Sir, 2026-11-17: "the whole UI tony stark styled", "the colors should still remain
+    /// yellow"): the Stark design in his own colours. The stock 18 px corners become Stark's
+    /// sharp cut (a rounding he chose stays); Arc Cyan, stored as "stark", moves to its own name.
     pub fn stark_v28(&mut self) {
         if self.theme == "stark" {
             self.theme = "arc_cyan".to_string();
         }
-        // The stock 18 px corners become Stark's sharp cut; a rounding he chose stays.
         if self.corner_rounding == 18.0 {
             self.corner_rounding = Self::default().corner_rounding;
-        }
-        if self.hud_palette == "jai_gold" && self.accent.eq_ignore_ascii_case("#ffd400") {
-            let defaults = Self::default();
-            self.theme = defaults.theme;
-            self.accent = defaults.accent;
-            self.background = defaults.background;
-            self.hud_palette = defaults.hud_palette;
         }
     }
 
@@ -1187,22 +1180,22 @@ pub struct Theme {
 
 pub const THEMES: &[Theme] = &[
     Theme {
-        name: "stark_red",
-        display: "Stark",
-        accent: "#ff2b3e",
-        // Blue-black workshop glass.
-        background: "#05070b",
-        hint: "red and blue, the default",
-        aliases: &["stark", "stark red", "tony stark", "stark hud", "stark look", "default", "standard", "original", "normal"],
-    },
-    Theme {
         name: "jai",
         display: "JAI Gold",
         accent: "#ffd400",
         // Warm obsidian glass.
         background: "#0a0804",
-        hint: "yellow",
-        aliases: &["jai", "jai gold", "jai yellow", "classic"],
+        hint: "yellow, the default",
+        aliases: &["jai", "jai gold", "jai yellow", "default", "standard", "classic", "original", "normal"],
+    },
+    Theme {
+        name: "stark_red",
+        display: "Stark Red",
+        accent: "#ff2b3e",
+        // Blue-black workshop glass.
+        background: "#05070b",
+        hint: "red and blue",
+        aliases: &["stark", "stark red", "tony stark", "stark hud"],
     },
     Theme {
         // ("stark" until v28, which moves a stored "stark" here: the word means the Stark look now.)
@@ -2908,7 +2901,7 @@ pub fn tool_definition() -> Value {
             "fullscreen": {"type": "boolean"},
             "core_view": {"type": "boolean", "description": "The 3D sphere of your source modules ('show me your core')."},
             "dock_windows": {"type": "boolean", "description": "Bring every detached view back inside the HUD."},
-            "hud_palette": {"type": "string", "enum": ["stark_red", "jai_gold", "rose_crimson", "arc_cyan", "stark_gold", "emerald_matrix", "ultraviolet", "crimson_overdrive", "solar_orange", "ice_monochrome"], "description": "The whole HUD's colour theme; a plain colour is accent_color."},
+            "hud_palette": {"type": "string", "enum": ["jai_gold", "stark_red", "rose_crimson", "arc_cyan", "stark_gold", "emerald_matrix", "ultraviolet", "crimson_overdrive", "solar_orange", "ice_monochrome"], "description": "The whole HUD's colour theme; a plain colour is accent_color."},
             "detach_window": {"type": "string", "description": "Pop a view out into its own OS window."},
             "create_theme": {"type": "object", "description": "Design, save and apply a named theme ('a theme called Cyberpunk with neon yellow borders').", "properties": {"name": {"type": "string"}, "description": {"type": "string", "description": "Sir's colours per role and/or a mood."}, "core_primary": {"type": "string"}, "core_secondary": {"type": "string"}, "window_border": {"type": "string"}, "background_tint": {"type": "string"}}},
             "save_theme": {"type": "string", "description": "Save the current look under this name."},
@@ -2971,8 +2964,8 @@ mod tests {
         assert_eq!(theme("stark_gold").map(|t| t.name), Some("stark_gold"));
         assert_eq!(theme("crimson_mk42").map(|t| t.name), Some("crimson_mk42"));
         assert_eq!(theme("arc_cyan").map(|t| t.name), Some("arc_cyan"));
-        assert_eq!(theme("Stark").map(|t| t.name), Some("stark_red"), "the word is the Stark look's now");
-        assert_eq!(theme("default").map(|t| t.name), Some("stark_red"));
+        assert_eq!(theme("Stark").map(|t| t.name), Some("stark_red"), "the word is the Stark red theme's now");
+        assert_eq!(theme("default").map(|t| t.name), Some("jai"));
         assert_eq!(theme("stealth_obsidian").map(|t| t.name), Some("stealth"));
         assert_eq!(theme("emerald_matrix").map(|t| t.name), Some("emerald"));
         assert!(theme("red").is_none(), "plain colours are accents, not themes");
@@ -3001,7 +2994,7 @@ mod tests {
         assert_eq!((s.accent.as_str(), s.background.as_str()), ("#ffc233", "#170507"));
         // "Make the interface black" darkens the background instead of hiding the accent.
         let s = apply(json!({"accent_color": "black"}));
-        assert_eq!((s.accent.as_str(), s.background.as_str()), ("#ff2b3e", "#000000"));
+        assert_eq!((s.accent.as_str(), s.background.as_str()), ("#ffd400", "#000000"));
         let s = apply(json!({"background_color": "red"}));
         assert_eq!(s.background, hex(scale_rgb([255, 59, 59], 0.14)));
         let done = configure(&InterfaceSettings::default(), &json!({"accent_color": "red", "opacity": "nonsense"})).unwrap();

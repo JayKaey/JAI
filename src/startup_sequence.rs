@@ -4,7 +4,7 @@
 //! sequence plays and whether a catch-up follows the greeting; `paint` draws it over the HUD.
 
 use chrono::{DateTime, Local, Timelike};
-use eframe::egui::{self, pos2, vec2, Align2, Color32, FontId, Rect, Rounding, Shape, Stroke};
+use eframe::egui::{self, pos2, vec2, Align2, Color32, FontId, Rect, Rounding, Shape};
 use std::f32::consts::TAU;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
@@ -167,9 +167,7 @@ fn tick(p: &egui::Painter, right: f32, y: f32, colour: Color32) {
     p.add(Shape::line(vec![pos2(right - 9.0, y), pos2(right - 6.0, y + 3.0), pos2(right, y - 4.0)], stroke(1.4, colour)));
 }
 
-fn stroke(width: f32, colour: Color32) -> Stroke {
-    Stroke::new(width, colour)
-}
+use crate::hud_style::stroke;
 
 fn arc(centre: egui::Pos2, radius: f32, from: f32, sweep: f32) -> Vec<egui::Pos2> {
     let n = ((sweep.abs() * radius / 6.0) as usize).clamp(4, 160);

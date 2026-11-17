@@ -1625,9 +1625,7 @@ fn rgb([r, g, b]: [u8; 3]) -> Color32 {
 }
 
 /// `Stroke::new` takes `impl Into<f32>`, which leaves float literals untyped.
-fn stroke(width: f32, colour: Color32) -> Stroke {
-    Stroke::new(width, colour)
-}
+use crate::hud_style::stroke;
 
 fn rgba([r, g, b]: [u8; 3], alpha: f32) -> Color32 {
     Color32::from_rgba_unmultiplied(r, g, b, (alpha.clamp(0.0, 1.0) * 255.0).round() as u8)
@@ -5843,7 +5841,9 @@ impl HudApp {
         let (width, centre_x) = comms_placement(screen, self.console_reserve());
         let bottom = screen.bottom() - 12.0 - TELEMETRY_H - 6.0;
         let rect = Rect::from_min_size(pos2(centre_x - width / 2.0, bottom - (CAPTION_BAND - 8.0)), vec2(width, CAPTION_BAND - 8.0)).translate(self.comms_offset);
-        ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("jai_tour_comms"), (ui.ctx().cumulative_pass_nr(), rect)));
+        // (The pass is read before the write: egui's lock is not re-entrant, see `no_context_call_waits_inside_the_contexts_own_lock`.)
+        let pass = ui.ctx().cumulative_pass_nr();
+        ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("jai_tour_comms"), (pass, rect)));
         // Like every block, it moves with the mouse.
         let drag = ui.interact(rect, egui::Id::new("hud_comms_drag"), Sense::drag());
         if drag.dragged() {
@@ -7908,7 +7908,8 @@ const WINDOW_TITLE_ROW: f32 = 36.0;
 fn esc_closes_window(ctx: &egui::Context) {
     let typed = egui::Id::new("jai_window_typing").with(ctx.viewport_id());
     let was_typing = ctx.data(|d| d.get_temp::<bool>(typed)).unwrap_or(false);
-    ctx.data_mut(|d| d.insert_temp(typed, ctx.memory(|m| m.focused().is_some())));
+    let focused = ctx.memory(|m| m.focused().is_some());
+    ctx.data_mut(|d| d.insert_temp(typed, focused));
     if ctx.viewport_id() != ViewportId::ROOT && !was_typing && ctx.input(|i| i.key_pressed(egui::Key::Escape) && i.viewport().fullscreen != Some(true)) {
         ctx.send_viewport_cmd(ViewportCommand::Close);
     }
@@ -8728,13 +8729,14 @@ fn paint_block_frame(painter: &egui::Painter, rect: Rect, m: &WindowMotion, fill
     if band.height() < 0.5 || m.frame <= 0.0 {
         return;
     }
-    crate::hud_style::surface(painter, band, fill, m.frame);
     let heat = (1.0 - m.unfold).clamp(0.0, 1.0);
-    crate::hud_style::border(painter, band, width, mix(edge, Color32::WHITE, heat * 0.7).gamma_multiply(m.frame.max(heat)));
-    // The Stark tab, as on the board's blocks (`hud_style::shell`), once the frame stands.
-    if let Some(tab) = crate::hud_style::tab_rect(band, crate::hud_style::px(painter)) {
-        painter.rect_filled(tab, Rounding::ZERO, crate::theme_engine::current().primary().gamma_multiply(0.85 * m.frame * (1.0 - heat)));
+    let edge = mix(edge, Color32::WHITE, heat * 0.7).gamma_multiply(m.frame.max(heat));
+    crate::hud_style::panel(painter, band, fill, edge, m.frame);
+    if width > 1.0 {
+        crate::hud_style::border(painter, band, width, edge);
     }
+    // The Stark marks, as on the board's blocks (`hud_style::shell`), once the frame stands.
+    crate::hud_style::marks(painter, band, false, m.frame * (1.0 - heat));
 }
 
 /// The two short diagonals in a resizable block's bottom-right corner (inside its border).
@@ -9373,6 +9375,24 @@ pub(crate) fn paint_canvas(ctx: &egui::Context) {
         mesh.add_triangle(m0, o1, m1);
     }
     painter.add(Shape::mesh(mesh));
+    // The workshop table under it all, as the films' hologram tables are drawn: faint rings of
+    // the theme's light round the home, a tick ring with longer marks every 30°, and a dashed
+    // crosshair through the middle.
+    let light = crate::hud_board::active_colour();
+    let hair = |a: f32| egui::Stroke::new(1.0_f32, light.gamma_multiply(a));
+    let unit = home.width().min(home.height()) * 0.5 * zoom;
+    for (f, a) in [(0.34f32, 0.05f32), (0.52, 0.04), (0.74, 0.09), (1.02, 0.04)] {
+        painter.circle_stroke(centre, unit * f, hair(a));
+    }
+    let ring = unit * 0.74;
+    for k in 0..120 {
+        let dir = egui::Vec2::angled(TAU * k as f32 / 120.0);
+        let long = k % 10 == 0;
+        painter.line_segment([centre + dir * (ring - if long { 12.0 } else { 5.0 }), centre + dir * ring], hair(if long { 0.24 } else { 0.1 }));
+    }
+    for line in [[pos2(rect.left(), centre.y), pos2(rect.right(), centre.y)], [pos2(centre.x, rect.top()), pos2(centre.x, rect.bottom())]] {
+        painter.extend(Shape::dashed_line(&line, hair(0.06), 6.0, 10.0));
+    }
     let mut dots = egui::Mesh::default();
     let dot = Color32::from_white_alpha((255.0 * DOT_ALPHA) as u8);
     let cross = Color32::from_white_alpha((255.0 * CROSS_ALPHA) as u8);
@@ -10078,6 +10098,48 @@ mod tests {
         let small = parts.iter().find(|(n, _)| *n == "small views").unwrap().1;
         assert!((small - 6.0).abs() < 0.5, "two stretches of the same part add up: {small}");
         assert!(parts_of(&[], at(5)).is_empty());
+    }
+
+    /// egui's context lock is not re-entrant: a call on the context inside one of the
+    /// context's own closures waits for itself forever. Two of them froze the whole HUD on
+    /// 2026-11-16 (every window of his own, and the comms caption); Sir had to end him in the
+    /// Task Manager. (One line at a time: the closures over several lines were read by hand.)
+    #[test]
+    fn no_context_call_waits_inside_the_contexts_own_lock() {
+        let mut nested = Vec::new();
+        for path in std::fs::read_dir("src").unwrap().flatten().map(|e| e.path()) {
+            let Ok(text) = std::fs::read_to_string(&path) else { continue };
+            for (n, line) in text.lines().enumerate() {
+                for name in ["data", "data_mut", "memory", "memory_mut", "input", "input_mut", "viewport", "options", "options_mut", "fonts", "interaction_snapshot"] {
+                    let needle = format!(".{name}(|");
+                    for (at, _) in line.match_indices(needle.as_str()) {
+                        let body = &line[at + needle.len()..];
+                        let mut depth = 1;
+                        let end = body.char_indices().find(|&(_, c)| {
+                            depth += match c { '(' => 1, ')' => -1, _ => 0 };
+                            depth == 0
+                        });
+                        let body = &body[..end.map_or(body.len(), |(i, _)| i)];
+                        if body.contains("ctx.") || body.contains("ctx().") {
+                            nested.push(format!("{}:{}", path.display(), n + 1));
+                        }
+                    }
+                }
+            }
+        }
+        assert!(nested.is_empty(), "the context is called inside its own lock at {nested:?}");
+    }
+
+    /// The Esc check that every window of his own runs on each of its frames.
+    #[test]
+    fn a_window_of_his_own_finishes_its_frame() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let ctx = egui::Context::default();
+            let _ = ctx.run(egui::RawInput::default(), esc_closes_window);
+            let _ = tx.send(());
+        });
+        assert!(rx.recv_timeout(Duration::from_secs(5)).is_ok(), "the frame froze in esc_closes_window");
     }
 
     // ---- The gallery: what the look-and-feel pieces of 2026-11-12 draw, rendered offscreen as

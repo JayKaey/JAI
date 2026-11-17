@@ -9,8 +9,19 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 /// `Stroke::new` takes `impl Into<f32>`, which leaves float literals untyped.
-fn stroke(width: f32, colour: Color32) -> Stroke {
-    Stroke::new(width, colour)
+/// Every line of the HUD: a hairline stays one, anything wider is drawn finer (2 → 1.4,
+/// 6 → 3), as Stark's screens draw their light.
+pub fn stroke(width: f32, colour: Color32) -> Stroke {
+    Stroke::new(thin(width), colour)
+}
+
+/// A line's width the Stark way (`stroke`).
+pub fn thin(width: f32) -> f32 {
+    if width > 1.0 {
+        1.0 + (width - 1.0) * 0.4
+    } else {
+        width
+    }
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -132,64 +143,159 @@ pub fn glow(p: &Painter, r: Rect, colour: Color32, strength: f32) {
     if strength <= 0.0 {
         return;
     }
-    for (grow, a) in [(1.0, 0.20), (2.5, 0.07)] {
+    for (grow, a) in [(1.0, 0.13), (2.5, 0.045)] {
         p.rect_filled(r.expand(grow), Rounding::same(grow), colour.gamma_multiply(a * strength.min(1.0)));
     }
 }
 
-/// The four L-shaped corner brackets inside `r`: `arm` long, whole pixels thick (two at any
-/// scale), on the pixel grid; `lit` lays their light round them (the block in use).
+/// One point in whole physical pixels: the Stark hairline at any scale.
+fn hairline(ppp: f32) -> f32 {
+    ppp.round().max(1.0) / ppp
+}
+
+/// How deep a Stark panel's cut corners are (top-left and bottom-right, at 45°).
+pub const CHAMFER: f32 = 12.0;
+
+/// The cut of a panel at `r`: `CHAMFER`, or none for a panel too small to carry it.
+pub fn chamfer(r: Rect) -> f32 {
+    if r.width() >= 5.0 * CHAMFER && r.height() >= 3.0 * CHAMFER {
+        CHAMFER
+    } else {
+        0.0
+    }
+}
+
+/// The corner brackets inside `r`, a hairline thick, on the pixel grid: L-shaped at the top-right
+/// and bottom-left, and at the cut corners a line of light along the cut with short arms on
+/// from it (`chamfer`). `arm`: how long the arms are; `lit` lays their light round them (the
+/// block in use).
 pub fn corners(p: &Painter, r: Rect, arm: f32, colour: Color32, lit: f32) {
     if !r.is_positive() || colour.a() == 0 {
         return;
     }
     let ppp = p.ctx().pixels_per_point();
-    let t = (1.5 * ppp).round().max(1.0) / ppp;
+    let t = hairline(ppp);
+    let cut = snap(chamfer(r), ppp);
     let r = snapped(r, ppp);
     let arm = snap(arm.min(r.width() * 0.5).min(r.height() * 0.5), ppp);
-    for (x, y, dx, dy) in [(r.left(), r.top(), 1.0, 1.0), (r.right(), r.top(), -1.0, 1.0), (r.left(), r.bottom(), 1.0, -1.0), (r.right(), r.bottom(), -1.0, -1.0)] {
-        let across = Rect::from_two_pos(pos2(x, y), pos2(x + arm * dx, y + t * dy));
-        let down = Rect::from_two_pos(pos2(x, y), pos2(x + t * dx, y + arm * dy));
-        glow(p, across, colour, lit);
-        glow(p, down, colour, lit);
-        p.rect_filled(across, Rounding::ZERO, colour);
-        p.rect_filled(down, Rounding::ZERO, colour);
+    let reach = snap((arm * 0.7).max(4.0), ppp);
+    let bar = |rect: Rect| {
+        glow(p, rect, colour, lit);
+        p.rect_filled(rect, Rounding::ZERO, colour);
+    };
+    for (x, y, dx, dy, cut) in [(r.left(), r.top(), 1.0, 1.0, cut), (r.right(), r.top(), -1.0, 1.0, 0.0), (r.left(), r.bottom(), 1.0, -1.0, 0.0), (r.right(), r.bottom(), -1.0, -1.0, cut)] {
+        // (At a cut corner the arms start where the cut ends.)
+        bar(Rect::from_two_pos(pos2(x + cut * dx, y), pos2(x + (cut + if cut > 0.0 { reach } else { arm }) * dx, y + t * dy)));
+        bar(Rect::from_two_pos(pos2(x, y + cut * dy), pos2(x + t * dx, y + (cut + if cut > 0.0 { reach } else { arm }) * dy)));
+        if cut > 0.0 {
+            let h = t * 0.5;
+            p.line_segment([pos2(x + h * dx, y + cut * dy), pos2(x + cut * dx, y + h * dy)], Stroke::new(t * 1.2, colour));
+        }
     }
 }
 
-/// A block's shell, as the films draw a panel: faint flat glass, a hairline frame in a faint
-/// tint of the theme, and bright corner brackets (the theme's own colour, and lit, on the block
-/// in use). `alpha`: the block's own opacity (its entrance, a search that dims it).
+/// A Stark panel's glass and frame: one plain quad of glass (`surface`) with fine scan lines of
+/// the theme's light, its top-left and bottom-right corners cut off (shaded away and edged), and
+/// a hairline in `edge` (as given) round it. `alpha`: the glass's own opacity.
+pub fn panel(p: &Painter, r: Rect, fill: Color32, edge: Color32, alpha: f32) {
+    if !r.is_positive() || alpha <= 0.0 {
+        return;
+    }
+    surface(p, r, fill, alpha);
+    let ppp = p.ctx().pixels_per_point();
+    let t = hairline(ppp);
+    let c = snap(chamfer(r), ppp);
+    let r = snapped(r, ppp);
+    let mut mesh = egui::Mesh::default();
+    // The hologram's scan lines, every third pixel, clear of the cut corners.
+    let light = crate::theme_engine::current().primary().gamma_multiply(0.035 * alpha);
+    let mut y = r.top() + 2.0;
+    while y < r.bottom() - 1.0 {
+        let left = r.left() + (c - (y - r.top())).max(0.0);
+        let right = r.right() - (c - (r.bottom() - y)).max(0.0);
+        mesh.add_colored_rect(Rect::from_min_max(pos2(left, y), pos2(right, y + t)), light);
+        y += 3.0;
+    }
+    if c > 0.0 {
+        // The cut corners, shaded off the glass down to the canvas.
+        let shade = Color32::from_black_alpha((235.0 * alpha.min(1.0)) as u8);
+        for (a, b, d) in [(r.left_top(), pos2(r.left() + c, r.top()), pos2(r.left(), r.top() + c)), (r.right_bottom(), pos2(r.right() - c, r.bottom()), pos2(r.right(), r.bottom() - c))] {
+            let at = mesh.vertices.len() as u32;
+            for v in [a, b, d] {
+                mesh.colored_vertex(v, shade);
+            }
+            mesh.add_triangle(at, at + 1, at + 2);
+        }
+    }
+    p.add(egui::Shape::mesh(mesh));
+    if c <= 0.0 {
+        border(p, r, 1.0, edge);
+        return;
+    }
+    for side in [
+        Rect::from_min_max(pos2(r.left() + c, r.top()), pos2(r.right(), r.top() + t)),
+        Rect::from_min_max(pos2(r.left(), r.bottom() - t), pos2(r.right() - c, r.bottom())),
+        Rect::from_min_max(pos2(r.left(), r.top() + c), pos2(r.left() + t, r.bottom() - t)),
+        Rect::from_min_max(pos2(r.right() - t, r.top() + t), pos2(r.right(), r.bottom() - c)),
+    ] {
+        p.rect_filled(side, Rounding::ZERO, edge);
+    }
+    let h = t * 0.5;
+    p.line_segment([pos2(r.left() + h, r.top() + c), pos2(r.left() + c, r.top() + h)], Stroke::new(t, edge));
+    p.line_segment([pos2(r.right() - c, r.bottom() - h), pos2(r.right() - h, r.bottom() - c)], Stroke::new(t, edge));
+}
+
+/// A block's shell, as the films draw a panel: hologram glass with its corners cut, a hairline
+/// frame in a faint tint of the theme, and bright corner brackets (the theme's own colour, and
+/// lit, on the block in use). `alpha`: the block's own opacity (its entrance, a search that dims
+/// it).
 pub fn shell(p: &Painter, r: Rect, active: bool, alpha: f32) {
     if !r.is_positive() || alpha <= 0.0 {
         return;
     }
-    surface(p, r, if active { crate::hud_board::BLOCK_FILL_LIFTED } else { crate::hud_board::BLOCK_FILL }, alpha);
     let edge = if active { crate::hud_board::active_colour().gamma_multiply(0.45) } else { crate::hud_board::border_colour() };
-    border(p, r, 1.0, edge.gamma_multiply(alpha));
+    panel(p, r, if active { crate::hud_board::BLOCK_FILL_LIFTED } else { crate::hud_board::BLOCK_FILL }, edge.gamma_multiply(alpha), alpha);
     let (bracket, lit) = if active { (crate::hud_board::active_colour(), 0.8) } else { (crate::hud_board::bracket_colour().gamma_multiply(0.85), 0.0) };
     corners(p, r, BRACKET_ARM, bracket.gamma_multiply(alpha), lit * alpha);
-    if let Some(tab) = tab_rect(r, px(p)) {
-        let colour = crate::theme_engine::current().primary().gamma_multiply(if active { 1.0 } else { 0.8 } * alpha);
-        glow(p, tab, colour, if active { 0.8 } else { 0.3 } * alpha);
-        p.rect_filled(tab, Rounding::ZERO, colour);
-    }
+    marks(p, r, active, alpha);
 }
 
-/// How long a corner bracket's arms are.
-pub const BRACKET_ARM: f32 = 9.0;
+/// How long a corner bracket's arms are (long and fine).
+pub const BRACKET_ARM: f32 = 14.0;
 /// The Stark panel's tab: a short bar of the theme's colour on the top edge, just past the
 /// top-left bracket (as the films mark a panel). Narrow blocks go without it.
-pub const TAB_W: f32 = 22.0;
+pub const TAB_W: f32 = 28.0;
 
-/// Where the tab of a block at `r` lies (two whole pixels high, on its top edge), if it has room.
+/// Where the tab of a block at `r` lies (a hairline on its top edge), if it has room.
 pub fn tab_rect(r: Rect, pixel: f32) -> Option<Rect> {
     let ppp = 1.0 / pixel;
-    (r.width() >= 6.0 * TAB_W).then(|| Rect::from_min_size(pos2(snap(r.left() + BRACKET_ARM + 6.0, ppp), snap(r.top(), ppp)), vec2(TAB_W, 2.0 * pixel)))
+    (r.width() >= 5.0 * TAB_W).then(|| Rect::from_min_size(pos2(snap(r.left() + chamfer(r) + BRACKET_ARM + 4.0, ppp), snap(r.top(), ppp)), vec2(TAB_W, hairline(ppp))))
+}
+
+/// The Stark marks on a panel's edges: the red tab with a short dash after it and a fine tick
+/// ruler hanging from the top edge, and a hologram-blue mark on the bottom edge by the right
+/// bracket. Light on the frame, nothing added round it; narrow panels go without.
+pub fn marks(p: &Painter, r: Rect, active: bool, alpha: f32) {
+    let pixel = px(p);
+    let Some(tab) = tab_rect(r, pixel) else { return };
+    let (ppp, line) = (1.0 / pixel, tab.height());
+    let theme = crate::theme_engine::current();
+    let red = theme.primary().gamma_multiply(if active { 1.0 } else { 0.8 } * alpha);
+    glow(p, tab, red, if active { 0.7 } else { 0.25 } * alpha);
+    p.rect_filled(tab, Rounding::ZERO, red);
+    p.rect_filled(Rect::from_min_size(pos2(tab.right() + 4.0, tab.top()), vec2(6.0, line)), Rounding::ZERO, red.gamma_multiply(0.6));
+    let tick = MUTED.gamma_multiply(0.45 * alpha);
+    for k in 0..5 {
+        let x = snap(tab.right() + 16.0 + 4.0 * k as f32, ppp);
+        p.rect_filled(Rect::from_min_size(pos2(x, tab.top()), vec2(line, if k == 2 { 5.0 } else { 3.0 })), Rounding::ZERO, tick);
+    }
+    let blue = theme.secondary().gamma_multiply(if active { 0.95 } else { 0.6 } * alpha);
+    let w = (TAB_W * 0.6).round();
+    p.rect_filled(Rect::from_min_size(pos2(snap(r.right() - chamfer(r) - BRACKET_ARM - 4.0 - w, ppp), snap(r.bottom(), ppp) - line), vec2(w, line)), Rounding::ZERO, blue);
 }
 
 /// `a` to `b` by `t`, channel by channel (both as they are stored: premultiplied).
-fn lerp_colour(a: Color32, b: Color32, t: f32) -> Color32 {
+pub fn lerp_colour(a: Color32, b: Color32, t: f32) -> Color32 {
     let ch = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t.clamp(0.0, 1.0)).round() as u8;
     Color32::from_rgba_premultiplied(ch(a.r(), b.r()), ch(a.g(), b.g()), ch(a.b(), b.b()), ch(a.a(), b.a()))
 }
@@ -1114,7 +1220,7 @@ mod tests {
     }
 
     /// Sharp at any scaling: frames and brackets sit on whole physical pixels at 100,
-    /// 125 and 150 %, one pixel thin (brackets two).
+    /// 125 and 150 %, one pixel thin (the brackets too, but two at 150 %: Stark hairlines).
     #[test]
     fn hairlines_sit_on_whole_pixels_at_any_scaling() {
         for ppp in [1.0f32, 1.25, 1.5] {
@@ -1137,7 +1243,8 @@ mod tests {
                     assert!((edge * ppp - (edge * ppp).round()).abs() < 1e-3, "{r:?} off the pixel grid at {ppp}");
                 }
                 let thin = (r.width().min(r.height()) * ppp).round();
-                assert_eq!(thin, if k < 4 { 1.0 } else { 2.0 }, "{r:?} at {ppp}");
+                // (A bracket is a `hairline`: two pixels at 150 %, where one would be half a point.)
+                assert_eq!(thin, if k < 4 { 1.0 } else { ppp.round() }, "{r:?} at {ppp}");
             }
         }
     }

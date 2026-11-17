@@ -915,7 +915,7 @@ pub fn place_new_window(bounds: Rect, regions: &[Rect], size: eframe::egui::Vec2
 const FORCED_FRAMES: u8 = 4;
 /// The smallest a block is ever made, and the gap between tiled blocks.
 pub const MIN_BLOCK: [f32; 2] = [300.0, 200.0];
-pub const TILE_GAP: f32 = 12.0;
+pub const TILE_GAP: f32 = 28.0;
 /// The largest a tiled cell is used (a lone block does not fill a 2560 px screen).
 const MAX_TILE: [f32; 2] = [900.0, 620.0];
 

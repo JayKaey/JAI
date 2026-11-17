@@ -1438,8 +1438,8 @@ pub fn bento(sizes: &[(usize, usize)], cols: usize, rows: usize, reserved: &[(us
         .collect()
 }
 
-/// The gap between two blocks of the grid.
-const GRID_GAP: f32 = 12.0;
+/// The gap between two blocks of the grid: room to breathe, as panels float in Stark's workshop.
+const GRID_GAP: f32 = 32.0;
 /// The smallest a grid cell is made (a narrower note could not hold a headline).
 const MIN_CELL: [f32; 2] = [250.0, 150.0];
 
@@ -2095,9 +2095,7 @@ fn front_rect(slot: Rect, stack: Option<(usize, usize)>) -> Rect {
 }
 
 /// `Stroke::new` takes `impl Into<f32>`, which leaves float literals untyped.
-fn stroke(width: f32, colour: Color32) -> Stroke {
-    Stroke::new(width, colour)
-}
+use crate::hud_style::stroke;
 
 fn micro() -> FontId {
     FontId::monospace(11.0)
@@ -2238,6 +2236,10 @@ fn frame(p: &Painter, slot: Rect, block: &Block, active: bool, stack: Option<(us
         }
         inset.shrink(8.0)
     } else {
+        // The header rule: a hairline under the title, lit in the theme's colour where it starts.
+        let (y, line) = (p.round_to_pixel(r.top() + pad + 13.0), crate::hud_style::px(p));
+        p.rect_filled(Rect::from_min_max(pos2(r.left() + pad, y), pos2(r.right() - pad, y + line)), Rounding::ZERO, border_colour().gamma_multiply(0.6));
+        p.rect_filled(Rect::from_min_size(pos2(r.left() + pad, y), vec2(24.0, line)), Rounding::ZERO, active_colour().gamma_multiply(0.85));
         p.text(pos2(r.right() - pad, foot - 4.0), Align2::RIGHT_CENTER, "[ MAX ]", micro(), MICRO);
         Rect::from_min_max(r.left_top() + vec2(pad, pad + 16.0), r.right_bottom() - vec2(pad, pad + 14.0))
     };
@@ -3032,7 +3034,18 @@ fn paint_chart(p: &Painter, r: Rect, unit: &str, bars: &[Bar], caption: &str, sc
         let h = plot.height() * (bar.value / top.max(1e-3)).clamp(0.0, 1.0);
         let rect = Rect::from_min_max(pos2(x - width / 2.0, plot.bottom() - h), pos2(x + width / 2.0, plot.bottom()));
         let lit = hover.is_some_and(|at| (at.x - x).abs() < slot / 2.0 && at.y > plot.top() && at.y < plot.bottom() + label_h);
-        p.rect_filled(rect, Rounding::ZERO, if lit { active_colour() } else { active_colour().gamma_multiply(0.8) });
+        // A hologram bar: faint light inside fine scan lines, a hairline edge and a bright cap.
+        let colour = if lit { active_colour() } else { active_colour().gamma_multiply(0.85) };
+        p.rect_filled(rect, Rounding::ZERO, colour.gamma_multiply(if lit { 0.3 } else { 0.18 }));
+        let mut y = rect.bottom() - 4.0;
+        while y > rect.top() + 3.0 {
+            p.rect_filled(Rect::from_min_max(pos2(rect.left(), y), pos2(rect.right(), y + 1.0)), Rounding::ZERO, colour.gamma_multiply(0.22));
+            y -= 4.0;
+        }
+        crate::hud_style::border(p, rect, 1.0, colour.gamma_multiply(0.75));
+        let cap = Rect::from_min_size(rect.min, vec2(rect.width(), 2.0));
+        crate::hud_style::glow(p, cap, colour, 0.8);
+        p.rect_filled(cap, Rounding::ZERO, crate::hud_style::lerp_colour(colour, Color32::WHITE, 0.35));
         p.text(pos2(x, rect.top() - 3.0), Align2::CENTER_BOTTOM, format!("{}{unit}", trim_number(bar.value)), micro(), INK);
         let label: String = bar.label.to_uppercase().chars().take(12).collect();
         p.text(pos2(x, plot.bottom() + 5.0), Align2::CENTER_TOP, label, micro(), INK.gamma_multiply(0.9));
