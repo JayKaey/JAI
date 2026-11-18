@@ -103,6 +103,16 @@ pub const RELEASES: &[Release] = &[
             better("His voice and yours", "His own voice lights the core's inner ring in your yellow; yours shows as white ticks round it."),
             better("New lettering", "Wide capitals for labels, thin squared figures for readings, plain sentences for the rest."),
             better("A new icon", "The core in your yellow on a black disc."),
+            better("A top rail of words", "The header is words on a hairline: what is open is a solid block of your yellow."),
+            better("The rule answers his voice", "The filament under the rail widens and brightens while he speaks, and so does his first circle."),
+            better("Windows tied to the core", "A leader runs from his circle to every open window; light runs out along it while he speaks."),
+            better("Plates everywhere", "Board blocks, windows, cards and questions are one plate: cut corner, three ticks, an index tab."),
+            better("New keys, switches and sliders", "Keys lean, switches slide, a slider is a hairline with a ruler; every panel uses them."),
+            better("Charts of light", "Bars are faint panes under a bright cap, on a scale of hairlines; no more olive fills."),
+            better("Notifications and the edge light", "Cards are plates with a chip; the screen's edge lights as a filament, not a painted frame."),
+            better("The idle dial", "The time in thin figures inside a dial: the seconds as sixty marks, the minutes as an arc."),
+            better("He draws himself at start-up", "A spark, the axes, then ring after ring of light, and the parts that are really up."),
+            better("The phone page", "The same plates, leaning keys and lettering on your phone."),
             fixed("\"Shut off my PC\" asks first", "It closed an app named \"off my pc\"; now it asks to shut the PC down, also when misheard."),
         ],
     },
@@ -790,17 +800,17 @@ pub fn show(ctx: &egui::Context) {
         let closed = crate::gui::block(ctx, ID, "Changes // what is new, better, fixed", [700.0, 640.0], |ui| {
             ui.horizontal(|ui| {
                 ui.label(RichText::new("FIND").font(FontId::monospace(11.0)).color(muted));
-                ui.add(egui::TextEdit::singleline(&mut search).desired_width(220.0).hint_text("a word, a date").font(FontId::proportional(13.5)));
+                crate::holo_ui::slot(ui, egui::TextEdit::singleline(&mut search).desired_width(220.0).hint_text("a word, a date").font(FontId::proportional(13.5)));
                 ui.add_space(10.0);
                 for (label, kind) in [("ALL", None), ("NEW", Some(Kind::New)), ("BETTER", Some(Kind::Better)), ("FIXED", Some(Kind::Fixed))] {
                     let lit = only == kind;
-                    if ui.add(egui::Label::new(RichText::new(format!("[ {label} ]")).font(FontId::monospace(11.0)).color(if lit { accent } else { muted })).sense(Sense::click())).clicked() {
+                    if ui.add(egui::Label::new(RichText::new(format!("{label}")).font(FontId::monospace(11.0)).color(if lit { accent } else { muted })).sense(Sense::click())).clicked() {
                         only = kind;
                     }
                 }
             });
             ui.add_space(6.0);
-            crate::hud_style::faded(ui, egui::ScrollArea::vertical().auto_shrink([false; 2]), |ui| {
+            crate::holo_block::faded(ui, egui::ScrollArea::vertical().auto_shrink([false; 2]), |ui| {
                 let mut shown = 0;
                 for release in RELEASES {
                     let entries = matching(release, &search, only);
@@ -814,12 +824,12 @@ pub fn show(ctx: &egui::Context) {
                         ui.label(RichText::new(release.name).font(FontId::new(17.0, FontFamily::Name("display".into()))).color(ink));
                     });
                     let rule = ui.cursor();
-                    ui.painter().line_segment([rule.left_top(), egui::pos2(rule.left() + ui.available_width(), rule.top())], egui::Stroke::new(1.0f32, crate::hud_style::white(0.10)));
+                    ui.painter().line_segment([rule.left_top(), egui::pos2(rule.left() + ui.available_width(), rule.top())], egui::Stroke::new(1.0f32, crate::holo::a(crate::holo::theme().ink(), 0.10)));
                     ui.add_space(4.0);
                     for entry in entries {
                         let tag_colour = match entry.kind {
                             Kind::New => accent,
-                            Kind::Better => crate::hud_style::GOOD,
+                            Kind::Better => crate::holo::theme().ink(),
                             Kind::Fixed => muted,
                         };
                         ui.horizontal_wrapped(|ui| {
@@ -863,7 +873,7 @@ pub fn show(ctx: &egui::Context) {
         let Some(e) = explanation(id) else { continue };
         let block = explain_id(id);
         let closed = crate::gui::block(ctx, &block, &format!("{} // how it works", e.title), [520.0, 460.0], |ui| {
-            crate::hud_style::faded(ui, egui::ScrollArea::vertical().auto_shrink([false; 2]), |ui| {
+            crate::holo_block::faded(ui, egui::ScrollArea::vertical().auto_shrink([false; 2]), |ui| {
                 ui.add_space(4.0);
                 ui.label(RichText::new(e.title).font(FontId::new(24.0, FontFamily::Name("display".into()))).color(ink));
                 ui.add_space(8.0);

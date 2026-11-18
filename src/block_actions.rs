@@ -53,8 +53,7 @@ pub fn menu(ui: &mut Ui, pinned: bool, maximized: bool) -> Option<BlockAction> {
     let mut chosen = None;
     ui.set_min_width(196.0);
     for action in BlockAction::ALL {
-        let entry = egui::Button::new(RichText::new(action.label(pinned, maximized)).font(FontId::monospace(11.0))).min_size(egui::vec2(188.0, 24.0));
-        if ui.add(entry).on_hover_text(action.hint()).clicked() {
+        if crate::holo_ui::item(ui, action.label(pinned, maximized), false).on_hover_text(action.hint()).clicked() {
             chosen = Some(action);
             ui.close_menu();
         }

@@ -885,7 +885,7 @@ pub fn check_board(size: Vec2, count: usize, pass: usize, rt: &tokio::runtime::H
 
     // Check 6: the page keys of the first stacked note.
     if let (Some([previous, next]), Some((page, pages))) = (crate::hud_board::page_keys(area), crate::hud_board::front_page()) {
-        for (name, key) in [("[ < PREV ]", previous), ("[ NEXT > ]", next)] {
+        for (name, key) in [("< PREV", previous), ("NEXT >", next)] {
             if key.width() < MIN_PAGE_KEY[0] || key.height() < MIN_PAGE_KEY[1] {
                 findings.push(format!("{name} is {}x{} px (at least {}x{})", key.width(), key.height(), MIN_PAGE_KEY[0], MIN_PAGE_KEY[1]));
             }

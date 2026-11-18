@@ -23,8 +23,6 @@ use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 use tokio::runtime::Handle;
 
-const PANEL: Color32 = Color32::from_rgb(0x02, 0x05, 0x09);
-const LIVE_RED: Color32 = Color32::from_rgb(0xFF, 0x3B, 0x4E);
 
 /// One block: a picture block (one per subject), the cameras or street view. Its window is the
 /// viewport `jai_<id>`.
@@ -145,7 +143,7 @@ fn host(ctx: &egui::Context, rt: &Handle, b: Block) -> bool {
             if class == ViewportClass::Embedded {
                 egui::Window::new(b.title).id(egui::Id::new(("jai_embedded_block", &b.id))).show(ctx, |ui| (b.body)(ui, &rt));
             } else {
-                egui::CentralPanel::default().frame(Frame::none().fill(super::BLOCK_SLATE).inner_margin(Margin::same(14.0))).show(ctx, |ui| {
+                egui::CentralPanel::default().frame(Frame::none().fill(super::block_slate()).inner_margin(Margin::same(14.0))).show(ctx, |ui| {
                     if super::detached_title_bar(ui, ctx, b.title) {
                         (b.close)();
                     }
@@ -217,29 +215,29 @@ fn accent() -> Color32 {
 }
 
 fn chip(ui: &mut Ui, text: &str, hint: &str) -> bool {
-    ui.add(egui::Button::new(RichText::new(text).font(super::strip_font()).color(super::STRIP_INK)).fill(super::rgba([3, 7, 12], 0.9)).stroke(super::stroke(1.0, crate::hud_board::border_colour())).rounding(Rounding::ZERO))
+    crate::holo_ui::key(ui, text)
         .on_hover_text(hint)
         .clicked()
 }
 
 fn muted(ui: &mut Ui, text: impl Into<String>) {
-    ui.add(egui::Label::new(RichText::new(text.into()).font(super::strip_font()).color(super::STRIP_MUTED)).truncate());
+    ui.add(egui::Label::new(RichText::new(text.into()).font(super::strip_font()).color(super::strip_muted())).truncate());
 }
 
 /// A line of text in the middle of a dark frame ("Searching…").
 fn frame_note(p: &Painter, rect: Rect, text: &str) {
-    p.rect_filled(rect, Rounding::ZERO, PANEL);
-    p.text(rect.center(), Align2::CENTER_CENTER, text, FontId::monospace(12.0), super::STRIP_MUTED);
+    p.rect_filled(rect, Rounding::ZERO, crate::holo::theme().void());
+    p.text(rect.center(), Align2::CENTER_CENTER, text, FontId::monospace(12.0), super::strip_muted());
 }
 
 /// A picture frame without its picture: the outline of one while it loads, or what went wrong
 /// with a `[ RETRY ]` key. Returns whether the key was clicked.
 fn frame_state(ui: &mut Ui, rect: Rect, status: Option<(bool, Option<String>)>, what: &str) -> bool {
-    ui.painter_at(rect).rect_filled(rect, Rounding::ZERO, PANEL);
+    ui.painter_at(rect).rect_filled(rect, Rounding::ZERO, crate::holo::theme().void());
     match status {
-        Some((false, Some(e))) => crate::hud_style::failed(ui, rect.shrink(12.0), &format!("This {what} could not be loaded ({e}).")),
+        Some((false, Some(e))) => crate::holo_block::failed(ui, rect.shrink(12.0), &format!("This {what} could not be loaded ({e}).")),
         _ => {
-            crate::hud_style::outline(ui, rect.shrink(14.0), crate::hud_style::Outline::Picture);
+            crate::holo_block::outline(ui, rect.shrink(14.0), crate::holo_block::Outline::Picture);
             false
         }
     }
@@ -312,7 +310,7 @@ fn framed(ui: &mut Ui, rect: Rect, id: egui::Id, key: u64, tex: &TextureHandle, 
     let room = ((size - rect.size()) * 0.5).max(Vec2::ZERO);
     zp.pan = zp.pan.clamp(-room, room);
     let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, Rounding::ZERO, PANEL);
+    painter.rect_filled(rect, Rounding::ZERO, crate::holo::theme().void());
     painter.image(tex.id(), Rect::from_center_size(rect.center() + zp.pan, size), Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
     ui.data_mut(|d| d.insert_temp(id, zp));
     resp
@@ -343,7 +341,7 @@ fn pictures_body(ui: &mut Ui, rt: &Handle, id: &str) {
         let title = current.as_ref().map(|p| p.title.clone()).unwrap_or_default();
         ui.add(egui::Label::new(RichText::new(format!("{} // {}", album.label.to_uppercase(), title)).font(super::strip_font()).color(accent())).truncate());
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if current.as_ref().is_some_and(|p| p.local.is_none()) && chip(ui, "[ SAVE ]", "Save the full picture to Pictures\\JAI") {
+            if current.as_ref().is_some_and(|p| p.local.is_none()) && chip(ui, "SAVE", "Save the full picture to Pictures\\JAI") {
                 let id = id.to_string();
                 rt.spawn(async move {
                     if let Err(e) = crate::image_viewer::save_current(Some(&id)).await {
@@ -352,11 +350,11 @@ fn pictures_body(ui: &mut Ui, rt: &Handle, id: &str) {
                 });
             }
             if n > 1 {
-                if chip(ui, "[ NEXT ]", "Next picture (→)") {
+                if chip(ui, "NEXT", "Next picture (→)") {
                     crate::image_viewer::step(Some(id), 1);
                 }
-                ui.label(RichText::new(format!("{} / {n}", album.index + 1)).font(super::strip_font()).color(super::STRIP_INK));
-                if chip(ui, "[ PREV ]", "Previous picture (←)") {
+                ui.label(RichText::new(format!("{} / {n}", album.index + 1)).font(super::strip_font()).color(super::strip_ink()));
+                if chip(ui, "PREV", "Previous picture (←)") {
                     crate::image_viewer::step(Some(id), -1);
                 }
             }
@@ -367,14 +365,14 @@ fn pictures_body(ui: &mut Ui, rt: &Handle, id: &str) {
     let main_h = (avail.y - strip_h - 26.0).max(120.0);
     let (rect, _) = ui.allocate_exact_size(vec2(avail.x, main_h), Sense::hover());
     {
-        use crate::hud_style::Light;
-        crate::hud_style::set_light(id, match &current {
-            None if album.note.ends_with('\u{2026}') => Light::Busy,
-            None => Light::Rest,
+        use crate::holo_block::Lamp;
+        crate::holo_block::set_lamp(id, match &current {
+            None if album.note.ends_with('\u{2026}') => Lamp::Busy,
+            None => Lamp::Rest,
             Some(pic) => match crate::image_viewer::pixels::status(&pic.full_key()) {
-                Some((false, Some(_))) => Light::Fault,
-                Some((false, None)) => Light::Good,
-                _ => Light::Busy,
+                Some((false, Some(_))) => Lamp::Fault,
+                Some((false, None)) => Lamp::Good,
+                _ => Lamp::Busy,
             },
         });
     }
@@ -382,13 +380,13 @@ fn pictures_body(ui: &mut Ui, rt: &Handle, id: &str) {
         // Nothing found yet: the outline of a picture while he searches (the note says where),
         // one plain sentence when there is nothing.
         None if album.note.ends_with('\u{2026}') => {
-            ui.painter_at(rect).rect_filled(rect, Rounding::ZERO, PANEL);
-            crate::hud_style::outline(ui, rect.shrink(14.0), crate::hud_style::Outline::Picture);
-            tag(&ui.painter_at(rect), rect.left_bottom() + vec2(8.0, -8.0), Align2::LEFT_BOTTOM, &album.note, super::STRIP_INK);
+            ui.painter_at(rect).rect_filled(rect, Rounding::ZERO, crate::holo::theme().void());
+            crate::holo_block::outline(ui, rect.shrink(14.0), crate::holo_block::Outline::Picture);
+            tag(&ui.painter_at(rect), rect.left_bottom() + vec2(8.0, -8.0), Align2::LEFT_BOTTOM, &album.note, super::strip_ink());
         }
         None => {
-            ui.painter_at(rect).rect_filled(rect, Rounding::ZERO, PANEL);
-            crate::hud_style::empty(ui, rect, if album.note.is_empty() { "No pictures yet." } else { &album.note });
+            ui.painter_at(rect).rect_filled(rect, Rounding::ZERO, crate::holo::theme().void());
+            crate::holo_block::empty(ui, rect, if album.note.is_empty() { "No pictures yet." } else { &album.note });
         }
         Some(pic) => {
             crate::image_viewer::pixels::want(&pic.full_key(), &pic.full_origin(), crate::image_viewer::FULL_SIDE, pic.local.is_none());
@@ -398,7 +396,7 @@ fn pictures_body(ui: &mut Ui, rt: &Handle, id: &str) {
                 Some((tex, px)) => {
                     framed(ui, rect, egui::Id::new(("jai_picture_frame", id)), hash_of(&pic.full_key()), &tex, px);
                     if full.is_none() {
-                        tag(&ui.painter_at(rect), rect.right_top() + vec2(-8.0, 8.0), Align2::RIGHT_TOP, "LOADING FULL RESOLUTION", super::STRIP_MUTED);
+                        tag(&ui.painter_at(rect), rect.right_top() + vec2(-8.0, 8.0), Align2::RIGHT_TOP, "LOADING FULL RESOLUTION", super::strip_muted());
                     }
                 }
                 None => {
@@ -408,7 +406,7 @@ fn pictures_body(ui: &mut Ui, rt: &Handle, id: &str) {
                 }
             }
             if !album.note.is_empty() {
-                tag(&ui.painter_at(rect), rect.left_bottom() + vec2(8.0, -8.0), Align2::LEFT_BOTTOM, &album.note, super::STRIP_INK);
+                tag(&ui.painter_at(rect), rect.left_bottom() + vec2(8.0, -8.0), Align2::LEFT_BOTTOM, &album.note, super::strip_ink());
             }
             if let Some(forward) = arrows(ui, rect) {
                 crate::image_viewer::step(Some(id), if forward { 1 } else { -1 });
@@ -421,7 +419,7 @@ fn pictures_body(ui: &mut Ui, rt: &Handle, id: &str) {
             muted(ui, pic.credit());
             if !pic.page.is_empty() {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    ui.hyperlink_to(RichText::new("SOURCE PAGE").font(super::strip_font()).color(accent()), &pic.page);
+                    crate::holo_ui::link_to(ui, RichText::new("SOURCE PAGE").font(super::strip_font()).color(accent()), &pic.page);
                 });
             }
         }
@@ -440,7 +438,7 @@ fn strip(ui: &mut Ui, album: &crate::image_viewer::Album, id: &str) {
                 if ui.is_rect_visible(rect) {
                     crate::image_viewer::pixels::want(&pic.thumb_key(), &pic.thumb_origin(), crate::image_viewer::THUMB_SIDE, pic.local.is_none());
                     let p = ui.painter_at(rect);
-                    p.rect_filled(rect, Rounding::ZERO, PANEL);
+                    p.rect_filled(rect, Rounding::ZERO, crate::holo::theme().void());
                     if let Some((tex, px)) = texture(ui.ctx(), &pic.thumb_key()) {
                         fitted(&p, rect, &tex, px, true);
                     }
@@ -465,13 +463,13 @@ fn cameras_body(ui: &mut Ui, _rt: &Handle) {
         ui.add(egui::Label::new(RichText::new(format!("LIVE // {}", view.label.to_uppercase())).font(super::strip_font()).color(accent())).truncate());
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             if view.cams.len() > 1 {
-                if chip(ui, "[ NEXT ]", "The next camera") {
+                if chip(ui, "NEXT", "The next camera") {
                     crate::webcams::select(if view.wall > 0 { 0 } else { (view.index + 1) % view.cams.len() });
                 }
-                if view.cams.len() >= 9 && chip(ui, "[ 3×3 ]", "A wall of nine cameras") {
+                if view.cams.len() >= 9 && chip(ui, "3×3", "A wall of nine cameras") {
                     crate::webcams::show_wall(9);
                 }
-                if chip(ui, "[ 2×2 ]", "A wall of four cameras") {
+                if chip(ui, "2×2", "A wall of four cameras") {
                     crate::webcams::show_wall(4);
                 }
             }
@@ -512,9 +510,9 @@ fn cameras_body(ui: &mut Ui, _rt: &Handle) {
     if side > 0.0 {
         let list = Rect::from_min_max(pos2(rect.right() - side, rect.top()), rect.max);
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(list).layout(Layout::top_down(Align::Min)));
-        crate::hud_style::faded(&mut child, egui::ScrollArea::vertical().id_salt("jai_cam_list"), |ui| {
+        crate::holo_block::faded(&mut child, egui::ScrollArea::vertical().id_salt("jai_cam_list"), |ui| {
             for (i, (cam, km)) in view.cams.iter().enumerate() {
-                let text = RichText::new(format!("{}\n{} · {:.1} km", cam.title(), cam.area, km)).font(FontId::monospace(11.0)).color(if i == view.index { accent() } else { super::STRIP_INK });
+                let text = RichText::new(format!("{}\n{} · {:.1} km", cam.title(), cam.area, km)).font(FontId::monospace(11.0)).color(if i == view.index { accent() } else { super::strip_ink() });
                 if ui.add(egui::SelectableLabel::new(i == view.index, text)).clicked() {
                     crate::webcams::select(i);
                 }
@@ -538,7 +536,7 @@ fn camera_frame(ui: &Ui, rect: Rect, cam: &crate::webcams::Cam, km: f64, on_wall
     }
     crate::webcams::ensure_name(cam);
     let p = ui.painter_at(rect);
-    p.rect_filled(rect, Rounding::ZERO, PANEL);
+    p.rect_filled(rect, Rounding::ZERO, crate::holo::theme().void());
     let frame = pixels::get(&key);
     match texture(ui.ctx(), &key) {
         Some((tex, px)) => fitted(&p, rect, &tex, px, false),
@@ -547,14 +545,14 @@ fn camera_frame(ui: &Ui, rect: Rect, cam: &crate::webcams::Cam, km: f64, on_wall
                 Some((false, Some(e))) => format!("No frame ({e})"),
                 _ => "Connecting…".to_string(),
             };
-            p.text(rect.center(), Align2::CENTER_CENTER, text, FontId::monospace(11.0), super::STRIP_MUTED);
+            p.text(rect.center(), Align2::CENTER_CENTER, text, FontId::monospace(11.0), super::strip_muted());
         }
     }
     let edge = if hovered { accent() } else { crate::hud_board::border_colour().gamma_multiply(0.7) };
     p.rect_stroke(rect, Rounding::ZERO, Stroke::new(1.0_f32, edge));
     // A red dot, LIVE and the name.
-    let top = tag(&p, rect.left_top() + vec2(6.0, 6.0), Align2::LEFT_TOP, &format!("   LIVE  {}", cam.title()), super::STRIP_INK);
-    p.circle_filled(pos2(top.left() + 8.0, top.center().y), 3.5, LIVE_RED);
+    let top = tag(&p, rect.left_top() + vec2(6.0, 6.0), Align2::LEFT_TOP, &format!("   LIVE  {}", cam.title()), super::strip_ink());
+    p.circle_filled(pos2(top.left() + 8.0, top.center().y), 3.5, crate::holo::theme().alert());
     let age_text = match &frame {
         Some(f) => match f.modified {
             Some(m) => format!("frame {} old", age(m)),
@@ -564,7 +562,7 @@ fn camera_frame(ui: &Ui, rect: Rect, cam: &crate::webcams::Cam, km: f64, on_wall
     };
     let far = if km >= 0.05 { format!(" · {km:.1} km away") } else { String::new() };
     let line = if on_wall { format!("{} · {age_text}", cam.area) } else { format!("{} · {} · {age_text}{far}", cam.area, cam.source) };
-    tag(&p, rect.left_bottom() + vec2(6.0, -6.0), Align2::LEFT_BOTTOM, &line, super::STRIP_MUTED);
+    tag(&p, rect.left_bottom() + vec2(6.0, -6.0), Align2::LEFT_BOTTOM, &line, super::strip_muted());
 }
 
 // --------------------------------------------------------------------------- street view ----
@@ -593,10 +591,10 @@ fn street_body(ui: &mut Ui, _rt: &Handle) {
         ui.add(egui::Label::new(RichText::new(format!("STREET VIEW // {}", scene.label.to_uppercase())).font(super::strip_font()).color(accent())).truncate());
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             if let Some(shot) = &scene.shot {
-                if shot.next.is_some() && chip(ui, "[ FORWARD ]", "One photo further along (→)") {
+                if shot.next.is_some() && chip(ui, "FORWARD", "One photo further along (→)") {
                     crate::street_view::step_in_background(true);
                 }
-                if shot.prev.is_some() && chip(ui, "[ BACK ]", "One photo back (←)") {
+                if shot.prev.is_some() && chip(ui, "BACK", "One photo back (←)") {
                     crate::street_view::step_in_background(false);
                 }
             }
@@ -630,15 +628,15 @@ fn street_body(ui: &mut Ui, _rt: &Handle) {
     }
     let p = ui.painter_at(rect);
     if full.is_none() {
-        tag(&p, rect.right_top() + vec2(-8.0, 8.0), Align2::RIGHT_TOP, "LOADING FULL RESOLUTION", super::STRIP_MUTED);
+        tag(&p, rect.right_top() + vec2(-8.0, 8.0), Align2::RIGHT_TOP, "LOADING FULL RESOLUTION", super::strip_muted());
     }
     if let Some(h) = heading {
         const POINTS: [&str; 8] = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
         let point = POINTS[(((h + 22.5) / 45.0) as usize) % 8];
-        tag(&p, rect.center_top() + vec2(0.0, 8.0), Align2::CENTER_TOP, &format!("HEADING {h:03.0}° {point}"), super::STRIP_INK);
+        tag(&p, rect.center_top() + vec2(0.0, 8.0), Align2::CENTER_TOP, &format!("HEADING {h:03.0}° {point}"), super::strip_ink());
     }
     if !scene.note.is_empty() {
-        tag(&p, rect.left_bottom() + vec2(8.0, -8.0), Align2::LEFT_BOTTOM, &scene.note, super::STRIP_INK);
+        tag(&p, rect.left_bottom() + vec2(8.0, -8.0), Align2::LEFT_BOTTOM, &scene.note, super::strip_ink());
     }
     if let Some(forward) = arrows(ui, rect) {
         let can = if forward { shot.next.is_some() } else { shot.prev.is_some() };
@@ -652,7 +650,7 @@ fn street_body(ui: &mut Ui, _rt: &Handle) {
         muted(ui, format!("{}{far}{}", shot.credit(), if shot.pano { " · drag to look around, wheel to zoom" } else { "" }));
         if !shot.page.is_empty() {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                ui.hyperlink_to(RichText::new("SOURCE PAGE").font(super::strip_font()).color(accent()), &shot.page);
+                crate::holo_ui::link_to(ui, RichText::new("SOURCE PAGE").font(super::strip_font()).color(accent()), &shot.page);
             });
         }
     });
@@ -683,7 +681,7 @@ fn panorama(ui: &mut Ui, rect: Rect, id: egui::Id, key: u64, start_yaw_deg: f32,
         look.pitch = 0.0;
     }
     let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, Rounding::ZERO, PANEL);
+    painter.rect_filled(rect, Rounding::ZERO, crate::holo::theme().void());
     painter.add(Shape::mesh(sphere_mesh(rect, tex, look.yaw, look.pitch, look.fov)));
     ui.data_mut(|d| d.insert_temp(id, look));
     look
@@ -775,7 +773,7 @@ pub(super) fn paint_earth_cameras(p: &Painter, map: Rect, at: &dyn Fn(f64, f64) 
     if let Some((_, i, pos)) = best {
         let cam = &cams[i];
         p.circle_stroke(pos, 7.5, Stroke::new(1.5_f32, ink));
-        tag(p, pos + vec2(11.0, -9.0), Align2::LEFT_BOTTOM, &format!("{} · {} · click for the live feed", cam.title(), cam.area), super::STRIP_INK);
+        tag(p, pos + vec2(11.0, -9.0), Align2::LEFT_BOTTOM, &format!("{} · {} · click for the live feed", cam.title(), cam.area), super::strip_ink());
         ctx.set_cursor_icon(CursorIcon::PointingHand);
         if clicked {
             crate::webcams::open_cam(cam);

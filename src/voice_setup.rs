@@ -282,7 +282,7 @@ pub fn show_trace(levels: &[f32]) {
 fn paint_trace(p: &egui::Painter, centre: egui::Pos2, levels: &[f32], accent: Color32) {
     const STEP: f32 = 4.0;
     let left = centre.x - TRACE_LEN as f32 * STEP / 2.0;
-    p.line_segment([pos2(left, centre.y), pos2(left + TRACE_LEN as f32 * STEP, centre.y)], Stroke::new(1.0f32, crate::hud_style::white(0.08)));
+    p.line_segment([pos2(left, centre.y), pos2(left + TRACE_LEN as f32 * STEP, centre.y)], Stroke::new(1.0f32, crate::holo::a(crate::holo::theme().ink(), 0.08)));
     let offset = TRACE_LEN - levels.len().min(TRACE_LEN);
     for (k, level) in levels.iter().rev().take(TRACE_LEN).rev().enumerate() {
         let half = 1.0 + 11.0 * level.sqrt();
@@ -315,7 +315,7 @@ pub fn show(ctx: &egui::Context, mic: f32) {
         // How far it is: six marks.
         for k in 0..LINES.len() {
             let mark = egui::Rect::from_min_size(pos2(rect.left() + k as f32 * 30.0, rect.top() + 4.0), vec2(24.0, 4.0));
-            p.rect_filled(mark, Rounding::ZERO, if k < step { accent } else { crate::hud_style::white(0.12) });
+            p.rect_filled(mark, Rounding::ZERO, if k < step { accent } else { crate::holo::a(crate::holo::theme().ink(), 0.12) });
         }
         let centre = pos2(rect.center().x, rect.top() + rect.height() * 0.42);
         match &outcome {
@@ -325,7 +325,7 @@ pub fn show(ctx: &egui::Context, mic: f32) {
                 let galley = p.layout(line.to_string(), FontId::new(30.0, FontFamily::Name("display".into())), ink, rect.width() - 20.0);
                 p.galley(pos2(centre.x - galley.size().x / 2.0, centre.y - galley.size().y / 2.0), galley, ink);
                 if let Some((text, ok)) = &last {
-                    let (mark, colour) = if *ok { ("HEARD", crate::hud_style::GOOD) } else { ("ONCE MORE, PLEASE  ·  I HEARD", crate::hud_style::warn_colour()) };
+                    let (mark, colour) = if *ok { ("HEARD", crate::holo::theme().ink()) } else { ("ONCE MORE, PLEASE  ·  I HEARD", crate::holo::theme().warn()) };
                     p.text(pos2(rect.center().x, rect.bottom() - 34.0), Align2::CENTER_CENTER, format!("{mark}:  \u{201C}{text}\u{201D}"), FontId::monospace(11.0), colour);
                 }
                 p.text(pos2(rect.center().x, rect.bottom() - 12.0), Align2::CENTER_CENTER, "Speak as you always do. Close the block to stop.", FontId::proportional(11.5), muted);
@@ -352,7 +352,7 @@ pub fn show(ctx: &egui::Context, mic: f32) {
                     } else {
                         format!("No voice print: {}.", o.no_print.clone().unwrap_or_else(|| "the lines were too short".into()))
                     },
-                    if o.print { ink } else { crate::hud_style::warn_colour() },
+                    if o.print { ink } else { crate::holo::theme().warn() },
                 );
                 say(
                     match (o.spellings.is_empty(), o.soft.is_empty()) {

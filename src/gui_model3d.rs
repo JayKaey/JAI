@@ -7,7 +7,7 @@
 //! the credit line at the bottom. Model files dropped on the studio open in it. Without a GPU
 //! path the model's edges are drawn with egui.
 
-use super::{stroke, STRIP_INK, STRIP_MUTED};
+use super::{stroke, strip_ink, strip_muted};
 use crate::gpu3d;
 use crate::mesh_io::math;
 use crate::model3d::{self as studio, CameraCmd, Look, Phase, Snapshot};
@@ -25,7 +25,6 @@ const FOV: f32 = 35.0 * PI / 180.0;
 const HOME_YAW: f32 = 0.45;
 const HOME_PITCH: f32 = 0.22;
 const HOME_DIST: f32 = 3.4;
-const CARD: Color32 = Color32::from_rgba_premultiplied(3, 7, 12, 226);
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
@@ -137,10 +136,7 @@ fn rgb(c: Color32) -> [f32; 3] {
 }
 
 fn chip(ui: &mut Ui, text: &str, on: bool, hint: &str) -> bool {
-    let accent = crate::hud_board::active_colour();
-    let ink = if on { accent } else { STRIP_INK };
-    let edge = if on { accent } else { crate::hud_board::border_colour() };
-    ui.add(egui::Button::new(RichText::new(text).font(mono(11.0)).color(ink)).fill(CARD).stroke(stroke(1.0, edge)).rounding(Rounding::ZERO)).on_hover_text(hint).clicked()
+    crate::holo_ui::key_on(ui, text, on).on_hover_text(hint).clicked()
 }
 
 /// The chips over the model.
@@ -353,19 +349,19 @@ fn view_area(ui: &mut Ui, snap: &Snapshot, rect: Rect, rt: &Handle) {
             }
         }
     } else if snap.phase == Phase::Failed {
-        painter.text(c, Align2::CENTER_CENTER, wrap_line(&snap.status, 60), mono(12.0), super::STRIP_MUTED);
+        painter.text(c, Align2::CENTER_CENTER, wrap_line(&snap.status, 60), mono(12.0), super::strip_muted());
     } else if !snap.status.is_empty() {
-        painter.text(pos2(rect.left() + 12.0, rect.bottom() - 14.0), Align2::LEFT_BOTTOM, &snap.status, mono(11.0), STRIP_MUTED);
+        painter.text(pos2(rect.left() + 12.0, rect.bottom() - 14.0), Align2::LEFT_BOTTOM, &snap.status, mono(11.0), strip_muted());
     }
     // The Sketchfab match (without Sir's token, or while it downloads).
     if let Some(preview) = &snap.preview {
         preview_card(ui, &painter, rect, preview, snap.note.as_deref());
     } else if let Some(note) = &snap.note {
-        painter.text(pos2(rect.left() + 12.0, rect.top() + 12.0), Align2::LEFT_TOP, wrap_line(note, 70), mono(11.0), STRIP_MUTED);
+        painter.text(pos2(rect.left() + 12.0, rect.top() + 12.0), Align2::LEFT_TOP, wrap_line(note, 70), mono(11.0), strip_muted());
     }
     if gpu3d::status() == gpu3d::Status::Unsupported && snap.scene.is_some() {
         let why = gpu3d::unsupported_reason().unwrap_or_default();
-        painter.text(pos2(rect.right() - 10.0, rect.top() + 10.0), Align2::RIGHT_TOP, format!("EDGES ONLY: {why}"), mono(11.0), STRIP_MUTED);
+        painter.text(pos2(rect.right() - 10.0, rect.top() + 10.0), Align2::RIGHT_TOP, format!("EDGES ONLY: {why}"), mono(11.0), strip_muted());
     }
     // Files dropped on the studio open in it.
     let (dropped, hovering, pointer) = ui.input(|i| (i.raw.dropped_files.iter().filter_map(|f| f.path.clone()).collect::<Vec<_>>(), !i.raw.hovered_files.is_empty(), i.pointer.latest_pos()));
@@ -420,7 +416,7 @@ fn preview_card(ui: &Ui, painter: &Painter, rect: Rect, p: &studio::Preview, not
     if click.clicked() && p.url.starts_with("https://") {
         ui.ctx().open_url(egui::OpenUrl::new_tab(&p.url));
     }
-    painter.rect_filled(card, Rounding::ZERO, CARD);
+    painter.rect_filled(card, Rounding::ZERO, crate::holo::theme().glass());
     painter.rect_stroke(card, Rounding::ZERO, stroke(1.0, crate::hud_board::border_colour()));
     let mut y = card.top() + 6.0;
     if let Some(t) = &tex {
@@ -429,10 +425,10 @@ fn preview_card(ui: &Ui, painter: &Painter, rect: Rect, p: &studio::Preview, not
         y += thumb_h + 4.0;
     }
     painter.text(pos2(card.left() + 6.0, y), Align2::LEFT_TOP, "SKETCHFAB // BEST MATCH", mono(11.0), accent);
-    painter.text(pos2(card.left() + 6.0, y + 13.0), Align2::LEFT_TOP, truncate(&p.title, 34), mono(11.0), STRIP_INK);
-    painter.text(pos2(card.left() + 6.0, y + 28.0), Align2::LEFT_TOP, truncate(&format!("by {} · {}", p.author, p.license), 44), mono(11.0), STRIP_MUTED);
+    painter.text(pos2(card.left() + 6.0, y + 13.0), Align2::LEFT_TOP, truncate(&p.title, 34), mono(11.0), strip_ink());
+    painter.text(pos2(card.left() + 6.0, y + 28.0), Align2::LEFT_TOP, truncate(&format!("by {} · {}", p.author, p.license), 44), mono(11.0), strip_muted());
     if let Some(n) = note {
-        painter.text(pos2(card.left() + 6.0, y + 44.0), Align2::LEFT_TOP, wrap_line(n, ((w / 6.2) as usize).max(20)), mono(11.0), STRIP_MUTED);
+        painter.text(pos2(card.left() + 6.0, y + 44.0), Align2::LEFT_TOP, wrap_line(n, ((w / 6.2) as usize).max(20)), mono(11.0), strip_muted());
     }
 }
 
@@ -486,10 +482,10 @@ fn footer_for(ui: &Ui, snap: &Snapshot) -> (String, Option<String>, bool) {
 fn footer(ui: &mut Ui, snap: &Snapshot) {
     let (facts, credit, stacked) = footer_for(ui, snap);
     let credit_label = |ui: &mut Ui, text: String| {
-        let text = RichText::new(text).font(mono(11.0)).color(STRIP_MUTED);
+        let text = RichText::new(text).font(mono(11.0)).color(strip_muted());
         match &snap.credit {
             Some(c) if c.url.starts_with("https://") => {
-                ui.hyperlink_to(text, &c.url);
+                crate::holo_ui::link_to(ui, text, &c.url);
             }
             _ => {
                 ui.label(text);
@@ -497,7 +493,7 @@ fn footer(ui: &mut Ui, snap: &Snapshot) {
         }
     };
     ui.horizontal(|ui| {
-        ui.label(RichText::new(facts).font(mono(11.0)).color(STRIP_MUTED));
+        ui.label(RichText::new(facts).font(mono(11.0)).color(strip_muted()));
         if let Some(c) = credit.clone().filter(|_| !stacked) {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| credit_label(ui, c));
         }
@@ -552,13 +548,13 @@ fn summary(snap: &Snapshot) -> String {
 }
 
 fn body(ui: &mut Ui, rt: &Handle) {
-    use crate::hud_style::Light;
+    use crate::holo_block::Lamp;
     let snap = studio::snapshot();
-    crate::hud_style::set_light(ID, match snap.phase {
-        Phase::Working => Light::Busy,
-        Phase::Failed => Light::Fault,
-        Phase::Ready => Light::Good,
-        Phase::Idle => Light::Rest,
+    crate::holo_block::set_lamp(ID, match snap.phase {
+        Phase::Working => Lamp::Busy,
+        Phase::Failed => Lamp::Fault,
+        Phase::Ready => Lamp::Good,
+        Phase::Idle => Lamp::Rest,
     });
     if snap.open {
         let line = summary(&snap);
@@ -574,7 +570,7 @@ fn body(ui: &mut Ui, rt: &Handle) {
         }
     }
     if !snap.title.is_empty() {
-        ui.label(RichText::new(snap.title.to_uppercase()).font(mono(12.5)).color(STRIP_INK));
+        ui.label(RichText::new(snap.title.to_uppercase()).font(mono(12.5)).color(strip_ink()));
     }
     toolbar(ui, &snap, rt);
     ui.add_space(4.0);
@@ -645,7 +641,7 @@ pub(super) fn show(ctx: &egui::Context, rt: &Handle) {
             if class == ViewportClass::Embedded {
                 egui::Window::new(TITLE).show(ctx, |ui| body(ui, &rt));
             } else {
-                egui::CentralPanel::default().frame(Frame::none().fill(super::BLOCK_SLATE).inner_margin(Margin::same(14.0))).show(ctx, |ui| {
+                egui::CentralPanel::default().frame(Frame::none().fill(super::block_slate()).inner_margin(Margin::same(14.0))).show(ctx, |ui| {
                     if super::detached_title_bar(ui, ctx, TITLE) {
                         studio::close();
                     }
@@ -668,16 +664,16 @@ pub(super) fn sketchfab_section(ui: &mut Ui, p: &super::Palette, vault: &crate::
     ui.horizontal(|ui| {
         ui.label("API token");
         let hint = if stored { "•••••• stored encrypted (type to replace)" } else { "sketchfab.com → Settings → Password & API" };
-        ui.add(egui::TextEdit::singleline(&mut *field).password(true).hint_text(hint).desired_width(300.0));
+        crate::holo_ui::slot(ui, egui::TextEdit::singleline(&mut *field).password(true).hint_text(hint).desired_width(300.0));
         let token = field.trim().trim_start_matches("Token ").trim().to_string();
-        if ui.add_enabled(!token.is_empty(), egui::Button::new("Save")).clicked() {
+        if ui.add_enabled_ui(!token.is_empty(), |ui| crate::holo_ui::key(ui, "Save")).inner.clicked() {
             *lock(&TOKEN_NOTE) = Some(match vault.set_secret(studio::SKETCHFAB_SERVICE, crate::vault::TOKEN, &token) {
                 Ok(()) => (true, "Stored encrypted. \"Render me … in 3D\" now downloads full Sketchfab models.".into()),
                 Err(e) => (false, format!("Not stored: {e}")),
             });
             field.clear();
         }
-        if stored && ui.button("Test").clicked() {
+        if stored && crate::holo_ui::key(ui, "Test").clicked() {
             if let Some(token) = vault.secret(studio::SKETCHFAB_SERVICE, crate::vault::TOKEN) {
                 *lock(&TOKEN_NOTE) = Some((true, "Asking Sketchfab…".into()));
                 let ctx = ui.ctx().clone();
@@ -688,7 +684,7 @@ pub(super) fn sketchfab_section(ui: &mut Ui, p: &super::Palette, vault: &crate::
                 });
             }
         }
-        if stored && ui.button("Forget").clicked() {
+        if stored && crate::holo_ui::key(ui, "Forget").clicked() {
             vault.clear_secret(studio::SKETCHFAB_SERVICE, crate::vault::TOKEN);
             *lock(&TOKEN_NOTE) = Some((true, "Forgotten: the studio shows Sketchfab matches as cards again.".into()));
         }
@@ -697,7 +693,7 @@ pub(super) fn sketchfab_section(ui: &mut Ui, p: &super::Palette, vault: &crate::
     if let Some((ok, text)) = lock(&TOKEN_NOTE).clone() {
         ui.label(RichText::new(text).size(11.0).color(if ok { p.green } else { p.red }));
     }
-    super::muted(ui, p, "Searching needs no token. Every downloaded model shows its author and licence under it.");
+    super::muted(ui, "Searching needs no token. Every downloaded model shows its author and licence under it.");
 }
 
 #[cfg(test)]

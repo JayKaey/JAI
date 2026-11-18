@@ -65,12 +65,12 @@ impl WorkoutWindow {
         let snapshot = self.snapshot.lock().unwrap_or_else(|e| e.into_inner()).clone();
         let mut open = self.open;
         super::board_window(ctx, "workout_coach", "Gym // workout and PR coach", [580.0, 700.0], &mut open, |ui| {
-                muted(ui, p, "Or just say: \"JAI, log 3 by 10 bench press at 60 kilos\", \"start a 90 second rest timer\".");
+                muted(ui, "Or just say: \"JAI, log 3 by 10 bench press at 60 kilos\", \"start a 90 second rest timer\".");
                 ui.add_space(6.0);
-                crate::hud_style::faded(ui, egui::ScrollArea::vertical().max_height(620.0), |ui| match &snapshot {
+                crate::holo_block::faded(ui, egui::ScrollArea::vertical().max_height(620.0), |ui| match &snapshot {
                     None => {
                         let room = ui.available_rect_before_wrap();
-                        crate::hud_style::outline(ui, egui::Rect::from_min_size(room.min, egui::vec2(room.width(), room.height().min(160.0))), crate::hud_style::Outline::List);
+                        crate::holo_block::outline(ui, egui::Rect::from_min_size(room.min, egui::vec2(room.width(), room.height().min(160.0))), crate::holo_block::Outline::List);
                     }
                     Some(Err(e)) => {
                         ui.colored_label(p.red, e);
@@ -85,12 +85,12 @@ impl WorkoutWindow {
     fn body(&mut self, ui: &mut egui::Ui, p: &Palette, app: &Jai, rt: &Handle, snapshot: &WorkoutSnapshot) {
         self.rest_card(ui, p, app, rt, snapshot);
         self.log_card(ui, p, app, rt, snapshot);
-        card(ui, p, "CALENDAR SESSIONS (NEXT 14 DAYS)", |_| {}, |ui| {
+        card(ui, "CALENDAR SESSIONS (NEXT 14 DAYS)", |_| {}, |ui| {
             if snapshot.scheduled.is_empty() {
-                muted(ui, p, "No workout entries found in the calendar. Entries such as \"Arme\", \"Gym\" or \"Push\" are detected automatically.");
+                muted(ui, "No workout entries found in the calendar. Entries such as \"Arme\", \"Gym\" or \"Push\" are detected automatically.");
             }
             for event in &snapshot.scheduled {
-                item(ui, p, Some(p.green), |ui| {
+                item(ui, Some(p.green), |ui| {
                     ui.horizontal(|ui| {
                         ui.label(RichText::new(&event.title).font(bold(12.0)).color(p.text));
                         ui.label(RichText::new(&event.date).monospace().size(11.0).color(p.muted));
@@ -101,25 +101,25 @@ impl WorkoutWindow {
                 });
             }
         });
-        card(ui, p, "ESTIMATED PERSONAL RECORDS (1RM)", |_| {}, |ui| {
+        card(ui, "ESTIMATED PERSONAL RECORDS (1RM)", |_| {}, |ui| {
             if snapshot.records.is_empty() {
-                muted(ui, p, "Log a set to start tracking records. Estimates use the Epley formula.");
+                muted(ui, "Log a set to start tracking records. Estimates use the Epley formula.");
             }
             for record in &snapshot.records {
                 let selected = self.plot_exercise.as_deref() == Some(record.exercise.as_str());
-                let response = row(ui, p, &record.exercise, format!("{:.1} kg  ({:.1} kg × {} · {})", record.estimated_1rm, record.weight_kg, record.reps, crate::crash_guard::clip(&record.date, 10)));
+                let response = row(ui, &record.exercise, format!("{:.1} kg  ({:.1} kg × {} · {})", record.estimated_1rm, record.weight_kg, record.reps, crate::crash_guard::clip(&record.date, 10)));
                 if response.interact(Sense::click()).clicked() || (selected && self.plot_exercise.is_none()) {
                     self.plot_exercise = Some(record.exercise.clone());
                 }
             }
         });
         self.progression_card(ui, p, snapshot);
-        card(ui, p, "RECENT SETS", |_| {}, |ui| {
+        card(ui, "RECENT SETS", |_| {}, |ui| {
             if snapshot.recent.is_empty() {
-                muted(ui, p, "Nothing logged yet.");
+                muted(ui, "Nothing logged yet.");
             }
             for log in snapshot.recent.iter().take(25) {
-                item(ui, p, None, |ui| {
+                item(ui, None, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(RichText::new(format!("{} × {}", log.sets, log.reps)).monospace().size(11.5).color(p.accent));
                         ui.label(RichText::new(&log.exercise).size(12.0).color(p.text));
@@ -133,7 +133,7 @@ impl WorkoutWindow {
     }
 
     fn rest_card(&mut self, ui: &mut egui::Ui, p: &Palette, app: &Jai, rt: &Handle, snapshot: &WorkoutSnapshot) {
-        card(ui, p, "REST TIMER (PC + PHONE)", |_| {}, |ui| {
+        card(ui, "REST TIMER (PC + PHONE)", |_| {}, |ui| {
             match &snapshot.rest {
                 Some(rest) if !rest.finished => {
                     let colour = if rest.remaining_seconds <= 10 { p.amber } else { p.green };
@@ -142,16 +142,16 @@ impl WorkoutWindow {
                 Some(_) => {
                     ui.label(RichText::new("Rest complete — next set, Sir.").font(bold(14.0)).color(p.green));
                 }
-                None => muted(ui, p, "No rest timer running."),
+                None => muted(ui, "No rest timer running."),
             }
             ui.horizontal(|ui| {
-                ui.add(egui::DragValue::new(&mut self.rest_seconds).range(5..=1800).suffix(" s"));
+                ui.add(crate::holo_ui::Number::new(&mut self.rest_seconds).range(5..=1800).suffix(" s"));
                 for preset in [60u32, 90, 120, 180] {
-                    if ui.small_button(format!("{preset}s")).clicked() {
+                    if crate::holo_ui::key(ui, format!("{preset}s")).clicked() {
                         self.rest_seconds = preset;
                     }
                 }
-                if button(ui, p, "Start rest", Tone::On).clicked() {
+                if button(ui, "Start rest", Tone::On).clicked() {
                     let tools = app.tools().clone();
                     let seconds = u64::from(self.rest_seconds);
                     self.status = Some(match tools.workout.start_rest(seconds) {
@@ -160,7 +160,7 @@ impl WorkoutWindow {
                     });
                     self.refresh(app, rt);
                 }
-                if snapshot.rest.is_some() && button(ui, p, "Clear", Tone::Danger).clicked() {
+                if snapshot.rest.is_some() && button(ui, "Clear", Tone::Danger).clicked() {
                     self.status = Some(match app.tools().workout.cancel_rest() {
                         Ok(()) => ("Rest timer cleared.".to_string(), true),
                         Err(e) => (e, false),
@@ -172,19 +172,19 @@ impl WorkoutWindow {
     }
 
     fn log_card(&mut self, ui: &mut egui::Ui, p: &Palette, app: &Jai, rt: &Handle, snapshot: &WorkoutSnapshot) {
-        card(ui, p, "LOG A SET", |_| {}, |ui| {
+        card(ui, "LOG A SET", |_| {}, |ui| {
             ui.horizontal(|ui| {
                 ui.label(RichText::new("Exercise").size(11.5).color(p.muted));
-                ui.add(egui::TextEdit::singleline(&mut self.exercise).hint_text("Bench press").desired_width(180.0));
+                crate::holo_ui::slot(ui, egui::TextEdit::singleline(&mut self.exercise).hint_text("Bench press").desired_width(180.0));
                 ui.label(RichText::new("Sets").size(11.5).color(p.muted));
-                ui.add(egui::DragValue::new(&mut self.sets).range(1..=100));
+                ui.add(crate::holo_ui::Number::new(&mut self.sets).range(1..=100));
                 ui.label(RichText::new("Reps").size(11.5).color(p.muted));
-                ui.add(egui::DragValue::new(&mut self.reps).range(1..=1000));
+                ui.add(crate::holo_ui::Number::new(&mut self.reps).range(1..=1000));
                 ui.label(RichText::new("kg").size(11.5).color(p.muted));
-                ui.add(egui::DragValue::new(&mut self.weight).range(0.0..=2000.0).speed(0.5).fixed_decimals(1));
+                ui.add(crate::holo_ui::Number::new(&mut self.weight).range(0.0..=2000.0).speed(0.5).fixed_decimals(1));
             });
             ui.horizontal(|ui| {
-                if button(ui, p, "Log set", Tone::On).clicked() {
+                if button(ui, "Log set", Tone::On).clicked() {
                     let today = chrono::Local::now().date_naive().to_string();
                     let uid = snapshot.scheduled.iter().find(|w| w.date == today).map(|w| w.uid.clone());
                     let outcome = app.tools().workout.log_set(&self.exercise, self.sets, self.reps, f64::from(self.weight), uid.as_deref());
@@ -224,18 +224,17 @@ impl WorkoutWindow {
         let points: Vec<_> = snapshot.progression.iter().filter(|s| s.exercise.to_lowercase() == selected_key).collect();
         card(
             ui,
-            p,
             "STRENGTH PROGRESSION",
             |ui| {
-                egui::ComboBox::from_id_salt("workout_plot_exercise").selected_text(&selected).show_ui(ui, |ui| {
+                crate::holo_ui::Picker::from_id_salt("workout_plot_exercise").selected_text(&selected).show_ui(ui, |ui| {
                     for exercise in &exercises {
-                        ui.selectable_value(&mut self.plot_exercise, Some(exercise.clone()), exercise);
+                        crate::holo_ui::option(ui, &mut self.plot_exercise, Some(exercise.clone()), exercise);
                     }
                 });
             },
             |ui| {
                 if points.len() < 2 {
-                    muted(ui, p, "At least two training days are needed to draw a progression line.");
+                    muted(ui, "At least two training days are needed to draw a progression line.");
                     return;
                 }
                 let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 160.0), Sense::hover());

@@ -483,11 +483,10 @@ fn card_body(ui: &mut egui::Ui, p: &mut DynamicHudPopup, style: &CardStyle, acti
         ui.horizontal(|ui| {
             ui.label(RichText::new(title).strong().color(style.text));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.add(egui::Button::new(RichText::new("X").color(style.muted)).frame(false)).on_hover_text("Dismiss").clicked() {
+                if crate::holo_ui::key(ui, "X").on_hover_text("Dismiss").clicked() {
                     dismiss.push(p.id);
                 }
-                let pin = if p.pinned { "PIN" } else { "PINNED" };
-                if ui.add(egui::Button::new(RichText::new(pin).color(if p.pinned { style.accent } else { style.muted })).frame(false)).on_hover_text(if p.pinned { "Unpin" } else { "Pin" }).clicked() {
+                if crate::holo_ui::key_on(ui, "PIN", p.pinned).on_hover_text(if p.pinned { "Unpin" } else { "Pin" }).clicked() {
                     pins.push((p.id, !p.pinned));
                 }
             });
@@ -515,7 +514,7 @@ fn card_body(ui: &mut egui::Ui, p: &mut DynamicHudPopup, style: &CardStyle, acti
             ui.painter().rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * progress.clamp(0.0, 1.0), bar.height())), Rounding::ZERO, style.accent);
             ui.horizontal(|ui| {
                 for (label, action) in [("PREV", PopupAction::MediaPrevious), (if *is_playing { "PAUSE" } else { "PLAY" }, PopupAction::MediaPlayPause), ("NEXT", PopupAction::MediaNext)] {
-                    if ui.add(egui::Button::new(RichText::new(label).size(16.0).color(style.text)).frame(false)).clicked() {
+                    if crate::holo_ui::key(ui, label).clicked() {
                         actions.push(action);
                     }
                 }
@@ -530,7 +529,7 @@ fn card_body(ui: &mut egui::Ui, p: &mut DynamicHudPopup, style: &CardStyle, acti
                 });
             });
             let mut v = *percent as f32;
-            if ui.add(egui::Slider::new(&mut v, 0.0..=100.0).show_value(false)).changed() {
+            if ui.add(crate::holo_ui::Slider::new(&mut v, 0.0..=100.0).show_value(false)).changed() {
                 actions.push(PopupAction::SetVolume { target: target_name.clone(), percent: v.round() as u8 });
             }
         }
@@ -555,11 +554,11 @@ fn card_body(ui: &mut egui::Ui, p: &mut DynamicHudPopup, style: &CardStyle, acti
             header(ui, title, dismiss, pins);
             ui.label(RichText::new(description).color(style.muted));
             ui.horizontal(|ui| {
-                if ui.add(egui::Button::new(RichText::new("Confirm").color(crate::hud_style::ink_on(style.accent))).fill(style.accent).rounding(Rounding::ZERO)).clicked() {
+                if crate::holo_ui::key_on(ui, "Confirm", true).clicked() {
                     actions.push(PopupAction::Confirm(confirm_action_id.clone()));
                     dismiss.push(p.id);
                 }
-                if ui.add(egui::Button::new(RichText::new("Cancel").color(style.text)).stroke(Stroke::new(1.0_f32, style.border)).fill(Color32::TRANSPARENT).rounding(Rounding::ZERO)).clicked() {
+                if crate::holo_ui::key(ui, "Cancel").clicked() {
                     actions.push(PopupAction::Cancel(confirm_action_id.clone()));
                     dismiss.push(p.id);
                 }
@@ -568,7 +567,7 @@ fn card_body(ui: &mut egui::Ui, p: &mut DynamicHudPopup, style: &CardStyle, acti
         PopupPayload::VisualDataCard { title, markdown_or_code, chart_points, action_buttons } => {
             header(ui, title, dismiss, pins);
             if !markdown_or_code.is_empty() {
-                crate::hud_style::faded_into(ui, egui::ScrollArea::vertical().max_height(220.0).id_salt(("popup_text", p.id)), style.surface, |ui| {
+                crate::holo_block::faded_into(ui, egui::ScrollArea::vertical().max_height(220.0).id_salt(("popup_text", p.id)), style.surface, |ui| {
                     let mono = markdown_or_code.contains("```") || markdown_or_code.lines().any(|l| l.starts_with("    "));
                     let text = markdown_or_code.replace("```", "");
                     ui.label(if mono { RichText::new(text.trim()).monospace().color(style.text) } else { RichText::new(text.trim()).color(style.text) });
@@ -585,7 +584,7 @@ fn card_body(ui: &mut egui::Ui, p: &mut DynamicHudPopup, style: &CardStyle, acti
             if !action_buttons.is_empty() {
                 ui.horizontal_wrapped(|ui| {
                     for label in action_buttons {
-                        if ui.add(egui::Button::new(RichText::new(format!("[ {label} ]")).color(style.accent)).frame(false)).clicked() {
+                        if crate::holo_ui::key(ui, label.as_str()).clicked() {
                             actions.push(PopupAction::Button(label.clone()));
                         }
                     }

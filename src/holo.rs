@@ -98,12 +98,11 @@ pub fn install_fonts(ctx: &egui::Context) {
     }
     fonts.families.insert(FontFamily::Proportional, chain(&["holo-body"]));
     fonts.families.insert(FontFamily::Monospace, chain(&["holo-mono", "holo-body"]));
-    // The names panels not yet laid out anew still ask for: "display" (headlines and large
-    // figures), "label" (small capitals: the wide face set smaller, to take the room the old
-    // narrow one did) and "bold".
-    fonts.font_data.insert("holo-label-small".into(), FontData::from_static(FACES[0].1).tweak(egui::FontTweak { scale: 0.74, ..Default::default() }));
+    // The families egui's text styles and `RichText` ask for by name: "display" (headlines
+    // and large figures), "label" (a row's name, a button's word: the squared face, which
+    // reads in mixed case as well as in capitals) and "bold".
     fonts.families.insert(FontFamily::Name("display".into()), chain(&["holo-head", "holo-strong"]));
-    fonts.families.insert(FontFamily::Name("label".into()), chain(&["holo-label-small", "holo-plain"]));
+    fonts.families.insert(FontFamily::Name("label".into()), chain(&["holo-plain", "holo-body"]));
     fonts.families.insert(FontFamily::Name("bold".into()), chain(&["holo-strong"]));
     ctx.set_fonts(fonts);
 }
@@ -132,6 +131,32 @@ pub fn galley_within(p: &Painter, face: Face, text: &str, size: f32, colour: Col
     job.wrap = egui::text::TextWrapping { max_width: width.max(1.0), max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
     job.append(&text, 0.0, egui::TextFormat { font_id: font(face, size), extra_letter_spacing: spacing, color: colour, ..Default::default() });
     p.layout_job(job)
+}
+
+/// Text wrapped into `width` from `at` down and cut after `max_rows` with an ellipsis;
+/// returns the height it took.
+pub fn wrapped(p: &Painter, at: Pos2, width: f32, face: Face, text: &str, size: f32, colour: Color32, max_rows: usize) -> f32 {
+    let (text, spacing) = if face == Face::Label { (text.to_uppercase(), size * 0.14) } else { (text.to_string(), 0.0) };
+    let mut job = egui::text::LayoutJob::default();
+    job.wrap = egui::text::TextWrapping { max_width: width.max(10.0), max_rows: max_rows.max(1), break_anywhere: false, overflow_character: Some('…') };
+    job.append(&text, 0.0, egui::TextFormat { font_id: font(face, size), extra_letter_spacing: spacing, color: colour, ..Default::default() });
+    let g = p.layout_job(job);
+    let height = g.size().y;
+    p.galley(pos2(snap(at.x, ppp(p)), snap(at.y, ppp(p))), g, colour);
+    height
+}
+
+/// Text that runs out of its room fades into the glass instead of being cut: a band of
+/// `colour` that hides what is under it at the height `solid` and lets it show at `clear`.
+pub fn fade(p: &Painter, left: f32, right: f32, solid: f32, clear: f32, colour: Color32) {
+    let mut mesh = egui::Mesh::default();
+    for (y, c) in [(solid, colour), (clear, Color32::TRANSPARENT)] {
+        mesh.colored_vertex(pos2(left, y), c);
+        mesh.colored_vertex(pos2(right, y), c);
+    }
+    mesh.add_triangle(0, 1, 2);
+    mesh.add_triangle(1, 3, 2);
+    p.add(Shape::mesh(mesh));
 }
 
 /// Draws `text` anchored at `at`; returns where it stands.
@@ -685,9 +710,13 @@ pub fn plate(r: Rect, cut: [f32; 4]) -> Vec<Pos2> {
     pts
 }
 
+/// `points` on the pixel grid: each on the centre of a pixel, and none past the line's own
+/// right or bottom bound, so a frame flush with the screen's edge keeps all four sides.
 fn on_grid(p: &Painter, points: &[Pos2]) -> Vec<Pos2> {
     let k = ppp(p);
-    points.iter().map(|q| pos2(((q.x * k).floor() + 0.5) / k, ((q.y * k).floor() + 0.5) / k)).collect()
+    let (right, bottom) = points.iter().fold((f32::MIN, f32::MIN), |(x, y), q| (x.max(q.x), y.max(q.y)));
+    let centre = |v: f32, most: f32| ((v * k).floor() + 0.5).min((most * k).round() - 0.5) / k;
+    points.iter().map(|q| pos2(centre(q.x, right), centre(q.y, bottom))).collect()
 }
 
 pub fn fill(p: &Painter, points: &[Pos2], colour: Color32) {
@@ -818,6 +847,100 @@ pub fn canvas(p: &Painter, screen: Rect, origin: Pos2, reach: f32) {
         light.seg(polar(origin, r, angle), polar(origin, r + if long { 9.0 } else { 4.0 }, angle), px(p), a(t.ink(), if long { 0.22 } else { 0.11 }));
     }
     light.paint(p);
+}
+
+/// Every line of the HUD: a hairline stays one, anything wider is drawn finer (2 → 1.4,
+/// 6 → 3). (`Stroke::new` takes `impl Into<f32>`, which leaves float literals untyped.)
+pub fn stroke(width: f32, colour: Color32) -> Stroke {
+    Stroke::new(thin(width), colour)
+}
+
+pub fn thin(width: f32) -> f32 {
+    if width > 1.0 {
+        1.0 + (width - 1.0) * 0.4
+    } else {
+        width
+    }
+}
+
+/// The ink for text on a coloured `fill`: dark or light, whichever reads better.
+pub fn ink_on(fill: Color32) -> Color32 {
+    if contrast(fill, Color32::BLACK) >= contrast(fill, Color32::WHITE) { Color32::BLACK } else { Color32::WHITE }
+}
+
+/// The WCAG contrast ratio of two opaque colours (1 to 21).
+pub fn contrast(a: Color32, b: Color32) -> f32 {
+    let lum = |c: Color32| {
+        let ch = |v: u8| {
+            let v = v as f32 / 255.0;
+            if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+        };
+        0.2126 * ch(c.r()) + 0.7152 * ch(c.g()) + 0.0722 * ch(c.b())
+    };
+    let (x, y) = (lum(a), lum(b));
+    (x.max(y) + 0.05) / (x.min(y) + 0.05)
+}
+
+/// A readout: every digit as wide as the widest, so a changing number (a clock's seconds) never
+/// jitters.
+pub fn figure_galley(fonts: &egui::text::Fonts, text: &str, font: FontId, colour: Color32) -> std::sync::Arc<egui::Galley> {
+    let widest = ('0'..='9').map(|d| fonts.glyph_width(&font, d)).fold(0.0f32, f32::max);
+    let mut job = egui::text::LayoutJob::default();
+    let format = egui::TextFormat { font_id: font.clone(), color: colour, ..Default::default() };
+    // (Each digit stands in the middle of a cell the widest digit's width: the room it lacks
+    // goes half before it and half after it.)
+    let mut owed = 0.0;
+    let mut buf = [0u8; 4];
+    for c in text.chars() {
+        let pad = if c.is_ascii_digit() { (widest - fonts.glyph_width(&font, c)) * 0.5 } else { 0.0 };
+        job.append(c.encode_utf8(&mut buf), owed + pad, format.clone());
+        owed = pad;
+    }
+    fonts.layout_job(job)
+}
+
+/// How long a changed digit takes to roll in.
+const ROLL_SECS: f64 = 0.26;
+
+/// Paints `text` as even-width figures with its top-left at `at`; a figure that changed since
+/// the last frame (per `id`) rolls up into place, the old one leaving above it. Returns the size.
+pub fn rolling_figures(p: &Painter, id: egui::Id, at: Pos2, text: &str, font: FontId, colour: Color32) -> Vec2 {
+    let ctx = p.ctx();
+    let now = ctx.input(|i| i.time);
+    let (old, since) = ctx.data_mut(|d| {
+        let slot = d.get_temp_mut_or_insert_with(id, || (text.to_string(), String::new(), f64::MIN));
+        if slot.0 != text {
+            let old = std::mem::replace(&mut slot.0, text.to_string());
+            (slot.1, slot.2) = (old, now);
+        }
+        (slot.1.clone(), slot.2)
+    });
+    let new = p.fonts(|f| figure_galley(f, text, font.clone(), colour));
+    let size = new.size();
+    let t = ((now - since) / ROLL_SECS) as f32;
+    if t >= 1.0 || !crate::gui::motion_enabled() || old.chars().count() != text.chars().count() {
+        p.galley(at, new, colour);
+        return size;
+    }
+    let old = p.fonts(|f| figure_galley(f, &old, font, colour));
+    let e = crate::holo_motion::ease_out_expo(t);
+    let glyphs = &new.rows[0].glyphs;
+    let old_glyphs = &old.rows[0].glyphs;
+    for (i, g) in glyphs.iter().enumerate() {
+        // Each figure's column runs halfway to its neighbours.
+        let left = if i == 0 { 0.0 } else { (glyphs[i - 1].pos.x + glyphs[i - 1].advance_width + g.pos.x) * 0.5 };
+        let right = glyphs.get(i + 1).map_or(size.x, |next| (g.pos.x + g.advance_width + next.pos.x) * 0.5);
+        let column = Rect::from_min_max(pos2(at.x + left, at.y), pos2(at.x + right, at.y + size.y));
+        let clipped = p.with_clip_rect(column.intersect(p.clip_rect()));
+        if old_glyphs.get(i).is_some_and(|o| o.chr == g.chr) {
+            clipped.galley(at, new.clone(), colour);
+        } else {
+            clipped.galley_with_override_text_color(at - vec2(0.0, size.y * e), old.clone(), colour.gamma_multiply(1.0 - e));
+            clipped.galley_with_override_text_color(at + vec2(0.0, size.y * (1.0 - e)), new.clone(), colour.gamma_multiply(e));
+        }
+    }
+    ctx.request_repaint();
+    size
 }
 
 #[cfg(test)]

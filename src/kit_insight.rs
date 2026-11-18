@@ -401,7 +401,7 @@ fn privacy_block(ctx: &egui::Context) {
     let closed = crate::gui::block(ctx, PRIVACY, "Privacy // what I keep about you", [640.0, 430.0], |ui| {
         ui.label(RichText::new("Kept on this PC only. Nothing here is ever sent anywhere.").color(muted).size(12.5));
         ui.add_space(6.0);
-        crate::hud_style::faded(ui, egui::ScrollArea::vertical().auto_shrink([false; 2]), |ui| {
+        crate::holo_block::faded(ui, egui::ScrollArea::vertical().auto_shrink([false; 2]), |ui| {
             for row in &rows {
                 ui.horizontal(|ui| {
                     // (A column of its own width, its words at the left edge.)
@@ -410,9 +410,9 @@ fn privacy_block(ctx: &egui::Context) {
                     });
                     if let Some(key) = row.delete {
                         let sure = asked.is_some_and(|(k, _)| k == key);
-                        let label = if sure { "[ SURE? ]" } else { "[ DELETE ]" };
-                        let colour = if sure { crate::hud_style::warn_colour() } else { muted };
-                        if ui.button(RichText::new(label).font(FontId::monospace(11.0)).color(colour)).on_hover_text("Click twice to delete").clicked() {
+                        let label = if sure { "SURE?" } else { "DELETE" };
+                        let colour = if sure { crate::holo::theme().warn() } else { muted };
+                        if crate::holo_ui::key(ui, RichText::new(label).font(FontId::monospace(11.0)).color(colour)).on_hover_text("Click twice to delete").clicked() {
                             clicked = Some(key);
                         }
                     }

@@ -46,7 +46,7 @@ pub(crate) struct VirtualHud {
 impl VirtualHud {
     fn new(app: Jai, rt: Handle, size: Vec2) -> Self {
         let ctx = egui::Context::default();
-        install_fonts(&ctx);
+        crate::holo::install_fonts(&ctx);
         // Its blocks are measured where they rest (the verifier's own row plays the entrance and
         // the exit: `set_still`).
         set_still(&ctx, true);

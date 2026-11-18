@@ -57,10 +57,20 @@ pub fn spring(x: &mut f32, v: &mut f32, target: f32, omega: f32, dt: f32) {
     *v = (*v - omega * c * dt) * k;
 }
 
-/// `value` towards `target` at `rate` a second, without passing it.
-pub fn approach(value: f32, target: f32, rate: f32, dt: f32) -> f32 {
-    let step = rate * dt.max(0.0);
-    if (target - value).abs() <= step { target } else { value + step * (target - value).signum() }
+/// One frame of `from` closing in on `to` so that it is there (within 1 %) after `secs`.
+pub fn approach(from: f32, to: f32, dt: f32, secs: f32) -> f32 {
+    let rate = 4.6 / secs.max(0.001);
+    let next = to + (from - to) * (-rate * dt.clamp(0.0, 0.1)).exp();
+    if (next - to).abs() < 0.002 { to } else { next }
+}
+
+/// A reading (a gauge, a meter, a percentage) that glides to `value` instead of jumping; at
+/// once with the animations off.
+pub fn glide(ctx: &eframe::egui::Context, id: eframe::egui::Id, value: f32) -> f32 {
+    if !crate::gui::motion_enabled() {
+        return value;
+    }
+    ctx.animate_value_with_time(id, value, LEAVE)
 }
 
 /// A title being decoded: the letters up to `progress` (0-1) are final, the next few are
@@ -143,9 +153,14 @@ mod tests {
     }
 
     #[test]
-    fn approach_never_passes_its_target() {
-        assert_eq!(approach(0.0, 1.0, 4.0, 0.1), 0.4);
-        assert_eq!(approach(0.9, 1.0, 4.0, 0.1), 1.0);
-        assert_eq!(approach(1.0, 0.0, 4.0, 1.0), 0.0);
+    fn approach_is_there_after_its_time_and_never_passes_its_target() {
+        let mut v = 0.0;
+        for _ in 0..(LEAVE * 60.0).ceil() as usize {
+            let next = approach(v, 1.0, 1.0 / 60.0, LEAVE);
+            assert!(next >= v && next <= 1.0);
+            v = next;
+        }
+        assert!(v > 0.98, "{v}");
+        assert_eq!(approach(0.999, 1.0, 1.0 / 60.0, LEAVE), 1.0, "it lands, it does not creep");
     }
 }

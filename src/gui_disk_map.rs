@@ -34,18 +34,38 @@ const XFADE: f64 = 0.08;
 const WIPE: f64 = 0.13;
 /// While anything moves: a frame every 33 ms (30 fps), and none otherwise.
 const TICK: Duration = Duration::from_millis(33);
-const INK: Color32 = Color32::from_rgb(0xF4, 0xFA, 0xFF);
+// What the map is drawn in, all from the theme: ink for structure and text, the void under
+// it, the alert for a drive that is nearly full.
+fn ink() -> Color32 {
+    crate::holo::theme().ink()
+}
 /// Text on a bright tile.
-const DARK: Color32 = Color32::from_rgb(0x05, 0x0A, 0x10);
-const ALERT: Color32 = Color32::from_rgb(0xFF, 0x3B, 0x4E);
-const ALERT_RGB: [u8; 3] = [0xFF, 0x3B, 0x4E];
-const MAP_FILL: Color32 = Color32::from_rgb(0x03, 0x07, 0x0C);
-const READING_FILL: Color32 = Color32::from_rgb(0x0B, 0x15, 0x24);
-const TRACK: Color32 = Color32::from_rgb(0x12, 0x1E, 0x2C);
-const HIDDEN_FILL: Color32 = Color32::from_rgb(0x2B, 0x33, 0x3E);
-const HATCH: Color32 = Color32::from_rgb(0x46, 0x50, 0x5C);
-const PALE: Color32 = Color32::from_rgb(0xE6, 0xF6, 0xFF);
-const BUTTON_FILL: Color32 = Color32::from_rgb(0x03, 0x07, 0x0C);
+fn dark() -> Color32 {
+    crate::holo::theme().void()
+}
+fn alert() -> Color32 {
+    crate::holo::theme().alert()
+}
+fn map_fill() -> Color32 {
+    crate::holo::theme().void()
+}
+fn reading_fill() -> Color32 {
+    let t = crate::holo::theme();
+    crate::holo::mix(t.void(), t.ink(), 0.06)
+}
+fn track() -> Color32 {
+    let t = crate::holo::theme();
+    crate::holo::mix(t.void(), t.ink(), 0.10)
+}
+/// What the scan could not read: a grey of the ink, hatched.
+fn hidden_fill() -> Color32 {
+    let t = crate::holo::theme();
+    crate::holo::mix(t.void(), t.ink(), 0.16)
+}
+fn hatch_ink() -> Color32 {
+    let t = crate::holo::theme();
+    crate::holo::mix(t.void(), t.ink(), 0.30)
+}
 /// The most tiles one map draws.
 const MAX_TILES: usize = 1600;
 /// Levels of the finished map: the folder's content, and that of its folders, twice.
@@ -125,7 +145,7 @@ pub(super) fn show(ctx: &egui::Context, rt: &Handle) {
             if class == ViewportClass::Embedded {
                 egui::Window::new(TITLE).show(ctx, |ui| body(ui, &rt));
             } else {
-                egui::CentralPanel::default().frame(Frame::none().fill(super::BLOCK_SLATE).inner_margin(Margin::same(14.0))).show(ctx, |ui| {
+                egui::CentralPanel::default().frame(Frame::none().fill(super::block_slate()).inner_margin(Margin::same(14.0))).show(ctx, |ui| {
                     if super::detached_title_bar(ui, ctx, TITLE) {
                         crate::disk_map::close();
                     }
@@ -272,9 +292,9 @@ fn shade([r, g, b]: [u8; 3], k: f32) -> Color32 {
 fn ink_on(fill: Color32) -> Color32 {
     let luma = 0.2126 * fill.r() as f32 + 0.7152 * fill.g() as f32 + 0.0722 * fill.b() as f32;
     if luma > 0.55 * 255.0 {
-        DARK
+        dark()
     } else {
-        INK
+        ink()
     }
 }
 
@@ -391,11 +411,11 @@ fn draw_panel(ui: &mut Ui, snap: &Snapshot) -> Option<Action> {
     let now = ui.input(|i| i.time);
     let p = ui.painter_at(rect);
     let scanning = snap.phase == Phase::Scanning;
-    crate::hud_style::set_light(ID, match snap.phase {
-        Phase::Scanning => crate::hud_style::Light::Busy,
-        Phase::Failed => crate::hud_style::Light::Fault,
-        Phase::Done => crate::hud_style::Light::Good,
-        Phase::Idle => crate::hud_style::Light::Rest,
+    crate::holo_block::set_lamp(ID, match snap.phase {
+        Phase::Scanning => crate::holo_block::Lamp::Busy,
+        Phase::Failed => crate::holo_block::Lamp::Fault,
+        Phase::Done => crate::holo_block::Lamp::Good,
+        Phase::Idle => crate::holo_block::Lamp::Rest,
     });
     let mut action = None;
     let mut moving = scanning || snap.graft.is_some();
@@ -406,19 +426,19 @@ fn draw_panel(ui: &mut Ui, snap: &Snapshot) -> Option<Action> {
     let live = mono(m.mono);
     let live_rect = Rect::from_min_max(pos2(top.right() - measure(&ctx, "LIVE", &live).x - 2.0, top.top()), pos2(top.right() - 2.0, top.bottom()));
     let mut title_end = top.right();
-    if put(&p, live_rect, "LIVE", &live, INK, Align2::RIGHT_CENTER, false).is_some() {
+    if put(&p, live_rect, "LIVE", &live, ink(), Align2::RIGHT_CENTER, false).is_some() {
         let dot = 3.5 * m.s;
         let pulse = if scanning { 0.45 + 0.55 * (0.5 + 0.5 * (now * 5.0).sin() as f32) } else { 1.0 };
         let centre = pos2(live_rect.left() - dot - 5.0 * m.s, live_rect.center().y);
-        p.circle_filled(centre, dot, ALERT.gamma_multiply(pulse));
+        p.circle_filled(centre, dot, alert().gamma_multiply(pulse));
         title_end = centre.x - dot - 12.0 * m.s;
     }
-    put(&p, Rect::from_min_max(top.min, pos2(title_end, top.bottom())), "DISK MAP", &head, INK, Align2::LEFT_CENTER, false);
+    put(&p, Rect::from_min_max(top.min, pos2(title_end, top.bottom())), "DISK MAP", &head, ink(), Align2::LEFT_CENTER, false);
 
     // "SCANNING C:\" or "C:\ · 223 GB · 1,336,317 FILES · 315,942 FOLDERS".
     let sub_font = mono(m.mono);
     let sub = Rect::from_min_size(pos2(rect.left(), top.bottom() + 2.0 * m.s), vec2(rect.width(), row_h(&ctx, &sub_font)));
-    put_parts(&p, sub, &subtitle(snap), &sub_font, if scanning { c.accent } else { super::STRIP_INK }, Align2::LEFT_CENTER);
+    put_parts(&p, sub, &subtitle(snap), &sub_font, if scanning { c.accent } else { super::strip_ink() }, Align2::LEFT_CENTER);
 
     // The thin line with its accent.
     let line_y = (sub.bottom() + 5.0 * m.s).round() + 0.5;
@@ -509,17 +529,17 @@ fn breadcrumb(ui: &mut Ui, p: &Painter, area: Rect, crumbs: &[String], font: &Fo
         }
         let room = Rect::from_min_max(pos2(x, area.top()), area.max);
         let Some(i) = *item else {
-            match put(p, room, ell, font, super::STRIP_MUTED, Align2::LEFT_CENTER, false) {
+            match put(p, room, ell, font, super::strip_muted(), Align2::LEFT_CENTER, false) {
                 Some(r) => x = r.right(),
                 None => break,
             }
             continue;
         };
         let last = i + 1 == n;
-        let Some((mut label, r)) = place(&ctx, room, &crumbs[i], font, INK, Align2::LEFT_CENTER, last) else { break };
+        let Some((mut label, r)) = place(&ctx, room, &crumbs[i], font, ink(), Align2::LEFT_CENTER, last) else { break };
         if !last {
             let response = ui.interact(r, ui.id().with(("jai_disk_map_crumb", i)), Sense::click()).on_hover_cursor(CursorIcon::PointingHand);
-            label.colour = if response.hovered() { c.accent } else { super::STRIP_MUTED };
+            label.colour = if response.hovered() { c.accent } else { super::strip_muted() };
             if response.clicked() {
                 clicked = Some(i);
             }
@@ -540,7 +560,7 @@ fn footer(p: &Painter, area: Rect, snap: &Snapshot, font: &FontId, c: &Colours) 
     };
     if let Some(head) = reading {
         if let Some(r) = put(p, area, head, font, c.accent, Align2::LEFT_CENTER, false) {
-            put(p, Rect::from_min_max(pos2(r.right(), area.top()), area.max), &snap.live.current, font, super::STRIP_MUTED, Align2::LEFT_CENTER, true);
+            put(p, Rect::from_min_max(pos2(r.right(), area.top()), area.max), &snap.live.current, font, super::strip_muted(), Align2::LEFT_CENTER, true);
         }
         return;
     }
@@ -557,7 +577,7 @@ fn footer(p: &Painter, area: Rect, snap: &Snapshot, font: &FontId, c: &Colours) 
     }
     parts.push("CLICK: OPEN".to_string());
     parts.push("RIGHT-CLICK: BACK".to_string());
-    put_parts(p, area, &parts, font, super::STRIP_MUTED, Align2::LEFT_CENTER);
+    put_parts(p, area, &parts, font, super::strip_muted(), Align2::LEFT_CENTER);
 }
 
 // ----------------------------------------------------------------------------- treemap ----
@@ -738,7 +758,7 @@ fn live_tiles(ctx: &egui::Context, snap: &Snapshot, area: Rect, m: &Metrics) -> 
         let colour = if bucket {
             Category::Other.rgb()
         } else if t.name.eq_ignore_ascii_case(dm::RECYCLE_NAME) {
-            ALERT_RGB
+            crate::holo::theme().alert
         } else {
             t.cat.rgb()
         };
@@ -760,8 +780,8 @@ fn live_tiles(ctx: &egui::Context, snap: &Snapshot, area: Rect, m: &Metrics) -> 
     }
     if let Some(r) = rects.last().filter(|_| to_go > 0) {
         let r = r.shrink(0.5);
-        let mut tile = Tile::new(r, TileKind::Reading, READING_FILL, to_go);
-        tile.labels = centre_labels(ctx, r, "READING..", Some(&format!("{} TO GO", dm::format_size(to_go))), m, INK);
+        let mut tile = Tile::new(r, TileKind::Reading, reading_fill(), to_go);
+        tile.labels = centre_labels(ctx, r, "READING..", Some(&format!("{} TO GO", dm::format_size(to_go))), m, ink());
         tile.title = "Still to read".to_string();
         out.push(tile);
     }
@@ -833,7 +853,7 @@ fn nest(ctx: &egui::Context, tree: &Tree, folder: u32, area: Rect, depth: usize,
         let size = dm::format_size(item.bytes);
         let leaf_shade = LEAF_SHADE[depth.min(LEAF_SHADE.len() - 1)];
         let Some(id) = item.node else {
-            let fill = shade(if bin { ALERT_RGB } else { tree.nodes[folder as usize].cat.rgb() }, 0.42);
+            let fill = shade(if bin { crate::holo::theme().alert } else { tree.nodes[folder as usize].cat.rgb() }, 0.42);
             let mut tile = Tile::new(r, TileKind::Rest, fill, item.bytes);
             tile.labels = rest_name(ctx, r, item.items, m).map(|name| centre_labels(ctx, r, &name, Some(&size), m, ink_on(fill))).unwrap_or_default();
             tile.items = item.items;
@@ -847,7 +867,7 @@ fn nest(ctx: &egui::Context, tree: &Tree, folder: u32, area: Rect, depth: usize,
         match n.kind {
             Kind::Dir => {
                 let red = bin || name.eq_ignore_ascii_case(dm::RECYCLE_NAME);
-                let colour = if red { ALERT_RGB } else { n.cat.rgb() };
+                let colour = if red { crate::holo::theme().alert } else { n.cat.rgb() };
                 let room = depth + 1 < NEST_LEVELS && r.width() >= 44.0 * m.s && r.height() >= strip_h + 24.0 * m.s && (!n.children.is_empty() || n.rest_bytes > 0);
                 if room {
                     let strip = Rect::from_min_size(r.min, vec2(r.width(), strip_h));
@@ -870,7 +890,7 @@ fn nest(ctx: &egui::Context, tree: &Tree, folder: u32, area: Rect, depth: usize,
                 }
             }
             Kind::File => {
-                let fill = shade(if bin { ALERT_RGB } else { n.cat.rgb() }, leaf_shade);
+                let fill = shade(if bin { crate::holo::theme().alert } else { n.cat.rgb() }, leaf_shade);
                 let mut tile = Tile::new(r, TileKind::File, fill, item.bytes);
                 tile.labels = centre_labels(ctx, r, name, Some(&size), m, ink_on(fill));
                 tile.node = Some(id);
@@ -878,8 +898,8 @@ fn nest(ctx: &egui::Context, tree: &Tree, folder: u32, area: Rect, depth: usize,
                 out.push(tile);
             }
             Kind::Hidden => {
-                let mut tile = Tile::new(r, TileKind::Hidden, HIDDEN_FILL, item.bytes);
-                tile.labels = centre_labels(ctx, r, name, Some(&size), m, super::STRIP_INK);
+                let mut tile = Tile::new(r, TileKind::Hidden, hidden_fill(), item.bytes);
+                tile.labels = centre_labels(ctx, r, name, Some(&size), m, super::strip_ink());
                 tile.node = Some(id);
                 out.push(tile);
             }
@@ -1000,7 +1020,7 @@ impl ViewState {
                 let age = now - at;
                 if (0.0..FLASH).contains(&age) {
                     flashing = true;
-                    tp.rect_filled(t.rect, Rounding::ZERO, PALE.gamma_multiply(0.55 * (1.0 - (age / FLASH) as f32)));
+                    tp.rect_filled(t.rect, Rounding::ZERO, ink().gamma_multiply(0.55 * (1.0 - (age / FLASH) as f32)));
                 }
             }
         }
@@ -1020,7 +1040,7 @@ fn fill_tile(p: &Painter, t: &Tile, c: &Colours, pulse: f32) {
         p.rect_filled(strip, Rounding::ZERO, t.strip_fill);
     }
     match t.kind {
-        TileKind::Hidden => hatch(p, t.rect, HATCH, 6.0),
+        TileKind::Hidden => hatch(p, t.rect, hatch_ink(), 6.0),
         TileKind::Reading => {
             p.rect_stroke(t.rect.shrink(0.5), Rounding::ZERO, super::stroke(1.0, c.border));
         }
@@ -1074,7 +1094,7 @@ fn tooltip(tree: Option<&Tree>, t: &Tile) -> Vec<String> {
 /// The treemap in `frame`: its click's action, and whether it still moves.
 fn draw_map(ui: &mut Ui, p: &Painter, frame: Rect, snap: &Snapshot, m: &Metrics, now: f64, c: &Colours) -> (Option<Action>, bool) {
     let ctx = ui.ctx().clone();
-    p.rect_filled(frame, Rounding::ZERO, MAP_FILL);
+    p.rect_filled(frame, Rounding::ZERO, map_fill());
     p.rect_stroke(frame, Rounding::ZERO, super::stroke(1.0, c.border));
     crate::hud_board::brackets(p, frame, c.bracket);
     let area = frame.shrink(3.0);
@@ -1086,8 +1106,8 @@ fn draw_map(ui: &mut Ui, p: &Painter, frame: Rect, snap: &Snapshot, m: &Metrics,
     };
     if empty {
         let (text, colour) = match snap.phase {
-            Phase::Failed => (snap.error.clone().unwrap_or_else(|| "The scan failed.".to_string()), ALERT),
-            _ => ("READING..".to_string(), super::STRIP_MUTED),
+            Phase::Failed => (snap.error.clone().unwrap_or_else(|| "The scan failed.".to_string()), alert()),
+            _ => ("READING..".to_string(), super::strip_muted()),
         };
         put(p, area.shrink(8.0), &text, &mono(m.label), colour, Align2::CENTER_CENTER, true);
         return (None, false);
@@ -1104,7 +1124,7 @@ fn draw_map(ui: &mut Ui, p: &Painter, frame: Rect, snap: &Snapshot, m: &Metrics,
     let response = ui.interact(frame, ui.id().with("jai_disk_map_area"), Sense::click());
     let hovered = response.hover_pos().and_then(|at| view.tiles.iter().rposition(|t| t.rect.contains(at)));
     if let Some(t) = hovered.map(|i| &view.tiles[i]) {
-        p.rect_stroke(t.rect.shrink(0.75), Rounding::ZERO, super::stroke(1.5, INK));
+        p.rect_stroke(t.rect.shrink(0.75), Rounding::ZERO, super::stroke(1.5, ink()));
         let opens = t.opens.filter(|_| snap.phase == Phase::Done && snap.graft.is_none());
         if response.clicked() {
             action = opens.map(Action::Drill);
@@ -1113,7 +1133,7 @@ fn draw_map(ui: &mut Ui, p: &Painter, frame: Rect, snap: &Snapshot, m: &Metrics,
         let response = if opens.is_some() { response.clone().on_hover_cursor(CursorIcon::PointingHand) } else { response.clone() };
         response.on_hover_ui_at_pointer(|ui| {
             for (k, line) in lines.iter().enumerate() {
-                ui.label(RichText::new(line).font(mono(if k == 0 { 11.0 } else { 10.0 })).color(if k == 0 { INK } else { super::STRIP_MUTED }));
+                ui.label(RichText::new(line).font(mono(if k == 0 { 11.0 } else { 10.0 })).color(if k == 0 { ink() } else { super::strip_muted() }));
             }
         });
     }
@@ -1135,13 +1155,13 @@ fn graft_strip(p: &Painter, area: Rect, snap: &Snapshot, tree: &Tree, at: u32, m
         return;
     }
     let strip = Rect::from_min_max(pos2(area.left(), area.bottom() - h), area.max);
-    p.rect_filled(strip, Rounding::ZERO, READING_FILL);
+    p.rect_filled(strip, Rounding::ZERO, reading_fill());
     p.rect_stroke(strip.shrink(0.5), Rounding::ZERO, super::stroke(1.0, c.border));
     let before = tree.node(at).map_or(1, |n| n.size.max(1));
     let share = (snap.live.stats.bytes as f32 / before as f32).clamp(0.0, 1.0);
     p.rect_filled(Rect::from_min_size(pos2(strip.left(), strip.bottom() - 2.0), vec2(strip.width() * share, 2.0)), Rounding::ZERO, c.accent);
     let text = format!("READING {} AGAIN \u{B7} {}", tree.name(at).to_uppercase(), dm::format_size(snap.live.stats.bytes));
-    put(p, strip.shrink2(vec2(8.0 * m.s, 0.0)), &text, &font, INK, Align2::LEFT_CENTER, true);
+    put(p, strip.shrink2(vec2(8.0 * m.s, 0.0)), &text, &font, ink(), Align2::LEFT_CENTER, true);
 }
 
 // ------------------------------------------------------------------------- side column ----
@@ -1200,29 +1220,29 @@ fn ring_block(p: &Painter, block: Rect, snap: &Snapshot, m: &Metrics, now: f64, 
             let st = &snap.live.stats;
             let share = snap.expected.filter(|e| *e > 0).map(|e| (st.bytes as f64 / e as f64).min(0.99) as f32);
             let big = share.map_or_else(|| format!("{secs} S"), |s| format!("{:.0}%", s * 100.0));
-            let lines = vec![(size(st.bytes), INK), (count(st.files, "file", "files"), super::STRIP_MUTED), (count(st.dirs, "folder", "folders"), super::STRIP_MUTED), (format!("{secs} s"), super::STRIP_MUTED)];
+            let lines = vec![(size(st.bytes), ink()), (count(st.files, "file", "files"), super::strip_muted()), (count(st.dirs, "folder", "folders"), super::strip_muted()), (format!("{secs} s"), super::strip_muted())];
             (share, c.accent, big, "SCANNING".to_string(), lines)
         }
         Phase::Done => match snap.drive {
             Some(drive) if snap.is_drive => {
                 let full = drive.used_share() >= dm::NEARLY_FULL;
-                let colour = if full { ALERT } else { c.accent };
-                let lines = vec![(size(drive.used()), INK), (format!("of {}", size(drive.total)), super::STRIP_MUTED), (format!("FREE {}", size(drive.free)), if full { ALERT } else { super::STRIP_MUTED })];
+                let colour = if full { alert() } else { c.accent };
+                let lines = vec![(size(drive.used()), ink()), (format!("of {}", size(drive.total)), super::strip_muted()), (format!("FREE {}", size(drive.free)), if full { alert() } else { super::strip_muted() })];
                 (Some(drive.used_share() as f32), colour, format!("{:.0}%", drive.used_share() * 100.0), "USED".to_string(), lines)
             }
             Some(drive) => {
                 let share = (snap.stats.bytes as f64 / drive.total.max(1) as f64) as f32;
-                let lines = vec![(size(snap.stats.bytes), INK), (count(snap.stats.files, "file", "files"), super::STRIP_MUTED), (format!("{}: FREE {}", drive.letter, size(drive.free)), super::STRIP_MUTED)];
+                let lines = vec![(size(snap.stats.bytes), ink()), (count(snap.stats.files, "file", "files"), super::strip_muted()), (format!("{}: FREE {}", drive.letter, size(drive.free)), super::strip_muted())];
                 (Some(share), c.accent, format!("{:.0}%", share * 100.0), format!("OF {}:", drive.letter), lines)
             }
             None => {
-                let lines = vec![(size(snap.stats.bytes), INK), (count(snap.stats.files, "file", "files"), super::STRIP_MUTED), (count(snap.stats.dirs, "folder", "folders"), super::STRIP_MUTED)];
+                let lines = vec![(size(snap.stats.bytes), ink()), (count(snap.stats.files, "file", "files"), super::strip_muted()), (count(snap.stats.dirs, "folder", "folders"), super::strip_muted())];
                 (None, c.accent, String::new(), String::new(), lines)
             }
         },
         Phase::Idle | Phase::Failed => (None, c.accent, String::new(), String::new(), Vec::new()),
     };
-    p.circle_stroke(centre, r, super::stroke(width, TRACK));
+    p.circle_stroke(centre, r, super::stroke(width, track()));
     match share {
         Some(share) => {
             arc(p, centre, r, 0.0, share.clamp(0.0, 1.0), width, colour);
@@ -1253,7 +1273,7 @@ fn ring_block(p: &Painter, block: Rect, snap: &Snapshot, m: &Metrics, now: f64, 
     let both = !small.is_empty() && big_h + small_h <= hole * 0.92;
     let top = centre.y - if both { (big_h + small_h) / 2.0 } else { big_h / 2.0 };
     if !big.is_empty() {
-        put(p, Rect::from_min_size(pos2(centre.x - inner_w / 2.0, top), vec2(inner_w, big_h)), &big, &big_font, INK, Align2::CENTER_CENTER, false);
+        put(p, Rect::from_min_size(pos2(centre.x - inner_w / 2.0, top), vec2(inner_w, big_h)), &big, &big_font, ink(), Align2::CENTER_CENTER, false);
     }
     if both {
         put(p, Rect::from_min_size(pos2(centre.x - inner_w / 2.0, top + big_h), vec2(inner_w, small_h)), &small, &small_font, colour, Align2::CENTER_CENTER, false);
@@ -1296,7 +1316,7 @@ fn file_types(p: &Painter, area: Rect, snap: &Snapshot, m: &Metrics, c: &Colours
     let mut order: Vec<Category> = Category::ALL.into_iter().filter(|k| cats[k.index()] > 0).collect();
     order.sort_by(|a, b| cats[b.index()].cmp(&cats[a.index()]));
     let bar = Rect::from_min_size(pos2(area.left(), y), vec2(area.width(), bar_h));
-    p.rect_filled(bar, Rounding::ZERO, TRACK);
+    p.rect_filled(bar, Rounding::ZERO, track());
     let mut x = bar.left();
     for k in &order {
         let w = bar.width() * cats[k.index()] as f32 / total.max(1) as f32;
@@ -1330,10 +1350,10 @@ fn legend_cell(p: &Painter, cell: Rect, k: Category, bytes: u64, font: &FontId, 
     let text = Rect::from_min_max(pos2(cell.left() + sw + 5.0 * m.s, cell.top()), cell.max);
     let size = dm::format_size(bytes);
     if measure(&ctx, k.label(), font).x + 6.0 + measure(&ctx, &size, font).x <= text.width() {
-        put(p, text, k.label(), font, super::STRIP_INK, Align2::LEFT_CENTER, false);
-        put(p, text, &size, font, super::STRIP_MUTED, Align2::RIGHT_CENTER, false);
+        put(p, text, k.label(), font, super::strip_ink(), Align2::LEFT_CENTER, false);
+        put(p, text, &size, font, super::strip_muted(), Align2::RIGHT_CENTER, false);
     } else {
-        put(p, text, k.label(), font, super::STRIP_INK, Align2::LEFT_CENTER, true);
+        put(p, text, k.label(), font, super::strip_ink(), Align2::LEFT_CENTER, true);
     }
 }
 
@@ -1364,9 +1384,9 @@ fn largest(ui: &mut Ui, p: &Painter, area: Rect, snap: &Snapshot, m: &Metrics, c
                     let n = &tree.nodes[id as usize];
                     let red = bin || (n.kind == Kind::Dir && tree.name(id).eq_ignore_ascii_case(dm::RECYCLE_NAME));
                     let colour = if red {
-                        ALERT
+                        alert()
                     } else if n.kind == Kind::Hidden {
-                        HATCH
+                        hatch_ink()
                     } else {
                         rgb(n.cat.rgb())
                     };
@@ -1382,9 +1402,9 @@ fn largest(ui: &mut Ui, p: &Painter, area: Rect, snap: &Snapshot, m: &Metrics, c
                 .iter()
                 .map(|t| {
                     let colour = if t.name.eq_ignore_ascii_case(dm::RECYCLE_NAME) {
-                        ALERT
+                        alert()
                     } else if t.items > 0 {
-                        HATCH
+                        hatch_ink()
                     } else {
                         rgb(t.cat.rgb())
                     };
@@ -1412,12 +1432,12 @@ fn largest(ui: &mut Ui, p: &Painter, area: Rect, snap: &Snapshot, m: &Metrics, c
             break;
         }
         let line = Rect::from_min_size(pos2(area.left(), y), vec2(area.width(), line_h));
-        let mut ink = if row.busy { c.accent } else { super::STRIP_INK };
+        let mut ink = if row.busy { c.accent } else { super::strip_ink() };
         if let Some(id) = row.opens {
             let whole = Rect::from_min_size(line.min, vec2(area.width(), line_h + 2.0 + bar_h));
             let response = ui.interact(whole, ui.id().with(("jai_disk_map_largest", i)), Sense::click()).on_hover_cursor(CursorIcon::PointingHand);
             if response.hovered() {
-                ink = INK;
+                ink = super::strip_ink();
             }
             if response.clicked() {
                 action = Some(Action::Drill(id));
@@ -1425,10 +1445,10 @@ fn largest(ui: &mut Ui, p: &Painter, area: Rect, snap: &Snapshot, m: &Metrics, c
         }
         let size = dm::format_size(row.bytes);
         let size_w = measure(&ctx, &size, &font).x;
-        put(p, line, &size, &font, super::STRIP_MUTED, Align2::RIGHT_CENTER, false);
+        put(p, line, &size, &font, super::strip_muted(), Align2::RIGHT_CENTER, false);
         put(p, Rect::from_min_max(line.min, pos2(line.right() - size_w - 8.0 * m.s, line.bottom())), &row.name, &font, ink, Align2::LEFT_CENTER, true);
         let bar = Rect::from_min_size(pos2(area.left(), line.bottom() + 2.0), vec2(area.width(), bar_h));
-        p.rect_filled(bar, Rounding::ZERO, TRACK);
+        p.rect_filled(bar, Rounding::ZERO, track());
         let w = bar.width() * row.bytes as f32 / most as f32;
         if w >= 0.5 {
             p.rect_filled(Rect::from_min_size(bar.min, vec2(w, bar_h)), Rounding::ZERO, row.colour);
@@ -1452,16 +1472,16 @@ fn draw_buttons(ui: &mut Ui, p: &Painter, area: Rect, snap: &Snapshot, font: &Fo
             response = response.on_hover_cursor(CursorIcon::PointingHand);
         }
         let hot = enabled && response.hovered();
-        p.rect_filled(r, Rounding::ZERO, BUTTON_FILL);
-        p.rect_stroke(r.shrink(0.5), Rounding::ZERO, super::stroke(1.0, if hot { INK } else { c.border }));
+        p.rect_filled(r, Rounding::ZERO, map_fill());
+        p.rect_stroke(r.shrink(0.5), Rounding::ZERO, super::stroke(1.0, if hot { ink() } else { c.border }));
         let accent = if enabled { c.accent } else { c.accent.gamma_multiply(0.35) };
         p.line_segment([pos2(r.left() + 0.5, r.top() + 0.5), pos2(r.left() + r.width() * 0.32, r.top() + 0.5)], super::stroke(2.0, accent));
         let ink = if !enabled {
-            super::STRIP_MUTED.gamma_multiply(0.55)
+            super::strip_muted().gamma_multiply(0.55)
         } else if hot {
-            INK
+            ink()
         } else {
-            super::STRIP_INK
+            super::strip_ink()
         };
         put(p, r.shrink2(vec2(4.0, 0.0)), label, font, ink, Align2::CENTER_CENTER, false);
         if enabled && response.clicked() {
@@ -1547,7 +1567,7 @@ mod tests {
     }
 
     fn draw(ctx: &egui::Context, snap: &Snapshot, actions: &RefCell<Vec<Action>>) {
-        egui::CentralPanel::default().frame(Frame::none().fill(super::super::BLOCK_SLATE).inner_margin(Margin::same(14.0))).show(ctx, |ui| {
+        egui::CentralPanel::default().frame(Frame::none().fill(super::super::block_slate()).inner_margin(Margin::same(14.0))).show(ctx, |ui| {
             if let Some(a) = draw_panel(ui, snap) {
                 actions.borrow_mut().push(a);
             }

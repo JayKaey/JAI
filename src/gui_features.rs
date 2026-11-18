@@ -11,7 +11,7 @@
 //! Studio), and only what would send, delete, close or rewrite something waits in the text console
 //! as an example request for Sir to send. The badge shows PASS / FAIL (or IN CONSOLE).
 
-use super::{rgba, stroke, strip_font, STRIP_INK, STRIP_MUTED};
+use super::{rgba, stroke, strip_font, strip_ink, strip_muted};
 use crate::tools::{ToolContext, JAI_CAPABILITY_MANIFEST};
 use eframe::egui::{self, Color32, Frame, Margin, Response, RichText, Rounding, Ui, ViewportBuilder, ViewportClass, ViewportCommand, ViewportId};
 use serde_json::Value;
@@ -118,7 +118,6 @@ const SIDE_EFFECTS: &[&str] = &[
 
 /// The block's id on the board.
 const ID: &str = "features";
-const PASS: Color32 = Color32::from_rgb(0x3D, 0xF5, 0x9B);
 
 /// A probe's outcome: (passed, milliseconds, first line of the result); `None` while it runs.
 type Outcome = Option<(bool, u64, String)>;
@@ -235,12 +234,7 @@ fn run_probe(tools: &ToolContext, rt: &Handle, name: &str) {
 }
 
 fn chip(ui: &mut Ui, text: &str) -> Response {
-    ui.add(
-        egui::Button::new(RichText::new(text).font(strip_font()).color(STRIP_INK))
-            .fill(rgba([3, 7, 12], 0.9))
-            .stroke(stroke(1.0, crate::hud_board::border_colour()))
-            .rounding(Rounding::ZERO),
-    )
+    crate::holo_ui::key(ui, text)
 }
 
 /// The tool definitions, their grouping and each tool's `[ TRY ]` plan: built once and again
@@ -279,8 +273,8 @@ fn body(ui: &mut Ui, app: &crate::app::Jai, rt: &Handle) {
     let mut filter = FILTER.lock().unwrap_or_else(|e| e.into_inner()).clone();
     let (running, tally) = (suite::running(), suite::summary());
     ui.horizontal(|ui| {
-        ui.add(egui::TextEdit::singleline(&mut filter).hint_text("Filter features…").desired_width(240.0));
-        if chip(ui, if running { "[ TESTING… ]" } else { "[ TEST ALL PROBES ]" })
+        crate::holo_ui::slot(ui, egui::TextEdit::singleline(&mut filter).hint_text("Filter features…").desired_width(240.0));
+        if chip(ui, if running { "TESTING…" } else { "TEST ALL PROBES" })
             .on_hover_text("The live self-test: every pipeline, every route through the real brain (dry run), every tool and the HUD, each against its latency budget. Nothing is sent, said or changed.")
             .clicked()
             && !running
@@ -295,13 +289,13 @@ fn body(ui: &mut Ui, app: &crate::app::Jai, rt: &Handle) {
         } else {
             format!("{total} FEATURES · {} PROBES · {} PASS · {} FAIL · {} SLOW · {} SKIP{}", tally.total, tally.pass, tally.fail, tally.slow, tally.skip, if running { " · RUNNING" } else { "" })
         };
-        let colour = if tally.total > 0 && !running && tally.clean() { PASS } else if tally.fail + tally.slow > 0 { crate::hud_board::PIN_RED } else { STRIP_MUTED };
+        let colour = if tally.total > 0 && !running && tally.clean() { crate::holo::theme().ink() } else if tally.fail + tally.slow > 0 { crate::holo::theme().alert() } else { strip_muted() };
         ui.label(RichText::new(line).font(strip_font()).color(colour));
     });
     *FILTER.lock().unwrap_or_else(|e| e.into_inner()) = filter.clone();
     let needle = filter.trim().to_lowercase();
     ui.add_space(4.0);
-    crate::hud_style::faded(ui, egui::ScrollArea::vertical().auto_shrink([false; 2]), |ui| {
+    crate::holo_block::faded(ui, egui::ScrollArea::vertical().auto_shrink([false; 2]), |ui| {
         // What the live suite found wrong or slow, first; then its pipeline and HUD probes.
         let outcomes = suite::results();
         for (heading, wanted) in [("LIVE SUITE // FAILED OR SLOW", true), ("LIVE SUITE // PIPELINES · ROUTING · HUD", false)] {
@@ -317,15 +311,15 @@ fn body(ui: &mut Ui, app: &crate::app::Jai, rt: &Handle) {
             ui.label(RichText::new(format!("{heading} // {}", shown.len())).font(strip_font()).color(crate::hud_board::active_colour()));
             for o in shown {
                 let colour = match o.status {
-                    suite::Status::Pass => PASS,
-                    suite::Status::Skip => STRIP_MUTED,
-                    _ => crate::hud_board::PIN_RED,
+                    suite::Status::Pass => crate::holo::theme().ink(),
+                    suite::Status::Skip => strip_muted(),
+                    _ => crate::holo::theme().alert(),
                 };
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(format!("{} · {:.2} MS", o.status.label(), o.ms)).font(strip_font()).color(colour));
-                    ui.label(RichText::new(format!("{} // {}", o.group.to_uppercase(), o.id)).font(strip_font()).color(STRIP_INK));
+                    ui.label(RichText::new(format!("{} // {}", o.group.to_uppercase(), o.id)).font(strip_font()).color(strip_ink()));
                 });
-                ui.add(egui::Label::new(RichText::new(format!("→ {}", o.detail)).size(11.0).color(STRIP_MUTED)).wrap());
+                ui.add(egui::Label::new(RichText::new(format!("→ {}", o.detail)).size(11.0).color(strip_muted())).wrap());
             }
         }
         for (group, features) in groups {
@@ -356,7 +350,7 @@ fn row(ui: &mut Ui, tools: &ToolContext, rt: &Handle, name: &str, description: &
             TryPlan::Open(_) => "Open the HUD control that drives it",
             TryPlan::Console(_) => "Changes or sends something: an example request goes into the text console for you to send",
         };
-        if chip(ui, if probe { "[ TEST ]" } else { "[ TRY ]" }).on_hover_text(hint).clicked() {
+        if chip(ui, if probe { "TEST" } else { "TRY" }).on_hover_text(hint).clicked() {
             match plan.clone() {
                 _ if probe => run_probe(tools, rt, name),
                 TryPlan::Run { tool, args } => run_try(tools, rt, name, tool, args),
@@ -370,27 +364,27 @@ fn row(ui: &mut Ui, tools: &ToolContext, rt: &Handle, name: &str, description: &
                 }
             }
         }
-        ui.label(RichText::new(name.to_uppercase()).font(strip_font()).color(STRIP_INK));
+        ui.label(RichText::new(name.to_uppercase()).font(strip_font()).color(strip_ink()));
         match &outcome {
             Some(None) => {
-                ui.label(RichText::new("RUNNING…").font(strip_font()).color(STRIP_MUTED));
+                ui.label(RichText::new("RUNNING…").font(strip_font()).color(strip_muted()));
             }
             Some(Some((ok, ms, _))) => {
-                let (text, colour) = if *ok { ("PASS", PASS) } else { ("FAIL", crate::hud_board::PIN_RED) };
+                let (text, colour) = if *ok { ("PASS", crate::holo::theme().ink()) } else { ("FAIL", crate::holo::theme().alert()) };
                 ui.label(RichText::new(format!("{text} · {ms} MS")).font(strip_font()).color(colour));
             }
             None if STAGED.lock().unwrap_or_else(|e| e.into_inner()).contains(name) => {
-                ui.label(RichText::new("IN CONSOLE · SEND TO RUN").font(strip_font()).color(STRIP_MUTED));
+                ui.label(RichText::new("IN CONSOLE · SEND TO RUN").font(strip_font()).color(strip_muted()));
             }
             None => {
                 if let Some(o) = &suite {
                     use crate::live_self_tester::Status;
                     let (text, colour) = match o.status {
-                        Status::Pass if o.detail.starts_with("wired") => ("WIRED".to_string(), PASS),
-                        Status::Pass => (format!("PASS · {:.0} MS", o.ms), PASS),
-                        Status::Skip => ("SKIP".to_string(), STRIP_MUTED),
-                        Status::Slow => (format!("SLOW · {:.0} MS", o.ms), crate::hud_board::PIN_RED),
-                        Status::Fail => ("FAIL".to_string(), crate::hud_board::PIN_RED),
+                        Status::Pass if o.detail.starts_with("wired") => ("WIRED".to_string(), crate::holo::theme().ink()),
+                        Status::Pass => (format!("PASS · {:.0} MS", o.ms), crate::holo::theme().ink()),
+                        Status::Skip => ("SKIP".to_string(), strip_muted()),
+                        Status::Slow => (format!("SLOW · {:.0} MS", o.ms), crate::holo::theme().alert()),
+                        Status::Fail => ("FAIL".to_string(), crate::holo::theme().alert()),
                     };
                     ui.label(RichText::new(text).font(strip_font()).color(colour));
                 }
@@ -402,7 +396,7 @@ fn row(ui: &mut Ui, tools: &ToolContext, rt: &Handle, name: &str, description: &
         (None, Some(o)) if !o.detail.is_empty() => format!("→ {}", o.detail),
         _ => description.split_inclusive(['.', '!', '?']).next().unwrap_or(description).trim().to_string(),
     };
-    ui.add(egui::Label::new(RichText::new(text).size(11.0).color(STRIP_MUTED)).wrap());
+    ui.add(egui::Label::new(RichText::new(text).size(11.0).color(strip_muted())).wrap());
 }
 
 /// Registers the lab with egui while it is open (each HUD frame): a block on the board, or its
@@ -443,7 +437,7 @@ pub(super) fn show(ctx: &egui::Context, app: &crate::app::Jai, rt: &Handle) {
             if class == ViewportClass::Embedded {
                 egui::Window::new("Feature Lab").default_size([820.0, 680.0]).show(ctx, |ui| body(ui, &app, &rt));
             } else {
-                egui::CentralPanel::default().frame(Frame::none().fill(super::BLOCK_SLATE).inner_margin(Margin::same(14.0))).show(ctx, |ui| {
+                egui::CentralPanel::default().frame(Frame::none().fill(super::block_slate()).inner_margin(Margin::same(14.0))).show(ctx, |ui| {
                     if super::detached_title_bar(ui, ctx, "Feature Lab // every system") {
                         OPEN.store(false, Ordering::Release);
                     }

@@ -5828,7 +5828,6 @@ mod tests {
         assert_eq!(hud("Next song"), None);
     }
 
-    #[test]
     /// Which core he wears and which theme, by voice: English, German, and as they are said in
     /// the middle of a longer sentence.
     #[test]

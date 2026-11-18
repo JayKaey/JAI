@@ -11,7 +11,7 @@
 //! flat map), the tour's caption, the legend, the scale, the control column and, after an area
 //! query, the drawer of results under the map.
 
-use super::{stroke, STRIP_INK, STRIP_MUTED};
+use super::{stroke, strip_ink, strip_muted};
 use crate::earth::{self as model, Bbox, Camera, Earth, EventKind, Flight, FlatView, GeoEvent, GlobeView, Iss, Layer, Look, Outlook, Overlay, Quake, TileKey, TileLayer};
 use crate::earth_gl as gl;
 use eframe::egui::{self, epaint::Vertex, pos2, vec2, Align2, Color32, FontFamily, FontId, Frame, Galley, Margin, Mesh, Painter, Pos2, Rect, Sense, Shape, Stroke, TextureId, Ui, UiBuilder, Vec2, ViewportBuilder, ViewportClass, ViewportCommand, ViewportId};
@@ -282,7 +282,7 @@ fn view_with(ui: &mut Ui, st: &mut Earth, rt: &Handle, fetch: bool) {
         return;
     }
     let ink = ink();
-    let credits = ui.painter().layout(credits_line(st), mono(11.0), STRIP_MUTED, full.width());
+    let credits = ui.painter().layout(credits_line(st), mono(11.0), strip_muted(), full.width());
     let lay = Layout::new(full, st.area.is_some(), credits.size().y);
     ui.allocate_rect(full, Sense::hover());
     let map_resp = ui.interact(lay.map, ui.id().with("earth_map"), Sense::click_and_drag());
@@ -337,7 +337,7 @@ fn view_with(ui: &mut Ui, st: &mut Earth, rt: &Handle, fetch: bool) {
     if let Some(rect) = lay.drawer {
         drawer(ui, rect, st, &ink);
     }
-    ui.painter().galley(lay.credits.min, credits, STRIP_MUTED);
+    ui.painter().galley(lay.credits.min, credits, strip_muted());
 
     let resting = !moving && now - st.still_since >= model::REST_SECS;
     let outlook = Outlook { lat: st.cam.lat, lon: st.cam.lon, alt: st.cam.alt, bbox: geo.bbox(st.cam), resting };
@@ -1004,7 +1004,7 @@ fn paint_layers(p: &Painter, st: &Earth, geo: &Geo, ink: &Ink, now: f64, placer:
             if strongest.as_ref() == Some(q) {
                 for k in 0..2 {
                     let phase = ((now / PULSE_SECS) + k as f64 * 0.5).fract() as f32;
-                    p.circle_stroke(at, r * (1.2 + 2.6 * phase), stroke(1.4, crate::hud_board::PIN_RED.gamma_multiply((1.0 - phase) * 0.9 * vis)));
+                    p.circle_stroke(at, r * (1.2 + 2.6 * phase), stroke(1.4, crate::holo::theme().alert().gamma_multiply((1.0 - phase) * 0.9 * vis)));
                 }
                 pulsing = true;
             }
@@ -1210,7 +1210,7 @@ enum Icon {
 impl Icon {
     /// The icon in a box of `2 s` around `c`: in its own colours, or all in `mono` (a button's).
     fn paint(self, p: &Painter, c: Pos2, s: f32, mono: Option<Color32>) {
-        let ink = mono.unwrap_or(STRIP_INK);
+        let ink = mono.unwrap_or(strip_ink());
         let line = stroke(1.3, ink);
         match self {
             Icon::Dot(colour) => {
@@ -1243,7 +1243,7 @@ impl Icon {
             }
             Icon::Quake => {
                 p.circle_filled(c, s * 0.45, mono.unwrap_or(QUAKE_LOW));
-                p.circle_stroke(c, s * 0.9, stroke(1.0, mono.unwrap_or(crate::hud_board::PIN_RED)));
+                p.circle_stroke(c, s * 0.9, stroke(1.0, mono.unwrap_or(crate::holo::theme().alert())));
             }
             Icon::Storm => spiral(p, c, s, mono.unwrap_or(STORM)),
             Icon::Fire => flame(p, c, s * 2.0, mono.unwrap_or(FIRE), if mono.is_some() { None } else { Some(FIRE_CORE) }),
@@ -1382,7 +1382,7 @@ impl Card {
                     x += ICON + if piece.text.is_some() { 5.0 } else { 0.0 };
                 }
                 if let Some(galley) = &piece.text {
-                    p.galley(pos2(x, y + h - galley.size().y), galley.clone(), STRIP_INK);
+                    p.galley(pos2(x, y + h - galley.size().y), galley.clone(), strip_ink());
                     x += galley.size().x;
                 }
                 x += PIECE_GAP;
@@ -1403,10 +1403,10 @@ impl Scale {
     fn paint(&self, p: &Painter) {
         p.rect_filled(self.rect, 0.0, Color32::from_black_alpha(120));
         let r = self.rect.shrink2(vec2(6.0, 4.0));
-        p.galley(pos2(r.right() - self.label.size().x, r.top()), self.label.clone(), STRIP_INK);
+        p.galley(pos2(r.right() - self.label.size().x, r.top()), self.label.clone(), strip_ink());
         let (y, x1) = (r.bottom() - 1.0, r.right());
         let x0 = x1 - self.px;
-        let line = stroke(1.3, STRIP_INK);
+        let line = stroke(1.3, strip_ink());
         p.line_segment([pos2(x0, y), pos2(x1, y)], line);
         for x in [x0, x1] {
             p.line_segment([pos2(x, y - 5.0), pos2(x, y)], line);
@@ -1448,12 +1448,12 @@ fn plan_cards(p: &Painter, st: &Earth, geo: &Geo, controls: &Controls, placer: &
     let text = |s: String, font: FontId, colour: Color32| p.layout_no_wrap(s, font, colour);
 
     // The time and place in view.
-    let mut rows = vec![vec![Piece::text(text(local.format("%H:%M").to_string(), display(22.0), WHITE_INK)), Piece::text(text(model::utc_offset_label(offset), mono(11.0), STRIP_MUTED))]];
+    let mut rows = vec![vec![Piece::text(text(local.format("%H:%M").to_string(), display(22.0), WHITE_INK)), Piece::text(text(model::utc_offset_label(offset), mono(11.0), strip_muted()))]];
     if !compact {
-        rows.push(vec![Piece::text(text(local.format("%a %-d %b %Y").to_string().to_uppercase(), mono(11.0), STRIP_MUTED))]);
+        rows.push(vec![Piece::text(text(local.format("%a %-d %b %Y").to_string().to_uppercase(), mono(11.0), strip_muted()))]);
     }
-    rows.push(vec![Piece::with(Icon::Dot(ink.accent), text(model::coords_label(st.cam.lat, st.cam.lon), mono(11.0), STRIP_INK))]);
-    rows.push(vec![Piece::with(Icon::UpDown, text(format!("{} km", model::group_digits(st.cam.alt.round() as i64)), mono(11.0), STRIP_INK))]);
+    rows.push(vec![Piece::with(Icon::Dot(ink.accent), text(model::coords_label(st.cam.lat, st.cam.lon), mono(11.0), strip_ink()))]);
+    rows.push(vec![Piece::with(Icon::UpDown, text(format!("{} km", model::group_digits(st.cam.alt.round() as i64)), mono(11.0), strip_ink()))]);
     let info = Card::new(rows, map.min + vec2(10.0, 10.0), Align2::LEFT_TOP, true);
     let info_rect = placer.take(info.rect).then_some(info.rect);
     if info_rect.is_some() {
@@ -1467,26 +1467,26 @@ fn plan_cards(p: &Painter, st: &Earth, geo: &Geo, controls: &Controls, placer: &
     let right = pos2(controls.area.left() - 6.0, map.top() + 10.0);
     let place = if flat && (name.is_some() || st.weather.is_some()) {
         let mut rows = vec![vec![Piece::text(elided(p, name.as_deref().unwrap_or("\u{2014}"), super::bold(13.0), WHITE_INK, name_width))]];
-        rows.push(vec![Piece::text(text(format!("{} {}", local.format("%H:%M"), model::utc_offset_label(offset)), mono(11.0), STRIP_MUTED))]);
+        rows.push(vec![Piece::text(text(format!("{} {}", local.format("%H:%M"), model::utc_offset_label(offset)), mono(11.0), strip_muted()))]);
         if let Some(w) = &st.weather {
-            rows.push(vec![Piece::text(text(format!("{:.1} \u{b0}C", w.temp), display(18.0), WHITE_INK)), Piece::text(text(format!("\u{2248} {:.1} \u{b0}C", w.feels), mono(11.0), STRIP_MUTED))]);
+            rows.push(vec![Piece::text(text(format!("{:.1} \u{b0}C", w.temp), display(18.0), WHITE_INK)), Piece::text(text(format!("\u{2248} {:.1} \u{b0}C", w.feels), mono(11.0), strip_muted()))]);
             let mut air = Vec::new();
             if let Some(h) = w.humidity {
-                air.push(Piece::text(text(format!("{h:.0} %"), mono(11.0), STRIP_INK)));
+                air.push(Piece::text(text(format!("{h:.0} %"), mono(11.0), strip_ink())));
             }
             if let Some(v) = w.wind_kmh {
-                air.push(Piece::with(Icon::Wind(w.wind_from.unwrap_or(0.0) as f32), text(format!("{v:.0} km/h"), mono(11.0), STRIP_INK)));
+                air.push(Piece::with(Icon::Wind(w.wind_from.unwrap_or(0.0) as f32), text(format!("{v:.0} km/h"), mono(11.0), strip_ink())));
             }
             if !air.is_empty() {
                 rows.push(air);
             }
             if let (Some(rise), Some(set)) = (&w.sunrise, &w.sunset) {
-                rows.push(vec![Piece::with(Icon::Sun(true), text(rise.clone(), mono(11.0), STRIP_INK)), Piece::with(Icon::Sun(false), text(set.clone(), mono(11.0), STRIP_INK))]);
+                rows.push(vec![Piece::with(Icon::Sun(true), text(rise.clone(), mono(11.0), strip_ink())), Piece::with(Icon::Sun(false), text(set.clone(), mono(11.0), strip_ink()))]);
             }
         }
         Some(Card::new(rows, right, Align2::RIGHT_TOP, true))
     } else {
-        name.map(|n| Card::new(vec![vec![Piece::with(Icon::Dot(ink.accent), elided(p, &n.to_uppercase(), mono(11.0), STRIP_INK, name_width))]], right, Align2::RIGHT_TOP, false))
+        name.map(|n| Card::new(vec![vec![Piece::with(Icon::Dot(ink.accent), elided(p, &n.to_uppercase(), mono(11.0), strip_ink(), name_width))]], right, Align2::RIGHT_TOP, false))
     };
     if let Some(card) = place.filter(|c| placer.take(c.rect)) {
         list.push(card);
@@ -1509,7 +1509,7 @@ fn plan_cards(p: &Painter, st: &Earth, geo: &Geo, controls: &Controls, placer: &
     // The scale, then the legend beside it.
     let max_px = (map.width() * 0.16).clamp(60.0, 130.0) as f64;
     let scale = model::nice_scale(geo.proj().px_per_km(), max_px).and_then(|(km, px)| {
-        let label = text(model::distance_label(km), mono(11.0), STRIP_INK);
+        let label = text(model::distance_label(km), mono(11.0), strip_ink());
         let size = vec2((px as f32).max(label.size().x) + 12.0, label.size().y + 14.0);
         let rect = Align2::RIGHT_BOTTOM.anchor_size(pos2(controls.area.left() - 6.0, map.bottom() - 10.0), size);
         placer.take(rect).then_some(Scale { rect, px: px as f32, label })
@@ -1535,9 +1535,9 @@ fn plan_tour_card(p: &Painter, st: &Earth, geo: &Geo, placer: &mut Placer) -> Op
     let width = (map.width() * 0.5).clamp(140.0, 420.0);
     let head = format!("WORLD TOUR {}/{} \u{b7} {}", tour.index + 1, tour.stops.len(), stop.kind.label());
     let rows = vec![
-        vec![Piece::text(p.layout_no_wrap(head, mono(11.0), STRIP_MUTED))],
+        vec![Piece::text(p.layout_no_wrap(head, mono(11.0), strip_muted()))],
         vec![Piece::text(elided(p, &stop.title, super::bold(13.0), WHITE_INK, width))],
-        vec![Piece::text(elided(p, &stop.caption, mono(11.0), STRIP_INK, width))],
+        vec![Piece::text(elided(p, &stop.caption, mono(11.0), strip_ink(), width))],
     ];
     let spots = [(pos2(map.center().x, map.bottom() - 10.0), Align2::CENTER_BOTTOM), (pos2(map.center().x, map.bottom() - 60.0), Align2::CENTER_BOTTOM), (pos2(map.center().x, map.top() + 40.0), Align2::CENTER_TOP)];
     let card = spots.into_iter().map(|(at, align)| Card::new(rows.clone(), at, align, true)).find(|c| placer.fits(c.rect))?;
@@ -1547,7 +1547,7 @@ fn plan_tour_card(p: &Painter, st: &Earth, geo: &Geo, placer: &mut Placer) -> Op
 
 /// The legend's pieces: each layer that is on with its count.
 fn legend(p: &Painter, st: &Earth) -> Vec<Piece> {
-    let text = |s: String| p.layout_no_wrap(s, mono(11.0), STRIP_INK);
+    let text = |s: String| p.layout_no_wrap(s, mono(11.0), strip_ink());
     let mut pieces = Vec::new();
     if st.layers.quakes {
         let mags = st.quakes.items.iter().map(|q| q.mag);
@@ -1581,20 +1581,20 @@ fn callout(p: &Painter, hover: &Hover, at: Pos2, map: Rect, ink: &Ink) {
     let line = |s: &str, font: FontId, colour: Color32| elided(p, s, font, colour, width);
     let now_ms = chrono::Utc::now().timestamp_millis();
     let rows: Vec<Vec<Piece>> = match hover {
-        Hover::Plane(f) => vec![vec![Piece::with(Icon::Plane, line(&f.callsign, super::bold(12.0), WHITE_INK))], vec![Piece::text(line(&f.details(), mono(11.0), STRIP_INK))]],
+        Hover::Plane(f) => vec![vec![Piece::with(Icon::Plane, line(&f.callsign, super::bold(12.0), WHITE_INK))], vec![Piece::text(line(&f.details(), mono(11.0), strip_ink()))]],
         Hover::Quake(q) => vec![
             vec![Piece::with(Icon::Quake, line(&format!("M{:.1} \u{b7} {}", q.mag, model::ago((now_ms - q.time_ms) / 1000)), super::bold(12.0), WHITE_INK))],
-            vec![Piece::text(line(if q.place.is_empty() { "Unnamed place" } else { &q.place }, mono(11.0), STRIP_INK))],
-            vec![Piece::text(line(&format!("depth {:.0} km", q.depth_km), mono(11.0), STRIP_MUTED))],
+            vec![Piece::text(line(if q.place.is_empty() { "Unnamed place" } else { &q.place }, mono(11.0), strip_ink()))],
+            vec![Piece::text(line(&format!("depth {:.0} km", q.depth_km), mono(11.0), strip_muted()))],
         ],
-        Hover::Event(e) if e.kind == EventKind::Storm => vec![vec![Piece::with(Icon::Storm, line(&e.label, super::bold(12.0), WHITE_INK))], vec![Piece::text(line(&e.title, mono(11.0), STRIP_INK))]],
-        Hover::Event(e) => vec![vec![Piece::with(Icon::Fire, line(&e.title, super::bold(12.0), WHITE_INK))], vec![Piece::text(line("Wildfire \u{b7} NASA EONET", mono(11.0), STRIP_MUTED))]],
+        Hover::Event(e) if e.kind == EventKind::Storm => vec![vec![Piece::with(Icon::Storm, line(&e.label, super::bold(12.0), WHITE_INK))], vec![Piece::text(line(&e.title, mono(11.0), strip_ink()))]],
+        Hover::Event(e) => vec![vec![Piece::with(Icon::Fire, line(&e.title, super::bold(12.0), WHITE_INK))], vec![Piece::text(line("Wildfire \u{b7} NASA EONET", mono(11.0), strip_muted()))]],
         Hover::Iss(iss) => vec![
             vec![Piece::with(Icon::Iss, line("ISS", super::bold(12.0), WHITE_INK))],
-            vec![Piece::text(line(&format!("{} km \u{b7} {} km/h", iss.alt_km.round(), model::group_digits(iss.speed_kmh.round() as i64)), mono(11.0), STRIP_INK))],
+            vec![Piece::text(line(&format!("{} km \u{b7} {} km/h", iss.alt_km.round(), model::group_digits(iss.speed_kmh.round() as i64)), mono(11.0), strip_ink()))],
         ],
         // live layers (C1): a satellite, a train or a road incident.
-        Hover::Live(hit) => hit.lines().iter().enumerate().map(|(i, s)| vec![if i == 0 { Piece::with(Icon::Dot(ink.accent), line(s, super::bold(12.0), WHITE_INK)) } else { Piece::text(line(s, mono(11.0), STRIP_INK)) }]).collect(),
+        Hover::Live(hit) => hit.lines().iter().enumerate().map(|(i, s)| vec![if i == 0 { Piece::with(Icon::Dot(ink.accent), line(s, super::bold(12.0), WHITE_INK)) } else { Piece::text(line(s, mono(11.0), strip_ink())) }]).collect(),
     };
     let size = Card::size(&rows);
     let mut min = at + vec2(14.0, 14.0);
@@ -1727,7 +1727,7 @@ fn paint_controls(ui: &mut Ui, p: &Painter, st: &mut Earth, controls: &Controls,
             SPACE
         } else {
             p.circle(c, r, CARD, stroke(1.0, if resp.hovered() { ink.accent } else { ink.border }));
-            if matches!(control, Control::Layer(_) | Control::Overlay(_) | Control::Satellite) { ink.accent } else { STRIP_INK }
+            if matches!(control, Control::Layer(_) | Control::Overlay(_) | Control::Satellite) { ink.accent } else { strip_ink() }
         };
         control.icon().paint(p, c, r * 0.5, Some(icon));
         if resp.on_hover_text(control.hint()).clicked() {
@@ -1768,15 +1768,15 @@ fn drawer(ui: &mut Ui, rect: Rect, st: &mut Earth, ink: &Ink) {
     p.galley(pos2(header.left() + 22.0, mid - title.size().y / 2.0), title, ink.accent);
     let close = Rect::from_center_size(pos2(header.right() - 14.0, mid), vec2(18.0, 18.0));
     let close_resp = ui.interact(close, ui.id().with("earth_area_close"), Sense::click());
-    let x_ink = stroke(1.4, if close_resp.hovered() { ink.accent } else { STRIP_INK });
+    let x_ink = stroke(1.4, if close_resp.hovered() { ink.accent } else { strip_ink() });
     let k = 4.5;
     p.line_segment([close.center() + vec2(-k, -k), close.center() + vec2(k, k)], x_ink);
     p.line_segment([close.center() + vec2(-k, k), close.center() + vec2(k, -k)], x_ink);
     let count = area.results.as_ref().map(|list| format!("{} FOUND  ", list.len())).unwrap_or_default();
-    let asked = p.layout_no_wrap(format!("{count}{}", area.asked), mono(11.0), STRIP_MUTED);
+    let asked = p.layout_no_wrap(format!("{count}{}", area.asked), mono(11.0), strip_muted());
     let asked_x = close.left() - 8.0 - asked.size().x;
     if asked_x > title_right + 12.0 {
-        p.galley(pos2(asked_x, mid - asked.size().y / 2.0), asked, STRIP_MUTED);
+        p.galley(pos2(asked_x, mid - asked.size().y / 2.0), asked, strip_muted());
     }
     p.line_segment([pos2(rect.left(), header.bottom()), pos2(rect.right(), header.bottom())], stroke(1.0, ink.border));
     let body = Rect::from_min_max(pos2(rect.left() + 8.0, header.bottom() + 4.0), pos2(rect.right() - 8.0, rect.bottom() - 4.0));
@@ -1785,13 +1785,13 @@ fn drawer(ui: &mut Ui, rect: Rect, st: &mut Earth, ink: &Ink) {
         p.galley(pos2(body.center().x - galley.size().x / 2.0, body.top() + 6.0), galley, colour);
     };
     match (&area.results, &area.failed) {
-        (_, Some(e)) => note(&format!("USGS: {e}"), STRIP_MUTED),
-        (None, None) => note("QUERYING USGS..", STRIP_MUTED),
-        (Some(list), _) if list.is_empty() => note("\u{2014}", STRIP_INK),
+        (_, Some(e)) => note(&format!("USGS: {e}"), strip_muted()),
+        (None, None) => note("QUERYING USGS..", strip_muted()),
+        (Some(list), _) if list.is_empty() => note("\u{2014}", strip_ink()),
         (Some(list), _) => {
             let now_ms = chrono::Utc::now().timestamp_millis();
             let mut child = ui.new_child(UiBuilder::new().max_rect(body));
-            crate::hud_style::faded_into(&mut child, egui::ScrollArea::vertical().id_salt("earth_area_rows").auto_shrink([false; 2]), CARD, |ui| {
+            crate::holo_block::faded_into(&mut child, egui::ScrollArea::vertical().id_salt("earth_area_rows").auto_shrink([false; 2]), CARD, |ui| {
                 let width = ui.available_width();
                 for q in list {
                     let (row, resp) = ui.allocate_exact_size(vec2(width, 18.0), Sense::click());
@@ -1803,11 +1803,11 @@ fn drawer(ui: &mut Ui, rect: Rect, st: &mut Earth, ink: &Ink) {
                     p.circle_filled(pos2(row.left() + 6.0, mid), 4.0, quake_colour(q.mag));
                     let mag = p.layout_no_wrap(format!("{:.1}", q.mag), mono(11.0), WHITE_INK);
                     p.galley(pos2(row.left() + 16.0, mid - mag.size().y / 2.0), mag, WHITE_INK);
-                    let ago = p.layout_no_wrap(model::ago((now_ms - q.time_ms) / 1000), mono(11.0), STRIP_MUTED);
+                    let ago = p.layout_no_wrap(model::ago((now_ms - q.time_ms) / 1000), mono(11.0), strip_muted());
                     let ago_x = row.right() - ago.size().x - 4.0;
-                    p.galley(pos2(ago_x, mid - ago.size().y / 2.0), ago, STRIP_MUTED);
-                    let place = elided(p, if q.place.is_empty() { "Unnamed place" } else { &q.place }, mono(11.0), STRIP_INK, ago_x - 10.0 - (row.left() + 50.0));
-                    p.galley(pos2(row.left() + 50.0, mid - place.size().y / 2.0), place, STRIP_INK);
+                    p.galley(pos2(ago_x, mid - ago.size().y / 2.0), ago, strip_muted());
+                    let place = elided(p, if q.place.is_empty() { "Unnamed place" } else { &q.place }, mono(11.0), strip_ink(), ago_x - 10.0 - (row.left() + 50.0));
+                    p.galley(pos2(row.left() + 50.0, mid - place.size().y / 2.0), place, strip_ink());
                     if resp.on_hover_text("Fly there").clicked() {
                         let alt = st.target().alt;
                         st.fly_to(Camera { lat: q.lat, lon: q.lon, alt });
@@ -1942,7 +1942,7 @@ pub(super) fn show(ctx: &egui::Context, rt: &Handle) {
             if class == ViewportClass::Embedded {
                 egui::Window::new(TITLE).show(ctx, |ui| body(ui, &rt));
             } else {
-                egui::CentralPanel::default().frame(Frame::none().fill(super::BLOCK_SLATE).inner_margin(Margin::same(14.0))).show(ctx, |ui| {
+                egui::CentralPanel::default().frame(Frame::none().fill(super::block_slate()).inner_margin(Margin::same(14.0))).show(ctx, |ui| {
                     if super::detached_title_bar(ui, ctx, TITLE) {
                         crate::earth::close();
                     }

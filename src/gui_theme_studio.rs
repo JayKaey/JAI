@@ -3,8 +3,7 @@
 //! HSV picker, or a hex code), names the theme, and `[ SAVE THEME ]` stores it
 //! (`config/custom_themes.json` and SQLite) and applies it.
 
-use super::{rgba, stroke, strip_font, STRIP_INK, STRIP_MUTED};
-use crate::interface::InterfaceSettings;
+use super::{rgba, stroke, strip_font, strip_ink, strip_muted};
 use crate::theme_store::CustomTheme;
 use eframe::egui::{self, Frame, Margin, RichText, Rounding, Ui, ViewportBuilder, ViewportClass, ViewportCommand, ViewportId};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -43,8 +42,8 @@ pub(super) fn is_open() -> bool {
 
 /// One colour: its picker (RGB / HSV), its hex code (applied once it parses) and its HSV.
 fn colour_row(ui: &mut Ui, label: &str, rgb: &mut [u8; 3]) {
-    ui.label(RichText::new(label).font(strip_font()).color(STRIP_INK));
-    egui::color_picker::color_edit_button_srgb(ui, rgb);
+    ui.label(RichText::new(label).font(strip_font()).color(strip_ink()));
+    crate::holo_ui::colour(ui, rgb);
     let id = ui.id().with(("theme_hex", label));
     let mut hex = ui.data_mut(|d| d.get_temp::<String>(id)).unwrap_or_else(|| crate::interface::hex(*rgb));
     // (Its full width, whatever the grid offers: a grid gives a cell the width its column had in
@@ -61,7 +60,7 @@ fn colour_row(ui: &mut Ui, label: &str, rgb: &mut [u8; 3]) {
     }
     ui.data_mut(|d| d.insert_temp(id, hex));
     let (h, s, v) = crate::holo_theme::to_hsv(*rgb);
-    ui.label(RichText::new(format!("H {h:.0}°  S {:.0}%  V {:.0}%", s * 100.0, v * 100.0)).font(strip_font()).color(STRIP_MUTED));
+    ui.label(RichText::new(format!("H {h:.0}°  S {:.0}%  V {:.0}%", s * 100.0, v * 100.0)).font(strip_font()).color(strip_muted()));
     ui.end_row();
 }
 
@@ -69,8 +68,8 @@ fn body(ui: &mut Ui) {
     let mut draft = lock(&DRAFT);
     let Some(t) = draft.as_mut() else { return };
     ui.horizontal(|ui| {
-        ui.label(RichText::new("NAME").font(strip_font()).color(STRIP_INK));
-        ui.add(egui::TextEdit::singleline(&mut t.name).desired_width(220.0).hint_text("Cyberpunk"));
+        ui.label(RichText::new("NAME").font(strip_font()).color(strip_ink()));
+        crate::holo_ui::slot(ui, egui::TextEdit::singleline(&mut t.name).desired_width(220.0).hint_text("Cyberpunk"));
     });
     ui.add_space(6.0);
     egui::Grid::new("theme_studio_colours").num_columns(4).spacing([10.0, 8.0]).show(ui, |ui| {
@@ -87,11 +86,7 @@ fn body(ui: &mut Ui) {
     painter.circle_filled(rect.left_center() + egui::vec2(20.0, 0.0), 10.0, super::rgb(t.core_primary));
     painter.circle_stroke(rect.left_center() + egui::vec2(20.0, 0.0), 14.0, stroke(1.5, super::rgb(t.core_secondary)));
     ui.add_space(8.0);
-    let save = egui::Button::new(RichText::new("[ SAVE THEME ]").font(strip_font()).color(STRIP_INK))
-        .fill(rgba([3, 7, 12], 0.9))
-        .stroke(stroke(1.0, crate::hud_board::border_colour()))
-        .rounding(Rounding::ZERO);
-    if ui.add_enabled(!t.name.trim().is_empty(), save).on_hover_text("Saves it under its name and applies it").clicked() {
+    if ui.add_enabled_ui(!t.name.trim().is_empty(), |ui| crate::holo_ui::key_on(ui, "SAVE THEME", true)).inner.on_hover_text("Saves it under its name and applies it").clicked() {
         t.name = t.name.trim().to_string();
         *lock(&SAVED) = Some(t.clone());
         super::request_repaint();
@@ -100,7 +95,7 @@ fn body(ui: &mut Ui) {
 
 /// Registers the studio while it is open (a block on the board, or its own window once
 /// detached); the theme Sir saved this frame, if any.
-pub(super) fn show(ctx: &egui::Context, iface: &InterfaceSettings) -> Option<CustomTheme> {
+pub(super) fn show(ctx: &egui::Context) -> Option<CustomTheme> {
     // (Closed while it was its own window: it plays its exit first.)
     if !super::detached_keep(ctx, ViewportId::from_hash_of("jai_theme_studio"), OPEN.load(Ordering::Acquire)) {
         crate::hud_dock::forget(ID);
@@ -111,7 +106,7 @@ pub(super) fn show(ctx: &egui::Context, iface: &InterfaceSettings) -> Option<Cus
         // (Its rows keep their width: in a block the dock made narrower, the studio scrolls
         // sideways instead of squeezing its hex fields shut.)
         let action = super::hud_block_window(ctx, ID, "Theme Studio // create theme", [560.0, 300.0], |ui| {
-            crate::hud_style::faded(ui, egui::ScrollArea::both().auto_shrink([false; 2]), |ui| {
+            crate::holo_block::faded(ui, egui::ScrollArea::both().auto_shrink([false; 2]), |ui| {
                 ui.set_min_width(MIN_WIDTH);
                 body(ui);
             });
@@ -143,7 +138,7 @@ pub(super) fn show(ctx: &egui::Context, iface: &InterfaceSettings) -> Option<Cus
             if class == ViewportClass::Embedded {
                 egui::Window::new("Theme Studio").show(ctx, body);
             } else {
-                egui::CentralPanel::default().frame(Frame::none().fill(super::BLOCK_SLATE).inner_margin(Margin::same(14.0))).show(ctx, |ui| {
+                egui::CentralPanel::default().frame(Frame::none().fill(super::block_slate()).inner_margin(Margin::same(14.0))).show(ctx, |ui| {
                     if super::detached_title_bar(ui, ctx, "Theme Studio // create theme") {
                         OPEN.store(false, Ordering::Release);
                     }
@@ -169,7 +164,7 @@ mod tests {
         let mut stage = Stage::new(egui::vec2(900.0, 600.0));
         let frame = stage.frames(4, &mut |ctx| {
             egui::Window::new("studio").title_bar(false).fixed_pos(egui::pos2(20.0, 20.0)).fixed_size(egui::vec2(560.0, 300.0)).show(ctx, |ui| {
-                crate::hud_style::faded(ui, egui::ScrollArea::both().auto_shrink([false; 2]), |ui| {
+                crate::holo_block::faded(ui, egui::ScrollArea::both().auto_shrink([false; 2]), |ui| {
                     ui.set_min_width(MIN_WIDTH);
                     body(ui);
                 });

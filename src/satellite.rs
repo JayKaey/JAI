@@ -350,8 +350,8 @@ fn static_asset(path: &str) -> Option<(&'static str, Vec<u8>)> {
     static ICONS: std::sync::OnceLock<(Vec<u8>, Vec<u8>)> = std::sync::OnceLock::new();
     let icon = |size: u32| crate::app_icon::encode_png(size, size, &crate::app_icon::render_icon_rgba(size));
     match path.strip_prefix(STATIC)? {
-        "display.ttf" => crate::gui::hud_face("display").map(|b| ("font/ttf", b.to_vec())),
-        "mono.ttf" => crate::gui::hud_face("mono").map(|b| ("font/ttf", b.to_vec())),
+        // The HUD's own faces, by name: label, figure, head, body, mono.
+        font if font.ends_with(".ttf") => crate::holo::face_file(font.trim_end_matches(".ttf")).map(|b| ("font/ttf", b.to_vec())),
         "icon.png" => Some(("image/png", ICONS.get_or_init(|| (icon(512), icon(192))).0.clone())),
         "icon-192.png" => Some(("image/png", ICONS.get_or_init(|| (icon(512), icon(192))).1.clone())),
         _ => None,

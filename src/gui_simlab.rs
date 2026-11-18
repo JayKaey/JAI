@@ -121,8 +121,7 @@ pub(super) fn dock_key(id: &str) -> String {
     format!("sim:{id}")
 }
 
-/// ROSE plot colours.
-const PLOT_CANVAS: Color32 = Color32::from_rgb(0x05, 0x0A, 0x10);
+/// A plot's frame: structure, in ink.
 fn plot_frame() -> Color32 {
     crate::hud_board::border_colour()
 }
@@ -283,13 +282,13 @@ fn draw_body(ui: &mut egui::Ui, p: &Palette, sim: &Simulation, host: &WidgetHost
             ui.label(RichText::new(sim.title.to_uppercase()).font(bold(16.0)).color(p.accent).extra_letter_spacing(1.5));
         }
         super::chip(ui, sim.kind.label(), p.violet);
-        if ui.button(if sim.paused { "Resume" } else { "Pause" }).clicked() {
+        if crate::holo_ui::key(ui, if sim.paused { "Resume" } else { "Pause" }).clicked() {
             lab.toggle_pause(&sim.id);
         }
-        if ui.button("Restart").clicked() {
+        if crate::holo_ui::key(ui, "Restart").clicked() {
             lab.restart(&sim.id);
         }
-        if !in_app && button(ui, p, "Close", Tone::Danger).clicked() {
+        if !in_app && button(ui, "Close", Tone::Danger).clicked() {
             lab.close(&sim.id);
             ui.ctx().request_repaint_of(ViewportId::ROOT);
         }
@@ -302,11 +301,11 @@ fn draw_body(ui: &mut egui::Ui, p: &Palette, sim: &Simulation, host: &WidgetHost
     let (controls_rect, plot_rect) = split_layout(avail);
     ui.allocate_new_ui(egui::UiBuilder::new().max_rect(controls_rect), |ui| {
         ui.set_width(controls_rect.width());
-        crate::hud_style::faded(ui, egui::ScrollArea::vertical().id_salt(("sim_controls", &sim.id)).max_height(controls_rect.height()), |ui| controls(ui, p, sim, host));
+        crate::holo_block::faded(ui, egui::ScrollArea::vertical().id_salt(("sim_controls", &sim.id)).max_height(controls_rect.height()), |ui| controls(ui, p, sim, host));
     });
     let response = ui.allocate_rect(plot_rect, Sense::hover());
     let painter = ui.painter_at(plot_rect.expand(2.0));
-    painter.rect_filled(plot_rect, Rounding::ZERO, PLOT_CANVAS);
+    painter.rect_filled(plot_rect, Rounding::ZERO, crate::holo::theme().void());
     painter.rect_stroke(plot_rect, Rounding::ZERO, Stroke::new(1.0f32, plot_frame()));
     crate::hud_board::brackets(&painter, plot_rect, Color32::WHITE);
     let mut guard = RUNTIMES.lock().unwrap_or_else(|e| e.into_inner());
@@ -342,7 +341,7 @@ fn controls(ui: &mut egui::Ui, p: &Palette, sim: &Simulation, host: &WidgetHost)
         let mut v = value;
         ui.label(RichText::new(format!("{label}{}", if unit.is_empty() { String::new() } else { format!(" ({unit})") })).size(11.5));
         let step = ((max - min) / 400.0).max(1e-4);
-        if ui.add(egui::Slider::new(&mut v, min..=max).step_by(if (max - min) > 50.0 { 1.0 } else { step })).changed() {
+        if ui.add(crate::holo_ui::Slider::new(&mut v, min..=max).step_by(if (max - min) > 50.0 { 1.0 } else { step })).changed() {
             lab.set_param(&sim.id, &name, v);
         }
     }
@@ -362,13 +361,13 @@ fn controls(ui: &mut egui::Ui, p: &Palette, sim: &Simulation, host: &WidgetHost)
         }
     }
     if sim.kind == SimKind::Sorting {
-        muted(ui, p, format!("Algorithm: {}", sim.algorithm));
+        muted(ui, format!("Algorithm: {}", sim.algorithm));
     }
     ui.add_space(8.0);
     ui.label(RichText::new("READOUT").font(bold(10.5)).color(p.muted).extra_letter_spacing(1.0));
     ui.add(egui::Label::new(RichText::new(sim.readout()).size(11.5)).wrap());
     ui.add_space(8.0);
-    muted(ui, p, "Drag the sliders, or tell JAI: “set the angle to 60 degrees and double the velocity”.");
+    muted(ui, "Drag the sliders, or tell JAI: “set the angle to 60 degrees and double the velocity”.");
 }
 
 // ---------------------------------------------------------------------- plotting ----
@@ -650,7 +649,7 @@ fn draw_collision(painter: &egui::Painter, rect: Rect, p: &Palette, sim: &Simula
     for (x, rad, m, v, colour, name) in [(rt.x1, r1, m1, rt.v1, p.accent, "m₁"), (rt.x2, r2, m2, rt.v2, p.amber, "m₂")] {
         let c = pos2(view.to_screen(x, 0.0).x, track_y - rad as f32 * px_per_m);
         painter.circle_filled(c, rad as f32 * px_per_m, colour.gamma_multiply(0.85));
-        painter.text(c, Align2::CENTER_CENTER, format!("{name}\n{m:.1} kg"), FontId::proportional(11.0), crate::hud_style::ink_on(colour));
+        painter.text(c, Align2::CENTER_CENTER, format!("{name}\n{m:.1} kg"), FontId::proportional(11.0), crate::holo::ink_on(colour));
         if v.abs() > 0.01 {
             painter.arrow(c - vec2(0.0, rad as f32 * px_per_m + 14.0), vec2(v as f32 * px_per_m * 0.6, 0.0), stroke(2.0, p.green));
         }
@@ -828,7 +827,6 @@ mod tests {
         assert_eq!(curve_runs(&xs, &sin, |x, y| view.to_screen(x, y), -1.2, 1.2).len(), 1);
         let pole: Vec<f64> = xs.iter().map(|x| 1.0 / x).collect();
         assert!(curve_runs(&xs, &pole, |x, y| view.to_screen(x, y), -2.0, 2.0).len() >= 2);
-        assert_eq!(PLOT_CANVAS, Color32::from_rgb(0x05, 0x0A, 0x10));
     }
 
     #[test]
@@ -862,10 +860,10 @@ mod tests {
         let plot = Rect::from_min_size(pos2(20.0, 20.0), size - vec2(40.0, 40.0));
         let mut snap = crate::ui_snapshot::Snapshot::new(size);
         let canvas = snap.render(2, |ctx| {
-            crate::gui::install_fonts(ctx);
+            crate::holo::install_fonts(ctx);
             egui::CentralPanel::default().frame(Frame::none()).show(ctx, |ui| {
                 let painter = ui.painter_at(plot.expand(2.0));
-                painter.rect_filled(plot, Rounding::ZERO, PLOT_CANVAS);
+                painter.rect_filled(plot, Rounding::ZERO, crate::holo::theme().void());
                 painter.rect_stroke(plot, Rounding::ZERO, Stroke::new(1.0f32, plot_frame()));
                 crate::hud_board::brackets(&painter, plot, Color32::WHITE);
                 draw_function(&painter, plot.shrink(16.0), &p, &sim, None);

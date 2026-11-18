@@ -296,6 +296,30 @@ fn paint_simple(p: &Painter, id: egui::Id, c: Pos2, r: f32, look: &CoreLook) {
     }
 }
 
+/// How long the core's ripple runs (seconds).
+pub const RIPPLE_SECS: f32 = 0.9;
+
+/// The core's answer when he hears his name (his silent "yes?"): three rings of light leave it
+/// and fade, the first white-hot, the next in the accent, the last in the deep tone. `age` is
+/// the seconds since he heard it; returns whether it is still running.
+pub fn ripple(p: &Painter, centre: Pos2, radius: f32, age: f32) -> bool {
+    if !(0.0..RIPPLE_SECS).contains(&age) {
+        return false;
+    }
+    let t = holo::theme();
+    let mut light = Light::new(p);
+    for (delay, colour, glow) in [(0.0, t.hot(), 1.0), (0.14, t.accent(), 0.7), (0.28, t.deep(), 0.5)] {
+        let run = (age - delay) / (RIPPLE_SECS - delay);
+        if !(0.0..1.0).contains(&run) {
+            continue;
+        }
+        let fade = (1.0 - run) * (1.0 - run);
+        light.neon_arc(centre, radius * (1.04 + 0.85 * crate::holo_motion::ease_out_expo(run)), 0.0, TAU, px(p).max(1.0), a(colour, 0.9 * fade), fade * glow);
+    }
+    light.paint(p);
+    true
+}
+
 // ----------------------------------------------------------------------- where he stands ----
 
 /// How far the docked core stands from the screen's corner, and how large it is there.

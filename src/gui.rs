@@ -67,7 +67,9 @@ mod model3d_view;
 pub(crate) mod offscreen;
 
 use crate::app::Jai;
+use crate::holo::{self, Face};
 use crate::holo_core::{Core, CoreInputs};
+use crate::{holo_kit, holo_ui};
 use crate::config::ConfigStore;
 use crate::ears::AudioLevel;
 use crate::hud::{ConfigState, HudCommand, HudEvent};
@@ -77,7 +79,7 @@ use crate::modality::VoiceResponseMode;
 use crate::skills::JaiSkill;
 use crate::telemetry::SystemTelemetry;
 use eframe::egui::{
-    self, pos2, vec2, Align, Align2, Color32, FontData, FontDefinitions, FontFamily, FontId, Frame, Key, Layout, Margin,
+    self, pos2, vec2, Align, Align2, Color32, FontFamily, FontId, Frame, Key, Layout, Margin,
     Pos2, Rect, RichText, Rounding, Sense, Shape, Stroke, Ui, Vec2, ViewportCommand, ViewportId,
 };
 use std::collections::VecDeque;
@@ -1625,7 +1627,7 @@ fn rgb([r, g, b]: [u8; 3]) -> Color32 {
 }
 
 /// `Stroke::new` takes `impl Into<f32>`, which leaves float literals untyped.
-use crate::hud_style::stroke;
+use crate::holo::stroke;
 
 fn rgba([r, g, b]: [u8; 3], alpha: f32) -> Color32 {
     Color32::from_rgba_unmultiplied(r, g, b, (alpha.clamp(0.0, 1.0) * 255.0).round() as u8)
@@ -1684,7 +1686,7 @@ impl Palette {
             muted: t.muted(),
             // A calm green for "all is well", a caution that is never the theme's own colour,
             // and the alert for what failed.
-            green: crate::hud_style::GOOD,
+            green: crate::holo::theme().ink(),
             amber: t.warn(),
             red: t.alert(),
             violet: t.deep(),
@@ -1742,7 +1744,7 @@ fn visuals(p: &Palette) -> egui::Visuals {
     v.hyperlink_color = p.accent;
     v.slider_trailing_fill = true;
     v.handle_shape = egui::style::HandleShape::Rect { aspect_ratio: 0.35 };
-    v.text_cursor.stroke = Stroke::new(2.0, p.accent);
+    v.text_cursor.stroke = stroke(2.0, p.accent);
     let w = &mut v.widgets;
     w.noninteractive.bg_fill = p.card_solid;
     w.noninteractive.weak_bg_fill = p.card_solid;
@@ -1767,16 +1769,6 @@ fn visuals(p: &Palette) -> egui::Visuals {
     v
 }
 
-/// One of the HUD's own faces as a file, for the phone page ("display": the headline face,
-/// "mono": the data face).
-pub(crate) fn hud_face(name: &str) -> Option<&'static [u8]> {
-    crate::holo::face_file(if name == "display" { "head" } else { name })
-}
-
-/// The HUD's faces (`holo::install_fonts`).
-pub(crate) fn install_fonts(ctx: &egui::Context) {
-    crate::holo::install_fonts(ctx);
-}
 
 fn label_family() -> FontFamily {
     FontFamily::Name("label".into())
@@ -1816,6 +1808,8 @@ fn configure_style(ctx: &egui::Context, font_scale: f32) {
         ]
         .into();
         s.spacing.item_spacing = vec2(8.0, 6.0);
+        // A scroll bar is a hairline of ink over the content's edge, brighter under the pointer.
+        s.spacing.scroll = egui::style::ScrollStyle { bar_width: 3.0, floating_width: 2.0, handle_min_length: 14.0, foreground_color: true, dormant_handle_opacity: 0.25, active_handle_opacity: 0.6, interact_handle_opacity: 1.0, dormant_background_opacity: 0.0, active_background_opacity: 0.0, interact_background_opacity: 0.0, ..egui::style::ScrollStyle::floating() };
         s.spacing.button_padding = vec2(10.0, 5.0);
         s.spacing.interact_size.y = 24.0 * f.max(1.0);
     });
@@ -1920,23 +1914,7 @@ pub(crate) fn settle_new_areas(ctx: &egui::Context) {
     }
 }
 
-// ------------------------------------------------------------------ the node-graph core ----
-// JAI's subsystems sit on a sphere (`orb_3d`), tied together by strings through the interior.
-// The strings vibrate with Sir's voice and JAI's own, and signal particles run along them
-// while a request flows EARS → STT → BRAIN → a tool.
-
-/// Cascade colours along the orb's real dependency chains.
-const STARK_GOLD: Color32 = Color32::from_rgb(255, 184, 0);
-fn arc_points(centre: Pos2, radius: f32, from: f32, to: f32) -> Vec<Pos2> {
-    let steps = ((to - from).abs() / TAU * 120.0).ceil().max(2.0) as usize;
-    (0..=steps)
-        .map(|i| {
-            let a = from + (to - from) * i as f32 / steps as f32;
-            centre + vec2(a.cos(), a.sin()) * radius
-        })
-        .collect()
-}
-
+use crate::holo::arc_points;
 
 fn state_name(state: &str) -> &str {
     match state {
@@ -1950,6 +1928,7 @@ fn state_name(state: &str) -> &str {
 }
 
 // --------------------------------------------------------------------------- widgets ----
+// What the drawer's cards and the panels are made of, all on the kit (`holo_ui`, `holo_kit`).
 
 #[derive(Clone, Copy)]
 enum Tone {
@@ -1958,158 +1937,113 @@ enum Tone {
     Danger,
 }
 
-fn button(ui: &mut Ui, p: &Palette, text: &str, tone: Tone) -> egui::Response {
-    let label = RichText::new(text).size(ts(12.0));
+/// A key: plain, solid (its thing is on), or in the alert colour (it ends or deletes something).
+fn button(ui: &mut Ui, text: &str, tone: Tone) -> egui::Response {
     match tone {
-        Tone::Normal => ui.add(egui::Button::new(label)),
-        Tone::On => ui.add(
-            egui::Button::new(label.color(p.green)).fill(p.green.gamma_multiply(0.14)).stroke(stroke(1.0, p.green)),
-        ),
-        Tone::Danger => ui.add(
-            egui::Button::new(label.color(blend(p.red, p.text, 0.3)))
-                .fill(p.red.gamma_multiply(0.12))
-                .stroke(stroke(1.0, p.red.gamma_multiply(0.7))),
-        ),
+        Tone::Normal => holo_ui::key(ui, text),
+        Tone::On => holo_ui::key_on(ui, text, true),
+        Tone::Danger => holo_ui::key_alert(ui, text),
     }
 }
 
-fn pill(ui: &mut Ui, p: &Palette, text: impl Into<String>, colour: Color32) -> egui::Response {
-    Frame::none()
-        .fill(p.accent.gamma_multiply(0.06))
-        .stroke(stroke(1.0, p.line))
-        .rounding(Rounding::same(p.r_button()))
-        .inner_margin(Margin::symmetric(8.0, 4.0))
-        .show(ui, |ui| ui.label(RichText::new(text).monospace().size(ts(11.0)).color(colour)))
-        .response
+/// A reading in a small outlined tag (the data face).
+fn pill(ui: &mut Ui, text: impl Into<String>, colour: Color32) -> egui::Response {
+    let text = text.into();
+    let g = ui.painter().layout_no_wrap(text, FontId::monospace(ts(11.0)), colour);
+    let (rect, response) = ui.allocate_exact_size(g.size() + vec2(14.0, 6.0), Sense::hover());
+    holo::outline(ui.painter(), &holo::plate(rect, [0.0, 0.0, 4.0, 0.0]), holo::a(holo::theme().ink(), 0.22));
+    ui.painter().galley(rect.min + vec2(7.0, 3.0), g, colour);
+    response
 }
 
+/// A state as a tag in wide capitals, outlined in its colour.
 fn chip(ui: &mut Ui, text: &str, colour: Color32) {
-    Frame::none()
-        .fill(colour.gamma_multiply(0.16))
-        .rounding(Rounding::ZERO)
-        .inner_margin(Margin::symmetric(8.0, 2.0))
-        .show(ui, |ui| ui.label(RichText::new(text.replace('_', " ").to_uppercase()).font(bold(10.0)).color(colour)));
+    let label = text.replace('_', " ");
+    let width = holo::galley(ui.painter(), Face::Label, &label, 8.0, colour).size().x + 12.0;
+    let (rect, _) = ui.allocate_exact_size(vec2(width, 14.0), Sense::hover());
+    holo_kit::chip(ui.painter(), rect.min, &label, colour, false, 1.0);
 }
 
-/// A Stark-OS glass panel: deep obsidian-slate fill (see-through with the background
-/// opacity), a 1 px accent border and a soft drop shadow; `card` adds the specular top edge.
-fn glass(_ui: &Ui, p: &Palette) -> Frame {
-    Frame::none()
-        .fill(p.card)
-        .stroke(stroke(1.0, p.line))
-        .rounding(Rounding::same(p.r_panel()))
-        .shadow(egui::epaint::Shadow { offset: vec2(0.0, 6.0), blur: 18.0, spread: 0.0, color: Color32::from_black_alpha(if p.light { 25 } else { 70 }) })
-}
-
-/// A titled panel of the HUD.
-fn card<R>(ui: &mut Ui, p: &Palette, title: &str, aux: impl FnOnce(&mut Ui), body: impl FnOnce(&mut Ui) -> R) -> R {
-    let shown = glass(ui, p)
-        .inner_margin(Margin::same(12.0))
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.horizontal(|ui| {
-                ui.label(RichText::new(title).font(bold(11.5)).color(p.accent).extra_letter_spacing(1.2));
-                ui.with_layout(Layout::right_to_left(Align::Center), aux);
-            });
-            ui.add_space(2.0);
-            body(ui)
-        });
-    let r = shown.response.rect;
-    // The specular edge: a bright accent line on top, a faint white sheen just under it.
-    let inset = p.r_panel().max(8.0);
-    ui.painter()
-        .line_segment([pos2(r.left() + inset, r.top()), pos2(r.right() - inset, r.top())], stroke(1.0, p.accent.gamma_multiply(0.45)));
-    ui.painter().line_segment(
-        [pos2(r.left() + inset * 0.8, r.top() + 1.5), pos2(r.right() - inset * 0.8, r.top() + 1.5)],
-        stroke(1.0, if p.light { Color32::from_white_alpha(120) } else { Color32::from_white_alpha(10) }),
-    );
-    ui.add_space(10.0);
-    shown.inner
-}
-
-/// A list entry inside a card; `mark` draws a coloured left edge.
-fn item(ui: &mut Ui, p: &Palette, mark: Option<Color32>, body: impl FnOnce(&mut Ui)) {
-    let shown = Frame::none()
-        .fill(p.well)
-        .stroke(stroke(1.0, p.line.gamma_multiply(0.7)))
-        .rounding(Rounding::same(p.r_button()))
-        .inner_margin(Margin::symmetric(10.0, 8.0))
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            body(ui);
-        });
-    if let Some(colour) = mark {
-        let r = shown.response.rect;
-        let rr = p.r_button();
-        ui.painter().rect_filled(
-            Rect::from_min_max(r.left_top(), pos2(r.left() + 3.0, r.bottom())),
-            Rounding { nw: rr, sw: rr, ne: 0.0, se: 0.0 },
-            colour,
-        );
-    }
-    ui.add_space(4.0);
-}
-
-fn muted(ui: &mut Ui, p: &Palette, text: impl Into<String>) {
-    ui.label(RichText::new(text).size(ts(11.0)).color(p.muted));
-}
-
-/// "Key ……… value" row; returns the value's response (for tooltips).
-fn row(ui: &mut Ui, p: &Palette, key: &str, value: impl Into<String>) -> egui::Response {
+/// A part of a panel: a tick of the accent, its name in wide capitals, what belongs at its
+/// right (`aux`), a rule between them, and its body under it. Nothing is boxed.
+fn card<R>(ui: &mut Ui, title: &str, aux: impl FnOnce(&mut Ui), body: impl FnOnce(&mut Ui) -> R) -> R {
+    let t = holo::theme();
     ui.horizontal(|ui| {
-        ui.label(RichText::new(key).size(ts(11.5)).color(p.muted));
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            ui.add(egui::Label::new(RichText::new(value).size(ts(11.5)).color(p.text)).truncate())
-        })
-        .inner
-    })
-    .inner
-}
-
-/// Horizontal meter (0..1) with vertical markers at fractions.
-fn meter(ui: &mut Ui, p: &Palette, fraction: f32, height: f32, fill: Color32, markers: &[(f32, Color32)]) {
-    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
-    let painter = ui.painter();
-    let rounding = Rounding::same(height / 2.0);
-    painter.rect_filled(rect, rounding, p.track);
-    let f = crate::hud_style::motion::glide(ui.ctx(), response.id.with("glide"), fraction.clamp(0.0, 1.0));
-    if f > 0.0 {
-        let mut filled = rect;
-        filled.set_width((rect.width() * f).max(height));
-        painter.rect_filled(filled, rounding, fill);
-    }
-    for (at, colour) in markers {
-        let x = rect.left() + rect.width() * at.clamp(0.0, 1.0);
-        painter.line_segment([pos2(x, rect.top() - 1.0), pos2(x, rect.bottom() + 1.0)], stroke(2.0, *colour));
-    }
-}
-
-fn slider(ui: &mut Ui, p: &Palette, label: &str, shown: String, widget: egui::Slider<'_>) -> egui::Response {
-    ui.horizontal(|ui| {
-        ui.label(RichText::new(label).size(ts(11.0)).color(p.muted));
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| ui.label(RichText::new(shown).size(ts(11.0)).color(p.text)));
+        ui.set_width(ui.available_width());
+        let (tick, _) = ui.allocate_exact_size(vec2(3.0, 11.0), Sense::hover());
+        ui.painter().rect_filled(tick, Rounding::ZERO, t.accent());
+        let name = ui.label(RichText::new(title.to_uppercase()).font(holo::font(Face::Label, ts(8.5))).color(t.ink()).extra_letter_spacing(1.2)).rect;
+        let aux_left = ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            aux(ui);
+            ui.min_rect().left().min(ui.max_rect().right())
+        });
+        holo::rule(ui.painter(), pos2(name.right() + 10.0, name.center().y), pos2(aux_left.inner - 8.0, name.center().y), holo::a(t.ink(), 0.13));
     });
+    ui.add_space(4.0);
+    let inner = body(ui);
+    ui.add_space(14.0);
+    inner
+}
+
+/// A list entry inside a card: its content on a hairline, a bar on its left (`mark` colours
+/// it: a state; else faint ink).
+fn item(ui: &mut Ui, mark: Option<Color32>, body: impl FnOnce(&mut Ui)) {
+    let t = holo::theme();
+    let shown = Frame::none().inner_margin(Margin { left: 11.0, right: 4.0, top: 6.0, bottom: 6.0 }).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        body(ui);
+    });
+    let r = shown.response.rect;
+    holo::rule(ui.painter(), r.left_bottom(), r.right_bottom(), holo::a(t.ink(), 0.08));
+    ui.painter().rect_filled(Rect::from_min_max(r.left_top() + vec2(0.0, 4.0), pos2(r.left() + 2.0, r.bottom() - 4.0)), Rounding::ZERO, mark.unwrap_or(holo::a(t.ink(), 0.22)));
+    ui.add_space(2.0);
+}
+
+fn muted(ui: &mut Ui, text: impl Into<String>) {
+    ui.label(RichText::new(text).size(ts(11.5)).color(holo::theme().muted()));
+}
+
+/// A label and its value on one line, dots between them (`holo_kit::pair`); returns the row's
+/// response (for tooltips).
+fn row(ui: &mut Ui, key: &str, value: impl Into<String>) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 18.0), Sense::hover());
+    if ui.is_rect_visible(rect) {
+        holo_kit::pair(ui.painter(), rect, key, &value.into(), 1.0);
+    }
+    response
+}
+
+/// A level (0..1) as a row of cells, with ticks at the `markers`' shares.
+fn meter(ui: &mut Ui, fraction: f32, height: f32, fill: Color32, markers: &[(f32, Color32)]) {
+    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), height.max(7.0)), Sense::hover());
+    let shown = ui.ctx().animate_value_with_time(response.id.with("glide"), fraction.clamp(0.0, 1.0), crate::holo_motion::TOUCH);
+    holo_kit::cells(ui.painter(), rect, shown, ((rect.width() / 5.0) as usize).max(8), fill, 1.0);
+    for (at, colour) in markers {
+        let x = holo::snap(rect.left() + rect.width() * at.clamp(0.0, 1.0), holo::ppp(ui.painter()));
+        holo::rule(ui.painter(), pos2(x, rect.top() - 2.0), pos2(x, rect.bottom() + 2.0), *colour);
+    }
+}
+
+/// A slider under its name, the value it has at the name's right.
+fn slider(ui: &mut Ui, label: &str, shown: String, widget: holo_ui::Slider<'_>) -> egui::Response {
+    row(ui, label, shown);
     ui.spacing_mut().slider_width = ui.available_width();
     ui.add(widget.show_value(false))
 }
 
-/// Combo box whose first entry ("Auto …") stands for `None`.
+/// A picker whose first entry ("Auto …") stands for `None`.
 fn device_combo(ui: &mut Ui, id: &str, auto: &str, devices: &[String], current: Option<&str>) -> Option<Option<String>> {
     let mut picked = None;
-    egui::ComboBox::from_id_salt(id)
-        .width(ui.available_width())
-        .truncate()
-        .selected_text(current.unwrap_or(auto))
-        .show_ui(ui, |ui| {
-            if ui.selectable_label(current.is_none(), auto).clicked() {
-                picked = Some(None);
+    holo_ui::Picker::from_id_salt(id).width(ui.available_width()).selected_text(current.unwrap_or(auto)).show_ui(ui, |ui| {
+        if holo_ui::item(ui, auto, current.is_none()).clicked() {
+            picked = Some(None);
+        }
+        for d in devices {
+            if holo_ui::item(ui, d.as_str(), current == Some(d.as_str())).clicked() {
+                picked = Some(Some(d.clone()));
             }
-            for d in devices {
-                if ui.selectable_label(current == Some(d.as_str()), d).clicked() {
-                    picked = Some(Some(d.clone()));
-                }
-            }
-        });
+        }
+    });
     picked
 }
 
@@ -2522,17 +2456,16 @@ impl HudApp {
                 (VoiceResponseMode::TextOnly, "Silent Text-Only", "Never speak; answers only appear here"),
             ] {
                 let selected = current == mode;
-                let text = RichText::new(label).size(ts(11.0)).color(if selected { p.accent } else { p.muted });
-                if ui.add(egui::Button::new(text).selected(selected)).on_hover_text(hover).clicked() && !selected {
+                if holo_ui::key_on(ui, label, selected).on_hover_text(hover).clicked() && !selected {
                     self.command(HudCommand::SetResponseMode { mode });
                 }
             }
             if let VoiceResponseMode::CustomCondition(c) = &current {
-                pill(ui, &p, format!("CUSTOM: {}", c.replace('_', " ")), p.amber)
+                pill(ui, format!("CUSTOM: {}", c.replace('_', " ")), p.amber)
                     .on_hover_text("A custom rule JAI applies per answer (set by voice or chat)");
             }
             if cfg.voice_muted {
-                pill(ui, &p, "voice muted", p.red).on_hover_text("Say \"unmute your voice\" to hear JAI again");
+                pill(ui, "voice muted", p.red).on_hover_text("Say \"unmute your voice\" to hear JAI again");
             }
         });
     }
@@ -2548,7 +2481,7 @@ impl HudApp {
             "calibrating" | "mic_test" => p.amber,
             _ => p.accent,
         };
-        card(ui, &p, "MICROPHONE & VAD", |ui| chip(ui, phase, phase_colour), |ui| {
+        card(ui, "MICROPHONE & VAD", |ui| chip(ui, phase, phase_colour), |ui| {
             if let Some(level) = &m.level {
                 let value = if level.phase == "muted" {
                     "mic muted".to_string()
@@ -2557,21 +2490,19 @@ impl HudApp {
                 } else {
                     format!("{:.1} dBFS", level.rms_db)
                 };
-                row(ui, &p, "Input level", value);
+                row(ui, "Input level", value);
                 let voice = level.rms >= level.start_gate;
                 meter(
                     ui,
-                    &p,
                     db_fraction(level.rms_db),
                     12.0,
                     if voice { p.green } else { p.accent },
                     &[(db_fraction(to_db(level.noise_floor)), p.violet), (db_fraction(to_db(level.start_gate)), p.amber)],
                 );
-                row(ui, &p, "Speech probability (Silero)", format!("{:.2}", level.probability));
+                row(ui, "Speech probability (Silero)", format!("{:.2}", level.probability));
                 let hot = level.probability >= level.start_threshold;
                 meter(
                     ui,
-                    &p,
                     level.probability,
                     7.0,
                     if hot { p.amber } else { p.accent },
@@ -2588,30 +2519,30 @@ impl HudApp {
                     }
                 });
             } else {
-                muted(ui, &p, "Waiting for the microphone…");
+                muted(ui, "Waiting for the microphone…");
             }
-            muted(ui, &p, if m.vad_note.is_empty() { " " } else { m.vad_note.as_str() });
+            muted(ui, if m.vad_note.is_empty() { " " } else { m.vad_note.as_str() });
             if let Some(cfg) = &m.cfg {
                 let mut start = cfg.vad_start_threshold;
-                let r = slider(ui, &p, "VAD sensitivity (start threshold)", format!("{start:.2}"), egui::Slider::new(&mut start, 0.2..=0.9).step_by(0.01))
+                let r = slider(ui, "VAD sensitivity (start threshold)", format!("{start:.2}"), crate::holo_ui::Slider::new(&mut start, 0.2..=0.9).step_by(0.01))
                     .on_hover_text("Silero probability needed to start an utterance (lower = more sensitive)");
                 if r.changed() {
                     self.command(HudCommand::SetVad { start_threshold: Some(start), release_threshold: None, silence_ms: None, noise_multiplier: None });
                 }
                 let mut release = cfg.vad_release_threshold;
-                let r = slider(ui, &p, "Release threshold", format!("{release:.2}"), egui::Slider::new(&mut release, 0.1..=0.8).step_by(0.01))
+                let r = slider(ui, "Release threshold", format!("{release:.2}"), crate::holo_ui::Slider::new(&mut release, 0.1..=0.8).step_by(0.01))
                     .on_hover_text("Below this probability a frame counts as silence");
                 if r.changed() {
                     self.command(HudCommand::SetVad { start_threshold: None, release_threshold: Some(release), silence_ms: None, noise_multiplier: None });
                 }
                 let mut silence = cfg.silence_ms as f32;
-                let r = slider(ui, &p, "Silence before end-of-speech", format!("{silence:.0} ms"), egui::Slider::new(&mut silence, 150.0..=1500.0).step_by(10.0))
+                let r = slider(ui, "Silence before end-of-speech", format!("{silence:.0} ms"), crate::holo_ui::Slider::new(&mut silence, 150.0..=1500.0).step_by(10.0))
                     .on_hover_text("How long you must pause before JAI treats your sentence as finished");
                 if r.changed() {
                     self.command(HudCommand::SetVad { start_threshold: None, release_threshold: None, silence_ms: Some(silence as u32), noise_multiplier: None });
                 }
                 let mut multiplier = cfg.noise_multiplier;
-                let r = slider(ui, &p, "Noise gate multiplier", format!("×{multiplier:.1}"), egui::Slider::new(&mut multiplier, 1.2..=5.0).step_by(0.1))
+                let r = slider(ui, "Noise gate multiplier", format!("×{multiplier:.1}"), crate::holo_ui::Slider::new(&mut multiplier, 1.2..=5.0).step_by(0.1))
                     .on_hover_text("Speech must be this many times louder than the room noise to start");
                 if r.changed() {
                     self.command(HudCommand::SetVad { start_threshold: None, release_threshold: None, silence_ms: None, noise_multiplier: Some(multiplier) });
@@ -2620,11 +2551,11 @@ impl HudApp {
             ui.add_space(2.0);
             ui.columns(2, |cols| {
                 let w = cols[0].available_width();
-                let recalibrate = cols[0].add_sized([w, 26.0], egui::Button::new("Recalibrate"));
+                let recalibrate = holo_ui::key(&mut cols[0], "Recalibrate");
                 if recalibrate.on_hover_text("Re-measure the room noise (stay quiet for ~1 s)").clicked() {
                     self.command(HudCommand::Recalibrate);
                 }
-                let test = cols[1].add_sized([w, 26.0], egui::Button::new("Test mic"));
+                let test = holo_ui::key(&mut cols[1], "Test mic");
                 if test.on_hover_text("Record 2.5 s and run Whisper on it").clicked() {
                     self.command(HudCommand::TestMic);
                 }
@@ -2637,46 +2568,45 @@ impl HudApp {
         let mut refresh = false;
         card(
             ui,
-            &p,
             "AUDIO DEVICES",
             |ui| {
-                if ui.small_button("RELOAD").on_hover_text("Rescan devices").clicked() {
+                if crate::holo_ui::key(ui, "RELOAD").on_hover_text("Rescan devices").clicked() {
                     refresh = true;
                 }
             },
             |ui| {
                 let Some(cfg) = &m.cfg else {
-                    muted(ui, &p, "Loading…");
+                    muted(ui, "Loading…");
                     return;
                 };
-                muted(ui, &p, "Microphone");
+                muted(ui, "Microphone");
                 if let Some(device) = device_combo(ui, "hud_mic", "Auto (default + failover)", &m.inputs, cfg.requested_mic.as_deref()) {
                     self.command(HudCommand::SetMicDevice { device });
                 }
-                row(ui, &p, "Active", &cfg.active_mic);
-                muted(ui, &p, "Speaker");
+                row(ui, "Active", &cfg.active_mic);
+                muted(ui, "Speaker");
                 if let Some(device) = device_combo(ui, "hud_speaker", "System default", &m.outputs, cfg.requested_speaker.as_deref()) {
                     self.command(HudCommand::SetSpeakerDevice { device });
                 }
-                row(ui, &p, "Active", &cfg.active_speaker);
+                row(ui, "Active", &cfg.active_speaker);
                 let mut loudness = cfg.loudness_pct as f32;
-                if slider(ui, &p, "JAI voice loudness", format!("{loudness:.0} %"), egui::Slider::new(&mut loudness, 0.0..=200.0).step_by(5.0)).changed() {
+                if slider(ui, "JAI voice loudness", format!("{loudness:.0} %"), crate::holo_ui::Slider::new(&mut loudness, 0.0..=200.0).step_by(5.0)).changed() {
                     self.command(HudCommand::SetLoudness { volume_pct: loudness as u8 });
                 }
                 ui.horizontal(|ui| {
                     let voices = if cfg.voices.is_empty() { std::slice::from_ref(&cfg.voice) } else { cfg.voices.as_slice() };
-                    egui::ComboBox::from_id_salt("hud_voice").width(ui.available_width() - 110.0).selected_text(&cfg.voice).show_ui(ui, |ui| {
+                    crate::holo_ui::Picker::from_id_salt("hud_voice").width(ui.available_width() - 110.0).selected_text(&cfg.voice).show_ui(ui, |ui| {
                         for voice in voices {
-                            if ui.selectable_label(*voice == cfg.voice, voice).clicked() {
+                            if crate::holo_ui::item(ui, voice, *voice == cfg.voice).clicked() {
                                 self.command(HudCommand::SetVoice { voice: voice.clone() });
                             }
                         }
                     });
-                    if ui.button("Test voice").clicked() {
+                    if crate::holo_ui::key(ui, "Test voice").clicked() {
                         self.command(HudCommand::TestVoice);
                     }
                 });
-                row(ui, &p, "Speech engines", format!("{} · {}", if cfg.stt_ready { "whisper OK: " } else { "whisper loading…" }, cfg.tts_status))
+                row(ui, "Speech engines", format!("{} · {}", if cfg.stt_ready { "whisper OK: " } else { "whisper loading…" }, cfg.tts_status))
                     .on_hover_text(format!("{} | {}", cfg.stt_model, cfg.tts_status));
             },
         );
@@ -2690,20 +2620,19 @@ impl HudApp {
         let cpu_name = m.telemetry.as_ref().map(|t| t.cpu_name.trim().to_string()).unwrap_or_default();
         card(
             ui,
-            &p,
             "SYSTEM",
             |ui| {
                 ui.add(egui::Label::new(RichText::new(cpu_name).size(ts(10.5)).color(p.muted)).truncate());
             },
             |ui| {
                 let Some(t) = &m.telemetry else {
-                    muted(ui, &p, "Collecting telemetry…");
+                    muted(ui, "Collecting telemetry…");
                     return;
                 };
-                let bar = |ui: &mut Ui, pct: f32, hot: bool| meter(ui, &p, pct / 100.0, 6.0, if hot { p.amber } else { p.accent }, &[]);
-                row(ui, &p, "CPU", format!("{:.1}% · {} threads", t.cpu_usage_pct, t.cpu_cores));
+                let bar = |ui: &mut Ui, pct: f32, hot: bool| meter(ui, pct / 100.0, 6.0, if hot { p.amber } else { p.accent }, &[]);
+                row(ui, "CPU", format!("{:.1}% · {} threads", t.cpu_usage_pct, t.cpu_cores));
                 bar(ui, t.cpu_usage_pct, t.cpu_usage_pct > 85.0);
-                row(ui, &p, "RAM", format!("{:.1} / {:.1} GB", t.ram_used_gb, t.ram_total_gb));
+                row(ui, "RAM", format!("{:.1} / {:.1} GB", t.ram_used_gb, t.ram_total_gb));
                 bar(ui, t.ram_usage_pct, t.ram_usage_pct > 90.0);
                 match &t.gpu {
                     Some(g) => {
@@ -2717,21 +2646,21 @@ impl HudApp {
                         if let Some(w) = g.power_w {
                             parts.push(format!("{w:.0} W"));
                         }
-                        row(ui, &p, &g.name.replace("NVIDIA GeForce ", ""), if parts.is_empty() { "—".into() } else { parts.join(" · ") });
+                        row(ui, &g.name.replace("NVIDIA GeForce ", ""), if parts.is_empty() { "—".into() } else { parts.join(" · ") });
                         bar(ui, g.utilization_pct.unwrap_or(0.0), g.temperature_c.unwrap_or(0.0) >= 80.0);
                         if let (Some(used), Some(total)) = (g.vram_used_mb, g.vram_total_mb.filter(|t| *t > 0)) {
-                            row(ui, &p, "VRAM", format!("{:.1} / {:.1} GB", used as f32 / 1024.0, total as f32 / 1024.0));
+                            row(ui, "VRAM", format!("{:.1} / {:.1} GB", used as f32 / 1024.0, total as f32 / 1024.0));
                             let pct = used as f32 / total as f32 * 100.0;
                             bar(ui, pct, pct > 92.0);
                         }
                     }
                     None => {
-                        row(ui, &p, "GPU", "no telemetry");
+                        row(ui, "GPU", "no telemetry");
                     }
                 }
-                row(ui, &p, "Network", format!("↓ {} · ↑ {}", rate(t.net_down_kbps), rate(t.net_up_kbps)));
+                row(ui, "Network", format!("↓ {} · ↑ {}", rate(t.net_down_kbps), rate(t.net_up_kbps)));
                 for d in &t.disks {
-                    row(ui, &p, &format!("Drive {}", d.mount), format!("{:.0} GB free / {:.0} GB", d.free_gb, d.total_gb));
+                    row(ui, &format!("Drive {}", d.mount), format!("{:.0} GB free / {:.0} GB", d.free_gb, d.total_gb));
                     bar(ui, d.used_pct, d.used_pct > 92.0);
                 }
             },
@@ -2761,13 +2690,13 @@ impl HudApp {
                 ui.add_space(4.0);
                 ui.horizontal_wrapped(|ui| match card.status.as_str() {
                     "pending" => {
-                        if button(ui, p, &format!("{}", card.label), Tone::Danger).clicked() {
+                        if button(ui, &format!("{}", card.label), Tone::Danger).clicked() {
                             self.command(HudCommand::PowerCard { id: card.id.clone(), confirm: true });
                         }
-                        if ui.button("Cancel").clicked() {
+                        if crate::holo_ui::key(ui, "Cancel").clicked() {
                             self.command(HudCommand::PowerCard { id: card.id.clone(), confirm: false });
                         }
-                        muted(ui, p, "or say “yes” / “no” within 30 s");
+                        muted(ui, "or say “yes” / “no” within 30 s");
                     }
                     "confirmed" => {
                         ui.label(RichText::new(if card.action == "restart" { "Restarting…" } else { "Shutting down…" }).color(p.red));
@@ -2807,13 +2736,13 @@ impl HudApp {
                 ui.add_space(4.0);
                 ui.horizontal(|ui| match card.status.as_str() {
                     "pending" => {
-                        if button(ui, p, "Send via WhatsApp", Tone::On).clicked() {
+                        if button(ui, "Send via WhatsApp", Tone::On).clicked() {
                             self.command(HudCommand::MessageCard { id: card.id.clone(), send: true });
                         }
-                        if ui.button("Cancel").clicked() {
+                        if crate::holo_ui::key(ui, "Cancel").clicked() {
                             self.command(HudCommand::MessageCard { id: card.id.clone(), send: false });
                         }
-                        muted(ui, p, "or just say “yes”");
+                        muted(ui, "or just say “yes”");
                     }
                     "sent" => {
                         ui.label(RichText::new("OK: Sent").color(p.green));
@@ -2836,19 +2765,27 @@ impl HudApp {
         if *until <= now {
             return;
         }
-        let p = self.palette;
+        let t = holo::theme();
         let pulse = ((ctx.input(|i| i.time) * 6.0).sin().abs() * 0.7 + 0.3) as f32;
         egui::Area::new(egui::Id::new("hud_room_alert"))
             .order(egui::Order::Foreground)
             .fixed_pos(pos2(0.0, 0.0))
             .interactable(false)
             .show(ctx, |ui| {
+                // The screen's edge beats in the caution colour (light, not a painted frame),
+                // and what it is stands on a plate under the top rail.
                 let rect = home_screen(ctx);
-                ui.painter().rect_stroke(rect.shrink(3.0), Rounding::ZERO, stroke(6.0, p.amber.gamma_multiply(pulse)));
+                let edge = rect.shrink(1.0);
+                let mut light = holo::Light::new(ui.painter());
+                light.halo(&[edge.left_top(), edge.right_top(), edge.right_bottom(), edge.left_bottom()], true, 26.0, holo::lit(t.warn(), 0.5 * pulse));
+                light.strip(&[edge.left_top(), edge.right_top(), edge.right_bottom(), edge.left_bottom()], true, 2.0, holo::a(t.warn(), pulse));
+                light.paint(ui.painter());
                 let banner = Rect::from_center_size(pos2(rect.center().x, rect.top() + 70.0), vec2(rect.width().min(560.0), 44.0));
-                ui.painter().rect_filled(banner, Rounding::ZERO, p.card_solid);
-                ui.painter().rect_stroke(banner, Rounding::ZERO, stroke(1.5, p.amber));
-                ui.painter().text(banner.center(), Align2::CENTER_CENTER, format!(" {message}"), bold(13.0), p.amber);
+                crate::holo_frame::card(ui.painter(), banner, 0.0, 1.0);
+                holo::outline(ui.painter(), &holo::plate(banner, [0.0, 0.0, crate::holo_frame::CUT, 0.0]), t.warn());
+                let chip = holo_kit::chip(ui.painter(), pos2(banner.left() + 12.0, banner.center().y - 7.0), "ALERT", t.warn(), true, 1.0);
+                let words = holo::galley_within(ui.painter(), Face::Body, message, 14.0, t.ink(), banner.right() - chip.right() - 24.0);
+                ui.painter().galley(pos2(chip.right() + 10.0, banner.center().y - words.size().y / 2.0), words, t.ink());
             });
         ctx.request_repaint_after(Duration::from_millis(33));
     }
@@ -2860,23 +2797,23 @@ impl HudApp {
             Some(_) => format!("{n} match{}", if n == 1 { "" } else { "es" }),
             None => format!("{n} facts"),
         };
-        card(ui, &p, "LONG-TERM MEMORY", |ui| muted(ui, &p, count), |ui| {
+        card(ui, "LONG-TERM MEMORY", |ui| muted(ui, count), |ui| {
             ui.horizontal(|ui| {
                 let w = ui.available_width();
-                ui.add(egui::TextEdit::singleline(&mut self.memory_key).hint_text("key (e.g. coffee)").desired_width(w * 0.5));
-                egui::ComboBox::from_id_salt("hud_memory_category")
+                crate::holo_ui::slot(ui, egui::TextEdit::singleline(&mut self.memory_key).hint_text("key (e.g. coffee)").desired_width(w * 0.5));
+                crate::holo_ui::Picker::from_id_salt("hud_memory_category")
                     .width(ui.available_width())
                     .selected_text(&self.memory_category)
                     .show_ui(ui, |ui| {
                         for c in MEMORY_CATEGORIES {
-                            ui.selectable_value(&mut self.memory_category, c.to_string(), c);
+                            crate::holo_ui::option(ui, &mut self.memory_category, c.to_string(), c);
                         }
                     });
             });
             ui.horizontal(|ui| {
-                ui.add(egui::TextEdit::singleline(&mut self.memory_value).hint_text("Fact to remember…").desired_width(ui.available_width() - 96.0));
-                ui.add(egui::DragValue::new(&mut self.memory_importance).range(1..=10).prefix("FAV ")).on_hover_text("Importance 1-10");
-                if button(ui, &p, "+", Tone::On).on_hover_text("Remember").clicked() {
+                crate::holo_ui::slot(ui, egui::TextEdit::singleline(&mut self.memory_value).hint_text("Fact to remember…").desired_width(ui.available_width() - 96.0));
+                ui.add(crate::holo_ui::Number::new(&mut self.memory_importance).range(1..=10).prefix("FAV ")).on_hover_text("Importance 1-10");
+                if button(ui, "+", Tone::On).on_hover_text("Remember").clicked() {
                     let (key, value) = (self.memory_key.trim().to_string(), self.memory_value.trim().to_string());
                     if !key.is_empty() && !value.is_empty() {
                         self.command(HudCommand::AddMemory {
@@ -2890,24 +2827,24 @@ impl HudApp {
                     }
                 }
             });
-            let search = ui.add(egui::TextEdit::singleline(&mut self.memory_search).hint_text("Search memories…").desired_width(f32::INFINITY));
+            let search = crate::holo_ui::slot(ui, egui::TextEdit::singleline(&mut self.memory_search).hint_text("Search memories…").desired_width(f32::INFINITY));
             if search.changed() {
                 self.memory_search_at = Some(Instant::now());
             }
             ui.add_space(2.0);
             if m.memories.is_empty() {
-                muted(ui, &p, if m.memory_query.is_some() { "No matches." } else { "Nothing remembered yet." });
+                muted(ui, if m.memory_query.is_some() { "No matches." } else { "Nothing remembered yet." });
             }
             for mem in m.memories.iter().take(120) {
-                item(ui, &p, None, |ui| {
+                item(ui, None, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(RichText::new(&mem.key).font(bold(12.0)).color(p.accent));
                         chip(ui, &mem.category, p.green);
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            if ui.small_button("X").on_hover_text("Forget this").clicked() {
+                            if crate::holo_ui::key(ui, "X").on_hover_text("Forget this").clicked() {
                                 self.command(HudCommand::DeleteMemory { id_or_key: mem.id.to_string() });
                             }
-                            muted(ui, &p, format!("FAV {}", mem.importance));
+                            muted(ui, format!("FAV {}", mem.importance));
                         });
                     });
                     ui.add(egui::Label::new(RichText::new(&mem.value).size(ts(12.0))).wrap());
@@ -2918,28 +2855,28 @@ impl HudApp {
 
     fn skills_card(&mut self, ui: &mut Ui, m: &HudModel) {
         let p = self.palette;
-        card(ui, &p, "SKILLS", |ui| muted(ui, &p, m.skills.len().to_string()), |ui| {
+        card(ui, "SKILLS", |ui| muted(ui, m.skills.len().to_string()), |ui| {
             if m.skills.is_empty() {
-                muted(ui, &p, "No skills yet — say “create a skill that …”");
+                muted(ui, "No skills yet — say “create a skill that …”");
             }
             for skill in &m.skills {
-                item(ui, &p, None, |ui| {
+                item(ui, None, |ui| {
                     ui.horizontal(|ui| {
                         let title = if skill.title.is_empty() { &skill.name } else { &skill.title };
                         ui.label(RichText::new(title).font(bold(12.0)).color(p.accent));
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            if ui.small_button("X").on_hover_text("Delete skill").clicked() {
+                            if crate::holo_ui::key(ui, "X").on_hover_text("Delete skill").clicked() {
                                 self.confirm_delete_skill = Some(skill.name.clone());
                             }
-                            if ui.small_button("Run").clicked() {
+                            if crate::holo_ui::key(ui, "Run").clicked() {
                                 self.command(HudCommand::RunSkill { name: skill.name.clone() });
                             }
-                            muted(ui, &p, format!("{}×", skill.usage_count));
+                            muted(ui, format!("{}×", skill.usage_count));
                         });
                     });
                     ui.add(egui::Label::new(RichText::new(&skill.description).size(ts(12.0))).wrap());
                     if !skill.trigger_phrases.is_empty() {
-                        muted(ui, &p, format!("“{}”", skill.trigger_phrases.join("” · “")));
+                        muted(ui, format!("“{}”", skill.trigger_phrases.join("” · “")));
                     }
                 });
             }
@@ -2948,20 +2885,18 @@ impl HudApp {
 
     fn tools_card(&mut self, ui: &mut Ui, m: &HudModel) {
         let p = self.palette;
-        card(ui, &p, "TOOL LOG", |ui| muted(ui, &p, m.tool_count.to_string()), |ui| {
+        card(ui, "TOOL LOG", |ui| muted(ui, m.tool_count.to_string()), |ui| {
             if m.tools.is_empty() {
-                muted(ui, &p, "No tools used yet.");
+                muted(ui, "No tools used yet.");
             }
             for t in &m.tools {
-                item(ui, &p, Some(if t.success { p.green } else { p.red }), |ui| {
+                item(ui, Some(if t.success { p.green } else { p.red }), |ui| {
                     ui.horizontal(|ui| {
                         ui.label(RichText::new(&t.tool).font(bold(11.5)).color(p.accent));
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| muted(ui, &p, &t.meta));
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| muted(ui, &t.meta));
                     });
                     ui.add(egui::Label::new(RichText::new(&t.summary).size(ts(12.0))).wrap());
-                    egui::CollapsingHeader::new(RichText::new("details").size(ts(10.5)).color(p.muted))
-                        .id_salt(("hud_tool", t.id))
-                        .show(ui, |ui| {
+                    holo_ui::fold(ui, ("hud_tool", t.id), "details", false, |ui| {
                             ui.add(egui::Label::new(RichText::new(&t.details).monospace().size(ts(10.5)).color(p.muted)).wrap());
                         });
                 });
@@ -2971,26 +2906,26 @@ impl HudApp {
 
     fn brain_card(&mut self, ui: &mut Ui, m: &HudModel) {
         let p = self.palette;
-        card(ui, &p, "BRAIN", |_| {}, |ui| {
+        card(ui, "BRAIN", |_| {}, |ui| {
             let Some(cfg) = &m.cfg else {
-                muted(ui, &p, "Loading…");
+                muted(ui, "Loading…");
                 return;
             };
-            muted(ui, &p, "Primary model");
+            muted(ui, "Primary model");
             let mut models = m.models.clone();
             if !models.contains(&cfg.model) {
                 models.push(cfg.model.clone());
             }
-            egui::ComboBox::from_id_salt("hud_model").width(ui.available_width()).selected_text(&cfg.model).show_ui(ui, |ui| {
+            crate::holo_ui::Picker::from_id_salt("hud_model").width(ui.available_width()).selected_text(&cfg.model).show_ui(ui, |ui| {
                 for model in &models {
-                    if ui.selectable_label(*model == cfg.model, model).clicked() && *model != cfg.model {
+                    if crate::holo_ui::item(ui, model, *model == cfg.model).clicked() && *model != cfg.model {
                         self.command(HudCommand::SetModel { model: model.clone() });
                     }
                 }
             });
-            row(ui, &p, "Fallback", &cfg.fallback_model);
-            row(ui, &p, "Engine", &cfg.llm).on_hover_text(&cfg.llm);
-            if ui.button("Clear conversation").on_hover_text("Forget the current conversation (long-term memory is kept)").clicked() {
+            row(ui, "Fallback", &cfg.fallback_model);
+            row(ui, "Engine", &cfg.llm).on_hover_text(&cfg.llm);
+            if crate::holo_ui::key(ui, "Clear conversation").on_hover_text("Forget the current conversation (long-term memory is kept)").clicked() {
                 self.command(HudCommand::ClearHistory);
             }
         });
@@ -3055,12 +2990,12 @@ impl HudApp {
         let right = crate::dynamic_popups::card_column_right(home, 360.0, console_rect());
         // In its last 0.4 s it fades away.
         let alpha = ((UNDO_CHIP_FOR - age).as_secs_f32() / 0.4).min(1.0);
-        let label = "[ UNDO ]";
-        let width = crate::hud_style::key_width(&ctx.layer_painter(egui::LayerId::background()), label);
+        let label = "UNDO";
+        let width = crate::holo_kit::key_width(&ctx.layer_painter(egui::LayerId::background()), label);
         let at = pos2(right - width, home.top() + HEADER_H + 10.0);
         egui::Area::new(egui::Id::new("hud_undo_chip")).order(egui::Order::Foreground).fixed_pos(at).show(ctx, |ui| {
-            let (rect, response) = ui.allocate_exact_size(vec2(width, crate::hud_style::KEY_H), Sense::click());
-            crate::hud_style::key(ui.painter(), rect.right(), rect.center().y, label, response.hovered(), response.is_pointer_button_down_on(), true, alpha);
+            let (rect, response) = ui.allocate_exact_size(vec2(width, crate::holo_kit::KEY_H), Sense::click());
+            holo_kit::key(ui.painter(), rect, label, response.hovered() as u8 as f32, response.is_pointer_button_down_on(), true, alpha);
             if response.on_hover_text("Take the last change back (\"undo that\")").clicked() {
                 self.run_calls(vec![("undo_last_action", serde_json::json!({}))]);
             }
@@ -3096,7 +3031,7 @@ impl HudApp {
         ctx.request_repaint();
         let now = cues.iter().rev().find(|(_, at)| *at <= t).and_then(|(k, _)| self.tour_rect(ctx, TOUR[*k].0));
         let id = egui::Id::new("jai_tour_light");
-        let alpha = ctx.animate_bool_with_time(id, now.is_some(), crate::hud_style::motion::NORMAL.as_secs_f32());
+        let alpha = ctx.animate_bool_with_time(id, now.is_some(), crate::holo_motion::LEAVE);
         // (Where nothing is lit it glides on from its last place.)
         let last = ctx.data(|d| d.get_temp::<Rect>(id)).or(now);
         let Some(target) = now.or(last) else { return };
@@ -3112,14 +3047,14 @@ impl HudApp {
             let mut open = true;
             board_window(ctx, "confirm_shutdown", "Shut down // are you sure", [380.0, 190.0], &mut open, |ui| {
                     ui.label("Shut down J.A.I. completely?");
-                    muted(ui, &p, "Closing the window only hides him in the tray.");
+                    muted(ui, "Closing the window only hides him in the tray.");
                     ui.add_space(6.0);
                     ui.horizontal(|ui| {
-                        if button(ui, &p, "Shut down", Tone::Danger).clicked() {
+                        if button(ui, "Shut down", Tone::Danger).clicked() {
                             self.confirm_shutdown = false;
                             self.command(HudCommand::Shutdown);
                         }
-                        if ui.button("Cancel").clicked() {
+                        if crate::holo_ui::key(ui, "Cancel").clicked() {
                             self.confirm_shutdown = false;
                         }
                     });
@@ -3137,11 +3072,11 @@ impl HudApp {
                     ui.label(format!("Delete the skill \"{name}\"?"));
                     ui.add_space(6.0);
                     ui.horizontal(|ui| {
-                        if button(ui, &p, "Delete", Tone::Danger).clicked() {
+                        if button(ui, "Delete", Tone::Danger).clicked() {
                             self.confirm_delete_skill = None;
                             self.command(HudCommand::DeleteSkill { name: name.clone() });
                         }
-                        if ui.button("Cancel").clicked() {
+                        if crate::holo_ui::key(ui, "Cancel").clicked() {
                             self.confirm_delete_skill = None;
                         }
                     });
@@ -3161,14 +3096,14 @@ impl HudApp {
         let mut open = self.settings_open;
         let mut s = iface.clone();
         board_window(ctx, "interface_settings", "Interface // look and layout", [400.0, 640.0], &mut open, |ui| {
-                muted(ui, &p, "Or just ask: “JAI, make the interface gold”, “hide the system panel”, “zoom in”, “stay on top”.");
+                muted(ui, "Or just ask: “JAI, make the interface gold”, “hide the system panel”, “zoom in”, “stay on top”.");
                 ui.add_space(4.0);
                 egui::Grid::new("hud_interface").num_columns(2).spacing([14.0, 8.0]).show(ui, |ui| {
                     ui.label("Theme");
                     let current = THEMES.iter().find(|t| t.name == s.theme).map(|t| t.display).unwrap_or("Custom");
-                    egui::ComboBox::from_id_salt("hud_theme").selected_text(current).show_ui(ui, |ui| {
+                    crate::holo_ui::Picker::from_id_salt("hud_theme").selected_text(current).show_ui(ui, |ui| {
                         for t in THEMES {
-                            if ui.selectable_label(s.theme == t.name, t.display).clicked() {
+                            if crate::holo_ui::item(ui, t.display, s.theme == t.name).clicked() {
                                 s.theme = t.name.to_string();
                                 s.accent = t.accent.to_string();
                                 s.background = t.background.to_string();
@@ -3178,7 +3113,7 @@ impl HudApp {
                     ui.end_row();
                     ui.label("Accent");
                     let mut colour = s.accent_rgb();
-                    if egui::color_picker::color_edit_button_srgb(ui, &mut colour).changed() {
+                    if crate::holo_ui::colour(ui, &mut colour).changed() {
                         s.accent = interface::hex(colour);
                         s.theme = "custom".into();
                     }
@@ -3190,17 +3125,17 @@ impl HudApp {
                     // lands off-grid again (66 %) — the window flickered between the two.
                     let shown = (interface::background_darkness(s.background_rgb()) * 20.0).round() * 5.0;
                     let mut depth = shown;
-                    let r = ui.add(egui::Slider::new(&mut depth, 0.0..=100.0).step_by(5.0).suffix(" %"));
+                    let r = ui.add(crate::holo_ui::Slider::new(&mut depth, 0.0..=100.0).step_by(5.0).suffix(" %"));
                     if r.changed() && (depth - shown).abs() >= 2.5 {
                         s.background = interface::hex(interface::with_darkness(s.background_rgb(), depth / 100.0));
                     }
                     ui.end_row();
                     ui.label("Corner rounding");
-                    ui.add(egui::Slider::new(&mut s.corner_rounding, 0.0..=32.0).step_by(1.0));
+                    ui.add(crate::holo_ui::Slider::new(&mut s.corner_rounding, 0.0..=32.0).step_by(1.0));
                     ui.end_row();
                     ui.label("Zoom");
                     let mut zoom = self.zoom_draft.unwrap_or(s.scale * 100.0);
-                    let r = ui.add(egui::Slider::new(&mut zoom, 50.0..=250.0).step_by(5.0).suffix(" %"));
+                    let r = ui.add(crate::holo_ui::Slider::new(&mut zoom, 50.0..=250.0).step_by(5.0).suffix(" %"));
                     if r.dragged() {
                         self.zoom_draft = Some(zoom);
                     } else if r.changed() || r.drag_stopped() || self.zoom_draft.is_some() {
@@ -3210,30 +3145,30 @@ impl HudApp {
                     ui.end_row();
                     ui.label("Opacity");
                     let mut opacity = s.opacity as f32;
-                    if ui.add(egui::Slider::new(&mut opacity, 15.0..=100.0).step_by(5.0).suffix(" %")).changed() {
+                    if ui.add(crate::holo_ui::Slider::new(&mut opacity, 15.0..=100.0).step_by(5.0).suffix(" %")).changed() {
                         s.opacity = opacity as u8;
                     }
                     ui.end_row();
                     ui.label("Layout");
                     ui.horizontal(|ui| {
                         for (layout, label) in [(HudLayout::Full, "Full"), (HudLayout::Compact, "Compact"), (HudLayout::Orb, "Orb")] {
-                            ui.selectable_value(&mut s.layout, layout, label);
+                            crate::holo_ui::option(ui, &mut s.layout, layout, label);
                         }
                     });
                     ui.end_row();
                     ui.label("Window");
                     ui.vertical(|ui| {
-                        ui.checkbox(&mut s.always_on_top, "Always on top");
-                        ui.checkbox(&mut s.fullscreen, "Full screen");
-                        ui.checkbox(&mut s.frameless, "Stark title bar (frameless)");
-                        ui.checkbox(&mut s.animations, "Animations");
-                        ui.checkbox(&mut s.header_telemetry, "Header telemetry");
-                        ui.checkbox(&mut s.orb_mode, "Pure orb mode");
+                        crate::holo_ui::toggle(ui, &mut s.always_on_top, "Always on top");
+                        crate::holo_ui::toggle(ui, &mut s.fullscreen, "Full screen");
+                        crate::holo_ui::toggle(ui, &mut s.frameless, "Stark title bar (frameless)");
+                        crate::holo_ui::toggle(ui, &mut s.animations, "Animations");
+                        crate::holo_ui::toggle(ui, &mut s.header_telemetry, "Header telemetry");
+                        crate::holo_ui::toggle(ui, &mut s.orb_mode, "Pure orb mode");
                     });
                     ui.end_row();
                     ui.label("Name");
                     let mut title = self.title_draft.clone().unwrap_or_else(|| s.title.clone());
-                    let r = ui.add(egui::TextEdit::singleline(&mut title).desired_width(180.0));
+                    let r = crate::holo_ui::slot(ui, egui::TextEdit::singleline(&mut title).desired_width(180.0));
                     if r.lost_focus() {
                         s.title = title;
                         self.title_draft = None;
@@ -3242,29 +3177,29 @@ impl HudApp {
                     }
                     ui.end_row();
                 });
-                ui.separator();
+                crate::holo_ui::rule(ui);
                 // The live layout state JAI controls by voice ("zen mode", "make the orb bigger").
                 ui.label("Live layout");
                 let mut state = s.layout_state((0.0, 0.0));
                 let before = state;
                 ui.horizontal_wrapped(|ui| {
-                    ui.checkbox(&mut state.show_audio_devices_panel, "Audio devices");
-                    ui.checkbox(&mut state.show_skills_panel, "Skills");
-                    ui.checkbox(&mut state.show_quick_pills_bar, "Quick pills");
-                    ui.checkbox(&mut state.show_telemetry_sidebar, "Telemetry");
-                    ui.checkbox(&mut state.show_orb_panel, "3D orb");
-                    ui.checkbox(&mut state.minimal_zen_mode, "Zen mode");
+                    crate::holo_ui::toggle(ui, &mut state.show_audio_devices_panel, "Audio devices");
+                    crate::holo_ui::toggle(ui, &mut state.show_skills_panel, "Skills");
+                    crate::holo_ui::toggle(ui, &mut state.show_quick_pills_bar, "Quick pills");
+                    crate::holo_ui::toggle(ui, &mut state.show_telemetry_sidebar, "Telemetry");
+                    crate::holo_ui::toggle(ui, &mut state.show_orb_panel, "3D orb");
+                    crate::holo_ui::toggle(ui, &mut state.minimal_zen_mode, "Zen mode");
                 });
                 egui::Grid::new("hud_live_layout").num_columns(2).spacing([14.0, 8.0]).show(ui, |ui| {
                     ui.label("Orb size");
                     let mut orb = state.orb_radius_scale * 100.0;
-                    if ui.add(egui::Slider::new(&mut orb, 40.0..=250.0).step_by(5.0).suffix(" %")).changed() {
+                    if ui.add(crate::holo_ui::Slider::new(&mut orb, 40.0..=250.0).step_by(5.0).suffix(" %")).changed() {
                         state.orb_radius_scale = orb / 100.0;
                     }
                     ui.end_row();
                     ui.label("Text size");
                     let mut font = state.ui_font_scale * 100.0;
-                    if ui.add(egui::Slider::new(&mut font, 75.0..=160.0).step_by(5.0).suffix(" %")).changed() {
+                    if ui.add(crate::holo_ui::Slider::new(&mut font, 75.0..=160.0).step_by(5.0).suffix(" %")).changed() {
                         state.ui_font_scale = font / 100.0;
                     }
                     ui.end_row();
@@ -3273,7 +3208,7 @@ impl HudApp {
                     s.apply_layout_state(&state);
                 }
                 ui.add_space(6.0);
-                if ui.button("Reset to defaults").clicked() {
+                if crate::holo_ui::key(ui, "Reset to defaults").clicked() {
                     s = InterfaceSettings::default();
                     self.zoom_draft = None;
                     self.title_draft = None;
@@ -3287,14 +3222,15 @@ impl HudApp {
     }
 
     fn offline_overlay(&self, ctx: &egui::Context) {
-        let p = self.palette;
+        let t = holo::theme();
         egui::Area::new(egui::Id::new("hud_offline"))
             .order(egui::Order::Foreground)
             .fixed_pos(pos2(0.0, 0.0))
             .show(ctx, |ui| {
                 let rect = ctx.screen_rect();
-                ui.painter().rect_filled(rect, Rounding::ZERO, p.card_solid.gamma_multiply(0.94));
-                ui.painter().text(rect.center(), Align2::CENTER_CENTER, "J.A.I. IS SHUTTING DOWN", bold(16.0), p.accent);
+                ui.painter().rect_filled(rect, Rounding::ZERO, holo::a(t.void(), 0.94));
+                let said = holo::text(ui.painter(), rect.center(), Align2::CENTER_CENTER, Face::Label, "J.A.I. is shutting down", 12.0, t.accent());
+                holo::rule(ui.painter(), pos2(said.left(), said.bottom() + 8.0), pos2(said.right(), said.bottom() + 8.0), holo::a(t.ink(), 0.3));
                 ui.allocate_rect(rect, Sense::click());
             });
     }
@@ -3366,19 +3302,19 @@ fn clip_card(ui: &mut Ui, p: &Palette, clip: &ClipCardView) {
     let name = std::path::Path::new(&clip.video).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| clip.video.clone());
     Frame::none()
         .fill(p.well)
-        .stroke(stroke(1.0, STARK_GOLD.gamma_multiply(0.55)))
+        .stroke(stroke(1.0, crate::holo::theme().accent().gamma_multiply(0.55)))
         .rounding(Rounding::same(p.r_bubble()))
         .inner_margin(Margin::symmetric(14.0, 10.0))
         .show(ui, |ui| {
             ui.set_max_width((ui.available_width() * 0.9).max(180.0));
             ui.label(RichText::new(format!("INSTANT REPLAY · LAST {} S", clip.seconds)).size(ts(9.5)).color(p.muted).extra_letter_spacing(0.6));
-            ui.add(egui::Label::new(RichText::new(&name).font(bold(12.5)).color(STARK_GOLD)).truncate()).on_hover_text(&clip.video);
+            ui.add(egui::Label::new(RichText::new(&name).font(bold(12.5)).color(crate::holo::theme().accent())).truncate()).on_hover_text(&clip.video);
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                if button(ui, p, "Open Video Clip", Tone::On).clicked() {
+                if button(ui, "Open Video Clip", Tone::On).clicked() {
                     open_path(&clip.video, false);
                 }
-                if ui.add(egui::Button::new(RichText::new("Open Folder").size(ts(12.0)))).clicked() {
+                if holo_ui::key(ui, "Open folder").clicked() {
                     open_path(if clip.folder.is_empty() { &clip.video } else { &clip.folder }, clip.folder.is_empty());
                 }
             });
@@ -3409,25 +3345,12 @@ fn open_path(path: &str, reveal: bool) {
     }
 }
 
+/// The ground of a window of his own: the canvas's black (with Sir's opacity) and its dot grid.
 fn paint_background(ctx: &egui::Context, p: &Palette) {
     let rect = ctx.screen_rect();
     let painter = ctx.layer_painter(egui::LayerId::background());
     painter.rect_filled(rect, Rounding::ZERO, p.bg);
-    if p.oled {
-        // True black: every background pixel stays off.
-        return;
-    }
-    let grid = stroke(1.0, p.accent.gamma_multiply(if p.light { 0.07 } else { 0.035 }));
-    let mut x = rect.left() + 32.0;
-    while x < rect.right() {
-        painter.line_segment([pos2(x, rect.top()), pos2(x, rect.bottom())], grid);
-        x += 32.0;
-    }
-    let mut y = rect.top() + 32.0;
-    while y < rect.bottom() {
-        painter.line_segment([pos2(rect.left(), y), pos2(rect.right(), y)], grid);
-        y += 32.0;
-    }
+    holo::dot_field(&painter, rect, DOT_SPACING, rect.center(), holo::a(holo::theme().ink(), DOT_ALPHA));
 }
 
 impl HudApp {
@@ -3453,15 +3376,15 @@ impl HudApp {
                 (DrawerTab::Look, "Look"),
             ] {
                 let selected = self.drawer_tab == tab;
-                if ui.add(egui::Button::new(RichText::new(label).size(ts(11.5)).color(if selected { p.accent } else { p.muted })).selected(selected)).clicked() {
+                if holo_ui::key_on(ui, label, selected).clicked() {
                     self.drawer_tab = tab;
                 }
             }
         });
         ui.add_space(8.0);
-        crate::hud_style::faded(ui, egui::ScrollArea::vertical().id_salt("hud_drawer").auto_shrink([false; 2]), |ui| match self.drawer_tab {
+        crate::holo_block::faded(ui, egui::ScrollArea::vertical().id_salt("hud_drawer").auto_shrink([false; 2]), |ui| match self.drawer_tab {
             DrawerTab::Voice => {
-                card(ui, &p, "REPLIES", |_| {}, |ui| self.response_mode_selector(ui, m));
+                card(ui, "REPLIES", |_| {}, |ui| self.response_mode_selector(ui, m));
                 self.audio_card(ui, m);
                 self.devices_card(ui, m);
             }
@@ -3482,19 +3405,19 @@ impl HudApp {
     /// Settings → System: the last turn's latency, the model, the reply mode and the languages.
     fn status_card(&mut self, ui: &mut Ui, m: &HudModel) {
         let p = self.palette;
-        card(ui, &p, "LATENCY & LANGUAGE", |_| {}, |ui| {
+        card(ui, "LATENCY & LANGUAGE", |_| {}, |ui| {
             let ms = |v: Option<u64>| v.map(|v| format!("{v} ms")).unwrap_or_else(|| "—".into());
             let [stt, token, audio] = m.latency;
-            row(ui, &p, "Speech-to-text", ms(stt)).on_hover_text("Last turn, from the end of your speech");
-            row(ui, &p, "First token", ms(token));
-            row(ui, &p, "First audio", ms(audio));
+            row(ui, "Speech-to-text", ms(stt)).on_hover_text("Last turn, from the end of your speech");
+            row(ui, "First token", ms(token));
+            row(ui, "First audio", ms(audio));
             if let Some(cfg) = &m.cfg {
-                row(ui, &p, "Language model", &cfg.model);
+                row(ui, "Language model", &cfg.model);
                 let mode = if cfg.voice_muted { "muted".to_string() } else { cfg.response_mode.display() };
-                row(ui, &p, "Replies", mode);
-                row(ui, &p, "Follow-up window", format!("{} s after each answer", cfg.window_secs));
+                row(ui, "Replies", mode);
+                row(ui, "Follow-up window", format!("{} s after each answer", cfg.window_secs));
             }
-            row(ui, &p, "Languages", "German, English, Denglisch → British English");
+            row(ui, "Languages", "German, English, Denglisch → British English");
         });
     }
 
@@ -3505,11 +3428,13 @@ impl HudApp {
 // a micro header strip (top right) and a micro audio/telemetry strip (bottom left). Ctrl+L opens
 // a small floating command prompt; everything else is voice.
 
-const OBSIDIAN: Color32 = Color32::from_rgb(0x02, 0x04, 0x08);
-const STRIP_INK: Color32 = Color32::from_rgb(0xD4, 0xEC, 0xF5);
-const STRIP_MUTED: Color32 = Color32::from_rgb(0x95, 0xB8, 0xC6);
-/// A muted microphone and the privacy lock's status.
-const MUTED_CRIMSON: Color32 = Color32::from_rgb(0xFF, 0x3A, 0x6A);
+/// The strips' ink and their quieter ink: the theme's structure colour.
+fn strip_ink() -> Color32 {
+    crate::holo::theme().ink()
+}
+fn strip_muted() -> Color32 {
+    crate::holo::theme().muted()
+}
 /// Header strip and telemetry strip heights.
 const HEADER_H: f32 = 16.0;
 const TELEMETRY_H: f32 = 14.0;
@@ -3535,8 +3460,51 @@ fn strip_font() -> FontId {
     FontId::monospace(11.0)
 }
 
-/// The status pill's cross-fade.
-const PILL_FADE: f32 = 0.033;
+/// The size of the shell's wide capitals (the top rail, the state plate, the key hints).
+const RAIL_TEXT: f32 = 8.0;
+
+/// How wide `text` stands in the rail's capitals.
+fn rail_width(painter: &egui::Painter, text: &str) -> f32 {
+    holo::galley(painter, Face::Label, text, RAIL_TEXT, Color32::WHITE).size().x
+}
+
+/// One word of the top rail. It stands in plain ink over the rule; the pointer lights it
+/// (`hot` 0-1: a filament of `colour` grows under it), and while its thing is open it is a
+/// solid leaning block of `colour` with black lettering.
+fn rail_key(painter: &egui::Painter, rect: Rect, text: &str, hot: f32, on: bool, colour: Color32) {
+    let t = holo::theme();
+    if on {
+        let shape = holo_kit::leaning(rect);
+        let mut light = holo::Light::new(painter);
+        light.halo(&[shape[0], shape[1], shape[2], shape[3], shape[0]], false, 7.0, holo::lit(colour, 0.24));
+        light.paint(painter);
+        holo::fill(painter, &shape, holo::mix(colour, t.hot(), 0.3 * hot));
+        holo::text(painter, rect.center(), Align2::CENTER_CENTER, Face::Label, text, RAIL_TEXT, Color32::BLACK);
+        return;
+    }
+    holo::text(painter, rect.center(), Align2::CENTER_CENTER, Face::Label, text, RAIL_TEXT, holo::mix(t.muted(), t.ink(), 0.45 + 0.55 * hot));
+    if hot > 0.02 {
+        let (mid, half, y) = (rect.center().x, (rect.width() / 2.0 - 3.0) * hot, rect.bottom() + 1.5);
+        let mut light = holo::Light::new(painter);
+        light.neon(&[pos2(mid - half, y), pos2(mid + half, y)], false, 1.3, holo::a(colour, hot), 0.8);
+        light.paint(painter);
+    }
+}
+
+/// A picker on the top rail: what is chosen (a camera's name) in a slot, a marker at its end.
+fn rail_picker(painter: &egui::Painter, rect: Rect, text: &str, hot: f32) {
+    let t = holo::theme();
+    let shape = holo::plate(rect, [0.0, 0.0, 5.0, 0.0]);
+    holo::fill(painter, &shape, holo::a(t.ink(), 0.05 * hot));
+    holo::outline(painter, &shape, holo::mix(holo::a(t.ink(), 0.34), t.accent(), hot));
+    let name = holo::galley_within(painter, Face::Label, text, RAIL_TEXT, t.ink(), rect.width() - 30.0);
+    painter.galley(pos2(rect.left() + 8.0, rect.center().y - name.size().y / 2.0), name, t.ink());
+    let c = pos2(rect.right() - 12.0, rect.center().y);
+    painter.add(Shape::convex_polygon(vec![c + vec2(-3.5, -2.0), c + vec2(3.5, -2.0), c + vec2(0.0, 2.5)], holo::mix(t.muted(), t.accent(), hot), Stroke::NONE));
+}
+
+/// The state plate's cross-fade.
+const PILL_FADE: f32 = 0.12;
 
 /// Where the screen card stands: under the emblem at home, above the bottom strip while the
 /// emblem is docked; always whole on the screen.
@@ -3577,7 +3545,8 @@ fn paint_frost(ctx: &egui::Context, screen: Rect) {
     }
     ctx.request_repaint();
     let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("jai_screen_frost")));
-    painter.rect_filled(screen, Rounding::ZERO, Color32::from_rgba_unmultiplied(205, 228, 245, (frost * 70.0) as u8));
+    // (The ink's own tint: the glass mists over while he looks.)
+    painter.rect_filled(screen, Rounding::ZERO, holo::a(holo::theme().ink(), 0.27 * frost));
 }
 
 /// Where the key hints end on the right: clear of the docked emblem's corner, which moves left
@@ -3592,13 +3561,23 @@ fn key_hints(painter: &egui::Painter, right: f32, mid: f32) -> Vec<(&'static str
     let mut placed = Vec::new();
     let mut x = right;
     for label in ["ESC INTERRUPT", "F11 FULLSCREEN", "F1 MUTE"] {
-        let size = painter.layout_no_wrap(label.to_string(), strip_font(), STRIP_MUTED).size();
+        let size = vec2(rail_width(painter, label) + 10.0, TELEMETRY_H);
         let rect = Rect::from_min_size(pos2(x - size.x, mid - size.y / 2.0), size);
         x = rect.left() - 18.0;
         placed.push((label, rect));
     }
     placed.reverse();
     placed
+}
+
+/// One key hint in `rect`: the key as a cap (an outlined block), what it does beside it.
+fn paint_key_hint(painter: &egui::Painter, rect: Rect, label: &str, hot: bool) {
+    let t = holo::theme();
+    let (key, does) = label.split_once(' ').unwrap_or((label, ""));
+    let cap = Rect::from_min_size(rect.min, vec2(rail_width(painter, key) + 8.0, rect.height()));
+    holo::outline(painter, &holo::plate(cap, [0.0; 4]), if hot { t.accent() } else { holo::a(t.ink(), 0.40) });
+    holo::text(painter, cap.center(), Align2::CENTER_CENTER, Face::Label, key, RAIL_TEXT, if hot { t.accent() } else { t.ink() });
+    holo::text(painter, pos2(cap.right() + 6.0, rect.center().y), Align2::LEFT_CENTER, Face::Label, does, RAIL_TEXT, if hot { t.ink() } else { t.muted() });
 }
 
 /// The status pill's word for the HUD's state.
@@ -3621,15 +3600,34 @@ pub(crate) fn pill_word(state: &str, muted: bool, asleep: bool) -> &'static str 
 /// Every word the status pill shows (`pill_word`).
 pub(crate) const PILL_WORDS: [&str; 8] = ["LISTENING", "THINKING", "SEARCHING THE WEB", "LOADING BRAIN", "ON CPU · GAME", "SPEAKING", "MUTED", "STANDBY"];
 
-/// The pill's colours for its word, as in the reference videos: text, dot, fill, outline. They
-/// are the same in every theme (status colours, like the status red).
+/// Whether `word` is one of the waits (he is working on it).
+fn pill_works(word: &str) -> bool {
+    matches!(word, "THINKING" | "SEARCHING THE WEB" | "LOADING BRAIN" | "ON CPU · GAME")
+}
+
+/// The state plate's colours for its word: lettering, lamp, fill, edge. Colour is information:
+/// the accent for what he is doing (solid while he speaks), the alert for a microphone that
+/// is off, plain ink while he only listens.
 pub(crate) fn pill_colours(word: &str) -> [Color32; 4] {
-    let c = |hex: u32| Color32::from_rgb((hex >> 16) as u8, (hex >> 8) as u8, hex as u8);
+    let t = holo::theme();
     match word {
-        "LISTENING" => [c(0x7EF0A0), c(0x3EE07A), c(0x0F2A1A), c(0x2F8A55)],
-        "THINKING" | "SEARCHING THE WEB" | "LOADING BRAIN" | "ON CPU · GAME" => [c(0xFFA530), c(0xFFA530), c(0x2A1A06), c(0xA06A10)],
-        "SPEAKING" => [c(0xFF5A3A), c(0xFF5A3A), c(0x2A0A08), c(0xB03020)],
-        _ => [c(0x8A96A3), c(0x5A6673), c(0x10151B), c(0x3A4552)],
+        "LISTENING" => [t.ink(), t.accent(), Color32::TRANSPARENT, holo::a(t.ink(), 0.34)],
+        _ if pill_works(word) => [t.hot(), t.accent(), holo::a(t.accent(), 0.10), t.accent()],
+        "SPEAKING" => [Color32::BLACK, Color32::BLACK, t.accent(), t.accent()],
+        "MUTED" => [t.alert(), t.alert(), Color32::TRANSPARENT, holo::a(t.alert(), 0.70)],
+        _ => [t.muted(), t.faint(), Color32::TRANSPARENT, holo::a(t.ink(), 0.20)],
+    }
+}
+
+/// The colour a state reads in where it stands alone on the canvas (a lamp, a ring).
+pub(crate) fn state_colour(word: &str) -> Color32 {
+    let t = holo::theme();
+    match word {
+        "LISTENING" => t.ink(),
+        "SPEAKING" => t.hot(),
+        "MUTED" => t.alert(),
+        "STANDBY" => t.muted(),
+        _ => t.accent(),
     }
 }
 
@@ -3651,7 +3649,7 @@ fn pill_tip(word: &str) -> &'static str {
 /// left of the header row's boxes where they reach the centre; None where the row leaves no
 /// room at all.
 fn pill_rect(painter: &egui::Painter, screen: Rect, header: &[Rect]) -> Option<Rect> {
-    let width = PILL_WORDS.iter().map(|w| painter.layout_no_wrap(w.to_string(), strip_font(), STRIP_INK).size().x).fold(0.0, f32::max) + 30.0;
+    let width = PILL_WORDS.iter().map(|w| rail_width(painter, w)).fold(0.0, f32::max) + 36.0;
     let size = vec2(width, HEADER_H + 2.0);
     let centred = Rect::from_center_size(pos2(screen.center().x, screen.top() + 10.0 + HEADER_H / 2.0), size);
     if !header.iter().any(|r| r.expand(8.0).intersects(centred)) {
@@ -3662,35 +3660,26 @@ fn pill_rect(painter: &egui::Painter, screen: Rect, header: &[Rect]) -> Option<R
     (beside.left() >= screen.left() + 12.0).then_some(beside)
 }
 
-/// The thin line under the header strip (as in the reference videos): the theme's colour along
-/// the whole width, brightening towards a lit middle, with a faint glow under it. It stays
-/// above the blocks' area (`block_bounds`).
-fn header_rule(painter: &egui::Painter, screen: Rect) {
+/// The rule under the top rail: a hairline of ink across the screen with a tick at each end,
+/// and on its middle a filament in the accent that widens and brightens with JAI's `voice`
+/// (0-1). It stays above the blocks' area (`block_bounds`).
+fn header_rule(painter: &egui::Painter, screen: Rect, voice: f32) {
     let band = header_rule_band(screen);
     let (left, right, y) = (band.left(), band.right(), band.top());
     if right - left < 80.0 {
         return;
     }
-    let colour = crate::hud_board::active_colour();
-    let mid = (left + right) / 2.0;
-    let half = ((right - left) * 0.12).max(40.0);
-    // Along the line: where the brightness changes, and how bright it is there.
-    let stops = [(left, 0.10), (mid - half, 0.24), (mid, 0.9), (mid + half, 0.24), (right, 0.10)];
-    let mut mesh = egui::Mesh::default();
-    for (top, bottom, strength) in [(y, y + 1.0, 1.0f32), (y + 1.0, y + 3.0, 0.22)] {
-        for pair in stops.windows(2) {
-            let ((x0, a0), (x1, a1)) = (pair[0], pair[1]);
-            let base = mesh.vertices.len() as u32;
-            for (x, a) in [(x0, a0), (x1, a1)] {
-                let tint = colour.gamma_multiply(a * strength);
-                mesh.colored_vertex(pos2(x, top), tint);
-                mesh.colored_vertex(pos2(x, bottom), tint);
-            }
-            mesh.add_triangle(base, base + 1, base + 2);
-            mesh.add_triangle(base + 1, base + 3, base + 2);
-        }
+    let t = holo::theme();
+    let voice = voice.clamp(0.0, 1.0);
+    holo::rule(painter, pos2(left, y), pos2(right, y), holo::a(t.ink(), 0.16));
+    for x in [left, right] {
+        holo::rule(painter, pos2(x, y - 3.0), pos2(x, y + 3.0), holo::a(t.ink(), 0.45));
     }
-    painter.add(egui::Shape::mesh(mesh));
+    let mid = (left + right) / 2.0;
+    let half = (right - left) * (0.05 + 0.09 * voice);
+    let mut light = holo::Light::new(painter);
+    light.neon(&[pos2(mid - half, y + 0.5), pos2(mid + half, y + 0.5)], false, 1.2, holo::a(holo::mix(t.accent(), t.hot(), voice), 0.55 + 0.45 * voice), 0.5 + 0.7 * voice);
+    light.paint(painter);
 }
 
 /// Where the line under the header runs, its glow included.
@@ -3699,19 +3688,28 @@ fn header_rule_band(screen: Rect) -> Rect {
     Rect::from_min_max(pos2(screen.left() + 12.0, y), pos2(screen.right() - 12.0, y + 3.0))
 }
 
-/// The pill for `word` centred on `centre` at `alpha`: a capsule with a dot and the word.
+/// The state plate for `word` centred on `centre` at `alpha`: a leaning block with a lamp and
+/// the word. While he works a bar of light runs along its foot; while he speaks it is solid.
 fn paint_pill(painter: &egui::Painter, centre: Pos2, word: &str, alpha: f32) {
     if alpha <= 0.0 {
         return;
     }
-    let [ink, dot, fill, edge] = pill_colours(word);
-    let galley = painter.layout_no_wrap(word.to_string(), strip_font(), ink.gamma_multiply(alpha));
-    let rect = Rect::from_center_size(centre, vec2(galley.size().x + 30.0, HEADER_H + 2.0));
-    let round = Rounding::same(rect.height() / 2.0);
-    painter.rect_filled(rect, round, fill.gamma_multiply(alpha));
-    painter.rect_stroke(rect, round, stroke(1.0, edge.gamma_multiply(alpha)));
-    painter.circle_filled(pos2(rect.left() + 11.0, centre.y), 3.0, dot.gamma_multiply(alpha));
-    painter.galley(pos2(rect.left() + 19.0, centre.y - galley.size().y / 2.0), galley, ink.gamma_multiply(alpha));
+    let [ink, lamp, fill, edge] = pill_colours(word);
+    let rect = Rect::from_center_size(centre, vec2(rail_width(painter, word) + 36.0, HEADER_H + 2.0));
+    let shape = holo_kit::leaning(rect);
+    holo::fill(painter, &shape, holo::a(fill, alpha));
+    holo::outline(painter, &shape, holo::a(edge, alpha));
+    painter.rect_filled(Rect::from_center_size(pos2(rect.left() + 14.0, centre.y), vec2(5.0, 5.0)), Rounding::ZERO, holo::a(lamp, alpha));
+    holo::text(painter, pos2(rect.left() + 24.0, centre.y), Align2::LEFT_CENTER, Face::Label, word, RAIL_TEXT, holo::a(ink, alpha));
+    if pill_works(word) {
+        let clock = painter.ctx().input(|i| i.time);
+        let (from, to) = (rect.left() + 2.0, rect.right() - holo_kit::LEAN - 2.0);
+        let run = 22.0;
+        let x = from + (to - from - run) * crate::holo_motion::ease_in_out((clock * 0.8).fract() as f32);
+        let mut light = holo::Light::new(painter);
+        light.neon(&[pos2(x, rect.bottom()), pos2(x + run, rect.bottom())], false, 1.4, holo::a(holo::theme().hot(), alpha), 0.9);
+        light.paint(painter);
+    }
 }
 
 /// How strongly the voice rim shows for the microphone's VAD `phase` and level `mic` (0-1):
@@ -3993,28 +3991,27 @@ fn corner_orb_ui(ui: &mut Ui, emblem: &Core, c: &CornerOrbContent) -> OrbClick {
     }
     // Nothing behind it (Sir, 2026-11-14: "the orb in the corner shouldn't have a background
     // colour"): the window's black is see-through (`win32_desktop::key_out_black`), and the
-    // emblem is painted without the light round its lines, which on black would be a dark veil.
+    // core is painted without the light round its lines, which on black would be a dark veil.
     emblem.paint_in_crisp(&ui.painter().with_clip_rect(orb), orb);
+    let t = holo::theme();
     if let Some(share) = c.progress {
+        // What runs (a timer, a download) as arcs round it: lines only, as the core is here.
         let (centre, r) = (orb.center(), orb.width() * 0.5 - 3.0);
         let (from, sweep) = match share {
             Some(done) => (-TAU / 4.0, TAU * done.clamp(0.0, 1.0)),
             None => ((ui.input(|i| i.time) as f32 * 2.2) % TAU, TAU * 0.22),
         };
-        let arc: Vec<Pos2> = (0..=48).map(|k| from + sweep * k as f32 / 48.0).map(|a| centre + vec2(a.cos(), a.sin()) * r).collect();
-        ui.painter().add(Shape::line(arc, stroke(2.5, crate::hud_board::active_colour())));
+        let mut light = holo::Light::new(ui.painter());
+        light.arc(centre, r, from, from + sweep, 2.2, t.hot());
         for (k, done) in c.more_rings.iter().enumerate() {
-            let r = r - 5.0 * (k + 1) as f32;
-            let arc: Vec<Pos2> = (0..=48).map(|i| -TAU / 4.0 + TAU * done.clamp(0.0, 1.0) * i as f32 / 48.0).map(|a| centre + vec2(a.cos(), a.sin()) * r).collect();
-            ui.painter().add(Shape::line(arc, stroke(1.5, crate::hud_board::active_colour().gamma_multiply(0.75 - 0.2 * k as f32))));
+            light.arc(centre, r - 5.0 * (k + 1) as f32, -TAU / 4.0, -TAU / 4.0 + TAU * done.clamp(0.0, 1.0), 1.4, holo::mix(t.accent(), t.deep(), 0.3 * (k + 1) as f32));
         }
+        light.paint(ui.painter());
     }
     if c.game {
         // Game mode's badge: his mind waits in RAM, the game has the whole GPU.
-        let tag = ui.painter().layout_no_wrap("GAME · VRAM 0 MB".into(), FontId::monospace(11.0), crate::hud_board::active_colour());
-        let r = Rect::from_center_size(pos2(orb.center().x, orb.bottom() - tag.size().y), tag.size() + vec2(10.0, 5.0));
-        ui.painter().rect_filled(r, Rounding::ZERO, rgba([3, 7, 12], 0.9));
-        ui.painter().galley(r.min + vec2(5.0, 2.5), tag, Color32::PLACEHOLDER);
+        let width = rail_width(ui.painter(), "GAME · VRAM 0 MB") + 12.0;
+        holo_kit::chip(ui.painter(), pos2(orb.center().x - width / 2.0, orb.bottom() - 16.0), "GAME · VRAM 0 MB", t.accent(), true, 1.0);
     }
     response.on_hover_text("Drag to move · click for the console · double-click for the board · right-click for more · wheel for its size");
     if !c.words && !c.menu {
@@ -4022,53 +4019,48 @@ fn corner_orb_ui(ui: &mut Ui, emblem: &Core, c: &CornerOrbContent) -> OrbClick {
     }
     let plate = if c.words_left { Rect::from_min_max(all.min, pos2(orb.left() - 12.0, all.bottom())) } else { Rect::from_min_max(pos2(orb.right() + 12.0, all.top()), all.max) };
     let p = ui.painter().with_clip_rect(plate);
-    p.rect_filled(plate, Rounding::ZERO, rgba([3, 7, 12], 0.9));
-    crate::hud_style::border(&p, plate, 1.0, crate::hud_board::border_colour());
+    crate::holo_frame::card(&p, plate, 0.0, 1.0);
     let inner = plate.shrink2(vec2(12.0, 9.0));
     let mut y = inner.top();
     let key = |ui: &mut Ui, at: Pos2, text: &str, lit: bool| -> (bool, f32) {
-        let ink = if lit { crate::hud_board::active_colour() } else { STRIP_INK };
-        let galley = ui.painter().layout_no_wrap(text.to_string(), strip_font(), ink);
-        let rect = Rect::from_min_size(at, galley.size() + vec2(14.0, 8.0));
+        let rect = Rect::from_min_size(at, vec2(holo_kit::key_width(ui.painter(), text), holo_kit::KEY_H));
         let response = ui.interact(rect, ui.id().with(("corner_orb_key", text.to_string())), Sense::click());
-        ui.painter().rect_filled(rect, Rounding::ZERO, rgba([3, 7, 12], 0.9));
-        ui.painter().rect_stroke(rect, Rounding::ZERO, stroke(1.0, if response.hovered() || lit { crate::hud_board::active_colour() } else { crate::hud_board::border_colour() }));
-        ui.painter().galley(rect.min + vec2(7.0, 4.0), galley, ink);
+        holo_kit::key(ui.painter(), rect, text, response.hovered() as u8 as f32, response.is_pointer_button_down_on(), lit, 1.0);
         (response.clicked(), rect.right())
     };
+    let head = |y: f32, text: &str| holo::text(&p, pos2(inner.left(), y), Align2::LEFT_TOP, Face::Label, text, RAIL_TEXT, t.accent()).bottom() + 6.0;
     if c.menu {
         // His keys (his choice of 2026-11-14: "Right-click menu"): what a click on the orb does
         // and what Sir would else have to say.
-        p.text(pos2(inner.left(), y), Align2::LEFT_TOP, "J.A.I.", FontId::monospace(11.0), crate::hud_board::active_colour());
-        let mut at = pos2(inner.left(), y + 16.0);
-        for (text, click) in [("[ CONSOLE ]", OrbClick::Console), ("[ MY WINDOWS ]", OrbClick::Windows), ("[ QUIET 10 MIN ]", OrbClick::Quiet), ("[ BOARD ]", OrbClick::Board)] {
+        let mut at = pos2(inner.left(), head(y, "J.A.I."));
+        for (text, click) in [("CONSOLE", OrbClick::Console), ("MY WINDOWS", OrbClick::Windows), ("QUIET 10 MIN", OrbClick::Quiet), ("BOARD", OrbClick::Board)] {
             // (A second row once the first is full.)
-            if at.x + ui.painter().layout_no_wrap(text.to_string(), strip_font(), STRIP_INK).size().x + 14.0 > inner.right() {
-                at = pos2(inner.left(), at.y + 27.0);
+            if at.x + holo_kit::key_width(ui.painter(), text) > inner.right() {
+                at = pos2(inner.left(), at.y + holo_kit::KEY_H + 4.0);
             }
             let (clicked, right) = key(ui, at, text, false);
             if clicked {
                 did = click;
             }
-            at.x = right + 8.0;
+            at.x = right + 2.0;
         }
         return did;
     }
     if let Some(label) = &c.timer {
-        p.text(inner.right_bottom(), Align2::RIGHT_BOTTOM, label, strip_font(), crate::hud_board::active_colour());
+        holo::text(&p, inner.right_bottom(), Align2::RIGHT_BOTTOM, Face::Mono, label, 11.0, t.accent());
     }
     if !c.said.is_empty() {
-        let line = crate::hud_lines::fit(&p, &c.said, &strip_font(), inner.width());
-        y = p.text(pos2(inner.left(), y), Align2::LEFT_TOP, line, strip_font(), STRIP_MUTED).bottom() + 5.0;
+        let said = holo::galley_within(&p, Face::Body, &c.said, 12.5, t.muted(), inner.width());
+        let h = said.size().y;
+        p.galley(pos2(inner.left(), y), said, t.muted());
+        y += h + 5.0;
     }
     if let Some(question) = &c.question {
         // His question before a guess is carried out, and its two keys.
-        let galley = p.layout(crate::crash_guard::clip(question, 160).to_string(), FontId::proportional(13.5), STRIP_INK, inner.width());
-        let h = galley.size().y;
-        p.galley(pos2(inner.left(), y), galley, STRIP_INK);
-        let row = pos2(inner.left(), (y + h + 7.0).min(inner.bottom() - 24.0));
-        let (yes, right) = key(ui, row, "[ YES ]", true);
-        let (no, _) = key(ui, pos2(right + 8.0, row.y), "[ NO ]", false);
+        let h = holo::wrapped(&p, pos2(inner.left(), y), inner.width(), Face::Body, crate::crash_guard::clip(question, 160), 13.5, t.ink(), 4);
+        let row = pos2(inner.left(), (y + h + 7.0).min(inner.bottom() - holo_kit::KEY_H));
+        let (yes, right) = key(ui, row, "YES", true);
+        let (no, _) = key(ui, pos2(right + 2.0, row.y), "NO", false);
         if yes {
             did = OrbClick::Yes;
         } else if no {
@@ -4076,19 +4068,18 @@ fn corner_orb_ui(ui: &mut Ui, emblem: &Core, c: &CornerOrbContent) -> OrbClick {
         }
     } else if !c.choices.is_empty() {
         // The orders closest to the one he did not know: a click (or "the first one") takes one.
-        p.text(pos2(inner.left(), y), Align2::LEFT_TOP, "DID YOU MEAN", FontId::monospace(11.0), crate::hud_board::active_colour());
-        let mut at = pos2(inner.left(), y + 16.0);
+        let mut at = pos2(inner.left(), head(y, "Did you mean"));
         for (k, label) in c.choices.iter().enumerate().take(3) {
-            let text = crate::hud_lines::fit(&p, label, &strip_font(), inner.width() - 20.0);
-            let (clicked, _) = key(ui, at, &text, false);
-            if clicked {
+            let row = Rect::from_min_size(at, vec2(inner.width(), holo_ui::ROW_H));
+            let response = ui.interact(row, ui.id().with(("corner_orb_choice", k)), Sense::click());
+            holo_kit::row(&p, row, &format!("{:02}", k + 1), label, "", 0.0, response.hovered() as u8 as f32, 1.0);
+            if response.clicked() {
                 did = OrbClick::Choice(k);
             }
-            at.y += 27.0;
+            at.y += holo_ui::ROW_H;
         }
     } else if !c.answered.is_empty() {
-        let galley = p.layout(crate::crash_guard::clip(&c.answered, 220).to_string(), FontId::proportional(13.5), STRIP_INK, inner.width());
-        p.with_clip_rect(Rect::from_min_max(pos2(inner.left(), y), inner.max)).galley(pos2(inner.left(), y), galley, STRIP_INK);
+        holo::wrapped(&p.with_clip_rect(Rect::from_min_max(pos2(inner.left(), y), inner.max)), pos2(inner.left(), y), inner.width(), Face::Body, crate::crash_guard::clip(&c.answered, 220), 13.5, t.ink(), 8);
     } else if c.state != "idle" {
         // (What he is at, and Sir's words as he speaks, as under the emblem.)
         let _ = crate::hud_lines::paint(ui, pos2(inner.center().x, y + 2.0), inner.width(), &c.state, c.live_words, None);
@@ -4100,11 +4091,6 @@ fn corner_orb_ui(ui: &mut Ui, emblem: &Core, c: &CornerOrbContent) -> OrbClick {
 /// the strip is (points).
 const MINI_STRIP: &str = "strip";
 const MINI_STRIP_HEIGHT: f32 = 40.0;
-
-/// `a` → `b` by `t` (opaque colours).
-fn mix_colour(a: Color32, b: Color32, t: f32) -> Color32 {
-    mix(a, b, t)
-}
 
 /// What the mini strip shows.
 struct MiniStrip {
@@ -4119,49 +4105,52 @@ struct MiniStrip {
 }
 
 /// Paints the mini strip over the whole of `ui` (a bar some forty points tall): on the left a
-/// small emblem that turns, his name and what he is doing; in the middle Sir's last words and
+/// small core that turns, his name and what he is doing; in the middle Sir's last words and
 /// his last answer; on the right the running timers, the time and the key back to the board.
 /// Returns whether that key was clicked.
 fn paint_mini_strip(ui: &mut Ui, s: &MiniStrip) -> bool {
-    let accent = crate::hud_board::active_colour();
+    let t = holo::theme();
     let rect = ui.max_rect();
     let p = ui.painter().clone();
     let mid = rect.center().y;
-    crate::hud_style::surface(&p, rect, Color32::from_rgb(5, 9, 15), 1.0);
-    p.rect_filled(Rect::from_min_size(pos2(rect.left(), rect.bottom() - 1.0), vec2(rect.width(), 1.0)), Rounding::ZERO, accent.gamma_multiply(0.85));
-    // The emblem in small: two arcs that turn against each other round a lamp in the colour of
+    p.rect_filled(rect, Rounding::ZERO, block_slate());
+    holo::rule(&p, pos2(rect.left(), rect.bottom() - 1.0), pos2(rect.right(), rect.bottom() - 1.0), holo::a(t.ink(), 0.20));
+    holo::rule(&p, pos2(rect.left(), rect.bottom() - 1.0), pos2(rect.left() + 46.0, rect.bottom() - 1.0), t.accent());
+    // The core in small: two arcs that turn against each other round a lamp in the colour of
     // what he is doing.
-    let lamp = pill_colours(s.word)[0];
+    let lamp = state_colour(s.word);
     let centre = pos2(rect.left() + 20.0, mid);
-    let turn = ui.input(|i| i.time) as f32 * if matches!(s.word, "THINKING" | "SPEAKING") { 2.4 } else { 0.5 };
-    p.add(Shape::line(arc_points(centre, 10.5, turn, turn + 4.2), stroke(1.4, accent)));
-    p.add(Shape::line(arc_points(centre, 7.0, -turn * 1.3, -turn * 1.3 + 3.4), stroke(1.0, Color32::WHITE.gamma_multiply(0.8))));
-    p.circle_filled(centre, 2.6, lamp);
-    p.circle_filled(centre, 5.0, lamp.gamma_multiply(0.2));
-    let name = crate::hud_style::title_galley(&p, "J.A.I.", 15.0, accent, 120.0);
-    let name_right = centre.x + 18.0 + name.size().x;
-    p.galley(pos2(centre.x + 18.0, mid - name.size().y * 0.5), name, Color32::PLACEHOLDER);
-    let mut x = p.text(pos2(name_right + 12.0, mid + 0.5), Align2::LEFT_CENTER, s.word, FontId::monospace(11.0), lamp).right() + 26.0;
+    let turn = ui.input(|i| i.time) as f32 * if pill_works(s.word) || s.word == "SPEAKING" { 2.4 } else { 0.5 };
+    let mut light = holo::Light::new(&p);
+    light.neon_arc(centre, 10.5, turn, turn + 4.2, 1.3, t.accent(), 0.7);
+    light.arc(centre, 7.0, -turn * 1.3, -turn * 1.3 + 3.4, 1.0, holo::a(t.ink(), 0.8));
+    light.spark(centre, 5.0, holo::lit(lamp, 0.8));
+    light.paint(&p);
+    p.rect_filled(Rect::from_center_size(centre, vec2(4.0, 4.0)), Rounding::ZERO, lamp);
+    let name = holo::text(&p, pos2(centre.x + 18.0, mid), Align2::LEFT_CENTER, Face::Label, "J.A.I.", 10.0, t.ink());
+    let mut x = holo::text(&p, pos2(name.right() + 12.0, mid), Align2::LEFT_CENTER, Face::Label, s.word, RAIL_TEXT, lamp).right() + 26.0;
     // On the right: the key back to the board, the time, the running timers.
-    let (key, keys_left) = crate::hud_style::keys(ui, egui::Id::new("mini_strip"), rect.right() - 10.0, mid, &[("[ BOARD ]", false, "Back to the full board (or say: mini mode off)")], 1.0);
-    let mut right = p.text(pos2(keys_left - 14.0, mid + 0.5), Align2::RIGHT_CENTER, &s.clock, FontId::monospace(13.0), STRIP_INK).left() - 18.0;
+    let (key, keys_left) = holo_ui::keys_at(ui, egui::Id::new("mini_strip"), rect.right() - 10.0, mid, &[("BOARD", false, "Back to the full board (or say: mini mode off)")], 1.0);
+    let mut right = holo::text(&p, pos2(keys_left - 14.0, mid), Align2::RIGHT_CENTER, Face::Figure, &s.clock, 16.0, t.ink()).left() - 18.0;
     for timer in &s.timers {
-        right = p.text(pos2(right, mid + 0.5), Align2::RIGHT_CENTER, timer, FontId::monospace(11.0), accent).left() - 18.0;
+        right = holo::text(&p, pos2(right, mid), Align2::RIGHT_CENTER, Face::Mono, timer, 11.0, t.accent()).left() - 18.0;
     }
     // In between: his last words and JAI's last answer, each on one line and cut to its room.
     let room = (right - x).max(0.0);
-    let font = FontId::proportional(12.5);
     if room > 180.0 {
         let one_line = |text: &str| text.split_whitespace().collect::<Vec<_>>().join(" ");
+        let said = |x: f32, tag: &str, tag_ink: Color32, text: &str, ink: Color32, width: f32| {
+            let tag = holo::text(&p, pos2(x, mid), Align2::LEFT_CENTER, Face::Label, tag, RAIL_TEXT, tag_ink).right() + 8.0;
+            let words = holo::galley_within(&p, Face::Body, &one_line(text), 12.5, ink, width);
+            let end = tag + words.size().x;
+            p.galley(pos2(tag, holo::snap(mid - words.size().y / 2.0, holo::ppp(&p))), words, ink);
+            end
+        };
         if !s.sir.trim().is_empty() {
-            let tag = p.text(pos2(x, mid + 0.5), Align2::LEFT_CENTER, "YOU", FontId::monospace(11.0), STRIP_MUTED).right() + 8.0;
-            let shown = fit_width(&p, &one_line(&s.sir), &font, (room * 0.36 - 40.0).max(40.0));
-            x = p.text(pos2(tag, mid), Align2::LEFT_CENTER, shown, font.clone(), STRIP_INK).right() + 24.0;
+            x = said(x, "YOU", t.faint(), &s.sir, t.muted(), (room * 0.36 - 40.0).max(40.0)) + 24.0;
         }
         if !s.jai.trim().is_empty() && right - x > 90.0 {
-            let tag = p.text(pos2(x, mid + 0.5), Align2::LEFT_CENTER, "J.A.I.", FontId::monospace(11.0), accent.gamma_multiply(0.85)).right() + 8.0;
-            let shown = fit_width(&p, &one_line(&s.jai), &font, (right - tag).max(40.0));
-            p.text(pos2(tag, mid), Align2::LEFT_CENTER, shown, font, Color32::WHITE);
+            said(x, "J.A.I.", t.accent(), &s.jai, t.ink(), (right - x - 50.0).max(40.0));
         }
     }
     key.is_some()
@@ -4217,7 +4206,7 @@ fn emblem_inputs(m: &HudModel, console_open: bool, core_open: bool, centre_cover
 
 impl HudApp {
     fn new(cc: &eframe::CreationContext<'_>, app: Jai, rt: Handle, model: Arc<Mutex<HudModel>>, restore: Option<[i32; 4]>) -> Self {
-        install_fonts(&cc.egui_ctx);
+        holo::install_fonts(&cc.egui_ctx);
         configure_style(&cc.egui_ctx, app.config().read(|c| c.interface.font_scale));
         crate::theme_store::attach_database(&app.config().read(|c| c.memory_db_path.clone()));
         *lock(&SHARED.ctx) = Some(cc.egui_ctx.clone());
@@ -4390,12 +4379,16 @@ impl HudApp {
         if hovering {
             let screen = ctx.screen_rect();
             let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("jai_file_drop")));
-            let accent = crate::hud_board::active_colour();
-            painter.rect_filled(screen, Rounding::ZERO, rgba([3, 7, 12], 0.55));
+            let t = holo::theme();
+            painter.rect_filled(screen, Rounding::ZERO, holo::a(t.void(), 0.55));
+            // A slot in the middle of the screen, drawn in light, says where it goes.
             let zone = Rect::from_center_size(screen.center(), vec2(420.0, 120.0));
-            painter.rect_stroke(zone, Rounding::ZERO, stroke(1.5, accent));
-            crate::hud_board::brackets(&painter, zone.expand(6.0), accent);
-            painter.text(zone.center(), Align2::CENTER_CENTER, "+ DROP THE FILE HERE", FontId::monospace(16.0), accent);
+            let outline = holo::plate(zone, [0.0, 0.0, crate::holo_frame::CUT, 0.0]);
+            let mut light = holo::Light::new(&painter);
+            light.neon(&[outline[0], outline[1], outline[2], outline[3], outline[4], outline[0]], false, 1.4, t.accent(), 0.9);
+            light.paint(&painter);
+            holo::corner_ticks(&painter, zone.expand(6.0), crate::holo_frame::TICK, t.ink());
+            holo::text(&painter, zone.center(), Align2::CENTER_CENTER, Face::Label, "Drop the file here", 11.0, t.ink());
             ctx.request_repaint();
         }
         let Some(path) = dropped.last() else { return };
@@ -4715,10 +4708,7 @@ impl HudApp {
             if let Some((label, ok, until)) = &m.quick {
                 if *until > Instant::now() {
                     let at = pos2(rect.center().x, rect.bottom() - 14.0);
-                    let galley = ui.painter().layout_no_wrap(label.clone(), strip_font(), if *ok { STARK_GOLD } else { p.red });
-                    let pill_rect = Rect::from_center_size(at, galley.size() + vec2(14.0, 6.0));
-                    ui.painter().rect_filled(pill_rect, Rounding::ZERO, rgba([4, 10, 20], 0.85));
-                    ui.painter().galley(pill_rect.min + vec2(7.0, 3.0), galley, Color32::WHITE);
+                    holo_kit::chip(ui.painter(), pos2(at.x - rail_width(ui.painter(), label) / 2.0 - 6.0, at.y - 7.0), label, if *ok { holo::theme().accent() } else { holo::theme().alert() }, true, 1.0);
                 }
             }
             response.on_hover_text("Drag to move · wheel to resize · double-click for the full HUD");
@@ -4780,7 +4770,7 @@ impl HudApp {
             let board_rects = crate::hud_board::visible_rects(area);
             self.centre_covered = iface.orb_aside || crate::hud_dock::centre_covered(screen, &board_rects) || crate::hud_dock::stage_covers_centre(screen);
             // The board fades out while the core sphere fades in over it.
-            let core_t = ctx.animate_bool_with_time(egui::Id::new("hud_core_view"), self.core_open, crate::hud_style::motion::SLOW.as_secs_f32());
+            let core_t = ctx.animate_bool_with_time(egui::Id::new("hud_core_view"), self.core_open, crate::holo_motion::ARRIVE);
             if core_t < 1.0 {
                 let (board_click, board_moving) = ui.scope(|ui| {
                     ui.set_opacity(1.0 - core_t);
@@ -4841,7 +4831,7 @@ impl HudApp {
                 self.emblem.paint(&ui.painter_at(stage), screen);
             }
             self.emblem_spot = (frame.centre, frame.radius, frame.rest);
-            *lock(&CANVAS_ORIGIN) = Some((frame.centre, frame.rest));
+            *lock(&CANVAS_ORIGIN) = Some((frame.centre, frame.rest, frame.dock, self.reactor.emblem_voice()));
             // (Said once, a moment after the start: where the emblem stands, in the log.)
             if self.frames == 150 {
                 info!("[HUD] Emblem at {:.0},{:.0} (radius {:.0}) on a screen of {:.0}×{:.0} at {:.0},{:.0}", frame.centre.x, frame.centre.y, frame.radius, screen.width(), screen.height(), screen.left(), screen.top());
@@ -4890,7 +4880,7 @@ impl HudApp {
 
             // He heard his name: the emblem answers with a ripple (his silent "yes?").
             if let Some(age) = crate::hud_lines::woke_age().filter(|_| frame.dock < 0.5) {
-                if crate::hud_style::ripple(&ui.painter_at(stage), frame.centre, frame.radius, age, crate::hud_board::active_colour()) {
+                if crate::holo_core::ripple(&ui.painter_at(stage), frame.centre, frame.radius, age) {
                     ctx.request_repaint();
                 }
             }
@@ -4929,7 +4919,7 @@ impl HudApp {
             ui.scope(|ui| {
                 ui.set_opacity(calm);
                 self.header_strip(ui, ctx, iface, screen);
-                header_rule(&ui.painter_at(screen), screen);
+                header_rule(&ui.painter_at(screen), screen, self.reactor.emblem_voice());
             });
             if iface.status_pill {
                 self.status_pill(ui, m, screen);
@@ -5025,7 +5015,7 @@ impl HudApp {
         }
         if self.idle != target {
             // It comes up slowly and is gone at once.
-            self.idle = crate::hud_style::motion::approach(self.idle, target, dt, if idle { Duration::from_millis(1200) } else { crate::hud_style::motion::SLOW });
+            self.idle = crate::holo_motion::approach(self.idle, target, dt, if idle { 1.2 } else { crate::holo_motion::ARRIVE });
             ctx.request_repaint();
         }
         // (Its ring stands where the emblem is; with the emblem in its corner, in the middle.)
@@ -5044,7 +5034,7 @@ impl HudApp {
         if windows_still(ctx) {
             self.calm = target;
         } else if self.calm != target {
-            self.calm = crate::hud_style::motion::approach(self.calm, target, dt, crate::hud_style::motion::NORMAL);
+            self.calm = crate::holo_motion::approach(self.calm, target, dt, crate::holo_motion::LEAVE);
             ctx.request_repaint();
         }
         self.calm
@@ -5100,17 +5090,16 @@ impl HudApp {
             };
             ui.memory_mut(|mem| mem.open_popup(popup));
         }
-        let row = header_layout(&items, screen.left() + 12.0, screen.right() - 12.0, y, |t| painter.layout_no_wrap(t.to_string(), strip_font(), STRIP_INK).size().x);
+        let row = header_layout(&items, screen.left() + 12.0, screen.right() - 12.0, y, |t| rail_width(&painter, t));
         self.header_taken = row.placed.iter().map(|(_, r)| *r).chain(row.more).collect();
-        // On a screen too narrow for the whole strip: `[ MORE ]` holds the boxes that are not
-        // on the row (lit while one of them is).
+        let t = holo::theme();
+        let lit_by = |response: &egui::Response| ctx.animate_bool_with_time(response.id.with("rail_hot"), response.hovered(), crate::holo_motion::TOUCH);
+        // On a screen too narrow for the whole rail: `MORE` holds the words that are not on
+        // the row (solid while one of them is).
         if let Some(rect) = row.more {
             let response = ui.interact(rect, ui.id().with(("hud_strip", "more")), Sense::click());
             let lit = row.hidden.iter().any(|id| items.iter().any(|i| i.id == *id && i.on));
-            let colour = crate::hud_board::active_colour();
-            painter.rect_filled(rect, Rounding::ZERO, if lit { colour.gamma_multiply(0.14) } else { rgba([3, 7, 12], 0.9) });
-            painter.rect_stroke(rect, Rounding::ZERO, stroke(1.0, if response.hovered() || lit { colour } else { STRIP_INK.gamma_multiply(0.7) }));
-            painter.text(rect.center(), Align2::CENTER_CENTER, "MORE", strip_font(), if lit { colour } else { STRIP_INK });
+            rail_key(&painter, rect, "MORE", lit_by(&response), lit, t.accent());
             if response.clicked() {
                 ui.memory_mut(|mem| mem.toggle_popup(more_id));
             }
@@ -5118,8 +5107,7 @@ impl HudApp {
                 ui.set_min_width(190.0);
                 for id in row.hidden.iter().copied() {
                     let Some(item) = items.iter().find(|i| i.id == id) else { continue };
-                    let ink = if item.on { crate::hud_board::active_colour() } else { STRIP_INK };
-                    if ui.add(egui::Button::new(RichText::new(item.text.as_str()).font(strip_font()).color(ink)).frame(false)).clicked() {
+                    if holo_ui::item(ui, item.text.as_str(), item.on).clicked() {
                         if matches!(id, "theme" | "modules" | "view" | "source") {
                             if id == "source" {
                                 crate::camera_feed::refresh_devices();
@@ -5131,7 +5119,7 @@ impl HudApp {
                     }
                 }
             });
-            // The menus of the boxes it holds hang off it.
+            // The menus of the words it holds hang off it.
             for id in row.hidden.iter().copied().filter(|id| matches!(*id, "theme" | "modules" | "view" | "source")) {
                 anchors.push((id, response.clone()));
             }
@@ -5139,7 +5127,7 @@ impl HudApp {
         for (id, rect) in row.placed {
             let item = items.iter().find(|i| i.id == id).expect("laid-out item");
             if !item.boxed {
-                painter.text(rect.left_center(), Align2::LEFT_CENTER, item.text.as_str(), strip_font(), STRIP_MUTED);
+                holo::text(&painter, rect.left_center(), Align2::LEFT_CENTER, Face::Label, item.text.as_str(), RAIL_TEXT, t.faint());
                 continue;
             }
             if crate::window_drill::enabled() {
@@ -5150,23 +5138,17 @@ impl HudApp {
                 *lock(&DEMO_KEY) = Some(rect);
             }
             let response = ui.interact(rect, ui.id().with(("hud_strip", id)), Sense::click());
-            let hot = response.hovered() || item.on;
-            // A muted microphone reads crimson whatever the theme.
-            let lit_colour = if id == "mic" { MUTED_CRIMSON } else { crate::hud_board::active_colour() };
-            painter.rect_filled(rect, Rounding::ZERO, if item.on { lit_colour.gamma_multiply(0.14) } else { rgba([3, 7, 12], 0.9) });
-            painter.rect_stroke(rect, Rounding::ZERO, stroke(1.0, if hot { lit_colour } else { STRIP_INK.gamma_multiply(0.7) }));
-            let ink = if item.on { lit_colour } else { STRIP_INK };
+            let hot = lit_by(&response);
             if id == "source" {
-                // A picker: the device name left, the v marker right.
-                painter.text(rect.left_center() + vec2(7.0, 0.0), Align2::LEFT_CENTER, item.text.as_str(), strip_font(), ink);
-                painter.text(rect.right_center() - vec2(7.0, 0.0), Align2::RIGHT_CENTER, "v", strip_font(), ink);
+                rail_picker(&painter, rect, item.text.as_str(), hot);
             } else {
-                painter.text(rect.center(), Align2::CENTER_CENTER, item.text.as_str(), strip_font(), ink);
+                // A muted microphone reads in the alert colour whatever the theme.
+                rail_key(&painter, rect, item.text.as_str(), hot, item.on, if id == "mic" { t.alert() } else { t.accent() });
             }
             if response.clicked() {
                 clicked = Some(id);
             }
-            // `[ THEME ]`: a click cycles the presets, a right-click shows all eight as swatches.
+            // `THEME`: a click cycles the presets, a right-click shows them all as swatches.
             let response = if id == "theme" { response.on_hover_text("Click: next theme · right-click: all themes") } else { response };
             if id == "theme" && response.secondary_clicked() {
                 ui.memory_mut(|mem| mem.toggle_popup(theme_id));
@@ -5239,52 +5221,33 @@ impl HudApp {
         }
         // "Stop listening": the lock and how to lift it, under the strip.
         if let Some(status) = crate::listening_lock::status_line() {
-            painter.text(pos2(screen.right() - 12.0, y + 30.0), Align2::RIGHT_TOP, status, strip_font(), MUTED_CRIMSON);
+            painter.text(pos2(screen.right() - 12.0, y + 30.0), Align2::RIGHT_TOP, status, strip_font(), crate::holo::theme().alert());
             ctx.request_repaint_after(Duration::from_millis(500));
         }
-        // `[ THEME ]` right-click: the eight presets as swatches (primary, contrast, border).
+        // `THEME` right-click: the presets and Sir's own themes as swatches, then the studio.
         if let Some(button) = anchor("theme") {
             let mut picked: Option<&'static str> = None;
             let mut load: Option<String> = None;
             let mut create = false;
             egui::popup::popup_below_widget(ui, theme_id, &button, egui::popup::PopupCloseBehavior::CloseOnClick, |ui| {
                 ui.set_min_width(230.0);
-                for (name, _, p) in crate::holo_theme::PRESETS.iter() {
-                    let active = iface.hud_palette == *name;
-                    let (row, response) = ui.allocate_exact_size(vec2(226.0, 20.0), Sense::click());
-                    let painter = ui.painter_at(row);
-                    if response.hovered() || active {
-                        painter.rect_filled(row, Rounding::ZERO, p.ink().gamma_multiply(0.16));
-                    }
-                    for (k, c) in [p.accent(), p.deep(), p.ink()].into_iter().enumerate() {
-                        painter.rect_filled(Rect::from_min_size(row.left_center() + vec2(4.0 + k as f32 * 13.0, -5.0), vec2(10.0, 10.0)), Rounding::ZERO, c);
-                    }
-                    let label = crate::holo_theme::label(name);
-                    painter.text(row.left_center() + vec2(48.0, 0.0), Align2::LEFT_CENTER, if active { format!("{label}") } else { label }, strip_font(), STRIP_INK);
-                    if response.clicked() {
+                holo_ui::head(ui, "THEME");
+                for (name, _, look) in crate::holo_theme::PRESETS.iter() {
+                    if theme_row(ui, look, &crate::holo_theme::label(name), iface.hud_palette == *name).clicked() {
                         picked = Some(name);
                     }
                 }
-                // Sir's own themes, then the studio.
-                for theme in crate::theme_store::custom_themes() {
-                    let p = theme.theme();
-                    let (row, response) = ui.allocate_exact_size(vec2(226.0, 20.0), Sense::click());
-                    let painter = ui.painter_at(row);
-                    let active = iface.hud_palette == theme.key();
-                    if response.hovered() || active {
-                        painter.rect_filled(row, Rounding::ZERO, p.ink().gamma_multiply(0.16));
-                    }
-                    for (k, c) in [p.accent(), p.deep(), p.ink()].into_iter().enumerate() {
-                        painter.rect_filled(Rect::from_min_size(row.left_center() + vec2(4.0 + k as f32 * 13.0, -5.0), vec2(10.0, 10.0)), Rounding::ZERO, c);
-                    }
-                    let label = theme.name.to_uppercase();
-                    painter.text(row.left_center() + vec2(48.0, 0.0), Align2::LEFT_CENTER, if active { format!("{label}") } else { label }, strip_font(), STRIP_INK);
-                    if response.clicked() {
+                let own = crate::theme_store::custom_themes();
+                if !own.is_empty() {
+                    holo_ui::head(ui, "YOURS");
+                }
+                for theme in own {
+                    if theme_row(ui, &theme.theme(), &theme.name, iface.hud_palette == theme.key()).clicked() {
                         load = Some(theme.name.clone());
                     }
                 }
-                ui.separator();
-                if ui.add(egui::Button::new(RichText::new("[ + CREATE THEME ]").font(strip_font()).color(crate::hud_board::active_colour())).frame(false)).clicked() {
+                holo_ui::rule(ui);
+                if holo_ui::item(ui, "+ Create a theme", false).clicked() {
                     create = true;
                 }
             });
@@ -5298,17 +5261,18 @@ impl HudApp {
                 theme_studio::open();
             }
         }
-        // `[ MODULES ]`: one click to each Stark module (the tool runs directly, no language model).
+        // `MODULES`: one click to each Stark module (the tool runs directly, no language model).
         if let Some(button) = anchor("modules") {
             let mut run: Option<&[(&'static str, &'static str)]> = None;
             egui::popup::popup_below_widget(ui, modules_id, &button, egui::popup::PopupCloseBehavior::CloseOnClick, |ui| {
                 ui.set_min_width(330.0);
+                holo_ui::head(ui, "MODULES");
                 for (label, calls) in MODULES {
-                    if ui.add(egui::Button::new(RichText::new(*label).font(strip_font()).color(STRIP_INK)).frame(false)).clicked() {
+                    if holo_ui::item(ui, *label, false).clicked() {
                         run = Some(calls);
                     }
                 }
-                if ui.add(egui::Button::new(RichText::new("DISCORD // AUDIO ROUTING — VOICE INTO THE CALL").font(strip_font()).color(STRIP_INK)).frame(false)).clicked() {
+                if holo_ui::item(ui, "DISCORD // AUDIO ROUTING — VOICE INTO THE CALL", false).clicked() {
                     discord_view::open();
                 }
             });
@@ -5320,12 +5284,13 @@ impl HudApp {
         if let Some(source_button) = anchor("source") {
             egui::popup::popup_below_widget(ui, source_id, &source_button, egui::popup::PopupCloseBehavior::CloseOnClick, |ui| {
                 ui.set_min_width(source_button.rect.width().max(200.0));
+                holo_ui::head(ui, "CAMERA SOURCE");
                 if devices.is_empty() {
-                    ui.label(RichText::new("NO CAPTURE DEVICES FOUND").font(strip_font()).color(STRIP_MUTED));
+                    ui.label(RichText::new("No capture devices found.").color(strip_muted()));
                 }
                 for (i, name) in devices.iter().enumerate() {
-                    let label = if i == 0 { format!("DEFAULT — {}", name.to_uppercase()) } else { name.to_uppercase() };
-                    if ui.selectable_label(self.camera_device == i, RichText::new(label).font(strip_font())).clicked() {
+                    let label = if i == 0 { format!("Default — {name}") } else { name.clone() };
+                    if holo_ui::item(ui, label, self.camera_device == i).clicked() {
                         self.camera_device = i;
                         if crate::camera_feed::is_running() {
                             crate::camera_feed::stop();
@@ -5339,7 +5304,7 @@ impl HudApp {
                 }
             });
         }
-        // `[ VIEW ]`: the navigation, the window and the settings.
+        // `VIEW`: the navigation, the window and the settings.
         let Some(view_button) = anchor("view") else { return };
         let windows = self.app.tools().widgets.windows();
         let sims = !self.app.tools().stark.simlab.list().is_empty();
@@ -5359,104 +5324,80 @@ impl HudApp {
         let wake_word = self.app.config_state().wake_word_required;
         let dormant = crate::vram_guard::is_dormant();
         egui::popup::popup_below_widget(ui, view_id, &view_button, egui::popup::PopupCloseBehavior::CloseOnClick, |ui| {
-            ui.set_min_width(250.0);
-            let item = |ui: &mut Ui, text: &str| ui.add(egui::Button::new(RichText::new(text).font(strip_font()).color(STRIP_INK)).frame(false)).clicked();
-            ui.label(RichText::new("NAVIGATE").font(strip_font()).color(STRIP_MUTED));
+            ui.set_min_width(270.0);
+            let item = |ui: &mut Ui, text: &str| holo_ui::item(ui, text, false).clicked();
+            holo_ui::head(ui, "NAVIGATE");
             for (mode, on) in nav {
-                if item(ui, &format!("{} {}", if on { "[x]" } else { "[ ]" }, mode.label())) {
+                if holo_ui::item(ui, mode.label(), on).clicked() {
                     chosen = Some(mode);
                 }
             }
-            if item(ui, "  DOCK ALL WINDOWS INSIDE") {
+            holo_ui::head(ui, "ON THE CANVAS");
+            // (Each a switch: what it is now shows on it.)
+            let mut next = iface.clone();
+            for (label, on) in [("Comms block", &mut next.comms_block), ("Status plate", &mut next.status_pill), ("Voice ring", &mut next.voice_rim), ("Sound cues", &mut next.sound_cues)] {
+                if holo_ui::item_toggle(ui, label, *on).clicked() {
+                    *on = !*on;
+                }
+            }
+            if item(ui, "Dock all windows inside") {
                 crate::hud_dock::dock_all();
             }
-            ui.separator();
-            if item(ui, if iface.comms_block { "COMMS BLOCK: ON" } else { "COMMS BLOCK: OFF" }) {
-                let mut next = iface.clone();
-                next.comms_block = !iface.comms_block;
-                self.set_interface(next);
-            }
-            if item(ui, if iface.status_pill { "STATUS PILL: ON" } else { "STATUS PILL: OFF" }) {
-                let mut next = iface.clone();
-                next.status_pill = !iface.status_pill;
-                self.set_interface(next);
-            }
-            if item(ui, if iface.voice_rim { "VOICE RIM: ON" } else { "VOICE RIM: OFF" }) {
-                let mut next = iface.clone();
-                next.voice_rim = !iface.voice_rim;
-                self.set_interface(next);
-            }
-            if item(ui, if iface.sound_cues { "SOUND CUES: ON" } else { "SOUND CUES: OFF" }) {
-                let mut next = iface.clone();
-                next.sound_cues = !iface.sound_cues;
-                self.set_interface(next);
-            }
-            if item(ui, "  TIDY THE WINDOWS") {
+            if item(ui, "Tidy the windows") {
                 crate::hud_dock::retile_all(block_bounds(screen));
             }
-            if item(ui, "  FIND IN BLOCKS (CTRL+F)") {
+            if item(ui, "Find in blocks (Ctrl+F)") {
                 self.find_open = true;
                 self.find_focus = true;
             }
-            if item(ui, if wake_word { "MODE: WAKE WORD → HANDS-FREE" } else { "MODE: HANDS-FREE → WAKE WORD" }) {
+            let ghosts = crate::workspace_canvas::ghost_count();
+            if ghosts > 0 && item(ui, &format!("Un-ghost all ({ghosts})")) {
+                crate::workspace_canvas::unghost_all();
+            }
+            holo_ui::head(ui, "HE HEARS AND THINKS");
+            if holo_ui::item_toggle(ui, "Wake word needed", wake_word).clicked() {
                 self.command(HudCommand::SetWakeWordRequired { required: !wake_word });
             }
-            if item(ui, if dormant { "VRAM: STANDBY — WAKE" } else { "VRAM: CLEAR THE GPU NOW" }) {
+            if item(ui, if dormant { "Graphics memory: standby — wake him" } else { "Graphics memory: clear it now" }) {
                 if dormant {
                     crate::vram_guard::wake("HUD view menu");
                 } else {
                     crate::vram_guard::flush_with_reason("cleared from the HUD");
                 }
             }
-            ui.separator();
-            if item(ui, if iface.fullscreen { "EXIT FULLSCREEN" } else { "FULLSCREEN" }) {
-                let mut next = iface.clone();
-                next.fullscreen = !iface.fullscreen;
-                self.set_interface(next);
+            holo_ui::head(ui, "WINDOW");
+            for (label, on) in [("Fullscreen", &mut next.fullscreen), ("Always on top", &mut next.always_on_top)] {
+                if holo_ui::item_toggle(ui, label, *on).clicked() {
+                    *on = !*on;
+                }
             }
-            if item(ui, "PURE EMBLEM MODE") {
-                let mut next = iface.clone();
+            if item(ui, "The core alone") {
                 next.orb_mode = true;
+            }
+            if next != *iface {
                 self.set_interface(next);
             }
-            if item(ui, if iface.always_on_top { "ALWAYS ON TOP: ON" } else { "ALWAYS ON TOP: OFF" }) {
-                let mut next = iface.clone();
-                next.always_on_top = !iface.always_on_top;
-                self.set_interface(next);
-            }
-            // The design of the settings, hub and extra windows: Minimal OLED or Sci-Fi.
-            use crate::oled_minimal_ui::UiDesignParadigm;
-            let other = if iface.ui_paradigm == UiDesignParadigm::ModernOledMinimal { UiDesignParadigm::ClassicSciFiHud } else { UiDesignParadigm::ModernOledMinimal };
-            if item(ui, &format!("WINDOW DESIGN: {}", other.label().to_uppercase())) {
-                let mut next = iface.clone();
-                next.ui_paradigm = other;
-                self.set_interface(next);
-            }
-            let ghosts = crate::workspace_canvas::ghost_count();
-            if ghosts > 0 && item(ui, &format!("UN-GHOST ALL ({ghosts})")) {
-                crate::workspace_canvas::unghost_all();
-            }
-            ui.separator();
-            if item(ui, "ALL SETTINGS — SEARCH") {
-                settings_panel::open(!settings_panel::is_open());
-            }
-            if item(ui, "SETTINGS — VOICE, DEVICES, MEMORY") {
-                self.drawer_open = !self.drawer_open;
-            }
-            if item(ui, "INTERFACE — THEME, ZOOM") {
-                self.settings_open = true;
-            }
-            if item(ui, "INTEGRATIONS HUB") {
-                self.hub.open = !self.hub.open;
-            }
-            ui.separator();
-            if item(ui, "— MINIMISE") {
+            if item(ui, "Minimise") {
                 ctx.send_viewport_cmd(ViewportCommand::Minimized(true));
             }
-            if item(ui, "HIDE TO TRAY") {
+            if item(ui, "Hide to the tray") {
                 hide();
             }
-            if item(ui, "SHUT DOWN J.A.I.") {
+            holo_ui::head(ui, "SETTINGS");
+            if item(ui, "All settings — search") {
+                settings_panel::open(!settings_panel::is_open());
+            }
+            if item(ui, "Voice, devices, memory") {
+                self.drawer_open = !self.drawer_open;
+            }
+            if item(ui, "Interface — theme, zoom") {
+                self.settings_open = true;
+            }
+            if item(ui, "Integrations hub") {
+                self.hub.open = !self.hub.open;
+            }
+            holo_ui::rule(ui);
+            if item(ui, "Shut down J.A.I.") {
                 self.confirm_shutdown = true;
             }
         });
@@ -5507,46 +5448,22 @@ impl HudApp {
         });
     }
 
-    /// Bottom left, as on the reference board: the red-to-white double-line level meter,
-    /// `LVL −66.5 dB  PK −60.7 dB`, the outlined `[LIVE]` / `[MUTE]` badge (click: microphone
-    /// on / off; its tooltip carries the VRAM guard, the listening mode and the state) and the
-    /// last thing Sir said, inline. A silent command's badge or a signal shows after it.
+    /// Bottom left: the microphone as a row of cells with its peak held as a tick, `LVL` and
+    /// `PK` in dB, the `LIVE` / `MUTE` / `SLEEP` chip (click: microphone on / off; its tooltip
+    /// carries the VRAM guard, the listening mode and the state) and the last thing Sir said,
+    /// inline. A silent command's badge or a signal shows after it; the key hints stand right.
     fn telemetry_strip(&mut self, ui: &mut Ui, m: &HudModel, screen: Rect, dt: f32) {
         let painter = ui.painter_at(screen);
+        let t = holo::theme();
         let y = screen.bottom() - 10.0 - TELEMETRY_H;
         let mid = y + TELEMETRY_H / 2.0;
-        let mut x = screen.left() + 14.0;
         let level = m.level.as_ref();
         let muted = level.is_none_or(|l| l.phase == "muted") || m.cfg.as_ref().is_some_and(|c| !c.mic_enabled);
         let lvl = level.map(|l| l.rms_db).unwrap_or(-90.0).max(-90.0);
         self.peak_db = if lvl > self.peak_db { lvl } else { (self.peak_db - 9.0 * dt).max(lvl) };
-        // The meter: two hairlines, lit from the left in crimson running to white at the level.
-        let fill = if muted { 0.0 } else { db_fraction(lvl) };
-        for (k, dy) in [-1.5f32, 1.5].into_iter().enumerate() {
-            let (from, to) = (pos2(x, mid + dy), pos2(x + METER_W, mid + dy));
-            painter.line_segment([from, to], stroke(1.0, Color32::from_rgba_unmultiplied(255, 255, 255, 18)));
-            let mut mesh = egui::Mesh::default();
-            meter_ribbon(&mut mesh, from, METER_W * fill, if k == 0 { 1.6 } else { 1.2 });
-            painter.add(Shape::mesh(mesh));
-        }
-        let peak_x = x + METER_W * db_fraction(self.peak_db);
-        painter.line_segment([pos2(peak_x, mid - 4.0), pos2(peak_x, mid + 4.0)], stroke(1.0, Color32::WHITE.gamma_multiply(0.8)));
-        x += METER_W + 12.0;
-        let text = |painter: &egui::Painter, x: &mut f32, s: String, colour: Color32| {
-            let r = painter.text(pos2(*x, mid), Align2::LEFT_CENTER, s, strip_font(), colour);
-            *x = r.right() + 14.0;
-        };
-        text(&painter, &mut x, format!("LVL {lvl:.1} dB"), STRIP_INK);
-        text(&painter, &mut x, format!("PK {:.1} dB", self.peak_db), STRIP_INK);
-        // `[LIVE]` / `[MUTE]` / `[SLEEP]`, outlined in white.
         let sleeping = m.cfg.as_ref().is_some_and(|c| c.sleeping);
-        let (badge, ink) = strip_badge(muted, sleeping);
-        let galley = painter.layout_no_wrap(badge.to_string(), strip_font(), ink);
-        let rect = Rect::from_min_size(pos2(x, y), vec2(galley.size().x + 12.0, TELEMETRY_H));
-        painter.rect_stroke(rect, Rounding::ZERO, stroke(1.0, Color32::WHITE.gamma_multiply(0.85)));
-        painter.galley(rect.center() - galley.size() / 2.0, galley, ink);
+        let rect = paint_strip_meter(&painter, pos2(screen.left() + 14.0, y), lvl, self.peak_db, muted, sleeping);
         let (vram, _, _) = crate::vram_guard::badge();
-        let vram = vram;
         let wake = m.cfg.as_ref().is_none_or(|c| c.wake_word_required);
         let ptt = m.cfg.as_ref().is_some_and(|c| c.ptt_active);
         let mode = if ptt { "PTT" } else if wake { "WAKE WORD" } else { "HANDS-FREE" };
@@ -5557,38 +5474,36 @@ impl HudApp {
             let enabled = !self.app.config_state().mic_enabled;
             self.command(HudCommand::SetMic { enabled });
         }
-        x = rect.right() + 14.0;
-        // `[CALL · LISTENING]` / `[CALL · TALKING]` while JAI is in Sir's Discord call.
+        let mut x = rect.right() + 14.0;
+        // `CALL · LISTENING` / `CALL · TALKING` while JAI is in Sir's Discord call.
         if let Some(call) = crate::discord_bridge::status_label() {
-            let ink = crate::hud_board::active_colour();
-            let galley = painter.layout_no_wrap(call.to_string(), strip_font(), ink);
-            let rect = Rect::from_min_size(pos2(x, y), vec2(galley.size().x + 12.0, TELEMETRY_H));
-            painter.rect_stroke(rect, Rounding::ZERO, stroke(1.0, ink));
-            painter.galley(rect.center() - galley.size() / 2.0, galley, ink);
+            let rect = holo_kit::chip(&painter, pos2(x, y), call.trim_start_matches('[').trim_end_matches(']'), t.accent(), false, 1.0);
             ui.interact(rect, ui.id().with("hud_call"), Sense::hover()).on_hover_text("JAI hears the others in your Discord call (not your microphone). Say \"stop listening to the call\" to end it.");
             x = rect.right() + 14.0;
         }
-        // `F1 MUTE · F11 FULLSCREEN · ESC INTERRUPT` on the right, as on the reference board
-        // (each also a button), left of the docked emblem's corner; only where it fits.
+        // `F1 MUTE · F11 FULLSCREEN · ESC INTERRUPT` on the right (each also a button), left of
+        // the docked core's corner; only where it fits.
         let hints = key_hints(&painter, key_hints_right(screen, self.console_reserve()), mid);
         let hints_left = hints.first().map_or(f32::INFINITY, |(_, r)| r.left());
         let room_right = if hints_left > x + 160.0 { hints_left - 24.0 } else { screen.right() - crate::hud_dock::DOCK_INSET * 2.0 - 40.0 };
+        let line = |x: &mut f32, face: Face, size: f32, s: &str, colour: Color32| {
+            *x = holo::text(&painter, pos2(*x, mid), Align2::LEFT_CENTER, face, s, size, colour).right() + 14.0;
+        };
         // What he said last, inline (fading out with the caption timer).
-        if let Some(line) = m.messages.iter().rev().find(|l| l.who == Speaker::Sir && !l.faded) {
-            let room = (room_right - x).max(0.0);
-            let heard = heard_line(&line.text, (room / 6.2) as usize);
+        if let Some(said) = m.messages.iter().rev().find(|l| l.who == Speaker::Sir && !l.faded) {
+            let heard = heard_line(&said.text, ((room_right - x).max(0.0) / 6.4) as usize);
             if !heard.is_empty() {
-                text(&painter, &mut x, heard, STRIP_INK.gamma_multiply(0.75));
+                line(&mut x, Face::Body, 12.5, &heard, holo::a(t.ink(), 0.75));
             }
         }
         if let Some((path, alert, until)) = &m.signal {
             if *until > Instant::now() {
-                text(&painter, &mut x, format!("SIGNAL: {path}"), if *alert { self.palette.red } else { crate::hud_board::active_colour() });
+                line(&mut x, Face::Label, RAIL_TEXT, &format!("SIGNAL: {path}"), if *alert { t.alert() } else { t.accent() });
             }
         }
         if let Some((label, ok, until)) = &m.quick {
             if *until > Instant::now() {
-                text(&painter, &mut x, label.to_uppercase(), if *ok { STARK_GOLD } else { self.palette.red });
+                line(&mut x, Face::Label, RAIL_TEXT, label, if *ok { t.accent() } else { t.alert() });
             }
         }
         // The key hints, where the line left them room.
@@ -5597,11 +5512,7 @@ impl HudApp {
         }
         for (n, (label, rect)) in hints.iter().enumerate() {
             let response = ui.interact(rect.expand(3.0), ui.id().with(("hud_key_hint", n)), Sense::click());
-            let ink = if response.hovered() { crate::hud_board::active_colour() } else { STRIP_MUTED };
-            painter.text(rect.left_center(), Align2::LEFT_CENTER, *label, strip_font(), ink);
-            if n > 0 {
-                painter.text(pos2(rect.left() - 9.0, mid), Align2::CENTER_CENTER, "·", strip_font(), STRIP_MUTED);
-            }
+            paint_key_hint(&painter, *rect, label, response.hovered());
             let response = response.on_hover_text(["Microphone on / off (F1, Ctrl+M)", "Fullscreen ↔ maximised window (F11)", "Stop JAI speaking (Esc)"][n]);
             if response.clicked() {
                 match n {
@@ -5613,9 +5524,10 @@ impl HudApp {
         }
     }
 
-    /// The status pill, top centre as on the reference board: `● LISTENING` (green), `THINKING`
-    /// (amber), `SPEAKING` (red), `MUTED` or `STANDBY` (grey). A new word cross-fades in within
-    /// 33 ms; on a screen whose header row reaches the centre it sits under the row.
+    /// The state plate, top centre: `LISTENING` in plain ink, the waits (`THINKING`, …) in the
+    /// accent with a bar of light running its foot, `SPEAKING` a solid block, `MUTED` in the alert
+    /// colour, `STANDBY` stepped back. A new word cross-fades in; where the top rail reaches the
+    /// centre it stands left of it.
     fn status_pill(&mut self, ui: &mut Ui, m: &HudModel, screen: Rect) {
         let muted = m.level.as_ref().is_none_or(|l| l.phase == "muted") || m.cfg.as_ref().is_some_and(|c| !c.mic_enabled) || crate::listening_lock::is_locked();
         let asleep = m.cfg.as_ref().is_some_and(|c| c.sleeping) || crate::vram_guard::is_dormant();
@@ -5646,27 +5558,19 @@ impl HudApp {
         ui.ctx().request_repaint_after(Duration::from_millis(40));
         let alpha = crate::screen_context::card_alpha(age);
         let painter = ui.painter_at(screen);
-        let accent = crate::hud_board::active_colour().gamma_multiply(alpha);
-        painter.rect_filled(rect, Rounding::ZERO, rgba([3, 7, 12], 0.92 * alpha));
-        painter.rect_stroke(rect, Rounding::ZERO, stroke(1.0, crate::hud_board::border_colour().gamma_multiply(alpha)));
-        let amber = Color32::from_rgb(0xFF, 0xA5, 0x30).gamma_multiply(alpha);
+        let t = holo::theme();
+        crate::holo_frame::card(&painter, rect, 0.0, alpha);
         let left = rect.left() + 12.0;
-        painter.circle_filled(pos2(left + 3.0, rect.top() + 14.0), 3.0, amber);
-        painter.text(pos2(left + 12.0, rect.top() + 14.0), Align2::LEFT_CENTER, format!("{} DETECTED", card.kind), strip_font(), amber);
+        holo_kit::chip(&painter, pos2(left, rect.top() + 8.0), &format!("{} DETECTED", card.kind), t.accent(), true, alpha);
         // (A long window title is shortened to the card's width.)
-        let font = FontId::proportional(12.0);
-        let line = fit_width(&painter, &card.line, &font, rect.width() - 24.0);
-        painter.text(pos2(left, rect.top() + 33.0), Align2::LEFT_CENTER, line, font, STRIP_INK.gamma_multiply(alpha));
+        let line = holo::galley_within(&painter, Face::Body, &card.line, 13.0, holo::a(t.ink(), alpha), rect.width() - 24.0);
+        painter.galley(pos2(left, rect.top() + 26.0), line, t.ink());
         let mut x = left;
         for (n, (word, ask)) in card.actions.iter().enumerate() {
-            let galley = painter.layout_no_wrap(word.to_string(), strip_font(), accent);
-            let key = Rect::from_min_size(pos2(x - 3.0, rect.bottom() - 21.0), galley.size() + vec2(6.0, 6.0));
+            let key = Rect::from_min_size(pos2(x, rect.bottom() - 6.0 - holo_kit::KEY_H), vec2(holo_kit::key_width(&painter, word), holo_kit::KEY_H));
             let response = ui.interact(key, ui.id().with(("hud_screen_card", n)), Sense::click()).on_hover_text(*ask);
-            if response.hovered() {
-                painter.rect_filled(key, Rounding::ZERO, accent.gamma_multiply(0.14));
-            }
-            painter.galley(key.min + vec2(3.0, 3.0), galley, accent);
-            x = key.right() + 16.0;
+            holo_kit::key(&painter, key, word, response.hovered() as u8 as f32, response.is_pointer_button_down_on(), false, alpha);
+            x = key.right() + 6.0;
             if response.clicked() {
                 crate::screen_context::dismiss();
                 self.command(HudCommand::Chat { text: (*ask).to_string() });
@@ -5772,11 +5676,11 @@ impl HudApp {
         let screen = home_screen(ctx);
         let mut close = false;
         egui::Area::new(egui::Id::new("hud_find_bar")).order(egui::Order::Foreground).fixed_pos(pos2(screen.center().x - FIND_BAR_WIDTH / 2.0, screen.top() + 12.0 + HEADER_H + 10.0)).show(ctx, |ui| {
-            Frame::none().fill(crate::hud_board::BLOCK_FILL).stroke(stroke(1.0, crate::hud_board::border_colour())).rounding(Rounding::ZERO).inner_margin(Margin::symmetric(10.0, 6.0)).show(ui, |ui| {
+            Frame::none().fill(crate::holo::theme().glass()).stroke(stroke(1.0, crate::hud_board::border_colour())).rounding(Rounding::ZERO).inner_margin(Margin::symmetric(10.0, 6.0)).show(ui, |ui| {
                 ui.set_width(FIND_BAR_WIDTH - 20.0);
                 ui.horizontal(|ui| {
                     ui.label(RichText::new("FIND IN BLOCKS").font(strip_font()).color(crate::hud_board::active_colour()));
-                    let input = ui.add(egui::TextEdit::singleline(&mut self.find_text).desired_width(220.0).font(FontId::proportional(14.0)).hint_text("voltage, deadline …"));
+                    let input = crate::holo_ui::slot(ui, egui::TextEdit::singleline(&mut self.find_text).desired_width(220.0).font(FontId::proportional(14.0)).hint_text("voltage, deadline …"));
                     if self.find_focus {
                         input.request_focus();
                         self.find_focus = false;
@@ -5787,10 +5691,9 @@ impl HudApp {
                     let needle = crate::hud_dock::search();
                     let hits = crate::hud_dock::search_hits().len() + crate::hud_board::search_hits(&needle).len();
                     let tally = if needle.is_empty() { "TYPE TO SEARCH".to_string() } else { format!("{hits} BLOCK{}", if hits == 1 { "" } else { "S" }) };
-                    ui.label(RichText::new(tally).font(strip_font()).color(STRIP_MUTED));
+                    ui.label(RichText::new(tally).font(strip_font()).color(strip_muted()));
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        let key = egui::Button::new(RichText::new("[ X ]").font(strip_font()).color(STRIP_INK)).fill(rgba([3, 7, 12], 0.9)).stroke(stroke(1.0, crate::hud_board::border_colour())).rounding(Rounding::ZERO);
-                        close = ui.add(key).on_hover_text("End the search (Esc)").clicked();
+                        close = holo_ui::key(ui, "X").on_hover_text("End the search (Esc)").clicked();
                     });
                 });
             });
@@ -5855,7 +5758,7 @@ impl HudApp {
                 if ctx.input(|i| i.viewport().close_requested()) {
                     act.close = true;
                 }
-                egui::CentralPanel::default().frame(Frame::none().fill(BLOCK_SLATE).inner_margin(Margin::same(12.0))).show(ctx, |ui| {
+                egui::CentralPanel::default().frame(Frame::none().fill(block_slate()).inner_margin(Margin::same(12.0))).show(ctx, |ui| {
                     ui.set_min_size(ui.available_size());
                     window_ground(ui);
                     self.console_body(ui, ctx, m, speaking, true, &mut act);
@@ -5876,7 +5779,7 @@ impl HudApp {
                 edge.min
             };
             // (Its border is drawn inside it below: whole at any DPI, also flush with an edge.)
-            let frame = Frame::none().fill(crate::hud_board::BLOCK_FILL).rounding(Rounding::ZERO).inner_margin(Margin::same(12.0));
+            let frame = Frame::none().fill(crate::holo::theme().glass()).rounding(Rounding::ZERO).inner_margin(Margin::same(12.0));
             let shown = egui::Window::new("TEXT // CONSOLE")
                 .id(area)
                 .title_bar(false)
@@ -5901,7 +5804,7 @@ impl HudApp {
                 let rect = inner.response.rect;
                 self.console_at_edge = rect.right() >= screen.right() - 40.0;
                 let painter = ctx.layer_painter(inner.response.layer_id);
-                crate::hud_style::border(&painter, rect, 1.0, crate::hud_board::border_colour().gamma_multiply(slide));
+                crate::holo::outline(&painter, &crate::holo::plate(rect, [0.0; 4]), crate::hud_board::border_colour().gamma_multiply(slide));
                 crate::hud_board::brackets(&painter, rect.shrink(0.75), crate::hud_board::bracket_colour().gamma_multiply(slide));
                 crate::hud_dock::publish_block(CONSOLE_ID, "Text console", rect);
                 publish_console_rect(Some(rect));
@@ -5940,29 +5843,22 @@ impl HudApp {
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 let pinned = self.console_pinned;
-                let chip = |ui: &mut Ui, text: &str, on: bool| {
-                    let ink = if on { crate::hud_board::active_colour() } else { STRIP_INK };
-                    ui.add(egui::Button::new(RichText::new(text).font(strip_font()).color(ink)).fill(rgba([3, 7, 12], 0.9)).stroke(stroke(1.0, crate::hud_board::border_colour())).rounding(Rounding::ZERO))
-                };
-                act.close |= chip(ui, "[ CLOSE ]", false).on_hover_text("Close (Esc)").clicked();
+                let chip = |ui: &mut Ui, text: &str, on: bool| holo_ui::key_on(ui, text, on);
+                act.close |= chip(ui, "CLOSE", false).on_hover_text("Close (Esc)").clicked();
                 // (As the desktop's background it is a window for good, and "in front" means
                 // above other programs' windows.)
                 if crate::hud_dock::all_own() {
-                    on_top_key(ui, |ui, lit| chip(ui, "[ TOP ]", lit));
+                    on_top_key(ui, |ui, lit| chip(ui, "TOP", lit));
                 } else {
-                    act.detach |= chip(ui, if detached { "[ DOCK ]" } else { "[ DETACH ]" }, false).on_hover_text("Its own window / back inside the HUD").clicked();
-                    act.pin |= chip(ui, "[ PIN ]", pinned).on_hover_text("Keep it in front (Esc leaves it open)").clicked();
+                    act.detach |= chip(ui, if detached { "DOCK" } else { "DETACH" }, false).on_hover_text("Its own window / back inside the HUD").clicked();
+                    act.pin |= chip(ui, "PIN", pinned).on_hover_text("Keep it in front (Esc leaves it open)").clicked();
                 }
             });
         });
         ui.add_space(4.0);
         ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 0.0;
-            let segment = |ui: &mut Ui, text: &str, on: bool| {
-                let fill = if on { crate::hud_board::active_colour() } else { rgba([3, 7, 12], 0.9) };
-                let ink = if on { crate::hud_style::ink_on(fill) } else { STRIP_INK };
-                ui.add(egui::Button::new(RichText::new(text).font(strip_font()).color(ink)).fill(fill).stroke(stroke(1.0, crate::hud_board::border_colour())).rounding(Rounding::ZERO)).clicked()
-            };
+            ui.spacing_mut().item_spacing.x = 2.0;
+            let segment = |ui: &mut Ui, text: &str, on: bool| holo_ui::key_on(ui, text, on).clicked();
             if segment(ui, "SPEAK REPLIES", speaking) && !speaking {
                 act.mode = Some(VoiceResponseMode::AlwaysSpeak);
             }
@@ -5980,20 +5876,20 @@ impl HudApp {
                 ui.label(RichText::new(format!("FILE // {}", crate::crash_guard::clip(&name, 48))).font(strip_font()).color(crate::hud_board::active_colour())).on_hover_text(path.display().to_string());
             }
             None => {
-                ui.label(RichText::new("+ DROP A FILE ON THE HUD · NO FILE LOADED").font(strip_font()).color(STRIP_MUTED));
+                ui.label(RichText::new("+ DROP A FILE ON THE HUD · NO FILE LOADED").font(strip_font()).color(strip_muted()));
             }
         }
         ui.add_space(8.0);
         let log_height = (ui.available_height() - self.console_foot).max(60.0);
-        crate::hud_style::faded(ui, egui::ScrollArea::vertical().max_height(log_height).auto_shrink([false, false]).stick_to_bottom(true), |ui| {
+        crate::holo_block::faded(ui, egui::ScrollArea::vertical().max_height(log_height).auto_shrink([false, false]).stick_to_bottom(true), |ui| {
             for line in m.messages.iter().filter(|l| !l.text.trim().is_empty()) {
                 let (who, colour) = match line.who {
-                    Speaker::Sir => ("USER", STRIP_MUTED),
+                    Speaker::Sir => ("USER", strip_muted()),
                     Speaker::Jai => ("J.A.I.", crate::hud_board::active_colour()),
-                    Speaker::System => ("SYSTEM", STRIP_MUTED),
+                    Speaker::System => ("SYSTEM", strip_muted()),
                 };
                 ui.label(RichText::new(format!("[{who} // {}]", line.at)).font(strip_font()).color(colour));
-                let ink = if line.faded { STRIP_MUTED } else { STRIP_INK };
+                let ink = if line.faded { strip_muted() } else { strip_ink() };
                 let text = if line.streaming { format!("{} ▌", line.text.trim()) } else { line.text.trim().to_string() };
                 ui.add(egui::Label::new(RichText::new(text).size(13.5).color(ink)).wrap());
                 ui.add_space(6.0);
@@ -6042,17 +5938,17 @@ impl HudApp {
             ui.set_width(SYSTEM_COLUMN);
             column_scroll(ui, room, |ui| {
                 for card in &power {
-                    sharp_block(ui, "SYSTEM POWER // CONFIRMATION", "PENDING", |ui| this.power_card(ui, &p, card));
+                    crate::holo_ui::titled_plate(ui, "SYSTEM POWER // CONFIRMATION", "PENDING", |ui| this.power_card(ui, &p, card));
                 }
                 for card in &cards {
-                    sharp_block(ui, "WHATSAPP // MESSAGE CARD", "PENDING", |ui| this.message_card(ui, &p, card));
+                    crate::holo_ui::titled_plate(ui, "WHATSAPP // MESSAGE CARD", "PENDING", |ui| this.message_card(ui, &p, card));
                 }
                 if let Some(clip) = &clip {
-                    sharp_block(ui, "INSTANT REPLAY // CLIP", &format!("{} S", clip.seconds), |ui| clip_card(ui, &p, clip));
+                    crate::holo_ui::titled_plate(ui, "INSTANT REPLAY // CLIP", &format!("{} S", clip.seconds), |ui| clip_card(ui, &p, clip));
                 }
                 for spec in &widgets {
                     let label = format!("WIDGET // {}", spec.title.to_uppercase());
-                    sharp_block(ui, &label, short_type_upper(spec), |ui| widget_view::widget_bare(ui, &p, spec, &this.widget_host));
+                    crate::holo_ui::titled_plate(ui, &label, short_type_upper(spec), |ui| widget_view::widget_bare(ui, &p, spec, &this.widget_host));
                 }
             });
         };
@@ -6090,16 +5986,16 @@ impl HudApp {
                 ui.set_width(size.x);
                 // (An area hands on only the height it had before: `column_scroll`.)
                 ui.set_max_height(size.y + 120.0);
-                sharp_block(ui, "HISTORY // CONVERSATION & REPORTS", "[ CLOSE ]", |ui| {
-                    if ui.add(egui::Button::new(RichText::new("[ CLOSE ]").font(strip_font()).color(STRIP_MUTED)).frame(false)).clicked() {
+                crate::holo_ui::titled_plate(ui, "HISTORY // CONVERSATION & REPORTS", "CLOSE", |ui| {
+                    if crate::holo_ui::key(ui, "CLOSE").clicked() {
                         close = true;
                     }
-                    crate::hud_style::faded(ui, egui::ScrollArea::vertical().max_height(size.y).auto_shrink([false, true]).stick_to_bottom(true), |ui| {
+                    crate::holo_block::faded(ui, egui::ScrollArea::vertical().max_height(size.y).auto_shrink([false, true]).stick_to_bottom(true), |ui| {
                         if !self.history_reports.is_empty() {
                             ui.label(RichText::new("REPORTS").font(strip_font()).color(crate::hud_board::active_colour()));
                             for (id, topic, when, blocks, sources) in &self.history_reports {
                                 let text = format!("{}  ·  {blocks} BLOCKS · {sources} SOURCES  ·  {}", topic.to_uppercase(), when.get(..16).unwrap_or(when));
-                                if ui.add(egui::Button::new(RichText::new(text).font(strip_font()).color(STRIP_INK)).frame(false)).on_hover_text("Put this report on the board").clicked() {
+                                if crate::holo_ui::key(ui, text).on_hover_text("Put this report on the board").clicked() {
                                     present = Some(*id);
                                 }
                             }
@@ -6108,15 +6004,15 @@ impl HudApp {
                         ui.label(RichText::new("CONVERSATION").font(strip_font()).color(crate::hud_board::active_colour()));
                         for line in m.messages.iter().filter(|l| !l.text.trim().is_empty()) {
                             let (who, colour) = match line.who {
-                                Speaker::Sir => ("YOU //", STRIP_MUTED),
+                                Speaker::Sir => ("YOU //", strip_muted()),
                                 Speaker::Jai => ("J.A.I. //", crate::hud_board::active_colour()),
-                                Speaker::System => ("SYSTEM //", STRIP_MUTED),
+                                Speaker::System => ("SYSTEM //", strip_muted()),
                             };
                             ui.horizontal_wrapped(|ui| {
                                 ui.label(RichText::new(who).font(strip_font()).color(colour));
-                                let ink = if line.faded { STRIP_MUTED } else { STRIP_INK };
+                                let ink = if line.faded { strip_muted() } else { strip_ink() };
                                 ui.add(egui::Label::new(RichText::new(&line.text).size(13.0).color(ink)).wrap());
-                                if line.who == Speaker::Jai && ui.add(egui::Button::new(RichText::new("[ DETACH ]").font(strip_font()).color(STRIP_MUTED)).frame(false)).on_hover_text("Open in its own window").clicked() {
+                                if line.who == Speaker::Jai && crate::holo_ui::key(ui, "DETACH").on_hover_text("Open in its own window").clicked() {
                                     open_window = Some(line.text.clone());
                                 }
                             });
@@ -6163,18 +6059,19 @@ impl HudApp {
         let closed = floating_block(ctx, "hud_camera", "Camera", pos2(screen.center().x - 200.0, screen.top() + 12.0 + HEADER_H + 14.0), vec2(400.0, 330.0), |ui| {
             {
                 ui.set_width(400.0);
-                sharp_block(ui, &format!("CAMERA // {name}"), &status, |ui| {
+                crate::holo_ui::titled_plate(ui, &format!("CAMERA // {name}"), &status, |ui| {
                     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 225.0), Sense::hover());
                     match &self.camera_texture {
                         Some((_, t)) => {
                             ui.painter().image(t.id(), rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+                            holo::corner_ticks(ui.painter(), rect, 6.0, holo::a(strip_ink(), 0.75));
                         }
                         None => {
-                            ui.painter().rect_filled(rect, Rounding::ZERO, Color32::from_rgb(6, 10, 15));
-                            ui.painter().text(rect.center(), Align2::CENTER_CENTER, if status == "STARTING" { "CONNECTING…" } else { status.as_str() }, strip_font(), STRIP_MUTED);
+                            holo::outline(ui.painter(), &holo::plate(rect, [0.0; 4]), holo::a(strip_ink(), 0.14));
+                            holo_kit::empty(ui.painter(), rect, if status == "STARTING" { "Connecting to the camera…" } else { status.as_str() }, 1.0);
                         }
                     }
-                    if ui.add(egui::Button::new(RichText::new("[ CAMERA OFF ]").font(strip_font()).color(STRIP_INK)).frame(false)).clicked() {
+                    if crate::holo_ui::key(ui, "CAMERA OFF").clicked() {
                         close = true;
                     }
                 });
@@ -6223,16 +6120,16 @@ impl HudApp {
     /// Settings → Look: the essentials, and the full Interface window.
     fn look_card(&mut self, ui: &mut Ui, iface: &InterfaceSettings) {
         let p = self.palette;
-        card(ui, &p, "LOOK", |_| {}, |ui| {
+        card(ui, "LOOK", |_| {}, |ui| {
             let mut s = iface.clone();
-            ui.checkbox(&mut s.fullscreen, "Fullscreen HUD board");
-            ui.checkbox(&mut s.animations, "Animations");
-            ui.checkbox(&mut s.always_on_top, "Always on top");
+            crate::holo_ui::toggle(ui, &mut s.fullscreen, "Fullscreen HUD board");
+            crate::holo_ui::toggle(ui, &mut s.animations, "Animations");
+            crate::holo_ui::toggle(ui, &mut s.always_on_top, "Always on top");
             ui.add_space(4.0);
-            if ui.button("Theme, colours, zoom and panels…").clicked() {
+            if crate::holo_ui::key(ui, "Theme, colours, zoom and panels…").clicked() {
                 self.settings_open = true;
             }
-            muted(ui, &p, "Or just ask: “JAI, go fullscreen”, “orb mode”, “clear the board”.");
+            muted(ui, "Or just ask: “JAI, go fullscreen”, “orb mode”, “clear the board”.");
             if &s != iface {
                 s.sanitize();
                 self.set_interface(s);
@@ -6383,7 +6280,7 @@ impl HudApp {
             });
         }
         // The Theme Studio; `[ SAVE THEME ]` saves and applies the theme.
-        if let Some(t) = theme_studio::show(ctx, &iface) {
+        if let Some(t) = theme_studio::show(ctx) {
             let hex = crate::interface::hex;
             let spec = serde_json::json!({ "name": t.name, "core_primary": hex(t.core_primary), "core_secondary": hex(t.core_secondary), "window_border": hex(t.window_border), "background_tint": hex(t.background_tint) });
             self.configure_look(&iface, serde_json::json!({ "create_theme": spec }));
@@ -7017,9 +6914,12 @@ fn block_tray(ctx: &egui::Context) {
                 let name = title.split(" // ").next().unwrap_or(title).trim().to_uppercase();
                 // A closed block waits here dim for ten minutes; one put away stands bright.
                 let parked = crate::hud_dock::is_parked(id);
-                let ink = if parked { STRIP_INK.gamma_multiply(0.5) } else { STRIP_INK };
                 let chip = ui
-                    .add(egui::Button::new(RichText::new(format!("[ {name} ]")).font(strip_font()).color(ink)).fill(rgba([3, 7, 12], 0.9)).stroke(stroke(1.0, crate::hud_board::border_colour().gamma_multiply(if parked { 0.5 } else { 1.0 }))).rounding(Rounding::ZERO))
+                    .scope(|ui| {
+                        ui.set_opacity(if parked { 0.5 } else { 1.0 });
+                        holo_ui::key(ui, name.as_str())
+                    })
+                    .inner
                     .on_hover_text(if parked { "Closed. Click within ten minutes to bring it back." } else { "Put away. Click, or say \"restore it\", to bring it back." });
                 if chip.clicked() {
                     crate::hud_dock::restore(id);
@@ -7029,39 +6929,62 @@ fn block_tray(ctx: &egui::Context) {
     });
 }
 
-/// Width of the bottom strip's level meter.
-const METER_W: f32 = 72.0;
+/// The bottom strip's level meter: its width and how many cells it has.
+const METER_W: f32 = 94.0;
+const METER_CELLS: usize = 24;
 
-/// The lit part of one meter line, `len` px from `from`: dark crimson fading in at the left,
-/// full crimson, white at the tip (the reference's red-to-white meter).
-fn meter_ribbon(mesh: &mut egui::Mesh, from: Pos2, len: f32, width: f32) {
-    if len < 0.5 {
-        return;
-    }
-    let stops = [(0.0, Color32::from_rgba_unmultiplied(0xFF, 0x1E, 0x56, 0)), (0.45, Color32::from_rgb(0xC8, 0x14, 0x40)), (0.85, Color32::from_rgb(0xFF, 0x3A, 0x6A)), (1.0, Color32::WHITE)];
-    let h = width / 2.0;
-    for w in stops.windows(2) {
-        let (a, b) = (w[0], w[1]);
-        let (xa, xb) = (from.x + len * a.0, from.x + len * b.0);
-        let base = mesh.vertices.len() as u32;
-        mesh.colored_vertex(pos2(xa, from.y - h), a.1);
-        mesh.colored_vertex(pos2(xb, from.y - h), b.1);
-        mesh.colored_vertex(pos2(xb, from.y + h), b.1);
-        mesh.colored_vertex(pos2(xa, from.y + h), a.1);
-        mesh.add_triangle(base, base + 1, base + 2);
-        mesh.add_triangle(base, base + 2, base + 3);
+/// The strip's chip: its word, its colour and whether it is solid. `LIVE` is a solid block of
+/// the accent (he hears), `MUTE` one of the alert colour, `SLEEP` an outline.
+fn strip_badge(muted: bool, sleeping: bool) -> (&'static str, Color32, bool) {
+    let t = holo::theme();
+    if muted {
+        ("MUTE", t.alert(), true)
+    } else if sleeping {
+        ("SLEEP", t.muted(), false)
+    } else {
+        ("LIVE", t.accent(), true)
     }
 }
 
-/// The strip's badge and its ink: `MUTE` (microphone off) in crimson, `SLEEP`, else `LIVE`.
-fn strip_badge(muted: bool, sleeping: bool) -> (&'static str, Color32) {
-    if muted {
-        ("MUTE", Color32::from_rgb(0xFF, 0x3A, 0x6A))
-    } else if sleeping {
-        ("SLEEP", STRIP_MUTED)
-    } else {
-        ("LIVE", Color32::WHITE)
+/// The left end of the bottom strip from `at` (its top-left): the microphone as a row of cells
+/// lit to its level (the alert colour where it clips) with the peak held as a tick, `LVL` and
+/// `PK` in dB, and the `LIVE` / `MUTE` / `SLEEP` chip. Returns the chip's rect.
+fn paint_strip_meter(painter: &egui::Painter, at: Pos2, lvl: f32, peak_db: f32, muted: bool, sleeping: bool) -> Rect {
+    let t = holo::theme();
+    let (mut x, mid) = (at.x, at.y + TELEMETRY_H / 2.0);
+    let meter = Rect::from_min_size(pos2(x, mid - 4.0), vec2(METER_W, 8.0));
+    holo_kit::cells(painter, meter, if muted { 0.0 } else { db_fraction(lvl) }, METER_CELLS, if lvl > -3.0 { t.alert() } else { t.accent() }, 1.0);
+    let peak_x = holo::snap(x + METER_W * db_fraction(peak_db), holo::ppp(painter));
+    holo::rule(painter, pos2(peak_x, mid - 6.0), pos2(peak_x, mid + 6.0), holo::a(t.ink(), 0.85));
+    x += METER_W + 12.0;
+    for (label, value) in [("LVL", lvl), ("PK", peak_db)] {
+        let l = holo::text(painter, pos2(x, mid), Align2::LEFT_CENTER, Face::Label, label, RAIL_TEXT, t.muted());
+        x = holo::text(painter, pos2(l.right() + 5.0, mid), Align2::LEFT_CENTER, Face::Mono, &format!("{value:.1} dB"), 11.0, t.ink()).right() + 14.0;
     }
+    let (badge, ink, solid) = strip_badge(muted, sleeping);
+    holo_kit::chip(painter, pos2(x, at.y), badge, ink, solid, 1.0)
+}
+
+/// One theme in a menu: its three lights as leaning swatches and its name, marked while it
+/// is the one shown.
+fn theme_row(ui: &mut Ui, look: &crate::holo_theme::Theme, label: &str, active: bool) -> egui::Response {
+    let (row, response) = ui.allocate_exact_size(vec2(ui.available_width().max(226.0), holo_ui::ROW_H), Sense::click());
+    let hot = ui.ctx().animate_bool_with_time(response.id.with("rail_hot"), response.hovered(), crate::holo_motion::TOUCH);
+    let painter = ui.painter_at(row);
+    let t = holo::theme();
+    let lift = hot.max(active as u8 as f32 * 0.7);
+    if lift > 0.01 {
+        painter.rect_filled(row, Rounding::ZERO, holo::a(t.ink(), 0.07 * lift));
+    }
+    if active {
+        painter.rect_filled(Rect::from_min_size(row.min, vec2(2.0, row.height())), Rounding::ZERO, t.accent());
+    }
+    for (k, colour) in [look.accent(), look.deep(), look.ink()].into_iter().enumerate() {
+        let swatch = Rect::from_min_size(pos2(row.left() + 10.0 + k as f32 * 13.0, row.center().y - 5.0), vec2(12.0, 10.0));
+        holo::fill(&painter, &holo_kit::leaning(swatch), colour);
+    }
+    holo::text(&painter, pos2(row.left() + 58.0, row.center().y), Align2::LEFT_CENTER, Face::Label, label, RAIL_TEXT, if active { t.accent() } else { holo::mix(t.muted(), t.ink(), 0.6 + 0.4 * hot) });
+    response
 }
 
 /// What Sir said, as the strip shows it: one line, at most `max_chars`.
@@ -7525,8 +7448,7 @@ fn console_foot(ui: &mut Ui, line: &mut String, completions: &[String], focus: &
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = vec2(6.0, 4.0);
             for (n, text) in completions.iter().enumerate() {
-                let chip = egui::Button::new(RichText::new(text).font(strip_font()).color(if n == 0 { crate::hud_board::active_colour() } else { STRIP_INK })).fill(rgba([3, 7, 12], 0.9)).stroke(stroke(1.0, crate::hud_board::border_colour())).rounding(Rounding::ZERO);
-                if ui.add(chip).on_hover_text(if n == 0 { "Tab completes the line with this" } else { "Click to use this" }).clicked() {
+                if holo_ui::key_on(ui, text.as_str(), n == 0).on_hover_text(if n == 0 { "Tab completes the line with this" } else { "Click to use this" }).clicked() {
                     taken = Some(text.clone());
                 }
             }
@@ -7562,9 +7484,7 @@ fn console_foot(ui: &mut Ui, line: &mut String, completions: &[String], focus: &
             *focus = false;
         }
         let enter = input.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
-        let transmit = ui
-            .add(egui::Button::new(RichText::new("[ TRANSMIT -> ]").font(strip_font()).color(crate::hud_board::active_colour())).fill(rgba([3, 7, 12], 0.9)).stroke(stroke(1.0, crate::hud_board::border_colour())).rounding(Rounding::ZERO))
-            .clicked();
+        let transmit = holo_ui::key_on(ui, "TRANSMIT", true).clicked();
         if enter || transmit {
             let text = line.trim().to_string();
             if !text.is_empty() {
@@ -7578,15 +7498,25 @@ fn console_foot(ui: &mut Ui, line: &mut String, completions: &[String], focus: &
     sent
 }
 
-/// `#050A10`: the canvas of an in-app tool block.
-const BLOCK_SLATE: Color32 = Color32::from_rgb(0x05, 0x0A, 0x10);
-/// The same under the pointer: the block Sir is using stands a little brighter than the rest.
-const BLOCK_SLATE_LIFTED: Color32 = Color32::from_rgb(0x0A, 0x12, 0x1C);
+/// How tall the header row of an in-app block is.
+const BLOCK_HEADER: f32 = 24.0;
 
-/// What a detached window shows outside its frame while the frame unfolds or folds: an OS window
-/// cannot be see-through, so it is a pane darker than the slate (the frame draws itself out of
-/// the dark glass and folds back into it).
-const WINDOW_VOID: Color32 = Color32::from_rgb(0x02, 0x04, 0x07);
+/// The glass of an in-app tool block, opaque (a window of its own cannot be see-through).
+fn block_slate() -> Color32 {
+    let t = crate::holo::theme();
+    crate::holo::mix(t.void(), t.ink(), 0.035)
+}
+/// The same under the pointer: the block Sir is using stands a little brighter than the rest.
+fn block_lifted() -> Color32 {
+    let t = crate::holo::theme();
+    crate::holo::mix(t.void(), t.ink(), 0.07)
+}
+
+/// What a detached window shows outside its frame while the frame unfolds or folds: the canvas
+/// itself (the frame draws itself out of the black and folds back into it).
+fn window_void() -> Color32 {
+    crate::holo::theme().void()
+}
 
 /// What the HUD had drawn at each animating window's last frame (`next_animation_frame`).
 static HUD_TURNS: Mutex<Vec<(ViewportId, u64)>> = Mutex::new(Vec::new());
@@ -7631,20 +7561,20 @@ pub(super) fn paint_window_border(ctx: &egui::Context) {
         // Outside the frame: the dark glass. Inside it, below the scan edge: the slate.
         for void in [Rect::from_min_max(screen.min, pos2(screen.max.x, band.top())), Rect::from_min_max(pos2(screen.min.x, band.bottom()), screen.max)] {
             if void.height() > 0.0 {
-                painter.rect_filled(void, Rounding::ZERO, WINDOW_VOID);
+                painter.rect_filled(void, Rounding::ZERO, window_void());
             }
         }
         let shown = motion_content_clip(screen, &motion);
         let unresolved = Rect::from_min_max(pos2(band.min.x, shown.bottom()), band.max);
         if unresolved.height() > 0.0 {
-            painter.rect_filled(unresolved, Rounding::ZERO, BLOCK_SLATE);
+            painter.rect_filled(unresolved, Rounding::ZERO, block_slate());
         }
         if motion.content < 1.0 && shown.height() > 0.0 {
-            painter.rect_filled(shown, Rounding::ZERO, BLOCK_SLATE.gamma_multiply(1.0 - motion.content));
+            painter.rect_filled(shown, Rounding::ZERO, block_slate().gamma_multiply(1.0 - motion.content));
         }
-        paint_block_frame(&painter, screen, &motion, Color32::TRANSPARENT, crate::hud_board::border_colour(), 1.0);
+        paint_block_frame(&painter, screen, &motion, false, crate::hud_board::border_colour(), 1.0);
     } else {
-        crate::hud_style::border(&painter, screen, 1.0, crate::hud_board::border_colour());
+        crate::holo::outline(&painter, &crate::holo::plate(screen, [0.0; 4]), crate::hud_board::border_colour());
     }
     paint_window_motion(&painter, screen, &motion);
     // Esc in a view he put in full screen ("full screen the Earth") brings its window back.
@@ -7696,7 +7626,7 @@ pub(crate) fn piece_window(ctx: &egui::Context, viewport: ViewportId, title: &st
         // (Closed through Windows itself: Alt+F4, its key in the taskbar.)
         closed |= ctx.input(|i| i.viewport().close_requested());
         let Some(body) = body.take() else { return };
-        egui::CentralPanel::default().frame(Frame::none().fill(OBSIDIAN)).show(ctx, body);
+        egui::CentralPanel::default().frame(Frame::none().fill(window_void())).show(ctx, body);
         HudApp::resize_grips(ctx);
         esc_closes_window(ctx);
         reveal_when_drawn(ctx);
@@ -7833,15 +7763,12 @@ fn detached_bar(ui: &mut Ui, ctx: &egui::Context, title: &str, dock: bool) -> (b
         // (Its letters are not for marking: a drag on them moves the window like the rest of the row.)
         ui.add(egui::Label::new(RichText::new(title.to_uppercase()).font(strip_font()).color(crate::hud_board::active_colour())).selectable(false));
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            let key = |ui: &mut Ui, text: &str, lit: bool| {
-                let ink = if lit { crate::hud_board::active_colour() } else { STRIP_INK };
-                ui.add(egui::Button::new(RichText::new(text).font(strip_font()).color(ink)).fill(rgba([3, 7, 12], 0.9)).stroke(stroke(1.0, crate::hud_board::border_colour())).rounding(Rounding::ZERO))
-            };
-            clicked = key(ui, "[ CLOSE ]", false).clicked();
+            let key = |ui: &mut Ui, text: &str, lit: bool| holo_ui::key_on(ui, text, lit);
+            clicked = key(ui, "CLOSE", false).clicked();
             if dock {
-                docked = key(ui, "[ DOCK ]", false).on_hover_text("Back onto the board").clicked();
+                docked = key(ui, "DOCK", false).on_hover_text("Back onto the board").clicked();
             }
-            on_top_key(ui, |ui, lit| key(ui, "[ TOP ]", lit));
+            on_top_key(ui, |ui, lit| key(ui, "TOP", lit));
         });
     });
     if clicked && windows_still(ctx) {
@@ -8185,7 +8112,7 @@ pub(super) fn hud_block_window(ctx: &egui::Context, id: &str, title: &str, size:
     // The pointer resting on another block: this one steps back a little (to 85 %).
     let mine = ctx.memory(|m| m.area_rect(area));
     let elsewhere = !still && ctx.pointer_hover_pos().is_some_and(|at| !mine.is_some_and(|r| r.contains(at)) && crate::hud_dock::block_rects().iter().any(|b| b.contains(at)));
-    let dim = dim * (1.0 - 0.15 * ctx.animate_bool_with_time(area.with("others_used"), elsewhere, crate::hud_style::motion::NORMAL.as_secs_f32()));
+    let dim = dim * (1.0 - 0.15 * ctx.animate_bool_with_time(area.with("others_used"), elsewhere, crate::holo_motion::LEAVE));
     let content_alpha = motion.content * dim;
     let (pinned, maximized) = (crate::hud_dock::is_pinned(id), crate::hud_dock::is_maximized(id));
     let edge = if found { crate::hud_board::active_colour() } else { crate::hud_board::border_colour() };
@@ -8214,23 +8141,21 @@ pub(super) fn hud_block_window(ctx: &egui::Context, id: &str, title: &str, size:
     let mut natural = None;
     let shown = window.show(ctx, |ui| {
         let frame_rect = ui.max_rect().expand(BLOCK_MARGIN);
-        // Depth: the block floats on a shadow, the one under the pointer is lifted, and the
-        // emblem lights the edge that faces it. Wear on the frame once it stands.
-        let using = ctx.animate_bool_with_time(area.with("using"), !still && ctx.pointer_hover_pos().is_some_and(|at| frame_rect.contains(at)), crate::hud_style::motion::FAST.as_secs_f32());
+        // The block under the pointer wears its frame in the accent, and the core lights the
+        // edge that faces it.
+        let using = ctx.animate_bool_with_time(area.with("using"), !still && ctx.pointer_hover_pos().is_some_and(|at| frame_rect.contains(at)), crate::holo_motion::TOUCH);
         let accent = crate::hud_board::active_colour();
         // (`with_clip_rect` only ever narrows a clip: the shell's painter gets its own.)
         let mut shell = ui.painter().clone();
-        shell.set_clip_rect(frame_rect.expand(48.0));
-        crate::hud_style::shadow(&shell, motion_band(frame_rect, &motion), motion.frame * dim);
         // (The window clips what its content draws to the content's own room, a margin inside
         // the frame: painted with that, the frame's border and the outer strip of its surface
         // never showed, and a block was brackets round a dark patch. The shell is painted on the
         // whole of the block's rect.)
         shell.set_clip_rect(frame_rect);
-        paint_block_frame(&shell, frame_rect, &motion, mix(BLOCK_SLATE, BLOCK_SLATE_LIFTED, using).gamma_multiply(dim), mix(edge, accent.gamma_multiply(0.45), using).gamma_multiply(dim), if found { 2.0 } else { 1.0 });
+        paint_block_frame(&shell, frame_rect, &motion, true, mix(edge, accent, using).gamma_multiply(dim), if found { 2.0 } else { 1.0 });
         if !motion.moving() {
             if let Some(orb) = crate::hud_dock::orb() {
-                crate::hud_style::emblem_light(&shell, frame_rect, orb, accent, dim);
+                crate::holo_block::core_light(&shell, frame_rect, orb, accent, dim);
             }
         }
         // Only what the frame has unfolded to, down to the scan edge, shows (and takes clicks).
@@ -8245,22 +8170,22 @@ pub(super) fn hud_block_window(ctx: &egui::Context, id: &str, title: &str, size:
         ui.set_min_size(ui.available_size());
         // The header every block wears: its title and state light on the left, its keys on the
         // right. A drag that begins on the title moves the block.
-        let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), crate::hud_style::HEADER_H), Sense::hover());
+        let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), BLOCK_HEADER), Sense::hover());
         let mid = row.center().y;
         // (Its tooltip names the words that close it: blocks answer to their name.)
         let name = title.split(" // ").next().unwrap_or(title).trim().to_lowercase();
         let close_hint = format!("Close · say: \"close the {name}\" · Ctrl+W: the block under the pointer");
         let pin_hint = format!("Pinned, it stays through \"close the windows\" and keeps its place (Ctrl+P, or say \"pin the {name}\")");
         let labels = [
-            ("[ CLOSE ]", false, close_hint.as_str()),
-            ("[ DETACH ]", false, "Open in its own window (say \"dock all windows\" to bring it back)"),
-            ("[ PIN ]", pinned, pin_hint.as_str()),
+            ("CLOSE", false, close_hint.as_str()),
+            ("DETACH", false, "Open in its own window (say \"dock all windows\" to bring it back)"),
+            ("PIN", pinned, pin_hint.as_str()),
         ];
         // (A narrow block keeps its title whole and lets its keys go, [ PIN ] first: the menu
         // and Ctrl+P still pin. The keys are quiet until the pointer is over their block.)
-        let wanted = crate::hud_style::title_galley(ui.painter(), title, ts(14.0), accent, f32::INFINITY).size().x + 26.0;
-        let fit = crate::hud_style::keys_that_fit(ui.painter(), &labels, row.width(), wanted);
-        let (key, keys_left) = crate::hud_style::keys(ui, area.with("header"), row.right(), mid, &labels[..fit], content_alpha * (0.62 + 0.38 * using));
+        let wanted = crate::holo_block::title_galley(ui.painter(), title, ts(14.0), accent, f32::INFINITY).size().x + 26.0;
+        let fit = crate::holo_ui::keys_that_fit(ui.painter(), &labels, row.width(), wanted);
+        let (key, keys_left) = crate::holo_ui::keys_at(ui, area.with("header"), row.right(), mid, &labels[..fit], content_alpha * (0.62 + 0.38 * using));
         match key {
             Some(0) => close_asked = true,
             // The block plays its exit first; the new window comes up after it.
@@ -8292,10 +8217,10 @@ pub(super) fn hud_block_window(ctx: &egui::Context, id: &str, title: &str, size:
         // A title cut short shows whole under the pointer.
         let cut = wanted - 26.0 > title_room + 0.5;
         // The title decodes itself as the block opens, and back as it leaves.
-        let lettered = crate::hud_style::fitted_title(ui.painter(), &crate::hud_style::decode(title, motion.resolve.min(motion.content), ctx.input(|i| i.time)), ts(14.0), theme.ink().gamma_multiply(content_alpha), title_room);
+        let lettered = crate::holo_block::fitted_title(ui.painter(), &crate::holo_motion::decode(title, motion.resolve.min(motion.content), ctx.input(|i| i.time)), ts(14.0), theme.ink().gamma_multiply(content_alpha), title_room);
         let title_rect = Rect::from_min_size(pos2(title_left, mid - lettered.size().y * 0.5), lettered.size());
         ui.painter().galley(title_rect.min, lettered, Color32::PLACEHOLDER);
-        if crate::hud_style::paint_light(ui.painter(), pos2(title_rect.right() + 10.0, mid), crate::hud_style::light(id), ctx.input(|i| i.time), content_alpha) {
+        if crate::holo_block::paint_lamp(ui.painter(), pos2(title_rect.right() + 10.0, mid), crate::holo_block::lamp(id), ctx.input(|i| i.time), content_alpha) {
             ctx.request_repaint_after(Duration::from_millis(50));
         }
         // (A click-only sense: a drag that begins here still moves the block.)
@@ -8369,9 +8294,9 @@ pub(super) fn hud_block_window(ctx: &egui::Context, id: &str, title: &str, size:
                 crate::hud_dock::hold_once(id, landed);
                 // Let go while it moved: it is thrown, and glides on a little; flung away, it
                 // closes (and waits in the tray, so a slip of the hand loses nothing).
-                if released && !still && velocity.length() >= crate::hud_style::FLING_AWAY && !crate::hud_dock::is_pinned(id) {
+                if released && !still && velocity.length() >= crate::holo_block::FLING_AWAY && !crate::hud_dock::is_pinned(id) {
                     crate::hud_dock::begin_close(id);
-                } else if released && !still && velocity.length() >= crate::hud_style::THROW_FROM {
+                } else if released && !still && velocity.length() >= crate::holo_block::THROW_FROM {
                     lock(&THROWN).insert(id.to_string(), (landed, velocity));
                 } else if released && !still {
                     // Let go across a bezel (or where no screen shows): it glides the rest of
@@ -8390,7 +8315,7 @@ pub(super) fn hud_block_window(ctx: &egui::Context, id: &str, title: &str, size:
             // A thrown block glides on until it rests (or is taken hold of again: `pressed`).
             let mut thrown = lock(&THROWN);
             if let Some((at, velocity)) = thrown.get(id).copied() {
-                match crate::hud_style::glide_on(at, velocity, bounds, ctx.input(|i| i.stable_dt)) {
+                match crate::holo_block::glide_on(at, velocity, bounds, ctx.input(|i| i.stable_dt)) {
                     Some((next, v)) => {
                         thrown.insert(id.to_string(), (next, v));
                         crate::hud_dock::hold_once(id, next);
@@ -8455,7 +8380,7 @@ pub(super) fn hud_block_window(ctx: &egui::Context, id: &str, title: &str, size:
     action
 }
 
-/// Blocks Sir threw: where each is and how fast it still glides (`hud_style::glide_on`).
+/// Blocks Sir threw: where each is and how fast it still glides (`holo_block::glide_on`).
 static THROWN: std::sync::LazyLock<Mutex<std::collections::HashMap<String, (Rect, Vec2)>>> = std::sync::LazyLock::new(Default::default);
 
 /// The egui-data key that marks a context whose windows are drawn at rest (offscreen renders:
@@ -8617,28 +8542,39 @@ pub(crate) fn motion_content_clip(rect: Rect, m: &WindowMotion) -> Rect {
     Rect::from_min_max(band.min, pos2(band.max.x, band.top() + band.height() * m.resolve.max(0.0)))
 }
 
-/// A block's frame in this frame of its motion: the glass and the hairline frame (`width` whole
-/// pixels), both on the band the frame has unfolded to. The frame runs white-hot while it
-/// travels and cools as it lands; `found` (the search lights the block) draws it two pixels wide.
-fn paint_block_frame(painter: &egui::Painter, rect: Rect, m: &WindowMotion, fill: Color32, edge: Color32, width: f32) {
+/// A block's plate in this frame of its motion, on the band the frame has unfolded to: glass
+/// lit from above (`glass`; not for a window whose ground is its own), a hairline frame with
+/// one corner cut, ticks at the other three. The frame runs white-hot while it travels and
+/// cools as it lands; `width` 2 (the search lights the block) doubles its line.
+fn paint_block_frame(painter: &egui::Painter, rect: Rect, m: &WindowMotion, glass: bool, edge: Color32, width: f32) {
     let band = motion_band(rect, m);
     if band.height() < 0.5 || m.frame <= 0.0 {
         return;
     }
+    let t = holo::theme();
     let heat = (1.0 - m.unfold).clamp(0.0, 1.0);
-    let edge = mix(edge, crate::holo::theme().hot(), heat * 0.8).gamma_multiply(m.frame.max(heat));
-    crate::hud_style::panel(painter, band, fill, edge, m.frame);
-    if width > 1.0 {
-        crate::hud_style::border(painter, band, width, edge);
+    let edge = mix(edge, t.hot(), heat * 0.8).gamma_multiply(m.frame.max(heat));
+    let cut = crate::holo_frame::CUT.min(band.height() / 2.0);
+    let shape = holo::plate(band, [0.0, 0.0, cut, 0.0]);
+    if glass {
+        crate::holo_frame::glass(painter, &shape, m.frame);
     }
+    holo::outline(painter, &shape, edge);
+    if width > 1.0 {
+        holo::outline(painter, &holo::plate(band.shrink(1.0), [0.0, 0.0, cut, 0.0]), edge);
+    }
+    let bright = holo::a(mix(t.ink(), t.hot(), heat), 0.85 * m.frame);
+    let arm = crate::holo_frame::TICK.min(band.width() / 3.0).min(band.height() / 3.0);
+    for (at, dx, dy) in [(band.left_top(), 1.0, 1.0), (band.right_top(), -1.0, 1.0), (band.left_bottom(), 1.0, -1.0)] {
+        holo::path(painter, &[pos2(at.x + dx * arm, at.y), at, pos2(at.x, at.y + dy * arm)], bright);
+    }
+    holo::path(painter, &[pos2(band.right(), band.bottom() - cut), pos2(band.right() - cut, band.bottom())], bright);
 }
 
-/// The two short diagonals in a resizable block's cut corner (inside its frame).
+/// The mark in a resizable block's cut corner: one short line along the cut, inside it.
 fn paint_resize_grip(painter: &egui::Painter, rect: Rect, colour: Color32) {
-    let corner = rect.right_bottom() - vec2(crate::hud_style::chamfer(rect) * 0.5 + 3.0, crate::hud_style::chamfer(rect) * 0.5 + 3.0);
-    for k in [4.0, 8.0] {
-        painter.line_segment([corner - vec2(k, 0.0), corner - vec2(0.0, k)], stroke(1.0, colour));
-    }
+    let cut = crate::holo_frame::CUT;
+    holo::path(painter, &[pos2(rect.right() - 5.0, rect.bottom() - cut - 1.0), pos2(rect.right() - cut - 1.0, rect.bottom() - 5.0)], colour);
 }
 
 /// 0 below `from`, 1 above `to`, a smooth S between.
@@ -8651,7 +8587,7 @@ fn smooth(from: f32, to: f32, x: f32) -> f32 {
 /// corner's spark), and its corner ticks (at rest: where they always are). `fill` is the
 /// window's own glass: the scan fades the freshly resolved content up out of it.
 pub(super) fn paint_window_motion(painter: &egui::Painter, rect: Rect, m: &WindowMotion) {
-    paint_window_motion_on(painter, rect, m, BLOCK_SLATE);
+    paint_window_motion_on(painter, rect, m, block_slate());
 }
 
 pub(crate) fn paint_window_motion_on(painter: &egui::Painter, rect: Rect, m: &WindowMotion, fill: Color32) {
@@ -8701,7 +8637,7 @@ pub(crate) fn paint_window_motion_on(painter: &egui::Painter, rect: Rect, m: &Wi
         light.neon(&[pos2(inner.left(), y), pos2(inner.right(), y)], false, px, a(hot, 0.9), if soft { 0.8 } else { 0.0 });
     }
     if m.glow > 0.0 {
-        let frame = crate::holo::plate(rect, [0.0, 0.0, crate::hud_style::chamfer(rect), 0.0]);
+        let frame = crate::holo::plate(rect, [0.0, 0.0, crate::holo_frame::CUT.min(rect.height() / 2.0), 0.0]);
         if soft {
             let mut closed = frame.clone();
             closed.push(frame[0]);
@@ -8786,8 +8722,8 @@ pub(crate) fn board_area(screen: Rect, left_reserve: f32, right_reserve: f32) ->
 pub(crate) fn text_block(ctx: &egui::Context, id: &str, title: &str, size: [f32; 2], content: &str) -> bool {
     crate::hud_dock::describe_block(id, content);
     block(ctx, id, title, size, |ui| {
-        crate::hud_style::faded(ui, egui::ScrollArea::vertical().auto_shrink([false; 2]), |ui| {
-            ui.add(egui::Label::new(RichText::new(content).size(13.5).color(STRIP_INK)).wrap());
+        crate::holo_block::faded(ui, egui::ScrollArea::vertical().auto_shrink([false; 2]), |ui| {
+            ui.add(egui::Label::new(RichText::new(content).size(13.5).color(strip_ink())).wrap());
         });
     })
 }
@@ -8837,7 +8773,7 @@ pub(crate) fn block(ctx: &egui::Context, id: &str, title: &str, size: [f32; 2], 
             egui::Window::new(title).id(egui::Id::new(("jai_embedded_block", id))).show(ctx, |ui| body(ui));
             return;
         }
-        egui::CentralPanel::default().frame(Frame::none().fill(BLOCK_SLATE).inner_margin(Margin::same(14.0))).show(ctx, |ui| {
+        egui::CentralPanel::default().frame(Frame::none().fill(block_slate()).inner_margin(Margin::same(14.0))).show(ctx, |ui| {
             // (Its own keys, on top of a close that was asked for by word. No way back onto
             // the board while he is the desktop's background: every view is a window then,
             // and `[ DOCK ]` closed it and opened it again.)
@@ -8872,7 +8808,7 @@ pub(crate) fn board_window(ctx: &egui::Context, id: &str, title: &str, size: [f3
         return;
     }
     if block(ctx, id, title, size, |ui| {
-        crate::hud_style::faded(ui, egui::ScrollArea::vertical().auto_shrink([false; 2]), body);
+        crate::holo_block::faded(ui, egui::ScrollArea::vertical().auto_shrink([false; 2]), body);
     }) {
         *open = false;
         crate::hud_dock::forget(id);
@@ -9021,48 +8957,47 @@ struct ScreensPick {
 fn screens_menu(ui: &mut Ui, monitors: &[crate::monitors::Monitor], spanning: bool, here: Option<usize>) -> ScreensPick {
     let mut picked = ScreensPick::default();
     // (`mark`: the name the window drill clicks it by.)
-    let key = |ui: &mut Ui, text: &str, ink: Color32, hint: &str, mark: &dyn Fn() -> String| {
-        let response = ui.add(egui::Button::new(RichText::new(text).font(strip_font()).color(ink)).fill(rgba([3, 7, 12], 0.9)).stroke(stroke(1.0, crate::hud_board::border_colour())).rounding(Rounding::ZERO)).on_hover_text(hint);
+    let key = |ui: &mut Ui, text: &str, hint: &str, mark: &dyn Fn() -> String| {
+        let response = crate::holo_ui::key(ui, text).on_hover_text(hint);
         if crate::window_drill::enabled() {
             crate::window_drill::mark(&mark(), response.rect);
         }
         response.clicked()
     };
     let title = format!("SCREENS // {} DISPLAY{}", monitors.len(), if monitors.len() == 1 { "" } else { "S" });
-    sharp_block(ui, &title, if spanning { "SPANNING ALL" } else { "ONE SCREEN" }, |ui| {
+    crate::holo_ui::titled_plate(ui, &title, if spanning { "SPANNING ALL" } else { "ONE SCREEN" }, |ui| {
         for m in monitors {
+            // Its name with its key (or the mark that the HUD stands on it) at the row's end,
+            // then where it lies on the desk, on a line of its own.
             ui.horizontal(|ui| {
-                // The button takes its place at the right first (beside both lines); the two
-                // lines get what is left.
-                ui.set_min_height(28.0);
+                ui.set_min_height(holo_kit::KEY_H);
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if here == Some(m.index) {
-                        ui.add(egui::Label::new(RichText::new("HUD IS HERE").font(strip_font()).color(STRIP_MUTED)).selectable(false));
-                    } else if key(ui, "[ MOVE HERE ]", crate::hud_board::active_colour(), "The fullscreen board on this monitor", &|| format!("screens:move:{}", m.index)) {
+                        chip(ui, "HUD IS HERE", holo::theme().accent());
+                    } else if key(ui, "MOVE HERE", "The fullscreen board on this monitor", &|| format!("screens:move:{}", m.index)) {
                         picked.send = Some(m.index);
                     }
-                    ui.with_layout(Layout::top_down(Align::Min), |ui| {
-                        ui.spacing_mut().item_spacing.y = 2.0;
+                    ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                         let name = format!("DISPLAY {}{}", m.index, if m.primary { "  //  PRIMARY" } else { "" });
-                        ui.add(egui::Label::new(RichText::new(name).font(strip_font()).color(STRIP_INK)).truncate().selectable(false));
-                        let place = format!("{} x {}  AT  {}, {}", m.width(), m.height(), m.rect[0], m.rect[1]);
-                        ui.add(egui::Label::new(RichText::new(place).font(strip_font()).color(STRIP_MUTED)).truncate().selectable(false));
+                        ui.add(egui::Label::new(RichText::new(name).font(strip_font()).color(strip_ink())).truncate().selectable(false));
                     });
                 });
             });
+            let place = format!("{} x {}  AT  {}, {}", m.width(), m.height(), m.rect[0], m.rect[1]);
+            ui.add(egui::Label::new(RichText::new(place).font(strip_font()).color(strip_muted())).truncate().selectable(false));
             ui.add_space(6.0);
         }
         ui.horizontal(|ui| {
             if monitors.len() > 1 {
                 if spanning {
-                    if key(ui, "[ BACK TO ONE MONITOR ]", crate::hud_board::active_colour(), "The fullscreen board on your first monitor again", &|| "screens:span:off".into()) {
+                    if key(ui, "BACK TO ONE MONITOR", "The fullscreen board on your first monitor again", &|| "screens:span:off".into()) {
                         picked.span = Some(false);
                     }
-                } else if key(ui, "[ SPAN ALL MONITORS ]", crate::hud_board::active_colour(), "One board across every monitor; the header, the console and the emblem stay on your first", &|| "screens:span:on".into()) {
+                } else if key(ui, "SPAN ALL MONITORS", "One board across every monitor; the header, the console and the emblem stay on your first", &|| "screens:span:on".into()) {
                     picked.span = Some(true);
                 }
             }
-            if key(ui, "[ CLOSE ]", STRIP_MUTED, "Close (Esc)", &|| "screens:close".into()) {
+            if key(ui, "CLOSE", "Close (Esc)", &|| "screens:close".into()) {
                 picked.close = true;
             }
         });
@@ -9087,11 +9022,11 @@ fn short_type_upper(spec: &crate::widgets::DynamicWidgetSpec) -> &'static str {
 fn column_scroll(ui: &mut Ui, room: f32, blocks: impl FnOnce(&mut Ui)) {
     let room = room.max(120.0);
     ui.set_max_height(room);
-    let out = crate::hud_style::faded(ui, egui::ScrollArea::vertical().max_height(room).auto_shrink([false, true]), blocks);
+    let out = crate::holo_block::faded(ui, egui::ScrollArea::vertical().max_height(room).auto_shrink([false, true]), blocks);
     let (view, above) = (out.inner_rect, out.state.offset.y);
     let below = out.content_size.y - view.height() - above;
     let fade = |edge: Rect, solid_at_bottom: bool| {
-        let (top, bottom) = if solid_at_bottom { (Color32::TRANSPARENT, OBSIDIAN) } else { (OBSIDIAN, Color32::TRANSPARENT) };
+        let (top, bottom) = if solid_at_bottom { (Color32::TRANSPARENT, window_void()) } else { (window_void(), Color32::TRANSPARENT) };
         let mut mesh = egui::Mesh::default();
         for (at, colour) in [(edge.left_top(), top), (edge.right_top(), top), (edge.left_bottom(), bottom), (edge.right_bottom(), bottom)] {
             mesh.colored_vertex(at, colour);
@@ -9107,30 +9042,6 @@ fn column_scroll(ui: &mut Ui, room: f32, blocks: impl FnOnce(&mut Ui)) {
     if above > 1.0 {
         fade(Rect::from_min_max(pos2(view.left() - 2.0, view.top() - 1.0), pos2(view.right() + 2.0, view.top() + FADE)), false);
     }
-}
-
-fn sharp_block<R>(ui: &mut Ui, label: &str, tag: &str, body: impl FnOnce(&mut Ui) -> R) -> R {
-    // (The frame every block wears, `hud_style`: its surface goes behind the content once the
-    // content has said how tall it is.)
-    let back = ui.painter().add(egui::Shape::Noop);
-    let shown = Frame::none().inner_margin(Margin::same(12.0)).show(ui, |ui| {
-        ui.set_width(ui.available_width());
-        let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), 18.0), Sense::hover());
-        let tag = ui.painter().layout_no_wrap(tag.to_string(), strip_font(), STRIP_MUTED);
-        let title = crate::hud_style::fitted_title(ui.painter(), label, ts(13.0), crate::hud_style::TEXT, (row.width() - tag.size().x - 14.0).max(20.0));
-        ui.painter().galley(pos2(row.left(), row.center().y - title.size().y * 0.5), title, Color32::PLACEHOLDER);
-        ui.painter().galley(pos2(row.right() - tag.size().x, row.center().y - tag.size().y * 0.5), tag, STRIP_MUTED);
-        ui.painter().line_segment([pos2(row.left(), row.bottom() + 3.0), pos2(row.right(), row.bottom() + 3.0)], stroke(1.0, crate::hud_board::border_colour()));
-        ui.add_space(8.0);
-        body(ui)
-    });
-    let rect = shown.response.rect;
-    let mut frame = crate::hud_style::surface_shapes(rect, crate::hud_board::BLOCK_FILL, 1.0);
-    frame.push(egui::Shape::rect_stroke(rect.shrink(0.5), Rounding::ZERO, stroke(1.0, crate::hud_board::border_colour())));
-    ui.painter().set(back, egui::Shape::Vec(frame));
-    crate::hud_board::brackets(ui.painter(), rect, crate::hud_board::bracket_colour());
-    ui.add_space(10.0);
-    shown.inner
 }
 
 /// Rows between two scan lines, and the grain's tile and strength (alpha of 255).
@@ -9186,15 +9097,21 @@ pub(crate) fn paint_finish(ctx: &egui::Context) {
     let mut mesh = egui::Mesh::with_texture(grain.id());
     mesh.add_rect_with_uv(rect, Rect::from_min_size(pos2(shift.x, shift.y), rect.size() / GRAIN_TILE as f32), Color32::WHITE);
     painter.add(Shape::mesh(mesh));
-    // The glass itself: uneven light, darker edges and a little dust, per screen of
-    // a HUD that spans several, else over the one it is on. (It was only drawn on a spanned
-    // HUD: on a single screen there was no glass at all.)
+    // The glass itself: its edges a little darker than its middle, per screen of a HUD that
+    // spans several, else over the one it is on. (Nothing is worn: no dust, no scratches.)
     let screens = monitor_regions(ctx);
-    if screens.is_empty() {
-        crate::hud_style::glass(&painter, rect);
-    }
-    for screen in screens {
-        crate::hud_style::glass(&painter, screen);
+    for screen in if screens.is_empty() { vec![rect] } else { screens } {
+        let inner = screen.shrink2(screen.size() * 0.22);
+        let mut falloff = egui::Mesh::default();
+        for (at, colour) in [screen.left_top(), screen.right_top(), screen.right_bottom(), screen.left_bottom()].into_iter().map(|at| (at, Color32::from_black_alpha(46))).chain([inner.left_top(), inner.right_top(), inner.right_bottom(), inner.left_bottom()].into_iter().map(|at| (at, Color32::TRANSPARENT))) {
+            falloff.colored_vertex(at, colour);
+        }
+        for k in 0..4u32 {
+            let n = (k + 1) % 4;
+            falloff.add_triangle(k, n, 4 + n);
+            falloff.add_triangle(k, 4 + n, 4 + k);
+        }
+        painter.add(Shape::mesh(falloff));
     }
 }
 
@@ -9231,9 +9148,10 @@ fn is_cross(offset: Vec2) -> bool {
     step(offset.x).rem_euclid(CROSS_EVERY) == 0 && step(offset.y).rem_euclid(CROSS_EVERY) == 0
 }
 
-/// Where the core stands and how large it is (the HUD says so every frame): the origin of the
+/// Where the core stands, how large it is at rest, how far it is docked (0-1) and how loud
+/// JAI's voice is (0-1); the HUD says so every frame. It is the origin of the
 /// drafting table.
-static CANVAS_ORIGIN: Mutex<Option<(Pos2, f32)>> = Mutex::new(None);
+static CANVAS_ORIGIN: Mutex<Option<(Pos2, f32, f32, f32)>> = Mutex::new(None);
 
 /// The canvas everything stands on: the theme's void as a drafting table. A dot grid with a
 /// "+" on every fourth dot (fading out round the blocks, so what they show stands out), and the
@@ -9250,26 +9168,44 @@ pub(crate) fn paint_canvas(ctx: &egui::Context) {
     // the blocks stand still.
     let drift = canvas_drift(ctx, home);
     let zoom = view_zoom(ctx);
-    let (origin, reach) = lock(&CANVAS_ORIGIN).unwrap_or((home.center(), crate::holo_core::centre_radius(home)));
+    let (origin, reach, dock, voice) = lock(&CANVAS_ORIGIN).unwrap_or((home.center(), crate::holo_core::centre_radius(home), 0.0, 0.0));
     let origin = origin + drift;
     let (ink, w) = (t.ink(), 1.0 / ctx.pixels_per_point());
     crate::holo::rule(&painter, pos2(rect.left(), origin.y), pos2(rect.right(), origin.y), a(ink, 0.07));
     crate::holo::rule(&painter, pos2(origin.x, rect.top()), pos2(origin.x, rect.bottom()), a(ink, 0.07));
     let mut light = crate::holo::Light::new(&painter);
-    for (k, share) in [(1.55, 0.085), (2.3, 0.06), (3.2, 0.045)] {
+    // (His first circle and its ticks brighten as he speaks.)
+    for (k, share) in [(1.55, 0.085 + 0.20 * voice), (2.3, 0.06), (3.2, 0.045)] {
         light.ring(origin, reach * k * zoom, w, a(ink, share));
     }
     let ring = reach * 1.55 * zoom;
     for i in 0..72 {
         let angle = TAU * i as f32 / 72.0;
         let long = i % 6 == 0;
-        light.seg(polar(origin, ring, angle), polar(origin, ring + if long { 9.0 } else { 4.0 }, angle), w, a(ink, if long { 0.22 } else { 0.11 }));
+        light.seg(polar(origin, ring, angle), polar(origin, ring + if long { 9.0 } else { 4.0 }, angle), w, a(ink, if long { 0.22 } else { 0.11 } + 0.25 * voice));
+    }
+    // The windows are tied to him: a leader from his first circle to the corner of each
+    // window's header that faces him, and while he speaks a point of light runs out along it.
+    let blocks = crate::hud_dock::block_rects();
+    if dock < 0.5 {
+        let run = (ctx.input(|i| i.time) * 0.9).fract() as f32;
+        for (from, to) in blocks.iter().filter_map(|block| crate::holo_stage::leader(origin, ring, *block)) {
+            crate::holo::leader(&painter, from, to, a(ink, 0.26 + 0.3 * voice));
+            if voice > 0.03 {
+                // (Along its two legs: the slope to the knee, then level to the window.)
+                let rise = (to.y - from.y).abs().min((to.x - from.x).abs());
+                let knee = pos2(from.x + (to.x - from.x).signum() * rise, to.y);
+                let (first, second) = ((knee - from).length(), (to - knee).length());
+                let at = run * (first + second);
+                let point = if at <= first { from + (knee - from) * (at / first.max(1.0)) } else { knee + (to - knee) * ((at - first) / second.max(1.0)) };
+                light.spark(point, 4.0, crate::holo::lit(t.hot(), voice.min(1.0)));
+            }
+        }
     }
     light.paint(&painter);
     let mut dots = egui::Mesh::default();
     let (dot, cross) = (a(ink, DOT_ALPHA), a(ink, CROSS_ALPHA));
     let centre = home.center() + drift;
-    let blocks = crate::hud_dock::block_rects();
     let mut y = rect.top() + DOT_SPACING / 2.0 + drift.y.rem_euclid(DOT_SPACING) - DOT_SPACING;
     while y < rect.bottom() {
         let mut x = rect.left() + DOT_SPACING / 2.0 + drift.x.rem_euclid(DOT_SPACING) - DOT_SPACING;
@@ -9420,7 +9356,7 @@ impl HudApp {
             crate::hud_feel::set_night_by_clock(iface.night_mode);
             // (A scripted session shows the dimming from its 34th to its 46th second on request.)
             let night = (crate::hud_feel::night_active() || (demo("night") && (34.0..46.0).contains(&hud_age()))) && !windows_still(ctx);
-            self.night = crate::hud_style::motion::approach(self.night, if night { 1.0 } else { 0.0 }, dt, Duration::from_millis(900));
+            self.night = crate::holo_motion::approach(self.night, if night { 1.0 } else { 0.0 }, dt, 0.9);
             if self.night > 0.0 {
                 let dim = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("hud_night")));
                 dim.rect_filled(ctx.screen_rect(), Rounding::ZERO, Color32::from_black_alpha((NIGHT_DIM * 255.0 * self.night) as u8));
@@ -9521,25 +9457,25 @@ impl HudApp {
             let closed = block(ctx, "on_call", TITLE, [470.0, 300.0], |ui| {
                 let rows: Vec<_> = own.iter().filter(|w| !w.title.starts_with("On call")).collect();
                 if rows.is_empty() {
-                    ui.label(RichText::new("No window of mine is open, Sir.").size(13.5).color(STRIP_MUTED));
+                    ui.label(RichText::new("No window of mine is open, Sir.").size(13.5).color(strip_muted()));
                 }
-                crate::hud_style::faded(ui, egui::ScrollArea::vertical().auto_shrink([false; 2]), |ui| {
+                crate::holo_block::faded(ui, egui::ScrollArea::vertical().auto_shrink([false; 2]), |ui| {
                     for w in rows {
                         ui.horizontal(|ui| {
                             let name = w.title.trim_end_matches("J.A.I.").trim_end_matches([' ', '\u{2014}', '-']).to_string();
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                let key = |ui: &mut Ui, text: &str, hint: &str| ui.add(egui::Button::new(RichText::new(text).font(strip_font()).color(STRIP_INK)).fill(rgba([3, 7, 12], 0.9)).stroke(stroke(1.0, crate::hud_board::border_colour())).rounding(Rounding::ZERO)).on_hover_text(hint).clicked();
-                                if key(ui, "[ CLOSE ]", "Close it") {
+                                let key = |ui: &mut Ui, text: &str, hint: &str| crate::holo_ui::key(ui, text).on_hover_text(hint).clicked();
+                                if key(ui, "CLOSE", "Close it") {
                                     act = Some((w.hwnd, 2, w.rect));
                                 }
-                                if key(ui, "[ HERE ]", "Onto the monitor you are using") {
+                                if key(ui, "HERE", "Onto the monitor you are using") {
                                     act = Some((w.hwnd, 1, w.rect));
                                 }
-                                if key(ui, "[ FRONT ]", "In front of the other windows") {
+                                if key(ui, "FRONT", "In front of the other windows") {
                                     act = Some((w.hwnd, 0, w.rect));
                                 }
                                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                                    ui.add(egui::Label::new(RichText::new(name).size(13.5).color(STRIP_INK)).truncate());
+                                    ui.add(egui::Label::new(RichText::new(name).size(13.5).color(strip_ink())).truncate());
                                 });
                             });
                         });
@@ -9629,20 +9565,19 @@ impl HudApp {
         let width = (home.width() * 0.2).clamp(240.0, 380.0);
         let x = if self.system_column_rect.is_none() { (centre.x - radius * 1.55 - width).max(home.left() + 28.0) } else { (centre.x + radius * 1.55).min(home.right() - 28.0 - width) };
         let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Background, egui::Id::new("hud_day"))).with_clip_rect(home);
-        let (accent, ink) = (crate::hud_board::active_colour(), Color32::from_rgb(0xE8, 0xF2, 0xFC));
-        let line_font = FontId::new(15.5, egui::FontFamily::Name("label".into()));
-        // (Laid out first: the whole of it stands level with the emblem's middle.)
-        let laid: Vec<(&str, Vec<Arc<egui::Galley>>)> = sections.iter().map(|(title, lines)| (*title, lines.iter().map(|l| p.layout(l.clone(), line_font.clone(), ink, width)).collect())).collect();
+        let t = holo::theme();
+        let line_font = holo::font(Face::Body, 15.0);
+        // (Laid out first: the whole of it stands level with the core's middle.)
+        let laid: Vec<(&str, Vec<Arc<egui::Galley>>)> = sections.iter().map(|(title, lines)| (*title, lines.iter().map(|l| p.layout(l.clone(), line_font.clone(), t.ink(), width)).collect())).collect();
         let height: f32 = laid.iter().map(|(_, lines)| 30.0 + lines.iter().map(|g| g.size().y + 5.0).sum::<f32>() + 14.0).sum();
         let mut y = (centre.y - height / 2.0).max(home.top() + HEADER_H + 30.0);
-        for (title, lines) in laid {
-            p.text(pos2(x, y), Align2::LEFT_TOP, title, FontId::monospace(11.0), accent);
-            y += 17.0;
-            p.line_segment([pos2(x, y), pos2(x + width, y)], egui::Stroke::new(1.0f32, crate::hud_style::white(0.10)));
-            y += 13.0;
+        for (k, (title, lines)) in laid.into_iter().enumerate() {
+            // Numbered like the parts of a drawing: its number, its name, a rule.
+            holo_kit::section(&p, pos2(x, y), width, &format!("{:02}", k + 1), title, 1.0);
+            y += 30.0;
             for galley in lines {
                 let h = galley.size().y;
-                p.galley(pos2(x, y), galley, ink);
+                p.galley(pos2(x, y), galley, t.ink());
                 y += h + 5.0;
             }
             y += 14.0;
@@ -10040,11 +9975,11 @@ mod tests {
     /// nothing to show, or failed.
     #[test]
     fn gallery_blocks_and_their_states() {
-        use crate::hud_style::{Light, Outline};
+        use crate::holo_block::{Lamp, Outline};
         let _g = crate::hud_dock::test_lock();
         let ids = ["gallery_stats", "gallery_picture", "gallery_failed", "gallery_empty", "gallery_list", "gallery_chart"];
-        for (id, light) in ids.iter().zip([Light::Good, Light::Busy, Light::Fault, Light::Rest, Light::Busy, Light::Warn]) {
-            crate::hud_style::set_light(id, light);
+        for (id, light) in ids.iter().zip([Lamp::Good, Lamp::Busy, Lamp::Fault, Lamp::Rest, Lamp::Busy, Lamp::Warn]) {
+            crate::holo_block::set_lamp(id, light);
         }
         // (Past their opening and the glide to the size of what they show: blocks fit their content.)
         let mut frame = 0;
@@ -10057,29 +9992,29 @@ mod tests {
             let p = Palette::new(&InterfaceSettings::default());
             hud_block_window(ctx, ids[0], "System telemetry", [400.0, 240.0], |ui| {
                 for (key, value, share) in [("CPU", "23.4% · 16 threads", 0.23), ("RAM", "18.2 / 31.9 GB", 0.57), ("RTX 4070", "52°C · 12%", 0.12), ("VRAM", "3.1 / 12.0 GB", 0.26)] {
-                    row(ui, &p, key, value.to_string());
-                    meter(ui, &p, share, 6.0, p.accent, &[]);
+                    row(ui, key, value.to_string());
+                    meter(ui, share, 6.0, p.accent, &[]);
                 }
             });
             hud_block_window(ctx, ids[1], "Pictures // Eiffel Tower", [400.0, 240.0], |ui| {
                 let room = ui.available_rect_before_wrap();
-                crate::hud_style::outline(ui, room.shrink(6.0), Outline::Picture);
+                crate::holo_block::outline(ui, room.shrink(6.0), Outline::Picture);
             });
             hud_block_window(ctx, ids[2], "3D studio // apple", [400.0, 240.0], |ui| {
                 let room = ui.available_rect_before_wrap();
-                crate::hud_style::failed(ui, room, "The model could not be downloaded (no connection).");
+                crate::holo_block::failed(ui, room, "The model could not be downloaded (no connection).");
             });
             hud_block_window(ctx, ids[3], "Notes", [400.0, 220.0], |ui| {
                 let room = ui.available_rect_before_wrap();
-                crate::hud_style::empty(ui, room, "No notes yet. Say: add a note saying call Tom at five.");
+                crate::holo_block::empty(ui, room, "No notes yet. Say: add a note saying call Tom at five.");
             });
             hud_block_window(ctx, ids[4], "Processes", [400.0, 220.0], |ui| {
                 let room = ui.available_rect_before_wrap();
-                crate::hud_style::outline(ui, room.shrink(6.0), Outline::List);
+                crate::holo_block::outline(ui, room.shrink(6.0), Outline::List);
             });
             hud_block_window(ctx, ids[5], "Network", [400.0, 220.0], |ui| {
                 let room = ui.available_rect_before_wrap();
-                crate::hud_style::outline(ui, room.shrink(6.0), Outline::Chart);
+                crate::holo_block::outline(ui, room.shrink(6.0), Outline::Chart);
             });
         });
         for id in ids {
@@ -10129,9 +10064,8 @@ mod tests {
     #[test]
     fn gallery_notifications_and_edge_light() {
         use crate::hud_notify::{Card, Edge};
-        crate::hud_notify::edge(Edge::Notice);
-        std::thread::sleep(Duration::from_millis(220));
         gallery("gallery_notifications", GALLERY, 2, |ctx| {
+            crate::hud_notify::edge_held(Edge::Notice);
             let area = Rect::from_min_max(pos2(0.0, 56.0), pos2(GALLERY.x - 16.0, GALLERY.y));
             let cards = [
                 Card { text: "Timer done: tea.", alert: false, age: 3.2, left: 1.8 },
@@ -10159,7 +10093,7 @@ mod tests {
                 if spectrum {
                     crate::hud_lines::paint_mic_label(&painter, frame.centre, frame.radius, "TOO QUIET", 1.0);
                 } else {
-                    crate::hud_style::ripple(&painter, frame.centre, frame.radius, 0.2, crate::hud_board::active_colour());
+                    crate::holo_core::ripple(&painter, frame.centre, frame.radius, 0.2);
                 }
                 crate::hud_lines::paint(ui, crate::hud_lines::top_under(frame.centre, frame.radius), 640.0, state, true, lyric);
             });
@@ -10217,7 +10151,7 @@ mod tests {
         assert_eq!((steps, turned), (2, 0.5));
     }
 
-    /// The emblem close up: its housing, its uneven light, the glass over it.
+    /// The core close up.
     #[test]
     fn gallery_emblem_close_up() {
         let emblem = emblem_at_rest();
@@ -10227,6 +10161,64 @@ mod tests {
                 emblem.paint_in(&ui.painter_at(screen), screen);
             });
         });
+    }
+
+    /// The main screen as it stands at rest and while he speaks: the top rail with one thing
+    /// open, the state plate over the voice-lit rule, the core (each of the two), the COMMS
+    /// plate, and the bottom strip with its meter, chip and key hints.
+    #[test]
+    fn gallery_main_screen() {
+        // (No block of another test's stands on the stage: the canvas would tie leaders to it.)
+        let _g = crate::hud_dock::test_lock();
+        crate::hud_dock::begin_frame();
+        crate::hud_dock::begin_frame();
+        const SCREEN: Vec2 = Vec2::new(1920.0, 1080.0);
+        for (name, style, word, voice, level) in [("gallery_main_simple", crate::holo_core::CoreStyle::Simple, "LISTENING", 0.0, -38.0), ("gallery_main_complex", crate::holo_core::CoreStyle::Complex, "SPEAKING", 0.7, -61.0)] {
+            let mut emblem = emblem_at_rest();
+            emblem.style = style;
+            for _ in 0..20 {
+                emblem.tick(1.0 / 60.0, voice, false);
+            }
+            let reply = if voice > 0.0 { "Three things today, Sir: Physics at 08:00 in room 204, the dentist at 14:30, and the parcel arrives before six." } else { "" };
+            gallery(name, SCREEN, 2, |ctx| {
+                egui::CentralPanel::default().frame(Frame::none()).show(ctx, |ui| {
+                    let screen = ctx.screen_rect();
+                    let painter = ui.painter_at(screen);
+                    emblem.paint(&painter, screen);
+                    // The rail, as `header_strip` lays it out and letters it.
+                    let lit = HeaderState { core: style == crate::holo_core::CoreStyle::Complex, ..Default::default() };
+                    let items = header_items(&lit, "REBOOT", "DEFAULT CAMERA");
+                    let row = header_layout(&items, screen.left() + 12.0, screen.right() - 12.0, screen.top() + 10.0, |t| rail_width(&painter, t));
+                    let taken: Vec<Rect> = row.placed.iter().map(|(_, r)| *r).collect();
+                    for (id, rect) in row.placed {
+                        let item = items.iter().find(|i| i.id == id).expect("laid-out item");
+                        if !item.boxed {
+                            holo::text(&painter, rect.left_center(), Align2::LEFT_CENTER, Face::Label, &item.text, RAIL_TEXT, holo::theme().faint());
+                        } else if id == "source" {
+                            rail_picker(&painter, rect, &item.text, 0.0);
+                        } else {
+                            rail_key(&painter, rect, &item.text, 0.0, item.on, holo::theme().accent());
+                        }
+                    }
+                    header_rule(&painter, screen, voice);
+                    if let Some(plate) = pill_rect(&painter, screen, &taken) {
+                        paint_pill(&painter, plate.center(), word, 1.0);
+                    }
+                    if let Some(block) = crate::hud_board::dialogue_block("what is on today", reply, false, "14:02") {
+                        let (width, centre_x) = comms_placement(screen, 0.0);
+                        let bottom = screen.bottom() - 12.0 - TELEMETRY_H - 6.0;
+                        crate::hud_board::paint_dialogue(&painter, Rect::from_min_size(pos2(centre_x - width / 2.0, bottom - (CAPTION_BAND - 8.0)), vec2(width, CAPTION_BAND - 8.0)), &block);
+                    }
+                    // The bottom strip: the meter and its chip, what he heard, the key hints.
+                    let y = screen.bottom() - 10.0 - TELEMETRY_H;
+                    let chip = paint_strip_meter(&painter, pos2(screen.left() + 14.0, y), level, level + 6.0, false, false);
+                    holo::text(&painter, pos2(chip.right() + 14.0, y + TELEMETRY_H / 2.0), Align2::LEFT_CENTER, Face::Body, "what is on today", 12.5, holo::a(holo::theme().ink(), 0.75));
+                    for (label, rect) in key_hints(&painter, key_hints_right(screen, 0.0), y + TELEMETRY_H / 2.0) {
+                        paint_key_hint(&painter, rect, label, false);
+                    }
+                });
+            });
+        }
     }
 
     /// The tour lighting the emblem, as "In the middle stands my emblem" is said.
@@ -10388,14 +10380,14 @@ mod tests {
                 egui::Area::new(egui::Id::new("hud_system_column")).default_pos(pos2(screen.left() + 24.0, top)).order(egui::Order::Middle).show(ctx, |ui| {
                     ui.set_width(SYSTEM_COLUMN);
                     column_scroll(ui, screen.height() - top - 90.0, |ui| {
-                        sharp_block(ui, "WIDGET // DAILY BRIEFING SUMMARY", "NOTE", |ui| {
+                        crate::holo_ui::titled_plate(ui, "WIDGET // DAILY BRIEFING SUMMARY", "NOTE", |ui| {
                             for line in lines {
-                                ui.add(egui::Label::new(RichText::new(line).size(13.5).color(STRIP_INK)).wrap());
+                                ui.add(egui::Label::new(RichText::new(line).size(13.5).color(strip_ink())).wrap());
                                 ui.add_space(4.0);
                             }
                         });
-                        sharp_block(ui, "WIDGET // A SHORT ONE", "NOTE", |ui| {
-                            ui.label(RichText::new("One line.").size(13.5).color(STRIP_INK));
+                        crate::holo_ui::titled_plate(ui, "WIDGET // A SHORT ONE", "NOTE", |ui| {
+                            ui.label(RichText::new("One line.").size(13.5).color(strip_ink()));
                         });
                     });
                 });
@@ -10538,27 +10530,23 @@ mod tests {
         assert_eq!(WindowMotion::of(Some(0.4), Some(0.2)), exit(20));
     }
 
-    /// A border drawn inside its rect: whole pixels at any scale, nothing outside the rect (a
-    /// block flush with the screen's edge keeps all four sides).
+    /// A hairline frame drawn inside its rect: whole pixels at any scale, nothing outside the
+    /// rect (a block flush with the screen's edge keeps all four sides).
     #[test]
-    fn borders_stay_inside_their_rect_at_any_scale() {
+    fn outlines_stay_inside_their_rect_at_any_scale() {
         for ppp in [1.0, 1.25, 1.5, 1.75, 2.0] {
             let ctx = egui::Context::default();
             ctx.set_pixels_per_point(ppp);
             let rect = Rect::from_min_size(Pos2::ZERO, vec2(300.0, 200.0));
             let out = ctx.run(egui::RawInput::default(), |ctx| {
                 let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("border_test")));
-                crate::hud_style::border(&painter, rect, 1.0, Color32::WHITE);
+                crate::holo::outline(&painter, &crate::holo::plate(rect, [0.0; 4]), Color32::WHITE);
             });
             let shapes: Vec<Rect> = out.shapes.iter().map(|c| c.shape.visual_bounding_rect()).filter(|r| r.is_positive()).collect();
-            assert_eq!(shapes.len(), 4, "four sides at {ppp}");
-            for side in &shapes {
-                assert!(rect.expand(1e-3).contains_rect(*side), "inside the rect at {ppp}: {side:?}");
-                let thin = side.width().min(side.height()) * ppp;
-                assert!((thin - thin.round()).abs() < 1e-3 && thin >= 1.0 - 1e-3, "whole pixels at {ppp}: {thin}");
-            }
-            let union = shapes.iter().copied().reduce(|a, b| a.union(b)).unwrap_or(Rect::NOTHING);
-            assert!((union.min - rect.min).length() < 1e-3 && (union.max - rect.max).length() < 1e-3, "all four edges at {ppp}");
+            assert_eq!(shapes.len(), 1, "one closed hairline at {ppp}");
+            let drawn = shapes[0];
+            assert!(rect.expand(1e-3).contains_rect(drawn), "inside the rect at {ppp}: {drawn:?}");
+            assert!((drawn.min - rect.min).length() < 1e-3 && (drawn.max - rect.max).length() < 1e-3, "all four edges at {ppp}: {drawn:?}");
         }
     }
 
@@ -10606,7 +10594,7 @@ mod tests {
         let key = |key: Key| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
         let typed = |s: &str| egui::Event::Text(s.to_string());
         let ctx = egui::Context::default();
-        install_fonts(&ctx);
+        holo::install_fonts(&ctx);
         let focused = |ctx: &egui::Context| ctx.memory(|m| m.has_focus(egui::Id::new(CONSOLE_INPUT_ID)));
         let (mut line, mut focus) = (String::new(), true);
         let none: Vec<String> = Vec::new();
@@ -10680,7 +10668,7 @@ mod tests {
         let _g = crate::hud_dock::test_lock();
         let screen = Rect::from_min_size(Pos2::ZERO, vec2(600.0, 400.0));
         let ctx = egui::Context::default();
-        install_fonts(&ctx);
+        holo::install_fonts(&ctx);
         set_still(&ctx, true);
         // One frame of a window with his bar, a line of text and a key of its own; whether the
         // window was told to follow the mouse. (How often the key was clicked, and where it is.)
@@ -10690,7 +10678,7 @@ mod tests {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     detached_bar(ui, ctx, "Changes", false);
                     ui.label("What is new.");
-                    let key = ui.button("A KEY OF ITS OWN");
+                    let key = crate::holo_ui::key(ui, "A KEY OF ITS OWN");
                     key_at.set(key.rect.center());
                     clicks.set(clicks.get() + key.clicked() as u32);
                 });
@@ -10753,7 +10741,7 @@ mod tests {
     fn a_view_in_a_window_of_its_own_closes_by_word() {
         let _g = crate::hud_dock::test_lock();
         let ctx = egui::Context::default();
-        install_fonts(&ctx);
+        holo::install_fonts(&ctx);
         let screen = Rect::from_min_size(Pos2::ZERO, vec2(600.0, 400.0));
         // (The board's frame asks for the window, as the view's module does; then the window
         // draws a frame of its own.)
@@ -10839,7 +10827,7 @@ mod tests {
         let _g = crate::hud_dock::test_lock();
         let screen = Rect::from_min_size(Pos2::ZERO, vec2(1920.0, 1080.0));
         let ctx = egui::Context::default();
-        install_fonts(&ctx);
+        holo::install_fonts(&ctx);
         set_still(&ctx, true);
         let mut sizes = Vec::new();
         for _ in 0..40 {
@@ -10887,7 +10875,7 @@ mod tests {
         let _g = crate::hud_dock::test_lock();
         let screen = Rect::from_min_size(Pos2::ZERO, vec2(1920.0, 1080.0));
         let ctx = egui::Context::default();
-        install_fonts(&ctx);
+        holo::install_fonts(&ctx);
         set_still(&ctx, false);
         let id = "detach_probe";
         let frame = || {
@@ -10929,7 +10917,7 @@ mod tests {
         let _g = crate::hud_dock::test_lock();
         let screen = Rect::from_min_size(Pos2::ZERO, vec2(1920.0, 1080.0));
         let ctx = egui::Context::default();
-        install_fonts(&ctx);
+        holo::install_fonts(&ctx);
         set_still(&ctx, true);
         let id = "arrange_probe";
         let run = |frames: usize| {
@@ -11035,16 +11023,20 @@ mod tests {
         assert_eq!(pill_word("speaking", false, false), "SPEAKING");
         assert_eq!(pill_word("idle", true, false), "MUTED");
         assert_eq!(pill_word("speaking", false, true), "STANDBY");
-        assert_eq!(pill_colours("LISTENING")[1], Color32::from_rgb(0x3E, 0xE0, 0x7A));
-        assert_eq!(pill_colours("THINKING")[0], Color32::from_rgb(0xFF, 0xA5, 0x30));
-        assert_eq!(pill_colours("SPEAKING")[0], Color32::from_rgb(0xFF, 0x5A, 0x3A));
+        // Colour is information: his lamp is lit while he listens, the plate is solid while
+        // he speaks, and a microphone that is off reads in the alert colour.
+        let t = holo::theme();
+        assert_eq!(pill_colours("LISTENING")[1], t.accent());
+        assert_eq!((pill_colours("SPEAKING")[2], pill_colours("SPEAKING")[0]), (t.accent(), Color32::BLACK));
+        assert_eq!(pill_colours("MUTED")[0], t.alert());
+        assert!(pill_works("LOADING BRAIN") && !pill_works("LISTENING"));
         assert_eq!(rim_target("listening", "idle", 0.9, 0.0), 0.0, "silence");
         assert!(rim_target("listening", "speaking", 0.6, 0.0) >= 0.6);
         assert!(rim_target("idle", "pre_speech", 0.0, 0.0) >= 0.25, "a quiet voice still shows");
         assert_eq!(rim_target("speaking", "speaking", 0.9, 0.0), 0.0, "never while JAI speaks");
         assert_eq!(rim_target("listening", "speaking", 0.9, 1.0), 0.0, "never docked");
         let ctx = egui::Context::default();
-        install_fonts(&ctx);
+        holo::install_fonts(&ctx);
         let screen = Rect::from_min_size(Pos2::ZERO, vec2(1920.0, 1080.0));
         let _ = ctx.run(egui::RawInput::default(), |ctx| {
             let painter = ctx.layer_painter(egui::LayerId::background());
@@ -11161,16 +11153,16 @@ mod tests {
                     assert_eq!(frame.find_text(&format!("DISPLAY {n}")).len(), 1, "{case}");
                 }
                 assert_eq!(frame.find_text("1080 x 1920  AT  -1080, -290").len(), 1, "{case}");
-                assert_eq!(frame.find_exact("[ MOVE HERE ]").len(), if spanning { 3 } else { 2 }, "{case}");
+                assert_eq!(frame.find_exact("MOVE HERE").len(), if spanning { 3 } else { 2 }, "{case}");
                 assert_eq!(frame.find_exact("HUD IS HERE").len(), usize::from(!spanning), "{case}");
                 // The switch says what it will do, and does it.
-                let (label, turns) = if spanning { ("[ BACK TO ONE MONITOR ]", false) } else { ("[ SPAN ALL MONITORS ]", true) };
+                let (label, turns) = if spanning { ("BACK TO ONE MONITOR", false) } else { ("SPAN ALL MONITORS", true) };
                 let key = frame.find_exact(label);
                 assert_eq!(key.len(), 1, "{case}: {label}");
                 stage.click(key[0].center(), egui::PointerButton::Primary, &mut menu);
                 assert_eq!(picked.get(), ScreensPick { span: Some(turns), ..Default::default() }, "{case}");
                 // `[ MOVE HERE ]` names its own monitor (the rows are in the monitors' order).
-                let mut moves = frame.find_exact("[ MOVE HERE ]");
+                let mut moves = frame.find_exact("MOVE HERE");
                 moves.sort_by(|a, b| a.top().total_cmp(&b.top()));
                 stage.click(moves[moves.len() - 1].center(), egui::PointerButton::Primary, &mut menu);
                 assert_eq!(picked.get().send, Some(if here == Some(3) { 2 } else { 3 }), "{case}");
@@ -11185,16 +11177,16 @@ mod tests {
         let mut stage = Stage::new(vec2(900.0, 600.0));
         let frame = stage.frames(3, &mut |ctx| {
             egui::Area::new(egui::Id::new("old_screens_menu")).fixed_pos(pos2(40.0, 40.0)).show(ctx, |ui| {
-                ui.set_width(340.0);
+                ui.set_width(300.0);
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("DISPLAY 3  MONITOR 3 (1080×1920 AT -1080,-290)").font(strip_font()).color(STRIP_INK));
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| ui.add(egui::Button::new(RichText::new("[ MONITOR 3 ]").font(strip_font())).frame(false)));
+                    ui.label(RichText::new("DISPLAY 3  MONITOR 3 (1080×1920 AT -1080,-290)").font(strip_font()).color(strip_ink()));
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| ui.add(egui::Button::new(RichText::new("MONITOR 3").font(strip_font())).frame(false)));
                 });
             });
         });
         let found = visual::text_over_text(&frame);
         assert_eq!(found.len(), 1, "{found:?}");
-        assert!(found[0].contains("[ MONITOR 3 ]"), "{found:?}");
+        assert!(found[0].contains("MONITOR 3"), "{found:?}");
         // A window over the board's text hides it: that is no finding.
         let frame = stage.frames(3, &mut |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| ui.label("The board's own text, under the window."));
@@ -11273,7 +11265,7 @@ mod tests {
     fn a_tool_block_renders_inside_the_hud_and_a_crashing_frame_is_contained() {
         let _dock = crate::hud_dock::test_lock();
         let ctx = egui::Context::default();
-        install_fonts(&ctx);
+        holo::install_fonts(&ctx);
         let screen = egui::RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1920.0, 1080.0))), ..Default::default() };
         let draw = |ctx: &egui::Context| {
             crate::hud_dock::begin_frame();
@@ -11310,16 +11302,9 @@ mod tests {
         let long = heard_line("Hey, can you research something for me, a state of VR report please", 24);
         assert!(long.ends_with('…') && long.chars().count() == 24, "{long}");
         assert_eq!(heard_line("anything", 3), "", "no room, no line");
-        // The meter: crimson rising to a white tip, nothing when silent.
-        let mut mesh = egui::Mesh::default();
-        meter_ribbon(&mut mesh, pos2(0.0, 0.0), 0.0, 1.5);
-        assert!(mesh.vertices.is_empty());
-        meter_ribbon(&mut mesh, pos2(0.0, 0.0), 50.0, 1.5);
-        let tip = mesh.vertices.iter().max_by(|a, b| a.pos.x.total_cmp(&b.pos.x)).unwrap();
-        assert_eq!(tip.color, Color32::WHITE);
-        let start = mesh.vertices.iter().min_by(|a, b| a.pos.x.total_cmp(&b.pos.x)).unwrap();
-        assert_eq!(start.color.a(), 0, "fades in from nothing");
-        assert!(mesh.vertices.iter().all(|v| v.pos.x <= 50.0 + 1e-3));
+        // The chip is a solid block while he hears or is muted, an outline while he sleeps.
+        assert!(strip_badge(false, false).2 && strip_badge(true, false).2 && !strip_badge(false, true).2);
+        assert_eq!(strip_badge(true, false).1, holo::theme().alert(), "a muted microphone reads in the alert colour");
         // The COMMS block is off unless switched on.
         assert!(!crate::interface::InterfaceSettings::default().comms_block);
     }

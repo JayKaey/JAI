@@ -296,10 +296,10 @@ fn hearing_block(ctx: &egui::Context) {
         }
         ui.label(RichText::new("WHAT ARRIVED  →  WHAT I TOOK IT FOR      click a line to tell me what you meant").font(FontId::monospace(11.0)).color(muted));
         ui.add_space(4.0);
-        crate::hud_style::faded(ui, egui::ScrollArea::vertical().auto_shrink([false; 2]), |ui| {
+        crate::holo_block::faded(ui, egui::ScrollArea::vertical().auto_shrink([false; 2]), |ui| {
             for clip in &clips {
                 let same = crate::ear::words(&clip.heard).join(" ").ends_with(&crate::ear::words(&clip.meant).join(" "));
-                let mark = if clip.led { crate::hud_style::GOOD } else { crate::hud_style::warn_colour() };
+                let mark = if clip.led { crate::holo::theme().ink() } else { crate::holo::theme().warn() };
                 let line = ui
                     .horizontal_wrapped(|ui| {
                         ui.label(RichText::new(clip.at.get(11..16).unwrap_or("")).font(FontId::monospace(11.0)).color(muted));
@@ -329,12 +329,12 @@ fn hearing_block(ctx: &egui::Context) {
                 if let Some((id, text)) = editing.as_mut().filter(|(id, _)| *id == clip.id) {
                     ui.horizontal(|ui| {
                         ui.label(RichText::new("I MEANT").font(FontId::monospace(11.0)).color(accent));
-                        let field = ui.add(egui::TextEdit::singleline(text).desired_width(360.0).font(FontId::proportional(13.5)));
+                        let field = crate::holo_ui::slot(ui, egui::TextEdit::singleline(text).desired_width(360.0).font(FontId::proportional(13.5)));
                         let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                        if ui.button(RichText::new("[ TEACH ]").font(FontId::monospace(11.0))).clicked() || enter {
+                        if crate::holo_ui::key(ui, RichText::new("TEACH").font(FontId::monospace(11.0))).clicked() || enter {
                             taught = Some((*id, clip.heard.clone(), text.trim().to_string()));
                         }
-                        if ui.button(RichText::new("[ CANCEL ]").font(FontId::monospace(11.0))).clicked() {
+                        if crate::holo_ui::key(ui, RichText::new("CANCEL").font(FontId::monospace(11.0))).clicked() {
                             cancel = true;
                         }
                     });
@@ -580,8 +580,8 @@ fn coach_block(ctx: &egui::Context) {
                 let mut x = rect.left();
                 for w in words {
                     let (text, colour, under) = match w {
-                        Word::Right(word) => (word.as_str(), crate::hud_style::GOOD, None),
-                        Word::Wrong(word, got) => (word.as_str(), crate::hud_style::warn_colour(), Some(if got.is_empty() { "(not heard)".to_string() } else { got.clone() })),
+                        Word::Right(word) => (word.as_str(), crate::holo::theme().ink(), None),
+                        Word::Wrong(word, got) => (word.as_str(), crate::holo::theme().warn(), Some(if got.is_empty() { "(not heard)".to_string() } else { got.clone() })),
                     };
                     let galley = p.layout_no_wrap(text.to_string(), font.clone(), colour);
                     let under_galley = under.map(|u| p.layout_no_wrap(u, FontId::monospace(11.0), muted));
@@ -598,14 +598,14 @@ fn coach_block(ctx: &egui::Context) {
                 }
                 let share = score(words);
                 let verdict = if share >= 0.99 { "Every word arrived.".to_string() } else { format!("{:.0} % of the words arrived. Say it once more, or \"next\".", share * 100.0) };
-                p.text(pos2(rect.left(), rect.bottom() - 16.0), Align2::LEFT_CENTER, format!("I heard: \u{201C}{heard}\u{201D}   ·   {verdict}"), FontId::proportional(12.0), if share >= 0.99 { crate::hud_style::GOOD } else { muted });
+                p.text(pos2(rect.left(), rect.bottom() - 16.0), Align2::LEFT_CENTER, format!("I heard: \u{201C}{heard}\u{201D}   ·   {verdict}"), FontId::proportional(12.0), if share >= 0.99 { crate::holo::theme().ink() } else { muted });
             }
         }
         ui.horizontal(|ui| {
-            if ui.button(RichText::new("[ HEAR IT ]").font(FontId::monospace(11.0)).color(accent)).on_hover_text("I say the sentence").clicked() {
+            if crate::holo_ui::key(ui, RichText::new("HEAR IT").font(FontId::monospace(11.0)).color(accent)).on_hover_text("I say the sentence").clicked() {
                 say_it = true;
             }
-            if ui.button(RichText::new("[ NEXT ]").font(FontId::monospace(11.0))).clicked() {
+            if crate::holo_ui::key(ui, RichText::new("NEXT").font(FontId::monospace(11.0))).clicked() {
                 if let Some(c) = lock(&COACHING).as_mut() {
                     (c.at, c.last, c.tries, c.since) = ((c.at + 1) % SENTENCES.len(), None, 0, Instant::now());
                 }

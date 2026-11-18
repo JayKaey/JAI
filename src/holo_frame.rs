@@ -31,11 +31,13 @@ pub struct Plate<'a> {
     pub alpha: f32,
     /// Seconds, for the decoding title.
     pub clock: f64,
+    /// Room kept free at the right of the header (for keys): the title is cut short of it.
+    pub reserve: f32,
 }
 
 impl Default for Plate<'_> {
     fn default() -> Self {
-        Self { index: "", title: "", focus: 0.0, open: 1.0, alpha: 1.0, clock: 0.0 }
+        Self { index: "", title: "", focus: 0.0, open: 1.0, alpha: 1.0, clock: 0.0, reserve: 0.0 }
     }
 }
 
@@ -47,7 +49,8 @@ pub struct Laid {
     pub header: Rect,
     /// The room for content, inside the padding.
     pub body: Rect,
-    /// The right end of the title: keys go right of it.
+    /// Where the title starts and ends: keys go right of it.
+    pub title_start: f32,
     pub title_end: f32,
     /// How visible the content should be drawn (0 until the frame stands).
     pub content: f32,
@@ -91,7 +94,7 @@ pub fn plate(p: &Painter, r: Rect, plate: &Plate) -> Laid {
     let content = phase(plate.open, 0.66, 1.0) * alpha;
     let header = Rect::from_min_size(frame.min, vec2(frame.width(), HEADER.min(frame.height())));
     let body = Rect::from_min_max(pos2(r.left() + PAD, r.top() + HEADER + PAD * 0.7), pos2(r.right() - PAD, r.bottom() - PAD));
-    let laid = Laid { frame, header, body, title_end: frame.left(), content };
+    let laid = Laid { frame, header, body, title_start: frame.left(), title_end: frame.left(), content };
     if alpha <= 0.003 || frame.width() < 1.0 {
         return laid;
     }
@@ -124,7 +127,7 @@ pub fn plate(p: &Painter, r: Rect, plate: &Plate) -> Laid {
     }
     holo::path(p, &[pos2(frame.right(), frame.bottom() - cut), pos2(frame.right() - cut, frame.bottom())], bright);
 
-    let mut title_end = frame.left();
+    let (mut title_start, mut title_end) = (frame.left(), frame.left());
     if chrome > 0.003 && frame.height() >= HEADER {
         // The header's rule, with the accent under the tab.
         let y = frame.top() + HEADER;
@@ -143,12 +146,12 @@ pub fn plate(p: &Painter, r: Rect, plate: &Plate) -> Laid {
             x = tab.right() + 12.0 - (1.0 - slide) * 18.0;
         }
         let shown = decode(&plate.title.to_uppercase(), phase(plate.open, 0.55, 1.0), plate.clock);
-        let room = (frame.right() - PAD - x).max(1.0);
+        let room = (frame.right() - PAD - plate.reserve - x).max(1.0);
         let g = holo::galley_within(p, Face::Label, &shown, 10.5, a(t.ink(), chrome), room);
-        title_end = x + g.size().x;
+        (title_start, title_end) = (x, x + g.size().x);
         p.with_clip_rect(frame.intersect(p.clip_rect())).galley(pos2(x, holo::snap(mid - g.size().y / 2.0 + 0.5, holo::ppp(p))), g, t.ink());
     }
-    Laid { title_end, ..laid }
+    Laid { title_start, title_end, ..laid }
 }
 
 /// A plain plate without a header: a tooltip, a menu, a card inside a panel.
@@ -157,6 +160,22 @@ pub fn card(p: &Painter, r: Rect, focus: f32, alpha: f32) {
     let shape = holo::plate(r, [0.0, 0.0, CUT.min(r.height() / 3.0), 0.0]);
     glass(p, &shape, alpha);
     holo::outline(p, &shape, a(mix(a(t.ink(), 0.20), t.accent(), focus), alpha));
+}
+
+/// A plate's frame over a rect that is already filled with glass: for a container whose height
+/// is known only once its content is laid out (`holo_ui::plate`). The canvas shows through the
+/// cut corner; the hairline, the three ticks and the cut are drawn as on `plate`.
+pub fn dress(p: &Painter, r: Rect, focus: f32, alpha: f32) {
+    let t = holo::theme();
+    let cut = CUT.min(r.height() / 3.0);
+    holo::fill(p, &[pos2(r.right() - cut, r.bottom() + 1.0), pos2(r.right() + 1.0, r.bottom() + 1.0), pos2(r.right() + 1.0, r.bottom() - cut)], t.void());
+    holo::outline(p, &holo::plate(r, [0.0, 0.0, cut, 0.0]), a(mix(a(t.ink(), 0.20), t.accent(), focus), alpha));
+    let bright = a(mix(t.ink(), t.hot(), focus), 0.85 * alpha);
+    let arm = TICK.min(r.width() / 3.0).min(r.height() / 3.0);
+    for (at, dx, dy) in [(r.left_top(), 1.0, 1.0), (r.right_top(), -1.0, 1.0), (r.left_bottom(), 1.0, -1.0)] {
+        holo::path(p, &[pos2(at.x + dx * arm, at.y), at, pos2(at.x, at.y + dy * arm)], bright);
+    }
+    holo::path(p, &[pos2(r.right(), r.bottom() - cut), pos2(r.right() - cut, r.bottom())], bright);
 }
 
 /// The text under a panel's bottom edge, left: what it is and how old ("WX-02 · 14:32:07").

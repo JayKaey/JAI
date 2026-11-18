@@ -1,10 +1,11 @@
 //! The idle screen (Sir, 2026-11-12: "calm screen"): unused for some minutes, the HUD dims down
-//! to a large clock, the date, the next appointment and the weather, with a ring that breathes
-//! where the emblem is. His voice or the mouse brings everything back. The figures move a few
+//! to a large clock on a dial of the minute's seconds, the date, the next appointment and the weather,
+//! where the core stands. His voice or the mouse brings everything back. The figures move a few
 //! pixels every minute, so nothing burns into an OLED.
 
 use chrono::{Datelike, Local, NaiveDateTime, Timelike};
-use eframe::egui::{self, pos2, vec2, Align2, Color32, FontFamily, FontId, Pos2, Rect, Rounding, Stroke};
+use crate::holo::{self, Face};
+use eframe::egui::{self, pos2, vec2, Align2, Color32, Pos2, Rect, Rounding};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -131,34 +132,31 @@ pub fn clock_height(radius: f32, date: bool, weather: bool) -> f32 {
     time * CLOCK_LEAD + if date { small + 10.0 } else { 0.0 } + if weather { sky + 8.0 } else { 0.0 }
 }
 
-fn display(size: f32) -> FontId {
-    FontId::new(size, FontFamily::Name("display".into()))
-}
-
 /// The room the desktop clock takes under an emblem of `radius`: as wide as its time (and
 /// never narrower than the emblem's core), as tall as its lines.
 pub fn clock_size(ctx: &egui::Context, radius: f32, time: &str, date: bool, weather: bool) -> egui::Vec2 {
-    let width = ctx.fonts(|f| crate::hud_style::figure_galley(f, time, display(clock_sizes(radius)[0]), Color32::WHITE)).size().x;
+    let width = ctx.fonts(|f| crate::holo::figure_galley(f, time, holo::font(Face::Figure, clock_sizes(radius)[0]), Color32::WHITE)).size().x;
     vec2(width.max(radius * 1.2), clock_height(radius, date, weather))
 }
 
-/// Paints the desktop clock into `rect` (`clock_size`): the time, the date under it and the
-/// weather under that, where each is given.
+/// Paints the desktop clock into `rect` (`clock_size`): the time in thin figures, the date
+/// under it in the accent's capitals and the weather under that, where each is given.
 pub fn paint_clock(p: &egui::Painter, rect: Rect, radius: f32, time: &str, date: Option<&str>, weather: Option<&(f64, String)>) {
+    let t = holo::theme();
     let [time_size, small, sky] = clock_sizes(radius);
     let x = rect.center().x;
     // Even-width digits, so the time does not shuffle sideways as the minutes turn; a digit that
     // changes rolls up into place.
-    let font = display(time_size);
-    let width = p.fonts(|f| crate::hud_style::figure_galley(f, time, font.clone(), Color32::WHITE)).size().x;
-    crate::hud_style::rolling_figures(p, egui::Id::new("jai_desk_clock"), pos2(x - width * 0.5, rect.top()), time, font, Color32::from_rgb(0xE8, 0xF2, 0xFC));
+    let font = holo::font(Face::Figure, time_size);
+    let width = p.fonts(|f| crate::holo::figure_galley(f, time, font.clone(), Color32::WHITE)).size().x;
+    crate::holo::rolling_figures(p, egui::Id::new("jai_desk_clock"), pos2(x - width * 0.5, rect.top()), time, font, t.ink());
     let mut y = rect.top() + time_size * CLOCK_LEAD;
     if let Some(date) = date {
-        p.text(pos2(x, y), Align2::CENTER_TOP, date, FontId::monospace(small), crate::hud_board::active_colour().gamma_multiply(0.9));
+        holo::text(p, pos2(x, y), Align2::CENTER_TOP, Face::Label, date, small * 0.78, t.accent());
         y += small + 10.0;
     }
     if let Some((degrees, sky_word)) = weather {
-        p.text(pos2(x, y), Align2::CENTER_TOP, format!("{degrees:.0}°  ·  {sky_word}"), FontId::new(sky, FontFamily::Name("label".into())), Color32::from_rgb(0x8E, 0xA4, 0xB8));
+        holo::text(p, pos2(x, y), Align2::CENTER_TOP, Face::Body, &format!("{degrees:.0}°  ·  {sky_word}"), sky, t.muted());
     }
 }
 
@@ -180,54 +178,58 @@ pub fn minute_mark(k: usize) -> f32 {
     -std::f32::consts::FRAC_PI_2 + k as f32 / 60.0 * std::f32::consts::TAU
 }
 
-/// Paints the idle screen over `screen` at `strength` (0 … 1, eased by the HUD). The ring
-/// stands at `centre` with `radius` (where the emblem is) and breathes; the time stands inside
-/// it, the minute's seconds run round it as sixty marks, and the date, the next appointment and
-/// the weather stand under it.
+/// Paints the idle screen over `screen` at `strength` (0 … 1, eased by the HUD): a dial where
+/// the core stands (`centre`, `radius`). Round it the minute's sixty seconds as marks, those
+/// passed lit and the present one white-hot; inside it the hour's minutes as an arc of light
+/// and the time in thin figures; under it the date, the next appointment and the weather.
 pub fn paint(ctx: &egui::Context, screen: Rect, centre: Pos2, radius: f32, strength: f32) {
     if strength <= 0.0 {
         return;
     }
+    let t = holo::theme();
+    let a = holo::a;
     let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("hud_idle_screen")));
-    p.rect_filled(screen, Rounding::ZERO, Color32::from_black_alpha((255.0 * DIM * strength) as u8));
-    let accent = crate::hud_board::active_colour();
+    p.rect_filled(screen, Rounding::ZERO, a(t.void(), DIM * strength));
     let now = Local::now().naive_local();
-    let time = ctx.input(|i| i.time) as f32;
     let centre = centre + drift(now.minute());
-    let ink = Color32::from_rgb(0xE8, 0xF2, 0xFC);
-    let muted = Color32::from_rgb(0x8E, 0xA4, 0xB8);
-    // The ring breathes where the emblem is (once in six seconds); what is inside it goes dark,
-    // so the time stands alone.
-    p.circle_filled(centre, radius * 0.93, Color32::from_black_alpha((250.0 * strength) as u8));
-    let breath = 0.5 + 0.5 * (time * std::f32::consts::TAU / 6.0).sin();
-    for (share, width, alpha) in [(1.0f32, 1.6f32, 0.55f32), (0.93, 1.0, 0.25)] {
-        p.circle_stroke(centre, radius * share * (0.99 + 0.02 * breath), Stroke::new(width, accent.gamma_multiply(alpha * (0.6 + 0.4 * breath) * strength)));
-    }
-    // The minute as it passes: sixty marks round the ring, lit up to the second.
+    // What is inside the dial goes dark, so the time stands alone.
+    p.circle_filled(centre, radius * 0.93, a(t.void(), 0.98 * strength));
+    let mut light = holo::Light::new(&p);
+    light.ring(centre, radius, holo::px(&p), a(t.ink(), 0.20 * strength));
     let second = now.second() as usize;
     for k in 0..60 {
         let angle = minute_mark(k);
-        let dir = vec2(angle.cos(), angle.sin());
-        let (from, to) = (radius * 1.07, radius * if k % 5 == 0 { 1.125 } else { 1.1 });
-        let colour = if k <= second { accent.gamma_multiply(0.9 * strength) } else { crate::hud_style::white(0.14 * strength) };
-        p.line_segment([centre + dir * from, centre + dir * to], Stroke::new(if k % 5 == 0 { 1.6f32 } else { 1.0 }, colour));
+        let (from, to) = (radius * 1.07, radius * if k % 5 == 0 { 1.125 } else { 1.10 });
+        let (from, to) = (holo::polar(centre, from, angle), holo::polar(centre, to, angle));
+        if k == second {
+            light.neon(&[from, to], false, 1.8, a(t.hot(), strength), 1.0);
+        } else {
+            light.seg(from, to, if k % 5 == 0 { 1.5 } else { 1.0 }, if k < second { a(t.accent(), 0.85 * strength) } else { a(t.ink(), 0.14 * strength) });
+        }
     }
+    let hour_share = (now.minute() as f32 + now.second() as f32 / 60.0) / 60.0;
+    if hour_share > 0.004 {
+        let to = holo::NORTH + hour_share * std::f32::consts::TAU;
+        light.neon_arc(centre, radius * 0.93, holo::NORTH, to, 1.3, a(t.accent(), strength), 0.8);
+        light.spark(holo::polar(centre, radius * 0.93, to), 5.0, holo::lit(t.hot(), strength));
+    }
+    light.paint(&p);
     // Inside: what this is, the time, and the date under it.
-    p.text(centre - vec2(0.0, radius * 0.42), Align2::CENTER_CENTER, "STANDING BY", FontId::monospace((radius * 0.05).clamp(8.5, 12.0)), muted.gamma_multiply(0.8 * strength));
-    p.text(centre - vec2(0.0, radius * 0.07), Align2::CENTER_CENTER, now.format("%H:%M").to_string(), display((radius * 0.5).clamp(36.0, 150.0)), ink.gamma_multiply(strength));
-    p.text(centre + vec2(0.0, radius * 0.33), Align2::CENTER_CENTER, date_line(now).to_uppercase(), FontId::monospace((radius * 0.062).clamp(9.5, 15.0)), accent.gamma_multiply(0.9 * strength));
-    // Under it (above it where the ring stands low): the next appointment and the weather.
+    holo::text(&p, centre - vec2(0.0, radius * 0.42), Align2::CENTER_CENTER, Face::Label, "STANDING BY", (radius * 0.042).clamp(8.0, 10.0), a(t.faint(), strength));
+    holo::text(&p, centre - vec2(0.0, radius * 0.05), Align2::CENTER_CENTER, Face::Figure, &now.format("%H:%M").to_string(), (radius * 0.52).clamp(36.0, 150.0), a(t.ink(), strength));
+    holo::text(&p, centre + vec2(0.0, radius * 0.35), Align2::CENTER_CENTER, Face::Label, &date_line(now), (radius * 0.05).clamp(8.0, 12.0), a(t.accent(), strength));
+    // Under it (above it where the dial stands low): the next appointment and the weather.
     let glance = glance();
     let lines = glance.next.is_some() as u8 + glance.weather.is_some() as u8;
     let below = centre.y + radius * 1.22 + lines as f32 * 30.0 < screen.bottom();
     let mut y = if below { centre.y + radius * 1.22 } else { centre.y - radius * 1.22 - lines as f32 * 30.0 };
     if let Some((title, start, place)) = &glance.next {
-        y = p.text(pos2(centre.x, y), Align2::CENTER_TOP, next_line(title, *start, place, now), display(19.0), ink.gamma_multiply(0.92 * strength)).bottom() + 6.0;
+        y = holo::text(&p, pos2(centre.x, y), Align2::CENTER_TOP, Face::Body, &next_line(title, *start, place, now), 18.0, a(t.ink(), 0.92 * strength)).bottom() + 8.0;
     }
     if let Some((degrees, sky)) = &glance.weather {
-        p.text(pos2(centre.x, y), Align2::CENTER_TOP, format!("{degrees:.0}°  ·  {sky}"), FontId::new(15.0, FontFamily::Name("label".into())), muted.gamma_multiply(strength));
+        holo::text(&p, pos2(centre.x, y), Align2::CENTER_TOP, Face::Label, &format!("{degrees:.0}°  ·  {sky}"), 9.0, a(t.muted(), strength));
     }
-    // (The ring breathes: fifteen frames a second are plenty.)
+    // (The seconds step: fifteen frames a second are plenty.)
     ctx.request_repaint_after(Duration::from_millis(66));
 }
 

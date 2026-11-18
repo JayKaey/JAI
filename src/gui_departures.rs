@@ -3,7 +3,7 @@
 //! that train?" then means it); SHOW ON EARTH follows it on the globe. The data comes from
 //! `crate::transit`; this file only draws it.
 
-use super::{bold, stroke, BLOCK_SLATE, STRIP_INK, STRIP_MUTED};
+use super::{bold, stroke, block_slate, strip_ink, strip_muted};
 use crate::transit::{self, Departure};
 use eframe::egui::{self, pos2, vec2, Align2, Color32, CursorIcon, FontId, Frame, Margin, Rect, Rounding, Sense, Ui, ViewportBuilder, ViewportClass, ViewportCommand, ViewportId};
 use std::sync::Arc;
@@ -18,9 +18,6 @@ const WINDOW_SIZE: [f32; 2] = [580.0, 520.0];
 const WINDOW_MIN: [f32; 2] = [420.0, 300.0];
 const VIEWPORT: &str = "jai_departures";
 const ROW_H: f32 = 30.0;
-const LATE: Color32 = Color32::from_rgb(0xFF, 0x9A, 0x3C);
-const CANCELLED: Color32 = Color32::from_rgb(0xFF, 0x4D, 0x4D);
-const ON_TIME: Color32 = Color32::from_rgb(0x7C, 0xE3, 0x9A);
 
 fn mono(size: f32) -> FontId {
     FontId::monospace(super::ts(size))
@@ -43,7 +40,7 @@ fn pill_colour(d: &Departure) -> Color32 {
     }
 }
 
-use crate::hud_style::ink_on;
+use crate::holo::ink_on;
 
 /// What Sir clicked this frame.
 #[derive(Default)]
@@ -65,21 +62,21 @@ fn body(ui: &mut Ui, rt: &Handle) {
     // The header: the station, when it was updated, LIVE or DEMO.
     ui.horizontal(|ui| {
         let name = board.stop.as_ref().map(|s| s.name.clone()).or_else(|| board.asked.clone()).unwrap_or_else(|| "Finding your station…".into());
-        ui.label(egui::RichText::new(name.to_uppercase()).font(bold(15.0)).color(STRIP_INK));
+        ui.label(egui::RichText::new(name.to_uppercase()).font(bold(15.0)).color(strip_ink()));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let (tag, colour) = if board.demo { ("DEMO", STRIP_MUTED) } else if board.loading { ("…", STRIP_MUTED) } else { ("LIVE", crate::hud_board::PIN_RED) };
+            let (tag, colour) = if board.demo { ("DEMO", strip_muted()) } else if board.loading { ("…", strip_muted()) } else { ("LIVE", crate::holo::theme().alert()) };
             ui.label(egui::RichText::new(tag).font(mono(11.0)).color(colour));
             if !board.updated.is_empty() {
-                ui.label(egui::RichText::new(format!("UPDATED {}", board.updated)).font(mono(11.0)).color(STRIP_MUTED));
+                ui.label(egui::RichText::new(format!("UPDATED {}", board.updated)).font(mono(11.0)).color(strip_muted()));
             }
         });
     });
     ui.add_space(4.0);
     if let Some(e) = &board.error {
-        ui.label(egui::RichText::new(e).font(mono(11.0)).color(LATE));
+        ui.label(egui::RichText::new(e).font(mono(11.0)).color(crate::holo::theme().warn()));
     }
     if board.loading && board.rows.is_empty() && board.error.is_none() {
-        ui.label(egui::RichText::new("Asking Transitous for the departures…").font(mono(11.0)).color(STRIP_MUTED));
+        ui.label(egui::RichText::new("Asking Transitous for the departures…").font(mono(11.0)).color(strip_muted()));
     }
 
     // The columns.
@@ -88,12 +85,12 @@ fn body(ui: &mut Ui, rt: &Handle) {
     let head = ui.allocate_exact_size(vec2(full, 18.0), Sense::hover()).0;
     let p = ui.painter();
     for (x, h) in cols.iter().zip(["TIME", "LINE", "DESTINATION", "PLATF.", "STATUS"]) {
-        p.text(pos2(head.left() + x, head.center().y), Align2::LEFT_CENTER, h, mono(11.0), STRIP_MUTED);
+        p.text(pos2(head.left() + x, head.center().y), Align2::LEFT_CENTER, h, mono(11.0), strip_muted());
     }
     p.line_segment([head.left_bottom(), head.right_bottom()], stroke(1.0, accent.gamma_multiply(0.35)));
 
     let footer = 34.0;
-    crate::hud_style::faded(ui, egui::ScrollArea::vertical().max_height((ui.available_height() - footer).max(60.0)).auto_shrink([false, false]), |ui| {
+    crate::holo_block::faded(ui, egui::ScrollArea::vertical().max_height((ui.available_height() - footer).max(60.0)).auto_shrink([false, false]), |ui| {
         for (i, d) in board.rows.iter().enumerate() {
             let (rect, resp) = ui.allocate_exact_size(vec2(full, ROW_H), Sense::click());
             let p = ui.painter();
@@ -109,7 +106,7 @@ fn body(ui: &mut Ui, rt: &Handle) {
             let y = rect.center().y;
             // The time: planned, with the expected one beside it when late.
             let planned = d.planned.with_timezone(&tz).format("%H:%M").to_string();
-            p.text(pos2(rect.left() + cols[0] + 4.0, y), Align2::LEFT_CENTER, &planned, mono(13.0), STRIP_INK.gamma_multiply(fade));
+            p.text(pos2(rect.left() + cols[0] + 4.0, y), Align2::LEFT_CENTER, &planned, mono(13.0), strip_ink().gamma_multiply(fade));
             // The line pill.
             let pill_c = pill_colour(d).gamma_multiply(fade);
             let galley = p.layout_no_wrap(d.line.clone(), bold(11.0), ink_on(pill_c));
@@ -118,26 +115,26 @@ fn body(ui: &mut Ui, rt: &Handle) {
             p.with_clip_rect(pill).galley(pos2(pill.left() + 6.0, y - galley.size().y / 2.0), galley, ink_on(pill_c));
             // The destination.
             let dest_w = cols[3] - cols[2] - 8.0;
-            let dest = p.layout(d.headsign.clone(), FontId::proportional(super::ts(13.0)), if d.cancelled { STRIP_MUTED } else { STRIP_INK.gamma_multiply(fade) }, f32::INFINITY);
+            let dest = p.layout(d.headsign.clone(), FontId::proportional(super::ts(13.0)), if d.cancelled { strip_muted() } else { strip_ink().gamma_multiply(fade) }, f32::INFINITY);
             let dest_rect = Rect::from_min_size(pos2(rect.left() + cols[2], y - dest.size().y / 2.0), vec2(dest_w, dest.size().y));
-            p.with_clip_rect(dest_rect).galley(dest_rect.min, dest, STRIP_INK);
+            p.with_clip_rect(dest_rect).galley(dest_rect.min, dest, strip_ink());
             if d.cancelled {
-                p.line_segment([pos2(dest_rect.left(), y), pos2(dest_rect.left() + dest_w.min(200.0), y)], stroke(1.0, CANCELLED.gamma_multiply(0.8)));
+                p.line_segment([pos2(dest_rect.left(), y), pos2(dest_rect.left() + dest_w.min(200.0), y)], stroke(1.0, crate::holo::theme().alert().gamma_multiply(0.8)));
             }
             // The platform (amber when it changed).
             if let Some(track) = &d.track {
-                let c = if d.platform_changed() { LATE } else { STRIP_INK.gamma_multiply(fade) };
+                let c = if d.platform_changed() { crate::holo::theme().warn() } else { strip_ink().gamma_multiply(fade) };
                 p.text(pos2(rect.left() + cols[3], y), Align2::LEFT_CENTER, track, mono(12.0), c);
             }
             // The status.
             let (status, c) = if d.cancelled {
-                ("cancelled".to_string(), CANCELLED)
+                ("cancelled".to_string(), crate::holo::theme().alert())
             } else if !d.realtime {
-                ("timetable".to_string(), STRIP_MUTED)
+                ("timetable".to_string(), strip_muted())
             } else if d.delay_min() >= 1 {
-                (format!("{} +{}", d.expected.with_timezone(&tz).format("%H:%M"), d.delay_min()), LATE)
+                (format!("{} +{}", d.expected.with_timezone(&tz).format("%H:%M"), d.delay_min()), crate::holo::theme().warn())
             } else {
-                ("on time".to_string(), ON_TIME)
+                ("on time".to_string(), crate::holo::theme().ink())
             };
             p.text(pos2(rect.left() + cols[4], y), Align2::LEFT_CENTER, status, mono(11.0), c.gamma_multiply(fade));
             p.line_segment([rect.left_bottom(), rect.right_bottom()], stroke(1.0, Color32::from_white_alpha(10)));
@@ -147,7 +144,7 @@ fn body(ui: &mut Ui, rt: &Handle) {
             resp.on_hover_cursor(CursorIcon::PointingHand);
         }
         if board.rows.is_empty() && !board.loading && board.error.is_none() && board.stop.is_some() {
-            ui.label(egui::RichText::new("Nothing leaves in the next while.").font(mono(11.0)).color(STRIP_MUTED));
+            ui.label(egui::RichText::new("Nothing leaves in the next while.").font(mono(11.0)).color(strip_muted()));
         }
     });
 
@@ -155,7 +152,7 @@ fn body(ui: &mut Ui, rt: &Handle) {
     ui.add_space(4.0);
     ui.horizontal(|ui| {
         let button = |ui: &mut Ui, text: &str, enabled: bool| {
-            ui.add_enabled(enabled, egui::Button::new(egui::RichText::new(text).font(mono(11.0)).color(if enabled { accent } else { STRIP_MUTED })).fill(BLOCK_SLATE).stroke(stroke(1.0, accent.gamma_multiply(if enabled { 0.7 } else { 0.25 }))))
+            ui.add_enabled_ui(enabled, |ui| crate::holo_ui::key(ui, text)).inner
         };
         if button(ui, "SHOW ON EARTH", transit::focused().is_some()).on_hover_text("Follow the selected train on the Earth").clicked() {
             actions.show_on_earth = true;
@@ -164,7 +161,7 @@ fn body(ui: &mut Ui, rt: &Handle) {
             actions.refresh = true;
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label(egui::RichText::new("Transitous \u{b7} open data").font(mono(11.0)).color(STRIP_MUTED));
+            ui.label(egui::RichText::new("Transitous \u{b7} open data").font(mono(11.0)).color(strip_muted()));
         });
     });
 
@@ -223,7 +220,7 @@ pub(super) fn show(ctx: &egui::Context, rt: &Handle) {
             if class == ViewportClass::Embedded {
                 egui::Window::new(TITLE).show(ctx, |ui| body(ui, &rt));
             } else {
-                egui::CentralPanel::default().frame(Frame::none().fill(BLOCK_SLATE).inner_margin(Margin::same(14.0))).show(ctx, |ui| {
+                egui::CentralPanel::default().frame(Frame::none().fill(block_slate()).inner_margin(Margin::same(14.0))).show(ctx, |ui| {
                     if super::detached_title_bar(ui, ctx, TITLE) {
                         transit::close();
                     }

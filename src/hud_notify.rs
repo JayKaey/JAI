@@ -4,7 +4,8 @@
 //! happens, so it is noticed without a sound.
 
 use chrono::{DateTime, Local};
-use eframe::egui::{self, pos2, vec2, Color32, FontId, Rect, Rounding};
+use crate::holo::{self, Face};
+use eframe::egui::{self, pos2, vec2, Color32, Rect, Rounding};
 use std::collections::VecDeque;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -13,7 +14,6 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-use crate::hud_style::stroke;
 
 // ------------------------------------------------------------------------------ history ----
 
@@ -243,7 +243,7 @@ pub struct Card<'a> {
 /// How far in a card is (0 off screen … 1 in place) and how strong (0-1), from its age and the
 /// time it has left.
 pub fn card_motion(age: f32, left: f32) -> (f32, f32) {
-    let enter = crate::hud_style::motion::settle((age / SLIDE).clamp(0.0, 1.0));
+    let enter = crate::holo_motion::ease_out_cubic((age / SLIDE).clamp(0.0, 1.0));
     let leave = (left / SLIDE).clamp(0.0, 1.0);
     (enter, leave.min((age / (SLIDE * 0.6)).clamp(0.0, 1.0)))
 }
@@ -254,35 +254,36 @@ pub fn paint_stack(ctx: &egui::Context, area: Rect, cards: &[Card<'_>]) -> bool 
     if cards.is_empty() {
         return false;
     }
+    let t = holo::theme();
     let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("hud_notifications")));
     let mut y = area.top();
     let mut moving = false;
     for card in cards.iter().rev() {
         let (enter, strength) = card_motion(card.age, card.left);
         moving |= card.age < SLIDE * 1.2 || card.left < SLIDE * 1.2;
-        let edge = if card.alert { crate::hud_style::FAULT } else { crate::hud_board::border_colour() };
-        let tag = if card.alert { "ALERT //" } else { "NOTICE //" };
-        let galley = p.layout(card.text.to_string(), FontId::proportional(12.0), Color32::from_rgb(0xE8, 0xF2, 0xFC), CARD_WIDTH - 26.0);
-        let height = galley.size().y + 34.0;
+        let colour = if card.alert { t.alert() } else { t.accent() };
+        let galley = p.layout(card.text.to_string(), holo::font(Face::Body, 13.0), t.ink(), CARD_WIDTH - 28.0);
+        let height = galley.size().y + 38.0;
         // It unfolds downwards from its top edge as it comes, and folds up as it goes: the cards
         // under it make room and close the gap at the same pace, so no two ever overlap.
         let open = enter.min(1.0) * (card.left / SLIDE).clamp(0.0, 1.0);
         let rect = Rect::from_min_size(pos2(area.right() - CARD_WIDTH, y), vec2(CARD_WIDTH, height));
         let mut q = p.with_clip_rect(Rect::from_min_max(pos2(rect.left() - 40.0, y - 6.0), pos2(rect.right() + 40.0, y + (height + 8.0) * open + if open >= 1.0 { 30.0 } else { 0.0 })));
         q.set_opacity(strength);
-        crate::hud_style::shadow(&q, rect, 0.8);
-        q.rect_filled(rect, Rounding::ZERO, crate::hud_board::BLOCK_FILL);
-        q.rect_stroke(rect.shrink(0.5), Rounding::ZERO, stroke(1.0, edge));
-        // An alert carries a bar down its left edge.
+        // A plate of glass; an alert's frame is the alert colour, with a bar down its left edge.
+        crate::holo_frame::card(&q, rect, 0.0, 1.0);
         if card.alert {
-            q.rect_filled(Rect::from_min_size(rect.min, vec2(3.0, rect.height())), Rounding::ZERO, crate::hud_style::FAULT);
+            holo::outline(&q, &holo::plate(rect, [0.0, 0.0, crate::holo_frame::CUT.min(rect.height() / 3.0), 0.0]), holo::a(colour, 0.85));
+            q.rect_filled(Rect::from_min_size(rect.min, vec2(3.0, rect.height())), Rounding::ZERO, colour);
         }
-        crate::hud_board::brackets(&q, rect.shrink(0.75), crate::hud_board::bracket_colour());
-        q.text(rect.min + vec2(13.0, 9.0), egui::Align2::LEFT_TOP, tag, FontId::monospace(11.0), if card.alert { crate::hud_style::FAULT } else { Color32::from_rgb(0x7F, 0xA6, 0xB6) });
-        q.galley(rect.min + vec2(13.0, 24.0), galley, Color32::PLACEHOLDER);
-        // Its time runs out along the bottom edge.
+        crate::holo_kit::chip(&q, rect.min + vec2(14.0, 9.0), if card.alert { "ALERT" } else { "NOTICE" }, if card.alert { colour } else { t.muted() }, card.alert, 1.0);
+        q.galley(rect.min + vec2(14.0, 29.0), galley, t.ink());
+        // Its time runs out along the bottom edge, as a filament.
         let total = (card.age + card.left).max(0.1);
-        q.rect_filled(Rect::from_min_size(pos2(rect.left(), rect.bottom() - 1.5), vec2(rect.width() * (card.left / total).clamp(0.0, 1.0), 1.5)), Rounding::ZERO, edge.gamma_multiply(0.8));
+        let run = (rect.width() - crate::holo_frame::CUT) * (card.left / total).clamp(0.0, 1.0);
+        let mut light = holo::Light::new(&q);
+        light.neon(&[rect.left_bottom(), rect.left_bottom() + vec2(run, 0.0)], false, 1.2, holo::a(colour, 0.9), 0.6);
+        light.paint(&q);
         y += (height + 8.0) * open;
     }
     moving
@@ -317,12 +318,18 @@ pub fn edge(kind: Edge) {
     }
 }
 
+/// The edges at full strength right now, however long a picture takes to draw (the gallery).
+#[cfg(test)]
+pub fn edge_held(kind: Edge) {
+    *lock(&EDGE) = Instant::now().checked_sub(Duration::from_secs_f32(EDGE_RISE + 0.05)).map(|at| (kind, at));
+}
+
 /// The pulse's strength `age` seconds after it was lit (0 … 1 … 0).
 pub fn edge_strength(age: f32) -> f32 {
     if age < 0.0 {
         0.0
     } else if age < EDGE_RISE {
-        crate::hud_style::motion::ease_out(age / EDGE_RISE)
+        crate::holo_motion::ease_out_cubic(age / EDGE_RISE)
     } else if age < EDGE_RISE + EDGE_HOLD {
         1.0
     } else {
@@ -341,32 +348,19 @@ pub fn paint_edge(ctx: &egui::Context, screen: Rect, dim: f32) -> bool {
         return false;
     }
     let strength = edge_strength(age) * dim;
+    let t = holo::theme();
     let colour = match kind {
-        Edge::Notice => crate::hud_board::active_colour(),
-        Edge::Alert => crate::hud_style::FAULT,
+        Edge::Notice => t.accent(),
+        Edge::Alert => t.alert(),
     };
-    // (A glow, not a frame: soft at the very edge, gone a finger's width in.)
-    let lit = colour.gamma_multiply(0.26 * strength);
-    let line = colour.gamma_multiply(0.5 * strength);
-    let clear = Color32::TRANSPARENT;
+    // Light, not a frame: a filament along the very edge whose bloom is gone a finger's width
+    // in (a dim tint of the colour would read as mud).
     let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("hud_edge_light")));
-    let mut mesh = egui::Mesh::default();
-    let inner = screen.shrink(EDGE_REACH);
-    let outer = [screen.left_top(), screen.right_top(), screen.right_bottom(), screen.left_bottom()];
-    let inside = [inner.left_top(), inner.right_top(), inner.right_bottom(), inner.left_bottom()];
-    for at in outer {
-        mesh.colored_vertex(at, lit);
-    }
-    for at in inside {
-        mesh.colored_vertex(at, clear);
-    }
-    for k in 0..4u32 {
-        let n = (k + 1) % 4;
-        mesh.add_triangle(k, n, 4 + n);
-        mesh.add_triangle(k, 4 + n, 4 + k);
-    }
-    p.add(egui::Shape::mesh(mesh));
-    p.rect_stroke(screen.shrink(0.75), Rounding::ZERO, stroke(1.5, line));
+    let r = screen.shrink(0.75);
+    let mut light = holo::Light::new(&p);
+    light.halo(&[r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom()], true, EDGE_REACH, holo::lit(colour, 0.34 * strength));
+    light.strip(&[r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom()], true, 1.5, holo::a(holo::mix(colour, Color32::WHITE, 0.45), strength));
+    light.paint(&p);
     ctx.request_repaint();
     true
 }

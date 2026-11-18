@@ -59,7 +59,7 @@ impl Snapshot {
     /// A context the size of `size` points (1 px per point) with the HUD's fonts.
     pub fn new(size: egui::Vec2) -> Self {
         let ctx = egui::Context::default();
-        crate::gui::install_fonts(&ctx);
+        crate::holo::install_fonts(&ctx);
         // Measured as it rests: no window entrance or exit moves what is checked.
         ctx.data_mut(|d| d.insert_temp(egui::Id::new(crate::gui::STILL_WINDOWS), true));
         Self { ctx, textures: HashMap::new(), size }
@@ -163,14 +163,17 @@ impl Canvas {
             let colours = [unit(v[0].color), unit(v[1].color), unit(v[2].color)];
             for y in min_y.max(0)..max_y.min(self.height as i32) {
                 for x in min_x.max(0)..max_x.min(self.width as i32) {
-                    let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
+                    // (Sampled a hair off the pixel's centre and without slack: a pixel on the edge
+                    // two triangles share is then covered once. Covered twice, light that adds
+                    // up shows every such edge as a bright seam.)
+                    let (px, py) = (x as f32 + 0.5003, y as f32 + 0.5007);
                     if px < clip.left() || px > clip.right() || py < clip.top() || py > clip.bottom() {
                         continue;
                     }
                     let w0 = ((v[1].pos.x - px) * (v[2].pos.y - py) - (v[2].pos.x - px) * (v[1].pos.y - py)) / area;
                     let w1 = ((v[2].pos.x - px) * (v[0].pos.y - py) - (v[0].pos.x - px) * (v[2].pos.y - py)) / area;
                     let w2 = 1.0 - w0 - w1;
-                    if w0 < -1e-4 || w1 < -1e-4 || w2 < -1e-4 {
+                    if w0 < 0.0 || w1 < 0.0 || w2 < 0.0 {
                         continue;
                     }
                     let mut src = [0.0f32; 4];

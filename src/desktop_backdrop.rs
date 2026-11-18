@@ -254,7 +254,7 @@ pub fn paint_dashboard(ctx: &egui::Context, emblem: &Core, state: &str, dash: &c
         }
         p.text(pos2(left, *y), Align2::LEFT_TOP, title, FontId::monospace(11.0), accent);
         *y += 18.0;
-        p.line_segment([pos2(left, *y), pos2(right, *y)], egui::Stroke::new(1.0f32, crate::hud_style::white(0.10)));
+        p.line_segment([pos2(left, *y), pos2(right, *y)], egui::Stroke::new(1.0f32, crate::holo::a(crate::holo::theme().ink(), 0.10)));
         *y += 10.0;
         for line in lines {
             let galley = p.layout(line.clone(), FontId::new(19.0, FontFamily::Name("label".into())), ink, right - left);

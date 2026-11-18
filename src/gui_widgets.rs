@@ -62,13 +62,13 @@ pub(super) fn widget_card(ui: &mut Ui, p: &Palette, spec: &DynamicWidgetSpec, ho
             ui.horizontal(|ui| {
                 ui.add(egui::Label::new(RichText::new(&spec.title).font(bold(12.5)).color(accent)).truncate());
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui.small_button("X").on_hover_text("Remove this widget").clicked() {
+                    if crate::holo_ui::key(ui, "X").on_hover_text("Remove this widget").clicked() {
                         host.command(HudCommand::WidgetRemove { id: spec.id.clone() });
                     }
-                    if !in_window && ui.small_button("POP").on_hover_text("Open in its own window").clicked() {
+                    if !in_window && crate::holo_ui::key(ui, "POP").on_hover_text("Open in its own window").clicked() {
                         host.command(HudCommand::WidgetPopOut { id: spec.id.clone() });
                     }
-                    muted(ui, p, short_type(&spec.kind));
+                    muted(ui, short_type(&spec.kind));
                 });
             });
             ui.add_space(2.0);
@@ -83,8 +83,8 @@ pub(super) fn widget_card(ui: &mut Ui, p: &Palette, spec: &DynamicWidgetSpec, ho
 pub(super) fn widget_bare(ui: &mut Ui, p: &Palette, spec: &DynamicWidgetSpec, host: &WidgetHost) {
     let accent = accent_of(spec, p);
     let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), 16.0), Sense::hover());
-    let labels = [("[ REMOVE ]", false, "Remove this widget"), ("[ POP OUT ]", false, "Open it in its own window")];
-    match crate::hud_style::keys(ui, ui.id().with(("widget_keys", &spec.id)), row.right(), row.center().y, &labels, 0.85).0 {
+    let labels = [("REMOVE", false, "Remove this widget"), ("POP OUT", false, "Open it in its own window")];
+    match crate::holo_ui::keys_at(ui, ui.id().with(("widget_keys", &spec.id)), row.right(), row.center().y, &labels, 0.85).0 {
         Some(0) => host.command(HudCommand::WidgetRemove { id: spec.id.clone() }),
         Some(1) => host.command(HudCommand::WidgetPopOut { id: spec.id.clone() }),
         _ => {}
@@ -146,23 +146,23 @@ fn widget_body(ui: &mut Ui, p: &Palette, spec: &DynamicWidgetSpec, host: &Widget
                 ui.vertical_centered(|ui| {
                     ui.add_space(6.0);
                     ui.label(RichText::new("—").font(bold(26.0)).color(p.muted));
-                    muted(ui, p, format!("no {} reading on this PC", s.replace('_', " ")));
+                    muted(ui, format!("no {} reading on this PC", s.replace('_', " ")));
                 });
                 return;
             }
             let hot = warn_at.is_some_and(|w| *value >= w);
-            gauge(ui, p, *value, *min, *max, unit, if hot { p.amber } else { accent });
+            gauge(ui, *value, *min, *max, unit, if hot { p.amber } else { accent });
             if let Some(s) = source {
-                ui.vertical_centered(|ui| muted(ui, p, format!("live: {s}")));
+                ui.vertical_centered(|ui| muted(ui, format!("live: {s}")));
             }
         }
         WidgetKind::ProgressBar { value, max, unit, .. } => {
             let f = (*value / max.max(f64::EPSILON)) as f32;
-            row(ui, p, &format!("{:.0} %", f * 100.0), format!("{} / {} {unit}", fmt_value(*value), fmt_value(*max)));
-            meter(ui, p, f, 10.0, if f >= 0.9 { p.amber } else { accent }, &[]);
+            row(ui, &format!("{:.0} %", f * 100.0), format!("{} / {} {unit}", fmt_value(*value), fmt_value(*max)));
+            meter(ui, f, 10.0, if f >= 0.9 { p.amber } else { accent }, &[]);
         }
-        WidgetKind::LiveLineChart { series, unit, min, max, .. } => line_chart(ui, p, series, unit, *min, *max, 96.0, true, accent),
-        WidgetKind::Sparkline { series, unit, .. } => line_chart(ui, p, series, unit, None, None, 30.0, false, accent),
+        WidgetKind::LiveLineChart { series, unit, min, max, .. } => line_chart(ui, series, unit, *min, *max, 96.0, true, accent),
+        WidgetKind::Sparkline { series, unit, .. } => line_chart(ui, series, unit, None, None, 30.0, false, accent),
         WidgetKind::CountdownOrStopwatch { mode, duration_secs, running, alerted, .. } => {
             let (elapsed, remaining) = widgets::timer_state(&spec.kind, widgets::now_ms()).unwrap_or((0, None));
             let shown = remaining.unwrap_or(elapsed);
@@ -172,30 +172,30 @@ fn widget_body(ui: &mut Ui, p: &Palette, spec: &DynamicWidgetSpec, host: &Widget
                 let (text, font) = (clock(shown), FontId::monospace(ts(30.0)));
                 let size = ui.painter().layout_no_wrap(text.clone(), font.clone(), colour).size();
                 let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
-                crate::hud_style::rolling_figures(ui.painter(), response.id.with("roll"), rect.min, &text, font, colour);
+                crate::holo::rolling_figures(ui.painter(), response.id.with("roll"), rect.min, &text, font, colour);
             });
             if *mode == TimerMode::Countdown && *duration_secs > 0.0 {
-                meter(ui, p, 1.0 - shown as f32 / (*duration_secs as f32 * 1000.0), 5.0, colour, &[]);
+                meter(ui, 1.0 - shown as f32 / (*duration_secs as f32 * 1000.0), 5.0, colour, &[]);
             }
             ui.horizontal(|ui| {
                 let (label, op) = if *running { ("Pause", "pause") } else { ("Start", "start") };
-                if ui.small_button(label).clicked() {
+                if crate::holo_ui::key(ui, label).clicked() {
                     host.command(HudCommand::WidgetTimer { id: id.clone(), op: op.into() });
                 }
-                if ui.small_button("Reset").clicked() {
+                if crate::holo_ui::key(ui, "Reset").clicked() {
                     host.command(HudCommand::WidgetTimer { id: id.clone(), op: "reset".into() });
                 }
                 if *alerted {
-                    muted(ui, p, "finished");
+                    muted(ui, "finished");
                 }
             });
         }
         WidgetKind::KeyValueList { items } => {
             if items.is_empty() {
-                muted(ui, p, "(empty)");
+                muted(ui, "(empty)");
             }
             for kv in items {
-                row(ui, p, &kv.key, &kv.value).on_hover_text(&kv.value);
+                row(ui, &kv.key, &kv.value).on_hover_text(&kv.value);
             }
         }
         WidgetKind::DataTable { columns, rows } => {
@@ -219,24 +219,24 @@ fn widget_body(ui: &mut Ui, p: &Palette, spec: &DynamicWidgetSpec, host: &Widget
         WidgetKind::MarkdownNoteCard { markdown } => markdown_view(ui, p, markdown, accent),
         WidgetKind::Checklist { items } => {
             if items.is_empty() {
-                muted(ui, p, "Nothing on the list.");
+                muted(ui, "Nothing on the list.");
             }
             let done = items.iter().filter(|i| i.done).count();
             for (index, item) in items.iter().enumerate() {
                 let mut checked = item.done;
                 let text = if item.done { RichText::new(&item.text).strikethrough().color(p.muted) } else { RichText::new(&item.text) };
-                if ui.checkbox(&mut checked, text).changed() {
+                if crate::holo_ui::toggle(ui, &mut checked, text).changed() {
                     host.command(HudCommand::WidgetToggleItem { id: id.clone(), index });
                 }
             }
             if !items.is_empty() {
-                muted(ui, p, format!("{done} of {} done", items.len()));
+                muted(ui, format!("{done} of {} done", items.len()));
             }
         }
         WidgetKind::QuickActionButtons { buttons } => {
             ui.horizontal_wrapped(|ui| {
                 for (index, b) in buttons.iter().enumerate() {
-                    if button(ui, p, &b.label, Tone::Normal).on_hover_text(&b.action).clicked() {
+                    if button(ui, &b.label, Tone::Normal).on_hover_text(&b.action).clicked() {
                         host.command(HudCommand::WidgetAction { id: id.clone(), index });
                     }
                 }
@@ -246,16 +246,16 @@ fn widget_body(ui: &mut Ui, p: &Palette, spec: &DynamicWidgetSpec, host: &Widget
             ui.horizontal(|ui| {
                 ui.add(egui::Label::new(RichText::new(format!("$ {command}")).monospace().size(ts(10.5)).color(p.muted)).truncate());
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui.small_button("RELOAD").on_hover_text("Run now").clicked() {
+                    if crate::holo_ui::key(ui, "RELOAD").on_hover_text("Run now").clicked() {
                         host.command(HudCommand::WidgetRefresh { id: id.clone() });
                     }
                     let age = if *last_run_ms > 0 { format!("{} s ago", (widgets::now_ms() - last_run_ms).max(0) / 1000) } else { "pending".into() };
-                    muted(ui, p, format!("every {interval_secs} s · {age}"));
+                    muted(ui, format!("every {interval_secs} s · {age}"));
                 });
             });
             Frame::none().fill(p.well_solid).rounding(Rounding::ZERO).inner_margin(Margin::same(6.0)).show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                crate::hud_style::faded(ui, egui::ScrollArea::vertical().id_salt(("widget_output", &spec.id)).max_height(170.0), |ui| {
+                crate::holo_block::faded(ui, egui::ScrollArea::vertical().id_salt(("widget_output", &spec.id)).max_height(170.0), |ui| {
                     let colour = if *ok { p.text } else { p.red };
                     ui.add(egui::Label::new(RichText::new(if output.is_empty() { "…" } else { output }).monospace().size(ts(10.5)).color(colour)).wrap());
                 });
@@ -274,42 +274,29 @@ fn clock(ms: i64) -> String {
     }
 }
 
-/// A 270° arc gauge with the value in the middle.
-fn gauge(ui: &mut Ui, p: &Palette, value: f64, min: f64, max: f64, unit: &str, colour: Color32) {
+/// A reading round a ring (`holo_kit::gauge`): the arc glides to a new value, the number shows
+/// the value itself; the scale's ends stand under it.
+fn gauge(ui: &mut Ui, value: f64, min: f64, max: f64, unit: &str, colour: Color32) {
     let size = ui.available_width().min(170.0);
-    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), size * 0.78), Sense::hover());
-    let painter = ui.painter();
-    let c = pos2(rect.center().x, rect.top() + size * 0.46);
-    let radius = size * 0.38;
-    let (start, sweep) = (0.75 * PI, 1.5 * PI);
-    // The arc glides to a new reading (the number shows the reading itself).
-    let f = crate::hud_style::motion::glide(ui.ctx(), response.id.with("glide"), ((value - min) / (max - min).max(f64::EPSILON)).clamp(0.0, 1.0) as f32);
-    let arc = |from: f32, to: f32| super::arc_points(c, radius, from, to);
-    // Thin lines of light (the film look): a faint track, the reading on it.
-    painter.add(Shape::line(arc(start, start + sweep), stroke(2.0, p.track)));
-    if f > 0.0 {
-        painter.add(Shape::line(arc(start, start + sweep * f), stroke(2.0, colour)));
+    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), size * 0.92), Sense::hover());
+    let share = crate::holo_motion::glide(ui.ctx(), response.id.with("glide"), ((value - min) / (max - min).max(f64::EPSILON)).clamp(0.0, 1.0) as f32);
+    let (c, radius) = (pos2(rect.center().x, rect.top() + size * 0.44), size * 0.36);
+    crate::holo_kit::gauge(ui.painter(), c, radius, share, &fmt_value(value), unit, colour, 1.0);
+    let t = crate::holo::theme();
+    for (x, anchor, end) in [(c.x - radius, egui::Align2::LEFT_TOP, min), (c.x + radius, egui::Align2::RIGHT_TOP, max)] {
+        crate::holo::text(ui.painter(), pos2(x, c.y + radius * 1.2), anchor, crate::holo::Face::Mono, &fmt_value(end), 10.0, t.faint());
     }
-    painter.text(c, egui::Align2::CENTER_CENTER, fmt_value(value), FontId::new(size * 0.17, super::bold_family()), p.text);
-    painter.text(c + vec2(0.0, size * 0.15), egui::Align2::CENTER_CENTER, unit, FontId::proportional(ts(11.0)), p.muted);
-    let label_y = c.y + radius * 0.85;
-    painter.text(pos2(c.x - radius * 0.75, label_y), egui::Align2::CENTER_CENTER, fmt_value(min), FontId::proportional(ts(10.0)), p.muted);
-    painter.text(pos2(c.x + radius * 0.75, label_y), egui::Align2::CENTER_CENTER, fmt_value(max), FontId::proportional(ts(10.0)), p.muted);
 }
 
+/// A series as a line of light (`holo_kit::area`). With `grid` it stands in a frame of its own
+/// with its latest value and the ends of its scale; without, the value stands under it.
 #[allow(clippy::too_many_arguments)]
-fn line_chart(ui: &mut Ui, p: &Palette, series: &[f64], unit: &str, min: Option<f64>, max: Option<f64>, height: f32, grid: bool, colour: Color32) {
+fn line_chart(ui: &mut Ui, series: &[f64], unit: &str, min: Option<f64>, max: Option<f64>, height: f32, grid: bool, colour: Color32) {
+    use crate::holo::{self, Face};
     let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
-    let painter = ui.painter();
-    if grid {
-        painter.rect_filled(rect, Rounding::ZERO, p.well_solid);
-        for i in 1..4 {
-            let y = rect.top() + rect.height() * i as f32 / 4.0;
-            painter.line_segment([pos2(rect.left(), y), pos2(rect.right(), y)], stroke(1.0, p.track));
-        }
-    }
+    let t = holo::theme();
     if series.len() < 2 {
-        painter.text(rect.center(), egui::Align2::CENTER_CENTER, "collecting data…", FontId::proportional(ts(10.5)), p.muted);
+        holo::text(ui.painter(), rect.center(), egui::Align2::CENTER_CENTER, Face::Label, "Collecting data", 8.0, t.faint());
         return;
     }
     let lo = min.unwrap_or_else(|| series.iter().copied().fold(f64::INFINITY, f64::min));
@@ -317,29 +304,17 @@ fn line_chart(ui: &mut Ui, p: &Palette, series: &[f64], unit: &str, min: Option<
     let (lo, hi) = if (hi - lo).abs() < 1e-9 { (lo - 1.0, hi + 1.0) } else { (lo, hi) };
     let pad = if min.is_none() && max.is_none() { (hi - lo) * 0.1 } else { 0.0 };
     let (lo, hi) = (lo - pad, hi + pad);
-    let inner = rect.shrink2(vec2(2.0, 3.0));
-    let n = series.len();
-    let points: Vec<egui::Pos2> = series
-        .iter()
-        .enumerate()
-        .map(|(i, v)| {
-            let x = inner.left() + inner.width() * i as f32 / (n - 1) as f32;
-            let y = inner.bottom() - inner.height() * ((v - lo) / (hi - lo)) as f32;
-            pos2(x, y.clamp(inner.top(), inner.bottom()))
-        })
-        .collect();
-    painter.add(Shape::line(points.clone(), stroke(if grid { 2.0 } else { 1.6 }, colour)));
-    if let Some(last) = points.last() {
-        painter.circle_filled(*last, 2.5, colour);
-    }
-    let latest = series[n - 1];
+    let values: Vec<f32> = series.iter().map(|v| *v as f32).collect();
+    let plot = if grid { rect.shrink2(vec2(0.0, 14.0)) } else { rect.shrink2(vec2(2.0, 3.0)) };
+    crate::holo_kit::area(ui.painter(), plot, &values, lo as f32, hi as f32, colour, 1.0);
+    let latest = series[series.len() - 1];
     if grid {
-        painter.text(rect.right_top() + vec2(-6.0, 4.0), egui::Align2::RIGHT_TOP, format!("{} {unit}", fmt_value(latest)), FontId::proportional(ts(12.0)), p.text);
-        painter.text(rect.left_top() + vec2(6.0, 4.0), egui::Align2::LEFT_TOP, fmt_value(hi), FontId::proportional(ts(9.5)), p.muted);
-        painter.text(rect.left_bottom() + vec2(6.0, -4.0), egui::Align2::LEFT_BOTTOM, fmt_value(lo), FontId::proportional(ts(9.5)), p.muted);
+        holo::text(ui.painter(), rect.right_top(), egui::Align2::RIGHT_TOP, Face::Mono, &format!("{} {unit}", fmt_value(latest)), 11.5, t.ink());
+        holo::text(ui.painter(), rect.left_top(), egui::Align2::LEFT_TOP, Face::Mono, &fmt_value(hi), 9.5, t.faint());
+        holo::text(ui.painter(), rect.left_bottom(), egui::Align2::LEFT_BOTTOM, Face::Mono, &fmt_value(lo), 9.5, t.faint());
     } else {
         response.on_hover_text(format!("{} {unit} (min {}, max {})", fmt_value(latest), fmt_value(lo + pad), fmt_value(hi - pad)));
-        ui.horizontal(|ui| muted(ui, p, format!("now {} {unit}", fmt_value(latest))));
+        ui.horizontal(|ui| muted(ui, format!("now {} {unit}", fmt_value(latest))));
     }
 }
 
@@ -442,7 +417,7 @@ fn code_block(ui: &mut Ui, p: &Palette, code: &str) {
         ui.set_width(ui.available_width());
         ui.horizontal(|ui| {
             ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
-                if ui.small_button("Copy").clicked() {
+                if crate::holo_ui::key(ui, "Copy").clicked() {
                     let text = code.trim_end().to_string();
                     ui.output_mut(|o| o.copied_text = text);
                 }
@@ -483,22 +458,22 @@ fn diff_job(p: &Palette, code: &str) -> LayoutJob {
 
 fn telemetry_view(ui: &mut Ui, p: &Palette, app: &Jai) {
     let t = app.telemetry();
-    let bar = |ui: &mut Ui, pct: f32, hot: bool| meter(ui, p, pct / 100.0, 6.0, if hot { p.amber } else { p.accent }, &[]);
-    row(ui, p, "CPU", format!("{:.1}% · {} threads", t.cpu_usage_pct, t.cpu_cores));
+    let bar = |ui: &mut Ui, pct: f32, hot: bool| meter(ui, pct / 100.0, 6.0, if hot { p.amber } else { p.accent }, &[]);
+    row(ui, "CPU", format!("{:.1}% · {} threads", t.cpu_usage_pct, t.cpu_cores));
     bar(ui, t.cpu_usage_pct, t.cpu_usage_pct > 85.0);
-    row(ui, p, "RAM", format!("{:.1} / {:.1} GB", t.ram_used_gb, t.ram_total_gb));
+    row(ui, "RAM", format!("{:.1} / {:.1} GB", t.ram_used_gb, t.ram_total_gb));
     bar(ui, t.ram_usage_pct, t.ram_usage_pct > 90.0);
     if let Some(g) = &t.gpu {
         let temp = g.temperature_c.map(|c| format!("{c:.0}°C")).unwrap_or_else(|| "—".into());
-        row(ui, p, &g.name.replace("NVIDIA GeForce ", ""), format!("{temp} · {:.0}%", g.utilization_pct.unwrap_or(0.0)));
+        row(ui, &g.name.replace("NVIDIA GeForce ", ""), format!("{temp} · {:.0}%", g.utilization_pct.unwrap_or(0.0)));
         bar(ui, g.utilization_pct.unwrap_or(0.0), g.temperature_c.unwrap_or(0.0) >= 80.0);
         if let (Some(used), Some(total)) = (g.vram_used_mb, g.vram_total_mb.filter(|t| *t > 0)) {
-            row(ui, p, "VRAM", format!("{:.1} / {:.1} GB", used as f32 / 1024.0, total as f32 / 1024.0));
+            row(ui, "VRAM", format!("{:.1} / {:.1} GB", used as f32 / 1024.0, total as f32 / 1024.0));
             bar(ui, used as f32 / total as f32 * 100.0, used * 100 / total > 92);
         }
     }
     for d in &t.disks {
-        row(ui, p, &format!("Drive {}", d.mount), format!("{:.0} GB free / {:.0} GB", d.free_gb, d.total_gb));
+        row(ui, &format!("Drive {}", d.mount), format!("{:.0} GB free / {:.0} GB", d.free_gb, d.total_gb));
         bar(ui, d.used_pct, d.used_pct > 92.0);
     }
 }
@@ -520,8 +495,8 @@ fn capacity_colour(p: &Palette, pct: f32) -> Color32 {
 
 /// A labelled bar: title left, value right, the bar below.
 fn bar_row(ui: &mut Ui, p: &Palette, label: &str, value: String, fraction: f32, colour: Color32, height: f32) {
-    row(ui, p, label, value);
-    meter(ui, p, fraction.clamp(0.0, 1.0), height, colour, &[]);
+    row(ui, label, value);
+    meter(ui, fraction.clamp(0.0, 1.0), height, colour, &[]);
 }
 
 /// History of a live value per window (kept in egui's memory, two minutes at one sample/s).
@@ -541,33 +516,16 @@ fn history(ui: &Ui, key: (&str, &str), value: f32) -> Vec<f64> {
     })
 }
 
-/// A ring gauge sized to `size`, value in the middle.
-fn ring(ui: &mut Ui, p: &Palette, size: f32, fraction: f32, colour: Color32, big: &str, small: &str) {
+/// A ring gauge sized to `size`: the value in the middle, what it is under it.
+fn ring(ui: &mut Ui, size: f32, fraction: f32, colour: Color32, big: &str, small: &str) {
     let (rect, response) = ui.allocate_exact_size(vec2(size, size), Sense::hover());
-    let painter = ui.painter();
-    let c = rect.center();
-    let radius = size * 0.42;
-    let (start, sweep) = (0.75 * PI, 1.5 * PI);
-    let fraction = crate::hud_style::motion::glide(ui.ctx(), response.id.with("glide"), fraction.clamp(0.0, 1.0));
-    let width = (size * 0.02).clamp(1.5, 2.5);
-    painter.add(Shape::line(super::arc_points(c, radius, start, start + sweep), stroke(width, p.track)));
-    if fraction > 0.0 {
-        painter.add(Shape::line(super::arc_points(c, radius, start, start + sweep * fraction), stroke(width, colour)));
-    }
-    painter.text(c - vec2(0.0, size * 0.04), egui::Align2::CENTER_CENTER, big, FontId::new(size * 0.23, egui::FontFamily::Name("display".into())), p.text);
-    painter.text(c + vec2(0.0, size * 0.16), egui::Align2::CENTER_CENTER, small, FontId::proportional((size * 0.085).max(ts(9.5))), p.muted);
+    let share = crate::holo_motion::glide(ui.ctx(), response.id.with("glide"), fraction.clamp(0.0, 1.0));
+    crate::holo_kit::gauge(ui.painter(), rect.center(), size * 0.40, share, big, small, colour, 1.0);
 }
 
-/// A titled section frame inside a live window.
-fn section(ui: &mut Ui, p: &Palette, title: &str, body: impl FnOnce(&mut Ui)) {
-    // (Sharp like the block it stands in: a hairline box, its title lettered as the block's is.)
-    Frame::none().fill(Color32::from_rgba_unmultiplied(9, 15, 23, 150)).stroke(stroke(1.0, p.line.gamma_multiply(0.7))).rounding(Rounding::ZERO).inner_margin(Margin::same(10.0)).show(ui, |ui| {
-        ui.set_width(ui.available_width());
-        ui.label(RichText::new(title.to_uppercase()).font(FontId::new(ts(12.5), egui::FontFamily::Name("display".into()))).color(p.accent).extra_letter_spacing(1.3));
-        ui.add_space(4.0);
-        body(ui);
-    });
-    ui.add_space(8.0);
+/// A titled part of a live window (the kit's unboxed section: a tick, its name, a rule).
+fn section(ui: &mut Ui, title: &str, body: impl FnOnce(&mut Ui)) {
+    super::card(ui, title, |_| {}, body);
 }
 
 /// CPU (overall gauge + every core), RAM + swap, GPU load / temperature / VRAM, with history.
@@ -581,24 +539,24 @@ fn pc_stats_view(ui: &mut Ui, p: &Palette, app: &Jai, window: &str) {
     let gpu_hist = gpu.as_ref().and_then(|g| g.utilization_pct).map(|u| history(ui, (window, "gpu"), u));
     // Headline gauges, as many per row as fit.
     ui.horizontal_wrapped(|ui| {
-        ring(ui, p, gauge, t.cpu_usage_pct / 100.0, capacity_colour(p, t.cpu_usage_pct), &format!("{:.0}%", t.cpu_usage_pct), "CPU");
-        ring(ui, p, gauge, t.ram_usage_pct / 100.0, capacity_colour(p, t.ram_usage_pct), &format!("{:.0}%", t.ram_usage_pct), "RAM");
+        ring(ui, gauge, t.cpu_usage_pct / 100.0, capacity_colour(p, t.cpu_usage_pct), &format!("{:.0}%", t.cpu_usage_pct), "CPU");
+        ring(ui, gauge, t.ram_usage_pct / 100.0, capacity_colour(p, t.ram_usage_pct), &format!("{:.0}%", t.ram_usage_pct), "RAM");
         if let Some(g) = &gpu {
             let load = g.utilization_pct.unwrap_or(0.0);
-            ring(ui, p, gauge, load / 100.0, capacity_colour(p, load), &format!("{load:.0}%"), "GPU");
+            ring(ui, gauge, load / 100.0, capacity_colour(p, load), &format!("{load:.0}%"), "GPU");
             if let Some(temp) = g.temperature_c {
                 let hot = if temp >= 83.0 { p.red } else if temp >= 75.0 { p.amber } else { p.accent };
-                ring(ui, p, gauge, (temp / 100.0).clamp(0.0, 1.0), hot, &format!("{temp:.0}°"), "GPU °C");
+                ring(ui, gauge, (temp / 100.0).clamp(0.0, 1.0), hot, &format!("{temp:.0}°"), "GPU °C");
             }
         }
         if let Some(c) = t.cpu_temp_c {
             let hot = if c >= 90.0 { p.red } else if c >= 80.0 { p.amber } else { p.accent };
-            ring(ui, p, gauge, (c / 105.0).clamp(0.0, 1.0), hot, &format!("{c:.0}°"), "CPU °C");
+            ring(ui, gauge, (c / 105.0).clamp(0.0, 1.0), hot, &format!("{c:.0}°"), "CPU °C");
         }
     });
     ui.add_space(6.0);
-    section(ui, p, &format!("CPU · {} · {} THREADS{}", t.cpu_name.trim().to_uppercase(), t.cpu_cores, if t.cpu_freq_mhz > 0 { format!(" · {:.2} GHz", t.cpu_freq_mhz as f32 / 1000.0) } else { String::new() }), |ui| {
-        line_chart(ui, p, &cpu_hist, "%", Some(0.0), Some(100.0), (ui.available_width() * 0.16).clamp(48.0, 110.0), true, p.accent);
+    section(ui, &format!("CPU · {} · {} THREADS{}", t.cpu_name.trim().to_uppercase(), t.cpu_cores, if t.cpu_freq_mhz > 0 { format!(" · {:.2} GHz", t.cpu_freq_mhz as f32 / 1000.0) } else { String::new() }), |ui| {
+        line_chart(ui, &cpu_hist, "%", Some(0.0), Some(100.0), (ui.available_width() * 0.16).clamp(48.0, 110.0), true, p.accent);
         ui.add_space(6.0);
         // Per-core bars: as many columns as the width allows.
         let cores = &t.cpu_per_core;
@@ -618,7 +576,7 @@ fn pc_stats_view(ui: &mut Ui, p: &Palette, app: &Jai, window: &str) {
                                 ui.label(RichText::new(format!("{load:.0}%")).size(ts(9.5)).color(p.text));
                             });
                         });
-                        meter(ui, p, load / 100.0, 5.0, capacity_colour(p, *load), &[]);
+                        meter(ui, load / 100.0, 5.0, capacity_colour(p, *load), &[]);
                     });
                     if (i + 1) % columns == 0 {
                         ui.end_row();
@@ -627,7 +585,7 @@ fn pc_stats_view(ui: &mut Ui, p: &Palette, app: &Jai, window: &str) {
             });
         }
     });
-    section(ui, p, "MEMORY", |ui| {
+    section(ui, "MEMORY", |ui| {
         bar_row(ui, p, "RAM", format!("{:.1} / {:.1} GB ({:.0}%)", t.ram_used_gb, t.ram_total_gb, t.ram_usage_pct), t.ram_usage_pct / 100.0, capacity_colour(p, t.ram_usage_pct), 9.0);
         if t.swap_total_gb > 0.05 {
             let pct = t.swap_used_gb / t.swap_total_gb * 100.0;
@@ -635,9 +593,9 @@ fn pc_stats_view(ui: &mut Ui, p: &Palette, app: &Jai, window: &str) {
         }
     });
     match &gpu {
-        Some(g) => section(ui, p, &format!("GPU · {}", g.name.to_uppercase()), |ui| {
+        Some(g) => section(ui, &format!("GPU · {}", g.name.to_uppercase()), |ui| {
             if let Some(hist) = &gpu_hist {
-                line_chart(ui, p, hist, "%", Some(0.0), Some(100.0), (ui.available_width() * 0.12).clamp(40.0, 90.0), true, p.violet);
+                line_chart(ui, hist, "%", Some(0.0), Some(100.0), (ui.available_width() * 0.12).clamp(40.0, 90.0), true, p.violet);
                 ui.add_space(4.0);
             }
             let load = g.utilization_pct.unwrap_or(0.0);
@@ -650,10 +608,10 @@ fn pc_stats_view(ui: &mut Ui, p: &Palette, app: &Jai, window: &str) {
                 bar_row(ui, p, "VRAM", format!("{:.2} / {:.1} GB ({pct:.0}%)", used as f32 / 1024.0, total as f32 / 1024.0), pct / 100.0, capacity_colour(p, pct), 8.0);
             }
             if let Some(w) = g.power_w {
-                row(ui, p, "Power draw", format!("{w:.0} W"));
+                row(ui, "Power draw", format!("{w:.0} W"));
             }
         }),
-        None => section(ui, p, "GPU", |ui| muted(ui, p, "No GPU telemetry (NVML / nvidia-smi not available).")),
+        None => section(ui, "GPU", |ui| muted(ui, "No GPU telemetry (NVML / nvidia-smi not available).")),
     }
 }
 
@@ -661,7 +619,7 @@ fn pc_stats_view(ui: &mut Ui, p: &Palette, app: &Jai, window: &str) {
 fn drive_space_view(ui: &mut Ui, p: &Palette, app: &Jai) {
     let t = app.telemetry();
     if t.disks.is_empty() {
-        muted(ui, p, "Reading the drives…");
+        muted(ui, "Reading the drives…");
         return;
     }
     let total: f32 = t.disks.iter().map(|d| d.total_gb).sum();
@@ -701,8 +659,8 @@ fn drive_space_view(ui: &mut Ui, p: &Palette, app: &Jai) {
                 });
                 ui.add_space(2.0);
                 ui.label(RichText::new(format!("{:.1} GB free", d.free_gb)).font(bold(14.0)).color(p.text));
-                muted(ui, p, format!("{:.0}% free · {:.1} GB used of {:.1} GB", d.free_pct(), d.used_gb(), d.total_gb));
-                meter(ui, p, d.used_pct / 100.0, 10.0, colour, &[(0.75, p.amber.gamma_multiply(0.6)), (0.9, p.red.gamma_multiply(0.6))]);
+                muted(ui, format!("{:.0}% free · {:.1} GB used of {:.1} GB", d.free_pct(), d.used_gb(), d.total_gb));
+                meter(ui, d.used_pct / 100.0, 10.0, colour, &[(0.75, p.amber.gamma_multiply(0.6)), (0.9, p.red.gamma_multiply(0.6))]);
             });
             ui.add_space(8.0);
         }
@@ -715,7 +673,7 @@ fn processes_view(ui: &mut Ui, p: &Palette, host: &WidgetHost) {
     if list.is_empty() {
         // The first sample is on its way: the outline of the list.
         let room = ui.available_rect_before_wrap();
-        crate::hud_style::outline(ui, room.shrink(4.0), crate::hud_style::Outline::List);
+        crate::holo_block::outline(ui, room.shrink(4.0), crate::holo_block::Outline::List);
         return;
     }
     let rows = ((ui.available_height() / 2.0 / 22.0).floor() as usize).clamp(5, 15);
@@ -727,7 +685,7 @@ fn processes_view(ui: &mut Ui, p: &Palette, host: &WidgetHost) {
     let columns = if ui.available_width() >= 640.0 { 2 } else { 1 };
     ui.columns(columns, |cols| {
         let (left, right) = if columns == 2 { let (a, b) = cols.split_at_mut(1); (&mut a[0], Some(&mut b[0])) } else { (&mut cols[0], None) };
-        section(left, p, "TOP CPU", |ui| {
+        section(left, "TOP CPU", |ui| {
             for proc_ in by_cpu.iter().take(rows) {
                 bar_row(ui, p, &crate::apps::display_name(&proc_.name), format!("{:.1}%{}", proc_.cpu_pct, if proc_.count > 1 { format!(" · {}×", proc_.count) } else { String::new() }), proc_.cpu_pct / 100.0, capacity_colour(p, proc_.cpu_pct), 5.0);
             }
@@ -736,7 +694,7 @@ fn processes_view(ui: &mut Ui, p: &Palette, host: &WidgetHost) {
             Some(r) => r,
             None => left,
         };
-        section(target, p, "TOP MEMORY", |ui| {
+        section(target, "TOP MEMORY", |ui| {
             for proc_ in by_mem.iter().take(rows) {
                 bar_row(ui, p, &crate::apps::display_name(&proc_.name), format!("{:.2} GB", proc_.memory_mb / 1024.0), (proc_.memory_mb / top_mem) as f32, p.violet, 5.0);
             }
@@ -753,11 +711,11 @@ fn network_view(ui: &mut Ui, p: &Palette, app: &Jai, window: &str) {
     // The first seconds have nothing to plot: the outline of the chart to come.
     if down.len() < 3 {
         let room = ui.available_rect_before_wrap();
-        crate::hud_style::outline(ui, egui::Rect::from_min_size(room.min, vec2(room.width(), (2.0 * h + 60.0).min(room.height()))), crate::hud_style::Outline::Chart);
+        crate::holo_block::outline(ui, egui::Rect::from_min_size(room.min, vec2(room.width(), (2.0 * h + 60.0).min(room.height()))), crate::holo_block::Outline::Chart);
         return;
     }
-    section(ui, p, &format!("DOWNLOAD · {}", super::rate(t.net_down_kbps)), |ui| line_chart(ui, p, &down, "KB/s", Some(0.0), None, h, true, p.accent));
-    section(ui, p, &format!("UPLOAD · {}", super::rate(t.net_up_kbps)), |ui| line_chart(ui, p, &up, "KB/s", Some(0.0), None, h, true, p.accent));
+    section(ui, &format!("DOWNLOAD · {}", super::rate(t.net_down_kbps)), |ui| line_chart(ui, &down, "KB/s", Some(0.0), None, h, true, p.accent));
+    section(ui, &format!("UPLOAD · {}", super::rate(t.net_up_kbps)), |ui| line_chart(ui, &up, "KB/s", Some(0.0), None, h, true, p.accent));
 }
 
 // -------------------------------------------------------------------------- windows ----
@@ -845,7 +803,7 @@ pub(super) fn show_windows(ctx: &egui::Context, host: &WidgetHost) {
             if !spec.live_kinds().is_empty() {
                 let t = host.app.telemetry();
                 let hot = spec.live_kinds().contains(&"pc_stats") && (t.cpu_usage_pct > 85.0 || t.ram_usage_pct > 90.0 || t.gpu.as_ref().and_then(|g| g.temperature_c).is_some_and(|c| c >= 80.0));
-                crate::hud_style::set_light(&spec.id, if hot { crate::hud_style::Light::Warn } else { crate::hud_style::Light::Good });
+                crate::holo_block::set_lamp(&spec.id, if hot { crate::holo_block::Lamp::Warn } else { crate::holo_block::Lamp::Good });
             }
             let action = super::hud_block_window(ctx, &spec.id, &spec.title, [spec.width, spec.height], |ui| {
                 fast = window_content(ui, &p, &spec, host);
@@ -953,7 +911,7 @@ fn window_frame(ctx: &egui::Context, class: ViewportClass, host: &WidgetHost, id
                 if hovered {
                     window_toolbar(ui, ctx, host, &spec);
                 } else if spec.always_on_top {
-                    muted(ui, &p, "PIN");
+                    muted(ui, "PIN");
                 }
             });
         });
@@ -990,7 +948,7 @@ fn window_content(ui: &mut Ui, p: &Palette, spec: &NativeWindowSpec, host: &Widg
     let id = spec.id.as_str();
     let p = *p;
     let mut fast = false;
-    crate::hud_style::faded(ui, egui::ScrollArea::vertical().auto_shrink([false; 2]), |ui| {
+    crate::holo_block::faded(ui, egui::ScrollArea::vertical().auto_shrink([false; 2]), |ui| {
         for block in &spec.blocks {
             if !block.title.is_empty() {
                 ui.label(RichText::new(&block.title).font(bold(12.0)).color(p.accent));
@@ -1039,7 +997,7 @@ fn window_content(ui: &mut Ui, p: &Palette, spec: &NativeWindowSpec, host: &Widg
             }
         }
         if spec.blocks.is_empty() && spec.widgets.is_empty() {
-            muted(ui, &p, "Empty window — ask JAI to put something here.");
+            muted(ui, "Empty window — ask JAI to put something here.");
         }
     });
     fast
@@ -1079,41 +1037,40 @@ fn window_toolbar(ui: &mut Ui, ctx: &egui::Context, host: &WidgetHost, spec: &Na
         ctx.request_repaint();
     };
     let small = |text: &str| RichText::new(text).size(ts(11.0));
-    if ui.add(egui::Button::new(small("X"))).on_hover_text("Close this window").clicked() {
+    if crate::holo_ui::key(ui, "X").on_hover_text("Close this window").clicked() {
         // (It plays its exit, then goes: `show_windows`.)
         engine.window_closed_by_user(&spec.id);
         ctx.request_repaint_of(ViewportId::ROOT);
         return;
     }
     let current = spec.style.theme.as_deref().and_then(crate::interface::theme).map(|t| t.display).unwrap_or("HUD theme");
-    egui::ComboBox::from_id_salt(("jai_window_theme", &spec.id)).width(ts(92.0)).selected_text(small(current)).show_ui(ui, |ui| {
-        if ui.selectable_label(spec.style.theme.is_none() && spec.style.accent.is_none(), "Like the HUD").clicked() {
+    crate::holo_ui::Picker::from_id_salt(("jai_window_theme", &spec.id)).width(ts(92.0)).selected_text(small(current)).show_ui(ui, |ui| {
+        if crate::holo_ui::item(ui, "Like the HUD", spec.style.theme.is_none() && spec.style.accent.is_none()).clicked() {
             restyle(serde_json::json!({ "theme": "hud" }));
         }
         for t in crate::interface::THEMES {
-            if ui.selectable_label(spec.style.theme.as_deref() == Some(t.name), t.display).clicked() {
+            if crate::holo_ui::item(ui, t.display, spec.style.theme.as_deref() == Some(t.name)).clicked() {
                 restyle(serde_json::json!({ "theme": t.name }));
             }
         }
     });
     let mut opacity = spec.style.opacity * 100.0;
     ui.spacing_mut().slider_width = ts(70.0);
-    let slider = ui.add(egui::Slider::new(&mut opacity, 20.0..=100.0).step_by(5.0).show_value(false));
+    let slider = ui.add(crate::holo_ui::Slider::new(&mut opacity, 20.0..=100.0).step_by(5.0).show_value(false));
     if slider.on_hover_text(format!("Background opacity {opacity:.0} %")).changed() {
         restyle(serde_json::json!({ "opacity": opacity / 100.0 }));
     }
-    if ui.add(egui::Button::new(small("A+"))).on_hover_text("Bigger text").clicked() {
+    if crate::holo_ui::key(ui, "A+").on_hover_text("Bigger text").clicked() {
         restyle(serde_json::json!({ "font_scale": "bigger" }));
     }
-    if ui.add(egui::Button::new(small("A−"))).on_hover_text("Smaller text").clicked() {
+    if crate::holo_ui::key(ui, "A−").on_hover_text("Smaller text").clicked() {
         restyle(serde_json::json!({ "font_scale": "smaller" }));
     }
     let framed = spec.style.decorations;
-    if ui.add(egui::Button::new(small(if framed { "[ ]" } else { "[X]" })).selected(!framed)).on_hover_text(if framed { "Borderless" } else { "Show the title bar" }).clicked() {
+    if crate::holo_ui::key_on(ui, "FRAME", framed).on_hover_text(if framed { "Borderless" } else { "Show the title bar" }).clicked() {
         restyle(serde_json::json!({ "borderless": framed }));
     }
-    let pin = if spec.always_on_top { "On top" } else { "PIN" };
-    if ui.add(egui::Button::new(small(pin)).selected(spec.always_on_top)).on_hover_text("Keep this window above others").clicked() {
+    if crate::holo_ui::key_on(ui, "ON TOP", spec.always_on_top).on_hover_text("Keep this window above others").clicked() {
         restyle(serde_json::json!({ "always_on_top": !spec.always_on_top }));
     }
 }

@@ -322,8 +322,8 @@ fn plan(hwnd: isize) -> Vec<Step> {
         steps.push(click(format!("[ MOVE HERE ] back on display {start}"), format!("screens:move:{start}"), Expect::Covers(start)));
     }
     if monitors.len() > 1 {
-        steps.push(click("[ SPAN ALL MONITORS ]".into(), "screens:span:on".into(), Expect::SpansAll));
-        steps.push(click("[ BACK TO ONE MONITOR ]".into(), "screens:span:off".into(), Expect::Covers(primary)));
+        steps.push(click("SPAN ALL MONITORS".into(), "screens:span:on".into(), Expect::SpansAll));
+        steps.push(click("BACK TO ONE MONITOR".into(), "screens:span:off".into(), Expect::Covers(primary)));
     }
     steps.push(click("[ CLOSE ] closes the menu".into(), "screens:close".into(), Expect::NotDrawn("screens:close".into())));
     steps.push(f11("F11: a maximised window", Expect::Maximised));

@@ -3,7 +3,7 @@
 //! cards, the device list, the latency chart and the speed test on the right. The data comes
 //! from `crate::network_radar`; this file draws it and turns clicks into actions.
 
-use super::{bold_family, rgba, stroke, BLOCK_SLATE, STRIP_INK, STRIP_MUTED};
+use super::{bold_family, rgba, stroke, block_slate, strip_ink, strip_muted};
 use crate::network_radar::{self as radar, Device, Kind, Phase, Series, Snapshot, Speed};
 use eframe::egui::text::{LayoutJob, TextFormat, TextWrapping};
 use eframe::egui::{
@@ -45,7 +45,9 @@ const TEXT_SWAP: f64 = 0.05;
 /// The latency rings on the scope.
 const RINGS_MS: [f32; 4] = [1.0, 3.0, 10.0, 30.0];
 /// "LIVE", the router, a new device.
-const STATUS_RED: Color32 = crate::hud_board::PIN_RED;
+fn status_red() -> Color32 {
+    crate::holo::theme().alert()
+}
 
 static VIEW: LazyLock<Mutex<View>> = LazyLock::new(|| Mutex::new(View::default()));
 
@@ -83,7 +85,7 @@ fn body(ui: &mut Ui, rt: &Handle) {
         }
         crate::gui::refresh();
     }
-    crate::hud_style::set_light(ID, if busy { crate::hud_style::Light::Busy } else { crate::hud_style::Light::Good });
+    crate::holo_block::set_lamp(ID, if busy { crate::holo_block::Lamp::Busy } else { crate::holo_block::Lamp::Good });
     ui.ctx().request_repaint_after(Duration::from_millis(if busy { 16 } else { 33 }));
 }
 
@@ -124,7 +126,7 @@ pub(super) fn show(ctx: &egui::Context, rt: &Handle) {
             if class == ViewportClass::Embedded {
                 egui::Window::new(TITLE).show(ctx, |ui| body(ui, &rt));
             } else {
-                egui::CentralPanel::default().frame(Frame::none().fill(super::BLOCK_SLATE).inner_margin(Margin::same(14.0))).show(ctx, |ui| {
+                egui::CentralPanel::default().frame(Frame::none().fill(super::block_slate()).inner_margin(Margin::same(14.0))).show(ctx, |ui| {
                     if super::detached_title_bar(ui, ctx, TITLE) {
                         crate::network_radar::close();
                     }
@@ -331,15 +333,15 @@ impl Ink {
             border: crate::hud_board::border_colour(),
             bracket: crate::hud_board::bracket_colour(),
             hot: Color32::from_rgb(r, g, b),
-            text: STRIP_INK,
-            muted: STRIP_MUTED,
+            text: strip_ink(),
+            muted: strip_muted(),
         }
     }
 
     /// A device's colour by what it is.
     fn kind(&self, kind: Kind) -> Color32 {
         match kind {
-            Kind::Router => STATUS_RED,
+            Kind::Router => status_red(),
             Kind::Phone | Kind::Tablet => Color32::from_rgb(0x3E, 0xE0, 0x7A),
             Kind::SmartHome => Color32::from_rgb(0x45, 0xE0, 0xB4),
             Kind::Pc => self.accent,
@@ -480,7 +482,7 @@ fn subtitle(snap: &Snapshot) -> String {
 /// The title, LIVE and the status line; the y of the accent line under them.
 fn header(pen: &Pen, area: Rect, snap: &Snapshot, view: &mut View) -> f32 {
     let ink = pen.ink;
-    let live = pen.text("LIVE", pen.mono(12.0, 9.5), STATUS_RED, pen.px(1.5), area.width());
+    let live = pen.text("LIVE", pen.mono(12.0, 9.5), status_red(), pen.px(1.5), area.width());
     let title_width = (area.width() - live.size().x - pen.px(48.0)).max(40.0);
     let title = pen.text("NETWORK RADAR", pen.display(34.0, 20.0), ink.text, pen.px(1.2), title_width);
     let title_rect = pen.put(title.clone(), area.left_top(), Align2::LEFT_TOP);
@@ -490,8 +492,8 @@ fn header(pen: &Pen, area: Rect, snap: &Snapshot, view: &mut View) -> f32 {
     let pulse = 0.55 + 0.45 * (0.5 + 0.5 * (pen.now * 3.2).sin() as f32);
     let dot = pos2(live_rect.left() - pen.px(10.0), live_rect.center().y);
     let r = pen.size(4.0, 3.0);
-    pen.p.circle_filled(dot, r + 3.0, STATUS_RED.gamma_multiply(0.15 * pulse));
-    pen.p.circle_filled(dot, r, STATUS_RED.gamma_multiply(pulse));
+    pen.p.circle_filled(dot, r + 3.0, status_red().gamma_multiply(0.15 * pulse));
+    pen.p.circle_filled(dot, r, status_red().gamma_multiply(pulse));
     let font = pen.mono(11.0, 9.0);
     view.subtitle.set(snap.phase, &subtitle(snap), pen.now);
     let y = title_rect.bottom() + pen.px(3.0);
@@ -659,7 +661,7 @@ struct Floating {
 impl Floating {
     fn paint(self, pen: &Pen) {
         let back = self.rect.expand(pen.px(4.0));
-        pen.p.rect_filled(back, Rounding::ZERO, BLOCK_SLATE);
+        pen.p.rect_filled(back, Rounding::ZERO, block_slate());
         pen.p.rect_stroke(back, Rounding::ZERO, stroke(1.0, pen.ink.border));
         label(pen, self.rect, self.name, self.latency, Align::Center);
     }
@@ -738,7 +740,7 @@ fn scope(pen: &Pen, area: Rect, snap: &Snapshot, view: &mut View, card: Option<R
     // This PC in the centre.
     let cr = pen.size(13.0, 9.0);
     p.circle_filled(c, cr + pen.px(7.0), additive(ink.hot, 0.07));
-    p.circle_filled(c, cr, BLOCK_SLATE);
+    p.circle_filled(c, cr, block_slate());
     p.circle_stroke(c, cr, stroke(1.5, ink.hot));
     glyph(p, Kind::ThisPc, c, cr * 0.55, ink.hot);
     let mut centre = Vec::new();
@@ -788,7 +790,7 @@ fn scope(pen: &Pen, area: Rect, snap: &Snapshot, view: &mut View, card: Option<R
         if let Some(t) = blip.pass.map(|t| ((pen.now - t) / PASS_GLOW) as f32).filter(|t| *t < 1.0) {
             p.circle_filled(at, br + 2.0 + 6.0 * (1.0 - t), additive(colour, 0.28 * (1.0 - t)));
         }
-        p.circle_filled(at, br, BLOCK_SLATE);
+        p.circle_filled(at, br, block_slate());
         if fill > 0.0 {
             p.circle_filled(at, br, colour.gamma_multiply(0.24 * fill));
         }
@@ -962,7 +964,7 @@ fn adapter_card(pen: &Pen, rect: Rect, snap: &Snapshot) {
             let big = if speed.is_empty() { "--" } else { speed.as_str() };
             card(pen, rect, a.link.label(), &format!("ROUTER {}", radar::fmt_ms(snap.router_latency())), big, pen.ink.text, &a.description);
         }
-        None if snap.phase == Phase::Failed => card(pen, rect, "NETWORK", "", "OFFLINE", STATUS_RED, snap.error.as_deref().unwrap_or("")),
+        None if snap.phase == Phase::Failed => card(pen, rect, "NETWORK", "", "OFFLINE", status_red(), snap.error.as_deref().unwrap_or("")),
         None => card(pen, rect, "NETWORK", "", "", pen.ink.muted, ""),
     }
 }
@@ -970,7 +972,7 @@ fn adapter_card(pen: &Pen, rect: Rect, snap: &Snapshot) {
 fn internet_card(pen: &Pen, rect: Rect, snap: &Snapshot) {
     let (big, colour) = match snap.internet_latency() {
         Some(ms) => (radar::fmt_ms(Some(ms)), pen.ink.text),
-        None if snap.internet.samples.len() >= 3 => ("OFFLINE".to_string(), STATUS_RED),
+        None if snap.internet.samples.len() >= 3 => ("OFFLINE".to_string(), status_red()),
         None if snap.adapter.is_none() => (String::new(), pen.ink.muted),
         None => ("CHECKING..".to_string(), pen.ink.muted),
     };
@@ -1100,7 +1102,7 @@ fn device_row(pen: &Pen, rect: Rect, d: &Device, view: &mut View, actions: &mut 
     let left = gc.x + gr + pen.px(10.0);
     let text_w = (right - right_w - pen.px(10.0) - left).max(30.0);
     let tag_font = pen.mono(9.0, 8.0);
-    let tags: Vec<(Arc<Galley>, Color32)> = [(d.this_pc, "THIS PC", ink.hot), (d.new, "NEW", STATUS_RED)]
+    let tags: Vec<(Arc<Galley>, Color32)> = [(d.this_pc, "THIS PC", ink.hot), (d.new, "NEW", status_red())]
         .into_iter()
         .filter(|(on, ..)| *on)
         .map(|(_, tag, c)| (pen.text(tag, tag_font.clone(), c, pen.px(1.0), 100.0), c))
@@ -1281,7 +1283,7 @@ fn line_chart(pen: &Pen, area: Rect, series: &[(&Series, Color32)]) {
                 Some(v) => run.push(pos2(x, plot.bottom() - plot.height() * (v / top).min(1.0))),
                 None => {
                     flush(&mut run);
-                    pen.p.line_segment([pos2(x, plot.bottom()), pos2(x, plot.bottom() - 4.0)], stroke(1.5, STATUS_RED));
+                    pen.p.line_segment([pos2(x, plot.bottom()), pos2(x, plot.bottom() - 4.0)], stroke(1.5, status_red()));
                 }
             }
         }
@@ -1403,16 +1405,16 @@ fn details(pen: &Pen, area: Rect, snap: &Snapshot, view: &mut View, actions: &mu
     if pen.click(rect, "details", actions).clicked() {
         view.selected = None;
     }
-    pen.p.rect_filled(rect, Rounding::ZERO, BLOCK_SLATE);
+    pen.p.rect_filled(rect, Rounding::ZERO, block_slate());
     pen.p.rect_stroke(rect, Rounding::ZERO, stroke(1.0, colour));
     corner_brackets(&pen.p, rect, pen.px(8.0), colour);
-    let badge = d.new.then(|| pen.text("NEW", pen.mono(9.0, 8.0), STATUS_RED, pen.px(1.0), 60.0));
+    let badge = d.new.then(|| pen.text("NEW", pen.mono(9.0, 8.0), status_red(), pen.px(1.0), 60.0));
     let badge_room = badge.as_ref().map_or(0.0, |b| b.size().x + pen.px(16.0));
     let name = pen.text(&d.name(), name_font, ink.text, 0.0, (inner_w - badge_room).max(30.0));
     let name_rect = pen.put(name, rect.left_top() + vec2(pad, pad), Align2::LEFT_TOP);
     if let Some(b) = badge {
         let r = Align2::LEFT_CENTER.anchor_size(pos2(name_rect.right() + pen.px(10.0), name_rect.center().y), b.size());
-        pen.p.rect_stroke(r.expand2(vec2(pen.px(4.0), 1.0)), Rounding::ZERO, stroke(1.0, STATUS_RED));
+        pen.p.rect_stroke(r.expand2(vec2(pen.px(4.0), 1.0)), Rounding::ZERO, stroke(1.0, status_red()));
         pen.put(b, r.min, Align2::LEFT_TOP);
     }
     let sub_rect = pen.put(pen.text(&d.subline(), sub_font, ink.muted, 0.0, inner_w), pos2(rect.left() + pad, name_rect.bottom() + pen.px(2.0)), Align2::LEFT_TOP);
@@ -1435,7 +1437,7 @@ mod tests {
 
     /// The radar as the block holds it: the block's slate and margin around it.
     fn paint(ctx: &egui::Context, snap: &Snapshot, view: &mut View, actions: &mut Actions) {
-        egui::CentralPanel::default().frame(Frame::none().fill(BLOCK_SLATE).inner_margin(Margin::same(12.0))).show(ctx, |ui| {
+        egui::CentralPanel::default().frame(Frame::none().fill(block_slate()).inner_margin(Margin::same(12.0))).show(ctx, |ui| {
             let asked = draw(ui, snap, view);
             actions.rescan |= asked.rescan;
             actions.speed_test |= asked.speed_test;

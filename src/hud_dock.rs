@@ -262,7 +262,7 @@ pub fn off_board(id: &str) {
 /// the board at once).
 pub fn forget(id: &str) {
     off_board(id);
-    crate::hud_style::set_light(id, crate::hud_style::Light::Rest);
+    crate::holo_block::set_lamp(id, crate::holo_block::Lamp::Rest);
     with(|s| {
         s.seen.remove(id);
         s.detached.remove(id);

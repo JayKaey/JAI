@@ -138,12 +138,12 @@ impl Default for Hub {
 }
 
 fn text_field(ui: &mut Ui, value: &mut String, hint: &str) {
-    ui.add(egui::TextEdit::singleline(value).hint_text(hint).desired_width(300.0));
+    crate::holo_ui::slot(ui, egui::TextEdit::singleline(value).hint_text(hint).desired_width(300.0));
 }
 
 fn secret_field(ui: &mut Ui, value: &mut String, stored: bool) {
     let hint = if stored { "•••••• stored encrypted (type to replace)" } else { "app token / password" };
-    ui.add(egui::TextEdit::singleline(value).password(true).hint_text(hint).desired_width(300.0));
+    crate::holo_ui::slot(ui, egui::TextEdit::singleline(value).password(true).hint_text(hint).desired_width(300.0));
 }
 
 /// Quick Connections: JAI's own Discord account and Away Mode. Needs nothing of the running
@@ -154,7 +154,7 @@ fn account_and_away(ui: &mut Ui, p: &Palette, bot: &mut DiscordBotSettings, away
         ui.label(RichText::new(title).font(bold(12.5)).color(p.accent));
     };
     section(ui, "JAI's Discord account (a bot of his own)");
-    ui.checkbox(&mut bot.enabled, "Enabled");
+    crate::holo_ui::toggle(ui, &mut bot.enabled, "Enabled");
     egui::Grid::new("hub_discord_bot").num_columns(2).spacing([12.0, 7.0]).show(ui, |ui| {
         ui.label("Bot token");
         secret_field(ui, token, token_stored);
@@ -166,15 +166,15 @@ fn account_and_away(ui: &mut Ui, p: &Palette, bot: &mut DiscordBotSettings, away
         text_field(ui, &mut bot.status_text, "Watching … (empty: none)");
         ui.end_row();
     });
-    ui.checkbox(&mut bot.answer_others, "Friends who DM or mention him get a short answer");
-    ui.checkbox(&mut bot.notify_owner, "Alerts reach my phone as DMs while I'm away");
-    ui.checkbox(&mut bot.follow_owner_voice, "Join my voice channel whenever I join one");
-    ui.checkbox(&mut bot.announce_listening, "Say once in each call's chat that he transcribes it");
-    ui.checkbox(&mut bot.presence_intent, "Who's online (switch on the Presence Intent in the Developer Portal too)");
+    crate::holo_ui::toggle(ui, &mut bot.answer_others, "Friends who DM or mention him get a short answer");
+    crate::holo_ui::toggle(ui, &mut bot.notify_owner, "Alerts reach my phone as DMs while I'm away");
+    crate::holo_ui::toggle(ui, &mut bot.follow_owner_voice, "Join my voice channel whenever I join one");
+    crate::holo_ui::toggle(ui, &mut bot.announce_listening, "Say once in each call's chat that he transcribes it");
+    crate::holo_ui::toggle(ui, &mut bot.presence_intent, "Who's online (switch on the Presence Intent in the Developer Portal too)");
     let status = crate::discord_bot::hud_status();
     ui.horizontal_wrapped(|ui| {
         let online = crate::discord_bot::online();
-        if ui.add_enabled(online, egui::Button::new("Pair my account")).on_hover_text("Shows a code: send it to the bot as a direct message within ten minutes").clicked() {
+        if ui.add_enabled_ui(online, |ui| crate::holo_ui::key(ui, "Pair my account")).inner.on_hover_text("Shows a code: send it to the bot as a direct message within ten minutes").clicked() {
             if let Some(bot) = crate::discord_bot::bot() {
                 let code = bot.start_pairing();
                 lock(results).insert("discord_bot", (true, format!("Send the bot this code as a DM: {code}")));
@@ -201,17 +201,17 @@ fn account_and_away(ui: &mut Ui, p: &Palette, bot: &mut DiscordBotSettings, away
     if let Some(note) = status.and_then(|s| s.note) {
         ui.add(egui::Label::new(RichText::new(note).size(11.0).color(p.amber)).wrap());
     }
-    muted(ui, p, "Create it at discord.com/developers → New Application → Bot: copy the token here and switch on the Message Content Intent. Invite it with OAuth2 → URL Generator (scope bot; View Channels, Send Messages, Read Message History, Connect, Speak, Use Voice Activity). Bots join server voice channels, not private calls.");
+    muted(ui, "Create it at discord.com/developers → New Application → Bot: copy the token here and switch on the Message Content Intent. Invite it with OAuth2 → URL Generator (scope bot; View Channels, Send Messages, Read Message History, Connect, Speak, Use Voice Activity). Bots join server voice channels, not private calls.");
 
     section(ui, "Away Mode");
     ui.horizontal_wrapped(|ui| {
         ui.label("On by itself once the PC has been locked for");
-        ui.add(egui::DragValue::new(&mut away.auto_after_locked_mins).range(0..=240).suffix(" min"));
+        ui.add(crate::holo_ui::Number::new(&mut away.auto_after_locked_mins).range(0..=240).suffix(" min"));
     });
-    muted(ui, p, "0: only when you tell him you're leaving (\"I'm heading out\").");
-    ui.checkbox(&mut away.answering_machine, "Answer friends' Discord messages while I'm away");
-    ui.checkbox(&mut away.alert_on_unlock, "Tell my phone when someone uses the PC after I said I was leaving");
-    ui.checkbox(&mut away.alert_on_usb, "Tell me when a drive is plugged in while I'm away");
+    muted(ui, "0: only when you tell him you're leaving (\"I'm heading out\").");
+    crate::holo_ui::toggle(ui, &mut away.answering_machine, "Answer friends' Discord messages while I'm away");
+    crate::holo_ui::toggle(ui, &mut away.alert_on_unlock, "Tell my phone when someone uses the PC after I said I was leaving");
+    crate::holo_ui::toggle(ui, &mut away.alert_on_usb, "Tell me when a drive is plugged in while I'm away");
 }
 
 impl Hub {
@@ -248,25 +248,25 @@ impl Hub {
         }
         let mut open = self.open;
         super::board_window(ctx, "integrations_hub", "Hub // integrations and productivity", [600.0, 700.0], &mut open, |ui| {
-                muted(ui, p, "Or just ask: “JAI, check my school schedule”, “any new emails?”, “give me my morning briefing”.");
+                muted(ui, "Or just ask: “JAI, check my school schedule”, “any new emails?”, “give me my morning briefing”.");
                 // One button that verifies every connection, with status codes and previews.
                 let registry = app.tools().stark.integrations.clone();
                 ui.horizontal(|ui| {
                     let label = if registry.running() { "Diagnosing…" } else { "Test & Diagnose All Connections" };
-                    if button(ui, p, label, Tone::On).clicked() && !registry.running() {
+                    if button(ui, label, Tone::On).clicked() && !registry.running() {
                         let tools = app.tools().clone();
                         rt.spawn(async move {
                             let _ = crate::integration_registry::run_tool(&tools).await;
                             request_repaint();
                         });
                     }
-                    if ui.button("Phone pairing").on_hover_text("Show the QR code for the mobile satellite").clicked() {
+                    if crate::holo_ui::key(ui, "Phone pairing").on_hover_text("Show the QR code for the mobile satellite").clicked() {
                         super::show_pairing();
                     }
                 });
                 let reports = registry.last();
                 if !reports.is_empty() {
-                    egui::CollapsingHeader::new(RichText::new("Last diagnosis").size(11.5)).default_open(true).show(ui, |ui| {
+                    crate::holo_ui::fold(ui, "hub_diagnosis", "Last diagnosis", true, |ui| {
                         for r in &reports {
                             let colour = match r.state.as_str() {
                                 "ok" => p.green,
@@ -279,11 +279,11 @@ impl Hub {
                 }
                 ui.horizontal_wrapped(|ui| {
                     for (tab, label) in Tab::ALL {
-                        ui.selectable_value(&mut self.tab, tab, label);
+                        crate::holo_ui::option(ui, &mut self.tab, tab, label);
                     }
                 });
-                ui.separator();
-                crate::hud_style::faded(ui, egui::ScrollArea::vertical().max_height(470.0).auto_shrink([false, true]), |ui| match self.tab {
+                crate::holo_ui::rule(ui);
+                crate::holo_block::faded(ui, egui::ScrollArea::vertical().max_height(470.0).auto_shrink([false, true]), |ui| match self.tab {
                     Tab::Email => self.email_tab(ui, p, pim),
                     Tab::Calendar => self.calendar_tab(ui, p, pim),
                     Tab::WebUntis => self.webuntis_tab(ui, p, pim),
@@ -293,12 +293,12 @@ impl Hub {
                     Tab::Quick => self.quick_tab(ui, p, app, rt),
                     Tab::Field => self.field_tab(ui, p, app, rt),
                 });
-                ui.separator();
+                crate::holo_ui::rule(ui);
                 if let Some(service) = self.tab.service() {
                     self.status_line(ui, p, pim, service);
                 }
                 ui.horizontal(|ui| {
-                    if button(ui, p, "Save", Tone::On).clicked() {
+                    if button(ui, "Save", Tone::On).clicked() {
                         if self.tab == Tab::Quick {
                             self.save_quick(app);
                         } else if self.tab == Tab::Field {
@@ -308,11 +308,11 @@ impl Hub {
                         }
                     }
                     if let Some(service) = self.tab.service() {
-                        if ui.button("Save & test connection").clicked() && self.save(pim) {
+                        if crate::holo_ui::key(ui, "Save & test connection").clicked() && self.save(pim) {
                             self.test(pim, rt, service);
                         }
                     }
-                    if ui.button("Revert").clicked() {
+                    if crate::holo_ui::key(ui, "Revert").clicked() {
                         self.draft = None;
                         self.quick = None;
                         self.field = None;
@@ -322,7 +322,7 @@ impl Hub {
                 if let Some((text, error)) = &self.message {
                     ui.label(RichText::new(text).size(11.0).color(if *error { p.red } else { p.green }));
                 }
-                muted(ui, p, format!("Tokens are sealed with AES-256-GCM; master key in {}.", pim.config().vault().key_store()));
+                muted(ui, format!("Tokens are sealed with AES-256-GCM; master key in {}.", pim.config().vault().key_store()));
             });
         self.open = open;
         if !self.open {
@@ -346,7 +346,7 @@ impl Hub {
         let tools = app.tools().clone();
         let f = tools.stark.features.clone();
         ui.label(RichText::new("FIELD SYSTEMS").font(bold(12.0)).color(p.accent));
-        muted(ui, p, "Say “clip that”, “quiz me on …”, “why am I lagging”, “clean up my downloads”, “wake me at 6:30 with JaysRock”, “find me an RTX 3080 under 350 euros”.");
+        muted(ui, "Say “clip that”, “quiz me on …”, “why am I lagging”, “clean up my downloads”, “wake me at 6:30 with JaysRock”, “find me an RTX 3080 under 350 euros”.");
         let rows = [
             ("Instant Replay", if f.replay.is_running() { "recording the rolling buffer".to_string() } else { "off".to_string() }),
             ("Smart Alarm", f.alarm.describe().unwrap_or_else(|| "no alarm set".into())),
@@ -372,39 +372,39 @@ impl Hub {
             });
         };
         ui.horizontal_wrapped(|ui| {
-            if ui.button("Save replay").clicked() {
+            if crate::holo_ui::key(ui, "Save replay").clicked() {
                 run("save_instant_replay", json!({}));
             }
-            if ui.button("Preview Downloads cleanup").clicked() {
+            if crate::holo_ui::key(ui, "Preview Downloads cleanup").clicked() {
                 run("smart_folder_cleanup", json!({ "target_folder": "downloads", "dry_run_first": true }));
             }
-            if ui.button("Undo cleanup").clicked() {
+            if crate::holo_ui::key(ui, "Undo cleanup").clicked() {
                 run("undo_last_cleanup", json!({}));
             }
-            if ui.button("Network check").clicked() {
+            if crate::holo_ui::key(ui, "Network check").clicked() {
                 run("diagnose_network_and_ping", json!({ "action": "full" }));
             }
-            if ui.button("Finances").clicked() {
+            if crate::holo_ui::key(ui, "Finances").clicked() {
                 run("manage_finances_and_goals", json!({ "action": "summary" }));
             }
-            if ui.button("Check deals").clicked() {
+            if crate::holo_ui::key(ui, "Check deals").clicked() {
                 run("manage_price_sniper", json!({ "action": "check_now" }));
             }
-            if ui.button("Minecraft doctor").clicked() {
+            if crate::holo_ui::key(ui, "Minecraft doctor").clicked() {
                 run("diagnose_minecraft_or_server", json!({ "action": "diagnose" }));
             }
-            if ui.button("Install yt-dlp + FFmpeg").on_hover_text("Through winget, for the Media Grabber").clicked() {
+            if crate::holo_ui::key(ui, "Install yt-dlp + FFmpeg").on_hover_text("Through winget, for the Media Grabber").clicked() {
                 run("download_or_extract_media", json!({ "action": "install_tools", "url_or_active_browser": "" }));
             }
         });
-        ui.separator();
+        crate::holo_ui::rule(ui);
         let Some(s) = self.field.as_mut() else { return };
         egui::Grid::new("field_settings").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
             ui.label("Instant Replay");
             ui.horizontal(|ui| {
-                ui.checkbox(&mut s.replay_enabled, "rolling buffer");
-                ui.add(egui::DragValue::new(&mut s.replay_seconds).range(10..=600).suffix(" s"));
-                ui.add(egui::DragValue::new(&mut s.replay_fps).range(0.2..=5.0).speed(0.1).suffix(" fps"));
+                crate::holo_ui::toggle(ui, &mut s.replay_enabled, "rolling buffer");
+                ui.add(crate::holo_ui::Number::new(&mut s.replay_seconds).range(10..=600).suffix(" s"));
+                ui.add(crate::holo_ui::Number::new(&mut s.replay_fps).range(0.2..=5.0).speed(0.1).suffix(" fps"));
             });
             ui.end_row();
             ui.label("Projects folder");
@@ -414,7 +414,7 @@ impl Hub {
             text_field(ui, &mut self.field_servers, "euw.leagueoflegends.com, 1.2.3.4");
             ui.end_row();
             ui.label("Deal checks every");
-            ui.add(egui::DragValue::new(&mut s.deal_interval_min).range(5..=1440).suffix(" min"));
+            ui.add(crate::holo_ui::Number::new(&mut s.deal_interval_min).range(5..=1440).suffix(" min"));
             ui.end_row();
             ui.label("Minecraft folder");
             text_field(ui, &mut s.minecraft_dir, "%APPDATA%\\.minecraft (auto)");
@@ -424,8 +424,8 @@ impl Hub {
             ui.end_row();
             ui.label("RCON");
             ui.horizontal(|ui| {
-                ui.add(egui::TextEdit::singleline(&mut s.rcon_address).hint_text("host:25575").desired_width(140.0));
-                ui.add(egui::TextEdit::singleline(&mut s.rcon_password).password(true).hint_text("password").desired_width(140.0));
+                crate::holo_ui::slot(ui, egui::TextEdit::singleline(&mut s.rcon_address).hint_text("host:25575").desired_width(140.0));
+                crate::holo_ui::slot(ui, egui::TextEdit::singleline(&mut s.rcon_password).password(true).hint_text("password").desired_width(140.0));
             });
             ui.end_row();
             ui.label("SSH target");
@@ -433,8 +433,8 @@ impl Hub {
             ui.end_row();
             ui.label("Alarm fade-in");
             ui.horizontal(|ui| {
-                ui.add(egui::DragValue::new(&mut s.alarm_fade_secs).range(10..=900).suffix(" s"));
-                ui.add(egui::DragValue::new(&mut s.alarm_volume).range(5..=100).suffix(" % volume"));
+                ui.add(crate::holo_ui::Number::new(&mut s.alarm_fade_secs).range(10..=900).suffix(" s"));
+                ui.add(crate::holo_ui::Number::new(&mut s.alarm_volume).range(5..=100).suffix(" % volume"));
             });
             ui.end_row();
         });
@@ -508,16 +508,16 @@ impl Hub {
 
         // ---- WhatsApp -------------------------------------------------------------------
         section(ui, "WhatsApp");
-        ui.checkbox(&mut q.whatsapp.notification_listener, "Read incoming messages from WhatsApp Desktop's notifications");
-        ui.checkbox(&mut q.whatsapp.desktop_auto_send, "\"Send it now\": press Enter in WhatsApp Desktop once the chat is open");
+        crate::holo_ui::toggle(ui, &mut q.whatsapp.notification_listener, "Read incoming messages from WhatsApp Desktop's notifications");
+        crate::holo_ui::toggle(ui, &mut q.whatsapp.desktop_auto_send, "\"Send it now\": press Enter in WhatsApp Desktop once the chat is open");
         egui::Grid::new("hub_whatsapp").num_columns(2).spacing([12.0, 7.0]).show(ui, |ui| {
             ui.label("Local bridge URL");
             text_field(ui, &mut q.whatsapp.bridge_url, "http://127.0.0.1:3000 (optional)");
             ui.end_row();
             ui.label("Bridge type");
-            egui::ComboBox::from_id_salt("hub_wa_kind").selected_text(q.whatsapp.bridge_kind.clone()).show_ui(ui, |ui| {
-                ui.selectable_value(&mut q.whatsapp.bridge_kind, "generic".to_string(), "generic (GET /messages, POST /send)");
-                ui.selectable_value(&mut q.whatsapp.bridge_kind, "waha".to_string(), "WAHA (POST /api/sendText)");
+            crate::holo_ui::Picker::from_id_salt("hub_wa_kind").selected_text(q.whatsapp.bridge_kind.clone()).show_ui(ui, |ui| {
+                crate::holo_ui::option(ui, &mut q.whatsapp.bridge_kind, "generic".to_string(), "generic (GET /messages, POST /send)");
+                crate::holo_ui::option(ui, &mut q.whatsapp.bridge_kind, "waha".to_string(), "WAHA (POST /api/sendText)");
             });
             ui.end_row();
             ui.label("WAHA session");
@@ -528,14 +528,14 @@ impl Hub {
             secret_field(ui, &mut self.wa_token, stored);
             ui.end_row();
             ui.label("Country code");
-            ui.add(egui::TextEdit::singleline(&mut q.whatsapp.default_country_code).desired_width(70.0));
+            crate::holo_ui::slot(ui, egui::TextEdit::singleline(&mut q.whatsapp.default_country_code).desired_width(70.0));
             ui.end_row();
             ui.label("Check every");
-            ui.add(egui::DragValue::new(&mut q.whatsapp.poll_seconds).range(5..=600).suffix(" s"));
+            ui.add(crate::holo_ui::Number::new(&mut q.whatsapp.poll_seconds).range(5..=600).suffix(" s"));
             ui.end_row();
         });
         ui.horizontal(|ui| {
-            if ui.button("Test bridge").clicked() {
+            if crate::holo_ui::key(ui, "Test bridge").clicked() {
                 lock(&self.results).insert("whatsapp_bridge", (true, "Testing the bridge…".into()));
                 let (wa, settings, token, results) = (tools.stark.whatsapp.clone(), q.whatsapp.clone(), tools.pim.config().vault().secret(crate::whatsapp_client::VAULT_SERVICE, crate::vault::TOKEN), Arc::clone(&self.results));
                 rt.spawn(async move {
@@ -551,7 +551,7 @@ impl Hub {
                 ui.label(RichText::new(text).size(11.0).color(if ok { p.green } else { p.red }));
             }
         });
-        muted(ui, p, format!(
+        muted(ui, format!(
             "{} unread on record. Bridges can also push messages to the satellite: POST {}/api/whatsapp/incoming?k=<key>.",
             tools.stark.whatsapp.unread_count(),
             crate::satellite::pairing_url(app.config()).split("/satellite").next().unwrap_or("")
@@ -569,20 +569,20 @@ impl Hub {
             secret_field(ui, &mut self.mapillary_token, mapillary_stored);
             ui.end_row();
         });
-        if mapillary_stored && ui.small_button("Forget the Mapillary token").on_hover_text("Street view then uses Panoramax and KartaView only").clicked() {
+        if mapillary_stored && crate::holo_ui::key(ui, "Forget the Mapillary token").on_hover_text("Street view then uses Panoramax and KartaView only").clicked() {
             tools.pim.config().vault().clear_secret(crate::street_view::VAULT_SERVICE, crate::vault::TOKEN);
         }
-        muted(ui, p, "Without a token street view uses Panoramax and KartaView (open, no account). With a free Mapillary client token (MLY|…, from mapillary.com/dashboard/developers) Mapillary's photos come first. Stored encrypted, never in the settings file.");
+        muted(ui, "Without a token street view uses Panoramax and KartaView (open, no account). With a free Mapillary client token (MLY|…, from mapillary.com/dashboard/developers) Mapillary's photos come first. Stored encrypted, never in the settings file.");
         // ---- Sketchfab (the 3D studio's full models) ----------------------------------------
         super::model3d_view::sketchfab_section(ui, p, tools.pim.config().vault(), rt);
 
         // ---- The mobile satellite -------------------------------------------------------
         section(ui, "Mobile satellite (phone / iPad with live GPS)");
         ui.horizontal(|ui| {
-            ui.checkbox(&mut q.satellite.enabled, "Enabled");
-            ui.checkbox(&mut q.satellite.https, "HTTPS (needed for GPS)");
+            crate::holo_ui::toggle(ui, &mut q.satellite.enabled, "Enabled");
+            crate::holo_ui::toggle(ui, &mut q.satellite.https, "HTTPS (needed for GPS)");
             ui.label("Port");
-            ui.add(egui::DragValue::new(&mut q.satellite.port).range(1024..=65535));
+            ui.add(crate::holo_ui::Number::new(&mut q.satellite.port).range(1024..=65535));
         });
         let url = crate::satellite::pairing_url(app.config());
         if self.qr.as_ref().is_none_or(|(u, _, _)| *u != url) {
@@ -606,14 +606,14 @@ impl Hub {
             ui.vertical(|ui| {
                 ui.label(RichText::new("Scan with your phone's camera:").size(11.5));
                 ui.add(egui::Label::new(RichText::new(&url).monospace().size(11.0).color(p.accent)).wrap());
-                if ui.small_button("Copy link").clicked() {
+                if crate::holo_ui::key(ui, "Copy link").clicked() {
                     ui.output_mut(|o| o.copied_text = url.clone());
                 }
-                muted(ui, p, "The certificate is self-signed: accept the browser's warning once (or install it from /satellite/cert.der), then allow location access.");
+                muted(ui, "The certificate is self-signed: accept the browser's warning once (or install it from /satellite/cert.der), then allow location access.");
                 if !crate::satellite::has_certificate() && q.satellite.https {
-                    muted(ui, p, "(The certificate is created when the satellite starts.)");
+                    muted(ui, "(The certificate is created when the satellite starts.)");
                 }
-                if ui.small_button("New pairing key").on_hover_text("Unpairs every device that used the old QR code").clicked() {
+                if crate::holo_ui::key(ui, "New pairing key").on_hover_text("Unpairs every device that used the old QR code").clicked() {
                     q.satellite.token.clear();
                 }
                 let fix = tools.stark.location.phone_fix();
@@ -627,7 +627,7 @@ impl Hub {
 
         // ---- The worldwide address ------------------------------------------------------
         section(ui, "Worldwide address (the phone page away from home)");
-        ui.checkbox(&mut q.satellite.worldwide_enabled, "Reachable from anywhere through an HTTPS tunnel");
+        crate::holo_ui::toggle(ui, &mut q.satellite.worldwide_enabled, "Reachable from anywhere through an HTTPS tunnel");
         let provider = match q.satellite.tunnel_provider.to_ascii_lowercase().as_str() {
             "tailscale" => "tailscale",
             "ssh" => "ssh",
@@ -642,10 +642,10 @@ impl Hub {
                 "ssh" => "Own server (SSH)",
                 _ => "Cloudflare",
             };
-            egui::ComboBox::from_id_salt("hub_tunnel_provider").selected_text(shown).show_ui(ui, |ui| {
-                ui.selectable_value(&mut q.satellite.tunnel_provider, "cloudflare".to_string(), "Cloudflare");
-                ui.selectable_value(&mut q.satellite.tunnel_provider, "tailscale".to_string(), "Tailscale Funnel");
-                ui.selectable_value(&mut q.satellite.tunnel_provider, "ssh".to_string(), "Own server (SSH)");
+            crate::holo_ui::Picker::from_id_salt("hub_tunnel_provider").selected_text(shown).show_ui(ui, |ui| {
+                crate::holo_ui::option(ui, &mut q.satellite.tunnel_provider, "cloudflare".to_string(), "Cloudflare");
+                crate::holo_ui::option(ui, &mut q.satellite.tunnel_provider, "tailscale".to_string(), "Tailscale Funnel");
+                crate::holo_ui::option(ui, &mut q.satellite.tunnel_provider, "ssh".to_string(), "Own server (SSH)");
             });
             ui.end_row();
             if provider != "tailscale" {
@@ -683,25 +683,25 @@ impl Hub {
         ui.add(egui::Label::new(RichText::new(line).size(11.0).color(colour)).wrap());
         match provider {
             "cloudflare" => {
-                muted(ui, p, format!(
+                muted(ui, format!(
                     "One address for good needs a domain of your own at Cloudflare (the free plan will do): in Zero Trust open Networks, Tunnels, create a tunnel (Cloudflared), paste its token here, and give it a public hostname with the service HTTP 127.0.0.1:{}. Without a token a quick tunnel is used, whose address is new on every start.",
                     q.satellite.tunnel_origin_port
                 ));
-                if token_stored && ui.small_button("Forget the tunnel token").on_hover_text("Back to a quick tunnel with a changing address").clicked() {
+                if token_stored && crate::holo_ui::key(ui, "Forget the tunnel token").on_hover_text("Back to a quick tunnel with a changing address").clicked() {
                     vault.clear_secret(crate::worldwide_tunnel::TOKEN_SERVICE, crate::vault::TOKEN);
                     crate::worldwide_tunnel::kick();
                 }
             }
-            "tailscale" => muted(ui, p, "Tailscale Funnel gives this PC one address for good (https://pc-name.your-tailnet.ts.net) without a domain: install Tailscale on this PC, sign in and allow Funnel once. JAI starts it himself."),
-            _ => muted(ui, p, "Your own server: an HTTPS reverse proxy on it forwards to the SSH port; the permanent address is the proxy's."),
+            "tailscale" => muted(ui, "Tailscale Funnel gives this PC one address for good (https://pc-name.your-tailnet.ts.net) without a domain: install Tailscale on this PC, sign in and allow Funnel once. JAI starts it himself."),
+            _ => muted(ui, "Your own server: an HTTPS reverse proxy on it forwards to the SSH port; the permanent address is the proxy's."),
         }
 
         // ---- Location, geofence & commute -----------------------------------------------
         section(ui, "Location, home geofence & commute");
         let coord = |ui: &mut Ui, lat: &mut Option<f64>, lon: &mut Option<f64>| {
             let (mut a, mut b) = (lat.unwrap_or(0.0), lon.unwrap_or(0.0));
-            let ra = ui.add(egui::DragValue::new(&mut a).speed(0.0001).range(-90.0..=90.0).max_decimals(6).prefix("lat "));
-            let rb = ui.add(egui::DragValue::new(&mut b).speed(0.0001).range(-180.0..=180.0).max_decimals(6).prefix("lon "));
+            let ra = ui.add(crate::holo_ui::Number::new(&mut a).speed(0.0001).range(-90.0..=90.0).max_decimals(6).prefix("lat "));
+            let rb = ui.add(crate::holo_ui::Number::new(&mut b).speed(0.0001).range(-180.0..=180.0).max_decimals(6).prefix("lon "));
             if ra.changed() || rb.changed() {
                 *lat = Some(a);
                 *lon = Some(b);
@@ -711,7 +711,7 @@ impl Hub {
             ui.label("Home");
             ui.horizontal(|ui| {
                 coord(ui, &mut q.location.home_lat, &mut q.location.home_lon);
-                if ui.small_button("From phone").on_hover_text("Use the phone's current GPS position").clicked() {
+                if crate::holo_ui::key(ui, "From phone").on_hover_text("Use the phone's current GPS position").clicked() {
                     if let Some(f) = tools.stark.location.phone_fix() {
                         q.location.home_lat = Some(f.lat);
                         q.location.home_lon = Some(f.lon);
@@ -723,7 +723,7 @@ impl Hub {
             ui.label("School");
             ui.horizontal(|ui| {
                 coord(ui, &mut q.location.school_lat, &mut q.location.school_lon);
-                if ui.small_button("From phone").clicked() {
+                if crate::holo_ui::key(ui, "From phone").clicked() {
                     if let Some(f) = tools.stark.location.phone_fix() {
                         q.location.school_lat = Some(f.lat);
                         q.location.school_lon = Some(f.lon);
@@ -739,47 +739,47 @@ impl Hub {
             text_field(ui, &mut q.location.arrival_protocol, "a Stark protocol (empty = none)");
             ui.end_row();
             ui.label("Travel by");
-            egui::ComboBox::from_id_salt("hub_travel").selected_text(q.location.default_travel_mode.clone()).show_ui(ui, |ui| {
+            crate::holo_ui::Picker::from_id_salt("hub_travel").selected_text(q.location.default_travel_mode.clone()).show_ui(ui, |ui| {
                 for m in ["motorcycle", "car", "bike", "walk", "transit"] {
-                    ui.selectable_value(&mut q.location.default_travel_mode, m.to_string(), m);
+                    crate::holo_ui::option(ui, &mut q.location.default_travel_mode, m.to_string(), m);
                 }
             });
             ui.end_row();
             ui.label("Commute buffer");
-            ui.add(egui::DragValue::new(&mut q.location.commute_buffer_min).range(0..=120).suffix(" min"));
+            ui.add(crate::holo_ui::Number::new(&mut q.location.commute_buffer_min).range(0..=120).suffix(" min"));
             ui.end_row();
         });
         ui.horizontal_wrapped(|ui| {
-            ui.checkbox(&mut q.location.geofence_enabled, "Home geofence");
-            ui.checkbox(&mut q.location.arrival_wake_hud, "Wake the HUD on arrival");
-            ui.checkbox(&mut q.location.arrival_greeting, "Greet me");
-            ui.checkbox(&mut q.location.ip_fallback, "IP location fallback");
+            crate::holo_ui::toggle(ui, &mut q.location.geofence_enabled, "Home geofence");
+            crate::holo_ui::toggle(ui, &mut q.location.arrival_wake_hud, "Wake the HUD on arrival");
+            crate::holo_ui::toggle(ui, &mut q.location.arrival_greeting, "Greet me");
+            crate::holo_ui::toggle(ui, &mut q.location.ip_fallback, "IP location fallback");
         });
-        muted(ui, p, format!("Arrival fires when the phone comes back within {:.0} m after being farther than {:.0} m away.", q.location.geofence_arrive_m, q.location.geofence_leave_m));
+        muted(ui, format!("Arrival fires when the phone comes back within {:.0} m after being farther than {:.0} m away.", q.location.geofence_arrive_m, q.location.geofence_leave_m));
 
         // ---- Acoustic radar ----------------------------------------------------------------
         section(ui, "Acoustic radar");
         ui.horizontal_wrapped(|ui| {
-            ui.checkbox(&mut q.acoustic.double_clap, "Double clap");
-            egui::ComboBox::from_id_salt("hub_clap").selected_text(if q.acoustic.clap_action == "toggle_music" { "toggles the music" } else { "wakes JAI" }).show_ui(ui, |ui| {
-                ui.selectable_value(&mut q.acoustic.clap_action, "wake".to_string(), "wakes JAI");
-                ui.selectable_value(&mut q.acoustic.clap_action, "toggle_music".to_string(), "toggles the music");
+            crate::holo_ui::toggle(ui, &mut q.acoustic.double_clap, "Double clap");
+            crate::holo_ui::Picker::from_id_salt("hub_clap").selected_text(if q.acoustic.clap_action == "toggle_music" { "toggles the music" } else { "wakes JAI" }).show_ui(ui, |ui| {
+                crate::holo_ui::option(ui, &mut q.acoustic.clap_action, "wake".to_string(), "wakes JAI");
+                crate::holo_ui::option(ui, &mut q.acoustic.clap_action, "toggle_music".to_string(), "toggles the music");
             });
-            ui.checkbox(&mut q.acoustic.knock_alert, "Door-knock alert");
-            ui.checkbox(&mut q.acoustic.knock_only_with_music, "only while music plays");
+            crate::holo_ui::toggle(ui, &mut q.acoustic.knock_alert, "Door-knock alert");
+            crate::holo_ui::toggle(ui, &mut q.acoustic.knock_only_with_music, "only while music plays");
         });
-        ui.add(egui::Slider::new(&mut q.acoustic.sensitivity, 0.5..=2.0).text("sensitivity"));
+        ui.add(crate::holo_ui::Slider::new(&mut q.acoustic.sensitivity, 0.5..=2.0).text("sensitivity"));
 
         // ---- Remote nodes ------------------------------------------------------------------
         section(ui, "Hivemind nodes (SSH)");
         for n in tools.stark.hivemind.list() {
-            muted(ui, p, format!("• {}", n.describe()));
+            muted(ui, format!("• {}", n.describe()));
         }
         ui.horizontal(|ui| {
             for (i, hint) in ["name", "host / IP", "ssh user", "kind (pi, vps, minecraft)"].iter().enumerate() {
-                ui.add(egui::TextEdit::singleline(&mut self.node_form[i]).hint_text(*hint).desired_width(if i == 3 { 150.0 } else { 100.0 }));
+                crate::holo_ui::slot(ui, egui::TextEdit::singleline(&mut self.node_form[i]).hint_text(*hint).desired_width(if i == 3 { 150.0 } else { 100.0 }));
             }
-            if ui.button("+ Add").clicked() && !self.node_form[0].trim().is_empty() && !self.node_form[1].trim().is_empty() {
+            if crate::holo_ui::key(ui, "+ Add").clicked() && !self.node_form[0].trim().is_empty() && !self.node_form[1].trim().is_empty() {
                 let mut node = crate::hivemind_mesh::RemoteNode {
                     name: self.node_form[0].trim().to_string(),
                     host: self.node_form[1].trim().to_string(),
@@ -801,7 +801,7 @@ impl Hub {
             }
         });
         ui.horizontal(|ui| {
-            if ui.button("Check all nodes").clicked() {
+            if crate::holo_ui::key(ui, "Check all nodes").clicked() {
                 lock(&self.results).insert("nodes", (true, "Checking…".into()));
                 let (tools, results) = (tools.clone(), Arc::clone(&self.results));
                 rt.spawn(async move {
@@ -821,12 +821,12 @@ impl Hub {
         // ---- Contacts ----------------------------------------------------------------------
         section(ui, "Contacts");
         let contacts = tools.stark.contacts.list();
-        muted(ui, p, format!("{} contacts{}", contacts.len(), if contacts.is_empty() { String::new() } else { format!(": {}", contacts.iter().take(12).map(|c| c.name.clone()).collect::<Vec<_>>().join(", ")) }));
+        muted(ui, format!("{} contacts{}", contacts.len(), if contacts.is_empty() { String::new() } else { format!(": {}", contacts.iter().take(12).map(|c| c.name.clone()).collect::<Vec<_>>().join(", ")) }));
         ui.horizontal(|ui| {
             for (i, hint) in ["name", "phone (+49 …)", "WhatsApp name"].iter().enumerate() {
-                ui.add(egui::TextEdit::singleline(&mut self.contact_form[i]).hint_text(*hint).desired_width(120.0));
+                crate::holo_ui::slot(ui, egui::TextEdit::singleline(&mut self.contact_form[i]).hint_text(*hint).desired_width(120.0));
             }
-            if ui.button("+ Save contact").clicked() && !self.contact_form[0].trim().is_empty() {
+            if crate::holo_ui::key(ui, "+ Save contact").clicked() && !self.contact_form[0].trim().is_empty() {
                 let c = crate::contacts::Contact {
                     name: self.contact_form[0].trim().to_string(),
                     phone_number: self.contact_form[1].trim().to_string(),
@@ -905,12 +905,12 @@ impl Hub {
         ui.horizontal(|ui| {
             let stored = pim.config().has_token(service);
             secret_field(ui, self.tokens.entry(service).or_default(), stored);
-            if stored && ui.small_button("Forget").on_hover_text("Remove the stored token from the vault").clicked() {
+            if stored && crate::holo_ui::key(ui, "Forget").on_hover_text("Remove the stored token from the vault").clicked() {
                 let _ = pim.config().set_token(service, "");
                 self.message = Some((format!("Removed the {} token.", pim_config::display(service)), false));
             }
             if !stored {
-                muted(ui, p, "none stored");
+                muted(ui, "none stored");
             }
         });
         ui.end_row();
@@ -918,13 +918,13 @@ impl Hub {
 
     fn email_tab(&mut self, ui: &mut Ui, p: &Palette, pim: &Pim) {
         let Some(mut d) = self.draft.take() else { return };
-        ui.checkbox(&mut d.email.enabled, "Use my e-mail (IMAP over TLS)");
+        crate::holo_ui::toggle(ui, &mut d.email.enabled, "Use my e-mail (IMAP over TLS)");
         egui::Grid::new("hub_email").num_columns(2).spacing([12.0, 7.0]).show(ui, |ui| {
             ui.label("IMAP host");
             text_field(ui, &mut d.email.imap_host, "imap.gmail.com");
             ui.end_row();
             ui.label("Port");
-            ui.add(egui::DragValue::new(&mut d.email.imap_port).range(1..=65535));
+            ui.add(crate::holo_ui::Number::new(&mut d.email.imap_port).range(1..=65535));
             ui.end_row();
             ui.label("E-mail address");
             text_field(ui, &mut d.email.address, "sir@gmail.com");
@@ -934,13 +934,13 @@ impl Hub {
             ui.end_row();
             self.token_row(ui, p, pim, EMAIL, "App token");
         });
-        muted(ui, p, "Gmail: turn on 2-step verification, create an app password (Google Account → Security → App passwords) and paste it here. JAI only reads (EXAMINE + BODY.PEEK); nothing is marked as read.");
+        muted(ui, "Gmail: turn on 2-step verification, create an app password (Google Account → Security → App passwords) and paste it here. JAI only reads (EXAMINE + BODY.PEEK); nothing is marked as read.");
         self.draft = Some(d);
     }
 
     fn calendar_tab(&mut self, ui: &mut Ui, p: &Palette, pim: &Pim) {
         let Some(mut d) = self.draft.take() else { return };
-        ui.checkbox(&mut d.calendar.enabled, "Sync my calendar (events are always kept offline too)");
+        crate::holo_ui::toggle(ui, &mut d.calendar.enabled, "Sync my calendar (events are always kept offline too)");
         egui::Grid::new("hub_calendar").num_columns(2).spacing([12.0, 7.0]).show(ui, |ui| {
             ui.label("CalDAV server");
             text_field(ui, &mut d.calendar.caldav_url, "https://caldav.icloud.com");
@@ -956,13 +956,13 @@ impl Hub {
             text_field(ui, &mut d.calendar.ics_url, "webcal://… (optional, read-only)");
             ui.end_row();
         });
-        muted(ui, p, "iCloud: appleid.apple.com → Sign-In and Security → App-Specific Passwords. Any CalDAV server (Nextcloud, Fastmail …) works with its server or calendar URL.");
+        muted(ui, "iCloud: appleid.apple.com → Sign-In and Security → App-Specific Passwords. Any CalDAV server (Nextcloud, Fastmail …) works with its server or calendar URL.");
         self.draft = Some(d);
     }
 
     fn webuntis_tab(&mut self, ui: &mut Ui, p: &Palette, pim: &Pim) {
         let Some(mut d) = self.draft.take() else { return };
-        ui.checkbox(&mut d.webuntis.enabled, "Read my school timetable");
+        crate::holo_ui::toggle(ui, &mut d.webuntis.enabled, "Read my school timetable");
         egui::Grid::new("hub_untis").num_columns(2).spacing([12.0, 7.0]).show(ui, |ui| {
             ui.label("School server");
             text_field(ui, &mut d.webuntis.server, "hebe.webuntis.com");
@@ -985,20 +985,20 @@ impl Hub {
             ui.end_row();
             ui.label("Session id (SSO)");
             ui.horizontal(|ui| {
-                ui.add(egui::TextEdit::singleline(&mut self.untis_session).password(true).hint_text("JSESSIONID from the browser (optional)").desired_width(300.0));
-                if pim.config().session(WEBUNTIS).is_some() && ui.small_button("Forget").on_hover_text("Remove the stored session id").clicked() {
+                crate::holo_ui::slot(ui, egui::TextEdit::singleline(&mut self.untis_session).password(true).hint_text("JSESSIONID from the browser (optional)").desired_width(300.0));
+                if pim.config().session(WEBUNTIS).is_some() && crate::holo_ui::key(ui, "Forget").on_hover_text("Remove the stored session id").clicked() {
                     let _ = pim.config().set_session(WEBUNTIS, "");
                 }
             });
             ui.end_row();
         });
-        muted(ui, p, "Cancelled periods show as Entfall / free period, substitutions and room changes as Vertretung. Sessions are renewed after 8 idle minutes.");
+        muted(ui, "Cancelled periods show as Entfall / free period, substitutions and room changes as Vertretung. Sessions are renewed after 8 idle minutes.");
         self.draft = Some(d);
     }
 
     fn lms_tab(&mut self, ui: &mut Ui, p: &Palette, pim: &Pim) {
         let Some(mut d) = self.draft.take() else { return };
-        ui.checkbox(&mut d.lms.enabled, "Track my itslearning courses");
+        crate::holo_ui::toggle(ui, &mut d.lms.enabled, "Track my itslearning courses");
         egui::Grid::new("hub_lms").num_columns(2).spacing([12.0, 7.0]).show(ui, |ui| {
             ui.label("Portal URL");
             text_field(ui, &mut d.lms.base_url, "https://myschool.itslearning.com");
@@ -1014,16 +1014,16 @@ impl Hub {
             text_field(ui, &mut d.lms.rest_endpoint, "custom path or URL (optional)");
             ui.end_row();
             ui.label("Keep-alive");
-            ui.add(egui::DragValue::new(&mut d.lms.keepalive_minutes).range(1..=60).suffix(" min"));
+            ui.add(crate::holo_ui::Number::new(&mut d.lms.keepalive_minutes).range(1..=60).suffix(" min"));
             ui.end_row();
         });
-        muted(ui, p, "The session is refreshed whenever it has been idle longer than the keep-alive interval (itslearning logs out after ~10 minutes). Schools with Feide / Microsoft single sign-on: use the feed URL.");
+        muted(ui, "The session is refreshed whenever it has been idle longer than the keep-alive interval (itslearning logs out after ~10 minutes). Schools with Feide / Microsoft single sign-on: use the feed URL.");
         self.draft = Some(d);
     }
 
     fn feeds_tab(&mut self, ui: &mut Ui, p: &Palette) {
         let Some(mut d) = self.draft.take() else { return };
-        muted(ui, p, "Any page or JSON endpoint: give it a name, a CSS selector (.status, #news li) or JSON path ($.data.items[0].title) and how often a watcher may check it.");
+        muted(ui, "Any page or JSON endpoint: give it a name, a CSS selector (.status, #news li) or JSON path ($.data.items[0].title) and how often a watcher may check it.");
         let mut remove = None;
         for (i, f) in d.feeds.iter_mut().enumerate() {
             egui::Frame::none().stroke(super::stroke(1.0, p.line)).rounding(egui::Rounding::ZERO).inner_margin(egui::Margin::same(8.0)).show(ui, |ui| {
@@ -1039,8 +1039,8 @@ impl Hub {
                     ui.end_row();
                     ui.label("Refresh");
                     ui.horizontal(|ui| {
-                        ui.add(egui::DragValue::new(&mut f.interval_minutes).range(0..=1440).suffix(" min"));
-                        if button(ui, p, "Remove", Tone::Danger).clicked() {
+                        ui.add(crate::holo_ui::Number::new(&mut f.interval_minutes).range(0..=1440).suffix(" min"));
+                        if button(ui, "Remove", Tone::Danger).clicked() {
                             remove = Some(i);
                         }
                     });
@@ -1052,7 +1052,7 @@ impl Hub {
         if let Some(i) = remove {
             d.feeds.remove(i);
         }
-        if ui.button("+ Add web feed").clicked() {
+        if crate::holo_ui::key(ui, "+ Add web feed").clicked() {
             d.feeds.push(WebFeed { interval_minutes: 30, ..Default::default() });
         }
         d.feeds.retain(|f| !(f.name.trim().is_empty() && f.url.trim().is_empty() && f.selector.trim().is_empty() && f.interval_minutes == 0));
@@ -1062,7 +1062,7 @@ impl Hub {
     fn study_tab(&mut self, ui: &mut Ui, p: &Palette, pim: &Pim) {
         let Some(mut d) = self.draft.take() else { return };
         ui.label(RichText::new("Background change watchers").font(bold(12.0)).color(p.accent));
-        muted(ui, p, "JAI checks the service on a timer, lights its node in the core and tells you the moment a class is cancelled or something new is posted.");
+        muted(ui, "JAI checks the service on a timer, lights its node in the core and tells you the moment a class is cancelled or something new is posted.");
         let running: HashMap<String, u32> = pim.watchers().list().into_iter().collect();
         let mut targets: Vec<(String, String)> = vec![(WEBUNTIS.into(), "WebUntis (cancellations, substitutions)".into()), (LMS.into(), "itslearning (new posts)".into())];
         targets.extend(d.feeds.iter().filter(|f| !f.name.trim().is_empty()).map(|f| (format!("feed:{}", f.name), format!("Web feed: {}", f.name))));
@@ -1072,17 +1072,17 @@ impl Hub {
                 ui.label(label);
                 let default = active.unwrap_or(if key == WEBUNTIS { 15 } else if key == LMS { 10 } else { 30 });
                 let minutes = self.watch_minutes.entry(key.clone()).or_insert(default);
-                ui.add(egui::DragValue::new(minutes).range(2..=1440).suffix(" min"));
+                ui.add(crate::holo_ui::Number::new(minutes).range(2..=1440).suffix(" min"));
                 let service = key.strip_prefix("feed:").unwrap_or(key).to_string();
                 let result = if active.is_some() {
                     ui.horizontal(|ui| {
-                        let stop = button(ui, p, "Stop", Tone::Danger).clicked();
-                        let update = ui.button("Update").clicked();
+                        let stop = button(ui, "Stop", Tone::Danger).clicked();
+                        let update = crate::holo_ui::key(ui, "Update").clicked();
                         (stop, update)
                     })
                     .inner
                 } else {
-                    (false, button(ui, p, "Watch", Tone::On).clicked())
+                    (false, button(ui, "Watch", Tone::On).clicked())
                 };
                 let args = match result {
                     (true, _) => Some(json!({ "service_name": service, "interval_minutes": 0 })),
@@ -1107,10 +1107,10 @@ impl Hub {
             text_field(ui, &mut d.study.school_dir, &crate::study_assistant::school_dir(pim).display().to_string());
             ui.end_row();
             ui.label("Downloads");
-            ui.checkbox(&mut d.study.sort_downloads, "Also sort study files from Downloads (last 14 days)");
+            crate::holo_ui::toggle(ui, &mut d.study.sort_downloads, "Also sort study files from Downloads (last 14 days)");
             ui.end_row();
         });
-        muted(ui, p, "“Sync my study materials” sorts files into School/<Subject>/ and adds exams and homework to the calendar; “summarise my new physics worksheet” reads the newest one.");
+        muted(ui, "“Sync my study materials” sorts files into School/<Subject>/ and adds exams and homework to the calendar; “summarise my new physics worksheet” reads the newest one.");
         self.draft = Some(d);
     }
 }

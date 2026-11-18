@@ -81,7 +81,7 @@ pub(super) fn paint_qr(ui: &mut egui::Ui, url: &str, size: f32) {
         cache.clone()
     };
     let Some((_, side, modules)) = matrix else {
-        muted(ui, &Palette::new(&crate::interface::InterfaceSettings::default()), "(The link is too long for a QR code.)");
+        muted(ui, "(The link is too long for a QR code.)");
         return;
     };
     let quiet = 4.0;
@@ -118,39 +118,39 @@ fn frame(ctx: &egui::Context, class: Option<ViewportClass>, host: &WidgetHost) {
     let body = |ui: &mut egui::Ui| {
         ui.vertical_centered(|ui| {
             ui.label(RichText::new("MOBILE SATELLITE").font(bold(18.0)).color(p.accent).extra_letter_spacing(3.0));
-            muted(ui, &p, "J.A.I. on your phone or iPad — anywhere in the world");
+            muted(ui, "J.A.I. on your phone or iPad — anywhere in the world");
             ui.add_space(8.0);
             match &worldwide {
                 Some(url) => {
                     ui.label(RichText::new(format!("WORLDWIDE HTTPS ONLINE · {}", tunnel.provider.to_uppercase())).font(bold(11.5)).color(p.green));
                     // One address for good, or one that is new with every start.
-                    let (stays, colour) = if tunnel.permanent { ("[ PERMANENT ADDRESS ]", p.green) } else { ("[ CHANGES WHEN THE TUNNEL RESTARTS ]", p.amber) };
+                    let (stays, colour) = if tunnel.permanent { ("PERMANENT ADDRESS", p.green) } else { ("CHANGES WHEN THE TUNNEL RESTARTS", p.amber) };
                     ui.label(RichText::new(stays).font(bold(10.5)).color(colour));
                     ui.add_space(6.0);
                     paint_qr(ui, url, 300.0);
                     ui.add_space(8.0);
-                    ui.hyperlink_to(RichText::new(url).monospace().size(11.0).color(p.accent), url);
+                    crate::holo_ui::link_to(ui, RichText::new(url).monospace().size(11.0).color(p.accent), url);
                     ui.horizontal(|ui| {
-                        if ui.button("Copy link").clicked() {
+                        if crate::holo_ui::key(ui, "Copy link").clicked() {
                             ui.output_mut(|o| o.copied_text = url.clone());
                         }
-                        if ui.button("Close").clicked() {
+                        if crate::holo_ui::key(ui, "Close").clicked() {
                             OPEN.store(false, Ordering::Release);
                         }
                     });
                 }
                 None => {
                     ui.label(RichText::new(format!("WORLDWIDE TUNNEL {} — {}", tunnel.state.to_uppercase(), tunnel.detail)).font(bold(11.0)).color(p.amber));
-                    muted(ui, &p, "Its QR code appears here the moment it is online. Until then, on this Wi-Fi only:");
+                    muted(ui, "Its QR code appears here the moment it is online. Until then, on this Wi-Fi only:");
                     ui.add_space(6.0);
                     paint_qr(ui, &local, 220.0);
                     ui.add_space(6.0);
                     ui.add(egui::Label::new(RichText::new(&local).monospace().size(11.0).color(p.muted)).wrap());
                     ui.horizontal(|ui| {
-                        if ui.button("Copy local link").clicked() {
+                        if crate::holo_ui::key(ui, "Copy local link").clicked() {
                             ui.output_mut(|o| o.copied_text = local.clone());
                         }
-                        if ui.button("Close").clicked() {
+                        if crate::holo_ui::key(ui, "Close").clicked() {
                             OPEN.store(false, Ordering::Release);
                         }
                     });
@@ -172,14 +172,14 @@ fn frame(ctx: &egui::Context, class: Option<ViewportClass>, host: &WidgetHost) {
             });
         }
         if worldwide.is_some() && !tunnel.permanent {
-            muted(ui, &p, "For one address that never changes: Integrations, Quick Connections, Mobile satellite, Permanent address.");
+            muted(ui, "For one address that never changes: Integrations, Quick Connections, Mobile satellite, Permanent address.");
         }
         if worldwide.is_some() {
             ui.add_space(4.0);
-            egui::CollapsingHeader::new(RichText::new("At home: the local Wi-Fi link").size(11.0).color(p.muted)).id_salt("pairing_local").show(ui, |ui| {
-                muted(ui, &p, format!("Same Wi-Fi as this PC ({ip}); accept J.A.I.' own certificate once."));
+            crate::holo_ui::fold(ui, "pairing_local", "At home: the local Wi-Fi link", false, |ui| {
+                muted(ui, format!("Same Wi-Fi as this PC ({ip}); accept J.A.I.' own certificate once."));
                 ui.add(egui::Label::new(RichText::new(&local).monospace().size(11.0).color(p.muted)).wrap());
-                if ui.small_button("Copy local link").clicked() {
+                if crate::holo_ui::key(ui, "Copy local link").clicked() {
                     ui.output_mut(|o| o.copied_text = local.clone());
                 }
             });

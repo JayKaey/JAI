@@ -76,10 +76,10 @@ fn set_phase(p: Phase) {
 /// The header button's label for a phase (and whether it glows amber).
 pub fn button_label(p: &Phase) -> (String, bool) {
     match p {
-        Phase::Idle => ("[ REBOOT LLM ]".into(), false),
-        Phase::Rebooting { step, .. } => (format!("[ {step}… ]"), true),
-        Phase::Online { latency_ms, .. } => (format!("[ LLM ONLINE · {:.1} S ]", *latency_ms as f32 / 1000.0), false),
-        Phase::Failed(_) => ("[ REBOOT FAILED ]".into(), true),
+        Phase::Idle => ("REBOOT LLM".into(), false),
+        Phase::Rebooting { step, .. } => (format!("{step}…"), true),
+        Phase::Online { latency_ms, .. } => (format!("LLM ONLINE · {:.1} S", *latency_ms as f32 / 1000.0), false),
+        Phase::Failed(_) => ("REBOOT FAILED".into(), true),
     }
 }
 
@@ -325,10 +325,10 @@ mod tests {
 
     #[test]
     fn button_labels_follow_the_phase() {
-        assert_eq!(button_label(&Phase::Idle), ("[ REBOOT LLM ]".into(), false));
+        assert_eq!(button_label(&Phase::Idle), ("REBOOT LLM".into(), false));
         let (label, amber) = button_label(&Phase::Rebooting { since: Instant::now(), step: "WARM RELOAD" });
         assert!(amber && label.contains("WARM RELOAD"));
-        assert_eq!(button_label(&Phase::Online { latency_ms: 2400, restarted: false }).0, "[ LLM ONLINE · 2.4 S ]");
+        assert_eq!(button_label(&Phase::Online { latency_ms: 2400, restarted: false }).0, "LLM ONLINE · 2.4 S");
         assert!(button_label(&Phase::Failed("x".into())).1);
     }
 

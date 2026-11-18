@@ -153,7 +153,7 @@ mod tests {
         // Text and secondary text read on the cards (WCAG 4.5:1).
         let c = |c: [u8; 3]| eframe::egui::Color32::from_rgb(c[0], c[1], c[2]);
         for ink in [p.text, p.muted] {
-            assert!(crate::hud_style::contrast(c(ink), c(p.well)) >= 4.5, "{ink:?}");
+            assert!(crate::holo::contrast(c(ink), c(p.well)) >= 4.5, "{ink:?}");
         }
         // Old configs without the field get the new default.
         let old: InterfaceSettings = serde_json::from_value(json!({"theme": "stark"})).unwrap();

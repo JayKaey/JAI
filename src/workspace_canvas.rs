@@ -1032,18 +1032,18 @@ fn crawler_view(ui: &mut Ui, w: &mut SpatialWindow, c: &mut WorkspaceCanvas, app
             });
         };
         let paused = snap.as_ref().is_some_and(|s| s.mission.status == "paused");
-        if running && !paused && ui.small_button("Pause").clicked() {
+        if running && !paused && crate::holo_ui::key(ui, "Pause").clicked() {
             action("pause");
         }
-        if (paused || (!running && snap.as_ref().is_some_and(|s| s.mission.status != "completed"))) && ui.small_button("Resume").clicked() {
+        if (paused || (!running && snap.as_ref().is_some_and(|s| s.mission.status != "completed"))) && crate::holo_ui::key(ui, "Resume").clicked() {
             action("resume");
         }
-        if running && ui.small_button("Stop").clicked() {
+        if running && crate::holo_ui::key(ui, "Stop").clicked() {
             action("stop");
         }
     });
     ui.add_space(4.0);
-    crate::hud_style::faded_into(ui, egui::ScrollArea::vertical().id_salt(("crawl_feed", w.id)).stick_to_bottom(true).auto_shrink([false; 2]), fill, |ui| {
+    crate::holo_block::faded_into(ui, egui::ScrollArea::vertical().id_salt(("crawl_feed", w.id)).stick_to_bottom(true).auto_shrink([false; 2]), fill, |ui| {
         for e in engine.recent_events(Some(id), 180) {
             let (tag, colour, text) = match &e.kind {
                 TelemetryKind::Fetch { url, status, ms, bytes } => (
@@ -1116,7 +1116,7 @@ fn dossier_view(ui: &mut Ui, w: &mut SpatialWindow, c: &mut WorkspaceCanvas, ctx
     };
     let Some(snap) = c.snapshot(id) else {
         let room = ui.available_rect_before_wrap();
-        crate::hud_style::outline(ui, room.shrink(6.0), crate::hud_style::Outline::Lines);
+        crate::holo_block::outline(ui, room.shrink(6.0), crate::holo_block::Outline::Lines);
         return;
     };
     let scroll_to_selection = w.seen_selection != c.selection_revision;
@@ -1124,10 +1124,10 @@ fn dossier_view(ui: &mut Ui, w: &mut SpatialWindow, c: &mut WorkspaceCanvas, ctx
     let mut clicked: Option<(i64, i64)> = None;
     let m = &snap.mission;
     let brief = c.briefs.get(&id).cloned();
-    crate::hud_style::faded_into(ui, egui::ScrollArea::vertical().id_salt(("dossier", w.id)).auto_shrink([false; 2]), fill, |ui| {
+    crate::holo_block::faded_into(ui, egui::ScrollArea::vertical().id_salt(("dossier", w.id)).auto_shrink([false; 2]), fill, |ui| {
         // A topic workspace: what JAI knows, before the research chapters.
         if let Some(brief) = &brief {
-            egui::CollapsingHeader::new(RichText::new("OVERVIEW & FACTS").size(13.0).color(STARK_GOLD)).id_salt((w.id, "brief")).default_open(true).show(ui, |ui| {
+            crate::holo_ui::fold(ui, (w.id, "brief"), "Overview & facts", true, |ui| {
                 markdown_lite(ui, brief, ARC_CYAN);
             });
             ui.add_space(6.0);
@@ -1169,7 +1169,7 @@ fn dossier_view(ui: &mut Ui, w: &mut SpatialWindow, c: &mut WorkspaceCanvas, ctx
                 continue;
             }
             ui.add_space(4.0);
-            egui::CollapsingHeader::new(RichText::new(format!("{title}  ({})", facts.len())).size(13.0).color(ARC_CYAN)).id_salt((w.id, title)).default_open(true).show(ui, |ui| {
+            crate::holo_ui::fold(ui, (w.id, title), &format!("{title}  ({})", facts.len()), true, |ui| {
                 for f in facts {
                     let selected = c.selected_fact == Some(f.id);
                     let r = fact_row(ui, f, selected, c.selected_source == Some(f.source_id));
@@ -1184,7 +1184,7 @@ fn dossier_view(ui: &mut Ui, w: &mut SpatialWindow, c: &mut WorkspaceCanvas, ctx
         }
         let conflicts: Vec<&FactRow> = snap.facts.iter().filter(|f| f.contradicting_source.is_some()).take(20).collect();
         if !conflicts.is_empty() {
-            egui::CollapsingHeader::new(RichText::new(format!("Chapter 7 — Contradictions  ({})", conflicts.len())).size(13.0).color(CONTRADICTION)).id_salt((w.id, "conflicts")).default_open(true).show(ui, |ui| {
+            crate::holo_ui::fold(ui, (w.id, "conflicts"), &format!("Chapter 7 — Contradictions  ({})", conflicts.len()), true, |ui| {
                 egui::Grid::new(("conflict_grid", w.id)).striped(true).num_columns(3).show(ui, |ui| {
                     for h in ["CLAIM", "SOURCE", "DISPUTED BY"] {
                         ui.label(RichText::new(h).monospace().size(11.0).color(MUTED));
@@ -1199,12 +1199,12 @@ fn dossier_view(ui: &mut Ui, w: &mut SpatialWindow, c: &mut WorkspaceCanvas, ctx
                 });
             });
         }
-        egui::CollapsingHeader::new(RichText::new(format!("Sources  ({})", snap.sources.len())).size(13.0).color(ARC_CYAN)).id_salt((w.id, "sources")).default_open(false).show(ui, |ui| {
+        crate::holo_ui::fold(ui, (w.id, "sources"), &format!("Sources  ({})", snap.sources.len()), false, |ui| {
             egui::Grid::new(("source_grid", w.id)).striped(true).num_columns(3).show(ui, |ui| {
                 for s in snap.sources.iter().take(80) {
                     let selected = c.selected_source == Some(s.id);
                     ui.label(RichText::new(format!("S{}", s.id)).monospace().size(11.0).color(if selected { STARK_GOLD } else { MUTED }));
-                    ui.hyperlink_to(RichText::new(s.title.chars().take(70).collect::<String>()).size(11.0), &s.url).on_hover_text(format!("{} · crawled {} · link depth {}", s.domain, s.crawled_at, s.depth));
+                    crate::holo_ui::link_to(ui, RichText::new(s.title.chars().take(70).collect::<String>()).size(11.0), &s.url).on_hover_text(format!("{} · crawled {} · link depth {}", s.domain, s.crawled_at, s.depth));
                     let (rect, _) = ui.allocate_exact_size(vec2(60.0, 8.0), Sense::hover());
                     ui.painter().rect_filled(rect, Rounding::ZERO, Color32::from_white_alpha(14));
                     ui.painter().rect_filled(Rect::from_min_size(rect.min, vec2(60.0 * s.reliability, 8.0)), Rounding::ZERO, VERIFIED.gamma_multiply(0.4 + 0.6 * s.reliability));
@@ -1264,7 +1264,7 @@ fn graph_view(ui: &mut Ui, w: &mut SpatialWindow, c: &mut WorkspaceCanvas, ctx: 
     };
     let Some(snap) = c.snapshot(id) else {
         let room = ui.available_rect_before_wrap();
-        crate::hud_style::outline(ui, room.shrink(6.0), crate::hud_style::Outline::Lines);
+        crate::holo_block::outline(ui, room.shrink(6.0), crate::holo_block::Outline::Lines);
         return;
     };
     let graph = w.graph.get_or_insert_with(ResearchGraphView::new);
@@ -1292,7 +1292,7 @@ fn inspector_view(ui: &mut Ui, c: &mut WorkspaceCanvas, accent: Color32, repaint
     ui.horizontal(|ui| {
         ui.label(RichText::new(&item.title).strong().size(12.5).color(accent));
         pill(ui, &format!("{:?}", item.format).to_uppercase(), MUTED);
-        if ui.small_button("Copy").clicked() {
+        if crate::holo_ui::key(ui, "Copy").clicked() {
             ui.ctx().copy_text(item.body.clone());
         }
     });
@@ -1301,7 +1301,7 @@ fn inspector_view(ui: &mut Ui, c: &mut WorkspaceCanvas, accent: Color32, repaint
         InspectFormat::Plot => plot_view(ui, &item.body, accent, repaint),
         InspectFormat::Csv => csv_view(ui, &item.body, fill),
         _ => {
-            crate::hud_style::faded_into(ui, egui::ScrollArea::both().id_salt("inspector_body").auto_shrink([false; 2]), fill, |ui| match item.format {
+            crate::holo_block::faded_into(ui, egui::ScrollArea::both().id_salt("inspector_body").auto_shrink([false; 2]), fill, |ui| match item.format {
                 InspectFormat::Code => {
                     ui.label(highlighted(&item.body, 11.5));
                 }
@@ -1420,7 +1420,7 @@ fn markdown_lite(ui: &mut Ui, text: &str, accent: Color32) {
                 ui.label(RichText::new(t).monospace().size(11.0).color(TEXT));
             }
         } else if t == "---" {
-            ui.separator();
+            crate::holo_ui::rule(ui);
         } else {
             ui.add(egui::Label::new(RichText::new(t.replace("**", "")).size(12.0).color(TEXT)).wrap());
         }
@@ -1460,7 +1460,7 @@ fn csv_view(ui: &mut Ui, body: &str, fill: Color32) {
     let delim = csv_delimiter(body);
     let rows: Vec<Vec<String>> = body.lines().filter(|l| !l.trim().is_empty()).take(500).map(|l| csv_fields(l, delim)).collect();
     let width = rows.iter().map(Vec::len).max().unwrap_or(0);
-    crate::hud_style::faded_into(ui, egui::ScrollArea::both().id_salt("inspector_csv").auto_shrink([false; 2]), fill, |ui| {
+    crate::holo_block::faded_into(ui, egui::ScrollArea::both().id_salt("inspector_csv").auto_shrink([false; 2]), fill, |ui| {
         egui::Grid::new("inspector_csv_grid").striped(true).num_columns(width).show(ui, |ui| {
             for (i, row) in rows.iter().enumerate() {
                 for cell in row {
@@ -1757,14 +1757,14 @@ fn refresh_schedule(tools: ToolContext, rt: &Handle) {
 fn schedule_view(ui: &mut Ui, app: &Jai, rt: &Handle, fill: Color32) {
     refresh_schedule(app.tools().clone(), rt);
     let now = chrono::Local::now();
-    crate::hud_style::faded_into(ui, egui::ScrollArea::vertical().id_salt("schedule_deck").auto_shrink([false; 2]), fill, |ui| {
+    crate::holo_block::faded_into(ui, egui::ScrollArea::vertical().id_salt("schedule_deck").auto_shrink([false; 2]), fill, |ui| {
         ui.label(RichText::new(now.format("%A, %d %B · %H:%M").to_string()).strong().size(14.0).color(EMERALD));
         ui.add_space(6.0);
         let s = schedule();
         ui.label(RichText::new("TIMETABLE (WEBUNTIS)").monospace().size(11.0).color(MUTED));
         if s.loading && s.fetched_at.is_none() {
             let room = ui.available_rect_before_wrap();
-            crate::hud_style::outline(ui, room.shrink(6.0), crate::hud_style::Outline::Lines);
+            crate::holo_block::outline(ui, room.shrink(6.0), crate::holo_block::Outline::Lines);
         }
         for (line, colour) in &s.lessons {
             ui.label(RichText::new(line).monospace().size(11.0).color(*colour));

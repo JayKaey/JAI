@@ -4,6 +4,7 @@
 //! name ("Heard: … – do it?"). Also the microphone's verdict for the voice ring ("too quiet").
 //! The pipeline reports here (`heard`, `settled`, `step`, `took`, `offer`); the HUD paints.
 
+use crate::holo::{self, Face};
 use eframe::egui::{self, pos2, vec2, Color32, FontId, Pos2, Rect, Rounding, Ui};
 use regex::Regex;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -295,8 +296,6 @@ pub fn mic_verdict(peak_db: f32, floor_db: f32) -> Option<&'static str> {
 
 // --------------------------------------------------------------------------------- paint ----
 
-const INK: Color32 = Color32::from_rgb(0xE8, 0xF2, 0xFC);
-const MUTED: Color32 = Color32::from_rgb(0x8E, 0xA4, 0xB8);
 const ROW: f32 = 26.0;
 
 /// The mark of the song's line: three small bars that move with what plays, the lows on the
@@ -318,20 +317,29 @@ pub fn top_under(centre: Pos2, radius: f32) -> Pos2 {
     pos2(centre.x, centre.y + radius * 1.34 + 26.0)
 }
 
-use crate::hud_style::stroke;
-
-/// Text centred on `at` on a soft dark band, so it reads over whatever is behind it. `apart`:
-/// how far its letters stand apart.
-fn line(p: &egui::Painter, at: Pos2, text: &str, font: FontId, colour: Color32, width: f32, apart: f32) -> Rect {
+/// Text centred on `at` in `face`, on a soft band of the canvas so it reads over whatever is
+/// behind it (the band fades out to both sides: no box). Two rows at most.
+fn line(p: &egui::Painter, at: Pos2, text: &str, face: Face, size: f32, colour: Color32, width: f32) -> Rect {
+    let (text, apart) = if face == Face::Label { (text.to_uppercase(), size * 0.14) } else { (text.to_string(), 0.0) };
     let mut job = egui::text::LayoutJob::default();
-    job.append(text, 0.0, egui::TextFormat { font_id: font, color: colour, extra_letter_spacing: apart, ..Default::default() });
+    job.append(&text, 0.0, egui::TextFormat { font_id: holo::font(face, size), color: colour, extra_letter_spacing: apart, ..Default::default() });
     job.wrap.max_width = width;
     job.wrap.max_rows = 2;
     job.wrap.overflow_character = Some('…');
     job.halign = egui::Align::Center;
     let galley = p.layout_job(job);
     let rect = Rect::from_center_size(at, galley.size()).expand2(vec2(12.0, 4.0));
-    crate::hud_style::caption_band(p, rect, colour.a() as f32 / 255.0);
+    let void = holo::a(holo::theme().void(), 0.72 * colour.a() as f32 / 255.0);
+    let mut band = egui::Mesh::default();
+    for (x, c) in [(rect.left() - 40.0, Color32::TRANSPARENT), (rect.left(), void), (rect.right(), void), (rect.right() + 40.0, Color32::TRANSPARENT)] {
+        band.colored_vertex(pos2(x, rect.top()), c);
+        band.colored_vertex(pos2(x, rect.bottom()), c);
+    }
+    for k in 0..3u32 {
+        band.add_triangle(2 * k, 2 * k + 1, 2 * k + 2);
+        band.add_triangle(2 * k + 1, 2 * k + 3, 2 * k + 2);
+    }
+    p.add(egui::Shape::mesh(band));
     p.galley(pos2(at.x, at.y - galley.size().y * 0.5), galley, colour);
     rect
 }
@@ -348,110 +356,104 @@ pub fn woke() {
 pub fn woke_age() -> Option<f32> {
     let mut woke = lock(&WOKE);
     let age = woke.as_ref()?.elapsed().as_secs_f32();
-    if age >= crate::hud_style::RIPPLE_SECS {
+    if age >= crate::holo_core::RIPPLE_SECS {
         *woke = None;
         return None;
     }
     Some(age)
 }
 
+/// A question on a plate, centred on `centre`: its words left, its keys right (each: label,
+/// whether it is the one he means, its hint), and its time running out along its foot as a
+/// filament (`left` 0-1). Returns the key that was pressed.
+fn question(ui: &mut Ui, id: egui::Id, centre: Pos2, width: f32, text: &str, left: f32, keys: &[(&str, bool, &str)]) -> Option<usize> {
+    let t = holo::theme();
+    let p = ui.painter().clone();
+    let keys_w = keys.iter().map(|(label, _, _)| crate::holo_kit::key_width(&p, label) + 2.0).sum::<f32>();
+    let words = holo::galley_within(&p, Face::Mono, text, 11.0, t.ink(), (width - keys_w - 40.0).max(60.0));
+    let chip = Rect::from_center_size(centre, vec2(words.size().x + keys_w + 34.0, 30.0));
+    crate::holo_frame::card(&p, chip, 1.0, 1.0);
+    p.galley(pos2(chip.left() + 12.0, holo::snap(chip.center().y - words.size().y * 0.5, holo::ppp(&p))), words, t.ink());
+    let mut light = holo::Light::new(&p);
+    light.neon(&[chip.left_bottom(), chip.left_bottom() + vec2((chip.width() - 10.0) * left.clamp(0.0, 1.0), 0.0)], false, 1.2, t.accent(), 0.6);
+    light.paint(&p);
+    crate::holo_ui::keys_at(ui, id, chip.right() - 12.0, chip.center().y, keys, 1.0).0
+}
+
 /// Paints the lines under the emblem, top row centred on `top`, within `width`. `state`: what
 /// he is doing; `live_words`: Sir's words are shown while he speaks; `lyrics`: the song's
-/// current line. Returns the order of an offer Sir just took by its `[ YES ]`.
+/// current line. Returns the order of an offer Sir just took by its `YES`.
 pub fn paint(ui: &mut Ui, top: Pos2, width: f32, state: &str, live_words: bool, lyrics: Option<&str>) -> Option<String> {
     let ctx = ui.ctx().clone();
     let p = ui.painter().clone();
+    let t = holo::theme();
     let time = ctx.input(|i| i.time);
-    let accent = crate::hud_board::active_colour();
     let mut y = top.y;
     let mut moving = false;
     // Row one: his words while he speaks; what JAI is working on while he thinks.
     let step = step_now(state);
     if let Some((text, working)) = &step {
         let dots = if *working { ".".repeat(1 + ((time * 2.5) as usize) % 3) } else { String::new() };
-        line(&p, pos2(top.x, y), &format!("{}{dots}", text.to_uppercase()), FontId::new(13.5, egui::FontFamily::Name("label".into())), if *working { accent } else { MUTED }, width, 1.6);
+        line(&p, pos2(top.x, y), &format!("{text}{dots}"), Face::Label, 9.5, if *working { t.accent() } else { t.muted() }, width);
         y += ROW;
         moving = true;
     } else if let Some((text, settled, strength)) = words_now().filter(|_| live_words) {
-        let colour = if settled { INK } else { INK.gamma_multiply(0.82) };
-        line(&p, pos2(top.x, y), &text, FontId::new(18.0, egui::FontFamily::Name("display".into())), colour.gamma_multiply(strength), width, 0.6);
+        line(&p, pos2(top.x, y), &text, Face::Body, 18.0, holo::a(t.ink(), if settled { strength } else { 0.82 * strength }), width);
         y += ROW + 2.0;
         moving = true;
     }
     // Row two: the song's line.
     if let Some(lyric) = lyrics.filter(|l| !l.trim().is_empty()) {
-        let rect = line(&p, pos2(top.x, y), lyric, FontId::new(15.5, egui::FontFamily::Name("label".into())), accent.gamma_multiply(0.95), width, 0.5);
-        music_mark(&p, pos2(rect.left() - 5.0, rect.center().y), accent);
+        let rect = line(&p, pos2(top.x, y), lyric, Face::Body, 15.0, t.accent(), width);
+        music_mark(&p, pos2(rect.left() - 5.0, rect.center().y), t.accent());
         y += ROW;
     }
     // The offer: what was heard without his name, and its two keys.
     let mut taken = None;
     if let Some((order, left)) = offered() {
-        let text = format!("HEARD:  \u{201C}{order}\u{201D}  \u{2014}  DO IT?");
-        let font = FontId::monospace(11.0);
-        let galley = p.layout_no_wrap(crate::hud_lines::fit(&p, &text, &font, width - 150.0), font.clone(), INK);
-        let keys = crate::hud_style::key_width(&p, "[ YES ]") + crate::hud_style::key_width(&p, "[ NO ]") + 4.0;
-        let chip = Rect::from_center_size(pos2(top.x, y + 6.0), vec2(galley.size().x + keys + 34.0, 26.0));
-        p.rect_filled(chip, Rounding::ZERO, Color32::from_rgba_unmultiplied(4, 8, 13, 240));
-        p.rect_stroke(chip.shrink(0.5), Rounding::ZERO, stroke(1.0, accent));
-        crate::hud_board::brackets(&p, chip.shrink(0.75), crate::hud_board::bracket_colour());
-        p.galley(pos2(chip.left() + 10.0, chip.center().y - galley.size().y * 0.5), galley, INK);
-        // Its time runs out along the bottom edge.
-        p.rect_filled(Rect::from_min_size(pos2(chip.left(), chip.bottom() - 2.0), vec2(chip.width() * left.clamp(0.0, 1.0), 2.0)), Rounding::ZERO, accent.gamma_multiply(0.8));
-        let (clicked, _) = crate::hud_style::keys(ui, egui::Id::new("hud_offer"), chip.right() - 8.0, chip.center().y, &[("[ NO ]", false, "Leave it"), ("[ YES ]", true, "Carry it out")], 1.0);
-        match clicked {
+        match question(ui, egui::Id::new("hud_offer"), pos2(top.x, y + 6.0), width, &format!("HEARD:  \u{201C}{order}\u{201D}  \u{2014}  DO IT?"), left, &[("NO", false, "Leave it"), ("YES", true, "Carry it out")]) {
             Some(0) => dismiss_offer(),
             Some(1) => taken = accept(),
             _ => {}
         }
-        y += 34.0;
+        y += 38.0;
         moving = true;
     }
     // "Did you mean: create a protocol called 'no think', Sir?" (`ask_first`): the question he
     // asked aloud before a guess changed anything, with its two keys. Yes is said for Sir.
-    if let Some((question, left)) = crate::ask_first::pending() {
-        let text = format!("{}?", question.trim_end_matches('?').trim_end_matches(", Sir").to_uppercase());
-        let font = FontId::monospace(11.0);
-        let galley = p.layout_no_wrap(fit(&p, &text, &font, width - 150.0), font.clone(), INK);
-        let keys = crate::hud_style::key_width(&p, "[ YES ]") + crate::hud_style::key_width(&p, "[ NO ]") + 4.0;
-        let chip = Rect::from_center_size(pos2(top.x, y + 6.0), vec2(galley.size().x + keys + 34.0, 26.0));
-        p.rect_filled(chip, Rounding::ZERO, Color32::from_rgba_unmultiplied(4, 8, 13, 240));
-        p.rect_stroke(chip.shrink(0.5), Rounding::ZERO, stroke(1.0, accent));
-        crate::hud_board::brackets(&p, chip.shrink(0.75), crate::hud_board::bracket_colour());
-        p.galley(pos2(chip.left() + 10.0, chip.center().y - galley.size().y * 0.5), galley, INK);
-        p.rect_filled(Rect::from_min_size(pos2(chip.left(), chip.bottom() - 2.0), vec2(chip.width() * left.clamp(0.0, 1.0), 2.0)), Rounding::ZERO, accent.gamma_multiply(0.8));
-        let (clicked, _) = crate::hud_style::keys(ui, egui::Id::new("hud_ask_first"), chip.right() - 8.0, chip.center().y, &[("[ NO ]", false, "Leave it as it is"), ("[ YES ]", true, "Carry it out")], 1.0);
-        match clicked {
+    if let Some((asked, left)) = crate::ask_first::pending() {
+        let text = format!("{}?", asked.trim_end_matches('?').trim_end_matches(", Sir").to_uppercase());
+        match question(ui, egui::Id::new("hud_ask_first"), pos2(top.x, y + 6.0), width, &text, left, &[("NO", false, "Leave it as it is"), ("YES", true, "Carry it out")]) {
             Some(0) => crate::ask_first::drop_it(),
             Some(1) => taken = Some("yes".to_string()),
             _ => {}
         }
-        y += 34.0;
+        y += 38.0;
         moving = true;
     }
     // "Did you mean" (`did_you_mean`): the orders he does know that are closest to one he did
-    // not, each a key of its own (a click carries it out), and one that takes them all down.
+    // not, each a numbered row (a click carries it out), and a key that takes them all down.
     if let Some(offer) = crate::did_you_mean::current() {
-        let head = p.layout_no_wrap("DID YOU MEAN".to_string(), FontId::monospace(11.0), MUTED);
-        let labels: Vec<String> = offer.choices.iter().enumerate().map(|(k, choice)| format!("[ {}  {} ]", k + 1, fit(&p, &choice.label.to_uppercase(), &FontId::monospace(11.0), (width - 90.0).max(120.0)))).collect();
-        let none = crate::hud_style::key_width(&p, "[ NONE ]");
-        let widest = labels.iter().map(|label| crate::hud_style::key_width(&p, label)).fold(head.size().x + none + 24.0, f32::max);
-        let rows = labels.len() as f32;
-        let chip = Rect::from_min_size(pos2(top.x - widest * 0.5 - 14.0, y - 7.0), vec2(widest + 28.0, 30.0 + rows * 22.0));
-        p.rect_filled(chip, Rounding::ZERO, Color32::from_rgba_unmultiplied(4, 8, 13, 240));
-        p.rect_stroke(chip.shrink(0.5), Rounding::ZERO, stroke(1.0, accent.gamma_multiply(0.7)));
-        crate::hud_board::brackets(&p, chip.shrink(0.75), crate::hud_board::bracket_colour());
-        let first_row = chip.top() + 13.0;
-        p.galley(pos2(chip.left() + 10.0, first_row - head.size().y * 0.5), head, MUTED);
+        let labels: Vec<String> = offer.choices.iter().map(|choice| fit(&p, &choice.label, &holo::font(Face::Body, 13.5), (width - 120.0).max(120.0))).collect();
+        let none = crate::holo_kit::key_width(&p, "NONE");
+        let widest = labels.iter().map(|label| p.layout_no_wrap(label.clone(), holo::font(Face::Body, 13.5), Color32::WHITE).size().x + 60.0).fold(160.0 + none, f32::max);
+        let chip = Rect::from_min_size(pos2(top.x - widest * 0.5 - 14.0, y - 9.0), vec2(widest + 28.0, 36.0 + labels.len() as f32 * 24.0));
+        crate::holo_frame::card(&p, chip, 0.6, 1.0);
+        let first_row = chip.top() + 15.0;
+        holo::text(&p, pos2(chip.left() + 12.0, first_row), egui::Align2::LEFT_CENTER, Face::Label, "Did you mean", 8.0, t.muted());
         // Its time runs out along the bottom edge.
-        p.rect_filled(Rect::from_min_size(pos2(chip.left(), chip.bottom() - 2.0), vec2(chip.width() * offer.left(), 2.0)), Rounding::ZERO, accent.gamma_multiply(0.8));
-        if crate::hud_style::keys(ui, egui::Id::new("hud_meant_none"), chip.right() - 8.0, first_row, &[("[ NONE ]", false, "None of them")], 1.0).0.is_some() {
+        let mut light = holo::Light::new(&p);
+        light.neon(&[chip.left_bottom(), chip.left_bottom() + vec2((chip.width() - 10.0) * offer.left(), 0.0)], false, 1.2, t.accent(), 0.6);
+        light.paint(&p);
+        if crate::holo_ui::keys_at(ui, egui::Id::new("hud_meant_none"), chip.right() - 12.0, first_row, &[("NONE", false, "None of them")], 1.0).0.is_some() {
             crate::did_you_mean::dismiss();
         }
         for (k, label) in labels.iter().enumerate() {
-            let right = chip.left() + 10.0 + crate::hud_style::key_width(&p, label);
-            let clicked = crate::hud_style::keys(ui, egui::Id::new(("hud_meant", k)), right, first_row + 22.0 * (k as f32 + 1.0), &[(label.as_str(), true, "Carry this one out")], 1.0).0;
-            if clicked.is_some() {
+            let row = Rect::from_min_size(pos2(chip.left() + 4.0, first_row + 13.0 + 24.0 * k as f32), vec2(chip.width() - 8.0, 24.0));
+            let response = ui.interact(row, egui::Id::new(("hud_meant", k)), egui::Sense::click()).on_hover_text("Carry this one out");
+            let hot = ctx.animate_bool_with_time(response.id.with("hot"), response.hovered(), crate::holo_motion::TOUCH);
+            crate::holo_kit::row(&p, row, &format!("{:02}", k + 1), label, "", 0.0, hot, 1.0);
+            if response.clicked() {
                 taken = crate::did_you_mean::take(k);
             }
         }
@@ -479,9 +481,9 @@ pub fn fit(p: &egui::Painter, text: &str, font: &FontId, width: f32) -> String {
     chars[..low].iter().collect::<String>() + "\u{2026}"
 }
 
-/// The microphone's verdict as a label over the voice ring (amber), `strength` 0-1.
+/// The microphone's verdict as a label over the voice ring (a caution), `strength` 0-1.
 pub fn paint_mic_label(p: &egui::Painter, centre: Pos2, radius: f32, verdict: &str, strength: f32) {
-    paint_label(p, centre, radius, verdict, crate::hud_style::warn_colour(), strength);
+    paint_label(p, centre, radius, verdict, holo::theme().warn(), strength);
 }
 
 /// When the voice lock last turned an order away (it was not Sir's voice).
@@ -507,17 +509,16 @@ pub fn turned_away_strength() -> Option<f32> {
 
 /// The voice lock's word over the emblem.
 pub fn paint_lock_label(p: &egui::Painter, centre: Pos2, radius: f32, strength: f32) {
-    paint_label(p, centre, radius, "VOICE LOCK  ·  NOT YOUR VOICE", crate::hud_style::FAULT, strength);
+    paint_label(p, centre, radius, "VOICE LOCK  ·  NOT YOUR VOICE", holo::theme().alert(), strength);
 }
 
+/// A word over the core as a tag in `colour`, on the canvas's black so it reads over the ticks.
 fn paint_label(p: &egui::Painter, centre: Pos2, radius: f32, verdict: &str, colour: Color32, strength: f32) {
-    let colour = colour.gamma_multiply(strength);
-    let galley = p.layout_no_wrap(verdict.to_string(), FontId::monospace(11.0), colour);
-    let rect = Rect::from_center_size(pos2(centre.x, centre.y - radius * 1.2 - 8.0), galley.size()).expand2(vec2(7.0, 3.0));
-    // (On a dark plate, so it reads over the voice ring's ticks.)
-    p.rect_filled(rect, Rounding::ZERO, Color32::from_black_alpha((150.0 * strength) as u8));
-    p.galley(rect.min + vec2(7.0, 3.0), galley, colour);
-    p.rect_stroke(rect, Rounding::ZERO, stroke(1.0, colour.gamma_multiply(0.7)));
+    let g = holo::galley(p, Face::Label, verdict, 8.0, Color32::WHITE);
+    let rect = Rect::from_center_size(pos2(centre.x, centre.y - radius * 1.2 - 8.0), g.size() + vec2(12.0, 0.0)).expand2(vec2(0.0, 3.0));
+    let rect = Rect::from_min_size(rect.min, vec2(rect.width(), 14.0));
+    p.rect_filled(rect, Rounding::ZERO, holo::a(holo::theme().void(), 0.6 * strength));
+    crate::holo_kit::chip(p, rect.min, verdict, colour, false, strength);
 }
 
 #[cfg(test)]

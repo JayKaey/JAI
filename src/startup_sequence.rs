@@ -4,7 +4,8 @@
 //! sequence plays and whether a catch-up follows the greeting; `paint` draws it over the HUD.
 
 use chrono::{DateTime, Local, Timelike};
-use eframe::egui::{self, pos2, vec2, Align2, Color32, FontId, Rect, Rounding, Shape};
+use crate::holo::{self, Face};
+use eframe::egui::{self, pos2, vec2, Align2, Color32, Rect, Rounding};
 use std::f32::consts::TAU;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
@@ -164,80 +165,82 @@ fn typed(text: &str, begun: f32) -> &str {
 
 /// A small tick, its right end at `right`, on the line through `y`.
 fn tick(p: &egui::Painter, right: f32, y: f32, colour: Color32) {
-    p.add(Shape::line(vec![pos2(right - 9.0, y), pos2(right - 6.0, y + 3.0), pos2(right, y - 4.0)], stroke(1.4, colour)));
-}
-
-use crate::hud_style::stroke;
-
-fn arc(centre: egui::Pos2, radius: f32, from: f32, sweep: f32) -> Vec<egui::Pos2> {
-    let n = ((sweep.abs() * radius / 6.0) as usize).clamp(4, 160);
-    (0..=n).map(|k| centre + vec2((from + sweep * k as f32 / n as f32).cos(), (from + sweep * k as f32 / n as f32).sin()) * radius).collect()
+    holo::path(p, &[pos2(right - 9.0, y), pos2(right - 6.0, y + 3.0), pos2(right, y - 4.0)], colour);
 }
 
 /// How far ring `k` of `n` has drawn itself `t` of the way through the assembly (0-1): the
 /// rings start one after the other and each closes smoothly.
 pub fn ring_progress(k: usize, n: usize, t: f32) -> f32 {
     let lead = 0.5 * k as f32 / n.max(1) as f32;
-    crate::hud_style::motion::ease_out(((t - lead) / 0.5).clamp(0.0, 1.0))
+    crate::holo_motion::ease_out_cubic(((t - lead) / 0.5).clamp(0.0, 1.0))
 }
 
-/// Paints the sequence over `screen` at `age` into it, the emblem assembling at `centre` with
-/// `radius`. Returns false once it is over (nothing was painted).
+/// Paints the sequence over `screen` at `age` into it, the core drawing itself at `centre` with
+/// `radius`: a spark, the axes, then ring after ring of light, each led by a white-hot point,
+/// until it ignites and the dark clears. Under it the parts a start really waits for, each
+/// typing itself on and ticked once it is up. Returns false once it is over (nothing was
+/// painted).
 pub fn paint(ctx: &egui::Context, screen: Rect, centre: egui::Pos2, radius: f32, kind: Kind, age: Duration) -> bool {
     let total = kind.length().as_secs_f32();
     let t = age.as_secs_f32();
     if t >= total {
         return false;
     }
+    let theme = holo::theme();
+    let a = holo::a;
     let ignite = kind.ignition().as_secs_f32();
     let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("hud_startup")));
-    let accent = crate::hud_board::active_colour();
-    // The dark the HUD comes out of: solid until the emblem ignites, then it clears.
-    let cover = 1.0 - crate::hud_style::motion::ease_out(((t - ignite) / (total - ignite)).clamp(0.0, 1.0));
-    p.rect_filled(screen, Rounding::ZERO, Color32::from_rgba_unmultiplied(2, 4, 8, (255.0 * cover) as u8));
-    // (After the ignition the drawn rings give way to the emblem's own as the dark clears.)
-    let alpha = cover.min(1.0) * cover.min(1.0);
-    // The rings draw themselves, one after the other, until the ignition: the emblem's own
-    // seven, at their own radii.
-    let radii = [0.314, 0.4, 0.56, 0.64, 0.743, 0.869, 1.0];
+    // The dark the HUD comes out of: solid until the core ignites, then it clears.
+    let cover = 1.0 - crate::holo_motion::ease_out_cubic(((t - ignite) / (total - ignite)).clamp(0.0, 1.0));
+    p.rect_filled(screen, Rounding::ZERO, a(theme.void(), cover));
+    // (After the ignition the drawn rings give way to the core's own as the dark clears.)
+    let alpha = cover * cover;
     let assembly = (t / ignite).clamp(0.0, 1.0);
+    // The axes of the drafting table run out from the spark first.
+    let reach = radius * 1.5 * crate::holo_motion::ease_out_expo((assembly / 0.35).min(1.0));
+    for (dx, dy) in [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)] {
+        holo::rule(&p, centre + vec2(dx, dy) * radius * 0.12, centre + vec2(dx, dy) * reach, a(theme.ink(), 0.22 * alpha));
+    }
+    // The rings draw themselves, one after the other, until the ignition: the nearer ones in
+    // the accent, the outer ones in the deep tone, every third in ink.
+    let radii = [0.314, 0.4, 0.56, 0.64, 0.743, 0.869, 1.0];
+    let mut light = crate::holo_core::glow(&p, egui::Id::new("jai_startup"), centre, radius * 1.6, false);
     for (k, share) in radii.iter().enumerate() {
         let progress = ring_progress(k, radii.len(), assembly);
         if progress <= 0.0 {
             continue;
         }
         let from = -TAU / 4.0 + k as f32 * 0.9 + t * if k % 2 == 0 { 0.5 } else { -0.35 };
-        let width = if k == 2 || k == 6 { 2.4 } else { 1.2 };
-        let colour = if k % 3 == 1 { Color32::WHITE } else { accent };
-        p.add(Shape::line(arc(centre, radius * *share, from, TAU * progress), stroke(width, colour.gamma_multiply((0.35 + 0.65 * progress) * alpha))));
+        let colour = if k % 3 == 1 { theme.ink() } else { holo::mix(theme.accent(), theme.deep(), k as f32 / 9.0) };
+        let width = if k == 2 || k == 6 { 2.0 } else { 1.1 };
+        light.arc(centre, radius * *share, from, from + TAU * progress, width, a(colour, (0.35 + 0.65 * progress) * alpha));
         // The point that draws the ring is white-hot.
         if progress < 1.0 {
-            let head = from + TAU * progress;
-            p.circle_filled(centre + vec2(head.cos(), head.sin()) * (radius * *share), 2.2, Color32::WHITE.gamma_multiply(alpha));
+            light.spark(holo::polar(centre, radius * *share, from + TAU * progress), 5.0, holo::lit(theme.hot(), alpha));
         }
     }
-    // The ignition: one flash out of the centre.
+    // The spark everything starts from, and the ignition: one flash out of the centre.
+    light.spark(centre, radius * 0.07 * (1.0 - assembly * 0.5), holo::lit(theme.hot(), alpha));
     let since = t - ignite;
     if (0.0..0.45).contains(&since) {
         let flash = 1.0 - since / 0.45;
-        p.circle_filled(centre, radius * (0.2 + 0.9 * (1.0 - flash)), Color32::WHITE.gamma_multiply(0.18 * flash * flash));
-        p.circle_stroke(centre, radius * (1.0 + 0.5 * (1.0 - flash)), stroke(2.0, accent.gamma_multiply(0.6 * flash)));
+        light.haze(centre, 2.2 * flash * flash);
+        light.arc(centre, radius * (1.0 + 0.5 * (1.0 - flash)), 0.0, TAU, 1.6, a(theme.hot(), 0.8 * flash));
     }
-    // What is coming up, line by line: the real parts, each READY once it is (the quick one has
-    // no time for words; the long one adds a bar).
+    light.paint(&p);
+    // What is coming up, line by line: the real parts, each ticked once it is up (the quick one
+    // has no time for words; the long one adds the cells).
     let lines: &[&str] = if kind == Kind::Quick { &[] } else { &PARTS };
     if !lines.is_empty() {
-        let font = FontId::monospace(11.0);
-        let left = centre.x - 150.0;
-        // (Under the emblem's outermost ring, which stands at 1.28 of its radius.)
+        let (left, right) = (centre.x - 160.0, centre.x + 160.0);
+        // (Under the core's outermost ring.)
         let top = centre.y + radius * 1.3 + 46.0;
-        let head = crate::hud_style::title_galley(&p, "J.A.I. // power-up", 13.0, accent.gamma_multiply(alpha), 300.0);
-        p.galley(pos2(left, top - 30.0), head, Color32::PLACEHOLDER);
         // How much is really up, and the word once all of it is.
         let up: [bool; 4] = std::array::from_fn(|k| UP[k].load(Ordering::Relaxed));
         let share = share_up(up);
-        let (reading, ink) = if share >= 1.0 { ("ONLINE".to_string(), Color32::WHITE) } else { (format!("{:.0} %", share * 100.0), accent) };
-        p.text(pos2(left + 300.0, top - 21.0), Align2::RIGHT_CENTER, reading, font.clone(), ink.gamma_multiply(alpha));
+        crate::holo_kit::section(&p, pos2(left, top - 34.0), right - left - 62.0, "00", "J.A.I. // power-up", alpha);
+        let (reading, ink) = if share >= 1.0 { ("ONLINE".to_string(), theme.ink()) } else { (format!("{:.0} %", share * 100.0), theme.accent()) };
+        holo::text(&p, pos2(right, top - 28.0), Align2::RIGHT_CENTER, Face::Mono, &reading, 11.0, a(ink, alpha));
         let per = ignite / lines.len() as f32;
         for (k, text) in lines.iter().enumerate() {
             let begun = t - k as f32 * per;
@@ -245,20 +248,19 @@ pub fn paint(ctx: &egui::Context, screen: Rect, centre: egui::Pos2, radius: f32,
                 break;
             }
             let done = up[k];
-            let y = top + k as f32 * 17.0;
-            let ink = if done { Color32::from_rgb(0x9A, 0xB0, 0xC2) } else { Color32::WHITE };
+            let y = top + k as f32 * 18.0;
+            holo::text(&p, pos2(left, y), Align2::LEFT_CENTER, Face::Mono, &format!("{:02}", k + 1), 10.0, a(theme.accent(), alpha));
             // Each line types itself on; once its part is up a tick stands at its end.
-            p.text(pos2(left, y), Align2::LEFT_CENTER, typed(text, begun), font.clone(), ink.gamma_multiply(alpha));
+            holo::text(&p, pos2(left + 26.0, y), Align2::LEFT_CENTER, Face::Label, typed(text, begun), 8.5, a(if done { theme.muted() } else { theme.ink() }, alpha));
             if done {
-                tick(&p, left + 300.0, y, accent.gamma_multiply(alpha));
+                tick(&p, right, y, a(theme.accent(), alpha));
             } else {
-                p.text(pos2(left + 300.0, y), Align2::RIGHT_CENTER, line_state(k, begun), font.clone(), ink.gamma_multiply(alpha));
+                holo::text(&p, pos2(right, y), Align2::RIGHT_CENTER, Face::Mono, line_state(k, begun), 10.5, a(theme.ink(), alpha));
             }
         }
         if kind == Kind::Long {
-            let bar = Rect::from_min_size(pos2(left, top + lines.len() as f32 * 17.0 + 6.0), vec2(300.0, 2.0));
-            p.rect_filled(bar, Rounding::ZERO, accent.gamma_multiply(0.2 * alpha));
-            p.rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * share, bar.height())), Rounding::ZERO, accent.gamma_multiply(alpha));
+            let bar = Rect::from_min_size(pos2(left, top + lines.len() as f32 * 18.0 + 4.0), vec2(right - left, 6.0));
+            crate::holo_kit::cells(&p, bar, share, 40, theme.accent(), alpha);
         }
     }
     ctx.request_repaint();

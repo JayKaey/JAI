@@ -3,7 +3,7 @@
 //! goes through `audio_mixer::slide` (a drag is a hundred changes a second), a mute key through
 //! `control_audio_mixer`, the way a spoken request goes.
 
-use super::{rgba, stroke, strip_font, STRIP_INK, STRIP_MUTED};
+use super::{rgba, stroke, strip_font, strip_ink, strip_muted};
 use crate::audio_mixer::Channel;
 use eframe::egui::{self, Frame, Margin, RichText, Rounding, Ui, ViewportBuilder, ViewportClass, ViewportCommand, ViewportId};
 use serde_json::json;
@@ -21,7 +21,7 @@ const READ_EVERY: Duration = Duration::from_millis(500);
 /// A fader stays where his hand left it this long (the device takes a moment to say so itself).
 const HELD_FOR: Duration = Duration::from_millis(900);
 const FADER_WIDTH: f32 = 240.0;
-/// The mute key: "[ MUTED ]" in the strip's font.
+/// The mute key: "MUTED" in the strip's font.
 const KEY_SIZE: [f32; 2] = [74.0, 22.0];
 
 static OPEN: AtomicBool = AtomicBool::new(false);
@@ -72,19 +72,17 @@ fn refresh(rt: &Handle) {
 /// One channel: its name, its fader, its level and its mute key.
 fn row(ui: &mut Ui, channel: &mut Channel, rt: &Handle) {
     let touched = || *lock(&LAST_TOUCH) = Some(Instant::now());
-    ui.label(RichText::new(channel.label.to_uppercase()).font(strip_font()).color(STRIP_INK));
+    ui.label(RichText::new(channel.label.to_uppercase()).font(strip_font()).color(strip_ink()));
     ui.spacing_mut().slider_width = FADER_WIDTH;
     let mut level = f32::from(channel.percent);
-    if ui.add(egui::Slider::new(&mut level, 0.0..=100.0).show_value(false)).changed() {
+    if ui.add(crate::holo_ui::Slider::new(&mut level, 0.0..=100.0).show_value(false)).changed() {
         channel.percent = level.round() as u8;
         touched();
         let (target, percent) = (channel.target.clone(), channel.percent);
         rt.spawn(async move { crate::audio_mixer::slide(&target, percent).await });
     }
-    ui.label(RichText::new(format!("{:>3} %", channel.percent)).font(strip_font()).color(STRIP_MUTED));
-    let (text, ink) = if channel.muted { ("[ MUTED ]", crate::hud_board::active_colour()) } else { ("[ MUTE ]", STRIP_INK) };
-    let key = egui::Button::new(RichText::new(text).font(strip_font()).color(ink)).fill(rgba([3, 7, 12], 0.9)).stroke(stroke(1.0, crate::hud_board::border_colour())).rounding(Rounding::ZERO);
-    if ui.add_sized(KEY_SIZE, key).clicked() {
+    ui.label(RichText::new(format!("{:>3} %", channel.percent)).font(strip_font()).color(strip_muted()));
+    if crate::holo_ui::key_on(ui, if channel.muted { "MUTED" } else { "MUTE" }, channel.muted).clicked() {
         channel.muted = !channel.muted;
         touched();
         let args = if channel.is_master() {
@@ -106,11 +104,11 @@ fn body(ui: &mut Ui, rt: &Handle) {
     ui.ctx().request_repaint_after(READ_EVERY);
     let mut channels = lock(&CHANNELS);
     if channels.is_empty() {
-        ui.label(RichText::new("READING THE MIXER").font(strip_font()).color(STRIP_MUTED));
+        ui.label(RichText::new("READING THE MIXER").font(strip_font()).color(strip_muted()));
         return;
     }
     // (A block the dock made narrower scrolls sideways instead of squeezing its faders.)
-    crate::hud_style::faded(ui, egui::ScrollArea::both().auto_shrink([false; 2]), |ui| rows(ui, &mut channels, rt));
+    crate::holo_block::faded(ui, egui::ScrollArea::both().auto_shrink([false; 2]), |ui| rows(ui, &mut channels, rt));
 }
 
 fn rows(ui: &mut Ui, channels: &mut [Channel], rt: &Handle) {
@@ -158,7 +156,7 @@ pub(super) fn show(ctx: &egui::Context, rt: &Handle) {
             if class == ViewportClass::Embedded {
                 egui::Window::new("Mixer").show(ctx, |ui| body(ui, &rt));
             } else {
-                egui::CentralPanel::default().frame(Frame::none().fill(super::BLOCK_SLATE).inner_margin(Margin::same(14.0))).show(ctx, |ui| {
+                egui::CentralPanel::default().frame(Frame::none().fill(super::block_slate()).inner_margin(Margin::same(14.0))).show(ctx, |ui| {
                     if super::detached_title_bar(ui, ctx, TITLE) {
                         OPEN.store(false, Ordering::Release);
                     }
@@ -193,7 +191,7 @@ mod tests {
         });
         assert_eq!(visual::clipped_text(&frame), Vec::<String>::new());
         assert_eq!(visual::text_over_text(&frame), Vec::<String>::new());
-        for shown in ["MASTER", "DISCORD", "100 %", "5 %", "[ MUTED ]", "[ MUTE ]"] {
+        for shown in ["MASTER", "DISCORD", "100 %", "5 %", "MUTED", "MUTE"] {
             assert!(!frame.find_text(shown).is_empty(), "{shown} is not on the block");
         }
     }

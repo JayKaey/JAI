@@ -858,7 +858,7 @@ fn window_motion(hud: &mut crate::gui::offscreen::VirtualHud, tools: &ToolContex
     // The exit: closed by hand, it is still there for a moment, folding, then gone.
     let frame = hud.frames_at(2, 60.0);
     let place = crate::hud_dock::block_rect(&id);
-    match frame.find_exact("[ CLOSE ]").into_iter().find(|r| place.is_some_and(|p| p.contains(r.center()))) {
+    match frame.find_exact("CLOSE").into_iter().find(|r| place.is_some_and(|p| p.contains(r.center()))) {
         None => found.push("the block shows no [ CLOSE ]".to_string()),
         Some(chip) => {
             hud.click(chip.center(), PointerButton::Primary);
@@ -958,11 +958,11 @@ fn visual_matrix(hud: &mut crate::gui::offscreen::VirtualHud, tools: &ToolContex
         hud.set_surface("screens", true);
         let frame = hud.frames_at(6, 60.0);
         let mut found = text_findings(&frame);
-        let moves = frame.find_exact("[ MOVE HERE ]").len();
+        let moves = frame.find_exact("MOVE HERE").len();
         if moves != 2 {
             found.push(format!("the SCREENS menu offers {moves} monitors to move to; two of the three are not the HUD's own"));
         }
-        match frame.find_exact("[ SPAN ALL MONITORS ]").first() {
+        match frame.find_exact("SPAN ALL MONITORS").first() {
             Some(key) if home_screen.contains_rect(*key) => {}
             Some(key) => found.push(format!("the SCREENS menu's span switch at {key:?} is off the home screen")),
             None => found.push("the SCREENS menu does not offer [ SPAN ALL MONITORS ]".to_string()),
@@ -1139,7 +1139,7 @@ fn visual_matrix(hud: &mut crate::gui::offscreen::VirtualHud, tools: &ToolContex
     let frame = hud.frames_at(45, 60.0);
     match (crate::hud_board::page_keys(hud.board_area()), crate::hud_board::front_page()) {
         (Some([previous, next]), Some((page, pages))) => {
-            for (label, key) in [("[ < PREV ]", previous), ("[ NEXT > ]", next)] {
+            for (label, key) in [("< PREV", previous), ("NEXT >", next)] {
                 if key.width() < visual::MIN_PAGE_KEY[0] || key.height() < visual::MIN_PAGE_KEY[1] {
                     found.push(format!("{label} is {}x{} px", key.width(), key.height()));
                 }
@@ -1562,7 +1562,7 @@ async fn matrix_d(app: &Jai, run: usize) {
                 wrong.push(format!("a click on [ {label} ] did not switch the microphone"));
                 break;
             }
-            steps.push(format!("[ {label} ]"));
+            steps.push(format!("{label}"));
             if mic_on() && !hears() {
                 wrong.push("with the microphone on he does not hear".to_string());
             } else if !mic_on() && !nothing_heard() {

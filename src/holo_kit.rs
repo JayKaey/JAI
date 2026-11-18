@@ -26,20 +26,31 @@ pub fn key_width(p: &Painter, label: &str) -> f32 {
 
 /// A key. `hot` is how far the pointer has lit it (0-1), `on` whether it is the chosen one.
 pub fn key(p: &Painter, r: Rect, label: &str, hot: f32, down: bool, on: bool, alpha: f32) {
+    key_tinted(p, r, label, hot, down, on, alpha, None);
+}
+
+/// The same in a colour of its own (`tint`): the alert for a key that ends or deletes
+/// something. Such a key's frame and lettering wear the colour even at rest.
+#[allow(clippy::too_many_arguments)]
+pub fn key_tinted(p: &Painter, r: Rect, label: &str, hot: f32, down: bool, on: bool, alpha: f32, tint: Option<Color32>) {
     let t = holo::theme();
+    let colour = tint.unwrap_or(t.accent());
+    let bright = mix(colour, Color32::WHITE, 0.62);
     let shape = leaning(r);
     let (fill, edge, ink) = if down {
-        (a(t.hot(), alpha), a(t.hot(), alpha), Color32::BLACK)
+        (a(bright, alpha), a(bright, alpha), Color32::BLACK)
     } else if on {
-        (a(mix(t.accent(), t.hot(), 0.35 * hot), alpha), a(t.accent(), alpha), Color32::BLACK)
+        (a(mix(colour, bright, 0.35 * hot), alpha), a(colour, alpha), Color32::BLACK)
+    } else if tint.is_some() {
+        (a(colour, 0.16 * hot * alpha), a(colour, (0.55 + 0.45 * hot) * alpha), a(mix(colour, bright, hot), alpha))
     } else {
-        (a(t.ink(), 0.10 * hot * alpha), a(mix(a(t.ink(), 0.34), t.accent(), hot), alpha), a(mix(t.muted(), t.ink(), 0.4 + 0.6 * hot), alpha))
+        (a(t.ink(), 0.10 * hot * alpha), a(mix(a(t.ink(), 0.34), colour, hot), alpha), a(mix(t.muted(), t.ink(), 0.4 + 0.6 * hot), alpha))
     };
     if on || down || hot > 0.3 {
         let mut light = Light::new(p);
         let mut closed = shape.to_vec();
         closed.push(shape[0]);
-        light.halo(&closed, false, 7.0, lit(t.accent(), (if on || down { 0.26 } else { 0.16 * hot }) * alpha));
+        light.halo(&closed, false, 7.0, lit(colour, (if on || down { 0.26 } else { 0.16 * hot }) * alpha));
         light.paint(p);
     }
     holo::fill(p, &shape, fill);
@@ -96,9 +107,11 @@ pub fn cells(p: &Painter, r: Rect, value: f32, count: usize, colour: Color32, al
     p.add(Shape::mesh(mesh));
 }
 
-/// A reading round a ring: a faint band, an arc of light from twelve o'clock to the value,
+/// A reading round a ring: a faint band, an arc of light in `colour` (the accent, or a caution
+/// for a reading that is too high) from twelve o'clock to the value,
 /// the figure in the middle and its label under it.
-pub fn gauge(p: &Painter, centre: Pos2, radius: f32, value: f32, figure: &str, caption: &str, alpha: f32) {
+#[allow(clippy::too_many_arguments)]
+pub fn gauge(p: &Painter, centre: Pos2, radius: f32, value: f32, figure: &str, caption: &str, colour: Color32, alpha: f32) {
     let t = holo::theme();
     let value = value.clamp(0.0, 1.0);
     let mut light = Light::new(p);
@@ -110,9 +123,9 @@ pub fn gauge(p: &Painter, centre: Pos2, radius: f32, value: f32, figure: &str, c
         // Glass lit from the filament, as on the core's band.
         let n = ((value * TAU * radius / 3.5).ceil() as usize).max(4);
         let ring = |r: f32| (0..=n).map(|i| polar(centre, r, NORTH + (to - NORTH) * i as f32 / n as f32)).collect::<Vec<_>>();
-        light.sheet(&ring(radius * 0.84), &ring(radius), &[lit(t.accent(), 0.34 * alpha)], &[lit(t.deep(), 0.05 * alpha)]);
-        light.neon_arc(centre, radius * 0.84, NORTH, to, (radius * 0.035).max(1.4), a(t.hot(), alpha), 1.0);
-        light.spark(polar(centre, radius * 0.84, to), radius * 0.09, lit(t.hot(), alpha));
+        light.sheet(&ring(radius * 0.84), &ring(radius), &[lit(colour, 0.20 * alpha)], &[lit(colour, 0.02 * alpha)]);
+        light.neon_arc(centre, radius * 0.84, NORTH, to, (radius * 0.035).max(1.4), a(mix(colour, Color32::WHITE, 0.62), alpha), 1.0);
+        light.spark(polar(centre, radius * 0.84, to), radius * 0.09, lit(mix(colour, Color32::WHITE, 0.62), alpha));
     }
     light.paint(p);
     holo::text(p, pos2(centre.x, centre.y - radius * 0.06), Align2::CENTER_CENTER, Face::Figure, figure, radius * 0.60, a(t.ink(), alpha));
@@ -136,7 +149,7 @@ pub fn area(p: &Painter, r: Rect, values: &[f32], lo: f32, hi: f32, colour: Colo
     let points: Vec<Pos2> = (0..values.len()).map(at).collect();
     let mut mesh = Mesh::default();
     for q in &points {
-        mesh.colored_vertex(*q, lit(colour, 0.26 * alpha));
+        mesh.colored_vertex(*q, lit(colour, 0.15 * alpha));
         mesh.colored_vertex(pos2(q.x, r.bottom()), Color32::TRANSPARENT);
     }
     for i in 0..points.len() as u32 - 1 {
@@ -177,10 +190,10 @@ pub fn columns(p: &Painter, r: Rect, items: &[(&str, f32)], unit: &str, grow: f3
         let bar = Rect::from_min_max(pos2(holo::snap(x - width / 2.0, holo::ppp(p)), plot.bottom() - h), pos2(holo::snap(x + width / 2.0, holo::ppp(p)), plot.bottom()));
         let n = mesh.vertices.len() as u32;
         let colour = if i == 0 { t.accent() } else { mix(t.accent(), t.deep(), 0.5) };
-        mesh.colored_vertex(bar.left_top(), lit(colour, 0.50 * alpha));
-        mesh.colored_vertex(bar.right_top(), lit(colour, 0.50 * alpha));
-        mesh.colored_vertex(bar.left_bottom(), lit(colour, 0.05 * alpha));
-        mesh.colored_vertex(bar.right_bottom(), lit(colour, 0.05 * alpha));
+        mesh.colored_vertex(bar.left_top(), lit(colour, 0.17 * alpha));
+        mesh.colored_vertex(bar.right_top(), lit(colour, 0.17 * alpha));
+        mesh.colored_vertex(bar.left_bottom(), Color32::TRANSPARENT);
+        mesh.colored_vertex(bar.right_bottom(), Color32::TRANSPARENT);
         mesh.add_triangle(n, n + 1, n + 2);
         mesh.add_triangle(n + 1, n + 3, n + 2);
         light.neon(&[bar.left_top(), bar.right_top()], false, 1.5, a(mix(colour, t.hot(), 0.5), alpha), 1.0);
@@ -261,7 +274,10 @@ pub fn pair(p: &Painter, r: Rect, label: &str, value: &str, alpha: f32) {
     let t = holo::theme();
     let mid = r.center().y;
     let l = holo::text(p, pos2(r.left(), mid), Align2::LEFT_CENTER, Face::Label, label, 8.0, a(t.muted(), alpha));
-    let v = holo::text(p, pos2(r.right(), mid), Align2::RIGHT_CENTER, Face::Mono, value, 11.5, a(t.ink(), alpha));
+    // (A value too long for the line is cut, never drawn over its label.)
+    let g = holo::galley_within(p, Face::Mono, value, 11.5, a(t.ink(), alpha), (r.right() - l.right() - 16.0).max(20.0));
+    let v = Rect::from_min_size(pos2(holo::snap(r.right() - g.size().x, holo::ppp(p)), holo::snap(mid - g.size().y / 2.0, holo::ppp(p))), g.size());
+    p.galley(v.min, g, t.ink());
     let mut x = l.right() + 8.0;
     let mut mesh = Mesh::default();
     while x < v.left() - 8.0 {
