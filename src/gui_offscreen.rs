@@ -51,7 +51,7 @@ impl VirtualHud {
         // the exit: `set_still`).
         set_still(&ctx, true);
         configure_style(&ctx, app.config().read(|c| c.interface.font_scale));
-        crate::theme_engine::attach_database(&app.config().read(|c| c.memory_db_path.clone()));
+        crate::theme_store::attach_database(&app.config().read(|c| c.memory_db_path.clone()));
         let model = Arc::new(Mutex::new(HudModel::default()));
         // The offscreen context is the HUD's context: repaint requests and the "is a HUD up"
         // question reach it exactly as they reach the window's.
@@ -119,9 +119,9 @@ impl VirtualHud {
         monitor_regions(&self.ctx)
     }
 
-    /// The emblem's state name ("AwakeFrontEmblem", "ThinkingGyroscope", "CornerDocked" …).
+    /// The emblem's state name ("Front", "Gyro", "Docked").
     pub(crate) fn emblem_state(&self) -> String {
-        format!("{:?}", self.hud.emblem.state())
+        format!("{:?}", self.hud.emblem.pose())
     }
 
     /// Opens or closes one of the HUD's own surfaces by name, as its header button would:

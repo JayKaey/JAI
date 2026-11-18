@@ -36,17 +36,17 @@ pub const BLOCK_FILL_LIFTED: Color32 = Color32::from_rgba_premultiplied(9, 16, 2
 /// The 1 px block border: a faint tint of the active theme (`theme_engine`; re-read every
 /// frame). The film look keeps the full colour for what is live or selected.
 pub fn border_colour() -> Color32 {
-    crate::theme_engine::current().border().gamma_multiply(0.3)
+    crate::holo::a(crate::holo_theme::current().ink(), 0.20)
 }
 
 /// The active / highlighted border and every frame's glow.
 pub fn active_colour() -> Color32 {
-    crate::theme_engine::current().glow()
+    crate::holo_theme::current().accent()
 }
 
 /// Corner brackets and ticks.
 pub fn bracket_colour() -> Color32 {
-    crate::theme_engine::current().bracket()
+    crate::holo_theme::current().ink()
 }
 pub const PIN_RED: Color32 = Color32::from_rgb(0xFF, 0x2A, 0x55);
 const INK: Color32 = crate::hud_style::TEXT;
@@ -385,7 +385,7 @@ pub fn researching() -> bool {
 
 /// Puts a report on the board (the cascade starts now); the emblem docks.
 pub fn present(mut report: Report) -> (usize, usize) {
-    crate::core_sphere_3d::pulse("hud_board.rs");
+    crate::mind_activity::pulse("hud_board.rs");
     let counts = (report.blocks.len(), report.sources.len());
     let mut b = board();
     // Pinned blocks lead the new report (once each).

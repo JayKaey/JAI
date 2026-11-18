@@ -580,7 +580,7 @@ pub async fn fetch_updates(s: &BwSession) -> Result<Vec<CourseUpdate>, String> {
 /// Everything for `Lms::updates` when the settings use Schule@BW.
 pub async fn updates(cfg: &LmsSettings, password: Option<&str>) -> Result<Vec<CourseUpdate>, String> {
     let password = password.filter(|p| !p.is_empty()).ok_or("itslearning needs your Schule@BW password — enter it once in the Integrations Hub (it is kept encrypted)")?;
-    crate::core_sphere_3d::pulse("itslearning_bw_sso.rs");
+    crate::mind_activity::pulse("itslearning_bw_sso.rs");
     let s = session(cfg, password).await?;
     match fetch_updates(&s).await {
         Ok(u) => Ok(u),

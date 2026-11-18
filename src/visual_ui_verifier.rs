@@ -24,8 +24,9 @@
 //! Every check returns its findings as sentences; an empty list is a pass.
 
 use crate::hud_board::{Bar, Block, BlockKind, BoardView, Note, Report};
-use crate::rose_emblem_renderer::{self as emblem, RoseEmblem, RoseEmblemState};
-use crate::theme_engine::{self, ThemePalette};
+use crate::holo_core::{self as emblem, Core, Pose};
+use crate::holo_theme::{self, Theme};
+use crate::theme_store;
 use eframe::egui::{self, epaint, pos2, vec2, Color32, PointerButton, Pos2, Rect, Vec2};
 use std::collections::HashSet;
 use std::time::Duration;
@@ -392,7 +393,7 @@ fn hsv(colour: Color32) -> (f32, f32, f32) {
     let [r, g, b, a] = colour.to_array();
     let scale = if a == 0 { 1.0 } else { 255.0 / a as f32 };
     let rgb = [r, g, b].map(|c| (c as f32 * scale).min(255.0) as u8);
-    let (h, s, v) = theme_engine::to_hsv(rgb);
+    let (h, s, v) = holo_theme::to_hsv(rgb);
     (h, s, v * 255.0)
 }
 
@@ -402,8 +403,8 @@ fn hue_distance(a: f32, b: f32) -> f32 {
 }
 
 /// The hues of a theme's saturated colours (its neutral members are inks, not hues).
-fn theme_hues(palette: &ThemePalette) -> Vec<f32> {
-    [palette.core_primary, palette.core_secondary, palette.core_hot_center, palette.hud_frame_border, palette.hud_frame_glow, palette.hud_bracket_color].into_iter().map(theme_engine::to_hsv).filter(|(_, s, _)| *s >= SATURATED).map(|(h, _, _)| h).collect()
+fn theme_hues(palette: &Theme) -> Vec<f32> {
+    [palette.accent, palette.deep, palette.alert, palette.ink].into_iter().map(holo_theme::to_hsv).filter(|(_, s, _)| *s >= SATURATED).map(|(h, _, _)| h).collect()
 }
 
 /// Below this saturation a colour is a grey or a white, not a hue.
@@ -418,7 +419,7 @@ fn of_theme(colour: Color32, hues: &[f32]) -> bool {
     if v < 44.0 || s < SATURATED {
         return true;
     }
-    let (status, _, _) = theme_engine::to_hsv(STATUS_RED);
+    let (status, _, _) = holo_theme::to_hsv(STATUS_RED);
     if hue_distance(h, status) <= 8.0 || pill_colour(colour) {
         return true;
     }
@@ -452,7 +453,7 @@ fn pill_colour(colour: Color32) -> bool {
 
 /// Check 4: every outline and every mesh colour in the frame that is not of `palette` (named
 /// `theme` in the findings). Strokes thinner than a hair or nearly transparent are noise.
-pub fn off_theme(frame: &Frame, theme: &str, palette: &ThemePalette) -> Vec<String> {
+pub fn off_theme(frame: &Frame, theme: &str, palette: &Theme) -> Vec<String> {
     let hues = theme_hues(palette);
     let mut findings: Vec<String> = Vec::new();
     let mut reported: HashSet<[u8; 3]> = HashSet::new();
@@ -477,10 +478,10 @@ pub fn off_theme(frame: &Frame, theme: &str, palette: &ThemePalette) -> Vec<Stri
 
 /// The themes of the matrix: the eight presets and three custom themes (Sir's own from
 /// `config/custom_themes.json` first, filled up with probe colours no preset uses). Each as
-/// (palette name for `theme_engine::follow`, label).
+/// (palette name for `theme_store::follow`, label).
 pub fn themes() -> Vec<(String, String)> {
-    let mut list: Vec<(String, String)> = theme_engine::PRESETS.iter().map(|(name, _)| (name.to_string(), theme_engine::label(name))).collect();
-    let mut custom: Vec<(String, String)> = theme_engine::custom_themes().into_iter().take(3).map(|t| (t.key(), format!("custom theme {}", t.name))).collect();
+    let mut list: Vec<(String, String)> = holo_theme::PRESETS.iter().map(|(name, _, _)| (name.to_string(), holo_theme::label(name))).collect();
+    let mut custom: Vec<(String, String)> = theme_store::custom_themes().into_iter().take(3).map(|t| (t.key(), format!("custom theme {}", t.name))).collect();
     for probe in ["custom:#FF00C8", "custom:#B4FF00", "custom:#7A5CFF"] {
         if custom.len() < 3 {
             custom.push((probe.to_string(), format!("custom colour {}", &probe[7..])));
@@ -515,31 +516,31 @@ pub fn check_emblem(screen: Rect, pass: usize) -> Vec<String> {
     let mut findings = Vec::new();
     let fps = [180.0f32, 144.0, 60.0, 120.0, 30.0][pass % 5];
     let dt = 1.0 / fps;
-    let mut orb = RoseEmblem::new(RoseEmblemState::AwakeFrontEmblem);
+    let mut orb = Core::new(Pose::Front);
     // Settled in the front pose first.
     for _ in 0..(2.0 * fps) as usize {
-        orb.step(dt, 0.0, false);
+        orb.tick(dt, 0.0, false);
         orb.glide(screen, dt);
     }
     let diagonal = screen.size().length();
     let route = [
-        (RoseEmblemState::ThinkingGyroscope, true, "front emblem -> thinking gyroscope"),
-        (RoseEmblemState::CornerDocked, false, "thinking gyroscope -> corner dock"),
-        (RoseEmblemState::AwakeFrontEmblem, false, "corner dock -> front emblem"),
-        (RoseEmblemState::CornerDocked, false, "front emblem -> corner dock"),
-        (RoseEmblemState::ThinkingGyroscope, true, "corner dock -> thinking gyroscope"),
-        (RoseEmblemState::AwakeFrontEmblem, false, "thinking gyroscope -> front emblem"),
+        (Pose::Gyro, true, "front emblem -> thinking gyroscope"),
+        (Pose::Docked, false, "thinking gyroscope -> corner dock"),
+        (Pose::Front, false, "corner dock -> front emblem"),
+        (Pose::Docked, false, "front emblem -> corner dock"),
+        (Pose::Gyro, true, "corner dock -> thinking gyroscope"),
+        (Pose::Front, false, "thinking gyroscope -> front emblem"),
     ];
     for (state, busy, name) in route {
         let before = orb.frame(screen);
-        orb.set_state(state, busy);
+        orb.set_pose(state, busy);
         let mut flat = vec![before.flat];
         let mut dock = vec![before.dock];
         let mut x = vec![before.centre.x];
         let mut y = vec![before.centre.y];
         let mut radius = vec![before.radius];
         for _ in 0..(2.5 * fps) as usize {
-            orb.step(dt, 0.0, busy);
+            orb.tick(dt, 0.0, busy);
             orb.glide(screen, dt);
             let f = orb.frame(screen);
             flat.push(f.flat);
@@ -553,7 +554,7 @@ pub fn check_emblem(screen: Rect, pass: usize) -> Vec<String> {
         // (quick and crisp, a quarter of a second) runs at 3.3 times its mean speed at most;
         // anything faster in one frame is a jump. The emblem's place is held to the same share
         // of the screen's diagonal.
-        let peak = 3.3 / crate::rose_emblem_renderer::UNFOLD_SECS.min(crate::rose_emblem_renderer::DOCK_SECS);
+        let peak = 3.3 / crate::holo_core::UNFOLD_SECS.min(crate::holo_core::DOCK_SECS);
         let step = (peak / fps).clamp(peak / 150.0, 0.5);
         for (what, series, limit) in [("flatness", &flat, step), ("docking", &dock, step), ("x", &x, diagonal * step), ("y", &y, diagonal * step), ("radius", &radius, (before.radius - after.radius).abs().max(40.0) * step.max(0.12))] {
             if let Some((frame, by)) = jumps(series, limit).first() {
@@ -569,46 +570,46 @@ pub fn check_emblem(screen: Rect, pass: usize) -> Vec<String> {
         if (after.dock - before.dock).abs() > 0.5 && !monotonic(&dock, after.dock > before.dock) {
             findings.push(format!("{name}: the docking is not monotonic"));
         }
-        if orb.state() != state {
-            findings.push(format!("{name}: the emblem is in {:?}", orb.state()));
+        if orb.pose() != state {
+            findings.push(format!("{name}: the emblem is in {:?}", orb.pose()));
         }
     }
-    // Ring 5: three clusters 120 degrees apart; every tick's surge is proportional to the voice
-    // and symmetric around its cluster; silent below the noise floor.
-    let gaps: Vec<f32> = (0..3).map(|i| (emblem::TACH_CLUSTERS[(i + 1) % 3] - emblem::TACH_CLUSTERS[i]).rem_euclid(std::f32::consts::TAU)).collect();
-    if gaps.iter().any(|g| (g - std::f32::consts::TAU / 3.0).abs() > 1e-4) {
-        findings.push(format!("ring 5: the clusters are not 120 degrees apart: {gaps:?}"));
-    }
-    let rest = emblem::tach_ticks(0.0);
-    let full = emblem::tach_ticks(1.0);
-    for voice in [0.1f32, 0.25, 0.37 + 0.1 * pass as f32, 0.9] {
-        let ticks = emblem::tach_ticks(voice);
-        if ticks.len() != full.len() {
-            findings.push(format!("ring 5: {} ticks at voice {voice}, {} at full voice", ticks.len(), full.len()));
-            continue;
+    // The voice ring: silent at rest, rising with his voice and never jumping; every band
+    // stays within 0-1 and the louder voice lights the ring more.
+    let mut level_at = Vec::new();
+    for voice in [0.0f32, 0.25, 0.37 + 0.1 * (pass % 5) as f32, 0.9] {
+        let mut orb = Core::new(Pose::Front);
+        orb.set_mood(emblem::Mood::Speaking);
+        let mut seen = vec![0.0f32];
+        for _ in 0..(1.0 * fps) as usize {
+            orb.tick(dt, voice, false);
+            seen.push(orb.look().voice);
         }
-        for (k, ((_, len), ((_, silent), (_, loud)))) in ticks.iter().zip(rest.iter().zip(&full)).enumerate() {
-            let expected = silent + voice.min(1.0) * (loud - silent);
-            if (len - expected).abs() > 0.01 {
-                findings.push(format!("ring 5: tick {k} is {len:.2} px at voice {voice}, proportional would be {expected:.2} px"));
-            }
+        let look = orb.look();
+        if look.bands.iter().any(|b| !(0.0..=1.0).contains(b)) || !look.voice.is_finite() {
+            findings.push(format!("voice ring: a band leaves 0-1 at voice {voice}"));
         }
-        let n = ticks.len();
-        if (0..n / 2).any(|k| (ticks[k].1 - ticks[n - 1 - k].1).abs() > 1e-3) {
-            findings.push(format!("ring 5: the cluster is not symmetric at voice {voice}"));
+        if let Some((frame, by)) = jumps(&seen, (40.0 * dt).clamp(0.05, 0.75)).first() {
+            findings.push(format!("voice ring at {fps} FPS: its level jumps by {by:.3} in frame {frame} at voice {voice}"));
         }
+        level_at.push((voice, look.voice, look.bands.iter().sum::<f32>()));
     }
-    if emblem::tach_ticks(0.01).iter().zip(&rest).any(|(a, b)| a != b) {
-        findings.push("ring 5: the ticks move below the noise floor".to_string());
+    if level_at[0].1 > 0.004 || level_at[0].2 > 0.05 {
+        findings.push(format!("voice ring: it moves while he is silent ({:?})", level_at[0]));
     }
-    // Ring 6 keeps turning: its main arc advances every frame, its tracer runs the other way.
-    let start = 3.0 + pass as f32 * 17.3;
-    let arcs: Vec<(f32, f32, f32, f32)> = (0..(4.0 * fps) as usize).map(|i| emblem::halo_arcs(start + i as f32 * dt)).collect();
-    if !arcs.windows(2).all(|w| w[1].0 > w[0].0 && w[1].2 < w[0].2) {
-        findings.push("ring 6: the arcs do not advance every frame".to_string());
+    if !level_at.windows(2).all(|w| w[1].0 <= w[0].0 || (w[1].1 > w[0].1 && w[1].2 > w[0].2)) {
+        findings.push(format!("voice ring: a louder voice does not light it more: {level_at:?}"));
     }
-    if arcs.iter().any(|a| a.1 <= 0.0 || a.3 <= 0.0) {
-        findings.push("ring 6: an arc has no length".to_string());
+    // His clock never stops: the look's own time advances with every frame.
+    let mut orb = Core::new(Pose::Front);
+    let clocks: Vec<f32> = (0..(2.0 * fps) as usize)
+        .map(|_| {
+            orb.tick(dt, 0.0, false);
+            orb.look().clock
+        })
+        .collect();
+    if !clocks.windows(2).all(|w| w[1] > w[0]) {
+        findings.push("the core's clock does not advance every frame".to_string());
     }
     // The idle switch: never before 120 s of idle, always by 240 s; it holds 120-240 s; any
     // activity ends it.
@@ -760,9 +761,9 @@ fn brightest_near(canvas: &crate::ui_snapshot::Canvas, at: Pos2) -> [u8; 3] {
 /// Pixel-level border check: along the four edges of the frame `block`, the rasterised border
 /// pixels carry one of the theme's hues (a neutral theme: no hue at all). The share of the
 /// sampled points that do.
-pub fn border_pixels(canvas: &crate::ui_snapshot::Canvas, block: Rect, palette: &ThemePalette) -> f32 {
+pub fn border_pixels(canvas: &crate::ui_snapshot::Canvas, block: Rect, palette: &Theme) -> f32 {
     let hues = theme_hues(palette);
-    let (_, border_s, _) = theme_engine::to_hsv(palette.hud_frame_border);
+    let (_, border_s, _) = holo_theme::to_hsv(palette.ink);
     let mut points = Vec::new();
     for t in [0.2f32, 0.35, 0.5, 0.65, 0.8] {
         points.push(pos2(block.left() + block.width() * t, block.top()));
@@ -914,7 +915,7 @@ pub fn check_board(size: Vec2, count: usize, pass: usize, rt: &tokio::runtime::H
 /// theme's border hue. The theme is put back afterwards.
 pub fn check_board_themes(size: Vec2, pass: usize, rt: &tokio::runtime::Handle) -> Vec<String> {
     let mut findings = Vec::new();
-    let before = theme_engine::active_name();
+    let before = holo_theme::active_name();
     let mut stage = Stage::new(size);
     let area = crate::gui::board_area(stage.screen(), 0.0, 0.0);
     let report = sample_report(4 + pass % 3, pass);
@@ -928,17 +929,17 @@ pub fn check_board_themes(size: Vec2, pass: usize, rt: &tokio::runtime::Handle) 
     stage.frames(3, &mut paint);
     stage.wait(0.75);
     let first = crate::hud_board::layout(&report, area, false).into_iter().flatten().next();
-    let mut seen: Vec<(String, ThemePalette)> = Vec::new();
+    let mut seen: Vec<(String, Theme)> = Vec::new();
     for (name, label) in themes() {
-        theme_engine::follow(&name);
-        theme_engine::finish_fade();
-        seen.push((label, theme_engine::current()));
+        theme_store::follow(&name);
+        holo_theme::finish_fade();
+        seen.push((label, holo_theme::current()));
     }
-    theme_engine::follow(&before);
-    theme_engine::finish_fade();
+    theme_store::follow(&before);
+    holo_theme::finish_fade();
     for (n, (label, palette)) in seen.iter().enumerate() {
-        theme_engine::follow(&themes()[n].0);
-        theme_engine::finish_fade();
+        theme_store::follow(&themes()[n].0);
+        holo_theme::finish_fade();
         let frame = stage.frames(2, &mut paint);
         findings.extend(off_theme(&frame, label, palette));
         if frame.strokes.is_empty() {
@@ -963,8 +964,8 @@ pub fn check_board_themes(size: Vec2, pass: usize, rt: &tokio::runtime::Handle) 
             }
         }
     }
-    theme_engine::follow(&before);
-    theme_engine::finish_fade();
+    theme_store::follow(&before);
+    holo_theme::finish_fade();
     crate::hud_board::close_board();
     findings
 }
@@ -1108,8 +1109,13 @@ fn check_block_menu(stage: &mut Stage, scene: &mut dyn FnMut(&egui::Context), n:
     fn choose(stage: &mut Stage, scene: &mut dyn FnMut(&egui::Context), id: &str, label: &str) -> Result<(), String> {
         let home = crate::hud_dock::block_rect(id).ok_or("the block is gone")?;
         let menu = stage.click(pos2(home.left() + 90.0, home.top() + 18.0), PointerButton::Secondary, scene);
-        let entry = menu.find_exact(label).into_iter().next().ok_or_else(|| format!("the menu has no entry '{label}' (it shows: {})", crate::crash_guard::clip(&menu.all_text().replace('\n', " | "), 200)))?;
+        // (The last of its name: a header key may be lettered the same, the menu is drawn over it.)
+        let entry = menu.find_exact(label).into_iter().last().ok_or_else(|| format!("the menu has no entry '{label}' (it shows: {})", crate::crash_guard::clip(&menu.all_text().replace('\n', " | "), 200)))?;
         stage.click(entry.center(), PointerButton::Primary, scene);
+        // (A block that closes plays its exit first: it is gone once that has run.)
+        if label == "CLOSE" {
+            stage.wait(crate::hud_dock::CLOSE_FADE.as_secs_f32() + 0.05);
+        }
         stage.frames(6, scene);
         Ok(())
     }
@@ -1160,11 +1166,12 @@ pub fn check_core(size: Vec2) -> Vec<String> {
     let mut stage = Stage::new(size);
     let area = crate::gui::board_area(stage.screen(), 0.0, 0.0);
     let centre = area.center();
-    let mut core = crate::core_sphere_3d::CoreSphereView::default();
-    let show = |ctx: &egui::Context, core: &mut crate::core_sphere_3d::CoreSphereView| {
-        egui::CentralPanel::default().frame(egui::Frame::none()).show(ctx, |ui| core.show(ui, area, 0.2));
+    let mut core = crate::holo_mind::MindView::default();
+    let look = crate::holo_core::CoreLook { voice: 0.2, clock: 4.0, word: "LISTENING", ..Default::default() };
+    let show = |ctx: &egui::Context, core: &mut crate::holo_mind::MindView| {
+        egui::CentralPanel::default().frame(egui::Frame::none()).show(ctx, |ui| core.show(ui, area, &look, &crate::mind_activity::LAYERS, &[("stt.rs", 0, 1.0), ("brain.rs", 1, 0.6)]));
     };
-    let advance = |stage: &mut Stage, core: &mut crate::core_sphere_3d::CoreSphereView, frames: usize| {
+    let advance = |stage: &mut Stage, core: &mut crate::holo_mind::MindView, frames: usize| {
         let mut frame = Frame::default();
         for _ in 0..frames {
             stage.wait(0.02);
@@ -1190,16 +1197,16 @@ pub fn check_core(size: Vec2) -> Vec<String> {
         findings.push(format!("the core sphere keeps rotating under the pointer ({} rad in 10 frames)", core.orientation().0 - held));
     }
     // A drag to the right turns the front face to the right, a drag up tilts it up.
-    let front = |core: &crate::core_sphere_3d::CoreSphereView| core.project([0.0, 0.0, -1.0], centre, 200.0).0;
+    let front = |core: &crate::holo_mind::MindView| core.project([0.0, 0.0, 1.0], centre, 200.0).0;
     let before = front(&core);
     stage.drag(centre, vec2(60.0, 0.0), 6, &mut |ctx| show(ctx, &mut core));
     let after = front(&core);
     if after.x <= before.x + 2.0 {
         findings.push(format!("dragging the core sphere right moved its front from x {} to x {}", before.x, after.x));
     }
-    let before = front(&core);
+    let tilt = core.orientation().1;
     stage.drag(centre, vec2(0.0, -50.0), 6, &mut |ctx| show(ctx, &mut core));
-    if front(&core).y >= before.y - 2.0 {
+    if core.orientation().1 >= tilt - 0.05 {
         findings.push("dragging the core sphere up did not tilt it up".to_string());
     }
     findings
@@ -1209,10 +1216,10 @@ pub fn check_core(size: Vec2) -> Vec<String> {
 /// somewhere else, it ends exactly under the pointer, having glided there without a jump.
 pub fn check_orb_drag(screen: Rect, pass: usize) -> Vec<String> {
     let mut findings = Vec::new();
-    let mut orb = RoseEmblem::new(RoseEmblemState::AwakeFrontEmblem);
+    let mut orb = Core::new(Pose::Front);
     let dt = 1.0 / 120.0;
     for _ in 0..240 {
-        orb.step(dt, 0.0, false);
+        orb.tick(dt, 0.0, false);
         orb.glide(screen, dt);
     }
     let start = orb.frame(screen).centre;
@@ -1223,7 +1230,7 @@ pub fn check_orb_drag(screen: Rect, pass: usize) -> Vec<String> {
     for n in 1..=15 {
         let at = start + delta * (n as f32 / 15.0);
         orb.drag_to(vec2((at.x - screen.left()) / screen.width(), (at.y - screen.top()) / screen.height()));
-        orb.step(dt, 0.0, false);
+        orb.tick(dt, 0.0, false);
         orb.glide(screen, dt);
         let now = orb.frame(screen).centre;
         if (now - at).length() > 1.0 {
@@ -1233,7 +1240,7 @@ pub fn check_orb_drag(screen: Rect, pass: usize) -> Vec<String> {
         path.push(now);
     }
     for _ in 0..120 {
-        orb.step(dt, 0.0, false);
+        orb.tick(dt, 0.0, false);
         orb.glide(screen, dt);
     }
     let end = orb.frame(screen).centre;
@@ -1251,11 +1258,11 @@ pub fn check_orb_drag(screen: Rect, pass: usize) -> Vec<String> {
 /// single-frame jump and comes to rest there.
 pub fn check_orb_glide(screen: Rect, pass: usize) -> Vec<String> {
     let mut findings = Vec::new();
-    let mut orb = RoseEmblem::new(RoseEmblemState::AwakeFrontEmblem);
+    let mut orb = Core::new(Pose::Front);
     let fps = [180.0f32, 60.0, 144.0, 120.0, 90.0][pass % 5];
     let dt = 1.0 / fps;
     for _ in 0..(2.0 * fps) as usize {
-        orb.step(dt, 0.0, false);
+        orb.tick(dt, 0.0, false);
         orb.glide(screen, dt);
     }
     let homes = [vec2(0.86, 0.2), vec2(0.14, 0.2), vec2(0.14, 0.8), vec2(0.86, 0.8), vec2(0.5, 0.5)];
@@ -1265,7 +1272,7 @@ pub fn check_orb_glide(screen: Rect, pass: usize) -> Vec<String> {
     orb.set_custom_home(Some(home));
     let mut path: Vec<Pos2> = Vec::new();
     for _ in 0..(4.0 * fps) as usize {
-        orb.step(dt, 0.0, false);
+        orb.tick(dt, 0.0, false);
         orb.glide(screen, dt);
         path.push(orb.frame(screen).centre);
     }
@@ -1299,15 +1306,23 @@ pub fn check_orb_glide(screen: Rect, pass: usize) -> Vec<String> {
 /// mapping (`gui::emblem_voice_of`).
 pub fn check_voice_ticks(voice_of: &dyn Fn(&str, f32, f32) -> f32) -> Vec<String> {
     let mut findings = Vec::new();
+    // What the core's own voice ring shows after a second of a level.
+    let ring = |voice: f32| {
+        let mut orb = Core::new(Pose::Front);
+        for _ in 0..60 {
+            orb.tick(1.0 / 60.0, voice, false);
+        }
+        orb.look().voice
+    };
     for (state, jai, mic) in [("listening", 0.0f32, 0.95f32), ("idle", 0.0, 0.85), ("thinking", 0.0, 1.0), ("speaking", 0.0, 0.9)] {
         let voice = voice_of(state, jai, mic);
-        if emblem::tach_ticks(voice) != emblem::tach_ticks(0.0) {
-            findings.push(format!("the voice ticks move while JAI is silent ({state}, microphone at {mic}): voice {voice}"));
+        if ring(voice) > 0.004 {
+            findings.push(format!("the voice ring moves while JAI is silent ({state}, microphone at {mic}): voice {voice}"));
         }
     }
     let speaking = voice_of("speaking", 0.6, 0.0);
-    if emblem::tach_ticks(speaking) == emblem::tach_ticks(0.0) {
-        findings.push("the voice ticks stay at rest while JAI speaks".to_string());
+    if ring(speaking) < 0.2 {
+        findings.push("the voice ring stays at rest while JAI speaks".to_string());
     }
     findings
 }
@@ -1366,10 +1381,10 @@ mod tests {
         assert_eq!(overlaps(&[("a".into(), a), ("b".into(), beside), ("c".into(), across)]).len(), 2);
         // A cyan outline under a red theme is off theme; the theme's own, white ink, a dim
         // grey-black and the status red are not.
-        let red = theme_engine::resolve("crimson_overdrive");
+        let red = theme_store::resolve("hot_rod");
         let mut frame = Frame { screen: Rect::from_min_size(Pos2::ZERO, vec2(400.0, 300.0)), ..Frame::default() };
         let clip = frame.screen;
-        for colour in [red.border(), red.glow(), Color32::WHITE, Color32::from_gray(30), Color32::from_rgb(STATUS_RED[0], STATUS_RED[1], STATUS_RED[2]), red.border().gamma_multiply(0.4)] {
+        for colour in [red.accent(), red.deep(), Color32::WHITE, Color32::from_gray(30), Color32::from_rgb(STATUS_RED[0], STATUS_RED[1], STATUS_RED[2]), red.accent().gamma_multiply(0.4)] {
             frame.strokes.push(StrokeItem { clip, rect: a, colour, width: 1.0 });
         }
         fail("the theme's own colours", off_theme(&frame, "Crimson Overdrive", &red));
@@ -1380,8 +1395,8 @@ mod tests {
         assert!(found[0].contains("#2B7A9E") && found[1].contains("#3DF59B"), "{found:?}");
         // The matrix has every preset and three custom themes.
         let list = themes();
-        assert_eq!(list.len(), theme_engine::PRESETS.len() + 3, "{list:?}");
-        assert!(list.iter().any(|(name, _)| name == theme_engine::DEFAULT_PRESET));
+        assert_eq!(list.len(), holo_theme::PRESETS.len() + 3, "{list:?}");
+        assert!(list.iter().any(|(name, _)| name == holo_theme::DEFAULT_PRESET));
         let found = jumps(&[0.0, 0.1, 0.9, 1.0], 0.5);
         assert!(found.len() == 1 && found[0].0 == 2 && (found[0].1 - 0.8).abs() < 1e-5, "{found:?}");
         assert!(monotonic(&[0.0, 0.2, 0.2, 0.9], true) && !monotonic(&[0.0, 0.3, 0.2], true));
@@ -1404,12 +1419,12 @@ mod tests {
                 }
             }
         }
-        for (name, palette) in theme_engine::PRESETS {
+        for (name, _, palette) in holo_theme::PRESETS {
             fail(&format!("the pill under {name}"), off_theme(&frame, name, &palette));
         }
         // Only the pill's own colours: another green is still off a red theme.
         frame.strokes.push(StrokeItem { clip, rect: at, colour: Color32::from_rgb(0x20, 0xC0, 0x40), width: 1.0 });
-        let found = off_theme(&frame, "Crimson Overdrive", &theme_engine::resolve("crimson_overdrive"));
+        let found = off_theme(&frame, "Crimson Overdrive", &theme_store::resolve("crimson_overdrive"));
         assert!(found.len() == 1 && found[0].contains("#20C040"), "{found:?}");
         // Every word the pill can show has its colours here.
         for (state, muted, asleep) in [("idle", false, false), ("thinking", false, false), ("speaking", false, false), ("idle", true, false), ("idle", false, true)] {
@@ -1446,7 +1461,7 @@ mod tests {
     fn every_theme_colours_every_border_of_the_board() {
         let _board = crate::hud_board::test_lock();
         let _dock = crate::hud_dock::test_lock();
-        let _theme = crate::theme_engine::test_lock();
+        let _theme = crate::holo_theme::test_lock();
         let rt = runtime();
         for pass in 0..2 {
             fail(&format!("board themes, pass {}", pass + 1), check_board_themes(vec2(1600.0, 900.0), pass, rt.handle()));

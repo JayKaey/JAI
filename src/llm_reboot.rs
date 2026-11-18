@@ -199,7 +199,7 @@ pub async fn reboot(trigger: Trigger) -> Result<CycleReport, String> {
     }
     let since = Instant::now();
     set_phase(Phase::Rebooting { since, step: "ABORTING" });
-    crate::core_sphere_3d::CoreActivityBus::chain(&["llm_reboot.rs", "brain.rs", "runtime.rs"]);
+    crate::mind_activity::chain(&["llm_reboot.rs", "brain.rs", "runtime.rs"]);
     info!("[REBOOT] Language model reboot ({trigger:?})");
     if trigger == Trigger::Button {
         (ctx.interrupt)();

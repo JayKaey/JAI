@@ -1588,7 +1588,7 @@ fn any_name() -> Vec<Way> {
     ways.push(shape(
         "close {app}",
         &[
-            r"(?:shut down|close down|kill|quit|exit|terminate|shut|close|beende|schließe|schließ|deaktiviere)(?: the| my| den| die| das| mein| meine)? (?P<app>[a-z0-9äöüß][a-z0-9äöüß .+]{1,24}?)(?: app| application| program| programm| anwendung)?(?: down)?",
+            r"(?:shut down|shut off|close down|kill|quit|exit|terminate|shut|close|beende|schließe|schließ|deaktiviere)(?: the| my| den| die| das| mein| meine)? (?P<app>[a-z0-9äöüß][a-z0-9äöüß .+]{1,24}?)(?: app| application| program| programm| anwendung)?(?: down)?",
             r"(?:mach|mache) (?:the |den |die |das |mein |meine )?(?P<app>[a-z0-9äöüß][a-z0-9äöüß .+]{1,24}?) (?:zu|aus)",
         ],
     ));

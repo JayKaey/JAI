@@ -293,7 +293,7 @@ mod tests {
         assert_eq!(plan.calls.len(), 3, "{tools:?}");
         assert!(!tools.iter().any(|t| t.contains("music")), "never the music player: {tools:?}");
         assert_eq!(plan.calls[0].tool, "configure_interface");
-        assert_eq!(plan.calls[0].args["hud_palette"], "arc_cyan", "{}", plan.calls[0].args);
+        assert_eq!(plan.calls[0].args["hud_palette"], "arc_reactor", "{}", plan.calls[0].args);
         assert!(plan.calls[1].args.to_string().contains("top"), "the orb goes to the top right: {} {}", plan.calls[1].tool, plan.calls[1].args);
         assert!(plan.calls[2].args.to_string().to_lowercase().contains("schedule") || plan.calls[2].tool.contains("schedule"), "{} {}", plan.calls[2].tool, plan.calls[2].args);
         assert_eq!(plan.rest(), "Set theme to Arc Cyan, move the orb to the top right and open my WebUntis schedule");

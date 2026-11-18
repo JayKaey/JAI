@@ -1282,10 +1282,10 @@ mod tests {
         let mishap = r##"{ "config_version": 23, "interface": { "theme": "custom", "accent": "#ffe14d", "background": "#0f0507", "hud_palette": "stark_gold" } }"##;
         let mut cfg: JaiConfig = serde_json::from_str(mishap).unwrap();
         cfg.migrate();
-        assert_eq!((cfg.interface.theme.as_str(), cfg.interface.hud_palette.as_str(), cfg.interface.accent.as_str(), cfg.interface.title.as_str()), ("jai", "jai_gold", "#ffd400", "J.A.I."));
+        assert_eq!((cfg.interface.theme.as_str(), cfg.interface.hud_palette.as_str(), cfg.interface.accent.as_str(), cfg.interface.title.as_str()), ("jai", "stark_gold", "#ffd400", "J.A.I."));
         // A fresh install is his from the start.
         let fresh = JaiConfig::default();
-        assert_eq!((fresh.wake_words.as_slice(), fresh.interface.hud_palette.as_str()), (["jai".to_string(), "jay".to_string()].as_slice(), "jai_gold"));
+        assert_eq!((fresh.wake_words.as_slice(), fresh.interface.hud_palette.as_str()), (["jai".to_string(), "jay".to_string()].as_slice(), "stark_gold"));
         assert!(fresh.name_meaning.is_empty(), "what the name stands for is Sir's to set, not the code's");
         assert_eq!(CONFIG_FILE, "jai_config.json");
     }

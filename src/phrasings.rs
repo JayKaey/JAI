@@ -144,6 +144,7 @@ const CANON: &[(&str, &str)] = &[
     ("earth.show", "show me the earth"),
     ("zoom.out", "zoom out"),
     ("mic.stop", "stop listening"),
+    ("pc.shutdown", "shut down my PC"),
 ];
 
 /// Other wordings of an order whose road counts as its own (the same thing by another of the
@@ -184,7 +185,11 @@ pub(crate) fn route(text: &str) -> Option<(String, Value)> {
         Fast::Intent(intent) => of(intent),
         Fast::Route(route) => (route.tool.to_string(), route.args.clone()),
         Fast::Selection(ask) => ("(selection)".to_string(), json!(ask)),
-        Fast::Other => ("(other)".to_string(), json!({})),
+        Fast::Other => match crate::system_power::power_request(text) {
+            // (The PC's power is the brain's double-checked dialogue, with no tool of its own.)
+            Some(action) => ("(power)".to_string(), json!({ "action": action.id() })),
+            None => ("(other)".to_string(), json!({})),
+        },
     };
     if let Some((_, found)) = crate::brain::another_way(text) {
         return Some(road(&found));
@@ -362,6 +367,32 @@ mod tests {
         assert!(dev.share() >= DEV_AT_LEAST, "worked on: {:.3}", dev.share());
         assert!(held.share() >= HELD_AT_LEAST, "held back: {:.3}", held.share());
         assert!(newly.len() <= TALK_AT_MOST, "sentences that are no orders, newly taken for one: {}", newly.len());
+    }
+
+    /// Sir's words of 2026-11-16: "please shut off my PC" was reworded to "close off my pc" and
+    /// closed an app of that name; "power down by PC" ("by" heard for "my") reached the model.
+    #[test]
+    fn pc_power_orders_reach_the_power_dialogue() {
+        let power = Some(("(power)".to_string(), json!({ "action": "shutdown" })));
+        for said in [
+            "please shut off my PC",
+            "JAI, please shut off my PC",
+            "please power down by PC",
+            "shut down my PC",
+            "shut off my computer",
+            "power off my PC",
+            "power down my PC",
+            "turn off my PC",
+            "fahr den PC runter",
+            "schalte den PC aus",
+        ] {
+            assert_eq!(route(said), power, "{said}");
+        }
+        // Apps are still closed, "shut off" one too.
+        for (said, app) in [("close Spotify", "spotify"), ("shut Discord", "discord"), ("shut off Spotify", "spotify")] {
+            let (tool, args) = route(said).unwrap_or_else(|| panic!("{said}: the model"));
+            assert_eq!((tool.as_str(), plain(&args["app_name"])), ("close_application", json!(app)), "{said}");
+        }
     }
 
     fn same_road(a: &Option<(String, Value)>, b: &Option<(String, Value)>) -> bool {

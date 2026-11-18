@@ -323,11 +323,11 @@ struct Ink {
 
 impl Ink {
     fn now() -> Self {
-        let theme = crate::theme_engine::current();
-        let [r, g, b] = theme.core_hot_center;
+        let theme = crate::holo_theme::current();
+        let [r, g, b] = theme.hot().to_array()[..3].try_into().unwrap_or([255; 3]);
         Self {
             accent: crate::hud_board::active_colour(),
-            second: theme.secondary(),
+            second: theme.deep(),
             border: crate::hud_board::border_colour(),
             bracket: crate::hud_board::bracket_colour(),
             hot: Color32::from_rgb(r, g, b),

@@ -282,9 +282,9 @@ fn body(ui: &mut Ui, iface: &InterfaceSettings) -> Option<Out> {
                     Control::Theme => {
                         // A swatch for each ready-made theme; the one in use is framed in white.
                         ui.spacing_mut().item_spacing.x = 5.0;
-                        for (name, palette) in crate::theme_engine::PRESETS.iter().rev() {
+                        for (name, _, palette) in crate::holo_theme::PRESETS.iter().rev() {
                             let (rect, response) = ui.allocate_exact_size(vec2(20.0, 20.0), Sense::click());
-                            let colour = Color32::from_rgb(palette.core_primary[0], palette.core_primary[1], palette.core_primary[2]);
+                            let colour = Color32::from_rgb(palette.accent[0], palette.accent[1], palette.accent[2]);
                             let chosen = iface.hud_palette == *name;
                             let p = ui.painter();
                             p.rect_filled(rect.shrink(if response.hovered() || chosen { 2.0 } else { 4.0 }), Rounding::ZERO, colour);
@@ -295,7 +295,7 @@ fn body(ui: &mut Ui, iface: &InterfaceSettings) -> Option<Out> {
                             if response.on_hover_text(label).clicked() && !chosen {
                                 let mut next = iface.clone();
                                 next.hud_palette = name.to_string();
-                                next.accent = crate::interface::hex(palette.core_primary);
+                                next.accent = crate::interface::hex(palette.accent);
                                 out = Some(Out::Set(Box::new(next)));
                             }
                         }

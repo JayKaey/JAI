@@ -5,7 +5,7 @@
 
 use super::{rgba, stroke, strip_font, STRIP_INK, STRIP_MUTED};
 use crate::interface::InterfaceSettings;
-use crate::theme_engine::CustomTheme;
+use crate::theme_store::CustomTheme;
 use eframe::egui::{self, Frame, Margin, RichText, Rounding, Ui, ViewportBuilder, ViewportClass, ViewportCommand, ViewportId};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -60,7 +60,7 @@ fn colour_row(ui: &mut Ui, label: &str, rgb: &mut [u8; 3]) {
         hex = crate::interface::hex(*rgb);
     }
     ui.data_mut(|d| d.insert_temp(id, hex));
-    let (h, s, v) = crate::theme_engine::to_hsv(*rgb);
+    let (h, s, v) = crate::holo_theme::to_hsv(*rgb);
     ui.label(RichText::new(format!("H {h:.0}°  S {:.0}%  V {:.0}%", s * 100.0, v * 100.0)).font(strip_font()).color(STRIP_MUTED));
     ui.end_row();
 }
@@ -106,7 +106,7 @@ pub(super) fn show(ctx: &egui::Context, iface: &InterfaceSettings) -> Option<Cus
         crate::hud_dock::forget(ID);
         return lock(&SAVED).take();
     }
-    lock(&DRAFT).get_or_insert_with(|| CustomTheme::from_palette("Custom", &crate::theme_engine::current(), iface.background_rgb()));
+    lock(&DRAFT).get_or_insert_with(|| CustomTheme::from_theme("Custom", &crate::holo_theme::current()));
     if !crate::hud_dock::adopt(ID) {
         // (Its rows keep their width: in a block the dock made narrower, the studio scrolls
         // sideways instead of squeezing its hex fields shut.)
@@ -165,7 +165,7 @@ mod tests {
     /// its fourth character, in every frame.
     #[test]
     fn every_hex_code_in_the_studio_is_shown_whole() {
-        *lock(&DRAFT) = Some(CustomTheme::from_palette("Custom", &crate::theme_engine::current(), [3, 5, 9]));
+        *lock(&DRAFT) = Some(CustomTheme::from_theme("Custom", &crate::holo_theme::current()));
         let mut stage = Stage::new(egui::vec2(900.0, 600.0));
         let frame = stage.frames(4, &mut |ctx| {
             egui::Window::new("studio").title_bar(false).fixed_pos(egui::pos2(20.0, 20.0)).fixed_size(egui::vec2(560.0, 300.0)).show(ctx, |ui| {

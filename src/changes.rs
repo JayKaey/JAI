@@ -90,6 +90,23 @@ const fn fixed(title: &'static str, what: &'static str) -> Entry {
 /// Every change, newest first.
 pub const RELEASES: &[Release] = &[
     Release {
+        date: "2026-11-18",
+        name: "The hologram interface",
+        entries: &[
+            new("An interface drawn from scratch", "Light on black glass: white structure, your yellow for what is live, a real glow.", "hologram_interface"),
+            new("Two cores", "Simple is an instrument of rings, complex the sphere of circuitry: \"switch to the complex core\".", "two_cores"),
+            added("Black and white, and six more themes", "Mono, Arc Reactor, Hot Rod, Gamma, Vibranium, Ember, Graphite: \"the black and white theme\"."),
+            better("Windows open about the core", "The first beside it at eye level, the next on the other side, later ones along its circle."),
+            better("Windows are drawn, not shown", "A spark in the corner, a line of light, the frame unfolding from it, then its rows."),
+            better("Numbered windows", "Every window carries an index tab in the order it was opened, as on a drawing."),
+            better("The core is his clock", "Its scale ring ticks the seconds, an arc shows the minutes, a block the hour."),
+            better("His voice and yours", "His own voice lights the core's inner ring in your yellow; yours shows as white ticks round it."),
+            better("New lettering", "Wide capitals for labels, thin squared figures for readings, plain sentences for the rest."),
+            better("A new icon", "The core in your yellow on a black disc."),
+            fixed("\"Shut off my PC\" asks first", "It closed an app named \"off my pc\"; now it asks to shut the PC down, also when misheard."),
+        ],
+    },
+    Release {
         date: "2026-11-17",
         name: "The Stark look",
         entries: &[
@@ -447,6 +464,20 @@ pub const RELEASES: &[Release] = &[
 
 /// The explanations, by id.
 pub const EXPLANATIONS: &[Explanation] = &[
+    Explanation {
+        id: "hologram_interface",
+        title: "The interface, drawn from scratch",
+        what: "Everything he shows is built anew, the way the films' designers built Stark's screens. Structure is white: frames, rules and text. Your yellow is kept for what is live, selected or measured, and red for faults alone. Lines of light have a white-hot middle and a real glow that falls off through yellow into amber. Every window is numbered, opens about the core and is tied to it by a line, and nothing appears at once: a window is a spark, then a line, then a frame, then its rows.",
+        say: &["Jay, switch to the black and white theme.", "Jay, make the interface yellow.   (your yellow, any time)", "Jay, set theme to arc reactor.   (or hot rod, gamma, vibranium, ember, graphite)"],
+        know: "Every mark reads something real: the core's scale ring is the clock, the white ticks round it are your voice, the line under a window says what it is and how old. The themes you saved before still load, and so does a theme named in your settings from before today.",
+    },
+    Explanation {
+        id: "two_cores",
+        title: "Two cores",
+        what: "He has two cores and wears the one you choose. Simple is an instrument of rings: his voice on the inner ring, a band that opens while he listens and spins up while he thinks, the clock on the scale, two orbits. Complex is the sphere of circuitry from the lab scene in Age of Ultron: four shells of circuit board round a bright nucleus, pulses running the traces, rings of data outside that are his voice. Its shells are the layers of his mind (voice, language, tools, memory), and each lights up while that layer works.",
+        say: &["Jay, switch to the complex core.", "Jay, use the simple core.", "Jay, show me your core.   (the complex core, large: drag to turn it, wheel to zoom)"],
+        know: "Both react to voice the same way: his own is your yellow, yours is white. In the corner orb the core is drawn as lines only, because that window's black is see-through.",
+    },
     Explanation {
         id: "stark_look",
         title: "The Stark look",

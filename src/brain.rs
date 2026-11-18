@@ -1206,7 +1206,7 @@ impl Brain {
         // "Stop" / "pause" stop everything at once, JAI's own voice included — also when Sir
         // says it over him (the dispatcher already silenced him and paused every player).
         let silent = intents::silent_quick_command(&text);
-        crate::core_sphere_3d::CoreActivityBus::chain(&["intents.rs", "intent_engine.rs", "brain.rs"]);
+        crate::mind_activity::chain(&["intents.rs", "intent_engine.rs", "brain.rs"]);
         let fast_intent = if let Some(answer) = &selection_answer {
             Some(Intent::Answer(answer.clone()))
         } else if compound.is_some() {
@@ -2792,7 +2792,7 @@ impl Brain {
 
     /// The streaming LLM tool loop. Returns (model used, interrupted).
     async fn llm_loop(&self, cfg: &JaiConfig, caps: ModelCaps, request: &str, st: &mut TurnState<'_>) -> (String, bool) {
-        crate::core_sphere_3d::CoreActivityBus::chain(&["brain.rs", "context.rs", "runtime.rs"]);
+        crate::mind_activity::chain(&["brain.rs", "context.rs", "runtime.rs"]);
         let gear = crate::intent_engine::reasoning_gear(request);
         info!("[GEAR] {gear:?} for '{}'", crate::crash_guard::clip(request, 60));
         // Game mode with RAM short: loading the model now would make the game swap.
@@ -3954,6 +3954,11 @@ fn fast_before_the_parser(text: &str) -> Option<Fast> {
             },
             json!({}),
         );
+    }
+    // "Shut down my PC": the brain's double-checked power dialogue, with no tool of its own. (Not
+    // known here, "shut off my PC" was read another way and closed an app "off my pc".)
+    if crate::system_power::power_request(text).is_some() {
+        return Some(Fast::Other);
     }
     if crate::intent_engine::is_cancel(text) || crate::ear::about_his_words(text) {
         return Some(Fast::Other);

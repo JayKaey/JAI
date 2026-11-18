@@ -633,9 +633,9 @@ impl ToolContext {
                 state_changed: false,
             };
         }
-        crate::core_sphere_3d::pulse("tools.rs");
-        if let Some(module) = crate::core_sphere_3d::CoreActivityBus::module_for_tool(name) {
-            crate::core_sphere_3d::pulse(module);
+        crate::mind_activity::pulse("tools.rs");
+        if let Some(module) = crate::mind_activity::module_for_tool(name) {
+            crate::mind_activity::pulse(module);
         }
         // What is his before the call: the way back from what the call changes ("undo that").
         let before = self.snapshot();
@@ -1355,7 +1355,7 @@ impl ToolContext {
                 gui::set_text_console(open);
             }
             if let Some(open) = bool_arg(args, "core_view") {
-                gui::core_command(crate::core_sphere_3d::CoreCommand::Open(open));
+                gui::core_command(crate::holo_mind::CoreCommand::Open(open));
             }
             if let Some(open) = bool_arg(args, "feature_lab") {
                 gui::show_features(open);

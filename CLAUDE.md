@@ -81,24 +81,37 @@ Code that acts outside JAI, writes the settings file, or writes the conversation
 
 ## The Stark look (style guide)
 
-Everything JAI shows must look as if Tony Stark designed it for his workshop and his helmet: black glass, thin lines of light, technical type, radial readouts, in the owner's yellow. The owner's reference videos (2026-11-17) show radial HUDs, hologram projection tables, and particle "AI cores"; he wants their design, not their red ("the colors should still remain yellow"). This applies to the HUD, every block and window, the emblem, the corner orb, the core sphere, the icon (`app_icon.rs`) and the phone page (`assets/satellite.html`). Before you build a look change, render it offscreen (`cargo test --release gallery_ snapshot_`; pictures in `target/ui-snapshots/yellow/`, `JAI_LOOK=red` for Stark Red) and send the owner a picture.
+Everything JAI shows must look as if Tony Stark designed it when he built J.A.R.V.I.S.: light drawn on black glass, in the owner's yellow, with white structure. The whole UI was rebuilt on this on 2026-11-18 (the owner: "nothing of the old UI should remain"). It applies to the HUD, every block and window, both cores, the corner orb, the icon (`app_icon.rs`) and the phone page (`assets/satellite.html`). Before you build a look change, render it offscreen and send the owner a picture (`cargo test --release gallery_ snapshot_`; pictures in `target/ui-snapshots/<theme>/`, `JAI_LOOK=mono` for another theme). He judges by the picture: flat or muddy light is rejected at once ("wrong shading").
 
-- **Colour comes only from `theme_engine::current()`.** Never hard-code it. The default preset `jai_gold` (his yellow) defines:
-  - **Primary `#FFD400`:** what is live, active or selected, the busy light, the panel tab, the main rings.
-  - **Secondary `#FF9A00`:** the counter-rings, the turning readouts, 3D light, and a chart's second series.
-  - **Frame border** `#FFC400`, faint; **corner brackets** near-white.
+### How Stark's interfaces are designed
 
-  `stark_red` (red `#FF2B3E`, hologram blue `#62C8FF`, steel frames) is an optional theme, never the default. Text is `hud_style::TEXT` (cool white) and `MUTED`. States use `GOOD`, `warn_colour()` and `FAULT`. The canvas is near-black `OBSIDIAN`; the Minimal OLED design uses pure black.
-- **Lines are thin.** Draw through `hud_style::stroke`, which thins anything wider than a hairline; frames are 1 px on the pixel grid (`hud_style::border`). Corner brackets are one point thick with long arms (`corners`, `BRACKET_ARM`).
-- **Shapes:** sharp corners (0–2 px). Each panel's edges carry the Stark marks (`hud_style::marks`): a hairline tab with a dash and a tick ruler on the top edge, a secondary-colour mark on the bottom edge. Blocks float apart (`GRID_GAP` 32, `TILE_GAP` 28), never touching. The canvas has a dot grid with a "+" crosshair on every fourth dot (`paint_canvas`). Radial pieces are segmented arcs with tick marks and bearings.
-- **Light, not objects:** a thin bright line with two faint strokes under it (`NEON_PASSES`); chart bars are hologram light (hairline edge, scan lines, bright cap); nodes are rings of light. Rings, segments and readouts of light round the emblem are fine. Use no bevels, metal housings, rivets, wear or rounded "app" cards; the owner rejected these.
-- **Type:**
-  - Titles: white, uppercase and tracked, in Rajdhani (`title_font`).
-  - Labels, figures and keys: Share Tech Mono or `label_font`. Keys look like `[ CLOSE ]`.
-  - Sections are joined with `//` (`COMMS // LIVE RESPONSE`).
-  - Body text stays plain and readable (4.5:1 contrast, tested in `text_and_labels_read_on_every_theme`).
-- **Motion:** 250 ms or less. Titles decode in, panels unfold from a hairline and fold into a line on exit (`hud_style`, `WindowMotion`).
-- **New UI** uses the existing pieces (`hud_style::shell`, the block header, `keys`, `paint_light`, the `Palette` in `gui.rs`). It should not invent its own colours or chrome.
+Researched on 2026-11-18 from the films' own designers: Jayse Hansen and Cantina Creative (the helmet HUDs), Perception (the Iron Man 2 workshop), Territory Studio (the lab screens of Age of Ultron), Animal Logic (J.A.R.V.I.S.'s hologram), and the owner's three reference videos (`target/stark_ref/`).
+
+1. **Every mark has a function.** The first HUD's rule: "everything has to have a purpose and everything has to work, and if it doesn't work then it's out." A ring, a tick, a figure reads something real. The core's scale ring is the clock; a panel's serial says what it is and when it was updated; the complex core's shells are the layers of his mind and light up when that layer works (`mind_activity`). No made-up numbers, no ornament.
+2. **The interface is a character, not a prop.** It brings forward what matters and steps back otherwise. The middle of the screen stays clear, most of the screen is black, and panels stand at the edges of attention.
+3. **White structure, colour as information** (the Mark III HUD: white graphics, colour only on what is read). Frames, rules, ticks and text are ink. The accent is for what is live, selected or measured. The alert colour is for faults alone.
+4. **Thick and faint beside thin and bright.** A broad band at a tenth of its strength next to a hairline at full strength; one solid block of the accent with black lettering for the chosen thing (a selected key, a panel's index tab).
+5. **Radial, about a hub.** The core is the origin of the drafting table: its axes and range circles are drawn on the canvas, windows stand on its first circle, each tied to it by a leader.
+6. **Light is light.** A filament is white-hot; its glow is a real bloom that falls off through the accent into the deep tone. Where lines cross they add up and whiten. A dim accent on black is never used as a glow: dim yellow reads as olive.
+7. **Depth.** What is nearer is brighter and larger; what is behind falls back into the deep tone.
+8. **Things are drawn, not shown.** A window is a spark, then a line, then a frame unfolding from it, then its rows one after another. Fast first, a soft landing, leaving quicker than arriving. Something is always quietly working: the clock ring steps, pulses run the traces.
+9. **Type.** Wide capitals of the Eurostile kind for labels, thin squared figures for readings, plain sentences for what is read.
+10. **Numbered like a drawing.** Index tabs (`01`), serials under panels, leaders with a knee, rulers, a dot grid with a cross on every fourth dot.
+
+The owner's own taste on top: yellow stays the colour (never move the default to the films' red), he also likes black and white (`mono`), "realistic" means natural light and nothing ornamental (no bevels, housings, rivets, wear, rounded cards), and a look change must be plainly visible.
+
+### How it is built
+
+- **Colour comes only from `holo::theme()`** (`holo_theme::Theme`, five colours): `accent` (live, selected, measured), `deep` (the same light further back: far shells, a second series), `ink` (structure and text), `void` (the canvas), `alert` (faults). `hot()`, `muted()`, `faint()`, `warn()` and `glass()` are derived. Never hard-code a colour. Presets: `stark_gold` (default, `#FFD400` with `#FF8A00`), `mono`, `arc_reactor`, `hot_rod`, `gamma`, `vibranium`, `ember`, `graphite`; saved and spoken themes are `theme_store`. A stored name of the old engine still resolves (`holo_theme::preset_name`).
+- **Light** is `holo::Light`: ribbons with soft edges in one mesh. Colours made with `holo::lit` add up. `Light::glowing` gives it a bloom map (`holo::Bloom`: energy blurred twice and coloured by `glow_colour`); use it for the cores and hero pieces. Without a map, `Light::neon` lays a halo that falls off through the deep tone. A window whose black Windows sees through (the corner orb) is drawn `crisp`: lines only, no glow.
+- **Structure** is hairlines on the pixel grid: `holo::rule`, `outline`, `path`, `plate` (a rect with cut corners: fill and outline share the points, so a corner is never cut in one and square in the other).
+- **Panels** are `holo_frame::plate`: glass a breath lighter at the top, a hairline frame in ink (the accent, lit, on the panel in use), ticks at three corners and the fourth cut, an index tab and a title in wide capitals. `holo_frame::serial` is the line under it.
+- **Controls and instruments** are `holo_kit`: leaning keys (selected is solid accent with black lettering), `toggle`, `slider`, `cells`, `gauge`, `area`, `columns`, `row`, `section`, `reading`, `chip`, `pair`, `callout`, `empty`.
+- **Type** is `holo::Face` through `holo::text` / `holo::galley`: `Label` (Michroma, capitals, tracked, at least 8 px), `Figure` and `Head` (Oxanium Light and SemiBold), `Body` and `Strong` (Barlow), `Mono` (Share Tech Mono). Body text keeps 4.5:1 contrast (`every_preset_reads_on_its_own_canvas`).
+- **The cores** are `holo_core` (`Core`: where it stands, its poses, its envelopes) with two painters chosen by the `core_style` setting or by voice: `Simple` (`holo_core::paint_simple`, the instrument of rings) and `Complex` (`holo_mind`, the sphere of circuitry; `MindView` is the core view). His own voice is the accent ring, Sir's is white ticks.
+- **Motion** is `holo_motion` (eases, `spring`, `cascade`, `decode`) and `gui::WindowMotion` (a window's entrance in 440 ms and exit in 240 ms). Nothing is scaled while it moves; frames and content are clipped and faded.
+- **Windows** open where `holo_stage::slot` puts them: beside the core at its level, the emptier side first, following its circle as they stack, `holo_stage::GAP` apart.
+- `hud_style` is only the bridge for panels not yet laid out with the kit; new code does not use it.
 
 ## Conventions and traps
 
@@ -120,4 +133,4 @@ Rules:
 
 ## Token & Sub-Agent Rules
 - Do NOT spawn sub-agents (`Task` tool) for simple edits, single-file lookups, or routine tasks—handle them directly in the main thread.
-- When sub-agents are strictly necessary for parallel research, always pass `model: "sonnet"` or `model: "haiku"` instead of inheriting Opus/Fable.
+- When sub-agents are strictly necessary for parallel research, always pass `model: "sonnet"` or `model: "haiku"` instead of inheriting Opus/Fable.

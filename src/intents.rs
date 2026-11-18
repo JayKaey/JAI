@@ -1847,6 +1847,9 @@ fn hud_view_sentence(text: &str) -> Option<Intent> {
     if let Some(name) = theme_preset_request(&s) {
         return interface(json!({ "hud_palette": name }));
     }
+    if let Some(style) = core_style_request(&s) {
+        return interface(json!({ "core_style": style }));
+    }
     if let Some(c) = NAV_VIEW.captures(&s) {
         let mode = crate::hud_dock::HudViewMode::parse(capture(&c)?)?;
         return interface(json!({ "hud_view": mode.id() }));
@@ -1973,7 +1976,47 @@ fn theme_preset_request(s: &str) -> Option<&'static str> {
     if !(s.contains("theme") || s.contains("palette") || s.contains("thema") || s.contains("farbschema")) {
         return None;
     }
-    crate::theme_engine::PRESETS.iter().map(|(n, _)| *n).find(|n| s.contains(&n.replace('_', " ")))
+    // By its own name ("the arc reactor theme"), else by what stands before the word: a former
+    // name ("arc cyan theme") or what he calls it ("the black and white theme").
+    // (A theme that is being made is not one that is being chosen: "design a dark stealth theme".)
+    if s.contains("design") || s.contains("create") || s.contains("build") || s.contains("entwirf") || s.contains("erstelle") || s.contains("save") || s.contains("speicher") {
+        return None;
+    }
+    let by_name = |named: &str| {
+        let named = named.trim();
+        let named = named.rsplit_once(" the ").or(named.rsplit_once(" to ")).or(named.rsplit_once(" das ")).map_or(named, |(_, name)| name);
+        let named = ["the ", "to ", "das ", "dem "].iter().find_map(|article| named.strip_prefix(article)).unwrap_or(named);
+        crate::holo_theme::preset_name(named).or_else(|| crate::holo_theme::preset_for_word(named))
+    };
+    crate::holo_theme::PRESETS
+        .iter()
+        .map(|(n, _, _)| *n)
+        .find(|n| s.contains(&n.replace('_', " ")))
+        .or_else(|| by_name(THEME_NAMED.captures(s)?.get(1)?.as_str()))
+        .or_else(|| by_name(THEME_TO.captures(s)?.get(1)?.as_str()))
+}
+
+/// "The arc cyan theme": the name before the word.
+static THEME_NAMED: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:.*?\b(?:to|use|the|das|nimm|zum)\s+)?([a-zäöüß ]+?)\s+(?:theme|thema|palette|farbschema)\b"));
+/// "Set theme to arc cyan", "stell das Theme auf Arc Cyan": the name after it.
+static THEME_TO: LazyLock<Regex> = LazyLock::new(|| re(r"\b(?:theme|thema|palette|farbschema)\s+(?:to|auf|zu|in)\s+(?:the\s+)?([a-zäöüß ]+?)$"));
+
+/// "Switch to the complex core", "use the simple core", "make your core complex", "nimm den
+/// komplexen Kern": which core stands on the HUD.
+fn core_style_request(s: &str) -> Option<&'static str> {
+    static CORE: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"\b(simple|classic|plain|rings?|complex|detailed|age of ultron|ultron|circuit|einfach\w*|komplex\w*|detailliert\w*)\s+(?:core|kern)\b|\b(?:core|kern)\s+(?:to\s+|look\s+|style\s+|auf\s+|in\s+)?(?:the\s+)?(simple|classic|plain|complex|detailed|ultron|einfach\w*|komplex\w*|detailliert\w*)\b")
+    });
+    let c = CORE.captures(s)?;
+    let word = c.get(1).or_else(|| c.get(2))?.as_str();
+    let word = if word.starts_with("einfach") {
+        "simple"
+    } else if word.starts_with("komplex") || word.starts_with("detailliert") {
+        "complex"
+    } else {
+        word
+    };
+    crate::holo_core::CoreStyle::of_word(word).map(|style| style.name())
 }
 
 /// "Open the integrations hub", "show my productivity settings", "öffne den Integrations-Hub",
@@ -3392,7 +3435,7 @@ fn look_args(name: &str, prefer_layout: bool) -> Option<Value> {
     let theme = || interface::theme(name).map(|_| json!({ "theme": name }));
     let colour = || interface::parse_color(name).map(|_| json!({ "accent_color": name }));
     // "Make the theme rose", "switch to the rose theme": a palette by its colour word.
-    let palette = || crate::theme_engine::preset_for_word(name).map(|preset| json!({ "hud_palette": preset }));
+    let palette = || crate::holo_theme::preset_for_word(name).map(|preset| json!({ "hud_palette": preset }));
     if prefer_layout {
         layout().or_else(theme).or_else(colour).or_else(palette)
     } else {
@@ -5786,6 +5829,45 @@ mod tests {
     }
 
     #[test]
+    /// Which core he wears and which theme, by voice: English, German, and as they are said in
+    /// the middle of a longer sentence.
+    #[test]
+    fn the_core_and_the_theme_are_chosen_by_voice() {
+        let hud = |text: &str| match tool(text) {
+            Some(("configure_interface", args)) => Some(args),
+            _ => None,
+        };
+        for (text, style) in [
+            ("Switch to the complex core", "complex"),
+            ("JAI, use the simple core", "simple"),
+            ("make your core complex", "complex"),
+            ("I want the detailed core", "complex"),
+            ("the age of ultron core please", "complex"),
+            ("set your core to simple", "simple"),
+            ("Nimm den komplexen Kern", "complex"),
+            ("wechsle zum einfachen Kern", "simple"),
+        ] {
+            assert_eq!(hud(text), Some(json!({"core_style": style})), "{text}");
+        }
+        // An order about the core that names neither is not about its style.
+        for text in ["show me your core", "make your core bigger", "close the core"] {
+            assert!(hud(text).is_none_or(|args| args.get("core_style").is_none()), "{text}: {:?}", hud(text));
+        }
+        for (text, theme) in [
+            ("switch to the black and white theme", "mono"),
+            ("Set theme to Arc Reactor", "arc_reactor"),
+            ("the hot rod theme", "hot_rod"),
+            ("Stell das Theme auf Gamma", "gamma"),
+            ("switch to the arc cyan theme", "arc_reactor"),
+            ("graphite theme", "graphite"),
+        ] {
+            assert_eq!(hud(text), Some(json!({"hud_palette": theme})), "{text}");
+        }
+        // A theme that is being made is not one of the presets, whatever words it shares with one.
+        assert_eq!(hud("design a dark graphite theme").and_then(|args| args.get("hud_palette").cloned()), None);
+    }
+
+    #[test]
     fn restyling_the_hud() {
         let hud = |text: &str| match tool(text) {
             Some(("configure_interface", args)) => Some(args),
@@ -5794,7 +5876,7 @@ mod tests {
         assert_eq!(hud("JAI, make the interface red"), Some(json!({"accent_color": "red"})));
         assert_eq!(hud("Mach das Interface rot"), Some(json!({"accent_color": "rot"})));
         assert_eq!(hud("Ändere die Farbe zu Grün"), Some(json!({"accent_color": "grün"})));
-        assert_eq!(hud("Switch to the Iron Man theme"), Some(json!({"theme": "iron man"})));
+        assert_eq!(hud("Switch to the Iron Man theme"), Some(json!({"hud_palette": "hot_rod"})));
         assert_eq!(hud("Dark mode"), Some(json!({"theme": "dark"})));
         assert_eq!(hud("Compact mode"), Some(json!({"layout": "compact"})));
         assert_eq!(hud("Kompaktmodus"), Some(json!({"layout": "compact"})));
@@ -6480,19 +6562,19 @@ mod tests {
             Some(Intent::Tool { name: "configure_interface", args }) => crate::interface::configure(&crate::interface::InterfaceSettings::default(), &args).map(|d| d.settings.hud_palette).unwrap_or_default(),
             other => panic!("{text}: {other:?}"),
         };
-        for (text, want) in [("change the theme to Stark", "stark_red"), ("JAI, switch to the Stark look", "stark_red"), ("make the interface yellow", "jai_gold"), ("change your color to red", "crimson_overdrive"),("JAI, make the interface gold", "stark_gold"), ("change your colour to blue", "arc_cyan"), ("Ändere deine Farbe auf Grün", "emerald_matrix"), ("Mach dich lila", "ultraviolet"), ("change your colour to orange", "solar_orange")] {
+        for (text, want) in [("change the theme to Stark", "stark_gold"), ("JAI, switch to the Stark look", "stark_gold"), ("make the interface yellow", "stark_gold"), ("change your color to red", "hot_rod"), ("JAI, make the interface gold", "stark_gold"), ("change your colour to blue", "arc_reactor"), ("Ändere deine Farbe auf Grün", "gamma"), ("Mach dich lila", "vibranium"), ("change your colour to orange", "ember"), ("make the interface black and white", "mono")] {
             assert_eq!(palette(text), want, "{text}");
         }
         // The colour lands on the whole HUD's palette.
         let done = crate::interface::configure(&crate::interface::InterfaceSettings::default(), &json!({"accent_color": "gold"})).unwrap();
         assert_eq!(done.settings.hud_palette, "stark_gold");
         let done = crate::interface::configure(&crate::interface::InterfaceSettings::default(), &json!({"accent_color": "rot"})).unwrap();
-        assert_eq!(done.settings.hud_palette, "crimson_overdrive");
+        assert_eq!(done.settings.hud_palette, "hot_rod");
         let done = crate::interface::configure(&crate::interface::InterfaceSettings::default(), &json!({"accent_color": "#8B4513"})).unwrap();
         assert_eq!(done.settings.hud_palette, "custom:#8B4513");
         // Presets by name.
-        assert_eq!(hud_view_command("switch to the arc cyan theme"), Some(Intent::Tool { name: "configure_interface", args: json!({"hud_palette": "arc_cyan"}) }));
-        assert_eq!(hud_view_command("ultraviolet theme"), Some(Intent::Tool { name: "configure_interface", args: json!({"hud_palette": "ultraviolet"}) }));
+        assert_eq!(hud_view_command("switch to the arc cyan theme"), Some(Intent::Tool { name: "configure_interface", args: json!({"hud_palette": "arc_reactor"}) }));
+        assert_eq!(hud_view_command("ultraviolet theme"), Some(Intent::Tool { name: "configure_interface", args: json!({"hud_palette": "vibranium"}) }));
     }
 
     #[test]
@@ -7633,7 +7715,7 @@ mod tests {
         }
         // The rose palette, as said and as heard.
         for text in ["make the interface rose", "make the theme rose", "switch to the rose theme", "make the interface rows", "Make the entire face a rose"] {
-            assert_eq!(tool(text), Some(("configure_interface", json!({"hud_palette": "rose_crimson"}))), "{text}");
+            assert_eq!(tool(text), Some(("configure_interface", json!({"hud_palette": "hot_rod"}))), "{text}");
         }
         // Opacity in his words (0 % ends on the floor, said so by the reply).
         assert_eq!(tool("make the opacity 50%"), Some(("configure_interface", json!({"opacity": 50}))));

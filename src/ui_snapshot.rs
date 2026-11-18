@@ -217,10 +217,10 @@ impl Canvas {
     }
 
     /// Writes the picture to `target/ui-snapshots/` (in the folder of its colour set when it was
-    /// taken in the look's colours: `theme_engine::look_for_pictures`).
+    /// taken in the look's colours: `holo_theme::look_for_pictures`).
     #[cfg(test)]
     pub fn save(&self, name: &str) -> PathBuf {
-        let dir = PathBuf::from("target").join("ui-snapshots").join(crate::theme_engine::picture_set().unwrap_or(""));
+        let dir = PathBuf::from("target").join("ui-snapshots").join(crate::holo_theme::picture_set().unwrap_or(""));
         let _ = std::fs::create_dir_all(&dir);
         let mut img = image::RgbaImage::new(self.width as u32, self.height as u32);
         for (i, p) in img.pixels_mut().enumerate() {
@@ -237,7 +237,7 @@ impl Canvas {
 mod tests {
     use super::*;
     use crate::hud_board::{self, BlockKind};
-    use crate::rose_emblem_renderer::{RoseEmblem, RoseEmblemState};
+    use crate::holo_core::{Core, Pose};
     use std::time::Instant;
 
     const W: f32 = 1280.0;
@@ -250,11 +250,11 @@ mod tests {
     /// The emblem in each state, on the obsidian canvas.
     #[test]
     fn snapshot_emblem_states() {
-        let _look = crate::theme_engine::look_for_pictures();
-        for (state, name, steps) in [(RoseEmblemState::AwakeFrontEmblem, "emblem_front", 1), (RoseEmblemState::ThinkingGyroscope, "emblem_gyroscope", 40), (RoseEmblemState::CornerDocked, "emblem_docked", 1)] {
-            let mut emblem = RoseEmblem::new(state);
+        let _look = crate::holo_theme::look_for_pictures();
+        for (state, name, steps) in [(Pose::Front, "emblem_front", 1), (Pose::Gyro, "emblem_gyroscope", 40), (Pose::Docked, "emblem_docked", 1)] {
+            let mut emblem = Core::new(state);
             for _ in 0..steps {
-                emblem.step(1.0 / 60.0, 0.4, state == RoseEmblemState::ThinkingGyroscope);
+                emblem.tick(1.0 / 60.0, 0.4, state == Pose::Gyro);
             }
             let mut snap = Snapshot::new(vec2(W, H));
             let canvas = snap.render(2, |ctx| {
@@ -273,8 +273,8 @@ mod tests {
     /// darker edges, dust, hairline scratches). It darkens the corners and leaves the middle.
     #[test]
     fn snapshot_display_finish() {
-        let _look = crate::theme_engine::look_for_pictures();
-        let emblem = RoseEmblem::new(RoseEmblemState::AwakeFrontEmblem);
+        let _look = crate::holo_theme::look_for_pictures();
+        let emblem = Core::new(Pose::Front);
         let paint = |finish: bool| {
             let mut snap = Snapshot::new(vec2(W, H));
             snap.render(3, |ctx| {
@@ -321,7 +321,7 @@ mod tests {
     #[test]
     fn snapshot_board_blocks_stay_inside_their_frames() {
         let _one = hud_board::test_lock();
-        let _look = crate::theme_engine::look_for_pictures();
+        let _look = crate::holo_theme::look_for_pictures();
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         // The video's stills without the network: two pictures, two YouTube does not have.
         for (k, url) in hud_board::video_frames("dQw4w9WgXcQ").iter().enumerate() {
@@ -362,7 +362,7 @@ mod tests {
     #[test]
     fn snapshot_itslearning_board_and_core_sphere() {
         let _one = hud_board::test_lock();
-        let _look = crate::theme_engine::look_for_pictures();
+        let _look = crate::holo_theme::look_for_pictures();
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         let now = chrono::NaiveDate::from_ymd_opt(2026, 11, 2).unwrap().and_hms_opt(18, 0, 0).unwrap();
         let at = |d: u32| chrono::NaiveDate::from_ymd_opt(2026, 11, d).unwrap().and_hms_opt(8, 0, 0);
@@ -386,12 +386,12 @@ mod tests {
         canvas.save("board_itslearning");
         hud_board::sign_off();
 
-        crate::core_sphere_3d::CoreActivityBus::chain(&["ears.rs", "stt.rs", "intents.rs", "brain.rs"]);
-        let mut sphere = crate::core_sphere_3d::CoreSphereView::default();
+        crate::mind_activity::chain(&["ears.rs", "stt.rs", "intents.rs", "brain.rs"]);
+        let mut sphere = crate::holo_mind::MindView::default();
         let mut snap = Snapshot::new(vec2(W, H));
         let canvas = snap.render(12, |ctx| {
             crate::gui::paint_canvas(ctx);
-            egui::CentralPanel::default().frame(egui::Frame::none()).show(ctx, |ui| sphere.show(ui, area, 0.5));
+            egui::CentralPanel::default().frame(egui::Frame::none()).show(ctx, |ui| sphere.show(ui, area, &crate::holo_core::CoreLook { voice: 0.5, clock: 6.0, layers: [0.9, 0.7, 0.2, 0.1], ..Default::default() }, &crate::mind_activity::LAYERS, &crate::mind_activity::recent(std::time::Instant::now())));
         });
         canvas.save("core_sphere");
         let middle = Rect::from_center_size(area.center(), vec2(300.0, 300.0));

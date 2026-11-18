@@ -5,7 +5,7 @@
 //! never the focus, draws ten frames a second and one while a game is in front. When the
 //! desktop will not take it, it closes again and says so.
 
-use crate::rose_emblem_renderer::{RoseEmblem, RoseEmblemState};
+use crate::holo_core::{Core, Pose};
 use chrono::Local;
 use eframe::egui::{self, pos2, vec2, Align2, Color32, FontFamily, FontId, ViewportBuilder, ViewportId};
 use std::sync::Mutex;
@@ -19,7 +19,7 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 }
 
 struct Backdrop {
-    emblem: RoseEmblem,
+    emblem: Core,
     /// The monitor it stands on (physical pixels: left, top, right, bottom).
     monitor: [i32; 4],
     opened: Instant,
@@ -107,7 +107,7 @@ pub fn show(ctx: &egui::Context, on: bool, hud: isize, spanning: bool, board: bo
             }));
         };
         tracing::info!("[DESKTOP] The live {} opens on the monitor at {},{} ({}×{})", if dashboard { "dashboard" } else { "background" }, monitor[0], monitor[1], monitor[2] - monitor[0], monitor[3] - monitor[1]);
-        *guard = Some(Backdrop { emblem: RoseEmblem::new(RoseEmblemState::AwakeFrontEmblem), monitor, opened: Instant::now(), last_frame: Instant::now(), asked: false, kept: Instant::now(), dashboard });
+        *guard = Some(Backdrop { emblem: Core::new(Pose::Front), monitor, opened: Instant::now(), last_frame: Instant::now(), asked: false, kept: Instant::now(), dashboard });
     }
     let Some(b) = guard.as_mut() else { return None };
     let ppp = ctx.native_pixels_per_point().unwrap_or(1.0).max(0.5);
@@ -122,7 +122,7 @@ pub fn show(ctx: &egui::Context, on: bool, hud: isize, spanning: bool, board: bo
         .with_inner_size(vec2((r - l) as f32 / ppp, (bottom - t) as f32 / ppp));
     let dt = b.last_frame.elapsed().as_secs_f32().min(0.2);
     b.last_frame = Instant::now();
-    b.emblem.step(dt, 0.0, false);
+    b.emblem.tick(dt, 0.0, false);
     let emblem = &b.emblem;
     let gaming = crate::hud_feel::game_in_front();
     let as_dashboard = b.dashboard;
@@ -196,7 +196,7 @@ fn attach(_monitor: [i32; 4]) {
 
 /// The background's picture: the obsidian canvas, the emblem at rest, the clock and the date
 /// under it, and what he is doing.
-fn paint(ctx: &egui::Context, emblem: &RoseEmblem, state: &str) {
+fn paint(ctx: &egui::Context, emblem: &Core, state: &str) {
     crate::gui::paint_canvas(ctx);
     let screen = ctx.screen_rect();
     let p = ctx.layer_painter(egui::LayerId::background());
@@ -220,7 +220,7 @@ fn paint(ctx: &egui::Context, emblem: &RoseEmblem, state: &str) {
 
 /// The dashboard's picture for an upright monitor: the emblem and the clock in the upper
 /// part, and under them what the day holds, section by section.
-pub fn paint_dashboard(ctx: &egui::Context, emblem: &RoseEmblem, state: &str, dash: &crate::kit_screen::Dash) {
+pub fn paint_dashboard(ctx: &egui::Context, emblem: &Core, state: &str, dash: &crate::kit_screen::Dash) {
     crate::gui::paint_canvas(ctx);
     let screen = ctx.screen_rect();
     let p = ctx.layer_painter(egui::LayerId::background());

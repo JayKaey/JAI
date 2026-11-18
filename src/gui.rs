@@ -67,7 +67,7 @@ mod model3d_view;
 pub(crate) mod offscreen;
 
 use crate::app::Jai;
-use crate::rose_emblem_renderer::{EmblemInputs, RoseEmblem};
+use crate::holo_core::{Core, CoreInputs};
 use crate::config::ConfigStore;
 use crate::ears::AudioLevel;
 use crate::hud::{ConfigState, HudCommand, HudEvent};
@@ -569,12 +569,12 @@ pub fn view_is_up(key: &str) -> bool {
 }
 
 /// "Show me your core", "make your core bigger": applied on the HUD's next frame.
-static CORE_REQUESTS: Mutex<Vec<crate::core_sphere_3d::CoreCommand>> = Mutex::new(Vec::new());
+static CORE_REQUESTS: Mutex<Vec<crate::holo_mind::CoreCommand>> = Mutex::new(Vec::new());
 
 /// Opens, closes, zooms or spins the core sphere and brings the HUD up.
-pub fn core_command(cmd: crate::core_sphere_3d::CoreCommand) {
+pub fn core_command(cmd: crate::holo_mind::CoreCommand) {
     lock(&CORE_REQUESTS).push(cmd);
-    if !matches!(cmd, crate::core_sphere_3d::CoreCommand::Open(false)) {
+    if !matches!(cmd, crate::holo_mind::CoreCommand::Open(false)) {
         show();
     }
     request_repaint();
@@ -1072,7 +1072,7 @@ fn min_size(layout: HudLayout) -> Vec2 {
 /// the HUD opens (rendered at the first detach instead, it froze the HUD for a second).
 pub(crate) fn window_icon() -> Option<egui::IconData> {
     static ICON: std::sync::OnceLock<egui::IconData> = std::sync::OnceLock::new();
-    Some(ICON.get_or_init(crate::app_icon::generate_rose_gyro_app_icon).clone())
+    Some(ICON.get_or_init(crate::app_icon::window_icon).clone())
 }
 
 /// That icon as the one `Arc` every window of JAI's own carries (`for_test_session`).
@@ -1662,79 +1662,36 @@ struct Palette {
 }
 
 impl Palette {
+    /// The stock controls' colours from the live theme: ink for structure and text, the
+    /// accent for what is chosen, glass for surfaces. `opacity` thins the canvas only.
     fn new(s: &InterfaceSettings) -> Self {
-        if s.ui_paradigm == crate::oled_minimal_ui::UiDesignParadigm::ModernOledMinimal {
-            return Self::oled(s);
-        }
-        // Every window takes the active HUD theme (board, console, telemetry, detached windows).
-        let theme = crate::theme_engine::current();
-        let accent = theme.core_primary;
-        // Always deep obsidian glass: colour lives only in the accents.
-        let bg = interface::dark_glass(s.background_rgb());
-        let light = false;
+        let t = crate::holo::theme();
         let o = s.opacity as f32 / 100.0;
-        let white = [255, 255, 255];
-        // Stark-OS glass: deep obsidian slate with a breath of the accent.
-        let slate = [13, 19, 30];
-        let card = if light { interface::mix(bg, white, 0.6) } else { interface::mix(interface::mix(bg, slate, 0.6), accent, 0.035) };
-        let well = if light { interface::mix(bg, white, 0.85) } else { interface::mix(interface::mix(bg, slate, 0.35), accent, 0.025) };
-        let (text, muted) = if light {
-            ([11, 23, 38], [74, 99, 120])
-        } else {
-            // Cool white for what is read, whatever the theme: colour is for his own things.
-            ([232, 242, 252], interface::mix([128, 152, 176], accent, 0.06))
-        };
-        let semantic = |dark: [u8; 3], bright: [u8; 3]| rgb(if light { dark } else { bright });
+        let glass = t.glass();
+        let solid = Color32::from_rgb(glass.r(), glass.g(), glass.b());
+        let well = blend(t.void(), t.ink(), 0.07);
         Self {
-            accent: rgb(accent),
-            bg: rgba(bg, o),
-            card: rgba(card, 0.55 + 0.4 * o),
-            card_solid: rgb(card),
-            well: rgba(well, 0.6 + 0.4 * o),
-            well_solid: rgb(well),
-            line: rgba(theme.hud_frame_border, if light { 0.45 } else { 0.42 }),
-            line_strong: rgba(theme.hud_frame_border, 0.8),
-            track: if light { Color32::from_black_alpha(22) } else { Color32::from_white_alpha(18) },
-            text: rgb(text),
-            muted: rgb(muted),
-            // A calm green for "all is well", and a warning that never looks like the theme's
-            // own colour (amber, or orange under a yellow theme); red is for what failed.
-            green: semantic([0, 150, 100], [120, 232, 176]),
-            amber: if light { rgb([190, 110, 0]) } else { crate::hud_style::warn_colour() },
-            red: semantic([210, 30, 60], [255, 59, 92]),
-            violet: rgb(theme.core_secondary),
-            sky: rgb(theme.core_secondary),
-            light,
-            radius: s.corner_rounding,
-            oled: false,
-        }
-    }
-
-    /// Pixels-off black with zinc cards; colour only in the accent.
-    fn oled(s: &InterfaceSettings) -> Self {
-        let o = s.opacity as f32 / 100.0;
-        let p = crate::oled_minimal_ui::OledPalette::new(crate::theme_engine::current().core_primary);
-        Self {
-            accent: rgb(p.accent),
-            bg: rgba(p.background, o),
-            card: rgba(p.surface, 0.7 + 0.3 * o),
-            card_solid: rgb(p.surface),
-            well: rgba(p.well, 0.75 + 0.25 * o),
-            well_solid: rgb(p.well),
-            line: rgb(p.border(false)),
-            line_strong: rgb(p.border(true)),
-            track: Color32::from_white_alpha(14),
-            text: rgb(p.text),
-            muted: rgb(p.muted),
-            // The HUD's own state colours, and the theme's hologram blue (one system, as in the films).
+            accent: t.accent(),
+            bg: rgba(t.void, o),
+            card: glass.gamma_multiply(0.62 + 0.38 * o),
+            card_solid: solid,
+            well: well.gamma_multiply(0.7 + 0.3 * o),
+            well_solid: well,
+            line: crate::holo::a(t.ink(), 0.20),
+            line_strong: crate::holo::a(t.ink(), 0.46),
+            track: crate::holo::a(t.ink(), 0.09),
+            text: t.ink(),
+            muted: t.muted(),
+            // A calm green for "all is well", a caution that is never the theme's own colour,
+            // and the alert for what failed.
             green: crate::hud_style::GOOD,
-            amber: crate::hud_style::warn_colour(),
-            red: crate::hud_style::FAULT,
-            violet: rgb(crate::theme_engine::current().core_secondary),
-            sky: rgb(crate::theme_engine::current().core_secondary),
+            amber: t.warn(),
+            red: t.alert(),
+            violet: t.deep(),
+            sky: t.deep(),
             light: false,
-            radius: crate::oled_minimal_ui::CARD_ROUNDING,
-            oled: true,
+            radius: 0.0,
+            oled: t.void == [0, 0, 0],
         }
     }
 
@@ -1764,115 +1721,61 @@ fn blend(a: Color32, b: Color32, t: f32) -> Color32 {
     rgb(interface::mix([a.r(), a.g(), a.b()], [b.r(), b.g(), b.b()], t))
 }
 
+/// egui's own controls in the hologram look: sharp corners, hairlines of ink, the accent for
+/// what is chosen or under the pointer, glass for menus and windows, no drop shadows.
 fn visuals(p: &Palette) -> egui::Visuals {
-    let mut v = if p.light { egui::Visuals::light() } else { egui::Visuals::dark() };
+    let mut v = egui::Visuals::dark();
     v.override_text_color = Some(p.text);
-    // Panels are transparent: the background (with Sir's opacity) is painted underneath.
+    // Panels are transparent: the canvas (with Sir's opacity) is painted underneath.
     v.panel_fill = Color32::TRANSPARENT;
     v.window_fill = p.card_solid;
     v.extreme_bg_color = p.well_solid;
     v.faint_bg_color = p.well_solid;
     v.code_bg_color = p.well_solid;
     v.window_stroke = stroke(1.0, p.line_strong);
-    v.window_rounding = Rounding::same(p.r_panel());
-    v.menu_rounding = Rounding::same(p.r_button().min(10.0));
-    v.window_shadow = egui::epaint::Shadow { offset: vec2(0.0, 8.0), blur: 24.0, spread: 0.0, color: Color32::from_black_alpha(110) };
-    v.popup_shadow = egui::epaint::Shadow { offset: vec2(0.0, 4.0), blur: 12.0, spread: 0.0, color: Color32::from_black_alpha(90) };
-    v.selection.bg_fill = p.accent.gamma_multiply(0.35);
+    v.window_rounding = Rounding::ZERO;
+    v.menu_rounding = Rounding::ZERO;
+    v.window_shadow = egui::epaint::Shadow { offset: vec2(0.0, 4.0), blur: 22.0, spread: 0.0, color: Color32::from_black_alpha(150) };
+    v.popup_shadow = egui::epaint::Shadow { offset: vec2(0.0, 3.0), blur: 14.0, spread: 0.0, color: Color32::from_black_alpha(140) };
+    v.selection.bg_fill = p.accent.gamma_multiply(0.30);
     v.selection.stroke = stroke(1.0, p.accent);
     v.hyperlink_color = p.accent;
     v.slider_trailing_fill = true;
-    v.handle_shape = egui::style::HandleShape::Circle;
-    let fill = |t: f32| blend(p.well_solid, p.accent, t);
+    v.handle_shape = egui::style::HandleShape::Rect { aspect_ratio: 0.35 };
+    v.text_cursor.stroke = Stroke::new(2.0, p.accent);
     let w = &mut v.widgets;
     w.noninteractive.bg_fill = p.card_solid;
     w.noninteractive.weak_bg_fill = p.card_solid;
     w.noninteractive.bg_stroke = stroke(1.0, p.line);
     w.noninteractive.fg_stroke = stroke(1.0, p.text);
-    w.inactive.bg_fill = fill(0.14);
-    w.inactive.weak_bg_fill = fill(0.10);
-    w.inactive.bg_stroke = stroke(1.0, p.line);
+    w.inactive.bg_fill = p.well_solid;
+    w.inactive.weak_bg_fill = Color32::TRANSPARENT;
+    w.inactive.bg_stroke = stroke(1.0, p.line_strong.gamma_multiply(0.7));
     w.inactive.fg_stroke = stroke(1.0, p.text);
-    w.hovered.bg_fill = fill(0.24);
-    w.hovered.weak_bg_fill = fill(0.20);
+    w.hovered.bg_fill = blend(p.well_solid, p.accent, 0.16);
+    w.hovered.weak_bg_fill = blend(p.well_solid, p.accent, 0.10);
     w.hovered.bg_stroke = stroke(1.0, p.accent);
-    w.hovered.fg_stroke = stroke(1.5, p.text);
-    w.active.bg_fill = fill(0.34);
-    w.active.weak_bg_fill = fill(0.30);
+    w.hovered.fg_stroke = stroke(1.0, p.text);
+    w.active.bg_fill = p.accent;
+    w.active.weak_bg_fill = p.accent;
     w.active.bg_stroke = stroke(1.0, p.accent);
-    w.active.fg_stroke = stroke(2.0, p.text);
+    w.active.fg_stroke = stroke(1.0, Color32::BLACK);
     w.open = w.hovered;
     for widget in [&mut w.noninteractive, &mut w.inactive, &mut w.hovered, &mut w.active, &mut w.open] {
-        widget.rounding = Rounding::same(p.r_button());
+        widget.rounding = Rounding::ZERO;
     }
     v
 }
 
-/// The HUD's own faces, compiled in (Open Font Licence, `assets/fonts`): Rajdhani for titles and
-/// labels, Share Tech Mono for numbers and the small technical print. Rajdhani is drawn small on
-/// its em, so it is scaled up to stand level with Segoe UI at the same size.
-const HUD_FACES: [(&str, &[u8], f32); 3] = [
-    ("rajdhani-semibold", include_bytes!("../assets/fonts/Rajdhani-SemiBold.ttf"), 1.16),
-    ("rajdhani-medium", include_bytes!("../assets/fonts/Rajdhani-Medium.ttf"), 1.16),
-    ("share-tech-mono", include_bytes!("../assets/fonts/ShareTechMono-Regular.ttf"), 1.04),
-];
-
-/// One of the HUD's own faces as a file ("display": Rajdhani SemiBold, "mono": Share Tech
-/// Mono), for the phone page.
+/// One of the HUD's own faces as a file, for the phone page ("display": the headline face,
+/// "mono": the data face).
 pub(crate) fn hud_face(name: &str) -> Option<&'static [u8]> {
-    match name {
-        "display" => Some(HUD_FACES[0].1),
-        "mono" => Some(HUD_FACES[2].1),
-        _ => None,
-    }
+    crate::holo::face_file(if name == "display" { "head" } else { name })
 }
 
-/// Titles and labels in Rajdhani, numbers in Share Tech Mono (both compiled in), long text in
-/// Segoe UI (+ Semibold for emphasis, Segoe UI Symbol for icons) with Cascadia Mono and egui's
-/// bundled fonts as fallbacks.
+/// The HUD's faces (`holo::install_fonts`).
 pub(crate) fn install_fonts(ctx: &egui::Context) {
-    let mut fonts = FontDefinitions::default();
-    for (name, bytes, scale) in HUD_FACES {
-        fonts.font_data.insert(name.to_string(), FontData::from_static(bytes).tweak(egui::FontTweak { scale, ..Default::default() }));
-    }
-    let own = |name: &str| vec![name.to_string()];
-    let defaults = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
-    let mut loaded: Vec<(&str, Vec<u8>)> = Vec::new();
-    #[cfg(windows)]
-    {
-        let dir = std::path::PathBuf::from(std::env::var_os("WINDIR").unwrap_or_else(|| "C:\\Windows".into())).join("Fonts");
-        let read = |file: &str| std::fs::read(dir.join(file)).ok();
-        for (name, files) in [
-            ("segoe", &["segoeui.ttf"][..]),
-            ("segoe-semibold", &["seguisb.ttf", "segoeuib.ttf"][..]),
-            ("mono", &["CascadiaMono.ttf", "consola.ttf"][..]),
-            ("symbols", &["seguisym.ttf"][..]),
-            ("display", &["bahnschrift.ttf"][..]),
-        ] {
-            if let Some(bytes) = files.iter().find_map(|f| read(f)) {
-                loaded.push((name, bytes));
-            }
-        }
-    }
-    let has = |name: &str| loaded.iter().any(|(n, _)| *n == name);
-    let pick = |names: &[&str]| -> Vec<String> { names.iter().filter(|n| has(n)).map(|n| n.to_string()).collect() };
-    let proportional = [pick(&["segoe", "symbols"]), defaults.clone()].concat();
-    let bold = [pick(&["segoe-semibold", "segoe", "symbols"]), defaults].concat();
-    // What a compiled-in face has no glyph for (box drawing, arrows, symbols) comes from the next.
-    let monospace = [own("share-tech-mono"), pick(&["mono", "symbols"]), fonts.families.get(&FontFamily::Monospace).cloned().unwrap_or_default()].concat();
-    // Always registered (the board and the emblem use it).
-    let display = [own("rajdhani-semibold"), pick(&["display", "segoe-semibold", "segoe", "symbols"]), bold.clone()].concat();
-    // Buttons, menu entries and small labels.
-    let label = [own("rajdhani-medium"), proportional.clone()].concat();
-    for (name, bytes) in loaded {
-        fonts.font_data.insert(name.to_string(), FontData::from_owned(bytes));
-    }
-    fonts.families.insert(FontFamily::Proportional, proportional);
-    fonts.families.insert(FontFamily::Monospace, monospace);
-    fonts.families.insert(bold_family(), bold);
-    fonts.families.insert(FontFamily::Name("display".into()), display);
-    fonts.families.insert(label_family(), label);
-    ctx.set_fonts(fonts);
+    crate::holo::install_fonts(ctx);
 }
 
 fn label_family() -> FontFamily {
@@ -2309,15 +2212,15 @@ impl HudApp {
             current.orb_on_top = true;
         }
         // The HUD's colours (board, console, core, emblem) cross-fade to the chosen theme.
-        if crate::theme_engine::follow(&current.hud_palette) {
+        if crate::theme_store::follow(&current.hud_palette) {
             info!("[THEME] {}", current.hud_palette);
         }
-        let fading = crate::theme_engine::fading();
+        let fading = crate::holo_theme::fading();
         if fading {
             ctx.request_repaint_after(Duration::from_millis(16));
         }
         // Every window's colours follow the theme's fade, not only the board.
-        let generation = crate::theme_engine::generation();
+        let generation = crate::holo_theme::generation();
         if self.applied.as_ref() == Some(&current) {
             // "Move yourself to monitor 2" while the fullscreen board is up.
             if let Some(index) = take_monitor_request(&current) {
@@ -2332,6 +2235,7 @@ impl HudApp {
         }
         self.theme_generation = generation;
         self.emblem.set_custom_home(current.orb_board_pos.map(|[x, y]| vec2(x, y)));
+        self.emblem.style = crate::holo_core::CoreStyle::of_word(&current.core_style).unwrap_or_default();
         if let Some([x, y]) = current.orb_board_pos.filter(|_| self.applied.is_none()) {
             info!("[HUD] Emblem home: Sir's spot at {:.0} %, {:.0} % of the screen (double-click it, or \"center your orb\", for the middle)", x * 100.0, y * 100.0);
         }
@@ -3609,14 +3513,14 @@ const MUTED_CRIMSON: Color32 = Color32::from_rgb(0xFF, 0x3A, 0x6A);
 /// Header strip and telemetry strip heights.
 const HEADER_H: f32 = 16.0;
 const TELEMETRY_H: f32 = 14.0;
-/// The dot matrix: 1 px dots every 28 px at 6 %.
-const DOT_SPACING: f32 = 28.0;
-const DOT_ALPHA: f32 = 0.06;
+/// The drafting grid: 1 px dots every 24 px.
+const DOT_SPACING: f32 = 24.0;
+const DOT_ALPHA: f32 = 0.085;
 /// The Stark workshop's registration marks: every fourth dot is a small "+" (arms 3 px), a
 /// little brighter, fixed to the canvas while it drifts.
 const CROSS_EVERY: i64 = 4;
 const CROSS_ARM: f32 = 3.0;
-const CROSS_ALPHA: f32 = 0.13;
+const CROSS_ALPHA: f32 = 0.20;
 /// The COMMS block (what Sir said, what JAI answers) fades this long after the last word.
 const CAPTION_SECS: f32 = 20.0;
 /// The band above the telemetry strip the board leaves to the COMMS block (its frame, a heard
@@ -3636,7 +3540,7 @@ const PILL_FADE: f32 = 0.033;
 
 /// Where the screen card stands: under the emblem at home, above the bottom strip while the
 /// emblem is docked; always whole on the screen.
-fn screen_card_rect(screen: Rect, frame: &crate::rose_emblem_renderer::EmblemFrame) -> Rect {
+fn screen_card_rect(screen: Rect, frame: &crate::holo_core::CoreFrame) -> Rect {
     let size = vec2(340.0, 72.0);
     let top = if frame.dock < 0.5 { frame.centre.y + frame.radius * 1.32 } else { screen.bottom() - 10.0 - TELEMETRY_H - 14.0 - size.y };
     let x = if frame.dock < 0.5 { frame.centre.x } else { screen.center().x };
@@ -3679,7 +3583,7 @@ fn paint_frost(ctx: &egui::Context, screen: Rect) {
 /// Where the key hints end on the right: clear of the docked emblem's corner, which moves left
 /// of the text console while that is out (`console` = how far it has slid in).
 fn key_hints_right(screen: Rect, console: f32) -> f32 {
-    screen.right() - console.max(0.0) - crate::hud_dock::DOCK_INSET - crate::rose_emblem_renderer::DOCKED_DIAMETER - 16.0
+    screen.right() - console.max(0.0) - crate::hud_dock::DOCK_INSET - crate::holo_core::DOCKED_DIAMETER - 16.0
 }
 
 /// The key hints of the bottom strip, right-aligned to `right` on the line `mid`: each label
@@ -3821,22 +3725,6 @@ fn rim_target(state: &str, phase: &str, mic: f32, dock: f32) -> f32 {
     }
 }
 
-/// The voice rim's ticks round an emblem of `radius` at `centre`, `strength` 0-1, at `clock`
-/// seconds: (inner end, outer end, alpha), lengths rippling round the ring.
-fn rim_ticks(centre: Pos2, radius: f32, strength: f32, clock: f32) -> Vec<(Pos2, Pos2, f32)> {
-    const COUNT: usize = 120;
-    let inner = radius * 1.08;
-    (0..COUNT)
-        .map(|i| {
-            let a = i as f32 / COUNT as f32 * TAU;
-            let ripple = ((a * 3.0 + clock * 5.1).sin() * (a * 7.0 - clock * 3.3).cos()).abs() * 0.75 + ((a * 13.0 + clock * 9.0).sin() * 0.5 + 0.5) * 0.25;
-            let length = 2.0 + radius * 0.2 * strength * ripple;
-            let dir = vec2(a.cos(), a.sin());
-            (centre + dir * inner, centre + dir * (inner + length), strength * (0.3 + 0.7 * ripple))
-        })
-        .collect()
-}
-
 struct HudApp {
     app: Jai,
     rt: Handle,
@@ -3876,7 +3764,7 @@ struct HudApp {
     /// Where the full HUD was before pure orb mode (restored when it ends).
     normal_placement: Option<[i32; 4]>,
     /// The gyroscopic ring emblem.
-    emblem: RoseEmblem,
+    emblem: Core,
     /// The board of blocks (textures).
     board: crate::hud_board::BoardView,
     /// `[ CONSOLE ]` (Ctrl+L, "open text interface"): the slide-out text console, its
@@ -3887,7 +3775,7 @@ struct HudApp {
     console_input: String,
     console_focus: bool,
     /// `[ CORE ]` / "show me your core": the 3D module sphere.
-    core: crate::core_sphere_3d::CoreSphereView,
+    core: crate::holo_mind::MindView,
     core_open: bool,
     /// Frames drawn, and the fullscreen watchdog's last check / re-applications.
     frames: u64,
@@ -3914,7 +3802,7 @@ struct HudApp {
     centre_covered: bool,
     /// How far the text console has slid in (0-1).
     console_slide: f32,
-    /// `theme_engine::generation()` the palette was built at.
+    /// `holo_theme::generation()` the palette was built at.
     theme_generation: u64,
     /// `[ PIN ]`: the console stays in front and Esc leaves it open.
     console_pinned: bool,
@@ -3943,6 +3831,8 @@ struct HudApp {
     pill: (&'static str, &'static str, Instant),
     /// How strongly Sir's voice shows as the tick rim round the emblem (0-1).
     voice_rim: f32,
+    /// Music plays and the core shows it: its voice ring takes the PC's real spectrum.
+    emblem_music: bool,
     /// How tall the console's foot (the completions and the input line) was in the last frame:
     /// the log above it takes what is left, so the input line is never pushed out of the
     /// console when the completions appear or wrap.
@@ -4076,7 +3966,7 @@ fn wheel_turn(turned: f32, events: &[egui::Event]) -> (f32, Option<bool>) {
 
 /// The corner orb's window: the emblem in its disc with the ring of what he is at, and beside
 /// it the plate with what is being said, his question or the orders he offers.
-fn corner_orb_ui(ui: &mut Ui, emblem: &RoseEmblem, c: &CornerOrbContent) -> OrbClick {
+fn corner_orb_ui(ui: &mut Ui, emblem: &Core, c: &CornerOrbContent) -> OrbClick {
     let mut did = OrbClick::Nothing;
     let all = ui.max_rect();
     // The orb in the middle of its window, room for the plate on either side of it: the plate
@@ -4211,32 +4101,6 @@ fn corner_orb_ui(ui: &mut Ui, emblem: &RoseEmblem, c: &CornerOrbContent) -> OrbC
 const MINI_STRIP: &str = "strip";
 const MINI_STRIP_HEIGHT: f32 = 40.0;
 
-/// The music's spectrum round the emblem: each band a pair of ticks, the low ones at the bottom,
-/// the high ones at the top, the same on both sides.
-fn paint_spectrum_ring(painter: &egui::Painter, frame: &crate::rose_emblem_renderer::EmblemFrame, bands: &[f32; crate::pc_audio::BANDS]) {
-    const PER_SIDE: usize = 2 * crate::pc_audio::BANDS;
-    let accent = crate::hud_board::active_colour();
-    // (Clear of the housing's rim and of the four marks on its diagonals.)
-    let inner = frame.radius * 1.15;
-    let reach = 30.0 * (frame.radius / 175.0).clamp(0.5, 1.6);
-    for k in 0..PER_SIDE {
-        let at = (k as f32 + 0.5) / PER_SIDE as f32;
-        // Between two bands: the mean of them.
-        let band = at * (crate::pc_audio::BANDS - 1) as f32;
-        let (low, mix) = (band.floor() as usize, band.fract());
-        let value = bands[low] * (1.0 - mix) + bands[(low + 1).min(crate::pc_audio::BANDS - 1)] * mix;
-        // (Every tick stands, however quiet its band: a whole ring that breathes, not a scatter
-        // of dashes where a band happens to sound.)
-        let colour = mix_colour(accent, Color32::WHITE, ((value - 0.8) * 4.0).clamp(0.0, 0.8)).gamma_multiply(0.2 + 0.8 * value);
-        for side in [1.0f32, -1.0] {
-            // From straight down (the bass) up to straight up (the highs).
-            let angle = std::f32::consts::FRAC_PI_2 - side * at * std::f32::consts::PI;
-            let dir = vec2(angle.cos(), angle.sin());
-            painter.line_segment([frame.centre + dir * inner, frame.centre + dir * (inner + 3.0 + reach * value)], stroke(1.6, colour));
-        }
-    }
-}
-
 /// `a` → `b` by `t` (opaque colours).
 fn mix_colour(a: Color32, b: Color32, t: f32) -> Color32 {
     mix(a, b, t)
@@ -4334,10 +4198,10 @@ fn near_strips(at: Pos2, screen: Rect) -> bool {
 
 /// The emblem's inputs from the HUD's model and the board (`centre_covered`: a block, the
 /// spotlight or a tool window reaches into the centre safe zone).
-fn emblem_inputs(m: &HudModel, console_open: bool, core_open: bool, centre_covered: bool, idle: bool) -> EmblemInputs {
+fn emblem_inputs(m: &HudModel, console_open: bool, core_open: bool, centre_covered: bool, idle: bool) -> CoreInputs {
     use crate::hud_board::ScreenState;
     let screen = crate::hud_board::screen_state();
-    EmblemInputs {
+    CoreInputs {
         // Thinking until he speaks: the voice then pulses the front emblem's ticks.
         thinking: crate::thinking_guard::is_thinking() && m.state != "speaking",
         researching: crate::hud_board::researching(),
@@ -4355,7 +4219,7 @@ impl HudApp {
     fn new(cc: &eframe::CreationContext<'_>, app: Jai, rt: Handle, model: Arc<Mutex<HudModel>>, restore: Option<[i32; 4]>) -> Self {
         install_fonts(&cc.egui_ctx);
         configure_style(&cc.egui_ctx, app.config().read(|c| c.interface.font_scale));
-        crate::theme_engine::attach_database(&app.config().read(|c| c.memory_db_path.clone()));
+        crate::theme_store::attach_database(&app.config().read(|c| c.memory_db_path.clone()));
         *lock(&SHARED.ctx) = Some(cc.egui_ctx.clone());
         #[cfg(windows)]
         let hwnd = native_window(cc);
@@ -4424,9 +4288,9 @@ impl HudApp {
             settings_open: false,
             zoom_draft: None,
             title_draft: None,
-            emblem: RoseEmblem::new(crate::rose_emblem_renderer::resolve_state(inputs)),
+            emblem: Core::new(crate::holo_core::resolve(inputs)),
             board: crate::hud_board::BoardView::default(),
-            core: crate::core_sphere_3d::CoreSphereView::default(),
+            core: crate::holo_mind::MindView::default(),
             core_open: false,
             console_open: false,
             console_anim: Default::default(),
@@ -4470,6 +4334,7 @@ impl HudApp {
             header_taken: Vec::new(),
             pill: ("LISTENING", "LISTENING", now),
             voice_rim: 0.0,
+            emblem_music: false,
             backdrop: crate::wallpaper::Standing::Off,
             corner_orb: Default::default(),
             orb_out_on: None,
@@ -4644,13 +4509,13 @@ impl HudApp {
         let idle = self.last_activity.elapsed() > Duration::from_secs(12);
         let inputs = emblem_inputs(m, self.console_open, self.core_open, self.centre_covered, idle);
         self.emblem.set_console_width(self.console_reserve());
-        let before = self.emblem.state();
+        let before = self.emblem.pose();
         self.emblem.follow(inputs);
-        if self.emblem.state() != before {
-            info!("[HUD] Emblem: {:?} → {:?}", before, self.emblem.state());
+        if self.emblem.pose() != before {
+            info!("[HUD] Emblem: {:?} → {:?}", before, self.emblem.pose());
         }
         // Its mood: what he is doing (and one red flash for an order that failed).
-        use crate::rose_emblem_renderer::Mood;
+        use crate::holo_core::Mood;
         self.emblem.set_mood(match m.state.as_str() {
             "listening" => Mood::Listening,
             "thinking" => Mood::Thinking,
@@ -4660,7 +4525,37 @@ impl HudApp {
         if crate::hud_lines::take_fault() {
             self.emblem.flash_fault();
         }
-        self.emblem.step(dt, self.reactor.emblem_voice().max(welcome_level() * 0.6), inputs.busy());
+        // His own voice moves his rings, Sir's shows as the white ticks round him (the voice
+        // rim's level, while it is on); music gives the real spectrum, a voice its level.
+        let music = self.emblem_music.then(crate::pc_audio::bands).map(|bands| {
+            let mut out = [0.0; crate::holo_core::BANDS];
+            for (i, v) in out.iter_mut().enumerate() {
+                *v = bands[i * crate::pc_audio::BANDS / crate::holo_core::BANDS];
+            }
+            out
+        });
+        // The time of day (his scale ring is the clock) and the word for what he is doing.
+        use chrono::Timelike;
+        let now = chrono::Local::now();
+        let muted = m.level.as_ref().is_some_and(|l| l.phase == "muted");
+        let word = match pill_word(&m.state, muted, inputs.asleep) {
+            "LISTENING" if m.state != "listening" => "STANDING BY",
+            word => word,
+        };
+        let feed = crate::holo_core::Feed {
+            voice: self.reactor.emblem_voice().max(welcome_level() * 0.6),
+            heard: self.voice_rim,
+            bands: music,
+            busy: inputs.busy(),
+            asleep: inputs.asleep,
+            layers: crate::mind_activity::layers(Instant::now()),
+            day_secs: now.num_seconds_from_midnight() as f32 + now.nanosecond() as f32 / 1e9,
+            word,
+        };
+        self.emblem.step(dt, &feed);
+        if crate::mind_activity::active(Instant::now()) {
+            request_repaint_soon();
+        }
     }
 
     /// Where the window really is, in the log whenever it has changed and come to rest (in
@@ -4868,7 +4763,7 @@ impl HudApp {
             let area = board_area(screen, if system { SYSTEM_COLUMN + 16.0 } else { 0.0 }, self.console_reserve());
             self.board_area_now = area;
             for cmd in std::mem::take(&mut *lock(&CORE_REQUESTS)) {
-                use crate::core_sphere_3d::CoreCommand;
+                use crate::holo_mind::CoreCommand;
                 match cmd {
                     CoreCommand::Open(open) => self.core_open = open,
                     other => {
@@ -4911,11 +4806,10 @@ impl HudApp {
                 }
             }
             if core_t > 0.0 {
-                let voice = self.reactor.voice;
-                ui.scope(|ui| {
-                    ui.set_opacity(core_t);
-                    self.core.show(ui, area, voice);
-                });
+                // The core view: the complex core large, whichever core stands on the board.
+                let look = crate::holo_core::CoreLook { alpha: core_t, ..self.emblem.look() };
+                let active = crate::mind_activity::recent(Instant::now());
+                self.core.show(ui, area, &look, &crate::mind_activity::LAYERS, &active);
                 if core_t < 1.0 {
                     ctx.request_repaint_after(Duration::from_millis(16));
                 }
@@ -4947,6 +4841,7 @@ impl HudApp {
                 self.emblem.paint(&ui.painter_at(stage), screen);
             }
             self.emblem_spot = (frame.centre, frame.radius, frame.rest);
+            *lock(&CANVAS_ORIGIN) = Some((frame.centre, frame.rest));
             // (Said once, a moment after the start: where the emblem stands, in the log.)
             if self.frames == 150 {
                 info!("[HUD] Emblem at {:.0},{:.0} (radius {:.0}) on a screen of {:.0}×{:.0} at {:.0},{:.0}", frame.centre.x, frame.centre.y, frame.radius, screen.width(), screen.height(), screen.left(), screen.top());
@@ -4956,7 +4851,7 @@ impl HudApp {
             taken.extend(self.system_column_rect.filter(|_| system));
             crate::hud_dock::publish_obstacles(Some(Rect::from_center_size(frame.centre, Vec2::splat(frame.radius * 2.3))), taken);
             let docked = crate::hud_dock::docked_centre(screen, self.console_reserve());
-            crate::hud_dock::publish_docked_spot(Some(Rect::from_center_size(docked, Vec2::splat(crate::rose_emblem_renderer::DOCKED_DIAMETER + 8.0))));
+            crate::hud_dock::publish_docked_spot(Some(Rect::from_center_size(docked, Vec2::splat(crate::holo_core::DOCKED_DIAMETER + 8.0))));
             let hit = Rect::from_center_size(frame.centre, vec2(frame.radius * 1.6, frame.radius * 1.6));
             let emblem = ui.interact(hit, ui.id().with("hud_emblem"), Sense::click_and_drag());
             // Drag the emblem anywhere on the board; it stays there (and windows open around it).
@@ -5001,6 +4896,8 @@ impl HudApp {
             }
             if iface.voice_rim {
                 self.voice_rim(&ui.painter_at(stage), m, &frame, dt);
+            } else {
+                self.voice_rim = 0.0;
             }
             // The voice lock turned an order away: the emblem says why nothing happens.
             if let Some(strength) = crate::hud_lines::turned_away_strength().filter(|_| frame.dock < 0.5) {
@@ -5011,9 +4908,9 @@ impl HudApp {
             // the song's line, and the offer of an order heard without his name.
             // (Under the desktop clock, where that stands under the emblem.)
             let lines_top = if frame.dock < 0.5 { crate::hud_lines::top_under(frame.centre, frame.radius) + vec2(0.0, self.clock_room(iface, frame.rest)) } else { pos2(screen.center().x, screen.bottom() - TELEMETRY_H - 110.0) };
-            // The spectrum as a ring of ticks round the emblem (when Sir's own voice is not there).
-            if music && frame.dock < 0.5 && self.voice_rim < 0.05 {
-                paint_spectrum_ring(&ui.painter_at(stage), &frame, &crate::pc_audio::bands());
+            // The music's spectrum is the core's own voice ring (when Sir's voice is not there).
+            self.emblem_music = music && frame.dock < 0.5 && self.voice_rim < 0.05;
+            if self.emblem_music {
                 ctx.request_repaint_after(Duration::from_millis(if crate::hud_feel::game_in_front() { 40 } else { 16 }));
             }
             // Under it: the line being sung (lyrics on), else what plays.
@@ -5280,9 +5177,9 @@ impl HudApp {
         }
         let anchor = |id: &str| anchors.iter().find(|(a, _)| *a == id).map(|(_, r)| r.clone());
         match clicked {
-            Some("theme") => self.apply_palette(ctx, iface, crate::theme_engine::next_preset(&iface.hud_palette)),
+            Some("theme") => self.apply_palette(ctx, iface, crate::holo_theme::next_preset(&iface.hud_palette)),
             Some("phone") => pairing_view::toggle(),
-            Some("core") => core_command(crate::core_sphere_3d::CoreCommand::Open(!self.core_open)),
+            Some("core") => core_command(crate::holo_mind::CoreCommand::Open(!self.core_open)),
             Some("modules") => ui.memory_mut(|mem| mem.toggle_popup(modules_id)),
             Some("features") => features_view::toggle(),
             Some("changes") => crate::changes::toggle(),
@@ -5352,32 +5249,32 @@ impl HudApp {
             let mut create = false;
             egui::popup::popup_below_widget(ui, theme_id, &button, egui::popup::PopupCloseBehavior::CloseOnClick, |ui| {
                 ui.set_min_width(230.0);
-                for (name, p) in crate::theme_engine::PRESETS.iter() {
+                for (name, _, p) in crate::holo_theme::PRESETS.iter() {
                     let active = iface.hud_palette == *name;
                     let (row, response) = ui.allocate_exact_size(vec2(226.0, 20.0), Sense::click());
                     let painter = ui.painter_at(row);
                     if response.hovered() || active {
-                        painter.rect_filled(row, Rounding::ZERO, p.border().gamma_multiply(0.16));
+                        painter.rect_filled(row, Rounding::ZERO, p.ink().gamma_multiply(0.16));
                     }
-                    for (k, c) in [p.primary(), p.secondary(), p.border()].into_iter().enumerate() {
+                    for (k, c) in [p.accent(), p.deep(), p.ink()].into_iter().enumerate() {
                         painter.rect_filled(Rect::from_min_size(row.left_center() + vec2(4.0 + k as f32 * 13.0, -5.0), vec2(10.0, 10.0)), Rounding::ZERO, c);
                     }
-                    let label = crate::theme_engine::label(name);
+                    let label = crate::holo_theme::label(name);
                     painter.text(row.left_center() + vec2(48.0, 0.0), Align2::LEFT_CENTER, if active { format!("{label}") } else { label }, strip_font(), STRIP_INK);
                     if response.clicked() {
                         picked = Some(name);
                     }
                 }
                 // Sir's own themes, then the studio.
-                for theme in crate::theme_engine::custom_themes() {
-                    let p = theme.palette();
+                for theme in crate::theme_store::custom_themes() {
+                    let p = theme.theme();
                     let (row, response) = ui.allocate_exact_size(vec2(226.0, 20.0), Sense::click());
                     let painter = ui.painter_at(row);
                     let active = iface.hud_palette == theme.key();
                     if response.hovered() || active {
-                        painter.rect_filled(row, Rounding::ZERO, p.border().gamma_multiply(0.16));
+                        painter.rect_filled(row, Rounding::ZERO, p.ink().gamma_multiply(0.16));
                     }
-                    for (k, c) in [p.primary(), p.secondary(), p.border()].into_iter().enumerate() {
+                    for (k, c) in [p.accent(), p.deep(), p.ink()].into_iter().enumerate() {
                         painter.rect_filled(Rect::from_min_size(row.left_center() + vec2(4.0 + k as f32 * 13.0, -5.0), vec2(10.0, 10.0)), Rounding::ZERO, c);
                     }
                     let label = theme.name.to_uppercase();
@@ -5569,7 +5466,7 @@ impl HudApp {
     }
 
     /// Switches the HUD to the preset `name`: board, blocks, emblem and core cross-fade from the
-    /// next frame on (`theme_engine::follow`), the settings windows take its accent, and a toast
+    /// next frame on (`theme_store::follow`), the settings windows take its accent, and a toast
     /// names it.
     /// A `configure_interface` change straight from a HUD control, with its outcome as a toast.
     fn configure_look(&self, iface: &InterfaceSettings, args: serde_json::Value) {
@@ -5585,11 +5482,11 @@ impl HudApp {
     fn apply_palette(&mut self, ctx: &egui::Context, iface: &InterfaceSettings, name: &str) {
         let mut next = iface.clone();
         next.hud_palette = name.to_string();
-        if let Some(p) = crate::theme_engine::preset(name) {
-            next.accent = format!("#{:02x}{:02x}{:02x}", p.core_primary[0], p.core_primary[1], p.core_primary[2]);
+        if let Some(p) = crate::holo_theme::preset(name) {
+            next.accent = format!("#{:02x}{:02x}{:02x}", p.accent[0], p.accent[1], p.accent[2]);
         }
         self.set_interface(next);
-        self.app.notice(format!("THEME // {} ACTIVE", crate::theme_engine::label(name)));
+        self.app.notice(format!("THEME // {} ACTIVE", crate::holo_theme::label(name)));
         ctx.request_repaint();
     }
 
@@ -5742,7 +5639,7 @@ impl HudApp {
     /// The card under the emblem after JAI looked at the screen (`screen_context`), as in the
     /// reference video: `● VIDEO DETECTED`, what it was, and its quick actions (a click asks
     /// him); it leaves by itself after a few seconds (the pointer on it keeps it).
-    fn screen_card(&mut self, ui: &mut Ui, screen: Rect, frame: &crate::rose_emblem_renderer::EmblemFrame) {
+    fn screen_card(&mut self, ui: &mut Ui, screen: Rect, frame: &crate::holo_core::CoreFrame) {
         let rect = screen_card_rect(screen, frame);
         // (The pointer on it holds it, fully shown.)
         let Some((card, age)) = crate::screen_context::card(ui.rect_contains_pointer(rect)) else { return };
@@ -5779,7 +5676,7 @@ impl HudApp {
 
     /// While Sir speaks, his voice shows as a ring of radial ticks round the emblem, as on the
     /// reference orb (only at home, not docked; the emblem's own rings follow JAI's voice).
-    fn voice_rim(&mut self, painter: &egui::Painter, m: &HudModel, frame: &crate::rose_emblem_renderer::EmblemFrame, dt: f32) {
+    fn voice_rim(&mut self, painter: &egui::Painter, m: &HudModel, frame: &crate::holo_core::CoreFrame, dt: f32) {
         let phase = m.level.as_ref().map_or("muted", |l| l.phase);
         // How well he hears Sir: from half a second into an utterance, by the loudest his voice
         // was and the room's own noise. The ring turns amber and says what is wrong.
@@ -5807,16 +5704,12 @@ impl HudApp {
         let target = rim_target(&m.state, phase, self.reactor.mic, frame.dock);
         let rate: f32 = if target > self.voice_rim { 0.55 } else { 0.9 };
         self.voice_rim += (target - self.voice_rim) * (1.0 - rate.powf(dt * 60.0));
+        // (The core draws the ticks themselves: `step_emblem` hands it this level.)
         if self.voice_rim < 0.01 {
             self.voice_rim = 0.0;
             return;
         }
         painter.ctx().request_repaint();
-        let clock = painter.ctx().input(|i| i.time) as f32;
-        let colour = if verdict.is_some() { crate::hud_style::warn_colour() } else { crate::hud_board::active_colour() };
-        for (from, to, alpha) in rim_ticks(frame.centre, frame.radius, self.voice_rim, clock) {
-            painter.line_segment([from, to], stroke(1.4, colour.gamma_multiply(alpha)));
-        }
     }
 
     /// `COMMS // LIVE RESPONSE`: the latest exchange as a sharp block in the band above the
@@ -7362,7 +7255,7 @@ fn header_layout(items: &[HeaderItem], left: f32, right: f32, y: f32, measure: i
 fn comms_placement(screen: Rect, console_width: f32) -> (f32, f32) {
     let free_right = screen.right() - console_width.max(0.0);
     let free_width = (free_right - screen.left()).max(0.0);
-    let corner = crate::hud_dock::DOCK_INSET + crate::rose_emblem_renderer::DOCKED_DIAMETER / 2.0 + 12.0;
+    let corner = crate::hud_dock::DOCK_INSET + crate::holo_core::DOCKED_DIAMETER / 2.0 + 12.0;
     let width = (free_width * 0.5).clamp(360.0, 820.0).min(free_width - 2.0 * corner).max(240.0);
     let centre_x = (screen.left() + free_right) / 2.0;
     (width, centre_x)
@@ -8381,12 +8274,26 @@ pub(super) fn hud_block_window(ctx: &egui::Context, id: &str, title: &str, size:
             }
             _ => {}
         }
-        let title_room = (keys_left - row.left() - 22.0).max(20.0);
+        // Its index tab: every block on the board is numbered in the order it was opened, as
+        // on a drawing. A solid block of the accent in the frame's corner, the number in black.
+        let theme = crate::holo::theme();
+        let number = crate::hud_dock::open_blocks().iter().position(|(open, _)| open == id).map_or(String::new(), |k| format!("{:02}", k + 1));
+        let tab = {
+            let digits = crate::holo::galley(&shell, crate::holo::Face::Label, &number, 8.5, Color32::BLACK);
+            let tab = Rect::from_min_size(frame_rect.min, vec2(digits.size().x + 16.0, 17.0));
+            if !number.is_empty() && motion.unfold >= 1.0 {
+                shell.rect_filled(tab, Rounding::ZERO, mix(theme.accent(), theme.hot(), 0.3 * using).gamma_multiply(content_alpha));
+                shell.galley(pos2(tab.left() + 8.0, tab.center().y - digits.size().y * 0.5), digits, Color32::BLACK);
+            }
+            tab
+        };
+        let title_left = row.left().max(tab.right() + 10.0);
+        let title_room = (keys_left - title_left - 22.0).max(20.0);
         // A title cut short shows whole under the pointer.
         let cut = wanted - 26.0 > title_room + 0.5;
         // The title decodes itself as the block opens, and back as it leaves.
-        let lettered = crate::hud_style::fitted_title(ui.painter(), &crate::hud_style::decode(title, motion.resolve.min(motion.content), ctx.input(|i| i.time)), ts(14.0), crate::hud_style::TEXT.gamma_multiply(content_alpha), title_room);
-        let title_rect = Rect::from_min_size(pos2(row.left(), mid - lettered.size().y * 0.5), lettered.size());
+        let lettered = crate::hud_style::fitted_title(ui.painter(), &crate::hud_style::decode(title, motion.resolve.min(motion.content), ctx.input(|i| i.time)), ts(14.0), theme.ink().gamma_multiply(content_alpha), title_room);
+        let title_rect = Rect::from_min_size(pos2(title_left, mid - lettered.size().y * 0.5), lettered.size());
         ui.painter().galley(title_rect.min, lettered, Color32::PLACEHOLDER);
         if crate::hud_style::paint_light(ui.painter(), pos2(title_rect.right() + 10.0, mid), crate::hud_style::light(id), ctx.input(|i| i.time), content_alpha) {
             ctx.request_repaint_after(Duration::from_millis(50));
@@ -8404,8 +8311,12 @@ pub(super) fn hud_block_window(ctx: &egui::Context, id: &str, title: &str, size:
         if crate::hud_dock::take_esc_close(id) {
             close_asked = true;
         }
+        // The header's rule, from edge to edge of the frame, the accent under the tab.
         let r = ui.cursor();
-        ui.painter().line_segment([pos2(r.left(), r.top()), pos2(r.left() + ui.available_width(), r.top())], stroke(1.0, crate::hud_board::border_colour()));
+        crate::holo::rule(&shell, pos2(frame_rect.left(), r.top()), pos2(frame_rect.right(), r.top()), crate::holo::a(theme.ink(), 0.15 * content_alpha));
+        if !number.is_empty() {
+            crate::holo::rule(&shell, pos2(frame_rect.left(), r.top()), pos2(tab.right() + 26.0, r.top()), crate::holo::a(theme.accent(), 0.9 * content_alpha));
+        }
         ui.add_space(6.0);
         // The content lives in the block's size and never grows it: egui widens a window to its
         // last content every frame, so a body a few pixels taller than its room made the block
@@ -8573,25 +8484,24 @@ pub(crate) fn set_still(ctx: &egui::Context, still: bool) {
     ctx.data_mut(|d| d.insert_temp(egui::Id::new(STILL_WINDOWS), still));
 }
 
-/// One frame of a window's entrance (`opening` 0 … 1 of `hud_dock::OPEN_ANIM`, 400 ms) or exit
-/// (`closing` 0 … 1 of `hud_dock::CLOSE_FADE`, 200 ms): one motion language for every block,
-/// detached window, pop-up card and board block.
+/// One frame of a window's entrance (`opening` 0 … 1 of `hud_dock::OPEN_ANIM`) or exit
+/// (`closing` 0 … 1 of `hud_dock::CLOSE_FADE`): one motion language for every block, detached
+/// window, pop-up card and board block. A window is drawn, not shown.
 ///
-/// In: a hairline draws out from the centre (0–90 ms, ease-out expo); the frame unfolds from it
-/// about its middle (90–250 ms, ease-out quint) with the corner brackets leading (80–210 ms),
-/// the unfolding edges white-hot and cooling; the content resolves top to bottom behind a soft
-/// scan edge (250–370 ms); one faint glow settles on the border (to 400 ms).
-/// Out, quicker: the content goes (0–70 ms), the frame folds back into the hairline (40–130
-/// ms, ease-in cubic) with the brackets riding it, the line contracts to a point (120–190 ms)
-/// and the point flashes once (~175 ms).
+/// In: a spark at its top left corner throws a line of light along its top edge (0–130 ms,
+/// fast first); the frame unfolds downwards from that line (110–330 ms) with the corner ticks
+/// riding the travelling edge, white-hot and cooling; the content resolves top to bottom behind
+/// a scan line (280–420 ms); one glow settles on the frame (to 440 ms).
+/// Out, quicker: the content goes (0–80 ms), the frame folds up into the top line (50–170 ms),
+/// the line runs back into its corner (160–235 ms) and the corner sparks once.
 ///
 /// Nothing is scaled: the frame and the content are clipped and faded, so text never lays out
 /// again while a window comes or goes, and its neighbours never move.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct WindowMotion {
-    /// The frame's height as a share of the window's, about its middle (1: whole).
+    /// The frame's height as a share of the window's, from its top edge (1: whole).
     pub unfold: f32,
-    /// The hairline across the middle: its width share and brightness.
+    /// The line along the top edge: its width share from the left corner and its brightness.
     pub line: Option<(f32, f32)>,
     /// How far down the content has resolved (0 top … 1: all of it).
     pub resolve: f32,
@@ -8599,49 +8509,35 @@ pub(crate) struct WindowMotion {
     pub frame: f32,
     /// The content's opacity (title row included).
     pub content: f32,
-    /// The corner brackets' height as a share of the window's, about its middle (1: the corners).
+    /// How far down the lower corner ticks have travelled, as a share of the window's height
+    /// (1: the corners).
     pub brackets: f32,
     pub brackets_alpha: f32,
-    /// The glow settling on the border at the end of an entrance (0 … 1).
+    /// The glow settling on the frame at the end of an entrance (0 … 1).
     pub glow: f32,
-    /// The point's flash at the end of an exit (0 … 1).
+    /// The spark at the top left corner: as the line leaves it, and as it returns (0 … 1).
     pub flash: f32,
 }
 
-/// The entrance's beats, in ms of `hud_dock::OPEN_ANIM`.
-const IN_LINE: (f32, f32) = (0.0, 56.0);
-const IN_UNFOLD: (f32, f32) = (56.0, 156.0);
-const IN_BRACKETS: (f32, f32) = (50.0, 131.0);
-const IN_RESOLVE: (f32, f32) = (156.0, 231.0);
-const IN_SETTLE: (f32, f32) = (156.0, 250.0);
-/// The exit's beats, in ms of `hud_dock::CLOSE_FADE`.
-const OUT_CONTENT: (f32, f32) = (0.0, 70.0);
-const OUT_FOLD: (f32, f32) = (40.0, 130.0);
-const OUT_BRACKETS: (f32, f32) = (30.0, 120.0);
-const OUT_CONTRACT: (f32, f32) = (120.0, 190.0);
-const OUT_FLASH: f32 = 175.0;
+/// The entrance's beats, in ms of `hud_dock::OPEN_ANIM` (440).
+const IN_LINE: (f32, f32) = (0.0, 130.0);
+const IN_UNFOLD: (f32, f32) = (110.0, 330.0);
+const IN_BRACKETS: (f32, f32) = (100.0, 310.0);
+const IN_RESOLVE: (f32, f32) = (280.0, 420.0);
+const IN_SETTLE: (f32, f32) = (300.0, 440.0);
+/// The exit's beats, in ms of `hud_dock::CLOSE_FADE` (240).
+const OUT_CONTENT: (f32, f32) = (0.0, 80.0);
+const OUT_FOLD: (f32, f32) = (50.0, 170.0);
+const OUT_BRACKETS: (f32, f32) = (40.0, 160.0);
+const OUT_CONTRACT: (f32, f32) = (160.0, 235.0);
+const OUT_FLASH: f32 = 222.0;
 
 /// 0 before `beat`, 1 after it, linear between.
 fn beat(ms: f32, (from, to): (f32, f32)) -> f32 {
     ((ms - from) / (to - from)).clamp(0.0, 1.0)
 }
 
-fn ease_out_expo(t: f32) -> f32 {
-    if t >= 1.0 { 1.0 } else { 1.0 - 2f32.powf(-10.0 * t.max(0.0)) }
-}
-
-fn ease_out_quint(t: f32) -> f32 {
-    1.0 - (1.0 - t.clamp(0.0, 1.0)).powi(5)
-}
-
-fn ease_in_cubic(t: f32) -> f32 {
-    t.clamp(0.0, 1.0).powi(3)
-}
-
-fn ease_in_out_cubic(t: f32) -> f32 {
-    let t = t.clamp(0.0, 1.0);
-    if t < 0.5 { 4.0 * t * t * t } else { 1.0 - (-2.0 * t + 2.0).powi(3) / 2.0 }
-}
+use crate::holo_motion::{ease_in_cubic, ease_in_out as ease_in_out_cubic, ease_out_expo};
 
 impl WindowMotion {
     pub const REST: Self = Self { unfold: 1.0, line: None, resolve: 1.0, frame: 1.0, content: 1.0, brackets: 1.0, brackets_alpha: 1.0, glow: 0.0, flash: 0.0 };
@@ -8660,19 +8556,19 @@ impl WindowMotion {
             return Self::REST;
         }
         let ms = t * crate::hud_dock::OPEN_ANIM.as_secs_f32() * 1000.0;
-        let unfold = ease_out_quint(beat(ms, IN_UNFOLD));
-        // The line is the frame's edges until they part; it fades as they do.
-        let line_alpha = 1.0 - beat(ms, (IN_UNFOLD.0, IN_UNFOLD.0 + 50.0));
+        let unfold = ease_out_expo(beat(ms, IN_UNFOLD));
+        // The line is the frame's top edge once the frame stands; it fades into it.
+        let line_alpha = 1.0 - smooth(IN_UNFOLD.0 + 60.0, IN_UNFOLD.1, ms);
         Self {
             unfold,
             line: (line_alpha > 0.0).then(|| (ease_out_expo(beat(ms, IN_LINE)), line_alpha)),
             resolve: ease_in_out_cubic(beat(ms, IN_RESOLVE)),
-            frame: smooth(IN_UNFOLD.0 - 10.0, IN_UNFOLD.0 + 30.0, ms),
+            frame: smooth(IN_UNFOLD.0 - 10.0, IN_UNFOLD.0 + 50.0, ms),
             content: 1.0,
-            brackets: ease_out_quint(beat(ms, IN_BRACKETS)),
-            brackets_alpha: smooth(IN_BRACKETS.0, IN_BRACKETS.0 + 40.0, ms),
-            glow: smooth(IN_SETTLE.0 - 40.0, IN_SETTLE.0, ms) * (1.0 - smooth(IN_SETTLE.0, IN_SETTLE.1, ms)),
-            flash: 0.0,
+            brackets: ease_out_expo(beat(ms, IN_BRACKETS)),
+            brackets_alpha: smooth(IN_BRACKETS.0, IN_BRACKETS.0 + 50.0, ms),
+            glow: smooth(IN_SETTLE.0 - 60.0, IN_SETTLE.0, ms) * (1.0 - smooth(IN_SETTLE.0, IN_SETTLE.1, ms)),
+            flash: 1.0 - smooth(0.0, IN_LINE.1 * 0.8, ms),
         }
     }
 
@@ -8681,18 +8577,18 @@ impl WindowMotion {
         let ms = t * crate::hud_dock::CLOSE_FADE.as_secs_f32() * 1000.0;
         let unfold = 1.0 - ease_in_cubic(beat(ms, OUT_FOLD));
         let width = 1.0 - ease_in_cubic(beat(ms, OUT_CONTRACT));
-        // The line shows once the frame has folded into it, until it is a point.
-        let line_alpha = smooth(OUT_FOLD.1 - 30.0, OUT_FOLD.1, ms);
+        // The line shows once the frame has folded into it, until it is back in its corner.
+        let line_alpha = smooth(OUT_FOLD.1 - 40.0, OUT_FOLD.1, ms);
         Self {
             unfold,
             line: (line_alpha > 0.0 && width > 0.0).then_some((width, line_alpha)),
             resolve: 1.0,
-            frame: 1.0 - smooth(OUT_FOLD.1 - 20.0, OUT_FOLD.1 + 10.0, ms),
+            frame: 1.0 - smooth(OUT_FOLD.1 - 30.0, OUT_FOLD.1 + 10.0, ms),
             content: 1.0 - smooth(OUT_CONTENT.0, OUT_CONTENT.1, ms),
             brackets: 1.0 - ease_in_cubic(beat(ms, OUT_BRACKETS)),
-            brackets_alpha: 1.0 - smooth(OUT_BRACKETS.0 + 30.0, OUT_BRACKETS.1 + 10.0, ms),
+            brackets_alpha: 1.0 - smooth(OUT_BRACKETS.0 + 40.0, OUT_BRACKETS.1 + 10.0, ms),
             glow: 0.0,
-            flash: (1.0 - (ms - OUT_FLASH).abs() / 25.0).max(0.0),
+            flash: (1.0 - (ms - OUT_FLASH).abs() / 28.0).max(0.0),
         }
     }
 
@@ -8702,12 +8598,13 @@ impl WindowMotion {
     }
 }
 
-/// Where a window's frame stands in this frame of its motion: its rect folded about its middle.
+/// Where a window's frame stands in this frame of its motion: its rect unfolded from its top
+/// edge.
 pub(crate) fn motion_band(rect: Rect, m: &WindowMotion) -> Rect {
     if m.unfold >= 1.0 {
         return rect;
     }
-    Rect::from_center_size(rect.center(), vec2(rect.width(), rect.height() * m.unfold.max(0.0)))
+    Rect::from_min_size(rect.min, vec2(rect.width(), rect.height() * m.unfold.max(0.0)))
 }
 
 /// What of a window's content shows in this frame of its motion: its frame, down to the edge
@@ -8720,29 +8617,26 @@ pub(crate) fn motion_content_clip(rect: Rect, m: &WindowMotion) -> Rect {
     Rect::from_min_max(band.min, pos2(band.max.x, band.top() + band.height() * m.resolve.max(0.0)))
 }
 
-/// A block's frame in this frame of its motion: the glass and the hairline border (`width`
-/// whole pixels), both on the band the frame has unfolded to. The edges run white-hot while they
-/// travel and cool as they land; `found` (the search lights the block) draws the border two
-/// pixels wide.
+/// A block's frame in this frame of its motion: the glass and the hairline frame (`width` whole
+/// pixels), both on the band the frame has unfolded to. The frame runs white-hot while it
+/// travels and cools as it lands; `found` (the search lights the block) draws it two pixels wide.
 fn paint_block_frame(painter: &egui::Painter, rect: Rect, m: &WindowMotion, fill: Color32, edge: Color32, width: f32) {
     let band = motion_band(rect, m);
     if band.height() < 0.5 || m.frame <= 0.0 {
         return;
     }
     let heat = (1.0 - m.unfold).clamp(0.0, 1.0);
-    let edge = mix(edge, Color32::WHITE, heat * 0.7).gamma_multiply(m.frame.max(heat));
+    let edge = mix(edge, crate::holo::theme().hot(), heat * 0.8).gamma_multiply(m.frame.max(heat));
     crate::hud_style::panel(painter, band, fill, edge, m.frame);
     if width > 1.0 {
         crate::hud_style::border(painter, band, width, edge);
     }
-    // The Stark marks, as on the board's blocks (`hud_style::shell`), once the frame stands.
-    crate::hud_style::marks(painter, band, false, m.frame * (1.0 - heat));
 }
 
-/// The two short diagonals in a resizable block's bottom-right corner (inside its border).
+/// The two short diagonals in a resizable block's cut corner (inside its frame).
 fn paint_resize_grip(painter: &egui::Painter, rect: Rect, colour: Color32) {
-    let corner = rect.right_bottom() - vec2(4.0, 4.0);
-    for k in [5.0, 9.0] {
+    let corner = rect.right_bottom() - vec2(crate::hud_style::chamfer(rect) * 0.5 + 3.0, crate::hud_style::chamfer(rect) * 0.5 + 3.0);
+    for k in [4.0, 8.0] {
         painter.line_segment([corner - vec2(k, 0.0), corner - vec2(0.0, k)], stroke(1.0, colour));
     }
 }
@@ -8753,51 +8647,47 @@ fn smooth(from: f32, to: f32, x: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
-/// What a window's entrance or exit draws over it (the hairline, the scan edge, the settling
-/// glow, the closing point's flash), and its corner brackets (at rest: where they always are,
-/// inset by half their stroke so a window at the screen's edge keeps them whole). `fill` is the
-/// window's own slate: the scan edge fades the freshly resolved content up out of it.
+/// What a window's entrance or exit draws over it (the line, the scan, the settling glow, the
+/// corner's spark), and its corner ticks (at rest: where they always are). `fill` is the
+/// window's own glass: the scan fades the freshly resolved content up out of it.
 pub(super) fn paint_window_motion(painter: &egui::Painter, rect: Rect, m: &WindowMotion) {
     paint_window_motion_on(painter, rect, m, BLOCK_SLATE);
 }
 
 pub(crate) fn paint_window_motion_on(painter: &egui::Painter, rect: Rect, m: &WindowMotion, fill: Color32) {
-    let accent = crate::hud_board::active_colour();
-    let ppp = painter.ctx().pixels_per_point();
-    // One point as whole physical pixels: the hairline's thickness at any DPI.
-    let px = ppp.round().max(1.0) / ppp;
+    use crate::holo::{a, lit};
+    let t = crate::holo::theme();
+    let (accent, hot) = (t.accent(), t.hot());
+    let px = crate::holo::px(painter);
+    // (A window whose black Windows sees through draws its lines without their light.)
     let soft = !OLED_MOTION.load(Ordering::Relaxed);
+    let mut light = crate::holo::Light::new(painter);
     if m.brackets_alpha > 0.0 && m.brackets > 0.0 {
-        let r = Rect::from_center_size(rect.center(), vec2(rect.width(), rect.height() * m.brackets)).shrink(0.75);
-        // White-hot while they travel, the theme's own once they are home.
+        let r = Rect::from_min_size(rect.min, vec2(rect.width(), rect.height() * m.brackets)).shrink(0.5);
+        // White-hot while they travel, ink once they are home.
         let travel = (1.0 - m.brackets).abs().min(1.0);
-        let colour = mix(crate::hud_board::bracket_colour(), Color32::WHITE, travel * 0.6).gamma_multiply(m.brackets_alpha);
-        crate::hud_board::brackets(painter, r, colour);
+        crate::hud_board::brackets(painter, r, mix(crate::hud_board::bracket_colour().gamma_multiply(0.85), hot, travel).gamma_multiply(m.brackets_alpha));
     }
     if let Some((width, strength)) = m.line {
-        let c = painter.round_pos_to_pixels(rect.center());
-        let half = (rect.width() * 0.5 * width).max(px);
-        let core = Rect::from_min_max(pos2(c.x - half, c.y), pos2(c.x + half, c.y + px));
-        if soft {
-            for (grow, a) in [(4.0, 0.08), (2.0, 0.18)] {
-                painter.rect_filled(core.expand2(vec2(grow * 0.5, grow)), Rounding::ZERO, accent.gamma_multiply(a * strength));
-            }
+        let from = pos2(rect.left(), rect.top() + px * 0.5);
+        let to = pos2(rect.left() + (rect.width() * width).max(px), from.y);
+        light.neon(&[from, to], false, px.max(1.2), a(hot, strength), if soft { strength } else { 0.0 });
+        if soft && width < 0.995 {
+            light.spark(to, 7.0, lit(hot, strength));
         }
-        painter.rect_filled(core, Rounding::ZERO, mix(accent, Color32::WHITE, 0.55).gamma_multiply(strength));
     }
     if m.resolve > 0.0 && m.resolve < 1.0 {
-        // The scan edge: the content above it fades up out of the slate, a soft light trails
-        // it and its line is bright.
+        // The scan: the content above it fades up out of the glass, light trails it.
         let band = motion_band(rect, m);
         let inner = band.shrink2(vec2(1.0, 0.0));
         let y = painter.round_to_pixel(band.top() + band.height() * m.resolve);
-        let fade = 26.0f32.min(y - band.top());
+        let fade = 34.0f32.min(y - band.top());
         if fade > 1.0 {
             let mut mesh = egui::Mesh::default();
             let above = Rect::from_min_max(pos2(inner.left(), y - fade), pos2(inner.right(), y));
-            let (clear, slate) = (Color32::TRANSPARENT, fill.gamma_multiply(0.92));
-            let glow = if soft { accent.gamma_multiply(0.16) } else { Color32::TRANSPARENT };
-            for (colour_top, colour_bottom) in [(clear, slate), (clear, glow)] {
+            let (clear, glass) = (Color32::TRANSPARENT, fill.gamma_multiply(0.92));
+            let trail = if soft { lit(accent, 0.20) } else { Color32::TRANSPARENT };
+            for (colour_top, colour_bottom) in [(clear, glass), (clear, trail)] {
                 let base = mesh.vertices.len() as u32;
                 mesh.colored_vertex(above.left_top(), colour_top);
                 mesh.colored_vertex(above.right_top(), colour_top);
@@ -8808,22 +8698,25 @@ pub(crate) fn paint_window_motion_on(painter: &egui::Painter, rect: Rect, m: &Wi
             }
             painter.add(egui::Shape::mesh(mesh));
         }
-        painter.rect_filled(Rect::from_min_max(pos2(inner.left(), y - px), pos2(inner.right(), y)), Rounding::ZERO, mix(accent, Color32::WHITE, 0.4).gamma_multiply(0.85));
+        light.neon(&[pos2(inner.left(), y), pos2(inner.right(), y)], false, px, a(hot, 0.9), if soft { 0.8 } else { 0.0 });
     }
     if m.glow > 0.0 {
-        crate::hud_style::border(painter, rect, 1.0, accent.gamma_multiply(0.75 * m.glow));
+        let frame = crate::holo::plate(rect, [0.0, 0.0, crate::hud_style::chamfer(rect), 0.0]);
         if soft {
-            painter.rect_stroke(rect.expand(1.5), Rounding::ZERO, stroke(2.0, accent.gamma_multiply(0.14 * m.glow)));
+            let mut closed = frame.clone();
+            closed.push(frame[0]);
+            light.halo(&closed, false, 10.0, lit(accent, 0.34 * m.glow));
         }
+        crate::holo::outline(painter, &frame, a(accent, 0.8 * m.glow));
     }
     if m.flash > 0.0 {
-        let c = painter.round_pos_to_pixels(rect.center());
+        let c = rect.left_top();
         if soft {
-            painter.circle_filled(c, 7.0, accent.gamma_multiply(0.22 * m.flash));
-            painter.rect_filled(Rect::from_center_size(c, vec2(26.0 * m.flash, px)), Rounding::ZERO, accent.gamma_multiply(0.6 * m.flash));
+            light.spark(c, 12.0 * m.flash.max(0.4), lit(hot, 0.9 * m.flash));
         }
-        painter.circle_filled(c, 2.2, Color32::WHITE.gamma_multiply(0.95 * m.flash));
+        painter.circle_filled(c, 1.8, Color32::WHITE.gamma_multiply(0.95 * m.flash));
     }
+    light.paint(painter);
 }
 
 /// `a` → `b` by `t`.
@@ -9240,13 +9133,6 @@ fn sharp_block<R>(ui: &mut Ui, label: &str, tag: &str, body: impl FnOnce(&mut Ui
     shown.inner
 }
 
-/// The glow in the middle of the canvas for a theme colour: the colour itself at about a
-/// twelfth, on obsidian (Arc Cyan's is the old cyan slate, his yellow's a warm umber).
-pub(crate) fn vignette_for(primary: Color32) -> Color32 {
-    let lift = |c: u8, floor: u8| ((c as f32 * 0.085) as u8).saturating_add(floor);
-    Color32::from_rgb(lift(primary.r(), OBSIDIAN.r()), lift(primary.g(), OBSIDIAN.g()), lift(primary.b(), OBSIDIAN.b()))
-}
-
 /// Rows between two scan lines, and the grain's tile and strength (alpha of 255).
 const SCAN_PITCH: f32 = 3.0;
 const GRAIN_TILE: usize = 128;
@@ -9345,58 +9231,44 @@ fn is_cross(offset: Vec2) -> bool {
     step(offset.x).rem_euclid(CROSS_EVERY) == 0 && step(offset.y).rem_euclid(CROSS_EVERY) == 0
 }
 
+/// Where the core stands and how large it is (the HUD says so every frame): the origin of the
+/// drafting table.
+static CANVAS_ORIGIN: Mutex<Option<(Pos2, f32)>> = Mutex::new(None);
+
+/// The canvas everything stands on: the theme's void as a drafting table. A dot grid with a
+/// "+" on every fourth dot (fading out round the blocks, so what they show stands out), and the
+/// core's construction lines: its two axes across the whole screen and three range circles
+/// round it, the first with a tick every 5°. The panels are seen to be placed about him.
 pub(crate) fn paint_canvas(ctx: &egui::Context) {
+    use crate::holo::{a, polar};
     let rect = ctx.screen_rect();
     let painter = ctx.layer_painter(egui::LayerId::background());
-    painter.rect_filled(rect, Rounding::ZERO, OBSIDIAN);
-    let mut mesh = egui::Mesh::default();
+    let t = crate::holo::theme();
+    painter.rect_filled(rect, Rounding::ZERO, t.void());
     let home = home_screen(ctx);
-    // Depth: the dots and the vignette drift a little against the pointer, in whole pixels so
-    // they stay sharp; the blocks stand still.
+    // Depth: the table drifts a little against the pointer, in whole pixels so it stays sharp;
+    // the blocks stand still.
     let drift = canvas_drift(ctx, home);
-    let centre = home.center() + drift;
     let zoom = view_zoom(ctx);
-    let reach = home.size() * 0.75 * zoom;
-    let vignette = vignette_for(crate::hud_board::active_colour());
-    let mid = blend(vignette, OBSIDIAN, 0.55);
-    mesh.colored_vertex(centre, vignette);
-    let n = 72;
-    for k in 0..n {
-        let a = TAU * k as f32 / n as f32;
-        let dir = vec2(a.cos(), a.sin());
-        mesh.colored_vertex(centre + dir * reach * 0.42, mid);
-        mesh.colored_vertex(centre + dir * reach, OBSIDIAN);
+    let (origin, reach) = lock(&CANVAS_ORIGIN).unwrap_or((home.center(), crate::holo_core::centre_radius(home)));
+    let origin = origin + drift;
+    let (ink, w) = (t.ink(), 1.0 / ctx.pixels_per_point());
+    crate::holo::rule(&painter, pos2(rect.left(), origin.y), pos2(rect.right(), origin.y), a(ink, 0.07));
+    crate::holo::rule(&painter, pos2(origin.x, rect.top()), pos2(origin.x, rect.bottom()), a(ink, 0.07));
+    let mut light = crate::holo::Light::new(&painter);
+    for (k, share) in [(1.55, 0.085), (2.3, 0.06), (3.2, 0.045)] {
+        light.ring(origin, reach * k * zoom, w, a(ink, share));
     }
-    for k in 0..n as u32 {
-        let next = (k + 1) % n as u32;
-        let (m0, o0, m1, o1) = (1 + 2 * k, 2 + 2 * k, 1 + 2 * next, 2 + 2 * next);
-        mesh.add_triangle(0, m0, m1);
-        mesh.add_triangle(m0, o0, o1);
-        mesh.add_triangle(m0, o1, m1);
+    let ring = reach * 1.55 * zoom;
+    for i in 0..72 {
+        let angle = TAU * i as f32 / 72.0;
+        let long = i % 6 == 0;
+        light.seg(polar(origin, ring, angle), polar(origin, ring + if long { 9.0 } else { 4.0 }, angle), w, a(ink, if long { 0.22 } else { 0.11 }));
     }
-    painter.add(Shape::mesh(mesh));
-    // The workshop table under it all, as the films' hologram tables are drawn: faint rings of
-    // the theme's light round the home, a tick ring with longer marks every 30°, and a dashed
-    // crosshair through the middle.
-    let light = crate::hud_board::active_colour();
-    let hair = |a: f32| egui::Stroke::new(1.0_f32, light.gamma_multiply(a));
-    let unit = home.width().min(home.height()) * 0.5 * zoom;
-    for (f, a) in [(0.34f32, 0.05f32), (0.52, 0.04), (0.74, 0.09), (1.02, 0.04)] {
-        painter.circle_stroke(centre, unit * f, hair(a));
-    }
-    let ring = unit * 0.74;
-    for k in 0..120 {
-        let dir = egui::Vec2::angled(TAU * k as f32 / 120.0);
-        let long = k % 10 == 0;
-        painter.line_segment([centre + dir * (ring - if long { 12.0 } else { 5.0 }), centre + dir * ring], hair(if long { 0.24 } else { 0.1 }));
-    }
-    for line in [[pos2(rect.left(), centre.y), pos2(rect.right(), centre.y)], [pos2(centre.x, rect.top()), pos2(centre.x, rect.bottom())]] {
-        painter.extend(Shape::dashed_line(&line, hair(0.06), 6.0, 10.0));
-    }
+    light.paint(&painter);
     let mut dots = egui::Mesh::default();
-    let dot = Color32::from_white_alpha((255.0 * DOT_ALPHA) as u8);
-    let cross = Color32::from_white_alpha((255.0 * CROSS_ALPHA) as u8);
-    // Round the blocks the dots fade out: what they show stands out (Sir's choice of 2026-11-15).
+    let (dot, cross) = (a(ink, DOT_ALPHA), a(ink, CROSS_ALPHA));
+    let centre = home.center() + drift;
     let blocks = crate::hud_dock::block_rects();
     let mut y = rect.top() + DOT_SPACING / 2.0 + drift.y.rem_euclid(DOT_SPACING) - DOT_SPACING;
     while y < rect.bottom() {
@@ -9468,7 +9340,7 @@ impl HudApp {
         crate::window_drill::begin_frame();
         let now = Instant::now();
         // Clamped: the first frame after an idle second never makes an animation jump.
-        let dt = crate::rose_emblem_renderer::safe_dt(now.duration_since(self.last_frame).as_secs_f32());
+        let dt = crate::holo_core::safe_dt(now.duration_since(self.last_frame).as_secs_f32());
         if ctx.input(|i| i.pointer.any_down() || i.pointer.delta().length() > 0.5 || !i.keys_down.is_empty()) {
             self.last_activity = now;
         }
@@ -9794,7 +9666,7 @@ impl HudApp {
     /// the date and the weather under it. Sir can drag it anywhere, onto any monitor; a double
     /// click puts it back under the emblem, with which it then moves again. (Sir, 2026-11-14:
     /// "I want the desktop view to have a clock".)
-    fn desk_clock(&mut self, ctx: &egui::Context, iface: &InterfaceSettings, home: Rect, frame: &crate::rose_emblem_renderer::EmblemFrame) {
+    fn desk_clock(&mut self, ctx: &egui::Context, iface: &InterfaceSettings, home: Rect, frame: &crate::holo_core::CoreFrame) {
         let now = chrono::Local::now().naive_local();
         let weather = crate::idle_screen::glance().weather;
         // (By the emblem's size at rest, on whichever monitor it stands: its swelling with his
@@ -10146,7 +10018,7 @@ mod tests {
     // PNGs (target/ui-snapshots/gallery_*.png) to be looked at. Each asserts only that it drew.
 
     fn gallery(name: &str, size: Vec2, frames: usize, mut ui: impl FnMut(&egui::Context)) {
-        let _look = crate::theme_engine::look_for_pictures();
+        let _look = crate::holo_theme::look_for_pictures();
         let mut snap = crate::ui_snapshot::Snapshot::new(size);
         let canvas = snap.render(frames, |ctx| {
             paint_canvas(ctx);
@@ -10158,9 +10030,9 @@ mod tests {
 
     const GALLERY: Vec2 = Vec2::new(1280.0, 760.0);
 
-    fn emblem_at_rest() -> RoseEmblem {
-        let mut emblem = RoseEmblem::new(crate::rose_emblem_renderer::RoseEmblemState::AwakeFrontEmblem);
-        emblem.step(1.0 / 60.0, 0.0, false);
+    fn emblem_at_rest() -> Core {
+        let mut emblem = Core::new(crate::holo_core::Pose::Front);
+        emblem.tick(1.0 / 60.0, 0.0, false);
         emblem
     }
 
@@ -10234,7 +10106,7 @@ mod tests {
         let _g = crate::hud_dock::test_lock();
         settings_panel::open(true);
         *settings_panel::GAMES.lock().unwrap() = Some(vec![("Stand-in Racer".into(), "StandInRacer".into()), ("Stand-in Quest".into(), "StandInQuest".into())]);
-        let _look = crate::theme_engine::look_for_pictures();
+        let _look = crate::holo_theme::look_for_pictures();
         let mut snap = crate::ui_snapshot::Snapshot::new(GALLERY);
         let mut last = None;
         for k in 0..40 {
@@ -10276,10 +10148,6 @@ mod tests {
     #[test]
     fn gallery_lines_under_the_emblem() {
         let emblem = emblem_at_rest();
-        let mut bands = [0.0f32; crate::pc_audio::BANDS];
-        for (k, b) in bands.iter_mut().enumerate() {
-            *b = (0.92 - k as f32 * 0.03) * (0.55 + 0.45 * (k as f32 * 1.7).sin().abs());
-        }
         crate::hud_lines::dismiss_offer();
         crate::hud_lines::heard("Jay, open the mixer and turn the music");
         let draw = |ctx: &egui::Context, state: &'static str, lyric: Option<&str>, spectrum: bool| {
@@ -10289,7 +10157,6 @@ mod tests {
                 emblem.paint(&painter, screen);
                 let frame = emblem.frame(screen);
                 if spectrum {
-                    paint_spectrum_ring(&painter, &frame, &bands);
                     crate::hud_lines::paint_mic_label(&painter, frame.centre, frame.radius, "TOO QUIET", 1.0);
                 } else {
                     crate::hud_style::ripple(&painter, frame.centre, frame.radius, 0.2, crate::hud_board::active_colour());
@@ -10379,7 +10246,7 @@ mod tests {
     fn gallery_idle_screen_and_startup() {
         use crate::startup_sequence::Kind;
         let emblem = emblem_at_rest();
-        let base = |ctx: &egui::Context| -> crate::rose_emblem_renderer::EmblemFrame {
+        let base = |ctx: &egui::Context| -> crate::holo_core::CoreFrame {
             let screen = ctx.screen_rect();
             egui::CentralPanel::default().frame(Frame::none()).show(ctx, |ui| emblem.paint(&ui.painter_at(screen), screen));
             emblem.frame(screen)
@@ -10435,7 +10302,7 @@ mod tests {
         gallery("gallery_subtitles", vec2(1000.0, 110.0), 2, |ctx| crate::live_subtitles::paint_bar(ctx, &lines, None));
         // The corner orb with what is being said beside it, with a question of his, and with
         // the orders he offers (over a light ground, as over a bright window of Sir's).
-        let emblem = RoseEmblem::new(crate::rose_emblem_renderer::RoseEmblemState::AwakeFrontEmblem);
+        let emblem = Core::new(crate::holo_core::Pose::Front);
         let orb = |name: &str, c: CornerOrbContent| {
             gallery(name, vec2(952.0, 168.0), 2, |ctx| {
                 ctx.layer_painter(egui::LayerId::background()).rect_filled(ctx.screen_rect(), Rounding::ZERO, Color32::from_rgb(0xD8, 0xDC, 0xE0));
@@ -10607,11 +10474,6 @@ mod tests {
         assert!(strongest > 0 && strongest <= 2 * GRAIN_ALPHA as u8, "grain is a whisper: {strongest}");
         let (light, dark) = (grain.pixels.iter().filter(|p| p.r() > 0).count(), grain.pixels.iter().filter(|p| p.r() == 0 && p.a() > 0).count());
         assert!(light > GRAIN_TILE * GRAIN_TILE / 4 && dark > GRAIN_TILE * GRAIN_TILE / 4, "lighter and darker specks: {light} / {dark}");
-        // His yellow glows warm (red and green lead), Arc Cyan cool, and both stay dark.
-        let warm = vignette_for(Color32::from_rgb(0xFF, 0xD4, 0x00));
-        assert!(warm.r() > warm.b() && warm.g() > warm.b() && warm.r() < 40, "{warm:?}");
-        let cool = vignette_for(Color32::from_rgb(0x00, 0xF0, 0xFF));
-        assert!(cool.b() > cool.r() && cool.b() < 40, "{cool:?}");
         // A frame with the finish paints, and asks for no frame of its own.
         // (A new context paints twice before it settles, and the grain's texture is new once.)
         let ctx = egui::Context::default();
@@ -10633,12 +10495,12 @@ mod tests {
         assert_eq!(WindowMotion::of(None, None), WindowMotion::REST);
         assert!(!entrance(100).moving(), "an entrance ends exactly at rest");
         let start = entrance(0);
-        assert!(start.moving() && start.unfold == 0.0 && start.frame == 0.0 && start.resolve == 0.0 && start.brackets_alpha == 0.0);
+        assert!(start.moving() && start.unfold == 0.0 && start.frame == 0.0 && start.resolve == 0.0 && start.brackets_alpha == 0.0 && start.flash > 0.9, "it begins as a spark in its corner");
         for n in 0..=100 {
             let (m, ms) = (entrance(n), ms_in(n));
-            assert_eq!(m.flash, 0.0, "no flash on the way in ({ms} ms)");
-            assert!(m.brackets >= m.unfold - 1e-6, "the brackets lead the frame ({ms} ms)");
-            if ms < IN_UNFOLD.1 {
+            assert!(ms < IN_LINE.1 || m.flash == 0.0, "the corner's spark is gone once the line is out ({ms} ms)");
+            assert!(m.brackets >= m.unfold - 1e-6, "the corner ticks ride ahead of the frame ({ms} ms)");
+            if m.unfold < 0.98 {
                 assert_eq!(m.resolve, 0.0, "nothing resolves before the frame is whole ({ms} ms)");
             }
             if m.frame > 0.0 {
@@ -10649,7 +10511,7 @@ mod tests {
                 assert!(m.unfold >= before.unfold - 1e-6 && m.resolve >= before.resolve - 1e-6 && m.frame >= before.frame - 1e-6 && m.brackets >= before.brackets - 1e-6, "the entrance only grows ({ms} ms)");
                 if ms <= IN_LINE.1 {
                     let (w0, w1) = (before.line.expect("the line").0, m.line.expect("the line").0);
-                    assert!(w1 > w0, "the hairline draws out of the middle ({ms} ms)");
+                    assert!(w1 > w0, "the line runs out of its corner ({ms} ms)");
                 }
             }
         }
@@ -10667,11 +10529,11 @@ mod tests {
                 assert!(m.unfold < 0.75, "the line shows once the frame has folded into it ({ms} ms)");
             }
         }
-        assert!(exit(35).content < 1e-6 && exit(35).unfold > 0.9, "the content is gone while the frame has barely folded");
+        assert!(exit(34).content < 1e-6 && exit(34).unfold > 0.9, "the content is gone while the frame has barely folded");
         let end = exit(100);
         assert!(end.frame < 1e-6 && end.content < 1e-6 && end.brackets_alpha < 1e-6 && end.unfold < 1e-6 && end.line.is_none());
         let flash = (0..=100).max_by(|a, b| exit(*a).flash.total_cmp(&exit(*b).flash)).unwrap_or(0);
-        assert!((150.0..=200.0).contains(&ms_out(flash)) && exit(flash).flash > 0.9, "the point flashes once at the end: {} ms", ms_out(flash));
+        assert!((200.0..=240.0).contains(&ms_out(flash)) && exit(flash).flash > 0.9, "the corner sparks once at the end: {} ms", ms_out(flash));
         // Closed while it was still opening: the exit takes over.
         assert_eq!(WindowMotion::of(Some(0.4), Some(0.2)), exit(20));
     }
@@ -11181,15 +11043,6 @@ mod tests {
         assert!(rim_target("idle", "pre_speech", 0.0, 0.0) >= 0.25, "a quiet voice still shows");
         assert_eq!(rim_target("speaking", "speaking", 0.9, 0.0), 0.0, "never while JAI speaks");
         assert_eq!(rim_target("listening", "speaking", 0.9, 1.0), 0.0, "never docked");
-        let centre = pos2(500.0, 400.0);
-        let ticks = rim_ticks(centre, 100.0, 1.0, 2.5);
-        assert_eq!(ticks.len(), 120);
-        for (from, to, alpha) in &ticks {
-            let (r0, r1) = ((*from - centre).length(), (*to - centre).length());
-            assert!(r0 >= 107.9 && r1 > r0 && r1 <= r0 + 22.01 && *alpha <= 1.0, "{r0} {r1} {alpha}");
-        }
-        let lengths: Vec<f32> = ticks.iter().map(|(a, b, _)| (*b - *a).length()).collect();
-        assert!(lengths.iter().copied().fold(0.0, f32::max) - lengths.iter().copied().fold(f32::MAX, f32::min) > 5.0, "the lengths ripple");
         let ctx = egui::Context::default();
         install_fonts(&ctx);
         let screen = Rect::from_min_size(Pos2::ZERO, vec2(1920.0, 1080.0));
@@ -11211,12 +11064,12 @@ mod tests {
             assert!(long.ends_with('…') && painter.layout_no_wrap(long.clone(), font.clone(), Color32::WHITE).size().x <= 316.0, "{long}");
             assert!(long.chars().count() > 20, "as much as fits: {long}");
         });
-        let home = crate::rose_emblem_renderer::EmblemFrame { centre: pos2(960.0, 500.0), radius: 200.0, rest: 200.0, flat: 1.0, dock: 0.0 };
+        let home = crate::holo_core::CoreFrame { centre: pos2(960.0, 500.0), radius: 200.0, rest: 200.0, flat: 1.0, dock: 0.0 };
         let card = screen_card_rect(screen, &home);
         assert!(card.top() > 700.0 && (card.center().x - 960.0).abs() < 0.5, "under the emblem: {card:?}");
-        let low = crate::rose_emblem_renderer::EmblemFrame { centre: pos2(1900.0, 1000.0), ..home };
+        let low = crate::holo_core::CoreFrame { centre: pos2(1900.0, 1000.0), ..home };
         assert!(screen.contains_rect(screen_card_rect(screen, &low)), "always whole on the screen");
-        let docked = crate::rose_emblem_renderer::EmblemFrame { dock: 1.0, ..home };
+        let docked = crate::holo_core::CoreFrame { dock: 1.0, ..home };
         assert!(screen_card_rect(screen, &docked).bottom() <= 1080.0 - 10.0 - TELEMETRY_H, "above the strip");
     }
 
@@ -11256,7 +11109,7 @@ mod tests {
         assert_eq!(parts.len(), 3);
         assert_eq!(blocks, vec![block_bounds(first), parts[1].shrink(8.0), parts[2].shrink(8.0)]);
         // The emblem's home is the middle of the first monitor, not of the box.
-        let (centre, _) = crate::rose_emblem_renderer::home_pose(home, 0.0);
+        let (centre, _) = crate::holo_core::home_pose(home, 0.0);
         assert_eq!(centre, pos2(1080.0 + 1280.0, 290.0 + 720.0));
         // The top right of the header and the bottom strip are on the first monitor, not in the
         // corners above and below the two landscape monitors.
@@ -11542,7 +11395,7 @@ mod tests {
                 let (left, right) = (x - width / 2.0, x + width / 2.0);
                 assert!(left >= 0.0 && right <= w - console, "{w}×{h} console {console}: {left}..{right}");
                 // The docked emblem (centre `DOCK_INSET` left of the free edge, 52.5 px radius).
-                let emblem = crate::hud_dock::docked_centre(screen, console).x - crate::rose_emblem_renderer::DOCKED_DIAMETER / 2.0;
+                let emblem = crate::hud_dock::docked_centre(screen, console).x - crate::holo_core::DOCKED_DIAMETER / 2.0;
                 assert!(right < emblem, "{w}×{h} console {console}: block ends at {right}, emblem starts at {emblem}");
                 // The key hints of the bottom strip end left of it too, console out or not.
                 assert!(key_hints_right(screen, console) + 16.0 <= emblem, "{w}×{h} console {console}: hints end at {}", key_hints_right(screen, console));

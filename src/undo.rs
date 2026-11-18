@@ -492,8 +492,8 @@ mod tests {
         let before = snapshot();
         // A look change: the settings as they were, said for what they were.
         let mut after = snapshot();
-        after.interface.hud_palette = "stark_gold".to_string();
-        let step = way_back("configure_interface", &json!({"hud_palette": "stark_gold"}), "", &before, &after).expect("a theme change has a way back");
+        after.interface.hud_palette = "arc_reactor".to_string();
+        let step = way_back("configure_interface", &json!({"hud_palette": "arc_reactor"}), "", &before, &after).expect("a theme change has a way back");
         assert_eq!((step.done, step.interface.as_ref(), step.calls.len()), ("the theme is as it was", Some(&before.interface), 0));
         let mut spanned = snapshot();
         spanned.interface.span_all_monitors = true;

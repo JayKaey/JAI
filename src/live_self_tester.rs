@@ -507,7 +507,7 @@ pub async fn warm_up(app: &Jai) {
     // of the settings that is thrown away. (After a night's idle the first emblem move took
     // 236 ms, the next one none: its code had to come off the disk.)
     let look = app.tools().config.read(|c| c.interface.clone());
-    for args in [json!({"orb_board_position": "top left"}), json!({"orb_board_position": "a little bit to the right"}), json!({"hud_palette": "arc_cyan"}), json!({"core_view": true})] {
+    for args in [json!({"orb_board_position": "top left"}), json!({"orb_board_position": "a little bit to the right"}), json!({"hud_palette": "arc_reactor"}), json!({"core_view": true})] {
         let _ = crate::interface::configure(&look, &args);
     }
     // Windows' media session answers slowly the first time it is asked (336 ms measured, then
@@ -1001,12 +1001,12 @@ async fn pipeline_probes(app: &Jai) {
     });
 
     timed("pipeline", "theme: his yellow is the default, saved themes load", LOCAL_BUDGET_MS, || {
-        use crate::theme_engine as theme;
-        if theme::DEFAULT_PRESET != "jai_gold" || theme::preset("stark_red").is_none() || theme::preset("jai_gold").is_none() {
+        use crate::{holo_theme as theme, theme_store as store};
+        if theme::DEFAULT_PRESET != "stark_gold" || theme::preset("mono").is_none() || theme::preset("jai_gold").is_none() {
             return Err(format!("the default is '{}'", theme::DEFAULT_PRESET));
         }
-        let stored = if Path::new(theme::CUSTOM_THEMES_PATH).is_file() { theme::load_custom(Path::new(theme::CUSTOM_THEMES_PATH)).len() } else { 0 };
-        Ok(format!("default {}; {stored} saved theme(s) in {}", theme::label(theme::DEFAULT_PRESET), theme::CUSTOM_THEMES_PATH))
+        let stored = if Path::new(store::CUSTOM_THEMES_PATH).is_file() { store::load_custom(Path::new(store::CUSTOM_THEMES_PATH)).len() } else { 0 };
+        Ok(format!("default {}; {stored} saved theme(s) in {}", theme::label(theme::DEFAULT_PRESET), store::CUSTOM_THEMES_PATH))
     });
 
     timed("pipeline", "monitors are listed", LOCAL_BUDGET_MS, || {
@@ -1146,7 +1146,7 @@ async fn hud_probes(app: &Jai) {
 
         // The theme: another preset and back.
         let palette = tools.config.read(|c| c.interface.hud_palette.clone());
-        let other = crate::theme_engine::next_preset(&palette);
+        let other = crate::holo_theme::next_preset(&palette);
         let started = Instant::now();
         let changed = Box::pin(tools.execute("configure_interface", &json!({"hud_palette": other}))).await;
         let now = tools.config.read(|c| c.interface.hud_palette.clone());

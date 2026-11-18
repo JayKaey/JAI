@@ -1329,7 +1329,7 @@ pub struct HoloPalette {
 
 /// The holo look in the theme's hue (the reference blue for Arc Cyan).
 pub fn holo_palette(hue: f32) -> HoloPalette {
-    let c = |dh: f32, s: f32, v: f32| crate::theme_engine::from_hsv(hue + dh, s, v);
+    let c = |dh: f32, s: f32, v: f32| crate::holo_theme::from_hsv(hue + dh, s, v);
     HoloPalette {
         ocean_deep: c(10.0, 0.90, 0.30),
         ocean_shallow: c(6.0, 0.86, 0.50),
@@ -1344,8 +1344,8 @@ pub fn holo_palette(hue: f32) -> HoloPalette {
 /// The globe's hue: the theme's primary turned a little towards blue (Arc Cyan → the reference's
 /// #5AB0E8 continents); a colourless theme gets the reference blue.
 pub fn theme_hue() -> f32 {
-    let p = crate::theme_engine::current();
-    let (h, s, _) = crate::theme_engine::to_hsv(p.core_primary);
+    let p = crate::holo_theme::current();
+    let (h, s, _) = crate::holo_theme::to_hsv(p.accent);
     if s < 0.2 {
         206.0
     } else {

@@ -19,7 +19,7 @@ fn main() {
     println!("cargo:rerun-if-changed=assets/jai.rc");
     println!("cargo:rerun-if-changed=assets/jai.manifest");
     println!("cargo:rerun-if-changed=src");
-    // `app_icon::generate_rose_gyro_app_icon` (egui types) only exists in the application itself.
+    // `app_icon::window_icon` (egui types) only exists in the application itself.
     println!("cargo::rustc-check-cfg=cfg(jai_app)");
     println!("cargo:rustc-cfg=jai_app");
 

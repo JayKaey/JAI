@@ -118,13 +118,13 @@ fn words(text: &str) -> String {
 }
 
 /// The PC itself as the object of the sentence ("my system" too, never "your system": that is
-/// JAI).
-const PC: &str = r"(?:(?:my |the |this |your |our |den |meinen |meinem |dem |mein |deinen )?(?:pc|computer|laptop|rechner|machine|desktop|workstation|gaming pc|gaming rig|rig)|(?:my |the |this |our |my whole |my entire |the whole |the entire |mein |meinen |das )system)";
+/// JAI). ("By PC": how the recogniser heard "my PC", 2026-11-16.)
+const PC: &str = r"(?:(?:my |by |the |this |your |our |den |meinen |meinem |dem |mein |deinen )?(?:pc|computer|laptop|rechner|machine|desktop|workstation|gaming pc|gaming rig|rig)|(?:my |the |this |our |my whole |my entire |the whole |the entire |mein |meinen |das )system)";
 
 static SHUTDOWN_PC: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(&format!(
         // ("Shut on my PC": how the recogniser hears "shut down" said quickly.)
-        r"\b(?:shut\s*down|shutdown|shut on|turn off|switch off|power off|power down)\s+{PC}\b|\b{PC}\s+(?:shut\s*down|shutdown|herunterfahren|runterfahren|ausschalten|abschalten)\b|\b(?:fahr|fahre)\s+{PC}\s+(?:herunter|runter)\b|\b(?:schalt|schalte|mach|mache)\s+{PC}\s+aus\b|\b(?:put|send|set)\s+{PC}\s+(?:to|into|in)\s+(?:shut\s*down|shutdown|power off)(?:\s+mode)?\b"
+        r"\b(?:shut\s*down|shutdown|shut on|shut off|turn off|switch off|power off|power down)\s+{PC}\b|\b{PC}\s+(?:shut\s*down|shutdown|herunterfahren|runterfahren|ausschalten|abschalten)\b|\b(?:fahr|fahre)\s+{PC}\s+(?:herunter|runter)\b|\b(?:schalt|schalte|mach|mache)\s+{PC}\s+aus\b|\b(?:put|send|set)\s+{PC}\s+(?:to|into|in)\s+(?:shut\s*down|shutdown|power off)(?:\s+mode)?\b"
     ))
     .expect("valid shutdown regex")
 });
@@ -328,11 +328,15 @@ mod tests {
             assert!(power_request(t).is_some(), "{t}");
         }
         assert_eq!(power_request("restart the whole system"), Some(PowerAction::Restart));
+        // 2026-11-16: "shut off" closed an app called "off my pc"; "by PC" is "my PC" misheard.
+        for t in ["please shut off my PC", "please power down by PC", "shut off my computer", "power off my PC", "power down my PC", "turn off my PC", "fahr den PC runter", "schalte den PC aus"] {
+            assert_eq!(power_request(t), Some(PowerAction::Shutdown), "{t}");
+        }
     }
 
     #[test]
     fn not_requests() {
-        for t in ["shut down", "close yourself", "don't shut down my PC", "how do I shut down my PC?", "turn down the volume", "shut down Discord", "restart Spotify", "Should I lock my PC?", "Should I restart my PC?", "Is it safe to put my PC to sleep?", "Soll ich den PC sperren?", "shut down your system", "shut down all systems"] {
+        for t in ["shut down", "close yourself", "don't shut down my PC", "how do I shut down my PC?", "turn down the volume", "shut down Discord", "restart Spotify", "Should I lock my PC?", "Should I restart my PC?", "Is it safe to put my PC to sleep?", "Soll ich den PC sperren?", "shut down your system", "shut down all systems", "shut off Spotify", "shut Discord", "close Spotify"] {
             assert_eq!(power_request(t), None, "{t}");
         }
     }

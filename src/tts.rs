@@ -1851,7 +1851,7 @@ fn render_clause(
             return Some(hit);
         }
     }
-    crate::core_sphere_3d::CoreActivityBus::chain(&["pronunciation_lexicon.rs", "phonemizer.rs", "tts.rs", "jai_voice_dsp.rs", "fish_zero_shot_tts.rs"]);
+    crate::mind_activity::chain(&["pronunciation_lexicon.rs", "phonemizer.rs", "tts.rs", "jai_voice_dsp.rs", "fish_zero_shot_tts.rs"]);
     let audio = match engine {
         Engine::Kokoro(k) => {
             // "Sir, the report's done.": the vocative gets its own 85 ms breath.

@@ -128,12 +128,12 @@ fn plot_frame() -> Color32 {
 }
 /// f(x): the theme's contrast accent (cyan in the ROSE default).
 fn plot_cyan() -> Color32 {
-    crate::theme_engine::current().secondary()
+    crate::holo_theme::current().deep()
 }
 /// f′(x): the theme's primary (crimson in ROSE), else crimson `#FF1E56` when the primary is too
 /// close to f(x)'s colour to tell the curves apart (Arc Cyan: two blues).
 fn plot_crimson() -> Color32 {
-    let (a, b) = (crate::theme_engine::current().primary(), plot_cyan());
+    let (a, b) = (crate::holo_theme::current().accent(), plot_cyan());
     let distance = a.r().abs_diff(b.r()) as u32 + a.g().abs_diff(b.g()) as u32 + a.b().abs_diff(b.b()) as u32;
     if distance < 200 { Color32::from_rgb(0xFF, 0x1E, 0x56) } else { a }
 }
@@ -828,11 +828,6 @@ mod tests {
         assert_eq!(curve_runs(&xs, &sin, |x, y| view.to_screen(x, y), -1.2, 1.2).len(), 1);
         let pole: Vec<f64> = xs.iter().map(|x| 1.0 / x).collect();
         assert!(curve_runs(&xs, &pole, |x, y| view.to_screen(x, y), -2.0, 2.0).len() >= 2);
-        // ROSE colours: f(x) cyan, f'(x) crimson.
-        // In the ROSE default: f(x) in the contrast cyan, f'(x) in the primary rose-crimson.
-        let rose = crate::theme_engine::preset("rose_crimson").unwrap();
-        assert_eq!(rose.secondary(), Color32::from_rgb(0x00, 0xF5, 0xFF));
-        assert_eq!(rose.primary(), Color32::from_rgb(0xFF, 0x00, 0x55));
         assert_eq!(PLOT_CANVAS, Color32::from_rgb(0x05, 0x0A, 0x10));
     }
 
@@ -860,8 +855,8 @@ mod tests {
         let p = Palette::new(&crate::interface::InterfaceSettings::default());
         // The curves take the active theme's colours, which other tests switch: judged by the
         // colours this drawing uses, not by a fixed cyan.
-        let _theme = crate::theme_engine::test_lock();
-        crate::theme_engine::finish_fade();
+        let _theme = crate::holo_theme::test_lock();
+        crate::holo_theme::finish_fade();
         let (f_colour, df_colour) = (plot_cyan(), plot_crimson());
         let size = vec2(900.0, 520.0);
         let plot = Rect::from_min_size(pos2(20.0, 20.0), size - vec2(40.0, 40.0));

@@ -327,6 +327,9 @@ pub struct InterfaceSettings {
     pub orb_monitor: u8,
     /// The look: the True-OLED minimal design (default) or the classic sci-fi HUD.
     pub ui_paradigm: crate::oled_minimal_ui::UiDesignParadigm,
+    /// Which core stands on the HUD: "simple" (the instrument of rings) or "complex" (the
+    /// sphere of circuitry).
+    pub core_style: String,
     /// The `COMMS // LIVE RESPONSE` block above the bottom strip. Off by default, like the
     /// reference board: the strip shows what Sir said, the voice carries the answer and the text
     /// console keeps every written reply.
@@ -414,11 +417,12 @@ impl Default for InterfaceSettings {
             orb_anchor: "bottom-right".to_string(),
             orb_monitor: 0,
             ui_paradigm: crate::oled_minimal_ui::UiDesignParadigm::ModernOledMinimal,
+            core_style: "simple".to_string(),
             comms_block: false,
             status_pill: true,
             voice_rim: true,
             sound_cues: true,
-            hud_palette: crate::theme_engine::DEFAULT_PRESET.to_string(),
+            hud_palette: crate::holo_theme::DEFAULT_PRESET.to_string(),
             orb_board_pos: None,
             span_all_monitors: false,
             allow_window_overlap: false,
@@ -542,9 +546,9 @@ impl InterfaceSettings {
 
     pub fn sanitize(&mut self) {
         let defaults = Self::default();
-        let known = crate::theme_engine::preset(&self.hud_palette).is_some()
+        let known = crate::holo_theme::preset(&self.hud_palette).is_some()
             || self.hud_palette.strip_prefix("custom:#").is_some_and(|h| h.len() == 6 && u32::from_str_radix(h, 16).is_ok())
-            || self.hud_palette.strip_prefix(crate::theme_engine::CUSTOM_PREFIX).is_some_and(|n| crate::theme_engine::custom(n).is_some());
+            || self.hud_palette.strip_prefix(crate::holo_theme::CUSTOM_PREFIX).is_some_and(|n| crate::theme_store::custom(n).is_some());
         if !known {
             self.hud_palette = defaults.hud_palette.clone();
         }
@@ -1653,7 +1657,7 @@ fn list_arg(args: &Value, key: &str) -> Vec<String> {
 /// Applies `configure_interface` arguments to `current`. Fields that cannot be understood are
 /// reported back instead of failing the whole call; nothing understood at all is an error.
 /// A saved theme on the whole HUD: palette, accent and background tint.
-fn apply_custom_theme(s: &mut InterfaceSettings, t: &crate::theme_engine::CustomTheme, done: &mut Vec<String>, verb: &str) {
+fn apply_custom_theme(s: &mut InterfaceSettings, t: &crate::theme_store::CustomTheme, done: &mut Vec<String>, verb: &str) {
     s.hud_palette = t.key();
     s.accent = hex(t.core_primary);
     s.background = hex(t.background_tint);
@@ -1679,6 +1683,15 @@ pub fn configure(current: &InterfaceSettings, args: &Value) -> Result<Configured
             None => failed.push(format!("unknown design '{raw}' (modern_oled_minimal, classic_scifi_hud)")),
         }
     }
+    if let Some(raw) = str_arg(args, &["core_style", "core", "core_look"]) {
+        match crate::holo_core::CoreStyle::of_word(raw) {
+            Some(style) => {
+                s.core_style = style.name().to_string();
+                done.push(format!("the {} core", style.name()));
+            }
+            None => failed.push(format!("unknown core '{raw}' (simple, complex)")),
+        }
+    }
     if let Some(raw) = str_arg(args, &["accent_preset"]) {
         match crate::oled_minimal_ui::accent_preset(raw) {
             Some((name, hex_code)) => {
@@ -1696,7 +1709,7 @@ pub fn configure(current: &InterfaceSettings, args: &Value) -> Result<Configured
             s.background = t.background.to_string();
             // The HUD's palette follows: the preset the word names, else the theme's accent.
             if let Some(rgb) = parse_color(t.accent) {
-                s.hud_palette = crate::theme_engine::palette_name_for(name, rgb);
+                s.hud_palette = crate::theme_store::name_for(name, rgb);
             }
             done.push(format!("theme {}", t.display));
         } else if let Some(layout) = HudLayout::parse(name) {
@@ -1705,7 +1718,7 @@ pub fn configure(current: &InterfaceSettings, args: &Value) -> Result<Configured
         } else if let Some(rgb) = parse_color(name) {
             s.accent = hex(rgb);
             s.theme = "custom".into();
-            s.hud_palette = crate::theme_engine::palette_name_for(name, rgb);
+            s.hud_palette = crate::theme_store::name_for(name, rgb);
             done.push(format!("accent colour {name}"));
         } else {
             failed.push(format!("unknown theme '{name}' (themes: {})", theme_list()));
@@ -1722,7 +1735,7 @@ pub fn configure(current: &InterfaceSettings, args: &Value) -> Result<Configured
             Some(rgb) => {
                 s.accent = hex(rgb);
                 s.theme = "custom".into();
-                s.hud_palette = crate::theme_engine::palette_name_for(c, rgb);
+                s.hud_palette = crate::theme_store::name_for(c, rgb);
                 done.push(format!("accent colour {c}"));
             }
             None => failed.push(format!("unknown colour '{c}'")),
@@ -1942,13 +1955,13 @@ pub fn configure(current: &InterfaceSettings, args: &Value) -> Result<Configured
         done.push("every window docked inside the HUD".into());
     }
     if let Some(name) = str_arg(args, &["hud_palette", "palette", "hud_theme"]) {
-        match crate::theme_engine::preset(name) {
+        match crate::holo_theme::preset(name) {
             Some(p) => {
-                s.hud_palette = name.trim().to_lowercase().replace([' ', '-'], "_");
-                s.accent = hex(p.core_primary);
+                s.hud_palette = crate::holo_theme::preset_name(name).unwrap_or(crate::holo_theme::DEFAULT_PRESET).to_string();
+                s.accent = hex(p.accent);
                 done.push(format!("HUD theme {}", s.hud_palette));
             }
-            None => match crate::theme_engine::custom(name.trim().trim_start_matches(crate::theme_engine::CUSTOM_PREFIX)) {
+            None => match crate::theme_store::custom(name.trim().trim_start_matches(crate::holo_theme::CUSTOM_PREFIX)) {
                 Some(t) => apply_custom_theme(&mut s, &t, &mut done, "loaded"),
                 None => failed.push(format!("unknown HUD theme '{name}'")),
             },
@@ -1960,8 +1973,8 @@ pub fn configure(current: &InterfaceSettings, args: &Value) -> Result<Configured
         let text = |k: &str| spec.get(k).and_then(Value::as_str).map(str::trim).filter(|v| !v.is_empty());
         let description = text("description").or(spec.as_str()).unwrap_or("");
         let colour = |k: &str| text(k).and_then(parse_color);
-        let designed = crate::theme_engine::design_theme(text("name"), description);
-        let base = designed.or_else(|| colour("core_primary").or(colour("window_border")).map(|c| crate::theme_engine::CustomTheme::from_palette(text("name").unwrap_or("Custom"), &crate::theme_engine::derive(c), s.background_rgb())));
+        let designed = crate::theme_store::design_theme(text("name"), description);
+        let base = designed.or_else(|| colour("core_primary").or(colour("window_border")).map(|c| crate::theme_store::CustomTheme::from_theme(text("name").unwrap_or("Custom"), &crate::holo_theme::Theme::of_colour(c))));
         match base {
             Some(mut t) => {
                 if let Some(n) = text("name") {
@@ -1971,7 +1984,7 @@ pub fn configure(current: &InterfaceSettings, args: &Value) -> Result<Configured
                 t.core_secondary = colour("core_secondary").unwrap_or(t.core_secondary);
                 t.window_border = colour("window_border").unwrap_or(t.window_border);
                 t.background_tint = text("background_tint").and_then(parse_background).unwrap_or(t.background_tint);
-                match crate::theme_engine::save_custom(t.clone()) {
+                match crate::theme_store::save_custom(t.clone()) {
                     Ok(()) => apply_custom_theme(&mut s, &t, &mut done, "created and saved"),
                     Err(e) => failed.push(format!("theme '{}' not saved: {e}", t.name)),
                 }
@@ -1980,16 +1993,16 @@ pub fn configure(current: &InterfaceSettings, args: &Value) -> Result<Configured
         }
     }
     if let Some(name) = str_arg(args, &["save_theme"]) {
-        let t = crate::theme_engine::CustomTheme::from_palette(name, &crate::theme_engine::resolve(&s.hud_palette), s.background_rgb());
-        match crate::theme_engine::save_custom(t.clone()) {
+        let t = crate::theme_store::CustomTheme::from_theme(name, &crate::theme_store::resolve(&s.hud_palette));
+        match crate::theme_store::save_custom(t.clone()) {
             Ok(()) => apply_custom_theme(&mut s, &t, &mut done, "saved"),
             Err(e) => failed.push(format!("theme '{name}' not saved: {e}")),
         }
     }
     if let Some(name) = str_arg(args, &["load_theme"]) {
-        match crate::theme_engine::custom(name) {
+        match crate::theme_store::custom(name) {
             Some(t) => apply_custom_theme(&mut s, &t, &mut done, "loaded"),
-            None => failed.push(format!("no saved theme '{name}' (saved: {})", crate::theme_engine::custom_themes().iter().map(|t| t.name.as_str()).collect::<Vec<_>>().join(", "))),
+            None => failed.push(format!("no saved theme '{name}' (saved: {})", crate::theme_store::custom_themes().iter().map(|t| t.name.as_str()).collect::<Vec<_>>().join(", "))),
         }
     }
     if let Some(name) = str_arg(args, &["detach_window"]) {
@@ -2039,8 +2052,8 @@ pub fn configure(current: &InterfaceSettings, args: &Value) -> Result<Configured
 }
 
 /// The core sphere command in `configure_interface` arguments (`core_scale`, `core_spin`).
-pub fn core_command(args: &Value) -> Option<crate::core_sphere_3d::CoreCommand> {
-    use crate::core_sphere_3d::CoreCommand;
+pub fn core_command(args: &Value) -> Option<crate::holo_mind::CoreCommand> {
+    use crate::holo_mind::CoreCommand;
     if let Some(v) = args.get("core_scale").filter(|v| !v.is_null()) {
         return Some(match (v.as_f64(), v.as_str().map(str::to_lowercase).as_deref()) {
             (Some(p), _) => CoreCommand::Zoom((p as f32 / if p > 5.0 { 100.0 } else { 1.0 }).clamp(0.5, 3.0)),
@@ -2093,7 +2106,7 @@ pub fn spoken_ack(args: &Value, now: &InterfaceSettings) -> String {
     if let Some(open) = flag("mixer_view") {
         return if open { "The mixer, Sir. A fader for every channel." } else { "Mixer closed, Sir." }.into();
     }
-    if let Some(name) = text(&["hud_palette", "palette", "hud_theme"]).filter(|n| crate::theme_engine::preset(n).is_some()) {
+    if let Some(name) = text(&["hud_palette", "palette", "hud_theme"]).filter(|n| crate::holo_theme::preset(n).is_some()) {
         return format!("{} it is, Sir.", name.replace(['_', '-'], " ").split_whitespace().map(|w| { let mut c = w.chars(); c.next().map(|f| f.to_uppercase().chain(c).collect::<String>()).unwrap_or_default() }).collect::<Vec<_>>().join(" "));
     }
     if text(&["detach_window"]).is_some() {
@@ -2125,8 +2138,8 @@ pub fn spoken_ack(args: &Value, now: &InterfaceSettings) -> String {
     }
     if let Some(cmd) = core_command(args) {
         return match cmd {
-            crate::core_sphere_3d::CoreCommand::Spin(f) if f <= 0.0 => "Holding it still, Sir.".into(),
-            crate::core_sphere_3d::CoreCommand::Spin(_) => "Spinning it up, Sir.".into(),
+            crate::holo_mind::CoreCommand::Spin(f) if f <= 0.0 => "Holding it still, Sir.".into(),
+            crate::holo_mind::CoreCommand::Spin(_) => "Spinning it up, Sir.".into(),
             _ => "Scaled, Sir.".into(),
         };
     }
@@ -2138,6 +2151,9 @@ pub fn spoken_ack(args: &Value, now: &InterfaceSettings) -> String {
     }
     if let Some(p) = text(&["ui_paradigm", "design", "ui_design", "look"]).and_then(crate::oled_minimal_ui::UiDesignParadigm::parse) {
         return format!("Very good, Sir. Switched to {}.", p.spoken());
+    }
+    if let Some(style) = text(&["core_style", "core", "core_look"]).and_then(crate::holo_core::CoreStyle::of_word) {
+        return format!("The {} core, Sir.", style.name());
     }
     if let Some((name, _)) = text(&["accent_preset"]).and_then(crate::oled_minimal_ui::accent_preset) {
         return format!("Done, Sir. The accent is now {name}.");
@@ -2888,6 +2904,7 @@ pub fn tool_definition() -> Value {
         "description": "Restyle or rearrange YOUR OWN HUD (the J.A.I. window) when Sir asks: colours, theme, zoom, transparency, layout, panels, always on top, fullscreen, title bar, name, or show/hide/move/resize the window. Pass only what changes.",
         "parameters": {"type": "object", "properties": {
             "ui_paradigm": {"type": "string", "enum": ["modern_oled_minimal", "classic_scifi_hud"], "description": "OLED minimal (default) or classic sci-fi HUD."},
+            "core_style": {"type": "string", "enum": ["simple", "complex"], "description": "Your core: simple (rings) or complex (the sphere of circuitry)."},
             "accent_preset": {"type": "string", "enum": ["Ice White", "Electric Blue", "Stark Gold", "Emerald", "Violet", "Crimson", "Sunset Orange"]},
             "theme": {"type": "string", "description": format!("Colour preset: {}.", theme_list())},
             "accent_color": {"type": "string", "description": "Colour name or #RRGGBB."},
@@ -2901,7 +2918,7 @@ pub fn tool_definition() -> Value {
             "fullscreen": {"type": "boolean"},
             "core_view": {"type": "boolean", "description": "The 3D sphere of your source modules ('show me your core')."},
             "dock_windows": {"type": "boolean", "description": "Bring every detached view back inside the HUD."},
-            "hud_palette": {"type": "string", "enum": ["jai_gold", "stark_red", "rose_crimson", "arc_cyan", "stark_gold", "emerald_matrix", "ultraviolet", "crimson_overdrive", "solar_orange", "ice_monochrome"], "description": "The whole HUD's colour theme; a plain colour is accent_color."},
+            "hud_palette": {"type": "string", "enum": ["stark_gold", "mono", "arc_reactor", "hot_rod", "gamma", "vibranium", "ember", "graphite"], "description": "The whole HUD's colour theme; a plain colour is accent_color."},
             "detach_window": {"type": "string", "description": "Pop a view out into its own OS window."},
             "create_theme": {"type": "object", "description": "Design, save and apply a named theme ('a theme called Cyberpunk with neon yellow borders').", "properties": {"name": {"type": "string"}, "description": {"type": "string", "description": "Sir's colours per role and/or a mood."}, "core_primary": {"type": "string"}, "core_secondary": {"type": "string"}, "window_border": {"type": "string"}, "background_tint": {"type": "string"}}},
             "save_theme": {"type": "string", "description": "Save the current look under this name."},

@@ -129,10 +129,10 @@ pub const CASES: &[Case] = &[
     c("orb", 2, "Geh aus dem Weg.", "configure_interface", r#"{"orb_board_position": "aside"}"#),
     c("orb", 3, "you're in the way", "configure_interface", r#"{"orb_board_position": "aside"}"#),
     // ---- The theme ----
-    c("theme", 1, "Set theme to Arc Cyan.", "configure_interface", r#"{"hud_palette": "arc_cyan"}"#),
+    c("theme", 1, "Set theme to Arc Cyan.", "configure_interface", r#"{"hud_palette": "arc_reactor"}"#),
     c("theme", 1, "Change the theme to Stark Gold.", "configure_interface", r#"{"hud_palette": "stark_gold"}"#),
     c("theme", 2, "Mach das Theme blau.", "configure_interface", "{}"),
-    c("theme", 2, "Stell das Theme auf Arc Cyan.", "configure_interface", r#"{"hud_palette": "arc_cyan"}"#),
+    c("theme", 2, "Stell das Theme auf Arc Cyan.", "configure_interface", r#"{"hud_palette": "arc_reactor"}"#),
     c("theme", 3, "make your seam yellow", "configure_interface", "{}"),
     c("theme", 3, "make your steam red", "configure_interface", "{}"),
     // ---- Closing his own blocks ----
@@ -472,7 +472,7 @@ pub struct Compound {
     pub needs: Needs,
 }
 
-const THEME_CYAN: (&str, &str) = ("configure_interface", r#"{"hud_palette": "arc_cyan"}"#);
+const THEME_CYAN: (&str, &str) = ("configure_interface", r#"{"hud_palette": "arc_reactor"}"#);
 const ORB_TOP_RIGHT: (&str, &str) = ("configure_interface", r#"{"orb_board_position": "top right"}"#);
 const PAUSE: (&str, &str) = ("control_music", "{}");
 const STATS: (&str, &str) = ("open_jai_view", r#"{"view": "system_stats"}"#);
@@ -945,7 +945,7 @@ fn visual_matrix(hud: &mut crate::gui::offscreen::VirtualHud, tools: &ToolContex
         if orb_home.is_none() && (centre - home_screen.center()).length() > 1.5 {
             found.push(format!("the emblem rests at {centre:?}; the middle of the home screen is {:?}", home_screen.center()));
         }
-        if hud.emblem_state() == "CornerDocked" {
+        if hud.emblem_state() == "Docked" {
             found.push("the emblem is docked although nothing covers the middle".to_string());
         }
         if !frame.find_text("SCREENS").iter().any(|r| home_screen.contains_rect(*r) && r.top() < home_screen.top() + 60.0) {
@@ -1185,14 +1185,14 @@ fn visual_matrix(hud: &mut crate::gui::offscreen::VirtualHud, tools: &ToolContex
         let started = Instant::now();
         tools.config.update(|c| c.interface.hud_palette = theme.clone());
         hud.frames_at(2, 60.0);
-        crate::theme_engine::finish_fade();
+        crate::holo_theme::finish_fade();
         let frame = hud.frames_at(3, 60.0);
-        let found = visual::off_theme(&frame, &label, &crate::theme_engine::current());
+        let found = visual::off_theme(&frame, &label, &crate::holo_theme::current());
         row(&mut rows, format!("theme {label}: every outline and mesh in its colours"), started, found, format!("{} outlines, {} mesh colours", frame.strokes.len(), frame.mesh_colours.len()));
     }
     tools.config.update(|c| c.interface.hud_palette = palette.clone());
     hud.frames_at(2, 60.0);
-    crate::theme_engine::finish_fade();
+    crate::holo_theme::finish_fade();
     hud.close_controls();
     close_blocks(hud, 1);
     crate::hud_board::close_board();
@@ -1235,7 +1235,7 @@ fn visual_matrix(hud: &mut crate::gui::offscreen::VirtualHud, tools: &ToolContex
     let as_docked = hud.emblem_state();
     crate::hud_board::close_board();
     track(hud, 90, "corner dock to front emblem", &mut found);
-    if as_thinking != "ThinkingGyroscope" || as_docked != "CornerDocked" {
+    if as_thinking != "Gyro" || as_docked != "Docked" {
         found.push(format!("the emblem was {as_thinking} while thinking and {as_docked} over a full board"));
     }
     row(&mut rows, "the emblem thinks, docks and comes home without a jump".to_string(), started, found, format!("{as_thinking} → {as_docked} → {}", hud.emblem_state()));

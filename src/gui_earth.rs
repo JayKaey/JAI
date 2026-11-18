@@ -76,7 +76,7 @@ fn light(c: Color32, a: f32) -> Color32 {
 }
 
 fn hsv(h: f32, s: f32, v: f32) -> Color32 {
-    let [r, g, b] = crate::theme_engine::from_hsv(h, s, v);
+    let [r, g, b] = crate::holo_theme::from_hsv(h, s, v);
     Color32::from_rgb(r, g, b)
 }
 
@@ -93,12 +93,12 @@ struct Ink {
 }
 
 fn ink() -> Ink {
-    let p = crate::theme_engine::current();
-    let (h, s, _) = crate::theme_engine::to_hsv(p.core_primary);
+    let p = crate::holo_theme::current();
+    let (h, s, _) = crate::holo_theme::to_hsv(p.accent);
     let [r, g, b] = model::holo_palette(model::theme_hue()).border;
     Ink {
         // (The primary alone: a blend with the secondary is a third hue in a two-hue theme.)
-        rim: mix(p.primary(), Color32::WHITE, 0.2),
+        rim: mix(p.accent(), Color32::WHITE, 0.2),
         accent: crate::hud_board::active_colour(),
         border: crate::hud_board::border_colour(),
         // (A colourless theme gets a colourless aurora.)
@@ -2082,15 +2082,15 @@ mod tests {
 
     impl Drop for ThemeBack {
         fn drop(&mut self) {
-            crate::theme_engine::follow(&self.0);
-            crate::theme_engine::finish_fade();
+            crate::theme_store::follow(&self.0);
+            crate::holo_theme::finish_fade();
         }
     }
 
     /// The verifier's colour check on the globe (every layer on) and on the flat map (an area,
     /// its results and the flights) in the theme on screen.
     fn off_theme(label: &str, rt: &Handle) -> Vec<String> {
-        let palette = crate::theme_engine::current();
+        let palette = crate::holo_theme::current();
         let mut earth = Earth::demo();
         earth.layers.set(Layer::Flights, true);
         let mut stage = stage(vec2(1000.0, 640.0));
@@ -2108,13 +2108,13 @@ mod tests {
 
     #[test]
     fn every_outline_and_mesh_keeps_to_the_theme() {
-        let _theme = crate::theme_engine::test_lock();
-        let _back = ThemeBack(crate::theme_engine::active_name());
+        let _theme = crate::holo_theme::test_lock();
+        let _back = ThemeBack(crate::holo_theme::active_name());
         let rt = runtime();
         let mut findings = Vec::new();
         for (name, label) in visual::themes() {
-            crate::theme_engine::follow(&name);
-            crate::theme_engine::finish_fade();
+            crate::theme_store::follow(&name);
+            crate::holo_theme::finish_fade();
             findings.extend(off_theme(&label, rt.handle()));
         }
         assert_eq!(findings, Vec::<String>::new());

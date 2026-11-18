@@ -892,7 +892,7 @@ impl Jai {
             AudioEvent::SpeechStarted { barge_in, ptt } => {
                 // (Whisper is his from here: a video's clip being written along is dropped.)
                 crate::live_subtitles::sir_speaks();
-                crate::core_sphere_3d::CoreActivityBus::chain(&["ears.rs", "vad.rs"]);
+                crate::mind_activity::chain(&["ears.rs", "vad.rs"]);
                 self.inner.speech_epoch.fetch_add(1, Ordering::AcqRel);
                 // Sir is speaking: the desktop and the media session are read now, so the turn
                 // that follows finds them in memory.
@@ -1516,7 +1516,7 @@ impl Jai {
         // and to be kept with what it was taken for (`voice_clips`).
         let again_audio = (self.inner.config.read(|c| c.whisper_second_hearing) && pcm.len() <= SECOND_HEARING_MOST).then(|| pcm.clone());
         let clip_audio = (!scripted && pcm.len() <= SECOND_HEARING_MOST && self.inner.config.read(|c| c.keep_voice_clips)).then(|| pcm.clone());
-        crate::core_sphere_3d::pulse("stt.rs");
+        crate::mind_activity::pulse("stt.rs");
         // With a head start the transcript is already on its way (or here): only the rest of the
         // decode is waited for.
         let waiting = Instant::now();

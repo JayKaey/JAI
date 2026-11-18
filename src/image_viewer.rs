@@ -202,8 +202,8 @@ pub fn demo_image(seed: u64, side: u32) -> ColorImage {
     let w = side.clamp(16, 512) as usize;
     let h = (w / 2).max(8);
     let hue = (seed % 360) as f32;
-    let sky = crate::theme_engine::from_hsv(hue, 0.55, 0.85);
-    let ground = crate::theme_engine::from_hsv(hue + 140.0, 0.45, 0.35);
+    let sky = crate::holo_theme::from_hsv(hue, 0.55, 0.85);
+    let ground = crate::holo_theme::from_hsv(hue + 140.0, 0.45, 0.35);
     let mut pixels = Vec::with_capacity(w * h);
     for y in 0..h {
         for x in 0..w {

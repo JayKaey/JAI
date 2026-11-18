@@ -384,6 +384,17 @@
       "okay, hör jetzt auf zuzuhören",
       "kannst du kurz nicht zuhören",
       "Mikro aus"
+    ],
+    "pc.shutdown": [
+      "please shut off my PC",
+      "please power down by PC",
+      "shut off my computer",
+      "power off my PC",
+      "power down my PC",
+      "turn off my PC",
+      "could you shut down the computer please",
+      "fahr den PC runter",
+      "schalte den PC aus"
     ]
   },
   "heldout": {

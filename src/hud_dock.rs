@@ -153,14 +153,14 @@ struct DockState {
 }
 
 /// A block that closes (by voice, its `[ CLOSE ]`, the menu or Ctrl+W) plays its exit over
-/// this long before it leaves the board: its content goes, its frame folds into a hairline and
-/// the line contracts to a point (`gui::WindowMotion`).
-pub const CLOSE_FADE: Duration = Duration::from_millis(200);
-/// A block's entrance takes this long: a hairline draws out of its middle, the frame unfolds
-/// from it with the corner brackets leading, the content resolves top to bottom behind a scan
-/// edge and one faint glow settles on the border (`gui::WindowMotion`).
-/// (Quick and crisp: a quarter of a second, `hud_style::motion::SLOW`.)
-pub const OPEN_ANIM: Duration = crate::hud_style::motion::SLOW;
+/// this long before it leaves the board: its content goes, its frame folds up into its top line and
+/// the line runs back into its corner (`gui::WindowMotion`).
+pub const CLOSE_FADE: Duration = Duration::from_millis(240);
+/// A block's entrance takes this long: a line of light runs along its top edge, the frame unfolds
+/// downwards from it with the corner ticks riding its edge, the content resolves behind a scan
+/// line and one glow settles on the frame (`gui::WindowMotion`).
+/// (Fast first, settling softly: `holo_motion::ARRIVE`.)
+pub const OPEN_ANIM: Duration = Duration::from_millis(440);
 /// How long a block glides to where it was told to go ("move it to the middle").
 pub const GLIDE: Duration = Duration::from_millis(220);
 /// A frame later than this after the one before moves an entrance's start on by the wait: a
@@ -901,9 +901,14 @@ pub fn place_new_window(bounds: Rect, regions: &[Rect], size: eframe::egui::Vec2
     let (orb, board) = lock(&OBSTACLES).clone();
     let windows: Vec<Rect> = block_rects().into_iter().filter(|r| Some(*r) != own && r.is_positive()).chain(board).collect();
     let areas: Vec<Rect> = if regions.is_empty() { vec![bounds] } else { regions.iter().map(|r| r.intersect(bounds)).filter(|r| r.is_positive()).collect() };
+    // About the core first, on the screen it stands on (`holo_stage`): beside it, on the
+    // emptier side, hugging its circle.
+    if let Some(at) = orb.and_then(|core| areas.iter().filter(|a| a.contains(core.center())).find_map(|a| crate::holo_stage::slot(*a, size, core, &windows, crate::holo_stage::GAP))) {
+        return at;
+    }
     let with_orb: Vec<Rect> = windows.iter().copied().chain(orb).collect();
     for taken in [&with_orb, &windows] {
-        if let Some(at) = areas.iter().find_map(|a| find_non_overlapping_slot(*a, size, taken, 12.0)) {
+        if let Some(at) = areas.iter().find_map(|a| find_non_overlapping_slot(*a, size, taken, crate::holo_stage::GAP)) {
             return at;
         }
     }
@@ -915,7 +920,7 @@ pub fn place_new_window(bounds: Rect, regions: &[Rect], size: eframe::egui::Vec2
 const FORCED_FRAMES: u8 = 4;
 /// The smallest a block is ever made, and the gap between tiled blocks.
 pub const MIN_BLOCK: [f32; 2] = [300.0, 200.0];
-pub const TILE_GAP: f32 = 28.0;
+pub const TILE_GAP: f32 = crate::holo_stage::GAP;
 /// The largest a tiled cell is used (a lone block does not fill a 2560 px screen).
 const MAX_TILE: [f32; 2] = [900.0, 620.0];
 
@@ -1009,6 +1014,13 @@ pub fn place_new_block(id: &str, bounds: Rect, regions: &[Rect], size: eframe::e
         let fitted = vec2((size.x * shrink).max(MIN_BLOCK[0] + 20.0), (size.y * shrink).max(MIN_BLOCK[1] + 20.0));
         if tried.replace(fitted) == Some(fitted) {
             continue;
+        }
+        // About the core first, on the screen it stands on (`holo_stage`): beside it, on the
+        // emptier side, hugging its circle.
+        // (Off where the core goes when it docks, too: a window there would hide him then.)
+        let off_board: Vec<Rect> = windows.iter().copied().chain(board.iter().copied()).chain(*lock(&DOCKED_SPOT)).collect();
+        if let Some(at) = orb.and_then(|core| areas.iter().filter(|a| a.contains(core.center())).find_map(|a| crate::holo_stage::slot(*a, fitted, core, &off_board, TILE_GAP))) {
+            return hold(at, fitted);
         }
         // The board's own blocks give way last: a window may open over a full report, never
         // over another window or the orb.

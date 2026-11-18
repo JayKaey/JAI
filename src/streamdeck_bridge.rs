@@ -111,7 +111,7 @@ pub fn start(app: Jai) {
                                 tokio::spawn(async move { app.handle_command(crate::hud::HudCommand::Chat { text }).await });
                                 ("200 OK", "queued".into())
                             }
-                            DeckCommand::Theme(name) => match crate::theme_engine::preset(&name) {
+                            DeckCommand::Theme(name) => match crate::holo_theme::preset(&name) {
                                 Some(_) => {
                                     let n = name.trim().to_lowercase().replace([' ', '-'], "_");
                                     app.config().update(|c| c.interface.hud_palette = n);

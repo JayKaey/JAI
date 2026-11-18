@@ -1,16 +1,16 @@
-//! The application icon: JAI's HUD emblem on a deep-space glass squircle. It reads at 256 × 256 px
+//! The application icon: J.A.I.'s simple core as light on a black disc. It reads at 256 × 256 px
 //! and stays unmistakable at 16-24 px on the Windows taskbar.
 //!
-//! From the outside in: a hairline rim with a 72-tick scale (long ticks every 30°), a bold cyan ring
-//! cut into four arcs, a slim ice-white ring of three long arcs, an amber arc-reactor ring of three
-//! short arcs and a white-hot core in a cyan / amber halo, all lit over a `#0A1E33` → `#02060C`
-//! radial gradient with a cold rim light. The fine parts (ticks, hairline, core ring) only appear
-//! from about 64 px up; the bold rings carry the taskbar frames on their own.
+//! From the outside in: a hairline rim of ink with a 60-tick scale (the core's clock ring), two
+//! orbit arcs in the deep tone, the band of four glass segments with a white-hot filament on
+//! their inner edge, the fine voice ring and a white-hot nucleus in its glow. The fine parts
+//! (ticks, rim, voice ring) only appear from about 64 px up; at taskbar size the band is four
+//! solid arcs of his yellow round a bright dot.
 //!
 //! Pure `std` on purpose: `build.rs` includes this file (`#[path]`) to write `assets/jai_icon.ico`
 //! (taskbar, Alt-Tab, Explorer and the tray load it from the executable's resources), and the HUD
-//! window takes the same pixels at runtime (`generate_rose_gyro_app_icon`). Every pixel is
-//! anti-aliased analytically (coverage from signed distances) and 8 × 8 supersampled.
+//! window takes the same pixels at runtime (`window_icon`). Every pixel is anti-aliased
+//! analytically (coverage from signed distances) and 8 × 8 supersampled.
 
 // The `.ico` encoders serve `build.rs` and the tests; the application itself only renders pixels.
 #![cfg_attr(not(test), allow(dead_code))]
@@ -24,9 +24,8 @@ pub const ICO_SIZES: [u32; 7] = [16, 24, 32, 48, 64, 128, 256];
 /// Samples per pixel along each axis (8 × 8 = 64).
 pub const SUPERSAMPLE: usize = 8;
 
-/// One pixel of the 256 px canvas in unit space (the canvas spans −1 … 1).
-const P: f32 = 1.0 / 128.0;
-const CORNER: f32 = 56.0 * P;
+/// The disc's radius in unit space (the canvas spans −1 … 1).
+pub const DISC: f32 = 0.97;
 /// A ring: (centre-line radius, half stroke width, arc count, arc span in radians, phase of the
 /// first arc's centre in radians, y down).
 pub struct Ring {
@@ -39,20 +38,20 @@ pub struct Ring {
 const fn deg(d: f32) -> f32 {
     d * PI / 180.0
 }
-/// The bold cyan ring: four 62° arcs, centred on the diagonals.
-pub const OUTER: Ring = Ring { radius: 0.68, half: 0.055, arcs: 4, span: deg(62.0), phase: deg(-45.0) };
-/// The slim ice ring: three 100° arcs, the first at the bottom.
-pub const MIDDLE: Ring = Ring { radius: 0.50, half: 0.030, arcs: 3, span: deg(100.0), phase: deg(90.0) };
-/// The amber arc-reactor ring: three 50° arcs, the first at the top.
-pub const INNER: Ring = Ring { radius: 0.36, half: 0.050, arcs: 3, span: deg(50.0), phase: deg(-90.0) };
-pub const CORE_RADIUS: f32 = 0.15;
+/// The band: four segments of 62°, centred on the diagonals (three yellow arcs on black would
+/// read as a radiation sign at taskbar size).
+pub const BAND: Ring = Ring { radius: 0.56, half: 0.075, arcs: 4, span: deg(62.0), phase: deg(-45.0) };
+/// The orbit: two arcs in the deep tone, opposite each other.
+pub const ORBIT: Ring = Ring { radius: 0.80, half: 0.022, arcs: 2, span: deg(104.0), phase: deg(20.0) };
+/// The fine voice ring round the nucleus.
+pub const VOICE: Ring = Ring { radius: 0.34, half: 0.012, arcs: 1, span: TAU, phase: 0.0 };
+pub const NUCLEUS: f32 = 0.13;
 
-const SPACE_EDGE: [f32; 3] = rgb(0x02060C);
-const SPACE_MID: [f32; 3] = rgb(0x0A1E33);
-const BEVEL: [f32; 3] = rgb(0x1A3550);
-const CYAN: [f32; 3] = rgb(0x22D3FF);
-const ICE: [f32; 3] = rgb(0xCFF6FF);
-const AMBER: [f32; 3] = rgb(0xFFB347);
+const VOID: [f32; 3] = rgb(0x020304);
+const YELLOW: [f32; 3] = rgb(0xFFD400);
+const DEEP: [f32; 3] = rgb(0xFF8A00);
+const HOT: [f32; 3] = rgb(0xFFF4BF);
+const INK: [f32; 3] = rgb(0xEEF3F7);
 const WHITE: [f32; 3] = [1.0; 3];
 
 const fn rgb(hex: u32) -> [f32; 3] {
@@ -76,13 +75,6 @@ fn add(dst: &mut [f32; 3], colour: [f32; 3], amount: f32) {
     }
 }
 
-/// Signed distance to the squircle (a square with 56 px corners), < 0 inside.
-fn squircle_distance(x: f32, y: f32) -> f32 {
-    let inner = 1.0 - 0.5 * P - CORNER;
-    let (qx, qy) = (x.abs() - inner, y.abs() - inner);
-    qx.max(0.0).hypot(qy.max(0.0)) + qx.max(qy).min(0.0) - CORNER
-}
-
 /// How far the angle `theta` lies inside the nearest of `count` arcs of angular width `span`
 /// spaced evenly from `phase`, as a length along the circle of radius `r` (negative in a gap).
 pub fn arc_inside(theta: f32, r: f32, phase: f32, count: usize, span: f32) -> f32 {
@@ -94,57 +86,63 @@ pub fn arc_inside(theta: f32, r: f32, phase: f32, count: usize, span: f32) -> f3
         .fold(f32::MIN, f32::max)
 }
 
-/// Paints one ring (arcs cut flat and radial, with a soft glow dying a little past each cut).
-fn ring(c: &mut [f32; 3], ring: &Ring, colour: [f32; 3], r: f32, theta: f32, px: f32, glow: f32) {
-    let half = ring.half.max(px * 0.6);
-    let inside = arc_inside(theta, r, ring.phase, ring.arcs, ring.span);
-    let d = (r - ring.radius).abs();
-    let spread = if r > ring.radius { 0.08 } else { 0.05 };
-    let ends = (-(inside.min(0.0) / 0.05).powi(2)).exp();
-    add(c, colour, (-((d - half).max(0.0) / spread).powi(2)).exp() * 0.28 * glow * ends);
-    over(c, colour, cover(d, half, px) * (inside / px + 0.5).clamp(0.0, 1.0));
+/// How much of a ring's stroke covers the point (r, theta): its arcs cut flat and radial.
+fn on_ring(ring: &Ring, r: f32, theta: f32, px: f32) -> f32 {
+    let inside = if ring.span >= TAU { 1.0 } else { (arc_inside(theta, r, ring.phase, ring.arcs, ring.span) / px + 0.5).clamp(0.0, 1.0) };
+    cover((r - ring.radius).abs(), ring.half.max(px * 0.6), px) * inside
+}
+
+/// A glow round a ring's centre line: light that falls off through the deep tone (never a dim
+/// yellow, which reads as olive).
+fn glow(c: &mut [f32; 3], ring: &Ring, r: f32, theta: f32, reach: f32, strength: f32) {
+    let ends = if ring.span >= TAU { 1.0 } else { (-(arc_inside(theta, r, ring.phase, ring.arcs, ring.span).min(0.0) / 0.06).powi(2)).exp() };
+    let d = (r - ring.radius).abs() / reach;
+    add(c, YELLOW, (-(d * 2.4).powi(2)).exp() * 0.30 * strength * ends);
+    add(c, DEEP, (-d.powi(2)).exp() * 0.16 * strength * ends);
 }
 
 /// Colour and alpha of one sample at unit coordinates (x, y), y down; `px` = one pixel.
 fn sample(x: f32, y: f32, px: f32) -> ([f32; 3], f32) {
-    let sd = squircle_distance(x, y);
-    let alpha = cover(sd, 0.0, px);
+    let (r, theta) = (x.hypot(y), y.atan2(x));
+    let alpha = cover(r - DISC, 0.0, px);
     if alpha <= 0.0 {
         return ([0.0; 3], 0.0);
     }
-    // Taskbar frames (32 px and less) keep only a hint of the glows: the bold shapes carry them.
-    let glow = if px > 0.05 { 0.35 } else { 1.0 };
+    // Taskbar frames (32 px and less) are drawn in bold shapes: no fine lines, little glow.
     let fine = px < 0.03;
-    let (r, theta) = (x.hypot(y), y.atan2(x));
-    // Deep space, lifted toward the middle so the black reads as depth, not a hole.
-    let mut c = SPACE_EDGE;
-    over(&mut c, SPACE_MID, (1.0 - r).clamp(0.0, 1.0).powf(1.5));
-    // The cold rim light just inside the edge, brighter on the upper left.
-    let bevel = P.max(px * 0.5);
-    let lit = 0.7 + 0.3 * (-(x + y) * 0.7).clamp(-1.0, 1.0);
-    over(&mut c, BEVEL, cover((sd + bevel).abs(), bevel, px) * lit);
+    let strength = if fine { 1.0 } else { 0.4 };
+    let mut c = VOID;
     if fine {
-        // The hairline rim and its tick scale: 72 ticks, every sixth one longer and brighter.
-        over(&mut c, ICE, cover((r - 0.90).abs(), 0.010, px) * 0.45);
-        let step = TAU / 72.0;
+        // The rim and its scale: 60 ticks, every fifth one longer and brighter.
+        over(&mut c, INK, cover((r - 0.93).abs(), 0.006, px) * 0.35);
+        let step = TAU / 60.0;
         let nearest = (theta / step).round();
         let across = (theta - nearest * step).abs() * r;
-        let long = (nearest as i32).rem_euclid(6) == 0;
-        let (inner, outer) = if long { (0.77, 0.87) } else { (0.82, 0.87) };
+        let long = (nearest as i32).rem_euclid(5) == 0;
+        let (inner, outer) = if long { (0.865, 0.925) } else { (0.895, 0.925) };
         let reach = cover((r - (inner + outer) / 2.0).abs(), (outer - inner) / 2.0, px);
-        over(&mut c, ICE, cover(across, if long { 0.007 } else { 0.004 }, px) * reach * if long { 0.8 } else { 0.4 });
+        over(&mut c, INK, cover(across, if long { 0.006 } else { 0.004 }, px) * reach * if long { 0.85 } else { 0.4 });
+        // The orbit arcs in the deep tone.
+        glow(&mut c, &ORBIT, r, theta, 0.07, 0.6);
+        over(&mut c, DEEP, on_ring(&ORBIT, r, theta, px));
     }
-    ring(&mut c, &OUTER, CYAN, r, theta, px, glow);
-    ring(&mut c, &MIDDLE, ICE, r, theta, px, glow);
-    ring(&mut c, &INNER, AMBER, r, theta, px, glow);
-    // The white-hot core in its amber / cyan halo, and (large frames) a fine cyan ring around it.
-    let off_core = (r - CORE_RADIUS).max(0.0);
-    add(&mut c, AMBER, (-(off_core / 0.07).powi(2)).exp() * 0.55 * glow);
-    add(&mut c, CYAN, (-(off_core / 0.18).powi(2)).exp() * 0.16 * glow);
+    // The band: glass lit from its inner edge, and the filament there.
+    glow(&mut c, &BAND, r, theta, 0.16, strength);
     if fine {
-        over(&mut c, CYAN, cover((r - 0.235).abs(), 0.008, px) * 0.8);
+        let across = ((r - (BAND.radius - BAND.half)) / (2.0 * BAND.half)).clamp(0.0, 1.0);
+        over(&mut c, YELLOW, on_ring(&BAND, r, theta, px) * (0.42 - 0.34 * across));
+        let filament = Ring { radius: BAND.radius - BAND.half, half: 0.014, ..BAND };
+        over(&mut c, HOT, on_ring(&filament, r, theta, px));
+        over(&mut c, YELLOW, on_ring(&VOICE, r, theta, px) * 0.9);
+    } else {
+        over(&mut c, YELLOW, on_ring(&BAND, r, theta, px));
     }
-    over(&mut c, WHITE, cover(r, CORE_RADIUS.max(px * 0.9), px));
+    // The nucleus: white-hot in its glow.
+    let off = (r - NUCLEUS).max(0.0);
+    add(&mut c, YELLOW, (-(off / 0.09).powi(2)).exp() * 0.55 * strength);
+    add(&mut c, DEEP, (-(off / 0.22).powi(2)).exp() * 0.20 * strength);
+    over(&mut c, HOT, cover(r, NUCLEUS.max(px * 1.1), px));
+    over(&mut c, WHITE, cover(r, (NUCLEUS * 0.62).max(px * 0.7), px));
     (c, alpha)
 }
 
@@ -292,10 +290,9 @@ pub fn icon_ico() -> Vec<u8> {
 
 /// The window / taskbar icon of the HUD (256 × 256 RGBA).
 #[cfg(jai_app)]
-pub fn generate_rose_gyro_app_icon() -> eframe::egui::IconData {
+pub fn window_icon() -> eframe::egui::IconData {
     eframe::egui::IconData { rgba: render_icon_rgba(ICON_SIZE), width: ICON_SIZE, height: ICON_SIZE }
 }
-
 
 #[cfg(all(test, jai_app))]
 mod tests {
@@ -306,89 +303,68 @@ mod tests {
         [rgba[o], rgba[o + 1], rgba[o + 2], rgba[o + 3]]
     }
 
-    /// The 256 px pixel at `radius` canvas px from the centre, `deg` degrees (y down).
+    /// The 256 px pixel at `radius` (of the canvas's half) from the centre, `deg` degrees (y down).
     fn polar(rgba: &[u8], radius: f32, deg: f32) -> [u8; 4] {
         let (s, c) = deg.to_radians().sin_cos();
-        pixel(rgba, 256, (128.0 + radius * c) as usize, (128.0 + radius * s) as usize)
+        pixel(rgba, 256, (128.0 + radius * 128.0 * c) as usize, (128.0 + radius * 128.0 * s) as usize)
     }
 
-    fn is_cyan(p: [u8; 4]) -> bool {
-        p[0] < 80 && p[1] > 190 && p[2] > 230
+    /// His yellow, lit: red and green high, blue low.
+    fn is_yellow(p: [u8; 4]) -> bool {
+        p[0] > 200 && p[1] > 150 && p[2] < 150
     }
 
-    fn is_ice(p: [u8; 4]) -> bool {
-        p[0] > 170 && p[1] > 220 && p[2] > 230
-    }
-
-    fn is_amber(p: [u8; 4]) -> bool {
-        p[0] > 220 && p[1] > 140 && p[1] < 210 && p[2] < 120
+    fn is_deep(p: [u8; 4]) -> bool {
+        p[0] > 200 && p[1] > 90 && p[1] < 190 && p[2] < 90
     }
 
     fn is_dark(p: [u8; 4]) -> bool {
-        (p[0] as u32 + p[1] as u32 + p[2] as u32) < 110
-    }
-
-    /// The ring's pixel radius on the 256 px canvas.
-    fn at(ring: &Ring) -> f32 {
-        ring.radius * 128.0
-    }
-
-    fn arc_centre(ring: &Ring, k: usize) -> f32 {
-        ring.phase.to_degrees() + 360.0 * k as f32 / ring.arcs as f32
+        (p[0] as u32 + p[1] as u32 + p[2] as u32) < 130
     }
 
     #[test]
-    fn icon_is_a_glass_squircle_with_cyan_ice_and_amber_rings_and_a_white_core() {
-        let icon = generate_rose_gyro_app_icon();
+    fn the_icon_is_the_simple_core_on_a_black_disc() {
+        let icon = window_icon();
         assert_eq!((icon.width, icon.height), (256, 256));
         let rgba = &icon.rgba;
-        let px = |x, y| pixel(rgba, 256, x, y);
-        // Transparent in the rounded corner, opaque deep space inside.
-        assert_eq!(px(3, 3)[3], 0);
-        assert_eq!(px(128, 6)[3], 255);
-        assert!(is_dark(px(128, 6)), "{:?}", px(128, 6));
-        // The cold rim light just inside the top edge.
-        let bevel = px(128, 1);
-        assert!(bevel[2] > 40 && bevel[2] < 100 && bevel[0] < 50, "bevel {bevel:?}");
-        for (ring, is_ring, name) in [(&OUTER, is_cyan as fn([u8; 4]) -> bool, "cyan"), (&MIDDLE, is_ice, "ice"), (&INNER, is_amber, "amber")] {
-            for k in 0..ring.arcs {
-                let (arc, gap) = (arc_centre(ring, k), arc_centre(ring, k) + 180.0 / ring.arcs as f32);
-                assert!(is_ring(polar(rgba, at(ring), arc)), "{name} arc at {arc}°: {:?}", polar(rgba, at(ring), arc));
-                assert!(!is_ring(polar(rgba, at(ring), gap)), "{name} gap at {gap}°: {:?}", polar(rgba, at(ring), gap));
-            }
+        // A disc: clear in the corners, opaque black inside.
+        assert_eq!(pixel(rgba, 256, 3, 3)[3], 0);
+        let edge = polar(rgba, 0.955, 45.0);
+        assert!(edge[3] == 255 && is_dark(edge), "{edge:?}");
+        // The band's four segments, with gaps between them; the filament on their inner edge.
+        for k in 0..4 {
+            let arc = -45.0 + 90.0 * k as f32;
+            let filament = polar(rgba, BAND.radius - BAND.half, arc);
+            assert!(filament[0] > 230 && filament[1] > 200, "the filament is white-hot at {arc}°: {filament:?}");
+            let glass = polar(rgba, BAND.radius, arc);
+            assert!(glass[0] > 110 && glass[1] > 80 && glass[2] < 60, "the glass is lit warm at {arc}°: {glass:?}");
+            let gap = polar(rgba, BAND.radius, arc + 45.0);
+            assert!(!is_yellow(gap), "gap at {}°: {gap:?}", arc + 45.0);
         }
-        // Dark air between the rings, then the white-hot core.
-        let air = polar(rgba, 56.0, 0.0);
-        assert!(is_dark(air) || air[0] < 120, "{air:?}");
-        let c = px(128, 128);
-        assert!(c[0] > 245 && c[1] > 245 && c[2] > 245, "{c:?}");
-        // The fine parts exist at full size: a long tick on the hairline rim at the top.
-        let tick = polar(rgba, 0.82 * 128.0, -90.0);
-        assert!(tick[0] > 90 && tick[1] > 120, "tick {tick:?}");
+        // The glass of a segment is lit from its inner edge: brighter there than at its outer.
+        let lum = |p: [u8; 4]| p[0] as u32 + p[1] as u32;
+        assert!(lum(polar(rgba, BAND.radius - BAND.half * 0.5, -45.0)) > lum(polar(rgba, BAND.radius + BAND.half * 0.8, -45.0)) + 30);
+        // The orbit in the deep tone, the nucleus white-hot, dark air between.
+        assert!(is_deep(polar(rgba, ORBIT.radius, 20.0)), "{:?}", polar(rgba, ORBIT.radius, 20.0));
+        assert!(!is_deep(polar(rgba, ORBIT.radius, 110.0)));
+        let c = pixel(rgba, 256, 128, 128);
+        assert!(c[0] > 245 && c[1] > 245 && c[2] > 235, "{c:?}");
+        assert!(is_dark(polar(rgba, 0.45, 150.0)), "{:?}", polar(rgba, 0.45, 150.0));
+        // The fine parts exist at full size: a long tick of the scale at the top.
+        let tick = polar(rgba, 0.895, -90.0);
+        assert!(tick[0] > 120 && tick[2] > 120, "tick {tick:?}");
     }
 
     #[test]
-    fn each_ring_repeats_by_its_arc_count() {
-        let rgba = render_icon_rgba(256);
-        // Sampled well away from every arc cut (the cuts sit at the arc centres ± half the span).
-        for (ring, degrees) in [(&OUTER, [20.0f32, 30.0, 40.0, 50.0, 60.0]), (&MIDDLE, [5.0, 10.0, 60.0, 80.0, 100.0]), (&INNER, [15.0, 25.0, 35.0, 80.0, 100.0])] {
-            let turn = 360.0 / ring.arcs as f32;
-            for deg in degrees {
-                let a = polar(&rgba, at(ring), deg);
-                for k in 1..ring.arcs {
-                    let b = polar(&rgba, at(ring), deg + turn * k as f32);
-                    let diff = (0..3).map(|i| (a[i] as i32 - b[i] as i32).abs()).max().unwrap();
-                    assert!(diff < 40, "r {} at {deg}° vs +{}°: {a:?} {b:?}", at(ring), turn * k as f32);
-                }
-            }
-        }
-        assert!(arc_inside(OUTER.phase, 1.0, OUTER.phase, OUTER.arcs, OUTER.span) > 0.0);
-        assert!(arc_inside(OUTER.phase + PI / 4.0, 1.0, OUTER.phase, OUTER.arcs, OUTER.span) < 0.0);
+    fn arcs_repeat_by_their_count() {
+        assert!(arc_inside(BAND.phase, 1.0, BAND.phase, BAND.arcs, BAND.span) > 0.0);
+        assert!(arc_inside(BAND.phase + PI / 4.0, 1.0, BAND.phase, BAND.arcs, BAND.span) < 0.0);
+        assert!(arc_inside(BAND.phase + TAU / 4.0, 1.0, BAND.phase, BAND.arcs, BAND.span) > 0.0);
     }
 
     #[test]
     fn snapshot_icon_frames() {
-        // The 256 px icon and the 16 / 32 px taskbar frames (nearest-neighbour ×8 / ×4) as PNGs.
+        // The 256 px icon and the 16 / 24 / 32 px taskbar frames (nearest-neighbour, enlarged) as PNGs.
         let dir = std::path::Path::new("target/ui-snapshots");
         let _ = std::fs::create_dir_all(dir);
         let _ = std::fs::write(dir.join("app_icon_256.png"), encode_png(256, 256, &render_icon_rgba(256)));
@@ -412,15 +388,14 @@ mod tests {
         for size in [16usize, 24] {
             let rgba = render_icon_rgba(size as u32);
             let px = |x: usize, y: usize| pixel(&rgba, size, x, y);
-            assert!(px(0, 0)[3] < 16, "transparent corner at {size} px: {:?}", px(0, 0));
+            assert!(px(0, 0)[3] < 16, "clear corner at {size} px: {:?}", px(0, 0));
             let all: Vec<[u8; 4]> = (0..size).flat_map(|y| (0..size).map(move |x| (x, y))).map(|(x, y)| px(x, y)).collect();
-            // Cyan and amber survive at taskbar size, the core is bright, the dark dominates.
-            assert!(all.iter().any(|p| p[2] > 150 && p[1] > 140 && p[0] < 110), "cyan at {size} px");
-            assert!(all.iter().any(|p| p[0] > 150 && p[1] > 100 && p[2] < 110), "amber at {size} px");
+            // His yellow survives at taskbar size, the nucleus is bright, the dark dominates.
+            assert!(all.iter().filter(|p| p[0] > 170 && p[1] > 130 && p[2] < 120).count() >= 6, "yellow at {size} px");
             let c = px(size / 2, size / 2).iter().take(3).map(|v| *v as u32).sum::<u32>().max(px(size / 2 - 1, size / 2 - 1).iter().take(3).map(|v| *v as u32).sum());
-            assert!(c > 450, "bright core at {size} px: {c}");
+            assert!(c > 450, "a bright nucleus at {size} px: {c}");
             let dark = all.iter().filter(|p| p[3] == 255 && is_dark(**p)).count();
-            assert!(dark * 4 > size * size, "dark background pixels at {size} px: {dark}");
+            assert!(dark * 5 > size * size, "dark pixels at {size} px: {dark}");
         }
     }
 
