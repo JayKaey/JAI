@@ -147,7 +147,7 @@ struct DockState {
     hand_sized: HashSet<String>,
 }
 
-/// A block that closes (by voice, its `[ CLOSE ]`, the menu or Ctrl+W) plays its exit over
+/// A block that closes (by voice, its `[ CLOSE ]` or the menu) plays its exit over
 /// this long before it leaves the board: its content goes, its frame folds up into its top line and
 /// the line runs back into its corner (`gui::WindowMotion`).
 pub const CLOSE_FADE: Duration = Duration::from_millis(240);
@@ -493,7 +493,7 @@ pub fn close_all_blocks() -> usize {
     n
 }
 
-/// Block `id` begins its exit (its `[ CLOSE ]`, the menu, Ctrl+W): it closes once that has
+/// Block `id` begins its exit (its `[ CLOSE ]`, the menu): it closes once that has
 /// played (`closing_progress` reaches 1).
 pub fn begin_close(id: &str) {
     with(|s| {

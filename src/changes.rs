@@ -99,6 +99,7 @@ pub const RELEASES: &[Release] = &[
             better("Leaders run to the real windows", "The board draws a line from the core's circle to each of his windows on its screen."),
             better("Windows wear the panel's header", "Index tab, title in wide capitals and state lamp, as a block on the board had."),
             better("No more dock and detach", "The keys and orders that moved a view on and off the board are gone: nothing docks."),
+            better("The block shortcuts are gone", "Ctrl+W, Ctrl+G, Ctrl+P and Ctrl+E only acted on a block inside his own window."),
             fixed("The canvas is black again", "The film grain was four times too strong since 11 November: a grey fog over the black."),
             fixed("The clock stays off the core view", "The desktop clock was drawn over the sphere while the core view was open."),
             fixed("Feature Lab lines end where they should", "A description was cut inside \"e.g.\"; it ends at its first full sentence now."),

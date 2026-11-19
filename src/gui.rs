@@ -7834,7 +7834,7 @@ fn detached_motion(ctx: &egui::Context) -> WindowMotion {
 /// (`hud_dock::block_rects`).
 pub(super) fn hud_block_window(ctx: &egui::Context, id: &str, title: &str, size: [f32; 2], body: impl FnOnce(&mut Ui)) -> BlockAction {
     let mut action = BlockAction::default();
-    // Closing ("close the feature lab", its [ CLOSE ], the menu, Ctrl+W) or minimising
+    // Closing ("close the feature lab", its [ CLOSE ], the menu) or minimising
     // ("minimise it"): the block plays its exit, then leaves the board that way.
     let fade = crate::hud_dock::closing_progress(id);
     let tray = crate::hud_dock::is_minimized(id);
@@ -7973,11 +7973,11 @@ pub(super) fn hud_block_window(ctx: &egui::Context, id: &str, title: &str, size:
         let mid = row.center().y;
         // (Its tooltip names the words that close it: blocks answer to their name.)
         let name = title.split(" // ").next().unwrap_or(title).trim().to_lowercase();
-        let close_hint = format!("Close · say: \"close the {name}\" · Ctrl+W: the block under the pointer");
-        let pin_hint = format!("Pinned, it stays through \"close the windows\" and keeps its place (Ctrl+P, or say \"pin the {name}\")");
+        let close_hint = format!("Close · say: \"close the {name}\"");
+        let pin_hint = format!("Pinned, it stays through \"close the windows\" and keeps its place (say \"pin the {name}\")");
         let labels = [("CLOSE", false, close_hint.as_str()), ("PIN", pinned, pin_hint.as_str())];
         // (A narrow block keeps its title whole and lets its keys go, [ PIN ] first: the menu
-        // and Ctrl+P still pin. The keys are quiet until the pointer is over their block.)
+        // still pins. The keys are quiet until the pointer is over their block.)
         // (Beside the title the row holds the index tab before it and the lamp after it.)
         let title_width = crate::holo_block::title_galley(ui.painter(), title, ts(14.0), accent, f32::INFINITY).size().x;
         let fit = crate::holo_ui::keys_that_fit(ui.painter(), &labels, row.width(), title_width + 62.0);
@@ -8016,7 +8016,7 @@ pub(super) fn hud_block_window(ctx: &egui::Context, id: &str, title: &str, size:
         // (A click-only sense: a drag that begins here still moves the block.)
         let header = ui
             .interact(Rect::from_min_max(row.min, pos2(keys_left - 4.0, row.bottom())), area.with("title"), Sense::click())
-            .on_hover_text(format!("{}Drag to move, drag an edge to resize, double-click for large and back, fling it away to close. Right-click: copy, pin, maximize, export, close. Esc or Ctrl+W close, Ctrl+G maximize, Ctrl+P pin, Ctrl+E export.", if cut { format!("{title}\n\n") } else { String::new() }));
+            .on_hover_text(format!("{}Drag to move, drag an edge to resize, double-click for large and back, fling it away to close. Right-click: copy, pin, maximize, export, close. Esc closes it.", if cut { format!("{title}\n\n") } else { String::new() }));
         if header.double_clicked() {
             header_maximize = true;
         }
@@ -8129,8 +8129,8 @@ pub(super) fn hud_block_window(ctx: &egui::Context, id: &str, title: &str, size:
         } else if let Some(natural) = natural.filter(|_| held.is_none() && !full && !motion.moving()) {
             crate::hud_dock::fit_to_content(id, natural, bounds, still);
         }
-        // Ctrl+W / Ctrl+M / Ctrl+P on the block under the pointer; right-click: the block menu.
-        let mut chosen = inner.response.contains_pointer().then(|| block_shortcut(ctx)).flatten().or(header_menu);
+        // Right-click: the block menu.
+        let mut chosen = header_menu;
         inner.response.context_menu(|ui| chosen = chosen.or(crate::block_actions::menu(ui, pinned, maximized)));
         if let Some(chosen) = chosen {
             use crate::block_actions::{BlockAction as Menu, Format};
@@ -8156,7 +8156,7 @@ pub(super) fn hud_block_window(ctx: &egui::Context, id: &str, title: &str, size:
             ctx.request_repaint();
         }
     }
-    // Closed by hand (the chip, the menu, Ctrl+W): the block leaves with its cue, after its exit
+    // Closed by hand (the chip, the menu): the block leaves with its cue, after its exit
     // (offscreen, at once).
     if close_asked {
         crate::tts::play_cue(crate::jai_voice_dsp::Earcon::Dismiss);
@@ -8573,17 +8573,6 @@ pub(crate) fn board_window(ctx: &egui::Context, id: &str, title: &str, size: [f3
         *open = false;
         crate::hud_dock::forget(id);
     }
-}
-
-/// The keyboard shortcut for the block under the pointer, if one was pressed this frame:
-/// Ctrl+W closes it, Ctrl+G grows it to the full board (and back), Ctrl+P pins it, Ctrl+E
-/// exports it as Markdown. (Ctrl+M is the microphone's.)
-fn block_shortcut(ctx: &egui::Context) -> Option<crate::block_actions::BlockAction> {
-    use crate::block_actions::BlockAction as Menu;
-    use egui::{Key, Modifiers};
-    ctx.input_mut(|i| {
-        [(Key::W, Menu::Close), (Key::G, Menu::Maximize), (Key::P, Menu::Pin), (Key::E, Menu::ExportMarkdown)].into_iter().find(|(key, _)| i.consume_key(Modifiers::CTRL, *key)).map(|(_, action)| action)
-    })
 }
 
 /// Where a new block opens and how large: a free spot off every open block and the orb, smaller
