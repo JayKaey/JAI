@@ -51,6 +51,18 @@ pub const MAX_ALT_KM: f64 = 60_000.0;
 /// The flat map starts to show below `FLAT_FROM_KM` and is all there is below `FLAT_FULL_KM`.
 pub const FLAT_FROM_KM: f64 = 1_750.0;
 pub const FLAT_FULL_KM: f64 = 1_450.0;
+/// Google Earth's 3D: the camera leans back over the flat map, fully below `TILT_FULL_KM` and
+/// standing up again on the way to `FLAT_FULL_KM` (the globe does not lean).
+pub const TILT_FULL_KM: f64 = 1_000.0;
+/// How far the 3D view leans back (55°), the most it ever does (62°) and how fast it gets there.
+pub const TILT_3D: f64 = 0.96;
+pub const MAX_PITCH: f64 = 1.08;
+pub const TILT_TAU_SECS: f64 = 0.16;
+/// Leaned back, the map's top edge stands on ground at most `FAR` times as far as its middle
+/// (no sky, a bounded number of tiles; the ground fades into the deep on the way). Nearer than
+/// `NEAR` a point is under or behind the camera: a line is cut there.
+pub const FAR: f64 = 4.0;
+pub const NEAR: f64 = 0.3;
 /// The open's camera fly-in: from 2.4x the distance, smootherstep (the reference: ~450 ms).
 pub const INTRO_SECS: f64 = 0.45;
 pub const INTRO_DISTANCE: f64 = 2.4;
@@ -139,6 +151,18 @@ pub fn smooth_towards(current: f64, target: f64, dt: f64, tau: f64) -> f64 {
 
 pub fn wrap_lon(lon: f64) -> f64 {
     (lon + 180.0).rem_euclid(360.0) - 180.0
+}
+
+/// An angle in radians as the shorter way round (-π..π).
+pub fn wrap_pi(a: f64) -> f64 {
+    (a + PI).rem_euclid(2.0 * PI) - PI
+}
+
+/// How much of the ground's light reaches the eye at a depth along the view (in camera
+/// distances): all of it about the middle, falling back into the deep towards `FAR`. (The
+/// globe's shader does the same.)
+pub fn fade(depth: f64) -> f32 {
+    (1.0 - 0.85 * smoothstep(1.5, FAR, depth)) as f32
 }
 
 /// lat/lon (degrees) as a unit vector: x towards 0°N 0°E, y towards 0°N 90°E, z north.
@@ -316,8 +340,18 @@ pub fn lat_of_merc_y(y: f64) -> f64 {
     (PI * (1.0 - 2.0 * y)).sinh().atan().to_degrees()
 }
 
+/// The camera leaned back over the flat map (Google Earth's 3D): `pitch` from straight down and
+/// the compass `heading` up the screen, in radians.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Tilt {
+    pub pitch: f64,
+    pub heading: f64,
+}
+
 /// The flat map: Web Mercator around (`lat0`, `lon0`), `world` px for the whole width of the
-/// world, at the same scale in the middle as the globe at the same altitude.
+/// world, at the same scale in the middle as the globe at the same altitude. It is a plane seen
+/// by a camera `f` px from its middle (the altitude): straight down, or leaned back `pitch` and
+/// turned to `heading` (`tilted`).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FlatView {
     pub lat0: f64,
@@ -325,27 +359,110 @@ pub struct FlatView {
     pub world: f64,
     pub cx: f64,
     pub cy: f64,
+    pub f: f64,
+    pub pitch: f64,
+    pub heading: f64,
 }
 
 impl FlatView {
     pub fn new(lat0: f64, lon0: f64, alt_km: f64, f: f64, centre: (f64, f64)) -> Self {
         let lat0 = lat0.clamp(-80.0, 80.0);
         let world = 2.0 * PI * R_KM * lat0.to_radians().cos() * f / alt_km.max(0.05);
-        Self { lat0, lon0, world, cx: centre.0, cy: centre.1 }
+        Self { lat0, lon0, world, cx: centre.0, cy: centre.1, f, pitch: 0.0, heading: 0.0 }
     }
 
-    /// Screen position of a point (the copy of the world nearest the view).
-    pub fn project(&self, lat: f64, lon: f64) -> (f64, f64) {
-        let mut dx = merc_x(lon) - merc_x(self.lon0);
-        dx -= dx.round();
-        (self.cx + dx * self.world, self.cy + (merc_y(lat) - merc_y(self.lat0)) * self.world)
+    /// The view leaned back as `tilt` says, as far as a map `half_h` px high (half its height)
+    /// allows (`max_pitch`).
+    pub fn tilted(self, tilt: Tilt, half_h: f64) -> Self {
+        Self { pitch: tilt.pitch.clamp(0.0, self.max_pitch(half_h)), heading: tilt.heading, ..self }
+    }
+
+    /// The most the camera leans back over a map `half_h` px high: its top edge stays on ground
+    /// no further than `FAR`.
+    pub fn max_pitch(&self, half_h: f64) -> f64 {
+        ((FAR - 1.0) * self.f / (FAR * half_h.max(1.0))).atan().min(MAX_PITCH)
+    }
+
+    /// A point of the map (Web Mercator, 0-1) on the ground: px from the middle, as the map lies
+    /// straight down and north up (the copy of the world nearest the view).
+    pub fn ground(&self, mx: f64, my: f64) -> [f64; 2] {
+        let dx = mx - merc_x(self.lon0);
+        [(dx - dx.round()) * self.world, (my - merc_y(self.lat0)) * self.world]
+    }
+
+    /// A point `h` px above the ground at `g` on the screen, and how far along the view it is
+    /// (in camera distances: 1 in the middle of the map). Nearer than `NEAR` (under or behind
+    /// the camera) it lands far below the map.
+    pub fn lift(&self, g: [f64; 2], h: f64) -> ([f64; 2], f64) {
+        let ((sp, cp), (sh, ch)) = (self.pitch.sin_cos(), self.heading.sin_cos());
+        // (Turned with the heading up: u to the right, v towards the viewer.)
+        let (u, v) = (g[0] * ch + g[1] * sh, g[1] * ch - g[0] * sh);
+        let depth = (self.f - v * sp - h * cp) / self.f;
+        let k = 1.0 / depth.max(NEAR);
+        ([self.cx + u * k, self.cy + (v * cp - h * sp) * k], depth)
+    }
+
+    /// The ground under a screen position (px from the middle) and how far along the view it is;
+    /// above the horizon, as if far beyond the far edge.
+    pub fn under(&self, sx: f64, sy: f64) -> ([f64; 2], f64) {
+        let ((sp, cp), (sh, ch)) = (self.pitch.sin_cos(), self.heading.sin_cos());
+        let (dx, dy) = ((sx - self.cx) / self.f, (sy - self.cy) / self.f);
+        let depth = cp / (cp + dy * sp).max(cp / (4.0 * FAR));
+        let (u, v) = (depth * dx * self.f, self.f * (sp + depth * (dy * cp - sp)));
+        ([u * ch - v * sh, u * sh + v * ch], depth)
+    }
+
+    /// Where the camera stands over the ground (px from the middle).
+    pub fn eye(&self) -> [f64; 2] {
+        let (r, (sh, ch)) = (self.f * self.pitch.sin(), self.heading.sin_cos());
+        [-r * sh, r * ch]
+    }
+
+    /// Screen position of a point (the copy of the world nearest the view) and how far along the
+    /// view it is (`lift`).
+    pub fn project(&self, lat: f64, lon: f64) -> (f64, f64, f64) {
+        let ([x, y], depth) = self.lift(self.ground(merc_x(lon), merc_y(lat)), 0.0);
+        (x, y, depth)
     }
 
     /// The point under a screen position (its longitude unwrapped).
     pub fn unproject(&self, sx: f64, sy: f64) -> (f64, f64) {
-        let x = merc_x(self.lon0) + (sx - self.cx) / self.world;
-        let y = merc_y(self.lat0) + (sy - self.cy) / self.world;
+        let ([gx, gy], _) = self.under(sx, sy);
+        let x = merc_x(self.lon0) + gx / self.world;
+        let y = merc_y(self.lat0) + gy / self.world;
         (lat_of_merc_y(y.clamp(0.0, 1.0)), x * 360.0 - 180.0)
+    }
+
+    /// A line of the map (Web Mercator points) on the screen, in runs: broken where it leaves one
+    /// side of the world for the other, and cut where it passes under the camera.
+    pub fn runs(&self, points: impl IntoIterator<Item = [f64; 2]>) -> Vec<Vec<[f64; 2]>> {
+        let screen = |g: [f64; 2]| self.lift(g, 0.0).0;
+        // (Where the ground between two points, one in view, passes `NEAR`: depth is even there.)
+        let cut = |(a, da): ([f64; 2], f64), (b, db): ([f64; 2], f64)| {
+            let t = (NEAR - da) / (db - da);
+            screen([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t])
+        };
+        let mut runs: Vec<Vec<[f64; 2]>> = Vec::new();
+        let mut last: Option<([f64; 2], f64)> = None;
+        for m in points {
+            let g = self.ground(m[0], m[1]);
+            let here = (g, self.lift(g, 0.0).1);
+            match last.filter(|(before, _)| (g[0] - before[0]).abs() <= self.world / 2.0) {
+                Some(before) if before.1 >= NEAR => {
+                    let next = if here.1 >= NEAR { screen(g) } else { cut(before, here) };
+                    if let Some(run) = runs.last_mut() {
+                        run.push(next);
+                    }
+                }
+                Some(before) if here.1 >= NEAR => runs.push(vec![cut(here, before), screen(g)]),
+                Some(_) => {}
+                None if here.1 >= NEAR => runs.push(vec![screen(g)]),
+                None => {}
+            }
+            last = Some(here);
+        }
+        runs.retain(|run| run.len() >= 2);
+        runs
     }
 
     pub fn px_per_km(&self) -> f64 {
@@ -357,16 +474,18 @@ impl FlatView {
         (self.world / 256.0).log2()
     }
 
-    /// The tiles of level `z` over the screen rectangle `[x0, y0, x1, y1]`, nearest the middle
-    /// first. Their x runs on past the antimeridian (`rem_euclid(2^z)` is the tile itself).
+    /// The tiles of level `z` under the screen rectangle `[x0, y0, x1, y1]` (the box round the
+    /// ground under its corners), nearest the middle first. Their x runs on past the antimeridian
+    /// (`rem_euclid(2^z)` is the tile itself).
     pub fn tiles(&self, rect: [f64; 4], z: u8) -> Vec<(i64, i64)> {
         let n = 1i64 << z;
         let size = self.world / n as f64;
-        let gx = |sx: f64| merc_x(self.lon0) * self.world + (sx - self.cx);
-        let gy = |sy: f64| merc_y(self.lat0) * self.world + (sy - self.cy);
-        let (x0, x1) = ((gx(rect[0]) / size).floor() as i64, (gx(rect[2]) / size).floor() as i64);
-        let (y0, y1) = (((gy(rect[1]) / size).floor() as i64).max(0), ((gy(rect[3]) / size).floor() as i64).min(n - 1));
-        let (mx, my) = (gx(self.cx) / size, gy(self.cy) / size);
+        let (ox, oy) = (merc_x(self.lon0) * self.world, merc_y(self.lat0) * self.world);
+        let corners = [[rect[0], rect[1]], [rect[2], rect[1]], [rect[0], rect[3]], [rect[2], rect[3]]].map(|[x, y]| self.under(x, y).0);
+        let span = |k: usize, o: f64| corners.iter().map(|c| ((o + c[k]) / size).floor() as i64).fold((i64::MAX, i64::MIN), |(lo, hi), v| (lo.min(v), hi.max(v)));
+        let ((x0, x1), (y0, y1)) = (span(0, ox), span(1, oy));
+        let (y0, y1) = (y0.max(0), y1.min(n - 1));
+        let (mx, my) = (ox / size, oy / size);
         let mut out: Vec<(i64, i64)> = (y0..=y1).flat_map(|y| (x0..=x1).map(move |x| (x, y))).collect();
         out.sort_by(|a, b| {
             let da = (a.0 as f64 + 0.5 - mx).powi(2) + (a.1 as f64 + 0.5 - my).powi(2);
@@ -376,12 +495,11 @@ impl FlatView {
         out
     }
 
-    /// A tile's rectangle on screen `[x0, y0, x1, y1]` (x unwrapped as `tiles` gives it).
-    pub fn tile_rect(&self, z: u8, x: i64, y: i64) -> [f64; 4] {
+    /// A tile on the ground: its north-west corner (px from the middle, x unwrapped as `tiles`
+    /// gives it) and its side.
+    pub fn tile_ground(&self, z: u8, x: i64, y: i64) -> ([f64; 2], f64) {
         let size = self.world / (1i64 << z) as f64;
-        let ox = self.cx - merc_x(self.lon0) * self.world;
-        let oy = self.cy - merc_y(self.lat0) * self.world;
-        [ox + x as f64 * size, oy + y as f64 * size, ox + (x + 1) as f64 * size, oy + (y + 1) as f64 * size]
+        ([x as f64 * size - merc_x(self.lon0) * self.world, y as f64 * size - merc_y(self.lat0) * self.world], size)
     }
 }
 
@@ -1161,6 +1279,8 @@ pub enum Action {
     Mountains(Option<String>),
     /// The houses as block models: down at street level over a place, or where the view is.
     Buildings(Option<String>),
+    /// Google Earth's 3D (true) or the flat map seen straight down again.
+    View3d(bool),
     /// The relief steeper than life (or back).
     Exaggerate(bool),
     /// The rain radar; `animate`: the past two hours in a loop.
@@ -1295,6 +1415,8 @@ pub fn parse_action(args: &Value) -> Result<Action, String> {
         "hide_labels" | "hide_borders" => Action::Overlay(Overlay::Labels, false),
         "show_buildings" | "buildings" | "show_houses" | "show_3d_buildings" => Action::Buildings(place),
         "hide_buildings" | "hide_houses" => Action::Overlay(Overlay::Buildings, false),
+        "show_3d" | "3d" | "tilt" | "tilt_view" => Action::View3d(true),
+        "show_2d" | "2d" | "top_down" | "flat_view" => Action::View3d(false),
         "set_imagery" | "imagery" | "switch_imagery" => {
             let name = text("imagery").or(place).ok_or("set_imagery needs an imagery (esri, sentinel or nasa)")?;
             Action::Imagery(Imagery::parse(&name).ok_or_else(|| format!("'{name}' is not an imagery of the Earth (esri, sentinel, nasa)"))?)
@@ -1325,7 +1447,7 @@ pub fn parse_action(args: &Value) -> Result<Action, String> {
         "spin_reverse" | "reverse_spin" | "spin_other_way" | "spin_backwards" => Action::SpinReverse,
         "stop_spin" => Action::StopSpin,
         "show_cameras" | "cameras" | "webcams" => Action::Cameras, // cameras (C2)
-        other => return Err(format!("'{other}' is not something the Earth does (show, show_satellite, show_holo, show_place, show_quakes, show_flights, show_storms, show_fires, show_iss, show_cameras, hide_layer, hide_layers, zoom_in, zoom_out, home, spin, spin_reverse, stop_spin, show_my_location, show_mountains, show_terrain, exaggerate_terrain, show_radar, animate_radar, show_clouds, show_labels, hide_labels, show_buildings, hide_buildings, set_imagery, show_date, show_today, show_world_tour, stop_tour).")),
+        other => return Err(format!("'{other}' is not something the Earth does (show, show_satellite, show_holo, show_place, show_quakes, show_flights, show_storms, show_fires, show_iss, show_cameras, hide_layer, hide_layers, zoom_in, zoom_out, home, spin, spin_reverse, stop_spin, show_my_location, show_mountains, show_terrain, exaggerate_terrain, show_radar, animate_radar, show_clouds, show_labels, hide_labels, show_buildings, hide_buildings, show_3d, show_2d, set_imagery, show_date, show_today, show_world_tour, stop_tour).")),
     })
 }
 
@@ -1926,6 +2048,9 @@ pub struct Earth {
     pub tour: Option<crate::earth_tour::Tour>,
     /// A drag's speed after the release (points a second), dying away.
     pub inertia: Option<(f32, f32)>,
+    /// The camera leaned back over the flat map (3D), and where it is turning to.
+    pub tilt: Tilt,
+    pub tilt_to: Option<Tilt>,
     /// The globe on the GPU: how its base textures are coming along, and its clipmaps.
     gpu_fetch: [Fetch; 5],
     gpu_busy: bool,
@@ -2098,6 +2223,8 @@ impl Earth {
             me_since: 0.0,
             tour: None,
             inertia: None,
+            tilt: Tilt::default(),
+            tilt_to: None,
             gpu_fetch: Default::default(),
             gpu_busy: false,
             gpu_historic: None,
@@ -2121,6 +2248,7 @@ impl Earth {
         self.historic = None;
         self.tour = None;
         self.inertia = None;
+        (self.tilt, self.tilt_to) = (Tilt::default(), None);
         self.peaks_box = None;
         self.marker = None;
         self.area = None;
@@ -2283,6 +2411,21 @@ impl Earth {
         self.zoom_target = Some((from * factor).clamp(MIN_ALT_KM, MAX_ALT_KM));
     }
 
+    /// Google Earth's 3D (`on`): the camera leans back over the ground, flying down first while
+    /// it is above the flat map; off: straight down again, north up.
+    pub fn set_3d(&mut self, on: bool) {
+        self.tilt_to = Some(if on { Tilt { pitch: TILT_3D, heading: self.tilt.heading } } else { Tilt::default() });
+        let to = self.target();
+        if on && to.alt > TILT_FULL_KM {
+            self.fly_to(Camera { alt: TILT_FULL_KM * 0.6, ..to });
+        }
+    }
+
+    /// Whether the 3D view is on (or coming).
+    pub fn in_3d(&self) -> bool {
+        self.tilt_to.unwrap_or(self.tilt).pitch > 0.01
+    }
+
     /// A drag of the map stops whatever moved the camera (a tour included).
     pub fn grab(&mut self) {
         self.spin = false;
@@ -2329,6 +2472,15 @@ impl Earth {
                 self.zoom_target = None;
             } else {
                 self.cam.alt = next.exp();
+            }
+        }
+        if let Some(to) = self.tilt_to {
+            moving = true;
+            // (The heading the shorter way round.)
+            let left = smooth_towards(wrap_pi(to.heading - self.tilt.heading), 0.0, dt, TILT_TAU_SECS);
+            self.tilt = Tilt { pitch: smooth_towards(self.tilt.pitch, to.pitch, dt, TILT_TAU_SECS), heading: to.heading - left };
+            if (self.tilt.pitch - to.pitch).abs() < 1e-3 && left.abs() < 1e-3 {
+                (self.tilt, self.tilt_to) = (to, None);
             }
         }
         if self.spin && self.motion.is_none() {
@@ -3928,6 +4080,14 @@ async fn act(action: Action, offline: bool) -> (String, String) {
             state().set_look(Look::Holo);
             ("The holographic globe.".into(), "Back to the holographic view, Sir.".into())
         }
+        Action::View3d(true) => {
+            state().set_3d(true);
+            ("3D: the camera leans back over the ground.".into(), "Here it is in 3D, Sir. The right mouse button tilts and turns it.".into())
+        }
+        Action::View3d(false) => {
+            state().set_3d(false);
+            ("2D: straight down, north up.".into(), "Back to the flat map, Sir.".into())
+        }
         Action::Place(name) => show_place(&name, offline).await,
         Action::Quakes { place: None, radius_km: None } => global_quakes(offline).await,
         Action::Quakes { place, radius_km } => area_quakes(place, radius_km, offline).await,
@@ -4087,10 +4247,12 @@ async fn buildings(place: Option<String>, offline: bool) -> (String, String) {
     if hit.is_some() || t.alt > STREET_ALT_KM {
         st.fly_to(Camera { lat, lon, alt: STREET_ALT_KM });
     }
+    // (They are seen in 3D: the camera leans back over them.)
+    st.set_3d(true);
     let over = hit.map(|h| format!(" of {}", h.name)).unwrap_or_default();
     (
-        format!("Buildings{over}: block models from OpenStreetMap's outlines and heights."),
-        format!("The houses{over} are standing, Sir. Drag with the right button to turn them."),
+        format!("Buildings{over}: block models from OpenStreetMap's outlines and heights, in 3D."),
+        format!("The houses{over} are standing, Sir. The right mouse button tilts and turns the view."),
     )
 }
 
@@ -4524,7 +4686,7 @@ mod tests {
         // The flat view: a point maps to the screen and back; the tiles cover the view.
         let f = focal_for(600.0);
         let view = FlatView::new(40.7, -74.0, 1_100.0, f, (400.0, 300.0));
-        let (x, y) = view.project(42.0, -71.0);
+        let (x, y, _) = view.project(42.0, -71.0);
         let (la, lo) = view.unproject(x, y);
         assert!(near(la, 42.0, 1e-6) && near(lo, -71.0, 1e-6));
         // Its scale in the middle is the globe's at the same altitude.
@@ -4536,8 +4698,9 @@ mod tests {
         assert_eq!(tiles[0], (cx as i64, cy as i64), "the middle tile first");
         for corner in [(0.0, 0.0), (799.0, 0.0), (0.0, 599.0), (799.0, 599.0)] {
             assert!(tiles.iter().any(|t| {
-                let r = view.tile_rect(z, t.0, t.1);
-                (r[0]..r[2]).contains(&corner.0) && (r[1]..r[3]).contains(&corner.1)
+                let (o, size) = view.tile_ground(z, t.0, t.1);
+                let (x, y) = (corner.0 - 400.0, corner.1 - 300.0);
+                (o[0]..o[0] + size).contains(&x) && (o[1]..o[1] + size).contains(&y)
             }), "corner {corner:?} uncovered");
         }
         // Across the antimeridian x runs on (and wraps for the tile itself).
@@ -4545,6 +4708,98 @@ mod tests {
         let t = pacific.tiles([0.0, 0.0, 800.0, 600.0], 6);
         assert!(t.iter().any(|t| t.0 >= 64) && t.iter().all(|t| t.0.rem_euclid(64) < 64));
         assert_eq!(TileKey { layer: TileLayer::Reference, z: 10, x: 301, y: 385 }.parent(), Some(TileKey { layer: TileLayer::Reference, z: 9, x: 150, y: 192 }));
+    }
+
+    /// Leaned back (3D), the flat map is a plane seen in perspective: straight down it is the
+    /// plain map to the bit; a point goes to the screen and back whatever the heading; a roof
+    /// stands above its foot; the top edge stays on ground no further than `FAR`; the bottom is
+    /// nearer than the middle; a line under the camera is cut where it passes `NEAR`; the tiles
+    /// reach as far as the ground in view.
+    #[test]
+    fn the_leaned_back_map_is_a_plane_in_perspective() {
+        let f = focal_for(600.0);
+        let plain = FlatView::new(48.0, 9.0, 2.0, f, (400.0, 300.0));
+        let (x, y, _) = plain.project(48.01, 9.02);
+        let g = plain.ground(merc_x(9.02), merc_y(48.01));
+        assert_eq!((x, y), (400.0 + g[0], 300.0 + g[1]), "straight down, the plain map");
+        for heading in [0.0, 0.7, -2.5] {
+            let view = plain.tilted(Tilt { pitch: TILT_3D, heading }, 300.0);
+            assert!((view.pitch - TILT_3D).abs() < 1e-12, "leaned {} for {TILT_3D}", view.pitch);
+            for (lat, lon) in [(48.0, 9.0), (48.004, 9.01), (47.995, 8.99), (48.01, 9.0)] {
+                let (sx, sy, _) = view.project(lat, lon);
+                let (la, lo) = view.unproject(sx, sy);
+                assert!(near(la, lat, 1e-9) && near(lo, lon, 1e-9), "{heading}: {lat},{lon} came back as {la},{lo}");
+            }
+            let (mx, my, _) = view.project(48.0, 9.0);
+            assert!(near(mx, 400.0, 1e-9) && near(my, 300.0, 1e-9), "the middle moved");
+            let (foot, roof) = (view.lift([0.0, 0.0], 0.0).0, view.lift([0.0, 0.0], 30.0).0);
+            assert!(roof[1] < foot[1] - 10.0, "{heading}: the roof {roof:?} over the foot {foot:?}");
+        }
+        // As far as it may lean, the top edge stands on ground no further than FAR, on a wide
+        // map and a tall one.
+        for half_h in [300.0, 450.0, 900.0] {
+            let view = plain.tilted(Tilt { pitch: 2.0, heading: 0.3 }, half_h);
+            let depth = view.under(400.0, 300.0 - half_h).1;
+            assert!(view.pitch <= MAX_PITCH && depth <= FAR + 1e-9, "{half_h}: the top edge at {depth}");
+        }
+        let view = plain.tilted(Tilt { pitch: TILT_3D, heading: 0.0 }, 300.0);
+        assert!(view.under(400.0, 590.0).1 < 1.0 && view.under(400.0, 10.0).1 > 1.5, "nearer at the bottom, further at the top");
+        // A street from the middle to behind the camera ends far down the screen where it
+        // passes NEAR; one wholly behind it is not drawn.
+        let south = |px: f64| merc_y(48.0) + px / view.world;
+        let runs = view.runs([[merc_x(9.0), south(0.0)], [merc_x(9.0), south(3.0 * view.f)]]);
+        assert!(runs.len() == 1 && runs[0][1][1] > 1_000.0 && near(runs[0][1][0], 400.0, 1e-6), "{runs:?}");
+        assert!(view.runs([[merc_x(9.0), south(3.0 * view.f)], [merc_x(9.001), south(3.0 * view.f)]]).is_empty());
+        let z = view.zoom().round() as u8;
+        let tiles = view.tiles([0.0, 0.0, 800.0, 600.0], z);
+        for corner in [(0.0, 0.0), (800.0, 0.0), (0.0, 600.0), (800.0, 600.0)] {
+            let g = view.under(corner.0, corner.1).0;
+            assert!(tiles.iter().any(|t| {
+                let (o, size) = view.tile_ground(z, t.0, t.1);
+                (o[0]..o[0] + size).contains(&g[0]) && (o[1]..o[1] + size).contains(&g[1])
+            }), "{corner:?} uncovered");
+        }
+    }
+
+    /// "Switch to 3D": the camera leans back in a breath; "2D" stands it up again and turns
+    /// north up the shorter way; from the globe it first flies down to where the map leans.
+    #[test]
+    fn the_3d_view_leans_back_and_stands_up_again() {
+        let mut e = Earth::demo();
+        e.cam = Camera { lat: 48.0, lon: 9.0, alt: 2.0 };
+        let settle = |e: &mut Earth| {
+            let (mut t, mut widest) = (0.0, 0.0f64);
+            while e.tilt_to.is_some() && t < 3.0 {
+                e.step(t, 1.0 / 60.0);
+                widest = widest.max(wrap_pi(e.tilt.heading).abs());
+                t += 1.0 / 60.0;
+            }
+            (t, widest)
+        };
+        e.set_3d(true);
+        assert!(e.in_3d() && e.motion.is_none(), "near the ground it only leans back");
+        let (secs, _) = settle(&mut e);
+        assert!(secs < 1.5 && (e.tilt.pitch - TILT_3D).abs() < 1e-3, "{secs} s: {:?}", e.tilt);
+        // Turned nearly all the way round by hand, north comes back the short way.
+        e.tilt.heading = 6.0;
+        e.set_3d(false);
+        let (_, widest) = settle(&mut e);
+        assert!(!e.in_3d() && e.tilt == Tilt::default() && widest < 0.3, "{:?}, {widest}", e.tilt);
+        e.cam.alt = HOME_ALT_KM;
+        e.set_3d(true);
+        assert!(e.in_3d() && e.target().alt < TILT_FULL_KM, "from the globe it goes down to the map");
+    }
+
+    /// "Switch to 3D" and "back to 2D" said while the Earth is up take the fast path to its
+    /// camera, in either language: nothing on the way (another wording, the 3D studio) has them.
+    #[test]
+    fn switch_to_3d_and_back_is_the_earths_while_it_is_up() {
+        set_open(true);
+        for (text, action) in [("Switch to 3D", "show_3d"), ("Tilt the map", "show_3d"), ("Show it in 3D", "show_3d"), ("Schalte auf 3D", "show_3d"), ("Back to 2D", "show_2d"), ("Top-down view", "show_2d"), ("Draufsicht", "show_2d")] {
+            let (tool, args) = crate::phrasings::route(text).unwrap_or_else(|| panic!("{text}: the language model's"));
+            assert_eq!((tool.as_str(), args["view"].as_str(), args["action"].as_str()), ("open_jai_view", Some("earth"), Some(action)), "{text}: {args}");
+        }
+        set_open(false);
     }
 
     #[test]
@@ -4738,6 +4993,8 @@ mod tests {
             ("hide_borders", Action::Overlay(Overlay::Labels, false)),
             ("show_buildings", Action::Buildings(None)),
             ("hide_buildings", Action::Overlay(Overlay::Buildings, false)),
+            ("show_3d", Action::View3d(true)),
+            ("show_2d", Action::View3d(false)),
             ("show_today", Action::Today),
             ("world_tour", Action::Tour),
             ("stop_tour", Action::StopTour),

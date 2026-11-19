@@ -12,7 +12,7 @@
 //! query, the drawer of results under the map.
 
 use super::{stroke, strip_ink, strip_muted};
-use crate::earth::{self as model, Bbox, Camera, Earth, EventKind, Flight, FlatView, GeoEvent, GlobeView, Iss, Layer, Look, Outlook, Overlay, Quake, TileKey, TileLayer};
+use crate::earth::{self as model, Bbox, Camera, Earth, EventKind, Flight, FlatView, GeoEvent, GlobeView, Iss, Layer, Look, Outlook, Overlay, Quake, TileKey, TileLayer, Tilt};
 use crate::earth_gl as gl;
 use eframe::egui::{self, epaint::Vertex, pos2, vec2, Align2, Color32, FontId, Frame, Galley, Margin, Mesh, Painter, Pos2, Rect, Sense, Shape, Stroke, TextureId, Ui, UiBuilder, Vec2, ViewportBuilder, ViewportClass, ViewportCommand, ViewportId};
 use std::f32::consts::{PI, TAU};
@@ -174,13 +174,17 @@ struct Geo {
 }
 
 impl Geo {
-    fn new(cam: Camera, map: Rect) -> Self {
+    /// The camera at `cam`, leaned back over the flat map as `tilt` says (it stands up again on
+    /// the way to the globe, which does not lean).
+    fn new(cam: Camera, tilt: Tilt, map: Rect) -> Self {
         let f = model::focal_for(map.width().min(map.height()) as f64);
         let centre = (map.center().x as f64, map.center().y as f64);
+        let share = 1.0 - model::smoothstep(model::TILT_FULL_KM, model::FLAT_FULL_KM, cam.alt);
+        let lean = Tilt { pitch: tilt.pitch * share, heading: model::wrap_pi(tilt.heading) * share };
         Self {
             map,
             globe: GlobeView::new(cam.lat, cam.lon, cam.alt, f, centre),
-            flat: FlatView::new(cam.lat, cam.lon, cam.alt, f, centre),
+            flat: FlatView::new(cam.lat, cam.lon, cam.alt, f, centre).tilted(lean, map.height() as f64 / 2.0),
             flatness: model::smoothstep(model::FLAT_FROM_KM, model::FLAT_FULL_KM, cam.alt) as f32,
         }
     }
@@ -226,9 +230,11 @@ impl Proj {
                 let h = g.horizon();
                 g.project(lat, lon).filter(|(_, _, z)| *z > h + 0.002).map(|(x, y, z)| (pos2(x as f32, y as f32), model::smoothstep(h, h + 0.08, z) as f32))
             }
+            // (Leaned back, a point under or behind the camera is not on the map, and the far
+            // ones fall back into the deep.)
             Proj::Flat(f) => {
-                let (x, y) = f.project(lat, lon);
-                Some((pos2(x as f32, y as f32), 1.0))
+                let (x, y, depth) = f.project(lat, lon);
+                (depth >= model::NEAR).then(|| (pos2(x as f32, y as f32), model::fade(depth)))
             }
         }
     }
@@ -241,22 +247,17 @@ impl Proj {
     }
 
     /// A line of points as runs on screen: broken where it goes behind the globe, or where it
-    /// leaves the flat map on one side for the other.
+    /// leaves the flat map on one side for the other (cut where it passes under the camera).
     fn runs(&self, points: &[(f64, f64)]) -> Vec<Vec<Pos2>> {
-        let jump = match self {
-            Proj::Flat(f) => (f.world / 2.0) as f32,
-            Proj::Globe(_) => f32::INFINITY,
-        };
+        if let Proj::Flat(f) = self {
+            let runs = f.runs(points.iter().map(|&(lat, lon)| [model::merc_x(lon), model::merc_y(lat)]));
+            return runs.into_iter().map(|run| run.into_iter().map(|[x, y]| pos2(x as f32, y as f32)).collect()).collect();
+        }
         let mut runs: Vec<Vec<Pos2>> = Vec::new();
         let mut run: Vec<Pos2> = Vec::new();
         for &(lat, lon) in points {
             match self.at(lat, lon) {
-                Some((p, _)) => {
-                    if run.last().is_some_and(|last: &Pos2| (p.x - last.x).abs() > jump) {
-                        runs.push(std::mem::take(&mut run));
-                    }
-                    run.push(p);
-                }
+                Some((p, _)) => run.push(p),
                 None => runs.push(std::mem::take(&mut run)),
             }
         }
@@ -304,10 +305,10 @@ fn view_with(ui: &mut Ui, st: &mut Earth, rt: &Handle, fetch: bool) {
     let lay = Layout::new(full, st.area.is_some(), credits.size().y);
     ui.allocate_rect(full, Sense::hover());
     let map_resp = ui.interact(lay.map, ui.id().with("earth_map"), Sense::click_and_drag());
-    if handle_input(&ctx, st, &Geo::new(st.cam, lay.map), &map_resp, now, dt) {
+    if handle_input(&ctx, st, &Geo::new(st.cam, st.tilt, lay.map), &map_resp, now, dt) {
         moving = true;
     }
-    let geo = Geo::new(st.cam, lay.map);
+    let geo = Geo::new(st.cam, st.tilt, lay.map);
 
     let painter = ui.painter_at(lay.map);
     painter.rect_filled(lay.map, 0.0, space());
@@ -350,7 +351,7 @@ fn view_with(ui: &mut Ui, st: &mut Earth, rt: &Handle, fetch: bool) {
     if let Some(card) = tour_card {
         card.paint(&painter, &ink);
     }
-    paint_controls(ui, &painter, st, &controls, &ink, rt);
+    paint_controls(ui, &painter, st, &controls, &ink, rt, geo.flat.heading);
     // live layers (C1): a click picks a satellite or a train (or lets go).
     if map_resp.clicked() && !controls.area.contains(map_resp.interact_pointer_pos().unwrap_or_default()) {
         crate::earth_layers::clicked(picker.best.as_ref().and_then(|(_, h)| if let Hover::Live(hit) = h { Some(hit) } else { None }));
@@ -436,17 +437,19 @@ fn handle_input(ctx: &egui::Context, st: &mut Earth, geo: &Geo, resp: &egui::Res
     const GLIDE_TAU: f64 = 0.32;
     const GLIDE_MIN: f32 = 12.0;
     let mut moved = false;
-    // The right button turns the houses while they stand (it pans like the left one otherwise).
-    if resp.dragged_by(egui::PointerButton::Secondary) && st.overlays.buildings && geo.flatness >= 1.0 && crate::earth_buildings::showing(&geo.flat) > 0.0 {
-        crate::earth_buildings::lean_by(resp.drag_delta());
-        st.inertia = None;
+    // The right button leans the camera back over the flat map and turns it (Google Earth's
+    // 3D): up leans it further, across turns it. On the globe it pans like the left one.
+    if resp.dragged_by(egui::PointerButton::Secondary) && geo.flatness >= 1.0 {
+        let (d, most) = (resp.drag_delta(), geo.flat.max_pitch(geo.map.height() as f64 / 2.0));
+        st.tilt = Tilt { pitch: (st.tilt.pitch.min(most) - d.y as f64 * 0.005).clamp(0.0, most), heading: st.tilt.heading + d.x as f64 * 0.006 };
+        (st.tilt_to, st.inertia) = (None, None);
         moved = true;
     } else if resp.dragged() {
         let d = resp.drag_delta();
         let before = st.inertia.unwrap_or((0.0, 0.0));
         if d != Vec2::ZERO {
             st.grab();
-            pan(st, geo, d);
+            pan(st, geo, resp.interact_pointer_pos().unwrap_or(geo.map.center()), d);
             st.still_since = now;
             moved = true;
         }
@@ -461,7 +464,7 @@ fn handle_input(ctx: &egui::Context, st: &mut Earth, geo: &Geo, resp: &egui::Res
         if v.length() < GLIDE_MIN || st.motion.is_some() {
             st.inertia = None;
         } else {
-            pan(st, geo, v * dt as f32);
+            pan(st, geo, geo.map.center(), v * dt as f32);
             st.inertia = Some((v.x, v.y));
             st.still_since = now;
             moved = true;
@@ -492,14 +495,15 @@ fn handle_input(ctx: &egui::Context, st: &mut Earth, geo: &Geo, resp: &egui::Res
     moved
 }
 
-/// The camera follows a drag: the point under the pointer stays under it (exactly on the flat
-/// map, in the middle of the globe).
-fn pan(st: &mut Earth, geo: &Geo, d: Vec2) {
+/// The camera follows a drag by `d` to `at`: the point under the pointer stays under it
+/// (exactly on the flat map, leaned back or not; in the middle of the globe).
+fn pan(st: &mut Earth, geo: &Geo, at: Pos2, d: Vec2) {
     match geo.proj() {
         Proj::Flat(f) => {
-            let y = model::merc_y(st.cam.lat.clamp(-80.0, 80.0)) - d.y as f64 / f.world;
+            let (from, to) = (f.under((at.x - d.x) as f64, (at.y - d.y) as f64).0, f.under(at.x as f64, at.y as f64).0);
+            let y = model::merc_y(st.cam.lat.clamp(-80.0, 80.0)) + (from[1] - to[1]) / f.world;
             st.cam.lat = model::lat_of_merc_y(y.clamp(0.0, 1.0)).clamp(-80.0, 80.0);
-            st.cam.lon = model::wrap_lon(st.cam.lon - d.x as f64 / f.world * 360.0);
+            st.cam.lon = model::wrap_lon(st.cam.lon + (from[0] - to[0]) / f.world * 360.0);
         }
         Proj::Globe(g) => {
             let radians_per_px = (g.d - 1.0) / g.f;
@@ -604,6 +608,7 @@ fn gpu_frame(st: &mut Earth, geo: &Geo, ink: &Ink, now: f64, rt: &Handle) -> gl:
         basis: gl::view_basis(g.lat0, g.lon0),
         flatness: geo.flatness,
         flat: [model::merc_x(geo.flat.lon0) as f32, model::merc_y(geo.flat.lat0) as f32, geo.flat.world as f32],
+        tilt: [geo.flat.pitch as f32, geo.flat.heading as f32],
         sun: gl::world_unit(sun_lat, sun_lon),
         holo: if photo { 0.0 } else { 1.0 },
         night: if live { 1.0 } else { 0.0 },
@@ -779,7 +784,8 @@ fn paint_flat(p: &Painter, st: &mut Earth, geo: &Geo, base: TextureId, ink: &Ink
             for c in 0..=COLS {
                 let at = pos2(map.left() + map.width() * c as f32 / COLS as f32, map.top() + map.height() * r as f32 / ROWS as f32);
                 let (lat, lon) = flat.unproject(at.x as f64, at.y as f64);
-                mesh.vertices.push(Vertex { pos: at, uv: pos2(((lon + 180.0) / 360.0) as f32, ((90.0 - lat) / 180.0) as f32), color: tint });
+                let color = tint.gamma_multiply(model::fade(flat.under(at.x as f64, at.y as f64).1));
+                mesh.vertices.push(Vertex { pos: at, uv: pos2(((lon + 180.0) / 360.0) as f32, ((90.0 - lat) / 180.0) as f32), color });
             }
         }
         for r in 0..ROWS {
@@ -820,25 +826,36 @@ fn paint_flat(p: &Painter, st: &mut Earth, geo: &Geo, base: TextureId, ink: &Ink
 }
 
 /// Parallels and meridians over the flat map (straight lines in Web Mercator), every 30 degrees
-/// down to every quarter of one: as many as stay ~70 px apart.
+/// down to every quarter of one: as many as stay ~70 px apart in the middle. Leaned back, each
+/// dims into the deep with the ground under it.
 fn flat_graticule(p: &Painter, flat: &FlatView, map: Rect, colour: Color32) {
     let px_per_deg = flat.world / 360.0;
     if !px_per_deg.is_finite() || px_per_deg <= 0.0 {
         return;
     }
     let step = [0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 15.0, 30.0].into_iter().find(|s| s * px_per_deg >= 70.0).unwrap_or(30.0);
-    let line = stroke(1.0, colour);
-    let (north, west) = flat.unproject(map.left() as f64, map.top() as f64);
-    let (south, east) = flat.unproject(map.right() as f64, map.bottom() as f64);
-    let first = (west / step).ceil() as i64;
-    for k in first..=(east / step).floor() as i64 {
-        let (x, _) = flat.project(0.0, k as f64 * step);
-        p.line_segment([pos2(x as f32, map.top()), pos2(x as f32, map.bottom())], line);
+    // (The ground in view: the box round what lies under the map's corners.)
+    let corners = [map.left_top(), map.right_top(), map.right_bottom(), map.left_bottom()].map(|c| flat.unproject(c.x as f64, c.y as f64));
+    let (south, north) = corners.iter().fold((85.0f64, -85.0f64), |(s, n), c| (s.min(c.0), n.max(c.0)));
+    let (west, east) = corners.iter().fold((f64::MAX, f64::MIN), |(w, e), c| (w.min(c.1), e.max(c.1)));
+    let line = |a: (f64, f64), b: (f64, f64)| {
+        let ends = [a, b].map(|(lat, lon)| [model::merc_x(lon), model::merc_y(lat)]);
+        for run in flat.runs(ends) {
+            let (a, b) = (pos2(run[0][0] as f32, run[0][1] as f32), pos2(run[1][0] as f32, run[1][1] as f32));
+            // (In pieces, each as bright as the ground under its middle.)
+            const PIECES: usize = 8;
+            for k in 0..PIECES {
+                let (from, to) = (a.lerp(b, k as f32 / PIECES as f32), a.lerp(b, (k + 1) as f32 / PIECES as f32));
+                let mid = from.lerp(to, 0.5);
+                p.line_segment([from, to], stroke(1.0, colour.gamma_multiply(model::fade(flat.under(mid.x as f64, mid.y as f64).1))));
+            }
+        }
+    };
+    for k in (west / step).ceil() as i64..=(east / step).floor() as i64 {
+        line((south.max(-85.0), k as f64 * step), (north.min(85.0), k as f64 * step));
     }
-    let first = (south.max(-85.0) / step).ceil() as i64;
-    for k in first..=(north.min(85.0) / step).floor() as i64 {
-        let (_, y) = flat.project(k as f64 * step, 0.0);
-        p.line_segment([pos2(map.left(), y as f32), pos2(map.right(), y as f32)], line);
+    for k in (south.max(-85.0) / step).ceil() as i64..=(north.min(85.0) / step).floor() as i64 {
+        line((k as f64 * step, west), (k as f64 * step, east));
     }
 }
 
@@ -846,15 +863,12 @@ fn flat_graticule(p: &Painter, flat: &FlatView, map: Rect, colour: Color32) {
 /// is here stands in for it.
 #[allow(clippy::too_many_arguments)]
 fn tiles(p: &Painter, st: &mut Earth, flat: &FlatView, map: Rect, layer: TileLayer, z: u8, tint: Color32, rt: &Handle) {
-    let n = 1i64 << z;
     let whole = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
     let ctx = p.ctx().clone();
-    for (x, y) in flat.tiles([map.left() as f64, map.top() as f64, map.right() as f64, map.bottom() as f64], z) {
-        let key = TileKey { layer, z, x: x.rem_euclid(n) as u32, y: y as u32 };
-        let r = flat.tile_rect(z, x, y);
-        let rect = Rect::from_min_max(pos2(r[0] as f32, r[1] as f32), pos2(r[2] as f32, r[3] as f32));
+    for (z, x, y) in tiles_over(flat, map, z) {
+        let key = TileKey { layer, z, x: x.rem_euclid(1i64 << z) as u32, y: y as u32 };
         if let Some(texture) = st.tile(&ctx, key) {
-            p.image(texture, rect, whole, tint);
+            tile_picture(p, flat, (z, x, y), texture, whole, tint);
             continue;
         }
         st.request_tile(key, rt);
@@ -867,11 +881,69 @@ fn tiles(p: &Painter, st: &mut Earth, flat: &FlatView, map: Rect, layer: TileLay
             uv = Rect::from_min_size(pos2((qx + uv.min.x) / 2.0, (qy + uv.min.y) / 2.0), uv.size() / 2.0);
             k = parent;
             if let Some(texture) = st.tile(&ctx, k) {
-                p.image(texture, rect, uv, tint);
+                tile_picture(p, flat, (z, x, y), texture, uv, tint);
                 break;
             }
         }
     }
+}
+
+/// The tiles to draw over `map`, up to level `z` (level, x, y). Leaned back, a tile is split
+/// while it stands larger on the screen than half again its 256 pixels: the far ground takes
+/// coarser ones (a bounded number, nearest first).
+fn tiles_over(flat: &FlatView, map: Rect, z: u8) -> Vec<(u8, i64, i64)> {
+    let rect = [map.left() as f64, map.top() as f64, map.right() as f64, map.bottom() as f64];
+    if flat.pitch <= 0.0 {
+        return flat.tiles(rect, z).into_iter().map(|(x, y)| (z, x, y)).collect();
+    }
+    let top = z.saturating_sub(4);
+    let mut todo: Vec<(u8, i64, i64)> = flat.tiles(rect, top).into_iter().rev().map(|(x, y)| (top, x, y)).collect();
+    let mut out = Vec::new();
+    while let Some((l, x, y)) = todo.pop() {
+        let corners = tile_corners(flat, (l, x, y));
+        if !Rect::from_points(&corners).intersects(map) {
+            continue;
+        }
+        let side = (0..4).map(|i| corners[i].distance(corners[(i + 1) % 4])).fold(0.0, f32::max);
+        if l < z && side > 384.0 {
+            todo.extend([(1, 1), (0, 1), (1, 0), (0, 0)].map(|(i, j)| (l + 1, 2 * x + i, 2 * y + j)));
+        } else {
+            out.push((l, x, y));
+        }
+    }
+    out
+}
+
+/// A tile's corners on the screen, clockwise from the north-west.
+fn tile_corners(flat: &FlatView, (z, x, y): (u8, i64, i64)) -> [Pos2; 4] {
+    let (o, size) = flat.tile_ground(z, x, y);
+    [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)].map(|(i, j)| {
+        let ([sx, sy], _) = flat.lift([o[0] + i * size, o[1] + j * size], 0.0);
+        pos2(sx as f32, sy as f32)
+    })
+}
+
+/// A tile's picture (the part `uv` of `texture`) on the ground: one square straight down, a grid
+/// of them leaned back (in perspective, the far part dimmed into the deep).
+fn tile_picture(p: &Painter, flat: &FlatView, (z, x, y): (u8, i64, i64), texture: TextureId, uv: Rect, tint: Color32) {
+    let (o, size) = flat.tile_ground(z, x, y);
+    let cells: u32 = if flat.pitch > 0.0 { 8 } else { 1 };
+    let mut mesh = Mesh::with_texture(texture);
+    for r in 0..=cells {
+        for c in 0..=cells {
+            let t = vec2(c as f32, r as f32) / cells as f32;
+            let ([sx, sy], depth) = flat.lift([o[0] + t.x as f64 * size, o[1] + t.y as f64 * size], 0.0);
+            mesh.vertices.push(Vertex { pos: pos2(sx as f32, sy as f32), uv: uv.lerp_inside(t), color: tint.gamma_multiply(model::fade(depth)) });
+        }
+    }
+    for r in 0..cells {
+        for c in 0..cells {
+            let k = r * (cells + 1) + c;
+            mesh.add_triangle(k, k + 1, k + cells + 1);
+            mesh.add_triangle(k + 1, k + cells + 2, k + cells + 1);
+        }
+    }
+    p.add(Shape::mesh(mesh));
 }
 
 // -------------------------------------------------------------------------- the layers ----
@@ -1243,6 +1315,8 @@ enum Icon {
     Cloud,
     /// Two blocks on the ground: the houses in 3D.
     Buildings,
+    /// The ground leaned back: 3D.
+    Tilt,
 }
 
 impl Icon {
@@ -1335,6 +1409,13 @@ impl Icon {
                 p.add(Shape::line(vec![pos2(x(-0.8), foot), pos2(x(-0.8), c.y - s * 0.1), pos2(x(-0.15), c.y - s * 0.1), pos2(x(-0.15), c.y - s * 0.8), pos2(x(0.75), c.y - s * 0.8), pos2(x(0.75), foot)], line));
                 p.line_segment([pos2(x(-0.15), c.y - s * 0.1), pos2(x(-0.15), foot)], line);
                 p.line_segment([pos2(x(-1.0), foot), pos2(x(1.0), foot)], line);
+            }
+            Icon::Tilt => {
+                // (A square of ground narrowing away, ruled along and across.)
+                let (near, far) = (c.y + s * 0.6, c.y - s * 0.6);
+                p.add(Shape::closed_line(vec![pos2(c.x - s, near), pos2(c.x - s * 0.45, far), pos2(c.x + s * 0.45, far), pos2(c.x + s, near)], line));
+                p.line_segment([pos2(c.x - s * 0.725, c.y), pos2(c.x + s * 0.725, c.y)], line);
+                p.line_segment([pos2(c.x, near), pos2(c.x, far)], line);
             }
             Icon::Radar => {
                 for k in 1..=3 {
@@ -1662,16 +1743,19 @@ enum Control {
     ZoomOut,
     Home,
     Locate,
+    /// Google Earth's 3D: the camera leans back over the flat map (again: straight down).
+    Tilt,
     Layer(Layer),
     Overlay(Overlay),
     Satellite,
 }
 
-const CONTROLS: [Control; 15] = [
+const CONTROLS: [Control; 16] = [
     Control::ZoomIn,
     Control::ZoomOut,
     Control::Home,
     Control::Locate,
+    Control::Tilt,
     Control::Layer(Layer::Quakes),
     Control::Layer(Layer::Storms),
     Control::Layer(Layer::Fires),
@@ -1685,7 +1769,7 @@ const CONTROLS: [Control; 15] = [
     Control::Satellite,
 ];
 /// Where the column's groups start (the camera, the live layers, the overlays).
-const GROUP_STARTS: [usize; 2] = [4, 9];
+const GROUP_STARTS: [usize; 2] = [5, 10];
 
 impl Control {
     fn icon(self) -> Icon {
@@ -1694,6 +1778,7 @@ impl Control {
             Control::ZoomOut => Icon::Minus,
             Control::Home => Icon::Home,
             Control::Locate => Icon::You,
+            Control::Tilt => Icon::Tilt,
             Control::Layer(Layer::Quakes) => Icon::Quake,
             Control::Layer(Layer::Storms) => Icon::Storm,
             Control::Layer(Layer::Fires) => Icon::Fire,
@@ -1715,12 +1800,13 @@ impl Control {
             Control::ZoomOut => "Zoom out",
             Control::Home => "Back to the whole globe",
             Control::Locate => "Where am I? (the Windows location service, else your connection's city)",
+            Control::Tilt => "3D: the camera leans back over the ground (the right button tilts and turns it); again for 2D, north up",
             Control::Layer(layer) => layer.hint(),
             Control::Overlay(Overlay::Labels) => "Place names and borders (Esri)",
             Control::Overlay(Overlay::Terrain) => "Shaded terrain and the peaks' names (AWS Terrain Tiles, OpenStreetMap)",
             Control::Overlay(Overlay::Radar) => "Rain radar, the past two hours (RainViewer)",
             Control::Overlay(Overlay::Clouds) => "Live cloud cover: infrared from GOES and Himawari (NASA GIBS)",
-            Control::Overlay(Overlay::Buildings) => "The houses in 3D at street level (OpenFreeMap, OpenStreetMap); a drag with the right button turns them",
+            Control::Overlay(Overlay::Buildings) => "The houses as block models at street level (OpenFreeMap, OpenStreetMap)",
             Control::Satellite => "The photo globe; again for the holographic one",
         }
     }
@@ -1759,8 +1845,9 @@ fn controls_layout(map: Rect) -> Controls {
     Controls { area, buttons }
 }
 
-/// The control column: filled in the accent while a layer (or the satellite view) is on.
-fn paint_controls(ui: &mut Ui, p: &Painter, st: &mut Earth, controls: &Controls, ink: &Ink, rt: &Handle) {
+/// The control column: filled in the accent while a layer (or the satellite view, or 3D) is on.
+/// The 3D key's rim carries a tick towards north while the map is turned (`heading`).
+fn paint_controls(ui: &mut Ui, p: &Painter, st: &mut Earth, controls: &Controls, ink: &Ink, rt: &Handle, heading: f64) {
     for &(control, rect) in &controls.buttons {
         let resp = ui.interact(rect, ui.id().with(("earth_control", control)), Sense::click());
         let on = match control {
@@ -1768,6 +1855,7 @@ fn paint_controls(ui: &mut Ui, p: &Painter, st: &mut Earth, controls: &Controls,
             Control::Overlay(overlay) => st.overlays.get(overlay),
             Control::Locate => st.me.is_some(),
             Control::Satellite => st.look == Look::Satellite,
+            Control::Tilt => st.in_3d(),
             _ => false,
         };
         let (c, r) = (rect.center(), rect.width() / 2.0);
@@ -1776,9 +1864,13 @@ fn paint_controls(ui: &mut Ui, p: &Painter, st: &mut Earth, controls: &Controls,
             Color32::BLACK
         } else {
             p.circle(c, r, card(),stroke(1.0, if resp.hovered() { ink.accent } else { ink.border }));
-            if matches!(control, Control::Layer(_) | Control::Overlay(_) | Control::Satellite) { ink.accent } else { strip_ink() }
+            if matches!(control, Control::Layer(_) | Control::Overlay(_) | Control::Satellite | Control::Tilt) { ink.accent } else { strip_ink() }
         };
         control.icon().paint(p, c, r * 0.5, Some(icon));
+        if control == Control::Tilt && heading.abs() > 0.01 {
+            let north = vec2(-heading.sin() as f32, -heading.cos() as f32);
+            p.line_segment([c + north * (r + 1.0), c + north * (r + 5.0)], stroke(2.0, ink.accent));
+        }
         if resp.on_hover_text(control.hint()).clicked() {
             match control {
                 Control::ZoomIn => st.zoom_by(1.0 / model::ZOOM_STEP),
@@ -1788,6 +1880,7 @@ fn paint_controls(ui: &mut Ui, p: &Painter, st: &mut Earth, controls: &Controls,
                     st.go_home();
                 }
                 Control::Locate => model::locate_in_background(rt),
+                Control::Tilt => st.set_3d(!on),
                 Control::Layer(layer) => st.layers.set(layer, !on),
                 Control::Overlay(overlay) => {
                     st.overlays.set(overlay, !on);
@@ -2034,8 +2127,8 @@ mod tests {
     }
 
     /// The houses at street level: block models of light on the flat map in both looks, with
-    /// their credit, gone with their key off; the right button leans them and pans nothing; a
-    /// town of them costs no more than a frame.
+    /// their credit, gone with their key off; the right button leans the camera back and turns
+    /// it, and pans nothing; a town of them costs no more than a frame.
     #[test]
     fn the_houses_stand_at_street_level_and_turn_with_the_right_button() {
         let _look = crate::holo_theme::look_for_pictures();
@@ -2063,7 +2156,8 @@ mod tests {
             assert!((with - without).abs() > 1.0, "{look:?}: the houses change nothing on the map ({with} and {without})");
         }
         earth.overlays.buildings = true;
-        // The right button leans them the way it is dragged, and the map stays where it is.
+        // The right button leans the camera back as it is dragged up and turns it as it is
+        // dragged across, and the map stays where it is.
         let before = earth.cam;
         {
             let mut ui = |ctx: &egui::Context| {
@@ -2074,24 +2168,68 @@ mod tests {
             stage.press(PointerButton::Secondary, true);
             stage.frame(&mut ui);
             for n in 1..=6 {
-                stage.move_pointer(pos2(420.0 + 20.0 * n as f32, 300.0));
+                stage.move_pointer(pos2(420.0 + 20.0 * n as f32, 300.0 - 25.0 * n as f32));
                 stage.frame(&mut ui);
             }
             stage.press(PointerButton::Secondary, false);
             stage.frame(&mut ui);
         }
         assert_eq!((earth.cam.lat, earth.cam.lon), (before.lat, before.lon), "the right button panned the map");
-        let lean = crate::earth_buildings::tests::lean();
-        assert!(lean.x > 0.5 && lean.y < -0.7, "the houses did not lean with the drag: {lean:?}");
+        // (Dragged 150 px up and 120 px across; egui takes the first few pixels as a click.)
+        assert!((0.55..0.8).contains(&earth.tilt.pitch) && (0.55..0.75).contains(&earth.tilt.heading), "the camera did not lean and turn with the drag: {:?}", earth.tilt);
+        assert!(earth.in_3d(), "leaned back by hand is 3D: the key lights");
         let turned = draw(&mut stage, &mut earth, rt.handle(), 2);
         stage.raster(&turned).save("panel_earth_houses_turned");
         // Where they first stand, a whole town is in view: still a frame's work.
-        let high = [1.6, 1.3, 1.0, 0.8, 0.6].into_iter().find(|alt| crate::earth_buildings::showing(&Geo::new(crate::earth::Camera { alt: *alt, ..before }, stage.screen()).flat) >= 1.0).expect("a height at which they stand");
+        let high = [1.6, 1.3, 1.0, 0.8, 0.6].into_iter().find(|alt| crate::earth_buildings::showing(&Geo::new(crate::earth::Camera { alt: *alt, ..before }, Tilt::default(), stage.screen()).flat) >= 1.0).expect("a height at which they stand");
         earth.cam.alt = high;
         let _ = draw(&mut stage, &mut earth, rt.handle(), 3);
         let t = std::time::Instant::now();
         let _ = draw(&mut stage, &mut earth, rt.handle(), 10);
         assert!(t.elapsed() / 10 < std::time::Duration::from_millis(40), "{high} km: {:?} a frame", t.elapsed() / 10);
+    }
+
+    /// The 3D key leans the camera back over a town (the far ground falling back into the deep)
+    /// in both looks, and stands it up again, north up.
+    #[test]
+    fn the_3d_key_leans_the_map_back_and_stands_it_up_again() {
+        let _look = crate::holo_theme::look_for_pictures();
+        let rt = runtime();
+        let _town = crate::earth_buildings::tests::stand_in(48.0, 9.0, 2_500);
+        let mut earth = Earth::demo();
+        earth.cam = crate::earth::Camera { lat: 48.0, lon: 9.0, alt: 0.4 };
+        earth.overlays.buildings = true;
+        earth.set_look(Look::Holo);
+        let mut stage = stage(vec2(1180.0, 720.0));
+        let _ = draw(&mut stage, &mut earth, rt.handle(), 2);
+        let column = controls_layout(Rect::from_min_size(pos2(0.0, 0.0), vec2(1180.0, 640.0)));
+        let (_, key) = column.buttons.iter().find(|(c, _)| *c == Control::Tilt).copied().expect("a 3D key");
+        let settle = |earth: &mut Earth| {
+            for k in 0..200 {
+                earth.step(k as f64 / 60.0, 1.0 / 60.0);
+            }
+        };
+        assert!(!earth.in_3d());
+        stage.click(key.center(), PointerButton::Primary, &mut |ctx| {
+            egui::CentralPanel::default().frame(Frame::none()).show(ctx, |ui| view(ui, &mut earth, rt.handle()));
+        });
+        assert!(earth.in_3d(), "the 3D key did nothing");
+        settle(&mut earth);
+        assert!((earth.tilt.pitch - model::TILT_3D).abs() < 1e-3, "{:?}", earth.tilt);
+        for (look, name) in [(Look::Holo, "panel_earth_3d"), (Look::Satellite, "panel_earth_3d_photo")] {
+            earth.set_look(look);
+            let frame = draw(&mut stage, &mut earth, rt.handle(), 3);
+            clean(&frame);
+            assert!(earth.houses, "{look:?}: no house in 3D");
+            stage.raster(&frame).save(name);
+        }
+        // Again: straight down, north up.
+        stage.click(key.center(), PointerButton::Primary, &mut |ctx| {
+            egui::CentralPanel::default().frame(Frame::none()).show(ctx, |ui| view(ui, &mut earth, rt.handle()));
+        });
+        assert!(!earth.in_3d(), "the 3D key does not stand the camera up");
+        settle(&mut earth);
+        assert!(earth.tilt.pitch.abs() < 1e-3 && earth.tilt.heading.abs() < 1e-3, "{:?}", earth.tilt);
     }
 
     /// The hologram's ground from a town's outline down to its houses: the streets by rank, the

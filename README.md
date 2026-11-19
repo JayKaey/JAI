@@ -117,8 +117,10 @@ Three panels open by voice, each in a window of its own, and close with "close t
   as models with their heights (estimated from a house's ground where the map gives none), a
   line for every storey, window bays up close, hipped roofs on small houses (a guess: the map
   knows no roof shapes), their house numbers and the height of every tower (OpenFreeMap): "show me the houses of Musterstadt in 3D" flies there,
-  "show me the buildings" goes down where the map is, a drag with the right mouse button
-  leans them another way, "hide the buildings" takes them off.
+  "show me the buildings" goes down where the map is, "hide the buildings" takes them off.
+  Near the ground the map leans back into 3D as Google Earth does: the 3D key, "switch to 3D"
+  or "tilt the map", or a drag with the right mouse button (up and down tilts it, across turns
+  it); "back to 2D" or the key again stands it straight down, north up.
 
 "Open a few random windows" leaves the choice to him: he opens two to four of his own views
 and says which ("open three random windows" opens three). Asked for his opinion he gives one,

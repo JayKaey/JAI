@@ -2198,6 +2198,22 @@ fn panel_args(text: &str, s: &str, up: PanelsUp) -> Option<Value> {
         if let Some(args) = earth_layer_switch(s, up.radar) {
             return Some(args);
         }
+        // The camera leaned back over the ground (3D) or straight down again (2D), as Google
+        // Earth does it: "switch to 3D", "tilt the map", "back to 2D", "top-down view".
+        static VIEW_3D: LazyLock<Regex> = LazyLock::new(|| {
+            let (d3, d2) = (r"(?:3\s?-?\s?d|three\s?-?\s?d|drei\s?-?\s?d|3\s?-?\s?dimensional|three\s+dimensional|dreidimensional)", r"(?:2\s?-?\s?d|two\s?-?\s?d|zwei\s?-?\s?d|2\s?-?\s?dimensional|two\s+dimensional|zweidimensional|flat|top\s?-?\s?down|birds\s?-?\s?eye|overhead)");
+            let obj = r"(?:it|this|that|the\s+(?:map|view|earth|globe|camera))";
+            let (it, mode) = (r"(?:it\s+|this\s+|that\s+|the\s+(?:map|view|earth|globe|camera|city|town|place|area|streets?)\s+)", r"(?:\s+(?:view|mode|map|perspective))?");
+            let (verb, de) = (r"(?:switch|change|go|flip|turn|swap|put|set|show|show\s+me|view|see|let\s+me\s+see|give\s+me)", r"(?:\s?-?\s?(?:ansicht|modus|karte))?(?:\s+(?:um|zurück))?");
+            re(&format!(
+                r"^(?:{verb}\s+{it}?(?:back\s+)?(?:over\s+)?(?:to|into|in)\s+|(?:go\s+)?back\s+to\s+|in\s+)?(?:the\s+)?({d3}|{d2}){mode}(?:\s+again)?$|^(?:go|make\s+{obj})\s+({d3}|{d2})(?:\s+again)?$|^(tilt)(?:\s+{obj})?(?:\s+back)?$|^(lean|tip)\s+{obj}\s+back$|^(untilt|level|straighten)\s+{obj}(?:\s+(?:out|again))?$|^(untilt)$|^look\s+(straight\s+down)$|^(?:schalte?|wechsel|wechsle|geh|gehe|stell|stelle)\s+(?:zurück\s+)?(?:auf|in|zu|zur|in\s+die)\s+(?:die\s+)?({d3}|{d2}|draufsicht){de}$|^(?:zeig|zeige)\s+(?:es|das|mir\s+das|mir\s+die\s+karte|die\s+karte)\s+in\s+({d3}){de}$|^({d3}|{d2})\s?-?\s?(?:ansicht|modus)$|^(kipp|kippe|neig|neige)\s+(?:die\s+)?(?:karte|ansicht|kamera)$|^(draufsicht)$|^(von\s+oben)$"
+            ))
+        });
+        if let Some(c) = VIEW_3D.captures(s) {
+            let said = c.iter().skip(1).flatten().next().map_or("", |m| m.as_str());
+            let leaned = said.contains('3') || said.contains("three") || said.contains("drei") || ["tilt", "lean", "tip", "kipp", "kippe", "neig", "neige"].contains(&said);
+            return Some(earth(if leaned { "show_3d" } else { "show_2d" }));
+        }
         static BACK_TO_HOLO: LazyLock<Regex> = LazyLock::new(|| {
             re(r"^(?:switch|change|flip)\s+(?:it\s+)?back$|^(?:switch|change|flip|turn|go)\s+(?:it\s+)?back\s+to\s+(?:the\s+)?(?:normal|default|blue|original|old|holo|holographic|hologram)\s*(?:view|mode|globe|look)?$|^(?:(?:switch|change|go|flip|turn)\s+(?:it\s+)?(?:to|into)\s+(?:the\s+)?)?(?:holo|holographic|hologram)\s*(?:view|mode|globe|map)?$|^(?:normal|default)\s+(?:view|mode|globe)$|^turn\s+off\s+(?:the\s+)?satellite(?:\s+(?:view|mode|imagery))?$")
         });
@@ -6982,6 +6998,17 @@ mod tests {
             assert_eq!((args["action"].as_str(), args["layer"].as_str()), (Some("hide_layer"), Some("buildings")), "{text}");
         }
         is("flatten the terrain", earth_up, "flatten_terrain");
+        // Its camera in 3D and back to 2D, while it is up; the houses' own orders stay theirs.
+        for text in ["Switch to 3D", "3D view", "Show it in 3D", "Go 3D", "Tilt the map", "Switch the map to 3-D", "Show me the city in 3D", "In 3D, please", "Schalte auf 3D", "Wechsle in die 3D-Ansicht", "Kippe die Karte", "Zeig mir das in 3D"] {
+            is(text, earth_up, "show_3d");
+            assert_eq!(act(text, none), None, "{text}: the Earth's only while it is up");
+        }
+        for text in ["Switch back to 2D", "Back to 2D", "2D", "Top-down view", "Back to the flat map", "Look straight down", "Make it flat again", "Untilt the camera", "Schalte zurück auf 2D", "2D-Ansicht", "Draufsicht"] {
+            is(text, earth_up, "show_2d");
+        }
+        for text in ["Show me the houses in 3D", "Turn off the 3D buildings", "Make the mountains taller"] {
+            assert!(!matches!(act(text, earth_up).as_deref(), Some("show_3d" | "show_2d")), "{text}");
+        }
         // The weather.
         for text in ["Show me the weather radar", "Show the rain radar", "Where is it raining?", "Zeig mir das Regenradar", "rain radar"] {
             is(text, none, "show_radar");

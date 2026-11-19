@@ -94,6 +94,7 @@ pub const RELEASES: &[Release] = &[
         date: "2026-11-19",
         name: "Every panel in the new look",
         entries: &[
+            new("The Earth in 3D", "Near the ground the camera leans back over the town; the right button tilts and turns it.", "earth_3d"),
             added("Streets and water on the hologram map", "From a town's outline down: its streets by rank, rails, rivers, lakes and the streets' names."),
             fixed("No hidden Edge any more", "Signing in to itslearning started a hidden Edge at every briefing; he starts no browser now."),
             fixed("Windows opened together no longer stack", "Opened at once, they all came up where each last stood alone; a taken spot is skipped now."),
@@ -517,9 +518,16 @@ pub const RELEASES: &[Release] = &[
 /// The explanations, by id.
 pub const EXPLANATIONS: &[Explanation] = &[
     Explanation {
+        id: "earth_3d",
+        title: "The Earth in 3D",
+        what: "Down near the ground the 3D key in the Earth's column leans the camera back over the map, as Google Earth does: the town stands before you in perspective, its houses as blocks you see from the side, its streets running off into the distance, where the ground falls back into the dark. Drag with the right mouse button to tilt it (up and down) and to turn it (left and right); the left button still moves the map. The key again stands it straight down, north up. While it is turned, a mark on the key's ring points north.",
+        say: &["Jay, switch to 3D.", "Jay, tilt the map.", "Jay, back to 2D.   (straight down, north up)", "Jay, schalte auf 3D."],
+        know: "It leans back only near the ground; from high above the key first takes you down. It leans no further than the map has ground to show, so no sky appears, and the far tiles come coarser so it stays quick. The photo, the hologram, the streets and the houses all lean; place names and markers stay upright.",
+    },
+    Explanation {
         id: "earth_houses",
         title: "The houses of a town in 3D",
-        what: "Zoom the Earth down to street level and the houses rise from the map: every building a block of dark glass with a lit roof line, as tall as OpenStreetMap says it is; where the map gives no height, as in most small towns, he judges it by the house's ground. The walls carry a line for every storey and, up close, their window bays; a small house wears a hipped roof; a roof says its house number once you are close, and a tower says how tall it is. It works in any town of the world whose houses are on OpenStreetMap. It works on the photo map and on the hologram. The map stays north-up, like a drawing on a drafting table: the houses lean one way, and a drag with the right mouse button leans them another, so you can look at every side.",
+        what: "Zoom the Earth down to street level and the houses rise from the map: every building a block of dark glass with a lit roof line, as tall as OpenStreetMap says it is; where the map gives no height, as in most small towns, he judges it by the house's ground. The walls carry a line for every storey and, up close, their window bays; a small house wears a hipped roof; a roof says its house number once you are close, and a tower says how tall it is. It works in any town of the world whose houses are on OpenStreetMap. It works on the photo map and on the hologram. Straight down you see their roofs and the walls turned to the middle of the view; lean the camera back (the 3D key, or a drag with the right mouse button) and you look at them from the side, and turn round them to see every side.",
         say: &["Jay, show me the houses of Musterstadt in 3D.", "Jay, show me the buildings.   (down to street level where the map is)", "Jay, hide the buildings."],
         know: "These are models from outlines and heights, not photographed ones; a landmark mapped in parts (a tower on a hall) stands in its parts. The map knows no roof shapes, so the hipped roofs of small houses are his guess, and so is a height it does not give. A town's houses come from OpenFreeMap once, when you first look at it, and are kept on this PC. The key with the two blocks in the Earth's column switches them.",
     },

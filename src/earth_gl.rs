@@ -454,6 +454,8 @@ pub struct Frame {
     pub flatness: f32,
     /// The flat map: Web Mercator x of the view's longitude, y of its latitude, the world's width.
     pub flat: [f32; 3],
+    /// How far the camera leans back over the flat map and its heading (`earth::FlatView`).
+    pub tilt: [f32; 2],
     pub sun: [f32; 3],
     /// 0: the photo-real look, 1: the holographic one (cross-fades between).
     pub holo: f32,
@@ -750,6 +752,7 @@ uniform float u_ppp;
 uniform float u_screen_h;
 uniform float u_flatness;
 uniform vec3 u_flat;
+uniform vec2 u_tilt;
 uniform vec3 u_sun;
 uniform float u_holo;
 uniform float u_night;
@@ -920,8 +923,24 @@ vec4 globe_colour(vec2 s) {
 }
 
 vec4 flat_colour(vec2 s) {
-    float mx = u_flat.x + (s.x - u_centre.x) / u_flat.z;
-    float my = u_flat.y + (s.y - u_centre.y) / u_flat.z;
+    // The ground under the pixel (px from the middle). Leaned back (3D) the camera is u_f from
+    // the middle, u_tilt.x from straight down and turned to u_tilt.y; the far ground dims into
+    // the deep (as earth::FlatView::under and earth::fade).
+    vec2 g = s - u_centre;
+    float near_light = 1.0;
+    if (u_tilt.x > 0.0 || u_tilt.y != 0.0) {
+        float sp = sin(u_tilt.x);
+        float cp = cos(u_tilt.x);
+        vec2 d = g / u_f;
+        float depth = cp / max(cp + d.y * sp, cp / 16.0);
+        vec2 w = vec2(depth * d.x, sp + depth * (d.y * cp - sp)) * u_f;
+        float sh = sin(u_tilt.y);
+        float ch = cos(u_tilt.y);
+        g = vec2(w.x * ch - w.y * sh, w.x * sh + w.y * ch);
+        near_light = 1.0 - 0.85 * smoothstep(1.5, 4.0, depth);
+    }
+    float mx = u_flat.x + g.x / u_flat.z;
+    float my = u_flat.y + g.y / u_flat.z;
     float lat = atan(sinh(PI * (1.0 - 2.0 * my)));
     vec2 ll = vec2(degrees(lat), fract(mx) * 360.0 - 180.0);
     vec2 uv = vec2(fract(mx), 0.5 - ll.x / 180.0);
@@ -936,7 +955,7 @@ vec4 flat_colour(vec2 s) {
     vec3 n = vec3(cl * cos(radians(ll.y)), cl * sin(radians(ll.y)), sin(radians(ll.x)));
     vec3 col = ground(ll, dllx, dlly, uv, dux, duy, merc, dmx, dmy, n, n, 0.0);
     float inside = step(0.0, my) * step(my, 1.0);
-    return vec4(mix(vec3(0.008, 0.02, 0.035), col, inside), 1.0);
+    return vec4(mix(vec3(0.008, 0.02, 0.035), col, inside) * near_light, 1.0);
 }
 
 void main() {
@@ -955,7 +974,7 @@ void main() {
 
 const UNIFORMS: [&str; 33] = [
     "u_centre", "u_f", "u_d", "u_basis", "u_ppp", "u_screen_h", "u_flatness", "u_flat", "u_sun", "u_holo", "u_night", "u_borders", "u_glint", "u_rim", "u_ocean_deep", "u_ocean_shallow", "u_land_dark", "u_land", "u_dot",
-    "u_coast", "u_border", "u_detail", "u_overlay", "u_mask_size", "u_time", "t_day", "t_night", "t_mask", "t_detail", "t_detail_ok", "t_overlay", "t_overlay_ok", "u_unused",
+    "u_coast", "u_border", "u_detail", "u_overlay", "u_mask_size", "u_time", "t_day", "t_night", "t_mask", "t_detail", "t_detail_ok", "t_overlay", "t_overlay_ok", "u_tilt",
 ];
 
 /// The shader program (GLSL 3.30, or 1.40 where 3.30 does not build), its vertex array and the
@@ -1233,6 +1252,7 @@ unsafe fn paint(gl: &glow::Context, gpu: &mut Gpu, info: &egui::PaintCallbackInf
         gl.uniform_1_f32(loc("u_screen_h"), info.screen_size_px[1] as f32);
         gl.uniform_1_f32(loc("u_flatness"), frame.flatness);
         gl.uniform_3_f32(loc("u_flat"), frame.flat[0], frame.flat[1], frame.flat[2]);
+        gl.uniform_2_f32(loc("u_tilt"), frame.tilt[0], frame.tilt[1]);
         gl.uniform_3_f32(loc("u_sun"), frame.sun[0], frame.sun[1], frame.sun[2]);
         gl.uniform_1_f32(loc("u_holo"), frame.holo);
         gl.uniform_1_f32(loc("u_night"), frame.night);

@@ -1,8 +1,9 @@
 //! The houses of a town on the Earth's flat map: the building outlines and heights of
 //! OpenStreetMap, read from OpenFreeMap's vector tiles (one tile at a time, kept in the Earth's
 //! cache), raised from the map as block models of light once the view is down at street level.
-//! The map stays north-up: the models lean one way, as in a plan oblique drawing, and a drag
-//! with the right button leans them another, so every side of a house can be looked at.
+//! They stand in the camera's perspective (`FlatView::lift`): straight down a house shows its
+//! roof and the walls turned to the middle of the view; leaned back (3D) the camera looks at
+//! them from the side, and every side of a house can be seen by turning it.
 //! The same tiles give the hologram its ground from a town's outline down: the streets, the
 //! rails, the shores and the streams, and the streets' names along them.
 
@@ -28,10 +29,7 @@ const KEEP: usize = 24;
 /// Houses drawn in one frame (the nearest the middle), and how many still get upright edges.
 const MAX_DRAWN: usize = 5_000;
 const EDGES_UP_TO: usize = 1_500;
-/// Where a metre of height goes on the map, in metres: straight up the screen at first.
-const LEAN: Vec2 = Vec2::new(0.0, -0.8);
-const LEAN_MAX: f32 = 1.3;
-/// Where the walls' light comes from on the screen.
+/// Where the walls' light comes from on the ground (north up).
 const SUN: Vec2 = Vec2::new(-0.6, 0.8);
 /// A storey's height: its lines on the walls are a scale of the house's height.
 const STOREY_M: f32 = 3.2;
@@ -545,12 +543,11 @@ enum Tile {
 struct Store {
     /// By (level, x, y).
     tiles: HashMap<(u8, u32, u32), Tile>,
-    lean: Vec2,
     /// Where this week's tiles are ("…/{z}/{x}/{y}.pbf"), once read from the tile set.
     address: Option<String>,
 }
 
-static STORE: LazyLock<Mutex<Store>> = LazyLock::new(|| Mutex::new(Store { tiles: HashMap::new(), lean: LEAN, address: None }));
+static STORE: LazyLock<Mutex<Store>> = LazyLock::new(|| Mutex::new(Store { tiles: HashMap::new(), address: None }));
 
 fn store() -> MutexGuard<'static, Store> {
     crate::crash_guard::lock(&STORE)
@@ -561,13 +558,6 @@ pub fn showing(flat: &FlatView) -> f32 {
     ((flat.zoom() - SHOW_FROM) / FADE).clamp(0.0, 1.0) as f32
 }
 
-/// A drag with the right button: the roofs go with it, so the models lean another way.
-pub fn lean_by(drag: Vec2) {
-    let mut s = store();
-    let lean = s.lean + drag * 0.006;
-    s.lean = if lean.length() > LEAN_MAX { lean.normalized() * LEAN_MAX } else { lean };
-}
-
 /// The level of tiles a view asks for (tiles of 512 pixels, as a vector map draws them), or
 /// None while neither the houses (`houses`) nor the ground (`ground`) shows in it.
 fn level(flat: &FlatView, houses: bool, ground: bool) -> Option<u8> {
@@ -575,19 +565,32 @@ fn level(flat: &FlatView, houses: bool, ground: bool) -> Option<u8> {
     (houses && showing(flat) > 0.0 || ground && zoom >= GROUND_FROM).then(|| (zoom - 1.0).floor().clamp(0.0, Z as f64) as u8)
 }
 
-/// Where a point of the map (Web Mercator, 0-1) stands on the screen.
-fn to_screen(flat: &FlatView) -> impl Fn([f64; 2]) -> Pos2 + '_ {
-    let (ox, oy) = (model::merc_x(flat.lon0), model::merc_y(flat.lat0));
-    move |m| {
-        let dx = m[0] - ox;
-        pos2((flat.cx + (dx - dx.round()) * flat.world) as f32, (flat.cy + (m[1] - oy) * flat.world) as f32)
+/// Where a point of the map (Web Mercator, 0-1) `h` metres up stands on the screen, and how far
+/// along the view it is (in camera distances: 1 in the middle).
+fn to_screen(flat: &FlatView) -> impl Fn([f64; 2], f32) -> (Pos2, f64) + '_ {
+    let metre = flat.px_per_km() / 1000.0;
+    move |m, h| {
+        let ([x, y], depth) = flat.lift(flat.ground(m[0], m[1]), h as f64 * metre);
+        (pos2(x as f32, y as f32), depth)
     }
+}
+
+/// How bright the light of what stands `depth` along the view is: falling back into the deep,
+/// and thinner where the lines crowd further off (its light on a patch of the screen stays).
+fn dim(depth: f64) -> f32 {
+    model::fade(depth) / depth.max(1.0) as f32
+}
+
+/// A line of the map (Web Mercator points) on the screen: its runs in front of the camera.
+fn on_screen(flat: &FlatView, points: &[[f64; 2]]) -> Vec<Vec<Pos2>> {
+    flat.runs(points.iter().copied()).into_iter().map(|run| run.into_iter().map(|[x, y]| pos2(x as f32, y as f32)).collect()).collect()
 }
 
 /// Whether a tile lies over `map`.
 fn covers(flat: &FlatView, map: Rect, (z, x, y): (u8, u32, u32)) -> bool {
     let (at, n) = (to_screen(flat), (1u32 << z) as f64);
-    map.intersects(Rect::from_two_pos(at([x as f64 / n, y as f64 / n]), at([(x + 1) as f64 / n, (y + 1) as f64 / n])))
+    let corners = [(0, 0), (1, 0), (0, 1), (1, 1)].map(|(i, j)| at([(x + i) as f64 / n, (y + j) as f64 / n], 0.0).0);
+    map.intersects(Rect::from_points(&corners))
 }
 
 /// The tiles of a level over `map`.
@@ -717,64 +720,80 @@ pub fn paint(p: &Painter, flat: &FlatView, map: Rect, strength: f32, keep_off: &
     if strength <= 0.0 {
         return false;
     }
-    let (tiles, lean) = (towns(flat, map.expand(120.0), Z), store().lean);
+    let tiles = towns(flat, map.expand(120.0), Z);
     let screen = to_screen(flat);
-    // A metre of height on the screen.
-    let rise = lean * (flat.px_per_km() / 1000.0) as f32;
     let middle = map.center();
-    let mut seen: Vec<(Pos2, &Building)> = tiles.iter().flat_map(|t| t.houses.iter()).map(|b| (screen(b.mid), b)).filter(|(at, b)| map.expand((b.reach * flat.world) as f32 + 60.0).contains(*at)).collect();
+    // Each house where its middle stands and how far along the view: one under or behind the
+    // camera is not seen.
+    let mut seen: Vec<(Pos2, f64, &Building)> = tiles
+        .iter()
+        .flat_map(|t| t.houses.iter())
+        .map(|b| {
+            let (at, depth) = screen(b.mid, 0.0);
+            (at, depth, b)
+        })
+        .filter(|(at, depth, b)| *depth >= model::NEAR && map.expand((b.reach * flat.world / depth) as f32 + 60.0).contains(*at))
+        .collect();
     if seen.len() > MAX_DRAWN {
         seen.sort_by(|a, b| a.0.distance_sq(middle).total_cmp(&b.0.distance_sq(middle)));
         seen.truncate(MAX_DRAWN);
     }
-    // What stands further along the lean is behind.
-    let depth = |at: Pos2| -(at.x * lean.x + at.y * lean.y);
-    seen.sort_by(|a, b| depth(a.0).total_cmp(&depth(b.0)));
+    // The far ones first: a nearer house stands in front.
+    seen.sort_by(|a, b| b.1.total_cmp(&a.1));
     let theme = crate::holo::theme();
     let (accent, ink) = (theme.accent(), theme.ink());
     let upright = seen.len() <= EDGES_UP_TO;
-    // (Glass dark enough that a house hides the one behind it: outlines seen through each other
-    // were a tangle; the light is the lines', the panes stay faint.)
-    let foot = [glass(accent, 0.0, 0.78 * strength)];
-    let roof = [glass(ink, 0.05 * strength, 0.86 * strength)];
-    let (edge, rim, storey, hip_line) = (lit(accent, 0.55 * strength), lit(ink, 0.7 * strength), lit(accent, 0.2 * strength), lit(ink, 0.32 * strength));
-    // A window bay's width on the screen: the walls get their bays where it can be read.
-    let bay = BAY_M * (flat.px_per_km() / 1000.0) as f32;
+    let (metre, eye) = (flat.px_per_km() / 1000.0, flat.eye());
     let storeys = seen.len() <= STOREYS_UP_TO;
     let mut light = crate::holo::Light::new(p);
-    let (mut ground, mut top, mut walls): (Vec<Pos2>, Vec<Pos2>, Vec<(f32, usize)>) = (Vec::new(), Vec::new(), Vec::new());
-    for (_, b) in &seen {
+    let (mut ground, mut top, mut plan, mut walls): (Vec<Pos2>, Vec<Pos2>, Vec<[f64; 2]>, Vec<(f64, usize)>) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    for &(_, depth, b) in &seen {
+        // (The far ones fall back into the deep.)
+        let strength = strength * dim(depth);
+        // (Glass dark enough that a house hides the one behind it: outlines seen through each
+        // other were a tangle; the light is the lines', the panes stay faint.)
+        let foot = [glass(accent, 0.0, 0.78 * strength)];
+        let roof = [glass(ink, 0.05 * strength, 0.86 * strength)];
+        let (edge, rim, storey, hip_line) = (lit(accent, 0.55 * strength), lit(ink, 0.7 * strength), lit(accent, 0.2 * strength), lit(ink, 0.32 * strength));
         ground.clear();
         top.clear();
+        plan.clear();
         // (Under a pitched roof the walls end at the eaves.)
         let eaves = b.top - b.hip.as_ref().map_or(0.0, |hip| hip.rise);
         for m in &b.ring {
-            let at = screen(*m);
-            ground.push(at + rise * b.base);
-            top.push(at + rise * eaves);
+            ground.push(screen(*m, b.base).0);
+            top.push(screen(*m, eaves).0);
+            plan.push(flat.ground(m[0], m[1]));
         }
         let n = ground.len();
         let seam = |i: usize| b.seam.get(i).copied().unwrap_or(false);
-        // The walls turned to the view, the far ones first.
+        // A wall's outward side on the ground (north up), as a unit.
+        let out = |i: usize| {
+            let (a, b) = (plan[i], plan[(i + 1) % n]);
+            vec2((b[1] - a[1]) as f32, (a[0] - b[0]) as f32).normalized()
+        };
+        // The walls turned to the camera, the far ones first.
         walls.clear();
         walls.extend((0..n).filter(|i| !seam(*i)).filter_map(|i| {
-            let d = ground[(i + 1) % n] - ground[i];
-            (vec2(d.y, -d.x).dot(lean) < 0.0).then(|| (depth(ground[i] + d * 0.5), i))
+            let (a, b) = (plan[i], plan[(i + 1) % n]);
+            let o = out(i);
+            let mid = [(a[0] + b[0]) / 2.0 - eye[0], (a[1] + b[1]) / 2.0 - eye[1]];
+            ((eye[0] - a[0]) * o.x as f64 + (eye[1] - a[1]) * o.y as f64 > 0.0).then(|| (mid[0].hypot(mid[1]), i))
         }));
-        walls.sort_by(|a, b| a.0.total_cmp(&b.0));
+        walls.sort_by(|a, b| b.0.total_cmp(&a.0));
         // A corner of the house: where its outline turns (a round wall is many points and no
         // corner: a comb of edges in the window of 2026-11-19), and no point the tile cut it at.
         let corner = |k: usize| {
-            let (before, after) = ((ground[k] - ground[(k + n - 1) % n]).normalized(), (ground[(k + 1) % n] - ground[k]).normalized());
+            let (before, after) = (out((k + n - 1) % n), out(k));
             (before.x * after.y - before.y * after.x).abs() > 0.3 && !seam(k) && !seam((k + n - 1) % n)
         };
         // The storeys along the walls, where they are far enough apart to be read.
         let floors = (((eaves - b.base) / STOREY_M).round() as usize).clamp(1, 60);
-        let storeyed = storeys && rise.length() * (eaves - b.base) / floors as f32 >= 3.0;
+        let tall = (0..n).map(|i| (top[i] - ground[i]).length()).fold(0.0, f32::max);
+        let storeyed = storeys && tall / floors as f32 >= 3.0;
         for &(_, i) in &walls {
             let j = (i + 1) % n;
-            let out = (ground[j] - ground[i]).normalized().rot90();
-            let shade = 0.55 + 0.45 * out.dot(SUN.normalized()).max(0.0);
+            let shade = 0.55 + 0.45 * out(i).dot(SUN.normalized()).max(0.0);
             light.sheet(&[ground[i], ground[j]], &[top[i], top[j]], &foot, &[glass(accent, 0.12 * shade * strength, 0.86 * strength)]);
             if storeyed {
                 for k in 1..floors {
@@ -782,7 +801,9 @@ pub fn paint(p: &Painter, flat: &FlatView, map: Rect, strength: f32, keep_off: &
                     light.seg(ground[i].lerp(top[i], t), ground[j].lerp(top[j], t), 1.0, storey);
                 }
                 // And its bays across them, up close: the wall as a grid of its rooms.
-                let bays = ((ground[j] - ground[i]).length() / bay).round() as usize;
+                let (a, b) = (plan[i], plan[j]);
+                let bays = ((b[0] - a[0]).hypot(b[1] - a[1]) / metre / BAY_M as f64).round() as usize;
+                let bay = (ground[j] - ground[i]).length() / bays.max(1) as f32;
                 if bay >= 7.0 && (2..=40).contains(&bays) {
                     for k in 1..bays {
                         let t = k as f32 / bays as f32;
@@ -801,12 +822,18 @@ pub fn paint(p: &Painter, flat: &FlatView, map: Rect, strength: f32, keep_off: &
             }
         }
         if let Some(hip) = &b.hip {
-            // Four faces up to the ridge, each as bright as it is turned to the light; the
-            // ridge and the hips as lines.
-            let ridge = hip.ridge.map(|end| screen(end) + rise * b.top);
-            for k in 0..4 {
+            // Four faces up to the ridge, each as bright as it is turned to the light, those
+            // turned away from the camera first; the ridge and the hips as lines.
+            let ridge = hip.ridge.map(|end| screen(end, b.top).0);
+            let facing = |k: usize| {
+                let (i, o) = ((hip.long + k) % 4, out((hip.long + k) % 4));
+                (eye[0] - plan[i][0]) * o.x as f64 + (eye[1] - plan[i][1]) * o.y as f64
+            };
+            let mut faces = [0, 1, 2, 3];
+            faces.sort_by(|a, b| facing(*a).total_cmp(&facing(*b)));
+            for k in faces {
                 let (i, j) = ((hip.long + k) % 4, (hip.long + k + 1) % 4);
-                let shade = (top[j] - top[i]).normalized().rot90().dot(SUN.normalized()).max(0.0);
+                let shade = out(i).dot(SUN.normalized()).max(0.0);
                 let face = [glass(ink, (0.03 + 0.11 * shade) * strength, 0.86 * strength)];
                 // (Along the ridge, then over the far end, back along it, over the near end.)
                 let up = [[ridge[0], ridge[1]], [ridge[1], ridge[1]], [ridge[1], ridge[0]], [ridge[0], ridge[0]]][k];
@@ -834,12 +861,12 @@ pub fn paint(p: &Painter, flat: &FlatView, map: Rect, strength: f32, keep_off: &
     // Each on a roof wide enough for it, inside the map and clear of the others.
     let numbers = flat.zoom() >= NUMBERS_FROM;
     let mut taken = keep_off.to_vec();
-    for (at, b) in seen.iter().rev() {
+    for &(_, depth, b) in seen.iter().rev() {
         let Some(label) = b.label(numbers).filter(|_| taken.len() < keep_off.len() + MAX_LABELS) else { continue };
-        let centre = *at + rise * b.top;
+        let centre = screen(b.mid, b.top).0;
         let room = Rect::from_center_size(centre, vec2(label.chars().count() as f32 * 6.0 + 6.0, 13.0));
-        if (b.reach * flat.world) as f32 * 1.4 >= room.width() && map.contains_rect(room) && !taken.iter().any(|t| t.intersects(room)) {
-            crate::holo::text(p, centre, Align2::CENTER_CENTER, crate::holo::Face::Mono, &label, 9.5, crate::holo::a(ink, 0.85 * strength));
+        if (b.reach * flat.world / depth) as f32 * 1.4 >= room.width() && map.contains_rect(room) && !taken.iter().any(|t| t.intersects(room)) {
+            crate::holo::text(p, centre, Align2::CENTER_CENTER, crate::holo::Face::Mono, &label, 9.5, crate::holo::a(ink, 0.85 * strength * dim(depth)));
             taken.push(room);
         }
     }
@@ -880,20 +907,19 @@ pub fn paint_ground(p: &Painter, flat: &FlatView, map: Rect, strength: f32) -> b
     let (zoom, metre, at) = (flat.zoom(), (flat.px_per_km() / 1000.0) as f32, to_screen(flat));
     let theme = crate::holo::theme();
     let mut light = crate::holo::Light::new(p);
-    let mut line = Vec::new();
     for way in towns(flat, map, z).iter().flat_map(|t| t.ways.iter()) {
         let Some((water, bright, metres)) = look(way.kind, zoom) else { continue };
-        if !map.expand((way.reach * flat.world) as f32).contains(at(way.mid)) {
-            continue;
-        }
         let colour = if water { theme.deep() } else { theme.ink() };
-        line.clear();
-        line.extend(way.points.iter().map(|m| at(*m)));
-        if metres * metre >= 3.0 {
-            light.strip(&line, false, metres * metre, lit(colour, 0.07 * strength));
+        // (As wide and as bright as it is near: the far ones fall back into the deep.)
+        let depth = at(way.mid, 0.0).1.max(model::NEAR);
+        let (wide, fade) = (metres * metre / depth as f32, dim(depth));
+        for line in on_screen(flat, &way.points).iter().filter(|run| map.intersects(Rect::from_points(run))) {
+            if wide >= 3.0 {
+                light.strip(line, false, wide, lit(colour, 0.07 * strength * fade));
+            }
+            light.strip(line, false, 1.0, lit(colour, bright * strength * fade));
+            drawn = true;
         }
-        light.strip(&line, false, 1.0, lit(colour, bright * strength));
-        drawn = true;
     }
     light.paint(p);
     drawn
@@ -927,29 +953,31 @@ fn straightest(line: &[Pos2], map: Rect) -> Option<(Pos2, Pos2)> {
 /// the map and clear of `taken` (which they then join).
 pub fn paint_names(p: &Painter, flat: &FlatView, map: Rect, strength: f32, taken: &mut Vec<Rect>) {
     let Some((strength, z)) = ground_showing(flat, strength) else { return };
-    let (zoom, at) = (flat.zoom(), to_screen(flat));
+    let zoom = flat.zoom();
     let towns = towns(flat, map, z);
     let mut stretches: Vec<(u8, f32, Pos2, Pos2, &str)> = Vec::new();
-    let mut line = Vec::new();
     for way in towns.iter().flat_map(|t| t.names.iter()) {
         let (Some(name), Kind::Road(rank)) = (way.name.as_deref(), way.kind) else { continue };
-        if look(way.kind, zoom).is_none() || !map.expand((way.reach * flat.world) as f32).contains(at(way.mid)) {
+        if look(way.kind, zoom).is_none() {
             continue;
         }
-        line.clear();
-        line.extend(way.points.iter().map(|m| at(*m)));
-        if let Some((a, b)) = straightest(&line, map) {
-            stretches.push((rank, (b - a).length(), a, b, name));
+        for line in on_screen(flat, &way.points) {
+            if let Some((a, b)) = straightest(&line, map) {
+                stretches.push((rank, (b - a).length(), a, b, name));
+            }
         }
     }
     stretches.sort_by(|x, y| x.0.cmp(&y.0).then(y.1.total_cmp(&x.1)));
-    let colour = crate::holo::a(crate::holo::theme().ink(), 0.75 * strength);
+    let ink = crate::holo::theme().ink();
     let mut said: Vec<&str> = Vec::new();
     for (_, length, a, b, name) in stretches {
         // (A name is at least six pixels a letter: no layout for a stretch too short anyway.)
         if said.len() >= MAX_NAMES || said.contains(&name) || name.chars().count() as f32 * 6.0 > length {
             continue;
         }
+        // (Fainter as the ground under it falls back.)
+        let mid = a.lerp(b, 0.5);
+        let colour = crate::holo::a(ink, 0.75 * strength * dim(flat.under(mid.x as f64, mid.y as f64).1));
         let g = crate::holo::galley(p, crate::holo::Face::Label, name, 8.0, colour);
         if g.size().x + 16.0 > length {
             continue;
@@ -984,15 +1012,8 @@ pub mod tests {
 
     impl Drop for StandIn {
         fn drop(&mut self) {
-            let mut s = store();
-            s.tiles.clear();
-            s.lean = LEAN;
+            store().tiles.clear();
         }
-    }
-
-    /// How the houses lean now.
-    pub fn lean() -> Vec2 {
-        store().lean
     }
 
     /// A made-up town around a point for the pictures and the geometry checks: `count` houses
@@ -1045,7 +1066,6 @@ pub mod tests {
         ground.ways.push(way(Kind::Shore, lake.to_vec(), None));
         let middle = ((at(lat, lon)[0] * n) as u32, (at(lat, lon)[1] * n) as u32);
         let mut s = store();
-        s.lean = LEAN;
         s.tiles.clear();
         for (tile, houses) in by_tile {
             let ground = if tile == middle { std::mem::take(&mut ground) } else { Town::default() };
@@ -1345,15 +1365,6 @@ pub mod tests {
             let areas: Vec<f64> = roof.iter().map(|t| side(ring[t[0] as usize], ring[t[1] as usize], ring[t[2] as usize]) / 2.0).collect();
             assert!(areas.iter().all(|a| *a >= 0.0) && (areas.iter().sum::<f64>() - whole).abs() < 1e-9, "{ring:?}: {areas:?} of {whole}");
         }
-    }
-
-    #[test]
-    fn the_lean_follows_the_drag_and_stays_in_reach() {
-        let _town = stand_in(48.0, 9.0, 1);
-        lean_by(vec2(100.0, 80.0));
-        assert!((lean() - vec2(0.6, -0.32)).length() < 1e-4, "{:?}", lean());
-        lean_by(vec2(5_000.0, 0.0));
-        assert!((lean().length() - LEAN_MAX).abs() < 1e-4);
     }
 
     /// A real tile from a file (`JAI_TILE=<path to a z14 .pbf>`, with `JAI_TILE_XY=x,y`): how
