@@ -1395,6 +1395,9 @@ pub fn internal_view_command(text: &str) -> Option<Value> {
     }
     let c = VERB.captures(&s)?;
     let verb = c.get(1)?.as_str();
+    if let Some(args) = random_views(c.get(2)?.as_str()) {
+        return Some(args);
+    }
     let mut object = c.get(2)?.as_str().to_string();
     let monitor = MONITOR_ANYWHERE.captures(&s).and_then(|m| monitor_value(m.get(1)?.as_str()));
     if let Some(m) = MONITOR_ANYWHERE.find(&object) {
@@ -1416,8 +1419,11 @@ pub fn internal_view_command(text: &str) -> Option<Value> {
 /// sphere (also as Whisper mishears it, see `typos::core_homophones`), the board restore ("bring
 /// back the screen"), and the navigation dock's tabs.
 pub fn hud_view_command(text: &str) -> Option<Intent> {
-    // The 3D studio ("render me an Iron Man suit in 3D"; its edits only while it is open).
-    if let Some(intent) = crate::model3d::intent(text) {
+    // The 3D studio ("render me an Iron Man suit in 3D"; its edits only while it is open). The
+    // houses of a town in 3D are the Earth's (live, 2026-11-19: the studio took "the houses of
+    // Berlin in 3D" for a thing to model).
+    let houses = || panel_request(text).is_some_and(|args| args["action"] == "show_buildings");
+    if let Some(intent) = crate::model3d::intent(text).filter(|_| !houses()) {
         return Some(intent);
     }
     // Pictures, live cameras and street view ("show me a picture of the Earth", "Zeig mir eine
@@ -2459,6 +2465,19 @@ fn earth_panel_args(text: &str, s: &str, up: PanelsUp) -> Option<Value> {
         }
         return Some(args);
     }
+    // The houses in 3D: block models at street level; over a place when one is named.
+    static BUILDINGS: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^(?:show|show\s+me|display|turn\s+on|put\s+up|bring\s+up|pull\s+up|give\s+me|zeig|zeig\s+mir|zeige|zeige\s+mir)\s+(?:me\s+|mir\s+)?(?:the\s+|die\s+)?(?:3d\s+)?(?:buildings|houses|gebäude|gebaeude|häuser|haeuser)(?:\s+(?:of|in|around|near|von|im|um|bei|der|des)\s+(.+?))??(?:\s+(?:in|as|als)\s+3d)?$")
+    });
+    if let Some(c) = BUILDINGS.captures(s) {
+        let mut args = earth("show_buildings");
+        match c.get(1).map(|m| place_of(m.as_str())) {
+            Some(None) => return None,
+            Some(Some(Some(place))) => args["place"] = json!(place),
+            _ => {}
+        }
+        return Some(args);
+    }
     static EXAGGERATE: LazyLock<Regex> = LazyLock::new(|| {
         re(concat!(
             r"^(?:exaggerate|amplify|boost|stretch|enhance)\s+(?:the\s+)?(?:terrain|relief|elevation|mountains|heights?|topography)$",
@@ -2592,13 +2611,14 @@ fn earth_panel_args(text: &str, s: &str, up: PanelsUp) -> Option<Value> {
         return Some(earth(if off { "hide_labels" } else { "show_labels" }));
     }
     static HIDE_OVERLAY: LazyLock<Regex> = LazyLock::new(|| {
-        re(r"^(?:hide|remove|turn\s+off|switch\s+off|disable|get\s+rid\s+of|blende|entferne)\s+(?:the\s+|die\s+|das\s+|den\s+)?(weather\s+radar|rain\s+radar|radar|regenradar|wetterradar|clouds|cloud\s+cover|infrared|wolken|terrain|relief|mountains|peaks|hillshade|gelände|gelaende|berge)(?:\s+(?:layer|overlay))?(?:\s+aus)?$")
+        re(r"^(?:hide|remove|turn\s+off|switch\s+off|disable|get\s+rid\s+of|blende|entferne)\s+(?:the\s+|die\s+|das\s+|den\s+)?(weather\s+radar|rain\s+radar|radar|regenradar|wetterradar|clouds|cloud\s+cover|infrared|wolken|terrain|relief|mountains|peaks|hillshade|gelände|gelaende|berge|3d\s+buildings|buildings|houses|gebäude|gebaeude|häuser|haeuser)(?:\s+(?:layer|overlay))?(?:\s+aus)?$")
     });
     if let Some(c) = HIDE_OVERLAY.captures(s) {
         let layer = match &c[1] {
             // (A bare "radar" with the network radar up is that one's.)
             "radar" if up.radar => return None,
             l if l.contains("radar") => "radar",
+            l if ["building", "house", "gebäude", "gebaeude", "häuser", "haeuser"].iter().any(|w| l.contains(w)) => "buildings",
             "clouds" | "cloud cover" | "infrared" | "wolken" => "clouds",
             _ => "terrain",
         };
@@ -2718,6 +2738,29 @@ fn disk_path(s: &str) -> Option<String> {
 }
 
 /// The JAI view a phrase names (`opening`: Sir wants a window, not a reading in the chat).
+/// "A few random windows", "three random views", "some windows of your choice": his own choice
+/// of views, and of how many unless a number is said. A named or a plain window is none of his
+/// ("two chrome windows", "a new window").
+fn random_views(object: &str) -> Option<Value> {
+    static RANDOM: LazyLock<Regex> = LazyLock::new(|| {
+        re(concat!(
+            r"^(?:me\s+|mir\s+)?(?:(?P<n>\d+|a|an|one|two|three|four|five|six|seven|eine?|eins|zwei|drei|vier|fünf|fuenf|sechs|sieben)\s+|(?P<some>a few|some|several|a couple of|a couple|a bunch of|a handful of|ein paar|einige|mehrere)\s+)?",
+            r"(?:(?P<random>random|randomly chosen|arbitrary|zufällige[sn]?|zufaellige[sn]?|beliebige[sn]?|irgendwelche)\s+)?",
+            r"(?:windows|window|views|view|fenster|ansichten)",
+            r"(?P<choice>\s+(?:of your (?:own )?(?:choice|choosing)|you (?:choose|pick|decide)|your choice|(?:nach )?deiner wahl))?(?:\s+for me|\s+für mich)?$",
+        ))
+    });
+    let c = RANDOM.captures(object.trim())?;
+    if c.name("random").is_none() && c.name("choice").is_none() && c.name("some").is_none() {
+        return None;
+    }
+    let mut args = json!({ "view": "random" });
+    if let Some(n) = c.name("n").and_then(|m| count_word(m.as_str()).or(Some(1))) {
+        args["count"] = json!(n);
+    }
+    Some(args)
+}
+
 fn view_named(object: &str, opening: bool) -> Option<&'static str> {
     let o = object.trim();
     static STATS: LazyLock<Regex> = LazyLock::new(|| {
@@ -6729,6 +6772,40 @@ mod tests {
         assert_eq!(strip_article("chrome on my pc"), "chrome");
     }
 
+    /// "Open three random windows" is his own choice of views, never a program of that name (the
+    /// launcher looked for "Three Random Windows", 2026-11-19).
+    #[test]
+    fn random_windows_are_his_choice() {
+        for (text, count) in [
+            ("JAI, can you open three random windows?", Some(3)),
+            ("open a few random windows", None),
+            ("Open some random windows for me, please.", None),
+            ("open 2 random views", Some(2)),
+            ("show me a couple of windows of your choice", None),
+            ("open a few windows", None),
+            ("open random windows", None),
+            ("öffne ein paar zufällige Fenster", None),
+            ("Öffne drei zufällige Fenster", Some(3)),
+        ] {
+            let (name, args) = crate::phrasings::route(text).unwrap_or_else(|| panic!("{text}"));
+            assert_eq!((name.as_str(), args["view"].as_str()), ("open_jai_view", Some("random")), "{text}");
+            assert_eq!(args["count"].as_u64(), count, "{text}");
+        }
+        // "… in 3D", the whole road as the brain takes it: a thing is the 3D studio's, a town's
+        // houses are the Earth's.
+        for text in ["Show me the houses of Musterstadt in 3D", "show me the houses of Berlin in 3D", "Zeig mir die Häuser von Musterstadt in 3D"] {
+            let (name, args) = crate::phrasings::route(text).unwrap_or_else(|| panic!("{text}"));
+            assert_eq!((name.as_str(), args["action"].as_str()), ("open_jai_view", Some("show_buildings")), "{text}");
+            assert!(args["place"].as_str().is_some_and(|p| !p.is_empty()), "{text}: {args}");
+        }
+        assert_eq!(crate::phrasings::route("Render me an Iron Man suit in 3D").map(|r| r.0).as_deref(), Some("show_3d_model"));
+        assert_eq!(crate::phrasings::route("Show me a house in 3D").map(|r| r.0).as_deref(), Some("show_3d_model"));
+        // A named thing stays what it is.
+        for text in ["open two chrome windows", "open a new window", "open the windows settings", "open two windows"] {
+            assert_ne!(internal_view_command(text).map(|a| a["view"].clone()), Some(json!("random")), "{text}");
+        }
+    }
+
     /// "… in a new window" after a note: a window of its own, and not words of the note.
     #[test]
     fn a_note_in_a_new_window_gets_one() {
@@ -6892,6 +6969,17 @@ mod tests {
         assert!(panel_command("Show me the mountains on the globe", none).unwrap().get("place").is_none());
         for text in ["Exaggerate the terrain", "Make the mountains taller", "Überhöhe das Gelände"] {
             is(text, none, "exaggerate_terrain");
+        }
+        // The houses in 3D.
+        for text in ["Show me the buildings", "Show me the houses in 3D", "Show the 3D buildings", "Zeig mir die Häuser in 3D", "Zeige mir die Gebäude"] {
+            is(text, none, "show_buildings");
+        }
+        let town = panel_command("Show me the houses of Musterstadt in 3D", none).unwrap();
+        assert_eq!((town["action"].as_str(), town["place"].as_str()), (Some("show_buildings"), Some("Musterstadt")));
+        assert_eq!(panel_command("Zeig mir die Häuser in Musterstadt", none).unwrap()["place"], "Musterstadt");
+        for text in ["Hide the buildings", "Turn off the 3D buildings", "Blende die Häuser aus"] {
+            let args = panel_command(text, earth_up).unwrap_or_else(|| panic!("{text}"));
+            assert_eq!((args["action"].as_str(), args["layer"].as_str()), (Some("hide_layer"), Some("buildings")), "{text}");
         }
         is("flatten the terrain", earth_up, "flatten_terrain");
         // The weather.

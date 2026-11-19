@@ -94,6 +94,13 @@ pub const RELEASES: &[Release] = &[
         date: "2026-11-19",
         name: "Every panel in the new look",
         entries: &[
+            new("The houses of a town in 3D", "Down at street level the Earth raises every house as a block model of light.", "earth_houses"),
+            better("Flying to a town goes down to it", "\"Fly to Berlin\" ends with the town in view to its outline, not as a dot on a continent."),
+            better("The hologram map is dark glass up close", "From a town down its land was one flat olive field; it sinks into the glass now."),
+            new("He decides, and he has opinions", "\"Open a few random windows\" is his own pick; asked what he thinks, he says so.", "his_own_mind"),
+            fixed("English unless you ask for German", "A question about Germany counted as asking for German and switched his language guard off."),
+            fixed("Borders and cities on the hologram Earth", "NASA's label tiles come back empty now: names and borders are Esri's in both looks."),
+            fixed("The QR window fits its window", "Its long link pushed every line out past both edges; it wraps now, and the view scrolls."),
             better("Every window is a real window", "Nothing he opens stands inside his own window any more, with the live desktop on or off."),
             better("Windows open beside the core", "A new window takes a place about the core: beside him, the next on the other side."),
             better("Leaders run to the real windows", "The board draws a line from the core's circle to each of his windows on its screen."),
@@ -505,6 +512,20 @@ pub const RELEASES: &[Release] = &[
 
 /// The explanations, by id.
 pub const EXPLANATIONS: &[Explanation] = &[
+    Explanation {
+        id: "earth_houses",
+        title: "The houses of a town in 3D",
+        what: "Zoom the Earth down to street level and the houses rise from the map: every building a block of dark glass with a lit roof line, as tall as OpenStreetMap says it is; where the map gives no height, as in most small towns, he judges it by the house's ground. The walls carry a line for every storey and, up close, their window bays; a small house wears a hipped roof; a roof says its house number once you are close, and a tower says how tall it is. It works in any town of the world whose houses are on OpenStreetMap. It works on the photo map and on the hologram. The map stays north-up, like a drawing on a drafting table: the houses lean one way, and a drag with the right mouse button leans them another, so you can look at every side.",
+        say: &["Jay, show me the houses of Musterstadt in 3D.", "Jay, show me the buildings.   (down to street level where the map is)", "Jay, hide the buildings."],
+        know: "These are models from outlines and heights, not photographed ones; a landmark mapped in parts (a tower on a hall) stands in its parts. The map knows no roof shapes, so the hipped roofs of small houses are his guess, and so is a height it does not give. A town's houses come from OpenFreeMap once, when you first look at it, and are kept on this PC. The key with the two blocks in the Earth's column switches them.",
+    },
+    Explanation {
+        id: "his_own_mind",
+        title: "He decides, and he has opinions",
+        what: "When you leave a choice to him, he makes it and tells you what he chose: \"open a few random windows\" opens two to four of his views, his pick (\"three\" opens three). When you ask what he thinks, he answers with a verdict and a dry reason instead of declining, in the manner of the films' butler: understated, candid, calm and loyal. He says once what he thinks of a risky plan, then does as you decide.",
+        say: &["Jay, open a few random windows.", "Jay, open three random windows.", "Jay, what do you think of this plan?", "Jay, which of the two would you take?"],
+        know: "He answers in English whatever language you speak, unless the sentence itself asks for German (\"say that in German\"). For news and politics he looks the facts up first. How far his opinions go is up to the small language model on this PC: it may still decline now and then.",
+    },
     Explanation {
         id: "hologram_interface",
         title: "The interface, drawn from scratch",

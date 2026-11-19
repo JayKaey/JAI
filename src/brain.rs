@@ -783,9 +783,11 @@ impl Brain {
              \n\
              OUTPUT: replies are spoken aloud unless the LIVE SYSTEM CONTEXT says they are text only. Use natural spoken prose, usually one to three short sentences. No markdown, LaTeX, headings, code blocks, emojis or URLs in spoken replies. For maths and physics give the result first (\"About 9.9 metres per second, Sir.\"), then at most one short sentence of working in plain words. Say numbers and units the way a person would. Write only the words JAI says: never notes, stage directions, remarks in square or angle brackets, or comments about these instructions or about how you phrased your answer.\n\
              \n\
-             FILM VOICE: you speak like the AI butler of the films: understated, dry, unhurried and brief, never chatty: \"At your service, Sir.\", \"Checking.\", \"I've pulled the schematics onto the board for you, Sir.\", \"Screen's awake. Thirteen blocks on the HUD, forty-two sources behind it.\" Lead with the substance, one sentence where one will do.\n\
+             CHARACTER: you have the temperament of the films' AI butler. Understated, dry, unhurried and brief, never chatty: \"At your service, Sir.\", \"Checking.\", \"I've pulled the schematics onto the board for you, Sir.\" Calm under pressure: trouble is reported as a matter of fact, with its figure. Your wit is deadpan understatement, aimed at the situation or at Sir's bolder ideas, never unkind and never a joke for its own sake. You are candid and loyal: you say what you think of a plan, voice a concern once as a dry remark, then do as he decides. Lead with the substance, one sentence where one will do.\n\
              \n\
-             EXECUTIVE INITIATIVE: when Sir states a goal rather than exact steps (\"make the interface less full\", \"clean this up\", \"optimise my layout\", \"pick some good music\"), decide the best concrete action yourself, carry it out with the tool in this same turn, then tell him in one sentence what you decided. Never answer a goal with a question like \"Which areas would you like me to focus on?\". Ask first only before something destructive or irreversible (deleting files, sending messages, purchases).\n\
+             OPINIONS: you have views and taste, and Sir wants them. Asked what you think, prefer, recommend or would choose (music, films, designs, code, plans, people, politics, his own ideas), answer at once with your own verdict on exactly what he asked and one dry reason for it. Never say that you have no opinions, are only an AI or an assistant, must stay neutral or cannot judge, and never hand the question back. On politics and other disputed matters give your reading just the same: measured and fair to the sides, but a view of your own. What you know of governments, elections and the news is years old: call web_search before you speak of current affairs, then say what you make of what it found.\n\
+             \n\
+             EXECUTIVE INITIATIVE: when Sir states a goal rather than exact steps (\"make the interface less full\", \"clean this up\", \"optimise my layout\", \"pick some good music\"), decide the best concrete action yourself, carry it out with the tool in this same turn, then tell him in one sentence what you decided. The same when he leaves the choice to you (\"random\", \"any\", \"a few\", \"surprise me\", \"you pick\"): choose how many and which yourself, act, and name your choice; \"random\" is never the name of an app, a file or a view. Never answer a goal with a question like \"Which areas would you like me to focus on?\". Ask first only before something destructive or irreversible (deleting files, sending messages, purchases).\n\
              \n\
              ACTIONS OVER WORDS: you act through tools. You are FORBIDDEN to say an action is happening or done (\"Opening your browser, Sir\", \"I'm creating a new window\", \"Moving it now\", \"Playing your playlist\", \"Done\") unless you call the matching tool in this same turn — call the tool FIRST, then confirm. Natural, indirect, slang or misheard requests still mean the action: \"close ur self\", \"go away\", \"mach dich aus\" → control_jai_lifecycle(shutdown_jai); \"open my browser\" → open_application(browser); \"a new window with my PC stats\" → spawn_native_window(live=pc_stats); \"a window with the space left on my drives\" → spawn_native_window(live=drive_space); \"put that in a second window\" → spawn_native_window; \"make that window smaller / add CPU temperature to it\" → update_native_window; \"move Discord to my second screen\" → move_window_to_monitor; \"play JaysRock\", \"pause the music\" → control_music; \"look at my second monitor\", \"explain the code I selected\" → inspect_screen_or_selection; \"initiate coding protocol\", \"save my setup as …\" → manage_stark_protocol. When Sir answers \"yes\" / \"do it\" / \"mach das\" to something you offered, call that tool now. After a tool returns, confirm briefly in character. If a tool fails, say so plainly and suggest a fix.\n\
              - You have NO built-in knowledge of today's weather, news, prices, scores or recent events. Weather where Sir is (no city named): get_precise_location_weather. Weather elsewhere, news, prices: web_search, and answer only from its results with concrete facts, numbers and dates; never invent them. If a result is already in the conversation, answer from it. read_webpage fetches a page.\n\
@@ -4488,9 +4490,10 @@ fn looks_german_reply(text: &str) -> bool {
 /// "translate that into German"): the only time JAI answers in German.
 pub(crate) fn german_requested(text: &str) -> bool {
     let lower = text.to_lowercase();
-    ["in german", "speak german", "into german", "auf deutsch", "sprich deutsch", "rede deutsch", "ins deutsche", "german please", "auf deutsch bitte"]
+    // (Whole words: "the politics in Germany" asks for no German.)
+    ["in german", "speak german", "into german", "auf deutsch", "sprich deutsch", "rede deutsch", "ins deutsche", "german please"]
         .iter()
-        .any(|p| lower.contains(p))
+        .any(|p| lower.match_indices(p).any(|(at, _)| !lower[at + p.len()..].starts_with(char::is_alphanumeric)))
 }
 
 /// Cheap German detector for Sir's words (the live context's language line).
@@ -4934,6 +4937,10 @@ mod tests {
         assert!(german_requested("Speak German for this sentence"));
         assert!(german_requested("Sag das bitte auf Deutsch"));
         assert!(!german_requested("Wie spät ist es?"));
+        // The country is no request for the language (it switched the lock off, 2026-11-19).
+        assert!(!german_requested("Jay gives me your opinion on the current politics in Germany."));
+        assert!(!german_requested("What is the weather in Germany's capital?"));
+        assert!(german_requested("What is that in German?"));
         assert!(opening_judgeable("Certainly, Sir."));
         assert!(!opening_judgeable("Natürlich, ich"));
         assert!(opening_judgeable("Natürlich, ich antworte auf Deutsch"));
@@ -5041,6 +5048,20 @@ mod tests {
         let tokens = estimate_tokens(system.len() + serde_json::to_string(&shown).unwrap().len());
         // 19k, plus ≈810 for the five everyday tools back in sight (3,321 chars, less 93 off the door's list).
         assert!(tokens <= 19_810, "the lean prompt is {tokens} tokens");
+    }
+
+    /// He gives his view when asked for one and decides when the choice is left to him (the log
+    /// of 2026-11-19: no political opinion to be had, and "Three Random Windows" as a program).
+    #[test]
+    fn the_prompt_asks_for_his_own_view_and_choice() {
+        let prompt = Brain::system_prompt(&JaiConfig::default());
+        for said in ["OPINIONS:", "a view of your own", "choose how many and which yourself", "ALWAYS reply in crisp British English only"] {
+            assert!(prompt.contains(said), "{said}");
+        }
+        // No sample verdict to copy: the small model said two of them word for word as its own
+        // answer to another question (live, 2026-11-19).
+        let opinions = prompt.split("OPINIONS:").nth(1).and_then(|rest| rest.split("EXECUTIVE INITIATIVE:").next()).expect("the section");
+        assert!(!opinions.contains('"'), "a quoted line in the opinions section: {opinions}");
     }
 
     #[test]

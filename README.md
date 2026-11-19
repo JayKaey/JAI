@@ -105,11 +105,22 @@ Three panels open by voice, each in a window of its own, and close with "close t
   "go up a folder" comes back out, and when the reading is done JAI says in two sentences
   what fills it.
 - **Earth**: "show me the earth" opens the globe, "switch to satellite view" and "go back to
-  the hologram" change its face, "fly to Tokyo" turns it. On it: "were there any earthquakes
+  the hologram" change its face, "fly to Tokyo" turns it and goes down until the town is in
+  view to its outline (a small town from lower than a large one). On it: "were there any earthquakes
   near Tokyo recently?", "show me the flights over New York", "show me the storms", "show me
   the fires", "where is the space station?", and "hide the flights" takes a layer off. The
   globe fetches public data while it is open (NASA GIBS imagery, USGS and EONET events, the
-  ISS position, OpenSky flights).
+  ISS position, OpenSky flights). Place names and borders show on both faces (Esri). Down at
+  street level the houses of any town in the world that is on OpenStreetMap stand on the map
+  as models with their heights (estimated from a house's ground where the map gives none), a
+  line for every storey, window bays up close, hipped roofs on small houses (a guess: the map
+  knows no roof shapes), their house numbers and the height of every tower (OpenFreeMap): "show me the houses of Musterstadt in 3D" flies there,
+  "show me the buildings" goes down where the map is, a drag with the right mouse button
+  leans them another way, "hide the buildings" takes them off.
+
+"Open a few random windows" leaves the choice to him: he opens two to four of his own views
+and says which ("open three random windows" opens three). Asked for his opinion he gives one,
+in English unless the sentence itself asks for German.
 
 Every window of his opens with a holographic entrance (the frame draws in, brackets close,
 a scan line passes) and leaves with an exit (it folds into a line), whether it is opened or

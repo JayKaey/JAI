@@ -109,8 +109,6 @@ struct Ink {
     accent: Color32,
     border: Color32,
     aurora: Color32,
-    /// Borders and coastlines over the holographic map.
-    lines: Color32,
 }
 
 fn ink() -> Ink {
@@ -124,7 +122,6 @@ fn ink() -> Ink {
         border: crate::hud_board::border_colour(),
         // (A colourless theme gets a colourless aurora.)
         aurora: if s < 0.28 { t.ink() } else { t.deep() },
-        lines: t.deep(),
     }
 }
 
@@ -335,12 +332,18 @@ fn view_with(ui: &mut Ui, st: &mut Earth, rt: &Handle, fetch: bool) {
     if geo.flatness > 0.0 {
         paint_flat(&painter, st, &geo, textures.0, &ink, rt, cpu);
     }
+    if fetch && st.overlays.buildings && geo.flatness >= 1.0 && !st.demo {
+        crate::earth_buildings::schedule(rt, &geo.flat, lay.map);
+    }
 
     let controls = controls_layout(lay.map);
     let mut placer = Placer { bounds: lay.map.shrink(4.0), taken: vec![controls.area] };
     let cards = plan_cards(&painter, st, &geo, &controls, &mut placer, &ink);
     let mut picker = Picker { pointer: map_resp.hover_pos(), best: None };
     let tour_card = plan_tour_card(&painter, st, &geo, &mut placer);
+    // The houses, once the map is down at street level (what their roofs say keeps off the
+    // cards and the keys).
+    st.houses = crate::earth_buildings::paint(&painter, &geo.flat, lay.map, if st.overlays.buildings { geo.flatness } else { 0.0 }, &placer.taken);
     let (pulsing, movers) = paint_layers(&painter, st, &geo, &ink, now, &mut placer, &mut picker);
     cards.paint(&painter, &ink);
     if let Some(card) = tour_card {
@@ -390,9 +393,12 @@ fn credits_line(st: &Earth) -> String {
     }];
     if st.look == Look::Satellite {
         parts.push("Globe: NASA GIBS / EOSDIS (Blue Marble, Black Marble)");
-        if st.overlays.labels {
-            parts.push(crate::earth_sources::REFERENCE_CREDIT);
-        }
+    }
+    if st.overlays.labels {
+        parts.push(crate::earth_sources::REFERENCE_CREDIT);
+    }
+    if st.houses {
+        parts.push(crate::earth_buildings::CREDIT);
     }
     if st.overlays.terrain {
         parts.push(crate::earth_sources::TERRAIN_CREDIT);
@@ -429,7 +435,12 @@ fn handle_input(ctx: &egui::Context, st: &mut Earth, geo: &Geo, resp: &egui::Res
     const GLIDE_TAU: f64 = 0.32;
     const GLIDE_MIN: f32 = 12.0;
     let mut moved = false;
-    if resp.dragged() {
+    // The right button turns the houses while they stand (it pans like the left one otherwise).
+    if resp.dragged_by(egui::PointerButton::Secondary) && st.overlays.buildings && geo.flatness >= 1.0 && crate::earth_buildings::showing(&geo.flat) > 0.0 {
+        crate::earth_buildings::lean_by(resp.drag_delta());
+        st.inertia = None;
+        moved = true;
+    } else if resp.dragged() {
         let d = resp.drag_delta();
         let before = st.inertia.unwrap_or((0.0, 0.0));
         if d != Vec2::ZERO {
@@ -785,6 +796,12 @@ fn paint_flat(p: &Painter, st: &mut Earth, geo: &Geo, base: TextureId, ink: &Ink
     if let Some(terrain) = st.terrain_layer() {
         tiles(p, st, flat, map, terrain, level(terrain, 0.3), tint, rt);
     }
+    // The hologram up close: its imagery ends at level 8, and from a town down the land was one
+    // flat field of its colour (olive, in the window of 2026-11-19). It sinks into the glass
+    // there; the grid, the names and the houses carry the picture.
+    if st.look == Look::Holo {
+        p.rect_filled(map, 0.0, scrim(0.86 * model::smoothstep(8.0, 11.0, zoom) as f32 * geo.flatness));
+    }
     // The hologram's grid (a satellite photo stays clean once it is there).
     if st.look == Look::Holo || (cpu && st.sat.tex.is_none()) {
         flat_graticule(p, flat, map, ink.rim.gamma_multiply(0.18 * geo.flatness));
@@ -792,12 +809,6 @@ fn paint_flat(p: &Painter, st: &mut Earth, geo: &Geo, base: TextureId, ink: &Ink
     let now = p.ctx().input(|i| i.time);
     for layer in st.overlay_layers(now) {
         match layer {
-            // The hologram's lines in its own colour, then its names.
-            TileLayer::Labels => {
-                let detail = level(TileLayer::Features, 0.5);
-                tiles(p, st, flat, map, TileLayer::Features, detail, ink.lines.gamma_multiply(0.85 * geo.flatness), rt);
-                tiles(p, st, flat, map, TileLayer::Labels, detail, tint, rt);
-            }
             TileLayer::Radar(_) => tiles(p, st, flat, map, layer, level(layer, 0.0), Color32::WHITE.gamma_multiply(0.85 * geo.flatness), rt),
             _ => tiles(p, st, flat, map, layer, level(layer, 0.5), tint, rt),
         }
@@ -1226,6 +1237,8 @@ enum Icon {
     Mountain,
     Radar,
     Cloud,
+    /// Two blocks on the ground: the houses in 3D.
+    Buildings,
 }
 
 impl Icon {
@@ -1312,6 +1325,12 @@ impl Icon {
                     line,
                 ));
                 p.line_segment([pos2(c.x - s * 0.5, c.y - s * 0.3), pos2(c.x - s * 0.05, c.y - s * 0.3)], line);
+            }
+            Icon::Buildings => {
+                let (foot, x) = (c.y + s * 0.7, |k: f32| c.x + s * k);
+                p.add(Shape::line(vec![pos2(x(-0.8), foot), pos2(x(-0.8), c.y - s * 0.1), pos2(x(-0.15), c.y - s * 0.1), pos2(x(-0.15), c.y - s * 0.8), pos2(x(0.75), c.y - s * 0.8), pos2(x(0.75), foot)], line));
+                p.line_segment([pos2(x(-0.15), c.y - s * 0.1), pos2(x(-0.15), foot)], line);
+                p.line_segment([pos2(x(-1.0), foot), pos2(x(1.0), foot)], line);
             }
             Icon::Radar => {
                 for k in 1..=3 {
@@ -1644,7 +1663,7 @@ enum Control {
     Satellite,
 }
 
-const CONTROLS: [Control; 14] = [
+const CONTROLS: [Control; 15] = [
     Control::ZoomIn,
     Control::ZoomOut,
     Control::Home,
@@ -1658,6 +1677,7 @@ const CONTROLS: [Control; 14] = [
     Control::Overlay(Overlay::Terrain),
     Control::Overlay(Overlay::Radar),
     Control::Overlay(Overlay::Clouds),
+    Control::Overlay(Overlay::Buildings),
     Control::Satellite,
 ];
 /// Where the column's groups start (the camera, the live layers, the overlays).
@@ -1680,6 +1700,7 @@ impl Control {
             Control::Overlay(Overlay::Terrain) => Icon::Mountain,
             Control::Overlay(Overlay::Radar) => Icon::Radar,
             Control::Overlay(Overlay::Clouds) => Icon::Cloud,
+            Control::Overlay(Overlay::Buildings) => Icon::Buildings,
             Control::Satellite => Icon::Globe,
         }
     }
@@ -1695,6 +1716,7 @@ impl Control {
             Control::Overlay(Overlay::Terrain) => "Shaded terrain and the peaks' names (AWS Terrain Tiles, OpenStreetMap)",
             Control::Overlay(Overlay::Radar) => "Rain radar, the past two hours (RainViewer)",
             Control::Overlay(Overlay::Clouds) => "Live cloud cover: infrared from GOES and Himawari (NASA GIBS)",
+            Control::Overlay(Overlay::Buildings) => "The houses in 3D at street level (OpenFreeMap, OpenStreetMap); a drag with the right button turns them",
             Control::Satellite => "The photo globe; again for the holographic one",
         }
     }
@@ -1877,6 +1899,7 @@ fn summary(st: &Earth) -> String {
         (o.radar && !o.animate, "rain radar"),
         (o.radar && o.animate, "rain radar (past two hours)"),
         (o.clouds, "clouds"),
+        (st.houses, "buildings in 3D"),
     ]
     .into_iter()
     .filter_map(|(on, name)| on.then_some(name))
@@ -2003,6 +2026,66 @@ mod tests {
             let _ = draw(&mut stage, &mut earth, rt.handle(), 10);
             assert!(t.elapsed() / 10 < std::time::Duration::from_millis(40), "{alt} km: {:?} a frame", t.elapsed() / 10);
         }
+    }
+
+    /// The houses at street level: block models of light on the flat map in both looks, with
+    /// their credit, gone with their key off; the right button leans them and pans nothing; a
+    /// town of them costs no more than a frame.
+    #[test]
+    fn the_houses_stand_at_street_level_and_turn_with_the_right_button() {
+        let _look = crate::holo_theme::look_for_pictures();
+        let rt = runtime();
+        let _town = crate::earth_buildings::tests::stand_in(48.0, 9.0, 2_500);
+        let mut earth = Earth::demo();
+        earth.cam = crate::earth::Camera { lat: 48.0, lon: 9.0, alt: 0.3 };
+        let mut stage = stage(vec2(900.0, 620.0));
+        let around = Rect::from_center_size(pos2(420.0, 300.0), vec2(520.0, 420.0));
+        for (look, name) in [(Look::Satellite, "panel_earth_houses_photo"), (Look::Holo, "panel_earth_houses")] {
+            earth.set_look(look);
+            earth.overlays.buildings = true;
+            let frame = draw(&mut stage, &mut earth, rt.handle(), 3);
+            clean(&frame);
+            assert!(earth.houses, "{look:?}: no house on the map at 300 m");
+            assert!(!frame.find_text("Buildings: OpenFreeMap").is_empty(), "{look:?}: no credit:\n{}", frame.all_text());
+            let canvas = stage.raster(&frame);
+            canvas.save(name);
+            let with = canvas.brightness(around);
+            earth.overlays.buildings = false;
+            let frame = draw(&mut stage, &mut earth, rt.handle(), 2);
+            assert!(!earth.houses && frame.find_text("Buildings: OpenFreeMap").is_empty(), "{look:?}: the key leaves them standing");
+            let without = stage.raster(&frame).brightness(around);
+            assert!((with - without).abs() > 1.0, "{look:?}: the houses change nothing on the map ({with} and {without})");
+        }
+        earth.overlays.buildings = true;
+        // The right button leans them the way it is dragged, and the map stays where it is.
+        let before = earth.cam;
+        {
+            let mut ui = |ctx: &egui::Context| {
+                egui::CentralPanel::default().frame(Frame::none()).show(ctx, |ui| view(ui, &mut earth, rt.handle()));
+            };
+            stage.move_pointer(pos2(420.0, 300.0));
+            stage.frame(&mut ui);
+            stage.press(PointerButton::Secondary, true);
+            stage.frame(&mut ui);
+            for n in 1..=6 {
+                stage.move_pointer(pos2(420.0 + 20.0 * n as f32, 300.0));
+                stage.frame(&mut ui);
+            }
+            stage.press(PointerButton::Secondary, false);
+            stage.frame(&mut ui);
+        }
+        assert_eq!((earth.cam.lat, earth.cam.lon), (before.lat, before.lon), "the right button panned the map");
+        let lean = crate::earth_buildings::tests::lean();
+        assert!(lean.x > 0.5 && lean.y < -0.7, "the houses did not lean with the drag: {lean:?}");
+        let turned = draw(&mut stage, &mut earth, rt.handle(), 2);
+        stage.raster(&turned).save("panel_earth_houses_turned");
+        // Where they first stand, a whole town is in view: still a frame's work.
+        let high = [1.6, 1.3, 1.0, 0.8, 0.6].into_iter().find(|alt| crate::earth_buildings::showing(&Geo::new(crate::earth::Camera { alt: *alt, ..before }, stage.screen()).flat) >= 1.0).expect("a height at which they stand");
+        earth.cam.alt = high;
+        let _ = draw(&mut stage, &mut earth, rt.handle(), 3);
+        let t = std::time::Instant::now();
+        let _ = draw(&mut stage, &mut earth, rt.handle(), 10);
+        assert!(t.elapsed() / 10 < std::time::Duration::from_millis(40), "{high} km: {:?} a frame", t.elapsed() / 10);
     }
 
     fn runtime() -> tokio::runtime::Runtime {

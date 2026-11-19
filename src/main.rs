@@ -55,6 +55,7 @@ mod earth_gl;
 mod earth_locate;
 mod earth_sources;
 mod earth_tour;
+mod earth_buildings;
 // live layers (C1): satellites (SGP4/SDP4), trains, departures, traffic, past weather, rain.
 mod earth_layers;
 mod live_layers;

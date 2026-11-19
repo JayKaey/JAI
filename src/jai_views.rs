@@ -151,10 +151,80 @@ async fn markdown_window(ctx: &ToolContext, view: JaiSubWindow, markdown: String
     }
 }
 
+/// The views JAI opens of his own accord, as he names them: each stands on its own and changes
+/// nothing (the disk map scans a whole drive and the QR code shows his link, so not those).
+const OWN_CHOICE: [(&str, &str); 7] = [
+    ("earth", "the Earth"),
+    ("system_stats", "the system telemetry"),
+    ("network_radar", "the network radar"),
+    ("simulation_lab", "the simulation lab"),
+    ("schedule", "your schedule"),
+    ("contacts", "your contacts"),
+    ("workout_finance", "the finance tracker"),
+];
+
+/// His choice: the views in an order `seed` decides, and how many of them to open (as said,
+/// else two to four).
+fn own_choice(seed: u64, said: Option<u64>) -> (Vec<usize>, usize) {
+    let mut state = seed | 1;
+    let mut next = move || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state
+    };
+    let count = said.unwrap_or(2 + next() % 3).clamp(1, OWN_CHOICE.len() as u64) as usize;
+    let mut order: Vec<usize> = (0..OWN_CHOICE.len()).collect();
+    for i in (1..order.len()).rev() {
+        order.swap(i, (next() % (i as u64 + 1)) as usize);
+    }
+    (order, count)
+}
+
+/// "Open a few random windows": he decides how many and which (a view that will not open gives
+/// way to the next one).
+async fn open_own_choice(ctx: &ToolContext, args: &Value) -> Result<String, String> {
+    let said = args.get("count").and_then(|c| c.as_u64().or_else(|| c.as_str()?.trim().parse().ok()));
+    let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(1, |d| d.as_nanos() as u64);
+    let (order, count) = own_choice(seed, said);
+    let mut opened = Vec::new();
+    for (id, name) in order.into_iter().map(|i| OWN_CHOICE[i]) {
+        if opened.len() == count {
+            break;
+        }
+        let mut one = json!({ "view": id });
+        if let Some(m) = args.get("monitor") {
+            one["monitor"] = m.clone();
+        }
+        if Box::pin(ctx.execute("open_jai_view", &one)).await.success {
+            opened.push(name);
+        }
+    }
+    let list = match opened.split_last() {
+        Some((last, rest)) if !rest.is_empty() => format!("{} and {last}", rest.join(", ")),
+        Some((only, _)) => only.to_string(),
+        None => return Err("none of my views would open".into()),
+    };
+    let mut number = crate::hud_board::number_words(opened.len());
+    number[..1].make_ascii_uppercase();
+    let spoken = if said.is_some_and(|n| n as usize > opened.len()) {
+        format!("That is every view I could open, Sir: {list}.")
+    } else {
+        format!("{number} of my choosing, Sir: {list}.")
+    };
+    Ok(format!("Opened: {list}.\nSpoken: {spoken}"))
+}
+
 /// `open_jai_view`: the view as a HUD block (or its own window). The result ends with a
 /// "Spoken:" line.
 pub async fn run(ctx: &ToolContext, args: &Value) -> Result<String, String> {
     let raw = str_arg(args, &["view", "window_kind", "name", "target"]).unwrap_or("system stats");
+    if matches!(raw.trim().to_lowercase().as_str(), "random" | "surprise" | "any") {
+        if !crate::gui::windows_supported() {
+            return Err("JAI is running without a display (headless), so he cannot open windows.".into());
+        }
+        return open_own_choice(ctx, args).await;
+    }
     let view = JaiSubWindow::parse(raw)
         .ok_or_else(|| format!("'{raw}' is not one of my views (system stats, schedule, simulation lab, mobile QR, gym and finances, contacts, network radar, disk map, earth)."))?;
     // (live layers (C1): view `live` answers in words and needs no display.)
@@ -314,11 +384,12 @@ pub fn close_detached_panels() -> usize {
 pub fn tool_definition() -> Value {
     json!({"type": "function", "function": {
         "name": "open_jai_view",
-        "description": "Open one of YOUR OWN views as its own movable window (never an installed program): system stats / telemetry, schedule (WebUntis + calendar), simulation lab, mobile QR code, gym & finance tracker, contacts, network radar (\"who is on my network\"), disk map (\"what is taking up space\"), earth (globe: quakes, storms, satellites, flights, trains, traffic; satellite view; where Sir is; terrain; rain radar and clouds; past days; a world tour), departures (next trains), live (spoken answers, no window). \"Open my system stats in a new window\" → view system_stats.",
+        "description": "Open one of YOUR OWN views as its own movable window (never an installed program): system stats / telemetry, schedule (WebUntis + calendar), simulation lab, mobile QR code, gym & finance tracker, contacts, network radar (\"who is on my network\"), disk map (\"what is taking up space\"), earth (globe: quakes, storms, satellites, flights, trains, traffic; satellite view; where Sir is; terrain; rain radar and clouds; past days; a world tour), departures (next trains), live (spoken answers, no window), random (\"a few random windows\": your own pick; count only if Sir said one). \"Open my system stats in a new window\" → view system_stats.",
         "parameters": {"type": "object", "properties": {
-            "view": {"type": "string", "enum": ["system_stats", "schedule", "simulation_lab", "mobile_qr", "workout_finance", "contacts", "network_radar", "disk_map", "earth", "departures", "live"]},
-            "action": {"type": "string", "description": "network_radar: show, rescan, check_security. disk_map: show (path), rescan, back. earth: show, show_satellite, show_holo, show_place (place), show_quakes (place, radius_km), show_flights (place), show_storms, show_fires, show_iss, show_satellites (name: group), find_satellite (name), show_overhead, show_trains (place), show_traffic (name or place), show_my_location (where am I), show_mountains (place optional), exaggerate_terrain, show_radar, animate_radar, show_clouds (date optional), show_labels / hide_labels, set_imagery (imagery), show_date (date, place optional: a past day's imagery), show_today, show_world_tour, stop_tour, hide_layer (layer), hide_layers, zoom_in, zoom_out, home, spin, spin_reverse (the other direction), stop_spin. departures: show (name). live: passes (name, place), traffic (name or place), weather_on (date, place), rain_soon (place)."},
-            "layer": {"type": "string", "description": "earth, hide_layer: quakes, flights, storms, fires, iss, satellites, trains, traffic, radar, clouds, terrain, labels"},
+            "view": {"type": "string", "enum": ["system_stats", "schedule", "simulation_lab", "mobile_qr", "workout_finance", "contacts", "network_radar", "disk_map", "earth", "departures", "live", "random"]},
+            "count": {"type": "integer"},
+            "action": {"type": "string", "description": "network_radar: show, rescan, check_security. disk_map: show (path), rescan, back. earth: show, show_satellite, show_holo, show_place (place), show_quakes (place, radius_km), show_flights (place), show_storms, show_fires, show_iss, show_satellites (name: group), find_satellite (name), show_overhead, show_trains (place), show_traffic (name or place), show_my_location (where am I), show_mountains (place optional), exaggerate_terrain, show_radar, animate_radar, show_clouds (date optional), show_labels / hide_labels, show_buildings (place optional: the houses in 3D), set_imagery (imagery), show_date (date, place optional: a past day's imagery), show_today, show_world_tour, stop_tour, hide_layer (layer), hide_layers, zoom_in, zoom_out, home, spin, spin_reverse (the other direction), stop_spin. departures: show (name). live: passes (name, place), traffic (name or place), weather_on (date, place), rain_soon (place)."},
+            "layer": {"type": "string", "description": "earth, hide_layer: quakes, flights, storms, fires, iss, satellites, trains, traffic, radar, clouds, terrain, labels, buildings"},
             "name": {"type": "string", "description": "satellite, group (starlink), station or motorway (A8)"},
             "date": {"type": "string", "description": "a day as said (\"yesterday\", \"1 March 2024\", 2024-03-01)"},
             "imagery": {"type": "string", "description": "earth, set_imagery: esri, sentinel, nasa"},
@@ -364,6 +435,31 @@ mod tests {
             assert_eq!(JaiSubWindow::parse(name), Some(view), "{name}");
         }
         assert_eq!(JaiSubWindow::parse("discord"), None);
+    }
+
+    /// "A few random windows": two to four different views unless a number is said, never more
+    /// than there are, and another pick the next time.
+    #[test]
+    fn his_own_choice_of_views() {
+        let mut orders = std::collections::HashSet::new();
+        for seed in 1..200u64 {
+            let (order, count) = own_choice(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15), None);
+            assert!((2..=4).contains(&count), "{count}");
+            let mut seen = order.clone();
+            seen.sort_unstable();
+            assert_eq!(seen, (0..OWN_CHOICE.len()).collect::<Vec<_>>(), "every view once");
+            orders.insert((order, count));
+        }
+        assert!(orders.len() > 100, "the choice varies: {}", orders.len());
+        assert_eq!(own_choice(7, Some(3)).1, 3);
+        assert_eq!(own_choice(7, Some(0)).1, 1);
+        assert_eq!(own_choice(7, Some(40)).1, OWN_CHOICE.len());
+        // Every view he may choose is one of his, and none of them is the heavy or private one.
+        for (id, _) in OWN_CHOICE {
+            let view = JaiSubWindow::parse(id).unwrap_or_else(|| panic!("{id}"));
+            assert_eq!(view.id(), id);
+            assert!(!matches!(view, JaiSubWindow::DiskMap | JaiSubWindow::MobileSatelliteQr | JaiSubWindow::Live | JaiSubWindow::Departures));
+        }
     }
 
     #[test]

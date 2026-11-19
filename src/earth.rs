@@ -624,15 +624,18 @@ pub enum PlaceKind {
     Continent,
 }
 
-impl PlaceKind {
-    /// How high the camera flies to show one.
-    pub fn altitude_km(self) -> f64 {
-        match self {
-            Self::City => 2_600.0,
-            Self::Region => 3_600.0,
-            Self::Country => 5_500.0,
-            Self::Other => 4_000.0,
-            Self::Continent => 6_500.0,
+impl GeoHit {
+    /// How high the camera flies to show it. A town is in view to its outline: it covers about
+    /// a square kilometre for every 3,000 of its people, and from twice its width up it fills
+    /// the view (2026-11-19: from 2,600 km a town was a dot on half a continent).
+    pub fn altitude_km(&self) -> f64 {
+        match self.kind {
+            PlaceKind::City => (4.0 * (self.people.unwrap_or(150_000) as f64 / 3_000.0 / PI).sqrt()).clamp(10.0, 130.0),
+            // A landmark, a lake, a mountain: with the land around it.
+            PlaceKind::Other => 120.0,
+            PlaceKind::Region => 1_200.0,
+            PlaceKind::Country => 3_200.0,
+            PlaceKind::Continent => 6_500.0,
         }
     }
 }
@@ -653,7 +656,7 @@ pub fn continent(name: &str) -> Option<GeoHit> {
         (&["the indian ocean", "indian ocean", "indischer ozean"], "the Indian Ocean", -15.0, 78.0),
     ];
     let key = name.trim().to_lowercase();
-    CONTINENTS.iter().find(|(names, ..)| names.contains(&key.as_str())).map(|(_, n, lat, lon)| GeoHit { name: n.to_string(), lat: *lat, lon: *lon, kind: PlaceKind::Continent })
+    CONTINENTS.iter().find(|(names, ..)| names.contains(&key.as_str())).map(|(_, n, lat, lon)| GeoHit { name: n.to_string(), lat: *lat, lon: *lon, kind: PlaceKind::Continent, people: None })
 }
 
 /// A geocoded place.
@@ -663,6 +666,8 @@ pub struct GeoHit {
     pub lat: f64,
     pub lon: f64,
     pub kind: PlaceKind,
+    /// How many live there, when the geocoder says.
+    pub people: Option<u64>,
 }
 
 /// A place the camera flew to ("New York"): a white reticle with its name.
@@ -882,7 +887,7 @@ pub fn parse_geocode(v: &Value) -> Option<GeoHit> {
     } else {
         PlaceKind::Other
     };
-    Some(GeoHit { name: hit["name"].as_str()?.to_string(), lat: hit["latitude"].as_f64()?, lon: hit["longitude"].as_f64()?, kind })
+    Some(GeoHit { name: hit["name"].as_str()?.to_string(), lat: hit["latitude"].as_f64()?, lon: hit["longitude"].as_f64()?, kind, people: hit["population"].as_u64().filter(|p| *p > 0) })
 }
 
 /// "United States of America (the)" → "United States".
@@ -1154,6 +1159,8 @@ pub enum Action {
     Locate,
     /// Shaded terrain and the peaks' names; over a place, or the nearest mountains.
     Mountains(Option<String>),
+    /// The houses as block models: down at street level over a place, or where the view is.
+    Buildings(Option<String>),
     /// The relief steeper than life (or back).
     Exaggerate(bool),
     /// The rain radar; `animate`: the past two hours in a loop.
@@ -1182,6 +1189,8 @@ pub enum Overlay {
     Terrain,
     Radar,
     Clouds,
+    /// The houses as block models at street level (`earth_buildings`).
+    Buildings,
 }
 
 impl Overlay {
@@ -1191,6 +1200,7 @@ impl Overlay {
             "terrain" | "relief" | "mountains" | "peaks" | "hillshade" | "elevation" => Self::Terrain,
             "radar" | "rain" | "rain radar" | "weather radar" | "precipitation" => Self::Radar,
             "clouds" | "cloud" | "infrared" | "cloud cover" | "satellite clouds" => Self::Clouds,
+            "buildings" | "building" | "houses" | "3d buildings" | "3d houses" | "3d" => Self::Buildings,
             _ => return None,
         })
     }
@@ -1201,6 +1211,7 @@ impl Overlay {
             Self::Terrain => "terrain",
             Self::Radar => "rain radar",
             Self::Clouds => "clouds",
+            Self::Buildings => "buildings",
         }
     }
 }
@@ -1214,10 +1225,11 @@ pub struct Overlays {
     pub radar: bool,
     pub animate: bool,
     pub clouds: bool,
+    pub buildings: bool,
 }
 
 impl Overlays {
-    pub const DEFAULT: Overlays = Overlays { labels: true, terrain: false, exaggerate: false, radar: false, animate: false, clouds: false };
+    pub const DEFAULT: Overlays = Overlays { labels: true, terrain: false, exaggerate: false, radar: false, animate: false, clouds: false, buildings: true };
 
     pub fn get(&self, o: Overlay) -> bool {
         match o {
@@ -1225,6 +1237,7 @@ impl Overlays {
             Overlay::Terrain => self.terrain,
             Overlay::Radar => self.radar,
             Overlay::Clouds => self.clouds,
+            Overlay::Buildings => self.buildings,
         }
     }
 
@@ -1240,6 +1253,7 @@ impl Overlays {
                 self.animate &= on;
             }
             Overlay::Clouds => self.clouds = on,
+            Overlay::Buildings => self.buildings = on,
         }
     }
 }
@@ -1263,7 +1277,7 @@ pub fn parse_action(args: &Value) -> Result<Action, String> {
     };
     let overlay = |name: Option<String>| -> Result<Overlay, String> {
         let name = name.ok_or("hide_layer needs a layer")?;
-        Overlay::parse(&name).ok_or_else(|| format!("'{name}' is not a layer of the Earth (quakes, flights, storms, fires, iss, labels, terrain, radar, clouds)"))
+        Overlay::parse(&name).ok_or_else(|| format!("'{name}' is not a layer of the Earth (quakes, flights, storms, fires, iss, labels, terrain, radar, clouds, buildings)"))
     };
     Ok(match action.as_str() {
         // (The "show_" names pass the question guard: "where am I?" only looks.)
@@ -1279,6 +1293,8 @@ pub fn parse_action(args: &Value) -> Result<Action, String> {
         },
         "show_labels" | "labels" | "show_borders" | "borders" => Action::Overlay(Overlay::Labels, true),
         "hide_labels" | "hide_borders" => Action::Overlay(Overlay::Labels, false),
+        "show_buildings" | "buildings" | "show_houses" | "show_3d_buildings" => Action::Buildings(place),
+        "hide_buildings" | "hide_houses" => Action::Overlay(Overlay::Buildings, false),
         "set_imagery" | "imagery" | "switch_imagery" => {
             let name = text("imagery").or(place).ok_or("set_imagery needs an imagery (esri, sentinel or nasa)")?;
             Action::Imagery(Imagery::parse(&name).ok_or_else(|| format!("'{name}' is not an imagery of the Earth (esri, sentinel, nasa)"))?)
@@ -1309,7 +1325,7 @@ pub fn parse_action(args: &Value) -> Result<Action, String> {
         "spin_reverse" | "reverse_spin" | "spin_other_way" | "spin_backwards" => Action::SpinReverse,
         "stop_spin" => Action::StopSpin,
         "show_cameras" | "cameras" | "webcams" => Action::Cameras, // cameras (C2)
-        other => return Err(format!("'{other}' is not something the Earth does (show, show_satellite, show_holo, show_place, show_quakes, show_flights, show_storms, show_fires, show_iss, show_cameras, hide_layer, hide_layers, zoom_in, zoom_out, home, spin, spin_reverse, stop_spin, show_my_location, show_mountains, show_terrain, exaggerate_terrain, show_radar, animate_radar, show_clouds, show_labels, hide_labels, set_imagery, show_date, show_today, show_world_tour, stop_tour).")),
+        other => return Err(format!("'{other}' is not something the Earth does (show, show_satellite, show_holo, show_place, show_quakes, show_flights, show_storms, show_fires, show_iss, show_cameras, hide_layer, hide_layers, zoom_in, zoom_out, home, spin, spin_reverse, stop_spin, show_my_location, show_mountains, show_terrain, exaggerate_terrain, show_radar, animate_radar, show_clouds, show_labels, hide_labels, show_buildings, hide_buildings, set_imagery, show_date, show_today, show_world_tour, stop_tour).")),
     })
 }
 
@@ -1479,12 +1495,6 @@ pub fn procedural_texture(w: usize, h: usize, hue: f32) -> ColorImage {
     ColorImage { size: [w, h], pixels }
 }
 
-/// A GIBS overlay tile as white light with the tile's own alpha (tinted when drawn).
-fn as_light(img: &image::RgbaImage) -> ColorImage {
-    let pixels = img.pixels().map(|p| Color32::from_rgba_premultiplied(p.0[3], p.0[3], p.0[3], p.0[3])).collect();
-    ColorImage { size: [img.width() as usize, img.height() as usize], pixels }
-}
-
 fn to_color_image(img: &image::RgbaImage) -> ColorImage {
     ColorImage::from_rgba_unmultiplied([img.width() as usize, img.height() as usize], img.as_raw())
 }
@@ -1501,10 +1511,6 @@ pub enum TileLayer {
     Holo,
     /// The Blue Marble Next Generation true-colour mosaic.
     Satellite,
-    /// Borders and coastlines.
-    Features,
-    /// Place names.
-    Labels,
     /// Esri World Imagery (to street level).
     Esri,
     /// EOX Sentinel-2 cloudless.
@@ -1526,8 +1532,6 @@ impl TileLayer {
         match self {
             Self::Holo => "BlueMarble_ShadedRelief_Bathymetry",
             Self::Satellite => "BlueMarble_NextGeneration",
-            Self::Features => "Reference_Features_15m",
-            Self::Labels => "Reference_Labels_15m",
             Self::Daily(_) => src::DAILY_LAYER,
             _ => "",
         }
@@ -1535,13 +1539,12 @@ impl TileLayer {
 
     /// GIBS layers with a fixed time whose URL form is probed once.
     fn probed(self) -> bool {
-        matches!(self, Self::Holo | Self::Satellite | Self::Features | Self::Labels)
+        matches!(self, Self::Holo | Self::Satellite)
     }
 
     pub fn max_level(self) -> u8 {
         match self {
             Self::Holo | Self::Satellite => 8,
-            Self::Features | Self::Labels => 13,
             Self::Esri => Imagery::Esri.max_level(),
             Self::Sentinel => Imagery::Sentinel.max_level(),
             Self::Reference => src::REFERENCE_MAX_LEVEL,
@@ -1565,8 +1568,6 @@ impl TileLayer {
         match self {
             Self::Holo => "holo".into(),
             Self::Satellite => "satellite".into(),
-            Self::Features => "features".into(),
-            Self::Labels => "labels".into(),
             Self::Esri => "esri".into(),
             Self::Sentinel => "sentinel".into(),
             Self::Reference => "reference".into(),
@@ -1615,7 +1616,7 @@ pub fn source_urls(key: TileKey, radar: Option<(&str, &RadarFrame)>) -> Vec<Stri
             let day = layer.date().map(|d| d.format("%Y-%m-%d").to_string());
             vec![src::gibs_tile_url(src::DAILY_LAYER, day.as_deref(), src::DAILY_MAX_LEVEL, "jpg", z, x, y)]
         }
-        TileLayer::Holo | TileLayer::Satellite | TileLayer::Features | TileLayer::Labels => Vec::new(),
+        TileLayer::Holo | TileLayer::Satellite => Vec::new(),
     }
 }
 
@@ -1657,11 +1658,7 @@ const TEMPLATE_FORMS: usize = 6;
 
 fn tile_url(layer: TileLayer, form: usize, z: u8, x: u32, y: u32) -> String {
     let tms = format!("GoogleMapsCompatible_Level{}", layer.max_level());
-    let ext = match (layer.photo(), form >= 3) {
-        (true, false) => "jpeg",
-        (true, true) => "jpg",
-        (false, _) => "png",
-    };
+    let ext = if form >= 3 { "jpg" } else { "jpeg" };
     let time = ["", "default/", "/"][form % 3];
     format!("https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/{}/default/{time}{tms}/{z}/{y}/{x}.{ext}", layer.gibs())
 }
@@ -1901,6 +1898,8 @@ pub struct Earth {
     pub still_since: f64,
     pub globe_fade: TexFade,
     pub look_changed: f64,
+    /// Houses stood on the map in the last frame (`earth_buildings`): their credit shows.
+    pub houses: bool,
     trimmed: bool,
     next_area: u64,
     /// What the block says it shows (the board's search and "copy").
@@ -2078,6 +2077,7 @@ impl Earth {
             still_since: 0.0,
             globe_fade: TexFade::default(),
             look_changed: f64::NEG_INFINITY,
+            houses: false,
             trimmed: false,
             next_area: 1,
             described: String::new(),
@@ -2402,8 +2402,9 @@ impl Earth {
                 layers.push(TileLayer::Radar(frame.time as u32));
             }
         }
-        if self.overlays.labels || self.look == Look::Holo {
-            layers.push(if self.look == Look::Holo { TileLayer::Labels } else { TileLayer::Reference });
+        // (Esri's in both looks: NASA's own label and border tiles come back empty, 2026-11-19.)
+        if self.overlays.labels {
+            layers.push(TileLayer::Reference);
         }
         layers
     }
@@ -3149,6 +3150,11 @@ pub fn set_waker(ctx: &egui::Context) {
 
 fn deliver(arrival: Arrival) {
     crate::crash_guard::lock(&INBOX).push(arrival);
+    wake();
+}
+
+/// Something for the Earth arrived: the window that draws it paints again.
+pub(crate) fn wake() {
     crate::gui::refresh();
     if let Some((ctx, viewport)) = crate::crash_guard::lock(&WAKER).clone() {
         ctx.request_repaint_of(viewport);
@@ -3156,7 +3162,7 @@ fn deliver(arrival: Arrival) {
 }
 
 /// No network: the verifier, a dry run, the unit tests.
-fn offline() -> bool {
+pub(crate) fn offline() -> bool {
     cfg!(test) || crate::live_self_tester::running() || crate::live_self_tester::dry()
 }
 
@@ -3167,7 +3173,7 @@ static HTTP: LazyLock<reqwest::Client> = LazyLock::new(|| {
 });
 
 /// A GET's body, or (HTTP status if any, what went wrong).
-async fn get(url: &str, timeout: Duration) -> Result<Vec<u8>, (Option<u16>, String)> {
+pub(crate) async fn get(url: &str, timeout: Duration) -> Result<Vec<u8>, (Option<u16>, String)> {
     let response = HTTP.get(url).timeout(timeout).send().await.map_err(|e| (None, e.to_string()))?;
     let status = response.status();
     if !status.is_success() {
@@ -3306,6 +3312,7 @@ pub fn gazetteer(name: &str) -> Option<GeoHit> {
         lat: *lat,
         lon: *lon,
         kind: PlaceKind::City,
+        people: None,
     })
 }
 
@@ -3368,7 +3375,7 @@ pub fn iss_ground_track(lat: f64, lon: f64, ascending: bool, minutes: &[f64]) ->
 
 // ------------------------------------------------------------------------ disk cache ----
 
-fn cache_path(parts: &[&str]) -> PathBuf {
+pub(crate) fn cache_path(parts: &[&str]) -> PathBuf {
     parts.iter().fold(PathBuf::from(CACHE_DIR), |p, part| p.join(part))
 }
 
@@ -3379,7 +3386,7 @@ fn tile_path(key: TileKey) -> PathBuf {
 
 static WRITES: AtomicUsize = AtomicUsize::new(0);
 
-async fn cache_write(path: PathBuf, bytes: Vec<u8>) {
+pub(crate) async fn cache_write(path: PathBuf, bytes: Vec<u8>) {
     if let Some(dir) = path.parent() {
         let _ = tokio::fs::create_dir_all(dir).await;
     }
@@ -3428,7 +3435,7 @@ fn templates_path() -> PathBuf {
 fn load_templates() -> HashMap<TileLayer, Template> {
     let Ok(raw) = std::fs::read_to_string(templates_path()) else { return HashMap::new() };
     let Ok(v) = serde_json::from_str::<Value>(&raw) else { return HashMap::new() };
-    [TileLayer::Holo, TileLayer::Satellite, TileLayer::Features, TileLayer::Labels]
+    [TileLayer::Holo, TileLayer::Satellite]
         .into_iter()
         .filter_map(|l| v[l.dir().as_str()].as_u64().filter(|f| (*f as usize) < TEMPLATE_FORMS).map(|f| (l, Template::Works(f as usize))))
         .collect()
@@ -3505,13 +3512,12 @@ async fn fetch_satellite_base() -> Result<BaseImage, String> {
     .map_err(|e| e.to_string())?
 }
 
-/// A tile's bytes decoded for the GPU: the relief in the holo look, the GIBS lines as white light,
-/// the elevation as shading; imagery and the other overlays as they are.
+/// A tile's bytes decoded for the GPU: the relief in the holo look, the elevation as shading;
+/// imagery and the other overlays as they are.
 fn tile_image(key: TileKey, bytes: &[u8], hue: f32) -> Option<ColorImage> {
     let img = image::load_from_memory(bytes).ok()?;
     Some(match key.layer {
         TileLayer::Holo => colour_holo(&build_mask(&img.to_rgb8(), None, None), &holo_palette(hue)),
-        TileLayer::Features => as_light(&img.to_rgba8()),
         TileLayer::Terrain(tenths) => {
             let rgba = img.to_rgba8();
             let (w, h) = (rgba.width() as usize, rgba.height() as usize);
@@ -3839,6 +3845,7 @@ async fn act(action: Action, offline: bool) -> (String, String) {
         }
         Action::Locate => locate_me(offline).await,
         Action::Mountains(place) => mountains(place, offline).await,
+        Action::Buildings(place) => buildings(place, offline).await,
         Action::Exaggerate(on) => {
             let mut st = state();
             st.overlays.terrain |= on;
@@ -3881,6 +3888,8 @@ async fn act(action: Action, offline: bool) -> (String, String) {
                 (Overlay::Radar, false) => "The rain radar is off, Sir.",
                 (Overlay::Clouds, true) => "The clouds are on, Sir.",
                 (Overlay::Clouds, false) => "The clouds are off, Sir.",
+                (Overlay::Buildings, true) => "The buildings are on, Sir: they stand once you are down at street level.",
+                (Overlay::Buildings, false) => "The buildings are off, Sir.",
             };
             (format!("{}: {}.", overlay.noun(), if on { "on" } else { "off" }), spoken.into())
         }
@@ -3932,7 +3941,8 @@ async fn act(action: Action, offline: bool) -> (String, String) {
             crate::webcams::set_earth_layer(false); // cameras (C2)
             let mut st = state();
             st.layers = Layers { quakes: false, storms: false, fires: false, iss: false, flights: false };
-            st.overlays = Overlays { labels: st.overlays.labels, ..Overlays { labels: false, terrain: false, exaggerate: false, radar: false, animate: false, clouds: false } };
+            // (The names and the houses are the map itself: they stay as they are.)
+            st.overlays = Overlays { terrain: false, exaggerate: false, radar: false, animate: false, clouds: false, ..st.overlays };
             st.area = None;
             crate::earth_layers::hide_all(); // live layers (C1)
             ("Every layer is off.".into(), "All layers are off, Sir.".into())
@@ -3976,7 +3986,7 @@ async fn show_place(name: &str, offline: bool) -> (String, String) {
             {
                 let mut st = state();
                 st.marker = Some(Marker { name: hit.name.clone(), lat: hit.lat, lon: hit.lon });
-                st.fly_to(Camera { lat: hit.lat, lon: hit.lon, alt: hit.kind.altitude_km() });
+                st.fly_to(Camera { lat: hit.lat, lon: hit.lon, alt: hit.altitude_km() });
             }
             (format!("{} at {}.", hit.name, coords_label(hit.lat, hit.lon)), format!("Here is {}, Sir.", hit.name))
         }
@@ -4056,6 +4066,31 @@ async fn mountains(place: Option<String>, offline: bool) -> (String, String) {
     }
 }
 
+/// The houses in 3D: over a place when one is named, else down to street level where the view is.
+async fn buildings(place: Option<String>, offline: bool) -> (String, String) {
+    /// Low enough for the houses to stand at their full strength.
+    const STREET_ALT_KM: f64 = 0.6;
+    let hit = match place.as_deref().filter(|p| !p.eq_ignore_ascii_case("here")) {
+        Some(name) => match resolve(name, offline).await {
+            Ok(hit) => Some(hit),
+            Err(e) => return (e, format!("I couldn't find {name} on the map, Sir.")),
+        },
+        None => None,
+    };
+    let mut st = state();
+    st.overlays.buildings = true;
+    let t = st.target();
+    let (lat, lon) = hit.as_ref().map_or((t.lat, t.lon), |h| (h.lat, h.lon));
+    if hit.is_some() || t.alt > STREET_ALT_KM {
+        st.fly_to(Camera { lat, lon, alt: STREET_ALT_KM });
+    }
+    let over = hit.map(|h| format!(" of {}", h.name)).unwrap_or_default();
+    (
+        format!("Buildings{over}: block models from OpenStreetMap's outlines and heights."),
+        format!("The houses{over} are standing, Sir. Drag with the right button to turn them."),
+    )
+}
+
 /// A day of NASA's daily imagery, over a place when one is named.
 async fn historic(date: NaiveDate, place: Option<String>, offline: bool) -> (String, String) {
     let hit = match place.as_deref().filter(|p| !p.eq_ignore_ascii_case("here")) {
@@ -4073,7 +4108,8 @@ async fn historic(date: NaiveDate, place: Option<String>, offline: bool) -> (Str
     let display = format!("NASA VIIRS true colour of {}.", date.format("%Y-%m-%d"));
     match hit {
         Some(hit) => {
-            let alt = (hit.kind.altitude_km() * 1.6).min(MAX_ALT_KM);
+            // (The daily imagery is coarse: no lower than a region.)
+            let alt = (hit.altitude_km() * 1.6).clamp(400.0, MAX_ALT_KM);
             st.marker = (hit.kind != PlaceKind::Continent).then(|| Marker { name: hit.name.clone(), lat: hit.lat, lon: hit.lon });
             st.fly_to(Camera { lat: hit.lat, lon: hit.lon, alt });
             (display, format!("Here's {} on {when}, Sir, as NASA's satellites saw it.", hit.name))
@@ -4505,7 +4541,7 @@ mod tests {
         let pacific = FlatView::new(0.0, 179.5, 1_000.0, f, (400.0, 300.0));
         let t = pacific.tiles([0.0, 0.0, 800.0, 600.0], 6);
         assert!(t.iter().any(|t| t.0 >= 64) && t.iter().all(|t| t.0.rem_euclid(64) < 64));
-        assert_eq!(TileKey { layer: TileLayer::Labels, z: 10, x: 301, y: 385 }.parent(), Some(TileKey { layer: TileLayer::Labels, z: 9, x: 150, y: 192 }));
+        assert_eq!(TileKey { layer: TileLayer::Reference, z: 10, x: 301, y: 385 }.parent(), Some(TileKey { layer: TileLayer::Reference, z: 9, x: 150, y: 192 }));
     }
 
     #[test]
@@ -4620,7 +4656,16 @@ mod tests {
         assert_eq!((w.sunrise.as_deref(), w.sunset.as_deref(), w.wind_from), (Some("06:58"), Some("19:10"), Some(225.0)));
 
         let geo = json!({"results": [{"id": 1, "name": "Tokyo", "latitude": 35.6895, "longitude": 139.69171, "feature_code": "PPLC", "country": "Japan"}]});
-        assert_eq!(parse_geocode(&geo).unwrap(), GeoHit { name: "Tokyo".into(), lat: 35.6895, lon: 139.69171, kind: PlaceKind::City });
+        assert_eq!(parse_geocode(&geo).unwrap(), GeoHit { name: "Tokyo".into(), lat: 35.6895, lon: 139.69171, kind: PlaceKind::City, people: None });
+        // The camera goes down until a town is in view to its outline: lower for a small one.
+        let town = |people: Option<u64>| GeoHit { people, ..parse_geocode(&geo).unwrap() }.altitude_km();
+        let big = json!({"results": [{"name": "Musterstadt", "latitude": 52.5, "longitude": 13.4, "feature_code": "PPLC", "population": 3_400_000}]});
+        assert_eq!(parse_geocode(&big).unwrap().people, Some(3_400_000));
+        assert!((70.0..85.0).contains(&town(Some(3_400_000))), "{}", town(Some(3_400_000)));
+        assert_eq!((town(Some(45_000)), town(Some(40_000_000))), (10.0, 130.0));
+        assert!((12.0..20.0).contains(&town(None)));
+        let kind = |kind| GeoHit { kind, ..parse_geocode(&geo).unwrap() }.altitude_km();
+        assert!(kind(PlaceKind::Other) < kind(PlaceKind::Region) && kind(PlaceKind::Region) < kind(PlaceKind::Country) && kind(PlaceKind::Country) < kind(PlaceKind::Continent));
         assert!(parse_geocode(&json!({"generationtime_ms": 0.5})).is_none());
 
         let place = parse_reverse(&json!({"countryName": "United States of America (the)", "principalSubdivision": "West Virginia", "city": "", "locality": "Charleston"})).unwrap();
@@ -4688,6 +4733,8 @@ mod tests {
             ("show_clouds", Action::Clouds),
             ("show_labels", Action::Overlay(Overlay::Labels, true)),
             ("hide_borders", Action::Overlay(Overlay::Labels, false)),
+            ("show_buildings", Action::Buildings(None)),
+            ("hide_buildings", Action::Overlay(Overlay::Buildings, false)),
             ("show_today", Action::Today),
             ("world_tour", Action::Tour),
             ("stop_tour", Action::StopTour),
@@ -4696,6 +4743,18 @@ mod tests {
             assert_eq!(a(json!({"action": name})), Ok(action), "{name}");
         }
         assert_eq!(a(json!({"action": "show_mountains", "place": "Nepal"})), Ok(Action::Mountains(Some("Nepal".into()))));
+        assert_eq!(a(json!({"action": "show_buildings", "place": "Musterstadt"})), Ok(Action::Buildings(Some("Musterstadt".into()))));
+        assert_eq!(a(json!({"action": "hide_layer", "layer": "houses"})), Ok(Action::Overlay(Overlay::Buildings, false)));
+        // Names and borders in the hologram too, from the source that has them (NASA's own
+        // label tiles came back empty, 2026-11-19); their key switches them in both looks.
+        let mut earth = Earth::new();
+        for look in [Look::Holo, Look::Satellite] {
+            earth.look = look;
+            assert_eq!(earth.overlay_layers(0.0), vec![TileLayer::Reference], "{look:?}");
+        }
+        earth.overlays.labels = false;
+        assert!(earth.overlay_layers(0.0).is_empty());
+        assert!(Overlays::DEFAULT.buildings && Overlays::DEFAULT.labels);
         assert_eq!(a(json!({"action": "set_imagery", "imagery": "Sentinel-2"})), Ok(Action::Imagery(Imagery::Sentinel)));
         assert!(a(json!({"action": "set_imagery", "imagery": "crayons"})).is_err());
         let march = NaiveDate::from_ymd_opt(2024, 3, 1).unwrap();
@@ -4923,7 +4982,6 @@ mod tests {
         );
         assert_eq!(flights_url(&Bbox { south: 38.0, west: -78.0, north: 43.0, east: -70.0 }), "https://opensky-network.org/api/states/all?lamin=38.000&lomin=-78.000&lamax=43.000&lomax=-70.000");
         assert_eq!(geocode_url("New York"), "https://geocoding-api.open-meteo.com/v1/search?name=New%20York&count=1&language=en&format=json");
-        assert!(tile_url(TileLayer::Labels, 0, 5, 9, 12).ends_with("/Reference_Labels_15m/default/GoogleMapsCompatible_Level13/5/12/9.png"));
         assert!(tile_url(TileLayer::Holo, 4, 2, 1, 3).ends_with("/BlueMarble_ShadedRelief_Bathymetry/default/default/GoogleMapsCompatible_Level8/2/3/1.jpg"));
         assert!(wms_url("Coastlines_15m", true, false).contains("BBOX=-90,-180,90,180&WIDTH=2048&HEIGHT=1024&FORMAT=image/png"));
         assert_eq!(USER_AGENT, "JAI/3 desktop assistant");
