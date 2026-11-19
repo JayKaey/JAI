@@ -96,6 +96,9 @@ pub const RELEASES: &[Release] = &[
         entries: &[
             better("Every panel in the new look", "Earth, radar, research, lab, 3D studio, pictures, mixer and the rest: light on black glass."),
             better("The disk map is panes of light", "A folder is faint glass in its file type's colour with a bright edge, not a solid block."),
+            better("The Earth is dark glass", "The holographic globe is a dark ball with dots of light and lit coasts, not an olive one."),
+            better("Block titles stay whole", "A narrow block lets its keys step back before its title is cut."),
+            better("\"Show everything\" ends the calm mode", "The readouts at the top and bottom come back at once."),
             better("One settings panel", "Core, core size, opacity, name and window size are rows of the one panel: \"open settings\"."),
             better("Settings that did nothing are gone", "Panel hiding, zen mode, background colour, corner rounding and the old theme list."),
             better("A window in a theme of its own", "\"Make that window red\": that window alone wears the red theme, frame and content."),
@@ -712,7 +715,12 @@ pub fn run(args: &Value) -> Result<String, String> {
     open(true);
     let latest = &RELEASES[0];
     let news = latest.entries.iter().filter(|e| e.kind == Kind::New).count();
-    Ok(say(format!("The changes list is on the board: {} days of work, the latest on {} ({} new features).", RELEASES.len(), latest.date, news), format!("Everything that changed, Sir, by day. The latest brought {news} new features.")))
+    let features = match news {
+        0 => "no new features".to_string(),
+        1 => "1 new feature".to_string(),
+        n => format!("{n} new features"),
+    };
+    Ok(say(format!("The changes list is on the board: {} days of work, the latest on {} ({features}).", RELEASES.len(), latest.date), format!("Everything that changed, Sir, by day. The latest brought {features}.")))
 }
 
 // -------------------------------------------------------------------------- the block ----
