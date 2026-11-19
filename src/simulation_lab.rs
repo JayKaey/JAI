@@ -990,10 +990,9 @@ pub fn tool_definitions() -> Vec<Value> {
     vec![
         json!({"type": "function", "function": {
             "name": "launch_interactive_simulation",
-            "description": "Simulation Lab: a live simulation with sliders as a HUD block (separate_window true only when Sir asks for a window). sim_type function (f(x); several separated by ';'; 'derivative' / 'integral'; 'x from -5 to 5'), projectile, pendulum, collision, waves, gradient_descent, sorting (bubble / insertion / selection / quick). formula_or_params: the formulas, or 'angle=60, velocity=30, gravity=9.81'. For any physics problem, function or algorithm he could watch.",
+            "description": "Simulation Lab: a live simulation with sliders in a window of its own. sim_type function (f(x); several separated by ';'; 'derivative' / 'integral'; 'x from -5 to 5'), projectile, pendulum, collision, waves, gradient_descent, sorting (bubble / insertion / selection / quick). formula_or_params: the formulas, or 'angle=60, velocity=30, gravity=9.81'. For any physics problem, function or algorithm he could watch.",
             "parameters": {"type": "object", "properties": {
                 "sim_type": {"type": "string", "enum": ["function", "projectile", "pendulum", "collision", "waves", "gradient_descent", "sorting"]},
-                "separate_window": {"type": "boolean", "description": "true only when Sir asked for a new / separate window."},
                 "formula_or_params": {"type": "string"},
                 "title": {"type": "string"}
             }, "required": ["sim_type"]}
@@ -1010,16 +1009,6 @@ pub fn tool_definitions() -> Vec<Value> {
     ]
 }
 
-/// Where a new simulation opens: a block inside the HUD, or its own OS window when Sir asked for
-/// one (`separate_window`). Returns whether it is detached.
-pub fn place_simulation(id: &str, args: &Value) -> bool {
-    let separate = args.get("separate_window").and_then(Value::as_bool) == Some(true);
-    if separate {
-        crate::hud_dock::detach(&format!("sim:{id}"));
-    }
-    separate
-}
-
 pub fn run_tool(lab: &SimulationLab, name: &str, args: &Value) -> Result<String, String> {
     match name {
         "launch_interactive_simulation" => {
@@ -1030,14 +1019,12 @@ pub fn run_tool(lab: &SimulationLab, name: &str, args: &Value) -> Result<String,
                 return Err("JAI is running without a display, so the Simulation Lab cannot open a window.".into());
             }
             let sim = lab.launch(kind, spec, str_arg(args, &["title", "name"]))?;
-            let separate = place_simulation(&sim.id, args);
             crate::gui::sync_windows();
             Ok(format!(
-                "Opened the {} simulation '{}' ({}) {} with sliders for {}. {}",
+                "Opened the {} simulation '{}' ({}) in its own window with sliders for {}. {}",
                 kind.label().to_lowercase(),
                 sim.title,
                 sim.id,
-                if separate { "in its own window" } else { "on the HUD" },
                 sim.params.iter().map(|p| p.label.to_lowercase()).collect::<Vec<_>>().join(", "),
                 sim.readout()
             ))

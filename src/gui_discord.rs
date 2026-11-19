@@ -115,7 +115,7 @@ fn body(ui: &mut Ui, tools: &ToolContext, rt: &Handle) {
     ui.ctx().request_repaint_after(Duration::from_millis(100));
 }
 
-/// Registers the block while it is open: on the board, or its own window once detached.
+/// Registers the block while it is open: a window of its own (a block on the board in a session without windows).
 pub(super) fn show(ctx: &egui::Context, tools: &ToolContext, rt: &Handle) {
     // (Closed while it was its own window: it plays its exit first.)
     if !super::detached_keep(ctx, ViewportId::from_hash_of("jai_discord_audio"), OPEN.load(Ordering::Acquire)) {
@@ -127,17 +127,11 @@ pub(super) fn show(ctx: &egui::Context, tools: &ToolContext, rt: &Handle) {
         if action.close {
             OPEN.store(false, Ordering::Release);
         }
-        if action.detach {
-            crate::hud_dock::detach(ID);
-        }
         return;
     }
     let mut builder = ViewportBuilder::default().with_title("Discord Audio — J.A.I.").with_app_id("jai").with_inner_size([560.0, 350.0]).with_min_inner_size([460.0, 300.0]).with_decorations(false);
     if let Some(icon) = super::window_icon() {
         builder = builder.with_icon(Arc::new(icon));
-    }
-    if let Some((at, size)) = super::detached_placement(ctx, ID) {
-        builder = builder.with_position(at).with_inner_size(size);
     }
     let builder = super::for_test_session(builder);
     let (tools, rt) = (tools.clone(), rt.clone());
@@ -153,7 +147,7 @@ pub(super) fn show(ctx: &egui::Context, tools: &ToolContext, rt: &Handle) {
                 egui::Window::new("Discord // audio routing").show(ctx, |ui| body(ui, &tools, &rt));
             } else {
                 egui::CentralPanel::default().frame(Frame::none().fill(super::block_slate()).inner_margin(Margin::same(14.0))).show(ctx, |ui| {
-                    if super::detached_title_bar(ui, ctx, "Discord // audio routing") {
+                    if super::detached_title_bar(ui, ctx, ID, "Discord // audio routing") {
                         OPEN.store(false, Ordering::Release);
                     }
                     body(ui, &tools, &rt);

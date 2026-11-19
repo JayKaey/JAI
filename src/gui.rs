@@ -912,16 +912,14 @@ pub(crate) fn for_test_session(builder: egui::ViewportBuilder) -> egui::Viewport
         let scale = points_scale();
         return builder.with_position(pos2(x as f32, y as f32) / scale).with_inner_size(vec2(w as f32, h as f32) / scale);
     }
-    if !crate::platform::in_test_session() {
-        // A window with no place of its own opens on the monitor Sir is using, not always on
-        // his first one. (His choice of 2026-11-13: "Windows open where you work".)
-        return match builder.position.is_none().then(|| place_where_sir_works(&builder)).flatten() {
-            Some(at) => builder.with_position(at),
-            None => builder,
-        };
-    }
-    match (builder.position, start_monitor_points()) {
-        (None, Some(m)) => {
+    // A window with no place of its own opens on the monitor Sir is using, not always on his
+    // first one, and beside the core there. (His choice of 2026-11-13: "Windows open where
+    // you work".)
+    let placed = builder.position.is_none().then(|| place_where_sir_works(&builder)).flatten();
+    match (placed, builder.position, start_monitor_points()) {
+        (Some(at), ..) => builder.with_position(at),
+        // (A scripted session whose monitor is not known yet: its middle, never Sir's screen.)
+        (None, None, Some(m)) => {
             let size = builder.inner_size.unwrap_or(vec2(800.0, 600.0)).min(m.size());
             builder.with_position(m.center() - size / 2.0)
         }
@@ -938,12 +936,70 @@ fn points_scale() -> f32 {
     (scale * context().map_or(1.0, |ctx| ctx.zoom_factor())).max(0.1)
 }
 
-/// Where a window of JAI's own that has no place yet opens (points): in the middle of the
-/// monitor Sir is using, a step aside for each window of his that opened just before; beside a
-/// game, on a monitor the game is not on ("A game is left alone"). The same place for as long
-/// as the window is asked for (by its title), so a window Sir has moved is never pulled back.
+/// Where the board's own top-left corner is on the screen (points); the HUD says so every
+/// frame. With it the core has a place among his windows (`core_on_screen`).
+static BOARD_ORIGIN: Mutex<Option<Pos2>> = Mutex::new(None);
+
+/// The core on the screen (points), with the room its light takes.
+fn core_on_screen() -> Option<Rect> {
+    let origin = (*lock(&BOARD_ORIGIN))?;
+    crate::hud_dock::orb().map(|core| core.translate(origin.to_vec2()))
+}
+
+/// Where a new window of `size` opens on the monitor whose work area is `work`: about the
+/// core when he stands on that monitor, beside him on his circle, the emptier side first, off
+/// the windows that stand there already (`holo_stage::slot`); else at `middle`.
+fn opening_spot(work: Rect, size: Vec2, core: Option<Rect>, taken: &[Rect], middle: Pos2) -> Pos2 {
+    use crate::holo_stage::{slot, GAP};
+    let Some(core) = core.filter(|core| work.contains(core.center())) else { return middle };
+    // Out on his second circle where the screen has the room: the leader that ties the window
+    // to him has a length to show there (hard against his first circle it has none).
+    let far = Rect::from_center_size(core.center(), core.size() * 1.5);
+    let with_core: Vec<Rect> = taken.iter().copied().chain([core]).collect();
+    slot(work, size, far, taken, GAP)
+        .or_else(|| slot(work, size, core, taken, GAP))
+        // No room left about him: any free spot off him and off the others.
+        .or_else(|| crate::hud_dock::find_non_overlapping_slot(work, size, &with_core, GAP))
+        // No free spot at all: over the windows beside him, never on him.
+        .or_else(|| stacked_beside(work, size, core, taken))
+        .unwrap_or(middle)
+}
+
+/// A place beside the core for a window that finds no free one: on his emptier flank, over
+/// the windows that stand there, a step outwards for each and below the header of the lowest,
+/// so that every header stays in view. None for a window too wide to stand beside him at all.
+fn stacked_beside(work: Rect, size: Vec2, core: Rect, taken: &[Rect]) -> Option<Pos2> {
+    let c = core.center();
+    let left = taken.iter().filter(|t| t.center().x < c.x).count();
+    let sides = if left < taken.len() - left { [-1.0, 1.0] } else { [1.0, -1.0] };
+    let top = (c.y - size.y / 2.0).clamp(work.top(), (work.bottom() - size.y).max(work.top()));
+    sides.into_iter().find_map(|side: f32| {
+        let x = if side > 0.0 { (core.right() + crate::holo_stage::GAP).min(work.right() - size.x) } else { (core.left() - crate::holo_stage::GAP - size.x).max(work.left()) };
+        if Rect::from_min_size(pos2(x, top), size).intersects(core) {
+            return None;
+        }
+        let there: Vec<&Rect> = taken.iter().filter(|t| (t.center().x - c.x) * side > 0.0).collect();
+        let below = there.iter().map(|t| t.top() + WINDOW_TITLE_ROW + 4.0).fold(top, f32::max);
+        Some(pos2((x + side * 34.0 * there.len() as f32).clamp(work.left(), work.right() - size.x), below.min((work.bottom() - size.y).max(work.top()))))
+    })
+}
+
+/// A stage panel (the radar, the disk map, the Earth) whose window stands over the middle of
+/// the board: the core makes room for it, as it did for such a panel on the board.
+fn stage_window_covers_centre(ctx: &egui::Context, screen: Rect) -> bool {
+    let Some(board) = ctx.input(|i| i.viewport().inner_rect) else { return false };
+    let zone = crate::hud_dock::centre_safe_zone(screen);
+    let motions = lock(&DETACHED_MOTIONS);
+    crate::hud_dock::STAGE_BLOCKS.iter().map(|id| viewport_for_block(id)).any(|window| !motions.leaving.contains_key(&window) && motions.rects.get(&window).is_some_and(|rect| rect.translate(-board.min.to_vec2()).intersects(zone)))
+}
+
+/// Where a window of JAI's own that has no place yet opens (points): on the monitor Sir is
+/// using, beside the core when he stands there (`opening_spot`), else in its middle, a step
+/// aside for each window of his that opened just before; beside a game, on a monitor the game
+/// is not on ("A game is left alone"). The same place for as long as the window is asked for
+/// (by its title), so a window Sir has moved is never pulled back.
 fn place_where_sir_works(builder: &egui::ViewportBuilder) -> Option<Pos2> {
-    static PLACES: std::sync::LazyLock<Mutex<std::collections::HashMap<String, (Pos2, Instant)>>> = std::sync::LazyLock::new(Default::default);
+    static PLACES: std::sync::LazyLock<Mutex<std::collections::HashMap<String, (Rect, Instant)>>> = std::sync::LazyLock::new(Default::default);
     let title = builder.title.clone()?;
     let mut places = lock(&PLACES);
     let now = Instant::now();
@@ -959,18 +1015,29 @@ fn place_where_sir_works(builder: &egui::ViewportBuilder) -> Option<Pos2> {
     });
     if let Some((at, seen)) = places.get_mut(&title) {
         *seen = now;
-        return Some(*at);
+        return Some(at.min);
     }
     let monitors = crate::monitors::recent();
     // (monitor_in_use already keeps off a game's monitor: a second swap here went back onto it.)
     let on = crate::wallpaper::monitor_in_use(&monitors)?;
     let scale = points_scale();
-    let work = Rect::from_min_max(pos2(on.work[0] as f32, on.work[1] as f32) / scale, pos2(on.work[2] as f32, on.work[3] as f32) / scale);
+    let points = |r: [i32; 4]| Rect::from_min_max(pos2(r[0] as f32, r[1] as f32) / scale, pos2(r[2] as f32, r[3] as f32) / scale);
+    let work = points(on.work);
     let size = builder.inner_size.unwrap_or(vec2(800.0, 600.0)).min(work.size());
     let step = (places.len() % 6) as f32 - 1.0;
-    let at = work.center() - size / 2.0 + vec2(34.0, 30.0) * step;
-    let at = pos2(at.x.clamp(work.left(), (work.right() - size.x).max(work.left())), at.y.clamp(work.top(), (work.bottom() - size.y).max(work.top())));
-    places.insert(title, (at, now));
+    let middle = work.center() - size / 2.0 + vec2(34.0, 30.0) * step;
+    let middle = pos2(middle.x.clamp(work.left(), (work.right() - size.x).max(work.left())), middle.y.clamp(work.top(), (work.bottom() - size.y).max(work.top())));
+    // What stands there already: his windows where they are now, and those placed a moment
+    // ago that have not shown themselves yet, where they will come up.
+    #[cfg(windows)]
+    let standing: Vec<(String, Rect)> = crate::own_windows::list().into_iter().map(|w| (w.title, points(w.rect))).collect();
+    #[cfg(not(windows))]
+    let standing: Vec<(String, Rect)> = Vec::new();
+    let taken: Vec<Rect> = places.iter().filter(|(placed, _)| !standing.iter().any(|(shown, _)| shown == *placed)).map(|(_, (rect, _))| *rect).chain(standing.iter().map(|(_, rect)| *rect)).collect();
+    // ("Overlap the windows": always the step aside in the middle.)
+    let at = if crate::hud_dock::overlap_allowed() { middle } else { opening_spot(work, size, core_on_screen(), &taken, middle) };
+    info!("[HUD] '{title}' opens at {:.0},{:.0}, {}", at.x, at.y, if at == middle { "in the middle of the monitor in use" } else { "about the core" });
+    places.insert(title, (Rect::from_min_size(at, size), now));
     Some(at)
 }
 
@@ -4156,10 +4223,12 @@ impl HudApp {
 
     /// He as the desktop's background (`wallpaper`): the board's window is handed to the
     /// desktop once it stands, plain, where it is to be, and taken back when the switch goes
-    /// off. A refusal puts the switch back and says why. While he is the background every view
-    /// of his is a window of its own (`hud_dock::all_own`).
+    /// off. A refusal puts the switch back and says why.
     fn sync_background(&mut self, ctx: &egui::Context, iface: &InterfaceSettings) {
         use crate::wallpaper::Standing;
+        // Every view of his is a window of its own, in every mode, wherever the HUD has windows
+        // to give (`hud_dock::all_own`).
+        crate::hud_dock::set_all_own(!ctx.embed_viewports());
         let rect = (iface.desktop_background && !iface.orb_mode && self.hwnd != 0 && !ctx.embed_viewports()).then(|| background_rect(iface)).flatten();
         let now = crate::wallpaper::tick(self.hwnd, rect, ctx.native_pixels_per_point().unwrap_or(1.0), crate::hud_feel::game_in_front());
         if now == self.backdrop {
@@ -4170,7 +4239,6 @@ impl HudApp {
             self.app.config().update(|c| c.interface.desktop_background = false);
         }
         self.backdrop = now;
-        crate::hud_dock::set_all_own(self.as_background());
         if !self.as_background() {
             self.corner_orb = Default::default();
             self.orb_out_on = None;
@@ -4575,7 +4643,8 @@ impl HudApp {
             // of the way; any other window never moves it (windows open around it, and one Sir
             // drags over it simply covers it). The core sphere docks it on its own.
             let board_rects = crate::hud_board::visible_rects(area);
-            self.centre_covered = iface.orb_aside || crate::hud_dock::centre_covered(screen, &board_rects) || crate::hud_dock::stage_covers_centre(screen);
+            // (As the desktop's background a covered emblem has its orb in the corner instead.)
+            self.centre_covered = iface.orb_aside || crate::hud_dock::centre_covered(screen, &board_rects) || crate::hud_dock::stage_covers_centre(screen) || (!self.as_background() && stage_window_covers_centre(ctx, screen));
             // The board fades out while the core sphere fades in over it.
             let core_t = ctx.animate_bool_with_time(egui::Id::new("hud_core_view"), self.core_open, crate::holo_motion::ARRIVE);
             if core_t < 1.0 {
@@ -4639,6 +4708,7 @@ impl HudApp {
             }
             self.emblem_spot = (frame.centre, frame.radius, frame.rest);
             *lock(&CANVAS_ORIGIN) = Some((frame.centre, frame.rest, frame.dock, self.reactor.emblem_voice()));
+            *lock(&BOARD_ORIGIN) = ctx.input(|i| i.viewport().inner_rect).map(|r| r.min);
             // (Said once, a moment after the start: where the emblem stands, in the log.)
             if self.frames == 150 {
                 info!("[HUD] Emblem at {:.0},{:.0} (radius {:.0}) on a screen of {:.0}×{:.0} at {:.0},{:.0}", frame.centre.x, frame.centre.y, frame.radius, screen.width(), screen.height(), screen.left(), screen.top());
@@ -4809,7 +4879,8 @@ impl HudApp {
         if self.as_background() && self.boot.is_none() {
             // (Beside the emblem on the monitor it stands on.)
             self.day_panel(ctx, self.emblem.room_at(home, frame.centre), frame.centre, frame.radius);
-            if iface.desk_clock {
+            // (Not while the core view has the middle: the clock stood on the sphere.)
+            if iface.desk_clock && !self.core_open {
                 self.desk_clock(ctx, iface, home, &frame);
             }
         }
@@ -5146,9 +5217,6 @@ impl HudApp {
                 if holo_ui::item_toggle(ui, label, *on).clicked() {
                     *on = !*on;
                 }
-            }
-            if item(ui, "Dock all windows inside") {
-                crate::hud_dock::dock_all();
             }
             if item(ui, "Tidy the windows") {
                 crate::hud_dock::retile_all(block_bounds(screen));
@@ -5532,16 +5600,13 @@ impl HudApp {
         }
         let speaking = m.cfg.as_ref().is_some_and(|c| c.response_mode == VoiceResponseMode::AlwaysSpeak);
         let mut act = ConsoleActions::default();
-        if crate::hud_dock::is_detached(CONSOLE_ID) {
-            // (Closed while it is a window of its own: it plays its exit, then goes.)
+        if crate::hud_dock::all_own() {
+            // (Closed: it plays its exit, then goes.)
             if !detached_keep(ctx, ViewportId::from_hash_of("jai_text_console"), self.console_open) {
                 return;
             }
             self.console_at_edge = false;
-            let mut builder = egui::ViewportBuilder::default().with_title("Text Console — J.A.I.").with_app_id("jai").with_inner_size([CONSOLE_WIDTH, 640.0]).with_min_inner_size([320.0, 260.0]).with_decorations(false);
-            if let Some((at, size)) = detached_placement(ctx, CONSOLE_ID) {
-                builder = builder.with_position(at).with_inner_size(size);
-            }
+            let builder = egui::ViewportBuilder::default().with_title("Text Console — J.A.I.").with_app_id("jai").with_inner_size([CONSOLE_WIDTH, 640.0]).with_min_inner_size([320.0, 260.0]).with_decorations(false);
             let builder = for_test_session(builder);
             // Asked for to type in (his key, a click on the corner orb): once its window is
             // up it takes the keyboard. (His windows come up without it; this one is the
@@ -5561,7 +5626,6 @@ impl HudApp {
                 }
                 egui::CentralPanel::default().frame(Frame::none().fill(block_slate()).inner_margin(Margin::same(12.0))).show(ctx, |ui| {
                     ui.set_min_size(ui.available_size());
-                    window_ground(ui);
                     self.console_body(ui, ctx, m, speaking, true, &mut act);
                 });
                 paint_window_border(ctx);
@@ -5613,17 +5677,9 @@ impl HudApp {
         }
         if act.close {
             self.console_open = false;
-            crate::hud_dock::dock(CONSOLE_ID);
         }
         if act.pin {
             self.console_pinned = !self.console_pinned;
-        }
-        if act.detach {
-            if crate::hud_dock::is_detached(CONSOLE_ID) {
-                crate::hud_dock::dock(CONSOLE_ID);
-            } else {
-                crate::hud_dock::detach(CONSOLE_ID);
-            }
         }
         if let Some(mode) = act.mode {
             self.command(HudCommand::SetResponseMode { mode });
@@ -5637,25 +5693,19 @@ impl HudApp {
     /// The console's content, in the HUD or in its own window (`detached`: the title row moves
     /// the window).
     fn console_body(&mut self, ui: &mut Ui, ctx: &egui::Context, m: &HudModel, speaking: bool, detached: bool, act: &mut ConsoleActions) {
-        ui.horizontal(|ui| {
-            let title = ui.add(egui::Label::new(RichText::new("TEXT // CONSOLE").font(strip_font()).color(crate::hud_board::active_colour())).sense(Sense::drag()));
-            if detached && title.drag_started() {
-                ctx.send_viewport_cmd(ViewportCommand::StartDrag);
-            }
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let pinned = self.console_pinned;
-                let chip = |ui: &mut Ui, text: &str, on: bool| holo_ui::key_on(ui, text, on);
-                act.close |= chip(ui, "CLOSE", false).on_hover_text("Close (Esc)").clicked();
-                // (As the desktop's background it is a window for good, and "in front" means
-                // above other programs' windows.)
-                if crate::hud_dock::all_own() {
-                    on_top_key(ui, |ui, lit| chip(ui, "TOP", lit));
-                } else {
-                    act.detach |= chip(ui, if detached { "DOCK" } else { "DETACH" }, false).on_hover_text("Its own window / back inside the HUD").clicked();
-                    act.pin |= chip(ui, "PIN", pinned).on_hover_text("Keep it in front (Esc leaves it open)").clicked();
-                }
+        // In its window it wears the bar every window of his wears; on the board a row of its own.
+        if detached {
+            act.close |= detached_bar(ui, ctx, CONSOLE_ID, "Text // console");
+        } else {
+            ui.horizontal(|ui| {
+                ui.add(egui::Label::new(RichText::new("TEXT // CONSOLE").font(strip_font()).color(crate::hud_board::active_colour())).sense(Sense::drag()));
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    let pinned = self.console_pinned;
+                    act.close |= holo_ui::key_on(ui, "CLOSE", false).on_hover_text("Close (Esc)").clicked();
+                    act.pin |= holo_ui::key_on(ui, "PIN", pinned).on_hover_text("Keep it in front (Esc leaves it open)").clicked();
+                });
             });
-        });
+        }
         ui.add_space(4.0);
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
@@ -5813,7 +5863,7 @@ impl HudApp {
                                 ui.label(RichText::new(who).font(strip_font()).color(colour));
                                 let ink = if line.faded { strip_muted() } else { strip_ink() };
                                 ui.add(egui::Label::new(RichText::new(&line.text).size(13.0).color(ink)).wrap());
-                                if line.who == Speaker::Jai && crate::holo_ui::key(ui, "DETACH").on_hover_text("Open in its own window").clicked() {
+                                if line.who == Speaker::Jai && crate::holo_ui::key(ui, "OPEN").on_hover_text("This reply in a window of its own").clicked() {
                                     open_window = Some(line.text.clone());
                                 }
                             });
@@ -5952,13 +6002,13 @@ impl HudApp {
     /// The navigation dock (and "go to the sim lab" / "home view"): `toggle` (a click) closes a
     /// view that is already up; a spoken request only ever opens it.
     fn switch_view(&mut self, mode: crate::hud_dock::HudViewMode, toggle: bool) {
-        use crate::hud_dock::{is_detached, HudViewMode as V};
+        use crate::hud_dock::{all_own, HudViewMode as V};
         info!("[HUD] Navigation: {}{}", mode.id(), if toggle { " (click)" } else { "" });
         *lock(&VIEW_ZOOM) = Some(Instant::now());
         let tools = self.app.tools().clone();
         let lab = &tools.stark.simlab;
         let engine = &tools.widgets;
-        let in_app_sims: Vec<String> = lab.list().into_iter().map(|s| s.id).filter(|id| !is_detached(&format!("sim:{id}"))).collect();
+        let in_app_sims: Vec<String> = lab.list().into_iter().map(|s| s.id).filter(|_| !all_own()).collect();
         let window_open = |id: &str| engine.windows().iter().any(|w| w.id == id);
         match mode {
             V::Home => {
@@ -5969,11 +6019,11 @@ impl HudApp {
                 if crate::hud_board::is_active() {
                     crate::hud_board::sign_off();
                 }
-                // The in-app tool blocks close; detached OS windows stay where Sir put them.
+                // Blocks on the board close; his windows stay where Sir put them.
                 for id in &in_app_sims {
                     lab.close(id);
                 }
-                for w in engine.windows().into_iter().filter(|w| !is_detached(&w.id)) {
+                for w in engine.windows().into_iter().filter(|_| !all_own()) {
                     engine.window_closed_by_user(&w.id);
                 }
                 pairing_view::close_in_app();
@@ -6255,62 +6305,6 @@ fn display_hz() -> f32 {
     HZ.load(Ordering::Relaxed) as f32
 }
 
-/// A detached window's first position and size: exactly where its block sat in the HUD (screen
-/// points), so popping it out never throws it onto another monitor.
-pub(super) fn detached_placement(ctx: &egui::Context, id: &str) -> Option<(Pos2, Vec2)> {
-    // Where each detached window first went and the step it took aside, kept while detached
-    // (worked out per frame, a window dragged away would pull the other back).
-    static FIRST: std::sync::LazyLock<Mutex<std::collections::HashMap<String, (Pos2, Vec2)>>> = std::sync::LazyLock::new(Default::default);
-    // ("Move the radar to my second monitor" on a HUD that covers one: where it was sent.)
-    let wanted = match crate::window_commands::os_placement(id) {
-        Some(rect) => {
-            placed_by_order();
-            rect
-        }
-        None => {
-            let origin = ctx.input(|i| i.viewport().inner_rect.map(|r| r.min))?;
-            let at = crate::hud_dock::block_rect(id)?.translate(origin.to_vec2());
-            // A second view popped out from the spot the first left steps aside (2026-11-09: the
-            // 3D model covered the pictures).
-            let mut first = lock(&FIRST);
-            first.retain(|k, _| crate::hud_dock::is_detached(k));
-            let step = match first.get(id) {
-                Some((_, step)) => *step,
-                None => {
-                    let mut step = Vec2::ZERO;
-                    for _ in 0..8 {
-                        if !first.values().any(|(p, s)| (*p + *s - (at.min + step)).length() < 12.0) {
-                            break;
-                        }
-                        step += vec2(34.0, 30.0);
-                    }
-                    first.insert(id.to_string(), (at.min, step));
-                    step
-                }
-            };
-            at.translate(step)
-        }
-    };
-    let placed = clamp_to_work_area(wanted, &crate::monitors::recent(), ctx.pixels_per_point());
-    Some((placed.min, placed.size()))
-}
-
-/// `rect` (screen points) moved, and shrunk if it must be, into the work area of the monitor its
-/// middle is on (else the nearest one): a window of its own never hangs off a screen's edge or
-/// under the taskbar, where its border and its title row would be lost.
-pub(crate) fn clamp_to_work_area(rect: Rect, monitors: &[crate::monitors::Monitor], ppp: f32) -> Rect {
-    let ppp = ppp.max(0.1);
-    let area = monitors
-        .iter()
-        .map(|m| Rect::from_min_max(pos2(m.work[0] as f32, m.work[1] as f32) / ppp, pos2(m.work[2] as f32, m.work[3] as f32) / ppp))
-        .filter(|r| r.is_positive())
-        .min_by(|a, b| a.distance_sq_to_pos(rect.center()).total_cmp(&b.distance_sq_to_pos(rect.center())));
-    let Some(area) = area else { return rect };
-    let size = rect.size().min(area.size());
-    let min = pos2(rect.min.x.clamp(area.min.x, area.max.x - size.x), rect.min.y.clamp(area.min.y, area.max.y - size.y));
-    Rect::from_min_size(min, size)
-}
-
 // ----------------------------------------------------------- arranging his views on command ----
 // `window_commands` says what Sir wants ("move it to the middle", "full screen the Earth",
 // "minimise it", "move the radar to my second monitor", "put them side by side"); here, in the
@@ -6328,7 +6322,7 @@ fn viewport_for_block(id: &str) -> ViewportId {
         "theme_studio" => ViewportId::from_hash_of("jai_theme_studio"),
         "discord_audio" => ViewportId::from_hash_of("jai_discord_audio"),
         "pairing" => ViewportId::from_hash_of("jai_satellite_pairing"),
-        // ("Dock it back" found no 3D window: these had no entry.)
+        // (An order for the 3D window found none: these had no entry.)
         "model3d" => ViewportId::from_hash_of("jai_model3d"),
         "departures" => ViewportId::from_hash_of("jai_departures"),
         "image_viewer" => ViewportId::from_hash_of("jai_image_viewer"),
@@ -6446,7 +6440,7 @@ fn arrange(ctx: &egui::Context, a: &crate::window_commands::Arrangement) -> bool
                 return true;
             }
             dock::restore(&id);
-            matches!(a.action, Action::Restore | Action::Dock)
+            a.action == Action::Restore
         }
         Whereabouts::Board => arrange_block(ctx, &id, other.as_deref(), a).unwrap_or(true),
         Whereabouts::Window => arrange_window(ctx, &id, other.as_deref(), a).unwrap_or(true),
@@ -6477,7 +6471,6 @@ fn arrange_block(ctx: &egui::Context, id: &str, other: Option<&str>, a: &crate::
     let current = full.unwrap_or(rect);
     let regions = block_regions(ctx);
     let area = region_at(&regions, current.center());
-    let still = windows_still(ctx);
     match a.action {
         Action::Move | Action::Resize => {
             let position = a.position.or((a.action == Action::Move && a.size.is_none()).then_some(wc::Position::Centre));
@@ -6516,14 +6509,6 @@ fn arrange_block(ctx: &egui::Context, id: &str, other: Option<&str>, a: &crate::
         Action::Minimize => {
             dock::minimize(id);
         }
-        Action::Detach => {
-            if still {
-                dock::detach(id);
-            } else {
-                dock::begin_detach(id);
-            }
-        }
-        Action::Dock => return None,
         Action::ToMonitor => return Some(block_to_monitor(ctx, id, rect, a)),
         Action::SideBySide | Action::Swap => {
             let other = other.filter(|o| *o != id)?;
@@ -6533,11 +6518,7 @@ fn arrange_block(ctx: &egui::Context, id: &str, other: Option<&str>, a: &crate::
                     dock::restore(other);
                     return Some(false);
                 }
-                Whereabouts::Window => {
-                    dock::dock(other);
-                    return Some(false);
-                }
-                Whereabouts::Closed => return None,
+                Whereabouts::Window | Whereabouts::Closed => return None,
             }
             let other_rect = dock::block_rect(other)?;
             if dock::fullscreen_block().is_some_and(|f| f == id || f == other) {
@@ -6558,9 +6539,9 @@ fn arrange_block(ctx: &egui::Context, id: &str, other: Option<&str>, a: &crate::
     Some(true)
 }
 
-/// "Move the radar to my second monitor": on a HUD that spans that monitor the block glides over
-/// to its part of the board; otherwise it becomes a window of its own in the middle of that
-/// monitor (after its exit). False: not yet.
+/// "Move the radar to my second monitor" for a block on the board: on a HUD that spans that
+/// monitor it glides over to its part of the board (a board on one screen has nowhere to send
+/// it). False: not yet.
 fn block_to_monitor(ctx: &egui::Context, id: &str, rect: Rect, a: &crate::window_commands::Arrangement) -> bool {
     let Some(monitor) = a.monitor.as_ref() else { return true };
     let monitors = crate::monitors::recent();
@@ -6577,15 +6558,6 @@ fn block_to_monitor(ctx: &egui::Context, id: &str, rect: Rect, a: &crate::window
     let part = points(target.rect).translate(-origin);
     if let Some(region) = block_regions(ctx).into_iter().find(|r| part.contains(r.center())) {
         send_block(ctx, id, rect, crate::window_commands::fit(Rect::from_center_size(region.center(), rect.size()), region));
-        return true;
-    }
-    // Else a window of its own there.
-    let work = points(target.work);
-    crate::window_commands::set_os_placement(id, crate::window_commands::fit(Rect::from_center_size(work.center(), rect.size()), work));
-    if windows_still(ctx) {
-        crate::hud_dock::detach(id);
-    } else {
-        crate::hud_dock::begin_detach(id);
     }
     true
 }
@@ -6621,11 +6593,6 @@ fn arrange_window(ctx: &egui::Context, id: &str, other: Option<&str>, a: &crate:
             } else if info.maximized == Some(true) {
                 send(ViewportCommand::Maximized(false));
             }
-        }
-        Action::Detach => return None,
-        Action::Dock => {
-            wc::note_window_fullscreen(id, false);
-            dock::dock(id);
         }
         Action::Move | Action::Resize | Action::ToMonitor | Action::SideBySide | Action::Swap => {
             let outer = info.outer_rect?;
@@ -6665,12 +6632,7 @@ fn arrange_window(ctx: &egui::Context, id: &str, other: Option<&str>, a: &crate:
                             dock::restore(other);
                             return Some(false);
                         }
-                        // (One on the board, one in a window: both on the board.)
-                        Whereabouts::Board => {
-                            dock::dock(id);
-                            return Some(false);
-                        }
-                        Whereabouts::Closed => return None,
+                        Whereabouts::Board | Whereabouts::Closed => return None,
                     }
                     let other_viewport = viewport_for_block(other);
                     let other_info = ctx.input(|i| i.raw.viewports.get(&other_viewport).cloned())?;
@@ -7074,7 +7036,6 @@ pub fn frame_summary(costs: &[f64]) -> Option<(f64, f64, f64)> {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(super) struct BlockAction {
     pub close: bool,
-    pub detach: bool,
 }
 
 /// How many sent lines the console remembers (across restarts too).
@@ -7168,7 +7129,6 @@ struct ConsoleActions {
     mode: Option<VoiceResponseMode>,
     close: bool,
     pin: bool,
-    detach: bool,
 }
 
 /// The text console's id among the HUD's windows.
@@ -7398,8 +7358,8 @@ fn keep_above_hud(ctx: &egui::Context) {
 }
 
 /// A piece of the board (a block of a report, the column of his system blocks) in a window of
-/// its own, while he is the desktop's background: no frame of Windows', none of his bars (the
-/// piece wears its own header), his icon, a key in the taskbar and a place in Alt+Tab. It
+/// its own: no frame of Windows', none of his bars (the piece wears its own header), his
+/// icon, and as the desktop's background a key in the taskbar and a place in Alt+Tab. It
 /// comes up at `place` (screen points) and is Sir's to move, to size and to put in front of
 /// other programs from then on; `body` draws it and may start a drag of the window
 /// (`ViewportCommand::StartDrag`). Never where the HUD has no windows to give
@@ -7414,17 +7374,19 @@ pub(crate) fn piece_window(ctx: &egui::Context, viewport: ViewportId, title: &st
         closed |= ctx.input(|i| i.viewport().close_requested());
         let Some(body) = body.take() else { return };
         egui::CentralPanel::default().frame(Frame::none().fill(window_void())).show(ctx, body);
+        crate::live_shots::tick(ctx);
         HudApp::resize_grips(ctx);
         esc_closes_window(ctx);
         reveal_when_drawn(ctx);
+        // (Over the fullscreen board it must stay above it, as his other windows do.)
+        keep_above_hud(ctx);
     });
     closed
 }
 
-/// A block of the board's own that floats over it (the history, the camera): an area on the
-/// board at `at`, or, while he is the desktop's background, a window of its own of `size`
-/// that comes up there and is moved by a drag on its ground. True when Sir closed that window
-/// through Windows itself.
+/// A view of the board's own (the history, the camera): a window of its own of `size` that
+/// comes up at `at` and is moved by a drag on its ground (an area on the board in a session
+/// without windows). True when Sir closed that window through Windows itself.
 fn floating_block(ctx: &egui::Context, id: &str, title: &str, at: Pos2, size: Vec2, body: impl FnOnce(&mut Ui)) -> bool {
     if !pieces_in_windows(ctx) {
         egui::Area::new(egui::Id::new(id)).default_pos(at).order(egui::Order::Foreground).show(ctx, body);
@@ -7443,10 +7405,10 @@ pub(crate) fn piece_window_gone(viewport: ViewportId) {
     lock(&DETACHED_MOTIONS).forget(viewport);
 }
 
-/// Whether the board's pieces stand in windows of their own: while he is the desktop's
-/// background, where the HUD has windows to give.
+/// Whether the board's pieces stand in windows of their own: wherever the HUD has windows to
+/// give (all but an offscreen session).
 pub(crate) fn pieces_in_windows(ctx: &egui::Context) -> bool {
-    crate::wallpaper::in_use() && !ctx.embed_viewports()
+    !ctx.embed_viewports()
 }
 
 /// Where the point `at` of the board (its own points) is on the screen (points).
@@ -7462,16 +7424,36 @@ fn reveal_when_drawn(ctx: &egui::Context) {
     if viewport == ViewportId::ROOT || ctx.cumulative_pass_nr() < 1 {
         return;
     }
+    let stands = ctx.input(|i| i.viewport().inner_rect);
     let mut motions = lock(&DETACHED_MOTIONS);
     if motions.revealed.insert(viewport) {
         ctx.send_viewport_cmd(ViewportCommand::Visible(true));
         info!("[HUD] A window of its own shows itself, its first frame drawn ({viewport:?})");
     }
+    // Where it stands now: the board ties it to the core with a leader, and draws that anew
+    // when the window has moved.
+    if let Some(rect) = stands {
+        if motions.rects.insert(viewport, rect) != Some(rect) {
+            ctx.request_repaint_of(ViewportId::ROOT);
+        }
+    }
 }
 
-/// The top row of a borderless detached window: its title (drag it to move the window) and
-/// `[ X ]`; true when Sir closed it (once its exit has played).
-pub(super) fn detached_title_bar(ui: &mut Ui, ctx: &egui::Context, title: &str) -> bool {
+/// Where his windows stand, in the board's own points: those on the board's screen that are
+/// not on their way out. (In each window's own points: on a monitor of another scale than the
+/// board's a window is not on the board's screen.)
+fn own_window_rects(ctx: &egui::Context) -> Vec<Rect> {
+    let Some(board) = ctx.input(|i| i.viewport().inner_rect) else { return Vec::new() };
+    let motions = lock(&DETACHED_MOTIONS);
+    let mut rects: Vec<Rect> = motions.rects.iter().filter(|(viewport, _)| !motions.leaving.contains_key(viewport)).map(|(_, rect)| rect.translate(-board.min.to_vec2())).filter(|rect| rect.intersects(Rect::from_min_size(Pos2::ZERO, board.size()))).collect();
+    // (In one order every frame: a leader drawn over another would flicker.)
+    rects.sort_by(|a, b| a.min.x.total_cmp(&b.min.x).then(a.min.y.total_cmp(&b.min.y)));
+    rects
+}
+
+/// The top row of a view's own window (`detached_bar`); `id` is the view's, for its lamp. True
+/// when Sir closed it (once its exit has played).
+pub(super) fn detached_title_bar(ui: &mut Ui, ctx: &egui::Context, id: &str, title: &str) -> bool {
     // In a window of its own it is still one of his views, known to the dock by its title:
     // "close the feature lab" and "close all windows" mean it too (`detached_keep` sees to
     // that from the board's frames; this window's own may be seconds apart). Seen live
@@ -7479,7 +7461,7 @@ pub(super) fn detached_title_bar(ui: &mut Ui, ctx: &egui::Context, title: &str) 
     // Feature Lab, the mixer or the theme studio in a window closed by their key and by no
     // word, and as the desktop's background they always stand in one.
     lock(&DETACHED_MOTIONS).named.entry(ctx.viewport_id()).or_insert_with(|| (format!("window:{title}"), title.to_string()));
-    detached_bar(ui, ctx, title, false).0
+    detached_bar(ui, ctx, id, title)
 }
 
 /// The ground of a window of his own moves it: a drag wherever nothing of its content takes
@@ -7539,31 +7521,54 @@ fn on_top_key(ui: &mut Ui, draw: impl FnOnce(&mut Ui, bool) -> egui::Response) {
     }
 }
 
-/// The top row of a borderless detached window: its title, `[ CLOSE ]`, with `dock` a
-/// `[ DOCK ]` key that brings the view back onto the board, and as the desktop's background
-/// `[ TOP ]`. A drag on the row (on any bare ground of the window) moves the window. Returns
-/// (Sir closed it, once its exit has played; he asked it back onto the board).
-fn detached_bar(ui: &mut Ui, ctx: &egui::Context, title: &str, dock: bool) -> (bool, bool) {
-    let (mut clicked, mut docked) = (false, false);
+/// The start of the top row of a window of his own, as every panel wears it: the index tab
+/// in the window's corner (its number among his open windows), the title in wide capitals,
+/// cut to leave `keys` of the row free, and the lamp of view `id`.
+pub(super) fn bar_title(ui: &mut Ui, ctx: &egui::Context, id: &str, title: &str, keys: f32) {
+    let viewport = ctx.viewport_id();
+    let number = {
+        let mut motions = lock(&DETACHED_MOTIONS);
+        motions.opened(viewport, ctx.cumulative_pass_nr());
+        motions.barred.insert(viewport);
+        motions.number(viewport)
+    };
+    let theme = crate::holo::theme();
+    // The tab stands in the window's own corner, outside the room its content has.
+    let shell = ui.painter().with_clip_rect(ctx.screen_rect());
+    let digits = crate::holo::galley(&shell, crate::holo::Face::Label, &format!("{number:02}"), 8.5, Color32::BLACK);
+    let tab = Rect::from_min_size(ctx.screen_rect().min, vec2(digits.size().x + 16.0, 17.0));
+    shell.rect_filled(tab, Rounding::ZERO, theme.accent());
+    shell.galley(pos2(tab.left() + 8.0, tab.center().y - digits.size().y * 0.5), digits, Color32::BLACK);
+    ui.add_space((tab.right() + 10.0 - ui.cursor().left()).max(0.0));
+    // (Its letters are not for marking: a drag on them moves the window like the rest of the
+    // row.)
+    let lettered = crate::holo_block::fitted_title(ui.painter(), title, ts(14.0), theme.ink(), (ui.available_width() - keys).max(60.0));
+    let name = ui.add(egui::Label::new(lettered).selectable(false));
+    let time = ctx.input(|i| i.time);
+    if crate::holo_block::paint_lamp(ui.painter(), pos2(name.rect.right() + 10.0, name.rect.center().y), crate::holo_block::lamp(id), time, 1.0) {
+        ctx.request_repaint_after(Duration::from_millis(50));
+    }
+}
+
+/// The top row of a window of his own: its number, title and lamp (`bar_title`),
+/// `[ CLOSE ]`, and as the desktop's background `[ TOP ]`. A drag on the row (on any bare
+/// ground of the window) moves the window. True when Sir closed it, once its exit has played.
+fn detached_bar(ui: &mut Ui, ctx: &egui::Context, id: &str, title: &str) -> bool {
+    let mut clicked = false;
     window_ground(ui);
+    let viewport = ctx.viewport_id();
     ui.horizontal(|ui| {
-        // (Its letters are not for marking: a drag on them moves the window like the rest of the row.)
-        ui.add(egui::Label::new(RichText::new(title.to_uppercase()).font(strip_font()).color(crate::hud_board::active_colour())).selectable(false));
+        bar_title(ui, ctx, id, title, 190.0);
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             let key = |ui: &mut Ui, text: &str, lit: bool| holo_ui::key_on(ui, text, lit);
             clicked = key(ui, "CLOSE", false).clicked();
-            if dock {
-                docked = key(ui, "DOCK", false).on_hover_text("Back onto the board").clicked();
-            }
             on_top_key(ui, |ui, lit| key(ui, "TOP", lit));
         });
     });
     if clicked && windows_still(ctx) {
-        return (true, false);
+        return true;
     }
-    let viewport = ctx.viewport_id();
     let mut motions = lock(&DETACHED_MOTIONS);
-    motions.opened(viewport, ctx.cumulative_pass_nr());
     if clicked && !motions.leaving.contains_key(&viewport) {
         motions.leaving.insert(viewport, (Instant::now(), true));
         crate::tts::play_cue(crate::jai_voice_dsp::Earcon::Dismiss);
@@ -7574,7 +7579,7 @@ fn detached_bar(ui: &mut Ui, ctx: &egui::Context, title: &str, dock: bool) -> (b
     if closed {
         motions.told.entry(viewport).or_insert_with(Instant::now);
     }
-    (closed, docked)
+    closed
 }
 
 /// The detached windows' entrances and exits, by viewport.
@@ -7600,6 +7605,11 @@ struct DetachedMotions {
     named: std::collections::HashMap<ViewportId, (String, String)>,
     /// Since when a window's bar has told its module that Sir closed it (its exit had played).
     told: std::collections::HashMap<ViewportId, Instant>,
+    /// Where each stands on the screen (points), as of its last frame: the board draws its
+    /// leader to it (`own_window_rects`).
+    rects: std::collections::HashMap<ViewportId, Rect>,
+    /// The windows that wear his bar: their index tabs number them (`number`).
+    barred: std::collections::HashSet<ViewportId>,
 }
 
 impl DetachedMotions {
@@ -7633,7 +7643,17 @@ impl DetachedMotions {
         self.leaving.get(&viewport).is_some_and(|(_, by_hand)| !by_hand || self.told.get(&viewport).is_some_and(|at| now.saturating_duration_since(*at) >= Duration::from_millis(400)))
     }
 
+    /// The number on this window's index tab: its place among his open windows with a bar,
+    /// in the order they came up, as the sheets of a drawing are numbered.
+    fn number(&self, viewport: ViewportId) -> usize {
+        let came = |v: &ViewportId| self.shown.get(v).map(|(_, at, _)| *at);
+        let Some(mine) = came(&viewport) else { return 1 };
+        1 + self.barred.iter().filter(|v| **v != viewport && !self.leaving.contains_key(v) && came(v).is_some_and(|at| at < mine)).count()
+    }
+
     fn forget(&mut self, viewport: ViewportId) {
+        self.rects.remove(&viewport);
+        self.barred.remove(&viewport);
         self.shown.remove(&viewport);
         self.leaving.remove(&viewport);
         self.revealed.remove(&viewport);
@@ -7807,24 +7827,21 @@ fn detached_motion(ctx: &egui::Context) -> WindowMotion {
     WindowMotion::of((opening < 1.0).then_some(opening), closing)
 }
 
-/// A tool view as a ROSE block inside the main HUD — the default for every view (Simulation Lab,
-/// telemetry, schedule, the QR link, JAI's markdown windows): `#050A10` slate, a 1 px
-/// `#2B7A9E` frame, white L-corner brackets, the title on the left and `[ DETACH ]` `[ X ]`
-/// on the right. Movable and resizable on the board; its rect is published so the emblem knows
-/// whether the centre is covered (`hud_dock::block_rects`).
+/// A view as a block on the board: what a session without windows of its own to give draws
+/// (a picture, a test, the headless verifier) where the real HUD opens a window. The panel's
+/// plate with its index tab, title, lamp and keys; movable and resizable on the board; its
+/// rect is published so the emblem knows whether the centre is covered
+/// (`hud_dock::block_rects`).
 pub(super) fn hud_block_window(ctx: &egui::Context, id: &str, title: &str, size: [f32; 2], body: impl FnOnce(&mut Ui)) -> BlockAction {
     let mut action = BlockAction::default();
-    // Closing ("close the feature lab", its [ CLOSE ], the menu, Ctrl+W), minimising ("minimise
-    // it") or detaching ("detach it", its [ DETACH ]): the block plays its exit, then leaves the
-    // board that way.
+    // Closing ("close the feature lab", its [ CLOSE ], the menu, Ctrl+W) or minimising
+    // ("minimise it"): the block plays its exit, then leaves the board that way.
     let fade = crate::hud_dock::closing_progress(id);
     let tray = crate::hud_dock::is_minimized(id);
     if fade.is_some_and(|t| t >= 1.0) || (tray && fade.is_some()) {
         // Off the board from this frame on (the emblem stops making room for it at once).
         crate::hud_dock::off_board(id);
-        if crate::hud_dock::take_detaching(id) {
-            action.detach = true;
-        } else if !crate::hud_dock::take_minimizing(id, title) && (tray || !crate::hud_dock::park(id, title)) {
+        if !crate::hud_dock::take_minimizing(id, title) && (tray || !crate::hud_dock::park(id, title)) {
             // (Closed from the tray, or for real: gone. Otherwise it waits in the tray, dim.)
             action.close = true;
         }
@@ -7835,11 +7852,6 @@ pub(super) fn hud_block_window(ctx: &egui::Context, id: &str, title: &str, size:
     if tray {
         action.close = crate::hud_dock::parked_out(id);
         return action;
-    }
-    // On the board (and not on its way out): a window of its own opens where it stands again,
-    // not where "move it to my second monitor" once sent it.
-    if fade.is_none() {
-        crate::window_commands::forget_os_placement(id);
     }
     // Opening: the entrance. (Offscreen renders draw every block at rest, as before.)
     let still = windows_still(ctx);
@@ -7963,11 +7975,7 @@ pub(super) fn hud_block_window(ctx: &egui::Context, id: &str, title: &str, size:
         let name = title.split(" // ").next().unwrap_or(title).trim().to_lowercase();
         let close_hint = format!("Close · say: \"close the {name}\" · Ctrl+W: the block under the pointer");
         let pin_hint = format!("Pinned, it stays through \"close the windows\" and keeps its place (Ctrl+P, or say \"pin the {name}\")");
-        let labels = [
-            ("CLOSE", false, close_hint.as_str()),
-            ("DETACH", false, "Open in its own window (say \"dock all windows\" to bring it back)"),
-            ("PIN", pinned, pin_hint.as_str()),
-        ];
+        let labels = [("CLOSE", false, close_hint.as_str()), ("PIN", pinned, pin_hint.as_str())];
         // (A narrow block keeps its title whole and lets its keys go, [ PIN ] first: the menu
         // and Ctrl+P still pin. The keys are quiet until the pointer is over their block.)
         // (Beside the title the row holds the index tab before it and the lamp after it.)
@@ -7976,13 +7984,7 @@ pub(super) fn hud_block_window(ctx: &egui::Context, id: &str, title: &str, size:
         let (key, keys_left) = crate::holo_ui::keys_at(ui, area.with("header"), row.right(), mid, &labels[..fit], content_alpha * (0.62 + 0.38 * using));
         match key {
             Some(0) => close_asked = true,
-            // The block plays its exit first; the new window comes up after it.
-            Some(1) if still => action.detach = true,
             Some(1) => {
-                info!("[HUD] '{id}': its [ DETACH ] asks it into a window of its own");
-                crate::hud_dock::begin_detach(id);
-            }
-            Some(2) => {
                 crate::hud_dock::toggle_pin(id);
             }
             _ => {}
@@ -8507,24 +8509,17 @@ pub(crate) fn text_block(ctx: &egui::Context, id: &str, title: &str, size: [f32;
     })
 }
 
-/// A block of the board for a module outside the GUI (`body` draws its content). Returns
-/// whether it was closed. Its `[ DETACH ]` makes it a window of its own with the same body
-/// (drawn inside the HUD's frame, so `body` may borrow what its caller holds), and that
-/// window's `[ DOCK ]` brings it back. (2026-11-13, Sir: "detaching windows doesn't work but
-/// it closes them": these blocks had the key and threw the detach away.)
+/// A view of a module outside the GUI (`body` draws its content) in a window of its own,
+/// drawn inside the HUD's frame, so `body` may borrow what its caller holds. Returns whether
+/// it was closed.
 pub(crate) fn block(ctx: &egui::Context, id: &str, title: &str, size: [f32; 2], body: impl FnOnce(&mut Ui)) -> bool {
     let viewport = ViewportId::from_hash_of(format!("jai_block_{id}"));
-    // (Where the HUD has no windows of its own to give, an offscreen session, every block
-    // stays on the board.)
+    // (Where the HUD has no windows of its own to give, an offscreen session, it is drawn as
+    // a block on the board.)
     if !crate::hud_dock::adopt(id) || ctx.embed_viewports() {
         crate::hud_dock::window_gone(id);
-        // (On the board: nothing of an earlier window of its own counts for the next one.)
         detached_keep(ctx, viewport, true);
-        let action = hud_block_window(ctx, id, title, size, body);
-        if action.detach {
-            crate::hud_dock::detach(id);
-        }
-        return action.close;
+        return hud_block_window(ctx, id, title, size, body).close;
     }
     detached_keep(ctx, viewport, true);
     let name = title.split("//").next().unwrap_or(title).trim();
@@ -8532,14 +8527,11 @@ pub(crate) fn block(ctx: &egui::Context, id: &str, title: &str, size: [f32; 2], 
     if let Some(icon) = window_icon() {
         builder = builder.with_icon(Arc::new(icon));
     }
-    if let Some((at, size)) = detached_placement(ctx, id) {
-        builder = builder.with_position(at).with_inner_size(size);
-    }
     let builder = for_test_session(builder);
     // In a window of its own it is still one of his blocks: "close the windows", "close it" and
     // its name mean it too (`hud_dock::close_named`, `close_all_blocks`).
     crate::hud_dock::publish_window(id, title);
-    let (mut closed, mut docked) = (crate::hud_dock::closing_progress(id).is_some(), false);
+    let mut closed = crate::hud_dock::closing_progress(id).is_some();
     // (The viewport's callback may be asked for more than once; the body is drawn once.)
     let mut body = Some(body);
     ctx.show_viewport_immediate(viewport, builder, |ctx, class| {
@@ -8553,34 +8545,23 @@ pub(crate) fn block(ctx: &egui::Context, id: &str, title: &str, size: [f32; 2], 
             return;
         }
         egui::CentralPanel::default().frame(Frame::none().fill(block_slate()).inner_margin(Margin::same(14.0))).show(ctx, |ui| {
-            // (Its own keys, on top of a close that was asked for by word. No way back onto
-            // the board while he is the desktop's background: every view is a window then,
-            // and `[ DOCK ]` closed it and opened it again.)
-            let (by_key, to_board) = detached_bar(ui, ctx, title, !crate::hud_dock::all_own());
-            closed |= by_key;
-            docked |= to_board;
+            // (Its own key, on top of a close that was asked for by word.)
+            closed |= detached_bar(ui, ctx, id, title);
             body(ui);
         });
         paint_window_border(ctx);
     });
-    if closed || docked {
-        // (Docked: back on the board from the next frame. Closed: on the board when it is
-        // next asked for.)
+    if closed {
         crate::hud_dock::window_gone(id);
-        crate::hud_dock::dock(id);
         lock(&DETACHED_MOTIONS).forget(viewport);
-        if docked {
-            info!("[HUD] '{id}' is back on the board (its window's [ DOCK ])");
-        }
     }
     closed
 }
 
 /// A window of the board's own (the interface settings, the hub, a question to Sir) as one of
-/// his blocks: on the board, or a window of its own (`[ DETACH ]`, and always while he is the
-/// desktop's background). `open` goes false when Sir closes it. (Until 2026-11-13 these were
-/// plain windows inside the board and nowhere else. Sir: "there should be none windows that
-/// are exclusive to JAI's UI".)
+/// his views, in a window of its own. `open` goes false when Sir closes it. (Until 2026-11-13
+/// these were plain windows inside the board and nowhere else. Sir: "there should be none
+/// windows that are exclusive to JAI's UI".)
 pub(crate) fn board_window(ctx: &egui::Context, id: &str, title: &str, size: [f32; 2], open: &mut bool, body: impl FnOnce(&mut Ui)) {
     if !*open {
         crate::hud_dock::forget(id);
@@ -8840,7 +8821,10 @@ fn grain_image() -> egui::ColorImage {
             seed ^= seed << 5;
             let (light, a) = (seed & 1 == 0, ((seed >> 8) % (GRAIN_ALPHA + 1)) as u8);
             if light {
-                Color32::from_white_alpha(a)
+                // (Premultiplied by hand. `Color32::from_white_alpha` takes its alpha as linear
+                // light: 15 of 255 came out as 69 of 255, and from 2026-11-11 to 2026-11-19 the
+                // grain lay over the black as a grey fog four times its strength.)
+                Color32::from_rgba_premultiplied(a, a, a, a)
             } else {
                 Color32::from_black_alpha(a.saturating_mul(2))
             }
@@ -8965,7 +8949,10 @@ pub(crate) fn paint_canvas(ctx: &egui::Context) {
     }
     // The windows are tied to him: a leader from his first circle to the corner of each
     // window's header that faces him, and while he speaks a point of light runs out along it.
-    let blocks = crate::hud_dock::block_rects();
+    // (His windows stand on the screen, above the board; a session without windows draws
+    // them as blocks on it.)
+    let mut blocks = crate::hud_dock::block_rects();
+    blocks.extend(own_window_rects(ctx));
     if dock < 0.5 {
         let run = (ctx.input(|i| i.time) * 0.9).fract() as f32;
         for (from, to) in blocks.iter().filter_map(|block| crate::holo_stage::leader(origin, ring, *block)) {
@@ -10275,6 +10262,11 @@ mod tests {
         assert_eq!(grain.size, [GRAIN_TILE, GRAIN_TILE]);
         let strongest = grain.pixels.iter().map(|p| p.a()).max().unwrap();
         assert!(strongest > 0 && strongest <= 2 * GRAIN_ALPHA as u8, "grain is a whisper: {strongest}");
+        // Its light counts, not only its alpha: a speck adds no more light than its alpha says.
+        // (Seen in the real window on 2026-11-19: the black canvas stood at a mean of 25 of 255,
+        // because `Color32::from_white_alpha(15)` is [69, 69, 69, 15].)
+        let brightest = grain.pixels.iter().map(|p| p.r().max(p.g()).max(p.b())).max().unwrap();
+        assert!(brightest <= GRAIN_ALPHA as u8, "a speck is a shade lighter, never a fog: {brightest}");
         let (light, dark) = (grain.pixels.iter().filter(|p| p.r() > 0).count(), grain.pixels.iter().filter(|p| p.r() == 0 && p.a() > 0).count());
         assert!(light > GRAIN_TILE * GRAIN_TILE / 4 && dark > GRAIN_TILE * GRAIN_TILE / 4, "lighter and darker specks: {light} / {dark}");
         // A frame with the finish paints, and asks for no frame of its own.
@@ -10487,7 +10479,7 @@ mod tests {
         let frame = |events: Vec<egui::Event>| {
             let out = ctx.run(egui::RawInput { screen_rect: Some(screen), events, ..Default::default() }, |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    detached_bar(ui, ctx, "Changes", false);
+                    detached_bar(ui, ctx, "changes", "Changes");
                     ui.label("What is new.");
                     let key = crate::holo_ui::key(ui, "A KEY OF ITS OWN");
                     key_at.set(key.rect.center());
@@ -10560,7 +10552,7 @@ mod tests {
             let mut closed = false;
             detached_keep(&ctx, ViewportId::ROOT, true);
             let _ = ctx.run(egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| closed = detached_title_bar(ui, ctx, "Feature Lab // every system"));
+                egui::CentralPanel::default().show(ctx, |ui| closed = detached_title_bar(ui, ctx, "features", "Feature Lab // every system"));
             });
             closed
         };
@@ -10679,45 +10671,125 @@ mod tests {
         assert_eq!(frame(), Duration::ZERO, "the HUD drew, yet the window waited");
     }
 
-    /// Its [ DETACH ] (with the motion on): the block plays its exit and then asks for a window
-    /// of its own, never for its close, and the window opens where the block stood.
+    /// Sir, 2026-11-19: "All windows should be real windows", and of the blocks on the board:
+    /// "I really like how the windows have all a connection to the orb. I want this also to
+    /// happen with the windows you are making now." A new window takes its place about the
+    /// core as a block did: beside him on his circle, the next on the other side, none on him
+    /// or on another. Only where he is not on the monitor in use does it open in its middle.
     #[test]
-    fn a_detached_block_leaves_for_its_own_window() {
-        let _g = crate::hud_dock::test_lock();
-        let screen = Rect::from_min_size(Pos2::ZERO, vec2(1920.0, 1080.0));
+    fn a_new_window_opens_beside_the_core_and_never_on_it() {
+        let work = Rect::from_min_size(pos2(2560.0, 0.0), vec2(2560.0, 1392.0));
+        let core = Rect::from_center_size(work.center(), Vec2::splat(420.0));
+        let size = vec2(560.0, 400.0);
+        let middle = work.center() - size / 2.0;
+        let mut taken: Vec<Rect> = Vec::new();
+        for k in 0..6 {
+            let window = Rect::from_min_size(opening_spot(work, size, Some(core), &taken, middle), size);
+            assert!(work.expand(0.5).contains_rect(window), "window {k} hangs off the screen: {window:?}");
+            assert!(!window.intersects(core.shrink(40.0)), "window {k} stands on the core: {window:?}");
+            assert!(taken.iter().all(|t| !t.intersects(window)), "window {k} stands on another: {window:?}");
+            taken.push(window);
+        }
+        assert!(taken[0].center().x > core.center().x && taken[1].center().x < core.center().x, "the first two flank him: {taken:?}");
+        // Out on his second circle, so the leader that ties each to him has a length to show.
+        let ring = core.width() * 0.5 * 1.55 / 1.15;
+        for window in &taken[..2] {
+            let (from, to) = crate::holo_stage::leader(core.center(), ring, *window).expect("a leader to a window beside him");
+            assert!((to - from).length() > 120.0, "a leader too short to see: {:.0} to {window:?}", (to - from).length());
+        }
+        // Large windows, as his are (the settings, the Feature Lab, the telemetry, the console,
+        // the mixer on one 1440p screen): none on him, even when no free place is left.
+        let mut large: Vec<Rect> = Vec::new();
+        for (k, size) in [vec2(620.0, 680.0), vec2(580.0, 340.0), vec2(820.0, 720.0), vec2(620.0, 760.0), vec2(440.0, 640.0)].into_iter().enumerate() {
+            let window = Rect::from_min_size(opening_spot(work, size, Some(core), &large, work.center() - size / 2.0), size);
+            assert!(work.expand(0.5).contains_rect(window) && !window.intersects(core.shrink(40.0)), "large window {k} hangs off the screen or stands on the core: {window:?}");
+            // (Stacked over others where no free place is left: their headers stay in view.)
+            assert!(large.iter().all(|under| !window.intersects(Rect::from_min_size(under.min, vec2(under.width(), WINDOW_TITLE_ROW)))), "large window {k} covers a header: {window:?} over {large:?}");
+            large.push(window);
+        }
+        // A panel wider than his flank (the disk map) and a screen with no room at all: the
+        // middle, as before (there the core makes room, `stage_window_covers_centre`).
+        let wide = vec2(1120.0, 700.0);
+        assert_eq!(opening_spot(work, wide, Some(core), &[], work.center() - wide / 2.0), work.center() - wide / 2.0);
+        assert_eq!(opening_spot(work, work.size(), Some(core), &[], Pos2::ZERO), Pos2::ZERO);
+        // He stands on another monitor, or is not up: the middle of the one in use.
+        assert_eq!(opening_spot(work, size, Some(core.translate(vec2(-2560.0, 0.0))), &[], middle), middle);
+        assert_eq!(opening_spot(work, size, None, &[], middle), middle);
+    }
+
+    /// The board ties each of his windows to the core as it tied its blocks: where they stand
+    /// on the screen comes into the board's own points. A window on its way out, or on
+    /// another screen, has no leader.
+    #[test]
+    fn the_board_draws_its_leaders_to_his_windows() {
+        let board = Rect::from_min_size(pos2(2560.0, 0.0), vec2(2560.0, 1440.0));
+        let [beside, leaving, elsewhere] = ["a", "b", "c"].map(|k| ViewportId::from_hash_of(("leader_probe", k)));
+        let stands = |x: f32| Rect::from_min_size(pos2(x, 400.0), vec2(600.0, 420.0));
+        {
+            let mut motions = lock(&DETACHED_MOTIONS);
+            motions.rects.insert(beside, stands(2560.0 + 1700.0));
+            motions.rects.insert(leaving, stands(2560.0 + 100.0));
+            motions.leaving.insert(leaving, (Instant::now(), true));
+            motions.rects.insert(elsewhere, stands(300.0));
+        }
         let ctx = egui::Context::default();
-        holo::install_fonts(&ctx);
-        set_still(&ctx, false);
-        let id = "detach_probe";
-        let frame = || {
-            let mut out = BlockAction::default();
-            let input = egui::RawInput { screen_rect: Some(screen), ..Default::default() };
-            let _ = ctx.run(input, |ctx| {
-                crate::hud_dock::begin_frame();
-                out = hud_block_window(ctx, id, "Detach probe", [600.0, 400.0], |ui| {
-                    ui.label("probe");
-                });
+        let mut input = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, board.size())), ..Default::default() };
+        input.viewports.entry(ViewportId::ROOT).or_default().inner_rect = Some(board);
+        let mut rects = Vec::new();
+        let _ = ctx.run(input, |ctx| rects = own_window_rects(ctx));
+        for viewport in [beside, leaving, elsewhere] {
+            lock(&DETACHED_MOTIONS).forget(viewport);
+        }
+        assert!(rects.contains(&stands(1700.0)), "his window, in the board's points: {rects:?}");
+        assert!(!rects.contains(&stands(100.0)) && !rects.contains(&stands(300.0 - 2560.0)), "none to a leaving window or to another screen: {rects:?}");
+        let core = pos2(1280.0, 720.0);
+        let (from, to) = crate::holo_stage::leader(core, 300.0, stands(1700.0)).expect("a leader");
+        assert!(((from - core).length() - 300.0).abs() < 0.5 && to.x == 1700.0, "from his circle to the edge that faces him: {from:?} {to:?}");
+    }
+
+    /// A window of his own wears an index tab as a panel does: numbered in the order his
+    /// windows came up. One on its way out is not counted, nor one without his bar.
+    #[test]
+    fn his_windows_are_numbered_in_the_order_they_came_up() {
+        let mut motions = DetachedMotions::default();
+        let ids: Vec<ViewportId> = (0..3).map(|k| ViewportId::from_hash_of(("number_probe", k))).collect();
+        let start = Instant::now();
+        for (k, id) in ids.iter().enumerate() {
+            let at = start + Duration::from_millis(10 * (k as u64 + 1));
+            motions.shown.insert(*id, (0, at, at));
+            motions.barred.insert(*id);
+        }
+        assert_eq!(ids.iter().map(|id| motions.number(*id)).collect::<Vec<_>>(), vec![1, 2, 3]);
+        motions.shown.insert(ViewportId::from_hash_of("number_probe_console"), (0, start, start));
+        assert_eq!(motions.number(ids[2]), 3, "a window without his bar takes no number");
+        motions.leaving.insert(ids[0], (Instant::now(), true));
+        assert_eq!((motions.number(ids[1]), motions.number(ids[2])), (1, 2), "the first is leaving");
+    }
+
+    /// A window of his own as it stands on the screen, for the eye: his bar (the index tab in
+    /// its corner, the title, the lamp, its key), its content, its frame.
+    #[test]
+    fn gallery_a_window_of_his_own() {
+        let _g = crate::hud_dock::test_lock();
+        let _look = crate::holo_theme::look_for_pictures();
+        let size = vec2(720.0, 400.0);
+        crate::holo_block::set_lamp("window_probe", crate::holo_block::Lamp::Busy);
+        let mut snap = crate::ui_snapshot::Snapshot::new(size);
+        let canvas = snap.render(6, |ctx| {
+            egui::CentralPanel::default().frame(Frame::none().fill(block_slate()).inner_margin(Margin::same(14.0))).show(ctx, |ui| {
+                detached_bar(ui, ctx, "window_probe", "Network radar // who is on the network");
+                ui.add_space(10.0);
+                crate::holo_ui::head(ui, "DEVICES");
+                ui.label(RichText::new("Twelve devices answer. The router is the nearest.").size(13.5).color(strip_ink()));
             });
-            out
-        };
-        // Up, and settled at the size of what it shows (one word: the smallest block).
-        let start = Instant::now();
-        while start.elapsed() < crate::hud_dock::OPEN_ANIM + crate::hud_dock::GLIDE + Duration::from_millis(200) {
-            frame();
-        }
-        let stood = crate::hud_dock::block_rect(id).expect("drawn");
-        assert!(stood.width() < 400.0 && stood.height() < 300.0, "a block round one word is a small one: {stood:?}");
-        crate::hud_dock::begin_detach(id);
-        let start = Instant::now();
-        let mut left = None;
-        while left.is_none() && start.elapsed() < crate::hud_dock::CLOSE_FADE * 3 {
-            let out = frame();
-            assert!(!out.close, "[ DETACH ] closed the block");
-            left = out.detach.then_some(());
-        }
-        assert!(left.is_some(), "the block never asked for its own window");
-        assert_eq!(crate::hud_dock::block_rect(id), Some(stood), "the window's place is the block's");
-        crate::hud_dock::forget(id);
+            paint_window_border(ctx);
+        });
+        crate::holo_block::set_lamp("window_probe", crate::holo_block::Lamp::Rest);
+        lock(&DETACHED_MOTIONS).forget(ViewportId::ROOT);
+        canvas.save("gallery_own_window");
+        let tab = canvas.brightness(Rect::from_min_size(pos2(1.0, 1.0), vec2(10.0, 12.0)));
+        assert!(tab > 60.0, "the index tab stands lit in the window's corner: {tab}");
+        assert!(canvas.brightness(Rect::from_min_size(pos2(40.0, 6.0), vec2(300.0, 24.0))) > 2.0, "the title is drawn");
     }
 
     /// "Move it to the middle", "put it on the left half", "full screen it", "minimise it",
@@ -10779,30 +10851,6 @@ mod tests {
         crate::hud_dock::forget(id);
         crate::hud_dock::begin_frame();
         crate::hud_dock::begin_frame();
-    }
-
-    /// A window of its own never hangs off a screen: it is moved (and shrunk only when it must
-    /// be) into the work area of the monitor its middle is on.
-    #[test]
-    fn detached_windows_land_inside_a_work_area() {
-        let monitor = |index: usize, x: i32, primary: bool| crate::monitors::Monitor { index, name: format!("M{index}"), rect: [x, 0, x + 1920, 1080], work: [x, 0, x + 1920, 1040], primary };
-        let desk = [monitor(1, 0, true), monitor(2, 1920, false)];
-        let fits = |r: Rect, ppp: f32| {
-            let placed = clamp_to_work_area(r, &desk, ppp);
-            assert!(desk.iter().any(|m| Rect::from_min_max(pos2(m.work[0] as f32, m.work[1] as f32) / ppp, pos2(m.work[2] as f32, m.work[3] as f32) / ppp).expand(1e-3).contains_rect(placed)), "{r:?} at {ppp}: {placed:?}");
-            placed
-        };
-        // Flush against the right edge of the second monitor and under its taskbar.
-        let placed = fits(Rect::from_min_size(pos2(3500.0, 900.0), vec2(800.0, 500.0)), 1.0);
-        assert_eq!(placed.size(), vec2(800.0, 500.0), "only moved");
-        assert_eq!(placed.max, pos2(3840.0, 1040.0));
-        // Larger than a monitor: shrunk to it. At 150 % the work area is in points.
-        assert_eq!(fits(Rect::from_min_size(pos2(-50.0, -50.0), vec2(2400.0, 1300.0)), 1.0).size(), vec2(1920.0, 1040.0));
-        let scaled = fits(Rect::from_min_size(pos2(1200.0, 600.0), vec2(500.0, 300.0)), 1.5);
-        assert!(scaled.size() == vec2(500.0, 300.0) && scaled.max.y <= 1040.0 / 1.5 + 1e-3, "{scaled:?}");
-        // Already inside: untouched.
-        let inside = Rect::from_min_size(pos2(100.0, 100.0), vec2(600.0, 400.0));
-        assert_eq!(fits(inside, 1.0), inside);
     }
 
     /// The status pill's tooltip says what its word says: a wait (a web search, the brain

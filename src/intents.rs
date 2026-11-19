@@ -1406,9 +1406,6 @@ pub fn internal_view_command(text: &str) -> Option<Value> {
     let opening = in_window || matches!(verb, "open up" | "open" | "pull up" | "bring up" | "launch" | "öffne mir" | "öffne" | "oeffne" | "mach" | "mache");
     let view = view_named(&object, opening)?;
     let mut args = json!({ "view": view });
-    if SEPARATE_WINDOW.is_match(&s) {
-        args["separate_window"] = json!(true);
-    }
     if let Some(m) = monitor {
         args["monitor"] = m;
     }
@@ -1417,7 +1414,7 @@ pub fn internal_view_command(text: &str) -> Option<Value> {
 
 /// The HUD's own views, before the layout classifier or the model can guess at them: the core
 /// sphere (also as Whisper mishears it, see `typos::core_homophones`), the board restore ("bring
-/// back the screen"), docking and detaching windows, and the navigation dock's tabs.
+/// back the screen"), and the navigation dock's tabs.
 pub fn hud_view_command(text: &str) -> Option<Intent> {
     // The 3D studio ("render me an Iron Man suit in 3D"; its edits only while it is open).
     if let Some(intent) = crate::model3d::intent(text) {
@@ -1670,7 +1667,7 @@ fn widget_sentence(s: &str, text: &str) -> Option<Intent> {
         let id = format!("note_{}_{}", crate::widgets::now_ms(), NOTES.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
         let title = format!("Note: {}", head.trim_end_matches(|c: char| !c.is_alphanumeric()));
         if separate {
-            return Some(Intent::Tool { name: "spawn_native_window", args: json!({ "id": id, "title": title, "markdown": note, "separate_window": true, "width": 460, "height": 300 }) });
+            return Some(Intent::Tool { name: "spawn_native_window", args: json!({ "id": id, "title": title, "markdown": note, "width": 460, "height": 300 }) });
         }
         return widget(json!({
             "id": id,
@@ -1820,12 +1817,8 @@ fn hud_view_sentence(text: &str) -> Option<Intent> {
     if BOARD_RESTORE.is_match(&s) && !crate::hud_board::spotlight_active() {
         return Some(Intent::Tool { name: "hud_board", args: json!({ "action": "restore" }) });
     }
-    if DOCK_ALL.is_match(&s) {
-        return interface(json!({ "dock_windows": true }));
-    }
-    if let Some(c) = DETACH.captures(&s) {
-        let name = capture(&c)?;
-        return interface(json!({ "detach_window": name }));
+    if let Some(intent) = docking_retired(&s) {
+        return Some(intent);
     }
     if let Some(intent) = shadow_or_server_command(&s) {
         return Some(intent);
@@ -2024,11 +2017,6 @@ static INTEGRATIONS_HUB: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(?:open|show|bring up|pull up|display|launch|öffne|oeffne|zeig|zeige)\s+(?:me\s+|mir\s+)?(?:the\s+|my\s+|your\s+|den\s+|die\s+|das\s+|meine\s+|deine\s+)?(?:integrations?|productivity)(?:\s+(?:and|und)\s+productivity)?(?:\s*(?:hub|sub|hab|tab|settings|window|center|centre|panel|page|einstellungen))?$")
 });
 
-/// "In a new / separate / its own window": Sir explicitly wants an OS window, not a HUD block.
-static SEPARATE_WINDOW: LazyLock<Regex> = LazyLock::new(|| {
-    re(r"\b(?:new|separate|own|extra|another|real|native|second|neuen|neues|eigenen|separaten|zweiten)\s+(?:native\s+|os\s+)?(?:window|fenster)\b")
-});
-
 /// Which panels from the reference videos are up: a follow-up ("switch back", "fly to Tokyo",
 /// "zoom in", "rescan") only means one of them while it is.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -2075,8 +2063,7 @@ fn panel_command(text: &str, up: PanelsUp) -> Option<Value> {
     static OWN_WINDOW: LazyLock<Regex> = LazyLock::new(|| {
         re(r"\s+(?:in|into|as|im|in\s+einem|als)\s+(?:a\s+|an\s+|its\s+own\s+|one\s+|the\s+|einem\s+|ein\s+)?(?:new|separate|second|own|extra|another|real|neuen|neues|eigenen|separaten|zweiten)\s+(?:native\s+|os\s+)?(?:window|fenster)$")
     });
-    let separate = OWN_WINDOW.is_match(&s);
-    if separate {
+    if OWN_WINDOW.is_match(&s) {
         s = OWN_WINDOW.replace(&s, "").trim().to_string();
     }
     let monitor = MONITOR_ANYWHERE.captures(&s).and_then(|m| monitor_value(m.get(1)?.as_str()));
@@ -2086,9 +2073,6 @@ fn panel_command(text: &str, up: PanelsUp) -> Option<Value> {
         }
     }
     let mut args = panel_args(text, &s, up)?;
-    if separate {
-        args["separate_window"] = json!(true);
-    }
     if let Some(m) = monitor {
         args["monitor"] = m;
     }
@@ -3243,15 +3227,6 @@ static HUD_CORE: LazyLock<Regex> = LazyLock::new(|| {
 /// "Bring back the screen", "restore the screen", "screen back on": the last board comes back.
 static BOARD_RESTORE: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(?:go\s+)?back\s+to\s+(?:the\s+)?(?:board|hud board|screen)$|^(?:bring|put|get)\s+(?:back\s+)?(?:the|my|your)\s+(?:screen|board|hud board|blocks|report)\s*(?:back)?(?:\s+(?:up|on))?$|^(?:bring|get)\s+back\s+(?:the|my|your)\s+(?:screen|board|hud board|blocks)$|^(?:restore|reopen)\s+(?:the|my|your)\s+(?:screen|blocks|last board|hud board)$|^(?:screen|board)\s+(?:back(?:\s+(?:on|up))?|up)$|^(?:turn|switch)\s+(?:the\s+)?screen\s+back\s+on$|^(?:hol|bring)\s+(?:den\s+)?(?:bildschirm|screen)\s+zurück$")
-});
-/// "Dock all windows back inside JAI" (the name is stripped by `normalize`), "bring all the
-/// windows back in".
-static DOCK_ALL: LazyLock<Regex> = LazyLock::new(|| {
-    re(r"^dock\s+(?:all\s+)?(?:(?:the|your|my)\s+)?(?:windows|views|blocks)(?:\s+back)?(?:\s+(?:in|into|inside|onto)(?:\s+(?:the\s+)?(?:hud|board|main window|app|yourself))?)?$|^(?:bring|put|move|pull)\s+(?:all\s+)?(?:(?:the|your|my)\s+)?(?:windows|views)\s+back\s+(?:in|into|inside|onto)(?:\s+(?:the\s+)?(?:hud|board|main window|app|yourself))?$|^(?:hol|hole)\s+alle\s+fenster\s+(?:wieder\s+)?(?:rein|zurück)$")
-});
-/// "Detach the telemetry window", "pop out the plotter", "undock the schedule".
-static DETACH: LazyLock<Regex> = LazyLock::new(|| {
-    re(r"^(?:detach|pop out|undock|float)\s+(?:the\s+|my\s+|your\s+|that\s+)?(.+?)(?:\s+(?:window|block|view))?(?:\s+(?:into|in|as)\s+(?:a\s+|its\s+)?(?:separate|new|own)\s+window)?$|^(?:put|move|pack|packe|schieb|schiebe|mach)\s+(?:the\s+|my\s+|your\s+|das\s+|den\s+|die\s+)?(.+?)\s+(?:into|in|zu)\s+(?:a\s+|its\s+|ein\s+|einem\s+)?(?:separate|new|own|eigenes|eigenen|neues|separates)\s+(?:window|fenster)$")
 });
 /// A navigation dock tab named on its own: "home view", "go to the sim lab", "HUD board".
 static NAV_VIEW: LazyLock<Regex> = LazyLock::new(|| {
@@ -4483,19 +4458,7 @@ fn requested_action(request: &str) -> bool {
 
 /// The offer a reply ends with ("Shall I open the drive space window?"), for Sir's "yes".
 pub fn offered_action(reply: &str) -> Option<(&'static str, Value)> {
-    reply_actions(reply).into_iter().find(|a| a.offer).map(|a| (a.name, placed_by_sir(a.args, "")))
-}
-
-/// Only Sir's own words decide whether a view gets its own OS window ("a new window"), never
-/// the model's phrasing of its reply.
-fn placed_by_sir(mut args: Value, request: &str) -> Value {
-    if let Some(o) = args.as_object_mut() {
-        o.remove("separate_window");
-        if SEPARATE_WINDOW.is_match(&normalize(request)) {
-            o.insert("separate_window".into(), json!(true));
-        }
-    }
-    args
+    reply_actions(reply).into_iter().find(|a| a.offer).map(|a| (a.name, a.args))
 }
 
 /// Compiles every pattern up front (first use otherwise costs ~0.5 s on the first command).
@@ -4527,6 +4490,15 @@ fn ultron_retired(s: &str) -> Option<Intent> {
         re(r"^(?:(?:switch|change|go|turn|flip|wechsel|wechsle|schalte?|geh|gehe)\s+(?:back\s+|zurück\s+)?(?:to|into|zu|zum|in\s+den|auf\s+den|auf)\s+|(?:activate|enable|engage|start|initiate|turn\s+on|aktiviere?|starte?)\s+|(?:what\s+is|whats|was\s+ist|are\s+you\s+in|bist\s+du\s+im|is|ist)\s+)?(?:the\s+|den\s+|der\s+)?ultron(?:[\s-]*(?:mode|modus|protocol|protokoll))?(?:\s+(?:on|off|an|aus|ein|aktivieren|einschalten|starten|engage|activate|active|aktiv|enabled))?$")
     });
     ULTRON.is_match(s).then(|| Intent::Answer("Ultron mode has been retired, Sir.".to_string()))
+}
+
+/// "Dock all windows", "dock it back", "detach the radar", "pop out the plotter": every view
+/// of his is a window of its own (2026-11-19), so there is nothing to dock or to detach, and
+/// saying so is all that happens. (Left to the model, "dock all windows" went for Sir's own
+/// programs' windows.)
+fn docking_retired(s: &str) -> Option<Intent> {
+    static DOCKING: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:re-?dock|dock|undock|detach|pop out)\s+(?:it|them|that|this|all|every|the|my|your)\b"));
+    DOCKING.is_match(s).then(|| Intent::Answer("Every view of mine is a window of its own now, Sir. There is nothing to dock.".to_string()))
 }
 
 /// An order in Sir's words: by the fast path's own rules, and where those do not know it (or
@@ -4758,11 +4730,7 @@ pub fn parse_as_said(text: &str) -> Option<Intent> {
         return Some(intent);
     }
     // "Create a new window that shows my PC stats / the space left on my drives."
-    if let Some(mut args) = live_window_request(&s) {
-        // "A new window" said out loud: its own OS window (otherwise a block inside the HUD).
-        if SEPARATE_WINDOW.is_match(&s) {
-            args["separate_window"] = json!(true);
-        }
+    if let Some(args) = live_window_request(&s) {
         return tool("spawn_native_window", args);
     }
     // "Make the drive space window smaller", "add CPU temperature to that window".
@@ -5322,7 +5290,7 @@ pub fn claimed_action(reply: &str, request: &str) -> Option<(&'static str, Value
     // showing your PC stats"), run exactly as the fast path would have run Sir's words.
     if requested_action(request) || is_affirmation(request) {
         if let Some(a) = reply_actions(reply).into_iter().find(|a| !a.offer) {
-            return Some((a.name, placed_by_sir(a.args, request)));
+            return Some((a.name, a.args));
         }
     }
     None
@@ -6244,9 +6212,9 @@ mod tests {
             Some(("spawn_native_window", a)) => a,
             other => panic!("{text}: {other:?}"),
         };
-        assert_eq!(live("JAI, can you create a new window please that shows me my PC stats?"), json!({"live": "pc_stats", "separate_window": true}));
-        assert_eq!(live("Please create a new window showing my remaining space on my drives."), json!({"live": "drive_space", "separate_window": true}));
-        assert_eq!(live("Show my CPU and GPU usage in a new window on my second monitor"), json!({"live": "pc_stats", "monitor": 2, "separate_window": true}));
+        assert_eq!(live("JAI, can you create a new window please that shows me my PC stats?"), json!({"live": "pc_stats"}));
+        assert_eq!(live("Please create a new window showing my remaining space on my drives."), json!({"live": "drive_space"}));
+        assert_eq!(live("Show my CPU and GPU usage in a new window on my second monitor"), json!({"live": "pc_stats", "monitor": 2}));
         assert_eq!(live("Open a window with my drives and processes")["add_content"], json!(["processes"]));
         assert_eq!(live("Zeig mir meinen Speicherplatz in einem neuen Fenster")["live"], "drive_space");
         assert_eq!(live("Create a 800x600 window with my network traffic"), json!({"live": "network", "width": 800, "height": 600}));
@@ -6558,22 +6526,24 @@ mod tests {
     }
 
     #[test]
-    fn screen_restore_docking_and_detaching_by_voice() {
+    fn screen_restore_and_the_navigation_tabs_by_voice() {
         let board = |args: Value| Some(Intent::Tool { name: "hud_board", args });
         let iface = |args: Value| Some(Intent::Tool { name: "configure_interface", args });
         for text in ["JAI, bring back the screen", "bring the screen back", "restore the screen", "screen back on", "back to the board"] {
             assert_eq!(parse(text), board(json!({"action": "restore"})), "{text}");
         }
-        assert_eq!(parse("Dock all windows back inside JAI"), iface(json!({"dock_windows": true})));
-        assert_eq!(parse("bring all the windows back in"), iface(json!({"dock_windows": true})));
-        assert_eq!(parse("Detach the telemetry window"), iface(json!({"detach_window": "telemetry"})));
-        assert_eq!(parse("pop out the function plotter"), iface(json!({"detach_window": "function plotter"})));
         assert_eq!(parse("go to the sim lab"), iface(json!({"hud_view": "sim_lab"})));
         assert_eq!(parse("home view"), iface(json!({"hud_view": "home"})));
-        // In the HUD by default; an OS window only when he says so.
+        // Nothing docks any more: the old orders are answered in one line and never reach the
+        // model (which took "dock all windows" for Sir's own programs' windows).
+        for text in ["Dock all windows back inside JAI", "dock it back", "Detach the telemetry window", "pop out the function plotter", "undock the schedule"] {
+            assert!(matches!(parse(text), Some(Intent::Answer(ref line)) if line.contains("nothing to dock")), "{text}: {:?}", parse(text));
+        }
+        assert!(!matches!(parse("docker is not starting"), Some(Intent::Answer(_))), "a word that only begins so");
+        // ("In a new window" is where every view opens anyway.)
         assert_eq!(internal_view_command("open my system stats"), Some(json!({"view": "system_stats"})));
-        assert_eq!(internal_view_command("open my system stats in a new window"), Some(json!({"view": "system_stats", "separate_window": true})));
-        assert_eq!(internal_view_command("open the simulation lab in a separate window"), Some(json!({"view": "simulation_lab", "separate_window": true})));
+        assert_eq!(internal_view_command("open my system stats in a new window"), Some(json!({"view": "system_stats"})));
+        assert_eq!(internal_view_command("open the simulation lab in a separate window"), Some(json!({"view": "simulation_lab"})));
     }
 
     #[test]
@@ -6764,7 +6734,7 @@ mod tests {
     fn a_note_in_a_new_window_gets_one() {
         let (name, args) = tool("Add a note saying buy milk in a new window").expect("a note");
         assert_eq!(name, "spawn_native_window");
-        assert_eq!((args["markdown"].as_str(), args["title"].as_str(), args["separate_window"].as_bool()), (Some("buy milk"), Some("Note: buy milk"), Some(true)));
+        assert_eq!((args["markdown"].as_str(), args["title"].as_str()), (Some("buy milk"), Some("Note: buy milk")));
         assert!(args["id"].as_str().is_some_and(|id| id.starts_with("note_")), "{args}");
         let (name, args) = tool("Add a note saying buy milk").expect("a note");
         assert_eq!((name, args["markdown"].as_str()), ("create_or_update_widget", Some("buy milk")));
@@ -6862,7 +6832,7 @@ mod tests {
             is(text, disk_up, "disk_map", "back");
         }
         assert_eq!(panel_command("hide the flights", earth_up).unwrap()["layer"], "flights");
-        assert_eq!(panel_command("Show me the earth in a new window", none).unwrap()["separate_window"], true);
+        assert_eq!(panel_command("Show me the earth in a new window", none).unwrap()["view"], "earth");
         // Follow-ups only while their panel is up, and nobody else's words.
         for (text, up) in [
             ("zoom in", none),
@@ -7062,8 +7032,6 @@ mod tests {
         ] {
             assert_eq!(parse(text), back, "{text}");
         }
-        // Docking detached windows is another thing, as is the board.
-        assert_eq!(parse("bring all the windows back in"), Some(Intent::Tool { name: "configure_interface", args: json!({"dock_windows": true}) }));
         let keep = |id: &str, on: bool| Some(Intent::Tool { name: "create_or_update_widget", args: json!({"id": id, "keep_at_start": on}) });
         for (text, id, on) in [
             ("Open that widget again the next time I start you", "last", true),

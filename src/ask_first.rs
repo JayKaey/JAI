@@ -99,7 +99,6 @@ fn interface_words(key: &str, value: &Value) -> Option<Vec<&'static str>> {
         "lyrics" => vec!["lyric", "songtext", "liedtext", "sing along", "mitsingen"],
         "voice_guest" => vec!["guest", "gast", "gäste", "besuch", "friend", "freund", "visitor", "company"],
         "voice_lock" => vec!["obey", "listen", "lock", "gehorch", "sperre", "everyone", "only me", "nur mir", "nur auf mich"],
-        "dock_windows" | "detach_window" => vec!["dock", "detach", "pop out", "own window", "eigenes fenster", "lös"],
         "allow_window_overlap" => vec!["overlap", "stack", "cascade", "apart", "überlapp", "stapel"],
         "sound_cues" => vec!["sound", "cue", "effect", "ton", "töne"],
         _ => return None,

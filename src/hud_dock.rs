@@ -1,13 +1,12 @@
 //! The HUD's views and where its windows live.
 //!
-//! Every tool view (Simulation Lab and function plotter, system telemetry, schedule, the phone
-//! QR link, JAI's markdown windows) opens **inside** the main fullscreen board as a ROSE block
-//! by default. A view becomes its own OS window only when Sir asks — the block's
-//! `[ DETACH ]` button, "open the telemetry in a separate window", "detach the plotter" — and
-//! "dock all windows back inside JAI" brings every one of them home.
+//! Every view he opens (Simulation Lab and function plotter, system telemetry, schedule, the
+//! phone QR link, his markdown windows) is a window of its own (`all_own`). Only an offscreen
+//! session, which has no windows to give, draws a view as a block on the board; the layout of
+//! such blocks lives here too.
 //!
-//! This module is the shared state behind that (which ids are detached, which views should open
-//! detached), the top navigation dock's `HudViewMode`, and the emblem's spatial rule: it only
+//! This module is the shared state behind that (which views are open, and where), the top
+//! navigation dock's `HudViewMode`, and the emblem's spatial rule: it only
 //! leaves the centre of the screen when something actually covers the 360 × 360 px centre safe
 //! zone, and when it docks while the text console is out, it docks left of the console.
 //! The state is plain data behind a mutex; the geometry is pure and unit-tested.
@@ -89,17 +88,15 @@ impl HudViewMode {
 
 #[derive(Default)]
 struct DockState {
-    /// Window ids shown as their own OS viewport.
-    detached: HashSet<String>,
-    /// Id prefixes of views that should open detached when they next appear.
-    pending: Vec<String>,
-    /// Ids already seen (a pending prefix only applies to a window that is new).
+    /// The views that stand in windows of their own.
+    windows: HashSet<String>,
+    /// Ids already seen ("it" means a view from the frame it is new in).
     seen: HashSet<String>,
     /// The in-app blocks drawn this frame: (id, title, rect).
     blocks: Vec<(String, String, Rect)>,
     /// The blocks of the previous frame (what the emblem's centre check reads).
     last_blocks: Vec<(String, String, Rect)>,
-    /// Where each block was last drawn (a detached window opens right there).
+    /// Where each block was last drawn.
     last_rect: HashMap<String, Rect>,
     /// Navigation requests from voice or tools (the HUD applies them next frame).
     views: Vec<HudViewMode>,
@@ -139,8 +136,6 @@ struct DockState {
     parked: HashMap<String, Instant>,
     /// Blocks closing for real ("close the windows"): they skip the tray.
     for_real: HashSet<String>,
-    /// Blocks whose exit is playing on the way into a window of their own.
-    detaching: HashSet<String>,
     /// When each block or window was opened, moved by hand or arranged by voice: "it" means
     /// the latest of them.
     touched: HashMap<String, Instant>,
@@ -174,15 +169,16 @@ fn with<R>(f: impl FnOnce(&mut DockState) -> R) -> R {
     f(g.get_or_insert_with(DockState::default))
 }
 
-/// While he is the desktop's background every view of his is a window of its own: there is no
-/// board window for a block to stand on. (Sir, 2026-11-13: "all the windows he can create …
-/// should be detached windows so that I can always move them in front of other windows", "there
-/// should be none windows that are exclusive to JAI's UI".)
+/// Every view of his is a window of its own, in every mode: nothing he opens stands inside the
+/// HUD's own window. (Sir, 2026-11-13: "there should be none windows that are exclusive to
+/// JAI's UI"; 2026-11-19: "JAI shouldn't have any in app windows. All windows should be real
+/// windows".) Off only where the HUD has no windows to give, an offscreen session (a picture,
+/// a test, the headless verifier): there a view is drawn as a block on the board instead.
 static ALL_OWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 pub fn set_all_own(on: bool) {
     if ALL_OWN.swap(on, std::sync::atomic::Ordering::AcqRel) != on {
-        tracing::info!("[DOCK] {}", if on { "Every view is a window of its own from now on (he is the desktop's background)" } else { "Views open on the board again" });
+        tracing::info!("[DOCK] {}", if on { "Every view is a window of its own" } else { "No windows to give here: views are drawn on the board" });
         crate::gui::refresh();
     }
 }
@@ -191,62 +187,23 @@ pub fn all_own() -> bool {
     ALL_OWN.load(std::sync::atomic::Ordering::Acquire)
 }
 
-/// Whether window `id` is its own OS window.
-pub fn is_detached(id: &str) -> bool {
-    all_own() || with(|s| s.detached.contains(id))
-}
-
-/// Window `id` opens as its own OS window from now on.
-pub fn detach(id: &str) {
-    if with(|s| s.detached.insert(id.to_string())) {
-        tracing::info!("[DOCK] '{id}' is a window of its own from now on");
-    }
-    crate::gui::refresh();
-}
-
-/// Window `id` comes back inside the HUD.
-pub fn dock(id: &str) {
-    with(|s| s.detached.remove(id));
-    crate::gui::refresh();
-}
-
-/// Every detached window comes back inside the HUD; returns how many.
-pub fn dock_all() -> usize {
-    let n = with(|s| {
-        s.pending.clear();
-        std::mem::take(&mut s.detached).len()
-    });
-    crate::gui::refresh();
-    n
-}
-
-/// The next window whose id starts with `prefix` opens as its own OS window.
-pub fn detach_next(prefix: &str) {
-    with(|s| {
-        if !s.pending.iter().any(|p| p == prefix) {
-            s.pending.push(prefix.to_string());
-        }
-    });
-}
-
-/// Called for every window each frame: a window seen for the first time takes a pending detach
-/// request for its kind. Returns whether it is detached.
+/// Called for every view each frame: one seen for the first time is what "it" means now.
+/// Returns whether it stands in a window of its own.
 pub fn adopt(id: &str) -> bool {
+    adopt_as(id, all_own())
+}
+
+fn adopt_as(id: &str, own: bool) -> bool {
     with(|s| {
         if s.seen.insert(id.to_string()) {
-            // Newly opened: "it" means this one now.
             s.touched.insert(id.to_string(), Instant::now());
-            if let Some(k) = s.pending.iter().position(|p| id.starts_with(p.as_str())) {
-                s.pending.remove(k);
-                s.detached.insert(id.to_string());
-            }
         }
-        // (As the desktop's background: every view, and as one of the windows he can name.)
-        if all_own() {
-            s.detached.insert(id.to_string());
+        // (And as one of the windows he can name.)
+        if own {
+            s.windows.insert(id.to_string());
         }
-        s.detached.contains(id)
-    })
+    });
+    own
 }
 
 /// Block `id` has finished its exit: off the board at once, not only from the next frame (a
@@ -265,7 +222,7 @@ pub fn forget(id: &str) {
     crate::holo_block::set_lamp(id, crate::holo_block::Lamp::Rest);
     with(|s| {
         s.seen.remove(id);
-        s.detached.remove(id);
+        s.windows.remove(id);
         s.last_rect.remove(id);
         s.closing.remove(id);
         s.pinned.remove(id);
@@ -284,7 +241,6 @@ pub fn forget(id: &str) {
         s.minimizing.remove(id);
         s.parked.remove(id);
         s.for_real.remove(id);
-        s.detaching.remove(id);
         s.touched.remove(id);
         s.fitted.remove(id);
         s.hand_sized.remove(id);
@@ -423,9 +379,10 @@ pub fn publish_window(id: &str, title: &str) {
     WINDOWS.lock().unwrap_or_else(|e| e.into_inner()).insert(id.to_string(), (title.to_string(), Instant::now()));
 }
 
-/// That window is gone (closed, or back on the board).
+/// That window is gone (closed).
 pub fn window_gone(id: &str) {
     WINDOWS.lock().unwrap_or_else(|e| e.into_inner()).remove(id);
+    with(|s| s.windows.remove(id));
 }
 
 /// The blocks that stand in windows of their own right now, as `(id, title)`.
@@ -550,7 +507,6 @@ pub fn cancel_close(id: &str) {
     with(|s| {
         s.closing.remove(id);
         s.minimizing.remove(id);
-        s.detaching.remove(id);
     });
     // (Asked for again while it waited in the tray: it comes back.)
     restore(id);
@@ -651,45 +607,6 @@ pub fn id_prefix_for(name: &str) -> Option<&'static str> {
     })
 }
 
-/// "Detach the telemetry window": the open window(s) the name means become OS windows; a view
-/// that is not open yet opens detached next time. Returns what was detached.
-pub fn detach_named(name: &str) -> Result<String, String> {
-    let n = name.to_lowercase();
-    // "Detach it": the view he had last, not the first block whose title holds the letters "it".
-    if crate::focus::is_pronoun(n.trim()) {
-        let (id, _) = recent_blocks().into_iter().find(|(id, _)| !is_detached(id)).ok_or_else(|| "None of my views is on the board, Sir.".to_string())?;
-        let title = with(|s| s.last_blocks.iter().find(|(b, _, _)| *b == id).map(|(_, t, _)| t.clone())).unwrap_or_else(|| crate::window_commands::spoken_name(&id));
-        detach(&id);
-        return Ok(title);
-    }
-    let prefix = id_prefix_for(&n);
-    let open: Vec<(String, String)> = with(|s| {
-        s.last_blocks
-            .iter()
-            .filter(|(id, title, _)| prefix.is_some_and(|p| id.starts_with(p)) || (!n.trim().is_empty() && (title.to_lowercase().contains(n.trim()) || called(id, n.trim()))))
-            .map(|(id, title, _)| (id.clone(), title.clone()))
-            .collect()
-    });
-    // "Detach the pictures" / "all the windows": every block it names (2026-11-09: one went).
-    let every = n.split(|c: char| !c.is_alphanumeric()).any(|w| {
-        ["all", "every", "each", "both", "them", "alle", "beide", "pictures", "images", "photos", "bilder", "fotos", "models", "windows", "fenster", "cameras"].contains(&w)
-    });
-    if let Some((_, title)) = open.first() {
-        let take = if every { open.len() } else { 1 };
-        for (id, _) in &open[..take] {
-            detach(id);
-        }
-        return Ok(if take > 1 { format!("{take} windows") } else { title.clone() });
-    }
-    match prefix {
-        Some(p) => {
-            detach_next(p);
-            Ok(format!("the next {} window", p.trim_end_matches(':').replace('_', " ")))
-        }
-        None => Err(format!("I have no window called '{name}' open, Sir.")),
-    }
-}
-
 /// Clears this frame's block list (the previous one stays readable for the emblem).
 pub fn begin_frame() {
     with(|s| s.last_blocks = std::mem::take(&mut s.blocks));
@@ -768,7 +685,7 @@ pub fn stage_covers_centre(screen: Rect) -> bool {
             .chain(s.blocks.iter())
             .map(|(id, _, rect)| (id, *rect))
             .chain(s.forced.iter().map(|(id, (rect, _))| (id, *rect)))
-            .any(|(id, rect)| is_stage_block(id) && !s.detached.contains(id) && !s.closing.contains_key(id) && rect.is_positive() && rect.intersects(zone))
+            .any(|(id, rect)| is_stage_block(id) && !s.closing.contains_key(id) && rect.is_positive() && rect.intersects(zone))
     })
 }
 
@@ -1199,7 +1116,6 @@ fn busy(s: &DockState, id: &str) -> bool {
         || s.pinned.contains(id)
         || s.hand_sized.contains(id)
         || s.minimizing.contains(id)
-        || s.detaching.contains(id)
         || s.grab.as_ref().is_some_and(|(held, _, _)| held == id)
         || held(&s.maximized)
         || held(&s.fullscreen)
@@ -1442,25 +1358,6 @@ pub fn minimized_blocks() -> Vec<(String, String)> {
     with(|s| s.minimized.clone())
 }
 
-/// "Detach it": block `id` plays its exit first and then becomes its own OS window (the new
-/// window's slow first frame falls between the two motions, where nothing moves).
-pub fn begin_detach(id: &str) {
-    with(|s| {
-        s.detaching.insert(id.to_string());
-        s.closing.entry(id.to_string()).or_insert_with(Instant::now);
-        s.touched.insert(id.to_string(), Instant::now());
-        if s.fullscreen.as_ref().is_some_and(|(open, _)| open == id) {
-            s.fullscreen = None;
-        }
-    });
-    crate::gui::refresh();
-}
-
-/// Block `id`'s exit has played: true when it was on its way into a window of its own.
-pub fn take_detaching(id: &str) -> bool {
-    with(|s| s.detaching.remove(id))
-}
-
 /// Block `id` was moved by hand or arranged by voice: "it" means this one now.
 pub fn touch(id: &str) {
     with(|s| {
@@ -1482,7 +1379,7 @@ pub fn recent_blocks() -> Vec<(String, Duration)> {
     with(|s| {
         let mut out: Vec<(String, Duration)> = Vec::new();
         // (A closed block waiting in the tray is closed.)
-        let open = s.last_blocks.iter().chain(s.blocks.iter()).map(|(id, _, _)| id).chain(s.minimized.iter().map(|(id, _)| id).filter(|id| !s.parked.contains_key(*id))).chain(s.detached.iter().filter(|id| s.seen.contains(*id)));
+        let open = s.last_blocks.iter().chain(s.blocks.iter()).map(|(id, _, _)| id).chain(s.minimized.iter().map(|(id, _)| id).filter(|id| !s.parked.contains_key(*id))).chain(s.windows.iter().filter(|id| s.seen.contains(*id)));
         for id in open.filter(|id| id.as_str() != "console") {
             if let Some(at) = s.touched.get(id) {
                 if !out.iter().any(|(known, _)| known == id) {
@@ -1514,7 +1411,7 @@ pub fn whereabouts(id: &str) -> Whereabouts {
             Whereabouts::Closed
         } else if s.minimized.iter().any(|(open, _)| open == id) {
             Whereabouts::Tray
-        } else if s.detached.contains(id) && s.seen.contains(id) {
+        } else if s.windows.contains(id) && s.seen.contains(id) {
             Whereabouts::Window
         } else if s.last_blocks.iter().chain(s.blocks.iter()).any(|(b, _, _)| b == id) {
             Whereabouts::Board
@@ -1539,7 +1436,7 @@ pub fn find_open(name: &str) -> Option<String> {
     with(|s| {
         let tray = s.minimized.iter().filter(|(id, _)| !s.parked.contains_key(id)).find(|(id, title)| title.to_lowercase().contains(n.as_str()) || prefix.is_some_and(|p| id.starts_with(p))).map(|(id, _)| id.clone());
         tray.or_else(|| {
-            let mut windows: Vec<&String> = s.detached.iter().filter(|id| s.seen.contains(*id) && (prefix.is_some_and(|p| id.starts_with(p)) || id.replace('_', " ") == n)).collect();
+            let mut windows: Vec<&String> = s.windows.iter().filter(|id| s.seen.contains(*id) && (prefix.is_some_and(|p| id.starts_with(p)) || id.replace('_', " ") == n)).collect();
             windows.sort();
             windows.first().map(|id| (*id).clone())
         })
@@ -1576,7 +1473,7 @@ mod tests {
 
     /// Windows the size of what they show: the Drive Space block of 2026-11-09 stood 640 × 306
     /// round three short rows.
-    /// "Close the privacy board", "detach the changes list": the kit's blocks answer to what Sir
+    /// "Close the privacy board", "minimise the changes list": the kit's blocks answer to what Sir
     /// calls them, whatever their titles say (seen live 2026-11-13: neither was found).
     #[test]
     fn a_block_answers_to_what_sir_calls_it() {
@@ -1657,68 +1554,27 @@ mod tests {
         assert!(c.x + 52.5 < 1920.0 - 440.0);
     }
 
+    /// Sir, 2026-11-19: "All windows should be real windows". Every view is a window of its
+    /// own wherever the HUD has windows to give, and he knows it there by its name; a closed
+    /// one is closed. Only a session without windows draws a view on the board.
     #[test]
-    fn views_open_inside_unless_detached_and_dock_back_on_request() {
+    fn every_view_is_a_window_of_its_own_where_the_hud_has_windows() {
         let _g = test_lock();
-        dock_all();
-        assert!(!adopt("system_telemetry"), "in-app by default");
-        detach("system_telemetry");
-        assert!(is_detached("system_telemetry"));
-        // "Open the simulation lab in a separate window": the next sim opens detached.
-        detach_next("sim:");
-        assert!(!adopt("schedule"));
-        assert!(adopt("sim:abc"), "the new simulation takes the request");
-        assert!(!adopt("sim:def"), "only the next one");
-        assert_eq!(dock_all(), 2);
-        assert!(!is_detached("system_telemetry") && !is_detached("sim:abc"));
-        forget("sim:abc");
-        forget("sim:def");
-        forget("system_telemetry");
-        forget("schedule");
-    }
-
-    /// "Detach it": the view he had last ("Iron Man suit" and "Unit tests" both hold "it").
-    #[test]
-    fn detach_it_means_the_latest_view() {
-        let _g = test_lock();
-        dock_all();
-        let r = Rect::from_min_size(Pos2::ZERO, vec2(300.0, 300.0));
-        begin_frame();
-        publish_block("unit_probe", "Unit tests", r);
-        touch("unit_probe");
-        std::thread::sleep(Duration::from_millis(5));
-        publish_block("model_probe", "Iron Man suit", r.translate(vec2(400.0, 400.0)));
-        touch("model_probe");
-        begin_frame();
-        assert_eq!(detach_named("it"), Ok("Iron Man suit".to_string()));
-        assert!(is_detached("model_probe") && !is_detached("unit_probe"));
-        assert_eq!(dock_all(), 1);
-        forget("unit_probe");
-        forget("model_probe");
-    }
-
-    /// "Detach the pictures": every picture block; "detach the picture" the first one.
-    #[test]
-    fn a_plural_detaches_every_block_it_names() {
-        let _g = test_lock();
-        dock_all();
-        let r = Rect::from_min_size(Pos2::ZERO, vec2(300.0, 300.0));
-        begin_frame();
-        publish_block("image_viewer", "Pictures", r);
-        publish_block("image_viewer_2", "Pictures", r.translate(vec2(320.0, 0.0)));
-        begin_frame();
-        assert_eq!(detach_named("picture"), Ok("Pictures".to_string()));
-        assert!(is_detached("image_viewer") && !is_detached("image_viewer_2"));
-        dock_all();
-        assert_eq!(detach_named("the pictures"), Ok("2 windows".to_string()));
-        assert!(is_detached("image_viewer") && is_detached("image_viewer_2"));
-        assert_eq!(dock_all(), 2);
-        forget("image_viewer");
-        forget("image_viewer_2");
+        assert!(!adopt_as("own_probe_board", false), "an offscreen session: on the board");
+        assert_eq!(whereabouts("own_probe_board"), Whereabouts::Closed, "not drawn yet");
+        assert!(adopt_as("system_telemetry", true) && adopt_as("sim:abc", true));
+        assert_eq!(whereabouts("system_telemetry"), Whereabouts::Window);
+        assert_eq!(find_open("the telemetry").as_deref(), Some("system_telemetry"));
+        assert!(recent_blocks().iter().any(|(id, _)| id == "sim:abc"), "\"it\" can mean a view in its window");
+        window_gone("sim:abc");
+        assert_eq!(whereabouts("sim:abc"), Whereabouts::Closed);
+        for id in ["own_probe_board", "system_telemetry", "sim:abc"] {
+            forget(id);
+        }
     }
 
     #[test]
-    fn a_detached_window_starts_where_its_block_was() {
+    fn a_blocks_place_is_remembered_until_it_is_forgotten() {
         let _g = test_lock();
         let r = Rect::from_min_size(pos2(48.0, 60.0), vec2(900.0, 560.0));
         publish_block("dock_test_where", "Plotter", r);
@@ -1992,13 +1848,10 @@ mod tests {
         }
         with(|st| st.forced.clear());
         assert!(stage_covers_centre(s));
-        // Leaving, or in a window of its own, it no longer holds the stage.
+        // Leaving, it no longer holds the stage.
         begin_close("earth");
         assert!(!stage_covers_centre(s), "the emblem comes back while it leaves");
         cancel_close("earth");
-        detach("earth");
-        assert!(!stage_covers_centre(s));
-        with(|st| st.detached.remove("earth"));
         // Any other block keeps off the emblem as before, and there is room beside the stage.
         let (at, size) = place_new_block("tile_test_plain", bounds, &[], vec2(320.0, 220.0), pos2(40.0, 80.0));
         let plain = Rect::from_min_size(at, size);
@@ -2078,9 +1931,9 @@ mod tests {
         begin_frame();
     }
 
-    /// "Move it to the middle", "full screen it", "minimise it", "detach it": a block glides
-    /// there, fills the screen and goes back, waits in the tray, plays its exit before its window;
-    /// "it" is the block opened, moved or arranged last.
+    /// "Move it to the middle", "full screen it", "minimise it": a block glides there, fills
+    /// the screen and goes back, waits in the tray; "it" is the block opened, moved or arranged
+    /// last.
     #[test]
     fn arranged_blocks_glide_fill_the_screen_wait_in_the_tray_and_are_what_it_means() {
         let _g = test_lock();
@@ -2122,9 +1975,6 @@ mod tests {
         assert_eq!(minimized_blocks(), vec![("arr_b".to_string(), "Arrange test".to_string())]);
         assert!(mine().contains(&"arr_b".to_string()), "a block in the tray can still be 'it'");
         assert!(restore("arr_b") && !is_minimized("arr_b") && !restore("arr_b"));
-        // Detached: its exit plays first, then it becomes a window of its own.
-        begin_detach("arr_a");
-        assert!(closing_progress("arr_a").is_some() && take_detaching("arr_a") && !take_detaching("arr_a"));
         assert!(!minimize("arr_none"), "nothing to minimise");
         for id in ["arr_a", "arr_b"] {
             forget(id);

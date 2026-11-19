@@ -22,8 +22,6 @@ use crate::tools::{str_arg, ToolContext};
 use eframe::egui::{pos2, vec2, Rect, Vec2};
 use regex::Regex;
 use serde_json::{json, Value};
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
@@ -51,8 +49,6 @@ pub enum Action {
     Maximize,
     Restore,
     Minimize,
-    Detach,
-    Dock,
     ToMonitor,
     SideBySide,
     Swap,
@@ -69,8 +65,6 @@ impl Action {
             "maximize" | "maximise" | "maximieren" => Self::Maximize,
             "restore" | "unminimize" | "unminimise" | "wiederherstellen" => Self::Restore,
             "minimize" | "minimise" | "minimieren" => Self::Minimize,
-            "detach" | "pop_out" | "undock" => Self::Detach,
-            "dock" | "dock_back" | "bring_back" => Self::Dock,
             "to_monitor" | "move_to_monitor" | "monitor" => Self::ToMonitor,
             "side_by_side" | "next_to_each_other" | "nebeneinander" => Self::SideBySide,
             "swap" | "exchange" | "tauschen" => Self::Swap,
@@ -87,8 +81,6 @@ impl Action {
             Self::Maximize => "maximize",
             Self::Restore => "restore",
             Self::Minimize => "minimize",
-            Self::Detach => "detach",
-            Self::Dock => "dock",
             Self::ToMonitor => "to_monitor",
             Self::SideBySide => "side_by_side",
             Self::Swap => "swap",
@@ -374,9 +366,6 @@ pub struct Arrangement {
 }
 
 static PENDING: Mutex<Vec<Arrangement>> = Mutex::new(Vec::new());
-/// Where a block sent to another monitor opens as a window of its own (screen points).
-static OS_PLACEMENT: Mutex<Option<HashMap<String, Rect>>> = Mutex::new(None);
-static ANY_PLACEMENT: AtomicBool = AtomicBool::new(false);
 /// The views in windows of their own that Sir put in full screen ("exit full screen" means them).
 static FULLSCREEN_WINDOWS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
@@ -402,34 +391,6 @@ pub fn requeue(arrangement: Arrangement) {
 /// Whether arrangements are waiting.
 pub fn pending() -> bool {
     !crate::crash_guard::lock(&PENDING).is_empty()
-}
-
-/// A block sent to another monitor opens there as a window of its own (`rect` in screen points).
-pub fn set_os_placement(id: &str, rect: Rect) {
-    crate::crash_guard::lock(&OS_PLACEMENT).get_or_insert_with(HashMap::new).insert(id.to_string(), rect);
-    ANY_PLACEMENT.store(true, Ordering::Release);
-}
-
-/// Where window `id` opens instead of where its block stood (None: where its block stood).
-pub fn os_placement(id: &str) -> Option<Rect> {
-    if !ANY_PLACEMENT.load(Ordering::Acquire) {
-        return None;
-    }
-    crate::crash_guard::lock(&OS_PLACEMENT).as_ref()?.get(id).copied()
-}
-
-/// Block `id` is on the board again: a later window of its own opens where the block stands.
-pub fn forget_os_placement(id: &str) {
-    if !ANY_PLACEMENT.load(Ordering::Acquire) {
-        return;
-    }
-    let mut map = crate::crash_guard::lock(&OS_PLACEMENT);
-    if let Some(m) = map.as_mut() {
-        m.remove(id);
-        if m.is_empty() {
-            ANY_PLACEMENT.store(false, Ordering::Release);
-        }
-    }
 }
 
 /// Window `id` went to (true) or left (false) full screen.
@@ -689,10 +650,6 @@ static SHRINK_GROW: LazyLock<Regex> = LazyLock::new(|| {
 static SIDE_BY_SIDE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^(?:put|place|show|arrange|move|set|lay out|stell|stelle|leg|lege|zeig|zeige|ordne)\s+(.+?)\s+(?:side by side|next to each other|beside each other|nebeneinander)(?:\s+an)?$|^(?:put|place|move|stell|stelle)\s+(.+?)\s+(?:next to|beside|neben)\s+(.+)$").expect("side by side regex")
 });
-/// "Dock it back", "dock the 3D model", "put it back in the HUD", "attach it back".
-static DOCK: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^(?:re-?dock|dock)\s+(.+?)(?:\s+(?:back|again|wieder))?(?:\s+(?:in|into|inside|onto|on|to)(?:\s+(?:the\s+)?(?:hud|board|main window|app|yourself|you)))?(?:\s+an)?$|^attach\s+(.+?)\s+back(?:\s+(?:in|into|inside|onto|on|to)(?:\s+(?:the\s+)?(?:hud|board|main window|app|yourself|you))?)?$|^(?:put|bring|move|pull)\s+(.+?)\s+back\s+(?:in|into|inside|onto|on|to)\s+(?:the\s+)?(?:hud|board|main window|app|yourself|you)$").expect("dock regex")
-});
 static SWAP: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^(?:swap|exchange|switch around|tausch|tausche|vertausch|vertausche)\s+(.+?)(?:\s+(?:around|places|positions|die plätze|die positionen|um))?$").expect("swap regex")
 });
@@ -753,10 +710,6 @@ pub fn parse(text: &str) -> Option<Value> {
     if let Some(c) = SWAP.captures(s) {
         let target = target_of(&c[1])?;
         return matches!(target, Target::Them | Target::Pair(..)).then(|| call(&target, Action::Swap, json!({}))).flatten();
-    }
-    if let Some(c) = DOCK.captures(s) {
-        let target = target_of(c.get(1).or(c.get(2)).or(c.get(3))?.as_str())?;
-        return matches!(target, Target::It | Target::Named(_)).then(|| call(&target, Action::Dock, json!({}))).flatten();
     }
     // Full screen, by name ("make it full screen" keeps its rule; the tools hand it over).
     if let Some(c) = FULLSCREEN.captures(s) {
@@ -863,10 +816,10 @@ pub fn is_tool(name: &str) -> bool {
 pub fn definitions() -> Vec<Value> {
     vec![json!({"type": "function", "function": {
         "name": "arrange_jai_window",
-        "description": "Move, size, full-screen, minimise, restore, detach or dock one of YOUR OWN views (Earth, radar, disk map, Feature Lab, a simulation, a window you opened): \"full screen the Earth\", \"move it to the middle\". target: its name, \"it\" (the latest) or \"them\". Not Sir's apps (window_management), not yourself.",
+        "description": "Move, size, full-screen, minimise or restore one of YOUR OWN views (Earth, radar, disk map, Feature Lab, a simulation, a window you opened): \"full screen the Earth\", \"move it to the middle\". target: its name, \"it\" (the latest) or \"them\". Not Sir's apps (window_management), not yourself.",
         "parameters": {"type": "object", "properties": {
             "target": {"type": "string"},
-            "action": {"type": "string", "enum": ["move", "resize", "fullscreen", "exit_fullscreen", "maximize", "restore", "minimize", "detach", "dock", "to_monitor", "side_by_side", "swap"]},
+            "action": {"type": "string", "enum": ["move", "resize", "fullscreen", "exit_fullscreen", "maximize", "restore", "minimize", "to_monitor", "side_by_side", "swap"]},
             "position": {"type": "string", "description": "centre, left, right, top, bottom, top_left …, left_third, right_two_thirds"},
             "size": {"type": "string", "description": "bigger, smaller, half, 60%, 900x600"},
             "monitor": {"type": "string", "description": "1, 2, left, right"},
@@ -942,7 +895,7 @@ pub async fn run_tool(ctx: &ToolContext, args: &Value) -> Result<String, String>
         let raw = str_arg(args, &["target", "view", "name", "id"]).unwrap_or("it");
         return crate::own_windows::pin(raw, on).ok_or_else(|| format!("None of my windows is called '{raw}', Sir."));
     }
-    let action = str_arg(args, &["action"]).and_then(Action::parse).ok_or("arrange_jai_window needs an action (move, resize, fullscreen, exit_fullscreen, maximize, restore, minimize, detach, dock, to_monitor, side_by_side, swap).")?;
+    let action = str_arg(args, &["action"]).and_then(Action::parse).ok_or("arrange_jai_window needs an action (move, resize, fullscreen, exit_fullscreen, maximize, restore, minimize, to_monitor, side_by_side, swap).")?;
     let position = str_arg(args, &["position", "where", "place"]).map(|p| Position::parse(p).ok_or(format!("'{p}' is not a place I know (centre, left, right, top, bottom, a corner, a third)."))).transpose()?;
     let size = str_arg(args, &["size"]).map(|s| Size::parse(s).ok_or(format!("'{s}' is not a size I know (bigger, smaller, half, 60%, 900x600)."))).transpose()?;
     let monitor = args.get("monitor").or_else(|| args.get("target_monitor")).filter(|m| !m.is_null()).cloned();
@@ -994,7 +947,7 @@ pub async fn run_tool(ctx: &ToolContext, args: &Value) -> Result<String, String>
     };
     // A panel that is not up yet opens first (its arrangement waits for it).
     if let Some(view) = opening {
-        if matches!(action, Action::Minimize | Action::ExitFullscreen | Action::Restore | Action::Dock) {
+        if matches!(action, Action::Minimize | Action::ExitFullscreen | Action::Restore) {
             return Err(format!("{} is not open, Sir.", capitalised(&spoken_name(&id))));
         }
         let opened = Box::pin(ctx.execute("open_jai_view", &json!({ "view": view }))).await;
@@ -1018,8 +971,6 @@ pub async fn run_tool(ctx: &ToolContext, args: &Value) -> Result<String, String>
         Action::Maximize => format!("{} is maximised, Sir.", capitalised(&name)),
         Action::Restore => format!("{} is restored, Sir.", capitalised(&name)),
         Action::Minimize => format!("{} is put away, Sir. Say \"restore it\" to bring it back.", capitalised(&name)),
-        Action::Detach => format!("{} has a window of its own now, Sir.", capitalised(&name)),
-        Action::Dock => format!("{} is back on your HUD, Sir.", capitalised(&name)),
         Action::ToMonitor => format!("{} is on monitor {}, Sir.", capitalised(&name), monitor.as_ref().map_or_else(String::new, |m| m.as_str().map_or_else(|| m.to_string(), str::to_string))),
         Action::SideBySide => format!("{} and {} are side by side, Sir.", capitalised(&name), other.as_deref().map_or_else(String::new, spoken_name)),
         Action::Swap => format!("{} and {} have swapped places, Sir.", capitalised(&name), other.as_deref().map_or_else(String::new, spoken_name)),
@@ -1078,7 +1029,7 @@ async fn app_instead(ctx: &ToolContext, action: Action, position: Option<Positio
             Some(Position::Bottom) => window("snap_bottom"),
             _ => return Err("None of my views is open to move, Sir, and I can only snap an app's window to a side of the screen.".into()),
         },
-        Action::Detach | Action::Dock | Action::SideBySide | Action::Swap => return Err("None of my views is open, Sir.".into()),
+        Action::SideBySide | Action::Swap => return Err("None of my views is open, Sir.".into()),
     };
     Box::pin(forward(ctx, tool, args)).await
 }
@@ -1179,13 +1130,6 @@ mod tests {
         };
         // The two sentences from the log that had no tool to call.
         assert_eq!(p("Move it to the middle of my screen."), args("it", "move", json!({ "position": "centre" })));
-        // A view of its own window comes back on the board ("dock it back" reached the brain).
-        for docked in ["dock it back", "Dock it.", "dock it back into the HUD", "put it back in the HUD", "attach it back", "redock it"] {
-            assert_eq!(p(docked), args("it", "dock", json!({})), "{docked}");
-        }
-        assert_eq!(p("dock the earth back"), args("earth", "dock", json!({})));
-        // ("Put it back" alone may be the model's colours or a moved block's place.)
-        assert_ne!(p("put it back"), args("it", "dock", json!({})));
         assert_eq!(p("No JAI, can you full screen the Earth?"), args("earth", "fullscreen", json!({})));
         assert_eq!(p("Centre the Earth"), args("earth", "move", json!({ "position": "centre" })));
         assert_eq!(p("Put the earth on the left half"), args("earth", "move", json!({ "position": "left" })));

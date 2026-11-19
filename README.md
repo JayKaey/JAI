@@ -59,6 +59,12 @@ live, selected or measured. The canvas is always black; the colour is the theme.
   one is a sphere of circuitry whose shells light up with the part of his mind that is working.
   "Switch to the complex core", "use the simple core", "make the orb bigger", "set the orb size
   to 150 percent".
+- **Windows.** Everything he opens is a window of Windows itself, never a block inside his own
+  window, with the live desktop on or off. A new window takes a place about the core: beside
+  him, the next on the other side, later ones above and below ("overlap the windows" opens them
+  in the middle instead). A line ties each window to the core, and its header wears its number
+  among the open ones, its title and a lamp for what it is doing. A window you have had before
+  opens where it last stood.
 - **His extra windows** take the HUD's theme unless told otherwise: "make that window red",
   "make that window arc reactor", "make that window transparent", "pin that window".
 - **What steps back.** "Calm mode" lets the readouts at the top and bottom step back until the
@@ -76,8 +82,8 @@ The HUD is the fullscreen board on one monitor, or one board across all of them 
 monitors", "stop spanning", "toggle span mode", the SCREENS menu, F11 to leave). Across several
 monitors the HUD proper (header, console, emblem, the board) stays on the primary one; the
 others are room for windows, each of which stands whole on one monitor. The emblem rests in the
-middle of that screen; it leaves it for a report on the board, for a panel on the centre stage
-(below), or when told to "move out of the way" (until "come back").
+middle of that screen; it leaves it for a report on the board, or when told to "move out of the
+way" (until "come back").
 
 F11 switches between the fullscreen board and a maximised window. "Make Discord full screen" is
 about Discord, "full screen" alone about the window in front, and neither ever about him; "move
@@ -88,10 +94,8 @@ start; "bring back my windows" reopens what was open last, also after a restart.
 
 ## Panels
 
-Three panels open by voice, as a block on the board or in a window of their own ("… in a new
-window"), and close with "close the radar", "close the disk map", "close the globe". On the
-board a panel takes the centre stage when nothing else stands there, and the emblem moves to its
-corner until the panel closes or is dragged away:
+Three panels open by voice, each in a window of its own, and close with "close the radar",
+"close the disk map", "close the globe":
 
 - **Network radar**: "check the network", "who's on my wifi?", "scan my network again" sweep
   the local network and place every device that answers; "is my network secure?" looks over
@@ -109,8 +113,7 @@ corner until the panel closes or is dragged away:
 
 Every window of his opens with a holographic entrance (the frame draws in, brackets close,
 a scan line passes) and leaves with an exit (it folds into a line), whether it is opened or
-closed by voice, by its CLOSE chip, by Ctrl+W, or as a window of its own. Asked for again while
-it is leaving, it stays.
+closed by voice, by its CLOSE key or by Esc. Asked for again while it is leaving, it stays.
 
 A pill at the top of the HUD says what he is doing: LISTENING, THINKING, SPEAKING, MUTED or
 STANDBY. While Sir speaks, his voice shows as a ring of ticks round the emblem. Both can be
@@ -152,7 +155,7 @@ Discord" read the other app's level off the mixer. "Set all apps to 100 %" (or "
 master. Questions ("is the sound on?") only ever read. Which device plays is
 not his to change: "switch to my speakers" says so, "which audio device am I using?" tells.
 
-"Open the mixer" puts a block with a fader for every channel on the board: the master first, then
+"Open the mixer" opens a window with a fader for every channel: the master first, then
 each app that has a session. "I can't hear anything" (or "there's no sound", "ich höre Discord
 nicht") looks for the sound: a muted master, a muted or nearly silent app, and says where it went.
 "Is anything muted?" names only what is.
@@ -264,8 +267,8 @@ JAI.exe --silent --show --window-drill --chat "What time is it?"   # SCREENS but
 ```
 
 `--monitor <n>` opens a test session's window on monitor n (1 = the primary) for that session
-only, so a test never lands on the monitor you are playing on. A window of its own without a
-place on the board opens on that monitor too. A test session never moves the focus: its board
+only, so a test never lands on the monitor you are playing on. His other windows open on that
+monitor too. A test session never moves the focus: its board
 covers the monitor as a borderless window rather than winit's fullscreen (which forces a new
 window to the front with an Alt tap), and none of its windows asks to be brought forward.
 
@@ -319,6 +322,6 @@ asked at the same time on several days, a thermal advisor with a fan-curve sugge
 clipboard history (in memory only, secrets never kept), tiling program windows on a monitor,
 and predictive command completion in the text console (Ctrl+K).
 
-Every block on the board has a right-click menu (copy, pin, maximize, export to Markdown or
-JSON, close), Ctrl+F searches across all open blocks, and new blocks are placed so that they
-never overlap each other or the orb.
+Every block of a report on the board has a right-click menu (copy, pin, maximize, export to
+Markdown or JSON, close), and new windows are placed so that they never open on each other or
+on the core.

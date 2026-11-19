@@ -1,4 +1,4 @@
-//! The 3D STUDIO block (`crate::model3d`): on the board, or in its own window once detached.
+//! The 3D STUDIO block (`crate::model3d`): a window of its own (a block on the board in a session without windows).
 //!
 //! The model is drawn by the GPU (`crate::gpu3d`, an egui paint callback) between the block's
 //! own egui chrome: the chips on top (look, wireframe, spin, explode, view, export), the model in
@@ -583,8 +583,8 @@ fn body(ui: &mut Ui, rt: &Handle) {
     footer(ui, &snap);
 }
 
-/// Registers the studio while it is open (a block on the board, or its own window once
-/// detached); once closed, the GPU memory goes on the next frame.
+/// Registers the studio while it is open (a window of its own; a block on the board in a session
+/// without windows); once closed, the GPU memory goes on the next frame.
 pub(super) fn show(ctx: &egui::Context, rt: &Handle) {
     let viewport = ViewportId::from_hash_of(VIEWPORT);
     if !super::detached_keep(ctx, viewport, studio::is_open()) {
@@ -613,17 +613,11 @@ pub(super) fn show(ctx: &egui::Context, rt: &Handle) {
         if action.close {
             studio::close();
         }
-        if action.detach {
-            crate::hud_dock::detach(ID);
-        }
         return;
     }
     let mut builder = ViewportBuilder::default().with_title("3D model — J.A.I.").with_app_id("jai").with_inner_size([960.0, 700.0]).with_min_inner_size([520.0, 380.0]).with_decorations(false);
     if let Some(icon) = super::window_icon() {
         builder = builder.with_icon(Arc::new(icon));
-    }
-    if let Some((at, size)) = super::detached_placement(ctx, ID) {
-        builder = builder.with_position(at).with_inner_size(size);
     }
     let builder = super::for_test_session(builder);
     let rt = rt.clone();
@@ -641,7 +635,7 @@ pub(super) fn show(ctx: &egui::Context, rt: &Handle) {
                 egui::Window::new(TITLE).show(ctx, |ui| body(ui, &rt));
             } else {
                 egui::CentralPanel::default().frame(Frame::none().fill(super::block_slate()).inner_margin(Margin::same(14.0))).show(ctx, |ui| {
-                    if super::detached_title_bar(ui, ctx, TITLE) {
+                    if super::detached_title_bar(ui, ctx, ID, TITLE) {
                         studio::close();
                     }
                     body(ui, &rt);

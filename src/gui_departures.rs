@@ -191,7 +191,7 @@ fn body(ui: &mut Ui, rt: &Handle) {
     ui.ctx().request_repaint_after(Duration::from_secs(if board.loading { 1 } else { 5 }));
 }
 
-/// Registers the board while it is open (a block, or its own window once detached).
+/// Registers the board while it is open (a window of its own, or a block in a session without windows).
 pub(super) fn show(ctx: &egui::Context, rt: &Handle) {
     if !super::detached_keep(ctx, ViewportId::from_hash_of(VIEWPORT), transit::is_open()) {
         crate::hud_dock::forget(ID);
@@ -202,17 +202,11 @@ pub(super) fn show(ctx: &egui::Context, rt: &Handle) {
         if action.close {
             transit::close();
         }
-        if action.detach {
-            crate::hud_dock::detach(ID);
-        }
         return;
     }
     let mut builder = ViewportBuilder::default().with_title("Departures — J.A.I.").with_app_id("jai").with_inner_size(WINDOW_SIZE).with_min_inner_size(WINDOW_MIN).with_decorations(false);
     if let Some(icon) = super::window_icon() {
         builder = builder.with_icon(Arc::new(icon));
-    }
-    if let Some((at, size)) = super::detached_placement(ctx, ID) {
-        builder = builder.with_position(at).with_inner_size(size);
     }
     let builder = super::for_test_session(builder);
     let rt = rt.clone();
@@ -228,7 +222,7 @@ pub(super) fn show(ctx: &egui::Context, rt: &Handle) {
                 egui::Window::new(TITLE).show(ctx, |ui| body(ui, &rt));
             } else {
                 egui::CentralPanel::default().frame(Frame::none().fill(block_slate()).inner_margin(Margin::same(14.0))).show(ctx, |ui| {
-                    if super::detached_title_bar(ui, ctx, TITLE) {
+                    if super::detached_title_bar(ui, ctx, ID, TITLE) {
                         transit::close();
                     }
                     body(ui, &rt);

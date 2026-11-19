@@ -117,7 +117,7 @@ fn rows(ui: &mut Ui, channels: &mut [Channel], rt: &Handle) {
     });
 }
 
-/// Registers the mixer while it is open (a block on the board, or its own window once detached).
+/// Registers the mixer while it is open (a window of its own; a block on the board in a session without windows).
 pub(super) fn show(ctx: &egui::Context, rt: &Handle) {
     // (Closed while it was its own window: it plays its exit first.)
     if !super::detached_keep(ctx, ViewportId::from_hash_of("jai_audio_mixer"), OPEN.load(Ordering::Acquire)) {
@@ -129,17 +129,11 @@ pub(super) fn show(ctx: &egui::Context, rt: &Handle) {
         if action.close {
             OPEN.store(false, Ordering::Release);
         }
-        if action.detach {
-            crate::hud_dock::detach(ID);
-        }
         return;
     }
     let mut builder = ViewportBuilder::default().with_title("Mixer — J.A.I.").with_app_id("jai").with_inner_size([580.0, 340.0]).with_min_inner_size([480.0, 200.0]).with_decorations(false);
     if let Some(icon) = super::window_icon() {
         builder = builder.with_icon(Arc::new(icon));
-    }
-    if let Some((at, size)) = super::detached_placement(ctx, ID) {
-        builder = builder.with_position(at).with_inner_size(size);
     }
     let builder = super::for_test_session(builder);
     let rt = rt.clone();
@@ -155,7 +149,7 @@ pub(super) fn show(ctx: &egui::Context, rt: &Handle) {
                 egui::Window::new("Mixer").show(ctx, |ui| body(ui, &rt));
             } else {
                 egui::CentralPanel::default().frame(Frame::none().fill(super::block_slate()).inner_margin(Margin::same(14.0))).show(ctx, |ui| {
-                    if super::detached_title_bar(ui, ctx, TITLE) {
+                    if super::detached_title_bar(ui, ctx, ID, TITLE) {
                         OPEN.store(false, Ordering::Release);
                     }
                     body(ui, &rt);

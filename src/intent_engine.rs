@@ -230,7 +230,7 @@ pub fn close_secondary_windows(tools: &ToolContext) -> usize {
     // exit as it goes); those on the board are fading with the other blocks and close
     // themselves as their exit ends, and in a moment all the same (a HUD that is not drawing
     // plays nothing).
-    let on_board = |block: &str| crate::hud_dock::is_open(block) && !crate::hud_dock::is_detached(block);
+    let on_board = |block: &str| crate::hud_dock::is_open(block) && !crate::hud_dock::all_own();
     let (fading_windows, own_windows): (Vec<String>, Vec<String>) = tools.widgets.windows().into_iter().map(|w| w.id).partition(|id| on_board(id));
     let (fading_sims, own_sims): (Vec<String>, Vec<String>) = tools.stark.simlab.list().into_iter().map(|s| s.id).partition(|id| on_board(&crate::gui::simulation_block_id(id)));
     let native = own_windows.iter().filter(|id| tools.widgets.close_window(id).is_ok()).count() + fading_windows.len();

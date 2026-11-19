@@ -1035,9 +1035,6 @@ pub fn configure(current: &InterfaceSettings, args: &Value) -> Result<Configured
     if let Some(cmd) = core_command(args) {
         done.push(format!("core {cmd:?}"));
     }
-    if bool_arg(args, "dock_windows") == Some(true) {
-        done.push("every window docked inside the HUD".into());
-    }
     if let Some(name) = str_arg(args, &["hud_palette", "palette", "hud_theme"]) {
         match crate::holo_theme::preset_name(name) {
             Some(preset) => {
@@ -1087,9 +1084,6 @@ pub fn configure(current: &InterfaceSettings, args: &Value) -> Result<Configured
             Some(t) => apply_custom_theme(&mut s, &t, &mut done, "loaded"),
             None => failed.push(format!("no saved theme '{name}' (saved: {})", crate::theme_store::custom_themes().iter().map(|t| t.name.as_str()).collect::<Vec<_>>().join(", "))),
         }
-    }
-    if let Some(name) = str_arg(args, &["detach_window"]) {
-        done.push(format!("'{name}' detached into its own window"));
     }
     if let Some(view) = str_arg(args, &["hud_view"]) {
         match crate::hud_dock::HudViewMode::parse(view) {
@@ -1170,9 +1164,6 @@ pub fn spoken_ack(args: &Value, now: &InterfaceSettings) -> String {
     if let Some(open) = flag("core_view") {
         return if open { "My core, Sir. Every module I run on, wired as it runs. Drag to orbit it." } else { "Core view hidden, Sir." }.into();
     }
-    if flag("dock_windows") == Some(true) {
-        return "Every window is back inside the HUD, Sir.".into();
-    }
     if let Some(open) = flag("feature_lab") {
         return if open { "The Feature Lab, Sir. Everything I can do, each with a button to try it." } else { "Feature Lab closed, Sir." }.into();
     }
@@ -1184,9 +1175,6 @@ pub fn spoken_ack(args: &Value, now: &InterfaceSettings) -> String {
     }
     if let Some(preset) = text(&["hud_palette", "palette", "hud_theme"]).and_then(crate::holo_theme::preset_name) {
         return format!("{} it is, Sir.", spoken_theme(preset));
-    }
-    if text(&["detach_window"]).is_some() {
-        return "Detached into its own window, Sir.".into();
     }
     if args.get("span_all_monitors").is_some_and(|v| !v.is_null()) {
         return if now.span_all_monitors { "One board across every monitor, Sir. I stay on your first screen." } else { "Back on your first monitor, Sir." }.into();
@@ -1684,9 +1672,7 @@ pub fn tool_definition() -> Value {
             "always_on_top": {"type": "boolean"},
             "fullscreen": {"type": "boolean"},
             "core_view": {"type": "boolean", "description": "The 3D sphere of your source modules ('show me your core')."},
-            "dock_windows": {"type": "boolean", "description": "Bring every detached view back inside the HUD."},
             "hud_palette": {"type": "string", "enum": ["stark_gold", "mono", "arc_reactor", "hot_rod", "gamma", "vibranium", "ember", "graphite"], "description": "The whole HUD's colour theme; a plain colour is accent_color."},
-            "detach_window": {"type": "string", "description": "Pop a view out into its own OS window."},
             "create_theme": {"type": "object", "description": "Design, save and apply a named theme ('a theme called Cyberpunk with neon yellow borders').", "properties": {"name": {"type": "string"}, "description": {"type": "string", "description": "Sir's colours per role and/or a mood."}, "core_primary": {"type": "string"}, "core_secondary": {"type": "string"}, "window_border": {"type": "string"}, "background_tint": {"type": "string"}}},
             "save_theme": {"type": "string", "description": "Save the current look under this name."},
             "load_theme": {"type": "string", "description": "Apply a saved theme by name."},

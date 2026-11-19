@@ -337,6 +337,19 @@ fn body(ui: &mut Ui, app: &crate::app::Jai, rt: &Handle) {
     });
 }
 
+/// The first sentence of `text`: up to the first stop, "!" or "?" that ends one (a space or the
+/// end follows it), never a stop inside "e.g.", "i.e." or "3.5". (Seen in the real window on
+/// 2026-11-19: "Open any installed application, folder or file (e.")
+fn first_sentence(text: &str) -> &str {
+    for (i, c) in text.char_indices() {
+        let ends = matches!(c, '.' | '!' | '?') && text[i + 1..].chars().next().is_none_or(char::is_whitespace);
+        if ends && !(text[..i].ends_with("e.g") || text[..i].ends_with("i.e")) {
+            return text[..=i].trim();
+        }
+    }
+    text.trim()
+}
+
 fn row(ui: &mut Ui, tools: &ToolContext, rt: &Handle, name: &str, description: &str, plan: TryPlan) {
     let probe = probe_args(name).is_some();
     let outcome = results().get(name).cloned();
@@ -393,13 +406,13 @@ fn row(ui: &mut Ui, tools: &ToolContext, rt: &Handle, name: &str, description: &
     let text = match (&outcome, &suite) {
         (Some(Some((_, _, line))), _) if !line.is_empty() => format!("→ {line}"),
         (None, Some(o)) if !o.detail.is_empty() => format!("→ {}", o.detail),
-        _ => description.split_inclusive(['.', '!', '?']).next().unwrap_or(description).trim().to_string(),
+        _ => first_sentence(description).to_string(),
     };
     ui.add(egui::Label::new(RichText::new(text).size(11.0).color(strip_muted())).wrap());
 }
 
-/// Registers the lab with egui while it is open (each HUD frame): a block on the board, or its
-/// own window once detached.
+/// Registers the lab with egui while it is open (each HUD frame): a window of its own (a block
+/// on the board in a session without windows).
 pub(super) fn show(ctx: &egui::Context, app: &crate::app::Jai, rt: &Handle) {
     // (Closed while it was its own window: it plays its exit first.)
     if !super::detached_keep(ctx, ViewportId::from_hash_of("jai_feature_lab"), is_open()) {
@@ -411,17 +424,11 @@ pub(super) fn show(ctx: &egui::Context, app: &crate::app::Jai, rt: &Handle) {
         if action.close {
             OPEN.store(false, Ordering::Release);
         }
-        if action.detach {
-            crate::hud_dock::detach(ID);
-        }
         return;
     }
     let mut builder = ViewportBuilder::default().with_title("Feature Lab — J.A.I.").with_app_id("jai").with_inner_size([820.0, 720.0]).with_min_inner_size([520.0, 400.0]).with_decorations(false);
     if let Some(icon) = super::window_icon() {
         builder = builder.with_icon(Arc::new(icon));
-    }
-    if let Some((at, size)) = super::detached_placement(ctx, ID) {
-        builder = builder.with_position(at).with_inner_size(size);
     }
     let builder = super::for_test_session(builder);
     let (app, rt) = (app.clone(), rt.clone());
@@ -437,7 +444,7 @@ pub(super) fn show(ctx: &egui::Context, app: &crate::app::Jai, rt: &Handle) {
                 egui::Window::new("Feature Lab").default_size([820.0, 680.0]).show(ctx, |ui| body(ui, &app, &rt));
             } else {
                 egui::CentralPanel::default().frame(Frame::none().fill(super::block_slate()).inner_margin(Margin::same(14.0))).show(ctx, |ui| {
-                    if super::detached_title_bar(ui, ctx, "Feature Lab // every system") {
+                    if super::detached_title_bar(ui, ctx, ID, "Feature Lab // every system") {
                         OPEN.store(false, Ordering::Release);
                     }
                     body(ui, &app, &rt);
@@ -459,6 +466,21 @@ pub(super) fn check_call(defs: &[Value], name: &str, args: &str) -> Result<(), S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_description_is_cut_at_its_first_sentence_not_inside_an_abbreviation() {
+        assert_eq!(first_sentence("Open any installed application, folder or file (e.g. Spotify). Then more."), "Open any installed application, folder or file (e.g. Spotify).");
+        assert_eq!(first_sentence("\"Is Firefox open?\" is answered from the process list. More."), "\"Is Firefox open?\" is answered from the process list.");
+        assert_eq!(first_sentence("Zoom 1.25 is bigger! And then."), "Zoom 1.25 is bigger!");
+        assert_eq!(first_sentence("  One line without a stop  "), "One line without a stop");
+        // Every tool's line in the lab ends as a sentence does, or is the whole description.
+        let defs = crate::tools::definitions_with(Vec::new());
+        for (name, description) in catalogue(&defs).into_iter().flat_map(|(_, tools)| tools) {
+            let line = first_sentence(&description);
+            assert!(line == description.trim() || line.ends_with(['.', '!', '?']), "{name}: {line}");
+            assert!(!line.ends_with("(e.") && !line.ends_with(" e."), "{name}: {line}");
+        }
+    }
 
     #[test]
     fn every_tool_is_listed_once_and_every_probe_is_a_valid_call() {

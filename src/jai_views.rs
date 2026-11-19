@@ -143,28 +143,11 @@ async fn markdown_window(ctx: &ToolContext, view: JaiSubWindow, markdown: String
     if let Some(m) = args.get("monitor") {
         spec["monitor"] = m.clone();
     }
-    if separate(args) {
-        spec["separate_window"] = json!(true);
-    }
     let outcome = Box::pin(ctx.execute("spawn_native_window", &spec)).await;
     if outcome.success {
         Ok(outcome.output)
     } else {
         Err(outcome.output.trim_start_matches("Error: ").to_string())
-    }
-}
-
-/// Sir asked for an OS window ("in a new window") or a monitor.
-fn separate(args: &Value) -> bool {
-    args.get("separate_window").and_then(Value::as_bool) == Some(true) || args.get("monitor").is_some_and(|m| !m.is_null())
-}
-
-/// "in its own window on Monitor 2" or "on your HUD" for the spoken line.
-fn placed(args: &Value) -> String {
-    if separate(args) {
-        format!(" in its own window{}", on_monitor(args))
-    } else {
-        " on your HUD".to_string()
     }
 }
 
@@ -178,15 +161,12 @@ pub async fn run(ctx: &ToolContext, args: &Value) -> Result<String, String> {
     if view != JaiSubWindow::Live && !crate::gui::windows_supported() {
         return Err("JAI is running without a display (headless), so he cannot open windows.".into());
     }
-    let on = placed(args);
+    let on = on_monitor(args);
     match view {
         // live layers (C1): satellite passes, road traffic, another day's weather, rain soon.
         JaiSubWindow::Live => crate::live_layers::run_view(ctx, args).await,
         // The panels with their own state and actions (sweep, scan, globe): theirs to carry out.
         JaiSubWindow::NetworkRadar | JaiSubWindow::DiskMap | JaiSubWindow::Earth | JaiSubWindow::Departures => {
-            if separate(args) {
-                crate::hud_dock::detach(view.id());
-            }
             // Asked for again while it was leaving: it stays.
             crate::hud_dock::cancel_close(view.id());
             match view {
@@ -207,9 +187,6 @@ pub async fn run(ctx: &ToolContext, args: &Value) -> Result<String, String> {
             });
             if let Some(m) = args.get("monitor") {
                 spec["monitor"] = m.clone();
-            }
-            if separate(args) {
-                spec["separate_window"] = json!(true);
             }
             let outcome = Box::pin(ctx.execute("spawn_native_window", &spec)).await;
             if !outcome.success {
@@ -243,16 +220,13 @@ pub async fn run(ctx: &ToolContext, args: &Value) -> Result<String, String> {
         }
         JaiSubWindow::SimulationLab => {
             let kind = str_arg(args, &["sim_type"]).unwrap_or("projectile");
-            let outcome = Box::pin(ctx.execute("launch_interactive_simulation", &json!({ "sim_type": kind, "title": "Simulation Lab", "separate_window": separate(args) }))).await;
+            let outcome = Box::pin(ctx.execute("launch_interactive_simulation", &json!({ "sim_type": kind, "title": "Simulation Lab" }))).await;
             if !outcome.success {
                 return Err(outcome.output.trim_start_matches("Error: ").to_string());
             }
             Ok(format!("{}\nSpoken: The Simulation Lab is open{on}, Sir. Drag the sliders, or just tell me what to change.", outcome.output))
         }
         JaiSubWindow::MobileSatelliteQr => {
-            if separate(args) {
-                crate::hud_dock::detach("pairing");
-            }
             let outcome = Box::pin(ctx.execute("show_mobile_satellite_instructions", &json!({}))).await;
             if !outcome.success {
                 return Err(outcome.output.trim_start_matches("Error: ").to_string());
@@ -325,8 +299,8 @@ pub fn close_panel(name: &str) -> Option<&'static str> {
 /// fade out with the other blocks). How many closed.
 pub fn close_detached_panels() -> usize {
     let mut closed = 0;
-    for (id, _, open, close) in PANELS {
-        if open() && crate::hud_dock::is_detached(id) {
+    for (_, _, open, close) in PANELS {
+        if open() && crate::hud_dock::all_own() {
             close();
             closed += 1;
         }

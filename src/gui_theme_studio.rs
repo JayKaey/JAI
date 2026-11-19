@@ -94,8 +94,8 @@ fn body(ui: &mut Ui) {
     }
 }
 
-/// Registers the studio while it is open (a block on the board, or its own window once
-/// detached); the theme Sir saved this frame, if any.
+/// Registers the studio while it is open (a window of its own; a block on the board in a session
+/// without windows); the theme Sir saved this frame, if any.
 pub(super) fn show(ctx: &egui::Context) -> Option<CustomTheme> {
     // (Closed while it was its own window: it plays its exit first.)
     if !super::detached_keep(ctx, ViewportId::from_hash_of("jai_theme_studio"), OPEN.load(Ordering::Acquire)) {
@@ -115,17 +115,11 @@ pub(super) fn show(ctx: &egui::Context) -> Option<CustomTheme> {
         if action.close {
             OPEN.store(false, Ordering::Release);
         }
-        if action.detach {
-            crate::hud_dock::detach(ID);
-        }
         return lock(&SAVED).take();
     }
     let mut builder = ViewportBuilder::default().with_title("Theme Studio — J.A.I.").with_app_id("jai").with_inner_size([580.0, 330.0]).with_min_inner_size([460.0, 280.0]).with_decorations(false);
     if let Some(icon) = super::window_icon() {
         builder = builder.with_icon(Arc::new(icon));
-    }
-    if let Some((at, size)) = super::detached_placement(ctx, ID) {
-        builder = builder.with_position(at).with_inner_size(size);
     }
     let builder = super::for_test_session(builder);
     ctx.show_viewport_deferred(ViewportId::from_hash_of("jai_theme_studio"), builder, move |ctx, class| {
@@ -140,7 +134,7 @@ pub(super) fn show(ctx: &egui::Context) -> Option<CustomTheme> {
                 egui::Window::new("Theme Studio").show(ctx, body);
             } else {
                 egui::CentralPanel::default().frame(Frame::none().fill(super::block_slate()).inner_margin(Margin::same(14.0))).show(ctx, |ui| {
-                    if super::detached_title_bar(ui, ctx, "Theme Studio // create theme") {
+                    if super::detached_title_bar(ui, ctx, ID, "Theme Studio // create theme") {
                         OPEN.store(false, Ordering::Release);
                     }
                     body(ui);

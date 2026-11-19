@@ -94,6 +94,14 @@ pub const RELEASES: &[Release] = &[
         date: "2026-11-19",
         name: "Every panel in the new look",
         entries: &[
+            better("Every window is a real window", "Nothing he opens stands inside his own window any more, with the live desktop on or off."),
+            better("Windows open beside the core", "A new window takes a place about the core: beside him, the next on the other side."),
+            better("Leaders run to the real windows", "The board draws a line from the core's circle to each of his windows on its screen."),
+            better("Windows wear the panel's header", "Index tab, title in wide capitals and state lamp, as a block on the board had."),
+            better("No more dock and detach", "The keys and orders that moved a view on and off the board are gone: nothing docks."),
+            fixed("The canvas is black again", "The film grain was four times too strong since 11 November: a grey fog over the black."),
+            fixed("The clock stays off the core view", "The desktop clock was drawn over the sphere while the core view was open."),
+            fixed("Feature Lab lines end where they should", "A description was cut inside \"e.g.\"; it ends at its first full sentence now."),
             better("Every panel in the new look", "Earth, radar, research, lab, 3D studio, pictures, mixer and the rest: light on black glass."),
             better("The disk map is panes of light", "A folder is faint glass in its file type's colour with a bright edge, not a solid block."),
             better("The Earth is dark glass", "The holographic globe is a dark ball with dots of light and lit coasts, not an olive one."),
@@ -788,8 +796,6 @@ pub fn open_explanation(id: &'static str) {
     let mut ui = lock(&UI);
     if !ui.explaining.contains(&id) {
         ui.explaining.push(id);
-        // (Born as a window of its own: "in a new window".)
-        crate::hud_dock::detach_next(&explain_id(id));
     }
     drop(ui);
     crate::gui::refresh();

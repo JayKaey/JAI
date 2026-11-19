@@ -141,8 +141,8 @@ fn second_series() -> Color32 {
 /// Segments of every plotted curve.
 pub const CURVE_SEGMENTS: usize = 200;
 
-/// Registers every simulation with egui (each HUD frame): a block in the HUD, or its own window
-/// once detached.
+/// Registers every simulation with egui (each HUD frame): a window of its own (a block on the
+/// board in a session without windows).
 pub(super) fn show_simulations(ctx: &egui::Context, host: &WidgetHost) {
     static SEEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let lab = &host.app.tools().stark.simlab;
@@ -167,9 +167,6 @@ pub(super) fn show_simulations(ctx: &egui::Context, host: &WidgetHost) {
                 lab.close(&sim.id);
                 crate::hud_dock::forget(&key);
             }
-            if action.detach {
-                crate::hud_dock::detach(&key);
-            }
             if !sim.paused {
                 ctx.request_repaint_after(Duration::from_millis(16));
             }
@@ -188,9 +185,6 @@ pub(super) fn show_simulations(ctx: &egui::Context, host: &WidgetHost) {
             .with_decorations(false);
         if let Some(icon) = super::window_icon() {
             builder = builder.with_icon(std::sync::Arc::new(icon));
-        }
-        if let Some((at, size)) = super::detached_placement(ctx, &key) {
-            builder = builder.with_position(at).with_inner_size(size);
         }
         let builder = super::for_test_session(builder);
         // (Asked for again while it was leaving: it stays.)
@@ -221,17 +215,12 @@ pub(super) fn show_simulations(ctx: &egui::Context, host: &WidgetHost) {
 /// builders): one that was closed keeps its window while its exit plays, drawn from here.
 static SHOWN: Mutex<Vec<(Simulation, ViewportBuilder)>> = Mutex::new(Vec::new());
 
-/// Sir closed a simulation's own window: the simulation comes back onto the HUD, or, where
-/// every view is a window of its own (he is the desktop's background), it is closed. (There
-/// it stayed open, its window asked for again in every frame and standing as its exit's last
-/// one: "I tried closing a window JAI opened and it turned black", 2026-11-14.)
+/// Sir closed a simulation's window: the simulation is closed. (Left open, its window was
+/// asked for again in every frame and stood as its exit's last one: "I tried closing a window
+/// JAI opened and it turned black", 2026-11-14.)
 fn closed_by_hand(lab: &simulation_lab::SimulationLab, id: &str) {
-    if crate::hud_dock::all_own() {
-        lab.close(id);
-        crate::hud_dock::forget(&dock_key(id));
-    } else {
-        crate::hud_dock::dock(&dock_key(id));
-    }
+    lab.close(id);
+    crate::hud_dock::forget(&dock_key(id));
 }
 
 fn sim_frame(ctx: &egui::Context, class: ViewportClass, host: &WidgetHost, id: &str) {
@@ -258,7 +247,7 @@ fn sim_frame(ctx: &egui::Context, class: ViewportClass, host: &WidgetHost, id: &
         egui::Window::new(&sim.title).id(egui::Id::new(("jai_sim_embedded", id))).default_size([900.0, 560.0]).show(ctx, body);
     } else {
         egui::CentralPanel::default().frame(Frame::none().inner_margin(Margin::same(12.0))).show(ctx, |ui| {
-            if super::detached_title_bar(ui, ctx, &sim.title) && !leaving {
+            if super::detached_title_bar(ui, ctx, &dock_key(id), &sim.title) && !leaving {
                 closed_by_hand(lab, id);
             }
             body(ui);
@@ -831,21 +820,6 @@ mod tests {
         assert_eq!(curve_runs(&xs, &sin, |x, y| view.to_screen(x, y), -1.2, 1.2).len(), 1);
         let pole: Vec<f64> = xs.iter().map(|x| 1.0 / x).collect();
         assert!(curve_runs(&xs, &pole, |x, y| view.to_screen(x, y), -2.0, 2.0).len() >= 2);
-    }
-
-    #[test]
-    fn simulations_open_in_the_hud_and_detach_only_on_request() {
-        use crate::simulation_lab::{place_simulation, SimKind, SimulationLab};
-        let _dock = crate::hud_dock::test_lock();
-        let lab = SimulationLab::default();
-        let plot = lab.launch(SimKind::Function, "x^2 - 2x - 3", Some("Function plotter")).unwrap();
-        assert!(!place_simulation(&plot.id, &serde_json::json!({})));
-        assert!(!crate::hud_dock::adopt(&dock_key(&plot.id)), "the plotter is a HUD block");
-        let swing = lab.launch(SimKind::Pendulum, "", None).unwrap();
-        assert!(place_simulation(&swing.id, &serde_json::json!({"separate_window": true})));
-        assert!(crate::hud_dock::adopt(&dock_key(&swing.id)), "its own window only when asked");
-        crate::hud_dock::forget(&dock_key(&plot.id));
-        crate::hud_dock::forget(&dock_key(&swing.id));
     }
 
     #[test]

@@ -1274,11 +1274,6 @@ impl WidgetEngine {
             .filter(|s| !s.is_empty())
             .or_else(|| defaults.map(|d| d.0.to_string()))
             .unwrap_or_else(|| format!("window_{seq}"));
-        // In the HUD by default; its own OS window only when Sir said so (or named a monitor).
-        let separate = args.get("separate_window").and_then(Value::as_bool) == Some(true) || args.get("monitor").is_some_and(|m| !m.is_null());
-        if separate {
-            crate::hud_dock::detach(&id);
-        }
         // Asked for again while it was leaving: it stays.
         crate::hud_dock::cancel_close(&id);
         if self.windows().iter().any(|w| w.id == id) {
@@ -1332,15 +1327,11 @@ impl WidgetEngine {
         // A window without content is not opened (it used to fall back to system telemetry, so
         // "open an image of the Earth" showed CPU and RAM).
         if spec.widgets.is_empty() && spec.blocks.is_empty() {
-            if separate {
-                crate::hud_dock::forget(&id);
-            }
             return Err("Nothing was opened: a window needs content (markdown, text, code, a live view such as pc_stats, or widgets). For a picture call show_image, for a live camera show_live_camera, for street view show_street_view.".into());
         }
         let live = spec.live_kinds();
         let summary = format!(
-            "Opened window '{id}' {} (\"{}\", {:.0}×{:.0}{}{}) with {}{} widget(s) and {} content block(s){}.",
-            if separate { "as its own OS window" } else { "as a block inside the HUD (\"detach it\" gives it its own window)" },
+            "Opened window '{id}' as a window of its own (\"{}\", {:.0}×{:.0}{}{}) with {}{} widget(s) and {} content block(s){}.",
             spec.title,
             spec.width,
             spec.height,
@@ -2283,18 +2274,5 @@ mod tests {
         assert_eq!(telemetry_value(&t, "disk:C"), Some(75.0));
         assert_eq!(telemetry_value(&t, "gpu"), None);
         assert_eq!(telemetry_value(&t, "banana"), None);
-    }
-
-    #[test]
-    fn windows_open_inside_the_hud_unless_a_separate_window_is_asked_for() {
-        let _dock = crate::hud_dock::test_lock();
-        let e = WidgetEngine::in_memory();
-        e.spawn_window(&json!({"id": "dock_test_inside", "title": "Inside", "live": "pc_stats"})).unwrap();
-        assert!(!crate::hud_dock::is_detached("dock_test_inside"), "a HUD block by default");
-        let out = e.spawn_window(&json!({"id": "dock_test_outside", "title": "Outside", "live": "pc_stats", "separate_window": true})).unwrap();
-        assert!(crate::hud_dock::is_detached("dock_test_outside"));
-        assert!(out.contains("own OS window"), "{out}");
-        crate::hud_dock::forget("dock_test_inside");
-        crate::hud_dock::forget("dock_test_outside");
     }
 }

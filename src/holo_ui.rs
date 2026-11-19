@@ -638,7 +638,7 @@ pub fn keys_at(ui: &mut Ui, id: egui::Id, right: f32, mid: f32, labels: &[(&str,
 }
 
 /// What Sir can say instead of pressing a key: its tip names it (`tip_with_sentence`).
-pub const SAY_INSTEAD: &[(&str, &str)] = &[("DETACH", "detach it"), ("POP OUT", "detach it"), ("UNDO", "undo that"), ("YES", "yes"), ("NO", "no"), ("NONE", "none of them")];
+pub const SAY_INSTEAD: &[(&str, &str)] = &[("UNDO", "undo that"), ("YES", "yes"), ("NO", "no"), ("NONE", "none of them")];
 
 /// A key's tip with the sentence that does the same, unless the tip names it already.
 pub fn tip_with_sentence(label: &str, hint: &str) -> String {
@@ -655,8 +655,8 @@ mod tests {
 
     #[test]
     fn a_keys_tip_names_the_sentence_that_does_the_same() {
-        assert_eq!(tip_with_sentence("DETACH", ""), "Say “detach it”.");
-        assert_eq!(tip_with_sentence("DETACH", "A window of its own"), "A window of its own. Or say “detach it”.");
+        assert_eq!(tip_with_sentence("UNDO", ""), "Say “undo that”.");
+        assert_eq!(tip_with_sentence("UNDO", "Take it back"), "Take it back. Or say “undo that”.");
         assert_eq!(tip_with_sentence("CLOSE", "Close it"), "Close it");
     }
 

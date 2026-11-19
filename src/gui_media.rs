@@ -118,17 +118,11 @@ fn host(ctx: &egui::Context, rt: &Handle, b: Block) -> bool {
         if action.close {
             (b.close)();
         }
-        if action.detach {
-            crate::hud_dock::detach(&b.id);
-        }
         return true;
     }
     let mut builder = ViewportBuilder::default().with_title(b.window_title).with_app_id("jai").with_inner_size(b.size).with_min_inner_size(b.min).with_decorations(false);
     if let Some(icon) = super::window_icon() {
         builder = builder.with_icon(Arc::new(icon));
-    }
-    if let Some((at, size)) = super::detached_placement(ctx, &b.id) {
-        builder = builder.with_position(at).with_inner_size(size);
     }
     let builder = super::for_test_session(builder);
     let rt = rt.clone();
@@ -144,7 +138,7 @@ fn host(ctx: &egui::Context, rt: &Handle, b: Block) -> bool {
                 egui::Window::new(b.title).id(egui::Id::new(("jai_embedded_block", &b.id))).show(ctx, |ui| (b.body)(ui, &rt));
             } else {
                 egui::CentralPanel::default().frame(Frame::none().fill(super::block_slate()).inner_margin(Margin::same(14.0))).show(ctx, |ui| {
-                    if super::detached_title_bar(ui, ctx, b.title) {
+                    if super::detached_title_bar(ui, ctx, &b.id, b.title) {
                         (b.close)();
                     }
                     (b.body)(ui, &rt);

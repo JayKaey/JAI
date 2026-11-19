@@ -1367,12 +1367,6 @@ impl ToolContext {
             if let Some(cmd) = interface::core_command(args) {
                 gui::core_command(cmd);
             }
-            if bool_arg(args, "dock_windows") == Some(true) {
-                crate::hud_dock::dock_all();
-            }
-            if let Some(name) = str_arg(args, &["detach_window"]) {
-                crate::hud_dock::detach_named(name)?;
-            }
             if let Some(mode) = str_arg(args, &["hud_view"]).and_then(crate::hud_dock::HudViewMode::parse) {
                 crate::hud_dock::request_view(mode);
             }

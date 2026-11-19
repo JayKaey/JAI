@@ -812,9 +812,6 @@ pub(super) fn show_windows(ctx: &egui::Context, host: &WidgetHost) {
                 engine.window_closed_by_user(&spec.id);
                 crate::hud_dock::forget(&spec.id);
             }
-            if action.detach {
-                crate::hud_dock::detach(&spec.id);
-            }
             ctx.request_repaint_after(Duration::from_millis(if fast { 1000 } else { 700 }));
             continue;
         }
@@ -840,8 +837,6 @@ pub(super) fn show_windows(ctx: &egui::Context, host: &WidgetHost) {
         if let Some(pos) = position(&spec, native_ppp) {
             builder = builder.with_position(pos);
             super::placed_by_order();
-        } else if let Some((at, size)) = super::detached_placement(ctx, &spec.id) {
-            builder = builder.with_position(at).with_inner_size(size);
         }
         let builder = super::for_test_session(builder);
         // (Asked for again while it was leaving: it stays.)
@@ -905,7 +900,12 @@ fn window_frame(ctx: &egui::Context, class: ViewportClass, host: &WidgetHost, id
             font.size *= scale;
         }
         ui.horizontal(|ui| {
-            ui.add(egui::Label::new(RichText::new(&spec.title).font(bold(16.0)).color(p.accent).extra_letter_spacing(1.5)).selectable(false));
+            // (In a window of its own: the number, title and lamp every window of his wears.)
+            if class == ViewportClass::Embedded {
+                ui.add(egui::Label::new(RichText::new(&spec.title).font(bold(16.0)).color(p.accent).extra_letter_spacing(1.5)).selectable(false));
+            } else {
+                super::bar_title(ui, ctx, &spec.id, &spec.title, 250.0);
+            }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if hovered {
                     window_toolbar(ui, ctx, host, &spec);

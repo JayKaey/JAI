@@ -35,13 +35,13 @@ pub(super) fn toggle() {
 
 /// Closes the pairing view when it sits inside the HUD (the HOME tab).
 pub(super) fn close_in_app() {
-    if !crate::hud_dock::is_detached("pairing") {
+    if !crate::hud_dock::all_own() {
         OPEN.store(false, Ordering::Release);
     }
 }
 
-/// Registers the view with egui while it is open (each HUD frame): a ROSE block inside the HUD,
-/// or its own window once detached.
+/// Registers the view with egui while it is open (each HUD frame): a window of its own (a block on
+/// the board in a session without windows).
 pub(super) fn show(ctx: &egui::Context, host: &WidgetHost) {
     // (Closed while it was its own window: it plays its exit first.)
     if !super::detached_keep(ctx, viewport_id(), OPEN.load(Ordering::Acquire)) {
@@ -61,9 +61,6 @@ pub(super) fn show(ctx: &egui::Context, host: &WidgetHost) {
         .with_decorations(false);
     if let Some(icon) = super::window_icon() {
         builder = builder.with_icon(std::sync::Arc::new(icon));
-    }
-    if let Some((at, size)) = super::detached_placement(ctx, "pairing") {
-        builder = builder.with_position(at).with_inner_size(size);
     }
     let builder = super::for_test_session(builder);
     let host = host.clone();
@@ -197,14 +194,11 @@ fn frame(ctx: &egui::Context, class: Option<ViewportClass>, host: &WidgetHost) {
         if action.close {
             OPEN.store(false, Ordering::Release);
         }
-        if action.detach {
-            crate::hud_dock::detach("pairing");
-        }
     } else if class == Some(ViewportClass::Embedded) {
         egui::Window::new("Mobile Satellite Pairing").default_size([480.0, 640.0]).show(ctx, body);
     } else {
         egui::CentralPanel::default().frame(Frame::none().inner_margin(Margin::same(16.0))).show(ctx, |ui| {
-            if super::detached_title_bar(ui, ctx, "Mobile satellite pairing") {
+            if super::detached_title_bar(ui, ctx, "pairing", "Mobile satellite pairing") {
                 OPEN.store(false, Ordering::Release);
             }
             body(ui);

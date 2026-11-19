@@ -1,4 +1,4 @@
-//! The DISK MAP block (`crate::disk_map`): on the board, or in its own window once detached.
+//! The DISK MAP block (`crate::disk_map`): a window of its own (a block on the board in a session without windows).
 //!
 //! While the scan runs, the drive's top-level folders are flat tiles that grow and re-squarify
 //! beside a dark READING tile of what is still to come; a tile that grew flashes pale and every
@@ -102,8 +102,8 @@ fn body(ui: &mut Ui, _rt: &Handle) {
     }
 }
 
-/// Registers the disk map while it is open (a block on the board, or its own window once
-/// detached).
+/// Registers the disk map while it is open (a window of its own; a block on the board in a session
+/// without windows).
 pub(super) fn show(ctx: &egui::Context, rt: &Handle) {
     // (Closed while it was its own window: it plays its exit first.)
     if !super::detached_keep(ctx, ViewportId::from_hash_of("jai_disk_map"), crate::disk_map::is_open()) {
@@ -116,17 +116,11 @@ pub(super) fn show(ctx: &egui::Context, rt: &Handle) {
         if action.close {
             crate::disk_map::close();
         }
-        if action.detach {
-            crate::hud_dock::detach(ID);
-        }
         return;
     }
     let mut builder = ViewportBuilder::default().with_title("Disk map — J.A.I.").with_app_id("jai").with_inner_size([1120.0, 700.0]).with_min_inner_size([680.0, 440.0]).with_decorations(false);
     if let Some(icon) = super::window_icon() {
         builder = builder.with_icon(Arc::new(icon));
-    }
-    if let Some((at, size)) = super::detached_placement(ctx, ID) {
-        builder = builder.with_position(at).with_inner_size(size);
     }
     let builder = super::for_test_session(builder);
     let rt = rt.clone();
@@ -142,7 +136,7 @@ pub(super) fn show(ctx: &egui::Context, rt: &Handle) {
                 egui::Window::new(TITLE).show(ctx, |ui| body(ui, &rt));
             } else {
                 egui::CentralPanel::default().frame(Frame::none().fill(super::block_slate()).inner_margin(Margin::same(14.0))).show(ctx, |ui| {
-                    if super::detached_title_bar(ui, ctx, TITLE) {
+                    if super::detached_title_bar(ui, ctx, ID, TITLE) {
                         crate::disk_map::close();
                     }
                     body(ui, &rt);

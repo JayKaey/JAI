@@ -1289,8 +1289,8 @@ impl Brain {
             info!("[VENUE] '{text}' → {intent:?}");
             Some(intent)
         } else if let Some(intent) = intents::hud_view_command(&text) {
-            // "Close your core" (heard as "car" / "call"), "bring back the screen", "dock all
-            // windows": the HUD's own views, before the layout classifier or the model guesses.
+            // "Close your core" (heard as "car" / "call"), "bring back the screen": the HUD's
+            // own views, before the layout classifier or the model guesses.
             self.inner.tools.focus.clear_offer();
             info!("[HUD] '{text}' → {intent:?}");
             Some(intent)
