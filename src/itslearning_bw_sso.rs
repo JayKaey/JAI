@@ -14,10 +14,8 @@
 //!    itslearning's assertion consumer service, confirming an attribute-release page on the way;
 //! 5. stop on itslearning with its session cookies.
 //!
-//! If the IdP serves a page that only works with JavaScript, `edge_login` drives a headless
-//! Microsoft Edge over the DevTools protocol (a minimal WebSocket client below): it clicks the
-//! Schule@BW link, fills the form, submits, and hands the resulting itslearning cookies to the
-//! same cookie jar.
+//! A page that only works in a browser ends the sign-in: JAI starts no browser of its own (a
+//! hidden Edge did this until 2026-11-19, at every briefing, and still got no course data).
 //!
 //! With the session, `fetch_updates` obtains an API token the way the itslearning app does for
 //! single-sign-on schools (the OAuth authorize endpoint answers the logged-in session with a code
@@ -33,7 +31,7 @@ use crate::pim_config::LmsSettings;
 use reqwest::cookie::Jar;
 use reqwest::Url;
 use scraper::{ElementRef, Html, Selector};
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 use tracing::{info, warn};
@@ -50,7 +48,7 @@ const APP_REDIRECT: &str = "itsl-itslearning://login";
 /// A session is reused this long before logging in again.
 const SESSION_TTL: Duration = Duration::from_secs(8 * 60);
 const MAX_HOPS: usize = 14;
-const JS_NEEDED: &str = "the Schule@BW page needs JavaScript";
+const JS_NEEDED: &str = "the sign-in works only in a browser now: the Schule@BW page needs JavaScript";
 
 /// Whether these settings use the Schule@BW single sign-on.
 pub fn uses_schule_bw(cfg: &LmsSettings) -> bool {
@@ -336,8 +334,6 @@ pub struct BwSession {
     pub jar: Arc<Jar>,
     pub base: String,
     pub since: Instant,
-    /// "http" or "edge".
-    pub via: &'static str,
 }
 
 fn client_for(jar: &Arc<Jar>, follow: bool) -> Result<reqwest::Client, String> {
@@ -372,10 +368,10 @@ pub async fn login(base: &str, username: &str, password: &str) -> Result<BwSessi
         let page = classify(&html, &url, &base_host, submitted);
         info!("[SCHULE@BW] Step {hop}: {} at {}", page_name(&page), host(&url));
         (url, html) = match page {
-            Page::Landed => return Ok(BwSession { client, jar, base, since: Instant::now(), via: "http" }),
+            Page::Landed => return Ok(BwSession { client, jar, base, since: Instant::now() }),
             Page::Failed(e) => return Err(format!("Schule@BW refused the login: {e}")),
             Page::JavaScript => return Err(JS_NEEDED.into()),
-            Page::Unknown => return Err(format!("the sign-in stopped at an unexpected page on {}", host(&url))),
+            Page::Unknown => return Err(format!("the sign-in works only in a browser now: it stopped at an unexpected page on {}", host(&url))),
             Page::Federation(Trigger::Link(link)) => read(client.get(&link).send().await.map_err(crate::web_connector::err_chain)?).await?,
             Page::Federation(Trigger::Post(post)) | Page::AutoPost(post) => submit(&client, &post).await?,
             Page::Login(form) => {
@@ -405,8 +401,7 @@ fn page_name(p: &Page) -> &'static str {
     }
 }
 
-/// Logs in, trying the username as written, then in lower case if the IdP is case-sensitive, then
-/// the headless Edge fallback when a page needs JavaScript.
+/// Logs in, trying the username as written, then in lower case if the IdP is case-sensitive.
 pub async fn sign_in(base: &str, username: &str, password: &str) -> Result<BwSession, String> {
     let mut names = vec![username.trim().to_string()];
     let lower = username.trim().to_lowercase();
@@ -418,10 +413,7 @@ pub async fn sign_in(base: &str, username: &str, password: &str) -> Result<BwSes
         match login(base, name, password).await {
             Ok(s) => return Ok(s),
             Err(e) if e.starts_with("Schule@BW refused") || e.contains("asked for the password again") => last = e,
-            Err(e) => {
-                warn!("[SCHULE@BW] Plain sign-in failed ({e}); trying headless Edge");
-                return edge_login(base, name, password).await.map_err(|edge| format!("{e}; the Edge fallback failed too: {edge}"));
-            }
+            Err(e) => return Err(e),
         }
     }
     Err(last)
@@ -441,7 +433,7 @@ pub async fn session(cfg: &LmsSettings, password: &str) -> Result<BwSession, Str
     }
     let started = Instant::now();
     let s = sign_in(&base, &cfg.username, password).await?;
-    info!("[SCHULE@BW] Signed in to {} via {} in {} ms", host(&base), s.via, started.elapsed().as_millis());
+    info!("[SCHULE@BW] Signed in to {} in {} ms", host(&base), started.elapsed().as_millis());
     *slot = Some(s.clone());
     Ok(s)
 }
@@ -653,7 +645,7 @@ pub fn board_report(updates: &[CourseUpdate], now: chrono::NaiveDateTime) -> Rep
     Report { topic: "itslearning".into(), created_at: now.format("%Y-%m-%d %H:%M:%S").to_string(), blocks, sources, id: None }
 }
 
-// ------------------------------------------------------------------- headless Edge (CDP) ----
+// ------------------------------------------------------- WebSocket frames (Wave Link's too) ----
 
 /// A WebSocket frame (client frames are masked).
 pub fn encode_frame(payload: &[u8], opcode: u8, mask: [u8; 4]) -> Vec<u8> {
@@ -698,217 +690,6 @@ pub fn decode_frame(buf: &[u8]) -> Option<(bool, u8, Vec<u8>, usize)> {
         None => data.to_vec(),
     };
     Some((fin, opcode, payload, at + len))
-}
-
-/// A minimal WebSocket client for Edge's local DevTools endpoint.
-struct DevTools {
-    stream: tokio::net::TcpStream,
-    buf: Vec<u8>,
-    next_id: u64,
-}
-
-impl DevTools {
-    async fn connect(ws_url: &str) -> Result<Self, String> {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        let rest = ws_url.strip_prefix("ws://").ok_or("not a ws:// URL")?;
-        let (addr, path) = rest.split_once('/').map(|(a, p)| (a, format!("/{p}"))).unwrap_or((rest, "/".into()));
-        let mut stream = tokio::net::TcpStream::connect(addr).await.map_err(|e| e.to_string())?;
-        let key = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, uuid::Uuid::new_v4().as_bytes());
-        let request = format!("GET {path} HTTP/1.1\r\nHost: {addr}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n");
-        stream.write_all(request.as_bytes()).await.map_err(|e| e.to_string())?;
-        let mut buf = Vec::new();
-        let mut chunk = [0u8; 4096];
-        let head_end = loop {
-            let n = stream.read(&mut chunk).await.map_err(|e| e.to_string())?;
-            if n == 0 {
-                return Err("DevTools closed the connection".into());
-            }
-            buf.extend_from_slice(&chunk[..n]);
-            if let Some(i) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
-                break i + 4;
-            }
-        };
-        if !String::from_utf8_lossy(&buf[..head_end]).starts_with("HTTP/1.1 101") {
-            return Err("DevTools refused the WebSocket upgrade".into());
-        }
-        Ok(Self { stream, buf: buf[head_end..].to_vec(), next_id: 0 })
-    }
-
-    async fn recv(&mut self) -> Result<String, String> {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        let mut message = Vec::new();
-        loop {
-            if let Some((fin, opcode, payload, used)) = decode_frame(&self.buf) {
-                self.buf.drain(..used);
-                match opcode {
-                    0x9 => {
-                        let pong = encode_frame(&payload, 0xA, [7, 1, 3, 9]);
-                        self.stream.write_all(&pong).await.map_err(|e| e.to_string())?;
-                    }
-                    0x8 => return Err("DevTools closed the session".into()),
-                    _ => {
-                        message.extend_from_slice(&payload);
-                        if fin {
-                            return Ok(String::from_utf8_lossy(&message).into_owned());
-                        }
-                    }
-                }
-                continue;
-            }
-            let mut chunk = [0u8; 65_536];
-            let n = self.stream.read(&mut chunk).await.map_err(|e| e.to_string())?;
-            if n == 0 {
-                return Err("DevTools closed the connection".into());
-            }
-            self.buf.extend_from_slice(&chunk[..n]);
-        }
-    }
-
-    /// A DevTools command and its result (events in between are skipped).
-    async fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
-        use tokio::io::AsyncWriteExt;
-        self.next_id += 1;
-        let id = self.next_id;
-        let text = json!({ "id": id, "method": method, "params": params }).to_string();
-        let mask = *uuid::Uuid::new_v4().as_bytes().first_chunk::<4>().unwrap_or(&[1, 2, 3, 4]);
-        self.stream.write_all(&encode_frame(text.as_bytes(), 0x1, mask)).await.map_err(|e| e.to_string())?;
-        let deadline = Instant::now() + Duration::from_secs(20);
-        while Instant::now() < deadline {
-            let raw = tokio::time::timeout(Duration::from_secs(20), self.recv()).await.map_err(|_| format!("{method}: no answer"))??;
-            let v: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
-            if v["id"].as_u64() == Some(id) {
-                if let Some(e) = v.get("error") {
-                    return Err(format!("{method}: {e}"));
-                }
-                return Ok(v["result"].clone());
-            }
-        }
-        Err(format!("{method}: no answer"))
-    }
-}
-
-/// The page script one polling step runs: Schule@BW link → fill the IdP form → confirm → done.
-pub fn step_script(username: &str, password: &str) -> String {
-    let (u, p) = (serde_json::to_string(username).unwrap_or_default(), serde_json::to_string(password).unwrap_or_default());
-    format!(
-        r#"(() => {{
-  const user = {u}, pass = {p};
-  const onPortal = location.host.includes('itslearning');
-  const pw = document.querySelector('input[type=password]');
-  const label = e => ((e.innerText || '') + ' ' + (e.value || '') + ' ' + (e.title || '')).toLowerCase();
-  if (pw && !onPortal) {{
-    const form = pw.form || document;
-    const u = form.querySelector('input[type=email],input[name=username],input[name=j_username],input[type=text]');
-    const set = (el, v) => {{ el.focus(); el.value = v; el.dispatchEvent(new Event('input', {{bubbles: true}})); el.dispatchEvent(new Event('change', {{bubbles: true}})); }};
-    if (u) set(u, user);
-    set(pw, pass);
-    const btn = form.querySelector('[type=submit],button');
-    if (btn) btn.click(); else if (pw.form) pw.form.submit();
-    return 'submitted';
-  }}
-  const proceed = document.querySelector('[name=_eventId_proceed]');
-  if (proceed) {{ proceed.click(); return 'consent'; }}
-  if (onPortal) {{
-    const fed = [...document.querySelectorAll('a,button,input[type=submit]')].find(e => label(e).includes('schule@bw'));
-    if (fed && pw) {{ fed.click(); return 'federation'; }}
-    if (!pw) return 'landed';
-  }}
-  return 'waiting';
-}})()"#
-    )
-}
-
-fn edge_binary() -> Option<std::path::PathBuf> {
-    ["C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe", "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe"].iter().map(std::path::PathBuf::from).find(|p| p.is_file())
-}
-
-/// Step 5: the same sign-in in a headless Edge; its itslearning cookies join a fresh jar.
-pub async fn edge_login(base: &str, username: &str, password: &str) -> Result<BwSession, String> {
-    let edge = edge_binary().ok_or("Microsoft Edge is not installed")?;
-    let profile = std::env::temp_dir().join(format!("jai-edge-sso-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&profile);
-    std::fs::create_dir_all(&profile).map_err(|e| e.to_string())?;
-    let mut cmd = std::process::Command::new(edge);
-    cmd.args(["--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check", "--remote-debugging-port=0"])
-        .arg(format!("--user-data-dir={}", profile.display()))
-        .arg("about:blank")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
-    crate::shell::hide_console_std(&mut cmd);
-    let mut child = cmd.spawn().map_err(|e| format!("Edge did not start: {e}"))?;
-    let result = drive_edge(&profile, base, username, password).await;
-    let _ = child.kill();
-    let _ = child.wait();
-    let _ = std::fs::remove_dir_all(&profile);
-    result
-}
-
-async fn drive_edge(profile: &std::path::Path, base: &str, username: &str, password: &str) -> Result<BwSession, String> {
-    // Edge writes its DevTools port once it listens.
-    let port_file = profile.join("DevToolsActivePort");
-    let deadline = Instant::now() + Duration::from_secs(15);
-    let port = loop {
-        if let Some(p) = std::fs::read_to_string(&port_file).ok().and_then(|t| t.lines().next().and_then(|l| l.trim().parse::<u16>().ok())) {
-            break p;
-        }
-        if Instant::now() > deadline {
-            return Err("Edge did not open its DevTools port".into());
-        }
-        tokio::time::sleep(Duration::from_millis(150)).await;
-    };
-    let http = reqwest::Client::builder().no_proxy().build().map_err(|e| e.to_string())?;
-    let targets: Value = http.get(format!("http://127.0.0.1:{port}/json/list")).send().await.map_err(|e| e.to_string())?.json().await.map_err(|e| e.to_string())?;
-    let ws = targets.as_array().and_then(|t| t.iter().find(|x| x["type"] == "page")).and_then(|t| t["webSocketDebuggerUrl"].as_str()).ok_or("Edge has no page to drive")?.to_string();
-    let mut dt = DevTools::connect(&ws).await?;
-    dt.call("Network.enable", json!({})).await?;
-    dt.call("Page.navigate", json!({ "url": format!("{}/index.aspx", base.trim_end_matches('/')) })).await?;
-    let script = step_script(username, password);
-    let mut submitted = 0;
-    let mut steps = Vec::new();
-    let finish = Instant::now() + Duration::from_secs(75);
-    let landed = loop {
-        tokio::time::sleep(Duration::from_millis(1200)).await;
-        if Instant::now() > finish {
-            break false;
-        }
-        let r = dt.call("Runtime.evaluate", json!({ "expression": script, "returnByValue": true })).await.unwrap_or(Value::Null);
-        let step = r["result"]["value"].as_str().unwrap_or("waiting").to_string();
-        if steps.last() != Some(&step) {
-            info!("[SCHULE@BW] Edge: {step}");
-            steps.push(step.clone());
-        }
-        match step.as_str() {
-            "landed" => break true,
-            "submitted" => {
-                submitted += 1;
-                if submitted > 2 {
-                    return Err("Schule@BW kept asking for the password (wrong username or password?)".into());
-                }
-            }
-            _ => {}
-        }
-    };
-    if !landed {
-        return Err(format!("the headless sign-in did not finish ({})", steps.join(" → ")));
-    }
-    let cookies = dt.call("Network.getAllCookies", json!({})).await?;
-    let jar = Arc::new(Jar::default());
-    let base_url = Url::parse(base).map_err(|e| e.to_string())?;
-    let mut count = 0;
-    for c in cookies["cookies"].as_array().into_iter().flatten() {
-        let domain = c["domain"].as_str().unwrap_or("");
-        if !domain.contains("itslearning") {
-            continue;
-        }
-        let cookie = format!("{}={}; Domain={}; Path={}", c["name"].as_str().unwrap_or(""), c["value"].as_str().unwrap_or(""), domain.trim_start_matches('.'), c["path"].as_str().unwrap_or("/"));
-        jar.add_cookie_str(&cookie, &base_url);
-        count += 1;
-    }
-    if count == 0 {
-        return Err("Edge signed in but holds no itslearning cookies".into());
-    }
-    info!("[SCHULE@BW] Edge signed in; {count} itslearning cookies taken over");
-    Ok(BwSession { client: client_for(&jar, true)?, jar, base: base.trim_end_matches('/').to_string(), since: Instant::now(), via: "edge" })
 }
 
 #[cfg(test)]
@@ -1019,7 +800,7 @@ mod tests {
     }
 
     #[test]
-    fn websocket_frames_round_trip_and_the_step_script_escapes_credentials() {
+    fn websocket_frames_round_trip() {
         for len in [5usize, 300, 70_000] {
             let payload: Vec<u8> = (0..len).map(|i| (i % 251) as u8).collect();
             let frame = encode_frame(&payload, 0x1, [9, 8, 7, 6]);
@@ -1027,9 +808,20 @@ mod tests {
             assert!(fin && op == 1 && back == payload && used == frame.len());
             assert!(decode_frame(&frame[..frame.len() - 1]).is_none(), "incomplete frames wait");
         }
-        let script = step_script("max.mustermann", "pa\"ss'\\word");
-        assert!(script.contains(r#"const user = "max.mustermann", pass = "pa\"ss'\\word";"#), "{script}");
-        assert!(script.contains("schule@bw"));
+    }
+
+    /// Sir, 2026-11-19: "when JAI is running, Microsoft Edge is also running in the background.
+    /// I don't want that." The sign-in drove a hidden Edge (13 processes) at every briefing; no
+    /// part of JAI starts a browser he cannot see.
+    #[test]
+    fn no_part_of_jai_starts_a_hidden_browser() {
+        let flags = ["remote-debugging-port", "headless=new", "headless=old"].map(|f| format!("--{f}"));
+        for entry in std::fs::read_dir("src").expect("the sources").flatten() {
+            let source = std::fs::read_to_string(entry.path()).unwrap_or_default();
+            for flag in &flags {
+                assert!(!source.contains(flag.as_str()), "{} starts a hidden browser ({flag})", entry.path().display());
+            }
+        }
     }
 
     #[test]

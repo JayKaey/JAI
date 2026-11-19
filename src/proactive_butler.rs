@@ -137,6 +137,9 @@ pub fn integration_trouble(service: &str, error: &str, site: Option<&str>) -> Ca
     let (body, fixes) = if has(&["refused the session", "app code"]) {
         // (2026-11-16: itslearning's own server fails at the app's consent step, HTTP 500.)
         (format!("{service} signs you in, but its server won't hand your course data to me; it's all there in the browser."), browser.into_iter().collect())
+    } else if has(&["only in a browser"]) {
+        // (2026-11-19: Schule@BW's sign-in now passes a page only a browser gets through.)
+        (format!("{service} lets you sign in only in the browser now; it's all there."), browser.into_iter().collect())
     } else if has(&["needs your", "enter it once", "no password"]) {
         (format!("{service} needs your password once."), vec![hub])
     } else if has(&["401", "403", "password", "credentials", "authentication", "sign-in failed", "login failed"]) {
@@ -536,6 +539,9 @@ mod tests {
         let refused = integration_trouble("itslearning", "signed in through Schule@BW, but itslearning's course data refused the session: /restapi/personal/tasks/v1?PageIndex=0&PageSize=40: HTTP 401 Unauthorized", site);
         assert!(!refused.body.contains("restapi") && !refused.body.contains("401"), "{}", refused.body);
         assert_eq!(refused.fixes.iter().map(|f| (f.tool, f.args["url"].as_str())).collect::<Vec<_>>(), [("open_website", site)]);
+        let browser_only = integration_trouble("itslearning", "the sign-in works only in a browser now: it stopped at an unexpected page on eu1.itslearning.com", site);
+        assert!(browser_only.body.contains("only in the browser") && !browser_only.body.contains("eu1"), "{}", browser_only.body);
+        assert_eq!(browser_only.fixes.iter().map(|f| f.tool).collect::<Vec<_>>(), ["open_website"]);
         let password = integration_trouble("itslearning", "itslearning needs your Schule@BW password — enter it once in the Integrations Hub (it is kept encrypted)", site);
         assert_eq!((password.body.as_str(), password.fixes[0].tool), ("itslearning needs your password once.", "configure_productivity_service"));
         let down = integration_trouble("Email", "imap.example.com: connection timed out", None);

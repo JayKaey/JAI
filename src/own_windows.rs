@@ -309,11 +309,21 @@ pub fn place_of(title: &str) -> Option<[i32; 4]> {
 }
 
 /// Where the window titled `title` stands (x, y, w, h) as it opens and after: where it last
-/// stood, unless an order of Sir's placed it (`by_order`), for as long as the code asks no other
-/// place or size of it (`code`: its own position and size for it, as given each frame). (Given
-/// anew each frame, the place kept every move and size of the code's from the window.)
-pub fn opening_place(title: &str, code: [Option<[f32; 2]>; 2], by_order: bool) -> Option<[i32; 4]> {
-    opened_at(&mut lock(&OPENED), title, code, || if by_order { None } else { place_of(title) })
+/// stood, unless an order of Sir's placed it (`by_order`) or that place is not `free` (another
+/// of his windows stands there, or comes up there with it), for as long as the code asks no
+/// other place or size of it (`code`: its own position and size for it, as given each frame).
+/// (Given anew each frame, the place kept every move and size of the code's from the window.)
+pub fn opening_place(title: &str, code: [Option<[f32; 2]>; 2], by_order: bool, free: impl FnOnce([i32; 4]) -> bool) -> Option<[i32; 4]> {
+    // (Decided once, as it first opens, and outside the lock: `free` looks at the others.)
+    let first = !lock(&OPENED).iter().any(|(t, _, _)| t == title);
+    let place = if first && !by_order { place_of(title).filter(|place| free(*place)) } else { None };
+    opened_at(&mut lock(&OPENED), title, code, || place)
+}
+
+/// The windows that came up at the place they had before and are still up, by title, with that
+/// place (x, y, w, h): before they have shown themselves, Windows does not list them yet.
+pub fn opening_now() -> Vec<(String, [i32; 4])> {
+    lock(&OPENED).iter().filter_map(|(title, _, place)| place.map(|place| (title.clone(), place))).collect()
 }
 
 fn opened_at(opened: &mut Vec<(String, [Option<[f32; 2]>; 2], Option<[i32; 4]>)>, title: &str, code: [Option<[f32; 2]>; 2], place: impl FnOnce() -> Option<[i32; 4]>) -> Option<[i32; 4]> {
@@ -493,6 +503,39 @@ mod tests {
         // Closed, it opens at its place again.
         opened.clear();
         assert_eq!(opened_at(&mut opened, "Timer \u{2014} J.A.I.", bigger, || place), place);
+    }
+
+    /// Sir, 2026-11-19: "i asked jai to open 3 random windows and he did but the windows are
+    /// all placed on top of each other". Each had last been open alone, in the first place
+    /// beside the core, and each came up there again. Now only the first does; the others are
+    /// placed anew, off it and off each other.
+    #[test]
+    fn windows_coming_up_together_never_share_a_spot() {
+        let _g = crate::hud_dock::test_lock();
+        crate::monitors::pretend(Some(crate::visual_ui_verifier::desk()));
+        let work = crate::monitors::recent()[0].work;
+        let spot = [work[0] + 200, work[1] + 150, 640, 480];
+        let titles = ["Spot probe one \u{2014} J.A.I.", "Spot probe two \u{2014} J.A.I.", "Spot probe three \u{2014} J.A.I."];
+        lock(&PLACES).get_or_insert_with(Vec::new).extend(titles.map(|t| (t.to_string(), spot)));
+        let came: Vec<eframe::egui::Rect> = titles
+            .iter()
+            .map(|title| {
+                let builder = crate::gui::for_test_session(eframe::egui::ViewportBuilder::default().with_title(*title).with_inner_size([640.0, 480.0]));
+                eframe::egui::Rect::from_min_size(builder.position.expect("placed"), builder.inner_size.expect("sized"))
+            })
+            .collect();
+        let at_their_place: Vec<(String, [i32; 4])> = opening_now().into_iter().filter(|(t, _)| titles.contains(&t.as_str())).collect();
+        if let Some(places) = lock(&PLACES).as_mut() {
+            places.retain(|(t, _)| !titles.contains(&t.as_str()));
+        }
+        lock(&OPENED).retain(|(t, _, _)| !titles.contains(&t.as_str()));
+        crate::monitors::pretend(None);
+        assert_eq!(at_their_place, vec![(titles[0].to_string(), spot)], "only the first comes up where it stood");
+        for (k, a) in came.iter().enumerate() {
+            for b in &came[k + 1..] {
+                assert!(!a.shrink(1.0).intersects(*b), "two on one spot: {a:?} {b:?}");
+            }
+        }
     }
 
     #[test]

@@ -110,7 +110,9 @@ Three panels open by voice, each in a window of its own, and close with "close t
   near Tokyo recently?", "show me the flights over New York", "show me the storms", "show me
   the fires", "where is the space station?", and "hide the flights" takes a layer off. The
   globe fetches public data while it is open (NASA GIBS imagery, USGS and EONET events, the
-  ISS position, OpenSky flights). Place names and borders show on both faces (Esri). Down at
+  ISS position, OpenSky flights). Place names and borders show on both faces (Esri). From a
+  town's outline down, the hologram draws its streets by rank, its rails, rivers and lakes,
+  and the streets' names along them (OpenFreeMap; the names go with "hide the labels"). Down at
   street level the houses of any town in the world that is on OpenStreetMap stand on the map
   as models with their heights (estimated from a house's ground where the map gives none), a
   line for every storey, window bays up close, hipped roofs on small houses (a guess: the map

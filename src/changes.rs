@@ -94,6 +94,10 @@ pub const RELEASES: &[Release] = &[
         date: "2026-11-19",
         name: "Every panel in the new look",
         entries: &[
+            added("Streets and water on the hologram map", "From a town's outline down: its streets by rank, rails, rivers, lakes and the streets' names."),
+            fixed("No hidden Edge any more", "Signing in to itslearning started a hidden Edge at every briefing; he starts no browser now."),
+            fixed("Windows opened together no longer stack", "Opened at once, they all came up where each last stood alone; a taken spot is skipped now."),
+            fixed("No black pane behind a closing window", "As a window folds up or unfolds, what stands behind it shows through instead of a black pane."),
             new("The houses of a town in 3D", "Down at street level the Earth raises every house as a block model of light.", "earth_houses"),
             better("Flying to a town goes down to it", "\"Fly to Berlin\" ends with the town in view to its outline, not as a dot on a continent."),
             better("The hologram map is dark glass up close", "From a town down its land was one flat olive field; it sinks into the glass now."),

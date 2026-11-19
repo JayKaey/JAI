@@ -1900,6 +1900,8 @@ pub struct Earth {
     pub look_changed: f64,
     /// Houses stood on the map in the last frame (`earth_buildings`): their credit shows.
     pub houses: bool,
+    /// The hologram's streets and water were on the map in the last frame: the same credit.
+    pub ground: bool,
     trimmed: bool,
     next_area: u64,
     /// What the block says it shows (the board's search and "copy").
@@ -2078,6 +2080,7 @@ impl Earth {
             globe_fade: TexFade::default(),
             look_changed: f64::NEG_INFINITY,
             houses: false,
+            ground: false,
             trimmed: false,
             next_area: 1,
             described: String::new(),

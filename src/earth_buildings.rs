@@ -3,6 +3,8 @@
 //! cache), raised from the map as block models of light once the view is down at street level.
 //! The map stays north-up: the models lean one way, as in a plan oblique drawing, and a drag
 //! with the right button leans them another, so every side of a house can be looked at.
+//! The same tiles give the hologram its ground from a town's outline down: the streets, the
+//! rails, the shores and the streams, and the streets' names along them.
 
 use crate::earth::{self as model, FlatView};
 use crate::holo::lit;
@@ -42,9 +44,13 @@ const STOREYS_UP_TO: usize = 600;
 const MAX_LABELS: usize = 140;
 /// The view's zoom from which the house numbers are read.
 const NUMBERS_FROM: f64 = 17.0;
+/// The view's zoom from which the hologram shows the ground (a big town's outline), fading in
+/// over one level, and the streets' names drawn at most.
+const GROUND_FROM: f64 = 10.0;
+const MAX_NAMES: usize = 40;
 /// The tile set's description: it names the address of this week's tiles.
 const TILE_SET: &str = "https://tiles.openfreemap.org/planet";
-pub const CREDIT: &str = "Buildings: OpenFreeMap \u{a9} OpenMapTiles, data from OpenStreetMap";
+pub const CREDIT: &str = "Streets and buildings: OpenFreeMap \u{a9} OpenMapTiles, data from OpenStreetMap";
 
 /// A house as it is drawn.
 #[derive(Debug, Clone, PartialEq)]
@@ -112,9 +118,8 @@ impl Hip {
 
 impl Building {
     fn new(ring: Vec<[f64; 2]>, seam: Vec<bool>, base: f32, top: f32) -> Self {
-        let (lo, hi) = ring.iter().fold(([f64::MAX; 2], [f64::MIN; 2]), |(lo, hi), p| ([lo[0].min(p[0]), lo[1].min(p[1])], [hi[0].max(p[0]), hi[1].max(p[1])]));
-        let mid = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0];
-        Self { roof: triangulate(&ring), reach: (hi[0] - mid[0]).hypot(hi[1] - mid[1]), mid, hip: Hip::of(&ring, &seam, base, top), ring, seam, base, top, number: None }
+        let (mid, reach) = span(&ring);
+        Self { roof: triangulate(&ring), reach, mid, hip: Hip::of(&ring, &seam, base, top), ring, seam, base, top, number: None }
     }
 
     /// What its roof says: its number, and how tall it is when it is a tower.
@@ -250,28 +255,159 @@ fn text(value: &[u8]) -> Option<&str> {
     })
 }
 
-/// The rings of a polygon's geometry, in the tile's own units.
-fn rings(geometry: &[u8]) -> Vec<Vec<[i32; 2]>> {
+/// The paths of a geometry, in the tile's own units, each with whether it was closed (a
+/// polygon's ring) or left open (a line).
+fn paths(geometry: &[u8]) -> Vec<(Vec<[i32; 2]>, bool)> {
     let mut words = Fields(geometry);
-    let (mut out, mut ring, mut at) = (Vec::new(), Vec::new(), [0i32; 2]);
+    let (mut out, mut path, mut at) = (Vec::new(), Vec::new(), [0i32; 2]);
     while let Some(command) = words.varint() {
         match command & 7 {
-            // Move to (a new ring starts) and line to.
+            // Move to (a new path starts: what stands so far was a line) and line to.
             id @ (1 | 2) => {
                 for _ in 0..command >> 3 {
                     let (Some(dx), Some(dy)) = (words.varint(), words.varint()) else { return out };
                     at = [at[0].wrapping_add(zigzag(dx) as i32), at[1].wrapping_add(zigzag(dy) as i32)];
                     if id == 1 {
-                        ring.clear();
+                        let line = std::mem::take(&mut path);
+                        if line.len() > 1 {
+                            out.push((line, false));
+                        }
                     }
-                    ring.push(at);
+                    path.push(at);
                 }
             }
-            7 => out.push(std::mem::take(&mut ring)),
+            7 => out.push((std::mem::take(&mut path), true)),
             _ => return out,
         }
     }
+    if path.len() > 1 {
+        out.push((path, false));
+    }
     out
+}
+
+/// What a line on a town's ground is.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Kind {
+    Shore,
+    Stream,
+    /// A street by its rank: 0 a motorway, 4 a residential street, 6 a path.
+    Road(u8),
+    Rail,
+}
+
+/// A line of a town's ground (a street, a rail, a shore), or a street's name with the line it
+/// runs along.
+#[derive(Debug, Clone, PartialEq)]
+struct Way {
+    kind: Kind,
+    /// Web Mercator (0-1).
+    points: Vec<[f64; 2]>,
+    mid: [f64; 2],
+    reach: f64,
+    name: Option<String>,
+}
+
+/// The middle of some points and how far they reach from there.
+fn span(points: &[[f64; 2]]) -> ([f64; 2], f64) {
+    let (lo, hi) = points.iter().fold(([f64::MAX; 2], [f64::MIN; 2]), |(lo, hi), p| ([lo[0].min(p[0]), lo[1].min(p[1])], [hi[0].max(p[0]), hi[1].max(p[1])]));
+    let mid = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0];
+    (mid, (hi[0] - mid[0]).hypot(hi[1] - mid[1]))
+}
+
+/// The part of the segment a-b inside the box from `lo` to `hi` (a tile's square, the map on
+/// the screen), if any.
+fn clip(a: [f64; 2], b: [f64; 2], lo: [f64; 2], hi: [f64; 2]) -> Option<([f64; 2], [f64; 2])> {
+    let d = [b[0] - a[0], b[1] - a[1]];
+    let (mut t0, mut t1) = (0.0f64, 1.0f64);
+    for k in 0..2 {
+        for (p, q) in [(-d[k], a[k] - lo[k]), (d[k], hi[k] - a[k])] {
+            if p == 0.0 {
+                if q < 0.0 {
+                    return None;
+                }
+            } else if p < 0.0 {
+                t0 = t0.max(q / p);
+            } else {
+                t1 = t1.min(q / p);
+            }
+        }
+    }
+    // (A point cut at the edge sits on it exactly: the next tile's part starts there.)
+    let on = |v: f64, k: usize| if (v - lo[k]).abs() < 1e-6 { lo[k] } else if (v - hi[k]).abs() < 1e-6 { hi[k] } else { v };
+    let at = |t: f64| if t == 0.0 { a } else if t == 1.0 { b } else { [on(a[0] + d[0] * t, 0), on(a[1] + d[1] * t, 1)] };
+    (t0 < t1).then(|| (at(t0), at(t1)))
+}
+
+/// The lines of a tile's ground and the names along its streets (the OpenMapTiles layers
+/// "water", "waterway", "transportation" and "transportation_name"), at any level. A tunnel is
+/// left out, and each tile keeps what lies in its own square, cut at its edge: a line over the
+/// seam is drawn once (light adds up), and where the tiler cut a lake no shore is drawn.
+fn ground(tile_bytes: &[u8], (z, tx, ty): (u8, u32, u32)) -> (Vec<Way>, Vec<Way>) {
+    let n_tiles = (1u32 << z) as f64;
+    let (mut ways, mut names) = (Vec::new(), Vec::new());
+    // (The layer, and its features' kind: 3 a polygon, 2 a line.)
+    let sought: [(&[u8], u64); 4] = [(b"water", 3), (b"waterway", 2), (b"transportation", 2), (b"transportation_name", 2)];
+    for (layer, shape) in sought {
+        for (features, keys, values, extent) in layers(tile_bytes, layer) {
+            let size = extent as f64;
+            let merc = |p: [f64; 2]| [(tx as f64 + p[0] / size) / n_tiles, (ty as f64 + p[1] / size) / n_tiles];
+            for (_, geometry, said) in features.iter().map(|f| feature(f, &keys, &values)).filter(|f| f.0 == shape) {
+                let word = |name: &[u8]| said.iter().find(|(key, _)| *key == name).and_then(|(_, value)| text(value));
+                let kind = match layer {
+                    b"water" => Some(Kind::Shore),
+                    b"waterway" => Some(Kind::Stream),
+                    _ => word(b"class").and_then(|class| match class {
+                        "motorway" | "trunk" => Some(Kind::Road(0)),
+                        "primary" => Some(Kind::Road(1)),
+                        "secondary" => Some(Kind::Road(2)),
+                        "tertiary" => Some(Kind::Road(3)),
+                        "minor" | "busway" => Some(Kind::Road(4)),
+                        "service" | "track" | "raceway" => Some(Kind::Road(5)),
+                        "path" => Some(Kind::Road(6)),
+                        "rail" | "transit" => Some(Kind::Rail),
+                        _ => None,
+                    }),
+                };
+                let name = word(b"name").filter(|_| layer == b"transportation_name").map(|n| n.chars().take(40).collect::<String>());
+                let Some(kind) = kind.filter(|_| word(b"brunnel") != Some("tunnel") && (name.is_some() || layer != b"transportation_name")) else { continue };
+                let list = if name.is_some() { &mut names } else { &mut ways };
+                for (mut path, closed) in paths(geometry) {
+                    path.extend(path.first().copied().filter(|_| closed));
+                    let (mut run, mut end): (Vec<[f64; 2]>, Option<[f64; 2]>) = (Vec::new(), None);
+                    let mut keep = |run: &mut Vec<[f64; 2]>| {
+                        let points = std::mem::take(run);
+                        if points.len() > 1 {
+                            let (mid, reach) = span(&points);
+                            list.push(Way { kind, points, mid, reach, name: name.clone() });
+                        }
+                    };
+                    for pair in path.windows(2) {
+                        // (A ring's stretch along the square's edge is where the tiler cut it.)
+                        let piece = clip(pair[0].map(f64::from), pair[1].map(f64::from), [0.0; 2], [size; 2]).filter(|(a, b)| !closed || !(0..2).any(|k| a[k] == b[k] && (a[k] == 0.0 || a[k] == size)));
+                        if let Some((from, to)) = piece {
+                            if end != Some(from) {
+                                keep(&mut run);
+                                run.push(merc(from));
+                            }
+                            run.push(merc(to));
+                        }
+                        end = piece.map(|piece| piece.1);
+                    }
+                    keep(&mut run);
+                }
+            }
+        }
+    }
+    (ways, names)
+}
+
+/// What a tile holds of a town.
+#[derive(Default)]
+struct Town {
+    houses: Vec<Building>,
+    ways: Vec<Way>,
+    names: Vec<Way>,
 }
 
 /// A ring of a tile as a house: None for a courtyard (it runs the other way round), for what is
@@ -370,7 +506,7 @@ fn houses(tile_bytes: &[u8], tile: (u32, u32)) -> Vec<Building> {
             // (Five metres is what the tiles write where the map says nothing: no height.)
             let top = figure(b"render_height").filter(|h| *h > 0.0 && *h != 5.0);
             let base = figure(b"render_min_height").unwrap_or(0.0);
-            found.extend(rings(geometry).into_iter().map(|ring| (ring, base, top)));
+            found.extend(paths(geometry).into_iter().filter(|path| path.1).map(|(ring, _)| (ring, base, top)));
         }
         // Where the tile cut its houses: the outermost lines any of them reaches.
         let points = || found.iter().flat_map(|(ring, ..)| ring.iter());
@@ -394,20 +530,21 @@ fn houses(tile_bytes: &[u8], tile: (u32, u32)) -> Vec<Building> {
     out
 }
 
-fn cache_file(tile: (u32, u32)) -> PathBuf {
-    model::cache_path(&["buildings", &Z.to_string(), &format!("{}_{}.pbf", tile.0, tile.1)])
+fn cache_file((z, x, y): (u8, u32, u32)) -> PathBuf {
+    model::cache_path(&["buildings", &z.to_string(), &format!("{x}_{y}.pbf")])
 }
 
 // --------------------------------------------------------------------------------- state ----
 
 enum Tile {
     Loading,
-    Ready(Arc<Vec<Building>>),
+    Ready(Arc<Town>),
     Failed(Instant),
 }
 
 struct Store {
-    tiles: HashMap<(u32, u32), Tile>,
+    /// By (level, x, y).
+    tiles: HashMap<(u8, u32, u32), Tile>,
     lean: Vec2,
     /// Where this week's tiles are ("…/{z}/{x}/{y}.pbf"), once read from the tile set.
     address: Option<String>,
@@ -431,25 +568,61 @@ pub fn lean_by(drag: Vec2) {
     s.lean = if lean.length() > LEAN_MAX { lean.normalized() * LEAN_MAX } else { lean };
 }
 
-/// The tiles over `map`, nearest the middle first.
-fn tiles_in_view(flat: &FlatView, map: Rect) -> Vec<(u32, u32)> {
-    let n = 1i64 << Z;
-    let over = flat.tiles([map.left() as f64, map.top() as f64, map.right() as f64, map.bottom() as f64], Z);
-    over.into_iter().filter(|(_, y)| (0..n).contains(y)).map(|(x, y)| (x.rem_euclid(n) as u32, y as u32)).collect()
+/// The level of tiles a view asks for (tiles of 512 pixels, as a vector map draws them), or
+/// None while neither the houses (`houses`) nor the ground (`ground`) shows in it.
+fn level(flat: &FlatView, houses: bool, ground: bool) -> Option<u8> {
+    let zoom = flat.zoom();
+    (houses && showing(flat) > 0.0 || ground && zoom >= GROUND_FROM).then(|| (zoom - 1.0).floor().clamp(0.0, Z as f64) as u8)
+}
+
+/// Where a point of the map (Web Mercator, 0-1) stands on the screen.
+fn to_screen(flat: &FlatView) -> impl Fn([f64; 2]) -> Pos2 + '_ {
+    let (ox, oy) = (model::merc_x(flat.lon0), model::merc_y(flat.lat0));
+    move |m| {
+        let dx = m[0] - ox;
+        pos2((flat.cx + (dx - dx.round()) * flat.world) as f32, (flat.cy + (m[1] - oy) * flat.world) as f32)
+    }
+}
+
+/// Whether a tile lies over `map`.
+fn covers(flat: &FlatView, map: Rect, (z, x, y): (u8, u32, u32)) -> bool {
+    let (at, n) = (to_screen(flat), (1u32 << z) as f64);
+    map.intersects(Rect::from_two_pos(at([x as f64 / n, y as f64 / n]), at([(x + 1) as f64 / n, (y + 1) as f64 / n])))
+}
+
+/// The tiles of a level over `map`.
+fn tiles_in_view(flat: &FlatView, map: Rect, z: u8) -> Vec<(u8, u32, u32)> {
+    let n = 1i64 << z;
+    let over = flat.tiles([map.left() as f64, map.top() as f64, map.right() as f64, map.bottom() as f64], z);
+    over.into_iter().filter(|(_, y)| (0..n).contains(y)).map(|(x, y)| (z, x.rem_euclid(n) as u32, y as u32)).collect()
+}
+
+/// What stands over `map` at level `z`, or else at the level nearest to it that has any here:
+/// until a new level's tiles come, the last ones stay.
+fn towns(flat: &FlatView, map: Rect, z: u8) -> Vec<Arc<Town>> {
+    let s = store();
+    let here: Vec<(u8, Arc<Town>)> = s
+        .tiles
+        .iter()
+        .filter_map(|(&tile, t)| match t {
+            Tile::Ready(town) if covers(flat, map, tile) => Some((tile.0, town.clone())),
+            _ => None,
+        })
+        .collect();
+    let best = here.iter().map(|(level, _)| (level.abs_diff(z), *level)).min().map(|(_, level)| level);
+    here.into_iter().filter(|(level, _)| Some(*level) == best).map(|(_, town)| town).collect()
 }
 
 /// Asks for the tiles in view that are not here yet: from the cache, else from OpenFreeMap. One
-/// round at a time.
-pub fn schedule(rt: &Handle, flat: &FlatView, map: Rect) {
-    if showing(flat) <= 0.0 || model::offline() {
-        return;
-    }
+/// round at a time. `houses`: the houses are wanted; `ground`: the streets and the water.
+pub fn schedule(rt: &Handle, flat: &FlatView, map: Rect, houses: bool, ground: bool) {
+    let Some(z) = level(flat, houses, ground).filter(|_| !model::offline()) else { return };
     let mut s = store();
     if s.tiles.values().any(|t| matches!(t, Tile::Loading)) {
         return;
     }
-    let view = tiles_in_view(flat, map);
-    let wanted: Vec<(u32, u32)> = view
+    let view = tiles_in_view(flat, map, z);
+    let wanted: Vec<(u8, u32, u32)> = view
         .iter()
         .copied()
         .filter(|t| match s.tiles.get(t) {
@@ -462,7 +635,8 @@ pub fn schedule(rt: &Handle, flat: &FlatView, map: Rect) {
         return;
     }
     if s.tiles.len() > KEEP {
-        s.tiles.retain(|t, _| view.contains(t));
+        // (The level next to this one stays while it is in view: it is drawn until this one comes.)
+        s.tiles.retain(|t, _| t.0.abs_diff(z) <= 1 && covers(flat, map, *t));
     }
     for tile in &wanted {
         s.tiles.insert(*tile, Tile::Loading);
@@ -472,19 +646,35 @@ pub fn schedule(rt: &Handle, flat: &FlatView, map: Rect) {
     rt.spawn(load(wanted, address));
 }
 
-/// The houses of `wanted` into the store, each tile read from the cache or fetched and kept.
-async fn load(wanted: Vec<(u32, u32)>, mut address: Option<String>) {
-    let mut read = Vec::new();
+/// The towns of `wanted` into the store, each tile read from the cache or fetched (all at once:
+/// a town's outline is a dozen tiles) and kept.
+async fn load(wanted: Vec<(u8, u32, u32)>, mut address: Option<String>) {
+    let (mut read, mut missing) = (Vec::new(), Vec::new());
     for tile in wanted {
-        let bytes = match tokio::fs::read(cache_file(tile)).await {
-            Ok(bytes) => Some(bytes),
-            Err(_) => fetch(tile, &mut address).await.map_err(|e| debug!("[EARTH] The buildings of tile {tile:?} did not come: {e}")).ok(),
-        };
-        read.push((tile, bytes));
+        match tokio::fs::read(cache_file(tile)).await {
+            Ok(bytes) => read.push((tile, Some(bytes))),
+            Err(_) => missing.push(tile),
+        }
     }
-    let built = tokio::task::spawn_blocking(move || read.into_iter().map(|(tile, bytes)| (tile, bytes.map(|b| Arc::new(houses(&b, tile))))).collect::<Vec<_>>()).await.unwrap_or_default();
-    let count: usize = built.iter().filter_map(|(_, b)| b.as_ref()).map(|b| b.len()).sum();
-    info!("[EARTH] {count} building(s) in {} map tile(s)", built.len());
+    if !missing.is_empty() {
+        if address.is_none() {
+            address = tile_address().await.map_err(|e| debug!("[EARTH] The map tiles' address did not come: {e}")).ok();
+        }
+        let got = futures_util::future::join_all(missing.iter().map(|&tile| fetch(tile, address.as_deref()))).await;
+        // (Gone: this week's tiles moved on, and their address is read again next round.)
+        if got.iter().any(|r| matches!(r, Err((Some(404), _)))) {
+            address = None;
+        }
+        read.extend(missing.into_iter().zip(got).map(|(tile, got)| (tile, got.map_err(|(_, e)| debug!("[EARTH] Map tile {tile:?} did not come: {e}")).ok())));
+    }
+    let town = |bytes: Vec<u8>, (z, x, y): (u8, u32, u32)| {
+        let (ways, names) = ground(&bytes, (z, x, y));
+        // (Only the last level's tiles carry every house.)
+        Arc::new(Town { houses: if z == Z { houses(&bytes, (x, y)) } else { Vec::new() }, ways, names })
+    };
+    let built = tokio::task::spawn_blocking(move || read.into_iter().map(|(tile, bytes)| (tile, bytes.map(|b| town(b, tile)))).collect::<Vec<_>>()).await.unwrap_or_default();
+    let count = |of: fn(&Town) -> usize| built.iter().filter_map(|(_, town)| town.as_deref()).map(of).sum::<usize>();
+    info!("[EARTH] {} building(s) and {} line(s) of streets, rails and water in {} map tile(s)", count(|t| t.houses.len()), count(|t| t.ways.len()), built.len());
     let mut s = store();
     // (A round that was lost leaves nothing loading: its tiles are asked for again.)
     s.tiles.retain(|_, t| !matches!(t, Tile::Loading));
@@ -496,26 +686,19 @@ async fn load(wanted: Vec<(u32, u32)>, mut address: Option<String>) {
     model::wake();
 }
 
-/// A tile from OpenFreeMap, kept in the cache. The address of this week's tiles is read from
-/// the tile set first, and again when a tile is gone from it.
-async fn fetch(tile: (u32, u32), address: &mut Option<String>) -> Result<Vec<u8>, String> {
-    if address.is_none() {
-        let set = model::get_json(TILE_SET, Duration::from_secs(15)).await?;
-        *address = Some(set["tiles"][0].as_str().filter(|t| t.starts_with("https://")).ok_or("the tile set names no address")?.to_string());
-    }
-    let url = address.as_deref().unwrap_or_default().replace("{z}", &Z.to_string()).replace("{x}", &tile.0.to_string()).replace("{y}", &tile.1.to_string());
-    match model::get(&url, Duration::from_secs(20)).await {
-        Ok(bytes) => {
-            model::cache_write(cache_file(tile), bytes.clone()).await;
-            Ok(bytes)
-        }
-        Err((status, e)) => {
-            if status == Some(404) {
-                *address = None;
-            }
-            Err(e)
-        }
-    }
+/// Where this week's tiles are ("…/{z}/{x}/{y}.pbf"), as the tile set names it.
+async fn tile_address() -> Result<String, String> {
+    let set = model::get_json(TILE_SET, Duration::from_secs(15)).await?;
+    set["tiles"][0].as_str().filter(|t| t.starts_with("https://")).map(str::to_string).ok_or_else(|| "the tile set names no address".to_string())
+}
+
+/// A tile from OpenFreeMap, kept in the cache.
+async fn fetch(tile: (u8, u32, u32), address: Option<&str>) -> Result<Vec<u8>, (Option<u16>, String)> {
+    let address = address.ok_or((None, "no address for this week's tiles".to_string()))?;
+    let url = address.replace("{z}", &tile.0.to_string()).replace("{x}", &tile.1.to_string()).replace("{y}", &tile.2.to_string());
+    let bytes = model::get(&url, Duration::from_secs(20)).await?;
+    model::cache_write(cache_file(tile), bytes.clone()).await;
+    Ok(bytes)
 }
 
 // ------------------------------------------------------------------------------ painting ----
@@ -534,24 +717,12 @@ pub fn paint(p: &Painter, flat: &FlatView, map: Rect, strength: f32, keep_off: &
     if strength <= 0.0 {
         return false;
     }
-    let (tiles, lean) = {
-        let s = store();
-        let near = tiles_in_view(flat, map.expand(120.0));
-        let ready = near.iter().filter_map(|t| match s.tiles.get(t) {
-            Some(Tile::Ready(buildings)) => Some(buildings.clone()),
-            _ => None,
-        });
-        (ready.collect::<Vec<_>>(), s.lean)
-    };
-    let (ox, oy) = (model::merc_x(flat.lon0), model::merc_y(flat.lat0));
-    let screen = |m: [f64; 2]| {
-        let dx = m[0] - ox;
-        pos2((flat.cx + (dx - dx.round()) * flat.world) as f32, (flat.cy + (m[1] - oy) * flat.world) as f32)
-    };
+    let (tiles, lean) = (towns(flat, map.expand(120.0), Z), store().lean);
+    let screen = to_screen(flat);
     // A metre of height on the screen.
     let rise = lean * (flat.px_per_km() / 1000.0) as f32;
     let middle = map.center();
-    let mut seen: Vec<(Pos2, &Building)> = tiles.iter().flat_map(|t| t.iter()).map(|b| (screen(b.mid), b)).filter(|(at, b)| map.expand((b.reach * flat.world) as f32 + 60.0).contains(*at)).collect();
+    let mut seen: Vec<(Pos2, &Building)> = tiles.iter().flat_map(|t| t.houses.iter()).map(|b| (screen(b.mid), b)).filter(|(at, b)| map.expand((b.reach * flat.world) as f32 + 60.0).contains(*at)).collect();
     if seen.len() > MAX_DRAWN {
         seen.sort_by(|a, b| a.0.distance_sq(middle).total_cmp(&b.0.distance_sq(middle)));
         seen.truncate(MAX_DRAWN);
@@ -675,6 +846,133 @@ pub fn paint(p: &Painter, flat: &FlatView, map: Rect, strength: f32, keep_off: &
     !seen.is_empty()
 }
 
+/// How a line of the ground is drawn at a zoom: whether it is water (the deep tone; the rest is
+/// ink), how bright its line is and how wide the street is in metres (a band of faint light
+/// under the line once that is wide enough to see); None while it is too small to be drawn.
+fn look(kind: Kind, zoom: f64) -> Option<(bool, f32, f32)> {
+    // (From what zoom, how bright, how wide: a motorway down to a footpath.)
+    const ROADS: [(f64, f32, f32); 7] = [(0.0, 0.8, 26.0), (0.0, 0.7, 18.0), (11.0, 0.58, 14.0), (12.0, 0.48, 12.0), (13.5, 0.36, 9.0), (14.5, 0.24, 6.0), (15.5, 0.16, 0.0)];
+    let (from, water, bright, metres) = match kind {
+        Kind::Road(rank) => {
+            let (from, bright, metres) = ROADS[rank.min(6) as usize];
+            (from, false, bright, metres)
+        }
+        Kind::Rail => (11.5, false, 0.3, 0.0),
+        Kind::Shore => (0.0, true, 0.6, 0.0),
+        Kind::Stream => (12.0, true, 0.45, 0.0),
+    };
+    (zoom >= from).then_some((water, bright, metres))
+}
+
+/// How much of the ground shows at this zoom on the hologram, and the level of its tiles.
+fn ground_showing(flat: &FlatView, strength: f32) -> Option<(f32, u8)> {
+    let strength = strength * model::smoothstep(GROUND_FROM, GROUND_FROM + 1.0, flat.zoom()) as f32;
+    level(flat, false, true).filter(|_| strength > 0.0).map(|z| (strength, z))
+}
+
+/// The hologram's ground from a town's outline down, under its houses: the streets as lines of
+/// ink by their rank (thick and faint beside thin and bright: a street as wide as it is under
+/// its line, once that can be seen), the rails fainter, the shores and the streams in the deep
+/// tone.
+pub fn paint_ground(p: &Painter, flat: &FlatView, map: Rect, strength: f32) -> bool {
+    let Some((strength, z)) = ground_showing(flat, strength) else { return false };
+    let mut drawn = false;
+    let (zoom, metre, at) = (flat.zoom(), (flat.px_per_km() / 1000.0) as f32, to_screen(flat));
+    let theme = crate::holo::theme();
+    let mut light = crate::holo::Light::new(p);
+    let mut line = Vec::new();
+    for way in towns(flat, map, z).iter().flat_map(|t| t.ways.iter()) {
+        let Some((water, bright, metres)) = look(way.kind, zoom) else { continue };
+        if !map.expand((way.reach * flat.world) as f32).contains(at(way.mid)) {
+            continue;
+        }
+        let colour = if water { theme.deep() } else { theme.ink() };
+        line.clear();
+        line.extend(way.points.iter().map(|m| at(*m)));
+        if metres * metre >= 3.0 {
+            light.strip(&line, false, metres * metre, lit(colour, 0.07 * strength));
+        }
+        light.strip(&line, false, 1.0, lit(colour, bright * strength));
+        drawn = true;
+    }
+    light.paint(p);
+    drawn
+}
+
+/// The longest stretch of a line on the screen that runs nearly straight (none of it more than
+/// 3 px off the line between its ends: a name along it stays on the street), as far as `map`
+/// shows it: its two ends there. (A street's ends may lie far outside the map.)
+fn straightest(line: &[Pos2], map: Rect) -> Option<(Pos2, Pos2)> {
+    // (How far `p` lies off the line through `a` and `b`.)
+    let off = |a: Pos2, b: Pos2, p: Pos2| ((b - a).x * (p - a).y - (b - a).y * (p - a).x).abs() / (b - a).length().max(1e-3);
+    let (lo, hi) = ([map.left() as f64, map.top() as f64], [map.right() as f64, map.bottom() as f64]);
+    let at = |p: [f64; 2]| pos2(p[0] as f32, p[1] as f32);
+    let mut best: Option<(Pos2, Pos2)> = None;
+    let mut s = 0;
+    for i in 1..line.len() {
+        // (It ends where the line ends or bends away.)
+        if i + 1 == line.len() || line[s + 1..=i].iter().any(|p| off(line[s], line[i + 1], *p) > 3.0) {
+            let shown = clip([line[s].x as f64, line[s].y as f64], [line[i].x as f64, line[i].y as f64], lo, hi).map(|(a, b)| (at(a), at(b)));
+            if let Some(stretch) = shown.filter(|(a, b)| best.is_none_or(|(c, d)| (*b - *a).length() > (d - c).length())) {
+                best = Some(stretch);
+            }
+            s = i;
+        }
+    }
+    best
+}
+
+/// The streets' names along them, as on a drawing: above the line and turned with it, the great
+/// streets first, each name once, where a straight stretch of the street is long enough, inside
+/// the map and clear of `taken` (which they then join).
+pub fn paint_names(p: &Painter, flat: &FlatView, map: Rect, strength: f32, taken: &mut Vec<Rect>) {
+    let Some((strength, z)) = ground_showing(flat, strength) else { return };
+    let (zoom, at) = (flat.zoom(), to_screen(flat));
+    let towns = towns(flat, map, z);
+    let mut stretches: Vec<(u8, f32, Pos2, Pos2, &str)> = Vec::new();
+    let mut line = Vec::new();
+    for way in towns.iter().flat_map(|t| t.names.iter()) {
+        let (Some(name), Kind::Road(rank)) = (way.name.as_deref(), way.kind) else { continue };
+        if look(way.kind, zoom).is_none() || !map.expand((way.reach * flat.world) as f32).contains(at(way.mid)) {
+            continue;
+        }
+        line.clear();
+        line.extend(way.points.iter().map(|m| at(*m)));
+        if let Some((a, b)) = straightest(&line, map) {
+            stretches.push((rank, (b - a).length(), a, b, name));
+        }
+    }
+    stretches.sort_by(|x, y| x.0.cmp(&y.0).then(y.1.total_cmp(&x.1)));
+    let colour = crate::holo::a(crate::holo::theme().ink(), 0.75 * strength);
+    let mut said: Vec<&str> = Vec::new();
+    for (_, length, a, b, name) in stretches {
+        // (A name is at least six pixels a letter: no layout for a stretch too short anyway.)
+        if said.len() >= MAX_NAMES || said.contains(&name) || name.chars().count() as f32 * 6.0 > length {
+            continue;
+        }
+        let g = crate::holo::galley(p, crate::holo::Face::Label, name, 8.0, colour);
+        if g.size().x + 16.0 > length {
+            continue;
+        }
+        // Read from the left; the text stands on the street's upper side.
+        let along = if b.x < a.x { (a - b) / length } else { (b - a) / length };
+        let down = vec2(-along.y, along.x);
+        let half = g.size() / 2.0;
+        let middle = a.lerp(b, 0.5) - down * (half.y + 2.0);
+        let corners = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)].map(|(s, t)| middle + along * half.x * s + down * half.y * t);
+        let room = Rect::from_points(&corners);
+        if !map.contains_rect(room) || taken.iter().any(|t| t.intersects(room)) {
+            continue;
+        }
+        // (Level, it stands on the pixel grid, as all level text does: crisp.)
+        let corner = middle - along * half.x - down * half.y;
+        let corner = if along.y.abs() < 1e-3 { pos2(p.round_to_pixel(corner.x), p.round_to_pixel(corner.y)) } else { corner };
+        p.add(eframe::egui::epaint::TextShape::new(corner, g, colour).with_angle(along.y.atan2(along.x)));
+        taken.push(room);
+        said.push(name);
+    }
+}
+
 #[cfg(test)]
 pub mod tests {
     use super::*;
@@ -682,9 +980,9 @@ pub mod tests {
     static TOWN: Mutex<()> = Mutex::new(());
 
     /// The made-up town while a test uses it: no other test's houses meanwhile, none after.
-    pub struct Town(#[allow(dead_code)] MutexGuard<'static, ()>);
+    pub struct StandIn(#[allow(dead_code)] MutexGuard<'static, ()>);
 
-    impl Drop for Town {
+    impl Drop for StandIn {
         fn drop(&mut self) {
             let mut s = store();
             s.tiles.clear();
@@ -698,9 +996,10 @@ pub mod tests {
     }
 
     /// A made-up town around a point for the pictures and the geometry checks: `count` houses
-    /// in a square of rows, some of them L-shaped, of growing height.
-    pub fn stand_in(lat: f64, lon: f64, count: usize) -> Town {
-        let town = Town(TOWN.lock().unwrap_or_else(|e| e.into_inner()));
+    /// in a square of rows, some of them L-shaped, of growing height, with streets between the
+    /// rows and the columns (every fifth a main street, named), a river across and a lake.
+    pub fn stand_in(lat: f64, lon: f64, count: usize) -> StandIn {
+        let town = StandIn(TOWN.lock().unwrap_or_else(|e| e.into_inner()));
         let (dlat, dlon) = (0.00018, 0.00027);
         let rows = (count as f64).sqrt().ceil().max(1.0) as usize;
         let n = (1u32 << Z) as f64;
@@ -720,10 +1019,38 @@ pub mod tests {
             house.number = Some((k + 1).to_string());
             by_tile.entry(tile).or_default().push(house);
         }
+        // The ground: every street in the tile of the town's middle (a tile draws what it holds).
+        let at = |lat: f64, lon: f64| [model::merc_x(lon), model::merc_y(lat)];
+        let way = |kind: Kind, points: Vec<[f64; 2]>, name: Option<String>| {
+            let (mid, reach) = span(&points);
+            Way { kind, points, mid, reach, name }
+        };
+        let (south, north) = (lat - (rows as f64 / 2.0 + 1.0) * dlat * 1.6, lat + (rows as f64 / 2.0 + 1.0) * dlat * 1.6);
+        let (west, east) = (lon - (rows as f64 / 2.0 + 1.0) * dlon * 1.5, lon + (rows as f64 / 2.0 + 1.0) * dlon * 1.5);
+        const NAMES: [&str; 6] = ["Hauptstraße", "Bahnhofstraße", "Lindenallee", "Gartenweg", "Am Markt", "Schulstraße"];
+        let mut ground = Town::default();
+        for k in 0..=rows {
+            let (s, w) = (lat + (k as f64 - rows as f64 / 2.0) * dlat * 1.6 - dlat * 0.3, lon + (k as f64 - rows as f64 / 2.0) * dlon * 1.5 - dlon * 0.25);
+            let main = k % 5 == 0;
+            let kind = Kind::Road(if main { 1 } else { 4 });
+            for points in [vec![at(s, west), at(s, east)], vec![at(south, w), at(north, w)]] {
+                if main {
+                    ground.names.push(way(kind, points.clone(), Some(NAMES[(k / 5 + ground.names.len()) % NAMES.len()].to_string())));
+                }
+                ground.ways.push(way(kind, points, None));
+            }
+        }
+        ground.ways.push(way(Kind::Stream, vec![at(north, west), at(lat, lon - dlon), at(south, east)], None));
+        let lake = [(1.0, 1.0), (1.0, 4.0), (-2.0, 4.0), (-2.0, 1.0), (1.0, 1.0)].map(|(n, e)| at(lat + n * dlat * 3.0, east + e * dlon * 3.0));
+        ground.ways.push(way(Kind::Shore, lake.to_vec(), None));
+        let middle = ((at(lat, lon)[0] * n) as u32, (at(lat, lon)[1] * n) as u32);
         let mut s = store();
         s.lean = LEAN;
         s.tiles.clear();
-        s.tiles.extend(by_tile.into_iter().map(|(tile, buildings)| (tile, Tile::Ready(Arc::new(buildings)))));
+        for (tile, houses) in by_tile {
+            let ground = if tile == middle { std::mem::take(&mut ground) } else { Town::default() };
+            s.tiles.insert((Z, tile.0, tile.1), Tile::Ready(Arc::new(Town { houses, ..ground })));
+        }
         town
     }
 
@@ -759,16 +1086,115 @@ pub mod tests {
 
     /// A polygon feature of one ring through `points`, with `tags` (key index, value index).
     fn feature(points: &[[i64; 2]], tags: &[u64]) -> Vec<u8> {
+        shape(points, tags, true)
+    }
+
+    /// A line feature through `points`.
+    fn line(points: &[[i64; 2]], tags: &[u64]) -> Vec<u8> {
+        shape(points, tags, false)
+    }
+
+    fn shape(points: &[[i64; 2]], tags: &[u64], ring: bool) -> Vec<u8> {
         let mut geometry = vec![1 << 3 | 1, zz(points[0][0]), zz(points[0][1]), ((points.len() as u64 - 1) << 3) | 2];
         for w in points.windows(2) {
             geometry.extend([zz(w[1][0] - w[0][0]), zz(w[1][1] - w[0][1])]);
         }
-        geometry.push(1 << 3 | 7);
+        if ring {
+            geometry.push(1 << 3 | 7);
+        }
         let mut out = Vec::new();
         bytes(2, &packed(tags), &mut out);
-        number_field(3, 3, &mut out);
+        number_field(3, if ring { 3 } else { 2 }, &mut out);
         bytes(4, &packed(&geometry), &mut out);
         out
+    }
+
+    /// A layer whose keys and values are words.
+    fn words(name: &str, features: &[Vec<u8>], keys: &[&str], values: &[&str]) -> Vec<u8> {
+        let mut out = Vec::new();
+        bytes(1, name.as_bytes(), &mut out);
+        features.iter().for_each(|f| bytes(2, f, &mut out));
+        keys.iter().for_each(|k| bytes(3, k.as_bytes(), &mut out));
+        for v in values {
+            let mut text = Vec::new();
+            bytes(1, v.as_bytes(), &mut text);
+            bytes(4, &text, &mut out);
+        }
+        number_field(5, 4096, &mut out);
+        out
+    }
+
+    /// The ground of a tile: its streets by rank, its rails and its shores, each cut at the
+    /// tile's edge (a line over the seam is drawn once, by the two tiles together), no tunnel,
+    /// no ferry, no shore where the tiler cut the lake; the names along their streets.
+    #[test]
+    fn a_tile_gives_its_streets_water_and_names_once_over_the_seams() {
+        let keys = ["class", "name", "brunnel"];
+        let values = ["primary", "minor", "rail", "tunnel", "Musterstraße", "ferry"];
+        let roads = |dx: i64| {
+            words(
+                "transportation",
+                &[
+                    line(&[[100 + dx, 100], [2000 + dx, 100], [2000 + dx, 2000]], &[0, 0]), // a main street round a corner
+                    line(&[[3000 + dx, 500], [5000 + dx, 500]], &[0, 1]),                // a street over the east seam
+                    line(&[[-300 + dx, 800], [-100 + dx, 900]], &[0, 1]),                // in the margin: the neighbour's
+                    line(&[[100 + dx, 3000], [3000 + dx, 3000]], &[0, 2]),               // a rail
+                    line(&[[100 + dx, 3500], [3000 + dx, 3500]], &[0, 1, 2, 3]),         // a tunnel
+                    line(&[[100 + dx, 3900], [3000 + dx, 3900]], &[0, 5]),               // a ferry
+                ],
+                &keys,
+                &values,
+            )
+        };
+        // A lake the tiler cut along the margin: only its shore inside the tile is drawn.
+        let lake = words("water", &[feature(&[[-64, -64], [2000, -64], [2000, 1000], [-64, 1000]], &[])], &[], &[]);
+        let names = words("transportation_name", &[line(&[[100, 100], [2000, 100]], &[0, 0, 1, 4]), line(&[[100, 600], [900, 600]], &[0, 1])], &keys, &values);
+        let mut tile = Vec::new();
+        for layer in [&lake, &roads(0), &names] {
+            bytes(3, layer, &mut tile);
+        }
+        let (ways, named) = ground(&tile, (14, 8802, 5371));
+        let n = (1u32 << 14) as f64;
+        let merc = |x: f64, y: f64| [(8802.0 + x / 4096.0) / n, (5371.0 + y / 4096.0) / n];
+        let kinds: Vec<(Kind, usize)> = ways.iter().map(|w| (w.kind, w.points.len())).collect();
+        assert_eq!(kinds, [(Kind::Shore, 3), (Kind::Road(1), 3), (Kind::Road(4), 2), (Kind::Rail, 2)], "{ways:?}");
+        assert_eq!(ways[0].points, [merc(2000.0, 0.0), merc(2000.0, 1000.0), merc(0.0, 1000.0)], "the lake's shore inside the tile");
+        assert_eq!(ways[2].points, [merc(3000.0, 500.0), merc(4096.0, 500.0)], "cut at the east edge");
+        // The same street seen from the east neighbour starts where this tile's part ends.
+        let mut east = Vec::new();
+        bytes(3, &roads(-4096), &mut east);
+        let (theirs, _) = ground(&east, (14, 8803, 5371));
+        let street = theirs.iter().find(|w| w.kind == Kind::Road(4)).expect("the street in the neighbour");
+        assert_eq!(street.points, [merc(4096.0, 500.0), merc(5000.0, 500.0)]);
+        assert_eq!(theirs.len(), 1, "everything else lies west of the neighbour: {theirs:?}");
+        // A name only with its street, and a tile of another level in its own units.
+        assert_eq!(named.iter().map(|w| (w.kind, w.name.as_deref())).collect::<Vec<_>>(), [(Kind::Road(1), Some("Musterstraße"))]);
+        let (low, _) = ground(&tile, (12, 2200, 1342));
+        assert_eq!(low[2].points[1], [(2200.0 + 1.0) / 4096.0, (1342.0 + 500.0 / 4096.0) / 4096.0]);
+        // A tile that breaks off gives what was whole; no tile gives nothing.
+        assert!(ground(&tile[..tile.len() - 5], (14, 8802, 5371)).0.len() <= ways.len() && ground(&[], (14, 0, 0)).0.is_empty());
+        // What shows when: a motorway at a town's outline, a footpath only down at the houses,
+        // and water in the deep tone.
+        assert_eq!(look(Kind::Road(0), 10.5).map(|l| l.0), Some(false));
+        assert!(look(Kind::Road(6), 13.0).is_none() && look(Kind::Road(6), 16.0).is_some());
+        assert_eq!(look(Kind::Shore, 10.5).map(|l| l.0), Some(true));
+    }
+
+    /// A street's name goes on its straightest stretch inside the map.
+    #[test]
+    fn a_name_takes_the_longest_straight_stretch() {
+        let map = Rect::from_min_size(pos2(0.0, 0.0), vec2(500.0, 500.0));
+        // Along, round a corner, then a longer run, then out of the map.
+        let line = [pos2(10.0, 10.0), pos2(110.0, 10.0), pos2(110.0, 300.0), pos2(110.0, 600.0)];
+        assert_eq!(straightest(&line[..3], map), Some((pos2(110.0, 10.0), pos2(110.0, 300.0))));
+        assert_eq!(straightest(&line, map), Some((pos2(110.0, 10.0), pos2(110.0, 500.0))), "a stretch leaving the map counts as far as the map shows it");
+        // A gentle curve is one stretch while none of it strays 3 px off the line between its
+        // ends; on a rounder one the name would float beside the street.
+        let curve = |bend: f32| -> Vec<Pos2> { (0..5).map(|k| pos2(50.0 + 60.0 * k as f32, 200.0 + bend * (k * k) as f32)).collect() };
+        let (gentle, round) = (curve(0.5), curve(3.0));
+        assert_eq!(straightest(&gentle, map), Some((gentle[0], gentle[4])));
+        assert_ne!(straightest(&round, map), Some((round[0], round[4])));
+        assert_eq!(straightest(&[pos2(10.0, 10.0)], map), None);
     }
 
     fn layer(name: &str, features: &[Vec<u8>]) -> Vec<u8> {
@@ -864,7 +1290,7 @@ pub mod tests {
         // A tile that breaks off gives what was whole; no tile gives nothing.
         assert!(houses(&tile[..tile.len() - 7], (8802, 5371)).is_empty());
         assert!(houses(&[], (0, 0)).is_empty());
-        assert_eq!(cache_file((8802, 5371)), model::cache_path(&["buildings", "14", "8802_5371.pbf"]));
+        assert_eq!(cache_file((Z, 8802, 5371)), model::cache_path(&["buildings", "14", "8802_5371.pbf"]));
     }
 
     #[test]

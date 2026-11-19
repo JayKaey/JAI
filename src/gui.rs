@@ -904,11 +904,11 @@ pub(crate) fn for_test_session(builder: egui::ViewportBuilder) -> egui::Viewport
     // times a second.)
     builder.icon = shared_icon();
     // A window Sir has had before opens where it last stood, at the size it had, unless an
-    // order of his placed it; what the code asks of it later is done. (His choice of
-    // 2026-11-14: "Windows remember their place".)
+    // order of his placed it or another of his windows stands there; what the code asks of it
+    // later is done. (His choice of 2026-11-14: "Windows remember their place".)
     let by_order = PLACED_BY_ORDER.with(|p| p.replace(false));
     let code = [builder.position.map(|p| [p.x, p.y]), builder.inner_size.map(|s| [s.x, s.y])];
-    if let Some([x, y, w, h]) = builder.title.as_deref().and_then(|title| crate::own_windows::opening_place(title, code, by_order)) {
+    if let Some([x, y, w, h]) = builder.title.as_deref().and_then(|title| crate::own_windows::opening_place(title, code, by_order, |place| place_is_free(title, place))) {
         let scale = points_scale();
         return builder.with_position(pos2(x as f32, y as f32) / scale).with_inner_size(vec2(w as f32, h as f32) / scale);
     }
@@ -948,10 +948,14 @@ fn core_on_screen() -> Option<Rect> {
 
 /// Where a new window of `size` opens on the monitor whose work area is `work`: about the
 /// core when he stands on that monitor, beside him on his circle, the emptier side first, off
-/// the windows that stand there already (`holo_stage::slot`); else at `middle`.
+/// the windows that stand there already (`holo_stage::slot`); else at `middle`, or where it
+/// stands on none of them when one stands there.
 fn opening_spot(work: Rect, size: Vec2, core: Option<Rect>, taken: &[Rect], middle: Pos2) -> Pos2 {
     use crate::holo_stage::{slot, GAP};
-    let Some(core) = core.filter(|core| work.contains(core.center())) else { return middle };
+    let Some(core) = core.filter(|core| work.contains(core.center())) else {
+        let on_one = taken.iter().any(|t| t.intersects(Rect::from_min_size(middle, size).shrink(1.0)));
+        return on_one.then(|| crate::hud_dock::find_non_overlapping_slot(work, size, taken, GAP)).flatten().unwrap_or(middle);
+    };
     // Out on his second circle where the screen has the room: the leader that ties the window
     // to him has a length to show there (hard against his first circle it has none).
     let far = Rect::from_center_size(core.center(), core.size() * 1.5);
@@ -993,13 +997,44 @@ fn stage_window_covers_centre(ctx: &egui::Context, screen: Rect) -> bool {
     crate::hud_dock::STAGE_BLOCKS.iter().map(|id| viewport_for_block(id)).any(|window| !motions.leaving.contains_key(&window) && motions.rects.get(&window).is_some_and(|rect| rect.translate(-board.min.to_vec2()).intersects(zone)))
 }
 
+/// The windows `place_where_sir_works` placed (points), by title, and when each was last asked
+/// for.
+static PLACES: std::sync::LazyLock<Mutex<std::collections::HashMap<String, (Rect, Instant)>>> = std::sync::LazyLock::new(Default::default);
+
+/// What stands in the way of a window titled `title` (points): his other windows where they
+/// stand now, and those that have not shown themselves yet where they will come up (`placed` a
+/// moment ago, or at the place they had before).
+fn in_the_way(title: &str, placed: &std::collections::HashMap<String, (Rect, Instant)>) -> Vec<Rect> {
+    let scale = points_scale();
+    let points = |r: [i32; 4]| Rect::from_min_max(pos2(r[0] as f32, r[1] as f32) / scale, pos2(r[2] as f32, r[3] as f32) / scale);
+    #[cfg(windows)]
+    let standing: Vec<(String, Rect)> = crate::own_windows::list().into_iter().map(|w| (w.title, points(w.rect))).collect();
+    #[cfg(not(windows))]
+    let standing: Vec<(String, Rect)> = Vec::new();
+    let coming = placed.iter().map(|(t, (rect, _))| (t.clone(), *rect)).chain(crate::own_windows::opening_now().into_iter().map(|(t, [x, y, w, h])| (t, points([x, y, x + w, y + h]))));
+    coming.filter(|(t, _)| !standing.iter().any(|(shown, _)| shown == t)).chain(standing.iter().cloned()).filter(|(t, _)| t != title).map(|(_, rect)| rect).collect()
+}
+
+/// Whether a window may come up at the place it had before (x, y, w, h): not where another of
+/// his windows stands or comes up with it, unless he said "overlap the windows". (Sir,
+/// 2026-11-19: "open 3 random windows" brought three up on one spot; each had last been open
+/// alone, in the first place beside the core.)
+fn place_is_free(title: &str, [x, y, w, h]: [i32; 4]) -> bool {
+    let scale = points_scale();
+    let place = Rect::from_min_size(pos2(x as f32, y as f32) / scale, vec2(w as f32, h as f32) / scale).shrink(1.0);
+    let free = crate::hud_dock::overlap_allowed() || !in_the_way(title, &lock(&PLACES)).iter().any(|other| other.intersects(place));
+    if !free {
+        info!("[HUD] '{title}' does not come up where it stood before: another of his windows stands there");
+    }
+    free
+}
+
 /// Where a window of JAI's own that has no place yet opens (points): on the monitor Sir is
 /// using, beside the core when he stands there (`opening_spot`), else in its middle, a step
 /// aside for each window of his that opened just before; beside a game, on a monitor the game
 /// is not on ("A game is left alone"). The same place for as long as the window is asked for
 /// (by its title), so a window Sir has moved is never pulled back.
 fn place_where_sir_works(builder: &egui::ViewportBuilder) -> Option<Pos2> {
-    static PLACES: std::sync::LazyLock<Mutex<std::collections::HashMap<String, (Rect, Instant)>>> = std::sync::LazyLock::new(Default::default);
     let title = builder.title.clone()?;
     let mut places = lock(&PLACES);
     let now = Instant::now();
@@ -1027,13 +1062,7 @@ fn place_where_sir_works(builder: &egui::ViewportBuilder) -> Option<Pos2> {
     let step = (places.len() % 6) as f32 - 1.0;
     let middle = work.center() - size / 2.0 + vec2(34.0, 30.0) * step;
     let middle = pos2(middle.x.clamp(work.left(), (work.right() - size.x).max(work.left())), middle.y.clamp(work.top(), (work.bottom() - size.y).max(work.top())));
-    // What stands there already: his windows where they are now, and those placed a moment
-    // ago that have not shown themselves yet, where they will come up.
-    #[cfg(windows)]
-    let standing: Vec<(String, Rect)> = crate::own_windows::list().into_iter().map(|w| (w.title, points(w.rect))).collect();
-    #[cfg(not(windows))]
-    let standing: Vec<(String, Rect)> = Vec::new();
-    let taken: Vec<Rect> = places.iter().filter(|(placed, _)| !standing.iter().any(|(shown, _)| shown == *placed)).map(|(_, (rect, _))| *rect).chain(standing.iter().map(|(_, rect)| *rect)).collect();
+    let taken = in_the_way(&title, &places);
     // ("Overlap the windows": always the step aside in the middle.)
     let at = if crate::hud_dock::overlap_allowed() { middle } else { opening_spot(work, size, core_on_screen(), &taken, middle) };
     info!("[HUD] '{title}' opens at {:.0},{:.0}, {}", at.x, at.y, if at == middle { "in the middle of the monitor in use" } else { "about the core" });
@@ -7259,8 +7288,7 @@ fn block_slate() -> Color32 {
     let t = crate::holo::theme();
     crate::holo::mix(t.void(), t.ink(), 0.035)
 }
-/// What a detached window shows outside its frame while the frame unfolds or folds: the canvas
-/// itself (the frame draws itself out of the black and folds back into it).
+/// The ground of a piece of the board in a window of its own: the canvas itself.
 fn window_void() -> Color32 {
     crate::holo::theme().void()
 }
@@ -7302,14 +7330,19 @@ pub(super) fn paint_window_border(ctx: &egui::Context) {
     let screen = ctx.screen_rect();
     let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("jai_window_border")));
     let motion = detached_motion(ctx);
+    let band = motion_band(screen, &motion);
+    // Nothing of it is pure black but what Windows is to see through (`see_through`): over
+    // everything it draws (tool tips too), light a breath strong is added; while it comes or
+    // goes, on its frame alone. (The rects reach past the screen: their soft edges stay off it.)
+    let lifted = Rect::from_min_max(screen.min - vec2(2.0, 2.0), pos2(screen.max.x + 2.0, if band.bottom() < screen.bottom() { band.bottom() } else { screen.max.y + 2.0 }));
+    ctx.layer_painter(egui::LayerId::new(egui::Order::Debug, egui::Id::new("jai_window_lift"))).rect_filled(lifted, Rounding::ZERO, Color32::from_rgba_premultiplied(2, 2, 2, 0));
     if motion.moving() {
         ctx.request_repaint();
-        let band = motion_band(screen, &motion);
-        // Outside the frame: the dark glass. Inside it, below the scan edge: the slate.
-        for void in [Rect::from_min_max(screen.min, pos2(screen.max.x, band.top())), Rect::from_min_max(pos2(screen.min.x, band.bottom()), screen.max)] {
-            if void.height() > 0.0 {
-                painter.rect_filled(void, Rounding::ZERO, window_void());
-            }
+        // Below the frame: pure black, seen through, so the frame unfolds out of nothing and
+        // folds back into it over whatever stands behind. Inside it, below the scan edge: the
+        // slate.
+        if band.bottom() < screen.bottom() {
+            painter.rect_filled(Rect::from_min_max(pos2(screen.min.x - 2.0, band.bottom()), screen.max + vec2(2.0, 2.0)), Rounding::ZERO, Color32::BLACK);
         }
         let shown = motion_content_clip(screen, &motion);
         let unresolved = Rect::from_min_max(pos2(band.min.x, shown.bottom()), band.max);
@@ -7323,14 +7356,37 @@ pub(super) fn paint_window_border(ctx: &egui::Context) {
     } else {
         crate::holo::outline(&painter, &crate::holo::plate(screen, [0.0; 4]), crate::hud_board::border_colour());
     }
-    paint_window_motion(&painter, screen, &motion);
+    paint_window_motion(&painter, screen, &motion, true);
     // Esc in a view he put in full screen ("full screen the Earth") brings its window back.
     if ctx.input(|i| i.key_pressed(egui::Key::Escape) && i.viewport().fullscreen == Some(true)) {
         ctx.send_viewport_cmd(ViewportCommand::Fullscreen(false));
     }
     esc_closes_window(ctx);
+    // (Before it first shows itself: from its first frame on screen its black is seen through.)
+    see_through(ctx);
     reveal_when_drawn(ctx);
     keep_above_hud(ctx);
+}
+
+/// A window of his own shows what stands behind it where it is pure black, from before it
+/// first shows itself on (`win32_desktop::see_through_black`). Its entrance and exit draw out
+/// of nothing and fold back into it over whatever is behind. (Sir, 2026-11-19: "when the
+/// windows are closing the animation is great but there is a black background".)
+fn see_through(ctx: &egui::Context) {
+    #[cfg(windows)]
+    {
+        let viewport = ctx.viewport_id();
+        // (Looked for in its first frames only: a window that cannot be found stays as it was.)
+        if viewport == ViewportId::ROOT || ctx.cumulative_pass_nr() >= 30 || lock(&DETACHED_MOTIONS).see_through.contains(&viewport) {
+            return;
+        }
+        let Some(title) = ctx.input(|i| i.viewport().title.clone()) else { return };
+        if crate::win32::own_window(&title).is_some_and(crate::win32_desktop::see_through_black) {
+            lock(&DETACHED_MOTIONS).see_through.insert(viewport);
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = ctx;
 }
 
 /// A view in a window of its own stays above the HUD it came from: Windows keeps an owned window
@@ -7610,6 +7666,8 @@ struct DetachedMotions {
     rects: std::collections::HashMap<ViewportId, Rect>,
     /// The windows that wear his bar: their index tabs number them (`number`).
     barred: std::collections::HashSet<ViewportId>,
+    /// The windows whose pure black Windows sees through (`see_through`).
+    see_through: std::collections::HashSet<ViewportId>,
 }
 
 impl DetachedMotions {
@@ -7625,6 +7683,7 @@ impl DetachedMotions {
                 if pass == 0 {
                     self.revealed.remove(&viewport);
                     self.owned.remove(&viewport);
+                    self.see_through.remove(&viewport);
                 }
                 now
             }
@@ -7661,6 +7720,7 @@ impl DetachedMotions {
         self.owned.remove(&viewport);
         self.looked.remove(&viewport);
         self.told.remove(&viewport);
+        self.see_through.remove(&viewport);
         if let Some((known_as, _)) = self.named.remove(&viewport) {
             crate::hud_dock::window_gone(&known_as);
         }
@@ -8050,7 +8110,7 @@ pub(super) fn hud_block_window(ctx: &egui::Context, id: &str, title: &str, size:
         // the scan edge, the settling glow and the closing point's flash; the block itself is
         // never scaled (its text never lays out again while it comes or goes).
         let painter = ctx.layer_painter(inner.response.layer_id);
-        paint_window_motion(&painter, rect, &motion);
+        paint_window_motion(&painter, rect, &motion, false);
         if !motion.moving() {
             paint_resize_grip(&painter, rect, edge.gamma_multiply(0.8 * dim));
         }
@@ -8372,17 +8432,19 @@ fn smooth(from: f32, to: f32, x: f32) -> f32 {
 }
 
 /// What a window's entrance or exit draws over it (the line, the scan, the settling glow, the
-/// corner's spark), and its corner ticks (at rest: where they always are). `fill` is the
-/// window's own glass: the scan fades the freshly resolved content up out of it.
-pub(super) fn paint_window_motion(painter: &egui::Painter, rect: Rect, m: &WindowMotion) {
-    paint_window_motion_on(painter, rect, m, block_slate());
-}
-
-pub(crate) fn paint_window_motion_on(painter: &egui::Painter, rect: Rect, m: &WindowMotion, fill: Color32) {
+/// corner's spark), and its corner ticks (at rest: where they always are). The scan fades the
+/// freshly resolved content up out of the window's glass. In a window of his own (`crisp`) the
+/// black around the frame is seen through, so what is drawn there has no light round it, as
+/// the corner orb has none: soft light on a black that is seen through stands round it as a
+/// dark veil.
+pub(super) fn paint_window_motion(painter: &egui::Painter, rect: Rect, m: &WindowMotion, crisp: bool) {
     use crate::holo::{a, lit};
     let t = crate::holo::theme();
-    let (accent, hot) = (t.accent(), t.hot());
+    let (accent, hot, fill) = (t.accent(), t.hot(), block_slate());
     let px = crate::holo::px(painter);
+    // (The light round a line stays on the frame's glass there.)
+    let glass = if crisp { painter.with_clip_rect(motion_band(rect, m).intersect(painter.clip_rect())) } else { painter.clone() };
+    let mut glow = crate::holo::Light::new(&glass);
     let mut light = crate::holo::Light::new(painter);
     if m.brackets_alpha > 0.0 && m.brackets > 0.0 {
         let r = Rect::from_min_size(rect.min, vec2(rect.width(), rect.height() * m.brackets)).shrink(0.5);
@@ -8393,9 +8455,13 @@ pub(crate) fn paint_window_motion_on(painter: &egui::Painter, rect: Rect, m: &Wi
     if let Some((width, strength)) = m.line {
         let from = pos2(rect.left(), rect.top() + px * 0.5);
         let to = pos2(rect.left() + (rect.width() * width).max(px), from.y);
-        light.neon(&[from, to], false, px.max(1.2), a(hot, strength), strength);
+        light.neon(&[from, to], false, px.max(1.2), a(hot, strength), if crisp { 0.0 } else { strength });
         if width < 0.995 {
-            light.spark(to, 7.0, lit(hot, strength));
+            if crisp {
+                painter.circle_filled(to, 1.6, a(hot, strength));
+            } else {
+                light.spark(to, 7.0, lit(hot, strength));
+            }
         }
     }
     if m.resolve > 0.0 && m.resolve < 1.0 {
@@ -8419,20 +8485,23 @@ pub(crate) fn paint_window_motion_on(painter: &egui::Painter, rect: Rect, m: &Wi
             }
             painter.add(egui::Shape::mesh(mesh));
         }
-        light.neon(&[pos2(inner.left(), y), pos2(inner.right(), y)], false, px, a(hot, 0.9), 0.8);
+        glow.neon(&[pos2(inner.left(), y), pos2(inner.right(), y)], false, px, a(hot, 0.9), 0.8);
     }
     if m.glow > 0.0 {
         let frame = crate::holo::plate(rect, [0.0, 0.0, crate::holo_frame::CUT.min(rect.height() / 2.0), 0.0]);
         let mut closed = frame.clone();
         closed.push(frame[0]);
-        light.halo(&closed, false, 10.0, lit(accent, 0.34 * m.glow));
+        glow.halo(&closed, false, 10.0, lit(accent, 0.34 * m.glow));
         crate::holo::outline(painter, &frame, a(accent, 0.8 * m.glow));
     }
     if m.flash > 0.0 {
         let c = rect.left_top();
-        light.spark(c, 12.0 * m.flash.max(0.4), lit(hot, 0.9 * m.flash));
-        painter.circle_filled(c, 1.8, Color32::WHITE.gamma_multiply(0.95 * m.flash));
+        if !crisp {
+            light.spark(c, 12.0 * m.flash.max(0.4), lit(hot, 0.9 * m.flash));
+        }
+        painter.circle_filled(c, if crisp { 2.6 } else { 1.8 }, Color32::WHITE.gamma_multiply(0.95 * m.flash));
     }
+    glow.paint(&glass);
     light.paint(painter);
 }
 
@@ -10704,6 +10773,10 @@ mod tests {
         // He stands on another monitor, or is not up: the middle of the one in use.
         assert_eq!(opening_spot(work, size, Some(core.translate(vec2(-2560.0, 0.0))), &[], middle), middle);
         assert_eq!(opening_spot(work, size, None, &[], middle), middle);
+        // (A window stands there: off it, not a step beside it on it.)
+        let standing = Rect::from_min_size(middle + vec2(-34.0, -30.0), size);
+        let off = Rect::from_min_size(opening_spot(work, size, None, &[standing], middle), size);
+        assert!(!off.intersects(standing) && work.contains_rect(off), "{off:?}");
     }
 
     /// The board ties each of his windows to the core as it tied its blocks: where they stand
@@ -10779,6 +10852,45 @@ mod tests {
         let tab = canvas.brightness(Rect::from_min_size(pos2(1.0, 1.0), vec2(10.0, 12.0)));
         assert!(tab > 60.0, "the index tab stands lit in the window's corner: {tab}");
         assert!(canvas.brightness(Rect::from_min_size(pos2(40.0, 6.0), vec2(300.0, 24.0))) > 2.0, "the title is drawn");
+    }
+
+    /// Sir, 2026-11-19: "when the windows are closing the animation is great but there is a
+    /// black background". A window of his left a pane of the canvas's near-black below its
+    /// frame as the frame folded up, and Windows showed it as drawn. Now that ground is pure
+    /// black, which Windows sees through (`win32_desktop::see_through_black`), and nothing else
+    /// of the window is: not at rest (its index tab's black digits included), not its frame
+    /// as it goes.
+    #[test]
+    fn a_closing_window_leaves_nothing_behind_its_frame() {
+        let _g = crate::hud_dock::test_lock();
+        let _look = crate::holo_theme::look_for_pictures();
+        let size = vec2(720.0, 400.0);
+        let draw = |ctx: &egui::Context| {
+            egui::CentralPanel::default().frame(Frame::none().fill(block_slate()).inner_margin(Margin::same(14.0))).show(ctx, |ui| {
+                detached_bar(ui, ctx, "exit_probe", "Network radar // who is on the network");
+                ui.label(RichText::new("Twelve devices answer. The router is the nearest.").size(13.5).color(strip_ink()));
+            });
+            paint_window_border(ctx);
+        };
+        let black = |canvas: &crate::ui_snapshot::Canvas, rows: std::ops::Range<usize>| rows.flat_map(|y| (0..720).map(move |x| (x, y))).filter(|&(x, y)| canvas.pixel(x, y) == [0, 0, 0]).count();
+        let mut snap = crate::ui_snapshot::Snapshot::new(size);
+        let rest = snap.render(4, draw);
+        {
+            // 100 ms into the exit [ CLOSE ] started: the frame has folded up a tenth, the
+            // content has gone.
+            let mut motions = lock(&DETACHED_MOTIONS);
+            motions.shown.insert(ViewportId::ROOT, (0, Instant::now() - Duration::from_secs(2), Instant::now()));
+            motions.leaving.insert(ViewportId::ROOT, (Instant::now() - Duration::from_millis(100), true));
+        }
+        let exit = snap.render(1, |ctx| {
+            set_still(ctx, false);
+            draw(ctx);
+        });
+        lock(&DETACHED_MOTIONS).forget(ViewportId::ROOT);
+        exit.save("window_exit");
+        assert_eq!(black(&rest, 0..400), 0, "at rest nothing of it is seen through");
+        assert_eq!(black(&exit, 385..400), 720 * 15, "below the folding frame all is seen through");
+        assert_eq!(black(&exit, 0..160), 0, "the folding frame itself is not");
     }
 
     /// "Move it to the middle", "put it on the left half", "full screen it", "minimise it",

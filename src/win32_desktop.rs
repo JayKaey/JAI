@@ -352,9 +352,7 @@ pub fn own_exit(hwnd: isize) {
 /// surface format, with a window region and without. A black that is keyed out is seen
 /// through, and the emblem goes on being drawn in it.)
 pub fn tend_orb(hwnd: isize, pass: bool, drawn: bool) {
-    use windows::Win32::Foundation::COLORREF;
-    use windows::Win32::UI::WindowsAndMessaging::{GetLayeredWindowAttributes, SetLayeredWindowAttributes, LAYERED_WINDOW_ATTRIBUTES_FLAGS, LWA_COLORKEY};
-    // SAFETY: the style and the layer attributes of a window handle; a stale one just fails.
+    // SAFETY: the style of a window handle; a stale one just fails.
     unsafe {
         if !IsWindow(HWND(hwnd)).as_bool() {
             return;
@@ -365,16 +363,65 @@ pub fn tend_orb(hwnd: isize, pass: bool, drawn: bool) {
         if wanted != ex {
             SetWindowLongPtrW(HWND(hwnd), GWL_EXSTYLE, wanted);
         }
-        let mut flags = LAYERED_WINDOW_ATTRIBUTES_FLAGS(0);
-        if GetLayeredWindowAttributes(HWND(hwnd), None, None, Some(&mut flags)).is_err() || flags.0 & LWA_COLORKEY.0 == 0 {
-            let _ = SetLayeredWindowAttributes(HWND(hwnd), COLORREF(0), 0, LWA_COLORKEY);
-        }
+        key_out_black(hwnd);
         let on_show = IsWindowVisible(HWND(hwnd)).as_bool();
         ORB_ON_SHOW.store(on_show, Ordering::Release);
         if drawn && !on_show {
             crate::win32::show_no_activate(hwnd);
         }
     }
+}
+
+/// Makes window `hwnd` a layered one whose pure black Windows sees through and lets clicks
+/// through, unless it is one already.
+fn key_out_black(hwnd: isize) {
+    use windows::Win32::Foundation::COLORREF;
+    use windows::Win32::UI::WindowsAndMessaging::{GetLayeredWindowAttributes, SetLayeredWindowAttributes, LAYERED_WINDOW_ATTRIBUTES_FLAGS, LWA_COLORKEY};
+    // SAFETY: the style and the layer attributes of a window handle; a stale one just fails.
+    unsafe {
+        let ex = GetWindowLongPtrW(HWND(hwnd), GWL_EXSTYLE);
+        if ex & WS_EX_LAYERED.0 as isize == 0 {
+            SetWindowLongPtrW(HWND(hwnd), GWL_EXSTYLE, ex | WS_EX_LAYERED.0 as isize);
+        }
+        let mut flags = LAYERED_WINDOW_ATTRIBUTES_FLAGS(0);
+        if GetLayeredWindowAttributes(HWND(hwnd), None, None, Some(&mut flags)).is_err() || flags.0 & LWA_COLORKEY.0 == 0 {
+            let _ = SetLayeredWindowAttributes(HWND(hwnd), COLORREF(0), 0, LWA_COLORKEY);
+        }
+    }
+}
+
+/// Window `hwnd` of his sees through its pure black for good (`key_out_black`): the windowing
+/// library writes its whole extended style anew whenever one of its own flags changes (it shows
+/// the window that way), and the layer stays in it (`keep_layered`). His views draw nothing
+/// pure black but what their entrance and exit leave around their frame
+/// (`gui::paint_window_border`). On the window's own thread; true when it is one.
+pub fn see_through_black(hwnd: isize) -> bool {
+    use windows::Win32::UI::Shell::SetWindowSubclass;
+    // SAFETY: subclasses a window of the calling thread with a procedure that passes every
+    // message on; a stale handle just fails.
+    unsafe {
+        if !IsWindow(HWND(hwnd)).as_bool() || !SetWindowSubclass(HWND(hwnd), Some(keep_layered), KEEP_LAYERED, 0).as_bool() {
+            return false;
+        }
+    }
+    key_out_black(hwnd);
+    true
+}
+
+const KEEP_LAYERED: usize = 0x4A4B_4C59;
+
+/// Keeps a window of his layered whatever is written into its extended style.
+unsafe extern "system" fn keep_layered(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM, _id: usize, _data: usize) -> LRESULT {
+    use windows::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass};
+    use windows::Win32::UI::WindowsAndMessaging::{STYLESTRUCT, WM_NCDESTROY, WM_STYLECHANGING};
+    if msg == WM_STYLECHANGING && wparam.0 as i32 == GWL_EXSTYLE.0 {
+        // (For this message Windows hands over the style about to be set, to change.)
+        (*(lparam.0 as *mut STYLESTRUCT)).styleNew |= WS_EX_LAYERED.0;
+    }
+    if msg == WM_NCDESTROY {
+        let _ = RemoveWindowSubclass(hwnd, Some(keep_layered), KEEP_LAYERED);
+    }
+    DefSubclassProc(hwnd, msg, wparam, lparam)
 }
 
 /// Whether the corner orb's window was on show when it was last looked after.
@@ -593,6 +640,36 @@ mod tests {
             own_exit(hwnd.0);
             assert_eq!(GetPropW(hwnd, OWN_EXIT).0, 1, "the mark the animations look for");
             let _ = DestroyWindow(hwnd);
+        }
+    }
+
+    /// A window of his sees through its pure black for good: the windowing library writes its
+    /// whole extended style anew as it shows the window, and the layer stays, with what is seen
+    /// through.
+    #[test]
+    fn a_window_of_his_sees_through_its_black_for_good() {
+        use windows::Win32::Foundation::{COLORREF, HINSTANCE};
+        use windows::Win32::UI::WindowsAndMessaging::{CreateWindowExW, DestroyWindow, GetLayeredWindowAttributes, HMENU, LAYERED_WINDOW_ATTRIBUTES_FLAGS, LWA_COLORKEY, WINDOW_EX_STYLE, WS_POPUP};
+        // SAFETY: a hidden window owned by this test thread, destroyed below; plain queries on it.
+        unsafe {
+            let hwnd = CreateWindowExW(WINDOW_EX_STYLE(0), w!("STATIC"), w!("jai see-through test"), WS_POPUP, 0, 0, 120, 80, HWND(0), HMENU(0), HINSTANCE(0), None);
+            assert_ne!(hwnd.0, 0, "test window");
+            let layered = || GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_LAYERED.0 as isize != 0;
+            let keyed = || {
+                let (mut key, mut flags) = (COLORREF(1), LAYERED_WINDOW_ATTRIBUTES_FLAGS(0));
+                GetLayeredWindowAttributes(hwnd, Some(&mut key), None, Some(&mut flags)).is_ok() && key.0 == 0 && flags.0 & LWA_COLORKEY.0 != 0
+            };
+            assert!(!layered(), "plain as it comes");
+            assert!(see_through_black(hwnd.0));
+            assert!(layered() && keyed(), "its pure black is seen through");
+            // (As winit shows a window: the edge, files dropped on it, a key in the taskbar.)
+            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, 0x0004_0110);
+            assert!(layered() && keyed(), "the layer stays, and what is seen through with it");
+            // (Windows keeps the raised edge only on a framed window: this one is a popup.)
+            assert_eq!(GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & 0x0004_0010, 0x0004_0010, "what the library asked for is there too");
+            assert!(see_through_black(hwnd.0) && layered() && keyed(), "asked again, nothing changes");
+            let _ = DestroyWindow(hwnd);
+            assert!(!see_through_black(hwnd.0), "a window that is gone");
         }
     }
 

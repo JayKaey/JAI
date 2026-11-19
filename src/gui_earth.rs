@@ -329,11 +329,9 @@ fn view_with(ui: &mut Ui, st: &mut Earth, rt: &Handle, fetch: bool) {
             globe_marks(&painter, &geo.globe, &ink, st.look, now);
         }
     }
-    if geo.flatness > 0.0 {
-        paint_flat(&painter, st, &geo, textures.0, &ink, rt, cpu);
-    }
-    if fetch && st.overlays.buildings && geo.flatness >= 1.0 && !st.demo {
-        crate::earth_buildings::schedule(rt, &geo.flat, lay.map);
+    st.ground = geo.flatness > 0.0 && paint_flat(&painter, st, &geo, textures.0, &ink, rt, cpu);
+    if fetch && geo.flatness >= 1.0 && !st.demo {
+        crate::earth_buildings::schedule(rt, &geo.flat, lay.map, st.overlays.buildings, st.look == Look::Holo);
     }
 
     let controls = controls_layout(lay.map);
@@ -341,8 +339,11 @@ fn view_with(ui: &mut Ui, st: &mut Earth, rt: &Handle, fetch: bool) {
     let cards = plan_cards(&painter, st, &geo, &controls, &mut placer, &ink);
     let mut picker = Picker { pointer: map_resp.hover_pos(), best: None };
     let tour_card = plan_tour_card(&painter, st, &geo, &mut placer);
-    // The houses, once the map is down at street level (what their roofs say keeps off the
-    // cards and the keys).
+    // The hologram's street names, then the houses once the map is down at street level (what
+    // their roofs say keeps off the cards, the keys and the names).
+    if st.look == Look::Holo && st.overlays.labels {
+        crate::earth_buildings::paint_names(&painter, &geo.flat, lay.map, geo.flatness, &mut placer.taken);
+    }
     st.houses = crate::earth_buildings::paint(&painter, &geo.flat, lay.map, if st.overlays.buildings { geo.flatness } else { 0.0 }, &placer.taken);
     let (pulsing, movers) = paint_layers(&painter, st, &geo, &ink, now, &mut placer, &mut picker);
     cards.paint(&painter, &ink);
@@ -397,7 +398,7 @@ fn credits_line(st: &Earth) -> String {
     if st.overlays.labels {
         parts.push(crate::earth_sources::REFERENCE_CREDIT);
     }
-    if st.houses {
+    if st.houses || st.ground {
         parts.push(crate::earth_buildings::CREDIT);
     }
     if st.overlays.terrain {
@@ -766,7 +767,8 @@ fn stars(p: &Painter, map: Rect, colour: Color32, g: &GlobeView) {
 /// mesh by `cpu`) under the tiles: the imagery, the terrain's shading, the clouds and the radar,
 /// then the labels and borders, all at `geo.flatness`.
 #[allow(clippy::too_many_arguments)]
-fn paint_flat(p: &Painter, st: &mut Earth, geo: &Geo, base: TextureId, ink: &Ink, rt: &Handle, cpu: bool) {
+/// The flat map; whether the hologram's ground (its streets and water) is on it.
+fn paint_flat(p: &Painter, st: &mut Earth, geo: &Geo, base: TextureId, ink: &Ink, rt: &Handle, cpu: bool) -> bool {
     let (map, flat) = (geo.map, &geo.flat);
     let tint = Color32::WHITE.gamma_multiply(geo.flatness);
     if cpu {
@@ -798,10 +800,11 @@ fn paint_flat(p: &Painter, st: &mut Earth, geo: &Geo, base: TextureId, ink: &Ink
     }
     // The hologram up close: its imagery ends at level 8, and from a town down the land was one
     // flat field of its colour (olive, in the window of 2026-11-19). It sinks into the glass
-    // there; the grid, the names and the houses carry the picture.
-    if st.look == Look::Holo {
+    // there; the grid, the streets, the names and the houses carry the picture.
+    let ground = st.look == Look::Holo && {
         p.rect_filled(map, 0.0, scrim(0.86 * model::smoothstep(8.0, 11.0, zoom) as f32 * geo.flatness));
-    }
+        crate::earth_buildings::paint_ground(p, flat, map, geo.flatness)
+    };
     // The hologram's grid (a satellite photo stays clean once it is there).
     if st.look == Look::Holo || (cpu && st.sat.tex.is_none()) {
         flat_graticule(p, flat, map, ink.rim.gamma_multiply(0.18 * geo.flatness));
@@ -813,6 +816,7 @@ fn paint_flat(p: &Painter, st: &mut Earth, geo: &Geo, base: TextureId, ink: &Ink
             _ => tiles(p, st, flat, map, layer, level(layer, 0.5), tint, rt),
         }
     }
+    ground
 }
 
 /// Parallels and meridians over the flat map (straight lines in Web Mercator), every 30 degrees
@@ -1900,6 +1904,7 @@ fn summary(st: &Earth) -> String {
         (o.radar && o.animate, "rain radar (past two hours)"),
         (o.clouds, "clouds"),
         (st.houses, "buildings in 3D"),
+        (st.ground, "streets and water"),
     ]
     .into_iter()
     .filter_map(|(on, name)| on.then_some(name))
@@ -2046,13 +2051,14 @@ mod tests {
             let frame = draw(&mut stage, &mut earth, rt.handle(), 3);
             clean(&frame);
             assert!(earth.houses, "{look:?}: no house on the map at 300 m");
-            assert!(!frame.find_text("Buildings: OpenFreeMap").is_empty(), "{look:?}: no credit:\n{}", frame.all_text());
+            assert!(!frame.find_text("OpenFreeMap").is_empty(), "{look:?}: no credit:\n{}", frame.all_text());
             let canvas = stage.raster(&frame);
             canvas.save(name);
             let with = canvas.brightness(around);
             earth.overlays.buildings = false;
             let frame = draw(&mut stage, &mut earth, rt.handle(), 2);
-            assert!(!earth.houses && frame.find_text("Buildings: OpenFreeMap").is_empty(), "{look:?}: the key leaves them standing");
+            assert!(!earth.houses, "{look:?}: the key leaves them standing");
+            assert_eq!(frame.find_text("OpenFreeMap").is_empty(), look == Look::Satellite, "{look:?}: the credit goes with the houses (the hologram's streets keep it)");
             let without = stage.raster(&frame).brightness(around);
             assert!((with - without).abs() > 1.0, "{look:?}: the houses change nothing on the map ({with} and {without})");
         }
@@ -2086,6 +2092,39 @@ mod tests {
         let t = std::time::Instant::now();
         let _ = draw(&mut stage, &mut earth, rt.handle(), 10);
         assert!(t.elapsed() / 10 < std::time::Duration::from_millis(40), "{high} km: {:?} a frame", t.elapsed() / 10);
+    }
+
+    /// The hologram's ground from a town's outline down to its houses: the streets by rank, the
+    /// river and the lake, the streets' names clear of each other and of the keys, the credit; the
+    /// photo shows its own streets.
+    #[test]
+    fn the_hologram_draws_a_towns_streets_water_and_names() {
+        let _look = crate::holo_theme::look_for_pictures();
+        let rt = runtime();
+        let _town = crate::earth_buildings::tests::stand_in(48.0, 9.0, 2_500);
+        let mut earth = Earth::demo();
+        let mut stage = stage(vec2(900.0, 620.0));
+        let names = ["HAUPTSTRASSE", "BAHNHOFSTRASSE", "LINDENALLEE", "GARTENWEG", "AM MARKT", "SCHULSTRASSE"];
+        for (alt, picture) in [(2.5, "panel_earth_streets"), (0.6, "panel_earth_streets_near")] {
+            earth.cam = crate::earth::Camera { lat: 48.0, lon: 9.0, alt };
+            earth.set_look(Look::Holo);
+            let frame = draw(&mut stage, &mut earth, rt.handle(), 3);
+            clean(&frame);
+            stage.raster(&frame).save(picture);
+            assert!(earth.ground, "{alt} km: no street on the hologram");
+            assert!(!frame.find_text("OpenFreeMap").is_empty(), "{alt} km: no credit:\n{}", frame.all_text());
+            assert!(names.iter().any(|n| !frame.find_text(n).is_empty()), "{alt} km: no street's name:\n{}", frame.all_text());
+            // Each name once.
+            assert!(names.iter().all(|n| frame.find_text(n).len() <= 1), "{alt} km: a name twice:\n{}", frame.all_text());
+        }
+        earth.set_look(Look::Satellite);
+        let _ = draw(&mut stage, &mut earth, rt.handle(), 2);
+        assert!(!earth.ground, "the photo shows its own streets");
+        // Up where a town is a speck, none.
+        earth.set_look(Look::Holo);
+        earth.cam.alt = 400.0;
+        let _ = draw(&mut stage, &mut earth, rt.handle(), 2);
+        assert!(!earth.ground, "streets at 400 km");
     }
 
     fn runtime() -> tokio::runtime::Runtime {
