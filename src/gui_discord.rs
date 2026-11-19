@@ -3,9 +3,10 @@
 //! output he listens to (the call), a level meter of what the call hears, and
 //! `[ TEST VOICE IN DISCORD ]`. Sir's own speaker keeps playing either way.
 
-use super::{rgba, stroke, strip_font, strip_ink, strip_muted};
+use super::{strip_ink, strip_muted};
+use crate::holo::Face;
 use crate::tools::ToolContext;
-use eframe::egui::{self, Frame, Margin, RichText, Rounding, Ui, ViewportBuilder, ViewportClass, ViewportCommand, ViewportId};
+use eframe::egui::{self, Frame, Margin, RichText, Ui, ViewportBuilder, ViewportClass, ViewportCommand, ViewportId};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -53,24 +54,24 @@ fn picker(ui: &mut Ui, id: &str, current: Option<&str>, devices: &[String]) -> O
     picked
 }
 
+fn label() -> egui::FontId {
+    crate::holo::font(Face::Label, 9.0)
+}
+
 /// The level as `−18.4 dB` and a bar from −60 to 0 dB.
 fn meter(ui: &mut Ui, level: f32) {
     let db = (20.0 * level.max(1e-5).log10()).clamp(-60.0, 0.0);
     ui.horizontal(|ui| {
-        ui.label(RichText::new("CALL HEARS").font(strip_font()).color(strip_muted()));
-        let (rect, _) = ui.allocate_exact_size(egui::vec2(220.0, 8.0), egui::Sense::hover());
-        let painter = ui.painter_at(rect);
-        painter.rect_stroke(rect, Rounding::ZERO, stroke(1.0, crate::hud_board::border_colour()));
-        let fill = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width() * (db + 60.0) / 60.0, rect.height()));
-        painter.rect_filled(fill, Rounding::ZERO, crate::hud_board::active_colour());
-        ui.label(RichText::new(format!("{db:.1} dB")).font(strip_font()).color(strip_ink()));
+        ui.label(RichText::new("CALL HEARS").font(label()).color(strip_muted()));
+        crate::holo_ui::bar(ui, (db + 60.0) / 60.0, 220.0);
+        ui.label(RichText::new(format!("{db:.1} dB")).font(crate::holo::font(Face::Mono, 11.0)).color(strip_ink()));
     });
 }
 
 fn body(ui: &mut Ui, tools: &ToolContext, rt: &Handle) {
     let devices = devices();
     let (target, source) = tools.config.read(|c| (c.discord_call_output.clone(), c.discord_listen_source.clone()));
-    ui.label(RichText::new(format!("BRIDGE {} · VOICE INTO CALL: {}", crate::discord_bridge::mode().label().to_uppercase(), crate::discord_bridge::voice_device())).font(strip_font()).color(strip_ink()));
+    ui.label(RichText::new(format!("BRIDGE {} · VOICE INTO CALL: {}", crate::discord_bridge::mode().label().to_uppercase(), crate::discord_bridge::voice_device())).font(label()).color(strip_ink()));
     // JAI's own account (a bot of his: he joins calls as himself, no routing needed).
     if let Some(s) = crate::discord_bot::hud_status() {
         let call = match &s.call {
@@ -78,16 +79,16 @@ fn body(ui: &mut Ui, tools: &ToolContext, rt: &Handle) {
             None => String::new(),
         };
         let unread = if s.unread > 0 { format!(" · {} UNREAD", s.unread) } else { String::new() };
-        ui.label(RichText::new(format!("HIS ACCOUNT: {}{call}{unread}", s.link.to_uppercase())).font(strip_font()).color(strip_ink()));
+        ui.label(RichText::new(format!("HIS ACCOUNT: {}{call}{unread}", s.link.to_uppercase())).font(label()).color(strip_ink()));
     }
     ui.add_space(6.0);
     egui::Grid::new("discord_routing").num_columns(2).spacing([10.0, 8.0]).show(ui, |ui| {
-        ui.label(RichText::new("INJECTION TARGET").font(strip_font()).color(strip_ink()));
+        ui.label(RichText::new("INJECTION TARGET").font(label()).color(strip_ink()));
         if let Some(next) = picker(ui, "discord_injection", target.as_deref(), &devices) {
             crate::discord_bridge::set_injection_target(&tools.config, next);
         }
         ui.end_row();
-        ui.label(RichText::new("LISTEN SOURCE").font(strip_font()).color(strip_ink()));
+        ui.label(RichText::new("LISTEN SOURCE").font(label()).color(strip_ink()));
         if let Some(next) = picker(ui, "discord_listen", source.as_deref(), &devices) {
             crate::discord_bridge::set_listen_source(&tools.config, next);
         }
@@ -106,11 +107,11 @@ fn body(ui: &mut Ui, tools: &ToolContext, rt: &Handle) {
     }
     let last = LAST.lock().unwrap_or_else(|e| e.into_inner()).clone();
     if !last.is_empty() {
-        ui.add(egui::Label::new(RichText::new(format!("→ {last}")).size(11.0).color(strip_ink())).wrap());
+        ui.add(egui::Label::new(RichText::new(format!("→ {last}")).font(crate::holo::font(Face::Mono, 11.0)).color(strip_ink())).wrap());
     }
     ui.add_space(6.0);
-    ui.label(RichText::new("TIP: Wave Link — add a spare channel (SFX / Aux), turn it up in the Chat Mix and pick it as the injection target.").size(11.0).color(strip_muted()));
-    ui.label(RichText::new("No Wave Link: route a virtual cable into the microphone Discord uses (e.g. Voicemeeter) and pick the cable's input here.").size(11.0).color(strip_muted()));
+    ui.label(RichText::new("TIP: Wave Link — add a spare channel (SFX / Aux), turn it up in the Chat Mix and pick it as the injection target.").font(crate::holo::font(Face::Body, 11.0)).color(strip_muted()));
+    ui.label(RichText::new("No Wave Link: route a virtual cable into the microphone Discord uses (e.g. Voicemeeter) and pick the cable's input here.").font(crate::holo::font(Face::Body, 11.0)).color(strip_muted()));
     ui.ctx().request_repaint_after(Duration::from_millis(100));
 }
 

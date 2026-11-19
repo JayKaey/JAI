@@ -827,11 +827,6 @@ impl JaiConfig {
             self.whisper_dynamic_audio_ctx = true;
             // The light background capture (no cursor flicker); a lower rate Sir chose stays.
             self.features.replay_fps = self.features.replay_fps.min(defaults.features.replay_fps);
-            // The clean two-zone studio layout (orb + conversation) on deep obsidian glass.
-            self.interface.zen_mode = true;
-            if matches!(self.interface.background.to_lowercase().as_str(), "#030509" | "#03070e") {
-                self.interface.background = defaults.interface.background.clone();
-            }
         }
         if self.config_version < 12 {
             // v12, voice input: the name prompt (no prompt made "JAI" unrecognisable) and the
@@ -957,10 +952,6 @@ impl JaiConfig {
             // voice lock is on. It holds as soon as his voice is known, and the bar for it is
             // read anew from the print (`speaker_id`).
             self.interface.voice_lock = true;
-        }
-        if self.config_version < 28 {
-            // v28 (Sir, 2026-11-17): the whole HUD in the Stark look.
-            self.interface.stark_v28();
         }
         if self.config_version < 22 && self.pre_roll_ms == 320 {
             // v22: 500 ms of audio before the onset, so "JAI" / "Move" keep their first
@@ -1270,19 +1261,19 @@ mod tests {
         assert!(fingerprint(&now.memory_db_path) != STOCK_DB_PATH && fingerprint(&now.log_file) != STOCK_LOG_FILE && fingerprint(&now.kokoro_voice) != STOCK_VOICE_ALIAS);
         // What Sir set himself comes through every migration untouched.
         let own = r##"{ "config_version": 23, "wake_words": ["friday"], "whisper_initial_prompt": "Sir's own words.", "memory_db_path": "D:/data/mine.db", "log_file": "mine.log", "kokoro_voice": "bm_george",
-            "interface": { "theme": "crimson_mk42", "accent": "#ff2a45", "background": "#0f0507", "title": "Workshop", "hud_palette": "rose_crimson" } }"##;
+            "interface": { "title": "Workshop", "hud_palette": "rose_crimson" } }"##;
         let mut cfg: JaiConfig = serde_json::from_str(own).unwrap();
         cfg.migrate();
         assert_eq!(cfg.wake_words, ["jai", "jay", "friday"], "his name in front, a name Sir added stays");
         assert_eq!((cfg.whisper_initial_prompt.as_str(), cfg.memory_db_path.as_str(), cfg.log_file.as_str(), cfg.kokoro_voice.as_str()), ("Sir's own words.", "D:/data/mine.db", "mine.log", "bm_george"));
-        assert_eq!((cfg.interface.theme.as_str(), cfg.interface.hud_palette.as_str(), cfg.interface.title.as_str()), ("crimson_mk42", "rose_crimson", "Workshop"));
+        assert_eq!((cfg.interface.hud_palette.as_str(), cfg.interface.title.as_str()), ("rose_crimson", "Workshop"));
         assert_eq!(cfg.config_version, CONFIG_VERSION);
-        // The yellow accent the 2026-11-09 helmet mishap left on the gold palette becomes the
-        // default look.
-        let mishap = r##"{ "config_version": 23, "interface": { "theme": "custom", "accent": "#ffe14d", "background": "#0f0507", "hud_palette": "stark_gold" } }"##;
-        let mut cfg: JaiConfig = serde_json::from_str(mishap).unwrap();
+        // The stock look of then (the cyan theme) becomes his yellow; fields that are gone
+        // since (a theme name, an accent, a background, round corners) are read past.
+        let stock = r##"{ "config_version": 23, "interface": { "theme": "stark", "accent": "#00e5ff", "background": "#0f0507", "hud_palette": "arc_cyan", "corner_rounding": 18.0, "zen_mode": true } }"##;
+        let mut cfg: JaiConfig = serde_json::from_str(stock).unwrap();
         cfg.migrate();
-        assert_eq!((cfg.interface.theme.as_str(), cfg.interface.hud_palette.as_str(), cfg.interface.accent.as_str(), cfg.interface.title.as_str()), ("jai", "stark_gold", "#ffd400", "J.A.I."));
+        assert_eq!((cfg.interface.hud_palette.as_str(), cfg.interface.title.as_str()), ("stark_gold", "J.A.I."));
         // A fresh install is his from the start.
         let fresh = JaiConfig::default();
         assert_eq!((fresh.wake_words.as_slice(), fresh.interface.hud_palette.as_str()), (["jai".to_string(), "jay".to_string()].as_slice(), "stark_gold"));
@@ -1291,27 +1282,27 @@ mod tests {
     }
 
     #[test]
-    fn the_stark_design_keeps_his_yellow_and_cuts_the_stock_corners_sharp() {
-        // The look v24-v27 left on his PC (custom theme, the stock yellow, the stock palette).
-        let stock = r##"{ "config_version": 27, "interface": { "theme": "custom", "accent": "#ffd400", "background": "#070b12", "hud_palette": "jai_gold", "ui_paradigm": "modern_oled_minimal", "corner_rounding": 18.0 } }"##;
+    fn a_look_of_the_old_engine_still_names_a_theme_and_its_dead_fields_are_dropped() {
+        // The look v24-v27 left on his PC: the stock yellow under its name of then, beside
+        // settings the hologram interface has no use for.
+        let stock = r##"{ "config_version": 27, "interface": { "theme": "custom", "accent": "#ffd400", "background": "#070b12", "hud_palette": "jai_gold",
+            "ui_paradigm": "modern_oled_minimal", "corner_rounding": 18.0, "header_telemetry": false, "hidden_panels": ["chat"], "zen_mode": true } }"##;
         let mut cfg: JaiConfig = serde_json::from_str(stock).unwrap();
         cfg.migrate();
-        let i = &cfg.interface;
-        assert_eq!((i.theme.as_str(), i.accent.as_str(), i.background.as_str(), i.hud_palette.as_str()), ("custom", "#ffd400", "#070b12", "jai_gold"));
-        assert_eq!(i.corner_rounding, 2.0, "the stock round corners are cut sharp");
-        assert_eq!(i.ui_paradigm, crate::oled_minimal_ui::UiDesignParadigm::ModernOledMinimal, "his design stays");
-        // A colour he picked himself after v24 is his.
-        for (palette, accent) in [("jai_gold", "#00e5ff"), ("rose_crimson", "#ffd400"), ("custom:#FFD400", "#ffd400")] {
-            let mine = format!(r##"{{ "config_version": 27, "interface": {{ "accent": "{accent}", "hud_palette": "{palette}", "corner_rounding": 9.0 }} }}"##);
+        cfg.sanitize();
+        assert_eq!(cfg.interface.hud_palette, "stark_gold", "kept under the preset's name of today");
+        let saved = serde_json::to_string(&cfg.interface).unwrap();
+        for gone in ["\"theme\"", "\"accent\"", "\"background\"", "ui_paradigm", "corner_rounding", "header_telemetry", "hidden_panels", "zen_mode"] {
+            assert!(!saved.contains(gone), "{gone} is saved no more");
+        }
+        // A theme he picked himself is his: the preset it is today, or his own colour.
+        for (stored, now) in [("rose_crimson", "hot_rod"), ("arc_cyan", "arc_reactor"), ("custom:#FFD400", "custom:#FFD400")] {
+            let mine = format!(r##"{{ "config_version": 27, "interface": {{ "hud_palette": "{stored}" }} }}"##);
             let mut cfg: JaiConfig = serde_json::from_str(&mine).unwrap();
             cfg.migrate();
-            assert_eq!((cfg.interface.hud_palette.as_str(), cfg.interface.accent.as_str(), cfg.interface.corner_rounding), (palette, accent, 9.0));
+            cfg.sanitize();
+            assert_eq!(cfg.interface.hud_palette, now);
         }
-        // Arc Cyan was stored as "stark": the word names the Stark Red theme now, so it moves.
-        let cyan = r##"{ "config_version": 27, "interface": { "theme": "stark", "accent": "#00e5ff", "hud_palette": "arc_cyan" } }"##;
-        let mut cfg: JaiConfig = serde_json::from_str(cyan).unwrap();
-        cfg.migrate();
-        assert_eq!((cfg.interface.theme.as_str(), cfg.interface.hud_palette.as_str()), ("arc_cyan", "arc_cyan"));
         assert_eq!(CONFIG_VERSION, 28);
     }
 
@@ -1335,15 +1326,12 @@ mod tests {
         let mut cfg: JaiConfig = serde_json::from_str(v11).unwrap();
         cfg.migrate();
         assert_eq!((cfg.whisper_initial_prompt.as_str(), cfg.whisper_beam_size), (WHISPER_DOMAIN_PROMPT, 2));
-        let v10 = r##"{ "config_version": 10, "active_conversation_window_secs": 45, "features": { "replay_fps": 12.0 },
-                       "interface": { "zen_mode": false, "background": "#030509" } }"##;
+        let v10 = r#"{ "config_version": 10, "active_conversation_window_secs": 45, "features": { "replay_fps": 12.0 } }"#;
         let mut cfg: JaiConfig = serde_json::from_str(v10).unwrap();
         cfg.migrate();
         cfg.sanitize();
         assert_eq!(cfg.active_conversation_window_secs, 5);
         assert_eq!(cfg.features.replay_fps, 5.0);
-        assert!(cfg.interface.zen_mode, "the two-zone studio layout");
-        assert_eq!(cfg.interface.background, crate::interface::InterfaceSettings::default().background);
         assert!(cfg.short_command_hangover_ms <= cfg.silence_hangover_ms);
     }
 

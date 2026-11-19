@@ -4,8 +4,13 @@
 //! password fields and go straight into the encrypted vault (left blank, the stored one stays).
 //! "Test connection" runs the real client in the background and shows its answer.
 
-use super::{bold, button, lock, muted, request_repaint, Palette, Tone};
+use super::{button, lock, muted, request_repaint, Palette, Tone};
 use crate::app::Jai;
+use crate::holo::{font as face, Face};
+
+fn bold(size: f32) -> egui::FontId {
+    face(Face::Head, super::ts(size))
+}
 use crate::config::{AcousticSettings, AwaySettings, DiscordBotSettings, FeatureSettings, LocationSettings, SatelliteSettings, WhatsAppSettings};
 use crate::pim::Pim;
 use crate::pim_config::{self, PimSettings, WebFeed, CALENDAR, EMAIL, FEEDS, LMS, WEBUNTIS};
@@ -151,7 +156,7 @@ fn secret_field(ui: &mut Ui, value: &mut String, stored: bool) {
 fn account_and_away(ui: &mut Ui, p: &Palette, bot: &mut DiscordBotSettings, away: &mut AwaySettings, token: &mut String, token_stored: bool, results: &Mutex<HashMap<&'static str, (bool, String)>>) {
     let section = |ui: &mut Ui, title: &str| {
         ui.add_space(6.0);
-        ui.label(RichText::new(title).font(bold(12.5)).color(p.accent));
+        ui.label(RichText::new(title).font(bold(12.5)).color(p.text));
     };
     section(ui, "JAI's Discord account (a bot of his own)");
     crate::holo_ui::toggle(ui, &mut bot.enabled, "Enabled");
@@ -182,24 +187,24 @@ fn account_and_away(ui: &mut Ui, p: &Palette, bot: &mut DiscordBotSettings, away
         }
         match &status {
             Some(s) => {
-                let colour = if s.link == "online" { p.green } else if s.link.starts_with("stopped") { p.red } else { p.muted };
+                let colour = if s.link == "online" { p.nominal } else if s.link.starts_with("stopped") { p.alert } else { p.muted };
                 let who = if s.name.is_empty() { String::new() } else { format!(" as {}", s.name) };
                 let paired = if s.owner_paired { " · your account paired" } else { " · not paired yet" };
-                ui.label(RichText::new(format!("{}{who}{paired}", s.link.to_uppercase())).size(11.0).color(colour));
+                ui.label(RichText::new(format!("{}{who}{paired}", s.link.to_uppercase())).font(face(Face::Label, 9.0)).color(colour));
                 if let Some(code) = &s.pairing_code {
-                    ui.label(RichText::new(format!("CODE {code}")).monospace().size(12.0).color(p.accent));
+                    ui.label(RichText::new(format!("CODE {code}")).font(face(Face::Mono, 12.0)).color(p.accent));
                 }
             }
             None => {
-                ui.label(RichText::new("Starts with JAI (not in test sessions)").size(11.0).color(p.muted));
+                ui.label(RichText::new("Starts with JAI (not in test sessions)").font(face(Face::Body, 11.0)).color(p.muted));
             }
         }
     });
     if let Some((ok, text)) = lock(results).get("discord_bot").cloned() {
-        ui.label(RichText::new(text).size(11.5).color(if ok { p.accent } else { p.red }));
+        ui.label(RichText::new(text).font(face(Face::Body, 11.5)).color(if ok { p.accent } else { p.alert }));
     }
     if let Some(note) = status.and_then(|s| s.note) {
-        ui.add(egui::Label::new(RichText::new(note).size(11.0).color(p.amber)).wrap());
+        ui.add(egui::Label::new(RichText::new(note).font(face(Face::Body, 11.0)).color(p.warn)).wrap());
     }
     muted(ui, "Create it at discord.com/developers → New Application → Bot: copy the token here and switch on the Message Content Intent. Invite it with OAuth2 → URL Generator (scope bot; View Channels, Send Messages, Read Message History, Connect, Speak, Use Voice Activity). Bots join server voice channels, not private calls.");
 
@@ -269,11 +274,11 @@ impl Hub {
                     crate::holo_ui::fold(ui, "hub_diagnosis", "Last diagnosis", true, |ui| {
                         for r in &reports {
                             let colour = match r.state.as_str() {
-                                "ok" => p.green,
+                                "ok" => p.nominal,
                                 "off" => p.muted,
-                                _ => p.red,
+                                _ => p.alert,
                             };
-                            ui.add(egui::Label::new(RichText::new(format!("{} {} — {} · {}", if r.ok() { "OK" } else if r.state == "off" { "OFF" } else { "ERR" }, r.name, r.status, r.detail)).size(11.0).color(colour)).wrap());
+                            ui.add(egui::Label::new(RichText::new(format!("{} {} — {} · {}", if r.ok() { "OK" } else if r.state == "off" { "OFF" } else { "ERR" }, r.name, r.status, r.detail)).font(face(Face::Body, 11.0)).color(colour)).wrap());
                         }
                     });
                 }
@@ -284,11 +289,11 @@ impl Hub {
                 });
                 crate::holo_ui::rule(ui);
                 crate::holo_block::faded(ui, egui::ScrollArea::vertical().max_height(470.0).auto_shrink([false, true]), |ui| match self.tab {
-                    Tab::Email => self.email_tab(ui, p, pim),
-                    Tab::Calendar => self.calendar_tab(ui, p, pim),
-                    Tab::WebUntis => self.webuntis_tab(ui, p, pim),
-                    Tab::Lms => self.lms_tab(ui, p, pim),
-                    Tab::Feeds => self.feeds_tab(ui, p),
+                    Tab::Email => self.email_tab(ui, pim),
+                    Tab::Calendar => self.calendar_tab(ui, pim),
+                    Tab::WebUntis => self.webuntis_tab(ui, pim),
+                    Tab::Lms => self.lms_tab(ui, pim),
+                    Tab::Feeds => self.feeds_tab(ui),
                     Tab::Study => self.study_tab(ui, p, pim),
                     Tab::Quick => self.quick_tab(ui, p, app, rt),
                     Tab::Field => self.field_tab(ui, p, app, rt),
@@ -320,7 +325,7 @@ impl Hub {
                     }
                 });
                 if let Some((text, error)) = &self.message {
-                    ui.label(RichText::new(text).size(11.0).color(if *error { p.red } else { p.green }));
+                    ui.label(RichText::new(text).font(face(Face::Body, 11.0)).color(if *error { p.alert } else { p.nominal }));
                 }
                 muted(ui, format!("Tokens are sealed with AES-256-GCM; master key in {}.", pim.config().vault().key_store()));
             });
@@ -345,7 +350,7 @@ impl Hub {
     fn field_tab(&mut self, ui: &mut Ui, p: &Palette, app: &Jai, rt: &Handle) {
         let tools = app.tools().clone();
         let f = tools.stark.features.clone();
-        ui.label(RichText::new("FIELD SYSTEMS").font(bold(12.0)).color(p.accent));
+        ui.label(RichText::new("FIELD SYSTEMS").font(bold(12.0)).color(p.text));
         muted(ui, "Say “clip that”, “quiz me on …”, “why am I lagging”, “clean up my downloads”, “wake me at 6:30 with JaysRock”, “find me an RTX 3080 under 350 euros”.");
         let rows = [
             ("Instant Replay", if f.replay.is_running() { "recording the rolling buffer".to_string() } else { "off".to_string() }),
@@ -356,8 +361,8 @@ impl Hub {
         ];
         for (name, state) in rows {
             ui.horizontal(|ui| {
-                ui.label(RichText::new(name).size(11.5).strong());
-                ui.label(RichText::new(state).size(11.5).color(p.muted));
+                ui.label(RichText::new(name).font(face(Face::Strong, 11.5)).color(p.text));
+                ui.label(RichText::new(state).font(face(Face::Body, 11.5)).color(p.muted));
             });
         }
         ui.add_space(6.0);
@@ -503,7 +508,7 @@ impl Hub {
         let tools = app.tools();
         let section = |ui: &mut Ui, title: &str| {
             ui.add_space(6.0);
-            ui.label(RichText::new(title).font(bold(12.5)).color(p.accent));
+            ui.label(RichText::new(title).font(bold(12.5)).color(p.text));
         };
 
         // ---- WhatsApp -------------------------------------------------------------------
@@ -548,7 +553,7 @@ impl Hub {
                 });
             }
             if let Some((ok, text)) = lock(&self.results).get("whatsapp_bridge").cloned() {
-                ui.label(RichText::new(text).size(11.0).color(if ok { p.green } else { p.red }));
+                ui.label(RichText::new(text).font(face(Face::Body, 11.0)).color(if ok { p.nominal } else { p.alert }));
             }
         });
         muted(ui, format!(
@@ -604,8 +609,8 @@ impl Hub {
                 }
             }
             ui.vertical(|ui| {
-                ui.label(RichText::new("Scan with your phone's camera:").size(11.5));
-                ui.add(egui::Label::new(RichText::new(&url).monospace().size(11.0).color(p.accent)).wrap());
+                ui.label(RichText::new("Scan with your phone's camera:").font(face(Face::Body, 11.5)).color(p.text));
+                ui.add(egui::Label::new(RichText::new(&url).font(face(Face::Mono, 11.0)).color(p.accent)).wrap());
                 if crate::holo_ui::key(ui, "Copy link").clicked() {
                     ui.output_mut(|o| o.copied_text = url.clone());
                 }
@@ -618,10 +623,10 @@ impl Hub {
                 }
                 let fix = tools.stark.location.phone_fix();
                 let (colour, text) = match fix {
-                    Some(f) => (p.green, format!("GPS LOCK ACTIVE · {:.5}, {:.5} ±{:.0} m", f.lat, f.lon, f.accuracy_m)),
+                    Some(f) => (p.nominal, format!("GPS LOCK ACTIVE · {:.5}, {:.5} ±{:.0} m", f.lat, f.lon, f.accuracy_m)),
                     None => (p.muted, "No phone connected".to_string()),
                 };
-                ui.label(RichText::new(text).size(11.0).color(colour));
+                ui.label(RichText::new(text).font(face(Face::Body, 11.0)).color(colour));
             });
         });
 
@@ -669,18 +674,18 @@ impl Hub {
         });
         let address = q.satellite.tunnel_public_url.trim().to_string();
         if provider != "tailscale" && !address.is_empty() && crate::worldwide_tunnel::https_origin(&address).is_none() {
-            ui.label(RichText::new("The address must look like https://jai.your-domain, without a path.").size(11.0).color(p.red));
+            ui.label(RichText::new("The address must look like https://jai.your-domain, without a path.").font(face(Face::Body, 11.0)).color(p.alert));
         }
         let tunnel = crate::worldwide_tunnel::snapshot();
         let (colour, line) = match (&tunnel.public_url, tunnel.permanent) {
-            (Some(url), true) => (p.green, format!("PERMANENT ADDRESS ONLINE // {url}")),
-            (Some(url), false) => (p.amber, format!("ONLINE // {url} // this address is new whenever the tunnel restarts")),
+            (Some(url), true) => (p.nominal, format!("PERMANENT ADDRESS ONLINE // {url}")),
+            (Some(url), false) => (p.warn, format!("ONLINE // {url} // this address is new whenever the tunnel restarts")),
             (None, _) => match crate::worldwide_tunnel::configured_address(&q.satellite, token_stored) {
                 Some(fixed) => (p.muted, format!("{} // {fixed} // {}", tunnel.state.to_uppercase(), tunnel.detail)),
                 None => (p.muted, format!("{} // {}", tunnel.state.to_uppercase(), tunnel.detail)),
             },
         };
-        ui.add(egui::Label::new(RichText::new(line).size(11.0).color(colour)).wrap());
+        ui.add(egui::Label::new(RichText::new(line).font(face(Face::Body, 11.0)).color(colour)).wrap());
         match provider {
             "cloudflare" => {
                 muted(ui, format!(
@@ -814,7 +819,7 @@ impl Hub {
                 });
             }
             if let Some((ok, text)) = lock(&self.results).get("nodes").cloned() {
-                ui.add(egui::Label::new(RichText::new(text).size(11.0).color(if ok { p.text } else { p.red })).wrap());
+                ui.add(egui::Label::new(RichText::new(text).font(face(Face::Body, 11.0)).color(if ok { p.text } else { p.alert })).wrap());
             }
         });
 
@@ -848,17 +853,17 @@ impl Hub {
     fn status_line(&self, ui: &mut Ui, p: &Palette, pim: &Pim, service: &'static str) {
         let running = lock(&self.results).get(service).cloned();
         let (colour, text) = match running {
-            Some((ok, text)) => (if ok { p.green } else { p.red }, text),
+            Some((ok, text)) => (if ok { p.nominal } else { p.alert }, text),
             None => {
                 let st = pim.config().status(service);
                 match st.state.as_str() {
-                    "connected" => (p.green, format!("Connected · {} · {}", st.last_checked, st.detail)),
-                    "error" => (p.red, format!("Error · {} · {}", st.last_checked, st.detail)),
+                    "connected" => (p.nominal, format!("Connected · {} · {}", st.last_checked, st.detail)),
+                    "error" => (p.alert, format!("Error · {} · {}", st.last_checked, st.detail)),
                     _ => (p.muted, pim.config().missing(service).unwrap_or_else(|| "Not tested yet".into())),
                 }
             }
         };
-        ui.add(egui::Label::new(RichText::new(text).size(11.0).color(colour)).wrap());
+        ui.add(egui::Label::new(RichText::new(text).font(face(Face::Body, 11.0)).color(colour)).wrap());
     }
 
     /// Writes the draft and any new tokens. False when nothing could be saved.
@@ -900,7 +905,7 @@ impl Hub {
         });
     }
 
-    fn token_row(&mut self, ui: &mut Ui, p: &Palette, pim: &Pim, service: &'static str, label: &str) {
+    fn token_row(&mut self, ui: &mut Ui, pim: &Pim, service: &'static str, label: &str) {
         ui.label(label);
         ui.horizontal(|ui| {
             let stored = pim.config().has_token(service);
@@ -916,7 +921,7 @@ impl Hub {
         ui.end_row();
     }
 
-    fn email_tab(&mut self, ui: &mut Ui, p: &Palette, pim: &Pim) {
+    fn email_tab(&mut self, ui: &mut Ui, pim: &Pim) {
         let Some(mut d) = self.draft.take() else { return };
         crate::holo_ui::toggle(ui, &mut d.email.enabled, "Use my e-mail (IMAP over TLS)");
         egui::Grid::new("hub_email").num_columns(2).spacing([12.0, 7.0]).show(ui, |ui| {
@@ -932,13 +937,13 @@ impl Hub {
             ui.label("Mailbox");
             text_field(ui, &mut d.email.mailbox, "INBOX");
             ui.end_row();
-            self.token_row(ui, p, pim, EMAIL, "App token");
+            self.token_row(ui, pim, EMAIL, "App token");
         });
         muted(ui, "Gmail: turn on 2-step verification, create an app password (Google Account → Security → App passwords) and paste it here. JAI only reads (EXAMINE + BODY.PEEK); nothing is marked as read.");
         self.draft = Some(d);
     }
 
-    fn calendar_tab(&mut self, ui: &mut Ui, p: &Palette, pim: &Pim) {
+    fn calendar_tab(&mut self, ui: &mut Ui, pim: &Pim) {
         let Some(mut d) = self.draft.take() else { return };
         crate::holo_ui::toggle(ui, &mut d.calendar.enabled, "Sync my calendar (events are always kept offline too)");
         egui::Grid::new("hub_calendar").num_columns(2).spacing([12.0, 7.0]).show(ui, |ui| {
@@ -948,7 +953,7 @@ impl Hub {
             ui.label("Username");
             text_field(ui, &mut d.calendar.username, "Apple ID e-mail");
             ui.end_row();
-            self.token_row(ui, p, pim, CALENDAR, "App-specific password");
+            self.token_row(ui, pim, CALENDAR, "App-specific password");
             ui.label("New events go to");
             text_field(ui, &mut d.calendar.calendar_name, "calendar name (empty = the first)");
             ui.end_row();
@@ -960,7 +965,7 @@ impl Hub {
         self.draft = Some(d);
     }
 
-    fn webuntis_tab(&mut self, ui: &mut Ui, p: &Palette, pim: &Pim) {
+    fn webuntis_tab(&mut self, ui: &mut Ui, pim: &Pim) {
         let Some(mut d) = self.draft.take() else { return };
         crate::holo_ui::toggle(ui, &mut d.webuntis.enabled, "Read my school timetable");
         egui::Grid::new("hub_untis").num_columns(2).spacing([12.0, 7.0]).show(ui, |ui| {
@@ -973,7 +978,7 @@ impl Hub {
             ui.label("Username");
             text_field(ui, &mut d.webuntis.username, "WebUntis login");
             ui.end_row();
-            self.token_row(ui, p, pim, WEBUNTIS, "Password");
+            self.token_row(ui, pim, WEBUNTIS, "Password");
             ui.label("Class");
             text_field(ui, &mut d.webuntis.class_name, "e.g. 10b (optional)");
             ui.end_row();
@@ -996,7 +1001,7 @@ impl Hub {
         self.draft = Some(d);
     }
 
-    fn lms_tab(&mut self, ui: &mut Ui, p: &Palette, pim: &Pim) {
+    fn lms_tab(&mut self, ui: &mut Ui, pim: &Pim) {
         let Some(mut d) = self.draft.take() else { return };
         crate::holo_ui::toggle(ui, &mut d.lms.enabled, "Track my itslearning courses");
         egui::Grid::new("hub_lms").num_columns(2).spacing([12.0, 7.0]).show(ui, |ui| {
@@ -1006,7 +1011,7 @@ impl Hub {
             ui.label("Username");
             text_field(ui, &mut d.lms.username, "itslearning login (REST)");
             ui.end_row();
-            self.token_row(ui, p, pim, LMS, "Password");
+            self.token_row(ui, pim, LMS, "Password");
             ui.label("Feed URL");
             text_field(ui, &mut d.lms.feed_url, "RSS / notification feed (optional)");
             ui.end_row();
@@ -1021,12 +1026,12 @@ impl Hub {
         self.draft = Some(d);
     }
 
-    fn feeds_tab(&mut self, ui: &mut Ui, p: &Palette) {
+    fn feeds_tab(&mut self, ui: &mut Ui) {
         let Some(mut d) = self.draft.take() else { return };
         muted(ui, "Any page or JSON endpoint: give it a name, a CSS selector (.status, #news li) or JSON path ($.data.items[0].title) and how often a watcher may check it.");
         let mut remove = None;
         for (i, f) in d.feeds.iter_mut().enumerate() {
-            egui::Frame::none().stroke(super::stroke(1.0, p.line)).rounding(egui::Rounding::ZERO).inner_margin(egui::Margin::same(8.0)).show(ui, |ui| {
+            crate::holo_ui::plate(ui, 8.0, 0.0, |ui| {
                 egui::Grid::new(("hub_feed", i)).num_columns(2).spacing([12.0, 5.0]).show(ui, |ui| {
                     ui.label("Name");
                     text_field(ui, &mut f.name, "Mensa plan");
@@ -1061,7 +1066,7 @@ impl Hub {
 
     fn study_tab(&mut self, ui: &mut Ui, p: &Palette, pim: &Pim) {
         let Some(mut d) = self.draft.take() else { return };
-        ui.label(RichText::new("Background change watchers").font(bold(12.0)).color(p.accent));
+        ui.label(RichText::new("Background change watchers").font(bold(12.0)).color(p.text));
         muted(ui, "JAI checks the service on a timer, lights its node in the core and tells you the moment a class is cancelled or something new is posted.");
         let running: HashMap<String, u32> = pim.watchers().list().into_iter().collect();
         let mut targets: Vec<(String, String)> = vec![(WEBUNTIS.into(), "WebUntis (cancellations, substitutions)".into()), (LMS.into(), "itslearning (new posts)".into())];
@@ -1101,7 +1106,7 @@ impl Hub {
             }
         });
         ui.add_space(8.0);
-        ui.label(RichText::new("Study folder").font(bold(12.0)).color(p.accent));
+        ui.label(RichText::new("Study folder").font(bold(12.0)).color(p.text));
         egui::Grid::new("hub_study").num_columns(2).spacing([12.0, 7.0]).show(ui, |ui| {
             ui.label("School folder");
             text_field(ui, &mut d.study.school_dir, &crate::study_assistant::school_dir(pim).display().to_string());
@@ -1124,6 +1129,7 @@ mod tests {
     /// narrow one: nothing cut off, nothing drawn over anything else, every control there.
     #[test]
     fn the_discord_account_and_away_mode_settings_are_shown_whole() {
+        let _look = crate::holo_theme::look_for_pictures();
         let p = Palette::new(&crate::interface::InterfaceSettings::default());
         for width in [540.0, 400.0] {
             let (mut bot, mut away, mut token) = (DiscordBotSettings::default(), AwaySettings::default(), String::new());

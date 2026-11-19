@@ -440,18 +440,17 @@ pub struct WindowStyle {
     pub opacity: f32,
     /// false = borderless (no title bar; drag the header to move).
     pub decorations: bool,
-    /// Theme preset (see `interface::THEMES`); `None` follows the HUD.
+    /// The `holo_theme` preset this window wears; `None` follows the HUD.
     pub theme: Option<String>,
-    /// #RRGGBB overrides on top of the theme.
+    /// A light of its own colour (#RRGGBB), over the theme.
     pub accent: Option<String>,
-    pub background: Option<String>,
     /// Text size 0.8-1.6.
     pub font_scale: f32,
 }
 
 impl Default for WindowStyle {
     fn default() -> Self {
-        Self { opacity: 1.0, decorations: true, theme: None, accent: None, background: None, font_scale: 1.0 }
+        Self { opacity: 1.0, decorations: true, theme: None, accent: None, font_scale: 1.0 }
     }
 }
 
@@ -462,9 +461,15 @@ impl WindowStyle {
     fn sanitize(&mut self) {
         self.opacity = if self.opacity.is_finite() { self.opacity.clamp(Self::MIN_OPACITY, 1.0) } else { 1.0 };
         self.font_scale = if self.font_scale.is_finite() { self.font_scale.clamp(Self::FONT_SCALE.0, Self::FONT_SCALE.1) } else { 1.0 };
-        self.theme = self.theme.take().and_then(|t| crate::interface::theme(&t).map(|t| t.name.to_string()));
+        // (A theme of the engine before the hologram interface is the preset its name means now.)
+        self.theme = self.theme.take().and_then(|t| crate::holo_theme::preset_for_word(&t).map(str::to_string));
         self.accent = self.accent.take().and_then(|c| crate::interface::parse_color(&c).map(crate::interface::hex));
-        self.background = self.background.take().and_then(|c| crate::interface::parse_color(&c).map(crate::interface::hex));
+    }
+
+    /// The theme this window wears instead of the HUD's, if it has one of its own.
+    pub fn look(&self) -> Option<crate::holo_theme::Theme> {
+        let own = self.accent.as_deref().and_then(crate::interface::parse_color).map(crate::holo_theme::Theme::of_colour);
+        own.or_else(|| self.theme.as_deref().and_then(crate::holo_theme::preset))
     }
 
     /// Applies style fields of tool / toolbar arguments; returns what changed.
@@ -487,26 +492,23 @@ impl WindowStyle {
             if matches!(t.to_lowercase().as_str(), "hud" | "follow" | "follow hud" | "default" | "same as hud" | "none") {
                 self.theme = None;
                 self.accent = None;
-                self.background = None;
                 done.push("theme of the HUD".into());
-            } else if let Some(theme) = crate::interface::theme(t) {
-                self.theme = Some(theme.name.to_string());
+            } else if let Some(preset) = crate::holo_theme::preset_for_word(t) {
+                self.theme = Some(preset.to_string());
                 self.accent = None;
-                self.background = None;
-                done.push(format!("theme {}", theme.display));
+                done.push(format!("theme {}", crate::holo_theme::label(preset)));
             } else if crate::interface::parse_color(t).is_some() {
                 self.accent = Some(t.to_string());
                 done.push(format!("accent {t}"));
             }
         }
-        for (keys, field, label) in [
-            (&["accent_color", "accent", "color", "colour"][..], &mut self.accent, "accent"),
-            (&["background_color", "background"][..], &mut self.background, "background"),
-        ] {
-            if let Some(c) = str_arg(args, keys).filter(|c| crate::interface::parse_color(c).is_some()) {
-                *field = Some(c.to_string());
-                done.push(format!("{label} {c}"));
+        if let Some((c, rgb)) = str_arg(args, &["accent_color", "accent", "color", "colour"]).and_then(|c| Some((c, crate::interface::parse_color(c)?))) {
+            // The look the HUD takes for that word: its preset, else a light of that colour.
+            match crate::holo_theme::preset_for_word(c) {
+                Some(preset) => (self.theme, self.accent) = (Some(preset.to_string()), None),
+                None => self.accent = Some(crate::interface::hex(rgb)),
             }
+            done.push(format!("accent {c}"));
         }
         let scale = args.get("font_scale").or_else(|| args.get("scale")).or_else(|| args.get("text_size"));
         if let Some(v) = scale {
@@ -1456,7 +1458,7 @@ impl WidgetEngine {
             }
         }
         if changed_specs.is_empty() {
-            return Err("Nothing to change: pass opacity, borderless, theme, accent_color, background_color, font_scale or always_on_top.".into());
+            return Err("Nothing to change: pass opacity, borderless, theme, accent_color, font_scale or always_on_top.".into());
         }
         for spec in &changed_specs {
             self.save_style(spec);

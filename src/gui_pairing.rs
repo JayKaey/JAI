@@ -4,7 +4,8 @@
 //! of `gui`.
 
 use super::widget_view::WidgetHost;
-use super::{bold, muted, paint_background, Palette};
+use super::{muted, paint_background, Palette};
+use crate::holo::{font as face, Face};
 use eframe::egui::{self, vec2, Color32, Frame, Margin, RichText, Rounding, Sense, ViewportBuilder, ViewportClass, ViewportCommand, ViewportId};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
@@ -117,19 +118,19 @@ fn frame(ctx: &egui::Context, class: Option<ViewportClass>, host: &WidgetHost) {
     let fix = host.app.tools().stark.location.phone_fix();
     let body = |ui: &mut egui::Ui| {
         ui.vertical_centered(|ui| {
-            ui.label(RichText::new("MOBILE SATELLITE").font(bold(18.0)).color(p.accent).extra_letter_spacing(3.0));
+            ui.label(RichText::new("MOBILE SATELLITE").font(face(Face::Label, 14.0)).color(p.text).extra_letter_spacing(3.0));
             muted(ui, "J.A.I. on your phone or iPad — anywhere in the world");
             ui.add_space(8.0);
             match &worldwide {
                 Some(url) => {
-                    ui.label(RichText::new(format!("WORLDWIDE HTTPS ONLINE · {}", tunnel.provider.to_uppercase())).font(bold(11.5)).color(p.green));
+                    ui.label(RichText::new(format!("WORLDWIDE HTTPS ONLINE · {}", tunnel.provider.to_uppercase())).font(face(Face::Label, 9.0)).color(p.nominal));
                     // One address for good, or one that is new with every start.
-                    let (stays, colour) = if tunnel.permanent { ("PERMANENT ADDRESS", p.green) } else { ("CHANGES WHEN THE TUNNEL RESTARTS", p.amber) };
-                    ui.label(RichText::new(stays).font(bold(10.5)).color(colour));
+                    let (stays, colour) = if tunnel.permanent { ("PERMANENT ADDRESS", p.nominal) } else { ("CHANGES WHEN THE TUNNEL RESTARTS", p.warn) };
+                    ui.label(RichText::new(stays).font(face(Face::Label, 8.5)).color(colour));
                     ui.add_space(6.0);
                     paint_qr(ui, url, 300.0);
                     ui.add_space(8.0);
-                    crate::holo_ui::link_to(ui, RichText::new(url).monospace().size(11.0).color(p.accent), url);
+                    crate::holo_ui::link_to(ui, RichText::new(url).font(face(Face::Mono, 11.0)).color(p.accent), url);
                     ui.horizontal(|ui| {
                         if crate::holo_ui::key(ui, "Copy link").clicked() {
                             ui.output_mut(|o| o.copied_text = url.clone());
@@ -140,12 +141,12 @@ fn frame(ctx: &egui::Context, class: Option<ViewportClass>, host: &WidgetHost) {
                     });
                 }
                 None => {
-                    ui.label(RichText::new(format!("WORLDWIDE TUNNEL {} — {}", tunnel.state.to_uppercase(), tunnel.detail)).font(bold(11.0)).color(p.amber));
+                    ui.label(RichText::new(format!("WORLDWIDE TUNNEL {} — {}", tunnel.state.to_uppercase(), tunnel.detail)).font(face(Face::Label, 9.0)).color(p.warn));
                     muted(ui, "Its QR code appears here the moment it is online. Until then, on this Wi-Fi only:");
                     ui.add_space(6.0);
                     paint_qr(ui, &local, 220.0);
                     ui.add_space(6.0);
-                    ui.add(egui::Label::new(RichText::new(&local).monospace().size(11.0).color(p.muted)).wrap());
+                    ui.add(egui::Label::new(RichText::new(&local).font(face(Face::Mono, 11.0)).color(p.muted)).wrap());
                     ui.horizontal(|ui| {
                         if crate::holo_ui::key(ui, "Copy local link").clicked() {
                             ui.output_mut(|o| o.copied_text = local.clone());
@@ -167,8 +168,8 @@ fn frame(ctx: &egui::Context, class: Option<ViewportClass>, host: &WidgetHost) {
         .enumerate()
         {
             ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new(format!("{}.", n + 1)).font(bold(13.0)).color(p.accent));
-                ui.label(RichText::new(*step).size(12.5));
+                ui.label(RichText::new(format!("{}.", n + 1)).font(face(Face::Head, 13.0)).color(p.accent));
+                ui.label(RichText::new(*step).font(face(Face::Body, 12.5)).color(p.text));
             });
         }
         if worldwide.is_some() && !tunnel.permanent {
@@ -178,7 +179,7 @@ fn frame(ctx: &egui::Context, class: Option<ViewportClass>, host: &WidgetHost) {
             ui.add_space(4.0);
             crate::holo_ui::fold(ui, "pairing_local", "At home: the local Wi-Fi link", false, |ui| {
                 muted(ui, format!("Same Wi-Fi as this PC ({ip}); accept J.A.I.' own certificate once."));
-                ui.add(egui::Label::new(RichText::new(&local).monospace().size(11.0).color(p.muted)).wrap());
+                ui.add(egui::Label::new(RichText::new(&local).font(face(Face::Mono, 11.0)).color(p.muted)).wrap());
                 if crate::holo_ui::key(ui, "Copy local link").clicked() {
                     ui.output_mut(|o| o.copied_text = local.clone());
                 }
@@ -186,10 +187,10 @@ fn frame(ctx: &egui::Context, class: Option<ViewportClass>, host: &WidgetHost) {
         }
         ui.add_space(8.0);
         let (colour, text) = match &fix {
-            Some(f) => (p.green, format!("GPS LOCK ACTIVE · ±{:.0} m{}", f.accuracy_m, f.address.as_deref().map(|a| format!(" · {a}")).unwrap_or_default())),
+            Some(f) => (p.nominal, format!("GPS LOCK ACTIVE · ±{:.0} m{}", f.accuracy_m, f.address.as_deref().map(|a| format!(" · {a}")).unwrap_or_default())),
             None => (p.muted, "Waiting for a phone…".to_string()),
         };
-        ui.label(RichText::new(text).size(12.0).color(colour));
+        ui.label(RichText::new(text).font(face(Face::Body, 12.0)).color(colour));
     };
     if class.is_none() {
         let action = super::hud_block_window(ctx, "pairing", "Mobile Satellite // QR link", [480.0, 640.0], body);

@@ -3,7 +3,8 @@
 //! HSV picker, or a hex code), names the theme, and `[ SAVE THEME ]` stores it
 //! (`config/custom_themes.json` and SQLite) and applies it.
 
-use super::{rgba, stroke, strip_font, strip_ink, strip_muted};
+use super::{stroke, strip_ink, strip_muted};
+use crate::holo::Face;
 use crate::theme_store::CustomTheme;
 use eframe::egui::{self, Frame, Margin, RichText, Rounding, Ui, ViewportBuilder, ViewportClass, ViewportCommand, ViewportId};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -42,14 +43,14 @@ pub(super) fn is_open() -> bool {
 
 /// One colour: its picker (RGB / HSV), its hex code (applied once it parses) and its HSV.
 fn colour_row(ui: &mut Ui, label: &str, rgb: &mut [u8; 3]) {
-    ui.label(RichText::new(label).font(strip_font()).color(strip_ink()));
+    ui.label(RichText::new(label).font(crate::holo::font(Face::Label, 9.0)).color(strip_ink()));
     crate::holo_ui::colour(ui, rgb);
     let id = ui.id().with(("theme_hex", label));
     let mut hex = ui.data_mut(|d| d.get_temp::<String>(id)).unwrap_or_else(|| crate::interface::hex(*rgb));
     // (Its full width, whatever the grid offers: a grid gives a cell the width its column had in
     // the frame before, 40 px in the first, and a field that takes what it is offered stayed
     // 40 px wide for good, with the hex code cut off.)
-    let field = ui.add_sized(egui::vec2(HEX_WIDTH, ui.spacing().interact_size.y), egui::TextEdit::singleline(&mut hex).font(egui::TextStyle::Monospace));
+    let field = ui.add_sized(egui::vec2(HEX_WIDTH, ui.spacing().interact_size.y), egui::TextEdit::singleline(&mut hex).font(crate::holo::font(Face::Mono, 12.0)));
     if field.changed() {
         if let Some(c) = crate::interface::parse_color(hex.trim()).filter(|_| hex.trim().len() >= 7) {
             *rgb = c;
@@ -60,7 +61,7 @@ fn colour_row(ui: &mut Ui, label: &str, rgb: &mut [u8; 3]) {
     }
     ui.data_mut(|d| d.insert_temp(id, hex));
     let (h, s, v) = crate::holo_theme::to_hsv(*rgb);
-    ui.label(RichText::new(format!("H {h:.0}°  S {:.0}%  V {:.0}%", s * 100.0, v * 100.0)).font(strip_font()).color(strip_muted()));
+    ui.label(RichText::new(format!("H {h:.0}°  S {:.0}%  V {:.0}%", s * 100.0, v * 100.0)).font(crate::holo::font(Face::Mono, 11.0)).color(strip_muted()));
     ui.end_row();
 }
 
@@ -68,7 +69,7 @@ fn body(ui: &mut Ui) {
     let mut draft = lock(&DRAFT);
     let Some(t) = draft.as_mut() else { return };
     ui.horizontal(|ui| {
-        ui.label(RichText::new("NAME").font(strip_font()).color(strip_ink()));
+        ui.label(RichText::new("NAME").font(crate::holo::font(Face::Label, 9.0)).color(strip_ink()));
         crate::holo_ui::slot(ui, egui::TextEdit::singleline(&mut t.name).desired_width(220.0).hint_text("Cyberpunk"));
     });
     ui.add_space(6.0);
@@ -160,6 +161,7 @@ mod tests {
     /// its fourth character, in every frame.
     #[test]
     fn every_hex_code_in_the_studio_is_shown_whole() {
+        let _look = crate::holo_theme::look_for_pictures();
         *lock(&DRAFT) = Some(CustomTheme::from_theme("Custom", &crate::holo_theme::current()));
         let mut stage = Stage::new(egui::vec2(900.0, 600.0));
         let frame = stage.frames(4, &mut |ctx| {
@@ -171,6 +173,7 @@ mod tests {
             });
         });
         *lock(&DRAFT) = None;
+        stage.raster(&frame).save("panel_theme_studio");
         assert_eq!(visual::clipped_text(&frame), Vec::<String>::new());
         assert_eq!(visual::text_over_text(&frame), Vec::<String>::new());
         let codes = frame.find_text("#");

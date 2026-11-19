@@ -65,6 +65,24 @@ impl Plan {
 const THEN: &[&str] = &[", and then ", " and then ", ", then ", " then ", " und dann ", ", dann ", " dann ", ", danach ", " danach ", " after that ", ", after that ", ", afterwards ", " afterwards "];
 const AND: &[&str] = &["; ", ", and also ", " and also ", ", and ", " and ", ", und ", " und ", ", sowie ", " sowie ", ", "];
 
+/// Pairs whose "and" joins two words of one name, never two orders ("the black and white
+/// theme" was cut into a black look and a white theme, seen in a silent run on 2026-11-19).
+const PAIRS: &[&str] = &["black and white", "schwarz und weiß", "schwarz und weiss"];
+
+/// Where `separator` first stands in `lower` from `from` on, outside every pair.
+fn find_separator(lower: &str, from: usize, separator: &str) -> Option<usize> {
+    let mut at = from;
+    while let Some(i) = lower[at..].find(separator) {
+        let hit = at + i;
+        let in_pair = PAIRS.iter().any(|pair| lower.match_indices(pair).any(|(start, _)| start <= hit && hit + separator.len() <= start + pair.len()));
+        if !in_pair {
+            return Some(hit);
+        }
+        at = hit + separator.len();
+    }
+    None
+}
+
 /// Words that are a clause to nobody ("JAI, …", "…, please").
 fn is_courtesy(clause: &str) -> bool {
     let lower = clause.to_lowercase();
@@ -85,7 +103,7 @@ fn cut(pieces: Vec<(String, bool)>, separators: &[&str], begins_stage: bool) -> 
         let mut from = 0;
         let mut first = true;
         loop {
-            let next = separators.iter().filter_map(|s| lower[from..].find(s).map(|i| (from + i, s.len()))).min_by_key(|(i, len)| (*i, std::cmp::Reverse(*len)));
+            let next = separators.iter().filter_map(|s| find_separator(&lower, from, s).map(|at| (at, s.len()))).min_by_key(|(i, len)| (*i, std::cmp::Reverse(*len)));
             match next {
                 Some((at, len)) if piece.is_char_boundary(at) && piece.is_char_boundary(at + len) => {
                     out.push((piece[from..at].to_string(), if first { staged } else { begins_stage }));
@@ -171,7 +189,6 @@ fn resolve_any(clause: &str, ctx: &ReflexContext) -> Option<Resolved> {
     };
     let call = |tool: &'static str| move |args: Value| Resolved::Call(tool, args);
     of(intents::hud_view_command(clause))
-        .or_else(|| crate::oled_minimal_ui::voice_command(clause).map(call("configure_interface")))
         .or_else(|| crate::dynamic_popups::voice_command(clause).map(call("control_popups")))
         .or_else(|| intents::silent_quick_command(clause).map(|a| Resolved::Call(a.tool, a.args)))
         .or_else(|| intents::orb_mode_command(clause).map(call("control_orb_mode")))
@@ -283,6 +300,19 @@ mod tests {
         assert_eq!(clauses("JAI, pause the music, please."), vec![("pause the music".to_string(), false)]);
         assert_eq!(clauses("What time is it?"), vec![("What time is it?".to_string(), false)]);
         assert_eq!(clauses("JAI, and then, please"), Vec::new());
+    }
+
+    /// "Black and white" names one theme: the sentence is one order with one answer, and a
+    /// list that holds the pair is still cut at its other joins.
+    #[test]
+    fn black_and_white_is_one_theme_not_two_orders() {
+        for said in ["Switch to the black and white theme", "JAI, make the interface black and white", "Nimm das Schwarz und Weiß Theme"] {
+            assert_eq!(clauses(said).len(), 1, "{said}: {:?}", clauses(said));
+            assert!(plan(said, &idle()).is_none(), "{said}: one order");
+            assert_eq!(resolve_one(said, &idle()), Some(("configure_interface".to_string(), json!({"hud_palette": "mono"}))), "{said}");
+        }
+        let list = clauses("Open the mixer and switch to the black and white theme and then close it");
+        assert_eq!(list, vec![("Open the mixer".to_string(), false), ("switch to the black and white theme".to_string(), false), ("close it".to_string(), true)]);
     }
 
     #[test]

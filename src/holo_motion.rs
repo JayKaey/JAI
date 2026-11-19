@@ -6,8 +6,6 @@
 /// A panel's entrance, start to settled, in seconds; its exit takes [`LEAVE`].
 pub const ARRIVE: f32 = 0.42;
 pub const LEAVE: f32 = 0.22;
-/// The pause between one row of a cascade and the next.
-pub const STAGGER: f32 = 0.028;
 /// A small thing answering the pointer (a key lighting, a toggle moving).
 pub const TOUCH: f32 = 0.12;
 
@@ -29,21 +27,9 @@ pub fn ease_in_out(t: f32) -> f32 {
     if t < 0.5 { 4.0 * t * t * t } else { 1.0 - (-2.0 * t + 2.0).powi(3) / 2.0 }
 }
 
-/// A small overshoot, for a thing that pops into place (a key, a dot).
-pub fn ease_out_back(t: f32) -> f32 {
-    let t = t.clamp(0.0, 1.0) - 1.0;
-    1.0 + 2.2 * t * t * t + 1.2 * t * t
-}
-
 /// The share of the stretch `from..to` that `t` has covered (0 before it, 1 after).
 pub fn phase(t: f32, from: f32, to: f32) -> f32 {
     ((t - from) / (to - from).max(1e-6)).clamp(0.0, 1.0)
-}
-
-/// How far row `index` of a cascade is in, `age` seconds after the cascade began: each row
-/// starts [`STAGGER`] after the one before and takes `each` seconds.
-pub fn cascade(age: f32, index: usize, each: f32) -> f32 {
-    ease_out_cubic((age - index as f32 * STAGGER) / each.max(1e-3))
 }
 
 /// One step of a critically damped spring: `x` follows `target` with stiffness `omega`
@@ -91,11 +77,6 @@ pub fn decode(text: &str, progress: f32, clock: f64) -> String {
         .collect()
 }
 
-/// A figure counting up to `value` as `progress` goes 0-1 (the last digits settle last).
-pub fn count_up(value: f64, progress: f32) -> f64 {
-    value * ease_out_cubic(progress) as f64
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -113,8 +94,6 @@ mod tests {
         }
         // Arriving is fast first: half the way in the first sixth of the time.
         assert!(ease_out_expo(1.0 / 6.0) > 0.5);
-        // The pop passes its place a little and comes back.
-        assert!((0..100).any(|k| ease_out_back(k as f32 / 100.0) > 1.0) && (ease_out_back(1.0) - 1.0).abs() < 1e-6);
     }
 
     #[test]
@@ -133,14 +112,6 @@ mod tests {
             spring(&mut x, &mut v, 100.0, 14.0, 1.0 / 60.0);
         }
         assert!(x > 90.0, "{x}");
-    }
-
-    #[test]
-    fn rows_cascade_one_after_the_other() {
-        assert_eq!(cascade(0.0, 0, 0.2), 0.0);
-        assert!(cascade(0.1, 0, 0.2) > cascade(0.1, 2, 0.2));
-        assert_eq!(cascade(0.1, 6, 0.2), 0.0, "the seventh row has not started");
-        assert_eq!(cascade(1.0, 6, 0.2), 1.0);
     }
 
     #[test]

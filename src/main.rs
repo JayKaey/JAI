@@ -169,7 +169,6 @@ mod monitors;
 mod music;
 mod network_guardian;
 mod network_radar;
-mod oled_minimal_ui;
 mod omni_inbox;
 mod persona;
 mod phonemizer;

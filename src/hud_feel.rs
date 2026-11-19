@@ -58,8 +58,9 @@ static PHRASES: LazyLock<Vec<(Regex, Value)>> = LazyLock::new(|| {
     let p = |pattern: &str, args: Value| (Regex::new(pattern).expect("valid phrase regex"), args);
     vec![
         // Calm or dense.
-        // ("Show everything" is the older order that brings every panel back: not this one's.)
-        p(r"^(?:show\s+(?:me\s+)?(?:all\s+(?:the\s+)?readouts|the\s+readouts)|dense\s+(?:mode|hud)|busy\s+(?:mode|hud)|zeig\s+(?:mir\s+)?(?:alle\s+)?anzeigen)$", json!({"calm_hud": false})),
+        // ("Show everything" brought every panel back while panels could be hidden: what steps
+        // back today is the readouts.)
+        p(r"^(?:show\s+(?:me\s+)?(?:all\s+(?:the\s+)?readouts|the\s+readouts|everything|all\s+(?:the\s+)?panels)(?:\s+again)?|dense\s+(?:mode|hud)|busy\s+(?:mode|hud)|zeig\s+(?:mir\s+)?(?:alle\s+)?anzeigen)$", json!({"calm_hud": false})),
         p(r"^(?:hide\s+the\s+readouts|calm\s+(?:the\s+hud|down\s+the\s+hud|it\s+down)|less\s+on\s+(?:the\s+)?screen|blende?\s+die\s+anzeigen\s+aus|anzeigen\s+ausblenden|weniger\s+auf\s+dem\s+bildschirm)$", json!({"calm_hud": true})),
         p(r"^(?:stop\s+showing\s+my\s+words|don'?t\s+show\s+my\s+words|zeig\s+meine\s+worte\s+nicht(?:\s+mehr)?(?:\s+an)?|meine\s+worte\s+nicht\s+(?:mehr\s+)?(?:an)?zeigen)$", json!({"live_words": false})),
         p(r"^(?:show\s+(?:me\s+)?my\s+words(?:\s+(?:while|as)\s+i\s+(?:speak|talk))?|zeig\s+(?:mir\s+)?meine\s+worte(?:\s+(?:beim\s+sprechen|während\s+ich\s+(?:spreche|rede)))?)$", json!({"live_words": true})),
@@ -640,6 +641,8 @@ mod tests {
             ("calm mode", json!({"calm_hud": true})),
             ("calm mode off", json!({"calm_hud": false})),
             ("show the readouts", json!({"calm_hud": false})),
+            ("show everything", json!({"calm_hud": false})),
+            ("show all panels again", json!({"calm_hud": false})),
             ("hide the readouts", json!({"calm_hud": true})),
             ("live words off", json!({"live_words": false})),
             ("show my words while i speak", json!({"live_words": true})),

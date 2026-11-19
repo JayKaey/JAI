@@ -5,7 +5,8 @@
 
 use crate::kit::say;
 use crate::tools::ToolContext;
-use eframe::egui::{self, Color32, FontId, RichText};
+use crate::holo::Face;
+use eframe::egui::{self, RichText};
 use regex::Regex;
 use serde_json::{json, Value};
 use std::sync::{LazyLock, Mutex};
@@ -395,28 +396,28 @@ fn privacy_block(ctx: &egui::Context) {
     if !open {
         return;
     }
-    let ink = Color32::from_rgb(0xE8, 0xF2, 0xFC);
-    let muted = Color32::from_rgb(0x8E, 0xA4, 0xB8);
+    let ink = crate::holo::theme().ink();
+    let muted = crate::holo::theme().muted();
     let mut clicked: Option<&'static str> = None;
     let closed = crate::gui::block(ctx, PRIVACY, "Privacy // what I keep about you", [640.0, 430.0], |ui| {
-        ui.label(RichText::new("Kept on this PC only. Nothing here is ever sent anywhere.").color(muted).size(12.5));
+        ui.label(RichText::new("Kept on this PC only. Nothing here is ever sent anywhere.").color(muted).font(crate::holo::font(Face::Body, 12.5)));
         ui.add_space(6.0);
         crate::holo_block::faded(ui, egui::ScrollArea::vertical().auto_shrink([false; 2]), |ui| {
             for row in &rows {
                 ui.horizontal(|ui| {
                     // (A column of its own width, its words at the left edge.)
                     ui.allocate_ui_with_layout(egui::vec2(196.0, 20.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                        ui.add(egui::Label::new(RichText::new(row.what).color(ink).size(14.0)).truncate());
+                        ui.add(egui::Label::new(RichText::new(row.what).color(ink).font(crate::holo::font(Face::Body, 14.0))).truncate());
                     });
                     if let Some(key) = row.delete {
                         let sure = asked.is_some_and(|(k, _)| k == key);
                         let label = if sure { "SURE?" } else { "DELETE" };
                         let colour = if sure { crate::holo::theme().warn() } else { muted };
-                        if crate::holo_ui::key(ui, RichText::new(label).font(FontId::monospace(11.0)).color(colour)).on_hover_text("Click twice to delete").clicked() {
+                        if crate::holo_ui::key(ui, RichText::new(label).font(crate::holo::font(Face::Label, 9.0)).color(colour)).on_hover_text("Click twice to delete").clicked() {
                             clicked = Some(key);
                         }
                     }
-                    ui.label(RichText::new(&row.detail).color(muted).size(13.0));
+                    ui.label(RichText::new(&row.detail).color(muted).font(crate::holo::font(Face::Body, 13.0)));
                 });
                 ui.add_space(4.0);
             }

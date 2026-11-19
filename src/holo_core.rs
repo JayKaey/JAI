@@ -583,6 +583,10 @@ pub struct Core {
     /// Where Sir put him (fractions of the canvas, None: home), and where he is now.
     custom_home: Option<Vec2>,
     home_now: Option<Vec2>,
+    /// How large Sir made him at home ("make the orb bigger": 0.4-2.5), and how large he is
+    /// while he grows there.
+    pub size: f32,
+    size_now: f32,
     /// Each monitor's part of a canvas that reaches over more than one.
     rooms: Vec<Rect>,
     mood: Mood,
@@ -622,6 +626,8 @@ impl Core {
             idle_morph: IdleMorph::new(0x9E37_79B9),
             custom_home: None,
             home_now: None,
+            size: 1.0,
+            size_now: 1.0,
             rooms: Vec::new(),
             mood: Mood::Rest,
             listen: 0.0,
@@ -670,11 +676,11 @@ impl Core {
             Some(f) => {
                 let p = screen.min + vec2(f.x * screen.width(), f.y * screen.height());
                 let room = self.room_at(screen, p);
-                let r = centre_radius(room);
+                let r = centre_radius(room) * self.size_now;
                 let p = pos2(p.x.clamp(room.left() + r, (room.right() - r).max(room.left() + r)), p.y.clamp(room.top() + r, (room.bottom() - r).max(room.top() + r)));
                 (to_frac(p), r)
             }
-            None => (to_frac(home), radius),
+            None => (to_frac(home), radius * self.size_now),
         }
     }
 
@@ -684,6 +690,8 @@ impl Core {
         let now = self.home_now.unwrap_or(target);
         // (A move takes a few frames however few are drawn: never three-quarters in one.)
         let dt = safe_dt(dt).min(1.0 / 30.0);
+        // (He lands on his size: an ease alone never arrives, and the HUD would draw for ever.)
+        self.size_now = if (self.size - self.size_now).abs() > 2e-3 { follow(self.size_now, self.size, 9.0, dt) } else { self.size };
         self.home_now = Some(vec2(follow(now.x, target.x, 14.0, dt), follow(now.y, target.y, 14.0, dt)));
     }
 
@@ -784,7 +792,7 @@ impl Core {
             return true;
         }
         let settling = (self.tilt - (1.0 - self.flat.to)).abs() > 1e-3 || self.tilt_v.abs() > 1e-3;
-        let gliding = matches!((self.custom_home, self.home_now), (Some(t), Some(n)) if (t - n).length() > 1e-4);
+        let gliding = matches!((self.custom_home, self.home_now), (Some(t), Some(n)) if (t - n).length() > 1e-4) || (self.size - self.size_now).abs() > 2e-3;
         !self.flat.done(self.clock) || !self.dock.done(self.clock) || settling || gliding
     }
 
@@ -885,6 +893,28 @@ mod tests {
         assert_eq!(resolve(CoreInputs { idle: true, ..none }), Pose::Front, "idle alone changes nothing");
         assert_eq!(resolve(CoreInputs { idle: true, idle_gyro: true, ..none }), Pose::Gyro);
         assert_eq!(pose_targets(Pose::Docked, true), (0.0, 1.0), "a busy docked core stands up");
+    }
+
+    /// "Make the orb bigger": he grows to the size he was given, without a jump, and lands on it.
+    #[test]
+    fn he_grows_to_the_size_he_was_given_and_lands_on_it() {
+        let mut core = Core::new(Pose::Front);
+        let usual = core.frame(screen()).rest;
+        core.size = 1.5;
+        core.glide(screen(), 1.0 / 60.0);
+        let growing = core.frame(screen()).rest;
+        assert!(growing > usual && growing < usual * 1.2, "one frame is a step, not the whole way: {usual} to {growing}");
+        assert!(core.is_animating(), "the HUD keeps drawing while he grows");
+        for _ in 0..180 {
+            core.glide(screen(), 1.0 / 60.0);
+        }
+        assert_eq!(core.frame(screen()).rest, usual * 1.5);
+        assert!(!core.is_animating(), "and rests once he is there");
+        // Docked in the corner he is the corner's size, whatever his size at home.
+        let mut docked = Core::new(Pose::Docked);
+        docked.size = 2.0;
+        docked.glide(screen(), 1.0 / 60.0);
+        assert!((docked.frame(screen()).rest - DOCKED_DIAMETER / 2.0).abs() < 1e-3);
     }
 
     #[test]

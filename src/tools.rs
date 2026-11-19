@@ -49,7 +49,7 @@ pub const JAI_CAPABILITY_MANIFEST: &[CapabilityCategory] = &[
     CapabilityCategory { name: "Memory and learned skills", summary: "Store and recall facts, search conversation history, manage persistent skills and execute installed skill tools.", tools: &["remember_fact", "recall_memories", "delete_memory", "search_conversation", "create_skill", "execute_skill", "create_persistent_skill", "run_custom_skill", "list_skills", "delete_skill"] },
     CapabilityCategory { name: "Files, code and automation", summary: "Locate/read/write/edit files, undo edits, search source contents, run commands, generate projects, inspect source, apply self-improvements and perform reversible folder cleanup.", tools: &["find_files", "read_text_file", "create_or_overwrite_file", "edit_file_surgical", "undo_last_file_edit", "search_inside_files", "run_shell_command", "spawn_coding_project", "patch_own_source", "smart_folder_cleanup", "undo_last_cleanup", "run_sandbox_calculation_or_script", "diagnose_minecraft_or_server"] },
     CapabilityCategory { name: "Web, research and locations", summary: "Web search and page reading, connected websites, background research, location-aware weather, nearby places, routes and commute checks, network diagnosis and price watches.", tools: &["web_search", "read_webpage", "open_website", "query_connected_website", "start_background_research", "get_precise_location_weather", "find_nearby_places_or_route", "check_ride_and_commute_status", "diagnose_network_and_ping", "manage_price_sniper"] },
-    CapabilityCategory { name: "Visual tools, media and analysis", summary: "Native widgets and windows, a self-configuring HUD (panels, zen mode, resizable 3D sphere orb, text and window size) and live real-file project graph, interactive simulations, calculation, code/idea analysis, supported media extraction, instant replay and local finance/goal tracking.", tools: &["create_or_update_widget", "remove_widget", "spawn_native_window", "close_native_window", "customize_hud_and_windows", "configure_interface", "control_jai_interface", "launch_interactive_simulation", "adjust_simulation", "calculate", "stress_test_idea_or_code", "download_or_extract_media", "save_instant_replay", "manage_finances_and_goals", "list_jai_features"] },
+    CapabilityCategory { name: "Visual tools, media and analysis", summary: "Native widgets and windows, a self-configuring HUD (themes, two cores, a resizable orb, text and window size) and live real-file project graph, interactive simulations, calculation, code/idea analysis, supported media extraction, instant replay and local finance/goal tracking.", tools: &["create_or_update_widget", "remove_widget", "spawn_native_window", "close_native_window", "customize_hud_and_windows", "configure_interface", "control_jai_interface", "launch_interactive_simulation", "adjust_simulation", "calculate", "stress_test_idea_or_code", "download_or_extract_media", "save_instant_replay", "manage_finances_and_goals", "list_jai_features"] },
     CapabilityCategory { name: "Workbench", summary: "Spaced-repetition flashcards, the maths/physics/chemistry formula sheet, molar masses and mole conversion, keyboard-shortcut sheets for the program in front, screen time with a break coach, routines learned from what Sir asks for, an hour of temperatures with a fan-curve verdict, clipboard history (in memory only), tiling program windows on a monitor and predictive command completion in the console.", tools: &["manage_flashcards", "lookup_formula", "chemistry_helper", "show_app_shortcuts", "screen_time_report", "suggest_routine", "thermal_advisor", "clipboard_history", "tile_windows", "suggest_commands"] },
 ];
 
@@ -183,10 +183,9 @@ fn canonical_tool_name(name: &str, known: &[String]) -> Option<String> {
         "grep" | "search_in_files" | "find_in_files" | "search_file_contents" | "search_code" | "grep_files" => "search_inside_files",
         "fullscreen" | "maximize_window" | "minimize_window" | "window" | "snap_window" => "window_management",
         "customize_hud" | "customize_window" | "style_window" | "restyle_window" | "theme_window" => "customize_hud_and_windows",
-        "control_interface" | "interface_layout" | "hide_panel" | "show_panel" | "declutter" | "declutter_interface" | "clean_up_interface"
-        | "control_ui" | "ui_layout" | "zen_mode" | "orb_size" | "set_orb_size" | "control_jai_ui" => "control_jai_interface",
+        "control_interface" | "interface_layout"
+        | "control_ui" | "ui_layout" | "orb_size" | "set_orb_size" | "control_jai_ui" => "control_jai_interface",
         "orb_mode" | "pure_orb_mode" | "orb_only" | "set_orb_mode" | "toggle_orb_mode" => "control_orb_mode",
-        "gui_aspect" | "set_gui" | "gui_config" | "control_gui" | "set_gui_aspect" | "gui_master_config" => "control_gui_aspect",
         "mixer" | "audio_mixer" | "volume_mixer" | "app_volume" | "set_app_volume" | "mute_app" => "control_audio_mixer",
         "listening_mode" | "hands_free" | "wake_word_mode" | "set_wake_word" | "handsfree_mode" => "set_listening_mode",
         "shutdown" | "quit" | "exit" | "exit_jai" | "quit_jai" | "shutdown_self" | "close_jai" | "stop_jai" => "shutdown_jai",
@@ -305,7 +304,7 @@ pub fn stays_inside(name: &str, args: &Value) -> bool {
     }
     let action = args["action"].as_str().unwrap_or("");
     match name {
-        "configure_interface" | "control_jai_interface" | "control_gui_aspect" | "customize_hud_and_windows" | "control_orb_mode" | "spawn_native_window" | "update_native_window"
+        "configure_interface" | "control_jai_interface" | "customize_hud_and_windows" | "control_orb_mode" | "spawn_native_window" | "update_native_window"
         | "close_native_window" | "close_all_secondary_windows" | "create_or_update_widget" | "remove_widget" | "hud_board" | "open_jai_view" | "control_popups"
         | "set_response_modality" | "set_listening_mode" | "listening_lock" | "control_audio_mixer" | "thermal_advisor" | "undo_last_action" | "lookup_formula" | "chemistry_helper"
         | "more_tools" => true,
@@ -954,7 +953,6 @@ impl ToolContext {
             "configure_interface" => self.configure_interface(&args),
             "control_jai_interface" => self.control_interface(&args),
             "control_orb_mode" => self.orb_mode(&args),
-            "control_gui_aspect" => self.gui_aspect(&args),
             "control_audio_mixer" => crate::audio_mixer::tool(&args).await,
             "set_listening_mode" => {
                 let mode = str_arg(&args, &["mode", "listening_mode"]).unwrap_or("").to_lowercase().replace([' ', '-'], "_");
@@ -1387,8 +1385,8 @@ impl ToolContext {
         })
     }
 
-    /// `control_jai_interface`: the HUD's live layout (panels, zen mode, orb and text size,
-    /// window size). The window picks the new settings up on its next frame.
+    /// `control_jai_interface`: the orb, the text and the window, each resized live.
+    /// The window picks the new settings up on its next frame.
     fn control_interface(&self, args: &Value) -> Result<String, String> {
         let current = self.config.read(|c| c.interface.clone());
         let done = interface::control(&current, args)?;
@@ -1413,26 +1411,6 @@ impl ToolContext {
             self.config.update(|c| c.interface = done.settings.clone());
         }
         gui::show();
-        gui::refresh();
-        Ok(done.summary)
-    }
-
-    /// `control_gui_aspect`: one aspect of the GUI master config (mode, theme, darkness, opacity,
-    /// rounding, font, orb size, on top, panels, window position and size).
-    fn gui_aspect(&self, args: &Value) -> Result<String, String> {
-        let current = self.config.read(|c| c.interface.clone());
-        let done = interface::control_gui_aspect(&current, args)?;
-        if done.settings != current {
-            self.config.update(|c| c.interface = done.settings.clone());
-        }
-        if let Some(command) = done.window {
-            gui::window_command(command)?;
-        } else {
-            gui::show();
-        }
-        if let Some((width, height)) = done.window_size {
-            gui::set_window_size(width, height)?;
-        }
         gui::refresh();
         Ok(done.summary)
     }
@@ -2072,7 +2050,6 @@ fn pc_tool_definitions() -> Vec<Value> {
         interface::tool_definition(),
         interface::control_tool_definition(),
         interface::orb_mode_tool_definition(),
-        interface::gui_aspect_tool_definition(),
         crate::audio_mixer::tool_definition(),
         json!({"type": "function", "function": {
             "name": "undo_last_action",
@@ -2115,19 +2092,17 @@ fn pc_tool_definitions() -> Vec<Value> {
         }}),
         json!({"type": "function", "function": {
             "name": "customize_hud_and_windows",
-            "description": "Restyle your main HUD (target \"hud\") or one of your extra windows (target = its id or title, \"last\" or \"all\"): theme (stark = Stark Cyan, mark42 = Iron Man Gold & Red, stealth = Minimal Monochrome, emerald = Stealth Matrix, …) or custom #RRGGBB accent/background, opacity 0.2-1.0, borderless, always_on_top, font_scale 0.8-1.6; for the HUD also compact (Mini-HUD), layout and show_panels/hide_panels (system, memory, tools, widgets, reactor …).",
+            "description": "Restyle your main HUD (target \"hud\") or one of your extra windows (target = its id or title, \"last\" or \"all\"): theme (stark_gold, mono, arc_reactor, hot_rod, gamma, vibranium, ember, graphite) or an accent_color (a colour name or #RRGGBB), opacity 0.2-1.0, borderless, always_on_top, font_scale 0.8-1.6; for the HUD also compact (Mini-HUD) and layout.",
             "parameters": {"type": "object", "properties": {
                 "target": {"type": "string"},
                 "theme": {"type": "string"},
-                "accent_color": {"type": "string"}, "background_color": {"type": "string"},
+                "accent_color": {"type": "string"},
                 "opacity": {"type": "number"},
                 "borderless": {"type": "boolean"},
                 "always_on_top": {"type": "boolean"},
                 "font_scale": {"type": "number"},
                 "compact": {"type": "boolean"},
-                "layout": {"type": "string", "enum": ["full", "compact", "orb"]},
-                "show_panels": {"type": "array", "items": {"type": "string"}},
-                "hide_panels": {"type": "array", "items": {"type": "string"}}
+                "layout": {"type": "string", "enum": ["full", "compact", "orb"]}
             }, "required": ["target"]}
         }}),
         modality::tool_definition(),

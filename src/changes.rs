@@ -12,7 +12,8 @@
 //! link leads somewhere and every explanation is linked.
 
 use crate::kit::say;
-use eframe::egui::{self, Color32, FontFamily, FontId, RichText, Sense};
+use crate::holo::{font as face, Face};
+use eframe::egui::{self, RichText, Sense};
 use regex::Regex;
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -89,6 +90,24 @@ const fn fixed(title: &'static str, what: &'static str) -> Entry {
 
 /// Every change, newest first.
 pub const RELEASES: &[Release] = &[
+    Release {
+        date: "2026-11-19",
+        name: "Every panel in the new look",
+        entries: &[
+            better("Every panel in the new look", "Earth, radar, research, lab, 3D studio, pictures, mixer and the rest: light on black glass."),
+            better("The disk map is panes of light", "A folder is faint glass in its file type's colour with a bright edge, not a solid block."),
+            better("One settings panel", "Core, core size, opacity, name and window size are rows of the one panel: \"open settings\"."),
+            better("Settings that did nothing are gone", "Panel hiding, zen mode, background colour, corner rounding and the old theme list."),
+            better("A window in a theme of its own", "\"Make that window red\": that window alone wears the red theme, frame and content."),
+            better("\"Darker\" and \"lighter\" pick a theme", "The canvas is always black: \"make it darker\" is Graphite, \"a bit lighter\" is Mono."),
+            better("Old theme words still work", "\"Iron man\", \"stealth\", \"matrix\" and the like choose the nearest of the eight themes."),
+            better("Light in every theme", "Windows open with their glow, and the display finish shows, in Mono and Graphite too."),
+            fixed("\"Make the orb bigger\" works again", "The core grows and shrinks with a glide, by voice or in the settings panel."),
+            fixed("\"The black and white theme\" is one order", "It was cut at its \"and\" into two look changes and answered twice."),
+            added("\"Close the chat\", \"show the chat\"", "The conversation block above the bottom strip goes and comes by voice, never Discord."),
+            fixed("Wrapped lines on this page", "A description that wraps stays under its own start, not under the tag."),
+        ],
+    },
     Release {
         date: "2026-11-18",
         name: "The hologram interface",
@@ -789,8 +808,8 @@ fn day_words(date: &str) -> String {
 /// Draws the changes block and the explanation windows that are open.
 pub fn show(ctx: &egui::Context) {
     let accent = crate::hud_board::active_colour();
-    let ink = Color32::from_rgb(0xE8, 0xF2, 0xFC);
-    let muted = Color32::from_rgb(0x8E, 0xA4, 0xB8);
+    let ink = crate::holo::theme().ink();
+    let muted = crate::holo::theme().muted();
     if is_open() {
         let (mut search, mut only) = {
             let ui = lock(&UI);
@@ -799,12 +818,12 @@ pub fn show(ctx: &egui::Context) {
         let mut asked: Option<&'static str> = None;
         let closed = crate::gui::block(ctx, ID, "Changes // what is new, better, fixed", [700.0, 640.0], |ui| {
             ui.horizontal(|ui| {
-                ui.label(RichText::new("FIND").font(FontId::monospace(11.0)).color(muted));
-                crate::holo_ui::slot(ui, egui::TextEdit::singleline(&mut search).desired_width(220.0).hint_text("a word, a date").font(FontId::proportional(13.5)));
+                ui.label(RichText::new("FIND").font(face(Face::Label, 9.0)).color(muted));
+                crate::holo_ui::slot(ui, egui::TextEdit::singleline(&mut search).desired_width(220.0).hint_text("a word, a date").font(face(Face::Body, 13.5)));
                 ui.add_space(10.0);
                 for (label, kind) in [("ALL", None), ("NEW", Some(Kind::New)), ("BETTER", Some(Kind::Better)), ("FIXED", Some(Kind::Fixed))] {
                     let lit = only == kind;
-                    if ui.add(egui::Label::new(RichText::new(format!("{label}")).font(FontId::monospace(11.0)).color(if lit { accent } else { muted })).sense(Sense::click())).clicked() {
+                    if ui.add(egui::Label::new(RichText::new(format!("{label}")).font(face(Face::Label, 9.0)).color(if lit { accent } else { muted })).sense(Sense::click())).clicked() {
                         only = kind;
                     }
                 }
@@ -820,8 +839,8 @@ pub fn show(ctx: &egui::Context) {
                     shown += entries.len();
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new(day_words(release.date)).font(FontId::monospace(11.0)).color(accent));
-                        ui.label(RichText::new(release.name).font(FontId::new(17.0, FontFamily::Name("display".into()))).color(ink));
+                        ui.label(RichText::new(day_words(release.date)).font(face(Face::Mono, 11.0)).color(accent));
+                        ui.label(RichText::new(release.name).font(face(Face::Head, 17.0)).color(ink));
                     });
                     let rule = ui.cursor();
                     ui.painter().line_segment([rule.left_top(), egui::pos2(rule.left() + ui.available_width(), rule.top())], egui::Stroke::new(1.0f32, crate::holo::a(crate::holo::theme().ink(), 0.10)));
@@ -833,25 +852,26 @@ pub fn show(ctx: &egui::Context) {
                             Kind::Fixed => muted,
                         };
                         ui.horizontal_wrapped(|ui| {
-                            ui.add_sized([54.0, 16.0], egui::Label::new(RichText::new(entry.kind.tag()).font(FontId::monospace(11.0)).color(tag_colour)).halign(egui::Align::LEFT));
-                            ui.label(RichText::new(entry.title).color(ink).size(14.0).family(FontFamily::Name("label".into())));
+                            ui.add_sized([54.0, 16.0], egui::Label::new(RichText::new(entry.kind.tag()).font(face(Face::Label, 8.5)).color(tag_colour)).halign(egui::Align::LEFT));
+                            ui.label(RichText::new(entry.title).color(ink).font(face(Face::Strong, 14.0)));
                             if let Some(id) = entry.explain {
-                                let link = ui.add(egui::Label::new(RichText::new("HOW IT WORKS").font(FontId::monospace(11.0)).color(accent).underline()).sense(Sense::click())).on_hover_text("Opens the explanation in a window of its own");
+                                let link = ui.add(egui::Label::new(RichText::new("HOW IT WORKS").font(face(Face::Label, 8.5)).color(accent).underline()).sense(Sense::click())).on_hover_text("Opens the explanation in a window of its own");
                                 if link.clicked() {
                                     asked = Some(id);
                                 }
                             }
                         });
-                        ui.horizontal_wrapped(|ui| {
+                        // (A plain row: a line that wraps stays under its own start, not the tag's.)
+                        ui.horizontal(|ui| {
                             ui.add_space(62.0);
-                            ui.label(RichText::new(entry.what).color(muted).size(12.5));
+                            ui.add(egui::Label::new(RichText::new(entry.what).color(muted).font(face(Face::Body, 12.5))).wrap());
                         });
                         ui.add_space(4.0);
                     }
                 }
                 if shown == 0 {
                     ui.add_space(20.0);
-                    ui.label(RichText::new("Nothing in the list matches that.").color(muted).size(13.5));
+                    ui.label(RichText::new("Nothing in the list matches that.").color(muted).font(face(Face::Body, 13.5)));
                 }
                 ui.add_space(10.0);
             });
@@ -875,20 +895,20 @@ pub fn show(ctx: &egui::Context) {
         let closed = crate::gui::block(ctx, &block, &format!("{} // how it works", e.title), [520.0, 460.0], |ui| {
             crate::holo_block::faded(ui, egui::ScrollArea::vertical().auto_shrink([false; 2]), |ui| {
                 ui.add_space(4.0);
-                ui.label(RichText::new(e.title).font(FontId::new(24.0, FontFamily::Name("display".into()))).color(ink));
+                ui.label(RichText::new(e.title).font(face(Face::Head, 24.0)).color(ink));
                 ui.add_space(8.0);
-                ui.add(egui::Label::new(RichText::new(e.what).color(ink).size(14.0)).wrap());
+                ui.add(egui::Label::new(RichText::new(e.what).color(ink).font(face(Face::Body, 14.0))).wrap());
                 ui.add_space(14.0);
-                ui.label(RichText::new("WHAT TO SAY").font(FontId::monospace(11.0)).color(accent));
+                ui.label(RichText::new("WHAT TO SAY").font(face(Face::Label, 9.0)).color(accent));
                 ui.add_space(4.0);
                 for line in e.say {
-                    ui.add(egui::Label::new(RichText::new(*line).font(FontId::monospace(12.5)).color(ink)).wrap());
+                    ui.add(egui::Label::new(RichText::new(*line).font(face(Face::Mono, 12.0)).color(ink)).wrap());
                     ui.add_space(2.0);
                 }
                 ui.add_space(12.0);
-                ui.label(RichText::new("GOOD TO KNOW").font(FontId::monospace(11.0)).color(accent));
+                ui.label(RichText::new("GOOD TO KNOW").font(face(Face::Label, 9.0)).color(accent));
                 ui.add_space(4.0);
-                ui.add(egui::Label::new(RichText::new(e.know).color(muted).size(13.0)).wrap());
+                ui.add(egui::Label::new(RichText::new(e.know).color(muted).font(face(Face::Body, 13.0))).wrap());
                 ui.add_space(8.0);
             });
         });

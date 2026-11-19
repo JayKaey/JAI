@@ -1,4 +1,4 @@
-//! Dynamic pop-up cards: the OLED HUD stays empty until something needs a picture, then a card
+//! Dynamic pop-up cards: the HUD stays empty until something needs a picture, then a card
 //! springs out beside the orb and folds away again.
 //!
 //! * `NowPlayingMediaCard` slides in when music starts or changes (previous / play-pause / next + volume) and
@@ -10,7 +10,8 @@
 //! * A card of the same kind updates in place (the volume OSD follows the slider, the media
 //!   card follows the track) instead of stacking duplicates.
 
-use eframe::egui::{self, emath::TSTransform, pos2, vec2, Color32, Id, Order, Rect, RichText, Rounding, Sense, Stroke};
+use eframe::egui::{self, emath::TSTransform, pos2, vec2, Color32, Id, Order, Rect, RichText, Sense, Stroke};
+use crate::holo::{font, Face};
 use serde_json::{json, Value};
 use std::sync::{LazyLock, Mutex, MutexGuard};
 
@@ -383,15 +384,13 @@ pub fn run_tool(name: &str, args: &Value) -> Result<String, String> {
 
 // ------------------------------------------------------------------------ rendering ----
 
-/// Card colours: the OLED surface, a hairline border and the accent.
+/// A card's colours (its plate comes from the kit).
 #[derive(Debug, Clone, Copy)]
 pub struct CardStyle {
     pub surface: Color32,
-    pub border: Color32,
     pub accent: Color32,
     pub text: Color32,
     pub muted: Color32,
-    pub rounding: f32,
 }
 
 /// Steps and draws every card in a column at the bottom right of the HUD; returns what Sir
@@ -427,23 +426,15 @@ pub fn show(ctx: &egui::Context, style: CardStyle, dt: f32) -> Vec<PopupAction> 
         let response = egui::Area::new(area_id).order(Order::Foreground).fixed_pos(at).interactable(solid).show(ctx, |ui| {
             ui.set_width(width);
             ui.multiply_opacity(alpha);
-            let hovered_border = if p.pinned { style.accent } else { style.border };
-            egui::Frame::none()
-                .fill(style.surface)
-                .stroke(Stroke::new(1.0_f32, hovered_border))
-                .rounding(Rounding::same(style.rounding))
-                .inner_margin(egui::Margin::symmetric(14.0, if p.collapsed { 8.0 } else { 12.0 }))
-                .show(ui, |ui| {
-                    ui.set_width(width - 28.0);
-                    card_body(ui, p, &style, &mut actions, &mut dismiss, &mut pins);
-                });
+            // (A pinned card, or one under the pointer, which holds it, has its edge lit.)
+            let focus = if p.pinned { 1.0 } else if p.hovered { 0.7 } else { 0.0 };
+            crate::holo_ui::plate(ui, 14.0, focus, |ui| {
+                ui.set_width(width - 28.0);
+                card_body(ui, p, &style, &mut actions, &mut dismiss, &mut pins);
+            });
         });
         let rect = response.response.rect;
         p.hovered = solid && ctx.pointer_hover_pos().is_some_and(|pos| rect.contains(pos));
-        if p.hovered && !p.pinned {
-            // Hovering a card holds it (and lights its edge).
-            ctx.layer_painter(egui::LayerId::new(Order::Foreground, area_id)).rect_stroke(rect.shrink(0.5), Rounding::same(style.rounding), Stroke::new(1.0_f32, style.accent.gamma_multiply(0.7)));
-        }
         p.rect = Some(rect);
         // At rest exactly where it stands (a scale a hair off 1 blurs every letter); on its way
         // in or out it grows from, and shrinks to, a little below its place.
@@ -481,7 +472,7 @@ pub fn card_column_right(screen: Rect, width: f32, console: Option<Rect>) -> f32
 fn card_body(ui: &mut egui::Ui, p: &mut DynamicHudPopup, style: &CardStyle, actions: &mut Vec<PopupAction>, dismiss: &mut Vec<u64>, pins: &mut Vec<(u64, bool)>) {
     let header = |ui: &mut egui::Ui, title: &str, dismiss: &mut Vec<u64>, pins: &mut Vec<(u64, bool)>| {
         ui.horizontal(|ui| {
-            ui.label(RichText::new(title).strong().color(style.text));
+            ui.label(RichText::new(title).font(font(Face::Strong, 13.0)).color(style.text));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if crate::holo_ui::key(ui, "X").on_hover_text("Dismiss").clicked() {
                     dismiss.push(p.id);
@@ -496,8 +487,8 @@ fn card_body(ui: &mut egui::Ui, p: &mut DynamicHudPopup, style: &CardStyle, acti
         PopupPayload::NowPlayingMediaCard { title, artist, playlist, player_name, progress, is_playing } => {
             if p.collapsed {
                 let r = ui.horizontal(|ui| {
-                    ui.label(RichText::new(if *is_playing { "PLAY" } else { "PAUSE" }).color(style.accent));
-                    ui.label(RichText::new(format!("{title} — {artist}")).color(style.text).small());
+                    ui.label(RichText::new(if *is_playing { "PLAY" } else { "PAUSE" }).font(font(Face::Label, 8.5)).color(style.accent));
+                    ui.label(RichText::new(format!("{title} — {artist}")).font(font(Face::Body, 11.0)).color(style.text));
                 });
                 if ui.interact(r.response.rect, Id::new(("popup_pill", p.id)), Sense::click()).clicked() {
                     p.collapsed = false;
@@ -506,12 +497,10 @@ fn card_body(ui: &mut egui::Ui, p: &mut DynamicHudPopup, style: &CardStyle, acti
                 return;
             }
             header(ui, title, dismiss, pins);
-            ui.label(RichText::new(artist).color(style.muted));
+            ui.label(RichText::new(artist).font(font(Face::Body, 12.5)).color(style.muted));
             let from = playlist.as_ref().map(|l| format!("{player_name} · {l}")).unwrap_or_else(|| player_name.clone());
-            ui.label(RichText::new(from).small().color(style.muted));
-            let (bar, _) = ui.allocate_exact_size(vec2(ui.available_width(), 3.0), Sense::hover());
-            ui.painter().rect_filled(bar, Rounding::ZERO, style.border);
-            ui.painter().rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * progress.clamp(0.0, 1.0), bar.height())), Rounding::ZERO, style.accent);
+            ui.label(RichText::new(from).font(font(Face::Body, 11.0)).color(style.muted));
+            crate::holo_ui::bar(ui, progress.clamp(0.0, 1.0), ui.available_width());
             ui.horizontal(|ui| {
                 for (label, action) in [("PREV", PopupAction::MediaPrevious), (if *is_playing { "PAUSE" } else { "PLAY" }, PopupAction::MediaPlayPause), ("NEXT", PopupAction::MediaNext)] {
                     if crate::holo_ui::key(ui, label).clicked() {
@@ -522,10 +511,10 @@ fn card_body(ui: &mut egui::Ui, p: &mut DynamicHudPopup, style: &CardStyle, acti
         }
         PopupPayload::VolumeMixerOsd { target_name, percent, is_muted } => {
             ui.horizontal(|ui| {
-                ui.label(RichText::new(if *is_muted { "MUTED" } else { "SOUND" }).color(style.accent));
-                ui.label(RichText::new(target_name).color(style.text));
+                ui.label(RichText::new(if *is_muted { "MUTED" } else { "SOUND" }).font(font(Face::Label, 8.5)).color(style.accent));
+                ui.label(RichText::new(target_name).font(font(Face::Body, 12.5)).color(style.text));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(RichText::new(format!("{percent} %")).color(style.muted).monospace());
+                    ui.label(RichText::new(format!("{percent} %")).font(font(Face::Mono, 11.0)).color(style.muted));
                 });
             });
             let mut v = *percent as f32;
@@ -538,21 +527,21 @@ fn card_body(ui: &mut egui::Ui, p: &mut DynamicHudPopup, style: &CardStyle, acti
             for (i, (when, what)) in entries.iter().enumerate().take(10) {
                 let hot = *highlight_index == Some(i);
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new(when).monospace().color(if hot { style.accent } else { style.muted }));
-                    ui.label(RichText::new(what).color(style.text));
+                    ui.label(RichText::new(when).font(font(Face::Mono, 11.0)).color(if hot { style.accent } else { style.muted }));
+                    ui.label(RichText::new(what).font(font(Face::Body, 12.5)).color(style.text));
                 });
             }
         }
         PopupPayload::ToolForgeLiveCard { tool_name, steps_summary, status } => {
             header(ui, &format!("New Tool Forged · {tool_name}"), dismiss, pins);
-            ui.label(RichText::new(status).color(style.accent).small());
+            ui.label(RichText::new(status).font(font(Face::Label, 8.5)).color(style.accent));
             for step in steps_summary.iter().take(8) {
-                ui.label(RichText::new(format!("› {step}")).small().color(style.muted));
+                ui.label(RichText::new(format!("› {step}")).font(font(Face::Body, 11.0)).color(style.muted));
             }
         }
         PopupPayload::QuickConfirmModal { title, description, confirm_action_id } => {
             header(ui, title, dismiss, pins);
-            ui.label(RichText::new(description).color(style.muted));
+            ui.label(RichText::new(description).font(font(Face::Body, 12.5)).color(style.muted));
             ui.horizontal(|ui| {
                 if crate::holo_ui::key_on(ui, "Confirm", true).clicked() {
                     actions.push(PopupAction::Confirm(confirm_action_id.clone()));
@@ -570,7 +559,7 @@ fn card_body(ui: &mut egui::Ui, p: &mut DynamicHudPopup, style: &CardStyle, acti
                 crate::holo_block::faded_into(ui, egui::ScrollArea::vertical().max_height(220.0).id_salt(("popup_text", p.id)), style.surface, |ui| {
                     let mono = markdown_or_code.contains("```") || markdown_or_code.lines().any(|l| l.starts_with("    "));
                     let text = markdown_or_code.replace("```", "");
-                    ui.label(if mono { RichText::new(text.trim()).monospace().color(style.text) } else { RichText::new(text.trim()).color(style.text) });
+                    ui.label(RichText::new(text.trim()).font(if mono { font(Face::Mono, 11.5) } else { font(Face::Body, 12.5) }).color(style.text));
                 });
             }
             if chart_points.len() >= 2 {

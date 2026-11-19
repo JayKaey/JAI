@@ -4,7 +4,7 @@
 //! and the throw of a block Sir flings.
 
 use crate::holo::{self, Face};
-use eframe::egui::{self, pos2, vec2, Color32, Painter, Pos2, Rect, Rounding, Sense, Ui};
+use eframe::egui::{self, pos2, vec2, Color32, Painter, Pos2, Rect, Rounding, Ui};
 use std::collections::HashMap;
 use std::sync::Mutex;
 

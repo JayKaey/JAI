@@ -10,11 +10,11 @@
 
 use crate::app::Jai;
 use crate::deep_research_engine::{self as research, FactRow, MissionSnapshot, TelemetryKind};
-use crate::research_graph_view::{GraphPick, ResearchGraphView, CONTRADICTION, SINGLE, VERIFIED};
+use crate::research_graph_view::{contradiction, single, verified, GraphPick, ResearchGraphView};
 use crate::tools::ToolContext;
 use crate::window_physics::{self as physics, Guide, SpringF32, SpringVec2};
 use eframe::egui::{
-    self, pos2, vec2, Align, Align2, Color32, FontId, Frame, Margin, Pos2, Rect, RichText, Rounding, Sense, Stroke, TextFormat, Ui, UiBuilder, Vec2,
+    self, pos2, vec2, Align, Align2, Color32, Frame, Margin, Pos2, Rect, RichText, Rounding, Sense, Stroke, TextFormat, Ui, UiBuilder, Vec2,
     ViewportBuilder, ViewportClass, ViewportCommand, ViewportId,
 };
 use regex::Regex;
@@ -26,11 +26,30 @@ use std::time::{Duration, Instant};
 use tokio::runtime::Handle;
 use tracing::warn;
 
-pub const ARC_CYAN: Color32 = Color32::from_rgb(0x00, 0xE5, 0xFF);
-pub const STARK_GOLD: Color32 = Color32::from_rgb(0xFF, 0xB8, 0x00);
-pub const EMERALD: Color32 = Color32::from_rgb(0x10, 0xB9, 0x81);
-const TEXT: Color32 = Color32::from_gray(222);
-const MUTED: Color32 = Color32::from_gray(140);
+use crate::holo::{self, Face};
+
+fn text_c() -> Color32 {
+    holo::theme().ink()
+}
+fn muted_c() -> Color32 {
+    holo::theme().muted()
+}
+fn live_c() -> Color32 {
+    holo::theme().accent()
+}
+/// A caption or readout in the kit's faces (capitals for labels, thin mono for data).
+fn mono(s: impl Into<String>, size: f32, colour: Color32) -> RichText {
+    RichText::new(s).font(holo::font(Face::Mono, size)).color(colour)
+}
+fn body(s: impl Into<String>, size: f32, colour: Color32) -> RichText {
+    RichText::new(s).font(holo::font(Face::Body, size)).color(colour)
+}
+fn label(s: &str, colour: Color32) -> RichText {
+    RichText::new(s.to_uppercase()).font(holo::font(Face::Label, 9.0)).color(colour)
+}
+fn head(s: impl Into<String>, size: f32, colour: Color32) -> RichText {
+    RichText::new(s).font(holo::font(Face::Head, size)).color(colour)
+}
 const HEADER_H: f32 = 30.0;
 const DEFAULT_ALPHA: u8 = 228;
 /// Launch stagger between windows of one fan-out.
@@ -79,12 +98,13 @@ impl SpatialWindowKind {
         }
     }
 
-    /// Arc cyan for research, Stark gold for telemetry and code, emerald for data and schedule.
+    /// The theme's accent for research, its deep tone for telemetry and code, ink for the schedule.
     pub fn accent(self) -> Color32 {
+        let t = holo::theme();
         match self {
-            Self::LiveCrawlerStream | Self::ExecutiveDossier | Self::KnowledgeGraphPinboard => ARC_CYAN,
-            Self::CodeAndSandboxInspector | Self::HardwareAndVramHud => STARK_GOLD,
-            Self::ScheduleAndCommandDeck => EMERALD,
+            Self::LiveCrawlerStream | Self::ExecutiveDossier | Self::KnowledgeGraphPinboard => t.accent(),
+            Self::CodeAndSandboxInspector | Self::HardwareAndVramHud => t.deep(),
+            Self::ScheduleAndCommandDeck => t.ink(),
         }
     }
 
@@ -755,7 +775,8 @@ fn frame_body(ctx: &egui::Context, class: ViewportClass, app: &Jai, rt: &Handle,
     let accent = w.kind.accent();
     let fade = w.fade.current.clamp(0.0, 1.0);
     let base_alpha = if w.ghost { w.alpha.min(physics::GHOST_ALPHA) } else { w.alpha };
-    let fill = Color32::from_rgba_unmultiplied(8, 12, 20, (base_alpha as f32 * fade) as u8);
+    let share = base_alpha as f32 / 255.0 * fade;
+    let fill = holo::a(holo::theme().void(), share);
     let mut repaint_after = body_cadence(w);
     let logical = w.size / ppp;
     let (kind_title, window_id) = (w.kind.title(), w.id);
@@ -763,8 +784,7 @@ fn frame_body(ctx: &egui::Context, class: ViewportClass, app: &Jai, rt: &Handle,
         ui.set_opacity(fade);
         let full = ui.max_rect();
         let painter = ui.painter().clone();
-        painter.rect(full.shrink(0.6), Rounding::ZERO, fill, Stroke::new(1.2_f32, accent.gamma_multiply(0.85)));
-        painter.rect_stroke(full.shrink(3.0), Rounding::ZERO, Stroke::new(3.0_f32, accent.gamma_multiply(0.07)));
+        crate::holo_frame::card(&painter, full.shrink(0.6), 0.6, share);
         header(ui, ctx, w, full, accent);
         let body = Rect::from_min_max(pos2(full.left() + 12.0, full.top() + HEADER_H + 8.0), pos2(full.right() - 12.0, full.bottom() - 12.0));
         ui.allocate_new_ui(UiBuilder::new().max_rect(body), |ui| {
@@ -787,7 +807,7 @@ fn frame_body(ctx: &egui::Context, class: ViewportClass, app: &Jai, rt: &Handle,
             } else {
                 let origin = w.spring.current;
                 for g in &w.guides {
-                    let ink = Stroke::new(2.0_f32, ARC_CYAN.gamma_multiply(0.9 * left));
+                    let ink = Stroke::new(2.0_f32, holo::a(live_c(), 0.9 * left));
                     if g.vertical {
                         let x = ((g.at - origin.x) / ppp).clamp(full.left() + 1.0, full.right() - 1.0);
                         painter.line_segment([pos2(x, full.top() + 10.0), pos2(x, full.bottom() - 10.0)], ink);
@@ -804,7 +824,7 @@ fn frame_body(ctx: &egui::Context, class: ViewportClass, app: &Jai, rt: &Handle,
         let g = ui.interact(grip, ui.id().with(("grip", w.id)), Sense::drag());
         for k in 0..3 {
             let o = 4.0 + k as f32 * 4.0;
-            painter.line_segment([grip.right_bottom() - vec2(o, 2.0), grip.right_bottom() - vec2(2.0, o)], Stroke::new(1.0_f32, accent.gamma_multiply(if g.hovered() { 0.9 } else { 0.4 })));
+            painter.line_segment([grip.right_bottom() - vec2(o, 2.0), grip.right_bottom() - vec2(2.0, o)], Stroke::new(1.0_f32, holo::a(if g.hovered() { accent } else { holo::theme().ink() }, if g.hovered() { 0.9 } else { 0.4 })));
         }
         if g.drag_started() {
             ctx.send_viewport_cmd(ViewportCommand::BeginResize(egui::ResizeDirection::SouthEast));
@@ -849,14 +869,14 @@ fn icon_button(ui: &mut Ui, rect: Rect, icon: Icon, active: bool, accent: Color3
     let r = ui.interact(rect, id, Sense::click());
     let hot = r.hovered();
     let col = match (icon, hot, active) {
-        (Icon::Close, true, _) => CONTRADICTION,
+        (Icon::Close, true, _) => contradiction(),
         (_, _, true) => accent,
-        (_, true, _) => TEXT,
-        _ => MUTED,
+        (_, true, _) => text_c(),
+        _ => muted_c(),
     };
     let p = ui.painter();
     if hot || active {
-        p.rect_filled(rect.shrink(1.0), Rounding::ZERO, col.gamma_multiply(0.14));
+        p.rect_filled(rect.shrink(1.0), Rounding::ZERO, holo::a(col, 0.14));
     }
     let c = rect.center();
     let s = Stroke::new(1.4_f32, col);
@@ -867,7 +887,7 @@ fn icon_button(ui: &mut Ui, rect: Rect, icon: Icon, active: bool, accent: Color3
             for dx in [-3.0, 0.0, 3.0] {
                 p.circle_filled(c + vec2(dx, 4.2), 1.55, col);
             }
-            let eye = Color32::from_rgb(8, 12, 20);
+            let eye = holo::theme().void();
             p.circle_filled(c + vec2(-1.7, -1.6), 0.95, eye);
             p.circle_filled(c + vec2(1.7, -1.6), 0.95, eye);
         }
@@ -894,12 +914,11 @@ fn header(ui: &mut Ui, ctx: &egui::Context, w: &mut SpatialWindow, full: Rect, a
     let t = ui.input(|i| i.time) as f32;
     let pulse = 0.55 + 0.45 * (t * 2.4).sin();
     painter.circle_filled(pos2(bar.left() + 8.0, bar.center().y), 3.4, accent.gamma_multiply(pulse));
-    painter.circle_stroke(pos2(bar.left() + 8.0, bar.center().y), 6.0, Stroke::new(1.0_f32, accent.gamma_multiply(0.25)));
-    let galley = painter.layout_no_wrap(w.label.clone().unwrap_or_else(|| w.kind.title().to_string()), FontId::proportional(12.5), accent);
-    let title_w = galley.size().x;
-    painter.galley(pos2(bar.left() + 20.0, bar.center().y - galley.size().y / 2.0), galley, accent);
-    painter.text(pos2(bar.left() + 26.0 + title_w, bar.center().y), Align2::LEFT_CENTER, format!("// {}{}", w.kind.tag(), if w.ghost { " · GHOST" } else { "" }), FontId::monospace(11.0), MUTED);
-    painter.line_segment([pos2(full.left() + 14.0, full.top() + HEADER_H + 3.0), pos2(full.right() - 14.0, full.top() + HEADER_H + 3.0)], Stroke::new(1.0_f32, accent.gamma_multiply(0.22)));
+    painter.circle_stroke(pos2(bar.left() + 8.0, bar.center().y), 6.0, Stroke::new(1.0_f32, holo::a(holo::theme().ink(), 0.25)));
+    let title = w.label.clone().unwrap_or_else(|| w.kind.title().to_string());
+    let title_w = holo::text(&painter, pos2(bar.left() + 20.0, bar.center().y), Align2::LEFT_CENTER, Face::Label, &title, 10.0, accent).width();
+    holo::text(&painter, pos2(bar.left() + 28.0 + title_w, bar.center().y), Align2::LEFT_CENTER, Face::Mono, &format!("// {}{}", w.kind.tag(), if w.ghost { " · GHOST" } else { "" }), 10.0, muted_c());
+    painter.line_segment([pos2(full.left() + 14.0, full.top() + HEADER_H + 3.0), pos2(full.right() - 14.0, full.top() + HEADER_H + 3.0)], Stroke::new(1.0_f32, holo::a(holo::theme().ink(), 0.2)));
 
     let size = vec2(24.0, 22.0);
     let mut x = bar.right() - size.x;
@@ -944,37 +963,36 @@ fn header(ui: &mut Ui, ctx: &egui::Context, w: &mut SpatialWindow, full: Rect, a
 // ------------------------------------------------------------------------ the views ----
 
 fn muted(ui: &mut Ui, text: &str) {
-    ui.add(egui::Label::new(RichText::new(text).size(12.0).color(MUTED)).wrap());
+    ui.add(egui::Label::new(body(text, 12.0, muted_c())).wrap());
 }
 
-fn stat(ui: &mut Ui, label: &str, value: String, colour: Color32) {
+fn stat(ui: &mut Ui, caption: &str, value: String, colour: Color32) {
     ui.vertical(|ui| {
-        ui.label(RichText::new(label).monospace().size(11.0).color(MUTED));
-        ui.label(RichText::new(value).monospace().size(13.0).color(colour));
+        ui.label(label(caption, muted_c()));
+        ui.label(mono(value, 12.0, colour));
     });
 }
 
-fn bar(ui: &mut Ui, label: &str, value: &str, frac: f32, colour: Color32) {
+fn bar(ui: &mut Ui, caption: &str, value: &str, frac: f32, colour: Color32) {
     ui.horizontal(|ui| {
-        ui.add_sized([62.0, 14.0], egui::Label::new(RichText::new(label).monospace().size(11.0).color(MUTED)));
+        ui.add_sized([62.0, 14.0], egui::Label::new(label(caption, muted_c())));
         let width = (ui.available_width() - 96.0).max(40.0);
         let (rect, _) = ui.allocate_exact_size(vec2(width, 9.0), Sense::hover());
         let p = ui.painter();
-        p.rect_filled(rect, Rounding::ZERO, Color32::from_white_alpha(14));
+        p.rect_filled(rect, Rounding::ZERO, holo::a(holo::theme().ink(), 0.07));
         let filled = Rect::from_min_size(rect.min, vec2(rect.width() * frac.clamp(0.0, 1.0), rect.height()));
         p.rect_filled(filled, Rounding::ZERO, colour);
-        p.rect_filled(filled, Rounding::ZERO, colour.gamma_multiply(0.25));
-        ui.label(RichText::new(value).monospace().size(11.0).color(TEXT));
+        ui.label(mono(value, 10.5, text_c()));
     });
 }
 
 fn pill(ui: &mut Ui, text: &str, colour: Color32) -> egui::Response {
     Frame::none()
-        .fill(colour.gamma_multiply(0.12))
-        .stroke(Stroke::new(1.0_f32, colour.gamma_multiply(0.55)))
+        .fill(holo::a(colour, 0.12))
+        .stroke(Stroke::new(1.0_f32, holo::a(colour, 0.55)))
         .rounding(Rounding::ZERO)
         .inner_margin(Margin::symmetric(8.0, 2.0))
-        .show(ui, |ui| ui.label(RichText::new(text).monospace().size(11.0).color(colour)))
+        .show(ui, |ui| ui.label(label(text, colour)))
         .response
         .interact(Sense::click())
 }
@@ -1000,24 +1018,24 @@ fn crawler_view(ui: &mut Ui, w: &mut SpatialWindow, c: &mut WorkspaceCanvas, app
     }
     if let Some(s) = &snap {
         ui.horizontal(|ui| {
-            ui.label(RichText::new(&s.mission.topic).strong().size(14.0).color(ARC_CYAN));
-            pill(ui, &s.mission.status.to_uppercase(), if running { VERIFIED } else { MUTED });
+            ui.label(head(&s.mission.topic, 14.0, live_c()));
+            pill(ui, &s.mission.status, if running { live_c() } else { muted_c() });
             if let Some(tick) = engine.last_progress(id).filter(|_| running) {
-                ui.label(RichText::new(format!("LIVE {}", tick.at)).monospace().size(11.0).color(VERIFIED));
+                ui.label(mono(format!("LIVE {}", tick.at), 10.5, live_c()));
             }
         });
     }
     let (elapsed, target) = live.as_ref().map(|l| (l.elapsed_secs, l.target_secs)).or_else(|| snap.as_ref().map(|s| (s.mission.elapsed_secs as u64, s.mission.target_secs as u64))).unwrap_or((0, 1));
     let clock = |s: u64| format!("{:02}:{:02}:{:02}", s / 3600, (s / 60) % 60, s % 60);
-    bar(ui, "MISSION", &format!("{} / {}", clock(elapsed), clock(target)), elapsed as f32 / target.max(1) as f32, ARC_CYAN);
+    bar(ui, "MISSION", &format!("{} / {}", clock(elapsed), clock(target)), elapsed as f32 / target.max(1) as f32, live_c());
     if let Some(l) = &live {
         ui.horizontal_wrapped(|ui| {
-            stat(ui, "PAGES", l.pages.to_string(), TEXT);
-            stat(ui, "FACTS", l.facts.to_string(), VERIFIED);
-            stat(ui, "PAGES/MIN", format!("{:.0}", l.pages_per_min()), STARK_GOLD);
-            stat(ui, "FRONTIER", l.frontier.to_string(), TEXT);
-            stat(ui, "QUERIES", l.queries_left.to_string(), TEXT);
-            stat(ui, "STAGE", l.stage.to_uppercase(), ARC_CYAN);
+            stat(ui, "PAGES", l.pages.to_string(), text_c());
+            stat(ui, "FACTS", l.facts.to_string(), verified());
+            stat(ui, "PAGES/MIN", format!("{:.0}", l.pages_per_min()), live_c());
+            stat(ui, "FRONTIER", l.frontier.to_string(), text_c());
+            stat(ui, "QUERIES", l.queries_left.to_string(), text_c());
+            stat(ui, "STAGE", l.stage.to_uppercase(), live_c());
         });
     }
     ui.horizontal(|ui| {
@@ -1048,26 +1066,26 @@ fn crawler_view(ui: &mut Ui, w: &mut SpatialWindow, c: &mut WorkspaceCanvas, app
             let (tag, colour, text) = match &e.kind {
                 TelemetryKind::Fetch { url, status, ms, bytes } => (
                     format!("GET {status}"),
-                    if *status < 300 { VERIFIED } else if *status < 400 { STARK_GOLD } else { CONTRADICTION },
+                    if *status < 300 { verified() } else if *status < 400 { single() } else { contradiction() },
                     format!("{ms:>5} ms {:>6.1} KB  {url}", *bytes as f32 / 1024.0),
                 ),
-                TelemetryKind::Query { provider, query, results } => ("QUERY".into(), STARK_GOLD, format!("{provider} \"{query}\" → {results}")),
-                TelemetryKind::Snippet { text, .. } => ("SNIP".into(), MUTED, text.clone()),
+                TelemetryKind::Query { provider, query, results } => ("QUERY".into(), single(), format!("{provider} \"{query}\" → {results}")),
+                TelemetryKind::Snippet { text, .. } => ("SNIP".into(), muted_c(), text.clone()),
                 TelemetryKind::Fact { category, claim, corroborated, contradiction, .. } => (
                     format!("FACT {}", category.to_uppercase()),
-                    if *contradiction { CONTRADICTION } else if *corroborated { VERIFIED } else { SINGLE },
+                    if *contradiction { crate::research_graph_view::contradiction() } else if *corroborated { verified() } else { single() },
                     claim.clone(),
                 ),
-                TelemetryKind::Stage { stage, detail } => (stage.to_uppercase(), ARC_CYAN, detail.clone()),
-                TelemetryKind::Error { url, message } => ("ERR".into(), CONTRADICTION, format!("{message} — {url}")),
-                TelemetryKind::Finished { status, summary } => (status.to_uppercase(), VERIFIED, summary.clone()),
+                TelemetryKind::Stage { stage, detail } => (stage.to_uppercase(), live_c(), detail.clone()),
+                TelemetryKind::Error { url, message } => ("ERR".into(), contradiction(), format!("{message} — {url}")),
+                TelemetryKind::Finished { status, summary } => (status.to_uppercase(), live_c(), summary.clone()),
                 TelemetryKind::Progress { .. } => continue,
             };
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
-                ui.label(RichText::new(&e.at).monospace().size(11.0).color(MUTED));
-                ui.label(RichText::new(tag).monospace().size(11.0).color(colour));
-                ui.add(egui::Label::new(RichText::new(text).monospace().size(11.0).color(TEXT)).wrap());
+                ui.label(mono(&e.at, 10.5, muted_c()));
+                ui.label(mono(tag, 10.5, colour));
+                ui.add(egui::Label::new(mono(text, 10.5, text_c())).wrap());
             });
         }
     });
@@ -1075,34 +1093,34 @@ fn crawler_view(ui: &mut Ui, w: &mut SpatialWindow, c: &mut WorkspaceCanvas, app
 
 fn fact_colour(f: &FactRow) -> Color32 {
     if f.contradicting_source.is_some() {
-        CONTRADICTION
+        contradiction()
     } else if f.corroborating > 0 {
-        VERIFIED
+        verified()
     } else {
-        SINGLE
+        single()
     }
 }
 
 /// A clickable fact line; highlighted when selected in the graph.
 fn fact_row(ui: &mut Ui, f: &FactRow, selected: bool, related: bool) -> egui::Response {
     let fill = if selected {
-        ARC_CYAN.gamma_multiply(0.18)
+        holo::a(live_c(), 0.18)
     } else if related {
-        ARC_CYAN.gamma_multiply(0.06)
+        holo::a(holo::theme().ink(), 0.06)
     } else {
-        Color32::TRANSPARENT
+        holo::a(holo::theme().void(), 0.0)
     };
     let inner = Frame::none().fill(fill).rounding(Rounding::ZERO).inner_margin(Margin::symmetric(6.0, 4.0)).show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new("-").size(11.0).color(fact_colour(f)));
-            ui.add(egui::Label::new(RichText::new(&f.claim).size(12.0).color(TEXT)).wrap());
-            ui.label(RichText::new(format!("[S{}]", f.source_id)).monospace().size(11.0).color(ARC_CYAN));
+            ui.label(mono("-", 11.0, fact_colour(f)));
+            ui.add(egui::Label::new(body(&f.claim, 12.0, text_c())).wrap());
+            ui.label(mono(format!("[S{}]", f.source_id), 10.5, live_c()));
             if f.corroborating > 0 {
-                ui.label(RichText::new(format!("OK {}×", f.corroborating + 1)).size(11.0).color(VERIFIED));
+                ui.label(mono(format!("OK {}×", f.corroborating + 1), 10.5, verified()));
             }
             if f.contradicting_source.is_some() {
-                ui.label(RichText::new("WARN: disputed").size(11.0).color(CONTRADICTION));
+                ui.label(mono("WARN: disputed", 10.5, contradiction()));
             }
         });
     });
@@ -1128,19 +1146,14 @@ fn dossier_view(ui: &mut Ui, w: &mut SpatialWindow, c: &mut WorkspaceCanvas, ctx
         // A topic workspace: what JAI knows, before the research chapters.
         if let Some(brief) = &brief {
             crate::holo_ui::fold(ui, (w.id, "brief"), "Overview & facts", true, |ui| {
-                markdown_lite(ui, brief, ARC_CYAN);
+                markdown_lite(ui, brief, live_c());
             });
             ui.add_space(6.0);
         }
-        ui.label(RichText::new(format!("Stark Research Dossier — {}", m.topic)).strong().size(16.0).color(ARC_CYAN));
-        ui.label(
-            RichText::new(format!("Mission #{} · started {} · {} · {} of {} min · {} pages · {} facts · {} sources", m.id, m.created_at, m.status, m.elapsed_secs / 60, m.target_secs / 60, m.pages, m.facts, snap.sources.len()))
-                .monospace()
-                .size(11.0)
-                .color(MUTED),
-        );
+        ui.label(head(format!("Stark Research Dossier — {}", m.topic), 16.0, live_c()));
+        ui.label(mono(format!("Mission #{} · started {} · {} · {} of {} min · {} pages · {} facts · {} sources", m.id, m.created_at, m.status, m.elapsed_secs / 60, m.target_secs / 60, m.pages, m.facts, snap.sources.len()), 10.5, muted_c()));
         ui.add_space(6.0);
-        ui.label(RichText::new("EXECUTIVE SUMMARY").monospace().size(11.0).color(STARK_GOLD));
+        ui.label(label("EXECUTIVE SUMMARY", holo::theme().deep()));
         if m.executive_summary.trim().is_empty() {
             let mut top: Vec<&FactRow> = snap.facts.iter().filter(|f| f.contradicting_source.is_none()).collect();
             top.sort_by(|a, b| b.corroborating.cmp(&a.corroborating).then(b.confidence.partial_cmp(&a.confidence).unwrap_or(std::cmp::Ordering::Equal)));
@@ -1153,7 +1166,7 @@ fn dossier_view(ui: &mut Ui, w: &mut SpatialWindow, c: &mut WorkspaceCanvas, ctx
                 }
             }
         } else {
-            ui.add(egui::Label::new(RichText::new(&m.executive_summary).size(12.5).color(TEXT)).wrap());
+            ui.add(egui::Label::new(body(&m.executive_summary, 12.5, text_c())).wrap());
         }
         let chapters: [(&str, &[&str]); 6] = [
             ("Chapter 1 — Overview & Definitions", &["definition"]),
@@ -1187,13 +1200,13 @@ fn dossier_view(ui: &mut Ui, w: &mut SpatialWindow, c: &mut WorkspaceCanvas, ctx
             crate::holo_ui::fold(ui, (w.id, "conflicts"), &format!("Chapter 7 — Contradictions  ({})", conflicts.len()), true, |ui| {
                 egui::Grid::new(("conflict_grid", w.id)).striped(true).num_columns(3).show(ui, |ui| {
                     for h in ["CLAIM", "SOURCE", "DISPUTED BY"] {
-                        ui.label(RichText::new(h).monospace().size(11.0).color(MUTED));
+                        ui.label(label(h, muted_c()));
                     }
                     ui.end_row();
                     for f in conflicts {
-                        ui.add(egui::Label::new(RichText::new(&f.claim).size(11.0)).wrap());
-                        ui.label(RichText::new(snap.source(f.source_id).map(|s| s.domain.clone()).unwrap_or_default()).size(11.0).color(ARC_CYAN));
-                        ui.label(RichText::new(f.contradicting_source.and_then(|s| snap.source(s)).map(|s| s.domain.clone()).unwrap_or_default()).size(11.0).color(CONTRADICTION));
+                        ui.add(egui::Label::new(body(&f.claim, 11.5, text_c())).wrap());
+                        ui.label(mono(snap.source(f.source_id).map(|s| s.domain.clone()).unwrap_or_default(), 10.5, live_c()));
+                        ui.label(mono(f.contradicting_source.and_then(|s| snap.source(s)).map(|s| s.domain.clone()).unwrap_or_default(), 10.5, contradiction()));
                         ui.end_row();
                     }
                 });
@@ -1203,11 +1216,11 @@ fn dossier_view(ui: &mut Ui, w: &mut SpatialWindow, c: &mut WorkspaceCanvas, ctx
             egui::Grid::new(("source_grid", w.id)).striped(true).num_columns(3).show(ui, |ui| {
                 for s in snap.sources.iter().take(80) {
                     let selected = c.selected_source == Some(s.id);
-                    ui.label(RichText::new(format!("S{}", s.id)).monospace().size(11.0).color(if selected { STARK_GOLD } else { MUTED }));
-                    crate::holo_ui::link_to(ui, RichText::new(s.title.chars().take(70).collect::<String>()).size(11.0), &s.url).on_hover_text(format!("{} · crawled {} · link depth {}", s.domain, s.crawled_at, s.depth));
+                    ui.label(mono(format!("S{}", s.id), 10.5, if selected { live_c() } else { muted_c() }));
+                    crate::holo_ui::link_to(ui, body(s.title.chars().take(70).collect::<String>(), 11.5, text_c()), &s.url).on_hover_text(format!("{} · crawled {} · link depth {}", s.domain, s.crawled_at, s.depth));
                     let (rect, _) = ui.allocate_exact_size(vec2(60.0, 8.0), Sense::hover());
-                    ui.painter().rect_filled(rect, Rounding::ZERO, Color32::from_white_alpha(14));
-                    ui.painter().rect_filled(Rect::from_min_size(rect.min, vec2(60.0 * s.reliability, 8.0)), Rounding::ZERO, VERIFIED.gamma_multiply(0.4 + 0.6 * s.reliability));
+                    ui.painter().rect_filled(rect, Rounding::ZERO, holo::a(holo::theme().ink(), 0.07));
+                    ui.painter().rect_filled(Rect::from_min_size(rect.min, vec2(60.0 * s.reliability, 8.0)), Rounding::ZERO, holo::a(verified(), 0.4 + 0.6 * s.reliability));
                     ui.end_row();
                 }
             });
@@ -1290,8 +1303,8 @@ fn inspector_view(ui: &mut Ui, c: &mut WorkspaceCanvas, accent: Color32, repaint
         return;
     };
     ui.horizontal(|ui| {
-        ui.label(RichText::new(&item.title).strong().size(12.5).color(accent));
-        pill(ui, &format!("{:?}", item.format).to_uppercase(), MUTED);
+        ui.label(head(&item.title, 12.5, accent));
+        pill(ui, &format!("{:?}", item.format), muted_c());
         if crate::holo_ui::key(ui, "Copy").clicked() {
             ui.ctx().copy_text(item.body.clone());
         }
@@ -1311,7 +1324,7 @@ fn inspector_view(ui: &mut Ui, c: &mut WorkspaceCanvas, accent: Color32, repaint
                 }
                 InspectFormat::Markdown => markdown_lite(ui, &item.body, accent),
                 _ => {
-                    ui.add(egui::Label::new(RichText::new(&item.body).monospace().size(11.0).color(TEXT)).wrap());
+                    ui.add(egui::Label::new(mono(&item.body, 11.0, text_c())).wrap());
                 }
             });
         }
@@ -1327,8 +1340,9 @@ const KEYWORDS: [&str; 40] = [
 /// Lightweight syntax colouring: keywords, strings, numbers and comments.
 fn highlighted(code: &str, size: f32) -> egui::text::LayoutJob {
     let mut job = egui::text::LayoutJob::default();
+    let t = holo::theme();
     let mut push = |text: &str, colour: Color32| {
-        job.append(text, 0.0, TextFormat { font_id: FontId::monospace(size), color: colour, ..Default::default() });
+        job.append(text, 0.0, TextFormat { font_id: holo::font(Face::Mono, size), color: colour, ..Default::default() });
     };
     for line in code.lines().take(4000) {
         let chars: Vec<char> = line.chars().collect();
@@ -1337,7 +1351,7 @@ fn highlighted(code: &str, size: f32) -> egui::text::LayoutJob {
             let ch = chars[i];
             let rest: String = chars[i..].iter().collect();
             if rest.starts_with("//") || (ch == '#' && chars[..i].iter().all(|c| c.is_whitespace())) {
-                push(&rest, Color32::from_gray(110));
+                push(&rest, t.faint());
                 break;
             }
             if ch == '"' || ch == '\'' {
@@ -1349,7 +1363,7 @@ fn highlighted(code: &str, size: f32) -> egui::text::LayoutJob {
                     j += 1;
                 }
                 let end = (j + 1).min(chars.len());
-                push(&chars[i..end].iter().collect::<String>(), EMERALD);
+                push(&chars[i..end].iter().collect::<String>(), t.deep());
                 i = end;
                 continue;
             }
@@ -1358,7 +1372,7 @@ fn highlighted(code: &str, size: f32) -> egui::text::LayoutJob {
                 while j < chars.len() && (chars[j].is_ascii_alphanumeric() || chars[j] == '.' || chars[j] == '_') {
                     j += 1;
                 }
-                push(&chars[i..j].iter().collect::<String>(), ARC_CYAN);
+                push(&chars[i..j].iter().collect::<String>(), t.accent());
                 i = j;
                 continue;
             }
@@ -1368,14 +1382,14 @@ fn highlighted(code: &str, size: f32) -> egui::text::LayoutJob {
                     j += 1;
                 }
                 let word: String = chars[i..j].iter().collect();
-                push(&word, if KEYWORDS.contains(&word.as_str()) { STARK_GOLD } else { TEXT });
+                push(&word, if KEYWORDS.contains(&word.as_str()) { t.hot() } else { t.ink() });
                 i = j;
                 continue;
             }
-            push(&ch.to_string(), Color32::from_gray(170));
+            push(&ch.to_string(), t.muted());
             i += 1;
         }
-        push("\n", TEXT);
+        push("\n", t.ink());
     }
     job
 }
@@ -1386,7 +1400,7 @@ fn markdown_lite(ui: &mut Ui, text: &str, accent: Color32) {
         if line.trim_start().starts_with("```") {
             match code.take() {
                 Some(block) => {
-                    Frame::none().fill(Color32::from_white_alpha(8)).rounding(Rounding::ZERO).inner_margin(Margin::same(6.0)).show(ui, |ui| {
+                    Frame::none().fill(holo::a(holo::theme().ink(), 0.05)).rounding(Rounding::ZERO).inner_margin(Margin::same(6.0)).show(ui, |ui| {
                         ui.label(highlighted(&block, 11.0));
                     });
                 }
@@ -1403,26 +1417,26 @@ fn markdown_lite(ui: &mut Ui, text: &str, accent: Color32) {
         if t.is_empty() {
             ui.add_space(4.0);
         } else if let Some(h) = t.strip_prefix("# ") {
-            ui.label(RichText::new(h).strong().size(16.0).color(accent));
+            ui.label(head(h, 16.0, accent));
         } else if let Some(h) = t.strip_prefix("## ") {
-            ui.label(RichText::new(h).strong().size(14.0).color(accent));
+            ui.label(head(h, 14.0, accent));
         } else if let Some(h) = t.strip_prefix("### ").or_else(|| t.strip_prefix("#### ")) {
-            ui.label(RichText::new(h).strong().size(12.5).color(STARK_GOLD));
+            ui.label(head(h, 12.5, holo::theme().deep()));
         } else if let Some(item) = t.strip_prefix("- ").or_else(|| t.strip_prefix("* ")) {
             ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new("•").color(accent));
-                ui.add(egui::Label::new(RichText::new(item.replace("**", "")).size(12.0).color(TEXT)).wrap());
+                ui.label(body("•", 12.0, accent));
+                ui.add(egui::Label::new(body(item.replace("**", ""), 12.0, text_c())).wrap());
             });
         } else if let Some(q) = t.strip_prefix("> ") {
-            ui.add(egui::Label::new(RichText::new(q).italics().size(12.5).color(VERIFIED)).wrap());
+            ui.add(egui::Label::new(body(q, 12.5, muted_c()).italics()).wrap());
         } else if t.starts_with('|') {
             if !t.contains("---") {
-                ui.label(RichText::new(t).monospace().size(11.0).color(TEXT));
+                ui.label(mono(t, 11.0, text_c()));
             }
         } else if t == "---" {
             crate::holo_ui::rule(ui);
         } else {
-            ui.add(egui::Label::new(RichText::new(t.replace("**", "")).size(12.0).color(TEXT)).wrap());
+            ui.add(egui::Label::new(body(t.replace("**", ""), 12.0, text_c())).wrap());
         }
     }
     if let Some(block) = code {
@@ -1464,8 +1478,7 @@ fn csv_view(ui: &mut Ui, body: &str, fill: Color32) {
         egui::Grid::new("inspector_csv_grid").striped(true).num_columns(width).show(ui, |ui| {
             for (i, row) in rows.iter().enumerate() {
                 for cell in row {
-                    let text = RichText::new(cell).monospace().size(11.0);
-                    ui.label(if i == 0 { text.strong().color(STARK_GOLD) } else { text.color(TEXT) });
+                    ui.label(if i == 0 { label(cell, holo::theme().deep()) } else { mono(cell, 11.0, text_c()) });
                 }
                 ui.end_row();
             }
@@ -1502,7 +1515,7 @@ fn plot_view(ui: &mut Ui, body: &str, accent: Color32, repaint: &mut Duration) {
     ui.allocate_rect(rect, Sense::hover());
     let p = ui.painter_at(rect);
     if points.len() < 2 {
-        p.text(rect.center(), Align2::CENTER_CENTER, "Nothing to plot (give numbers, or a function of x such as sin(x)*x).", FontId::proportional(11.5), MUTED);
+        holo::text(&p, rect.center(), Align2::CENTER_CENTER, Face::Body, "Nothing to plot (give numbers, or a function of x such as sin(x)*x).", 12.0, muted_c());
         return;
     }
     let (mut x0, mut x1, mut y0, mut y1) = (f64::MAX, f64::MIN, f64::MAX, f64::MIN);
@@ -1518,21 +1531,23 @@ fn plot_view(ui: &mut Ui, body: &str, accent: Color32, repaint: &mut Duration) {
     }
     let inner = rect.shrink2(vec2(36.0, 16.0));
     let to = |x: f64, y: f64| pos2(inner.left() + ((x - x0) / (x1 - x0).max(1e-9)) as f32 * inner.width(), inner.bottom() - ((y - y0) / (y1 - y0)) as f32 * inner.height());
-    p.rect_stroke(inner, Rounding::ZERO, Stroke::new(1.0_f32, Color32::from_white_alpha(25)));
+    let ink = holo::theme().ink();
+    holo::outline(&p, &holo::plate(inner, [0.0; 4]), holo::a(ink, 0.2));
     if y0 < 0.0 && y1 > 0.0 {
-        p.line_segment([to(x0, 0.0), to(x1, 0.0)], Stroke::new(1.0_f32, Color32::from_white_alpha(40)));
+        holo::rule(&p, to(x0, 0.0), to(x1, 0.0), holo::a(ink, 0.35));
     }
     if x0 < 0.0 && x1 > 0.0 {
-        p.line_segment([to(0.0, y0), to(0.0, y1)], Stroke::new(1.0_f32, Color32::from_white_alpha(40)));
+        holo::rule(&p, to(0.0, y0), to(0.0, y1), holo::a(ink, 0.35));
     }
     let line: Vec<Pos2> = points.iter().map(|&(x, y)| to(x, y)).collect();
-    p.add(egui::Shape::line(line.clone(), Stroke::new(4.0_f32, accent.gamma_multiply(0.15))));
+    p.add(egui::Shape::line(line.clone(), Stroke::new(4.0_f32, holo::a(holo::theme().deep(), 0.15))));
     p.add(egui::Shape::line(line, Stroke::new(1.6_f32, accent)));
     let fmt = |v: f64| crate::calc::format_number(v);
-    p.text(inner.left_top() + vec2(-4.0, 0.0), Align2::RIGHT_TOP, fmt(y1), FontId::monospace(11.0), MUTED);
-    p.text(inner.left_bottom() + vec2(-4.0, 0.0), Align2::RIGHT_BOTTOM, fmt(y0), FontId::monospace(11.0), MUTED);
-    p.text(inner.left_bottom() + vec2(0.0, 3.0), Align2::LEFT_TOP, fmt(x0), FontId::monospace(11.0), MUTED);
-    p.text(inner.right_bottom() + vec2(0.0, 3.0), Align2::RIGHT_TOP, fmt(x1), FontId::monospace(11.0), MUTED);
+    let m = muted_c();
+    holo::text(&p, inner.left_top() + vec2(-4.0, 0.0), Align2::RIGHT_TOP, Face::Mono, &fmt(y1), 10.5, m);
+    holo::text(&p, inner.left_bottom() + vec2(-4.0, 0.0), Align2::RIGHT_BOTTOM, Face::Mono, &fmt(y0), 10.5, m);
+    holo::text(&p, inner.left_bottom() + vec2(0.0, 3.0), Align2::LEFT_TOP, Face::Mono, &fmt(x0), 10.5, m);
+    holo::text(&p, inner.right_bottom() + vec2(0.0, 3.0), Align2::RIGHT_TOP, Face::Mono, &fmt(x1), 10.5, m);
 }
 
 /// Ping and the busiest processes, sampled off the UI thread while a hardware HUD is open.
@@ -1597,7 +1612,7 @@ fn hardware_view(ui: &mut Ui, w: &SpatialWindow, app: &Jai, repaint: &mut Durati
     };
     if !compact {
         let shown = badge.clone();
-        let r = pill(ui, &shown, if dormant { EMERALD } else { STARK_GOLD }).on_hover_text(format!("{detail}\nClick to {}", if dormant { "wake JAI" } else { "clear the GPU now" }));
+        let r = pill(ui, &shown, if dormant { holo::theme().deep() } else { live_c() }).on_hover_text(format!("{detail}\nClick to {}", if dormant { "wake JAI" } else { "clear the GPU now" }));
         if r.clicked() {
             if dormant {
                 crate::vram_guard::wake("hardware HUD");
@@ -1607,34 +1622,28 @@ fn hardware_view(ui: &mut Ui, w: &SpatialWindow, app: &Jai, repaint: &mut Durati
         }
         ui.add_space(4.0);
     }
-    bar(ui, "CPU", &format!("{:.0}%", t.cpu_usage_pct), t.cpu_usage_pct / 100.0, STARK_GOLD);
-    bar(ui, "RAM", &format!("{:.1}/{:.0} GB", t.ram_used_gb, t.ram_total_gb), t.ram_usage_pct / 100.0, ARC_CYAN);
+    bar(ui, "CPU", &format!("{:.0}%", t.cpu_usage_pct), t.cpu_usage_pct / 100.0, live_c());
+    bar(ui, "RAM", &format!("{:.1}/{:.0} GB", t.ram_used_gb, t.ram_total_gb), t.ram_usage_pct / 100.0, holo::theme().deep());
     if total > 0 {
-        bar(ui, "VRAM", &format!("{}/{}", gb(used), gb(total)), used as f32 / total as f32, if dormant { EMERALD } else { STARK_GOLD });
+        bar(ui, "VRAM", &format!("{}/{}", gb(used), gb(total)), used as f32 / total as f32, if dormant { holo::theme().deep() } else { live_c() });
         if !compact {
-            bar(ui, "JAI", &format!("{ollama_mb} MB"), ollama_mb as f32 / total.max(1) as f32, ARC_CYAN);
+            bar(ui, "JAI", &format!("{ollama_mb} MB"), ollama_mb as f32 / total.max(1) as f32, holo::theme().deep());
         }
     }
     if let Some(g) = &gpu {
-        ui.label(
-            RichText::new(format!(
+        ui.label(mono(
+            format!(
                 "{} · {} · {} · {}",
                 g.name.trim(),
                 g.utilization_pct.map(|u| format!("{u:.0}% load")).unwrap_or_else(|| "—".into()),
                 g.temperature_c.map(|c| format!("{c:.0}°C")).unwrap_or_else(|| "—".into()),
                 g.power_w.map(|p| format!("{p:.0} W")).unwrap_or_else(|| "—".into())
-            ))
-            .monospace()
-            .size(11.0)
-            .color(TEXT),
-        );
+            ),
+            10.5,
+            text_c(),
+        ));
     }
-    ui.label(
-        RichText::new(format!("NET ↓ {:.0} KB/s  ↑ {:.0} KB/s  · PING {}", t.net_down_kbps, t.net_up_kbps, ping_now.map(|p| format!("{p:.0} ms")).unwrap_or_else(|| "—".into())))
-            .monospace()
-            .size(11.0)
-            .color(TEXT),
-    );
+    ui.label(mono(format!("NET ↓ {:.0} KB/s  ↑ {:.0} KB/s  · PING {}", t.net_down_kbps, t.net_up_kbps, ping_now.map(|p| format!("{p:.0} ms")).unwrap_or_else(|| "—".into())), 10.5, text_c()));
     if compact {
         *repaint = Duration::from_millis(if w.ghost { 1000 } else { 500 });
         return;
@@ -1649,40 +1658,40 @@ fn hardware_view(ui: &mut Ui, w: &SpatialWindow, app: &Jai, repaint: &mut Durati
         for (i, load) in t.cpu_per_core.iter().enumerate() {
             let h = rect.height() * (load / 100.0).clamp(0.02, 1.0);
             let r = Rect::from_min_max(pos2(rect.left() + i as f32 * bw + 1.0, rect.bottom() - h), pos2(rect.left() + (i + 1) as f32 * bw - 1.0, rect.bottom()));
-            p.rect_filled(r, Rounding::ZERO, STARK_GOLD.gamma_multiply(0.35 + 0.65 * load / 100.0));
+            p.rect_filled(r, Rounding::ZERO, holo::a(live_c(), 0.35 + 0.65 * load / 100.0));
         }
-        p.text(rect.left_top(), Align2::LEFT_TOP, "CORES", FontId::monospace(11.0), MUTED);
+        holo::text(&p, rect.left_top(), Align2::LEFT_TOP, Face::Label, "CORES", 8.5, muted_c());
         // Ping radar.
         let (rect, _) = ui.allocate_exact_size(vec2(120.0, 86.0), Sense::hover());
         let p = ui.painter_at(rect);
         let c = rect.center();
         let r = 40.0;
         for k in 1..=3 {
-            p.circle_stroke(c, r * k as f32 / 3.0, Stroke::new(1.0_f32, VERIFIED.gamma_multiply(0.18)));
+            p.circle_stroke(c, r * k as f32 / 3.0, Stroke::new(1.0_f32, holo::a(verified(), 0.18)));
         }
         let a = (ui.input(|i| i.time) as f32 * 1.6) % std::f32::consts::TAU;
-        p.line_segment([c, c + vec2(a.cos(), a.sin()) * r], Stroke::new(1.4_f32, VERIFIED.gamma_multiply(0.8)));
+        p.line_segment([c, c + vec2(a.cos(), a.sin()) * r], Stroke::new(1.4_f32, holo::a(live_c(), 0.8)));
         let history: Vec<Option<f32>> = hw().ping.iter().copied().collect();
         let n = history.len().max(1) as f32;
         for (i, ping) in history.iter().enumerate() {
             let angle = i as f32 / n * std::f32::consts::TAU;
             match ping {
                 Some(ms) => {
-                    p.circle_filled(c + vec2(angle.cos(), angle.sin()) * (ms / 120.0).clamp(0.08, 1.0) * r, 2.0, if *ms < 40.0 { VERIFIED } else if *ms < 90.0 { SINGLE } else { CONTRADICTION });
+                    p.circle_filled(c + vec2(angle.cos(), angle.sin()) * (ms / 120.0).clamp(0.08, 1.0) * r, 2.0, if *ms < 40.0 { verified() } else if *ms < 90.0 { single() } else { contradiction() });
                 }
                 None => {
-                    p.circle_filled(c + vec2(angle.cos(), angle.sin()) * r, 2.0, CONTRADICTION);
+                    p.circle_filled(c + vec2(angle.cos(), angle.sin()) * r, 2.0, contradiction());
                 }
             }
         }
-        p.text(rect.left_top(), Align2::LEFT_TOP, "PING", FontId::monospace(11.0), MUTED);
+        holo::text(&p, rect.left_top(), Align2::LEFT_TOP, Face::Label, "PING", 8.5, muted_c());
     });
     ui.add_space(4.0);
-    ui.label(RichText::new("TOP PROCESSES (RAM)").monospace().size(11.0).color(MUTED));
+    ui.label(label("TOP PROCESSES (RAM)", muted_c()));
     for (name, mb) in procs {
         ui.horizontal(|ui| {
-            ui.label(RichText::new(format!("{mb:>7.0} MB")).monospace().size(11.0).color(STARK_GOLD));
-            ui.label(RichText::new(name).monospace().size(11.0).color(TEXT));
+            ui.label(mono(format!("{mb:>7.0} MB"), 10.5, live_c()));
+            ui.label(mono(name, 10.5, text_c()));
         });
     }
 }
@@ -1727,9 +1736,9 @@ fn refresh_schedule(tools: ToolContext, rt: &Handle) {
                         let subject = if l.subject_long.trim().is_empty() { l.subject.clone() } else { l.subject_long.clone() };
                         let room = if l.rooms.is_empty() { String::new() } else { format!(" · {}", l.rooms.join("/")) };
                         let (tag, colour) = match l.status {
-                            LessonStatus::Cancelled => (" · CANCELLED", CONTRADICTION),
-                            LessonStatus::Irregular => (" · CHANGED", SINGLE),
-                            LessonStatus::Regular => ("", TEXT),
+                            LessonStatus::Cancelled => (" · CANCELLED", contradiction()),
+                            LessonStatus::Irregular => (" · CHANGED", single()),
+                            LessonStatus::Regular => ("", text_c()),
                         };
                         (format!("{}–{}  {subject}{room}{tag}", l.start.format("%H:%M"), l.end.format("%H:%M")), colour)
                     })
@@ -1758,38 +1767,38 @@ fn schedule_view(ui: &mut Ui, app: &Jai, rt: &Handle, fill: Color32) {
     refresh_schedule(app.tools().clone(), rt);
     let now = chrono::Local::now();
     crate::holo_block::faded_into(ui, egui::ScrollArea::vertical().id_salt("schedule_deck").auto_shrink([false; 2]), fill, |ui| {
-        ui.label(RichText::new(now.format("%A, %d %B · %H:%M").to_string()).strong().size(14.0).color(EMERALD));
+        ui.label(head(now.format("%A, %d %B · %H:%M").to_string(), 14.0, text_c()));
         ui.add_space(6.0);
         let s = schedule();
-        ui.label(RichText::new("TIMETABLE (WEBUNTIS)").monospace().size(11.0).color(MUTED));
+        ui.label(label("TIMETABLE (WEBUNTIS)", muted_c()));
         if s.loading && s.fetched_at.is_none() {
             let room = ui.available_rect_before_wrap();
             crate::holo_block::outline(ui, room.shrink(6.0), crate::holo_block::Outline::Lines);
         }
         for (line, colour) in &s.lessons {
-            ui.label(RichText::new(line).monospace().size(11.0).color(*colour));
+            ui.label(mono(line, 10.5, *colour));
         }
         if let Some(note) = &s.lesson_note {
             muted(ui, note);
         }
         ui.add_space(8.0);
-        ui.label(RichText::new("CALENDAR").monospace().size(11.0).color(MUTED));
+        ui.label(label("CALENDAR", muted_c()));
         for line in &s.events {
-            ui.label(RichText::new(line).monospace().size(11.0).color(TEXT));
+            ui.label(mono(line, 10.5, text_c()));
         }
         if let Some(note) = &s.event_note {
             muted(ui, note);
         }
         drop(s);
         ui.add_space(10.0);
-        ui.label(RichText::new("STARK PROTOCOLS").monospace().size(11.0).color(MUTED));
+        ui.label(label("STARK PROTOCOLS", muted_c()));
         let protocols = app.tools().protocols.list();
         if protocols.is_empty() {
             muted(ui, "No protocols yet — \"JAI, create a gaming protocol that …\"");
         }
         ui.horizontal_wrapped(|ui| {
             for p in protocols {
-                if pill(ui, &p.name.to_uppercase(), STARK_GOLD).on_hover_text(&p.description).clicked() {
+                if pill(ui, &p.name, live_c()).on_hover_text(&p.description).clicked() {
                     let app = app.clone();
                     let text = format!("engage {} protocol", p.name);
                     rt.spawn(async move {
@@ -1799,10 +1808,10 @@ fn schedule_view(ui: &mut Ui, app: &Jai, rt: &Handle, fill: Color32) {
             }
         });
         ui.add_space(8.0);
-        ui.label(RichText::new("MISSION PROFILES").monospace().size(11.0).color(MUTED));
+        ui.label(label("MISSION PROFILES", muted_c()));
         ui.horizontal_wrapped(|ui| {
             for scene in crate::spatial_scenes::builtin_scenes() {
-                if pill(ui, &scene.name.to_uppercase(), ARC_CYAN).on_hover_text(&scene.description).clicked() {
+                if pill(ui, &scene.name, holo::theme().deep()).on_hover_text(&scene.description).clicked() {
                     // Off the UI thread: loading re-arranges this very canvas.
                     let tools = app.tools().clone();
                     rt.spawn(async move {

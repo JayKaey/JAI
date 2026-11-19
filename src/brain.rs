@@ -372,7 +372,7 @@ fn static_tool(name: &str) -> Option<&'static str> {
         "create_or_update_widget", "open_website", "media_and_volume_control", "inspect_screen_or_selection",
         "send_whatsapp_message", "reply_to_last_whatsapp", "teleport_content", "launch_interactive_simulation", "adjust_simulation",
         "manage_voice_macro", "check_ride_and_commute_status", "get_precise_location_weather", "find_nearby_places_or_route",
-        "control_jai_interface", "configure_interface", "create_calendar_event", "control_orb_mode", "control_gui_aspect",
+        "control_jai_interface", "configure_interface", "create_calendar_event", "control_orb_mode",
         "control_audio_mixer", "set_listening_mode", "save_instant_replay", "open_jai_view",
         "spawn_multi_window_workspace", "control_spatial_window", "manage_spatial_scene", "manage_vram", "spawn_topic_knowledge_workspace",
         "hud_board", "undo_last_action", "discord_bot", "away_mode", "arrange_jai_window",
@@ -482,7 +482,7 @@ const COMPLETED_PREFIX: &str = "Finished in an earlier turn, nothing left to do:
 fn is_action_tool(name: &str) -> bool {
     matches!(
         name,
-        "configure_interface" | "control_jai_interface" | "control_orb_mode" | "control_gui_aspect" | "control_audio_mixer" | "set_listening_mode"
+        "configure_interface" | "control_jai_interface" | "control_orb_mode" | "control_audio_mixer" | "set_listening_mode"
             | "media_and_volume_control" | "control_music" | "open_application" | "close_application" | "window_management" | "move_window_to_monitor"
             | "place_application_window" | "spawn_native_window" | "update_native_window" | "close_native_window" | "customize_hud_and_windows"
             | "create_or_update_widget" | "remove_widget" | "launch_interactive_simulation" | "adjust_simulation" | "set_response_modality"
@@ -796,7 +796,7 @@ impl Brain {
              - Never do arithmetic or unit conversions in your head: call calculate. Reminders and timers: reminders / a CountdownOrStopwatch widget. 'Good morning', 'brief me', 'update me on my day': run_executive_briefing. Routines and workspaces: manage_stark_protocol (\"engage house party protocol\"); concentration: focus_mode.\n\
              - SCREEN vs CALENDAR: \"what's on my screen\", \"what do you see\", \"what am I looking at\" are about his monitor: inspect_screen_or_selection, never the calendar. The calendar is read only when he says calendar, schedule, events, appointments or Termine.\n\
              - SIMULATIONS: \"show me / simulate / plot / visualise it\", or a physics problem, function or algorithm Sir could watch → launch_interactive_simulation with concrete parameters from the conversation (a ball thrown 5 m up: projectile, angle 90, height 5, gravity 9.81); adjust_simulation moves its sliders. Never draw diagrams, ASCII art or fake visuals in the chat.\n\
-             - YOUR LOOK is always dark obsidian glass: \"darker\" means a deeper black background (control_gui_aspect background_darkness), never a light or neon colour; colour lives only in the accents (control_gui_aspect accent_theme). Pure orb mode: control_orb_mode. How you listen: set_listening_mode (hands_free / wake_word). App volumes: control_audio_mixer (\"Sonora to 30 %, Discord to 100 %\", \"mute Chrome\").\n\
+             - YOUR LOOK is light on black glass: the canvas is always black, and colour lives in the theme (configure_interface hud_palette, or accent_color for a colour of his own). Pure orb mode: control_orb_mode. How you listen: set_listening_mode (hands_free / wake_word). App volumes: control_audio_mixer (\"Sonora to 30 %, Discord to 100 %\", \"mute Chrome\").\n\
              - You can see and use Sir's desktop: inspect_screen_or_selection (his selection, the active window or any monitor), clipboard (read or copy), top_processes (what slows the PC), network_status, search_conversation (what you discussed before). The live context lists his monitors.\n\
              - FOLLOW-UPS: \"full screen\", \"maximize it\", \"close it\", \"move it to the left\" without a name mean the app or website in the Conversation focus line of the live context: call window_management WITHOUT target_window (fullscreen, maximize, snap_left …) or close_application with app_name \"it\". Never full-screen, minimise or close yourself unless Sir says \"yourself\" or \"JAI\". Your own views (Earth, radar, a simulation …): arrange_jai_window.\n\
              - Websites: open_website — direct_url (\"open YouTube\"), channel_or_profile (\"open BastiGHG on YouTube\", a Twitch streamer, a GitHub user, a subreddit), site_search (\"open YouTube and search for Minecraft\", \"RTX 3060 Ti on Kleinanzeigen\").\n\
@@ -811,7 +811,7 @@ impl Brain {
              - HUD BOARD: your screen is a board of sharp technical blocks (hud_board). \"Do a report on X\" or \"research X\" → hud_board research; when your chime has played and Sir says yes, present. Questions about what is on the board: answer from the HUD board lines of the live context with their exact figures and name the block you used. To recommend a place (\"where can I take my fiancée tonight?\"), venue_guide recommend with his words; \"let's go here\" → venue_guide go_here. \"Sign off\" and \"you can go to sleep\" clear the board (sign_off).\n\
              - Call tools through the tool interface only. Never write a call as text such as [tool_name arg=\"x\"], and never claim to have checked something you did not fetch: timetable, calendar, e-mail and message contents come only from their tools.\n\
              - NEVER REPEAT YOURSELF: answer Sir's newest message on its own words; do not restate facts from your last replies (the Recently said section lists them) and vary your openings (\"Right away, Sir.\", \"On it.\", \"Consider it done, Sir.\", \"At once.\") or answer straight away. Repeat yourself verbatim only when Sir asks you to.\n\
-             - Your look and your extra windows: customize_hud_and_windows (themes, opacity, borderless, always on top, font scale, Mini-HUD, panels). Your HUD's layout: control_jai_interface hides or shows panels (audio_devices, skills, telemetry, quick_pills, orb, memory, tool_log), declutters it (\"less full\", \"clean up the UI\"), zen mode (only the orb and the chat), orb size and font size — it changes the live window at once.\n\
+             - Your look and your extra windows: customize_hud_and_windows (themes, opacity, borderless, always on top, font scale, Mini-HUD). Your orb, text and window size: control_jai_interface, which changes the live window at once.\n\
              - Shut down, restart, mute your voice or sleep only through control_jai_lifecycle. It controls only you, never the computer.\n\
              - When Sir asks you to improve yourself, read your code with inspect_own_source, change it with patch_own_source (backed up and compile-checked) and rebuild with recompile_and_restart.\n\
              - Every message from Sir starts with a LIVE SYSTEM CONTEXT section (time, reply language, how he is talking to you, the foreground window, open apps, your windows and widgets, relevant memories). Use it; never read it out or mention it.\n\
@@ -1298,10 +1298,6 @@ impl Brain {
             // "Bring up everything you know about Spotify": the topic workspace, deterministically.
             self.inner.tools.focus.clear_offer();
             Some(Intent::Tool { name: "spawn_topic_knowledge_workspace", args: json!({ "topic": topic }) })
-        } else if let Some(args) = crate::oled_minimal_ui::voice_command(&text) {
-            // "Switch to Sci-Fi UI", "OLED mode", "accent electric blue".
-            self.inner.tools.focus.clear_offer();
-            Some(Intent::Tool { name: "configure_interface", args })
         } else if let Some(args) = crate::dynamic_popups::voice_command(&text) {
             // "Pin that pop-up", "dismiss pop-ups".
             self.inner.tools.focus.clear_offer();
@@ -2599,21 +2595,11 @@ impl Brain {
                 _ => None,
             },
             "get_system_status" => Some(spoken_reading(&self.inner.tools.monitor.latest(), args["reading"].as_str())),
-            "configure_interface" if args.get("background_shade").is_some() => {
-                let darker = args["background_shade"].as_f64().unwrap_or(0.0) > 0.0;
-                Some(match (darker, out.contains("already at its")) {
-                    (true, true) => "It is as deep as obsidian goes, Sir.".into(),
-                    (true, false) => "Done, Sir. A deeper shade of obsidian.".into(),
-                    (false, true) => "That is the lightest the glass goes, Sir. Any lighter would hurt your eyes.".into(),
-                    (false, false) => "Done, Sir. A touch lighter, still dark glass.".into(),
-                })
-            }
             "configure_interface" => {
                 Some(crate::interface::spoken_ack(args, &self.inner.config.read(|c| c.interface.clone())))
             }
             "control_orb_mode" if args["action"] == "status" => Some(out.to_string()),
             "control_orb_mode" => Some(crate::interface::orb_mode_ack(args, &self.inner.config.read(|c| c.interface.clone()))),
-            "control_gui_aspect" => Some(crate::interface::gui_aspect_ack(args, &self.inner.config.read(|c| c.interface.clone()))),
             "control_audio_mixer" => {
                 let line = crate::audio_mixer::ack(args, out);
                 (!line.is_empty()).then_some(line)
@@ -3002,7 +2988,7 @@ impl Brain {
                     // said the helmet was yellow).
                     let painted = crate::model3d::painted_thing(request);
                     let not_his = |name: &str, args: &Value| {
-                        const LOOK: &[&str] = &["theme", "preset", "style", "accent_color", "accent_colour", "accent", "color", "colour", "highlight_color", "background_color", "background_colour", "background", "backdrop"];
+                        const LOOK: &[&str] = &["theme", "preset", "style", "accent_color", "accent_colour", "accent", "color", "colour", "highlight_color", "hud_palette"];
                         painted.is_some() && name == "configure_interface" && LOOK.iter().any(|k| args.get(*k).is_some_and(|v| !v.is_null()))
                     };
                     // A guess: a call that creates, deletes or switches something, for an order
@@ -3968,9 +3954,6 @@ fn fast_before_the_parser(text: &str) -> Option<Fast> {
     }
     if let Some(topic) = crate::intent_engine::knowledge_workspace_topic(text) {
         return tool("spawn_topic_knowledge_workspace", json!({ "topic": topic }));
-    }
-    if let Some(args) = crate::oled_minimal_ui::voice_command(text) {
-        return tool("configure_interface", args);
     }
     if let Some(args) = crate::dynamic_popups::voice_command(text) {
         return tool("control_popups", args);

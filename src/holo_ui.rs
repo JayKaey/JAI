@@ -57,16 +57,6 @@ pub fn key_alert(ui: &mut Ui, label: impl Into<WidgetText>) -> Response {
     response
 }
 
-/// One of several values as a key: pressing it chooses `value`.
-pub fn choice<T: PartialEq>(ui: &mut Ui, current: &mut T, value: T, label: impl Into<WidgetText>) -> Response {
-    let mut response = key_on(ui, label, *current == value);
-    if response.clicked() && *current != value {
-        *current = value;
-        response.mark_changed();
-    }
-    response
-}
-
 /// A switch with what it switches written beside it.
 pub fn toggle(ui: &mut Ui, on: &mut bool, text: impl Into<WidgetText>) -> Response {
     let text = plain(text);
@@ -448,17 +438,6 @@ pub fn head(ui: &mut Ui, text: &str) -> Response {
         let drawn = holo::text(p, pos2(rect.left() + 10.0, rect.center().y), Align2::LEFT_CENTER, Face::Label, text, 8.0, t.muted());
         holo::rule(p, pos2(drawn.right() + 8.0, rect.center().y), pos2(rect.right() - 6.0, rect.center().y), a(t.ink(), 0.13));
     }
-    response
-}
-
-/// A numbered heading inside a panel (`holo_kit::section`).
-pub fn section(ui: &mut Ui, index: &str, title: &str) -> Response {
-    ui.add_space(6.0);
-    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width().max(80.0), 16.0), Sense::hover());
-    if ui.is_rect_visible(rect) {
-        kit::section(ui.painter(), rect.min, rect.width(), index, title, 1.0);
-    }
-    ui.add_space(2.0);
     response
 }
 

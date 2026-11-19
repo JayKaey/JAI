@@ -102,14 +102,6 @@ pub fn leader(core: Pos2, reach: f32, window: Rect) -> Option<(Pos2, Pos2)> {
     ((to - core).length() > reach + 24.0).then_some((from, to))
 }
 
-/// How far along its entrance a window is from the core to its place (0-1): it is thrown out
-/// of the core, fast first. Its frame at `t`: a point at the core growing into the window.
-pub fn thrown(core: Pos2, to: Rect, t: f32) -> Rect {
-    let e = crate::holo_motion::ease_out_expo(t);
-    let centre = core + (to.center() - core) * e;
-    Rect::from_center_size(centre, to.size() * (0.12 + 0.88 * e))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -177,9 +169,5 @@ mod tests {
         assert!(((from - c).length() - 200.0).abs() < 0.01);
         assert_eq!(to, pos2(1300.0, 315.0));
         assert!(leader(c, 200.0, Rect::from_center_size(c, vec2(600.0, 400.0))).is_none(), "a window over the core has none");
-        // Thrown out of the core: it starts there, small, and ends as the window.
-        assert_eq!(thrown(c, window, 1.0), window);
-        let start = thrown(c, window, 0.0);
-        assert!(start.center() == c && start.width() < 60.0, "{start:?}");
     }
 }

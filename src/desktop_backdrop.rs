@@ -5,9 +5,10 @@
 //! never the focus, draws ten frames a second and one while a game is in front. When the
 //! desktop will not take it, it closes again and says so.
 
+use crate::holo::Face;
 use crate::holo_core::{Core, Pose};
 use chrono::Local;
-use eframe::egui::{self, pos2, vec2, Align2, Color32, FontFamily, FontId, ViewportBuilder, ViewportId};
+use eframe::egui::{self, pos2, vec2, Align2, ViewportBuilder, ViewportId};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -205,8 +206,8 @@ fn paint(ctx: &egui::Context, emblem: &Core, state: &str) {
     let now = Local::now().naive_local();
     let accent = crate::hud_board::active_colour();
     let top = pos2(frame.centre.x, frame.centre.y + frame.radius * 1.3);
-    let clock = p.text(top, Align2::CENTER_TOP, now.format("%H:%M").to_string(), FontId::new(72.0, FontFamily::Name("display".into())), Color32::from_rgb(0xE8, 0xF2, 0xFC));
-    let date = p.text(pos2(top.x, clock.bottom() + 2.0), Align2::CENTER_TOP, crate::idle_screen::date_line(now).to_uppercase(), FontId::monospace(12.0), accent.gamma_multiply(0.9));
+    let clock = crate::holo::text(&p, top, Align2::CENTER_TOP, Face::Figure, &now.format("%H:%M").to_string(), 72.0, crate::holo::theme().ink());
+    let date = crate::holo::text(&p, pos2(top.x, clock.bottom() + 2.0), Align2::CENTER_TOP, Face::Label, &crate::idle_screen::date_line(now), 10.0, accent);
     let word = match state {
         "listening" => "LISTENING",
         "thinking" => "THINKING",
@@ -214,7 +215,7 @@ fn paint(ctx: &egui::Context, emblem: &Core, state: &str) {
         _ => "",
     };
     if !word.is_empty() {
-        p.text(pos2(top.x, date.bottom() + 14.0), Align2::CENTER_TOP, word, FontId::monospace(11.0), Color32::WHITE);
+        crate::holo::text(&p, pos2(top.x, date.bottom() + 14.0), Align2::CENTER_TOP, Face::Label, word, 9.0, crate::holo::theme().hot());
     }
 }
 
@@ -229,11 +230,11 @@ pub fn paint_dashboard(ctx: &egui::Context, emblem: &Core, state: &str, dash: &c
     let frame = emblem.frame(head);
     let now = Local::now().naive_local();
     let accent = crate::hud_board::active_colour();
-    let ink = Color32::from_rgb(0xE8, 0xF2, 0xFC);
-    let muted = Color32::from_rgb(0x8E, 0xA4, 0xB8);
+    let ink = crate::holo::theme().ink();
+    let muted = crate::holo::theme().muted();
     let top = pos2(frame.centre.x, frame.centre.y + frame.radius * 1.3);
-    let clock = p.text(top, Align2::CENTER_TOP, now.format("%H:%M").to_string(), FontId::new(84.0, FontFamily::Name("display".into())), ink);
-    let date = p.text(pos2(top.x, clock.bottom() + 2.0), Align2::CENTER_TOP, crate::idle_screen::date_line(now).to_uppercase(), FontId::monospace(13.0), accent.gamma_multiply(0.9));
+    let clock = crate::holo::text(&p, top, Align2::CENTER_TOP, Face::Figure, &now.format("%H:%M").to_string(), 84.0, ink);
+    let date = crate::holo::text(&p, pos2(top.x, clock.bottom() + 2.0), Align2::CENTER_TOP, Face::Label, &crate::idle_screen::date_line(now), 10.0, accent);
     let word = match state {
         "listening" => "LISTENING",
         "thinking" => "THINKING",
@@ -242,7 +243,7 @@ pub fn paint_dashboard(ctx: &egui::Context, emblem: &Core, state: &str, dash: &c
     };
     let mut y = date.bottom() + 12.0;
     if !word.is_empty() {
-        y = p.text(pos2(top.x, y), Align2::CENTER_TOP, word, FontId::monospace(11.0), Color32::WHITE).bottom() + 8.0;
+        y = crate::holo::text(&p, pos2(top.x, y), Align2::CENTER_TOP, Face::Label, word, 9.0, crate::holo::theme().hot()).bottom() + 8.0;
     }
     // The sections: a column with the same margin left and right.
     let margin = (screen.width() * 0.09).clamp(28.0, 110.0);
@@ -252,12 +253,12 @@ pub fn paint_dashboard(ctx: &egui::Context, emblem: &Core, state: &str, dash: &c
         if lines.is_empty() || *y > screen.bottom() - 120.0 {
             return;
         }
-        p.text(pos2(left, *y), Align2::LEFT_TOP, title, FontId::monospace(11.0), accent);
+        crate::holo::text(&p, pos2(left, *y), Align2::LEFT_TOP, Face::Label, title, 9.0, accent);
         *y += 18.0;
         p.line_segment([pos2(left, *y), pos2(right, *y)], egui::Stroke::new(1.0f32, crate::holo::a(crate::holo::theme().ink(), 0.10)));
         *y += 10.0;
         for line in lines {
-            let galley = p.layout(line.clone(), FontId::new(19.0, FontFamily::Name("label".into())), ink, right - left);
+            let galley = p.layout(line.clone(), crate::holo::font(Face::Body, 19.0), ink, right - left);
             if *y + galley.size().y > screen.bottom() - 70.0 {
                 break;
             }
@@ -277,7 +278,7 @@ pub fn paint_dashboard(ctx: &egui::Context, emblem: &Core, state: &str, dash: &c
     }
     section("LATELY", &dash.notices, &mut y);
     // Whom he answers to, and the other short states, along the foot.
-    p.text(pos2(screen.center().x, screen.bottom() - 44.0), Align2::CENTER_CENTER, dash.states.join("     \u{00B7}     "), FontId::monospace(11.0), muted);
+    crate::holo::text(&p, pos2(screen.center().x, screen.bottom() - 44.0), Align2::CENTER_CENTER, Face::Mono, &dash.states.join("     \u{00B7}     "), 11.0, muted);
 }
 
 #[cfg(test)]

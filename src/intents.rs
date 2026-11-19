@@ -3,7 +3,7 @@
 //! open/close apps, window actions, time/date and system status. Everything else goes to the
 //! LLM with native tool calling.
 
-use crate::interface::{self, HudLayout, HudPanel, WindowCommand};
+use crate::interface::{self, HudLayout, WindowCommand};
 use regex::Regex;
 use serde_json::{json, Value};
 use std::sync::LazyLock;
@@ -1355,8 +1355,7 @@ pub fn normalize_phrase(text: &str) -> String {
 }
 
 /// Spoken layout commands for the HUD (`control_jai_interface` arguments), classified on Sir's
-/// own words: "make the interface less full", "remove the audio devices tab and the skills
-/// tab", "bring back the audio settings", "make the orb bigger", "zen mode".
+/// own words: "make the orb bigger", "the orb at 150 percent".
 pub fn ui_layout_command(text: &str) -> Option<Value> {
     let s = normalize(text);
     if s.is_empty() || s.split_whitespace().count() > 32 {
@@ -3277,7 +3276,7 @@ static HUD_WINDOWED: LazyLock<Regex> = LazyLock::new(|| {
 static HUD_SETTINGS: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(?:open|show|bring up|pull up|show me|display)\s+(?:me\s+)?(?:(?:the|your|my)\s+)?(?:interface\s+|hud\s+|gui\s+|design\s+|look\s+|appearance\s+)?(?:settings|options|preferences|settings window|settings menu)$|^(?:öffne|oeffne|zeig|zeige)\s+(?:mir\s+)?(?:die\s+|deine\s+)?(?:interface[- ]?|design[- ]?)?einstellungen$|^einstellungen\s+(?:öffnen|oeffnen|zeigen)$")
 });
-/// "Make it darker", "a bit lighter", "mach es dunkler": the depth of the dark-glass background.
+/// "Make it darker", "a bit lighter", "mach es dunkler": dimmer or brighter light.
 static HUD_SHADE: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(?:make|turn|set|go)\s+(?:it|this|the (?:interface|background|hud|gui|ui|theme|window|design|colou?rs?)|your (?:interface|background|window|hud)|everything|yourself|the whole (?:thing|interface))\s+(?:a\s+(?:bit|little|lot)\s+|much\s+|even\s+|slightly\s+|way\s+)?(darker|lighter|brighter|deeper|blacker)$|^(?:a\s+(?:bit|little)\s+|much\s+|even\s+)?(darker|lighter|brighter)(?:\s+(?:please|still))?$|^(?:mach|mache)\s+(?:es|das|den hintergrund|das interface|die oberfläche|alles|dich|das design)\s+(?:etwas\s+|noch\s+|ein bisschen\s+|viel\s+)?(dunkler|heller)$|^(?:noch\s+|etwas\s+)?(dunkler|heller)$")
 });
@@ -3412,16 +3411,12 @@ fn layout_and_theme_command(s: &str) -> Option<Value> {
 static HUD_COLOUR_DE: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(?:mach|mache|färbe|färb|faerbe|stell|stelle|setz|setze|ändere|änder|aendere|wechsel|wechsle)\s+(?:(?:das|die|den|dein|deine|deinen|mein|meine)\s+)?(?:(?:interface|gui|ui|hud|oberfläche|oberflaeche|design|farbe|farben|akzentfarbe|anzeige|fenster|theme|thema|bildschirm|dich|alles|aussehen|reaktor)\s+)?(?:(?:auf|zu|in|nach)\s+)?(.+?)$")
 });
-static HUD_PANEL_HIDE: LazyLock<Regex> = LazyLock::new(|| {
-    // Not "minimize": "minimize everything" means the desktop.
-    re(r"^(?:hide|close|remove|collapse|turn off|switch off|disable|get rid of)\s+(?:(?:the|your|my)\s+)?(.+?)$|^(?:versteck|verstecke|verberge|verbirg|schließ|schließe|schliess|schliesse|entferne|entfern)\s+(?:(?:den|die|das|dein|deine|deinen)\s+)?(.+?)$")
-});
-static HUD_PANEL_SHOW: LazyLock<Regex> = LazyLock::new(|| {
-    re(r"^(?:show|open|display|bring back|restore|turn on|switch on|enable|unhide|expand|reveal)\s+(?:me\s+)?(?:(?:the|your|my)\s+)?(.+?)(?:\s+again)?$|^(?:zeig|zeige|öffne|oeffne|öffn)\s+(?:mir\s+)?(?:(?:den|die|das|dein|deine|deinen)\s+)?(.+?)(?:\s+(?:wieder an|wieder|an))?$")
-});
-/// "Blende das Systempanel aus", "Chat einblenden".
-static HUD_PANEL_DE: LazyLock<Regex> = LazyLock::new(|| {
-    re(r"^(?:blende|blend)\s+(?:(?:den|die|das|dein|deine|deinen)\s+)?(.+?)\s+(aus|ein)$|^(?:(?:den|die|das|dein|deine|deinen)\s+)?(.+?)\s+(ausblenden|verstecken|schließen|schliessen|einblenden|anzeigen|zeigen|öffnen|oeffnen)$")
+
+/// "Close the chat", "show me the conversation again", "blende den Chat aus": the block that
+/// holds what was said. (Group 1 or 2: it goes away. The words were a panel's once, and must
+/// never reach the chat *application*: "chat" is Discord to the app closer.)
+static HUD_CHAT: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"^(?:(hide|close|remove|turn off|switch off|disable|get rid of)|show|open|display|bring back|restore|turn on|switch on|enable)\s+(?:me\s+)?(?:(?:the|your|my)\s+)?(?:chat|conversation|comms)(?:\s+(?:block|panel|window))?(?:\s+again)?$|^(?:blende\s+|blend\s+)?(?:(?:den|das|die|dein|deinen)\s+)?(?:chat|gespräch|unterhaltung)\s+(?:(aus|ausblenden|verstecken|schließen|schliessen)|ein|einblenden|anzeigen|zeigen|öffnen)$")
 });
 
 /// First non-empty capture group.
@@ -3432,14 +3427,13 @@ fn capture<'t>(c: &regex::Captures<'t>) -> Option<&'t str> {
 /// A theme, layout or colour named in a request → `configure_interface` arguments.
 fn look_args(name: &str, prefer_layout: bool) -> Option<Value> {
     let layout = || HudLayout::parse(name).map(|l| json!({ "layout": l.id() }));
-    let theme = || interface::theme(name).map(|_| json!({ "theme": name }));
     let colour = || interface::parse_color(name).map(|_| json!({ "accent_color": name }));
-    // "Make the theme rose", "switch to the rose theme": a palette by its colour word.
-    let palette = || crate::holo_theme::preset_for_word(name).map(|preset| json!({ "hud_palette": preset }));
+    // A theme by a word that is no colour: "rose", "iron man", "dark", "arc reactor".
+    let theme = || crate::holo_theme::preset_for_word(name).map(|preset| json!({ "hud_palette": preset }));
     if prefer_layout {
-        layout().or_else(theme).or_else(colour).or_else(palette)
+        layout().or_else(colour).or_else(theme)
     } else {
-        theme().or_else(colour).or_else(layout).or_else(palette)
+        colour().or_else(theme).or_else(layout)
     }
 }
 
@@ -3513,11 +3507,11 @@ fn interface_command(s: &str) -> Option<Value> {
     if HUD_WINDOWED.is_match(s) {
         return Some(json!({ "fullscreen": false }));
     }
-    // "Make it darker": a deeper obsidian, never a light colour.
+    // "Make it darker": the canvas is black as it is, so the light steps back (the dim grey
+    // theme); "lighter" is white light. Never a light canvas.
     if let Some(c) = HUD_SHADE.captures(s) {
         let darker = matches!(capture(&c)?, "darker" | "deeper" | "blacker" | "dunkler" | "dark" | "more dark" | "noch dunkler");
-        let amount = if s.contains("much") || s.contains("viel") || s.contains("a lot") { 0.3 } else { 0.15 };
-        return Some(json!({ "background_shade": if darker { amount } else { -amount } }));
+        return Some(json!({ "theme": if darker { "dark" } else { "light" } }));
     }
     for re in [&*HUD_ZOOM, &*HUD_TEXT_SIZE] {
         if let Some(c) = re.captures(s) {
@@ -3554,9 +3548,10 @@ fn interface_command(s: &str) -> Option<Value> {
     if HUD_ONLY_ORB.is_match(s) {
         return Some(json!({ "layout": "orb" }));
     }
+    // "A red background": the canvas stays black, the light takes the colour.
     if let Some(name) = HUD_BACKGROUND.captures(s).as_ref().and_then(capture) {
         if interface::parse_color(name).is_some() {
-            return Some(json!({ "background_color": name }));
+            return Some(json!({ "accent_color": name }));
         }
     }
     if let Some(args) = layout_and_theme_command(s) {
@@ -3573,23 +3568,8 @@ fn interface_command(s: &str) -> Option<Value> {
             return Some(args);
         }
     }
-    if let Some(c) = HUD_PANEL_DE.captures(s) {
-        // Groups 1/2: "blende … aus/ein"; groups 3/4: "… ausblenden/einblenden".
-        let (name, verb) = match (c.get(1), c.get(2), c.get(3), c.get(4)) {
-            (Some(n), Some(v), _, _) | (_, _, Some(n), Some(v)) => (n.as_str(), v.as_str()),
-            _ => return None,
-        };
-        if !HudPanel::parse(name).is_empty() {
-            let show = matches!(verb, "ein" | "einblenden" | "anzeigen" | "zeigen" | "öffnen" | "oeffnen");
-            return Some(json!({ if show { "show_panels" } else { "hide_panels" }: [name] }));
-        }
-    }
-    for (re, key) in [(&*HUD_PANEL_HIDE, "hide_panels"), (&*HUD_PANEL_SHOW, "show_panels")] {
-        if let Some(name) = re.captures(s).as_ref().and_then(capture) {
-            if !HudPanel::parse(name).is_empty() {
-                return Some(json!({ key: [name] }));
-            }
-        }
+    if let Some(c) = HUD_CHAT.captures(s) {
+        return Some(json!({ "comms_block": c.get(1).or(c.get(2)).is_none() }));
     }
     None
 }
@@ -3807,10 +3787,10 @@ fn window_style_command(s: &str) -> Option<Intent> {
         "smaller text" | "text smaller" => style(json!({ "font_scale": "smaller" })),
         other => {
             let name = other.trim_end_matches(" theme").trim_end_matches(" colour").trim_end_matches(" color");
-            if interface::theme(name).is_some() {
-                style(json!({ "theme": name }))
-            } else if interface::parse_color(name).is_some() {
+            if interface::parse_color(name).is_some() {
                 style(json!({ "accent_color": name }))
+            } else if crate::holo_theme::preset_for_word(name).is_some() {
+                style(json!({ "theme": name }))
             } else {
                 None
             }
@@ -5817,7 +5797,7 @@ mod tests {
         for said in ["Hide the words beside the orb", "JAI, show the words next to the orb", "Make the corner orb smaller", "Hide the clock"] {
             assert_eq!(ui_layout_command(said), None, "{said}");
         }
-        assert!(ui_layout_command("Hide the system panel").is_some() && ui_layout_command("Make the orb bigger").is_some(), "the layout keeps its own words");
+        assert!(ui_layout_command("Make the orb bigger").is_some(), "the orb keeps its own words");
         // Nor does any other router that is asked before the fast path take the new words.
         for said in ["Show me a clock", "Hide the clock", "Clock with seconds", "12 hour clock", "What's next?", "What comes next today?", "Hide the words beside the orb", "Make the corner orb smaller", "Keep the console on top", "Put the console on the left half", "Move the text console to another monitor"] {
             assert!(mixer_command(said).is_none() && internal_view_command(said).is_none() && ui_layout_command(said).is_none(), "{said}");
@@ -5876,16 +5856,16 @@ mod tests {
         assert_eq!(hud("Mach das Interface rot"), Some(json!({"accent_color": "rot"})));
         assert_eq!(hud("Ändere die Farbe zu Grün"), Some(json!({"accent_color": "grün"})));
         assert_eq!(hud("Switch to the Iron Man theme"), Some(json!({"hud_palette": "hot_rod"})));
-        assert_eq!(hud("Dark mode"), Some(json!({"theme": "dark"})));
+        assert_eq!(hud("Dark mode"), Some(json!({"hud_palette": "graphite"})));
         assert_eq!(hud("Compact mode"), Some(json!({"layout": "compact"})));
         assert_eq!(hud("Kompaktmodus"), Some(json!({"layout": "compact"})));
-        assert_eq!(hud("Make the background dark blue"), Some(json!({"background_color": "dark blue"})));
-        assert_eq!(hud("Roter Hintergrund"), Some(json!({"background_color": "roter"})));
-        assert_eq!(hud("Hide the system panel"), Some(json!({"hide_panels": ["system panel"]})));
-        assert_eq!(hud("Close the chat"), Some(json!({"hide_panels": ["chat"]})));
-        assert_eq!(hud("Show me the tool log again"), Some(json!({"show_panels": ["tool log"]})));
-        assert_eq!(hud("Blende das Gedächtnis aus"), Some(json!({"hide_panels": ["gedächtnis"]})));
-        assert_eq!(hud("Skills einblenden"), Some(json!({"show_panels": ["skills"]})));
+        // "The chat" is his conversation block, never the chat application (Discord).
+        for (said, shown) in [("Close the chat", false), ("Hide the conversation", false), ("Show me the chat again", true), ("Open the comms block", true), ("Blende den Chat aus", false), ("Chat einblenden", true)] {
+            assert_eq!(hud(said), Some(json!({"comms_block": shown})), "{said}");
+        }
+        assert!(matches!(tool("Close Discord"), Some(("close_application", _))), "an application by its name is still closed");
+        assert_eq!(hud("Make the background dark blue"), Some(json!({"accent_color": "dark blue"})));
+        assert_eq!(hud("Roter Hintergrund"), Some(json!({"accent_color": "roter"})));
         assert_eq!(hud("Make the text bigger"), Some(json!({"scale": "bigger"})));
         assert_eq!(hud("Zoom out"), Some(json!({"scale": "smaller"})));
         assert_eq!(hud("Set the zoom to 125 percent"), Some(json!({"scale": 1.25})));
@@ -5899,7 +5879,6 @@ mod tests {
         // "Just the orb" is pure orb mode now (the floating orb, not the orb layout in a window).
         assert_eq!(tool("Just the orb"), Some(("control_orb_mode", json!({"enabled": true}))));
         assert_eq!(hud("Nur den Reaktor"), Some(json!({"layout": "orb"})));
-        assert_eq!(hud("Hide everything"), Some(json!({"hide_panels": ["everything"]})));
         assert_eq!(hud("Reset the interface"), Some(json!({"reset": true})));
         assert_eq!(hud("Show yourself"), Some(json!({"window": "show"})));
         assert_eq!(hud("Versteck dich"), Some(json!({"window": "hide"})));
@@ -5909,26 +5888,13 @@ mod tests {
     }
 
     #[test]
-    fn layout_goals_and_panel_requests_act_at_once() {
+    fn the_orbs_size_is_set_at_once_and_nothing_else_is_the_layouts() {
         let ui = |text: &str| ui_layout_command(text);
-        assert_eq!(ui("Just make the overall interface less full."), Some(json!({"action": "declutter"})));
-        assert_eq!(ui("Can you make the interface cleaner?"), Some(json!({"action": "declutter"})));
-        assert_eq!(ui("Clean up the UI"), Some(json!({"action": "declutter"})));
-        assert_eq!(ui("Optimise my layout"), Some(json!({"action": "declutter"})));
-        assert_eq!(
-            ui("Just leave the normal chat window, but remove the Audio Devices tab and the Skills tab, please."),
-            Some(json!({"action": "hide_panel", "target_panel": ["audio_devices", "skills"]}))
-        );
-        assert_eq!(ui("JAI, can you disable the Audio Devices tab from the interface?"), Some(json!({"action": "hide_panel", "target_panel": ["audio_devices"]})));
-        assert_eq!(ui("Bring back the Audio settings"), Some(json!({"action": "show_panel", "target_panel": ["audio_devices"]})));
-        assert_eq!(ui("Turn off the telemetry"), Some(json!({"action": "hide_panel", "target_panel": ["telemetry"]})));
         assert_eq!(ui("Make the orb bigger"), Some(json!({"action": "orb_bigger"})));
         assert_eq!(ui("Make the sphere smaller"), Some(json!({"action": "orb_smaller"})));
         assert_eq!(ui("Set the orb size to 150 percent"), Some(json!({"action": "set_orb_scale", "scale_value": 1.5})));
-        assert_eq!(ui("Zen mode"), Some(json!({"action": "zen_mode_on"})));
-        assert_eq!(ui("Exit zen mode"), Some(json!({"action": "zen_mode_off"})));
-        assert_eq!(ui("Show all panels again"), Some(json!({"action": "restore_all"})));
-        for text in ["Open Spotify", "Close Discord", "Turn off the microphone", "Show me the weather", "Clean up my downloads folder", "Remove the reminder"] {
+        // (Panels and a zen mode were settings no part of the HUD read any more: gone.)
+        for text in ["Open Spotify", "Close Discord", "Turn off the microphone", "Show me the weather", "Clean up my downloads folder", "Remove the reminder", "Zen mode", "Hide the system panel"] {
             assert_eq!(ui(text), None, "{text}");
         }
         assert_eq!(tool("Pick some good music"), Some(("control_music", json!({"action": "pick_music"}))));
@@ -6090,7 +6056,8 @@ mod tests {
         assert_eq!(style("Make that window transparent"), json!({"opacity": 0.6, "target": "focus"}));
         assert_eq!(style("Make the second window borderless"), json!({"borderless": true, "target": "focus"}));
         assert_eq!(style("Make that window red"), json!({"accent_color": "red", "target": "focus"}));
-        assert_eq!(style("Make that window emerald"), json!({"theme": "emerald", "target": "focus"}));
+        assert_eq!(style("Make that window emerald"), json!({"accent_color": "emerald", "target": "focus"}));
+        assert_eq!(style("Make that window arc reactor"), json!({"theme": "arc reactor", "target": "focus"}));
         assert_eq!(style("Pin that window"), json!({"always_on_top": true, "target": "focus"}));
         assert_eq!(style("Unpin that window"), json!({"always_on_top": false, "target": "focus"}));
         // "The window" / "your window" is still the HUD.
@@ -6691,10 +6658,10 @@ mod tests {
             Some(("configure_interface", args)) => Some(args),
             _ => None,
         };
-        assert_eq!(hud("Make it darker"), Some(json!({"background_shade": 0.15})));
-        assert_eq!(hud("Make the interface a lot darker"), Some(json!({"background_shade": 0.3})));
-        assert_eq!(hud("mach es dunkler"), Some(json!({"background_shade": 0.15})));
-        assert_eq!(hud("A bit lighter"), Some(json!({"background_shade": -0.15})));
+        assert_eq!(hud("Make it darker"), Some(json!({"theme": "dark"})));
+        assert_eq!(hud("Make the interface a lot darker"), Some(json!({"theme": "dark"})));
+        assert_eq!(hud("mach es dunkler"), Some(json!({"theme": "dark"})));
+        assert_eq!(hud("A bit lighter"), Some(json!({"theme": "light"})));
         for text in ["Change the interface back to default", "Change it back to those default", "back to the defaults", "Reset the interface", "Stell alles wieder auf Standard"] {
             assert_eq!(hud(text), Some(json!({"reset": true})), "{text}");
         }
@@ -6759,7 +6726,7 @@ mod tests {
         // Small talk stays small talk.
         assert_eq!(parse("What's up?"), None);
         assert_eq!(tool("What's up on the board?"), Some(("whats_open", json!({}))));
-        assert_eq!(tool("Make the accents gold"), Some(("configure_interface", json!({"theme": "gold"}))));
+        assert_eq!(tool("Make the accents gold"), Some(("configure_interface", json!({"accent_color": "gold"}))));
         assert_eq!(tool("Find my jai config file").unwrap().1["query"], "jai config");
         assert_eq!(tool("Find my tax pdf").unwrap().1["query"], "tax pdf");
         // "What's playing" is the song, not the mixer.
@@ -7359,7 +7326,7 @@ mod tests {
             assert!(crate::intent_engine::deterministic_action(&said).is_none(), "{text}: a window action");
             assert!(silent_quick_command(&said).is_none(), "{text}: a quick command");
             assert!(hud_view_command(&said).is_none() && outing_command(&said).is_none(), "{text}: a HUD view");
-            assert!(crate::oled_minimal_ui::voice_command(&said).is_none() && crate::dynamic_popups::voice_command(&said).is_none(), "{text}: the look");
+            assert!(crate::dynamic_popups::voice_command(&said).is_none(), "{text}: the look");
             assert!(orb_mode_command(&said).is_none() && listening_mode_command(&said).is_none() && mixer_command(&said).is_none(), "{text}: a mode");
             assert!(internal_view_command(&said).is_none() && ui_layout_command(&said).is_none(), "{text}: a view");
             assert!(crate::modality::parse_command(&said).is_none(), "{text}: the reply mode");

@@ -3,9 +3,10 @@
 //! goes through `audio_mixer::slide` (a drag is a hundred changes a second), a mute key through
 //! `control_audio_mixer`, the way a spoken request goes.
 
-use super::{rgba, stroke, strip_font, strip_ink, strip_muted};
+use super::{strip_ink, strip_muted};
 use crate::audio_mixer::Channel;
-use eframe::egui::{self, Frame, Margin, RichText, Rounding, Ui, ViewportBuilder, ViewportClass, ViewportCommand, ViewportId};
+use crate::holo::Face;
+use eframe::egui::{self, Frame, Margin, RichText, Ui, ViewportBuilder, ViewportClass, ViewportCommand, ViewportId};
 use serde_json::json;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -21,9 +22,6 @@ const READ_EVERY: Duration = Duration::from_millis(500);
 /// A fader stays where his hand left it this long (the device takes a moment to say so itself).
 const HELD_FOR: Duration = Duration::from_millis(900);
 const FADER_WIDTH: f32 = 240.0;
-/// The mute key: "MUTED" in the strip's font.
-const KEY_SIZE: [f32; 2] = [74.0, 22.0];
-
 static OPEN: AtomicBool = AtomicBool::new(false);
 /// A reading is under way.
 static READING: AtomicBool = AtomicBool::new(false);
@@ -72,7 +70,7 @@ fn refresh(rt: &Handle) {
 /// One channel: its name, its fader, its level and its mute key.
 fn row(ui: &mut Ui, channel: &mut Channel, rt: &Handle) {
     let touched = || *lock(&LAST_TOUCH) = Some(Instant::now());
-    ui.label(RichText::new(channel.label.to_uppercase()).font(strip_font()).color(strip_ink()));
+    ui.label(RichText::new(channel.label.to_uppercase()).font(crate::holo::font(Face::Label, 9.0)).color(strip_ink()));
     ui.spacing_mut().slider_width = FADER_WIDTH;
     let mut level = f32::from(channel.percent);
     if ui.add(crate::holo_ui::Slider::new(&mut level, 0.0..=100.0).show_value(false)).changed() {
@@ -81,7 +79,7 @@ fn row(ui: &mut Ui, channel: &mut Channel, rt: &Handle) {
         let (target, percent) = (channel.target.clone(), channel.percent);
         rt.spawn(async move { crate::audio_mixer::slide(&target, percent).await });
     }
-    ui.label(RichText::new(format!("{:>3} %", channel.percent)).font(strip_font()).color(strip_muted()));
+    ui.label(RichText::new(format!("{:>3} %", channel.percent)).font(crate::holo::font(Face::Mono, 11.0)).color(strip_muted()));
     if crate::holo_ui::key_on(ui, if channel.muted { "MUTED" } else { "MUTE" }, channel.muted).clicked() {
         channel.muted = !channel.muted;
         touched();
@@ -104,7 +102,7 @@ fn body(ui: &mut Ui, rt: &Handle) {
     ui.ctx().request_repaint_after(READ_EVERY);
     let mut channels = lock(&CHANNELS);
     if channels.is_empty() {
-        ui.label(RichText::new("READING THE MIXER").font(strip_font()).color(strip_muted()));
+        ui.label(RichText::new("READING THE MIXER").font(crate::holo::font(Face::Label, 9.0)).color(strip_muted()));
         return;
     }
     // (A block the dock made narrower scrolls sideways instead of squeezing its faders.)
@@ -185,10 +183,12 @@ mod tests {
             channel("discord", "Discord", 5, true),
             channel("applicationframehost", "Application Frame Host", 40, false),
         ];
+        let _look = crate::holo_theme::look_for_pictures();
         let mut stage = Stage::new(egui::vec2(760.0, 420.0));
         let frame = stage.frames(4, &mut |ctx| {
             egui::Window::new("mixer").title_bar(false).fixed_pos(egui::pos2(20.0, 20.0)).fixed_size(egui::vec2(640.0, 320.0)).show(ctx, |ui| rows(ui, &mut channels, runtime.handle()));
         });
+        stage.raster(&frame).save("panel_mixer");
         assert_eq!(visual::clipped_text(&frame), Vec::<String>::new());
         assert_eq!(visual::text_over_text(&frame), Vec::<String>::new());
         for shown in ["MASTER", "DISCORD", "100 %", "5 %", "MUTED", "MUTE"] {

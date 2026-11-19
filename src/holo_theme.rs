@@ -94,21 +94,28 @@ pub fn label(name: &str) -> String {
 
 /// The preset a spoken colour word means (English and German).
 pub fn preset_for_word(word: &str) -> Option<&'static str> {
-    let w = word.trim().to_lowercase();
+    let w = word.trim().to_lowercase().replace(['_', '-'], " ");
     let w = w.trim_end_matches(['.', '!', '?']);
     if let Some(name) = preset_name(w) {
         return Some(name);
     }
+    // (With the words the themes before the hologram interface went by: "mark 42", "stealth".)
     Some(match w {
-        "yellow" | "gelb" | "gold" | "golden" | "golden yellow" | "goldgelb" | "jai" | "jai gold" | "jai yellow" | "default" | "standard" | "stark" => "stark_gold",
-        "white" | "weiß" | "weiss" | "black and white" | "schwarz weiß" | "schwarz weiss" | "schwarzweiß" | "monochrome" | "silver" | "silber" | "ice" | "eis" => "mono",
-        "cyan" | "blue" | "blau" | "türkis" | "tuerkis" | "turquoise" | "aqua" | "arc" | "hellblau" => "arc_reactor",
+        "yellow" | "gelb" | "gold" | "golden" | "golden yellow" | "goldgelb" | "jai" | "jai gold" | "jai yellow" | "default" | "standard" | "classic" | "original" | "normal"
+        | "stark" | "tony stark" | "stark hud" => "stark_gold",
+        "white" | "weiß" | "weiss" | "black" | "schwarz" | "black and white" | "schwarz und weiß" | "schwarz und weiss" | "schwarz weiß" | "schwarz weiss" | "schwarzweiß"
+        | "monochrome" | "monochrom"
+        | "minimal monochrome" | "silver" | "silber" | "ice" | "eis" | "arctic" | "frost" | "snow" | "polar" | "light" | "bright" | "white mode" => "mono",
+        "cyan" | "blue" | "blau" | "türkis" | "tuerkis" | "turquoise" | "aqua" | "arc" | "hellblau" | "stark cyan" | "stark industries" | "midnight" | "mitternacht"
+        | "ocean" | "deep blue" => "arc_reactor",
         // ("Make the interface rows": the recogniser's "rose".)
-        "red" | "rot" | "blood red" | "blutrot" | "crimson" | "stark red" | "iron man" | "rose" | "roses" | "rows" | "pink" | "magenta" | "rosa" | "pinke" => "hot_rod",
-        "green" | "grün" | "gruen" | "emerald" | "smaragd" | "matrix" | "hulk" | "banner" => "gamma",
-        "purple" | "violet" | "lila" | "violett" | "lilac" | "ultraviolet" => "vibranium",
-        "orange" | "amber" | "bernstein" | "solar" => "ember",
-        "grey" | "gray" | "grau" | "steel" | "stahl" | "graphit" => "graphite",
+        "red" | "rot" | "blood red" | "blutrot" | "crimson" | "crimson red" | "crimson mk42" | "stark red" | "iron man" | "ironman" | "mark 42" | "mark42" | "mark xlii"
+        | "red and gold" | "red gold" | "rot gold" | "gold and red" | "gold red" | "rose" | "roses" | "rows" | "pink" | "magenta" | "rosa" | "pinke" => "hot_rod",
+        "green" | "grün" | "gruen" | "emerald" | "smaragd" | "matrix" | "matrix green" | "hacker" | "hulk" | "banner" => "gamma",
+        "purple" | "violet" | "lila" | "violett" | "lilac" | "ultraviolet" | "amethyst" | "purple haze" | "vision" => "vibranium",
+        "orange" | "amber" | "bernstein" | "solar" | "sunset" | "sonnenuntergang" | "hulkbuster" => "ember",
+        "grey" | "gray" | "grau" | "steel" | "stahl" | "graphit" | "stealth" | "stealth obsidian" | "obsidian" | "dark" | "darker" | "dunkel" | "dunkler" | "night"
+        | "nacht" => "graphite",
         _ => return None,
     })
 }
@@ -244,8 +251,31 @@ fn live() -> std::sync::RwLockReadGuard<'static, Live> {
     LIVE.read().unwrap_or_else(|e| e.into_inner())
 }
 
+thread_local! {
+    /// The theme one window of his wears while it draws itself, instead of the live one.
+    static WORN: std::cell::Cell<Option<Theme>> = const { std::cell::Cell::new(None) };
+}
+
+/// Everything this thread draws wears `theme` until the guard goes (None: the live theme): a
+/// window of his in a look of its own ("make that window red").
+pub fn wear(theme: Option<Theme>) -> Worn {
+    Worn(WORN.with(|w| w.replace(theme)))
+}
+
+/// Puts back what was worn before.
+pub struct Worn(Option<Theme>);
+
+impl Drop for Worn {
+    fn drop(&mut self) {
+        WORN.with(|w| w.set(self.0));
+    }
+}
+
 /// The theme as it is drawn right now (mid-fade: between the two).
 pub fn current() -> Theme {
+    if let Some(worn) = WORN.with(|w| w.get()) {
+        return worn;
+    }
     #[cfg(test)]
     if let Some((look, _)) = LOOK.with(|l| l.get()) {
         return look;
@@ -334,6 +364,22 @@ impl Drop for LookGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_window_wears_its_own_theme_only_while_it_draws() {
+        let _pictures = look_for_pictures();
+        let (live, red) = (current(), Theme::of_colour([255, 0, 0]));
+        {
+            let _worn = wear(Some(red));
+            assert_eq!(current(), red);
+            {
+                let _inner = wear(None);
+                assert_eq!(current(), live, "a window like the HUD inside it");
+            }
+            assert_eq!(current(), red);
+        }
+        assert_eq!(current(), live);
+    }
 
     #[test]
     fn his_yellow_is_the_default_and_black_and_white_is_a_preset() {

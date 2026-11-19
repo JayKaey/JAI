@@ -8,15 +8,32 @@
 //! to move it, click a fact or source to inspect it (and highlight it in the dossier).
 
 use crate::deep_research_engine::{FactRow, MissionSnapshot};
-use eframe::egui::{self, pos2, vec2, Align2, Color32, FontId, Pos2, Rect, Rounding, Sense, Shape, Stroke, Ui, Vec2};
+use eframe::egui::{self, pos2, vec2, Align2, Color32, Pos2, Rect, Sense, Stroke, Ui, Vec2};
 use std::collections::HashMap;
 
-pub const VERIFIED: Color32 = Color32::from_rgb(0x00, 0xF5, 0xD4);
-pub const SINGLE: Color32 = Color32::from_rgb(0xFF, 0xB8, 0x00);
-pub const CONTRADICTION: Color32 = Color32::from_rgb(0xFF, 0x2A, 0x55);
-const HUB: Color32 = Color32::from_rgb(0x00, 0xE5, 0xFF);
-const QUESTION: Color32 = Color32::from_rgb(0xFF, 0xB8, 0x00);
-const SOURCE: Color32 = Color32::from_rgb(0x7D, 0xA8, 0xFF);
+use crate::holo::{self, Face};
+
+/// Verified by several sources: nominal, so plain ink.
+pub fn verified() -> Color32 {
+    holo::theme().ink()
+}
+/// A claim only one source makes.
+pub fn single() -> Color32 {
+    holo::theme().warn()
+}
+/// Sources contradict each other.
+pub fn contradiction() -> Color32 {
+    holo::theme().alert()
+}
+fn hub() -> Color32 {
+    holo::theme().accent()
+}
+fn question() -> Color32 {
+    holo::theme().accent()
+}
+fn source() -> Color32 {
+    holo::theme().deep()
+}
 
 const MAX_SOURCES: usize = 45;
 const MAX_FACTS: usize = 140;
@@ -50,10 +67,10 @@ impl EdgeKind {
 
     fn colour(self) -> Color32 {
         match self {
-            EdgeKind::Structure => Color32::from_rgb(0x5A, 0x6B, 0x80),
-            EdgeKind::Verified => VERIFIED,
-            EdgeKind::Single => SINGLE,
-            EdgeKind::Contradiction => CONTRADICTION,
+            EdgeKind::Structure => holo::a(holo::theme().ink(), 0.45),
+            EdgeKind::Verified => verified(),
+            EdgeKind::Single => single(),
+            EdgeKind::Contradiction => contradiction(),
         }
     }
 
@@ -190,13 +207,13 @@ impl ResearchGraphView {
         self.nodes.clear();
         self.edges.clear();
         self.index.clear();
-        let hub = self.node(NodeKind::Hub, 0, Vec2::ZERO, snap.mission.topic.clone(), snap.mission.status.clone(), HUB, 16.0);
+        let hub = self.node(NodeKind::Hub, 0, Vec2::ZERO, snap.mission.topic.clone(), snap.mission.status.clone(), hub(), 16.0);
         let mut qpos: HashMap<i64, usize> = HashMap::new();
         let nq = snap.queries.len().max(1) as f32;
         for (i, q) in snap.queries.iter().enumerate().take(60) {
             let angle = i as f32 / nq * std::f32::consts::TAU;
             let near = vec2(angle.cos(), angle.sin()) * 170.0;
-            let colour = if q.status == "done" { QUESTION } else { QUESTION.gamma_multiply(0.45) };
+            let colour = if q.status == "done" { question() } else { holo::theme().deep() };
             let n = self.node(NodeKind::Question, q.id, near, q.sub_question.clone(), q.search_query.clone(), colour, 7.0);
             self.edges.push(GraphEdge { a: hub, b: n, kind: EdgeKind::Structure });
             qpos.insert(q.id, n);
@@ -216,7 +233,7 @@ impl ResearchGraphView {
         for s in sources.into_iter().take(MAX_SOURCES) {
             let parent = s.query_id.and_then(|q| qpos.get(&q).copied()).unwrap_or(hub);
             let near = self.nodes[parent].pos * 1.5;
-            let colour = SOURCE.lerp_to_gamma(VERIFIED, (s.reliability - 0.5).max(0.0) * 2.0);
+            let colour = holo::mix(source(), verified(), (s.reliability - 0.5).max(0.0) * 2.0);
             let n = self.node(NodeKind::Source, s.id, near, s.domain.clone(), format!("{}\n{}\nreliability {:.2}", s.title, s.url, s.reliability), colour, 5.0 + s.reliability * 4.0);
             self.edges.push(GraphEdge { a: parent, b: n, kind: EdgeKind::Structure });
             spos.insert(s.id, n);
@@ -350,7 +367,7 @@ impl ResearchGraphView {
         // Faint grid: the pinboard.
         let grid = 48.0 * zoom;
         if grid > 12.0 {
-            let ink = Color32::from_rgba_unmultiplied(0, 229, 255, 10);
+            let ink = holo::a(holo::theme().ink(), 0.05);
             let mut x = rect.left() + (origin.x - rect.left()).rem_euclid(grid);
             while x < rect.right() {
                 painter.line_segment([pos2(x, rect.top()), pos2(x, rect.bottom())], Stroke::new(1.0_f32, ink));
@@ -393,7 +410,7 @@ impl ResearchGraphView {
             painter.circle_filled(c, r * 1.9, n.colour.gamma_multiply(0.12));
             painter.circle_filled(c, r, n.colour);
             if n.kind == NodeKind::Hub {
-                painter.circle_stroke(c, r + 4.0 + 2.0 * pulse, Stroke::new(1.2_f32, HUB.gamma_multiply(0.5)));
+                painter.circle_stroke(c, r + 4.0 + 2.0 * pulse, Stroke::new(1.2_f32, holo::a(hub(), 0.5)));
             }
             let show_label = match n.kind {
                 NodeKind::Hub => true,
@@ -402,49 +419,48 @@ impl ResearchGraphView {
                 NodeKind::Fact => zoom > 2.2 || Some(i) == hovered,
             };
             if show_label {
-                let (text, size) = match n.kind {
-                    NodeKind::Hub => (short(&n.label, 40), 14.0),
-                    NodeKind::Question => (short(&n.label, 34), 10.5),
-                    NodeKind::Source => (short(&n.label, 26), 10.0),
-                    NodeKind::Fact => (short(&n.label, 60), 10.0),
+                let (text, face, size) = match n.kind {
+                    NodeKind::Hub => (short(&n.label, 40), Face::Head, 14.0),
+                    NodeKind::Question => (short(&n.label, 34), Face::Mono, 10.5),
+                    NodeKind::Source => (short(&n.label, 26), Face::Mono, 10.0),
+                    NodeKind::Fact => (short(&n.label, 60), Face::Mono, 10.0),
                 };
-                let colour = if n.kind == NodeKind::Hub { HUB } else { Color32::from_gray(205) };
-                painter.text(c + vec2(r + 4.0, 0.0), Align2::LEFT_CENTER, text, FontId::proportional(size), colour);
+                let colour = if n.kind == NodeKind::Hub { hub() } else { holo::theme().ink() };
+                holo::text(&painter, c + vec2(r + 4.0, 0.0), Align2::LEFT_CENTER, face, &text, size, colour);
             }
         }
         if let Some(i) = hovered {
             let n = &self.nodes[i];
             response.clone().on_hover_ui_at_pointer(|ui| {
                 ui.set_max_width(360.0);
-                ui.label(egui::RichText::new(&n.label).strong());
+                ui.label(egui::RichText::new(&n.label).font(holo::font(Face::Body, 13.0)).color(holo::theme().ink()));
                 if !n.detail.is_empty() {
-                    ui.label(egui::RichText::new(&n.detail).small());
+                    ui.label(egui::RichText::new(&n.detail).font(holo::font(Face::Mono, 10.5)).color(holo::theme().muted()));
                 }
             });
         }
         // Legend.
         let mut y = rect.top() + 10.0;
-        for (label, colour) in [("Verified (2+ sources)", VERIFIED), ("Single source", SINGLE), ("Contradiction", CONTRADICTION)] {
+        for (label, colour) in [("Verified (2+ sources)", verified()), ("Single source", single()), ("Contradiction", contradiction())] {
             painter.circle_filled(pos2(rect.left() + 14.0, y + 6.0), 4.0, colour);
-            painter.text(pos2(rect.left() + 24.0, y + 6.0), Align2::LEFT_CENTER, label, FontId::proportional(11.0), Color32::from_gray(190));
+            holo::text(&painter, pos2(rect.left() + 24.0, y + 6.0), Align2::LEFT_CENTER, Face::Label, label, 8.5, holo::theme().muted());
             y += 16.0;
         }
-        painter.text(rect.right_bottom() + vec2(-8.0, -6.0), Align2::RIGHT_BOTTOM, format!("{} nodes · zoom {:.0}%", self.nodes.len(), self.zoom * 100.0), FontId::monospace(11.0), Color32::from_gray(120));
+        holo::text(&painter, rect.right_bottom() + vec2(-8.0, -6.0), Align2::RIGHT_BOTTOM, Face::Mono, &format!("{} nodes · zoom {:.0}%", self.nodes.len(), self.zoom * 100.0), 10.0, holo::theme().faint());
         // The selected node's card.
         if let Some(n) = highlighted.and_then(|i| self.nodes.get(i)) {
             let card = Rect::from_min_size(pos2(rect.left() + 10.0, rect.bottom() - 96.0), vec2((rect.width() - 20.0).min(520.0), 86.0));
-            painter.add(Shape::rect_filled(card, Rounding::ZERO, Color32::from_rgba_unmultiplied(6, 10, 18, 230)));
-            painter.rect_stroke(card, Rounding::ZERO, Stroke::new(1.0_f32, n.colour.gamma_multiply(0.8)));
+            crate::holo_frame::card(&painter, card, 1.0, 1.0);
             let kind = match n.kind {
                 NodeKind::Hub => "TOPIC",
                 NodeKind::Question => "SUB-QUESTION",
                 NodeKind::Source => "SOURCE",
                 NodeKind::Fact => "FACT",
             };
-            painter.text(card.min + vec2(10.0, 8.0), Align2::LEFT_TOP, kind, FontId::monospace(11.0), n.colour);
-            let galley = painter.layout(short(&n.label, 220), FontId::proportional(11.5), Color32::from_gray(225), card.width() - 20.0);
-            painter.galley(card.min + vec2(10.0, 22.0), galley, Color32::WHITE);
-            painter.text(card.left_bottom() + vec2(10.0, -8.0), Align2::LEFT_BOTTOM, short(n.detail.lines().next().unwrap_or(""), 90), FontId::proportional(11.0), Color32::from_gray(150));
+            let t = holo::theme();
+            holo::text(&painter, card.min + vec2(10.0, 8.0), Align2::LEFT_TOP, Face::Label, kind, 8.5, n.colour);
+            holo::wrapped(&painter, card.min + vec2(10.0, 24.0), card.width() - 20.0, Face::Body, &short(&n.label, 220), 12.0, t.ink(), 2);
+            holo::text(&painter, card.left_bottom() + vec2(10.0, -8.0), Align2::LEFT_BOTTOM, Face::Mono, &short(n.detail.lines().next().unwrap_or(""), 90), 9.5, t.muted());
         }
         if self.animating() {
             ui.ctx().request_repaint();

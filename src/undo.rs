@@ -121,7 +121,7 @@ pub fn way_back(tool: &str, args: &Value, said: &str, before: &Snapshot, after: 
         let (was, is) = (&before.interface, &after.interface);
         step.done = if was.span_all_monitors != is.span_all_monitors || was.fullscreen != is.fullscreen {
             "the board is as it was"
-        } else if was.hud_palette != is.hud_palette || was.theme != is.theme || was.accent != is.accent || was.background != is.background {
+        } else if was.hud_palette != is.hud_palette {
             "the theme is as it was"
         } else if was.orb_board_pos != is.orb_board_pos || was.orb_aside != is.orb_aside {
             "I am back where I was"

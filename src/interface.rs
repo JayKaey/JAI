@@ -1,5 +1,5 @@
 //! The HUD's look and layout, which JAI changes himself when Sir asks ("make the interface
-//! red", "hide the system panel", "zoom in", "stay on top", "go minimal").
+//! red", "zoom in", "stay on top", "go minimal").
 //!
 //! The settings live in `jai_config.json` (`interface`) and the native window re-applies
 //! them live whenever they change. `configure` turns `configure_interface` tool arguments (from
@@ -12,16 +12,9 @@ use serde_json::{json, Value};
 
 pub const DEFAULT_TITLE: &str = "J.A.I.";
 const MIN_OPACITY: u8 = 15;
-/// The darkest background "darker" goes to (deep obsidian).
-pub const DEEPEST_BACKGROUND: [u8; 3] = [3, 5, 9];
-/// The lightest background the HUD ever shows (dark slate glass): colour only lives in accents.
-pub const LIGHTEST_BACKGROUND: [u8; 3] = [12, 20, 28];
-const MAX_BACKGROUND_LUMINANCE: f32 = 0.085;
 /// Pure orb mode: the window is a square of this many pixels.
 const MIN_ORB_PX: f32 = 120.0;
 const MAX_ORB_PX: f32 = 900.0;
-const MIN_ROUNDING: f32 = 0.0;
-const MAX_ROUNDING: f32 = 32.0;
 const MIN_SCALE: f32 = 0.5;
 const MAX_SCALE: f32 = 2.5;
 /// Relative zoom step ("bigger", "zoom out").
@@ -49,7 +42,7 @@ fn words(s: &str) -> String {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(from = "String", into = "String")]
 pub enum HudLayout {
-    /// Every panel (minus `hidden_panels`).
+    /// The whole HUD.
     #[default]
     Full,
     /// Header, reactor and conversation.
@@ -93,166 +86,17 @@ impl From<HudLayout> for String {
     }
 }
 
-/// A card of the HUD.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum HudPanel {
-    Header,
-    Audio,
-    Devices,
-    System,
-    Reactor,
-    Chat,
-    Memory,
-    Skills,
-    Tools,
-    Brain,
-    /// JAI's dynamic widgets (gauges, charts, timers, notes …).
-    Widgets,
-    /// The quick-action pills above the conversation ("Daddy's home", "Add calendar event" …).
-    Pills,
-}
-
-impl HudPanel {
-    pub const ALL: [Self; 12] = [
-        Self::Header,
-        Self::Audio,
-        Self::Devices,
-        Self::System,
-        Self::Reactor,
-        Self::Widgets,
-        Self::Chat,
-        Self::Pills,
-        Self::Memory,
-        Self::Skills,
-        Self::Tools,
-        Self::Brain,
-    ];
-    pub const LEFT: [Self; 3] = [Self::Audio, Self::Devices, Self::System];
-    pub const RIGHT: [Self; 4] = [Self::Memory, Self::Skills, Self::Tools, Self::Brain];
-    const SIDES: [Self; 7] =
-        [Self::Audio, Self::Devices, Self::System, Self::Memory, Self::Skills, Self::Tools, Self::Brain];
-    /// The secondary telemetry: system monitor, microphone meters, tool log and brain panel.
-    pub const TELEMETRY: [Self; 4] = [Self::System, Self::Audio, Self::Tools, Self::Brain];
-
-    pub fn id(self) -> &'static str {
-        match self {
-            Self::Header => "header",
-            Self::Audio => "audio",
-            Self::Devices => "devices",
-            Self::System => "system",
-            Self::Reactor => "reactor",
-            Self::Chat => "chat",
-            Self::Memory => "memory",
-            Self::Skills => "skills",
-            Self::Tools => "tools",
-            Self::Brain => "brain",
-            Self::Widgets => "widgets",
-            Self::Pills => "pills",
-        }
-    }
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Header => "header",
-            Self::Audio => "microphone panel",
-            Self::Devices => "audio devices",
-            Self::System => "system monitor",
-            Self::Reactor => "reactor",
-            Self::Chat => "conversation",
-            Self::Memory => "memory panel",
-            Self::Skills => "skills panel",
-            Self::Tools => "tool log",
-            Self::Brain => "brain panel",
-            Self::Widgets => "widgets panel",
-            Self::Pills => "quick pills bar",
-        }
-    }
-
-    pub fn from_id(id: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|p| p.id() == id)
-    }
-
-    /// Part of the compact layout.
-    fn in_compact(self) -> bool {
-        matches!(self, Self::Header | Self::Reactor | Self::Chat | Self::Widgets | Self::Pills)
-    }
-
-    /// Panel names, aliases and groups ("left side", "sidebars") in English or German. Words that
-    /// also name other things ("microphone", "model", "log") only count with "panel" after them.
-    pub fn parse(name: &str) -> Vec<Self> {
-        let mut n = words(name);
-        let mut explicit = false;
-        for suffix in [
-            " panels", " panel", " section", " card", " box", " widget", " view", " window", " tabs", " tab", " sidebar",
-            " anzeige", " bereich", " fenster", " leiste", " karte", " reiter",
-        ] {
-            if let Some(rest) = n.strip_suffix(suffix) {
-                n = rest.trim().to_string();
-                explicit = true;
-                break;
-            }
-        }
-        let panels: &[Self] = match n.as_str() {
-            "header" | "top bar" | "title bar" | "status bar" | "kopfzeile" | "titelleiste" | "statusleiste" => {
-                &[Self::Header]
-            }
-            "vad" | "voice activity" | "voice activity detection" | "input level" | "sprachaktivität" | "pegel" => {
-                &[Self::Audio]
-            }
-            "microphone" | "mic" | "mikrofon" | "mikro" | "audio" if explicit => &[Self::Audio],
-            "devices" | "audio devices" | "audio device" | "geräte" | "geraete" | "audiogeräte" | "audiogeraete" | "audio settings"
-            | "sound settings" | "speaker settings" | "audio geräte" => &[Self::Devices],
-            "telemetry" | "secondary telemetry" | "telemetrie" | "diagnostics" => &Self::TELEMETRY,
-            "pills" | "quick pills" | "quick pills bar" | "pills bar" | "action bar" | "quick actions" | "quick action" | "quick action buttons" | "action buttons" | "suggestions"
-            | "suggestion buttons" | "shortcuts" | "shortcut buttons" | "schnellaktionen" => &[Self::Pills],
-            "speaker" | "speakers" | "voice" | "lautsprecher" | "stimme" if explicit => &[Self::Devices],
-            "system" | "system monitor" | "system stats" | "stats" | "statistics" | "hardware"
-            | "performance" | "systemmonitor" | "systemanzeige" | "systeminfo" | "leistung" | "auslastung" | "system telemetry" => {
-                &[Self::System]
-            }
-            "cpu" | "gpu" | "ram" if explicit => &[Self::System],
-            "reactor" | "arc reactor" | "orb" | "core" | "reaktor" | "kugel" | "kern" | "arc reactor centerpiece" | "centerpiece"
-            | "centrepiece" | "reactor centerpiece" => &[Self::Reactor],
-            "chat" | "conversation" | "messages" | "transcript" | "chat log" | "unterhaltung" | "gespräch"
-            | "gespraech" | "nachrichten" | "verlauf" | "konversation" => &[Self::Chat],
-            "memory" | "memories" | "long term memory" | "gedächtnis" | "gedaechtnis" | "erinnerungen" | "memory manager" => &[Self::Memory],
-            "skills" | "skill list" | "abilities" | "fähigkeiten" | "faehigkeiten" => &[Self::Skills],
-            "tool log" | "tools" | "activity log" | "werkzeuge" | "tool protokoll" | "protokoll" | "tool logs" | "tool execution log"
-            | "tool execution logs" | "execution log" | "execution logs" => &[Self::Tools],
-            "log" | "activity" if explicit => &[Self::Tools],
-            "brain" | "gehirn" | "language model" | "sprachmodell" => &[Self::Brain],
-            "widgets" | "widget grid" | "widget panel" | "dashboard" | "my widgets" | "your widgets" | "dynamic widgets"
-            | "dynamic widgets dock" | "widgets dock" | "widget dock" => &[Self::Widgets],
-            "model" | "llm" | "modell" if explicit => &[Self::Brain],
-            "left" | "left side" | "left sidebar" | "left column" | "linke seite" | "linke spalte" => &Self::LEFT,
-            "right" | "right side" | "right sidebar" | "right column" | "rechte seite" | "rechte spalte" => &Self::RIGHT,
-            "sidebars" | "sidebar" | "side" | "both sidebars" | "seitenleisten" | "seitenleiste" | "seiten" => &Self::SIDES,
-            "all" | "everything" | "alle" | "alles" => &Self::ALL,
-            _ => &[],
-        };
-        panels.to_vec()
-    }
-}
-
 // ---------------------------------------------------------------------------- settings ----
 
 /// Persisted under `interface` in `jai_config.json`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct InterfaceSettings {
-    /// Colour preset the accent and background came from ("custom" after a manual colour).
-    pub theme: String,
-    /// Highlight colour (#RRGGBB): reactor, rings, headings, active controls.
-    pub accent: String,
-    /// Window background (#RRGGBB).
-    pub background: String,
     /// Interface zoom, 1.0 = 100 %.
     pub scale: f32,
     /// Background opacity in percent; text and controls stay fully opaque.
     pub opacity: u8,
     pub layout: HudLayout,
-    /// Panel ids (see `HudPanel::id`) hidden from the full layout.
-    pub hidden_panels: Vec<String>,
     pub always_on_top: bool,
     /// The HUD board fills the monitor (the default since config v16).
     pub fullscreen: bool,
@@ -261,7 +105,7 @@ pub struct InterfaceSettings {
     pub animations: bool,
     /// The display's finish: fine scan lines and film grain over the whole HUD, so it reads as
     /// light on glass (Sir, 2026-11-11: "more realistic, a bit more rough"). "Turn off the scan
-    /// lines" / the tool's `display_finish`. Never in OLED mode (true black stays black).
+    /// lines" / the tool's `display_finish`.
     pub display_finish: bool,
     /// Calm HUD: the header strip, the telemetry strip and the key hints step back while nothing
     /// happens and return when the mouse comes near or he has something to do ("calm mode",
@@ -302,16 +146,10 @@ pub struct InterfaceSettings {
     pub brief_confirmations: bool,
     /// Name shown in the header.
     pub title: String,
-    /// Minimal zen mode: no sidebars, widgets or pills — only the 3D orb and a clean chat.
-    pub zen_mode: bool,
     /// Radius of the 3D sphere orb relative to its viewport (0.4-2.5).
     pub orb_scale: f32,
     /// Text size on top of the zoom (0.75-1.6).
     pub font_scale: f32,
-    /// Corner radius of panels (chat bubbles, inputs and buttons follow it), 0-32.
-    pub corner_rounding: f32,
-    /// The header's live telemetry readouts (latency, CPU, GPU).
-    pub header_telemetry: bool,
     /// Pure orb mode: only the 3D orb, borderless, transparent, floating.
     pub orb_mode: bool,
     /// Side length of the orb window in pure orb mode (120-900 px).
@@ -325,8 +163,6 @@ pub struct InterfaceSettings {
     pub orb_anchor: String,
     /// Monitor of the orb (1 = primary, 2 = the second …; 0 = the HUD's current monitor).
     pub orb_monitor: u8,
-    /// The look: the True-OLED minimal design (default) or the classic sci-fi HUD.
-    pub ui_paradigm: crate::oled_minimal_ui::UiDesignParadigm,
     /// Which core stands on the HUD: "simple" (the instrument of rings) or "complex" (the
     /// sphere of circuitry).
     pub core_style: String,
@@ -342,9 +178,9 @@ pub struct InterfaceSettings {
     pub voice_rim: bool,
     /// The board's sound cues (a block materialising, the spotlight, a mode change, an alert).
     pub sound_cues: bool,
-    /// The HUD's colour theme (`theme_engine`): one of the eight presets ("rose_crimson",
-    /// "arc_cyan", …) or "custom:#RRGGBB". The board, the console, the core sphere and the emblem
-    /// all read it; a colour request sets it.
+    /// The theme (`theme_store::resolve`): one of the eight presets ("stark_gold", "mono", …), a
+    /// saved theme ("theme:<name>") or a light of his own colour ("custom:#RRGGBB"). Everything
+    /// he draws reads it through `holo::theme()`; a colour request sets it.
     pub hud_palette: String,
     /// Where Sir put the emblem on the board (fractions of the canvas; None = the centre).
     pub orb_board_pos: Option<[f32; 2]>,
@@ -374,15 +210,10 @@ pub struct InterfaceSettings {
 
 impl Default for InterfaceSettings {
     fn default() -> Self {
-        let own = &THEMES[0];
         Self {
-            theme: own.name.to_string(),
-            accent: own.accent.to_string(),
-            background: own.background.to_string(),
             scale: 1.0,
             opacity: 100,
             layout: HudLayout::Full,
-            hidden_panels: Vec::new(),
             always_on_top: false,
             fullscreen: true,
             frameless: true,
@@ -403,20 +234,14 @@ impl Default for InterfaceSettings {
             portrait_dashboard: false,
             brief_confirmations: true,
             title: DEFAULT_TITLE.to_string(),
-            // The clean two-zone studio layout: the orb and the conversation; every technical
-            // panel lives in the Settings drawer.
-            zen_mode: true,
             orb_scale: 1.0,
             font_scale: 1.0,
-            corner_rounding: 2.0,
-            header_telemetry: true,
             orb_mode: false,
             orb_size_px: 260.0,
             orb_opacity: 1.0,
             orb_on_top: true,
             orb_anchor: "bottom-right".to_string(),
             orb_monitor: 0,
-            ui_paradigm: crate::oled_minimal_ui::UiDesignParadigm::ModernOledMinimal,
             core_style: "simple".to_string(),
             comms_block: false,
             status_pill: true,
@@ -476,81 +301,33 @@ impl InterfaceSettings {
     }
 }
 
-/// Dark glass only: a background brighter than slate glass is pulled down to it (hue kept), so no
-/// request, theme or hand edit can produce a light or neon window.
-pub fn dark_glass(rgb: [u8; 3]) -> [u8; 3] {
-    let lum = luminance(rgb);
-    let mut out = if lum > MAX_BACKGROUND_LUMINANCE { scale_rgb(rgb, MAX_BACKGROUND_LUMINANCE / lum) } else { rgb };
-    // A saturated tint ("deep red") keeps every channel low as well.
-    let peak = out.iter().copied().max().unwrap_or(0) as f32;
-    if peak > 46.0 {
-        out = scale_rgb(out, 46.0 / peak);
-    }
-    out
-}
-
-/// How deep the background is: 0 = slate glass rgb(12,20,28), 1 = obsidian rgb(3,5,9).
-pub fn background_darkness(rgb: [u8; 3]) -> f32 {
-    let (light, deep) = (luminance(LIGHTEST_BACKGROUND), luminance(DEEPEST_BACKGROUND));
-    ((light - luminance(rgb)) / (light - deep)).clamp(0.0, 1.0)
-}
-
-/// The background at depth `darkness` (0-1), keeping the hue of `current`.
-pub fn with_darkness(current: [u8; 3], darkness: f32) -> [u8; 3] {
-    let d = darkness.clamp(0.0, 1.0);
-    let (light, deep) = (luminance(LIGHTEST_BACKGROUND), luminance(DEEPEST_BACKGROUND));
-    let target = light - d * (light - deep);
-    let base = if luminance(current) < 0.004 { LIGHTEST_BACKGROUND } else { current };
-    // Rounded towards the target, so repeated "darker" really reaches obsidian (nearest
-    // rounding could stall a hue one step short of it).
-    let factor = target / luminance(base).max(0.001);
-    let scaled = base.map(|v| {
-        let x = v as f32 * factor;
-        (if factor < 1.0 { x.floor() } else { x.ceil() }).clamp(0.0, 255.0) as u8
-    });
-    // Never below obsidian (a channel already lower stays as it was), never above slate.
-    dark_glass(std::array::from_fn(|i| scaled[i].max(DEEPEST_BACKGROUND[i].min(base[i]))))
-}
-
 impl InterfaceSettings {
-    /// v24: the stock title follows his new name, and the stock look (or the yellow accent the
-    /// 2026-11-09 helmet mishap left on the gold palette) becomes the new default.
+    /// v24: the stock title follows his new name, and the stock look of then (the cyan theme)
+    /// becomes his yellow.
     pub fn renamed_v24(&mut self) {
         // (The stock titles of v1-v23, as fingerprints: `config::fingerprint`.)
         const STOCK_TITLES: [u64; 4] = [0x8b99_a312_d3e9_a308, 0x0fb8_900f_eed4_fcf6, 0xac2f_d99e_782e_a7e4, 0xd68c_c20b_65a0_1b44];
         if STOCK_TITLES.contains(&crate::config::fingerprint(self.title.trim())) {
             self.title = DEFAULT_TITLE.to_string();
         }
-        let defaults = Self::default();
-        let stock = self.theme == "stark" && self.hud_palette == "arc_cyan";
-        let mishap = self.theme == "custom" && self.accent.eq_ignore_ascii_case("#ffe14d") && self.hud_palette == "stark_gold";
-        if stock || mishap {
-            self.theme = defaults.theme;
-            self.accent = defaults.accent;
-            self.background = defaults.background;
-            self.hud_palette = defaults.hud_palette;
-        }
-    }
-
-    /// v28 (Sir, 2026-11-17: "the whole UI tony stark styled", "the colors should still remain
-    /// yellow"): the Stark design in his own colours. The stock 18 px corners become Stark's
-    /// sharp cut (a rounding he chose stays); Arc Cyan, stored as "stark", moves to its own name.
-    pub fn stark_v28(&mut self) {
-        if self.theme == "stark" {
-            self.theme = "arc_cyan".to_string();
-        }
-        if self.corner_rounding == 18.0 {
-            self.corner_rounding = Self::default().corner_rounding;
+        if self.hud_palette == "arc_cyan" {
+            self.hud_palette = Self::default().hud_palette;
         }
     }
 
     pub fn sanitize(&mut self) {
         let defaults = Self::default();
-        let known = crate::holo_theme::preset(&self.hud_palette).is_some()
-            || self.hud_palette.strip_prefix("custom:#").is_some_and(|h| h.len() == 6 && u32::from_str_radix(h, 16).is_ok())
-            || self.hud_palette.strip_prefix(crate::holo_theme::CUSTOM_PREFIX).is_some_and(|n| crate::theme_store::custom(n).is_some());
-        if !known {
-            self.hud_palette = defaults.hud_palette.clone();
+        match crate::holo_theme::preset_name(&self.hud_palette) {
+            // (A preset under a name of the old engine, "jai_gold", is kept under its own from
+            // now on: whatever compares the setting with a preset's name finds it.)
+            Some(preset) => self.hud_palette = preset.to_string(),
+            None => {
+                let own = self.hud_palette.strip_prefix("custom:#").is_some_and(|h| h.len() == 6 && u32::from_str_radix(h, 16).is_ok())
+                    || self.hud_palette.strip_prefix(crate::holo_theme::CUSTOM_PREFIX).is_some_and(|n| crate::theme_store::custom(n).is_some());
+                if !own {
+                    self.hud_palette = defaults.hud_palette.clone();
+                }
+            }
         }
         self.scale = if self.scale.is_finite() { (self.scale * 100.0).round() / 100.0 } else { 1.0 };
         self.scale = self.scale.clamp(MIN_SCALE, MAX_SCALE);
@@ -559,14 +336,6 @@ impl InterfaceSettings {
         self.orb_scale = round(self.orb_scale, MIN_ORB_SCALE, MAX_ORB_SCALE);
         self.corner_orb_scale = round(self.corner_orb_scale, 0.6, 1.8);
         self.font_scale = round(self.font_scale, MIN_FONT_SCALE, MAX_FONT_SCALE);
-        if parse_hex(&self.accent).is_none() {
-            self.accent = defaults.accent;
-        }
-        match parse_hex(&self.background) {
-            Some(rgb) => self.background = hex(dark_glass(rgb)),
-            None => self.background = defaults.background.clone(),
-        }
-        self.corner_rounding = if self.corner_rounding.is_finite() { self.corner_rounding.round().clamp(MIN_ROUNDING, MAX_ROUNDING) } else { 2.0 };
         self.orb_size_px = if self.orb_size_px.is_finite() { self.orb_size_px.round().clamp(MIN_ORB_PX, MAX_ORB_PX) } else { 260.0 };
         self.orb_opacity = if self.orb_opacity.is_finite() { ((self.orb_opacity * 100.0).round() / 100.0).clamp(0.15, 1.0) } else { 1.0 };
         self.orb_anchor = anchor_id(&self.orb_anchor).unwrap_or("bottom-right").to_string();
@@ -575,81 +344,24 @@ impl InterfaceSettings {
         if self.title.is_empty() {
             self.title = defaults.title;
         }
-        let mut panels: Vec<String> = Vec::new();
-        for id in self.hidden_panels.drain(..) {
-            if HudPanel::from_id(&id).is_some() && !panels.contains(&id) {
-                panels.push(id);
-            }
-        }
-        self.hidden_panels = panels;
-    }
-
-    pub fn accent_rgb(&self) -> [u8; 3] {
-        parse_hex(&self.accent).unwrap_or([0, 229, 255])
-    }
-
-    pub fn background_rgb(&self) -> [u8; 3] {
-        parse_hex(&self.background).unwrap_or([3, 7, 14])
-    }
-
-    fn is_hidden(&self, panel: HudPanel) -> bool {
-        self.hidden_panels.iter().any(|id| id == panel.id())
-    }
-
-    /// Whether `panel` is on screen with the current layout (the panel model `configure_interface`
-    /// edits; the HUD board itself has no panels).
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub fn shows(&self, panel: HudPanel) -> bool {
-        match self.layout {
-            HudLayout::Orb => panel == HudPanel::Reactor,
-            HudLayout::Compact => panel.in_compact() && !self.is_hidden(panel),
-            HudLayout::Full => !self.is_hidden(panel),
-        }
-    }
-
-    fn hide(&mut self, panel: HudPanel) {
-        if !self.is_hidden(panel) {
-            self.hidden_panels.push(panel.id().to_string());
-        }
-    }
-
-    /// Un-hides `panel`, widening the layout when it has no room for it.
-    fn show(&mut self, panel: HudPanel) {
-        self.hidden_panels.retain(|id| id != panel.id());
-        let fits = match self.layout {
-            HudLayout::Full => true,
-            HudLayout::Compact => panel.in_compact(),
-            HudLayout::Orb => panel == HudPanel::Reactor,
-        };
-        if !fits {
-            self.layout = if panel.in_compact() { HudLayout::Compact } else { HudLayout::Full };
-        }
     }
 
     pub fn describe(&self) -> String {
-        let hidden: Vec<&str> = HudPanel::ALL.iter().filter(|p| self.is_hidden(**p)).map(|p| p.id()).collect();
         let on_off = |b: bool| if b { "on" } else { "off" };
         format!(
-            "theme {}, accent {}, background {} (darkness {:.0} %), zoom {:.0} %, window opacity {} %, layout {}, hidden panels {}, \
-             always on top {}, fullscreen {}, frameless {}, animations {}, title \"{}\", zen mode {}, orb size {:.0} %, font size {:.0} %, \
-             corner rounding {:.0}, pure orb mode {} ({:.0} px, {}, monitor {}, opacity {:.0} %)",
-            self.theme,
-            self.accent,
-            self.background,
-            background_darkness(self.background_rgb()) * 100.0,
+            "theme {}, zoom {:.0} %, window opacity {} %, layout {}, always on top {}, fullscreen {}, frameless {}, animations {}, \
+             title \"{}\", orb size {:.0} %, font size {:.0} %, pure orb mode {} ({:.0} px, {}, monitor {}, opacity {:.0} %)",
+            self.hud_palette,
             self.scale * 100.0,
             self.opacity,
             self.layout.id(),
-            if hidden.is_empty() { "none".to_string() } else { hidden.join(", ") },
             on_off(self.always_on_top),
             on_off(self.fullscreen),
             on_off(self.frameless),
             on_off(self.animations),
             self.title,
-            on_off(self.zen_mode),
             self.orb_scale * 100.0,
             self.font_scale * 100.0,
-            self.corner_rounding,
             on_off(self.orb_mode),
             self.orb_size_px,
             self.orb_anchor,
@@ -657,51 +369,6 @@ impl InterfaceSettings {
             self.orb_opacity * 100.0,
         )
     }
-
-    /// The live layout state of these settings (the window size comes from the open window).
-    pub fn layout_state(&self, window_size: (f32, f32)) -> UiLayoutState {
-        UiLayoutState {
-            show_audio_devices_panel: !self.is_hidden(HudPanel::Devices),
-            show_skills_panel: !self.is_hidden(HudPanel::Skills),
-            show_quick_pills_bar: !self.is_hidden(HudPanel::Pills),
-            show_telemetry_sidebar: HudPanel::TELEMETRY.iter().any(|p| !self.is_hidden(*p)),
-            show_orb_panel: !self.is_hidden(HudPanel::Reactor),
-            minimal_zen_mode: self.zen_mode,
-            orb_radius_scale: self.orb_scale,
-            ui_font_scale: self.font_scale,
-            window_size,
-        }
-    }
-
-    /// Writes the switches of a layout state that differ from these settings back into them (an
-    /// unchanged switch leaves Sir's individual panel choices alone; the window size is a window
-    /// command, not a setting).
-    pub fn apply_layout_state(&mut self, state: &UiLayoutState) {
-        let current = self.layout_state(state.window_size);
-        let switches = [
-            (&[HudPanel::Devices][..], current.show_audio_devices_panel, state.show_audio_devices_panel),
-            (&[HudPanel::Skills][..], current.show_skills_panel, state.show_skills_panel),
-            (&[HudPanel::Pills][..], current.show_quick_pills_bar, state.show_quick_pills_bar),
-            (&HudPanel::TELEMETRY[..], current.show_telemetry_sidebar, state.show_telemetry_sidebar),
-            (&[HudPanel::Reactor][..], current.show_orb_panel, state.show_orb_panel),
-        ];
-        for (panels, was, now) in switches {
-            if was != now {
-                for p in panels {
-                    if now {
-                        self.show(*p);
-                    } else {
-                        self.hide(*p);
-                    }
-                }
-            }
-        }
-        self.zen_mode = state.minimal_zen_mode;
-        self.orb_scale = state.orb_radius_scale;
-        self.font_scale = state.ui_font_scale;
-        self.sanitize();
-    }
-
 }
 
 // ----------------------------------------------------------------------- live layout ----
@@ -713,48 +380,16 @@ const MAX_FONT_SCALE: f32 = 1.6;
 /// Relative step for "make the orb bigger" / "bigger text".
 const LAYOUT_STEP: f32 = 1.2;
 
-/// Every panel and element of the HUD that JAI (and Sir, through the HUD's own controls) can
-/// change while it runs. The panel switches and scales persist in `interface`; the window size
-/// is whatever the open window measures. The HUD publishes the live state each frame
-/// ([`publish_layout`]), so `control_jai_interface` reports what is really on screen.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
-pub struct UiLayoutState {
-    pub show_audio_devices_panel: bool,
-    pub show_skills_panel: bool,
-    pub show_quick_pills_bar: bool,
-    pub show_telemetry_sidebar: bool,
-    pub show_orb_panel: bool,
-    /// Hides every sidebar, the widgets and the pills: only the 3D sphere orb and a clean chat.
-    pub minimal_zen_mode: bool,
-    /// 0.4-2.5, by voice, the orb's slider or the mouse wheel over the orb.
-    pub orb_radius_scale: f32,
-    /// 0.8-1.6.
-    pub ui_font_scale: f32,
-    /// Logical points (width, height) of the HUD window; (0, 0) while it is closed.
-    pub window_size: (f32, f32),
-}
+/// The HUD window's size in logical points as it last drew itself; (0, 0) while it is closed.
+static WINDOW_SIZE: std::sync::Mutex<(f32, f32)> = std::sync::Mutex::new((0.0, 0.0));
 
-impl Default for UiLayoutState {
-    fn default() -> Self {
-        InterfaceSettings::default().layout_state((0.0, 0.0))
-    }
-}
-
-static UI_LAYOUT: std::sync::LazyLock<std::sync::Arc<std::sync::Mutex<UiLayoutState>>> =
-    std::sync::LazyLock::new(|| std::sync::Arc::new(std::sync::Mutex::new(UiLayoutState::default())));
-
-/// The shared live layout state (written by the HUD every frame).
-pub fn ui_layout() -> std::sync::Arc<std::sync::Mutex<UiLayoutState>> {
-    std::sync::Arc::clone(&UI_LAYOUT)
-}
-
-/// The HUD reports what it shows.
-pub fn publish_layout(state: UiLayoutState) {
-    *UI_LAYOUT.lock().unwrap_or_else(|e| e.into_inner()) = state;
+/// The HUD reports how large its window is (every frame).
+pub fn publish_window_size(size: (f32, f32)) {
+    *WINDOW_SIZE.lock().unwrap_or_else(|e| e.into_inner()) = size;
 }
 
 fn live_window_size() -> (f32, f32) {
-    ui_layout().lock().unwrap_or_else(|e| e.into_inner()).window_size
+    *WINDOW_SIZE.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 /// The result of `control_jai_interface`.
@@ -765,26 +400,6 @@ pub struct Controlled {
     pub summary: String,
 }
 
-/// Panel names (with groups) of a `target_panel` argument: a string, a list or "a and b".
-fn target_panels(args: &Value) -> Vec<HudPanel> {
-    let mut out: Vec<HudPanel> = Vec::new();
-    for name in list_arg(args, "target_panel").into_iter().chain(list_arg(args, "target_panels")).chain(list_arg(args, "panels")) {
-        let name = name.replace('_', " ");
-        let found = match name.trim() {
-            "orb" | "sphere" | "3d orb" | "3d sphere" | "globe" => vec![HudPanel::Reactor],
-            "tool log" | "tool logs" | "tools log" => vec![HudPanel::Tools],
-            "microphone" | "mic" | "vad" => vec![HudPanel::Audio],
-            other => HudPanel::parse(other),
-        };
-        for p in found {
-            if !out.contains(&p) {
-                out.push(p);
-            }
-        }
-    }
-    out
-}
-
 fn scale_arg(args: &Value) -> Option<f32> {
     let v = args.get("scale_value").or_else(|| args.get("scale")).or_else(|| args.get("value")).filter(|v| !v.is_null())?;
     let (x, relative) = number_like(v)?;
@@ -793,101 +408,13 @@ fn scale_arg(args: &Value) -> Option<f32> {
     Some(if relative { 1.0 + factor } else { factor })
 }
 
-fn labels(panels: &[HudPanel]) -> String {
-    let telemetry = HudPanel::TELEMETRY.iter().all(|p| panels.contains(p));
-    let mut names: Vec<&str> = panels.iter().filter(|p| !(telemetry && HudPanel::TELEMETRY.contains(p))).map(|p| p.label()).collect();
-    if telemetry {
-        names.push("secondary telemetry panels");
-    }
-    join_labels(&names)
-}
-
-/// Applies `control_jai_interface(action, target_panel, scale_value)` to `current`.
+/// Applies `control_jai_interface(action, scale_value)` to `current`: the core's size, the text
+/// size and the window's size.
 pub fn control(current: &InterfaceSettings, args: &Value) -> Result<Controlled, String> {
     let action = str_arg(args, &["action", "command"]).unwrap_or("status").to_lowercase().replace([' ', '-'], "_");
     let mut s = current.clone();
     let mut window_size = None;
-    let panels = target_panels(args);
-    let need_panels = || if panels.is_empty() { Err(format!("'{action}' needs target_panel (audio_devices, skills, quick_pills, telemetry, orb, memory, tool_log, brain, widgets, chat).")) } else { Ok(()) };
     let done = match action.as_str() {
-        "declutter" | "less_full" | "clean_up" | "cleanup" | "tidy" | "simplify" | "optimize" | "optimise" => {
-            // The executive decision for "make the interface less full": the chat, the orb, the
-            // widgets and the pills stay; everything secondary folds away.
-            for p in [HudPanel::Devices, HudPanel::Skills, HudPanel::Memory].into_iter().chain(HudPanel::TELEMETRY) {
-                s.hide(p);
-            }
-            for p in [HudPanel::Chat, HudPanel::Reactor, HudPanel::Header] {
-                s.show(p);
-            }
-            s.zen_mode = false;
-            "decluttered: audio devices, skills, memory and the secondary telemetry are collapsed; chat, orb and widgets stay".to_string()
-        }
-        "hide_panel" | "hide" | "remove" | "disable" | "collapse" => {
-            need_panels()?;
-            if panels.len() == HudPanel::ALL.len() {
-                s.zen_mode = true;
-            } else {
-                panels.iter().for_each(|p| s.hide(*p));
-            }
-            format!("hid the {}", labels(&panels))
-        }
-        "show_panel" | "show" | "restore" | "enable" | "bring_back" => {
-            need_panels()?;
-            panels.iter().for_each(|p| s.show(*p));
-            if panels.iter().any(|p| !matches!(p, HudPanel::Header | HudPanel::Reactor | HudPanel::Chat)) {
-                s.zen_mode = false;
-            }
-            format!("showing the {}", labels(&panels))
-        }
-        "toggle_panel" | "toggle" => {
-            need_panels()?;
-            for p in &panels {
-                if s.is_hidden(*p) {
-                    s.show(*p);
-                } else {
-                    s.hide(*p);
-                }
-            }
-            format!("toggled the {}", labels(&panels))
-        }
-        "set_panels" => {
-            let hide = target_panels(&json!({ "target_panel": args.get("hide").cloned().unwrap_or(Value::Null) }));
-            let show = target_panels(&json!({ "target_panel": args.get("show").cloned().unwrap_or(Value::Null) }));
-            if hide.is_empty() && show.is_empty() {
-                return Err("set_panels needs 'hide' and/or 'show' panel lists.".into());
-            }
-            hide.iter().for_each(|p| s.hide(*p));
-            show.iter().for_each(|p| s.show(*p));
-            if !show.is_empty() {
-                s.zen_mode = false;
-            }
-            [(!hide.is_empty()).then(|| format!("hid the {}", labels(&hide))), (!show.is_empty()).then(|| format!("showing the {}", labels(&show)))]
-                .into_iter()
-                .flatten()
-                .collect::<Vec<_>>()
-                .join("; ")
-        }
-        "zen_mode_on" | "zen_on" | "zen_mode" | "zen" | "minimal_zen_mode" => {
-            s.zen_mode = true;
-            if s.layout == HudLayout::Orb {
-                s.layout = HudLayout::Full;
-            }
-            "zen mode on: only the orb and the chat".to_string()
-        }
-        "zen_mode_off" | "zen_off" | "exit_zen" => {
-            s.zen_mode = false;
-            "zen mode off".to_string()
-        }
-        "toggle_zen" => {
-            s.zen_mode = !s.zen_mode;
-            format!("zen mode {}", if s.zen_mode { "on" } else { "off" })
-        }
-        "restore_all" | "show_all" | "reset_layout" | "everything" => {
-            s.hidden_panels.clear();
-            s.zen_mode = false;
-            s.layout = HudLayout::Full;
-            "every panel is back".to_string()
-        }
         // (While the orb is out in its corner, it is the one Sir sees and means.)
         "orb_bigger" | "orb_larger" | "bigger_orb" | "orb_smaller" | "smaller_orb" if crate::wallpaper::orb_out() => {
             s.corner_orb_scale = corner_orb_scale(s.corner_orb_scale, if action.contains("smaller") { "smaller" } else { "bigger" });
@@ -895,7 +422,6 @@ pub fn control(current: &InterfaceSettings, args: &Value) -> Result<Controlled, 
         }
         "orb_bigger" | "orb_larger" | "bigger_orb" => {
             s.orb_scale *= LAYOUT_STEP;
-            s.show(HudPanel::Reactor);
             "orb enlarged".to_string()
         }
         "orb_smaller" | "smaller_orb" => {
@@ -904,7 +430,6 @@ pub fn control(current: &InterfaceSettings, args: &Value) -> Result<Controlled, 
         }
         "set_orb_scale" | "orb_size" | "orb_scale" => {
             s.orb_scale = scale_arg(args).ok_or("set_orb_scale needs scale_value (0.4-2.5, or a percentage).")?;
-            s.show(HudPanel::Reactor);
             "orb resized".to_string()
         }
         "font_bigger" | "text_bigger" | "bigger_text" => {
@@ -934,73 +459,19 @@ pub fn control(current: &InterfaceSettings, args: &Value) -> Result<Controlled, 
             format!("window resized to {:.0} × {:.0}", size.0, size.1)
         }
         "status" | "describe" | "state" => "no change".to_string(),
-        other => {
-            return Err(format!(
-                "Unknown action '{other}' (declutter, hide_panel, show_panel, toggle_panel, set_panels, zen_mode_on, zen_mode_off, restore_all, \
-                 orb_bigger, orb_smaller, set_orb_scale, font_bigger, font_smaller, set_font_scale, set_window_size, status)."
-            ))
-        }
+        other => return Err(format!("Unknown action '{other}' (orb_bigger, orb_smaller, set_orb_scale, font_bigger, font_smaller, set_font_scale, set_window_size, status).")),
     };
     s.sanitize();
-    let state = s.layout_state(window_size.unwrap_or_else(live_window_size));
-    let summary = format!(
-        "Interface layout: {done}. Now: audio devices {}, skills {}, quick pills {}, telemetry {}, orb {}, zen mode {}, orb size {:.0} %, font size {:.0} %, window {:.0} × {:.0}.",
-        on_off(state.show_audio_devices_panel),
-        on_off(state.show_skills_panel),
-        on_off(state.show_quick_pills_bar),
-        on_off(state.show_telemetry_sidebar),
-        on_off(state.show_orb_panel),
-        on_off(state.minimal_zen_mode),
-        state.orb_radius_scale * 100.0,
-        state.ui_font_scale * 100.0,
-        state.window_size.0,
-        state.window_size.1,
-    );
+    let (width, height) = window_size.unwrap_or_else(live_window_size);
+    let summary = format!("Interface layout: {done}. Now: orb size {:.0} %, font size {:.0} %, window {width:.0} × {height:.0}.", s.orb_scale * 100.0, s.font_scale * 100.0);
     Ok(Controlled { settings: s, window_size, summary })
-}
-
-fn is_plural(panels: &[HudPanel]) -> bool {
-    let names = labels(panels);
-    panels.len() > 1 || (names.ends_with('s') && !names.ends_with("ss"))
-}
-
-fn on_off(b: bool) -> &'static str {
-    if b { "shown" } else { "hidden" }
 }
 
 /// In-character confirmation of `control_jai_interface`, from the request and the settings it
 /// produced.
 pub fn control_ack(args: &Value, now: &InterfaceSettings) -> String {
     let action = str_arg(args, &["action", "command"]).unwrap_or("status").to_lowercase().replace([' ', '-'], "_");
-    let panels = target_panels(args);
-    let names = labels(&panels);
-    // "The audio devices are back", "the skills panel is back".
-    let plural = is_plural(&panels);
     match action.as_str() {
-        "declutter" | "less_full" | "clean_up" | "cleanup" | "tidy" | "simplify" | "optimize" | "optimise" => {
-            "Right away, Sir. I have collapsed the Audio Devices, Skills and secondary telemetry panels to give you a clean workspace.".into()
-        }
-        "hide_panel" | "hide" | "remove" | "disable" | "collapse" if now.zen_mode && panels.len() == HudPanel::ALL.len() => {
-            "Zen mode, Sir. Just the orb and our conversation.".into()
-        }
-        "hide_panel" | "hide" | "remove" | "disable" | "collapse" => {
-            format!("Done, Sir. I've removed the {names}; {} gone from the interface.", if plural { "they're" } else { "it's" })
-        }
-        "show_panel" | "show" | "restore" | "enable" | "bring_back" => format!("There you are, Sir. The {names} {} back.", if plural { "are" } else { "is" }),
-        "toggle_panel" | "toggle" => "Done, Sir.".into(),
-        "set_panels" => {
-            let hide = target_panels(&json!({ "target_panel": args.get("hide").cloned().unwrap_or(Value::Null) }));
-            let show = target_panels(&json!({ "target_panel": args.get("show").cloned().unwrap_or(Value::Null) }));
-            match (hide.is_empty(), show.is_empty()) {
-                (false, true) => format!("Done, Sir. I've removed the {}.", labels(&hide)),
-                (true, false) => format!("There you are, Sir. The {} {} back.", labels(&show), if is_plural(&show) { "are" } else { "is" }),
-                _ => format!("Done, Sir. The {} {} gone and the {} back.", labels(&hide), if is_plural(&hide) { "are" } else { "is" }, labels(&show)),
-            }
-        }
-        "zen_mode_on" | "zen_on" | "zen_mode" | "zen" | "minimal_zen_mode" => "Zen mode, Sir. Just the orb and our conversation.".into(),
-        "zen_mode_off" | "zen_off" | "exit_zen" => "Very good, Sir. The full workspace is back.".into(),
-        "toggle_zen" => if now.zen_mode { "Zen mode, Sir.".into() } else { "The full workspace is back, Sir.".into() },
-        "restore_all" | "show_all" | "reset_layout" | "everything" => "There you are, Sir. Every panel is back.".into(),
         "orb_bigger" | "orb_larger" | "bigger_orb" | "orb_smaller" | "smaller_orb" if crate::wallpaper::orb_out() => {
             format!("Done, Sir. The corner orb is at {:.0} percent.", now.corner_orb_scale * 100.0)
         }
@@ -1017,289 +488,34 @@ pub fn control_ack(args: &Value, now: &InterfaceSettings) -> String {
 
 // ------------------------------------------------------------ spoken layout commands ----
 
-fn rx(pattern: &str) -> regex::Regex {
-    regex::Regex::new(pattern).expect("valid layout regex")
-}
-
-/// Goals rather than steps: "make the interface less full", "clean up the UI", "declutter",
-/// "optimise my layout", "mach das Interface übersichtlicher".
-static DECLUTTER: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
-    rx(r"\b(?:less (?:full|cluttered|busy|crowded|messy)|(?:too|so) (?:full|cluttered|busy|crowded|messy)|declutter|de clutter|unclutter|(?:clean|tidy|neaten|sort) (?:up )?(?:the |my |your |this )?(?:overall )?(?:ui|interface|hud|layout|screen|workspace|gui|display|window)|(?:the |my |your |this )?(?:overall )?(?:ui|interface|hud|layout|gui|workspace|display) (?:cleaner|tidier|simpler|less full|less cluttered|less busy|clean|tidy|simple|minimal|minimalistic)|optimi[sz]e (?:the |my |your )?(?:ui|interface|hud|layout|workspace|screen)|übersichtlicher|aufgeräumter|weniger voll|räum (?:das |dein |die )?(?:interface|oberfläche|hud|layout) auf)\b")
-});
-static ZEN_ON: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
-    rx(r"\b(?:zen mode|zen modus|zen layout|go zen|(?:only|just) (?:the )?(?:chat|conversation) and (?:the )?(?:orb|sphere|reactor)|(?:only|just) (?:the )?(?:orb|sphere|reactor) and (?:the )?(?:chat|conversation)|nur (?:noch )?(?:den )?(?:chat|orb) und (?:den )?(?:orb|chat))\b")
-});
-static ZEN_OFF: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
-    rx(r"\b(?:(?:exit|leave|end|stop|disable|turn off|quit|beende|verlasse?) (?:the )?zen(?: mode| modus)?|zen(?: mode| modus)? (?:off|aus))\b")
-});
-/// "Hide the panels", "show the panels": all of them at once, which is what zen mode is.
-static PANELS_OFF: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
-    rx(r"^(?:hide|close|remove|clear|get rid of|turn off|switch off|versteck|verstecke|schließ|schließe|blende)\s+(?:all\s+)?(?:(?:of\s+)?(?:the|my|your|alle|die|deine)\s+)?panels(?:\s+aus)?$")
-});
-static PANELS_ON: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
-    rx(r"^(?:show|bring back|give me back|turn on|switch on|zeig|zeige|blende)\s+(?:me\s+)?(?:(?:the|my|your|die|deine)\s+)?panels(?:\s+(?:again|back|ein|wieder))*$")
-});
-static RESTORE_ALL: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
-    rx(r"^(?:(?:show|bring back|restore|give me back|enable) (?:me )?(?:all|every|everything)(?: (?:the|your|my))? ?(?:panels?|tabs?|sidebars?|of the panels)?(?: again| back)?|(?:show|restore) (?:the )?full (?:workspace|layout|interface|hud)|alle (?:panels|reiter|fenster) (?:wieder )?(?:anzeigen|einblenden|zeigen))$")
-});
 static ORB_SIZE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
-    rx(r"\b(orb|sphere|reactor|globe|kugel|3d core)\b.*?\b(bigger|larger|smaller|tinier|grow|shrink|größer|groesser|kleiner|(\d{2,3})\s*(?:%|percent|prozent))|\b(bigger|larger|smaller|enlarge|shrink|grow|vergrößere|verkleinere)\s+(?:the\s+|my\s+|your\s+|die\s+|den\s+)?(?:3d\s+)?(orb|sphere|reactor|globe|kugel)\b")
+    regex::Regex::new(r"\b(orb|sphere|reactor|globe|kugel|3d core)\b.*?\b(bigger|larger|smaller|tinier|grow|shrink|größer|groesser|kleiner|(\d{2,3})\s*(?:%|percent|prozent))|\b(bigger|larger|smaller|enlarge|shrink|grow|vergrößere|verkleinere)\s+(?:the\s+|my\s+|your\s+|die\s+|den\s+)?(?:3d\s+)?(orb|sphere|reactor|globe|kugel)\b").expect("valid layout regex")
 });
-/// Verbs that hide a panel, show one, or keep one as it is ("just leave the normal chat window").
-static PANEL_VERBS: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
-    rx(r"\b(remove|hide|disable|close|collapse|get rid of|turn off|switch off|take away|take out|drop|lose|kill|deactivate|entferne|entfern|versteck|verstecke|verberge|deaktiviere|deaktivier|schließe|schliesse|blende|weg mit|bring back|show|restore|enable|re enable|reenable|unhide|turn on|switch on|add back|put back|expand|reveal|reopen|open|give me back|zeig|zeige|aktiviere|einblenden|leave|keep|lass|behalte)\b")
-});
-/// Panel names as Sir says them (longest first, so "audio devices tab" wins over "audio").
-const PANEL_PHRASES: &[(&str, &[&str])] = &[
-    ("audio devices tab", &["devices"]), ("audio devices panel", &["devices"]), ("audio device panel", &["devices"]), ("audio devices", &["devices"]),
-    ("audio device", &["devices"]), ("audio settings", &["devices"]), ("sound settings", &["devices"]), ("speaker settings", &["devices"]),
-    ("audio panel", &["devices"]), ("audio tab", &["devices"]), ("devices tab", &["devices"]), ("devices panel", &["devices"]), ("audiogeräte", &["devices"]),
-    ("audio geräte", &["devices"]), ("geräte", &["devices"]),
-    ("microphone panel", &["audio"]), ("microphone tab", &["audio"]), ("mic panel", &["audio"]), ("vad panel", &["audio"]), ("mikrofon panel", &["audio"]),
-    ("skills tab", &["skills"]), ("skills panel", &["skills"]), ("skill tab", &["skills"]), ("skill panel", &["skills"]), ("skills", &["skills"]), ("fähigkeiten", &["skills"]),
-    ("telemetry sidebar", &["system", "audio", "tools", "brain"]), ("telemetry panels", &["system", "audio", "tools", "brain"]),
-    ("telemetry", &["system", "audio", "tools", "brain"]), ("telemetrie", &["system", "audio", "tools", "brain"]),
-    ("system monitor", &["system"]), ("system panel", &["system"]), ("system tab", &["system"]), ("system stats", &["system"]), ("systemmonitor", &["system"]),
-    ("tool log", &["tools"]), ("tool logs", &["tools"]), ("tools tab", &["tools"]), ("tools panel", &["tools"]), ("activity log", &["tools"]),
-    ("brain panel", &["brain"]), ("brain tab", &["brain"]), ("model panel", &["brain"]),
-    ("memory panel", &["memory"]), ("memory tab", &["memory"]), ("memories panel", &["memory"]), ("gedächtnis", &["memory"]),
-    ("quick pills bar", &["pills"]), ("quick pills", &["pills"]), ("pills bar", &["pills"]), ("pills", &["pills"]), ("quick actions", &["pills"]),
-    ("quick action buttons", &["pills"]), ("suggestion buttons", &["pills"]), ("action buttons", &["pills"]),
-    ("3d orb", &["reactor"]), ("3d sphere", &["reactor"]), ("orb", &["reactor"]), ("sphere", &["reactor"]), ("reactor", &["reactor"]), ("kugel", &["reactor"]),
-    ("widgets panel", &["widgets"]), ("widget panel", &["widgets"]), ("widgets", &["widgets"]),
-    ("chat window", &["chat"]), ("chat panel", &["chat"]), ("chat tab", &["chat"]), ("normal chat", &["chat"]), ("conversation panel", &["chat"]),
-    ("left sidebar", &["audio", "devices", "system"]), ("right sidebar", &["memory", "skills", "tools", "brain"]),
-    ("sidebars", &["audio", "devices", "system", "memory", "skills", "tools", "brain"]), ("side panels", &["audio", "devices", "system", "memory", "skills", "tools", "brain"]),
-];
 
 /// Spoken layout commands on the fast path (`s` = the intent parser's normalised sentence):
-/// `control_jai_interface` arguments for a goal ("less full" → declutter), zen mode, the orb's
-/// size, or the panels a sentence hides and shows — several at once and in any order ("just
-/// leave the normal chat window, but remove the audio devices tab and the skills tab").
+/// `control_jai_interface` arguments for the orb's size ("make the orb bigger", "the orb at
+/// 150 percent").
 pub fn layout_command(s: &str) -> Option<Value> {
-    if ZEN_OFF.is_match(s) || PANELS_ON.is_match(s) {
-        return Some(json!({ "action": "zen_mode_off" }));
+    let c = ORB_SIZE.captures(s)?;
+    if let Some(pct) = c.get(3).and_then(|m| m.as_str().parse::<f32>().ok()) {
+        return Some(json!({ "action": "set_orb_scale", "scale_value": pct / 100.0 }));
     }
-    if ZEN_ON.is_match(s) || PANELS_OFF.is_match(s) {
-        return Some(json!({ "action": "zen_mode_on" }));
-    }
-    if RESTORE_ALL.is_match(s) {
-        return Some(json!({ "action": "restore_all" }));
-    }
-    if let Some(c) = ORB_SIZE.captures(s) {
-        if let Some(pct) = c.get(3).and_then(|m| m.as_str().parse::<f32>().ok()) {
-            return Some(json!({ "action": "set_orb_scale", "scale_value": pct / 100.0 }));
-        }
-        let word = c.get(2).or_else(|| c.get(4)).map(|m| m.as_str()).unwrap_or("");
-        let bigger = matches!(word, "bigger" | "larger" | "grow" | "größer" | "groesser" | "enlarge" | "vergrößere");
-        return Some(json!({ "action": if bigger { "orb_bigger" } else { "orb_smaller" } }));
-    }
-    // Panels named with a verb that governs them.
-    let verbs: Vec<(usize, &str)> = PANEL_VERBS.find_iter(s).map(|m| (m.start(), m.as_str())).collect();
-    if !verbs.is_empty() {
-        let mut hide: Vec<&str> = Vec::new();
-        let mut show: Vec<&str> = Vec::new();
-        let mut taken = vec![false; s.len()];
-        for (phrase, ids) in PANEL_PHRASES {
-            for (at, _) in s.match_indices(phrase) {
-                let end = at + phrase.len();
-                let bounded = (at == 0 || !s[..at].ends_with(char::is_alphanumeric)) && !s[end..].starts_with(char::is_alphanumeric);
-                if !bounded || taken[at..end].iter().any(|t| *t) {
-                    continue;
-                }
-                taken[at..end].iter_mut().for_each(|t| *t = true);
-                // The nearest verb before the name decides; "blende … aus" / "… ausblenden" too.
-                let Some((_, verb)) = verbs.iter().rev().find(|(v, _)| *v < at) else { continue };
-                let tail = &s[end..];
-                let german_off = *verb == "blende" && !tail.trim_start().starts_with("ein");
-                let target = match *verb {
-                    "leave" | "keep" | "lass" | "behalte" => continue,
-                    "bring back" | "show" | "restore" | "enable" | "re enable" | "reenable" | "unhide" | "turn on" | "switch on" | "add back" | "put back"
-                    | "expand" | "reveal" | "reopen" | "open" | "give me back" | "zeig" | "zeige" | "aktiviere" | "einblenden" => &mut show,
-                    "blende" if !german_off => &mut show,
-                    _ => &mut hide,
-                };
-                for id in ids.iter() {
-                    if !target.contains(id) {
-                        target.push(id);
-                    }
-                }
-            }
-        }
-        let name = |id: &str| match id {
-            "devices" => "audio_devices",
-            "reactor" => "orb",
-            "pills" => "quick_pills",
-            "tools" => "tool_log",
-            "audio" => "microphone",
-            other => other,
-        }
-        .to_string();
-        let telemetry = ["system", "audio", "tools", "brain"];
-        let names = |ids: &[&str]| -> Vec<String> {
-            if telemetry.iter().all(|t| ids.contains(t)) && ids.len() == 4 {
-                vec!["telemetry".to_string()]
-            } else {
-                ids.iter().map(|id| name(id)).collect()
-            }
-        };
-        match (hide.is_empty(), show.is_empty()) {
-            (true, true) => {}
-            (false, true) => return Some(json!({ "action": "hide_panel", "target_panel": names(&hide) })),
-            (true, false) => return Some(json!({ "action": "show_panel", "target_panel": names(&show) })),
-            (false, false) => return Some(json!({ "action": "set_panels", "hide": names(&hide), "show": names(&show) })),
-        }
-    }
-    if DECLUTTER.is_match(s) {
-        return Some(json!({ "action": "declutter" }));
-    }
-    None
+    let word = c.get(2).or_else(|| c.get(4)).map(|m| m.as_str()).unwrap_or("");
+    let bigger = matches!(word, "bigger" | "larger" | "grow" | "größer" | "groesser" | "enlarge" | "vergrößere");
+    Some(json!({ "action": if bigger { "orb_bigger" } else { "orb_smaller" } }))
 }
 
 /// The `control_jai_interface` tool schema.
 pub fn control_tool_definition() -> Value {
     json!({"type": "function", "function": {
         "name": "control_jai_interface",
-        "description": "Change YOUR OWN HUD layout live: hide or show panels (\"remove the audio devices tab and the skills tab\" → hide_panel [audio_devices, skills]; \"bring back the audio settings\" → show_panel audio_devices), declutter (\"make the interface less full\", \"clean up the UI\": decide yourself, no questions), zen mode (only the 3D orb and the chat), the orb's size, the text size or the window size.",
+        "description": "Resize parts of YOUR OWN HUD live: the orb (\"make the orb bigger\"), the text or the window.",
         "parameters": {"type": "object", "properties": {
-            "action": {"type": "string", "enum": ["declutter", "hide_panel", "show_panel", "toggle_panel", "zen_mode_on", "zen_mode_off", "restore_all", "orb_bigger", "orb_smaller", "set_orb_scale", "font_bigger", "font_smaller", "set_font_scale", "set_window_size", "status"]},
-            "target_panel": {"type": "array", "items": {"type": "string", "enum": ["audio_devices", "skills", "quick_pills", "telemetry", "orb", "memory", "tool_log", "brain", "microphone", "system", "widgets", "chat", "header"]}},
+            "action": {"type": "string", "enum": ["orb_bigger", "orb_smaller", "set_orb_scale", "font_bigger", "font_smaller", "set_font_scale", "set_window_size", "status"]},
             "scale_value": {"type": "number", "description": "Orb 0.4-2.5, font 0.8-1.6, window factor; or a percentage"},
             "width": {"type": "number"}, "height": {"type": "number"}
         }, "required": ["action"]}
     }})
-}
-
-// ------------------------------------------------------------------------------ themes ----
-
-pub struct Theme {
-    pub name: &'static str,
-    pub display: &'static str,
-    pub accent: &'static str,
-    pub background: &'static str,
-    /// Short description for the tool schema.
-    hint: &'static str,
-    aliases: &'static [&'static str],
-}
-
-pub const THEMES: &[Theme] = &[
-    Theme {
-        name: "jai",
-        display: "JAI Gold",
-        accent: "#ffd400",
-        // Warm obsidian glass.
-        background: "#0a0804",
-        hint: "yellow, the default",
-        aliases: &["jai", "jai gold", "jai yellow", "default", "standard", "classic", "original", "normal"],
-    },
-    Theme {
-        name: "stark_red",
-        display: "Stark Red",
-        accent: "#ff2b3e",
-        // Blue-black workshop glass.
-        background: "#05070b",
-        hint: "red and blue",
-        aliases: &["stark", "stark red", "tony stark", "stark hud"],
-    },
-    Theme {
-        // ("stark" until v28, which moves a stored "stark" here: the word means the Stark look now.)
-        name: "arc_cyan",
-        display: "Arc Cyan",
-        accent: "#00e5ff",
-        // Deep obsidian glass.
-        background: "#070b12",
-        hint: "cyan",
-        aliases: &["arc reactor", "stark industries", "stark cyan", "cyan", "arc cyan", "arc_cyan"],
-    },
-    Theme {
-        name: "mark42",
-        display: "Mark 42",
-        accent: "#ffc233",
-        background: "#170507",
-        hint: "red and gold",
-        aliases: &[
-            "mark 42", "mark xlii", "iron man", "ironman", "red and gold", "red gold", "rot gold", "hot rod", "gold and red", "gold red",
-            "iron man gold and red", "iron man gold & red", "iron man red and gold", "iron man gold red",
-        ],
-    },
-    Theme {
-        name: "stealth",
-        display: "Stealth",
-        accent: "#a9b8c8",
-        background: "#050608",
-        hint: "dark grey",
-        aliases: &[
-            "dark", "darker", "dunkel", "dunkler", "dunkle", "night", "nacht", "black", "schwarz", "monochrome", "grey", "gray", "grau",
-            "minimal monochrome", "monochrome minimal", "monochrom", "stealth obsidian", "obsidian", "stealth_obsidian",
-        ],
-    },
-    Theme {
-        name: "emerald",
-        display: "Emerald",
-        accent: "#22f59a",
-        background: "#020b06",
-        hint: "green",
-        aliases: &["matrix", "hacker", "hulk", "smaragd", "stealth matrix", "matrix green", "emerald matrix", "emerald_matrix"],
-    },
-    Theme {
-        name: "amethyst",
-        display: "Amethyst",
-        accent: "#b48cff",
-        background: "#08040f",
-        hint: "purple",
-        aliases: &["vision", "purple haze", "amethyst purple"],
-    },
-    Theme {
-        name: "arctic",
-        display: "Arctic",
-        accent: "#d2f1ff",
-        background: "#05090f",
-        hint: "ice white",
-        aliases: &["ice", "frost", "snow", "eis", "polar", "light", "white mode", "bright"],
-    },
-    Theme {
-        name: "midnight",
-        display: "Midnight",
-        accent: "#4f8cff",
-        background: "#030616",
-        hint: "deep blue",
-        aliases: &["ocean", "deep blue", "mitternacht"],
-    },
-    Theme {
-        name: "sunset",
-        display: "Sunset",
-        accent: "#ff8a3d",
-        background: "#130804",
-        hint: "orange",
-        aliases: &["hulkbuster", "sonnenuntergang", "ember"],
-    },
-    Theme {
-        name: "stark_gold",
-        display: "Stark Gold",
-        accent: "#ffb800",
-        background: "#0b0905",
-        hint: "Stark gold on obsidian",
-        aliases: &["stark gold", "gold", "golden", "gold theme", "stark industries gold"],
-    },
-    Theme {
-        name: "crimson_mk42",
-        display: "Crimson MK42",
-        accent: "#ff2a45",
-        background: "#0f0507",
-        hint: "crimson on dark glass",
-        aliases: &["crimson", "crimson mk42", "crimson mark 42", "mk42 crimson", "crimson red"],
-    },
-];
-
-pub fn theme(name: &str) -> Option<&'static Theme> {
-    let n = words(name);
-    let compact = n.replace(' ', "");
-    // A theme's own name first, then its display name and aliases.
-    THEMES.iter().find(|t| t.name == compact || t.name == n.replace(' ', "_")).or_else(|| THEMES.iter().find(|t| t.display.to_lowercase() == n || t.aliases.contains(&n.as_str())))
-}
-
-fn theme_list() -> String {
-    THEMES.iter().map(|t| format!("{} ({})", t.name, t.hint)).collect::<Vec<_>>().join(", ")
 }
 
 // ----------------------------------------------------------------------------- colours ----
@@ -1455,23 +671,6 @@ pub fn parse_color(input: &str) -> Option<[u8; 3]> {
         Some(Shade::Light) => mix(rgb, WHITE, 0.45),
         None => rgb,
     })
-}
-
-/// Background colours, always as dark glass: a colour name becomes a deep tint ("red background"
-/// = obsidian with a red cast), a light name or value the lightest slate glass, never a light or
-/// neon window.
-pub fn parse_background(input: &str) -> Option<[u8; 3]> {
-    let w = words(input);
-    match w.as_str() {
-        "darker" | "dark" | "deeper" | "dunkler" | "dunkel" | "black" | "schwarz" | "obsidian" => return Some(DEEPEST_BACKGROUND),
-        "lighter" | "light" | "brighter" | "heller" | "hell" | "white" | "weiß" | "weiss" | "slate" => return Some(LIGHTEST_BACKGROUND),
-        _ => {}
-    }
-    if let Some(rgb) = parse_hex(input).or_else(|| parse_rgb_triplet(input)) {
-        return Some(dark_glass(rgb));
-    }
-    let rgb = parse_color(input)?;
-    Some(if luminance(rgb) > 0.62 { LIGHTEST_BACKGROUND } else { dark_glass(scale_rgb(rgb, 0.14)) })
 }
 
 /// The colour as JAI says it: always English ("dunkelblau" → "dark blue").
@@ -1639,30 +838,22 @@ fn opacity_value(v: &Value, current: u8) -> Option<i32> {
     Some(if relative { current as i32 + pct.round() as i32 } else { pct.round() as i32 })
 }
 
-/// Strings, or one string with commas / "and" ("memory and skills").
-fn list_arg(args: &Value, key: &str) -> Vec<String> {
-    match args.get(key) {
-        Some(Value::Array(items)) => items.iter().filter_map(Value::as_str).map(str::to_string).collect(),
-        Some(Value::String(s)) => s
-            .replace(" and ", ",")
-            .replace(" und ", ",")
-            .split(',')
-            .map(|p| p.trim().to_string())
-            .filter(|p| !p.is_empty())
-            .collect(),
-        _ => Vec::new(),
-    }
-}
-
 /// Applies `configure_interface` arguments to `current`. Fields that cannot be understood are
 /// reported back instead of failing the whole call; nothing understood at all is an error.
 /// A saved theme on the whole HUD: palette, accent and background tint.
 fn apply_custom_theme(s: &mut InterfaceSettings, t: &crate::theme_store::CustomTheme, done: &mut Vec<String>, verb: &str) {
     s.hud_palette = t.key();
-    s.accent = hex(t.core_primary);
-    s.background = hex(t.background_tint);
-    s.theme = "custom".into();
     done.push(format!("theme '{}' {verb}", t.name));
+}
+
+/// What a colour request stores. Light is drawn on black glass, so a colour too dark to be a
+/// light ("black") is the black and white theme.
+fn light_of(word: &str, rgb: [u8; 3]) -> String {
+    if luminance(rgb) < 0.08 {
+        "mono".to_string()
+    } else {
+        crate::theme_store::name_for(word, rgb)
+    }
 }
 
 pub fn configure(current: &InterfaceSettings, args: &Value) -> Result<Configured, String> {
@@ -1674,15 +865,6 @@ pub fn configure(current: &InterfaceSettings, args: &Value) -> Result<Configured
         done.push("reset to the default look".into());
     }
 
-    if let Some(raw) = str_arg(args, &["ui_paradigm", "design", "ui_design", "look"]) {
-        match crate::oled_minimal_ui::UiDesignParadigm::parse(raw) {
-            Some(p) => {
-                s.ui_paradigm = p;
-                done.push(format!("design {}", p.id()));
-            }
-            None => failed.push(format!("unknown design '{raw}' (modern_oled_minimal, classic_scifi_hud)")),
-        }
-    }
     if let Some(raw) = str_arg(args, &["core_style", "core", "core_look"]) {
         match crate::holo_core::CoreStyle::of_word(raw) {
             Some(style) => {
@@ -1692,95 +874,30 @@ pub fn configure(current: &InterfaceSettings, args: &Value) -> Result<Configured
             None => failed.push(format!("unknown core '{raw}' (simple, complex)")),
         }
     }
-    if let Some(raw) = str_arg(args, &["accent_preset"]) {
-        match crate::oled_minimal_ui::accent_preset(raw) {
-            Some((name, hex_code)) => {
-                s.accent = hex_code.to_string();
-                s.theme = "custom".into();
-                done.push(format!("accent {name}"));
-            }
-            None => failed.push(format!("unknown accent '{raw}' (Ice White, Electric Blue, Stark Gold, Emerald, Violet, Crimson, Sunset Orange)")),
-        }
-    }
+    // A theme by its name or a word for it ("iron man", "black and white"), a layout said as a
+    // theme ("minimal"), or a colour of his own.
     if let Some(name) = str_arg(args, &["theme", "preset", "style"]) {
-        if let Some(t) = theme(name) {
-            s.theme = t.name.to_string();
-            s.accent = t.accent.to_string();
-            s.background = t.background.to_string();
-            // The HUD's palette follows: the preset the word names, else the theme's accent.
-            if let Some(rgb) = parse_color(t.accent) {
-                s.hud_palette = crate::theme_store::name_for(name, rgb);
-            }
-            done.push(format!("theme {}", t.display));
+        if let Some(preset) = crate::holo_theme::preset_for_word(&words(name)) {
+            s.hud_palette = preset.to_string();
+            done.push(format!("theme {}", crate::holo_theme::label(preset)));
         } else if let Some(layout) = HudLayout::parse(name) {
             s.layout = layout;
             done.push(format!("layout {}", layout.id()));
         } else if let Some(rgb) = parse_color(name) {
-            s.accent = hex(rgb);
-            s.theme = "custom".into();
-            s.hud_palette = crate::theme_store::name_for(name, rgb);
+            s.hud_palette = light_of(name, rgb);
             done.push(format!("accent colour {name}"));
         } else {
-            failed.push(format!("unknown theme '{name}' (themes: {})", theme_list()));
+            failed.push(format!("unknown theme '{name}' (themes: {})", crate::holo_theme::PRESETS.map(|(name, _, _)| name).join(", ")));
         }
     }
     if let Some(c) = str_arg(args, &["accent_color", "accent_colour", "accent", "color", "colour", "highlight_color"]) {
         match parse_color(c) {
-            // A near-black highlight would be invisible: Sir wants a black interface.
-            Some(rgb) if luminance(rgb) < 0.08 => {
-                s.background = hex(rgb);
-                s.theme = "custom".into();
-                done.push(format!("background {c}"));
-            }
             Some(rgb) => {
-                s.accent = hex(rgb);
-                s.theme = "custom".into();
-                s.hud_palette = crate::theme_store::name_for(c, rgb);
+                s.hud_palette = light_of(c, rgb);
                 done.push(format!("accent colour {c}"));
             }
             None => failed.push(format!("unknown colour '{c}'")),
         }
-    }
-    if let Some(c) = str_arg(args, &["background_color", "background_colour", "background", "backdrop"]) {
-        // "Darker" / "lighter" are relative: a deeper or a shallower dark glass.
-        let relative = match words(c).as_str() {
-            "darker" | "deeper" | "dunkler" | "blacker" | "more dark" => Some(0.25),
-            "lighter" | "brighter" | "heller" | "less dark" => Some(-0.25),
-            _ => None,
-        };
-        match relative.map(|step| with_darkness(s.background_rgb(), background_darkness(s.background_rgb()) + step)).or_else(|| parse_background(c)) {
-            Some(rgb) => {
-                s.background = hex(rgb);
-                done.push(format!("background {} (darkness {:.0} %)", hex(rgb), background_darkness(rgb) * 100.0));
-            }
-            None => failed.push(format!("unknown background colour '{c}'")),
-        }
-    }
-    // "Make it darker": +0.15 deeper, -0.15 shallower (always within dark glass).
-    if let Some((step, _)) = args.get("background_shade").filter(|v| !v.is_null()).and_then(number_like) {
-        let before = background_darkness(s.background_rgb());
-        let rgb = with_darkness(s.background_rgb(), before + step);
-        s.background = hex(rgb);
-        let after = background_darkness(rgb);
-        if (after - before).abs() < 0.01 {
-            done.push(format!("background already at its {} (darkness {:.0} %)", if step > 0.0 { "deepest" } else { "lightest dark glass" }, after * 100.0));
-        } else {
-            done.push(format!("background {} (darkness {:.0} %)", if step > 0.0 { "deeper" } else { "lighter" }, after * 100.0));
-        }
-    }
-    if let Some((d, _)) = args.get("background_darkness").filter(|v| !v.is_null()).and_then(number_like) {
-        let d = if d > 1.0 { d / 100.0 } else { d };
-        let rgb = with_darkness(s.background_rgb(), d);
-        s.background = hex(rgb);
-        done.push(format!("background darkness {:.0} %", background_darkness(rgb) * 100.0));
-    }
-    if let Some((r, relative)) = args.get("corner_rounding").or_else(|| args.get("rounding")).filter(|v| !v.is_null()).and_then(number_like) {
-        s.corner_rounding = (if relative { s.corner_rounding + r } else { r }).clamp(MIN_ROUNDING, MAX_ROUNDING);
-        done.push(format!("corner rounding {:.0}", s.corner_rounding));
-    }
-    if let Some(on) = bool_arg(args, "header_telemetry").or_else(|| bool_arg(args, "show_header_telemetry")) {
-        s.header_telemetry = on;
-        done.push(format!("header telemetry {}", if on { "on" } else { "off" }));
     }
     if let Some(v) = ["scale", "zoom", "ui_scale"].iter().find_map(|k| args.get(*k).filter(|v| !v.is_null())) {
         match scale_value(v, s.scale) {
@@ -1805,10 +922,6 @@ pub fn configure(current: &InterfaceSettings, args: &Value) -> Result<Configured
             }
         }
     }
-    if let Some(on) = bool_arg(args, "zen_mode").or_else(|| bool_arg(args, "minimal_zen_mode")) {
-        s.zen_mode = on;
-        done.push(format!("zen mode {}", if on { "on" } else { "off" }));
-    }
     let opacity = match (args.get("opacity").filter(|v| !v.is_null()), args.get("transparency").filter(|v| !v.is_null())) {
         (Some(v), _) => Some(opacity_value(v, s.opacity).ok_or(v)),
         // Transparency 30 % = opacity 70 %.
@@ -1829,41 +942,11 @@ pub fn configure(current: &InterfaceSettings, args: &Value) -> Result<Configured
         if let Some(layout) = HudLayout::parse(name) {
             s.layout = layout;
             done.push(format!("layout {}", layout.id()));
-        } else if let Some(t) = theme(name) {
-            s.theme = t.name.to_string();
-            s.accent = t.accent.to_string();
-            s.background = t.background.to_string();
-            done.push(format!("theme {}", t.display));
+        } else if let Some(preset) = crate::holo_theme::preset_for_word(&words(name)) {
+            s.hud_palette = preset.to_string();
+            done.push(format!("theme {}", crate::holo_theme::label(preset)));
         } else {
             failed.push(format!("unknown layout '{name}' (full, compact or orb)"));
-        }
-    }
-    for (key, show) in [("hide_panels", false), ("show_panels", true)] {
-        for name in list_arg(args, key) {
-            let panels = HudPanel::parse(&name);
-            if panels.is_empty() {
-                failed.push(format!(
-                    "unknown panel '{name}' (panels: {})",
-                    HudPanel::ALL.iter().map(|p| p.id()).collect::<Vec<_>>().join(", ")
-                ));
-                continue;
-            }
-            if show && panels.len() == HudPanel::ALL.len() {
-                s.hidden_panels.clear();
-                s.layout = HudLayout::Full;
-            } else if !show && panels.len() == HudPanel::ALL.len() {
-                // "Hide everything": only the reactor stays.
-                s.layout = HudLayout::Orb;
-            } else {
-                for p in panels {
-                    if show {
-                        s.show(p);
-                    } else {
-                        s.hide(p);
-                    }
-                }
-            }
-            done.push(format!("{} {name}", if show { "showing" } else { "hiding" }));
         }
     }
     let flags = [
@@ -1880,6 +963,7 @@ pub fn configure(current: &InterfaceSettings, args: &Value) -> Result<Configured
         ("animations", bool_arg(args, "animations"), &mut s.animations),
         ("display finish", bool_arg(args, "display_finish").or_else(|| bool_arg(args, "scan_lines")).or_else(|| bool_arg(args, "grain")), &mut s.display_finish),
         ("sound cues", bool_arg(args, "sound_cues"), &mut s.sound_cues),
+        ("conversation block", bool_arg(args, "comms_block"), &mut s.comms_block),
         ("calm HUD", bool_arg(args, "calm_hud"), &mut s.calm_hud),
         ("live words", bool_arg(args, "live_words"), &mut s.live_words),
         ("start-up sequence", bool_arg(args, "startup_sequence"), &mut s.startup_sequence),
@@ -1955,11 +1039,10 @@ pub fn configure(current: &InterfaceSettings, args: &Value) -> Result<Configured
         done.push("every window docked inside the HUD".into());
     }
     if let Some(name) = str_arg(args, &["hud_palette", "palette", "hud_theme"]) {
-        match crate::holo_theme::preset(name) {
-            Some(p) => {
-                s.hud_palette = crate::holo_theme::preset_name(name).unwrap_or(crate::holo_theme::DEFAULT_PRESET).to_string();
-                s.accent = hex(p.accent);
-                done.push(format!("HUD theme {}", s.hud_palette));
+        match crate::holo_theme::preset_name(name) {
+            Some(preset) => {
+                s.hud_palette = preset.to_string();
+                done.push(format!("HUD theme {preset}"));
             }
             None => match crate::theme_store::custom(name.trim().trim_start_matches(crate::holo_theme::CUSTOM_PREFIX)) {
                 Some(t) => apply_custom_theme(&mut s, &t, &mut done, "loaded"),
@@ -1983,7 +1066,7 @@ pub fn configure(current: &InterfaceSettings, args: &Value) -> Result<Configured
                 t.core_primary = colour("core_primary").unwrap_or(t.core_primary);
                 t.core_secondary = colour("core_secondary").unwrap_or(t.core_secondary);
                 t.window_border = colour("window_border").unwrap_or(t.window_border);
-                t.background_tint = text("background_tint").and_then(parse_background).unwrap_or(t.background_tint);
+                t.background_tint = colour("background_tint").unwrap_or(t.background_tint);
                 match crate::theme_store::save_custom(t.clone()) {
                     Ok(()) => apply_custom_theme(&mut s, &t, &mut done, "created and saved"),
                     Err(e) => failed.push(format!("theme '{}' not saved: {e}", t.name)),
@@ -2034,8 +1117,8 @@ pub fn configure(current: &InterfaceSettings, args: &Value) -> Result<Configured
 
     if done.is_empty() {
         return Err(if failed.is_empty() {
-            "Nothing to change: pass theme, accent_color, background_color, scale, opacity, layout, show_panels, \
-             hide_panels, always_on_top, fullscreen, frameless, animations, title, window or reset."
+            "Nothing to change: pass hud_palette, accent_color, scale, opacity, layout, always_on_top, fullscreen, frameless, 
+             animations, title, window or reset."
                 .to_string()
         } else {
             failed.join("; ")
@@ -2078,13 +1161,6 @@ pub fn core_command(args: &Value) -> Option<crate::holo_mind::CoreCommand> {
 pub fn spoken_ack(args: &Value, now: &InterfaceSettings) -> String {
     let text = |keys: &[&str]| str_arg(args, keys);
     let flag = |key: &str| bool_arg(args, key);
-    let panels = |key: &str| {
-        list_arg(args, key)
-            .iter()
-            .flat_map(|n| HudPanel::parse(n))
-            .map(|p| p.label())
-            .collect::<Vec<_>>()
-    };
     if let Some(line) = crate::hud_feel::spoken(args) {
         return line;
     }
@@ -2106,8 +1182,8 @@ pub fn spoken_ack(args: &Value, now: &InterfaceSettings) -> String {
     if let Some(open) = flag("mixer_view") {
         return if open { "The mixer, Sir. A fader for every channel." } else { "Mixer closed, Sir." }.into();
     }
-    if let Some(name) = text(&["hud_palette", "palette", "hud_theme"]).filter(|n| crate::holo_theme::preset(n).is_some()) {
-        return format!("{} it is, Sir.", name.replace(['_', '-'], " ").split_whitespace().map(|w| { let mut c = w.chars(); c.next().map(|f| f.to_uppercase().chain(c).collect::<String>()).unwrap_or_default() }).collect::<Vec<_>>().join(" "));
+    if let Some(preset) = text(&["hud_palette", "palette", "hud_theme"]).and_then(crate::holo_theme::preset_name) {
+        return format!("{} it is, Sir.", spoken_theme(preset));
     }
     if text(&["detach_window"]).is_some() {
         return "Detached into its own window, Sir.".into();
@@ -2149,14 +1225,8 @@ pub fn spoken_ack(args: &Value, now: &InterfaceSettings) -> String {
     if flag("reset") == Some(true) {
         return "Very good, Sir. The interface is back to its factory look.".into();
     }
-    if let Some(p) = text(&["ui_paradigm", "design", "ui_design", "look"]).and_then(crate::oled_minimal_ui::UiDesignParadigm::parse) {
-        return format!("Very good, Sir. Switched to {}.", p.spoken());
-    }
     if let Some(style) = text(&["core_style", "core", "core_look"]).and_then(crate::holo_core::CoreStyle::of_word) {
         return format!("The {} core, Sir.", style.name());
-    }
-    if let Some((name, _)) = text(&["accent_preset"]).and_then(crate::oled_minimal_ui::accent_preset) {
-        return format!("Done, Sir. The accent is now {name}.");
     }
     if let Some(cmd) = text(&["window", "window_action"]).and_then(WindowCommand::parse) {
         return match cmd {
@@ -2168,8 +1238,8 @@ pub fn spoken_ack(args: &Value, now: &InterfaceSettings) -> String {
         };
     }
     if let Some(name) = text(&["theme"]) {
-        if let Some(t) = theme(name) {
-            return format!("Very good, Sir. Switching to the {} theme.", t.display);
+        if let Some(preset) = crate::holo_theme::preset_for_word(&words(name)) {
+            return format!("Very good, Sir. Switching to the {} theme.", spoken_theme(preset));
         }
         if let Some(layout) = HudLayout::parse(name) {
             return layout_ack(layout);
@@ -2177,39 +1247,14 @@ pub fn spoken_ack(args: &Value, now: &InterfaceSettings) -> String {
     }
     if let Some(c) = text(&["accent_color", "accent", "color"]) {
         if parse_color(c).is_some_and(|rgb| luminance(rgb) < 0.08) {
-            return "Very good, Sir. Going dark.".into();
+            return "Black and white, Sir. Only light shows on black glass.".into();
         }
         return format!("Very good, Sir. The interface is now {}.", colour_word(c));
-    }
-    if let Some((step, _)) = args.get("background_shade").and_then(number_like) {
-        let d = background_darkness(now.background_rgb());
-        return if step > 0.0 && d >= 0.99 {
-            "It is as deep as obsidian goes, Sir.".into()
-        } else if step > 0.0 {
-            "Done, Sir. A deeper shade of obsidian.".into()
-        } else if d <= 0.01 {
-            "That is the lightest the glass goes, Sir. Any lighter would hurt your eyes.".into()
-        } else {
-            "Done, Sir. A touch lighter, still dark glass.".into()
-        };
-    }
-    if text(&["background_color", "background"]).is_some() || args.get("background_darkness").is_some() {
-        return "Done, Sir. A new background.".into();
     }
     if let Some(name) = text(&["layout"]) {
         if let Some(layout) = HudLayout::parse(name) {
             return layout_ack(layout);
         }
-    }
-    let hidden = panels("hide_panels");
-    if !hidden.is_empty() {
-        if now.layout == HudLayout::Orb && hidden.len() == HudPanel::ALL.len() {
-            return layout_ack(HudLayout::Orb);
-        }
-        return format!("Done, Sir. {} hidden.", capitalise(&join_labels(&hidden)));
-    }
-    if !panels("show_panels").is_empty() {
-        return "There you are, Sir.".into();
     }
     if let Some(v) = args.get("scale") {
         return match v.as_str().map(words).as_deref() {
@@ -2255,6 +1300,9 @@ pub fn spoken_ack(args: &Value, now: &InterfaceSettings) -> String {
     }
     if let Some(on) = flag("sound_cues") {
         return if on { "Done, Sir. Sound cues back on.".into() } else { "Done, Sir. The board stays quiet.".into() };
+    }
+    if let Some(on) = flag("comms_block") {
+        return if on { "The conversation, Sir, above the bottom strip.".into() } else { "Done, Sir. The conversation block is away.".into() };
     }
     if text(&["title"]).is_some() {
         return format!("Very good, Sir. On screen I am now {}.", now.title);
@@ -2604,277 +1652,6 @@ pub fn orb_mode_tool_definition() -> Value {
     }})
 }
 
-// ------------------------------------------------------------------- GUI master config ----
-
-/// Every aspect of the GUI under one switchboard (`control_gui_aspect`): the live view of
-/// `InterfaceSettings` with the names Sir and the model use.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct GuiMasterConfig {
-    /// "full", "minimal" (zen: orb and chat) or "orb_only" (pure orb mode).
-    pub mode: &'static str,
-    /// arc_cyan, stark_gold, crimson_mk42, emerald_matrix, stealth_obsidian (or another theme).
-    pub accent_theme: String,
-    /// 0 = slate glass, 1 = deepest obsidian.
-    pub background_darkness: f32,
-    /// 0.15-1.0.
-    pub window_opacity: f32,
-    /// 0-32 (panels; bubbles and buttons follow).
-    pub corner_rounding: f32,
-    /// 0.75-1.6.
-    pub font_scale: f32,
-    /// 100-800 px (the orb in orb mode, the reactor's share of its panel otherwise).
-    pub orb_size: f32,
-    pub always_on_top: bool,
-    pub show_audio_panel: bool,
-    pub show_skills_panel: bool,
-    pub show_pills_bar: bool,
-    pub show_header_telemetry: bool,
-    pub show_chat_panel: bool,
-    /// Logical size of the open window.
-    pub window_size: (f32, f32),
-}
-
-impl GuiMasterConfig {
-    pub fn of(s: &InterfaceSettings) -> Self {
-        let accent_theme = match s.theme.as_str() {
-            "stealth" => "stealth_obsidian".to_string(),
-            "emerald" => "emerald_matrix".to_string(),
-            other => other.to_string(),
-        };
-        Self {
-            mode: if s.orb_mode {
-                "orb_only"
-            } else if s.zen_mode || s.layout == HudLayout::Orb {
-                "minimal"
-            } else {
-                "full"
-            },
-            accent_theme,
-            background_darkness: (background_darkness(s.background_rgb()) * 100.0).round() / 100.0,
-            window_opacity: s.opacity as f32 / 100.0,
-            corner_rounding: s.corner_rounding,
-            font_scale: s.font_scale,
-            orb_size: if s.orb_mode { s.orb_size_px } else { (s.orb_scale * 300.0).round() },
-            always_on_top: s.always_on_top,
-            show_audio_panel: !s.is_hidden(HudPanel::Devices) || !s.is_hidden(HudPanel::Audio),
-            show_skills_panel: !s.is_hidden(HudPanel::Skills),
-            show_pills_bar: !s.is_hidden(HudPanel::Pills),
-            show_header_telemetry: s.header_telemetry,
-            show_chat_panel: !s.is_hidden(HudPanel::Chat),
-            window_size: live_window_size(),
-        }
-    }
-}
-
-/// The result of `control_gui_aspect`.
-pub struct GuiChange {
-    pub settings: InterfaceSettings,
-    pub window: Option<WindowCommand>,
-    /// A new inner size for the HUD window (logical points).
-    pub window_size: Option<(f32, f32)>,
-    pub summary: String,
-}
-
-/// A boolean from true/false, "on"/"off", "show"/"hide", 1/0.
-fn switch_value(v: &Value) -> Option<bool> {
-    match v {
-        Value::Bool(b) => Some(*b),
-        Value::Number(n) => n.as_f64().map(|x| x != 0.0),
-        Value::String(t) => match words(t).as_str() {
-            "true" | "on" | "yes" | "show" | "visible" | "enable" | "enabled" | "an" | "ein" | "ja" => Some(true),
-            "false" | "off" | "no" | "hide" | "hidden" | "disable" | "disabled" | "aus" | "nein" => Some(false),
-            _ => None,
-        },
-        _ => None,
-    }
-}
-
-/// `control_gui_aspect(property, value)` (or several `property: value` pairs at once) on the
-/// GUI master config.
-pub fn control_gui_aspect(current: &InterfaceSettings, args: &Value) -> Result<GuiChange, String> {
-    let mut pairs: Vec<(String, Value)> = Vec::new();
-    if let Some(prop) = str_arg(args, &["property", "aspect"]) {
-        pairs.push((prop.to_lowercase().replace([' ', '-'], "_"), args.get("value").cloned().unwrap_or(Value::Null)));
-    }
-    if let Some(obj) = args.as_object() {
-        for (k, v) in obj {
-            if !matches!(k.as_str(), "property" | "aspect" | "value") {
-                pairs.push((k.to_lowercase(), v.clone()));
-            }
-        }
-    }
-    if pairs.is_empty() {
-        return Err("control_gui_aspect needs property and value (mode, accent_theme, background_darkness, window_opacity, corner_rounding, font_scale, orb_size, always_on_top, show_audio_panel, show_skills_panel, show_pills_bar, show_header_telemetry, show_chat_panel, window_position, window_size).".into());
-    }
-    let mut s = current.clone();
-    let mut window = None;
-    let mut window_size = None;
-    let mut done: Vec<String> = Vec::new();
-    for (prop, v) in pairs {
-        let bad = || format!("unclear value {v} for {prop}");
-        match prop.as_str() {
-            "mode" | "gui_mode" | "layout" => {
-                let m = v.as_str().map(words).ok_or_else(bad)?;
-                match m.as_str() {
-                    "full" | "normal" | "standard" | "everything" => {
-                        s.orb_mode = false;
-                        s.zen_mode = false;
-                        s.layout = HudLayout::Full;
-                    }
-                    "minimal" | "zen" | "minimal zen" | "clean" => {
-                        s.orb_mode = false;
-                        s.zen_mode = true;
-                        if s.layout == HudLayout::Orb {
-                            s.layout = HudLayout::Full;
-                        }
-                    }
-                    "orb only" | "orb" | "orb_only" | "pure orb" => s.orb_mode = true,
-                    _ => return Err(format!("unknown mode '{m}' (full, minimal, orb_only)")),
-                }
-                done.push(format!("mode {m}"));
-            }
-            "accent_theme" | "theme" | "accent" => {
-                let name = v.as_str().ok_or_else(bad)?;
-                if let Some(t) = theme(name) {
-                    s.theme = t.name.to_string();
-                    s.accent = t.accent.to_string();
-                    s.background = t.background.to_string();
-                    done.push(format!("theme {}", t.display));
-                } else if let Some(rgb) = parse_color(name) {
-                    s.accent = hex(rgb);
-                    s.theme = "custom".into();
-                    done.push(format!("accent {}", hex(rgb)));
-                } else {
-                    return Err(format!("unknown theme '{name}' (arc_cyan, stark_gold, crimson_mk42, emerald_matrix, stealth_obsidian)"));
-                }
-            }
-            "background_darkness" | "darkness" => {
-                let (x, rel) = match v.as_str().map(words).as_deref() {
-                    Some("darker" | "deeper" | "dunkler") => (0.2, true),
-                    Some("lighter" | "brighter" | "heller") => (-0.2, true),
-                    _ => number_like(&v).ok_or_else(bad)?,
-                };
-                let x = if x.abs() > 1.0 { x / 100.0 } else { x };
-                let d = if rel { background_darkness(s.background_rgb()) + x } else { x };
-                let rgb = with_darkness(s.background_rgb(), d);
-                s.background = hex(rgb);
-                done.push(format!("background darkness {:.0} %", background_darkness(rgb) * 100.0));
-            }
-            "window_opacity" | "opacity" => {
-                let (x, rel) = number_like(&v).ok_or_else(bad)?;
-                let pct = if x.abs() <= 1.0 { x * 100.0 } else { x };
-                let pct = if rel { s.opacity as f32 + pct } else { pct };
-                s.opacity = pct.round().clamp(MIN_OPACITY as f32, 100.0) as u8;
-                done.push(format!("window opacity {} %", s.opacity));
-            }
-            "corner_rounding" | "rounding" | "corner_radius" => {
-                let (x, rel) = number_like(&v).ok_or_else(bad)?;
-                s.corner_rounding = (if rel { s.corner_rounding + x } else { x }).clamp(MIN_ROUNDING, MAX_ROUNDING);
-                done.push(format!("corner rounding {:.0}", s.corner_rounding));
-            }
-            "font_scale" | "text_size" | "font_size" => {
-                let x = scale_value(&v, s.font_scale).ok_or_else(bad)?;
-                s.font_scale = x.clamp(MIN_FONT_SCALE, MAX_FONT_SCALE);
-                done.push(format!("font scale {:.0} %", s.font_scale * 100.0));
-            }
-            "orb_size" | "orb_size_px" => {
-                let (x, rel) = number_like(&v).ok_or_else(bad)?;
-                if s.orb_mode {
-                    s.orb_size_px = (if rel { s.orb_size_px + x } else { x }).clamp(100.0, 800.0).max(MIN_ORB_PX);
-                    done.push(format!("orb {:.0} px", s.orb_size_px));
-                } else {
-                    let px = if rel { s.orb_scale * 300.0 + x } else { x };
-                    s.orb_scale = (px.clamp(100.0, 800.0) / 300.0).clamp(MIN_ORB_SCALE, MAX_ORB_SCALE);
-                    s.orb_size_px = px.clamp(MIN_ORB_PX, MAX_ORB_PX);
-                    done.push(format!("orb {:.0} %", s.orb_scale * 100.0));
-                }
-            }
-            "always_on_top" | "on_top" => {
-                s.always_on_top = switch_value(&v).ok_or_else(bad)?;
-                done.push(format!("always on top {}", if s.always_on_top { "on" } else { "off" }));
-            }
-            "show_audio_panel" | "show_skills_panel" | "show_pills_bar" | "show_chat_panel" | "show_memory_panel" | "show_tool_log" | "show_system_panel" => {
-                let on = switch_value(&v).ok_or_else(bad)?;
-                let panels: &[HudPanel] = match prop.as_str() {
-                    "show_audio_panel" => &[HudPanel::Audio, HudPanel::Devices],
-                    "show_skills_panel" => &[HudPanel::Skills],
-                    "show_pills_bar" => &[HudPanel::Pills],
-                    "show_memory_panel" => &[HudPanel::Memory],
-                    "show_tool_log" => &[HudPanel::Tools],
-                    "show_system_panel" => &[HudPanel::System],
-                    _ => &[HudPanel::Chat],
-                };
-                for p in panels {
-                    if on {
-                        s.show(*p);
-                    } else {
-                        s.hide(*p);
-                    }
-                }
-                if on {
-                    s.zen_mode = false;
-                }
-                done.push(format!("{} {}", labels(panels), if on { "shown" } else { "hidden" }));
-            }
-            "show_header_telemetry" | "header_telemetry" => {
-                s.header_telemetry = switch_value(&v).ok_or_else(bad)?;
-                done.push(format!("header telemetry {}", if s.header_telemetry { "shown" } else { "hidden" }));
-            }
-            "window_position" | "position" => {
-                let name = v.as_str().ok_or_else(bad)?;
-                let cmd = WindowCommand::parse(name).filter(|c| matches!(c, WindowCommand::Place(_) | WindowCommand::Center)).ok_or_else(bad)?;
-                window = Some(cmd);
-                done.push(format!("window {}", cmd.describe()));
-            }
-            "window_size" | "size" => {
-                let size = match &v {
-                    Value::Array(a) if a.len() == 2 => a[0].as_f64().zip(a[1].as_f64()).map(|(w, h)| (w as f32, h as f32)),
-                    Value::Object(o) => o.get("width").and_then(Value::as_f64).zip(o.get("height").and_then(Value::as_f64)).map(|(w, h)| (w as f32, h as f32)),
-                    Value::String(t) => t.to_lowercase().replace(' ', "").split_once(['x', '×', '*']).and_then(|(w, h)| w.parse::<f32>().ok().zip(h.parse::<f32>().ok())),
-                    _ => None,
-                }
-                .ok_or_else(bad)?;
-                let size = (size.0.clamp(240.0, 7680.0).round(), size.1.clamp(200.0, 4320.0).round());
-                window_size = Some(size);
-                done.push(format!("window {:.0} × {:.0}", size.0, size.1));
-            }
-            other => return Err(format!("unknown property '{other}'")),
-        }
-    }
-    s.sanitize();
-    let cfg = GuiMasterConfig::of(&s);
-    let summary = format!("GUI updated: {}. Now: {}.", done.join(", "), serde_json::to_string(&cfg).unwrap_or_default());
-    Ok(GuiChange { settings: s, window, window_size, summary })
-}
-
-/// Spoken confirmation of `control_gui_aspect`.
-pub fn gui_aspect_ack(args: &Value, now: &InterfaceSettings) -> String {
-    let prop = str_arg(args, &["property", "aspect"]).map(|p| p.to_lowercase()).or_else(|| args.as_object().and_then(|o| o.keys().next().cloned())).unwrap_or_default();
-    match prop.as_str() {
-        "mode" if now.orb_mode => "Orb mode, Sir.".into(),
-        "mode" if now.zen_mode => "Minimal view, Sir. Just the orb and our conversation.".into(),
-        "mode" => "There you are, Sir. The full display.".into(),
-        "accent_theme" | "theme" => format!("Very good, Sir. {} it is.", theme(&now.theme).map(|t| t.display).unwrap_or("Your colour")),
-        "background_darkness" | "darkness" => format!("Done, Sir. The glass is at {:.0} percent depth.", background_darkness(now.background_rgb()) * 100.0),
-        "corner_rounding" | "rounding" => format!("Done, Sir. Corners at {:.0}.", now.corner_rounding),
-        "font_scale" | "text_size" => format!("Is this better, Sir? Text at {:.0} percent.", now.font_scale * 100.0),
-        "window_opacity" | "opacity" => format!("Done, Sir. Window opacity at {} percent.", now.opacity),
-        _ => "Done, Sir.".into(),
-    }
-}
-
-/// The `control_gui_aspect` tool schema.
-pub fn gui_aspect_tool_definition() -> Value {
-    json!({"type": "function", "function": {
-        "name": "control_gui_aspect",
-        "description": "Change any single aspect of YOUR OWN GUI (GuiMasterConfig). The background is ALWAYS dark obsidian glass: \"darker\" = background_darkness up, never a light colour. Examples: \"make it darker\" → background_darkness \"darker\"; \"rounder corners\" → corner_rounding 26; \"gold accents\" → accent_theme stark_gold; \"hide the pills\" → show_pills_bar false.",
-        "parameters": {"type": "object", "properties": {
-            "property": {"type": "string", "enum": ["mode", "accent_theme", "background_darkness", "window_opacity", "corner_rounding", "font_scale", "orb_size", "always_on_top", "show_audio_panel", "show_skills_panel", "show_pills_bar", "show_header_telemetry", "show_chat_panel", "window_position", "window_size"]},
-            "value": {"description": "mode: full|minimal|orb_only; accent_theme: arc_cyan|stark_gold|crimson_mk42|emerald_matrix|stealth_obsidian; background_darkness 0-1 or \"darker\"/\"lighter\"; window_opacity 0.15-1; corner_rounding 0-32; font_scale 0.75-1.6; orb_size 100-800; booleans; window_position top_left|top_right|bottom_left|bottom_right|center|left|right; window_size [w, h]"}
-        }, "required": ["property", "value"]}
-    }})
-}
-
 fn layout_ack(layout: HudLayout) -> String {
     match layout {
         HudLayout::Orb => "Very good, Sir. Just the reactor.".into(),
@@ -2883,12 +1660,9 @@ fn layout_ack(layout: HudLayout) -> String {
     }
 }
 
-fn join_labels(labels: &[&str]) -> String {
-    match labels {
-        [] => String::new(),
-        [one] => one.to_string(),
-        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
-    }
+/// A preset's name as he says it ("Stark Gold").
+fn spoken_theme(preset: &str) -> String {
+    preset.split('_').map(capitalise).collect::<Vec<_>>().join(" ")
 }
 
 fn capitalise(s: &str) -> String {
@@ -2898,22 +1672,15 @@ fn capitalise(s: &str) -> String {
 
 /// The `configure_interface` tool schema.
 pub fn tool_definition() -> Value {
-    let panels: Vec<&str> = HudPanel::ALL.iter().map(|p| p.id()).collect();
     let mut definition = json!({"type": "function", "function": {
         "name": "configure_interface",
-        "description": "Restyle or rearrange YOUR OWN HUD (the J.A.I. window) when Sir asks: colours, theme, zoom, transparency, layout, panels, always on top, fullscreen, title bar, name, or show/hide/move/resize the window. Pass only what changes.",
+        "description": "Restyle or rearrange YOUR OWN HUD (the J.A.I. window) when Sir asks: theme, colour, core, zoom, transparency, layout, always on top, fullscreen, title bar, name, or show/hide/move/resize the window. Pass only what changes.",
         "parameters": {"type": "object", "properties": {
-            "ui_paradigm": {"type": "string", "enum": ["modern_oled_minimal", "classic_scifi_hud"], "description": "OLED minimal (default) or classic sci-fi HUD."},
             "core_style": {"type": "string", "enum": ["simple", "complex"], "description": "Your core: simple (rings) or complex (the sphere of circuitry)."},
-            "accent_preset": {"type": "string", "enum": ["Ice White", "Electric Blue", "Stark Gold", "Emerald", "Violet", "Crimson", "Sunset Orange"]},
-            "theme": {"type": "string", "description": format!("Colour preset: {}.", theme_list())},
-            "accent_color": {"type": "string", "description": "Colour name or #RRGGBB."},
-            "background_color": {"type": "string", "description": "Colour name or #RRGGBB."},
+            "accent_color": {"type": "string", "description": "A light of his own colour: a colour name or #RRGGBB."},
             "scale": {"type": "number", "description": "Zoom: 1.0 normal, 1.25 bigger, 0.8 smaller."},
             "opacity": {"type": "integer", "description": "Background opacity 20-100 %."},
             "layout": {"type": "string", "enum": ["full", "compact", "orb"], "description": "compact = reactor and chat, orb = reactor only."},
-            "show_panels": {"type": "array", "items": {"type": "string", "enum": panels}},
-            "hide_panels": {"type": "array", "items": {"type": "string", "enum": panels}},
             "always_on_top": {"type": "boolean"},
             "fullscreen": {"type": "boolean"},
             "core_view": {"type": "boolean", "description": "The 3D sphere of your source modules ('show me your core')."},
@@ -2974,50 +1741,42 @@ mod tests {
 
     #[test]
     fn themes_and_layouts_by_alias() {
-        assert_eq!(theme("Iron Man").map(|t| t.name), Some("mark42"));
-        assert_eq!(theme("mark-42").map(|t| t.name), Some("mark42"));
-        assert_eq!(theme("dark").map(|t| t.name), Some("stealth"));
-        assert_eq!(theme("light").map(|t| t.name), Some("arctic"), "light names stay dark glass");
-        assert_eq!(theme("stark_gold").map(|t| t.name), Some("stark_gold"));
-        assert_eq!(theme("crimson_mk42").map(|t| t.name), Some("crimson_mk42"));
-        assert_eq!(theme("arc_cyan").map(|t| t.name), Some("arc_cyan"));
-        assert_eq!(theme("Stark").map(|t| t.name), Some("stark_red"), "the word is the Stark red theme's now");
-        assert_eq!(theme("default").map(|t| t.name), Some("jai"));
-        assert_eq!(theme("stealth_obsidian").map(|t| t.name), Some("stealth"));
-        assert_eq!(theme("emerald_matrix").map(|t| t.name), Some("emerald"));
-        assert!(theme("red").is_none(), "plain colours are accents, not themes");
+        // The words that named the old engine's themes name the presets of today.
+        for (word, preset) in [
+            ("Iron Man", "hot_rod"),
+            ("mark-42", "hot_rod"),
+            ("crimson_mk42", "hot_rod"),
+            ("dark", "graphite"),
+            ("stealth_obsidian", "graphite"),
+            ("light", "mono"),
+            ("black and white", "mono"),
+            ("stark_gold", "stark_gold"),
+            ("Stark", "stark_gold"),
+            ("default", "stark_gold"),
+            ("arc_cyan", "arc_reactor"),
+            ("emerald_matrix", "gamma"),
+        ] {
+            assert_eq!(crate::holo_theme::preset_for_word(&words(word)), Some(preset), "{word}");
+        }
         assert_eq!(HudLayout::parse("Minimal"), Some(HudLayout::Orb));
         assert_eq!(HudLayout::parse("kompakt"), Some(HudLayout::Compact));
     }
 
     #[test]
-    fn panels_parse_with_aliases_and_groups() {
-        assert_eq!(HudPanel::parse("the system panel"), vec![HudPanel::System]);
-        assert_eq!(HudPanel::parse("tool log"), vec![HudPanel::Tools]);
-        assert_eq!(HudPanel::parse("Gedächtnis"), vec![HudPanel::Memory]);
-        assert_eq!(HudPanel::parse("left side"), HudPanel::LEFT.to_vec());
-        // Ambiguous words need "panel": "turn off the microphone" means muting, not hiding.
-        assert!(HudPanel::parse("microphone").is_empty());
-        assert_eq!(HudPanel::parse("microphone panel"), vec![HudPanel::Audio]);
-        assert!(HudPanel::parse("spotify").is_empty());
-    }
-
-    #[test]
     fn configure_applies_colours_and_reports_changes() {
-        let s = apply(json!({"accent_color": "red"}));
-        assert_eq!(s.accent, "#ff3b3b");
-        assert_eq!(s.theme, "custom");
-        let s = apply(json!({"theme": "mark 42"}));
-        assert_eq!((s.accent.as_str(), s.background.as_str()), ("#ffc233", "#170507"));
-        // "Make the interface black" darkens the background instead of hiding the accent.
-        let s = apply(json!({"accent_color": "black"}));
-        assert_eq!((s.accent.as_str(), s.background.as_str()), ("#ffd400", "#000000"));
-        let s = apply(json!({"background_color": "red"}));
-        assert_eq!(s.background, hex(scale_rgb([255, 59, 59], 0.14)));
+        // A colour that names a preset is that preset; any other is a light of its own.
+        assert_eq!(apply(json!({"accent_color": "red"})).hud_palette, "hot_rod");
+        assert_eq!(apply(json!({"accent_color": "#12AB34"})).hud_palette, "custom:#12AB34");
+        assert_eq!(apply(json!({"theme": "mark 42"})).hud_palette, "hot_rod");
+        // "Make the interface black": only light shows on black glass.
+        assert_eq!(apply(json!({"accent_color": "black"})).hud_palette, "mono");
+        assert_eq!(apply(json!({"accent_color": "#050505"})).hud_palette, "mono");
         let done = configure(&InterfaceSettings::default(), &json!({"accent_color": "red", "opacity": "nonsense"})).unwrap();
         assert!(done.summary.contains("accent colour red") && done.summary.contains("Not changed"));
         assert!(configure(&InterfaceSettings::default(), &json!({})).is_err());
         assert!(configure(&InterfaceSettings::default(), &json!({"theme": "banana"})).is_err());
+        // The canvas is always black: a background is no setting any more.
+        assert!(configure(&InterfaceSettings::default(), &json!({"background_color": "red"})).is_err());
     }
 
     #[test]
@@ -3033,13 +1792,7 @@ mod tests {
     }
 
     #[test]
-    fn configure_panels_layout_and_window() {
-        let s = apply(json!({"hide_panels": ["system", "tools"]}));
-        assert!(!s.shows(HudPanel::System) && !s.shows(HudPanel::Tools) && s.shows(HudPanel::Chat));
-        let compact = InterfaceSettings { layout: HudLayout::Compact, ..Default::default() };
-        let shown = configure(&compact, &json!({"show_panels": "memory"})).unwrap().settings;
-        assert_eq!(shown.layout, HudLayout::Full, "showing a side panel widens the layout");
-        assert_eq!(apply(json!({"hide_panels": ["everything"]})).layout, HudLayout::Orb);
+    fn configure_layout_and_window() {
         let done = configure(&InterfaceSettings::default(), &json!({"window": "top_right"})).unwrap();
         assert_eq!(done.window, Some(WindowCommand::Place(Corner::TopRight)));
         assert_eq!(WindowCommand::parse("oben links"), Some(WindowCommand::Place(Corner::TopLeft)));
@@ -3053,43 +1806,12 @@ mod tests {
     #[test]
     fn hand_edited_settings_load_leniently() {
         let s: InterfaceSettings =
-            serde_json::from_str(r#"{"layout": "weird", "hidden_panels": ["chat", "bogus", "chat"], "opacity": 3}"#).unwrap();
+            serde_json::from_str(r#"{"layout": "weird", "hidden_panels": ["chat"], "opacity": 3}"#).unwrap();
         let mut s = s;
         s.sanitize();
         assert_eq!(s.layout, HudLayout::Full);
-        assert_eq!(s.hidden_panels, vec!["chat".to_string()]);
         assert_eq!(s.opacity, MIN_OPACITY);
         assert_eq!(serde_json::to_value(HudLayout::Orb).unwrap(), json!("orb"));
-    }
-
-    #[test]
-    fn backgrounds_are_always_dark_glass() {
-        // The reported bug: a light mint background.
-        let s = apply(json!({"background_color": "#E0FFE8"}));
-        assert!(luminance(s.background_rgb()) <= MAX_BACKGROUND_LUMINANCE + 0.005, "{}", s.background);
-        let s = apply(json!({"background_color": "white"}));
-        assert_eq!(s.background_rgb(), LIGHTEST_BACKGROUND);
-        let s = apply(json!({"background_color": "mint"}));
-        assert!(s.background_rgb().iter().all(|c| *c <= 46), "{}", s.background);
-        // "Make it darker" goes deeper, step by step, down to obsidian and no further.
-        let mut s = InterfaceSettings::default();
-        let start = background_darkness(s.background_rgb());
-        s = configure(&s, &json!({"background_shade": 0.15})).unwrap().settings;
-        assert!(background_darkness(s.background_rgb()) > start);
-        for _ in 0..12 {
-            s = configure(&s, &json!({"background_shade": 0.15})).unwrap().settings;
-        }
-        assert!(background_darkness(s.background_rgb()) >= 0.99);
-        assert!(s.background_rgb().iter().zip(DEEPEST_BACKGROUND).all(|(c, d)| *c >= d.min(*c)));
-        // Lighter stays dark glass.
-        for _ in 0..20 {
-            s = configure(&s, &json!({"background_shade": -0.15})).unwrap().settings;
-        }
-        assert!(luminance(s.background_rgb()) <= MAX_BACKGROUND_LUMINANCE + 0.005);
-        let hand_edited: InterfaceSettings = serde_json::from_str(r##"{"background": "#eef3f7"}"##).unwrap();
-        let mut hand_edited = hand_edited;
-        hand_edited.sanitize();
-        assert!(luminance(hand_edited.background_rgb()) <= MAX_BACKGROUND_LUMINANCE + 0.005);
     }
 
     #[test]
@@ -3225,7 +1947,7 @@ mod tests {
     }
 
     #[test]
-    fn orb_mode_and_gui_aspects() {
+    fn orb_mode_is_set_and_left() {
         let now = InterfaceSettings::default();
         let s = control_orb_mode(&now, &json!({"enabled": true, "orb_size_px": 5000, "screen_position": "top right of monitor 2", "opacity": 0.05})).unwrap().settings;
         assert!(s.orb_mode);
@@ -3233,24 +1955,6 @@ mod tests {
         assert_eq!(s.orb_opacity, 0.15);
         let s = control_orb_mode(&s, &json!({"enabled": false})).unwrap().settings;
         assert!(!s.orb_mode);
-        let g = control_gui_aspect(&now, &json!({"property": "accent_theme", "value": "stark_gold"})).unwrap().settings;
-        assert_eq!(g.accent, "#ffb800");
-        let g = control_gui_aspect(&now, &json!({"property": "background_darkness", "value": 1.0})).unwrap().settings;
-        assert!(background_darkness(g.background_rgb()) >= 0.99);
-        let g = control_gui_aspect(&now, &json!({"property": "corner_rounding", "value": 99})).unwrap().settings;
-        assert_eq!(g.corner_rounding, MAX_ROUNDING);
-        let g = control_gui_aspect(&now, &json!({"property": "mode", "value": "orb_only"})).unwrap().settings;
-        assert!(g.orb_mode);
-        let g = control_gui_aspect(&now, &json!({"show_pills_bar": false, "window_opacity": 0.5})).unwrap().settings;
-        assert!(!g.shows(HudPanel::Pills));
-        assert_eq!(g.opacity, 50);
-        let c = control_gui_aspect(&now, &json!({"property": "window_size", "value": "1280x720"})).unwrap();
-        assert_eq!(c.window_size, Some((1280.0, 720.0)));
-        assert!(control_gui_aspect(&now, &json!({"property": "accent_theme", "value": "banana"})).is_err());
-        // The default is the clean two-zone studio layout (orb + conversation).
-        assert_eq!(GuiMasterConfig::of(&now).mode, "minimal");
-        let full = InterfaceSettings { zen_mode: false, ..now.clone() };
-        assert_eq!(GuiMasterConfig::of(&full).mode, "full");
     }
 
     #[test]
@@ -3258,11 +1962,11 @@ mod tests {
         let now = InterfaceSettings::default();
         assert_eq!(spoken_ack(&json!({"accent_color": "rot"}), &now), "Very good, Sir. The interface is now red.");
         assert_eq!(spoken_ack(&json!({"accent_color": "dunkelblau"}), &now), "Very good, Sir. The interface is now dark blue.");
-        assert_eq!(spoken_ack(&json!({"theme": "iron man"}), &now), "Very good, Sir. Switching to the Mark 42 theme.");
-        assert_eq!(
-            spoken_ack(&json!({"hide_panels": ["system", "tools"]}), &now),
-            "Done, Sir. System monitor and tool log hidden."
-        );
+        assert_eq!(spoken_ack(&json!({"theme": "iron man"}), &now), "Very good, Sir. Switching to the Hot Rod theme.");
+        assert_eq!(spoken_ack(&json!({"hud_palette": "arc-reactor"}), &now), "Arc Reactor it is, Sir.");
+        // The conversation block ("close the chat"): off by default, switched and said so.
+        assert!(!now.comms_block && apply(json!({"comms_block": true})).comms_block);
+        assert_eq!(spoken_ack(&json!({"comms_block": false}), &now), "Done, Sir. The conversation block is away.");
         assert_eq!(spoken_ack(&json!({"scale": "bigger"}), &now), "Is this better, Sir?");
         assert_eq!(spoken_ack(&json!({"window": "hide"}), &now), "Very good, Sir. I'll be in the tray if you need me.");
     }

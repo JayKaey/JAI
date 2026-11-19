@@ -9,7 +9,8 @@
 
 use crate::kit::say;
 use crate::tools::ToolContext;
-use eframe::egui::{self, pos2, vec2, Align2, Color32, FontFamily, FontId, RichText, Sense};
+use eframe::egui::{self, pos2, vec2, Align2, RichText, Sense};
+use crate::holo::Face;
 use regex::Regex;
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -284,17 +285,17 @@ fn hearing_block(ctx: &egui::Context) {
         return;
     }
     let accent = crate::hud_board::active_colour();
-    let ink = Color32::from_rgb(0xE8, 0xF2, 0xFC);
-    let muted = Color32::from_rgb(0x8E, 0xA4, 0xB8);
+    let ink = crate::holo::theme().ink();
+    let muted = crate::holo::theme().muted();
     let mut taught: Option<(i64, String, String)> = None;
     let mut cancel = false;
     let closed = crate::gui::block(ctx, HEARING, "Hearing log // what I heard", [640.0, 520.0], |ui| {
         if clips.is_empty() {
             ui.add_space(8.0);
-            ui.label(RichText::new("Nothing yet. Every order you give by voice appears here with what I took it for.").color(muted).size(13.5));
+            ui.label(RichText::new("Nothing yet. Every order you give by voice appears here with what I took it for.").color(muted).font(crate::holo::font(Face::Body, 13.5)));
             return;
         }
-        ui.label(RichText::new("WHAT ARRIVED  →  WHAT I TOOK IT FOR      click a line to tell me what you meant").font(FontId::monospace(11.0)).color(muted));
+        ui.label(RichText::new("WHAT ARRIVED  →  WHAT I TOOK IT FOR      click a line to tell me what you meant").font(crate::holo::font(Face::Mono, 11.0)).color(muted));
         ui.add_space(4.0);
         crate::holo_block::faded(ui, egui::ScrollArea::vertical().auto_shrink([false; 2]), |ui| {
             for clip in &clips {
@@ -302,22 +303,22 @@ fn hearing_block(ctx: &egui::Context) {
                 let mark = if clip.led { crate::holo::theme().ink() } else { crate::holo::theme().warn() };
                 let line = ui
                     .horizontal_wrapped(|ui| {
-                        ui.label(RichText::new(clip.at.get(11..16).unwrap_or("")).font(FontId::monospace(11.0)).color(muted));
+                        ui.label(RichText::new(clip.at.get(11..16).unwrap_or("")).font(crate::holo::font(Face::Mono, 11.0)).color(muted));
                         // A small square: filled for an order he knew, hollow for words that led nowhere.
                         let (square, hover) = ui.allocate_exact_size(vec2(8.0, 8.0), Sense::hover());
                         if clip.led {
                             ui.painter().rect_filled(square, 0.0, mark);
                         } else {
-                            ui.painter().rect_stroke(square, 0.0, egui::Stroke::new(1.0f32, mark));
+                            crate::holo::outline(ui.painter(), &crate::holo::plate(square, [0.0; 4]), mark);
                         }
                         hover.on_hover_text(if clip.led { "An order I knew" } else { "It led nowhere" });
-                        ui.label(RichText::new(&clip.heard).color(if same { ink } else { muted }).size(13.5));
+                        ui.label(RichText::new(&clip.heard).color(if same { ink } else { muted }).font(crate::holo::font(Face::Body, 13.5)));
                         if !same {
-                            ui.label(RichText::new("→").color(accent).size(13.5));
-                            ui.label(RichText::new(&clip.meant).color(ink).size(13.5));
+                            ui.label(RichText::new("→").color(accent).font(crate::holo::font(Face::Body, 13.5)));
+                            ui.label(RichText::new(&clip.meant).color(ink).font(crate::holo::font(Face::Body, 13.5)));
                         }
                         if clip.likeness > 0.0 {
-                            ui.label(RichText::new(format!("voice {:.2}", clip.likeness)).font(FontId::monospace(11.0)).color(muted));
+                            ui.label(RichText::new(format!("voice {:.2}", clip.likeness)).font(crate::holo::font(Face::Mono, 11.0)).color(muted));
                         }
                     })
                     .response
@@ -328,13 +329,13 @@ fn hearing_block(ctx: &egui::Context) {
                 }
                 if let Some((id, text)) = editing.as_mut().filter(|(id, _)| *id == clip.id) {
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new("I MEANT").font(FontId::monospace(11.0)).color(accent));
-                        let field = crate::holo_ui::slot(ui, egui::TextEdit::singleline(text).desired_width(360.0).font(FontId::proportional(13.5)));
+                        ui.label(RichText::new("I MEANT").font(crate::holo::font(Face::Label, 9.0)).color(accent));
+                        let field = crate::holo_ui::slot(ui, egui::TextEdit::singleline(text).desired_width(360.0).font(crate::holo::font(Face::Body, 13.5)));
                         let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                        if crate::holo_ui::key(ui, RichText::new("TEACH").font(FontId::monospace(11.0))).clicked() || enter {
+                        if crate::holo_ui::key(ui, RichText::new("TEACH").font(crate::holo::font(Face::Label, 9.0))).clicked() || enter {
                             taught = Some((*id, clip.heard.clone(), text.trim().to_string()));
                         }
-                        if crate::holo_ui::key(ui, RichText::new("CANCEL").font(FontId::monospace(11.0))).clicked() {
+                        if crate::holo_ui::key(ui, RichText::new("CANCEL").font(crate::holo::font(Face::Label, 9.0))).clicked() {
                             cancel = true;
                         }
                     });
@@ -555,28 +556,28 @@ fn coach_block(ctx: &egui::Context) {
         return;
     }
     let accent = crate::hud_board::active_colour();
-    let ink = Color32::from_rgb(0xE8, 0xF2, 0xFC);
-    let muted = Color32::from_rgb(0x8E, 0xA4, 0xB8);
+    let ink = crate::holo::theme().ink();
+    let muted = crate::holo::theme().muted();
     let mut say_it = false;
     let closed = crate::gui::block(ctx, COACH, "Pronunciation coach // read it aloud", [640.0, 340.0], |ui| {
         let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width().max(600.0), 236.0), Sense::hover());
         let p = ui.painter_at(rect);
-        p.text(pos2(rect.left(), rect.top() + 4.0), Align2::LEFT_TOP, format!("SENTENCE {} OF {}   ·   {} OF {} RIGHT AT THE FIRST GO", at + 1, SENTENCES.len(), right, read), FontId::monospace(11.0), muted);
+        crate::holo::text(&p, pos2(rect.left(), rect.top() + 4.0), Align2::LEFT_TOP, Face::Label, &format!("SENTENCE {} OF {}   ·   {} OF {} RIGHT AT THE FIRST GO", at + 1, SENTENCES.len(), right, read), 9.0, muted);
         let sentence = SENTENCES[at];
-        let galley = p.layout(sentence.to_string(), FontId::new(28.0, FontFamily::Name("display".into())), ink, rect.width() - 20.0);
+        let galley = p.layout(sentence.to_string(), crate::holo::font(Face::Head, 28.0), ink, rect.width() - 20.0);
         let top = rect.top() + 40.0;
         p.galley(pos2(rect.center().x - galley.size().x / 2.0, top), galley.clone(), ink);
         let mut y = top + galley.size().y + 26.0;
         match &last {
             None => {
-                p.text(pos2(rect.center().x, y), Align2::CENTER_TOP, "Read it as you would say it. I am listening.", FontId::proportional(13.0), muted);
+                crate::holo::text(&p, pos2(rect.center().x, y), Align2::CENTER_TOP, Face::Body, "Read it as you would say it. I am listening.", 13.0, muted);
             }
             Some((heard, words)) => {
-                p.text(pos2(rect.left(), y), Align2::LEFT_TOP, "WHAT ARRIVED", FontId::monospace(11.0), muted);
+                crate::holo::text(&p, pos2(rect.left(), y), Align2::LEFT_TOP, Face::Label, "WHAT ARRIVED", 9.0, muted);
                 y += 16.0;
                 // Word by word: right in the good colour, wrong in the warning one with what
                 // arrived for it under it.
-                let font = FontId::new(19.0, FontFamily::Name("label".into()));
+                let font = crate::holo::font(Face::Body, 19.0);
                 let mut x = rect.left();
                 for w in words {
                     let (text, colour, under) = match w {
@@ -584,7 +585,7 @@ fn coach_block(ctx: &egui::Context) {
                         Word::Wrong(word, got) => (word.as_str(), crate::holo::theme().warn(), Some(if got.is_empty() { "(not heard)".to_string() } else { got.clone() })),
                     };
                     let galley = p.layout_no_wrap(text.to_string(), font.clone(), colour);
-                    let under_galley = under.map(|u| p.layout_no_wrap(u, FontId::monospace(11.0), muted));
+                    let under_galley = under.map(|u| p.layout_no_wrap(u, crate::holo::font(Face::Mono, 11.0), muted));
                     let width = galley.size().x.max(under_galley.as_ref().map_or(0.0, |g| g.size().x));
                     if x + width > rect.right() {
                         x = rect.left();
@@ -598,14 +599,14 @@ fn coach_block(ctx: &egui::Context) {
                 }
                 let share = score(words);
                 let verdict = if share >= 0.99 { "Every word arrived.".to_string() } else { format!("{:.0} % of the words arrived. Say it once more, or \"next\".", share * 100.0) };
-                p.text(pos2(rect.left(), rect.bottom() - 16.0), Align2::LEFT_CENTER, format!("I heard: \u{201C}{heard}\u{201D}   ·   {verdict}"), FontId::proportional(12.0), if share >= 0.99 { crate::holo::theme().ink() } else { muted });
+                crate::holo::text(&p, pos2(rect.left(), rect.bottom() - 16.0), Align2::LEFT_CENTER, Face::Body, &format!("I heard: \u{201C}{heard}\u{201D}   ·   {verdict}"), 12.0, if share >= 0.99 { crate::holo::theme().ink() } else { muted });
             }
         }
         ui.horizontal(|ui| {
-            if crate::holo_ui::key(ui, RichText::new("HEAR IT").font(FontId::monospace(11.0)).color(accent)).on_hover_text("I say the sentence").clicked() {
+            if crate::holo_ui::key(ui, RichText::new("HEAR IT").font(crate::holo::font(Face::Label, 9.0)).color(accent)).on_hover_text("I say the sentence").clicked() {
                 say_it = true;
             }
-            if crate::holo_ui::key(ui, RichText::new("NEXT").font(FontId::monospace(11.0))).clicked() {
+            if crate::holo_ui::key(ui, RichText::new("NEXT").font(crate::holo::font(Face::Label, 9.0))).clicked() {
                 if let Some(c) = lock(&COACHING).as_mut() {
                     (c.at, c.last, c.tries, c.since) = ((c.at + 1) % SENTENCES.len(), None, 0, Instant::now());
                 }

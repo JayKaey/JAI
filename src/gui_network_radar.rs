@@ -3,11 +3,12 @@
 //! cards, the device list, the latency chart and the speed test on the right. The data comes
 //! from `crate::network_radar`; this file draws it and turns clicks into actions.
 
-use super::{bold_family, rgba, stroke, block_slate, strip_ink, strip_muted};
+use super::{stroke, block_slate, strip_ink, strip_muted};
+use crate::holo::{self, Face};
 use crate::network_radar::{self as radar, Device, Kind, Phase, Series, Snapshot, Speed};
 use eframe::egui::text::{LayoutJob, TextFormat, TextWrapping};
 use eframe::egui::{
-    self, pos2, vec2, Align, Align2, Color32, CursorIcon, FontFamily, FontId, Frame, Galley, Margin, Mesh, Painter, Pos2, Rect, Rounding, Sense, Shape, Ui, Vec2, ViewportBuilder, ViewportClass,
+    self, pos2, vec2, Align, Align2, Color32, CursorIcon, FontId, Frame, Galley, Margin, Mesh, Painter, Pos2, Rect, Rounding, Sense, Shape, Ui, Vec2, ViewportBuilder, ViewportClass,
     ViewportCommand, ViewportId,
 };
 use std::collections::HashMap;
@@ -44,8 +45,8 @@ const ROW_STAGGER: f64 = 0.05;
 const TEXT_SWAP: f64 = 0.05;
 /// The latency rings on the scope.
 const RINGS_MS: [f32; 4] = [1.0, 3.0, 10.0, 30.0];
-/// "LIVE", the router, a new device.
-fn status_red() -> Color32 {
+/// What is wrong: the network is down, a packet was lost.
+fn fault() -> Color32 {
     crate::holo::theme().alert()
 }
 
@@ -326,13 +327,12 @@ struct Ink {
 impl Ink {
     fn now() -> Self {
         let theme = crate::holo_theme::current();
-        let [r, g, b] = theme.hot().to_array()[..3].try_into().unwrap_or([255; 3]);
         Self {
             accent: crate::hud_board::active_colour(),
             second: theme.deep(),
             border: crate::hud_board::border_colour(),
             bracket: crate::hud_board::bracket_colour(),
-            hot: Color32::from_rgb(r, g, b),
+            hot: theme.hot(),
             text: strip_ink(),
             muted: strip_muted(),
         }
@@ -341,15 +341,15 @@ impl Ink {
     /// A device's colour by what it is.
     fn kind(&self, kind: Kind) -> Color32 {
         match kind {
-            Kind::Router => status_red(),
-            Kind::Phone | Kind::Tablet => Color32::from_rgb(0x3E, 0xE0, 0x7A),
-            Kind::SmartHome => Color32::from_rgb(0x45, 0xE0, 0xB4),
+            Kind::Router => self.accent,
+            Kind::Phone | Kind::Tablet => self.text,
+            Kind::SmartHome => self.second,
             Kind::Pc => self.accent,
             Kind::ThisPc => self.hot,
-            Kind::Tv => Color32::from_rgb(0xB5, 0x8C, 0xFF),
-            Kind::Printer => Color32::from_rgb(0xFF, 0xB5, 0x47),
-            Kind::Console => Color32::from_rgb(0x5A, 0xA8, 0xFF),
-            Kind::Unknown => Color32::from_rgb(0x9A, 0xA6, 0xB2),
+            Kind::Tv => crate::holo::mix(self.second, self.text, 0.5),
+            Kind::Printer => crate::holo::theme().warn(),
+            Kind::Console => crate::holo::mix(self.accent, self.second, 0.5),
+            Kind::Unknown => self.muted,
         }
     }
 }
@@ -377,20 +377,25 @@ impl Pen<'_> {
     }
 
     fn mono(&self, base: f32, min: f32) -> FontId {
-        FontId::monospace(self.size(base, min))
+        holo::font(Face::Mono, self.size(base, min))
     }
 
     fn bold(&self, base: f32, min: f32) -> FontId {
-        FontId::new(self.size(base, min), bold_family())
+        holo::font(Face::Strong, self.size(base, min))
     }
 
-    /// Bahnschrift: the condensed DIN of the headings.
+    /// The thin squared figures of the headings.
     fn display(&self, base: f32, min: f32) -> FontId {
-        FontId::new(self.size(base, min), FontFamily::Name("display".into()))
+        holo::font(Face::Figure, self.size(base, min))
     }
 
     fn plain(&self, base: f32, min: f32) -> FontId {
-        FontId::proportional(self.size(base, min))
+        holo::font(Face::Body, self.size(base, min))
+    }
+
+    /// Wide capitals for tags and captions.
+    fn label(&self, base: f32, min: f32) -> FontId {
+        holo::font(Face::Label, self.size(base, min))
     }
 
     fn row(&self, font: &FontId) -> f32 {
@@ -399,7 +404,8 @@ impl Pen<'_> {
 
     /// One line of text, letter-spaced, cut with an ellipsis at `width`.
     fn text(&self, text: &str, font: FontId, colour: Color32, spacing: f32, width: f32) -> Arc<Galley> {
-        let mut job = LayoutJob::single_section(text.to_owned(), TextFormat { font_id: font, color: colour, extra_letter_spacing: spacing, ..Default::default() });
+        let text = if font.family == self.label(1.0, 1.0).family { text.to_uppercase() } else { text.to_owned() };
+        let mut job = LayoutJob::single_section(text, TextFormat { font_id: font, color: colour, extra_letter_spacing: spacing, ..Default::default() });
         job.wrap = TextWrapping::truncate_at_width(width.max(1.0));
         self.p.layout_job(job)
     }
@@ -482,18 +488,16 @@ fn subtitle(snap: &Snapshot) -> String {
 /// The title, LIVE and the status line; the y of the accent line under them.
 fn header(pen: &Pen, area: Rect, snap: &Snapshot, view: &mut View) -> f32 {
     let ink = pen.ink;
-    let live = pen.text("LIVE", pen.mono(12.0, 9.5), status_red(), pen.px(1.5), area.width());
+    let live = pen.text("LIVE", pen.label(9.5, 8.0), crate::holo::theme().accent(), pen.px(1.5), area.width());
     let title_width = (area.width() - live.size().x - pen.px(48.0)).max(40.0);
-    let title = pen.text("NETWORK RADAR", pen.display(34.0, 20.0), ink.text, pen.px(1.2), title_width);
-    let title_rect = pen.put(title.clone(), area.left_top(), Align2::LEFT_TOP);
-    // Bold: the same words once more, a hair to the right.
-    pen.p.galley(title_rect.min + vec2(0.8, 0.0), title, ink.text);
+    let title = pen.text("NETWORK RADAR", holo::font(Face::Head, pen.size(34.0, 20.0)), ink.text, pen.px(1.2), title_width);
+    let title_rect = pen.put(title, area.left_top(), Align2::LEFT_TOP);
     let live_rect = pen.put(live, pos2(area.right(), title_rect.center().y), Align2::RIGHT_CENTER);
     let pulse = 0.55 + 0.45 * (0.5 + 0.5 * (pen.now * 3.2).sin() as f32);
     let dot = pos2(live_rect.left() - pen.px(10.0), live_rect.center().y);
     let r = pen.size(4.0, 3.0);
-    pen.p.circle_filled(dot, r + 3.0, status_red().gamma_multiply(0.15 * pulse));
-    pen.p.circle_filled(dot, r, status_red().gamma_multiply(pulse));
+    pen.p.circle_filled(dot, r + 3.0, crate::holo::theme().accent().gamma_multiply(0.15 * pulse));
+    pen.p.circle_filled(dot, r, crate::holo::theme().accent().gamma_multiply(pulse));
     let font = pen.mono(11.0, 9.0);
     view.subtitle.set(snap.phase, &subtitle(snap), pen.now);
     let y = title_rect.bottom() + pen.px(3.0);
@@ -554,9 +558,7 @@ fn dir(degrees: f32) -> Vec2 {
 
 /// A colour that adds light to what is under it.
 fn additive(colour: Color32, strength: f32) -> Color32 {
-    let s = strength.clamp(0.0, 1.0);
-    let scale = |c: u8| (f32::from(c) * s).round() as u8;
-    Color32::from_rgba_premultiplied(scale(colour.r()), scale(colour.g()), scale(colour.b()), 0)
+    holo::lit(colour, strength)
 }
 
 /// The scope's faint glow, brightest in the middle.
@@ -661,8 +663,8 @@ struct Floating {
 impl Floating {
     fn paint(self, pen: &Pen) {
         let back = self.rect.expand(pen.px(4.0));
-        pen.p.rect_filled(back, Rounding::ZERO, block_slate());
-        pen.p.rect_stroke(back, Rounding::ZERO, stroke(1.0, pen.ink.border));
+        pen.p.rect_filled(back, 0.0, block_slate());
+        holo::outline(&pen.p, &holo::plate(back, [0.0; 4]), pen.ink.border);
         label(pen, self.rect, self.name, self.latency, Align::Center);
     }
 }
@@ -744,7 +746,7 @@ fn scope(pen: &Pen, area: Rect, snap: &Snapshot, view: &mut View, card: Option<R
     p.circle_stroke(c, cr, stroke(1.5, ink.hot));
     glyph(p, Kind::ThisPc, c, cr * 0.55, ink.hot);
     let mut centre = Vec::new();
-    let tag = pen.text("THIS PC", pen.bold(10.0, 8.5), ink.text, pen.px(1.2), 120.0);
+    let tag = pen.text("THIS PC", pen.label(8.5, 8.0), ink.text, pen.px(0.6), 120.0);
     let tag_rect = pen.put(tag, c + vec2(0.0, cr + pen.px(4.0)), Align2::CENTER_TOP);
     centre.push(tag_rect);
     if let Some(a) = &snap.adapter {
@@ -753,7 +755,7 @@ fn scope(pen: &Pen, area: Rect, snap: &Snapshot, view: &mut View, card: Option<R
     }
     if snap.sweeping() {
         let pulse = 0.55 + 0.45 * (0.5 + 0.5 * (pen.now * 4.0).sin() as f32);
-        let g = pen.text("SWEEPING", pen.mono(9.0, 8.5), ink.accent.gamma_multiply(pulse), pen.px(1.4), 160.0);
+        let g = pen.text("SWEEPING", pen.label(8.0, 8.0), ink.accent.gamma_multiply(pulse), pen.px(0.6), 160.0);
         let below = centre.last().map_or(tag_rect.bottom(), |r: &Rect| r.bottom());
         centre.push(pen.put(g, pos2(c.x, below + pen.px(3.0)), Align2::CENTER_TOP));
     }
@@ -857,7 +859,7 @@ fn glyph(p: &Painter, kind: Kind, c: Pos2, g: f32, colour: Color32) {
         Kind::Phone | Kind::Tablet => {
             let size = if kind == Kind::Phone { vec2(g * 0.95, g * 1.7) } else { vec2(g * 1.45, g * 1.75) };
             let body = Rect::from_center_size(c, size);
-            p.rect_stroke(body, Rounding::same(g * 0.18), s);
+            p.rect_stroke(body, Rounding::ZERO, s);
             dot(pos2(c.x, body.bottom() - g * 0.28));
         }
         Kind::Pc | Kind::ThisPc => {
@@ -883,7 +885,7 @@ fn glyph(p: &Painter, kind: Kind, c: Pos2, g: f32, colour: Color32) {
             p.line_segment([c + vec2(-g * 0.5, g * 0.8), c + vec2(g * 0.5, g * 0.8)], s);
         }
         Kind::Console => {
-            p.rect_stroke(Rect::from_center_size(c, vec2(g * 1.9, g * 1.05)), Rounding::same(g * 0.4), s);
+            p.rect_stroke(Rect::from_center_size(c, vec2(g * 1.9, g * 1.05)), Rounding::ZERO, s);
             p.line_segment([c + vec2(-g * 0.75, 0.0), c + vec2(-g * 0.25, 0.0)], s);
             p.line_segment([c + vec2(-g * 0.5, -g * 0.25), c + vec2(-g * 0.5, g * 0.25)], s);
             dot(c + vec2(g * 0.4, -g * 0.12));
@@ -935,15 +937,14 @@ fn card_height(pen: &Pen) -> f32 {
 /// A card: a caption with a value in the accent right of it, a big value, a line under it.
 fn card(pen: &Pen, rect: Rect, caption: &str, corner: &str, big: &str, big_colour: Color32, sub: &str) {
     let ink = pen.ink;
-    pen.p.rect_filled(rect, Rounding::ZERO, rgba([3, 7, 12], 0.85));
-    pen.p.rect_stroke(rect, Rounding::ZERO, stroke(1.0, ink.border));
+    crate::holo_frame::card(&pen.p, rect, 0.0, 1.0);
     pen.p.line_segment([rect.left_top(), rect.left_top() + vec2(pen.px(18.0), 0.0)], stroke(2.0, ink.accent));
     let inner = rect.shrink(pen.size(9.0, 5.0));
-    let caption = pen.text(caption, pen.mono(10.0, 8.5), ink.muted, pen.px(1.2), inner.width() * 0.6);
+    let caption = pen.text(caption, pen.label(8.5, 8.0), ink.muted, pen.px(0.6), inner.width() * 0.6);
     let caption_rect = pen.put(caption, inner.left_top(), Align2::LEFT_TOP);
     let room = inner.width() - caption_rect.width() - pen.px(8.0);
     if !corner.is_empty() && room > 16.0 {
-        pen.put(pen.text(corner, pen.mono(10.0, 8.5), ink.accent, pen.px(0.6), room), inner.right_top(), Align2::RIGHT_TOP);
+        pen.put(pen.text(corner, pen.mono(10.5, 9.5), ink.accent, pen.px(0.6), room), inner.right_top(), Align2::RIGHT_TOP);
     }
     if big.is_empty() {
         return;
@@ -964,7 +965,7 @@ fn adapter_card(pen: &Pen, rect: Rect, snap: &Snapshot) {
             let big = if speed.is_empty() { "--" } else { speed.as_str() };
             card(pen, rect, a.link.label(), &format!("ROUTER {}", radar::fmt_ms(snap.router_latency())), big, pen.ink.text, &a.description);
         }
-        None if snap.phase == Phase::Failed => card(pen, rect, "NETWORK", "", "OFFLINE", status_red(), snap.error.as_deref().unwrap_or("")),
+        None if snap.phase == Phase::Failed => card(pen, rect, "NETWORK", "", "OFFLINE", fault(), snap.error.as_deref().unwrap_or("")),
         None => card(pen, rect, "NETWORK", "", "", pen.ink.muted, ""),
     }
 }
@@ -972,7 +973,7 @@ fn adapter_card(pen: &Pen, rect: Rect, snap: &Snapshot) {
 fn internet_card(pen: &Pen, rect: Rect, snap: &Snapshot) {
     let (big, colour) = match snap.internet_latency() {
         Some(ms) => (radar::fmt_ms(Some(ms)), pen.ink.text),
-        None if snap.internet.samples.len() >= 3 => ("OFFLINE".to_string(), status_red()),
+        None if snap.internet.samples.len() >= 3 => ("OFFLINE".to_string(), fault()),
         None if snap.adapter.is_none() => (String::new(), pen.ink.muted),
         None => ("CHECKING..".to_string(), pen.ink.muted),
     };
@@ -988,18 +989,18 @@ fn internet_card(pen: &Pen, rect: Rect, snap: &Snapshot) {
 fn list_header(pen: &Pen, area: Rect, snap: &Snapshot, actions: &mut Actions) -> f32 {
     let ink = pen.ink;
     let sweeping = snap.sweeping();
-    let word = pen.text(if sweeping { "SWEEPING" } else { "RESCAN" }, pen.mono(10.5, 9.0), if sweeping { ink.muted } else { ink.text }, pen.px(1.2), 200.0);
+    let word = pen.text(if sweeping { "SWEEPING" } else { "RESCAN" }, pen.label(8.5, 8.0), if sweeping { ink.muted } else { ink.text }, pen.px(0.6), 200.0);
     let icon = pen.size(10.0, 8.0);
     let button_size = vec2(word.size().x + icon + pen.px(26.0), word.size().y + pen.px(8.0));
-    let title = pen.text("DEVICES", pen.mono(10.5, 9.0), ink.muted, pen.px(1.4), (area.width() - button_size.x - pen.px(12.0)).max(30.0));
+    let title = pen.text("DEVICES", pen.label(8.5, 8.0), ink.muted, pen.px(0.6),(area.width() - button_size.x - pen.px(12.0)).max(30.0));
     let h = title.size().y.max(button_size.y);
     let mid = area.top() + h / 2.0;
     let title_rect = pen.put(title, pos2(area.left(), mid), Align2::LEFT_CENTER);
     let button = Rect::from_center_size(pos2(area.right() - button_size.x / 2.0, mid), button_size);
     let response = pen.click(button, "rescan", actions).on_hover_cursor(if sweeping { CursorIcon::Default } else { CursorIcon::PointingHand });
     let lit = response.hovered() && !sweeping;
-    pen.p.rect_filled(button, Rounding::ZERO, if lit { ink.accent.gamma_multiply(0.18) } else { rgba([3, 7, 12], 0.9) });
-    pen.p.rect_stroke(button, Rounding::ZERO, stroke(1.0, if lit { ink.accent } else { ink.border }));
+    pen.p.rect_filled(button, Rounding::ZERO, if lit { ink.accent.gamma_multiply(0.18) } else { holo::a(holo::theme().void(), 0.9) });
+    holo::outline(&pen.p, &holo::plate(button, [0.0; 4]), if lit { ink.accent } else { ink.border });
     let spin = if sweeping { (pen.now * 240.0).rem_euclid(360.0) as f32 } else { 0.0 };
     rescan_icon(&pen.p, pos2(button.left() + pen.px(9.0) + icon / 2.0, mid), icon / 2.0, if sweeping { ink.muted } else { ink.accent }, spin);
     pen.put(word, pos2(button.right() - pen.px(9.0), mid), Align2::RIGHT_CENTER);
@@ -1101,11 +1102,11 @@ fn device_row(pen: &Pen, rect: Rect, d: &Device, view: &mut View, actions: &mut 
     // Left: the name and its tags over what it is.
     let left = gc.x + gr + pen.px(10.0);
     let text_w = (right - right_w - pen.px(10.0) - left).max(30.0);
-    let tag_font = pen.mono(9.0, 8.0);
-    let tags: Vec<(Arc<Galley>, Color32)> = [(d.this_pc, "THIS PC", ink.hot), (d.new, "NEW", status_red())]
+    let tag_font = pen.label(8.0, 8.0);
+    let tags: Vec<(Arc<Galley>, Color32)> = [(d.this_pc, "THIS PC", ink.hot), (d.new, "NEW", crate::holo::theme().warn())]
         .into_iter()
         .filter(|(on, ..)| *on)
-        .map(|(_, tag, c)| (pen.text(tag, tag_font.clone(), c, pen.px(1.0), 100.0), c))
+        .map(|(_, tag, c)| (pen.text(tag, tag_font.clone(), c, pen.px(0.5), 100.0), c))
         .collect();
     let tags_w: f32 = pen.px(6.0) + tags.iter().map(|(g, _)| g.size().x + pen.px(16.0)).sum::<f32>();
     let name = pen.text(&d.name(), pen.bold(13.5, 10.5), ink.text, 0.0, (text_w - if tags.is_empty() { 0.0 } else { tags_w }).max(24.0));
@@ -1113,7 +1114,7 @@ fn device_row(pen: &Pen, rect: Rect, d: &Device, view: &mut View, actions: &mut 
     let mut x = name_rect.right() + pen.px(10.0);
     for (g, c) in tags {
         let r = Align2::LEFT_CENTER.anchor_size(pos2(x + pen.px(4.0), name_rect.center().y), g.size());
-        pen.p.rect_stroke(r.expand2(vec2(pen.px(4.0), 1.0)), Rounding::ZERO, stroke(1.0, c));
+        holo::outline(&pen.p, &holo::plate(r.expand2(vec2(pen.px(4.0), 1.0)), [0.0; 4]), c);
         pen.put(g, r.min, Align2::LEFT_TOP);
         x = r.right() + pen.px(12.0);
     }
@@ -1283,7 +1284,7 @@ fn line_chart(pen: &Pen, area: Rect, series: &[(&Series, Color32)]) {
                 Some(v) => run.push(pos2(x, plot.bottom() - plot.height() * (v / top).min(1.0))),
                 None => {
                     flush(&mut run);
-                    pen.p.line_segment([pos2(x, plot.bottom()), pos2(x, plot.bottom() - 4.0)], stroke(1.5, status_red()));
+                    pen.p.line_segment([pos2(x, plot.bottom()), pos2(x, plot.bottom() - 4.0)], stroke(1.5, fault()));
                 }
             }
         }
@@ -1329,8 +1330,8 @@ fn speed(pen: &Pen, area: Rect, snap: &Snapshot, actions: &mut Actions) {
     }
     let response = pen.click(button, "speed_test", actions).on_hover_cursor(if running { CursorIcon::Default } else { CursorIcon::PointingHand });
     let lit = response.hovered() && !running;
-    pen.p.rect_filled(button, Rounding::ZERO, if lit { ink.accent.gamma_multiply(0.18) } else { rgba([3, 7, 12], 0.9) });
-    pen.p.rect_stroke(button, Rounding::ZERO, stroke(1.0, if lit { ink.accent } else { ink.border }));
+    pen.p.rect_filled(button, Rounding::ZERO, if lit { ink.accent.gamma_multiply(0.18) } else { holo::a(holo::theme().void(), 0.9) });
+    holo::outline(&pen.p, &holo::plate(button, [0.0; 4]), if lit { ink.accent } else { ink.border });
     pen.put(g, button.center(), Align2::CENTER_CENTER);
     if response.clicked() && !running {
         actions.speed_test = true;
@@ -1406,15 +1407,15 @@ fn details(pen: &Pen, area: Rect, snap: &Snapshot, view: &mut View, actions: &mu
         view.selected = None;
     }
     pen.p.rect_filled(rect, Rounding::ZERO, block_slate());
-    pen.p.rect_stroke(rect, Rounding::ZERO, stroke(1.0, colour));
+    holo::outline(&pen.p, &holo::plate(rect, [0.0; 4]), colour);
     corner_brackets(&pen.p, rect, pen.px(8.0), colour);
-    let badge = d.new.then(|| pen.text("NEW", pen.mono(9.0, 8.0), status_red(), pen.px(1.0), 60.0));
+    let badge = d.new.then(|| pen.text("NEW", pen.label(8.0, 8.0), crate::holo::theme().warn(), pen.px(0.5), 60.0));
     let badge_room = badge.as_ref().map_or(0.0, |b| b.size().x + pen.px(16.0));
     let name = pen.text(&d.name(), name_font, ink.text, 0.0, (inner_w - badge_room).max(30.0));
     let name_rect = pen.put(name, rect.left_top() + vec2(pad, pad), Align2::LEFT_TOP);
     if let Some(b) = badge {
         let r = Align2::LEFT_CENTER.anchor_size(pos2(name_rect.right() + pen.px(10.0), name_rect.center().y), b.size());
-        pen.p.rect_stroke(r.expand2(vec2(pen.px(4.0), 1.0)), Rounding::ZERO, stroke(1.0, status_red()));
+        holo::outline(&pen.p, &holo::plate(r.expand2(vec2(pen.px(4.0), 1.0)), [0.0; 4]), crate::holo::theme().warn());
         pen.put(b, r.min, Align2::LEFT_TOP);
     }
     let sub_rect = pen.put(pen.text(&d.subline(), sub_font, ink.muted, 0.0, inner_w), pos2(rect.left() + pad, name_rect.bottom() + pen.px(2.0)), Align2::LEFT_TOP);
@@ -1453,11 +1454,13 @@ mod tests {
 
     #[test]
     fn the_radar_shows_every_part_whole_at_both_sizes() {
+        let _look = crate::holo_theme::look_for_pictures();
         for size in [egui::vec2(1180.0, 720.0), egui::vec2(700.0, 460.0)] {
             let snap = radar::demo_snapshot();
             let (mut view, mut actions) = (View::default(), Actions::default());
             let mut stage = Stage::new(size);
             let frame = stage.frames(8, &mut |ctx| paint(ctx, &snap, &mut view, &mut actions));
+            stage.raster(&frame).save(&format!("panel_radar_{:.0}", size.x));
             clean(&frame, &format!("{size:?}"));
             for shown in ["NETWORK RADAR", "DEVICES", "THIS PC", "LIVE", "LATENCY", "SPEED TEST", "192.168.1.0/24", "6 ONLINE", "SWEPT IN 3.0 S", "ROUTER <1 ms", "TP-Link router", "Private device \u{b7}105"] {
                 assert!(!frame.find_text(shown).is_empty(), "\"{shown}\" is not on the radar at {size:?}:\n{}", frame.all_text());

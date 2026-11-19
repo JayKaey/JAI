@@ -9,10 +9,9 @@ use crate::app::Jai;
 use crate::hud::HudCommand;
 use crate::widgets::{self, BlockKind, DynamicWidgetSpec, NativeWindowSpec, TimerMode, WidgetKind};
 use eframe::egui::{
-    self, pos2, text::LayoutJob, vec2, Align, Color32, FontId, Frame, IconData, Layout, Margin, RichText, Rounding, Sense, Shape,
+    self, pos2, text::LayoutJob, vec2, Align, Color32, FontId, Frame, IconData, Layout, Margin, RichText, Rounding, Sense,
     TextFormat, Ui, ViewportBuilder, ViewportClass, ViewportCommand, ViewportId,
 };
-use std::f32::consts::PI;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use tokio::runtime::Handle;
@@ -151,7 +150,7 @@ fn widget_body(ui: &mut Ui, p: &Palette, spec: &DynamicWidgetSpec, host: &Widget
                 return;
             }
             let hot = warn_at.is_some_and(|w| *value >= w);
-            gauge(ui, *value, *min, *max, unit, if hot { p.amber } else { accent });
+            gauge(ui, *value, *min, *max, unit, if hot { p.warn } else { accent });
             if let Some(s) = source {
                 ui.vertical_centered(|ui| muted(ui, format!("live: {s}")));
             }
@@ -159,14 +158,14 @@ fn widget_body(ui: &mut Ui, p: &Palette, spec: &DynamicWidgetSpec, host: &Widget
         WidgetKind::ProgressBar { value, max, unit, .. } => {
             let f = (*value / max.max(f64::EPSILON)) as f32;
             row(ui, &format!("{:.0} %", f * 100.0), format!("{} / {} {unit}", fmt_value(*value), fmt_value(*max)));
-            meter(ui, f, 10.0, if f >= 0.9 { p.amber } else { accent }, &[]);
+            meter(ui, f, 10.0, if f >= 0.9 { p.warn } else { accent }, &[]);
         }
         WidgetKind::LiveLineChart { series, unit, min, max, .. } => line_chart(ui, series, unit, *min, *max, 96.0, true, accent),
         WidgetKind::Sparkline { series, unit, .. } => line_chart(ui, series, unit, None, None, 30.0, false, accent),
         WidgetKind::CountdownOrStopwatch { mode, duration_secs, running, alerted, .. } => {
             let (elapsed, remaining) = widgets::timer_state(&spec.kind, widgets::now_ms()).unwrap_or((0, None));
             let shown = remaining.unwrap_or(elapsed);
-            let colour = if *alerted { p.green } else if *running { accent } else { p.muted };
+            let colour = if *alerted { p.nominal } else if *running { accent } else { p.muted };
             ui.vertical_centered(|ui| {
                 // Each digit that changes rolls up into place.
                 let (text, font) = (clock(shown), FontId::monospace(ts(30.0)));
@@ -256,7 +255,7 @@ fn widget_body(ui: &mut Ui, p: &Palette, spec: &DynamicWidgetSpec, host: &Widget
             Frame::none().fill(p.well_solid).rounding(Rounding::ZERO).inner_margin(Margin::same(6.0)).show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 crate::holo_block::faded(ui, egui::ScrollArea::vertical().id_salt(("widget_output", &spec.id)).max_height(170.0), |ui| {
-                    let colour = if *ok { p.text } else { p.red };
+                    let colour = if *ok { p.text } else { p.alert };
                     ui.add(egui::Label::new(RichText::new(if output.is_empty() { "…" } else { output }).monospace().size(ts(10.5)).color(colour)).wrap());
                 });
             });
@@ -444,8 +443,8 @@ fn diff_job(p: &Palette, code: &str) -> LayoutJob {
     let mut job = LayoutJob::default();
     for line in code.trim_end().lines() {
         let (colour, background) = match line.chars().next() {
-            Some('+') => (p.green, p.green.gamma_multiply(0.12)),
-            Some('-') => (p.red, p.red.gamma_multiply(0.12)),
+            Some('+') => (p.nominal, p.nominal.gamma_multiply(0.12)),
+            Some('-') => (p.alert, p.alert.gamma_multiply(0.12)),
             Some('@') => (p.accent, Color32::TRANSPARENT),
             _ => (p.muted, Color32::TRANSPARENT),
         };
@@ -458,7 +457,7 @@ fn diff_job(p: &Palette, code: &str) -> LayoutJob {
 
 fn telemetry_view(ui: &mut Ui, p: &Palette, app: &Jai) {
     let t = app.telemetry();
-    let bar = |ui: &mut Ui, pct: f32, hot: bool| meter(ui, pct / 100.0, 6.0, if hot { p.amber } else { p.accent }, &[]);
+    let bar = |ui: &mut Ui, pct: f32, hot: bool| meter(ui, pct / 100.0, 6.0, if hot { p.warn } else { p.accent }, &[]);
     row(ui, "CPU", format!("{:.1}% · {} threads", t.cpu_usage_pct, t.cpu_cores));
     bar(ui, t.cpu_usage_pct, t.cpu_usage_pct > 85.0);
     row(ui, "RAM", format!("{:.1} / {:.1} GB", t.ram_used_gb, t.ram_total_gb));
@@ -485,16 +484,16 @@ fn telemetry_view(ui: &mut Ui, p: &Palette, app: &Jai) {
 /// The theme's accent below 75 %, amber to 90 %, red above.
 fn capacity_colour(p: &Palette, pct: f32) -> Color32 {
     if pct >= 90.0 {
-        p.red
+        p.alert
     } else if pct >= 75.0 {
-        p.amber
+        p.warn
     } else {
         p.accent
     }
 }
 
 /// A labelled bar: title left, value right, the bar below.
-fn bar_row(ui: &mut Ui, p: &Palette, label: &str, value: String, fraction: f32, colour: Color32, height: f32) {
+fn bar_row(ui: &mut Ui, label: &str, value: String, fraction: f32, colour: Color32, height: f32) {
     row(ui, label, value);
     meter(ui, fraction.clamp(0.0, 1.0), height, colour, &[]);
 }
@@ -545,12 +544,12 @@ fn pc_stats_view(ui: &mut Ui, p: &Palette, app: &Jai, window: &str) {
             let load = g.utilization_pct.unwrap_or(0.0);
             ring(ui, gauge, load / 100.0, capacity_colour(p, load), &format!("{load:.0}%"), "GPU");
             if let Some(temp) = g.temperature_c {
-                let hot = if temp >= 83.0 { p.red } else if temp >= 75.0 { p.amber } else { p.accent };
+                let hot = if temp >= 83.0 { p.alert } else if temp >= 75.0 { p.warn } else { p.accent };
                 ring(ui, gauge, (temp / 100.0).clamp(0.0, 1.0), hot, &format!("{temp:.0}°"), "GPU °C");
             }
         }
         if let Some(c) = t.cpu_temp_c {
-            let hot = if c >= 90.0 { p.red } else if c >= 80.0 { p.amber } else { p.accent };
+            let hot = if c >= 90.0 { p.alert } else if c >= 80.0 { p.warn } else { p.accent };
             ring(ui, gauge, (c / 105.0).clamp(0.0, 1.0), hot, &format!("{c:.0}°"), "CPU °C");
         }
     });
@@ -586,26 +585,26 @@ fn pc_stats_view(ui: &mut Ui, p: &Palette, app: &Jai, window: &str) {
         }
     });
     section(ui, "MEMORY", |ui| {
-        bar_row(ui, p, "RAM", format!("{:.1} / {:.1} GB ({:.0}%)", t.ram_used_gb, t.ram_total_gb, t.ram_usage_pct), t.ram_usage_pct / 100.0, capacity_colour(p, t.ram_usage_pct), 9.0);
+        bar_row(ui, "RAM", format!("{:.1} / {:.1} GB ({:.0}%)", t.ram_used_gb, t.ram_total_gb, t.ram_usage_pct), t.ram_usage_pct / 100.0, capacity_colour(p, t.ram_usage_pct), 9.0);
         if t.swap_total_gb > 0.05 {
             let pct = t.swap_used_gb / t.swap_total_gb * 100.0;
-            bar_row(ui, p, "Swap / page file", format!("{:.1} / {:.1} GB", t.swap_used_gb, t.swap_total_gb), pct / 100.0, capacity_colour(p, pct), 7.0);
+            bar_row(ui, "Swap / page file", format!("{:.1} / {:.1} GB", t.swap_used_gb, t.swap_total_gb), pct / 100.0, capacity_colour(p, pct), 7.0);
         }
     });
     match &gpu {
         Some(g) => section(ui, &format!("GPU · {}", g.name.to_uppercase()), |ui| {
             if let Some(hist) = &gpu_hist {
-                line_chart(ui, hist, "%", Some(0.0), Some(100.0), (ui.available_width() * 0.12).clamp(40.0, 90.0), true, p.violet);
+                line_chart(ui, hist, "%", Some(0.0), Some(100.0), (ui.available_width() * 0.12).clamp(40.0, 90.0), true, p.deep);
                 ui.add_space(4.0);
             }
             let load = g.utilization_pct.unwrap_or(0.0);
-            bar_row(ui, p, "Load", format!("{load:.0}%"), load / 100.0, capacity_colour(p, load), 8.0);
+            bar_row(ui, "Load", format!("{load:.0}%"), load / 100.0, capacity_colour(p, load), 8.0);
             if let Some(temp) = g.temperature_c {
-                bar_row(ui, p, "Temperature", format!("{temp:.0} °C"), temp / 100.0, if temp >= 83.0 { p.red } else if temp >= 75.0 { p.amber } else { p.accent }, 8.0);
+                bar_row(ui, "Temperature", format!("{temp:.0} °C"), temp / 100.0, if temp >= 83.0 { p.alert } else if temp >= 75.0 { p.warn } else { p.accent }, 8.0);
             }
             if let (Some(used), Some(total)) = (g.vram_used_mb, g.vram_total_mb.filter(|t| *t > 0)) {
                 let pct = used as f32 / total as f32 * 100.0;
-                bar_row(ui, p, "VRAM", format!("{:.2} / {:.1} GB ({pct:.0}%)", used as f32 / 1024.0, total as f32 / 1024.0), pct / 100.0, capacity_colour(p, pct), 8.0);
+                bar_row(ui, "VRAM", format!("{:.2} / {:.1} GB ({pct:.0}%)", used as f32 / 1024.0, total as f32 / 1024.0), pct / 100.0, capacity_colour(p, pct), 8.0);
             }
             if let Some(w) = g.power_w {
                 row(ui, "Power draw", format!("{w:.0} W"));
@@ -628,7 +627,7 @@ fn drive_space_view(ui: &mut Ui, p: &Palette, app: &Jai) {
         chip(ui, &format!("{} drives", t.disks.len()), p.accent);
         chip(ui, &format!("{:.0} GB free of {:.0} GB", free, total), p.accent);
         if let Some(low) = t.disks.iter().filter(|d| d.free_gb < 5.0).map(|d| d.letter()).next() {
-            chip(ui, &format!("{low} below 5 GB"), p.red);
+            chip(ui, &format!("{low} below 5 GB"), p.alert);
         }
     });
     ui.add_space(6.0);
@@ -660,7 +659,7 @@ fn drive_space_view(ui: &mut Ui, p: &Palette, app: &Jai) {
                 ui.add_space(2.0);
                 ui.label(RichText::new(format!("{:.1} GB free", d.free_gb)).font(bold(14.0)).color(p.text));
                 muted(ui, format!("{:.0}% free · {:.1} GB used of {:.1} GB", d.free_pct(), d.used_gb(), d.total_gb));
-                meter(ui, d.used_pct / 100.0, 10.0, colour, &[(0.75, p.amber.gamma_multiply(0.6)), (0.9, p.red.gamma_multiply(0.6))]);
+                meter(ui, d.used_pct / 100.0, 10.0, colour, &[(0.75, p.warn.gamma_multiply(0.6)), (0.9, p.alert.gamma_multiply(0.6))]);
             });
             ui.add_space(8.0);
         }
@@ -687,7 +686,7 @@ fn processes_view(ui: &mut Ui, p: &Palette, host: &WidgetHost) {
         let (left, right) = if columns == 2 { let (a, b) = cols.split_at_mut(1); (&mut a[0], Some(&mut b[0])) } else { (&mut cols[0], None) };
         section(left, "TOP CPU", |ui| {
             for proc_ in by_cpu.iter().take(rows) {
-                bar_row(ui, p, &crate::apps::display_name(&proc_.name), format!("{:.1}%{}", proc_.cpu_pct, if proc_.count > 1 { format!(" · {}×", proc_.count) } else { String::new() }), proc_.cpu_pct / 100.0, capacity_colour(p, proc_.cpu_pct), 5.0);
+                bar_row(ui, &crate::apps::display_name(&proc_.name), format!("{:.1}%{}", proc_.cpu_pct, if proc_.count > 1 { format!(" · {}×", proc_.count) } else { String::new() }), proc_.cpu_pct / 100.0, capacity_colour(p, proc_.cpu_pct), 5.0);
             }
         });
         let target = match right {
@@ -696,7 +695,7 @@ fn processes_view(ui: &mut Ui, p: &Palette, host: &WidgetHost) {
         };
         section(target, "TOP MEMORY", |ui| {
             for proc_ in by_mem.iter().take(rows) {
-                bar_row(ui, p, &crate::apps::display_name(&proc_.name), format!("{:.2} GB", proc_.memory_mb / 1024.0), (proc_.memory_mb / top_mem) as f32, p.violet, 5.0);
+                bar_row(ui, &crate::apps::display_name(&proc_.name), format!("{:.2} GB", proc_.memory_mb / 1024.0), (proc_.memory_mb / top_mem) as f32, p.deep, 5.0);
             }
         });
     });
@@ -790,8 +789,8 @@ pub(super) fn show_windows(ctx: &egui::Context, host: &WidgetHost) {
     let mut shown_now: Vec<(NativeWindowSpec, ViewportBuilder)> = Vec::new();
     for spec in windows {
         if !crate::hud_dock::adopt(&spec.id) {
-            // Inside the HUD: a ROSE block.
-            let p = window_palette(host, &spec.style);
+            // Inside the HUD: a block.
+            let (p, _look) = window_palette(host, &spec.style);
             let hud_scale = TEXT_SCALE.with(|s| s.get());
             TEXT_SCALE.with(|s| s.set(spec.style.font_scale));
             let mut fast = false;
@@ -888,7 +887,7 @@ fn window_frame(ctx: &egui::Context, class: ViewportClass, host: &WidgetHost, id
         ctx.request_repaint_of(ViewportId::ROOT);
         return;
     }
-    let p = window_palette(host, &spec.style);
+    let (p, _look) = window_palette(host, &spec.style);
     paint_background(ctx, &p);
     let scale = spec.style.font_scale;
     // The HUD's own text scale comes back once this window is drawn.
@@ -960,7 +959,7 @@ fn window_content(ui: &mut Ui, p: &Palette, spec: &NativeWindowSpec, host: &Widg
                 BlockKind::Markdown => markdown_view(ui, &p, &block.body, p.accent),
                 BlockKind::Code => {
                     if !block.language.is_empty() {
-                        chip(ui, &block.language, p.violet);
+                        chip(ui, &block.language, p.deep);
                     }
                     code_block(ui, &p, &block.body);
                 }
@@ -1003,26 +1002,13 @@ fn window_content(ui: &mut Ui, p: &Palette, spec: &NativeWindowSpec, host: &Widg
     fast
 }
 
-/// A JAI window's colours: the HUD's, with the window's own theme, colours and opacity.
-fn window_palette(host: &WidgetHost, style: &widgets::WindowStyle) -> Palette {
+/// A JAI window's colours, with its own opacity. A window in a look of its own ("make that
+/// window red") wears it while it is drawn: the guard is held until then.
+fn window_palette(host: &WidgetHost, style: &widgets::WindowStyle) -> (Palette, crate::holo_theme::Worn) {
+    let worn = crate::holo_theme::wear(style.look());
     let mut iface = host.app.config().read(|c| c.interface.clone());
-    if let Some(t) = style.theme.as_deref().and_then(crate::interface::theme) {
-        iface.accent = t.accent.to_string();
-        iface.background = t.background.to_string();
-    }
-    if let Some(a) = &style.accent {
-        iface.accent = a.clone();
-    }
-    if let Some(b) = &style.background {
-        iface.background = b.clone();
-    }
     iface.opacity = (style.opacity * 100.0).round().clamp(20.0, 100.0) as u8;
-    let mut p = Palette::new(&iface);
-    // A colour Sir gave this one window ("make that window red") beats the theme.
-    if style.accent.is_some() || style.theme.is_some() {
-        p.accent = super::rgb(iface.accent_rgb());
-    }
-    p
+    (Palette::new(&iface), worn)
 }
 
 /// The hover toolbar of a JAI window (right to left): close, theme, opacity, text size,
@@ -1043,14 +1029,14 @@ fn window_toolbar(ui: &mut Ui, ctx: &egui::Context, host: &WidgetHost, spec: &Na
         ctx.request_repaint_of(ViewportId::ROOT);
         return;
     }
-    let current = spec.style.theme.as_deref().and_then(crate::interface::theme).map(|t| t.display).unwrap_or("HUD theme");
-    crate::holo_ui::Picker::from_id_salt(("jai_window_theme", &spec.id)).width(ts(92.0)).selected_text(small(current)).show_ui(ui, |ui| {
-        if crate::holo_ui::item(ui, "Like the HUD", spec.style.theme.is_none() && spec.style.accent.is_none()).clicked() {
+    let current = spec.style.theme.as_deref().map_or("HUD THEME".to_string(), crate::holo_theme::label);
+    crate::holo_ui::Picker::from_id_salt(("jai_window_theme", &spec.id)).width(ts(92.0)).selected_text(small(&current)).show_ui(ui, |ui| {
+        if crate::holo_ui::item(ui, "LIKE THE HUD", spec.style.theme.is_none() && spec.style.accent.is_none()).clicked() {
             restyle(serde_json::json!({ "theme": "hud" }));
         }
-        for t in crate::interface::THEMES {
-            if crate::holo_ui::item(ui, t.display, spec.style.theme.as_deref() == Some(t.name)).clicked() {
-                restyle(serde_json::json!({ "theme": t.name }));
+        for (name, label, _) in crate::holo_theme::PRESETS {
+            if crate::holo_ui::item(ui, label, spec.style.theme.as_deref() == Some(name)).clicked() {
+                restyle(serde_json::json!({ "theme": name }));
             }
         }
     });

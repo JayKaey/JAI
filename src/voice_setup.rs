@@ -5,7 +5,8 @@
 //! voice lock compares with: `speaker_id`). While it runs, what is said goes to the set-up and
 //! not to him as an order.
 
-use eframe::egui::{self, pos2, vec2, Align2, Color32, FontFamily, FontId, RichText, Rounding, Stroke};
+use eframe::egui::{self, pos2, vec2, Align2, Color32, RichText, Rounding, Stroke};
+use crate::holo::Face;
 use std::sync::Mutex;
 use std::time::Instant;
 
@@ -305,8 +306,8 @@ pub fn show(ctx: &egui::Context, mic: f32) {
         return;
     };
     let accent = crate::hud_board::active_colour();
-    let ink = Color32::from_rgb(0xE8, 0xF2, 0xFC);
-    let muted = Color32::from_rgb(0x8E, 0xA4, 0xB8);
+    let ink = crate::holo::theme().ink();
+    let muted = crate::holo::theme().muted();
     let closed = crate::gui::block(ctx, ID, "Voice set-up // learn my voice", [620.0, 330.0], |ui| {
         // (Its body is painted, not laid out: it claims its room, or the block, which takes the
         // size of what it shows, shrinks to nothing round it. Seen live 2026-11-12.)
@@ -320,26 +321,26 @@ pub fn show(ctx: &egui::Context, mic: f32) {
         let centre = pos2(rect.center().x, rect.top() + rect.height() * 0.42);
         match &outcome {
             None => {
-                p.text(pos2(rect.left(), rect.top() + 26.0), Align2::LEFT_TOP, format!("READ THIS ALOUD  ·  {} OF {}", (step + 1).min(LINES.len()), LINES.len()), FontId::monospace(11.0), muted);
+                crate::holo::text(&p, pos2(rect.left(), rect.top() + 26.0), Align2::LEFT_TOP, Face::Label, &format!("READ THIS ALOUD  ·  {} OF {}", (step + 1).min(LINES.len()), LINES.len()), 9.0, muted);
                 let line = LINES.get(step).copied().unwrap_or("");
-                let galley = p.layout(line.to_string(), FontId::new(30.0, FontFamily::Name("display".into())), ink, rect.width() - 20.0);
+                let galley = p.layout(line.to_string(), crate::holo::font(Face::Head, 30.0), ink, rect.width() - 20.0);
                 p.galley(pos2(centre.x - galley.size().x / 2.0, centre.y - galley.size().y / 2.0), galley, ink);
                 if let Some((text, ok)) = &last {
                     let (mark, colour) = if *ok { ("HEARD", crate::holo::theme().ink()) } else { ("ONCE MORE, PLEASE  ·  I HEARD", crate::holo::theme().warn()) };
-                    p.text(pos2(rect.center().x, rect.bottom() - 34.0), Align2::CENTER_CENTER, format!("{mark}:  \u{201C}{text}\u{201D}"), FontId::monospace(11.0), colour);
+                    crate::holo::text(&p, pos2(rect.center().x, rect.bottom() - 34.0), Align2::CENTER_CENTER, Face::Mono, &format!("{mark}:  \u{201C}{text}\u{201D}"), 11.0, colour);
                 }
-                p.text(pos2(rect.center().x, rect.bottom() - 12.0), Align2::CENTER_CENTER, "Speak as you always do. Close the block to stop.", FontId::proportional(11.5), muted);
+                crate::holo::text(&p, pos2(rect.center().x, rect.bottom() - 12.0), Align2::CENTER_CENTER, Face::Body, "Speak as you always do. Close the block to stop.", 12.0, muted);
                 // His voice as it comes in.
                 let levels = trace(ctx.input(|i| i.time), mic);
                 paint_trace(&p, pos2(rect.center().x, rect.bottom() - 66.0), &levels, accent);
             }
             Some(o) if *o == Outcome::default() => {
-                p.text(centre, Align2::CENTER_CENTER, "LEARNING…", FontId::new(22.0, FontFamily::Name("display".into())), accent);
+                crate::holo::text(&p, centre, Align2::CENTER_CENTER, Face::Head, "LEARNING…", 22.0, accent);
             }
             Some(o) => {
                 let mut y = rect.top() + 30.0;
                 let mut say = |text: String, colour: Color32| {
-                    let galley = p.layout(text, FontId::proportional(14.0), colour, rect.width() - 10.0);
+                    let galley = p.layout(text, crate::holo::font(Face::Body, 14.0), colour, rect.width() - 10.0);
                     let h = galley.size().y;
                     p.galley(pos2(rect.left(), y), galley, colour);
                     y += h + 10.0;

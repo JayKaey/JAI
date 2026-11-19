@@ -479,10 +479,6 @@ impl Default for MindView {
 }
 
 impl MindView {
-    pub fn zoom_target(&self) -> f32 {
-        self.zoom_target
-    }
-
     pub fn set_zoom(&mut self, zoom: f32) {
         self.zoom_target = zoom.clamp(MIN_ZOOM, MAX_ZOOM);
     }

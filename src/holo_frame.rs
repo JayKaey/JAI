@@ -7,7 +7,7 @@
 
 use crate::holo::{self, a, lit, mix, px, Face, Light};
 use crate::holo_motion::{decode, ease_out_expo, phase};
-use eframe::egui::{pos2, vec2, Align2, Color32, Mesh, Painter, Pos2, Rect, Shape};
+use eframe::egui::{pos2, vec2, Color32, Mesh, Painter, Pos2, Rect, Shape};
 
 /// The header's height.
 pub const HEADER: f32 = 30.0;
@@ -44,9 +44,6 @@ impl Default for Plate<'_> {
 /// Where a plate's parts landed.
 #[derive(Clone, Copy, Debug)]
 pub struct Laid {
-    /// The frame as drawn (smaller than asked while it unfolds).
-    pub frame: Rect,
-    pub header: Rect,
     /// The room for content, inside the padding.
     pub body: Rect,
     /// Where the title starts and ends: keys go right of it.
@@ -92,9 +89,8 @@ pub fn plate(p: &Painter, r: Rect, plate: &Plate) -> Laid {
     let alpha = plate.alpha;
     let chrome = phase(plate.open, 0.55, 0.92) * alpha;
     let content = phase(plate.open, 0.66, 1.0) * alpha;
-    let header = Rect::from_min_size(frame.min, vec2(frame.width(), HEADER.min(frame.height())));
     let body = Rect::from_min_max(pos2(r.left() + PAD, r.top() + HEADER + PAD * 0.7), pos2(r.right() - PAD, r.bottom() - PAD));
-    let laid = Laid { frame, header, body, title_start: frame.left(), title_end: frame.left(), content };
+    let laid = Laid { body, title_start: frame.left(), title_end: frame.left(), content };
     if alpha <= 0.003 || frame.width() < 1.0 {
         return laid;
     }
@@ -176,12 +172,6 @@ pub fn dress(p: &Painter, r: Rect, focus: f32, alpha: f32) {
         holo::path(p, &[pos2(at.x + dx * arm, at.y), at, pos2(at.x, at.y + dy * arm)], bright);
     }
     holo::path(p, &[pos2(r.right(), r.bottom() - cut), pos2(r.right() - cut, r.bottom())], bright);
-}
-
-/// The text under a panel's bottom edge, left: what it is and how old ("WX-02 · 14:32:07").
-pub fn serial(p: &Painter, frame: Rect, text: &str, alpha: f32) {
-    let t = holo::theme();
-    holo::text(p, pos2(frame.left() + 1.0, frame.bottom() + 5.0), Align2::LEFT_TOP, Face::Mono, text, 9.5, a(t.faint(), alpha));
 }
 
 #[cfg(test)]

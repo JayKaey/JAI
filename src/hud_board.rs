@@ -1713,12 +1713,6 @@ fn ease_out(t: f32) -> f32 {
     1.0 - (1.0 - t.clamp(0.0, 1.0)).powi(3)
 }
 
-/// A slight overshoot at the end (a spring settling).
-pub fn ease_out_back(t: f32) -> f32 {
-    let (c, x) = (1.70158, t.clamp(0.0, 1.0) - 1.0);
-    1.0 + (c + 1.0) * x.powi(3) + c * x.powi(2)
-}
-
 /// The open/close animation of a drawer or block: `t` springs 0 (closed) … 1 (open), frame-rate
 /// independent; a closing one keeps rendering until `t` is back at 0.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -1754,11 +1748,6 @@ impl UiAnimState {
     pub fn moving(&self) -> bool {
         self.t > 0.0 && self.t < 1.0 || self.target_open && self.t < 1.0
     }
-}
-
-/// `r` scaled by `s` about its centre.
-fn scale_rect(r: Rect, s: f32) -> Rect {
-    Rect::from_center_size(r.center(), r.size() * s)
 }
 
 fn lerp_rect(a: Rect, b: Rect, t: f32) -> Rect {
@@ -2087,18 +2076,6 @@ fn front_rect(slot: Rect, stack: Option<(usize, usize)>) -> Rect {
 
 use crate::holo::{self, a, lit, mix, stroke, Face, Light};
 use crate::{holo_frame, holo_kit};
-
-fn ink() -> Color32 {
-    holo::theme().ink()
-}
-
-fn muted() -> Color32 {
-    holo::theme().muted()
-}
-
-fn micro() -> FontId {
-    FontId::monospace(11.0)
-}
 
 /// The pointer is on `r` of this painter's layer (not on a block in front of it).
 fn hovered(p: &Painter, r: Rect) -> bool {
@@ -3229,9 +3206,6 @@ mod tests {
         (0..6).for_each(|_| { s60.step(1.0 / 60.0); });
         (0..14).for_each(|_| { s144.step(14.4f32.recip() / 10.0); });
         assert!((s60.t - s144.t).abs() < 0.03, "{} vs {}", s60.t, s144.t);
-        // The spring overshoots a touch, then settles on 1.
-        assert!((1..10).map(|k| ease_out_back(k as f32 / 10.0)).any(|v| v > 1.0));
-        assert!((ease_out_back(1.0) - 1.0).abs() < 1e-5 && ease_out_back(0.0).abs() < 1e-5);
     }
 
     #[test]

@@ -145,11 +145,11 @@ pub fn kind_of(el: &Elements, group: &str) -> SatKind {
 
 fn kind_colour(kind: SatKind, accent: Color32) -> Color32 {
     match kind {
-        SatKind::Station => Color32::from_rgb(0xF2, 0xF8, 0xFF),
-        SatKind::Starlink => Color32::from_rgb(0x9F, 0xC8, 0xFF),
-        SatKind::Navigation => Color32::from_rgb(0xFF, 0xC1, 0x4D),
-        SatKind::Weather => Color32::from_rgb(0x7C, 0xE3, 0x9A),
-        SatKind::Geo => Color32::from_rgb(0xC3, 0x9B, 0xFF),
+        SatKind::Station => crate::holo::theme().hot(),
+        SatKind::Starlink => crate::holo::theme().ink(),
+        SatKind::Navigation => crate::holo::theme().warn(),
+        SatKind::Weather => crate::holo::theme().deep(),
+        SatKind::Geo => crate::holo::mix(crate::holo::theme().deep(), crate::holo::theme().ink(), 0.5),
         SatKind::Other => accent,
     }
 }
@@ -1057,12 +1057,14 @@ impl Hit {
     }
 }
 
-const WHITE: Color32 = Color32::from_rgb(0xF2, 0xF8, 0xFF);
+use crate::holo::{stroke, theme};
 
-use crate::holo::stroke;
-const JAM_RED: Color32 = Color32::from_rgb(0xFF, 0x4D, 0x4D);
-const AMBER: Color32 = Color32::from_rgb(0xFF, 0xC1, 0x4D);
-const WORKS: Color32 = Color32::from_rgb(0xFF, 0x9A, 0x3C);
+fn white() -> Color32 {
+    theme().hot()
+}
+fn jam_red() -> Color32 {
+    theme().alert()
+}
 
 fn train_colour(s: &Segment) -> Color32 {
     if let Some([r, g, b]) = s.colour {
@@ -1073,20 +1075,20 @@ fn train_colour(s: &Segment) -> Color32 {
         }
     }
     match s.mode.as_str() {
-        "HIGHSPEED_RAIL" | "LONG_DISTANCE" | "NIGHT_RAIL" => WHITE,
-        "SUBURBAN" | "METRO" => Color32::from_rgb(0x4C, 0xC3, 0x6B),
-        "SUBWAY" => Color32::from_rgb(0x3D, 0x8B, 0xFF),
-        "TRAM" => Color32::from_rgb(0xF2, 0xC8, 0x3C),
-        _ => Color32::from_rgb(0xE5, 0x3E, 0x3E),
+        "HIGHSPEED_RAIL" | "LONG_DISTANCE" | "NIGHT_RAIL" => white(),
+        "SUBURBAN" | "METRO" => theme().deep(),
+        "SUBWAY" => theme().ink(),
+        "TRAM" => theme().warn(),
+        _ => theme().accent(),
     }
 }
 
 fn incident_colour(kind: crate::traffic::Kind) -> Color32 {
     use crate::traffic::Kind;
     match kind {
-        Kind::Accident | Kind::Jam | Kind::Closure => JAM_RED,
-        Kind::Hazard => AMBER,
-        Kind::Roadworks => WORKS,
+        Kind::Accident | Kind::Jam | Kind::Closure => jam_red(),
+        Kind::Hazard => theme().warn(),
+        Kind::Roadworks => crate::holo::mix(theme().warn(), theme().alert(), 0.5),
     }
 }
 
@@ -1214,7 +1216,7 @@ pub fn paint(p: &Painter, v: &MapView) -> Painted {
         let mut draw = |s: &Segment, pos: (f64, f64), dwelling: bool| {
             let Some((at, vis)) = (v.at)(pos.0, pos.1).filter(|(at, _)| inside(*at, 5.0)) else { return };
             let c = train_colour(s);
-            p.circle_filled(at, 4.2, Color32::from_black_alpha((200.0 * vis) as u8));
+            p.circle_filled(at, 4.2, crate::holo::a(theme().void(), 0.78 * vis));
             p.circle_filled(at, 3.0, c.gamma_multiply(vis * if dwelling { 0.7 } else { 1.0 }));
             consider(at, 4.0, &|| Hit { target: Target::Train(s.trip_id.clone()), lines: segment_lines(s, dwelling) });
         };
@@ -1240,18 +1242,18 @@ pub fn paint(p: &Painter, v: &MapView) -> Painted {
         for f in finland.iter() {
             let pos = fi_position(f, since);
             let Some((at, vis)) = (v.at)(pos.0, pos.1).filter(|(at, _)| inside(*at, 5.0)) else { continue };
-            p.circle_filled(at, 4.0, Color32::from_black_alpha((200.0 * vis) as u8));
-            p.circle_filled(at, 2.8, Color32::from_rgb(0x4C, 0xC3, 0x6B).gamma_multiply(vis));
+            p.circle_filled(at, 4.0, crate::holo::a(theme().void(), 0.78 * vis));
+            p.circle_filled(at, 2.8, theme().deep().gamma_multiply(vis));
             consider(at, 4.0, &|| Hit { target: Target::FinnishTrain(f.train.number), lines: vec![format!("Train {}", f.train.number), format!("{:.0} km/h · live GPS", f.train.speed_kmh), "Finland · Digitraffic".into()] });
         }
         out.moving = true;
     }
     if let Some(f) = &followed {
         if let Some((at, vis)) = (v.at)(f.lat, f.lon).filter(|(at, _)| inside(*at, 12.0)) {
-            p.circle_stroke(at, 9.0, stroke(1.5, WHITE.gamma_multiply(vis)));
+            p.circle_stroke(at, 9.0, stroke(1.5, white().gamma_multiply(vis)));
             p.circle_filled(at, 4.0, v.accent.gamma_multiply(vis));
             out.glyphs.push(Rect::from_center_size(at, Vec2::splat(20.0)));
-            out.labels.push(LiveLabel { at, gap: 12.0, text: f.title.clone(), colour: WHITE.gamma_multiply(vis), rank: 0.2 });
+            out.labels.push(LiveLabel { at, gap: 12.0, text: f.title.clone(), colour: white().gamma_multiply(vis), rank: 0.2 });
             consider(at, 9.0, &|| Hit { target: Target::Train(f.trip_id.clone()), lines: vec![f.title.clone(), f.words.clone()] });
         }
     }
@@ -1260,7 +1262,7 @@ pub fn paint(p: &Painter, v: &MapView) -> Painted {
     if let Some(sel) = &selected {
         let fix = sel.sat.model.fix(now).ok();
         for run in (v.runs)(&sel.track) {
-            p.add(Shape::line(run, stroke(1.3, WHITE.gamma_multiply(0.55))));
+            p.add(Shape::line(run, stroke(1.3, white().gamma_multiply(0.55))));
         }
         if let Some(fix) = fix {
             for run in (v.runs)(&circle((fix.lat, fix.lon), footprint_km(fix.alt_km), 96)) {
@@ -1283,7 +1285,7 @@ pub fn paint(p: &Painter, v: &MapView) -> Painted {
             let c = kind_colour(sat.kind, v.accent).gamma_multiply(vis);
             mesh.add_colored_rect(Rect::from_center_size(at, Vec2::splat(size)), c);
             if LANDMARKS.contains(&sat.el.norad) && labelled.insert(sat.el.norad) {
-                out.labels.push(LiveLabel { at, gap: 6.0, text: display_name(&sat.el).trim_start_matches("the ").to_string(), colour: WHITE.gamma_multiply(vis), rank: 0.6 });
+                out.labels.push(LiveLabel { at, gap: 6.0, text: display_name(&sat.el).trim_start_matches("the ").to_string(), colour: white().gamma_multiply(vis), rank: 0.6 });
                 out.glyphs.push(Rect::from_center_size(at, Vec2::splat(6.0)));
             }
             consider(at, size, &|| Hit { target: Target::Satellite(sat.el.norad), lines: sat_lines(&sat.el, d.alt_km, d.speed_kms) });
@@ -1300,10 +1302,10 @@ pub fn paint(p: &Painter, v: &MapView) -> Painted {
         let is_selected = selected.as_ref().is_some_and(|s| s.sat.el.norad == sat.el.norad);
         p.circle_filled(at, 4.0, kind_colour(sat.kind, v.accent).gamma_multiply(vis));
         if is_selected {
-            p.circle_stroke(at, 8.0, stroke(1.4, WHITE.gamma_multiply(vis)));
+            p.circle_stroke(at, 8.0, stroke(1.4, white().gamma_multiply(vis)));
         }
         if labelled.insert(sat.el.norad) {
-            out.labels.push(LiveLabel { at, gap: 10.0, text: display_name(&sat.el).trim_start_matches("the ").to_string(), colour: WHITE.gamma_multiply(vis), rank: if is_selected { 0.1 } else { 0.7 } });
+            out.labels.push(LiveLabel { at, gap: 10.0, text: display_name(&sat.el).trim_start_matches("the ").to_string(), colour: white().gamma_multiply(vis), rank: if is_selected { 0.1 } else { 0.7 } });
         }
         out.glyphs.push(Rect::from_center_size(at, Vec2::splat(10.0)));
         consider(at, 6.0, &|| Hit { target: Target::Satellite(sat.el.norad), lines: sat_lines(&sat.el, fix.alt_km, fix.speed_kms) });
@@ -1350,11 +1352,11 @@ fn incident_lines(i: &crate::traffic::Incident) -> Vec<String> {
 /// diamond.
 fn incident_glyph(p: &Painter, at: Pos2, kind: crate::traffic::Kind, c: Color32) {
     use crate::traffic::Kind;
-    let dark = Color32::from_black_alpha(210);
+    let dark = crate::holo::a(theme().void(), 0.82);
     match kind {
         Kind::Closure => {
             p.circle_filled(at, 5.5, c);
-            p.line_segment([at - vec2(3.0, 0.0), at + vec2(3.0, 0.0)], stroke(1.6, WHITE));
+            p.line_segment([at - vec2(3.0, 0.0), at + vec2(3.0, 0.0)], stroke(1.6, white()));
         }
         Kind::Jam => {
             p.circle_filled(at, 5.5, c);
@@ -1406,17 +1408,17 @@ pub fn legend() -> Vec<(Color32, String)> {
     let mut out = Vec::new();
     if l.group.is_some() {
         let n = l.snap.as_ref().map_or(0, |s| s.dots.len());
-        out.push((Color32::from_rgb(0x9F, 0xC8, 0xFF), if n == 0 { "SAT …".to_string() } else { format!("{} SAT", digits(n as i64)) }));
+        out.push((theme().ink(), if n == 0 { "SAT …".to_string() } else { format!("{} SAT", digits(n as i64)) }));
     }
     if l.trains {
         let t = chrono::Utc::now();
         let n = l.segments.iter().filter(|s| s.at(t).is_some()).map(|s| s.trip_id.as_str()).collect::<HashSet<_>>().len() + l.finland.len();
-        out.push((Color32::from_rgb(0x4C, 0xC3, 0x6B), format!("{n} TRAINS")));
+        out.push((theme().deep(), format!("{n} TRAINS")));
     }
     if l.traffic {
         drop(l);
         let n = crate::traffic::cached().iter().filter(|i| i.kind != crate::traffic::Kind::Roadworks).count();
-        out.push((JAM_RED, format!("{n} ROAD")));
+        out.push((jam_red(), format!("{n} ROAD")));
     }
     out
 }
@@ -1569,8 +1571,8 @@ mod tests {
             let a = std::f32::consts::TAU * k as f32 / 96.0;
             Pos2::new(500.0 + r * a.cos() - r, 300.0f32 + r * a.sin())
         }).collect();
-        let dashes = dashed_on(map, &ring, Stroke::new(1.0f32, Color32::WHITE), 5.0, 4.0);
+        let dashes = dashed_on(map, &ring, Stroke::new(1.0f32, white()), 5.0, 4.0);
         assert!((50..400).contains(&dashes.len()), "{} dashes", dashes.len());
-        assert!(dashed_on(map, &[Pos2::new(-50.0f32, -50.0f32), Pos2::new(-10.0f32, 900.0f32)], Stroke::new(1.0f32, Color32::WHITE), 5.0, 4.0).is_empty());
+        assert!(dashed_on(map, &[Pos2::new(-50.0f32, -50.0f32), Pos2::new(-10.0f32, 900.0f32)], Stroke::new(1.0f32, white()), 5.0, 4.0).is_empty());
     }
 }

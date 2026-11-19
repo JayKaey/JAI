@@ -169,29 +169,6 @@ pub fn text(p: &Painter, at: Pos2, anchor: Align2, face: Face, text: &str, size:
     Rect::from_min_size(min, rect.size())
 }
 
-/// Capitals set along a circle, centred on `mid` (radians, 0 = east, clockwise). On the lower
-/// half the letters turn to stay upright.
-pub fn arc_text(p: &Painter, centre: Pos2, radius: f32, mid: f32, face: Face, text: &str, size: f32, colour: Color32) {
-    let text = if face == Face::Label { text.to_uppercase() } else { text.to_string() };
-    let spacing = if face == Face::Label { size * 0.14 } else { size * 0.04 };
-    let glyphs: Vec<Arc<egui::Galley>> = text.chars().map(|c| p.layout_no_wrap(c.to_string(), font(face, size), colour)).collect();
-    let total: f32 = glyphs.iter().map(|g| g.size().x + spacing).sum::<f32>() - spacing;
-    let upright = mid.rem_euclid(TAU) < std::f32::consts::PI; // lower half: read left to right along the bottom
-    let dir = if upright { -1.0 } else { 1.0 };
-    let mut along = -total / 2.0;
-    for g in glyphs {
-        let w = g.size().x;
-        let angle = mid + dir * (along + w / 2.0) / radius;
-        let at = polar(centre, radius, angle);
-        let turn = angle + if upright { -std::f32::consts::FRAC_PI_2 } else { std::f32::consts::FRAC_PI_2 };
-        let (s, c) = turn.sin_cos();
-        let half = g.size() / 2.0;
-        let origin = pos2(at.x - (half.x * c - half.y * s), at.y - (half.x * s + half.y * c));
-        p.add(egui::epaint::TextShape::new(origin, g, colour).with_angle(turn));
-        along += w + spacing;
-    }
-}
-
 // -------------------------------------------------------------------------------- colour ----
 
 /// `colour` at `alpha` (0-1) of its own strength.
@@ -630,39 +607,6 @@ impl Light {
         }
     }
 
-    /// A filled disc with a soft edge.
-    pub fn disc(&mut self, centre: Pos2, radius: f32, colour: Color32) {
-        let f = self.feather;
-        let mid = self.vertex(centre, colour);
-        let n = arc_steps(radius, TAU).max(12);
-        let mut prev: Option<(u32, u32)> = None;
-        let mut first = (0, 0);
-        for i in 0..n {
-            let angle = TAU * i as f32 / n as f32;
-            let row = (self.vertex(polar(centre, (radius - f / 2.0).max(0.0), angle), colour), self.vertex(polar(centre, radius + f / 2.0, angle), Color32::TRANSPARENT));
-            if let Some(pr) = prev {
-                self.mesh.add_triangle(mid, pr.0, row.0);
-                self.quad(pr.0, pr.1, row.0, row.1);
-            } else {
-                first = row;
-            }
-            prev = Some(row);
-        }
-        if let Some(pr) = prev {
-            self.mesh.add_triangle(mid, pr.0, first.0);
-            self.quad(pr.0, pr.1, first.0, first.1);
-        }
-    }
-
-    /// A plain filled quad (no soft edge: bars, cells).
-    pub fn cell(&mut self, rect: Rect, colour: Color32) {
-        self.mesh.add_colored_rect(rect, colour);
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.mesh.indices.is_empty()
-    }
-
     pub fn paint(self, p: &Painter) {
         if let Some(bloom) = self.bloom {
             bloom.paint(p, self.spill);
@@ -740,42 +684,6 @@ pub fn corner_ticks(p: &Painter, r: Rect, arm: f32, colour: Color32) {
     }
 }
 
-/// A registration mark: a small cross in a circle, where a drawing is pinned.
-pub fn reg_mark(p: &Painter, centre: Pos2, radius: f32, colour: Color32) {
-    p.circle_stroke(centre, radius, Stroke::new(px(p), colour));
-    rule(p, pos2(centre.x - radius * 1.7, centre.y), pos2(centre.x + radius * 1.7, centre.y), colour);
-    rule(p, pos2(centre.x, centre.y - radius * 1.7), pos2(centre.x, centre.y + radius * 1.7), colour);
-}
-
-/// A small "+" (the canvas grid's cross, an add key).
-pub fn cross(p: &Painter, centre: Pos2, arm: f32, colour: Color32) {
-    rule(p, pos2(centre.x - arm, centre.y), pos2(centre.x + arm + px(p), centre.y), colour);
-    rule(p, pos2(centre.x, centre.y - arm), pos2(centre.x, centre.y + arm + px(p)), colour);
-}
-
-/// A ruler along a straight line: a tick every `pitch`, every `major`-th one longer. Ticks
-/// stand on the side `side` points to.
-pub fn ruler(p: &Painter, from: Pos2, to: Pos2, pitch: f32, major: usize, len: f32, side: Vec2, colour: Color32) {
-    let span = to - from;
-    let n = (span.length() / pitch.max(1.0)).floor() as usize;
-    let step = span.normalized() * pitch;
-    for i in 0..=n {
-        let at = from + step * i as f32;
-        let l = if major > 0 && i % major == 0 { len } else { len * 0.45 };
-        rule(p, at, at + side * l, colour);
-    }
-}
-
-/// Diagonal hatching inside `r`: what is locked, absent or out of range.
-pub fn hatch(p: &Painter, r: Rect, pitch: f32, colour: Color32) {
-    let clipped = p.with_clip_rect(r.intersect(p.clip_rect()));
-    let mut x = r.left() - r.height();
-    while x < r.right() {
-        clipped.line_segment([pos2(x, r.bottom()), pos2(x + r.height(), r.top())], Stroke::new(px(p), colour));
-        x += pitch;
-    }
-}
-
 /// A field of dots (the drafting grid, a texture behind a reading).
 pub fn dot_field(p: &Painter, r: Rect, pitch: f32, origin: Pos2, colour: Color32) {
     let (k, w) = (ppp(p), px(p));
@@ -808,45 +716,6 @@ pub fn leader(p: &Painter, from: Pos2, to: Pos2, colour: Color32) {
     let knee = pos2(from.x + dx, to.y);
     p.add(Shape::line(vec![from, knee, to], Stroke::new(px(p), colour)));
     p.circle_filled(from, 1.6, colour);
-}
-
-// -------------------------------------------------------------------------------- canvas ----
-
-/// The drafting table everything stands on: the void, a dot grid with a cross on every fourth
-/// dot, and the construction lines of the core at `origin` (its axes and range circles), so
-/// every panel is seen to be placed about him.
-pub fn canvas(p: &Painter, screen: Rect, origin: Pos2, reach: f32) {
-    let t = theme();
-    p.rect_filled(screen, 0.0, t.void());
-    const PITCH: f32 = 24.0;
-    dot_field(p, screen, PITCH, origin, a(t.ink(), 0.085));
-    let pitch = PITCH * 4.0;
-    let start = |lo: f32, o: f32| o + ((lo - o) / pitch).ceil() * pitch;
-    let mut y = start(screen.top(), origin.y);
-    while y <= screen.bottom() {
-        let mut x = start(screen.left(), origin.x);
-        while x <= screen.right() {
-            cross(p, pos2(x, y), 3.0, a(t.ink(), 0.20));
-            x += pitch;
-        }
-        y += pitch;
-    }
-    // The core's axes, ruled near him and fading out.
-    let axis = a(t.ink(), 0.07);
-    rule(p, pos2(screen.left(), origin.y), pos2(screen.right(), origin.y), axis);
-    rule(p, pos2(origin.x, screen.top()), pos2(origin.x, screen.bottom()), axis);
-    let mut light = Light::new(p);
-    for (k, share) in [(1.55, 0.085), (2.3, 0.06), (3.2, 0.045)] {
-        light.ring(origin, reach * k, px(p), a(t.ink(), share));
-    }
-    // Range ticks on the first circle: every 5°, longer every 30°.
-    for i in 0..72 {
-        let angle = TAU * i as f32 / 72.0;
-        let long = i % 6 == 0;
-        let r = reach * 1.55;
-        light.seg(polar(origin, r, angle), polar(origin, r + if long { 9.0 } else { 4.0 }, angle), px(p), a(t.ink(), if long { 0.22 } else { 0.11 }));
-    }
-    light.paint(p);
 }
 
 /// Every line of the HUD: a hairline stays one, anything wider is drawn finer (2 → 1.4,

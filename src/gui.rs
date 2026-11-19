@@ -73,7 +73,7 @@ use crate::{holo_kit, holo_ui};
 use crate::config::ConfigStore;
 use crate::ears::AudioLevel;
 use crate::hud::{ConfigState, HudCommand, HudEvent};
-use crate::interface::{self, HudLayout, InterfaceSettings, WindowCommand, THEMES};
+use crate::interface::{self, HudLayout, InterfaceSettings, WindowCommand};
 use crate::memory::MemoryEntry;
 use crate::modality::VoiceResponseMode;
 use crate::skills::JaiSkill;
@@ -408,12 +408,9 @@ pub fn show_pairing() {
     sync_windows();
 }
 
-/// "Open the interface settings": the HUD's settings window opens on its next frame.
-static SETTINGS_REQUEST: AtomicBool = AtomicBool::new(false);
-
-/// Opens the HUD's interface settings window and brings the HUD up.
+/// "Open the interface settings": the settings panel opens and the HUD comes up.
 pub fn open_interface_settings() {
-    SETTINGS_REQUEST.store(true, Ordering::Release);
+    crate::hud_feel::open_settings_panel();
     show();
     request_repaint();
 }
@@ -1648,19 +1645,16 @@ struct Palette {
     well_solid: Color32,
     line: Color32,
     line_strong: Color32,
-    track: Color32,
     text: Color32,
     muted: Color32,
-    green: Color32,
-    amber: Color32,
-    red: Color32,
-    violet: Color32,
-    sky: Color32,
-    light: bool,
-    /// Corner radius of panels (`corner_rounding`); bubbles and buttons follow it.
-    radius: f32,
-    /// The True-OLED minimal design: pure black, `#09090B` cards, hairline borders, no grid.
-    oled: bool,
+    /// All is well: plain ink (colour is for what is live or wrong).
+    nominal: Color32,
+    /// A caution, never the theme's own colour.
+    warn: Color32,
+    /// What failed.
+    alert: Color32,
+    /// The same light further back: a second series, a counterpart.
+    deep: Color32,
 }
 
 impl Palette {
@@ -1681,42 +1675,19 @@ impl Palette {
             well_solid: well,
             line: crate::holo::a(t.ink(), 0.20),
             line_strong: crate::holo::a(t.ink(), 0.46),
-            track: crate::holo::a(t.ink(), 0.09),
             text: t.ink(),
             muted: t.muted(),
-            // A calm green for "all is well", a caution that is never the theme's own colour,
-            // and the alert for what failed.
-            green: crate::holo::theme().ink(),
-            amber: t.warn(),
-            red: t.alert(),
-            violet: t.deep(),
-            sky: t.deep(),
-            light: false,
-            radius: 0.0,
-            oled: t.void == [0, 0, 0],
+            nominal: t.ink(),
+            warn: t.warn(),
+            alert: t.alert(),
+            deep: t.deep(),
         }
     }
 
-    /// The pop-up cards' look in either design.
+    /// The pop-up cards' look.
     fn card_style(&self) -> crate::dynamic_popups::CardStyle {
-        crate::dynamic_popups::CardStyle { surface: self.card_solid, border: self.line, accent: self.accent, text: self.text, muted: self.muted, rounding: self.r_panel() }
+        crate::dynamic_popups::CardStyle { surface: self.card_solid, accent: self.accent, text: self.text, muted: self.muted }
     }
-
-    /// Panels and cards (16 at the default 18).
-    fn r_panel(&self) -> f32 {
-        self.radius * 16.0 / 18.0
-    }
-
-    /// Chat bubbles and text inputs (22 at the default 18).
-    fn r_bubble(&self) -> f32 {
-        self.radius * 22.0 / 18.0
-    }
-
-    /// Buttons and pills (14 at the default 18).
-    fn r_button(&self) -> f32 {
-        self.radius * 14.0 / 18.0
-    }
-
 }
 
 fn blend(a: Color32, b: Color32, t: f32) -> Color32 {
@@ -1914,7 +1885,6 @@ pub(crate) fn settle_new_areas(ctx: &egui::Context) {
     }
 }
 
-use crate::holo::arc_points;
 
 fn state_name(state: &str) -> &str {
     match state {
@@ -2170,6 +2140,7 @@ impl HudApp {
         self.theme_generation = generation;
         self.emblem.set_custom_home(current.orb_board_pos.map(|[x, y]| vec2(x, y)));
         self.emblem.style = crate::holo_core::CoreStyle::of_word(&current.core_style).unwrap_or_default();
+        self.emblem.size = current.orb_scale;
         if let Some([x, y]) = current.orb_board_pos.filter(|_| self.applied.is_none()) {
             info!("[HUD] Emblem home: Sir's spot at {:.0} %, {:.0} % of the screen (double-click it, or \"center your orb\", for the middle)", x * 100.0, y * 100.0);
         }
@@ -2461,11 +2432,11 @@ impl HudApp {
                 }
             }
             if let VoiceResponseMode::CustomCondition(c) = &current {
-                pill(ui, format!("CUSTOM: {}", c.replace('_', " ")), p.amber)
+                pill(ui, format!("CUSTOM: {}", c.replace('_', " ")), p.warn)
                     .on_hover_text("A custom rule JAI applies per answer (set by voice or chat)");
             }
             if cfg.voice_muted {
-                pill(ui, "voice muted", p.red).on_hover_text("Say \"unmute your voice\" to hear JAI again");
+                pill(ui, "voice muted", p.alert).on_hover_text("Say \"unmute your voice\" to hear JAI again");
             }
         });
     }
@@ -2476,9 +2447,9 @@ impl HudApp {
         let p = self.palette;
         let phase = m.level.as_ref().map(|l| l.phase).unwrap_or("—");
         let phase_colour = match phase {
-            "speaking" | "pre_speech" | "hangover" => p.green,
-            "muted" => p.red,
-            "calibrating" | "mic_test" => p.amber,
+            "speaking" | "pre_speech" | "hangover" => p.nominal,
+            "muted" => p.alert,
+            "calibrating" | "mic_test" => p.warn,
             _ => p.accent,
         };
         card(ui, "MICROPHONE & VAD", |ui| chip(ui, phase, phase_colour), |ui| {
@@ -2496,8 +2467,8 @@ impl HudApp {
                     ui,
                     db_fraction(level.rms_db),
                     12.0,
-                    if voice { p.green } else { p.accent },
-                    &[(db_fraction(to_db(level.noise_floor)), p.violet), (db_fraction(to_db(level.start_gate)), p.amber)],
+                    if voice { p.nominal } else { p.accent },
+                    &[(db_fraction(to_db(level.noise_floor)), p.deep), (db_fraction(to_db(level.start_gate)), p.warn)],
                 );
                 row(ui, "Speech probability (Silero)", format!("{:.2}", level.probability));
                 let hot = level.probability >= level.start_threshold;
@@ -2505,14 +2476,14 @@ impl HudApp {
                     ui,
                     level.probability,
                     7.0,
-                    if hot { p.amber } else { p.accent },
-                    &[(level.start_threshold, p.amber), (level.release_threshold, blend(p.sky, p.text, 0.3))],
+                    if hot { p.warn } else { p.accent },
+                    &[(level.start_threshold, p.warn), (level.release_threshold, blend(p.deep, p.text, 0.3))],
                 );
                 ui.horizontal_wrapped(|ui| {
                     for (colour, text) in [
-                        (p.violet, format!("noise floor {:.0} dB", to_db(level.noise_floor))),
-                        (p.amber, "start gate".to_string()),
-                        (blend(p.sky, p.text, 0.3), "release".to_string()),
+                        (p.deep, format!("noise floor {:.0} dB", to_db(level.noise_floor))),
+                        (p.warn, "start gate".to_string()),
+                        (blend(p.deep, p.text, 0.3), "release".to_string()),
                     ] {
                         ui.label(RichText::new("[#]").size(ts(10.0)).color(colour));
                         ui.label(RichText::new(text).size(ts(10.0)).color(p.muted));
@@ -2550,7 +2521,6 @@ impl HudApp {
             }
             ui.add_space(2.0);
             ui.columns(2, |cols| {
-                let w = cols[0].available_width();
                 let recalibrate = holo_ui::key(&mut cols[0], "Recalibrate");
                 if recalibrate.on_hover_text("Re-measure the room noise (stay quiet for ~1 s)").clicked() {
                     self.command(HudCommand::Recalibrate);
@@ -2564,7 +2534,6 @@ impl HudApp {
     }
 
     fn devices_card(&mut self, ui: &mut Ui, m: &HudModel) {
-        let p = self.palette;
         let mut refresh = false;
         card(
             ui,
@@ -2629,7 +2598,7 @@ impl HudApp {
                     muted(ui, "Collecting telemetry…");
                     return;
                 };
-                let bar = |ui: &mut Ui, pct: f32, hot: bool| meter(ui, pct / 100.0, 6.0, if hot { p.amber } else { p.accent }, &[]);
+                let bar = |ui: &mut Ui, pct: f32, hot: bool| meter(ui, pct / 100.0, 6.0, if hot { p.warn } else { p.accent }, &[]);
                 row(ui, "CPU", format!("{:.1}% · {} threads", t.cpu_usage_pct, t.cpu_cores));
                 bar(ui, t.cpu_usage_pct, t.cpu_usage_pct > 85.0);
                 row(ui, "RAM", format!("{:.1} / {:.1} GB", t.ram_used_gb, t.ram_total_gb));
@@ -2673,20 +2642,20 @@ impl HudApp {
         let pending = card.status == "pending";
         let glow = if pending { ((ui.input(|i| i.time) * 3.0).sin().abs() * 0.5 + 0.5) as f32 } else { 0.35 };
         let colour = match card.status.as_str() {
-            "confirmed" => p.red,
-            "pending" => p.red,
+            "confirmed" => p.alert,
+            "pending" => p.alert,
             _ => p.muted,
         };
         Frame::none()
-            .fill(p.red.gamma_multiply(if pending { 0.10 } else { 0.04 }))
+            .fill(p.alert.gamma_multiply(if pending { 0.10 } else { 0.04 }))
             .stroke(stroke(if pending { 1.6 } else { 1.0 }, colour.gamma_multiply(glow)))
             .rounding(Rounding::ZERO)
             .inner_margin(Margin::symmetric(12.0, 10.0))
             .show(ui, |ui| {
                 ui.set_max_width((ui.available_width() * 0.9).max(180.0));
-                ui.label(RichText::new("SYSTEM POWER · DOUBLE-CHECK").size(ts(9.5)).color(p.red).extra_letter_spacing(0.8));
+                ui.label(RichText::new("SYSTEM POWER · DOUBLE-CHECK").size(ts(9.5)).color(p.alert).extra_letter_spacing(0.8));
                 let what = if card.action == "restart" { "Restart this PC now?" } else { "Shut down this PC now?" };
-                ui.label(RichText::new(what).font(bold(13.5)).color(p.red));
+                ui.label(RichText::new(what).font(bold(13.5)).color(p.alert));
                 ui.add_space(4.0);
                 ui.horizontal_wrapped(|ui| match card.status.as_str() {
                     "pending" => {
@@ -2699,7 +2668,7 @@ impl HudApp {
                         muted(ui, "or say “yes” / “no” within 30 s");
                     }
                     "confirmed" => {
-                        ui.label(RichText::new(if card.action == "restart" { "Restarting…" } else { "Shutting down…" }).color(p.red));
+                        ui.label(RichText::new(if card.action == "restart" { "Restarting…" } else { "Shutting down…" }).color(p.alert));
                     }
                     "expired" => {
                         ui.label(RichText::new("Timed out — aborted").color(p.muted));
@@ -2718,10 +2687,10 @@ impl HudApp {
     /// A WhatsApp message waiting for Sir's go-ahead: `[ Send via WhatsApp ]` / `[ Cancel ]`.
     fn message_card(&mut self, ui: &mut Ui, p: &Palette, card: &MessageCardView) {
         let colour = match card.status.as_str() {
-            "sent" => p.green,
+            "sent" => p.nominal,
             "cancelled" => p.muted,
-            "pending" => p.green.gamma_multiply(0.8),
-            _ => p.red,
+            "pending" => p.nominal.gamma_multiply(0.8),
+            _ => p.alert,
         };
         Frame::none()
             .fill(p.well)
@@ -2745,13 +2714,13 @@ impl HudApp {
                         muted(ui, "or just say “yes”");
                     }
                     "sent" => {
-                        ui.label(RichText::new("OK: Sent").color(p.green));
+                        ui.label(RichText::new("OK: Sent").color(p.nominal));
                     }
                     "cancelled" => {
                         ui.label(RichText::new("Cancelled").color(p.muted));
                     }
                     other => {
-                        ui.label(RichText::new(format!("WARN: {other}")).color(p.red));
+                        ui.label(RichText::new(format!("WARN: {other}")).color(p.alert));
                     }
                 });
             });
@@ -2839,7 +2808,7 @@ impl HudApp {
                 item(ui, None, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(RichText::new(&mem.key).font(bold(12.0)).color(p.accent));
-                        chip(ui, &mem.category, p.green);
+                        chip(ui, &mem.category, p.nominal);
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             if crate::holo_ui::key(ui, "X").on_hover_text("Forget this").clicked() {
                                 self.command(HudCommand::DeleteMemory { id_or_key: mem.id.to_string() });
@@ -2890,7 +2859,7 @@ impl HudApp {
                 muted(ui, "No tools used yet.");
             }
             for t in &m.tools {
-                item(ui, Some(if t.success { p.green } else { p.red }), |ui| {
+                item(ui, Some(if t.success { p.nominal } else { p.alert }), |ui| {
                     ui.horizontal(|ui| {
                         ui.label(RichText::new(&t.tool).font(bold(11.5)).color(p.accent));
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| muted(ui, &t.meta));
@@ -2905,7 +2874,6 @@ impl HudApp {
     }
 
     fn brain_card(&mut self, ui: &mut Ui, m: &HudModel) {
-        let p = self.palette;
         card(ui, "BRAIN", |_| {}, |ui| {
             let Some(cfg) = &m.cfg else {
                 muted(ui, "Loading…");
@@ -3042,7 +3010,6 @@ impl HudApp {
     }
 
     fn dialogs(&mut self, ctx: &egui::Context) {
-        let p = self.palette;
         if self.confirm_shutdown {
             let mut open = true;
             board_window(ctx, "confirm_shutdown", "Shut down // are you sure", [380.0, 190.0], &mut open, |ui| {
@@ -3090,137 +3057,6 @@ impl HudApp {
         }
     }
 
-    /// Manual counterpart of `configure_interface`.
-    fn settings_window(&mut self, ctx: &egui::Context, iface: &InterfaceSettings) {
-        let p = self.palette;
-        let mut open = self.settings_open;
-        let mut s = iface.clone();
-        board_window(ctx, "interface_settings", "Interface // look and layout", [400.0, 640.0], &mut open, |ui| {
-                muted(ui, "Or just ask: “JAI, make the interface gold”, “hide the system panel”, “zoom in”, “stay on top”.");
-                ui.add_space(4.0);
-                egui::Grid::new("hud_interface").num_columns(2).spacing([14.0, 8.0]).show(ui, |ui| {
-                    ui.label("Theme");
-                    let current = THEMES.iter().find(|t| t.name == s.theme).map(|t| t.display).unwrap_or("Custom");
-                    crate::holo_ui::Picker::from_id_salt("hud_theme").selected_text(current).show_ui(ui, |ui| {
-                        for t in THEMES {
-                            if crate::holo_ui::item(ui, t.display, s.theme == t.name).clicked() {
-                                s.theme = t.name.to_string();
-                                s.accent = t.accent.to_string();
-                                s.background = t.background.to_string();
-                            }
-                        }
-                    });
-                    ui.end_row();
-                    ui.label("Accent");
-                    let mut colour = s.accent_rgb();
-                    if crate::holo_ui::colour(ui, &mut colour).changed() {
-                        s.accent = interface::hex(colour);
-                        s.theme = "custom".into();
-                    }
-                    ui.end_row();
-                    // Always dark glass: the background only gets deeper or shallower.
-                    ui.label("Background depth");
-                    // Shown on the slider's own 5 % grid: a colour between two steps (59 %) would
-                    // otherwise be snapped and written back every frame, and the quantised colour
-                    // lands off-grid again (66 %) — the window flickered between the two.
-                    let shown = (interface::background_darkness(s.background_rgb()) * 20.0).round() * 5.0;
-                    let mut depth = shown;
-                    let r = ui.add(crate::holo_ui::Slider::new(&mut depth, 0.0..=100.0).step_by(5.0).suffix(" %"));
-                    if r.changed() && (depth - shown).abs() >= 2.5 {
-                        s.background = interface::hex(interface::with_darkness(s.background_rgb(), depth / 100.0));
-                    }
-                    ui.end_row();
-                    ui.label("Corner rounding");
-                    ui.add(crate::holo_ui::Slider::new(&mut s.corner_rounding, 0.0..=32.0).step_by(1.0));
-                    ui.end_row();
-                    ui.label("Zoom");
-                    let mut zoom = self.zoom_draft.unwrap_or(s.scale * 100.0);
-                    let r = ui.add(crate::holo_ui::Slider::new(&mut zoom, 50.0..=250.0).step_by(5.0).suffix(" %"));
-                    if r.dragged() {
-                        self.zoom_draft = Some(zoom);
-                    } else if r.changed() || r.drag_stopped() || self.zoom_draft.is_some() {
-                        s.scale = zoom / 100.0;
-                        self.zoom_draft = None;
-                    }
-                    ui.end_row();
-                    ui.label("Opacity");
-                    let mut opacity = s.opacity as f32;
-                    if ui.add(crate::holo_ui::Slider::new(&mut opacity, 15.0..=100.0).step_by(5.0).suffix(" %")).changed() {
-                        s.opacity = opacity as u8;
-                    }
-                    ui.end_row();
-                    ui.label("Layout");
-                    ui.horizontal(|ui| {
-                        for (layout, label) in [(HudLayout::Full, "Full"), (HudLayout::Compact, "Compact"), (HudLayout::Orb, "Orb")] {
-                            crate::holo_ui::option(ui, &mut s.layout, layout, label);
-                        }
-                    });
-                    ui.end_row();
-                    ui.label("Window");
-                    ui.vertical(|ui| {
-                        crate::holo_ui::toggle(ui, &mut s.always_on_top, "Always on top");
-                        crate::holo_ui::toggle(ui, &mut s.fullscreen, "Full screen");
-                        crate::holo_ui::toggle(ui, &mut s.frameless, "Stark title bar (frameless)");
-                        crate::holo_ui::toggle(ui, &mut s.animations, "Animations");
-                        crate::holo_ui::toggle(ui, &mut s.header_telemetry, "Header telemetry");
-                        crate::holo_ui::toggle(ui, &mut s.orb_mode, "Pure orb mode");
-                    });
-                    ui.end_row();
-                    ui.label("Name");
-                    let mut title = self.title_draft.clone().unwrap_or_else(|| s.title.clone());
-                    let r = crate::holo_ui::slot(ui, egui::TextEdit::singleline(&mut title).desired_width(180.0));
-                    if r.lost_focus() {
-                        s.title = title;
-                        self.title_draft = None;
-                    } else if r.has_focus() {
-                        self.title_draft = Some(title);
-                    }
-                    ui.end_row();
-                });
-                crate::holo_ui::rule(ui);
-                // The live layout state JAI controls by voice ("zen mode", "make the orb bigger").
-                ui.label("Live layout");
-                let mut state = s.layout_state((0.0, 0.0));
-                let before = state;
-                ui.horizontal_wrapped(|ui| {
-                    crate::holo_ui::toggle(ui, &mut state.show_audio_devices_panel, "Audio devices");
-                    crate::holo_ui::toggle(ui, &mut state.show_skills_panel, "Skills");
-                    crate::holo_ui::toggle(ui, &mut state.show_quick_pills_bar, "Quick pills");
-                    crate::holo_ui::toggle(ui, &mut state.show_telemetry_sidebar, "Telemetry");
-                    crate::holo_ui::toggle(ui, &mut state.show_orb_panel, "3D orb");
-                    crate::holo_ui::toggle(ui, &mut state.minimal_zen_mode, "Zen mode");
-                });
-                egui::Grid::new("hud_live_layout").num_columns(2).spacing([14.0, 8.0]).show(ui, |ui| {
-                    ui.label("Orb size");
-                    let mut orb = state.orb_radius_scale * 100.0;
-                    if ui.add(crate::holo_ui::Slider::new(&mut orb, 40.0..=250.0).step_by(5.0).suffix(" %")).changed() {
-                        state.orb_radius_scale = orb / 100.0;
-                    }
-                    ui.end_row();
-                    ui.label("Text size");
-                    let mut font = state.ui_font_scale * 100.0;
-                    if ui.add(crate::holo_ui::Slider::new(&mut font, 75.0..=160.0).step_by(5.0).suffix(" %")).changed() {
-                        state.ui_font_scale = font / 100.0;
-                    }
-                    ui.end_row();
-                });
-                if state != before {
-                    s.apply_layout_state(&state);
-                }
-                ui.add_space(6.0);
-                if crate::holo_ui::key(ui, "Reset to defaults").clicked() {
-                    s = InterfaceSettings::default();
-                    self.zoom_draft = None;
-                    self.title_draft = None;
-                }
-            });
-        self.settings_open = open;
-        if &s != iface {
-            s.sanitize();
-            self.set_interface(s);
-        }
-    }
-
     fn offline_overlay(&self, ctx: &egui::Context) {
         let t = holo::theme();
         egui::Area::new(egui::Id::new("hud_offline"))
@@ -3243,18 +3079,18 @@ fn title_button(ui: &mut Ui, p: &Palette, glyph: &str, danger: bool) -> egui::Re
     let hot = response.hovered();
     let close = glyph == "X";
     let colour = match (hot, danger, close) {
-        (true, true, true) => p.red,
+        (true, true, true) => p.alert,
         (_, true, false) => p.accent,
         (true, _, _) => p.accent,
         _ => p.muted,
     };
     let fill = match (hot, danger, close) {
-        (true, true, true) => p.red.gamma_multiply(0.18),
+        (true, true, true) => p.alert.gamma_multiply(0.18),
         (_, true, false) => p.accent.gamma_multiply(0.14),
         (true, _, _) => p.accent.gamma_multiply(0.12),
         _ => Color32::TRANSPARENT,
     };
-    ui.painter().rect(rect, Rounding::same(p.r_button().min(12.0)), fill, stroke(1.0, if hot { colour.gamma_multiply(0.6) } else { p.line.gamma_multiply(0.5) }));
+    ui.painter().rect(rect, Rounding::ZERO, fill, stroke(1.0, if hot { colour.gamma_multiply(0.6) } else { p.line.gamma_multiply(0.5) }));
     ui.painter().text(rect.center(), Align2::CENTER_CENTER, glyph, FontId::proportional(ts(13.0)), colour);
     response
 }
@@ -3303,7 +3139,7 @@ fn clip_card(ui: &mut Ui, p: &Palette, clip: &ClipCardView) {
     Frame::none()
         .fill(p.well)
         .stroke(stroke(1.0, crate::holo::theme().accent().gamma_multiply(0.55)))
-        .rounding(Rounding::same(p.r_bubble()))
+        .rounding(Rounding::ZERO)
         .inner_margin(Margin::symmetric(14.0, 10.0))
         .show(ui, |ui| {
             ui.set_max_width((ui.available_width() * 0.9).max(180.0));
@@ -3404,7 +3240,6 @@ impl HudApp {
 
     /// Settings → System: the last turn's latency, the model, the reply mode and the languages.
     fn status_card(&mut self, ui: &mut Ui, m: &HudModel) {
-        let p = self.palette;
         card(ui, "LATENCY & LANGUAGE", |_| {}, |ui| {
             let ms = |v: Option<u64>| v.map(|v| format!("{v} ms")).unwrap_or_else(|| "—".into());
             let [stt, token, audio] = m.latency;
@@ -3515,26 +3350,6 @@ fn screen_card_rect(screen: Rect, frame: &crate::holo_core::CoreFrame) -> Rect {
     let rect = Rect::from_min_size(pos2(x - size.x / 2.0, top), size);
     let inside = screen.shrink(12.0);
     rect.translate(vec2((inside.left() - rect.left()).max(0.0) + (inside.right() - rect.right()).min(0.0), (inside.top() - rect.top()).max(0.0) + (inside.bottom() - TELEMETRY_H - 14.0 - rect.bottom()).min(0.0)))
-}
-
-/// `text` as it fits `width` in `font`: whole, or cut after a character and ended with "…".
-fn fit_width(painter: &egui::Painter, text: &str, font: &FontId, width: f32) -> String {
-    let fits = |s: &str| painter.layout_no_wrap(s.to_string(), font.clone(), Color32::WHITE).size().x <= width;
-    if fits(text) {
-        return text.to_string();
-    }
-    let chars: Vec<char> = text.chars().collect();
-    let cut = |n: usize| format!("{}…", chars[..n].iter().collect::<String>().trim_end());
-    let (mut lo, mut hi) = (0usize, chars.len());
-    while lo < hi {
-        let mid = (lo + hi).div_ceil(2);
-        if fits(&cut(mid)) {
-            lo = mid;
-        } else {
-            hi = mid - 1;
-        }
-    }
-    cut(lo)
 }
 
 /// The frost over the whole HUD while JAI looks at the screen (`screen_context::frost`).
@@ -3745,10 +3560,6 @@ struct HudApp {
     ptt_sent: bool,
     confirm_shutdown: bool,
     confirm_delete_skill: Option<String>,
-    settings_open: bool,
-    /// Zoom being dragged in the Interface window (applied on release, so the slider holds still).
-    zoom_draft: Option<f32>,
-    title_draft: Option<String>,
     /// Widgets and JAI's extra windows send their clicks through this.
     widget_host: widget_view::WidgetHost,
     /// The Integrations & Productivity Hub window.
@@ -4274,9 +4085,6 @@ impl HudApp {
             ptt_sent: false,
             confirm_shutdown: false,
             confirm_delete_skill: None,
-            settings_open: false,
-            zoom_draft: None,
-            title_draft: None,
             emblem: Core::new(crate::holo_core::resolve(inputs)),
             board: crate::hud_board::BoardView::default(),
             core: crate::holo_mind::MindView::default(),
@@ -4669,7 +4477,6 @@ impl HudApp {
             self.mini_strip(ctx, m);
             return;
         }
-        let p = self.palette;
         egui::CentralPanel::default().frame(Frame::none()).show(ctx, |ui| {
             let rect = ui.max_rect();
             let response = ui.allocate_rect(rect, Sense::click_and_drag());
@@ -5390,9 +5197,6 @@ impl HudApp {
             if item(ui, "Voice, devices, memory") {
                 self.drawer_open = !self.drawer_open;
             }
-            if item(ui, "Interface — theme, zoom") {
-                self.settings_open = true;
-            }
             if item(ui, "Integrations hub") {
                 self.hub.open = !self.hub.open;
             }
@@ -5423,9 +5227,6 @@ impl HudApp {
     fn apply_palette(&mut self, ctx: &egui::Context, iface: &InterfaceSettings, name: &str) {
         let mut next = iface.clone();
         next.hud_palette = name.to_string();
-        if let Some(p) = crate::holo_theme::preset(name) {
-            next.accent = format!("#{:02x}{:02x}{:02x}", p.accent[0], p.accent[1], p.accent[2]);
-        }
         self.set_interface(next);
         self.app.notice(format!("THEME // {} ACTIVE", crate::holo_theme::label(name)));
         ctx.request_repaint();
@@ -6119,15 +5920,14 @@ impl HudApp {
 
     /// Settings → Look: the essentials, and the full Interface window.
     fn look_card(&mut self, ui: &mut Ui, iface: &InterfaceSettings) {
-        let p = self.palette;
         card(ui, "LOOK", |_| {}, |ui| {
             let mut s = iface.clone();
             crate::holo_ui::toggle(ui, &mut s.fullscreen, "Fullscreen HUD board");
             crate::holo_ui::toggle(ui, &mut s.animations, "Animations");
             crate::holo_ui::toggle(ui, &mut s.always_on_top, "Always on top");
             ui.add_space(4.0);
-            if crate::holo_ui::key(ui, "Theme, colours, zoom and panels…").clicked() {
-                self.settings_open = true;
+            if crate::holo_ui::key(ui, "All settings…").clicked() {
+                settings_panel::open(true);
             }
             muted(ui, "Or just ask: “JAI, go fullscreen”, “orb mode”, “clear the board”.");
             if &s != iface {
@@ -6225,14 +6025,8 @@ impl HudApp {
         let iface = iface.clone();
         mark("dialogs");
         self.dialogs(ctx);
-        if SETTINGS_REQUEST.swap(false, Ordering::AcqRel) {
-            self.settings_open = true;
-        }
         if WORKOUT_REQUEST.swap(false, Ordering::AcqRel) {
             self.workout.open = true;
-        }
-        if self.settings_open {
-            self.settings_window(ctx, &iface);
         }
         self.hub.poll_request();
         if self.hub.open {
@@ -6292,7 +6086,6 @@ impl HudApp {
                 use settings_panel::Tool;
                 match tool {
                     Tool::Devices => self.drawer_open = true,
-                    Tool::Interface => self.settings_open = true,
                     Tool::ThemeStudio => show_theme_studio(true),
                     Tool::Screens => self.screens_open = true,
                     Tool::Hub => self.hub.open = true,
@@ -7506,12 +7299,6 @@ fn block_slate() -> Color32 {
     let t = crate::holo::theme();
     crate::holo::mix(t.void(), t.ink(), 0.035)
 }
-/// The same under the pointer: the block Sir is using stands a little brighter than the rest.
-fn block_lifted() -> Color32 {
-    let t = crate::holo::theme();
-    crate::holo::mix(t.void(), t.ink(), 0.07)
-}
-
 /// What a detached window shows outside its frame while the frame unfolds or folds: the canvas
 /// itself (the frame draws itself out of the black and folds back into it).
 fn window_void() -> Color32 {
@@ -8183,8 +7970,9 @@ pub(super) fn hud_block_window(ctx: &egui::Context, id: &str, title: &str, size:
         ];
         // (A narrow block keeps its title whole and lets its keys go, [ PIN ] first: the menu
         // and Ctrl+P still pin. The keys are quiet until the pointer is over their block.)
-        let wanted = crate::holo_block::title_galley(ui.painter(), title, ts(14.0), accent, f32::INFINITY).size().x + 26.0;
-        let fit = crate::holo_ui::keys_that_fit(ui.painter(), &labels, row.width(), wanted);
+        // (Beside the title the row holds the index tab before it and the lamp after it.)
+        let title_width = crate::holo_block::title_galley(ui.painter(), title, ts(14.0), accent, f32::INFINITY).size().x;
+        let fit = crate::holo_ui::keys_that_fit(ui.painter(), &labels, row.width(), title_width + 62.0);
         let (key, keys_left) = crate::holo_ui::keys_at(ui, area.with("header"), row.right(), mid, &labels[..fit], content_alpha * (0.62 + 0.38 * using));
         match key {
             Some(0) => close_asked = true,
@@ -8215,7 +8003,7 @@ pub(super) fn hud_block_window(ctx: &egui::Context, id: &str, title: &str, size:
         let title_left = row.left().max(tab.right() + 10.0);
         let title_room = (keys_left - title_left - 22.0).max(20.0);
         // A title cut short shows whole under the pointer.
-        let cut = wanted - 26.0 > title_room + 0.5;
+        let cut = title_width > title_room + 0.5;
         // The title decodes itself as the block opens, and back as it leaves.
         let lettered = crate::holo_block::fitted_title(ui.painter(), &crate::holo_motion::decode(title, motion.resolve.min(motion.content), ctx.input(|i| i.time)), ts(14.0), theme.ink().gamma_multiply(content_alpha), title_room);
         let title_rect = Rect::from_min_size(pos2(title_left, mid - lettered.size().y * 0.5), lettered.size());
@@ -8396,8 +8184,6 @@ fn windows_still(ctx: &egui::Context) -> bool {
 /// Settings → Animations off: windows, cards and blocks open and close without their motion
 /// (set from the interface settings every frame).
 static REDUCED_MOTION: AtomicBool = AtomicBool::new(false);
-/// The OLED palette: the motion keeps its lines and drops its soft glows (true black stays black).
-static OLED_MOTION: AtomicBool = AtomicBool::new(false);
 
 /// Whether windows and cards play their motion (false with the animations off).
 pub(crate) fn motion_enabled() -> bool {
@@ -8595,8 +8381,6 @@ pub(crate) fn paint_window_motion_on(painter: &egui::Painter, rect: Rect, m: &Wi
     let t = crate::holo::theme();
     let (accent, hot) = (t.accent(), t.hot());
     let px = crate::holo::px(painter);
-    // (A window whose black Windows sees through draws its lines without their light.)
-    let soft = !OLED_MOTION.load(Ordering::Relaxed);
     let mut light = crate::holo::Light::new(painter);
     if m.brackets_alpha > 0.0 && m.brackets > 0.0 {
         let r = Rect::from_min_size(rect.min, vec2(rect.width(), rect.height() * m.brackets)).shrink(0.5);
@@ -8607,8 +8391,8 @@ pub(crate) fn paint_window_motion_on(painter: &egui::Painter, rect: Rect, m: &Wi
     if let Some((width, strength)) = m.line {
         let from = pos2(rect.left(), rect.top() + px * 0.5);
         let to = pos2(rect.left() + (rect.width() * width).max(px), from.y);
-        light.neon(&[from, to], false, px.max(1.2), a(hot, strength), if soft { strength } else { 0.0 });
-        if soft && width < 0.995 {
+        light.neon(&[from, to], false, px.max(1.2), a(hot, strength), strength);
+        if width < 0.995 {
             light.spark(to, 7.0, lit(hot, strength));
         }
     }
@@ -8622,8 +8406,7 @@ pub(crate) fn paint_window_motion_on(painter: &egui::Painter, rect: Rect, m: &Wi
             let mut mesh = egui::Mesh::default();
             let above = Rect::from_min_max(pos2(inner.left(), y - fade), pos2(inner.right(), y));
             let (clear, glass) = (Color32::TRANSPARENT, fill.gamma_multiply(0.92));
-            let trail = if soft { lit(accent, 0.20) } else { Color32::TRANSPARENT };
-            for (colour_top, colour_bottom) in [(clear, glass), (clear, trail)] {
+            for (colour_top, colour_bottom) in [(clear, glass), (clear, lit(accent, 0.20))] {
                 let base = mesh.vertices.len() as u32;
                 mesh.colored_vertex(above.left_top(), colour_top);
                 mesh.colored_vertex(above.right_top(), colour_top);
@@ -8634,22 +8417,18 @@ pub(crate) fn paint_window_motion_on(painter: &egui::Painter, rect: Rect, m: &Wi
             }
             painter.add(egui::Shape::mesh(mesh));
         }
-        light.neon(&[pos2(inner.left(), y), pos2(inner.right(), y)], false, px, a(hot, 0.9), if soft { 0.8 } else { 0.0 });
+        light.neon(&[pos2(inner.left(), y), pos2(inner.right(), y)], false, px, a(hot, 0.9), 0.8);
     }
     if m.glow > 0.0 {
         let frame = crate::holo::plate(rect, [0.0, 0.0, crate::holo_frame::CUT.min(rect.height() / 2.0), 0.0]);
-        if soft {
-            let mut closed = frame.clone();
-            closed.push(frame[0]);
-            light.halo(&closed, false, 10.0, lit(accent, 0.34 * m.glow));
-        }
+        let mut closed = frame.clone();
+        closed.push(frame[0]);
+        light.halo(&closed, false, 10.0, lit(accent, 0.34 * m.glow));
         crate::holo::outline(painter, &frame, a(accent, 0.8 * m.glow));
     }
     if m.flash > 0.0 {
         let c = rect.left_top();
-        if soft {
-            light.spark(c, 12.0 * m.flash.max(0.4), lit(hot, 0.9 * m.flash));
-        }
+        light.spark(c, 12.0 * m.flash.max(0.4), lit(hot, 0.9 * m.flash));
         painter.circle_filled(c, 1.8, Color32::WHITE.gamma_multiply(0.95 * m.flash));
     }
     light.paint(painter);
@@ -9282,10 +9061,8 @@ impl HudApp {
         }
 
         let iface = self.sync_interface(ctx);
-        // Settings → Animations off: windows come and go without their motion; the OLED palette
-        // keeps the motion's lines and drops its glows.
+        // Settings → Animations off: windows come and go without their motion.
         REDUCED_MOTION.store(!iface.animations, Ordering::Relaxed);
-        OLED_MOTION.store(self.palette.oled, Ordering::Relaxed);
         // (The console publishes where it stands again if it is drawn this frame.)
         publish_console_rect(None);
         self.sync_background(ctx, &iface);
@@ -9311,14 +9088,14 @@ impl HudApp {
         // The HUD's text scale (JAI's extra windows set their own while they draw).
         TEXT_SCALE.with(|s| s.set(iface.font_scale));
         let screen = ctx.screen_rect();
-        crate::interface::publish_layout(iface.layout_state((screen.width() * iface.scale, screen.height() * iface.scale)));
+        crate::interface::publish_window_size((screen.width() * iface.scale, screen.height() * iface.scale));
         let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
         if iface.orb_mode {
             self.pure_orb(ctx, &m, &iface);
         } else {
             paint_canvas(ctx);
             // (Offscreen renders stay clean: the verifier reads their colours.)
-            if iface.display_finish && !self.palette.oled && !windows_still(ctx) {
+            if iface.display_finish && !windows_still(ctx) {
                 paint_finish(ctx);
             }
             // The Settings drawer slides in from the right (VIEW → SETTINGS).
@@ -9963,6 +9740,14 @@ mod tests {
         assert!(canvas.brightness(Rect::from_min_size(Pos2::ZERO, size)) > 1.0, "{name}: nothing was drawn");
     }
 
+    /// The board to itself for a picture: no block of another test, and so no leader to one.
+    fn board_alone() -> std::sync::MutexGuard<'static, ()> {
+        let alone = crate::hud_dock::test_lock();
+        crate::hud_dock::begin_frame();
+        crate::hud_dock::begin_frame();
+        alone
+    }
+
     const GALLERY: Vec2 = Vec2::new(1280.0, 760.0);
 
     fn emblem_at_rest() -> Core {
@@ -10034,6 +9819,26 @@ mod tests {
         crate::hud_dock::forget(settings_panel::ID);
     }
 
+    /// The cards that come up beside the core: the song, the day's lessons, a result with a
+    /// chart, a tool being built.
+    #[test]
+    fn gallery_popup_cards() {
+        let _alone = board_alone();
+        use crate::dynamic_popups::{self as popups, PopupPayload};
+        let ids = [
+            popups::spawn(PopupPayload::NowPlayingMediaCard { title: "Highway to Hell".into(), artist: "AC/DC".into(), playlist: Some("Rock".into()), player_name: "Sonora".into(), progress: 0.4, is_playing: true }, None),
+            popups::spawn(PopupPayload::ScheduleAndCalendarCard { title: "Today".into(), entries: vec![("08:00".into(), "Maths".into()), ("09:45".into(), "Physics".into()), ("11:30".into(), "English".into())], highlight_index: Some(1) }, None),
+            popups::spawn(PopupPayload::VisualDataCard { title: "Kinematics".into(), markdown_or_code: "v = 12 m/s after 3 s".into(), chart_points: vec![0.0, 4.0, 8.0, 12.0], action_buttons: vec!["Copy".into()] }, None),
+            popups::spawn(PopupPayload::ToolForgeLiveCard { tool_name: "playlist_player".into(), steps_summary: vec!["scan the library".into(), "write the tool".into()], status: "verified".into() }, None),
+        ];
+        gallery("gallery_popups", GALLERY, 40, |ctx| {
+            let _ = popups::show(ctx, Palette::new(&InterfaceSettings::default()).card_style(), 1.0 / 30.0);
+        });
+        for id in ids {
+            popups::manager().dismiss(id);
+        }
+    }
+
     /// Wheeled to its end: the group of the top rows stays named at the top, and the game list
     /// under "Game mode" (stand-in games).
     #[test]
@@ -10063,6 +9868,7 @@ mod tests {
 
     #[test]
     fn gallery_notifications_and_edge_light() {
+        let _alone = board_alone();
         use crate::hud_notify::{Card, Edge};
         gallery("gallery_notifications", GALLERY, 2, |ctx| {
             crate::hud_notify::edge_held(Edge::Notice);
@@ -10081,6 +9887,7 @@ mod tests {
     /// microphone's verdict over it; then what he is working on, the song's line and an offer.
     #[test]
     fn gallery_lines_under_the_emblem() {
+        let _alone = board_alone();
         let emblem = emblem_at_rest();
         crate::hud_lines::dismiss_offer();
         crate::hud_lines::heard("Jay, open the mixer and turn the music");
@@ -10154,6 +9961,7 @@ mod tests {
     /// The core close up.
     #[test]
     fn gallery_emblem_close_up() {
+        let _alone = board_alone();
         let emblem = emblem_at_rest();
         gallery("gallery_emblem", vec2(900.0, 900.0), 2, |ctx| {
             egui::CentralPanel::default().frame(Frame::none()).show(ctx, |ui| {
@@ -10224,6 +10032,7 @@ mod tests {
     /// The tour lighting the emblem, as "In the middle stands my emblem" is said.
     #[test]
     fn gallery_tour_light() {
+        let _alone = board_alone();
         let emblem = emblem_at_rest();
         gallery("gallery_tour", GALLERY, 2, |ctx| {
             egui::CentralPanel::default().frame(Frame::none()).show(ctx, |ui| {
@@ -10236,6 +10045,7 @@ mod tests {
 
     #[test]
     fn gallery_idle_screen_and_startup() {
+        let _alone = board_alone();
         use crate::startup_sequence::Kind;
         let emblem = emblem_at_rest();
         let base = |ctx: &egui::Context| -> crate::holo_core::CoreFrame {
@@ -10278,6 +10088,7 @@ mod tests {
 
     #[test]
     fn gallery_mini_strip_and_subtitles() {
+        let _alone = board_alone();
         let strip = MiniStrip {
             word: "SPEAKING",
             sir: "Jay, what is on my calendar tomorrow?".into(),
@@ -11049,12 +10860,6 @@ mod tests {
             let crowded = pill_rect(&painter, screen, &[Rect::from_min_size(pos2(700.0, 10.0), vec2(1200.0, HEADER_H))]).expect("room");
             assert!(crowded.right() <= 690.0 && crowded.top() < 12.0, "left of a row that reaches the centre: {crowded:?}");
             assert_eq!(pill_rect(&painter, screen, &[Rect::from_min_size(pos2(40.0, 10.0), vec2(1860.0, HEADER_H))]), None, "no room, no pill");
-            // The card's line: a short title whole, a long one cut to the card's width.
-            let font = FontId::proportional(12.0);
-            assert_eq!(fit_width(&painter, "Settings", &font, 316.0), "Settings");
-            let long = fit_width(&painter, &"How the Apollo guidance computer landed on the Moon - YouTube — Mozilla Firefox".repeat(2), &font, 316.0);
-            assert!(long.ends_with('…') && painter.layout_no_wrap(long.clone(), font.clone(), Color32::WHITE).size().x <= 316.0, "{long}");
-            assert!(long.chars().count() > 20, "as much as fits: {long}");
         });
         let home = crate::holo_core::CoreFrame { centre: pos2(960.0, 500.0), radius: 200.0, rest: 200.0, flat: 1.0, dock: 0.0 };
         let card = screen_card_rect(screen, &home);

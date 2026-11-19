@@ -482,7 +482,7 @@ pub fn classify(text: &str) -> IntentClass {
     }
 }
 
-const LOOK_TOOLS: &[&str] = &["configure_interface", "control_gui_aspect", "customize_hud_and_windows", "control_jai_interface", "control_orb_mode", "create_or_update_widget", "remove_widget"];
+const LOOK_TOOLS: &[&str] = &["configure_interface", "customize_hud_and_windows", "control_jai_interface", "control_orb_mode", "create_or_update_widget", "remove_widget"];
 const WINDOW_TOOLS: &[&str] = &[
     "spawn_native_window", "update_native_window", "close_native_window", "window_management", "move_window_to_monitor", "place_application_window", "open_jai_view",
     "spawn_multi_window_workspace", "control_spatial_window", "spawn_topic_knowledge_workspace", "manage_spatial_scene", "launch_interactive_simulation",
@@ -495,7 +495,7 @@ const APP_TOOLS: &[&str] = &["open_application", "close_application", "open_webs
 /// The tools that fulfil a class (empty: no tool is required).
 pub fn backing_tools(class: &IntentClass) -> &'static [&'static str] {
     match class {
-        IntentClass::Ui => &["configure_interface", "control_gui_aspect", "customize_hud_and_windows", "control_jai_interface", "control_orb_mode", "spawn_native_window", "update_native_window", "close_native_window", "window_management", "open_jai_view", "spawn_multi_window_workspace", "control_spatial_window", "spawn_topic_knowledge_workspace", "manage_spatial_scene", "create_or_update_widget", "remove_widget", "arrange_jai_window"],
+        IntentClass::Ui => &["configure_interface", "customize_hud_and_windows", "control_jai_interface", "control_orb_mode", "spawn_native_window", "update_native_window", "close_native_window", "window_management", "open_jai_view", "spawn_multi_window_workspace", "control_spatial_window", "spawn_topic_knowledge_workspace", "manage_spatial_scene", "create_or_update_widget", "remove_widget", "arrange_jai_window"],
         IntentClass::Media => MEDIA_TOOLS,
         IntentClass::Schedule => SCHEDULE_TOOLS,
         IntentClass::KnowledgeWorkspace(_) => &["spawn_topic_knowledge_workspace"],
@@ -1860,7 +1860,7 @@ mod tests {
         assert!(out.trim().is_empty(), "{out}");
         // A real tool backs the claim.
         let mut g = GroundingFilter::new();
-        g.note_tool("control_gui_aspect");
+        g.note_tool("configure_interface");
         let mut out = g.push("I have lowered the opacity to sixty percent, Sir. ");
         out.push_str(&g.flush());
         assert!(out.contains("lowered the opacity"));

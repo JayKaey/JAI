@@ -11,9 +11,9 @@
 //! Studio), and only what would send, delete, close or rewrite something waits in the text console
 //! as an example request for Sir to send. The badge shows PASS / FAIL (or IN CONSOLE).
 
-use super::{rgba, stroke, strip_font, strip_ink, strip_muted};
+use super::{strip_font, strip_ink, strip_muted};
 use crate::tools::{ToolContext, JAI_CAPABILITY_MANIFEST};
-use eframe::egui::{self, Color32, Frame, Margin, Response, RichText, Rounding, Ui, ViewportBuilder, ViewportClass, ViewportCommand, ViewportId};
+use eframe::egui::{self, Frame, Margin, Response, RichText, Ui, ViewportBuilder, ViewportClass, ViewportCommand, ViewportId};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -84,7 +84,6 @@ const CONTROLS: &[(&str, Control)] = &[
     ("move_window_to_monitor", Control::Open("screens")),
     ("configure_interface", Control::Open("theme_studio")),
     ("customize_hud_and_windows", Control::Open("theme_studio")),
-    ("control_gui_aspect", Control::Open("theme_studio")),
     ("control_audio_mixer", Control::Open("mixer")),
     ("media_and_volume_control", Control::Run("control_audio_mixer", r#"{"action": "list"}"#)),
 ];

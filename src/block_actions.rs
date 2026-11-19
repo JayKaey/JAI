@@ -3,7 +3,7 @@
 //! `Export to JSON`, `Close`. The board and the block windows draw this one menu and export
 //! through these functions, so a note, a chart and a telemetry window all behave alike.
 
-use eframe::egui::{self, FontId, RichText, Ui};
+use eframe::egui::{self, Ui};
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::sync::Mutex;

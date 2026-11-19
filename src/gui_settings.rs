@@ -6,7 +6,7 @@
 
 use super::{strip_font, strip_ink, strip_muted, ts};
 use crate::holo::{self, Face};
-use crate::interface::InterfaceSettings;
+use crate::interface::{HudLayout, InterfaceSettings};
 use eframe::egui::{self, pos2, vec2, Align, Align2, Color32, FontId, Layout, Rect, RichText, Rounding, Sense, Ui};
 use serde_json::json;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -36,7 +36,6 @@ pub(super) fn is_open() -> bool {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Tool {
     Devices,
-    Interface,
     ThemeStudio,
     Screens,
     Hub,
@@ -60,6 +59,10 @@ enum Control {
     Moment(fn(&InterfaceSettings) -> bool, &'static str),
     /// A size, changed a step at a time: (get, set, least, most).
     Size(fn(&InterfaceSettings) -> f32, fn(&mut InterfaceSettings, f32), f32, f32),
+    /// One of a few, each a key: (its label, whether it is the one chosen, choosing it).
+    Keys(&'static [(&'static str, fn(&InterfaceSettings) -> bool, fn(&mut InterfaceSettings))]),
+    /// His name, typed.
+    Name,
     /// The HUD's colours: a swatch for each ready-made theme.
     Theme,
     /// A deeper tool, behind a key with this label.
@@ -89,10 +92,25 @@ const fn row(group: &'static str, name: &'static str, explain: &'static str, wor
 /// The groups, in the order they stand (each is also a key that shows it alone).
 const GROUPS: [&str; 6] = ["LOOK", "SCREENS", "VOICE", "PRESENCE", "GAMES", "TOOLS"];
 
-static ROWS: [Row; 42] = [
+static ROWS: [Row; 48] = [
     row("LOOK", "Theme", "The HUD's colours: one click on a swatch changes them.", "colour color palette gold cyan red green farbe farben design", Control::Theme),
     row("LOOK", "Your own theme", "Build a theme from your own colours, name it and save it.", "theme studio custom create", Control::Open(Tool::ThemeStudio, "THEME STUDIO")),
-    row("LOOK", "Colours, opacity and panels", "The accent and background colour, how see-through the HUD is, which panels show.", "interface accent background transparency", Control::Open(Tool::Interface, "OPEN")),
+    row(
+        "LOOK",
+        "Core",
+        "The instrument of rings, or the sphere of circuitry.",
+        "orb emblem simple complex sphere rings kern kugel",
+        Control::Keys(&[("SIMPLE", |s| s.core_style != "complex", |s| s.core_style = "simple".into()), ("COMPLEX", |s| s.core_style == "complex", |s| s.core_style = "complex".into())]),
+    ),
+    row("LOOK", "Core size", "How large the core stands in the middle of the board.", "orb emblem bigger smaller kugel größe", Control::Size(|s| s.orb_scale, |s, v| s.orb_scale = v, 0.4, 2.5)),
+    row(
+        "LOOK",
+        "Opacity",
+        "How solid the black behind the light is. Lower, and the desktop shows through.",
+        "transparency transparent see through durchsichtig deckkraft",
+        Control::Size(|s| s.opacity as f32 / 100.0, |s, v| s.opacity = (v * 100.0).round() as u8, 0.15, 1.0),
+    ),
+    row("LOOK", "Name", "The name his window goes by in the taskbar.", "title titel call yourself", Control::Name),
     row("LOOK", "Display finish", "Scan lines, a fine grain and darker edges: the HUD reads as light on glass.", "rough grain scan lines glass scratches", Control::Switch(|s| s.display_finish, |s, v| s.display_finish = v)),
     row("LOOK", "Animations", "Blocks unfold, glide and fold away. Off: everything appears at once.", "motion movement animation bewegung", Control::Switch(|s| s.animations, |s, v| s.animations = v)),
     row("LOOK", "Calm HUD", "The readouts at the top and bottom step back until the mouse comes near.", "quiet dense readouts header telemetry", Control::Switch(|s| s.calm_hud, |s, v| s.calm_hud = v)),
@@ -106,6 +124,19 @@ static ROWS: [Row; 42] = [
     row("SCREENS", "Fullscreen board", "The HUD fills its monitor. Off: a window you can move and size.", "full screen window f11 vollbild fenster", Control::Switch(|s| s.fullscreen, |s, v| s.fullscreen = v)),
     row("SCREENS", "One board across all monitors", "The board spans every screen; the HUD proper stays on the first.", "span monitors bildschirme", Control::Switch(|s| s.span_all_monitors, |s, v| s.span_all_monitors = v)),
     row("SCREENS", "Always on top", "The HUD stays in front of other programs.", "front", Control::Switch(|s| s.always_on_top, |s, v| s.always_on_top = v)),
+    row(
+        "SCREENS",
+        "Window size",
+        "How large his window is when it is neither fullscreen nor maximised.",
+        "layout full compact orb minimal fenster größe",
+        Control::Keys(&[
+            ("FULL", |s| s.layout == HudLayout::Full, |s| s.layout = HudLayout::Full),
+            ("COMPACT", |s| s.layout == HudLayout::Compact, |s| s.layout = HudLayout::Compact),
+            ("SMALL", |s| s.layout == HudLayout::Orb, |s| s.layout = HudLayout::Orb),
+        ]),
+    ),
+    row("SCREENS", "Title bar", "The window's own title bar. Off: the top rail moves it.", "frameless frame border rahmen titelleiste", Control::Switch(|s| !s.frameless, |s, v| s.frameless = !v)),
+    row("SCREENS", "Floating core", "Only the core, in a small window that floats over your work.", "pure orb mode kugel", Control::Switch(|s| s.orb_mode, |s, v| s.orb_mode = v)),
     row("SCREENS", "Windows may overlap", "New windows of his may open over each other instead of beside each other.", "stack cascade", Control::Switch(|s| s.allow_window_overlap, |s, v| s.allow_window_overlap = v)),
     row("SCREENS", "Mini mode", "A slim strip at the top of a screen instead of the board, for gaming or work.", "strip bar small compact leiste klein", Control::Switch(|s| s.mini_strip, |s, v| s.mini_strip = v)),
     row("SCREENS", "Live desktop background", "He is your desktop's background: the board behind your icons, his views as windows.", "wallpaper desktop hintergrund hintergrundbild background mode", Control::Switch(|s| s.desktop_background, |s, v| s.desktop_background = v)),
@@ -223,7 +254,7 @@ fn body(ui: &mut Ui, iface: &InterfaceSettings) -> Option<Out> {
             ui.horizontal(|ui| {
                 ui.set_min_height(44.0);
                 let width = ui.available_width();
-                let wide = matches!(row.control, Control::Theme);
+                let wide = matches!(row.control, Control::Theme | Control::Keys(_));
                 ui.allocate_ui_with_layout(vec2((width - if wide { 250.0 } else { 150.0 }).max(120.0), 44.0), Layout::top_down(Align::Min), |ui| {
                     ui.spacing_mut().item_spacing.y = 2.0;
                     ui.label(lit(row.name, &needle, FontId::new(ts(14.5), super::label_family()), strip_ink(), accent));
@@ -261,6 +292,31 @@ fn body(ui: &mut Ui, iface: &InterfaceSettings) -> Option<Out> {
                             }
                         }
                     }
+                    Control::Keys(keys) => {
+                        ui.spacing_mut().item_spacing.x = 4.0;
+                        // (Laid from the right: the last key first.)
+                        for (label, chosen, choose) in keys.iter().rev() {
+                            if key(ui, label, chosen(iface)) && !chosen(iface) {
+                                let mut next = iface.clone();
+                                choose(&mut next);
+                                out = Some(Out::Set(Box::new(next)));
+                            }
+                        }
+                    }
+                    Control::Name => {
+                        // What is typed is kept until the field is left, then it is his name.
+                        let id = egui::Id::new("jai_settings_name");
+                        let mut name = ui.data(|d| d.get_temp::<String>(id)).unwrap_or_else(|| iface.title.clone());
+                        let field = crate::holo_ui::slot(ui, egui::TextEdit::singleline(&mut name).desired_width(130.0).font(FontId::proportional(ts(13.5))).text_color(strip_ink()));
+                        if field.has_focus() {
+                            ui.data_mut(|d| d.insert_temp(id, name));
+                        } else if ui.data_mut(|d| d.remove_temp::<String>(id)).is_some() && name.trim() != iface.title {
+                            let mut next = iface.clone();
+                            next.title = name;
+                            next.sanitize();
+                            out = Some(Out::Set(Box::new(next)));
+                        }
+                    }
                     Control::Theme => {
                         // A leaning swatch for each ready-made theme: its accent over its deep
                         // tone; the one in use stands full size on a rule of its own light.
@@ -280,7 +336,6 @@ fn body(ui: &mut Ui, iface: &InterfaceSettings) -> Option<Out> {
                             if response.on_hover_text(label).clicked() && !chosen {
                                 let mut next = iface.clone();
                                 next.hud_palette = name.to_string();
-                                next.accent = crate::interface::hex(palette.accent);
                                 out = Some(Out::Set(Box::new(next)));
                             }
                         }
@@ -467,7 +522,16 @@ mod tests {
                     set(&mut s, most);
                     assert_eq!(get(&s), most);
                 }
-                Control::Moment(..) | Control::Open(..) | Control::Theme | Control::Games => {}
+                Control::Keys(keys) => {
+                    // Choosing a key shows that key as the one chosen, and no other.
+                    for (k, (label, _, choose)) in keys.iter().enumerate() {
+                        let mut s = defaults.clone();
+                        choose(&mut s);
+                        let chosen: Vec<usize> = keys.iter().enumerate().filter(|(_, (_, chosen, _))| chosen(&s)).map(|(i, _)| i).collect();
+                        assert_eq!(chosen, [k], "{}: {label}", row.name);
+                    }
+                }
+                Control::Moment(..) | Control::Open(..) | Control::Theme | Control::Games | Control::Name => {}
             }
         }
         // The features of 2026-11-12 are all here.

@@ -14,7 +14,7 @@
 use super::{stroke, strip_ink, strip_muted};
 use crate::earth::{self as model, Bbox, Camera, Earth, EventKind, Flight, FlatView, GeoEvent, GlobeView, Iss, Layer, Look, Outlook, Overlay, Quake, TileKey, TileLayer};
 use crate::earth_gl as gl;
-use eframe::egui::{self, epaint::Vertex, pos2, vec2, Align2, Color32, FontFamily, FontId, Frame, Galley, Margin, Mesh, Painter, Pos2, Rect, Sense, Shape, Stroke, TextureId, Ui, UiBuilder, Vec2, ViewportBuilder, ViewportClass, ViewportCommand, ViewportId};
+use eframe::egui::{self, epaint::Vertex, pos2, vec2, Align2, Color32, FontId, Frame, Galley, Margin, Mesh, Painter, Pos2, Rect, Sense, Shape, Stroke, TextureId, Ui, UiBuilder, Vec2, ViewportBuilder, ViewportClass, ViewportCommand, ViewportId};
 use std::f32::consts::{PI, TAU};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -30,18 +30,44 @@ static LET_GO: AtomicBool = AtomicBool::new(true);
 /// The globe mesh: rings from the middle of the view out to the limb, segments around.
 const RINGS: usize = 40;
 const SEGMENTS: usize = 128;
-const SPACE: Color32 = Color32::from_rgb(2, 5, 9);
+fn space() -> Color32 {
+    crate::holo::theme().void()
+}
 /// Cards, chips and callouts: opaque enough to hide what lies under them.
-const CARD: Color32 = Color32::from_rgba_premultiplied(3, 7, 12, 226);
-const QUAKE_LOW: Color32 = Color32::from_rgb(0xFF, 0xB0, 0x20);
-const QUAKE_MID: Color32 = Color32::from_rgb(0xFF, 0x7A, 0x1A);
-const QUAKE_HIGH: Color32 = Color32::from_rgb(0xFF, 0x4A, 0x2A);
-/// Storm spirals: the status red's family (the reference's pink).
-const STORM: Color32 = Color32::from_rgb(0xFF, 0x3C, 0x70);
-const STORM_TEXT: Color32 = Color32::from_rgb(0xFF, 0xA2, 0xBE);
-const FIRE: Color32 = Color32::from_rgb(0xFF, 0xA8, 0x2E);
-const FIRE_CORE: Color32 = Color32::from_rgb(0xFF, 0xE6, 0x9A);
-const WHITE_INK: Color32 = Color32::from_rgb(0xF2, 0xF8, 0xFF);
+fn card() -> Color32 {
+    crate::holo::a(crate::holo::theme().void(), 0.89)
+}
+fn quake_low() -> Color32 {
+    crate::holo::theme().warn()
+}
+fn quake_mid() -> Color32 {
+    let t = crate::holo::theme();
+    crate::holo::mix(t.warn(), t.alert(), 0.5)
+}
+fn quake_high() -> Color32 {
+    crate::holo::theme().alert()
+}
+/// Storm spirals: the fault colour.
+fn storm() -> Color32 {
+    crate::holo::theme().alert()
+}
+fn storm_text() -> Color32 {
+    let t = crate::holo::theme();
+    crate::holo::mix(t.alert(), t.hot(), 0.45)
+}
+fn fire() -> Color32 {
+    crate::holo::theme().warn()
+}
+fn fire_core() -> Color32 {
+    crate::holo::theme().hot()
+}
+fn white_ink() -> Color32 {
+    crate::holo::theme().ink()
+}
+/// The map's dark scrim under labels and scale: the canvas at `a` of its strength.
+fn scrim(a: f32) -> Color32 {
+    crate::holo::a(crate::holo::theme().void(), a)
+}
 /// The geomagnetic north pole: the middle of the aurora's ring.
 const MAGNETIC_POLE: (f64, f64) = (80.65, -72.68);
 /// One beat of the halo around the strongest earthquake.
@@ -55,29 +81,24 @@ const ICON: f32 = 10.0;
 const MAX_LABELS: usize = 48;
 
 fn mono(size: f32) -> FontId {
-    FontId::monospace(super::ts(size))
+    crate::holo::font(crate::holo::Face::Mono, super::ts(size))
 }
 
 fn display(size: f32) -> FontId {
-    FontId::new(super::ts(size), FontFamily::Name("display".into()))
+    crate::holo::font(crate::holo::Face::Figure, super::ts(size))
 }
 
-fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
-    let t = t.clamp(0.0, 1.0);
-    let ch = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
-    Color32::from_rgb(ch(a.r(), b.r()), ch(a.g(), b.g()), ch(a.b(), b.b()))
+fn strong(size: f32) -> FontId {
+    crate::holo::font(crate::holo::Face::Strong, super::ts(size))
 }
+
+use crate::holo::mix;
 
 /// `c` as light added to what lies under it (premultiplied, covering nothing): glows, the aurora.
 fn light(c: Color32, a: f32) -> Color32 {
     let a = a.clamp(0.0, 1.0);
     let ch = |x: u8| (x as f32 * a).round() as u8;
     Color32::from_rgba_premultiplied(ch(c.r()), ch(c.g()), ch(c.b()), 0)
-}
-
-fn hsv(h: f32, s: f32, v: f32) -> Color32 {
-    let [r, g, b] = crate::holo_theme::from_hsv(h, s, v);
-    Color32::from_rgb(r, g, b)
 }
 
 /// The theme's colours for one frame.
@@ -94,16 +115,16 @@ struct Ink {
 
 fn ink() -> Ink {
     let p = crate::holo_theme::current();
-    let (h, s, _) = crate::holo_theme::to_hsv(p.accent);
-    let [r, g, b] = model::holo_palette(model::theme_hue()).border;
+    let (_, s, _) = crate::holo_theme::to_hsv(p.accent);
+    let t = crate::holo::theme();
     Ink {
         // (The primary alone: a blend with the secondary is a third hue in a two-hue theme.)
-        rim: mix(p.accent(), Color32::WHITE, 0.2),
+        rim: mix(t.accent(), t.hot(), 0.2),
         accent: crate::hud_board::active_colour(),
         border: crate::hud_board::border_colour(),
         // (A colourless theme gets a colourless aurora.)
-        aurora: if s < 0.28 { hsv(h, 0.12, 0.85) } else { hsv(h - 25.0, 0.75, 0.88) },
-        lines: Color32::from_rgb(r, g, b),
+        aurora: if s < 0.28 { t.ink() } else { t.deep() },
+        lines: t.deep(),
     }
 }
 
@@ -113,11 +134,11 @@ fn quake_radius(mag: f64) -> f32 {
 
 fn quake_colour(mag: f64) -> Color32 {
     if mag >= 6.0 {
-        QUAKE_HIGH
+        quake_high()
     } else if mag >= 5.0 {
-        QUAKE_MID
+        quake_mid()
     } else {
-        QUAKE_LOW
+        quake_low()
     }
 }
 
@@ -292,14 +313,14 @@ fn view_with(ui: &mut Ui, st: &mut Earth, rt: &Handle, fetch: bool) {
     let geo = Geo::new(st.cam, lay.map);
 
     let painter = ui.painter_at(lay.map);
-    painter.rect_filled(lay.map, 0.0, SPACE);
+    painter.rect_filled(lay.map, 0.0, space());
     // The GPU draws the globe (and the flat map's base) once it has; the CPU until then, and for
     // good where the shader would not build. The offscreen HUD never runs the callback.
     let gpu = !gl::failed();
     let cpu = !gl::proven();
     let textures = globe_textures(st, now);
     if geo.flatness < 1.0 {
-        stars(&painter, lay.map, mix(ink.rim, Color32::WHITE, 0.55), &geo.globe);
+        stars(&painter, lay.map, mix(ink.rim, crate::holo::theme().hot(), 0.55), &geo.globe);
         if cpu {
             paint_globe(&painter, &geo.globe, &ink, st.look, textures, now);
         }
@@ -333,7 +354,7 @@ fn view_with(ui: &mut Ui, st: &mut Earth, rt: &Handle, fetch: bool) {
     if let (Some((_, hover)), Some(at)) = (picker.best, picker.pointer) {
         callout(&painter, &hover, at, lay.map, &ink);
     }
-    painter.rect_stroke(lay.map, 0.0, stroke(1.0, ink.border));
+    crate::holo::outline(&painter, &crate::holo::plate(lay.map, [0.0; 4]), ink.border);
     if let Some(rect) = lay.drawer {
         drawer(ui, rect, st, &ink);
     }
@@ -894,7 +915,7 @@ impl Placer {
         for spot in spots {
             let r = Rect::from_min_size(spot, s).expand(1.5);
             if self.take(r) {
-                p.rect_filled(r, 0.0, Color32::from_black_alpha(150));
+                p.rect_filled(r, 0.0, scrim(0.59));
                 p.galley(spot, galley, text.colour);
                 return;
             }
@@ -958,13 +979,13 @@ fn paint_layers(p: &Painter, st: &Earth, geo: &Geo, ink: &Ink, now: f64, placer:
             p.extend(crate::earth_layers::dashed_on(map, &run, stroke(1.0, ink.rim.gamma_multiply(0.75)), 5.0, 4.0));
         }
         for run in proj.runs(&densify(&st.track.items, 10)) {
-            p.add(Shape::line(run, stroke(1.3, WHITE_INK.gamma_multiply(0.55))));
+            p.add(Shape::line(run, stroke(1.3, white_ink().gamma_multiply(0.55))));
         }
     }
     if st.layers.fires {
         for e in st.events.items.iter().filter(|e| e.kind == EventKind::Fire) {
             let Some((at, vis)) = proj.at(e.lat, e.lon).filter(|(at, _)| inside(*at, 10.0)) else { continue };
-            flame(p, at, 11.0, FIRE.gamma_multiply(vis), Some(FIRE_CORE.gamma_multiply(vis)));
+            flame(p, at, 11.0, fire().gamma_multiply(vis), Some(fire_core().gamma_multiply(vis)));
             glyphs.push(Rect::from_center_size(at, vec2(8.0, 11.0)));
             picker.consider(at, 6.0, || Hover::Event(e.clone()));
         }
@@ -972,9 +993,9 @@ fn paint_layers(p: &Painter, st: &Earth, geo: &Geo, ink: &Ink, now: f64, placer:
     if st.layers.storms {
         for e in st.events.items.iter().filter(|e| e.kind == EventKind::Storm) {
             let Some((at, vis)) = proj.at(e.lat, e.lon).filter(|(at, _)| inside(*at, 12.0)) else { continue };
-            spiral(p, at, 9.0, STORM.gamma_multiply(vis));
+            spiral(p, at, 9.0, storm().gamma_multiply(vis));
             glyphs.push(Rect::from_center_size(at, Vec2::splat(18.0)));
-            labels.push(Label { at, gap: 12.0, text: e.label.clone(), font: mono(11.0), colour: STORM_TEXT.gamma_multiply(vis), rank: 1.0 });
+            labels.push(Label { at, gap: 12.0, text: e.label.clone(), font: mono(11.0), colour: storm_text().gamma_multiply(vis), rank: 1.0 });
             picker.consider(at, 9.0, || Hover::Event(e.clone()));
         }
     }
@@ -999,7 +1020,7 @@ fn paint_layers(p: &Painter, st: &Earth, geo: &Geo, ink: &Ink, now: f64, placer:
             p.circle_filled(at, r * 2.3, c.gamma_multiply(0.10 * vis));
             p.circle_filled(at, r * 1.55, c.gamma_multiply(0.22 * vis));
             p.circle_filled(at, r, c.gamma_multiply(vis));
-            p.circle_filled(at, r * 0.42, mix(c, Color32::WHITE, 0.65).gamma_multiply(vis));
+            p.circle_filled(at, r * 0.42, mix(c, crate::holo::theme().hot(), 0.65).gamma_multiply(vis));
             glyphs.push(Rect::from_center_size(at, Vec2::splat(2.0 * r)));
             if strongest.as_ref() == Some(q) {
                 for k in 0..2 {
@@ -1008,7 +1029,7 @@ fn paint_layers(p: &Painter, st: &Earth, geo: &Geo, ink: &Ink, now: f64, placer:
                 }
                 pulsing = true;
             }
-            labels.push(Label { at, gap: r + 4.0, text: format!("{:.1}", q.mag), font: mono(11.0), colour: WHITE_INK.gamma_multiply(0.92 * vis), rank: 10.0 - q.mag as f32 });
+            labels.push(Label { at, gap: r + 4.0, text: format!("{:.1}", q.mag), font: mono(11.0), colour: white_ink().gamma_multiply(0.92 * vis), rank: 10.0 - q.mag as f32 });
             picker.consider(at, r, || Hover::Quake(q.clone()));
         }
     }
@@ -1017,7 +1038,7 @@ fn paint_layers(p: &Painter, st: &Earth, geo: &Geo, ink: &Ink, now: f64, placer:
         for f in &st.flights.items {
             let (lat, lon) = f.reckoned(now_s - f.at as f64);
             let Some((at, vis)) = proj.at(lat, lon).filter(|(at, _)| inside(*at, 8.0)) else { continue };
-            plane(p, at, 6.5, f.track as f32, WHITE_INK.gamma_multiply(vis));
+            plane(p, at, 6.5, f.track as f32, white_ink().gamma_multiply(vis));
             picker.consider(at, 7.0, || Hover::Plane(f.clone()));
         }
         movers |= !st.flights.items.is_empty();
@@ -1036,18 +1057,18 @@ fn paint_layers(p: &Painter, st: &Earth, geo: &Geo, ink: &Ink, now: f64, placer:
     if let Some(iss) = iss {
         if let Some((at, vis)) = proj.at(iss.lat, iss.lon).filter(|(at, _)| inside(*at, 12.0)) {
             p.circle_filled(at, 11.0, light(ink.rim, 0.3 * vis));
-            iss_glyph(p, at, 7.0, WHITE_INK.gamma_multiply(vis));
+            iss_glyph(p, at, 7.0, white_ink().gamma_multiply(vis));
             glyphs.push(Rect::from_center_size(at, vec2(14.0, 8.0)));
-            labels.push(Label { at, gap: 12.0, text: "ISS".into(), font: mono(11.0), colour: WHITE_INK.gamma_multiply(vis), rank: 0.5 });
+            labels.push(Label { at, gap: 12.0, text: "ISS".into(), font: mono(11.0), colour: white_ink().gamma_multiply(vis), rank: 0.5 });
             picker.consider(at, 9.0, || Hover::Iss(iss));
         }
         movers = true;
     }
     if let Some(m) = &st.marker {
         if let Some((at, vis)) = proj.at(m.lat, m.lon).filter(|(at, _)| inside(*at, 14.0)) {
-            reticle(p, at, WHITE_INK.gamma_multiply(vis));
+            reticle(p, at, white_ink().gamma_multiply(vis));
             glyphs.push(Rect::from_center_size(at, Vec2::splat(28.0)));
-            labels.push(Label { at, gap: 16.0, text: m.name.clone(), font: super::bold(11.0), colour: WHITE_INK.gamma_multiply(vis), rank: 0.0 });
+            labels.push(Label { at, gap: 16.0, text: m.name.clone(), font: strong(11.0), colour: white_ink().gamma_multiply(vis), rank: 0.0 });
         }
     }
     // The peaks in view on the shaded terrain: the highest named first.
@@ -1059,7 +1080,7 @@ fn paint_layers(p: &Painter, st: &Earth, geo: &Geo, ink: &Ink, now: f64, placer:
             }
             let Some((at, vis)) = proj.at(peak.lat, peak.lon).filter(|(at, _)| map.shrink(6.0).contains(*at)) else { continue };
             shown += 1;
-            let c = WHITE_INK.gamma_multiply(vis);
+            let c = white_ink().gamma_multiply(vis);
             p.add(Shape::convex_polygon(vec![at + vec2(0.0, -4.5), at + vec2(4.0, 3.0), at + vec2(-4.0, 3.0)], c, Stroke::NONE));
             glyphs.push(Rect::from_center_size(at, Vec2::splat(9.0)));
             labels.push(Label { at, gap: 7.0, text: format!("{} {} m", peak.name, model::group_digits(peak.ele_m.round() as i64)), font: mono(11.0), colour: c, rank: 2.0 + shown as f32 * 0.01 });
@@ -1083,11 +1104,11 @@ fn paint_layers(p: &Painter, st: &Earth, geo: &Geo, ink: &Ink, now: f64, placer:
         if let Some((at, vis)) = proj.at(me.lat, me.lon).filter(|(at, _)| inside(*at, 16.0)) {
             let phase = (((now - st.me_since) / PULSE_SECS).max(0.0).fract()) as f32;
             p.circle_stroke(at, 6.0 + 14.0 * phase, stroke(1.6, ink.accent.gamma_multiply((1.0 - phase) * vis)));
-            p.circle_filled(at, 6.5, Color32::from_black_alpha((170.0 * vis) as u8));
+            p.circle_filled(at, 6.5, scrim(0.67 * vis));
             p.circle_filled(at, 5.0, ink.accent.gamma_multiply(vis));
-            p.circle_filled(at, 2.0, WHITE_INK.gamma_multiply(vis));
+            p.circle_filled(at, 2.0, white_ink().gamma_multiply(vis));
             glyphs.push(Rect::from_center_size(at, Vec2::splat(16.0)));
-            labels.push(Label { at, gap: 12.0, text: "YOU".into(), font: super::bold(11.0), colour: WHITE_INK.gamma_multiply(vis), rank: -1.0 });
+            labels.push(Label { at, gap: 12.0, text: "YOU".into(), font: strong(11.0), colour: white_ink().gamma_multiply(vis), rank: -1.0 });
             pulsing = true;
         }
     }
@@ -1242,13 +1263,13 @@ impl Icon {
                 p.line_segment([pos2(c.x, from), pos2(c.x, to)], line);
             }
             Icon::Quake => {
-                p.circle_filled(c, s * 0.45, mono.unwrap_or(QUAKE_LOW));
+                p.circle_filled(c, s * 0.45, mono.unwrap_or(quake_low()));
                 p.circle_stroke(c, s * 0.9, stroke(1.0, mono.unwrap_or(crate::holo::theme().alert())));
             }
-            Icon::Storm => spiral(p, c, s, mono.unwrap_or(STORM)),
-            Icon::Fire => flame(p, c, s * 2.0, mono.unwrap_or(FIRE), if mono.is_some() { None } else { Some(FIRE_CORE) }),
-            Icon::Iss => iss_glyph(p, c, s, mono.unwrap_or(WHITE_INK)),
-            Icon::Plane => plane(p, c, s * 0.95, 45.0, mono.unwrap_or(WHITE_INK)),
+            Icon::Storm => spiral(p, c, s, mono.unwrap_or(storm())),
+            Icon::Fire => flame(p, c, s * 2.0, mono.unwrap_or(fire()), if mono.is_some() { None } else { Some(fire_core()) }),
+            Icon::Iss => iss_glyph(p, c, s, mono.unwrap_or(white_ink())),
+            Icon::Plane => plane(p, c, s * 0.95, 45.0, mono.unwrap_or(white_ink())),
             Icon::Plus => {
                 p.line_segment([c - vec2(s * 0.75, 0.0), c + vec2(s * 0.75, 0.0)], line);
                 p.line_segment([c - vec2(0.0, s * 0.75), c + vec2(0.0, s * 0.75)], line);
@@ -1366,7 +1387,9 @@ impl Card {
     }
 
     fn paint(&self, p: &Painter, ink: &Ink) {
-        p.rect(self.rect, 0.0, CARD, stroke(1.0, self.edge.unwrap_or(ink.border)));
+        let shape = crate::holo::plate(self.rect, [0.0; 4]);
+        crate::holo::fill(p, &shape, card());
+        crate::holo::outline(p, &shape, self.edge.unwrap_or(ink.border));
         if self.brackets {
             crate::hud_board::brackets(p, self.rect, crate::hud_board::bracket_colour());
         }
@@ -1401,7 +1424,7 @@ struct Scale {
 
 impl Scale {
     fn paint(&self, p: &Painter) {
-        p.rect_filled(self.rect, 0.0, Color32::from_black_alpha(120));
+        p.rect_filled(self.rect, 0.0, scrim(0.47));
         let r = self.rect.shrink2(vec2(6.0, 4.0));
         p.galley(pos2(r.right() - self.label.size().x, r.top()), self.label.clone(), strip_ink());
         let (y, x1) = (r.bottom() - 1.0, r.right());
@@ -1448,7 +1471,7 @@ fn plan_cards(p: &Painter, st: &Earth, geo: &Geo, controls: &Controls, placer: &
     let text = |s: String, font: FontId, colour: Color32| p.layout_no_wrap(s, font, colour);
 
     // The time and place in view.
-    let mut rows = vec![vec![Piece::text(text(local.format("%H:%M").to_string(), display(22.0), WHITE_INK)), Piece::text(text(model::utc_offset_label(offset), mono(11.0), strip_muted()))]];
+    let mut rows = vec![vec![Piece::text(text(local.format("%H:%M").to_string(), display(22.0), white_ink())), Piece::text(text(model::utc_offset_label(offset), mono(11.0), strip_muted()))]];
     if !compact {
         rows.push(vec![Piece::text(text(local.format("%a %-d %b %Y").to_string().to_uppercase(), mono(11.0), strip_muted()))]);
     }
@@ -1466,10 +1489,10 @@ fn plan_cards(p: &Painter, st: &Earth, geo: &Geo, controls: &Controls, placer: &
     let name = st.place.as_ref().map(|place| place.name(flat)).filter(|n| !n.trim().is_empty());
     let right = pos2(controls.area.left() - 6.0, map.top() + 10.0);
     let place = if flat && (name.is_some() || st.weather.is_some()) {
-        let mut rows = vec![vec![Piece::text(elided(p, name.as_deref().unwrap_or("\u{2014}"), super::bold(13.0), WHITE_INK, name_width))]];
+        let mut rows = vec![vec![Piece::text(elided(p, name.as_deref().unwrap_or("\u{2014}"), strong(13.0), white_ink(), name_width))]];
         rows.push(vec![Piece::text(text(format!("{} {}", local.format("%H:%M"), model::utc_offset_label(offset)), mono(11.0), strip_muted()))]);
         if let Some(w) = &st.weather {
-            rows.push(vec![Piece::text(text(format!("{:.1} \u{b0}C", w.temp), display(18.0), WHITE_INK)), Piece::text(text(format!("\u{2248} {:.1} \u{b0}C", w.feels), mono(11.0), strip_muted()))]);
+            rows.push(vec![Piece::text(text(format!("{:.1} \u{b0}C", w.temp), display(18.0), white_ink())), Piece::text(text(format!("\u{2248} {:.1} \u{b0}C", w.feels), mono(11.0), strip_muted()))]);
             let mut air = Vec::new();
             if let Some(h) = w.humidity {
                 air.push(Piece::text(text(format!("{h:.0} %"), mono(11.0), strip_ink())));
@@ -1536,7 +1559,7 @@ fn plan_tour_card(p: &Painter, st: &Earth, geo: &Geo, placer: &mut Placer) -> Op
     let head = format!("WORLD TOUR {}/{} \u{b7} {}", tour.index + 1, tour.stops.len(), stop.kind.label());
     let rows = vec![
         vec![Piece::text(p.layout_no_wrap(head, mono(11.0), strip_muted()))],
-        vec![Piece::text(elided(p, &stop.title, super::bold(13.0), WHITE_INK, width))],
+        vec![Piece::text(elided(p, &stop.title, strong(13.0), white_ink(), width))],
         vec![Piece::text(elided(p, &stop.caption, mono(11.0), strip_ink(), width))],
     ];
     let spots = [(pos2(map.center().x, map.bottom() - 10.0), Align2::CENTER_BOTTOM), (pos2(map.center().x, map.bottom() - 60.0), Align2::CENTER_BOTTOM), (pos2(map.center().x, map.top() + 40.0), Align2::CENTER_TOP)];
@@ -1581,20 +1604,20 @@ fn callout(p: &Painter, hover: &Hover, at: Pos2, map: Rect, ink: &Ink) {
     let line = |s: &str, font: FontId, colour: Color32| elided(p, s, font, colour, width);
     let now_ms = chrono::Utc::now().timestamp_millis();
     let rows: Vec<Vec<Piece>> = match hover {
-        Hover::Plane(f) => vec![vec![Piece::with(Icon::Plane, line(&f.callsign, super::bold(12.0), WHITE_INK))], vec![Piece::text(line(&f.details(), mono(11.0), strip_ink()))]],
+        Hover::Plane(f) => vec![vec![Piece::with(Icon::Plane, line(&f.callsign, strong(12.0), white_ink()))], vec![Piece::text(line(&f.details(), mono(11.0), strip_ink()))]],
         Hover::Quake(q) => vec![
-            vec![Piece::with(Icon::Quake, line(&format!("M{:.1} \u{b7} {}", q.mag, model::ago((now_ms - q.time_ms) / 1000)), super::bold(12.0), WHITE_INK))],
+            vec![Piece::with(Icon::Quake, line(&format!("M{:.1} \u{b7} {}", q.mag, model::ago((now_ms - q.time_ms) / 1000)), strong(12.0), white_ink()))],
             vec![Piece::text(line(if q.place.is_empty() { "Unnamed place" } else { &q.place }, mono(11.0), strip_ink()))],
             vec![Piece::text(line(&format!("depth {:.0} km", q.depth_km), mono(11.0), strip_muted()))],
         ],
-        Hover::Event(e) if e.kind == EventKind::Storm => vec![vec![Piece::with(Icon::Storm, line(&e.label, super::bold(12.0), WHITE_INK))], vec![Piece::text(line(&e.title, mono(11.0), strip_ink()))]],
-        Hover::Event(e) => vec![vec![Piece::with(Icon::Fire, line(&e.title, super::bold(12.0), WHITE_INK))], vec![Piece::text(line("Wildfire \u{b7} NASA EONET", mono(11.0), strip_muted()))]],
+        Hover::Event(e) if e.kind == EventKind::Storm => vec![vec![Piece::with(Icon::Storm, line(&e.label, strong(12.0), white_ink()))], vec![Piece::text(line(&e.title, mono(11.0), strip_ink()))]],
+        Hover::Event(e) => vec![vec![Piece::with(Icon::Fire, line(&e.title, strong(12.0), white_ink()))], vec![Piece::text(line("Wildfire \u{b7} NASA EONET", mono(11.0), strip_muted()))]],
         Hover::Iss(iss) => vec![
-            vec![Piece::with(Icon::Iss, line("ISS", super::bold(12.0), WHITE_INK))],
+            vec![Piece::with(Icon::Iss, line("ISS", strong(12.0), white_ink()))],
             vec![Piece::text(line(&format!("{} km \u{b7} {} km/h", iss.alt_km.round(), model::group_digits(iss.speed_kmh.round() as i64)), mono(11.0), strip_ink()))],
         ],
         // live layers (C1): a satellite, a train or a road incident.
-        Hover::Live(hit) => hit.lines().iter().enumerate().map(|(i, s)| vec![if i == 0 { Piece::with(Icon::Dot(ink.accent), line(s, super::bold(12.0), WHITE_INK)) } else { Piece::text(line(s, mono(11.0), strip_ink())) }]).collect(),
+        Hover::Live(hit) => hit.lines().iter().enumerate().map(|(i, s)| vec![if i == 0 { Piece::with(Icon::Dot(ink.accent), line(s, strong(12.0), white_ink())) } else { Piece::text(line(s, mono(11.0), strip_ink())) }]).collect(),
     };
     let size = Card::size(&rows);
     let mut min = at + vec2(14.0, 14.0);
@@ -1724,9 +1747,9 @@ fn paint_controls(ui: &mut Ui, p: &Painter, st: &mut Earth, controls: &Controls,
         let (c, r) = (rect.center(), rect.width() / 2.0);
         let icon = if on {
             p.circle_filled(c, r, ink.accent);
-            SPACE
+            Color32::BLACK
         } else {
-            p.circle(c, r, CARD, stroke(1.0, if resp.hovered() { ink.accent } else { ink.border }));
+            p.circle(c, r, card(),stroke(1.0, if resp.hovered() { ink.accent } else { ink.border }));
             if matches!(control, Control::Layer(_) | Control::Overlay(_) | Control::Satellite) { ink.accent } else { strip_ink() }
         };
         control.icon().paint(p, c, r * 0.5, Some(icon));
@@ -1759,7 +1782,9 @@ fn paint_controls(ui: &mut Ui, p: &Painter, st: &mut Earth, controls: &Controls,
 fn drawer(ui: &mut Ui, rect: Rect, st: &mut Earth, ink: &Ink) {
     let Some(area) = st.area.clone() else { return };
     let p = ui.painter_at(rect);
-    p.rect(rect, 0.0, CARD, stroke(1.0, ink.border));
+    let shape = crate::holo::plate(rect, [0.0; 4]);
+    crate::holo::fill(&p, &shape, card());
+    crate::holo::outline(&p, &shape, ink.border);
     let header = Rect::from_min_size(rect.min, vec2(rect.width(), 24.0));
     let mid = header.center().y;
     p.circle_filled(pos2(header.left() + 12.0, mid), 3.5, ink.accent);
@@ -1791,7 +1816,7 @@ fn drawer(ui: &mut Ui, rect: Rect, st: &mut Earth, ink: &Ink) {
         (Some(list), _) => {
             let now_ms = chrono::Utc::now().timestamp_millis();
             let mut child = ui.new_child(UiBuilder::new().max_rect(body));
-            crate::holo_block::faded_into(&mut child, egui::ScrollArea::vertical().id_salt("earth_area_rows").auto_shrink([false; 2]), CARD, |ui| {
+            crate::holo_block::faded_into(&mut child, egui::ScrollArea::vertical().id_salt("earth_area_rows").auto_shrink([false; 2]), card(), |ui| {
                 let width = ui.available_width();
                 for q in list {
                     let (row, resp) = ui.allocate_exact_size(vec2(width, 18.0), Sense::click());
@@ -1801,8 +1826,8 @@ fn drawer(ui: &mut Ui, rect: Rect, st: &mut Earth, ink: &Ink) {
                     }
                     let mid = row.center().y;
                     p.circle_filled(pos2(row.left() + 6.0, mid), 4.0, quake_colour(q.mag));
-                    let mag = p.layout_no_wrap(format!("{:.1}", q.mag), mono(11.0), WHITE_INK);
-                    p.galley(pos2(row.left() + 16.0, mid - mag.size().y / 2.0), mag, WHITE_INK);
+                    let mag = p.layout_no_wrap(format!("{:.1}", q.mag), mono(11.0), white_ink());
+                    p.galley(pos2(row.left() + 16.0, mid - mag.size().y / 2.0), mag, white_ink());
                     let ago = p.layout_no_wrap(model::ago((now_ms - q.time_ms) / 1000), mono(11.0), strip_muted());
                     let ago_x = row.right() - ago.size().x - 4.0;
                     p.galley(pos2(ago_x, mid - ago.size().y / 2.0), ago, strip_muted());
@@ -1998,6 +2023,7 @@ mod tests {
 
     #[test]
     fn the_globe_with_its_cards_layers_and_controls() {
+        let _look = crate::holo_theme::look_for_pictures();
         let rt = runtime();
         let mut earth = Earth::demo();
         let mut stage = stage(vec2(1180.0, 720.0));
@@ -2006,11 +2032,14 @@ mod tests {
         for shown in ["UTC", "28.0000, -78.0000", "12 742 km", "UNITED STATES", "DEMO DATA", "M4.5\u{2013}5.2", "ODALYS-26", "POLO-26", "FAY-26", "5.2", "ISS", "Globe: NASA GIBS"] {
             assert!(!frame.find_text(shown).is_empty(), "{shown} is not on the Earth:\n{}", frame.all_text());
         }
-        // The globe is drawn: its middle is lit, the corner beyond it is space.
+        // The globe is drawn as light on glass: its limb is lit, its middle is dark glass (never
+        // a ball filled with the theme's colour), the corner beyond it is space.
         let canvas = stage.raster(&frame);
+        canvas.save("panel_earth");
+        let limb = canvas.brightness(Rect::from_center_size(pos2(303.0, 346.0), vec2(20.0, 60.0)));
         let middle = canvas.brightness(Rect::from_center_size(pos2(590.0, 330.0), vec2(80.0, 80.0)));
         let corner = canvas.brightness(Rect::from_min_size(pos2(4.0, 300.0), vec2(30.0, 30.0)));
-        assert!(middle > corner + 20.0, "globe {middle} vs space {corner}");
+        assert!(limb > corner + 20.0 && middle < limb * 0.6, "limb {limb}, glass {middle}, space {corner}");
         assert!(frame.mesh_vertices > 600, "the rim, the aurora and the rings are meshes");
     }
 

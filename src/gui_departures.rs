@@ -3,7 +3,7 @@
 //! that train?" then means it); SHOW ON EARTH follows it on the globe. The data comes from
 //! `crate::transit`; this file only draws it.
 
-use super::{bold, stroke, block_slate, strip_ink, strip_muted};
+use super::{stroke, block_slate, strip_ink, strip_muted};
 use crate::transit::{self, Departure};
 use eframe::egui::{self, pos2, vec2, Align2, Color32, CursorIcon, FontId, Frame, Margin, Rect, Rounding, Sense, Ui, ViewportBuilder, ViewportClass, ViewportCommand, ViewportId};
 use std::sync::Arc;
@@ -20,7 +20,15 @@ const VIEWPORT: &str = "jai_departures";
 const ROW_H: f32 = 30.0;
 
 fn mono(size: f32) -> FontId {
-    FontId::monospace(super::ts(size))
+    crate::holo::font(Face::Mono, super::ts(size))
+}
+
+fn label(size: f32) -> FontId {
+    crate::holo::font(Face::Label, super::ts(size))
+}
+
+fn bold(size: f32) -> FontId {
+    crate::holo::font(Face::Head, super::ts(size))
 }
 
 /// A line's pill colour: its own (bright enough), else by mode.
@@ -31,16 +39,15 @@ fn pill_colour(d: &Departure) -> Color32 {
         }
     }
     match d.mode.as_str() {
-        "HIGHSPEED_RAIL" | "LONG_DISTANCE" | "NIGHT_RAIL" => Color32::from_rgb(0xE8, 0xEE, 0xF2),
-        "SUBURBAN" | "METRO" => Color32::from_rgb(0x2E, 0x9E, 0x4F),
-        "SUBWAY" => Color32::from_rgb(0x2F, 0x6F, 0xD6),
-        "TRAM" => Color32::from_rgb(0xD9, 0xA4, 0x1E),
-        "BUS" | "COACH" => Color32::from_rgb(0x8E, 0x4F, 0xC9),
-        _ => Color32::from_rgb(0xC8, 0x3A, 0x3A),
+        "HIGHSPEED_RAIL" | "LONG_DISTANCE" | "NIGHT_RAIL" => crate::holo::theme().ink(),
+        "SUBURBAN" | "METRO" | "SUBWAY" => crate::holo::theme().deep(),
+        "TRAM" => crate::holo::theme().accent(),
+        "BUS" | "COACH" => crate::holo::theme().muted(),
+        _ => crate::holo::theme().hot(),
     }
 }
 
-use crate::holo::ink_on;
+use crate::holo::{ink_on, Face};
 
 /// What Sir clicked this frame.
 #[derive(Default)]
@@ -64,10 +71,10 @@ fn body(ui: &mut Ui, rt: &Handle) {
         let name = board.stop.as_ref().map(|s| s.name.clone()).or_else(|| board.asked.clone()).unwrap_or_else(|| "Finding your station…".into());
         ui.label(egui::RichText::new(name.to_uppercase()).font(bold(15.0)).color(strip_ink()));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let (tag, colour) = if board.demo { ("DEMO", strip_muted()) } else if board.loading { ("…", strip_muted()) } else { ("LIVE", crate::holo::theme().alert()) };
-            ui.label(egui::RichText::new(tag).font(mono(11.0)).color(colour));
+            let (tag, colour) = if board.demo { ("DEMO", strip_muted()) } else if board.loading { ("…", strip_muted()) } else { ("LIVE", crate::holo::theme().accent()) };
+            ui.label(egui::RichText::new(tag).font(label(9.0)).color(colour));
             if !board.updated.is_empty() {
-                ui.label(egui::RichText::new(format!("UPDATED {}", board.updated)).font(mono(11.0)).color(strip_muted()));
+                ui.label(egui::RichText::new(format!("UPDATED {}", board.updated)).font(label(9.0)).color(strip_muted()));
             }
         });
     });
@@ -85,9 +92,9 @@ fn body(ui: &mut Ui, rt: &Handle) {
     let head = ui.allocate_exact_size(vec2(full, 18.0), Sense::hover()).0;
     let p = ui.painter();
     for (x, h) in cols.iter().zip(["TIME", "LINE", "DESTINATION", "PLATF.", "STATUS"]) {
-        p.text(pos2(head.left() + x, head.center().y), Align2::LEFT_CENTER, h, mono(11.0), strip_muted());
+        p.text(pos2(head.left() + x, head.center().y), Align2::LEFT_CENTER, h, label(8.5), strip_muted());
     }
-    p.line_segment([head.left_bottom(), head.right_bottom()], stroke(1.0, accent.gamma_multiply(0.35)));
+    p.line_segment([head.left_bottom(), head.right_bottom()], stroke(1.0, crate::holo::a(crate::holo::theme().ink(), 0.3)));
 
     let footer = 34.0;
     crate::holo_block::faded(ui, egui::ScrollArea::vertical().max_height((ui.available_height() - footer).max(60.0)).auto_shrink([false, false]), |ui| {
@@ -97,10 +104,10 @@ fn body(ui: &mut Ui, rt: &Handle) {
             let selected = board.selected == Some(i);
             let gone = d.expected < now - chrono::Duration::seconds(30);
             if selected {
-                p.rect_filled(rect, Rounding::ZERO, accent.gamma_multiply(0.14));
+                p.rect_filled(rect, Rounding::ZERO, crate::holo::a(accent, 0.14));
                 p.line_segment([rect.left_top(), rect.left_bottom()], stroke(2.0, accent));
             } else if resp.hovered() {
-                p.rect_filled(rect, Rounding::ZERO, Color32::from_white_alpha(8));
+                p.rect_filled(rect, Rounding::ZERO, crate::holo::a(crate::holo::theme().ink(), 0.05));
             }
             let fade = if gone { 0.45 } else { 1.0 };
             let y = rect.center().y;
@@ -109,13 +116,13 @@ fn body(ui: &mut Ui, rt: &Handle) {
             p.text(pos2(rect.left() + cols[0] + 4.0, y), Align2::LEFT_CENTER, &planned, mono(13.0), strip_ink().gamma_multiply(fade));
             // The line pill.
             let pill_c = pill_colour(d).gamma_multiply(fade);
-            let galley = p.layout_no_wrap(d.line.clone(), bold(11.0), ink_on(pill_c));
+            let galley = p.layout_no_wrap(d.line.clone(), label(9.0), ink_on(pill_c));
             let pill = Rect::from_min_size(pos2(rect.left() + cols[1], y - 9.0), vec2((galley.size().x + 12.0).min(cols[2] - cols[1] - 6.0), 18.0));
             p.rect_filled(pill, Rounding::ZERO, pill_c);
             p.with_clip_rect(pill).galley(pos2(pill.left() + 6.0, y - galley.size().y / 2.0), galley, ink_on(pill_c));
             // The destination.
             let dest_w = cols[3] - cols[2] - 8.0;
-            let dest = p.layout(d.headsign.clone(), FontId::proportional(super::ts(13.0)), if d.cancelled { strip_muted() } else { strip_ink().gamma_multiply(fade) }, f32::INFINITY);
+            let dest = p.layout(d.headsign.clone(), crate::holo::font(Face::Body, super::ts(13.0)), if d.cancelled { strip_muted() } else { strip_ink().gamma_multiply(fade) }, f32::INFINITY);
             let dest_rect = Rect::from_min_size(pos2(rect.left() + cols[2], y - dest.size().y / 2.0), vec2(dest_w, dest.size().y));
             p.with_clip_rect(dest_rect).galley(dest_rect.min, dest, strip_ink());
             if d.cancelled {
@@ -137,7 +144,7 @@ fn body(ui: &mut Ui, rt: &Handle) {
                 ("on time".to_string(), crate::holo::theme().ink())
             };
             p.text(pos2(rect.left() + cols[4], y), Align2::LEFT_CENTER, status, mono(11.0), c.gamma_multiply(fade));
-            p.line_segment([rect.left_bottom(), rect.right_bottom()], stroke(1.0, Color32::from_white_alpha(10)));
+            p.line_segment([rect.left_bottom(), rect.right_bottom()], stroke(1.0, crate::holo::a(crate::holo::theme().ink(), 0.07)));
             if resp.clicked() {
                 actions.select = Some(i);
             }

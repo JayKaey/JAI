@@ -1327,29 +1327,35 @@ pub struct HoloPalette {
     pub border: [u8; 3],
 }
 
-/// The holo look in the theme's hue (the reference blue for Arc Cyan).
+/// A theme whose light has less colour than this has a globe without any (black and white).
+const COLOURLESS: f32 = 0.2;
+
+/// The holo look in the theme's hue: a ball of dark glass, the land a lattice of dots of the
+/// theme's light, the coasts lit. The sea and the land's own fill stay faint (a half-strength
+/// fill of a warm light on black reads as olive), the dots and the lines carry the light.
 pub fn holo_palette(hue: f32) -> HoloPalette {
-    let c = |dh: f32, s: f32, v: f32| crate::holo_theme::from_hsv(hue + dh, s, v);
+    let (_, light, _) = crate::holo_theme::to_hsv(crate::holo_theme::current().accent);
+    let colour = if light < COLOURLESS { 0.0 } else { 1.0 };
+    let c = |s: f32, v: f32| crate::holo_theme::from_hsv(hue, s * colour, v);
     HoloPalette {
-        ocean_deep: c(10.0, 0.90, 0.30),
-        ocean_shallow: c(6.0, 0.86, 0.50),
-        land_dark: c(-2.0, 0.66, 0.66),
-        land: c(-2.0, 0.60, 0.88),
-        dot: c(-6.0, 0.40, 1.0),
-        coast: c(-10.0, 0.20, 1.0),
-        border: c(-6.0, 0.36, 0.94),
+        ocean_deep: c(0.55, 0.035),
+        ocean_shallow: c(0.55, 0.08),
+        land_dark: c(0.35, 0.10),
+        land: c(0.35, 0.16),
+        dot: c(0.55, 0.95),
+        coast: c(0.18, 1.0),
+        border: c(0.45, 0.62),
     }
 }
 
-/// The globe's hue: the theme's primary turned a little towards blue (Arc Cyan → the reference's
-/// #5AB0E8 continents); a colourless theme gets the reference blue.
+/// The globe's hue: the theme's own light (for a theme without colour, a hue that only names
+/// its texture: `holo_palette` gives it none).
 pub fn theme_hue() -> f32 {
-    let p = crate::holo_theme::current();
-    let (h, s, _) = crate::holo_theme::to_hsv(p.accent);
-    if s < 0.2 {
+    let (h, s, _) = crate::holo_theme::to_hsv(crate::holo_theme::current().accent);
+    if s < COLOURLESS {
         206.0
     } else {
-        (h + 20.0).rem_euclid(360.0)
+        h
     }
 }
 
@@ -1432,8 +1438,8 @@ pub fn build_mask(relief: &image::RgbImage, coast: Option<&image::RgbaImage>, bo
     HoloMask { w, h, texels }
 }
 
-/// The mask in the palette's colours: deep-blue ocean (lighter over the shelves), light-blue
-/// land with a fine dot grid, bright thin coastlines and dimmer borders.
+/// The mask in the palette's colours: a dark sea (a breath lighter over the shelves), faint
+/// land under a fine grid of bright dots, bright thin coastlines and dimmer borders.
 pub fn colour_holo(mask: &HoloMask, p: &HoloPalette) -> ColorImage {
     let mut pixels = Vec::with_capacity(mask.w * mask.h);
     for (i, t) in mask.texels.iter().enumerate() {
@@ -1456,7 +1462,7 @@ pub fn colour_holo(mask: &HoloMask, p: &HoloPalette) -> ColorImage {
     ColorImage { size: [mask.w, mask.h], pixels }
 }
 
-/// The globe before (or without) imagery: a deep-blue ball with a faint dot lattice; the
+/// The globe before (or without) imagery: a ball of dark glass with a faint dot lattice; the
 /// graticule and the rim are drawn over it.
 pub fn procedural_texture(w: usize, h: usize, hue: f32) -> ColorImage {
     let p = holo_palette(hue);
@@ -4862,12 +4868,19 @@ mod tests {
         assert_ne!(at(4, 2) & LAND, 0, "the speck became land");
         assert_ne!(at(3, 1) & COAST, 0, "land next to water is coast");
         assert_eq!(at(4, 1) & COAST, 0);
+        // (In his yellow, whatever theme another test shows meanwhile: the palette asks the theme
+        // whether it has colour at all.)
+        let _look = crate::holo_theme::look_for_pictures();
         let p = holo_palette(206.0);
         let image = colour_holo(&mask, &p);
         assert_eq!(image.size, [6, 4]);
         assert_eq!(image.pixels[6 + 3], Color32::from_rgb(p.coast[0], p.coast[1], p.coast[2]));
         let ocean = image.pixels[6];
-        assert!(ocean.b() > ocean.r() && ocean.b() < 160, "deep blue ocean: {ocean:?}");
+        assert!(ocean.b() > ocean.r() && ocean.b() < 40, "the sea is dark glass with a breath of the hue: {ocean:?}");
+        // Nothing the globe is filled with stands in the half-strength band that reads as mud:
+        // the fills are faint, the dots and the coast are light.
+        let value = |c: [u8; 3]| c.iter().copied().max().unwrap_or(0) as f32 / 255.0;
+        assert!([p.ocean_deep, p.ocean_shallow, p.land_dark, p.land].iter().all(|c| value(*c) <= 0.17) && value(p.dot) > 0.9 && value(p.coast) > 0.95);
         assert!(is_water([8, 22, 64]) && is_water([60, 130, 190]) && !is_water([240, 245, 250]) && !is_water([200, 170, 130]));
         // The deepest basins (near black) are the sea; dark forest and shadowed rock stay land.
         assert!(is_water([2, 5, 20]) && is_water([1, 3, 18]) && !is_water([15, 40, 20]) && !is_water([30, 28, 26]));

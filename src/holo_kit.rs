@@ -166,48 +166,6 @@ pub fn area(p: &Painter, r: Rect, values: &[f32], lo: f32, hi: f32, colour: Colo
     p.line_segment([last, pos2(last.x, r.bottom())], Stroke::new(px(p), a(t.ink(), 0.30 * alpha)));
 }
 
-/// Columns of light: each a pane of glass with a bright cap, its value over it and its label
-/// under it. `grow` (0-1) raises them (the entrance).
-pub fn columns(p: &Painter, r: Rect, items: &[(&str, f32)], unit: &str, grow: f32, alpha: f32) {
-    let t = holo::theme();
-    if items.is_empty() {
-        return;
-    }
-    let top = items.iter().map(|(_, v)| *v).fold(f32::MIN, f32::max).max(1e-6);
-    let plot = Rect::from_min_max(pos2(r.left(), r.top() + 22.0), pos2(r.right(), r.bottom() - 18.0));
-    holo::rule(p, plot.left_bottom(), plot.right_bottom(), a(t.ink(), 0.26 * alpha));
-    for k in 1..=3 {
-        let y = plot.bottom() - plot.height() * k as f32 / 3.0;
-        holo::rule(p, pos2(plot.left(), y), pos2(plot.right(), y), a(t.ink(), 0.06 * alpha));
-    }
-    let slot = plot.width() / items.len() as f32;
-    let width = (slot * 0.46).clamp(8.0, 64.0);
-    let mut mesh = Mesh::default();
-    let mut light = Light::new(p);
-    for (i, (label, value)) in items.iter().enumerate() {
-        let x = plot.left() + slot * (i as f32 + 0.5);
-        let h = plot.height() * (value / top).clamp(0.0, 1.0) * grow;
-        let bar = Rect::from_min_max(pos2(holo::snap(x - width / 2.0, holo::ppp(p)), plot.bottom() - h), pos2(holo::snap(x + width / 2.0, holo::ppp(p)), plot.bottom()));
-        let n = mesh.vertices.len() as u32;
-        let colour = if i == 0 { t.accent() } else { mix(t.accent(), t.deep(), 0.5) };
-        mesh.colored_vertex(bar.left_top(), lit(colour, 0.17 * alpha));
-        mesh.colored_vertex(bar.right_top(), lit(colour, 0.17 * alpha));
-        mesh.colored_vertex(bar.left_bottom(), Color32::TRANSPARENT);
-        mesh.colored_vertex(bar.right_bottom(), Color32::TRANSPARENT);
-        mesh.add_triangle(n, n + 1, n + 2);
-        mesh.add_triangle(n + 1, n + 3, n + 2);
-        light.neon(&[bar.left_top(), bar.right_top()], false, 1.5, a(mix(colour, t.hot(), 0.5), alpha), 1.0);
-        holo::rule(p, bar.left_top(), bar.left_bottom(), a(colour, 0.35 * alpha));
-        holo::rule(p, bar.right_top(), bar.right_bottom(), a(colour, 0.35 * alpha));
-        let figure = if value.fract().abs() < 0.05 { format!("{value:.0}{unit}") } else { format!("{value:.1}{unit}") };
-        holo::text(p, pos2(x, bar.top() - 5.0), Align2::CENTER_BOTTOM, Face::Figure, &figure, 15.0, a(t.ink(), alpha * grow));
-        let g = holo::galley_within(p, Face::Label, label, 8.0, a(t.muted(), alpha), slot - 6.0);
-        p.galley(pos2(holo::snap(x - g.size().x / 2.0, holo::ppp(p)), plot.bottom() + 6.0), g, t.muted());
-    }
-    p.add(Shape::mesh(mesh));
-    light.paint(p);
-}
-
 /// A row of a list: its number, its title, what belongs at the right. The chosen row has a
 /// bar of the accent on its left and stands on lighter glass.
 pub fn row(p: &Painter, r: Rect, index: &str, title: &str, meta: &str, chosen: f32, hot: f32, alpha: f32) {
@@ -238,21 +196,6 @@ pub fn section(p: &Painter, at: Pos2, width: f32, index: &str, title: &str, alph
     let slash = holo::text(p, pos2(n.right() + 5.0, at.y), Align2::LEFT_TOP, Face::Mono, "/", 10.5, a(t.faint(), alpha));
     let name = holo::text(p, pos2(slash.right() + 6.0, at.y + 1.0), Align2::LEFT_TOP, Face::Label, title, 8.5, a(t.ink(), 0.9 * alpha));
     holo::rule(p, pos2(name.right() + 10.0, name.center().y), pos2(at.x + width, name.center().y), a(t.ink(), 0.13 * alpha));
-}
-
-/// A reading: a thin large figure, its unit small beside it, its label small over it.
-/// Returns where the figure stands.
-pub fn reading(p: &Painter, at: Pos2, label: &str, figure: &str, unit: &str, size: f32, alpha: f32) -> Rect {
-    let t = holo::theme();
-    let mut y = at.y;
-    if !label.is_empty() {
-        y = holo::text(p, at, Align2::LEFT_TOP, Face::Label, label, 8.0, a(t.muted(), alpha)).bottom() + 2.0;
-    }
-    let fig = holo::text(p, pos2(at.x, y), Align2::LEFT_TOP, Face::Figure, figure, size, a(t.ink(), alpha));
-    if !unit.is_empty() {
-        holo::text(p, pos2(fig.right() + 4.0, fig.bottom() - size * 0.18), Align2::LEFT_BOTTOM, Face::Label, unit, (size * 0.26).clamp(7.0, 11.0), a(t.accent(), alpha));
-    }
-    fig
 }
 
 /// A tag: a small block, filled when it marks something live.

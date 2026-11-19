@@ -13,7 +13,7 @@
 //!   wheel zooms); a flat photo is framed; ← → (or the buttons) step along the sequence.
 
 use eframe::egui::{
-    self, epaint::Vertex, pos2, vec2, Align, Align2, Color32, CursorIcon, FontId, Frame, Key, Layout, Margin, Mesh, Painter, Pos2, Rect, RichText, Rounding, Sense, Shape, Stroke, TextureHandle,
+    self, epaint::Vertex, pos2, vec2, Align, Align2, Color32, CursorIcon, Frame, Key, Layout, Margin, Mesh, Painter, Pos2, Rect, RichText, Rounding, Sense, Shape, Stroke, TextureHandle,
     TextureId, TextureOptions, Ui, Vec2, ViewportBuilder, ViewportClass, ViewportCommand, ViewportId,
 };
 use std::collections::{HashMap, HashSet};
@@ -227,11 +227,11 @@ fn muted(ui: &mut Ui, text: impl Into<String>) {
 /// A line of text in the middle of a dark frame ("Searching…").
 fn frame_note(p: &Painter, rect: Rect, text: &str) {
     p.rect_filled(rect, Rounding::ZERO, crate::holo::theme().void());
-    p.text(rect.center(), Align2::CENTER_CENTER, text, FontId::monospace(12.0), super::strip_muted());
+    p.text(rect.center(), Align2::CENTER_CENTER, text, crate::holo::font(crate::holo::Face::Mono, 12.0), super::strip_muted());
 }
 
 /// A picture frame without its picture: the outline of one while it loads, or what went wrong
-/// with a `[ RETRY ]` key. Returns whether the key was clicked.
+/// with a retry key. Returns whether the key was clicked.
 fn frame_state(ui: &mut Ui, rect: Rect, status: Option<(bool, Option<String>)>, what: &str) -> bool {
     ui.painter_at(rect).rect_filled(rect, Rounding::ZERO, crate::holo::theme().void());
     match status {
@@ -245,9 +245,9 @@ fn frame_state(ui: &mut Ui, rect: Rect, status: Option<(bool, Option<String>)>, 
 
 /// A small label with a dark backing.
 fn tag(p: &Painter, at: Pos2, anchor: Align2, text: &str, colour: Color32) -> Rect {
-    let galley = p.layout_no_wrap(text.to_string(), FontId::monospace(11.0), colour);
+    let galley = p.layout_no_wrap(text.to_string(), crate::holo::font(crate::holo::Face::Mono, 11.0), colour);
     let rect = anchor.anchor_size(at, galley.size()).expand2(vec2(5.0, 2.0));
-    p.rect_filled(rect, Rounding::ZERO, Color32::from_rgba_unmultiplied(2, 5, 9, 210));
+    p.rect_filled(rect, Rounding::ZERO, crate::holo::a(crate::holo::theme().void(), 0.8));
     p.galley(rect.min + vec2(5.0, 2.0), galley, colour);
     rect
 }
@@ -443,7 +443,7 @@ fn strip(ui: &mut Ui, album: &crate::image_viewer::Album, id: &str) {
                         fitted(&p, rect, &tex, px, true);
                     }
                     let edge = if i == album.index { accent() } else { crate::hud_board::border_colour().gamma_multiply(0.6) };
-                    p.rect_stroke(rect, Rounding::ZERO, Stroke::new(if i == album.index { 2.0_f32 } else { 1.0 }, edge));
+                    crate::holo::outline(&p, &crate::holo::plate(rect, [0.0; 4]), edge);
                 }
                 if resp.on_hover_text(&pic.title).clicked() {
                     crate::image_viewer::select(id, i);
@@ -512,7 +512,7 @@ fn cameras_body(ui: &mut Ui, _rt: &Handle) {
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(list).layout(Layout::top_down(Align::Min)));
         crate::holo_block::faded(&mut child, egui::ScrollArea::vertical().id_salt("jai_cam_list"), |ui| {
             for (i, (cam, km)) in view.cams.iter().enumerate() {
-                let text = RichText::new(format!("{}\n{} · {:.1} km", cam.title(), cam.area, km)).font(FontId::monospace(11.0)).color(if i == view.index { accent() } else { super::strip_ink() });
+                let text = RichText::new(format!("{}\n{} · {:.1} km", cam.title(), cam.area, km)).font(crate::holo::font(crate::holo::Face::Mono, 11.0)).color(if i == view.index { accent() } else { super::strip_ink() });
                 if ui.add(egui::SelectableLabel::new(i == view.index, text)).clicked() {
                     crate::webcams::select(i);
                 }
@@ -545,11 +545,11 @@ fn camera_frame(ui: &Ui, rect: Rect, cam: &crate::webcams::Cam, km: f64, on_wall
                 Some((false, Some(e))) => format!("No frame ({e})"),
                 _ => "Connecting…".to_string(),
             };
-            p.text(rect.center(), Align2::CENTER_CENTER, text, FontId::monospace(11.0), super::strip_muted());
+            p.text(rect.center(), Align2::CENTER_CENTER, text, crate::holo::font(crate::holo::Face::Mono, 11.0), super::strip_muted());
         }
     }
     let edge = if hovered { accent() } else { crate::hud_board::border_colour().gamma_multiply(0.7) };
-    p.rect_stroke(rect, Rounding::ZERO, Stroke::new(1.0_f32, edge));
+    crate::holo::outline(&p, &crate::holo::plate(rect, [0.0; 4]), edge);
     // A red dot, LIVE and the name.
     let top = tag(&p, rect.left_top() + vec2(6.0, 6.0), Align2::LEFT_TOP, &format!("   LIVE  {}", cam.title()), super::strip_ink());
     p.circle_filled(pos2(top.left() + 8.0, top.center().y), 3.5, crate::holo::theme().alert());
@@ -783,7 +783,7 @@ pub(super) fn paint_earth_cameras(p: &Painter, map: Rect, at: &dyn Fn(f64, f64) 
 
 /// A camera in 7 × 5 px: its body and lens.
 fn camera_mark(p: &Painter, at: Pos2, colour: Color32) {
-    p.rect_filled(Rect::from_center_size(at + vec2(-0.5, 0.0), vec2(5.0, 4.0)), Rounding::same(0.5), colour);
+    p.rect_filled(Rect::from_center_size(at + vec2(-0.5, 0.0), vec2(5.0, 4.0)), Rounding::ZERO, colour);
     p.add(Shape::convex_polygon(vec![at + vec2(2.0, 0.0), at + vec2(4.0, -2.0), at + vec2(4.0, 2.0)], colour, Stroke::NONE));
 }
 

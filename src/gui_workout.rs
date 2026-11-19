@@ -2,8 +2,9 @@
 //! one-repetition records, the strength progression plot and the rest timer shared with the
 //! mobile satellite. Child module of `gui`.
 
-use super::{bold, button, card, item, muted, row, Palette, Tone};
+use super::{button, card, item, muted, row, Palette, Tone};
 use crate::app::Jai;
+use crate::holo::{font as face, Face};
 use crate::workout_coach::WorkoutSnapshot;
 use eframe::egui::{self, pos2, vec2, Color32, RichText, Sense, Stroke};
 use std::sync::{Arc, Mutex};
@@ -73,7 +74,7 @@ impl WorkoutWindow {
                         crate::holo_block::outline(ui, egui::Rect::from_min_size(room.min, egui::vec2(room.width(), room.height().min(160.0))), crate::holo_block::Outline::List);
                     }
                     Some(Err(e)) => {
-                        ui.colored_label(p.red, e);
+                        ui.colored_label(p.alert, e);
                     }
                     Some(Ok(snapshot)) => self.body(ui, p, app, rt, snapshot),
                 });
@@ -90,12 +91,12 @@ impl WorkoutWindow {
                 muted(ui, "No workout entries found in the calendar. Entries such as \"Arme\", \"Gym\" or \"Push\" are detected automatically.");
             }
             for event in &snapshot.scheduled {
-                item(ui, Some(p.green), |ui| {
+                item(ui, Some(p.nominal), |ui| {
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new(&event.title).font(bold(12.0)).color(p.text));
-                        ui.label(RichText::new(&event.date).monospace().size(11.0).color(p.muted));
+                        ui.label(RichText::new(&event.title).font(face(Face::Head, 12.0)).color(p.text));
+                        ui.label(RichText::new(&event.date).font(face(Face::Mono, 11.0)).color(p.muted));
                         if event.all_day {
-                            ui.label(RichText::new("all day").size(11.0).color(p.muted));
+                            ui.label(RichText::new("all day").font(face(Face::Body, 11.0)).color(p.muted));
                         }
                     });
                 });
@@ -121,11 +122,11 @@ impl WorkoutWindow {
             for log in snapshot.recent.iter().take(25) {
                 item(ui, None, |ui| {
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new(format!("{} × {}", log.sets, log.reps)).monospace().size(11.5).color(p.accent));
-                        ui.label(RichText::new(&log.exercise).size(12.0).color(p.text));
-                        ui.label(RichText::new(format!("{:.1} kg", log.weight_kg)).size(11.5).color(p.text));
-                        ui.label(RichText::new(format!("1RM ≈ {:.1} kg", log.estimated_1rm)).size(11.0).color(p.muted));
-                        ui.label(RichText::new(crate::crash_guard::clip(&log.logged_at, 16)).monospace().size(11.0).color(p.muted));
+                        ui.label(RichText::new(format!("{} × {}", log.sets, log.reps)).font(face(Face::Mono, 11.5)).color(p.accent));
+                        ui.label(RichText::new(&log.exercise).font(face(Face::Body, 12.0)).color(p.text));
+                        ui.label(RichText::new(format!("{:.1} kg", log.weight_kg)).font(face(Face::Body, 11.5)).color(p.text));
+                        ui.label(RichText::new(format!("1RM ≈ {:.1} kg", log.estimated_1rm)).font(face(Face::Body, 11.0)).color(p.muted));
+                        ui.label(RichText::new(crate::crash_guard::clip(&log.logged_at, 16)).font(face(Face::Mono, 11.0)).color(p.muted));
                     });
                 });
             }
@@ -136,11 +137,11 @@ impl WorkoutWindow {
         card(ui, "REST TIMER (PC + PHONE)", |_| {}, |ui| {
             match &snapshot.rest {
                 Some(rest) if !rest.finished => {
-                    let colour = if rest.remaining_seconds <= 10 { p.amber } else { p.green };
-                    ui.label(RichText::new(format!("{:02}:{:02}", rest.remaining_seconds / 60, rest.remaining_seconds % 60)).font(bold(30.0)).color(colour));
+                    let colour = if rest.remaining_seconds <= 10 { p.warn } else { p.nominal };
+                    ui.label(RichText::new(format!("{:02}:{:02}", rest.remaining_seconds / 60, rest.remaining_seconds % 60)).font(face(Face::Figure, 30.0)).color(colour));
                 }
                 Some(_) => {
-                    ui.label(RichText::new("Rest complete — next set, Sir.").font(bold(14.0)).color(p.green));
+                    ui.label(RichText::new("Rest complete — next set, Sir.").font(face(Face::Head, 14.0)).color(p.nominal));
                 }
                 None => muted(ui, "No rest timer running."),
             }
@@ -174,13 +175,13 @@ impl WorkoutWindow {
     fn log_card(&mut self, ui: &mut egui::Ui, p: &Palette, app: &Jai, rt: &Handle, snapshot: &WorkoutSnapshot) {
         card(ui, "LOG A SET", |_| {}, |ui| {
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Exercise").size(11.5).color(p.muted));
+                ui.label(RichText::new("Exercise").font(face(Face::Body, 11.5)).color(p.muted));
                 crate::holo_ui::slot(ui, egui::TextEdit::singleline(&mut self.exercise).hint_text("Bench press").desired_width(180.0));
-                ui.label(RichText::new("Sets").size(11.5).color(p.muted));
+                ui.label(RichText::new("Sets").font(face(Face::Body, 11.5)).color(p.muted));
                 ui.add(crate::holo_ui::Number::new(&mut self.sets).range(1..=100));
-                ui.label(RichText::new("Reps").size(11.5).color(p.muted));
+                ui.label(RichText::new("Reps").font(face(Face::Body, 11.5)).color(p.muted));
                 ui.add(crate::holo_ui::Number::new(&mut self.reps).range(1..=1000));
-                ui.label(RichText::new("kg").size(11.5).color(p.muted));
+                ui.label(RichText::new("kg").font(face(Face::Body, 11.5)).color(p.muted));
                 ui.add(crate::holo_ui::Number::new(&mut self.weight).range(0.0..=2000.0).speed(0.5).fixed_decimals(1));
             });
             ui.horizontal(|ui| {
@@ -207,7 +208,7 @@ impl WorkoutWindow {
                     self.refresh(app, rt);
                 }
                 if let Some((text, ok)) = &self.status {
-                    ui.label(RichText::new(text).size(11.5).color(if *ok { p.green } else { p.red }));
+                    ui.label(RichText::new(text).font(face(Face::Body, 11.5)).color(if *ok { p.nominal } else { p.alert }));
                 }
             });
         });
@@ -239,7 +240,7 @@ impl WorkoutWindow {
                 }
                 let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 160.0), Sense::hover());
                 let painter = ui.painter();
-                painter.rect_filled(rect, 6.0, p.well);
+                painter.rect_filled(rect, 0.0, p.well);
                 let lo = points.iter().map(|s| s.estimated_1rm).fold(f64::INFINITY, f64::min);
                 let hi = points.iter().map(|s| s.estimated_1rm).fold(f64::NEG_INFINITY, f64::max);
                 let span = (hi - lo).max(1.0);
@@ -249,7 +250,7 @@ impl WorkoutWindow {
                     let y = inner.top() + inner.height() * i as f32 / 4.0;
                     painter.line_segment([pos2(inner.left(), y), pos2(inner.right(), y)], Stroke::new(0.6_f32, p.line));
                     let value = hi - span * f64::from(i) / 4.0;
-                    painter.text(pos2(inner.left() + 2.0, y - 1.0), egui::Align2::LEFT_BOTTOM, format!("{value:.0}"), egui::FontId::monospace(11.0), p.muted);
+                    painter.text(pos2(inner.left() + 2.0, y - 1.0), egui::Align2::LEFT_BOTTOM, format!("{value:.0}"), face(Face::Mono, 11.0), p.muted);
                 }
                 let step = if points.len() > 1 { inner.width() / (points.len() - 1) as f32 } else { 0.0 };
                 let mut previous: Option<egui::Pos2> = None;
@@ -260,17 +261,17 @@ impl WorkoutWindow {
                     if let Some(prev) = previous {
                         painter.line_segment([prev, at], Stroke::new(1.4_f32, p.accent));
                     }
-                    painter.circle_filled(at, 2.6, p.green);
+                    painter.circle_filled(at, 2.6, p.nominal);
                     if i == 0 || i + 1 == points.len() || points.len() <= 8 {
-                        painter.text(pos2(x, inner.bottom() + 2.0), egui::Align2::CENTER_TOP, &point.date[5..point.date.len().min(10)], egui::FontId::monospace(11.0), p.muted);
+                        painter.text(pos2(x, inner.bottom() + 2.0), egui::Align2::CENTER_TOP, &point.date[5..point.date.len().min(10)], face(Face::Mono, 11.0), p.muted);
                     }
                     previous = Some(at);
                 }
                 let last = points[points.len() - 1];
                 let first = points[0];
                 let delta = last.estimated_1rm - first.estimated_1rm;
-                let colour: Color32 = if delta >= 0.0 { p.green } else { p.red };
-                ui.label(RichText::new(format!("{selected}: {:.1} kg → {:.1} kg ({:+.1} kg over {} sessions)", first.estimated_1rm, last.estimated_1rm, delta, points.len())).size(11.5).color(colour));
+                let colour: Color32 = if delta >= 0.0 { p.nominal } else { p.alert };
+                ui.label(RichText::new(format!("{selected}: {:.1} kg → {:.1} kg ({:+.1} kg over {} sessions)", first.estimated_1rm, last.estimated_1rm, delta, points.len())).font(face(Face::Body, 11.5)).color(colour));
             },
         );
     }

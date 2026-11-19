@@ -5,7 +5,7 @@
 //! that hears Sir: a clip is called off the moment Sir speaks, so his words never wait behind
 //! a video's. Paused while a game is in front and while JAI himself is speaking.
 
-use eframe::egui::{self, pos2, vec2, Color32, FontFamily, FontId, Rounding, ViewportBuilder, ViewportId};
+use eframe::egui::{self, pos2, vec2, Rounding, ViewportBuilder, ViewportId};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -376,20 +376,18 @@ fn paint_embedded(ctx: &egui::Context, shown: &[(String, f32)], size: egui::Vec2
     paint_lines(&ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("hud_subtitles"))), rect, shown, wrap);
 }
 
-/// One line of the bar: `wrap` wide at most, two rows at most.
-fn line_job(text: &str, strength: f32, wrap: f32) -> egui::text::LayoutJob {
+/// Line `k` of the bar (0: the newest): `wrap` wide at most, two rows at most. The newest is
+/// lit; the one before it steps back as plain ink (a dimmed light reads as olive).
+fn line_job(text: &str, k: usize, strength: f32, wrap: f32) -> egui::text::LayoutJob {
+    let t = crate::holo::theme();
+    let colour = if k == 0 { t.hot() } else { t.muted() };
     let mut job = egui::text::LayoutJob::default();
-    job.append(text, 0.0, egui::TextFormat { font_id: FontId::new(25.0, FontFamily::Name("display".into())), color: Color32::WHITE.gamma_multiply(strength), extra_letter_spacing: 0.4, ..Default::default() });
+    job.append(text, 0.0, egui::TextFormat { font_id: crate::holo::font(crate::holo::Face::Head, 25.0), color: colour.gamma_multiply(strength), extra_letter_spacing: 0.4, ..Default::default() });
     job.wrap.max_width = wrap;
     job.wrap.max_rows = 2;
     job.wrap.overflow_character = Some('…');
     job.halign = egui::Align::Center;
     job
-}
-
-/// How strongly line `k` (0: the newest) stands.
-fn line_strength(k: usize, strength: f32) -> f32 {
-    strength * if k == 0 { 1.0 } else { 0.72 }
 }
 
 /// How large the bar is for these lines (it hugs them), each `wrap` wide at most.
@@ -398,7 +396,7 @@ fn bar_size(ctx: &egui::Context, shown: &[(String, f32)], wrap: f32) -> egui::Ve
     // band 8 taller than its text, 4 between two.)
     let mut size = vec2(0.0f32, 12.0);
     for (k, (text, strength)) in shown.iter().rev().enumerate() {
-        let line = ctx.fonts(|f| f.layout_job(line_job(text, line_strength(k, *strength), wrap))).size();
+        let line = ctx.fonts(|f| f.layout_job(line_job(text, k, *strength, wrap))).size();
         size.x = size.x.max(line.x + 32.0);
         size.y += line.y + 8.0 + if k > 0 { 4.0 } else { 0.0 };
     }
@@ -408,15 +406,15 @@ fn bar_size(ctx: &egui::Context, shown: &[(String, f32)], wrap: f32) -> egui::Ve
 fn paint_lines(p: &egui::Painter, rect: egui::Rect, shown: &[(String, f32)], wrap: f32) {
     let mut y = rect.bottom() - 8.0;
     for (k, (text, strength)) in shown.iter().rev().enumerate() {
-        let strength = line_strength(k, *strength);
-        let galley = p.layout_job(line_job(text, strength, wrap));
+        let strength = *strength;
+        let galley = p.layout_job(line_job(text, k, strength, wrap));
         let size = galley.size();
         let back = egui::Rect::from_min_size(pos2(rect.center().x - size.x / 2.0 - 16.0, y - size.y - 6.0), vec2(size.x + 32.0, size.y + 8.0));
         if back.top() < rect.top() - 0.5 {
             break;
         }
-        p.rect_filled(back, Rounding::ZERO, Color32::from_black_alpha((215.0 * strength) as u8));
-        p.galley(pos2(rect.center().x, y - size.y - 2.0), galley, Color32::WHITE);
+        p.rect_filled(back, Rounding::ZERO, crate::holo::a(crate::holo::theme().void(), 0.84 * strength));
+        p.galley(pos2(rect.center().x, y - size.y - 2.0), galley, crate::holo::theme().hot());
         y = back.top() - 4.0;
     }
 }

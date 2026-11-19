@@ -11,9 +11,10 @@
 //! the descent's position, the sort's progress) here.
 
 use super::widget_view::WidgetHost;
-use super::{bold, button, muted, paint_background, stroke, Palette, Tone};
+use super::{button, muted, paint_background, stroke, Palette, Tone};
+use crate::holo::Face;
 use crate::simulation_lab::{self, Param, SimKind, Simulation};
-use eframe::egui::{self, pos2, vec2, Align2, Color32, FontId, Frame, Margin, Pos2, Rect, RichText, Rounding, Sense, Shape, Stroke, ViewportBuilder, ViewportClass, ViewportCommand, ViewportId};
+use eframe::egui::{self, pos2, vec2, Align2, Color32, Frame, Margin, Pos2, Rect, RichText, Rounding, Sense, Shape, Stroke, ViewportBuilder, ViewportClass, ViewportCommand, ViewportId};
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -125,16 +126,17 @@ pub(super) fn dock_key(id: &str) -> String {
 fn plot_frame() -> Color32 {
     crate::hud_board::border_colour()
 }
-/// f(x): the theme's contrast accent (cyan in the ROSE default).
-fn plot_cyan() -> Color32 {
-    crate::holo_theme::current().deep()
+/// The first series (f(x)): the accent.
+fn first_series() -> Color32 {
+    crate::holo_theme::current().accent()
 }
-/// f′(x): the theme's primary (crimson in ROSE), else crimson `#FF1E56` when the primary is too
-/// close to f(x)'s colour to tell the curves apart (Arc Cyan: two blues).
-fn plot_crimson() -> Color32 {
-    let (a, b) = (crate::holo_theme::current().accent(), plot_cyan());
+/// The second series (f′(x)): the deep tone, else ink when it is too close to the accent to tell
+/// the curves apart.
+fn second_series() -> Color32 {
+    let t = crate::holo_theme::current();
+    let (a, b) = (t.accent(), t.deep());
     let distance = a.r().abs_diff(b.r()) as u32 + a.g().abs_diff(b.g()) as u32 + a.b().abs_diff(b.b()) as u32;
-    if distance < 200 { Color32::from_rgb(0xFF, 0x1E, 0x56) } else { a }
+    if distance < 200 { t.ink() } else { b }
 }
 /// Segments of every plotted curve.
 pub const CURVE_SEGMENTS: usize = 200;
@@ -279,9 +281,9 @@ fn draw_body(ui: &mut egui::Ui, p: &Palette, sim: &Simulation, host: &WidgetHost
     let lab = &host.app.tools().stark.simlab;
     ui.horizontal_wrapped(|ui| {
         if !in_app {
-            ui.label(RichText::new(sim.title.to_uppercase()).font(bold(16.0)).color(p.accent).extra_letter_spacing(1.5));
+            ui.label(RichText::new(sim.title.to_uppercase()).font(crate::holo::font(Face::Head, 16.0)).color(p.accent).extra_letter_spacing(1.5));
         }
-        super::chip(ui, sim.kind.label(), p.violet);
+        super::chip(ui, sim.kind.label(), p.deep);
         if crate::holo_ui::key(ui, if sim.paused { "Resume" } else { "Pause" }).clicked() {
             lab.toggle_pause(&sim.id);
         }
@@ -306,8 +308,8 @@ fn draw_body(ui: &mut egui::Ui, p: &Palette, sim: &Simulation, host: &WidgetHost
     let response = ui.allocate_rect(plot_rect, Sense::hover());
     let painter = ui.painter_at(plot_rect.expand(2.0));
     painter.rect_filled(plot_rect, Rounding::ZERO, crate::holo::theme().void());
-    painter.rect_stroke(plot_rect, Rounding::ZERO, Stroke::new(1.0f32, plot_frame()));
-    crate::hud_board::brackets(&painter, plot_rect, Color32::WHITE);
+    crate::holo::outline(&painter, &crate::holo::plate(plot_rect, [0.0; 4]), plot_frame());
+    crate::hud_board::brackets(&painter, plot_rect, crate::holo::theme().ink());
     let mut guard = RUNTIMES.lock().unwrap_or_else(|e| e.into_inner());
     let runtimes = guard.get_or_insert_with(HashMap::new);
     let rt = runtimes.entry(sim.id.clone()).or_insert_with(|| Runtime::new(sim));
@@ -334,12 +336,12 @@ fn draw_body(ui: &mut egui::Ui, p: &Palette, sim: &Simulation, host: &WidgetHost
 
 fn controls(ui: &mut egui::Ui, p: &Palette, sim: &Simulation, host: &WidgetHost) {
     let lab = &host.app.tools().stark.simlab;
-    ui.label(RichText::new("PARAMETERS").font(bold(10.5)).color(p.muted).extra_letter_spacing(1.0));
+    ui.label(RichText::new("PARAMETERS").font(crate::holo::font(Face::Label, 9.0)).color(p.muted).extra_letter_spacing(1.0));
     ui.spacing_mut().slider_width = 150.0;
     for prm in &sim.params {
         let Param { name, label, value, min, max, unit } = prm.clone();
         let mut v = value;
-        ui.label(RichText::new(format!("{label}{}", if unit.is_empty() { String::new() } else { format!(" ({unit})") })).size(11.5));
+        ui.label(RichText::new(format!("{label}{}", if unit.is_empty() { String::new() } else { format!(" ({unit})") })).font(crate::holo::font(Face::Body, 12.0)).color(p.text));
         let step = ((max - min) / 400.0).max(1e-4);
         if ui.add(crate::holo_ui::Slider::new(&mut v, min..=max).step_by(if (max - min) > 50.0 { 1.0 } else { step })).changed() {
             lab.set_param(&sim.id, &name, v);
@@ -349,23 +351,23 @@ fn controls(ui: &mut egui::Ui, p: &Palette, sim: &Simulation, host: &WidgetHost)
         ui.add_space(4.0);
         let (mut d, mut i) = (sim.show_derivative, sim.show_integral);
         // One option per line (they wrap inside the column instead of running off its edge).
-        if ui.add(egui::Checkbox::new(&mut d, RichText::new("Show derivative f′(x)").size(11.5))).changed() {
+        if ui.add(egui::Checkbox::new(&mut d, RichText::new("Show derivative f′(x)").font(crate::holo::font(Face::Body, 12.0)))).changed() {
             lab.set_option(&sim.id, Some(d), None);
         }
-        if ui.add(egui::Checkbox::new(&mut i, RichText::new("Shade the integral").size(11.5))).changed() {
+        if ui.add(egui::Checkbox::new(&mut i, RichText::new("Shade the integral").font(crate::holo::font(Face::Body, 12.0)))).changed() {
             lab.set_option(&sim.id, None, Some(i));
         }
         ui.add_space(4.0);
         for (label, src, _) in &sim.functions {
-            ui.label(RichText::new(format!("{label}(x) = {src}")).monospace().size(11.5).color(p.accent));
+            ui.label(RichText::new(format!("{label}(x) = {src}")).font(crate::holo::font(Face::Mono, 11.5)).color(p.accent));
         }
     }
     if sim.kind == SimKind::Sorting {
         muted(ui, format!("Algorithm: {}", sim.algorithm));
     }
     ui.add_space(8.0);
-    ui.label(RichText::new("READOUT").font(bold(10.5)).color(p.muted).extra_letter_spacing(1.0));
-    ui.add(egui::Label::new(RichText::new(sim.readout()).size(11.5)).wrap());
+    ui.label(RichText::new("READOUT").font(crate::holo::font(Face::Label, 9.0)).color(p.muted).extra_letter_spacing(1.0));
+    ui.add(egui::Label::new(RichText::new(sim.readout()).font(crate::holo::font(Face::Body, 12.0)).color(p.text)).wrap());
     ui.add_space(8.0);
     muted(ui, "Drag the sliders, or tell JAI: “set the angle to 60 degrees and double the velocity”.");
 }
@@ -395,13 +397,14 @@ impl View {
     }
 
     fn grid(&self, painter: &egui::Painter, _p: &Palette) {
-        let (minor, axis, ink) = (Color32::from_white_alpha(22), Color32::from_white_alpha(200), Color32::from_white_alpha(190));
+        let ink_colour = crate::holo::theme().ink();
+        let (minor, axis, ink) = (crate::holo::a(ink_colour, 0.09), crate::holo::a(ink_colour, 0.45), crate::holo::theme().muted());
         let step = |span: f64| {
             let raw = span / 8.0;
             let mag = 10f64.powf(raw.abs().log10().floor());
             [1.0, 2.0, 5.0, 10.0].iter().map(|m| m * mag).find(|s| *s >= raw).unwrap_or(raw)
         };
-        let font = FontId::proportional(11.0);
+        let font = crate::holo::font(Face::Mono, 10.0);
         let (sx, sy) = (step(self.x1 - self.x0), step(self.y1 - self.y0));
         let mut x = (self.x0 / sx).ceil() * sx;
         while x <= self.x1 {
@@ -440,9 +443,10 @@ fn label(v: f64) -> String {
     }
 }
 
-/// f(x) in glowing cyan, then the HUD's other accents for further functions.
-fn curve_colours(p: &Palette) -> [Color32; 6] {
-    [plot_cyan(), p.green, p.amber, p.violet, p.sky, p.red]
+/// f(x) in the accent, then the theme's other tones for further functions.
+fn curve_colours(_p: &Palette) -> [Color32; 6] {
+    let t = crate::holo::theme();
+    [first_series(), second_series(), t.ink(), t.warn(), t.muted(), t.hot()]
 }
 
 /// The samples of a curve over [a, b] (`CURVE_SEGMENTS` segments).
@@ -481,8 +485,8 @@ fn draw_function(painter: &egui::Painter, rect: Rect, p: &Palette, sim: &Simulat
         let colour = curve_colours(p)[k % 6];
         series.push((xs.iter().map(|x| e.eval(*x, &sim.params)).collect(), colour, false));
         if sim.show_derivative {
-            // f′(x) in crimson (dashed for the further functions).
-            series.push((xs.iter().map(|x| simulation_lab::derivative(e, *x, &sim.params)).collect(), if k == 0 { plot_crimson() } else { colour.gamma_multiply(0.6) }, k > 0));
+            // f′(x) in the second series' tone (dashed for the further functions).
+            series.push((xs.iter().map(|x| simulation_lab::derivative(e, *x, &sim.params)).collect(), if k == 0 { second_series() } else { colour.gamma_multiply(0.6) }, k > 0));
         }
     }
     // The y range from the 2nd-98th percentile, so asymptotes don't flatten everything.
@@ -551,7 +555,7 @@ fn draw_function(painter: &egui::Painter, rect: Rect, p: &Palette, sim: &Simulat
                 lines.push(format!("{label}′(x) = {:.4}", simulation_lab::derivative(e, x, &sim.params)));
             }
         }
-        painter.text(h + vec2(10.0, -10.0), Align2::LEFT_BOTTOM, lines.join("\n"), FontId::monospace(11.0), p.text);
+        painter.text(h + vec2(10.0, -10.0), Align2::LEFT_BOTTOM, lines.join("\n"), crate::holo::font(Face::Mono, 11.0), p.text);
     }
 }
 
@@ -574,16 +578,16 @@ fn draw_projectile(painter: &egui::Painter, rect: Rect, p: &Palette, sim: &Simul
     }
     if let Some(&(ts, x, y)) = rt.path.get(i) {
         let at = view.to_screen(x, y);
-        painter.circle_filled(at, 8.0, p.amber);
-        painter.circle_stroke(at, 12.0, stroke(1.0, p.amber.gamma_multiply(0.5)));
+        painter.circle_filled(at, 8.0, p.accent);
+        painter.circle_stroke(at, 12.0, stroke(1.0, p.accent.gamma_multiply(0.5)));
         let next = rt.path.get(i + 1).copied().unwrap_or((ts, x, y));
         let dt = (next.0 - ts).max(1e-6);
         let (vx, vy) = ((next.1 - x) / dt, (next.2 - y) / dt);
         let tip = view.to_screen(x + vx * 0.15 * max_x / sim.value("velocity").max(1.0), y + vy * 0.15 * max_x / sim.value("velocity").max(1.0));
-        painter.arrow(at, tip - at, stroke(2.0, p.green));
+        painter.arrow(at, tip - at, stroke(2.0, p.nominal));
         readout(painter, rect, 8.0, &format!("t = {ts:.2} s   x = {x:.1} m   y = {y:.1} m   v = {:.1} m/s", (vx * vx + vy * vy).sqrt()), p.text);
     }
-    painter.line_segment([view.to_screen(0.0, 0.0), view.to_screen(view.x1, 0.0)], stroke(2.0, p.green.gamma_multiply(0.7)));
+    painter.line_segment([view.to_screen(0.0, 0.0), view.to_screen(view.x1, 0.0)], stroke(2.0, p.nominal.gamma_multiply(0.7)));
 }
 
 fn draw_pendulum(painter: &egui::Painter, rect: Rect, p: &Palette, sim: &Simulation, rt: &mut Runtime, dt: f64) {
@@ -617,8 +621,8 @@ fn draw_pendulum(painter: &egui::Painter, rect: Rect, p: &Palette, sim: &Simulat
     painter.line_segment([pivot - vec2(60.0, 0.0), pivot + vec2(60.0, 0.0)], stroke(3.0, p.muted));
     painter.line_segment([pivot, bob], stroke(2.0, p.text));
     painter.circle_filled(pivot, 4.0, p.muted);
-    painter.circle_filled(bob, 14.0, p.amber);
-    painter.circle_stroke(bob, 18.0, stroke(1.0, p.amber.gamma_multiply(0.5)));
+    painter.circle_filled(bob, 14.0, p.accent);
+    painter.circle_stroke(bob, 18.0, stroke(1.0, p.accent.gamma_multiply(0.5)));
     let energy = 0.5 * (l * rt.omega).powi(2) + g * l * (1.0 - rt.theta.cos());
     readout(painter, rect, 8.0, &format!("θ = {:+.1}°   ω = {:+.2} rad/s   E/m = {:.2} J/kg   t = {:.1} s", rt.theta.to_degrees(), rt.omega, energy, rt.t), p.text);
 }
@@ -646,12 +650,12 @@ fn draw_collision(painter: &egui::Painter, rect: Rect, p: &Palette, sim: &Simula
     let track_y = rect.center().y + 30.0;
     painter.line_segment([pos2(rect.left(), track_y), pos2(rect.right(), track_y)], stroke(2.0, p.muted));
     let px_per_m = rect.width() / 24.0;
-    for (x, rad, m, v, colour, name) in [(rt.x1, r1, m1, rt.v1, p.accent, "m₁"), (rt.x2, r2, m2, rt.v2, p.amber, "m₂")] {
+    for (x, rad, m, v, colour, name) in [(rt.x1, r1, m1, rt.v1, p.accent, "m₁"), (rt.x2, r2, m2, rt.v2, p.deep, "m₂")] {
         let c = pos2(view.to_screen(x, 0.0).x, track_y - rad as f32 * px_per_m);
         painter.circle_filled(c, rad as f32 * px_per_m, colour.gamma_multiply(0.85));
-        painter.text(c, Align2::CENTER_CENTER, format!("{name}\n{m:.1} kg"), FontId::proportional(11.0), crate::holo::ink_on(colour));
+        painter.text(c, Align2::CENTER_CENTER, format!("{name}\n{m:.1} kg"), crate::holo::font(Face::Mono, 11.0), crate::holo::ink_on(colour));
         if v.abs() > 0.01 {
-            painter.arrow(c - vec2(0.0, rad as f32 * px_per_m + 14.0), vec2(v as f32 * px_per_m * 0.6, 0.0), stroke(2.0, p.green));
+            painter.arrow(c - vec2(0.0, rad as f32 * px_per_m + 14.0), vec2(v as f32 * px_per_m * 0.6, 0.0), stroke(2.0, p.nominal));
         }
     }
     let p_total = m1 * rt.v1 + m2 * rt.v2;
@@ -677,7 +681,7 @@ fn draw_waves(painter: &egui::Painter, rect: Rect, p: &Palette, sim: &Simulation
             let r2 = ((x - s2.0).powi(2) + (y - s2.1).powi(2)).sqrt();
             let a = (k * r1 - w * rt.t).sin() / (1.0 + 0.15 * r1) + (k * r2 - w * rt.t + phase).sin() / (1.0 + 0.15 * r2);
             let v = (a / 2.0).clamp(-1.0, 1.0) as f32;
-            let colour = if v >= 0.0 { p.accent.gamma_multiply(v) } else { p.violet.gamma_multiply(-v * 0.8) };
+            let colour = if v >= 0.0 { p.accent.gamma_multiply(v) } else { p.deep.gamma_multiply(-v * 0.8) };
             let cell = Rect::from_min_size(pos2(rect.left() + i as f32 * cw, rect.top() + j as f32 * ch), vec2(cw + 0.5, ch + 0.5));
             mesh.add_colored_rect(cell, colour);
         }
@@ -685,7 +689,7 @@ fn draw_waves(painter: &egui::Painter, rect: Rect, p: &Palette, sim: &Simulation
     painter.add(Shape::mesh(mesh));
     for s in [s1, s2] {
         let at = pos2(rect.left() + ((s.0 + span_x / 2.0) / span_x) as f32 * rect.width(), rect.center().y);
-        painter.circle_filled(at, 5.0, p.amber);
+        painter.circle_filled(at, 5.0, p.accent);
     }
     readout(painter, rect, 8.0, &format!("f = {f:.2} Hz   λ = {lambda:.2} m   d = {sep:.1} m   Δφ = {:.0}°", phase.to_degrees()), p.text);
 }
@@ -722,17 +726,17 @@ fn draw_descent(painter: &egui::Painter, rect: Rect, p: &Palette, sim: &Simulati
     let visible = |x: f64| x >= a && x <= b;
     let path: Vec<Pos2> = rt.gd_path.iter().copied().filter(|x| x.is_finite() && visible(*x)).map(|x| view.to_screen(x, e.eval(x, &sim.params).clamp(view.y0, view.y1))).collect();
     for (k, pt) in path.iter().enumerate() {
-        painter.circle_filled(*pt, 3.0, p.amber.gamma_multiply(0.3 + 0.7 * k as f32 / path.len().max(1) as f32));
+        painter.circle_filled(*pt, 3.0, p.accent.gamma_multiply(0.3 + 0.7 * k as f32 / path.len().max(1) as f32));
     }
     if path.len() >= 2 {
-        painter.add(Shape::line(path.clone(), stroke(1.0, p.amber.gamma_multiply(0.6))));
+        painter.add(Shape::line(path.clone(), stroke(1.0, p.accent.gamma_multiply(0.6))));
     }
     if let Some(last) = path.last() {
-        painter.circle_filled(*last, 8.0, p.amber);
+        painter.circle_filled(*last, 8.0, p.accent);
     }
     let loss = e.eval(rt.gd_x, &sim.params);
     let status = if diverged || !visible(rt.gd_x) && rt.gd_steps > 2 { "DIVERGING — the learning rate is too large" } else if rt.gd_steps >= max_steps { "done" } else { "descending…" };
-    readout(painter, rect, 8.0, &format!("loss(x) = {src}\nstep {} / {max_steps}   x = {:.4}   loss = {:.4}   lr = {lr}\n{status}", rt.gd_steps, rt.gd_x, loss), if status.starts_with("DIVERG") { p.red } else { p.text });
+    readout(painter, rect, 8.0, &format!("loss(x) = {src}\nstep {} / {max_steps}   x = {:.4}   loss = {:.4}   lr = {lr}\n{status}", rt.gd_steps, rt.gd_x, loss), if status.starts_with("DIVERG") { p.alert } else { p.text });
 }
 
 fn draw_sorting(painter: &egui::Painter, rect: Rect, p: &Palette, sim: &Simulation, rt: &mut Runtime, dt: f64) {
@@ -748,9 +752,9 @@ fn draw_sorting(painter: &egui::Painter, rect: Rect, p: &Palette, sim: &Simulati
         let h = *v as f32 * (rect.height() - 30.0);
         let bar = Rect::from_min_max(pos2(rect.left() + k as f32 * w + 1.0, rect.bottom() - h), pos2(rect.left() + (k + 1) as f32 * w - 1.0, rect.bottom()));
         let colour = if done {
-            p.green
+            p.nominal
         } else if k == *i || k == *j {
-            p.amber
+            crate::holo::theme().hot()
         } else {
             p.accent.gamma_multiply(0.75)
         };
@@ -764,7 +768,7 @@ fn draw_sorting(painter: &egui::Painter, rect: Rect, p: &Palette, sim: &Simulati
 /// go on to the next line when it is not; a single figure wider than the canvas wraps. Nothing
 /// is cut by a narrow block. The height it took.
 fn readout(painter: &egui::Painter, rect: Rect, top: f32, text: &str, colour: Color32) -> f32 {
-    let font = FontId::monospace(11.5);
+    let font = crate::holo::font(Face::Mono, 11.5);
     let room = (rect.width() - 20.0).max(60.0);
     let width = |s: &str| painter.layout_no_wrap(s.to_string(), font.clone(), colour).size().x;
     let mut lines: Vec<String> = Vec::new();
@@ -855,7 +859,7 @@ mod tests {
         // colours this drawing uses, not by a fixed cyan.
         let _theme = crate::holo_theme::test_lock();
         crate::holo_theme::finish_fade();
-        let (f_colour, df_colour) = (plot_cyan(), plot_crimson());
+        let (f_colour, df_colour) = (first_series(), second_series());
         let size = vec2(900.0, 520.0);
         let plot = Rect::from_min_size(pos2(20.0, 20.0), size - vec2(40.0, 40.0));
         let mut snap = crate::ui_snapshot::Snapshot::new(size);
@@ -864,8 +868,8 @@ mod tests {
             egui::CentralPanel::default().frame(Frame::none()).show(ctx, |ui| {
                 let painter = ui.painter_at(plot.expand(2.0));
                 painter.rect_filled(plot, Rounding::ZERO, crate::holo::theme().void());
-                painter.rect_stroke(plot, Rounding::ZERO, Stroke::new(1.0f32, plot_frame()));
-                crate::hud_board::brackets(&painter, plot, Color32::WHITE);
+                crate::holo::outline(&painter, &crate::holo::plate(plot, [0.0; 4]), plot_frame());
+                crate::hud_board::brackets(&painter, plot, crate::holo::theme().ink());
                 draw_function(&painter, plot.shrink(16.0), &p, &sim, None);
             });
         });

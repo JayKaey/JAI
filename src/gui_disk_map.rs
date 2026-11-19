@@ -39,10 +39,6 @@ const TICK: Duration = Duration::from_millis(33);
 fn ink() -> Color32 {
     crate::holo::theme().ink()
 }
-/// Text on a bright tile.
-fn dark() -> Color32 {
-    crate::holo::theme().void()
-}
 fn alert() -> Color32 {
     crate::holo::theme().alert()
 }
@@ -288,16 +284,6 @@ fn shade([r, g, b]: [u8; 3], k: f32) -> Color32 {
     Color32::from_rgb(f(r), f(g), f(b))
 }
 
-/// Text that reads on `fill`.
-fn ink_on(fill: Color32) -> Color32 {
-    let luma = 0.2126 * fill.r() as f32 + 0.7152 * fill.g() as f32 + 0.0722 * fill.b() as f32;
-    if luma > 0.55 * 255.0 {
-        dark()
-    } else {
-        ink()
-    }
-}
-
 fn ease(t: f32) -> f32 {
     1.0 - (1.0 - t.clamp(0.0, 1.0)).powi(3)
 }
@@ -430,7 +416,7 @@ fn draw_panel(ui: &mut Ui, snap: &Snapshot) -> Option<Action> {
         let dot = 3.5 * m.s;
         let pulse = if scanning { 0.45 + 0.55 * (0.5 + 0.5 * (now * 5.0).sin() as f32) } else { 1.0 };
         let centre = pos2(live_rect.left() - dot - 5.0 * m.s, live_rect.center().y);
-        p.circle_filled(centre, dot, alert().gamma_multiply(pulse));
+        p.circle_filled(centre, dot, crate::holo::theme().accent().gamma_multiply(pulse));
         title_end = centre.x - dot - 12.0 * m.s;
     }
     put(&p, Rect::from_min_max(top.min, pos2(title_end, top.bottom())), "DISK MAP", &head, ink(), Align2::LEFT_CENTER, false);
@@ -772,7 +758,7 @@ fn live_tiles(ctx: &egui::Context, snap: &Snapshot, area: Rect, m: &Metrics) -> 
         };
         let mut tile = Tile::new(r, kind, fill, t.bytes);
         let name = if bucket { rest_name(ctx, r, t.items, m) } else { Some(t.name.clone()) };
-        tile.labels = name.map(|name| centre_labels(ctx, r, &name, Some(&dm::format_size(t.bytes)), m, ink_on(fill))).unwrap_or_default();
+        tile.labels = name.map(|name| centre_labels(ctx, r, &name, Some(&dm::format_size(t.bytes)), m, ink())).unwrap_or_default();
         tile.items = t.items;
         tile.key = t.name.clone();
         tile.title = t.name.clone();
@@ -855,7 +841,7 @@ fn nest(ctx: &egui::Context, tree: &Tree, folder: u32, area: Rect, depth: usize,
         let Some(id) = item.node else {
             let fill = shade(if bin { crate::holo::theme().alert } else { tree.nodes[folder as usize].cat.rgb() }, 0.42);
             let mut tile = Tile::new(r, TileKind::Rest, fill, item.bytes);
-            tile.labels = rest_name(ctx, r, item.items, m).map(|name| centre_labels(ctx, r, &name, Some(&size), m, ink_on(fill))).unwrap_or_default();
+            tile.labels = rest_name(ctx, r, item.items, m).map(|name| centre_labels(ctx, r, &name, Some(&size), m, ink())).unwrap_or_default();
             tile.items = item.items;
             tile.opens = opens_here;
             tile.title = tree.path(folder).display().to_string();
@@ -874,7 +860,7 @@ fn nest(ctx: &egui::Context, tree: &Tree, folder: u32, area: Rect, depth: usize,
                     let mut tile = Tile::new(r, TileKind::Folder, shade(colour, 0.30), item.bytes);
                     tile.strip = Some(strip);
                     tile.strip_fill = shade(colour, 0.80);
-                    tile.labels = strip_labels(ctx, strip, name, &size, m, ink_on(tile.strip_fill));
+                    tile.labels = strip_labels(ctx, strip, name, &size, m, ink());
                     tile.node = Some(id);
                     tile.opens = Some(id);
                     out.push(tile);
@@ -883,7 +869,7 @@ fn nest(ctx: &egui::Context, tree: &Tree, folder: u32, area: Rect, depth: usize,
                 } else {
                     let fill = shade(colour, leaf_shade);
                     let mut tile = Tile::new(r, TileKind::Folder, fill, item.bytes);
-                    tile.labels = centre_labels(ctx, r, name, Some(&size), m, ink_on(fill));
+                    tile.labels = centre_labels(ctx, r, name, Some(&size), m, ink());
                     tile.node = Some(id);
                     tile.opens = Some(id);
                     out.push(tile);
@@ -892,7 +878,7 @@ fn nest(ctx: &egui::Context, tree: &Tree, folder: u32, area: Rect, depth: usize,
             Kind::File => {
                 let fill = shade(if bin { crate::holo::theme().alert } else { n.cat.rgb() }, leaf_shade);
                 let mut tile = Tile::new(r, TileKind::File, fill, item.bytes);
-                tile.labels = centre_labels(ctx, r, name, Some(&size), m, ink_on(fill));
+                tile.labels = centre_labels(ctx, r, name, Some(&size), m, ink());
                 tile.node = Some(id);
                 tile.opens = opens_here;
                 out.push(tile);
@@ -1034,21 +1020,38 @@ impl ViewState {
     }
 }
 
+/// How much of its colour a tile's glass holds: a pane stays faint (a strong fill on black
+/// reads as mud, not light), its edge and a folder's cap carry the colour.
+const PANE: f32 = 0.25;
+
+/// A tile is a pane of its file type's light: faint glass inside a hairline of its colour. A
+/// folder's strip lies under a cap of the colour at full strength.
 fn fill_tile(p: &Painter, t: &Tile, c: &Colours, pulse: f32) {
-    p.rect_filled(t.rect, Rounding::ZERO, t.fill);
+    // (On black of its own: a tile inside a folder's pane does not add up with it.)
+    p.rect_filled(t.rect, Rounding::ZERO, map_fill());
+    p.rect_filled(t.rect, Rounding::ZERO, t.fill.gamma_multiply(PANE));
     if let Some(strip) = t.strip {
-        p.rect_filled(strip, Rounding::ZERO, t.strip_fill);
+        p.rect_filled(strip, Rounding::ZERO, t.strip_fill.gamma_multiply(PANE));
+        crate::holo::rule(p, strip.left_top(), strip.right_top(), full(t.strip_fill));
     }
-    match t.kind {
-        TileKind::Hidden => hatch(p, t.rect, hatch_ink(), 6.0),
-        TileKind::Reading => {
-            p.rect_stroke(t.rect.shrink(0.5), Rounding::ZERO, super::stroke(1.0, c.border));
+    let edge = match t.kind {
+        TileKind::Hidden => {
+            hatch(p, t.rect, hatch_ink(), 6.0);
+            return;
         }
-        TileKind::Busy => {
-            p.rect_stroke(t.rect.shrink(0.5), Rounding::ZERO, super::stroke(1.0, c.accent.gamma_multiply(0.35 + 0.65 * pulse)));
-        }
-        TileKind::Folder | TileKind::File | TileKind::Rest | TileKind::Live => {}
-    }
+        TileKind::Reading => c.border,
+        TileKind::Busy => c.accent.gamma_multiply(0.35 + 0.65 * pulse),
+        // (A folder's frame stays back: its cap names it, and its own tiles stand inside it.)
+        TileKind::Folder => full(t.fill).gamma_multiply(0.34),
+        TileKind::File | TileKind::Rest | TileKind::Live => full(t.fill).gamma_multiply(0.62),
+    };
+    p.rect_stroke(t.rect.shrink(0.5), Rounding::ZERO, super::stroke(1.0, edge));
+}
+
+/// A tile's colour at full strength (tiles carry theirs darkened by how deep they lie).
+fn full(c: Color32) -> Color32 {
+    let k = 235.0 / c.r().max(c.g()).max(c.b()).max(1) as f32;
+    Color32::from_rgb((c.r() as f32 * k) as u8, (c.g() as f32 * k) as u8, (c.b() as f32 * k) as u8)
 }
 
 /// Diagonal lines across `r` (what no folder shows).
@@ -1576,6 +1579,7 @@ mod tests {
 
     #[test]
     fn the_panel_is_drawn_whole_while_scanning_and_when_done() {
+        let _look = crate::holo_theme::look_for_pictures();
         for (size, name) in [(vec2(1120.0, 700.0), "1120x700"), (vec2(680.0, 440.0), "680x440")] {
             for scanning in [true, false] {
                 let snap = dm::demo_snapshot(scanning);

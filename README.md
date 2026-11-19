@@ -44,6 +44,32 @@ JAI speaks Received Pronunciation through a dry studio chain. This is an approxi
 from stock voices, not a clone of an actor. Besides the similarity of the voice to its clip, the
 exhaustive verifier measures that the speech recogniser understands it.
 
+## The look
+
+Everything he shows is light drawn on black glass: white structure, and one colour for what is
+live, selected or measured. The canvas is always black; the colour is the theme.
+
+- **Themes.** Eight ready-made ones: Stark Gold (his yellow, the default), Mono (black and
+  white), Arc Reactor, Hot Rod, Gamma, Vibranium, Ember and Graphite. "Switch to the arc reactor
+  theme", "make the interface red" (a colour that names a theme is that theme, any other colour
+  becomes a light of its own), "make it darker" (Graphite) and "a bit lighter" (Mono). "Create a
+  new theme" opens the Theme Studio; "save this theme as …" and "load my … theme" keep and bring
+  back his own.
+- **Two cores.** The simple one is an instrument of rings whose scale is the clock; the complex
+  one is a sphere of circuitry whose shells light up with the part of his mind that is working.
+  "Switch to the complex core", "use the simple core", "make the orb bigger", "set the orb size
+  to 150 percent".
+- **His extra windows** take the HUD's theme unless told otherwise: "make that window red",
+  "make that window arc reactor", "make that window transparent", "pin that window".
+- **What steps back.** "Calm mode" lets the readouts at the top and bottom step back until the
+  mouse comes near; "show everything" brings them back. "Close the chat" and "show the chat"
+  take the conversation block above the bottom strip away and bring it back: "the chat" is
+  never the chat application. "Hide everything" is about the desktop (it minimises every
+  window, as "minimize everything" does), or about the Earth's layers while the Earth is open.
+- **Settings.** "Open settings" is one panel with a search field. Every setting has a row there
+  with a line that says what it does: the theme, the core and its size, text size, zoom,
+  opacity, the window's size, and every switch.
+
 ## Screens
 
 The HUD is the fullscreen board on one monitor, or one board across all of them ("use all

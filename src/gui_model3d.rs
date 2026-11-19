@@ -7,7 +7,7 @@
 //! the credit line at the bottom. Model files dropped on the studio open in it. Without a GPU
 //! path the model's edges are drawn with egui.
 
-use super::{stroke, strip_ink, strip_muted};
+use super::{strip_ink, strip_muted};
 use crate::gpu3d;
 use crate::mesh_io::math;
 use crate::model3d::{self as studio, CameraCmd, Look, Phase, Snapshot};
@@ -31,7 +31,7 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 fn mono(size: f32) -> FontId {
-    FontId::monospace(super::ts(size))
+    crate::holo::font(crate::holo::Face::Mono, super::ts(size))
 }
 
 /// The orbit camera (the panel's own; voice moves it through `model3d::take_camera`).
@@ -248,7 +248,7 @@ fn view_area(ui: &mut Ui, snap: &Snapshot, rect: Rect, rt: &Handle) {
     for k in 0..6 {
         let t = k as f32 / 6.0;
         let r = rect.width().max(rect.height()) * (0.62 - t * 0.45);
-        painter.circle_filled(pos2(c.x, c.y - rect.height() * 0.08), r, Color32::from_rgba_premultiplied(12, 18, 26, 10));
+        painter.circle_filled(pos2(c.x, c.y - rect.height() * 0.08), r, crate::holo::a(crate::holo::theme().ink(), 0.012));
     }
     crate::hud_board::brackets(&painter, rect.shrink(4.0), accent.gamma_multiply(0.55));
     // Sir's hands.
@@ -367,7 +367,7 @@ fn view_area(ui: &mut Ui, snap: &Snapshot, rect: Rect, rt: &Handle) {
     let (dropped, hovering, pointer) = ui.input(|i| (i.raw.dropped_files.iter().filter_map(|f| f.path.clone()).collect::<Vec<_>>(), !i.raw.hovered_files.is_empty(), i.pointer.latest_pos()));
     let over = pointer.is_none_or(|p| rect.contains(p));
     if hovering && over {
-        painter.rect_stroke(rect.shrink(2.0), Rounding::ZERO, stroke(1.5, accent));
+        crate::holo::outline(&painter, &crate::holo::plate(rect.shrink(2.0), [0.0; 4]), accent);
         painter.text(c, Align2::CENTER_CENTER, "+ DROP A MODEL (GLB · GLTF · OBJ · STL · ZIP)", mono(13.0), accent);
     }
     if over {
@@ -416,8 +416,7 @@ fn preview_card(ui: &Ui, painter: &Painter, rect: Rect, p: &studio::Preview, not
     if click.clicked() && p.url.starts_with("https://") {
         ui.ctx().open_url(egui::OpenUrl::new_tab(&p.url));
     }
-    painter.rect_filled(card, Rounding::ZERO, crate::holo::theme().glass());
-    painter.rect_stroke(card, Rounding::ZERO, stroke(1.0, crate::hud_board::border_colour()));
+    crate::holo_frame::card(painter, card, 0.0, 1.0);
     let mut y = card.top() + 6.0;
     if let Some(t) = &tex {
         let r = Rect::from_min_size(pos2(card.left() + 6.0, y), vec2(w, thumb_h));
@@ -658,7 +657,7 @@ pub(super) fn show(ctx: &egui::Context, rt: &Handle) {
 /// match as a card and composes a model meanwhile.
 pub(super) fn sketchfab_section(ui: &mut Ui, p: &super::Palette, vault: &crate::vault::Vault, rt: &Handle) {
     ui.add_space(6.0);
-    ui.label(RichText::new("Sketchfab (full models in the 3D studio)").font(super::bold(12.5)).color(p.accent));
+    ui.label(RichText::new("Sketchfab (full models in the 3D studio)").font(crate::holo::font(crate::holo::Face::Head, 12.5)).color(p.accent));
     let stored = vault.has_secret(studio::SKETCHFAB_SERVICE, crate::vault::TOKEN);
     let mut field = lock(&TOKEN_FIELD);
     ui.horizontal(|ui| {
@@ -691,7 +690,7 @@ pub(super) fn sketchfab_section(ui: &mut Ui, p: &super::Palette, vault: &crate::
     });
     drop(field);
     if let Some((ok, text)) = lock(&TOKEN_NOTE).clone() {
-        ui.label(RichText::new(text).size(11.0).color(if ok { p.green } else { p.red }));
+        ui.label(RichText::new(text).font(crate::holo::font(crate::holo::Face::Body, 12.0)).color(if ok { crate::holo::theme().ink() } else { p.alert }));
     }
     super::muted(ui, "Searching needs no token. Every downloaded model shows its author and licence under it.");
 }
