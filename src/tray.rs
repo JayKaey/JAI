@@ -494,6 +494,12 @@ mod sni {
             send(TrayAction::OpenHud);
         }
 
+        /// The setup updates J.A.I.: he quits, so his program can be replaced.
+        fn quit(&self) {
+            info!("[TRAY] The setup updates JAI: he quits");
+            send(TrayAction::Quit);
+        }
+
         /// Sir started J.A.I. while this scripted session runs: it ends.
         fn give_way(&self) {
             if crate::platform::in_test_session() {

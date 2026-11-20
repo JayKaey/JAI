@@ -105,7 +105,7 @@ pub const RELEASES: &[Release] = &[
             added("Typing and keys on KDE", "Typing, hands-free keys and the browser's address work on KDE through Plasma's fake input."),
             added("Disk map and radar on Linux", "The disk map, network radar and guardian read this Linux PC: disks, trash, ARP, pings."),
             added("Subtitles, widgets and more on KDE", "Live subtitles, ghost mode, desk widgets, the clipboard history and shortcuts work on KDE."),
-            added("Installers on GitHub", "Version 3.2: each new version builds his installers for Windows and Linux as a GitHub release."),
+            added("One file installs him", "Version 3.2 on GitHub: one file for Windows, one for Linux, for a new PC or an update."),
             better("Power and lock on Linux", "On Linux, shut down, restart, lock and sleep go through logind and KDE's own lock screen."),
             better("PC questions on Linux", "On Linux he finds frozen windows, checks the mic, lists pacman updates, opens Discover."),
             better("Games and the engine on Linux", "On Linux the language engine dies with J.A.I., and Steam games and video memory are found."),

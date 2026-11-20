@@ -567,7 +567,7 @@ pub fn show_accounts(db: Option<String>) {
 /// The installer's window (`installer::run`): the login of another PC in his look, then
 /// everything fetched.
 pub fn run_installer(rt: Handle, config: crate::config::ConfigStore, card: String, brain: Result<&'static str, String>, into: std::path::PathBuf) -> Result<(), String> {
-    login_view::installing(config.read(|c| c.main_pc.clone()), card, brain, &into);
+    login_view::installing(config.read(|c| c.main_pc.clone()), crate::fleet::key(&config).is_some(), card, brain, &into);
     let viewport = egui::ViewportBuilder::default().with_title("Install J.A.I.").with_app_id("jai").with_inner_size([520.0, 560.0]).with_decorations(false).with_icon(Arc::new(window_icon().unwrap_or_default()));
     let options = eframe::NativeOptions {
         viewport,

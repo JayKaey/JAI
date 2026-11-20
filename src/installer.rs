@@ -303,10 +303,12 @@ pub fn run() -> ExitCode {
     }
     let vram = vram_mb();
     let brain = brain_for(vram);
+    // (An update keeps the brain this PC has: it may be one Sir chose.)
+    let update = Path::new(crate::config::CONFIG_FILE).is_file();
     let mut cfg = JaiConfig::load();
-    if let Ok(brain) = brain {
-        cfg.primary_model = brain.into();
-        cfg.fallback_model = brain.into();
+    if let (Ok(brain), false) = (&brain, update) {
+        cfg.primary_model = (*brain).into();
+        cfg.fallback_model = (*brain).into();
     }
     if let Some(main) = downloaded_from().filter(|_| cfg.main_pc.is_empty()) {
         cfg.main_pc = main;

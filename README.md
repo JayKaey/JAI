@@ -274,9 +274,17 @@ on another PC sends no orders anywhere: asked to act on Sir's PC, it says it can
 the version Sir's PC runs (a newer one is fetched at once and started; Sir's own PC never updates
 itself), hears of new commits on GitHub, and shows in the accounts list with its version and its
 PC's load. Voice prints are shared both ways and held in memory only: each stays on its owner's PC.
-A Linux PC installs him as well (see Linux). Both installers are also on GitHub's Releases page
-(`JAI-setup-windows.zip`, `jai-linux-x86_64`): pushing a tag `v…` builds them into a draft
-release, which Sir publishes.
+A Linux PC installs him as well (see Linux).
+
+GitHub's Releases page has one file for each: `JAI-setup.exe` (Windows) and `JAI-setup-linux`
+(`chmod +x` first). Each carries the installer with everything it starts with (on Windows the
+Visual C++ runtime and DirectML, so nothing has to be installed first; on Arch it installs the
+packages below with pacman, asking for the password). On a PC where JAI is installed already, the
+same file updates him: the running JAI quits, UPDATE fetches the version Sir's PC runs with the
+key that PC holds (no login), and he starts again; called off, he starts as he was. It never
+touches a JAI that runs from another folder, such as Sir's own. The files are built from `setup/`
+(a crate of its own that packs the built JAI) by the `Release` workflow, which publishes them when
+a tag `v…` is pushed; `--check` unpacks the installer and starts it with `--help` only.
 
 ## Linux
 

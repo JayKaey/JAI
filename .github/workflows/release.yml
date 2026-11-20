@@ -1,14 +1,15 @@
-# J.A.I.'s installers: pushing a tag `v…` builds the Windows installer (JAI-setup.exe with the
-# DLLs it starts with, zipped) and the Linux one (jai-linux-x86_64) and puts both into a draft
-# release, which Sir looks at and publishes himself. A change to this file builds both without a
-# release, as a test; so does "Run workflow" on the Actions page.
+# J.A.I.'s setups: pushing a tag `v…` builds JAI-setup.exe (Windows) and JAI-setup-linux, one file
+# each for a new PC or an update (setup/: J.A.I.'s installer inside), checks both, and publishes
+# them as that version's release (an older release or draft of the same tag is replaced). A tag is
+# pushed only when Sir asks for a release. A change to this file or to setup/ on main builds and
+# checks both without a release; so does "Run workflow" on the Actions page.
 name: Release
 
 on:
   push:
     tags: ['v*']
     branches: [main]
-    paths: ['.github/workflows/release.yml']
+    paths: ['.github/workflows/release.yml', 'setup/**']
   workflow_dispatch:
 
 env:
@@ -16,6 +17,10 @@ env:
   FAILED: |
     awk '/^error(\[|:)|: error: / { print "::error::" $0 }' build.txt
     echo "::error title=Build::$(tail -c 3500 build.txt | sed ':a;N;$!ba;s/%/%25/g;s/\n/%0A/g')"
+    exit 1
+  # A failed check the same way.
+  CHECK_FAILED: |
+    echo "::error title=Check::$(tail -c 3000 check.txt | sed ':a;N;$!ba;s/%/%25/g;s/\n/%0A/g')"
     exit 1
 
 jobs:
@@ -33,22 +38,36 @@ jobs:
         shell: bash
         run: cargo build --release 2>&1 | tee build.txt || eval "$FAILED"
       # JAI.exe starts with DirectML and the Visual C++ runtime beside it (as build.bat packs
-      # them); started on its own it is the installer.
-      - name: Pack
+      # them): all of it goes into the setup.
+      - name: What goes into the setup
         shell: pwsh
         run: |
           $crt = Get-ChildItem "$env:ProgramFiles\Microsoft Visual Studio\*\*\VC\Redist\MSVC\*\x64\Microsoft.VC*.CRT" -Directory | Sort-Object FullName -Descending | Select-Object -First 1
           $dml = Get-ChildItem target\release, "$env:LOCALAPPDATA\ort.pyke.io" -Recurse -Filter DirectML.dll -ErrorAction SilentlyContinue | Select-Object -First 1
-          New-Item -ItemType Directory JAI | Out-Null
-          Copy-Item target\release\jai.exe JAI\JAI-setup.exe
-          Copy-Item $dml.FullName JAI\
-          foreach ($dll in 'msvcp140.dll', 'msvcp140_1.dll', 'vcruntime140.dll', 'vcruntime140_1.dll') { Copy-Item (Join-Path $crt.FullName $dll) JAI\ }
-          Compress-Archive JAI\* JAI-setup-windows.zip
-          Get-ChildItem JAI | ForEach-Object { "$($_.Name) $([math]::Round($_.Length / 1MB, 1)) MB" }
+          New-Item -ItemType Directory payload | Out-Null
+          Copy-Item target\release\jai.exe payload\JAI.exe
+          Copy-Item $dml.FullName payload\
+          foreach ($dll in 'msvcp140.dll', 'msvcp140_1.dll', 'vcruntime140.dll', 'vcruntime140_1.dll') { Copy-Item (Join-Path $crt.FullName $dll) payload\ }
+          Get-ChildItem payload | ForEach-Object { "$($_.Name) $([math]::Round($_.Length / 1MB, 1)) MB" }
+      - name: The setup
+        shell: bash
+        working-directory: setup
+        run: |
+          cargo test --release 2>&1 | tee build.txt || eval "$FAILED"
+          JAI_SETUP_PAYLOAD="$GITHUB_WORKSPACE/payload" cargo build --release 2>&1 | tee build.txt || eval "$FAILED"
+      # It starts on a PC without the Visual C++ runtime (built in), unpacks J.A.I. and he starts.
+      - name: Check
+        shell: bash
+        run: |
+          if grep -q -i -a vcruntime140 setup/target/release/jai-setup.exe; then echo "::error::The setup needs the Visual C++ runtime"; exit 1; fi
+          setup/target/release/jai-setup.exe --check > check.txt 2>&1 || eval "$CHECK_FAILED"
+          head -n 3 check.txt
+          cp setup/target/release/jai-setup.exe JAI-setup.exe
+          ls -l JAI-setup.exe
       - uses: actions/upload-artifact@v7
         with:
           name: windows
-          path: JAI-setup-windows.zip
+          path: JAI-setup.exe
 
   linux:
     runs-on: ubuntu-24.04
@@ -64,15 +83,47 @@ jobs:
       - name: Build
         shell: bash
         run: cargo build --release 2>&1 | tee build.txt || eval "$FAILED"
-      - run: cp target/release/jai jai-linux-x86_64
+      - name: The setup
+        shell: bash
+        working-directory: setup
+        run: |
+          echo "The libraries jai starts with:"; readelf -d ../target/release/jai | grep NEEDED
+          cargo test --release 2>&1 | tee build.txt || eval "$FAILED"
+          mkdir -p ../payload && cp ../target/release/jai ../payload/jai
+          JAI_SETUP_PAYLOAD="$GITHUB_WORKSPACE/payload" cargo build --release 2>&1 | tee build.txt || eval "$FAILED"
+          cp target/release/jai-setup ../JAI-setup-linux
+          ls -l ../JAI-setup-linux
       - uses: actions/upload-artifact@v7
         with:
           name: linux
-          path: jai-linux-x86_64
+          path: JAI-setup-linux
+
+  # The Linux setup on a bare Arch: it installs the packages J.A.I. needs, and the jai it carries
+  # starts there.
+  linux-check:
+    needs: linux
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    container: archlinux:latest
+    steps:
+      - name: An up-to-date Arch
+        run: |
+          pacman -Sy --noconfirm archlinux-keyring
+          pacman -Su --noconfirm
+      - uses: actions/download-artifact@v8
+        with:
+          name: linux
+      - name: Check
+        shell: bash
+        run: |
+          chmod +x JAI-setup-linux
+          ./JAI-setup-linux --check > check.txt 2>&1 || eval "$CHECK_FAILED"
+          head -n 3 check.txt
+          pacman -Q alsa-lib opus espeak-ng tesseract-data-deu discover ffmpeg
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [windows, linux]
+    needs: [windows, linux, linux-check]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -80,16 +131,20 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: The draft release
+      - name: The release
         run: |
           gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --dir out
           cat > notes.md <<'EOF'
-          J.A.I., the local voice assistant, for Windows and Linux.
+          J.A.I., the local voice assistant: one file for Windows and one for Linux, for a new PC or an update.
 
-          - **Windows:** unzip `JAI-setup-windows.zip` and start `JAI-setup.exe`. The program is not signed, so Windows warns the first time: *More info* → *Run anyway*.
-          - **Linux** (made for KDE Plasma 6 on Arch): `chmod +x jai-linux-x86_64` and start it. The packages it needs are in the README's [Linux section](https://github.com/JayKaey/JAI#linux). Linux has not yet been run on a real PC.
+          - **Windows:** start `JAI-setup.exe`. It is not signed, so Windows warns the first time: *More info* → *Run anyway*.
+          - **Linux** (made for KDE Plasma 6 on Arch): `chmod +x JAI-setup-linux`, then start it. It installs the packages J.A.I. needs with pacman and asks for your password for that. Linux has not yet been run on a real PC.
 
-          The installer is not standalone: it asks for the address of the PC J.A.I. already runs on and an account there, takes what it needs from that PC, then downloads the voice, the ears and the brain that fits the graphics card (4 GB of graphics memory at least).
+          The setup installs J.A.I. on a PC beside the one he already runs on (the main PC): it asks for the main PC's address and an account there, takes J.A.I. from it (the version it runs), then downloads the voice, the ears and the brain that fits the graphics card (4 GB of graphics memory at least). Where J.A.I. is installed already, the same file updates him: he quits, the version the main PC runs comes in, and he starts again.
           EOF
-          gh release create "$GITHUB_REF_NAME" out/windows/JAI-setup-windows.zip out/linux/jai-linux-x86_64 \
-            --repo "$GITHUB_REPOSITORY" --draft --title "J.A.I. $GITHUB_REF_NAME" --notes-file notes.md
+          # (An older release or draft of this tag gives way; the list shows drafts too.)
+          for id in $(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq ".[] | select(.tag_name == \"$GITHUB_REF_NAME\") | .id"); do
+            gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/$id"
+          done
+          gh release create "$GITHUB_REF_NAME" out/windows/JAI-setup.exe out/linux/JAI-setup-linux \
+            --repo "$GITHUB_REPOSITORY" --verify-tag --title "J.A.I. $GITHUB_REF_NAME" --notes-file notes.md
