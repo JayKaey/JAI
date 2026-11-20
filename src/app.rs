@@ -375,6 +375,10 @@ impl Jai {
     /// knows nothing of his. Silent and beside his own turn: it never cancels his turn or cuts
     /// his voice off. Kept for Sir's report. The answer (spoken by the caller for a voice).
     pub async fn guest_turn(&self, name: &str, text: &str, via: &str) -> String {
+        // (Nobody, before Sir made his admin account on this, his main PC.)
+        if crate::fleet::locked(self.config()).is_some() {
+            return "Sir has not finished setting J.A.I. up yet.".into();
+        }
         let db = self.config().read(|c| c.memory_db_path.clone());
         let Some(account) = crate::accounts::get(&db, name) else { return "That account no longer exists.".into() };
         if let Some(why) = account.turned_away(text) {
@@ -2187,11 +2191,26 @@ impl Jai {
 
     /// Starts a brain turn, superseding any running one.
     pub fn dispatch_turn(&self, text: String, started: Instant, stt_ms: u64, source: InputSource) {
+        self.dispatch(text, started, stt_ms, source, None);
+    }
+
+    /// Sir's order from his main PC (`fleet`): carried out here as his, whatever this PC's
+    /// account may.
+    pub fn dispatch_sirs_order(&self, order: String) {
+        // (Kept under the one name no account can have: his orders are one conversation.)
+        let brain = self.inner.others.lock().unwrap_or_else(|e| e.into_inner()).entry(String::new()).or_insert_with(|| self.inner.brain.for_caller(crate::accounts::Caller::Remote)).clone();
+        self.dispatch(order, Instant::now(), 0, InputSource::TextGui, Some(brain));
+    }
+
+    /// A turn on `brain` (none: his own, for whoever is at this PC).
+    fn dispatch(&self, text: String, started: Instant, stt_ms: u64, source: InputSource, brain: Option<Brain>) {
         // His name in one spelling, typed or spoken ("J.A.I., open Spotify", "jay open spotify").
         let text = crate::wake::canon(&text);
-        // Another PC of Sir's answers nobody until it is logged in (`fleet`).
-        if let Some(why) = crate::fleet::locked(self.config()) {
-            self.speak_standalone(why, true, Trigger::Input(source));
+        // Another PC of Sir's answers nobody until it is logged in (`fleet`), nor an account Sir
+        // paused or a topic he closed to it (`admin`).
+        let why = crate::fleet::locked(self.config()).map(String::from).or_else(|| brain.is_none().then(|| crate::admin::turned_away(self.config(), &text)).flatten());
+        if let Some(why) = why {
+            self.speak_standalone(&why, true, Trigger::Input(source));
             return;
         }
         // The privacy lock: answered at once — before music or any other parser, and without the
@@ -2278,7 +2297,7 @@ impl Jai {
             // The emblem's gyroscope follows this guard: it drops however the turn ends.
             let thinking = crate::thinking_guard::engage();
             let req = TurnRequest { text, message_id: id.clone(), generation, cancel, started, source, voice, link, barge_in };
-            app.inner.brain.run_turn(req, &app.inner.tts, &app.inner.brain_tx).await;
+            brain.as_ref().unwrap_or(&app.inner.brain).run_turn(req, &app.inner.tts, &app.inner.brain_tx).await;
             drop(thinking);
             app.settle_turn(id).await;
         });

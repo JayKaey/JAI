@@ -69,7 +69,7 @@ pub(super) fn is_open() -> bool {
     OPEN.load(Ordering::Acquire)
 }
 
-fn field(ui: &mut Ui, title: &str, text: &mut String, hint: &str, password: bool) {
+pub(super) fn field(ui: &mut Ui, title: &str, text: &mut String, hint: &str, password: bool) {
     ui.label(RichText::new(title.to_uppercase()).font(crate::holo::font(Face::Label, 8.5)).color(strip_ink()));
     // (A hint in the faint ink: in the field's own ink it read as a name already typed.)
     holo_ui::slot(ui, egui::TextEdit::singleline(text).hint_text(RichText::new(hint).color(crate::holo::theme().faint())).password(password).desired_width(f32::INFINITY));

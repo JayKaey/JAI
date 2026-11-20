@@ -78,21 +78,27 @@ pub fn is_client(main_pc: &str) -> bool {
     !main_pc.trim().is_empty()
 }
 
-/// Sends Sir's order to an account's PC.
+/// Sends Sir's order to an account's PC (from another PC of his, signed in there: through his
+/// own, which alone sends orders; nothing on his PC obeys another PC).
 pub async fn run(ctx: &ToolContext, args: &Value) -> Result<String, String> {
     let (db, main) = ctx.config.read(|c| (c.memory_db_path.clone(), c.main_pc.clone()));
-    // (Sir's word of 2026-11-19: from another PC, nothing happens on his.)
-    if is_client(&main) {
-        return Err("I can't do that: only Sir's own J.A.I. controls other PCs.".into());
-    }
     if ctx.caller.guest().is_some() {
         return Err("Only Sir controls other PCs.".into());
     }
+    if is_client(&main) {
+        let v = crate::admin::remote(json!({ "action": "order", "args": args })).await?;
+        return Ok(v["said"].as_str().unwrap_or("Sent.").to_string());
+    }
+    send(&db, args)
+}
+
+/// Sir's order, kept on his PC for the account's PC that it names.
+pub fn send(db: &str, args: &Value) -> Result<String, String> {
     let order = args["order"].as_str().unwrap_or("").trim().to_string();
     let names: Vec<String> = serde_json::from_value(args["names"].clone()).unwrap_or_default();
     let account = names
         .iter()
-        .find_map(|n| crate::accounts::get(&db, n))
+        .find_map(|n| crate::accounts::get(db, n))
         .filter(|a| a.devices.iter().any(|d| d.kind == "pc"))
         .ok_or_else(|| format!("I know no PC of {} with J.A.I. on it, Sir.", crate::kit_voice::capitalised(names.last().map_or("that name", String::as_str))))?;
     if order.is_empty() {
@@ -114,7 +120,8 @@ fn take(name: &str) -> Vec<String> {
     lock(&ORDERS).remove(&name.to_lowercase()).unwrap_or_default().into_iter().filter(|(_, at)| at.elapsed() < ORDER_KEEPS).map(|(order, _)| order).collect()
 }
 
-/// Sir's PC answers a client's call: what Sir sent it, his voice print, the build to run.
+/// Sir's PC answers a client's call: what Sir sent it, his voice print, the build to run, what
+/// its account may (Sir's switches, which that PC follows), and whether his sign-in there holds.
 pub fn hello(db: &str, name: &str, body: &Value) -> Value {
     for done in body["done"].as_array().into_iter().flatten() {
         if let Some(order) = done.as_str() {
@@ -124,7 +131,9 @@ pub fn hello(db: &str, name: &str, body: &Value) -> Value {
     if let Some(print) = body.get("print").filter(|p| p.is_object()) {
         crate::speaker_id::share_guest(name, print);
     }
-    json!({ "orders": take(name), "sir": crate::speaker_id::print_to_share(db), "build": BUILD, "os": std::env::consts::OS })
+    let account = crate::accounts::get(db, name).map(|a| crate::accounts::Account { devices: Vec::new(), ..a });
+    let admin = body["admin"].as_str().is_some_and(crate::admin::holds);
+    json!({ "orders": take(name), "sir": crate::speaker_id::print_to_share(db), "build": BUILD, "os": std::env::consts::OS, "account": account, "admin": admin })
 }
 
 /// How this PC is, in a line for Sir's list.
@@ -148,7 +157,7 @@ fn pc_name() -> String {
     std::env::var("COMPUTERNAME").or_else(|_| std::env::var("HOSTNAME")).unwrap_or_else(|_| "PC".into())
 }
 
-fn vault(config: &ConfigStore) -> Option<crate::vault::Vault> {
+pub(crate) fn vault(config: &ConfigStore) -> Option<crate::vault::Vault> {
     crate::vault::Vault::open(config.read(|c| c.memory_db_path.clone())).ok()
 }
 
@@ -158,8 +167,12 @@ pub fn key(config: &ConfigStore) -> Option<String> {
 }
 
 /// Why this J.A.I. answers nobody yet: it is another PC of Sir's and not logged in (the login
-/// window opens).
+/// window opens), or Sir's main PC before he made his admin account there (its window opens).
 pub fn locked(config: &ConfigStore) -> Option<&'static str> {
+    if crate::admin::needs_setup(config) {
+        crate::gui::show_admin_sign_in();
+        return Some("Make your admin account first, please: the window for it is open.");
+    }
     let waits = is_client(&config.read(|c| c.main_pc.clone())) && key(config).is_none();
     waits.then(|| {
         crate::gui::show_login();
@@ -188,7 +201,8 @@ pub async fn client(app: Jai) {
             continue;
         };
         let db = app.config().read(|c| c.memory_db_path.clone());
-        let body = json!({ "kind": "pc", "device": pc_name(), "version": BUILD, "stats": stats(&app), "done": done, "print": crate::speaker_id::print_to_share(&db) });
+        let admin = crate::admin::key_held();
+        let body = json!({ "kind": "pc", "device": pc_name(), "version": BUILD, "stats": stats(&app), "done": done, "print": crate::speaker_id::print_to_share(&db), "admin": admin });
         let answer = match http.post(format!("{main}/api/pc")).header("X-JAI-Key", &key).json(&body).send().await {
             Ok(r) if r.status().as_u16() == 403 || r.status().as_u16() == 401 => {
                 // The account is gone, paused or its key no longer holds: log in again.
@@ -196,6 +210,7 @@ pub async fn client(app: Jai) {
                 if let Some(v) = vault(app.config()) {
                     v.clear_secret(SESSION, "key");
                 }
+                crate::admin::hold(app.config(), None);
                 continue;
             }
             Ok(r) => r.json::<Value>().await.ok(),
@@ -211,10 +226,15 @@ pub async fn client(app: Jai) {
         said_offline = false;
         done.clear();
         crate::speaker_id::share_sir(answer.get("sir").filter(|s| s.is_object()));
+        // (What this PC's account may, as Sir set it; and whether his sign-in here still holds.)
+        if let Some(account) = answer.get("account") {
+            crate::admin::hold(app.config(), serde_json::from_value(account.clone()).ok());
+        }
+        crate::admin::heard(admin.as_deref(), answer["admin"].as_bool().unwrap_or(false));
         for order in answer["orders"].as_array().into_iter().flatten().filter_map(Value::as_str) {
             info!("[FLEET] Sir's order: '{order}'");
             crate::hud_notify::record(&format!("Sir, from his PC: \"{order}\""), false);
-            app.dispatch_turn(order.to_string(), Instant::now(), 0, crate::modality::InputSource::TextGui);
+            app.dispatch_sirs_order(order.to_string());
             done.push(order.to_string());
         }
         // (Only from a PC of its own kind: a Linux JAI's new version comes from GitHub, not from Sir's Windows.)

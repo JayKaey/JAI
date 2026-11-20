@@ -276,7 +276,8 @@ such a JAI answers nobody.
 
 "Open the earth on Max's PC", "turn the volume down on Max's computer", "shut down Max's PC": the
 order goes to Max's PC (it waits ten minutes if that PC is offline) and never acts on Sir's. A JAI
-on another PC sends no orders anywhere: asked to act on Sir's PC, it says it can't. It always runs
+on another PC sends no orders anywhere but in Sir's admin mode (see Admin): asked to act on Sir's
+PC, it says it can't. It always runs
 the version Sir's PC runs (a newer one is fetched at once and started; Sir's own PC never updates
 itself), hears of new commits on GitHub, and shows in the accounts list with its version and its
 PC's load. Voice prints are shared both ways and held in memory only: each stays on its owner's PC.
@@ -291,6 +292,28 @@ key that PC holds (no login), and he starts again; called off, he starts as he w
 touches a JAI that runs from another folder, such as Sir's own. The files are built from `setup/`
 (a crate of its own that packs the built JAI) by the `Release` workflow, which publishes them when
 a tag `v…` is pushed; `--check` unpacks the installer and starts it with `--help` only.
+
+## Admin
+
+"Open the admin window" ("activate admin mode", "öffne das Admin-Fenster") shows every window JAI
+can open, in groups, Sir's own first; a click on one opens it. His own are his alone on every PC:
+the accounts list, the report, the settings, the Feature Lab (the Tool Forge is in it) and Discord.
+"Close the admin window" ("admin mode off") closes it.
+
+Sir's main PC (one with no main PC of its own) asks once for his admin account, a name and a
+password typed twice, and answers nobody until it is made; from then on it is his. That account
+logs in nowhere: it only signs Sir in at another PC, and it is never paused, removed or shown from
+there.
+
+On another PC, JAI does what that PC's account may: Sir's switches in the accounts list, with
+"Windows on Max's PC" for each window. A new account only talks to him. A window it may not open
+does not open: a pop-up asks for Sir's admin sign-in instead, and the PC stays logged in with its
+own account. Signed in, that window is his until it closes; opened again, it asks again. The admin
+window there is admin mode: everything on that PC is his until it closes, his accounts list (the
+main PC's, changed there) and his orders to other PCs included. When the last window his sign-in
+opened closes, the sign-in ends at once, there and at his main PC (which also lets one go that its
+PC has not asked about for two minutes). An order Sir sends to that PC from his main PC opens its
+window there all the same.
 
 ## Linux
 

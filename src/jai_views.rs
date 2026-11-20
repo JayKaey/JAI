@@ -365,6 +365,13 @@ pub fn close_panel(name: &str) -> Option<&'static str> {
     })
 }
 
+/// Closes panel `id` (`admin`: a window not this PC's).
+pub fn shut_panel(id: &str) {
+    if let Some((.., close)) = PANELS.iter().find(|(panel, ..)| *panel == id) {
+        close();
+    }
+}
+
 /// "Close the windows you opened": the panels in their own OS windows close (the in-app ones
 /// fade out with the other blocks). How many closed.
 pub fn close_detached_panels() -> usize {

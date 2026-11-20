@@ -55,6 +55,7 @@ pub const TOOLS: &[&str] = &[
     "birthdays",
     "accounts",
     "other_pc",
+    "admin",
 ];
 
 /// "What's my next lesson?", "wann ist meine nächste Stunde?": WebUntis, without the model.
@@ -109,6 +110,7 @@ pub fn command(s: &str, original: &str) -> Option<(&'static str, Value)> {
         .or_else(|| crate::kit_insight::recap_command(s).map(|a| ("evening_recap", a)))
         .or_else(|| crate::kit_insight::doctor_command(s).map(|a| ("internet_doctor", a)))
         .or_else(|| crate::kit_insight::privacy_command(s).map(|a| ("privacy_board", a)))
+        .or_else(|| crate::admin::command(s).map(|a| ("admin", a)))
         .or_else(|| crate::accounts::command(s).map(|a| ("accounts", a)))
         .or_else(|| crate::changes::command(s).map(|a| ("show_changes", a)))
         .or_else(|| crate::backups::command(s).map(|a| ("memory_backup", a)))
@@ -159,6 +161,7 @@ pub async fn run_tool(ctx: &ToolContext, name: &str, args: &Value) -> Result<Str
         "what_to_wear" => crate::commute_advisor::wear(ctx, args).await,
         "accounts" => crate::accounts::run(ctx, args).await,
         "other_pc" => crate::fleet::run(ctx, args).await,
+        "admin" => crate::admin::run(ctx, args),
         other => Err(format!("The kit has no tool called '{other}'.")),
     }
 }
@@ -186,6 +189,7 @@ pub fn stays_inside(name: &str, args: &Value) -> bool {
         || (name == "games" && matches!(action, "after" | "routine" | "forget_routine" | "bedtime" | "watch_download"))
         || matches!(name, "notebook" | "privacy_board" | "pronunciation_coach" | "say_like" | "known_guest" | "subtitle_place" | "block_places" | "notification_history" | "scheduled_order" | "grades" | "put_away" | "birthdays")
         || (name == "accounts" && action == "close")
+        || name == "admin"
         || (name == "school_day" && matches!(action, "teach_pack" | "homework_done")) || (matches!(name, "type_snippet" | "whenever_rule" | "desk_layout") && matches!(action, "save" | "add" | "delete" | "remove"))
 }
 

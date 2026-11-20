@@ -40,6 +40,9 @@ mod mixer_view;
 
 #[path = "gui_accounts.rs"]
 mod accounts_view;
+/// Sir's admin window and the pop-up for his admin sign-in.
+#[path = "gui_admin.rs"]
+mod admin_view;
 
 #[path = "gui_login.rs"]
 mod login_view;
@@ -556,11 +559,58 @@ pub fn show_theme_studio(open: bool) {
 pub fn show_accounts(db: Option<String>) {
     match db {
         Some(db) => {
-            accounts_view::open(db);
+            accounts_view::open(db, false);
             show();
         }
         None => accounts_view::close(),
     }
+    request_repaint();
+}
+
+/// His accounts list on another PC in admin mode: the accounts at his main PC.
+pub fn show_remote_accounts() {
+    accounts_view::open(String::new(), true);
+    show();
+    request_repaint();
+}
+
+/// "Open the admin window" (or closes it).
+pub fn show_admin(open: bool) {
+    admin_view::set_open(open);
+    if open {
+        show();
+    }
+    request_repaint();
+}
+
+/// The pop-up for his admin sign-in (on his main PC, once: the making of his admin account).
+pub fn show_admin_sign_in() {
+    admin_view::ask();
+    show();
+    request_repaint();
+}
+
+/// The admin window's tiles for the HUD's own windows that no order opens.
+pub fn show_discord() {
+    discord_view::open();
+    show();
+    request_repaint();
+}
+
+pub fn show_screens() {
+    open_control("screens");
+}
+
+pub fn show_hub() {
+    open_integrations(None);
+}
+
+/// `show_devices`: the devices drawer opens on the HUD's next frame.
+static DEVICES_REQUEST: AtomicBool = AtomicBool::new(false);
+
+pub fn show_devices() {
+    DEVICES_REQUEST.store(true, Ordering::Release);
+    show();
     request_repaint();
 }
 
@@ -6203,6 +6253,76 @@ impl HudApp {
         }
     }
 
+    /// The windows of `admin::WINDOWS` that are up; on another PC of Sir's, those its account may
+    /// not show close (one just opened asks for his admin sign-in). On his main PC only while the
+    /// admin window shows which are open.
+    fn gate_windows(&mut self) {
+        if !crate::fleet::is_client(&self.app.config().read(|c| c.main_pc.clone())) && !admin_view::is_open() {
+            return;
+        }
+        let tools = self.app.tools().clone();
+        let widgets: Vec<String> = tools.widgets.windows().into_iter().map(|w| w.id).collect();
+        let widget = |id: &str| widgets.iter().any(|w| w == id);
+        let up: Vec<&'static str> = crate::admin::WINDOWS
+            .iter()
+            .map(|w| w.id)
+            .filter(|&id| match id {
+                "admin" => admin_view::is_open(),
+                "accounts" => accounts_view::is_open(),
+                "account_report" => crate::kit::text_is_up(id),
+                "notebook" => crate::kit::text_is_up(crate::kit_notes::NOTEBOOK),
+                "settings" => settings_panel::is_open(),
+                "feature_lab" => features_view::is_open(),
+                "discord" => discord_view::is_open(),
+                "system_stats" => widget("system_telemetry"),
+                "schedule" | "contacts" => widget(id),
+                "workout_finance" => widget(id) || self.workout.open,
+                "simulation_lab" => !tools.stark.simlab.list().is_empty(),
+                "mobile_qr" => pairing_view::is_open(),
+                "theme_studio" => theme_studio::is_open(),
+                "mixer" => mixer_view::is_open(),
+                "screens" => self.screens_open,
+                "integrations_hub" => self.hub.open,
+                "devices" => self.drawer_open,
+                "missed" => crate::hud_notify::missed_is_open(),
+                "voice_setup" => crate::voice_setup::active(),
+                "changes" => crate::changes::is_open(),
+                panel => crate::jai_views::panel_is_open(panel),
+            })
+            .collect();
+        for id in crate::admin::gate(self.app.config(), &self.rt, &up) {
+            info!("[ADMIN] The {id} window is not this PC's: closed");
+            match id {
+                "admin" => admin_view::set_open(false),
+                "accounts" => accounts_view::close(),
+                "account_report" => crate::kit::close_text(id),
+                "notebook" => crate::kit::close_text(crate::kit_notes::NOTEBOOK),
+                "settings" => settings_panel::open(false),
+                "feature_lab" => features_view::set_open(false),
+                "discord" => discord_view::close(),
+                "system_stats" | "schedule" | "contacts" | "workout_finance" => {
+                    let _ = tools.widgets.close_window(if id == "system_stats" { "system_telemetry" } else { id });
+                    self.workout.open &= id != "workout_finance";
+                }
+                "simulation_lab" => {
+                    for sim in tools.stark.simlab.list() {
+                        tools.stark.simlab.close(&sim.id);
+                    }
+                }
+                "mobile_qr" => pairing_view::toggle(),
+                "theme_studio" => theme_studio::close(),
+                "mixer" => mixer_view::close(),
+                "screens" => self.screens_open = false,
+                "integrations_hub" => self.hub.open = false,
+                "devices" => self.drawer_open = false,
+                "missed" => crate::hud_notify::close_missed(),
+                "voice_setup" => crate::voice_setup::cancel(),
+                "changes" => crate::changes::open(false),
+                panel => crate::jai_views::shut_panel(panel),
+            }
+        }
+    }
+
     /// Dialogs, the settings and hub windows, JAI's extra windows, push-to-talk and the frame
     /// rate: everything after the HUD's own canvas.
     fn after_body(&mut self, ctx: &egui::Context, iface: &InterfaceSettings) {
@@ -6213,6 +6333,14 @@ impl HudApp {
             self.workout.open = true;
         }
         self.hub.poll_request();
+        if SCREENS_REQUEST.swap(false, Ordering::AcqRel) {
+            self.screens_open = true;
+        }
+        if DEVICES_REQUEST.swap(false, Ordering::AcqRel) {
+            self.drawer_open = true;
+        }
+        // On another PC of Sir's: a window its account may not show closes (`admin`).
+        self.gate_windows();
         if self.hub.open {
             self.hub.show(ctx, &self.palette, &self.app, &self.rt);
         }
@@ -6239,9 +6367,7 @@ impl HudApp {
         // The Feature Lab (`[ FEATURES ]`), when open.
         features_view::show(ctx, &self.app, &self.rt);
         discord_view::show(ctx, self.app.tools(), &self.rt);
-        if SCREENS_REQUEST.swap(false, Ordering::AcqRel) {
-            self.screens_open = true;
-        }
+        admin_view::show(ctx, &self.app, &self.rt);
         // Orders a block gave (the hearing log's corrected words): carried out as if typed,
         // after what the misheard words changed in the last two minutes is taken back.
         for (text, undo_first) in std::mem::take(&mut *lock(&ORDERS)) {

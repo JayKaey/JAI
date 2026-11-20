@@ -1876,13 +1876,14 @@ impl Brain {
             }
         }
         let action = power::power_request(text)?;
-        // (Someone else: only what Sir allowed them, and nothing pops up on his screen.)
-        if let Some(name) = self.inner.tools.caller.guest() {
-            let db = self.inner.config.read(|c| c.memory_db_path.clone());
-            if !crate::accounts::get(&db, name).is_some_and(|a| a.allows(crate::accounts::POWER)) {
-                info!("[POWER] '{text}' from {name}: not allowed");
-                return Some(Intent::Answer("Sir has not given you that permission.".into()));
-            }
+        // (Someone else, or whoever sits at another PC of Sir's: only what Sir allowed them.)
+        let allowed = match self.inner.tools.caller.guest() {
+            Some(name) => crate::accounts::get(&self.inner.config.read(|c| c.memory_db_path.clone()), name).is_some_and(|a| a.allows(crate::accounts::POWER)),
+            None => self.inner.tools.caller == crate::accounts::Caller::Remote || crate::admin::may_power(&self.inner.config),
+        };
+        if !allowed {
+            info!("[POWER] '{text}' for {:?}: not allowed", self.inner.tools.caller);
+            return Some(Intent::Answer(crate::admin::NOT_YOURS.into()));
         }
         if !action.needs_confirmation() {
             info!("[POWER] '{text}' → PC {} now", action.id());

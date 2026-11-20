@@ -276,7 +276,7 @@ impl Request {
 fn public(method: &str, path: &str, length: usize) -> bool {
     match method {
         "GET" => length == 0 && (path == "/" || path.starts_with(STATIC) || matches!(path, "/satellite" | "/satellite/" | "/satellite/manifest.webmanifest" | "/api/themes" | "/install")),
-        "POST" => length <= 4096 && matches!(path, "/api/login" | "/api/signup" | "/api/signup/finish"),
+        "POST" => length <= 4096 && matches!(path, "/api/login" | "/api/signup" | "/api/signup/finish" | "/api/admin/login"),
         _ => false,
     }
 }
@@ -549,6 +549,14 @@ async fn open_to_anyone<S: AsyncWrite + Unpin>(stream: &mut S, req: &Request, wh
                 respond_json(stream, "403 Forbidden", &json!({ "error": e })).await;
             }
         },
+        // Sir signs in on another PC of his (`admin`): a key that holds while that PC calls.
+        ("POST", "/api/admin/login") => match crate::vault::Vault::open(db).and_then(|vault| crate::admin::grant_key(db, &vault, &field("name"), &field("password"), &from)) {
+            Ok(key) => respond_json(stream, "200 OK", &json!({ "key": key })).await,
+            Err(e) => {
+                warn!("[ADMIN] An admin sign-in from {from} failed: {e}");
+                respond_json(stream, "403 Forbidden", &json!({ "error": e })).await;
+            }
+        },
         ("POST", "/api/signup") => match crate::accounts::request(db, &field("name"), &field("password"), &from) {
             Ok(_) => {
                 info!("[ACCOUNTS] {from} asks for an account: {}", field("name"));
@@ -644,7 +652,7 @@ async fn for_account<S: AsyncWrite + Unpin>(stream: &mut S, app: &Jai, req: &Req
 
 async fn handle<S: AsyncRead + AsyncWrite + Unpin>(mut stream: S, app: Jai, peer: SocketAddr) {
     let (token, db) = app.config().read(|c| (c.satellite.token.clone(), c.memory_db_path.clone()));
-    let known = |key: &str| same_token(key, &token) || crate::accounts::session(&db, key).is_some();
+    let known = |key: &str| same_token(key, &token) || crate::accounts::session(&db, key).is_some() || crate::admin::holds(key);
     // Long enough for a phone photo over Wi-Fi.
     let req = match tokio::time::timeout(Duration::from_secs(90), read_request(&mut stream, known)).await {
         Ok(Ok(r)) => r,
@@ -666,6 +674,14 @@ async fn handle<S: AsyncRead + AsyncWrite + Unpin>(mut stream: S, app: Jai, peer
             return;
         }
     }
+    // Sir, signed in on another PC of his: what he asks of this, his main PC, from there.
+    if (req.method.as_str(), req.path.as_str()) == ("POST", "/api/admin") && crate::admin::holds(req.key()) {
+        match crate::admin::answer(&db, req.key(), &req.json()) {
+            Ok(answer) => respond_json(&mut stream, "200 OK", &answer).await,
+            Err(e) => respond_json(&mut stream, "400 Bad Request", &json!({ "error": e })).await,
+        }
+        return;
+    }
     // Who asks: Sir (his pairing key), an account (its key), or no one yet (the page logs in).
     let who = if same_token(req.key(), &token) { Some(Caller::Sir) } else { crate::accounts::session(&db, req.key()).map(Caller::Guest) };
     if open_to_anyone(&mut stream, &req, who.as_ref(), &token, &db, peer).await {
@@ -681,7 +697,7 @@ async fn handle<S: AsyncRead + AsyncWrite + Unpin>(mut stream: S, app: Jai, peer
             for_account(&mut stream, &app, &req, &name, &db).await;
             return;
         }
-        Some(Caller::Sir) => {}
+        Some(Caller::Sir | Caller::Remote) => {}
     }
     let tools = app.tools().clone();
     match (req.method.as_str(), req.path.as_str()) {

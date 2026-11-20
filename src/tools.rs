@@ -135,6 +135,11 @@ pub struct ToolOutcome {
     pub state_changed: bool,
 }
 
+tokio::task_local! {
+    /// Inside a call an account was allowed: what it does in turn is allowed with it.
+    static VOUCHED: ();
+}
+
 #[derive(Clone)]
 pub struct ToolContext {
     pub memory: MemoryManager,
@@ -161,7 +166,8 @@ pub struct ToolContext {
     pub workout: crate::workout_coach::WorkoutCoach,
     /// Context graph, contacts, WhatsApp, inbox, macros, hivemind, location and the Simulation Lab.
     pub stark: crate::stark::StarkSystems,
-    /// Whose turn these tools serve: Sir (everything), or an account (what Sir allowed it).
+    /// Whose turn these tools serve: Sir (everything on his main PC), his order from there, or an
+    /// account (what Sir allowed it).
     pub caller: crate::accounts::Caller,
 }
 
@@ -615,25 +621,42 @@ impl ToolContext {
         // "Make it full screen", "minimise it", "move it to the left" right after one of his own
         // views was opened, moved or arranged mean that view, not the app in front; "exit full
         // screen" means the view of his filling a screen (`window_commands::redirect`).
-        let (name, mut args) = match crate::window_commands::redirect_for(self, name, &args) {
+        let (name, args) = match crate::window_commands::redirect_for(self, name, &args) {
             Some(call) => {
                 info!("[TOOL] {name} {args} → arrange_jai_window {call} (it is a view of his)");
                 ("arrange_jai_window", call)
             }
             None => (name, args),
         };
-        // Someone other than Sir: only what Sir allowed that account (his accounts list).
-        if let Some(guest) = self.caller.guest() {
-            let db = self.config.read(|c| c.memory_db_path.clone());
-            let why = match crate::accounts::get(&db, guest) {
-                Some(account) => account.refusal(name, &args),
-                None => Some("Sir has not given you that permission.".to_string()),
+        // Someone other than Sir, or whoever sits at another PC of his: only what Sir allowed
+        // that account (his accounts list). What an allowed call does in turn (a view's reads, a
+        // protocol's steps) comes with it.
+        if VOUCHED.try_with(|_| ()).is_err() && self.caller != crate::accounts::Caller::Remote {
+            let why = match &self.caller {
+                // (Sir's own windows are no account's, whatever its switches.)
+                crate::accounts::Caller::Guest(guest) => match crate::accounts::get(&self.config.read(|c| c.memory_db_path.clone()), guest) {
+                    Some(account) => account.refusal(name, &args).or_else(|| crate::admin::window_of(name, &args).filter(|(w, opens)| w.sirs && *opens).map(|_| crate::admin::NOT_YOURS.to_string())),
+                    None => Some(crate::admin::NOT_YOURS.to_string()),
+                },
+                _ => crate::admin::refusal(&self.config, name, &args),
             };
             if let Some(why) = why {
-                info!("[TOOL] {name} {args} refused for {guest}: not allowed");
+                info!("[TOOL] {name} {args} refused for {}: not allowed", self.caller);
                 return ToolOutcome { tool: name.to_string(), args, output: format!("Error: {why}"), success: false, duration_ms: 0, memories_changed: false, skills_changed: false, shutdown_requested: false, modality_changed: false, state_changed: false };
             }
+            if self.caller.guest().is_some() || crate::fleet::is_client(&self.config.read(|c| c.main_pc.clone())) {
+                return VOUCHED.scope((), self.carry_out(name, args)).await;
+            }
         }
+        // (Sir's order from his main PC: a window it opens here is his while it is open.)
+        if self.caller == crate::accounts::Caller::Remote {
+            crate::admin::sirs_call(name, &args);
+        }
+        self.carry_out(name, args).await
+    }
+
+    /// A call that may be made, carried out.
+    async fn carry_out(&self, name: &str, mut args: Value) -> ToolOutcome {
         // A silent scripted session acts inside JAI only.
         if silent_session() && !stays_inside(name, &args) {
             info!("[TOOL] {name} {args} (noted, not carried out: a silent session leaves the PC around JAI alone)");

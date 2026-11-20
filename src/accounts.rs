@@ -21,22 +21,26 @@ use crate::vault::Vault;
 /// Who a turn is for.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub enum Caller {
-    /// Sir: his voice, his keyboard, his phone, his orders to another PC. No limit at all.
+    /// Sir: his voice, his keyboard, his phone. No limit at all on his main PC; on another PC
+    /// of his, whoever sits there, as far as its account and his sign-in go (`admin`).
     #[default]
     Sir,
+    /// Sir's order from his main PC, carried out on another PC of his: his, whatever that PC's
+    /// account may.
+    Remote,
     /// Anyone else, by account name.
     Guest(String),
 }
 
 impl Caller {
     pub fn is_sir(&self) -> bool {
-        *self == Caller::Sir
+        matches!(self, Caller::Sir | Caller::Remote)
     }
 
     pub fn guest(&self) -> Option<&str> {
         match self {
             Caller::Guest(name) => Some(name),
-            Caller::Sir => None,
+            Caller::Sir | Caller::Remote => None,
         }
     }
 }
@@ -80,6 +84,9 @@ pub struct Account {
     pub until: i64,
     pub created: i64,
     pub devices: Vec<Device>,
+    /// Sir's own admin account, made once on his main PC: it signs in at another PC's admin
+    /// window and nowhere else (`admin`).
+    pub admin: bool,
 }
 
 /// The topics Sir can close to an account (id, label, the words that ask about it).
@@ -119,9 +126,13 @@ impl Account {
     /// Why this account may not make this call; None: it may.
     pub fn refusal(&self, tool: &str, args: &Value) -> Option<String> {
         let keys = keys(tool, args);
-        let denied = keys.iter().any(|k| self.deny.contains(k));
         let allowed = self.allow.iter().any(|a| a == "*" || keys.contains(a));
-        (denied || !allowed).then(|| "Sir has not given you that permission.".to_string())
+        (self.denies(tool, args) || !allowed).then(|| "Sir has not given you that permission.".to_string())
+    }
+
+    /// Whether Sir switched off something this call names (a value of one of its options).
+    pub fn denies(&self, tool: &str, args: &Value) -> bool {
+        keys(tool, args).iter().any(|k| self.deny.contains(k))
     }
 
     /// Whether this one call would be allowed: the tool, or one value of an option.
@@ -285,8 +296,9 @@ pub fn password(vault: &Vault, name: &str) -> Option<String> {
 /// The account a guest's voice belongs to: kept for a voice Sir introduced (what it may: the
 /// music, or everything) or one that told its name; made when there is none yet.
 pub fn for_voice(db: &str, name: &str, may: &str) -> Option<Account> {
+    // (Never his admin account: a voice of that name is somebody else's.)
     if let Some(account) = get(db, name) {
-        return Some(account);
+        return (!account.admin).then_some(account);
     }
     let mut account = Account::new(name);
     account.allow = voice_allow(may);
@@ -307,6 +319,17 @@ pub fn voice_allow(may: &str) -> Vec<String> {
 /// A name or a password as Sir asked for them: 3 to 20 characters (a name: letters, digits,
 /// `_ - .`; a password: anything but control characters).
 pub fn check(text: &str, name: bool) -> Result<(), String> {
+    shape(text, name)?;
+    // (Nobody signs up as the one they would be taken for.)
+    if name && ["sir", "jai", "jay", "j.a.i.", "owner", "admin", "root", "system"].contains(&text.to_lowercase().as_str()) {
+        return Err("That name is taken.".into());
+    }
+    Ok(())
+}
+
+/// A name or a password of the right length and characters (Sir's own admin account may take
+/// any name: "admin" too).
+fn shape(text: &str, name: bool) -> Result<(), String> {
     let what = if name { "A name" } else { "A password" };
     let count = text.chars().count();
     if !(3..=20).contains(&count) {
@@ -316,10 +339,6 @@ pub fn check(text: &str, name: bool) -> Result<(), String> {
     if !text.chars().all(fits) {
         return Err(if name { "A name has letters, digits, _ - and . only.".into() } else { "A password has no control characters.".into() });
     }
-    // (Nobody signs up as the one they would be taken for.)
-    if name && ["sir", "jai", "jay", "j.a.i.", "owner", "admin", "root", "system"].contains(&text.to_lowercase().as_str()) {
-        return Err("That name is taken.".into());
-    }
     Ok(())
 }
 
@@ -327,7 +346,7 @@ fn same(a: &str, b: &str) -> bool {
     a.len() == b.len() && a.bytes().zip(b.bytes()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
-fn fresh_key() -> String {
+pub(crate) fn fresh_key() -> String {
     format!("{}{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple())
 }
 
@@ -353,7 +372,19 @@ pub fn logout(db: &str, key: &str) {
 }
 
 /// A login: the key its phone or PC sends from now on. `from`: where it came from (its address).
+/// Sir's admin account logs in nowhere: it signs in at an admin window (`admin`), for as long
+/// as that window is open.
 pub fn login(db: &str, vault: &Vault, name: &str, given: &str, from: &str) -> Result<String, String> {
+    let account = verify(db, vault, name, given, from)?;
+    if account.admin {
+        return Err("Sir's admin account opens his admin windows only; log in with an account of this PC's user.".into());
+    }
+    issue_key(db, &account.name)
+}
+
+/// The account whose name and password these are, within the limits on tries. `from`: where
+/// they came from (its address).
+pub fn verify(db: &str, vault: &Vault, name: &str, given: &str, from: &str) -> Result<Account, String> {
     let name = name.trim();
     if !knock("login", from, 20, Duration::from_secs(600)) || !knock("login", "", 120, Duration::from_secs(60)) {
         return Err("Too many tries. Wait a few minutes.".into());
@@ -363,14 +394,31 @@ pub fn login(db: &str, vault: &Vault, name: &str, given: &str, from: &str) -> Re
     }
     let account = get(db, name);
     let right = account.as_ref().and_then(|a| password(vault, &a.name)).is_some_and(|p| same(&p, given));
-    match account.filter(|_| right) {
-        Some(account) => issue_key(db, &account.name),
-        None => {
-            strike(&format!("name:{}", name.to_lowercase()));
-            strike(&format!("from:{from}"));
-            Err("That name and password do not match.".into())
-        }
+    account.filter(|_| right).ok_or_else(|| {
+        strike(&format!("name:{}", name.to_lowercase()));
+        strike(&format!("from:{from}"));
+        "That name and password do not match.".to_string()
+    })
+}
+
+/// Sir's admin account, once he made it.
+pub fn admin(db: &str) -> Option<Account> {
+    all(db).into_iter().find(|a| a.admin)
+}
+
+/// Sir makes his admin account on his main PC: once, with a name no other account has.
+pub fn make_admin(db: &str, vault: &Vault, name: &str, password: &str) -> Result<(), String> {
+    let name = name.trim();
+    shape(name, true)?;
+    shape(password, false)?;
+    if admin(db).is_some() {
+        return Err("Your admin account is made already.".into());
     }
+    if get(db, name).is_some() {
+        return Err("An account of that name is someone else's.".into());
+    }
+    vault.set_secret(PASSWORDS, &name.to_lowercase(), password)?;
+    save(db, &Account { admin: true, ..Account::new(name) })
 }
 
 // ------------------------------------------------------------------------- signing up ----
@@ -463,7 +511,7 @@ pub fn seen(db: &str, name: &str, device: Device) {
 // ------------------------------------------------------------------ what he did for whom ----
 
 /// One thing J.A.I. did for someone, kept for Sir ("what did you do for Max today?").
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Done {
     pub at: i64,
     pub name: String,
@@ -611,45 +659,68 @@ pub async fn run(ctx: &crate::tools::ToolContext, args: &Value) -> Result<String
     if !ctx.caller.is_sir() {
         return Err("Only Sir can see or change the accounts.".into());
     }
-    let db = ctx.config.read(|c| c.memory_db_path.clone());
-    let name = args["name"].as_str().unwrap_or("").trim();
-    let account = || get(&db, name).ok_or_else(|| format!("There is no account called {name}."));
-    match args["action"].as_str().unwrap_or("show") {
-        "show" => {
+    let (db, main) = ctx.config.read(|c| (c.memory_db_path.clone(), c.main_pc.clone()));
+    // (On another PC of his, signed in there: the accounts are his main PC's.)
+    let here = !crate::fleet::is_client(&main);
+    let (said, text) = match args["action"].as_str().unwrap_or("show") {
+        "show" if here => {
             crate::gui::show_accounts(Some(db.clone()));
             let n = all(&db).len();
-            Ok(crate::kit::say(format!("The accounts list is open ({n} accounts)."), "The accounts are on your screen, Sir."))
+            return Ok(crate::kit::say(format!("The accounts list is open ({n} accounts)."), "The accounts are on your screen, Sir."));
+        }
+        "show" => {
+            crate::gui::show_remote_accounts();
+            return Ok(crate::kit::say("Your accounts list, from your main PC.", "Your accounts, Sir, from your main PC."));
         }
         "close" => {
             crate::gui::show_accounts(None);
-            Ok(crate::kit::say("The accounts list is closed.", "Closed, Sir."))
+            return Ok(crate::kit::say("The accounts list is closed.", "Closed, Sir."));
         }
-        "report" => report(&db, name, args["since"].as_str().unwrap_or("today")),
+        _ if here => act(&db, args)?,
+        _ => {
+            let v = crate::admin::remote(serde_json::json!({ "action": "act", "args": args })).await?;
+            (v["said"].as_str().unwrap_or("Done.").to_string(), serde_json::from_value(v["text"].clone()).ok())
+        }
+    };
+    if let Some((title, text)) = text {
+        crate::kit::show_text("account_report", &title, &text, [560.0, 480.0]);
+    }
+    Ok(said)
+}
+
+/// What Sir's orders about the accounts change or find on his main PC: what he is told, and the
+/// lines of a report to put on his screen. His own admin account is not paused or removed.
+pub fn act(db: &str, args: &Value) -> Result<(String, Option<(String, String)>), String> {
+    let name = args["name"].as_str().unwrap_or("").trim();
+    let account = || get(db, name).filter(|a| !a.admin).ok_or_else(|| format!("There is no account called {name}."));
+    let said = match args["action"].as_str().unwrap_or("") {
+        "report" => return report(db, name, args["since"].as_str().unwrap_or("today")),
         "pause" => {
             let minutes = args["minutes"].as_i64().unwrap_or(60).clamp(0, 525_600);
             let a = account()?;
-            update(&db, &a.name, |a| a.until = if minutes > 0 { now() + minutes * 60 } else { 0 })?;
-            Ok(match minutes {
+            update(db, &a.name, |a| a.until = if minutes > 0 { now() + minutes * 60 } else { 0 })?;
+            match minutes {
                 0 => crate::kit::say(format!("{} may use J.A.I. again.", a.name), format!("{} may use me again, Sir.", a.name)),
                 m => {
                     let span = if m % 1440 == 0 { format!("{} day(s)", m / 1440) } else if m % 60 == 0 { format!("{} hour(s)", m / 60) } else { format!("{m} minute(s)") };
                     crate::kit::say(format!("{} is paused for {span}.", a.name), format!("{} is paused for {span}, Sir.", a.name))
                 }
-            })
+            }
         }
         "remove" => {
             let a = account()?;
-            let vault = Vault::open(&db)?;
-            remove(&db, &vault, &a.name);
-            Ok(crate::kit::say(format!("{}'s account is removed; their phones and PCs are logged out.", a.name), format!("{}'s account is gone, Sir.", a.name)))
+            let vault = Vault::open(db)?;
+            remove(db, &vault, &a.name);
+            crate::kit::say(format!("{}'s account is removed; their phones and PCs are logged out.", a.name), format!("{}'s account is gone, Sir.", a.name))
         }
-        other => Err(format!("The accounts know no action '{other}'.")),
-    }
+        other => return Err(format!("The accounts know no action '{other}'.")),
+    };
+    Ok((said, None))
 }
 
 /// What J.A.I. did for someone (everyone: an empty name) today, yesterday, this week or so far:
-/// on Sir's screen line by line, and in a sentence.
-fn report(db: &str, name: &str, since: &str) -> Result<String, String> {
+/// in a sentence, and line by line for Sir's screen.
+fn report(db: &str, name: &str, since: &str) -> Result<(String, Option<(String, String)>), String> {
     let midnight = chrono::Local::now().date_naive().and_hms_opt(0, 0, 0).and_then(|t| t.and_local_timezone(chrono::Local).earliest()).map_or(now() - 86_400, |t| t.timestamp());
     let (from, until, span) = match since {
         "yesterday" => (midnight - 86_400, midnight, "yesterday"),
@@ -661,7 +732,7 @@ fn report(db: &str, name: &str, since: &str) -> Result<String, String> {
     let done: Vec<Done> = log(db, who.as_deref(), from).into_iter().filter(|d| d.at < until).collect();
     let whom = who.clone().unwrap_or_else(|| "the others".into());
     if done.is_empty() {
-        return Ok(crate::kit::say(format!("Nothing for {whom} {span}."), format!("I did nothing for {whom} {span}, Sir.")));
+        return Ok((crate::kit::say(format!("Nothing for {whom} {span}."), format!("I did nothing for {whom} {span}, Sir.")), None));
     }
     let cut = |t: &str, n: usize| if t.chars().count() > n { format!("{}…", t.chars().take(n).collect::<String>()) } else { t.to_string() };
     let lines: Vec<String> = done
@@ -672,7 +743,6 @@ fn report(db: &str, name: &str, since: &str) -> Result<String, String> {
             format!("{at}  {} ({})\n   asked: {}\n   answer: {}{ran}", d.name, d.via, cut(&d.asked, 200), cut(&d.answered, 240))
         })
         .collect();
-    crate::kit::show_text("account_report", &format!("What I did for {whom}"), &lines.join("\n\n"), [560.0, 480.0]);
     let mut names: Vec<&str> = done.iter().map(|d| d.name.as_str()).collect();
     names.dedup();
     names.sort_unstable();
@@ -685,7 +755,7 @@ fn report(db: &str, name: &str, since: &str) -> Result<String, String> {
         if who.is_some() { whom.clone() } else { names.join(", ") },
         if acted > 0 { format!(", {acted} with a tool") } else { String::new() }
     );
-    Ok(crate::kit::say(format!("{} requests from {} {span}.", done.len(), names.join(", ")), spoken))
+    Ok((crate::kit::say(format!("{} requests from {} {span}.", done.len(), names.join(", ")), spoken), Some((format!("What I did for {whom}"), lines.join("\n\n")))))
 }
 
 // ------------------------------------------------------------------ what can be allowed ----
@@ -883,5 +953,24 @@ mod tests {
         for not_ours in ["resume spotify", "pause spotify for 10 minutes", "report on the weather", "what did you do today", "pause the music for 5 minutes", "remove the widget"] {
             assert!(command(not_ours).is_none(), "{not_ours}");
         }
+    }
+
+    /// Sir's admin account: made once, under any name; it logs in nowhere (no PC or phone holds
+    /// it), no voice is taken for it, and his orders neither pause nor remove it.
+    #[test]
+    fn his_admin_account_signs_in_at_admin_windows_only() {
+        let (db, vault) = (db(), Vault::in_memory());
+        assert!(check("admin", true).is_err(), "nobody else is called admin");
+        make_admin(&db, &vault, "admin", "geheim123").unwrap();
+        assert!(admin(&db).is_some_and(|a| a.admin && a.name == "admin"));
+        assert!(make_admin(&db, &vault, "Max", "geheim123").is_err(), "once");
+        assert!(login(&db, &vault, "admin", "geheim123", "10.0.1.1").unwrap_err().contains("admin windows"));
+        assert!(verify(&db, &vault, "ADMIN", "geheim123", "10.0.1.1").is_ok_and(|a| a.admin));
+        assert!(for_voice(&db, "Admin", "everything").is_none(), "a voice of his account's name is not his");
+        for args in [json!({"action": "pause", "name": "admin", "minutes": 60}), json!({"action": "remove", "name": "admin"})] {
+            assert!(act(&db, &args).is_err(), "{args}");
+        }
+        assert!(get(&db, "admin").is_some_and(|a| a.until == 0));
+        assert!(act(&db, &json!({"action": "report", "name": "", "since": "week"})).is_ok_and(|(_, lines)| lines.is_none()), "nothing done yet: no list");
     }
 }

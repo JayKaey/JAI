@@ -12,6 +12,7 @@
 
 mod accounts;
 mod acoustic_radar;
+mod admin;
 mod aegis_server_deck;
 mod airdrop_bridge;
 mod announcements;

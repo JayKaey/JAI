@@ -1,13 +1,17 @@
 //! The accounts list ("open the accounts list"): everyone besides Sir who may use J.A.I., with
 //! their passwords; what each may do, every tool and every value of its options one by one (the
 //! Earth, but not its satellites); the topics closed to them; a pause; their phones and PCs with
-//! what those PCs run; and what J.A.I. did for them. Only Sir opens it (`accounts::run`).
+//! what those PCs run; and what J.A.I. did for them. Only Sir opens it (`accounts::run`). On
+//! another PC of his, in admin mode, it shows the accounts at his main PC and changes them there
+//! (`admin::remote_accounts`).
 
 use super::{strip_ink, strip_muted};
 use crate::accounts::{self, Account, Grant, TOPICS};
+use crate::admin::{self, Remote};
 use crate::holo::Face;
 use crate::holo_ui;
 use eframe::egui::{self, Frame, Margin, RichText, Ui, ViewportBuilder, ViewportClass, ViewportCommand, ViewportId};
+use serde_json::json;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
@@ -20,6 +24,8 @@ static OPEN: AtomicBool = AtomicBool::new(false);
 struct View {
     /// The memory database the accounts are kept in.
     db: String,
+    /// The accounts at Sir's main PC, from another PC of his in admin mode.
+    remote: bool,
     grants: Vec<Grant>,
     /// The account unfolded.
     chosen: String,
@@ -38,16 +44,20 @@ fn lock() -> MutexGuard<'static, Option<View>> {
     VIEW.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-pub(super) fn open(db: String) {
+pub(super) fn open(db: String, remote: bool) {
     let grants = accounts::grants(&crate::tools::definitions_with(Vec::new()));
     let mut view = lock();
-    let chosen = view.as_ref().filter(|v| v.db == db).map(|v| v.chosen.clone()).unwrap_or_default();
-    *view = Some(View { db, grants, chosen, ..Default::default() });
+    let chosen = view.as_ref().filter(|v| v.db == db && v.remote == remote).map(|v| v.chosen.clone()).unwrap_or_default();
+    *view = Some(View { db, remote, grants, chosen, ..Default::default() });
     OPEN.store(true, Ordering::Release);
 }
 
 pub(super) fn close() {
     OPEN.store(false, Ordering::Release);
+}
+
+pub(super) fn is_open() -> bool {
+    OPEN.load(Ordering::Acquire)
 }
 
 fn label(text: &str, size: f32) -> RichText {
@@ -69,6 +79,9 @@ fn ago(at: i64) -> String {
 
 /// What an account may do, in a few words.
 fn summary(a: &Account) -> String {
+    if a.admin {
+        return format!("{}  ·  your admin account", a.name);
+    }
     let may = if a.allow.iter().any(|k| k == "*") {
         "may do everything".to_string()
     } else if a.allow.is_empty() {
@@ -84,13 +97,19 @@ fn summary(a: &Account) -> String {
 fn body(ui: &mut Ui) {
     let mut guard = lock();
     let Some(view) = guard.as_mut() else { return };
-    let all = accounts::all(&view.db);
-    let waiting = accounts::waiting();
-    if !waiting.is_empty() {
-        // (A key's minutes run down.)
+    let remote = view.remote.then(|| admin::remote_accounts(&view.chosen));
+    let (all, waiting) = match &remote {
+        Some(r) => (r.accounts.clone(), r.waiting.clone()),
+        None => (accounts::all(&view.db), accounts::waiting()),
+    };
+    if !waiting.is_empty() || remote.is_some() {
+        // (A key's minutes run down; his main PC's list is looked at again.)
         ui.ctx().request_repaint_after(Duration::from_secs(1));
     }
     crate::holo_block::faded(ui, egui::ScrollArea::vertical().auto_shrink([false; 2]), |ui| {
+        if let Some(r) = remote.as_ref().filter(|r| !r.error.is_empty()) {
+            ui.label(RichText::new(&r.error).font(crate::holo::font(Face::Body, 13.0)).color(crate::holo::theme().alert()));
+        }
         if !waiting.is_empty() {
             holo_ui::head(ui, "Asking for an account");
             for (name, code, left) in &waiting {
@@ -99,7 +118,10 @@ fn body(ui: &mut Ui) {
                     ui.label(RichText::new(format!("{} {}", &code[..3], &code[3..])).font(crate::holo::font(Face::Figure, 18.0)).color(crate::holo::theme().accent()));
                     ui.label(muted(&format!("holds {}:{:02}", left / 60, left % 60)));
                     if holo_ui::key(ui, "REFUSE").clicked() {
-                        accounts::refuse(name);
+                        match remote {
+                            Some(_) => admin::remote_change(json!({ "action": "refuse", "name": name })),
+                            None => accounts::refuse(name),
+                        }
                     }
                 });
             }
@@ -118,31 +140,46 @@ fn body(ui: &mut Ui) {
         }
         if let Some(a) = all.iter().find(|a| a.name.eq_ignore_ascii_case(&view.chosen)) {
             holo_ui::rule(ui);
-            detail(ui, view, a);
+            detail(ui, view, a, remote.as_ref());
         }
     });
 }
 
-/// One account unfolded.
-fn detail(ui: &mut Ui, view: &mut View, a: &Account) {
+/// One account unfolded (`remote`: one at Sir's main PC, changed there).
+fn detail(ui: &mut Ui, view: &mut View, a: &Account, remote: Option<&Remote>) {
     let db = view.db.clone();
     let change = |f: &mut dyn FnMut(&mut Account)| {
-        if let Err(e) = accounts::update(&db, &a.name, |x| f(x)) {
+        if remote.is_some() {
+            let mut changed = a.clone();
+            f(&mut changed);
+            admin::remote_change(json!({ "action": "save", "name": a.name, "account": changed }));
+        } else if let Err(e) = accounts::update(&db, &a.name, |x| f(x)) {
             tracing::warn!("[ACCOUNTS] {}'s account could not be changed: {e}", a.name);
         }
     };
     ui.label(label(&a.name, 12.0));
-    ui.horizontal(|ui| {
-        ui.label(label("Password", 8.0));
-        let shown = view.shown.as_ref().filter(|(n, _)| n.eq_ignore_ascii_case(&a.name)).map(|(_, p)| p.clone());
-        ui.label(RichText::new(shown.clone().unwrap_or_else(|| "••••••••".into())).font(crate::holo::font(Face::Mono, 13.0)).color(strip_ink()));
-        if holo_ui::key(ui, if shown.is_some() { "HIDE" } else { "SHOW" }).clicked() {
-            view.shown = match shown {
-                Some(_) => None,
-                None => crate::vault::Vault::open(&db).ok().and_then(|v| accounts::password(&v, &a.name)).map(|p| (a.name.clone(), p)),
-            };
-        }
-    });
+    if a.admin {
+        ui.label(muted("Your admin account: it signs you in at the admin window of another PC, and nowhere else. Nobody logs in with it, and it changes on your main PC alone."));
+    }
+    // (His own admin password is shown on his main PC only.)
+    if !(a.admin && remote.is_some()) {
+        ui.horizontal(|ui| {
+            ui.label(label("Password", 8.0));
+            let shown = remote.map_or(view.shown.clone(), |r| r.shown.clone()).filter(|(n, _)| n.eq_ignore_ascii_case(&a.name)).map(|(_, p)| p);
+            ui.label(RichText::new(shown.clone().unwrap_or_else(|| "••••••••".into())).font(crate::holo::font(Face::Mono, 13.0)).color(strip_ink()));
+            if holo_ui::key(ui, if shown.is_some() { "HIDE" } else { "SHOW" }).clicked() {
+                match (remote, shown) {
+                    (Some(_), Some(_)) => admin::hide_password(),
+                    (Some(_), None) => admin::remote_change(json!({ "action": "password", "name": a.name })),
+                    (None, Some(_)) => view.shown = None,
+                    (None, None) => view.shown = crate::vault::Vault::open(&db).ok().and_then(|v| accounts::password(&v, &a.name)).map(|p| (a.name.clone(), p)),
+                }
+            }
+        });
+    }
+    if a.admin {
+        return;
+    }
     ui.horizontal_wrapped(|ui| {
         match a.paused() {
             Some(until) => {
@@ -162,7 +199,9 @@ fn detail(ui: &mut Ui, view: &mut View, a: &Account) {
         let arming = view.removing.eq_ignore_ascii_case(&a.name);
         if holo_ui::key_alert(ui, if arming { "REMOVE FOR GOOD?" } else { "REMOVE" }).clicked() {
             if arming {
-                if let Ok(vault) = crate::vault::Vault::open(&db) {
+                if remote.is_some() {
+                    admin::remote_change(json!({ "action": "remove", "name": a.name }));
+                } else if let Ok(vault) = crate::vault::Vault::open(&db) {
                     accounts::remove(&db, &vault, &a.name);
                 }
                 view.chosen.clear();
@@ -204,6 +243,16 @@ fn detail(ui: &mut Ui, view: &mut View, a: &Account) {
                     }
                 });
             });
+        }
+    });
+    holo_ui::fold(ui, ("windows", &a.name), &format!("Windows on {}'s PC", a.name), false, |ui| {
+        ui.label(muted("On their PC a window opens when it is on here; any other asks for your admin sign-in. Yours (the accounts, the settings, the labs, Discord) are never theirs."));
+        for w in admin::WINDOWS.iter().filter(|w| !w.sirs) {
+            let key = admin::key(w.id);
+            let mut on = a.allows(&key);
+            if holo_ui::toggle(ui, &mut on, format!("{}: {}", w.title, w.about)).changed() {
+                change(&mut |x| x.set(&key, on));
+            }
         }
     });
     holo_ui::fold(ui, ("topics", &a.name), &format!("Topics closed to {}", a.name), false, |ui| {
@@ -259,7 +308,10 @@ fn detail(ui: &mut Ui, view: &mut View, a: &Account) {
         }
     });
     holo_ui::fold(ui, ("log", &a.name), &format!("What J.A.I. did for {} this week", a.name), false, |ui| {
-        let done = accounts::log(&db, Some(&a.name), accounts::now() - 7 * 86_400);
+        let done = match remote {
+            Some(r) => r.log.iter().filter(|d| d.name.eq_ignore_ascii_case(&a.name)).cloned().collect(),
+            None => accounts::log(&db, Some(&a.name), accounts::now() - 7 * 86_400),
+        };
         if done.is_empty() {
             ui.label(muted("Nothing this week."));
         }
@@ -337,6 +389,7 @@ mod tests {
         max.topics.push("maths".into());
         max.devices.push(accounts::Device { id: "a1b2c3d4".into(), kind: "pc".into(), label: "Musterstadt-PC (Windows 11)".into(), version: "3.1.0".into(), stats: "CPU 12 % · RAM 7.9 / 32 GB · RTX 4060 8 GB".into(), seen: accounts::now() - 120 });
         accounts::save(&db, &max).unwrap();
+        accounts::make_admin(&db, &crate::vault::Vault::in_memory(), "Mustermann", "geheim123").unwrap();
         let definitions = vec![json!({"type": "function", "function": {"name": "open_jai_view", "description": "Opens one of his views. More.", "parameters": {"type": "object", "properties": {"view": {"type": "string", "enum": ["earth", "disk_map"]}, "action": {"type": "string", "description": "earth: show, show_satellites"}}}}})];
         *lock() = Some(View { db: db.clone(), grants: accounts::grants(&definitions), chosen: "Max".into(), ..Default::default() });
         let mut stage = Stage::new(egui::vec2(640.0, 900.0));
@@ -346,7 +399,7 @@ mod tests {
         stage.raster(&frame).save("panel_accounts");
         assert_eq!(visual::clipped_text(&frame), Vec::<String>::new());
         assert_eq!(visual::text_over_text(&frame), Vec::<String>::new());
-        for shown in ["MAX", "PASSWORD", "SHOW", "PAUSE 1 H", "REMOVE", "open_jai_view: Opens one of his views", "Everything, as Sir may (this PC included)", "pc_power: Shut down, restart, sleep or lock this PC"] {
+        for shown in ["MAX", "PASSWORD", "SHOW", "PAUSE 1 H", "REMOVE", "open_jai_view: Opens one of his views", "Everything, as Sir may (this PC included)", "pc_power: Shut down, restart, sleep or lock this PC", "WINDOWS ON MAX'S PC", "Mustermann  ·  your admin account"] {
             assert!(!frame.find_text(shown).is_empty(), "'{shown}' is not in the list");
         }
         *lock() = None;

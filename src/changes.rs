@@ -120,6 +120,7 @@ pub const RELEASES: &[Release] = &[
             new("J.A.I. on other PCs", "Install him on a friend's PC: your PC stays the main one, sends orders and they can't touch it.", "other_pcs"),
             new("Accounts for everyone else", "Only your voice and phone may do everything; anyone else needs an account that only asks.", "accounts"),
             new("The accounts list", "\"Open the accounts list\": passwords, every permission one by one, pauses, topics, PCs.", "accounts"),
+            new("The admin window", "\"Open the admin window\": every window he has, yours first; other PCs ask for your sign-in.", "admin"),
             new("\"Who am I speaking with?\"", "A voice he has never heard is asked its name and learnt; it may ask questions, nothing more.", "unknown_voice"),
             added("Each phone knows its own place", "\"Where am I\" on a friend's phone answers with where that phone is, not where you are."),
             added("The phone page wears a theme", "Your PC's theme, or one picked under LOOK on the phone itself; your saved themes too."),
@@ -581,6 +582,13 @@ pub const EXPLANATIONS: &[Explanation] = &[
         what: "You are the only one who may do everything: by your voice, on your phone, on this PC. Everyone else needs an account. On the phone page anyone can ask for one with a name and a password (3 to 20 characters): a key appears on your screen, and only with that key from you is the account made. A new account may ask questions and nothing more. In the accounts list you see every account with its password, switch on what each may do tool by tool and down to single options (the Earth, but not its satellites), close topics to them (where they are, maths, your own words), pause them for an hour or a day, or remove them; you also see their phones and PCs and what J.A.I. did for them.",
         say: &["Jay, open the accounts list.", "Jay, öffne die Kontenliste.", "Jay, what did you do for Max today?"],
         know: "Logging in and asking for accounts are limited per address (a wrong password five times locks that name for ten minutes; one request a minute, three keys waiting at most), so the page cannot be flooded. Passwords are kept sealed in the vault, never in plain text on disk. Asked from an account, J.A.I. answers in a conversation of its own and never with anything of yours.",
+    },
+    Explanation {
+        id: "admin",
+        title: "The admin window",
+        what: "\"Open the admin window\" shows every window J.A.I. can open, in groups, yours first, and opens each with a click. Yours are yours alone on every PC: the accounts list, the report, the settings, the Feature Lab with the Tool Forge, and Discord. Your main PC asks once for your admin account (a name and a password) and answers nobody until it is made. On another PC, J.A.I. does what that PC's account may: a new account only talks to him, and a window it may not open asks for your admin sign-in in a pop-up instead, without logging the PC out. Signed in, that window is yours until it closes. The admin window there is admin mode: everything on that PC is yours, your accounts list and your orders to other PCs too, until it closes.",
+        say: &["Jay, open the admin window.", "Jay, activate admin mode.", "Jay, öffne das Admin-Fenster.", "Jay, admin mode off."],
+        know: "Your admin account logs in nowhere: it only signs you in at another PC, and it is never paused, removed or shown from there. When the last window your sign-in opened closes, the sign-in ends at once, on that PC and at your main PC, which also lets one go that its PC has not asked about for two minutes. In the accounts list, \"Windows on Max's PC\" switches each window on for that PC; an order you send to that PC from your main PC opens its window there all the same.",
     },
     Explanation {
         id: "unknown_voice",

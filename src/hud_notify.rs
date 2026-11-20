@@ -202,6 +202,16 @@ pub fn missed_text(now: DateTime<Local>) -> String {
 pub const MISSED_ID: &str = "missed";
 static MISSED_OPEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// Whether the history block is up, and closing it (`admin`: a window not this PC's).
+pub fn missed_is_open() -> bool {
+    MISSED_OPEN.load(std::sync::atomic::Ordering::Acquire)
+}
+
+pub fn close_missed() {
+    MISSED_OPEN.store(false, std::sync::atomic::Ordering::Release);
+    crate::hud_dock::forget(MISSED_ID);
+}
+
 /// Draws the history block while it is open ("what did I miss?" opens it).
 pub fn show(ctx: &egui::Context) {
     use std::sync::atomic::Ordering;

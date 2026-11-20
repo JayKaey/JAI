@@ -25,6 +25,14 @@ pub(super) fn open() {
     OPEN.store(true, Ordering::Release);
 }
 
+pub(super) fn is_open() -> bool {
+    OPEN.load(Ordering::Acquire)
+}
+
+pub(super) fn close() {
+    OPEN.store(false, Ordering::Release);
+}
+
 fn devices() -> Vec<String> {
     let mut d = DEVICES.lock().unwrap_or_else(|e| e.into_inner());
     if d.0.is_none_or(|at| at.elapsed() > Duration::from_secs(5)) {
