@@ -274,7 +274,9 @@ on another PC sends no orders anywhere: asked to act on Sir's PC, it says it can
 the version Sir's PC runs (a newer one is fetched at once and started; Sir's own PC never updates
 itself), hears of new commits on GitHub, and shows in the accounts list with its version and its
 PC's load. Voice prints are shared both ways and held in memory only: each stays on its owner's PC.
-A Linux PC installs him as well (see Linux).
+A Linux PC installs him as well (see Linux). Both installers are also on GitHub's Releases page
+(`JAI-setup-windows.zip`, `jai-linux-x86_64`): pushing a tag `v…` builds them into a draft
+release, which Sir publishes.
 
 ## Linux
 
