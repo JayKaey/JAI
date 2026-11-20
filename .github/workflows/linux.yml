@@ -20,7 +20,7 @@ jobs:
       - name: Build
         run: cargo build --release
       - name: Tests of the Linux parts
-        run: cargo test --release -- installer::tests::a_linux_pc kit_pc:: screen_context:: workbench:: fleet:: --test-threads=4
+        run: 'cargo test --release -- installer::tests::a_linux_pc kit_pc:: screen_context:: workbench:: fleet:: --test-threads=4'
       - uses: actions/upload-artifact@v4
         with:
           name: jai-linux-x86_64
