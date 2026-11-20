@@ -23,19 +23,20 @@
   @font-face { font-family:"JAI Head"; src:url("/satellite/static/head.ttf") format("truetype"); font-display:swap; }
   @font-face { font-family:"JAI Body"; src:url("/satellite/static/body.ttf") format("truetype"); font-display:swap; }
   @font-face { font-family:"JAI Mono"; src:url("/satellite/static/mono.ttf") format("truetype"); font-display:swap; }
-  :root { --bg:#020304; --ink:238,243,247; --card:rgba(11,12,13,.94); --line:rgba(var(--ink),.20); --line2:rgba(var(--ink),.85); --accent:#ffd400; --accent2:#ff8a00; --hot:#fff0a3; --text:#eef3f7; --muted:#8c97a2; --green:#eef3f7; --amber:#ff6a20; --red:#ff3b30;
+  /* (The theme's colours: the PC's own, or the one picked under LOOK; `wear` sets them.) */
+  :root { --bg:#020304; --bg-rgb:2,3,4; --ink:238,243,247; --card:rgba(11,12,13,.94); --line:rgba(var(--ink),.20); --line2:rgba(var(--ink),.85); --accent:#ffd400; --accent-rgb:255,212,0; --accent2:#ff8a00; --accent2-rgb:255,138,0; --hot:#fff0a3; --text:#eef3f7; --muted:#8c97a2; --green:#eef3f7; --amber:#ff6a20; --red:#ff3b30;
           --mono:"JAI Mono",ui-monospace,"Cascadia Mono",Menlo,Consolas,monospace; --display:"JAI Head","Bahnschrift","Segoe UI",sans-serif; --label:"JAI Label","Bahnschrift","Segoe UI",sans-serif; --figure:"JAI Figure","Bahnschrift","Segoe UI",sans-serif; --body:"JAI Body",-apple-system,"Segoe UI",Roboto,sans-serif; }
   * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
   html,body { margin:0; background:var(--bg); color:var(--text); font-family:var(--body); }
   /* The canvas: black, with the drafting table's dot grid. */
-  body { min-height:100vh; padding:0 12px max(16px, env(safe-area-inset-bottom)); max-width:720px; margin:0 auto; counter-reset:plate;
+  body { min-height:100vh; min-height:100dvh; padding:0 12px max(16px, env(safe-area-inset-bottom)); max-width:720px; margin:0 auto; counter-reset:plate;
          background-image:radial-gradient(rgba(var(--ink),.10) 1px, transparent 1.4px); background-size:24px 24px; background-attachment:fixed; }
   header { position:sticky; top:0; z-index:20; display:flex; align-items:center; gap:12px; margin:0 -12px 14px; padding:max(12px, env(safe-area-inset-top)) 12px 10px;
-           background:rgba(2,3,4,.94); border-bottom:1px solid var(--line); }
+           background:rgba(var(--bg-rgb),.94); border-bottom:1px solid var(--line); }
   /* (The rule under the header carries a filament in his colour on its middle.) */
   header::after { content:""; position:absolute; left:38%; right:38%; bottom:-1px; height:1px; background:var(--accent); box-shadow:0 0 10px var(--accent), 0 0 3px var(--hot); }
   .logo { width:40px; height:40px; border-radius:50%; border:1px solid rgba(var(--ink),.45); display:grid; place-items:center; font:400 8px var(--label); letter-spacing:.5px; color:var(--text); position:relative;
-          box-shadow:inset 0 0 0 5px var(--bg), inset 0 0 0 6.5px var(--accent), 0 0 14px rgba(255,212,0,.30); }
+          box-shadow:inset 0 0 0 5px var(--bg), inset 0 0 0 6.5px var(--accent), 0 0 14px rgba(var(--accent-rgb),.30); }
   h1 { font:400 17px var(--label); letter-spacing:5px; margin:0; color:var(--text); }
   .sub { font:400 7.5px var(--label); color:var(--muted); letter-spacing:1.6px; margin-top:4px; text-transform:uppercase; }
   .badges { margin-left:auto; display:flex; flex-direction:column; gap:4px; align-items:flex-end; }
@@ -70,10 +71,10 @@
   .orb { width:84px; height:84px; flex:none; border-radius:50%; position:relative; border:1px solid rgba(var(--ink),.30); }
   .orb::before { content:""; position:absolute; inset:7px; border-radius:50%; animation:spin 24s linear infinite;
           background:repeating-conic-gradient(rgba(var(--ink),.55) 0 1.2deg, transparent 1.2deg 6deg); -webkit-mask:radial-gradient(circle, transparent 62%, #000 63%, #000 70%, transparent 71%); mask:radial-gradient(circle, transparent 62%, #000 63%, #000 70%, transparent 71%); }
-  .orb::after { content:""; position:absolute; inset:19px; border-radius:50%; border:2px solid var(--accent); box-shadow:0 0 16px rgba(255,212,0,.55), inset 0 0 12px rgba(255,138,0,.35), 0 0 2px var(--hot); animation:breathe 3s ease-in-out infinite; }
+  .orb::after { content:""; position:absolute; inset:19px; border-radius:50%; border:2px solid var(--accent); box-shadow:0 0 16px rgba(var(--accent-rgb),.55), inset 0 0 12px rgba(var(--accent2-rgb),.35), 0 0 2px var(--hot); animation:breathe 3s ease-in-out infinite; }
   .orb.thinking::before { animation-duration:3s; }
   .orb.thinking::after { animation-duration:.9s; }
-  .orb.speaking::after { border-color:var(--hot); box-shadow:0 0 22px rgba(255,212,0,.85), inset 0 0 14px rgba(255,212,0,.5), 0 0 3px #fff; }
+  .orb.speaking::after { border-color:var(--hot); box-shadow:0 0 22px rgba(var(--accent-rgb),.85), inset 0 0 14px rgba(var(--accent-rgb),.5), 0 0 3px #fff; }
   @keyframes spin { to { transform:rotate(360deg); } }
   @keyframes breathe { 50% { opacity:.72; } }
   .state { font:300 24px var(--figure); letter-spacing:2px; color:var(--text); text-transform:uppercase; }
@@ -91,8 +92,8 @@
   .row { display:flex; gap:6px; margin-top:10px; flex-wrap:wrap; }
   .row > button { flex:1 1 auto; }
   /* A line to type into: a slot on a hairline that lights while it has the keyboard. */
-  input[type=text] { flex:1 1 60%; min-width:0; min-height:46px; background:transparent; color:var(--text); border:0; border-bottom:1px solid rgba(var(--ink),.34); border-radius:0; padding:11px 8px; font:15px var(--body); outline:none; }
-  input[type=text]:focus,textarea:focus,select:focus,input[type=number]:focus { border-color:var(--accent); box-shadow:0 6px 10px -8px var(--accent); }
+  input[type=text],input[type=password] { flex:1 1 60%; min-width:0; min-height:46px; background:transparent; color:var(--text); border:0; border-bottom:1px solid rgba(var(--ink),.34); border-radius:0; padding:11px 8px; font:15px var(--body); outline:none; }
+  input[type=text]:focus,input[type=password]:focus,textarea:focus,select:focus,input[type=number]:focus { border-color:var(--accent); box-shadow:0 6px 10px -8px var(--accent); }
   /* A key leans: its sides are drawn as slanted hairlines, its word in wide capitals. Pressed
      it is a solid block of his colour with black lettering. */
   button { min-height:44px; color:var(--text); border:0; border-radius:0; padding:10px 16px; font:400 9px var(--label); letter-spacing:1.4px; text-transform:uppercase; cursor:pointer;
@@ -106,7 +107,7 @@
   #send { flex:0 0 56px; font-size:15px; padding:0; background:var(--accent); color:#000; }
   /* Hold to talk: one large key; it is his colour while it listens. */
   .talk { flex:1 1 100%; min-height:68px; font-size:12px; letter-spacing:3px; user-select:none; -webkit-user-select:none; touch-action:none; }
-  .talk.live { color:#000; background:var(--accent); filter:drop-shadow(0 0 14px rgba(255,212,0,.55)); }
+  .talk.live { color:#000; background:var(--accent); filter:drop-shadow(0 0 14px rgba(var(--accent-rgb),.55)); }
   /* What is on his board: a row for each block, with its key. */
   .block { display:flex; gap:10px; align-items:center; padding:9px 0; border-bottom:1px solid rgba(var(--ink),.08); }
   .block:last-child { border-bottom:0; padding-bottom:0; }
@@ -134,23 +135,57 @@
   #scanBox { display:none; margin-top:10px; }
   #scanBox video { width:100%; border:1px solid var(--line); background:#000; }
   .hidden { display:none; }
-  input[type=number],select { min-width:0; width:100%; min-height:42px; color:var(--text); background:var(--bg); border:0; border-bottom:1px solid rgba(var(--ink),.34); border-radius:0; padding:9px; font:15px var(--mono); outline:none; }
+  input[type=number],select { min-width:0; width:100%; min-height:42px; color:var(--text); background:transparent; border:0; border-bottom:1px solid rgba(var(--ink),.34); border-radius:0; padding:9px; font:15px var(--mono); outline:none; }
   .measure { display:block; margin-bottom:6px; }
   .measure input { display:block; margin-top:4px; }
   #strength { width:100%; height:160px; margin-top:8px; }
   #processes,#pager { max-height:150px; overflow:auto; font:11.5px var(--mono); white-space:pre-wrap; color:var(--text); }
   .card details { margin-top:10px; font-size:13px; color:var(--muted); }
   .card details summary { cursor:pointer; padding:6px 0; }
+  /* (The status plate has no title: the numbering starts with the plate after it.) */
+  .card.status { counter-increment:none; }
+  /* A fold inside a plate: a hairline row in wide capitals with its + / –, not the browser's
+     triangle. */
+  .card details summary { list-style:none; display:flex; align-items:center; font:400 8.5px var(--label); letter-spacing:1.4px; text-transform:uppercase; color:var(--muted); border-bottom:1px solid rgba(var(--ink),.10); }
+  .card details summary::-webkit-details-marker { display:none; }
+  .card details > summary::after { content:"+"; margin-left:auto; font:400 13px var(--mono); color:var(--accent); }
+  .card details[open] > summary::after { content:"–"; }
+  /* A box to tick: a hairline square; ticked, a solid block of his colour with a black tick. */
+  input[type=checkbox] { appearance:none; -webkit-appearance:none; flex:none; margin:0; display:inline-grid; place-items:center; border:1px solid rgba(var(--ink),.45); background:transparent; border-radius:0; cursor:pointer; }
+  input[type=checkbox]:checked { background:var(--accent); border-color:var(--accent); }
+  input[type=checkbox]:checked::after { content:""; width:28%; height:55%; border:solid #000; border-width:0 2px 2px 0; transform:translateY(-12%) rotate(45deg); }
+  select option { background:var(--bg); color:var(--text); }
+  /* Logged out: the gate alone. Someone other than Sir: nothing of Sir's is shown. */
+  #gate { display:none; } body.out #gate { display:block; } body.out #app, body.out .badges { display:none; }
+  body.guest .sir-only, body:not(.guest) .guest-only { display:none !important; }
+  button.plain { background:none; clip-path:none; color:var(--muted); min-height:36px; padding:6px 0; letter-spacing:1px; }
+  #themes { display:flex; flex-wrap:wrap; gap:6px; }
+  #themes button { flex:1 1 30%; display:flex; align-items:center; gap:8px; justify-content:flex-start; padding:8px 12px; }
+  #themes button i { width:14px; height:14px; flex:none; background:var(--swatch); box-shadow:0 0 8px var(--swatch); }
+  #themes button.on { color:#000; background:var(--accent); }
   @media (prefers-reduced-motion: reduce) { *,*::before,*::after { animation:none !important; transition:none !important; } }
 </style>
 </head>
 <body>
 <header>
   <div class="logo">JAI</div>
-  <div><h1>J.A.I.</h1><div class="sub">ON YOUR PHONE</div></div>
+  <div><h1>J.A.I.</h1><div id="who" class="sub">ON YOUR PHONE</div></div>
   <div class="badges"><span id="gpsBadge" class="badge">GPS SEARCHING</span><span id="linkBadge" class="badge">LINK …</span></div>
 </header>
 
+<!-- Logged out: a name and a password, or an account asked for with the key on Sir's screen. -->
+<form id="gate" class="card">
+  <div id="gateTitle" class="title">Log in</div>
+  <div class="row"><input id="gName" type="text" placeholder="Name" autocomplete="username" maxlength="20" autocapitalize="none" spellcheck="false" enterkeyhint="next"></div>
+  <div class="row"><input id="gPass" type="password" placeholder="Password" autocomplete="current-password" maxlength="20" enterkeyhint="go"></div>
+  <div id="gKeyRow" class="row hidden"><input id="gKey" type="text" inputmode="numeric" placeholder="The key on Sir's screen" maxlength="7" autocomplete="one-time-code"></div>
+  <div class="row"><button id="gGo" type="submit">Log in</button></div>
+  <div id="gNote" class="note"></div>
+  <div class="row"><button id="gSwitch" type="button" class="plain">No account yet? Create one</button></div>
+  <div class="row"><a class="note" href="/install">J.A.I. for your Windows PC</a></div>
+</form>
+
+<main id="app">
 <div class="card status">
   <div id="orb" class="orb"></div>
   <div><div id="state" class="state">CONNECTING</div><div id="detail" class="detail"></div></div>
@@ -160,11 +195,12 @@
   <div class="title">Conversation</div>
   <div class="quick">
     <button data-q="How's the weather where I am?">☁ Weather here</button>
-    <button data-q="How is the weather for riding my motorcycle right now and later today?">🏍 Ride check</button>
-    <button data-q="When do I need to leave for school tomorrow?">🎒 Leave for school</button>
-    <button data-q="Check all my messages">✉ Messages</button>
+    <button class="sir-only" data-q="How is the weather for riding my motorcycle right now and later today?">🏍 Ride check</button>
+    <button class="sir-only" data-q="When do I need to leave for school tomorrow?">🎒 Leave for school</button>
+    <button class="sir-only" data-q="Check all my messages">✉ Messages</button>
     <button data-q="Where am I?">⌖ Where am I</button>
   </div>
+  <div class="sir-only">
   <div class="quick controls">
     <button data-q="Pause the music">⏸ Pause</button>
     <button data-q="Resume the music">▶ Play</button>
@@ -177,6 +213,7 @@
     <button data-q="Night mode">◐ Night</button>
     <button data-fill="Note: ">✎ Note</button>
   </div>
+  </div>
   <div id="log" style="margin-top:10px"></div>
   <div class="row">
     <input id="text" type="text" placeholder="Write to J.A.I.…" autocomplete="off" enterkeyhint="send">
@@ -186,17 +223,17 @@
   <div class="row"><label><input id="speak" type="checkbox" checked> Read replies aloud</label></div>
 </div>
 
-<details class="card" open>
+<details class="card sir-only" open>
   <summary class="title">On his board</summary>
   <div class="inner"><div id="board" class="note">Nothing is open.</div></div>
 </details>
 
-<details class="card" open>
+<details class="card sir-only" open>
   <summary class="title">His lists</summary>
   <div class="inner"><div id="lists" class="note">No lists yet.</div></div>
 </details>
 
-<details class="card">
+<details class="card sir-only">
   <summary class="title">PC guardian · worldwide</summary>
   <div class="inner">
   <div class="grid"><div>CPU <b id="cpu">—</b></div><div>GPU <b id="gpu">—</b></div><div>RAM <b id="ram">—</b></div><div>Link <b id="worldLink">—</b></div></div>
@@ -216,13 +253,13 @@
     <div>Position <b id="pos">—</b></div><div>Accuracy <b id="acc">—</b></div>
     <div>Speed <b id="spd">—</b></div><div>Altitude <b id="alt">—</b></div>
     <div style="grid-column:1/3">Address <b id="addr">—</b></div>
-    <div>WhatsApp <b id="wa">—</b></div><div>Focus <b id="ar">off</b></div>
+    <div class="sir-only">WhatsApp <b id="wa">—</b></div><div class="sir-only">Focus <b id="ar">off</b></div>
   </div>
   <div id="gpsErr" class="err"></div>
   </div>
 </details>
 
-<details class="card">
+<details class="card sir-only">
   <summary class="title">Air-drop</summary>
   <div class="inner">
   <textarea id="dropText" placeholder="Text or a link for the PC…"></textarea>
@@ -236,7 +273,7 @@
   </div>
 </details>
 
-<details class="card">
+<details class="card sir-only">
   <summary class="title">Scanner</summary>
   <div class="inner">
   <div class="quick">
@@ -249,7 +286,7 @@
   </div>
 </details>
 
-<details class="card">
+<details class="card sir-only">
   <summary class="title">Workout coach</summary>
   <div class="inner">
   <div id="gymSchedule" class="note"></div>
@@ -268,13 +305,98 @@
   </div>
 </details>
 
+<details class="card">
+  <summary class="title">Look</summary>
+  <div class="inner"><div id="themes" class="note">…</div></div>
+</details>
+
+<div class="card guest-only">
+  <div class="title">Account</div>
+  <div id="acct" class="note"></div>
+  <div class="row"><button id="logout">Log out</button></div>
+</div>
+</main>
+
 <script>
-const KEY = "__JAI_KEY__";
-try { localStorage.setItem("jai_satellite_key", KEY); history.replaceState(null, "", "/satellite"); } catch (e) {}
+const THEME = "__JAI_THEME__";
+let KEY = "__JAI_KEY__";
+// Sir's pairing link carries his key; anyone else's page logs in and keeps the key it was given.
+try { if (KEY) localStorage.setItem("jai_satellite_key", KEY); else KEY = localStorage.getItem("jai_satellite_key") || ""; history.replaceState(null, "", "/satellite"); } catch (e) {}
 const $ = (id) => document.getElementById(id);
 const api = (path) => path + (path.includes("?") ? "&" : "?") + "k=" + encodeURIComponent(KEY);
 // "Add to Home screen" makes this page an app: its own icon, no browser bar, opened paired.
-$("manifest").href = api("/satellite/manifest.webmanifest");
+const manifest = () => $("manifest").href = api("/satellite/manifest.webmanifest");
+manifest();
+
+// ---- the look: the PC's theme, or one of his picked here ---------------------------------
+function rgb(hex) { const n = parseInt(String(hex).slice(1), 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; }
+function wear(c) {
+  if (!c || !c.accent) return;
+  const s = document.documentElement.style, a = rgb(c.accent);
+  s.setProperty("--accent", c.accent); s.setProperty("--accent-rgb", a.join(","));
+  s.setProperty("--accent2", c.deep); s.setProperty("--accent2-rgb", rgb(c.deep).join(","));
+  s.setProperty("--hot", "rgb(" + a.map(v => Math.round(v + (255 - v) * .6)).join(",") + ")");
+  s.setProperty("--ink", rgb(c.ink).join(",")); s.setProperty("--text", c.ink); s.setProperty("--green", c.ink);
+  s.setProperty("--bg", c.void); s.setProperty("--bg-rgb", rgb(c.void).join(","));
+  s.setProperty("--red", c.alert);
+  document.querySelector("meta[name=theme-color]").content = c.void;
+}
+let picked = ""; try { picked = localStorage.getItem("jai_phone_theme") || ""; } catch (e) {}
+wear(THEME);
+async function themes() {
+  try {
+    const j = await (await fetch("/api/themes")).json();
+    const all = [{ id: "", label: "AS ON THE PC", colours: THEME }, ...j.themes];
+    const chosen = all.find(t => t.id === picked) || all[0];
+    wear(chosen.colours);
+    $("themes").replaceChildren(...all.map(t => {
+      const b = document.createElement("button"), i = document.createElement("i");
+      if (t.colours && t.colours.accent) b.style.setProperty("--swatch", t.colours.accent);
+      b.append(i, t.label); b.className = t === chosen ? "on" : "";
+      b.onclick = () => { picked = t.id; try { localStorage.setItem("jai_phone_theme", picked); } catch (e) {} themes(); };
+      return b;
+    }));
+  } catch (e) { $("themes").textContent = "The themes are not available right now."; }
+}
+themes();
+
+// ---- logging in, and asking Sir for an account --------------------------------------------
+let making = false;
+function out(note) {
+  KEY = ""; try { localStorage.removeItem("jai_satellite_key"); } catch (e) {}
+  document.body.classList.add("out"); document.body.classList.remove("guest");
+  $("who").textContent = "NOT LOGGED IN"; $("gNote").textContent = note || "";
+}
+function gateMode() {
+  const asked = !$("gKeyRow").classList.contains("hidden");
+  $("gateTitle").textContent = making ? "Create an account" : "Log in";
+  $("gGo").textContent = making ? (asked ? "Confirm" : "Ask Sir") : "Log in";
+  $("gSwitch").textContent = making ? "I have an account: log in" : "No account yet? Create one";
+  $("gPass").autocomplete = making ? "new-password" : "current-password";
+}
+$("gSwitch").onclick = () => { making = !making; $("gKeyRow").classList.add("hidden"); $("gNote").textContent = ""; gateMode(); };
+$("gate").onsubmit = async (e) => {
+  e.preventDefault();
+  const name = $("gName").value.trim(), password = $("gPass").value, asked = !$("gKeyRow").classList.contains("hidden");
+  const size = (t, what) => t.length < 3 || t.length > 20 ? what + " has 3 to 20 characters." : "";
+  const why = size(name, "A name") || (asked ? "" : size(password, "A password"));
+  if (why) { $("gNote").textContent = why; return; }
+  const [path, body] = !making ? ["/api/login", { name, password }] : asked ? ["/api/signup/finish", { name, key: $("gKey").value.replace(/\D/g, "") }] : ["/api/signup", { name, password }];
+  $("gGo").disabled = true;
+  try {
+    const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || "That did not work.");
+    if (j.key) {
+      KEY = j.key; try { localStorage.setItem("jai_satellite_key", KEY); } catch (x) {}
+      document.body.classList.remove("out"); $("gNote").textContent = ""; $("gPass").value = ""; $("gKey").value = ""; manifest(); poll();
+    } else { $("gKeyRow").classList.remove("hidden"); $("gNote").textContent = j.message || ""; gateMode(); $("gKey").focus(); }
+  } catch (x) { $("gNote").textContent = x.message; }
+  $("gGo").disabled = false;
+};
+$("logout").onclick = async () => { try { await post("/api/logout", {}); } catch (e) {} out("Logged out."); };
+gateMode();
+if (!KEY) out();
 let since = 0, lastSent = 0, pending = null, busy = false;
 let workout = null, restDeadline = 0, restNotified = 0;
 
@@ -321,6 +443,7 @@ function renderWorkout(data) {
 }
 function drawStrength() {
   const c = $("strength"), g = c.getContext("2d"), w = c.width, h = c.height;
+  const accent = getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() || "#ffd400";
   g.clearRect(0,0,w,h); g.font = "14px monospace"; g.fillStyle = "#8c97a2";
   const points = (workout && workout.progression || []).filter(p => p.exercise === $("strengthExercise").value);
   if (!points.length) { g.fillText("Estimated 1RM progression appears after logging sets",20,100); return; }
@@ -328,8 +451,8 @@ function drawStrength() {
   g.strokeStyle = "rgba(238,243,247,.14)"; g.lineWidth = 1;
   for (let i=0;i<4;i++) { const y=20+i*55; g.beginPath(); g.moveTo(55,y); g.lineTo(w-15,y); g.stroke(); g.fillText((top*(1-i/3)).toFixed(0),6,y+4); }
   const xy=points.map((p,i)=>[55+i*(w-85)/Math.max(1,points.length-1),185-p.estimated_1rm/top*165]);
-  g.beginPath(); xy.forEach(([x,y],i)=>i?g.lineTo(x,y):g.moveTo(x,y)); g.strokeStyle="#ffd400";g.lineWidth=2;g.stroke();
-  g.fillStyle="#ffd400";xy.forEach(([x,y])=>{g.beginPath();g.arc(x,y,3,0,Math.PI*2);g.fill();});
+  g.beginPath(); xy.forEach(([x,y],i)=>i?g.lineTo(x,y):g.moveTo(x,y)); g.strokeStyle=accent;g.lineWidth=2;g.stroke();
+  g.fillStyle=accent;xy.forEach(([x,y])=>{g.beginPath();g.arc(x,y,3,0,Math.PI*2);g.fill();});
   g.fillStyle="#8c97a2";g.fillText(points[0].date.slice(0,10),55,220);g.fillText(points[points.length-1].date.slice(0,10),w-120,220);
 }
 $("strengthExercise").onchange = drawStrength;
@@ -392,6 +515,7 @@ async function chat(text) {
 // ---- live GPS -----------------------------------------------------------------------
 function sendFix(p) {
   pending = p;
+  if (!KEY) return;
   const now = Date.now();
   if (now - lastSent < 3000) return;
   lastSent = now;
@@ -459,11 +583,18 @@ function renderLists(lists) {
 
 // ---- state & pushed content ---------------------------------------------------------
 async function poll() {
+  if (!KEY) return;
   try {
     const r = await fetch(api("/api/state?since=" + since));
+    // (A key no longer known: logged out on the PC, or the account is gone.)
+    if (r.status === 403) { out("Log in to use J.A.I."); return; }
     const j = await r.json();
     if (!r.ok) throw new Error(j.error || "Unauthorized");
-    const st = (j.state || "idle").toLowerCase();
+    const guest = j.role === "guest";
+    document.body.classList.toggle("guest", guest);
+    $("who").textContent = guest ? "SIGNED IN AS " + String(j.name || "").toUpperCase() : "ON YOUR PHONE";
+    if (guest) $("acct").textContent = j.paused ? "Sir has paused your access until " + j.paused + "." : "Signed in as " + j.name + ". J.A.I. answers what Sir allows you.";
+    const st = (j.paused ? "paused" : j.state || "idle").toLowerCase();
     $("state").textContent = st.toUpperCase(); $("detail").textContent = j.detail || "";
     $("orb").className = "orb " + st;
     if (j.gps && j.gps.address) $("addr").textContent = j.gps.address;

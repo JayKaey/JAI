@@ -10,6 +10,7 @@
 //! Kokoro TTS → speaker, with barge-in at every stage. UI: a native egui HUD window (no browser)
 //! that JAI restyles on request, plus a tray icon.
 
+mod accounts;
 mod acoustic_radar;
 mod aegis_server_deck;
 mod airdrop_bridge;
@@ -87,6 +88,7 @@ mod file_janitor;
 mod file_ops;
 mod finance_tracker;
 mod flashcards;
+mod fleet;
 mod focus;
 mod formula_sheet;
 mod guardian;
@@ -122,6 +124,7 @@ mod hud_suggestions;
 mod hyper_cortex;
 mod image_viewer;
 mod instant_replay;
+mod installer;
 mod integration_registry;
 mod integration_router;
 mod intent_engine;
@@ -274,6 +277,7 @@ struct Cli {
     console: bool,
     check_models: bool,
     download_models: bool,
+    install: bool,
     selftest: bool,
     speak: bool,
     bench: bool,
@@ -329,6 +333,7 @@ impl Cli {
             console: false,
             check_models: false,
             download_models: false,
+            install: false,
             selftest: false,
             voice_calibrate: false,
             voice_verify: false,
@@ -360,6 +365,7 @@ impl Cli {
                 "--console" => cli.console = true,
                 "--check-models" => cli.check_models = true,
                 "--download-models" => cli.download_models = true,
+                "--install" => cli.install = true,
                 "--selftest" => cli.selftest = true,
                 "--voice-calibrate" => cli.voice_calibrate = true,
                 "--voice-verify" => cli.voice_verify = true,
@@ -438,6 +444,8 @@ USAGE: JAI.exe [OPTIONS]
   --console           show the live log in a console window
   --check-models      check the speech models and the built-in language engine, then exit
   --download-models   install anything missing (speech models and language model), then exit
+  --install           install J.A.I. on this PC as one of Sir's (also when JAI.exe is started on
+                      its own, with nothing of his beside it)
   --selftest          offline pipeline test (TTS → VAD → Whisper → wake word → intents → LLM)
   --speak             with --selftest: also play a test sentence on the speakers
   --bench             with --selftest: time Whisper across settings (threads, encoder window, ...)
@@ -470,22 +478,24 @@ USAGE: JAI.exe [OPTIONS]
 
 ENV: JAI_LOG (e.g. jai=debug), JAI_PROFILE, OLLAMA_URL (external engine)";
 
-/// Finds the project folder (models/, runtime/) even when started from target\release.
-fn ensure_working_directory() {
+/// Finds the project folder (models/, runtime/) even when started from target\release. Whether
+/// there is one (JAI.exe on its own, downloaded, has none: it is the installer).
+fn ensure_working_directory() -> bool {
     let is_home = |p: &Path| p.join("models").is_dir() || p.join("runtime").is_dir() || p.join(config::CONFIG_FILE).is_file();
     if std::env::current_dir().map(|d| is_home(&d)).unwrap_or(false) {
-        return;
+        return true;
     }
     if let Ok(exe) = std::env::current_exe() {
         let mut dir = exe.parent();
         while let Some(d) = dir {
             if is_home(d) {
                 let _ = std::env::set_current_dir(d);
-                return;
+                return true;
             }
             dir = d.parent();
         }
     }
+    false
 }
 
 struct LocalTimer;
@@ -590,7 +600,9 @@ fn main() -> ExitCode {
             return if msg.is_empty() { ExitCode::SUCCESS } else { ExitCode::from(2) };
         }
     };
-    ensure_working_directory();
+    if !ensure_working_directory() && !cli.is_diagnostic() || cli.install {
+        return installer::run();
+    }
 
     // Starting JAI again only brings the running instance's HUD to the front. After a restart
     // the previous instance may still be finishing its shutdown, so wait for it. A test session
@@ -1116,6 +1128,7 @@ async fn start(cli: &Cli, cfg: JaiConfig) -> Started {
         },
         pim: pim.clone(),
         stark: stark::StarkSystems::open(&cfg.memory_db_path),
+        caller: accounts::Caller::Sir,
     };
     let stark_tools = tools.clone();
     let brain = brain::Brain::new(store.clone(), tools, Arc::clone(&llm));
@@ -1153,6 +1166,8 @@ async fn start(cli: &Cli, cfg: JaiConfig) -> Started {
     // WhatsApp listener + auto-responder, and the mobile satellite (phone GPS, chat).
     stark_tools.stark.start_background(&stark_tools, store.clone());
     satellite::start(app.clone(), shutdown.clone());
+    // On another PC than Sir's: his PC's orders, version and voice (`fleet`).
+    tokio::spawn(fleet::client(app.clone()));
     remote_guardian::start(app.clone(), shutdown.clone());
     // Away Mode's eye on the PC (lock, drives, Sir's return) and the "tell me when …" watches.
     away_mode::start(app.tools().clone(), shutdown.clone());

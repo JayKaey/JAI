@@ -665,6 +665,20 @@ struct BrainInner {
 
 impl Brain {
     pub fn new(config: ConfigStore, tools: ToolContext, llm: Arc<LlmRuntime>) -> Self {
+        let brain = Self::without_primer(config, tools, llm);
+        brain.spawn_primer();
+        brain
+    }
+
+    /// A brain for someone other than Sir: the same model and tools, a conversation of that
+    /// person's own, and the tools serving that account (what Sir allowed it). No primer: Sir's
+    /// cached prompt stays warm.
+    pub fn for_caller(&self, caller: crate::accounts::Caller) -> Self {
+        let tools = ToolContext { caller, ..self.inner.tools.clone() };
+        Self::without_primer(self.inner.config.clone(), tools, Arc::clone(&self.inner.llm))
+    }
+
+    fn without_primer(config: ConfigStore, tools: ToolContext, llm: Arc<LlmRuntime>) -> Self {
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(5))
             // Longer than the first-token window: a slow prompt evaluation is waited out, never
@@ -701,7 +715,6 @@ impl Brain {
                 power_lapsed: StdMutex::new(None),
             }),
         };
-        brain.spawn_primer();
         brain
     }
 
@@ -1035,9 +1048,11 @@ impl Brain {
     /// Runs one user turn end-to-end. Serialised: a new turn waits for the previous (cancelled)
     /// one to unwind so history stays consistent.
     pub async fn run_turn(&self, req: TurnRequest, tts: &TtsController, events: &UnboundedSender<BrainEvent>) {
+        // (Someone else's turn leaves Sir's voice, players and pending questions alone.)
+        let sir = self.inner.tools.caller.is_sir();
         // "Stop", "mute", "next", "weiter": carried out the moment they arrive, before waiting for
         // an older turn to unwind.
-        if self.execute_instant_reflex_command(&req, tts, events).await {
+        if sir && self.execute_instant_reflex_command(&req, tts, events).await {
             return;
         }
         let waited = Instant::now();
@@ -1058,7 +1073,7 @@ impl Brain {
         }
         // "No, I said open the mixer" after an order that led nowhere: that order is what he
         // carries out, and the words that led nowhere are his for it from now on (`ear`).
-        let text = match (!crate::live_self_tester::dry()).then(|| crate::ear::meant_instead(&text, &crate::ear::is_order)).flatten() {
+        let text = match (sir && !crate::live_self_tester::dry()).then(|| crate::ear::meant_instead(&text, &crate::ear::is_order)).flatten() {
             Some(meant) => {
                 info!("[EAR] '{text}': Sir says what he meant, '{meant}'");
                 meant
@@ -1069,7 +1084,7 @@ impl Brain {
         // did not (`did_you_mean`): the order picked is what Sir said, from here on. "None of
         // them" takes the offer down, and so does any other sentence: it is his next order.
         let mut none_of_them = false;
-        let text = match (!crate::live_self_tester::dry()).then(|| crate::did_you_mean::answer(&text)) {
+        let text = match (sir && !crate::live_self_tester::dry()).then(|| crate::did_you_mean::answer(&text)) {
             Some(Some(crate::did_you_mean::Answer::Order(order))) => {
                 info!("[MEANT] '{text}': Sir takes '{order}'");
                 order
@@ -1214,6 +1229,12 @@ impl Brain {
         } else if compound.is_some() {
             self.inner.tools.focus.clear_offer();
             None
+        } else if let Some(args) = crate::fleet::command(&text).filter(|_| put_off.is_none()) {
+            // "Open the earth on Max's PC", "shut down Max's PC": that PC's order, taken before
+            // every router that would carry it out on this one (its volume, its power, its windows).
+            self.inner.tools.focus.clear_offer();
+            info!("[FLEET] '{text}' → {args}");
+            Some(Intent::Tool { name: "other_pc", args })
         } else if let Some(action) = crate::intent_engine::deterministic_action(&text).filter(|_| put_off.is_none()) {
             // "No. Just can you close the windows you opened?", "schließ dich": carried out in
             // Rust at once — the model never gets to roleplay them.
@@ -1452,7 +1473,7 @@ impl Brain {
 
         let model_used;
         let interrupted;
-        if let Some(mode) = modality::parse_command(&text) {
+        if let Some(mode) = modality::parse_command(&text).filter(|_| sir) {
             model_used = "instant".to_string();
             interrupted = self.modality_command(mode, &text, &mut st).await;
         } else if let Some(intent) = fast_intent {
@@ -1704,8 +1725,9 @@ impl Brain {
             return false;
         }
         // An order with a delay is the full turn's too: "pause in five minutes" is no pause now.
-        // So are his answer to a question that waits, and a sentence about what he just did.
-        if crate::later::route(&text).is_some() || crate::ask_first::would_answer(&text) || crate::did_you_mean::would_answer(&text) || crate::just_did::follow_up(&text).is_some() {
+        // So are his answer to a question that waits, a sentence about what he just did and an
+        // order for another PC ("mute Max's PC" mutes Max's).
+        if crate::later::route(&text).is_some() || crate::ask_first::would_answer(&text) || crate::did_you_mean::would_answer(&text) || crate::just_did::follow_up(&text).is_some() || crate::fleet::command(&text).is_some() {
             return false;
         }
         let routed = crate::intent_engine::route(&text, &ctx);
@@ -1854,6 +1876,14 @@ impl Brain {
             }
         }
         let action = power::power_request(text)?;
+        // (Someone else: only what Sir allowed them, and nothing pops up on his screen.)
+        if let Some(name) = self.inner.tools.caller.guest() {
+            let db = self.inner.config.read(|c| c.memory_db_path.clone());
+            if !crate::accounts::get(&db, name).is_some_and(|a| a.allows(crate::accounts::POWER)) {
+                info!("[POWER] '{text}' from {name}: not allowed");
+                return Some(Intent::Answer("Sir has not given you that permission.".into()));
+            }
+        }
         if !action.needs_confirmation() {
             info!("[POWER] '{text}' → PC {} now", action.id());
             self.schedule_power(action, events.clone());
@@ -3879,7 +3909,6 @@ fn skill_name_from(text: &str) -> String {
     }
 }
 
-/// Route tools that run on the fast path (names as `'static` for `Intent::Tool`).
 /// What the fast path makes of a sentence without the language model (`fast_as_said`).
 pub(crate) enum Fast {
     /// An order, carried out as it is.
@@ -3915,6 +3944,10 @@ fn fast_before_the_parser(text: &str) -> Option<Fast> {
     // sentence's words for a song, the calendar or the conversation (`later`).
     if let Some(args) = crate::later::route(text) {
         return tool(crate::later::TOOL, args);
+    }
+    // An order for another PC: before every router that would carry it out on this one.
+    if let Some(args) = crate::fleet::command(text) {
+        return tool("other_pc", args);
     }
     // His answer to a question of his own that waits ("Did you mean …?": `ask_first`) or to
     // the orders he offers (`did_you_mean`): understood, by no tool of its own.
@@ -4053,7 +4086,8 @@ pub(crate) fn another_way_knowing(text: &str, parsed: Option<&Option<Intent>>) -
     // An order with a delay ("open the mixer in ten minutes") is understood as it stands: by
     // the first router there is (`later`), which is asked here because nothing is while a
     // sentence is being read another way.
-    if !rewording() && crate::later::order(text).is_some() {
+    // (So is an order for another PC: reworded, "… on Max's PC" would lose its PC.)
+    if !rewording() && (crate::later::order(text).is_some() || crate::fleet::command(text).is_some()) {
         return None;
     }
     if REWORDING.with(|inside| inside.replace(true)) {
@@ -4729,6 +4763,20 @@ fn spoken_reading(t: &crate::telemetry::SystemTelemetry, reading: Option<&str>) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Repro 2026-11-20 (a silent session): "turn the volume down on Max's computer" set this
+    /// PC's master volume to 100 %. The turn asked the feature router, which knows no other PC,
+    /// so the mixer came next and read "Max's" as "max".
+    #[test]
+    fn an_order_for_another_pc_is_taken_before_every_router_of_this_one() {
+        for said in ["turn the volume down on Max's computer", "mute Max's PC", "stop the music on Max's PC", "pause the music on Max's laptop", "open the earth on Max's PC", "shut down Max's PC"] {
+            let Some(Fast::Intent(Intent::Tool { name: "other_pc", args })) = fast_before_the_parser(said) else { panic!("{said} is not sent to Max's PC") };
+            assert_eq!(args["names"][1], "max", "{said}");
+            // (Nor do this PC's players stop before the turn: `JAI::dispatch_turn`.)
+            assert!(!intents::is_media_stop(said), "{said}");
+        }
+        assert!(intents::is_media_stop("stop the music"));
+    }
 
     /// Repro 2026-11-03: under GPU contention the first token took > 45 s, so every LLM turn got
     /// "my language core is still warming up" at 4.5 s and the canned standby line at 45 s.

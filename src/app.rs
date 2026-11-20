@@ -189,6 +189,8 @@ struct Inner {
     heard_turn: Mutex<Option<crate::stt::HeardQuality>>,
     /// The last requests and replies, for the hands-free continuity check.
     recent_turns: Mutex<std::collections::VecDeque<String>>,
+    /// A brain for each account that asked (its own conversation), by name in lower case.
+    others: Mutex<std::collections::HashMap<String, Brain>>,
 }
 
 #[derive(Clone)]
@@ -246,6 +248,8 @@ impl Jai {
         shutdown: CancellationToken,
     ) -> Self {
         let llm = Arc::clone(brain.llm());
+        // (The accounts' names, so that "resume Max" is known for an account's order at once.)
+        crate::accounts::all(&config.read(|c| c.memory_db_path.clone()));
         let (events, _) = broadcast::channel(1024);
         let (brain_tx, brain_rx) = mpsc::unbounded_channel();
         let wake = config.read(|c| WakeWordMatcher::new(&c.wake_words, c.wake_word_similarity_threshold));
@@ -279,6 +283,7 @@ impl Jai {
                 barge_in_turn: AtomicBool::new(false),
                 heard_turn: Mutex::new(None),
                 recent_turns: Mutex::new(std::collections::VecDeque::new()),
+                others: Mutex::new(std::collections::HashMap::new()),
             }),
         };
         app.spawn_loops(channels, brain_rx);
@@ -363,6 +368,50 @@ impl Jai {
         };
         recorded.extend(crate::live_self_tester::record(Box::pin(self.inner.brain.run_turn(req, &self.inner.tts, &events))).await);
         (recorded, started.elapsed())
+    }
+
+    /// A turn for someone other than Sir (an account, from its phone or by its voice): a
+    /// conversation of their own on a brain of their own that may do what Sir allowed them and
+    /// knows nothing of his. Silent and beside his own turn: it never cancels his turn or cuts
+    /// his voice off. Kept for Sir's report. The answer (spoken by the caller for a voice).
+    pub async fn guest_turn(&self, name: &str, text: &str, via: &str) -> String {
+        let db = self.config().read(|c| c.memory_db_path.clone());
+        let Some(account) = crate::accounts::get(&db, name) else { return "That account no longer exists.".into() };
+        if let Some(why) = account.turned_away(text) {
+            crate::accounts::note(&db, &account.name, via, text, &why, &[]);
+            return why;
+        }
+        let brain = {
+            let mut others = self.inner.others.lock().unwrap_or_else(|e| e.into_inner());
+            others.entry(account.name.to_lowercase()).or_insert_with(|| self.inner.brain.for_caller(crate::accounts::Caller::Guest(account.name.clone()))).clone()
+        };
+        let (events, mut heard) = mpsc::unbounded_channel();
+        // (A generation no speech of his ever has: nothing of this turn reaches the speaker.)
+        let req = TurnRequest {
+            text: text.to_string(),
+            message_id: uuid::Uuid::new_v4().to_string(),
+            generation: u64::MAX,
+            cancel: CancellationToken::new(),
+            started: Instant::now(),
+            source: if via == "voice" { InputSource::Voice } else { InputSource::TextGui },
+            voice: crate::modality::VoiceGate::Silent,
+            link: Arc::new(TurnLink::default()),
+            barge_in: false,
+        };
+        brain.run_turn(req, &self.inner.tts, &events).await;
+        let (mut reply, mut ran) = (String::new(), Vec::new());
+        // (What the turn sent; a task it left behind may hold the channel open.)
+        while let Ok(event) = heard.try_recv() {
+            match event {
+                BrainEvent::Done { text, .. } if !text.trim().is_empty() => reply = text,
+                BrainEvent::Error { error } if reply.is_empty() => reply = error,
+                BrainEvent::Tool(o) => ran.push(if o.success { o.tool } else { format!("{} (refused)", o.tool) }),
+                _ => {}
+            }
+        }
+        info!("[ACCOUNTS] {} ({via}): '{text}' → '{reply}'{}", account.name, if ran.is_empty() { String::new() } else { format!(" [{}]", ran.join(", ")) });
+        crate::accounts::note(&db, &account.name, via, text, &reply, &ran);
+        reply
     }
 
     /// An order JAI gives himself whose answer Sir is to hear (the catch-up after a long time
@@ -1658,7 +1707,17 @@ impl Jai {
         };
         let his_voice = judged.is_some_and(|j| j.sure);
         let (jai_focused, gaming) = foreground_context().await;
-        // A guest Sir has just introduced is saying the sentences his or her print is made of.
+        // A voice he asked "who am I speaking with?" answers with its name.
+        if !scripted && !judged.is_some_and(|j| j.his) {
+            if let Some(line) = voice.as_ref().and_then(|v| v.as_ref().ok()).and_then(|clip| crate::kit_voice::introduction(&db, clip, speech_ms, &transcript.text)) {
+                self.speak_standalone(&line, true, Trigger::Input(InputSource::Voice));
+                crate::hud_lines::speech_over();
+                self.rest_state();
+                return;
+            }
+        }
+        // A guest Sir has just introduced (or one that told its name) is saying the sentences its
+        // print is made of.
         // (Nothing that passes for Sir's own voice, by itself or in the moment of trust.)
         if !scripted && crate::kit_voice::guest_learning() && !judged.is_some_and(|j| j.his) {
             if let Some(Ok(clip)) = &voice {
@@ -1667,7 +1726,8 @@ impl Jai {
                         let line = match crate::speaker_id::keep_guest(&db, &guest, true) {
                             Ok(()) => {
                                 info!("[VOICE] A guest's voice is known now: {} ({} sentences)", guest.name, guest.clips);
-                                format!("Thank you, {0}. I know your voice now. Sir, say \"{0} may only control the music\" if that is all {0} should do.", guest.name)
+                                crate::accounts::for_voice(&db, &guest.name, &guest.may);
+                                format!("Thank you, {}. I know your voice now: you may ask me questions, and Sir decides what else you may do.", guest.name)
                             }
                             Err(e) => format!("I could not keep {}'s voice, Sir: {e}", guest.name),
                         };
@@ -1886,16 +1946,37 @@ impl Jai {
                 (None, _) => "someone whose voice I could not judge",
             });
         }
-        // A guest Sir introduced may speak: everything, or the music and the volume only.
-        let guest_may = guest.as_ref().is_some_and(|(guest, score)| {
-            let order = if wake.matched { wake.command.as_str() } else { transcript.text.as_str() };
-            let may = guest.may != "music" || crate::kit_voice::music_order(order);
-            info!("[VOICE LOCK] {}'s voice (likeness {score:.2}), a guest who may {}: '{order}' is {}", guest.name, if guest.may == "music" { "control the music" } else { "ask for everything" }, if may { "carried out" } else { "not carried out" });
-            may
-        });
-        if lock_on && !guest_may {
+        if lock_on {
             match (&judged, &voice) {
                 (Some(j), _) if !j.his => {
+                    // A voice he knows by name speaks for its account: what Sir allowed it, in a
+                    // brain of its own, never as Sir.
+                    if let Some((guest, score)) = &guest {
+                        let order = if wake.matched { wake.command.clone() } else { transcript.text.clone() };
+                        info!("[VOICE LOCK] {}'s voice (likeness {score:.2}): '{order}' is asked as {0}'s account", guest.name);
+                        crate::accounts::for_voice(&db, &guest.name, &guest.may);
+                        crate::hud_lines::speech_over();
+                        self.set_state("thinking", &format!("Answering {}", guest.name));
+                        let (app, name) = (self.clone(), guest.name.clone());
+                        tokio::spawn(async move {
+                            let reply = app.guest_turn(&name, &order, "voice").await;
+                            if reply.trim().is_empty() {
+                                app.rest_state();
+                            } else {
+                                app.speak_standalone(&reply, true, Trigger::Input(InputSource::Voice));
+                            }
+                        });
+                        return;
+                    }
+                    // A voice he does not know that calls him by name is asked who it is.
+                    if let (true, Some(Ok(clip))) = (wake.matched, &voice) {
+                        if crate::kit_voice::ask_who(clip, speech_ms) {
+                            info!("[VOICE] A voice I do not know called me (likeness to Sir's {:.2}): asking who it is", j.score);
+                            crate::hud_lines::speech_over();
+                            self.speak_standalone("I don't know your voice yet. Who am I speaking with?", true, Trigger::Input(InputSource::Voice));
+                            return;
+                        }
+                    }
                     info!("[VOICE LOCK] Not Sir's voice (likeness {:.2}, his from {:.2}): '{}' is not carried out", j.score, j.bar, transcript.text);
                     // (Orders by name that fall just short, three in a row: the bar goes back
                     // to the set-up's, so that a cold or another microphone is no lock-out.)
@@ -2108,6 +2189,11 @@ impl Jai {
     pub fn dispatch_turn(&self, text: String, started: Instant, stt_ms: u64, source: InputSource) {
         // His name in one spelling, typed or spoken ("J.A.I., open Spotify", "jay open spotify").
         let text = crate::wake::canon(&text);
+        // Another PC of Sir's answers nobody until it is logged in (`fleet`).
+        if let Some(why) = crate::fleet::locked(self.config()) {
+            self.speak_standalone(why, true, Trigger::Input(source));
+            return;
+        }
         // The privacy lock: answered at once — before music or any other parser, and without the
         // model. ("You can listen again" while he is listening anyway is an ordinary sentence.)
         let lifts_nothing = |cmd: crate::listening_lock::LockCommand| cmd == crate::listening_lock::LockCommand::Resume && !crate::listening_lock::is_locked();
@@ -2606,11 +2692,6 @@ impl Jai {
             HudCommand::WidgetRemove { id } => {
                 self.tools().widgets.remove(&id);
                 crate::gui::refresh();
-                None
-            }
-            HudCommand::WidgetPopOut { id } => {
-                let title = self.tools().widgets.widget(&id).map(|w| w.title).unwrap_or_else(|| id.clone());
-                self.run_ui_tool("spawn_native_window", json!({ "title": title, "widget_ids": [id], "width": 440, "height": 340 })).await;
                 None
             }
             HudCommand::OpenTextWindow { title, text } => {

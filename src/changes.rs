@@ -92,8 +92,19 @@ const fn fixed(title: &'static str, what: &'static str) -> Entry {
 pub const RELEASES: &[Release] = &[
     Release {
         date: "2026-11-20",
-        name: "Closer to the ground",
+        name: "Accounts and other PCs",
         entries: &[
+            new("J.A.I. on other PCs", "Install him on a friend's PC: your PC stays the main one, sends orders and they can't touch it.", "other_pcs"),
+            new("Accounts for everyone else", "Only your voice and phone may do everything; anyone else needs an account that only asks.", "accounts"),
+            new("The accounts list", "\"Open the accounts list\": passwords, every permission one by one, pauses, topics, PCs.", "accounts"),
+            new("\"Who am I speaking with?\"", "A voice he has never heard is asked its name and learnt; it may ask questions, nothing more.", "unknown_voice"),
+            added("Each phone knows its own place", "\"Where am I\" on a friend's phone answers with where that phone is, not where you are."),
+            added("The phone page wears a theme", "Your PC's theme, or one picked under LOOK on the phone itself; your saved themes too."),
+            better("A permanent address for the phone", "With Tailscale on this PC the phone's address is the same forever, for free."),
+            better("As many custom themes as you like", "A theme made without a name no longer replaces the last one: it is \"Custom 2\", and on."),
+            fixed("The phone page's rough edges", "Its folds, ticks, lists and number fields looked like a browser's; now they wear his look."),
+            fixed("Widget windows say CLOSE", "A widget in a window of its own showed POP OUT and REMOVE; it has one CLOSE key now."),
+            fixed("No leader into empty space", "A closed or minimised window kept its line from the core; the line goes with the window now."),
             fixed("A crowded city turns smoothly", "With thousands of houses in view the Earth lagged; a frame of them costs about half what it did."),
             better("The Earth comes much closer", "The wheel and \"zoom in\" go down to 30 m, a house filling the window (was 250 m)."),
         ],
@@ -527,6 +538,27 @@ pub const RELEASES: &[Release] = &[
 
 /// The explanations, by id.
 pub const EXPLANATIONS: &[Explanation] = &[
+    Explanation {
+        id: "other_pcs",
+        title: "J.A.I. on other PCs",
+        what: "A friend opens your phone page's address in a browser and takes \"J.A.I. for your Windows PC\" (or you give them JAI.exe). Started on its own it is the installer: it reads the graphics card (4 GB of memory at the least; under 8 GB he gets the smaller brain, Qwen3.5 2B), logs in at your PC with their account, fetches the program and its engines from your PC, then his voice, ears and brain, and puts him in the Start menu. Their J.A.I. calls yours every few seconds: you see it in the accounts list (online, its version, CPU, memory, graphics card), and what you order for it, it does. Theirs never sends anything to yours.",
+        say: &["Jay, open the earth on Max's PC.", "Jay, turn the volume down on Max's computer.", "Jay, mach die Musik leiser auf Max PC.", "Jay, what did you do for Max this week?"],
+        know: "Their J.A.I. always runs the version yours runs: when yours is newer, theirs fetches it at once and restarts (yours never updates itself), and a new commit on GitHub is announced to them. Your voice print reaches their J.A.I. and theirs reaches yours, held in memory only: each is stored on its owner's PC alone. Until their J.A.I. is logged in it answers nobody. An order waits ten minutes for a PC that is offline. Only Windows: J.A.I. is built on Windows' own speech, windows and security, so there is no Linux version.",
+    },
+    Explanation {
+        id: "accounts",
+        title: "Accounts",
+        what: "You are the only one who may do everything: by your voice, on your phone, on this PC. Everyone else needs an account. On the phone page anyone can ask for one with a name and a password (3 to 20 characters): a key appears on your screen, and only with that key from you is the account made. A new account may ask questions and nothing more. In the accounts list you see every account with its password, switch on what each may do tool by tool and down to single options (the Earth, but not its satellites), close topics to them (where they are, maths, your own words), pause them for an hour or a day, or remove them; you also see their phones and PCs and what J.A.I. did for them.",
+        say: &["Jay, open the accounts list.", "Jay, öffne die Kontenliste.", "Jay, what did you do for Max today?"],
+        know: "Logging in and asking for accounts are limited per address (a wrong password five times locks that name for ten minutes; one request a minute, three keys waiting at most), so the page cannot be flooded. Passwords are kept sealed in the vault, never in plain text on disk. Asked from an account, J.A.I. answers in a conversation of its own and never with anything of yours.",
+    },
+    Explanation {
+        id: "unknown_voice",
+        title: "\"Who am I speaking with?\"",
+        what: "When a voice he has never heard calls him, he asks who it is. Its answer (\"I'm Erika\", \"ich bin Erika\", or just the name) starts learning that voice: after a few sentences he knows it, and from then on that voice may ask him questions. What else it may do you set in the accounts list, under its name.",
+        say: &["(a new voice) Jay, what time is it?", "(after his question) I'm Erika.", "Jay, open the accounts list."],
+        know: "He asks at most every two minutes, and only the voice he asked may answer. A name that already belongs to an account or a known voice is refused: you have to introduce that person. Your own voice is never asked.",
+    },
     Explanation {
         id: "earth_landmarks",
         title: "Landmarks on the Earth",

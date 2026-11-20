@@ -187,6 +187,19 @@ fn installed(name: &str) -> Option<PathBuf> {
     if local.is_file() { return Some(local); }
     std::env::var_os("PATH").and_then(|paths| std::env::split_paths(&paths)
         .map(|p| p.join(&filename)).find(|p| p.is_file()))
+        // (Tailscale installed after JAI started is not on his PATH yet.)
+        .or_else(|| std::env::var_os("ProgramFiles").map(|p| Path::new(&p).join("Tailscale").join(&filename)).filter(|p| p.is_file()))
+}
+
+/// The settings a start runs with: "auto" without a Cloudflare token is Tailscale Funnel once
+/// Tailscale is installed (free, and an address that never changes), and the quick tunnel again
+/// after two failed tries (Funnel not switched on yet: the phone keeps a way in meanwhile).
+fn with_funnel(settings: &SatelliteSettings, has_token: bool, tailscale: bool, attempt: u32) -> SatelliteSettings {
+    let mut chosen = settings.clone();
+    if chosen.tunnel_provider.eq_ignore_ascii_case("auto") && !has_token && tailscale && attempt < 2 {
+        chosen.tunnel_provider = "tailscale".into();
+    }
+    chosen
 }
 
 async fn cloudflared() -> Result<PathBuf, String> {
@@ -384,7 +397,11 @@ async fn verify_origin(origin: &str, token: &str) -> bool {
 /// level and timestamp dropped).
 fn complaint(line: &str) -> Option<String> {
     let lower = line.to_ascii_lowercase();
-    if !(lower.contains(" err ") || lower.contains("error") || lower.contains("not valid") || lower.contains("unauthorized")) {
+    // (Tailscale names the page where Funnel is switched on, on a line of its own.)
+    if lower.contains("https://login.tailscale.com/") {
+        return Some(format!("Switch Funnel on for this PC, once: {}", line.trim()));
+    }
+    if !(lower.contains(" err ") || lower.contains("error") || lower.contains("not valid") || lower.contains("unauthorized") || lower.contains("not enabled") || lower.contains("logged out")) {
         return None;
     }
     let said = line.split(" ERR ").last().unwrap_or(line).trim();
@@ -406,8 +423,9 @@ pub async fn run(config: ConfigStore, secrets: crate::vault::Vault, port: u16, s
             }
         }
         let token = secrets.secret(TOKEN_SERVICE, crate::vault::TOKEN);
-        update(&settings.tunnel_provider, "starting", "Opening an outbound HTTPS tunnel", None);
-        let started = match plan(&settings, token.as_deref(), port) {
+        let chosen = with_funnel(&settings, token.as_deref().is_some_and(|t| !t.trim().is_empty()), installed("tailscale").is_some(), attempt);
+        update(&chosen.tunnel_provider, "starting", "Opening an outbound HTTPS tunnel", None);
+        let started = match plan(&chosen, token.as_deref(), port) {
             Ok(plan) => tokio::select! {
                 _ = shutdown.cancelled() => break,
                 result = spawn(&plan) => result.map(|child| (child, plan)),
@@ -450,6 +468,10 @@ pub async fn run(config: ConfigStore, secrets: crate::vault::Vault, port: u16, s
                                         }
                                     }
                                     if let Some(c) = complaint(&line) {
+                                        // (Shown while it waits: Funnel's switch is Sir's to throw.)
+                                        if !ready {
+                                            update(provider, "connecting", c.clone(), None);
+                                        }
                                         said = Some(c);
                                     }
                                 }
@@ -585,5 +607,23 @@ mod tests {
         // What the tunnel program complains about reaches the status line, without its prefix.
         assert_eq!(complaint("2026-11-06T07:00:00Z ERR Provided Tunnel token is not valid.").as_deref(), Some("Provided Tunnel token is not valid."));
         assert_eq!(complaint("2026-11-06T07:00:00Z INF Registered tunnel connection connIndex=0"), None);
+        assert_eq!(complaint("         https://login.tailscale.com/f/funnel?node=nAbC123").as_deref(), Some("Switch Funnel on for this PC, once: https://login.tailscale.com/f/funnel?node=nAbC123"));
+        assert!(complaint("Funnel is not enabled on your tailnet.").is_some());
+    }
+
+    /// Sir's word of 2026-11-19: an address that never changes, for free. "auto" takes Tailscale
+    /// Funnel once Tailscale is on the PC, and the quick tunnel while Funnel is not switched on.
+    #[test]
+    fn auto_takes_funnel_once_tailscale_is_there() {
+        let auto = SatelliteSettings { tunnel_provider: "auto".into(), ..Default::default() };
+        let provider = |has_token, tailscale, attempt| with_funnel(&auto, has_token, tailscale, attempt).tunnel_provider;
+        assert_eq!(provider(false, true, 0), "tailscale");
+        assert_eq!(provider(false, true, 1), "tailscale");
+        assert_eq!(provider(false, true, 2), "auto", "two failures: the quick tunnel meanwhile");
+        assert_eq!(provider(false, false, 0), "auto", "no Tailscale: the quick tunnel");
+        assert_eq!(provider(true, true, 0), "auto", "a Cloudflare token: its named tunnel");
+        let cloudflare = SatelliteSettings { tunnel_provider: "cloudflare".into(), ..Default::default() };
+        assert_eq!(with_funnel(&cloudflare, false, true, 0).tunnel_provider, "cloudflare", "a provider Sir chose stays");
+        assert_eq!(plan(&with_funnel(&auto, false, true, 0), None, 8444).unwrap().args, ["funnel", "http://127.0.0.1:8444"]);
     }
 }

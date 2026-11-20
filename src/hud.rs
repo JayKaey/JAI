@@ -122,8 +122,6 @@ pub enum HudCommand {
     WidgetAction { id: String, index: usize },
     WidgetRefresh { id: String },
     WidgetRemove { id: String },
-    /// Shows a widget in its own native window.
-    WidgetPopOut { id: String },
     /// A chat message in its own native window.
     OpenTextWindow { title: String, text: String },
     /// `[ Send via WhatsApp ]` (true) or `[ Cancel ]` on a message card.

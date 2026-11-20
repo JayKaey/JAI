@@ -63,6 +63,24 @@ pub async fn desktop() -> Desktop {
 /// new, self-contained request gets the live state only.
 pub async fn build(tools: &ToolContext, source: InputSource, voice: VoiceGate, request: &str, earlier: Option<String>, carry: bool) -> String {
     let now = chrono::Local::now();
+    // Someone other than Sir: the time, who is asking and where they are — nothing of Sir's own
+    // (his desktop, memories, calendar, where he is).
+    if let Some(guest) = tools.caller.guest() {
+        let db = tools.config.read(|c| c.memory_db_path.clone());
+        let closed: Vec<String> = crate::accounts::get(&db, guest)
+            .map(|a| a.topics.iter().map(|t| crate::accounts::TOPICS.iter().find(|(id, _)| id == t).map_or(t.clone(), |(_, label)| label.to_string())).collect())
+            .unwrap_or_default();
+        let place = tools.stark.location.guest_fix(guest).map_or("not shared (their phone sends it while J.A.I. is open on it)".to_string(), |f| f.address.clone().unwrap_or_else(|| format!("{:.5}, {:.5}", f.lat, f.lon)));
+        let mut out = String::from("LIVE SYSTEM CONTEXT (private notes for you; never read, quote or mention them):\n");
+        out.push_str(&format!("You are speaking with {guest}, someone Sir lets use you: not Sir. Call them {guest}, never Sir.\n"));
+        out.push_str("Never tell them anything about Sir: where he is, his schedule, messages, contacts, files, memories or what he asked you. What you may do for them is limited; a refused tool means Sir has not allowed it.\n");
+        out.push_str(&format!("Time: {}\nReply language: {}\n{guest}'s location: {place}\n", now.format("%A %-d %B %Y, %H:%M"), language_rule(request)));
+        if !closed.is_empty() {
+            out.push_str(&format!("Sir does not allow you to talk with {guest} about: {}. Decline those kindly.\n", closed.join(", ")));
+        }
+        out.push_str("END OF LIVE SYSTEM CONTEXT");
+        return out;
+    }
     let mode = tools.modality.get();
     let delivery = match voice {
         VoiceGate::Speak => "this reply is spoken aloud and shown in the chat",

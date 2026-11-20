@@ -161,6 +161,8 @@ pub struct ToolContext {
     pub workout: crate::workout_coach::WorkoutCoach,
     /// Context graph, contacts, WhatsApp, inbox, macros, hivemind, location and the Simulation Lab.
     pub stark: crate::stark::StarkSystems,
+    /// Whose turn these tools serve: Sir (everything), or an account (what Sir allowed it).
+    pub caller: crate::accounts::Caller,
 }
 
 /// Names small models invent for real tools ("open_app", "search_web", "set_timer" …).
@@ -616,6 +618,18 @@ impl ToolContext {
             }
             None => (name, args),
         };
+        // Someone other than Sir: only what Sir allowed that account (his accounts list).
+        if let Some(guest) = self.caller.guest() {
+            let db = self.config.read(|c| c.memory_db_path.clone());
+            let why = match crate::accounts::get(&db, guest) {
+                Some(account) => account.refusal(name, &args),
+                None => Some("Sir has not given you that permission.".to_string()),
+            };
+            if let Some(why) = why {
+                info!("[TOOL] {name} {args} refused for {guest}: not allowed");
+                return ToolOutcome { tool: name.to_string(), args, output: format!("Error: {why}"), success: false, duration_ms: 0, memories_changed: false, skills_changed: false, shutdown_requested: false, modality_changed: false, state_changed: false };
+            }
+        }
         // A silent scripted session acts inside JAI only.
         if silent_session() && !stays_inside(name, &args) {
             info!("[TOOL] {name} {args} (noted, not carried out: a silent session leaves the PC around JAI alone)");

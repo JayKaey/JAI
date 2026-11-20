@@ -48,8 +48,8 @@ fn accent_of(spec: &DynamicWidgetSpec, p: &Palette) -> Color32 {
 
 // ------------------------------------------------------------------------ the panel ----
 
-/// One widget with its title bar (pop-out and remove buttons).
-pub(super) fn widget_card(ui: &mut Ui, p: &Palette, spec: &DynamicWidgetSpec, host: &WidgetHost, in_window: bool) {
+/// One widget with its title bar and its close key.
+pub(super) fn widget_card(ui: &mut Ui, p: &Palette, spec: &DynamicWidgetSpec, host: &WidgetHost) {
     let accent = accent_of(spec, p);
     Frame::none()
         .fill(p.well)
@@ -61,11 +61,8 @@ pub(super) fn widget_card(ui: &mut Ui, p: &Palette, spec: &DynamicWidgetSpec, ho
             ui.horizontal(|ui| {
                 ui.add(egui::Label::new(RichText::new(&spec.title).font(bold(12.5)).color(accent)).truncate());
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if crate::holo_ui::key(ui, "X").on_hover_text("Remove this widget").clicked() {
+                    if crate::holo_ui::key(ui, "CLOSE").on_hover_text("Close this widget").clicked() {
                         host.command(HudCommand::WidgetRemove { id: spec.id.clone() });
-                    }
-                    if !in_window && crate::holo_ui::key(ui, "POP").on_hover_text("Open in its own window").clicked() {
-                        host.command(HudCommand::WidgetPopOut { id: spec.id.clone() });
                     }
                     muted(ui, short_type(&spec.kind));
                 });
@@ -77,16 +74,14 @@ pub(super) fn widget_card(ui: &mut Ui, p: &Palette, spec: &DynamicWidgetSpec, ho
 }
 
 /// A widget inside a block that is its frame and carries its title: its content alone, with
-/// its two keys above it on the right. (In the block of the board's left column the card's own
-/// rounded frame and second title stood inside the block's: a frame in a frame.)
+/// its close key above it on the right. (In the block of the board's left column the card's own
+/// rounded frame and second title stood inside the block's: a frame in a frame. It stands in a
+/// window of its own already, so there is nothing to pop out.)
 pub(super) fn widget_bare(ui: &mut Ui, p: &Palette, spec: &DynamicWidgetSpec, host: &WidgetHost) {
     let accent = accent_of(spec, p);
     let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), 16.0), Sense::hover());
-    let labels = [("REMOVE", false, "Remove this widget"), ("POP OUT", false, "Open it in its own window")];
-    match crate::holo_ui::keys_at(ui, ui.id().with(("widget_keys", &spec.id)), row.right(), row.center().y, &labels, 0.85).0 {
-        Some(0) => host.command(HudCommand::WidgetRemove { id: spec.id.clone() }),
-        Some(1) => host.command(HudCommand::WidgetPopOut { id: spec.id.clone() }),
-        _ => {}
+    if crate::holo_ui::keys_at(ui, ui.id().with(("widget_keys", &spec.id)), row.right(), row.center().y, &[("CLOSE", false, "Close this widget")], 0.85).0 == Some(0) {
+        host.command(HudCommand::WidgetRemove { id: spec.id.clone() });
     }
     ui.add_space(4.0);
     widget_body(ui, p, spec, host, accent);
@@ -992,7 +987,7 @@ fn window_content(ui: &mut Ui, p: &Palette, spec: &NativeWindowSpec, host: &Widg
         for wid in &spec.widgets {
             if let Some(w) = engine.widget(wid) {
                 fast |= matches!(w.kind, WidgetKind::CountdownOrStopwatch { running: true, .. });
-                widget_card(ui, &p, &w, host, true);
+                widget_card(ui, &p, &w, host);
             }
         }
         if spec.blocks.is_empty() && spec.widgets.is_empty() {

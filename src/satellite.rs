@@ -12,6 +12,7 @@
 //! Endpoints: `GET /satellite`, `POST /api/location`, `POST /api/chat`, `GET /api/state`,
 //! `POST /api/whatsapp/incoming` (bridge webhooks), `GET /satellite/cert.der`.
 
+use crate::accounts::Caller;
 use crate::app::Jai;
 use crate::config::ConfigStore;
 use crate::hud::{HudCommand, HudEvent};
@@ -254,9 +255,34 @@ impl Request {
     fn json(&self) -> Value {
         serde_json::from_slice(&self.body).unwrap_or(Value::Null)
     }
+
+    /// The key it carries: Sir's pairing key or an account's.
+    fn key(&self) -> &str {
+        self.header("X-JAI-Key").or_else(|| self.param("token")).or_else(|| self.param("k")).unwrap_or("")
+    }
+
+    /// Where it really came from: behind the tunnel (the loopback origin) the address the tunnel
+    /// names, else the peer's own.
+    fn from(&self, peer: SocketAddr) -> String {
+        if !peer.ip().is_loopback() {
+            return peer.ip().to_string();
+        }
+        self.header("CF-Connecting-IP").or_else(|| self.header("X-Forwarded-For").and_then(|v| v.split(',').next())).map(str::trim).filter(|v| !v.is_empty()).unwrap_or("tunnel").to_string()
+    }
 }
 
-async fn read_request<S: AsyncRead + Unpin>(stream: &mut S, token: Option<&str>) -> Result<Request, String> {
+/// What anyone may ask without a key: the page (it logs in), its files and themes, logging in
+/// and asking for an account (small bodies only).
+fn public(method: &str, path: &str, length: usize) -> bool {
+    match method {
+        "GET" => length == 0 && (path == "/" || path.starts_with(STATIC) || matches!(path, "/satellite" | "/satellite/" | "/satellite/manifest.webmanifest" | "/api/themes" | "/install")),
+        "POST" => length <= 4096 && matches!(path, "/api/login" | "/api/signup" | "/api/signup/finish"),
+        _ => false,
+    }
+}
+
+/// `known`: whether a key is Sir's or an account's.
+async fn read_request<S: AsyncRead + Unpin>(stream: &mut S, known: impl Fn(&str) -> bool) -> Result<Request, String> {
     let mut buf = Vec::with_capacity(2048);
     let mut chunk = [0u8; 4096];
     let header_end = loop {
@@ -305,10 +331,8 @@ async fn read_request<S: AsyncRead + Unpin>(stream: &mut S, token: Option<&str>)
         .map(|(k, v)| (k.to_string(), urlencoding::decode(&v.replace('+', " ")).map(|s| s.to_string()).unwrap_or_default()))
         .collect();
     let mut request = Request { method, path, query, headers, body: Vec::new() };
-    if let Some(token) = token {
-        let given = request.header("X-JAI-Key").or_else(|| request.param("token")).or_else(|| request.param("k")).unwrap_or("");
-        let public_get = request.method == "GET" && length == 0 && (request.path == "/" || request.path.starts_with(STATIC) || (given.is_empty() && matches!(request.path.as_str(), "/satellite" | "/satellite/")));
-        if !public_get && !same_token(given, token) { return Err("pairing key required".into()); }
+    if !public(&request.method, &request.path, length) && !known(request.key()) {
+        return Err("pairing key required".into());
     }
     // Authenticate before allocating or receiving a potentially large photo/file upload.
     request.body = buf[header_end + 4..].to_vec();
@@ -328,6 +352,20 @@ async fn respond<S: AsyncWrite + Unpin>(stream: &mut S, status: &str, content_ty
     );
     let _ = stream.write_all(head.as_bytes()).await;
     let _ = stream.write_all(body).await;
+    let _ = stream.flush().await;
+}
+
+/// A file sent as it is read (a program, an engine's libraries: up to gigabytes); `save_as`: the
+/// name a browser saves it under.
+async fn respond_file<S: AsyncWrite + Unpin>(stream: &mut S, path: &std::path::Path, save_as: Option<&str>) {
+    let Ok(mut file) = tokio::fs::File::open(path).await else {
+        return respond_json(stream, "404 Not Found", &json!({ "error": "no such file" })).await;
+    };
+    let size = file.metadata().await.map_or(0, |m| m.len());
+    let save_as = save_as.map(|n| format!("Content-Disposition: attachment; filename=\"{n}\"\r\n")).unwrap_or_default();
+    let head = format!("HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {size}\r\n{save_as}Cache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n");
+    let _ = stream.write_all(head.as_bytes()).await;
+    let _ = tokio::io::copy(&mut file, stream).await;
     let _ = stream.flush().await;
 }
 
@@ -401,10 +439,210 @@ async fn chat(app: &Jai, text: &str) -> Value {
     }
 }
 
+/// A value for the page's script (a `</script>` inside it cannot end the script).
+fn script_value(v: &Value) -> String {
+    v.to_string().replace('<', "\\u003c")
+}
+
+/// A theme as the page's colours.
+fn theme_colours(t: &crate::holo_theme::Theme) -> Value {
+    let hex = |c: [u8; 3]| format!("#{:02x}{:02x}{:02x}", c[0], c[1], c[2]);
+    json!({ "accent": hex(t.accent), "deep": hex(t.deep), "ink": hex(t.ink), "void": hex(t.void), "alert": hex(t.alert) })
+}
+
+/// The themes a phone can wear: the presets and Sir's saved ones, and the one his HUD wears.
+fn themes() -> Value {
+    let mut all: Vec<Value> = crate::holo_theme::PRESETS.iter().map(|(id, label, t)| json!({ "id": id, "label": label, "colours": theme_colours(t) })).collect();
+    all.extend(crate::theme_store::custom_themes().iter().map(|t| json!({ "id": t.key(), "label": t.name.to_uppercase(), "colours": theme_colours(&t.theme()) })));
+    json!({ "current": crate::holo_theme::active_name(), "themes": all })
+}
+
+/// The account requests waiting, in a window on Sir's PC: each name and its key (shown nowhere
+/// else; the phone that asked gets it from Sir).
+fn show_requests() {
+    let waiting = crate::accounts::waiting();
+    if waiting.is_empty() {
+        crate::kit::close_text("account_keys");
+        return;
+    }
+    let lines: Vec<String> = waiting.iter().map(|(name, code, left)| format!("{name} asks for an account.\nKEY   {} {}   (holds {} more min)", &code[..3], &code[3..], left.div_ceil(60).max(1))).collect();
+    crate::kit::show_text("account_keys", "Account requests", &format!("{}\n\nGive a key only to someone who may use J.A.I.; a new account may ask questions and nothing more until you allow it (\"open the accounts list\").", lines.join("\n\n")), [440.0, 300.0]);
+    crate::hud_notify::record(&format!("{} asks for an account: the key is on your screen.", waiting[0].0), false);
+}
+
+/// The phone or PC a request came from, for the account's list of devices.
+fn device(req: &Request, key: &str) -> crate::accounts::Device {
+    let body = req.json();
+    let agent = req.header("User-Agent").unwrap_or("");
+    let label = body["device"].as_str().map(str::to_string).unwrap_or_else(|| {
+        ["iPhone", "iPad", "Android", "Windows", "Mac", "Linux"].iter().find(|k| agent.contains(*k)).map_or("Browser", |k| *k).to_string()
+    });
+    crate::accounts::Device {
+        id: key.chars().take(8).collect(),
+        kind: body["kind"].as_str().unwrap_or("phone").chars().take(8).collect(),
+        label: label.chars().take(60).collect(),
+        version: body["version"].as_str().unwrap_or("").chars().take(40).collect(),
+        stats: body["stats"].as_str().unwrap_or("").chars().take(200).collect(),
+        seen: crate::accounts::now(),
+    }
+}
+
+/// The page, its themes, logging in and asking for an account: for anyone. Whether the request
+/// was one of them.
+async fn open_to_anyone<S: AsyncWrite + Unpin>(stream: &mut S, req: &Request, who: Option<&Caller>, token: &str, db: &str, peer: SocketAddr) -> bool {
+    let from = req.from(peer);
+    let body = req.json();
+    let field = |k: &str| body[k].as_str().unwrap_or("").to_string();
+    match (req.method.as_str(), req.path.as_str()) {
+        ("GET", "/satellite") | ("GET", "/satellite/") => {
+            // (Sir's pairing link carries his key and the page keeps it; anyone else's logs in.)
+            let key = if who == Some(&Caller::Sir) { token } else { "" };
+            let page = PAGE.replace("\"__JAI_KEY__\"", &script_value(&json!(key))).replace("\"__JAI_THEME__\"", &script_value(&theme_colours(&crate::holo_theme::current())));
+            respond(stream, "200 OK", "text/html; charset=utf-8", page.as_bytes()).await;
+            info!("[SATELLITE] {from} opened the satellite");
+        }
+        // "Add to Home screen": the page as an app (its own icon, no browser bar; Sir's opened paired).
+        ("GET", "/satellite/manifest.webmanifest") => {
+            let start = if who == Some(&Caller::Sir) { format!("/satellite?k={}", urlencoding::encode(token)) } else { "/satellite".into() };
+            let void = theme_colours(&crate::holo_theme::current())["void"].clone();
+            let manifest = json!({
+                "name": "J.A.I.",
+                "short_name": "J.A.I.",
+                "description": "J.A.I. on the phone",
+                "start_url": start,
+                "scope": "/satellite",
+                "display": "standalone",
+                "orientation": "portrait",
+                "background_color": void,
+                "theme_color": void,
+                "icons": [
+                    {"src": format!("{STATIC}icon-192.png"), "sizes": "192x192", "type": "image/png", "purpose": "any"},
+                    {"src": format!("{STATIC}icon.png"), "sizes": "512x512", "type": "image/png", "purpose": "any"},
+                ],
+            });
+            respond(stream, "200 OK", "application/manifest+json", manifest.to_string().as_bytes()).await;
+        }
+        ("GET", "/api/themes") => respond_json(stream, "200 OK", &themes()).await,
+        // J.A.I. for another PC: this program, which installs itself when it is started on its own
+        // (`installer`). It is large: three a day from one address, twenty in all.
+        ("GET", "/install") => {
+            if crate::accounts::knock("install", &from, 3, Duration::from_secs(86_400)) && crate::accounts::knock("install", "", 20, Duration::from_secs(86_400)) {
+                info!("[SATELLITE] {from} downloads the installer");
+                respond_file(stream, &std::env::current_exe().unwrap_or_default(), Some("JAI-setup.exe")).await;
+            } else {
+                respond_json(stream, "429 Too Many Requests", &json!({ "error": "Too many downloads from here today." })).await;
+            }
+        }
+        ("POST", "/api/login") => match crate::vault::Vault::open(db).and_then(|vault| crate::accounts::login(db, &vault, &field("name"), &field("password"), &from)) {
+            Ok(key) => {
+                let name = crate::accounts::session(db, &key).unwrap_or_default();
+                crate::accounts::seen(db, &name, device(req, &key));
+                info!("[ACCOUNTS] {name} logged in from {from}");
+                respond_json(stream, "200 OK", &json!({ "key": key, "name": name })).await;
+            }
+            Err(e) => {
+                warn!("[ACCOUNTS] A login from {from} failed: {e}");
+                respond_json(stream, "403 Forbidden", &json!({ "error": e })).await;
+            }
+        },
+        ("POST", "/api/signup") => match crate::accounts::request(db, &field("name"), &field("password"), &from) {
+            Ok(_) => {
+                info!("[ACCOUNTS] {from} asks for an account: {}", field("name"));
+                show_requests();
+                respond_json(stream, "200 OK", &json!({ "ok": true, "message": "A key is on Sir's screen now. Ask him for it and type it in (it holds five minutes)." })).await;
+            }
+            Err(e) => respond_json(stream, "400 Bad Request", &json!({ "error": e })).await,
+        },
+        ("POST", "/api/signup/finish") => {
+            let made = crate::vault::Vault::open(db).and_then(|vault| crate::accounts::finish(db, &vault, &field("name"), &field("key"), &from));
+            show_requests();
+            match made {
+                Ok(key) => {
+                    let name = crate::accounts::session(db, &key).unwrap_or_default();
+                    crate::accounts::seen(db, &name, device(req, &key));
+                    info!("[ACCOUNTS] {name}'s account is made ({from})");
+                    respond_json(stream, "200 OK", &json!({ "key": key, "name": name })).await;
+                }
+                Err(e) => respond_json(stream, "403 Forbidden", &json!({ "error": e })).await,
+            }
+        }
+        _ => return false,
+    }
+    true
+}
+
+/// What an account may ask from its phone: J.A.I. (a conversation of its own, what Sir allowed
+/// it), where it is, and its own state. Nothing of Sir's.
+async fn for_account<S: AsyncWrite + Unpin>(stream: &mut S, app: &Jai, req: &Request, name: &str, db: &str) {
+    let location = &app.tools().stark.location;
+    match (req.method.as_str(), req.path.as_str()) {
+        ("POST", "/api/chat") => {
+            let text: String = req.json()["text"].as_str().unwrap_or("").trim().chars().take(2000).collect();
+            if text.is_empty() {
+                respond_json(stream, "400 Bad Request", &json!({ "error": "text required" })).await;
+                return;
+            }
+            let reply = app.guest_turn(name, &text, "phone").await;
+            respond_json(stream, "200 OK", &json!({ "reply": reply })).await;
+        }
+        ("POST", "/api/voice") => {
+            let pcm: Vec<f32> = req.body.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]]) as f32 / 32768.0).collect();
+            if pcm.len() < 16_000 * 3 / 10 {
+                respond_json(stream, "400 Bad Request", &json!({ "error": "That was too short to be a sentence." })).await;
+                return;
+            }
+            let reply = match app.hear_clip(pcm).await {
+                Ok(heard) if !heard.trim().is_empty() => json!({ "heard": heard, "reply": app.guest_turn(name, &heard, "phone").await }),
+                Ok(_) => json!({ "heard": "", "reply": "", "error": "I did not catch that." }),
+                Err(e) => json!({ "heard": "", "reply": "", "error": e }),
+            };
+            respond_json(stream, "200 OK", &reply).await;
+        }
+        ("POST", "/api/location") => match serde_json::from_slice::<PhoneSample>(&req.body) {
+            Ok(sample) => {
+                location.update_guest(name, sample);
+                respond_json(stream, "200 OK", &json!({ "ok": true })).await;
+            }
+            Err(e) => respond_json(stream, "400 Bad Request", &json!({ "error": e.to_string() })).await,
+        },
+        ("GET", "/api/state") => {
+            crate::accounts::seen(db, name, device(req, req.key()));
+            let fix = location.guest_fix(name);
+            let paused = crate::accounts::get(db, name).and_then(|a| a.paused());
+            respond_json(stream, "200 OK", &json!({ "role": "guest", "name": name, "state": "idle", "paused": paused, "gps": fix.map(|f| json!({ "lat": f.lat, "lon": f.lon, "accuracy": f.accuracy_m, "address": f.address })) })).await;
+        }
+        ("POST", "/api/logout") => {
+            crate::accounts::logout(db, req.key());
+            respond_json(stream, "200 OK", &json!({ "ok": true })).await;
+        }
+        // A JAI on the account's PC (`fleet`): how it is, Sir's orders for it, the voices.
+        ("POST", "/api/pc") => {
+            crate::accounts::seen(db, name, device(req, req.key()));
+            respond_json(stream, "200 OK", &crate::fleet::hello(db, name, &req.json())).await;
+        }
+        // … and the version Sir's PC runs, which it takes at once.
+        ("GET", "/api/pc/update") => {
+            info!("[FLEET] {name}'s PC fetches this version");
+            respond_file(stream, &std::env::current_exe().unwrap_or_default(), None).await;
+        }
+        // The installer of a new PC (`installer`): what it fetches, and each file by its number.
+        ("GET", "/api/pc/files") => respond_json(stream, "200 OK", &json!(crate::installer::files().into_iter().map(|(to, _, size)| json!({ "path": to, "size": size })).collect::<Vec<_>>())).await,
+        ("GET", path) if path.starts_with("/api/pc/file/") => match path["/api/pc/file/".len()..].parse::<usize>().ok().and_then(|i| crate::installer::files().into_iter().nth(i)) {
+            Some((to, from, _)) => {
+                info!("[FLEET] {name}'s new PC fetches {to}");
+                respond_file(stream, &from, None).await;
+            }
+            None => respond_json(stream, "404 Not Found", &json!({ "error": "no such file" })).await,
+        },
+        _ => respond_json(stream, "403 Forbidden", &json!({ "error": "Sir has not given you that permission." })).await,
+    }
+}
+
 async fn handle<S: AsyncRead + AsyncWrite + Unpin>(mut stream: S, app: Jai, peer: SocketAddr) {
+    let (token, db) = app.config().read(|c| (c.satellite.token.clone(), c.memory_db_path.clone()));
+    let known = |key: &str| same_token(key, &token) || crate::accounts::session(&db, key).is_some();
     // Long enough for a phone photo over Wi-Fi.
-    let token = app.config().read(|c| c.satellite.token.clone());
-    let req = match tokio::time::timeout(Duration::from_secs(90), read_request(&mut stream, Some(&token))).await {
+    let req = match tokio::time::timeout(Duration::from_secs(90), read_request(&mut stream, known)).await {
         Ok(Ok(r)) => r,
         Ok(Err(error)) => {
             let status = if error == "pairing key required" { "403 Forbidden" } else { "400 Bad Request" };
@@ -413,9 +651,8 @@ async fn handle<S: AsyncRead + AsyncWrite + Unpin>(mut stream: S, app: Jai, peer
         }
         Err(_) => return,
     };
-    let given = req.header("X-JAI-Key").or_else(|| req.param("token")).or_else(|| req.param("k")).unwrap_or("");
     if req.path == "/" || req.path.is_empty() {
-        respond(&mut stream, "200 OK", "text/html; charset=utf-8", b"<!doctype html><meta name=viewport content='width=device-width'><body style='background:#000;color:#5ad;font-family:sans-serif;padding:2em'><h2>J.A.I. Satellite</h2><p>Scan the QR code in the HUD (Integrations &rarr; Quick Connections) to pair this device.</p>").await;
+        respond(&mut stream, "200 OK", "text/html; charset=utf-8", b"<!doctype html><meta name=viewport content='width=device-width'><meta http-equiv=refresh content='0;url=/satellite'><body style='background:#000;color:#eef3f7;font-family:sans-serif;padding:2em'><h2>J.A.I.</h2><p><a style='color:#ffd400' href='/satellite'>Log in</a></p>").await;
         return;
     }
     // The page's own fonts and icon: the same for everybody, no key needed.
@@ -425,44 +662,25 @@ async fn handle<S: AsyncRead + AsyncWrite + Unpin>(mut stream: S, app: Jai, peer
             return;
         }
     }
-    if !same_token(given, &token) {
-        if given.is_empty() && req.method == "GET" && matches!(req.path.as_str(), "/satellite" | "/satellite/") {
-            // An unpaired request gets only a bootstrap, never data or an embedded secret.
-            respond(&mut stream, "200 OK", "text/html; charset=utf-8", br#"<!doctype html><meta name="viewport" content="width=device-width"><title>Pair with JAI</title><p>Scan the pairing QR code in the desktop HUD to authorize this phone.</p><script>try{const k=localStorage.getItem('jai_satellite_key');if(k)location.replace('/satellite?token='+encodeURIComponent(k));}catch(e){}</script>"#).await;
+    // Who asks: Sir (his pairing key), an account (its key), or no one yet (the page logs in).
+    let who = if same_token(req.key(), &token) { Some(Caller::Sir) } else { crate::accounts::session(&db, req.key()).map(Caller::Guest) };
+    if open_to_anyone(&mut stream, &req, who.as_ref(), &token, &db, peer).await {
+        return;
+    }
+    match who {
+        None => {
+            warn!("[SATELLITE] Rejected {} {} from {peer} (bad or missing key)", req.method, req.path);
+            respond_json(&mut stream, "403 Forbidden", &json!({ "error": "pairing key required" })).await;
             return;
         }
-        warn!("[SATELLITE] Rejected {} {} from {peer} (bad or missing pairing key)", req.method, req.path);
-        respond_json(&mut stream, "403 Forbidden", &json!({ "error": "pairing key required" })).await;
-        return;
+        Some(Caller::Guest(name)) => {
+            for_account(&mut stream, &app, &req, &name, &db).await;
+            return;
+        }
+        Some(Caller::Sir) => {}
     }
     let tools = app.tools().clone();
     match (req.method.as_str(), req.path.as_str()) {
-        ("GET", "/satellite") | ("GET", "/satellite/") => {
-            let key = serde_json::to_string(&token).unwrap_or_default().replace('<', "\\u003c");
-            let page = PAGE.replace("\"__JAI_KEY__\"", &key);
-            respond(&mut stream, "200 OK", "text/html; charset=utf-8", page.as_bytes()).await;
-            tools.stark.pulse(&["hivemind", "brain"], false);
-            info!("[SATELLITE] {peer} opened the satellite");
-        }
-        // "Add to Home screen": the page as an app (its own icon, no browser bar, opened paired).
-        ("GET", "/satellite/manifest.webmanifest") => {
-            let manifest = json!({
-                "name": "J.A.I.",
-                "short_name": "J.A.I.",
-                "description": "J.A.I. on the phone",
-                "start_url": format!("/satellite?k={}", urlencoding::encode(&token)),
-                "scope": "/satellite",
-                "display": "standalone",
-                "orientation": "portrait",
-                "background_color": "#020408",
-                "theme_color": "#020408",
-                "icons": [
-                    {"src": format!("{STATIC}icon-192.png"), "sizes": "192x192", "type": "image/png", "purpose": "any"},
-                    {"src": format!("{STATIC}icon.png"), "sizes": "512x512", "type": "image/png", "purpose": "any"},
-                ],
-            });
-            respond(&mut stream, "200 OK", "application/manifest+json", manifest.to_string().as_bytes()).await;
-        }
         // Hold to talk: the phone's microphone (16 kHz, 16 bit), heard by his own recogniser.
         ("POST", "/api/voice") => {
             let pcm: Vec<f32> = req.body.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]]) as f32 / 32768.0).collect();
@@ -531,6 +749,7 @@ async fn handle<S: AsyncRead + AsyncWrite + Unpin>(mut stream: S, app: Jai, peer
                 &mut stream,
                 "200 OK",
                 &json!({
+                    "role": "sir",
                     "state": hud.state,
                     "detail": hud.detail,
                     "gps": fix.as_ref().map(|f| json!({ "lat": f.lat, "lon": f.lon, "accuracy": f.accuracy_m, "speed_kmh": f.speed_kmh, "address": f.address })),
@@ -921,7 +1140,7 @@ mod tests {
     async fn requests_parse_with_query_and_body() {
         let raw = b"POST /api/chat?k=abc%20d HTTP/1.1\r\nHost: x\r\nContent-Length: 14\r\nX-JAI-Key: k1\r\n\r\n{\"text\":\"hi!\"}x";
         let mut stream: &[u8] = raw;
-        let req = read_request(&mut stream, None).await.unwrap();
+        let req = read_request(&mut stream, |key| key == "k1").await.unwrap();
         assert_eq!(req.method, "POST");
         assert_eq!(req.path, "/api/chat");
         assert_eq!(req.param("k"), Some("abc d"));
@@ -937,9 +1156,30 @@ mod tests {
     async fn unauthenticated_upload_is_rejected_before_body_read() {
         let raw = b"POST /api/airdrop HTTP/1.1\r\nHost: x\r\nContent-Length: 1000000\r\n\r\n";
         let mut stream: &[u8] = raw;
-        let error = read_request(&mut stream, Some("secret")).await.err().unwrap();
+        let error = read_request(&mut stream, |key| key == "secret").await.err().unwrap();
         assert_eq!(error, "pairing key required");
         let mut conflicting: &[u8] = b"POST /api/chat HTTP/1.1\r\nContent-Length: 1\r\nContent-Length: 2\r\n\r\nx";
-        assert!(read_request(&mut conflicting, None).await.is_err());
+        assert!(read_request(&mut conflicting, |_| true).await.is_err());
+    }
+
+    /// Without a key: the page, its themes, logging in and asking for an account (small bodies
+    /// only); everything else needs Sir's key or an account's.
+    #[tokio::test]
+    async fn without_a_key_only_the_page_and_logging_in_are_open() {
+        let nobody = |_: &str| false;
+        for raw in [&b"GET /satellite HTTP/1.1\r\n\r\n"[..], b"GET /api/themes HTTP/1.1\r\n\r\n", b"POST /api/login HTTP/1.1\r\nContent-Length: 2\r\n\r\n{}", b"POST /api/signup HTTP/1.1\r\nContent-Length: 2\r\n\r\n{}"] {
+            let mut stream: &[u8] = raw;
+            assert!(read_request(&mut stream, nobody).await.is_ok(), "{}", String::from_utf8_lossy(raw));
+        }
+        for raw in [&b"GET /api/state HTTP/1.1\r\n\r\n"[..], b"POST /api/chat HTTP/1.1\r\nContent-Length: 2\r\n\r\n{}", b"POST /api/login HTTP/1.1\r\nContent-Length: 5000\r\n\r\n", b"GET /satellite HTTP/1.1\r\nContent-Length: 9\r\n\r\n123456789"] {
+            let mut stream: &[u8] = raw;
+            assert_eq!(read_request(&mut stream, nobody).await.err().as_deref(), Some("pairing key required"), "{}", String::from_utf8_lossy(raw));
+        }
+        // Behind the tunnel the address the tunnel names counts (each knock is that address's).
+        let mut stream: &[u8] = b"POST /api/login HTTP/1.1\r\nCF-Connecting-IP: 203.0.113.9\r\nContent-Length: 2\r\n\r\n{}";
+        let req = read_request(&mut stream, nobody).await.unwrap();
+        assert_eq!(req.from("127.0.0.1:5000".parse().unwrap()), "203.0.113.9");
+        assert_eq!(req.from("192.168.1.7:5000".parse().unwrap()), "192.168.1.7");
+        assert!(PAGE.contains("\"__JAI_THEME__\"") && PAGE.contains("/api/login") && PAGE.contains("/api/signup/finish"));
     }
 }

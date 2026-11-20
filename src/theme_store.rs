@@ -91,6 +91,14 @@ pub fn custom(name: &str) -> Option<CustomTheme> {
     custom_themes().into_iter().find(|t| t.name.to_lowercase() == key)
 }
 
+/// `base`, or "base 2", "base 3" …: a name no saved theme has yet. (A theme made without a name
+/// was always "Custom" and replaced the last one: Sir, 2026-11-19, "it only ever has one custom
+/// theme".)
+pub fn free_name(base: &str) -> String {
+    let base = base.trim();
+    std::iter::once(base.to_string()).chain((2..).map(|k| format!("{base} {k}"))).find(|n| custom(n).is_none()).unwrap_or_default()
+}
+
 /// Saves (or replaces) a theme: on disk at once, and in the memory database.
 pub fn save_custom(theme: CustomTheme) -> Result<(), String> {
     if theme.name.trim().is_empty() {
@@ -235,7 +243,7 @@ pub fn design_theme(name: Option<&str>, description: &str) -> Option<CustomTheme
                 c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default()
             })
             .collect();
-        if words.is_empty() { "Custom".into() } else { words.join(" ") }
+        free_name(&if words.is_empty() { "Custom".into() } else { words.join(" ") })
     });
     Some(CustomTheme { name, core_primary: primary, core_secondary: secondary, window_border: border, background_tint: background })
 }
@@ -288,6 +296,13 @@ mod tests {
         assert!(custom("my deep sea theme").is_some());
         assert_eq!(resolve("theme:Deep Sea").accent, [0, 180, 255]);
         assert!(save_custom(CustomTheme { name: " ".into(), core_primary: [0; 3], core_secondary: [0; 3], window_border: [0; 3], background_tint: [0; 3] }).is_err());
+        // Themes made without a name stand beside each other, never replace each other.
+        assert_eq!((free_name("Deep Sea"), free_name("Lagoon")), ("Deep Sea 2".to_string(), "Lagoon".to_string()));
+        let first = design_theme(None, "electric purple").expect("a theme");
+        save_custom(first.clone()).unwrap();
+        let second = design_theme(None, "electric purple").expect("a theme");
+        assert_eq!((first.name.as_str(), second.name.as_str()), ("Electric Purple", "Electric Purple 2"));
+        assert_eq!(design_theme(Some("Electric Purple"), "electric purple").unwrap().name, "Electric Purple", "a name given is kept");
         let _ = std::fs::remove_file(store_path());
     }
 }

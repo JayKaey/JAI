@@ -693,6 +693,7 @@ pub async fn run(cfg: &JaiConfig, speak: bool, bench: bool, llm_stage: bool) -> 
                 workout: crate::workout_coach::WorkoutCoach::in_memory(),
                 pim: crate::pim::Pim::in_memory(store.clone()),
                 stark: crate::stark::StarkSystems::in_memory(),
+                caller: crate::accounts::Caller::Sir,
             };
             let brain = crate::brain::Brain::new(store, tools, std::sync::Arc::clone(&llm));
             let t = Instant::now();

@@ -38,6 +38,12 @@ mod settings_panel;
 #[path = "gui_mixer.rs"]
 mod mixer_view;
 
+#[path = "gui_accounts.rs"]
+mod accounts_view;
+
+#[path = "gui_login.rs"]
+mod login_view;
+
 #[path = "gui_network_radar.rs"]
 mod radar_view;
 
@@ -542,6 +548,62 @@ pub fn show_theme_studio(open: bool) {
         open_control("theme_studio");
     } else {
         theme_studio::close();
+        request_repaint();
+    }
+}
+
+/// "Open the accounts list" (the memory database it reads), or closes it (`None`).
+pub fn show_accounts(db: Option<String>) {
+    match db {
+        Some(db) => {
+            accounts_view::open(db);
+            show();
+        }
+        None => accounts_view::close(),
+    }
+    request_repaint();
+}
+
+/// The installer's window (`installer::run`): the login of another PC in his look, then
+/// everything fetched.
+pub fn run_installer(rt: Handle, config: crate::config::ConfigStore, card: String, brain: Result<&'static str, String>, into: std::path::PathBuf) -> Result<(), String> {
+    login_view::installing(config.read(|c| c.main_pc.clone()), card, brain, &into);
+    let viewport = egui::ViewportBuilder::default().with_title("Install J.A.I.").with_app_id("jai").with_inner_size([520.0, 560.0]).with_decorations(false).with_icon(Arc::new(window_icon().unwrap_or_default()));
+    let options = eframe::NativeOptions { viewport, renderer: eframe::Renderer::Glow, centered: true, persist_window: false, ..Default::default() };
+    eframe::run_native(
+        "J.A.I. setup",
+        options,
+        Box::new(move |cc| {
+            holo::install_fonts(&cc.egui_ctx);
+            configure_style(&cc.egui_ctx, 1.0);
+            apply_hud_visuals(&cc.egui_ctx);
+            *lock(&SHARED.ctx) = Some(cc.egui_ctx.clone());
+            Ok(Box::new(Installer { rt, config }))
+        }),
+    )
+    .map_err(|e| e.to_string())
+}
+
+struct Installer {
+    rt: Handle,
+    config: crate::config::ConfigStore,
+}
+
+impl eframe::App for Installer {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        login_view::installer(ctx, &self.rt, &self.config);
+    }
+
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        [0.0, 0.0, 0.0, 1.0]
+    }
+}
+
+/// The login of a J.A.I. on another PC (`fleet`): opened while it has no key to Sir's PC.
+pub fn show_login() {
+    if !login_view::is_open() {
+        login_view::open();
+        show();
         request_repaint();
     }
 }
@@ -6200,6 +6262,8 @@ impl HudApp {
         }
         mark("mixer");
         mixer_view::show(ctx, &self.rt);
+        accounts_view::show(ctx);
+        login_view::show(ctx, &self.rt, self.app.config());
         // The network radar, the disk map and the Earth, when open.
         mark("radar");
         radar_view::show(ctx, &self.rt);
@@ -7496,12 +7560,16 @@ fn reveal_when_drawn(ctx: &egui::Context) {
 }
 
 /// Where his windows stand, in the board's own points: those on the board's screen that are
-/// not on their way out. (In each window's own points: on a monitor of another scale than the
-/// board's a window is not on the board's screen.)
+/// still there, not minimised and not on their way out. (In each window's own points: on a
+/// monitor of another scale than the board's a window is not on the board's screen.)
 fn own_window_rects(ctx: &egui::Context) -> Vec<Rect> {
     let Some(board) = ctx.input(|i| i.viewport().inner_rect) else { return Vec::new() };
-    let motions = lock(&DETACHED_MOTIONS);
-    let mut rects: Vec<Rect> = motions.rects.iter().filter(|(viewport, _)| !motions.leaving.contains_key(viewport)).map(|(_, rect)| rect.translate(-board.min.to_vec2())).filter(|rect| rect.intersects(Rect::from_min_size(Pos2::ZERO, board.size()))).collect();
+    let windows: std::collections::HashMap<ViewportId, bool> = ctx.input(|i| i.raw.viewports.iter().map(|(id, v)| (*id, v.minimized == Some(true))).collect());
+    let mut motions = lock(&DETACHED_MOTIONS);
+    // (A window gone without its exit, a widget closed by its key or a text window, left where
+    // it stood behind: a leader from the core to nothing, seen by Sir on 2026-11-19.)
+    motions.rects.retain(|viewport, _| windows.contains_key(viewport));
+    let mut rects: Vec<Rect> = motions.rects.iter().filter(|(viewport, _)| !motions.leaving.contains_key(viewport) && windows.get(viewport) == Some(&false)).map(|(_, rect)| rect.translate(-board.min.to_vec2())).filter(|rect| rect.intersects(Rect::from_min_size(Pos2::ZERO, board.size()))).collect();
     // (In one order every frame: a leader drawn over another would flicker.)
     rects.sort_by(|a, b| a.min.x.total_cmp(&b.min.x).then(a.min.y.total_cmp(&b.min.y)));
     rects
@@ -10780,12 +10848,12 @@ mod tests {
     }
 
     /// The board ties each of his windows to the core as it tied its blocks: where they stand
-    /// on the screen comes into the board's own points. A window on its way out, or on
-    /// another screen, has no leader.
+    /// on the screen comes into the board's own points. A window on its way out, on another
+    /// screen, minimised or gone (closed without its exit: a widget's CLOSE) has no leader.
     #[test]
     fn the_board_draws_its_leaders_to_his_windows() {
         let board = Rect::from_min_size(pos2(2560.0, 0.0), vec2(2560.0, 1440.0));
-        let [beside, leaving, elsewhere] = ["a", "b", "c"].map(|k| ViewportId::from_hash_of(("leader_probe", k)));
+        let [beside, leaving, elsewhere, gone, small] = ["a", "b", "c", "d", "e"].map(|k| ViewportId::from_hash_of(("leader_probe", k)));
         let stands = |x: f32| Rect::from_min_size(pos2(x, 400.0), vec2(600.0, 420.0));
         {
             let mut motions = lock(&DETACHED_MOTIONS);
@@ -10793,17 +10861,25 @@ mod tests {
             motions.rects.insert(leaving, stands(2560.0 + 100.0));
             motions.leaving.insert(leaving, (Instant::now(), true));
             motions.rects.insert(elsewhere, stands(300.0));
+            motions.rects.insert(gone, stands(2560.0 + 900.0));
+            motions.rects.insert(small, stands(2560.0 + 1300.0));
         }
         let ctx = egui::Context::default();
         let mut input = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, board.size())), ..Default::default() };
         input.viewports.entry(ViewportId::ROOT).or_default().inner_rect = Some(board);
+        for viewport in [beside, leaving, elsewhere, small] {
+            input.viewports.entry(viewport).or_default().minimized = Some(viewport == small);
+        }
         let mut rects = Vec::new();
         let _ = ctx.run(input, |ctx| rects = own_window_rects(ctx));
-        for viewport in [beside, leaving, elsewhere] {
+        let forgot_the_gone = !lock(&DETACHED_MOTIONS).rects.contains_key(&gone);
+        for viewport in [beside, leaving, elsewhere, gone, small] {
             lock(&DETACHED_MOTIONS).forget(viewport);
         }
         assert!(rects.contains(&stands(1700.0)), "his window, in the board's points: {rects:?}");
         assert!(!rects.contains(&stands(100.0)) && !rects.contains(&stands(300.0 - 2560.0)), "none to a leaving window or to another screen: {rects:?}");
+        assert!(!rects.contains(&stands(900.0)) && forgot_the_gone, "none to a window that is gone, and where it stood is forgotten: {rects:?}");
+        assert!(!rects.contains(&stands(1300.0)), "none to a minimised window: {rects:?}");
         let core = pos2(1280.0, 720.0);
         let (from, to) = crate::holo_stage::leader(core, 300.0, stands(1700.0)).expect("a leader");
         assert!(((from - core).length() - 300.0).abs() < 0.5 && to.x == 1700.0, "from his circle to the edge that faces him: {from:?} {to:?}");

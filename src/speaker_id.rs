@@ -378,6 +378,12 @@ pub fn hear(db: &str, clip: &[f32], speech_ms: u32, keep: bool) -> Option<Judged
         return None;
     }
     let judged = print.judge(clip, speech_ms, trusted_now());
+    // On another PC Sir's own voice (shared from his PC) has every right too; nothing of it is
+    // learnt into this PC's print.
+    let judged = match lock(&SHARED_SIR).as_ref().filter(|sir| sir.print.len() == clip.len()).map(|sir| sir.judge(clip, speech_ms, false)) {
+        Some(sir) if sir.sure && !judged.his => Judged { plain: false, ..sir },
+        _ => judged,
+    };
     // Only a full sentence that was surely his opens the moment of trust.
     if judged.plain {
         *lock(&LAST_SURE) = Some(std::time::Instant::now());
@@ -489,7 +495,8 @@ pub struct Guest {
     pub name: String,
     pub print: Vec<f32>,
     pub clips: usize,
-    /// What the guest may ask for: "everything", or "music" (players and volume only).
+    /// What the guest may ask for: "everything", "music" (players and volume only) or
+    /// "questions" (nothing else). Its account holds what it may since accounts came.
     pub may: String,
 }
 
@@ -506,8 +513,20 @@ fn open_guests(db: &str) -> rusqlite::Result<rusqlite::Connection> {
     Ok(conn)
 }
 
-/// The guests he knows (read from the database once, then from here).
+/// The guests he knows: those kept on this PC, and the voices of the accounts' PCs shared with
+/// it (`share_guest`).
 pub fn guests(db: &str) -> Vec<Guest> {
+    let mut all = kept_guests(db);
+    for shared in lock(&SHARED_GUESTS).iter() {
+        if !all.iter().any(|g| g.name.eq_ignore_ascii_case(&shared.name)) {
+            all.push(shared.clone());
+        }
+    }
+    all
+}
+
+/// The guests kept on this PC (read from the database once, then from here).
+fn kept_guests(db: &str) -> Vec<Guest> {
     let mut known = lock(&GUESTS);
     if known.is_none() {
         let read = rusqlite::Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
@@ -533,7 +552,7 @@ pub fn keep_guest(db: &str, guest: &Guest, keep: bool) -> Result<(), String> {
         )
         .map_err(|e| e.to_string())?;
     }
-    let mut all = guests(db);
+    let mut all = kept_guests(db);
     all.retain(|g| !g.name.eq_ignore_ascii_case(&guest.name));
     all.push(guest.clone());
     *lock(&GUESTS) = Some(all);
@@ -542,7 +561,7 @@ pub fn keep_guest(db: &str, guest: &Guest, keep: bool) -> Result<(), String> {
 
 /// Forgets a guest; whether there was one of that name.
 pub fn forget_guest(db: &str, name: &str, keep: bool) -> bool {
-    let mut all = guests(db);
+    let mut all = kept_guests(db);
     let before = all.len();
     all.retain(|g| !g.name.eq_ignore_ascii_case(name));
     let gone = all.len() != before;
@@ -571,7 +590,41 @@ pub fn guest_print(name: &str, clips: &[Vec<f32>]) -> Option<Guest> {
             *m += v;
         }
     }
-    Some(Guest { name: name.to_string(), print: normalised(mean), clips: clips.len(), may: "everything".to_string() })
+    // (A new voice asks questions only, until Sir says what else: his word of 2026-11-20.)
+    Some(Guest { name: name.to_string(), print: normalised(mean), clips: clips.len(), may: "questions".to_string() })
+}
+
+// ------------------------------------------------------- voices shared between PCs ----
+// (`fleet`.) Held here and never written down: each print is kept on disk on its owner's PC
+// alone. On another PC: Sir's own print. On Sir's PC: the voices of the accounts' PCs.
+
+static SHARED_SIR: Mutex<Option<VoicePrint>> = Mutex::new(None);
+static SHARED_GUESTS: Mutex<Vec<Guest>> = Mutex::new(Vec::new());
+
+/// This PC's own print (its user's voice), to be shared.
+pub fn print_to_share(db: &str) -> Option<serde_json::Value> {
+    let p = known(db)?;
+    Some(serde_json::json!({ "print": p.print, "threshold": p.threshold }))
+}
+
+fn shared_print(v: &serde_json::Value) -> Option<VoicePrint> {
+    let print: Vec<f32> = serde_json::from_value(v["print"].clone()).ok()?;
+    let threshold = v["threshold"].as_f64()? as f32;
+    (!print.is_empty() && print.iter().all(|x| x.is_finite())).then(|| VoicePrint { print, clips: 3, threshold: threshold.clamp(THRESHOLD_FLOOR, THRESHOLD_CEILING), grown: Vec::new(), grown_clips: 0, own: 0.0 })
+}
+
+/// On another PC: Sir's voice, from his PC (None: not known there).
+pub fn share_sir(v: Option<&serde_json::Value>) {
+    *lock(&SHARED_SIR) = v.and_then(shared_print);
+}
+
+/// On Sir's PC: the voice of an account's PC, by the account's name (its account says what it
+/// may).
+pub fn share_guest(name: &str, v: &serde_json::Value) {
+    let Some(p) = shared_print(v) else { return };
+    let mut all = lock(&SHARED_GUESTS);
+    all.retain(|g| !g.name.eq_ignore_ascii_case(name));
+    all.push(Guest { name: name.to_string(), print: p.print, clips: 3, may: "questions".into() });
 }
 
 // ------------------------------------------------------------ a print without a set-up ----
@@ -952,7 +1005,7 @@ mod tests {
         let said = |k: usize| unit(vec![0.1, 1.0, 0.05 * k as f32, 0.0]);
         assert!(guest_print("Tom", &[said(0), said(1)]).is_none(), "two sentences are too few");
         let tom = guest_print("Tom", &[said(0), said(1), said(2)]).expect("three make a print");
-        assert_eq!((tom.name.as_str(), tom.clips, tom.may.as_str()), ("Tom", 3, "everything"));
+        assert_eq!((tom.name.as_str(), tom.clips, tom.may.as_str()), ("Tom", 3, "questions"), "a new voice may only ask");
         keep_guest(&db, &tom, true).unwrap();
         keep_guest(&db, &Guest { may: "music".into(), ..tom.clone() }, true).unwrap();
         *lock(&GUESTS) = None;

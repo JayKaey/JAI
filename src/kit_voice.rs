@@ -762,6 +762,24 @@ static GUEST_WHO: LazyLock<Regex> = LazyLock::new(|| re(r"^who\s+(?:is|was)\s+(?
 
 /// Words that are no one's name in these sentences.
 const NO_NAME: [&str; 14] = ["my", "your", "his", "her", "the", "a", "that", "this", "it", "me", "you", "jai", "jay", "everyone"];
+/// (A name: three letters or more, and none of the words these sentences are made of.
+/// "Remember his voice" names no one, nor does "this is my dad speaking", nor "nobody".)
+const NOT_A_NAME: &[&str] = &["hi", "thi", "her", "their", "our", "speaking", "talking", "calling", "here", "there", "back", "home", "voice", "friend", "guest", "who", "what", "someone", "anyone", "now", "again", "too", "nobody", "hello", "hallo", "hey", "yes", "okay", "sorry", "nothing", "why", "fine", "good"];
+/// The answer to "who am I speaking with?": "Tom", "I'm Tom", "my name is Tom", "ich bin Tom".
+static SELF_NAMED: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"^(?:(?:hi|hello|hey|hallo|yes|ja|oh)\s+)?(?:(?:jai|jay)\s+)?(?:(?:i\s+am|im|my\s+name\s+is|my\s+names|it\s+is|its|this\s+is|here\s+is|call\s+me|ich\s+bin|ich\s+heiße|ich\s+heisse|mein\s+name\s+ist|hier\s+ist|hier\s+spricht)\s+)?(?P<name>[a-zäöüß]+)(?:\s+(?:here|speaking|hier))?$")
+});
+
+fn a_name(word: &str) -> bool {
+    word.chars().count() >= 3 && !NO_NAME.contains(&word) && !NOT_A_NAME.contains(&word)
+}
+
+/// The name a voice gives itself, in words heard (lower case).
+fn self_named(text: &str) -> Option<String> {
+    let said = crate::ear::words(text).join(" ");
+    let name = SELF_NAMED.captures(&said)?.name("name")?.as_str().to_string();
+    (a_name(&name) && crate::accounts::check(&name, true).is_ok()).then(|| capitalised(&name))
+}
 
 /// "This is my friend Tom, remember his voice", "Tom may only control the music", "forget
 /// Tom's voice", "who do you know", "who is speaking".
@@ -772,10 +790,7 @@ pub fn guest_command(s: &str) -> Option<Value> {
     if GUEST_WHO.is_match(s) {
         return Some(json!({"action": "status"}));
     }
-    // (A name: three letters or more, and none of the words these sentences are made of.
-    // "Remember his voice" names no one, nor does "this is my dad speaking".)
-    const NOT_A_NAME: [&str; 22] = ["hi", "thi", "her", "their", "our", "speaking", "talking", "calling", "here", "there", "back", "home", "voice", "friend", "guest", "who", "what", "someone", "anyone", "now", "again", "too"];
-    let named = |c: &regex::Captures, groups: &[&str]| groups.iter().find_map(|g| c.name(g)).map(|m| m.as_str().to_string()).filter(|n| n.chars().count() >= 3 && !NO_NAME.contains(&n.as_str()) && !NOT_A_NAME.contains(&n.as_str()));
+    let named = |c: &regex::Captures, groups: &[&str]| groups.iter().find_map(|g| c.name(g)).map(|m| m.as_str().to_string()).filter(|n| a_name(n));
     if let Some(c) = GUEST_LEARN.captures(s) {
         return named(&c, &["a", "b", "c", "d"]).map(|name| json!({"action": "learn", "name": capitalised(&name)}));
     }
@@ -786,7 +801,7 @@ pub fn guest_command(s: &str) -> Option<Value> {
     named(&c, &["a", "b", "c"]).map(|name| json!({"action": "forget", "name": capitalised(&name)}))
 }
 
-fn capitalised(word: &str) -> String {
+pub(crate) fn capitalised(word: &str) -> String {
     let mut c = word.chars();
     c.next().map_or(String::new(), |first| first.to_uppercase().chain(c).collect())
 }
@@ -845,12 +860,52 @@ pub fn guest_heard(print: Vec<f32>, speech_ms: u32) -> Result<crate::speaker_id:
     }
 }
 
-/// Whether a guest who may only control the music may ask for `order`.
-pub fn music_order(order: &str) -> bool {
-    let t = crate::typos::normalize_user_input_typos(order);
-    crate::intents::mixer_command(&t).is_some()
-        || matches!(crate::command_corrector::routed_intent(&t), Some(crate::intents::Intent::Tool { name: "control_music" | "control_audio_mixer" | "media_and_volume_control", .. }))
-        || crate::intents::silent_quick_command(&t).is_some_and(|a| matches!(a.tool, "control_music" | "control_audio_mixer" | "media_and_volume_control"))
+/// A voice he does not know that called him by name: its print, whether that sentence was long
+/// enough to count for the print, and when he asked it who it is.
+static INTRODUCING: Mutex<Option<(Vec<f32>, bool, Instant)>> = Mutex::new(None);
+/// When he last asked a voice he does not know who it is.
+static ASKED: Mutex<Option<Instant>> = Mutex::new(None);
+/// He asks that at most this often (a film's "Jay" is not asked all evening) …
+const ASK_EVERY: std::time::Duration = std::time::Duration::from_secs(120);
+/// … and waits this long for the answer.
+const ANSWER_WITHIN: std::time::Duration = std::time::Duration::from_secs(45);
+
+/// A voice he does not know called him by name: whether to ask who it is.
+pub fn ask_who(print: &[f32], speech_ms: u32) -> bool {
+    let mut asked = lock(&ASKED);
+    if asked.is_some_and(|at| at.elapsed() < ASK_EVERY) {
+        return false;
+    }
+    *asked = Some(Instant::now());
+    *lock(&INTRODUCING) = Some((print.to_vec(), speech_ms >= 900, Instant::now()));
+    true
+}
+
+/// The sentence after "who am I speaking with?" in the voice he asked: what he answers. The name
+/// starts the voice's print (its account asks questions only, until Sir allows more); a name
+/// someone has already is Sir's to give. None: no answer (nothing asked, another voice).
+pub fn introduction(db: &str, print: &[f32], speech_ms: u32, text: &str) -> Option<String> {
+    let (first, counts, _) = {
+        let mut asked = lock(&INTRODUCING);
+        let answers = asked.as_ref().is_some_and(|(first, _, at)| at.elapsed() < ANSWER_WITHIN && crate::speaker_id::likeness(first, print) >= GUEST_SENTENCES_ALIKE);
+        if !answers {
+            return None;
+        }
+        asked.take()?
+    };
+    let Some(name) = self_named(text) else {
+        tracing::info!("[VOICE] The voice I asked gave no name: '{text}'");
+        return None;
+    };
+    if crate::accounts::get(db, &name).is_some() || crate::speaker_id::guests(db).iter().any(|g| g.name.eq_ignore_ascii_case(&name)) {
+        tracing::info!("[VOICE] A voice I did not know says it is {name}, a name that is taken");
+        return Some(format!("I know a {name} already. Sir has to introduce you to me."));
+    }
+    let prints: Vec<Vec<f32>> = [(first, counts), (print.to_vec(), speech_ms >= 900)].into_iter().filter(|(_, counts)| *counts).map(|(p, _)| p).collect();
+    let left = crate::speaker_id::GUEST_CLIPS.saturating_sub(prints.len());
+    *lock(&LEARNING) = Some((name.clone(), prints, Instant::now()));
+    tracing::info!("[VOICE] A voice I did not know is {name}: learning it ({left} more sentences)");
+    Some(format!("Nice to meet you, {name}. Say {} more sentence{} to me, so I know your voice.", ["no", "one", "two", "three"][left.min(3)], if left == 1 { "" } else { "s" }))
 }
 
 pub fn guest(ctx: &ToolContext, args: &Value) -> Result<String, String> {
@@ -873,6 +928,11 @@ pub fn guest(ctx: &ToolContext, args: &Value) -> Result<String, String> {
             let mut guest = crate::speaker_id::guests(&db).into_iter().find(|g| g.name.eq_ignore_ascii_case(&name)).ok_or_else(|| format!("I do not know {name}'s voice yet, Sir. Say \"this is {name}, remember his voice\" first."))?;
             guest.may = if args["may"] == "music" { "music" } else { "everything" }.to_string();
             crate::speaker_id::keep_guest(&db, &guest, keep)?;
+            if keep {
+                // (What a voice may is its account's.)
+                crate::accounts::for_voice(&db, &guest.name, &guest.may);
+                crate::accounts::update(&db, &guest.name, |a| a.allow = crate::accounts::voice_allow(&guest.may))?;
+            }
             Ok(say(format!("{} may {}.", guest.name, if guest.may == "music" { "control the music and the volume, nothing else" } else { "ask for everything" }), format!("Understood, Sir. {} may {}.", guest.name, if guest.may == "music" { "control the music, nothing else" } else { "ask for everything" })))
         }
         "forget" => {
@@ -894,7 +954,7 @@ pub fn guest(ctx: &ToolContext, args: &Value) -> Result<String, String> {
             if all.is_empty() {
                 return Ok(say("I know no guest's voice. Say \"this is my friend Tom, remember his voice\".", "I know your voice alone, Sir. Introduce someone and I'll remember theirs."));
             }
-            let lines: Vec<String> = all.iter().map(|g| format!("{}  ·  may {}", g.name, if g.may == "music" { "control the music" } else { "ask for everything" })).collect();
+            let lines: Vec<String> = all.iter().map(|g| format!("{}  ·  may {}", g.name, match g.may.as_str() { "music" => "control the music", "everything" => "ask for everything", _ => "ask questions" })).collect();
             crate::kit::show_text("kit_guests", "Known guests // voices I know by name", &format!("{}\n\n\"Tom may only control the music\" limits a guest; \"forget Tom's voice\" removes one.", lines.join("\n")), [460.0, 280.0]);
             let names: Vec<&str> = all.iter().map(|g| g.name.as_str()).collect();
             Ok(say(lines.join("\n"), format!("Besides you, Sir: {}.", names.join(" and "))))
@@ -1096,9 +1156,34 @@ mod tests {
         assert_eq!(guest_heard(print(1), 400), Err(2), "a word is no sentence");
         assert_eq!(guest_heard(print(1), 1500), Err(1));
         let tom = guest_heard(print(2), 1500).expect("the third sentence");
-        assert_eq!((tom.name.as_str(), tom.clips), ("Tom", 3));
+        assert_eq!((tom.name.as_str(), tom.clips, tom.may.as_str()), ("Tom", 3, "questions"), "a new voice asks questions only");
         assert!(!guest_learning());
-        // A guest who may only control the music.
-        assert!(music_order("pause the music") && music_order("volume 40") && !music_order("open discord") && !music_order("close yourself"));
+
+        // A voice he does not know, asked who it is (in this test: the statics are shared).
+        for (said, want) in [("Erika.", Some("Erika")), ("I'm Erika", Some("Erika")), ("my name is erika", Some("Erika")), ("hello jay, this is Erika here", Some("Erika")), ("ich bin Erika", Some("Erika")), ("Mein Name ist Erika.", Some("Erika")), ("it's erika speaking", Some("Erika"))] {
+            assert_eq!(self_named(said).as_deref(), want, "{said}");
+        }
+        for said in ["nobody", "hello", "what's the weather", "I am fine", "here", "jay", "yo", "I am Erika and I want the weather"] {
+            assert_eq!(self_named(said), None, "{said}");
+        }
+        let db = std::env::temp_dir().join(format!("jai_voice_{}.db", uuid::Uuid::new_v4().simple())).to_string_lossy().to_string();
+        crate::accounts::for_voice(&db, "Max", "questions").expect("an account");
+        let (voice, other) = (vec![0.1, 1.0, 0.0], vec![1.0, -0.4, 0.3]);
+        *lock(&ASKED) = None;
+        assert!(ask_who(&voice, 1500), "asked once");
+        assert!(!ask_who(&voice, 1500), "not again for two minutes");
+        assert_eq!(introduction(&db, &other, 1500, "I'm Erika"), None, "another voice is no answer");
+        let line = introduction(&db, &voice, 600, "I'm Erika").expect("the voice that was asked");
+        assert!(line.contains("Erika") && line.contains("two more sentences"), "{line}: the first sentence counts, a short one not");
+        assert!(guest_learning());
+        assert_eq!(guest_heard(vec![0.1, 1.0, 0.02], 1500), Err(1));
+        assert_eq!(guest_heard(vec![0.1, 1.0, 0.04], 1500).map(|g| (g.name, g.may)), Ok(("Erika".to_string(), "questions".to_string())));
+        assert_eq!(introduction(&db, &voice, 1500, "I'm Erika"), None, "asked once, answered once");
+        // A name someone has already is not taken by a voice.
+        *lock(&ASKED) = None;
+        assert!(ask_who(&voice, 1500));
+        let line = introduction(&db, &voice, 1500, "my name is max").expect("an answer");
+        assert!(line.contains("Sir has to introduce you"), "{line}");
+        assert!(!guest_learning());
     }
 }

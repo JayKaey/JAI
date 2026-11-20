@@ -318,12 +318,16 @@ fn body(ui: &mut Ui, iface: &InterfaceSettings) -> Option<Out> {
                         }
                     }
                     Control::Theme => {
-                        // A leaning swatch for each ready-made theme: its accent over its deep
-                        // tone; the one in use stands full size on a rule of its own light.
+                        // A leaning swatch for each ready-made theme and his six newest own ones:
+                        // its accent over its deep tone; the one in use stands full size on a
+                        // rule of its own light.
                         ui.spacing_mut().item_spacing.x = 3.0;
-                        for (name, _, palette) in crate::holo_theme::PRESETS.iter().rev() {
+                        let own = crate::theme_store::custom_themes();
+                        let swatches = own.iter().rev().take(6).map(|t| (t.key(), t.name.clone(), t.theme()));
+                        for (name, label, palette) in swatches.chain(crate::holo_theme::PRESETS.iter().rev().map(|(name, _, look)| (name.to_string(), crate::holo_theme::label(name), *look))) {
+                            let palette = &palette;
                             let (rect, response) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
-                            let chosen = iface.hud_palette == *name;
+                            let chosen = iface.hud_palette == name;
                             let p = ui.painter();
                             let swatch = rect.shrink2(vec2(1.0, if response.hovered() || chosen { 2.0 } else { 5.0 }));
                             let (top, foot) = swatch.split_top_bottom_at_fraction(0.7);
@@ -332,10 +336,9 @@ fn body(ui: &mut Ui, iface: &InterfaceSettings) -> Option<Out> {
                             if chosen {
                                 holo::rule(p, rect.left_bottom(), rect.right_bottom(), palette.hot());
                             }
-                            let label = crate::holo_theme::label(name);
                             if response.on_hover_text(label).clicked() && !chosen {
                                 let mut next = iface.clone();
-                                next.hud_palette = name.to_string();
+                                next.hud_palette = name;
                                 out = Some(Out::Set(Box::new(next)));
                             }
                         }

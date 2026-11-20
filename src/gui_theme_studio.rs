@@ -102,7 +102,7 @@ pub(super) fn show(ctx: &egui::Context) -> Option<CustomTheme> {
         crate::hud_dock::forget(ID);
         return lock(&SAVED).take();
     }
-    lock(&DRAFT).get_or_insert_with(|| CustomTheme::from_theme("Custom", &crate::holo_theme::current()));
+    lock(&DRAFT).get_or_insert_with(|| CustomTheme::from_theme(&crate::theme_store::free_name("Custom"), &crate::holo_theme::current()));
     if !crate::hud_dock::adopt(ID) {
         // (Its rows keep their width: in a block the dock made narrower, the studio scrolls
         // sideways instead of squeezing its hex fields shut.)

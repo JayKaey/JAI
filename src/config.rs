@@ -298,6 +298,9 @@ pub struct JaiConfig {
     pub away: AwaySettings,
     /// The mobile web satellite (phone / iPad HUD with live GPS).
     pub satellite: SatelliteSettings,
+    /// On another PC than Sir's: the address of Sir's PC, the main one (`fleet`). Empty on
+    /// Sir's own PC.
+    pub main_pc: String,
     /// Home / school coordinates, IP fallback, the home geofence and the commute advisor.
     pub location: LocationSettings,
     /// Double-clap wake gesture and the door-knock radar.
@@ -694,6 +697,7 @@ impl Default for JaiConfig {
             discord_bot: DiscordBotSettings::default(),
             away: AwaySettings::default(),
             satellite: SatelliteSettings::default(),
+            main_pc: String::new(),
             location: LocationSettings::default(),
             acoustic: AcousticSettings::default(),
             features: FeatureSettings::default(),

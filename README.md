@@ -236,6 +236,45 @@ The mobile page is served over HTTPS and reached through a tunnel. Without any s
 Cloudflare quick tunnel whose address changes on every start. For an address that never
 changes, set a permanent address in the Integrations hub (Quick Connections, Worldwide address):
 a Cloudflare named tunnel (token plus your own hostname), Tailscale Funnel or your own server.
+The free one: install Tailscale on this PC (tailscale.com/download), sign in, and restart JAI.
+With the provider on "auto" he takes Funnel by himself; the first time he shows a link to switch
+Funnel on for this PC (or run `tailscale funnel 8444` once). The address is then
+`https://<pc>.<tailnet>.ts.net` for good, and so is the pairing link.
+
+## Accounts
+
+Only Sir may do everything: his voice, his paired phone, this PC. Anyone else needs an account.
+On the phone page anyone can ask for one with a name and a password (3 to 20 characters each); a
+six-digit key appears on Sir's screen only, and the account is made when it is typed in. A new
+account may ask questions and nothing else: it gets its own conversation and nothing of Sir's
+(not his place, his messages, his PC). "Open the accounts list" ("öffne die Kontenliste") shows
+every account with its password; Sir allows tools one by one and down to single options (the
+Earth, but not its satellites), closes topics (where they are, maths, words of his own), pauses an
+account ("time out Max for two hours") or removes it. "What did you do for Max today?" (or this
+week, or for everyone) reports what JAI did for others. Logging in and asking for accounts are
+limited per address, so the page cannot be flooded.
+
+A voice JAI has never heard that calls him is asked "Who am I speaking with?". Its answer ("I'm
+Erika", "ich bin Erika", the name alone) starts learning it; after a few sentences it may ask
+questions. A name that belongs to an account or a known voice already is refused: Sir introduces
+that person himself.
+
+## J.A.I. on other PCs
+
+Sir's PC is always the main one. A friend opens the phone page's address on their PC and takes "J.A.I.
+for your Windows PC" (or gets JAI.exe from Sir): started on its own, or with `--install`, it is the
+installer. It needs a graphics card with 4 GB of memory (under 8 GB it takes the smaller brain,
+Qwen3.5 2B), logs in at Sir's PC with an account, fetches the program and its engines from there,
+then the voice, ears and brain, adds JAI to the Start menu and starts him. Until it is logged in,
+such a JAI answers nobody.
+
+"Open the earth on Max's PC", "turn the volume down on Max's computer", "shut down Max's PC": the
+order goes to Max's PC (it waits ten minutes if that PC is offline) and never acts on Sir's. A JAI
+on another PC sends no orders anywhere: asked to act on Sir's PC, it says it can't. It always runs
+the version Sir's PC runs (a newer one is fetched at once and started; Sir's own PC never updates
+itself), hears of new commits on GitHub, and shows in the accounts list with its version and its
+PC's load. Voice prints are shared both ways and held in memory only: each stays on its owner's PC.
+Windows only.
 
 ## JAI's own Discord account
 

@@ -85,6 +85,9 @@ fn town_of(address: &Value) -> Option<String> {
 
 struct Inner {
     phone: RwLock<Option<GeoFix>>,
+    /// Where each other account's phone is (Sir, 2026-11-20: a friend across the country asking
+    /// "where am I" gets his own answer).
+    others: RwLock<HashMap<String, GeoFix>>,
     ip: Mutex<Option<(GeoFix, Instant)>>,
     addresses: Mutex<HashMap<(i64, i64), String>>,
     towns: Mutex<HashMap<(i64, i64), String>>,
@@ -197,7 +200,7 @@ impl LocationEngine {
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
         Self {
-            inner: Arc::new(Inner { phone: RwLock::new(None), ip: Mutex::new(None), addresses: Mutex::new(HashMap::new()), towns: Mutex::new(HashMap::new()), fence: Mutex::new(Fence::Unknown), http }),
+            inner: Arc::new(Inner { phone: RwLock::new(None), others: RwLock::new(HashMap::new()), ip: Mutex::new(None), addresses: Mutex::new(HashMap::new()), towns: Mutex::new(HashMap::new()), fence: Mutex::new(Fence::Unknown), http }),
         }
     }
 
@@ -210,23 +213,49 @@ impl LocationEngine {
         self.inner.phone.read().unwrap_or_else(|e| e.into_inner()).clone().filter(|f| f.at.elapsed() < PHONE_FIX_TTL)
     }
 
-    /// A GPS sample from the satellite: updates the working memory and the home geofence.
-    pub fn update_from_phone(&self, s: PhoneSample, cfg: &LocationSettings, graph: &ContextGraph, events: &broadcast::Sender<StarkEvent>) {
-        if !(-90.0..=90.0).contains(&s.latitude) || !(-180.0..=180.0).contains(&s.longitude) {
-            return;
+    /// Where another account's phone is (while fresh).
+    pub fn guest_fix(&self, name: &str) -> Option<GeoFix> {
+        self.inner.others.read().unwrap_or_else(|e| e.into_inner()).get(&name.to_lowercase()).cloned().filter(|f| f.at.elapsed() < PHONE_FIX_TTL)
+    }
+
+    /// A GPS sample from another account's phone: kept for that account alone (Sir's working
+    /// memory and his home geofence never see it).
+    pub fn update_guest(&self, name: &str, s: PhoneSample) {
+        let Some(fix) = self.fix_of(&s) else { return };
+        let key = name.to_lowercase();
+        self.inner.others.write().unwrap_or_else(|e| e.into_inner()).insert(key.clone(), fix.clone());
+        if fix.address.is_none() {
+            let me = self.clone();
+            tokio::spawn(async move {
+                if let Some(a) = me.reverse_geocode(fix.lat, fix.lon).await {
+                    if let Some(f) = me.inner.others.write().unwrap_or_else(|e| e.into_inner()).get_mut(&key) {
+                        f.address = Some(a);
+                    }
+                }
+            });
         }
-        let address = self.cached_address(s.latitude, s.longitude);
-        let fix = GeoFix {
+    }
+
+    fn fix_of(&self, s: &PhoneSample) -> Option<GeoFix> {
+        if !(-90.0..=90.0).contains(&s.latitude) || !(-180.0..=180.0).contains(&s.longitude) {
+            return None;
+        }
+        Some(GeoFix {
             lat: s.latitude,
             lon: s.longitude,
             accuracy_m: s.accuracy.unwrap_or(50.0),
             speed_kmh: s.speed.filter(|v| v.is_finite() && *v >= 0.0).map(|v| v * 3.6),
             altitude_m: s.altitude.filter(|v| v.is_finite()),
             heading: s.heading.filter(|v| v.is_finite()),
-            address,
+            address: self.cached_address(s.latitude, s.longitude),
             source: "phone GPS".into(),
             at: Instant::now(),
-        };
+        })
+    }
+
+    /// A GPS sample from the satellite: updates the working memory and the home geofence.
+    pub fn update_from_phone(&self, s: PhoneSample, cfg: &LocationSettings, graph: &ContextGraph, events: &broadcast::Sender<StarkEvent>) {
+        let Some(fix) = self.fix_of(&s) else { return };
         let first = self.inner.phone.read().unwrap_or_else(|e| e.into_inner()).is_none();
         *self.inner.phone.write().unwrap_or_else(|e| e.into_inner()) = Some(fix.clone());
         graph.set_location(fix.clone());
@@ -397,8 +426,12 @@ impl LocationEngine {
         Ok(fix)
     }
 
-    /// Where Sir is right now: phone GPS, else his home (`home`).
+    /// Where Sir is right now: phone GPS, else his home (`home`). For someone else: where that
+    /// account's phone is, and nothing of Sir's.
     pub async fn current(&self, tools: &ToolContext) -> Result<GeoFix, String> {
+        if let Some(guest) = tools.caller.guest() {
+            return self.guest_fix(guest).ok_or_else(|| "I do not know where you are: open J.A.I. on your phone and allow it your location.".to_string());
+        }
         if let Some(f) = self.phone_fix() {
             return Ok(f);
         }
@@ -660,7 +693,8 @@ async fn nearby(tools: &ToolContext, query: &str, radius: f64) -> Result<String,
             None => engine.reverse_geocode(fix.lat, fix.lon).await.unwrap_or_else(|| format!("{:.5}, {:.5}", fix.lat, fix.lon)),
         };
         return Ok(format!(
-            "Sir is at {address} ({:.5}, {:.5}, ±{:.0} m, source: {}){}{}.",
+            "{} at {address} ({:.5}, {:.5}, ±{:.0} m, source: {}){}{}.",
+            if tools.caller.is_sir() { "Sir is" } else { "You are" },
             fix.lat,
             fix.lon,
             fix.accuracy_m,

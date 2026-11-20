@@ -1054,7 +1054,7 @@ pub fn configure(current: &InterfaceSettings, args: &Value) -> Result<Configured
         let description = text("description").or(spec.as_str()).unwrap_or("");
         let colour = |k: &str| text(k).and_then(parse_color);
         let designed = crate::theme_store::design_theme(text("name"), description);
-        let base = designed.or_else(|| colour("core_primary").or(colour("window_border")).map(|c| crate::theme_store::CustomTheme::from_theme(text("name").unwrap_or("Custom"), &crate::holo_theme::Theme::of_colour(c))));
+        let base = designed.or_else(|| colour("core_primary").or(colour("window_border")).map(|c| crate::theme_store::CustomTheme::from_theme(&text("name").map_or_else(|| crate::theme_store::free_name("Custom"), str::to_string), &crate::holo_theme::Theme::of_colour(c))));
         match base {
             Some(mut t) => {
                 if let Some(n) = text("name") {

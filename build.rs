@@ -25,6 +25,11 @@ fn main() {
 
     write_icon();
     write_core_graph();
+    // Which build this is (`fleet`: a JAI on another PC runs the one Sir's PC runs): the commit
+    // it was built from and when.
+    let commit = std::process::Command::new("git").args(["rev-parse", "--short", "HEAD"]).output().ok().filter(|o| o.status.success()).map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).filter(|c| !c.is_empty()).unwrap_or_else(|| "local".into());
+    let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    println!("cargo:rustc-env=JAI_BUILD={commit}-{at}");
 
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         // The main thread runs the start-up and the egui window: 8 MB of stack instead of

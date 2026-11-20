@@ -174,7 +174,8 @@ fn volume_follow_up(last: crate::audio_mixer::Step, s: &str) -> Option<Value> {
 /// "Stop", "pause", "stopp", "halt", "stop music", "JAI, pause" (and Whisper's "post" / "paws",
 /// already corrected to "pause"): stop everything that is playing, at once and silently.
 pub fn is_media_stop(text: &str) -> bool {
-    silent_quick_command(text).is_some_and(|a| a.tool == "control_music" && a.args["action"] == "stop_all")
+    // (Not "stop the music on Max's PC": that is Max's PC's to stop.)
+    crate::fleet::command(text).is_none() && silent_quick_command(text).is_some_and(|a| a.tool == "control_music" && a.args["action"] == "stop_all")
 }
 
 /// "What's up? Can you change the interface to red?": several sentences of which exactly one is

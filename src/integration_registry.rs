@@ -400,6 +400,7 @@ pub async fn cli(cfg: &crate::config::JaiConfig) -> std::process::ExitCode {
         workout: crate::workout_coach::WorkoutCoach::in_memory(),
         pim: crate::pim::Pim::open(&cfg.memory_db_path, store.clone(), None),
         stark: crate::stark::StarkSystems::open(&cfg.memory_db_path),
+        caller: crate::accounts::Caller::Sir,
     };
     println!("J.A.I. integration diagnostics…\n");
     let reports = tools.stark.integrations.diagnose_all(&tools).await;
