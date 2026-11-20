@@ -26,7 +26,8 @@ jobs:
         shell: bash
         run: |
           cargo test --release -- installer::tests::a_linux_pc kit_pc:: screen_context:: workbench:: fleet:: --test-threads=4 | tee tests.txt
-          grep "^test result" tests.txt >> "$GITHUB_STEP_SUMMARY"
+          # (A notice: shown on the run's page and by the API without signing in, unlike the log.)
+          echo "::notice title=Linux tests::$(grep '^test result' tests.txt)"
       - uses: actions/upload-artifact@v7
         with:
           name: jai-linux-x86_64
