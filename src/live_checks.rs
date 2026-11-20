@@ -19,6 +19,10 @@
 //! - `his_words_for_the_route_reader` (JAI_HIS_WORDS=<file>): Sir's own lines from the
 //!   conversation log (read-only), one per line, for `where_these_sentences_go`.
 //! - `voice_samples_for_his_ear` (JAI_SAMPLES=<folder>): both voices as WAV files.
+//! - `kde::menu_entry_names_this_program`, then inside KDE Plasma `kde::kwin_` (Linux,
+//!   JAI_REAL_PLASMA=1; the Linux workflow runs them against a KWin without a screen): the menu
+//!   entry KWin's grants go by; a foot terminal's keys, states, quick tile, monitor and close
+//!   through KWin; one of his own X11 windows over its monitor and as the desktop's background.
 
 use serde_json::json;
 use std::path::Path;
@@ -451,5 +455,130 @@ fn voice_samples_for_his_ear() {
         write_wav(&path, &audio, rate).expect("the WAV file");
         let peak = audio.iter().fold(0.0f32, |m, s| m.max(s.abs()));
         eprintln!("{who}: {} sentence(s), {:.1} s, peak {:.2} → {}", sentences.len(), audio.len() as f32 / rate as f32, peak, path.display());
+    }
+}
+
+/// KDE Plasma against a real KWin. On a desktop these move real windows, and the menu entry names
+/// the test program until JAI's next start.
+#[cfg(not(windows))]
+mod kde {
+    use super::*;
+    use crate::plasma::{self, state, Window};
+    use crate::winctl::{manage, WindowAction::{self, *}, WindowTarget};
+
+    /// Waits up to `secs` seconds for `ok`.
+    fn until(secs: u64, mut ok: impl FnMut() -> bool) -> bool {
+        let end = Instant::now() + Duration::from_secs(secs);
+        while !ok() {
+            if Instant::now() > end {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        true
+    }
+
+    fn kwin() -> bool {
+        if !wanted("JAI_REAL_PLASMA") {
+            skipped("JAI_REAL_PLASMA=1");
+            return false;
+        }
+        assert!(plasma::available(), "KWin lent no window list: its menu entry must name this program before KWin starts");
+        true
+    }
+
+    /// Before KWin starts: KWin reads from the menu entry which program may have its window list
+    /// and keys, as a program connects.
+    #[test]
+    #[ignore = "writes this test program into the KDE menu entry: JAI_REAL_PLASMA=1"]
+    fn menu_entry_names_this_program() {
+        if !wanted("JAI_REAL_PLASMA") {
+            return skipped("JAI_REAL_PLASMA=1");
+        }
+        crate::installer::keep_menu_entry();
+        let entry = std::fs::read_to_string(crate::installer::data_home().expect("a home").join("applications/jai.desktop")).expect("the menu entry");
+        let exe = std::env::current_exe().expect("this program");
+        assert!(entry.contains(&format!("Exec=\"{}\"", exe.display())), "{entry}");
+    }
+
+    /// Another program's window (a foot terminal) as JAI handles Sir's programs under KDE: keys
+    /// through KWin's fake input, its states, a quick tile by KWin's shortcut, the second monitor
+    /// by its output name, closed.
+    #[test]
+    #[ignore = "types into a terminal and moves its window through KWin: JAI_REAL_PLASMA=1"]
+    fn kwin_runs_another_programs_window() {
+        if !kwin() {
+            return;
+        }
+        let monitors = crate::monitors::list();
+        eprintln!("monitors {monitors:?}, KWin's outputs {:?}", plasma::outputs());
+        let typed = std::env::temp_dir().join(format!("jai-kwin-keys-{}.txt", std::process::id()));
+        let mut foot = std::process::Command::new("foot")
+            .args(["-T", "kwin-check", "--", "sh", "-c", &format!("read line; echo \"$line\" > '{}'; exec sleep 600", typed.display())])
+            .spawn()
+            .expect("foot, the stand-in for another program");
+        let target = WindowTarget::Named("terminal".into());
+        assert!(until(20, || crate::winctl::kde_windows(&target).is_ok()), "the terminal never came into KWin's list");
+        let uuid = crate::winctl::kde_windows(&target).unwrap().remove(0).uuid;
+        let now = || plasma::windows().into_iter().find(|w| w.uuid == uuid);
+        let screen = |w: &Window| crate::monitors::monitor_at(&monitors, w.geometry[0] + w.geometry[2] / 2, w.geometry[1] + w.geometry[3] / 2);
+        crate::winctl::to_front(&now().unwrap()).expect("the terminal in front");
+        for key in ["j", "a", "i", "Enter"] {
+            plasma::press(key).expect("a key");
+        }
+        assert!(until(5, || std::fs::read_to_string(&typed).is_ok_and(|t| t.trim() == "jai")), "the keys never reached the terminal");
+        let rt = tokio::runtime::Runtime::new().expect("a runtime");
+        let run = |action: WindowAction| eprintln!("{}", rt.block_on(manage(action, target.clone())).unwrap_or_else(|e| panic!("{action:?}: {e}")));
+        for (action, bit, on) in [(Maximize, state::MAXIMIZED, true), (Restore, state::MAXIMIZED, false), (Fullscreen, state::FULLSCREEN, true), (ExitFullscreen, state::FULLSCREEN, false), (Minimize, state::MINIMIZED, true), (Restore, state::MINIMIZED, false)] {
+            run(action);
+            assert!(until(5, || now().is_some_and(|w| w.is(bit) == on)), "{action:?} left it as {:?}", now());
+        }
+        run(SnapLeft);
+        let left_half = |w: &Window| screen(w).is_some_and(|i| w.geometry[0] == monitors[i - 1].rect[0] && (w.geometry[2] - monitors[i - 1].width() / 2).abs() <= 24);
+        assert!(until(5, || now().is_some_and(|w| left_half(&w))), "snapped left as {:?}", now());
+        if monitors.len() > 1 && monitors[0].rect != monitors[1].rect {
+            eprintln!("{}", rt.block_on(crate::monitors::move_app(target.clone(), json!(2))).expect("on monitor 2"));
+            assert!(until(5, || now().is_some_and(|w| screen(&w) == Some(2))), "moved as {:?}", now());
+        } else {
+            eprintln!("(not moved between monitors: KWin put both in one place)");
+        }
+        run(Close);
+        assert!(until(5, || now().is_none()), "the terminal is still open");
+        let _ = foot.kill();
+        let _ = std::fs::remove_file(typed);
+    }
+
+    /// One of his own windows (an X11 window of this process without a frame, as winit makes
+    /// them): over its whole monitor as the full-screen board, then the desktop's background
+    /// (under every window, on every desktop, off the task manager) and back.
+    #[test]
+    #[ignore = "puts a window of its own under KWin: JAI_REAL_PLASMA=1"]
+    fn kwin_keeps_his_own_window_below() {
+        use x11rb::connection::Connection as _;
+        use x11rb::protocol::xproto::{AtomEnum, ConnectionExt as _, CreateWindowAux, PropMode, WindowClass};
+        use x11rb::wrapper::ConnectionExt as _;
+        if !kwin() {
+            return;
+        }
+        const TITLE: &str = "kwin-check-own";
+        let (conn, screen) = x11rb::connect(None).expect("XWayland");
+        let atom = |name: &str| conn.intern_atom(false, name.as_bytes()).expect("an atom").reply().expect("the atom").atom;
+        let (win, motif) = (conn.generate_id().expect("an id"), atom("_MOTIF_WM_HINTS"));
+        conn.create_window(x11rb::COPY_DEPTH_FROM_PARENT, win, conn.setup().roots[screen].root, 0, 0, 300, 200, 0, WindowClass::INPUT_OUTPUT, x11rb::COPY_FROM_PARENT, &CreateWindowAux::new()).expect("a window");
+        conn.change_property8(PropMode::REPLACE, win, AtomEnum::WM_NAME, AtomEnum::STRING, TITLE.as_bytes()).expect("its title");
+        conn.change_property32(PropMode::REPLACE, win, atom("_NET_WM_PID"), AtomEnum::CARDINAL, &[std::process::id()]).expect("its process");
+        conn.change_property32(PropMode::REPLACE, win, motif, motif, &[2, 0, 0, 0, 0]).expect("no frame");
+        conn.map_window(win).expect("shown");
+        conn.flush().expect("sent");
+        assert!(until(10, || crate::x11::own_window(TITLE).is_some()), "KWin never managed the window");
+        let hwnd = crate::x11::own_window(TITLE).unwrap();
+        crate::x11::cover_monitor(hwnd).expect("over its monitor");
+        assert!(until(5, || crate::x11::covers_monitor(hwnd)), "the window does not cover its monitor");
+        let mine = || plasma::windows().into_iter().find(|w| w.title == TITLE);
+        crate::wallpaper::stand(hwnd, Some([100, 100, 500, 400]));
+        let standing = |w: &Window| w.is(state::KEEP_BELOW) && w.is(state::SKIP_TASKBAR);
+        assert!(until(5, || mine().is_some_and(|w| standing(&w) && w.geometry == [100, 100, 400, 300])), "standing as {:?}", mine());
+        crate::wallpaper::stand(hwnd, None);
+        assert!(until(5, || mine().is_some_and(|w| !w.is(state::KEEP_BELOW) && !w.is(state::SKIP_TASKBAR))), "still standing as {:?}", mine());
     }
 }

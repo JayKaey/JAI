@@ -1,4 +1,5 @@
-# J.A.I. for Linux: builds the program on Ubuntu and runs the tests of what is Linux's own.
+# J.A.I. for Linux: builds the program on Ubuntu and runs the tests of what is Linux's own; on
+# Arch, checks the KDE parts against a real KWin without a screen.
 # The built program is kept as this run's artifact (`jai-linux-x86_64`), never released.
 name: Linux
 
@@ -37,3 +38,38 @@ jobs:
           name: jai-linux-x86_64
           path: target/release/jai
           retention-days: 30
+
+  kwin:
+    # KDE Plasma as on Sir's Arch PC: `live_checks::kde` against KWin. A foot terminal stands in
+    # for his programs; without a GPU KWin draws with QPainter, so screenshots (OpenGL) are not
+    # checked.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    container:
+      image: archlinux:latest
+      # (Arch lets kwin_wayland raise its priority; a container without that right cannot start it.)
+      options: --cap-add=SYS_NICE
+    env:
+      RUSTFLAGS: "-D warnings"
+    steps:
+      - name: The README's packages, KWin, XWayland and a terminal
+        run: |
+          pacman -Sy --noconfirm archlinux-keyring
+          pacman -Su --noconfirm --needed base-devel rust cmake clang alsa-lib opus git dbus kwin xorg-xwayland foot ttf-dejavu
+      - uses: actions/checkout@v7
+      - uses: Swatinem/rust-cache@v2
+      - name: Build the tests
+        run: cargo test --release --no-run
+      - name: The KDE parts against KWin
+        shell: bash
+        run: |
+          export JAI_REAL_PLASMA=1 XDG_RUNTIME_DIR=/tmp/runtime XDG_CURRENT_DESKTOP=KDE KWIN_COMPOSE=Q QT_LOGGING_RULES=KWIN_UTILS.debug=true
+          mkdir -p -m 700 "$XDG_RUNTIME_DIR" && mkdir -p -m 1777 /tmp/.X11-unix
+          # KWin reads the menu entry as a program connects: it is written before KWin starts.
+          cargo test --release -- --ignored --exact live_checks::kde::menu_entry_names_this_program
+          # (The checks' output and result go to files: KWin's exit code need not be theirs.)
+          timeout 600 dbus-run-session -- kwin_wayland --virtual --xwayland --no-lockscreen --width 1280 --height 800 --output-count 2 \
+            --exit-with-session "bash -c 'cargo test --release -- --ignored --test-threads=1 live_checks::kde::kwin_ > kwin.txt 2>&1; echo \$? > kwin.code'" || true
+          cat kwin.txt
+          echo "::notice title=KWin checks::$(grep '^test result' kwin.txt)"
+          exit "$(cat kwin.code)"

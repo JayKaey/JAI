@@ -280,10 +280,11 @@ A Linux PC installs him as well (see Linux).
 
 On Linux J.A.I. is made for KDE Plasma 6 (Wayland) on Arch. The same crate builds on Linux; the
 `Linux` GitHub workflow builds it on Ubuntu, runs the tests of the Linux parts and keeps
-`target/release/jai` as the run's artifact. To build it yourself on Arch:
+`target/release/jai` as the run's artifact, and on Arch checks the KDE parts against a real KWin
+without a screen (`live_checks::kde`). To build it yourself on Arch:
 
 ```
-sudo pacman -S --needed base-devel cmake clang alsa-lib opus
+sudo pacman -S --needed base-devel rust cmake clang alsa-lib opus
 cargo build --release
 ```
 

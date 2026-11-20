@@ -79,7 +79,7 @@ pub fn folder() -> PathBuf {
 
 /// Linux's folder for programs' data: $XDG_DATA_HOME, else ~/.local/share.
 #[cfg(not(windows))]
-fn data_home() -> Option<PathBuf> {
+pub(crate) fn data_home() -> Option<PathBuf> {
     std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local").join("share")))
 }
 
