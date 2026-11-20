@@ -1262,6 +1262,7 @@ async fn start(cli: &Cli, cfg: JaiConfig) -> Started {
         dormant: vram_guard::is_dormant(),
         game: vram_guard::in_game(),
         thinking: thinking_guard::is_thinking(),
+        autostart: kit_pc::starts_with_system(),
     });
     spawn_tray_handler(tray_rx, app.clone(), shutdown.clone());
 
@@ -1323,6 +1324,11 @@ fn spawn_tray_handler(mut actions: UnboundedReceiver<TrayAction>, app: app::Jai,
                 TrayAction::VoiceLock(on) => tray_switch(&app, serde_json::json!({ "voice_lock": on })).await,
                 TrayAction::Guests(on) => tray_switch(&app, serde_json::json!({ "voice_guest": on, "voice_guest_minutes": 30 })).await,
                 TrayAction::Night(on) => tray_switch(&app, serde_json::json!({ "night_now": on })).await,
+                // (As the settings' switch does: the HUD stays where it is.)
+                TrayAction::Autostart(on) => {
+                    hud_feel::apply(&serde_json::json!({ "start_with_system": on }));
+                    info!("[TRAY] start with the system: {on} -> {}", kit_pc::starts_with_system());
+                }
                 TrayAction::ToggleMic => {
                     let enabled = !app.config_state().mic_enabled;
                     app.handle_command(hud::HudCommand::SetMic { enabled }).await;

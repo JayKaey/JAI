@@ -77,7 +77,12 @@ pub fn command(s: &str) -> Option<Value> {
         return Some(json!({"action": "startup_off", "name": pick(&c, &["n"])?, "confirmed": true}));
     }
     if let Some(c) = STARTUP_OFF.captures(s) {
-        return Some(json!({"action": "startup_off", "name": pick(&c, &["n", "n2", "n3", "n4"])?}));
+        let name = pick(&c, &["n", "n2", "n3", "n4"])?;
+        // ("Stop yourself from starting with Windows" is his own switch: `hud_feel`.)
+        if name.split_whitespace().next().is_some_and(|w| ["yourself", "you", "jai", "j.a.i.", "j.a.i", "jay", "dich"].contains(&w)) {
+            return None;
+        }
+        return Some(json!({"action": "startup_off", "name": name}));
     }
     if REBOOT.is_match(s) {
         return Some(json!({"action": "reboot"}));
@@ -609,6 +614,94 @@ fn switch_off(entry: &StartupEntry) -> Result<(), String> {
     }
 }
 
+// --------------------------------------------------------------------- J.A.I. himself ----
+
+/// His own entry: his Run value (Windows), his autostart file (Linux).
+const OWN: &str = if cfg!(windows) { "JAI" } else { "jai.desktop" };
+
+/// A test or a scripted session never changes what starts with the system.
+fn not_a_test() -> Result<(), String> {
+    if crate::platform::hands_off() || crate::live_self_tester::dry() {
+        return Err("Not from a test session.".into());
+    }
+    Ok(())
+}
+
+/// Whether J.A.I. starts by himself when Sir logs in: his Run value, Task Manager's switch on.
+#[cfg(windows)]
+pub fn starts_with_system() -> bool {
+    use windows::core::PCWSTR;
+    use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_ANY};
+    let (path, name) = (wide(RUN), wide(OWN));
+    let mut size = 0u32;
+    // SAFETY: only the value's size is read, into a local.
+    let there = unsafe { RegGetValueW(HKEY_CURRENT_USER, PCWSTR(path.as_ptr()), PCWSTR(name.as_ptr()), RRF_RT_ANY, None, None, Some(&mut size)) }.is_ok();
+    there && approved_on(HKEY_CURRENT_USER, APPROVED_RUN, OWN)
+}
+
+/// Puts this J.A.I. (where it runs now) into Sir's start of Windows, or takes him out. Task
+/// Manager's "Disabled" goes either way, so the switch is what it says.
+#[cfg(windows)]
+pub fn start_with_system(on: bool) -> Result<(), String> {
+    use windows::core::PCWSTR;
+    use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS};
+    use windows::Win32::System::Registry::{RegCloseKey, RegCreateKeyExW, RegDeleteKeyValueW, RegSetValueExW, HKEY, HKEY_CURRENT_USER, KEY_SET_VALUE, REG_OPTION_NON_VOLATILE, REG_SZ};
+    const REFUSED: &str = "Windows refused the change, Sir.";
+    not_a_test()?;
+    let name = wide(OWN);
+    // SAFETY: the key is created/opened and closed here; every buffer outlives its call.
+    unsafe {
+        let gone = |path: &str| {
+            let path = wide(path);
+            let e = RegDeleteKeyValueW(HKEY_CURRENT_USER, PCWSTR(path.as_ptr()), PCWSTR(name.as_ptr()));
+            e == ERROR_SUCCESS || e == ERROR_FILE_NOT_FOUND
+        };
+        if !gone(APPROVED_RUN) {
+            return Err(REFUSED.into());
+        }
+        if !on {
+            return gone(RUN).then_some(()).ok_or_else(|| REFUSED.to_string());
+        }
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let command: Vec<u8> = wide(&format!("\"{}\"", exe.display())).iter().flat_map(|u| u.to_le_bytes()).collect();
+        let (path, mut key) = (wide(RUN), HKEY::default());
+        if RegCreateKeyExW(HKEY_CURRENT_USER, PCWSTR(path.as_ptr()), 0, PCWSTR::null(), REG_OPTION_NON_VOLATILE, KEY_SET_VALUE, None, &mut key, None) != ERROR_SUCCESS {
+            return Err(REFUSED.into());
+        }
+        let set = RegSetValueExW(key, PCWSTR(name.as_ptr()), 0, REG_SZ, Some(&command));
+        let _ = RegCloseKey(key);
+        (set == ERROR_SUCCESS).then_some(()).ok_or_else(|| REFUSED.to_string())
+    }
+}
+
+/// His own autostart entry: the menu entry, so KWin's grants hold for him there too.
+#[cfg(not(windows))]
+fn own_entry() -> Option<std::path::PathBuf> {
+    user_autostart().map(|d| d.join(OWN))
+}
+
+/// Whether J.A.I. starts by himself when Sir logs in: his autostart entry, not hidden.
+#[cfg(not(windows))]
+pub fn starts_with_system() -> bool {
+    own_entry().and_then(|f| std::fs::read_to_string(f).ok()).is_some_and(|text| desktop_starts(&text))
+}
+
+/// Puts this J.A.I. (where it runs now) into Sir's autostart, or takes him out.
+#[cfg(not(windows))]
+pub fn start_with_system(on: bool) -> Result<(), String> {
+    not_a_test()?;
+    let file = own_entry().ok_or("I can't find your home folder, Sir.")?;
+    if !on {
+        return match std::fs::remove_file(&file) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(format!("I couldn't remove {}: {e}", file.display())),
+            _ => Ok(()),
+        };
+    }
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(file.parent().unwrap_or(&file)).map_err(|e| e.to_string())?;
+    std::fs::write(&file, crate::installer::menu_entry(&exe)).map_err(|e| format!("I couldn't write {}: {e}", file.display()))
+}
+
 // ------------------------------------------------------------------------ restart due ----
 
 /// Whether Windows waits for a restart (Windows Update's or the servicing stack's flag).
@@ -878,6 +971,19 @@ mod tests {
         assert!(only_looks(&json!({"action": "port"})) && !only_looks(&json!({"action": "end"})) && !only_looks(&json!({"action": "startup_off"})));
         assert_eq!(command(&crate::intents::normalize_phrase("upgrade all apps with winget")), Some(json!({"action": "upgrade"})));
         assert!(only_looks(&json!({"action": "updates"})) && !only_looks(&json!({"action": "upgrade"})), "the list only reads; his yes installs");
+    }
+
+    /// Words about his own start are his switch's (`hud_feel`), never an entry of that name; and
+    /// no test touches the registry or the autostart folder.
+    #[test]
+    fn his_own_start_is_his_switch_and_no_test_changes_it() {
+        for said in ["stop yourself from starting with windows", "don't start yourself with windows", "stop JAI from starting at startup", "nimm dich aus dem Autostart"] {
+            assert_eq!(command(&crate::intents::normalize_phrase(said)), None, "{said}");
+        }
+        assert_eq!(command(&crate::intents::normalize_phrase("stop Steam from starting with Windows")), Some(json!({"action": "startup_off", "name": "steam"})));
+        let before = starts_with_system();
+        assert!(start_with_system(!before).is_err() && start_with_system(before).is_err());
+        assert_eq!(starts_with_system(), before);
     }
 
     #[test]

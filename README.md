@@ -44,6 +44,11 @@ JAI speaks Received Pronunciation through a dry studio chain. This is an approxi
 from stock voices, not a clone of an actor. Besides the similarity of the voice to its clip, the
 exhaustive verifier measures that the speech recogniser understands it.
 
+To have him start whenever you log in, say "start with Windows" ("starte mit Windows"), tick
+"Start with Windows" in the tray menu, or switch it on in the settings (PRESENCE). That is a `JAI`
+entry of your own under Windows' Run key, so Task Manager's Startup page shows it too (on KDE:
+`~/.config/autostart/jai.desktop`). "Don't start with Windows any more" takes it out again.
+
 ## The look
 
 Everything he shows is light drawn on black glass: white structure, and one colour for what is

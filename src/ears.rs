@@ -477,6 +477,15 @@ pub fn is_retro_reference(command: &str) -> bool {
 mod relevance_tests {
     use super::*;
 
+    /// His chosen microphone by its name: the same name before one that holds it, any case.
+    #[test]
+    fn his_chosen_microphone_is_found_by_its_name() {
+        let names = ["Microphone (USB Audio)", "Audio Mix (Elgato Virtual Audio) 2", "Audio Mix (Elgato Virtual Audio)"];
+        assert_eq!(chosen_at(names.iter().copied(), "audio mix (elgato virtual audio)"), Some(2));
+        assert_eq!(chosen_at(names.iter().copied(), "Elgato"), Some(1));
+        assert_eq!(chosen_at(names.iter().copied(), "Headset"), None, "not there yet: looked for again");
+    }
+
     #[test]
     fn lyrics_through_the_microphone_are_the_songs_not_sirs() {
         // jai.log 2026-11-05 19:45:25-29, with Whisper's own log-probabilities.
@@ -855,6 +864,12 @@ fn is_virtual(name: &str) -> bool {
         .any(|k| l.contains(k))
 }
 
+/// Where the microphone Sir chose stands among `names`: the same name, else one that holds it.
+fn chosen_at<'a>(names: impl Iterator<Item = &'a str> + Clone, preferred: &str) -> Option<usize> {
+    let p = preferred.to_lowercase();
+    names.clone().position(|n| n.to_lowercase() == p).or_else(|| names.map(str::to_lowercase).position(|n| n.contains(&p)))
+}
+
 /// Preferred device (exact, then substring match); otherwise the default input plus one more
 /// physical microphone for failover.
 fn select_input_devices(preferred: Option<&str>) -> Vec<(cpal::Device, String)> {
@@ -865,12 +880,7 @@ fn select_input_devices(preferred: Option<&str>) -> Vec<(cpal::Device, String)> 
         .unwrap_or_default();
 
     if let Some(pref) = preferred {
-        let p = pref.to_lowercase();
-        let hit = all
-            .iter()
-            .position(|(_, n)| n.to_lowercase() == p)
-            .or_else(|| all.iter().position(|(_, n)| n.to_lowercase().contains(&p)));
-        if let Some(i) = hit {
+        if let Some(i) = chosen_at(all.iter().map(|(_, n)| n.as_str()), pref) {
             return all.into_iter().skip(i).take(1).collect();
         }
         warn!("[MIC] Preferred microphone '{pref}' not found; using automatic selection.");
@@ -1025,11 +1035,24 @@ fn mic_thread(controls: Arc<AudioControls>, feeds_tx: mpsc::Sender<Vec<DeviceFee
             return;
         }
         failed.store(false, Ordering::Release);
+        // (His chosen microphone can come after J.A.I., as at login: on another one, it is looked
+        // for every few seconds and taken once it is there.)
+        let missing = requested.filter(|p| chosen_at(devices.iter().map(|(_, n)| n.as_str()), p).is_none());
+        let mut looked = Instant::now();
         while !controls.device_switch.swap(false, Ordering::AcqRel) {
             if failed.swap(false, Ordering::AcqRel) {
                 warn!("[MIC] Input stream failed (device unplugged?); reopening.");
                 std::thread::sleep(Duration::from_millis(500));
                 break;
+            }
+            if let Some(p) = missing.as_deref().filter(|_| looked.elapsed() >= Duration::from_secs(5)) {
+                looked = Instant::now();
+                // (Only one that can be opened: a working microphone is not left for a dead one.)
+                let names: Vec<String> = cpal::default_host().input_devices().map(|it| it.filter(|d| d.default_input_config().is_ok()).filter_map(|d| d.name().ok()).collect()).unwrap_or_default();
+                if chosen_at(names.iter().map(String::as_str), p).is_some() {
+                    info!("[MIC] '{p}' is here now: switching to it.");
+                    break;
+                }
             }
             std::thread::sleep(Duration::from_millis(100));
         }

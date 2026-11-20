@@ -2948,6 +2948,8 @@ fn held_back(text: &str) -> bool {
         && !NEXT_START.is_match(words)
         // "Don't make the windows overlap" sets the packer.
         && !WINDOWS_APART.is_match(words)
+        // "Don't start with Windows any more" is his own switch.
+        && crate::hud_feel::start_order(&normalize(text)).is_none()
 }
 
 /// A plain question: it asks, and asks for nothing to be done. "Can you close Firefox?" is an

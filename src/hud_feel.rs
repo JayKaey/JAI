@@ -187,12 +187,44 @@ fn guest_command(s: &str) -> Option<Value> {
     Some(json!({"voice_guest": true, "voice_guest_minutes": minutes}))
 }
 
+/// When he starts by himself: with Windows, at login, when the PC starts.
+const START_WHEN: &str = r"(?:with\s+(?:the\s+|my\s+|your\s+)?(?:windows|linux|system|pc|computer)|(?:at|on|upon)\s+(?:the\s+|my\s+|each\s+|every\s+)?(?:system\s+|windows\s+)?(?:start\s*-?\s*up|boot(?:\s*-?\s*up)?|log\s*-?\s*in|sign\s*-?\s*in)|(?:when(?:ever)?|as\s+soon\s+as)\s+(?:(?:the\s+|my\s+)?(?:windows|linux|pc|computer|system)\s+(?:starts?|boots?)(?:\s+up)?|i\s+(?:log|sign)\s+(?:in|on)|i\s+(?:start|boot|turn\s+on)\s+(?:up\s+)?(?:the|my)\s+(?:pc|computer)))";
+const START_WHEN_DE: &str = r"(?:mit\s+(?:windows|linux|dem\s+(?:system|pc|computer|rechner))|beim\s+(?:hochfahren|systemstart|booten|anmelden|einloggen|start(?:\s+(?:von\s+windows|des\s+(?:pcs?|computers|rechners|systems)))?))";
+
+/// "Start with Windows", "start automatically", "autostart an".
+static START_ON: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(&format!(
+        r"^(?:(?:always|from\s+now\s+on)\s+)?(?:start|launch|run|load)(?:\s+up)?(?:\s+(?:yourself|jai))?(?:\s+automatically(?:\s+{START_WHEN})?|\s+{START_WHEN})(?:\s+(?:from\s+now\s+on|again))?$|^(?:(?:turn|switch)\s+on|enable|activate)\s+(?:the\s+|your\s+)?autostart$|^autostart\s+on$|^(?:starte?|lade?)\s+(?:dich\s+)?(?:(?:immer|ab\s+jetzt|wieder)\s+)?(?:automatisch(?:\s+{START_WHEN_DE})?|{START_WHEN_DE})$|^(?:autostart\s+(?:an|ein)|(?:schalte?|mach)\s+(?:den\s+|deinen\s+)?autostart\s+(?:an|ein)|aktiviere?\s+(?:den\s+|deinen\s+)?autostart)$"
+    ))
+    .expect("valid start regex")
+});
+/// "Don't start with Windows any more", "stop yourself from starting at login", "autostart aus".
+static START_OFF: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(&format!(
+        r"^(?:(?:don'?t|do\s+not|never)\s+(?:start|launch|run|load)|stop\s+(?:starting|launching|running|loading)|(?:stop|keep)\s+(?:yourself|jai|you)\s+from\s+(?:starting|launching|running|loading))(?:\s+up)?(?:\s+(?:yourself|jai))?(?:\s+automatically(?:\s+{START_WHEN})?|\s+{START_WHEN})(?:\s+(?:any\s*more|again|from\s+now\s+on))?$|^(?:(?:turn|switch)\s+off|disable|deactivate|remove)\s+(?:the\s+|your\s+)?autostart$|^autostart\s+off$|^(?:take|remove)\s+(?:yourself|jai)\s+(?:out\s+of|from)\s+(?:the\s+)?(?:autostart|start\s*-?\s*up)$|^(?:starte?|lade?)\s+(?:dich\s+)?nicht\s+(?:mehr\s+)?(?:automatisch(?:\s+{START_WHEN_DE})?|{START_WHEN_DE})$|^(?:du\s+sollst|jai\s+soll)\s+nicht\s+mehr\s+(?:automatisch|{START_WHEN_DE})\s+starten$|^(?:autostart\s+aus|(?:schalte?|mach)\s+(?:den\s+|deinen\s+)?autostart\s+aus|deaktiviere?\s+(?:den\s+|deinen\s+)?autostart|kein(?:en)?\s+autostart(?:\s+mehr)?|nimm\s+dich\s+aus\s+dem\s+autostart)$"
+    ))
+    .expect("valid start regex")
+});
+
+/// "Start with Windows" (true) or "don't start with Windows any more" (false), in the fast path's
+/// normalised words.
+pub fn start_order(s: &str) -> Option<bool> {
+    if START_OFF.is_match(s) {
+        Some(false)
+    } else {
+        START_ON.is_match(s).then_some(true)
+    }
+}
+
 /// A request for one of these features as `configure_interface` arguments (`s`: the fast
 /// path's normalised phrase).
 pub fn command(s: &str) -> Option<Value> {
     let s = s.trim();
     if let Some(args) = guest_command(s) {
         return Some(args);
+    }
+    if let Some(on) = start_order(s) {
+        return Some(json!({"start_with_system": on}));
     }
     if let Some((_, args)) = PHRASES.iter().find(|(pattern, _)| pattern.is_match(s)) {
         // (What comes next is his to say only from a glance at Sir's day that tells it.)
@@ -263,7 +295,8 @@ pub fn is_game(process: &str) -> bool {
 
 /// The arguments that are requests of the moment, not settings (`interface::configure` names
 /// them in its summary; `apply` carries them out).
-pub const RUNTIME_KEYS: [(&str, &str); 9] = [
+pub const RUNTIME_KEYS: [(&str, &str); 10] = [
+    ("start_with_system", if cfg!(windows) { "starting with Windows" } else { "starting at login" }),
     ("next_now", "what comes next"),
     ("night_now", "night mode"),
     ("subtitles", "subtitles"),
@@ -279,7 +312,7 @@ pub const RUNTIME_KEYS: [(&str, &str); 9] = [
 /// (`brain::tests::the_whole_prompt_fits_the_context_window`), and these are said in words the
 /// fast path knows.
 #[cfg(test)]
-pub const UNLISTED: [&str; 9] = ["background_all_monitors", "windows_on_call", "orb_words", "desk_clock", "desk_clock_seconds", "desk_clock_12h", "desk_clock_date", "next_now", "corner_orb_size"];
+pub const UNLISTED: [&str; 10] = ["background_all_monitors", "windows_on_call", "orb_words", "desk_clock", "desk_clock_seconds", "desk_clock_12h", "desk_clock_date", "next_now", "corner_orb_size", "start_with_system"];
 
 /// How long what comes next stands beside the emblem once Sir asked for it.
 const NEXT_SHOWN: std::time::Duration = std::time::Duration::from_secs(10);
@@ -443,6 +476,14 @@ pub fn set_voice_known(known: bool) {
 
 /// Carries out the requests of the moment in `configure_interface`'s arguments.
 pub fn apply(args: &Value) {
+    if let Some(on) = flag(args, "start_with_system") {
+        if let Err(e) = crate::kit_pc::start_with_system(on) {
+            tracing::warn!("[STARTUP] J.A.I.'s own start entry was not changed: {e}");
+            if !crate::platform::hands_off() {
+                crate::hud_notify::record(&format!("I could not change whether I start by myself: {e}"), true);
+            }
+        }
+    }
     if let Some(on) = flag(args, "night_now") {
         set_night(on, chrono::Local::now().naive_local());
     }
@@ -491,6 +532,9 @@ pub fn apply(args: &Value) {
 pub fn spoken(args: &Value) -> Option<String> {
     let on = |key: &str| flag(args, key);
     let say = |yes: &str, no: &str, state: bool| Some(if state { yes } else { no }.to_string());
+    if let Some(v) = on("start_with_system") {
+        return Some(start_said(v, crate::kit_pc::starts_with_system()));
+    }
     if let Some(v) = on("calm_hud") {
         return say("Calm it is, Sir. The readouts step back until you reach for them.", "Everything on screen, Sir.", v);
     }
@@ -588,6 +632,15 @@ pub fn spoken(args: &Value) -> Option<String> {
         .to_string());
     }
     None
+}
+
+/// What he says to "start with Windows" (`asked`), from what the system holds after it (`now`).
+fn start_said(asked: bool, now: bool) -> String {
+    match (asked, now) {
+        (true, true) => format!("I'll start {} from now on, Sir.", if cfg!(windows) { "with Windows" } else { "when you log in" }),
+        (false, false) => "From now on I start only when you start me, Sir.".to_string(),
+        _ => if cfg!(windows) { "Windows would not let me change that, Sir." } else { "I could not change my autostart entry, Sir." }.to_string(),
+    }
 }
 
 /// The tool schema's lines for these arguments (appended to `configure_interface`'s).
@@ -840,6 +893,58 @@ mod tests {
             assert!(keys.contains(&key) || UNLISTED.contains(&key), "{key}");
         }
         assert_eq!(spoken(&json!({"accent_color": "red"})), None);
+    }
+
+    /// "Start with Windows" in his ways, English and German, on and off, all the way through the
+    /// router; other programs' entries, the list, a question and a bare "start" are not it.
+    #[test]
+    fn starting_with_the_pc_is_said_in_his_words() {
+        let routed = |text: &str| crate::phrasings::route(text);
+        let ours = |text: &str| routed(text).is_some_and(|(tool, args)| tool == "configure_interface" && args.get("start_with_system").is_some());
+        for (text, on) in [
+            ("Start with Windows.", true),
+            ("JAI, start with Windows from now on", true),
+            ("always start with my PC", true),
+            ("start automatically", true),
+            ("start yourself automatically when I log in", true),
+            ("launch at startup", true),
+            ("run on system startup", true),
+            ("start when the PC starts", true),
+            ("start up with windows", true),
+            ("turn on autostart", true),
+            ("autostart on", true),
+            ("Starte mit Windows", true),
+            ("starte dich automatisch beim Hochfahren", true),
+            ("starte beim Anmelden", true),
+            ("Autostart an", true),
+            ("Don't start with Windows anymore.", false),
+            ("do not start automatically", false),
+            ("stop starting with windows", false),
+            ("stop yourself from starting with Windows", false),
+            ("stop JAI from starting at login", false),
+            ("don't start yourself with windows", false),
+            ("never launch at startup", false),
+            ("turn off autostart", false),
+            ("disable autostart", false),
+            ("take yourself out of the autostart", false),
+            ("starte nicht mehr mit Windows", false),
+            ("starte nicht mehr automatisch", false),
+            ("du sollst nicht mehr automatisch starten", false),
+            ("Autostart aus", false),
+            ("nimm dich aus dem Autostart", false),
+        ] {
+            assert_eq!(routed(text), Some(("configure_interface".to_string(), json!({"start_with_system": on}))), "{text}");
+        }
+        for (text, tool) in [("stop discord from starting with windows", "pc_helper"), ("what starts with windows", "pc_helper")] {
+            assert_eq!(routed(text).map(|(t, _)| t), Some(tool.to_string()), "{text}");
+        }
+        // ("No autostart" loses its "no" to the normaliser: it must never switch it on.)
+        for text in ["do you start with windows", "start the startup sequence", "start spotify", "start", "don't start", "stop", "start with the news", "No autostart.", "autostart"] {
+            assert!(!ours(text), "{text}: {:?}", routed(text));
+        }
+        // What he says comes from what the system holds afterwards, so a refusal is said as one.
+        assert!(start_said(true, true).starts_with("I'll start") && start_said(false, false).contains("only when you start me"));
+        assert!(start_said(true, false).contains("not") && start_said(false, true).contains("not"));
     }
 
     /// Night by the clock runs from ten to six; "night mode off" holds until the morning and

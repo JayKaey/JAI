@@ -265,7 +265,7 @@ fn start_menu(exe: &Path) -> Result<(), String> {
 /// The menu entry for the program at `exe`. KDE gives Plasma's window list, pressed keys and
 /// screenshots only to a program whose entry asks for them (KWin finds it by the path in Exec).
 #[cfg(not(windows))]
-fn menu_entry(exe: &Path) -> String {
+pub(crate) fn menu_entry(exe: &Path) -> String {
     let folder = exe.parent().unwrap_or(Path::new("."));
     format!(
         "[Desktop Entry]\nType=Application\nName=J.A.I.\nComment=Local voice assistant\nExec=\"{}\"\nPath={}\nTerminal=false\nCategories=Utility;\nX-KDE-Wayland-Interfaces=org_kde_plasma_window_management,org_kde_kwin_fake_input\nX-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2\n",

@@ -304,6 +304,10 @@ pub fn stays_inside(name: &str, args: &Value) -> bool {
     if crate::kit::is_tool(name) {
         return crate::kit::stays_inside(name, args);
     }
+    // (Whether he starts with the PC is the system's: the registry or the autostart folder.)
+    if name == "configure_interface" && args.get("start_with_system").is_some() {
+        return false;
+    }
     let action = args["action"].as_str().unwrap_or("");
     match name {
         "configure_interface" | "control_jai_interface" | "customize_hud_and_windows" | "control_orb_mode" | "spawn_native_window" | "update_native_window"
@@ -2212,6 +2216,7 @@ mod tests {
             ("reminders", json!({"action": "create", "text": "x"})),
             ("discord_call", json!({"action": "listen"})),
             ("shutdown_jai", json!({})),
+            ("configure_interface", json!({"start_with_system": true})),
         ] {
             assert!(!stays_inside(name, &args), "{name} {args}");
         }

@@ -20,6 +20,8 @@ pub enum TrayAction {
     Night(bool),
     /// Game mode on (the model to RAM) or off.
     GameMode(bool),
+    /// He starts with the system (when Sir logs in), or not.
+    Autostart(bool),
     Quit,
 }
 
@@ -33,6 +35,7 @@ pub struct TrayState {
     pub dormant: bool,
     pub game: bool,
     pub thinking: bool,
+    pub autostart: bool,
 }
 
 #[cfg(windows)]
@@ -50,6 +53,7 @@ const CMD_GUESTS: usize = 6;
 const CMD_NIGHT: usize = 7;
 const CMD_STANDBY: usize = 8;
 const CMD_GAME: usize = 9;
+const CMD_AUTOSTART: usize = 10;
 
 /// When he started ("Fri 06:40"), for the menu's first line.
 static SINCE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
@@ -77,6 +81,7 @@ fn menu_lines(now: TrayState) -> Vec<(usize, String, Option<bool>, bool)> {
         lines.push(if now.dormant { line(CMD_WAKE, "Wake JAI (load models)", None) } else { line(CMD_STANDBY, "Standby (free the graphics memory)", None) });
     }
     lines.push(line(0, "", None));
+    lines.push(line(CMD_AUTOSTART, if cfg!(windows) { "Start with Windows" } else { "Start at login" }, Some(now.autostart)));
     lines.push(line(CMD_QUIT, "Quit J.A.I.", None));
     lines
 }
@@ -92,6 +97,7 @@ fn picked(command: usize, now: TrayState) -> Option<TrayAction> {
         CMD_GUESTS => TrayAction::Guests(!now.guests),
         CMD_NIGHT => TrayAction::Night(!now.night),
         CMD_GAME => TrayAction::GameMode(!now.game),
+        CMD_AUTOSTART => TrayAction::Autostart(!now.autostart),
         CMD_QUIT => TrayAction::Quit,
         _ => return None,
     })
@@ -813,6 +819,12 @@ mod tests {
         let state = TrayState { night: true, ..TrayState::default() };
         assert_eq!(picked(CMD_NIGHT, state), Some(TrayAction::Night(false)), "a ticked line is unticked");
         assert_eq!(picked(0, state), None, "the first line and the separators do nothing");
+        // Starting with the system: ticked as the system holds it, the line above Quit, a click turns it over.
+        assert!(awake.iter().any(|(c, _, tick)| *c == CMD_AUTOSTART && *tick == Some(false)));
+        let starting = lines(TrayState { autostart: true, ..TrayState::default() });
+        assert_eq!(starting.iter().rev().nth(1).map(|(c, _, tick)| (*c, *tick)), Some((CMD_AUTOSTART, Some(true))));
+        assert_eq!(picked(CMD_AUTOSTART, TrayState { autostart: true, ..TrayState::default() }), Some(TrayAction::Autostart(false)));
+        assert_eq!(picked(CMD_AUTOSTART, TrayState::default()), Some(TrayAction::Autostart(true)));
     }
 
     #[test]

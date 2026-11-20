@@ -92,7 +92,7 @@ const fn row(group: &'static str, name: &'static str, explain: &'static str, wor
 /// The groups, in the order they stand (each is also a key that shows it alone).
 const GROUPS: [&str; 6] = ["LOOK", "SCREENS", "VOICE", "PRESENCE", "GAMES", "TOOLS"];
 
-static ROWS: [Row; 48] = [
+static ROWS: [Row; 49] = [
     row("LOOK", "Theme", "The HUD's colours: one click on a swatch changes them.", "colour color palette gold cyan red green farbe farben design", Control::Theme),
     row("LOOK", "Your own theme", "Build a theme from your own colours, name it and save it.", "theme studio custom create", Control::Open(Tool::ThemeStudio, "THEME STUDIO")),
     row(
@@ -155,6 +155,13 @@ static ROWS: [Row; 48] = [
     row("VOICE", "Sound cues", "The short sounds when a block opens or closes, a report is ready, something fails.", "sounds earcons beep töne klänge", Control::Switch(|s| s.sound_cues, |s, v| s.sound_cues = v)),
     row("VOICE", "Microphone, devices and memory", "Pick the microphone and speaker, the wake word's strictness, what he remembers.", "audio input output drawer mikrofon lautsprecher geräte", Control::Open(Tool::Devices, "OPEN")),
     row("VOICE", "Mixer", "A fader for the master volume and for every program that plays sound.", "volume loud quiet lautstärke laut leise", Control::Open(Tool::Mixer, "MIXER")),
+    row(
+        "PRESENCE",
+        if cfg!(windows) { "Start with Windows" } else { "Start at login" },
+        "He starts by himself when you log in. Off: only when you start him.",
+        "autostart startup boot login sign in automatically system hochfahren anmelden systemstart",
+        Control::Moment(|_| crate::kit_pc::starts_with_system(), "start_with_system"),
+    ),
     row("PRESENCE", "Start-up sequence", "He powers up with a short sequence, a longer one after a long time away.", "boot greeting start begrüßung", Control::Switch(|s| s.startup_sequence, |s, v| s.startup_sequence = v)),
     row("PRESENCE", "Idle screen", "Unused for five minutes, the HUD dims to the clock, your next appointment and the weather.", "screensaver away dim clock ruhebildschirm uhr", Control::Switch(|s| s.idle_screen, |s, v| s.idle_screen = v)),
     row("PRESENCE", "Night mode by the clock", "From 22:00 to 6:00 he is dimmer, makes no sounds and speaks quietly and briefly.", "evening late dark nacht nachtmodus abend", Control::Switch(|s| s.night_mode, |s, v| s.night_mode = v)),
