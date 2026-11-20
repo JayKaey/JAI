@@ -169,7 +169,8 @@ pub fn find_federation_trigger(html: &str, page_url: &str) -> Option<Trigger> {
         let text = text_of(a);
         let href = a.value().attr("href").unwrap_or("");
         let onclick = a.value().attr("onclick").unwrap_or("");
-        if !(names_schule_bw(&text) || names_schule_bw(href)) {
+        // ("Nicht von SCHULE@BW?" names it too, but leads to itslearning's site chooser.)
+        if !(names_schule_bw(&text) || names_schule_bw(href)) || href.contains("welcome.aspx") {
             continue;
         }
         let script = if href.starts_with("javascript:") { href } else { onclick };
@@ -219,8 +220,9 @@ pub fn find_federation_trigger(html: &str, page_url: &str) -> Option<Trigger> {
 pub fn parse_login_form(html: &str, page_url: &str) -> Option<LoginForm> {
     let doc = Html::parse_document(html);
     for form in doc.select(&sel("form")) {
-        let Some(pass) = form.select(&sel("input[type=password]")).next() else { continue };
-        let pass_field = pass.value().attr("name")?.to_string();
+        // (Schule@BW's page has its password field drawn by a script: `<password-input id="password">`.)
+        let Some(pass) = form.select(&sel("input[type=password], password-input")).next() else { continue };
+        let pass_field = pass.value().attr("name").or(pass.value().attr("id"))?.to_string();
         let user = form
             .select(&sel("input"))
             .find(|i| {
@@ -371,7 +373,7 @@ pub async fn login(base: &str, username: &str, password: &str) -> Result<BwSessi
             Page::Landed => return Ok(BwSession { client, jar, base, since: Instant::now() }),
             Page::Failed(e) => return Err(format!("Schule@BW refused the login: {e}")),
             Page::JavaScript => return Err(JS_NEEDED.into()),
-            Page::Unknown => return Err(format!("the sign-in works only in a browser now: it stopped at an unexpected page on {}", host(&url))),
+            Page::Unknown => return Err(format!("the sign-in works only in a browser now: it stopped at an unexpected page on {}{} ({})", host(&url), Url::parse(&url).map(|u| u.path().to_string()).unwrap_or_default(), controls(&html))),
             Page::Federation(Trigger::Link(link)) => read(client.get(&link).send().await.map_err(crate::web_connector::err_chain)?).await?,
             Page::Federation(Trigger::Post(post)) | Page::AutoPost(post) => submit(&client, &post).await?,
             Page::Login(form) => {
@@ -446,6 +448,12 @@ pub fn code_from_redirect(location: &str) -> Option<String> {
     query.split('&').find_map(|kv| kv.strip_prefix("code=")).map(|c| urlencoding::decode(c).map(|s| s.into_owned()).unwrap_or_else(|_| c.to_string()))
 }
 
+/// The app's redirect where itslearning writes it into a page's script instead of a header:
+/// `top.location.replace('itsl-itslearning://login/?state=jai&Error=invalid_request')`.
+fn app_redirect_in(html: &str) -> Option<&str> {
+    html.match_indices("itsl-itslearning:").map(|(at, _)| &html[at..]).map(|tail| &tail[..tail.find(['\'', '"', '<']).unwrap_or(tail.len())]).find(|t| t.contains('?'))
+}
+
 /// The "allow the app access" form of the OAuth authorize page, with its allow button.
 fn allow_form(html: &str, page: &str) -> Option<FormPost> {
     let doc = Html::parse_document(html);
@@ -480,7 +488,8 @@ fn controls(html: &str) -> String {
 /// The app's OAuth code for the signed-in session, exchanged for an access token.
 async fn app_token(s: &BwSession) -> Result<String, String> {
     let client = client_for(&s.jar, false)?;
-    let mut url = format!("{}/oauth2/authorize.aspx?client_id={CLIENT_ID}&state=jai&response_type=code&redirect_uri={}", s.base, urlencoding::encode(APP_REDIRECT));
+    // (Without `scope=SCOPE` itslearning answers invalid_request, and saving its consent page fails.)
+    let mut url = format!("{}/oauth2/authorize.aspx?client_id={CLIENT_ID}&state=jai&response_type=code&redirect_uri={}&scope=SCOPE", s.base, urlencoding::encode(APP_REDIRECT));
     let mut code = None;
     // Where the authorize step went (host and path only: the queries carry the session's state).
     let mut trail: Vec<String> = Vec::new();
@@ -500,6 +509,13 @@ async fn app_token(s: &BwSession) -> Result<String, String> {
         // An "allow access" page: confirm it once.
         let status = resp.status();
         let (page, html) = read(resp).await?;
+        if let Some(target) = app_redirect_in(&html) {
+            code = code_from_redirect(target);
+            if code.is_none() {
+                trail.push(format!("{} sent the app away ({})", hop(&page), target.split_once('?').map_or("", |q| q.1)));
+            }
+            break;
+        }
         let Some(post) = allow_form(&html, &page) else {
             trail.push(format!("{} (HTTP {}, no form)", hop(&page), status.as_u16()));
             break;
@@ -516,7 +532,10 @@ async fn app_token(s: &BwSession) -> Result<String, String> {
             None => {
                 let status = resp.status().as_u16();
                 let (_, html) = read(resp).await?;
-                trail.push(format!("HTTP {status} after the form ({})", controls(&html)));
+                code = app_redirect_in(&html).and_then(code_from_redirect);
+                if code.is_none() {
+                    trail.push(format!("HTTP {status} after the form ({})", controls(&html)));
+                }
                 break;
             }
         }
@@ -525,7 +544,7 @@ async fn app_token(s: &BwSession) -> Result<String, String> {
     let resp = s
         .client
         .post(format!("{}/restapi/oauth2/token", s.base))
-        .form(&[("client_id", CLIENT_ID), ("grant_type", "authorization_code"), ("code", code.as_str())])
+        .form(&[("client_id", CLIENT_ID), ("grant_type", "authorization_code"), ("code", code.as_str()), ("redirect_uri", APP_REDIRECT)])
         .send()
         .await
         .map_err(crate::web_connector::err_chain)?;
@@ -557,14 +576,18 @@ pub async fn fetch_updates(s: &BwSession) -> Result<Vec<CourseUpdate>, String> {
     };
     let mut out = Vec::new();
     let mut errors = Vec::new();
-    for (path, tasks) in [("/restapi/personal/tasks/v1?PageIndex=0&PageSize=40", true), ("/restapi/personal/notifications/v1?PageIndex=0&PageSize=40", false)] {
+    // (A page of 40 cut a student's 42 open tasks, 2026-11-20.)
+    for (path, tasks) in [("/restapi/personal/tasks/v1?PageIndex=0&PageSize=100", true), ("/restapi/personal/notifications/v1?PageIndex=0&PageSize=40", false)] {
         match get_json(s, token.as_deref(), path).await {
             Ok(v) => out.extend(if tasks { crate::lms_client::parse_tasks(&v) } else { crate::lms_client::parse_notifications(&v) }),
             Err(e) => errors.push(e),
         }
     }
-    if out.is_empty() && !errors.is_empty() {
-        return Err(format!("signed in through Schule@BW, but itslearning's course data refused the session: {}", errors.join("; ")));
+    if !errors.is_empty() {
+        if out.is_empty() {
+            return Err(format!("signed in through Schule@BW, but itslearning's course data refused the session: {}", errors.join("; ")));
+        }
+        warn!("[SCHULE@BW] Read in part: {}", errors.join("; "));
     }
     Ok(out)
 }
@@ -699,7 +722,7 @@ mod tests {
     const PORTAL: &str = BWS_PORTAL;
     const IDP: &str = "https://login.schule-bw.de/realms/SchuleBW/protocol/saml";
 
-    const LOGIN_PAGE: &str = r#"<html><body><form method="post" action="./index.aspx" id="aspnetForm">
+    const LOGIN_PAGE: &str = r#"<html><body><a href="/welcome.aspx?clean=true&amp;LanguageId=6">Nicht von SCHULE@BW?</a><form method="post" action="./index.aspx" id="aspnetForm">
         <input type="hidden" name="__VIEWSTATE" value="VS123"><input type="hidden" name="__VIEWSTATEGENERATOR" value="GEN"><input type="hidden" name="__EVENTVALIDATION" value="EV9">
         <input type="text" name="ctl00$ContentPlaceHolder1$Username$input"><input type="password" name="ctl00$ContentPlaceHolder1$Password$input">
         <input type="submit" name="ctl00$ContentPlaceHolder1$nativeLoginButton" value="Anmelden">
@@ -765,6 +788,12 @@ mod tests {
         let shib = r#"<form action="/idp/profile/SAML2/Redirect/SSO?execution=e1s1" method="post"><input name="j_username" type="text"><input name="j_password" type="password"><button type="submit" name="_eventId_proceed">Login</button></form>"#;
         let f = parse_login_form(shib, "https://idp.schule-bw.de/x").unwrap();
         assert_eq!((f.user_field.as_str(), f.pass_field.as_str()), ("j_username", "j_password"));
+        // Schule@BW's own page since 2026-11.
+        let bw = r#"<form method="POST" action="https://bw.schule/login"><input type="hidden" name="_token" value="t0k"><input id="rpIdmPrimaryPrincipalName" name="rpIdmPrimaryPrincipalName" value="">
+            <password-input id="password" :error="false"></password-input><button type="submit">Anmelden</button><a href="https://beantragung.bw.schule">SCHULE@BW beantragen</a></form>"#;
+        assert!(matches!(classify(bw, "https://bw.schule/login", "bws.itslearning.com", false), Page::Login(_)), "the form, not the link to apply for an account");
+        let f = parse_login_form(bw, "https://bw.schule/login").unwrap();
+        assert_eq!((f.user_field.as_str(), f.pass_field.as_str(), f.post.fields.clone()), ("rpIdmPrimaryPrincipalName", "password", vec![("_token".to_string(), "t0k".to_string())]));
     }
 
     #[test]
@@ -793,10 +822,57 @@ mod tests {
         assert!(!uses_schule_bw(&LmsSettings { base_url: "https://myschool.itslearning.com".into(), ..Default::default() }));
     }
 
+    /// The real chain up to Schule@BW's login form, with no sign-in: each hop and what it offers.
+    #[tokio::test]
+    #[ignore = "walks the public itslearning and Schule@BW pages: JAI_REAL_ITSLEARNING=1"]
+    async fn the_real_chain_reaches_the_schule_bw_login_form() {
+        if std::env::var_os("JAI_REAL_ITSLEARNING").is_none() {
+            return;
+        }
+        let client = client_for(&Arc::new(Jar::default()), true).unwrap();
+        let (mut url, mut html) = read(client.get(PORTAL).send().await.unwrap()).await.unwrap();
+        for hop in 0..MAX_HOPS {
+            let page = classify(&html, &url, "bws.itslearning.com", false);
+            eprintln!("{hop}: {} at {} ({})", page_name(&page), url.split('?').next().unwrap_or(""), controls(&html));
+            (url, html) = match page {
+                Page::Federation(Trigger::Link(link)) => read(client.get(&link).send().await.unwrap()).await.unwrap(),
+                Page::Federation(Trigger::Post(post)) | Page::AutoPost(post) => submit(&client, &post).await.unwrap(),
+                Page::Login(form) => return eprintln!("login form posting {:?} to {}", form.post.fields.iter().map(|(k, _)| k).collect::<Vec<_>>(), form.post.action.split('?').next().unwrap_or("")),
+                _ => panic!("stopped at {url}:\n{html}"),
+            };
+        }
+        panic!("no login form after {MAX_HOPS} hops");
+    }
+
+    /// The whole sign-in with the account this installation keeps (read-only), the app's token
+    /// and what itslearning then lends: the hops and counts, never the data or the password.
+    #[tokio::test]
+    #[ignore = "signs in to itslearning with this installation's account: JAI_VAULT_DB=<path to the memory database>"]
+    async fn the_real_account_signs_in_and_reads_its_tasks() {
+        let Ok(db) = std::env::var("JAI_VAULT_DB") else { return };
+        let _ = tracing_subscriber::fmt().with_writer(std::io::stderr).with_ansi(false).try_init();
+        let conn = rusqlite::Connection::open_with_flags(&db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).expect("the memory database");
+        let json: String = conn.query_row("SELECT settings FROM service_configs WHERE service = ?1", [crate::pim_config::LMS], |r| r.get(0)).expect("itslearning's settings");
+        let cfg: LmsSettings = serde_json::from_str(&json).expect("readable settings");
+        let password = crate::vault::Vault::open(&db).expect("the vault").token(crate::pim_config::LMS).expect("a stored password");
+        let s = session(&cfg, &password).await.unwrap_or_else(|e| panic!("{e}"));
+        // (Announcements are read with the app's token alone; tasks also with the session.)
+        app_token(&s).await.unwrap_or_else(|e| panic!("{e}"));
+        let got = fetch_updates(&s).await.unwrap_or_else(|e| panic!("{e}"));
+        let tasks = got.iter().filter(|u| u.kind == "assignment").count();
+        eprintln!("{tasks} tasks, {} other items", got.len() - tasks);
+    }
+
     #[test]
     fn the_app_code_is_read_from_the_custom_scheme_redirect() {
         assert_eq!(code_from_redirect("itsl-itslearning://login?state=jai&code=AbC%2B9"), Some("AbC+9".into()));
         assert_eq!(code_from_redirect("itsl-itslearning://login?error=denied"), None);
+        // (itslearning also answers in a script, 2026-11-20.)
+        let page = "<script>//<![CDATA[\ntop.location.replace('itsl-itslearning://login/?state=jai&Error=invalid_request');//]]></script>";
+        assert_eq!(app_redirect_in(page), Some("itsl-itslearning://login/?state=jai&Error=invalid_request"));
+        assert_eq!(app_redirect_in(page).and_then(code_from_redirect), None);
+        assert_eq!(app_redirect_in("top.location.replace(\"itsl-itslearning://login/?state=jai&code=X1\")").and_then(code_from_redirect), Some("X1".into()));
+        assert_eq!(app_redirect_in("<html>no app here</html>"), None);
     }
 
     #[test]

@@ -114,6 +114,7 @@ pub const RELEASES: &[Release] = &[
             fixed("Tiling on the monitor you name", "\"Tile on monitor 2\" tiled the third monitor or found none; it tiles the one you name now."),
             fixed("The webcam on Linux", "The webcam never opened on Linux: its picture format was asked with a request of the wrong size."),
             fixed("Building on Arch", "Built on Arch, whisper's bindings lost their fields; the README's command builds him now."),
+            fixed("itslearning works again", "Schule@BW sign-in stopped on the wrong page; he reads your tasks and announcements again."),
             new("J.A.I. on other PCs", "Install him on a friend's PC: your PC stays the main one, sends orders and they can't touch it.", "other_pcs"),
             new("Accounts for everyone else", "Only your voice and phone may do everything; anyone else needs an account that only asks.", "accounts"),
             new("The accounts list", "\"Open the accounts list\": passwords, every permission one by one, pauses, topics, PCs.", "accounts"),
