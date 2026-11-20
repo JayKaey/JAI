@@ -8,6 +8,16 @@ on:
     branches: [main, v3.2-tested-features]
   workflow_dispatch:
 
+env:
+  # Each failed test as one error (`awk "$FAILURES" tests.txt`): errors and notices are shown on the
+  # run's page and by the API without signing in, unlike the log.
+  FAILURES: |
+    /^error(\[|:)|: error: / { print "::error::" $0 }
+    /^---- .* stdout ----$/ { if (m) print "::error::" m; m = $0; next }
+    m && (/^note: run with/ || /^failures:$/) { print "::error::" m; m = ""; next }
+    m && NF { m = m "%0A" $0 }
+    END { if (m) print "::error::" m }
+
 jobs:
   build:
     runs-on: ubuntu-24.04
@@ -26,13 +36,15 @@ jobs:
       - name: Tests of the Linux parts
         shell: bash
         run: |
+          code=0
           cargo test --release -- installer::tests::a_linux_pc kit_pc:: screen_context:: workbench:: fleet:: changes:: \
             kde:: plasma:: tray:: x11:: window_tiler:: camera_feed:: features::tests::xdg_ apps::tests::desktop_exec \
             media::tests::mpris_ audio_mixer::tests::pactl_ instant_replay::tests::a_screenshot kit_games::tests::video_memory \
             file_ops::tests::file_uri network_radar::tests::linux_ network_guardian::tests::linux_ vault::tests::the_key_file \
-            --test-threads=4 | tee tests.txt
-          # (A notice: shown on the run's page and by the API without signing in, unlike the log.)
+            --test-threads=4 2>&1 | tee tests.txt || code=$?
           echo "::notice title=Linux tests::$(grep '^test result' tests.txt)"
+          awk "$FAILURES" tests.txt
+          exit $code
       - uses: actions/upload-artifact@v7
         with:
           name: jai-linux-x86_64
@@ -51,6 +63,7 @@ jobs:
       options: --cap-add=SYS_NICE
     env:
       RUSTFLAGS: "-D warnings"
+      JAI_REAL_PLASMA: "1"
     steps:
       - name: The README's packages, KWin, XWayland and a terminal
         run: |
@@ -58,18 +71,26 @@ jobs:
           pacman -Su --noconfirm --needed base-devel rust cmake clang alsa-lib opus git dbus kwin xorg-xwayland foot ttf-dejavu
       - uses: actions/checkout@v7
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
       - name: Build the tests
-        run: cargo test --release --no-run
+        shell: bash
+        run: cargo test --release --no-run 2>&1 | tee build.txt || { awk "$FAILURES" build.txt; exit 1; }
+      # KWin reads the menu entry as a program connects: it is written before KWin starts.
+      - name: The menu entry KWin goes by
+        run: cargo test --release -- --ignored --exact live_checks::kde::menu_entry_names_this_program
       - name: The KDE parts against KWin
         shell: bash
         run: |
-          export JAI_REAL_PLASMA=1 XDG_RUNTIME_DIR=/tmp/runtime XDG_CURRENT_DESKTOP=KDE KWIN_COMPOSE=Q QT_LOGGING_RULES=KWIN_UTILS.debug=true
+          export XDG_RUNTIME_DIR=/tmp/runtime XDG_CURRENT_DESKTOP=KDE KWIN_COMPOSE=Q QT_LOGGING_RULES=KWIN_UTILS.debug=true
           mkdir -p -m 700 "$XDG_RUNTIME_DIR" && mkdir -p -m 1777 /tmp/.X11-unix
-          # KWin reads the menu entry as a program connects: it is written before KWin starts.
-          cargo test --release -- --ignored --exact live_checks::kde::menu_entry_names_this_program
           # (The checks' output and result go to files: KWin's exit code need not be theirs.)
           timeout 600 dbus-run-session -- kwin_wayland --virtual --xwayland --no-lockscreen --width 1280 --height 800 --output-count 2 \
-            --exit-with-session "bash -c 'cargo test --release -- --ignored --test-threads=1 live_checks::kde::kwin_ > kwin.txt 2>&1; echo \$? > kwin.code'" || true
-          cat kwin.txt
+            --exit-with-session "bash -c 'cargo test --release -- --ignored --test-threads=1 live_checks::kde::kwin_ > kwin.txt 2>&1; echo \$? > kwin.code'" \
+            > kwin.log 2>&1 || true
+          cat kwin.log kwin.txt || true
+          # (KWin's lookup of the menu entry and its last words, then the checks.)
+          echo "::notice title=KWin::$({ grep KWIN_UTILS kwin.log; tail -n 15 kwin.log; } | head -c 4000 | sed ':a;N;$!ba;s/%/%25/g;s/\n/%0A/g')"
           echo "::notice title=KWin checks::$(grep '^test result' kwin.txt)"
+          awk "$FAILURES" kwin.txt
           exit "$(cat kwin.code)"
