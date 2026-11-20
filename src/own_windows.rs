@@ -175,7 +175,10 @@ pub fn open(name: &str) -> bool {
     #[cfg(all(windows, not(test)))]
     return find(name).is_some();
     #[cfg(not(any(windows, test)))]
-    false
+    {
+        let _ = name;
+        false
+    }
 }
 
 /// Where (x, y, w, h) a window standing at `rect` (left, top, right, bottom) goes for a place

@@ -4,6 +4,7 @@
 //! leaves the machine.
 
 use std::time::Duration;
+#[cfg(windows)]
 use tracing::info;
 
 const OCR_TIMEOUT: Duration = Duration::from_secs(25);

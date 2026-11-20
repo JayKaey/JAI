@@ -410,7 +410,7 @@ mod linux {
                 Some((id, class, parts.collect::<Vec<_>>().join(" ")))
             })
             .collect();
-        let (id, class, title) = match target {
+        let (id, _, title) = match target {
             WindowTarget::Active => {
                 let active = run("xdotool", &["getactivewindow"])?;
                 let id = format!("0x{:08x}", active.trim().parse::<u64>().map_err(|e| e.to_string())?);

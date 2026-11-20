@@ -92,8 +92,9 @@ const fn fixed(title: &'static str, what: &'static str) -> Entry {
 pub const RELEASES: &[Release] = &[
     Release {
         date: "2026-11-20",
-        name: "Accounts and other PCs",
+        name: "Accounts, other PCs and Linux",
         entries: &[
+            new("J.A.I. on Linux", "The same program built for Linux: his ears, voice, brain, HUD, music, volume and windows.", "linux"),
             new("J.A.I. on other PCs", "Install him on a friend's PC: your PC stays the main one, sends orders and they can't touch it.", "other_pcs"),
             new("Accounts for everyone else", "Only your voice and phone may do everything; anyone else needs an account that only asks.", "accounts"),
             new("The accounts list", "\"Open the accounts list\": passwords, every permission one by one, pauses, topics, PCs.", "accounts"),
@@ -543,7 +544,14 @@ pub const EXPLANATIONS: &[Explanation] = &[
         title: "J.A.I. on other PCs",
         what: "A friend opens your phone page's address in a browser and takes \"J.A.I. for your Windows PC\" (or you give them JAI.exe). Started on its own it is the installer: it reads the graphics card (4 GB of memory at the least; under 8 GB he gets the smaller brain, Qwen3.5 2B), logs in at your PC with their account, fetches the program and its engines from your PC, then his voice, ears and brain, and puts him in the Start menu. Their J.A.I. calls yours every few seconds: you see it in the accounts list (online, its version, CPU, memory, graphics card), and what you order for it, it does. Theirs never sends anything to yours.",
         say: &["Jay, open the earth on Max's PC.", "Jay, turn the volume down on Max's computer.", "Jay, mach die Musik leiser auf Max PC.", "Jay, what did you do for Max this week?"],
-        know: "Their J.A.I. always runs the version yours runs: when yours is newer, theirs fetches it at once and restarts (yours never updates itself), and a new commit on GitHub is announced to them. Your voice print reaches their J.A.I. and theirs reaches yours, held in memory only: each is stored on its owner's PC alone. Until their J.A.I. is logged in it answers nobody. An order waits ten minutes for a PC that is offline. Only Windows: J.A.I. is built on Windows' own speech, windows and security, so there is no Linux version.",
+        know: "Their J.A.I. always runs the version yours runs: when yours is newer, theirs fetches it at once and restarts (yours never updates itself), and a new commit on GitHub is announced to them. Your voice print reaches their J.A.I. and theirs reaches yours, held in memory only: each is stored on its owner's PC alone. Until their J.A.I. is logged in it answers nobody. An order waits ten minutes for a PC that is offline. A Linux PC installs him too (see J.A.I. on Linux).",
+    },
+    Explanation {
+        id: "linux",
+        title: "J.A.I. on Linux",
+        what: "J.A.I. builds and runs on Linux as well as on Windows: listening, Whisper, his brain, his voice, the HUD and its windows, music (through playerctl), the volume (PipeWire, PulseAudio or ALSA), opening apps and moving windows (wmctrl and xdotool on X11, hyprctl on Hyprland), the questions about the PC (what uses a port, what holds a file, what starts with Linux, whether it needs a restart), screen time and the break coach. On Linux the installer is the program itself: started on its own or with --install, it logs in at your PC, takes your voice lock's model and his voice profile from there, fetches Ollama for Linux and his models, puts him into ~/.local/share/jai and the applications menu, and starts him.",
+        say: &["Jay, what's using port 8080?", "Jay, what starts with Linux?", "Jay, do I need to restart?", "Jay, turn the volume down."],
+        know: "Some things need Windows and say so: the desktop background mode, the tray icon, the window tiler, reading the screen, instant replay, the volume of single apps, the frozen-app and microphone checks, app updates. His voice needs espeak-ng installed, and the installer needs zstd to unpack Ollama; playerctl, wmctrl, xdotool, zenity and xprintidle make the rest work. Your PC runs Windows, so a Linux J.A.I. never takes its new versions from there: it hears of them from GitHub, where the Linux build is made.",
     },
     Explanation {
         id: "accounts",

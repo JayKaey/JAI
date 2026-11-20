@@ -2,6 +2,9 @@
 // started. `--console` attaches one on request (tests keep the console subsystem).
 #![cfg_attr(not(test), windows_subsystem = "windows")]
 #![recursion_limit = "256"]
+// Windows-only features (background mode, the tiler, screen OCR, replay …) leave their helpers
+// unused on Linux; the Windows build, which uses every one of them, is where dead code is caught.
+#![cfg_attr(not(windows), allow(dead_code))]
 
 //! J.A.I. — local, offline, low-latency voice assistant.
 //!

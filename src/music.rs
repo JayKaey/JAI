@@ -186,6 +186,7 @@ fn choose_player(preference: &str, sonora_running: bool, spotify_running: bool, 
 }
 
 async fn detect_player(preference: &str) -> Player {
+    #[cfg_attr(not(windows), allow(unused_mut))]
     let (mut sonora, mut spotify) = tokio::task::spawn_blocking(|| {
         let mut system = sysinfo::System::new();
         system.refresh_processes(sysinfo::ProcessesToUpdate::All);

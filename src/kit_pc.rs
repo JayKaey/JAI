@@ -5,6 +5,9 @@
 //! - what starts with Windows (the Run keys and Startup folders with Task Manager's on/off),
 //! - whether Windows waits for a restart (the servicing keys), told once, best as a game starts.
 //!
+//! On Linux the same questions read `/proc` (ports, open files), the XDG autostart folders and
+//! `/var/run/reboot-required`; frozen apps, app updates and the microphone check need Windows.
+//!
 //! Nothing is ended or switched off on the question: he is asked (`hud_lines::offer`), and only
 //! his yes carries out the order the offer holds ("end process 4321 discord").
 
@@ -12,6 +15,12 @@ use crate::kit::say;
 use regex::Regex;
 use serde_json::{json, Value};
 use std::sync::LazyLock;
+
+#[cfg(windows)]
+use crate::win32::process_name;
+
+/// The system the answers name ("what starts with Linux").
+const OS: &str = if cfg!(windows) { "Windows" } else { "Linux" };
 
 fn re(pattern: &str) -> Regex {
     Regex::new(pattern).expect("a valid PC phrase")
@@ -27,14 +36,14 @@ static FILE: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(?:who|what|which (?:app|program))(?: still)? (?:has|keeps) (?P<f>.+?) open$|^(?:who|what|which (?:app|program))(?:'s|s| s| is) (?:using|locking|blocking|holding) (?:the file )?(?P<f2>.+?\.\w{1,5})$|^wer hat (?P<f3>.+?) (?:noch )?offen$|^welches programm (?:blockiert|benutzt|sperrt) (?:die datei )?(?P<f4>.+?\.\w{1,5})$")
 });
 static STARTUP: LazyLock<Regex> = LazyLock::new(|| {
-    re(r"^(?:what|which (?:apps|programs)) (?:starts?|runs?|opens?|launch(?:es)?) (?:with windows|at (?:startup|boot|sign in|login))$|^(?:show|list) (?:me )?(?:my )?(?:startup|autostart) (?:apps|programs|entries|items)$|^was startet (?:alles )?(?:mit windows|beim (?:hochfahren|start|anmelden))$|^zeig(?:e)? (?:mir )?(?:meine |die )?autostart(?:[\s-]?programme|[\s-]?einträge)?$")
+    re(r"^(?:what|which (?:apps|programs)) (?:starts?|runs?|opens?|launch(?:es)?) (?:with (?:windows|linux)|at (?:startup|boot|sign in|login))$|^(?:show|list) (?:me )?(?:my )?(?:startup|autostart) (?:apps|programs|entries|items)$|^was startet (?:alles )?(?:mit (?:windows|linux)|beim (?:hochfahren|start|anmelden))$|^zeig(?:e)? (?:mir )?(?:meine |die )?autostart(?:[\s-]?programme|[\s-]?einträge)?$")
 });
 static STARTUP_OFF: LazyLock<Regex> = LazyLock::new(|| {
-    re(r"^(?:stop|disable|switch off|turn off) (?P<n>.+?) (?:from )?(?:starting with windows|at startup|on startup|in autostart|at boot)$|^(?:don't|do not) start (?P<n2>.+?) with windows$|^(?P<n3>.+?) soll nicht mehr (?:mit windows|automatisch) starten$|^nimm (?P<n4>.+?) aus dem autostart$")
+    re(r"^(?:stop|disable|switch off|turn off) (?P<n>.+?) (?:from )?(?:starting with (?:windows|linux)|at startup|on startup|in autostart|at boot)$|^(?:don't|do not) start (?P<n2>.+?) with (?:windows|linux)$|^(?P<n3>.+?) soll nicht mehr (?:mit (?:windows|linux)|automatisch) starten$|^nimm (?P<n4>.+?) aus dem autostart$")
 });
 static STARTUP_OFF_ORDER: LazyLock<Regex> = LazyLock::new(|| re(r"^switch off startup entry (?P<n>.+)$"));
 static REBOOT: LazyLock<Regex> = LazyLock::new(|| {
-    re(r"^(?:does|do) (?:windows|my pc|the pc|my computer) (?:need|want) (?:a |to )?restart$|^is a restart (?:pending|needed|due)$|^(?:muss|soll) (?:ich (?:den pc |windows )?|der pc |windows )?neu ?(?:starten|gestartet werden)$")
+    re(r"^(?:does|do) (?:windows|linux|my pc|the pc|my computer) (?:need|want) (?:a |to )?restart$|^is a restart (?:pending|needed|due)$|^(?:muss|soll) (?:ich (?:den pc |windows )?|der pc |windows )?neu ?(?:starten|gestartet werden)$")
 });
 static END: LazyLock<Regex> = LazyLock::new(|| re(r"^end process (?P<pid>\d{1,7}) (?P<name>[\w.-]+)$"));
 static UPDATES: LazyLock<Regex> = LazyLock::new(|| {
@@ -92,6 +101,7 @@ pub fn only_looks(args: &Value) -> bool {
 /// The microphone checked from Windows' side: the block's rows and the one line to say (the
 /// first fault, in the order it would stop the sound). `blocked_for`: whom the privacy setting
 /// shuts out.
+#[cfg(windows)]
 pub fn mic_verdict(blocked_for: Option<&str>, mic: Option<&crate::audio_mixer::MicState>) -> (String, String) {
     let yes_no = |b: bool, yes: &str, no: &str| if b { yes.to_string() } else { no.to_string() };
     let mut rows = vec![format!("Privacy   {}", blocked_for.map_or("allowed".to_string(), |w| format!("BLOCKED for {w}")))];
@@ -115,6 +125,7 @@ pub fn mic_verdict(blocked_for: Option<&str>, mic: Option<&crate::audio_mixer::M
 }
 
 /// Whom Windows' microphone privacy switch shuts out, if anyone (the PC's, his, desktop apps').
+#[cfg(windows)]
 fn mic_blocked_for() -> Option<&'static str> {
     use windows::Win32::System::Registry::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
     const STORE: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\CapabilityAccessManager\\ConsentStore\\microphone";
@@ -130,6 +141,7 @@ fn mic_blocked_for() -> Option<&'static str> {
     }
 }
 
+#[cfg(windows)]
 fn reg_text(root: windows::Win32::System::Registry::HKEY, path: &str, name: &str) -> Option<String> {
     use windows::core::PCWSTR;
     use windows::Win32::System::Registry::{RegGetValueW, RRF_RT_REG_SZ};
@@ -144,6 +156,7 @@ fn reg_text(root: windows::Win32::System::Registry::HKEY, path: &str, name: &str
 
 /// `winget upgrade`'s table: (name, id, installed, available) per row. The columns are cut where
 /// the header's words start (the header is in Windows' language), counted in characters.
+#[cfg(windows)]
 pub fn upgrade_rows(out: &str) -> Vec<(String, String, String, String)> {
     let lines: Vec<&str> = out.lines().map(|l| l.rsplit('\r').next().unwrap_or(l)).collect();
     let Some(dash) = lines.iter().position(|l| l.len() > 20 && l.trim().chars().all(|c| c == '-')) else { return Vec::new() };
@@ -169,6 +182,7 @@ pub fn upgrade_rows(out: &str) -> Vec<(String, String, String, String)> {
 }
 
 /// The line for the update list: how many, the first three names, the question.
+#[cfg(windows)]
 fn updates_line(rows: &[(String, String, String, String)]) -> String {
     let names: Vec<String> = rows.iter().take(3).map(|r| r.0.clone()).collect();
     let more = rows.len().saturating_sub(3);
@@ -193,6 +207,9 @@ fn ask_to_end(pid: u32, name: &str, why: &str) -> String {
 
 pub async fn run(args: &Value) -> Result<String, String> {
     match args["action"].as_str().unwrap_or("") {
+        #[cfg(not(windows))]
+        "frozen" | "mic" | "updates" | "upgrade" => Err("That one needs Windows, Sir: on Linux I can't see frozen windows, check the microphone or update apps yet.".into()),
+        #[cfg(windows)]
         "frozen" => {
             let hung = hung_windows();
             match hung.as_slice() {
@@ -211,7 +228,7 @@ pub async fn run(args: &Value) -> Result<String, String> {
             match owners.first() {
                 None => Ok(say(&format!("Nothing is using port {port}, Sir."), &format!("Nothing is using port {port}, Sir."))),
                 Some(&pid) => {
-                    let name = crate::win32::process_name(pid).unwrap_or_else(|| format!("process {pid}"));
+                    let name = process_name(pid).unwrap_or_else(|| format!("process {pid}"));
                     if pid == std::process::id() {
                         return Ok(say(&format!("Port {port} is mine, Sir."), &format!("Port {port} is mine, Sir.")));
                     }
@@ -227,7 +244,7 @@ pub async fn run(args: &Value) -> Result<String, String> {
             match owners.first() {
                 None => Ok(say(&format!("No program has {shown} open, Sir."), "No program has it open, Sir.")),
                 Some((pid, app)) => {
-                    let name = crate::win32::process_name(*pid).unwrap_or_else(|| app.clone());
+                    let name = process_name(*pid).unwrap_or_else(|| app.clone());
                     Ok(ask_to_end(*pid, &name, &format!("{app} has {shown} open.")))
                 }
             }
@@ -235,7 +252,7 @@ pub async fn run(args: &Value) -> Result<String, String> {
         "end" => {
             let pid = args["pid"].as_u64().ok_or("Which process, Sir?")? as u32;
             let name = args["name"].as_str().unwrap_or("");
-            match crate::win32::process_name(pid) {
+            match process_name(pid) {
                 Some(now) if end_order(pid, &now) == end_order(pid, name) && pid != std::process::id() => {
                     end_process(pid)?;
                     Ok(say(&format!("Ended {now}, Sir."), &format!("Ended {now}, Sir.")))
@@ -246,13 +263,14 @@ pub async fn run(args: &Value) -> Result<String, String> {
         "startup" => {
             let entries = tokio::task::spawn_blocking(startup_entries).await.map_err(|e| e.to_string())?;
             if entries.is_empty() {
-                return Ok(say("Nothing starts with Windows, Sir.", "Nothing starts with Windows, Sir."));
+                let line = format!("Nothing starts with {OS}, Sir.");
+                return Ok(say(&line, &line));
             }
             let text: Vec<String> = entries.iter().map(|e| format!("{}  {}  ·  {}", if e.on { "ON " } else { "off" }, e.name, e.place)).collect();
-            crate::kit::show_text("startup_apps", "STARTS WITH WINDOWS", &text.join("\n"), [420.0, 260.0]);
+            crate::kit::show_text("startup_apps", &format!("STARTS WITH {}", OS.to_uppercase()), &text.join("\n"), [420.0, 260.0]);
             let on = entries.iter().filter(|e| e.on).count();
-            let line = format!("{on} of {} entries start with Windows, Sir. Say \"stop <name> from starting with Windows\" to switch one off.", entries.len());
-            Ok(say(&line, &format!("{on} of {} entries start with Windows, Sir.", entries.len())))
+            let line = format!("{on} of {} entries start with {OS}, Sir. Say \"stop <name> from starting with {OS}\" to switch one off.", entries.len());
+            Ok(say(&line, &format!("{on} of {} entries start with {OS}, Sir.", entries.len())))
         }
         "startup_off" => {
             let said = args["name"].as_str().ok_or("Which entry, Sir?")?.to_string();
@@ -263,17 +281,19 @@ pub async fn run(args: &Value) -> Result<String, String> {
             }
             if !args["confirmed"].as_bool().unwrap_or(false) {
                 crate::hud_lines::offer(&format!("switch off startup entry {}", entry.name));
-                let line = format!("{} starts with Windows ({}). Shall I switch it off, Sir?", entry.name, entry.place);
+                let line = format!("{} starts with {OS} ({}). Shall I switch it off, Sir?", entry.name, entry.place);
                 return Ok(say(&line, &line));
             }
             let entry = entry.clone();
             tokio::task::spawn_blocking(move || switch_off(&entry)).await.map_err(|e| e.to_string())??;
-            Ok(say(&format!("Done, Sir: {said} no longer starts with Windows (Task Manager's switch, nothing deleted)."), "Done, Sir."))
+            let how = if cfg!(windows) { "Task Manager's switch" } else { "hidden in your autostart" };
+            Ok(say(&format!("Done, Sir: {said} no longer starts with {OS} ({how}, nothing deleted)."), "Done, Sir."))
         }
         "reboot" => Ok(match restart_pending() {
-            true => say("Yes, Sir: Windows has finished an update and waits for a restart.", "Yes, Sir: Windows waits for a restart."),
-            false => say("No, Sir: Windows waits for no restart.", "No, Sir."),
+            true => say(&format!("Yes, Sir: {OS} has finished an update and waits for a restart."), &format!("Yes, Sir: {OS} waits for a restart.")),
+            false => say(&format!("No, Sir: {OS} waits for no restart."), "No, Sir."),
         }),
+        #[cfg(windows)]
         "mic" => {
             let blocked = tokio::task::spawn_blocking(mic_blocked_for).await.map_err(|e| e.to_string())?;
             let mic = crate::audio_mixer::microphone_state().await;
@@ -281,6 +301,7 @@ pub async fn run(args: &Value) -> Result<String, String> {
             crate::kit::show_text("mic_check", "MICROPHONE", &rows, [420.0, 170.0]);
             Ok(say(&line, &line))
         }
+        #[cfg(windows)]
         "updates" => {
             let winget = crate::apps::which("winget").ok_or("winget is not on this PC, Sir.")?;
             let out = crate::shell::run_helper(&winget, ["upgrade", "--accept-source-agreements", "--disable-interactivity"], None, &[], std::time::Duration::from_secs(120)).await.map_err(|e| format!("winget did not run, Sir: {e}"))?;
@@ -294,6 +315,7 @@ pub async fn run(args: &Value) -> Result<String, String> {
             let line = updates_line(&rows);
             Ok(say(&line, &line))
         }
+        #[cfg(windows)]
         "upgrade" => {
             let winget = crate::apps::which("winget").ok_or("winget is not on this PC, Sir.")?;
             tokio::spawn(async move {
@@ -318,6 +340,7 @@ pub async fn run(args: &Value) -> Result<String, String> {
 // ------------------------------------------------------------------------- frozen apps ----
 
 /// (pid, process, title) of every application window that has stopped answering, his own aside.
+#[cfg(windows)]
 fn hung_windows() -> Vec<(u32, String, String)> {
     use windows::Win32::Foundation::HWND;
     use windows::Win32::UI::WindowsAndMessaging::IsHungAppWindow;
@@ -331,6 +354,7 @@ fn hung_windows() -> Vec<(u32, String, String)> {
     out
 }
 
+#[cfg(windows)]
 fn end_process(pid: u32) -> Result<(), String> {
     use windows::Win32::Foundation::CloseHandle;
     use windows::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE};
@@ -346,6 +370,7 @@ fn end_process(pid: u32) -> Result<(), String> {
 // ------------------------------------------------------------------------- port owners ----
 
 /// The processes listening on (TCP) or bound to (UDP) `port`, IPv4 and IPv6, each once.
+#[cfg(windows)]
 fn port_owners(port: u16) -> Vec<u32> {
     use windows::Win32::NetworkManagement::IpHelper::{
         GetExtendedTcpTable, GetExtendedUdpTable, MIB_TCP6ROW_OWNER_PID, MIB_TCPROW_OWNER_PID, MIB_UDP6ROW_OWNER_PID, MIB_UDPROW_OWNER_PID, TCP_TABLE_OWNER_PID_LISTENER,
@@ -390,6 +415,7 @@ fn port_owners(port: u16) -> Vec<u32> {
 // ------------------------------------------------------------------------- file owners ----
 
 /// (pid, app name) of the processes that have `path` open (the Restart Manager's list).
+#[cfg(windows)]
 fn file_owners(path: &std::path::Path) -> Result<Vec<(u32, String)>, String> {
     use windows::core::{PCWSTR, PWSTR};
     use windows::Win32::Foundation::ERROR_MORE_DATA;
@@ -437,19 +463,29 @@ struct StartupEntry {
     place: &'static str,
     on: bool,
     /// The StartupApproved key (under HKCU or HKLM) and whether it lies under HKLM.
+    #[cfg(windows)]
     approved: &'static str,
+    #[cfg(windows)]
     machine: bool,
+    /// Its `.desktop` file (Linux).
+    #[cfg(not(windows))]
+    file: std::path::PathBuf,
 }
 
+#[cfg(windows)]
 const RUN: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+#[cfg(windows)]
 const APPROVED_RUN: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\Run";
+#[cfg(windows)]
 const APPROVED_FOLDER: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\StartupFolder";
 
+#[cfg(windows)]
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(Some(0)).collect()
 }
 
 /// The names of the values under `path`.
+#[cfg(windows)]
 fn value_names(root: windows::Win32::System::Registry::HKEY, path: &str) -> Vec<String> {
     use windows::core::{PCWSTR, PWSTR};
     use windows::Win32::Foundation::ERROR_SUCCESS;
@@ -479,6 +515,7 @@ fn value_names(root: windows::Win32::System::Registry::HKEY, path: &str) -> Vec<
 }
 
 /// Task Manager's switch for `name`: on unless its StartupApproved bytes start odd (3 = off).
+#[cfg(windows)]
 fn approved_on(root: windows::Win32::System::Registry::HKEY, path: &str, name: &str) -> bool {
     use windows::core::PCWSTR;
     use windows::Win32::System::Registry::{RegGetValueW, RRF_RT_REG_BINARY};
@@ -490,6 +527,7 @@ fn approved_on(root: windows::Win32::System::Registry::HKEY, path: &str, name: &
     !(read.is_ok() && size > 0 && buf[0] & 1 == 1)
 }
 
+#[cfg(windows)]
 fn startup_entries() -> Vec<StartupEntry> {
     use windows::Win32::System::Registry::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
     let mut out = Vec::new();
@@ -526,6 +564,7 @@ fn best_entry<'a>(entries: &'a [StartupEntry], said: &str) -> Option<&'a Startup
 }
 
 /// Task Manager's own "Disable": the StartupApproved bytes 03 00 … (the entry itself stays).
+#[cfg(windows)]
 fn switch_off(entry: &StartupEntry) -> Result<(), String> {
     use windows::core::PCWSTR;
     use windows::Win32::Foundation::ERROR_SUCCESS;
@@ -549,6 +588,7 @@ fn switch_off(entry: &StartupEntry) -> Result<(), String> {
 // ------------------------------------------------------------------------ restart due ----
 
 /// Whether Windows waits for a restart (Windows Update's or the servicing stack's flag).
+#[cfg(windows)]
 pub fn restart_pending() -> bool {
     use windows::core::PCWSTR;
     use windows::Win32::Foundation::ERROR_SUCCESS;
@@ -572,7 +612,134 @@ pub fn restart_pending() -> bool {
 pub fn restart_note_for_game() -> Option<String> {
     use std::sync::atomic::{AtomicBool, Ordering};
     static TOLD: AtomicBool = AtomicBool::new(false);
-    (restart_pending() && !TOLD.swap(true, Ordering::AcqRel)).then(|| "Windows is waiting for a restart, Sir: an update could restart the PC on its own later.".to_string())
+    let why = if cfg!(windows) { "an update could restart the PC on its own later" } else { "an update needs one" };
+    (restart_pending() && !TOLD.swap(true, Ordering::AcqRel)).then(|| format!("{OS} is waiting for a restart, Sir: {why}."))
+}
+
+// ------------------------------------------------------------------------------ Linux ----
+
+#[cfg(not(windows))]
+fn process_name(pid: u32) -> Option<String> {
+    std::fs::read_to_string(format!("/proc/{pid}/comm")).ok().map(|n| n.trim().to_string()).filter(|n| !n.is_empty())
+}
+
+#[cfg(not(windows))]
+fn end_process(pid: u32) -> Result<(), String> {
+    let ended = std::process::Command::new("kill").arg(pid.to_string()).status().map_err(|e| e.to_string())?;
+    ended.success().then_some(()).ok_or_else(|| "Linux refused to end it, Sir (it may belong to another user).".to_string())
+}
+
+/// The processes holding an open descriptor that `wanted` accepts (`/proc/<pid>/fd`: another
+/// user's only when JAI runs as root).
+#[cfg(not(windows))]
+fn fd_owners(wanted: impl Fn(&std::path::Path) -> bool) -> Vec<u32> {
+    let mut pids = Vec::new();
+    for entry in std::fs::read_dir("/proc").into_iter().flatten().flatten() {
+        let Some(pid) = entry.file_name().to_str().and_then(|n| n.parse::<u32>().ok()) else { continue };
+        let mut fds = std::fs::read_dir(entry.path().join("fd")).into_iter().flatten().flatten();
+        if fds.any(|fd| std::fs::read_link(fd.path()).is_ok_and(|target| wanted(&target))) {
+            pids.push(pid);
+        }
+    }
+    pids
+}
+
+/// The sockets of one `/proc/net` table bound to `port` (TCP: listening only), named as
+/// `/proc/<pid>/fd` names them. A row: "sl local_address rem_address st … inode", the local
+/// address "0100007F:1F90" (the port in hex), st 0A = LISTEN.
+#[cfg(any(not(windows), test))]
+fn sockets_on(table: &str, port: u16, listening_only: bool) -> Vec<String> {
+    let row = |line: &str| {
+        let cols: Vec<&str> = line.split_whitespace().collect();
+        let (local, state, inode) = (*cols.get(1)?, *cols.get(3)?, *cols.get(9)?);
+        let bound = local.rsplit(':').next().and_then(|hex| u16::from_str_radix(hex, 16).ok()) == Some(port);
+        (bound && (!listening_only || state == "0A") && inode != "0").then(|| format!("socket:[{inode}]"))
+    };
+    table.lines().skip(1).filter_map(row).collect()
+}
+
+/// The processes listening on (TCP) or bound to (UDP) `port`: the sockets from `/proc/net`,
+/// then the processes holding them.
+#[cfg(not(windows))]
+fn port_owners(port: u16) -> Vec<u32> {
+    let tables = [("tcp", true), ("tcp6", true), ("udp", false), ("udp6", false)];
+    let sockets: Vec<String> = tables.iter().flat_map(|(t, listening)| sockets_on(&std::fs::read_to_string(format!("/proc/net/{t}")).unwrap_or_default(), port, *listening)).collect();
+    if sockets.is_empty() {
+        return Vec::new();
+    }
+    fd_owners(|target| sockets.iter().any(|s| target.as_os_str() == s.as_str()))
+}
+
+/// (pid, program) of the processes that have `path` open.
+#[cfg(not(windows))]
+fn file_owners(path: &std::path::Path) -> Result<Vec<(u32, String)>, String> {
+    let path = path.canonicalize().map_err(|e| e.to_string())?;
+    Ok(fd_owners(|target| target == path).into_iter().map(|pid| (pid, process_name(pid).unwrap_or_else(|| format!("process {pid}")))).collect())
+}
+
+/// His own autostart folder (XDG): `$XDG_CONFIG_HOME/autostart`, else `~/.config/autostart`.
+#[cfg(not(windows))]
+fn user_autostart() -> Option<std::path::PathBuf> {
+    let config = std::env::var_os("XDG_CONFIG_HOME").filter(|d| !d.is_empty()).map(std::path::PathBuf::from);
+    config.or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config"))).map(|d| d.join("autostart"))
+}
+
+/// The XDG autostart entries: his own, then every user's (`/etc/xdg/autostart`), where a file of
+/// his with the same name stands in for the system's.
+#[cfg(not(windows))]
+fn startup_entries() -> Vec<StartupEntry> {
+    let mut out: Vec<StartupEntry> = Vec::new();
+    for (dir, place) in [(user_autostart(), "Autostart (you)"), (Some(std::path::PathBuf::from("/etc/xdg/autostart")), "Autostart (all users)")] {
+        for file in dir.and_then(|d| std::fs::read_dir(d).ok()).into_iter().flatten().flatten() {
+            let path = file.path();
+            if path.extension().is_none_or(|e| e != "desktop") || out.iter().any(|e| e.file.file_name() == path.file_name()) {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).unwrap_or_default();
+            let name = desktop_key(&text, "Name").filter(|n| !n.is_empty()).map(str::to_string).unwrap_or_else(|| path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default());
+            out.push(StartupEntry { name, place, on: desktop_starts(&text), file: path });
+        }
+    }
+    out
+}
+
+/// A key of a `.desktop` entry ("Name", "Hidden"), trimmed; a translation ("Name[de]") is not it.
+#[cfg(any(not(windows), test))]
+fn desktop_key<'a>(text: &'a str, key: &str) -> Option<&'a str> {
+    text.lines().find_map(|l| l.strip_prefix(key).and_then(|v| v.strip_prefix('=')).map(str::trim))
+}
+
+/// Whether an autostart entry starts: neither hidden nor switched off in GNOME's way.
+#[cfg(any(not(windows), test))]
+fn desktop_starts(text: &str) -> bool {
+    desktop_key(text, "Hidden") != Some("true") && desktop_key(text, "X-GNOME-Autostart-enabled") != Some("false")
+}
+
+/// The entry's text with `Hidden=true` at the top of its [Desktop Entry] group (an old
+/// `Hidden=` goes).
+#[cfg(any(not(windows), test))]
+fn hidden(text: &str) -> String {
+    let mut lines: Vec<&str> = text.lines().filter(|l| !l.trim_start().starts_with("Hidden=")).collect();
+    let at = lines.iter().position(|l| l.trim() == "[Desktop Entry]").map_or(0, |i| i + 1);
+    lines.insert(at, "Hidden=true");
+    lines.join("\n") + "\n"
+}
+
+/// The XDG way to switch one off: his own copy of the entry says `Hidden=true` (nothing is
+/// deleted; for an entry of every user's, it is hidden for him alone).
+#[cfg(not(windows))]
+fn switch_off(entry: &StartupEntry) -> Result<(), String> {
+    let dir = user_autostart().ok_or("I can't find your home folder, Sir.")?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let copy = dir.join(entry.file.file_name().ok_or("That entry has no file, Sir.")?);
+    let text = std::fs::read_to_string(&entry.file).map_err(|e| e.to_string())?;
+    std::fs::write(&copy, hidden(&text)).map_err(|e| format!("I couldn't write {}: {e}", copy.display()))
+}
+
+/// Whether an update waits for a restart (Debian and Ubuntu leave this file).
+#[cfg(not(windows))]
+pub fn restart_pending() -> bool {
+    std::path::Path::new("/var/run/reboot-required").exists()
 }
 
 #[cfg(test)]
@@ -594,6 +761,10 @@ mod tests {
             ("nimm steam aus dem autostart", json!({"action": "startup_off", "name": "steam"})),
             ("does windows need a restart", json!({"action": "reboot"})),
             ("muss ich neu starten", json!({"action": "reboot"})),
+            ("what starts with linux", json!({"action": "startup"})),
+            ("was startet mit linux", json!({"action": "startup"})),
+            ("stop steam from starting with linux", json!({"action": "startup_off", "name": "steam"})),
+            ("does linux need a restart", json!({"action": "reboot"})),
         ] {
             assert_eq!(command(&crate::intents::normalize_phrase(said)), Some(want.clone()), "{said}");
         }
@@ -619,6 +790,11 @@ mod tests {
             assert_eq!(command(&crate::intents::normalize_phrase(said)), Some(json!({"action": "mic"})), "{said}");
         }
         assert_eq!(command(&crate::intents::normalize_phrase("my mic")), None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn the_microphone_verdict_names_the_first_fault() {
         let mic = |muted: bool, level: f32, peak: f32| crate::audio_mixer::MicState { name: "Headset Microphone".into(), level, muted, peak };
         let say = |blocked: Option<&str>, m: Option<crate::audio_mixer::MicState>| mic_verdict(blocked, m.as_ref()).1;
         assert!(say(Some("desktop apps"), Some(mic(true, 0.0, 0.0))).starts_with("Windows' privacy setting blocks the microphone for desktop apps"), "privacy first: nothing else matters while it blocks");
@@ -640,7 +816,12 @@ mod tests {
         for not in ["update me", "any updates", "updates for minecraft"] {
             assert_eq!(command(&crate::intents::normalize_phrase(not)), None, "{not}");
         }
-        let english = "   - \r   \\ \rName                       Id                      Version     Available   Source\n\
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn the_winget_table_is_read_in_any_language() {
+        let english ="   - \r   \\ \rName                       Id                      Version     Available   Source\n\
             ----------------------------------------------------------------------------------------\n\
             Git                        Git.Git                 2.45.0      2.46.0      winget\n\
             Mozilla Firefox (x64 de)   Mozilla.Firefox         131.0       132.0.1     winget\n\
@@ -662,7 +843,17 @@ mod tests {
 
     #[test]
     fn the_entry_he_means_is_the_closest_name() {
-        let e = |name: &str| StartupEntry { name: name.into(), place: "Run (you)", on: true, approved: APPROVED_RUN, machine: false };
+        let e = |name: &str| StartupEntry {
+            name: name.into(),
+            place: "Run (you)",
+            on: true,
+            #[cfg(windows)]
+            approved: APPROVED_RUN,
+            #[cfg(windows)]
+            machine: false,
+            #[cfg(not(windows))]
+            file: Default::default(),
+        };
         let entries = [e("Discord"), e("Steam"), e("SteamVR Helper"), e("OneDrive.lnk")];
         assert_eq!(best_entry(&entries, "steam").map(|e| e.name.as_str()), Some("Steam"));
         assert_eq!(best_entry(&entries, "onedrive").map(|e| e.name.as_str()), Some("OneDrive.lnk"));
@@ -670,10 +861,26 @@ mod tests {
         assert_eq!(best_entry(&entries, "spotify"), None);
     }
 
+    #[test]
+    fn linuxs_ports_and_autostart_entries_are_read() {
+        // /proc/net/tcp: a socket listening on 8080 (0x1F90) and a connection to it.
+        let tcp = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n   0: 0100007F:1F90 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 4711 1 0000000000000000 100 0 0 10 0\n   1: 0100007F:1F90 0100007F:D431 01 00000000:00000000 00:00000000 00000000  1000        0 4712 1 0000000000000000 20 4 30 10 -1\n";
+        assert_eq!(sockets_on(tcp, 8080, true), ["socket:[4711]"], "the listener, not the connection");
+        assert_eq!(sockets_on(tcp, 8080, false).len(), 2, "UDP's sockets count in every state");
+        assert!(sockets_on(tcp, 8081, true).is_empty() && sockets_on("", 8080, true).is_empty());
+        let entry = "[Desktop Entry]\nType=Application\nName[de]=Dampf\nName=Steam\nExec=steam -silent\nHidden=false\n";
+        assert_eq!(desktop_key(entry, "Name"), Some("Steam"), "the plain name, not a translation");
+        assert!(desktop_starts(entry));
+        let off = hidden(entry);
+        assert!(!desktop_starts(&off) && off.starts_with("[Desktop Entry]\nHidden=true\n") && off.matches("Hidden=").count() == 1, "{off}");
+        assert!(!desktop_starts("[Desktop Entry]\nX-GNOME-Autostart-enabled=false\n"));
+    }
+
     /// Read-only probes of this PC: nothing is ended or switched.
     #[test]
     fn the_pc_answers_without_changing_anything() {
         assert!(port_owners(1).len() <= 1);
+        #[cfg(windows)]
         let _ = hung_windows();
         let _ = restart_pending();
         let entries = startup_entries();

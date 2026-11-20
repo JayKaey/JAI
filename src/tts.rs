@@ -774,6 +774,7 @@ impl Kokoro {
             .unwrap_or_else(|e| e.recover())
             .with_intra_threads(cfg.tts_thread_count())
             .unwrap_or_else(|e| e.recover());
+        #[cfg_attr(not(windows), allow(unused_mut))]
         let mut device = "CPU";
         #[cfg(windows)]
         if cfg.tts_gpu {

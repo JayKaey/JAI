@@ -1,6 +1,6 @@
 # J.A.I.
 
-A local voice assistant for Windows in native Rust. Speech recognition (Whisper), voice
+A local voice assistant for Windows (and Linux) in native Rust. Speech recognition (Whisper), voice
 activity detection (Silero), speech synthesis (Kokoro), the language model (a local Ollama
 engine) and the egui HUD all run on the PC; there is no cloud speech or text-to-speech.
 
@@ -274,7 +274,27 @@ on another PC sends no orders anywhere: asked to act on Sir's PC, it says it can
 the version Sir's PC runs (a newer one is fetched at once and started; Sir's own PC never updates
 itself), hears of new commits on GitHub, and shows in the accounts list with its version and its
 PC's load. Voice prints are shared both ways and held in memory only: each stays on its owner's PC.
-Windows only.
+A Linux PC installs him as well (see Linux).
+
+## Linux
+
+The same crate builds on Linux; the `Linux` GitHub workflow builds it on Ubuntu and keeps
+`target/release/jai` as the run's artifact. To build it yourself:
+
+```
+sudo apt install build-essential cmake clang libclang-dev pkg-config libasound2-dev libopus-dev
+cargo build --release
+```
+
+At run time he needs `espeak-ng` (his voice) and, for the installer, `zstd`; `playerctl`
+(music), `wmctrl` and `xdotool` (windows on X11; Hyprland is driven through `hyprctl`), PipeWire's
+`wpctl` or `pactl` (volume), `xdg-open`, `zenity` or `kdialog` (save dialogs), `wl-clipboard` or
+`xclip`, `xprintidle` (idle time on X11; GNOME is asked over D-Bus) and the NVIDIA driver's
+`nvidia-smi` make the rest work. Started on its own, `jai` is the installer: it logs in at Sir's
+PC, takes his data (never his Windows programs), fetches Ollama for Linux and the models, and
+installs into `~/.local/share/jai` with an entry in the applications menu. What needs Windows says
+so: the desktop background mode, the tray icon, the window tiler, screen reading, instant replay,
+the per-app mixer, the frozen-app and microphone checks and app updates.
 
 ## JAI's own Discord account
 

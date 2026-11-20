@@ -308,7 +308,7 @@ pub async fn run(args: &Value) -> Result<String, String> {
         "start" => {
             let g = find(game).ok_or_else(|| format!("I can't find {game} among your games, Sir."))?;
             if !crate::platform::hands_off() {
-                crate::win32::shell_execute(&g.launch, None, None)?;
+                crate::platform::open(&g.launch)?;
             }
             Ok(say(format!("Starting {}.", g.name), format!("Starting {}, Sir.", plain(&g.name))))
         }

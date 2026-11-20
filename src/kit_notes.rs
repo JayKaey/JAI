@@ -499,6 +499,8 @@ async fn fall_silent(what: &str, still_wanted: impl Fn() -> bool) {
     }
     let stopped = crate::music::stop_all_active_media().await;
     let _ = what;
+    #[cfg(not(windows))]
+    let _ = still_wanted;
     #[cfg(windows)]
     if let Some(level) = stood {
         tokio::time::sleep(Duration::from_millis(600)).await;

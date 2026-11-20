@@ -164,7 +164,10 @@ pub async fn look() -> Looking {
     with(|s| s.looks += 1);
     let guard = Looking(());
     crate::gui::refresh();
+    #[cfg(windows)]
     let left_out = crate::win32::call(leave_out_own_windows).await.unwrap_or(false);
+    #[cfg(not(windows))]
+    let left_out = leave_out_own_windows();
     if left_out {
         // (The change shows from the next composition of the desktop.)
         tokio::time::sleep(Duration::from_millis(40)).await;
@@ -182,7 +185,10 @@ impl Drop for Looking {
             s.looks == 0
         });
         if last {
+            #[cfg(windows)]
             crate::win32::run_detached(let_own_windows_back);
+            #[cfg(not(windows))]
+            let_own_windows_back();
         }
         crate::gui::refresh();
     }
@@ -351,6 +357,7 @@ mod tests {
         drop(Looking(()));
         assert_eq!(with(|s| s.looks), 0);
         // Once the worker has caught up, nothing of his is left out.
+        #[cfg(windows)]
         let _ = rt.block_on(crate::win32::call(|| ()));
         assert!(with(|s| s.excluded.is_empty()));
     }

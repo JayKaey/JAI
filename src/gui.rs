@@ -6368,7 +6368,7 @@ fn nobody_watching() -> bool {
     let now = STARTED.elapsed().as_millis() as u64;
     if now >= ASK_AGAIN_MS.load(Ordering::Relaxed) {
         ASK_AGAIN_MS.store(now + 1_000, Ordering::Relaxed);
-        let unwatched = !crate::platform::in_test_session() && (crate::vram_guard::is_dormant() || crate::win32::idle_seconds().is_some_and(|idle| idle >= AWAY_AFTER_SECS));
+        let unwatched = !crate::platform::in_test_session() && (crate::vram_guard::is_dormant() || crate::platform::idle_seconds().is_some_and(|idle| idle >= AWAY_AFTER_SECS));
         UNWATCHED.store(unwatched, Ordering::Relaxed);
     }
     UNWATCHED.load(Ordering::Relaxed)
@@ -7475,6 +7475,8 @@ fn keep_above_hud(ctx: &egui::Context) {
             }
         }
     }
+    #[cfg(not(windows))]
+    let _ = ctx;
 }
 
 /// A piece of the board (a block of a report, the column of his system blocks) in a window of

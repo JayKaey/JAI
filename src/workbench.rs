@@ -82,21 +82,21 @@ impl Workbench {
                 });
             }
         });
+        let bench = self.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_secs(crate::screen_time::SAMPLE_SECS));
+            loop {
+                tick.tick().await;
+                let Some(process) = crate::platform::foreground_process() else { continue };
+                let idle = crate::platform::idle_seconds().unwrap_or(0);
+                let day = chrono::Local::now().format("%Y-%m-%d").to_string();
+                if let Some(stretch) = bench.screen.sample(&day, &process, idle, crate::platform::foreground_is_fullscreen()) {
+                    crate::proactive_butler::show(&break_card(stretch));
+                }
+            }
+        });
         #[cfg(windows)]
         {
-            let bench = self.clone();
-            tokio::spawn(async move {
-                let mut tick = tokio::time::interval(Duration::from_secs(crate::screen_time::SAMPLE_SECS));
-                loop {
-                    tick.tick().await;
-                    let Some((process, _)) = crate::win32::foreground_info() else { continue };
-                    let idle = crate::win32::idle_seconds().unwrap_or(0);
-                    let day = chrono::Local::now().format("%Y-%m-%d").to_string();
-                    if let Some(stretch) = bench.screen.sample(&day, &process, idle, crate::win32::foreground_is_fullscreen()) {
-                        crate::proactive_butler::show(&break_card(stretch));
-                    }
-                }
-            });
             let bench = self.clone();
             tokio::spawn(async move {
                 let mut seen = crate::win32::clipboard_sequence();
@@ -121,8 +121,7 @@ impl Workbench {
             loop {
                 tick.tick().await;
                 // Never over a game or a film, and not while Sir is not there to see it.
-                #[cfg(windows)]
-                if crate::win32::foreground_is_fullscreen() || crate::win32::idle_seconds().unwrap_or(0) > 300 {
+                if crate::platform::foreground_is_fullscreen() || crate::platform::idle_seconds().unwrap_or(0) > 300 {
                     continue;
                 }
                 if let Some(habit) = bench.routines.offer(chrono::Local::now().naive_local()) {

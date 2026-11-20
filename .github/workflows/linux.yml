@@ -1,0 +1,28 @@
+# J.A.I. for Linux: builds the program on Ubuntu and runs the tests of what is Linux's own.
+# The built program is kept as this run's artifact (`jai-linux-x86_64`), never released.
+name: Linux
+
+on:
+  push:
+    branches: [main, v3.2-tested-features]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Libraries the build links against
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libopus-dev pkg-config cmake clang libclang-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --release
+      - name: Tests of the Linux parts
+        run: cargo test --release -- installer::tests::a_linux_pc kit_pc:: screen_context:: workbench:: fleet:: --test-threads=4
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jai-linux-x86_64
+          path: target/release/jai
+          retention-days: 30

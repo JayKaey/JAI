@@ -72,6 +72,7 @@ pub fn install_fonts(ctx: &egui::Context) {
     for (name, bytes) in FACES {
         fonts.font_data.insert(name.to_string(), FontData::from_static(bytes));
     }
+    #[cfg_attr(not(windows), allow(unused_mut))]
     let mut system: Vec<String> = Vec::new();
     #[cfg(windows)]
     {

@@ -90,7 +90,7 @@ pub async fn run_tool(tools: &ToolContext, args: &Value) -> Result<String, Strin
     let chart = dir.join("chart.png");
     let has_chart = chart.is_file();
     if has_chart {
-        let _ = crate::win32::shell_execute(&chart.display().to_string(), None, None);
+        let _ = crate::platform::open(&chart.display().to_string());
     }
     let output = attempt.output.trim().chars().take(4000).collect::<String>();
     let status = if attempt.ok { format!("ran successfully{}", if fixes > 0 { format!(" after {fixes} repair(s)") } else { String::new() }) } else { format!("still fails after {fixes} repair(s)") };

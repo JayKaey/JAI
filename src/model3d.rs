@@ -1886,8 +1886,32 @@ fn folder_in(text: &str) -> Option<String> {
     KNOWN.iter().find(|(w, _)| t.split(|c: char| !c.is_alphanumeric() && c != ' ').any(|part| part.contains(w))).map(|(_, f)| f.to_string())
 }
 
+/// The desktop's "Save as" dialog (zenity on GNOME, kdialog on KDE): the file Sir chose, or None
+/// when he cancelled. (A test session opens no dialog.)
+#[cfg(not(windows))]
+fn save_dialog(name: &str, ext: &str) -> Result<Option<PathBuf>, String> {
+    if crate::platform::in_test_session() {
+        return Err("a test session opens no dialogs".into());
+    }
+    let start = export_dir().join(name).display().to_string();
+    let zenity = ["--file-selection".to_string(), "--save".into(), format!("--filename={start}"), "--title=Save the 3D model — J.A.I.".into()];
+    let kdialog = ["--getsavefilename".to_string(), start.clone(), format!("*.{ext}")];
+    for (program, args) in [("zenity", &zenity[..]), ("kdialog", &kdialog[..])] {
+        match std::process::Command::new(program).args(args).output() {
+            Ok(out) if out.status.success() => {
+                let chosen = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                return Ok((!chosen.is_empty()).then(|| PathBuf::from(chosen)));
+            }
+            Ok(_) => return Ok(None),
+            Err(_) => continue,
+        }
+    }
+    Err("there's no save dialog on this PC (zenity or kdialog); name a folder instead".into())
+}
+
 /// The Windows "Save as" dialog: the file Sir chose, or None when he cancelled. (A test session
 /// opens no dialog.)
+#[cfg(windows)]
 fn save_dialog(name: &str, ext: &str) -> Result<Option<PathBuf>, String> {
     if crate::platform::in_test_session() {
         return Err("a test session opens no dialogs".into());

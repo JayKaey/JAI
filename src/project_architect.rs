@@ -203,7 +203,7 @@ pub async fn run_tool(tools: &ToolContext, args: &Value) -> Result<String, Strin
     };
     log.push(if opened { "VS Code: opened".into() } else { "VS Code: not found (folder opened instead)".into() });
     if !opened {
-        let _ = crate::win32::shell_execute(&dir.display().to_string(), None, None);
+        let _ = crate::platform::open(&dir.display().to_string());
     }
     let monitor = str_arg(args, &["target_monitor", "monitor"]).map(String::from);
     if let (Some(m), true) = (&monitor, opened) {

@@ -43,9 +43,16 @@ pub fn vram_mb() -> Option<u64> {
         .map(|bytes| bytes / (1024 * 1024))
 }
 
+/// On Linux AMD's and Intel's drivers tell it in /sys, NVIDIA's through nvidia-smi.
 #[cfg(not(windows))]
 pub fn vram_mb() -> Option<u64> {
-    None
+    let sys = std::fs::read_dir("/sys/class/drm").into_iter().flatten().flatten().filter_map(|card| {
+        let bytes = std::fs::read_to_string(card.path().join("device").join("mem_info_vram_total")).ok()?;
+        bytes.trim().parse::<u64>().ok().map(|b| b / (1024 * 1024))
+    });
+    let smi = std::process::Command::new("nvidia-smi").args(["--query-gpu=memory.total", "--format=csv,noheader,nounits"]).output();
+    let nvidia = smi.map(|o| String::from_utf8_lossy(&o.stdout).lines().filter_map(|l| l.trim().parse::<u64>().ok()).collect::<Vec<_>>()).unwrap_or_default();
+    sys.chain(nvidia).max()
 }
 
 /// The brain for a card: the full one from 8 GB, the smaller one from 4 GB, none below.
@@ -58,9 +65,50 @@ pub fn brain_for(vram_mb: Option<u64>) -> Result<&'static str, String> {
     }
 }
 
-/// Where J.A.I. is installed: %LOCALAPPDATA%\Programs\JAI.
+/// The program's own name in its folder.
+const PROGRAM: &str = if cfg!(windows) { "JAI.exe" } else { "jai" };
+
+/// Where J.A.I. is installed: %LOCALAPPDATA%\Programs\JAI, on Linux ~/.local/share/jai.
 pub fn folder() -> PathBuf {
-    std::env::var_os("LOCALAPPDATA").map_or_else(|| PathBuf::from("JAI"), |d| PathBuf::from(d).join("Programs").join("JAI"))
+    #[cfg(windows)]
+    let base = std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("Programs"));
+    #[cfg(not(windows))]
+    let base = data_home();
+    base.map_or_else(|| PathBuf::from("JAI"), |d| d.join(if cfg!(windows) { "JAI" } else { "jai" }))
+}
+
+/// Linux's folder for programs' data: $XDG_DATA_HOME, else ~/.local/share.
+#[cfg(not(windows))]
+fn data_home() -> Option<PathBuf> {
+    std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local").join("share")))
+}
+
+/// Whether a file of Sir's PC is for this one: Linux takes his data, never his Windows program,
+/// its libraries or its engines (J.A.I. there is this program itself, his engine Ollama's own).
+fn for_this_system(path: &str, windows: bool) -> bool {
+    windows || !(path == "JAI.exe" || path.ends_with(".dll") || path.starts_with("runtime/"))
+}
+
+/// Streams `answer` into `to` through a `.part` file, telling `said` the bytes so far (every
+/// half second, by `told`); a file that comes short is not kept.
+async fn save(mut answer: reqwest::Response, to: &Path, size: u64, told: &mut Instant, said: &(dyn Fn(u64) + Sync)) -> Result<(), String> {
+    let part = to.with_extension("part");
+    let mut file = std::fs::File::create(&part).map_err(|e| e.to_string())?;
+    let mut written = 0u64;
+    while let Some(chunk) = answer.chunk().await.map_err(|e| e.to_string())? {
+        std::io::Write::write_all(&mut file, &chunk).map_err(|e| e.to_string())?;
+        written += chunk.len() as u64;
+        if told.elapsed() > Duration::from_millis(500) {
+            *told = Instant::now();
+            said(written);
+        }
+    }
+    drop(file);
+    if written != size {
+        let _ = std::fs::remove_file(&part);
+        return Err(format!("{} came incomplete ({written} of {size} bytes). Try again.", to.display()));
+    }
+    std::fs::rename(&part, to).map_err(|e| e.to_string())
 }
 
 /// What Sir's PC hands a new PC: (where it goes there, where it is here, its size). The program,
@@ -107,14 +155,16 @@ fn inside(path: &str) -> Option<&Path> {
 
 /// Fetches J.A.I. from Sir's PC into the current folder (the install folder), then his models,
 /// puts him in the Start menu and starts him. `said`: each step, for the window.
-pub async fn install(config: &ConfigStore, main: &str, said: impl Fn(String)) -> Result<(), String> {
+pub async fn install(config: &ConfigStore, main: &str, said: impl Fn(String) + Sync) -> Result<(), String> {
     let key = crate::fleet::key(config).ok_or("Log in first.")?;
     let main = main.trim().trim_end_matches('/');
     let http = reqwest::Client::builder().connect_timeout(Duration::from_secs(15)).read_timeout(Duration::from_secs(120)).build().map_err(|e| e.to_string())?;
     let list: Vec<Value> = http.get(format!("{main}/api/pc/files")).header("X-JAI-Key", &key).send().await.map_err(|e| e.to_string())?.error_for_status().map_err(|e| e.to_string())?.json().await.map_err(|e| e.to_string())?;
-    let total: u64 = list.iter().filter_map(|f| f["size"].as_u64()).sum();
+    // (By Sir's numbering: a file is asked for by its place in his list.)
+    let list: Vec<(usize, &Value)> = list.iter().enumerate().filter(|(_, f)| f["path"].as_str().is_some_and(|p| for_this_system(p, cfg!(windows)))).collect();
+    let total: u64 = list.iter().filter_map(|(_, f)| f["size"].as_u64()).sum();
     let (mut done, mut told) = (0u64, Instant::now());
-    for (i, f) in list.iter().enumerate() {
+    for (i, f) in list {
         let size = f["size"].as_u64().unwrap_or(0);
         let to = f["path"].as_str().and_then(inside).ok_or("Sir's PC named a file outside J.A.I.'s folder")?;
         // (Already here from an earlier try.)
@@ -125,30 +175,16 @@ pub async fn install(config: &ConfigStore, main: &str, said: impl Fn(String)) ->
         if let Some(dir) = to.parent().filter(|d| !d.as_os_str().is_empty()) {
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
-        let part = to.with_extension("part");
-        let mut file = std::fs::File::create(&part).map_err(|e| e.to_string())?;
-        let mut answer = http.get(format!("{main}/api/pc/file/{i}")).header("X-JAI-Key", &key).send().await.map_err(|e| e.to_string())?.error_for_status().map_err(|e| e.to_string())?;
-        let mut written = 0u64;
-        while let Some(chunk) = answer.chunk().await.map_err(|e| e.to_string())? {
-            std::io::Write::write_all(&mut file, &chunk).map_err(|e| e.to_string())?;
-            written += chunk.len() as u64;
-            if told.elapsed() > Duration::from_millis(500) {
-                told = Instant::now();
-                said(format!("Fetching J.A.I. from Sir's PC: {} of {} MB", (done + written) / 1_000_000, total / 1_000_000));
-            }
-        }
-        drop(file);
-        if written != size {
-            let _ = std::fs::remove_file(&part);
-            return Err(format!("{} came incomplete ({written} of {size} bytes). Try again.", to.display()));
-        }
-        std::fs::rename(&part, to).map_err(|e| e.to_string())?;
+        let answer = http.get(format!("{main}/api/pc/file/{i}")).header("X-JAI-Key", &key).send().await.map_err(|e| e.to_string())?.error_for_status().map_err(|e| e.to_string())?;
+        save(answer, to, size, &mut told, &|written| said(format!("Fetching J.A.I. from Sir's PC: {} of {} MB", (done + written) / 1_000_000, total / 1_000_000))).await?;
         done += size;
     }
     config.snapshot().save().map_err(|e| e.to_string())?;
+    let exe = std::env::current_dir().map_err(|e| e.to_string())?.join(PROGRAM);
+    #[cfg(not(windows))]
+    linux_program_and_engine(&http, config, &exe, &said).await?;
     // His voice, his ears and his brain: from where every J.A.I. fetches them.
     said("Fetching his voice, his ears and his brain (this takes a while)…".into());
-    let exe = std::env::current_dir().map_err(|e| e.to_string())?.join("JAI.exe");
     let mut child = std::process::Command::new(&exe).arg("--download-models").spawn().map_err(|e| format!("J.A.I. did not start: {e}"))?;
     let status = loop {
         if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
@@ -188,9 +224,44 @@ fn start_menu(exe: &Path) -> Result<(), String> {
     }
 }
 
+/// Linux: this program goes into the folder as `jai`, and the engine, when the folder has none,
+/// comes from Ollama's own releases (Sir's PC has only its Windows build).
 #[cfg(not(windows))]
-fn start_menu(_exe: &Path) -> Result<(), String> {
-    Ok(())
+async fn linux_program_and_engine(http: &reqwest::Client, config: &ConfigStore, exe: &Path, said: &(dyn Fn(String) + Sync)) -> Result<(), String> {
+    let me = std::env::current_exe().map_err(|e| e.to_string())?;
+    // (Never copied onto itself: that would empty it.)
+    if me.canonicalize().ok() != exe.canonicalize().ok() {
+        let part = exe.with_extension("part");
+        std::fs::copy(&me, &part).and_then(|_| std::fs::rename(&part, exe)).map_err(|e| format!("J.A.I. could not be put into {}: {e}", exe.display()))?;
+    }
+    let dir = PathBuf::from(config.read(|c| c.llm_runtime_dir.clone()));
+    if crate::runtime::engine_binary(&dir).is_some() {
+        return Ok(());
+    }
+    let arch = if std::env::consts::ARCH == "aarch64" { "arm64" } else { "amd64" };
+    let url = format!("https://github.com/ollama/ollama/releases/latest/download/ollama-linux-{arch}.tar.zst");
+    let answer = http.get(&url).send().await.map_err(|e| e.to_string())?.error_for_status().map_err(|e| e.to_string())?;
+    let size = answer.content_length().ok_or("Ollama's download did not say its size. Try again.")?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let archive = dir.join("ollama.tar.zst");
+    save(answer, &archive, size, &mut Instant::now(), &|got| said(format!("Fetching his engine (Ollama for Linux): {} of {} MB", got / 1_000_000, size / 1_000_000))).await?;
+    said("Unpacking his engine…".into());
+    let unpacked = tokio::process::Command::new("tar").arg("--zstd").arg("-xf").arg(&archive).arg("-C").arg(&dir).status().await;
+    let _ = std::fs::remove_file(&archive);
+    match unpacked {
+        Ok(status) if status.success() && crate::runtime::engine_binary(&dir).is_some() => Ok(()),
+        _ => Err("His engine could not be unpacked: install zstd (on Ubuntu `sudo apt install zstd`) and start the installer again.".into()),
+    }
+}
+
+/// J.A.I. in the applications menu.
+#[cfg(not(windows))]
+fn start_menu(exe: &Path) -> Result<(), String> {
+    let apps = data_home().ok_or("no HOME")?.join("applications");
+    std::fs::create_dir_all(&apps).map_err(|e| e.to_string())?;
+    let folder = exe.parent().unwrap_or(Path::new("."));
+    let entry = format!("[Desktop Entry]\nType=Application\nName=J.A.I.\nComment=Local voice assistant\nExec=\"{}\"\nPath={}\nTerminal=false\nCategories=Utility;\n", exe.display(), folder.display());
+    std::fs::write(apps.join("jai.desktop"), entry).map_err(|e| e.to_string())
 }
 
 /// Sir's PC's address, when this program was downloaded from his phone page (Windows notes
@@ -259,5 +330,17 @@ mod tests {
             assert!(inside(bad).is_none(), "{bad}");
         }
         assert!(inside("runtime/ollama/ollama.exe").is_some());
+    }
+
+    #[test]
+    fn a_linux_pc_takes_sirs_data_and_none_of_his_windows_programs() {
+        for windows_only in ["JAI.exe", "onnxruntime.dll", "runtime/ollama/ollama.exe", "runtime/ollama/lib/ollama/LLAMA_CPP_LICENSE", "runtime/espeak-ng/espeak-ng-data/en_dict"] {
+            assert!(!for_this_system(windows_only, false), "{windows_only}");
+            assert!(for_this_system(windows_only, true), "{windows_only}");
+        }
+        for data in ["models/speaker/voxceleb_resnet34.onnx", "assets/jai_reference_profile.bin"] {
+            assert!(for_this_system(data, false), "{data}");
+        }
+        assert!(folder().ends_with(if cfg!(windows) { "JAI" } else { "jai" }));
     }
 }

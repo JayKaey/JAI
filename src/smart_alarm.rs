@@ -283,6 +283,15 @@ impl AlarmClock {
     }
 }
 
+/// The system volume, set quietly (no volume bar, nothing for "more" to go on from): Core
+/// Audio, on Linux wpctl / pactl.
+async fn quiet_volume(level: f32) {
+    #[cfg(windows)]
+    let _ = crate::win32::set_volume(level);
+    #[cfg(not(windows))]
+    let _ = crate::media::execute(crate::media::MediaAction::SetVolume((level * 100.0).round() as u8)).await;
+}
+
 /// Music fading in, then the greeting and the morning briefing.
 async fn ring(tools: ToolContext, a: Alarm) {
     let settings = tools.config.read(|c| c.features.clone());
@@ -291,17 +300,17 @@ async fn ring(tools: ToolContext, a: Alarm) {
     let target = (settings.alarm_volume.clamp(5, 100) as f32) / 100.0;
     let mut music = false;
     if let Some(p) = &a.playlist {
-        let _ = crate::win32::set_volume(0.05);
+        quiet_volume(0.05).await;
         let out = Box::pin(tools.execute("control_music", &json!({ "action": "play", "playlist_name": p }))).await;
         music = out.success;
         if music {
             let steps = (settings.alarm_fade_secs.clamp(10, 900) / 5).max(1);
             for i in 1..=steps {
                 tokio::time::sleep(Duration::from_secs(5)).await;
-                let _ = crate::win32::set_volume(0.05 + (target - 0.05) * i as f32 / steps as f32);
+                quiet_volume(0.05 + (target - 0.05) * i as f32 / steps as f32).await;
             }
         } else {
-            let _ = crate::win32::set_volume(target);
+            quiet_volume(target).await;
         }
     }
     let shift = if a.shifted.is_some_and(|s| s != a.wake) { format!(" I let you sleep in a little: {}.", a.reason) } else { String::new() };

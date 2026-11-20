@@ -124,7 +124,7 @@ pub fn hello(db: &str, name: &str, body: &Value) -> Value {
     if let Some(print) = body.get("print").filter(|p| p.is_object()) {
         crate::speaker_id::share_guest(name, print);
     }
-    json!({ "orders": take(name), "sir": crate::speaker_id::print_to_share(db), "build": BUILD })
+    json!({ "orders": take(name), "sir": crate::speaker_id::print_to_share(db), "build": BUILD, "os": std::env::consts::OS })
 }
 
 /// How this PC is, in a line for Sir's list.
@@ -217,7 +217,9 @@ pub async fn client(app: Jai) {
             app.dispatch_turn(order.to_string(), Instant::now(), 0, crate::modality::InputSource::TextGui);
             done.push(order.to_string());
         }
-        if let Some(build) = answer["build"].as_str().filter(|b| *b != BUILD && !b.is_empty()) {
+        // (Only from a PC of its own kind: a Linux JAI's new version comes from GitHub, not from Sir's Windows.)
+        let same_system = answer["os"].as_str().is_none_or(|os| os == std::env::consts::OS);
+        if let Some(build) = answer["build"].as_str().filter(|b| *b != BUILD && !b.is_empty() && same_system) {
             match update(&http, &main, &key, build).await {
                 Ok(()) => return,
                 Err(e) => warn!("[FLEET] The new version ({build}) did not come: {e}"),
@@ -254,6 +256,8 @@ async fn update(http: &reqwest::Client, main: &str, key: &str, build: &str) -> R
     }
     let (new, old) = (exe.with_extension("new.exe"), exe.with_extension("old.exe"));
     std::fs::write(&new, &bytes).map_err(|e| e.to_string())?;
+    #[cfg(unix)]
+    std::fs::set_permissions(&new, std::os::unix::fs::PermissionsExt::from_mode(0o755)).map_err(|e| e.to_string())?;
     let _ = std::fs::remove_file(&old);
     std::fs::rename(&exe, &old).map_err(|e| e.to_string())?;
     if let Err(e) = std::fs::rename(&new, &exe) {

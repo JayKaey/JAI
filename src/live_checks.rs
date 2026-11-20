@@ -357,6 +357,8 @@ fn a_test_session_gives_way_to_the_jai_sir_starts() {
         assert!(log_since(log, from).contains("this test session gives way"), "jai.log has no give-way line");
         eprintln!("PASS the place is free for the JAI Sir started, and the log says why it went");
     }
+    #[cfg(not(windows))]
+    eprintln!("skipped: {exe} gives way through the tray's window, which needs Windows");
 }
 
 /// 2026-11-11: a rename changed the name of the vault key's entry, the next start made a new

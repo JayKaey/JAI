@@ -816,7 +816,7 @@ async fn watchdog(controls: Arc<AudioControls>, config: VramGuardConfig) {
         }
         // Back at the PC after a while away (an unlock, a hand on the mouse): the brain warms
         // up while he sits down, not when he first speaks.
-        let idle = crate::win32::idle_seconds().unwrap_or(0);
+        let idle = crate::platform::idle_seconds().unwrap_or(0);
         let back;
         (away, back) = came_back(away, last_idle, idle);
         last_idle = idle;

@@ -192,7 +192,7 @@ pub async fn receive(tools: &ToolContext, body: &Value) -> Value {
             Err(e) => format!("The photo arrived, but reading it failed: {e}"),
         }
     } else {
-        let _ = crate::win32::shell_execute(&path.display().to_string(), None, None);
+        let _ = crate::platform::open(&path.display().to_string());
         format!("{name} arrived from your phone ({:.1} MB) and is open.", bytes.len() as f64 / 1_048_576.0)
     };
     info!("[AIRDROP] {summary} ({})", path.display());

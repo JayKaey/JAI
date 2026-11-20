@@ -325,3 +325,80 @@ pub fn has_display() -> bool {
         || std::env::var_os("DISPLAY").is_some()
         || std::env::var_os("WAYLAND_DISPLAY").is_some()
 }
+
+/// Opens a file, a folder or a link with its default app (ShellExecute; `xdg-open` on Linux).
+pub fn open(target: &str) -> Result<(), String> {
+    #[cfg(windows)]
+    let opened = crate::win32::shell_execute(target, None, None);
+    #[cfg(not(windows))]
+    let opened = crate::apps::spawn_detached("xdg-open", &[target.to_string()]);
+    opened
+}
+
+/// A game, video or presentation covers the foreground window's whole monitor (never known on
+/// Linux).
+pub fn foreground_is_fullscreen() -> bool {
+    #[cfg(windows)]
+    return crate::win32::foreground_is_fullscreen();
+    #[cfg(not(windows))]
+    false
+}
+
+/// The program in front, by its process name (None where the desktop won't say: GNOME's
+/// Wayland tells no outside program which window has the focus).
+pub fn foreground_process() -> Option<String> {
+    #[cfg(windows)]
+    return crate::win32::foreground_info().map(|(process, _)| process);
+    #[cfg(not(windows))]
+    {
+        let out = |program: &str, args: &[&str]| {
+            let out = std::process::Command::new(program).args(args).output().ok().filter(|o| o.status.success())?;
+            Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+        };
+        let pid = if std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some() {
+            serde_json::from_str::<serde_json::Value>(&out("hyprctl", &["activewindow", "-j"])?).ok()?["pid"].as_i64()?.to_string()
+        } else {
+            out("xdotool", &["getactivewindow", "getwindowpid"])?
+        };
+        std::fs::read_to_string(format!("/proc/{pid}/comm")).ok().map(|name| name.trim().to_string())
+    }
+}
+
+/// Seconds since Sir last touched the keyboard or the mouse (None where the system won't say).
+#[cfg(windows)]
+pub fn idle_seconds() -> Option<u64> {
+    crate::win32::idle_seconds()
+}
+
+/// Seconds since Sir last touched the keyboard or the mouse: GNOME's idle monitor (X11 and
+/// Wayland), else `xprintidle` (X11); None where neither answers. Read by a thread of its own
+/// every two seconds: the HUD asks every second and must not wait for a process.
+#[cfg(not(windows))]
+pub fn idle_seconds() -> Option<u64> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static IDLE_MS: AtomicU64 = AtomicU64::new(u64::MAX);
+    static READER: std::sync::Once = std::sync::Once::new();
+    READER.call_once(|| {
+        let read = || -> Option<u64> {
+            let run = |program: &str, args: &[&str]| {
+                let out = std::process::Command::new(program).args(args).stderr(std::process::Stdio::null()).output().ok()?;
+                out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+            };
+            // "(uint64 1234,)"
+            let gnome = run("gdbus", &["call", "--session", "--dest", "org.gnome.Mutter.IdleMonitor", "--object-path", "/org/gnome/Mutter/IdleMonitor/Core", "--method", "org.gnome.Mutter.IdleMonitor.GetIdletime"]);
+            gnome
+                .and_then(|s| s.split_whitespace().nth(1).and_then(|n| n.trim_end_matches([',', ')']).parse().ok()))
+                .or_else(|| std::env::var_os("DISPLAY").and_then(|_| run("xprintidle", &[])).and_then(|s| s.parse().ok()))
+        };
+        // (Nothing answers the first time: no thread asking every two seconds for nothing.)
+        if let Some(first) = read() {
+            IDLE_MS.store(first, Ordering::Relaxed);
+            let _ = std::thread::Builder::new().name("jai-idle".into()).spawn(move || loop {
+                std::thread::sleep(std::time::Duration::from_secs(2));
+                IDLE_MS.store(read().unwrap_or(u64::MAX), Ordering::Relaxed);
+            });
+        }
+    });
+    let ms = IDLE_MS.load(Ordering::Relaxed);
+    (ms != u64::MAX).then_some(ms / 1000)
+}

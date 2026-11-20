@@ -229,7 +229,11 @@ pub fn with_roles(text: &str) -> std::borrow::Cow<'_, str> {
     if !ROLE.is_match(text) {
         return std::borrow::Cow::Borrowed(text);
     }
+    #[cfg(windows)]
     let running: Vec<String> = crate::win32::app_windows().iter().map(|w| w.process.to_lowercase().trim_end_matches(".exe").to_string()).collect();
+    // (Linux: no list of app windows here, so each part goes to its first app.)
+    #[cfg(not(windows))]
+    let running: Vec<String> = Vec::new();
     with_roles_among(text, &running)
 }
 
@@ -632,7 +636,7 @@ pub fn which(bin: &str) -> Option<PathBuf> {
 }
 
 #[cfg(not(windows))]
-fn spawn_detached(program: &str, args: &[String]) -> Result<(), String> {
+pub(crate) fn spawn_detached(program: &str, args: &[String]) -> Result<(), String> {
     use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
 
@@ -918,6 +922,7 @@ pub async fn close(name: &str, force: bool) -> Result<String, String> {
         return Err("No application name was given.".into());
     }
     let display = display_name(name);
+    #[cfg(windows)]
     let spec = find_spec(&query);
 
     #[cfg(windows)]

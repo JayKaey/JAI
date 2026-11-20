@@ -64,7 +64,7 @@ pub fn on(event: Event) {
         return;
     }
     let now = chrono::Local::now().timestamp();
-    let busy = crate::win32::foreground_is_fullscreen();
+    let busy = crate::platform::foreground_is_fullscreen();
     if !may_speak(now, LAST.load(Ordering::Acquire), crate::vram_guard::in_game(), crate::hud_feel::night_active(), crate::discord_bot::in_call(), busy) {
         return;
     }
@@ -83,7 +83,7 @@ pub fn start(mut telemetry: tokio::sync::watch::Receiver<crate::telemetry::Syste
         let mut active_minutes = 0u64;
         loop {
             tick.tick().await;
-            match crate::win32::idle_seconds() {
+            match crate::platform::idle_seconds() {
                 Some(idle) if idle < BREAK_SECS => active_minutes += 1,
                 _ => active_minutes = 0,
             }

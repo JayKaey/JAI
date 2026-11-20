@@ -7,6 +7,7 @@
 //! HUD — front-most first, at most nine. A maximised window is restored first so that it takes
 //! its cell.
 
+#[cfg(windows)]
 use crate::features::{spoken, str_arg};
 use serde_json::{json, Value};
 
