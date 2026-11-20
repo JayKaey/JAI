@@ -294,6 +294,7 @@ fn lock_locks_the_pc() {
 }
 
 /// What jai.log gained since `from` bytes.
+#[cfg(windows)]
 fn log_since(log: &Path, from: u64) -> String {
     use std::io::{Read, Seek, SeekFrom};
     let mut text = String::new();

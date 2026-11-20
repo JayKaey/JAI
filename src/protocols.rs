@@ -521,12 +521,13 @@ pub struct CapturedWindow {
     pub maximized: bool,
 }
 
-/// Processes that are part of Windows, not Sir's workspace.
+/// Processes that are part of Windows (or of KDE), not Sir's workspace.
 fn is_shell_process(p: &str) -> bool {
     matches!(
         p,
         "" | "explorer" | "applicationframehost" | "textinputhost" | "shellexperiencehost" | "searchhost" | "startmenuexperiencehost"
             | "systemsettings" | "lockapp" | "jai" | "nvidia overlay" | "gamebar" | "widgets" | "shellhost" | "crossdeviceresume"
+            | "plasmashell" | "krunner" | "kwin_wayland"
     )
 }
 
@@ -563,9 +564,24 @@ pub fn scan_workspace() -> Vec<CapturedWindow> {
     out
 }
 
+/// KDE: Plasma's window list, the same way (a program's exe stays empty: it starts by its name).
 #[cfg(not(windows))]
 pub fn scan_workspace() -> Vec<CapturedWindow> {
-    Vec::new()
+    use crate::plasma::state;
+    let monitors = crate::monitors::list();
+    let me = std::process::id();
+    let mut out: Vec<CapturedWindow> = Vec::new();
+    for w in crate::plasma::windows() {
+        let process = w.program();
+        if w.pid == me || w.is(state::SKIP_TASKBAR) || w.is(state::MINIMIZED) || is_shell_process(&process.to_lowercase()) || out.iter().any(|c| c.process == process) {
+            continue;
+        }
+        let [x, y, width, height] = w.geometry;
+        let Some(index) = crate::monitors::monitor_at(&monitors, x + width / 2, y + height / 2) else { continue };
+        let work = monitors[index - 1].work;
+        out.push(CapturedWindow { process, exe: String::new(), title: w.title.clone(), monitor: index, rect: [x - work[0], y - work[1], width, height], maximized: w.is(state::MAXIMIZED) });
+    }
+    out
 }
 
 /// The steps that rebuild a captured workspace.

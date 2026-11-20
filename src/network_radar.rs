@@ -825,7 +825,8 @@ fn store_hosts(generation: u64) {
 enum Reach {
     /// Reachable (it just answered ARP) or a permanent entry.
     Yes,
-    /// Stale or being probed: it may have gone.
+    /// Stale or being probed: it may have gone (Linux's ARP table does not tell).
+    #[cfg_attr(not(windows), allow(dead_code))]
     Maybe,
 }
 
@@ -1821,41 +1822,212 @@ mod native {
     }
 }
 
+/// The default gateway of this PC.
+#[cfg(not(windows))]
+pub(crate) fn default_gateway() -> Option<Ipv4Addr> {
+    native::parse_routes(&std::fs::read_to_string("/proc/net/route").ok()?).into_iter().min_by_key(|r| r.2).map(|r| r.1)
+}
+
+/// The name `ip` has on the network (reverse DNS and whatever the system resolver adds).
+pub(crate) fn host_name(ip: Ipv4Addr) -> Option<String> {
+    native::reverse_name(ip)
+}
+
+/// Linux: /proc/net and /sys/class/net for the tables, getifaddrs for the addresses, an
+/// unprivileged ICMP socket for the echoes (Arch lets every group open one).
 #[cfg(not(windows))]
 mod native {
-    use super::{Adapter, Reach};
+    use super::{usable_mac, Adapter, Link, Reach};
     use std::net::Ipv4Addr;
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    use std::time::{Duration, Instant};
 
-    pub fn adapters() -> Vec<Adapter> {
-        Vec::new()
+    /// "aa:bb:cc:dd:ee:ff".
+    fn parse_mac(text: &str) -> Option<[u8; 6]> {
+        let mut mac = [0u8; 6];
+        let mut parts = text.split(':');
+        for slot in &mut mac {
+            *slot = u8::from_str_radix(parts.next()?, 16).ok()?;
+        }
+        parts.next().is_none().then_some(mac)
     }
 
-    pub struct Icmp;
+    /// The default routes of `/proc/net/route`: interface, gateway, metric.
+    pub(super) fn parse_routes(text: &str) -> Vec<(String, Ipv4Addr, u32)> {
+        let hex = |s: Option<&&str>| u32::from_str_radix(s?, 16).ok();
+        text.lines()
+            .skip(1)
+            .filter_map(|line| {
+                let f: Vec<&str> = line.split_whitespace().collect();
+                let (dest, gateway, flags) = (hex(f.get(1))?, hex(f.get(2))?, hex(f.get(3))?);
+                // RTF_UP | RTF_GATEWAY, destination 0.0.0.0. The table prints the address in host order.
+                let default = dest == 0 && flags & 3 == 3 && gateway != 0;
+                default.then(|| Some((f[0].to_string(), Ipv4Addr::from(gateway.to_le_bytes()), f.get(6)?.parse().ok()?)))?
+            })
+            .collect()
+    }
+
+    /// The rows of `/proc/net/arp`: address, MAC, flags (0x2 complete, 0x4 permanent), device.
+    pub(super) fn parse_arp(text: &str) -> Vec<(Ipv4Addr, [u8; 6], u32, String)> {
+        text.lines()
+            .skip(1)
+            .filter_map(|line| {
+                let f: Vec<&str> = line.split_whitespace().collect();
+                let flags = u32::from_str_radix(f.get(2)?.trim_start_matches("0x"), 16).ok()?;
+                Some((f.first()?.parse().ok()?, parse_mac(f.get(3)?)?, flags, f.get(5)?.to_string()))
+            })
+            .collect()
+    }
+
+    fn sys(name: &str, file: &str) -> Option<String> {
+        std::fs::read_to_string(format!("/sys/class/net/{name}/{file}")).ok().map(|t| t.trim().to_string())
+    }
+
+    fn index_of(name: &str) -> u32 {
+        sys(name, "ifindex").and_then(|t| t.parse().ok()).unwrap_or(0)
+    }
+
+    fn name_of(if_index: u32) -> Option<String> {
+        std::fs::read_dir("/sys/class/net").ok()?.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).find(|n| index_of(n) == if_index)
+    }
+
+    /// The first IPv4 address (not link-local) of each interface that is up, with its prefix.
+    fn addresses() -> Vec<(String, Ipv4Addr, u8)> {
+        let mut list = Vec::new();
+        let mut head: *mut libc::ifaddrs = std::ptr::null_mut();
+        // SAFETY: the list getifaddrs allocates is walked read-only and freed once.
+        unsafe {
+            if libc::getifaddrs(&mut head) != 0 {
+                return list;
+            }
+            let mut node = head;
+            while let Some(a) = node.as_ref() {
+                node = a.ifa_next;
+                if a.ifa_addr.is_null() || a.ifa_netmask.is_null() || a.ifa_flags & libc::IFF_UP as u32 == 0 || i32::from((*a.ifa_addr).sa_family) != libc::AF_INET {
+                    continue;
+                }
+                let v4 = |sa: *const libc::sockaddr| Ipv4Addr::from(u32::from_be((*sa.cast::<libc::sockaddr_in>()).sin_addr.s_addr));
+                let (ip, mask) = (v4(a.ifa_addr), v4(a.ifa_netmask));
+                let name = std::ffi::CStr::from_ptr(a.ifa_name).to_string_lossy().into_owned();
+                if !ip.is_loopback() && !ip.is_link_local() && !list.iter().any(|(n, _, _): &(String, Ipv4Addr, u8)| *n == name) {
+                    list.push((name, ip, u32::from(mask).count_ones() as u8));
+                }
+            }
+            libc::freeifaddrs(head);
+        }
+        list
+    }
+
+    /// The adapters that are up with an IPv4 address and a default gateway.
+    pub fn adapters() -> Vec<Adapter> {
+        let routes = parse_routes(&std::fs::read_to_string("/proc/net/route").unwrap_or_default());
+        let addresses = addresses();
+        routes
+            .into_iter()
+            .filter_map(|(name, gateway, metric)| {
+                let (_, ip, prefix) = addresses.iter().find(|(n, _, _)| *n == name)?;
+                let link = if std::path::Path::new(&format!("/sys/class/net/{name}/wireless")).exists() {
+                    Link::WiFi
+                } else if sys(&name, "type").as_deref() == Some("1") {
+                    Link::Ethernet
+                } else {
+                    Link::Other
+                };
+                let speed_bps = sys(&name, "speed").and_then(|t| t.parse::<i64>().ok()).filter(|m| *m > 0).map_or(0, |m| m as u64 * 1_000_000);
+                let mac = sys(&name, "address").and_then(|t| parse_mac(&t));
+                Some(Adapter { link, description: name.clone(), speed_bps, ip: *ip, prefix: *prefix, gateway, mac, if_index: index_of(&name), metric })
+            })
+            .collect()
+    }
+
+    /// An unprivileged ICMP echo socket of one worker thread.
+    pub struct Icmp(OwnedFd);
 
     impl Icmp {
         pub fn open() -> Option<Self> {
-            None
+            // SAFETY: a plain socket(2); the descriptor is owned from here on.
+            let fd = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM, libc::IPPROTO_ICMP) };
+            // SAFETY: `fd` is a fresh, valid descriptor.
+            (fd >= 0).then(|| Self(unsafe { OwnedFd::from_raw_fd(fd) }))
         }
 
-        pub fn echo(&self, _ip: Ipv4Addr, _timeout_ms: u32) -> Option<f32> {
-            None
+        /// One echo: the round trip in ms, None without an answer.
+        pub fn echo(&self, ip: Ipv4Addr, timeout_ms: u32) -> Option<f32> {
+            let mut packet = [0u8; 16];
+            packet[0] = 8; // echo request; the kernel assigns the identifier
+            packet[7] = 1;
+            packet[8..].copy_from_slice(b"jai-ping");
+            let sum = packet.chunks(2).fold(0u32, |s, c| s + u32::from(u16::from_be_bytes([c[0], c[1]])));
+            let sum = (sum & 0xFFFF) + (sum >> 16);
+            packet[2..4].copy_from_slice(&(!(((sum & 0xFFFF) + (sum >> 16)) as u16)).to_be_bytes());
+            // SAFETY: zeroed sockaddr_in is valid; the packet and address outlive the calls.
+            let mut to: libc::sockaddr_in = unsafe { std::mem::zeroed() };
+            to.sin_family = libc::AF_INET as libc::sa_family_t;
+            to.sin_addr.s_addr = u32::from_ne_bytes(ip.octets());
+            let fd = self.0.as_raw_fd();
+            let started = Instant::now();
+            let sent = unsafe { libc::sendto(fd, packet.as_ptr().cast(), packet.len(), 0, std::ptr::addr_of!(to).cast(), std::mem::size_of::<libc::sockaddr_in>() as u32) };
+            if sent < 0 {
+                return None;
+            }
+            let deadline = started + Duration::from_millis(u64::from(timeout_ms));
+            loop {
+                let left = deadline.checked_duration_since(Instant::now())?;
+                let tv = libc::timeval { tv_sec: left.as_secs() as _, tv_usec: i64::from(left.subsec_micros()) as _ };
+                // SAFETY: the timeval and the buffers are valid for the calls.
+                unsafe { libc::setsockopt(fd, libc::SOL_SOCKET, libc::SO_RCVTIMEO, std::ptr::addr_of!(tv).cast(), std::mem::size_of::<libc::timeval>() as u32) };
+                let mut buf = [0u8; 64];
+                let mut from: libc::sockaddr_in = unsafe { std::mem::zeroed() };
+                let mut len = std::mem::size_of::<libc::sockaddr_in>() as u32;
+                let got = unsafe { libc::recvfrom(fd, buf.as_mut_ptr().cast(), buf.len(), 0, std::ptr::addr_of_mut!(from).cast(), &mut len) };
+                if got < 0 {
+                    return None;
+                }
+                if got >= 8 && buf[0] == 0 && from.sin_addr.s_addr == to.sin_addr.s_addr {
+                    return Some(started.elapsed().as_secs_f32() * 1000.0);
+                }
+            }
         }
     }
 
-    pub fn neighbours(_if_index: u32) -> Vec<(Ipv4Addr, [u8; 6], Reach)> {
-        Vec::new()
+    /// The IPv4 neighbour table of one interface: address, MAC, whether it is alive.
+    pub fn neighbours(if_index: u32) -> Vec<(Ipv4Addr, [u8; 6], Reach)> {
+        let Some(name) = name_of(if_index) else { return Vec::new() };
+        let table = parse_arp(&std::fs::read_to_string("/proc/net/arp").unwrap_or_default());
+        // shortcut: /proc/net/arp does not tell stale from reachable; the echo sweep just refreshed the live ones.
+        table.into_iter().filter(|(_, mac, flags, dev)| *dev == name && flags & 6 != 0 && usable_mac(mac)).map(|(ip, mac, _, _)| (ip, mac, Reach::Yes)).collect()
     }
 
-    pub fn neighbour_mac(_if_index: u32, _ip: Ipv4Addr) -> Option<[u8; 6]> {
+    pub fn neighbour_mac(if_index: u32, ip: Ipv4Addr) -> Option<[u8; 6]> {
+        neighbours(if_index).into_iter().find(|n| n.0 == ip).map(|n| n.1)
+    }
+
+    /// Asks `ip` once more: a UDP packet to the discard port makes the kernel ARP for it.
+    pub fn resolve(if_index: u32, ip: Ipv4Addr) -> Option<[u8; 6]> {
+        let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+        let _ = socket.send_to(b"x", (ip, 9));
+        for _ in 0..6 {
+            std::thread::sleep(Duration::from_millis(150));
+            if let Some(mac) = neighbour_mac(if_index, ip) {
+                return Some(mac);
+            }
+        }
         None
     }
 
-    pub fn resolve(_if_index: u32, _ip: Ipv4Addr) -> Option<[u8; 6]> {
-        None
-    }
-
-    pub fn reverse_name(_ip: Ipv4Addr) -> Option<String> {
-        None
+    /// The name `ip` has on the network (what getnameinfo asks: DNS, mDNS through nsswitch).
+    pub fn reverse_name(ip: Ipv4Addr) -> Option<String> {
+        // SAFETY: a zeroed sockaddr_in filled in; the host buffer's length goes with it.
+        let mut sa: libc::sockaddr_in = unsafe { std::mem::zeroed() };
+        sa.sin_family = libc::AF_INET as libc::sa_family_t;
+        sa.sin_addr.s_addr = u32::from_ne_bytes(ip.octets());
+        let mut host = [0 as libc::c_char; 1025];
+        let code = unsafe { libc::getnameinfo(std::ptr::addr_of!(sa).cast(), std::mem::size_of::<libc::sockaddr_in>() as u32, host.as_mut_ptr(), host.len() as u32, std::ptr::null_mut(), 0, libc::NI_NAMEREQD) };
+        if code != 0 {
+            return None;
+        }
+        let name = unsafe { std::ffi::CStr::from_ptr(host.as_ptr()) }.to_string_lossy().into_owned();
+        (!name.is_empty()).then_some(name)
     }
 }
 
@@ -1864,6 +2036,20 @@ mod native {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(windows))]
+    #[test]
+    fn linux_route_and_arp_tables_parse() {
+        let route = "Iface	Destination	Gateway	Flags	RefCnt	Use	Metric	Mask	MTU	Window	IRTT
+wlan0	00000000	0101A8C0	0003	0	0	600	00000000	0	0	0
+wlan0	0001A8C0	00000000	0001	0	0	600	00FFFFFF	0	0	0
+";
+        assert_eq!(native::parse_routes(route), vec![("wlan0".to_string(), Ipv4Addr::new(192, 168, 1, 1), 600)]);
+        let arp = "IP address       HW type     Flags       HW address            Mask     Device
+192.168.1.1      0x1         0x2         00:11:22:33:44:55     *        wlan0
+";
+        assert_eq!(native::parse_arp(arp), vec![(Ipv4Addr::new(192, 168, 1, 1), [0, 0x11, 0x22, 0x33, 0x44, 0x55], 2, "wlan0".to_string())]);
+    }
 
     fn device(last: u8, mac: [u8; 6]) -> Device {
         Device {

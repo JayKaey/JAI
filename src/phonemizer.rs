@@ -242,7 +242,7 @@ impl Phonemizer {
         }
         warn!(
             "[TTS] eSpeak-NG not found — using the basic built-in phonemizer (lower quality). Install eSpeak NG ({}).",
-            if cfg!(windows) { "https://github.com/espeak-ng/espeak-ng/releases" } else { "sudo apt install espeak-ng" }
+            if cfg!(windows) { "https://github.com/espeak-ng/espeak-ng/releases" } else { "sudo pacman -S espeak-ng" }
         );
         Self { backend: Backend::Rules }
     }

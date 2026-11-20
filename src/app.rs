@@ -2889,7 +2889,13 @@ async fn foreground_context() -> (bool, bool) {
 
 #[cfg(not(windows))]
 async fn foreground_context() -> (bool, bool) {
-    (false, false)
+    crate::kde::blocking(|| {
+        let process = crate::platform::foreground_process().unwrap_or_default();
+        let own = process.to_lowercase().starts_with("jai");
+        (own, !own && (crate::ears::is_game_or_voice_chat(&process) || crate::platform::foreground_is_fullscreen()))
+    })
+    .await
+    .unwrap_or((false, false))
 }
 
 /// His name opens the sentence ("JAI, show me the world", "Hey JAI, …"): the words are
@@ -2941,8 +2947,17 @@ async fn duck_audio(voice_volume: &Arc<std::sync::atomic::AtomicU8>) -> std::pin
     }
     #[cfg(not(windows))]
     {
+        // The master volume to a third through the mixer (never in a scripted session).
+        let previous = if crate::platform::hands_off() { None } else { crate::audio_mixer::master_state().await.ok().filter(|(level, muted)| !muted && *level > 0.05).map(|(level, _)| level) };
+        let set = |level: f32| crate::media::execute(crate::media::MediaAction::SetVolume((level * 100.0).round() as u8));
+        if let Some(level) = previous {
+            let _ = set(level * 0.35).await;
+        }
         Box::pin(async move {
             voice.store(previous_voice, Ordering::Relaxed);
+            if let Some(level) = previous {
+                let _ = set(level).await;
+            }
         })
     }
 }

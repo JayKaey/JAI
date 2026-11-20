@@ -13,6 +13,11 @@ use regex::Regex;
 use serde_json::{json, Value};
 use std::sync::{LazyLock, Mutex};
 
+#[cfg(windows)]
+use crate::win32::call as off_thread;
+#[cfg(not(windows))]
+use crate::kde::blocking as off_thread;
+
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
@@ -126,6 +131,41 @@ pub struct Level {
     pub primary: bool,
     /// Its brightness in percent of its own range, or why it cannot be read.
     pub percent: Result<u32, String>,
+}
+
+/// Brightness through KDE's PowerDevil (the laptop's panel and DDC/CI monitors), same API as the
+/// Windows channel below.
+#[cfg(not(windows))]
+mod ddc {
+    use super::Level;
+
+    fn percent(value: i32, max: i32) -> u32 {
+        (value.max(0) as i64 * 100 / i64::from(max.max(1))) as u32
+    }
+
+    pub fn read() -> Vec<Level> {
+        match crate::kde::screens() {
+            Ok(screens) => screens.iter().enumerate().map(|(i, s)| Level { index: i + 1, primary: i == 0, percent: Ok(percent(s.value, s.max)) }).collect(),
+            Err(e) => vec![Level { index: 1, primary: true, percent: Err(format!("KDE's brightness service did not answer ({e})")) }],
+        }
+    }
+
+    pub fn set(takes: impl Fn(usize, bool) -> bool, to: impl Fn(u32) -> u32) -> Vec<(usize, Result<(u32, u32), String>)> {
+        let screens = match crate::kde::screens() {
+            Ok(screens) => screens,
+            Err(e) => return vec![(1, Err(format!("KDE's brightness service did not answer ({e})")))],
+        };
+        screens
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| takes(i + 1, *i == 0))
+            .map(|(i, s)| {
+                let before = percent(s.value, s.max);
+                let wanted = to(before).min(100);
+                (i + 1, crate::kde::set_brightness(&s.name, (i64::from(wanted) * i64::from(s.max) / 100) as i32).map(|()| (before, wanted)))
+            })
+            .collect()
+    }
 }
 
 #[cfg(windows)]
@@ -248,21 +288,14 @@ pub async fn brightness_back() -> bool {
     if before.is_empty() || crate::platform::hands_off() {
         return false;
     }
-    #[cfg(windows)]
     for (index, level) in before {
-        let _ = crate::win32::call(move || ddc::set(|i, _| i == index, |_| level)).await;
+        let _ = off_thread(move || ddc::set(|i, _| i == index, |_| level)).await;
     }
     true
 }
 
 pub async fn brightness(args: &Value) -> Result<String, String> {
     let action = args["action"].as_str().unwrap_or("status");
-    #[cfg(not(windows))]
-    {
-        let _ = action;
-        Err("Monitor brightness is only built for Windows.".to_string())
-    }
-    #[cfg(windows)]
     {
         if action == "back" {
             return if brightness_back().await { Ok(say("The monitors are as bright as they were.", "As it was, Sir.")) } else { Err("There is no change of brightness to take back, Sir.".to_string()) };
@@ -271,7 +304,7 @@ pub async fn brightness(args: &Value) -> Result<String, String> {
             if cfg!(test) {
                 return Err("A test reads no monitors.".to_string());
             }
-            let levels = crate::win32::call(ddc::read).await.map_err(|e| e.to_string())?;
+            let levels = off_thread(ddc::read).await.map_err(|e| e.to_string())?;
             let lines: Vec<String> = levels
                 .iter()
                 .map(|l| match &l.percent {
@@ -293,7 +326,7 @@ pub async fn brightness(args: &Value) -> Result<String, String> {
             n => n.parse().map(Which::Number).unwrap_or(Which::All),
         };
         let (level, by) = (args["level"].as_u64().map(|l| l.min(100) as u32), args["by"].as_i64().unwrap_or(0));
-        let done = crate::win32::call(move || {
+        let done = off_thread(move || {
             ddc::set(
                 |index, primary| which.takes(index, primary),
                 |now| match level {

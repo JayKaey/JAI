@@ -549,6 +549,10 @@ pub fn bool_arg(args: &Value, key: &str, default: bool) -> bool {
 
 /// `C:\Users\<Sir>\<name>` (Videos, Downloads, Music, Documents, Desktop, Pictures).
 pub fn user_folder(name: &str) -> PathBuf {
+    #[cfg(not(windows))]
+    if let Some(dir) = xdg_folder(name) {
+        return dir;
+    }
     let home = crate::apps::home_dir().unwrap_or_else(std::env::temp_dir);
     // OneDrive may have taken over Documents / Desktop / Pictures.
     let onedrive = std::env::var_os("OneDrive").map(PathBuf::from).map(|o| o.join(name)).filter(|p| p.is_dir());
@@ -558,6 +562,30 @@ pub fn user_folder(name: &str) -> PathBuf {
     } else {
         onedrive.unwrap_or(local)
     }
+}
+
+/// Sir's folder `name` ("Documents", "Downloads", "Pictures" …) where Linux's
+/// `~/.config/user-dirs.dirs` puts it: translated ("Dokumente") or moved; None when it names none.
+#[cfg(not(windows))]
+pub fn xdg_folder(name: &str) -> Option<PathBuf> {
+    let home = crate::apps::home_dir()?;
+    let config = std::env::var_os("XDG_CONFIG_HOME").filter(|d| !d.is_empty()).map(PathBuf::from).unwrap_or_else(|| home.join(".config"));
+    xdg_dir(&std::fs::read_to_string(config.join("user-dirs.dirs")).ok()?, name, &home).filter(|p| p.is_dir())
+}
+
+/// The `XDG_<KEY>_DIR="$HOME/Bilder"` line of user-dirs.dirs for folder `name`, $HOME filled in.
+#[cfg(not(windows))]
+fn xdg_dir(text: &str, name: &str, home: &Path) -> Option<PathBuf> {
+    let key = match name {
+        "Downloads" => "DOWNLOAD".to_string(),
+        "Desktop" | "Documents" | "Pictures" | "Music" | "Videos" => name.to_uppercase(),
+        _ => return None,
+    };
+    let value = text.lines().find_map(|l| l.trim().strip_prefix(&format!("XDG_{key}_DIR=")))?.trim().trim_matches('"');
+    Some(match value.strip_prefix("$HOME") {
+        Some(rest) => home.join(rest.trim_start_matches('/')),
+        None => PathBuf::from(value),
+    })
 }
 
 /// A name safe for a file or folder.
@@ -733,6 +761,18 @@ mod tests {
 
     fn tool(text: &str) -> Option<&'static str> {
         route_text(text).map(|r| r.tool)
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn xdg_folders_come_from_user_dirs() {
+        let text = "# comment\nXDG_DESKTOP_DIR=\"$HOME/Schreibtisch\"\nXDG_DOWNLOAD_DIR=\"/data/Downloads\"\nXDG_PICTURES_DIR=\"$HOME/Bilder\"\n";
+        let home = Path::new("/home/mustermann");
+        assert_eq!(xdg_dir(text, "Desktop", home), Some(home.join("Schreibtisch")));
+        assert_eq!(xdg_dir(text, "Downloads", home), Some(PathBuf::from("/data/Downloads")), "Downloads is XDG_DOWNLOAD_DIR, singular");
+        assert_eq!(xdg_dir(text, "Pictures", home), Some(home.join("Bilder")));
+        assert_eq!(xdg_dir(text, "Music", home), None);
+        assert_eq!(xdg_dir(text, "Screenshots", home), None);
     }
 
     #[test]

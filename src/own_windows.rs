@@ -5,6 +5,11 @@
 
 use crate::window_commands::{Position, Size};
 use std::sync::Mutex;
+// His windows through Win32, or through X11 (XWayland under KDE Plasma) on Linux.
+#[cfg(windows)]
+use crate::win32_desktop as desk;
+#[cfg(not(windows))]
+use crate::x11 as desk;
 use std::time::{Duration, Instant};
 
 /// How long a window takes to glide where it was sent.
@@ -47,21 +52,15 @@ pub fn glide(hwnd: isize, from: [i32; 4], to: [i32; 4]) {
 
 /// One step of every glide, from the board's frame (its thread owns his windows). Whether any
 /// window is still on its way (the board then draws on).
-#[cfg(windows)]
 pub fn step() -> bool {
     let mut glides = lock(&GLIDES);
     glides.retain(|(hwnd, from, to, since)| {
         // (With the interface's animations off it is simply there.)
         let t = if crate::gui::motion_enabled() { since.elapsed().as_secs_f32() / GLIDE.as_secs_f32() } else { 1.0 };
-        crate::win32_desktop::place(*hwnd, between(*from, *to, t));
+        desk::place(*hwnd, between(*from, *to, t));
         t < 1.0
     });
     !glides.is_empty()
-}
-
-#[cfg(not(windows))]
-pub fn step() -> bool {
-    false
 }
 
 /// The cells (x, y, w, h) of a grid for `count` windows in the work area `work` (left, top,
@@ -95,14 +94,12 @@ pub fn lined_up(work: [i32; 4], windows: &[(isize, [i32; 4])]) -> Vec<(isize, [i
 }
 
 /// His windows as windows: all but the board itself and the corner orb.
-#[cfg(windows)]
-pub fn list() -> Vec<crate::win32_desktop::OwnWindow> {
+pub fn list() -> Vec<desk::OwnWindow> {
     let board = crate::gui::hud_hwnd();
-    crate::win32_desktop::own_windows().into_iter().filter(|w| w.hwnd != board && w.title != "J.A.I. // orb").collect()
+    desk::own_windows().into_iter().filter(|w| w.hwnd != board && w.title != crate::wallpaper::ORB_TITLE).collect()
 }
 
 /// "Tidy the windows": his windows glide into one grid on the monitor Sir is using. How many.
-#[cfg(windows)]
 pub fn tidy_now() -> usize {
     let own = list();
     let monitors = crate::monitors::recent();
@@ -116,11 +113,6 @@ pub fn tidy_now() -> usize {
         tracing::info!("[HUD] Tidied: {n} of his windows lined up on the monitor at {},{}", on.rect[0], on.rect[1]);
     }
     n
-}
-
-#[cfg(not(windows))]
-pub fn tidy_now() -> usize {
-    0
 }
 
 // ----------------------------------------------------------------- one of them, by name ----
@@ -145,11 +137,10 @@ pub fn names(title: &str, name: &str) -> bool {
 }
 
 /// The one of his windows Sir means by `name` ("it": the one in front, when that is his).
-#[cfg(windows)]
-pub fn find(name: &str) -> Option<crate::win32_desktop::OwnWindow> {
+pub fn find(name: &str) -> Option<desk::OwnWindow> {
     let own = list();
     if matches!(words_of(name).as_str(), "it" | "that" | "this" | "that one" | "this one" | "es" | "") {
-        let front = crate::win32_desktop::foreground_own()?;
+        let front = desk::foreground_own()?;
         return own.into_iter().find(|w| w.hwnd == front);
     }
     // (Its whole name before a part of it: "console" among "Text Console" and "Console log".)
@@ -172,13 +163,8 @@ pub fn pretend(titles: &[&str]) {
 pub fn open(name: &str) -> bool {
     #[cfg(test)]
     return OPEN.with(|open| open.borrow().iter().any(|title| names(title, name)));
-    #[cfg(all(windows, not(test)))]
+    #[cfg(not(test))]
     return find(name).is_some();
-    #[cfg(not(any(windows, test)))]
-    {
-        let _ = name;
-        false
-    }
 }
 
 /// Where (x, y, w, h) a window standing at `rect` (left, top, right, bottom) goes for a place
@@ -197,7 +183,6 @@ pub fn called(title: &str) -> &str {
 /// "Put the console on the left half", "make the timetable bigger": the window Sir names
 /// glides to that part of the monitor it stands on, or to that size. Its title; None: none of
 /// his windows is called that (the order is another program's).
-#[cfg(windows)]
 pub fn arrange(name: &str, position: Option<Position>, size: Option<Size>) -> Option<String> {
     let window = find(name)?;
     let monitors = crate::monitors::recent();
@@ -210,7 +195,6 @@ pub fn arrange(name: &str, position: Option<Position>, size: Option<Size>) -> Op
 /// "Move the text console to another monitor": the window Sir names glides to the middle of
 /// that monitor (`monitor`: 1, 2, "left", "next" …), at its own size. None: none of his windows
 /// is called that.
-#[cfg(windows)]
 pub fn to_monitor(name: &str, monitor: &serde_json::Value) -> Option<Result<String, String>> {
     let window = find(name)?;
     let monitors = crate::monitors::recent();
@@ -270,13 +254,12 @@ pub fn is_pinned(title: &str) -> bool {
 
 /// "Keep the console on top", "unpin it": the window Sir names stays above other programs'
 /// windows, or no longer. None: none of his windows is called that.
-#[cfg(windows)]
 pub fn pin(name: &str, on: bool) -> Option<String> {
     let window = find(name)?;
     pin_titled(&window.title, on);
     // (Pins go by title: every window by this one goes up, or down.)
     for same in list().iter().filter(|w| w.title == window.title) {
-        crate::win32_desktop::topmost(same.hwnd, on);
+        desk::topmost(same.hwnd, on);
     }
     let called = called(&window.title);
     Some(if on { format!("My window '{called}' stays on top now.\nSpoken: {called} stays on top, Sir.") } else { format!("My window '{called}' no longer stays on top.\nSpoken: {called} is no longer on top, Sir.") })
@@ -371,11 +354,10 @@ fn settled(looked: &[(String, [i32; 4])], now: &[(String, [i32; 4])], kept: &[(S
 /// Looks after his windows, every couple of seconds from the Win32 worker: those pinned on top
 /// stay there, and where each stands is kept by its title for the next time it opens. (Sir,
 /// 2026-11-14: "Windows remember their place", "Pin on top".)
-#[cfg(windows)]
 pub fn look_after() {
     let own = list();
     for window in own.iter().filter(|w| is_pinned(&w.title)) {
-        crate::win32_desktop::topmost(window.hwnd, true);
+        desk::topmost(window.hwnd, true);
     }
     // (One that is gone opens anew, at its place again.)
     lock(&OPENED).retain(|(t, _, _)| own.iter().any(|w| w.title == *t));
@@ -405,7 +387,6 @@ pub fn look_after() {
 
 /// From the HUD's frame: his windows are looked after every couple of seconds, on the Win32
 /// worker.
-#[cfg(windows)]
 pub fn tend() {
     static LAST: Mutex<Option<Instant>> = Mutex::new(None);
     let mut last = lock(&LAST);
@@ -413,7 +394,10 @@ pub fn tend() {
         return;
     }
     *last = Some(Instant::now());
+    #[cfg(windows)]
     crate::win32::run_detached(look_after);
+    #[cfg(not(windows))]
+    crate::x11::run_detached(look_after);
 }
 
 #[cfg(test)]

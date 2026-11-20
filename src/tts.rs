@@ -2106,9 +2106,18 @@ fn synth_worker(cfg: JaiConfig, inner: Arc<Inner>, rx: &mpsc::Receiver<Job>, eve
     }
 }
 
+/// Emergency fallback on Linux: the espeak-ng program's own voice (22.05 kHz WAV on stdout, a
+/// 44-byte header) at 24 kHz. Nothing when espeak-ng is not installed (sudo pacman -S espeak-ng).
 #[cfg(not(windows))]
-fn sapi_synthesize(_text: &str) -> Vec<f32> {
-    Vec::new()
+fn sapi_synthesize(text: &str) -> Vec<f32> {
+    let Some(cli) = crate::apps::which("espeak-ng") else { return Vec::new() };
+    match crate::shell::run_helper_blocking(&cli, ["-v", "en-gb", "--stdout", text], Duration::from_secs(30)) {
+        Ok(out) if out.success() && out.stdout.len() > 44 => {
+            let pcm: Vec<f32> = out.stdout[44..].chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]]) as f32 / 32768.0).collect();
+            resample_voice(&pcm, 22_050, KOKORO_RATE)
+        }
+        _ => Vec::new(),
+    }
 }
 
 /// Emergency fallback when Kokoro cannot load: Windows SAPI rendered to 24 kHz PCM.

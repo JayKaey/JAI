@@ -416,6 +416,7 @@ impl WhatsApp {
 
 // --------------------------------------------------------------- the desktop app ----
 
+#[cfg_attr(not(windows), allow(dead_code))]
 fn wa_uri(digits: &str, text: &str) -> String {
     if digits.is_empty() {
         format!("whatsapp://send?text={}", urlencoding::encode(text))

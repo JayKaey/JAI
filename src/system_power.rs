@@ -222,6 +222,9 @@ pub(crate) async fn run_shutdown_exe(args: &[&str]) -> Result<(), String> {
 }
 
 #[cfg(windows)]
+pub(crate) use imp::{lock_pc, sleep_pc};
+
+#[cfg(windows)]
 mod imp {
     use super::PowerAction;
     use std::path::PathBuf;
@@ -243,7 +246,7 @@ mod imp {
         }
     }
 
-    fn lock_pc() -> Result<(), String> {
+    pub(crate) fn lock_pc() -> Result<(), String> {
         #[link(name = "user32")]
         extern "system" {
             fn LockWorkStation() -> i32;
@@ -256,7 +259,7 @@ mod imp {
         }
     }
 
-    fn sleep_pc() -> Result<(), String> {
+    pub(crate) fn sleep_pc() -> Result<(), String> {
         #[link(name = "PowrProf")]
         extern "system" {
             fn SetSuspendState(hibernate: u8, force: u8, disable_wake_events: u8) -> u8;
@@ -279,28 +282,37 @@ mod imp {
     }
 }
 
+/// logind's Manager on the system bus: the PC's own power verbs (polkit decides who may).
+#[cfg(not(windows))]
+fn logind(method: &str) -> Result<(), String> {
+    let bus = zbus::blocking::Connection::system().map_err(|e| format!("no system bus: {e}"))?;
+    bus.call_method(Some("org.freedesktop.login1"), "/org/freedesktop/login1", Some("org.freedesktop.login1.Manager"), method, &(false,)).map(drop).map_err(|e| e.to_string())
+}
+
+/// KDE's own screen locker, by the freedesktop name.
+#[cfg(not(windows))]
+pub(crate) fn lock_pc() -> Result<(), String> {
+    crate::kde::call::<_, ()>("org.freedesktop.ScreenSaver", "/ScreenSaver", "org.freedesktop.ScreenSaver", "Lock", &())
+}
+
+#[cfg(not(windows))]
+pub(crate) fn sleep_pc() -> Result<(), String> {
+    logind("Suspend")
+}
+
 #[cfg(not(windows))]
 mod imp {
     use super::PowerAction;
-    use std::path::Path;
-    use std::time::Duration;
-
-    async fn run(program: &str, args: &[&str]) -> Result<(), String> {
-        let out = crate::shell::run_helper(Path::new(program), args, None, &[], Duration::from_secs(10)).await.map_err(|e| format!("{program}: {e}"))?;
-        if out.success() {
-            Ok(())
-        } else {
-            Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
-        }
-    }
 
     pub async fn execute(action: PowerAction) -> Result<String, String> {
-        match action {
-            PowerAction::Shutdown => run("systemctl", &["poweroff"]).await.map(|_| "The PC is shutting down.".to_string()),
-            PowerAction::Restart => run("systemctl", &["reboot"]).await.map(|_| "The PC is restarting.".to_string()),
-            PowerAction::Sleep => run("systemctl", &["suspend"]).await.map(|_| "The PC went to sleep.".to_string()),
-            PowerAction::Lock => run("loginctl", &["lock-session"]).await.map(|_| "The PC is locked.".to_string()),
-        }
+        let (done, work): (&str, fn() -> Result<(), String>) = match action {
+            PowerAction::Shutdown => ("The PC is shutting down.", || super::logind("PowerOff")),
+            PowerAction::Restart => ("The PC is restarting.", || super::logind("Reboot")),
+            PowerAction::Sleep => ("The PC went to sleep.", super::sleep_pc),
+            PowerAction::Lock => ("The PC is locked.", super::lock_pc),
+        };
+        crate::kde::blocking(work).await??;
+        Ok(done.to_string())
     }
 }
 

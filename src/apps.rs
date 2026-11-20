@@ -231,9 +231,9 @@ pub fn with_roles(text: &str) -> std::borrow::Cow<'_, str> {
     }
     #[cfg(windows)]
     let running: Vec<String> = crate::win32::app_windows().iter().map(|w| w.process.to_lowercase().trim_end_matches(".exe").to_string()).collect();
-    // (Linux: no list of app windows here, so each part goes to its first app.)
+    // Linux: the program ids of Plasma's windows ("spotify", "org.kde.dolphin").
     #[cfg(not(windows))]
-    let running: Vec<String> = Vec::new();
+    let running: Vec<String> = crate::plasma::windows().iter().flat_map(|w| [w.app_id.to_lowercase(), w.resource_name.to_lowercase()]).collect();
     with_roles_among(text, &running)
 }
 
@@ -755,7 +755,7 @@ pub fn search_installed(query: &str) -> Option<InstalledApp> {
                     return;
                 }
                 let Ok(text) = std::fs::read_to_string(path) else { return };
-                if text.lines().any(|l| l.trim() == "NoDisplay=true") {
+                if text.lines().any(|l| matches!(l.trim(), "NoDisplay=true" | "Hidden=true")) {
                     return;
                 }
                 let name = text
@@ -813,17 +813,40 @@ async fn launch_installed(app: &InstalledApp) -> Result<(), String> {
                 .lines()
                 .find_map(|l| l.strip_prefix("Exec="))
                 .ok_or("desktop entry has no Exec line")?;
-            let parts: Vec<String> = exec
-                .split_whitespace()
-                .filter(|p| !p.starts_with('%'))
-                .map(|p| p.trim_matches('"').to_string())
-                .collect();
+            let parts = exec_args(exec);
             let (program, rest) = parts.split_first().ok_or("empty Exec line")?;
             spawn_detached(program, rest)
         })
         .await
         .map_err(|e| e.to_string())?
     }
+}
+
+/// The words of a `.desktop` Exec line: quotes and `\` escapes undone, field codes (`%u`, `%F` …) dropped, `%%` a percent sign.
+#[cfg(not(windows))]
+fn exec_args(exec: &str) -> Vec<String> {
+    let (mut out, mut word, mut quoted, mut started) = (Vec::new(), String::new(), false, false);
+    let mut chars = exec.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => (quoted, started) = (!quoted, true),
+            '\\' if quoted => word.extend(chars.next()),
+            ' ' | '\t' if !quoted => {
+                if started {
+                    out.push(std::mem::take(&mut word));
+                    started = false;
+                }
+            }
+            _ => {
+                word.push(c);
+                started = true;
+            }
+        }
+    }
+    if started {
+        out.push(word);
+    }
+    out.iter().filter_map(|w| if w.len() == 2 && w.starts_with('%') && w != "%%" { None } else { Some(w.replace("%%", "%")) }).collect()
 }
 
 /// UWP / Store apps via `Get-StartApps` (slow, last resort).
@@ -995,10 +1018,15 @@ pub async fn close(name: &str, force: bool) -> Result<String, String> {
     {
         let t = targets.clone();
         let _ = tokio::task::spawn_blocking(move || {
+            // The windows are asked as their close button would (a save dialog may open); what has none gets SIGTERM.
+            let windows = crate::plasma::windows();
             let mut sys = System::new();
             sys.refresh_processes_specifics(ProcessesToUpdate::Some(&t), ProcessRefreshKind::new());
             for pid in &t {
-                if let Some(p) = sys.process(*pid) {
+                let mine: Vec<_> = windows.iter().filter(|w| w.pid == pid.as_u32() && !w.is(crate::plasma::state::SKIP_TASKBAR)).collect();
+                if !mine.is_empty() {
+                    mine.iter().for_each(|w| drop(crate::plasma::close(&w.uuid)));
+                } else if let Some(p) = sys.process(*pid) {
                     let _ = p.kill_with(sysinfo::Signal::Term);
                 }
             }
@@ -1090,6 +1118,14 @@ mod tests {
         std::env::set_var("JAI_TEST_DIR", "C:\\Tools");
         assert_eq!(expand_env("%JAI_TEST_DIR%\\app.exe"), "C:\\Tools\\app.exe");
         assert_eq!(expand_env("%NOPE_NOT_SET%\\x"), "%NOPE_NOT_SET%\\x");
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn desktop_exec_lines_lose_their_field_codes() {
+        assert_eq!(exec_args(r#"env GDK=1 "/opt/My App/run" --new-window %U"#), ["env", "GDK=1", "/opt/My App/run", "--new-window"]);
+        assert_eq!(exec_args("firefox %u"), ["firefox"]);
+        assert_eq!(exec_args("echo 100%%"), ["echo", "100%"]);
     }
 
     #[test]

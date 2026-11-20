@@ -734,15 +734,13 @@ fn position(spec: &NativeWindowSpec, native_ppp: f32) -> Option<egui::Pos2> {
         return None;
     }
     #[cfg(windows)]
+    use crate::win32 as wm;
+    #[cfg(not(windows))]
+    use crate::x11 as wm;
     let origin = spec
         .monitor
-        .and_then(|m| crate::win32::monitor_work_areas().get(m.saturating_sub(1)).copied())
+        .and_then(|m| wm::monitor_work_areas().get(m.saturating_sub(1)).copied())
         .map(|[x, y, w, h]| (x as f32 / native_ppp, y as f32 / native_ppp, w as f32 / native_ppp, h as f32 / native_ppp));
-    #[cfg(not(windows))]
-    let origin: Option<(f32, f32, f32, f32)> = {
-        let _ = native_ppp;
-        None
-    };
     let (ox, oy, ow, oh) = origin.unwrap_or((0.0, 0.0, 0.0, 0.0));
     // Without x/y on a chosen monitor: centred on it.
     let x = spec.x.unwrap_or(if ow > 0.0 { (ow - spec.width).max(0.0) / 2.0 } else { 80.0 });

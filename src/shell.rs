@@ -194,7 +194,7 @@ where
 }
 
 /// `run_helper` for synchronous callers (the TTS thread, telemetry sampling). Outside Windows the
-/// ordinary spawner waits for the process without a deadline.
+/// ordinary spawner (killed at the deadline on Linux, not on Windows' fallback).
 pub fn run_helper_blocking<I, S>(program: &Path, args: I, timeout: Duration) -> std::io::Result<HelperOutput>
 where
     I: IntoIterator<Item = S>,
@@ -205,13 +205,30 @@ where
     if let Some(exe) = quiet::resolve(program) {
         return quiet::output(&exe, &args, None, &[], timeout, &std::sync::atomic::AtomicBool::new(false));
     }
-    #[cfg(not(windows))]
-    let _ = timeout;
     let mut cmd = std::process::Command::new(program);
     cmd.args(&args).stdin(std::process::Stdio::null());
     hide_console_std(&mut cmd);
-    let out = cmd.output()?;
-    Ok(HelperOutput { code: out.status.code(), stdout: out.stdout, stderr: out.stderr })
+    #[cfg(not(windows))]
+    {
+        // The deadline: a reader thread collects the output; at the deadline the process is killed.
+        let child = cmd.stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn()?;
+        let pid = child.id() as libc::pid_t;
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || drop(tx.send(child.wait_with_output())));
+        return match rx.recv_timeout(timeout) {
+            Ok(out) => out.map(|o| HelperOutput { code: o.status.code(), stdout: o.stdout, stderr: o.stderr }),
+            Err(_) => {
+                // SAFETY: plain kill(2) of the child this call started.
+                unsafe { libc::kill(pid, libc::SIGKILL) };
+                Err(std::io::Error::new(std::io::ErrorKind::TimedOut, format!("{} timed out", program.display())))
+            }
+        };
+    }
+    #[cfg(windows)]
+    {
+        let out = cmd.output()?;
+        Ok(HelperOutput { code: out.status.code(), stdout: out.stdout, stderr: out.stderr })
+    }
 }
 
 /// A long-running hidden helper (the worldwide tunnel) on Windows: no feedback cursor, killed

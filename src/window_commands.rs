@@ -886,7 +886,6 @@ fn latest_two() -> Option<(String, String)> {
 pub async fn run_tool(ctx: &ToolContext, args: &Value) -> Result<String, String> {
     // "Keep the console on top", "take the console off the top" (said, never the model's): one
     // of his windows by its title ("it": the one of his in front).
-    #[cfg(windows)]
     if let Some(on) = str_arg(args, &["action"]).and_then(|a| match a {
         "on_top" => Some(true),
         "off_top" => Some(false),
@@ -909,7 +908,6 @@ pub async fn run_tool(ctx: &ToolContext, args: &Value) -> Result<String, String>
     let lower = raw.to_lowercase();
     // One of his windows that is no view of the dock (the text console, a report, the system
     // column): moved and sized as the window it is.
-    #[cfg(windows)]
     if !is_it(&lower) && !is_them(&lower) && crate::hud_dock::find_open(&raw).is_none() {
         if let Some(done) = own_window(&raw, action, position, size, monitor.as_ref()) {
             return done;
@@ -981,7 +979,6 @@ pub async fn run_tool(ctx: &ToolContext, args: &Value) -> Result<String, String>
 
 /// One of his windows that is no view of the dock, told by its title where to go or how large
 /// to be. None: none of his windows is called that.
-#[cfg(windows)]
 fn own_window(name: &str, action: Action, position: Option<Position>, size: Option<Size>, monitor: Option<&Value>) -> Option<Result<String, String>> {
     use crate::own_windows as own;
     let the = format!("The {}", name.to_lowercase().trim_start_matches("the "));

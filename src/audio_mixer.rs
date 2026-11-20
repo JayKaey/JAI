@@ -852,39 +852,201 @@ async fn com<R: Send + 'static>(f: impl FnOnce() -> Result<R, String> + Send + '
 }
 
 #[cfg(not(windows))]
-async fn com<R: Send + 'static>(_f: impl FnOnce() -> Result<R, String> + Send + 'static) -> Result<R, String> {
-    Err("The volume mixer needs Windows.".into())
+async fn com<R: Send + 'static>(f: impl FnOnce() -> Result<R, String> + Send + 'static) -> Result<R, String> {
+    crate::kde::blocking(f).await?
 }
 
+/// PipeWire's PulseAudio layer through `pactl`: its sink inputs are the apps' sessions.
 #[cfg(not(windows))]
 mod imp {
-    use super::AppSession;
-    pub fn output_device_of(_: &str) -> Result<Option<String>, String> {
-        Ok(None)
+    use super::{AppSession, Applied, Change, MicState, OutputDevice};
+    use serde_json::Value;
+    use std::process::Command;
+
+    fn pactl(args: &[&str]) -> Result<String, String> {
+        let out = Command::new("pactl").args(args).output().map_err(|e| format!("pactl: {e} (install it with: sudo pacman -S libpulse)"))?;
+        if out.status.success() {
+            Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+        } else {
+            Err(format!("pactl failed: {}", String::from_utf8_lossy(&out.stderr).trim()))
+        }
     }
-    pub fn input_device_of(_: &str) -> Result<Option<String>, String> {
-        Ok(None)
+
+    fn items(kind: &str) -> Result<Vec<Value>, String> {
+        match serde_json::from_str(&pactl(&["-f", "json", "list", kind])?) {
+            Ok(Value::Array(a)) => Ok(a),
+            _ => Err(format!("pactl: no {kind} list")),
+        }
     }
-    pub fn microphone_state() -> Result<Option<super::MicState>, String> {
-        Ok(None)
+
+    /// The loudest channel of a `volume` object, 0.0-1.0 (louder than 100 % reads as 1).
+    fn level_of(volume: &Value) -> f32 {
+        let loudest = volume.as_object().into_iter().flat_map(|c| c.values()).filter_map(|c| c["value_percent"].as_str()?.trim_end_matches('%').parse::<f32>().ok()).fold(0.0, f32::max);
+        (loudest / 100.0).min(1.0)
     }
+
+    /// "Volume: front-left: 26214 /  40% / -23.94 dB, …" → 0.4.
+    pub(super) fn level_in_text(text: &str) -> Option<f32> {
+        Some((text.split('/').nth(1)?.trim().trim_end_matches('%').parse::<f32>().ok()? / 100.0).min(1.0))
+    }
+
+    /// One app's stream: the session and where it plays (a sink, or for a recorder a source).
+    pub(super) struct Stream {
+        pub session: AppSession,
+        pub index: u64,
+        pub device: u64,
+        pub corked: bool,
+    }
+
+    /// The streams of a `list sink-inputs` / `list source-outputs` answer.
+    pub(super) fn streams(items: &[Value], device_key: &str) -> Vec<Stream> {
+        items
+            .iter()
+            .filter_map(|i| {
+                let p = &i["properties"];
+                let text = |k: &str| p[k].as_str().filter(|s| !s.is_empty()).map(str::to_string);
+                let (binary, app) = (text("application.process.binary"), text("application.name"));
+                let name = binary.clone().or_else(|| app.clone())?;
+                let labels = [app, text("media.name")].into_iter().flatten().filter(|l| *l != name).collect();
+                let session = AppSession { name, pid: p["application.process.id"].as_str().and_then(|s| s.parse().ok()).unwrap_or(0), level: level_of(&i["volume"]), muted: i["mute"].as_bool().unwrap_or(false), labels };
+                Some(Stream { session, index: i["index"].as_u64()?, device: i[device_key].as_u64().unwrap_or(u64::MAX), corked: i["corked"].as_bool().unwrap_or(false) })
+            })
+            .collect()
+    }
+
+    fn inputs() -> Result<Vec<Stream>, String> {
+        Ok(streams(&items("sink-inputs")?, "sink"))
+    }
+
+    fn mute_arg(on: bool) -> &'static str {
+        if on { "1" } else { "0" }
+    }
+
     pub fn master_state() -> Result<(f32, bool), String> {
-        Err("The volume mixer needs Windows.".into())
+        let level = level_in_text(&pactl(&["get-sink-volume", "@DEFAULT_SINK@"])?).ok_or("could not read pactl's volume")?;
+        Ok((level, pactl(&["get-sink-mute", "@DEFAULT_SINK@"])?.contains("yes")))
     }
-    pub fn master_write(_: (f32, bool), _: (f32, bool), _: bool) -> Result<(), String> {
-        master_state().map(|_| ())
+
+    /// Writes the level and mute state where they differ from `before` (with `all`, both).
+    pub fn master_write(before: (f32, bool), (level, muted): (f32, bool), all: bool) -> Result<(), String> {
+        if all || (level - before.0).abs() > 1e-4 {
+            pactl(&["set-sink-volume", "@DEFAULT_SINK@", &format!("{:.0}%", level.clamp(0.0, 1.0) * 100.0)])?;
+        }
+        if all || muted != before.1 {
+            pactl(&["set-sink-mute", "@DEFAULT_SINK@", mute_arg(muted)])?;
+        }
+        Ok(())
     }
-    pub fn outputs() -> Result<Vec<super::OutputDevice>, String> {
-        master_state().map(|_| Vec::new())
+
+    fn device_name(devices: &[Value], index: u64) -> Option<String> {
+        devices.iter().find(|d| d["index"].as_u64() == Some(index)).and_then(|d| d["description"].as_str()).map(str::to_string)
     }
+
+    /// The sink `app` plays to (its running stream first), read-only.
+    pub fn output_device_of(app: &str) -> Result<Option<String>, String> {
+        let mut mine: Vec<Stream> = inputs()?.into_iter().filter(|s| s.session.name.eq_ignore_ascii_case(app)).collect();
+        mine.sort_by_key(|s| s.corked);
+        Ok(mine.first().and_then(|s| device_name(&items("sinks").ok()?, s.device)))
+    }
+
+    /// The microphone `app` records from (a recording stream exists only while it records).
+    pub fn input_device_of(app: &str) -> Result<Option<String>, String> {
+        let recorders = streams(&items("source-outputs")?, "source");
+        Ok(recorders.iter().find(|s| s.session.name.eq_ignore_ascii_case(app)).and_then(|s| device_name(&items("sources").ok()?, s.device)))
+    }
+
+    /// The default source (never a sink's monitor): its name, level and mute. `peak` stays 0.
+    pub fn microphone_state() -> Result<Option<MicState>, String> {
+        let default = pactl(&["get-default-source"])?;
+        let sources = items("sources")?;
+        let Some(source) = sources.iter().find(|s| s["name"].as_str() == Some(default.trim()) && s["monitor_of_sink"].is_null()) else { return Ok(None) };
+        Ok(Some(MicState { name: source["description"].as_str().unwrap_or("the default microphone").to_string(), level: level_of(&source["volume"]), muted: source["mute"].as_bool().unwrap_or(false), peak: 0.0 }))
+    }
+
+    /// Every output: its level, whether it is running (sound leaving: peak 1) and its apps.
+    pub fn outputs() -> Result<Vec<OutputDevice>, String> {
+        let default = pactl(&["get-default-sink"])?;
+        let inputs = inputs()?;
+        Ok(items("sinks")?
+            .iter()
+            .map(|d| {
+                let index = d["index"].as_u64();
+                let mut apps: Vec<String> = Vec::new();
+                for s in inputs.iter().filter(|s| Some(s.device) == index) {
+                    let name = super::display_name(&s.session.name);
+                    if !apps.contains(&name) {
+                        apps.push(name);
+                    }
+                }
+                OutputDevice {
+                    name: d["description"].as_str().unwrap_or("Unnamed output").to_string(),
+                    default: d["name"].as_str() == Some(default.trim()),
+                    level: level_of(&d["volume"]),
+                    muted: d["mute"].as_bool().unwrap_or(false),
+                    peak: if d["state"].as_str() == Some("RUNNING") { 1.0 } else { 0.0 },
+                    apps,
+                }
+            })
+            .collect())
+    }
+
     pub fn list() -> Result<Vec<AppSession>, String> {
-        master_state().map(|_| Vec::new())
+        let mut seen: Vec<AppSession> = Vec::new();
+        for s in inputs()? {
+            if !seen.iter().any(|x| x.name.eq_ignore_ascii_case(&s.session.name)) {
+                seen.push(s.session);
+            }
+        }
+        Ok(seen)
     }
-    pub fn apply(_: &[String], _: bool, _: super::Change) -> Result<Vec<super::Applied>, String> {
-        master_state().map(|_| Vec::new())
-    }
+
+    /// (process name, pid) of every app whose stream is playing (not paused) right now.
     pub fn audible() -> Result<Vec<(String, u32)>, String> {
-        master_state().map(|_| Vec::new())
+        let mut out: Vec<(String, u32)> = Vec::new();
+        for s in inputs()?.into_iter().filter(|s| !s.corked && !s.session.muted) {
+            if !out.iter().any(|(n, _)| *n == s.session.name) {
+                out.push((s.session.name, s.session.pid));
+            }
+        }
+        Ok(out)
+    }
+
+    /// `change` on every stream of the wanted apps (or, with `others`, of every other app that may
+    /// be muted); one entry per app.
+    pub fn apply(wanted: &[String], others: bool, change: Change) -> Result<Vec<Applied>, String> {
+        let all = inputs()?;
+        let mut chosen: Vec<&Stream> = if others {
+            all.iter().filter(|s| !super::session_matches(&s.session, wanted) && !super::keeps_playing(&s.session.name)).collect()
+        } else {
+            all.iter().filter(|s| super::session_matches(&s.session, wanted)).collect()
+        };
+        if chosen.is_empty() && !others {
+            chosen = all.iter().filter(|s| super::session_matches_loosely(&s.session, wanted, &[])).collect();
+        }
+        let touch = change == Change::default();
+        let mut hit: Vec<Applied> = Vec::new();
+        let mut failure = None;
+        for s in chosen {
+            let before = (s.session.level, s.session.muted);
+            let after = change.on(before);
+            let index = s.index.to_string();
+            let mut result = Ok(String::new());
+            if touch || (after.0 - before.0).abs() > 1e-4 {
+                result = pactl(&["set-sink-input-volume", &index, &format!("{:.0}%", after.0 * 100.0)]);
+            }
+            if result.is_ok() && (touch || after.1 != before.1) {
+                result = pactl(&["set-sink-input-mute", &index, mute_arg(after.1)]);
+            }
+            match result {
+                Ok(_) if !hit.iter().any(|h| h.name.eq_ignore_ascii_case(&s.session.name)) => hit.push(Applied { name: s.session.name.clone(), before, after }),
+                Ok(_) => {}
+                Err(e) => failure = Some(format!("{}: {e}", s.session.name)),
+            }
+        }
+        match (hit.is_empty(), failure) {
+            (true, Some(why)) => Err(why),
+            _ => Ok(hit),
+        }
     }
 }
 
@@ -2499,6 +2661,23 @@ pub fn tool_definition() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(windows))]
+    #[test]
+    fn pactl_sink_inputs_become_sessions() {
+        let json = r#"[{"index":7,"sink":2,"mute":true,"corked":false,"volume":{"front-left":{"value_percent":"40%"},"front-right":{"value_percent":"35%"}},
+            "properties":{"application.name":"Firefox","application.process.binary":"firefox","application.process.id":"4242","media.name":"Musterlied"}},
+            {"index":9,"properties":{}}]"#;
+        let items: Vec<Value> = serde_json::from_str(json).unwrap();
+        let streams = imp::streams(&items, "sink");
+        assert_eq!(streams.len(), 1);
+        let s = &streams[0];
+        assert_eq!((s.index, s.device, s.corked, s.session.pid, s.session.muted), (7, 2, false, 4242, true));
+        assert_eq!((s.session.name.as_str(), s.session.level), ("firefox", 0.4));
+        assert_eq!(s.session.labels, vec!["Firefox".to_string(), "Musterlied".to_string()]);
+        assert_eq!(imp::level_in_text("Volume: front-left: 26214 /  40% / -23.94 dB,   front-right: 26214 /  40% / -23.94 dB"), Some(0.4));
+        assert_eq!(imp::level_in_text("nonsense"), None);
+    }
 
     #[test]
     fn app_names_and_targets() {

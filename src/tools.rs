@@ -1595,7 +1595,6 @@ impl ToolContext {
         // One of his windows by its title (the text console, a report, the system column):
         // "No open window matches 'Text Console'" was the answer on 2026-11-14. A program of
         // that name comes first.
-        #[cfg(windows)]
         if !focus::is_pronoun(name) && apps::find_spec(name).is_none() {
             if let Some(done) = crate::own_windows::to_monitor(name, &monitor) {
                 return done;
@@ -1620,41 +1619,46 @@ impl ToolContext {
     /// The HUD itself to another monitor ("move yourself to monitor 2").
     async fn move_hud(&self, monitor: &Value) -> Result<String, String> {
         #[cfg(windows)]
+        use crate::win32 as wm;
+        #[cfg(not(windows))]
+        use crate::x11 as wm;
+        let hwnd = gui::hud_hwnd();
+        if hwnd == 0 {
+            return Err("My HUD window is not open.".into());
+        }
+        let monitors = monitors::list();
+        // As the desktop's background he is on every monitor: his emblem goes ("the other
+        // monitor": the other than the one it stands on).
+        if crate::wallpaper::in_use() {
+            let on = gui::emblem_monitor(&self.config, &monitors);
+            let index = monitors::resolve(monitor, on, &monitors).ok_or_else(|| format!("There is no monitor {monitor}."))?;
+            return gui::send_emblem_to_monitor(&self.config, &monitors, index);
+        }
+        let current = wm::window_display_rect(hwnd).and_then(|r| monitors::monitor_at(&monitors, (r[0] + r[2]) / 2, (r[1] + r[3]) / 2));
+        let index = monitors::resolve(monitor, current, &monitors).ok_or_else(|| format!("There is no monitor {monitor}."))?;
+        // The fullscreen board (also one that spans every monitor) goes there as the
+        // fullscreen board; only a plain window is moved like any other window.
+        if gui::send_board_to_monitor(&self.config, index) {
+            return Ok(format!("Moved the HUD to Monitor {index}."));
+        }
+        let m = monitors[index - 1].clone();
+        #[cfg(windows)]
         {
-            let hwnd = gui::hud_hwnd();
-            if hwnd == 0 {
-                return Err("My HUD window is not open.".into());
-            }
-            let monitors = monitors::list();
-            // As the desktop's background he is on every monitor: his emblem goes ("the other
-            // monitor": the other than the one it stands on).
-            if crate::wallpaper::in_use() {
-                let on = gui::emblem_monitor(&self.config, &monitors);
-                let index = monitors::resolve(monitor, on, &monitors).ok_or_else(|| format!("There is no monitor {monitor}."))?;
-                return gui::send_emblem_to_monitor(&self.config, &monitors, index);
-            }
-            let current = crate::win32::window_display_rect(hwnd).and_then(|r| monitors::monitor_at(&monitors, (r[0] + r[2]) / 2, (r[1] + r[3]) / 2));
-            let index = monitors::resolve(monitor, current, &monitors).ok_or_else(|| format!("There is no monitor {monitor}."))?;
-            // The fullscreen board (also one that spans every monitor) goes there as the
-            // fullscreen board; only a plain window is moved like any other window.
-            if gui::send_board_to_monitor(&self.config, index) {
-                return Ok(format!("Moved the HUD to Monitor {index}."));
-            }
-            let m = monitors[index - 1].clone();
             let display = crate::win32::DisplayInfo { rect: m.rect, work: m.work, primary: m.primary, device: m.name };
             crate::win32::call(move || {
                 crate::win32::show_hud(hwnd);
                 crate::win32::move_to_display(hwnd, &display)
             })
             .await??;
-            gui::remember_placement(&self.config);
-            Ok(format!("Moved the HUD to Monitor {index}."))
         }
+        // (A plain window keeps its size, in the middle of that monitor.)
         #[cfg(not(windows))]
         {
-            let _ = monitor;
-            Err("Moving the HUD between monitors is only supported on Windows.".into())
+            let (now, ..) = wm::window_state(hwnd).ok_or("My HUD window is not open.")?;
+            wm::set_window_rect(hwnd, wm::spot_in(wm::Spot::Center, m.work, now))?;
         }
+        gui::remember_placement(&self.config);
+        Ok(format!("Moved the HUD to Monitor {index}."))
     }
 
     /// A protocol step: makes sure an application runs (launching it from its executable or
@@ -1726,11 +1730,26 @@ impl ToolContext {
             };
             Ok(format!("{} {} on Monitor {index}{}{note}.", if launched { "Opened" } else { "Placed" }, apps::display_name(&app), if maximise { ", maximised" } else { "" }))
         }
+        // shortcut: KDE lets no program set another's place and size (only a KWin script could),
+        // so a saved place keeps the window's own size there; upgrade if KWin offers a call for it.
         #[cfg(not(windows))]
         {
-            let _ = apps::open(&app, &[]).await;
-            tokio::time::sleep(Duration::from_secs(2)).await;
-            monitors::move_app(WindowTarget::Named(app), monitor).await
+            let target = WindowTarget::Named(app.clone());
+            // (Under KDE until its window is there, at most 20 s; elsewhere 2 s.)
+            let shown = || crate::plasma::available() && crate::winctl::kde_windows(&target).is_ok();
+            if !shown() {
+                let _ = apps::open(&app, &[]).await;
+                let deadline = Instant::now() + Duration::from_secs(if crate::plasma::available() { 20 } else { 2 });
+                while !shown() && Instant::now() < deadline {
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                }
+            }
+            let out = monitors::move_app(target.clone(), monitor).await?;
+            if bool_arg(args, "maximized").or_else(|| bool_arg(args, "maximised")).unwrap_or(false) {
+                winctl::manage(WindowAction::Maximize, target).await?;
+            }
+            self.focus.note_app(&app);
+            Ok(out)
         }
     }
 

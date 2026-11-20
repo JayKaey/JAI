@@ -21,10 +21,13 @@ const NEAREST_SCORE: f64 = 0.8;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EntryKind {
     /// `.lnk` / `.url` shortcut.
+    #[cfg_attr(not(windows), allow(dead_code))]
     Shortcut,
     /// Registry App Paths executable.
+    #[cfg_attr(not(windows), allow(dead_code))]
     AppPath,
     /// Executable found in a program folder.
+    #[cfg_attr(not(windows), allow(dead_code))]
     Program,
     /// Linux `.desktop` entry.
     #[cfg_attr(windows, allow(dead_code))]
@@ -366,7 +369,7 @@ fn scan() -> Vec<AppEntry> {
                 return;
             }
             let Ok(text) = std::fs::read_to_string(path) else { return };
-            if text.lines().any(|l| l.trim() == "NoDisplay=true") {
+            if text.lines().any(|l| matches!(l.trim(), "NoDisplay=true" | "Hidden=true")) {
                 return;
             }
             let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();

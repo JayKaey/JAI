@@ -168,8 +168,20 @@ pub async fn type_out(text: String) -> Result<usize, String> {
     }
     #[cfg(not(windows))]
     {
-        let _ = text;
-        Err("Typing for you is only built for Windows.".to_string())
+        // The text goes in by the clipboard and Ctrl+V; his own clipboard is put back after.
+        crate::kde::blocking(move || {
+            let ctrl = crate::plasma::key_code("ctrl", "us").ok_or("no Ctrl key")?;
+            let v = crate::plasma::key_code("v", &crate::plasma::layout()).ok_or("no V key")?;
+            let before = crate::clipboard::read_now().ok();
+            crate::clipboard::write_now(&text)?;
+            let pasted = crate::plasma::chord(&[ctrl], v);
+            std::thread::sleep(Duration::from_millis(300));
+            if let Some(before) = before {
+                let _ = crate::clipboard::write_now(&before);
+            }
+            pasted.map(|()| text.chars().count())
+        })
+        .await?
     }
 }
 
@@ -266,8 +278,24 @@ async fn strike(strokes: Vec<Stroke>) -> Result<(), String> {
     }
     #[cfg(not(windows))]
     {
-        let _ = strokes;
-        Err("Pressing keys for you is only built for Windows.".to_string())
+        crate::kde::blocking(move || {
+            let layout = crate::plasma::layout();
+            let code = |name: &str| crate::plasma::key_code(name, &layout).ok_or_else(|| format!("no key named {name}"));
+            for s in strokes {
+                let key = code(&format!("{:?}", s.key))?;
+                let mut with = Vec::new();
+                for (held, name) in [(s.ctrl, "ctrl"), (s.shift, "shift"), (s.alt, "alt")] {
+                    if held {
+                        with.push(code(name)?);
+                    }
+                }
+                for _ in 0..s.times.clamp(1, 400) {
+                    crate::plasma::chord(&with, key)?;
+                }
+            }
+            Ok::<(), String>(())
+        })
+        .await?
     }
 }
 

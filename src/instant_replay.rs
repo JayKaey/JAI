@@ -93,7 +93,7 @@ impl Replay {
     /// Starts the rolling recorder (when enabled in the settings).
     pub fn start(&self, config: ConfigStore) {
         let settings = config.read(|c| c.features.clone());
-        if !settings.replay_enabled || !cfg!(windows) {
+        if !settings.replay_enabled {
             info!("[REPLAY] Rolling recorder off.");
             return;
         }
@@ -111,7 +111,6 @@ impl Replay {
         let width = settings.replay_width.clamp(320, 1920);
         let recorder = Arc::clone(&self.recorder);
         let spawned = std::thread::Builder::new().name("jai-replay".into()).spawn(move || {
-            #[cfg(windows)]
             capture::run(&recorder, fps, width, keep);
             recorder.running.store(false, Ordering::Release);
         });
@@ -463,6 +462,46 @@ mod capture {
     }
 }
 
+/// KWin screenshots of the first monitor, scaled and JPEG-encoded, on the recorder's own thread.
+#[cfg(not(windows))]
+mod capture {
+    use super::{Frame, Recorder, JPEG_QUALITY};
+    use std::time::{Duration, Instant};
+    use tracing::warn;
+
+    /// One frame as JPEG, `width` pixels wide.
+    pub(super) fn encode(shot: &image::RgbaImage, width: u32) -> Result<Vec<u8>, String> {
+        let height = (u64::from(shot.height()) * u64::from(width) / u64::from(shot.width().max(1))).max(2) as u32;
+        let small = image::imageops::resize(shot, width.min(shot.width()).max(2), height.min(shot.height()).max(2), image::imageops::FilterType::Triangle);
+        let rgb = image::DynamicImage::ImageRgba8(small).to_rgb8();
+        let mut jpeg = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, (JPEG_QUALITY * 100.0) as u8).encode_image(&rgb).map_err(|e| e.to_string())?;
+        Ok(jpeg)
+    }
+
+    pub(super) fn run(recorder: &Recorder, fps: f32, width: u32, keep: Duration) {
+        let interval = Duration::from_secs_f32(1.0 / fps);
+        let mut logged = Instant::now() - Duration::from_secs(60);
+        loop {
+            let started = Instant::now();
+            let shot = crate::plasma::outputs().into_iter().next().map_or(crate::kde::Shot::Workspace, crate::kde::Shot::Screen);
+            match crate::kde::screenshot(&shot).and_then(|s| encode(&s, width)) {
+                Ok(jpeg) => recorder.push(Frame { at: Instant::now(), jpeg }, keep),
+                Err(e) => {
+                    recorder.failures.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    // A locked screen or a busy compositor: try again in a moment, log rarely.
+                    if logged.elapsed() > Duration::from_secs(60) {
+                        logged = Instant::now();
+                        warn!("[REPLAY] A frame could not be captured: {e}");
+                    }
+                    std::thread::sleep(Duration::from_secs(1));
+                }
+            }
+            std::thread::sleep(interval.saturating_sub(started.elapsed()).max(Duration::from_millis(5)));
+        }
+    }
+}
+
 /// Width and height of a baseline/progressive JPEG (its SOF marker).
 fn jpeg_size(data: &[u8]) -> Option<(u32, u32)> {
     let mut i = 2;
@@ -595,6 +634,15 @@ mod tests {
         assert_eq!(&avi[movi + first..movi + first + 4], b"00dc");
         note("Sir", "clip that");
         assert!(TRANSCRIPT.lock().unwrap_or_else(|e| e.into_inner()).iter().any(|(_, w, t)| w == "Sir" && t == "clip that"));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn a_screenshot_becomes_a_scaled_jpeg() {
+        let shot = image::RgbaImage::from_pixel(64, 32, image::Rgba([200, 30, 30, 255]));
+        let jpeg = capture::encode(&shot, 16).unwrap();
+        assert_eq!(&jpeg[..2], &[0xFF, 0xD8]);
+        assert_eq!(jpeg_size(&jpeg), Some((16, 8)));
     }
 
     #[test]

@@ -25,20 +25,14 @@ pub fn raise_thread_priority(audio: bool) {
 /// 2026-11-09, rustc at 99 %). Above normal, all of them are served first for the half second
 /// a decode lasts. A process started below normal on purpose (a test run beside Sir's game)
 /// stays where it was put.
-pub struct Urgent(Option<u32>);
+pub struct Urgent(#[cfg_attr(not(windows), allow(dead_code))] Option<u32>);
 
-/// The process's priority class (0 where there is none to read).
+/// The process's priority class.
+#[cfg(windows)]
 pub fn priority_class() -> u32 {
-    #[cfg(windows)]
-    {
-        use windows::Win32::System::Threading::{GetCurrentProcess, GetPriorityClass};
-        // SAFETY: reads this process's own priority class.
-        unsafe { GetPriorityClass(GetCurrentProcess()) }
-    }
-    #[cfg(not(windows))]
-    {
-        0
-    }
+    use windows::Win32::System::Threading::{GetCurrentProcess, GetPriorityClass};
+    // SAFETY: reads this process's own priority class.
+    unsafe { GetPriorityClass(GetCurrentProcess()) }
 }
 
 pub fn urgent() -> Urgent {
@@ -176,17 +170,11 @@ fn stdout_redirected() -> bool {
 }
 
 /// True when log output is visible somewhere (a console or a redirected stdout).
+#[cfg(windows)]
 pub fn has_console() -> bool {
-    #[cfg(windows)]
-    {
-        use windows::Win32::System::Console::GetConsoleWindow;
-        // SAFETY: plain query.
-        unsafe { GetConsoleWindow().0 != 0 || stdout_redirected() }
-    }
-    #[cfg(not(windows))]
-    {
-        true
-    }
+    use windows::Win32::System::Console::GetConsoleWindow;
+    // SAFETY: plain query.
+    unsafe { GetConsoleWindow().0 != 0 || stdout_redirected() }
 }
 
 /// Reports a fatal start-up problem: logged, and shown in a dialog when there is no console.
@@ -203,6 +191,9 @@ pub fn alert(text: &str) {
             MessageBoxW(HWND(0), PCWSTR(wide.as_ptr()), w!("J.A.I."), MB_ICONERROR | MB_OK | MB_SETFOREGROUND);
         }
     }
+    // (Started from the menu he has no terminal to show it in: KDE's notification shows it.)
+    #[cfg(not(windows))]
+    let _ = crate::kde::notify("J.A.I. could not start", text);
 }
 
 /// Held for the lifetime of the app; a second `JAI.exe` sees it and only brings up the HUD.
@@ -232,11 +223,16 @@ impl SingleInstance {
                 }
             }
         }
+        // His name on the session bus (none there: rather start than refuse to).
         #[cfg(not(windows))]
-        {
-            // The HTTP port is the guard on other platforms (a second bind fails).
-            Some(Self {})
-        }
+        (crate::tray::own_bus_name(crate::tray::INSTANCE) != Some(false)).then_some(Self {})
+    }
+}
+
+#[cfg(not(windows))]
+impl Drop for SingleInstance {
+    fn drop(&mut self) {
+        crate::tray::release_bus_name(crate::tray::INSTANCE);
     }
 }
 
@@ -268,6 +264,8 @@ pub fn mark_test_session() {
     unsafe {
         let _ = windows::Win32::System::Threading::CreateMutexW(None, false, TEST_SESSION);
     }
+    #[cfg(not(windows))]
+    let _ = crate::tray::own_bus_name(crate::tray::TEST_SESSION);
 }
 
 pub fn in_test_session() -> bool {
@@ -313,9 +311,7 @@ pub fn test_session_running() -> bool {
         }
     }
     #[cfg(not(windows))]
-    {
-        false
-    }
+    crate::tray::test_session_running()
 }
 
 /// Whether a desktop session is available for the HUD window.
@@ -335,13 +331,13 @@ pub fn open(target: &str) -> Result<(), String> {
     opened
 }
 
-/// A game, video or presentation covers the foreground window's whole monitor (never known on
-/// Linux).
+/// A game, video or presentation covers the foreground window's whole monitor (on Linux: the
+/// window in front is fullscreen, as KDE Plasma tells).
 pub fn foreground_is_fullscreen() -> bool {
     #[cfg(windows)]
     return crate::win32::foreground_is_fullscreen();
     #[cfg(not(windows))]
-    false
+    crate::plasma::active().is_some_and(|w| w.is(crate::plasma::state::FULLSCREEN))
 }
 
 /// The program in front, by its process name (None where the desktop won't say: GNOME's
@@ -355,7 +351,9 @@ pub fn foreground_process() -> Option<String> {
             let out = std::process::Command::new(program).args(args).output().ok().filter(|o| o.status.success())?;
             Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
         };
-        let pid = if std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some() {
+        let pid = if let Some(window) = crate::plasma::active() {
+            window.pid.to_string()
+        } else if std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some() {
             serde_json::from_str::<serde_json::Value>(&out("hyprctl", &["activewindow", "-j"])?).ok()?["pid"].as_i64()?.to_string()
         } else {
             out("xdotool", &["getactivewindow", "getwindowpid"])?
@@ -370,12 +368,16 @@ pub fn idle_seconds() -> Option<u64> {
     crate::win32::idle_seconds()
 }
 
-/// Seconds since Sir last touched the keyboard or the mouse: GNOME's idle monitor (X11 and
-/// Wayland), else `xprintidle` (X11); None where neither answers. Read by a thread of its own
-/// every two seconds: the HUD asks every second and must not wait for a process.
+/// Seconds since Sir last touched the keyboard or the mouse: KWin's (KDE Plasma), else GNOME's
+/// idle monitor (X11 and Wayland), else `xprintidle` (X11); None where none answers. The last
+/// two are read by a thread of its own every two seconds: the HUD asks every second and must
+/// not wait for a process.
 #[cfg(not(windows))]
 pub fn idle_seconds() -> Option<u64> {
     use std::sync::atomic::{AtomicU64, Ordering};
+    if let Some(seconds) = crate::plasma::idle_seconds() {
+        return Some(seconds);
+    }
     static IDLE_MS: AtomicU64 = AtomicU64::new(u64::MAX);
     static READER: std::sync::Once = std::sync::Once::new();
     READER.call_once(|| {

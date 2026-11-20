@@ -358,8 +358,21 @@ fn dress() {
     });
 }
 
+/// Linux: over every window, a little see-through, letting clicks through, off the task manager.
 #[cfg(not(windows))]
-fn dress() {}
+fn dress() {
+    match crate::x11::own_window(TITLE) {
+        Some(hwnd) => {
+            crate::x11::topmost(hwnd, true);
+            crate::x11::opacity(hwnd, BAR_ALPHA);
+            crate::x11::skip_taskbar(hwnd, true);
+            if let Err(why) = crate::x11::click_through(hwnd, true) {
+                tracing::warn!("[SUBTITLES] The bar's window takes clicks still: {why}");
+            }
+        }
+        None => tracing::warn!("[SUBTITLES] The bar has no window of its own"),
+    }
+}
 
 /// Paints the subtitles into the bar's own window: the newest line at the bottom, the one
 /// before it above and fainter, each on a dark band so it reads over any picture.
@@ -420,22 +433,15 @@ fn paint_lines(p: &egui::Painter, rect: egui::Rect, shown: &[(String, f32)], wra
 }
 
 /// The monitor a scripted session shows the bar on, when it was asked to show it.
-#[cfg(windows)]
 fn demo_monitor() -> Option<[i32; 4]> {
     if !crate::platform::demo("subtitles") {
         return None;
     }
     let n = std::env::var("JAI_BACKDROP_MONITOR").ok()?.trim().parse::<usize>().ok()?;
-    crate::win32::displays().get(n.checked_sub(1)?).map(|d| d.rect)
-}
-
-#[cfg(not(windows))]
-fn demo_monitor() -> Option<[i32; 4]> {
-    None
+    crate::monitors::list().get(n.checked_sub(1)?).map(|m| m.rect)
 }
 
 /// The monitor the bar stands on: the one the window in front is on.
-#[cfg(windows)]
 fn bar_monitor() -> Option<[i32; 4]> {
     static SEEN: Mutex<Option<(Instant, Option<[i32; 4]>)>> = Mutex::new(None);
     let mut seen = lock(&SEEN);
@@ -445,15 +451,15 @@ fn bar_monitor() -> Option<[i32; 4]> {
         }
     }
     // The monitor Sir chose for the bar, else the one of the window in front.
-    let chosen = place().1.and_then(|n| crate::monitors::list().into_iter().find(|m| m.index == n).map(|m| m.rect));
-    let rect = chosen.or_else(crate::win32::foreground_monitor).or_else(|| crate::win32::displays().first().map(|d| d.rect));
+    let monitors = crate::monitors::list();
+    let chosen = place().1.and_then(|n| monitors.iter().find(|m| m.index == n).map(|m| m.rect));
+    #[cfg(windows)]
+    let front = crate::win32::foreground_monitor();
+    #[cfg(not(windows))]
+    let front = crate::winctl::kde_front().and_then(|w| crate::monitors::monitor_at(&monitors, w.geometry[0] + w.geometry[2] / 2, w.geometry[1] + w.geometry[3] / 2)).map(|i| monitors[i - 1].rect);
+    let rect = chosen.or(front).or_else(|| monitors.first().map(|m| m.rect));
     *seen = Some((Instant::now(), rect));
     rect
-}
-
-#[cfg(not(windows))]
-fn bar_monitor() -> Option<[i32; 4]> {
-    None
 }
 
 /// Where the speech to write along is played: the output device of the app in front, else of
@@ -463,11 +469,7 @@ fn bar_monitor() -> Option<[i32; 4]> {
 async fn speech_source() -> crate::pc_audio::Source {
     use crate::pc_audio::Source;
     let stem = |process: &str| process.trim_end_matches(".exe").trim_end_matches(".EXE").to_string();
-    #[cfg(windows)]
-    let front = crate::win32::foreground_info().map(|(process, _)| stem(&process));
-    #[cfg(not(windows))]
-    let front: Option<String> = None;
-    if let Some(app) = front {
+    if let Some(app) = crate::platform::foreground_process().map(|process| stem(&process)) {
         if let Some(device) = crate::audio_mixer::app_output_device(&app).await {
             return Source::Device(device);
         }

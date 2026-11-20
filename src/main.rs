@@ -2,9 +2,6 @@
 // started. `--console` attaches one on request (tests keep the console subsystem).
 #![cfg_attr(not(test), windows_subsystem = "windows")]
 #![recursion_limit = "256"]
-// Windows-only features (background mode, the tiler, screen OCR, replay …) leave their helpers
-// unused on Linux; the Windows build, which uses every one of them, is where dead code is caught.
-#![cfg_attr(not(windows), allow(dead_code))]
 
 //! J.A.I. — local, offline, low-latency voice assistant.
 //!
@@ -261,6 +258,13 @@ mod win32;
 #[cfg(windows)]
 mod win32_desktop;
 mod winctl;
+// Linux, built for KDE Plasma: its services, its window list and keys, his own windows on X11.
+#[cfg(target_os = "linux")]
+mod kde;
+#[cfg(target_os = "linux")]
+mod plasma;
+#[cfg(target_os = "linux")]
+mod x11;
 
 use crate::config::{ConfigStore, JaiConfig};
 use crate::tray::TrayAction;
@@ -686,6 +690,12 @@ fn main() -> ExitCode {
     if cli.window_drill {
         window_drill::enable();
     }
+    // KDE gives Plasma's window list, keys and screenshots to the program its menu entry names:
+    // the entry is put right before anything of his asks KDE for them.
+    #[cfg(not(windows))]
+    if !platform::in_test_session() && installer::keep_menu_entry() {
+        info!("[KDE] My menu entry now names this program, so KDE lets me see and move windows");
+    }
     // The window's icon is drawn, not loaded: it is drawn now, beside the start, so that the
     // window does not wait for it later on the main thread.
     let _ = std::thread::Builder::new().name("jai-icon".into()).spawn(|| {
@@ -905,6 +915,20 @@ fn main() -> ExitCode {
     if hud.is_some() {
         const KEYS: &[(u32, u32)] = &[(0x0001 | 0x0002, 0x4A), (0x0001 | 0x0002, 0x4B)];
         win32_desktop::start(if platform::in_test_session() { &[] } else { KEYS }, wallpaper::on_mouse, gui::on_global_key);
+    }
+    // (On KDE they are registered with Plasma, where Sir may give them other keys.)
+    #[cfg(not(windows))]
+    if hud.is_some() && !platform::in_test_session() {
+        let keys = [("windows", "His windows to the front", kde::qt_key("Ctrl+Alt+J")), ("console", "The console to type to him", kde::qt_key("Ctrl+Alt+K"))];
+        let keys: Vec<(&str, &str, i32)> = keys.into_iter().filter_map(|(action, name, key)| Some((action, name, key?))).collect();
+        let pressed = |action: &str| match action {
+            "windows" => gui::on_global_key(0),
+            "console" => gui::on_global_key(1),
+            _ => {}
+        };
+        if let Err(e) = kde::global_keys(&keys, pressed) {
+            warn!("[HUD] KDE took none of my global keys: {e}");
+        }
     }
     if let Some(hud) = hud {
         start_mark("the window is asked for");

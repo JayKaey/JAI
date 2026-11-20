@@ -158,7 +158,7 @@ pub async fn run_tool(ctx: &ToolContext, name: &str, args: &Value) -> Result<Str
         return serde_json::to_string_pretty(&json!({"telemetry":ctx.monitor.latest(),"guardian":snapshot(),"tunnel":crate::worldwide_tunnel::snapshot()})).map_err(|e| e.to_string());
     }
     match args["action"].as_str().unwrap_or("") {
-        "lock" => { lock_pc()?; Ok("The Windows session is locked.".into()) }
+        "lock" => { lock_pc()?; Ok("The PC is locked.".into()) }
         "sleep" => {
             // Let the authenticated request receive its acknowledgement before suspending networking.
             let stark = ctx.stark.clone();
@@ -196,26 +196,7 @@ pub async fn run_tool(ctx: &ToolContext, name: &str, args: &Value) -> Result<Str
     }
 }
 
-#[cfg(windows)]
-fn lock_pc() -> Result<(), String> {
-    #[link(name = "user32")]
-    extern "system" { fn LockWorkStation() -> i32; }
-    // SAFETY: documented parameterless API, operating on this interactive user session.
-    if unsafe { LockWorkStation() } != 0 { Ok(()) } else { Err(std::io::Error::last_os_error().to_string()) }
-}
-
-#[cfg(windows)]
-fn sleep_pc() -> Result<(), String> {
-    #[link(name = "PowrProf")]
-    extern "system" { fn SetSuspendState(hibernate: u8, force: u8, disable_wake_events: u8) -> u8; }
-    // SAFETY: documented BOOLEAN arguments; suspend, without forced close or disabling wake events.
-    if unsafe { SetSuspendState(0, 0, 0) } != 0 { Ok(()) } else { Err(std::io::Error::last_os_error().to_string()) }
-}
-
-#[cfg(not(windows))]
-fn lock_pc() -> Result<(), String> { Err("Remote session locking is implemented for Windows on this build.".into()) }
-#[cfg(not(windows))]
-fn sleep_pc() -> Result<(), String> { Err("Remote suspend is implemented for Windows on this build.".into()) }
+use crate::system_power::{lock_pc, sleep_pc};
 
 fn magic_packet(mac: &str) -> Result<[u8; 102], String> {
     let hex = mac.replace([':', '-'], "");

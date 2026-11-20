@@ -25,7 +25,11 @@ jobs:
       - name: Tests of the Linux parts
         shell: bash
         run: |
-          cargo test --release -- installer::tests::a_linux_pc kit_pc:: screen_context:: workbench:: fleet:: --test-threads=4 | tee tests.txt
+          cargo test --release -- installer::tests::a_linux_pc kit_pc:: screen_context:: workbench:: fleet:: changes:: \
+            kde:: plasma:: tray:: x11:: window_tiler:: camera_feed:: features::tests::xdg_ apps::tests::desktop_exec \
+            media::tests::mpris_ audio_mixer::tests::pactl_ instant_replay::tests::a_screenshot kit_games::tests::video_memory \
+            file_ops::tests::file_uri network_radar::tests::linux_ network_guardian::tests::linux_ vault::tests::the_key_file \
+            --test-threads=4 | tee tests.txt
           # (A notice: shown on the run's page and by the API without signing in, unlike the log.)
           echo "::notice title=Linux tests::$(grep '^test result' tests.txt)"
       - uses: actions/upload-artifact@v7

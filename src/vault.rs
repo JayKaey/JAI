@@ -272,6 +272,21 @@ mod tests {
         assert_eq!(v.reseal_from("earlier-vault"), Ok(0), "once");
     }
 
+    /// Linux keeps the master key in a 0600 file: the second start reads the first start's key.
+    #[cfg(not(windows))]
+    #[test]
+    fn the_key_file_is_created_once_and_read_again() {
+        let dir = std::env::temp_dir().join(format!("jai_vault_key_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (first, _) = master_key(&dir).unwrap();
+        let (again, _) = master_key(&dir).unwrap();
+        assert_eq!(first, again);
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(std::fs::metadata(dir.join(KEY_FILE)).unwrap().permissions().mode() & 0o777, 0o600);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn secrets_round_trip_and_are_bound_to_their_slot() {
         let v = Vault::in_memory();

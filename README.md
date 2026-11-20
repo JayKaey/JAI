@@ -278,23 +278,37 @@ A Linux PC installs him as well (see Linux).
 
 ## Linux
 
-The same crate builds on Linux; the `Linux` GitHub workflow builds it on Ubuntu and keeps
-`target/release/jai` as the run's artifact. To build it yourself:
+On Linux J.A.I. is made for KDE Plasma 6 (Wayland) on Arch. The same crate builds on Linux; the
+`Linux` GitHub workflow builds it on Ubuntu, runs the tests of the Linux parts and keeps
+`target/release/jai` as the run's artifact. To build it yourself on Arch:
 
 ```
-sudo apt install build-essential cmake clang libclang-dev pkg-config libasound2-dev libopus-dev
+sudo pacman -S --needed base-devel cmake clang alsa-lib opus
 cargo build --release
 ```
 
-At run time he needs `espeak-ng` (his voice) and, for the installer, `zstd`; `playerctl`
-(music), `wmctrl` and `xdotool` (windows on X11; Hyprland is driven through `hyprctl`), PipeWire's
-`wpctl` or `pactl` (volume), `xdg-open`, `zenity` or `kdialog` (save dialogs), `wl-clipboard` or
-`xclip`, `xprintidle` (idle time on X11; GNOME is asked over D-Bus) and the NVIDIA driver's
-`nvidia-smi` make the rest work. Started on its own, `jai` is the installer: it logs in at Sir's
-PC, takes his data (never his Windows programs), fetches Ollama for Linux and the models, and
-installs into `~/.local/share/jai` with an entry in the applications menu. What needs Windows says
-so: the desktop background mode, the tray icon, the window tiler, screen reading, instant replay,
-the per-app mixer, the frozen-app and microphone checks and app updates.
+At run time he needs `espeak-ng` (his voice), `zstd` (the installer unpacks Ollama with it),
+`libpulse` (`pactl`: the volume of every app and the microphone), `tesseract` with its English and
+German data (reading the screen), `pacman-contrib` and `discover` (app updates), `geoclue` (where
+the PC is), `xdg-utils`, and `yt-dlp` and `ffmpeg` (the media grabber); the NVIDIA driver's
+`nvidia-smi` tells him the video memory:
+
+```
+sudo pacman -S --needed espeak-ng zstd libpulse tesseract tesseract-data-eng tesseract-data-deu pacman-contrib discover geoclue xdg-utils yt-dlp ffmpeg
+```
+
+His own windows are X11 windows (XWayland). Other programs' windows, the keys he presses for Sir
+and screenshots go through KWin, which allows them only to a program its menu entry names: at
+every start he writes `~/.local/share/applications/jai.desktop` for the program he is, so start
+him once more after the first start (or after moving him). Music and media keys go over MPRIS,
+power and sleep over logind, the lock to KDE's own lock screen, and his tray icon is a
+StatusNotifierItem. Other desktops get what works without KDE (`wmctrl` and `xdotool` on X11,
+`hyprctl` on Hyprland, `xprintidle` for the idle time).
+
+Started on its own, `jai` is the installer: it logs in at Sir's PC, takes his data (never his
+Windows programs), fetches Ollama for Linux and the models, and installs into `~/.local/share/jai`
+with an entry in the applications menu. Only on Windows: WhatsApp Desktop (Linux opens WhatsApp
+Web) and the microphone's level meter.
 
 ## JAI's own Discord account
 

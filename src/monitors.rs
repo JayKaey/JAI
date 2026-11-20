@@ -119,17 +119,9 @@ pub fn list() -> Vec<Monitor> {
                 ));
             }
         }
-    } else if let Some(out) = run("xrandr", &["--listmonitors"]) {
-        // " 0: +*DP-1 2560/597x1440/336+0+0  DP-1"
-        for line in out.lines().skip(1) {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            let (Some(flags), Some(geom), Some(name)) = (parts.get(1), parts.get(2), parts.last()) else { continue };
-            let nums: Vec<i32> = geom.split(['x', '+', '/']).filter_map(|s| s.parse().ok()).collect();
-            if nums.len() >= 6 {
-                let (w, h, x, y) = (nums[0], nums[2], nums[4], nums[5]);
-                raw.push((name.to_string(), [x, y, x + w, y + h], [x, y, x + w, y + h], flags.contains('*')));
-            }
-        }
+    } else {
+        // X11 (XWayland under KDE Plasma) knows every monitor, and the room its panels leave.
+        raw = crate::x11::displays().into_iter().map(|d| (d.device, d.rect, d.work, d.primary)).collect();
     }
     raw.sort_by_key(|(_, r, _, primary)| (!*primary, r[0], r[1]));
     raw.into_iter().enumerate().map(|(i, (name, rect, work, primary))| Monitor { index: i + 1, name, rect, work, primary }).collect()
@@ -248,6 +240,18 @@ pub async fn move_app(target: crate::winctl::WindowTarget, monitor: Value) -> Re
 #[cfg(not(windows))]
 fn linux_move(target: &crate::winctl::WindowTarget, monitor: &Value) -> Result<String, String> {
     let monitors = list();
+    if crate::plasma::available() {
+        // (XWayland names the monitors as KWin does: "DP-1", "HDMI-A-1".)
+        let window = crate::winctl::kde_windows(target)?.remove(0);
+        let [x, y, w, h] = window.geometry;
+        let current = monitor_at(&monitors, x + w / 2, y + h / 2);
+        let index = resolve(monitor, current, &monitors).ok_or_else(|| format!("There is no monitor '{}'; Sir has {} monitor(s).", monitor_label(monitor), monitors.len()))?;
+        if current == Some(index) {
+            return Ok(format!("'{}' is already on Monitor {index}.", short(&window.title)));
+        }
+        crate::plasma::send_to_output(&window.uuid, &monitors[index - 1].name)?;
+        return Ok(format!("Moved '{}' to Monitor {index}.", short(&window.title)));
+    }
     let index = resolve(monitor, None, &monitors).ok_or_else(|| format!("There is no monitor '{}'.", monitor_label(monitor)))?;
     let m = &monitors[index - 1];
     let run = |p: &str, a: &[&str]| -> Result<String, String> {

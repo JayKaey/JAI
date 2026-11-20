@@ -1253,7 +1253,7 @@ async fn launch_sonora(arguments: Vec<String>) -> Result<(), String> {
     if crate::platform::hands_off() {
         return Err(HANDS_OFF.into());
     }
-    let executable = sonora_binary().ok_or("Sonora.exe was not found in D:\\Program Files\\Sonora or the user installation paths.")?;
+    let executable = sonora_binary().ok_or(if cfg!(windows) { "Sonora.exe was not found in D:\\Program Files\\Sonora or the user installation paths." } else { "Sonora is a Windows program and is not installed here; use Spotify or the local library." })?;
     tokio::task::spawn_blocking(move || {
         let mut command = std::process::Command::new(executable);
         command.args(arguments).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
@@ -1491,8 +1491,45 @@ async fn activate_player_selection(player: &str, search: Option<&str>, first_res
 }
 
 #[cfg(not(windows))]
-async fn activate_player_selection(player: &str, _search: Option<&str>, _first_result: bool) -> Result<(), String> {
-    Err(format!("Interactive search automation for {player} is available on Windows; select the requested music in the player."))
+async fn activate_player_selection(player: &str, search: Option<&str>, first_result: bool) -> Result<(), String> {
+    if crate::platform::hands_off() {
+        return Err(HANDS_OFF.into());
+    }
+    if !crate::plasma::available() {
+        return Err(format!("Picking a result in {} needs Windows or KDE Plasma; select the requested music in the player.", player_name(player)));
+    }
+    let target = crate::winctl::WindowTarget::Named(player.to_string());
+    let deadline = std::time::Instant::now() + Duration::from_secs(12);
+    let window = loop {
+        let t = target.clone();
+        let found = crate::kde::blocking(move || crate::winctl::kde_windows(&t).ok().and_then(|w| w.into_iter().find(|w| !w.title.trim().is_empty()))).await?;
+        if let Some(window) = found { break window; }
+        if std::time::Instant::now() >= deadline { return Err(format!("{} has no controllable window.", player_name(player))); }
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    };
+    let w = window.clone();
+    crate::kde::blocking(move || crate::winctl::to_front(&w)).await??;
+    // The same keys as on Windows, each sent only while the player still has the focus.
+    let press = |keys: &'static str, wait: u64| {
+        let uuid = window.uuid.clone();
+        crate::kde::blocking(move || -> Result<(), String> {
+            if !crate::plasma::active().is_some_and(|a| a.uuid == uuid) { return Err("Music automation stopped because another window took focus.".into()); }
+            crate::plasma::press(keys)?;
+            std::thread::sleep(Duration::from_millis(wait));
+            Ok(())
+        })
+    };
+    if let Some(query) = search {
+        press("Ctrl+Shift+F", 200).await??;
+        press("Ctrl+A", 0).await??;
+        crate::kit_typing::type_out(query.chars().take(240).collect()).await?;
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+        if !first_result { press("Enter", 900).await??; }
+        press("Down", 0).await??;
+    } else if player == "sonora" && first_result {
+        press("Down", 0).await??;
+    }
+    press("Enter", 0).await?
 }
 
 /// Spotify running with its main window up ("Spotify Premium" / "Spotify Free" or a song):
@@ -1518,9 +1555,34 @@ async fn ensure_spotify_ready() -> Result<(), String> {
     Err("Spotify did not finish starting in time.".into())
 }
 
+/// Spotify's MPRIS name on the bus: it is up when it answers there. Started as `spotify` or as
+/// the flatpak, then waited for (a link handed over during its start makes it quit).
 #[cfg(not(windows))]
 async fn ensure_spotify_ready() -> Result<(), String> {
-    Ok(())
+    async fn up() -> Result<bool, String> {
+        tokio::task::spawn_blocking(|| !crate::media::mpris::named(&crate::media::mpris::names().unwrap_or_default(), "spotify").is_empty()).await.map_err(|e| e.to_string())
+    }
+    if crate::platform::hands_off() || up().await? {
+        return Ok(());
+    }
+    info!("[MUSIC] Starting Spotify");
+    let launched = if crate::apps::which("spotify").is_some() {
+        crate::apps::spawn_detached("spotify", &[])
+    } else if crate::apps::which("flatpak").is_some() {
+        crate::apps::spawn_detached("flatpak", &["run".into(), "com.spotify.Client".into()])
+    } else {
+        Err("neither `spotify` nor flatpak is installed".into())
+    };
+    launched.map_err(|e| format!("Spotify could not be started ({e}). Install it with: yay -S spotify, or flatpak install flathub com.spotify.Client"))?;
+    let deadline = std::time::Instant::now() + Duration::from_secs(40);
+    while std::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(700)).await;
+        if up().await? {
+            tokio::time::sleep(Duration::from_secs(3)).await;
+            return Ok(());
+        }
+    }
+    Err("Spotify did not finish starting in time.".into())
 }
 
 /// `spotify:playlist:…` from a URI or an open.spotify.com link.
@@ -1577,7 +1639,16 @@ async fn open_uri(uri: &str) -> Result<(), String> {
         return Err(HANDS_OFF.into());
     }
     let uri = uri.to_string();
-    tokio::task::spawn_blocking(move || std::process::Command::new("xdg-open").arg(&uri).spawn().map(|_| ()).map_err(|e| e.to_string())).await.map_err(|e| e.to_string())?
+    tokio::task::spawn_blocking(move || {
+        // A running Spotify takes its own links over MPRIS; any other handler through xdg-open.
+        let mpris = crate::media::mpris::names().unwrap_or_default();
+        if let Some(player) = uri.starts_with("spotify:").then(|| crate::media::mpris::named(&mpris, "spotify").into_iter().next()).flatten() {
+            return crate::media::mpris::open_uri(&player, &uri);
+        }
+        std::process::Command::new("xdg-open").arg(&uri).spawn().map(|_| ()).map_err(|e| format!("xdg-open: {e} (install it with: sudo pacman -S xdg-utils)"))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Spotify opened the page but is not playing it: focus it and press Enter on the page. (Never
@@ -1663,6 +1734,7 @@ pub async fn stop_all_active_media() -> MediaStop {
 
 /// Processes whose sound "stop" should end: music and video players and browsers (never games,
 /// voice chats or system sounds).
+#[cfg(windows)]
 fn is_media_player(process: &str) -> bool {
     let p = process.to_lowercase();
     let p = p.trim_end_matches(".exe");
@@ -1694,8 +1766,16 @@ async fn stop_everything() -> MediaStop {
 
 #[cfg(not(windows))]
 async fn stop_everything() -> MediaStop {
-    let paused = tokio::task::spawn_blocking(|| std::process::Command::new("playerctl").args(["-a", "pause"]).status().map(|s| s.success()).unwrap_or(false)).await.unwrap_or(false);
-    MediaStop { sessions: if paused { vec!["every player".into()] } else { Vec::new() }, windows: Vec::new() }
+    if crate::platform::hands_off() {
+        return MediaStop::default();
+    }
+    let sessions = tokio::task::spawn_blocking(|| {
+        let names = crate::media::mpris::names().unwrap_or_default();
+        names.iter().filter(|n| crate::media::mpris::info(n).is_some_and(|i| i.playing) && crate::media::mpris::control(n, "Pause").is_ok()).map(|n| player_name(crate::media::mpris::short(n))).collect()
+    })
+    .await
+    .unwrap_or_default();
+    MediaStop { sessions, windows: Vec::new() }
 }
 
 // ----------------------------------------------------------------- the media session ----
@@ -1896,21 +1976,8 @@ async fn control_session(app: Option<String>, op: SessionOp) -> Result<Option<No
 
 #[cfg(not(windows))]
 async fn sessions() -> Vec<NowPlaying> {
-    tokio::task::spawn_blocking(|| {
-        let out = std::process::Command::new("playerctl").args(["-a", "metadata", "--format", "{{playerName}}\t{{status}}\t{{title}}\t{{artist}}\t{{album}}"]).output().ok();
-        out.map(|o| {
-            String::from_utf8_lossy(&o.stdout)
-                .lines()
-                .filter_map(|l| {
-                    let f: Vec<&str> = l.split('\t').collect();
-                    (f.len() >= 5).then(|| NowPlaying { app: f[0].into(), playing: f[1] == "Playing", title: f[2].into(), artist: f[3].into(), album: f[4].into(), position: None })
-                })
-                .collect()
-        })
-        .unwrap_or_default()
-    })
-    .await
-    .unwrap_or_default()
+    let all = tokio::task::spawn_blocking(crate::media::mpris::all).await.unwrap_or_default();
+    all.into_iter().map(|i| NowPlaying { app: i.app, playing: i.playing, title: i.title, artist: i.artist, album: i.album, position: i.position }).collect()
 }
 
 #[cfg(not(windows))]
@@ -1918,20 +1985,31 @@ async fn control_session(app: Option<String>, op: SessionOp) -> Result<Option<No
     if crate::platform::hands_off() {
         return Err(HANDS_OFF.into());
     }
-    let cmd = match op {
-        SessionOp::Play => "play",
-        SessionOp::Pause => "pause",
-        SessionOp::Toggle => "play-pause",
-        SessionOp::Next => "next",
-        SessionOp::Previous => "previous",
+    let method = match op {
+        SessionOp::Play => "Play",
+        SessionOp::Pause => "Pause",
+        SessionOp::Toggle => "PlayPause",
+        SessionOp::Next => "Next",
+        SessionOp::Previous => "Previous",
     };
-    let mut args = Vec::new();
-    if let Some(a) = &app {
-        args.extend(["-p".to_string(), a.clone()]);
-    }
-    args.push(cmd.into());
-    let ok = std::process::Command::new("playerctl").args(&args).status().map(|s| s.success()).unwrap_or(false);
-    Ok(if ok { sessions().await.into_iter().next() } else { None })
+    let target = app;
+    let done = tokio::task::spawn_blocking(move || {
+        let names = crate::media::mpris::names().unwrap_or_default();
+        let name = match &target {
+            Some(a) => crate::media::mpris::named(&names, a).into_iter().next(),
+            None => crate::media::mpris::preferred(&names),
+        }?;
+        crate::media::mpris::control(&name, method).ok().map(|_| name)
+    })
+    .await
+    .unwrap_or_default();
+    // (A player answers its own state a moment after the call.)
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    let shown = sessions().await;
+    Ok(done.and_then(|n| {
+        let short = crate::media::mpris::short(&n).to_string();
+        shown.into_iter().find(|s| s.app == short)
+    }))
 }
 
 pub fn tool_definition() -> Value {

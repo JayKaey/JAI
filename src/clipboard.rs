@@ -92,41 +92,24 @@ pub async fn write(text: &str) -> Result<(), String> {
 
 #[cfg(not(windows))]
 pub async fn read() -> Result<String, String> {
-    tokio::task::spawn_blocking(|| {
-        let attempts: [(&str, &[&str]); 2] = [("wl-paste", &["--no-newline"]), ("xclip", &["-selection", "clipboard", "-o"])];
-        for (program, args) in attempts {
-            if let Ok(out) = std::process::Command::new(program).args(args).output() {
-                if out.status.success() {
-                    return Ok(String::from_utf8_lossy(&out.stdout).to_string());
-                }
-            }
-        }
-        Err("No clipboard tool found (install wl-clipboard or xclip).".to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    crate::kde::blocking(read_now).await?
+}
+
+/// KDE's Klipper holds the clipboard on the session bus.
+#[cfg(not(windows))]
+pub fn read_now() -> Result<String, String> {
+    crate::kde::call::<_, String>("org.kde.klipper", "/klipper", "org.kde.klipper.klipper", "getClipboardContents", &()).map_err(|e| format!("Klipper (KDE's clipboard) did not answer: {e}"))
+}
+
+#[cfg(not(windows))]
+pub fn write_now(text: &str) -> Result<(), String> {
+    crate::kde::call::<_, ()>("org.kde.klipper", "/klipper", "org.kde.klipper.klipper", "setClipboardContents", &(text,)).map_err(|e| format!("Klipper (KDE's clipboard) did not answer: {e}"))
 }
 
 #[cfg(not(windows))]
 pub async fn write(text: &str) -> Result<(), String> {
-    use std::io::Write;
     let text: String = text.chars().take(MAX_CHARS).collect();
-    tokio::task::spawn_blocking(move || {
-        let attempts: [(&str, &[&str]); 2] = [("wl-copy", &[]), ("xclip", &["-selection", "clipboard"])];
-        for (program, args) in attempts {
-            if let Ok(mut child) = std::process::Command::new(program).args(args).stdin(std::process::Stdio::piped()).spawn() {
-                if let Some(stdin) = child.stdin.as_mut() {
-                    let _ = stdin.write_all(text.as_bytes());
-                }
-                if child.wait().map(|s| s.success()).unwrap_or(false) {
-                    return Ok(());
-                }
-            }
-        }
-        Err("No clipboard tool found (install wl-clipboard or xclip).".to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    crate::kde::blocking(move || write_now(&text)).await?
 }
 
 /// The `clipboard` tool: read (for summarising, translating …) or write.

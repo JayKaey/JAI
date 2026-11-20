@@ -77,9 +77,21 @@ pub fn detect_connected_monitors() -> Vec<MonitorInfo> {
     sort_and_number(list)
 }
 
+/// Linux: the monitors as X11 tells them (`monitors::list`); one full-HD stand-in without X.
 #[cfg(not(windows))]
 pub fn detect_connected_monitors() -> Vec<MonitorInfo> {
-    sort_and_number(vec![MonitorInfo { number: 0, x: 0, y: 0, width: 1920, height: 1080, work: [0, 0, 1920, 1080], is_portrait: false, is_primary: true, device: "default".into() }])
+    let list: Vec<MonitorInfo> = crate::monitors::list()
+        .into_iter()
+        .map(|m| {
+            let (width, height) = (m.width(), m.height());
+            let [l, t, r, b] = m.work;
+            MonitorInfo { number: 0, x: m.rect[0], y: m.rect[1], width, height, work: [l, t, r - l, b - t], is_portrait: height > width, is_primary: m.primary, device: m.name }
+        })
+        .collect();
+    if list.is_empty() {
+        return sort_and_number(vec![MonitorInfo { number: 0, x: 0, y: 0, width: 1920, height: 1080, work: [0, 0, 1920, 1080], is_portrait: false, is_primary: true, device: "default".into() }]);
+    }
+    sort_and_number(list)
 }
 
 fn sort_and_number(mut list: Vec<MonitorInfo>) -> Vec<MonitorInfo> {

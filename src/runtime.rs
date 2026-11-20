@@ -260,6 +260,21 @@ impl LlmRuntime {
             .env("OLLAMA_MAX_LOADED_MODELS", "1")
             .env("OLLAMA_KEEP_ALIVE", "-1");
         crate::shell::hide_console_std(&mut cmd);
+        #[cfg(target_os = "linux")]
+        {
+            use std::os::unix::process::CommandExt;
+            // Its own process group, so `end_engine` ends the runners it starts as well; and
+            // SIGTERM if JAI dies without shutting down (the twin of the Windows job object). The
+            // signal follows the thread that spawned it: `launch` runs on a runtime worker, which stays.
+            cmd.process_group(0);
+            // SAFETY: only the async-signal-safe prctl runs between fork and exec.
+            unsafe {
+                cmd.pre_exec(|| {
+                    libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
+                    Ok(())
+                });
+            }
+        }
         let child = cmd.spawn().map_err(|e| format!("{}: {e}", engine.display()))?;
         self.adopt(child);
         Ok(())
@@ -493,7 +508,7 @@ impl LlmRuntime {
             return Err("the engine is already restarting".into());
         }
         if let Some(mut child) = self.child.lock().unwrap_or_else(|e| e.into_inner()).take() {
-            let _ = child.kill();
+            end_engine(&mut child);
             let _ = child.wait();
         }
         self.set_status(Phase::Starting, "rebooting the built-in engine…");
@@ -516,7 +531,7 @@ impl LlmRuntime {
     pub fn shutdown(&self) {
         self.stopping.store(true, Ordering::Release);
         if let Some(mut child) = self.child.lock().unwrap_or_else(|e| e.into_inner()).take() {
-            let _ = child.kill();
+            end_engine(&mut child);
             let _ = child.wait();
             info!("[LLM] Language engine stopped.");
         }
@@ -527,6 +542,16 @@ impl Drop for LlmRuntime {
     fn drop(&mut self) {
         self.shutdown();
     }
+}
+
+/// Ends the engine (on Linux its whole process group: the model runners are children of it).
+fn end_engine(child: &mut Child) {
+    #[cfg(target_os = "linux")]
+    // SAFETY: signals the engine's own process group (set in `spawn_engine`).
+    unsafe {
+        libc::kill(-(child.id() as i32), libc::SIGKILL);
+    }
+    let _ = child.kill();
 }
 
 /// The engine executable inside `dir` (`runtime/ollama`).

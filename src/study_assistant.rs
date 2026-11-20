@@ -58,9 +58,11 @@ fn shell_folder(value: &str) -> Option<PathBuf> {
     }
 }
 
+/// The XDG user folder for a Windows shell-folder name ("Personal" is Documents, the GUID is
+/// Downloads), from `~/.config/user-dirs.dirs` (translated names, a moved folder).
 #[cfg(not(windows))]
-fn shell_folder(_value: &str) -> Option<PathBuf> {
-    None
+fn shell_folder(value: &str) -> Option<PathBuf> {
+    crate::features::xdg_folder(if value == "Personal" { "Documents" } else { "Downloads" })
 }
 
 /// Documents (OneDrive-redirected ones included).

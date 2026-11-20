@@ -375,13 +375,14 @@ fn viewport_id(id: u64) -> ViewportId {
 /// The orb: the centre of the HUD window, else of the primary monitor (physical pixels).
 fn orb_center() -> Pos2 {
     #[cfg(windows)]
-    {
-        let hwnd = crate::gui::hud_hwnd();
-        if hwnd != 0 && crate::win32::is_visible(hwnd) {
-            if let Some(([x, y, w, h], _, minimised)) = crate::win32::window_state(hwnd) {
-                if !minimised && w > 0 && h > 0 {
-                    return pos2((x + w / 2) as f32, (y + h / 2) as f32);
-                }
+    use crate::win32 as wm;
+    #[cfg(not(windows))]
+    use crate::x11 as wm;
+    let hwnd = crate::gui::hud_hwnd();
+    if hwnd != 0 && wm::is_visible(hwnd) {
+        if let Some(([x, y, w, h], _, minimised)) = wm::window_state(hwnd) {
+            if !minimised && w > 0 && h > 0 {
+                return pos2((x + w / 2) as f32, (y + h / 2) as f32);
             }
         }
     }

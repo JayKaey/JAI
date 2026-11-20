@@ -497,8 +497,17 @@ fn disk_space(path: &Path) -> Option<(u64, u64)> {
 }
 
 #[cfg(not(windows))]
-fn disk_space(_path: &Path) -> Option<(u64, u64)> {
-    None
+fn disk_space(path: &Path) -> Option<(u64, u64)> {
+    use std::os::unix::ffi::OsStrExt;
+    let c = std::ffi::CString::new(path.as_os_str().as_bytes()).ok()?;
+    // SAFETY: `c` is NUL-terminated and `st` is a statvfs the call fills.
+    let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::statvfs(c.as_ptr(), &mut st) } != 0 {
+        return None;
+    }
+    let unit = st.f_frsize as u64;
+    let total = st.f_blocks as u64 * unit;
+    (total > 0).then_some((total, st.f_bavail as u64 * unit))
 }
 
 /// What the Recycle Bin holds on drive `letter`.
@@ -515,7 +524,9 @@ fn recycle_bin(letter: char) -> Option<u64> {
 
 #[cfg(not(windows))]
 fn recycle_bin(_letter: char) -> Option<u64> {
-    None
+    // The freedesktop trash of the home partition: what is in files/ is what emptying frees.
+    let files = crate::apps::home_dir()?.join(".local/share/Trash/files");
+    Some(walkdir::WalkDir::new(files).into_iter().flatten().filter_map(|e| e.metadata().ok()).filter(|m| m.is_file()).map(|m| m.len()).sum())
 }
 
 // --------------------------------------------------------------------------------- tree ----
@@ -820,7 +831,8 @@ impl Default for ScanOptions {
 enum EntryKind {
     File,
     Dir,
-    /// A cloud placeholder: its bytes are not on this PC.
+    /// A cloud placeholder: its bytes are not on this PC (OneDrive's, on Windows).
+    #[cfg_attr(not(windows), allow(dead_code))]
     Cloud,
 }
 
@@ -1244,6 +1256,7 @@ pub(crate) struct Summary {
 pub(crate) fn advice(s: &Summary) -> String {
     let first = match (s.drive, &s.folder) {
         (Some(letter), _) if s.total > 0 => {
+            let letter = if letter == '/' { "root".to_string() } else { letter.to_string() };
             let used = s.total.saturating_sub(s.free);
             if used as f64 >= s.total as f64 * NEARLY_FULL {
                 format!("Your {letter} drive is nearly full, Sir: {}.", used_of(used, s.total))
@@ -1485,8 +1498,8 @@ fn start(job: Job) {
 fn work(generation: u64, job: Job) {
     crate::platform::lower_thread_priority();
     let current = || SCAN_GEN.load(Ordering::Acquire) == generation;
-    let drive = drive_letter(&job.root).and_then(|letter| disk_space(&job.root).map(|(total, free)| Drive { letter, total, free }));
-    let recycle = if job.graft.is_none() && job.is_drive { drive.and_then(|d| recycle_bin(d.letter)) } else { None };
+    let drive = drive_letter(&job.root).or_else(|| (job.root == Path::new("/")).then_some('/')).and_then(|letter| disk_space(&job.root).map(|(total, free)| Drive { letter, total, free }));
+    let recycle = if job.graft.is_none() && (job.is_drive || cfg!(not(windows))) { drive.and_then(|d| recycle_bin(d.letter)) } else { None };
     {
         let mut s = state();
         if !current() {
@@ -1665,7 +1678,12 @@ pub(crate) fn open_in_explorer() {
     }
     #[cfg(not(windows))]
     {
-        let _ = path;
+        // Dolphin opens the folder through the file-manager service; xdg-open when it is absent.
+        let uri = crate::file_ops::file_uri(&path);
+        let shown = crate::kde::call::<_, ()>("org.freedesktop.FileManager1", "/org/freedesktop/FileManager1", "org.freedesktop.FileManager1", "ShowFolders", &(vec![uri], ""));
+        if shown.is_err() {
+            let _ = std::process::Command::new("xdg-open").arg(&path).spawn();
+        }
     }
 }
 

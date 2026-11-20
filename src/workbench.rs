@@ -95,26 +95,23 @@ impl Workbench {
                 }
             }
         });
-        #[cfg(windows)]
-        {
-            let bench = self.clone();
-            tokio::spawn(async move {
-                let mut seen = crate::win32::clipboard_sequence();
-                let mut tick = tokio::time::interval(Duration::from_millis(1200));
-                loop {
-                    tick.tick().await;
-                    let now = crate::win32::clipboard_sequence();
-                    if now == seen || bench.clips.paused() {
-                        seen = now;
-                        continue;
-                    }
+        let bench = self.clone();
+        tokio::spawn(async move {
+            let mut seen = copy_stamp().await;
+            let mut tick = tokio::time::interval(Duration::from_millis(1200));
+            loop {
+                tick.tick().await;
+                let now = copy_stamp().await;
+                if now == seen || bench.clips.paused() {
                     seen = now;
-                    if let Ok(text) = crate::clipboard::read().await {
-                        bench.clips.note(&text);
-                    }
+                    continue;
                 }
-            });
-        }
+                seen = now;
+                if let Ok(text) = crate::clipboard::read().await {
+                    bench.clips.note(&text);
+                }
+            }
+        });
         let bench = self.clone();
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(Duration::from_secs(300));
@@ -139,6 +136,15 @@ impl Workbench {
 }
 
 /// The break coach's card: silent, with one button that turns the coach off.
+/// What tells a new copy from the last one: Windows' clipboard sequence number; elsewhere the
+/// text itself (KDE's Klipper keeps no number).
+async fn copy_stamp() -> String {
+    #[cfg(windows)]
+    return crate::win32::clipboard_sequence().to_string();
+    #[cfg(not(windows))]
+    crate::clipboard::read().await.unwrap_or_default()
+}
+
 pub fn break_card(stretch_secs: u64) -> crate::proactive_butler::Card {
     crate::proactive_butler::Card {
         title: "BREAK COACH".to_string(),
@@ -223,7 +229,7 @@ pub async fn run_tool(tools: &ToolContext, name: &str, args: &Value) -> Result<S
             #[cfg(windows)]
             let front = crate::win32::user_window().map(|w| (w.process, w.title));
             #[cfg(not(windows))]
-            let front: Option<(String, String)> = None;
+            let front = crate::winctl::kde_front().map(|w| (w.program(), w.title));
             let said = crate::shortcut_overlay::run_tool(args, front)?;
             show(tools, "shortcut_overlay", "Shortcuts", &said, 620.0, 520.0);
             Ok(said)

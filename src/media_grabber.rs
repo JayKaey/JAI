@@ -1,7 +1,7 @@
 //! The Media Grabber: "download this video as MP3 from 1:20 to 2:05." Takes a URL (or the address
 //! of the browser tab in front), runs yt-dlp in the background — MP4 into Downloads, MP3/WAV into
 //! Music — and cuts sections with ffmpeg. Local files are cut / converted with ffmpeg directly.
-//! Missing tools are installed on request through winget (yt-dlp, FFmpeg).
+//! Missing tools are installed on request through winget (yt-dlp, FFmpeg); Linux gets the pacman line.
 
 use crate::features::{find_tool, run, spoken, str_arg, user_folder};
 use crate::stark::StarkEvent;
@@ -88,7 +88,12 @@ async fn active_browser_url() -> Result<String, String> {
     }
     let url = crate::clipboard::read().await.unwrap_or_default();
     let _ = crate::clipboard::write(&before).await;
-    let url = url.trim().to_string();
+    address(&url)
+}
+
+/// A link from what the address bar held.
+fn address(copied: &str) -> Result<String, String> {
+    let url = copied.trim().to_string();
     if url.starts_with("http") {
         Ok(url)
     } else if !url.is_empty() && url.contains('.') && !url.contains(' ') {
@@ -98,11 +103,41 @@ async fn active_browser_url() -> Result<String, String> {
     }
 }
 
+/// The address of the browser in front (Ctrl+L, Ctrl+C, Escape; the clipboard is restored). The
+/// keys go only when a browser really has the focus: they would land in whatever Sir is using.
 #[cfg(not(windows))]
 async fn active_browser_url() -> Result<String, String> {
-    Err("Reading the browser's address needs Windows; give me the link, Sir.".into())
+    let copied = crate::kde::blocking(|| {
+        let front = crate::plasma::active().ok_or("I see no window in front, Sir.")?;
+        let who = format!("{} {}", front.app_id, front.resource_name).to_lowercase();
+        if !["firefox", "chrom", "brave", "vivaldi", "opera", "zen", "librewolf", "falkon", "epiphany"].iter().any(|b| who.contains(b)) {
+            return Err("No browser is in front, so I couldn't read an address. Give me the link, Sir.".to_string());
+        }
+        let layout = crate::plasma::layout();
+        let key = |name: &str| crate::plasma::key_code(name, &layout).ok_or_else(|| format!("no key named {name}"));
+        let (ctrl, l, c, esc) = (key("ctrl")?, key("l")?, key("c")?, key("escape")?);
+        let before = crate::clipboard::read_now().ok();
+        crate::plasma::chord(&[ctrl], l)?;
+        std::thread::sleep(Duration::from_millis(80));
+        crate::plasma::chord(&[ctrl], c)?;
+        std::thread::sleep(Duration::from_millis(120));
+        crate::plasma::chord(&[], esc)?;
+        let copied = crate::clipboard::read_now().unwrap_or_default();
+        if let Some(before) = before {
+            let _ = crate::clipboard::write_now(&before);
+        }
+        Ok(copied)
+    })
+    .await??;
+    address(&copied)
 }
 
+#[cfg(not(windows))]
+async fn install_tools() -> Result<String, String> {
+    Err("Install them with: sudo pacman -S yt-dlp ffmpeg. I cannot use sudo myself, Sir.".into())
+}
+
+#[cfg(windows)]
 async fn install_tools() -> Result<String, String> {
     let winget = crate::apps::which("winget").ok_or("winget is not available; install yt-dlp and FFmpeg manually.")?;
     let mut done = Vec::new();
@@ -181,7 +216,7 @@ impl MediaJobs {
         }
 
         let url = if raw.starts_with("http") { raw.clone() } else { active_browser_url().await? };
-        let ytdlp = find_tool("yt-dlp").ok_or("yt-dlp is not installed. Say \"install the media tools\" and I'll set up yt-dlp and FFmpeg through winget, Sir.")?;
+        let ytdlp = find_tool("yt-dlp").ok_or("yt-dlp is not installed. Say \"install the media tools\" and I'll set up yt-dlp and FFmpeg, Sir.")?;
         if (format != "mp4" || section.is_some()) && find_tool("ffmpeg").is_none() {
             return Err("Audio extraction and cutting need FFmpeg. Say \"install the media tools\", Sir.".into());
         }

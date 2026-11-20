@@ -91,6 +91,7 @@ pub fn stop() {
 }
 
 /// BGRA / BGRX rows → an RGBA image, every second pixel when wider than 960 px.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn bgra_to_image(data: &[u8], width: usize, height: usize, pitch: isize) -> Option<ColorImage> {
     if width == 0 || height == 0 {
         return None;
@@ -244,16 +245,253 @@ mod platform {
     }
 }
 
+/// Video4Linux2 through ioctls on /dev/video*: MJPEG when the camera offers it, else YUYV.
 #[cfg(not(windows))]
 mod platform {
     use eframe::egui::ColorImage;
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 
-    pub fn enumerate() -> Vec<String> {
-        Vec::new()
+    const fn ioc(dir: u32, nr: u32, size: usize) -> libc::c_ulong {
+        ((dir << 30) | ((size as u32) << 16) | (0x56 << 8) | nr) as libc::c_ulong
+    }
+    const QUERYCAP: libc::c_ulong = ioc(2, 0, size_of::<Capability>());
+    const S_FMT: libc::c_ulong = ioc(3, 5, size_of::<Format>());
+    const REQBUFS: libc::c_ulong = ioc(3, 8, size_of::<RequestBuffers>());
+    const QUERYBUF: libc::c_ulong = ioc(3, 9, size_of::<Buffer>());
+    const QBUF: libc::c_ulong = ioc(3, 15, size_of::<Buffer>());
+    const DQBUF: libc::c_ulong = ioc(3, 17, size_of::<Buffer>());
+    const STREAMON: libc::c_ulong = ioc(1, 18, 4);
+    const STREAMOFF: libc::c_ulong = ioc(1, 19, 4);
+    const CAPTURE: u32 = 1;
+    const MMAP: u32 = 1;
+    const MJPEG: u32 = u32::from_le_bytes(*b"MJPG");
+    const YUYV: u32 = u32::from_le_bytes(*b"YUYV");
+
+    /// linux/videodev2.h `struct v4l2_capability` (104 bytes).
+    #[repr(C)]
+    struct Capability {
+        driver: [u8; 16],
+        card: [u8; 32],
+        bus_info: [u8; 32],
+        version: u32,
+        capabilities: u32,
+        device_caps: u32,
+        reserved: [u32; 3],
     }
 
-    pub fn capture(_index: usize, _on_frame: &dyn Fn(ColorImage) -> bool) -> Result<(), String> {
-        Err("NO CAMERA SUPPORT".into())
+    /// `struct v4l2_format` with the pixel-format member of its union (208 bytes on 64-bit).
+    #[repr(C)]
+    struct Format {
+        kind: u32,
+        _pad: u32,
+        width: u32,
+        height: u32,
+        pixelformat: u32,
+        field: u32,
+        bytesperline: u32,
+        sizeimage: u32,
+        rest: [u32; 30],
+    }
+
+    /// `struct v4l2_requestbuffers` (20 bytes).
+    #[repr(C)]
+    struct RequestBuffers {
+        count: u32,
+        kind: u32,
+        memory: u32,
+        capabilities: u32,
+        flags: u8,
+        reserved: [u8; 3],
+    }
+
+    /// `struct v4l2_buffer` (88 bytes on 64-bit); `offset` is the `m` union.
+    #[repr(C)]
+    struct Buffer {
+        index: u32,
+        kind: u32,
+        bytesused: u32,
+        flags: u32,
+        field: u32,
+        _pad: u32,
+        timestamp: [i64; 2],
+        timecode: [u8; 16],
+        sequence: u32,
+        memory: u32,
+        offset: u64,
+        length: u32,
+        reserved2: u32,
+        request_fd: u32,
+        _pad2: u32,
+    }
+
+    fn zeroed<T>() -> T {
+        // SAFETY: only used for the plain-integer ioctl structs above, for which zero is valid.
+        unsafe { std::mem::zeroed() }
+    }
+
+    fn ioctl<T>(fd: &OwnedFd, request: libc::c_ulong, arg: &mut T) -> Result<(), String> {
+        // SAFETY: `arg` is a live repr(C) struct of the size the request number encodes.
+        if unsafe { libc::ioctl(fd.as_raw_fd(), request as _, arg as *mut T) } < 0 {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        Ok(())
+    }
+
+    fn open(path: &str) -> Result<OwnedFd, String> {
+        let c = std::ffi::CString::new(path).map_err(|e| e.to_string())?;
+        // SAFETY: a valid C string; the descriptor is owned right away.
+        let fd = unsafe { libc::open(c.as_ptr(), libc::O_RDWR | libc::O_CLOEXEC) };
+        if fd < 0 {
+            return Err(format!("CAMERA BUSY ({})", std::io::Error::last_os_error()));
+        }
+        // SAFETY: just opened, owned by nothing else.
+        Ok(unsafe { OwnedFd::from_raw_fd(fd) })
+    }
+
+    /// (device node, name) of every capture node, /dev/video0 first (metadata nodes left out).
+    fn nodes() -> Vec<(String, String)> {
+        let mut numbers: Vec<u32> = std::fs::read_dir("/dev").into_iter().flatten().flatten().filter_map(|e| e.file_name().to_str()?.strip_prefix("video")?.parse().ok()).collect();
+        numbers.sort_unstable();
+        numbers
+            .into_iter()
+            .filter_map(|n| {
+                let path = format!("/dev/video{n}");
+                let fd = open(&path).ok()?;
+                let mut cap: Capability = zeroed();
+                ioctl(&fd, QUERYCAP, &mut cap).ok()?;
+                let caps = if cap.capabilities & 0x8000_0000 != 0 { cap.device_caps } else { cap.capabilities };
+                let name = String::from_utf8_lossy(&cap.card).trim_end_matches('\0').to_string();
+                (caps & 1 != 0).then_some((path, name))
+            })
+            .collect()
+    }
+
+    pub fn enumerate() -> Vec<String> {
+        nodes().into_iter().map(|(_, name)| name).collect()
+    }
+
+    /// RGBA from packed YUYV (BT.601, limited range); None when the buffer is too short.
+    pub(super) fn yuyv_to_rgba(data: &[u8], width: usize, height: usize) -> Option<Vec<u8>> {
+        let data = data.get(..width * height * 2)?;
+        let clamp = |v: i32| v.clamp(0, 255) as u8;
+        let mut out = Vec::with_capacity(width * height * 4);
+        for quad in data.chunks_exact(4) {
+            let (u, v) = (i32::from(quad[1]) - 128, i32::from(quad[3]) - 128);
+            for y in [quad[0], quad[2]] {
+                let c = 298 * (i32::from(y) - 16);
+                out.extend_from_slice(&[clamp((c + 409 * v + 128) >> 8), clamp((c - 100 * u - 208 * v + 128) >> 8), clamp((c + 516 * u + 128) >> 8), 255]);
+            }
+        }
+        Some(out)
+    }
+
+    struct Mapped(*mut libc::c_void, usize);
+
+    impl Drop for Mapped {
+        fn drop(&mut self) {
+            // SAFETY: the pointer and length came from one successful mmap.
+            unsafe { libc::munmap(self.0, self.1) };
+        }
+    }
+
+    /// Reads frames until `on_frame` returns false.
+    pub fn capture(index: usize, on_frame: &dyn Fn(ColorImage) -> bool) -> Result<(), String> {
+        let nodes = nodes();
+        let (path, _) = nodes.get(index).or(nodes.first()).ok_or("NO CAMERA")?;
+        let fd = open(path)?;
+        let mut format: Format = zeroed();
+        let mut chosen = 0;
+        for (wanted, width, height) in [(MJPEG, 1280, 720), (YUYV, 640, 480)] {
+            (format.kind, format.width, format.height, format.pixelformat, format.field) = (CAPTURE, width, height, wanted, 1);
+            if ioctl(&fd, S_FMT, &mut format).is_ok() && format.pixelformat == wanted {
+                chosen = wanted;
+                break;
+            }
+        }
+        if chosen == 0 {
+            return Err("CAMERA FORMAT UNSUPPORTED".into());
+        }
+        let (width, height) = (format.width as usize, format.height as usize);
+        let mut request: RequestBuffers = zeroed();
+        (request.count, request.kind, request.memory) = (4, CAPTURE, MMAP);
+        ioctl(&fd, REQBUFS, &mut request).map_err(|e| format!("CAMERA BUFFERS ({e})"))?;
+        let mut maps = Vec::new();
+        for index in 0..request.count {
+            let mut buf: Buffer = zeroed();
+            (buf.index, buf.kind, buf.memory) = (index, CAPTURE, MMAP);
+            ioctl(&fd, QUERYBUF, &mut buf)?;
+            // SAFETY: maps the driver's own buffer at the offset it reported; checked below.
+            let ptr = unsafe { libc::mmap(std::ptr::null_mut(), buf.length as usize, libc::PROT_READ, libc::MAP_SHARED, fd.as_raw_fd(), buf.offset as libc::off_t) };
+            if ptr == libc::MAP_FAILED {
+                return Err(std::io::Error::last_os_error().to_string());
+            }
+            maps.push(Mapped(ptr, buf.length as usize));
+            ioctl(&fd, QBUF, &mut buf)?;
+        }
+        let mut on = CAPTURE as i32;
+        ioctl(&fd, STREAMON, &mut on).map_err(|e| format!("CAMERA BUSY ({e})"))?;
+        let mut bad = 0;
+        let result = loop {
+            let mut ready = libc::pollfd { fd: fd.as_raw_fd(), events: libc::POLLIN, revents: 0 };
+            // SAFETY: one valid pollfd.
+            if unsafe { libc::poll(&mut ready, 1, 3000) } <= 0 {
+                break Err("CAMERA STOPPED".to_string());
+            }
+            let mut buf: Buffer = zeroed();
+            (buf.kind, buf.memory) = (CAPTURE, MMAP);
+            if let Err(e) = ioctl(&fd, DQBUF, &mut buf) {
+                break Err(e);
+            }
+            let map = &maps[buf.index as usize];
+            // SAFETY: the mapping is `map.1` bytes long and stays alive until `maps` drops.
+            let data = unsafe { std::slice::from_raw_parts(map.0 as *const u8, (buf.bytesused as usize).min(map.1)) };
+            let image = if chosen == MJPEG {
+                image::load_from_memory_with_format(data, image::ImageFormat::Jpeg).ok().map(|i| {
+                    let rgba = i.to_rgba8();
+                    ColorImage::from_rgba_unmultiplied([rgba.width() as usize, rgba.height() as usize], rgba.as_raw())
+                })
+            } else {
+                yuyv_to_rgba(data, width, height).map(|rgba| ColorImage::from_rgba_unmultiplied([width, height], &rgba))
+            };
+            let _ = ioctl(&fd, QBUF, &mut buf);
+            match image {
+                Some(image) => {
+                    bad = 0;
+                    if !on_frame(image) {
+                        break Ok(());
+                    }
+                }
+                None => {
+                    bad += 1;
+                    if bad > 30 {
+                        break Err("CAMERA SENDS BAD FRAMES".to_string());
+                    }
+                }
+            }
+        };
+        let _ = ioctl(&fd, STREAMOFF, &mut on);
+        result
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn v4l2_structs_match_videodev2_h_and_yuyv_converts() {
+            assert_eq!(size_of::<Capability>(), 104);
+            assert_eq!(size_of::<Format>(), 208);
+            assert_eq!(size_of::<RequestBuffers>(), 20);
+            assert_eq!(size_of::<Buffer>(), 88);
+            assert_eq!(QUERYCAP, 0x8068_5600);
+            assert_eq!(S_FMT, 0xC0D0_5605);
+            assert_eq!(DQBUF, 0xC058_5611);
+            // Two pixels: white (Y 235) and black (Y 16) with neutral chroma.
+            let rgba = yuyv_to_rgba(&[235, 128, 16, 128], 2, 1).unwrap();
+            assert_eq!(&rgba[..4], &[255, 255, 255, 255]);
+            assert_eq!(&rgba[4..], &[0, 0, 0, 255]);
+            assert!(yuyv_to_rgba(&[0; 3], 2, 1).is_none());
+        }
     }
 }
 

@@ -57,14 +57,12 @@ pub fn target(monitors: &[([i32; 4], bool)], hud: Option<[i32; 4]>, board: bool)
 pub struct Refused(pub String);
 
 /// The rect of the monitor the HUD's window (`hwnd`) is on.
-#[cfg(windows)]
 fn monitor_of(hwnd: isize) -> Option<[i32; 4]> {
-    (hwnd != 0).then(|| crate::win32::window_display_rect(hwnd)).flatten()
-}
-
-#[cfg(not(windows))]
-fn monitor_of(_hwnd: isize) -> Option<[i32; 4]> {
-    None
+    #[cfg(windows)]
+    use crate::win32 as wm;
+    #[cfg(not(windows))]
+    use crate::x11 as wm;
+    (hwnd != 0).then(|| wm::window_display_rect(hwnd)).flatten()
 }
 
 /// The upright monitor the dashboard takes: the first that is taller than wide and does not
@@ -151,14 +149,8 @@ pub fn show(ctx: &egui::Context, on: bool, hud: isize, spanning: bool, board: bo
     None
 }
 
-#[cfg(windows)]
 fn displays() -> Vec<([i32; 4], bool)> {
-    crate::win32::displays().into_iter().map(|d| (d.rect, d.primary)).collect()
-}
-
-#[cfg(not(windows))]
-fn displays() -> Vec<([i32; 4], bool)> {
-    Vec::new()
+    crate::monitors::list().into_iter().map(|m| (m.rect, m.primary)).collect()
 }
 
 #[cfg(windows)]
@@ -187,12 +179,21 @@ fn keep(hwnd: isize) {
     });
 }
 
+/// KDE: no desktop takes a window behind its icons; it stands under every other window over
+/// its monitor instead, taking no clicks, and KWin keeps it there.
 #[cfg(not(windows))]
 fn keep(_hwnd: isize) {}
 
 #[cfg(not(windows))]
-fn attach(_monitor: [i32; 4]) {
-    *lock(&ATTACHED) = Some(Err("only on Windows".to_string()));
+fn attach(monitor: [i32; 4]) {
+    let result = crate::x11::own_window(TITLE).ok_or_else(|| "its window did not open".to_string()).map(|hwnd| {
+        crate::wallpaper::stand(hwnd, Some(monitor));
+        if let Err(why) = crate::x11::click_through(hwnd, true) {
+            tracing::warn!("[DESKTOP] The live background takes clicks still: {why}");
+        }
+        hwnd
+    });
+    *lock(&ATTACHED) = Some(result);
 }
 
 /// The background's picture: the obsidian canvas, the emblem at rest, the clock and the date

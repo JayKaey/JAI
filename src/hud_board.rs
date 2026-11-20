@@ -2269,7 +2269,6 @@ impl BoardView {
         card.seen = true;
         // The spotlight: its window grows on the monitor it stands on, and goes back to where
         // it stood.
-        #[cfg(windows)]
         if spot != card.small.is_some() {
             if let Some(window) = crate::own_windows::list().into_iter().find(|w| w.title == card.title) {
                 let [l, t, r, b] = window.rect;

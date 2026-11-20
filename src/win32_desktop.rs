@@ -225,8 +225,7 @@ fn covers(own: bool, title: &str) -> bool {
     !own || !(title.is_empty() || title == ORB_TITLE)
 }
 
-/// The corner orb's window, by its title.
-pub const ORB_TITLE: &str = "J.A.I. // orb";
+use crate::wallpaper::ORB_TITLE;
 
 /// The window in front, when it is one of his own.
 pub fn foreground_own() -> Option<isize> {

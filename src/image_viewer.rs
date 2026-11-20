@@ -1025,8 +1025,10 @@ pub(crate) fn known_folder(name: &str) -> Option<PathBuf> {
 }
 
 #[cfg(not(windows))]
-pub(crate) fn known_folder(_name: &str) -> Option<PathBuf> {
-    None
+pub(crate) fn known_folder(name: &str) -> Option<PathBuf> {
+    // Spectacle saves its shots in a Screenshots folder inside Pictures.
+    let dir = if name == "Screenshots" { crate::features::user_folder("Pictures").join("Screenshots") } else { crate::features::xdg_folder(name)? };
+    dir.is_dir().then_some(dir)
 }
 
 /// Sir's folder `name` (the shell's answer, else the usual place).

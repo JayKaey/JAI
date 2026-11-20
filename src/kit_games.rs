@@ -83,14 +83,17 @@ fn steam_path_from_registry() -> Option<PathBuf> {
     Some(PathBuf::from(String::from_utf16_lossy(&buf[..len])))
 }
 
+/// Steam's folder on Linux: its own link in the home folder, else the XDG data folder.
 #[cfg(not(windows))]
 fn steam_path_from_registry() -> Option<PathBuf> {
-    None
+    let home = PathBuf::from(std::env::var_os("HOME")?);
+    [home.join(".steam").join("steam"), home.join(".local").join("share").join("Steam")].into_iter().find(|p| p.join("steamapps").is_dir())
 }
 
 /// Every Steam library's `steamapps` folder.
 fn steam_libraries() -> Vec<PathBuf> {
-    let Some(root) = steam_path_from_registry().or_else(|| Some(PathBuf::from(r"C:\Program Files (x86)\Steam"))).filter(|p| p.join("steamapps").is_dir()) else {
+    let default = cfg!(windows).then(|| PathBuf::from(r"C:\Program Files (x86)\Steam"));
+    let Some(root) = steam_path_from_registry().or(default).filter(|p| p.join("steamapps").is_dir()) else {
         return Vec::new();
     };
     let mut libs = vec![root.join("steamapps")];
@@ -896,9 +899,57 @@ pub fn vram_by_program() -> Vec<(String, u64)> {
     out
 }
 
+/// One DRM client's video memory in KiB from a `/proc/<pid>/fdinfo/<fd>` file: (client id, KiB).
+/// The kernel's AMD and Intel drivers write "drm-memory-vram:" or "drm-total-vram0:" lines.
+#[cfg(any(not(windows), test))]
+fn drm_vram_kib(fdinfo: &str) -> Option<(u64, u64)> {
+    let value = |key: &str| fdinfo.lines().find_map(|l| l.strip_prefix(key)?.strip_prefix(':')).map(str::trim);
+    let id = value("drm-client-id")?.parse().ok()?;
+    let kib = fdinfo.lines().filter(|l| l.starts_with("drm-memory-vram") || l.starts_with("drm-total-vram")).filter_map(|l| l.split_once(':')?.1.split_whitespace().next()?.parse::<u64>().ok()).max()?;
+    Some((id, kib))
+}
+
+/// `nvidia-smi --query-compute-apps=pid,used_memory --format=csv,noheader,nounits`: (pid, MiB).
+#[cfg(any(not(windows), test))]
+fn nvidia_apps(csv: &str) -> Vec<(u32, u64)> {
+    csv.lines().filter_map(|l| l.split_once(',').and_then(|(pid, mb)| Some((pid.trim().parse().ok()?, mb.trim().parse().ok()?)))).collect()
+}
+
+/// Video memory per program on Linux: the DRM clients' fdinfo (AMD, Intel) and, for NVIDIA's
+/// driver, which writes none, `nvidia-smi`.
 #[cfg(not(windows))]
 pub fn vram_by_program() -> Vec<(String, u64)> {
-    Vec::new()
+    let mut per_pid: std::collections::HashMap<u32, u64> = std::collections::HashMap::new();
+    for entry in std::fs::read_dir("/proc").into_iter().flatten().flatten() {
+        let Some(pid) = entry.file_name().to_str().and_then(|n| n.parse::<u32>().ok()) else { continue };
+        let mut seen = std::collections::HashSet::new();
+        for fd in std::fs::read_dir(entry.path().join("fdinfo")).into_iter().flatten().flatten() {
+            if let Some((client, kib)) = std::fs::read_to_string(fd.path()).ok().as_deref().and_then(drm_vram_kib) {
+                if seen.insert(client) {
+                    *per_pid.entry(pid).or_default() += kib / 1024;
+                }
+            }
+        }
+    }
+    if let Ok(out) = std::process::Command::new("nvidia-smi").args(["--query-compute-apps=pid,used_memory", "--format=csv,noheader,nounits"]).stderr(std::process::Stdio::null()).output() {
+        for (pid, mb) in nvidia_apps(&String::from_utf8_lossy(&out.stdout)) {
+            *per_pid.entry(pid).or_default() += mb;
+        }
+    }
+    let mut sys = sysinfo::System::new();
+    sys.refresh_processes_specifics(sysinfo::ProcessesToUpdate::All, sysinfo::ProcessRefreshKind::new());
+    let mut per_name: Vec<(String, u64)> = Vec::new();
+    for (pid, mb) in per_pid {
+        let Some(p) = sys.process(sysinfo::Pid::from_u32(pid)) else { continue };
+        let name = p.name().to_string_lossy().to_string();
+        match per_name.iter_mut().find(|(n, _)| *n == name) {
+            Some((_, m)) => *m += mb,
+            None => per_name.push((name, mb)),
+        }
+    }
+    per_name.retain(|(_, mb)| *mb >= 50);
+    per_name.sort_by(|a, b| b.1.cmp(&a.1));
+    per_name
 }
 
 fn vram_report() -> String {
@@ -915,6 +966,27 @@ fn vram_report() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn video_memory_is_read_from_the_drm_and_nvidia_outputs() {
+        let info = "pos:	0
+drm-driver:	amdgpu
+drm-client-id:	42
+drm-memory-gtt:	1000 KiB
+drm-memory-vram:	524288 KiB
+";
+        assert_eq!(drm_vram_kib(info), Some((42, 524288)));
+        assert_eq!(drm_vram_kib("drm-client-id:	7
+drm-total-vram0:	2048 KiB
+"), Some((7, 2048)));
+        assert_eq!(drm_vram_kib("pos:	0
+flags:	02
+"), None);
+        assert_eq!(nvidia_apps("1234, 2048
+99, 12
+not a row
+"), [(1234, 2048), (99, 12)]);
+    }
 
     #[test]
     fn games_are_named_the_way_he_says_them() {

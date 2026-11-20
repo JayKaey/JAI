@@ -69,14 +69,16 @@ pub(crate) async fn ping(host: &str, label: &str, count: usize) -> PingStats {
 }
 
 pub(crate) async fn gateway() -> Option<String> {
-    if !cfg!(windows) {
-        return None;
+    #[cfg(not(windows))]
+    return crate::network_radar::default_gateway().map(|ip| ip.to_string());
+    #[cfg(windows)]
+    {
+        powershell("(Get-NetRoute -DestinationPrefix '0.0.0.0/0' | Sort-Object RouteMetric | Select-Object -First 1).NextHop", Duration::from_secs(10))
+            .await
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty() && s != "0.0.0.0")
     }
-    powershell("(Get-NetRoute -DestinationPrefix '0.0.0.0/0' | Sort-Object RouteMetric | Select-Object -First 1).NextHop", Duration::from_secs(10))
-        .await
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty() && s != "0.0.0.0")
 }
 
 async fn ping_report(tools: &ToolContext) -> (String, String) {
@@ -115,14 +117,16 @@ async fn ping_report(tools: &ToolContext) -> (String, String) {
 
 /// The processes moving the most data right now (network + disk I/O) and the busiest connections.
 async fn bandwidth_report() -> (String, String) {
-    if !cfg!(windows) {
-        return (String::new(), "Bandwidth analysis needs Windows.".into());
-    }
+    #[cfg(windows)]
     let script = r#"$nic = Get-CimInstance Win32_PerfFormattedData_Tcpip_NetworkInterface | Measure-Object -Property BytesReceivedPersec,BytesSentPersec -Sum
 "NIC|" + [math]::Round(($nic | Where-Object Property -eq 'BytesReceivedPersec').Sum) + "|" + [math]::Round(($nic | Where-Object Property -eq 'BytesSentPersec').Sum)
 Get-CimInstance Win32_PerfFormattedData_PerfProc_Process | Where-Object { $_.Name -ne '_Total' -and $_.Name -ne 'Idle' } | Sort-Object IODataBytesPersec -Descending | Select-Object -First 6 | ForEach-Object { "IO|" + $_.Name + "|" + $_.IODataBytesPersec + "|" + $_.IDProcess }
 Get-NetTCPConnection -State Established -ErrorAction SilentlyContinue | Where-Object { $_.RemoteAddress -notmatch '^(127\.|::1|0\.)' } | Group-Object OwningProcess | Sort-Object Count -Descending | Select-Object -First 5 | ForEach-Object { $p = Get-Process -Id $_.Name -ErrorAction SilentlyContinue; "TCP|" + ($(if ($p) { $p.ProcessName } else { $_.Name })) + "|" + $_.Count }"#;
-    let out = match powershell(script, Duration::from_secs(25)).await {
+    #[cfg(windows)]
+    let measured = powershell(script, Duration::from_secs(25)).await;
+    #[cfg(not(windows))]
+    let measured = tokio::task::spawn_blocking(linux_traffic).await.map_err(|e| e.to_string());
+    let out = match measured {
         Ok(o) => o,
         Err(e) => return (String::new(), format!("I couldn't read the traffic counters: {e}")),
     };
@@ -264,7 +268,7 @@ async fn lan_report() -> (String, String) {
         }
     }
     tokio::time::sleep(Duration::from_millis(1800)).await;
-    let arp = run(Path::new("arp"), &["-a"], None, Duration::from_secs(10)).await.map(|o| o.stdout).unwrap_or_default();
+    let arp = if cfg!(windows) { run(Path::new("arp"), &["-a"], None, Duration::from_secs(10)).await.map(|o| o.stdout).unwrap_or_default() } else { proc_arp() };
     let prefix = format!("{}.{}.{}.", o[0], o[1], o[2]);
     let devices: Vec<(String, String)> = parse_arp(&arp).into_iter().filter(|(ip, _)| ip.starts_with(&prefix)).collect();
     // Names from the router's DNS (FRITZ!Box and most routers know them).
@@ -277,6 +281,14 @@ async fn lan_report() -> (String, String) {
             .lines()
             .filter_map(|l| l.split_once('|').map(|(a, b)| (a.trim().to_string(), b.trim().trim_end_matches('.').to_string())))
             .collect()
+    } else if !devices.is_empty() {
+        // Linux: the system resolver (the router's DNS, mDNS), all devices at once, a few seconds at most.
+        let asks = devices.iter().map(|(ip, _)| {
+            let ip = ip.clone();
+            async move { (ip.clone(), tokio::task::spawn_blocking(move || ip.parse().ok().and_then(crate::network_radar::host_name)).await.ok().flatten()) }
+        });
+        let found = tokio::time::timeout(Duration::from_secs(6), futures_util::future::join_all(asks)).await.unwrap_or_default();
+        found.into_iter().filter_map(|(ip, name)| Some((ip, name?))).collect()
     } else {
         Default::default()
     };
@@ -291,6 +303,76 @@ async fn lan_report() -> (String, String) {
     }
     let summary = kinds.iter().map(|(k, n)| format!("{n} {k}")).collect::<Vec<_>>().join(", ");
     (md, format!("{} devices besides this PC are on the network{}.", devices.len(), if summary.is_empty() { String::new() } else { format!(": {summary}") }))
+}
+
+/// `/proc/net/arp` in the shape `parse_arp` reads: "ip mac dynamic" for each complete entry.
+fn proc_arp() -> String {
+    let table = std::fs::read_to_string("/proc/net/arp").unwrap_or_default();
+    table.lines().skip(1).filter_map(|l| l.split_whitespace().collect::<Vec<_>>().get(..4).filter(|f| f[2] != "0x0").map(|f| format!("{} {} dynamic
+", f[0], f[3]))).collect()
+}
+
+/// The sockets of `/proc/net/tcp` and `tcp6` that are established with a remote that is not this PC: their inodes.
+#[cfg(not(windows))]
+fn established_inodes(text: &str) -> Vec<u64> {
+    text.lines()
+        .skip(1)
+        .filter_map(|l| {
+            let f: Vec<&str> = l.split_whitespace().collect();
+            let remote = f.get(2)?.split(':').next()?;
+            let local_peer = remote.ends_with("7F") && (remote.len() == 8 || remote.starts_with("0000000000000000FFFF0000")) || remote == "00000000000000000000000001000000";
+            (*f.get(3)? == "01" && !local_peer).then(|| f.get(9)?.parse().ok())?
+        })
+        .collect()
+}
+
+/// The traffic counters in the lines `bandwidth_report` reads (`NIC|down|up`, `IO|name|bytes|pid`,
+/// `TCP|name|count`), measured over one second from /proc.
+#[cfg(not(windows))]
+fn linux_traffic() -> String {
+    use std::collections::HashMap;
+    let nic = || {
+        let text = std::fs::read_to_string("/proc/net/dev").unwrap_or_default();
+        text.lines().skip(2).filter_map(|l| l.split_once(':')).filter(|(n, _)| n.trim() != "lo").fold((0u64, 0u64), |(rx, tx), (_, v)| {
+            let f: Vec<u64> = v.split_whitespace().filter_map(|x| x.parse().ok()).collect();
+            (rx + f.first().copied().unwrap_or(0), tx + f.get(8).copied().unwrap_or(0))
+        })
+    };
+    let pids = || -> Vec<u32> { std::fs::read_dir("/proc").into_iter().flatten().flatten().filter_map(|e| e.file_name().to_str()?.parse().ok()).collect() };
+    let io = |pid: u32| -> Option<u64> {
+        let text = std::fs::read_to_string(format!("/proc/{pid}/io")).ok()?;
+        let n = |key: &str| text.lines().find_map(|l| l.strip_prefix(key)?.trim().parse::<u64>().ok());
+        Some(n("rchar:")? + n("wchar:")?)
+    };
+    let name = |pid: u32| std::fs::read_to_string(format!("/proc/{pid}/comm")).map(|s| s.trim().to_string()).unwrap_or_default();
+    let (before, io_before) = (nic(), pids().into_iter().filter_map(|p| Some((p, io(p)?))).collect::<HashMap<_, _>>());
+    std::thread::sleep(Duration::from_secs(1));
+    let after = nic();
+    let mut out = format!("NIC|{}|{}
+", after.0.saturating_sub(before.0), after.1.saturating_sub(before.1));
+    let mut busy: Vec<(u64, u32)> = io_before.iter().filter_map(|(p, was)| Some((io(*p)?.saturating_sub(*was), *p))).collect();
+    busy.sort_unstable_by(|a, b| b.cmp(a));
+    for (bytes, pid) in busy.into_iter().take(6) {
+        out.push_str(&format!("IO|{}|{bytes}|{pid}
+", name(pid)));
+    }
+    let sockets: Vec<u64> = ["/proc/net/tcp", "/proc/net/tcp6"].iter().flat_map(|f| established_inodes(&std::fs::read_to_string(f).unwrap_or_default())).collect();
+    let mut per_process: HashMap<u32, usize> = HashMap::new();
+    for pid in pids() {
+        for fd in std::fs::read_dir(format!("/proc/{pid}/fd")).into_iter().flatten().flatten() {
+            let link = std::fs::read_link(fd.path()).unwrap_or_default();
+            if link.to_str().and_then(|l| l.strip_prefix("socket:[")?.strip_suffix(']')?.parse::<u64>().ok()).is_some_and(|i| sockets.contains(&i)) {
+                *per_process.entry(pid).or_default() += 1;
+            }
+        }
+    }
+    let mut top: Vec<(usize, u32)> = per_process.into_iter().map(|(p, n)| (n, p)).collect();
+    top.sort_unstable_by(|a, b| b.cmp(a));
+    for (count, pid) in top.into_iter().take(5) {
+        out.push_str(&format!("TCP|{}|{count}
+", name(pid)));
+    }
+    out
 }
 
 /// A short noun for the spoken summary.
@@ -377,5 +459,16 @@ mod tests {
         assert_eq!(vendor(&devices[1].1), "Raspberry Pi");
         assert_eq!(vendor("DA:11:22:33:44:55"), "private address (phone / tablet with Wi-Fi privacy)");
         assert_eq!(guess_kind("iPhone-von-Max", "Apple"), "phone or tablet");
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn linux_tcp_and_arp_tables() {
+        let tcp = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+   0: 0100007F:1F90 0100007F:C350 01 00000000:00000000 00:00000000 00000000  1000        0 11111 1 0 100 0
+   1: 0A01A8C0:C351 22D8B8AC:01BB 01 00000000:00000000 00:00000000 00000000  1000        0 22222 1 0 100 0
+   2: 0A01A8C0:C352 22D8B8AC:01BB 06 00000000:00000000 00:00000000 00000000  1000        0 33333 1 0 100 0
+";
+        assert_eq!(established_inodes(tcp), vec![22222]);
     }
 }

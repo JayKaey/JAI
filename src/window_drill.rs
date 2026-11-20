@@ -343,14 +343,10 @@ fn close(a: [i32; 4], b: [i32; 4]) -> bool {
 /// minimised or gone).
 fn window_rect(hwnd: isize) -> Option<([i32; 4], bool)> {
     #[cfg(windows)]
-    {
-        crate::win32::window_state(hwnd).filter(|(_, _, minimised)| !minimised).map(|(r, maximised, _)| (r, maximised))
-    }
+    use crate::win32 as wm;
     #[cfg(not(windows))]
-    {
-        let _ = hwnd;
-        None
-    }
+    use crate::x11 as wm;
+    wm::window_state(hwnd).filter(|(_, _, minimised)| !minimised).map(|(r, maximised, _)| (r, maximised))
 }
 
 fn holds(expect: &Expect, hwnd: isize) -> bool {
@@ -402,6 +398,7 @@ fn post(hwnd: isize, msg: u32, wparam: usize, lparam: isize) {
 
 /// The key message's lParam: repeat count 1 and the scan code; a release also carries "was
 /// down" and "going up".
+#[cfg_attr(not(windows), allow(dead_code))]
 fn key_lparam(scan: u32, down: bool) -> u32 {
     1 | (scan << 16) | if down { 0 } else { (1 << 30) | (1 << 31) }
 }

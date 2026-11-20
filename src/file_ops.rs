@@ -547,7 +547,17 @@ pub async fn open_with(path: &Path, with: Option<&str>) -> Result<String, String
                 crate::win32::call(move || crate::win32::shell_execute("explorer.exe", Some(&format!("/select,\"{p}\"")), None)).await??;
             }
             #[cfg(not(windows))]
-            open_path(path.parent().unwrap_or(path)).await?;
+            {
+                // Dolphin (or any file manager) selects the item; without one, its folder opens.
+                let uri = file_uri(path);
+                let shown_in_manager = crate::kde::blocking(move || {
+                    crate::kde::call::<_, ()>("org.freedesktop.FileManager1", "/org/freedesktop/FileManager1", "org.freedesktop.FileManager1", "ShowItems", &(vec![uri], ""))
+                })
+                .await?;
+                if shown_in_manager.is_err() {
+                    open_path(path.parent().unwrap_or(path)).await?;
+                }
+            }
             Ok(format!("Showed {shown} in the file manager."))
         }
         _ => {
@@ -555,6 +565,15 @@ pub async fn open_with(path: &Path, with: Option<&str>) -> Result<String, String
             Ok(format!("Opened {shown}."))
         }
     }
+}
+
+/// `file:///home/max/My%20Docs` for a path (the form the file-manager service takes).
+#[cfg(not(windows))]
+pub(crate) fn file_uri(path: &Path) -> String {
+    path.to_string_lossy().bytes().fold("file://".to_string(), |mut s, b| {
+        if b.is_ascii_alphanumeric() || b"/-_.~".contains(&b) { s.push(b as char) } else { s.push_str(&format!("%{b:02X}")) }
+        s
+    })
 }
 
 async fn open_path(path: &Path) -> Result<(), String> {
@@ -1268,6 +1287,12 @@ pub fn tool_definitions() -> Vec<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(windows))]
+    #[test]
+    fn file_uri_escapes_spaces_and_umlauts() {
+        assert_eq!(file_uri(Path::new("/home/max/My Docs/ä.txt")), "file:///home/max/My%20Docs/%C3%A4.txt");
+    }
 
     fn temp_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("jai_file_ops_{name}_{}", std::process::id()));

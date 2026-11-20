@@ -1,6 +1,8 @@
 //! Notification-area (tray) icon: shows that JAI is running in the background and offers
-//! Open HUD, a microphone toggle and Quit. Runs its own Win32 message loop on a dedicated thread,
-//! which also receives the "show your HUD" request of a second `JAI.exe`.
+//! Open HUD, a microphone toggle and Quit. On Windows it runs its own Win32 message loop on a
+//! dedicated thread, which also receives the "show your HUD" request of a second `JAI.exe`; on
+//! Linux it is a StatusNotifierItem with its menu on the session bus (KDE Plasma's tray), where
+//! J.A.I.'s own bus name takes that request.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrayAction {
@@ -37,27 +39,97 @@ pub struct TrayState {
 pub use win::{ask_test_session_to_give_way, remove, show_running_instance, spawn};
 
 #[cfg(not(windows))]
-pub fn spawn(_actions: tokio::sync::mpsc::UnboundedSender<TrayAction>, _state: impl Fn() -> TrayState + Send + Sync + 'static) {}
+pub use sni::{ask_test_session_to_give_way, own_bus_name, release_bus_name, remove, show_running_instance, spawn, test_session_running, INSTANCE, TEST_SESSION};
 
-#[cfg(not(windows))]
-pub fn remove() {}
+const CMD_OPEN: usize = 1;
+const CMD_MIC: usize = 2;
+const CMD_QUIT: usize = 3;
+const CMD_WAKE: usize = 4;
+const CMD_LOCK: usize = 5;
+const CMD_GUESTS: usize = 6;
+const CMD_NIGHT: usize = 7;
+const CMD_STANDBY: usize = 8;
+const CMD_GAME: usize = 9;
 
-/// Asks an already running JAI to show its HUD. False when none could be reached.
-#[cfg(not(windows))]
-pub fn show_running_instance() -> bool {
-    false
+/// When he started ("Fri 06:40"), for the menu's first line.
+static SINCE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// The menu's lines from the top: (command, text, its tick, enabled). An empty text is a
+/// separator; command 0 does nothing.
+fn menu_lines(now: TrayState) -> Vec<(usize, String, Option<bool>, bool)> {
+    // The first line says who is running and since when (greyed: it is no command).
+    let since = SINCE.get().map_or("a moment ago", String::as_str);
+    let line = |command: usize, text: &str, tick: Option<bool>| (command, text.to_string(), tick, true);
+    let mut lines = vec![
+        (0, format!("J.A.I. {} \u{2014} running since {since}", env!("CARGO_PKG_VERSION")), None, false),
+        line(CMD_OPEN, "Open HUD", None),
+        line(0, "", None),
+        line(CMD_MIC, "Microphone on", Some(now.mic_on)),
+        line(CMD_LOCK, "Obey only my voice", Some(now.voice_lock)),
+        line(CMD_GUESTS, "Guests may speak (30 minutes)", Some(now.guests)),
+        line(CMD_NIGHT, "Night mode", Some(now.night)),
+        line(0, "", None),
+        line(CMD_GAME, "Game mode (brain in RAM, GPU free)", Some(now.game)),
+    ];
+    // One line for the standby, saying what a click does from where he stands. (In game mode
+    // the GPU is free already: no standby line.)
+    if !now.game {
+        lines.push(if now.dormant { line(CMD_WAKE, "Wake JAI (load models)", None) } else { line(CMD_STANDBY, "Standby (free the graphics memory)", None) });
+    }
+    lines.push(line(0, "", None));
+    lines.push(line(CMD_QUIT, "Quit J.A.I.", None));
+    lines
 }
 
-/// Asks a running test session to end, for the JAI Sir just started. False when none could
-/// be reached.
-#[cfg(not(windows))]
-pub fn ask_test_session_to_give_way() -> bool {
-    false
+/// What picking the menu's line `command` asks for.
+fn picked(command: usize, now: TrayState) -> Option<TrayAction> {
+    Some(match command {
+        CMD_OPEN => TrayAction::OpenHud,
+        CMD_MIC => TrayAction::ToggleMic,
+        CMD_WAKE => TrayAction::WakeJai,
+        CMD_STANDBY => TrayAction::Standby,
+        CMD_LOCK => TrayAction::VoiceLock(!now.voice_lock),
+        CMD_GUESTS => TrayAction::Guests(!now.guests),
+        CMD_NIGHT => TrayAction::Night(!now.night),
+        CMD_GAME => TrayAction::GameMode(!now.game),
+        CMD_QUIT => TrayAction::Quit,
+        _ => return None,
+    })
+}
+
+/// The colour of the dot the icon shows (0xRRGGBB): violet in game mode, grey in standby or
+/// with the microphone off, amber while he thinks, green while he listens.
+fn dot_colour(s: TrayState) -> u32 {
+    if s.game {
+        0x9B6BFF
+    } else if s.dormant || !s.mic_on {
+        0x8A96A3
+    } else if s.thinking {
+        0xFFA530
+    } else {
+        0x3EE07A
+    }
+}
+
+/// Pixel `i` (row by row) of a `size`-square icon that wears a dot of `rgb` in its lower right
+/// corner: the dot's colour or its dark rim (0xAARRGGBB), None off the dot.
+fn dot_pixel(size: i32, i: usize, rgb: u32) -> Option<u32> {
+    let r = size as f32 * 0.22;
+    let c = size as f32 - r - 0.5;
+    let (x, y) = ((i as i32 % size) as f32 + 0.5, (i as i32 / size) as f32 + 0.5);
+    let d = ((x - c).powi(2) + (y - c).powi(2)).sqrt();
+    if d <= r {
+        Some(0xFF00_0000 | rgb)
+    } else if d <= r + 1.2 {
+        Some(0xFF10_1418)
+    } else {
+        None
+    }
 }
 
 #[cfg(windows)]
 mod win {
-    use super::{TrayAction, TrayState};
+    use super::{picked, TrayAction, TrayState, SINCE};
     use std::sync::atomic::{AtomicIsize, AtomicU32, Ordering};
     use std::sync::OnceLock;
     use tokio::sync::mpsc::UnboundedSender;
@@ -83,15 +155,6 @@ mod win {
     /// Posted by the `JAI.exe` Sir started while a test session holds the place: it ends.
     const GIVE_WAY_MESSAGE: PCWSTR = w!("JAI_GIVE_WAY");
     const ICON_ID: u32 = 1;
-    const CMD_OPEN: usize = 1;
-    const CMD_MIC: usize = 2;
-    const CMD_QUIT: usize = 3;
-    const CMD_WAKE: usize = 4;
-    const CMD_LOCK: usize = 5;
-    const CMD_GUESTS: usize = 6;
-    const CMD_NIGHT: usize = 7;
-    const CMD_STANDBY: usize = 8;
-    const CMD_GAME: usize = 9;
 
     struct Tray {
         actions: UnboundedSender<TrayAction>,
@@ -99,8 +162,6 @@ mod win {
     }
 
     static TRAY: OnceLock<Tray> = OnceLock::new();
-    /// When he started ("Fri 06:40"), for the menu's first line.
-    static SINCE: OnceLock<String> = OnceLock::new();
     static WINDOW: AtomicIsize = AtomicIsize::new(0);
     static TASKBAR_CREATED: AtomicU32 = AtomicU32::new(0);
     static SHOW_HUD: AtomicU32 = AtomicU32::new(0);
@@ -249,24 +310,10 @@ mod win {
     static DOT: AtomicU32 = AtomicU32::new(0);
     static DOTTED: AtomicIsize = AtomicIsize::new(0);
 
-    /// Violet in game mode, grey in standby or with the microphone off, amber while he thinks,
-    /// green while he listens.
-    pub(super) fn dot_colour(s: TrayState) -> u32 {
-        if s.game {
-            0x9B6BFF
-        } else if s.dormant || !s.mic_on {
-            0x8A96A3
-        } else if s.thinking {
-            0xFFA530
-        } else {
-            0x3EE07A
-        }
-    }
-
     /// Once a second: a new icon when his state's colour has changed.
     unsafe fn refresh_icon(hwnd: HWND) {
         let Some(tray) = TRAY.get() else { return };
-        let colour = dot_colour((tray.state)());
+        let colour = super::dot_colour((tray.state)());
         if DOT.load(Ordering::Acquire) == colour {
             return;
         }
@@ -305,15 +352,9 @@ mod win {
         if read != size {
             return None;
         }
-        let r = size as f32 * 0.22;
-        let c = size as f32 - r - 0.5;
         for (i, p) in px.iter_mut().enumerate() {
-            let (x, y) = ((i as i32 % size) as f32 + 0.5, (i as i32 / size) as f32 + 0.5);
-            let d = ((x - c).powi(2) + (y - c).powi(2)).sqrt();
-            if d <= r {
-                *p = 0xFF00_0000 | rgb;
-            } else if d <= r + 1.2 {
-                *p = 0xFF10_1418;
+            if let Some(dot) = super::dot_pixel(size, i, rgb) {
+                *p = dot;
             }
         }
         let colour = CreateBitmap(size, size, 1, 32, Some(px.as_ptr().cast()));
@@ -327,48 +368,29 @@ mod win {
     unsafe fn show_menu(hwnd: HWND) {
         let Ok(menu) = CreatePopupMenu() else { return };
         let now = TRAY.get().map(|t| (t.state)()).unwrap_or(TrayState { mic_on: true, ..TrayState::default() });
-        let tick = |on: bool| MF_STRING | if on { MF_CHECKED } else { MF_UNCHECKED };
-        // The first line says who is running and since when (greyed: it is no command).
-        let since = SINCE.get().map_or("a moment ago", String::as_str);
-        let head: Vec<u16> = format!("J.A.I. {} \u{2014} running since {since}", env!("CARGO_PKG_VERSION")).encode_utf16().chain(std::iter::once(0)).collect();
-        let _ = AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, PCWSTR(head.as_ptr()));
-        let _ = AppendMenuW(menu, MF_STRING, CMD_OPEN, w!("Open HUD"));
-        let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-        let _ = AppendMenuW(menu, tick(now.mic_on), CMD_MIC, w!("Microphone on"));
-        let _ = AppendMenuW(menu, tick(now.voice_lock), CMD_LOCK, w!("Obey only my voice"));
-        let _ = AppendMenuW(menu, tick(now.guests), CMD_GUESTS, w!("Guests may speak (30 minutes)"));
-        let _ = AppendMenuW(menu, tick(now.night), CMD_NIGHT, w!("Night mode"));
-        let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-        let _ = AppendMenuW(menu, tick(now.game), CMD_GAME, w!("Game mode (brain in RAM, GPU free)"));
-        // One line for the standby, saying what a click does from where he stands.
-        if now.game {
-            // (In game mode the GPU is free already: no standby line.)
-        } else if now.dormant {
-            let _ = AppendMenuW(menu, MF_STRING, CMD_WAKE, w!("Wake JAI (load models)"));
-        } else {
-            let _ = AppendMenuW(menu, MF_STRING, CMD_STANDBY, w!("Standby (free the graphics memory)"));
+        for (command, text, tick, enabled) in super::menu_lines(now) {
+            if text.is_empty() {
+                let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
+                continue;
+            }
+            let text: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+            let flags = match tick {
+                Some(true) => MF_STRING | MF_CHECKED,
+                Some(false) => MF_STRING | MF_UNCHECKED,
+                None => MF_STRING,
+            };
+            let _ = AppendMenuW(menu, if enabled { flags } else { flags | MF_GRAYED }, command, PCWSTR(text.as_ptr()));
         }
-        let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-        let _ = AppendMenuW(menu, MF_STRING, CMD_QUIT, w!("Quit J.A.I."));
-        let _ = SetMenuDefaultItem(menu, CMD_OPEN as u32, 0);
+        let _ = SetMenuDefaultItem(menu, super::CMD_OPEN as u32, 0);
         let mut pt = POINT::default();
         let _ = GetCursorPos(&mut pt);
         // Required so the menu closes when the user clicks elsewhere.
         let _ = SetForegroundWindow(hwnd);
-        let picked = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_BOTTOMALIGN, pt.x, pt.y, 0, hwnd, None);
+        let chosen = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_BOTTOMALIGN, pt.x, pt.y, 0, hwnd, None);
         let _ = PostMessageW(hwnd, WM_NULL, WPARAM(0), LPARAM(0));
         let _ = DestroyMenu(menu);
-        match picked.0 as usize {
-            CMD_OPEN => send(TrayAction::OpenHud),
-            CMD_MIC => send(TrayAction::ToggleMic),
-            CMD_WAKE => send(TrayAction::WakeJai),
-            CMD_STANDBY => send(TrayAction::Standby),
-            CMD_LOCK => send(TrayAction::VoiceLock(!now.voice_lock)),
-            CMD_GUESTS => send(TrayAction::Guests(!now.guests)),
-            CMD_NIGHT => send(TrayAction::Night(!now.night)),
-            CMD_GAME => send(TrayAction::GameMode(!now.game)),
-            CMD_QUIT => send(TrayAction::Quit),
-            _ => {}
+        if let Some(action) = picked(chosen.0 as usize, now) {
+            send(action);
         }
     }
 
@@ -417,5 +439,383 @@ mod win {
             }
             _ => DefWindowProcW(hwnd, msg, wparam, lparam),
         }
+    }
+}
+
+/// KDE Plasma's tray: a StatusNotifierItem and its menu (DBusMenu) on the session bus. The same
+/// bus carries J.A.I.'s own name: held by the J.A.I. that runs (a second one calls it to have the
+/// HUD shown), and a scripted session's, which Sir's own J.A.I. asks to give way.
+#[cfg(not(windows))]
+mod sni {
+    use super::{dot_colour, dot_pixel, menu_lines, picked, TrayAction, TrayState, SINCE};
+    use std::collections::HashMap;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::OnceLock;
+    use tokio::sync::mpsc::UnboundedSender;
+    use tracing::{info, warn};
+    use zbus::zvariant::{ObjectPath, OwnedValue, StructureBuilder, Value};
+
+    /// The name the J.A.I. that runs holds, and the one a scripted session holds besides.
+    pub const INSTANCE: &str = "org.jai.JAI";
+    pub const TEST_SESSION: &str = "org.jai.TestSession";
+    const PATH: &str = "/org/jai/JAI";
+    const ITEM: &str = "/StatusNotifierItem";
+    const MENU: &str = "/MenuBar";
+    const WATCHER: &str = "org.kde.StatusNotifierWatcher";
+    const BUS: &str = "org.freedesktop.DBus";
+
+    struct Tray {
+        actions: UnboundedSender<TrayAction>,
+        state: Box<dyn Fn() -> TrayState + Send + Sync>,
+    }
+
+    static TRAY: OnceLock<Tray> = OnceLock::new();
+    /// The colour of the icon's dot (0: none yet), and the menu's revision.
+    static DOT: AtomicU32 = AtomicU32::new(0);
+    static REVISION: AtomicU32 = AtomicU32::new(1);
+
+    fn send(action: TrayAction) {
+        if let Some(tray) = TRAY.get() {
+            let _ = tray.actions.send(action);
+        }
+    }
+
+    fn now() -> TrayState {
+        TRAY.get().map(|t| (t.state)()).unwrap_or(TrayState { mic_on: true, ..TrayState::default() })
+    }
+
+    /// What other J.A.I.s may ask of this one.
+    struct Instance;
+
+    #[zbus::interface(name = "org.jai.JAI")]
+    impl Instance {
+        /// A second J.A.I. was started: the HUD comes up.
+        fn show(&self) {
+            send(TrayAction::OpenHud);
+        }
+
+        /// Sir started J.A.I. while this scripted session runs: it ends.
+        fn give_way(&self) {
+            if crate::platform::in_test_session() {
+                info!("[TRAY] Sir started JAI: this test session gives way");
+                send(TrayAction::Quit);
+            }
+        }
+    }
+
+    /// Takes `name` on the session bus, with the object other J.A.I.s call. Some(false): another
+    /// process holds it; None: there is no bus to ask.
+    pub fn own_bus_name(name: &str) -> Option<bool> {
+        use zbus::fdo::{RequestNameFlags, RequestNameReply};
+        let bus = crate::kde::bus().ok()?;
+        let _ = bus.object_server().at(PATH, Instance);
+        match bus.request_name_with_flags(name, RequestNameFlags::DoNotQueue.into()) {
+            Ok(RequestNameReply::PrimaryOwner | RequestNameReply::AlreadyOwner) => Some(true),
+            Ok(_) => Some(false),
+            Err(e) => {
+                warn!("[TRAY] Could not take the bus name {name}: {e}");
+                None
+            }
+        }
+    }
+
+    pub fn release_bus_name(name: &str) {
+        if let Ok(bus) = crate::kde::bus() {
+            let _ = bus.release_name(name);
+        }
+    }
+
+    pub fn show_running_instance() -> bool {
+        crate::kde::call::<_, ()>(INSTANCE, PATH, INSTANCE, "Show", &()).is_ok()
+    }
+
+    pub fn ask_test_session_to_give_way() -> bool {
+        crate::kde::call::<_, ()>(TEST_SESSION, PATH, INSTANCE, "GiveWay", &()).is_ok()
+    }
+
+    pub fn test_session_running() -> bool {
+        crate::kde::call::<_, bool>(BUS, "/org/freedesktop/DBus", BUS, "NameHasOwner", &(TEST_SESSION,)).unwrap_or(false)
+    }
+
+    pub fn spawn(actions: UnboundedSender<TrayAction>, state: impl Fn() -> TrayState + Send + Sync + 'static) {
+        if TRAY.set(Tray { actions, state: Box::new(state) }).is_err() {
+            return;
+        }
+        let _ = SINCE.set(chrono::Local::now().format("%a %H:%M").to_string());
+        if let Err(e) = std::thread::Builder::new().name("jai-tray".into()).spawn(run) {
+            warn!("[TRAY] Could not start the tray icon: {e}");
+        }
+    }
+
+    /// The icon leaves the tray (the item's name is given up).
+    pub fn remove() {
+        release_bus_name(&item_name());
+    }
+
+    fn item_name() -> String {
+        format!("org.kde.StatusNotifierItem-{}-1", std::process::id())
+    }
+
+    fn run() {
+        let Ok(bus) = crate::kde::bus() else {
+            warn!("[TRAY] No session bus: no tray icon");
+            return;
+        };
+        let name = item_name();
+        let served = bus.object_server().at(ITEM, Item).and_then(|_| bus.object_server().at(MENU, Menu)).and_then(|_| bus.request_name(name.as_str()));
+        if let Err(e) = served {
+            warn!("[TRAY] Could not offer the tray icon: {e}");
+            return;
+        }
+        let (mut watcher, mut shown) = (String::new(), None);
+        loop {
+            // The tray's host (Plasma's panel) may start again: each new one is told of the icon.
+            let owner = crate::kde::call::<_, String>(BUS, "/org/freedesktop/DBus", BUS, "GetNameOwner", &(WATCHER,)).unwrap_or_default();
+            if owner != watcher {
+                match crate::kde::call::<_, ()>(WATCHER, "/StatusNotifierWatcher", WATCHER, "RegisterStatusNotifierItem", &(name.as_str(),)) {
+                    Ok(()) => info!("[TRAY] Running in the notification area (click: HUD, right-click: menu)"),
+                    Err(e) if !owner.is_empty() => warn!("[TRAY] The tray did not take the icon: {e}"),
+                    Err(_) => {}
+                }
+                watcher = owner;
+            }
+            // (The icon's dot and the menu's ticks follow his state.)
+            let state = now();
+            if shown != Some(state) {
+                shown = Some(state);
+                DOT.store(dot_colour(state), Ordering::Release);
+                REVISION.fetch_add(1, Ordering::AcqRel);
+                let _ = bus.emit_signal(None::<&str>, ITEM, "org.kde.StatusNotifierItem", "NewIcon", &());
+                let _ = bus.emit_signal(None::<&str>, MENU, "com.canonical.dbusmenu", "LayoutUpdated", &(REVISION.load(Ordering::Acquire), 0i32));
+            }
+            std::thread::sleep(std::time::Duration::from_secs(1));
+        }
+    }
+
+    /// The app icon at a few sizes, with its dot, as the tray takes it: ARGB in network order.
+    fn icon(rgb: u32) -> Vec<(i32, i32, Vec<u8>)> {
+        static BASE: OnceLock<Vec<(i32, Vec<u8>)>> = OnceLock::new();
+        let base = BASE.get_or_init(|| [22, 32, 64].into_iter().map(|size| (size, crate::app_icon::render_icon_rgba(size as u32))).collect());
+        base.iter()
+            .map(|(size, rgba)| {
+                let argb = rgba
+                    .chunks_exact(4)
+                    .enumerate()
+                    .flat_map(|(i, p)| dot_pixel(*size, i, rgb).filter(|_| rgb != 0).unwrap_or(u32::from_be_bytes([p[3], p[0], p[1], p[2]])).to_be_bytes())
+                    .collect();
+                (*size, *size, argb)
+            })
+            .collect()
+    }
+
+    struct Item;
+
+    #[zbus::interface(name = "org.kde.StatusNotifierItem")]
+    impl Item {
+        fn activate(&self, _x: i32, _y: i32) {
+            send(TrayAction::OpenHud);
+        }
+
+        fn secondary_activate(&self, _x: i32, _y: i32) {}
+
+        fn context_menu(&self, _x: i32, _y: i32) {}
+
+        fn scroll(&self, _delta: i32, _orientation: String) {}
+
+        #[zbus(property)]
+        fn category(&self) -> &str {
+            "ApplicationStatus"
+        }
+
+        #[zbus(property)]
+        fn id(&self) -> &str {
+            "jai"
+        }
+
+        #[zbus(property)]
+        fn title(&self) -> &str {
+            "J.A.I."
+        }
+
+        #[zbus(property)]
+        fn status(&self) -> &str {
+            "Active"
+        }
+
+        #[zbus(property)]
+        fn window_id(&self) -> i32 {
+            0
+        }
+
+        #[zbus(property)]
+        fn icon_name(&self) -> &str {
+            ""
+        }
+
+        #[zbus(property)]
+        fn icon_pixmap(&self) -> Vec<(i32, i32, Vec<u8>)> {
+            icon(DOT.load(Ordering::Acquire))
+        }
+
+        #[zbus(property)]
+        fn tool_tip(&self) -> (String, Vec<(i32, i32, Vec<u8>)>, String, String) {
+            let tip = if crate::platform::in_test_session() { "test run (starting him ends it)" } else { "online" };
+            (String::new(), Vec::new(), "J.A.I.".into(), tip.into())
+        }
+
+        #[zbus(property)]
+        fn item_is_menu(&self) -> bool {
+            false
+        }
+
+        #[zbus(property)]
+        fn menu(&self) -> ObjectPath<'static> {
+            ObjectPath::from_static_str_unchecked(MENU)
+        }
+    }
+
+    type Props = HashMap<String, OwnedValue>;
+
+    /// A DBusMenu entry: (id, properties, children).
+    #[derive(serde::Serialize, zbus::zvariant::Type)]
+    struct Layout {
+        id: i32,
+        properties: Props,
+        children: Vec<OwnedValue>,
+    }
+
+    fn owned(value: Value<'_>) -> Option<OwnedValue> {
+        OwnedValue::try_from(value).ok()
+    }
+
+    /// The menu's entries: a command's id is the command, the others count from 100.
+    fn entries(state: TrayState) -> Vec<(i32, Props)> {
+        menu_lines(state)
+            .into_iter()
+            .enumerate()
+            .map(|(i, (command, text, tick, enabled))| {
+                let mut props = Props::new();
+                let mut put = |key: &str, value: Value<'_>| {
+                    if let Some(value) = owned(value) {
+                        props.insert(key.into(), value);
+                    }
+                };
+                if text.is_empty() {
+                    put("type", Value::from("separator"));
+                } else {
+                    put("label", Value::from(text.as_str()));
+                    put("enabled", Value::from(enabled));
+                    if let Some(on) = tick {
+                        put("toggle-type", Value::from("checkmark"));
+                        put("toggle-state", Value::from(i32::from(on)));
+                    }
+                }
+                (if command == 0 { 100 + i as i32 } else { command as i32 }, props)
+            })
+            .collect()
+    }
+
+    struct Menu;
+
+    #[zbus::interface(name = "com.canonical.dbusmenu")]
+    impl Menu {
+        fn get_layout(&self, parent_id: i32, _recursion_depth: i32, _property_names: Vec<String>) -> (u32, Layout) {
+            let entries = entries(now());
+            let layout = if parent_id == 0 {
+                let children = entries
+                    .into_iter()
+                    .filter_map(|(id, props)| owned(Value::from(StructureBuilder::new().add_field(id).add_field(props).add_field(Vec::<OwnedValue>::new()).build())))
+                    .collect();
+                let root = owned(Value::from("submenu")).map(|v| Props::from([("children-display".to_string(), v)])).unwrap_or_default();
+                Layout { id: 0, properties: root, children }
+            } else {
+                let properties = entries.into_iter().find(|(id, _)| *id == parent_id).map(|(_, props)| props).unwrap_or_default();
+                Layout { id: parent_id, properties, children: Vec::new() }
+            };
+            (REVISION.load(Ordering::Acquire), layout)
+        }
+
+        fn get_group_properties(&self, ids: Vec<i32>, _property_names: Vec<String>) -> Vec<(i32, Props)> {
+            entries(now()).into_iter().filter(|(id, _)| ids.is_empty() || ids.contains(id)).collect()
+        }
+
+        fn get_property(&self, id: i32, name: String) -> zbus::fdo::Result<OwnedValue> {
+            entries(now()).into_iter().find(|(entry, _)| *entry == id).and_then(|(_, mut props)| props.remove(&name)).ok_or_else(|| zbus::fdo::Error::InvalidArgs(format!("no property {name} on {id}")))
+        }
+
+        fn event(&self, id: i32, event_id: String, _data: OwnedValue, _timestamp: u32) {
+            if event_id == "clicked" {
+                let state = now();
+                if let Some(action) = usize::try_from(id).ok().and_then(|command| picked(command, state)) {
+                    send(action);
+                }
+            }
+        }
+
+        fn event_group(&self, events: Vec<(i32, String, OwnedValue, u32)>) -> Vec<i32> {
+            for (id, event_id, data, timestamp) in events {
+                self.event(id, event_id, data, timestamp);
+            }
+            Vec::new()
+        }
+
+        fn about_to_show(&self, _id: i32) -> bool {
+            false
+        }
+
+        fn about_to_show_group(&self, _ids: Vec<i32>) -> (Vec<i32>, Vec<i32>) {
+            (Vec::new(), Vec::new())
+        }
+
+        #[zbus(property)]
+        fn version(&self) -> u32 {
+            3
+        }
+
+        #[zbus(property)]
+        fn text_direction(&self) -> &str {
+            "ltr"
+        }
+
+        #[zbus(property)]
+        fn status(&self) -> &str {
+            "normal"
+        }
+
+        #[zbus(property)]
+        fn icon_theme_path(&self) -> Vec<String> {
+            Vec::new()
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_tray_menu_offers_the_standby_its_ticks_and_what_each_line_does() {
+        let lines = |state| menu_lines(state).into_iter().map(|(command, text, tick, _)| (command, text, tick)).collect::<Vec<_>>();
+        let awake = lines(TrayState { mic_on: true, ..TrayState::default() });
+        assert!(awake.iter().any(|(c, _, _)| *c == CMD_STANDBY), "awake: the standby line");
+        assert!(awake.iter().any(|(c, _, tick)| *c == CMD_MIC && *tick == Some(true)), "the microphone is ticked");
+        let dormant = lines(TrayState { dormant: true, ..TrayState::default() });
+        assert!(dormant.iter().any(|(c, _, _)| *c == CMD_WAKE) && !dormant.iter().any(|(c, _, _)| *c == CMD_STANDBY));
+        let game = lines(TrayState { game: true, ..TrayState::default() });
+        assert!(!game.iter().any(|(c, _, _)| *c == CMD_WAKE || *c == CMD_STANDBY), "in game mode the GPU is free already");
+        assert_eq!(game.last().map(|l| l.0), Some(CMD_QUIT));
+        let state = TrayState { night: true, ..TrayState::default() };
+        assert_eq!(picked(CMD_NIGHT, state), Some(TrayAction::Night(false)), "a ticked line is unticked");
+        assert_eq!(picked(0, state), None, "the first line and the separators do nothing");
+    }
+
+    #[test]
+    fn the_icons_dot_sits_in_its_lower_right_corner_with_a_dark_rim() {
+        let size = 32;
+        let at = |x: i32, y: i32| dot_pixel(size, (y * size + x) as usize, 0x3EE07A);
+        assert_eq!(at(26, 26), Some(0xFF3E_E07A), "inside the dot");
+        assert_eq!(at(2, 2), None, "the icon's own pixels elsewhere");
+        assert!((0..size).flat_map(|y| (0..size).map(move |x| (x, y))).any(|(x, y)| at(x, y) == Some(0xFF10_1418)), "a rim round it");
+        assert_eq!(dot_colour(TrayState { game: true, ..TrayState::default() }), 0x9B6BFF);
     }
 }

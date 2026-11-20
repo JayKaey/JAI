@@ -96,6 +96,11 @@ use std::time::{Duration, Instant};
 use tokio::runtime::Handle;
 use tokio::sync::broadcast;
 use tracing::{info, warn};
+// The calls on his own windows: Win32 on Windows, X11 (XWayland under KDE Plasma) on Linux.
+#[cfg(windows)]
+use crate::{win32 as wm, win32_desktop as desk};
+#[cfg(not(windows))]
+use crate::{x11 as wm, x11 as desk};
 
 const WINDOW_TITLE: &str = "J.A.I. HUD";
 const MAX_MESSAGES: usize = 200;
@@ -172,6 +177,7 @@ fn request_repaint_soon() {
 /// `keep_drawing` holds it to. Never, until it has asked.
 static BOARD_DUE_MS: AtomicU64 = AtomicU64::new(u64::MAX);
 /// How far past that the board is given before it is told to paint.
+#[cfg_attr(not(windows), allow(dead_code))]
 const BOARD_OVERDUE_MS: u64 = 20;
 
 fn hud_ms() -> u64 {
@@ -186,6 +192,7 @@ fn board_due_in(wait: Duration) {
 
 /// Whether a board that wanted to draw at `due` (ms) has been kept waiting too long at `now`.
 /// `kept`: it has just been kept from drawing; then it is told the moment it is due.
+#[cfg_attr(not(windows), allow(dead_code))]
 fn board_overdue(now: u64, due: u64, kept: bool) -> bool {
     now > due.saturating_add(if kept { 0 } else { BOARD_OVERDUE_MS })
 }
@@ -312,7 +319,6 @@ pub fn block_area() -> Rect {
 }
 
 /// The HUD's native window handle (0 while it has none).
-#[cfg_attr(not(windows), allow(dead_code))]
 pub fn hud_hwnd() -> isize {
     SHARED.hwnd.load(Ordering::Acquire)
 }
@@ -464,25 +470,19 @@ pub fn set_text_console(open: bool) {
 /// front of the other programs' windows, in their own order, and none takes the keyboard. How
 /// many there are. (The board itself and the corner orb are not among them.)
 pub fn windows_on_call() -> usize {
-    #[cfg(windows)]
-    {
-        let board = SHARED.hwnd.load(Ordering::Acquire);
-        let own: Vec<_> = crate::win32_desktop::own_windows().into_iter().filter(|w| w.hwnd != board && w.title != "J.A.I. // orb").collect();
-        let n = own.len();
-        info!("[HUD] His windows on call: {n} brought to the front");
-        // (And their list, to pick one from, move it or close it.)
-        WINDOWS_LIST.store(true, Ordering::Release);
-        request_repaint();
-        crate::win32::run_detached(move || {
-            // (From the lowest up: they keep the order they had among themselves.)
-            for w in own.iter().rev() {
-                crate::win32_desktop::raise(w.hwnd);
-            }
-        });
-        n
-    }
-    #[cfg(not(windows))]
-    0
+    let own = crate::own_windows::list();
+    let n = own.len();
+    info!("[HUD] His windows on call: {n} brought to the front");
+    // (And their list, to pick one from, move it or close it.)
+    WINDOWS_LIST.store(true, Ordering::Release);
+    request_repaint();
+    wm::run_detached(move || {
+        // (From the lowest up: they keep the order they had among themselves.)
+        for w in own.iter().rev() {
+            desk::raise(w.hwnd);
+        }
+    });
+    n
 }
 
 /// The list of his windows is open ("show your windows", his key for it).
@@ -569,7 +569,15 @@ pub fn show_accounts(db: Option<String>) {
 pub fn run_installer(rt: Handle, config: crate::config::ConfigStore, card: String, brain: Result<&'static str, String>, into: std::path::PathBuf) -> Result<(), String> {
     login_view::installing(config.read(|c| c.main_pc.clone()), card, brain, &into);
     let viewport = egui::ViewportBuilder::default().with_title("Install J.A.I.").with_app_id("jai").with_inner_size([520.0, 560.0]).with_decorations(false).with_icon(Arc::new(window_icon().unwrap_or_default()));
-    let options = eframe::NativeOptions { viewport, renderer: eframe::Renderer::Glow, centered: true, persist_window: false, ..Default::default() };
+    let options = eframe::NativeOptions {
+        viewport,
+        renderer: eframe::Renderer::Glow,
+        centered: true,
+        persist_window: false,
+        #[cfg(not(windows))]
+        event_loop_builder: on_x11(),
+        ..Default::default()
+    };
     eframe::run_native(
         "J.A.I. setup",
         options,
@@ -671,9 +679,10 @@ pub fn hide() {
             crate::win32::hide_hud(hwnd);
         }
     }
+    // (Hidden, not closed: closing the root window would end him.)
     #[cfg(not(windows))]
     if let Some(ctx) = context() {
-        ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Close);
+        ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Visible(false));
         ctx.request_repaint();
     }
 }
@@ -716,17 +725,51 @@ pub fn window_command(command: WindowCommand) -> Result<(), String> {
         }
         #[cfg(not(windows))]
         other => {
-            let ctx = context().ok_or("The HUD window is not open.")?;
-            match other {
-                WindowCommand::Minimize => ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Minimized(true)),
-                WindowCommand::Maximize => ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Maximized(true)),
-                WindowCommand::Restore => ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Maximized(false)),
-                _ => return Err("Moving the HUD window is only supported on Windows.".into()),
+            context().ok_or("The HUD window is not open.")?;
+            let hwnd = SHARED.hwnd.load(Ordering::Acquire);
+            if hwnd == 0 && !matches!(other, WindowCommand::Minimize | WindowCommand::Maximize | WindowCommand::Restore) {
+                return Err("The HUD runs on Wayland alone here (no X11), where no program may move its window.".into());
             }
-            ctx.request_repaint();
+            wm::run_detached(move || apply_window_command(hwnd, other));
         }
     }
     Ok(())
+}
+
+/// The window commands on X11: the state through the window toolkit, the place through X11.
+#[cfg(not(windows))]
+fn apply_window_command(hwnd: isize, command: WindowCommand) {
+    use crate::interface::Corner;
+    use crate::x11::Spot;
+    let spot = match command {
+        WindowCommand::Center => Spot::Center,
+        WindowCommand::Bigger => Spot::Scale(1.2),
+        WindowCommand::Smaller => Spot::Scale(1.0 / 1.2),
+        WindowCommand::Place(Corner::Left) => Spot::Left,
+        WindowCommand::Place(Corner::Right) => Spot::Right,
+        WindowCommand::Place(Corner::TopLeft) => Spot::TopLeft,
+        WindowCommand::Place(Corner::TopRight) => Spot::TopRight,
+        WindowCommand::Place(Corner::BottomLeft) => Spot::BottomLeft,
+        WindowCommand::Place(Corner::BottomRight) => Spot::BottomRight,
+        WindowCommand::Show | WindowCommand::Hide => return,
+        state => {
+            if let Some(ctx) = context() {
+                if state != WindowCommand::Minimize {
+                    ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Minimized(false));
+                }
+                ctx.send_viewport_cmd_to(ViewportId::ROOT, match state {
+                    WindowCommand::Minimize => ViewportCommand::Minimized(true),
+                    _ => ViewportCommand::Maximized(state == WindowCommand::Maximize),
+                });
+                ctx.request_repaint();
+            }
+            return;
+        }
+    };
+    show();
+    if let Err(e) = crate::x11::arrange(hwnd, spot) {
+        warn!("[HUD] Window action {command:?} failed: {e}");
+    }
 }
 
 /// Resizes the HUD window (logical points) — `control_jai_interface` set_window_size.
@@ -780,22 +823,22 @@ fn apply_window_command(hwnd: isize, command: WindowCommand) {
 
 /// Remembers where the window is, so it reopens there (skipped in fullscreen).
 pub fn remember_placement(config: &ConfigStore) {
-    #[cfg(windows)]
-    {
-        let hwnd = SHARED.hwnd.load(Ordering::Acquire);
-        // The floating orb's square is not where the full HUD should reopen.
-        if hwnd == 0 || config.read(|c| c.interface.fullscreen || c.interface.orb_mode) {
-            return;
-        }
-        if let Some((rect, maximized)) = crate::win32::window_placement(hwnd) {
-            config.update(|c| {
-                c.hud_window = Some(rect);
-                c.hud_maximized = maximized;
-            });
-        }
+    let hwnd = SHARED.hwnd.load(Ordering::Acquire);
+    // The floating orb's square is not where the full HUD should reopen.
+    if hwnd == 0 || config.read(|c| c.interface.fullscreen || c.interface.orb_mode) {
+        return;
     }
+    #[cfg(windows)]
+    let placement = crate::win32::window_placement(hwnd);
+    // (X11 tells the bounds the window has now: a maximised one keeps the place it had before.)
     #[cfg(not(windows))]
-    let _ = config;
+    let placement = crate::x11::window_state(hwnd).map(|(rect, maximized, _)| (if maximized { config.read(|c| c.hud_window).unwrap_or(rect) } else { rect }, maximized));
+    if let Some((rect, maximized)) = placement {
+        config.update(|c| {
+            c.hud_window = Some(rect);
+            c.hud_maximized = maximized;
+        });
+    }
 }
 
 /// The HUD's link to the backend; it follows JAI's events from `attach` on, whether or not a
@@ -928,10 +971,7 @@ fn start_monitor_points() -> Option<Rect> {
         return None;
     }
     let m = crate::monitors::recent().into_iter().find(|m| m.index == n)?;
-    #[cfg(windows)]
-    let scale = crate::win32::primary_screen().2;
-    #[cfg(not(windows))]
-    let scale = 1.0;
+    let scale = wm::primary_screen().2;
     Some(Rect::from_min_max(pos2(m.rect[0] as f32 / scale, m.rect[1] as f32 / scale), pos2(m.rect[2] as f32 / scale, m.rect[3] as f32 / scale)))
 }
 
@@ -991,10 +1031,7 @@ pub(crate) fn for_test_session(builder: egui::ViewportBuilder) -> egui::Viewport
 
 /// How many of the screen's pixels one of the HUD's points is (Windows' scale times his zoom).
 fn points_scale() -> f32 {
-    #[cfg(windows)]
-    let scale = crate::win32::primary_screen().2;
-    #[cfg(not(windows))]
-    let scale = 1.0;
+    let scale = wm::primary_screen().2;
     (scale * context().map_or(1.0, |ctx| ctx.zoom_factor())).max(0.1)
 }
 
@@ -1069,10 +1106,7 @@ static PLACES: std::sync::LazyLock<Mutex<std::collections::HashMap<String, (Rect
 fn in_the_way(title: &str, placed: &std::collections::HashMap<String, (Rect, Instant)>) -> Vec<Rect> {
     let scale = points_scale();
     let points = |r: [i32; 4]| Rect::from_min_max(pos2(r[0] as f32, r[1] as f32) / scale, pos2(r[2] as f32, r[3] as f32) / scale);
-    #[cfg(windows)]
     let standing: Vec<(String, Rect)> = crate::own_windows::list().into_iter().map(|w| (w.title, points(w.rect))).collect();
-    #[cfg(not(windows))]
-    let standing: Vec<(String, Rect)> = Vec::new();
     let coming = placed.iter().map(|(t, (rect, _))| (t.clone(), *rect)).chain(crate::own_windows::opening_now().into_iter().map(|(t, [x, y, w, h])| (t, points([x, y, x + w, y + h]))));
     coming.filter(|(t, _)| !standing.iter().any(|(shown, _)| shown == t)).chain(standing.iter().cloned()).filter(|(t, _)| t != title).map(|(_, rect)| rect).collect()
 }
@@ -1105,10 +1139,7 @@ fn place_where_sir_works(builder: &egui::ViewportBuilder) -> Option<Pos2> {
     // frame of the board took: placed anew it would jump.)
     places.retain(|title, (_, seen)| {
         let fresh = now.duration_since(*seen) < Duration::from_secs(1);
-        #[cfg(windows)]
-        let fresh = fresh || crate::win32::own_window(title).is_some();
-        let _ = title;
-        fresh
+        fresh || wm::own_window(title).is_some()
     });
     if let Some((at, seen)) = places.get_mut(&title) {
         *seen = now;
@@ -1180,6 +1211,8 @@ fn open_window(app: &Jai, rt: &Handle, model: &Arc<Mutex<HudModel>>) -> Result<(
         renderer: eframe::Renderer::Glow,
         centered: placement.is_none() && !fullscreen && start_on.is_none(),
         persist_window: false,
+        #[cfg(not(windows))]
+        event_loop_builder: on_x11(),
         ..Default::default()
     };
     if fullscreen {
@@ -1256,10 +1289,7 @@ fn startup_geometry(iface: &InterfaceSettings, windowed: Vec2, on: Option<Rect>)
     // As the desktop's background: the plain, opaque, borderless window that the desktop is
     // handed before it is first shown (`HudApp::new`).
     if let Some([l, t, r, b]) = (iface.desktop_background && !iface.orb_mode).then(|| background_rect(iface)).flatten() {
-        #[cfg(windows)]
-        let scale = crate::win32::primary_screen().2.max(0.1);
-        #[cfg(not(windows))]
-        let scale = 1.0;
+        let scale = wm::primary_screen().2.max(0.1);
         return StartupGeometry { fullscreen: false, transparent: false, size: vec2((r - l) as f32 / scale, (b - t) as f32 / scale), position: Some([l as f32 / scale, t as f32 / scale]) };
     }
     let spanning = iface.span_all_monitors && !iface.orb_mode;
@@ -1295,24 +1325,33 @@ fn background_rect(iface: &InterfaceSettings) -> Option<[i32; 4]> {
 
 /// The primary monitor in logical points (`GetSystemMetrics` pixels over the system DPI scale).
 fn primary_screen_points() -> Option<(f32, f32)> {
-    #[cfg(windows)]
-    {
-        let (w, h, scale) = crate::win32::primary_screen();
-        (w > 0 && h > 0).then(|| (w as f32 / scale, h as f32 / scale))
-    }
-    #[cfg(not(windows))]
-    {
-        None
-    }
+    let (w, h, scale) = wm::primary_screen();
+    (w > 0 && h > 0).then(|| (w as f32 / scale, h as f32 / scale))
 }
 
-#[cfg(windows)]
 fn native_window(cc: &eframe::CreationContext<'_>) -> isize {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     match cc.window_handle().map(|handle| handle.as_raw()) {
+        #[cfg(windows)]
         Ok(RawWindowHandle::Win32(handle)) => handle.hwnd.get(),
+        #[cfg(not(windows))]
+        Ok(RawWindowHandle::Xlib(handle)) => handle.window as isize,
+        #[cfg(not(windows))]
+        Ok(RawWindowHandle::Xcb(handle)) => handle.window.get() as isize,
         _ => 0,
     }
+}
+
+/// On Linux his windows run on X11 (XWayland under KDE Plasma) when there is one: there a program
+/// may place, raise and pin its windows, which Wayland lets none do.
+#[cfg(not(windows))]
+fn on_x11() -> Option<eframe::EventLoopBuilderHook> {
+    use winit::platform::x11::EventLoopBuilderExtX11;
+    std::env::var_os("DISPLAY").map(|_| {
+        Box::new(|builder: &mut eframe::EventLoopBuilder<eframe::UserEvent>| {
+            builder.with_x11();
+        }) as eframe::EventLoopBuilderHook
+    })
 }
 
 // ----------------------------------------------------------------------------- model ----
@@ -2348,8 +2387,7 @@ impl HudApp {
                         // the frames are what hand it to the desktop. Seen 2026-11-14: hidden,
                         // it waited eight seconds for the next order, and was hidden again by
                         // the helper that wakes a board hidden in the tray.)
-                        #[cfg(windows)]
-                        crate::win32_desktop::sink(self.hwnd);
+                        desk::sink(self.hwnd);
                         ctx.send_viewport_cmd(ViewportCommand::Fullscreen(false));
                         ctx.send_viewport_cmd(ViewportCommand::Maximized(false));
                         ctx.send_viewport_cmd(ViewportCommand::Decorations(false));
@@ -2471,6 +2509,10 @@ impl HudApp {
                     if self.hwnd != 0 {
                         self.normal_placement = crate::win32::window_placement(self.hwnd).map(|(rect, _)| rect);
                     }
+                    #[cfg(not(windows))]
+                    if self.hwnd != 0 {
+                        self.normal_placement = wm::window_state(self.hwnd).map(|(rect, ..)| rect);
+                    }
                     ctx.send_viewport_cmd(ViewportCommand::Fullscreen(false));
                     ctx.send_viewport_cmd(ViewportCommand::Maximized(false));
                     ctx.send_viewport_cmd(ViewportCommand::Decorations(false));
@@ -2478,14 +2520,13 @@ impl HudApp {
                     info!("[HUD] Pure orb mode on ({size:.0} px, {anchor}, monitor {monitor})");
                 }
                 ctx.send_viewport_cmd(ViewportCommand::WindowLevel(if on_top { WindowLevel::AlwaysOnTop } else { WindowLevel::Normal }));
-                #[cfg(windows)]
                 if self.hwnd != 0 {
                     let hwnd = self.hwnd;
                     let ppp = ctx.native_pixels_per_point().unwrap_or(1.0);
-                    crate::win32::run_detached(move || place_orb(hwnd, size, &anchor, monitor, ppp));
+                    wm::run_detached(move || place_orb(hwnd, size, &anchor, monitor, ppp));
+                } else {
+                    ctx.send_viewport_cmd(ViewportCommand::InnerSize(vec2(size, size) / iface.scale));
                 }
-                #[cfg(not(windows))]
-                ctx.send_viewport_cmd(ViewportCommand::InnerSize(vec2(size, size) / iface.scale));
             }
             None if leaving => {
                 ctx.send_viewport_cmd(ViewportCommand::Decorations(!iface.frameless));
@@ -2493,10 +2534,12 @@ impl HudApp {
                 ctx.send_viewport_cmd(ViewportCommand::MinInnerSize(min_size(iface.layout)));
                 let restored = self.normal_placement.take().filter(|_| self.hwnd != 0);
                 match restored {
-                    #[cfg(windows)]
                     Some(rect) => {
                         let hwnd = self.hwnd;
+                        #[cfg(windows)]
                         crate::win32::run_detached(move || crate::win32::put_back_placement(hwnd, rect));
+                        #[cfg(not(windows))]
+                        wm::run_detached(move || wm::place(hwnd, rect));
                     }
                     _ => ctx.send_viewport_cmd(ViewportCommand::InnerSize(layout_size(iface.layout) / iface.scale)),
                 }
@@ -2547,18 +2590,15 @@ impl HudApp {
         }
     }
 
-    /// The close button hides the window to the tray (Windows); JAI keeps running.
+    /// The close button hides the window to the tray; JAI keeps running.
     fn handle_close(&mut self, ctx: &egui::Context) {
         if !ctx.input(|i| i.viewport().close_requested()) || SHARED.quitting.load(Ordering::Acquire) {
             return;
         }
-        #[cfg(windows)]
-        {
-            ctx.send_viewport_cmd(ViewportCommand::CancelClose);
-            remember_placement(self.app.config());
-            crate::win32::hide_hud(self.hwnd);
-            info!("[HUD] Hidden to the tray");
-        }
+        ctx.send_viewport_cmd(ViewportCommand::CancelClose);
+        remember_placement(self.app.config());
+        hide();
+        info!("[HUD] Hidden to the tray");
     }
 
     fn flush_memory_search(&mut self) {
@@ -3255,11 +3295,10 @@ fn title_button(ui: &mut Ui, p: &Palette, glyph: &str, danger: bool) -> egui::Re
 
 /// Puts the floating orb window at its corner (`anchor`) of a monitor (1-based; 0 = the one it
 /// is on), `size` logical pixels square; "free" keeps its centre where Sir dragged it.
-/// Synchronous window calls: run it on the Win32 worker thread.
-#[cfg(windows)]
+/// Synchronous window calls: run it on the window worker thread.
 fn place_orb(hwnd: isize, size: f32, anchor: &str, monitor: u8, ppp: f32) {
-    let displays = crate::win32::displays();
-    let current = crate::win32::window_display_rect(hwnd);
+    let displays = wm::displays();
+    let current = wm::window_display_rect(hwnd);
     let target = match monitor {
         0 => displays.iter().find(|d| Some(d.rect) == current).or_else(|| displays.first()),
         n => displays.get(n as usize - 1).or_else(|| displays.first()),
@@ -3270,7 +3309,7 @@ fn place_orb(hwnd: isize, size: f32, anchor: &str, monitor: u8, ppp: f32) {
     let [l, t, r, b] = target.work;
     // Mini mode: a strip across the top of the monitor's work area.
     if anchor == MINI_STRIP {
-        if let Err(e) = crate::win32::set_window_rect(hwnd, [l, t, r - l, (MINI_STRIP_HEIGHT * ppp).round() as i32]) {
+        if let Err(e) = wm::set_window_rect(hwnd, [l, t, r - l, (MINI_STRIP_HEIGHT * ppp).round() as i32]) {
             warn!("[HUD] Could not place the mini strip: {e}");
         }
         return;
@@ -3280,13 +3319,13 @@ fn place_orb(hwnd: isize, size: f32, anchor: &str, monitor: u8, ppp: f32) {
         "top-right" => (r - side - margin, t + margin),
         "bottom-left" => (l + margin, b - side - margin),
         "center" => ((l + r - side) / 2, (t + b - side) / 2),
-        "free" => match crate::win32::window_state(hwnd) {
+        "free" => match wm::window_state(hwnd) {
             Some(([x, y, w, h], _, _)) => (x + w / 2 - side / 2, y + h / 2 - side / 2),
             None => (r - side - margin, b - side - margin),
         },
         _ => (r - side - margin, b - side - margin),
     };
-    if let Err(e) = crate::win32::set_window_rect(hwnd, [x, y, side, side]) {
+    if let Err(e) = wm::set_window_rect(hwnd, [x, y, side, side]) {
         warn!("[HUD] Could not place the orb: {e}");
     }
 }
@@ -4179,17 +4218,16 @@ impl HudApp {
         configure_style(&cc.egui_ctx, app.config().read(|c| c.interface.font_scale));
         crate::theme_store::attach_database(&app.config().read(|c| c.memory_db_path.clone()));
         *lock(&SHARED.ctx) = Some(cc.egui_ctx.clone());
-        #[cfg(windows)]
         let hwnd = native_window(cc);
-        #[cfg(windows)]
         if hwnd != 0 {
+            #[cfg(windows)]
             crate::win32::install_hud_quit_hook(hwnd);
             if let Some(rect) = restore {
-                crate::win32::restore_placement(hwnd, rect);
+                wm::restore_placement(hwnd, rect);
             }
             SHARED.hwnd.store(hwnd, Ordering::Release);
             for command in lock(&SHARED.pending).drain(..) {
-                crate::win32::run_detached(move || apply_window_command(hwnd, command));
+                wm::run_detached(move || apply_window_command(hwnd, command));
             }
             // He starts as the desktop's background: the desktop is handed the window before
             // it is first shown, so the board never lies over Sir's windows on its way there.
@@ -4198,11 +4236,6 @@ impl HudApp {
                 crate::wallpaper::arrive(hwnd, rect, cc.egui_ctx.native_pixels_per_point().unwrap_or(1.0));
             }
         }
-        #[cfg(not(windows))]
-        let hwnd = {
-            let _ = restore;
-            0
-        };
         info!("[HUD] Native window open (HUD board)");
         crate::start_mark("the window is open");
         crate::camera_feed::refresh_devices();
@@ -4555,19 +4588,23 @@ impl HudApp {
             return;
         }
         // "Use all monitors": the window covers the box around every monitor.
-        #[cfg(windows)]
         if iface.span_all_monitors && !iface.orb_mode && self.hwnd != 0 && (self.frames == 2 || self.fullscreen_check.elapsed() > Duration::from_millis(1500)) {
             self.fullscreen_check = Instant::now();
             let hwnd = self.hwnd;
             if let Some(bounds) = crate::monitors::virtual_bounds(&crate::monitors::list()) {
-                let state = crate::win32::window_state(hwnd);
+                let state = wm::window_state(hwnd);
                 if state.as_ref().is_none_or(|(r, _, _)| r.iter().zip(bounds).any(|(a, b)| (a - b).abs() > 2)) {
                     let maximised = state.is_some_and(|(_, max, _)| max);
-                    crate::win32::run_detached(move || {
+                    #[cfg(not(windows))]
+                    if maximised {
+                        ctx.send_viewport_cmd(ViewportCommand::Maximized(false));
+                    }
+                    wm::run_detached(move || {
+                        #[cfg(windows)]
                         if maximised {
                             crate::win32::show_window(hwnd, crate::win32::WindowCmd::Restore);
                         }
-                        if let Err(e) = crate::win32::set_window_rect(hwnd, bounds) {
+                        if let Err(e) = wm::set_window_rect(hwnd, bounds) {
                             warn!("[HUD] Could not span the monitors: {e}");
                         }
                     });
@@ -4582,12 +4619,11 @@ impl HudApp {
         if self.frames == 1 && !quiet {
             ctx.send_viewport_cmd(ViewportCommand::Fullscreen(true));
         }
-        #[cfg(windows)]
         if self.hwnd != 0 && self.frames > 3 && self.fullscreen_check.elapsed() > Duration::from_millis(1500) {
             self.fullscreen_check = Instant::now();
             let hwnd = self.hwnd;
             let minimized = ctx.input(|i| i.viewport().minimized.unwrap_or(false));
-            if !minimized && crate::win32::is_visible(hwnd) && !crate::win32::covers_monitor(hwnd) {
+            if !minimized && wm::is_visible(hwnd) && !wm::covers_monitor(hwnd) {
                 self.fullscreen_fixes += 1;
                 if self.fullscreen_fixes <= 3 || self.fullscreen_fixes.is_multiple_of(20) {
                     warn!("[HUD] The fullscreen board does not cover its monitor; re-applying ({}×)", self.fullscreen_fixes);
@@ -4595,19 +4631,26 @@ impl HudApp {
                 if !quiet {
                     ctx.send_viewport_cmd(ViewportCommand::Fullscreen(true));
                 }
-                crate::win32::run_detached(move || {
-                    if let Err(e) = crate::win32::cover_monitor(hwnd) {
+                let cover = move || {
+                    if let Err(e) = wm::cover_monitor(hwnd) {
                         warn!("[HUD] Could not stretch the board over its monitor: {e}");
                     }
-                });
-            } else if !minimized && crate::win32::window_state(hwnd).is_some_and(|(_, maximised, _)| maximised) {
+                };
+                #[cfg(windows)]
+                crate::win32::run_detached(cover);
+                #[cfg(not(windows))]
+                cover();
+            } else {
                 // It covers the monitor but is still maximised underneath (a maximised window
                 // that went fullscreen, F11): a plain window of the same rect, nothing moves.
-                crate::win32::run_detached(move || match crate::win32::unmaximise_in_place(hwnd) {
-                    Ok(true) => info!("[HUD] The fullscreen board is no longer maximised underneath"),
-                    Ok(false) => {}
-                    Err(e) => warn!("[HUD] Could not let go of the board's maximised state: {e}"),
-                });
+                #[cfg(windows)]
+                if !minimized && crate::win32::window_state(hwnd).is_some_and(|(_, maximised, _)| maximised) {
+                    crate::win32::run_detached(move || match crate::win32::unmaximise_in_place(hwnd) {
+                        Ok(true) => info!("[HUD] The fullscreen board is no longer maximised underneath"),
+                        Ok(false) => {}
+                        Err(e) => warn!("[HUD] Could not let go of the board's maximised state: {e}"),
+                    });
+                }
             }
         }
     }
@@ -6180,7 +6223,6 @@ impl HudApp {
         }
         // (Those Sir pinned on top stay there, and where each stands is kept for its next
         // opening: looked after every couple of seconds.)
-        #[cfg(windows)]
         crate::own_windows::tend();
         // JAI's tool views: ROSE blocks inside the HUD, or their own OS windows when detached.
         crate::hud_dock::begin_frame();
@@ -7457,26 +7499,21 @@ fn see_through(ctx: &egui::Context) {
 /// above its owner, so the fullscreen board (raised by a reply, a click on it, its watchdog)
 /// never hides it (2026-11-09: a detached 3D model seemed to close; it was behind the board).
 fn keep_above_hud(ctx: &egui::Context) {
-    #[cfg(windows)]
-    {
-        let (viewport, hud) = (ctx.viewport_id(), SHARED.hwnd.load(Ordering::Acquire));
-        // (As the desktop's background he owns none of them: an owned window has no key in the
-        // taskbar and no place in Alt+Tab. Sir, 2026-11-14: "real windows like Discord".)
-        let wanted = !crate::wallpaper::in_use();
-        if viewport == ViewportId::ROOT || hud == 0 || lock(&DETACHED_MOTIONS).owned.contains(&viewport) == wanted {
-            return;
-        }
-        if ctx.input(|i| i.viewport().title.clone()).is_some_and(|title| crate::win32::own_window_titled(&title, if wanted { hud } else { 0 })) {
-            let mut motions = lock(&DETACHED_MOTIONS);
-            if wanted {
-                motions.owned.insert(viewport);
-            } else {
-                motions.owned.remove(&viewport);
-            }
+    let (viewport, hud) = (ctx.viewport_id(), SHARED.hwnd.load(Ordering::Acquire));
+    // (As the desktop's background he owns none of them: an owned window has no key in the
+    // taskbar and no place in Alt+Tab. Sir, 2026-11-14: "real windows like Discord".)
+    let wanted = !crate::wallpaper::in_use();
+    if viewport == ViewportId::ROOT || hud == 0 || lock(&DETACHED_MOTIONS).owned.contains(&viewport) == wanted {
+        return;
+    }
+    if ctx.input(|i| i.viewport().title.clone()).is_some_and(|title| wm::own_window_titled(&title, if wanted { hud } else { 0 })) {
+        let mut motions = lock(&DETACHED_MOTIONS);
+        if wanted {
+            motions.owned.insert(viewport);
+        } else {
+            motions.owned.remove(&viewport);
         }
     }
-    #[cfg(not(windows))]
-    let _ = ctx;
 }
 
 /// A piece of the board (a block of a report, the column of his system blocks) in a window of
@@ -7640,8 +7677,7 @@ fn on_top_key(ui: &mut Ui, draw: impl FnOnce(&mut Ui, bool) -> egui::Response) {
     let Some(title) = ui.ctx().input(|i| i.viewport().title.clone()).filter(|_| crate::wallpaper::in_use()) else { return };
     let on = crate::own_windows::is_pinned(&title);
     if draw(ui, on).on_hover_text("Keep this window above other programs' windows").clicked() {
-        #[cfg(windows)]
-        crate::win32::run_detached(move || {
+        wm::run_detached(move || {
             crate::own_windows::pin(&title, !on);
         });
     }
@@ -7798,6 +7834,7 @@ impl DetachedMotions {
 }
 
 /// How often a window that has shown itself is looked at from outside.
+#[cfg(windows)]
 const LOOK_EVERY: Duration = Duration::from_millis(400);
 
 /// From the HUD's frame: a window that has shown itself is looked at from outside a few times
@@ -7869,13 +7906,10 @@ fn reveal_overdue(ctx: &egui::Context, motions: &mut DetachedMotions, viewport: 
         ctx.send_viewport_cmd_to(viewport, ViewportCommand::Visible(true));
         // (It has no frame of its own yet to make the board its owner in: done from here, or
         // the fullscreen board could cover it.)
-        #[cfg(windows)]
-        {
-            let hud = SHARED.hwnd.load(Ordering::Acquire);
-            let title = ctx.input(|i| i.raw.viewports.get(&viewport).and_then(|v| v.title.clone()));
-            if hud != 0 && !crate::wallpaper::in_use() && title.is_some_and(|title| crate::win32::own_window_titled(&title, hud)) {
-                motions.owned.insert(viewport);
-            }
+        let hud = SHARED.hwnd.load(Ordering::Acquire);
+        let title = ctx.input(|i| i.raw.viewports.get(&viewport).and_then(|v| v.title.clone()));
+        if hud != 0 && !crate::wallpaper::in_use() && title.is_some_and(|title| wm::own_window_titled(&title, hud)) {
+            motions.owned.insert(viewport);
         }
         info!("[HUD] A window of its own had not drawn after a third of a second: shown from the board ({viewport:?})");
     }
@@ -9331,10 +9365,9 @@ impl HudApp {
         if !WINDOWS_LIST.load(Ordering::Acquire) {
             return;
         }
-        #[cfg(windows)]
         {
             // (Looked up twice a second, not in every frame.)
-            static SEEN: Mutex<Option<(Instant, Vec<crate::win32_desktop::OwnWindow>)>> = Mutex::new(None);
+            static SEEN: Mutex<Option<(Instant, Vec<desk::OwnWindow>)>> = Mutex::new(None);
             let own = {
                 let mut seen = lock(&SEEN);
                 if seen.as_ref().is_none_or(|(at, _)| at.elapsed() > Duration::from_millis(500)) {
@@ -9376,24 +9409,22 @@ impl HudApp {
                 });
             });
             match act {
-                Some((hwnd, 0, _)) => crate::win32_desktop::raise(hwnd),
+                Some((hwnd, 0, _)) => desk::raise(hwnd),
                 Some((hwnd, 1, [l, t, r, b])) => {
                     let monitors = crate::monitors::recent();
                     if let Some(on) = crate::wallpaper::monitor_in_use(&monitors) {
                         let (w, h) = ((r - l).min(on.work[2] - on.work[0]), (b - t).min(on.work[3] - on.work[1]));
                         crate::own_windows::glide(hwnd, [l, t, r - l, b - t], [(on.work[0] + on.work[2] - w) / 2, (on.work[1] + on.work[3] - h) / 2, w, h]);
-                        crate::win32_desktop::raise(hwnd);
+                        desk::raise(hwnd);
                     }
                 }
-                Some((hwnd, _, _)) => crate::win32_desktop::close(hwnd),
+                Some((hwnd, _, _)) => desk::close(hwnd),
                 None => {}
             }
             if closed {
                 WINDOWS_LIST.store(false, Ordering::Release);
             }
         }
-        #[cfg(not(windows))]
-        let _ = ctx;
     }
 
     /// The timers that run: what the strip says of each ("TIMER  04:12"), and the share of its
@@ -9666,7 +9697,7 @@ impl HudApp {
         }
         let at = self.corner_orb.resting().map_or(frame.rect.min, |r| r.min) - vec2(side, 0.0);
         let builder = egui::ViewportBuilder::default()
-            .with_title("J.A.I. // orb")
+            .with_title(crate::wallpaper::ORB_TITLE)
             .with_app_id("jai")
             .with_decorations(false)
             .with_transparent(true)
@@ -9681,39 +9712,51 @@ impl HudApp {
         // (`win32_desktop::tend_orb`): its black is see-through, beside a game it takes no click
         // (the game keeps its mouse), and it shows itself once it has drawn. Every frame while
         // it is new, then a few times a second.
+        if was_home {
+            self.orb_tended = (now, now.checked_sub(Duration::from_secs(1)).unwrap_or(now));
+            #[cfg(windows)]
+            crate::win32_desktop::orb_sets_out();
+        }
+        let (born, last) = self.orb_tended;
+        // (Its flight out begins once its window is on show; it waits a second for that at most.)
         #[cfg(windows)]
-        {
-            if was_home {
-                self.orb_tended = (now, now.checked_sub(Duration::from_secs(1)).unwrap_or(now));
-                crate::win32_desktop::orb_sets_out();
-            }
-            let (born, last) = self.orb_tended;
-            // (Its flight out begins once its window is on show; it waits a second for that at most.)
-            if !crate::win32_desktop::orb_on_show() && now.duration_since(born) < Duration::from_secs(1) {
-                self.corner_orb.wait(now);
-            }
-            if now.duration_since(born) < Duration::from_millis(1500) || now.duration_since(last) > Duration::from_millis(300) {
-                self.orb_tended.1 = now;
-                // At rest it goes with Sir to the monitor he goes to (his choice of 2026-11-14:
-                // "Orb follows you"), and takes the size he gave it, where it stands.
-                if let Some(rest) = self.corner_orb.resting() {
-                    let in_use = crate::wallpaper::monitor_in_use(&monitors).map(|m| m.work);
-                    let went = in_use.filter(|work| self.orb_monitor.replace(*work).is_some_and(|was| was != *work));
-                    let to = match (went, on.map(|m| m.work)) {
-                        (Some(work), _) => Some(crate::wallpaper::corner(work, size, crate::wallpaper::spot_on(work))),
-                        (None, Some(work)) if (rest.width() - size as f32).abs() > 0.5 => Some(crate::wallpaper::corner(work, size, Some(crate::wallpaper::spot_of(work, rest.width() as i32, rest.min)))),
-                        _ => None,
-                    };
-                    if let Some(to) = to {
-                        self.corner_orb.follow(now, to);
-                    }
+        let on_show = crate::win32_desktop::orb_on_show;
+        #[cfg(not(windows))]
+        let on_show = || wm::own_window(crate::wallpaper::ORB_TITLE).is_some_and(wm::is_visible);
+        if now.duration_since(born) < Duration::from_secs(1) && !on_show() {
+            self.corner_orb.wait(now);
+        }
+        if now.duration_since(born) < Duration::from_millis(1500) || now.duration_since(last) > Duration::from_millis(300) {
+            self.orb_tended.1 = now;
+            // At rest it goes with Sir to the monitor he goes to (his choice of 2026-11-14:
+            // "Orb follows you"), and takes the size he gave it, where it stands.
+            if let Some(rest) = self.corner_orb.resting() {
+                let in_use = crate::wallpaper::monitor_in_use(&monitors).map(|m| m.work);
+                let went = in_use.filter(|work| self.orb_monitor.replace(*work).is_some_and(|was| was != *work));
+                let to = match (went, on.map(|m| m.work)) {
+                    (Some(work), _) => Some(crate::wallpaper::corner(work, size, crate::wallpaper::spot_on(work))),
+                    (None, Some(work)) if (rest.width() - size as f32).abs() > 0.5 => Some(crate::wallpaper::corner(work, size, Some(crate::wallpaper::spot_of(work, rest.width() as i32, rest.min)))),
+                    _ => None,
+                };
+                if let Some(to) = to {
+                    self.corner_orb.follow(now, to);
                 }
-                let drawn = ctx.cumulative_pass_nr_for(viewport) > 0;
-                crate::win32::run_detached(move || {
-                    if let Some(hwnd) = crate::win32::own_window("J.A.I. // orb") {
-                        crate::win32_desktop::tend_orb(hwnd, gaming, drawn);
-                    }
-                });
+            }
+            let drawn = ctx.cumulative_pass_nr_for(viewport) > 0;
+            #[cfg(windows)]
+            crate::win32::run_detached(move || {
+                if let Some(hwnd) = crate::win32::own_window(crate::wallpaper::ORB_TITLE) {
+                    crate::win32_desktop::tend_orb(hwnd, gaming, drawn);
+                }
+            });
+            // (KDE draws its see-through parts itself, from the window's own alpha.)
+            #[cfg(not(windows))]
+            if let Some(hwnd) = wm::own_window(crate::wallpaper::ORB_TITLE) {
+                wm::skip_taskbar(hwnd, true);
+                let _ = wm::click_through(hwnd, gaming);
+                if drawn && !wm::is_visible(hwnd) {
+                    ctx.send_viewport_cmd_to(viewport, ViewportCommand::Visible(true));
+                }
             }
         }
         let content = CornerOrbContent {

@@ -2860,6 +2860,7 @@ dependencies = [
  "ignore",
  "image",
  "keyring",
+ "libc",
  "libloading",
  "mailparse",
  "nvml-wrapper",
@@ -2890,9 +2891,15 @@ dependencies = [
  "urlencoding",
  "uuid",
  "walkdir",
+ "wayland-client",
+ "wayland-protocols",
+ "wayland-protocols-plasma",
  "webpki-roots",
  "whisper-rs",
  "windows 0.54.0",
+ "winit",
+ "x11rb",
+ "zbus",
 ]
 
 [[package]]

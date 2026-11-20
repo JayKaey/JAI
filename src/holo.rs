@@ -72,8 +72,18 @@ pub fn install_fonts(ctx: &egui::Context) {
     for (name, bytes) in FACES {
         fonts.font_data.insert(name.to_string(), FontData::from_static(bytes));
     }
-    #[cfg_attr(not(windows), allow(unused_mut))]
     let mut system: Vec<String> = Vec::new();
+    // The symbol glyphs the bundled faces lack, from the first font of Arch's usual places.
+    #[cfg(not(windows))]
+    for (name, files) in [
+        ("sans", &["/usr/share/fonts/TTF/DejaVuSans.ttf", "/usr/share/fonts/noto/NotoSans-Regular.ttf"][..]),
+        ("symbols", &["/usr/share/fonts/noto/NotoSansSymbols2-Regular.ttf", "/usr/share/fonts/noto/NotoSansSymbols-Regular.ttf"][..]),
+    ] {
+        if let Some(bytes) = files.iter().find_map(|f| std::fs::read(f).ok()) {
+            fonts.font_data.insert(name.to_string(), FontData::from_owned(bytes));
+            system.push(name.to_string());
+        }
+    }
     #[cfg(windows)]
     {
         let dir = std::path::PathBuf::from(std::env::var_os("WINDIR").unwrap_or_else(|| "C:\\Windows".into())).join("Fonts");

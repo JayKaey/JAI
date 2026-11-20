@@ -32,6 +32,14 @@ pub async fn desktop() -> Desktop {
 #[cfg(not(windows))]
 pub async fn desktop() -> Desktop {
     tokio::task::spawn_blocking(|| {
+        // KDE: Plasma's own window list (the window Sir works in: the active one of the others,
+        // else the topmost).
+        if crate::plasma::available() {
+            let foreground = crate::winctl::kde_front().map(|w| (w.title.clone(), w.program()));
+            let me = std::process::id();
+            let apps: BTreeSet<String> = crate::plasma::windows().iter().filter(|w| w.pid != me && !w.is(crate::plasma::state::SKIP_TASKBAR)).map(|w| w.program().to_lowercase()).filter(|p| !p.is_empty()).collect();
+            return Desktop { foreground, apps: apps.into_iter().take(16).collect() };
+        }
         let run = |p: &str, a: &[&str]| {
             std::process::Command::new(p).args(a).output().ok().filter(|o| o.status.success()).map(|o| String::from_utf8_lossy(&o.stdout).to_string())
         };

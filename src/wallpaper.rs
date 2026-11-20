@@ -30,6 +30,7 @@ pub enum Standing {
     /// The desktop has it behind its icons.
     On,
     /// The desktop would not take it (why). It stays so until the background is switched off.
+    #[cfg_attr(not(windows), allow(dead_code))]
     Refused(String),
 }
 
@@ -37,6 +38,7 @@ struct State {
     standing: Standing,
     since: Instant,
     /// The desktop was asked (once per arrival, and again when the rect changes).
+    #[cfg_attr(not(windows), allow(dead_code))]
     asked: bool,
     hwnd: isize,
     /// Where it stands on the screen: left, top, right, bottom.
@@ -52,6 +54,7 @@ struct State {
 
 static STATE: Mutex<Option<State>> = Mutex::new(None);
 /// What came of asking the desktop (from the Win32 worker).
+#[cfg(windows)]
 static ASKED: Mutex<Option<Result<(), String>>> = Mutex::new(None);
 /// Read by the mouse hook without a lock: he is the background; one of his keys is under the
 /// pointer; a game is in front.
@@ -194,12 +197,62 @@ pub fn tick(hwnd: isize, want: Option<[i32; 4]>, ppp: f32, gaming: bool) -> Stan
     s.standing.clone()
 }
 
+/// KDE (his windows are X11 ones, under XWayland): no desktop there takes a window behind its
+/// icons, so his stands under every other window instead, over the rect, on every virtual
+/// desktop and off the task manager; Plasma's own desktop lies behind him then. His keys take
+/// their clicks as any window's do: no hook.
 #[cfg(not(windows))]
-pub fn tick(_hwnd: isize, want: Option<[i32; 4]>, _ppp: f32, _gaming: bool) -> Standing {
-    if want.is_some() {
-        Standing::Refused("only on Windows".to_string())
-    } else {
-        Standing::Off
+pub fn tick(hwnd: isize, want: Option<[i32; 4]>, ppp: f32, gaming: bool) -> Standing {
+    GAME.store(gaming, Ordering::Release);
+    let mut guard = lock(&STATE);
+    let now = Instant::now();
+    let s = guard.get_or_insert_with(|| State { standing: Standing::Off, since: now, asked: false, hwnd, rect: [0; 4], looked: now, ppp, events: Vec::new(), over: false, held: 0 });
+    (s.ppp, s.hwnd) = (ppp.max(0.1), hwnd);
+    let Some(rect) = want.filter(|_| hwnd != 0) else {
+        if matches!(s.standing, Standing::On | Standing::Arriving) {
+            // (Back as a window: `gui` gives it its place and shape.)
+            stand(hwnd, None);
+            tracing::info!("[DESKTOP] He is the board again: his window is a window again");
+        }
+        (s.standing, s.since) = (Standing::Off, now);
+        return Standing::Off;
+    };
+    match s.standing.clone() {
+        Standing::Off => {
+            (s.standing, s.since, s.rect) = (Standing::Arriving, now, rect);
+            tracing::info!("[DESKTOP] He becomes the desktop's background: {}×{} at {},{}", rect[2] - rect[0], rect[3] - rect[1], rect[0], rect[1]);
+        }
+        Standing::Arriving if s.since.elapsed() > SETTLE => {
+            stand(hwnd, Some(rect));
+            (s.standing, s.since, s.rect, s.looked) = (Standing::On, now, rect, now);
+            tracing::info!("[DESKTOP] He stands under every window as the desktop's background");
+        }
+        // Put in place again every look: the monitors change, and KWin takes no state of a
+        // window it does not show yet (at the start it may not).
+        Standing::On if rect != s.rect || s.looked.elapsed() > LOOK_EVERY => {
+            if rect != s.rect {
+                tracing::info!("[DESKTOP] The background now covers {}×{} at {},{}", rect[2] - rect[0], rect[3] - rect[1], rect[0], rect[1]);
+            }
+            (s.rect, s.looked) = (rect, now);
+            stand(hwnd, Some(rect));
+        }
+        _ => {}
+    }
+    s.standing.clone()
+}
+
+/// His window under every other one, on every virtual desktop and off the task manager, over
+/// `rect` (left, top, right, bottom); None undoes that.
+#[cfg(not(windows))]
+pub fn stand(hwnd: isize, rect: Option<[i32; 4]>) {
+    use crate::x11 as wm;
+    let on = rect.is_some();
+    wm::keep_below(hwnd, on);
+    wm::skip_taskbar(hwnd, on);
+    wm::sticky(hwnd, on);
+    if let Some([l, t, r, b]) = rect {
+        wm::place(hwnd, [l, t, r - l, b - t]);
+        wm::sink(hwnd);
     }
 }
 
@@ -218,25 +271,25 @@ fn ask(hwnd: isize, rect: [i32; 4]) {
 }
 
 /// He starts as the desktop's background: the desktop is asked at once, before the window is
-/// first shown, so the board never lies over Sir's windows on its way there.
-#[cfg(windows)]
+/// first shown, so the board never lies over Sir's windows on its way there. (Under KDE `tick`
+/// puts the window in place once it is on the screen.)
 pub fn arrive(hwnd: isize, rect: [i32; 4], ppp: f32) {
     let now = Instant::now();
     *lock(&STATE) = Some(State { standing: Standing::Arriving, since: now, asked: true, hwnd, rect, looked: now, ppp: ppp.max(0.1), events: Vec::new(), over: false, held: 0 });
-    *lock(&ASKED) = None;
     tracing::info!("[DESKTOP] He starts as the desktop's background: {}×{} at {},{}", rect[2] - rect[0], rect[3] - rect[1], rect[0], rect[1]);
-    ask(hwnd, rect);
+    #[cfg(windows)]
+    {
+        *lock(&ASKED) = None;
+        ask(hwnd, rect);
+    }
 }
-
-#[cfg(not(windows))]
-pub fn arrive(_hwnd: isize, _rect: [i32; 4], _ppp: f32) {}
 
 /// The window is gone (the desktop took it down with it, as when Explorer starts again):
 /// nothing of it stands any more.
+#[cfg(windows)]
 pub fn lost() {
     ON.store(false, Ordering::Release);
     HOT.store(false, Ordering::Release);
-    #[cfg(windows)]
     crate::win32_desktop::mouse_hook(false);
     *lock(&STATE) = None;
     *lock(&ASKED) = None;
@@ -257,9 +310,11 @@ pub enum MouseKind {
     Down(u8),
     Up(u8),
     /// Notches of the wheel (away from Sir is positive).
+    #[cfg_attr(not(windows), allow(dead_code))]
     Wheel(f32),
 }
 
+#[cfg(windows)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Mouse {
     pub kind: MouseKind,
@@ -348,6 +403,7 @@ pub fn demo_mouse(step: u8, x: i32, y: i32) -> Option<bool> {
 
 /// Asks the board for a frame, from the hook's thread, without ever waiting: a thread of its
 /// own does the asking, at most every few milliseconds.
+#[cfg(windows)]
 fn wake() {
     static WAKER: std::sync::OnceLock<Option<std::sync::mpsc::Sender<()>>> = std::sync::OnceLock::new();
     let waker = WAKER.get_or_init(|| {
@@ -406,8 +462,31 @@ pub fn look_at(emblem: [i32; 4]) {
     crate::win32::run_detached(move || HIDDEN.store(hidden_now(HIDDEN.load(Ordering::Acquire), crate::win32_desktop::covered_share(emblem)), Ordering::Release));
 }
 
+// shortcut: KWin's and XWayland's coordinates are taken as one (true without display scaling)
+// and windows on other virtual desktops count too; upgrade with the outputs' scale and Plasma's
+// virtual-desktop list.
 #[cfg(not(windows))]
-pub fn look_at(_emblem: [i32; 4]) {}
+pub fn look_at(emblem: [i32; 4]) {
+    use crate::plasma::state;
+    let [l, t, r, b] = emblem;
+    let me = std::process::id();
+    // (As on Windows: every other program's window, and of his own those that carry a name, never
+    // the orb; his background itself is the one kept below.)
+    let most = crate::plasma::windows()
+        .into_iter()
+        .filter(|w| !w.is(state::MINIMIZED) && !w.is(state::KEEP_BELOW) && (w.pid != me || !(w.title.is_empty() || w.title == ORB_TITLE)))
+        .map(|w| {
+            let [x, y, width, height] = w.geometry;
+            (r.min(x + width) - l.max(x)).max(0) as i64 * (b.min(y + height) - t.max(y)).max(0) as i64
+        })
+        .max()
+        .unwrap_or(0);
+    let share = most as f32 / ((r - l).max(1) as i64 * (b - t).max(1) as i64) as f32;
+    HIDDEN.store(hidden_now(HIDDEN.load(Ordering::Acquire), share), Ordering::Release);
+}
+
+/// The corner orb's window, by its title.
+pub const ORB_TITLE: &str = "J.A.I. // orb";
 
 /// Whether the background's emblem is hidden behind a window.
 pub fn hidden() -> bool {
@@ -435,23 +514,21 @@ pub fn set_orb_out(out: bool) {
 
 /// The monitor Sir is using: the one the window in front is on (another program's), else the
 /// one under the pointer, else his first.
-#[cfg(windows)]
 pub fn monitor_in_use(monitors: &[crate::monitors::Monitor]) -> Option<crate::monitors::Monitor> {
     // (A scripted session knows one monitor only, its own: nothing of it ever goes where Sir
     // works. Without one of its own it has none.)
     if let Some(own) = crate::gui::test_session_monitor() {
         return monitors.iter().find(|m| m.index == own).cloned();
     }
+    #[cfg(windows)]
     let at = crate::win32_desktop::foreground_rect().map(|[l, t, r, b]| ((l + r) / 2, (t + b) / 2)).or_else(crate::win32_desktop::cursor);
+    // (KDE: Wayland tells no program where the pointer is.)
+    #[cfg(not(windows))]
+    let at = crate::plasma::active().filter(|w| w.pid != std::process::id()).map(|w| (w.geometry[0] + w.geometry[2] / 2, w.geometry[1] + w.geometry[3] / 2));
     let in_use = at.and_then(|(x, y)| monitors.iter().find(|m| m.contains(x, y))).or_else(|| crate::monitors::primary(monitors));
     // A game fills that monitor: his orb and windows wait on another one until it closes.
     let other = in_use.filter(|_| crate::hud_feel::game_in_front()).and_then(|game| monitors.iter().find(|m| m.index != game.index));
     other.or(in_use).cloned()
-}
-
-#[cfg(not(windows))]
-pub fn monitor_in_use(monitors: &[crate::monitors::Monitor]) -> Option<crate::monitors::Monitor> {
-    crate::monitors::primary(monitors).cloned()
 }
 
 /// Whether Sir holds the left mouse button down right now.
@@ -459,7 +536,7 @@ pub fn button_down() -> bool {
     #[cfg(windows)]
     return crate::win32_desktop::left_button_down();
     #[cfg(not(windows))]
-    false
+    crate::x11::pointer().is_some_and(|(_, _, held)| held)
 }
 
 /// How long the orb takes from the background to its corner (and back).

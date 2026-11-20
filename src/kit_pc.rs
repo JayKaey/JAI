@@ -6,7 +6,9 @@
 //! - whether Windows waits for a restart (the servicing keys), told once, best as a game starts.
 //!
 //! On Linux the same questions read `/proc` (ports, open files), the XDG autostart folders and
-//! `/var/run/reboot-required`; frozen apps, app updates and the microphone check need Windows.
+//! `/var/run/reboot-required`; frozen apps are the windows KWin marks "Not Responding", app
+//! updates come from `checkupdates` and Flatpak (Discover installs them); the microphone check
+//! tells what PipeWire shows but cannot meter the input.
 //!
 //! Nothing is ended or switched off on the question: he is asked (`hud_lines::offer`), and only
 //! his yes carries out the order the offer holds ("end process 4321 discord").
@@ -49,7 +51,7 @@ static END: LazyLock<Regex> = LazyLock::new(|| re(r"^end process (?P<pid>\d{1,7}
 static UPDATES: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(?:are there |any )?(?:app |program |software )?(?:updates|upgrades) (?:for|of) (?:my )?(?:apps|programs|software)$|^(?:check|look) for (?:app |program |software )?updates$|^(?:which|what) (?:apps|programs) (?:can|need to|should) (?:be )?(?:updated|upgraded)$|^update (?:my |all )?(?:apps|programs)$|^gibt es updates für (?:meine )?(?:apps|programme)$|^(?:aktualisiere|update) (?:meine |alle )?(?:apps|programme)$")
 });
-static UPGRADE_ORDER: LazyLock<Regex> = LazyLock::new(|| re(r"^upgrade all apps with winget$"));
+static UPGRADE_ORDER: LazyLock<Regex> = LazyLock::new(|| re(r"^upgrade all apps with (?:winget|discover)$"));
 static MIC: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(?:my |the )?(?:mic|microphone) (?:doesn'?t|doesn t|does not|isn'?t|isn t|is not|won'?t|won t) (?:work|working|work anymore)$|^(?:check|test) (?:my |the )?(?:mic|microphone)$|^(?:what(?:'s|s| s| is) wrong with|is something wrong with) (?:my |the )?(?:mic|microphone)$|^(?:mein |das )?(?:mikro|mikrofon|mic) (?:geht|funktioniert) nicht(?: mehr)?$|^(?:prüf|prüfe|teste?) (?:mein |das )?(?:mikro|mikrofon)$")
 });
@@ -98,28 +100,36 @@ pub fn only_looks(args: &Value) -> bool {
     matches!(args["action"].as_str().unwrap_or(""), "frozen" | "port" | "file" | "startup" | "reboot" | "updates" | "mic")
 }
 
-/// The microphone checked from Windows' side: the block's rows and the one line to say (the
-/// first fault, in the order it would stop the sound). `blocked_for`: whom the privacy setting
-/// shuts out.
-#[cfg(windows)]
+/// The microphone checked from the system's side: the block's rows and the one line to say (the
+/// first fault, in the order it would stop the sound). `blocked_for`: whom Windows' privacy
+/// setting shuts out. (Linux's sound server keeps no meter on it: whether it hears is not said.)
 pub fn mic_verdict(blocked_for: Option<&str>, mic: Option<&crate::audio_mixer::MicState>) -> (String, String) {
+    let metered = cfg!(windows);
+    let side = if metered { "Windows'" } else { "Linux's" };
     let yes_no = |b: bool, yes: &str, no: &str| if b { yes.to_string() } else { no.to_string() };
     let mut rows = vec![format!("Privacy   {}", blocked_for.map_or("allowed".to_string(), |w| format!("BLOCKED for {w}")))];
     if let Some(m) = mic {
         rows.push(format!("Device    {}", m.name));
         rows.push(format!("Muted     {}", yes_no(m.muted, "YES", "no")));
         rows.push(format!("Level     {:.0} %", m.level * 100.0));
-        rows.push(format!("Hearing   {}", yes_no(m.peak > 0.0, &format!("yes (peak {:.2})", m.peak), "nothing at all")));
+        if metered {
+            rows.push(format!("Hearing   {}", yes_no(m.peak > 0.0, &format!("yes (peak {:.2})", m.peak), "nothing at all")));
+        }
     } else {
         rows.push("Device    NONE set as the default recording device".to_string());
     }
     let line = match (blocked_for, mic) {
         (Some(who), _) => format!("Windows' privacy setting blocks the microphone for {who}, Sir: Settings, Privacy, Microphone."),
-        (None, None) => "No microphone is set as Windows' default recording device, Sir.".to_string(),
-        (None, Some(m)) if m.muted => format!("{} is muted in Windows, Sir.", m.name),
+        (None, None) => format!("No microphone is set as {side} default recording device, Sir."),
+        (None, Some(m)) if m.muted => format!("{} is muted in {OS}, Sir.", m.name),
         (None, Some(m)) if m.level < 0.1 => format!("{}'s level is down at {:.0} percent, Sir.", m.name, m.level * 100.0),
-        (None, Some(m)) if m.peak <= 0.0 => format!("{} hears nothing at all, Sir: it may be unplugged, switched off on the device, or muted in its own software.", m.name),
-        (None, Some(m)) => format!("Windows' side is fine, Sir: {} is on at {:.0} percent and hears sound. If an app still hears nothing, check that app's own input setting.", m.name, m.level * 100.0),
+        (None, Some(m)) if metered && m.peak <= 0.0 => format!("{} hears nothing at all, Sir: it may be unplugged, switched off on the device, or muted in its own software.", m.name),
+        (None, Some(m)) => format!(
+            "{side} side is fine, Sir: {} is on at {:.0} percent{}. If an app still hears nothing, check that app's own input setting.",
+            m.name,
+            m.level * 100.0,
+            if metered { " and hears sound" } else { "" }
+        ),
     };
     (rows.join("\n"), line)
 }
@@ -182,14 +192,13 @@ pub fn upgrade_rows(out: &str) -> Vec<(String, String, String, String)> {
 }
 
 /// The line for the update list: how many, the first three names, the question.
-#[cfg(windows)]
 fn updates_line(rows: &[(String, String, String, String)]) -> String {
     let names: Vec<String> = rows.iter().take(3).map(|r| r.0.clone()).collect();
     let more = rows.len().saturating_sub(3);
     let list = if more > 0 { format!("{} and {more} more", names.join(", ")) } else { crate::briefing::join_and(&names) };
     match rows.len() {
-        1 => format!("{list} has an update, Sir. Shall I install it in the background?"),
-        n => format!("{} apps have updates, Sir: {list}. Shall I install them in the background?", crate::earth::count_word(n)),
+        1 => format!("{list} has an update, Sir. Shall I install it{BACKGROUND}?"),
+        n => format!("{} apps have updates, Sir: {list}. Shall I install them{BACKGROUND}?", crate::earth::count_word(n)),
     }
 }
 
@@ -207,9 +216,6 @@ fn ask_to_end(pid: u32, name: &str, why: &str) -> String {
 
 pub async fn run(args: &Value) -> Result<String, String> {
     match args["action"].as_str().unwrap_or("") {
-        #[cfg(not(windows))]
-        "frozen" | "mic" | "updates" | "upgrade" => Err("That one needs Windows, Sir: on Linux I can't see frozen windows, check the microphone or update apps yet.".into()),
-        #[cfg(windows)]
         "frozen" => {
             let hung = hung_windows();
             match hung.as_slice() {
@@ -293,48 +299,66 @@ pub async fn run(args: &Value) -> Result<String, String> {
             true => say(&format!("Yes, Sir: {OS} has finished an update and waits for a restart."), &format!("Yes, Sir: {OS} waits for a restart.")),
             false => say(&format!("No, Sir: {OS} waits for no restart."), "No, Sir."),
         }),
-        #[cfg(windows)]
         "mic" => {
+            #[cfg(windows)]
             let blocked = tokio::task::spawn_blocking(mic_blocked_for).await.map_err(|e| e.to_string())?;
+            #[cfg(not(windows))]
+            let blocked = None;
             let mic = crate::audio_mixer::microphone_state().await;
             let (rows, line) = mic_verdict(blocked, mic.as_ref());
             crate::kit::show_text("mic_check", "MICROPHONE", &rows, [420.0, 170.0]);
             Ok(say(&line, &line))
         }
-        #[cfg(windows)]
         "updates" => {
-            let winget = crate::apps::which("winget").ok_or("winget is not on this PC, Sir.")?;
-            let out = crate::shell::run_helper(&winget, ["upgrade", "--accept-source-agreements", "--disable-interactivity"], None, &[], std::time::Duration::from_secs(120)).await.map_err(|e| format!("winget did not run, Sir: {e}"))?;
-            let rows = upgrade_rows(&String::from_utf8_lossy(&out.stdout));
+            let rows = app_updates().await?;
             if rows.is_empty() {
                 return Ok(say("Every app is up to date, Sir.", "Every app is up to date, Sir."));
             }
             let text: Vec<String> = rows.iter().map(|(name, _, from, to)| format!("{name}  {from} → {to}")).collect();
-            crate::kit::show_text("app_updates", "UPDATES // WINGET", &text.join("\n"), [420.0, 60.0 + 22.0 * rows.len().min(16) as f32]);
-            crate::hud_lines::offer("upgrade all apps with winget");
+            crate::kit::show_text("app_updates", UPDATES_TITLE, &text.join("
+"), [420.0, 60.0 + 22.0 * rows.len().min(16) as f32]);
+            crate::hud_lines::offer(UPGRADE_ORDER_TEXT);
             let line = updates_line(&rows);
             Ok(say(&line, &line))
         }
-        #[cfg(windows)]
-        "upgrade" => {
-            let winget = crate::apps::which("winget").ok_or("winget is not on this PC, Sir.")?;
-            tokio::spawn(async move {
-                let args = ["upgrade", "--all", "--silent", "--accept-source-agreements", "--accept-package-agreements", "--disable-interactivity"];
-                let line = match crate::shell::run_helper(&winget, args, None, &[], std::time::Duration::from_secs(3600)).await {
-                    Ok(out) if out.code == Some(0) => "The app updates are installed, Sir.".to_string(),
-                    Ok(out) => {
-                        let text = String::from_utf8_lossy(&out.stdout);
-                        let last = text.lines().rev().map(|l| l.rsplit('\r').next().unwrap_or(l).trim()).find(|l| !l.is_empty()).unwrap_or("no reason given").to_string();
-                        format!("Some app updates failed, Sir: {last}")
-                    }
-                    Err(e) => format!("winget did not run, Sir: {e}"),
-                };
-                crate::announcements::say(line);
-            });
-            Ok(say("Installing the updates in the background, Sir. I'll tell you when they're done.", "Installing them in the background, Sir."))
-        }
+        "upgrade" => upgrade_all(),
         other => Err(format!("The PC helper has no action '{other}'.")),
     }
+}
+
+#[cfg(windows)]
+const UPDATES_TITLE: &str = "UPDATES // WINGET";
+#[cfg(not(windows))]
+const UPDATES_TITLE: &str = "UPDATES // PACMAN, FLATPAK";
+/// Windows installs behind his back; Discover opens a window of its own.
+const BACKGROUND: &str = if cfg!(windows) { " in the background" } else { "" };
+const UPGRADE_ORDER_TEXT: &str = if cfg!(windows) { "upgrade all apps with winget" } else { "upgrade all apps with discover" };
+
+/// (name, id, installed, available) of every app with an update.
+#[cfg(windows)]
+async fn app_updates() -> Result<Vec<(String, String, String, String)>, String> {
+    let winget = crate::apps::which("winget").ok_or("winget is not on this PC, Sir.")?;
+    let out = crate::shell::run_helper(&winget, ["upgrade", "--accept-source-agreements", "--disable-interactivity"], None, &[], std::time::Duration::from_secs(120)).await.map_err(|e| format!("winget did not run, Sir: {e}"))?;
+    Ok(upgrade_rows(&String::from_utf8_lossy(&out.stdout)))
+}
+
+#[cfg(windows)]
+fn upgrade_all() -> Result<String, String> {
+    let winget = crate::apps::which("winget").ok_or("winget is not on this PC, Sir.")?;
+    tokio::spawn(async move {
+        let args = ["upgrade", "--all", "--silent", "--accept-source-agreements", "--accept-package-agreements", "--disable-interactivity"];
+        let line = match crate::shell::run_helper(&winget, args, None, &[], std::time::Duration::from_secs(3600)).await {
+            Ok(out) if out.code == Some(0) => "The app updates are installed, Sir.".to_string(),
+            Ok(out) => {
+                let text = String::from_utf8_lossy(&out.stdout);
+                let last = text.lines().rev().map(|l| l.rsplit('\r').next().unwrap_or(l).trim()).find(|l| !l.is_empty()).unwrap_or("no reason given").to_string();
+                format!("Some app updates failed, Sir: {last}")
+            }
+            Err(e) => format!("winget did not run, Sir: {e}"),
+        };
+        crate::announcements::say(line);
+    });
+    Ok(say("Installing the updates in the background, Sir. I'll tell you when they're done.", "Installing them in the background, Sir."))
 }
 
 // ------------------------------------------------------------------------- frozen apps ----
@@ -618,6 +642,75 @@ pub fn restart_note_for_game() -> Option<String> {
 
 // ------------------------------------------------------------------------------ Linux ----
 
+/// The windows KWin marks as hung: it adds "(Not Responding)", in the desktop's language, to the title.
+#[cfg(not(windows))]
+fn hung_windows() -> Vec<(u32, String, String)> {
+    let mut out: Vec<(u32, String, String)> = Vec::new();
+    for w in crate::plasma::windows() {
+        let title = w.title.to_lowercase();
+        let hung = ["not responding", "reagiert nicht", "antwortet nicht"].iter().any(|m| title.contains(m));
+        if hung && w.pid != std::process::id() && !out.iter().any(|(pid, _, _)| *pid == w.pid) {
+            out.push((w.pid, process_name(w.pid).unwrap_or_else(|| w.resource_name.clone()), w.title));
+        }
+    }
+    out
+}
+
+/// `checkupdates`' lines ("name 1.0-1 -> 1.1-1") as (name, "pacman", installed, available).
+#[cfg(not(windows))]
+fn pacman_rows(out: &str) -> Vec<(String, String, String, String)> {
+    out.lines()
+        .filter_map(|l| {
+            let c: Vec<&str> = l.split_whitespace().collect();
+            (c.len() == 4 && c[2] == "->").then(|| (c[0].to_string(), "pacman".to_string(), c[1].to_string(), c[3].to_string()))
+        })
+        .collect()
+}
+
+/// `flatpak remote-ls --updates --columns=name,application,version`: tab-separated rows.
+#[cfg(not(windows))]
+fn flatpak_rows(out: &str) -> Vec<(String, String, String, String)> {
+    out.lines()
+        .filter_map(|l| {
+            let c: Vec<&str> = l.split('\t').map(str::trim).collect();
+            (c.len() >= 2 && !c[0].is_empty()).then(|| (c[0].to_string(), c[1].to_string(), String::new(), c.get(2).copied().filter(|v| !v.is_empty()).unwrap_or("new").to_string()))
+        })
+        .collect()
+}
+
+/// The updates pacman and Flatpak know of. `checkupdates` (pacman-contrib) reads a copy of the
+/// package database, so nothing needs root; exit code 2 means there are none.
+#[cfg(not(windows))]
+async fn app_updates() -> Result<Vec<(String, String, String, String)>, String> {
+    let wait = std::time::Duration::from_secs(120);
+    let check = crate::apps::which("checkupdates").ok_or("checkupdates is not installed, Sir. Install it with: sudo pacman -S pacman-contrib")?;
+    let out = crate::shell::run_helper(&check, std::iter::empty::<&str>(), None, &[], wait).await.map_err(|e| format!("checkupdates did not run, Sir: {e}"))?;
+    if !matches!(out.code, Some(0) | Some(2)) {
+        return Err(format!("checkupdates failed, Sir: {}", String::from_utf8_lossy(&out.stderr).trim()));
+    }
+    let mut rows = pacman_rows(&String::from_utf8_lossy(&out.stdout));
+    if let Some(flatpak) = crate::apps::which("flatpak") {
+        if let Ok(out) = crate::shell::run_helper(&flatpak, ["remote-ls", "--updates", "--columns=name,application,version"], None, &[], wait).await {
+            rows.extend(flatpak_rows(&String::from_utf8_lossy(&out.stdout)));
+        }
+    }
+    Ok(rows)
+}
+
+/// Installing is Discover's job (it asks for the password itself); J.A.I. never runs pacman as root.
+#[cfg(not(windows))]
+fn upgrade_all() -> Result<String, String> {
+    let mut child = std::process::Command::new("plasma-discover")
+        .args(["--mode", "update"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|_| "Discover is not installed, Sir. Install it with: sudo pacman -S discover".to_string())?;
+    std::thread::spawn(move || drop(child.wait()));
+    Ok(say("Discover's update page is open, Sir: it installs them and asks for your password itself.", "Discover's update page is open, Sir."))
+}
+
 #[cfg(not(windows))]
 fn process_name(pid: u32) -> Option<String> {
     std::fs::read_to_string(format!("/proc/{pid}/comm")).ok().map(|n| n.trim().to_string()).filter(|n| !n.is_empty())
@@ -736,10 +829,13 @@ fn switch_off(entry: &StartupEntry) -> Result<(), String> {
     std::fs::write(&copy, hidden(&text)).map_err(|e| format!("I couldn't write {}: {e}", copy.display()))
 }
 
-/// Whether an update waits for a restart (Debian and Ubuntu leave this file).
+/// Whether an update waits for a restart: Debian's flag file, or (Arch) the running kernel's
+/// modules are gone from disk because pacman replaced the kernel.
 #[cfg(not(windows))]
 pub fn restart_pending() -> bool {
-    std::path::Path::new("/var/run/reboot-required").exists()
+    let running = std::fs::read_to_string("/proc/sys/kernel/osrelease").unwrap_or_default();
+    let replaced = !running.trim().is_empty() && std::path::Path::new("/usr/lib/modules").is_dir() && !std::path::Path::new("/usr/lib/modules").join(running.trim()).exists();
+    replaced || std::path::Path::new("/var/run/reboot-required").exists()
 }
 
 #[cfg(test)]
@@ -808,6 +904,19 @@ mod tests {
         assert!(rows.lines().all(|l| l.chars().count() <= 48), "fits the 420 px block");
     }
 
+    #[cfg(not(windows))]
+    #[test]
+    fn linuxs_microphone_verdict_claims_nothing_it_cannot_measure() {
+        // (PipeWire keeps no meter on the microphone: its peak always reads 0 there.)
+        let mic = |muted: bool, level: f32| crate::audio_mixer::MicState { name: "Headset Microphone".into(), level, muted, peak: 0.0 };
+        let say = |m: Option<crate::audio_mixer::MicState>| mic_verdict(None, m.as_ref()).1;
+        assert_eq!(say(None), "No microphone is set as Linux's default recording device, Sir.");
+        assert_eq!(say(Some(mic(true, 0.8))), "Headset Microphone is muted in Linux, Sir.");
+        assert_eq!(say(Some(mic(false, 0.04))), "Headset Microphone's level is down at 4 percent, Sir.");
+        assert!(say(Some(mic(false, 0.8))).starts_with("Linux's side is fine, Sir: Headset Microphone is on at 80 percent. "), "never 'hears nothing'");
+        assert!(!mic_verdict(None, Some(&mic(false, 0.8))).0.contains("Hearing"));
+    }
+
     #[test]
     fn winget_updates_are_read_from_its_table_in_any_language() {
         for said in ["are there updates for my apps", "any updates for my programs", "check for app updates", "update my apps", "which apps can be updated", "gibt es updates für meine programme", "aktualisiere alle apps"] {
@@ -861,6 +970,21 @@ mod tests {
         assert_eq!(best_entry(&entries, "spotify"), None);
     }
 
+    #[cfg(not(windows))]
+    #[test]
+    fn linuxs_update_lists_are_read() {
+        let rows = pacman_rows("linux 6.11.1-1 -> 6.11.2-1
+firefox 131.0-1 -> 132.0-1
+noise
+");
+        assert_eq!(rows, [("linux".to_string(), "pacman".to_string(), "6.11.1-1".to_string(), "6.11.2-1".to_string()), ("firefox".to_string(), "pacman".to_string(), "131.0-1".to_string(), "132.0-1".to_string())]);
+        assert!(pacman_rows("").is_empty());
+        let flat = flatpak_rows("Musterapp	org.example.Musterapp	1.2
+Ohne Version	org.example.Plain	
+");
+        assert_eq!((flat[0].0.as_str(), flat[0].3.as_str(), flat[1].3.as_str()), ("Musterapp", "1.2", "new"));
+    }
+
     #[test]
     fn linuxs_ports_and_autostart_entries_are_read() {
         // /proc/net/tcp: a socket listening on 8080 (0x1F90) and a connection to it.
@@ -880,7 +1004,6 @@ mod tests {
     #[test]
     fn the_pc_answers_without_changing_anything() {
         assert!(port_owners(1).len() <= 1);
-        #[cfg(windows)]
         let _ = hung_windows();
         let _ = restart_pending();
         let entries = startup_entries();

@@ -250,7 +250,7 @@ async fn linux_program_and_engine(http: &reqwest::Client, config: &ConfigStore, 
     let _ = std::fs::remove_file(&archive);
     match unpacked {
         Ok(status) if status.success() && crate::runtime::engine_binary(&dir).is_some() => Ok(()),
-        _ => Err("His engine could not be unpacked: install zstd (on Ubuntu `sudo apt install zstd`) and start the installer again.".into()),
+        _ => Err("His engine could not be unpacked: install zstd (on Arch `sudo pacman -S zstd`, on Ubuntu `sudo apt install zstd`) and start the installer again.".into()),
     }
 }
 
@@ -259,9 +259,30 @@ async fn linux_program_and_engine(http: &reqwest::Client, config: &ConfigStore, 
 fn start_menu(exe: &Path) -> Result<(), String> {
     let apps = data_home().ok_or("no HOME")?.join("applications");
     std::fs::create_dir_all(&apps).map_err(|e| e.to_string())?;
+    std::fs::write(apps.join("jai.desktop"), menu_entry(exe)).map_err(|e| e.to_string())
+}
+
+/// The menu entry for the program at `exe`. KDE gives Plasma's window list, pressed keys and
+/// screenshots only to a program whose entry asks for them (KWin finds it by the path in Exec).
+#[cfg(not(windows))]
+fn menu_entry(exe: &Path) -> String {
     let folder = exe.parent().unwrap_or(Path::new("."));
-    let entry = format!("[Desktop Entry]\nType=Application\nName=J.A.I.\nComment=Local voice assistant\nExec=\"{}\"\nPath={}\nTerminal=false\nCategories=Utility;\n", exe.display(), folder.display());
-    std::fs::write(apps.join("jai.desktop"), entry).map_err(|e| e.to_string())
+    format!(
+        "[Desktop Entry]\nType=Application\nName=J.A.I.\nComment=Local voice assistant\nExec=\"{}\"\nPath={}\nTerminal=false\nCategories=Utility;\nX-KDE-Wayland-Interfaces=org_kde_plasma_window_management,org_kde_kwin_fake_input\nX-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2\n",
+        exe.display(),
+        folder.display()
+    )
+}
+
+/// Keeps the menu entry naming this program where it runs now (written when it did not):
+/// whether it was written.
+#[cfg(not(windows))]
+pub fn keep_menu_entry() -> bool {
+    let (Ok(exe), Some(home)) = (std::env::current_exe(), data_home()) else { return false };
+    if std::fs::read_to_string(home.join("applications").join("jai.desktop")).is_ok_and(|now| now == menu_entry(&exe)) {
+        return false;
+    }
+    start_menu(&exe).is_ok()
 }
 
 /// Sir's PC's address, when this program was downloaded from his phone page (Windows notes

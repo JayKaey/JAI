@@ -37,7 +37,7 @@ pub enum Source {
 impl Source {
     pub fn label(self) -> &'static str {
         match self {
-            Source::Device => "Windows location",
+            Source::Device => if cfg!(windows) { "Windows location" } else { "GeoClue location" },
             Source::Network => "network location",
             Source::Home => "home in the settings",
             Source::Demo => "demo",
@@ -72,7 +72,7 @@ impl Fix {
     pub fn spoken(&self) -> String {
         let within = spoken_accuracy(self.accuracy_m);
         match (self.source, &self.label) {
-            (Source::Device, _) => format!("There you are, Sir: the Windows location service has you to within {within}."),
+            (Source::Device, _) => format!("There you are, Sir: the {} location service has you to within {within}.", if cfg!(windows) { "Windows" } else { "system" }),
             (Source::Network, Some(place)) => format!("There you are, Sir: around {place}, going by your internet connection, so only to within {within}."),
             (Source::Network, None) => format!("There you are, Sir, going by your internet connection: to within {within}."),
             (Source::Home, _) => "There you are, Sir: at the home location in your settings. The live location service didn't answer.".to_string(),
@@ -202,9 +202,37 @@ fn device_position(timeout: Duration) -> Result<(f64, f64, f64), String> {
     Ok((point.Latitude, point.Longitude, accuracy))
 }
 
+/// GeoClue2 on the system bus (KDE and GNOME both run it): a client of its own, started, then the
+/// location it settles on. It refuses a program the system has not allowed (geoclue.conf).
 #[cfg(not(windows))]
-fn device_position(_timeout: Duration) -> Result<(f64, f64, f64), String> {
-    Err("no location service on this system".into())
+fn device_position(timeout: Duration) -> Result<(f64, f64, f64), String> {
+    use zbus::blocking::{Connection, Proxy};
+    use zbus::zvariant::{ObjectPath, OwnedObjectPath};
+    const SERVICE: &str = "org.freedesktop.GeoClue2";
+    let bus = Connection::system().map_err(|e| format!("no system bus: {e}"))?;
+    let manager = Proxy::new(&bus, SERVICE, "/org/freedesktop/GeoClue2/Manager", "org.freedesktop.GeoClue2.Manager").map_err(|e| e.to_string())?;
+    let client_path: OwnedObjectPath = manager.call("GetClient", &()).map_err(|e| format!("no location service on this system: {e}"))?;
+    let client = Proxy::new(&bus, SERVICE, client_path.as_ref(), "org.freedesktop.GeoClue2.Client").map_err(|e| e.to_string())?;
+    // 8 = exact; the desktop id names this program to the system's list of allowed ones.
+    client.set_property("DesktopId", "jai").map_err(|e| e.to_string())?;
+    client.set_property("RequestedAccuracyLevel", 8u32).map_err(|e| e.to_string())?;
+    client.call::<_, _, ()>("Start", &()).map_err(|e| format!("location access is switched off: {e}"))?;
+    let deadline = std::time::Instant::now() + timeout;
+    let found = loop {
+        let place: OwnedObjectPath = client.get_property("Location").map_err(|e| e.to_string())?;
+        if place.as_str() != "/" {
+            break place;
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = client.call::<_, _, ()>("Stop", &());
+            return Err("the location service gave no position in time".into());
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    };
+    let _ = client.call::<_, _, ()>("Stop", &());
+    let location = Proxy::new(&bus, SERVICE, ObjectPath::from(found.as_ref()), "org.freedesktop.GeoClue2.Location").map_err(|e| e.to_string())?;
+    let value = |name: &str| location.get_property::<f64>(name).map_err(|e| e.to_string());
+    Ok((value("Latitude")?, value("Longitude")?, value("Accuracy")?))
 }
 
 /// ipwho.is (keyless, HTTPS): the connection's city.

@@ -1401,7 +1401,13 @@ fn claim_account() -> bool {
     }
     #[cfg(not(windows))]
     {
-        true
+        use std::os::fd::AsRawFd;
+        let dir = std::env::var_os("XDG_RUNTIME_DIR").map(std::path::PathBuf::from).unwrap_or_else(std::env::temp_dir);
+        let Ok(lock) = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(dir.join("jai-discord-account.lock")) else { return true };
+        // SAFETY: flock on a descriptor this function owns; the file stays open (and locked) until the process ends, on purpose.
+        let taken = unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0;
+        std::mem::forget(lock);
+        taken
     }
 }
 

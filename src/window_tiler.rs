@@ -7,8 +7,8 @@
 //! HUD — front-most first, at most nine. A maximised window is restored first so that it takes
 //! its cell.
 
-#[cfg(windows)]
 use crate::features::{spoken, str_arg};
+use crate::monitors::Monitor;
 use serde_json::{json, Value};
 
 /// The most windows one layout takes (more would be slivers).
@@ -60,7 +60,8 @@ pub fn default_layout(n: usize) -> Layout {
 
 /// The cells of `layout` for `n` windows on the work area `[left, top, right, bottom]`, each as
 /// `[x, y, width, height]`, in the order the windows take them. The cells cover the work area
-/// exactly: no gap, no overlap.
+/// exactly: no gap, no overlap. (KDE tiles through KWin's own quick tiles instead.)
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn cells(layout: Layout, [left, top, right, bottom]: [i32; 4], n: usize) -> Vec<[i32; 4]> {
     let (w, h) = ((right - left).max(1), (bottom - top).max(1));
     // `count` equal spans of `total`, the last taking the rounding remainder.
@@ -143,6 +144,46 @@ pub fn tool_definition() -> Value {
     }})
 }
 
+/// The monitor to tile on: the one named in `args`, else the one the window in front stands
+/// on (`front`: its bounds x, y, width, height), else Sir's first one.
+fn monitor_for(args: &Value, front: Option<[i32; 4]>, monitors: &[Monitor]) -> Result<Monitor, String> {
+    let current = front.and_then(|r| crate::monitors::monitor_at(monitors, r[0] + r[2] / 2, r[1] + r[3] / 2));
+    let index = match args.get("monitor").filter(|m| !m.is_null()) {
+        Some(named) => crate::monitors::resolve(named, current, monitors).ok_or_else(|| format!("I can't find monitor {named}, Sir."))?,
+        None => current.or_else(|| crate::monitors::primary(monitors).map(|m| m.index)).unwrap_or(1),
+    };
+    monitors.iter().find(|m| m.index == index).cloned().ok_or_else(|| "That monitor is gone, Sir.".to_string())
+}
+
+/// The programs `args` names, when it names some.
+fn only(args: &Value) -> Vec<String> {
+    args["apps"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default()
+}
+
+/// What the tool says it did.
+fn said(moved: &[String], layout: Layout, monitor: usize) -> String {
+    if moved.is_empty() {
+        return spoken(format!("No windows to tile on monitor {monitor}."), format!("There's nothing open to tile on monitor {monitor}, Sir."));
+    }
+    spoken(format!("Tiled {} window(s) {} on monitor {monitor}: {}", moved.len(), layout.label(), moved.join(", ")), "")
+}
+
+/// KDE's own quick tiles (halves and quarters, as KWin's shortcuts name them) for the first
+/// windows of `n` in `layout`; KDE moves no window to a place a program chooses, so four at
+/// most. None for one window: it is maximised.
+#[cfg_attr(windows, allow(dead_code))]
+fn quick_tiles(layout: Layout, n: usize) -> &'static [&'static str] {
+    match (layout, n) {
+        (_, 0 | 1) => &[],
+        (Layout::Rows, 2) => &["Top", "Bottom"],
+        (_, 2) => &["Left", "Right"],
+        (Layout::Rows, 3) => &["Top", "Bottom Left", "Bottom Right"],
+        (Layout::Grid, 3) => &["Top Left", "Top Right", "Bottom"],
+        (_, 3) => &["Left", "Top Right", "Bottom Right"],
+        _ => &["Top Left", "Top Right", "Bottom Left", "Bottom Right"],
+    }
+}
+
 /// The `tile_windows` tool: moves the windows and says what it did.
 #[cfg(windows)]
 pub async fn run_tool(args: &Value) -> Result<String, String> {
@@ -150,15 +191,9 @@ pub async fn run_tool(args: &Value) -> Result<String, String> {
     if monitors.is_empty() {
         return Err("I can't see a monitor to tile on, Sir.".to_string());
     }
-    let front = crate::win32::user_window();
-    let state = front.as_ref().and_then(|w| crate::win32::window_state(w.hwnd));
-    let current = state.and_then(|(r, _, _)| crate::monitors::monitor_at(&monitors, r[0] + r[2] / 2, r[1] + r[3] / 2));
-    let target = match args.get("monitor").filter(|m| !m.is_null()) {
-        Some(named) => crate::monitors::resolve(named, current, &monitors).ok_or_else(|| format!("I can't find monitor {named}, Sir."))?,
-        None => current.or_else(|| monitors.iter().position(|m| m.primary)).unwrap_or(0),
-    };
-    let monitor = monitors.get(target).ok_or("That monitor is gone, Sir.")?.clone();
-    let only: Vec<String> = args["apps"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default();
+    let front = crate::win32::user_window().and_then(|w| crate::win32::window_state(w.hwnd)).map(|(r, _, _)| r);
+    let monitor = monitor_for(args, front, &monitors)?;
+    let only = only(args);
     let own = std::process::id();
     let layout_arg = str_arg(args, &["layout"]).and_then(parse_layout);
     let (moved, layout) = crate::win32::call(move || {
@@ -183,15 +218,59 @@ pub async fn run_tool(args: &Value) -> Result<String, String> {
         (moved, layout)
     })
     .await?;
-    if moved.is_empty() {
-        return Ok(spoken(format!("No windows to tile on monitor {}.", monitor.index), format!("There's nothing open to tile on monitor {}, Sir.", monitor.index)));
-    }
-    Ok(spoken(format!("Tiled {} window(s) {} on monitor {}: {}", moved.len(), layout.label(), monitor.index, moved.join(", ")), ""))
+    Ok(said(&moved, layout, monitor.index))
 }
 
+/// KDE: Plasma's window list and KDE's quick tiles, one window after the other (KDE tiles the
+/// window in front).
 #[cfg(not(windows))]
-pub async fn run_tool(_args: &Value) -> Result<String, String> {
-    Err("Tiling windows needs Windows, Sir.".to_string())
+pub async fn run_tool(args: &Value) -> Result<String, String> {
+    use crate::plasma::{self, state};
+    if !plasma::available() {
+        return Err("Tiling windows needs Windows or KDE Plasma, Sir.".to_string());
+    }
+    let monitors = crate::monitors::list();
+    if monitors.is_empty() {
+        return Err("I can't see a monitor to tile on, Sir.".to_string());
+    }
+    let all: Vec<plasma::Window> = plasma::windows().into_iter().filter(|w| !w.is(state::SKIP_TASKBAR)).collect();
+    let own = std::process::id();
+    // (`hwnd`: the window's place in `all`.)
+    let windows: Vec<Candidate> = all
+        .iter()
+        .enumerate()
+        .map(|(i, w)| Candidate {
+            hwnd: i as isize,
+            title: w.title.clone(),
+            process: w.program(),
+            rect: w.geometry,
+            maximised: w.is(state::MAXIMIZED),
+            minimised: w.is(state::MINIMIZED),
+            own: w.pid == own,
+        })
+        .collect();
+    let front = windows.iter().find(|c| !c.own && !c.minimised).map(|c| c.rect);
+    let monitor = monitor_for(args, front, &monitors)?;
+    let chosen = pick(&windows, monitor.rect, &only(args));
+    let layout = str_arg(args, &["layout"]).and_then(parse_layout).unwrap_or_else(|| default_layout(chosen.len()));
+    let tiles = quick_tiles(layout, chosen.len());
+    let moved = tokio::task::spawn_blocking(move || -> Result<Vec<String>, String> {
+        let mut moved = Vec::new();
+        for (i, window) in chosen.iter().take(tiles.len().max(1)).enumerate() {
+            let uuid = &all[window.hwnd as usize].uuid;
+            plasma::set_state(uuid, state::ACTIVE, true)?;
+            std::thread::sleep(std::time::Duration::from_millis(150));
+            match tiles.get(i) {
+                Some(tile) => crate::kde::kwin_shortcut(&format!("Window Quick Tile {tile}"))?,
+                None => plasma::set_state(uuid, state::MAXIMIZED, true)?,
+            }
+            moved.push(crate::screen_time::app_name(&window.process));
+        }
+        Ok(moved)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    Ok(said(&moved, layout, monitor.index))
 }
 
 #[cfg(test)]
@@ -243,6 +322,36 @@ mod tests {
         assert_eq!(parse_layout("main_and_stack"), Some(Layout::MainAndStack));
         assert_eq!(parse_layout("somehow"), None);
         assert_eq!((default_layout(2), default_layout(3), default_layout(4)), (Layout::SideBySide, Layout::SideBySide, Layout::Grid));
+    }
+
+    #[test]
+    fn the_monitor_named_or_in_front_is_the_one_tiled() {
+        let m = |index: usize, rect: [i32; 4], primary: bool| Monitor { index, name: format!("DISPLAY{index}"), rect, work: rect, primary };
+        let monitors = [m(1, [0, 0, 2560, 1440], true), m(2, [-1920, 0, 0, 1080], false), m(3, [2560, 0, 4480, 1080], false)];
+        let tiled = |args: Value, front: Option<[i32; 4]>| monitor_for(&args, front, &monitors).map(|m| m.index);
+        // (Until 2026-11-20 Sir's numbers, which count from 1, were taken as places in the list,
+        // which count from 0: "monitor 2" tiled on the third, and the third was "gone".)
+        assert_eq!(tiled(json!({"monitor": 2}), None), Ok(2));
+        assert_eq!(tiled(json!({"monitor": "the left one"}), None), Ok(2));
+        assert_eq!(tiled(json!({}), Some([2600, 100, 800, 600])), Ok(3), "the monitor of the window in front");
+        assert_eq!(tiled(json!({"monitor": null}), None), Ok(1), "else Sir's first");
+        assert!(tiled(json!({"monitor": 7}), None).is_err());
+    }
+
+    #[test]
+    fn kde_tiles_halves_and_quarters_four_windows_at_most() {
+        const KWIN: [&str; 8] = ["Left", "Right", "Top", "Bottom", "Top Left", "Top Right", "Bottom Left", "Bottom Right"];
+        assert_eq!(quick_tiles(Layout::SideBySide, 2), ["Left", "Right"]);
+        assert_eq!(quick_tiles(Layout::Rows, 2), ["Top", "Bottom"]);
+        assert_eq!(quick_tiles(Layout::MainAndStack, 3), ["Left", "Top Right", "Bottom Right"]);
+        assert!(quick_tiles(Layout::Grid, 1).is_empty(), "one window is maximised");
+        for layout in [Layout::SideBySide, Layout::Rows, Layout::Grid, Layout::MainAndStack] {
+            for n in 2..=MAX_WINDOWS {
+                let tiles = quick_tiles(layout, n);
+                assert_eq!(tiles.len(), n.min(4), "{layout:?} {n}");
+                assert!(tiles.iter().all(|t| KWIN.contains(t)), "{layout:?} {n}: {tiles:?}");
+            }
+        }
     }
 
     #[test]

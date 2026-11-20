@@ -420,14 +420,8 @@ impl ModalityStore {
     }
 }
 
-#[cfg(windows)]
 fn fullscreen_app_active() -> bool {
-    crate::win32::foreground_is_fullscreen()
-}
-
-#[cfg(not(windows))]
-fn fullscreen_app_active() -> bool {
-    false
+    crate::platform::foreground_is_fullscreen()
 }
 
 pub fn tool_definition() -> Value {

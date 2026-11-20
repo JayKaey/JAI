@@ -1,12 +1,14 @@
 //! "What's on my screen?" — JAI reads the window Sir is looking at (or the whole screen) with
-//! the OCR engine built into Windows (Windows.Media.Ocr, in Sir's own languages) and hands the
-//! text to the language model, which explains, summarises or answers questions about it. Nothing
-//! leaves the machine.
+//! the OCR engine built into Windows (Windows.Media.Ocr, in Sir's own languages; on Linux
+//! tesseract reads a KWin screenshot) and hands the text to the language model, which explains,
+//! summarises or answers questions about it. Nothing leaves the machine.
 
+#[cfg(windows)]
 use std::time::Duration;
 #[cfg(windows)]
 use tracing::info;
 
+#[cfg(windows)]
 const OCR_TIMEOUT: Duration = Duration::from_secs(25);
 const MAX_CHARS: usize = 6000;
 
@@ -45,6 +47,7 @@ pub(crate) fn base64(bytes: &[u8]) -> String {
 }
 
 /// Capture `rect` (or the primary screen) and print the recognised lines.
+#[cfg(windows)]
 fn ocr_script(rect: Option<[i32; 4]>, png: &str) -> String {
     let bounds = match rect {
         Some([x, y, w, h]) => format!("$x={x}; $y={y}; $w={w}; $h={h}"),
@@ -62,6 +65,7 @@ $bmp.Save('{png}', [System.Drawing.Imaging.ImageFormat]::Png); $g.Dispose(); $bm
 }
 
 /// Recognise the lines of the image at `png` after running `prepare` (which may write it).
+#[cfg(windows)]
 fn recognise_script(prepare: &str, png: &str) -> String {
     format!(
         r#"$ErrorActionPreference='Stop'
@@ -132,13 +136,43 @@ pub async fn ocr_file(path: &std::path::Path) -> Result<String, String> {
 
 #[cfg(not(windows))]
 pub async fn ocr_file(path: &std::path::Path) -> Result<String, String> {
-    let p = path.to_path_buf();
-    tokio::task::spawn_blocking(move || {
-        let out = std::process::Command::new("tesseract").args([p.to_string_lossy().as_ref(), "-"]).output().map_err(|_| "Install tesseract to read images.".to_string())?;
-        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+    crate::kde::blocking(move || tesseract(&bytes)).await?
+}
+
+/// Tesseract reads an encoded image from stdin; German too when its data is installed.
+#[cfg(not(windows))]
+fn tesseract(image: &[u8]) -> Result<String, String> {
+    use std::io::Write;
+    const HINT: &str = "Install it with: sudo pacman -S tesseract tesseract-data-eng tesseract-data-deu";
+    for langs in ["eng+deu", "eng"] {
+        let mut child = std::process::Command::new("tesseract")
+            .args(["-", "-", "-l", langs])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map_err(|_| format!("tesseract is missing. {HINT}"))?;
+        // A writer thread keeps a big image from deadlocking against the output pipe.
+        let mut stdin = child.stdin.take().ok_or("tesseract has no input")?;
+        let data = image.to_vec();
+        let writer = std::thread::spawn(move || stdin.write_all(&data));
+        let out = child.wait_with_output().map_err(|e| e.to_string())?;
+        let _ = writer.join();
+        if out.status.success() {
+            return Ok(String::from_utf8_lossy(&out.stdout).trim().to_string());
+        }
+    }
+    Err(format!("tesseract could not read the image (language data missing?). {HINT}"))
+}
+
+/// OCR of a screenshot from KWin.
+#[cfg(not(windows))]
+pub fn ocr_shot(shot: &crate::kde::Shot) -> Result<String, String> {
+    let image = crate::kde::screenshot(shot)?;
+    let mut png = std::io::Cursor::new(Vec::new());
+    image.write_to(&mut png, image::ImageFormat::Png).map_err(|e| e.to_string())?;
+    tesseract(&png.into_inner())
 }
 
 #[cfg(windows)]
@@ -371,8 +405,13 @@ async fn monitor_text(target: &serde_json::Value) -> Result<String, String> {
 }
 
 #[cfg(not(windows))]
-async fn monitor_text(_target: &serde_json::Value) -> Result<String, String> {
-    read(Scope::Screen).await
+async fn monitor_text(target: &serde_json::Value) -> Result<String, String> {
+    let outputs = crate::plasma::outputs();
+    let number = target.as_u64().or_else(|| target.as_str().and_then(|s| s.trim().parse().ok())).unwrap_or(1) as usize;
+    let name = outputs.get(number.max(1) - 1).ok_or_else(|| format!("There is no monitor {target}; {} are connected.", outputs.len()))?.clone();
+    let titles: Vec<String> = crate::plasma::windows().into_iter().filter(|w| !w.is(crate::plasma::state::MINIMIZED) && !w.title.is_empty()).take(12).map(|w| format!("\"{}\"", w.title.chars().take(70).collect::<String>())).collect();
+    let text = crate::kde::blocking(move || ocr_shot(&crate::kde::Shot::Screen(name))).await??;
+    Ok(format!("Monitor {number}. Open windows: {}.\n{text}", if titles.is_empty() { "none".to_string() } else { titles.join(", ") }))
 }
 
 /// "Copy the text of this window": what Windows reads in the window in front (or on a monitor)
@@ -404,8 +443,21 @@ async fn copy_text(monitor: Option<&serde_json::Value>) -> Result<String, String
 }
 
 #[cfg(not(windows))]
-async fn copy_text(_monitor: Option<&serde_json::Value>) -> Result<String, String> {
-    Err("Copying a window's text needs Windows' own OCR.".into())
+async fn copy_text(monitor: Option<&serde_json::Value>) -> Result<String, String> {
+    let outputs = crate::plasma::outputs();
+    let shot = match monitor {
+        Some(target) => {
+            let number = target.as_u64().or_else(|| target.as_str().and_then(|s| s.trim().parse().ok())).unwrap_or(1) as usize;
+            crate::kde::Shot::Screen(outputs.get(number.max(1) - 1).ok_or_else(|| format!("There is no monitor {target}; {} are connected.", outputs.len()))?.clone())
+        }
+        None => crate::kde::Shot::ActiveWindow,
+    };
+    let text = crate::kde::blocking(move || ocr_shot(&shot)).await??;
+    if text.trim().is_empty() {
+        return Ok("I found no text to copy, Sir.".into());
+    }
+    crate::clipboard::write(&text).await?;
+    Ok(format!("Copied, Sir: {} lines are on the clipboard.", text.lines().count()))
 }
 
 pub fn inspect_tool_definition() -> serde_json::Value {
@@ -420,21 +472,17 @@ pub fn inspect_tool_definition() -> serde_json::Value {
 }
 
 #[cfg(not(windows))]
-pub async fn read(_scope: Scope) -> Result<String, String> {
-    // grim/scrot + tesseract when available.
-    tokio::task::spawn_blocking(|| {
-        let png = std::env::temp_dir().join("jai_ocr.png");
-        let p = png.display().to_string();
-        let shot = ["grim", "scrot"].iter().any(|tool| std::process::Command::new(tool).arg(&p).status().map(|s| s.success()).unwrap_or(false));
-        if !shot {
-            return Err("No screenshot tool found (install grim or scrot).".to_string());
-        }
-        let out = std::process::Command::new("tesseract").args([p.as_str(), "-"]).output().map_err(|_| "Install tesseract for screen reading.".to_string())?;
-        let _ = std::fs::remove_file(&png);
-        Ok(format!("Text visible on the screen (OCR):\n{}", String::from_utf8_lossy(&out.stdout).chars().take(MAX_CHARS).collect::<String>()))
-    })
-    .await
-    .map_err(|e| e.to_string())?
+pub async fn read(scope: Scope) -> Result<String, String> {
+    let (shot, label) = match scope {
+        Scope::ActiveWindow => (crate::kde::Shot::ActiveWindow, "the window in front"),
+        Scope::Screen => (crate::plasma::outputs().into_iter().next().map_or(crate::kde::Shot::Workspace, crate::kde::Shot::Screen), "the screen"),
+    };
+    let looking = crate::screen_context::look().await;
+    let text = crate::kde::blocking(move || ocr_shot(&shot)).await?;
+    drop(looking);
+    let text = text?;
+    crate::screen_context::seen(label, &text);
+    Ok(format!("Text visible on {label} (OCR):\n{}", text.chars().take(MAX_CHARS).collect::<String>()))
 }
 
 #[cfg(test)]

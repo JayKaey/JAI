@@ -156,13 +156,10 @@ pub fn magnetic_snap(rect: Rect, others: &[Rect], screens: &[Rect], threshold: f
 /// Monitor rectangles (physical pixels) of the work areas.
 pub fn screen_rects() -> Vec<Rect> {
     #[cfg(windows)]
-    {
-        crate::win32::monitor_work_areas().into_iter().map(|[x, y, w, h]| Rect::from_min_size(pos2(x as f32, y as f32), vec2(w as f32, h as f32))).collect()
-    }
+    let areas = crate::win32::monitor_work_areas();
     #[cfg(not(windows))]
-    {
-        vec![Rect::from_min_size(Pos2::ZERO, vec2(1920.0, 1080.0))]
-    }
+    let areas = crate::x11::monitor_work_areas();
+    areas.into_iter().map(|[x, y, w, h]| Rect::from_min_size(pos2(x as f32, y as f32), vec2(w as f32, h as f32))).collect()
 }
 
 /// The cursor in physical screen pixels.
@@ -177,9 +174,7 @@ pub fn cursor_pos() -> Option<Pos2> {
         Some(pos2(pt.x as f32, pt.y as f32))
     }
     #[cfg(not(windows))]
-    {
-        None
-    }
+    crate::x11::pointer().map(|(x, y, _)| pos2(x as f32, y as f32))
 }
 
 /// Whether the left mouse button is physically held (ends a drag that left the window).
@@ -191,9 +186,7 @@ pub fn left_button_down() -> bool {
         (unsafe { GetAsyncKeyState(VK_LBUTTON.0 as i32) } as u16 & 0x8000) != 0
     }
     #[cfg(not(windows))]
-    {
-        false
-    }
+    crate::wallpaper::button_down()
 }
 
 /// The native window with exactly this title (the workspace windows' titles are unique).
@@ -208,10 +201,7 @@ pub fn find_window(title: &str) -> Option<isize> {
         (hwnd.0 != 0).then_some(hwnd.0)
     }
     #[cfg(not(windows))]
-    {
-        let _ = title;
-        None
-    }
+    crate::x11::own_window(title)
 }
 
 /// Ghost mode: `WS_EX_LAYERED | WS_EX_TRANSPARENT` (every click passes through) plus
@@ -248,9 +238,11 @@ pub fn set_window_click_through(hwnd: isize, enabled: bool) -> Result<(), String
     }
 }
 
+/// Linux: the same on his X11 window (every click passes, above every other window).
 #[cfg(not(windows))]
-pub fn set_window_click_through(_hwnd: isize, _enabled: bool) -> Result<(), String> {
-    Err("click-through windows need Windows".into())
+pub fn set_window_click_through(hwnd: isize, enabled: bool) -> Result<(), String> {
+    crate::x11::topmost(hwnd, enabled);
+    crate::x11::click_through(hwnd, enabled)
 }
 
 /// Always-on-top on or off.
@@ -264,7 +256,8 @@ pub fn set_topmost(hwnd: isize, on: bool) -> Result<(), String> {
 }
 
 #[cfg(not(windows))]
-pub fn set_topmost(_hwnd: isize, _on: bool) -> Result<(), String> {
+pub fn set_topmost(hwnd: isize, on: bool) -> Result<(), String> {
+    crate::x11::topmost(hwnd, on);
     Ok(())
 }
 

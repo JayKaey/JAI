@@ -1,6 +1,6 @@
 //! Window management: focus / minimise / maximise / restore / full screen / close / snap / show
-//! desktop. Windows uses native Win32; Linux uses Hyprland (`hyprctl`) or X11 (`wmctrl` +
-//! `xdotool`).
+//! desktop. Windows uses native Win32; Linux uses KDE Plasma's own window list and KWin's
+//! shortcuts (`plasma`, `kde`), else Hyprland (`hyprctl`) or X11 (`wmctrl` + `xdotool`).
 //!
 //! JAI's own windows are never a target unless Sir names JAI: without a name an action goes
 //! to the app the conversation is about or the window Sir was working in (see `focus`).
@@ -133,8 +133,7 @@ fn matches_target(target: &str, process: &str, title: &str) -> bool {
 }
 
 /// The hotkey that toggles an app's own full screen: F11 for browsers, editors, file managers and
-/// most apps; Discord uses Ctrl+Shift+F. (Linux compositors full-screen any window directly.)
-#[cfg_attr(not(windows), allow(dead_code))]
+/// most apps; Discord uses Ctrl+Shift+F.
 fn uses_ctrl_shift_f(process: &str) -> bool {
     matches!(process, "discord" | "discordcanary" | "discordptb")
 }
@@ -210,13 +209,18 @@ pub fn find_windows(target: &WindowTarget) -> Result<Vec<crate::win32::WindowInf
         WindowTarget::Active => win32::user_window().into_iter().collect(),
     };
     if chosen.is_empty() {
-        return Err(match target {
-            WindowTarget::Named(t) | WindowTarget::Focus(t) => format!("No open window matches '{}'.", apps::display_name(t)),
-            WindowTarget::Handle { title, .. } => format!("The window '{}' is no longer open.", short_title(title)),
-            WindowTarget::Active => "There is no window to act on (only JAI's own are open).".to_string(),
-        });
+        return Err(none_open(target));
     }
     Ok(chosen)
+}
+
+/// What JAI says when no window is what `target` means.
+fn none_open(target: &WindowTarget) -> String {
+    match target {
+        WindowTarget::Named(t) | WindowTarget::Focus(t) => format!("No open window matches '{}'.", apps::display_name(t)),
+        WindowTarget::Handle { title, .. } => format!("The window '{}' is no longer open.", short_title(title)),
+        WindowTarget::Active => "There is no window to act on (only JAI's own are open).".to_string(),
+    }
 }
 
 /// Focuses a window and checks it really is in front before a key is sent to it, so a hotkey
@@ -293,10 +297,146 @@ fn capitalize(s: &str) -> String {
 }
 
 #[cfg(not(windows))]
+pub use linux::{kde_front, kde_windows, to_front};
+
+#[cfg(not(windows))]
 mod linux {
-    use super::{capitalize, matches_target, WindowAction, WindowTarget};
+    use super::{capitalize, matches_target, none_open, short_title, uses_ctrl_shift_f, WindowAction, WindowTarget};
     use crate::apps::which;
+    use crate::plasma::{self, state, Window};
     use std::process::Command;
+    use std::time::Duration;
+
+    /// The windows a target means under KDE Plasma, the topmost first (J.A.I.'s own only when he
+    /// is named; panels and the desktop never).
+    pub fn kde_windows(target: &WindowTarget) -> Result<Vec<Window>, String> {
+        let me = std::process::id();
+        let candidates = plasma::windows().into_iter().filter(|w| !w.is(state::SKIP_TASKBAR) && (w.pid != me || target.names_jai()));
+        let chosen: Vec<Window> = match target {
+            // (The window Sir works in: the active one, or while JAI's own has the focus the
+            // topmost of the others.)
+            WindowTarget::Active => candidates.filter(|w| !w.is(state::MINIMIZED)).min_by_key(|w| !w.is(state::ACTIVE)).into_iter().collect(),
+            _ => candidates
+                .filter(|w| {
+                    let program = w.app_id.rsplit('.').next().unwrap_or_default().to_string();
+                    [w.program(), program, w.resource_name.clone()].iter().any(|name| !name.is_empty() && picks(target, name, &w.title))
+                })
+                .collect(),
+        };
+        if chosen.is_empty() {
+            return Err(none_open(target));
+        }
+        Ok(chosen)
+    }
+
+    /// The window Sir works in under KDE (never one of JAI's own), as `win32::user_window`.
+    pub fn kde_front() -> Option<Window> {
+        kde_windows(&WindowTarget::Active).ok()?.into_iter().next()
+    }
+
+    /// Brings a window to the front and checks it is there before a key is sent to it, so a key
+    /// never lands in another program (or in JAI's own window).
+    pub fn to_front(w: &Window) -> Result<(), String> {
+        for wait in [120, 250] {
+            if w.is(state::MINIMIZED) {
+                plasma::set_state(&w.uuid, state::MINIMIZED, false)?;
+            }
+            plasma::set_state(&w.uuid, state::ACTIVE, true)?;
+            std::thread::sleep(Duration::from_millis(wait));
+            if plasma::active().is_some_and(|a| a.uuid == w.uuid) {
+                return Ok(());
+            }
+        }
+        Err(format!("KDE would not bring '{}' to the front, so I did not send it a key.", short_title(&w.title)))
+    }
+
+    /// Full screen on (`on`) or off: the program's own (a browser's has no tabs or bars), else
+    /// KWin's.
+    fn fullscreen(w: &Window, on: bool) -> Result<String, String> {
+        let title = short_title(&w.title);
+        if w.is(state::FULLSCREEN) == on {
+            return Ok(if on { format!("'{title}' is already in full screen.") } else { format!("'{title}' is not in full screen.") });
+        }
+        to_front(w)?;
+        plasma::press(if uses_ctrl_shift_f(&w.program().to_lowercase()) { "Ctrl+Shift+F" } else { "F11" })?;
+        std::thread::sleep(Duration::from_millis(350));
+        if plasma::windows().into_iter().find(|now| now.uuid == w.uuid).is_some_and(|now| now.is(state::FULLSCREEN) != on) {
+            plasma::set_state(&w.uuid, state::FULLSCREEN, on)?;
+        }
+        Ok(if on { format!("Put '{title}' in full screen.") } else { format!("Took '{title}' out of full screen.") })
+    }
+
+    /// KDE Plasma: its own window list (Wayland's and X11's windows alike) and KWin's shortcuts.
+    fn kde(action: WindowAction, target: &WindowTarget) -> Result<String, String> {
+        match action {
+            WindowAction::ShowDesktop => return crate::kde::kwin_shortcut("Show Desktop").map(|_| "Toggled the desktop.".to_string()),
+            WindowAction::MinimizeAll => {
+                for w in plasma::windows().iter().filter(|w| w.pid != std::process::id() && !w.is(state::SKIP_TASKBAR) && !w.is(state::MINIMIZED)) {
+                    plasma::set_state(&w.uuid, state::MINIMIZED, true)?;
+                }
+                return Ok("Minimised all windows.".into());
+            }
+            _ => {}
+        }
+        let mut chosen = kde_windows(target)?;
+        // A name Sir said covers all of its windows for these; everything else is the top one.
+        if !(matches!(target, WindowTarget::Named(_)) && matches!(action, WindowAction::Minimize | WindowAction::Restore | WindowAction::Close)) {
+            chosen.truncate(1);
+        }
+        let mut note = None;
+        for w in &chosen {
+            let set = |mask: u32, on: bool| plasma::set_state(&w.uuid, mask, on);
+            match action {
+                WindowAction::Focus => {
+                    set(state::MINIMIZED, false)?;
+                    set(state::ACTIVE, true)?;
+                }
+                WindowAction::Minimize => set(state::MINIMIZED, true)?,
+                WindowAction::Maximize => {
+                    set(state::MAXIMIZED, true)?;
+                    set(state::ACTIVE, true)?;
+                }
+                WindowAction::Restore => {
+                    set(if w.is(state::MINIMIZED) { state::MINIMIZED } else { state::MAXIMIZED }, false)?;
+                    set(state::ACTIVE, true)?;
+                }
+                WindowAction::Fullscreen => note = Some(fullscreen(w, true)?),
+                WindowAction::ExitFullscreen => note = Some(fullscreen(w, false)?),
+                WindowAction::Close => plasma::close(&w.uuid)?,
+                WindowAction::CloseTab => {
+                    to_front(w)?;
+                    plasma::press("Ctrl+W")?;
+                }
+                WindowAction::SnapLeft | WindowAction::SnapRight | WindowAction::SnapTop | WindowAction::SnapBottom => {
+                    to_front(w)?;
+                    let side = match action {
+                        WindowAction::SnapLeft => "Left",
+                        WindowAction::SnapRight => "Right",
+                        WindowAction::SnapTop => "Top",
+                        _ => "Bottom",
+                    };
+                    crate::kde::kwin_shortcut(&format!("Window Quick Tile {side}"))?;
+                }
+                WindowAction::Bigger | WindowAction::Smaller => {
+                    to_front(w)?;
+                    let how = if action == WindowAction::Bigger { "Grow" } else { "Shrink" };
+                    for way in ["Horizontal", "Vertical"] {
+                        crate::kde::kwin_shortcut(&format!("Window {how} {way}"))?;
+                    }
+                }
+                WindowAction::MinimizeAll | WindowAction::ShowDesktop => {}
+            }
+        }
+        if let Some(note) = note {
+            return Ok(note);
+        }
+        let title = short_title(&chosen[0].title);
+        Ok(if chosen.len() > 1 {
+            format!("{} {} windows (e.g. '{title}').", capitalize(action.past_tense()), chosen.len())
+        } else {
+            format!("{} '{title}'.", capitalize(action.past_tense()))
+        })
+    }
 
     fn run(program: &str, args: &[&str]) -> Result<String, String> {
         let out = Command::new(program).args(args).output().map_err(|e| format!("{program}: {e}"))?;
@@ -332,6 +472,9 @@ mod linux {
     }
 
     pub fn manage(action: WindowAction, target: &WindowTarget) -> Result<String, String> {
+        if plasma::available() {
+            return kde(action, target);
+        }
         if std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some() && which("hyprctl").is_some() {
             return hyprland(action, target);
         }

@@ -473,6 +473,21 @@ pub fn sleep_timer(args: &Value) -> Result<String, String> {
     }
 }
 
+/// The master volume (0-1), for the timer's fade.
+async fn master_volume() -> Option<f32> {
+    #[cfg(windows)]
+    return crate::win32::call(crate::win32::get_volume).await.ok().and_then(Result::ok).map(|(level, _)| level);
+    #[cfg(not(windows))]
+    return crate::audio_mixer::master_state().await.ok().map(|(level, _)| level);
+}
+
+async fn set_master_volume(level: f32) {
+    #[cfg(windows)]
+    let _ = crate::win32::call(move || crate::win32::set_volume(level)).await;
+    #[cfg(not(windows))]
+    let _ = crate::media::execute(crate::media::MediaAction::SetVolume((level.clamp(0.0, 1.0) * 100.0).round() as u8)).await;
+}
+
 /// The timer is up: the volume sinks, every player is paused (with "everything", J.A.I.'s own
 /// voice too), and the volume stands again where it stood. A test touches nothing.
 async fn fall_silent(what: &str, still_wanted: impl Fn() -> bool) {
@@ -480,31 +495,25 @@ async fn fall_silent(what: &str, still_wanted: impl Fn() -> bool) {
         tracing::info!("[SLEEP TIMER] Up: a test session leaves Sir's players and his volume alone");
         return;
     }
-    #[cfg(windows)]
-    let stood = crate::win32::call(crate::win32::get_volume).await.ok().and_then(Result::ok).map(|(level, _)| level);
-    #[cfg(windows)]
+    let stood = master_volume().await;
     if let Some(level) = stood.filter(|l| *l > 0.02) {
         let steps = 24;
         for k in 1..=steps {
             // (Cancelled, or set anew, while the volume sinks: it stands again, nothing is paused.)
             if !still_wanted() {
-                let _ = crate::win32::call(move || crate::win32::set_volume(level)).await;
+                set_master_volume(level).await;
                 tracing::info!("[SLEEP TIMER] Called off while the volume sank: it stands where it stood");
                 return;
             }
-            let to = level * (1.0 - 0.9 * k as f32 / steps as f32);
-            let _ = crate::win32::call(move || crate::win32::set_volume(to)).await;
+            set_master_volume(level * (1.0 - 0.9 * k as f32 / steps as f32)).await;
             tokio::time::sleep(FADE / steps).await;
         }
     }
     let stopped = crate::music::stop_all_active_media().await;
     let _ = what;
-    #[cfg(not(windows))]
-    let _ = still_wanted;
-    #[cfg(windows)]
     if let Some(level) = stood {
         tokio::time::sleep(Duration::from_millis(600)).await;
-        let _ = crate::win32::call(move || crate::win32::set_volume(level)).await;
+        set_master_volume(level).await;
     }
     tracing::info!("[SLEEP TIMER] Up: {} player(s) paused, the volume stands where it stood", stopped.sessions.len() + stopped.windows.len());
     crate::hud_notify::record("The sleep timer was up: I paused what was playing.", false);

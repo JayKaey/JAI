@@ -1,6 +1,6 @@
 //! System volume (exact percentages) and media transport keys.
 //! Windows: Core Audio `IAudioEndpointVolume` + `SendInput` media keys.
-//! Linux: `wpctl` (PipeWire) → `pactl` (PulseAudio) → `amixer` (ALSA); `playerctl` for media.
+//! Linux: `wpctl` (PipeWire) → `pactl` (PulseAudio) → `amixer` (ALSA); MPRIS (D-Bus) for media.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MediaAction {
@@ -184,11 +184,11 @@ mod linux {
         }
     }
 
-    fn player(cmd: &str) -> Result<(), String> {
-        if which("playerctl").is_none() {
-            return Err("playerctl is not installed (sudo apt install playerctl).".into());
-        }
-        run("playerctl", &[cmd]).map(|_| ())
+    /// A transport call (PlayPause, Next …) to the player that plays, else the first one.
+    fn player(method: &str) -> Result<(), String> {
+        let names = super::mpris::names()?;
+        let name = super::mpris::preferred(&names).ok_or("No media player is running: none answers on the session bus.")?;
+        super::mpris::control(&name, method)
     }
 
     pub fn execute(action: MediaAction) -> Result<String, String> {
@@ -218,17 +218,107 @@ mod linux {
                 let (level, muted) = get()?;
                 Ok(format!("System volume is {level}%{}.", if muted { " (muted)" } else { "" }))
             }
-            MediaAction::PlayPause => player("play-pause").map(|_| "Toggled play/pause.".into()),
-            MediaAction::Next => player("next").map(|_| "Skipped to the next track.".into()),
-            MediaAction::Previous => player("previous").map(|_| "Went back to the previous track.".into()),
-            MediaAction::Stop => player("stop").map(|_| "Stopped playback.".into()),
+            MediaAction::PlayPause => player("PlayPause").map(|_| "Toggled play/pause.".into()),
+            MediaAction::Next => player("Next").map(|_| "Skipped to the next track.".into()),
+            MediaAction::Previous => player("Previous").map(|_| "Went back to the previous track.".into()),
+            MediaAction::Stop => player("Stop").map(|_| "Stopped playback.".into()),
         }
+    }
+}
+
+/// The media players of a KDE session: MPRIS over the session bus (Spotify, Firefox, VLC, mpv,
+/// Elisa, Haruna …). Every call that changes a player is the caller's to guard with `hands_off`.
+#[cfg(not(windows))]
+pub mod mpris {
+    use crate::kde;
+    use std::collections::HashMap;
+    use zbus::zvariant::{OwnedValue, Value};
+
+    const PREFIX: &str = "org.mpris.MediaPlayer2.";
+    const PATH: &str = "/org/mpris/MediaPlayer2";
+    const PLAYER: &str = "org.mpris.MediaPlayer2.Player";
+
+    /// What one player shows right now.
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct Info {
+        pub app: String,
+        pub playing: bool,
+        pub title: String,
+        pub artist: String,
+        pub album: String,
+        /// Seconds into the track.
+        pub position: Option<f32>,
+    }
+
+    /// The bus names of the running players.
+    pub fn names() -> Result<Vec<String>, String> {
+        let all: Vec<String> = kde::call("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "ListNames", &())?;
+        Ok(all.into_iter().filter(|n| n.starts_with(PREFIX)).collect())
+    }
+
+    /// "org.mpris.MediaPlayer2.firefox.instance_1_23" → "firefox".
+    pub fn short(name: &str) -> &str {
+        name.strip_prefix(PREFIX).unwrap_or(name).split('.').next().unwrap_or(name)
+    }
+
+    /// The names whose short name contains `app` ("spotify"), case-insensitive.
+    pub fn named(names: &[String], app: &str) -> Vec<String> {
+        names.iter().filter(|n| short(n).to_lowercase().contains(&app.to_lowercase())).cloned().collect()
+    }
+
+    /// The player that plays, else the first.
+    pub fn preferred(names: &[String]) -> Option<String> {
+        names.iter().find(|n| info(n).is_some_and(|i| i.playing)).or_else(|| names.first()).cloned()
+    }
+
+    pub fn control(name: &str, method: &str) -> Result<(), String> {
+        kde::call::<_, ()>(name, PATH, PLAYER, method, &())
+    }
+
+    /// A track URI the player opens itself (`spotify:track:…`).
+    pub fn open_uri(name: &str, uri: &str) -> Result<(), String> {
+        kde::call::<_, ()>(name, PATH, PLAYER, "OpenUri", &(uri,))
+    }
+
+    /// Text of a metadata entry: a string, or the strings of a list joined.
+    fn text(meta: &HashMap<String, OwnedValue>, key: &str) -> String {
+        match meta.get(key).map(|v| &**v) {
+            Some(Value::Str(s)) => s.to_string(),
+            Some(Value::Array(a)) => a.iter().filter_map(|v| if let Value::Str(s) = v { Some(s.to_string()) } else { None }).collect::<Vec<_>>().join(", "),
+            _ => String::new(),
+        }
+    }
+
+    pub fn info(name: &str) -> Option<Info> {
+        let status: String = kde::property(name, PATH, PLAYER, "PlaybackStatus").ok()?;
+        let meta: HashMap<String, OwnedValue> = kde::property(name, PATH, PLAYER, "Metadata").unwrap_or_default();
+        Some(Info {
+            app: short(name).to_string(),
+            playing: status == "Playing",
+            title: text(&meta, "xesam:title"),
+            artist: text(&meta, "xesam:artist"),
+            album: text(&meta, "xesam:album"),
+            position: kde::property::<i64>(name, PATH, PLAYER, "Position").ok().map(|us| us as f32 / 1e6),
+        })
+    }
+
+    pub fn all() -> Vec<Info> {
+        names().unwrap_or_default().iter().filter_map(|n| info(n)).collect()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(windows))]
+    #[test]
+    fn mpris_names_are_told_apart() {
+        let names = vec!["org.mpris.MediaPlayer2.spotify".to_string(), "org.mpris.MediaPlayer2.firefox.instance_1_23".to_string()];
+        assert_eq!(mpris::short(&names[1]), "firefox");
+        assert_eq!(mpris::named(&names, "Spotify"), vec![names[0].clone()]);
+        assert!(mpris::named(&names, "vlc").is_empty());
+    }
 
     #[test]
     fn parses_actions() {

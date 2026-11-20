@@ -8,7 +8,8 @@
 //! * the Whisper and Kokoro workers drop their engines (`Option::take` → `Drop` frees every
 //!   whisper.cpp / ONNX Runtime buffer, CPU or GPU) on their next idle tick.
 //!
-//! While dormant only the light Silero VAD and a Win32 hotkey (`Alt+J`) are alive. A hotkey, the
+//! While dormant only the light Silero VAD and a global hotkey (`Alt+J`; a KDE shortcut on
+//! Linux) are alive. A hotkey, the
 //! standby button (HUD, orb, tray) or Sir talking to JAI wakes him: the workers re-create their
 //! engines on the fly and the next language request loads the model again.
 //!
@@ -285,7 +286,6 @@ pub fn start(
     }
     rt.spawn(game_voice(Arc::clone(&controls)));
     rt.spawn(watchdog(controls, config.clone()));
-    #[cfg(windows)]
     hotkeys::spawn(&config.hotkeys);
 }
 
@@ -1035,6 +1035,42 @@ mod hotkeys {
             assert_eq!(parse("ctrl + space"), Some((MOD_CONTROL, 0x20)));
             assert_eq!(parse("Ctrl+Shift+F9"), Some((MOD_CONTROL | MOD_SHIFT, 0x78)));
             assert_eq!(parse("Alt+Banana"), None);
+        }
+    }
+}
+
+/// The wake keys on KDE Plasma: registered with KGlobalAccel (System Settings › Shortcuts shows
+/// them, and Sir may give them other keys there). A scripted session takes none of his keys.
+#[cfg(not(windows))]
+mod hotkeys {
+    use tracing::{info, warn};
+
+    pub fn spawn(specs: &[String]) {
+        if crate::platform::in_test_session() {
+            return;
+        }
+        let keys: Vec<(String, String, i32)> = specs
+            .iter()
+            .enumerate()
+            .filter_map(|(i, spec)| match crate::kde::qt_key(spec) {
+                Some(key) => Some((format!("wake-{i}"), format!("Wake J.A.I. ({spec})"), key)),
+                None => {
+                    warn!("[VRAM] Unknown hotkey '{spec}'");
+                    None
+                }
+            })
+            .collect();
+        if keys.is_empty() {
+            return;
+        }
+        let named: Vec<(&str, &str, i32)> = keys.iter().map(|(action, name, key)| (action.as_str(), name.as_str(), *key)).collect();
+        match crate::kde::global_keys(&named, |action| {
+            if action.starts_with("wake-") {
+                super::wake("hotkey");
+            }
+        }) {
+            Ok(()) => info!("[VRAM] Wake keys registered with KDE: {}", specs.join(", ")),
+            Err(e) => warn!("[VRAM] KDE took no wake key: {e}"),
         }
     }
 }

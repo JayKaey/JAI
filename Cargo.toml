@@ -162,6 +162,25 @@ windows = { version = "0.54", features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 
+# Linux, built for KDE Plasma (Arch). Every crate here is one the window toolkit already builds.
+[target.'cfg(target_os = "linux")'.dependencies]
+# KDE's services over the session bus: KWin's screenshots and window shortcuts, the global keys
+# (KGlobalAccel), the tray icon (StatusNotifierItem), brightness and notifications.
+zbus = "4.4"
+# His own windows run on X11 (XWayland under Plasma), where a program may place its windows; the
+# input shape makes a window click-through.
+x11rb = { version = "0.13", features = ["randr", "resource_manager", "shape"] }
+winit = { version = "0.30", default-features = false, features = ["x11"] }
+raw-window-handle = "0.6"
+# Other programs' windows (org_kde_plasma_window_management) and keys pressed for him (KWin's
+# fake input); both need the lines `installer::menu_entry` writes into jai.desktop.
+wayland-client = "0.31"
+wayland-protocols-plasma = { version = "0.3", features = ["client"] }
+# Sir's idle time from the compositor (ext-idle-notify), as Windows' last-input time.
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }
+# pipe2, the parent-death signal of the engine, nice levels, statvfs, the camera's ioctls.
+libc = "0.2"
+
 [build-dependencies]
 # Embeds the icon, version info and the DPI-aware manifest into the Windows executable.
 embed-resource = "3"

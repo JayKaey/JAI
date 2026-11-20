@@ -248,9 +248,39 @@ fn drives() -> u32 {
         .fold(0, |m, i| m | (1 << i))
 }
 
+/// The mounts under `/run/media/<user>` (where KDE mounts sticks and disks), one bit each in the
+/// order they were first seen; `drive_name` turns a bit back into the mount's name.
+#[cfg(not(windows))]
+static MOUNTS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
 #[cfg(not(windows))]
 fn drives() -> u32 {
-    0
+    let user = std::env::var("USER").unwrap_or_default();
+    let mut known = lock(&MOUNTS);
+    let mut mask = 0;
+    for entry in std::fs::read_dir(format!("/run/media/{user}")).into_iter().flatten().flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        let at = known.iter().position(|n| *n == name).unwrap_or_else(|| {
+            known.push(name);
+            known.len() - 1
+        });
+        if at < 26 {
+            mask |= 1 << at;
+        }
+    }
+    mask
+}
+
+/// How a plugged drive is named in the alert: "D:", or the mount's name.
+fn drive_name(letter: char) -> String {
+    #[cfg(windows)]
+    {
+        format!("{letter}:")
+    }
+    #[cfg(not(windows))]
+    {
+        lock(&MOUNTS).get(letter as usize - 'A' as usize).cloned().unwrap_or_else(|| letter.to_string())
+    }
 }
 
 /// The letters in `now` that were not in `before`.
@@ -278,20 +308,14 @@ fn desktop_locked() -> bool {
     }
 }
 
+/// KDE's screen locker says whether the session is locked.
 #[cfg(not(windows))]
 fn desktop_locked() -> bool {
-    false
+    crate::kde::screen_locked().unwrap_or(false)
 }
 
 fn idle_secs() -> Option<u64> {
-    #[cfg(windows)]
-    {
-        crate::win32::idle_seconds()
-    }
-    #[cfg(not(windows))]
-    {
-        None
-    }
+    crate::platform::idle_seconds()
 }
 
 /// Whether Sir is back: Some(true) when someone used the PC after he said he was leaving (worth
@@ -339,7 +363,7 @@ pub fn start(tools: ToolContext, stop: CancellationToken) {
                 }
                 let plugged = new_drives(known, now);
                 if !plugged.is_empty() && settings.alert_on_usb {
-                    let letters = plugged.iter().map(|c| format!("{c}:")).collect::<Vec<_>>().join(", ");
+                    let letters = plugged.iter().map(|c| drive_name(*c)).collect::<Vec<_>>().join(", ");
                     crate::announcements::say(format!("Sir, a drive was plugged into your PC ({letters}) at {}.", Local::now().format("%H:%M")));
                 }
             }

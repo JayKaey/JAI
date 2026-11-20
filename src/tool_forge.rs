@@ -28,6 +28,8 @@ const STEP_TIMEOUT: Duration = Duration::from_secs(25);
 const FORBIDDEN_BINARIES: &[&str] = &[
     "cmd", "powershell", "pwsh", "bash", "sh", "wsl", "python", "python3", "py", "pythonw", "node", "perl", "ruby", "wscript", "cscript", "mshta", "rundll32",
     "regsvr32", "reg", "diskpart", "format", "shutdown", "bcdedit", "vssadmin", "takeown", "icacls",
+    // Linux: other shells, privilege escalation, power and disk tools.
+    "zsh", "fish", "dash", "sudo", "su", "doas", "pkexec", "systemctl", "loginctl", "poweroff", "reboot", "halt", "mkfs", "dd", "rm", "chmod", "chown",
 ];
 /// JAI tools a forged step may not call (no recursion, no self-modification, no quitting).
 const FORBIDDEN_TOOLS: &[&str] = &[

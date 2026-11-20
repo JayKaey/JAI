@@ -237,9 +237,12 @@ fn game_in_front_now() -> bool {
     !own && (is_game(&process) || (crate::win32::foreground_is_fullscreen() && !is_player(&process)))
 }
 
+/// KDE: the window in front (another program's); a Steam game's says so in its program id.
 #[cfg(not(windows))]
 fn game_in_front_now() -> bool {
-    false
+    let Some(w) = crate::plasma::active().filter(|w| w.pid != std::process::id()) else { return false };
+    let process = w.program();
+    [&w.app_id, &w.resource_name].iter().any(|id| id.starts_with("steam_app_")) || is_game(&process) || (w.is(crate::plasma::state::FULLSCREEN) && !is_player(&process))
 }
 
 /// A browser or a media player: full screen, it shows a film, not a game.
