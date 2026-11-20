@@ -3,7 +3,7 @@
 # JAI_SETUP_PAYLOAD naming the folder of what goes in.
 [package]
 name = "jai-setup"
-version = "3.2.1"
+version = "3.2.2"
 edition = "2021"
 publish = false
 

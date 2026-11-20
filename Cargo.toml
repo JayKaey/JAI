@@ -1,6 +1,6 @@
 [package]
 name = "jai"
-version = "3.2.1"
+version = "3.2.2"
 edition = "2021"
 rust-version = "1.87"
 authors = ["Stark Industries <jai@stark.local>"]
