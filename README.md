@@ -266,13 +266,15 @@ that person himself.
 
 ## J.A.I. on other PCs
 
-Sir's PC is always the main one. A friend opens the phone page's address on their PC and takes "J.A.I.
-for your Windows PC" (or gets it from Sir): that is `JAI-setup.exe`, the one-file setup below,
-which build.bat makes beside JAI.exe (without it the page hands out JAI.exe, which started on its
-own, or with `--install`, is the installer itself). It needs a graphics card with 4 GB of memory (under 8 GB it takes the smaller brain,
-Qwen3.5 2B), logs in at Sir's PC with an account, fetches the program and its engines from there,
-then the voice, ears and brain, adds JAI to the Start menu and starts him. Until it is logged in,
-such a JAI answers nobody.
+Sir's PC is always the main one. A friend takes `JAI-setup.exe` from GitHub's Releases page (the
+phone page's "J.A.I. for your Windows PC" leads there too), the one-file setup below. It needs a
+graphics card with 4 GB of memory (under 8 GB it takes the smaller brain, Qwen3.5 2B) and logs in
+at Sir's PC with an account, or asks for one (a key appears on Sir's screen); that is all it takes
+from Sir's PC. Everything else is downloaded from GitHub: JAI and eSpeak NG come inside the setup,
+his engine from Ollama's release (the version Sir's PC runs, checked by its SHA-256), the voice
+lock's model from sherpa-onnx's. Then come the voice, ears and brain, from where every JAI fetches
+them; the setup adds JAI to the Start menu and starts him. Until it is logged in, such a JAI
+answers nobody.
 
 "Open the earth on Max's PC", "turn the volume down on Max's computer", "shut down Max's PC": the
 order goes to Max's PC (it waits ten minutes if that PC is offline) and never acts on Sir's. A JAI
@@ -285,10 +287,11 @@ A Linux PC installs him as well (see Linux).
 
 GitHub's Releases page has one file for each: `JAI-setup.exe` (Windows) and `JAI-setup-linux`
 (`chmod +x` first). Each carries the installer with everything it starts with (on Windows the
-Visual C++ runtime and DirectML, so nothing has to be installed first; on Arch it installs the
-packages below with pacman, asking for the password). On a PC where JAI is installed already, the
-same file updates him: the running JAI quits, UPDATE fetches the version Sir's PC runs with the
-key that PC holds (no login), and he starts again; called off, he starts as he was. It never
+Visual C++ runtime, DirectML and eSpeak NG, so nothing has to be installed first; on Arch it
+installs the packages below with pacman, asking for the password). On a PC where JAI is installed
+already, the same file updates him: the running JAI quits, UPDATE puts in the version the file
+carries with the key that PC holds (no login), and he starts again (and then takes the version
+Sir's PC runs, if that is another); called off, he starts as he was. It never
 touches a JAI that runs from another folder, such as Sir's own. The files are built from `setup/`
 (a crate of its own that packs the built JAI) by the `Release` workflow, which publishes them when
 a tag `v…` is pushed; `--check` unpacks the installer and starts it with `--help` only.

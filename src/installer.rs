@@ -1,15 +1,16 @@
 //! The installer (Sir, 2026-11-19: "the installer should look JAI themed and automaticly download
 //! everything that is needed ... if it has less than 8GB of VRAM than it should download a smaller
-//! LLM. The minium VRAM needed to be able to install JAI should be 4GB"). It is JAI.exe itself:
-//! started on its own (downloaded from Sir's phone page, `/install`, with nothing of his beside
-//! it) or with `--install`. Its window (`gui::run_installer`) logs in at Sir's PC like the phone
-//! page, fetches the program and its engines from there (the version Sir runs), then the voice,
-//! the ears and the brain that fits the graphics card (`--download-models`), puts J.A.I. in the
-//! Start menu and starts him.
+//! LLM. The minium VRAM needed to be able to install JAI should be 4GB"; 2026-11-20: "when
+//! installing JAI everything should get downloaded from the github repo"). It is JAI.exe itself,
+//! started by the setup from GitHub (`setup/`), on its own or with `--install`. Its window
+//! (`gui::run_installer`) logs in at Sir's PC like the phone page (for the account alone), puts
+//! this program into J.A.I.'s folder, unpacks eSpeak NG out of the setup, fetches the engine and
+//! the voice lock's model from GitHub, then the voice, the ears and the brain that fits the
+//! graphics card (`--download-models`), puts J.A.I. in the Start menu and starts him. Nothing is
+//! downloaded from Sir's PC.
 
 use crate::config::{ConfigStore, JaiConfig};
-use serde_json::Value;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
@@ -83,11 +84,16 @@ pub(crate) fn data_home() -> Option<PathBuf> {
     std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local").join("share")))
 }
 
-/// Whether a file of Sir's PC is for this one: Linux takes his data, never his Windows program,
-/// its libraries or its engines (J.A.I. there is this program itself, his engine Ollama's own).
-fn for_this_system(path: &str, windows: bool) -> bool {
-    windows || !(path == "JAI.exe" || path.ends_with(".dll") || path.starts_with("runtime/"))
-}
+/// What a new PC fetches from GitHub (address, size, SHA-256): the engine, the Ollama this J.A.I.
+/// runs with, from Ollama's own release; and the voice lock's model from sherpa-onnx's (its tag
+/// is spelt so there).
+#[cfg(windows)]
+const ENGINE: (&str, u64, &str) = ("https://github.com/ollama/ollama/releases/download/v0.40.5/ollama-windows-amd64.zip", 1_471_226_485, "5134ce7e3bc8e94d0494721c799ec293b429450d0c52461b0ee3647dd3bb4bb7");
+const VOICE_LOCK: (&str, u64, &str) = ("https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/wespeaker_en_voxceleb_resnet34_LM.onnx", 26_530_550, "e9848563da86f263117134dfd7ad63c92355b37de492b55e325400c9d9c39012");
+
+/// The setup a new Windows PC starts with: the newest on J.A.I.'s releases page (the phone page's
+/// `/install` sends there).
+pub const SETUP: &str = "https://github.com/JayKaey/JAI/releases/latest/download/JAI-setup.exe";
 
 /// Streams `answer` into `to` through a `.part` file, telling `said` the bytes so far (every
 /// half second, by `told`); a file that comes short is not kept.
@@ -111,78 +117,84 @@ async fn save(mut answer: reqwest::Response, to: &Path, size: u64, told: &mut In
     std::fs::rename(&part, to).map_err(|e| e.to_string())
 }
 
-/// What Sir's PC hands a new PC: (where it goes there, where it is here, its size). The program,
-/// its libraries, its engines, the voice lock's model and his voice's profile: never Sir's
-/// settings, memories, logs or the models every JAI fetches itself.
-pub fn files() -> Vec<(String, PathBuf, u64)> {
-    let size = |p: &Path| std::fs::metadata(p).map_or(0, |m| m.len());
-    let mut out = Vec::new();
-    if let Ok(exe) = std::env::current_exe() {
-        out.push(("JAI.exe".to_string(), exe.clone(), size(&exe)));
+/// A file from GitHub into `to`, its size and SHA-256 checked (one that is here and right
+/// already stays, a damaged one goes); `what` names it in the window.
+async fn fetch(http: &reqwest::Client, (url, size, sha): (&str, u64, &str), to: &Path, what: &str, said: &(dyn Fn(String) + Sync)) -> Result<(), String> {
+    if std::fs::metadata(to).is_ok_and(|m| m.len() == size) && sha256(to).is_ok_and(|s| s == sha) {
+        return Ok(());
     }
-    let root = std::env::current_dir().unwrap_or_default();
-    let dlls = std::fs::read_dir(&root).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("dll")));
-    let mut found: Vec<PathBuf> = dlls.collect();
-    for dir in ["runtime", "models/speaker"] {
-        walk(&root.join(dir), &mut found);
+    if let Some(dir) = to.parent().filter(|d| !d.as_os_str().is_empty()) {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
-    found.push(root.join("assets").join("jai_reference_profile.bin"));
-    found.sort();
-    for p in found.into_iter().filter(|p| p.is_file()) {
-        if let Ok(to) = p.strip_prefix(&root) {
-            out.push((to.to_string_lossy().replace('\\', "/"), p.clone(), size(&p)));
+    let answer = http.get(url).send().await.map_err(|e| e.to_string())?.error_for_status().map_err(|e| e.to_string())?;
+    save(answer, to, size, &mut Instant::now(), &|got| said(format!("Fetching {what} from GitHub: {} of {} MB", got / 1_000_000, size / 1_000_000))).await?;
+    if sha256(to)? != sha {
+        let _ = std::fs::remove_file(to);
+        return Err(format!("{what} came damaged. Start the installer again."));
+    }
+    Ok(())
+}
+
+/// A file's SHA-256, in hex.
+fn sha256(path: &Path) -> Result<String, String> {
+    let mut file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    let mut hash = ring::digest::Context::new(&ring::digest::SHA256);
+    let mut buf = vec![0u8; 1 << 20];
+    loop {
+        match std::io::Read::read(&mut file, &mut buf).map_err(|e| e.to_string())? {
+            0 => break,
+            n => hash.update(&buf[..n]),
         }
     }
-    out
+    Ok(hash.finish().as_ref().iter().map(|b| format!("{b:02x}")).collect())
 }
 
-fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
-    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
-        let p = entry.path();
-        if p.is_dir() {
-            walk(&p, out);
-        } else {
-            out.push(p);
-        }
+/// This program (the setup's) into J.A.I.'s folder as `exe`: a copy, never onto itself.
+fn program(exe: &Path) -> Result<(), String> {
+    let me = std::env::current_exe().map_err(|e| e.to_string())?;
+    if me.canonicalize().ok() != exe.canonicalize().ok() {
+        let part = exe.with_extension("part");
+        std::fs::copy(&me, &part).and_then(|_| std::fs::rename(&part, exe)).map_err(|e| format!("J.A.I. could not be put into {}: {e}", exe.display()))?;
+    }
+    Ok(())
+}
+
+/// Windows' own tar (Windows 10 and later carry one that reads zip).
+#[cfg(windows)]
+fn tar() -> PathBuf {
+    std::env::var_os("SystemRoot").map_or_else(|| PathBuf::from("tar.exe"), |root| PathBuf::from(root).join("System32").join("tar.exe"))
+}
+
+/// Unpacks a zip (Windows) or a .tar.zst (Linux, with zstd installed) into `into`.
+async fn unpack(archive: &Path, into: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(into).map_err(|e| e.to_string())?;
+    #[cfg(windows)]
+    let mut command = tokio::process::Command::new(tar());
+    #[cfg(not(windows))]
+    let mut command = tokio::process::Command::new("tar");
+    #[cfg(not(windows))]
+    command.arg("--zstd");
+    crate::shell::hide_console(&mut command);
+    let status = command.arg("-xf").arg(archive).arg("-C").arg(into).status().await.map_err(|e| format!("tar did not start: {e}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("{} could not be unpacked ({status}).", archive.display()))
     }
 }
 
-/// A path from Sir's list that stays inside the install folder.
-fn inside(path: &str) -> Option<&Path> {
-    let p = Path::new(path);
-    (!path.is_empty() && p.components().all(|c| matches!(c, Component::Normal(_)))).then_some(p)
-}
-
-/// Fetches J.A.I. from Sir's PC into the current folder (the install folder), then his models,
-/// puts him in the Start menu and starts him. `said`: each step, for the window.
-pub async fn install(config: &ConfigStore, main: &str, said: impl Fn(String) + Sync) -> Result<(), String> {
-    let key = crate::fleet::key(config).ok_or("Log in first.")?;
-    let main = main.trim().trim_end_matches('/');
+/// Installs J.A.I. into the current folder (the install folder) from GitHub, after the login at
+/// Sir's PC: this program, his engines, the voice lock's model, then his models; puts him in the
+/// Start menu and starts him. `said`: each step, for the window.
+pub async fn install(config: &ConfigStore, said: impl Fn(String) + Sync) -> Result<(), String> {
+    crate::fleet::key(config).ok_or("Log in first.")?;
     let http = reqwest::Client::builder().connect_timeout(Duration::from_secs(15)).read_timeout(Duration::from_secs(120)).build().map_err(|e| e.to_string())?;
-    let list: Vec<Value> = http.get(format!("{main}/api/pc/files")).header("X-JAI-Key", &key).send().await.map_err(|e| e.to_string())?.error_for_status().map_err(|e| e.to_string())?.json().await.map_err(|e| e.to_string())?;
-    // (By Sir's numbering: a file is asked for by its place in his list.)
-    let list: Vec<(usize, &Value)> = list.iter().enumerate().filter(|(_, f)| f["path"].as_str().is_some_and(|p| for_this_system(p, cfg!(windows)))).collect();
-    let total: u64 = list.iter().filter_map(|(_, f)| f["size"].as_u64()).sum();
-    let (mut done, mut told) = (0u64, Instant::now());
-    for (i, f) in list {
-        let size = f["size"].as_u64().unwrap_or(0);
-        let to = f["path"].as_str().and_then(inside).ok_or("Sir's PC named a file outside J.A.I.'s folder")?;
-        // (Already here from an earlier try.)
-        if std::fs::metadata(to).is_ok_and(|m| m.len() == size) {
-            done += size;
-            continue;
-        }
-        if let Some(dir) = to.parent().filter(|d| !d.as_os_str().is_empty()) {
-            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-        }
-        let answer = http.get(format!("{main}/api/pc/file/{i}")).header("X-JAI-Key", &key).send().await.map_err(|e| e.to_string())?.error_for_status().map_err(|e| e.to_string())?;
-        save(answer, to, size, &mut told, &|written| said(format!("Fetching J.A.I. from Sir's PC: {} of {} MB", (done + written) / 1_000_000, total / 1_000_000))).await?;
-        done += size;
-    }
     config.snapshot().save().map_err(|e| e.to_string())?;
     let exe = std::env::current_dir().map_err(|e| e.to_string())?.join(PROGRAM);
-    #[cfg(not(windows))]
-    linux_program_and_engine(&http, config, &exe, &said).await?;
+    program(&exe)?;
+    engines(&http, config, &said).await?;
+    let speaker = Path::new(&config.read(|c| c.silero_vad_model_path.clone())).parent().unwrap_or(Path::new("models")).join("speaker").join(crate::speaker_id::MODEL);
+    fetch(&http, VOICE_LOCK, &speaker, "the voice lock", &said).await?;
     // His voice, his ears and his brain: from where every J.A.I. fetches them.
     said("Fetching his voice, his ears and his brain (this takes a while)…".into());
     let mut child = std::process::Command::new(&exe).arg("--download-models").spawn().map_err(|e| format!("J.A.I. did not start: {e}"))?;
@@ -224,16 +236,34 @@ fn start_menu(exe: &Path) -> Result<(), String> {
     }
 }
 
-/// Linux: this program goes into the folder as `jai`, and the engine, when the folder has none,
-/// comes from Ollama's own releases (Sir's PC has only its Windows build).
-#[cfg(not(windows))]
-async fn linux_program_and_engine(http: &reqwest::Client, config: &ConfigStore, exe: &Path, said: &(dyn Fn(String) + Sync)) -> Result<(), String> {
-    let me = std::env::current_exe().map_err(|e| e.to_string())?;
-    // (Never copied onto itself: that would empty it.)
-    if me.canonicalize().ok() != exe.canonicalize().ok() {
-        let part = exe.with_extension("part");
-        std::fs::copy(&me, &part).and_then(|_| std::fs::rename(&part, exe)).map_err(|e| format!("J.A.I. could not be put into {}: {e}", exe.display()))?;
+/// Windows: eSpeak NG out of the setup (beside this program) and the engine from Ollama's
+/// release, each where it is missing.
+#[cfg(windows)]
+async fn engines(http: &reqwest::Client, config: &ConfigStore, said: &(dyn Fn(String) + Sync)) -> Result<(), String> {
+    let espeak = Path::new("runtime").join("espeak-ng");
+    if !espeak.join("libespeak-ng.dll").is_file() {
+        let zip = std::env::current_exe().map_err(|e| e.to_string())?.with_file_name("espeak-ng.zip");
+        if !zip.is_file() {
+            return Err(format!("eSpeak NG is missing: install J.A.I. with the setup from GitHub ({SETUP})."));
+        }
+        unpack(&zip, &espeak).await?;
     }
+    let dir = PathBuf::from(config.read(|c| c.llm_runtime_dir.clone()));
+    if crate::runtime::engine_binary(&dir).is_some() {
+        return Ok(());
+    }
+    let zip = dir.with_extension("zip");
+    fetch(http, ENGINE, &zip, "his engine (Ollama)", said).await?;
+    said("Unpacking his engine…".into());
+    let unpacked = unpack(&zip, &dir).await;
+    let _ = std::fs::remove_file(&zip);
+    unpacked?;
+    crate::runtime::engine_binary(&dir).map(|_| ()).ok_or("His engine came without its program. Start the installer again.".into())
+}
+
+/// Linux: the engine, when the folder has none, from Ollama's own releases (the newest).
+#[cfg(not(windows))]
+async fn engines(http: &reqwest::Client, config: &ConfigStore, said: &(dyn Fn(String) + Sync)) -> Result<(), String> {
     let dir = PathBuf::from(config.read(|c| c.llm_runtime_dir.clone()));
     if crate::runtime::engine_binary(&dir).is_some() {
         return Ok(());
@@ -246,10 +276,10 @@ async fn linux_program_and_engine(http: &reqwest::Client, config: &ConfigStore, 
     let archive = dir.join("ollama.tar.zst");
     save(answer, &archive, size, &mut Instant::now(), &|got| said(format!("Fetching his engine (Ollama for Linux): {} of {} MB", got / 1_000_000, size / 1_000_000))).await?;
     said("Unpacking his engine…".into());
-    let unpacked = tokio::process::Command::new("tar").arg("--zstd").arg("-xf").arg(&archive).arg("-C").arg(&dir).status().await;
+    let unpacked = unpack(&archive, &dir).await;
     let _ = std::fs::remove_file(&archive);
     match unpacked {
-        Ok(status) if status.success() && crate::runtime::engine_binary(&dir).is_some() => Ok(()),
+        Ok(()) if crate::runtime::engine_binary(&dir).is_some() => Ok(()),
         _ => Err("His engine could not be unpacked: install zstd (on Arch `sudo pacman -S zstd`, on Ubuntu `sudo apt install zstd`) and start the installer again.".into()),
     }
 }
@@ -285,15 +315,6 @@ pub fn keep_menu_entry() -> bool {
     start_menu(&exe).is_ok()
 }
 
-/// Sir's PC's address, when this program was downloaded from his phone page (Windows notes
-/// where a download came from).
-fn downloaded_from() -> Option<String> {
-    let exe = std::env::current_exe().ok()?;
-    let note = std::fs::read_to_string(format!("{}:Zone.Identifier", exe.display())).ok()?;
-    let url = note.lines().find_map(|l| l.strip_prefix("HostUrl="))?.trim();
-    url.ends_with("/install").then(|| url.trim_end_matches("/install").to_string())
-}
-
 /// The installer: its window, in the install folder.
 pub fn run() -> ExitCode {
     let into = folder();
@@ -309,9 +330,6 @@ pub fn run() -> ExitCode {
     if let (Ok(brain), false) = (&brain, update) {
         cfg.primary_model = (*brain).into();
         cfg.fallback_model = (*brain).into();
-    }
-    if let Some(main) = downloaded_from().filter(|_| cfg.main_pc.is_empty()) {
-        cfg.main_pc = main;
     }
     let card = vram.map_or_else(|| "No graphics card found".to_string(), |mb| format!("Graphics memory {:.0} GB", mb as f64 / 1024.0));
     let Ok(rt) = tokio::runtime::Runtime::new() else { return ExitCode::FAILURE };
@@ -340,30 +358,69 @@ mod tests {
         assert!(vram_mb().is_some_and(|mb| mb >= 1024), "{:?}", vram_mb());
     }
 
+    /// A new PC takes nothing from Sir's PC (Sir, 2026-11-20): what it fetches is a file of a
+    /// release on GitHub, held to its size and SHA-256.
     #[test]
-    fn a_new_pc_gets_the_program_and_never_sirs_own_files() {
-        for (to, from, _) in files() {
-            assert!(inside(&to).is_some(), "{to}");
-            let lower = to.to_lowercase();
-            for private in ["jai_config", "jai_memory", ".log", "conversation", "models/llm", "src/", "target/"] {
-                assert!(!lower.contains(private), "{to} ({})", from.display());
-            }
+    fn everything_a_new_pc_fetches_comes_from_github() {
+        #[cfg(windows)]
+        let all = [ENGINE, VOICE_LOCK];
+        #[cfg(not(windows))]
+        let all = [VOICE_LOCK];
+        for (url, size, sha) in all {
+            assert!(url.starts_with("https://github.com/") && url.contains("/releases/download/"), "{url}");
+            assert!(size > 1_000_000, "{url}");
+            assert!(sha.len() == 64 && sha.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)), "{url}");
         }
-        for bad in ["../x.dll", "/etc/passwd", r"C:\Windows\x.dll", "", "runtime/../../x"] {
-            assert!(inside(bad).is_none(), "{bad}");
-        }
-        assert!(inside("runtime/ollama/ollama.exe").is_some());
+        assert!(SETUP.starts_with("https://github.com/JayKaey/JAI/releases/"));
+        assert!(folder().ends_with(if cfg!(windows) { "JAI" } else { "jai" }));
     }
 
-    #[test]
-    fn a_linux_pc_takes_sirs_data_and_none_of_his_windows_programs() {
-        for windows_only in ["JAI.exe", "onnxruntime.dll", "runtime/ollama/ollama.exe", "runtime/ollama/lib/ollama/LLAMA_CPP_LICENSE", "runtime/espeak-ng/espeak-ng-data/en_dict"] {
-            assert!(!for_this_system(windows_only, false), "{windows_only}");
-            assert!(for_this_system(windows_only, true), "{windows_only}");
-        }
-        for data in ["models/speaker/voxceleb_resnet34.onnx", "assets/jai_reference_profile.bin"] {
-            assert!(for_this_system(data, false), "{data}");
-        }
-        assert!(folder().ends_with(if cfg!(windows) { "JAI" } else { "jai" }));
+    /// A file is kept only whole and as published: a damaged one is thrown away (from a server
+    /// on this PC that answers "abc").
+    #[tokio::test]
+    async fn a_download_is_kept_only_when_its_digest_is_right() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/file", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                let mut request = [0u8; 2048];
+                let _ = tokio::io::AsyncReadExt::read(&mut socket, &mut request).await;
+                let _ = tokio::io::AsyncWriteExt::write_all(&mut socket, b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\nabc").await;
+            }
+        });
+        let dir = std::env::temp_dir().join(format!("jai-fetch-{}", std::process::id()));
+        let to = dir.join("abc.bin");
+        let http = reqwest::Client::builder().no_proxy().build().unwrap();
+        let abc = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+        fetch(&http, (&url, 3, abc), &to, "a test file", &|_| {}).await.unwrap();
+        assert_eq!(std::fs::read(&to).unwrap(), b"abc");
+        // Here and right already: it stays.
+        fetch(&http, ("http://127.0.0.1:1/nothing", 3, abc), &to, "a test file", &|_| {}).await.unwrap();
+        // Not what was published: it goes, and the window says so.
+        std::fs::remove_file(&to).unwrap();
+        let damaged = fetch(&http, (&url, 3, &"0".repeat(64)), &to, "a test file", &|_| {}).await.unwrap_err();
+        assert!(damaged.contains("damaged"), "{damaged}");
+        assert!(!to.exists() && !to.with_extension("part").exists());
+        // Short of its size: not kept either.
+        assert!(fetch(&http, (&url, 4, abc), &to, "a test file", &|_| {}).await.unwrap_err().contains("incomplete"));
+        assert!(!to.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Windows' own tar unpacks a zip with its folders (eSpeak NG's data, the engine's libraries).
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn a_zip_is_unpacked_with_its_folders() {
+        let dir = std::env::temp_dir().join(format!("jai-unpack-{}", std::process::id()));
+        let (from, into, zip) = (dir.join("from"), dir.join("into"), dir.join("espeak-ng.zip"));
+        std::fs::create_dir_all(from.join("espeak-ng-data")).unwrap();
+        std::fs::write(from.join("libespeak-ng.dll"), b"dll").unwrap();
+        std::fs::write(from.join("espeak-ng-data").join("en_dict"), b"dict").unwrap();
+        assert!(std::process::Command::new(tar()).arg("-a").arg("-cf").arg(&zip).arg("-C").arg(&from).arg(".").status().unwrap().success());
+        unpack(&zip, &into).await.unwrap();
+        assert_eq!(std::fs::read(into.join("libespeak-ng.dll")).unwrap(), b"dll");
+        assert_eq!(std::fs::read(into.join("espeak-ng-data").join("en_dict")).unwrap(), b"dict");
+        assert!(unpack(&dir.join("no such.zip"), &into).await.is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

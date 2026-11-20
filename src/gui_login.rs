@@ -96,9 +96,9 @@ fn send(rt: &Handle, config: &ConfigStore, form: &mut Form, ask: bool) {
         } else {
             crate::fleet::log_in(&config, &main, &name, &password, key.as_deref()).await.map(|n| format!("Logged in as {n}."))
         };
-        // The installer goes on: everything J.A.I. needs, from Sir's PC and from where his models come.
+        // The installer goes on: everything J.A.I. needs, from GitHub and from where his models come.
         if installing && !ask && result.is_ok() {
-            result = crate::installer::install(&config, &main, |line| tell(line, false)).await.map(|()| "J.A.I. is installed and starts now.".into());
+            result = crate::installer::install(&config, |line| tell(line, false)).await.map(|()| "J.A.I. is installed and starts now.".into());
         }
         if let Some(form) = lock().as_mut() {
             form.busy = false;
@@ -126,7 +126,7 @@ fn body(ui: &mut Ui, rt: &Handle, config: &ConfigStore) {
     let about = if update {
         "J.A.I. is installed on this PC: UPDATE brings him to the version Sir's PC runs, with anything new he needs."
     } else if form.setup.is_some() {
-        "Install J.A.I. on this PC: log in with your account at Sir's PC, or ask for one (a key appears on his screen). Everything he needs comes from there."
+        "Install J.A.I. on this PC: log in with your account at Sir's PC, or ask for one (a key appears on his screen). J.A.I. himself comes from GitHub, nothing from Sir's PC."
     } else {
         "This PC runs J.A.I. as one of Sir's. Log in with your account, or ask for one: a key appears on Sir's screen."
     };

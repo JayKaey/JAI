@@ -107,6 +107,7 @@ pub const RELEASES: &[Release] = &[
             added("Subtitles, widgets and more on KDE", "Live subtitles, ghost mode, desk widgets, the clipboard history and shortcuts work on KDE."),
             added("One file installs him", "One file each for Windows and Linux, on GitHub and your phone page: a new PC or an update."),
             added("Start with Windows", "Say \"start with Windows\", or tick it in the settings or the tray: he starts when you log in."),
+            better("Installing on another PC", "A new PC downloads nothing from yours: J.A.I. and his engine come from GitHub."),
             better("Power and lock on Linux", "On Linux, shut down, restart, lock and sleep go through logind and KDE's own lock screen."),
             better("PC questions on Linux", "On Linux he finds frozen windows, checks the mic, lists pacman updates, opens Discover."),
             better("Games and the engine on Linux", "On Linux the language engine dies with J.A.I., and Steam games and video memory are found."),

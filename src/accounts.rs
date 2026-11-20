@@ -553,7 +553,7 @@ static KNOCKS: LazyLock<Mutex<HashMap<String, VecDeque<Instant>>>> = LazyLock::n
 
 /// One more knock of `kind` from `who` (empty: anyone): whether it is let through, at most `n`
 /// in `window`.
-pub(crate) fn knock(kind: &str, who: &str, n: usize, window: Duration) -> bool {
+fn knock(kind: &str, who: &str, n: usize, window: Duration) -> bool {
     let mut knocks = lock(&KNOCKS);
     if knocks.len() > 4096 {
         knocks.retain(|_, at| at.back().is_some_and(|t| t.elapsed() < Duration::from_secs(3600)));

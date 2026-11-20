@@ -355,15 +355,13 @@ async fn respond<S: AsyncWrite + Unpin>(stream: &mut S, status: &str, content_ty
     let _ = stream.flush().await;
 }
 
-/// A file sent as it is read (a program, an engine's libraries: up to gigabytes); `save_as`: the
-/// name a browser saves it under.
-async fn respond_file<S: AsyncWrite + Unpin>(stream: &mut S, path: &std::path::Path, save_as: Option<&str>) {
+/// A file sent as it is read (a program: up to a hundred megabytes).
+async fn respond_file<S: AsyncWrite + Unpin>(stream: &mut S, path: &std::path::Path) {
     let Ok(mut file) = tokio::fs::File::open(path).await else {
         return respond_json(stream, "404 Not Found", &json!({ "error": "no such file" })).await;
     };
     let size = file.metadata().await.map_or(0, |m| m.len());
-    let save_as = save_as.map(|n| format!("Content-Disposition: attachment; filename=\"{n}\"\r\n")).unwrap_or_default();
-    let head = format!("HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {size}\r\n{save_as}Cache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n");
+    let head = format!("HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {size}\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n");
     let _ = stream.write_all(head.as_bytes()).await;
     let _ = tokio::io::copy(&mut file, stream).await;
     let _ = stream.flush().await;
@@ -523,19 +521,13 @@ async fn open_to_anyone<S: AsyncWrite + Unpin>(stream: &mut S, req: &Request, wh
             respond(stream, "200 OK", "application/manifest+json", manifest.to_string().as_bytes()).await;
         }
         ("GET", "/api/themes") => respond_json(stream, "200 OK", &themes()).await,
-        // J.A.I. for another PC: the one-file setup build.bat makes beside him (`setup/`: it starts
-        // without the Visual C++ runtime and updates him too), else this program, which installs
-        // itself when it is started on its own (`installer`). It is large: three a day from one
-        // address, twenty in all.
+        // J.A.I. for another PC: the newest setup on GitHub (Sir, 2026-11-20: "when installing JAI
+        // everything should get downloaded from the github repo").
         ("GET", "/install") => {
-            if crate::accounts::knock("install", &from, 3, Duration::from_secs(86_400)) && crate::accounts::knock("install", "", 20, Duration::from_secs(86_400)) {
-                info!("[SATELLITE] {from} downloads the installer");
-                let setup = std::path::PathBuf::from("JAI-setup.exe");
-                let file = if setup.is_file() { setup } else { std::env::current_exe().unwrap_or_default() };
-                respond_file(stream, &file, Some("JAI-setup.exe")).await;
-            } else {
-                respond_json(stream, "429 Too Many Requests", &json!({ "error": "Too many downloads from here today." })).await;
-            }
+            info!("[SATELLITE] {from} is sent to the setup on GitHub");
+            let head = format!("HTTP/1.1 302 Found\r\nLocation: {}\r\nContent-Length: 0\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n", crate::installer::SETUP);
+            let _ = stream.write_all(head.as_bytes()).await;
+            let _ = stream.flush().await;
         }
         ("POST", "/api/login") => match crate::vault::Vault::open(db).and_then(|vault| crate::accounts::login(db, &vault, &field("name"), &field("password"), &from)) {
             Ok(key) => {
@@ -635,17 +627,8 @@ async fn for_account<S: AsyncWrite + Unpin>(stream: &mut S, app: &Jai, req: &Req
         // … and the version Sir's PC runs, which it takes at once.
         ("GET", "/api/pc/update") => {
             info!("[FLEET] {name}'s PC fetches this version");
-            respond_file(stream, &std::env::current_exe().unwrap_or_default(), None).await;
+            respond_file(stream, &std::env::current_exe().unwrap_or_default()).await;
         }
-        // The installer of a new PC (`installer`): what it fetches, and each file by its number.
-        ("GET", "/api/pc/files") => respond_json(stream, "200 OK", &json!(crate::installer::files().into_iter().map(|(to, _, size)| json!({ "path": to, "size": size })).collect::<Vec<_>>())).await,
-        ("GET", path) if path.starts_with("/api/pc/file/") => match path["/api/pc/file/".len()..].parse::<usize>().ok().and_then(|i| crate::installer::files().into_iter().nth(i)) {
-            Some((to, from, _)) => {
-                info!("[FLEET] {name}'s new PC fetches {to}");
-                respond_file(stream, &from, None).await;
-            }
-            None => respond_json(stream, "404 Not Found", &json!({ "error": "no such file" })).await,
-        },
         _ => respond_json(stream, "403 Forbidden", &json!({ "error": "Sir has not given you that permission." })).await,
     }
 }
@@ -1201,5 +1184,13 @@ mod tests {
         assert_eq!(req.from("127.0.0.1:5000".parse().unwrap()), "203.0.113.9");
         assert_eq!(req.from("192.168.1.7:5000".parse().unwrap()), "192.168.1.7");
         assert!(PAGE.contains("\"__JAI_THEME__\"") && PAGE.contains("/api/login") && PAGE.contains("/api/signup/finish"));
+        // "J.A.I. for your Windows PC" is the newest setup on GitHub: nothing goes out of Sir's PC
+        // (Sir, 2026-11-20).
+        let mut stream: &[u8] = b"GET /install HTTP/1.1\r\n\r\n";
+        let req = read_request(&mut stream, nobody).await.unwrap();
+        let mut answer = Vec::new();
+        assert!(open_to_anyone(&mut answer, &req, None, "", "", "192.168.1.7:5000".parse().unwrap()).await);
+        let answer = String::from_utf8(answer).unwrap();
+        assert!(answer.starts_with("HTTP/1.1 302 Found\r\n") && answer.contains(&format!("\r\nLocation: {}\r\n", crate::installer::SETUP)), "{answer}");
     }
 }

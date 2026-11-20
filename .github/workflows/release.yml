@@ -38,7 +38,8 @@ jobs:
         shell: bash
         run: cargo build --release 2>&1 | tee build.txt || eval "$FAILED"
       # JAI.exe starts with DirectML and the Visual C++ runtime beside it (as build.bat packs
-      # them): all of it goes into the setup.
+      # them): all of it goes into the setup. So does eSpeak NG (Kokoro's phonemes), from its own
+      # GitHub release: the files of its MSI as espeak-ng.zip, which the installer unpacks.
       - name: What goes into the setup
         shell: pwsh
         run: |
@@ -48,6 +49,11 @@ jobs:
           Copy-Item target\release\jai.exe payload\JAI.exe
           Copy-Item $dml.FullName payload\
           foreach ($dll in 'msvcp140.dll', 'msvcp140_1.dll', 'vcruntime140.dll', 'vcruntime140_1.dll') { Copy-Item (Join-Path $crt.FullName $dll) payload\ }
+          Invoke-WebRequest https://github.com/espeak-ng/espeak-ng/releases/download/1.52.0/espeak-ng.msi -OutFile espeak-ng.msi
+          Start-Process msiexec.exe -ArgumentList '/a', "`"$PWD\espeak-ng.msi`"", '/qn', "TARGETDIR=`"$PWD\espeak`"" -Wait
+          $espeak = (Get-ChildItem espeak -Recurse -Filter libespeak-ng.dll | Select-Object -First 1).DirectoryName
+          if (-not $espeak -or -not (Test-Path (Join-Path $espeak 'espeak-ng-data'))) { throw 'eSpeak NG did not unpack from its MSI' }
+          & "$env:SystemRoot\System32\tar.exe" -a -cf payload\espeak-ng.zip -C $espeak .
           Get-ChildItem payload | ForEach-Object { "$($_.Name) $([math]::Round($_.Length / 1MB, 1)) MB" }
       - name: The setup
         shell: bash
@@ -140,7 +146,7 @@ jobs:
           - **Windows:** start `JAI-setup.exe`. It is not signed, so Windows warns the first time: *More info* → *Run anyway*.
           - **Linux** (made for KDE Plasma 6 on Arch): `chmod +x JAI-setup-linux`, then start it. It installs the packages J.A.I. needs with pacman and asks for your password for that. Linux has not yet been run on a real PC.
 
-          The setup installs J.A.I. on a PC beside the one he already runs on (the main PC): it asks for the main PC's address and an account there, takes J.A.I. from it (the version it runs), then downloads the voice, the ears and the brain that fits the graphics card (4 GB of graphics memory at least). Where J.A.I. is installed already, the same file updates him: he quits, the version the main PC runs comes in, and he starts again.
+          The setup installs J.A.I. on a PC beside the one he already runs on (the main PC): it asks for the main PC's address and an account there, and downloads nothing from that PC. J.A.I. comes in this file, his engine from Ollama's release on GitHub, then the voice, the ears and the brain that fits the graphics card (4 GB of graphics memory at least). Where J.A.I. is installed already, the same file updates him: he quits, this version comes in, and he starts again (a PC that runs another version than the main PC then takes the main PC's).
           EOF
           # (An older release or draft of this tag gives way; the list shows drafts too.)
           for id in $(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq ".[] | select(.tag_name == \"$GITHUB_REF_NAME\") | .id"); do
