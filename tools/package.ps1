@@ -55,4 +55,26 @@ if (-not (Test-Path (Join-Path $espeak 'libespeak-ng.dll'))) {
         Write-Warning 'runtime\espeak-ng is missing: JAI falls back to its basic built-in phonemizer.'
     }
 }
+
+# 4. The one-file setup for other PCs (setup\), which the phone page's /install hands out: this
+#    JAI.exe and its DLLs inside, its own C runtime built in. (cargo reads setup\.cargo from the
+#    folder it runs in.)
+$payload = Join-Path $root 'target\setup-payload'
+Remove-Item $payload -Recurse -Force -ErrorAction SilentlyContinue
+New-Item -ItemType Directory $payload | Out-Null
+foreach ($file in 'JAI.exe', 'DirectML.dll', 'msvcp140.dll', 'msvcp140_1.dll', 'vcruntime140.dll', 'vcruntime140_1.dll') {
+    $path = Join-Path $root $file
+    if (Test-Path $path) { Copy-Item $path $payload }
+}
+$env:JAI_SETUP_PAYLOAD = $payload
+Push-Location (Join-Path $root 'setup')
+$ErrorActionPreference = 'Continue'   # (cargo writes its progress to stderr)
+cargo build --release --quiet
+$built = $LASTEXITCODE -eq 0
+$ErrorActionPreference = 'Stop'
+Pop-Location
+if (-not $built) { throw 'The setup for other PCs (setup\) did not build.' }
+$setup = Join-Path $root 'JAI-setup.exe'
+Copy-Item (Join-Path $root 'setup\target\release\jai-setup.exe') $setup -Force
+Write-Host "JAI-setup.exe     $([math]::Round((Get-Item $setup).Length / 1MB, 1)) MB (for other PCs: the phone page's /install)"
 exit 0

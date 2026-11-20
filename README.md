@@ -262,8 +262,9 @@ that person himself.
 ## J.A.I. on other PCs
 
 Sir's PC is always the main one. A friend opens the phone page's address on their PC and takes "J.A.I.
-for your Windows PC" (or gets JAI.exe from Sir): started on its own, or with `--install`, it is the
-installer. It needs a graphics card with 4 GB of memory (under 8 GB it takes the smaller brain,
+for your Windows PC" (or gets it from Sir): that is `JAI-setup.exe`, the one-file setup below,
+which build.bat makes beside JAI.exe (without it the page hands out JAI.exe, which started on its
+own, or with `--install`, is the installer itself). It needs a graphics card with 4 GB of memory (under 8 GB it takes the smaller brain,
 Qwen3.5 2B), logs in at Sir's PC with an account, fetches the program and its engines from there,
 then the voice, ears and brain, adds JAI to the Start menu and starts him. Until it is logged in,
 such a JAI answers nobody.

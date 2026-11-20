@@ -523,12 +523,16 @@ async fn open_to_anyone<S: AsyncWrite + Unpin>(stream: &mut S, req: &Request, wh
             respond(stream, "200 OK", "application/manifest+json", manifest.to_string().as_bytes()).await;
         }
         ("GET", "/api/themes") => respond_json(stream, "200 OK", &themes()).await,
-        // J.A.I. for another PC: this program, which installs itself when it is started on its own
-        // (`installer`). It is large: three a day from one address, twenty in all.
+        // J.A.I. for another PC: the one-file setup build.bat makes beside him (`setup/`: it starts
+        // without the Visual C++ runtime and updates him too), else this program, which installs
+        // itself when it is started on its own (`installer`). It is large: three a day from one
+        // address, twenty in all.
         ("GET", "/install") => {
             if crate::accounts::knock("install", &from, 3, Duration::from_secs(86_400)) && crate::accounts::knock("install", "", 20, Duration::from_secs(86_400)) {
                 info!("[SATELLITE] {from} downloads the installer");
-                respond_file(stream, &std::env::current_exe().unwrap_or_default(), Some("JAI-setup.exe")).await;
+                let setup = std::path::PathBuf::from("JAI-setup.exe");
+                let file = if setup.is_file() { setup } else { std::env::current_exe().unwrap_or_default() };
+                respond_file(stream, &file, Some("JAI-setup.exe")).await;
             } else {
                 respond_json(stream, "429 Too Many Requests", &json!({ "error": "Too many downloads from here today." })).await;
             }

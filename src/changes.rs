@@ -105,7 +105,7 @@ pub const RELEASES: &[Release] = &[
             added("Typing and keys on KDE", "Typing, hands-free keys and the browser's address work on KDE through Plasma's fake input."),
             added("Disk map and radar on Linux", "The disk map, network radar and guardian read this Linux PC: disks, trash, ARP, pings."),
             added("Subtitles, widgets and more on KDE", "Live subtitles, ghost mode, desk widgets, the clipboard history and shortcuts work on KDE."),
-            added("One file installs him", "Version 3.2 on GitHub: one file for Windows, one for Linux, for a new PC or an update."),
+            added("One file installs him", "One file each for Windows and Linux, on GitHub and your phone page: a new PC or an update."),
             better("Power and lock on Linux", "On Linux, shut down, restart, lock and sleep go through logind and KDE's own lock screen."),
             better("PC questions on Linux", "On Linux he finds frozen windows, checks the mic, lists pacman updates, opens Discover."),
             better("Games and the engine on Linux", "On Linux the language engine dies with J.A.I., and Steam games and video memory are found."),
@@ -562,7 +562,7 @@ pub const EXPLANATIONS: &[Explanation] = &[
     Explanation {
         id: "other_pcs",
         title: "J.A.I. on other PCs",
-        what: "A friend opens your phone page's address in a browser and takes \"J.A.I. for your Windows PC\" (or you give them JAI.exe). Started on its own it is the installer: it reads the graphics card (4 GB of memory at the least; under 8 GB he gets the smaller brain, Qwen3.5 2B), logs in at your PC with their account, fetches the program and its engines from your PC, then his voice, ears and brain, and puts him in the Start menu. Their J.A.I. calls yours every few seconds: you see it in the accounts list (online, its version, CPU, memory, graphics card), and what you order for it, it does. Theirs never sends anything to yours.",
+        what: "A friend opens your phone page's address in a browser and takes \"J.A.I. for your Windows PC\" (or you give them that file): one file that installs him, or updates him where he is installed. It reads the graphics card (4 GB of memory at the least; under 8 GB he gets the smaller brain, Qwen3.5 2B), logs in at your PC with their account, fetches the program and its engines from your PC, then his voice, ears and brain, and puts him in the Start menu. Their J.A.I. calls yours every few seconds: you see it in the accounts list (online, its version, CPU, memory, graphics card), and what you order for it, it does. Theirs never sends anything to yours.",
         say: &["Jay, open the earth on Max's PC.", "Jay, turn the volume down on Max's computer.", "Jay, mach die Musik leiser auf Max PC.", "Jay, what did you do for Max this week?"],
         know: "Their J.A.I. always runs the version yours runs: when yours is newer, theirs fetches it at once and restarts (yours never updates itself), and a new commit on GitHub is announced to them. Your voice print reaches their J.A.I. and theirs reaches yours, held in memory only: each is stored on its owner's PC alone. Until their J.A.I. is logged in it answers nobody. An order waits ten minutes for a PC that is offline. A Linux PC installs him too (see J.A.I. on Linux).",
     },

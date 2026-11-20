@@ -52,6 +52,9 @@ fn run(check: bool) -> Result<(), String> {
         #[cfg(windows)]
         if !check {
             libraries(&files, &folder);
+            if let Ok(me) = env::current_exe() {
+                pass_origin(&me, &program);
+            }
         }
         let status = Command::new(&program).arg(if check { "--help" } else { "--install" }).status().map_err(|e| format!("J.A.I.'s installer did not start: {e}"))?;
         if status.success() {
@@ -150,6 +153,17 @@ fn unpack_into(files: &[(String, Vec<u8>)], dir: &Path) -> Result<PathBuf, Strin
         fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).map_err(|e| format!("{}: {e}", program.display()))?;
     }
     Ok(program)
+}
+
+/// Where the setup was downloaded from (Windows notes it beside a download), for the installer
+/// it unpacked: from Sir's phone page (`/install`) the installer takes his PC's address. Only the
+/// address goes along, not the mark of a download.
+#[cfg(windows)]
+fn pass_origin(from: &Path, to: &Path) {
+    let note = fs::read_to_string(format!("{}:Zone.Identifier", from.display())).unwrap_or_default();
+    if let Some(url) = note.lines().find_map(|l| l.strip_prefix("HostUrl=")) {
+        let _ = fs::write(format!("{}:Zone.Identifier", to.display()), format!("[ZoneTransfer]\r\nHostUrl={}\r\n", url.trim()));
+    }
 }
 
 /// The libraries J.A.I. starts with (DirectML, the Visual C++ runtime), into his folder where
@@ -381,5 +395,24 @@ mod tests {
         assert_eq!(std::os::unix::fs::PermissionsExt::mode(&fs::metadata(&program).unwrap().permissions()) & 0o111, 0o111);
         remove(&dir);
         assert!(!dir.exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn the_address_it_came_from_goes_to_the_installer() {
+        let dir = env::temp_dir().join(format!("jai-setup-origin-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let [setup, program, plain, quiet] = ["JAI-setup.exe", "JAI.exe", "plain.exe", "quiet.exe"].map(|n| dir.join(n));
+        for file in [&setup, &program, &plain, &quiet] {
+            fs::write(file, b"x").unwrap();
+        }
+        let zone = |file: &Path| fs::read_to_string(format!("{}:Zone.Identifier", file.display()));
+        fs::write(format!("{}:Zone.Identifier", setup.display()), "[ZoneTransfer]\r\nZoneId=3\r\nReferrerUrl=https://jai.example.ts.net/\r\nHostUrl=https://jai.example.ts.net/install\r\n").unwrap();
+        pass_origin(&setup, &program);
+        assert_eq!(zone(&program).unwrap(), "[ZoneTransfer]\r\nHostUrl=https://jai.example.ts.net/install\r\n", "the address, without the mark");
+        // A setup that was not downloaded passes nothing on.
+        pass_origin(&plain, &quiet);
+        assert!(zone(&quiet).is_err());
+        remove(&dir);
     }
 }
