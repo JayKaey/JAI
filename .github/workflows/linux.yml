@@ -55,9 +55,9 @@ jobs:
           retention-days: 30
 
   kwin:
-    # KDE Plasma as on Sir's Arch PC: `live_checks::kde` against KWin. A foot terminal stands in
-    # for his programs; without a GPU KWin draws with QPainter, so screenshots (OpenGL) are not
-    # checked.
+    # KDE Plasma as on Sir's Arch PC: `live_checks::kde` against KWin. xterm stands in for his
+    # programs (foot, a Wayland terminal, never drew a new size here, so KWin never applied it);
+    # without a GPU KWin draws with QPainter, so screenshots (OpenGL) are not checked.
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     container:
@@ -71,7 +71,7 @@ jobs:
       - name: The README's packages, KWin, XWayland and a terminal
         run: |
           pacman -Sy --noconfirm archlinux-keyring
-          pacman -Su --noconfirm --needed base-devel rust cmake clang alsa-lib opus git dbus kwin xorg-xwayland foot ttf-dejavu
+          pacman -Su --noconfirm --needed base-devel rust cmake clang alsa-lib opus git dbus kwin xorg-xwayland xterm
       - uses: actions/checkout@v7
       - uses: Swatinem/rust-cache@v2
         with:

@@ -21,7 +21,7 @@
 //! - `voice_samples_for_his_ear` (JAI_SAMPLES=<folder>): both voices as WAV files.
 //! - `kde::menu_entry_names_this_program`, then inside KDE Plasma `kde::kwin_` (Linux,
 //!   JAI_REAL_PLASMA=1; the Linux workflow runs them against a KWin without a screen): the menu
-//!   entry KWin's grants go by; a foot terminal's keys, states, quick tile, monitor and close
+//!   entry KWin's grants go by; a terminal's keys, states, quick tile, monitor and close
 //!   through KWin; one of his own X11 windows over its monitor and as the desktop's background.
 
 use serde_json::json;
@@ -501,9 +501,10 @@ mod kde {
         assert!(entry.contains(&format!("Exec=\"{}\"", exe.display())), "{entry}");
     }
 
-    /// Another program's window (a foot terminal) as JAI handles Sir's programs under KDE: keys
-    /// through KWin's fake input, its states, a quick tile by KWin's shortcut, the second monitor
-    /// by its output name, closed.
+    /// Another program's window (xterm) as JAI handles Sir's programs under KDE: keys through
+    /// KWin's fake input, its states, a quick tile by KWin's shortcut, the second monitor by its
+    /// output name, closed. (An X11 terminal: KWin gives it a new size at once. A Wayland one
+    /// only takes it when it draws again, and foot never drew again under a KWin without a screen.)
     #[test]
     #[ignore = "types into a terminal and moves its window through KWin: JAI_REAL_PLASMA=1"]
     fn kwin_runs_another_programs_window() {
@@ -513,14 +514,10 @@ mod kde {
         let monitors = crate::monitors::list();
         eprintln!("monitors {monitors:?}, KWin's outputs {:?}", plasma::outputs());
         let typed = std::env::temp_dir().join(format!("jai-kwin-keys-{}.txt", std::process::id()));
-        // (What KWin tells the terminal and what it answers, for a step that fails.)
-        let told = std::env::temp_dir().join(format!("jai-kwin-foot-{}.log", std::process::id()));
-        let mut foot = std::process::Command::new("foot")
-            .args(["-T", "kwin-check", "--", "sh", "-c", &format!("read line; echo \"$line\" > '{}'; exec sleep 600", typed.display())])
-            .env("WAYLAND_DEBUG", "1")
-            .stderr(std::fs::File::create(&told).expect("the terminal's log"))
+        let mut terminal = std::process::Command::new("xterm")
+            .args(["-T", "kwin-check", "-e", "sh", "-c", &format!("read line; echo \"$line\" > '{}'; exec sleep 600", typed.display())])
             .spawn()
-            .expect("foot, the stand-in for another program");
+            .expect("xterm, the stand-in for another program");
         let target = WindowTarget::Named("terminal".into());
         assert!(until(20, || crate::winctl::kde_windows(&target).is_ok()), "the terminal never came into KWin's list");
         let uuid = crate::winctl::kde_windows(&target).unwrap().remove(0).uuid;
@@ -550,11 +547,9 @@ mod kde {
             eprintln!("(not moved between monitors: KWin put both in one place)");
         }
         step("Close".into(), rt.block_on(manage(Close, target.clone())), &|| now().is_none());
-        let _ = foot.kill();
+        let _ = terminal.kill();
         let _ = std::fs::remove_file(typed);
-        let log = std::fs::read_to_string(&told).unwrap_or_default();
-        let log: Vec<&str> = log.lines().filter(|l| l.contains("configure") || l.contains(".commit(")).collect();
-        assert!(failed.is_empty(), "{}\nWhat KWin told the terminal and its answers:\n{}", failed.join("\n"), log[log.len().saturating_sub(60)..].join("\n"));
+        assert!(failed.is_empty(), "{}", failed.join("\n"));
     }
 
     /// One of his own windows (an X11 window of this process without a frame, as winit makes
