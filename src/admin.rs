@@ -4,9 +4,12 @@
 //!
 //! Sir's main PC (no `main_pc` in its settings) keeps the accounts and his admin account, made
 //! there once: until then it answers nobody (`needs_setup`), from then on it is his. Every other
-//! PC of his (`fleet`) is logged in with an account and does what that account may: Sir's
-//! switches in the accounts list, which it hears with each call to his PC. A new account talks
-//! to J.A.I. and nothing more. A window it may not open does not open: a pop-up asks for Sir's
+//! PC of his (`fleet`) is logged in with an account and does what that account may on its own
+//! PC: Sir's switches in the accounts list, which it hears with each call to his PC (what it
+//! may on his PC is apart: `guest_refusal`). A new account talks to J.A.I. and nothing more;
+//! one allowed everything there opens his settings, the Feature Lab and Discord there too, but
+//! never his admin window, the accounts or their report (`FLEET`), and gives no orders to other
+//! PCs. A window it may not open does not open: a pop-up asks for Sir's
 //! admin sign-in instead, without touching the PC's own login, and that window is his until it
 //! closes. The admin window ("activate admin mode") makes everything his while it is open, his
 //! accounts and his orders to other PCs included (through his main PC: `answer`). When the last
@@ -52,9 +55,13 @@ pub struct Window {
     /// turned on; no option: any call of the tool). Sir's own windows list what lives in them
     /// too (the Tool Forge in the Feature Lab, Discord's calls).
     calls: &'static [(&'static str, &'static str, &'static str)],
-    /// Sir's alone on every PC: no account's switch opens it.
+    /// Sir's own: no single switch of an account opens it; everything allowed on its own PC
+    /// does there, but for `FLEET`.
     pub sirs: bool,
 }
+
+/// Sir's on every PC, whatever an account may: his admin window, the accounts and their report.
+pub const FLEET: [&str; 3] = ["admin", "accounts", "account_report"];
 
 const fn w(id: &'static str, title: &'static str, about: &'static str, group: usize, open: Open, calls: &'static [(&'static str, &'static str, &'static str)], sirs: bool) -> Window {
     Window { id, title, about, group, open, calls, sirs }
@@ -174,14 +181,21 @@ pub fn hold(config: &ConfigStore, account: Option<Account>) {
     *held = Some(account);
 }
 
+/// Whether an account opens a window of the list on its own PC: by its switch, and one of Sir's
+/// own only with everything allowed there (Sir, 2026-11-20: "only if i set their account
+/// settings so that they are allowed to do everything that i can do but only on their pc").
+pub fn opens(a: &Account, w: &Window) -> bool {
+    !FLEET.contains(&w.id) && (!w.sirs || a.own.everything()) && a.own.allows(&key(w.id))
+}
+
 /// Why whoever sits at another PC of Sir's may not make this call (None: they may; on his main
 /// PC everything may). A window of the list that is not theirs asks for his sign-in.
 pub fn refusal(config: &ConfigStore, tool: &str, args: &Value) -> Option<String> {
     if !other_pc(config) || admin_mode() || only_closes(tool, args) {
         return None;
     }
-    if let Some((w, opens)) = window_of(tool, args) {
-        if !opens || granted(w.id) || (!w.sirs && account(config).is_some_and(|a| a.allows(&key(w.id)) && !a.denies(tool, args))) {
+    if let Some((w, opens_it)) = window_of(tool, args) {
+        if !opens_it || granted(w.id) || account(config).is_some_and(|a| opens(&a, w) && !a.own.denies(tool, args)) {
             return None;
         }
         ask(w.id, Some((tool.to_string(), args.clone())));
@@ -197,7 +211,16 @@ pub fn refusal(config: &ConfigStore, tool: &str, args: &Value) -> Option<String>
         return Some(SIGN_IN.into());
     }
     match account(config) {
-        Some(a) => a.refusal(tool, args),
+        Some(a) => a.own.refusal(tool, args),
+        None => Some(NOT_YOURS.into()),
+    }
+}
+
+/// Why an account may not make this call on Sir's main PC (his phone page, its voice there): its
+/// switches for his PC, never a window of his own (None: it may).
+pub fn guest_refusal(db: &str, guest: &str, tool: &str, args: &Value) -> Option<String> {
+    match accounts::get(db, guest) {
+        Some(a) => a.here.refusal(tool, args).or_else(|| window_of(tool, args).filter(|(w, opens)| w.sirs && *opens).map(|_| NOT_YOURS.to_string())),
         None => Some(NOT_YOURS.into()),
     }
 }
@@ -205,7 +228,7 @@ pub fn refusal(config: &ConfigStore, tool: &str, args: &Value) -> Option<String>
 /// Whether whoever sits at another PC of Sir's may switch it off, restart it, put it to sleep
 /// or lock it.
 pub fn may_power(config: &ConfigStore) -> bool {
-    !other_pc(config) || admin_mode() || account(config).is_some_and(|a| a.allows(accounts::POWER))
+    !other_pc(config) || admin_mode() || account(config).is_some_and(|a| a.own.allows(accounts::POWER))
 }
 
 /// What whoever sits at another PC of Sir's is told instead of an answer: the account is
@@ -308,7 +331,7 @@ pub fn gate(config: &ConfigStore, rt: &tokio::runtime::Handle, up: &[&'static st
     let (mut shut, mut tried) = (Vec::new(), None);
     for &id in up {
         let Some(w) = window(id) else { continue };
-        let allowed = mode || state.grants.iter().any(|g| g.id == id) || (!w.sirs && account.as_ref().is_some_and(|a| a.allows(&key(id))));
+        let allowed = mode || state.grants.iter().any(|g| g.id == id) || account.as_ref().is_some_and(|a| opens(a, w));
         if !allowed {
             shut.push(id);
             if !state.up.contains(&id) {
@@ -549,7 +572,7 @@ pub fn answer(db: &str, key: &str, body: &Value) -> Result<Value, String> {
         }
         "save" => {
             let given: Account = serde_json::from_value(body["account"].clone()).map_err(|e| e.to_string())?;
-            accounts::update(db, &other()?.name, |a| (a.allow, a.deny, a.topics, a.until) = (given.allow, given.deny, given.topics, given.until))?;
+            accounts::update(db, &other()?.name, |a| (a.own, a.here, a.topics, a.until) = (given.own, given.here, given.topics, given.until))?;
             Ok(json!({ "ok": true }))
         }
         "password" => Ok(json!({ "password": accounts::password(&vault()?, &other()?.name) })),
@@ -695,11 +718,14 @@ mod tests {
         // His switches: the Earth (not its satellites when he denied those), a tool, the power.
         cancel();
         let mut max = Account { name: "Max".into(), ..Default::default() };
-        max.set(&key("earth"), true);
-        max.set("open_jai_view:action=show_satellites", false);
-        max.set("get_weather", true);
-        max.set(&key("settings"), true);
-        max.set(accounts::POWER, true);
+        max.own.set(&key("earth"), true);
+        max.own.set("open_jai_view:action=show_satellites", false);
+        max.own.set("get_weather", true);
+        max.own.set(&key("settings"), true);
+        max.own.set(accounts::POWER, true);
+        // (What he may on Sir's PC is no switch here.)
+        max.here.set("control_music", true);
+        assert_eq!(refusal(&config, "control_music", &json!({})).as_deref(), Some(NOT_YOURS));
         *lock(&ACCOUNT) = Some(Some(max));
         assert_eq!(refusal(&config, "open_jai_view", &earth), None);
         assert_eq!(refusal(&config, "open_jai_view", &json!({"view": "earth", "action": "show_satellites"})).as_deref(), Some(SIGN_IN));
@@ -729,6 +755,25 @@ mod tests {
         assert!(key_held().is_none() && !granted("settings"));
         assert_eq!(gate(&config, rt.handle(), &["settings"]), vec!["settings"]);
         cancel();
+        // Everything on his own PC: every feature, and Sir's settings, labs and Discord there,
+        // but one taken back stays shut; never Sir's admin window, accounts or report, and no
+        // orders to other PCs.
+        let saved = account(&config);
+        let mut all = Account { name: "Max".into(), ..Default::default() };
+        all.own.allow = vec!["*".into()];
+        all.own.set(&key("discord"), false);
+        *lock(&ACCOUNT) = Some(Some(all));
+        for (tool, args) in [("control_music", json!({"action": "pause"})), ("configure_interface", json!({"settings_panel": true})), ("forge_tool", json!({"name": "x"})), ("open_jai_view", json!({"view": "network_radar"}))] {
+            assert_eq!(refusal(&config, tool, &args), None, "{tool} {args}");
+        }
+        assert!(may_power(&config) && gate(&config, rt.handle(), &["settings", "feature_lab", "earth"]).is_empty());
+        for (tool, args) in [("discord_call", json!({"action": "join"})), ("admin", json!({"action": "show"})), ("accounts", json!({"action": "show"})), ("accounts", json!({"action": "report", "name": ""})), ("other_pc", json!({"order": "x"}))] {
+            assert_eq!(refusal(&config, tool, &args).as_deref(), Some(SIGN_IN), "{tool} {args}");
+            cancel();
+        }
+        assert_eq!(gate(&config, rt.handle(), &["admin", "accounts", "discord"]), vec!["admin", "accounts", "discord"]);
+        cancel();
+        *lock(&ACCOUNT) = Some(saved);
         // Admin mode: everything while the admin window is up; once it closes, what it opened
         // closes without asking.
         {
@@ -791,9 +836,18 @@ mod tests {
         let list = answer(&db, &key, &json!({"action": "accounts", "name": "Max"})).unwrap();
         assert_eq!(list["accounts"].as_array().map(Vec::len), Some(2));
         let mut changed = max.clone();
-        changed.set("get_weather", true);
+        changed.own.set("get_weather", true);
+        changed.here.set("control_music", true);
         answer(&db, &key, &json!({"action": "save", "name": "Max", "account": changed})).unwrap();
-        assert!(accounts::get(&db, "Max").unwrap().allows("get_weather"));
+        let saved = accounts::get(&db, "Max").unwrap();
+        assert!(saved.own.allows("get_weather") && saved.here.allows("control_music") && !saved.here.allows("get_weather"));
+        // On this, his PC, Max may what Sir allowed him here, and never Sir's own windows.
+        assert_eq!(guest_refusal(&db, "Max", "control_music", &json!({"action": "pause"})), None);
+        assert_eq!(guest_refusal(&db, "Max", "get_weather", &json!({})).as_deref(), Some(NOT_YOURS), "allowed on his own PC, not on Sir's");
+        accounts::update(&db, "Max", |a| a.here.allow = vec!["*".into()]).unwrap();
+        assert_eq!(guest_refusal(&db, "Max", "get_weather", &json!({})), None);
+        assert_eq!(guest_refusal(&db, "Max", "configure_interface", &json!({"settings_panel": true})).as_deref(), Some(NOT_YOURS));
+        assert_eq!(guest_refusal(&db, "Nobody", "get_weather", &json!({})).as_deref(), Some(NOT_YOURS));
         assert!(answer(&db, &key, &json!({"action": "remove", "name": "Mustermann"})).is_err());
         assert!(answer(&db, &key, &json!({"action": "password", "name": "Mustermann"})).is_err());
         // Given back: gone.

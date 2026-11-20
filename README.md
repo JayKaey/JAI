@@ -253,8 +253,12 @@ On the phone page anyone can ask for one with a name and a password (3 to 20 cha
 six-digit key appears on Sir's screen only, and the account is made when it is typed in. A new
 account may ask questions and nothing else: it gets its own conversation and nothing of Sir's
 (not his place, his messages, his PC). "Open the accounts list" ("öffne die Kontenliste") shows
-every account with its password; Sir allows tools one by one and down to single options (the
-Earth, but not its satellites), closes topics (where they are, maths, words of his own), pauses an
+every account with its password and what it may do in two places apart, on its own PC and on
+Sir's: talk only, what Sir switches on (tools by the Feature Lab's groups, down to single options:
+the Earth, but not its satellites), or everything. Everything on its own PC is all Sir can do, on
+that PC alone (its settings, Feature Lab and Discord included); on Sir's PC (his phone page, or a
+known voice at his PC) it never opens his own windows, and those switches all start off. Sir
+closes topics (where they are, maths, words of his own), pauses an
 account ("time out Max for two hours") or removes it. "What did you do for Max today?" (or this
 week, or for everyone) reports what JAI did for others. Logging in and asking for accounts are
 limited per address, so the page cannot be flooded.
@@ -300,7 +304,8 @@ a tag `v…` is pushed; `--check` unpacks the installer and starts it with `--he
 
 "Open the admin window" ("activate admin mode", "öffne das Admin-Fenster") shows every window JAI
 can open, in groups, Sir's own first; a click on one opens it. His own are his alone on every PC:
-the accounts list, the report, the settings, the Feature Lab (the Tool Forge is in it) and Discord.
+the accounts list and the report, and the settings, the Feature Lab (the Tool Forge is in it) and
+Discord unless that PC's account may do everything there.
 "Close the admin window" ("admin mode off") closes it.
 
 Sir's main PC (one with no main PC of its own) asks once for his admin account, a name and a
@@ -308,8 +313,8 @@ password typed twice, and answers nobody until it is made; from then on it is hi
 logs in nowhere: it only signs Sir in at another PC, and it is never paused, removed or shown from
 there.
 
-On another PC, JAI does what that PC's account may: Sir's switches in the accounts list, with
-"Windows on Max's PC" for each window. A new account only talks to him. A window it may not open
+On another PC, JAI does what that PC's account may: Sir's switches in the accounts list under "On
+Max's PC", each window among them. A new account only talks to him. A window it may not open
 does not open: a pop-up asks for Sir's admin sign-in instead, and the PC stays logged in with its
 own account. Signed in, that window is his until it closes; opened again, it asks again. The admin
 window there is admin mode: everything on that PC is his until it closes, his accounts list (the

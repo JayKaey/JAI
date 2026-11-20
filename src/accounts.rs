@@ -5,8 +5,11 @@
 //! on his PC. It may do what Sir allowed it and nothing more: a new one only asks the language
 //! model. Sir allows or denies a tool, or one value of one of its options (`open_jai_view` with
 //! `view=earth`, but not `action=show_satellites`), closes topics to it (where it is, maths …)
-//! and may pause it. All of it is kept on the main PC: the accounts in `jai_memory.db`, their
-//! passwords sealed in the vault so Sir can read them in his list.
+//! and may pause it. What it may is set apart for two places (Sir, 2026-11-20: "use all of JAIs
+//! features on their PCs but they arent allowed to controll my PC or others than theirs"): its
+//! own PC (`own`, everything at one switch) and Sir's PC (`here`: his phone page, its voice at
+//! his PC), all off at first. All of it is kept on the main PC: the accounts in
+//! `jai_memory.db`, their passwords sealed in the vault so Sir can read them in his list.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{LazyLock, Mutex, MutexGuard};
@@ -69,15 +72,27 @@ pub struct Device {
     pub seen: i64,
 }
 
+/// What an account may do in one place.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct Switches {
+    /// A tool (`open_jai_view`), one value of one of its options (`open_jai_view:view=earth`),
+    /// or `*` (everything).
+    pub allow: Vec<String>,
+    /// What it may not even where its tool is allowed (`open_jai_view:action=show_satellites`).
+    pub deny: Vec<String>,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Account {
     pub name: String,
-    /// What it may do: a tool (`open_jai_view`), one value of one of its options
-    /// (`open_jai_view:view=earth`), or `*` (everything).
-    pub allow: Vec<String>,
-    /// What it may not even where its tool is allowed (`open_jai_view:action=show_satellites`).
-    pub deny: Vec<String>,
+    /// What it may do on its own PC, the one logged in with it (kept where the switches of
+    /// every account were before they were set apart: those stay its PC's).
+    #[serde(flatten)]
+    pub own: Switches,
+    /// What it may do on Sir's PC: through his phone page, or by its voice at his PC.
+    pub here: Switches,
     /// What it gets no answer on: a topic of `TOPICS` by its id, or Sir's own words.
     pub topics: Vec<String>,
     /// Paused until (unix seconds); 0: not paused.
@@ -118,12 +133,13 @@ fn keys(tool: &str, args: &Value) -> Vec<String> {
     keys
 }
 
-impl Account {
-    fn new(name: &str) -> Self {
-        Self { name: name.to_string(), created: now(), ..Default::default() }
+impl Switches {
+    /// Whether everything is allowed (but what is switched off one by one).
+    pub fn everything(&self) -> bool {
+        self.allow.iter().any(|a| a == "*")
     }
 
-    /// Why this account may not make this call; None: it may.
+    /// Why this call may not be made; None: it may.
     pub fn refusal(&self, tool: &str, args: &Value) -> Option<String> {
         let keys = keys(tool, args);
         let allowed = self.allow.iter().any(|a| a == "*" || keys.contains(a));
@@ -165,6 +181,12 @@ impl Account {
             // allowed, its satellites not.)
             self.deny.push(key.to_string());
         }
+    }
+}
+
+impl Account {
+    fn new(name: &str) -> Self {
+        Self { name: name.to_string(), created: now(), ..Default::default() }
     }
 
     /// The topic of `text` it gets no answer on (its label), if any.
@@ -293,15 +315,15 @@ pub fn password(vault: &Vault, name: &str) -> Option<String> {
     vault.secret(PASSWORDS, &name.to_lowercase())
 }
 
-/// The account a guest's voice belongs to: kept for a voice Sir introduced (what it may: the
-/// music, or everything) or one that told its name; made when there is none yet.
+/// The account a guest's voice belongs to: kept for a voice Sir introduced (what it may at his
+/// PC: the music, or everything) or one that told its name; made when there is none yet.
 pub fn for_voice(db: &str, name: &str, may: &str) -> Option<Account> {
     // (Never his admin account: a voice of that name is somebody else's.)
     if let Some(account) = get(db, name) {
         return (!account.admin).then_some(account);
     }
     let mut account = Account::new(name);
-    account.allow = voice_allow(may);
+    account.here.allow = voice_allow(may);
     save(db, &account).ok().map(|_| account)
 }
 
@@ -819,7 +841,7 @@ mod tests {
 
     #[test]
     fn a_new_account_asks_the_model_only_until_sir_allows_more() {
-        let mut max = Account::new("Max");
+        let mut max = Switches::default();
         let earth = json!({"view": "earth"});
         let satellites = json!({"view": "earth", "action": "show_satellites", "name": "starlink"});
         // New: nothing at all.
@@ -839,8 +861,30 @@ mod tests {
         assert!(max.refusal("open_jai_view", &json!({"view": "disk_map"})).is_some());
         assert!(!max.allows("open_jai_view:view=disk_map") && max.allows("open_jai_view:view=earth"));
         // Everything.
-        let all = Account { allow: vec!["*".into()], ..Account::new("Anna") };
+        let all = Switches { allow: vec!["*".into()], ..Default::default() };
+        assert!(all.everything() && !max.everything());
         assert!(all.refusal("shutdown_pc", &json!({"action": "shutdown"})).is_none());
+    }
+
+    /// Everything on its own PC is nothing on Sir's (Sir, 2026-11-20): the two places are kept
+    /// apart, and an account saved before they were keeps its switches for its own PC.
+    #[test]
+    fn its_own_pc_and_sirs_are_allowed_apart() {
+        let mut max = Account::new("Max");
+        max.own.set("control_music", true);
+        assert!(max.own.refusal("control_music", &json!({})).is_none() && max.here.refusal("control_music", &json!({})).is_some());
+        max.own = Switches { allow: vec!["*".into()], ..Default::default() };
+        assert!(max.here.refusal("control_music", &json!({})).is_some() && max.here.refusal("open_jai_view", &json!({"view": "earth"})).is_some());
+        max.here.set("open_jai_view:view=earth", true);
+        assert!(max.here.refusal("open_jai_view", &json!({"view": "earth"})).is_none() && max.here.refusal("control_music", &json!({})).is_some());
+        // Kept as before beside its name; Sir's PC's apart.
+        let saved = serde_json::to_value(&max).unwrap();
+        assert_eq!(saved["allow"], json!(["*"]));
+        assert_eq!(saved["here"]["allow"], json!(["open_jai_view:view=earth"]));
+        assert_eq!(serde_json::from_value::<Account>(saved).unwrap(), max);
+        let older: Account = serde_json::from_str(r#"{"name":"Anna","allow":["control_music"],"deny":["control_music:action=pause"],"topics":["maths"],"until":0,"created":1}"#).unwrap();
+        assert_eq!(older.own.allow, vec!["control_music".to_string()]);
+        assert!(older.own.deny.len() == 1 && older.here == Switches::default() && older.topics.len() == 1);
     }
 
     #[test]
@@ -880,7 +924,7 @@ mod tests {
         let key = finish(&db, &vault, "Max", &code, "10.0.0.7").unwrap();
         assert_eq!(session(&db, &key).as_deref(), Some("Max"));
         let max = get(&db, "max").unwrap();
-        assert!(max.allow.is_empty() && max.deny.is_empty(), "a new account asks the model only");
+        assert!(max.own == Switches::default() && max.here == Switches::default(), "a new account asks the model only");
         assert_eq!(password(&vault, "Max").as_deref(), Some("secret1"), "Sir can read it in his list");
         // Logging in again; a wrong password five times locks the name.
         assert!(login(&db, &vault, "MAX", "secret1", "10.0.0.9").is_ok());
@@ -907,16 +951,18 @@ mod tests {
     #[test]
     fn a_voice_sir_introduced_keeps_what_it_was_allowed() {
         let db = db();
-        assert_eq!(for_voice(&db, "Tom", "music").unwrap().allow.len(), 3);
-        assert_eq!(for_voice(&db, "Lena", "everything").unwrap().allow, vec!["*".to_string()]);
-        assert!(for_voice(&db, "Kai", "").unwrap().allow.is_empty());
-        assert_eq!(for_voice(&db, "tom", "everything").unwrap().allow.len(), 3, "an account it has stays as Sir set it");
+        // (A voice speaks at Sir's PC: what it may is for his PC.)
+        let tom = for_voice(&db, "Tom", "music").unwrap();
+        assert!(tom.here.allow.len() == 3 && tom.own == Switches::default());
+        assert_eq!(for_voice(&db, "Lena", "everything").unwrap().here.allow, vec!["*".to_string()]);
+        assert!(for_voice(&db, "Kai", "").unwrap().here.allow.is_empty());
+        assert_eq!(for_voice(&db, "tom", "everything").unwrap().here.allow.len(), 3, "an account it has stays as Sir set it");
     }
 
     /// Everything but one tool: a whole tool switched off under "everything" is denied.
     #[test]
     fn everything_but_one_tool() {
-        let mut lena = Account { allow: vec!["*".into()], ..Account::new("Lena") };
+        let mut lena = Switches { allow: vec!["*".into()], ..Default::default() };
         lena.set("open_jai_view", false);
         assert!(lena.refusal("open_jai_view", &json!({"view": "earth"})).is_some() && lena.refusal("control_music", &json!({})).is_none());
         lena.set("open_jai_view", true);

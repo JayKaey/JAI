@@ -1878,7 +1878,7 @@ impl Brain {
         let action = power::power_request(text)?;
         // (Someone else, or whoever sits at another PC of Sir's: only what Sir allowed them.)
         let allowed = match self.inner.tools.caller.guest() {
-            Some(name) => crate::accounts::get(&self.inner.config.read(|c| c.memory_db_path.clone()), name).is_some_and(|a| a.allows(crate::accounts::POWER)),
+            Some(name) => crate::accounts::get(&self.inner.config.read(|c| c.memory_db_path.clone()), name).is_some_and(|a| a.here.allows(crate::accounts::POWER)),
             None => self.inner.tools.caller == crate::accounts::Caller::Remote || crate::admin::may_power(&self.inner.config),
         };
         if !allowed {

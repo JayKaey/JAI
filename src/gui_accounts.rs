@@ -1,12 +1,14 @@
 //! The accounts list ("open the accounts list"): everyone besides Sir who may use J.A.I., with
-//! their passwords; what each may do, every tool and every value of its options one by one (the
-//! Earth, but not its satellites); the topics closed to them; a pause; their phones and PCs with
-//! what those PCs run; and what J.A.I. did for them. Only Sir opens it (`accounts::run`). On
-//! another PC of his, in admin mode, it shows the accounts at his main PC and changes them there
-//! (`admin::remote_accounts`).
+//! their passwords; what each may do on their own PC and, apart, on Sir's (Sir, 2026-11-20: "the
+//! window where i can give and take permissions to be more clearly laid out"): talk only, what
+//! he chose, or everything, then every window and every tool by the Feature Lab's groups, in
+//! words, each value of its options one by one (the Earth, but not its satellites); the topics
+//! closed to them; a pause; their phones and PCs with what those PCs run; and what J.A.I. did for
+//! them. Only Sir opens it (`accounts::run`). On another PC of his, in admin mode, it shows the
+//! accounts at his main PC and changes them there (`admin::remote_accounts`).
 
 use super::{strip_ink, strip_muted};
-use crate::accounts::{self, Account, Grant, TOPICS};
+use crate::accounts::{self, Account, Grant, Switches, TOPICS};
 use crate::admin::{self, Remote};
 use crate::holo::Face;
 use crate::holo_ui;
@@ -26,10 +28,14 @@ struct View {
     db: String,
     /// The accounts at Sir's main PC, from another PC of his in admin mode.
     remote: bool,
-    grants: Vec<Grant>,
+    /// What can be allowed, by the Feature Lab's groups.
+    groups: Vec<(&'static str, Vec<Grant>)>,
     /// The account unfolded.
     chosen: String,
-    search: String,
+    /// The features searched for: on their PC, on Sir's.
+    search: [String; 2],
+    /// Where CHOSEN was pressed while nothing is switched on yet: (account, on its own PC).
+    choosing: Vec<(String, bool)>,
     /// A topic of Sir's own words being typed.
     topic: String,
     /// The password shown: whose, and what it is.
@@ -45,11 +51,46 @@ fn lock() -> MutexGuard<'static, Option<View>> {
 }
 
 pub(super) fn open(db: String, remote: bool) {
-    let grants = accounts::grants(&crate::tools::definitions_with(Vec::new()));
+    let definitions = crate::tools::definitions_with(Vec::new());
+    let groups = grouped(&definitions, accounts::grants(&definitions));
     let mut view = lock();
     let chosen = view.as_ref().filter(|v| v.db == db && v.remote == remote).map(|v| v.chosen.clone()).unwrap_or_default();
-    *view = Some(View { db, remote, grants, chosen, ..Default::default() });
+    *view = Some(View { db, remote, groups, chosen, ..Default::default() });
     OPEN.store(true, Ordering::Release);
+}
+
+/// The tools under the Feature Lab's groups (`features_view::catalogue`), the PC's power last.
+fn grouped(definitions: &[serde_json::Value], grants: Vec<Grant>) -> Vec<(&'static str, Vec<Grant>)> {
+    let catalogue = super::features_view::catalogue(definitions);
+    let mut groups: Vec<(&'static str, Vec<Grant>)> = catalogue.iter().map(|(name, _)| (*name, Vec::new())).collect();
+    groups.push(("Power and lock", Vec::new()));
+    let last = groups.len() - 1;
+    for g in grants {
+        let i = catalogue.iter().position(|(_, tools)| tools.iter().any(|(tool, _)| *tool == g.tool)).unwrap_or(last);
+        groups[i].1.push(g);
+    }
+    groups.retain(|(_, g)| !g.is_empty());
+    groups
+}
+
+/// One place's switches of an account: its own PC's, or Sir's PC's.
+fn switches(a: &mut Account, own: bool) -> &mut Switches {
+    if own {
+        &mut a.own
+    } else {
+        &mut a.here
+    }
+}
+
+/// A place's level in a word or two, for the list.
+fn level_word(s: &Switches) -> String {
+    if s.everything() {
+        "everything".into()
+    } else if s.allow.is_empty() {
+        "talks only".into()
+    } else {
+        format!("{} chosen", s.allow.len())
+    }
 }
 
 pub(super) fn close() {
@@ -82,13 +123,7 @@ fn summary(a: &Account) -> String {
     if a.admin {
         return format!("{}  ·  your admin account", a.name);
     }
-    let may = if a.allow.iter().any(|k| k == "*") {
-        "may do everything".to_string()
-    } else if a.allow.is_empty() {
-        "asks only".to_string()
-    } else {
-        format!("{} allowed", a.allow.len())
-    };
+    let may = format!("their PC: {}  ·  yours: {}", level_word(&a.own), level_word(&a.here));
     let state = a.paused().map_or(may, |until| format!("paused until {until}"));
     let seen = a.devices.first().map(|d| format!("  ·  seen {}", ago(d.seen))).unwrap_or_default();
     format!("{}  ·  {state}{seen}", a.name)
@@ -211,52 +246,12 @@ fn detail(ui: &mut Ui, view: &mut View, a: &Account, remote: Option<&Remote>) {
             }
         }
     });
-    holo_ui::fold(ui, ("allow", &a.name), &format!("What {} may do", a.name), true, |ui| {
-        let mut everything = a.allow.iter().any(|k| k == "*");
-        if holo_ui::toggle(ui, &mut everything, "Everything, as Sir may (this PC included)").changed() {
-            change(&mut |x| {
-                x.allow.retain(|k| k != "*");
-                if everything {
-                    x.allow.push("*".into());
-                }
-            });
-        }
-        ui.label(muted("All off: the language model alone. A tool on allows its options but those switched off below it; one option on allows just that."));
-        holo_ui::slot(ui, egui::TextEdit::singleline(&mut view.search).hint_text("search the tools").desired_width(f32::INFINITY));
-        let search = view.search.trim().to_lowercase();
-        for g in view.grants.iter().filter(|g| search.is_empty() || g.tool.contains(&search) || g.about.to_lowercase().contains(&search) || g.values.iter().any(|v| v.contains(&search))) {
-            let mut on = a.allows(&g.tool);
-            if holo_ui::toggle(ui, &mut on, format!("{}: {}", g.tool, g.about)).changed() {
-                change(&mut |x| x.set(&g.tool, on));
-            }
-            if g.values.is_empty() {
-                continue;
-            }
-            ui.indent(("values", &g.tool), |ui| {
-                holo_ui::fold(ui, ("values", &a.name, &g.tool), &format!("{} options", g.values.len()), !search.is_empty(), |ui| {
-                    for value in &g.values {
-                        let key = format!("{}:{value}", g.tool);
-                        let mut on = a.allows(&key);
-                        if holo_ui::toggle(ui, &mut on, value).changed() {
-                            change(&mut |x| x.set(&key, on));
-                        }
-                    }
-                });
-            });
-        }
-    });
-    holo_ui::fold(ui, ("windows", &a.name), &format!("Windows on {}'s PC", a.name), false, |ui| {
-        ui.label(muted("On their PC a window opens when it is on here; any other asks for your admin sign-in. Yours (the accounts, the settings, the labs, Discord) are never theirs."));
-        for w in admin::WINDOWS.iter().filter(|w| !w.sirs) {
-            let key = admin::key(w.id);
-            let mut on = a.allows(&key);
-            if holo_ui::toggle(ui, &mut on, format!("{}: {}", w.title, w.about)).changed() {
-                change(&mut |x| x.set(&key, on));
-            }
-        }
-    });
-    holo_ui::fold(ui, ("topics", &a.name), &format!("Topics closed to {}", a.name), false, |ui| {
-        ui.label(muted("A closed topic gets no answer, from the language model either."));
+    ui.add_space(8.0);
+    for own in [true, false] {
+        place(ui, view, a, own, &change);
+    }
+    holo_ui::titled_plate(ui, &format!("Topics closed to {}", a.name), "03", |ui| {
+        ui.label(muted("On their PC and on yours: a closed topic gets no answer, from the language model either."));
         for (id, title) in TOPICS {
             let mut closed = a.topics.iter().any(|t| t == id);
             if holo_ui::toggle(ui, &mut closed, title).changed() {
@@ -289,7 +284,7 @@ fn detail(ui: &mut Ui, view: &mut View, a: &Account, remote: Option<&Remote>) {
             }
         });
     });
-    holo_ui::fold(ui, ("devices", &a.name), &format!("{}'s phones and PCs", a.name), false, |ui| {
+    holo_ui::titled_plate(ui, &format!("{}'s phones and PCs", a.name), "04", |ui| {
         if a.devices.is_empty() {
             ui.label(muted("None yet."));
         }
@@ -307,7 +302,7 @@ fn detail(ui: &mut Ui, view: &mut View, a: &Account, remote: Option<&Remote>) {
             }
         }
     });
-    holo_ui::fold(ui, ("log", &a.name), &format!("What J.A.I. did for {} this week", a.name), false, |ui| {
+    holo_ui::titled_plate(ui, &format!("What J.A.I. did for {} this week", a.name), "05", |ui| {
         let done = match remote {
             Some(r) => r.log.iter().filter(|d| d.name.eq_ignore_ascii_case(&a.name)).cloned().collect(),
             None => accounts::log(&db, Some(&a.name), accounts::now() - 7 * 86_400),
@@ -315,7 +310,8 @@ fn detail(ui: &mut Ui, view: &mut View, a: &Account, remote: Option<&Remote>) {
         if done.is_empty() {
             ui.label(muted("Nothing this week."));
         }
-        for d in done.iter().rev().take(40) {
+        const SHOWN: usize = 12;
+        for d in done.iter().rev().take(SHOWN) {
             let at = chrono::DateTime::from_timestamp(d.at, 0).map(|t| t.with_timezone(&chrono::Local).format("%d.%m. %H:%M").to_string()).unwrap_or_default();
             ui.label(label(&format!("{at} · {}", d.via), 8.0));
             ui.label(RichText::new(&d.asked).font(crate::holo::font(Face::Body, 13.0)).color(strip_ink()));
@@ -323,6 +319,108 @@ fn detail(ui: &mut Ui, view: &mut View, a: &Account, remote: Option<&Remote>) {
             if !d.tools.is_empty() {
                 ui.label(RichText::new(format!("ran {}", d.tools)).font(crate::holo::font(Face::Mono, 11.0)).color(strip_muted()));
             }
+        }
+        if done.len() > SHOWN {
+            ui.label(muted(&format!("… and {} earlier this week (\"what did you do for {} this week\" lists them all).", done.len() - SHOWN, a.name)));
+        }
+    });
+}
+
+/// What an account may in one place, on a plate of its own: on its own PC (`own`; its windows
+/// too) or on Sir's. TALK ONLY, CHOSEN or EVERYTHING, then the windows and the features by group,
+/// each in words (its tool's name under the pointer).
+fn place(ui: &mut Ui, view: &mut View, a: &Account, own: bool, change: &dyn Fn(&mut dyn FnMut(&mut Account))) {
+    let s = if own { &a.own } else { &a.here };
+    let pick = (a.name.to_lowercase(), own);
+    let level = if s.everything() {
+        2
+    } else if !s.allow.is_empty() || view.choosing.contains(&pick) {
+        1
+    } else {
+        0
+    };
+    let (title, index) = if own { (format!("On {}'s PC", a.name), "01") } else { ("On your PC".to_string(), "02") };
+    holo_ui::titled_plate(ui, &title, index, |ui| {
+        ui.horizontal(|ui| {
+            for (i, text) in ["TALK ONLY", "CHOSEN", "EVERYTHING"].into_iter().enumerate() {
+                if holo_ui::key_on(ui, text, level == i).clicked() && level != i {
+                    view.choosing.retain(|p| *p != pick);
+                    match i {
+                        1 => view.choosing.push(pick.clone()),
+                        2 => change(&mut |x| *switches(x, own) = Switches { allow: vec!["*".into()], deny: Vec::new() }),
+                        _ => {}
+                    }
+                    if i == 0 || level == 2 {
+                        change(&mut |x| *switches(x, own) = Switches::default());
+                    }
+                }
+            }
+        });
+        let name = &a.name;
+        ui.label(muted(&match (own, level) {
+            (true, 0) => format!("On their own PC, {name} talks to J.A.I. and nothing more."),
+            (true, 1) => format!("On their own PC, {name} may what is switched on below; any other window asks for your admin sign-in."),
+            (true, _) => format!("Everything you can do, on {name}'s PC alone: every feature and window there, the settings, the Feature Lab and Discord too. Your admin window, the accounts and orders to other PCs stay yours."),
+            (false, 0) => format!("Through your phone page or by voice at your PC, {name} talks to J.A.I. and nothing more."),
+            (false, 1) => format!("Through your phone page or by voice at your PC, {name} may what is switched on below, and never your own windows."),
+            (false, _) => format!("Everything on your PC but your own windows (the accounts, the settings, the labs, Discord) and your other PCs."),
+        }));
+        if level == 0 {
+            return;
+        }
+        if own {
+            holo_ui::head(ui, "Windows");
+            let windows: Vec<&admin::Window> = admin::WINDOWS.iter().filter(|w| !admin::FLEET.contains(&w.id)).collect();
+            ui.columns(2, |columns| {
+                for (i, w) in windows.iter().enumerate() {
+                    let ui = &mut columns[i % 2];
+                    let key = admin::key(w.id);
+                    let mut on = s.allows(&key) && (!w.sirs || s.everything());
+                    ui.add_enabled_ui(!w.sirs || s.everything(), |ui| {
+                        if holo_ui::toggle(ui, &mut on, w.title).on_hover_text(w.about).on_disabled_hover_text("Only with EVERYTHING on their PC.").changed() {
+                            change(&mut |x| switches(x, own).set(&key, on));
+                        }
+                    });
+                }
+            });
+        }
+        holo_ui::head(ui, "Features");
+        let searched = &mut view.search[usize::from(!own)];
+        holo_ui::slot(ui, egui::TextEdit::singleline(searched).hint_text("search the features").desired_width(f32::INFINITY));
+        let search = searched.trim().to_lowercase();
+        for (group, grants) in &view.groups {
+            let found: Vec<&Grant> = grants.iter().filter(|g| search.is_empty() || g.tool.contains(&search) || g.about.to_lowercase().contains(&search) || g.values.iter().any(|v| v.contains(&search))).collect();
+            if found.is_empty() {
+                continue;
+            }
+            // (A tool counts when it, or one value of its options, is allowed.)
+            let on = grants.iter().filter(|g| s.allows(&g.tool) || g.values.iter().any(|v| s.allows(&format!("{}:{v}", g.tool)))).count();
+            // (Open at first where something was switched one by one: allowed, or taken back.)
+            let set = |tool: &str| s.allow.iter().chain(&s.deny).any(|k| k.split(':').next() == Some(tool));
+            holo_ui::fold(ui, ("features", own, &a.name, *group), &format!("{group}  ·  {on} of {}", grants.len()), !search.is_empty() || grants.iter().any(|g| set(&g.tool)), |ui| {
+                for g in found {
+                    let mut on = s.allows(&g.tool);
+                    let said = if g.about.is_empty() { g.tool.replace('_', " ") } else { g.about.clone() };
+                    if holo_ui::toggle(ui, &mut on, said).on_hover_text(&g.tool).changed() {
+                        change(&mut |x| switches(x, own).set(&g.tool, on));
+                    }
+                    if g.values.is_empty() {
+                        continue;
+                    }
+                    ui.indent(("values", own, &g.tool), |ui| {
+                        let one_by_one = s.allow.iter().chain(&s.deny).any(|k| k.starts_with(&format!("{}:", g.tool)));
+                        holo_ui::fold(ui, ("values", own, &a.name, &g.tool), &format!("{} options", g.values.len()), one_by_one || !search.is_empty(), |ui| {
+                            for value in &g.values {
+                                let key = format!("{}:{value}", g.tool);
+                                let mut on = s.allows(&key);
+                                if holo_ui::toggle(ui, &mut on, value.replace('=', ": ")).changed() {
+                                    change(&mut |x| switches(x, own).set(&key, on));
+                                }
+                            }
+                        });
+                    });
+                }
+            });
         }
     });
 }
@@ -375,8 +473,9 @@ mod tests {
     use crate::visual_ui_verifier::{self as visual, Stage};
     use serde_json::json;
 
-    /// The list with one account unfolded: its password key, its pause and REMOVE keys, every
-    /// tool with its options one by one, nothing cut off or drawn over.
+    /// The list with one account unfolded: its password key, its pause and REMOVE keys, its two
+    /// places apart (everything but Discord on its own PC; on Sir's, the Earth without its
+    /// satellites, the options one by one), nothing cut off or drawn over.
     #[test]
     fn the_accounts_list_shows_every_switch() {
         let _look = crate::holo_theme::look_for_pictures();
@@ -384,22 +483,26 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let db = dir.join("jai_memory.db").to_string_lossy().to_string();
         let mut max = accounts::for_voice(&db, "Max", "").unwrap();
-        max.set("open_jai_view:view=earth", true);
-        max.set("open_jai_view:action=show_satellites", false);
+        max.own.allow = vec!["*".into()];
+        max.own.set(&admin::key("discord"), false);
+        max.here = Switches::default();
+        max.here.set("open_jai_view:view=earth", true);
+        max.here.set("open_jai_view:action=show_satellites", false);
         max.topics.push("maths".into());
         max.devices.push(accounts::Device { id: "a1b2c3d4".into(), kind: "pc".into(), label: "Musterstadt-PC (Windows 11)".into(), version: "3.1.0".into(), stats: "CPU 12 % · RAM 7.9 / 32 GB · RTX 4060 8 GB".into(), seen: accounts::now() - 120 });
         accounts::save(&db, &max).unwrap();
         accounts::make_admin(&db, &crate::vault::Vault::in_memory(), "Mustermann", "geheim123").unwrap();
         let definitions = vec![json!({"type": "function", "function": {"name": "open_jai_view", "description": "Opens one of his views. More.", "parameters": {"type": "object", "properties": {"view": {"type": "string", "enum": ["earth", "disk_map"]}, "action": {"type": "string", "description": "earth: show, show_satellites"}}}}})];
-        *lock() = Some(View { db: db.clone(), grants: accounts::grants(&definitions), chosen: "Max".into(), ..Default::default() });
-        let mut stage = Stage::new(egui::vec2(640.0, 900.0));
+        *lock() = Some(View { db: db.clone(), groups: grouped(&definitions, accounts::grants(&definitions)), chosen: "Max".into(), ..Default::default() });
+        let mut stage = Stage::new(egui::vec2(640.0, 1500.0));
         let frame = stage.frames(4, &mut |ctx| {
-            egui::Window::new("accounts").title_bar(false).fixed_pos(egui::pos2(10.0, 10.0)).fixed_size(egui::vec2(600.0, 860.0)).show(ctx, body);
+            egui::Window::new("accounts").title_bar(false).fixed_pos(egui::pos2(10.0, 10.0)).fixed_size(egui::vec2(600.0, 1460.0)).show(ctx, body);
         });
         stage.raster(&frame).save("panel_accounts");
         assert_eq!(visual::clipped_text(&frame), Vec::<String>::new());
         assert_eq!(visual::text_over_text(&frame), Vec::<String>::new());
-        for shown in ["MAX", "PASSWORD", "SHOW", "PAUSE 1 H", "REMOVE", "open_jai_view: Opens one of his views", "Everything, as Sir may (this PC included)", "pc_power: Shut down, restart, sleep or lock this PC", "WINDOWS ON MAX'S PC", "Mustermann  ·  your admin account"] {
+        let row = "Max  ·  their PC: everything  ·  yours: 1 chosen";
+        for shown in [row,"PASSWORD", "SHOW", "PAUSE 1 H", "REMOVE", "ON MAX'S PC", "ON YOUR PC", "TALK ONLY", "CHOSEN", "EVERYTHING", "Feature Lab", "Discord", "Opens one of his views", "view: earth", "action: show_satellites", "TOPICS CLOSED TO MAX", "Musterstadt-PC", "Mustermann  ·  your admin account"] {
             assert!(!frame.find_text(shown).is_empty(), "'{shown}' is not in the list");
         }
         *lock() = None;

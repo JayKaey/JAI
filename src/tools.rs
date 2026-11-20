@@ -628,16 +628,12 @@ impl ToolContext {
             }
             None => (name, args),
         };
-        // Someone other than Sir, or whoever sits at another PC of his: only what Sir allowed
-        // that account (his accounts list). What an allowed call does in turn (a view's reads, a
-        // protocol's steps) comes with it.
+        // Someone other than Sir (on his PC: what Sir allowed that account here), or whoever sits
+        // at another PC of his (what its account may there). What an allowed call does in turn
+        // (a view's reads, a protocol's steps) comes with it.
         if VOUCHED.try_with(|_| ()).is_err() && self.caller != crate::accounts::Caller::Remote {
             let why = match &self.caller {
-                // (Sir's own windows are no account's, whatever its switches.)
-                crate::accounts::Caller::Guest(guest) => match crate::accounts::get(&self.config.read(|c| c.memory_db_path.clone()), guest) {
-                    Some(account) => account.refusal(name, &args).or_else(|| crate::admin::window_of(name, &args).filter(|(w, opens)| w.sirs && *opens).map(|_| crate::admin::NOT_YOURS.to_string())),
-                    None => Some(crate::admin::NOT_YOURS.to_string()),
-                },
+                crate::accounts::Caller::Guest(guest) => crate::admin::guest_refusal(&self.config.read(|c| c.memory_db_path.clone()), guest, name, &args),
                 _ => crate::admin::refusal(&self.config, name, &args),
             };
             if let Some(why) = why {

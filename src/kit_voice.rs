@@ -931,7 +931,7 @@ pub fn guest(ctx: &ToolContext, args: &Value) -> Result<String, String> {
             if keep {
                 // (What a voice may is its account's.)
                 crate::accounts::for_voice(&db, &guest.name, &guest.may);
-                crate::accounts::update(&db, &guest.name, |a| a.allow = crate::accounts::voice_allow(&guest.may))?;
+                crate::accounts::update(&db, &guest.name, |a| a.here.allow = crate::accounts::voice_allow(&guest.may))?;
             }
             Ok(say(format!("{} may {}.", guest.name, if guest.may == "music" { "control the music and the volume, nothing else" } else { "ask for everything" }), format!("Understood, Sir. {} may {}.", guest.name, if guest.may == "music" { "control the music, nothing else" } else { "ask for everything" })))
         }
