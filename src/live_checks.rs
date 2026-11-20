@@ -464,7 +464,7 @@ fn voice_samples_for_his_ear() {
 mod kde {
     use super::*;
     use crate::plasma::{self, state, Window};
-    use crate::winctl::{manage, WindowAction::{self, *}, WindowTarget};
+    use crate::winctl::{manage, WindowAction::*, WindowTarget};
 
     /// Waits up to `secs` seconds for `ok`.
     fn until(secs: u64, mut ok: impl FnMut() -> bool) -> bool {
@@ -513,8 +513,12 @@ mod kde {
         let monitors = crate::monitors::list();
         eprintln!("monitors {monitors:?}, KWin's outputs {:?}", plasma::outputs());
         let typed = std::env::temp_dir().join(format!("jai-kwin-keys-{}.txt", std::process::id()));
+        // (What KWin tells the terminal and what it answers, for a step that fails.)
+        let told = std::env::temp_dir().join(format!("jai-kwin-foot-{}.log", std::process::id()));
         let mut foot = std::process::Command::new("foot")
             .args(["-T", "kwin-check", "--", "sh", "-c", &format!("read line; echo \"$line\" > '{}'; exec sleep 600", typed.display())])
+            .env("WAYLAND_DEBUG", "1")
+            .stderr(std::fs::File::create(&told).expect("the terminal's log"))
             .spawn()
             .expect("foot, the stand-in for another program");
         let target = WindowTarget::Named("terminal".into());
@@ -528,24 +532,29 @@ mod kde {
         }
         assert!(until(5, || std::fs::read_to_string(&typed).is_ok_and(|t| t.trim() == "jai")), "the keys never reached the terminal");
         let rt = tokio::runtime::Runtime::new().expect("a runtime");
-        let run = |action: WindowAction| eprintln!("{}", rt.block_on(manage(action, target.clone())).unwrap_or_else(|e| panic!("{action:?}: {e}")));
+        // Every step is tried and each one that fails is told at the end.
+        let mut failed = Vec::new();
+        let mut step = |what: String, done: Result<String, String>, ok: &dyn Fn() -> bool| match done {
+            Ok(said) if until(5, ok) => eprintln!("{said}"),
+            Ok(said) => failed.push(format!("{what} ('{said}') left it as {:?}", now())),
+            Err(e) => failed.push(format!("{what}: {e}")),
+        };
         for (action, bit, on) in [(Maximize, state::MAXIMIZED, true), (Restore, state::MAXIMIZED, false), (Fullscreen, state::FULLSCREEN, true), (ExitFullscreen, state::FULLSCREEN, false), (Minimize, state::MINIMIZED, true), (Restore, state::MINIMIZED, false)] {
-            run(action);
-            assert!(until(5, || now().is_some_and(|w| w.is(bit) == on)), "{action:?} left it as {:?}", now());
+            step(format!("{action:?}"), rt.block_on(manage(action, target.clone())), &|| now().is_some_and(|w| w.is(bit) == on));
         }
-        run(SnapLeft);
         let left_half = |w: &Window| screen(w).is_some_and(|i| w.geometry[0] == monitors[i - 1].rect[0] && (w.geometry[2] - monitors[i - 1].width() / 2).abs() <= 24);
-        assert!(until(5, || now().is_some_and(|w| left_half(&w))), "snapped left as {:?}", now());
+        step("SnapLeft".into(), rt.block_on(manage(SnapLeft, target.clone())), &|| now().is_some_and(|w| left_half(&w)));
         if monitors.len() > 1 && monitors[0].rect != monitors[1].rect {
-            eprintln!("{}", rt.block_on(crate::monitors::move_app(target.clone(), json!(2))).expect("on monitor 2"));
-            assert!(until(5, || now().is_some_and(|w| screen(&w) == Some(2))), "moved as {:?}", now());
+            step("To monitor 2".into(), rt.block_on(crate::monitors::move_app(target.clone(), json!(2))), &|| now().is_some_and(|w| screen(&w) == Some(2)));
         } else {
             eprintln!("(not moved between monitors: KWin put both in one place)");
         }
-        run(Close);
-        assert!(until(5, || now().is_none()), "the terminal is still open");
+        step("Close".into(), rt.block_on(manage(Close, target.clone())), &|| now().is_none());
         let _ = foot.kill();
         let _ = std::fs::remove_file(typed);
+        let log = std::fs::read_to_string(&told).unwrap_or_default();
+        let log: Vec<&str> = log.lines().filter(|l| l.contains("configure") || l.contains(".commit(")).collect();
+        assert!(failed.is_empty(), "{}\nWhat KWin told the terminal and its answers:\n{}", failed.join("\n"), log[log.len().saturating_sub(60)..].join("\n"));
     }
 
     /// One of his own windows (an X11 window of this process without a frame, as winit makes
