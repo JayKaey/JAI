@@ -76,6 +76,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
+          # (A cache of its own: the first one kept whisper's broken generated bindings, and its
+          # build script does not run again when WHISPER_DONT_GENERATE_BINDINGS changes.)
+          key: bundled-bindings
       - name: Build the tests
         shell: bash
         run: cargo test --release --no-run 2>&1 | tee build.txt || { awk "$FAILURES" build.txt; exit 1; }

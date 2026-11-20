@@ -289,7 +289,8 @@ WHISPER_DONT_GENERATE_BINDINGS=1 cargo build --release
 ```
 
 (The variable keeps whisper's own bindings: generated with Arch's newer clang, they lose the
-fields of `whisper_full_params`.)
+fields of `whisper_full_params`. After a build without it, run `cargo clean -p whisper-rs-sys
+--release` once, as whisper's build script does not run again for the variable.)
 
 At run time he needs `espeak-ng` (his voice), `zstd` (the installer unpacks Ollama with it),
 `libpulse` (`pactl`: the volume of every app and the microphone), `tesseract` with its English and
