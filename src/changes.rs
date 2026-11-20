@@ -91,9 +91,19 @@ const fn fixed(title: &'static str, what: &'static str) -> Entry {
 /// Every change, newest first.
 pub const RELEASES: &[Release] = &[
     Release {
+        date: "2026-11-20",
+        name: "Closer to the ground",
+        entries: &[
+            fixed("A crowded city turns smoothly", "With thousands of houses in view the Earth lagged; a frame of them costs about half what it did."),
+            better("The Earth comes much closer", "The wheel and \"zoom in\" go down to 30 m, a house filling the window (was 250 m)."),
+        ],
+    },
+    Release {
         date: "2026-11-19",
         name: "Every panel in the new look",
         entries: &[
+            new("Landmarks on the Earth", "\"Show me the Statue of Liberty\" flies to it; a building stands among the houses in 3D.", "earth_landmarks"),
+            better("The houses rise as holograms", "Traced on the ground, then risen in a wave from the middle, with windows and a tower's scale."),
             new("The Earth in 3D", "Near the ground the camera leans back over the town; the right button tilts and turns it.", "earth_3d"),
             added("Streets and water on the hologram map", "From a town's outline down: its streets by rank, rails, rivers, lakes and the streets' names."),
             fixed("No hidden Edge any more", "Signing in to itslearning started a hidden Edge at every briefing; he starts no browser now."),
@@ -518,6 +528,13 @@ pub const RELEASES: &[Release] = &[
 /// The explanations, by id.
 pub const EXPLANATIONS: &[Explanation] = &[
     Explanation {
+        id: "earth_landmarks",
+        title: "Landmarks on the Earth",
+        what: "While the Earth is up, name any place you want to see, a town or a single building, and he flies there: the Statue of Liberty, the Empire State Building, the Eiffel Tower, Times Square, Mount Everest. A building or a square he shows close up among the houses, in 3D, and the one you asked for burns brightest among them; a tower from as far back as its top stands in view; a bridge, a park or a mountain he shows whole from higher up.",
+        say: &["Jay, show me the Statue of Liberty.", "Jay, zoom to the Empire State Building.", "Jay, fly me to the Golden Gate Bridge.", "Jay, zeig mir die Freiheitsstatue."],
+        know: "He asks OpenStreetMap for the name and takes its best-known hit, so a famous landmark wins over a hamlet that shares its name; a town still comes from the town search, which knows how many live there. A landmark goes by OpenStreetMap's name for it: Big Ben is the Elizabeth Tower there. A tower over about 450 m (the Burj Khalifa) is cut at its top, or the houses would no longer stand. With the Earth closed, say \"on the globe\" at the end.",
+    },
+    Explanation {
         id: "earth_3d",
         title: "The Earth in 3D",
         what: "Down near the ground the 3D key in the Earth's column leans the camera back over the map, as Google Earth does: the town stands before you in perspective, its houses as blocks you see from the side, its streets running off into the distance, where the ground falls back into the dark. Drag with the right mouse button to tilt it (up and down) and to turn it (left and right); the left button still moves the map. The key again stands it straight down, north up. While it is turned, a mark on the key's ring points north.",
@@ -527,7 +544,7 @@ pub const EXPLANATIONS: &[Explanation] = &[
     Explanation {
         id: "earth_houses",
         title: "The houses of a town in 3D",
-        what: "Zoom the Earth down to street level and the houses rise from the map: every building a block of dark glass with a lit roof line, as tall as OpenStreetMap says it is; where the map gives no height, as in most small towns, he judges it by the house's ground. The walls carry a line for every storey and, up close, their window bays; a small house wears a hipped roof; a roof says its house number once you are close, and a tower says how tall it is. It works in any town of the world whose houses are on OpenStreetMap. It works on the photo map and on the hologram. Straight down you see their roofs and the walls turned to the middle of the view; lean the camera back (the 3D key, or a drag with the right mouse button) and you look at them from the side, and turn round them to see every side.",
+        what: "Zoom the Earth down to street level and the houses rise from the map as Stark's holograms: each traced on the ground first, then raised in a wave from the middle of the view, glass lit from its foot under a white roof line, as tall as OpenStreetMap says it is; where the map gives no height, as in most small towns, he judges it by the house's ground. The walls carry a line for every storey and, up close, their windows; a tower shows its height scale on its nearest corner, a flat roof its parapet, a small house a hipped roof; a roof says its house number once you are close, and a tower says how tall it is. It works in any town of the world whose houses are on OpenStreetMap. It works on the photo map and on the hologram. Straight down you see their roofs and the walls turned to the middle of the view; lean the camera back (the 3D key, or a drag with the right mouse button) and you look at them from the side, and turn round them to see every side.",
         say: &["Jay, show me the houses of Musterstadt in 3D.", "Jay, show me the buildings.   (down to street level where the map is)", "Jay, hide the buildings."],
         know: "These are models from outlines and heights, not photographed ones; a landmark mapped in parts (a tower on a hall) stands in its parts. The map knows no roof shapes, so the hipped roofs of small houses are his guess, and so is a height it does not give. A town's houses come from OpenFreeMap once, when you first look at it, and are kept on this PC. The key with the two blocks in the Earth's column switches them.",
     },

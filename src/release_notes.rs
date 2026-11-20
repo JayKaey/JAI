@@ -27,8 +27,11 @@ mod tests {
     #[test]
     fn whats_new_is_the_newest_day_of_the_changes_list() {
         let line = spoken();
-        let first_new = RELEASES[0].entries.iter().find(|e| e.kind == Kind::New).expect("the newest day brought something new");
-        assert!(line.starts_with("New in this build, Sir: ") && line.contains(first_new.what), "{line}");
+        assert!(line.starts_with("New in this build, Sir: "), "{line}");
+        // (A day of fixes alone says "0 new things".)
+        if let Some(first_new) = RELEASES[0].entries.iter().find(|e| e.kind == Kind::New) {
+            assert!(line.contains(first_new.what), "{line}");
+        }
         assert!(RELEASES[1].entries.iter().all(|e| !line.contains(e.what)), "an older day's news: {line}");
         assert!(line.split_whitespace().count() < 120, "short enough to hear: {line}");
         assert!(crate::changes::command("show the changes").is_some(), "the line it ends on opens the list");

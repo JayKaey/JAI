@@ -345,7 +345,10 @@ fn view_with(ui: &mut Ui, st: &mut Earth, rt: &Handle, fetch: bool) {
     if st.look == Look::Holo && st.overlays.labels {
         crate::earth_buildings::paint_names(&painter, &geo.flat, lay.map, geo.flatness, &mut placer.taken);
     }
-    st.houses = crate::earth_buildings::paint(&painter, &geo.flat, lay.map, if st.overlays.buildings { geo.flatness } else { 0.0 }, &placer.taken);
+    // (The house a place Sir asked for stands on burns brightest.)
+    let chosen = st.marker.as_ref().map(|m| [model::merc_x(m.lon), model::merc_y(m.lat)]);
+    let (houses, rising) = crate::earth_buildings::paint(&painter, &geo.flat, lay.map, if st.overlays.buildings { geo.flatness } else { 0.0 }, &placer.taken, chosen);
+    st.houses = houses;
     let (pulsing, movers) = paint_layers(&painter, st, &geo, &ink, now, &mut placer, &mut picker);
     cards.paint(&painter, &ink);
     if let Some(card) = tour_card {
@@ -372,7 +375,7 @@ fn view_with(ui: &mut Ui, st: &mut Earth, rt: &Handle, fetch: bool) {
     }
     // Frames only while something moves: 60 a second for the camera and a fade, fewer for the
     // halo's beat and the aircraft, one a second for the clock.
-    if moving || st.globe_fade.progress(now) < 1.0 || map_resp.dragged() || (gpu && gl::proven() && gl::busy()) {
+    if moving || rising || st.globe_fade.progress(now) < 1.0 || map_resp.dragged() || (gpu && gl::proven() && gl::busy()) {
         super::next_animation_frame(&ctx);
     } else if crate::vram_guard::in_game() {
         // (In a game the globe rests: the GPU is the game's.)
@@ -1580,7 +1583,7 @@ fn plan_cards(p: &Painter, st: &Earth, geo: &Geo, controls: &Controls, placer: &
         rows.push(vec![Piece::text(text(local.format("%a %-d %b %Y").to_string().to_uppercase(), mono(11.0), strip_muted()))]);
     }
     rows.push(vec![Piece::with(Icon::Dot(ink.accent), text(model::coords_label(st.cam.lat, st.cam.lon), mono(11.0), strip_ink()))]);
-    rows.push(vec![Piece::with(Icon::UpDown, text(format!("{} km", model::group_digits(st.cam.alt.round() as i64)), mono(11.0), strip_ink()))]);
+    rows.push(vec![Piece::with(Icon::UpDown, text(model::distance_label(st.cam.alt), mono(11.0), strip_ink()))]);
     let info = Card::new(rows, map.min + vec2(10.0, 10.0), Align2::LEFT_TOP, true);
     let info_rect = placer.take(info.rect).then_some(info.rect);
     if info_rect.is_some() {
@@ -1970,7 +1973,9 @@ fn drawer(ui: &mut Ui, rect: Rect, st: &mut Earth, ink: &Ink) {
 /// What the block shows, for the board's search and "copy".
 fn summary(st: &Earth) -> String {
     let round = |v: f64| (v * 10.0).round() / 10.0;
-    let mut lines = vec![format!("Earth: {} from {} km", model::coords_label(round(st.cam.lat), round(st.cam.lon)), model::group_digits((st.cam.alt / 100.0).round() as i64 * 100))];
+    // (Down near the ground in metres, not "from 0 km".)
+    let alt = if st.cam.alt >= 100.0 { (st.cam.alt / 100.0).round() * 100.0 } else { st.cam.alt };
+    let mut lines = vec![format!("Earth: {} from {}", model::coords_label(round(st.cam.lat), round(st.cam.lon)), model::distance_label(alt))];
     if let Some(place) = &st.place {
         lines.push(place.name(false));
     }
@@ -2115,7 +2120,7 @@ mod tests {
     fn street_level_costs_no_more_than_space() {
         // At 250 m the ISS footprint was millions of pixels of dashes: 710 ms a frame (2026-11-09).
         let rt = runtime();
-        for alt in [12_742.0, 20.0, 0.25] {
+        for alt in [12_742.0, 20.0, 0.25, crate::earth::MIN_ALT_KM] {
             let mut earth = Earth::demo();
             earth.cam = crate::earth::Camera { lat: 40.71, lon: -74.0, alt };
             let mut stage = stage(vec2(1180.0, 720.0));
@@ -2141,6 +2146,8 @@ mod tests {
         for (look, name) in [(Look::Satellite, "panel_earth_houses_photo"), (Look::Holo, "panel_earth_houses")] {
             earth.set_look(look);
             earth.overlays.buildings = true;
+            // (Standing already: their rise has its own test.)
+            let _ = stage.frames(1, &mut |ctx| crate::earth_buildings::tests::rose(ctx, 60.0));
             let frame = draw(&mut stage, &mut earth, rt.handle(), 3);
             clean(&frame);
             assert!(earth.houses, "{look:?}: no house on the map at 300 m");
@@ -2156,6 +2163,7 @@ mod tests {
             assert!((with - without).abs() > 1.0, "{look:?}: the houses change nothing on the map ({with} and {without})");
         }
         earth.overlays.buildings = true;
+        let _ = stage.frames(1, &mut |ctx| crate::earth_buildings::tests::rose(ctx, 60.0));
         // The right button leans the camera back as it is dragged up and turns it as it is
         // dragged across, and the map stays where it is.
         let before = earth.cam;
@@ -2189,6 +2197,117 @@ mod tests {
         assert!(t.elapsed() / 10 < std::time::Duration::from_millis(40), "{high} km: {:?} a frame", t.elapsed() / 10);
     }
 
+    /// The houses rise as Stark's holograms when they come into view: at the first moment none
+    /// stands, a moment in those in the middle are up while the edge is still being traced, soon
+    /// all of it stands. The house a place Sir asked for stands on burns brightest.
+    #[test]
+    fn the_houses_rise_in_a_wave_and_the_asked_for_one_burns() {
+        use crate::earth_buildings::tests::rose;
+        let _look = crate::holo_theme::look_for_pictures();
+        let _town = crate::earth_buildings::tests::stand_in(48.0, 9.0, 2_500);
+        let mut stage = stage(vec2(900.0, 620.0));
+        let map = stage.screen();
+        // A tower of the made-up town (its 1281st house, 36 m high) in the middle of the view.
+        let tower = (48.0 + 0.00009, 9.0 + 5.0 * 0.00027 * 1.5 + 0.000135);
+        let tower_at = [model::merc_x(tower.1), model::merc_y(tower.0)];
+        let flat = |tilt| Geo::new(crate::earth::Camera { lat: tower.0, lon: tower.1, alt: 0.4 }, tilt, map).flat;
+        // The houses alone, as if they had come into view `since` seconds ago when given.
+        let mut houses = |flat: &model::FlatView, strength: f32, chosen: Option<[f64; 2]>, since: Option<f32>| {
+            let frame = stage.frames(1, &mut |ctx| {
+                if let Some(secs) = since {
+                    rose(ctx, secs);
+                }
+                egui::CentralPanel::default().frame(Frame::none()).show(ctx, |ui| {
+                    crate::earth_buildings::paint(ui.painter(), flat, map, strength, &[], chosen);
+                });
+            });
+            stage.raster(&frame)
+        };
+        let (down, leaned) = (flat(Tilt::default()), flat(Tilt { pitch: model::TILT_3D, heading: 0.4 }));
+        let risen = houses(&down, 1.0, None, Some(60.0));
+        // Out of view and back: the first moment, then a moment in.
+        let _ = houses(&down, 0.0, None, None);
+        let first = houses(&down, 1.0, None, None);
+        let rising = houses(&down, 1.0, None, Some(0.55));
+        let (whole, middle, corner) = (map.shrink(10.0), Rect::from_center_size(map.center(), vec2(160.0, 160.0)), Rect::from_min_size(map.min + vec2(10.0, 10.0), vec2(180.0, 160.0)));
+        assert!(first.brightness(whole) < risen.brightness(whole) * 0.05, "a house stood at the first moment ({} of {})", first.brightness(whole), risen.brightness(whole));
+        assert!(rising.brightness(whole) < risen.brightness(whole) * 0.9, "the town stood at once");
+        let share = |r: Rect| rising.brightness(r) / risen.brightness(r).max(1e-3);
+        assert!(share(middle) > 0.5 && share(middle) > share(corner) * 2.0, "the middle did not rise first: {} in the middle, {} at the edge", share(middle), share(corner));
+        // In 3D: rising, standing, and the tower Sir asked for.
+        let _ = houses(&leaned, 0.0, None, None);
+        let _ = houses(&leaned, 1.0, None, None);
+        houses(&leaned, 1.0, None, Some(0.7)).save("panel_earth_houses_rising");
+        houses(&leaned, 1.0, None, Some(60.0)).save("panel_earth_houses_hologram");
+        let chosen = houses(&leaned, 1.0, Some(tower_at), None);
+        chosen.save("panel_earth_houses_chosen");
+        let plain = houses(&leaned, 1.0, None, None);
+        let around = Rect::from_min_max(map.center() + vec2(-40.0, -110.0), map.center() + vec2(40.0, 25.0));
+        assert!(chosen.brightness(around) > plain.brightness(around) * 1.1, "the tower Sir asked for does not stand out ({} and {})", chosen.brightness(around), plain.brightness(around));
+    }
+
+    /// What a frame of the houses costs over a dense city while the camera turns (Sir,
+    /// 2026-11-20: "when many buildings are shown it is laggy"): every house of the tiles in view
+    /// is weighed each frame, and those drawn are one mesh sent to the GPU each frame.
+    #[test]
+    fn a_dense_city_turns_smoothly() {
+        let _town = crate::earth_buildings::tests::stand_in(40.75, -73.99, 40_000);
+        let mut stage = stage(vec2(1170.0, 650.0));
+        let map = stage.screen();
+        let _ = stage.frames(1, &mut |ctx| crate::earth_buildings::tests::rose(ctx, 60.0));
+        let (mut took, mut vertices) = (Vec::new(), 0);
+        for k in 0..24 {
+            let flat = Geo::new(crate::earth::Camera { lat: 40.75, lon: -73.99, alt: 1.2 }, Tilt { pitch: model::TILT_3D, heading: k as f64 * 0.05 }, map).flat;
+            let frame = stage.frames(1, &mut |ctx| {
+                egui::CentralPanel::default().frame(Frame::none()).show(ctx, |ui| {
+                    let t = std::time::Instant::now();
+                    crate::earth_buildings::paint(ui.painter(), &flat, map, 1.0, &[], None);
+                    took.push(t.elapsed().as_secs_f64() * 1000.0);
+                });
+            });
+            vertices = vertices.max(frame.mesh_vertices);
+        }
+        took.sort_by(f64::total_cmp);
+        let (median, worst) = (took[took.len() / 2], took[took.len() - 1]);
+        eprintln!("[probe] the houses of a dense city: median {median:.1} ms, worst {worst:.1} ms a frame, {vertices} vertices");
+        // (13.8 ms and 296 564 vertices before 2026-11-20: every point's sines and the view's
+        // Mercator middle were worked out again for each of a hundred thousand points; 8.4 ms and
+        // 158 968 vertices after, with 5 000 houses drawn.)
+        assert!(median < 8.0, "a frame of the houses: median {median:.1} ms, worst {worst:.1} ms, {vertices} vertices");
+    }
+
+    /// Down at the closest the camera comes (Sir, 2026-11-20: "zoom into the earth way more"),
+    /// straight down and leaned back among the houses: a house reaching over the camera is not
+    /// thrown across the window, the others stand.
+    #[test]
+    fn down_among_the_houses_at_the_closest_zoom() {
+        let _look = crate::holo_theme::look_for_pictures();
+        let rt = runtime();
+        let _town = crate::earth_buildings::tests::stand_in(48.0, 9.0, 2_500);
+        let mut earth = Earth::demo();
+        earth.cam = crate::earth::Camera { lat: 48.0, lon: 9.0, alt: model::MIN_ALT_KM };
+        earth.set_look(Look::Holo);
+        let mut stage = stage(vec2(900.0, 620.0));
+        let inner = stage.screen().shrink(40.0);
+        let _ = stage.frames(1, &mut |ctx| crate::earth_buildings::tests::rose(ctx, 60.0));
+        for (tilt, name) in [(Tilt::default(), "panel_earth_closest"), (Tilt { pitch: model::TILT_3D, heading: 0.3 }, "panel_earth_closest_3d")] {
+            earth.tilt = tilt;
+            earth.overlays.buildings = false;
+            let frame = draw(&mut stage, &mut earth, rt.handle(), 3);
+            let (bare, bare_vertices) = (stage.raster(&frame).brightness(inner), frame.mesh_vertices);
+            // (Back in view they would rise again: standing already.)
+            earth.overlays.buildings = true;
+            let _ = stage.frames(1, &mut |ctx| crate::earth_buildings::tests::rose(ctx, 60.0));
+            let frame = draw(&mut stage, &mut earth, rt.handle(), 3);
+            let canvas = stage.raster(&frame);
+            canvas.save(name);
+            // (From above, the houses' dark glass covers the lit ground as their lines add light:
+            // they stand when they are drawn; one thrown across the window would flood it.)
+            assert!(frame.mesh_vertices > bare_vertices + 200, "{name}: no house stands ({} vertices, {bare_vertices} without them)", frame.mesh_vertices);
+            assert!(canvas.brightness(inner) < bare * 1.6, "{name}: a house was thrown across the window ({} and {bare} without them)", canvas.brightness(inner));
+        }
+    }
+
     /// The 3D key leans the camera back over a town (the far ground falling back into the deep)
     /// in both looks, and stands it up again, north up.
     #[test]
@@ -2216,6 +2335,8 @@ mod tests {
         assert!(earth.in_3d(), "the 3D key did nothing");
         settle(&mut earth);
         assert!((earth.tilt.pitch - model::TILT_3D).abs() < 1e-3, "{:?}", earth.tilt);
+        // (Standing already: their rise has its own test.)
+        let _ = stage.frames(1, &mut |ctx| crate::earth_buildings::tests::rose(ctx, 60.0));
         for (look, name) in [(Look::Holo, "panel_earth_3d"), (Look::Satellite, "panel_earth_3d_photo")] {
             earth.set_look(look);
             let frame = draw(&mut stage, &mut earth, rt.handle(), 3);

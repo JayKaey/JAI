@@ -113,14 +113,22 @@ Three panels open by voice, each in a window of its own, and close with "close t
   ISS position, OpenSky flights). Place names and borders show on both faces (Esri). From a
   town's outline down, the hologram draws its streets by rank, its rails, rivers and lakes,
   and the streets' names along them (OpenFreeMap; the names go with "hide the labels"). Down at
-  street level the houses of any town in the world that is on OpenStreetMap stand on the map
-  as models with their heights (estimated from a house's ground where the map gives none), a
-  line for every storey, window bays up close, hipped roofs on small houses (a guess: the map
-  knows no roof shapes), their house numbers and the height of every tower (OpenFreeMap): "show me the houses of Musterstadt in 3D" flies there,
+  street level the houses of any town in the world that is on OpenStreetMap rise on the map
+  as holograms, traced on the ground and raised in a wave from the middle of the view, with
+  their heights (estimated from a house's ground where the map gives none), a line for every
+  storey, windows up close, a tower's height scale, hipped roofs on small houses (a guess: the
+  map knows no roof shapes), their house numbers and the height of every tower (OpenFreeMap): "show me the houses of Musterstadt in 3D" flies there,
   "show me the buildings" goes down where the map is, "hide the buildings" takes them off.
-  Near the ground the map leans back into 3D as Google Earth does: the 3D key, "switch to 3D"
+  The wheel and "zoom in" come down to 30 m, a house filling the window (the satellite photo
+  is sharp to about 250 m and drawn larger below; a house reaching over the camera steps
+  aside). Near the ground the map leans back into 3D as Google Earth does: the 3D key, "switch to 3D"
   or "tilt the map", or a drag with the right mouse button (up and down tilts it, across turns
-  it); "back to 2D" or the key again stands it straight down, north up.
+  it); "back to 2D" or the key again stands it straight down, north up. While the globe is up,
+  "show me the Statue of Liberty", "zoom to the Empire State Building" or "fly me to the Golden
+  Gate Bridge" flies to any landmark OpenStreetMap knows by name (its best-known one, before a
+  town of the same name): a building or a square close up among the houses in 3D, the one asked
+  for brightest, a tower from as far back as its top stands in view (up to ~450 m), a bridge or
+  a mountain whole.
 
 "Open a few random windows" leaves the choice to him: he opens two to four of his own views
 and says which ("open three random windows" opens three). Asked for his opinion he gives one,

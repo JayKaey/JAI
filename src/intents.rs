@@ -2297,7 +2297,7 @@ fn panel_args(text: &str, s: &str, up: PanelsUp) -> Option<Value> {
     }
     if up.earth {
         static FLY_TO: LazyLock<Regex> = LazyLock::new(|| {
-            re(r"^(?:fly|zoom|go|take\s+me|bring\s+me|move|jump|travel|head|pan|navigate)\s+(?:(?:over|in|back|down|right)\s+)?(?:to|into|on|onto|towards?|over)\s+(.+)$|^(?:center|centre|focus)\s+(?:the\s+(?:globe|earth|map|view|camera)\s+)?(?:on|onto)\s+(.+)$|^(?:flieg|fliege|zoom|zoome|geh|gehe|spring|springe)\s+(?:nach|zu|zum|zur|auf|über|ueber)\s+(.+)$")
+            re(r"^(?:fly|zoom|go|take\s+me|bring\s+me|move|jump|travel|head|pan|navigate)\s+(?:(?:me|us)\s+)?(?:(?:over|in|back|down|right)\s+)?(?:to|into|on|onto|towards?|over)\s+(.+)$|^(?:center|centre|focus)\s+(?:the\s+(?:globe|earth|map|view|camera)\s+)?(?:on|onto)\s+(.+)$|^(?:flieg|fliege|zoom|zoome|geh|gehe|spring|springe)\s+(?:nach|zu|zum|zur|auf|über|ueber)\s+(.+)$")
         });
         if let Some(c) = FLY_TO.captures(s) {
             let place = c.get(1).or(c.get(2)).or(c.get(3))?.as_str();
@@ -2315,7 +2315,8 @@ fn panel_args(text: &str, s: &str, up: PanelsUp) -> Option<Value> {
         });
         if let Some(c) = WHERE_IS.captures(s) {
             let place = (1..=5).find_map(|i| c.get(i))?.as_str();
-            let place = place.strip_prefix("the ").unwrap_or(place);
+            // (And "zeig mir die Freiheitsstatue".)
+            let place = ["the ", "die ", "der ", "das "].iter().find_map(|a| place.strip_prefix(a)).unwrap_or(place);
             if !not_a_place(place) && !NOT_ON_A_GLOBE.is_match(place) && place.split(' ').count() <= 4 {
                 return Some(at(earth("show_place"), place));
             }
@@ -7066,6 +7067,18 @@ mod tests {
         }
         for text in ["Show me a picture of the moon", "Show me the weather", "Show me my files", "Show me wireless", "Show me the satellites"] {
             assert_ne!(act(text, earth_up).as_deref(), Some("show_place"), "{text}");
+        }
+        // Landmarks and buildings by name, in English and in German (Sir's wish of 2026-11-19).
+        for (text, place) in [
+            ("Show me the Statue of Liberty", "Statue of Liberty"),
+            ("Show me the Empire State Building", "Empire State Building"),
+            ("Zoom to the Eiffel Tower", "Eiffel Tower"),
+            ("Fly me to the Golden Gate Bridge", "Golden Gate Bridge"),
+            ("Take me to Times Square", "Times Square"),
+            ("Zeig mir die Freiheitsstatue", "Freiheitsstatue"),
+        ] {
+            let fly = panel_command(text, earth_up).unwrap_or_else(|| panic!("{text}"));
+            assert_eq!((fly["action"].as_str(), fly["place"].as_str()), (Some("show_place"), Some(place)), "{text}");
         }
         assert_eq!(panel_command("Can you show me wireless?", earth_up).unwrap()["view"], "network_radar");
         is("back to today", earth_up, "show_today");

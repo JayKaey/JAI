@@ -9,7 +9,8 @@
 
 use crate::earth::{self as model, FlatView};
 use crate::holo::lit;
-use eframe::egui::{pos2, vec2, Align2, Color32, Painter, Pos2, Rect, Vec2};
+use crate::holo_motion::{ease_out_cubic, phase};
+use eframe::egui::{pos2, vec2, Align2, Color32, Id, Painter, Pos2, Rect, Vec2};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
@@ -27,8 +28,13 @@ const RETRY: Duration = Duration::from_secs(90);
 /// Tiles kept in memory; beyond it the ones out of view go.
 const KEEP: usize = 24;
 /// Houses drawn in one frame (the nearest the middle), and how many still get upright edges.
-const MAX_DRAWN: usize = 5_000;
+const MAX_DRAWN: usize = 3_500;
 const EDGES_UP_TO: usize = 1_500;
+/// A house smaller than this on the screen, across and high (px), is its roof's edge alone.
+const SMALL_PX: f32 = 5.0;
+/// Below this (px) a house is its walls and its roof's edge: no line along its foot, no glass on
+/// its roof, no hipped faces (too small to be read, and most of a city's mesh).
+const PLAIN_PX: f32 = 16.0;
 /// Where the walls' light comes from on the ground (north up).
 const SUN: Vec2 = Vec2::new(-0.6, 0.8);
 /// A storey's height: its lines on the walls are a scale of the house's height.
@@ -40,6 +46,15 @@ const TALL_M: f32 = 35.0;
 /// Houses in view up to which the walls get their storey lines, and labels drawn at most.
 const STOREYS_UP_TO: usize = 600;
 const MAX_LABELS: usize = 140;
+/// Window panes drawn at most in a frame (a wall's rooms, up close).
+const PANES_UP_TO: usize = 30_000;
+/// A tower's height scale on its front corner: a tick every so many metres, a long one every fifth.
+const TICK_M: f32 = 10.0;
+/// How long a house takes to rise, how long the wave of them takes from the middle of the view
+/// to its edge, and how much each one's own moment in the wave varies.
+const RISE_SECS: f32 = 0.9;
+const WAVE_SECS: f32 = 0.8;
+const JITTER_SECS: f32 = 0.2;
 /// The view's zoom from which the house numbers are read.
 const NUMBERS_FROM: f64 = 17.0;
 /// The view's zoom from which the hologram shows the ground (a big town's outline), fading in
@@ -406,6 +421,8 @@ struct Town {
     houses: Vec<Building>,
     ways: Vec<Way>,
     names: Vec<Way>,
+    /// When its houses came (they rise then); None: they were there from the start.
+    came: Option<Instant>,
 }
 
 /// A ring of a tile as a house: None for a courtyard (it runs the other way round), for what is
@@ -547,6 +564,19 @@ struct Store {
     address: Option<String>,
 }
 
+/// The houses coming into a view: they rise in a wave from the middle of the view (Web
+/// Mercator) out to `reach` (its half diagonal then). Kept by the view's own context.
+#[derive(Clone, Copy)]
+struct Rise {
+    at: Instant,
+    from: [f64; 2],
+    reach: f64,
+}
+
+fn rise_id() -> Id {
+    Id::new("earth-houses-rise")
+}
+
 static STORE: LazyLock<Mutex<Store>> = LazyLock::new(|| Mutex::new(Store { tiles: HashMap::new(), address: None }));
 
 fn store() -> MutexGuard<'static, Store> {
@@ -568,9 +598,9 @@ fn level(flat: &FlatView, houses: bool, ground: bool) -> Option<u8> {
 /// Where a point of the map (Web Mercator, 0-1) `h` metres up stands on the screen, and how far
 /// along the view it is (in camera distances: 1 in the middle).
 fn to_screen(flat: &FlatView) -> impl Fn([f64; 2], f32) -> (Pos2, f64) + '_ {
-    let metre = flat.px_per_km() / 1000.0;
+    let (metre, ground, lift) = (flat.px_per_km() / 1000.0, flat.grounder(), flat.lifter());
     move |m, h| {
-        let ([x, y], depth) = flat.lift(flat.ground(m[0], m[1]), h as f64 * metre);
+        let ([x, y], depth) = lift(ground(m[0], m[1]), h as f64 * metre);
         (pos2(x as f32, y as f32), depth)
     }
 }
@@ -673,7 +703,7 @@ async fn load(wanted: Vec<(u8, u32, u32)>, mut address: Option<String>) {
     let town = |bytes: Vec<u8>, (z, x, y): (u8, u32, u32)| {
         let (ways, names) = ground(&bytes, (z, x, y));
         // (Only the last level's tiles carry every house.)
-        Arc::new(Town { houses: if z == Z { houses(&bytes, (x, y)) } else { Vec::new() }, ways, names })
+        Arc::new(Town { houses: if z == Z { houses(&bytes, (x, y)) } else { Vec::new() }, ways, names, came: Some(Instant::now()) })
     };
     let built = tokio::task::spawn_blocking(move || read.into_iter().map(|(tile, bytes)| (tile, bytes.map(|b| town(b, tile)))).collect::<Vec<_>>()).await.unwrap_or_default();
     let count = |of: fn(&Town) -> usize| built.iter().filter_map(|(_, town)| town.as_deref()).map(of).sum::<usize>();
@@ -712,30 +742,57 @@ fn glass(light: Color32, strength: f32, dark: f32) -> Color32 {
     Color32::from_rgba_premultiplied(f(light.r()), f(light.g()), f(light.b()), (dark.clamp(0.0, 1.0) * 255.0) as u8)
 }
 
-/// The houses in view, the far ones first: walls of dark glass lit towards the roof, the roof's
-/// outline in ink, the upright edges in the accent, storey lines on the walls and what the
-/// roofs say (off the map's cards and keys, `keep_off`). Whether any stood on the map.
-pub fn paint(p: &Painter, flat: &FlatView, map: Rect, strength: f32, keep_off: &[Rect]) -> bool {
+/// How far a house has risen (0-1) `secs` after its rise began, `far` (0-1) of the way out from
+/// where the wave started, with its own moment `jitter` (0-1) in the wave.
+fn grown(secs: f32, far: f32, jitter: f32) -> f32 {
+    ((secs - WAVE_SECS * far.clamp(0.0, 1.0) - JITTER_SECS * jitter) / RISE_SECS).clamp(0.0, 1.0)
+}
+
+/// A house's own moment in the wave (0-1), the same in every frame.
+fn jitter(m: [f64; 2]) -> f32 {
+    ((m[0] * 7_919_351.3 + m[1] * 3_617_093.7).sin() * 43_758.545).fract().abs() as f32
+}
+
+/// The houses in view as Stark's holograms, the far ones first: each traced on the ground as it
+/// comes, then risen from that plate in a wave out from the middle of the view under a white-hot
+/// edge; walls of glass lit from their feet, white roof lines, uprights in the accent, then the
+/// storeys, the windows up close, a tower's height scale and what the roofs say (off the map's
+/// cards and keys, `keep_off`). The house `chosen` stands on (a place Sir asked for) burns
+/// brightest. Whether any stood on the map, and whether any is still rising.
+pub fn paint(p: &Painter, flat: &FlatView, map: Rect, strength: f32, keep_off: &[Rect], chosen: Option<[f64; 2]>) -> (bool, bool) {
     let strength = strength * showing(flat);
     if strength <= 0.0 {
-        return false;
+        // (Out of view: they rise again when they come back.)
+        p.ctx().data_mut(|d| d.remove::<Rise>(rise_id()));
+        return (false, false);
     }
+    let fresh = Rise { at: Instant::now(), from: [model::merc_x(flat.lon0), model::merc_y(flat.lat0)], reach: map.size().length() as f64 / 2.0 / flat.world };
+    let rise = p.ctx().data_mut(|d| *d.get_temp_mut_or_insert_with(rise_id(), || fresh));
+    let now = Instant::now();
     let tiles = towns(flat, map.expand(120.0), Z);
     let screen = to_screen(flat);
     let middle = map.center();
-    // Each house where its middle stands and how far along the view: one under or behind the
-    // camera is not seen.
-    let mut seen: Vec<(Pos2, f64, &Building)> = tiles
+    // Each house where its middle stands, how far along the view and how far it has risen: one
+    // under or behind the camera is not seen.
+    let mut seen: Vec<(Pos2, f64, &Building, f32)> = tiles
         .iter()
-        .flat_map(|t| t.houses.iter())
-        .map(|b| {
-            let (at, depth) = screen(b.mid, 0.0);
-            (at, depth, b)
+        .flat_map(|t| {
+            let secs = now.saturating_duration_since(t.came.map_or(rise.at, |came| came.max(rise.at))).as_secs_f32();
+            t.houses.iter().map(move |b| (b, secs))
         })
-        .filter(|(at, depth, b)| *depth >= model::NEAR && map.expand((b.reach * flat.world / depth) as f32 + 60.0).contains(*at))
+        .filter_map(|(b, secs)| {
+            let (at, depth) = screen(b.mid, 0.0);
+            (depth >= model::NEAR && map.expand((b.reach * flat.world / depth) as f32 + 60.0).contains(at)).then(|| {
+                let far = (b.mid[0] - rise.from[0]).hypot(b.mid[1] - rise.from[1]) / rise.reach.max(1e-12);
+                (at, depth, b, grown(secs, far as f32, jitter(b.mid)))
+            })
+        })
         .collect();
+    let (stood, rising) = (!seen.is_empty(), seen.iter().any(|s| s.3 < 1.0));
+    seen.retain(|s| s.3 > 0.0);
     if seen.len() > MAX_DRAWN {
-        seen.sort_by(|a, b| a.0.distance_sq(middle).total_cmp(&b.0.distance_sq(middle)));
+        // (The nearest the middle, in no order: they are sorted far to near next.)
+        seen.select_nth_unstable_by(MAX_DRAWN, |a, b| a.0.distance_sq(middle).total_cmp(&b.0.distance_sq(middle)));
         seen.truncate(MAX_DRAWN);
     }
     // The far ones first: a nearer house stands in front.
@@ -743,29 +800,59 @@ pub fn paint(p: &Painter, flat: &FlatView, map: Rect, strength: f32, keep_off: &
     let theme = crate::holo::theme();
     let (accent, ink) = (theme.accent(), theme.ink());
     let upright = seen.len() <= EDGES_UP_TO;
-    let (metre, eye) = (flat.px_per_km() / 1000.0, flat.eye());
+    let (metre, eye, on_ground) = (flat.px_per_km() / 1000.0, flat.eye(), flat.grounder());
     let storeys = seen.len() <= STOREYS_UP_TO;
+    let mut panes = 0;
     let mut light = crate::holo::Light::new(p);
     let (mut ground, mut top, mut plan, mut walls): (Vec<Pos2>, Vec<Pos2>, Vec<[f64; 2]>, Vec<(f64, usize)>) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
-    for &(_, depth, b) in &seen {
+    for &(_, depth, b, grown) in &seen {
         // (The far ones fall back into the deep.)
         let strength = strength * dim(depth);
-        // (Glass dark enough that a house hides the one behind it: outlines seen through each
-        // other were a tangle; the light is the lines', the panes stay faint.)
-        let foot = [glass(accent, 0.0, 0.78 * strength)];
-        let roof = [glass(ink, 0.05 * strength, 0.86 * strength)];
-        let (edge, rim, storey, hip_line) = (lit(accent, 0.55 * strength), lit(ink, 0.7 * strength), lit(accent, 0.2 * strength), lit(ink, 0.32 * strength));
+        let picked = chosen.is_some_and(|c| b.holds(c));
+        // The rise: the plate traced on the ground, then the walls up from it (fast, landing
+        // softly) under a white-hot edge; then the storeys, the windows and the scale resolve.
+        let trace = phase(grown, 0.0, 0.3);
+        let lift = ease_out_cubic(phase(grown, 0.3, 1.0));
+        let scan = 1.0 - phase(grown, 0.75, 1.0);
+        let settle = phase(grown, 0.8, 1.0);
+        let up = |h: f32| b.base + (h - b.base) * lift;
+        // (Glass dark enough that a house dims the one behind it, as outlines seen through each
+        // other were a tangle, and light enough to be a hologram's: the light is the lines'.)
+        let face = if picked { 0.22 } else { 0.15 };
+        let roof = [glass(ink, 0.05 * strength, 0.72 * strength)];
+        let edge = if picked { lit(ink, 0.95 * strength) } else { lit(accent, 0.6 * strength) };
+        let rim = lit(ink, (0.7 + 0.3 * if picked { 1.0 } else { scan }) * strength);
+        let (storey, pane, plate, hip_line) = (lit(accent, 0.18 * settle * strength), lit(accent, 0.13 * settle * strength), lit(accent, 0.45 * strength), lit(ink, 0.32 * strength));
         ground.clear();
         top.clear();
         plan.clear();
         // (Under a pitched roof the walls end at the eaves.)
         let eaves = b.top - b.hip.as_ref().map_or(0.0, |hip| hip.rise);
+        let mut nearest = f64::MAX;
         for m in &b.ring {
             ground.push(screen(*m, b.base).0);
-            top.push(screen(*m, eaves).0);
-            plan.push(flat.ground(m[0], m[1]));
+            let (at, depth) = screen(*m, up(eaves));
+            nearest = nearest.min(depth);
+            top.push(at);
+            plan.push(on_ground(m[0], m[1]));
         }
+        // (Come down among the houses, one reaching over the camera is not drawn: its roof
+        // there would be thrown across the screen.)
+        if nearest < model::NEAR {
+            continue;
+        }
+        // A house a few pixels across is its roof's edge alone: its walls would be specks.
+        let size = ((b.reach * flat.world / depth) as f32).max((b.top - b.base) * (metre / depth) as f32);
+        let (small, plain) = (size < SMALL_PX, size < PLAIN_PX && !picked);
         let n = ground.len();
+        if trace < 1.0 {
+            // Its plate, traced round on the ground as it comes.
+            let along = trace * n as f32;
+            for k in 0..along.ceil() as usize {
+                light.seg(ground[k], ground[k].lerp(ground[(k + 1) % n], (along - k as f32).min(1.0)), 1.0, plate);
+            }
+            continue;
+        }
         let seam = |i: usize| b.seam.get(i).copied().unwrap_or(false);
         // A wall's outward side on the ground (north up), as a unit.
         let out = |i: usize| {
@@ -774,7 +861,7 @@ pub fn paint(p: &Painter, flat: &FlatView, map: Rect, strength: f32, keep_off: &
         };
         // The walls turned to the camera, the far ones first.
         walls.clear();
-        walls.extend((0..n).filter(|i| !seam(*i)).filter_map(|i| {
+        walls.extend((0..n).filter(|i| !small && !seam(*i)).filter_map(|i| {
             let (a, b) = (plan[i], plan[(i + 1) % n]);
             let o = out(i);
             let mid = [(a[0] + b[0]) / 2.0 - eye[0], (a[1] + b[1]) / 2.0 - eye[1]];
@@ -790,41 +877,78 @@ pub fn paint(p: &Painter, flat: &FlatView, map: Rect, strength: f32, keep_off: &
         // The storeys along the walls, where they are far enough apart to be read.
         let floors = (((eaves - b.base) / STOREY_M).round() as usize).clamp(1, 60);
         let tall = (0..n).map(|i| (top[i] - ground[i]).length()).fold(0.0, f32::max);
-        let storeyed = storeys && tall / floors as f32 >= 3.0;
+        let storeyed = storeys && settle > 0.0 && tall / floors as f32 >= 3.0;
+        // An upright edge: white-hot in the accent's glow on the house Sir asked for.
+        let upright_edge = |light: &mut crate::holo::Light, from: Pos2, to: Pos2| {
+            if picked {
+                light.halo(&[from, to], false, 9.0, lit(accent, 0.5 * strength));
+            }
+            light.seg(from, to, if picked { 1.4 } else { 1.0 }, edge);
+        };
         for &(_, i) in &walls {
             let j = (i + 1) % n;
             let shade = 0.55 + 0.45 * out(i).dot(SUN.normalized()).max(0.0);
-            light.sheet(&[ground[i], ground[j]], &[top[i], top[j]], &foot, &[glass(accent, 0.12 * shade * strength, 0.86 * strength)]);
+            // (Lit from its foot, as from the table it is cast from, fading upwards; the plate's
+            // edge along its foot.)
+            light.sheet(&[ground[i], ground[j]], &[top[i], top[j]], &[glass(accent, face * shade * strength, 0.6 * strength)], &[glass(accent, 0.04 * shade * strength, 0.7 * strength)]);
+            if !plain {
+                light.seg(ground[i], ground[j], 1.0, plate);
+            }
             if storeyed {
                 for k in 1..floors {
                     let t = k as f32 / floors as f32;
                     light.seg(ground[i].lerp(top[i], t), ground[j].lerp(top[j], t), 1.0, storey);
                 }
-                // And its bays across them, up close: the wall as a grid of its rooms.
-                let (a, b) = (plan[i], plan[j]);
-                let bays = ((b[0] - a[0]).hypot(b[1] - a[1]) / metre / BAY_M as f64).round() as usize;
+                // And its rooms across them, up close: a pane in each, else the bays' lines.
+                let (a, c) = (plan[i], plan[j]);
+                let bays = ((c[0] - a[0]).hypot(c[1] - a[1]) / metre / BAY_M as f64).round() as usize;
                 let bay = (ground[j] - ground[i]).length() / bays.max(1) as f32;
-                if bay >= 7.0 && (2..=40).contains(&bays) {
+                let room = (top[i] - ground[i]).length().min((top[j] - ground[j]).length()) / floors as f32;
+                if bay >= 6.0 && room >= 5.0 && (2..=60).contains(&bays) && panes + bays * floors <= PANES_UP_TO {
+                    panes += bays * floors;
+                    let at = |s: f32, t: f32| ground[i].lerp(ground[j], s).lerp(top[i].lerp(top[j], s), t);
+                    for k in 0..floors {
+                        let (t0, t1) = ((k as f32 + 0.3) / floors as f32, (k as f32 + 0.8) / floors as f32);
+                        for q in 0..bays {
+                            let (s0, s1) = ((q as f32 + 0.22) / bays as f32, (q as f32 + 0.78) / bays as f32);
+                            light.sheet(&[at(s0, t0), at(s1, t0)], &[at(s0, t1), at(s1, t1)], &[pane], &[pane]);
+                        }
+                    }
+                } else if bay >= 7.0 && (2..=40).contains(&bays) {
                     for k in 1..bays {
                         let t = k as f32 / bays as f32;
                         light.seg(ground[i].lerp(ground[j], t), top[i].lerp(top[j], t), 1.0, storey);
                     }
                 }
             }
-            if upright {
+            if upright || picked {
                 // (The next wall draws its own first corner.)
                 if corner(i) {
-                    light.seg(ground[i], top[i], 1.0, edge);
+                    upright_edge(&mut light, ground[i], top[i]);
                 }
                 if corner(j) && !walls.iter().any(|w| w.1 == j) {
-                    light.seg(ground[j], top[j], 1.0, edge);
+                    upright_edge(&mut light, ground[j], top[j]);
                 }
             }
         }
-        if let Some(hip) = &b.hip {
+        // A tower's height scale on its corner nearest the camera, read off in metres.
+        if storeyed && b.top >= TALL_M {
+            let near = |k: usize| (plan[k][0] - eye[0]).hypot(plan[k][1] - eye[1]);
+            let front = (0..n).filter(|k| corner(*k) && walls.iter().any(|w| w.1 == *k || (w.1 + 1) % n == *k)).min_by(|x, y| near(*x).total_cmp(&near(*y)));
+            let span = (eaves - b.base).max(1.0);
+            if let Some(k) = front.filter(|k| (top[*k] - ground[*k]).length() * TICK_M / span >= 4.0) {
+                let side = if ground[k].x < screen(b.mid, b.base).0.x { -1.0 } else { 1.0 };
+                let tick = lit(accent, 0.5 * settle * strength);
+                for s in 1..=(span / TICK_M) as usize {
+                    let at = ground[k].lerp(top[k], s as f32 * TICK_M / span);
+                    light.seg(at, at + vec2(side * if s % 5 == 0 { 6.0 } else { 3.0 }, 0.0), 1.0, tick);
+                }
+            }
+        }
+        if let Some(hip) = b.hip.as_ref().filter(|_| !plain) {
             // Four faces up to the ridge, each as bright as it is turned to the light, those
             // turned away from the camera first; the ridge and the hips as lines.
-            let ridge = hip.ridge.map(|end| screen(end, b.top).0);
+            let ridge = hip.ridge.map(|end| screen(end, up(b.top)).0);
             let facing = |k: usize| {
                 let (i, o) = ((hip.long + k) % 4, out((hip.long + k) % 4));
                 (eye[0] - plan[i][0]) * o.x as f64 + (eye[1] - plan[i][1]) * o.y as f64
@@ -841,36 +965,60 @@ pub fn paint(p: &Painter, flat: &FlatView, map: Rect, strength: f32, keep_off: &
                 light.seg(top[i], up[0], 1.0, hip_line);
             }
             light.seg(ridge[0], ridge[1], 1.0, rim);
-        } else {
+        } else if !plain {
             for t in &b.roof {
                 // (A triangle as a sheet whose far edge is one point.)
                 let [p0, p1, p2] = t.map(|i| top[i as usize]);
                 light.sheet(&[p0, p1], &[p2, p2], &roof, &roof);
             }
+            // A flat roof's parapet up close: a faint line just inside its edge.
+            if b.seam.is_empty() && settle > 0.0 && b.reach * flat.world / depth >= 14.0 {
+                let metres = 40_075_017.0 * model::lat_of_merc_y(b.mid[1]).to_radians().cos();
+                let inside: Vec<Pos2> = b
+                    .ring
+                    .iter()
+                    .map(|m| {
+                        let (dx, dy) = (b.mid[0] - m[0], b.mid[1] - m[1]);
+                        let k = (0.9 / (dx.hypot(dy) * metres).max(1e-6)).min(0.25);
+                        screen([m[0] + dx * k, m[1] + dy * k], up(eaves)).0
+                    })
+                    .collect();
+                light.strip(&inside, true, 1.0, lit(ink, 0.22 * settle * strength));
+            }
         }
+        // The roof's edge, white-hot while it rises (and on the house Sir asked for).
+        let glow = if upright || picked { scan.max(if picked { 0.8 } else { 0.0 }) } else { 0.0 };
         if b.seam.is_empty() {
-            light.strip(&top, true, 1.0, rim);
+            light.neon(&top, true, 1.0, rim, glow);
         } else {
             for i in (0..n).filter(|i| !seam(*i)) {
-                light.seg(top[i], top[(i + 1) % n], 1.0, rim);
+                light.neon(&[top[i], top[(i + 1) % n]], false, 1.0, rim, glow);
             }
         }
     }
     light.paint(p);
-    // What the roofs say, the nearest houses first: a house number up close, a tower's height.
-    // Each on a roof wide enough for it, inside the map and clear of the others.
+    // What the roofs say once they stand, the nearest houses first: a house number up close, a
+    // tower's height. Each on a roof wide enough for it, inside the map and clear of the others.
     let numbers = flat.zoom() >= NUMBERS_FROM;
     let mut taken = keep_off.to_vec();
-    for &(_, depth, b) in seen.iter().rev() {
-        let Some(label) = b.label(numbers).filter(|_| taken.len() < keep_off.len() + MAX_LABELS) else { continue };
-        let centre = screen(b.mid, b.top).0;
+    for &(_, depth, b, grown) in seen.iter().rev() {
+        if taken.len() >= keep_off.len() + MAX_LABELS {
+            break;
+        }
+        // (No label is narrower than 12 px: a roof that could hold none is not asked for one.)
+        let settle = phase(grown, 0.8, 1.0);
+        if settle <= 0.0 || (b.reach * flat.world / depth) as f32 * 1.4 < 12.0 {
+            continue;
+        }
+        let Some(label) = b.label(numbers) else { continue };
+        let (centre, near) = screen(b.mid, b.top);
         let room = Rect::from_center_size(centre, vec2(label.chars().count() as f32 * 6.0 + 6.0, 13.0));
-        if (b.reach * flat.world / depth) as f32 * 1.4 >= room.width() && map.contains_rect(room) && !taken.iter().any(|t| t.intersects(room)) {
-            crate::holo::text(p, centre, Align2::CENTER_CENTER, crate::holo::Face::Mono, &label, 9.5, crate::holo::a(ink, 0.85 * strength * dim(depth)));
+        if near >= model::NEAR && (b.reach * flat.world / depth) as f32 * 1.4 >= room.width() && map.contains_rect(room) && !taken.iter().any(|t| t.intersects(room)) {
+            crate::holo::text(p, centre, Align2::CENTER_CENTER, crate::holo::Face::Mono, &label, 9.5, crate::holo::a(ink, 0.85 * strength * dim(depth) * settle));
             taken.push(room);
         }
     }
-    !seen.is_empty()
+    (stood, rising)
 }
 
 /// How a line of the ground is drawn at a zoom: whether it is water (the deep tone; the rest is
@@ -1014,6 +1162,16 @@ pub mod tests {
         fn drop(&mut self) {
             store().tiles.clear();
         }
+    }
+
+    /// The houses of the view drawn in `ctx` as if they had come into it `secs` ago, from where
+    /// they rose then (the middle of the view): mid-rise for a picture, or long since risen.
+    pub fn rose(ctx: &eframe::egui::Context, secs: f32) {
+        let at = Instant::now().checked_sub(Duration::from_secs_f32(secs)).unwrap_or_else(Instant::now);
+        ctx.data_mut(|d| {
+            let rise = d.get_temp::<Rise>(rise_id()).map_or(Rise { at, from: [0.0; 2], reach: 1.0 }, |r| Rise { at, ..r });
+            d.insert_temp(rise_id(), rise);
+        });
     }
 
     /// A made-up town around a point for the pictures and the geometry checks: `count` houses
@@ -1201,6 +1359,25 @@ pub mod tests {
     }
 
     /// A street's name goes on its straightest stretch inside the map.
+    /// A town rises in a wave from the middle of the view out: nothing at the first moment, the
+    /// middle first, each house at a moment of its own (the same in every frame), all of it
+    /// standing within two seconds.
+    #[test]
+    fn the_houses_rise_from_the_middle_of_the_view_outwards() {
+        assert_eq!(grown(0.0, 0.0, 0.0), 0.0, "nothing at the first moment");
+        assert_eq!(grown(RISE_SECS, 0.0, 0.0), 1.0, "the middle's house stands after its rise");
+        let half = RISE_SECS / 2.0;
+        assert!(grown(half, 0.0, 0.0) > grown(half, 1.0, 0.0), "the middle first");
+        assert!(grown(half, 0.0, 0.0) > grown(half, 0.0, 1.0), "each at its own moment");
+        assert_eq!(grown(half, 5.0, 0.0), grown(half, 1.0, 0.0), "beyond the edge no later than the edge");
+        assert_eq!(grown(WAVE_SECS + JITTER_SECS + RISE_SECS + 0.01, 1.0, 1.0), 1.0, "the edge's last house stands by then");
+        assert!(WAVE_SECS + JITTER_SECS + RISE_SECS <= 2.0, "a town in two seconds");
+        let m = [0.5326, 0.3401];
+        assert_eq!(jitter(m), jitter(m));
+        let moments: Vec<f32> = (0..50).map(|k| jitter([0.5 + k as f64 * 1e-5, 0.34])).collect();
+        assert!(moments.iter().all(|j| (0.0..=1.0).contains(j)) && moments.iter().any(|j| *j < 0.3) && moments.iter().any(|j| *j > 0.7), "neighbours rise at moments of their own: {moments:?}");
+    }
+
     #[test]
     fn a_name_takes_the_longest_straight_stretch() {
         let map = Rect::from_min_size(pos2(0.0, 0.0), vec2(500.0, 500.0));

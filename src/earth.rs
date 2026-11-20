@@ -45,8 +45,10 @@ use tracing::{debug, info, warn};
 pub const R_KM: f64 = 6371.0;
 /// The resting view: the whole planet, the camera one diameter above the surface.
 pub const HOME_ALT_KM: f64 = 12_742.0;
-/// Street level (Esri's level 19 needs ~250 m).
-pub const MIN_ALT_KM: f64 = 0.25;
+/// The closest the camera comes: a house fills the window (Sir, 2026-11-20: "zoom into the earth
+/// way more"). Esri's photo is sharp down to ~250 m (its level 19) and drawn larger below; the
+/// houses, the streets and the hologram stay sharp.
+pub const MIN_ALT_KM: f64 = 0.03;
 pub const MAX_ALT_KM: f64 = 60_000.0;
 /// The flat map starts to show below `FLAT_FROM_KM` and is all there is below `FLAT_FULL_KM`.
 pub const FLAT_FROM_KM: f64 = 1_750.0;
@@ -367,7 +369,7 @@ pub struct FlatView {
 impl FlatView {
     pub fn new(lat0: f64, lon0: f64, alt_km: f64, f: f64, centre: (f64, f64)) -> Self {
         let lat0 = lat0.clamp(-80.0, 80.0);
-        let world = 2.0 * PI * R_KM * lat0.to_radians().cos() * f / alt_km.max(0.05);
+        let world = 2.0 * PI * R_KM * lat0.to_radians().cos() * f / alt_km.max(MIN_ALT_KM);
         Self { lat0, lon0, world, cx: centre.0, cy: centre.1, f, pitch: 0.0, heading: 0.0 }
     }
 
@@ -386,20 +388,36 @@ impl FlatView {
     /// A point of the map (Web Mercator, 0-1) on the ground: px from the middle, as the map lies
     /// straight down and north up (the copy of the world nearest the view).
     pub fn ground(&self, mx: f64, my: f64) -> [f64; 2] {
-        let dx = mx - merc_x(self.lon0);
-        [(dx - dx.round()) * self.world, (my - merc_y(self.lat0)) * self.world]
+        self.grounder()(mx, my)
+    }
+
+    /// `ground` for many points: the view's middle worked out once (its Mercator y is a log).
+    pub fn grounder(&self) -> impl Fn(f64, f64) -> [f64; 2] + '_ {
+        let (x0, y0) = (merc_x(self.lon0), merc_y(self.lat0));
+        move |mx, my| {
+            let dx = mx - x0;
+            [(dx - dx.round()) * self.world, (my - y0) * self.world]
+        }
     }
 
     /// A point `h` px above the ground at `g` on the screen, and how far along the view it is
     /// (in camera distances: 1 in the middle of the map). Nearer than `NEAR` (under or behind
     /// the camera) it lands far below the map.
     pub fn lift(&self, g: [f64; 2], h: f64) -> ([f64; 2], f64) {
+        self.lifter()(g, h)
+    }
+
+    /// `lift` for many points: the sines of the pitch and the heading worked out once (a town
+    /// of houses is a hundred thousand points a frame: 13.8 ms of them on 2026-11-20).
+    pub fn lifter(&self) -> impl Fn([f64; 2], f64) -> ([f64; 2], f64) + '_ {
         let ((sp, cp), (sh, ch)) = (self.pitch.sin_cos(), self.heading.sin_cos());
-        // (Turned with the heading up: u to the right, v towards the viewer.)
-        let (u, v) = (g[0] * ch + g[1] * sh, g[1] * ch - g[0] * sh);
-        let depth = (self.f - v * sp - h * cp) / self.f;
-        let k = 1.0 / depth.max(NEAR);
-        ([self.cx + u * k, self.cy + (v * cp - h * sp) * k], depth)
+        move |g, h| {
+            // (Turned with the heading up: u to the right, v towards the viewer.)
+            let (u, v) = (g[0] * ch + g[1] * sh, g[1] * ch - g[0] * sh);
+            let depth = (self.f - v * sp - h * cp) / self.f;
+            let k = 1.0 / depth.max(NEAR);
+            ([self.cx + u * k, self.cy + (v * cp - h * sp) * k], depth)
+        }
     }
 
     /// The ground under a screen position (px from the middle) and how far along the view it is;
@@ -436,7 +454,8 @@ impl FlatView {
     /// A line of the map (Web Mercator points) on the screen, in runs: broken where it leaves one
     /// side of the world for the other, and cut where it passes under the camera.
     pub fn runs(&self, points: impl IntoIterator<Item = [f64; 2]>) -> Vec<Vec<[f64; 2]>> {
-        let screen = |g: [f64; 2]| self.lift(g, 0.0).0;
+        let (on_ground, lift) = (self.grounder(), self.lifter());
+        let screen = |g: [f64; 2]| lift(g, 0.0).0;
         // (Where the ground between two points, one in view, passes `NEAR`: depth is even there.)
         let cut = |(a, da): ([f64; 2], f64), (b, db): ([f64; 2], f64)| {
             let t = (NEAR - da) / (db - da);
@@ -445,8 +464,8 @@ impl FlatView {
         let mut runs: Vec<Vec<[f64; 2]>> = Vec::new();
         let mut last: Option<([f64; 2], f64)> = None;
         for m in points {
-            let g = self.ground(m[0], m[1]);
-            let here = (g, self.lift(g, 0.0).1);
+            let g = on_ground(m[0], m[1]);
+            let here = (g, lift(g, 0.0).1);
             match last.filter(|(before, _)| (g[0] - before[0]).abs() <= self.world / 2.0) {
                 Some(before) if before.1 >= NEAR => {
                     let next = if here.1 >= NEAR { screen(g) } else { cut(before, here) };
@@ -740,7 +759,22 @@ pub enum PlaceKind {
     Country,
     Other,
     Continent,
+    /// A building, a square, a bridge, a mountain: what OpenStreetMap knows by name, how far
+    /// across it is and how high it stands (0 when it does not say).
+    Landmark { metres: u32, high: u32 },
 }
+
+/// How low the camera comes over a building Sir asks for: among the houses (they stand from
+/// there).
+pub const LANDMARK_ALT_KM: f64 = 1.0;
+/// The furthest it stands back from a tower so that its top is in the 3D view: the houses
+/// still stand from there in a window 650 px high.
+// shortcut: a tower over ~450 m (the Burj Khalifa) is cut at its top; frame it from beside
+// (the view's middle beyond it) if Sir wants the tallest whole.
+const TOWER_ALT_KM: f64 = 1.25;
+/// How well known (OpenStreetMap's importance, 0-1) a place must be to win over a town of the
+/// same name: the Colosseum is 0.58, an Australian hamlet called that is not.
+const FAMOUS: f64 = 0.45;
 
 impl GeoHit {
     /// How high the camera flies to show it. A town is in view to its outline: it covers about
@@ -754,7 +788,27 @@ impl GeoHit {
             PlaceKind::Region => 1_200.0,
             PlaceKind::Country => 3_200.0,
             PlaceKind::Continent => 6_500.0,
+            // By its size: a building from low over it, a bridge or a park whole, a desert from
+            // high up; a tower from as far as its top stands in the 3D view (2.75 times its
+            // height, leaned back as the 3D view is).
+            PlaceKind::Landmark { metres, high } => (metres as f64 / 1000.0 * 2.5).max((high as f64 / 1000.0 * 2.75).min(TOWER_ALT_KM)).clamp(LANDMARK_ALT_KM, 6_500.0),
         }
+    }
+
+    /// Whether it is a building or a square (by its footprint, however high): shown among the
+    /// houses, in 3D.
+    pub fn among_houses(&self) -> bool {
+        matches!(self.kind, PlaceKind::Landmark { metres, .. } if metres as f64 / 1000.0 * 2.5 <= LANDMARK_ALT_KM * 1.2)
+    }
+
+    /// Its name as said in a sentence: "the Statue of Liberty", "the Eiffel Tower", but "Times
+    /// Square" and "Mount Everest".
+    pub fn spoken(&self) -> String {
+        const THE: [&str; 21] = ["building", "tower", "bridge", "gate", "canyon", "house", "wall", "dam", "monument", "memorial", "museum", "colosseum", "pantheon", "parthenon", "louvre", "kremlin", "mahal", "alps", "andes", "himalayas", "sahara"];
+        let lower = self.name.to_lowercase();
+        let last = lower.rsplit(' ').next().unwrap_or("");
+        let the = matches!(self.kind, PlaceKind::Landmark { .. }) && !lower.starts_with("the ") && (lower.contains(" of ") || THE.contains(&last));
+        if the { format!("the {}", self.name) } else { self.name.clone() }
     }
 }
 
@@ -1006,6 +1060,62 @@ pub fn parse_geocode(v: &Value) -> Option<GeoHit> {
         PlaceKind::Other
     };
     Some(GeoHit { name: hit["name"].as_str()?.to_string(), lat: hit["latitude"].as_f64()?, lon: hit["longitude"].as_f64()?, kind, people: hit["population"].as_u64().filter(|p| *p > 0) })
+}
+
+/// OpenStreetMap's Nominatim: every place it knows by a name, buildings and mountains too.
+pub fn landmark_url(name: &str) -> String {
+    format!("https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&accept-language=en&extratags=1&q={}", urlencoding::encode(name.trim()))
+}
+
+/// Nominatim's best-known hit and how well known it is (0-1): a town, a region or a country as
+/// those, anything else a landmark as wide as its outline (a building or a peak it knows only
+/// as a point: by what it is).
+pub fn parse_landmark(v: &Value) -> Option<(GeoHit, f64)> {
+    let fame = |h: &Value| h["importance"].as_f64().unwrap_or(0.0);
+    let hit = v.as_array()?.iter().reduce(|best, h| if fame(h) > fame(best) { h } else { best })?;
+    let number = |v: &Value| v.as_str().and_then(|s| s.parse::<f64>().ok());
+    let (lat, lon) = (number(&hit["lat"])?, number(&hit["lon"])?);
+    let bbox: Vec<f64> = hit["boundingbox"].as_array().map(|b| b.iter().filter_map(number).collect()).unwrap_or_default();
+    let across = match bbox[..] {
+        [south, north, west, east] => ((north - south) * 111_320.0).max((east - west) * 111_320.0 * lat.to_radians().cos()),
+        _ => 0.0,
+    };
+    let metres = match across {
+        m if m >= 20.0 => m,
+        _ if hit["place_rank"].as_u64().unwrap_or(30) >= 26 => 150.0,
+        _ => 40_000.0,
+    };
+    // How high it stands where OpenStreetMap says: in metres ("443.2", "330 m"), or by storeys.
+    let tag = |k: &str| -> Option<f64> { hit["extratags"][k].as_str()?.trim().split(|c: char| !(c.is_ascii_digit() || c == '.')).next()?.parse().ok() };
+    let high = tag("height").or_else(|| tag("building:levels").map(|n| n * 3.5)).unwrap_or(0.0);
+    let kind = match hit["addresstype"].as_str().unwrap_or("") {
+        "country" => PlaceKind::Country,
+        "state" | "region" | "province" | "state_district" | "county" => PlaceKind::Region,
+        "city" | "town" | "village" | "hamlet" | "municipality" | "suburb" | "borough" | "quarter" | "neighbourhood" | "city_district" | "district" | "isolated_dwelling" => PlaceKind::City,
+        _ => PlaceKind::Landmark { metres: metres as u32, high: high as u32 },
+    };
+    let name = hit["name"].as_str().filter(|n| !n.trim().is_empty()).or_else(|| hit["display_name"].as_str()?.split(',').next())?.trim().to_string();
+    Some((GeoHit { name, lat, lon, kind, people: None }, fame(hit)))
+}
+
+/// Which answer to show for `asked`: a landmark known the world over before a town that shares
+/// its name ("Colosseum" is a hamlet in Australia to the town search); else the town search's
+/// town (it knows how many live there) unless the best-known place by that name is another
+/// ("USA" was Uşak in Turkey to it); else whatever OpenStreetMap found.
+pub fn pick(asked: &str, town: Option<GeoHit>, found: Option<(GeoHit, f64)>) -> Option<GeoHit> {
+    let Some((hit, fame)) = found else { return town };
+    let famous = fame >= FAMOUS;
+    if famous && matches!(hit.kind, PlaceKind::Landmark { .. }) {
+        return Some(hit);
+    }
+    let named = |a: &str| {
+        let a = a.trim().to_lowercase();
+        a.strip_prefix("the ").unwrap_or(&a).to_string()
+    };
+    match town {
+        Some(town) if !famous || named(&town.name) == named(asked) || haversine_km((hit.lat, hit.lon), (town.lat, town.lon)) < 50.0 => Some(town),
+        _ => Some(hit),
+    }
 }
 
 /// "United States of America (the)" → "United States".
@@ -3421,6 +3531,10 @@ async fn geocode(name: &str) -> Result<GeoHit, String> {
     parse_geocode(&v).ok_or_else(|| format!("I couldn't find '{name}' on the map."))
 }
 
+async fn find_landmark(name: &str) -> Option<(GeoHit, f64)> {
+    parse_landmark(&get_json(&landmark_url(name), FETCH_TIMEOUT).await.ok()?)
+}
+
 /// A few well-known places for the demo and for when the geocoder is out of reach.
 pub fn gazetteer(name: &str) -> Option<GeoHit> {
     const PLACES: [(&str, f64, f64); 32] = [
@@ -3478,9 +3592,11 @@ async fn resolve(name: &str, offline: bool) -> Result<GeoHit, String> {
     if offline {
         return gazetteer(name).ok_or_else(|| format!("'{name}' is not among the demo's places."));
     }
-    match geocode(name).await {
-        Ok(hit) => Ok(hit),
-        Err(e) => gazetteer(name).ok_or(e),
+    // (A town by its people, anything else by its fame: both asked at once.)
+    let (town, found) = futures_util::future::join(geocode(name), find_landmark(name)).await;
+    match pick(name, town.as_ref().ok().cloned(), found) {
+        Some(hit) => Ok(hit),
+        None => gazetteer(name).ok_or_else(|| town.err().unwrap_or_else(|| format!("I couldn't find '{name}' on the map."))),
     }
 }
 
@@ -4150,8 +4266,13 @@ async fn show_place(name: &str, offline: bool) -> (String, String) {
                 let mut st = state();
                 st.marker = Some(Marker { name: hit.name.clone(), lat: hit.lat, lon: hit.lon });
                 st.fly_to(Camera { lat: hit.lat, lon: hit.lon, alt: hit.altitude_km() });
+                // A building or a square stands among the houses, in 3D, as Google Earth shows it.
+                if hit.among_houses() {
+                    st.overlays.buildings = true;
+                    st.set_3d(true);
+                }
             }
-            (format!("{} at {}.", hit.name, coords_label(hit.lat, hit.lon)), format!("Here is {}, Sir.", hit.name))
+            (format!("{} at {}.", hit.name, coords_label(hit.lat, hit.lon)), format!("Here is {}, Sir.", hit.spoken()))
         }
         Err(e) => (e, format!("I couldn't find {name} on the map, Sir.")),
     }
@@ -4802,6 +4923,18 @@ mod tests {
         set_open(false);
     }
 
+    /// A landmark named while the Earth is up is the Earth's to fly to, not the language model's
+    /// (Sir's wish of 2026-11-19: "show me the Statue of Liberty").
+    #[test]
+    fn landmarks_by_name_are_the_earths_while_it_is_up() {
+        set_open(true);
+        for (text, place) in [("Show me the Statue of Liberty", "Statue of Liberty"), ("Zoom to the Empire State Building", "Empire State Building"), ("Fly me to the Golden Gate Bridge", "Golden Gate Bridge"), ("Take me to Times Square", "Times Square"), ("Zeig mir die Freiheitsstatue", "Freiheitsstatue")] {
+            let (tool, args) = crate::phrasings::route(text).unwrap_or_else(|| panic!("{text}: the language model's"));
+            assert_eq!((tool.as_str(), args["action"].as_str(), args["place"].as_str()), ("open_jai_view", Some("show_place"), Some(place)), "{text}: {args}");
+        }
+        set_open(false);
+    }
+
     #[test]
     fn an_area_fits_the_map_whatever_its_size() {
         for min_side in [260.0, 460.0, 900.0] {
@@ -4930,6 +5063,90 @@ mod tests {
         assert_eq!((place.name(false), place.name(true), place.city.as_str()), ("United States".into(), "West Virginia".into(), "Charleston"));
         let sea = parse_reverse(&json!({"countryName": "", "principalSubdivision": "", "locality": "", "localityInfo": {"informative": [{"name": "Earth"}, {"name": "North Atlantic Ocean"}]}})).unwrap();
         assert_eq!((sea.name(false), sea.spoken()), ("North Atlantic Ocean".into(), "the North Atlantic Ocean".into()));
+    }
+
+    /// A landmark by name: OpenStreetMap's best-known hit, as wide as its outline; a building or
+    /// a square is shown among the houses in 3D and said with its article. It wins over a town of
+    /// the same name; the town search's town wins when it is the place meant.
+    #[test]
+    fn landmarks_are_found_by_their_fame_and_shown_among_the_houses() {
+        let statue = json!([
+            {"lat": "41.42", "lon": "-97.37", "importance": 0.24, "addresstype": "tourism", "name": "Statue of Liberty", "boundingbox": ["41.4202", "41.4203", "-97.3673", "-97.3672"]},
+            {"lat": "40.6892532", "lon": "-74.0445482", "place_rank": 30, "importance": 0.604, "addresstype": "building", "name": "Statue of Liberty", "boundingbox": ["40.6888049", "40.6896741", "-74.0451069", "-74.0439637"]}
+        ]);
+        let (hit, fame) = parse_landmark(&statue).unwrap();
+        assert_eq!((hit.name.as_str(), hit.lat, hit.lon, fame), ("Statue of Liberty", 40.6892532, -74.0445482, 0.604), "not the best-known of them");
+        let PlaceKind::Landmark { metres, .. } = hit.kind else { panic!("{:?}", hit.kind) };
+        assert!((90..110).contains(&metres), "{metres} m across");
+        assert!(hit.among_houses() && hit.altitude_km() == LANDMARK_ALT_KM);
+        assert_eq!(hit.spoken(), "the Statue of Liberty");
+        // A bridge whole, a peak it knows as a point from high up, a square among the houses, a
+        // town as a town.
+        let one = |v: Value| parse_landmark(&json!([v])).unwrap().0;
+        let bridge = one(json!({"lat": "37.818", "lon": "-122.478", "importance": 0.54, "addresstype": "man_made", "name": "Golden Gate Bridge", "boundingbox": ["37.8109901", "37.8285611", "-122.4797543", "-122.4773742"]}));
+        assert!(!bridge.among_houses() && (4.0..6.0).contains(&bridge.altitude_km()), "{} km", bridge.altitude_km());
+        assert_eq!(bridge.spoken(), "the Golden Gate Bridge");
+        let peak = one(json!({"lat": "27.988", "lon": "86.925", "importance": 0.61, "place_rank": 18, "addresstype": "peak", "name": "Mount Everest", "boundingbox": ["27.98801", "27.98811", "86.92516", "86.92526"]}));
+        assert!(peak.altitude_km() >= 80.0 && !peak.among_houses(), "{} km", peak.altitude_km());
+        assert_eq!(peak.spoken(), "Mount Everest");
+        let square = one(json!({"lat": "40.757", "lon": "-73.986", "importance": 0.6, "place_rank": 26, "addresstype": "pedestrian", "name": "Times Square", "boundingbox": ["40.7558313", "40.7591362", "-73.9870666", "-73.9845108"]}));
+        assert!(square.among_houses(), "{} km", square.altitude_km());
+        assert_eq!(square.spoken(), "Times Square");
+        let town = one(json!({"lat": "48.137", "lon": "11.575", "importance": 0.75, "addresstype": "city", "name": "Munich", "boundingbox": ["48.06", "48.25", "11.36", "11.72"]}));
+        assert_eq!((town.kind, town.spoken().as_str(), town.among_houses()), (PlaceKind::City, "Munich", false));
+        assert!(parse_landmark(&json!([])).is_none());
+        // Which answer wins.
+        let at = |name: &str, lat: f64, lon: f64, kind: PlaceKind| GeoHit { name: name.into(), lat, lon, kind, people: Some(100_000) };
+        let hamlet = at("Colosseum", -27.6, 152.1, PlaceKind::City);
+        let rome = (at("Colosseum", 41.89, 12.49, PlaceKind::Landmark { metres: 190, high: 48 }), 0.58);
+        assert_eq!(pick("Colosseum", Some(hamlet), Some(rome.clone())), Some(rome.0), "the amphitheatre, not the hamlet");
+        let usa = (at("United States", 39.8, -98.6, PlaceKind::Country), 0.92);
+        assert_eq!(pick("USA", Some(at("Uşak", 38.67, 29.41, PlaceKind::City)), Some(usa.clone())), Some(usa.0), "the United States, not Uşak");
+        let munich = at("Munich", 48.14, 11.58, PlaceKind::City);
+        assert_eq!(pick("München", Some(munich.clone()), Some((town, 0.75))), Some(munich.clone()), "the town search's Munich: it knows how many live there");
+        let tokyo = at("Tokyo", 35.69, 139.69, PlaceKind::City);
+        assert_eq!(pick("Tokyo", Some(tokyo.clone()), Some((at("Tokyo", 35.68, 139.76, PlaceKind::Region), 0.83))), Some(tokyo), "the city, not the prefecture");
+        let little = (at("Musterdorf", 48.5, 9.5, PlaceKind::City), 0.2);
+        assert_eq!(pick("Musterdorf", None, Some(little.clone())), Some(little.0.clone()), "what only OpenStreetMap knows");
+        assert_eq!(pick("Musterdorf", Some(munich.clone()), Some(little)), Some(munich), "a little-known place gives way to the town search's town");
+        assert_eq!(pick("Musterdorf", None, None), None);
+    }
+
+    /// "Zoom into the earth way more" (Sir, 2026-11-20): the wheel and "zoom in" go on down to a
+    /// house filling the window, past the photo's own finest level.
+    #[test]
+    fn the_camera_comes_down_to_a_house_filling_the_window() {
+        let mut e = Earth::demo();
+        e.cam.alt = 1.0;
+        for _ in 0..40 {
+            e.zoom_by(0.8);
+        }
+        assert_eq!(e.zoom_target, Some(MIN_ALT_KM));
+        let across_m = 650.0 / FlatView::new(48.0, 9.0, MIN_ALT_KM, focal_for(650.0), (0.0, 0.0)).px_per_km() * 1000.0;
+        assert!((15.0..40.0).contains(&across_m), "a map 650 px high shows {across_m:.0} m at the closest");
+    }
+
+    /// A tower Sir asks for stands whole in the 3D view with the houses around it (2026-11-19:
+    /// from 1 km the Empire State Building's spire ran off the top of the window, the camera
+    /// standing too close to see up to it); a taller one comes as close as the houses allow.
+    #[test]
+    fn a_tower_asked_for_stands_whole_in_the_3d_view() {
+        let one = |v: Value| parse_landmark(&json!([v])).unwrap().0;
+        let esb = one(json!({"lat": "40.7484", "lon": "-73.9857", "importance": 0.58, "addresstype": "office", "name": "Empire State Building", "boundingbox": ["40.7479255", "40.7489585", "-73.9865012", "-73.9848166"], "extratags": {"height": "443.2", "building:levels": "102"}}));
+        assert!(matches!(esb.kind, PlaceKind::Landmark { high: 443, .. }) && esb.among_houses(), "{:?}", esb.kind);
+        // Its spire's tip in the 3D view of a map 650 px high (325 px from its middle to the top
+        // edge), and how strongly the houses stand there.
+        let tip = |alt: f64| {
+            let flat = FlatView::new(esb.lat, esb.lon, alt, focal_for(650.0), (0.0, 0.0)).tilted(Tilt { pitch: TILT_3D, heading: 0.0 }, 325.0);
+            (flat.lift([0.0, 0.0], 0.4432 * flat.px_per_km()).0[1], crate::earth_buildings::showing(&flat))
+        };
+        let ((was, _), (is, houses)) = (tip(LANDMARK_ALT_KM), tip(esb.altitude_km()));
+        assert!(was < -325.0, "from 1 km its tip was in view after all: {was:.0} px");
+        assert!(is > -325.0 * 0.95 && houses > 0.8, "its tip {is:.0} px from the middle, the houses at {houses:.2}");
+        // In metres or by its storeys; a tower taller than the houses allow comes as close as
+        // they do, a statue no closer than any building.
+        let tall = |tags: Value| one(json!({"lat": "25.197", "lon": "55.274", "importance": 0.56, "addresstype": "tourism", "name": "Burj Khalifa", "extratags": tags})).altitude_km();
+        assert_eq!((tall(json!({"building:levels": "163"})), tall(json!({"height": "828 m"})), tall(json!({"height": "10"})), tall(Value::Null)), (TOWER_ALT_KM, TOWER_ALT_KM, LANDMARK_ALT_KM, LANDMARK_ALT_KM));
     }
 
     #[test]
