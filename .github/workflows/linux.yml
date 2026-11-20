@@ -9,6 +9,9 @@ on:
   workflow_dispatch:
 
 env:
+  # whisper-rs-sys's own Linux bindings, as the README builds: bindgen 0.69 with Arch's newer
+  # libclang makes `whisper_full_params` without its fields.
+  WHISPER_DONT_GENERATE_BINDINGS: "1"
   # Each failed test as one error (`awk "$FAILURES" tests.txt`): errors and notices are shown on the
   # run's page and by the API without signing in, unlike the log.
   FAILURES: |

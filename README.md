@@ -285,8 +285,11 @@ without a screen (`live_checks::kde`). To build it yourself on Arch:
 
 ```
 sudo pacman -S --needed base-devel rust cmake clang alsa-lib opus
-cargo build --release
+WHISPER_DONT_GENERATE_BINDINGS=1 cargo build --release
 ```
+
+(The variable keeps whisper's own bindings: generated with Arch's newer clang, they lose the
+fields of `whisper_full_params`.)
 
 At run time he needs `espeak-ng` (his voice), `zstd` (the installer unpacks Ollama with it),
 `libpulse` (`pactl`: the volume of every app and the microphone), `tesseract` with its English and

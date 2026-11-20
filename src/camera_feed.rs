@@ -290,7 +290,7 @@ mod platform {
         field: u32,
         bytesperline: u32,
         sizeimage: u32,
-        rest: [u32; 30],
+        rest: [u32; 44],
     }
 
     /// `struct v4l2_requestbuffers` (20 bytes).
