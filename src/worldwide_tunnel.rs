@@ -62,7 +62,12 @@ pub async fn kicked() {
 }
 
 fn update(provider: &str, phase: &str, detail: impl Into<String>, public_url: Option<String>) {
-    *state().write().unwrap_or_else(|e| e.into_inner()) = TunnelStatus { state: phase.into(), public_url, detail: detail.into(), provider: provider.into(), permanent: false };
+    let detail = detail.into();
+    // (Why a tunnel ended goes to the log too: the status line forgets it by the next start.)
+    if phase == "reconnecting" {
+        tracing::warn!("[TUNNEL] {provider}: {detail}");
+    }
+    *state().write().unwrap_or_else(|e| e.into_inner()) = TunnelStatus { state: phase.into(), public_url, detail, provider: provider.into(), permanent: false };
 }
 
 /// The verified public address is up.
@@ -200,6 +205,15 @@ fn with_funnel(settings: &SatelliteSettings, has_token: bool, tailscale: bool, a
         chosen.tunnel_provider = "tailscale".into();
     }
     chosen
+}
+
+/// How often Funnel is tried again beside the quick tunnel standing in for it.
+const FUNNEL_AGAIN: Duration = Duration::from_secs(5 * 60);
+
+/// Whether the tunnel run at `attempt` stands in for Funnel, whose tries failed: the quick
+/// tunnel where a first try would be Funnel.
+fn stands_in(settings: &SatelliteSettings, has_token: bool, tailscale: bool, attempt: u32) -> bool {
+    with_funnel(settings, has_token, tailscale, attempt).tunnel_provider != with_funnel(settings, has_token, tailscale, 0).tunnel_provider
 }
 
 async fn cloudflared() -> Result<PathBuf, String> {
@@ -393,6 +407,54 @@ async fn verify_origin(origin: &str, token: &str) -> bool {
     response.json::<serde_json::Value>().await.ok().is_some_and(|v| v["service"] == "jai-satellite")
 }
 
+/// Funnel tried again beside the quick tunnel standing in for it: its process once its address
+/// answers, or why not. The quick tunnel runs on meanwhile, its address unchanged.
+async fn funnel_again(settings: &SatelliteSettings, port: u16) -> Result<(TunnelProcess, Plan), String> {
+    let plan = plan(&SatelliteSettings { tunnel_provider: "tailscale".into(), ..settings.clone() }, None, port)?;
+    let child = spawn(&plan).await?;
+    answers(child, plan, &settings.token, Duration::from_secs(45)).await
+}
+
+/// A started tunnel, once the address it announces answers (`plan.address` then holds it), or
+/// why not: how it ended, or that it stayed silent, with its last complaint or line.
+async fn answers(mut child: TunnelProcess, mut plan: Plan, token: &str, wait: Duration) -> Result<(TunnelProcess, Plan), String> {
+    let deadline = tokio::time::sleep(wait);
+    tokio::pin!(deadline);
+    let (mut said, mut last, mut ended): (Option<String>, Option<String>, Option<String>) = (None, None, None);
+    let mut lines_open = true;
+    loop {
+        tokio::select! {
+            biased;
+            line = child.lines.recv(), if lines_open => match line {
+                Some(line) => {
+                    if let Some(url) = public_url_from_log(&line, plan.provider) {
+                        plan.address = Some(url);
+                    } else if let Some(c) = complaint(&line) {
+                        said = Some(c);
+                    } else if !line.trim().is_empty() {
+                        last = Some(line.trim().chars().take(160).collect());
+                    }
+                }
+                None => lines_open = false,
+            },
+            status = &mut child.exited, if ended.is_none() => ended = Some(status.unwrap_or_else(|_| "unknown".into())),
+            _ = &mut deadline => return Err(match plan.address {
+                Some(_) => format!("its address did not answer in {} seconds", wait.as_secs()),
+                None => said.or(last).unwrap_or_else(|| format!("no address in {} seconds", wait.as_secs())),
+            }),
+            _ = tokio::time::sleep(Duration::from_secs(2)), if plan.address.is_some() && ended.is_none() => {
+                if verify_origin(plan.address.as_deref().unwrap_or_default(), token).await {
+                    return Ok((child, plan));
+                }
+            }
+        }
+        // (Its output closes after it ended: by then every word it said is in.)
+        if let (Some(status), false) = (&ended, lines_open) {
+            return Err(format!("it ended ({status}){}", said.or(last).map(|s| format!(": {s}")).unwrap_or_default()));
+        }
+    }
+}
+
 /// What the tunnel program said went wrong, short enough for the status line (its own log
 /// level and timestamp dropped).
 fn complaint(line: &str) -> Option<String> {
@@ -413,9 +475,12 @@ fn complaint(line: &str) -> Option<String> {
 /// `secrets` holds the token of a named tunnel.
 pub async fn run(config: ConfigStore, secrets: crate::vault::Vault, port: u16, shutdown: CancellationToken) {
     let mut attempt = 0u32;
+    // Funnel back beside the quick tunnel that stood in for it: taken over as it runs.
+    let mut adopted: Option<(TunnelProcess, Plan)> = None;
     loop {
         let settings = config.read(|c| c.satellite.clone());
         if !settings.enabled || !settings.worldwide_enabled {
+            adopted = None;
             update("", "disabled", "Worldwide access is disabled in satellite settings", None);
             tokio::select! {
                 _ = shutdown.cancelled() => break,
@@ -423,14 +488,19 @@ pub async fn run(config: ConfigStore, secrets: crate::vault::Vault, port: u16, s
             }
         }
         let token = secrets.secret(TOKEN_SERVICE, crate::vault::TOKEN);
-        let chosen = with_funnel(&settings, token.as_deref().is_some_and(|t| !t.trim().is_empty()), installed("tailscale").is_some(), attempt);
+        let (has_token, tailscale) = (token.as_deref().is_some_and(|t| !t.trim().is_empty()), installed("tailscale").is_some());
+        let chosen = with_funnel(&settings, has_token, tailscale, attempt);
+        let stand_in = stands_in(&settings, has_token, tailscale, attempt);
         update(&chosen.tunnel_provider, "starting", "Opening an outbound HTTPS tunnel", None);
-        let started = match plan(&chosen, token.as_deref(), port) {
-            Ok(plan) => tokio::select! {
-                _ = shutdown.cancelled() => break,
-                result = spawn(&plan) => result.map(|child| (child, plan)),
+        let started = match adopted.take() {
+            Some(found) => Ok(found),
+            None => match plan(&chosen, token.as_deref(), port) {
+                Ok(plan) => tokio::select! {
+                    _ = shutdown.cancelled() => break,
+                    result = spawn(&plan) => result.map(|child| (child, plan)),
+                },
+                Err(why) => Err(why),
             },
-            Err(why) => Err(why),
         };
         match started {
             Ok((mut child, plan)) => {
@@ -442,20 +512,20 @@ pub async fn run(config: ConfigStore, secrets: crate::vault::Vault, port: u16, s
                 let mut ready = false;
                 let mut candidate = plan.address.clone();
                 let mut said: Option<String> = None;
+                // (And its last line: Tailscale's own errors are no complaint it knows.)
+                let mut last: Option<String> = None;
                 let mut health = tokio::time::interval(Duration::from_secs(5));
                 health.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                let mut again = tokio::time::interval_at(tokio::time::Instant::now() + FUNNEL_AGAIN, FUNNEL_AGAIN);
                 let mut failures = 0u8;
                 loop {
+                    // (Lines before the exit: what it printed as it ended is read first.)
                     tokio::select! {
+                        biased;
                         _ = shutdown.cancelled() => {
                             child.kill();
                             update(provider, "stopped", "JAI has shut down", None);
                             return;
-                        }
-                        status = &mut child.exited => {
-                            let why = said.take().map(|s| format!(": {s}")).unwrap_or_default();
-                            update(provider, "reconnecting", format!("Tunnel exited ({}){why}", status.unwrap_or_else(|_| "unknown".into())), None);
-                            break;
                         }
                         line = child.lines.recv(), if lines_open => {
                             match line {
@@ -473,16 +543,23 @@ pub async fn run(config: ConfigStore, secrets: crate::vault::Vault, port: u16, s
                                             update(provider, "connecting", c.clone(), None);
                                         }
                                         said = Some(c);
+                                    } else if !line.trim().is_empty() {
+                                        last = Some(line.trim().chars().take(160).collect());
                                     }
                                 }
                                 None => lines_open = false,
                             }
                         }
+                        status = &mut child.exited => {
+                            let why = said.take().or(last.take()).map(|s| format!(": {s}")).unwrap_or_default();
+                            update(provider, "reconnecting", format!("Tunnel exited ({}){why}", status.unwrap_or_else(|_| "unknown".into())), None);
+                            break;
+                        }
                         _ = &mut deadline, if !ready => {
                             child.kill();
                             let why = match &plan.address {
                                 Some(address) if provider == "cloudflare" => format!("{address} does not reach me yet: in the Cloudflare tunnel its public hostname must point to the service http://127.0.0.1:{port}; retrying"),
-                                _ => "No working HTTPS address after 90 seconds; retrying".to_string(),
+                                _ => format!("No working HTTPS address after 90 seconds{}; retrying", said.take().or(last.take()).map(|s| format!(" ({s})")).unwrap_or_default()),
                             };
                             update(provider, "reconnecting", why, None);
                             break;
@@ -524,6 +601,23 @@ pub async fn run(config: ConfigStore, secrets: crate::vault::Vault, port: u16, s
                                 }
                             }
                         }
+                        // Funnel tried again beside the quick tunnel standing in for it, which runs
+                        // on (its address unchanged) until Funnel's own answers.
+                        _ = again.tick(), if stand_in => {
+                            let back = tokio::select! {
+                                _ = shutdown.cancelled() => { child.kill(); return; }
+                                back = funnel_again(&settings, port) => back,
+                            };
+                            match back {
+                                Ok(found) => {
+                                    tracing::info!("[TUNNEL] Tailscale Funnel is back; the quick tunnel steps down");
+                                    child.kill();
+                                    adopted = Some(found);
+                                    break;
+                                }
+                                Err(why) => tracing::info!("[TUNNEL] Tailscale Funnel is not back yet: {why}"),
+                            }
+                        }
                     }
                 }
             }
@@ -531,6 +625,10 @@ pub async fn run(config: ConfigStore, secrets: crate::vault::Vault, port: u16, s
                 tracing::warn!("[TUNNEL] {error}");
                 update(&settings.tunnel_provider, "error", error, None);
             }
+        }
+        // (Funnel taken over: no failure, no wait.)
+        if adopted.is_some() {
+            continue;
         }
         attempt = attempt.saturating_add(1);
         let delay = Duration::from_secs((5 * 2u64.saturating_pow(attempt.min(5))).min(120));
@@ -625,5 +723,36 @@ mod tests {
         let cloudflare = SatelliteSettings { tunnel_provider: "cloudflare".into(), ..Default::default() };
         assert_eq!(with_funnel(&cloudflare, false, true, 0).tunnel_provider, "cloudflare", "a provider Sir chose stays");
         assert_eq!(plan(&with_funnel(&auto, false, true, 0), None, 8444).unwrap().args, ["funnel", "http://127.0.0.1:8444"]);
+    }
+
+    /// The quick tunnel stands in for Funnel only once Funnel's own tries failed; then Funnel is
+    /// tried beside it (until 2026-11-20 nothing tried it again before JAI restarted).
+    #[test]
+    fn the_quick_tunnel_standing_in_for_funnel_is_known() {
+        let settings = |provider: &str| SatelliteSettings { tunnel_provider: provider.into(), ..Default::default() };
+        assert!(stands_in(&settings("auto"), false, true, 2), "Funnel failed twice: the quick tunnel stands in");
+        assert!(!stands_in(&settings("auto"), false, true, 0), "Funnel itself");
+        assert!(!stands_in(&settings("auto"), true, true, 2), "a Cloudflare token: its named tunnel");
+        assert!(!stands_in(&settings("auto"), false, false, 2), "no Tailscale: the quick tunnel is all there is");
+        for chosen in ["cloudflare", "tailscale"] {
+            assert!(!stands_in(&settings(chosen), false, true, 2), "{chosen}, as Sir chose it");
+        }
+    }
+
+    /// The start at 20:00 on 2026-11-20: Funnel's two tries ended at once and the log kept no
+    /// reason, as `complaint` knows no line like Tailscale's own. A try's last words come back now.
+    #[tokio::test]
+    async fn a_try_that_ends_says_why() {
+        let said = "foreground already exists under this port";
+        assert!(complaint(said).is_none(), "the line the old exit dropped");
+        let (program, args) = if cfg!(windows) {
+            (PathBuf::from(std::env::var("ComSpec").unwrap_or_else(|_| r"C:\Windows\System32\cmd.exe".into())), ["/c".to_string(), format!("echo {said}& exit /b 1")])
+        } else {
+            (PathBuf::from("/bin/sh"), ["-c".to_string(), format!("echo {said}; exit 1")])
+        };
+        let funnel = plan(&SatelliteSettings { tunnel_provider: "tailscale".into(), ..Default::default() }, None, 8444).unwrap();
+        let Err(why) = answers(launch(&program, &args, &[]).unwrap(), funnel, "", Duration::from_secs(20)).await else { panic!("a try that ended came back as working") };
+        assert!(why.contains(said), "{why}");
+        assert!(!cfg!(windows) || why.contains("exit code 1"), "{why}");
     }
 }

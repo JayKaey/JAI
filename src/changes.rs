@@ -125,6 +125,7 @@ pub const RELEASES: &[Release] = &[
             added("Each phone knows its own place", "\"Where am I\" on a friend's phone answers with where that phone is, not where you are."),
             added("The phone page wears a theme", "Your PC's theme, or one picked under LOOK on the phone itself; your saved themes too."),
             better("A permanent address for the phone", "With Tailscale on this PC the phone's address is the same forever, for free."),
+            fixed("The permanent address comes back", "When Tailscale Funnel failed at start, he tries it again every five minutes and switches back."),
             better("As many custom themes as you like", "A theme made without a name no longer replaces the last one: it is \"Custom 2\", and on."),
             fixed("The phone page's rough edges", "Its folds, ticks, lists and number fields looked like a browser's; now they wear his look."),
             fixed("Widget windows say CLOSE", "A widget in a window of its own showed POP OUT and REMOVE; it has one CLOSE key now."),
