@@ -64,8 +64,8 @@ live, selected or measured. The canvas is always black; the colour is the theme.
   one is a sphere of circuitry whose shells light up with the part of his mind that is working.
   "Switch to the complex core", "use the simple core", "make the orb bigger", "set the orb size
   to 150 percent".
-- **Windows.** Everything he opens is a window of Windows itself, never a block inside his own
-  window, with the live desktop on or off. A new window takes a place about the core: beside
+- **Windows.** Everything he opens is a window of Windows itself, never a block on the board
+  behind your icons. A new window takes a place about the core: beside
   him, the next on the other side, later ones above and below ("overlap the windows" opens them
   in the middle instead). A line ties each window to the core, and its header wears its number
   among the open ones, its title and a lamp for what it is doing. A window you have had before
@@ -83,16 +83,23 @@ live, selected or measured. The canvas is always black; the colour is the theme.
 
 ## Screens
 
-The HUD is the fullscreen board on one monitor, or one board across all of them ("use all
-monitors", "stop spanning", "toggle span mode", the SCREENS menu, F11 to leave). Across several
-monitors the HUD proper (header, console, emblem, the board) stays on the primary one; the
-others are room for windows, each of which stands whole on one monitor. The emblem rests in the
-middle of that screen; it leaves it for a report on the board, or when told to "move out of the
-way" (until "come back").
+He is your desktop's background, always and on every PC, from the first start: the board stands
+behind your icons, across every monitor or on the first one alone ("use all monitors", "stop
+spanning", "toggle span mode", the SCREENS menu). He has no window of his own to hide, minimise
+or move, and says so when asked. Across several monitors the HUD proper (header, console,
+emblem) stays on the primary one; the others are room for windows, each of which stands whole
+on one monitor. The emblem rests in the middle of that screen; it leaves it for a report on the
+board, or when told to "move out of the way" (until "come back"); "move yourself to monitor 2"
+and the SCREENS menu's MOVE HERE send it to another monitor. Should the desktop not take him
+(Explorer still starting), he lies under every other window and asks it again every half minute.
 
-F11 switches between the fullscreen board and a maximised window. "Make Discord full screen" is
-about Discord, "full screen" alone about the window in front, and neither ever about him; "move
-Discord to another monitor" takes it to the next one.
+Spoken to while a window covers his emblem, his orb comes out to a corner of the monitor you are
+using and glides back when you are done. "Orb mode" keeps his orb floating in front of your work
+at its corner (drag it anywhere; the mouse wheel resizes it), "mini mode" a slim strip along the
+top. A double click on an orb, or BOARD on the strip, shows the desktop.
+
+"Make Discord full screen" is about Discord, "full screen" alone about the window in front, and
+neither ever about him; "move Discord to another monitor" takes it to the next one.
 
 JAI starts with an empty HUD. "Open that widget again next time" keeps one for the next
 start; "bring back my windows" reopens what was open last, also after a restart.
@@ -411,20 +418,20 @@ JAI.exe --exhaustive 5          # the live test plus the exhaustive matrices, fi
 JAI.exe --silent --chat "..."   # ask him for real, unseen and unheard; answers go to jai.log
 JAI.exe --silent --show --monitor 2 --chat "..."   # the same in the real window, on monitor 2
 JAI.exe --live-test --monitor 2   # the live test with its window on monitor 2
-JAI.exe --silent --show --window-drill --chat "What time is it?"   # SCREENS buttons and F11 in the real window
+JAI.exe --silent --show --window-drill --chat "What time is it?"   # SCREENS buttons in the real window
 ```
 
-`--monitor <n>` opens a test session's window on monitor n (1 = the primary) for that session
-only, so a test never lands on the monitor you are playing on. His other windows open on that
-monitor too. A test session never moves the focus: its board
-covers the monitor as a borderless window rather than winit's fullscreen (which forces a new
-window to the front with an Alt tap), and none of its windows asks to be brought forward.
+`--monitor <n>` puts a test session on monitor n (1 = the primary) for that session only: its
+background covers that monitor alone, so a test never lands on the monitor you are playing on.
+His other windows open on that monitor too. A test session never moves the focus: none of its
+windows asks to be brought forward, and without `--monitor` its board is a borderless window
+rather than winit's fullscreen (which forces a new window to the front with an Alt tap).
 
-`--window-drill` clicks every SCREENS button (each monitor, the span and back, CLOSE) and
-presses F11 out of and back into the fullscreen board, in the real window, one step at a time,
+`--window-drill` (without `--monitor`, where a test session's board is a window) clicks every
+SCREENS button (each monitor, the span and back, CLOSE) in the real window, one step at a time,
 and checks where Windows really put the window after each (`[DRILL]` lines in `jai.log`).
-The clicks go into the window's own input and F11 is a key message to the window, so the cursor
-and keyboard are never touched. The checks that change real things on the PC (the real mixer, a
+The clicks go into the window's own input, so the cursor and keyboard are never touched. The
+checks that change real things on the PC (the real mixer, a
 shutdown that is scheduled and cancelled, the lock screen, voice samples) are ignored tests in
 `src/live_checks.rs`, each behind its own environment switch.
 

@@ -1,12 +1,11 @@
 //! `--window-drill`: the real HUD window driven the way Sir drives it, and what Windows then
 //! shows checked against his monitors. The SCREENS menu is opened from the header and its
-//! buttons are clicked, and F11 is pressed; his cursor and keyboard are never touched. A click
-//! goes into the window's own pointer input (a press and a release on the button's middle);
-//! F11 is a key message posted to the window, read the way a real key press is. After each,
-//! the window's real place is read back from Windows: `[ MOVE HERE ]` puts the fullscreen board
-//! on that monitor, `[ SPAN ALL MONITORS ]` stretches it over all of them, `[ BACK TO ONE
-//! MONITOR ]` brings it to the first, `[ CLOSE ]` closes the menu, F11 switches between the
-//! fullscreen board and a maximised window.
+//! buttons are clicked; his cursor and keyboard are never touched. A click goes into the
+//! window's own pointer input (a press and a release on the button's middle). After each, the
+//! window's real place is read back from Windows: `[ MOVE HERE ]` puts the fullscreen board on
+//! that monitor, `[ SPAN ALL MONITORS ]` stretches it over all of them, `[ BACK TO ONE MONITOR ]`
+//! brings it to the first, `[ CLOSE ]` closes the menu. (That is the board of a scripted session
+//! without a monitor of its own: everywhere else he is the desktop's background.)
 //!
 //! (Posted mouse messages were tried first: once the window has left the monitor under his
 //! resting cursor, Windows answers each posted move with "the mouse left", and the press that
@@ -96,8 +95,6 @@ fn click_events(pos: egui::Pos2, down: bool) -> Vec<egui::Event> {
 enum Act {
     /// A left click in the middle of the named target.
     Click(String),
-    /// A key pressed and released (virtual key, scan code).
-    Key(u16, u32),
 }
 
 /// What must hold afterwards (and keep holding for a moment).
@@ -107,13 +104,8 @@ enum Expect {
     NotDrawn(String),
     /// The window covers exactly this monitor (1-based).
     Covers(usize),
-    /// The window covers exactly the monitor it is on when the step begins (F11 back into the
-    /// fullscreen board stays on the window's monitor).
-    CoversWhereItIs,
     /// The window covers exactly the box around every monitor.
     SpansAll,
-    /// A maximised window (windowed mode).
-    Maximised,
 }
 
 #[derive(Debug, Clone)]
@@ -145,8 +137,6 @@ const HOLD: Duration = Duration::from_millis(1800);
 const STEP_TIME: Duration = Duration::from_secs(8);
 /// The whole drill, at most.
 const DRILL_TIME: Duration = Duration::from_secs(240);
-const VK_F11: u16 = 0x7A;
-const SCAN_F11: u32 = 0x57;
 
 pub struct Drill {
     started: Instant,
@@ -189,7 +179,7 @@ impl Drill {
                 }
                 self.steps = plan(hwnd);
                 info!("[DRILL] {} steps on {}: {}", self.steps.len(), describe_monitors(), self.steps.iter().map(|s| s.why.as_str()).collect::<Vec<_>>().join(" → "));
-                self.begin_step(now, hwnd);
+                self.begin_step(now);
             }
             Phase::Finding { deadline } => {
                 let step = self.steps[self.at].clone();
@@ -205,23 +195,14 @@ impl Drill {
                         }
                         None => {}
                     },
-                    Act::Key(vk, scan) => {
-                        key(hwnd, vk, scan, true);
-                        self.phase = Phase::Pressing { at: now + Duration::from_millis(70), pos: egui::Pos2::ZERO };
-                    }
                 }
             }
             Phase::Pressing { at, pos } => {
                 if now < at {
                     return;
                 }
-                match self.steps[self.at].act {
-                    Act::Click(_) => {
-                        input().extend(click_events(pos, false));
-                        ctx.request_repaint();
-                    }
-                    Act::Key(vk, scan) => key(hwnd, vk, scan, false),
-                }
+                input().extend(click_events(pos, false));
+                ctx.request_repaint();
                 self.phase = Phase::Checking { deadline: now + STEP_TIME, since: None };
             }
             Phase::Checking { deadline, since } => {
@@ -243,23 +224,17 @@ impl Drill {
             }
             Phase::Pause { until } => {
                 if now >= until {
-                    self.begin_step(now, hwnd);
+                    self.begin_step(now);
                 }
             }
             Phase::Done => {}
         }
     }
 
-    fn begin_step(&mut self, now: Instant, hwnd: isize) {
+    fn begin_step(&mut self, now: Instant) {
         if self.at >= self.steps.len() {
             self.finish();
             return;
-        }
-        if self.steps[self.at].expect == Expect::CoversWhereItIs {
-            let monitors = crate::monitors::list();
-            let primary = crate::monitors::primary(&monitors).map_or(1, |m| m.index);
-            let here = window_rect(hwnd).and_then(|(r, _)| crate::monitors::monitor_at(&monitors, r[0] + r[2] / 2, r[1] + r[3] / 2)).unwrap_or(primary);
-            self.steps[self.at].expect = Expect::Covers(here);
         }
         info!("[DRILL] Step {} of {}: {}", self.at + 1, self.steps.len(), self.steps[self.at].why);
         self.phase = Phase::Finding { deadline: now + STEP_TIME };
@@ -290,28 +265,24 @@ impl Drill {
 }
 
 /// The drill for these monitors, from the shape the window is in now: first to the fullscreen
-/// board on one monitor (F11 from a window, `[ BACK TO ONE MONITOR ]` from a span), then every
-/// `[ MOVE HERE ]` and back, the span and back, `[ CLOSE ]`, and F11 out and in again.
+/// board on one monitor (`[ BACK TO ONE MONITOR ]` from a span, by way of the span from a
+/// window), then every `[ MOVE HERE ]` and back, the span and back, and `[ CLOSE ]`.
 fn plan(hwnd: isize) -> Vec<Step> {
     let monitors = crate::monitors::list();
     let primary = crate::monitors::primary(&monitors).map_or(1, |m| m.index);
     let state = window_rect(hwnd);
     let spanning = monitors.len() > 1 && state.zip(crate::monitors::virtual_bounds(&monitors)).is_some_and(|((r, _), b)| close(r, b));
-    let windowed = state.is_some_and(|(_, maximised)| maximised) || state.is_some_and(|(r, _)| !monitors.iter().any(|m| close(r, as_xywh(m.rect))));
+    let windowed = monitors.len() > 1 && !spanning && (state.is_some_and(|(_, maximised)| maximised) || state.is_some_and(|(r, _)| !monitors.iter().any(|m| close(r, as_xywh(m.rect)))));
     let centre = state.map(|(r, _)| (r[0] + r[2] / 2, r[1] + r[3] / 2));
     let mut here = centre.and_then(|(x, y)| crate::monitors::monitor_at(&monitors, x, y)).unwrap_or(primary);
     let click = |why: String, target: String, expect: Expect| Step { why, act: Act::Click(target), expect };
-    let f11 = |why: &str, expect: Expect| Step { why: why.to_string(), act: Act::Key(VK_F11, SCAN_F11), expect };
-    let mut steps = Vec::new();
-    if spanning {
-        steps.push(click("[ SCREENS ] opens".into(), "header:screens".into(), Expect::Drawn("screens:close".into())));
-        steps.push(click("[ BACK TO ONE MONITOR ] (from the span it started in)".into(), "screens:span:off".into(), Expect::Covers(primary)));
+    let mut steps = vec![click("[ SCREENS ] opens".into(), "header:screens".into(), Expect::Drawn("screens:close".into()))];
+    if windowed {
+        steps.push(click("[ SPAN ALL MONITORS ] (from the window it started in)".into(), "screens:span:on".into(), Expect::SpansAll));
+    }
+    if spanning || windowed {
+        steps.push(click("[ BACK TO ONE MONITOR ]: the fullscreen board".into(), "screens:span:off".into(), Expect::Covers(primary)));
         here = primary;
-    } else {
-        if windowed {
-            steps.push(f11("F11 from the window it started in: the fullscreen board", Expect::CoversWhereItIs));
-        }
-        steps.push(click("[ SCREENS ] opens".into(), "header:screens".into(), Expect::Drawn("screens:close".into())));
     }
     let start = here;
     for m in monitors.iter().map(|m| m.index).filter(|i| *i != start) {
@@ -326,8 +297,6 @@ fn plan(hwnd: isize) -> Vec<Step> {
         steps.push(click("BACK TO ONE MONITOR".into(), "screens:span:off".into(), Expect::Covers(primary)));
     }
     steps.push(click("[ CLOSE ] closes the menu".into(), "screens:close".into(), Expect::NotDrawn("screens:close".into())));
-    steps.push(f11("F11: a maximised window", Expect::Maximised));
-    steps.push(f11("F11 again: the fullscreen board", Expect::CoversWhereItIs));
     steps
 }
 
@@ -358,10 +327,7 @@ fn holds(expect: &Expect, hwnd: isize) -> bool {
             let Some(m) = monitors.iter().find(|m| m.index == *index) else { return false };
             window_rect(hwnd).is_some_and(|(r, maximised)| !maximised && close(r, as_xywh(m.rect)))
         }
-        // Resolved when the step begins.
-        Expect::CoversWhereItIs => false,
         Expect::SpansAll => crate::monitors::virtual_bounds(&monitors).zip(window_rect(hwnd)).is_some_and(|(b, (r, _))| close(r, b)),
-        Expect::Maximised => window_rect(hwnd).is_some_and(|(_, maximised)| maximised),
     }
 }
 
@@ -386,32 +352,6 @@ fn describe_monitors() -> String {
         .join(", ")
 }
 
-#[cfg(windows)]
-fn post(hwnd: isize, msg: u32, wparam: usize, lparam: isize) {
-    use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
-    use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
-    // SAFETY: a message posted to this process' own window; nothing is borrowed.
-    if let Err(e) = unsafe { PostMessageW(HWND(hwnd), msg, WPARAM(wparam), LPARAM(lparam)) } {
-        warn!("[DRILL] Could not post message {msg:#x}: {e}");
-    }
-}
-
-/// The key message's lParam: repeat count 1 and the scan code; a release also carries "was
-/// down" and "going up".
-#[cfg_attr(not(windows), allow(dead_code))]
-fn key_lparam(scan: u32, down: bool) -> u32 {
-    1 | (scan << 16) | if down { 0 } else { (1 << 30) | (1 << 31) }
-}
-
-#[cfg(windows)]
-fn key(hwnd: isize, vk: u16, scan: u32, down: bool) {
-    use windows::Win32::UI::WindowsAndMessaging::{WM_KEYDOWN, WM_KEYUP};
-    post(hwnd, if down { WM_KEYDOWN } else { WM_KEYUP }, vk as usize, key_lparam(scan, down) as i32 as isize);
-}
-
-#[cfg(not(windows))]
-fn key(_: isize, _: u16, _: u32, _: bool) {}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -427,12 +367,6 @@ mod tests {
         assert!(matches!(up[1], egui::Event::PointerButton { pos, pressed: false, .. } if pos == at));
         // His cursor rests elsewhere: the pointer leaves after the click.
         assert!(matches!(up.last(), Some(egui::Event::PointerGone)));
-    }
-
-    #[test]
-    fn f11_reads_as_one_real_key_press() {
-        assert_eq!(key_lparam(SCAN_F11, true), 0x0057_0001);
-        assert_eq!(key_lparam(SCAN_F11, false), 0xC057_0001);
     }
 
     #[test]

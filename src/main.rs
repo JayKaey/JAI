@@ -309,8 +309,8 @@ struct Cli {
     /// `--show` with `--silent`: the session runs in the real HUD window (what a monitor
     /// change or a span really does can only be seen there).
     show: bool,
-    /// `--window-drill` with `--silent --show`: the real window's SCREENS buttons and F11
-    /// driven through its message queue and checked against the monitors (`window_drill`).
+    /// `--window-drill` with `--silent --show`: the real window's SCREENS buttons driven
+    /// through its own input and checked against the monitors (`window_drill`).
     window_drill: bool,
     /// Test every integration and print the report, then exit.
     diagnose: bool,
@@ -470,9 +470,9 @@ USAGE: JAI.exe [OPTIONS]
                       offscreen, settings file and conversation log untouched); every answer
                       goes to jai.log as [CLI] lines, then JAI quits; with --show the
                       session runs in the real HUD window instead of offscreen
-  --window-drill      with --silent --show: click the SCREENS buttons and press F11 in the real
-                      window (posted messages, your mouse untouched), check where Windows put it
-                      on every monitor ([DRILL] lines in jai.log), then quit
+  --window-drill      with --silent --show (no --monitor: the board as a window): click the
+                      SCREENS buttons in the real window (your mouse untouched), check where
+                      Windows put it on every monitor ([DRILL] lines in jai.log), then quit
   --monitor <n>       with --silent --show or --live-test: the test window opens on monitor n
                       (1 = the primary), this session only; e.g. --monitor 2 while you play
   --diagnose         test every integration (WebUntis, calendar, e-mail, WhatsApp …) and exit

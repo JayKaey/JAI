@@ -854,13 +854,8 @@ impl Core {
         rect.width().min(rect.height()) * if self.style == CoreStyle::Simple { 0.36 } else { 0.30 }
     }
 
-    /// Paints him filling a small window (pure orb mode), as he is now.
-    pub fn paint_in(&self, p: &Painter, rect: Rect) {
-        paint(p, self.glow_id(p), self.style, rect.center(), self.radius_in(rect), &self.look());
-    }
-
-    /// As `paint_in`, the lines alone (`CoreLook::crisp`): for the corner orb, whose window's
-    /// black Windows sees through.
+    /// Paints him filling a small window (the floating orb, the corner orb), as he is now, the
+    /// lines alone (`CoreLook::crisp`): their window's black Windows sees through.
     pub fn paint_in_crisp(&self, p: &Painter, rect: Rect) {
         paint(p, self.glow_id(p), self.style, rect.center(), self.radius_in(rect), &CoreLook { crisp: true, ..self.look() });
     }

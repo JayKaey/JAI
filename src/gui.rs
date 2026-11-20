@@ -11,8 +11,8 @@
 //! above the strip; the header's `[ CONSOLE ]` (Ctrl+L, "open text interface") slides
 //! out the text console with the full transcript and an input line. JAI's live widgets,
 //! confirmations and message cards render as blocks in the left system column; his extra native
-//! windows are egui deferred viewports (`widget_view`). The board launches in true borderless
-//! fullscreen on the primary monitor (F11 toggles maximised windowed mode).
+//! windows are egui deferred viewports (`widget_view`). The board is always the desktop's
+//! background (`wallpaper`); the floating orb and mini mode's strip are windows of their own.
 
 #[path = "gui_widgets.rs"]
 mod widget_view;
@@ -245,11 +245,11 @@ pub fn windows_supported() -> bool {
 static HUD_MONITOR: Mutex<Option<usize>> = Mutex::new(None);
 
 /// Sends the HUD's board to monitor `index` (1-based) as the fullscreen board there; a board
-/// that spans every monitor comes back to that one. False when the HUD is a plain window or
-/// the floating orb, which move as any window does.
+/// that spans every monitor comes back to that one. False when the HUD is a plain window, which
+/// moves as any window does.
 pub fn send_board_to_monitor(config: &ConfigStore, index: usize) -> bool {
     let iface = config.read(|c| c.interface.clone());
-    if iface.orb_mode || !(iface.fullscreen || iface.span_all_monitors) {
+    if !(iface.fullscreen || iface.span_all_monitors) {
         return false;
     }
     *lock(&HUD_MONITOR) = Some(index);
@@ -306,9 +306,9 @@ pub fn emblem_monitor(config: &ConfigStore, monitors: &[crate::monitors::Monitor
 }
 
 /// The monitor the fullscreen board was sent to, once it can go there (a board that still
-/// spans the monitors, a window and the floating orb leave the request where it is).
+/// spans the monitors and a window leave the request where it is).
 fn take_monitor_request(current: &InterfaceSettings) -> Option<usize> {
-    if current.fullscreen && !current.span_all_monitors && !current.orb_mode { lock(&HUD_MONITOR).take() } else { None }
+    if current.fullscreen && !current.span_all_monitors { lock(&HUD_MONITOR).take() } else { None }
 }
 
 /// The board id of simulation `id`'s block.
@@ -722,6 +722,11 @@ pub fn open_integrations(service: Option<&'static str>) {
 
 /// Hides the HUD to the tray; JAI keeps running.
 pub fn hide() {
+    // (As the desktop's background there is nothing to hide: he is the desktop, always, and
+    // `show` could not bring a hidden background back.)
+    if crate::wallpaper::in_use() {
+        return;
+    }
     #[cfg(windows)]
     {
         let hwnd = SHARED.hwnd.load(Ordering::Acquire);
@@ -758,6 +763,11 @@ pub fn quit() {
 pub fn window_command(command: WindowCommand) -> Result<(), String> {
     if !SHARED.running.load(Ordering::Acquire) {
         return Err("JAI is running without his HUD window (headless), so there is no window to change.".into());
+    }
+    // As the desktop's background he has no window to hide, shrink or move (Sir, 2026-11-20:
+    // "he should always be the desktop"): the floating orb is what comes and goes.
+    if crate::wallpaper::in_use() && command != WindowCommand::Show {
+        return Err("I'm your desktop's background, Sir, always: I have no window to change. Say \"orb mode\" and my orb floats over your work.".into());
     }
     match command {
         WindowCommand::Show => show(),
@@ -874,8 +884,8 @@ fn apply_window_command(hwnd: isize, command: WindowCommand) {
 /// Remembers where the window is, so it reopens there (skipped in fullscreen).
 pub fn remember_placement(config: &ConfigStore) {
     let hwnd = SHARED.hwnd.load(Ordering::Acquire);
-    // The floating orb's square is not where the full HUD should reopen.
-    if hwnd == 0 || config.read(|c| c.interface.fullscreen || c.interface.orb_mode) {
+    // (The background's rect is no window's place.)
+    if hwnd == 0 || crate::wallpaper::in_use() || config.read(|c| c.interface.fullscreen) {
         return;
     }
     #[cfg(windows)]
@@ -1215,19 +1225,20 @@ fn place_where_sir_works(builder: &egui::ViewportBuilder) -> Option<Pos2> {
 
 fn open_window(app: &Jai, rt: &Handle, model: &Arc<Mutex<HudModel>>) -> Result<(), String> {
     let (iface, placement, maximized) = app.config().read(|c| (c.interface.clone(), c.hud_window, c.hud_maximized));
-    let on_top = if iface.orb_mode { iface.orb_on_top } else { iface.always_on_top };
-    let level = if on_top { egui::viewport::WindowLevel::AlwaysOnTop } else { egui::viewport::WindowLevel::Normal };
-    let (size, min) = if iface.orb_mode { (vec2(iface.orb_size_px, iface.orb_size_px), vec2(60.0, 60.0)) } else { (layout_size(iface.layout), min_size(iface.layout)) };
+    let level = if iface.always_on_top { egui::viewport::WindowLevel::AlwaysOnTop } else { egui::viewport::WindowLevel::Normal };
+    let (size, min) = (layout_size(iface.layout), min_size(iface.layout));
     let start_on = start_monitor_points();
     let asked = START_MONITOR.load(Ordering::Acquire);
     if asked > 0 && start_on.is_none() {
         warn!("[HUD] --monitor {asked}: there is no monitor {asked} ({} connected); the HUD opens where it would anyway", crate::monitors::list().len());
     }
-    let geometry = startup_geometry(&iface, size, start_on);
+    // He starts as the desktop's background, always (Sir, 2026-11-20: "he shouldnt have a normal
+    // window"), when there is a rect for it: a scripted session without a monitor of its own
+    // has none and starts as the board. (The floating orb is a window of its own over it.)
+    let behind = background_rect(&iface);
+    let background = behind.is_some();
+    let geometry = startup_geometry(&iface, behind, size, start_on);
     let fullscreen = geometry.fullscreen;
-    // He starts as the desktop's background (when there is a rect for it: a scripted session
-    // without a monitor of its own has none and starts as the board).
-    let background = iface.desktop_background && !iface.orb_mode && background_rect(&iface).is_some();
     // A test session's window never takes the focus (the window drill's does: it drives the
     // window's own keys). Its board covers the monitor as a plain borderless window: winit
     // forces a window it creates fullscreen to the front (an Alt tap and SetForegroundWindow,
@@ -1239,11 +1250,11 @@ fn open_window(app: &Jai, rt: &Handle, model: &Arc<Mutex<HudModel>>) -> Result<(
         .with_inner_size(geometry.size)
         .with_resizable(true)
         .with_min_inner_size(min)
-        // A see-through background ("opacity") and the floating orb need a transparent surface,
-        // but on Windows a transparent window does not take the whole monitor in fullscreen (it
-        // stayed a ~60 % rectangle in the top-left corner): the fullscreen board is opaque.
+        // A see-through background ("opacity") needs a transparent surface, but on Windows a
+        // transparent window does not take the whole monitor in fullscreen (it stayed a ~60 %
+        // rectangle in the top-left corner): the fullscreen board is opaque.
         .with_transparent(geometry.transparent)
-        .with_decorations(!iface.frameless && !iface.orb_mode && !fullscreen && !iface.span_all_monitors && !background)
+        .with_decorations(!iface.frameless && !fullscreen && !iface.span_all_monitors && !background)
         .with_fullscreen(fullscreen && !quiet)
         .with_maximized(maximized && !fullscreen && !quiet && !background)
         .with_window_level(if background { egui::viewport::WindowLevel::Normal } else { level })
@@ -1272,7 +1283,7 @@ fn open_window(app: &Jai, rt: &Handle, model: &Arc<Mutex<HudModel>>) -> Result<(
     if let Some(on) = start_on {
         info!("[HUD] This session opens on monitor {} (--monitor), at ({:.0}, {:.0})", START_MONITOR.load(Ordering::Acquire), on.left(), on.top());
     }
-    let restore = placement.filter(|_| !maximized && !fullscreen && !iface.orb_mode && start_on.is_none() && !background);
+    let restore = placement.filter(|_| !maximized && !fullscreen && start_on.is_none() && !background);
     let (app, rt, model) = (app.clone(), rt.clone(), Arc::clone(model));
     eframe::run_native(
         "J.A.I.",
@@ -1331,19 +1342,19 @@ struct StartupGeometry {
     position: Option<[f32; 2]>,
 }
 
-/// Fullscreen board: borderless, opaque, the primary monitor's full resolution at (0, 0) (pure orb
-/// mode never starts fullscreen). Otherwise the layout's window size, transparent. `on`: the
-/// monitor a test session opens on (`--monitor`, logical points): the board covers that one, a
-/// window starts in its middle.
-fn startup_geometry(iface: &InterfaceSettings, windowed: Vec2, on: Option<Rect>) -> StartupGeometry {
-    // As the desktop's background: the plain, opaque, borderless window that the desktop is
-    // handed before it is first shown (`HudApp::new`).
-    if let Some([l, t, r, b]) = (iface.desktop_background && !iface.orb_mode).then(|| background_rect(iface)).flatten() {
+/// As the desktop's background (`behind`, the rect it covers in pixels): the plain, opaque,
+/// borderless window that the desktop is handed before it is first shown (`HudApp::new`).
+/// Without one, the fullscreen board: borderless, opaque, the primary monitor's full resolution
+/// at (0, 0); otherwise the layout's window size, transparent. `on`: the monitor a test session
+/// opens on (`--monitor`, logical points): the board covers that one, a window starts in its
+/// middle.
+fn startup_geometry(iface: &InterfaceSettings, behind: Option<[i32; 4]>, windowed: Vec2, on: Option<Rect>) -> StartupGeometry {
+    if let Some([l, t, r, b]) = behind {
         let scale = wm::primary_screen().2.max(0.1);
         return StartupGeometry { fullscreen: false, transparent: false, size: vec2((r - l) as f32 / scale, (b - t) as f32 / scale), position: Some([l as f32 / scale, t as f32 / scale]) };
     }
-    let spanning = iface.span_all_monitors && !iface.orb_mode;
-    let fullscreen = iface.fullscreen && !iface.orb_mode && !spanning;
+    let spanning = iface.span_all_monitors;
+    let fullscreen = iface.fullscreen && !spanning;
     if !fullscreen && !spanning {
         let position = on.map(|m| {
             let size = windowed.min(m.size());
@@ -2410,7 +2421,7 @@ impl HudApp {
             let quiet = InterfaceSettings { orb_scale: prev.orb_scale, ..current.clone() } == prev;
             // (As the desktop's background he has no level, frame or size of a window: what is
             // set meanwhile applies when he is a window again.)
-            let in_desktop = current.desktop_background && !current.orb_mode && self.as_background();
+            let in_desktop = self.as_background();
             if prev.always_on_top != current.always_on_top && !in_desktop {
                 let level = if current.always_on_top {
                     egui::viewport::WindowLevel::AlwaysOnTop
@@ -2424,10 +2435,10 @@ impl HudApp {
             // (And a fourth: the desktop's background, which is no window at all. Coming back from
             // it is like coming back from the span: `wallpaper::tick` has taken the window out
             // of the desktop by the time these commands are carried out.)
-            let background = |i: &InterfaceSettings| i.desktop_background && !i.orb_mode && background_rect(i).is_some();
+            let background = |i: &InterfaceSettings| background_rect(i).is_some();
             let shape = |i: &InterfaceSettings| (background(i), i.span_all_monitors, i.fullscreen);
             let (to_background, from_background) = (background(&current), background(&prev));
-            if shape(&prev) != shape(&current) && !current.orb_mode {
+            if shape(&prev) != shape(&current) {
                 let target = lock(&HUD_MONITOR).take();
                 if to_background {
                     if !from_background {
@@ -2541,62 +2552,60 @@ impl HudApp {
         current
     }
 
-    /// Pure orb mode on the window itself: borderless, floating, a square of `orb_size_px` at its
-    /// corner of the chosen monitor; leaving it restores the full HUD where it was.
-    fn sync_orb_window(&mut self, ctx: &egui::Context, iface: &InterfaceSettings) {
-        use egui::viewport::WindowLevel;
-        let want = iface.orb_mode.then(|| (iface.orb_size_px, iface.orb_anchor.clone(), iface.orb_monitor, iface.orb_on_top));
-        if want == self.orb_geometry {
+    /// The floating orb (orb mode) and mini mode's strip: a window of their own in front of
+    /// everything, its black see-through, while the board stays the desktop's background (Sir,
+    /// 2026-11-20: "he should always be the desktop but the floating orb … should still exist
+    /// and be functinal"). It stands at its corner of the chosen monitor, `orb_size_px` square;
+    /// dragged, where Sir leaves it.
+    fn floating_orb(&mut self, ctx: &egui::Context, m: &HudModel, iface: &InterfaceSettings) {
+        if !iface.orb_mode {
+            if self.orb_geometry.take().is_some() {
+                info!("[HUD] The floating orb is gone");
+            }
             return;
         }
-        let entering = want.is_some() && self.orb_geometry.is_none();
-        let leaving = want.is_none() && self.orb_geometry.is_some();
-        self.orb_geometry = want.clone();
-        match want {
-            Some((size, anchor, monitor, on_top)) => {
-                if entering {
-                    #[cfg(windows)]
-                    if self.hwnd != 0 {
-                        self.normal_placement = crate::win32::window_placement(self.hwnd).map(|(rect, _)| rect);
-                    }
-                    #[cfg(not(windows))]
-                    if self.hwnd != 0 {
-                        self.normal_placement = wm::window_state(self.hwnd).map(|(rect, ..)| rect);
-                    }
-                    ctx.send_viewport_cmd(ViewportCommand::Fullscreen(false));
-                    ctx.send_viewport_cmd(ViewportCommand::Maximized(false));
-                    ctx.send_viewport_cmd(ViewportCommand::Decorations(false));
-                    ctx.send_viewport_cmd(ViewportCommand::MinInnerSize(vec2(60.0, 60.0)));
-                    info!("[HUD] Pure orb mode on ({size:.0} px, {anchor}, monitor {monitor})");
-                }
-                ctx.send_viewport_cmd(ViewportCommand::WindowLevel(if on_top { WindowLevel::AlwaysOnTop } else { WindowLevel::Normal }));
-                if self.hwnd != 0 {
-                    let hwnd = self.hwnd;
-                    let ppp = ctx.native_pixels_per_point().unwrap_or(1.0);
-                    wm::run_detached(move || place_orb(hwnd, size, &anchor, monitor, ppp));
-                } else {
-                    ctx.send_viewport_cmd(ViewportCommand::InnerSize(vec2(size, size) / iface.scale));
-                }
+        let viewport = ViewportId::from_hash_of("jai_floating_orb");
+        let (now, ppp) = (Instant::now(), ctx.pixels_per_point());
+        let want = (iface.orb_size_px, iface.orb_anchor.clone(), iface.orb_monitor);
+        if self.orb_geometry.as_ref().is_none_or(|(had, _)| *had != want) {
+            let native = ctx.native_pixels_per_point().unwrap_or(1.0);
+            let px = |points: f32| (points * native).round() as i32;
+            // (Where it stands now, in pixels: a new size keeps its centre.)
+            let centre = ctx.input(|i| i.raw.viewports.get(&viewport).and_then(|v| v.outer_rect)).map(|r| [(r.center().x * ppp) as i32, (r.center().y * ppp) as i32]);
+            let monitors = crate::monitors::recent();
+            // Its monitor (a scripted session's: that session's own, never Sir's); 0: the one it is on.
+            let on = match test_session_monitor().filter(|n| *n > 0).unwrap_or(iface.orb_monitor as usize) {
+                0 => centre.and_then(|[x, y]| monitors.iter().find(|m| m.contains(x, y))),
+                n => monitors.iter().find(|m| m.index == n),
             }
-            None if leaving => {
-                ctx.send_viewport_cmd(ViewportCommand::Decorations(!iface.frameless));
-                ctx.send_viewport_cmd(ViewportCommand::WindowLevel(if iface.always_on_top { WindowLevel::AlwaysOnTop } else { WindowLevel::Normal }));
-                ctx.send_viewport_cmd(ViewportCommand::MinInnerSize(min_size(iface.layout)));
-                let restored = self.normal_placement.take().filter(|_| self.hwnd != 0);
-                match restored {
-                    Some(rect) => {
-                        let hwnd = self.hwnd;
-                        #[cfg(windows)]
-                        crate::win32::run_detached(move || crate::win32::put_back_placement(hwnd, rect));
-                        #[cfg(not(windows))]
-                        wm::run_detached(move || wm::place(hwnd, rect));
-                    }
-                    _ => ctx.send_viewport_cmd(ViewportCommand::InnerSize(layout_size(iface.layout) / iface.scale)),
-                }
-                info!("[HUD] Pure orb mode off");
+            .or_else(|| crate::monitors::primary(&monitors));
+            let rect = orb_place(&iface.orb_anchor, on.map_or([0, 0, 1920, 1040], |m| m.work), px(iface.orb_size_px), px(24.0), px(MINI_STRIP_HEIGHT), centre);
+            if self.orb_geometry.is_none() {
+                info!("[HUD] The floating orb comes out ({:.0} px, {}, at {},{})", iface.orb_size_px, iface.orb_anchor, rect[0], rect[1]);
+                self.orb_tended = (now, now.checked_sub(Duration::from_secs(1)).unwrap_or(now));
             }
-            None => {}
+            self.orb_geometry = Some((want, rect));
         }
+        let Some((_, [x, y, w, h])) = self.orb_geometry else { return };
+        let builder = egui::ViewportBuilder::default()
+            .with_title(crate::wallpaper::ORB_TITLE)
+            .with_app_id("jai")
+            .with_decorations(false)
+            .with_transparent(true)
+            .with_taskbar(false)
+            .with_resizable(false)
+            .with_window_level(if iface.orb_on_top { egui::viewport::WindowLevel::AlwaysOnTop } else { egui::viewport::WindowLevel::Normal })
+            .with_position(pos2(x as f32, y as f32) / ppp)
+            .with_inner_size(vec2(w as f32, h as f32) / ppp);
+        let (born, last) = self.orb_tended;
+        if now.duration_since(born) < Duration::from_millis(1500) || now.duration_since(last) > Duration::from_millis(300) {
+            self.orb_tended.1 = now;
+            tend_orb_window(ctx, viewport, crate::hud_feel::game_in_front());
+        }
+        ctx.show_viewport_immediate(viewport, for_test_session(builder), |ctx, _class| {
+            self.pure_orb(ctx, m, iface);
+            crate::live_shots::tick(ctx);
+        });
     }
 
     /// Resize handles on all eight edges and corners of the frameless window (winit gives an
@@ -3343,41 +3352,24 @@ fn title_button(ui: &mut Ui, p: &Palette, glyph: &str, danger: bool) -> egui::Re
     response
 }
 
-/// Puts the floating orb window at its corner (`anchor`) of a monitor (1-based; 0 = the one it
-/// is on), `size` logical pixels square; "free" keeps its centre where Sir dragged it.
-/// Synchronous window calls: run it on the window worker thread.
-fn place_orb(hwnd: isize, size: f32, anchor: &str, monitor: u8, ppp: f32) {
-    let displays = wm::displays();
-    let current = wm::window_display_rect(hwnd);
-    let target = match monitor {
-        0 => displays.iter().find(|d| Some(d.rect) == current).or_else(|| displays.first()),
-        n => displays.get(n as usize - 1).or_else(|| displays.first()),
-    };
-    let Some(target) = target else { return };
-    let side = (size * ppp).round() as i32;
-    let margin = (24.0 * ppp).round() as i32;
-    let [l, t, r, b] = target.work;
-    // Mini mode: a strip across the top of the monitor's work area.
+/// Where the floating orb's window stands (x, y, w, h in pixels) on a monitor's `work` area
+/// (left, top, right, bottom): at its corner (`anchor`), `side` pixels square, `margin` from
+/// the edges; mini mode's strip across the top, `strip` pixels tall; "free" round `centre`,
+/// where Sir left it (without one: the bottom-right corner).
+fn orb_place(anchor: &str, work: [i32; 4], side: i32, margin: i32, strip: i32, centre: Option<[i32; 2]>) -> [i32; 4] {
+    let [l, t, r, b] = work;
     if anchor == MINI_STRIP {
-        if let Err(e) = wm::set_window_rect(hwnd, [l, t, r - l, (MINI_STRIP_HEIGHT * ppp).round() as i32]) {
-            warn!("[HUD] Could not place the mini strip: {e}");
-        }
-        return;
+        return [l, t, r - l, strip];
     }
-    let (x, y) = match anchor {
-        "top-left" => (l + margin, t + margin),
-        "top-right" => (r - side - margin, t + margin),
-        "bottom-left" => (l + margin, b - side - margin),
-        "center" => ((l + r - side) / 2, (t + b - side) / 2),
-        "free" => match wm::window_state(hwnd) {
-            Some(([x, y, w, h], _, _)) => (x + w / 2 - side / 2, y + h / 2 - side / 2),
-            None => (r - side - margin, b - side - margin),
-        },
+    let (x, y) = match (anchor, centre) {
+        ("top-left", _) => (l + margin, t + margin),
+        ("top-right", _) => (r - side - margin, t + margin),
+        ("bottom-left", _) => (l + margin, b - side - margin),
+        ("center", _) => ((l + r - side) / 2, (t + b - side) / 2),
+        ("free", Some([x, y])) => (x - side / 2, y - side / 2),
         _ => (r - side - margin, b - side - margin),
     };
-    if let Err(e) = wm::set_window_rect(hwnd, [x, y, side, side]) {
-        warn!("[HUD] Could not place the orb: {e}");
-    }
+    [x, y, side, side]
 }
 
 /// A saved instant replay: `[ Open Video Clip ]` `[ Open Folder ]`.
@@ -3622,7 +3614,7 @@ fn key_hints_right(screen: Rect, console: f32) -> f32 {
 fn key_hints(painter: &egui::Painter, right: f32, mid: f32) -> Vec<(&'static str, Rect)> {
     let mut placed = Vec::new();
     let mut x = right;
-    for label in ["ESC INTERRUPT", "F11 FULLSCREEN", "F1 MUTE"] {
+    for label in ["ESC INTERRUPT", "F1 MUTE"] {
         let size = vec2(rail_width(painter, label) + 10.0, TELEMETRY_H);
         let rect = Rect::from_min_size(pos2(x - size.x, mid - size.y / 2.0), size);
         x = rect.left() - 18.0;
@@ -3815,10 +3807,9 @@ struct HudApp {
     /// The Settings drawer (microphone, devices, system, memory, look) and its open tab.
     drawer_open: bool,
     drawer_tab: DrawerTab,
-    /// Pure orb mode as applied to the window: (size px, anchor, monitor, always on top).
-    orb_geometry: Option<(f32, String, u8, bool)>,
-    /// Where the full HUD was before pure orb mode (restored when it ends).
-    normal_placement: Option<[i32; 4]>,
+    /// The floating orb's window, as it was last placed: (size px, anchor, monitor) and where
+    /// that put it (x, y, w, h in pixels).
+    orb_geometry: Option<((f32, String, u8), [i32; 4])>,
     /// The gyroscopic ring emblem.
     emblem: Core,
     /// The board of blocks (textures).
@@ -4018,6 +4009,42 @@ fn wheel_turn(turned: f32, events: &[egui::Event]) -> (f32, Option<bool>) {
             })
             .sum::<f32>();
     if turned.abs() >= 1.0 { (0.0, Some(turned > 0.0)) } else { (turned, None) }
+}
+
+/// Looks after an orb's window, the corner orb's or the floating one's (both are titled
+/// `wallpaper::ORB_TITLE` and never out at once): its black is see-through, beside a game
+/// (`gaming`) it takes no click, and it shows itself without the focus once it has drawn.
+fn tend_orb_window(ctx: &egui::Context, viewport: ViewportId, gaming: bool) {
+    let drawn = ctx.cumulative_pass_nr_for(viewport) > 0;
+    #[cfg(windows)]
+    crate::win32::run_detached(move || {
+        if let Some(hwnd) = crate::win32::own_window(crate::wallpaper::ORB_TITLE) {
+            crate::win32_desktop::tend_orb(hwnd, gaming, drawn);
+        }
+    });
+    // (KDE draws its see-through parts itself, from the window's own alpha.)
+    #[cfg(not(windows))]
+    if let Some(hwnd) = wm::own_window(crate::wallpaper::ORB_TITLE) {
+        wm::skip_taskbar(hwnd, true);
+        let _ = wm::click_through(hwnd, gaming);
+        if drawn && !wm::is_visible(hwnd) {
+            ctx.send_viewport_cmd_to(viewport, ViewportCommand::Visible(true));
+        }
+    }
+}
+
+/// "Back to the board": he is the desktop, so the desktop is shown, every other window
+/// minimised. (Never from a test: Sir's windows are his.)
+fn show_the_board(rt: &Handle) {
+    if crate::platform::hands_off() {
+        return;
+    }
+    rt.spawn(async {
+        use crate::winctl::{manage, WindowAction, WindowTarget};
+        if let Err(e) = manage(WindowAction::MinimizeAll, WindowTarget::Named(String::new())).await {
+            warn!("[HUD] Could not show the desktop: {e}");
+        }
+    });
 }
 
 /// The corner orb's window: the emblem in its disc with the ring of what he is at, and beside
@@ -4281,8 +4308,7 @@ impl HudApp {
             }
             // He starts as the desktop's background: the desktop is handed the window before
             // it is first shown, so the board never lies over Sir's windows on its way there.
-            let iface = app.config().read(|c| c.interface.clone());
-            if let Some(rect) = (iface.desktop_background && !iface.orb_mode).then(|| background_rect(&iface)).flatten() {
+            if let Some(rect) = background_rect(&app.config().read(|c| c.interface.clone())) {
                 crate::wallpaper::arrive(hwnd, rect, cc.egui_ctx.native_pixels_per_point().unwrap_or(1.0));
             }
         }
@@ -4306,7 +4332,6 @@ impl HudApp {
             drawer_open: false,
             drawer_tab: DrawerTab::Voice,
             orb_geometry: None,
-            normal_placement: None,
             palette: Palette::new(&iface),
             app,
             rt,
@@ -4395,22 +4420,22 @@ impl HudApp {
         matches!(self.backdrop, crate::wallpaper::Standing::Arriving | crate::wallpaper::Standing::On)
     }
 
-    /// He as the desktop's background (`wallpaper`): the board's window is handed to the
-    /// desktop once it stands, plain, where it is to be, and taken back when the switch goes
-    /// off. A refusal puts the switch back and says why.
+    /// He as the desktop's background (`wallpaper`), always: the board's window is handed to the
+    /// desktop once it stands, plain, where it is to be. Refused, he says why and lies under
+    /// every other window until the desktop takes him (it is asked again).
     fn sync_background(&mut self, ctx: &egui::Context, iface: &InterfaceSettings) {
         use crate::wallpaper::Standing;
         // Every view of his is a window of its own, in every mode, wherever the HUD has windows
         // to give (`hud_dock::all_own`).
         crate::hud_dock::set_all_own(!ctx.embed_viewports());
-        let rect = (iface.desktop_background && !iface.orb_mode && self.hwnd != 0 && !ctx.embed_viewports()).then(|| background_rect(iface)).flatten();
+        let rect = (self.hwnd != 0 && !ctx.embed_viewports()).then(|| background_rect(iface)).flatten();
         let now = crate::wallpaper::tick(self.hwnd, rect, ctx.native_pixels_per_point().unwrap_or(1.0), crate::hud_feel::game_in_front());
         if now == self.backdrop {
             return;
         }
         if let Standing::Refused(why) = &now {
-            lock(&self.model).toast(format!("The desktop would not take me as its background ({why})."), true);
-            self.app.config().update(|c| c.interface.desktop_background = false);
+            lock(&self.model).toast(format!("The desktop would not take me as its background ({why}). I'll ask it again."), true);
+            desk::sink(self.hwnd);
         }
         self.backdrop = now;
         if !self.as_background() {
@@ -4452,15 +4477,6 @@ impl HudApp {
     fn toggle_mic(&mut self) {
         let enabled = !self.app.config_state().mic_enabled;
         self.command(HudCommand::SetMic { enabled });
-    }
-
-    /// True fullscreen ↔ maximised windowed mode (F11 and the strip's `F11 FULLSCREEN`).
-    fn toggle_fullscreen(&mut self) {
-        let mut iface = self.app.config().read(|c| c.interface.clone());
-        iface.fullscreen = !iface.fullscreen;
-        iface.orb_mode = false;
-        info!("[HUD] F11: {}", if iface.fullscreen { "fullscreen" } else { "windowed (maximised)" });
-        self.set_interface(iface);
     }
 
     fn handle_keys(&mut self, ctx: &egui::Context) {
@@ -4515,10 +4531,6 @@ impl HudApp {
         if pressed(Key::F) {
             self.find_open = true;
             self.find_focus = true;
-        }
-        // F11: true fullscreen ↔ maximised windowed mode.
-        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::F11)) {
-            self.toggle_fullscreen();
         }
         if pressed(Key::B) {
             self.command(HudCommand::Chat { text: "Brief me".into() });
@@ -4616,8 +4628,6 @@ impl HudApp {
             self.window_seen.1 = None;
             let shape = if self.as_background() {
                 "the desktop's background"
-            } else if iface.orb_mode {
-                "the floating orb"
             } else if iface.span_all_monitors {
                 "one board across every monitor"
             } else if iface.fullscreen {
@@ -4634,11 +4644,11 @@ impl HudApp {
     fn enforce_fullscreen(&mut self, ctx: &egui::Context, iface: &InterfaceSettings) {
         self.frames += 1;
         // (As the desktop's background its place is the desktop's affair: `wallpaper::tick`.)
-        if self.as_background() || (iface.desktop_background && !iface.orb_mode && background_rect(iface).is_some()) {
+        if self.as_background() || background_rect(iface).is_some() {
             return;
         }
         // "Use all monitors": the window covers the box around every monitor.
-        if iface.span_all_monitors && !iface.orb_mode && self.hwnd != 0 && (self.frames == 2 || self.fullscreen_check.elapsed() > Duration::from_millis(1500)) {
+        if iface.span_all_monitors && self.hwnd != 0 && (self.frames == 2 || self.fullscreen_check.elapsed() > Duration::from_millis(1500)) {
             self.fullscreen_check = Instant::now();
             let hwnd = self.hwnd;
             if let Some(bounds) = crate::monitors::virtual_bounds(&crate::monitors::list()) {
@@ -4661,7 +4671,7 @@ impl HudApp {
                 }
             }
         }
-        if !iface.fullscreen || iface.orb_mode {
+        if !iface.fullscreen {
             return;
         }
         // (A test session's board stays the borderless window that covers its monitor.)
@@ -4719,6 +4729,7 @@ impl HudApp {
         egui::CentralPanel::default().frame(Frame::none()).show(ctx, |ui| leave = paint_mini_strip(ui, &strip));
         if leave {
             self.app.config().update(|c| c.interface.mini_strip = false);
+            show_the_board(&self.rt);
         }
         // (The time, the timers and the little emblem move.)
         ctx.request_repaint_after(Duration::from_millis(if m.state == "idle" { 250 } else { 50 }));
@@ -4738,7 +4749,9 @@ impl HudApp {
                     // It stays where Sir leaves it (a resize keeps its centre).
                     let mut next = iface.clone();
                     next.orb_anchor = "free".into();
-                    self.orb_geometry = Some((next.orb_size_px, next.orb_anchor.clone(), next.orb_monitor, next.orb_on_top));
+                    if let Some((placed, _)) = self.orb_geometry.as_mut() {
+                        *placed = (next.orb_size_px, next.orb_anchor.clone(), next.orb_monitor);
+                    }
                     self.set_interface(next);
                 }
             }
@@ -4757,12 +4770,13 @@ impl HudApp {
                 let mut next = iface.clone();
                 next.orb_mode = false;
                 self.set_interface(next);
+                show_the_board(&self.rt);
             } else if response.clicked() && crate::vram_guard::is_dormant() {
                 // The floating emblem is a wake button during the zero-VRAM standby.
                 crate::vram_guard::wake("orb");
             }
             ui.set_opacity(iface.orb_opacity);
-            self.emblem.paint_in(&ui.painter().with_clip_rect(rect), rect);
+            self.emblem.paint_in_crisp(&ui.painter().with_clip_rect(rect), rect);
             // A silent quick command's badge, briefly, under the emblem.
             if let Some((label, ok, until)) = &m.quick {
                 if *until > Instant::now() {
@@ -4770,7 +4784,7 @@ impl HudApp {
                     holo_kit::chip(ui.painter(), pos2(at.x - rail_width(ui.painter(), label) / 2.0 - 6.0, at.y - 7.0), label, if *ok { holo::theme().accent() } else { holo::theme().alert() }, true, 1.0);
                 }
             }
-            response.on_hover_text("Drag to move · wheel to resize · double-click for the full HUD");
+            response.on_hover_text("Drag to move · wheel to resize · double-click for the board");
         });
     }
 
@@ -5425,22 +5439,11 @@ impl HudApp {
                 }
             }
             holo_ui::head(ui, "WINDOW");
-            for (label, on) in [("Fullscreen", &mut next.fullscreen), ("Always on top", &mut next.always_on_top)] {
-                if holo_ui::item_toggle(ui, label, *on).clicked() {
-                    *on = !*on;
-                }
-            }
             if item(ui, "The core alone") {
                 next.orb_mode = true;
             }
             if next != *iface {
                 self.set_interface(next);
-            }
-            if item(ui, "Minimise") {
-                ctx.send_viewport_cmd(ViewportCommand::Minimized(true));
-            }
-            if item(ui, "Hide to the tray") {
-                hide();
             }
             holo_ui::head(ui, "SETTINGS");
             if item(ui, "All settings — search") {
@@ -5534,7 +5537,7 @@ impl HudApp {
             ui.interact(rect, ui.id().with("hud_call"), Sense::hover()).on_hover_text("JAI hears the others in your Discord call (not your microphone). Say \"stop listening to the call\" to end it.");
             x = rect.right() + 14.0;
         }
-        // `F1 MUTE · F11 FULLSCREEN · ESC INTERRUPT` on the right (each also a button), left of
+        // `F1 MUTE · ESC INTERRUPT` on the right (each also a button), left of
         // the docked core's corner; only where it fits.
         let hints = key_hints(&painter, key_hints_right(screen, self.console_reserve()), mid);
         let hints_left = hints.first().map_or(f32::INFINITY, |(_, r)| r.left());
@@ -5566,11 +5569,10 @@ impl HudApp {
         for (n, (label, rect)) in hints.iter().enumerate() {
             let response = ui.interact(rect.expand(3.0), ui.id().with(("hud_key_hint", n)), Sense::click());
             paint_key_hint(&painter, *rect, label, response.hovered());
-            let response = response.on_hover_text(["Microphone on / off (F1, Ctrl+M)", "Fullscreen ↔ maximised window (F11)", "Stop JAI speaking (Esc)"][n]);
+            let response = response.on_hover_text(["Microphone on / off (F1, Ctrl+M)", "Stop JAI speaking (Esc)"][n]);
             if response.clicked() {
                 match n {
                     0 => self.toggle_mic(),
-                    1 => self.toggle_fullscreen(),
                     _ => self.command(HudCommand::Interrupt),
                 }
             }
@@ -6120,31 +6122,53 @@ impl HudApp {
     }
 
     /// `[ SCREENS ]`: the monitors, sending the HUD to one of them, and one board across all.
+    /// As the desktop's background: the background over every monitor or the first, and his
+    /// emblem on the one he is sent to.
     fn screens_block(&mut self, ctx: &egui::Context) {
         let screen = home_screen(ctx);
         let monitors = crate::monitors::list();
         let iface = self.app.config().read(|c| c.interface.clone());
-        // The monitor the HUD is on (none of them alone while it spans them).
+        let background = self.as_background();
+        let spanning = if background { iface.background_all_monitors } else { iface.span_all_monitors };
+        // The monitor the HUD is on (none of them alone while it spans them); as the background,
+        // the one his emblem stands on.
         let ppp = ctx.pixels_per_point();
-        let here = ctx.input(|i| i.viewport().inner_rect).filter(|_| !iface.span_all_monitors).and_then(|r| crate::monitors::monitor_at(&monitors, (r.center().x * ppp) as i32, (r.center().y * ppp) as i32));
+        let here = if background {
+            emblem_monitor(self.app.config(), &monitors)
+        } else {
+            ctx.input(|i| i.viewport().inner_rect).filter(|_| !spanning).and_then(|r| crate::monitors::monitor_at(&monitors, (r.center().x * ppp) as i32, (r.center().y * ppp) as i32))
+        };
         let width = SCREENS_WIDTH.min(screen.width() - 32.0);
         let mut picked = ScreensPick::default();
         // Always at the home screen's top right, also after the HUD changed monitors.
         egui::Area::new(egui::Id::new("hud_screens")).fixed_pos(pos2(screen.right() - 24.0 - width, screen.top() + 12.0 + HEADER_H + 14.0)).order(egui::Order::Foreground).show(ctx, |ui| {
             ui.set_width(width);
-            picked = screens_menu(ui, &monitors, iface.span_all_monitors, here);
+            picked = screens_menu(ui, &monitors, spanning, here);
         });
         if let Some(n) = picked.send {
+            if background {
+                // His emblem goes there; the background first spreads over every monitor when
+                // that one is not part of it yet.
+                if !spanning && home_monitor(&monitors).is_some_and(|first| first.index != n) {
+                    self.app.config().update(|c| c.interface.background_all_monitors = true);
+                }
+                if let Err(e) = send_emblem_to_monitor(self.app.config(), &monitors, n) {
+                    lock(&self.model).toast(e, true);
+                }
             // The fullscreen board (also one that spans the monitors) goes there at once; a
             // plain window is moved as any window is. No language model either way.
-            if !send_board_to_monitor(self.app.config(), n) {
+            } else if !send_board_to_monitor(self.app.config(), n) {
                 self.run_calls(vec![("move_window_to_monitor", serde_json::json!({ "app_or_window_name": "jai", "target_monitor": n }))]);
             }
         }
-        if let Some(on) = picked.span.filter(|on| *on != iface.span_all_monitors) {
+        if let Some(on) = picked.span.filter(|on| *on != spanning) {
             let mut next = iface.clone();
-            next.span_all_monitors = on;
-            next.fullscreen = !on;
+            if background {
+                next.background_all_monitors = on;
+            } else {
+                next.span_all_monitors = on;
+                next.fullscreen = !on;
+            }
             self.set_interface(next);
         }
         if picked.close {
@@ -6156,14 +6180,12 @@ impl HudApp {
     fn look_card(&mut self, ui: &mut Ui, iface: &InterfaceSettings) {
         card(ui, "LOOK", |_| {}, |ui| {
             let mut s = iface.clone();
-            crate::holo_ui::toggle(ui, &mut s.fullscreen, "Fullscreen HUD board");
             crate::holo_ui::toggle(ui, &mut s.animations, "Animations");
-            crate::holo_ui::toggle(ui, &mut s.always_on_top, "Always on top");
             ui.add_space(4.0);
             if crate::holo_ui::key(ui, "All settings…").clicked() {
                 settings_panel::open(true);
             }
-            muted(ui, "Or just ask: “JAI, go fullscreen”, “orb mode”, “clear the board”.");
+            muted(ui, "Or just ask: “JAI, orb mode”, “mini mode”, “clear the board”.");
             if &s != iface {
                 s.sanitize();
                 self.set_interface(s);
@@ -6421,9 +6443,8 @@ impl HudApp {
         // (He as the whole desktop's background is the board's own window: `sync_background`.
         // Then the upright monitor is part of him, and the dashboard is drawn on it there.)
         let state = lock(&self.model).state.clone();
-        let own_backdrop = iface.portrait_dashboard && !(iface.desktop_background && !iface.orb_mode) && !self.as_background();
-        // (As the orb or the slim strip he holds no monitor: any of them can hold it.)
-        if let Some(crate::desktop_backdrop::Refused(why)) = crate::desktop_backdrop::show(ctx, own_backdrop && !windows_still(ctx), if iface.orb_mode { 0 } else { self.hwnd }, iface.span_all_monitors && !iface.orb_mode, !iface.orb_mode, true, &state) {
+        let own_backdrop = iface.portrait_dashboard && background_rect(&iface).is_none() && !self.as_background();
+        if let Some(crate::desktop_backdrop::Refused(why)) = crate::desktop_backdrop::show(ctx, own_backdrop && !windows_still(ctx), self.hwnd, iface.span_all_monitors, true, true, &state) {
             lock(&self.model).toast(why, true);
             // (Off, or the refusal would come again with every frame.)
             self.app.config().update(|c| c.interface.portrait_dashboard = false);
@@ -9022,7 +9043,7 @@ fn screens_menu(ui: &mut Ui, monitors: &[crate::monitors::Monitor], spanning: bo
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if here == Some(m.index) {
                         chip(ui, "HUD IS HERE", holo::theme().accent());
-                    } else if key(ui, "MOVE HERE", "The fullscreen board on this monitor", &|| format!("screens:move:{}", m.index)) {
+                    } else if key(ui, "MOVE HERE", "My emblem on this monitor", &|| format!("screens:move:{}", m.index)) {
                         picked.send = Some(m.index);
                     }
                     ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
@@ -9038,10 +9059,10 @@ fn screens_menu(ui: &mut Ui, monitors: &[crate::monitors::Monitor], spanning: bo
         ui.horizontal(|ui| {
             if monitors.len() > 1 {
                 if spanning {
-                    if key(ui, "BACK TO ONE MONITOR", "The fullscreen board on your first monitor again", &|| "screens:span:off".into()) {
+                    if key(ui, "BACK TO ONE MONITOR", "My background on your first monitor only", &|| "screens:span:off".into()) {
                         picked.span = Some(false);
                     }
-                } else if key(ui, "SPAN ALL MONITORS", "One board across every monitor; the header, the console and the emblem stay on your first", &|| "screens:span:on".into()) {
+                } else if key(ui, "SPAN ALL MONITORS", "My background across every monitor; the header and the console stay on your first", &|| "screens:span:on".into()) {
                     picked.span = Some(true);
                 }
             }
@@ -9342,7 +9363,6 @@ impl HudApp {
         publish_console_rect(None);
         self.sync_background(ctx, &iface);
         self.enforce_fullscreen(ctx, &iface);
-        self.sync_orb_window(ctx, &iface);
         self.note_window(ctx, &iface);
         self.handle_close(ctx);
         self.handle_keys(ctx);
@@ -9365,76 +9385,74 @@ impl HudApp {
         let screen = ctx.screen_rect();
         crate::interface::publish_window_size((screen.width() * iface.scale, screen.height() * iface.scale));
         let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
-        if iface.orb_mode {
-            self.pure_orb(ctx, &m, &iface);
-        } else {
-            paint_canvas(ctx);
-            // (Offscreen renders stay clean: the verifier reads their colours.)
-            if iface.display_finish && !windows_still(ctx) {
-                paint_finish(ctx);
-            }
-            // The Settings drawer slides in from the right (VIEW → SETTINGS).
-            let p = self.palette;
-            let home = home_screen(ctx);
-            let drawer = Frame::none().fill(p.card_solid.gamma_multiply(0.96)).stroke(stroke(1.0, p.line)).inner_margin(Margin::same(14.0));
-            if home != screen {
-                // (A side panel hangs on the window's own edge: on a board across the monitors
-                // that is the far end of the last one, its top in a corner no screen shows.
-                // There the drawer stands at the right of the home screen.)
-                if self.drawer_open {
-                    let width = (home.width() * 0.3).clamp(340.0, 440.0);
-                    egui::Area::new(egui::Id::new("hud_settings_drawer_span")).order(egui::Order::Middle).fixed_pos(pos2(home.right() - width, home.top())).show(ctx, |ui| {
-                        drawer.show(ui, |ui| {
-                            ui.set_width(width - 28.0);
-                            ui.set_height(home.height() - 28.0);
-                            self.settings_drawer(ui, &m, &iface);
-                        });
-                    });
-                }
-            } else {
-                let width = screen.width();
-                egui::SidePanel::right("hud_settings_drawer")
-                    .resizable(true)
-                    .default_width((width * 0.3).clamp(340.0, 440.0))
-                    .width_range(300.0..=(width * 0.5).max(320.0))
-                    .show_separator_line(false)
-                    .frame(drawer)
-                    .show_animated(ctx, self.drawer_open, |ui| self.settings_drawer(ui, &m, &iface));
-            }
-            mark("board and emblem");
-            self.canvas(ctx, &m, &iface, dt);
-            mark("overlays");
-            // Night mode: the HUD dims (by the clock or because Sir said so).
-            crate::hud_feel::set_night_by_clock(iface.night_mode);
-            // (A scripted session shows the dimming from its 34th to its 46th second on request.)
-            let night = (crate::hud_feel::night_active() || (demo("night") && (34.0..46.0).contains(&hud_age()))) && !windows_still(ctx);
-            self.night = crate::holo_motion::approach(self.night, if night { 1.0 } else { 0.0 }, dt, 0.9);
-            if self.night > 0.0 {
-                let dim = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("hud_night")));
-                dim.rect_filled(ctx.screen_rect(), Rounding::ZERO, Color32::from_black_alpha((NIGHT_DIM * 255.0 * self.night) as u8));
-                if self.night < 1.0 {
-                    ctx.request_repaint();
-                }
-            }
-            if iface.edge_light && !windows_still(ctx) {
-                crate::hud_notify::paint_edge(ctx, home_screen(ctx), 1.0 - 0.5 * self.night);
-            }
-            self.presence(ctx, &m, &iface, dt);
-            // (The power-up sequence stands alone on its dark: what the start has to say waits.)
-            if self.boot.is_none() {
-                self.toasts(ctx, &m);
-                self.undo_chip(ctx);
-            }
-            self.popups(ctx, dt);
-            self.room_alert_overlay(ctx, &m);
-            // (Neither the fullscreen board nor the one across the monitors is resized by hand,
-            // nor the desktop's background.)
-            if iface.frameless && !iface.fullscreen && !iface.span_all_monitors && !maximized && !self.as_background() {
-                Self::resize_grips(ctx);
-            }
-            // As the desktop's background: the orb that leaves it when Sir speaks to him unseen.
-            self.corner_orb_frame(ctx, &m, &iface);
+        paint_canvas(ctx);
+        // (Offscreen renders stay clean: the verifier reads their colours.)
+        if iface.display_finish && !windows_still(ctx) {
+            paint_finish(ctx);
         }
+        // The Settings drawer slides in from the right (VIEW → SETTINGS).
+        let p = self.palette;
+        let home = home_screen(ctx);
+        let drawer = Frame::none().fill(p.card_solid.gamma_multiply(0.96)).stroke(stroke(1.0, p.line)).inner_margin(Margin::same(14.0));
+        if home != screen {
+            // (A side panel hangs on the window's own edge: on a board across the monitors
+            // that is the far end of the last one, its top in a corner no screen shows.
+            // There the drawer stands at the right of the home screen.)
+            if self.drawer_open {
+                let width = (home.width() * 0.3).clamp(340.0, 440.0);
+                egui::Area::new(egui::Id::new("hud_settings_drawer_span")).order(egui::Order::Middle).fixed_pos(pos2(home.right() - width, home.top())).show(ctx, |ui| {
+                    drawer.show(ui, |ui| {
+                        ui.set_width(width - 28.0);
+                        ui.set_height(home.height() - 28.0);
+                        self.settings_drawer(ui, &m, &iface);
+                    });
+                });
+            }
+        } else {
+            let width = screen.width();
+            egui::SidePanel::right("hud_settings_drawer")
+                .resizable(true)
+                .default_width((width * 0.3).clamp(340.0, 440.0))
+                .width_range(300.0..=(width * 0.5).max(320.0))
+                .show_separator_line(false)
+                .frame(drawer)
+                .show_animated(ctx, self.drawer_open, |ui| self.settings_drawer(ui, &m, &iface));
+        }
+        mark("board and emblem");
+        self.canvas(ctx, &m, &iface, dt);
+        mark("overlays");
+        // Night mode: the HUD dims (by the clock or because Sir said so).
+        crate::hud_feel::set_night_by_clock(iface.night_mode);
+        // (A scripted session shows the dimming from its 34th to its 46th second on request.)
+        let night = (crate::hud_feel::night_active() || (demo("night") && (34.0..46.0).contains(&hud_age()))) && !windows_still(ctx);
+        self.night = crate::holo_motion::approach(self.night, if night { 1.0 } else { 0.0 }, dt, 0.9);
+        if self.night > 0.0 {
+            let dim = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("hud_night")));
+            dim.rect_filled(ctx.screen_rect(), Rounding::ZERO, Color32::from_black_alpha((NIGHT_DIM * 255.0 * self.night) as u8));
+            if self.night < 1.0 {
+                ctx.request_repaint();
+            }
+        }
+        if iface.edge_light && !windows_still(ctx) {
+            crate::hud_notify::paint_edge(ctx, home_screen(ctx), 1.0 - 0.5 * self.night);
+        }
+        self.presence(ctx, &m, &iface, dt);
+        // (The power-up sequence stands alone on its dark: what the start has to say waits.)
+        if self.boot.is_none() {
+            self.toasts(ctx, &m);
+            self.undo_chip(ctx);
+        }
+        self.popups(ctx, dt);
+        self.room_alert_overlay(ctx, &m);
+        // (Neither the fullscreen board nor the one across the monitors is resized by hand,
+        // nor the desktop's background.)
+        if iface.frameless && !iface.fullscreen && !iface.span_all_monitors && !maximized && !self.as_background() {
+            Self::resize_grips(ctx);
+        }
+        // As the desktop's background: the orb that leaves it when Sir speaks to him unseen,
+        // and in orb mode (or mini mode) the floating orb (or the strip) in front of everything.
+        self.corner_orb_frame(ctx, &m, &iface);
+        self.floating_orb(ctx, &m, &iface);
         if m.offline {
             self.offline_overlay(ctx);
         }
@@ -9707,7 +9725,11 @@ impl HudApp {
     fn corner_orb_frame(&mut self, ctx: &egui::Context, m: &HudModel, iface: &InterfaceSettings) {
         use crate::wallpaper::{OrbPhase, Standing};
         let (centre, radius, rest) = self.emblem_spot;
-        if self.backdrop != Standing::On || self.boot.is_some() || radius <= 0.0 {
+        // (In orb mode the floating orb stands out in front already: this one stays home.)
+        if iface.orb_mode {
+            (self.corner_orb, self.orb_out_on, self.orb_landed) = (Default::default(), None, 0);
+        }
+        if self.backdrop != Standing::On || self.boot.is_some() || radius <= 0.0 || iface.orb_mode {
             crate::wallpaper::set_orb_out(false);
             return;
         }
@@ -9868,22 +9890,7 @@ impl HudApp {
                     self.corner_orb.follow(now, to);
                 }
             }
-            let drawn = ctx.cumulative_pass_nr_for(viewport) > 0;
-            #[cfg(windows)]
-            crate::win32::run_detached(move || {
-                if let Some(hwnd) = crate::win32::own_window(crate::wallpaper::ORB_TITLE) {
-                    crate::win32_desktop::tend_orb(hwnd, gaming, drawn);
-                }
-            });
-            // (KDE draws its see-through parts itself, from the window's own alpha.)
-            #[cfg(not(windows))]
-            if let Some(hwnd) = wm::own_window(crate::wallpaper::ORB_TITLE) {
-                wm::skip_taskbar(hwnd, true);
-                let _ = wm::click_through(hwnd, gaming);
-                if drawn && !wm::is_visible(hwnd) {
-                    ctx.send_viewport_cmd_to(viewport, ViewportCommand::Visible(true));
-                }
-            }
+            tend_orb_window(ctx, viewport, gaming);
         }
         let content = CornerOrbContent {
             orb_px,
@@ -9907,9 +9914,10 @@ impl HudApp {
         let emblem = &self.emblem;
         ctx.show_viewport_immediate(viewport, builder, |ctx, _class| {
             egui::CentralPanel::default().frame(Frame::none()).show(ctx, |ui| did = corner_orb_ui(ui, emblem, &content));
+            crate::live_shots::tick(ctx);
         });
         match did {
-            OrbClick::Board => self.app.config().update(|c| c.interface.desktop_background = false),
+            OrbClick::Board => show_the_board(&self.rt),
             OrbClick::Console => {
                 self.console_open = true;
                 self.console_focus = true;
@@ -10242,7 +10250,7 @@ mod tests {
         assert_eq!((steps, turned), (2, 0.5));
     }
 
-    /// The core close up.
+    /// The core close up, as the floating orb shows it (lines alone: its black is see-through).
     #[test]
     fn gallery_emblem_close_up() {
         let _alone = board_alone();
@@ -10250,7 +10258,7 @@ mod tests {
         gallery("gallery_emblem", vec2(900.0, 900.0), 2, |ctx| {
             egui::CentralPanel::default().frame(Frame::none()).show(ctx, |ui| {
                 let screen = ctx.screen_rect();
-                emblem.paint_in(&ui.painter_at(screen), screen);
+                emblem.paint_in_crisp(&ui.painter_at(screen), screen);
             });
         });
     }
@@ -10528,23 +10536,54 @@ mod tests {
         assert_eq!(frame_summary(&[3.0, 1.0, 2.0]).map(|s| s.0), Some(2.0));
     }
 
-    /// `--monitor 2`: the fullscreen board covers that monitor from its first frame and a window
-    /// starts in its middle; without it, the board is the primary's at (0, 0). A board across
-    /// every monitor is turned off for such a session in `main` (its settings stay in memory).
+    /// He opens as the desktop's background wherever there is a rect for it, with every setting
+    /// as a new install has it and in pure orb mode too (until 2026-11-20 a new install, such as a
+    /// friend's PC, opened as a fullscreen window: the background was a switch, off at first).
+    /// Without one (a scripted session without a monitor): `--monitor 2`, the fullscreen board
+    /// covers that monitor from its first frame and a window starts in its middle; without it,
+    /// the board is the primary's at (0, 0). A board across every monitor is turned off for such
+    /// a session in `main` (its settings stay in memory).
     #[test]
     fn a_test_session_opens_on_the_monitor_it_names() {
         let second = Rect::from_min_size(pos2(2560.0, 0.0), vec2(2560.0, 1440.0));
         let windowed = vec2(1500.0, 940.0);
+        for iface in [InterfaceSettings::default(), InterfaceSettings { orb_mode: true, ..InterfaceSettings::default() }, InterfaceSettings { mini_strip: true, ..InterfaceSettings::default() }] {
+            let g = startup_geometry(&iface, Some([0, 0, 2560, 1440]), windowed, Some(second));
+            assert!(!g.fullscreen && !g.transparent && g.position == Some([0.0, 0.0]), "{g:?}");
+        }
         let board = InterfaceSettings { fullscreen: true, orb_mode: false, span_all_monitors: false, ..InterfaceSettings::default() };
-        let g = startup_geometry(&board, windowed, Some(second));
+        let g = startup_geometry(&board, None, windowed, Some(second));
         assert!(g.fullscreen && !g.transparent);
         assert_eq!((g.size, g.position), (vec2(2560.0, 1440.0), Some([2560.0, 0.0])));
-        assert_eq!(startup_geometry(&board, windowed, None).position, Some([0.0, 0.0]));
+        assert_eq!(startup_geometry(&board, None, windowed, None).position, Some([0.0, 0.0]));
         let window = InterfaceSettings { fullscreen: false, ..board.clone() };
-        let g = startup_geometry(&window, windowed, Some(second));
+        let g = startup_geometry(&window, None, windowed, Some(second));
         assert!(!g.fullscreen && g.transparent && g.size == windowed);
         assert_eq!(g.position, Some([2560.0 + 1280.0 - 750.0, 720.0 - 470.0]));
-        assert_eq!(startup_geometry(&window, windowed, None).position, None, "without --monitor, where Windows puts it");
+        assert_eq!(startup_geometry(&window, None, windowed, None).position, None, "without --monitor, where Windows puts it");
+    }
+
+    /// The floating orb is a window of its own over the background he always is (Sir,
+    /// 2026-11-20: "the floating orb and so should still exist and be functinal"): at its
+    /// corner of the monitor's work area, the strip across its top, where Sir left it after a
+    /// drag (the size changing round that centre), and in the bottom-right corner when it
+    /// comes out "free" with no place known yet.
+    #[test]
+    fn the_floating_orb_stands_at_its_corner_of_the_work_area() {
+        // A second monitor right of the first, its taskbar 40 px tall at the bottom.
+        let work = [2560, 0, 5120, 1400];
+        let at = |anchor: &str, centre| orb_place(anchor, work, 200, 24, 40, centre);
+        assert_eq!(at("top-left", None), [2584, 24, 200, 200]);
+        assert_eq!(at("top-right", None), [4896, 24, 200, 200]);
+        assert_eq!(at("bottom-left", None), [2584, 1176, 200, 200]);
+        assert_eq!(at("bottom-right", None), [4896, 1176, 200, 200]);
+        assert_eq!(at("center", None), [3740, 600, 200, 200]);
+        assert_eq!(at("somewhere odd", None), at("bottom-right", None), "an anchor it does not know: its home corner");
+        assert_eq!(at(MINI_STRIP, None), [2560, 0, 2560, 40], "the strip spans the top of the work area");
+        // Dragged: it stays round where Sir left it, whatever its corner and monitor say.
+        assert_eq!(at("free", Some([3000, 500])), [2900, 400, 200, 200]);
+        assert_eq!(orb_place("free", work, 300, 24, 40, Some([3000, 500])), [2850, 350, 300, 300], "bigger round the same centre");
+        assert_eq!(at("free", None), at("bottom-right", None));
     }
 
     /// A window's entrance: a hairline draws out of its middle, the frame unfolds from it with
@@ -11248,8 +11287,9 @@ mod tests {
         let _ = ctx.run(egui::RawInput::default(), |ctx| {
             let painter = ctx.layer_painter(egui::LayerId::background());
             let hints = key_hints(&painter, 1800.0, 1060.0);
-            assert_eq!(hints.iter().map(|h| h.0).collect::<Vec<_>>(), ["F1 MUTE", "F11 FULLSCREEN", "ESC INTERRUPT"]);
-            assert!((hints[2].1.right() - 1800.0).abs() < 0.5);
+            // (No F11: he is the desktop's background, never a fullscreen window.)
+            assert_eq!(hints.iter().map(|h| h.0).collect::<Vec<_>>(), ["F1 MUTE", "ESC INTERRUPT"]);
+            assert!((hints[1].1.right() - 1800.0).abs() < 0.5);
             assert!(hints.windows(2).all(|w| w[0].1.right() + 10.0 < w[1].1.left()), "apart");
             let free = pill_rect(&painter, screen, &[Rect::from_min_size(pos2(1500.0, 10.0), vec2(400.0, HEADER_H))]).expect("room");
             assert!((free.center().x - 960.0).abs() < 0.5 && free.top() < 12.0, "top centre: {free:?}");

@@ -565,8 +565,9 @@ pub fn spoken(args: &Value) -> Option<String> {
     if let (Some(all), None | Some(true)) = (on("background_all_monitors"), on("desktop_background")) {
         return say("On every monitor, Sir.", "On your first monitor only, Sir.", all);
     }
+    // (He always is the desktop's background: Sir, 2026-11-20.)
     if let Some(v) = on("desktop_background") {
-        return say("I'm your desktop background now, Sir. My windows are yours to move, and I come out when you call.", "Back on the board, Sir.", v);
+        return say("I'm your desktop's background, Sir, always. My windows are yours to move, and I come out when you call.", "I stay your desktop, Sir. Say \"orb mode\" and my orb floats over your work.", v);
     }
     if on("windows_on_call") == Some(true) {
         return Some("My windows, Sir, in front of the rest.".to_string());

@@ -1287,14 +1287,6 @@ pub fn restore_placement(hwnd: isize, bounds: [i32; 4]) {
     set_normal_placement(hwnd, bounds, SW_HIDE);
 }
 
-/// Puts a shown window back at the bounds `window_placement` read earlier (leaving the floating
-/// orb), unless they are off every monitor now. It stays shown and is not activated (the
-/// startup form, `restore_placement`, hid the HUD when the orb was left).
-pub fn put_back_placement(hwnd: isize, bounds: [i32; 4]) {
-    use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNOACTIVATE;
-    set_normal_placement(hwnd, bounds, SW_SHOWNOACTIVATE);
-}
-
 fn set_normal_placement(hwnd: isize, [x, y, w, h]: [i32; 4], show: SHOW_WINDOW_CMD) {
     if w < 200 || h < 150 {
         return;

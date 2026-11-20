@@ -29,7 +29,7 @@ pub enum Standing {
     Arriving,
     /// The desktop has it behind its icons.
     On,
-    /// The desktop would not take it (why). It stays so until the background is switched off.
+    /// The desktop would not take it (why). It is asked again every `ASK_AGAIN`.
     #[cfg_attr(not(windows), allow(dead_code))]
     Refused(String),
 }
@@ -68,6 +68,9 @@ static HIDDEN: AtomicBool = AtomicBool::new(false);
 const SETTLE: Duration = Duration::from_millis(350);
 /// How often its place in the desktop is looked at.
 const LOOK_EVERY: Duration = Duration::from_secs(2);
+/// How long after a refusal the desktop is asked again (Explorer may have been starting).
+#[cfg(windows)]
+const ASK_AGAIN: Duration = Duration::from_secs(30);
 /// The emblem counts as hidden when one window covers more than this share of it, and as
 /// seen again once less than `SEEN_BELOW` of it is covered. (Between the two it stays what it
 /// was: a window half over it does not send the orb to and fro.)
@@ -192,7 +195,20 @@ pub fn tick(hwnd: isize, want: Option<[i32; 4]>, ppp: f32, gaming: bool) -> Stan
                 });
             }
         }
-        Standing::Refused(_) => {}
+        // He is always the background: the desktop is asked again until it takes him.
+        Standing::Refused(_) => match lock(&ASKED).take() {
+            Some(Ok(())) => {
+                (s.standing, s.since, s.looked) = (Standing::On, now, now.checked_sub(LOOK_EVERY).unwrap_or(now));
+                ON.store(true, Ordering::Release);
+                tracing::info!("[DESKTOP] The desktop took him behind its icons after all ({})", crate::win32::backdrop_standing(hwnd));
+            }
+            Some(Err(why)) => tracing::warn!("[DESKTOP] Asked again, the desktop would still not take him: {why}"),
+            None if s.since.elapsed() > ASK_AGAIN => {
+                (s.since, s.rect) = (now, rect);
+                ask(hwnd, rect);
+            }
+            None => {}
+        },
     }
     s.standing.clone()
 }

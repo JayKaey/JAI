@@ -125,6 +125,12 @@ pub const RELEASES: &[Release] = &[
             added("Friends may do everything on their PC", "EVERYTHING on their PC: all you can do there, settings too; your PC and others stay yours."),
             better("Your PC has switches of its own", "What a friend may on your PC, by phone or voice, is chosen apart; at first only talking."),
             better("The accounts list, laid out", "Each account: their PC, your PC, topics, PCs, what he did; features in the Lab's groups."),
+            new("Always your desktop", "He is your desktop's background on every PC from the first start, never a window of his own.", "desktop_background"),
+            better("The floating orb over your desktop", "Orb mode and mini mode float in front of your work while he stays the desktop behind it."),
+            fixed("The desktop is asked again", "When the desktop would not take him, he became a window for good; he asks again until it does."),
+            fixed("SCREENS as the desktop", "SCREENS moved his background like a window; now it spans your monitors or moves his emblem."),
+            fixed("Hiding no longer loses him", "\"Hide\" or the close key on his background left the desktop without him; he stays now."),
+            fixed("No freeze as a card shrinks away", "A card squeezed to nothing as a window closed stopped his HUD for seconds; no longer."),
             new("\"Who am I speaking with?\"", "A voice he has never heard is asked its name and learnt; it may ask questions, nothing more.", "unknown_voice"),
             added("Each phone knows its own place", "\"Where am I\" on a friend's phone answers with where that phone is, not where you are."),
             added("The phone page wears a theme", "Your PC's theme, or one picked under LOOK on the phone itself; your saved themes too."),
@@ -800,10 +806,10 @@ pub const EXPLANATIONS: &[Explanation] = &[
     },
     Explanation {
         id: "desktop_background",
-        title: "Live desktop background",
-        what: "He is your desktop's background: the board itself stands behind your icons, on every monitor or on your first, and looks as it does across all monitors. Every view of his, the console too, opens as a window of its own that you move like any other. Speak to him while a window covers his emblem, and the orb leaves the background for the lower left corner of the monitor you are using: smaller, in front of everything, with what is being said beside it. Five seconds after the last of it, it glides back. His keys on the background take your clicks; everything else on the desktop is yours as before.",
-        say: &["background mode", "be my desktop background", "background on all monitors", "background only on the main monitor", "show your windows", "tidy the windows", "board mode"],
-        know: "Ctrl+Alt+J brings his windows to the front, Ctrl+Alt+K the console to type to him. Drag the corner orb where you want it (he remembers the spot for each monitor); a click on it opens the console, a double click brings the board back. Beside a game he leaves the mouse alone. It sits in front of a wallpaper program's picture and behind everything else. Should Explorer start again, he opens his background anew by himself.",
+        title: "Always your desktop",
+        what: "He is your desktop's background, always and on every PC, from the first start: the board itself stands behind your icons, on every monitor or on your first, and looks as it does across all monitors. Every view of his, the console too, opens as a window of its own that you move like any other. Speak to him while a window covers his emblem, and the orb leaves the background for the lower left corner of the monitor you are using: smaller, in front of everything, with what is being said beside it. Five seconds after the last of it, it glides back. Orb mode keeps his orb floating in front of your work the whole time, mini mode a slim strip along the top. His keys on the background take your clicks; everything else on the desktop is yours as before.",
+        say: &["background on all monitors", "background only on the main monitor", "orb mode", "mini mode", "show your windows", "tidy the windows"],
+        know: "Ctrl+Alt+J brings his windows to the front, Ctrl+Alt+K the console to type to him. Drag an orb where you want it (the corner orb remembers the spot for each monitor); a click on the corner orb opens the console, a double click on either orb, or BOARD on the strip, shows the desktop. Beside a game he leaves the mouse alone. It sits in front of a wallpaper program's picture and behind everything else. Should Explorer start again, or not take him at first, he opens his background anew by himself.",
     },
 ];
 

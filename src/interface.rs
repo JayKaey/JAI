@@ -124,14 +124,8 @@ pub struct InterfaceSettings {
     pub edge_light: bool,
     /// The emblem moves with the music that plays on the PC.
     pub music_visuals: bool,
-    /// Mini mode: a slim always-on-top strip at the top of a monitor instead of the board.
+    /// Mini mode: a slim always-on-top strip at the top of a monitor, over the background.
     pub mini_strip: bool,
-    /// He is the desktop's background: the board itself stands behind the desktop's icons (as it
-    /// looks across every monitor), every view of his is a window of its own, and the orb comes
-    /// out to a corner when Sir speaks to him and the background is covered. (Until 2026-11-13
-    /// this was an emblem and a clock on a monitor the board was not on. Sir: "I want Jay to
-    /// basically only be my PC background".)
-    pub desktop_background: bool,
     /// As the background he covers every monitor (off: Sir's first one only). ("I want the live
     /// background to be on all monitors if I want it to".)
     pub background_all_monitors: bool,
@@ -227,7 +221,6 @@ impl Default for InterfaceSettings {
             edge_light: true,
             music_visuals: true,
             mini_strip: false,
-            desktop_background: false,
             background_all_monitors: true,
             // (On: he answers to Sir alone once Sir's voice is known, unless told otherwise.)
             voice_lock: true,
@@ -268,29 +261,6 @@ impl InterfaceSettings {
     /// other: whichever of the two was just switched on (compared with `before`) wins, so F11,
     /// the SCREENS menu, a settings checkbox and JAI's own tools can never leave both set.
     pub fn reconcile(&mut self, before: &InterfaceSettings) {
-        // As the desktop's background he has one more shape, and it excludes the floating orb
-        // and the mini strip: whichever was just asked for stands.
-        if self.desktop_background && (self.orb_mode || self.mini_strip) {
-            if before.desktop_background {
-                self.desktop_background = false;
-            } else {
-                self.orb_mode = false;
-                self.mini_strip = false;
-            }
-        }
-        if self.desktop_background && before.desktop_background {
-            if self.span_all_monitors != before.span_all_monitors {
-                // "Use all monitors" said to the background means the background (Sir, 2026-11-13,
-                // right after switching it on: "throw it on all monitors"); the board's own
-                // shape stays what it was for when he comes back to it.
-                self.background_all_monitors = self.span_all_monitors;
-                self.span_all_monitors = before.span_all_monitors;
-                self.fullscreen = before.fullscreen;
-            } else if self.fullscreen != before.fullscreen {
-                // "Full screen", F11: he wants the board.
-                self.desktop_background = false;
-            }
-        }
         if self.span_all_monitors && self.fullscreen {
             if before.span_all_monitors && !before.fullscreen {
                 self.span_all_monitors = false;
@@ -972,7 +942,6 @@ pub fn configure(current: &InterfaceSettings, args: &Value) -> Result<Configured
         ("edge light", bool_arg(args, "edge_light"), &mut s.edge_light),
         ("music visuals", bool_arg(args, "music_visuals"), &mut s.music_visuals),
         ("mini mode", bool_arg(args, "mini_strip"), &mut s.mini_strip),
-        ("live desktop background", bool_arg(args, "desktop_background"), &mut s.desktop_background),
         ("background on every monitor", bool_arg(args, "background_all_monitors"), &mut s.background_all_monitors),
         ("words beside the corner orb", bool_arg(args, "orb_words"), &mut s.orb_words),
         ("desktop clock", bool_arg(args, "desk_clock"), &mut s.desk_clock),
@@ -1095,6 +1064,10 @@ pub fn configure(current: &InterfaceSettings, args: &Value) -> Result<Configured
     if let Err(e) = apply_board_layout(&mut s, args, &mut done) {
         failed.push(e);
     }
+    // (He is always the desktop's background: asked to become it, or to leave it, he says so.)
+    if bool_arg(args, "desktop_background").is_some() {
+        done.push("the desktop's background, as always".to_string());
+    }
     let window = match str_arg(args, &["window", "window_action"]) {
         Some(w) => match WindowCommand::parse(w) {
             Some(cmd) => {
@@ -1177,7 +1150,7 @@ pub fn spoken_ack(args: &Value, now: &InterfaceSettings) -> String {
         return format!("{} it is, Sir.", spoken_theme(preset));
     }
     if args.get("span_all_monitors").is_some_and(|v| !v.is_null()) {
-        return if now.span_all_monitors { "One board across every monitor, Sir. I stay on your first screen." } else { "Back on your first monitor, Sir." }.into();
+        return if now.background_all_monitors { "On every monitor, Sir." } else { "On your first monitor only, Sir." }.into();
     }
     if let Some(spot) = text(&["orb_board_position", "emblem_position"]) {
         if now.orb_aside {
@@ -1493,16 +1466,15 @@ fn apply_board_layout(s: &mut InterfaceSettings, args: &Value, done: &mut Vec<St
             });
         }
     }
-    // "Toggle span mode": the other of the two.
+    // "Use all monitors" is said of the background he always is (Sir, 2026-11-13, of the
+    // background: "throw it on all monitors"); "toggle span mode": the other of the two.
     let span = match args.get("span_all_monitors").and_then(Value::as_str).map(words).as_deref() {
-        Some("toggle" | "switch" | "flip" | "other") => Some(!s.span_all_monitors),
+        Some("toggle" | "switch" | "flip" | "other") => Some(!s.background_all_monitors),
         _ => bool_arg(args, "span_all_monitors"),
     };
     if let Some(on) = span {
-        s.span_all_monitors = on;
-        // One board over every monitor, or back to fullscreen on one.
-        s.fullscreen = !on;
-        done.push(if on { "the HUD spans every monitor".into() } else { "the HUD back on one monitor".to_string() });
+        s.background_all_monitors = on;
+        done.push(if on { "the background on every monitor".into() } else { "the background on the first monitor".to_string() });
     }
     if let Some(on) = bool_arg(args, "allow_window_overlap") {
         s.allow_window_overlap = on;
@@ -1677,7 +1649,7 @@ pub fn tool_definition() -> Value {
             "save_theme": {"type": "string", "description": "Save the current look under this name."},
             "load_theme": {"type": "string", "description": "Apply a saved theme by name."},
             "orb_board_position": {"type": "string", "description": "The emblem's spot on the board: top left … bottom right, center."},
-            "span_all_monitors": {"type": "boolean", "description": "Stretch the HUD across every monitor."},
+            "span_all_monitors": {"type": "boolean", "description": "His background on every monitor (false: the first)."},
             "allow_window_overlap": {"type": "boolean", "description": "New windows may stack (default: side by side)."},
             "hud_view": {"type": "string", "enum": ["home", "board", "core", "sim_lab", "telemetry", "schedule", "console"]},
             "feature_lab": {"type": "boolean", "description": "The Feature Lab: everything you can do, each with a TRY button."},
@@ -1897,16 +1869,19 @@ mod tests {
         let home = configure(&nudged.settings, &json!({"orb_board_position": "back to the middle"})).unwrap().settings;
         assert_eq!(home.orb_board_pos, None);
         assert!(configure(&now, &json!({"orb_board_position": "monitor 2"})).is_err());
-        let spanned = configure(&now, &json!({"span_all_monitors": true})).unwrap().settings;
-        assert!(spanned.span_all_monitors && !spanned.fullscreen);
-        // The toggle goes both ways, and back means the fullscreen board on one monitor.
-        let back = configure(&spanned, &json!({"span_all_monitors": "toggle"})).unwrap().settings;
-        assert!(!back.span_all_monitors && back.fullscreen);
-        assert!(configure(&back, &json!({"span_all_monitors": "toggle"})).unwrap().settings.span_all_monitors);
-        assert_eq!(spoken_ack(&json!({"span_all_monitors": true}), &spanned), "One board across every monitor, Sir. I stay on your first screen.");
-        assert_eq!(spoken_ack(&json!({"span_all_monitors": "toggle"}), &back), "Back on your first monitor, Sir.");
-        // Spanning and the fullscreen board exclude each other, whichever way one is asked for:
-        // "full screen" (or F11) on a spanned board ends the span, it never leaves both set.
+        // "Use all monitors" is said of the background he always is: it covers every monitor or
+        // the first, both ways, toggled too, and he says which (as the background he once said
+        // "Back on your first monitor" while it went over all of them; "stop spanning" did nothing).
+        let one = configure(&now, &json!({"span_all_monitors": false})).unwrap().settings;
+        assert!(!one.background_all_monitors && one.span_all_monitors == now.span_all_monitors && one.fullscreen == now.fullscreen);
+        let all = configure(&one, &json!({"span_all_monitors": "toggle"})).unwrap().settings;
+        assert!(all.background_all_monitors);
+        assert!(!configure(&all, &json!({"span_all_monitors": "toggle"})).unwrap().settings.background_all_monitors);
+        assert_eq!(spoken_ack(&json!({"span_all_monitors": true}), &all), "On every monitor, Sir.");
+        assert_eq!(spoken_ack(&json!({"span_all_monitors": false}), &one), "On your first monitor only, Sir.");
+        // (The board as a window, in a session without a desktop:) spanning and the fullscreen
+        // board exclude each other, whichever way one is asked for.
+        let spanned = InterfaceSettings { span_all_monitors: true, fullscreen: false, ..now.clone() };
         let full = configure(&spanned, &json!({"fullscreen": true})).unwrap().settings;
         assert!(full.fullscreen && !full.span_all_monitors);
         let mut f11 = spanned.clone();

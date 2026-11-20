@@ -119,7 +119,7 @@ pub fn way_back(tool: &str, args: &Value, said: &str, before: &Snapshot, after: 
     // The interface: everything that is saved with it.
     if before.interface != after.interface {
         let (was, is) = (&before.interface, &after.interface);
-        step.done = if was.span_all_monitors != is.span_all_monitors || was.fullscreen != is.fullscreen {
+        step.done = if was.span_all_monitors != is.span_all_monitors || was.fullscreen != is.fullscreen || was.background_all_monitors != is.background_all_monitors {
             "the board is as it was"
         } else if was.hud_palette != is.hud_palette {
             "the theme is as it was"

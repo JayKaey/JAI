@@ -6,7 +6,7 @@
 
 use super::{strip_font, strip_ink, strip_muted, ts};
 use crate::holo::{self, Face};
-use crate::interface::{HudLayout, InterfaceSettings};
+use crate::interface::InterfaceSettings;
 use eframe::egui::{self, pos2, vec2, Align, Align2, Color32, FontId, Layout, Rect, RichText, Rounding, Sense, Ui};
 use serde_json::json;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -92,7 +92,7 @@ const fn row(group: &'static str, name: &'static str, explain: &'static str, wor
 /// The groups, in the order they stand (each is also a key that shows it alone).
 const GROUPS: [&str; 6] = ["LOOK", "SCREENS", "VOICE", "PRESENCE", "GAMES", "TOOLS"];
 
-static ROWS: [Row; 49] = [
+static ROWS: [Row; 43] = [
     row("LOOK", "Theme", "The HUD's colours: one click on a swatch changes them.", "colour color palette gold cyan red green farbe farben design", Control::Theme),
     row("LOOK", "Your own theme", "Build a theme from your own colours, name it and save it.", "theme studio custom create", Control::Open(Tool::ThemeStudio, "THEME STUDIO")),
     row(
@@ -121,26 +121,12 @@ static ROWS: [Row; 49] = [
     row("LOOK", "Music visuals", "The emblem moves with the music that plays on the PC.", "visualiser visualizer spectrum song", Control::Switch(|s| s.music_visuals, |s, v| s.music_visuals = v)),
     row("LOOK", "Text size", "How large the text is.", "font bigger smaller schrift größer kleiner", Control::Size(|s| s.font_scale, |s, v| s.font_scale = v, 0.8, 1.6)),
     row("LOOK", "Zoom", "How large everything is.", "scale bigger smaller", Control::Size(|s| s.scale, |s, v| s.scale = v, 0.7, 1.6)),
-    row("SCREENS", "Fullscreen board", "The HUD fills its monitor. Off: a window you can move and size.", "full screen window f11 vollbild fenster", Control::Switch(|s| s.fullscreen, |s, v| s.fullscreen = v)),
-    row("SCREENS", "One board across all monitors", "The board spans every screen; the HUD proper stays on the first.", "span monitors bildschirme", Control::Switch(|s| s.span_all_monitors, |s, v| s.span_all_monitors = v)),
-    row("SCREENS", "Always on top", "The HUD stays in front of other programs.", "front", Control::Switch(|s| s.always_on_top, |s, v| s.always_on_top = v)),
-    row(
-        "SCREENS",
-        "Window size",
-        "How large his window is when it is neither fullscreen nor maximised.",
-        "layout full compact orb minimal fenster größe",
-        Control::Keys(&[
-            ("FULL", |s| s.layout == HudLayout::Full, |s| s.layout = HudLayout::Full),
-            ("COMPACT", |s| s.layout == HudLayout::Compact, |s| s.layout = HudLayout::Compact),
-            ("SMALL", |s| s.layout == HudLayout::Orb, |s| s.layout = HudLayout::Orb),
-        ]),
-    ),
-    row("SCREENS", "Title bar", "The window's own title bar. Off: the top rail moves it.", "frameless frame border rahmen titelleiste", Control::Switch(|s| !s.frameless, |s, v| s.frameless = !v)),
+    // (He is always the desktop's background, Sir's own wish of 2026-11-20: the shapes of a
+    // board in a window of its own, fullscreen, spanned, framed, on top, are no setting of his.)
     row("SCREENS", "Floating core", "Only the core, in a small window that floats over your work.", "pure orb mode kugel", Control::Switch(|s| s.orb_mode, |s, v| s.orb_mode = v)),
     row("SCREENS", "Windows may overlap", "New windows of his may open over each other instead of beside each other.", "stack cascade", Control::Switch(|s| s.allow_window_overlap, |s, v| s.allow_window_overlap = v)),
-    row("SCREENS", "Mini mode", "A slim strip at the top of a screen instead of the board, for gaming or work.", "strip bar small compact leiste klein", Control::Switch(|s| s.mini_strip, |s, v| s.mini_strip = v)),
-    row("SCREENS", "Live desktop background", "He is your desktop's background: the board behind your icons, his views as windows.", "wallpaper desktop hintergrund hintergrundbild background mode", Control::Switch(|s| s.desktop_background, |s, v| s.desktop_background = v)),
-    row("SCREENS", "Background on every monitor", "As the background he covers all your monitors; off: your first one only.", "wallpaper all monitors every screen alle monitore hintergrund", Control::Switch(|s| s.background_all_monitors, |s, v| s.background_all_monitors = v)),
+    row("SCREENS", "Mini mode", "A slim strip at the top of a screen, in front of everything, for gaming or work.", "strip bar small compact leiste klein", Control::Switch(|s| s.mini_strip, |s, v| s.mini_strip = v)),
+    row("SCREENS", "Background on every monitor", "As the background he covers all your monitors; off: your first one only.", "wallpaper desktop span all monitors every screen alle monitore bildschirme hintergrund", Control::Switch(|s| s.background_all_monitors, |s, v| s.background_all_monitors = v)),
     row("SCREENS", "Words beside the corner orb", "What is said stands beside the orb in its corner. Off: the orb alone.", "info information window plate text orb corner kugel", Control::Switch(|s| s.orb_words, |s, v| s.orb_words = v)),
     row("SCREENS", "Corner orb size", "How large the orb is in its corner (the wheel over it does the same).", "orb size bigger smaller kugel größe", Control::Size(|s| s.corner_orb_scale, |s, v| s.corner_orb_scale = v, 0.6, 1.8)),
     row("SCREENS", "Desktop clock", "As the desktop's backdrop: the time under the emblem. Drag it anywhere.", "clock time uhr uhrzeit", Control::Switch(|s| s.desk_clock, |s, v| s.desk_clock = v)),
@@ -485,14 +471,14 @@ mod tests {
     fn the_search_finds_a_setting_by_any_of_its_words() {
         let found = |needle: &str| -> Vec<&'static str> { rows().filter(|r| answers(r, needle)).map(|r| r.name).collect() };
         assert_eq!(found("night").len(), 2);
-        assert!(found("wallpaper").contains(&"Live desktop background"));
+        assert!(found("wallpaper").contains(&"Background on every monitor"));
         assert!(found("GRAIN").contains(&"Display finish"));
         assert_eq!(found("only obey"), vec!["Only obey me"]);
         assert!(found("voice").len() >= 4, "the whole group answers to its name");
         assert!(found("quantum flux").is_empty());
         // The search understands German words for the same things.
         assert_eq!(found("nachtmodus"), vec!["Night mode by the clock"]);
-        assert_eq!(found("hintergrund"), vec!["Live desktop background", "Background on every monitor"]);
+        assert_eq!(found("hintergrund"), vec!["Background on every monitor"]);
         assert!(found("stimme").contains(&"Only obey me") && found("stimme").contains(&"Learn my voice"));
         assert_eq!(found("lautstärke"), vec!["Mixer"]);
         assert_eq!(found("").len(), rows().count(), "an empty search shows everything");
@@ -545,7 +531,7 @@ mod tests {
             }
         }
         // The features of 2026-11-12 are all here.
-        for name in ["Calm HUD", "Live words", "Start-up sequence", "Idle screen", "Night mode by the clock", "Edge light", "Music visuals", "Mini mode", "Live desktop background", "Only obey me"] {
+        for name in ["Calm HUD", "Live words", "Start-up sequence", "Idle screen", "Night mode by the clock", "Edge light", "Music visuals", "Mini mode", "Background on every monitor", "Only obey me"] {
             assert!(names.contains(&name), "{name}");
         }
     }

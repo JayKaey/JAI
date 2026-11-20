@@ -547,11 +547,7 @@ pub fn lock_state(lock_on: bool, voice_known: bool) -> String {
 
 /// Gathers what the dashboard shows (called every few seconds from the kit's background task).
 pub fn gather(tools: &ToolContext) {
-    // (For the dashboard on the upright monitor, and for the day on the background.)
-    if !tools.config.read(|c| c.interface.portrait_dashboard || c.interface.desktop_background) {
-        *lock(&DASH) = None;
-        return;
-    }
+    // (For the day on the background he always is, and the dashboard on an upright monitor.)
     let playing = crate::music_lyrics::track().filter(|t| t.playing && !t.title.trim().is_empty()).map(|t| if t.artist.trim().is_empty() { t.title.clone() } else { format!("{} \u{2014} {}", t.title, t.artist) });
     let notes: Vec<String> = crate::kit::list("note").into_iter().rev().take(4).filter_map(|(_, v, _)| v["text"].as_str().map(str::to_string)).collect();
     let (apps, total) = tools.stark.features.bench.screen.today();

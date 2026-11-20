@@ -647,7 +647,8 @@ pub fn rule(p: &Painter, from: Pos2, to: Pos2, colour: Color32) {
 /// A rectangle with corners cut at 45°: `cut` is [top-left, top-right, bottom-right,
 /// bottom-left] in points. Fill and outline share these points, so a cut corner is cut in both.
 pub fn plate(r: Rect, cut: [f32; 4]) -> Vec<Pos2> {
-    let m = r.width().min(r.height()) / 2.0;
+    // (A rect squeezed past nothing, as a closing window lays out, has no corner to cut.)
+    let m = (r.width().min(r.height()) / 2.0).max(0.0);
     let [tl, tr, br, bl] = cut.map(|c| c.clamp(0.0, m));
     let mut pts = Vec::with_capacity(8);
     let mut corner = |c: f32, a: Pos2, b: Pos2, at: Pos2| {
@@ -837,6 +838,10 @@ mod tests {
         // A cut never passes the middle of the shorter side.
         let all = plate(r, [500.0; 4]);
         assert!(all.iter().all(|q| r.expand(0.01).contains(*q)));
+        // A card squeezed past nothing has no corner to cut (2026-11-20, the PC card in the last
+        // frame of a closing session: "min > max … min = 0.0, max = -6.0").
+        let squeezed = Rect::from_min_size(pos2(10.0, 20.0), vec2(200.0, -12.0));
+        assert_eq!(plate(squeezed, [6.0; 4]).len(), 4);
     }
 
     /// Light that adds has no alpha, and a tenth of it is white: a pure yellow has a little
