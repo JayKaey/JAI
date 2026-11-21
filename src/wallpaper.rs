@@ -476,16 +476,28 @@ pub fn look_at(emblem: [i32; 4]) {
         return;
     }
     *last = Some(Instant::now());
-    crate::win32::run_detached(move || HIDDEN.store(hidden_now(HIDDEN.load(Ordering::Acquire), crate::win32_desktop::covered_share(emblem)), Ordering::Release));
+    crate::win32::run_detached(move || HIDDEN.store(hidden_now(HIDDEN.load(Ordering::Acquire), covered_share(emblem)), Ordering::Release));
+}
+
+#[cfg(not(windows))]
+pub fn look_at(emblem: [i32; 4]) {
+    HIDDEN.store(hidden_now(HIDDEN.load(Ordering::Acquire), covered_share(emblem)), Ordering::Release);
+}
+
+/// The share (0 to 1) of the screen rect (left, top, right, bottom) that the one window covering
+/// most of it covers: another program's, or one of his own that carries a name, never the orb.
+#[cfg(windows)]
+pub fn covered_share(rect: [i32; 4]) -> f32 {
+    crate::win32_desktop::covered_share(rect)
 }
 
 // shortcut: KWin's and XWayland's coordinates are taken as one (true without display scaling)
 // and windows on other virtual desktops count too; upgrade with the outputs' scale and Plasma's
 // virtual-desktop list.
 #[cfg(not(windows))]
-pub fn look_at(emblem: [i32; 4]) {
+pub fn covered_share(rect: [i32; 4]) -> f32 {
     use crate::plasma::state;
-    let [l, t, r, b] = emblem;
+    let [l, t, r, b] = rect;
     let me = std::process::id();
     // (As on Windows: every other program's window, and of his own those that carry a name, never
     // the orb; his background itself is the one kept below.)
@@ -498,8 +510,7 @@ pub fn look_at(emblem: [i32; 4]) {
         })
         .max()
         .unwrap_or(0);
-    let share = most as f32 / ((r - l).max(1) as i64 * (b - t).max(1) as i64) as f32;
-    HIDDEN.store(hidden_now(HIDDEN.load(Ordering::Acquire), share), Ordering::Release);
+    most as f32 / ((r - l).max(1) as i64 * (b - t).max(1) as i64) as f32
 }
 
 /// The corner orb's window, by its title.

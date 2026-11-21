@@ -104,11 +104,12 @@ pub const RELEASES: &[Release] = &[
             added("Asks before building a tool", "Where no tool of his can do it, he asks \"Shall I build a tool for it?\"; your yes builds it."),
             fixed("\"Zeig mir\" a thing", "\"Zeig mir das Sonnensystem\" no longer looks for a window of that name."),
             better("Hearing on the graphics card", "A larger Whisper on the graphics card: fewer wrong words, German too, and faster than before."),
-            new("Ten new simulations","Orbits, ripples, standing waves, Doppler, sound, light, springs, bouncing balls, 3D surfaces.", "simulations"),
+            new("Ten new simulations", "Orbits, ripples, standing waves, Doppler, sound, light, springs, bouncing balls, 3D surfaces.", "simulations"),
             better("Simulations in the new look", "Collisions and interfering waves are drawn as light on black glass, like the new ones."),
             better("Better pronunciation", "Dates, years, money, units, times and German names are said the way a person says them."),
             better("Clearer windows", "The board's keys stand in groups, settings rows have hairlines, account options are in words."),
             better("Lighter beside a game", "Behind a game his music ring and simulations draw far less, and Whisper leaves the card."),
+            new("Your own background", "Pictures, videos and slideshows on his black, behind the board or alone, per monitor.", "background"),
         ],
     },
     Release {
@@ -852,6 +853,13 @@ pub const EXPLANATIONS: &[Explanation] = &[
         what: "The Simulation Lab works the physics out itself: orbits of the sun, planets, moons and comets, ripples in a tank and through a slit, standing waves on a string, the Doppler effect and a sonic boom, sound as pressure, light through a double slit, a mass on a spring, a double pendulum, balls bouncing in a box, and any formula of x and y as a surface in 3D. Each has sliders you can set by name, and \"simulate it again\" or \"plot it with 3 m\" changes the one just shown.",
         say: &["simulate the sun, the earth and a comet", "zeig mir das Sonnensystem", "show me ripples with a single slit", "simulate standing waves", "simulate the doppler effect", "simuliere den Doppelspalt", "plot z = sin(x) * cos(y)", "set the speed to 200"],
         know: "The solar system uses the planets' real orbits (AU, years and Sun masses); distances are drawn by their square root, or the inner planets would be a dot beside Neptune. Beside a game a running simulation slows to four frames a second.",
+    },
+    Explanation {
+        id: "background",
+        title: "Your own background",
+        what: "A picture (PNG, JPEG, WebP), an H.264 MP4 video or a folder of pictures lies on his black, on every monitor or on one of them. Behind the board it is dimmed so the board still reads; as the whole background the board fades out, and comes back while you speak to him, while a window of his is open, or when you say \"show the board\". A slideshow fades from picture to picture; a video loops, silent unless you ask for its sound.",
+        say: &["set my background to D:\\Pictures\\sunset.png", "use my Pictures folder as a slideshow on monitor 2", "change the slideshow every 2 minutes", "background video with sound", "fill the whole background", "only behind the board", "show the board", "remove my background picture", "Setz mein Hintergrundbild auf meinen Bilder-Ordner"],
+        know: "Videos must be H.264 MP4s, as most are; for any other file he says why not. A game in front, a locked PC or a window over the whole monitor pauses the media and its sound. The same settings are under SCREENS in the settings window, with a path field for every monitor.",
     },
 ];
 

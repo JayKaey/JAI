@@ -12,9 +12,10 @@ His name is J.A.I., said "Jay". He answers to it said or spelt a little wrong ("
 
 ## Build
 
-You need a stable Rust toolchain, the Visual Studio C++ build tools with the Windows SDK, CMake
-and libclang (`whisper-rs-sys` compiles whisper.cpp). `build.bat` sets the paths for the PC it
-was written on (CMake from Visual Studio, `LIBCLANG_PATH`); change them at its top for yours.
+You need a stable Rust toolchain, the Visual Studio C++ build tools with the Windows SDK, CMake,
+Ninja, libclang and the Vulkan SDK (`whisper-rs-sys` compiles whisper.cpp with its Vulkan path,
+`VULKAN_SDK` set). `build.bat` sets the paths for the PC it was written on (CMake and Ninja from
+Visual Studio, `LIBCLANG_PATH`); change them at its top for yours.
 
 ```
 build.bat
@@ -28,7 +29,10 @@ That runs `cargo build --release` and then `tools\package.ps1`, which copies
 The models and runtimes are too large for git and are not in this repository:
 
 - `models\`: Whisper, Kokoro and Silero. `JAI.exe --download-models` installs what is missing;
-  `--check-models` only reports.
+  `--check-models` only reports. Whisper hears on the CPU from the first second and moves to the
+  graphics card (any make, through Vulkan) with the larger `ggml-large-v3-turbo-q5_0.bin` once
+  that has loaded, when the card has room for it beside the brain; a game sends it back to the
+  CPU until the game is closed.
 - `runtime\ollama` and `runtime\espeak-ng`: `tools\package.ps1` copies them from local installs of
   Ollama and eSpeak NG when they are missing.
 - `bin\cloudflared.exe`: downloaded on first use for the phone page's tunnel (SHA-256 verified).
@@ -98,6 +102,15 @@ using and glides back when you are done. "Orb mode" keeps his orb floating in fr
 at its corner (drag it anywhere; the mouse wheel resizes it), "mini mode" a slim strip along the
 top. A double click on an orb, or BOARD on the strip, shows the desktop.
 
+Your own pictures and videos can lie on his black: a picture (PNG, JPEG, WebP), an H.264 MP4
+(silent unless you ask for its sound) or a folder of pictures as a slideshow, for every monitor
+or for one ("set my background to D:\Pictures\sunset.png", "use my Pictures folder as a
+slideshow on monitor 2", "change the slideshow every 2 minutes", "background video with sound",
+"remove my background picture"; the same in the SCREENS settings). Behind the board they are
+dimmed so the board reads; as the whole background ("fill the whole background") the board
+fades out and comes back when you speak to him or say "show the board". A game in front, a
+locked PC or a window covering the whole monitor pauses them.
+
 "Make Discord full screen" is about Discord, "full screen" alone about the window in front, and
 neither ever about him; "move Discord to another monitor" takes it to the next one.
 
@@ -152,6 +165,15 @@ mir ein Herz" opens a 3D model, "show me waves" or "show me how a pendulum swing
 picture too, and he says he can't draw. What is Sir's own (his calendar, a program, a window, a
 place on the open globe) keeps its own order. Where no tool of his can do a thing, he says so and
 asks "Shall I build a tool for it?"; a yes builds it in the Tool Forge.
+
+The Simulation Lab works the physics out itself: a thrown ball, a pendulum and a double pendulum,
+collisions, bouncing balls, a mass on a spring, orbits ("simulate the sun, the earth and a
+comet", "zeig mir das Sonnensystem"), ripples ("show me ripples with a single slit"), standing
+waves, the Doppler effect and a sonic boom, sound waves, light through a double slit ("simuliere
+den Doppelspalt"), a formula as a curve or as a surface in 3D ("plot z = sin(x) * cos(y)"),
+gradient descent and sorting. Its sliders answer by name ("set the speed to 200"), and "simulate
+it again" or "plot it with 3 m" changes the one just shown. Beside a game a running simulation
+slows to four frames a second.
 
 Every window of his opens with a holographic entrance (the frame draws in, brackets close,
 a scan line passes) and leaves with an exit (it folds into a line), whether it is opened or

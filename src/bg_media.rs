@@ -318,7 +318,10 @@ pub fn set_media(s: &mut InterfaceSettings, key: &str, said: &str) -> Result<Str
     let kind = match source_of(&path)? {
         Source::Picture(_) => "picture",
         Source::Video(_) => "video",
-        Source::Slides(files) => return Ok(insert(s, key, &path, format!("a slideshow of {} pictures on {where_}", files.len()))),
+        Source::Slides(files) => return Ok(insert(s, key, &path, match files.len() {
+            1 => format!("the one picture in that folder on {where_}"),
+            n => format!("a slideshow of {n} pictures on {where_}"),
+        })),
     };
     Ok(insert(s, key, &path, format!("the {kind} {} on {where_}", path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default())))
 }
@@ -403,15 +406,18 @@ pub fn command(text: &str) -> Option<Value> {
             args.insert("background_monitor".into(), json!(m));
         }
     };
-    let video_word = has(&["video", "clip", "film"]);
-    let sound = if has(&["without sound", "no sound", "muted", "silent", "ohne ton", "ohne sound", "mute", "stumm"]) {
-        Some(false)
-    } else if has(&["with sound", "with audio", "mit ton", "mit sound", "sound on", "ton an", "unmute", "with its sound"]) {
+    let background = BACKGROUND.is_match(text);
+    // ("unmute" holds "mute"; a video alone is any video: "mute the video" is the player's.)
+    let sound = if has(&["with sound", "with audio", "mit ton", "mit sound", "sound on", "ton an", "unmute", "with its sound"]) {
         Some(true)
+    } else if has(&["without sound", "no sound", "muted", "silent", "ohne ton", "ohne sound", "mute", "stumm"]) {
+        Some(false)
     } else {
         None
-    };
-    let every = EVERY.captures(text).and_then(|c| {
+    }
+    .filter(|_| background);
+    // ("Remind me every 5 minutes" is no slideshow's.)
+    let every = EVERY.captures(text).filter(|_| background).and_then(|c| {
         let n: u32 = c[1].parse().ok()?;
         Some(if c[2].to_lowercase().starts_with('m') { n * 60 } else { n })
     });
@@ -426,12 +432,13 @@ pub fn command(text: &str) -> Option<Value> {
         .map(|c| c.get(1).or(c.get(2)).map_or(String::new(), |m| m.as_str().to_string()))
         .or_else(|| PATH.captures(text).map(|c| c[1].trim().to_string()))
         .or_else(|| FILE.captures(text).map(|c| c[1].to_string()))
-        .or_else(|| (has(&["slideshow", "diashow", "folder", "ordner"]) || BACKGROUND.is_match(text)).then(|| FOLDER.captures(text).map(|c| c[1].to_lowercase())).flatten());
-    let background = BACKGROUND.is_match(text);
+        .or_else(|| (has(&["slideshow", "diashow", "folder", "ordner"]) || background).then(|| FOLDER.captures(text).map(|c| c[1].to_lowercase())).flatten())
+        // ("My desktop background" is no folder.)
+        .filter(|f| !matches!(f.as_str(), "desktop" | "schreibtisch") || has(&["folder", "ordner", "slideshow", "diashow", "slide show"]));
     if let Some(source) = source.filter(|_| background && SET_VERB.is_match(text) && !has(&["how do", "how can", "can you", "could you", "what is", "?"]) || has(&["slideshow", "diashow"]) && !has(&["?"])) {
         args.insert("background_media".into(), json!(source));
         monitor_arg(&mut args);
-    } else if background && has(&["remove", "clear", "delete", "reset", "no more", "get rid", "entfern", "lösch", "kein ", "ohne"]) && has(&["picture", "image", "photo", "video", "slideshow", "media", "clip", "bild", "diashow", "wallpaper"]) && !has(&["?"]) {
+    } else if background && sound.is_none() && has(&["remove", "clear", "delete", "reset", "no more", "get rid", "entfern", "lösch", "kein "]) && has(&["picture", "image", "photo", "video", "slideshow", "media", "clip", "bild", "diashow", "wallpaper"]) && !has(&["?"]) {
         args.insert("background_media".into(), json!("none"));
         monitor_arg(&mut args);
     }
@@ -443,7 +450,7 @@ pub fn command(text: &str) -> Option<Value> {
             args.insert("background_mode".into(), json!("whole"));
         }
     }
-    if let Some(on) = sound.filter(|_| background || video_word) {
+    if let Some(on) = sound {
         args.insert("background_sound".into(), json!(on));
     }
     if args.is_empty() && whole_active() && has(&["show the board", "show your board", "bring up the board", "board anzeigen", "zeig das board", "zeige das board", "show the hud", "show me the board"]) {
@@ -818,6 +825,26 @@ fn blocked() -> bool {
     now
 }
 
+/// Whether a window covers monitor `index` whole, so its media rests meanwhile: looked at every
+/// two seconds, off the HUD's thread.
+fn covered(index: usize) -> bool {
+    static SEEN: Mutex<(Option<Instant>, Vec<usize>)> = Mutex::new((None, Vec::new()));
+    let mut seen = lock(&SEEN);
+    if !crate::platform::in_test_session() && !cfg!(test) && seen.0.is_none_or(|at| at.elapsed() >= Duration::from_secs(2)) {
+        seen.0 = Some(Instant::now());
+        let _ = std::thread::Builder::new().name("jai-bg-look".into()).spawn(|| {
+            let full = covered_monitors(&crate::monitors::recent(), crate::wallpaper::covered_share);
+            lock(&SEEN).1 = full;
+        });
+    }
+    seen.1.contains(&index)
+}
+
+/// The monitors whose work area (the screen without the taskbar) one window covers, by `share`.
+fn covered_monitors(monitors: &[crate::monitors::Monitor], share: impl Fn([i32; 4]) -> f32) -> Vec<usize> {
+    monitors.iter().filter(|m| share(m.work) > 0.97).map(|m| m.index).collect()
+}
+
 /// Starts, changes and stops the players to match the settings, uploads what they decoded.
 /// `rects`: each monitor the window reaches with its place in the window (points).
 fn tick(ctx: &egui::Context, look: &Look, rects: &[(usize, Rect)]) {
@@ -836,7 +863,7 @@ fn tick(ctx: &egui::Context, look: &Look, rects: &[(usize, Rect)]) {
             }
         }
         let Some(player) = players.get_mut(index) else { continue };
-        player.shared.paused.store(stood, Ordering::Relaxed);
+        player.shared.paused.store(stood || covered(*index), Ordering::Relaxed);
         player.shared.seen.store(now_ms(), Ordering::Relaxed);
         let layers = lock(&player.shared.layers);
         for (slot, img) in [(0, &layers.a), (1, &layers.b)] {
@@ -991,6 +1018,12 @@ mod tests {
         sh.seen.store(now_ms().saturating_sub(STALE_MS + 500).max(0), Ordering::Relaxed);
         // (The clock may be younger than the staleness: then nothing can be that stale yet.)
         assert_eq!(sh.idle(), now_ms() > STALE_MS + 500);
+        // A window over a monitor's whole work area (maximised over the taskbar's screen) rests
+        // that monitor's media; half of it does not.
+        let monitor = |index: usize, work: [i32; 4]| Monitor { index, name: String::new(), rect: [work[0], work[1], work[2], work[3] + 48], work, primary: index == 1 };
+        let screens = [monitor(1, [0, 0, 1920, 1032]), monitor(2, [1920, 0, 3840, 1032])];
+        assert_eq!(covered_monitors(&screens, |r| if r[0] == 0 { 1.0 } else { 0.5 }), vec![1]);
+        assert_eq!(covered_monitors(&screens, |_| 0.96), Vec::<usize>::new());
     }
 
     #[test]
@@ -1220,6 +1253,18 @@ mod tests {
         for no in ["set my background to red", "make the background darker", "how do I set a wallpaper?", "what is a slideshow?", "open my pictures folder", "play the video on youtube", "mute the music"] {
             assert_eq!(said(no), None, "{no}");
         }
+        // Found in review: "every", "video" or "desktop" in other orders, "unmute" read as "mute",
+        // "ohne Ton" read as "remove".
+        for no in ["remind me every 5 minutes to drink water", "check the weather every 10 minutes", "mute the video", "unmute the video", "play the video with sound", "set my desktop background to blue"] {
+            assert_eq!(said(no), None, "{no}");
+        }
+        assert_eq!(said("unmute the background video").unwrap()["background_sound"], true);
+        let quiet = said("Hintergrundvideo ohne Ton").unwrap();
+        assert_eq!((quiet["background_sound"].as_bool(), quiet.get("background_media")), (Some(false), None));
+        assert_eq!(media("use my desktop folder as a slideshow"), Some("desktop".into()));
+        // The changes page's examples.
+        assert_eq!(media("Setz mein Hintergrundbild auf meinen Bilder-Ordner"), Some("bilder".into()));
+        assert_eq!(media("set my background to D:\\Pictures\\sunset.png"), Some("D:\\Pictures\\sunset.png".into()));
     }
 
     #[test]
@@ -1232,7 +1277,7 @@ mod tests {
         assert!(failed.is_empty(), "{failed:?}");
         assert_eq!((s.bg_media.get("2").map(String::as_str), s.bg_mode.as_str(), s.bg_interval, s.bg_sound), (Some(path.as_str()), "whole", 5, true));
         assert!((s.bg_dim - 0.4).abs() < 1e-6);
-        assert!(done.iter().any(|l| l.contains("slideshow of 1 pictures on monitor 2")), "{done:?}");
+        assert!(done.iter().any(|l| l.contains("the one picture in that folder on monitor 2")), "{done:?}");
         // Taken off again, and for a monitor with nothing of its own.
         let (mut done, mut failed) = (Vec::new(), Vec::new());
         apply(&mut s, &json!({"background_media": "none", "background_monitor": "2"}), &mut done, &mut failed);
