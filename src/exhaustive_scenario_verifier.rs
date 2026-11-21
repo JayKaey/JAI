@@ -881,7 +881,8 @@ fn window_motion(hud: &mut crate::gui::offscreen::VirtualHud, tools: &ToolContex
             } else if smallest < 1.5 {
                 found.push(format!("the block did not fold as it left (at most {smallest:.1} px shorter; {})", diagnosis()));
             }
-            if crate::hud_dock::is_open(&id) || tools.widgets.windows().iter().any(|w| w.id == id) {
+            // (Closed, it waits in the tray for ten minutes: closed all the same.)
+            if crate::hud_dock::whereabouts(&id) != crate::hud_dock::Whereabouts::Closed {
                 found.push("the block was still open 1.5 s after its [ CLOSE ]".to_string());
             }
         }
@@ -1143,12 +1144,13 @@ fn visual_matrix(hud: &mut crate::gui::offscreen::VirtualHud, tools: &ToolContex
     let frame = hud.frames_at(45, 60.0);
     match (crate::hud_board::page_keys(hud.board_area()), crate::hud_board::front_page()) {
         (Some([previous, next]), Some((page, pages))) => {
-            for (label, key) in [("< PREV", previous), ("NEXT >", next)] {
+            for (label, key) in [("PREV", previous), ("NEXT", next)] {
                 if key.width() < visual::MIN_PAGE_KEY[0] || key.height() < visual::MIN_PAGE_KEY[1] {
                     found.push(format!("{label} is {}x{} px", key.width(), key.height()));
                 }
-                // The key is drawn where the board says it is.
-                match frame.find_exact(label).into_iter().next() {
+                // The key is drawn where the board says it is (its label, not the same word elsewhere).
+                let drawn = frame.find_exact(label);
+                match drawn.iter().find(|text| key.expand(2.0).contains(text.center())).or(drawn.first()) {
                     Some(text) if key.expand(2.0).contains(text.center()) => {}
                     Some(text) => found.push(format!("{label} is drawn at {text:?}, the board says its key is at {key:?}")),
                     None => found.push(format!("{label} is not drawn")),

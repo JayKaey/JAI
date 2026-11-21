@@ -114,6 +114,8 @@ pub const RELEASES: &[Release] = &[
             fixed("Orders taken for programs", "\"Open bubblesort\" opens the sorting simulation; \"open three random windows\" no app search."),
             fixed("Wallpaper Engine is no game", "Wallpaper Engine's window no longer starts game mode; games named \"Crash …\" now do."),
             fixed("Orders for another PC", "\"Move JAI on Max's PC to the background\" and \"send to Max's PC: …\" now reach Max's PC."),
+            fixed("The standing wave's legend in words", "Its legend names the nodes and antinodes in words, not in symbols the font may lack."),
+            fixed("False alarms in the full self-test", "The full self-test no longer fails on windows over the core, closed blocks and the page keys."),
         ],
     },
     Release {

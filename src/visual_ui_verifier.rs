@@ -79,7 +79,8 @@ pub struct StrokeItem {
     pub width: f32,
 }
 
-/// A filled rectangle (scroll bars and tracks among them, also while they are transparent).
+/// A filled rectangle (scroll bars and tracks among them, also while they are transparent) or
+/// plate (a window's glass).
 #[derive(Debug, Clone, Copy)]
 pub struct FillItem {
     pub rect: Rect,
@@ -88,6 +89,23 @@ pub struct FillItem {
     pub cover: u8,
     /// Its place in the frame's painting order.
     pub order: usize,
+    /// How far a plate's corners are cut at 45 degrees (top left, top right, bottom right,
+    /// bottom left): none on a rectangle.
+    pub cut: [f32; 4],
+}
+
+impl FillItem {
+    /// Whether the fill lies over all of `r`: inside its rect and clip, clear of its cut corners.
+    pub fn covers(&self, r: Rect) -> bool {
+        let corners = [self.rect.left_top(), self.rect.right_top(), self.rect.right_bottom(), self.rect.left_bottom()];
+        let nearest = [r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom()];
+        self.rect.intersect(self.clip).expand(0.5).contains_rect(r) && (0..4).all(|k| l1(corners[k], nearest[k]) >= self.cut[k] - 0.5)
+    }
+}
+
+/// The distance from `a` to `b` along the axes (a 45-degree cut is where it equals the cut).
+fn l1(a: Pos2, b: Pos2) -> f32 {
+    (a.x - b.x).abs() + (a.y - b.y).abs()
 }
 
 /// What one frame painted.
@@ -158,7 +176,7 @@ fn collect(frame: &mut Frame, clip: Rect, shape: &epaint::Shape) {
         }
         Shape::Rect(r) => {
             let order = frame.texts.len() + frame.fills.len();
-            frame.fills.push(FillItem { rect: r.rect, clip, cover: r.fill.a(), order });
+            frame.fills.push(FillItem { rect: r.rect, clip, cover: r.fill.a(), order, cut: [0.0; 4] });
             stroke(r.rect, r.stroke.color, r.stroke.width);
         }
         Shape::LineSegment { points, stroke: line } => {
@@ -189,12 +207,24 @@ fn collect(frame: &mut Frame, clip: Rect, shape: &epaint::Shape) {
                 return;
             }
             // A plain quad (a gradient laid over a rect: a block's surface) is a fill like any
-            // rect's, and covers what lies under it as much as its faintest corner does.
+            // rect's, and covers what lies under it as much as its faintest corner does. So is a
+            // plate's glass (`holo_frame::glass`): a fan round its middle, its rim along a rect
+            // whose corners it cuts.
+            let cover = mesh.vertices.iter().map(|v| v.color.a()).min().unwrap_or(0);
             if let [a, b, c, d] = mesh.vertices.as_slice() {
                 let r = Rect::from_min_max(a.pos, c.pos);
                 if r.is_positive() && b.pos == r.right_top() && d.pos == r.left_bottom() {
                     let order = frame.texts.len() + frame.fills.len();
-                    frame.fills.push(FillItem { rect: r, clip, cover: mesh.vertices.iter().map(|v| v.color.a()).min().unwrap_or(0), order });
+                    frame.fills.push(FillItem { rect: r, clip, cover, order, cut: [0.0; 4] });
+                }
+            } else if mesh.vertices.len() >= 5 && !mesh.indices.is_empty() && mesh.indices.chunks(3).all(|t| t[0] == 0) {
+                let rim: Vec<Pos2> = mesh.vertices[1..].iter().map(|v| v.pos).collect();
+                let r = Rect::from_points(&rim);
+                let on_edge = |q: &Pos2| [q.x - r.left(), r.right() - q.x, q.y - r.top(), r.bottom() - q.y].iter().any(|d| d.abs() < 0.01);
+                if r.is_positive() && rim.iter().all(on_edge) {
+                    let cut = [r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom()].map(|corner| rim.iter().map(|q| l1(*q, corner)).fold(f32::MAX, f32::min));
+                    let order = frame.texts.len() + frame.fills.len();
+                    frame.fills.push(FillItem { rect: r, clip, cover, order, cut });
                 }
             }
             let area = mesh.calc_bounds();
@@ -322,7 +352,7 @@ pub fn text_over_text(frame: &Frame) -> Vec<String> {
                 continue;
             }
             let (low, high) = (*order_a.min(order_b), *order_a.max(order_b));
-            let hidden = frame.fills.iter().any(|f| f.order > low && f.order < high && f.cover >= COVERING_FILL && f.rect.intersect(f.clip).expand(0.5).contains_rect(shared));
+            let hidden = frame.fills.iter().any(|f| f.order > low && f.order < high && f.cover >= COVERING_FILL && f.covers(shared));
             if !hidden {
                 findings.push(format!("text drawn over text: \"{}\" at {rect_a:?} and \"{}\" at {rect_b:?}", crate::crash_guard::clip(said_a.trim(), 40), crate::crash_guard::clip(said_b.trim(), 40)));
             }
@@ -1370,6 +1400,29 @@ mod tests {
         fail("text that fits", clipped_text(&plain));
         assert_eq!(pictographs(&plain).len(), 1);
         assert_eq!(plain.find_text("reactor online").len(), 1);
+    }
+
+    /// A window's glass (`holo_frame::glass`: a fan round its middle, one corner cut) hides the
+    /// board under it, its cut corner aside. (Until 2026-11-21 only a plain quad counted: under
+    /// every plate the verifier saw no fill, so a window over the core was "text drawn over text"
+    /// and a block's entrance "never drawn".)
+    #[test]
+    fn a_plates_glass_hides_the_board_under_it_but_not_its_cut_corner() {
+        let mut stage = Stage::new(vec2(800.0, 600.0));
+        let plate = Rect::from_min_size(pos2(100.0, 100.0), vec2(300.0, 200.0));
+        let font = egui::FontId::proportional(20.0);
+        let frame = stage.frames(2, &mut |ctx| {
+            let board = ctx.layer_painter(egui::LayerId::background());
+            board.text(pos2(120.0, 150.0), egui::Align2::LEFT_TOP, "REACTOR CORE", font.clone(), Color32::WHITE);
+            let window = ctx.layer_painter(egui::LayerId::new(egui::Order::Middle, egui::Id::new("verifier_plate")));
+            crate::holo_frame::glass(&window, &crate::holo::plate(plate, [0.0, 0.0, 14.0, 0.0]), 1.0);
+            window.text(pos2(125.0, 152.0), egui::Align2::LEFT_TOP, "LOAD 4%", font.clone(), Color32::WHITE);
+        });
+        fail("text under a window's glass", text_over_text(&frame));
+        let glass = frame.fills.iter().find(|f| f.rect == plate).expect("the plate's glass is a fill");
+        assert!(glass.cover >= COVERING_FILL && glass.cut == [0.0, 0.0, 14.0, 0.0], "{glass:?}");
+        assert!(glass.covers(Rect::from_min_size(pos2(380.0, 280.0), vec2(6.0, 6.0))));
+        assert!(!glass.covers(Rect::from_min_size(pos2(392.0, 292.0), vec2(6.0, 6.0))), "the cut corner shows the board");
     }
 
     #[test]

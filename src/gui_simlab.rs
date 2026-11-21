@@ -1046,7 +1046,7 @@ fn draw_standing(painter: &egui::Painter, rect: Rect, sim: &Simulation, rt: &Run
     for x in [left, right] {
         painter.line_segment([pos2(x, mid - 14.0), pos2(x, mid + 14.0)], stroke(3.0, th.ink()));
     }
-    legend(painter, pos2(left, area.bottom() - 8.0), &[(th.accent(), "the string"), (th.deep(), "wave running right"), (th.ink(), "wave running left"), (faint(th.ink(), 0.5), "○ node   ╷ antinode")]);
+    legend(painter, pos2(left, area.bottom() - 8.0), &[(th.accent(), "the string"), (th.deep(), "wave running right"), (th.ink(), "wave running left"), (faint(th.ink(), 0.5), "rings: nodes   ticks: antinodes")]);
     readout(painter, rect, 8.0, &format!("harmonic {n}   f = {:.1} Hz   λ = {:.2} m   {} nodes   shown {:.0}× slower", phys::harmonic_frequency(n, length, speed), 2.0 * length / n as f64, n + 1, slow), th.ink());
 }
 

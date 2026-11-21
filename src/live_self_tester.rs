@@ -1090,7 +1090,8 @@ async fn hud_probes(app: &Jai) {
         }
         let started = Instant::now();
         let closed = Box::pin(tools.execute("hud_board", &json!({"action": "close", "target": "self test"}))).await;
-        let gone = wait_until(Duration::from_millis(1500), || crate::hud_dock::blocks_named("self test").is_empty() && !tools.widgets.windows().iter().any(|w| w.id == "selftest_probe")).await;
+        // (Closed, it waits in the tray for ten minutes, dim: closed all the same.)
+        let gone = wait_until(Duration::from_millis(1500), || crate::hud_dock::blocks_named("self test").is_empty() && crate::hud_dock::whereabouts("selftest_probe") == crate::hud_dock::Whereabouts::Closed).await;
         judge(
             "hud",
             "\"close <block>\" fades it out and closes it",
@@ -1098,8 +1099,9 @@ async fn hud_probes(app: &Jai) {
             ms_since(started),
             if closed.success && gone.is_some() { Ok(format!("faded and gone ({} ms fade)", crate::hud_dock::CLOSE_FADE.as_millis())) } else { Err(format!("still there: {}", crate::crash_guard::clip(closed.output.trim(), 120))) },
         );
-        // Whatever happened, the probe window does not stay.
+        // Whatever happened, the probe window does not stay (nor wait in the tray).
         let _ = tools.widgets.close_window("selftest_probe");
+        crate::hud_dock::forget("selftest_probe");
 
         // While he looks at the screen his own window is left out of the picture (nothing is
         // captured here: only the window's display affinity is read). The exhaustive verifier
