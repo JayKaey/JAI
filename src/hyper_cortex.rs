@@ -103,7 +103,7 @@ const READ_ONLY: &[(&str, &[&str])] = &[
     ("media_and_volume_control", &["get_volume"]),
     ("control_audio_mixer", &["list", "list_mixes", "get_master", "get_app", "muted", "device", "devices", "switch_device"]),
     ("control_orb_mode", &["status"]),
-    ("control_music", &["what_is_playing", "list_playlists"]),
+    ("control_music", &["what_is_playing", "list_playlists", "queue_show"]),
     ("reminders", &["list"]),
     ("manage_vram", &["status", "game_status"]),
     ("manage_deep_research", &["status"]),

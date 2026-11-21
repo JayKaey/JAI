@@ -163,6 +163,15 @@ fn sonora_binary() -> Option<PathBuf> {
     if let Some(paths) = std::env::var_os("PATH") {
         candidates.extend(std::env::split_paths(&paths).map(|p| p.join(if cfg!(windows) { "sonora.exe" } else { "sonora" })));
     }
+    // (On Linux also the Flatpak, from Flathub: its exported launcher, system-wide or the user's.)
+    #[cfg(not(windows))]
+    {
+        const FLATPAK: &str = "io.github.nolight132.sonora";
+        candidates.push(PathBuf::from("/var/lib/flatpak/exports/bin").join(FLATPAK));
+        if let Some(home) = std::env::var_os("HOME") {
+            candidates.push(PathBuf::from(home).join(".local/share/flatpak/exports/bin").join(FLATPAK));
+        }
+    }
     candidates.into_iter().find(|p| p.is_file())
 }
 
@@ -981,6 +990,10 @@ impl MusicEngine {
                 self.play_track_directly_from_playlist(song, list, artist, &player).await
             }
             "play" | "start" | "play_playlist" | "play_song" | "play_track" | "shuffle" | "play_artist" | "play_album" => {
+                // "Shuffle my JaysRock playlist": Sonora's shuffle on, then the playlist.
+                if action == "shuffle" && player == "sonora" {
+                    let _ = pipe(crate::sonora::switch("shuffle", Some("on")), crate::sonora::QUICK).await;
+                }
                 if song.is_none() && playlist.is_none() && artist.is_none() && album.is_none() {
                     return session_control(SessionOp::Play, &player).await;
                 }
@@ -992,16 +1005,68 @@ impl MusicEngine {
             "toggle" | "play_pause" => session_control(SessionOp::Toggle, &player).await,
             "next" | "next_track" | "skip" | "next_song" => session_control(SessionOp::Next, &player).await,
             "previous" | "previous_track" | "prev_track" | "back" | "previous_song" => session_control(SessionOp::Previous, &player).await,
+            // Sonora's queue and switches, through its remote control (started when it isn't).
+            "queue_show" | "show_queue" | "queue" | "what_is_next" | "up_next" => {
+                sonora_up().await.ok_or(NO_SONORA)?;
+                let queue = pipe(crate::sonora::queue_snapshot(), crate::sonora::QUICK).await.map_err(|e| said(&e))?;
+                Ok(crate::sonora::describe_queue(&queue, 5))
+            }
+            "queue_add" | "add_to_queue" | "play_next" => {
+                let fresh = sonora_up().await.ok_or(NO_SONORA)?;
+                let (items, what) = self.sonora_items_named(song, playlist, artist, album).await?;
+                let next = action == "play_next" || str_arg(args, &["position"]).is_some_and(|p| p.eq_ignore_ascii_case("next"));
+                queue_on_sonora(if next { "play-next" } else { "add" }, &items, fresh).await.map_err(|e| said(&e))?;
+                Ok(format!("Queued {what} {}.", if next { "to play next" } else { "at the end of Sonora's queue" }))
+            }
+            "set_shuffle" | "set_repeat" | "like" | "unlike" | "seek" => {
+                let state = str_arg(args, &["state", "mode", "position"]).unwrap_or("").to_lowercase();
+                let order = match action.as_str() {
+                    "set_shuffle" => crate::sonora::switch("shuffle", Some(on_off(&state).unwrap_or("on"))),
+                    "set_repeat" => crate::sonora::switch("repeat", Some(repeat_mode(&state))),
+                    "like" => crate::sonora::switch("like", Some("on")),
+                    "unlike" => crate::sonora::switch("like", Some("off")),
+                    _ => crate::sonora::seek(seek_of(args.get("position").unwrap_or(&Value::Null)).ok_or("seek needs 'position': seconds (90 or \"1:30\"), a step (\"+30\", \"-10\") or a share (\"50%\").")?),
+                };
+                sonora_up().await.ok_or(NO_SONORA)?;
+                pipe(order, crate::sonora::QUICK).await.map_err(|e| said(&e))?;
+                let playing = pipe(crate::sonora::playback("current-track"), crate::sonora::QUICK).await.ok().and_then(|v| crate::sonora::describe_current(&v));
+                let done = match action.as_str() {
+                    "set_shuffle" => format!("Shuffle is {} on Sonora", on_off(&state).unwrap_or("on")),
+                    "set_repeat" => format!("Repeat is {} on Sonora", match repeat_mode(&state) { "one" => "on for this song", "all" => "on", _ => "off" }),
+                    "like" => "Saved to your liked songs".to_string(),
+                    "unlike" => "Removed from your liked songs".to_string(),
+                    _ => "Moved".to_string(),
+                };
+                Ok(match playing {
+                    Some(now) => format!("{done}: {now}."),
+                    None => format!("{done}."),
+                })
+            }
+            // (Sonora's remote control has no request for these: said plainly, never pretended.)
+            "clear_queue" | "remove_from_queue" => Err("Sonora's remote control can't take anything out of its queue, Sir: that is done in Sonora's queue panel. I can add to it, play something next or skip.".into()),
+            "edit_playlist" | "add_to_playlist" | "remove_from_playlist" | "create_playlist" => {
+                Err("Sonora's remote control can't change playlists, Sir: that is done in Sonora itself. I can save the song to your liked songs or queue it.".into())
+            }
             // The player's own volume: its mixer channel (the master volume when it has none). A
             // level with a sign is a step: "-50" was once clamped to the level 0 and muted the PC.
             "set_volume" | "volume" => {
                 let level = args.get("level").or_else(|| args.get("volume")).ok_or("set_volume needs 'level' (0-100, or a step such as \"+10\").")?;
                 crate::audio_mixer::player_volume(level).await
             }
-            "what_is_playing" | "now_playing" | "current" | "status" => match now_playing().await {
-                Some(np) => Ok(format!("Now playing: {}.", np.describe())),
-                None => Ok("Nothing is playing right now (no active media session).".into()),
-            },
+            "what_is_playing" | "now_playing" | "current" | "status" => {
+                // Sonora says more of what it plays (where in the song, liked, from which playlist).
+                let sonora = match player.as_str() {
+                    "sonora" => pipe(crate::sonora::playback("current-track"), crate::sonora::QUICK).await.ok().filter(|v| v["current"]["state"] == "playing"),
+                    _ => None,
+                };
+                if let Some(now) = sonora.and_then(|v| crate::sonora::describe_current(&v)) {
+                    return Ok(format!("Now playing on Sonora: {now}."));
+                }
+                match now_playing().await {
+                    Some(np) => Ok(format!("Now playing: {}.", np.describe())),
+                    None => Ok("Nothing is playing right now (no active media session).".into()),
+                }
+            }
             "list_playlists" | "playlists" | "list" => {
                 let names: Vec<String> = self.library().into_iter().filter(|i| matches!(i.kind, ItemKind::Playlist | ItemKind::LocalPlaylist)).map(|i| i.name).take(40).collect();
                 if names.is_empty() {
@@ -1017,7 +1082,7 @@ impl MusicEngine {
                 let target = str_arg(args, &["uri", "link", "target"]).ok_or("save_alias needs 'uri' (a spotify: URI, open.spotify.com link or library name).")?;
                 self.save_alias(alias, target)
             }
-            other => Err(format!("Unknown music action '{other}' (play, pause, stop_all, resume, next_track, previous_track, set_volume, what_is_playing, list_playlists, save_alias).")),
+            other => Err(format!("Unknown music action '{other}' (play, pause, stop_all, resume, next_track, previous_track, set_volume, what_is_playing, list_playlists, save_alias, queue_show, queue_add, play_next, set_shuffle, set_repeat, seek, like, unlike).")),
         }
     }
 
@@ -1064,7 +1129,8 @@ impl MusicEngine {
                     None if !local_only && !name.is_empty() => {
                         let query = [song, artist].into_iter().flatten().collect::<Vec<_>>().join(" ");
                         let query = if query.is_empty() { name.to_string() } else { query };
-                        return search_and_play(&query, name, player).await;
+                        let kind = if song.is_some() { "song" } else if playlist.is_some() { "playlist" } else if album.is_some() { "album" } else { "artist" };
+                        return search_and_play(&query, name, kind, player).await;
                     }
                     None => return Err(format!("I couldn't find '{name}' in the library or the local music files.")),
                 }
@@ -1117,6 +1183,34 @@ impl MusicEngine {
         Ok(format!("I picked your playlist '{choice}'. {result}"))
     }
 
+    /// What Sir named, as Sonora is handed it, and its name: from his library (its link or its
+    /// files), else the best hit of Sonora's own search.
+    async fn sonora_items_named(&self, song: Option<&str>, playlist: Option<&str>, artist: Option<&str>, album: Option<&str>) -> Result<(Vec<crate::sonora::Item>, String), String> {
+        let engine = self.clone();
+        let items = tokio::task::spawn_blocking(move || engine.library()).await.map_err(|e| e.to_string())?;
+        let found = match (song, playlist, album, artist) {
+            (Some(s), ..) => best_match(&items, s, &[ItemKind::Track, ItemKind::LocalFile], artist),
+            (None, Some(p), ..) => best_match(&items, p, &[ItemKind::Playlist, ItemKind::LocalPlaylist], None),
+            (None, None, Some(a), _) => best_match(&items, a, &[ItemKind::Album], artist),
+            (None, None, None, Some(a)) => best_match(&items, a, &[ItemKind::Artist], None),
+            _ => return Err("Name a song, an album, a playlist or an artist to queue.".into()),
+        };
+        if let Some((item, _)) = found {
+            let members = self.inner.cache.lock().unwrap_or_else(|e| e.into_inner()).members.get(&compact(&item.name)).cloned().unwrap_or_default();
+            let handed = sonora_items(item, &members);
+            if !handed.is_empty() {
+                return Ok((handed, format!("the {} '{}'", item.kind.label(), item.name)));
+            }
+        }
+        let (text, kind) = match (song, playlist, album, artist) {
+            (Some(s), ..) => ([Some(s), artist].into_iter().flatten().collect::<Vec<_>>().join(" "), "song"),
+            (None, Some(p), ..) => (p.to_string(), "playlist"),
+            (None, None, Some(a), _) => ([Some(a), artist].into_iter().flatten().collect::<Vec<_>>().join(" "), "album"),
+            (None, None, None, a) => (a.unwrap_or_default().to_string(), "artist"),
+        };
+        Ok((vec![crate::sonora::Item::Search { text: text.clone(), kind }], format!("Sonora's best hit for '{text}'")))
+    }
+
     /// The playlist Sir named and its ordered tracks (empty when only its name is known).
     async fn playlist_members(&self, playlist: &str) -> Option<(LibraryItem, Vec<LibraryItem>)> {
         let engine = self.clone();
@@ -1140,7 +1234,11 @@ impl MusicEngine {
         let result = if track.kind == ItemKind::LocalFile {
             // A queue from the entry on, in playlist order.
             let queue: Vec<String> = members[index..].iter().filter(|m| m.kind == ItemKind::LocalFile).take(1000).map(|m| m.uri.clone()).collect();
-            if player == "sonora" {
+            let files: Vec<_> = queue.iter().map(|path| crate::sonora::Item::Path(path.clone())).collect();
+            let piped = if player == "sonora" { play_on_sonora(&files, &format!("'{}' and the rest of '{}'", track.name, list.name), None).await } else { None };
+            if let Some(done) = piped {
+                done?
+            } else if player == "sonora" {
                 launch_sonora(queue).await?;
                 match sonora_confirms(&track, &[], None, 10).await {
                     Some(now) => sonora_played(&track, "", &now),
@@ -1253,7 +1351,7 @@ async fn launch_sonora(arguments: Vec<String>) -> Result<(), String> {
     if crate::platform::hands_off() {
         return Err(HANDS_OFF.into());
     }
-    let executable = sonora_binary().ok_or(if cfg!(windows) { "Sonora.exe was not found in D:\\Program Files\\Sonora or the user installation paths." } else { "Sonora is a Windows program and is not installed here; use Spotify or the local library." })?;
+    let executable = sonora_binary().ok_or(if cfg!(windows) { "Sonora.exe was not found in D:\\Program Files\\Sonora or the user installation paths." } else { "Sonora is not installed here (no sonora on the PATH, no Flatpak): install it from the AUR or Flathub, or use Spotify or the local library." })?;
     tokio::task::spawn_blocking(move || {
         let mut command = std::process::Command::new(executable);
         command.args(arguments).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
@@ -1264,6 +1362,147 @@ async fn launch_sonora(arguments: Vec<String>) -> Result<(), String> {
         let _ = std::thread::Builder::new().name("sonora-child".into()).spawn(move || { let _ = child.wait(); });
         Ok(())
     }).await.map_err(|e| e.to_string())?
+}
+
+// ------------------------------------------------------- Sonora's remote control ----
+
+/// One order to Sonora's remote control (`sonora.rs`), off the async threads.
+async fn pipe(body: Value, wait: Duration) -> Result<Value, crate::sonora::Failure> {
+    tokio::task::spawn_blocking(move || crate::sonora::ask(&body, wait)).await.unwrap_or(Err(crate::sonora::Failure::Away))
+}
+
+/// Sonora answering on its remote control, started first when it isn't running. Some(true):
+/// started just now (its provider may still be signing in); None: no Sonora answers.
+async fn sonora_up() -> Option<bool> {
+    let asked = || pipe(crate::sonora::playback("current-track"), crate::sonora::QUICK);
+    if asked().await.is_ok() {
+        return Some(false);
+    }
+    launch_sonora(Vec::new()).await.ok()?;
+    for _ in 0..40 {
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        if asked().await.is_ok() {
+            return Some(true);
+        }
+    }
+    None
+}
+
+/// A queue order to Sonora (`place`: play, play-next, add). A Spotify link while Sonora is on
+/// another provider switches it to Spotify first; a Sonora started just now is given the
+/// moments its provider needs to sign in.
+async fn queue_on_sonora(place: &str, items: &[crate::sonora::Item], fresh: bool) -> Result<(), crate::sonora::Failure> {
+    use crate::sonora::{Failure, Item};
+    let order = crate::sonora::queue(place, items);
+    let spotify = items.iter().any(|i| matches!(i, Item::Link(l) if l.contains("open.spotify.com")));
+    let (mut switched, mut waited) = (false, 0);
+    loop {
+        match pipe(order.clone(), crate::sonora::FETCH).await {
+            Err(Failure::OtherProvider { .. }) if spotify && !switched => {
+                switched = true;
+                pipe(crate::sonora::provider("spotify"), crate::sonora::FETCH).await?;
+            }
+            Err(Failure::SignedOut) if fresh && waited < 20 => {
+                waited += 1;
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+            other => return other.map(|_| ()),
+        }
+    }
+}
+
+/// What Sonora plays once it has started (`want`: the song's title, when one was asked for),
+/// asked for up to two seconds.
+async fn sonora_now(want: Option<&str>) -> Option<String> {
+    for _ in 0..8 {
+        if let Ok(value) = pipe(crate::sonora::playback("current-track"), crate::sonora::QUICK).await {
+            let current = &value["current"];
+            let title = current["track"]["title"].as_str().unwrap_or("");
+            if current["state"] == "playing" && want.is_none_or(|w| name_score(w, title) >= 0.85) {
+                return crate::sonora::describe_current(&value);
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    None
+}
+
+/// What Sonora is handed for a library item: its link (a song, an album, a playlist, private or
+/// not downloaded) or its file; a local playlist's files in order.
+fn sonora_items(item: &LibraryItem, members: &[LibraryItem]) -> Vec<crate::sonora::Item> {
+    use crate::sonora::Item;
+    let one = |i: &LibraryItem| match i.kind {
+        ItemKind::LocalFile => Some(Item::Path(i.uri.clone())),
+        _ => crate::sonora::link_of(&i.uri).map(Item::Link),
+    };
+    match item.kind {
+        ItemKind::LocalPlaylist => members.iter().filter(|m| m.kind == ItemKind::LocalFile).take(1000).filter_map(one).collect(),
+        _ => one(item).into_iter().collect(),
+    }
+}
+
+/// Plays `items` at once on Sonora through its remote control, the queue kept after them.
+/// None: no Sonora answers there (an older one is handed the item instead).
+async fn play_on_sonora(items: &[crate::sonora::Item], what: &str, want: Option<&str>) -> Option<Result<String, String>> {
+    if items.is_empty() {
+        return None;
+    }
+    let fresh = sonora_up().await?;
+    Some(match queue_on_sonora("play", items, fresh).await {
+        Ok(()) => Ok(match sonora_now(want).await {
+            Some(now) => format!("Playing {what} on Sonora. Now playing: {now}."),
+            None => format!("Sonora took {what}; it is starting."),
+        }),
+        Err(e) => Err(said(&e)),
+    })
+}
+
+/// A failure of Sonora's as Sir is told it.
+fn said(e: &crate::sonora::Failure) -> String {
+    format!("{}, Sir.", crate::pim::capitalise(&e.to_string()))
+}
+
+const NO_SONORA: &str = "Sonora isn't running, Sir, and it didn't start.";
+
+/// A switch's state as Sir says it: on, off or toggle (None: not said).
+fn on_off(said: &str) -> Option<&'static str> {
+    match said.trim() {
+        "on" | "true" | "yes" | "an" | "ein" | "enable" | "enabled" => Some("on"),
+        "off" | "false" | "no" | "aus" | "disable" | "disabled" | "none" => Some("off"),
+        "toggle" => Some("toggle"),
+        _ => None,
+    }
+}
+
+/// Repeat as Sir says it: one (this song), off, or all (the queue, also when unsaid).
+fn repeat_mode(said: &str) -> &'static str {
+    match said.trim() {
+        "one" | "song" | "track" | "this song" | "this track" | "single" | "lied" => "one",
+        s if on_off(s) == Some("off") => "off",
+        _ => "all",
+    }
+}
+
+/// A place in the track: seconds (90, "90", "1:30"), a step ("+30", "-10") or a share ("50%").
+fn seek_of(position: &Value) -> Option<crate::sonora::Seek> {
+    use crate::sonora::Seek;
+    if let Some(seconds) = position.as_u64() {
+        return Some(Seek::To(seconds));
+    }
+    let p = position.as_str()?.trim();
+    if let Some(share) = p.strip_suffix('%') {
+        return share.trim().parse::<u8>().ok().map(Seek::Percent);
+    }
+    if p.starts_with(['+', '-']) {
+        return p.parse::<i64>().ok().map(Seek::By);
+    }
+    if matches!(p, "start" | "beginning" | "the start" | "the beginning" | "anfang") {
+        return Some(Seek::To(0));
+    }
+    match p.split_once(':') {
+        Some((m, s)) => Some(Seek::To(m.trim().parse::<u64>().ok()? * 60 + s.trim().parse::<u64>().ok()?)),
+        None => p.parse::<u64>().ok().map(Seek::To),
+    }
 }
 
 /// Waits up to `polls` × 350 ms for Sonora's media session to report `item`.
@@ -1288,6 +1527,12 @@ fn sonora_played(item: &LibraryItem, how: &str, now: &NowPlaying) -> String {
 /// 3. Sonora's own search: focus its window, open the search, type title and artist, start the
 ///    first result.
 async fn play_sonora(item: &LibraryItem, members: &[LibraryItem]) -> Result<String, String> {
+    // Sonora's remote control first: at once, with no window touched and nothing typed. (What
+    // follows is for a Sonora too old to have one.)
+    let song = matches!(item.kind, ItemKind::Track | ItemKind::LocalFile);
+    if let Some(done) = play_on_sonora(&sonora_items(item, members), &format!("the {} '{}'", item.kind.label(), item.name), song.then_some(item.name.as_str())).await {
+        return done;
+    }
     let before = session_of("sonora").await;
     let arguments = if item.kind == ItemKind::LocalPlaylist && !members.is_empty() {
         members.iter().filter(|i| i.kind == ItemKind::LocalFile).take(1000).map(|i| i.uri.clone()).collect()
@@ -1354,6 +1599,19 @@ const MAX_PLAYLIST_SKIPS: usize = 80;
 /// A playlist entry in Sonora without its search: 1. the track link itself; 2. the playlist
 /// link, then Next until the entry plays (from wherever the playlist started).
 async fn play_sonora_in_playlist(track: &LibraryItem, list: &LibraryItem, index: usize, members: &[LibraryItem]) -> Result<String, String> {
+    // Sonora's remote control: the entry now, the playlist's next 30 after it. One that can't be
+    // fetched refuses the whole order, so then the entry alone.
+    let what = format!("'{}'", track.name);
+    let following: Vec<_> = members[index..].iter().take(31).flat_map(|m| sonora_items(m, &[])).collect();
+    match play_on_sonora(&following, &what, Some(&track.name)).await {
+        Some(Ok(done)) => return Ok(done),
+        Some(Err(_)) => {
+            if let Some(done) = play_on_sonora(&sonora_items(track, &[]), &what, Some(&track.name)).await {
+                return done;
+            }
+        }
+        None => {}
+    }
     let before = session_of("sonora").await;
     launch_sonora(vec![track.uri.clone()]).await?;
     if let Some(now) = sonora_confirms(track, &[], before.as_ref(), 8).await {
@@ -1402,7 +1660,14 @@ fn playback_matches(item: &LibraryItem, members: &[LibraryItem], before: Option<
     }
 }
 
-async fn search_and_play(query: &str, expected_title: &str, player: &str) -> Result<String, String> {
+async fn search_and_play(query: &str, expected_title: &str, kind: &'static str, player: &str) -> Result<String, String> {
+    // Sonora's own search through its remote control: its best hit of that kind plays.
+    if player == "sonora" {
+        let search = [crate::sonora::Item::Search { text: query.to_string(), kind }];
+        if let Some(done) = play_on_sonora(&search, &format!("'{expected_title}'"), (kind == "song").then_some(expected_title)).await {
+            return done;
+        }
+    }
     let confirmed = move || async move {
         for _ in 0..12 {
             tokio::time::sleep(Duration::from_millis(400)).await;
@@ -1791,6 +2056,23 @@ pub enum SessionOp {
 
 /// Pause / resume / skip on the player Sir means (or the active one), media keys as fallback.
 async fn session_control(op: SessionOp, player: &str) -> Result<String, String> {
+    // Sonora's own remote control: at once, whatever its media session says.
+    if player.contains("sonora") {
+        let (word, done) = match op {
+            SessionOp::Play => ("play", "Resumed Sonora"),
+            SessionOp::Pause => ("pause", "Paused Sonora"),
+            SessionOp::Toggle => ("toggle", "Toggled Sonora's playback"),
+            SessionOp::Next => ("next", "Skipped to the next track on Sonora"),
+            SessionOp::Previous => ("previous", "Went back a track on Sonora"),
+        };
+        if pipe(crate::sonora::playback(word), crate::sonora::QUICK).await.is_ok() {
+            let now = if matches!(op, SessionOp::Pause | SessionOp::Toggle) { None } else { sonora_now(None).await };
+            return Ok(match now {
+                Some(now) => format!("{done}. Now playing: {now}."),
+                None => format!("{done}."),
+            });
+        }
+    }
     let hint = match player {
         p if p.contains("spotify") => Some("spotify".to_string()),
         p if p.contains("sonora") => Some("sonora".to_string()),
@@ -2015,9 +2297,11 @@ async fn control_session(app: Option<String>, op: SessionOp) -> Result<Option<No
 pub fn tool_definition() -> Value {
     json!({"type": "function", "function": {
         "name": "control_music",
-        "description": "Sir's music (Spotify, Sonora, every indexed song on his drives). ALWAYS call it to play, pause or skip — never only say you did. play: playlist_name (\"play my playlist JaysRock\"), song_name (+ playlist_name for \"in <playlist>\", + artist_name), artist_name or album_name; pick_music when he leaves the choice to you; stop_all for a bare \"stop\" / \"pause\" (every app); pause (one player), resume, next_track, previous_track, set_volume (0-100, the music player's own volume only: any other app or the PC is control_audio_mixer), what_is_playing, list_playlists, save_alias (playlist_name = alias, uri).",
+        "description": "Sir's music (Spotify, Sonora, every indexed song on his drives). ALWAYS call it to play, pause or skip — never only say you did. play: playlist_name (\"play my playlist JaysRock\"), song_name (+ playlist_name for \"in <playlist>\", + artist_name), artist_name or album_name; pick_music when he leaves the choice to you; stop_all for a bare \"stop\" / \"pause\" (every app); pause (one player), resume, next_track, previous_track, set_volume (0-100, the music player's own volume only: any other app or the PC is control_audio_mixer), what_is_playing, list_playlists, save_alias (playlist_name = alias, uri). Sonora: queue_show, queue_add / play_next (a name as for play), set_shuffle / set_repeat (state on|off / off|all|one), seek (position 90, \"1:30\", \"+30\", \"-10\", \"50%\"), like / unlike the song playing; clear_queue and edit_playlist only say Sonora can't.",
         "parameters": {"type": "object", "properties": {
-            "action": {"type": "string", "enum": ["play", "play_from_playlist", "pick_music", "pause", "stop_all", "resume", "next_track", "previous_track", "set_volume", "what_is_playing", "list_playlists", "save_alias", "set_preferred_player", "welcome_home"]},
+            "action": {"type": "string", "enum": ["play", "play_from_playlist", "pick_music", "pause", "stop_all", "resume", "next_track", "previous_track", "set_volume", "what_is_playing", "list_playlists", "save_alias", "set_preferred_player", "welcome_home", "queue_show", "queue_add", "play_next", "set_shuffle", "set_repeat", "seek", "like", "unlike", "clear_queue", "edit_playlist"]},
+            "state": {"type": "string"},
+            "position": {"type": "string"},
             "song_name": {"type": "string"},
             "playlist_name": {"type": "string"},
             "artist_name": {"type": "string"},
@@ -2228,5 +2512,31 @@ mod tests {
         }
         assert_eq!(open_uri("spotify:search:example%20rock").await, Err(HANDS_OFF.to_string()));
         assert_eq!(launch_sonora(Vec::new()).await, Err(HANDS_OFF.to_string()));
+        // Sonora's queue and switches: no Sonora is reached, none is started.
+        let engine = MusicEngine::in_memory();
+        for action in ["queue_show", "queue_add", "play_next", "set_shuffle", "set_repeat", "like", "unlike", "seek"] {
+            let said = engine.control(&json!({"action": action, "song_name": "Highway to Hell", "position": "+10", "player_preference": "sonora"})).await;
+            assert_eq!(said, Err(NO_SONORA.to_string()), "{action}");
+        }
+        // What Sonora's remote control can't do is said, never pretended.
+        for action in ["clear_queue", "edit_playlist"] {
+            assert!(engine.control(&json!({"action": action})).await.unwrap_err().contains("can't"), "{action}");
+        }
+    }
+
+    #[test]
+    fn places_switches_and_repeats_are_read_as_said() {
+        use crate::sonora::Seek;
+        let at = |v: Value| match seek_of(&v) {
+            Some(Seek::To(s)) => format!("to {s}"),
+            Some(Seek::By(s)) => format!("by {s}"),
+            Some(Seek::Percent(p)) => format!("{p}%"),
+            None => "none".into(),
+        };
+        for (position, read) in [(json!(90), "to 90"), (json!("90"), "to 90"), (json!("1:30"), "to 90"), (json!("+30"), "by 30"), (json!("-10"), "by -10"), (json!("50%"), "50%"), (json!("start"), "to 0"), (json!("soon"), "none"), (json!("1:xx"), "none")] {
+            assert_eq!(at(position.clone()), read, "{position}");
+        }
+        assert_eq!((on_off("on"), on_off("aus"), on_off("toggle"), on_off("maybe")), (Some("on"), Some("off"), Some("toggle"), None));
+        assert_eq!((repeat_mode("one"), repeat_mode("song"), repeat_mode("off"), repeat_mode(""), repeat_mode("all")), ("one", "one", "off", "all", "all"));
     }
 }

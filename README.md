@@ -209,6 +209,19 @@ hardware makers (Logitech, Razer, Corsair and the like) are never taken for one.
 off" closes a program and "turn Firefox back on" opens it again; these two sentences work for
 real programs only, never for the PC or the sound.
 
+## Music
+
+Sonora is the player he drives, through its own pipe (`sonora.rs`). A song, an album, an artist
+or one of Sir's playlists starts there at once, private and not downloaded ones too: by its link
+from the library, else by Sonora's own search. "Shuffle my playlist Gym" plays it with shuffle on.
+"What's in the queue?" reads what comes next; "play Highway to Hell next" puts it right after the
+song playing, "add Thunderstruck to the queue" at the end. "Turn on shuffle", "repeat this song"
+("repeat the playlist", "repeat off"), "skip ahead 30 seconds", "go back 10 seconds", "jump to
+1:30", "restart the song", "like this song" and "unlike it" are Sonora's own switches. Sonora
+lets nobody clear its queue or change a playlist from outside: "clear the queue" and "add this
+song to my playlist Gym" say so. When Sonora is not running he starts it and waits for it; a test
+session never reaches it.
+
 ## Widgets by voice
 
 Notes, lists, clocks and charts go up without the language model: "add a note saying call Tom at

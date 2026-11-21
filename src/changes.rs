@@ -96,9 +96,10 @@ pub const RELEASES: &[Release] = &[
         entries: &[
             new("Hotkeys", "\"Open the hotkeys window\": every key of his, in any program or game; SET, then the new key.", "hotkeys"),
             added("A key for the microphone", "Your microphone on and off by a key of your choice, in any program or game, with a sound."),
-            better("Straight answers", "Touchy questions, rough words and any research topic get a straight, full answer: no lectures, warnings or dodging."),
-            added("Corrections and stutters", "\"Open Chrome, uh, I mean Firefox\" opens Firefox: stutters and \"uh\"s count once, the last correction wins, and \"Open the… never mind\" is taken back."),
-            better("He waits for the rest", "A sentence that stops on \"and\", \"to\" or a correction still to come (\"Open Chrome, no wait\") gets the moment a person would give it; half a sentence is never carried out."),
+            better("Straight answers", "Touchy questions, rough words and research get a straight, full answer: no lectures or dodging."),
+            added("Corrections and stutters", "\"Open Chrome, uh, I mean Firefox\" opens Firefox; \"Open the… never mind\" is taken back."),
+            new("Sonora, at once", "Your songs and playlists, private or not downloaded, start at once; the queue and more by voice.", "sonora"),
+            better("He waits for the rest", "A sentence that stops on \"and\" or \"no wait\" gets a person's pause; half an order never runs."),
         ],
     },
     Release {
@@ -828,6 +829,13 @@ pub const EXPLANATIONS: &[Explanation] = &[
         what: "His keys work in every program, and in games while they are in front: the microphone on and off (no key until you give it one), his windows to the front (Ctrl+Alt+J), the console to type to him (Ctrl+Alt+K) and waking him from standby (Alt+J). In the Hotkeys window press SET beside one, then the new key; CLEAR takes a key away. A key another program already holds is marked TAKEN: choose another.",
         say: &["open the hotkeys window", "change my mute key", "zeig mir die tastenkürzel"],
         know: "A letter, a digit or Space needs Ctrl or Alt with it; F1 to F24, Pause and Scroll Lock may stand alone. Esc, or another window in front, gives up on a new key and keeps the old one. With the sound cues on, the microphone key sounds rising when he listens again and falling when he stops. On KDE the keys also stand in System Settings under Shortcuts.",
+    },
+    Explanation {
+        id: "sonora",
+        title: "Sonora, at once",
+        what: "He speaks to Sonora through its own remote control: nothing is typed into its search and none of its windows is touched. A song, an album or any playlist of yours plays at once, downloaded or not, private or public; what is not in your library plays as Sonora's best hit. He reads you the queue, adds to its end or plays something next, turns shuffle and repeat on and off, jumps in the song, and likes or unlikes it. When Sonora isn't running, he starts it first.",
+        say: &["what's in the queue", "play Highway to Hell next", "add Thunderstruck to the queue", "turn on shuffle", "repeat this song", "skip ahead 30 seconds", "like this song"],
+        know: "Sonora's remote control cannot take songs out of the queue or change playlists: that stays in Sonora itself, and he says so. A Spotify playlist while Sonora is on another provider switches it to Spotify first.",
     },
 ];
 

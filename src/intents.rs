@@ -4210,10 +4210,72 @@ static PAUSE_MUSIC: LazyLock<Regex> = LazyLock::new(|| {
 static RESUME_MUSIC: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(?:resume|continue|unpause)(?:\s+(?:the\s+)?(?:music|song|track|playback))?$|^play(?:\s+(?:some\s+|the\s+|my\s+)?music)?$|^play music$|^musik\s+(?:weiter|fortsetzen|an)$|^spiel weiter$|^fortsetzen$|^weiter$|^abspielen$|^play pause$|^(?:turn|switch)\s+on\s+(?:the\s+|my\s+)?music$|^(?:turn|switch)\s+(?:the\s+|my\s+)?music\s+(?:back\s+)?on$|^music\s+(?:back\s+)?on$|^(?:mach|mache|schalt|schalte)\s+(?:die\s+|meine\s+)?musik\s+(?:wieder\s+)?an$")
 });
-/// Verbs that may start music when a playlist / song is named explicitly.
-const PLAY_VERB: &str = r"(?:play|spiel|spiele|put on|start|starte|shuffle|queue up|throw on|leg)";
+/// Verbs that may start music when a playlist / song is named explicitly. ("Shuffle X" is "play
+/// X" with shuffle on, "queue up X" Sonora's queue: `music_command` reads them first.)
+const PLAY_VERB: &str = r"(?:play|spiel|spiele|put on|start|starte|throw on|leg)";
 /// Verbs that mean music on their own ("start Discord" opens an app, even if a song is called so).
-const PLAY_ONLY: &str = r"(?:play|spiel|spiele|put on|shuffle|queue up|throw on)";
+const PLAY_ONLY: &str = r"(?:play|spiel|spiele|put on|throw on)";
+
+// Sonora's queue and switches (`sonora.rs`, through `control_music`).
+static QUEUE_SHOW: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"^(?:what(?:s| is) (?:in|on) (?:the|my) queue|(?:show|read|tell)(?: me)? (?:the |my |whats in the )?queue|what(?:s| is) (?:the )?next (?:song|track)|what (?:song|track) (?:is|comes) next|what(?:s| is) (?:coming )?(?:up )?next in the queue|welches lied kommt (?:als nächstes|danach)|was (?:ist|läuft|kommt)(?: gerade| als nächstes| noch)? in der warteschlange|zeig(?:e)?(?: mir)? (?:die )?warteschlange)$")
+});
+static QUEUE_ADD: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"^(?:add|put)\s+(.+?)\s+(?:to|in|on|into)\s+(?:the\s+|my\s+)?queue$|^queue(?:\s+up)?\s+(.+)$|^(?:füg|füge)\s+(.+?)\s+(?:zur|in die)\s+warteschlange(?:\s+hinzu)?$|^(?:pack|packe|setz|setze)\s+(.+?)\s+in die warteschlange$|^(?:play|spiel|spiele)\s+(.+?)\s+(next|als nächstes|danach)$")
+});
+static CLEAR_QUEUE: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:clear|empty|wipe)\s+(?:the|my)\s+queue$|^(?:lösch|lösche|leer|leere)\s+(?:die|meine)\s+warteschlange$"));
+static SHUFFLE: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"^(?:turn|switch|put)\s+(on|off)\s+(?:the\s+)?shuffle$|^(?:turn|switch|put)\s+(?:the\s+)?shuffle\s+(on|off)$|^shuffle\s+(on|off)$|^(enable|start|disable|stop)\s+shuffl(?:e|ing)$|^(?:zufallswiedergabe|shuffle)\s+(an|aus|ein)$|^(?:mach|schalt|schalte)\s+(?:die\s+)?(?:zufallswiedergabe|shuffle)\s+(an|aus|ein)$|^shuffle(?:\s+(?:the|my)\s+(?:songs|queue|music))?$|^(?:misch|mische)\s+(?:die|meine)\s+(?:songs|lieder|musik|warteschlange)$")
+});
+static REPEAT: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"^(?:repeat|loop)\s+(?:this|the|that)\s+(song|track)$|^(?:put|set)\s+(?:this|the)\s+(song|track)\s+on\s+(?:repeat|loop)$|^(?:repeat|loop)\s+(?:the|my|this)\s+(?:playlist|queue|album)$|^(?:repeat|loop)\s+(on|off|all|one)$|^(?:turn|switch)\s+(on|off)\s+(?:repeat|looping)$|^(?:turn|switch)\s+(?:repeat|looping)\s+(on|off)$|^(stop) (?:repeating|looping)$|^(?:wiederhol|wiederhole)\s+(?:das|dieses)\s+(lied)$|^(?:wiederholung|dauerschleife)\s+(an|aus)$|^(?:wiederhol|wiederhole)\s+(?:die|meine)\s+(?:playlist|warteschlange)$")
+});
+static SEEK_TO: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:jump|go|skip|seek|spring|springe|spul|spule)\s+(?:to|zu|auf)\s+(\d{1,2})[ :.](\d{2})$"));
+static RESTART_SONG: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"^(?:restart|replay)\s+(?:this|the)\s+(?:song|track)$|^(?:start|play)\s+(?:this|the)\s+(?:song|track)\s+(?:over|again|from the (?:start|beginning))$|^(?:spiel|starte)\s+(?:das|dieses)\s+lied\s+(?:nochmal\s+)?von vorne$")
+});
+static LIKE_SONG: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"^(?:like|save|heart|favou?rite)\s+(?:this|the|that)\s+(?:song|track)$|^(?:add|save)\s+(?:this|the|that)\s+(?:song|track)\s+to\s+(?:my\s+)?(?:liked songs|favou?rites|library)$|^(?:like|speicher|speichere)\s+(?:das|dieses)\s+lied$|^(?:dieses|das)\s+lied\s+gefällt mir$")
+});
+static UNLIKE_SONG: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"^(?:unlike|unsave|unheart)\s+(?:this|the|that)\s+(?:song|track)$|^remove\s+(?:this|the|that)\s+(?:song|track)\s+from\s+(?:my\s+)?(?:liked songs|favou?rites|library)$")
+});
+static EDIT_PLAYLIST: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"^(?:add|put|save)\s+(?:this|the|that)\s+(?:song|track)\s+(?:to|in|into)\s+(?:my\s+|the\s+)?(.+)$|^(?:create|make)\s+(?:a\s+)?(?:new\s+)?playlist(?:\s+(?:called|named)\s+.+)?$|^remove\s+(?:this|the|that)\s+(?:song|track)\s+from\s+(?:my\s+|the\s+)?(?:playlist\s+)?.+$|^(?:füg|füge)\s+(?:das|dieses)\s+lied\s+(?:zu|zur|in)\s+.+\s+hinzu$")
+});
+
+/// "Skip ahead 30 seconds", "go back 10 seconds", "spul 30 Sekunden vor": a step in the song.
+fn seek_step(s: &str) -> Option<String> {
+    let words: Vec<&str> = s.split_whitespace().collect();
+    if words.len() > 6 || !matches!(words.first().copied()?, "skip" | "jump" | "go" | "fast" | "forward" | "rewind" | "wind" | "spul" | "spule" | "spring" | "springe") {
+        return None;
+    }
+    let (at, n) = words.iter().enumerate().find_map(|(i, w)| w.parse::<i64>().ok().map(|n| (i, n)))?;
+    let unit = words.get(at + 1)?;
+    let seconds = if unit.starts_with("sec") || unit.starts_with("sek") { n } else if unit.starts_with("min") { n * 60 } else { return None };
+    let back = words.iter().any(|w| matches!(*w, "back" | "backward" | "backwards" | "zurück" | "rewind"));
+    let ahead = words.iter().any(|w| matches!(*w, "ahead" | "forward" | "forwards" | "vor" | "vorwärts" | "fast"));
+    (back != ahead).then(|| format!("{}{seconds}", if back { "-" } else { "+" }))
+}
+
+/// What Sir queues, as `control_music` takes it: "X by Y" a song and its artist, else a name
+/// of his library by its kind (a song when it is none of his). None for "it", "something" …
+fn queued_name(name: &str) -> Option<Value> {
+    let name = name.trim().trim_end_matches(['.', ',', '!']).trim();
+    if matches!(name, "" | "up" | "it" | "this" | "that" | "this song" | "that song" | "the song" | "something" | "something else" | "anything" | "music" | "some music" | "das" | "es" | "etwas" | "was") {
+        return None;
+    }
+    if let Some((song, artist)) = name.split_once(" by ").or_else(|| name.split_once(" von ")) {
+        return Some(json!({ "song_name": song.trim(), "artist_name": artist.trim() }));
+    }
+    let field = match crate::music::quick_lookup(name) {
+        Some(crate::music::ItemKind::Playlist | crate::music::ItemKind::LocalPlaylist) => "playlist_name",
+        Some(crate::music::ItemKind::Album) => "album_name",
+        Some(crate::music::ItemKind::Artist) => "artist_name",
+        _ => "song_name",
+    };
+    Some(json!({ field: name }))
+}
 static PLAY_ON_PLAYER: LazyLock<Regex> = LazyLock::new(|| re(&format!(r"^({PLAY_VERB}\s+.+?)\s+(?:on|in|auf|with|mit|über)\s+(spotify|sonora)$")));
 static PLAY_PLAYLIST: LazyLock<Regex> = LazyLock::new(|| {
     re(&format!(
@@ -4302,6 +4364,63 @@ fn music_command(s: &str) -> Option<Intent> {
     }
     if PREVIOUS.is_match(s) {
         return music(json!({ "action": "previous_track" }));
+    }
+    // Sonora's queue and switches.
+    if QUEUE_SHOW.is_match(s) {
+        return music(json!({ "action": "queue_show" }));
+    }
+    if CLEAR_QUEUE.is_match(s) {
+        return music(json!({ "action": "clear_queue" }));
+    }
+    if LIKE_SONG.is_match(s) {
+        return music(json!({ "action": "like" }));
+    }
+    if UNLIKE_SONG.is_match(s) {
+        return music(json!({ "action": "unlike" }));
+    }
+    if let Some(c) = QUEUE_ADD.captures(s) {
+        if let Some(mut args) = (1..=5).find_map(|i| c.get(i)).and_then(|m| queued_name(m.as_str())) {
+            args["action"] = json!(if c.get(6).is_some() { "play_next" } else { "queue_add" });
+            return music(args);
+        }
+    }
+    if let Some(c) = EDIT_PLAYLIST.captures(s) {
+        // ("Add this song to the queue" is the queue's; "… to my liked songs" was liked above.)
+        if !c.get(1).is_some_and(|m| m.as_str().contains("queue")) {
+            return music(json!({ "action": "edit_playlist" }));
+        }
+    }
+    if let Some(c) = SHUFFLE.captures(s) {
+        let said = (1..=6).find_map(|i| c.get(i)).map_or("on", |m| m.as_str());
+        let state = if matches!(said, "off" | "aus" | "disable" | "stop") { "off" } else { "on" };
+        return music(json!({ "action": "set_shuffle", "state": state }));
+    }
+    if let Some(c) = REPEAT.captures(s) {
+        let said = (1..=9).find_map(|i| c.get(i)).map_or("all", |m| m.as_str());
+        let state = match said {
+            "song" | "track" | "lied" | "one" => "one",
+            "off" | "aus" | "stop" => "off",
+            _ => "all",
+        };
+        return music(json!({ "action": "set_repeat", "state": state }));
+    }
+    if let Some(c) = SEEK_TO.captures(s) {
+        return music(json!({ "action": "seek", "position": format!("{}:{}", &c[1], &c[2]) }));
+    }
+    if RESTART_SONG.is_match(s) {
+        return music(json!({ "action": "seek", "position": "start" }));
+    }
+    if let Some(step) = seek_step(s) {
+        return music(json!({ "action": "seek", "position": step }));
+    }
+    // "Shuffle my JaysRock playlist": played as "play …", with Sonora's shuffle on.
+    if let Some(rest) = s.strip_prefix("shuffle ") {
+        if let Some(Intent::Tool { name, mut args }) = music_command(&format!("play {rest}")) {
+            if args["action"] == "play" {
+                args["action"] = json!("shuffle");
+            }
+            return Some(Intent::Tool { name, args });
+        }
     }
     if PICK_MUSIC.is_match(s) {
         return music(json!({ "action": "pick_music" }));
@@ -6367,6 +6486,43 @@ mod tests {
         assert_eq!(m("Play JaysRock"), json!({"action": "play", "playlist_name": "jaysrock"}));
         assert_eq!(m("Play Back in Black"), json!({"action": "play", "song_name": "back in black"}));
         assert!(tool("Start Discord").is_some_and(|(n, _)| n == "open_application"), "start never means music");
+    }
+
+    /// Sonora's queue and switches, by voice in both languages (2026-11-21).
+    #[test]
+    fn sonoras_queue_and_switches_are_ordered_by_voice() {
+        let m = |text: &str| match tool(text) {
+            Some(("control_music", a)) => a,
+            other => panic!("{text}: {other:?}"),
+        };
+        for said in ["What's in the queue?", "Show me the queue", "Show me what's in the queue", "What's the next song?", "Zeig mir die Warteschlange", "Welches Lied kommt als Nächstes?", "Was läuft gerade in der Warteschlange?"] {
+            assert_eq!(m(said), json!({"action": "queue_show"}), "{said}");
+        }
+        // Asked as a question, it must pass the guard that lets a question only read.
+        assert!(crate::hyper_cortex::is_read_only("control_music", &json!({"action": "queue_show"})));
+        assert_eq!(m("Add Thunderstruck by AC/DC to the queue"), json!({"action": "queue_add", "song_name": "thunderstruck", "artist_name": "ac dc"}));
+        assert_eq!(m("Queue up Highway to Hell"), json!({"action": "queue_add", "song_name": "highway to hell"}));
+        assert_eq!(m("Play Highway to Hell next"), json!({"action": "play_next", "song_name": "highway to hell"}));
+        assert_eq!(m("Füge Highway to Hell zur Warteschlange hinzu"), json!({"action": "queue_add", "song_name": "highway to hell"}));
+        for (said, state) in [("Turn on shuffle", "on"), ("Shuffle off", "off"), ("Stop shuffling", "off"), ("Zufallswiedergabe an", "on"), ("Shuffle", "on")] {
+            assert_eq!(m(said), json!({"action": "set_shuffle", "state": state}), "{said}");
+        }
+        for (said, state) in [("Repeat this song", "one"), ("Put this song on repeat", "one"), ("Repeat the playlist", "all"), ("Turn off repeat", "off"), ("Wiederhole das Lied", "one"), ("Wiederholung aus", "off")] {
+            assert_eq!(m(said), json!({"action": "set_repeat", "state": state}), "{said}");
+        }
+        for (said, position) in [("Skip ahead 30 seconds", "+30"), ("Go back 10 seconds", "-10"), ("Fast forward 2 minutes", "+120"), ("Spul 30 Sekunden vor", "+30"), ("Jump to 1:30", "1:30"), ("Restart the song", "start")] {
+            assert_eq!(m(said), json!({"action": "seek", "position": position}), "{said}");
+        }
+        for (said, action) in [("Like this song", "like"), ("Save this song to my liked songs", "like"), ("Unlike this song", "unlike"), ("Clear the queue", "clear_queue"), ("Add this song to my workout playlist", "edit_playlist")] {
+            assert_eq!(m(said)["action"], action, "{said}");
+        }
+        assert_eq!(m("Shuffle my workout playlist"), json!({"action": "shuffle", "playlist_name": "workout"}));
+        // What they were before: the next song, a bare skip, a step with no direction.
+        assert_eq!(m("Next song"), json!({"action": "next_track"}));
+        assert_eq!(m("Skip"), json!({"action": "next_track"}));
+        for said in ["Queue up", "Play something next", "Wait 10 seconds"] {
+            assert!(tool(said).is_none_or(|(_, a)| !matches!(a["action"].as_str(), Some("queue_add" | "play_next" | "seek"))), "{said}");
+        }
     }
 
     #[test]
