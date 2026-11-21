@@ -207,6 +207,7 @@ mod shell;
 mod shortcut_overlay;
 mod show_me;
 mod simulation_lab;
+mod simulation_physics;
 mod sites;
 mod spatial_scenes;
 mod skills;

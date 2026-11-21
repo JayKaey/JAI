@@ -11,6 +11,7 @@
 //! that Sir drags with the mouse — or changes by voice: "set the angle to 60 degrees and double
 //! the velocity" (`adjust_simulation`, also on the instant fast path).
 
+use crate::simulation_physics as phys;
 use crate::tools::str_arg;
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -180,9 +181,10 @@ fn split_word(word: &str) -> Vec<String> {
                 continue 'outer;
             }
         }
-        if let Some(r) = rest.strip_prefix('x') {
-            out.push("x".into());
-            rest = r;
+        // ("xy" is x times y, the surface's two variables.)
+        if let Some(c) = rest.chars().next().filter(|c| matches!(c, 'x' | 'y')) {
+            out.push(c.to_string());
+            rest = &rest[1..];
             continue;
         }
         return vec![word.to_string()];
@@ -367,24 +369,64 @@ pub enum SimKind {
     Waves,
     GradientDescent,
     Sorting,
+    /// Bodies pulling on each other (the solar system, a binary star, a scene in words).
+    Gravity,
+    /// A ripple tank, with slits.
+    Ripples,
+    StandingWave,
+    Doppler,
+    Sound,
+    /// Light through a double slit.
+    Light,
+    Spring,
+    DoublePendulum,
+    Balls,
+    /// z = f(x, y) as a 3-D mesh.
+    Surface,
 }
 
 impl SimKind {
+    /// The kind a sentence or a `sim_type` names (English and German). The specific wave kinds
+    /// come before plain "wave interference".
     pub fn parse(s: &str) -> Option<Self> {
         let s = s.to_lowercase();
         let has = |w: &[&str]| w.iter().any(|x| s.contains(x));
+        let words: Vec<&str> = s.split(|c: char| !c.is_alphanumeric()).collect();
+        let word = |w: &[&str]| words.iter().any(|x| w.contains(x));
         Some(if has(&["projectile", "trajectory", "throw", "ballistic", "cannon", "wurf", "flugbahn"]) {
             Self::Projectile
-        } else if has(&["pendulum", "pendel", "swing"]) {
+        } else if has(&["double pendulum", "doppelpendel", "chaotic pendulum", "chaos pendulum", "double_pendulum"]) {
+            Self::DoublePendulum
+        } else if has(&["pendulum", "pendel", "swing"]) && !has(&["federpendel", "spring pendulum"]) {
             Self::Pendulum
+        } else if has(&["bouncing ball", "balls in a box", "balls bouncing", "billiard", "gas in a box", "springende bälle", "bälle in", "balls"]) && !has(&["collision", "collide"]) {
+            Self::Balls
         } else if has(&["collision", "collide", "stoß", "stoss", "impact", "momentum"]) {
             Self::Collision
-        } else if has(&["wave", "interference", "welle", "ripple", "double slit"]) {
+        } else if has(&["spring", "oscillator", "resonance", "federpendel", "schwingung"]) || word(&["feder", "federn"]) {
+            Self::Spring
+        } else if has(&["gravity", "orbit", "solar system", "planet", "comet", "n-body", "nbody", "kepler", "satellite", "binary star", "three body", "three-body", "figure eight", "schwerkraft", "umlaufbahn", "sonnensystem", "gravitation", "komet", "doppelstern"])
+            || word(&["sun", "sonne", "moon", "mond", "earth", "erde"])
+        {
+            Self::Gravity
+        } else if has(&["doppler", "mach cone", "mach number", "machkegel", "sonic boom", "supersonic", "überschall", "schallmauer", "ambulance", "siren"]) {
+            Self::Doppler
+        } else if has(&["standing wave", "standing_wave", "stationary wave", "stehende welle", "vibrating string", "guitar string", "overtone", "oberton", "harmonics", "harmonic"]) || word(&["saite"]) {
+            Self::StandingWave
+        } else if has(&["ripple", "wellenwanne", "water wave", "wasserwelle", "single slit", "single-slit", "einzelspalt"]) {
+            Self::Ripples
+        } else if has(&["double slit", "double-slit", "doppelspalt", "young's", "light wave", "lichtwelle", "diffraction", "beugung", "slit"]) || word(&["light", "licht", "laser"]) {
+            Self::Light
+        } else if has(&["sound", "schallwelle", "acoustic", "akustik", "longitudinal", "pressure wave"]) || word(&["schall"]) {
+            Self::Sound
+        } else if has(&["wave", "interference", "welle"]) {
             Self::Waves
         } else if has(&["gradient", "descent", "learning", "ml", "optimi", "loss"]) {
             Self::GradientDescent
         } else if has(&["sort", "algorithm", "bubble", "quick", "insertion", "merge", "sortier"]) {
             Self::Sorting
+        } else if has(&["surface", "3d", "3-d", "paraboloid", "saddle", "sattel", "oberfläche", "fläche", "f(x,y)", "f(x, y)", "z=", "z ="]) {
+            Self::Surface
         } else if has(&["function", "plot", "graph", "math", "derivative", "integral", "funktion", "f(x)", "curve", "parabola"]) {
             Self::Function
         } else {
@@ -401,6 +443,39 @@ impl SimKind {
             Self::Waves => "Wave interference",
             Self::GradientDescent => "Gradient descent",
             Self::Sorting => "Sorting algorithm",
+            Self::Gravity => "Gravity and orbits",
+            Self::Ripples => "Ripple tank",
+            Self::StandingWave => "Standing wave",
+            Self::Doppler => "Doppler effect",
+            Self::Sound => "Sound wave",
+            Self::Light => "Light through a double slit",
+            Self::Spring => "Mass on a spring",
+            Self::DoublePendulum => "Double pendulum",
+            Self::Balls => "Bouncing balls",
+            Self::Surface => "3-D surface",
+        }
+    }
+
+    /// The `sim_type` the tool takes for it.
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Function => "function",
+            Self::Projectile => "projectile",
+            Self::Pendulum => "pendulum",
+            Self::Collision => "collision",
+            Self::Waves => "waves",
+            Self::GradientDescent => "gradient_descent",
+            Self::Sorting => "sorting",
+            Self::Gravity => "gravity",
+            Self::Ripples => "ripples",
+            Self::StandingWave => "standing_wave",
+            Self::Doppler => "doppler",
+            Self::Sound => "sound",
+            Self::Light => "light",
+            Self::Spring => "spring",
+            Self::DoublePendulum => "double_pendulum",
+            Self::Balls => "balls",
+            Self::Surface => "surface",
         }
     }
 }
@@ -432,6 +507,8 @@ pub struct Simulation {
     pub x_range: (f64, f64),
     /// Sorting: bubble, insertion, selection or quick.
     pub algorithm: String,
+    /// Gravity: the scene as named (a preset's words, the bodies named, or a JSON list).
+    pub scene: String,
     /// Bumped on every change: the window restarts its animation.
     pub revision: u64,
     pub paused: bool,
@@ -440,6 +517,53 @@ pub struct Simulation {
 impl Simulation {
     pub fn value(&self, name: &str) -> f64 {
         self.params.iter().find(|p| p.name == name).map(|p| p.value).unwrap_or(0.0)
+    }
+
+    /// The gravity scene (the solar system when the scene is not understood).
+    pub fn bodies(&self) -> phys::Bodies {
+        gravity_scene(&self.scene).or_else(|| phys::Bodies::preset("solar system")).expect("the solar system preset exists")
+    }
+
+    pub fn ripples(&self) -> phys::Ripples {
+        phys::Ripples::new(160, 96, self.value("frequency"), self.value("slits").round() as usize, self.value("slit_width").round() as usize, self.value("separation").round() as usize, self.value("plane") >= 0.5)
+    }
+
+    pub fn spring(&self) -> phys::Spring {
+        phys::Spring { mass: self.value("mass"), k: self.value("k"), c: self.value("damping"), force: self.value("force"), drive: self.value("drive"), x: self.value("start"), v: 0.0, t: 0.0 }
+    }
+
+    pub fn double_pendulum(&self) -> phys::DoublePendulum {
+        phys::DoublePendulum {
+            l1: self.value("length1"),
+            l2: self.value("length2"),
+            m1: self.value("mass1"),
+            m2: self.value("mass2"),
+            g: self.value("gravity"),
+            a1: self.value("angle1").to_radians(),
+            a2: self.value("angle2").to_radians(),
+            w1: 0.0,
+            w2: 0.0,
+        }
+    }
+
+    /// The box (10 m × 6 m) and its balls, always placed the same way.
+    pub fn balls(&self) -> phys::Balls {
+        phys::Balls::new(self.value("count").round() as usize, 10.0, 6.0, self.value("gravity"), self.value("elasticity"), self.value("radius"), 7)
+    }
+
+    /// The sliders plus a trailing `y` (the surface's second variable, set by `surface_z`).
+    pub fn surface_params(&self) -> Vec<Param> {
+        let mut ps = self.params.clone();
+        ps.push(param("y", "y", 0.0, f64::MIN, f64::MAX, ""));
+        ps
+    }
+
+    /// z = f(x, y) of a surface; `ps` comes from `surface_params`.
+    pub fn surface_z(&self, ps: &mut [Param], x: f64, y: f64) -> f64 {
+        if let Some(p) = ps.last_mut() {
+            p.value = y;
+        }
+        self.functions.first().map_or(f64::NAN, |(_, _, e)| e.eval(x, ps))
     }
 
     /// Numbers worth reading out (range, period, roots …).
@@ -484,6 +608,105 @@ impl Simulation {
                 None => String::new(),
             },
             SimKind::Sorting => format!("{} sort of {} values", self.algorithm, self.value("count") as i64),
+            SimKind::Gravity => {
+                let s = self.bodies();
+                let Some(hi) = (0..s.bodies.len()).max_by(|a, b| s.bodies[*a].mass.total_cmp(&s.bodies[*b].mass)) else { return String::new() };
+                let heavy = &s.bodies[hi];
+                let mut orbits: Vec<(f64, &str)> = s
+                    .bodies
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| *i != hi)
+                    .map(|(_, b)| {
+                        // The semi-major axis from the energy (vis-viva): 1/a = 2/r − v²/GM.
+                        let (mu, r) = (s.g * (heavy.mass + b.mass), ((b.pos[0] - heavy.pos[0]).powi(2) + (b.pos[1] - heavy.pos[1]).powi(2)).sqrt());
+                        let v2 = (b.vel[0] - heavy.vel[0]).powi(2) + (b.vel[1] - heavy.vel[1]).powi(2);
+                        let axis = 1.0 / (2.0 / r.max(1e-9) - v2 / mu.max(1e-12));
+                        (if axis > 0.0 { phys::kepler_period(s.g, heavy.mass + b.mass, axis) } else { f64::INFINITY }, b.name.as_str())
+                    })
+                    .collect();
+                orbits.sort_by(|a, b| a.0.total_cmp(&b.0));
+                let orbit = |(t, name): &(f64, &str)| format!("{name} orbits {} in {} {}", heavy.name, format!("{:.*}", if *t < 1.0 { 3 } else { 1 }, t), s.units.1);
+                let shown = match (orbits.first(), orbits.last()) {
+                    (Some(a), Some(b)) if orbits.len() > 1 => format!("{}, {}", orbit(a), orbit(b)),
+                    (Some(a), _) => orbit(a),
+                    _ => String::new(),
+                };
+                format!("{} bodies; {shown} (Kepler: T = 2π√(a³/GM)); energy {:.3e}, kept by the integrator", s.bodies.len(), s.energy())
+            }
+            SimKind::Ripples => {
+                let (f, w, d) = (self.value("frequency"), self.value("slit_width"), self.value("separation"));
+                let lambda = 1.0 / f.max(1e-6);
+                let mut out = format!("wavelength {lambda:.1} cells (speed 1 cell per time unit ÷ frequency {f:.3})");
+                if self.value("slits").round() >= 2.0 && lambda < d {
+                    out += &format!("; bright bands where d·sin θ = m·λ, the first at {:.0}°", (lambda / d).asin().to_degrees());
+                }
+                if self.value("slits").round() >= 1.0 {
+                    out += if w < lambda { "; the slit is narrower than a wavelength, so the waves spread out in a circle" } else { "; a slit wider than a wavelength lets a beam through" };
+                }
+                out
+            }
+            SimKind::StandingWave => {
+                let (n, l, v) = (self.value("harmonic").round().max(1.0) as u32, self.value("length").max(0.01), self.value("speed"));
+                format!(
+                    "harmonic {n}: f = n·v/2L = {:.1} Hz, wavelength 2L/n = {:.2} m, {} nodes (the ends included) and {n} antinodes; the fundamental is {:.1} Hz",
+                    phys::harmonic_frequency(n, l, v),
+                    2.0 * l / n as f64,
+                    n + 1,
+                    phys::harmonic_frequency(1, l, v)
+                )
+            }
+            SimKind::Doppler => {
+                let (f, v, c) = (self.value("frequency"), self.value("speed"), self.value("wave_speed").max(1.0));
+                let (ahead, behind) = phys::doppler(f, v, c);
+                let head = match (ahead, phys::mach_angle(v, c)) {
+                    (Some(a), _) => format!("heard {a:.0} Hz in front"),
+                    (None, Some(angle)) => format!("faster than its own waves, so a Mach cone of half-angle {:.1}° (sin θ = c/v) and no tone in front", angle.to_degrees()),
+                    (None, None) => "at the speed of its waves they pile up in front (the sound barrier)".to_string(),
+                };
+                format!("source {f:.0} Hz at Mach {:.2}: {head}; {behind:.0} Hz behind", v / c)
+            }
+            SimKind::Sound => {
+                let (f, c) = (self.value("frequency").max(1.0), self.value("speed").max(1.0));
+                format!("{f:.0} Hz in a medium at {c:.0} m/s: wavelength v/f = {:.3} m, period {:.2} ms; the air is pressed together a quarter wavelength ahead of its greatest displacement", c / f, 1000.0 / f)
+            }
+            SimKind::Light => {
+                let (l, d, a, s) = (self.value("wavelength"), self.value("separation"), self.value("slit_width"), self.value("screen"));
+                format!(
+                    "{} light, {l:.0} nm: bright fringes {:.2} mm apart (λL/d); the single-slit envelope first goes dark at ±{:.1} mm (λL/a)",
+                    phys::colour_name(l),
+                    phys::fringe_spacing(l, d, s) * 1000.0,
+                    phys::fringe_spacing(l, a, s) * 1000.0
+                )
+            }
+            SimKind::Spring => {
+                let sp = self.spring();
+                let z = sp.damping_ratio();
+                let regime = if z < 0.999 { "underdamped: it rings" } else if z < 1.001 { "critically damped: back fastest, no overshoot" } else { "overdamped: it creeps back" };
+                let w0 = sp.natural();
+                let mut out = format!("ω₀ = √(k/m) = {w0:.2} rad/s (f₀ {:.2} Hz, period {:.2} s); damping ratio ζ = {z:.2}, {regime}", w0 / std::f64::consts::TAU, std::f64::consts::TAU / w0.max(1e-9));
+                if sp.force > 0.0 {
+                    let amp = sp.force / ((sp.k - sp.mass * sp.drive.powi(2)).powi(2) + (sp.c * sp.drive).powi(2)).sqrt().max(1e-9);
+                    out += &format!("; driven at {:.2} rad/s the steady swing is {amp:.3} m (largest near ω₀)", sp.drive);
+                }
+                out
+            }
+            SimKind::DoublePendulum => format!(
+                "total energy {:.2} J, kept by the integrator; chaotic: a start angle changed by a hundredth of a degree gives another path within seconds",
+                self.double_pendulum().energy()
+            ),
+            SimKind::Balls => {
+                let b = self.balls();
+                format!("{} balls; each bounce keeps {:.0} % of the speed; energy {:.1} J ({})", b.balls.len(), b.elasticity * 100.0, b.energy(), if b.elasticity > 0.999 { "kept" } else { "drains away" })
+            }
+            SimKind::Surface => {
+                let Some((_, src, _)) = self.functions.first() else { return String::new() };
+                let r = self.value("range");
+                let mut ps = self.surface_params();
+                let zs: Vec<f64> = (0..=30).flat_map(|j| (0..=30).map(move |i| (i, j))).map(|(i, j)| self.surface_z(&mut ps, -r + 2.0 * r * i as f64 / 30.0, -r + 2.0 * r * j as f64 / 30.0)).filter(|z| z.is_finite()).collect();
+                let (lo, hi) = zs.iter().fold((f64::MAX, f64::MIN), |(lo, hi), z| (lo.min(*z), hi.max(*z)));
+                format!("z = {src}; z(0, 0) = {:.3}; between {lo:.2} and {hi:.2} for x and y within ±{r}", self.surface_z(&mut ps, 0.0, 0.0))
+            }
             SimKind::Function => {
                 let (a, b) = self.x_range;
                 self.functions
@@ -547,6 +770,86 @@ fn defaults(kind: SimKind) -> Vec<Param> {
         ],
         SimKind::Sorting => vec![param("count", "Values", 40.0, 5.0, 150.0, ""), param("speed", "Speed", 30.0, 1.0, 400.0, "steps/s")],
         SimKind::Function => vec![param("a", "a", 1.0, -10.0, 10.0, ""), param("b", "b", 0.0, -10.0, 10.0, ""), param("c", "c", 0.0, -10.0, 10.0, "")],
+        SimKind::Gravity => vec![param("speed", "Playback speed", 1.0, 0.1, 10.0, "×")],
+        SimKind::Ripples => vec![
+            param("frequency", "Frequency", 0.05, 0.02, 0.12, "cycles/step"),
+            param("slits", "Slits in the wall", 2.0, 0.0, 2.0, ""),
+            param("slit_width", "Slit width", 6.0, 1.0, 20.0, "cells"),
+            param("separation", "Slit separation", 24.0, 8.0, 60.0, "cells"),
+            param("plane", "Source (0 point, 1 plane)", 1.0, 0.0, 1.0, ""),
+            param("speed", "Playback speed", 3.0, 1.0, 8.0, "steps/frame"),
+        ],
+        SimKind::StandingWave => vec![
+            param("harmonic", "Harmonic", 3.0, 1.0, 8.0, ""),
+            param("length", "String length", 2.0, 0.5, 5.0, "m"),
+            param("speed", "Wave speed", 40.0, 5.0, 300.0, "m/s"),
+            param("amplitude", "Amplitude", 0.8, 0.1, 1.0, ""),
+            param("slowmo", "Slow motion", 40.0, 1.0, 400.0, "×"),
+        ],
+        SimKind::Doppler => vec![
+            param("frequency", "Source frequency", 440.0, 50.0, 2000.0, "Hz"),
+            param("speed", "Source speed", 120.0, 0.0, 700.0, "m/s"),
+            param("wave_speed", "Wave speed", 343.0, 100.0, 1500.0, "m/s"),
+        ],
+        SimKind::Sound => vec![
+            param("frequency", "Frequency", 440.0, 100.0, 2000.0, "Hz"),
+            param("speed", "Speed of sound", 343.0, 200.0, 1500.0, "m/s"),
+            param("amplitude", "Loudness", 0.6, 0.1, 1.0, ""),
+            param("slowmo", "Slow motion", 400.0, 20.0, 2000.0, "×"),
+        ],
+        SimKind::Light => vec![
+            param("wavelength", "Wavelength", 532.0, 380.0, 750.0, "nm"),
+            param("separation", "Slit separation", 100.0, 20.0, 500.0, "µm"),
+            param("slit_width", "Slit width", 30.0, 5.0, 100.0, "µm"),
+            param("screen", "Screen distance", 2.0, 0.5, 5.0, "m"),
+        ],
+        SimKind::Spring => vec![
+            param("mass", "Mass", 1.0, 0.1, 10.0, "kg"),
+            param("k", "Spring constant", 20.0, 1.0, 100.0, "N/m"),
+            param("damping", "Damping", 0.4, 0.0, 12.0, "N·s/m"),
+            param("force", "Driving force", 0.0, 0.0, 10.0, "N"),
+            param("drive", "Drive frequency", 4.0, 0.2, 20.0, "rad/s"),
+            param("start", "Start stretch", 0.5, -1.0, 1.0, "m"),
+        ],
+        SimKind::DoublePendulum => vec![
+            param("length1", "Upper rod", 1.0, 0.2, 2.0, "m"),
+            param("length2", "Lower rod", 1.0, 0.2, 2.0, "m"),
+            param("mass1", "Upper mass", 1.0, 0.1, 5.0, "kg"),
+            param("mass2", "Lower mass", 1.0, 0.1, 5.0, "kg"),
+            param("angle1", "Upper start angle", 120.0, -180.0, 180.0, "°"),
+            param("angle2", "Lower start angle", 120.0, -180.0, 180.0, "°"),
+            param("gravity", "Gravity", 9.81, 0.5, 30.0, "m/s²"),
+        ],
+        SimKind::Balls => vec![
+            param("count", "Balls", 20.0, 1.0, 60.0, ""),
+            param("radius", "Ball size", 0.3, 0.1, 0.6, "m"),
+            param("gravity", "Gravity", 9.81, 0.0, 20.0, "m/s²"),
+            param("elasticity", "Elasticity", 0.9, 0.0, 1.0, ""),
+        ],
+        SimKind::Surface => vec![
+            param("range", "Range of x and y", 5.0, 1.0, 10.0, "±"),
+            param("turn", "Turn", 40.0, 0.0, 360.0, "°"),
+            param("tilt", "Tilt", 55.0, 5.0, 85.0, "°"),
+            param("spin", "Spin", 8.0, 0.0, 60.0, "°/s"),
+        ],
+    }
+}
+
+/// A gravity scene from Sir's words: a JSON list of bodies, bodies named ("the sun, the earth
+/// and a comet") or a preset ("solar system", "binary star", "figure eight").
+pub fn gravity_scene(spec: &str) -> Option<phys::Bodies> {
+    phys::Bodies::from_json(spec).or_else(|| phys::Bodies::from_words(spec)).or_else(|| phys::Bodies::preset(spec))
+}
+
+/// The slider a spoken or written name means: its alias, or the name itself when a slider is
+/// called that ("speed" is the Doppler source's, though it also stands for a velocity).
+fn slider_name(params: &[Param], raw: &str) -> String {
+    let aliased = alias(raw);
+    let plain = raw.trim().to_lowercase().replace([' ', '-'], "_");
+    if params.iter().any(|p| p.name == aliased) || !params.iter().any(|p| p.name == plain) {
+        aliased
+    } else {
+        plain
     }
 }
 
@@ -569,7 +872,25 @@ fn alias(name: &str) -> String {
         "m2" | "mass_2" | "second_mass" => "mass2".into(),
         "v1" | "velocity_1" => "velocity1".into(),
         "v2" | "velocity_2" => "velocity2".into(),
-        "distance" | "gap" | "abstand" => "separation".into(),
+        "distance" | "gap" | "abstand" | "slit_distance" | "slit_spacing" | "d" => "separation".into(),
+        "wavelength_nm" | "nm" => "wavelength".into(),
+        "width" | "slit" | "a" | "spaltbreite" => "slit_width".into(),
+        "screen_distance" | "bildschirm" => "screen".into(),
+        "stiffness" | "spring_constant" | "federkonstante" => "k".into(),
+        "harmonics" | "overtone" | "mode" | "oberton" => "harmonic".into(),
+        "rotation" | "rotate" | "drehung" => "turn".into(),
+        "extent" | "bereich" => "range".into(),
+        "slow_motion" | "slowmotion" | "slow" => "slowmo".into(),
+        "loudness" | "lautstärke" => "amplitude".into(),
+        "driving_force" | "drive_force" => "force".into(),
+        "drive_frequency" | "driving_frequency" => "drive".into(),
+        "source_speed" => "speed".into(),
+        "source_frequency" => "frequency".into(),
+        "balls" => "count".into(),
+        "angle_1" | "upper_angle" | "first_angle" => "angle1".into(),
+        "angle_2" | "lower_angle" | "second_angle" => "angle2".into(),
+        "length_1" | "upper_rod" => "length1".into(),
+        "length_2" | "lower_rod" => "length2".into(),
         other => other.to_string(),
     }
 }
@@ -711,6 +1032,7 @@ impl SimulationLab {
             show_integral: false,
             x_range: (-10.0, 10.0),
             algorithm: "bubble".into(),
+            scene: "solar system".into(),
             revision: 0,
             paused: false,
         };
@@ -731,7 +1053,7 @@ impl SimulationLab {
             _ => Vec::new(),
         };
         for (raw_name, raw_value) in map {
-            let name = alias(&raw_name);
+            let name = slider_name(&sim.params, &raw_name);
             match name.as_str() {
                 "derivative" | "integral" => {
                     let on = raw_value.as_bool().unwrap_or(!matches!(raw_value.as_str(), Some("off" | "false" | "hide" | "no")));
@@ -803,10 +1125,19 @@ fn parse_pairs(text: &str) -> Vec<(String, String)> {
 /// Applies the creation spec: formulas and options for plots, key=value pairs for the rest.
 fn configure(sim: &mut Simulation, spec: &str) -> Result<(), String> {
     let spec = spec.trim();
+    if sim.kind == SimKind::Gravity {
+        if gravity_scene(spec).is_some() {
+            sim.scene = spec.to_string();
+        }
+        // (A list of bodies holds no sliders.)
+        if spec.starts_with(['{', '[']) {
+            return Ok(());
+        }
+    }
     // A JSON object of parameters.
     if let Ok(Value::Object(o)) = serde_json::from_str::<Value>(spec) {
         for (k, v) in o {
-            let name = alias(&k);
+            let name = slider_name(&sim.params, &k);
             if let Some(p) = sim.params.iter_mut().find(|p| p.name == name) {
                 if let Some(next) = apply_change(p.value, &v) {
                     p.value = next.clamp(p.min, p.max);
@@ -821,10 +1152,45 @@ fn configure(sim: &mut Simulation, spec: &str) -> Result<(), String> {
         if sim.kind == SimKind::GradientDescent && sim.functions.is_empty() {
             sim.functions.push(("loss".into(), "x^4 - 3x^3 + 2".into(), parse_expr("x^4 - 3x^3 + 2")?));
         }
+        if sim.kind == SimKind::Surface {
+            let given = sim.functions.pop().map(|(_, src, _)| src).unwrap_or_default();
+            return set_surface(sim, &given);
+        }
         return Ok(());
     }
     let lower = spec.to_lowercase();
+    let word = |w: &[&str]| w.iter().any(|x| lower.contains(x));
+    // Words that name a setting rather than give a number (explicit numbers below win).
+    let mut presets: Vec<(&str, f64)> = Vec::new();
     match sim.kind {
+        SimKind::Ripples => {
+            let slits = if word(&["no slit", "ohne spalt"]) { Some(0.0) } else if word(&["single", "einzel"]) { Some(1.0) } else if word(&["double", "doppel", "two slit"]) { Some(2.0) } else { None };
+            presets.extend(slits.map(|s| ("slits", s)));
+            if word(&["plane", "eben", "straight"]) {
+                presets.push(("plane", 1.0));
+            } else if word(&["point", "punkt", "circular"]) {
+                presets.push(("plane", 0.0));
+            }
+        }
+        SimKind::Light => {
+            let colours = [("red", 650.0), ("rot", 650.0), ("orange", 600.0), ("yellow", 580.0), ("gelb", 580.0), ("green", 532.0), ("grün", 532.0), ("blue", 470.0), ("blau", 470.0), ("violet", 410.0), ("purple", 410.0)];
+            presets.extend(colours.iter().find(|(c, _)| lower.contains(c)).map(|(_, nm)| ("wavelength", *nm)));
+        }
+        SimKind::Doppler if word(&["supersonic", "sonic boom", "mach cone", "überschall"]) => presets.push(("speed", 500.0)),
+        SimKind::Spring if word(&["resonan"]) => {
+            // Driven at its own frequency, lightly damped.
+            let w0 = (sim.value("k") / sim.value("mass").max(1e-9)).sqrt();
+            presets.extend([("force", 2.0), ("drive", w0), ("damping", 0.3), ("start", 0.0)]);
+        }
+        _ => {}
+    }
+    for (name, v) in presets {
+        if let Some(p) = sim.params.iter_mut().find(|p| p.name == name) {
+            p.value = v.clamp(p.min, p.max);
+        }
+    }
+    match sim.kind {
+        SimKind::Surface => return set_surface(sim, spec),
         SimKind::Function | SimKind::GradientDescent => {
             sim.show_derivative = lower.contains("derivative") || lower.contains("ableitung") || lower.contains("f'");
             sim.show_integral = lower.contains("integral") || lower.contains("area") || lower.contains("fläche");
@@ -885,7 +1251,7 @@ fn configure(sim: &mut Simulation, spec: &str) -> Result<(), String> {
                 }
             }
             for (k, v) in parse_pairs(&lower) {
-                let k = alias(&k);
+                let k = slider_name(&sim.params, &k);
                 if let (Some(q), Some(val)) = (sim.params.iter_mut().find(|q| q.name == k), v.replace(',', ".").parse::<f64>().ok()) {
                     q.value = val.clamp(q.min, q.max);
                 }
@@ -898,7 +1264,7 @@ fn configure(sim: &mut Simulation, spec: &str) -> Result<(), String> {
                 }
             }
             for (k, v) in parse_pairs(&lower) {
-                let k = alias(&k);
+                let k = slider_name(&sim.params, &k);
                 if let (Some(q), Ok(val)) = (sim.params.iter_mut().find(|q| q.name == k), v.parse::<f64>()) {
                     q.value = val.clamp(q.min, q.max);
                 }
@@ -906,7 +1272,7 @@ fn configure(sim: &mut Simulation, spec: &str) -> Result<(), String> {
         }
         _ => {
             for (k, v) in parse_pairs(spec) {
-                let k = alias(&k);
+                let k = slider_name(&sim.params, &k);
                 if let Some(q) = sim.params.iter_mut().find(|q| q.name == k) {
                     if let Some(val) = apply_change(q.value, &json!(v)) {
                         q.value = val.clamp(q.min, q.max);
@@ -915,6 +1281,40 @@ fn configure(sim: &mut Simulation, spec: &str) -> Result<(), String> {
             }
         }
     }
+    Ok(())
+}
+
+/// Puts a surface's formula in: "z = x^2 - y^2" or "plot sin(x)*cos(y)"; with none named (or
+/// only words), the ripple sin(√(x²+y²)). Unknown names in the formula become sliders.
+fn set_surface(sim: &mut Simulation, spec: &str) -> Result<(), String> {
+    static Z: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"(?:\bz|f\s*\(\s*x\s*,\s*y\s*\))\s*=\s*([^,;?!\n]+)").expect("valid surface regex"));
+    const LEAD: &[&str] = &[
+        "plot", "a", "an", "the", "3d", "3-d", "surface", "of", "show", "me", "simulate", "graph", "draw", "function", "as", "zeig", "zeige", "mir", "eine", "die", "fläche", "oberfläche", "von", "please", "bitte", "visualize", "display", "open", "for", "in", "and", "with", "z", "paraboloid", "saddle",
+    ];
+    let lower = spec.to_lowercase();
+    let named = Z.captures(&lower).map(|c| c[1].trim().trim_end_matches('.').trim_end_matches(" in 3d").trim_end_matches(" in 3-d").trim().to_string());
+    let rest = lower.split_whitespace().filter(|w| !LEAD.contains(&w.trim_matches(|c: char| !c.is_alphanumeric() && c != '-'))).collect::<Vec<_>>().join(" ");
+    let parsed = match (&named, rest.is_empty()) {
+        (Some(src), _) => Some(parse_expr(src).map(|e| (src.clone(), e)).map_err(|e| format!("I couldn't read the surface '{src}': {e}."))?),
+        // Words alone ("a nice hill") are no formula: only one-letter names count.
+        (None, false) => parse_expr(&rest).ok().filter(|e| {
+            let mut used = Vec::new();
+            e.params(&mut used);
+            used.iter().all(|n| n.chars().count() == 1 || n == "y")
+        }).map(|e| (rest.clone(), e)),
+        _ => None,
+    };
+    let (src, e) = match parsed {
+        Some(p) => p,
+        None => ("sin(sqrt(x^2 + y^2))".to_string(), parse_expr("sin(sqrt(x^2 + y^2))")?),
+    };
+    let mut used = Vec::new();
+    e.params(&mut used);
+    let missing: Vec<String> = used.into_iter().filter(|n| n != "y" && !sim.params.iter().any(|p| p.name == *n)).collect();
+    for name in missing {
+        sim.params.push(param(&name, &name, 1.0, -10.0, 10.0, ""));
+    }
+    sim.functions = vec![("z".into(), src, e)];
     Ok(())
 }
 
@@ -990,9 +1390,9 @@ pub fn tool_definitions() -> Vec<Value> {
     vec![
         json!({"type": "function", "function": {
             "name": "launch_interactive_simulation",
-            "description": "Simulation Lab: a live simulation with sliders in a window of its own. sim_type function (f(x); several separated by ';'; 'derivative' / 'integral'; 'x from -5 to 5'), projectile, pendulum, collision, waves, gradient_descent, sorting (bubble / insertion / selection / quick). formula_or_params: the formulas, or 'angle=60, velocity=30, gravity=9.81'. For any physics problem, function or algorithm he could watch.",
+            "description": "Simulation Lab: a live simulation with sliders in a window of its own. sim_type function (f(x); several separated by ';'; 'derivative' / 'integral'; 'x from -5 to 5'), projectile, pendulum, collision, waves, gradient_descent, sorting (bubble / insertion / selection / quick), gravity (formula_or_params: 'the sun, the earth and a comet', 'binary star', or JSON bodies), surface (z = f(x, y)), ripples, standing_wave, doppler, sound, light (double slit), spring, double_pendulum, balls. formula_or_params: the formulas, or 'angle=60, velocity=30, gravity=9.81'.",
             "parameters": {"type": "object", "properties": {
-                "sim_type": {"type": "string", "enum": ["function", "projectile", "pendulum", "collision", "waves", "gradient_descent", "sorting"]},
+                "sim_type": {"type": "string", "enum": ["function", "projectile", "pendulum", "collision", "waves", "gradient_descent", "sorting", "gravity", "surface", "ripples", "standing_wave", "doppler", "sound", "light", "spring", "double_pendulum", "balls"]},
                 "formula_or_params": {"type": "string"},
                 "title": {"type": "string"}
             }, "required": ["sim_type"]}
@@ -1072,7 +1472,12 @@ pub fn simulation_request(text: &str, context: &[String]) -> Option<Value> {
     use regex::Regex;
     use std::sync::LazyLock;
     static ASKS: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"(?i)\b(?:simulat\w*|simulier\w*|visuali[sz]\w*|animat\w*|plot\w*|zeichne|darstell\w*)\b|\b(?:show|zeig|zeige|display|open|launch|start|starte|run)\b.*\b(?:simulation|simulator|trajectory|flugbahn|graph|plot|animation|pendulum|pendel)\b").expect("valid simulation request regex")
+        Regex::new(r"(?i)\b(?:simulat\w*|simulier\w*|visuali[sz]\w*|animat\w*|plot\w*|zeichne|darstell\w*)\b|\b(?:show|zeig|zeige|display|open|launch|start|starte|run)\b.*\b(?:simulation|simulator|trajectory|flugbahn|graph|plot|animation|pendulum|pendel|surface|orbits?|solar system|double slit|doppler|ripples?|standing wave|spring|balls)\b|\bz\s*=\s*\S").expect("valid simulation request regex")
+    });
+    // A sentence that points back at the conversation ("simulate that", "show me the simulation",
+    // "plot it at 45 degrees"); "visualise the volcano" names a thing of its own.
+    static BACK: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?i)\b(?:it|that|this|again|es|nochmal|(?:the|die|den)\s+(?:simulation|simulator|animation|graph|plot|trajectory|curve|flugbahn|kurve))\b|\bdas\s*$|\d").expect("valid reference regex")
     });
     let lower = text.to_lowercase();
     if !ASKS.is_match(&lower) || lower.contains("calendar") || lower.contains("kalender") {
@@ -1090,20 +1495,28 @@ pub fn simulation_request(text: &str, context: &[String]) -> Option<Value> {
         SimKind::parse(s).filter(|k| *k != SimKind::GradientDescent || l.contains("gradient") || l.contains("descent"))
             .filter(|k| *k != SimKind::Sorting || l.contains("sort"))
     };
-    let kind = kind_of(text).or_else(|| context.iter().rev().take(6).find_map(|c| kind_of(c)))?;
+    // "plot it at 45 degrees": the verb alone names no function, the thing is the conversation's
+    // (a formula, "x" or a function's name keeps the plotter).
+    let formula = lower.contains(['=', '^']) || lower.split(|c: char| !c.is_alphanumeric()).any(|w| ["x", "sin", "cos", "tan", "log", "ln", "sqrt", "exp"].contains(&w));
+    let verb_only = !formula && SimKind::parse(&lower.replace("plot", "").replace("graph", "")).is_none();
+    let earlier = || context.iter().rev().take(6).find_map(|c| kind_of(c).map(|k| (k, c.as_str())));
+    let (kind, kind_text) = match kind_of(text) {
+        Some(SimKind::Function) if verb_only && BACK.is_match(&lower) => earlier().unwrap_or((SimKind::Function, text)),
+        Some(k) => (k, text),
+        None if BACK.is_match(&lower) => earlier()?,
+        None => return None,
+    };
+    // A sun, moon or earth alone is simulated only when a simulation is asked for: "Zeichne den
+    // Mond" wants a picture, "simulate the moon" its orbit.
+    let gravity_words = ["gravit", "orbit", "solar", "planet", "comet", "body", "kepler", "satellit", "binary", "figure eight", "schwerkraft", "umlaufbahn", "sonnensystem", "komet", "doppelstern"];
+    if kind == SimKind::Gravity && kind_text == text && !gravity_words.iter().chain(&["simul", "animat"]).any(|w| lower.contains(w)) {
+        return None;
+    }
     // Numbers: Sir's sentence first, then the conversation, newest first.
     let mut sources: Vec<String> = vec![lower.clone()];
     sources.extend(context.iter().rev().take(6).map(|c| c.to_lowercase()));
     let num = |re: &Regex| -> Option<f64> { sources.iter().find_map(|s| re.captures(s).and_then(|c| c.get(1)).and_then(|m| m.as_str().replace(',', ".").parse::<f64>().ok())) };
-    let id = match kind {
-        SimKind::Function => "function",
-        SimKind::Projectile => "projectile",
-        SimKind::Pendulum => "pendulum",
-        SimKind::Collision => "collision",
-        SimKind::Waves => "waves",
-        SimKind::GradientDescent => "gradient_descent",
-        SimKind::Sorting => "sorting",
-    };
+    let id = kind.id();
     let mut spec: Vec<String> = Vec::new();
     let mut title = kind.label().to_string();
     match kind {
@@ -1176,6 +1589,8 @@ pub fn simulation_request(text: &str, context: &[String]) -> Option<Value> {
                 spec.push(f);
             }
         }
+        // The scene, the formula, the colour: `configure` reads them from the words themselves.
+        SimKind::Gravity | SimKind::Surface | SimKind::Ripples | SimKind::StandingWave | SimKind::Doppler | SimKind::Sound | SimKind::Light | SimKind::Spring | SimKind::DoublePendulum | SimKind::Balls => spec.push(kind_text.trim().to_string()),
         _ => {}
     }
     Some(json!({ "sim_type": id, "formula_or_params": spec.join(", "), "title": title }))
@@ -1251,7 +1666,7 @@ pub fn voice_adjust(lab: &SimulationLab, text: &str) -> Option<Value> {
         // A one-letter slider ("a", "b") only counts as "a to 5" / "a = 5" ("set a timer" is not one).
         let find_param = |ws: &[&str]| -> Option<String> {
             ws.iter().enumerate().find_map(|(i, w)| {
-                let n = alias(w.trim_matches(|c: char| !c.is_alphanumeric() && c != '_'));
+                let n = slider_name(&sim.params, w.trim_matches(|c: char| !c.is_alphanumeric() && c != '_'));
                 let next = ws.get(i + 1).copied().unwrap_or("");
                 let explicit = n.chars().count() > 1 || matches!(next, "to" | "=" | "auf" | "zu") || next.parse::<f64>().is_ok();
                 (names.contains(&n.as_str()) && explicit).then_some(n)
@@ -1375,5 +1790,183 @@ mod tests {
         assert_eq!(steps.last().unwrap().0, vec![1.0, 2.0, 3.0]);
         assert!(lab.close(&sim.id));
         assert_eq!(apply_change(10.0, &json!("x3")), Some(30.0));
+    }
+
+    #[test]
+    fn the_new_kinds_are_found_by_their_words_in_english_and_german() {
+        use SimKind::*;
+        let cases = [
+            ("simulate the solar system", Gravity),
+            ("the sun, the earth and a comet", Gravity),
+            ("zeig mir die Umlaufbahn des Mondes", Gravity),
+            ("binary star", Gravity),
+            ("figure eight three body", Gravity),
+            ("ripple tank", Ripples),
+            ("Wellenwanne", Ripples),
+            ("single slit", Ripples),
+            ("standing wave on a string", StandingWave),
+            ("stehende Welle", StandingWave),
+            ("third harmonic", StandingWave),
+            ("doppler effect", Doppler),
+            ("sonic boom", Doppler),
+            ("Überschall", Doppler),
+            ("sound wave", Sound),
+            ("Schallwelle", Sound),
+            ("longitudinal wave", Sound),
+            ("double slit", Light),
+            ("Doppelspalt", Light),
+            ("a red laser", Light),
+            ("light interference", Light),
+            ("mass on a spring", Spring),
+            ("Federpendel", Spring),
+            ("resonance", Spring),
+            ("double pendulum", DoublePendulum),
+            ("Doppelpendel", DoublePendulum),
+            ("bouncing balls in a box", Balls),
+            ("billiard", Balls),
+            ("3d surface", Surface),
+            ("plot z = x^2 - y^2", Surface),
+            ("Oberfläche", Surface),
+            // The old kinds keep their words.
+            ("wave interference", Waves),
+            ("Welle", Waves),
+            ("pendulum", Pendulum),
+            ("Pendel", Pendulum),
+            ("a cannon ball", Projectile),
+            ("collision", Collision),
+            ("gradient descent", GradientDescent),
+            ("bubble sort", Sorting),
+            ("plot f(x) = x^2", Function),
+            ("function", Function),
+        ];
+        for (words, kind) in cases {
+            assert_eq!(SimKind::parse(words), Some(kind), "{words}");
+        }
+        for kind in [Function, Projectile, Pendulum, Collision, Waves, GradientDescent, Sorting, Gravity, Ripples, StandingWave, Doppler, Sound, Light, Spring, DoublePendulum, Balls, Surface] {
+            assert_eq!(SimKind::parse(kind.id()), Some(kind), "the tool's own name for {kind:?}");
+        }
+    }
+
+    #[test]
+    fn the_new_simulations_read_out_their_physics() {
+        let lab = SimulationLab::default();
+        let read = |kind: SimKind, spec: &str| {
+            let sim = lab.launch(kind, spec, None).unwrap();
+            let out = sim.readout();
+            lab.close(&sim.id);
+            out
+        };
+        let solar = read(SimKind::Gravity, "solar system");
+        assert!(solar.contains("Mercury orbits Sun in 0.241 years") && solar.contains("Neptune orbits Sun in 164."), "{solar}");
+        assert!(read(SimKind::Gravity, "binary star").contains("3 bodies"));
+        let scene = r#"{"g": 1, "bodies": [{"name": "Sun", "mass": 10, "x": 0, "y": 0}, {"name": "Rock", "mass": 0.01, "x": 2, "y": 0, "vx": 0, "vy": 2.2}]}"#;
+        let sim = lab.launch(SimKind::Gravity, scene, None).unwrap();
+        assert_eq!((sim.scene.as_str(), sim.bodies().bodies.len()), (scene, 2));
+        let words = lab.launch(SimKind::Gravity, "the sun, the earth and a comet", None).unwrap();
+        assert_eq!(words.bodies().bodies.len(), 3);
+        assert!(words.readout().contains("Comet orbits Sun") || words.readout().contains("Earth orbits Sun"));
+        lab.close(&sim.id);
+        lab.close(&words.id);
+        let tank = lab.launch(SimKind::Ripples, "single slit, point source", None).unwrap();
+        assert_eq!((tank.value("slits"), tank.value("plane")), (1.0, 0.0));
+        assert!(tank.readout().contains("wavelength 20.0 cells") && tank.readout().contains("narrower than a wavelength"), "{}", tank.readout());
+        lab.close(&tank.id);
+        let two = read(SimKind::Ripples, "");
+        assert!(two.contains("the first at 56°"), "{two}");
+        let string = read(SimKind::StandingWave, "");
+        assert!(string.contains("30.0 Hz") && string.contains("4 nodes") && string.contains("1.33 m"), "{string}");
+        let doppler = read(SimKind::Doppler, "");
+        assert!(doppler.contains("heard 677 Hz in front") && doppler.contains("326 Hz behind"), "{doppler}");
+        let boom = read(SimKind::Doppler, "supersonic");
+        assert!(boom.contains("Mach cone of half-angle 43.3°") && boom.contains("Mach 1.46"), "{boom}");
+        assert!(read(SimKind::Sound, "").contains("wavelength v/f = 0.780 m"));
+        let light = read(SimKind::Light, "");
+        assert!(light.contains("green light") && light.contains("10.64 mm") && light.contains("±35.5 mm"), "{light}");
+        assert!(read(SimKind::Light, "a red laser").contains("red light, 650 nm"));
+        let spring = read(SimKind::Spring, "");
+        assert!(spring.contains("ω₀ = √(k/m) = 4.47 rad/s") && spring.contains("underdamped"), "{spring}");
+        assert!(read(SimKind::Spring, "resonance").contains("steady swing is 1.491 m"));
+        assert!(read(SimKind::DoublePendulum, "").contains("total energy 14.7"));
+        let balls = read(SimKind::Balls, "");
+        assert!(balls.contains("20 balls") && balls.contains("90 % of the speed"), "{balls}");
+    }
+
+    #[test]
+    fn a_surface_takes_x_and_y_and_its_own_sliders() {
+        let lab = SimulationLab::default();
+        let saddle = lab.launch(SimKind::Surface, "z = x^2 - y^2", None).unwrap();
+        assert_eq!(saddle.functions[0].1, "x^2 - y^2");
+        let out = saddle.readout();
+        assert!(out.contains("z(0, 0) = 0.000") && out.contains("between -25.00 and 25.00"), "{out}");
+        let both = lab.launch(SimKind::Surface, "z = a*x*y", None).unwrap();
+        assert!(both.params.iter().any(|p| p.name == "a") && !both.params.iter().any(|p| p.name == "y"));
+        let mut ps = both.surface_params();
+        assert_eq!(both.surface_z(&mut ps, 3.0, 4.0), 12.0);
+        // "xy" is x times y, and a formula in words is found among the filler.
+        let joined = lab.launch(SimKind::Surface, "z = 2xy", None).unwrap();
+        let mut ps = joined.surface_params();
+        assert_eq!(joined.surface_z(&mut ps, 3.0, 4.0), 24.0);
+        let said = lab.launch(SimKind::Surface, "plot sin(x)*cos(y) as a surface", None).unwrap();
+        assert_eq!(said.functions[0].1, "sin(x)*cos(y)");
+        lab.close(&saddle.id);
+        lab.close(&both.id);
+        lab.close(&joined.id);
+        lab.close(&said.id);
+        let default = lab.launch(SimKind::Surface, "simulate a 3d surface", None).unwrap();
+        assert_eq!(default.functions[0].1, "sin(sqrt(x^2 + y^2))");
+        assert!(lab.launch(SimKind::Surface, "z = x +* ", None).is_err());
+    }
+
+    /// Slips found while merging the new kinds: a request naming its own thing took the last
+    /// simulation's kind, "Zeichne den Mond" became an orbit, a formula in 3D went to the studio.
+    #[test]
+    fn a_request_keeps_its_own_subject() {
+        let context = vec!["Simulate a pendulum with a 2 m string".to_string()];
+        assert_eq!(simulation_request("simulate it again", &context).unwrap()["sim_type"], "pendulum");
+        assert_eq!(simulation_request("plot it with 3 m", &context).unwrap()["sim_type"], "pendulum");
+        assert!(simulation_request("Visualise the volcano", &context).is_none());
+        assert!(simulation_request("Zeichne den Mond", &[]).is_none());
+        assert_eq!(simulation_request("simulate the moon", &[]).unwrap()["sim_type"], "gravity");
+        assert_eq!(simulation_request("Zeichne die Umlaufbahn der Erde", &[]).unwrap()["sim_type"], "gravity");
+        let said = "Show me z = x^2 + y^2 in 3D";
+        assert!(crate::model3d::intent(said).is_none());
+        let args = simulation_request(said, &[]).unwrap();
+        assert_eq!(args["sim_type"], "surface");
+        let lab = SimulationLab::default();
+        let surface = lab.launch(SimKind::Surface, args["formula_or_params"].as_str().unwrap(), None).unwrap();
+        assert_eq!(surface.functions[0].1, "x^2 + y^2");
+        lab.close(&surface.id);
+    }
+
+    #[test]
+    fn the_new_simulations_are_reached_by_voice_and_their_sliders_by_name() {
+        let args = |s: &str| simulation_request(s, &[]).unwrap_or(Value::Null);
+        for (said, kind) in [
+            ("simulate a double slit with a red laser", "light"),
+            ("simulate the sun, the earth and a comet", "gravity"),
+            ("show me ripples with a single slit", "ripples"),
+            ("simulate standing waves", "standing_wave"),
+            ("plot z = sin(x) * cos(y)", "surface"),
+            ("simulate the doppler effect", "doppler"),
+            ("simulate the double pendulum", "double_pendulum"),
+            ("simulate sound waves", "sound"),
+            ("simulate bouncing balls", "balls"),
+            ("simulate a mass on a spring", "spring"),
+            ("simuliere den Doppelspalt", "light"),
+        ] {
+            assert_eq!(args(said)["sim_type"], kind, "{said}");
+            // (No fixed route claims them: the language model's tool or `simulation_request` does.)
+            assert!(crate::phrasings::route(said).is_none_or(|(tool, _)| tool == "launch_interactive_simulation"), "{said}");
+        }
+        assert!(args("simulate the sun, the earth and a comet")["formula_or_params"].as_str().unwrap().contains("comet"));
+        let lab = SimulationLab::default();
+        let sim = lab.launch(SimKind::Doppler, "", None).unwrap();
+        let said = voice_adjust(&lab, "set the speed to 200").unwrap();
+        assert_eq!(said["changes"]["speed"], 200.0);
+        lab.adjust(&sim.id, &said["changes"]).unwrap();
+        assert_eq!(lab.get(&sim.id).unwrap().value("speed"), 200.0);
+        lab.adjust(&sim.id, &json!({"source speed": "half"})).unwrap();
+        assert_eq!(lab.get(&sim.id).unwrap().value("speed"), 100.0);
+        assert!(tool_definitions()[0].to_string().contains("double_pendulum"));
     }
 }

@@ -1,21 +1,18 @@
-//! The Simulation Lab: every simulation is a ROSE block inside the main HUD by default
-//! (`gui::hud_block_window`), redrawn at 60 FPS, with the parameter sliders on the left and the
-//! live plot / animation on the right; `[ DETACH ]` or "open it in a separate window" moves it
-//! into its own egui deferred viewport. The plot is the ROSE look: a `#050A10` canvas in a 1 px
-//! `#2B7A9E` frame with white L-corner brackets, white grid axes with their numbers, f(x) in
-//! glowing cyan `#00E5FF` and f′(x) in crimson `#FF1E56`. The canvas and the controls get
-//! explicit rectangles (a painter allocated inside a horizontal row was only one row tall, which
-//! left the old window's plot pitch-black).
-//! Child module of `gui` (shares the HUD palette and building blocks); the models live in
-//! `simulation_lab.rs`, the per-window animation state (time, pendulum angle, ball positions,
-//! the descent's position, the sort's progress) here.
+//! The Simulation Lab's windows: each simulation is a window of its own (a block only in an
+//! offscreen session), redrawn at 60 FPS, with the sliders on the left and the live plot or
+//! animation on the right. Light on black glass in the theme's colours: ink hairlines for
+//! structure, the accent only for what is live or measured, filaments with a soft glow. The
+//! models live in `simulation_lab.rs` and the physics in `simulation_physics.rs`; the
+//! per-window state (time, the n-body scene, the ripple tank, trails) is kept here.
 
 use super::widget_view::WidgetHost;
 use super::{button, muted, paint_background, stroke, Palette, Tone};
 use crate::holo::Face;
+use crate::holo::{a as faint, lit, mix, Light};
 use crate::simulation_lab::{self, Param, SimKind, Simulation};
+use crate::simulation_physics as phys;
 use eframe::egui::{self, pos2, vec2, Align2, Color32, Frame, Margin, Pos2, Rect, RichText, Rounding, Sense, Shape, Stroke, ViewportBuilder, ViewportClass, ViewportCommand, ViewportId};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -44,6 +41,20 @@ struct Runtime {
     /// Sorting: states and the progress through them.
     sort: Vec<(Vec<f64>, (usize, usize))>,
     sort_pos: f64,
+    /// What the physics-based kinds step (see `advance`).
+    world: World,
+}
+
+/// The state of the simulations that `simulation_physics` runs.
+enum World {
+    None,
+    /// The scene, scene time per second, the largest reach seen (the view only grows), the start energy.
+    Gravity { scene: phys::Bodies, rate: f64, reach: f64, e0: f64 },
+    Ripples(phys::Ripples),
+    /// The spring, (time, stretch) of the last ten seconds, the largest stretch seen.
+    Spring { spring: phys::Spring, trace: VecDeque<(f64, f64)>, reach: f64 },
+    Chaos { pendulum: phys::DoublePendulum, e0: f64, lower: VecDeque<[f64; 2]>, upper: VecDeque<[f64; 2]> },
+    Balls { balls: phys::Balls, e0: f64 },
 }
 
 impl Runtime {
@@ -67,8 +78,28 @@ impl Runtime {
             gd_timer: 0.0,
             sort: Vec::new(),
             sort_pos: 0.0,
+            world: World::None,
         };
         match sim.kind {
+            SimKind::Gravity => {
+                let scene = sim.bodies();
+                // The quickest orbit goes round in about five seconds at speed 1.
+                let rate = phys::quickest_period(&scene.bodies, scene.g) / 5.0;
+                r.world = World::Gravity { rate, reach: scene.extent() * 1.1, e0: scene.energy(), scene };
+            }
+            SimKind::Ripples => r.world = World::Ripples(sim.ripples()),
+            SimKind::Spring => {
+                let spring = sim.spring();
+                r.world = World::Spring { reach: spring.x.abs().max(0.3), spring, trace: VecDeque::new() };
+            }
+            SimKind::DoublePendulum => {
+                let pendulum = sim.double_pendulum();
+                r.world = World::Chaos { e0: pendulum.energy(), pendulum, lower: VecDeque::new(), upper: VecDeque::new() };
+            }
+            SimKind::Balls => {
+                let balls = sim.balls();
+                r.world = World::Balls { e0: balls.energy(), balls };
+            }
             SimKind::Projectile => r.path = trajectory(sim),
             SimKind::Sorting => {
                 let n = sim.value("count").round().clamp(2.0, 400.0) as usize;
@@ -254,7 +285,8 @@ fn sim_frame(ctx: &egui::Context, class: ViewportClass, host: &WidgetHost, id: &
         });
         super::paint_window_border(ctx);
     }
-    ctx.request_repaint_after(Duration::from_millis(if sim.paused { 250 } else { 16 }));
+    // (Beside a game a running simulation slows to four frames a second: the card is the game's.)
+    ctx.request_repaint_after(Duration::from_millis(if sim.paused || crate::hud_feel::game_in_front() { 250 } else { 16 }));
 }
 
 /// The control column's width and the plot canvas inside `avail` (side by side; the controls
@@ -312,7 +344,9 @@ fn draw_body(ui: &mut egui::Ui, p: &Palette, sim: &Simulation, host: &WidgetHost
     rt.last = now;
     rt.t += dt;
     let inner = plot_rect.shrink(16.0);
+    advance(sim, rt, dt);
     match sim.kind {
+        SimKind::Gravity | SimKind::Ripples | SimKind::StandingWave | SimKind::Doppler | SimKind::Sound | SimKind::Light | SimKind::Spring | SimKind::DoublePendulum | SimKind::Balls | SimKind::Surface => draw_physics(&painter, inner, sim, rt),
         SimKind::Function => draw_function(&painter, inner, p, sim, response.hover_pos()),
         SimKind::Projectile => draw_projectile(&painter, inner, p, sim, rt),
         SimKind::Pendulum => draw_pendulum(&painter, inner, p, sim, rt, dt),
@@ -340,15 +374,21 @@ fn controls(ui: &mut egui::Ui, p: &Palette, sim: &Simulation, host: &WidgetHost)
         ui.add_space(4.0);
         let (mut d, mut i) = (sim.show_derivative, sim.show_integral);
         // One option per line (they wrap inside the column instead of running off its edge).
-        if ui.add(egui::Checkbox::new(&mut d, RichText::new("Show derivative f′(x)").font(crate::holo::font(Face::Body, 12.0)))).changed() {
+        if crate::holo_ui::toggle(ui, &mut d, "Show derivative f′(x)").changed() {
             lab.set_option(&sim.id, Some(d), None);
         }
-        if ui.add(egui::Checkbox::new(&mut i, RichText::new("Shade the integral").font(crate::holo::font(Face::Body, 12.0)))).changed() {
+        if crate::holo_ui::toggle(ui, &mut i, "Shade the integral").changed() {
             lab.set_option(&sim.id, None, Some(i));
         }
         ui.add_space(4.0);
         for (label, src, _) in &sim.functions {
             ui.label(RichText::new(format!("{label}(x) = {src}")).font(crate::holo::font(Face::Mono, 11.5)).color(p.accent));
+        }
+    }
+    if sim.kind == SimKind::Surface {
+        ui.add_space(4.0);
+        for (label, src, _) in &sim.functions {
+            ui.label(RichText::new(format!("{label}(x, y) = {src}")).font(crate::holo::font(Face::Mono, 11.5)).color(p.accent));
         }
     }
     if sim.kind == SimKind::Sorting {
@@ -641,8 +681,10 @@ fn draw_collision(painter: &egui::Painter, rect: Rect, p: &Palette, sim: &Simula
     let px_per_m = rect.width() / 24.0;
     for (x, rad, m, v, colour, name) in [(rt.x1, r1, m1, rt.v1, p.accent, "m₁"), (rt.x2, r2, m2, rt.v2, p.deep, "m₂")] {
         let c = pos2(view.to_screen(x, 0.0).x, track_y - rad as f32 * px_per_m);
-        painter.circle_filled(c, rad as f32 * px_per_m, colour.gamma_multiply(0.85));
-        painter.text(c, Align2::CENTER_CENTER, format!("{name}\n{m:.1} kg"), crate::holo::font(Face::Mono, 11.0), crate::holo::ink_on(colour));
+        // A faint pane with a bright edge (a strong fill of the accent reads olive).
+        painter.circle_filled(c, rad as f32 * px_per_m, faint(crate::holo::theme().ink(), 0.09));
+        painter.circle_stroke(c, rad as f32 * px_per_m, stroke(1.8, colour));
+        painter.text(c, Align2::CENTER_CENTER, format!("{name}\n{m:.1} kg"), crate::holo::font(Face::Mono, 11.0), crate::holo::theme().ink());
         if v.abs() > 0.01 {
             painter.arrow(c - vec2(0.0, rad as f32 * px_per_m + 14.0), vec2(v as f32 * px_per_m * 0.6, 0.0), stroke(2.0, p.nominal));
         }
@@ -669,17 +711,18 @@ fn draw_waves(painter: &egui::Painter, rect: Rect, p: &Palette, sim: &Simulation
             let r1 = ((x - s1.0).powi(2) + (y - s1.1).powi(2)).sqrt();
             let r2 = ((x - s2.0).powi(2) + (y - s2.1).powi(2)).sqrt();
             let a = (k * r1 - w * rt.t).sin() / (1.0 + 0.15 * r1) + (k * r2 - w * rt.t + phase).sin() / (1.0 + 0.15 * r2);
-            let v = (a / 2.0).clamp(-1.0, 1.0) as f32;
-            let colour = if v >= 0.0 { p.accent.gamma_multiply(v) } else { p.deep.gamma_multiply(-v * 0.8) };
+            let colour = field_colour((a / 2.0).clamp(-1.0, 1.0) as f32);
             let cell = Rect::from_min_size(pos2(rect.left() + i as f32 * cw, rect.top() + j as f32 * ch), vec2(cw + 0.5, ch + 0.5));
             mesh.add_colored_rect(cell, colour);
         }
     }
     painter.add(Shape::mesh(mesh));
+    let mut light = Light::new(painter);
     for s in [s1, s2] {
         let at = pos2(rect.left() + ((s.0 + span_x / 2.0) / span_x) as f32 * rect.width(), rect.center().y);
-        painter.circle_filled(at, 5.0, p.accent);
+        light.spark(at, 9.0, crate::holo::theme().hot());
     }
+    light.paint(painter);
     readout(painter, rect, 8.0, &format!("f = {f:.2} Hz   λ = {lambda:.2} m   d = {sep:.1} m   Δφ = {:.0}°", phase.to_degrees()), p.text);
 }
 
@@ -740,16 +783,594 @@ fn draw_sorting(painter: &egui::Painter, rect: Rect, p: &Palette, sim: &Simulati
     for (k, v) in values.iter().enumerate() {
         let h = *v as f32 * (rect.height() - 30.0);
         let bar = Rect::from_min_max(pos2(rect.left() + k as f32 * w + 1.0, rect.bottom() - h), pos2(rect.left() + (k + 1) as f32 * w - 1.0, rect.bottom()));
-        let colour = if done {
-            p.nominal
+        // Faint bars with a bright cap; the two being compared are one solid block.
+        let (edge, fill) = if done {
+            (p.nominal, faint(p.nominal, 0.1))
         } else if k == *i || k == *j {
-            crate::holo::theme().hot()
+            (crate::holo::theme().hot(), crate::holo::theme().hot())
         } else {
-            p.accent.gamma_multiply(0.75)
+            (p.accent, faint(crate::holo::theme().ink(), 0.1))
         };
-        painter.rect_filled(bar, Rounding::ZERO, colour);
+        painter.rect_filled(bar, Rounding::ZERO, fill);
+        painter.line_segment([bar.left_top(), bar.right_top()], stroke(2.0, edge));
     }
     readout(painter, rect, 8.0, &format!("{} sort · step {} of {}{}", sim.algorithm, rt.sort_pos as usize, rt.sort.len() - 1, if done { " · sorted" } else { "" }), p.text);
+}
+
+// ------------------------------------------------------- the physics-based simulations ----
+
+/// Steps what `simulation_physics` runs by one frame (`dt` is 0 while paused).
+fn advance(sim: &Simulation, rt: &mut Runtime, dt: f64) {
+    if dt <= 0.0 {
+        return;
+    }
+    match &mut rt.world {
+        World::Gravity { scene, rate, reach, .. } => {
+            scene.advance(dt * *rate * sim.value("speed"));
+            *reach = reach.max(scene.extent() * 1.05);
+        }
+        World::Ripples(tank) => {
+            for _ in 0..sim.value("speed").round().max(1.0) as usize {
+                tank.step();
+            }
+        }
+        World::Spring { spring, trace, reach } => {
+            spring.advance(dt);
+            trace.push_back((spring.t, spring.x));
+            while trace.front().is_some_and(|(s, _)| spring.t - s > 10.0) {
+                trace.pop_front();
+            }
+            *reach = reach.max(spring.x.abs() * 1.05);
+        }
+        World::Chaos { pendulum, lower, upper, .. } => {
+            pendulum.advance(dt);
+            let (p1, p2) = pendulum.bobs();
+            upper.push_back(p1);
+            lower.push_back(p2);
+            if upper.len() > 120 {
+                upper.pop_front();
+            }
+            if lower.len() > 500 {
+                lower.pop_front();
+            }
+        }
+        World::Balls { balls, .. } => balls.advance(dt),
+        World::None => {}
+    }
+}
+
+/// Paints the kinds that `simulation_physics` runs.
+fn draw_physics(painter: &egui::Painter, rect: Rect, sim: &Simulation, rt: &Runtime) {
+    match sim.kind {
+        SimKind::Gravity => draw_gravity(painter, rect, sim, rt),
+        SimKind::Ripples => draw_ripples(painter, rect, sim, rt),
+        SimKind::StandingWave => draw_standing(painter, rect, sim, rt),
+        SimKind::Doppler => draw_doppler(painter, rect, sim, rt),
+        SimKind::Sound => draw_sound(painter, rect, sim, rt),
+        SimKind::Light => draw_light(painter, rect, sim),
+        SimKind::Spring => draw_spring(painter, rect, rt),
+        SimKind::DoublePendulum => draw_chaos(painter, rect, rt),
+        SimKind::Balls => draw_balls(painter, rect, rt),
+        SimKind::Surface => draw_surface(painter, rect, sim, rt),
+        _ => {}
+    }
+}
+
+/// Light of an intensity 0-1 through the theme: black glass, grey ink, the accent, then white-hot
+/// (a dim accent on black reads olive, so the low end goes through ink instead).
+fn ramp(t: f32) -> Color32 {
+    let th = crate::holo::theme();
+    let t = t.clamp(0.0, 1.0);
+    let grey = mix(th.void(), th.ink(), 0.45);
+    if t < 0.45 {
+        mix(th.void(), grey, (t / 0.45).powf(1.6))
+    } else if t < 0.85 {
+        mix(grey, th.accent(), (t - 0.45) / 0.4)
+    } else {
+        mix(th.accent(), th.hot(), (t - 0.85) / 0.15)
+    }
+}
+
+/// A signed wave: crests light up through the ramp, troughs stay a cool grey.
+fn field_colour(v: f32) -> Color32 {
+    let th = crate::holo::theme();
+    if v >= 0.0 { ramp(v) } else { mix(th.void(), th.ink(), 0.22 * -v) }
+}
+
+/// `cols` × `rows` cells over `rect`, one colour per vertex so the cells blend into each other.
+fn grid_mesh(rect: Rect, cols: usize, rows: usize, colour: impl Fn(usize, usize) -> Color32) -> Shape {
+    let mut mesh = egui::Mesh::default();
+    for j in 0..=rows {
+        for i in 0..=cols {
+            let at = pos2(rect.left() + rect.width() * i as f32 / cols as f32, rect.top() + rect.height() * j as f32 / rows as f32);
+            mesh.colored_vertex(at, colour(i, j));
+        }
+    }
+    let w = cols as u32 + 1;
+    for j in 0..rows as u32 {
+        for i in 0..cols as u32 {
+            let k = j * w + i;
+            mesh.add_triangle(k, k + 1, k + w);
+            mesh.add_triangle(k + 1, k + w + 1, k + w);
+        }
+    }
+    Shape::mesh(mesh)
+}
+
+/// Short samples of line colours with what each line is.
+fn legend(painter: &egui::Painter, at: Pos2, items: &[(Color32, &str)]) {
+    let font = crate::holo::font(Face::Mono, 10.0);
+    let mut x = at.x;
+    for (colour, text) in items {
+        painter.line_segment([pos2(x, at.y), pos2(x + 16.0, at.y)], stroke(2.0, *colour));
+        let used = painter.text(pos2(x + 20.0, at.y), Align2::LEFT_CENTER, *text, font.clone(), crate::holo::theme().muted());
+        x = used.right() + 16.0;
+    }
+}
+
+fn tag(painter: &egui::Painter, at: Pos2, anchor: Align2, text: &str, colour: Color32) {
+    painter.text(at, anchor, text, crate::holo::font(Face::Mono, 10.0), colour);
+}
+
+/// A canvas under its read-out (the read-out takes the top 44 points).
+fn below_readout(rect: Rect) -> Rect {
+    Rect::from_min_max(rect.min + vec2(0.0, 44.0), rect.max - vec2(0.0, 4.0))
+}
+
+/// The points of a circle, for a ribbon.
+fn circle_points(centre: Pos2, radius: f32, n: usize) -> Vec<Pos2> {
+    (0..n).map(|i| centre + vec2((i as f32 / n as f32 * std::f32::consts::TAU).cos(), (i as f32 / n as f32 * std::f32::consts::TAU).sin()) * radius).collect()
+}
+
+fn draw_gravity(painter: &egui::Painter, rect: Rect, sim: &Simulation, rt: &Runtime) {
+    let World::Gravity { scene, reach, e0, .. } = &rt.world else { return };
+    let th = crate::holo::theme();
+    let area = below_readout(rect);
+    let (centre, radius) = (area.center(), (area.width().min(area.height()) / 2.0 - 24.0).max(40.0));
+    // Distance from the centre by its square root when the planets would otherwise leave the inner ones a dot.
+    let place = |p: [f64; 2]| {
+        let r = (p[0].hypot(p[1]) / reach).min(4.0);
+        let k = if scene.root_scale { r.sqrt() } else { r } as f32;
+        let angle = p[1].atan2(p[0]) as f32;
+        centre + vec2(angle.cos(), -angle.sin()) * (k * radius)
+    };
+    // The origin's axes and range circles: the scale the scene is drawn at.
+    painter.line_segment([pos2(area.left(), centre.y), pos2(area.right(), centre.y)], stroke(1.0, faint(th.ink(), 0.07)));
+    painter.line_segment([pos2(centre.x, area.top()), pos2(centre.x, area.bottom())], stroke(1.0, faint(th.ink(), 0.07)));
+    for frac in [0.25f32, 0.5, 1.0] {
+        painter.circle_stroke(centre, radius * frac, stroke(1.0, faint(th.ink(), 0.16)));
+        let value = reach * if scene.root_scale { (frac * frac) as f64 } else { frac as f64 };
+        tag(painter, centre + vec2(4.0, radius * frac - 2.0), Align2::LEFT_BOTTOM, &format!("{} {}", label(value), scene.units.0), th.muted());
+    }
+    let heavy = (0..scene.bodies.len()).max_by(|a, b| scene.bodies[*a].mass.total_cmp(&scene.bodies[*b].mass)).unwrap_or(0);
+    let tones = [th.accent(), th.ink(), th.deep()];
+    let colour_of = |i: usize| if i == heavy { th.hot() } else { tones[i % 3] };
+    let mut light = Light::new(painter);
+    for (i, (trail, body)) in scene.trails.iter().zip(&scene.bodies).enumerate() {
+        let points: Vec<Pos2> = trail.iter().copied().chain([body.pos]).map(&place).collect();
+        let n = points.len();
+        if n >= 2 {
+            let colours: Vec<Color32> = (0..n).map(|k| lit(colour_of(i), 0.12 + 0.8 * (k as f32 / n as f32))).collect();
+            light.ribbon(&points, &colours, false, 1.3);
+        }
+        light.spark(place(body.pos), body.size * 1.6, colour_of(i));
+    }
+    light.paint(painter);
+    for (i, body) in scene.bodies.iter().enumerate() {
+        let at = place(body.pos);
+        painter.circle_filled(at, body.size * 0.4, th.hot());
+        painter.circle_stroke(at, body.size * 0.75, stroke(1.2, colour_of(i)));
+        tag(painter, at + vec2(body.size * 0.8 + 3.0, -body.size * 0.8), Align2::LEFT_BOTTOM, &body.name, th.ink());
+    }
+    let drift = (scene.energy() - e0) / e0.abs().max(1e-300);
+    readout(painter, rect, 8.0, &format!("t = {} {}   energy drift {drift:+.1e}   {} bodies   speed ×{:.1}", trim_t(scene.t), scene.units.1, scene.bodies.len(), sim.value("speed")), th.ink());
+}
+
+/// A time with the digits it needs (0.0748 years, 12.4 years).
+fn trim_t(t: f64) -> String {
+    format!("{:.*}", if t < 1.0 { 3 } else { 1 }, t)
+}
+
+fn draw_ripples(painter: &egui::Painter, rect: Rect, sim: &Simulation, rt: &Runtime) {
+    let World::Ripples(tank) = &rt.world else { return };
+    let th = crate::holo::theme();
+    let area = below_readout(rect);
+    let aspect = tank.w as f32 / tank.h as f32;
+    let (w, h) = if area.width() / area.height() > aspect { (area.height() * aspect, area.height()) } else { (area.width(), area.width() / aspect) };
+    let tank_rect = Rect::from_center_size(area.center(), vec2(w, h));
+    painter.add(grid_mesh(tank_rect, tank.w - 1, tank.h - 1, |i, j| field_colour((tank.at(i, j) * 1.1).tanh() * 0.85)));
+    let (cw, ch) = (tank_rect.width() / (tank.w - 1) as f32, tank_rect.height() / (tank.h - 1) as f32);
+    // The wall with its slits, in ink.
+    for y in 0..tank.h {
+        if tank.wall[y * tank.w + tank.wall_x] {
+            let cell = Rect::from_min_max(pos2(tank_rect.left() + (tank.wall_x as f32 - 0.5) * cw, tank_rect.top() + (y as f32 - 0.5) * ch), pos2(tank_rect.left() + (tank.wall_x as f32 + 1.5) * cw, tank_rect.top() + (y as f32 + 0.5) * ch));
+            painter.rect_filled(cell.intersect(tank_rect), Rounding::ZERO, faint(th.ink(), 0.85));
+        }
+    }
+    crate::holo::outline(painter, &crate::holo::plate(tank_rect, [0.0; 4]), faint(th.ink(), 0.4));
+    // The source.
+    let source = pos2(tank_rect.left() + 16.0 * cw, tank_rect.center().y);
+    let mut light = Light::new(painter);
+    if tank.plane {
+        light.seg(pos2(source.x, tank_rect.top() + ch), pos2(source.x, tank_rect.bottom() - ch), 2.0, th.accent());
+    } else {
+        light.spark(source, 9.0, th.hot());
+    }
+    light.paint(painter);
+    // One wavelength, measured against the picture.
+    let lambda = tank.wavelength() as f32 * cw;
+    let at = pos2(tank_rect.left() + 12.0, tank_rect.bottom() - 14.0);
+    for x in [at.x, at.x + lambda] {
+        painter.line_segment([pos2(x, at.y - 4.0), pos2(x, at.y + 4.0)], stroke(1.0, th.ink()));
+    }
+    painter.line_segment([at, at + vec2(lambda, 0.0)], stroke(1.0, th.ink()));
+    tag(painter, at + vec2(lambda + 6.0, 0.0), Align2::LEFT_CENTER, &format!("λ = {:.0} cells", tank.wavelength()), th.ink());
+    readout(painter, rect, 8.0, &format!("f = {:.3}   λ = {:.1} cells   slits {}   slit width {} cells   separation {} cells   {} source", tank.frequency, tank.wavelength(), sim.value("slits").round() as i64, sim.value("slit_width").round() as i64, sim.value("separation").round() as i64, if tank.plane { "plane" } else { "point" }), th.ink());
+}
+
+fn draw_standing(painter: &egui::Painter, rect: Rect, sim: &Simulation, rt: &Runtime) {
+    let th = crate::holo::theme();
+    let (n, length, speed, amp, slow) = (sim.value("harmonic").round().max(1.0) as u32, sim.value("length").max(0.01), sim.value("speed"), sim.value("amplitude"), sim.value("slowmo").max(1.0));
+    let t = rt.t / slow;
+    let area = below_readout(rect);
+    let (left, right, mid) = (area.left() + 24.0, area.right() - 24.0, area.center().y);
+    let reach = area.height() as f64 * 0.38;
+    let on = |x: f64, y: f64| pos2(left + (right - left) * (x / length) as f32, mid - (y * reach) as f32);
+    let curve = |f: &dyn Fn(f64) -> f64| -> Vec<Pos2> { (0..=240).map(|i| {
+        let x = length * i as f64 / 240.0;
+        on(x, f(x))
+    }).collect() };
+    crate::holo::rule(painter, pos2(left, mid), pos2(right, mid), faint(th.ink(), 0.3));
+    // The envelope the string swings inside.
+    for sign in [1.0, -1.0] {
+        painter.extend(Shape::dashed_line(&curve(&|x| sign * amp * (n as f64 * std::f64::consts::PI * x / length).sin()), stroke(1.0, faint(th.ink(), 0.35)), 5.0, 4.0));
+    }
+    // The two waves that make it: one running right, one left.
+    let halves = |right_going: bool| curve(&|x| {
+        let (r, l) = phys::travelling(n, length, speed, amp, x, t);
+        if right_going { r } else { l }
+    });
+    let mut light = Light::new(painter);
+    light.strip(&halves(true), false, 1.0, lit(th.deep(), 0.55));
+    light.strip(&halves(false), false, 1.0, lit(th.ink(), 0.4));
+    light.neon(&curve(&|x| phys::standing(n, length, speed, amp, x, t)), false, 2.4, th.accent(), 1.0);
+    light.paint(painter);
+    // Nodes (rings: the string never moves there), antinodes (ticks at the envelope).
+    for x in phys::nodes(n, length) {
+        painter.circle_stroke(on(x, 0.0), 5.0, stroke(1.2, th.ink()));
+    }
+    for k in 0..n {
+        let x = (k as f64 + 0.5) * length / n as f64;
+        painter.line_segment([on(x, amp) - vec2(0.0, 10.0), on(x, amp) - vec2(0.0, 4.0)], stroke(1.0, th.ink()));
+    }
+    for x in [left, right] {
+        painter.line_segment([pos2(x, mid - 14.0), pos2(x, mid + 14.0)], stroke(3.0, th.ink()));
+    }
+    legend(painter, pos2(left, area.bottom() - 8.0), &[(th.accent(), "the string"), (th.deep(), "wave running right"), (th.ink(), "wave running left"), (faint(th.ink(), 0.5), "○ node   ╷ antinode")]);
+    readout(painter, rect, 8.0, &format!("harmonic {n}   f = {:.1} Hz   λ = {:.2} m   {} nodes   shown {:.0}× slower", phys::harmonic_frequency(n, length, speed), 2.0 * length / n as f64, n + 1, slow), th.ink());
+}
+
+fn draw_doppler(painter: &egui::Painter, rect: Rect, sim: &Simulation, rt: &Runtime) {
+    let th = crate::holo::theme();
+    let (f0, vs, c) = (sim.value("frequency"), sim.value("speed"), sim.value("wave_speed").max(1.0));
+    let mach = vs / c;
+    let area = below_readout(rect);
+    let half = 6.0f64;
+    let scale = area.width() / (2.0 * half) as f32;
+    let on = |x: f64, y: f64| pos2(area.center().x + x as f32 * scale, area.center().y - y as f32 * scale);
+    // Distances in units of how far a wave goes in a second; the source starts at the left and
+    // goes round again once it has crossed the view.
+    let cycle = (9.0 / mach.max(0.6)).min(14.0);
+    let t = rt.t % cycle;
+    let start = -4.8;
+    let fronts = phys::wave_fronts(start, mach, 1.0, 1.2, t, 48);
+    let source = start + mach * t;
+    let clipped = painter.with_clip_rect(area.intersect(painter.clip_rect()));
+    crate::holo::rule(&clipped, pos2(area.left(), area.center().y), pos2(area.right(), area.center().y), faint(th.ink(), 0.25));
+    let mut light = Light::new(&clipped);
+    for (cx, r) in &fronts {
+        if *r > 0.02 {
+            let points = circle_points(on(*cx, 0.0), *r as f32 * scale, 96);
+            // (Ink, not a fading accent: a dim accent reads olive.)
+            light.strip(&points, true, 1.2, lit(th.ink(), (1.0 - *r / 9.0).clamp(0.1, 1.0) as f32 * 0.7));
+        }
+    }
+    // The Mach cone: the lines every front touches once the source outruns them.
+    if let (Some(mu), Some(&(_, oldest))) = (phys::mach_angle(vs, c), fronts.first()) {
+        let tip = on(source, 0.0);
+        let along = oldest * (mach * mach - 1.0) / mach;
+        let across = oldest * (mach * mach - 1.0).sqrt() / mach;
+        for sign in [1.0, -1.0] {
+            light.neon(&[tip, on(source - along, sign * across)], false, 2.0, th.accent(), 1.0);
+        }
+        tag(&clipped, tip + vec2(16.0, -12.0), Align2::LEFT_BOTTOM, &format!("Mach cone  θ = {:.1}°", mu.to_degrees()), th.ink());
+    }
+    light.spark(on(source, 0.0), 12.0, th.hot());
+    light.paint(&clipped);
+    painter.circle_stroke(on(source, 0.0), 6.0, stroke(1.5, th.accent()));
+    let (ahead, behind) = phys::doppler(f0, vs, c);
+    tag(painter, pos2(area.left() + 8.0, area.center().y - 28.0), Align2::LEFT_BOTTOM, &format!("behind\n{behind:.0} Hz"), th.ink());
+    tag(painter, pos2(area.right() - 8.0, area.center().y - 28.0), Align2::RIGHT_BOTTOM, &ahead.map_or("ahead\nno tone".to_string(), |a| format!("ahead\n{a:.0} Hz")), th.ink());
+    readout(painter, rect, 8.0, &format!("source {f0:.0} Hz   speed {vs:.0} m/s = Mach {mach:.2}   waves {c:.0} m/s"), th.ink());
+}
+
+fn draw_sound(painter: &egui::Painter, rect: Rect, sim: &Simulation, rt: &Runtime) {
+    let th = crate::holo::theme();
+    let (f, c, amp, slow) = (sim.value("frequency").max(1.0), sim.value("speed").max(1.0), sim.value("amplitude"), sim.value("slowmo").max(1.0));
+    let (lambda, t) = (c / f, rt.t / slow);
+    let length = 4.0 * lambda;
+    let s0 = amp * lambda * 0.11;
+    let area = below_readout(rect);
+    let columns = Rect::from_min_max(area.min, pos2(area.max.x, area.top() + area.height() * 0.5));
+    let curve = Rect::from_min_max(pos2(area.left(), columns.bottom() + 16.0), area.max);
+    let across = |r: Rect, x: f64| r.left() + 8.0 + (r.width() - 16.0) * (x / length) as f32;
+    // Air in rows of particles: where they bunch up the air is pressed together.
+    let (lanes, count, tagged) = (5usize, 72usize, 24usize);
+    for lane in 0..lanes {
+        let y = columns.top() + columns.height() * (lane as f32 + 0.5) / lanes as f32;
+        for j in 0..count {
+            let rest = length * (j as f64 + 0.5) / count as f64;
+            let (s, _) = phys::sound(f, c, s0, rest, t);
+            let at = pos2(across(columns, rest + s), y);
+            if j == tagged {
+                painter.line_segment([pos2(across(columns, rest), y - 7.0), pos2(across(columns, rest), y + 7.0)], stroke(1.0, faint(th.ink(), 0.5)));
+                painter.circle_filled(at, 3.2, th.accent());
+            } else {
+                painter.circle_filled(at, 1.8, faint(th.ink(), 0.7));
+            }
+        }
+    }
+    // Pressure (the measured curve) and the displacement it is a quarter wave out of step with.
+    let mid = curve.center().y;
+    let reach = curve.height() * 0.4;
+    crate::holo::rule(painter, pos2(curve.left(), mid), pos2(curve.right(), mid), faint(th.ink(), 0.3));
+    let k = std::f64::consts::TAU * f / c;
+    let line = |pressure: bool| -> Vec<Pos2> { (0..=240).map(|i| {
+        let x = length * i as f64 / 240.0;
+        let (s, p) = phys::sound(f, c, s0, x, t);
+        let v = if pressure { p / (s0 * k) } else { s / s0 };
+        pos2(across(curve, x), mid - v as f32 * reach)
+    }).collect() };
+    let mut light = Light::new(painter);
+    light.strip(&line(false), false, 1.0, lit(th.ink(), 0.45));
+    light.neon(&line(true), false, 2.4, th.accent(), 1.0);
+    light.paint(painter);
+    legend(painter, pos2(curve.left() + 8.0, curve.top() - 4.0), &[(th.accent(), "pressure"), (th.ink(), "displacement")]);
+    // One wavelength, measured.
+    let (a, b) = (across(curve, 0.0), across(curve, lambda));
+    let y = curve.bottom() - 6.0;
+    painter.line_segment([pos2(a, y), pos2(b, y)], stroke(1.0, th.ink()));
+    for x in [a, b] {
+        painter.line_segment([pos2(x, y - 4.0), pos2(x, y + 4.0)], stroke(1.0, th.ink()));
+    }
+    tag(painter, pos2(b + 6.0, y), Align2::LEFT_CENTER, &format!("λ = {lambda:.2} m"), th.ink());
+    readout(painter, rect, 8.0, &format!("{f:.0} Hz   v = {c:.0} m/s   λ = {lambda:.3} m   shown {slow:.0}× slower"), th.ink());
+}
+
+fn draw_light(painter: &egui::Painter, rect: Rect, sim: &Simulation) {
+    let th = crate::holo::theme();
+    let (l, d, a, s) = (sim.value("wavelength"), sim.value("separation"), sim.value("slit_width"), sim.value("screen"));
+    // The screen shows two dark places of the single-slit envelope on either side.
+    let span = 2.5 * phys::fringe_spacing(l, a, s);
+    let area = below_readout(rect);
+    let plot = Rect::from_min_max(area.min + vec2(28.0, 8.0), pos2(area.max.x - 8.0, area.top() + area.height() * 0.56));
+    let screen = Rect::from_min_max(pos2(plot.left(), plot.bottom() + 14.0), pos2(plot.right(), plot.bottom() + 14.0 + area.height() * 0.24));
+    let n = 480usize;
+    let y_of = |i: usize| -span + 2.0 * span * i as f64 / n as f64;
+    let intensity: Vec<f32> = (0..=n).map(|i| phys::double_slit(l, d, a, s, y_of(i)) as f32).collect();
+    painter.add(grid_mesh(screen, n, 1, |i, _| ramp(intensity[i].powf(0.6))));
+    crate::holo::outline(painter, &crate::holo::plate(screen, [0.0; 4]), faint(th.ink(), 0.4));
+    let x_at = |y: f64| plot.left() + plot.width() * ((y + span) / (2.0 * span)) as f32;
+    let up = |v: f32| plot.bottom() - v * plot.height() * 0.9;
+    // The envelope (the slit's own diffraction) and the curve it holds.
+    let envelope: Vec<Pos2> = (0..=n).map(|i| pos2(plot.left() + plot.width() * i as f32 / n as f32, up(phys::double_slit(l, 0.0, a, s, y_of(i)) as f32))).collect();
+    painter.extend(Shape::dashed_line(&envelope, stroke(1.0, faint(th.ink(), 0.45)), 5.0, 4.0));
+    let curve: Vec<Pos2> = intensity.iter().enumerate().map(|(i, v)| pos2(plot.left() + plot.width() * i as f32 / n as f32, up(*v))).collect();
+    let mut light = Light::new(painter);
+    light.neon(&curve, false, 2.0, th.accent(), 1.0);
+    light.paint(painter);
+    crate::holo::rule(painter, plot.left_bottom(), plot.right_bottom(), faint(th.ink(), 0.4));
+    tag(painter, pos2(plot.left() - 4.0, plot.top() + 0.1 * plot.height()), Align2::RIGHT_CENTER, "1", th.muted());
+    tag(painter, pos2(plot.left() - 4.0, plot.bottom()), Align2::RIGHT_CENTER, "0", th.muted());
+    // Positions on the screen in millimetres.
+    let span_mm = span * 1000.0;
+    let raw = 2.0 * span_mm / 8.0;
+    let mag = 10f64.powf(raw.log10().floor());
+    let step = [1.0, 2.0, 5.0, 10.0].iter().map(|m| m * mag).find(|v| *v >= raw).unwrap_or(raw);
+    let mut mm = (-span_mm / step).ceil() * step;
+    while mm <= span_mm {
+        let x = x_at(mm / 1000.0);
+        painter.line_segment([pos2(x, screen.bottom()), pos2(x, screen.bottom() + 4.0)], stroke(1.0, th.muted()));
+        tag(painter, pos2(x, screen.bottom() + 6.0), Align2::CENTER_TOP, &label(mm), th.muted());
+        mm += step;
+    }
+    tag(painter, pos2(screen.right(), screen.bottom() + 20.0), Align2::RIGHT_TOP, "position on the screen (mm)", th.muted());
+    // The fringe spacing, measured against the pattern.
+    let fringe = phys::fringe_spacing(l, d, s);
+    let (x0, x1) = (x_at(0.0), x_at(fringe));
+    let y = plot.top() + 3.0;
+    painter.line_segment([pos2(x0, y), pos2(x1, y)], stroke(1.0, th.ink()));
+    for x in [x0, x1] {
+        painter.line_segment([pos2(x, y - 3.0), pos2(x, y + 3.0)], stroke(1.0, th.ink()));
+    }
+    tag(painter, pos2(x1 + 6.0, y), Align2::LEFT_CENTER, &format!("{:.2} mm", fringe * 1000.0), th.ink());
+    readout(painter, rect, 8.0, &format!("{} light   λ = {l:.0} nm   d = {d:.0} µm   a = {a:.0} µm   L = {s:.1} m   fringes {:.2} mm apart", phys::colour_name(l), fringe * 1000.0), th.ink());
+}
+
+fn draw_spring(painter: &egui::Painter, rect: Rect, rt: &Runtime) {
+    let World::Spring { spring, trace, reach } = &rt.world else { return };
+    let th = crate::holo::theme();
+    let area = below_readout(rect);
+    let scene = Rect::from_min_max(area.min, pos2(area.max.x, area.top() + area.height() * 0.42));
+    let chart = Rect::from_min_max(pos2(area.left() + 8.0, scene.bottom() + 24.0), pos2(area.right() - 8.0, area.max.y - 6.0));
+    let wall = scene.left() + 22.0;
+    let (track, equilibrium) = (scene.center().y, scene.left() + scene.width() * 0.55);
+    let per_metre = scene.width() * 0.3 / reach.max(0.8) as f32;
+    let block = Rect::from_center_size(pos2(equilibrium + spring.x as f32 * per_metre, track), vec2(46.0, 46.0));
+    // The wall, hatched.
+    painter.line_segment([pos2(wall, track - 40.0), pos2(wall, track + 40.0)], stroke(2.0, th.ink()));
+    for k in 0..8 {
+        let y = track - 36.0 + k as f32 * 10.0;
+        painter.line_segment([pos2(wall, y + 8.0), pos2(wall - 8.0, y)], stroke(1.0, faint(th.ink(), 0.5)));
+    }
+    // The coil: straight ends and 14 turns between.
+    let (from, to) = (wall, block.left());
+    let mut coil = vec![pos2(from, track)];
+    for k in 0..28 {
+        let x = from + 12.0 + (to - from - 24.0).max(0.0) * (k as f32 + 0.5) / 28.0;
+        coil.push(pos2(x, track + if k % 2 == 0 { -11.0 } else { 11.0 }));
+    }
+    coil.push(pos2(to, track));
+    let mut light = Light::new(painter);
+    light.strip(&coil, false, 1.4, lit(th.ink(), 0.7));
+    light.paint(painter);
+    painter.extend(Shape::dashed_line(&[pos2(equilibrium, track - 40.0), pos2(equilibrium, track + 40.0)], stroke(1.0, faint(th.ink(), 0.4)), 4.0, 3.0));
+    tag(painter, pos2(equilibrium, track + 44.0), Align2::CENTER_TOP, "x = 0", th.muted());
+    painter.rect_filled(block, Rounding::ZERO, faint(th.ink(), 0.09));
+    crate::holo::outline(painter, &crate::holo::plate(block, [6.0, 0.0, 6.0, 0.0]), th.accent());
+    if spring.force > 0.0 {
+        let push = (spring.force * (spring.drive * spring.t).cos()) as f32 * 5.0;
+        painter.arrow(pos2(block.right() + 6.0, track), vec2(push, 0.0), stroke(1.5, th.ink()));
+        tag(painter, pos2(block.right() + 10.0, track - 16.0), Align2::LEFT_BOTTOM, "F", th.muted());
+    }
+    // x(t) over the last ten seconds.
+    let mid = chart.center().y;
+    crate::holo::rule(painter, pos2(chart.left(), mid), pos2(chart.right(), mid), faint(th.ink(), 0.3));
+    let points: Vec<Pos2> = trace.iter().map(|(s, x)| pos2(chart.right() - ((spring.t - s) / 10.0) as f32 * chart.width(), mid - (x / reach.max(0.3)) as f32 * chart.height() * 0.45)).collect();
+    if points.len() >= 2 {
+        let mut light = Light::new(&painter.with_clip_rect(chart.expand(2.0)));
+        light.neon(&points, false, 2.0, th.accent(), 1.0);
+        light.paint(&painter.with_clip_rect(chart.expand(2.0)));
+    }
+    tag(painter, chart.left_top() + vec2(0.0, -12.0), Align2::LEFT_BOTTOM, "x(t), the last 10 s", th.muted());
+    readout(painter, rect, 8.0, &format!("x = {:+.3} m   v = {:+.3} m/s   energy {:.3} J   t = {:.1} s", spring.x, spring.v, spring.energy(), spring.t), th.ink());
+}
+
+fn draw_chaos(painter: &egui::Painter, rect: Rect, rt: &Runtime) {
+    let World::Chaos { pendulum, e0, lower, upper } = &rt.world else { return };
+    let th = crate::holo::theme();
+    let area = below_readout(rect);
+    let centre = area.center();
+    let scale = (area.width().min(area.height()) / 2.0 * 0.92) / (pendulum.l1 + pendulum.l2) as f32;
+    let on = |p: [f64; 2]| centre + vec2(p[0] as f32, p[1] as f32) * scale;
+    let (b1, b2) = pendulum.bobs();
+    let (p1, p2) = (on(b1), on(b2));
+    let mut light = Light::new(painter);
+    for (trail, last, tone, gain) in [(upper, b1, th.deep(), 0.55), (lower, b2, th.accent(), 0.9)] {
+        let points: Vec<Pos2> = trail.iter().copied().chain([last]).map(&on).collect();
+        let n = points.len();
+        if n >= 2 {
+            let colours: Vec<Color32> = (0..n).map(|k| lit(tone, gain * (k as f32 / n as f32).powi(2))).collect();
+            light.ribbon(&points, &colours, false, 1.6);
+        }
+    }
+    light.paint(painter);
+    painter.line_segment([centre, p1], stroke(1.5, th.ink()));
+    painter.line_segment([p1, p2], stroke(1.5, th.ink()));
+    painter.circle_stroke(centre, 4.0, stroke(1.2, th.ink()));
+    for (at, mass) in [(p1, pendulum.m1), (p2, pendulum.m2)] {
+        let r = 6.0 + 4.0 * mass.cbrt() as f32;
+        painter.circle_filled(at, r, faint(th.ink(), 0.09));
+        painter.circle_stroke(at, r, stroke(1.8, th.accent()));
+        painter.circle_filled(at, 2.0, th.hot());
+    }
+    let drift = (pendulum.energy() - e0) / e0.abs().max(1e-12);
+    readout(painter, rect, 8.0, &format!("θ₁ = {:+.1}°   θ₂ = {:+.1}°   energy drift {drift:+.1e}   t = {:.1} s", pendulum.a1.to_degrees(), pendulum.a2.to_degrees(), rt.t), th.ink());
+}
+
+fn draw_balls(painter: &egui::Painter, rect: Rect, rt: &Runtime) {
+    let World::Balls { balls, e0 } = &rt.world else { return };
+    let th = crate::holo::theme();
+    let area = below_readout(rect);
+    let aspect = (balls.width / balls.height) as f32;
+    let (w, h) = if area.width() / area.height() > aspect { (area.height() * aspect, area.height()) } else { (area.width(), area.width() / aspect) };
+    let frame = Rect::from_center_size(area.center(), vec2(w, h));
+    let scale = frame.width() / balls.width as f32;
+    crate::holo::outline(painter, &crate::holo::plate(frame, [0.0; 4]), faint(th.ink(), 0.6));
+    let mut fastest = 0.0f64;
+    for ball in &balls.balls {
+        let speed = ball.vel[0].hypot(ball.vel[1]);
+        fastest = fastest.max(speed);
+        // Hotter with speed: the accent warms to white-hot.
+        let edge = mix(th.accent(), th.hot(), (speed / 12.0).min(1.0) as f32);
+        let at = pos2(frame.left() + ball.pos[0] as f32 * scale, frame.bottom() - ball.pos[1] as f32 * scale);
+        painter.circle_filled(at, ball.r as f32 * scale, faint(th.ink(), 0.09));
+        painter.circle_stroke(at, ball.r as f32 * scale, stroke(1.6, edge));
+    }
+    let drift = (balls.energy() - e0) / e0.abs().max(1e-12) * 100.0;
+    readout(painter, rect, 8.0, &format!("{} balls   energy {:.1} J ({drift:+.1} %)   fastest {fastest:.1} m/s   {:.0} % of the speed kept per bounce", balls.balls.len(), balls.energy(), balls.elasticity * 100.0), th.ink());
+}
+
+fn draw_surface(painter: &egui::Painter, rect: Rect, sim: &Simulation, rt: &Runtime) {
+    let th = crate::holo::theme();
+    let r = sim.value("range").max(0.5);
+    let (turn, tilt) = ((sim.value("turn") + sim.value("spin") * rt.t).to_radians(), sim.value("tilt").to_radians());
+    let n = 34usize;
+    let mut ps = sim.surface_params();
+    let step = |k: usize| -r + 2.0 * r * k as f64 / n as f64;
+    let z: Vec<Vec<f64>> = (0..=n).map(|j| (0..=n).map(|i| sim.surface_z(&mut ps, step(i), step(j))).collect()).collect();
+    // The height range from the 2nd-98th percentile, so a pole does not flatten the rest.
+    let mut sorted: Vec<f64> = z.iter().flatten().copied().filter(|v| v.is_finite()).collect();
+    sorted.sort_by(|a, b| a.total_cmp(b));
+    let (mut lo, mut hi) = if sorted.is_empty() { (-1.0, 1.0) } else { (sorted[sorted.len() * 2 / 100], sorted[(sorted.len() * 98 / 100).min(sorted.len() - 1)]) };
+    if hi - lo < 1e-9 {
+        lo -= 1.0;
+        hi += 1.0;
+    }
+    let tall = r * 0.9;
+    let high = |v: f64| ((v - (lo + hi) / 2.0) / (hi - lo) * 2.0 * tall).clamp(-1.4 * tall, 1.4 * tall);
+    let area = below_readout(rect);
+    let pixels = area.width().min(area.height()) * 0.5 * 0.8 / (r as f32 * 1.4);
+    let centre = area.center() + vec2(0.0, 8.0);
+    // (screen point, how near to the viewer, 0-1) of a point of the surface.
+    let project = |x: f64, y: f64, h: f64| {
+        let (x1, y1) = (x * turn.cos() - y * turn.sin(), x * turn.sin() + y * turn.cos());
+        let up = y1 * tilt.sin() + h * tilt.cos();
+        let near = -y1 * tilt.cos() + h * tilt.sin();
+        (centre + vec2(x1 as f32, -up as f32) * pixels, ((near / (r * 1.6)) * 0.5 + 0.5).clamp(0.0, 1.0) as f32)
+    };
+    // The floor and the axes they stand on.
+    let floor = -tall;
+    let corner = |sx: f64, sy: f64| project(sx * r, sy * r, floor).0;
+    for (a, b) in [((-1.0, -1.0), (1.0, -1.0)), ((1.0, -1.0), (1.0, 1.0)), ((1.0, 1.0), (-1.0, 1.0)), ((-1.0, 1.0), (-1.0, -1.0))] {
+        crate::holo::rule(painter, corner(a.0, a.1), corner(b.0, b.1), faint(th.ink(), 0.3));
+    }
+    let origin = corner(-1.0, -1.0);
+    crate::holo::rule(painter, origin, project(-r, -r, tall).0, faint(th.ink(), 0.6));
+    tag(painter, corner(1.0, -1.0) + vec2(6.0, 0.0), Align2::LEFT_CENTER, "x", th.ink());
+    tag(painter, corner(-1.0, 1.0) + vec2(6.0, 0.0), Align2::LEFT_CENTER, "y", th.ink());
+    tag(painter, project(-r, -r, tall).0 - vec2(0.0, 6.0), Align2::CENTER_BOTTOM, "z", th.ink());
+    // The wireframe: lines of constant y, then of constant x. Peaks take the accent, the near
+    // lines are brighter; a point that is not a number cuts the line.
+    let mut light = Light::new(painter);
+    let mut flush = |points: &mut Vec<Pos2>, colours: &mut Vec<Color32>| {
+        if points.len() >= 2 {
+            light.ribbon(points, colours, false, 1.1);
+        }
+        points.clear();
+        colours.clear();
+    };
+    for along_x in [true, false] {
+        for j in 0..=n {
+            let (mut points, mut colours) = (Vec::new(), Vec::new());
+            for i in 0..=n {
+                let (xi, yi) = if along_x { (i, j) } else { (j, i) };
+                let v = z[yi][xi];
+                if !v.is_finite() {
+                    flush(&mut points, &mut colours);
+                    continue;
+                }
+                let (at, near) = project(step(xi), step(yi), high(v));
+                let height = ((v - lo) / (hi - lo)).clamp(0.0, 1.0) as f32;
+                points.push(at);
+                colours.push(lit(mix(th.ink(), th.accent(), height), 0.1 + 0.7 * near));
+            }
+            flush(&mut points, &mut colours);
+        }
+    }
+    light.paint(painter);
+    let src = sim.functions.first().map(|(_, s, _)| s.as_str()).unwrap_or("");
+    readout(painter, rect, 8.0, &format!("z = {src}   turn {:.0}°   tilt {:.0}°   z from {lo:.2} to {hi:.2}", sim.value("turn") + sim.value("spin") * rt.t, sim.value("tilt")), th.ink());
 }
 
 /// A simulation's read-out in the top-left corner of its canvas, `top` points under its edge.
@@ -864,5 +1485,138 @@ mod tests {
         }
         assert!(cyan > 300, "f(x) drawn in {f_colour:?}: {cyan} px");
         assert!(crimson > 200, "f'(x) drawn in {df_colour:?}: {crimson} px");
+    }
+
+    /// A kind's canvas as the window draws it after `seconds` of its run, saved as a picture
+    /// (`target/ui-snapshots/<theme>/<name>.png`).
+    fn picture(kind: SimKind, spec: &str, name: &str, seconds: f64) -> crate::ui_snapshot::Canvas {
+        let _look = crate::holo_theme::look_for_pictures();
+        let lab = simulation_lab::SimulationLab::default();
+        let sim = lab.launch(kind, spec, None).unwrap();
+        let mut rt = Runtime::new(&sim);
+        for _ in 0..(seconds / 0.04) as usize {
+            rt.t += 0.04;
+            advance(&sim, &mut rt, 0.04);
+        }
+        let size = vec2(900.0, 560.0);
+        let plot = Rect::from_min_size(pos2(10.0, 10.0), size - vec2(20.0, 20.0));
+        let mut snap = crate::ui_snapshot::Snapshot::new(size);
+        let canvas = snap.render(2, |ctx| {
+            crate::holo::install_fonts(ctx);
+            egui::CentralPanel::default().frame(Frame::none()).show(ctx, |ui| {
+                let painter = ui.painter_at(plot.expand(2.0));
+                painter.rect_filled(plot, Rounding::ZERO, crate::holo::theme().void());
+                crate::holo::outline(&painter, &crate::holo::plate(plot, [0.0; 4]), plot_frame());
+                draw_physics(&painter, plot.shrink(16.0), &sim, &rt);
+            });
+        });
+        canvas.save(name);
+        canvas
+    }
+
+    /// Pixels brighter than `sum` (red + green + blue), and how many are not black glass.
+    fn lit_pixels(canvas: &crate::ui_snapshot::Canvas, sum: u32) -> (usize, usize) {
+        let (mut bright, mut drawn) = (0, 0);
+        for y in 0..canvas.height {
+            for x in 0..canvas.width {
+                let [r, g, b] = canvas.pixel(x, y);
+                let total = r as u32 + g as u32 + b as u32;
+                bright += usize::from(total > sum);
+                drawn += usize::from(total > 60);
+            }
+        }
+        (bright, drawn)
+    }
+
+    /// Light on black: some of it bright, most of the glass still dark.
+    fn assert_light_on_black(canvas: &crate::ui_snapshot::Canvas, what: &str, at_least: usize) {
+        let (bright, drawn) = lit_pixels(canvas, 450);
+        let all = canvas.width * canvas.height;
+        assert!(bright > at_least, "{what}: {bright} bright pixels");
+        assert!(drawn < all * 3 / 4, "{what}: {drawn} of {all} pixels are lit, the glass is flooded");
+    }
+
+    #[test]
+    fn snapshot_gravity_draws_orbits_with_trails_and_names() {
+        assert_light_on_black(&picture(SimKind::Gravity, "solar system", "simlab_gravity_solar", 20.0), "the solar system", 300);
+        assert_light_on_black(&picture(SimKind::Gravity, "the sun, the earth and a comet", "simlab_gravity_comet", 20.0), "sun, earth and comet", 200);
+    }
+
+    #[test]
+    fn snapshot_ripple_tank_shows_waves_through_the_slits() {
+        let canvas = picture(SimKind::Ripples, "double slit plane waves", "simlab_ripples", 8.0);
+        assert_light_on_black(&canvas, "the ripple tank", 600);
+        // The wall stands in ink: a column of near-white pixels a third of the way across.
+        let walls = (0..canvas.height).filter(|y| (0..canvas.width).any(|x| canvas.pixel(x, *y).iter().all(|c| *c > 200))).count();
+        assert!(walls > 40, "the wall: {walls} rows");
+    }
+
+    #[test]
+    fn snapshot_standing_wave_marks_its_nodes() {
+        assert_light_on_black(&picture(SimKind::StandingWave, "", "simlab_standing_wave", 2.5), "the string", 150);
+    }
+
+    #[test]
+    fn snapshot_doppler_draws_fronts_and_the_mach_cone() {
+        assert_light_on_black(&picture(SimKind::Doppler, "", "simlab_doppler_subsonic", 4.0), "the moving source", 300);
+        assert_light_on_black(&picture(SimKind::Doppler, "supersonic", "simlab_doppler_mach_cone", 4.0), "the Mach cone", 300);
+    }
+
+    #[test]
+    fn snapshot_sound_draws_air_particles_and_the_pressure_curve() {
+        assert_light_on_black(&picture(SimKind::Sound, "", "simlab_sound", 2.5), "the sound wave", 200);
+    }
+
+    #[test]
+    fn snapshot_light_draws_the_double_slit_fringes_on_a_screen() {
+        let canvas = picture(SimKind::Light, "", "simlab_light_double_slit", 0.0);
+        assert_light_on_black(&canvas, "the double slit", 300);
+        // Dark and bright alternate along a scanline of the screen band: count the changes.
+        let flips = (0..canvas.height)
+            .map(|y| {
+                let lit: Vec<bool> = (30..canvas.width - 30).map(|x| canvas.pixel(x, y).iter().map(|c| *c as u32).sum::<u32>() > 150).collect();
+                lit.windows(2).filter(|w| w[0] != w[1]).count()
+            })
+            .max()
+            .unwrap_or(0);
+        assert!(flips >= 8, "fringes alternate along the screen ({flips} changes)");
+    }
+
+    #[test]
+    fn snapshot_spring_and_double_pendulum_leave_trails() {
+        assert_light_on_black(&picture(SimKind::Spring, "resonance", "simlab_spring", 6.0), "the spring", 150);
+        assert_light_on_black(&picture(SimKind::DoublePendulum, "", "simlab_double_pendulum", 6.0), "the double pendulum", 150);
+    }
+
+    #[test]
+    fn snapshot_balls_in_a_box_are_faint_panes_with_bright_edges() {
+        let canvas = picture(SimKind::Balls, "", "simlab_balls", 3.0);
+        assert_light_on_black(&canvas, "the balls", 300);
+    }
+
+    #[test]
+    fn snapshot_surface_is_a_wireframe_seen_from_an_angle() {
+        assert_light_on_black(&picture(SimKind::Surface, "", "simlab_surface_ripple", 1.0), "the ripple surface", 400);
+        assert_light_on_black(&picture(SimKind::Surface, "z = x^2 - y^2", "simlab_surface_saddle", 1.0), "the saddle", 400);
+    }
+
+    #[test]
+    fn the_physics_kinds_run_for_a_minute_without_blowing_up() {
+        for (kind, spec) in [(SimKind::Gravity, "binary star"), (SimKind::Gravity, "figure eight"), (SimKind::Ripples, ""), (SimKind::Spring, "resonance"), (SimKind::DoublePendulum, ""), (SimKind::Balls, "")] {
+            let sim = simulation_lab::SimulationLab::default().launch(kind, spec, None).unwrap();
+            let mut rt = Runtime::new(&sim);
+            for _ in 0..1500 {
+                rt.t += 0.04;
+                advance(&sim, &mut rt, 0.04);
+            }
+            match &rt.world {
+                World::Gravity { scene, e0, .. } => assert!(((scene.energy() - e0) / e0.abs()).abs() < 1e-2, "{spec}: energy {} → {}", e0, scene.energy()),
+                World::Ripples(tank) => assert!(tank.now.iter().all(|v| v.is_finite() && v.abs() < 10.0)),
+                World::Spring { spring, .. } => assert!(spring.x.is_finite() && spring.x.abs() < 20.0),
+                World::Chaos { pendulum, e0, .. } => assert!(((pendulum.energy() - e0) / e0.abs()).abs() < 1e-3),
+                World::Balls { balls, .. } => assert!(balls.balls.iter().all(|b| b.pos[0].is_finite() && b.pos[1] >= 0.0)),
+                World::None => panic!("{kind:?} has no world"),
+            }
+        }
     }
 }

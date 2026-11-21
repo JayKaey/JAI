@@ -128,7 +128,7 @@ impl Bodies {
     /// A planet and a smaller one on an eccentric mutual orbit (G = 1): 85 % of the circular
     /// speed, so the pull is seen to change along the ellipse.
     fn two_planets() -> Self {
-        let (m1, m2, r) = (1.0, 0.25, 2.0);
+        let (m1, m2, r) = (1.0f64, 0.25f64, 2.0f64);
         let v_rel = 0.85 * ((m1 + m2) / r).sqrt();
         let bodies = vec![
             Body { name: "Planet 1".into(), mass: m1, pos: [-r * m2 / (m1 + m2), 0.0], vel: [0.0, -v_rel * m2 / (m1 + m2)], size: 12.0 },
@@ -187,19 +187,67 @@ impl Bodies {
         if bodies.len() < 2 || !g.is_finite() || g <= 0.0 {
             return None;
         }
-        // The step: a small part of the quickest pair's orbit.
-        let quickest = bodies
-            .iter()
-            .enumerate()
-            .flat_map(|(i, a)| bodies.iter().skip(i + 1).map(move |b| (a, b)))
-            .map(|(a, b)| {
-                let r = dist(a.pos, b.pos).max(1e-6);
-                TAU * (r.powi(3) / (g * (a.mass + b.mass).max(1e-12))).sqrt()
-            })
-            .fold(f64::MAX, f64::min);
-        let mut scene = Self::new(bodies, g, (quickest / 300.0).clamp(1e-6, 1.0), ("units", "time units", "masses"), false);
-        scene.softening = 1e-3;
-        Some(scene)
+        Some(Self::described(bodies, g, ("units", "time units", "masses"), 1e-3))
+    }
+
+    /// A scene of bodies put together from words or a list: the step is a small part of the
+    /// quickest pair's orbit.
+    fn described(bodies: Vec<Body>, g: f64, units: (&'static str, &'static str, &'static str), softening: f64) -> Self {
+        let quickest = quickest_period(&bodies, g);
+        let mut scene = Self::new(bodies, g, (quickest / 300.0).clamp(1e-6, 1.0), units, false);
+        scene.softening = softening;
+        scene
+    }
+
+    /// A scene named by its bodies: "the sun, the earth and a comet", "sun with jupiter and
+    /// saturn" (the Sun and its planets from their real orbits, a Moon about the Earth, a comet
+    /// on a long ellipse). None unless the Sun or a comet is named, or two planets are.
+    pub fn from_words(text: &str) -> Option<Self> {
+        let l = text.to_lowercase();
+        let words: Vec<&str> = l.split(|c: char| !c.is_alphanumeric()).collect();
+        let named = |names: &[&str]| words.iter().any(|w| names.contains(w));
+        let sun = named(&["sun", "sonne"]);
+        let comet = named(&["comet", "komet", "comets"]);
+        let moon = named(&["moon", "mond"]);
+        let german = |n: &str| match n {
+            "Mercury" => "merkur",
+            "Earth" => "erde",
+            "Mars" => "mars",
+            "Jupiter" => "jupiter",
+            "Saturn" => "saturn",
+            "Uranus" => "uranus",
+            "Neptune" => "neptun",
+            _ => "venus",
+        };
+        let planets: Vec<_> = PLANETS.iter().filter(|(n, ..)| named(&[&n.to_lowercase(), german(n)])).collect();
+        if !(sun || comet || planets.len() >= 2) || planets.len() + usize::from(sun) + usize::from(comet) + usize::from(moon) < 2 {
+            return None;
+        }
+        let mut bodies = vec![Body { name: "Sun".into(), mass: 1.0, pos: [0.0, 0.0], vel: [0.0, 0.0], size: 13.0 }];
+        let orbit = |a: f64, e: f64, angle: f64, mass: f64| {
+            let r = a * (1.0 - e);
+            let v = (G_SOLAR * (1.0 + mass) * (1.0 + e) / r).sqrt();
+            let (s, c) = angle.sin_cos();
+            ([r * c, r * s], [-v * s, v * c])
+        };
+        for &&(name, a, e, perihelion, mass) in &planets {
+            let (pos, vel) = orbit(a, e, perihelion.to_radians(), mass);
+            let size = if matches!(name, "Jupiter" | "Saturn") { 8.0 } else { 5.5 };
+            bodies.push(Body { name: name.into(), mass, pos, vel, size });
+        }
+        // A Moon only about a named Earth (384,400 km out, once round in 27.3 days).
+        if let Some(earth) = bodies.iter().find(|b| b.name == "Earth").cloned().filter(|_| moon) {
+            let mm = 3.694e-8;
+            let r = 0.002_569_6;
+            let v = (G_SOLAR * (earth.mass + mm) / r).sqrt();
+            bodies.push(Body { name: "Moon".into(), mass: mm, pos: [earth.pos[0] + r, earth.pos[1]], vel: [earth.vel[0], earth.vel[1] + v], size: 4.0 });
+        }
+        if comet {
+            // A long ellipse (e 0.9, a 3 AU, perihelion 0.3 AU), thrown the other way round.
+            let (pos, vel) = orbit(3.0, 0.9, 200f64.to_radians(), 1e-12);
+            bodies.push(Body { name: "Comet".into(), mass: 1e-12, pos, vel: [-vel[0], -vel[1]], size: 4.0 });
+        }
+        Some(Self::described(bodies, G_SOLAR, ("AU", "years", "Sun masses"), 1e-5))
     }
 
     /// The scene's centre of mass at rest at the origin (a lone heavy body stays put).
@@ -303,6 +351,17 @@ impl Bodies {
 
 fn dist(a: [f64; 2], b: [f64; 2]) -> f64 {
     ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt()
+}
+
+/// The shortest orbit of any pair of bodies, as they stand (Kepler's third law with their
+/// summed mass): the clock a scene's step and its playback speed are set by.
+pub fn quickest_period(bodies: &[Body], g: f64) -> f64 {
+    bodies
+        .iter()
+        .enumerate()
+        .flat_map(|(i, a)| bodies.iter().skip(i + 1).map(move |b| (a, b)))
+        .map(|(a, b)| kepler_period(g, (a.mass + b.mass).max(1e-12), dist(a.pos, b.pos).max(1e-6)))
+        .fold(f64::MAX, f64::min)
 }
 
 /// Kepler's third law: a body's period (in the scene's time) at semi-major axis `a` round
@@ -801,6 +860,20 @@ mod tests {
         assert!(Bodies::from_json("not json").is_none());
         assert!(Bodies::from_json(r#"[{"mass": 1}]"#).is_none(), "one body is no scene");
         assert!(Bodies::preset("a cat").is_none());
+    }
+
+    #[test]
+    fn a_scene_named_by_its_bodies_is_built_from_their_orbits() {
+        let mut s = Bodies::from_words("simulate the sun, the earth and a comet").unwrap();
+        let names: Vec<&str> = s.bodies.iter().map(|b| b.name.as_str()).collect();
+        assert_eq!(names, ["Sun", "Earth", "Comet"]);
+        let e0 = s.energy();
+        s.advance(1.0);
+        assert!(((s.energy() - e0) / e0).abs() < 1e-3, "drift {}", (s.energy() - e0) / e0);
+        let s = Bodies::from_words("die Sonne, die Erde und der Mond").unwrap();
+        assert_eq!(s.bodies.len(), 3);
+        assert!(Bodies::from_words("the earth and the moon").is_none(), "that is the preset");
+        assert!(Bodies::from_words("a cat and a dog").is_none());
     }
 
     /// Waves leave the source at one cell per time unit, pass the slits and do not come back

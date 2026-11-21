@@ -240,7 +240,6 @@ mod tests {
             ("show me how a heart works", "human heart", "A human heart, in 3D, Sir."),
             ("Show me DNA", "dna double helix", "DNA, in 3D, Sir."),
             ("show me a V8 engine", "v8 engine", "A V8 engine, in 3D, Sir."),
-            ("Zeig mir das Sonnensystem", "solar system", "The solar system, in 3D, Sir."),
             ("Kannst du mir ein Herz zeigen?", "human heart", "A human heart, in 3D, Sir."),
             ("Can you show me the Eiffel Tower?", "eiffel tower", "The Eiffel Tower, in 3D, Sir."),
         ] {
@@ -251,8 +250,11 @@ mod tests {
         for (said, line) in [
             ("show me waves", "Waves, as a simulation, Sir."),
             ("visualise ripples in water", "Ripples in water, as a simulation, Sir."),
-            ("Zeig mir eine stehende Welle", "Wave interference, as a simulation, Sir."),
+            ("Zeig mir eine stehende Welle", "Standing wave, as a simulation, Sir."),
             ("show me how a pendulum swings", "A pendulum, as a simulation, Sir."),
+            // The planets orbit: the Lab's gravity, not a model standing still.
+            ("Zeig mir das Sonnensystem", "The solar system, as a simulation, Sir."),
+            ("show me the planets", "The solar system, as a simulation, Sir."),
         ] {
             let (tool, args) = picked(said);
             assert_eq!((tool.as_str(), args[PICKED].as_str()), ("launch_interactive_simulation", Some(line)), "{said}: {args}");
@@ -292,7 +294,7 @@ mod tests {
     fn the_whole_road_ends_at_the_pick_only_where_no_rule_knows_the_words() {
         let road = |said: &str| crate::phrasings::route(said).map(|(tool, args)| (tool, args[PICKED].as_str().map(str::to_string)));
         // German "zeig mir" brought up a window called "Sonnensystem".
-        assert_eq!(road("Zeig mir das Sonnensystem"), Some((crate::model3d::TOOL.to_string(), Some("The solar system, in 3D, Sir.".to_string()))));
+        assert_eq!(road("Zeig mir das Sonnensystem"), Some(("launch_interactive_simulation".to_string(), Some("The solar system, as a simulation, Sir.".to_string()))));
         assert_eq!(road("zeig mir Discord").map(|r| r.0).as_deref(), Some("window_management"));
         // Every rule before it keeps its words.
         assert_eq!(road("Show me a picture of the Eiffel Tower").map(|r| r.1), Some(None));

@@ -940,6 +940,10 @@ fn correction(t: &str) -> Option<Value> {
 /// The fast path: a ready intent for the brain. (Unit tests of other modules never see a studio
 /// that a test of this one opened.)
 pub fn intent(text: &str) -> Option<Intent> {
+    // A formula in 3D ("show me z = x² + y² in 3D") is the Simulation Lab's surface.
+    if text.contains('=') {
+        return None;
+    }
     let open = is_open() && !cfg!(test);
     let (names, model) = if open {
         let s = studio();
