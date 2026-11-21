@@ -300,7 +300,8 @@ pub fn is_game(process: &str) -> bool {
 
 /// The arguments that are requests of the moment, not settings (`interface::configure` names
 /// them in its summary; `apply` carries them out).
-pub const RUNTIME_KEYS: [(&str, &str); 11] = [
+pub const RUNTIME_KEYS: [(&str, &str); 12] = [
+    ("show_board", "the board"),
     ("start_with_system", if cfg!(windows) { "starting with Windows" } else { "starting at login" }),
     ("next_now", "what comes next"),
     ("night_now", "night mode"),
@@ -318,7 +319,7 @@ pub const RUNTIME_KEYS: [(&str, &str); 11] = [
 /// (`brain::tests::the_whole_prompt_fits_the_context_window`), and these are said in words the
 /// fast path knows.
 #[cfg(test)]
-pub const UNLISTED: [&str; 11] = ["background_all_monitors", "windows_on_call", "hotkeys_window", "orb_words", "desk_clock", "desk_clock_seconds", "desk_clock_12h", "desk_clock_date", "next_now", "corner_orb_size", "start_with_system"];
+pub const UNLISTED: [&str; 18] = ["background_media", "background_monitor", "background_mode", "background_interval", "background_sound", "background_dim", "show_board", "background_all_monitors", "windows_on_call", "hotkeys_window", "orb_words", "desk_clock", "desk_clock_seconds", "desk_clock_12h", "desk_clock_date", "next_now", "corner_orb_size", "start_with_system"];
 
 /// How long what comes next stands beside the emblem once Sir asked for it.
 const NEXT_SHOWN: std::time::Duration = std::time::Duration::from_secs(10);
@@ -517,6 +518,9 @@ pub fn apply(args: &Value) {
     if flag(args, "hotkeys_window") == Some(true) {
         crate::gui::show_hotkeys();
     }
+    if flag(args, "show_board") == Some(true) {
+        crate::bg_media::call_board();
+    }
     if flag(args, "next_now") == Some(true) {
         *lock(&NEXT_UNTIL) = Some(std::time::Instant::now() + NEXT_SHOWN);
         crate::gui::refresh();
@@ -543,6 +547,9 @@ pub fn spoken(args: &Value) -> Option<String> {
     let say = |yes: &str, no: &str, state: bool| Some(if state { yes } else { no }.to_string());
     if let Some(v) = on("start_with_system") {
         return Some(start_said(v, crate::kit_pc::starts_with_system()));
+    }
+    if on("show_board") == Some(true) {
+        return Some("The board, Sir. It goes again when we are done.".into());
     }
     if let Some(v) = on("calm_hud") {
         return say("Calm it is, Sir. The readouts step back until you reach for them.", "Everything on screen, Sir.", v);

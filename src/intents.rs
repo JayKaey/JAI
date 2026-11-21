@@ -4742,6 +4742,10 @@ pub fn parse_as_said(text: &str) -> Option<Intent> {
     if let Some(line) = courtesy(text) {
         return Some(Intent::Answer(line.to_string()));
     }
+    // A picture, a video or a slideshow on the board's black (read as said: a path is no words).
+    if let Some(args) = crate::bg_media::command(text) {
+        return Some(Intent::Tool { name: "configure_interface", args });
+    }
     if let Some(line) = microphone_asked(text) {
         return Some(Intent::Answer(line));
     }

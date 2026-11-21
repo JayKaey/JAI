@@ -9273,11 +9273,27 @@ static CANVAS_ORIGIN: Mutex<Option<(Pos2, f32, f32, f32)>> = Mutex::new(None);
 /// core's construction lines: its two axes across the whole screen and three range circles
 /// round it, the first with a tick every 5°. The panels are seen to be placed about him.
 pub(crate) fn paint_canvas(ctx: &egui::Context) {
+    paint_canvas_in(ctx, &media_rects(ctx));
+}
+
+/// Where each monitor's own background media goes in the HUD window: its number and its rect.
+/// (A window that does not know its place, an offscreen one, is one monitor.)
+fn media_rects(ctx: &egui::Context) -> Vec<(usize, Rect)> {
+    let monitors = crate::monitors::recent();
+    match ctx.input(|i| i.viewport().inner_rect) {
+        Some(window) if !monitors.is_empty() => crate::bg_media::rects_in(window, ctx.pixels_per_point(), &monitors),
+        _ => vec![(1, ctx.screen_rect())],
+    }
+}
+
+/// `paint_canvas` with the media's places given.
+pub(crate) fn paint_canvas_in(ctx: &egui::Context, media: &[(usize, Rect)]) {
     use crate::holo::{a, polar};
     let rect = ctx.screen_rect();
     let painter = ctx.layer_painter(egui::LayerId::background());
     let t = crate::holo::theme();
     painter.rect_filled(rect, Rounding::ZERO, t.void());
+    crate::bg_media::paint(ctx, &painter, media);
     let home = home_screen(ctx);
     // Depth: the table drifts a little against the pointer, in whole pixels so it stays sharp;
     // the blocks stand still.
@@ -9428,6 +9444,7 @@ impl HudApp {
         let screen = ctx.screen_rect();
         crate::interface::publish_window_size((screen.width() * iface.scale, screen.height() * iface.scale));
         let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
+        crate::bg_media::publish(&iface, m.state != "idle" || !own_window_rects(ctx).is_empty());
         paint_canvas(ctx);
         // (Offscreen renders stay clean: the verifier reads their colours.)
         if iface.display_finish && !windows_still(ctx) {
@@ -9464,6 +9481,8 @@ impl HudApp {
         mark("board and emblem");
         self.canvas(ctx, &m, &iface, dt);
         mark("overlays");
+        // The media alone, while the board waits to be called (whole mode).
+        crate::bg_media::curtain(ctx, &media_rects(ctx));
         // Night mode: the HUD dims (by the clock or because Sir said so).
         crate::hud_feel::set_night_by_clock(iface.night_mode);
         // (A scripted session shows the dimming from its 34th to its 46th second on request.)

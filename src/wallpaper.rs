@@ -459,7 +459,8 @@ pub fn after_frame(ctx: &egui::Context) {
         return;
     }
     let (held, hovered): (bool, Vec<egui::Id>) = ctx.interaction_snapshot(|s| (s.dragged.is_some(), s.hovered.iter().copied().collect()));
-    let hot = held || hovered.into_iter().any(|id| ctx.read_response(id).is_some_and(|r| r.sense.click || r.sense.drag));
+    // (Behind the media alone, whole mode, his keys are not there to be pressed.)
+    let hot = crate::bg_media::board_shown() && (held || hovered.into_iter().any(|id| ctx.read_response(id).is_some_and(|r| r.sense.click || r.sense.drag)));
     HOT.store(hot, Ordering::Release);
 }
 

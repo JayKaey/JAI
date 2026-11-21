@@ -290,7 +290,7 @@ fn new_drives(before: u32, now: u32) -> Vec<char> {
 
 /// The PC is locked (the input desktop is the secure one).
 #[cfg(windows)]
-fn desktop_locked() -> bool {
+pub(crate) fn desktop_locked() -> bool {
     #[link(name = "user32")]
     extern "system" {
         fn OpenInputDesktop(flags: u32, inherit: i32, access: u32) -> isize;
@@ -310,7 +310,7 @@ fn desktop_locked() -> bool {
 
 /// KDE's screen locker says whether the session is locked.
 #[cfg(not(windows))]
-fn desktop_locked() -> bool {
+pub(crate) fn desktop_locked() -> bool {
     crate::kde::screen_locked().unwrap_or(false)
 }
 

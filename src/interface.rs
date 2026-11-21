@@ -193,6 +193,15 @@ pub struct InterfaceSettings {
     pub desk_clock_seconds: bool,
     pub desk_clock_12h: bool,
     pub desk_clock_date: bool,
+    /// Media on the board's black (`bg_media`): "behind" (the board over it, dimmed) or "whole"
+    /// (the media alone, the board when called); the source per monitor number ("all": every
+    /// monitor without its own), a picture, an H.264 MP4 or a folder of pictures; the seconds a
+    /// slideshow shows each picture; the video's sound; the black over it behind the board.
+    pub bg_mode: String,
+    pub bg_media: std::collections::BTreeMap<String, String>,
+    pub bg_interval: u32,
+    pub bg_sound: bool,
+    pub bg_dim: f32,
     /// Where Sir dragged that clock (fractions of his first screen, beyond 0-1 on another
     /// monitor; None: under the emblem, and with it wherever that goes).
     pub desk_clock_pos: Option<[f32; 2]>,
@@ -250,6 +259,11 @@ impl Default for InterfaceSettings {
             desk_clock_seconds: false,
             desk_clock_12h: false,
             desk_clock_date: true,
+            bg_mode: "behind".into(),
+            bg_media: Default::default(),
+            bg_interval: 30,
+            bg_sound: false,
+            bg_dim: 0.55,
             desk_clock_pos: None,
             orb_aside: false,
         }
@@ -310,6 +324,11 @@ impl InterfaceSettings {
         self.orb_opacity = if self.orb_opacity.is_finite() { ((self.orb_opacity * 100.0).round() / 100.0).clamp(0.15, 1.0) } else { 1.0 };
         self.orb_anchor = anchor_id(&self.orb_anchor).unwrap_or("bottom-right").to_string();
         self.orb_monitor = self.orb_monitor.min(9);
+        if self.bg_mode != "whole" {
+            self.bg_mode = defaults.bg_mode.clone();
+        }
+        self.bg_interval = self.bg_interval.clamp(3, 3600);
+        self.bg_dim = if self.bg_dim.is_finite() { ((self.bg_dim * 100.0).round() / 100.0).clamp(0.0, 0.9) } else { defaults.bg_dim };
         self.title = self.title.trim().chars().take(32).collect();
         if self.title.is_empty() {
             self.title = defaults.title;
@@ -963,6 +982,7 @@ pub fn configure(current: &InterfaceSettings, args: &Value) -> Result<Configured
             done.push(format!("{label} {}", if on { "on" } else { "off" }));
         }
     }
+    crate::bg_media::apply(&mut s, args, &mut done, &mut failed);
     // "Smaller orb", "bigger orb", "orb size normal": the corner orb, a fifth at a time.
     if let Some(step) = str_arg(args, &["corner_orb_size"]) {
         s.corner_orb_scale = corner_orb_scale(s.corner_orb_scale, step);

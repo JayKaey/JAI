@@ -24,6 +24,7 @@ mod appindex;
 mod audio_mixer;
 mod away_mode;
 mod backups;
+mod bg_media;
 mod block_actions;
 mod block_places;
 mod board_research;

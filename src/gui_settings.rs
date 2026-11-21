@@ -70,6 +70,8 @@ enum Control {
     Open(Tool, &'static str),
     /// Game mode now (the switch), and under it every installed game with its own switch.
     Games,
+    /// The background media: a path field under the row for every monitor and one for each.
+    Media,
 }
 
 /// The installed games for the list: (name, the folder title detection knows it by); None until
@@ -93,7 +95,7 @@ const fn row(group: &'static str, name: &'static str, explain: &'static str, wor
 /// The groups, in the order they stand (each is also a key that shows it alone).
 const GROUPS: [&str; 6] = ["LOOK", "SCREENS", "VOICE", "PRESENCE", "GAMES", "TOOLS"];
 
-static ROWS: [Row; 44] = [
+static ROWS: [Row; 49] = [
     row("LOOK", "Theme", "The HUD's colours: one click on a swatch changes them.", "colour color palette gold cyan red green farbe farben design", Control::Theme),
     row("LOOK", "Your own theme", "Build a theme from your own colours, name it and save it.", "theme studio custom create", Control::Open(Tool::ThemeStudio, "THEME STUDIO")),
     row(
@@ -128,6 +130,23 @@ static ROWS: [Row; 44] = [
     row("SCREENS", "Windows may overlap", "New windows of his may open over each other instead of beside each other.", "stack cascade", Control::Switch(|s| s.allow_window_overlap, |s, v| s.allow_window_overlap = v)),
     row("SCREENS", "Mini mode", "A slim strip at the top of a screen, in front of everything, for gaming or work.", "strip bar small compact leiste klein", Control::Switch(|s| s.mini_strip, |s, v| s.mini_strip = v)),
     row("SCREENS", "Background on every monitor", "As the background he covers all your monitors; off: your first one only.", "wallpaper desktop span all monitors every screen alle monitore bildschirme hintergrund", Control::Switch(|s| s.background_all_monitors, |s, v| s.background_all_monitors = v)),
+    row("SCREENS", "Background media", "A picture, a video or a folder of pictures (a slideshow) on the black, for every monitor or each.", "wallpaper picture video slideshow image photo path folder hintergrund bild diashow ordner", Control::Media),
+    row(
+        "SCREENS",
+        "Media mode",
+        "Behind the board (dimmed), or alone: the board comes only when he is spoken to.",
+        "wallpaper picture video whole fill only black hintergrund",
+        Control::Keys(&[("BEHIND THE BOARD", |s| s.bg_mode != "whole", |s| s.bg_mode = "behind".into()), ("WHOLE BACKGROUND", |s| s.bg_mode == "whole", |s| s.bg_mode = "whole".into())]),
+    ),
+    row(
+        "SCREENS",
+        "Slideshow time",
+        "How long each picture of a slideshow stays before it fades into the next.",
+        "interval seconds minutes diashow wechsel sekunden",
+        Control::Keys(&[("10 S", |s| s.bg_interval == 10, |s| s.bg_interval = 10), ("30 S", |s| s.bg_interval == 30, |s| s.bg_interval = 30), ("1 MIN", |s| s.bg_interval == 60, |s| s.bg_interval = 60), ("5 MIN", |s| s.bg_interval == 300, |s| s.bg_interval = 300)]),
+    ),
+    row("SCREENS", "Video sound", "A background video plays its sound. Off: it is silent.", "audio mute ton stumm", Control::Switch(|s| s.bg_sound, |s, v| s.bg_sound = v)),
+    row("SCREENS", "Media dimming", "How much black lies over the media behind the board, so the board reads.", "dark darker brightness dunkler hell", Control::Size(|s| s.bg_dim, |s, v| s.bg_dim = v, 0.0, 0.9)),
     row("SCREENS", "Words beside the corner orb", "What is said stands beside the orb in its corner. Off: the orb alone.", "info information window plate text orb corner kugel", Control::Switch(|s| s.orb_words, |s, v| s.orb_words = v)),
     row("SCREENS", "Corner orb size", "How large the orb is in its corner (the wheel over it does the same).", "orb size bigger smaller kugel größe", Control::Size(|s| s.corner_orb_scale, |s, v| s.corner_orb_scale = v, 0.6, 1.8)),
     row("SCREENS", "Desktop clock", "As the desktop's backdrop: the time under the emblem. Drag it anywhere.", "clock time uhr uhrzeit", Control::Switch(|s| s.desk_clock, |s, v| s.desk_clock = v)),
@@ -347,10 +366,16 @@ fn body(ui: &mut Ui, iface: &InterfaceSettings) -> Option<Out> {
                             crate::vram_guard::set_game_mode(Some(!on));
                         }
                     }
+                    Control::Media => {}
                 });
             });
             if matches!(row.control, Control::Games) {
                 games_list(ui);
+            }
+            if matches!(row.control, Control::Media) {
+                if let Some(set) = media_fields(ui, iface) {
+                    out = Some(set);
+                }
             }
             let band = Rect::from_min_max(start - vec2(4.0, 2.0), pos2(start.x + width + 4.0, ui.cursor().min.y + 2.0));
             if ui.rect_contains_pointer(band) {
@@ -455,6 +480,38 @@ fn games_list(ui: &mut Ui) {
     }
 }
 
+/// Under "Background media": a path field for every monitor and, with more than one, for each.
+/// What is typed is kept until the field is left, then it is the source (or why not is said).
+fn media_fields(ui: &mut Ui, iface: &InterfaceSettings) -> Option<Out> {
+    let mut out = None;
+    let monitors = crate::monitors::recent();
+    let mut keys = vec![(crate::bg_media::ALL.to_string(), "EVERY MONITOR".to_string())];
+    if monitors.len() > 1 {
+        keys.extend(monitors.iter().map(|m| (m.index.to_string(), format!("MONITOR {}", m.index))));
+    }
+    for (key, label) in keys {
+        ui.horizontal(|ui| {
+            let (tag, _) = ui.allocate_exact_size(vec2(104.0, 22.0), Sense::hover());
+            holo::text(ui.painter(), tag.left_center(), Align2::LEFT_CENTER, Face::Label, &label, 8.0, strip_muted());
+            let id = egui::Id::new(("jai_settings_media", &key));
+            let mut text = ui.data(|d| d.get_temp::<String>(id)).unwrap_or_else(|| iface.bg_media.get(&key).cloned().unwrap_or_default());
+            let edit = egui::TextEdit::singleline(&mut text).hint_text("path of a picture, a video (H.264 MP4) or a folder").desired_width(ui.available_width()).font(FontId::proportional(ts(12.5))).text_color(strip_ink());
+            if crate::holo_ui::slot(ui, edit).has_focus() {
+                ui.data_mut(|d| d.insert_temp(id, text));
+            } else if ui.data_mut(|d| d.remove_temp::<String>(id)).is_some() && iface.bg_media.get(&key).map_or("", String::as_str) != text.trim() {
+                let mut next = iface.clone();
+                match crate::bg_media::set_media(&mut next, &key, &text) {
+                    Ok(_) => out = Some(Out::Set(Box::new(next))),
+                    Err(why) if !crate::platform::hands_off() => crate::hud_notify::record(&why, true),
+                    Err(_) => {}
+                }
+            }
+        });
+    }
+    ui.add_space(4.0);
+    out
+}
+
 /// The settings panel while it is open: a block on the board. Returns what it asks of the HUD.
 pub(super) fn show(ctx: &egui::Context, iface: &InterfaceSettings) -> Option<Out> {
     if crate::hud_feel::take_settings_panel() {
@@ -488,7 +545,9 @@ mod tests {
         assert!(found("quantum flux").is_empty());
         // The search understands German words for the same things.
         assert_eq!(found("nachtmodus"), vec!["Night mode by the clock"]);
-        assert_eq!(found("hintergrund"), vec!["Background on every monitor"]);
+        assert!(found("hintergrund").contains(&"Background on every monitor") && found("hintergrund").contains(&"Background media"));
+        assert_eq!(found("slideshow"), vec!["Background media", "Slideshow time"]);
+        assert!(found("video").contains(&"Video sound") && found("wallpaper").contains(&"Media mode"));
         assert!(found("stimme").contains(&"Only obey me") && found("stimme").contains(&"Learn my voice"));
         assert_eq!(found("lautstärke"), vec!["Mixer"]);
         assert_eq!(found("").len(), rows().count(), "an empty search shows everything");
@@ -537,7 +596,7 @@ mod tests {
                         assert_eq!(chosen, [k], "{}: {label}", row.name);
                     }
                 }
-                Control::Moment(..) | Control::Open(..) | Control::Theme | Control::Games | Control::Name => {}
+                Control::Moment(..) | Control::Open(..) | Control::Theme | Control::Games | Control::Name | Control::Media => {}
             }
         }
         // The features of 2026-11-12 are all here.
