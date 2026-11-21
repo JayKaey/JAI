@@ -371,6 +371,23 @@ pub fn tend_orb(hwnd: isize, pass: bool, drawn: bool) {
     }
 }
 
+/// His board as the desktop's background lets the wallpaper under it show where it is pure
+/// black (`on`), or covers it, at full strength either way (Sir, 2026-11-21: "so that i can see
+/// the wallpaper from wallpaper engine while using JAI"). Asked every frame: it changes the
+/// layer only when that differs (the desktop taking him again sets it anew).
+pub fn key_black(hwnd: isize, on: bool) {
+    use windows::Win32::Foundation::COLORREF;
+    use windows::Win32::UI::WindowsAndMessaging::{GetLayeredWindowAttributes, SetLayeredWindowAttributes, LAYERED_WINDOW_ATTRIBUTES_FLAGS, LWA_ALPHA, LWA_COLORKEY};
+    // SAFETY: the layer attributes of our own window; a stale handle, or a window that is no
+    // layered one (he is a window of his own), just fails.
+    unsafe {
+        let mut flags = LAYERED_WINDOW_ATTRIBUTES_FLAGS(0);
+        if GetLayeredWindowAttributes(HWND(hwnd), None, None, Some(&mut flags)).is_ok() && (flags.0 & LWA_COLORKEY.0 != 0) != on {
+            let _ = SetLayeredWindowAttributes(HWND(hwnd), COLORREF(0), 255, if on { LWA_ALPHA | LWA_COLORKEY } else { LWA_ALPHA });
+        }
+    }
+}
+
 /// Makes window `hwnd` a layered one whose pure black Windows sees through and lets clicks
 /// through, unless it is one already.
 fn key_out_black(hwnd: isize) {

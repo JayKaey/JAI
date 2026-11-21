@@ -113,7 +113,7 @@ static PHRASES: LazyLock<Vec<(Regex, Value)>> = LazyLock::new(|| {
         // His pictures and videos behind the board, chosen by hand: the background window, and
         // the media gone again. (Sir, 2026-11-21: "a window where i can set my background".)
         p(
-            r"^(?:(?:open|show)\s+(?:me\s+)?(?:the\s+|my\s+|your\s+)?background\s+(?:window|settings|menu)|background\s+(?:window|settings)|(?:how\s+(?:can|do)\s+i\s+|i\s+(?:want|would\s+like)\s+to\s+|let\s+me\s+|can\s+i\s+)?(?:set|change|pick|choose)\s+(?:a\s+(?:new\s+)?|the\s+|my\s+|your\s+)?(?:desktop\s+)?(?:background|wallpaper)|(?:ändere?|wechsle?)\s+(?:den\s+|meinen\s+|deinen\s+)?hintergrund|hintergrund\s*-?\s*(?:fenster|einstellungen)|hintergrund\s+ändern)$",
+            r"^(?:(?:open|show)\s+(?:me\s+)?(?:the\s+|my\s+|your\s+)?backgrounds?\s+(?:window|settings|menu)|backgrounds?\s+(?:window|settings)|(?:how\s+(?:can|do)\s+i\s+|i\s+(?:want|would\s+like)\s+to\s+|let\s+me\s+|can\s+i\s+)?(?:set|change|pick|choose)\s+(?:a\s+(?:new\s+)?|the\s+|my\s+|your\s+)?(?:desktop\s+)?(?:background|wallpaper)|(?:ändere?|wechsle?)\s+(?:den\s+|meinen\s+|deinen\s+)?hintergrund|hintergrund\s*-?\s*(?:fenster|einstellungen)|hintergrund\s+ändern)$",
             json!({"background_window": true}),
         ),
         // His protocols, each changed by hand: the protocol window. (Sir, 2026-11-21.)
@@ -123,7 +123,7 @@ static PHRASES: LazyLock<Vec<(Regex, Value)>> = LazyLock::new(|| {
         ),
         // His keys in every program: the Hotkeys window.
         p(
-            r"^(?:(?:open|show)\s+(?:me\s+)?(?:(?:your|my)\s+(?:hot\s*-?\s*keys?|global\s+keys)(?:\s+(?:window|settings|menu))?|(?:the\s+)?(?:hot\s*-?\s*keys?|global\s+keys)\s+(?:window|settings|menu)|(?:the\s+|all\s+)?global\s+keys)|hot\s*-?\s*keys?\s+(?:window|settings)|(?:change|set|pick|choose|give\s+me|make)\s+(?:a\s+|the\s+|my\s+)?(?:new\s+)?(?:mute|microphone|mic)\s+(?:hot\s*)?key|(?:change|edit)\s+(?:the\s+|your\s+|my\s+)?(?:hot\s*-?\s*keys?|global\s+keys)|(?:öffne|zeig)\s+(?:mir\s+)?(?:(?:deine|meine)\s+(?:hotkeys?|tastenkürzel)|(?:das\s+)?hotkey\s*-?\s*fenster)|hotkey\s*-?\s*fenster|(?:ändere?|leg)\s+(?:die\s+|meine\s+)?(?:stumm|mikro(?:fon)?)\s*-?\s*taste(?:\s+fest)?)$",
+            r"^(?:(?:open|show)\s+(?:me\s+)?(?:(?:your|my)\s+(?:hot\s*-?\s*keys?|global\s+keys|key\s*-?\s*bind(?:ing)?s|keys)(?:\s+(?:window|settings|menu))?|(?:the\s+)?(?:hot\s*-?\s*keys?|global\s+keys|key\s*-?\s*bind(?:ing)?s|keys)\s+(?:window|settings|menu)|(?:the\s+|all\s+)?global\s+keys)|(?:hot\s*-?\s*keys?|key\s*-?\s*bind(?:ing)?s)\s+(?:window|settings)|(?:change|set|pick|choose|give\s+me|make)\s+(?:a\s+|the\s+|my\s+)?(?:new\s+)?(?:mute|microphone|mic)\s+(?:hot\s*)?key|(?:change|edit)\s+(?:the\s+|your\s+|my\s+)?(?:hot\s*-?\s*keys?|global\s+keys|key\s*-?\s*bind(?:ing)?s|keys)|(?:öffne|zeig)\s+(?:mir\s+)?(?:(?:deine|meine)\s+(?:hotkeys?|tastenkürzel)|(?:das\s+)?hotkey\s*-?\s*fenster)|hotkey\s*-?\s*fenster|(?:ändere?|leg)\s+(?:die\s+|meine\s+)?(?:stumm|mikro(?:fon)?)\s*-?\s*taste(?:\s+fest)?)$",
             json!({"hotkeys_window": true}),
         ),
         // What is being said, beside the corner orb or not. (Sir, 2026-11-14.)
@@ -816,8 +816,15 @@ mod tests {
             ("show me all settings", json!({"settings_panel": true})),
             ("open the hotkeys window", json!({"hotkeys_window": true})),
             ("show me your hot keys", json!({"hotkeys_window": true})),
+            // (Sir, 2026-11-21, both went looking for a program of that name.)
+            ("open the keybinds window", json!({"hotkeys_window": true})),
+            ("open the keys window", json!({"hotkeys_window": true})),
+            ("show me your key bindings", json!({"hotkeys_window": true})),
             ("hotkeys window", json!({"hotkeys_window": true})),
             ("open the background window", json!({"background_window": true})),
+            // (Sir, 2026-11-21: "open the backgrounds window" found no program "Backgrounds".)
+            ("open the backgrounds window", json!({"background_window": true})),
+            ("backgrounds window", json!({"background_window": true})),
             ("change my background", json!({"background_window": true})),
             ("set my background", json!({"background_window": true})),
             ("how can i change your background", json!({"background_window": true})),

@@ -56,6 +56,7 @@ pub(super) fn show(ctx: &egui::Context, host: &WidgetHost) {
         .with_title("Mobile Satellite Pairing — J.A.I.")
         .with_app_id("jai")
         .with_inner_size([520.0, 700.0])
+        .with_min_inner_size([440.0, 560.0])
         .with_min_inner_size([420.0, 560.0])
         .with_transparent(true)
         .with_decorations(false);
@@ -130,14 +131,23 @@ fn body(ui: &mut egui::Ui, p: &Palette, s: &Shown) {
             let side = |most: f32| most.min(wide);
             match &s.worldwide {
                 Some(url) => {
-                    ui.label(RichText::new(format!("WORLDWIDE HTTPS ONLINE · {}", s.tunnel.provider.to_uppercase())).font(face(Face::Label, 9.0)).color(p.nominal));
-                    // One address for good, or one that is new with every start.
-                    let (stays, colour) = if s.tunnel.permanent { ("PERMANENT ADDRESS", p.nominal) } else { ("CHANGES WHEN THE TUNNEL RESTARTS", p.warn) };
-                    ui.label(RichText::new(stays).font(face(Face::Label, 8.5)).color(colour));
+                    if s.tunnel.tailnet_only {
+                        // (This PC reaches its own Funnel name through Tailscale: its check proved
+                        // nothing for a phone outside the tailnet, 2026-11-21.)
+                        ui.label(RichText::new("TAILSCALE ONLINE · CHECKED INSIDE YOUR TAILNET ONLY").font(face(Face::Label, 9.0)).color(p.warn));
+                    } else {
+                        ui.label(RichText::new(format!("WORLDWIDE HTTPS ONLINE · {}", s.tunnel.provider.to_uppercase())).font(face(Face::Label, 9.0)).color(p.nominal));
+                        // One address for good, or one that is new with every start.
+                        let (stays, colour) = if s.tunnel.permanent { ("PERMANENT ADDRESS", p.nominal) } else { ("CHANGES WHEN THE TUNNEL RESTARTS", p.warn) };
+                        ui.label(RichText::new(stays).font(face(Face::Label, 8.5)).color(colour));
+                    }
                     ui.add_space(6.0);
                     paint_qr(ui, url, side(300.0));
                     ui.add_space(8.0);
                     link(ui, url, p.accent, "Copy link");
+                    if s.tunnel.tailnet_only {
+                        ui.add(egui::Label::new(RichText::new("Opens on a phone with Tailscale switched on. Without it, only while Funnel is on for this PC. At home, the Wi-Fi link below always works.").font(face(Face::Body, 12.0)).color(p.warn)).wrap());
+                    }
                 }
                 None => {
                     ui.add(egui::Label::new(RichText::new(format!("WORLDWIDE TUNNEL {} · {}", s.tunnel.state.to_uppercase(), s.tunnel.detail)).font(face(Face::Label, 9.0)).color(p.warn)).wrap());
@@ -150,9 +160,15 @@ fn body(ui: &mut egui::Ui, p: &Palette, s: &Shown) {
             }
         });
         ui.add_space(10.0);
+        // (Checked inside the tailnet only, "anywhere" is promised for a phone with Tailscale.)
+        let anywhere = if s.tunnel.tailnet_only {
+            "With the Tailscale app switched on, the phone reaches it from anywhere, over 4G/5G mobile data or any Wi-Fi."
+        } else {
+            "It runs through a secure HTTPS tunnel, so it works from anywhere in the world over 4G/5G mobile data or any Wi-Fi; no same Wi-Fi needed."
+        };
         for (n, step) in [
             "Scan the Worldwide HTTPS QR code with your phone's camera (or open the link on the phone).",
-            "It runs through a secure HTTPS tunnel, so it works from anywhere in the world over 4G/5G mobile data or any Wi-Fi; no same Wi-Fi needed.",
+            anywhere,
             "In Safari or Chrome tap Share → \"Add to Home Screen\", open it from there and allow Microphone and Location (GPS).",
         ]
         .iter()
@@ -168,7 +184,7 @@ fn body(ui: &mut egui::Ui, p: &Palette, s: &Shown) {
         }
         if s.worldwide.is_some() {
             ui.add_space(4.0);
-            crate::holo_ui::fold(ui, "pairing_local", "At home: the local Wi-Fi link", false, |ui| {
+            crate::holo_ui::fold(ui, "pairing_local", "At home: the local Wi-Fi link", s.tunnel.tailnet_only, |ui| {
                 muted(ui, format!("Same Wi-Fi as this PC ({}); accept J.A.I.'s own certificate once.", s.ip));
                 link(ui, &s.local, p.muted, "Copy local link");
             });
@@ -270,5 +286,20 @@ mod tests {
                 assert!(!frame.find_text(said).is_empty(), "{size:?}: {said} is not on the view:\n{}", frame.all_text());
             }
         }
+        // Checked from this PC inside the tailnet only (the phone link of 2026-11-21): said so,
+        // and the link for home stands open under it.
+        let mut tailnet = shown(true);
+        tailnet.tunnel.tailnet_only = true;
+        let mut stage = Stage::new(vec2(520.0, 980.0));
+        let frame = stage.frames(4, &mut |ctx| {
+            egui::CentralPanel::default().frame(Frame::none().inner_margin(Margin::same(16.0))).show(ctx, |ui| body(ui, &p, &tailnet));
+        });
+        stage.raster(&frame).save("panel_pairing_tailnet");
+        let flat: String = frame.all_text().split_whitespace().collect();
+        for said in ["INSIDEYOURTAILNETONLY", "Tailscaleswitchedon", LINK, tailnet.local.as_str()] {
+            assert!(flat.contains(said), "{said} is not on the view:\n{}", frame.all_text());
+        }
+        assert!(!flat.contains("WORLDWIDEHTTPSONLINE") && !flat.contains("itworksfromanywhere") && flat.contains("WiththeTailscaleappswitchedon"), "{}", frame.all_text());
+        assert_eq!(visual::clipped_text(&frame), Vec::<String>::new());
     }
 }

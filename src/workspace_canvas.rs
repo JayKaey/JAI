@@ -671,6 +671,10 @@ fn window_frame(ctx: &egui::Context, class: ViewportClass, app: &Jai, rt: &Handl
     };
     let mut w = c.windows.remove(index);
     let keep = frame_body(ctx, class, app, rt, &mut w, &mut c);
+    // (Sized by hand at its edges and corners, as every window of his is.)
+    if keep && class != ViewportClass::Embedded {
+        crate::gui::resize_grips(ctx);
+    }
     if keep {
         let at = index.min(c.windows.len());
         c.windows.insert(at, w);

@@ -49,6 +49,8 @@ const KNOWN: &[(&str, &str)] = &[
     ("systm", "system"), ("sytem", "system"), ("sistem", "system"), ("sysem", "system"), ("systen", "system"), ("sysytem", "system"),
     ("stast", "stats"), ("statts", "stats"), ("satts", "stats"),
     ("telemtry", "telemetry"), ("telemetery", "telemetry"),
+    // ("Open the admin pannel", Sir's own typing, 2026-11-21.)
+    ("pannel", "panel"), ("pannels", "panels"), ("panle", "panel"),
     // Apps Sir names every day.
     ("spotfy", "spotify"), ("spotifiy", "spotify"), ("spotfiy", "spotify"), ("discrod", "discord"), ("dicord", "discord"), ("disocrd", "discord"),
     // The verbs and words of every other command.
@@ -423,6 +425,9 @@ mod tests {
         assert_eq!(normalize_user_input_typos("whats teh time"), "whats the time");
         assert_eq!(normalize_user_input_typos("move yur orb to the left"), "move your orb to the left");
         assert_eq!(normalize_user_input_typos("mute evrything except discord"), "mute everything except discord");
+        // (It found no program "Admin Pannel", 2026-11-21: corrected, it is his admin window.)
+        let admin = normalize_user_input_typos("open the admin pannel");
+        assert!(crate::phrasings::route(&admin).is_some_and(|(tool, _)| tool == "admin"), "{admin}");
     }
 
     #[test]

@@ -111,8 +111,8 @@ static ROWS: [Row; 52] = [
     row(
         "LOOK",
         "Opacity",
-        "How solid the black behind the light is. Lower, and the desktop shows through.",
-        "transparency transparent see through durchsichtig deckkraft",
+        "How solid the black behind his light is. Lower, and your wallpaper shows through it, Wallpaper Engine's too.",
+        "transparency transparent see through durchsichtig deckkraft wallpaper engine",
         Control::Size(|s| s.opacity as f32 / 100.0, |s, v| s.opacity = (v * 100.0).round() as u8, 0.15, 1.0),
     ),
     row("LOOK", "Name", "The name his window goes by in the taskbar.", "title titel call yourself", Control::Name),

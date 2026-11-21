@@ -847,7 +847,7 @@ impl Core {
     /// Paints him on `screen` (the HUD's canvas).
     pub fn paint(&self, p: &Painter, screen: Rect) {
         let frame = self.frame(screen);
-        paint(p, self.glow_id(p), self.style, frame.centre, self.drawn_radius(&frame), &self.look());
+        paint(p, self.glow_id(p), self.style, frame.centre, self.drawn_radius(&frame), &CoreLook { crisp: crate::gui::board_keyed(), ..self.look() });
     }
 
     fn radius_in(&self, rect: Rect) -> f32 {

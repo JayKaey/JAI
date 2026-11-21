@@ -609,16 +609,19 @@ fn body(ui: &mut Ui, desk: &Desk) {
             list(ui, &mut f, desk, &rules, &all);
         });
         ui.add_space(14.0);
+        // (Its own scroll, top to bottom like the list: a long THEN I DO runs past the window's foot.)
         ui.vertical(|ui| {
-            match f.chosen.clone() {
-                Chosen::Rule(key) => rule_view(ui, &mut f, &rules, &key),
-                Chosen::Claps | Chosen::Knock => reaction(ui, &f, desk, &rules, &all),
-                Chosen::New | Chosen::Protocol(_) => editor(ui, &mut f, desk),
-            }
-            if !f.said.0.is_empty() {
-                ui.add_space(4.0);
-                ui.add(Label::new(RichText::new(&f.said.0).font(holo::font(Face::Body, 13.0)).color(if f.said.1 { holo::theme().alert() } else { strip_ink() })).wrap());
-            }
+            crate::holo_block::faded(ui, egui::ScrollArea::vertical().id_salt("protocol_side").auto_shrink([false; 2]), |ui| {
+                match f.chosen.clone() {
+                    Chosen::Rule(key) => rule_view(ui, &mut f, &rules, &key),
+                    Chosen::Claps | Chosen::Knock => reaction(ui, &f, desk, &rules, &all),
+                    Chosen::New | Chosen::Protocol(_) => editor(ui, &mut f, desk),
+                }
+                if !f.said.0.is_empty() {
+                    ui.add_space(4.0);
+                    ui.add(Label::new(RichText::new(&f.said.0).font(holo::font(Face::Body, 13.0)).color(if f.said.1 { holo::theme().alert() } else { strip_ink() })).wrap());
+                }
+            });
         });
     });
 }
@@ -801,5 +804,40 @@ mod tests {
         }
         form().load(None);
         assert!(kit_notes::rule(&serde_json::json!({"action": "remove", "all": true})).is_ok());
+    }
+
+    /// A long protocol's steps scroll into view, down to the last, in the window at its smallest
+    /// (Sir, 2026-11-21: "in the protocol window you cant scroll down in the then i do part").
+    #[test]
+    fn a_long_protocol_scrolls_to_its_last_step() {
+        let _look = crate::holo_theme::look_for_pictures();
+        let _kit = crate::kit::test_lock();
+        let _heard = crate::sound_sense::test_lock();
+        let store = ProtocolStore::in_memory();
+        let acoustic = |_: Option<AcousticSettings>| AcousticSettings::default();
+        let mut lines = vec!["pause the music"; 11];
+        lines.push("set the volume to 30");
+        form().load(Some(&Protocol {
+            name: "long watch".into(),
+            description: String::new(),
+            trigger_phrases: vec!["long watch".into()],
+            when: vec!["Someone knocks".into()],
+            steps: lines.iter().filter_map(|l| Step::of_line(l)).collect(),
+        }));
+        let window = egui::Rect::from_min_size(egui::pos2(10.0, 10.0), egui::vec2(720.0, 520.0));
+        let mut stage = Stage::new(egui::vec2(740.0, 540.0));
+        let mut draw = |ctx: &egui::Context| {
+            egui::Window::new("protocols").title_bar(false).fixed_pos(window.min).fixed_size(window.size()).show(ctx, |ui| body(ui, &desk_with(&store, &acoustic)));
+        };
+        let seen = |frame: &visual::Frame| frame.find_text("Set the volume to 30").iter().any(|r| window.contains_rect(*r));
+        assert!(!seen(&stage.frames(4, &mut draw)), "twelve steps fit the smallest window: this proves nothing");
+        for _ in 0..6 {
+            stage.scroll(egui::pos2(window.left() + LIST_W + 140.0, window.center().y), egui::vec2(0.0, -300.0));
+            stage.frames(20, &mut draw);
+        }
+        let frame = stage.frames(4, &mut draw);
+        form().load(None);
+        assert!(seen(&frame), "the last step cannot be scrolled into view");
+        assert_eq!(visual::clipped_text(&frame), Vec::<String>::new());
     }
 }

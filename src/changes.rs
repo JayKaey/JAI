@@ -94,6 +94,14 @@ pub const RELEASES: &[Release] = &[
         date: "2026-11-21",
         name: "Keys, ears and control",
         entries: &[
+            new("See-through background", "\"Make your background transparent\": your wallpaper, Wallpaper Engine's too, shows behind him.", "see_through"),
+            added("He guesses what you meant", "\"Open the backgrounds window\" finds no program: he opens what you most likely meant."),
+            better("Every window sized by hand", "All his windows are resized at their edges and corners, like any other window."),
+            better("The Features tab, complete", "It lists first what is said aloud, the news, sounds, protocols and more, each with TRY."),
+            fixed("THEN I DO scrolls", "A protocol with many steps scrolls in the Protocol window, down to its last step."),
+            fixed("\"Backgrounds\" and \"keybinds\"", "\"Open the backgrounds window\" and \"the keybinds window\" open his windows, no app search."),
+            fixed("\"Admin pannel\" and every window", "\"Open the admin pannel\" opens his admin window, and a guess now knows every window of his."),
+            fixed("The phone link, said honestly", "Tailscale's address, checked only inside your tailnet, says so; the home link stands open."),
             new("News by country", "\"The most important news from Germany\": that country's newsroom, word for word.", "news"),
             new("Sounds start things", "\"When I clap twice, open Spotify\": a sound starts a rule or a protocol.", "sounds"),
             added("He knows what he hears", "A sound model on this PC names claps, snaps, knocks, bells, phones, alarms, dogs and glass."),
@@ -622,6 +630,13 @@ pub const RELEASES: &[Release] = &[
 
 /// The explanations, by id.
 pub const EXPLANATIONS: &[Explanation] = &[
+    Explanation {
+        id: "see_through",
+        title: "See-through background",
+        what: "\"Make your background transparent\": his black lets your wallpaper through, Wallpaper Engine's too, while his light, his windows and his cards stay as they are. On Windows the black turns fully clear; on Linux (KDE Plasma) it fades as far as the Opacity setting says. \"Make your background solid again\" brings the black back.",
+        say: &["Jay, make your background transparent.", "Jay, make your background solid again.", "Jay, mach deinen Hintergrund durchsichtig.", "Jay, set the opacity to 60 percent."],
+        know: "It is the Opacity row in the settings: anything under 100 makes his black see-through. On Windows it is there or gone, never half (his windows cannot be drawn half clear there), and his core is drawn sharp, without its glow, so no dark seam rims it. The display finish's grain stays off while he is see-through.",
+    },
     Explanation {
         id: "news",
         title: "News by country",

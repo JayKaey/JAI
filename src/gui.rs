@@ -617,7 +617,7 @@ pub fn show_devices() {
 /// everything fetched.
 pub fn run_installer(rt: Handle, config: crate::config::ConfigStore, card: String, brain: Result<&'static str, String>, into: std::path::PathBuf) -> Result<(), String> {
     login_view::installing(config.read(|c| c.main_pc.clone()), crate::fleet::key(&config).is_some(), card, brain, &into);
-    let viewport = egui::ViewportBuilder::default().with_title("Install J.A.I.").with_app_id("jai").with_inner_size([520.0, 560.0]).with_decorations(false).with_icon(Arc::new(window_icon().unwrap_or_default()));
+    let viewport = egui::ViewportBuilder::default().with_title("Install J.A.I.").with_app_id("jai").with_inner_size([520.0, 560.0]).with_min_inner_size([440.0, 480.0]).with_decorations(false).with_icon(Arc::new(window_icon().unwrap_or_default()));
     let options = eframe::NativeOptions {
         viewport,
         renderer: eframe::Renderer::Glow,
@@ -1346,7 +1346,7 @@ struct StartupGeometry {
     position: Option<[f32; 2]>,
 }
 
-/// As the desktop's background (`behind`, the rect it covers in pixels): the plain, opaque,
+/// As the desktop's background (`behind`, the rect it covers in pixels): the plain (on Windows opaque),
 /// borderless window that the desktop is handed before it is first shown (`HudApp::new`).
 /// Without one, the fullscreen board: borderless, opaque, the primary monitor's full resolution
 /// at (0, 0); otherwise the layout's window size, transparent. `on`: the monitor a test session
@@ -1355,7 +1355,9 @@ struct StartupGeometry {
 fn startup_geometry(iface: &InterfaceSettings, behind: Option<[i32; 4]>, windowed: Vec2, on: Option<Rect>) -> StartupGeometry {
     if let Some([l, t, r, b]) = behind {
         let scale = wm::primary_screen().2.max(0.1);
-        return StartupGeometry { fullscreen: false, transparent: false, size: vec2((r - l) as f32 / scale, (b - t) as f32 / scale), position: Some([l as f32 / scale, t as f32 / scale]) };
+        // (On KDE the wallpaper shows through his black by the window's own alpha, `opacity`;
+        // Windows keys the black out instead, `win32_desktop::key_black`.)
+        return StartupGeometry { fullscreen: false, transparent: !cfg!(windows), size: vec2((r - l) as f32 / scale, (b - t) as f32 / scale), position: Some([l as f32 / scale, t as f32 / scale]) };
     }
     let spanning = iface.span_all_monitors;
     let fullscreen = iface.fullscreen && !spanning;
@@ -2610,47 +2612,6 @@ impl HudApp {
             self.pure_orb(ctx, m, iface);
             crate::live_shots::tick(ctx);
         });
-    }
-
-    /// Resize handles on all eight edges and corners of the frameless window (winit gives an
-    /// undecorated window no resize border of its own). Each claims the cursor only while it is
-    /// hovered or dragged.
-    fn resize_grips(ctx: &egui::Context) {
-        use egui::viewport::ResizeDirection as Dir;
-        use egui::CursorIcon as Cursor;
-        let r = ctx.screen_rect();
-        // Corners stay clear of the title bar's buttons (12 pt from the edge).
-        let (t, c) = (5.0, 10.0);
-        let grips = [
-            (Rect::from_min_max(pos2(r.left() + c, r.top()), pos2(r.right() - c, r.top() + t)), Dir::North, Cursor::ResizeNorth),
-            (Rect::from_min_max(pos2(r.left() + c, r.bottom() - t), pos2(r.right() - c, r.bottom())), Dir::South, Cursor::ResizeSouth),
-            (Rect::from_min_max(pos2(r.left(), r.top() + c), pos2(r.left() + t, r.bottom() - c)), Dir::West, Cursor::ResizeWest),
-            (Rect::from_min_max(pos2(r.right() - t, r.top() + c), pos2(r.right(), r.bottom() - c)), Dir::East, Cursor::ResizeEast),
-            (Rect::from_min_size(r.left_top(), vec2(c, c)), Dir::NorthWest, Cursor::ResizeNorthWest),
-            (Rect::from_min_size(pos2(r.right() - c, r.top()), vec2(c, c)), Dir::NorthEast, Cursor::ResizeNorthEast),
-            (Rect::from_min_size(pos2(r.left(), r.bottom() - c), vec2(c, c)), Dir::SouthWest, Cursor::ResizeSouthWest),
-            (Rect::from_min_size(pos2(r.right() - c, r.bottom() - c), vec2(c, c)), Dir::SouthEast, Cursor::ResizeSouthEast),
-        ];
-        for (i, (rect, dir, cursor)) in grips.into_iter().enumerate() {
-            egui::Area::new(egui::Id::new(("hud_resize_grip", i)))
-                .order(egui::Order::Foreground)
-                .fixed_pos(rect.min)
-                .movable(false)
-                .constrain(false)
-                .show(ctx, |ui| {
-                    let (_, response) = ui.allocate_exact_size(rect.size(), Sense::drag());
-                    // Only over the grip itself, or while resizing with it: never while another
-                    // widget is dragged across the edge (egui reports a cursor every frame, so a
-                    // stray claim here would make the arrow flicker between shapes).
-                    let other_drag = ctx.dragged_id().is_some_and(|id| id != response.id);
-                    if response.dragged() || (response.hovered() && !other_drag) {
-                        ctx.set_cursor_icon(cursor);
-                    }
-                    if response.drag_started() {
-                        ctx.send_viewport_cmd(ViewportCommand::BeginResize(dir));
-                    }
-                });
-        }
     }
 
     /// The close button hides the window to the tray; JAI keeps running.
@@ -4434,6 +4395,9 @@ impl HudApp {
         crate::hud_dock::set_all_own(!ctx.embed_viewports());
         let rect = (self.hwnd != 0 && !ctx.embed_viewports()).then(|| background_rect(iface)).flatten();
         let now = crate::wallpaper::tick(self.hwnd, rect, ctx.native_pixels_per_point().unwrap_or(1.0), crate::hud_feel::game_in_front());
+        // Below full opacity the wallpaper shows through his black (`CANVAS_OPACITY`).
+        #[cfg(windows)]
+        crate::win32_desktop::key_black(self.hwnd, matches!(now, Standing::On) && iface.opacity < 100);
         if now == self.backdrop {
             return;
         }
@@ -7605,6 +7569,47 @@ pub(super) fn next_animation_frame(ctx: &egui::Context) {
     }
 }
 
+/// Resize handles on all eight edges and corners of the frameless window (winit gives an
+/// undecorated window no resize border of its own). Each claims the cursor only while it is
+/// hovered or dragged.
+pub(crate) fn resize_grips(ctx: &egui::Context) {
+    use egui::viewport::ResizeDirection as Dir;
+    use egui::CursorIcon as Cursor;
+    let r = ctx.screen_rect();
+    // Corners stay clear of the title bar's buttons (12 pt from the edge).
+    let (t, c) = (5.0, 10.0);
+    let grips = [
+        (Rect::from_min_max(pos2(r.left() + c, r.top()), pos2(r.right() - c, r.top() + t)), Dir::North, Cursor::ResizeNorth),
+        (Rect::from_min_max(pos2(r.left() + c, r.bottom() - t), pos2(r.right() - c, r.bottom())), Dir::South, Cursor::ResizeSouth),
+        (Rect::from_min_max(pos2(r.left(), r.top() + c), pos2(r.left() + t, r.bottom() - c)), Dir::West, Cursor::ResizeWest),
+        (Rect::from_min_max(pos2(r.right() - t, r.top() + c), pos2(r.right(), r.bottom() - c)), Dir::East, Cursor::ResizeEast),
+        (Rect::from_min_size(r.left_top(), vec2(c, c)), Dir::NorthWest, Cursor::ResizeNorthWest),
+        (Rect::from_min_size(pos2(r.right() - c, r.top()), vec2(c, c)), Dir::NorthEast, Cursor::ResizeNorthEast),
+        (Rect::from_min_size(pos2(r.left(), r.bottom() - c), vec2(c, c)), Dir::SouthWest, Cursor::ResizeSouthWest),
+        (Rect::from_min_size(pos2(r.right() - c, r.bottom() - c), vec2(c, c)), Dir::SouthEast, Cursor::ResizeSouthEast),
+    ];
+    for (i, (rect, dir, cursor)) in grips.into_iter().enumerate() {
+        egui::Area::new(egui::Id::new(("hud_resize_grip", i)))
+            .order(egui::Order::Foreground)
+            .fixed_pos(rect.min)
+            .movable(false)
+            .constrain(false)
+            .show(ctx, |ui| {
+                let (_, response) = ui.allocate_exact_size(rect.size(), Sense::drag());
+                // Only over the grip itself, or while resizing with it: never while another
+                // widget is dragged across the edge (egui reports a cursor every frame, so a
+                // stray claim here would make the arrow flicker between shapes).
+                let other_drag = ctx.dragged_id().is_some_and(|id| id != response.id);
+                if response.dragged() || (response.hovered() && !other_drag) {
+                    ctx.set_cursor_icon(cursor);
+                }
+                if response.drag_started() {
+                    ctx.send_viewport_cmd(ViewportCommand::BeginResize(dir));
+                }
+            });
+    }
+}
+
 /// A borderless detached window's frame: the theme's 1 px border, inside the window on the pixel
 /// grid (whole at any DPI), and the corner brackets (Windows draws no grey frame of its own
 /// around a JAI window). It also plays the window's entrance and exit (`WindowMotion`) over
@@ -7644,6 +7649,11 @@ pub(super) fn paint_window_border(ctx: &egui::Context) {
     // Esc in a view he put in full screen ("full screen the Earth") brings its window back.
     if ctx.input(|i| i.key_pressed(egui::Key::Escape) && i.viewport().fullscreen == Some(true)) {
         ctx.send_viewport_cmd(ViewportCommand::Fullscreen(false));
+    }
+    // Sized by hand at its edges and corners, unless it fills the screen (Sir, 2026-11-21: "i
+    // want to be able to resize all the windows").
+    if !ctx.input(|i| i.viewport().fullscreen == Some(true) || i.viewport().maximized == Some(true)) {
+        resize_grips(ctx);
     }
     esc_closes_window(ctx);
     // (Before it first shows itself: from its first frame on screen its black is seen through.)
@@ -7712,7 +7722,7 @@ pub(crate) fn piece_window(ctx: &egui::Context, viewport: ViewportId, title: &st
         let Some(body) = body.take() else { return };
         egui::CentralPanel::default().frame(Frame::none().fill(window_void())).show(ctx, body);
         crate::live_shots::tick(ctx);
-        HudApp::resize_grips(ctx);
+        resize_grips(ctx);
         esc_closes_window(ctx);
         reveal_when_drawn(ctx);
         // (Over the fullscreen board it must stay above it, as his other windows do.)
@@ -9283,13 +9293,29 @@ fn media_rects(ctx: &egui::Context) -> Vec<(usize, Rect)> {
     }
 }
 
+/// How solid the board's black is, in percent (`InterfaceSettings::opacity`, set each frame):
+/// below 100 the desktop's wallpaper shows through it (Sir, 2026-11-21: "so that i can see the
+/// wallpaper from wallpaper engine while using JAI"). Windows keys the black out whole as his
+/// background (`win32_desktop::key_black`); on KDE his window blends it.
+static CANVAS_OPACITY: AtomicU8 = AtomicU8::new(100);
+
+fn canvas_opacity() -> f32 {
+    f32::from(CANVAS_OPACITY.load(Ordering::Relaxed)) / 100.0
+}
+
+/// Whether Windows sees through the board's black: then a glow would stand on the wallpaper as
+/// a dark smudge, and the core is drawn as lines alone (`CoreLook::crisp`).
+pub(crate) fn board_keyed() -> bool {
+    cfg!(windows) && canvas_opacity() < 1.0
+}
+
 /// `paint_canvas` with the media's places given.
 pub(crate) fn paint_canvas_in(ctx: &egui::Context, media: &[(usize, Rect)]) {
     use crate::holo::{a, polar};
     let rect = ctx.screen_rect();
     let painter = ctx.layer_painter(egui::LayerId::background());
     let t = crate::holo::theme();
-    painter.rect_filled(rect, Rounding::ZERO, t.void());
+    painter.rect_filled(rect, Rounding::ZERO, a(t.void(), canvas_opacity()));
     crate::bg_media::paint(ctx, &painter, media);
     let home = home_screen(ctx);
     // Depth: the table drifts a little against the pointer, in whole pixels so it stays sharp;
@@ -9442,9 +9468,12 @@ impl HudApp {
         crate::interface::publish_window_size((screen.width() * iface.scale, screen.height() * iface.scale));
         let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
         crate::bg_media::publish(&iface, m.state != "idle" || !own_window_rects(ctx).is_empty());
+        // (On Windows only his background lets the wallpaper through; a window of his is opaque.)
+        CANVAS_OPACITY.store(if cfg!(windows) && !self.as_background() { 100 } else { iface.opacity }, Ordering::Relaxed);
         paint_canvas(ctx);
-        // (Offscreen renders stay clean: the verifier reads their colours.)
-        if iface.display_finish && !windows_still(ctx) {
+        // (Offscreen renders stay clean: the verifier reads their colours. The grain would stand
+        // on a wallpaper seen through the black.)
+        if iface.display_finish && canvas_opacity() >= 1.0 && !windows_still(ctx) {
             paint_finish(ctx);
         }
         // The Settings drawer slides in from the right (VIEW → SETTINGS).
@@ -9506,7 +9535,7 @@ impl HudApp {
         // (Neither the fullscreen board nor the one across the monitors is resized by hand,
         // nor the desktop's background.)
         if iface.frameless && !iface.fullscreen && !iface.span_all_monitors && !maximized && !self.as_background() {
-            Self::resize_grips(ctx);
+            resize_grips(ctx);
         }
         // As the desktop's background: the orb that leaves it when Sir speaks to him unseen,
         // and in orb mode (or mini mode) the floating orb (or the strip) in front of everything.
@@ -10638,7 +10667,7 @@ mod tests {
         let windowed = vec2(1500.0, 940.0);
         for iface in [InterfaceSettings::default(), InterfaceSettings { orb_mode: true, ..InterfaceSettings::default() }, InterfaceSettings { mini_strip: true, ..InterfaceSettings::default() }] {
             let g = startup_geometry(&iface, Some([0, 0, 2560, 1440]), windowed, Some(second));
-            assert!(!g.fullscreen && !g.transparent && g.position == Some([0.0, 0.0]), "{g:?}");
+            assert!(!g.fullscreen && g.transparent == !cfg!(windows) && g.position == Some([0.0, 0.0]), "{g:?}");
         }
         let board = InterfaceSettings { fullscreen: true, orb_mode: false, span_all_monitors: false, ..InterfaceSettings::default() };
         let g = startup_geometry(&board, None, windowed, Some(second));
@@ -11295,6 +11324,60 @@ mod tests {
         assert_eq!(black(&rest, 0..400), 0, "at rest nothing of it is seen through");
         assert_eq!(black(&exit, 385..400), 720 * 15, "below the folding frame all is seen through");
         assert_eq!(black(&exit, 0..160), 0, "the folding frame itself is not");
+    }
+
+    /// Every window of his is sized by hand at its edges and corners (Sir, 2026-11-21: "i want
+    /// to be able to resize all the windows"): the frame they all share gives each its grip.
+    #[test]
+    fn every_window_of_his_is_sized_at_its_edges_and_corners() {
+        let _g = crate::hud_dock::test_lock();
+        let mut stage = crate::visual_ui_verifier::Stage::new(vec2(720.0, 400.0));
+        let cursor = std::cell::Cell::new(egui::CursorIcon::Default);
+        let mut draw = |ctx: &egui::Context| {
+            egui::CentralPanel::default().frame(Frame::none().fill(block_slate()).inner_margin(Margin::same(14.0))).show(ctx, |ui| {
+                ui.label(RichText::new("Twelve devices answer.").size(13.5).color(strip_ink()));
+            });
+            paint_window_border(ctx);
+            cursor.set(ctx.output(|o| o.cursor_icon));
+        };
+        let mut wrong = Vec::new();
+        for (at, wanted) in [
+            (pos2(718.0, 200.0), egui::CursorIcon::ResizeEast),
+            (pos2(1.0, 200.0), egui::CursorIcon::ResizeWest),
+            (pos2(360.0, 398.0), egui::CursorIcon::ResizeSouth),
+            (pos2(718.0, 398.0), egui::CursorIcon::ResizeSouthEast),
+            (pos2(1.0, 398.0), egui::CursorIcon::ResizeSouthWest),
+            (pos2(360.0, 200.0), egui::CursorIcon::Default),
+        ] {
+            stage.move_pointer(at);
+            stage.frames(3, &mut draw);
+            if cursor.get() != wanted {
+                wrong.push(format!("{at:?}: {:?}, not {wanted:?}", cursor.get()));
+            }
+        }
+        lock(&DETACHED_MOTIONS).forget(ViewportId::ROOT);
+        assert_eq!(wrong, Vec::<String>::new());
+    }
+
+    /// "Make your background transparent": the black behind his light thins, and the wallpaper
+    /// shows through it (`InterfaceSettings::opacity`); "make it solid again" brings it back.
+    #[test]
+    fn a_see_through_background_is_asked_for_in_his_words() {
+        let mut wrong = Vec::new();
+        for said in [
+            "make your background transparent",
+            "make the background see through",
+            "make your background see-through",
+            "mach deinen hintergrund durchsichtig",
+            "make your background transparent so i can see my wallpaper",
+            "make your background solid again",
+        ] {
+            let routed = crate::phrasings::route(said);
+            if !routed.as_ref().is_some_and(|(_, args)| args.get("opacity").is_some() || args.get("transparency").is_some()) {
+                wrong.push(format!("{said} → {routed:?}"));
+            }
+        }
+        assert_eq!(wrong, Vec::<String>::new());
     }
 
     /// "Move it to the middle", "put it on the left half", "full screen it", "minimise it",

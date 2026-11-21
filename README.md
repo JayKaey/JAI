@@ -73,7 +73,7 @@ live, selected or measured. The canvas is always black; the colour is the theme.
   him, the next on the other side, later ones above and below ("overlap the windows" opens them
   in the middle instead). A line ties each window to the core, and its header wears its number
   among the open ones, its title and a lamp for what it is doing. A window you have had before
-  opens where it last stood.
+  opens where it last stood. Every one of them is sized by hand at its edges and corners.
 - **His extra windows** take the HUD's theme unless told otherwise: "make that window red",
   "make that window arc reactor", "make that window transparent", "pin that window".
 - **What steps back.** "Calm mode" lets the readouts at the top and bottom step back until the
@@ -111,6 +111,13 @@ with FILE, FOLDER or NONE for each monitor, and in the SCREENS settings). Behind
 dimmed so the board reads; as the whole background ("fill the whole background") the board
 fades out and comes back when you speak to him or say "show the board". A game in front, a
 locked PC or a window covering the whole monitor pauses them.
+
+His black can also let your own wallpaper through, Wallpaper Engine's too: "make your background
+transparent" ("mach deinen Hintergrund durchsichtig"), "make your background solid again", or
+the Opacity row in the settings (anything under 100). On Windows the black is then gone
+altogether, never half, and his core is drawn sharp without its glow, so no dark seam rims it;
+on Linux (KDE Plasma) it fades as far as the Opacity says. The display finish's grain stays off
+meanwhile.
 
 "Make Discord full screen" is about Discord, "full screen" alone about the window in front, and
 neither ever about him; "move Discord to another monitor" takes it to the next one. A window he
@@ -168,6 +175,11 @@ mir ein Herz" opens a 3D model, "show me waves" or "show me how a pendulum swing
 picture too, and he says he can't draw. What is Sir's own (his calendar, a program, a window, a
 place on the open globe) keeps its own order. Where no tool of his can do a thing, he says so and
 asks "Shall I build a tool for it?"; a yes builds it in the Tool Forge.
+
+An "open …" that finds no program is not the end of it: when one order of his own is close and
+all it does is open or show something, he carries it out and says what he took it as ("open the
+backgrounds window" opens the Background window). A program is still never started on a
+guess.
 
 The Simulation Lab works the physics out itself: a thrown ball, a pendulum and a double pendulum,
 collisions, bouncing balls, a mass on a spring, orbits ("simulate the sun, the earth and a
@@ -347,7 +359,10 @@ a Cloudflare named tunnel (token plus your own hostname), Tailscale Funnel or yo
 The free one: install Tailscale on this PC (tailscale.com/download), sign in, and restart JAI.
 With the provider on "auto" he takes Funnel by himself; the first time he shows a link to switch
 Funnel on for this PC (or run `tailscale funnel 8444` once). The address is then
-`https://<pc>.<tailnet>.ts.net` for good, and so is the pairing link.
+`https://<pc>.<tailnet>.ts.net` for good, and so is the pairing link. This PC reaches its own
+Funnel address through Tailscale itself, so its check proves nothing for a phone outside your
+tailnet: the pairing window then says CHECKED INSIDE YOUR TAILNET ONLY and opens the link for
+home. A phone with the Tailscale app switched on opens the address anywhere.
 
 ## Accounts
 

@@ -1259,6 +1259,9 @@ pub fn spoken_ack(args: &Value, now: &InterfaceSettings) -> String {
         };
         return if now.opacity >= 100 {
             "Done, Sir. Fully opaque again.".into()
+        } else if cfg!(windows) {
+            // (Windows sees through his black whole: `win32_desktop::key_black`.)
+            "Done, Sir. Your wallpaper shows through behind me now.".into()
         } else if now.opacity == MIN_OPACITY && asked.is_some_and(|pct| pct < MIN_OPACITY as i32) {
             format!("Done, Sir. Background opacity at {} percent, the lowest it goes, so you can still find me.", now.opacity)
         } else {

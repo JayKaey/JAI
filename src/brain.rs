@@ -2192,6 +2192,15 @@ impl Brain {
                     "tool_calls": [{ "function": { "name": name, "arguments": args } }]
                 }));
                 hist_msgs.push(tool_message(name, &outcome.output));
+                // No program by that name: the order of his own it most likely was, carried out
+                // when all it does is open or show something (`did_you_mean::guess`).
+                let guess = (name == "open_application" && !outcome.success && !crate::live_self_tester::dry())
+                    .then(|| crate::did_you_mean::guess(text))
+                    .flatten()
+                    .and_then(|g| match fast_as_said(&g.order) {
+                        Some(Fast::Intent(meant)) => Some((g.order, meant)),
+                        _ => None,
+                    });
                 if let Some(line) = picked.filter(|_| outcome.success) {
                     st.say(&line);
                     hist_msgs.push(json!({ "role": "assistant", "content": line }));
@@ -2214,6 +2223,19 @@ impl Brain {
                         st.say_display(&display, &spoken);
                     }
                     hist_msgs.push(json!({ "role": "assistant", "content": spoken }));
+                } else if let Some((order, meant)) = guess {
+                    // Carried out in this same turn, as if he had said it (a turn of its own would
+                    // stop his voice): his line, then the order's own.
+                    info!("[MEANT] '{text}' taken as '{order}'");
+                    let line = format!("I took that as \"{order}\", Sir.");
+                    st.say(&line);
+                    hist_msgs.push(json!({ "role": "assistant", "content": line }));
+                    let mut hist = self.inner.history.lock().await;
+                    for m in hist_msgs {
+                        hist.push(m);
+                    }
+                    drop(hist);
+                    return Box::pin(self.fast_path(meant, &order, st)).await;
                 } else if let Some(line) = self.acknowledge(name, &args, &outcome).map(|l| if outcome.success && self.inner.tools.config.read(|c| c.interface.brief_confirmations) { brief_ack(&l, text) } else { l }).map(|l| self.vary(l)) {
                     st.say(&line);
                     hist_msgs.push(json!({ "role": "assistant", "content": line }));

@@ -737,6 +737,13 @@ impl Stage {
         }
     }
 
+    /// The mouse wheel turned over `at` by `delta` points (a negative y goes down the page).
+    #[cfg(test)]
+    pub fn scroll(&mut self, at: Pos2, delta: Vec2) {
+        self.move_pointer(at);
+        self.events.push(egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta, modifiers: egui::Modifiers::NONE });
+    }
+
     /// A click at `at`; the frame after it.
     pub fn click(&mut self, at: Pos2, button: PointerButton, ui: &mut dyn FnMut(&egui::Context)) -> Frame {
         self.move_pointer(at);

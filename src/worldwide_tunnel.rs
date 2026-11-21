@@ -34,6 +34,9 @@ pub struct TunnelStatus {
     pub provider: String,
     /// The address is the same after every restart (a named tunnel, Funnel, an own server).
     pub permanent: bool,
+    /// Checked from this PC through Tailscale's own network only (MagicDNS answers its name with
+    /// this PC's tailnet address): whether a phone outside the tailnet gets through is not known.
+    pub tailnet_only: bool,
 }
 
 fn state() -> &'static RwLock<TunnelStatus> {
@@ -67,13 +70,38 @@ fn update(provider: &str, phase: &str, detail: impl Into<String>, public_url: Op
     if phase == "reconnecting" {
         tracing::warn!("[TUNNEL] {provider}: {detail}");
     }
-    *state().write().unwrap_or_else(|e| e.into_inner()) = TunnelStatus { state: phase.into(), public_url, detail, provider: provider.into(), permanent: false };
+    *state().write().unwrap_or_else(|e| e.into_inner()) = TunnelStatus { state: phase.into(), public_url, detail, provider: provider.into(), ..Default::default() };
 }
 
 /// The verified public address is up.
-fn online(provider: &str, url: &str, permanent: bool) {
-    let detail = if permanent { "Permanent HTTPS address verified; it stays the same after every restart" } else { "Worldwide HTTPS endpoint verified; scan the QR code" };
-    *state().write().unwrap_or_else(|e| e.into_inner()) = TunnelStatus { state: "online".into(), public_url: Some(url.to_string()), detail: detail.into(), provider: provider.into(), permanent };
+fn online(provider: &str, url: &str, permanent: bool, tailnet_only: bool) {
+    *state().write().unwrap_or_else(|e| e.into_inner()) = up(provider, url, permanent, tailnet_only);
+}
+
+fn up(provider: &str, url: &str, permanent: bool, tailnet_only: bool) -> TunnelStatus {
+    let detail = if tailnet_only {
+        "Answers inside your tailnet; checked from this PC, which reaches it through Tailscale itself. A phone without Tailscale gets through only while Funnel is on"
+    } else if permanent {
+        "Permanent HTTPS address verified; it stays the same after every restart"
+    } else {
+        "Worldwide HTTPS endpoint verified; scan the QR code"
+    };
+    TunnelStatus { state: "online".into(), public_url: Some(url.to_string()), detail: detail.into(), provider: provider.into(), permanent, tailnet_only }
+}
+
+/// Whether `ip` is one of Tailscale's own (100.64.0.0/10, fd7a:115c:a1e0::/48).
+fn tailnet_ip(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => v4.octets()[0] == 100 && (64..128).contains(&v4.octets()[1]),
+        std::net::IpAddr::V6(v6) => v6.segments()[..3] == [0xfd7a, 0x115c, 0xa1e0],
+    }
+}
+
+/// Whether this PC reaches `url` only through the tailnet: then a check from here says nothing
+/// of a phone outside it (the phone link "loads but shows nothing", 2026-11-21).
+async fn through_tailnet(url: &str) -> bool {
+    let Some(host) = reqwest::Url::parse(url).ok().and_then(|u| u.host_str().map(str::to_string)) else { return false };
+    tokio::net::lookup_host((host.as_str(), 443)).await.is_ok_and(|mut found| found.all(|a| tailnet_ip(a.ip())))
 }
 
 pub fn pairing_url(config: &ConfigStore) -> Option<String> {
@@ -586,11 +614,12 @@ pub async fn run(config: ConfigStore, secrets: crate::vault::Vault, port: u16, s
                                     verified = verify_origin(url, &current.token) => verified,
                                 };
                                 if verified {
+                                    let tailnet_only = provider == "tailscale" && through_tailnet(url).await;
                                     if !ready {
-                                        tracing::info!("[TUNNEL] Worldwide HTTPS endpoint online and verified ({}): {url}", if plan.permanent { "permanent address" } else { "changes when the tunnel restarts" });
+                                        tracing::info!("[TUNNEL] Worldwide HTTPS endpoint online and verified ({}{}): {url}", if plan.permanent { "permanent address" } else { "changes when the tunnel restarts" }, if tailnet_only { ", checked inside the tailnet only" } else { "" });
                                     }
                                     ready = true; failures = 0; attempt = 0;
-                                    online(provider, url, plan.permanent);
+                                    online(provider, url, plan.permanent, tailnet_only);
                                 } else if ready {
                                     failures = failures.saturating_add(1);
                                     if failures >= 3 {
@@ -688,6 +717,21 @@ mod tests {
         assert!(!plan(&settings("https://jai.example.com"), None, 8444).unwrap().permanent);
         assert_eq!(configured_address(&settings("https://jai.example.com"), false), None);
         assert_eq!(configured_address(&settings("https://jai.example.com"), true).as_deref(), Some("https://jai.example.com"));
+    }
+
+    #[test]
+    fn a_check_through_the_tailnet_is_no_check_for_a_phone_outside_it() {
+        // MagicDNS answers this PC's own Funnel name with its tailnet address (2026-11-21): the
+        // health check never left the tailnet, and the phone outside it saw nothing.
+        for (ip, tailnet) in [("100.64.0.1", true), ("100.101.102.103", true), ("100.127.255.254", true), ("100.63.255.255", false), ("100.128.0.1", false), ("203.0.113.9", false), ("fd7a:115c:a1e0::1", true), ("2001:db8::1", false)] {
+            assert_eq!(tailnet_ip(ip.parse().unwrap()), tailnet, "{ip}");
+        }
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        assert!(!rt.block_on(through_tailnet("https://localhost")) && !rt.block_on(through_tailnet("not a url")));
+        let inside = up("tailscale", "https://pc.tail1.ts.net", true, true);
+        assert!(inside.tailnet_only && inside.detail.contains("Funnel"), "{inside:?}");
+        let out = up("tailscale", "https://pc.tail1.ts.net", true, false);
+        assert!(!out.tailnet_only && out.detail.starts_with("Permanent"));
     }
 
     #[test]

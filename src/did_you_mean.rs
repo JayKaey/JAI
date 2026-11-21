@@ -186,6 +186,9 @@ const KNOWN: &[(&str, &str)] = &[
     ("open the text console", "type chat keyboard write input"),
     ("show me my calendar", "schedule appointment agenda today"),
     ("show me the earth", "globe world map planet"),
+    ("open the background window", "wallpaper backdrop picture video desktop"),
+    ("open the protocol window", "routine steps edit"),
+    ("open the hotkeys window", "keys shortcuts keyboard"),
     ("brief me", "briefing rundown morning report day update"),
     ("list your features", "abilities commands can do help"),
     ("minimize everything", "window desktop hide all"),
@@ -226,6 +229,7 @@ const SAME: &[&[&str]] = &[
     &["darker", "dim", "dimmer", "dunkler", "dunkel", "dimmen"],
     &["subtitles", "subtitle", "captions", "caption", "subs", "untertitel"],
     &["background", "wallpaper", "backdrop", "hintergrund", "hintergrundbild", "desktophintergrund"],
+    &["hotkeys", "hotkey", "keybinds", "keybind", "keybindings", "keybinding", "tastenkürzel"],
     &["desktop", "schreibtisch"],
     &["pronunciation", "accent", "aussprache", "akzent"],
     &["coach", "trainer", "coaching", "aussprachetraining", "aussprachecoach"],
@@ -346,12 +350,20 @@ struct Known {
 }
 
 static ORDERS: LazyLock<Vec<Known>> = LazyLock::new(|| {
+    // (And every window of his that an "open …" order opens, by its title: "open the admin
+    // pannel" found no program and nothing close, 2026-11-21.)
+    let windows = crate::admin::WINDOWS.iter().filter_map(|w| match w.open {
+        crate::admin::Open::Order(order) if order.starts_with("open ") && !KNOWN.iter().any(|(known, _)| *known == order) => Some((order, format!("{} {}", w.title, w.id.replace('_', " ")))),
+        _ => None,
+    });
     KNOWN
         .iter()
+        .map(|(order, other)| (*order, other.to_string()))
+        .chain(windows)
         .map(|(order, other)| {
             let own = telling(&order.replace("{span}", "").replace("{n}", "").replace("{name}", ""));
             let nouns: Vec<String> = own.iter().filter(|w| weight(w) >= 1.0).cloned().collect();
-            Known { order: *order, nouns: if nouns.is_empty() { own.clone() } else { nouns }, own, other: telling(other) }
+            Known { order, nouns: if nouns.is_empty() { own.clone() } else { nouns }, own, other: telling(&other) }
         })
         .collect()
 });
@@ -444,6 +456,17 @@ pub fn offer_for(said: &str) -> bool {
     standing(|s| s.offer = Some(offer));
     crate::gui::refresh();
     true
+}
+
+/// What an order that found nothing most likely was ("open the backgrounds window": no program
+/// of that name): the one close order he knows, when all it does is open or show something.
+/// More than one, or one that does anything else, is only ever offered. (Sir, 2026-11-21:
+/// "make it so that JAI ... tries to guess if he doesn't find something".)
+pub fn guess(said: &str) -> Option<Choice> {
+    let choices = closest(said);
+    let [only] = choices.as_slice() else { return None };
+    let own = only.order != crate::ear::words(said).join(" ");
+    (own && (only.order.starts_with("open ") || only.order.starts_with("show "))).then(|| only.clone())
 }
 
 /// The offer that stands, if one does.
@@ -609,6 +632,20 @@ mod tests {
         assert!(looks_like_an_order("Throw it in all monitors.") && looks_like_an_order("can you put the wallpaper on every screen") && looks_like_an_order("Jay, mach mal die Untertitel weg"));
         for said in ["the weather is nice today", "I think the subtitles are great", "are the subtitles on?", "good morning", "that was a long day"] {
             assert!(!looks_like_an_order(said), "{said}");
+        }
+    }
+
+    #[test]
+    fn an_open_order_that_found_nothing_is_taken_as_the_one_close_view() {
+        // "open the backgrounds window" found no program of that name (Sir, 2026-11-21).
+        for (said, meant) in [("open the backgrounds window", "open the background window"), ("Jay, open the keybinds window", "open the hotkeys window"), ("open the protocols window please", "open the protocol window"), ("open the admin pannel", "open the admin window"), ("open the accounts", "open the accounts list")] {
+            assert_eq!(guess(said).map(|c| c.order).as_deref(), Some(meant), "{said}");
+            // (Carried out by the fast path in the same turn: it must be an order there.)
+            assert!(matches!(crate::brain::fast_as_said(meant), Some(crate::brain::Fast::Intent(_))), "{meant}");
+        }
+        // Its own words, nothing close, more than one close, or one that does more than open.
+        for said in ["open the background window", "open teams", "open the pod bay doors", "Throw it in all monitors.", "the captions should go away"] {
+            assert_eq!(guess(said).map(|c| c.order), None, "{said}");
         }
     }
 

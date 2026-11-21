@@ -678,6 +678,7 @@ impl Hub {
         }
         let tunnel = crate::worldwide_tunnel::snapshot();
         let (colour, line) = match (&tunnel.public_url, tunnel.permanent) {
+            (Some(url), _) if tunnel.tailnet_only => (p.warn, format!("ONLINE INSIDE YOUR TAILNET // {url} // {}", tunnel.detail)),
             (Some(url), true) => (p.nominal, format!("PERMANENT ADDRESS ONLINE // {url}")),
             (Some(url), false) => (p.warn, format!("ONLINE // {url} // this address is new whenever the tunnel restarts")),
             (None, _) => match crate::worldwide_tunnel::configured_address(&q.satellite, token_stored) {

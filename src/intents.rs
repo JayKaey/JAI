@@ -3345,7 +3345,7 @@ static HUD_ZOOM_SET: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(?:set\s+)?(?:the\s+)?(?:zoom|scale|ui scale|interface scale|text size|font size|skalierung)\s+(?:to\s+|auf\s+|at\s+)?(\d{2,3})\s*(?:%|percent|prozent)?$")
 });
 static HUD_OPACITY: LazyLock<Regex> = LazyLock::new(|| {
-    re(r"^(?:make\s+)?(?:(?:the|your)\s+)?(?:window|interface|hud|background|yourself|gui|ui|everything)\s+(?:a bit\s+|a little\s+|slightly\s+)?((?:more|less)\s+(?:transparent|see[- ]through|opaque|solid)|transparent|see[- ]through|translucent|opaque|solid|non[- ]transparent)$|^(?:mach|mache)\s+(?:dich|das fenster|das interface|die oberfläche|den hintergrund|das hud|alles)\s+(durchsichtig|durchsichtiger|transparent|transparenter|undurchsichtig|weniger transparent|weniger durchsichtig)$")
+    re(r"^(?:make\s+)?(?:(?:the|your)\s+)?(?:window|interface|hud|background|yourself|gui|ui|everything)\s+(?:a bit\s+|a little\s+|slightly\s+)?((?:more|less)\s+(?:transparent|see[- ]through|opaque|solid)|transparent|see[- ]through|translucent|opaque|solid|non[- ]transparent)(?:\s+again|\s+so\s+(?:that\s+)?i\s+can\s+see\b.*)?$|^(?:mach|mache)\s+(?:dich|das fenster|das interface|die oberfläche|(?:den|deinen) hintergrund|das hud|alles)\s+(?:wieder\s+)?(durchsichtig|durchsichtiger|transparent|transparenter|undurchsichtig|weniger transparent|weniger durchsichtig)$")
 });
 static HUD_OPACITY_SET: LazyLock<Regex> = LazyLock::new(|| {
     // ("Make the interfaces opacity 0 %": "interface's" without its apostrophe.)

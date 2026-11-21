@@ -255,10 +255,24 @@ fn cached_catalogue(tools: &ToolContext) -> Arc<Catalogue> {
         return Arc::clone(c);
     }
     let defs = tools.definitions();
-    let plans = defs.iter().filter_map(|d| Some((d["function"]["name"].as_str()?.to_string(), try_plan(d)))).collect();
-    let fresh = Arc::new(Catalogue { built: std::time::Instant::now(), groups: catalogue(&defs), plans });
+    let mut plans: BTreeMap<String, TryPlan> = defs.iter().filter_map(|d| Some((d["function"]["name"].as_str()?.to_string(), try_plan(d)))).collect();
+    let mut groups = catalogue(&defs);
+    groups.insert(0, said_aloud(&mut plans));
+    let fresh = Arc::new(Catalogue { built: std::time::Instant::now(), groups, plans });
     *cached = Some(Arc::clone(&fresh));
     fresh
+}
+
+/// The first group: every feature the changes page explains, by its name. Most are said aloud
+/// and are no tool of the model's (the news, the sounds, the protocol window); [ TRY ] puts its
+/// first example in the console. (Sir, 2026-11-21: "update the features tab of JAI".)
+fn said_aloud(plans: &mut BTreeMap<String, TryPlan>) -> (&'static str, Vec<(String, String)>) {
+    for e in crate::changes::EXPLANATIONS {
+        if let Some(first) = e.say.first() {
+            plans.insert(e.title.to_lowercase(), TryPlan::Console(first.trim_start_matches("Jay, ").to_string()));
+        }
+    }
+    ("Said aloud", crate::changes::EXPLANATIONS.iter().map(|e| (e.title.to_lowercase(), e.what.to_string())).collect())
 }
 
 /// The lab's content: the filter, `[ TEST ALL PROBES ]` with the live suite's tally, what failed,
@@ -480,6 +494,24 @@ mod tests {
             assert!(line == description.trim() || line.ends_with(['.', '!', '?']), "{name}: {line}");
             assert!(!line.ends_with("(e.") && !line.ends_with(" e."), "{name}: {line}");
         }
+    }
+
+    #[test]
+    fn what_is_said_aloud_is_listed_with_an_example_to_try() {
+        // The news and the sounds were nowhere in the tab (2026-11-21): no tool of the model's.
+        let mut plans = BTreeMap::new();
+        let (group, features) = said_aloud(&mut plans);
+        assert_eq!((group, features.len()), ("Said aloud", crate::changes::EXPLANATIONS.len()));
+        for name in ["news by country", "sounds start things", "your own background"] {
+            assert!(features.iter().any(|(title, _)| title == name), "{name}: {features:?}");
+        }
+        for (title, what) in &features {
+            assert!(!what.is_empty(), "{title}");
+            if let Some(plan) = plans.get(title) {
+                assert!(matches!(plan, TryPlan::Console(said) if !said.is_empty() && !said.starts_with("Jay,")), "{title}: {plan:?}");
+            }
+        }
+        assert!(plans.len() * 2 > features.len(), "most have an example: {} of {}", plans.len(), features.len());
     }
 
     #[test]
