@@ -32,6 +32,9 @@ if ($crt) {
 } else {
     Write-Warning 'Visual C++ redistributable files not found; JAI.exe will use the system-wide runtime.'
 }
+# The Vulkan loader that Whisper's graphics-card path links to (from the GPU driver or the Vulkan
+# SDK): on a PC without one JAI.exe would not start; without a card it hears on the CPU.
+Copy-Item (Join-Path $env:SystemRoot 'System32\vulkan-1.dll') $root -Force
 
 # 3. Built-in engines, copied once from local installs when missing.
 $engine = Join-Path $root 'runtime\ollama'

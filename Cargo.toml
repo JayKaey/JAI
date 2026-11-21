@@ -2,7 +2,7 @@
 name = "jai"
 version = "3.2.2"
 edition = "2021"
-rust-version = "1.87"
+rust-version = "1.88"
 authors = ["Stark Industries <jai@stark.local>"]
 description = "J.A.I. - local, offline, low-latency voice assistant in Rust"
 publish = false
@@ -59,7 +59,7 @@ ringbuf = "0.3.3"
 ort = "=2.0.0-rc.15"
 
 # whisper.cpp speech-to-text (logs routed into `tracing`)
-whisper-rs = { version = "0.12.0", features = ["whisper-cpp-tracing"] }
+whisper-rs = { version = "0.16.0", features = ["tracing_backend"] }
 
 # HTML parsing for the multi-source web search and the deep page reader
 scraper = "0.22"
@@ -107,6 +107,9 @@ chacha20poly1305 = "0.10"
 # The prebuilt Windows ONNX Runtime always ships with DirectML; this only exposes the API so
 # Kokoro can optionally run on the GPU (`tts_gpu` in jai_config.json).
 ort = { version = "=2.0.0-rc.15", features = ["directml"] }
+# Whisper on the graphics card through Vulkan (any vendor; the CPU when there is none or a game
+# runs). Building it needs the Vulkan SDK (`VULKAN_SDK`); `vulkan-1.dll` ships beside JAI.exe.
+whisper-rs = { version = "0.16.0", features = ["vulkan"] }
 # The HUD's native window handle (show/hide from the tray, placement, quit message).
 raw-window-handle = "0.6"
 # The vault's master key lives in the Windows Credential Manager.

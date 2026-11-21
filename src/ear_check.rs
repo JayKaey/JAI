@@ -103,8 +103,16 @@ async fn stages(stt: &SttEngine, matcher: &WakeWordMatcher, pcm: &[f32], voiced_
     Ok(Stages { first, plain, with_ear, again, careful_ms, first_ms: heard.stt_ms })
 }
 
+/// `JAI_EAR_MODEL` hears with another model and `JAI_EAR_CPU` keeps it off the graphics card,
+/// to compare them on the same clips.
 async fn recogniser(cfg: &JaiConfig) -> Option<SttEngine> {
-    let stt = SttEngine::start(cfg);
+    let mut cfg = cfg.clone();
+    if let Ok(model) = std::env::var("JAI_EAR_MODEL") {
+        cfg.whisper_model_path.clone_from(&model);
+        cfg.whisper_gpu_model_path = model;
+    }
+    cfg.whisper_gpu &= std::env::var_os("JAI_EAR_CPU").is_none();
+    let stt = SttEngine::start(&cfg);
     let wait = Instant::now();
     while !stt.is_ready() && wait.elapsed() < Duration::from_secs(120) {
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -113,6 +121,12 @@ async fn recogniser(cfg: &JaiConfig) -> Option<SttEngine> {
         error!("[EARCHECK] The recogniser did not load");
         return None;
     }
+    // (It hears on the CPU at once and moves to the graphics card when that has loaded: the
+    // clips are heard where it settles.)
+    while cfg.whisper_gpu && !stt.model_name().ends_with(&format!("({})", crate::stt::ON_CARD)) && wait.elapsed() < Duration::from_secs(90) {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    info!("[EARCHECK] Heard with {}", stt.model_name());
     Some(stt)
 }
 

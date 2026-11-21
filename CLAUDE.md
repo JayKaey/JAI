@@ -27,8 +27,8 @@ Finish every task with this checklist:
 
 - `build.bat` runs `cargo build --release`, then `tools\package.ps1`. The script copies `target\release\jai.exe` to `JAI.exe` with its DLLs. It refuses while `JAI.exe` is running, and it fails if the exe is a console-subsystem build.
 - `setup/` is the one crate besides `jai`, with its own workspace and `target/`: the one-file setup for other PCs. Its build packs the folder `JAI_SETUP_PAYLOAD` names (the built JAI and its DLLs); without it the setup holds nothing. Test it with `cargo test` inside `setup/`.
-- Plain `cargo` outside `build.bat` fails inside `whisper-rs`, because bindgen needs libclang. In Git Bash, from the repo root, run this first:
-  `export PATH="/c/Program Files/Microsoft Visual Studio/18/Community/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin:$PATH" LIBCLANG_PATH="$(pwd -W)/tools/libclang"`
+- Plain `cargo` outside `build.bat` fails inside `whisper-rs`: bindgen needs libclang, whisper.cpp's Vulkan path needs the Vulkan SDK (`VULKAN_SDK`, installed in `C:\VulkanSDK`), and Visual Studio's generator fails on the long paths of the Vulkan shader tool's build, so it is built with Ninja. In Git Bash, from the repo root, run this first:
+  `VS="/c/Program Files/Microsoft Visual Studio/18/Community/Common7/IDE/CommonExtensions/Microsoft/CMake"; export PATH="$VS/CMake/bin:$VS/Ninja:$PATH" LIBCLANG_PATH="$(pwd -W)/tools/libclang" CMAKE_GENERATOR=Ninja`
 - `cargo test --release` runs the whole suite (~1,300 `#[test]`s inline in the `src/` modules; `tests/fixtures/` only holds data). To run one test: `cargo test --release <name_substring> -- --nocapture`.
 - `src/live_checks.rs` holds `#[ignore]`d tests that act on the real PC (mixer, master volume, shutdown, lock screen, vault). Each needs its own env var (`JAI_REAL_AUDIO`, `JAI_REAL_MASTER`, `JAI_REAL_POWER`, `JAI_REAL_LOCK`, `JAI_EXE`, `JAI_VAULT_DB`). Run one with `cargo test --release <name> -- --ignored`.
 - `.cargo/config.toml` forces `-O2` for whisper.cpp; without it, speech recognition is about 20× slower. After you change those flags, run `cargo clean -p whisper-rs-sys --release`.

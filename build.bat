@@ -4,8 +4,12 @@ rem To run J.A.I. just double-click JAI.exe; add --console to see the live log.
 title Building J.A.I.
 cd /d "%~dp0"
 
-rem Toolchain for building whisper.cpp (cmake + libclang for bindgen)
-set "PATH=%USERPROFILE%\.cargo\bin;C:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin;%PATH%"
+rem Toolchain for building whisper.cpp (cmake, Ninja, libclang for bindgen; Vulkan from the
+rem Vulkan SDK's VULKAN_SDK). Ninja, because Visual Studio's file tracker fails on the long
+rem paths of the Vulkan shader tool's own build.
+set "VSCMAKE=C:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\CommonExtensions\Microsoft\CMake"
+set "PATH=%USERPROFILE%\.cargo\bin;%VSCMAKE%\CMake\bin;%VSCMAKE%\Ninja;%PATH%"
+set "CMAKE_GENERATOR=Ninja"
 if not defined LIBCLANG_PATH set "LIBCLANG_PATH=%~dp0tools\libclang"
 
 cargo build --release || goto :failed

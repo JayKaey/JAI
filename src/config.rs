@@ -234,6 +234,11 @@ pub struct JaiConfig {
     /// Smallest encoder window (frames, 50 per second) used with the dynamic window.
     pub whisper_min_audio_ctx: i32,
     pub whisper_flash_attn: bool,
+    /// Whisper runs on the graphics card (Vulkan) when there is one and no game runs, with
+    /// `whisper_gpu_model_path`; on the CPU it keeps `whisper_model_path` (`stt::Models`).
+    pub whisper_gpu: bool,
+    /// The model on the graphics card; missing, the CPU's model is used there too.
+    pub whisper_gpu_model_path: String,
     /// The whole process runs above normal priority for the half second a decode lasts
     /// (`platform::urgent`), so a busy CPU does not slow the transcript. Off: Whisper shares
     /// the cores evenly with whatever else runs.
@@ -670,6 +675,8 @@ impl Default for JaiConfig {
             // The encoder window follows the clip ((secs / 30 × 1500) + 64 frames); 128 is the floor.
             whisper_min_audio_ctx: 128,
             whisper_flash_attn: false,
+            whisper_gpu: true,
+            whisper_gpu_model_path: "models/ggml-large-v3-turbo-q5_0.bin".to_string(),
             whisper_priority_boost: true,
             whisper_fast_decode: true,
             whisper_second_hearing: true,

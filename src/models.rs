@@ -65,6 +65,7 @@ fn known_size(file_name: &str) -> Option<u64> {
         "ggml-small-q8_0.bin" => Some(264_464_607),
         "ggml-base-q8_0.bin" => Some(81_768_585),
         "ggml-small.bin" => Some(487_601_967),
+        "ggml-large-v3-turbo-q5_0.bin" => Some(574_041_195),
         _ => None,
     }
 }
@@ -96,6 +97,18 @@ pub fn required_files(cfg: &JaiConfig) -> Vec<ModelFile> {
         } else {
             warn!("[MODELS] Whisper model {name} is not a standard ggml file name; cannot auto-download it.");
         }
+    }
+
+    // The model Whisper hears with on a graphics card (optional: without it the CPU's goes there).
+    let name = file_name(&cfg.whisper_gpu_model_path);
+    if cfg.whisper_gpu && name.starts_with("ggml-") && name.ends_with(".bin") && crate::stt::has_card() {
+        files.push(ModelFile {
+            label: "Whisper (graphics card)",
+            path: PathBuf::from(&cfg.whisper_gpu_model_path),
+            url: format!("{WHISPER_BASE}/{name}"),
+            expected_size: known_size(&name),
+            required: false,
+        });
     }
 
     files.push(ModelFile {

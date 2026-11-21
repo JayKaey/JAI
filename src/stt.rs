@@ -45,7 +45,7 @@ use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
 use tracing::{error, info, warn};
-use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperState, WhisperToken};
+use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperState, WhisperTokenId};
 
 const SAMPLE_RATE: usize = 16_000;
 /// Longer than this (1.6 s) a clip is a sentence, not a one-word command.
@@ -178,13 +178,16 @@ struct Settings {
     languages: Vec<String>,
     dynamic_ctx: bool,
     min_ctx: i32,
+    /// The loaded model hears only its whole 30 s window (`needs_whole_window`), whatever
+    /// `dynamic_ctx` says.
+    whole_window: bool,
     /// One encoder pass per clip (see the module notes); false is the v22 decoding (a separate
     /// language-detection pass, the beam search for every sentence).
     fast: bool,
     /// `<|startoftranscript|>`, `<|nospeech|>` and `<|endoftext|>` of the loaded model.
-    sot: WhisperToken,
-    no_speech: WhisperToken,
-    eot: WhisperToken,
+    sot: WhisperTokenId,
+    no_speech: WhisperTokenId,
+    eot: WhisperTokenId,
 }
 
 /// A transcript with Whisper's own confidence.
@@ -261,21 +264,25 @@ impl SttEngine {
             languages: cfg.whisper_languages.clone(),
             dynamic_ctx: cfg.whisper_dynamic_audio_ctx,
             min_ctx: cfg.whisper_min_audio_ctx.clamp(64, 1500),
+            whole_window: false,
             fast: cfg.whisper_fast_decode,
             sot: 0,
             no_speech: 0,
             eot: 0,
         };
         // Multilingual models only (German and English); an `.en` model is swapped for its sibling.
-        let paths = model_candidates(&prefer_multilingual(&cfg.whisper_model_path), &prefer_multilingual(&cfg.whisper_fallback_model_path));
-        let flash_attn = cfg.whisper_flash_attn;
+        let cpu = model_candidates(&prefer_multilingual(&cfg.whisper_model_path), &prefer_multilingual(&cfg.whisper_fallback_model_path));
+        let gpu = model_candidates(&prefer_multilingual(&cfg.whisper_gpu_model_path), &cpu[0]);
+        // (Measured on the card with its buffers: turbo q5 1304 MB from 547 MB on disk, small 864 MB from 252.)
+        let gpu_need_mb = gpu.iter().find_map(|p| std::fs::metadata(p).ok()).map_or(0, |m| m.len() / 1_048_576) * 2 + 400;
+        let mut models = Models { cpu, gpu, flash_attn: cfg.whisper_flash_attn, gpu_allowed: cfg.whisper_gpu, gpu_need_mb, name: Arc::clone(&model), coming: None };
         // (A scripted session may run beside Sir's game: it never takes the cores from it.)
         let boost = cfg.whisper_priority_boost && !crate::platform::in_test_session();
-        let (ready_w, model_w) = (Arc::clone(&ready), Arc::clone(&model));
+        let ready_w = Arc::clone(&ready);
 
         let spawned = std::thread::Builder::new().name("jai-stt".into()).spawn(move || {
             crate::platform::raise_thread_priority(false);
-            let Some(first) = WhisperEngine::load(&paths, flash_attn, &mut settings) else {
+            let Some(first) = models.load(&mut settings) else {
                 error!("[STT] No Whisper model could be loaded; voice input is disabled.");
                 crate::vram_guard::report_stt(false);
                 for job in rx {
@@ -283,7 +290,6 @@ impl SttEngine {
                 }
                 return;
             };
-            *model_w.lock().unwrap_or_else(|e| e.into_inner()) = first.path.clone();
             ready_w.store(true, Ordering::Release);
             crate::vram_guard::report_stt(true);
 
@@ -297,7 +303,7 @@ impl SttEngine {
                 match rx.recv_timeout(Duration::from_millis(250)) {
                     Ok(job) => {
                         if engine.is_none() {
-                            engine = WhisperEngine::load(&paths, flash_attn, &mut settings);
+                            engine = models.load(&mut settings);
                             crate::vram_guard::report_stt(engine.is_some());
                         }
                         let result = match engine.as_mut() {
@@ -326,8 +332,27 @@ impl SttEngine {
                         last_job = Instant::now();
                     }
                     Err(mpsc::RecvTimeoutError::Timeout) => {
+                        // The card's engine has loaded: it takes over, unless he went to sleep
+                        // or a game started meanwhile.
+                        if let Some((card, card_settings)) = models.arrived() {
+                            if engine.is_some() && models.wants_gpu(true) {
+                                models.in_use(&card);
+                                (engine, settings) = (Some(card), card_settings);
+                            }
+                        }
+                        match engine.as_ref().map(|e| e.gpu) {
+                            // A game takes the card: off it at once, its memory freed first.
+                            Some(true) if !models.wants_gpu(true) => {
+                                drop(engine.take());
+                                engine = models.load(&mut settings);
+                                crate::vram_guard::report_stt(engine.is_some());
+                            }
+                            // The game is over, or the card has room again: back onto it.
+                            Some(false) => models.fetch_gpu(&settings),
+                            _ => {}
+                        }
                         let action = crate::vram_guard::worker_action(engine.is_some(), &mut epoch, last_job, retry_at);
-                        let changed = crate::vram_guard::apply_worker_action(&mut engine, action, || WhisperEngine::load(&paths, flash_attn, &mut settings));
+                        let changed = crate::vram_guard::apply_worker_action(&mut engine, action, || models.load(&mut settings));
                         match action {
                             crate::vram_guard::WorkerAction::Unload if changed => info!("[STT] Whisper unloaded (zero-VRAM standby)."),
                             crate::vram_guard::WorkerAction::Reload => {
@@ -408,6 +433,96 @@ struct WhisperEngine {
     prior: &'static str,
     _ctx: WhisperContext,
     path: String,
+    /// It runs on the graphics card.
+    gpu: bool,
+}
+
+/// How `SttEngine::model_name` says that Whisper runs on the graphics card.
+pub const ON_CARD: &str = "graphics card";
+
+/// Where Whisper runs: on the graphics card (Vulkan) when there is one with room beside the
+/// brain and no game runs, with its own model; on the CPU otherwise (`whisper_gpu`).
+struct Models {
+    cpu: Vec<String>,
+    gpu: Vec<String>,
+    flash_attn: bool,
+    gpu_allowed: bool,
+    /// What it takes on the card (MB): the model and its buffers.
+    gpu_need_mb: u64,
+    /// The model in use, for `SttEngine::model_name`.
+    name: Arc<std::sync::Mutex<String>>,
+    /// The engine loading onto the card in the background, with its settings (`arrived`).
+    coming: Option<mpsc::Receiver<Option<(WhisperEngine, Settings)>>>,
+}
+
+impl Models {
+    /// `on_gpu`: where it runs now. Onto the card only with room for itself and the brain; off it
+    /// only for a game (never for room, or it would see-saw with the brain).
+    fn wants_gpu(&self, on_gpu: bool) -> bool {
+        self.gpu_allowed && !crate::vram_guard::in_game() && card().is_some_and(|(_, free)| on_gpu || free >= self.gpu_need_mb + crate::vram_guard::brain_reserve_mb())
+    }
+
+    /// The engine to hear with at once: the CPU's, ready in about a second as before (the card's
+    /// first load takes 10 s and more); the card's follows in the background (`fetch_gpu`).
+    fn load(&mut self, settings: &mut Settings) -> Option<WhisperEngine> {
+        let engine = WhisperEngine::load(&self.cpu, self.flash_attn, false, settings).or_else(|| self.wants_gpu(false).then(|| WhisperEngine::load(&self.gpu, self.flash_attn, true, settings)).flatten())?;
+        self.in_use(&engine);
+        if !engine.gpu {
+            self.fetch_gpu(settings);
+        }
+        Some(engine)
+    }
+
+    fn in_use(&self, engine: &WhisperEngine) {
+        *self.name.lock().unwrap_or_else(|e| e.into_inner()) = format!("{} ({})", engine.path, if engine.gpu { ON_CARD } else { "CPU" });
+    }
+
+    /// Starts loading the card's engine on a thread of its own, when the card may take it.
+    fn fetch_gpu(&mut self, settings: &Settings) {
+        if self.coming.is_some() || !self.wants_gpu(false) {
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        let (paths, flash_attn, mut settings) = (self.gpu.clone(), self.flash_attn, settings.clone());
+        let spawned = std::thread::Builder::new().name("jai-stt-card".into()).spawn(move || {
+            let engine = WhisperEngine::load(&paths, flash_attn, true, &mut settings);
+            let _ = tx.send(engine.map(|e| (e, settings)));
+        });
+        if spawned.is_ok() {
+            self.coming = Some(rx);
+        }
+    }
+
+    /// The card's engine, once it has loaded (a failed load keeps Whisper on the CPU).
+    fn arrived(&mut self) -> Option<(WhisperEngine, Settings)> {
+        let got = self.coming.as_ref()?.try_recv();
+        if matches!(got, Err(mpsc::TryRecvError::Empty)) {
+            return None;
+        }
+        self.coming = None;
+        let done = got.ok().flatten();
+        if done.is_none() {
+            warn!("[STT] Whisper could not run on the graphics card: it hears on the CPU from now on.");
+            self.gpu_allowed = false;
+        }
+        done
+    }
+}
+
+/// Whether Whisper has a graphics card to run on (`card`).
+pub fn has_card() -> bool {
+    card().is_some()
+}
+
+/// The graphics card Whisper runs on and its free memory (MB): Vulkan's first device, a
+/// discrete card before an integrated one. None without one (or without Vulkan: Linux builds).
+fn card() -> Option<(String, u64)> {
+    #[cfg(windows)]
+    {
+        whisper_rs::vulkan::list_devices().into_iter().next().map(|card| (card.name, card.vram.free as u64 / 1_048_576))
+    }
+    #[cfg(not(windows))]
+    None
 }
 
 /// The language a clip is decoded in before anything was heard: English when allowed (most of
@@ -419,9 +534,10 @@ fn first_language(languages: &[String]) -> &'static str {
 
 impl WhisperEngine {
     /// Loads the first model that works and warms it up (also used to re-load after standby).
-    fn load(paths: &[String], flash_attn: bool, settings: &mut Settings) -> Option<Self> {
+    fn load(paths: &[String], flash_attn: bool, gpu: bool, settings: &mut Settings) -> Option<Self> {
         let t0 = Instant::now();
-        let (ctx, path) = load_model(paths, flash_attn)?;
+        let free_before = gpu.then(card).flatten().map(|(_, free)| free);
+        let (ctx, path) = load_model(paths, flash_attn, gpu)?;
         let mut state = match ctx.create_state() {
             Ok(s) => s,
             Err(e) => {
@@ -436,6 +552,7 @@ impl WhisperEngine {
         settings.sot = ctx.token_sot();
         settings.no_speech = ctx.token_nosp();
         settings.eot = ctx.token_eot();
+        settings.whole_window = needs_whole_window(ctx.model_n_audio_layer());
 
         // Warm-up: allocates compute buffers and seeds the encoder windows. whisper.cpp keeps
         // the last `audio_ctx` per state and language detection reuses it, so a second state
@@ -458,9 +575,12 @@ impl WhisperEngine {
         } else {
             None
         };
+        let place = match (gpu.then(card).flatten(), free_before) {
+            (Some((name, free)), Some(before)) => format!("on {name}, {} MB of its memory", before.saturating_sub(free)),
+            _ => format!("on the CPU, {} threads", settings.threads),
+        };
         info!(
-            "[STT] Whisper ready: {path} ({} threads, {}, load + warm-up {} ms)",
-            settings.threads,
+            "[STT] Whisper ready: {path} ({place}, {}, load + warm-up {} ms)",
             match (settings.fast, settings.beam_size > 1) {
                 (true, true) => format!("one pass, greedy, beam search {} for unsure sentences", settings.beam_size),
                 (true, false) => "one pass, greedy".to_string(),
@@ -470,19 +590,19 @@ impl WhisperEngine {
             t0.elapsed().as_millis()
         );
         let prior = first_language(&settings.languages);
-        Some(Self { state, detect_state, prior, _ctx: ctx, path })
+        Some(Self { state, detect_state, prior, _ctx: ctx, path, gpu })
     }
 }
 
-fn load_model(paths: &[String], flash_attn: bool) -> Option<(WhisperContext, String)> {
+fn load_model(paths: &[String], flash_attn: bool, gpu: bool) -> Option<(WhisperContext, String)> {
     for path in paths.iter().filter(|p| !p.is_empty()) {
         if !Path::new(path).exists() {
             warn!("[STT] Whisper model not found at {path}");
             continue;
         }
         let mut params = WhisperContextParameters::default();
-        params.flash_attn(flash_attn);
-        match WhisperContext::new_with_params(path, params) {
+        params.flash_attn(flash_attn).use_gpu(gpu);
+        match WhisperContext::new_with_params(Path::new(path), params) {
             Ok(ctx) => return Some((ctx, path.clone())),
             Err(e) => warn!("[STT] Failed to load {path}: {e}"),
         }
@@ -520,6 +640,13 @@ fn audio_ctx_for(samples: usize, min_ctx: i32) -> i32 {
     let frames = (samples * 1500).div_ceil(SAMPLE_RATE * 30) as i32;
     let dynamic_ctx = (frames + 64).clamp(128, 1500);
     dynamic_ctx.max(min_ctx.min(1500))
+}
+
+/// Whether a model with `encoder_layers` must hear its whole 30 s window: the large ones (32
+/// layers; large-v3-turbo too) repeat a clip heard through a shorter window ("Show me the
+/// lyrics. Jay. Show me the lyrics. …" on Sir's kept clips, 2026-11-21), the small ones do not.
+fn needs_whole_window(encoder_layers: i32) -> bool {
+    encoder_layers >= 32
 }
 
 /// Below this many dB of words over the room, Whisper gets a wider encoder window: with people
@@ -612,7 +739,7 @@ fn run_full(
     let fallback = beam || !s.fast;
     params.set_temperature_inc(if fallback && audio.len() > SENTENCE_SAMPLES { 0.2 } else { 0.0 });
     params.set_suppress_blank(true);
-    params.set_suppress_non_speech_tokens(true);
+    params.set_suppress_nst(true);
     params.set_no_speech_thold(0.65);
     params.set_logprob_thold(-0.85);
     params.set_entropy_thold(2.2);
@@ -625,6 +752,7 @@ fn run_full(
         params.set_initial_prompt(prompt);
     }
     match audio_ctx {
+        _ if s.whole_window => {}
         Some(ctx) => params.set_audio_ctx(ctx),
         None if s.dynamic_ctx => params.set_audio_ctx(audio_ctx_for(audio.len(), if words_over_room_db(audio) < NOISY_ROOM_DB { s.min_ctx.max(NOISY_MIN_CTX) } else { s.min_ctx })),
         None => {}
@@ -642,21 +770,18 @@ fn run_full(
         return Err(CALLED_OFF.into());
     }
     decoded.map_err(|e| format!("whisper failed: {e}"))?;
-    let n = state.full_n_segments().map_err(|e| e.to_string())?;
     let mut text = String::new();
     let (mut logprob, mut tokens) = (0.0f32, 0usize);
-    for i in 0..n {
-        if let Ok(seg) = state.full_get_segment_text_lossy(i) {
-            text.push_str(&seg);
+    for seg in (0..state.full_n_segments()).filter_map(|i| state.get_segment(i)) {
+        if let Ok(words) = seg.to_str_lossy() {
+            text.push_str(&words);
             text.push(' ');
         }
-        for t in 0..state.full_n_tokens(i).unwrap_or(0) {
-            if let Ok(data) = state.full_get_token_data(i, t) {
-                // Text tokens only (timestamps and control tokens sit above end-of-text).
-                if data.id < s.eot {
-                    logprob += data.plog;
-                    tokens += 1;
-                }
+        for data in (0..seg.n_tokens()).filter_map(|t| seg.get_token(t)).map(|token| token.token_data()) {
+            // Text tokens only (timestamps and control tokens sit above end-of-text).
+            if data.id < s.eot {
+                logprob += data.plog;
+                tokens += 1;
             }
         }
     }
@@ -678,13 +803,13 @@ fn subtitle_pass(engine: &mut WhisperEngine, pcm: &[f32], translate: bool, s: &S
     params.set_temperature(0.0);
     params.set_temperature_inc(0.0);
     params.set_suppress_blank(true);
-    params.set_suppress_non_speech_tokens(true);
+    params.set_suppress_nst(true);
     params.set_no_speech_thold(0.6);
     params.set_print_special(false);
     params.set_print_progress(false);
     params.set_print_realtime(false);
     params.set_print_timestamps(false);
-    if s.dynamic_ctx {
+    if s.dynamic_ctx && !s.whole_window {
         params.set_audio_ctx(audio_ctx_for(pcm.len(), s.min_ctx));
     }
     if let Some(flag) = called_off {
@@ -701,15 +826,14 @@ fn subtitle_pass(engine: &mut WhisperEngine, pcm: &[f32], translate: bool, s: &S
         return Err(CALLED_OFF.into());
     }
     decoded.map_err(|e| format!("whisper failed: {e}"))?;
-    let n = state.full_n_segments().map_err(|e| e.to_string())?;
     let mut text = String::new();
-    for i in 0..n {
-        if let Ok(seg) = state.full_get_segment_text_lossy(i) {
-            text.push_str(seg.trim());
+    for seg in (0..state.full_n_segments()).filter_map(|i| state.get_segment(i)) {
+        if let Ok(words) = seg.to_str_lossy() {
+            text.push_str(words.trim());
             text.push(' ');
         }
     }
-    let language = state.full_lang_id_from_state().ok().and_then(whisper_rs::get_lang_str).unwrap_or("").to_string();
+    let language = whisper_rs::get_lang_str(state.full_lang_id_from_state()).unwrap_or("").to_string();
     Ok(Transcript {
         text: text.trim().to_string(),
         language,
@@ -915,7 +1039,7 @@ fn transcribe(
     let text = normalize_stt_transcript(&filter_hallucinations(&raw, prompt, voiced_ms < 1500));
     let lang = language
         .map(String::from)
-        .or_else(|| engine.state.full_lang_id_from_state().ok().and_then(whisper_rs::get_lang_str).map(String::from))
+        .or_else(|| whisper_rs::get_lang_str(engine.state.full_lang_id_from_state()).map(String::from))
         .unwrap_or_else(|| "auto".into());
     let stt_ms = started.elapsed().as_millis() as u64;
     info!(
@@ -1486,6 +1610,23 @@ mod tests {
         assert_eq!(audio_ctx_for(16_000 * 10, 128), 564);
         assert_eq!(audio_ctx_for(16_000 * 30, 128), 1500);
         assert_eq!(audio_ctx_for(16_000 * 40, 128), 1500);
+        // The large models (and turbo) hear their whole window; tiny … medium may take less.
+        assert!(needs_whole_window(32));
+        assert!([4, 6, 12, 24].iter().all(|layers| !needs_whole_window(*layers)));
+    }
+
+    /// The card's engine loads beside the CPU's; a load that fails keeps him on the CPU for the
+    /// rest of the session, without another try.
+    #[test]
+    fn a_failed_load_on_the_card_keeps_him_on_the_cpu() {
+        let (tx, rx) = mpsc::channel();
+        let mut models = Models { cpu: Vec::new(), gpu: Vec::new(), flash_attn: false, gpu_allowed: true, gpu_need_mb: 0, name: Arc::default(), coming: Some(rx) };
+        assert!(models.arrived().is_none() && models.coming.is_some(), "still loading");
+        tx.send(None).unwrap();
+        assert!(models.arrived().is_none());
+        assert!(!models.gpu_allowed && models.coming.is_none());
+        models.fetch_gpu(&settings(2, &["en"]));
+        assert!(models.coming.is_none(), "no second try");
     }
 
     /// Words in a quiet room stand far above its pre-roll; words over people talking do not.
@@ -1589,6 +1730,7 @@ mod tests {
             languages: languages.iter().map(|l| l.to_string()).collect(),
             dynamic_ctx: true,
             min_ctx: 128,
+            whole_window: false,
             fast: true,
             sot: 0,
             no_speech: 0,

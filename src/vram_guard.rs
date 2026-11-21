@@ -713,6 +713,17 @@ async fn game_voice(controls: Arc<AudioControls>) {
     }
 }
 
+/// What the brain still needs on the graphics card (MB): nothing while it is there, else what it
+/// took last time. Whisper goes onto the card only with this left free (`stt::Models`).
+pub fn brain_reserve_mb() -> u64 {
+    let g = guard();
+    if g.ollama_vram_mb() > 0 {
+        0
+    } else {
+        g.model_vram_mb.max(MODEL_VRAM_GUESS_MB)
+    }
+}
+
 /// The GPU is too full for the model (free VRAM under what it took last time): an unknown game
 /// or program holds it, so the brain stays in RAM.
 fn vram_short() -> Option<u64> {

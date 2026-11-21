@@ -182,6 +182,7 @@ fn base_settings(threads: i32) -> Settings {
         languages: vec!["de".into(), "en".into()],
         dynamic_ctx: true,
         min_ctx: 128,
+        whole_window: false,
         fast: false,
         sot: 0,
         no_speech: 0,
@@ -234,13 +235,14 @@ fn spoken_commands_keep_his_name() {
         languages: cfg.whisper_languages.clone(),
         dynamic_ctx: cfg.whisper_dynamic_audio_ctx,
         min_ctx: cfg.whisper_min_audio_ctx.clamp(64, 1500),
+        whole_window: false,
         fast: cfg.whisper_fast_decode,
         sot: 0,
         no_speech: 0,
         eot: 0,
     };
     let model = models.join("ggml-small.bin").to_string_lossy().replace('\\', "/");
-    let mut engine = WhisperEngine::load(&[model], cfg.whisper_flash_attn, &mut s).expect("Whisper loads");
+    let mut engine = WhisperEngine::load(&[model], cfg.whisper_flash_attn, false, &mut s).expect("Whisper loads");
     let wake = crate::wake::WakeWordMatcher::new(&cfg.wake_words, cfg.wake_word_similarity_threshold);
     let same_order = |heard: &str, said: &str| {
         let plain = |t: &str| normalize(&crate::typos::normalize_user_input_typos(&crate::typos::imperative_after_name(t)));
@@ -289,7 +291,7 @@ fn bench_command_clips() {
     for v in &variants {
         let mut s = base_settings(threads);
         if !engines.iter().any(|(f, _)| *f == v.flash) {
-            let e = WhisperEngine::load(&[model.clone()], v.flash, &mut s).expect("Whisper loads");
+            let e = WhisperEngine::load(&[model.clone()], v.flash, false, &mut s).expect("Whisper loads");
             engines.push((v.flash, e));
             tokens = Some((s.sot, s.no_speech, s.eot));
         }

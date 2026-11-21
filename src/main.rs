@@ -642,7 +642,7 @@ fn main() -> ExitCode {
     };
 
     init_logging("jai.log");
-    whisper_rs::install_whisper_tracing_trampoline();
+    whisper_rs::install_logging_hooks();
 
     // A packaged JAI.exe that twice did not get going hands over to the last version that ran
     // well (JAI.prev.exe); a start that runs 30 s keeps itself as that version.
