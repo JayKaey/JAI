@@ -627,7 +627,7 @@ const GAME_FOLDERS: &[&str] = &[
 ];
 /// Programs in those folders that are no game (launchers, helpers, wallpapers, VR, tools).
 const NOT_GAMES: &[&str] = &[
-    "wallpaper", "steamvr", "vrserver", "vrmonitor", "vrcompositor", "vrdashboard", "launcher", "crash", "setup", "redist", "unins",
+    "wallpaper", "steamvr", "vrserver", "vrmonitor", "vrcompositor", "vrdashboard", "launcher", "crashhandler", "crash_handler", "crashpad", "crashsender", "setup", "redist", "unins",
     "helper", "anticheat", "beservice", "riotclient", "leagueclient", "overlay", "lossless", "obs", "soundpad", "updater", "installer",
     "service", "cef", "report", "eosbootstrapper", "ue4prereq",
 ];
@@ -645,7 +645,8 @@ pub fn game_title(exe_path: &str, name: &str, listed: &[String]) -> Option<Strin
         .find_map(|f| lower.find(f).map(|at| at + f.len()))
         .and_then(|from| path[from..].split('\\').next().filter(|s| !s.is_empty() && from + s.len() < path.len()).map(str::to_string));
     let is_listed = listed.iter().any(|g| g.trim().to_ascii_lowercase().trim_end_matches(".exe") == stem);
-    if !is_listed && (folder.is_none() || NOT_GAMES.iter().any(|n| stem.contains(n))) {
+    // (Wallpaper Engine's or SteamVR's own folder holds no game, whatever its programs are called.)
+    if !is_listed && (folder.as_deref().is_none_or(|f| crate::kit_games::not_a_game(&f.replace('_', " "))) || NOT_GAMES.iter().any(|n| stem.contains(n))) {
         return None;
     }
     Some(folder.unwrap_or_else(|| match stem {
@@ -1113,6 +1114,13 @@ mod tests {
         assert_eq!(t("", "GTA5.exe").as_deref(), Some("GTA5"), "listed, path unreadable");
         // Not games: Wallpaper Engine lives under steamapps too; launchers, helpers, Steam itself.
         assert_eq!(t(r"C:\Program Files (x86)\Steam\steamapps\common\wallpaper_engine\wallpaper64.exe", "wallpaper64.exe"), None);
+        // (jai.log 2026-11-20: Wallpaper Engine's own window, bin\ui32.exe, put him in game mode.)
+        assert_eq!(t(r"C:\Program Files (x86)\Steam\steamapps\common\wallpaper_engine\bin\ui32.exe", "ui32.exe"), None);
+        assert_eq!(t(r"D:\SteamLibrary\steamapps\common\SteamVR\tools\lighthouse\bin\win64\lighthouse_console.exe", "lighthouse_console.exe"), None);
+        // (A crash reporter is no game; a game with "crash" in its name is.)
+        assert_eq!(t(r"D:\SteamLibrary\steamapps\common\Crash Bandicoot N. Sane Trilogy\CrashBandicootNSaneTrilogy.exe", "CrashBandicootNSaneTrilogy.exe").as_deref(), Some("Crash Bandicoot N. Sane Trilogy"));
+        assert_eq!(t(r"D:\SteamLibrary\steamapps\common\Grand Theft Auto V\UnityCrashHandler64.exe", "UnityCrashHandler64.exe"), None);
+        assert_eq!(t(r"D:\SteamLibrary\steamapps\common\Grand Theft Auto V\crashpad_handler.exe", "crashpad_handler.exe"), None);
         assert_eq!(t(r"C:\Program Files (x86)\Steam\steamapps\common\SteamVR\bin\win64\vrserver.exe", "vrserver.exe"), None);
         assert_eq!(t(r"C:\Program Files\Epic Games\Launcher\Portal\Binaries\Win64\EpicGamesLauncher.exe", "EpicGamesLauncher.exe"), None);
         assert_eq!(t(r"C:\Riot Games\Riot Client\RiotClientServices.exe", "RiotClientServices.exe"), None);

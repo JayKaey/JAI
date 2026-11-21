@@ -309,7 +309,7 @@ pub fn set_media(s: &mut InterfaceSettings, key: &str, said: &str) -> Result<Str
     let where_ = if key == ALL { "every monitor".to_string() } else { format!("monitor {key}") };
     if said.trim().is_empty() || matches!(said.trim().to_lowercase().as_str(), "none" | "off" | "nothing" | "remove" | "keine" | "kein") {
         return match s.bg_media.remove(key) {
-            Some(_) => Ok(format!("no background media on {where_}")),
+            Some(_) => Ok(format!("the background media for {where_} removed")),
             None if key == ALL => Err("There is no background picture or video to remove, Sir.".into()),
             None => Err(format!("{where_} has no background of its own, Sir.")),
         };
@@ -1292,6 +1292,7 @@ mod tests {
         let (mut done, mut failed) = (Vec::new(), Vec::new());
         apply(&mut s, &json!({"background_media": "none", "background_monitor": "2"}), &mut done, &mut failed);
         assert!(s.bg_media.is_empty() && failed.is_empty());
+        assert_eq!(done, vec!["the background media for monitor 2 removed".to_string()]);
         apply(&mut s, &json!({"background_media": "none"}), &mut done, &mut failed);
         assert_eq!(failed, vec!["There is no background picture or video to remove, Sir.".to_string()]);
         // A video this cannot play says so.

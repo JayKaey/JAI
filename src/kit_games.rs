@@ -65,8 +65,8 @@ fn vdf_value(text: &str, key: &str) -> Option<String> {
     vdf_values(text, key).into_iter().next()
 }
 
-/// Runtimes, tools and wallpapers Steam lists among its apps.
-fn not_a_game(name: &str) -> bool {
+/// Runtimes, tools and wallpapers Steam lists among its apps (by name or install folder).
+pub fn not_a_game(name: &str) -> bool {
     let n = name.to_lowercase();
     ["redistributable", "proton", "steam linux runtime", "steamvr", "wallpaper engine", "steamworks", "dedicated server", " sdk", "soundtrack"].iter().any(|w| n.contains(w))
 }

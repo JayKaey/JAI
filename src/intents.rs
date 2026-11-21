@@ -3992,6 +3992,8 @@ fn looks_like_app_name(name: &str) -> bool {
         "the door", "a ", "my mind", "conversation", "the conversation", "with", "about", "how", "why", "what", "wie",
         "warum", "was", "and ", " und ", "that", "dass", "this", "it ", "es ", "timer", "a timer", "reminder",
         "meeting", "file", "datei", "folder with", "new", "neue", "skill", "yourself", "your ", "dich", "jai",
+        // ("Open three random windows": his views, not a program of that name; jai.log 2026-11-19.)
+        "random", "zufällig",
     ];
     words <= 4 && !blacklist.iter().any(|b| name == b.trim() || name.contains(b))
 }
@@ -6642,6 +6644,7 @@ mod tests {
         ] {
             assert!(parse(text).is_none(), "should not fast-path: {text}");
         }
+        assert!(!looks_like_app_name("three random windows") && !looks_like_app_name("drei zufällige fenster") && looks_like_app_name("windows terminal"));
     }
 
     #[test]

@@ -877,7 +877,8 @@ pub fn start(app: Jai, shutdown: tokio_util::sync::CancellationToken) {
     // A separate loopback-only origin avoids exposing a plain HTTP listener on the LAN.
     // It uses the same authenticated handler as the local HTTPS service. With worldwide access
     // switched off it waits until Sir asks for phone access (`worldwide_tunnel::kick`).
-    {
+    // (Never from a test session: it would take Sir's own phone link over, and end it on quitting.)
+    if !crate::platform::in_test_session() {
         let (remote_app, remote_stop) = (app.clone(), shutdown.clone());
         tokio::spawn(async move {
             while !remote_app.config().read(|c| c.satellite.worldwide_enabled) {

@@ -110,6 +110,10 @@ pub const RELEASES: &[Release] = &[
             better("Clearer windows", "The board's keys stand in groups, settings rows have hairlines, account options are in words."),
             better("Lighter beside a game", "Behind a game his music ring and simulations draw far less, and Whisper leaves the card."),
             new("Your own background", "Pictures, videos and slideshows on his black, behind the board or alone, per monitor.", "background"),
+            fixed("Test runs leave your phone link alone", "A test session no longer opens the worldwide phone link, which took yours over."),
+            fixed("Orders taken for programs", "\"Open bubblesort\" opens the sorting simulation; \"open three random windows\" no app search."),
+            fixed("Wallpaper Engine is no game", "Wallpaper Engine's window no longer starts game mode; games named \"Crash …\" now do."),
+            fixed("Orders for another PC", "\"Move JAI on Max's PC to the background\" and \"send to Max's PC: …\" now reach Max's PC."),
         ],
     },
     Release {
@@ -599,7 +603,7 @@ pub const EXPLANATIONS: &[Explanation] = &[
         id: "other_pcs",
         title: "J.A.I. on other PCs",
         what: "A friend opens your phone page's address in a browser and takes \"J.A.I. for your Windows PC\" (or you give them that file): one file that installs him, or updates him where he is installed. It reads the graphics card (4 GB of memory at the least; under 8 GB he gets the smaller brain, Qwen3.5 2B), logs in at your PC with their account, fetches the program and its engines from your PC, then his voice, ears and brain, and puts him in the Start menu. Their J.A.I. calls yours every few seconds: you see it in the accounts list (online, its version, CPU, memory, graphics card), and what you order for it, it does. Theirs never sends anything to yours.",
-        say: &["Jay, open the earth on Max's PC.", "Jay, turn the volume down on Max's computer.", "Jay, mach die Musik leiser auf Max PC.", "Jay, what did you do for Max this week?"],
+        say: &["Jay, open the earth on Max's PC.", "Jay, turn the volume down on Max's computer.", "Jay, mach die Musik leiser auf Max PC.", "Jay, send to Max's PC: show your core.", "Jay, what did you do for Max this week?"],
         know: "Their J.A.I. always runs the version yours runs: when yours is newer, theirs fetches it at once and restarts (yours never updates itself), and a new commit on GitHub is announced to them. Your voice print reaches their J.A.I. and theirs reaches yours, held in memory only: each is stored on its owner's PC alone. Until their J.A.I. is logged in it answers nobody. An order waits ten minutes for a PC that is offline. A Linux PC installs him too (see J.A.I. on Linux).",
     },
     Explanation {

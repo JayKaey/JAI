@@ -1472,7 +1472,7 @@ pub fn simulation_request(text: &str, context: &[String]) -> Option<Value> {
     use regex::Regex;
     use std::sync::LazyLock;
     static ASKS: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"(?i)\b(?:simulat\w*|simulier\w*|visuali[sz]\w*|animat\w*|plot\w*|zeichne|darstell\w*)\b|\b(?:show|zeig|zeige|display|open|launch|start|starte|run)\b.*\b(?:simulation|simulator|trajectory|flugbahn|graph|plot|animation|pendulum|pendel|surface|orbits?|solar system|double slit|doppler|ripples?|standing wave|spring|balls)\b|\bz\s*=\s*\S").expect("valid simulation request regex")
+        Regex::new(r"(?i)\b(?:simulat\w*|simulier\w*|visuali[sz]\w*|animat\w*|plot\w*|zeichne|darstell\w*)\b|\b(?:show|zeig|zeige|display|open|launch|start|starte|run)\b.*\b(?:simulation|simulator|trajectory|flugbahn|graph|plot|animation|pendulum|pendel|surface|orbits?|solar system|double slit|doppler|ripples?|standing wave|spring|balls|(?:bubble|quick|insertion|selection)\s*sort|sorting(?:\s+algorithm)?|sortieralgorithmus)\b|\bz\s*=\s*\S").expect("valid simulation request regex")
     });
     // A sentence that points back at the conversation ("simulate that", "show me the simulation",
     // "plot it at 45 degrees"); "visualise the volcano" names a thing of its own.
@@ -1590,7 +1590,7 @@ pub fn simulation_request(text: &str, context: &[String]) -> Option<Value> {
             }
         }
         // The scene, the formula, the colour: `configure` reads them from the words themselves.
-        SimKind::Gravity | SimKind::Surface | SimKind::Ripples | SimKind::StandingWave | SimKind::Doppler | SimKind::Sound | SimKind::Light | SimKind::Spring | SimKind::DoublePendulum | SimKind::Balls => spec.push(kind_text.trim().to_string()),
+        SimKind::Gravity | SimKind::Surface | SimKind::Ripples | SimKind::StandingWave | SimKind::Doppler | SimKind::Sound | SimKind::Light | SimKind::Spring | SimKind::DoublePendulum | SimKind::Balls | SimKind::Sorting => spec.push(kind_text.trim().to_string()),
         _ => {}
     }
     Some(json!({ "sim_type": id, "formula_or_params": spec.join(", "), "title": title }))
@@ -1936,6 +1936,22 @@ mod tests {
         let surface = lab.launch(SimKind::Surface, args["formula_or_params"].as_str().unwrap(), None).unwrap();
         assert_eq!(surface.functions[0].1, "x^2 + y^2");
         lab.close(&surface.id);
+    }
+
+    /// jai.log 2026-11-20: "open bubblesort" looked for a program of that name.
+    #[test]
+    fn a_sorting_algorithm_is_opened_by_its_name() {
+        let lab = SimulationLab::default();
+        for (said, algorithm) in [("open bubblesort", "bubble"), ("show me quick sort", "quick"), ("zeig mir Insertion Sort", "insertion"), ("start the sorting algorithm", "bubble")] {
+            let args = simulation_request(said, &[]).unwrap_or_else(|| panic!("{said}"));
+            assert_eq!(args["sim_type"], "sorting", "{said}");
+            let sim = lab.launch(SimKind::Sorting, args["formula_or_params"].as_str().unwrap(), None).unwrap();
+            assert_eq!(sim.algorithm, algorithm, "{said}");
+            lab.close(&sim.id);
+        }
+        for said in ["sort my downloads", "open the downloads sorted by date", "show me all sorts of things"] {
+            assert!(simulation_request(said, &[]).is_none(), "{said}");
+        }
     }
 
     #[test]

@@ -42,6 +42,16 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 
 /// "Open the earth on Max's PC", "mach die Musik leiser auf Max PC".
 static ON_PC: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)^(?P<order>.+?)\s+(?:on|at|auf|bei)\s+(?P<word>[\w.'’-]+)\s+(?:pc|computer|laptop|rechner)$").expect("regex"));
+/// "Move JAI on Max's PC to the background", "mach auf Max PC die Musik aus": its PC in the middle.
+static AMID_PC: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)^(?P<order>.+?)\s+(?:on|auf|bei)\s+(?P<word>[\w.'’-]+)\s+(?:pc|computer|laptop|rechner)[,:]?\s+(?P<rest>.+)$").expect("regex"));
+/// "Send to Max's PC: open the earth", "tell Max's PC to open the earth", "schick an Max PC
+/// „mach die Musik aus“": the order after its PC (a message to a person is WhatsApp's).
+static TO_PC: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?i)^(?:(?:hey\s+)?(?:jai|j\.a\.i\.|jay)\b[\s,.:!]*)?(?:(?:send|sende|schick|schicke)\s+(?:to|an)\s+(?P<to>[\w.'’-]+)\s+(?:pc|computer|laptop|rechner)[\s,:]+|(?:tell|ask|sag|sage)\s+(?P<tell>[\w.'’-]+)\s+(?:pc|computer|laptop|rechner)(?:\s*[,:]\s*|\s+to\s+|\s+["“„']))(?P<order>.+)$"#).expect("regex")
+});
+/// A question or a word about himself is no order for another PC: "what is on Max's PC", "I'm on
+/// Max's PC right now".
+const NO_ORDER: &[&str] = &["i", "im", "i'm", "i’m", "we", "were", "what", "whats", "what's", "how", "where", "who", "why", "when", "which", "is", "are", "was", "ich", "wir", "wie", "wo", "wer", "warum", "wann", "welche", "welcher", "ist", "sind", "bin"];
 
 /// The names a possessive word may stand for ("max's", "maxs", "max'", "chris").
 fn names_in(word: &str) -> Vec<String> {
@@ -63,11 +73,20 @@ static OF_PC: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)^(?P<order>.+?
 /// An order for another PC: what, and whose PC.
 pub fn command(s: &str) -> Option<Value> {
     let s = s.trim().trim_end_matches(['.', '!', '?']);
-    let (order, word) = match ON_PC.captures(s) {
-        Some(c) => (c["order"].trim().to_string(), c["word"].to_lowercase()),
-        None => OF_PC.captures(s).map(|c| (format!("{} this PC", c["order"].trim()), c["word"].to_lowercase()))?,
+    let (order, word) = if let Some(c) = TO_PC.captures(s) {
+        (c["order"].trim().trim_matches(['"', '“', '”', '„', '\'']).trim().to_string(), c.name("to").or(c.name("tell"))?.as_str().to_lowercase())
+    } else if let Some(c) = ON_PC.captures(s).or_else(|| AMID_PC.captures(s)) {
+        (format!("{} {}", c["order"].trim(), c.name("rest").map_or("", |r| r.as_str())).trim().to_string(), c["word"].to_lowercase())
+    } else {
+        OF_PC.captures(s).map(|c| (format!("{} this PC", c["order"].trim()), c["word"].to_lowercase()))?
     };
-    if ["my", "your", "this", "the", "that", "our", "his", "her", "their", "a", "its", "yours", "ours", "hers", "theirs", "mein", "meinem", "meinen", "deinem", "dem", "diesem", "des", "sir's", "sirs", "jai's", "jais", "jay's", "jays"].contains(&word.as_str()) {
+    let first = order.split_whitespace().next().unwrap_or("").trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase();
+    if NO_ORDER.contains(&first.as_str())
+        || [
+            "my", "your", "this", "the", "that", "our", "his", "her", "their", "a", "its", "yours", "ours", "hers", "theirs", "every", "each", "all", "any", "another", "other", "both", "mein", "meinem", "meinen", "deinem", "seinem", "ihrem", "unserem", "eurem", "dem", "diesem", "des", "sir's", "sirs", "jai's", "jais", "jay's", "jays",
+        ]
+        .contains(&word.as_str())
+    {
         return None;
     }
     Some(json!({ "order": order, "names": names_in(&word) }))
@@ -349,13 +368,24 @@ mod tests {
             ("turn the volume down on Max's computer.", "turn the volume down", "max"),
             ("mach die Musik leiser auf Max PC", "mach die Musik leiser", "max"),
             ("show the weather on chris pc", "show the weather", "chris"),
+            // (jai.log 2026-11-20: its PC in the middle went to the model, the order after it to WhatsApp.)
+            ("move jai on maxs pc to the background", "move jai to the background", "max"),
+            ("mach auf Max PC die Musik aus", "mach die Musik aus", "max"),
+            ("send to maxs pc \"Jay move to the background\"", "Jay move to the background", "max"),
+            ("JAI, send to Max's PC: open the earth", "open the earth", "max"),
+            ("tell Max's PC to open the earth", "open the earth", "max"),
+            ("schick an Max PC „mach die Musik aus“", "mach die Musik aus", "max"),
         ] {
             let got = command(said).unwrap_or_else(|| panic!("{said}"));
             assert_eq!(got["order"], order, "{said}");
             let names: Vec<String> = serde_json::from_value(got["names"].clone()).unwrap();
             assert!(names.contains(&name.to_string()), "{said}: {names:?}");
         }
-        for said in ["open the earth on my PC", "play music on this computer", "open the earth", "what is on the pc", "show the files on the laptop", "shut down the pc", "restart my computer", "lock sir's pc"] {
+        for said in [
+            "open the earth on my PC", "play music on this computer", "open the earth", "what is on the pc", "show the files on the laptop", "shut down the pc", "restart my computer", "lock sir's pc",
+            // (A question or a word about himself is no order, and a message to a person is WhatsApp's.)
+            "what is on Max's PC", "I'm on Max's PC right now", "is the music on maxs pc loud", "tell max pc is broken", "send Max a message that my pc is broken", "send to Max: I'm on my PC", "mach auf seinem PC die Musik aus", "tell your pc to open the earth",
+        ] {
             assert_eq!(command(said), None, "{said}");
         }
         assert_eq!(command("shut down Max's PC").unwrap()["order"], "shut down this PC");
@@ -370,7 +400,7 @@ mod tests {
     /// carried out here ("open the earth" alone opens his own; "shut down" his own power).
     #[test]
     fn an_order_for_another_pc_never_lands_on_this_one() {
-        for said in ["open the earth on Max's PC", "turn the volume down on Max's computer", "mach die Musik leiser auf Max PC", "shut down Max's PC", "restart Max's computer", "lock Max's PC", "play music on Max's laptop", "close all windows on Max's PC", "mute Max's PC"] {
+        for said in ["open the earth on Max's PC", "turn the volume down on Max's computer", "mach die Musik leiser auf Max PC", "shut down Max's PC", "restart Max's computer", "lock Max's PC", "play music on Max's laptop", "close all windows on Max's PC", "mute Max's PC", "move JAI on Max's PC to the background", "send to Max's PC \"Jay move to the background\"", "tell Max's PC to open the earth"] {
             let (tool, args) = crate::phrasings::route(said).unwrap_or_else(|| panic!("{said}: the model"));
             assert!(format!("{tool} {args}").contains("other_pc"), "{said} → {tool} {args}");
         }
