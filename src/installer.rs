@@ -12,7 +12,7 @@
 use crate::config::{ConfigStore, JaiConfig};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// A graphics card needs this much memory for J.A.I., and this much for the full brain.
 const VRAM_AT_LEAST_MB: u64 = 4096;
@@ -95,39 +95,15 @@ const VOICE_LOCK: (&str, u64, &str) = ("https://github.com/k2-fsa/sherpa-onnx/re
 /// `/install` sends there).
 pub const SETUP: &str = "https://github.com/JayKaey/JAI/releases/latest/download/JAI-setup.exe";
 
-/// Streams `answer` into `to` through a `.part` file, telling `said` the bytes so far (every
-/// half second, by `told`); a file that comes short is not kept.
-async fn save(mut answer: reqwest::Response, to: &Path, size: u64, told: &mut Instant, said: &(dyn Fn(u64) + Sync)) -> Result<(), String> {
-    let part = to.with_extension("part");
-    let mut file = std::fs::File::create(&part).map_err(|e| e.to_string())?;
-    let mut written = 0u64;
-    while let Some(chunk) = answer.chunk().await.map_err(|e| e.to_string())? {
-        std::io::Write::write_all(&mut file, &chunk).map_err(|e| e.to_string())?;
-        written += chunk.len() as u64;
-        if told.elapsed() > Duration::from_millis(500) {
-            *told = Instant::now();
-            said(written);
-        }
-    }
-    drop(file);
-    if written != size {
-        let _ = std::fs::remove_file(&part);
-        return Err(format!("{} came incomplete ({written} of {size} bytes). Try again.", to.display()));
-    }
-    std::fs::rename(&part, to).map_err(|e| e.to_string())
-}
-
 /// A file from GitHub into `to`, its size and SHA-256 checked (one that is here and right
 /// already stays, a damaged one goes); `what` names it in the window.
 async fn fetch(http: &reqwest::Client, (url, size, sha): (&str, u64, &str), to: &Path, what: &str, said: &(dyn Fn(String) + Sync)) -> Result<(), String> {
     if std::fs::metadata(to).is_ok_and(|m| m.len() == size) && sha256(to).is_ok_and(|s| s == sha) {
         return Ok(());
     }
-    if let Some(dir) = to.parent().filter(|d| !d.as_os_str().is_empty()) {
-        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    }
-    let answer = http.get(url).send().await.map_err(|e| e.to_string())?.error_for_status().map_err(|e| e.to_string())?;
-    save(answer, to, size, &mut Instant::now(), &|got| said(format!("Fetching {what} from GitHub: {} of {} MB", got / 1_000_000, size / 1_000_000))).await?;
+    crate::models::download_to(http, url, to, Some(size), &|got, _| said(format!("Fetching {what} from GitHub: {} of {} MB", got / 1_000_000, size / 1_000_000)))
+        .await
+        .map_err(|e| format!("{what} did not come ({e}). Check the internet connection and start the installer again; it goes on where it stopped."))?;
     if sha256(to)? != sha {
         let _ = std::fs::remove_file(to);
         return Err(format!("{what} came damaged. Start the installer again."));
@@ -270,11 +246,10 @@ async fn engines(http: &reqwest::Client, config: &ConfigStore, said: &(dyn Fn(St
     }
     let arch = if std::env::consts::ARCH == "aarch64" { "arm64" } else { "amd64" };
     let url = format!("https://github.com/ollama/ollama/releases/latest/download/ollama-linux-{arch}.tar.zst");
-    let answer = http.get(&url).send().await.map_err(|e| e.to_string())?.error_for_status().map_err(|e| e.to_string())?;
-    let size = answer.content_length().ok_or("Ollama's download did not say its size. Try again.")?;
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let archive = dir.join("ollama.tar.zst");
-    save(answer, &archive, size, &mut Instant::now(), &|got| said(format!("Fetching his engine (Ollama for Linux): {} of {} MB", got / 1_000_000, size / 1_000_000))).await?;
+    crate::models::download_to(http, &url, &archive, None, &|got, of| said(format!("Fetching his engine (Ollama for Linux): {} of {} MB", got / 1_000_000, of.unwrap_or(0) / 1_000_000)))
+        .await
+        .map_err(|e| format!("His engine did not come ({e}). Check the internet connection and start the installer again; it goes on where it stopped."))?;
     said("Unpacking his engine…".into());
     let unpacked = unpack(&archive, &dir).await;
     let _ = std::fs::remove_file(&archive);
@@ -400,10 +375,58 @@ mod tests {
         std::fs::remove_file(&to).unwrap();
         let damaged = fetch(&http, (&url, 3, &"0".repeat(64)), &to, "a test file", &|_| {}).await.unwrap_err();
         assert!(damaged.contains("damaged"), "{damaged}");
-        assert!(!to.exists() && !to.with_extension("part").exists());
-        // Short of its size: not kept either.
-        assert!(fetch(&http, (&url, 4, abc), &to, "a test file", &|_| {}).await.unwrap_err().contains("incomplete"));
+        assert!(!to.exists() && !dir.join("abc.bin.part").exists());
+        // Another size than published: not fetched again and again, not kept.
+        let other = fetch(&http, (&url, 4, abc), &to, "a test file", &|_| {}).await.unwrap_err();
+        assert!(other.contains("it has 3 bytes, not 4"), "{other}");
         assert!(!to.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A stream that breaks off (reqwest: "error decoding response body") goes on by a Range.
+    #[tokio::test]
+    async fn a_broken_download_goes_on_where_it_stopped() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/file", listener.local_addr().unwrap());
+        let ranges = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen = ranges.clone();
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                let mut request = [0u8; 2048];
+                let n = tokio::io::AsyncReadExt::read(&mut socket, &mut request).await.unwrap_or(0);
+                let request = String::from_utf8_lossy(&request[..n]).to_lowercase();
+                let answer: &[u8] = if request.contains("range: bytes=2-") {
+                    seen.lock().unwrap().push(2);
+                    b"HTTP/1.1 206 Partial Content\r\nContent-Length: 1\r\nConnection: close\r\n\r\nc"
+                } else {
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\nab" // the line drops after two bytes
+                };
+                let _ = tokio::io::AsyncWriteExt::write_all(&mut socket, answer).await;
+            }
+        });
+        let dir = std::env::temp_dir().join(format!("jai-resume-{}", std::process::id()));
+        let to = dir.join("abc.bin");
+        let http = reqwest::Client::builder().no_proxy().build().unwrap();
+        // What 3.4.0 did, one GET: the cut stream is the error a friend's installer showed.
+        let mut answer = http.get(&url).send().await.unwrap();
+        let cut = loop {
+            match answer.chunk().await {
+                Ok(Some(_)) => continue,
+                Ok(None) => panic!("the stream should break off"),
+                Err(e) => break e.to_string(),
+            }
+        };
+        assert!(cut.starts_with("error decoding response body"), "{cut}");
+        let abc = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+        fetch(&http, (&url, 3, abc), &to, "a test file", &|_| {}).await.unwrap();
+        assert_eq!(std::fs::read(&to).unwrap(), b"abc");
+        assert_eq!(*ranges.lock().unwrap(), vec![2], "it went on from byte 2, once");
+        assert!(!dir.join("abc.bin.part").exists());
+        // A model, its size unknown: the server's own length decides when it is whole.
+        let model = dir.join("model.onnx");
+        assert_eq!(crate::models::download_to(&http, &url, &model, None, &|_, _| {}).await, Ok(3));
+        assert_eq!(std::fs::read(&model).unwrap(), b"abc");
+        assert_eq!(*ranges.lock().unwrap(), vec![2, 2]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

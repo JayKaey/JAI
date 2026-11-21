@@ -15,7 +15,7 @@ use tracing::{error, info, warn};
 
 pub const CONFIG_FILE: &str = "jai_config.json";
 /// Bump whenever tuned defaults change and old persisted values must be migrated.
-pub const CONFIG_VERSION: u32 = 28;
+pub const CONFIG_VERSION: u32 = 29;
 
 /// His name as the settings list it (`wake::WakeWordMatcher` knows how it is misheard and spelt;
 /// further names may be added here).
@@ -458,7 +458,7 @@ pub struct FeatureSettings {
 impl Default for FeatureSettings {
     fn default() -> Self {
         Self {
-            replay_enabled: true,
+            replay_enabled: false,
             replay_seconds: 60,
             replay_fps: 5.0,
             replay_width: 1280,
@@ -967,6 +967,12 @@ impl JaiConfig {
             // read anew from the print (`speaker_id`).
             self.interface.voice_lock = true;
         }
+        if self.config_version < 29 {
+            // v29 (Sir, 2026-11-21: "my whole PC feels laggy when JAI is open"): Instant Replay
+            // no longer copies his screen five times a second unasked; its switch in the
+            // Integrations window starts it.
+            self.features.replay_enabled = false;
+        }
         if self.config_version < 22 && self.pre_roll_ms == 320 {
             // v22: 500 ms of audio before the onset, so "JAI" / "Move" keep their first
             // syllable.
@@ -1317,7 +1323,18 @@ mod tests {
             cfg.sanitize();
             assert_eq!(cfg.interface.hud_palette, now);
         }
-        assert_eq!(CONFIG_VERSION, 28);
+        assert_eq!(CONFIG_VERSION, 29);
+    }
+
+    #[test]
+    fn the_screen_is_recorded_only_once_sir_switches_it_on() {
+        let mut old: JaiConfig = serde_json::from_str(r#"{ "config_version": 28, "features": { "replay_enabled": true } }"#).unwrap();
+        old.migrate();
+        assert!(!old.features.replay_enabled, "the old default stops");
+        let mut his: JaiConfig = serde_json::from_str(r#"{ "config_version": 29, "features": { "replay_enabled": true } }"#).unwrap();
+        his.migrate();
+        assert!(his.features.replay_enabled, "switched on since: his");
+        assert!(!JaiConfig::default().features.replay_enabled);
     }
 
     #[test]

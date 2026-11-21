@@ -189,6 +189,10 @@ wayland-protocols = { version = "0.32", features = ["client", "staging"] }
 # pipe2, the parent-death signal of the engine, nice levels, statvfs, the camera's ioctls.
 libc = "0.2"
 
+# The frame probe opens its windows on a test's own thread (eframe's winit, named for that).
+[target.'cfg(windows)'.dev-dependencies]
+winit = { version = "0.30", default-features = false }
+
 [build-dependencies]
 # Embeds the icon, version info and the DPI-aware manifest into the Windows executable.
 embed-resource = "3"

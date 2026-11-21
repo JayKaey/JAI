@@ -2,9 +2,9 @@
 //! grouped into gestures while nobody is talking. What a sound really was is `sound_sense`'s to
 //! say (the radar hears that something happened; the sound model names it).
 //!
-//! * **Claps** — two or three broadband impulses (strong energy above 2.5 kHz, gone within
-//!   ~40 ms) 150-500 ms apart, with nothing right before or after (applause and music don't
-//!   count). Two: JAI wakes up like for "JAI", or toggles the music.
+//! * **Claps** — two or three broadband impulses (energy above 2.5 kHz, gone within ~40 ms)
+//!   150-900 ms apart at an even pace, with nothing right before or after (applause and music
+//!   don't count). Two: JAI wakes up like for "JAI", or toggles the music.
 //! * **Door knock** — two to six low, percussive impulses (most energy in 100-900 Hz, little
 //!   above 2.5 kHz) 100-550 ms apart, then quiet: while Sir has music on (headphones), the music is
 //!   ducked, the HUD flashes amber and JAI says someone is at the door.
@@ -12,8 +12,9 @@
 //!   an alarm, a bark): only the sound model can tell what they were.
 //!
 //! Analysis runs in 8 ms blocks (128 samples at 16 kHz) on the VAD thread: an onset is a block
-//! far above the slowly tracked background; it is kept when its energy falls away fast (an
-//! impulse, not speech or a sustained note).
+//! far above the slowly tracked background (inside a sound that lasts, a sharp jump over the
+//! block before); it is kept when its energy falls away fast (an impulse, not speech or a
+//! sustained note). The radar is lenient on purpose: the sound model judges what it heard.
 
 use crate::dsp::Biquad;
 
@@ -22,8 +23,11 @@ const BLOCK: usize = 128;
 const BLOCK_MS: f64 = 8.0;
 /// Blocks after an onset that decide whether it was an impulse.
 const DECAY_BLOCKS: usize = 6;
-/// How long after the last clap of a run it is over (and how far apart two claps of it may be).
-const CLAP_GAP_MS: f64 = 500.0;
+/// How far apart the first two claps of a run may be (a deliberate, loud double clap is slow:
+/// Sir's of 2026-11-21 were over 500 ms apart and came out as two runs).
+const CLAP_GAP_MS: f64 = 900.0;
+/// Inside a sound that lasts, an impulse is a block this many times the one before it.
+const JUMP: f32 = 16.0;
 /// The quiet before a run of claps or knocks that makes it a gesture, not part of a noise.
 const ALONE_MS: f64 = 1000.0;
 /// A lasting sound: loud this long (or this long and then over) before it is told.
@@ -79,7 +83,14 @@ pub struct AcousticRadar {
     loud_since: Option<f64>,
     loud_last: f64,
     loud_told: bool,
+    /// Whether the sound that lasts began with an impulse: a clap's own echo, told only if it
+    /// lasts `SOUND_TOLD_MS`.
+    loud_impulse: bool,
     sound_rest_until: f64,
+    /// The block before's energy.
+    prev: f32,
+    /// Where what was told last began (`span_ms`).
+    told_from: f64,
     carry: Vec<f32>,
 }
 
@@ -103,8 +114,26 @@ impl AcousticRadar {
             loud_since: None,
             loud_last: 0.0,
             loud_told: false,
+            loud_impulse: false,
             sound_rest_until: 0.0,
+            prev: 0.0,
+            told_from: 0.0,
             carry: Vec::with_capacity(BLOCK),
+        }
+    }
+
+    /// How long ago what was told last began: the sound model hears it from just before
+    /// (three seconds of what came before made two claps "Computer keyboard", 2026-11-21).
+    pub fn span_ms(&self) -> f64 {
+        self.now_ms - self.told_from
+    }
+
+    /// How long after the latest clap of a run the next may come, and the run is over without
+    /// one: up to `CLAP_GAP_MS` for the second, then about the run's own pace.
+    fn clap_window(&self) -> f64 {
+        match self.claps.as_slice() {
+            [first, second, ..] => ((second - first) * 1.6).clamp(350.0, CLAP_GAP_MS),
+            _ => CLAP_GAP_MS,
         }
     }
 
@@ -166,14 +195,18 @@ impl AcousticRadar {
             if on.after.len() >= DECAY_BLOCKS {
                 let on = self.onset.take().expect("onset present");
                 if let Some(kind) = classify(&on) {
+                    // (The loud stretch it began is its own echo.)
+                    self.loud_impulse |= self.loud_since.is_some_and(|since| since >= on.at);
                     out = self.pattern(kind, on.at);
                 }
             }
-        } else if listening && self.now_ms >= self.refractory_until && self.loud_since.is_none_or(|since| self.loud_last - since < 100.0) {
-            // (Not inside a sound that lasts: its end would else pass for an impulse.)
+        } else if listening && self.now_ms >= self.refractory_until {
+            // Inside a sound that lasts (a clap's echo, a bell) only a sharp jump over the block
+            // before is an impulse: the sound's own ups and downs and its end are none.
+            let inside = self.loud_since.is_some_and(|since| self.loud_last - since >= 100.0);
             let k = 12.0 / self.sensitivity;
-            let floor = 2e-5 / self.sensitivity;
-            if e > self.background * k && e > floor {
+            let floor = 6e-6 / self.sensitivity;
+            if e > self.background * k && e > floor && (!inside || e > self.prev * JUMP) {
                 self.onset = Some(Onset { at: self.now_ms, peak: e, peak_low: el, peak_high: eh, after: Vec::with_capacity(DECAY_BLOCKS) });
                 self.refractory_until = self.now_ms + 60.0;
             }
@@ -185,15 +218,17 @@ impl AcousticRadar {
             if self.loud_since.is_none() {
                 self.loud_since = Some(self.now_ms);
                 self.loud_told = false;
+                self.loud_impulse = false;
             }
             self.loud_last = self.now_ms;
         }
         if let Some(since) = self.loud_since {
             let over = !listening || self.now_ms - self.loud_last > 120.0;
             let lasted = self.loud_last - since;
-            if listening && !self.loud_told && self.now_ms >= self.sound_rest_until && (lasted >= SOUND_TOLD_MS || (over && lasted >= SOUND_SHORTEST_MS)) {
+            if listening && !self.loud_told && self.now_ms >= self.sound_rest_until && (lasted >= SOUND_TOLD_MS || (over && lasted >= SOUND_SHORTEST_MS && !self.loud_impulse)) {
                 self.loud_told = true;
                 self.sound_rest_until = self.now_ms + SOUND_REST_MS;
+                self.told_from = since;
                 out = out.or(Some(AcousticEvent::Sound));
             }
             if over {
@@ -213,6 +248,7 @@ impl AcousticRadar {
             self.background += (e - self.background) * rate;
             self.background = self.background.max(1e-7);
         }
+        self.prev = e;
         if !listening {
             self.claps.clear();
             self.knocks.clear();
@@ -225,8 +261,10 @@ impl AcousticRadar {
     fn tick(&mut self) -> Option<AcousticEvent> {
         if self.claps_until.is_some_and(|until| self.now_ms > until) {
             self.claps_until = None;
-            let count = std::mem::take(&mut self.claps).len();
+            let claps = std::mem::take(&mut self.claps);
+            self.told_from = claps.first().copied().unwrap_or(self.now_ms);
             // (Four and more: applause or a beat, not the gesture.)
+            let count = claps.len();
             return match count {
                 1 if self.alone => Some(AcousticEvent::Single),
                 2 | 3 if self.alone => Some(AcousticEvent::Claps { count }),
@@ -236,6 +274,7 @@ impl AcousticRadar {
         if let Some(last) = self.knocks.last().copied() {
             if self.now_ms - last > 700.0 {
                 let count = self.knocks.len();
+                self.told_from = self.knocks[0];
                 self.knocks.clear();
                 return match count {
                     1 if self.alone => Some(AcousticEvent::Single),
@@ -252,14 +291,15 @@ impl AcousticRadar {
         match kind {
             Kind::Clap => {
                 self.knocks.clear();
-                if self.claps.last().is_some_and(|prev| (150.0..=CLAP_GAP_MS).contains(&(at - prev))) {
+                let window = self.clap_window();
+                if self.claps.last().is_some_and(|prev| (150.0..=window).contains(&(at - prev))) {
                     self.claps.push(at);
                 } else {
                     // A new run: a gesture only after quiet.
                     self.claps = vec![at];
                     self.alone = at - before > ALONE_MS;
                 }
-                self.claps_until = Some(at + CLAP_GAP_MS);
+                self.claps_until = Some(at + self.clap_window());
             }
             Kind::Knock => {
                 self.claps.clear();
@@ -288,10 +328,11 @@ fn classify(on: &Onset) -> Option<Kind> {
     }
     let high = on.peak_high / on.peak.max(1e-9);
     let low = on.peak_low / on.peak.max(1e-9);
-    if high > 0.22 {
-        Some(Kind::Clap)
-    } else if low > 0.4 && high < 0.15 {
+    if low > 0.4 && high < 0.15 {
         Some(Kind::Knock)
+    } else if high > 0.12 {
+        // (Bright, or a clap as a headset's microphone hears it, its treble cut.)
+        Some(Kind::Clap)
     } else {
         None
     }
@@ -381,5 +422,90 @@ mod tests {
         }
         s.extend(silence(1200));
         assert_eq!(run(&mut r, &s), vec![AcousticEvent::Knock { count: 3 }]);
+    }
+
+    /// Noise as from a quiet room (rms ≈ 0.0005, what his microphone hears).
+    fn room(ms: usize) -> Vec<f32> {
+        let mut seed = 99u32;
+        (0..ms * 16)
+            .map(|_| {
+                seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12345);
+                (((seed >> 16) as f32 / 32768.0) - 1.0) * 0.0009
+            })
+            .collect()
+    }
+
+    /// A clap in a room as a headset's microphone hears it: a burst of `peak`, its treble cut
+    /// above `bright` Hz, and its echo dying away over about a second.
+    fn room_clap(peak: f32, bright: f32) -> Vec<f32> {
+        let mut seed = 777u32;
+        let mut treble = crate::dsp::Biquad::low_pass(bright, RATE);
+        (0..16 * 500)
+            .map(|i| {
+                seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12345);
+                let t = i as f32;
+                treble.process((((seed >> 16) as f32 / 32768.0) - 1.0) * peak * ((-t / 40.0).exp() + 0.15 * (-t / 2500.0).exp()))
+            })
+            .collect()
+    }
+
+    /// A finger snap: a crack of under a millisecond, bright and dry.
+    fn snap(peak: f32) -> Vec<f32> {
+        let mut seed = 4242u32;
+        let mut bright = crate::dsp::Biquad::high_pass(2000.0, RATE);
+        (0..16 * 60)
+            .map(|i| {
+                seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12345);
+                bright.process((((seed >> 16) as f32 / 32768.0) - 1.0) * peak * (-(i as f32) / 10.0).exp())
+            })
+            .collect()
+    }
+
+    /// A room's noise with these sounds laid in at these times (ms).
+    fn scene(ms: usize, sounds: &[(usize, Vec<f32>)]) -> Vec<f32> {
+        let mut s = room(ms);
+        for (at, sound) in sounds {
+            for (y, x) in s.iter_mut().skip(at * 16).zip(sound) {
+                *y += x;
+            }
+        }
+        s
+    }
+
+    /// Sir's claps of 2026-11-21: the first clap's echo counted as a sound that lasts, which
+    /// let no second clap start inside it, and claps over 500 ms apart were two runs. Each came
+    /// out as a "Sound" and, 128 ms later, a "Single".
+    #[test]
+    fn claps_in_a_room_count_however_they_are_spaced() {
+        for gap in [220, 450, 700] {
+            let clap = room_clap(0.3, 6000.0);
+            let s = scene(1500 + gap + 2500, &[(1500, clap.clone()), (1500 + gap, clap)]);
+            assert_eq!(run(&mut AcousticRadar::new(1.0), &s), vec![AcousticEvent::Claps { count: 2 }], "claps {gap} ms apart");
+        }
+        // (One clap's own echo is no sound that lasts.)
+        let s = scene(1500 + 2500, &[(1500, room_clap(0.3, 6000.0))]);
+        assert_eq!(run(&mut AcousticRadar::new(1.0), &s), vec![AcousticEvent::Single]);
+    }
+
+    /// Softer claps, claps whose treble the headset's microphone cuts, and a finger snap.
+    #[test]
+    fn soft_and_dull_claps_and_a_snap_are_heard() {
+        for (what, clap) in [("soft", room_clap(0.015, 6000.0)), ("dull", room_clap(0.3, 2500.0))] {
+            let s = scene(1500 + 300 + 2500, &[(1500, clap.clone()), (1800, clap)]);
+            assert_eq!(run(&mut AcousticRadar::new(1.0), &s), vec![AcousticEvent::Claps { count: 2 }], "{what} claps");
+        }
+        let s = scene(1500 + 2500, &[(1500, snap(0.03))]);
+        assert_eq!(run(&mut AcousticRadar::new(1.0), &s), vec![AcousticEvent::Single], "a snap");
+    }
+
+    /// The sound model hears the gesture itself: from its first clap to the moment it is told
+    /// (the gap and the run's own pace after it), not the seconds before.
+    #[test]
+    fn the_models_clip_starts_at_the_first_clap() {
+        let clap = room_clap(0.3, 6000.0);
+        let s = scene(1500 + 300 + 2500, &[(1500, clap.clone()), (1800, clap)]);
+        let mut r = AcousticRadar::new(1.0);
+        let told: Vec<(AcousticEvent, f64)> = s.chunks(512).filter_map(|f| r.process(f, true).map(|ev| (ev, r.span_ms()))).collect();
+        assert!(matches!(told.as_slice(), [(AcousticEvent::Claps { count: 2 }, span)] if (760.0..=860.0).contains(span)), "{told:?}");
     }
 }

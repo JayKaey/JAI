@@ -223,6 +223,8 @@ pub struct TurnRequest {
     pub source: InputSource,
     /// Whether this turn is spoken (decided from Sir's reply mode when it started).
     pub voice: VoiceGate,
+    /// A protocol's step: silent whatever it changes (no re-gate by the reply mode).
+    pub quiet: bool,
     pub link: Arc<TurnLink>,
     /// Sir spoke over JAI (logged; "stop" still stops his voice and every player).
     pub barge_in: bool,
@@ -2179,6 +2181,10 @@ impl Brain {
                     hist.trim();
                     return false;
                 }
+                if let Some(line) = self.activating(name, &args) {
+                    st.say(&line);
+                    hist_msgs.push(json!({ "role": "assistant", "content": line }));
+                }
                 let outcome = tokio::select! {
                     _ = st.req.cancel.cancelled() => return true,
                     // Through the cortex: from the read started ahead, or healed once.
@@ -2264,6 +2270,11 @@ impl Brain {
         for call in &calls {
             prepared.push((call.tool, self.prepare_args(call.tool, call.args.clone()).await));
         }
+        let mut hist_msgs: Vec<Value> = vec![json!({ "role": "user", "content": text })];
+        for line in prepared.iter().filter_map(|(name, args)| self.activating(name, args)) {
+            st.say(&line);
+            hist_msgs.push(json!({ "role": "assistant", "content": line }));
+        }
         let mut outcomes: Vec<Option<ToolOutcome>> = calls.iter().map(|_| None).collect();
         for stage in crate::compound_planner::lanes(&calls) {
             let lanes: Vec<crate::hyper_cortex::Lane> = stage.iter().map(|lane| lane.iter().map(|i| (*i, prepared[*i].0.to_string(), prepared[*i].1.clone())).collect()).collect();
@@ -2276,7 +2287,6 @@ impl Brain {
             }
         }
         info!("[FAST] {} commands decided and carried out in {} ms", calls.len(), started.elapsed().as_millis());
-        let mut hist_msgs: Vec<Value> = vec![json!({ "role": "user", "content": text })];
         let mut lines: Vec<String> = Vec::new();
         let mut failures: Vec<String> = Vec::new();
         for ((name, args), outcome) in prepared.iter().zip(outcomes) {
@@ -2355,7 +2365,7 @@ impl Brain {
             let title = if outcome.tool == "check_school_schedule" { "Timetable" } else { "Calendar" };
             crate::dynamic_popups::schedule(title, &outcome.output);
         }
-        if outcome.modality_changed || outcome.state_changed {
+        if (outcome.modality_changed || outcome.state_changed) && !st.req.quiet {
             st.voice = self.inner.tools.modality.gate(Trigger::Input(st.req.source), &st.req.text);
         }
     }
@@ -2444,6 +2454,16 @@ impl Brain {
         hist.push(json!({ "role": "assistant", "content": line }));
         hist.trim();
         false
+    }
+
+    /// "Activating the Gaming Protocol, Sir.": said as a protocol of his starts, before its steps
+    /// run (they follow without a word); None for any other call.
+    fn activating(&self, tool: &str, args: &Value) -> Option<String> {
+        if !matches!(tool, "manage_stark_protocol" | "protocols") || !crate::protocols::runs(args) {
+            return None;
+        }
+        let name = crate::tools::str_arg(args, &["protocol_name", "name", "protocol"])?;
+        self.inner.tools.protocols.get(name).map(|p| crate::protocols::activating(&p.name))
     }
 
     /// Canned in-character confirmations for fast-path commands (None = act silently).
@@ -2565,29 +2585,19 @@ impl Brain {
                 }
             }
             "manage_stark_protocol" | "protocols" => match action {
-                "capture_current_workspace" | "capture" => Some(format!(
+                "capture_current_workspace" | "capture" | "save_workspace" | "snapshot" | "capture_workspace" | "save_current_setup" => Some(format!(
                     "Very good, Sir. Your current setup is saved as the {}.",
                     crate::protocols::display_name(args["protocol_name"].as_str().or(args["name"].as_str()).unwrap_or("new"))
                 )),
-                "list" => {
+                "list" | "show" => {
                     let names: Vec<String> = self.inner.tools.protocols.list().into_iter().map(|p| crate::protocols::display_name(&p.name)).collect();
                     Some(format!("Your protocols are {}, Sir.", join_and(&names)))
                 }
-                "delete" => Some("Done, Sir. That protocol is gone.".into()),
+                "delete" | "remove" => Some("Done, Sir. That protocol is gone.".into()),
                 // (Reached by Sir's yes to "Did you mean: create a protocol called …?".)
                 "create" | "save" | "add" | "update" => Some(format!("Done, Sir. The {} is saved.", crate::protocols::display_name(args["protocol_name"].as_str().or(args["name"].as_str()).unwrap_or("new")))),
-                _ => {
-                    let name = args["protocol_name"].as_str().or(args["name"].as_str()).unwrap_or("the");
-                    let display = crate::protocols::display_name(&self.inner.tools.protocols.get(name).map(|p| p.name).unwrap_or_else(|| name.to_string()));
-                    // "Gaming Protocol engaged (5 of 5 steps succeeded). Moving Discord to Monitor 2 …"
-                    let choreography = out.split_once("). ").map(|(_, rest)| rest.lines().next().unwrap_or("").trim().to_string()).unwrap_or_default();
-                    let partial = out.lines().any(|l| l.trim_start().starts_with("FAIL "));
-                    Some(format!(
-                        "Initiating {display}, Sir.{}{}",
-                        if choreography.is_empty() { String::new() } else { format!(" {choreography}") },
-                        if partial { " One or two steps failed; the details are in the log." } else { "" }
-                    ))
-                }
+                // Its line was said as it started (`activating`); afterwards only what failed.
+                _ => out.lines().any(|l| l.trim_start().starts_with("FAIL ")).then(|| "One or two of its steps failed, Sir; the details are in the log.".to_string()),
             },
             "open_application" if args["open_last_file"] == true => Some(match args["with"].as_str() {
                 Some("vscode") => "Right away, Sir. Opening it in VS Code.".into(),

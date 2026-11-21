@@ -238,6 +238,16 @@ pub fn vram_free_mb() -> Option<u64> {
     None
 }
 
+/// The first GPU's VRAM in MB (NVML; `None` without it).
+pub fn vram_total_mb() -> Option<u64> {
+    #[cfg(feature = "desktop-gpu")]
+    {
+        nvml()?.device_by_index(0).ok()?.memory_info().ok().map(|m| m.total / 1_048_576)
+    }
+    #[cfg(not(feature = "desktop-gpu"))]
+    None
+}
+
 /// Names of the processes using the GPU (NVML; empty without it).
 pub fn gpu_process_names() -> Vec<String> {
     #[cfg(feature = "desktop-gpu")]

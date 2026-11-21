@@ -723,11 +723,38 @@ pub fn slot(p: &Painter, r: Rect, colour: Color32) {
 
 /// A leader: from the thing (`from`, marked with a dot) at 45° and then level to its label.
 pub fn leader(p: &Painter, from: Pos2, to: Pos2, colour: Color32) {
-    let dy = to.y - from.y;
-    let dx = (to.x - from.x).signum() * dy.abs().min((to.x - from.x).abs());
-    let knee = pos2(from.x + dx, to.y);
-    p.add(Shape::line(vec![from, knee, to], Stroke::new(px(p), colour)));
+    leader_out(p, from, to, 1.0, colour);
+}
+
+/// A leader drawn out of `from` as far as `share` (0 … 1) of its way: the spark that draws it
+/// stands at `along(from, to, share)`.
+pub fn leader_out(p: &Painter, from: Pos2, to: Pos2, share: f32, colour: Color32) {
+    let (knee, first, second) = legs(from, to);
+    let mut points = vec![from];
+    if share.clamp(0.0, 1.0) * (first + second) > first {
+        points.push(knee);
+    }
+    points.push(along(from, to, share));
+    p.add(Shape::line(points, Stroke::new(px(p), colour)));
     p.circle_filled(from, 1.6, colour);
+}
+
+/// A leader's knee and the lengths of its two legs (the slope, then level).
+fn legs(from: Pos2, to: Pos2) -> (Pos2, f32, f32) {
+    let dy = to.y - from.y;
+    let knee = pos2(from.x + (to.x - from.x).signum() * dy.abs().min((to.x - from.x).abs()), to.y);
+    (knee, (knee - from).length(), (to - knee).length())
+}
+
+/// The point `share` (0 … 1) of the way along the leader from `from` to `to`.
+pub fn along(from: Pos2, to: Pos2, share: f32) -> Pos2 {
+    let (knee, first, second) = legs(from, to);
+    let at = share.clamp(0.0, 1.0) * (first + second);
+    if at <= first {
+        from + (knee - from) * (at / first.max(1e-3))
+    } else {
+        knee + (to - knee) * ((at - first) / second.max(1e-3))
+    }
 }
 
 /// Every line of the HUD: a hairline stays one, anything wider is drawn finer (2 → 1.4,

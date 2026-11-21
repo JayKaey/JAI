@@ -12,7 +12,9 @@
 //! every open application (its executable, monitor, position, size and maximised state), JAI's
 //! own live windows and the playlist he started last — as steps; engaging it relaunches the apps,
 //! moves each window back to its monitor and place, reopens the telemetry windows and starts the
-//! music: "Initiating Gaming Protocol, Sir. Moving Discord to Monitor 2 and starting JaysRock."
+//! music. A protocol says one line as it starts ("Activating the Gaming Protocol, Sir."), then
+//! its steps run without a word; only a step that asks something is answered aloud, and only a
+//! step that failed is mentioned afterwards.
 
 use crate::modality::{ModalityStore, VoiceResponseMode};
 use crate::tools::str_arg;
@@ -43,6 +45,30 @@ pub struct Step {
 /// after the others as if he had said it (`StarkEvent::RunMacro`), so it can be anything he
 /// understands.
 pub const ORDER: &str = "order";
+
+/// The actions of `manage_stark_protocol` that start a protocol ("run" when none is given).
+pub const RUNS: &[&str] = &["run", "engage", "start", "activate", "execute", "execute_protocol", "initiate"];
+
+/// Whether these arguments of `manage_stark_protocol` start a protocol.
+pub fn runs(args: &Value) -> bool {
+    RUNS.contains(&str_arg(args, &["action"]).unwrap_or("run").to_lowercase().replace([' ', '-'], "_").as_str())
+}
+
+/// The one line a protocol starts with; its steps follow without a word (Sir, 2026-11-21: "He
+/// should just say something like activating protocol and than execute the things that are
+/// asked from him").
+pub fn activating(name: &str) -> String {
+    format!("Activating the {}, Sir.", display_name(name))
+}
+
+/// Whether a step in his own words is there to be heard (a question, "tell me the weather",
+/// "read my mail"): it is answered aloud. Every other step is carried out without a word.
+pub fn wants_an_answer(order: &str) -> bool {
+    static TELLS: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new(r"^(?:please\s+|then\s+|and\s+)?(?:tell\s+me|read|say|give\s+me\s+(?:the|my|a)|brief\s+me|sag\s+mir|lies|nenn\s+mir|gib\s+mir\s+(?:die|den|das|meine))\b").expect("valid regex")
+    });
+    crate::intents::only_asks(order) || TELLS.is_match(&crate::ear::words(order).join(" "))
+}
 
 impl Step {
     /// A line of the protocol window as a step: "tool_name {…}" stays that tool's call, any
@@ -834,5 +860,21 @@ mod tests {
         all.sort_unstable();
         assert_eq!(all, (0..custom.len()).collect::<Vec<_>>());
         assert!(plan(&[]).is_empty());
+    }
+
+    /// One line as it starts, then its steps without a word: only a step that asks something is
+    /// answered aloud (Sir, 2026-11-21).
+    #[test]
+    fn a_protocol_says_one_line_and_only_questions_are_answered() {
+        assert_eq!(activating("gaming"), "Activating the Gaming Protocol, Sir.");
+        for (args, starts) in [(json!({}), true), (json!({ "action": "engage" }), true), (json!({ "action": "Execute Protocol" }), true), (json!({ "action": "list" }), false), (json!({ "action": "capture" }), false)] {
+            assert_eq!(runs(&args), starts, "{args}");
+        }
+        for order in ["what's the weather?", "tell me the weather", "read my emails", "what is on my schedule today", "wie wird das Wetter", "sag mir die Uhrzeit"] {
+            assert!(wants_an_answer(order), "{order}");
+        }
+        for order in ["open Discord", "play my gym playlist", "set the volume to 40", "move Spotify to monitor 2", "öffne Discord", "dim the lights"] {
+            assert!(!wants_an_answer(order), "{order}");
+        }
     }
 }

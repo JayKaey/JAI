@@ -1815,7 +1815,7 @@ impl ToolContext {
                         })
                 }
             }
-            "run" | "engage" | "start" | "activate" | "execute" | "execute_protocol" | "initiate" => match self.protocols.get(name) {
+            run if protocols::RUNS.contains(&run) => match self.protocols.get(name) {
                 None => Err(format!(
                     "No protocol called '{name}'. Known protocols: {}.",
                     self.protocols.list().iter().map(|p| p.name.as_str()).collect::<Vec<_>>().join(", ")
@@ -1824,11 +1824,16 @@ impl ToolContext {
                     // Steps in his own words follow the rest, one after the other, as if he had
                     // said them.
                     let (said, steps): (Vec<protocols::Step>, Vec<protocols::Step>) = p.steps.iter().cloned().partition(|s| s.tool == protocols::ORDER);
-                    // ("Tell me" is said at once: what set the protocol off, or that it runs.)
+                    // ("Tell me" is said at once: what set the protocol off.)
                     let (told, orders): (Vec<String>, Vec<String>) = said.iter().filter_map(|s| s.args["order"].as_str().map(String::from)).partition(|order| crate::kit_notes::is_tell_me(order));
-                    if !told.is_empty() {
-                        let news = str_arg(args, &["because"]).map(String::from).unwrap_or_else(|| format!("The {} is engaged, Sir.", protocols::display_name(&p.name)));
-                        let _ = self.stark.events.send(crate::stark::StarkEvent::Alert(news));
+                    let because = str_arg(args, &["because"]);
+                    if let Some(news) = because.filter(|_| !told.is_empty()) {
+                        let _ = self.stark.events.send(crate::stark::StarkEvent::Alert(news.to_string()));
+                    }
+                    // Its one line, when no turn of his says it: set off by a sound, a time or a
+                    // rule, or by RUN NOW in its window.
+                    if because.is_some() || args["announce"] == true {
+                        let _ = self.stark.events.send(crate::stark::StarkEvent::Say(protocols::activating(&p.name)));
                     }
                     let p = Protocol { steps, ..p };
                     // Steps on different things (each app, the music, JAI's own windows)
@@ -1872,7 +1877,7 @@ impl ToolContext {
                     }
                     let then = if orders.is_empty() { String::new() } else { format!("\nThen: {}.", orders.join(", then ")) };
                     if !orders.is_empty() {
-                        let _ = self.stark.events.send(crate::stark::StarkEvent::RunMacro { name: format!("{} protocol", p.name), steps: orders.clone() });
+                        let _ = self.stark.events.send(crate::stark::StarkEvent::RunMacro { name: format!("{} protocol", p.name), steps: orders.clone(), quiet: true });
                     }
                     let summary = if p.steps.is_empty() {
                         format!("{} engaged.{then}", protocols::display_name(&p.name))

@@ -1125,6 +1125,12 @@ fn core_on_screen() -> Option<Rect> {
     crate::hud_dock::orb().map(|core| core.translate(origin.to_vec2()))
 }
 
+/// Whether his core (`core`, in the same points as `rect`) stands right of `rect`: its leader
+/// then lands on the top right corner (`holo_stage::leader`), and its entrance starts there.
+fn faces_right(rect: Rect, core: Option<Rect>) -> bool {
+    core.is_some_and(|core| rect.center().x < core.center().x)
+}
+
 /// Where a new window of `size` opens on the monitor whose work area is `work`: about the
 /// core when he stands on that monitor, beside him on his circle, the emptier side first, off
 /// the windows that stand there already (`holo_stage::slot`); else at `middle`, or where it
@@ -1276,6 +1282,8 @@ fn open_window(app: &Jai, rt: &Handle, model: &Arc<Mutex<HudModel>>) -> Result<(
         renderer: eframe::Renderer::Glow,
         centered: placement.is_none() && !fullscreen && start_on.is_none(),
         persist_window: false,
+        // (On Windows his windows wait for the screen's refresh in `pace`, once for all of them.)
+        vsync: cfg!(not(windows)),
         #[cfg(not(windows))]
         event_loop_builder: on_x11(),
         ..Default::default()
@@ -1292,9 +1300,87 @@ fn open_window(app: &Jai, rt: &Handle, model: &Arc<Mutex<HudModel>>) -> Result<(
     eframe::run_native(
         "J.A.I.",
         options,
-        Box::new(move |cc| Ok(Box::new(HudApp::new(cc, app, rt, model, restore)))),
+        Box::new(move |cc| {
+            #[cfg(windows)]
+            pace_by_the_screen(&cc.egui_ctx);
+            Ok(Box::new(HudApp::new(cc, app, rt, model, restore)))
+        }),
     )
     .map_err(|e| e.to_string())
+}
+
+/// Every window of his is drawn on this one thread, and a swap that waits for the screen's
+/// refresh waited one refresh per window: the windows drawn inside the board's own frame (his
+/// cards, the system column, every block) made one frame of the board four or five refreshes
+/// long (Sir's log at 74 Hz, again and again: "Slow frame: 54 ms (board and emblem 50)"), and a
+/// window being dragged or scrolled drew in every second to fifth refresh (Sir, 2026-11-21:
+/// "when i scroll through the menus and so it doesnt fell that smooth";
+/// `probe_windows_drawn_on_one_thread`). So on Windows no swap waits (`vsync: false`, as mpv
+/// does with OpenGL; DWM still shows every frame whole) and the thread waits once per refresh
+/// instead: a window that already drew in this one waits for the next, then all of them draw in
+/// it. (Only a frame's first pass: egui may draw one twice.)
+#[cfg(windows)]
+fn pace_by_the_screen(ctx: &egui::Context) {
+    ctx.on_begin_pass(
+        "pace",
+        Arc::new(|ctx| {
+            if ctx.output(|o| o.num_completed_passes) == 0 {
+                pace(ctx.viewport_id());
+            }
+        }),
+    );
+}
+
+#[cfg(windows)]
+fn pace(viewport: ViewportId) {
+    static DREW: Mutex<(i64, Vec<ViewportId>)> = Mutex::new((0, Vec::new()));
+    let mut drew = lock(&DREW);
+    let (refresh, next) = refresh_times();
+    if drew.0 != refresh {
+        *drew = (refresh, Vec::new());
+    }
+    if drew.1.contains(&viewport) {
+        std::thread::sleep(next);
+        *drew = (refresh_times().0, Vec::new());
+    }
+    drew.1.push(viewport);
+}
+
+/// When the screen last refreshed (a performance-counter time) and how long until it refreshes
+/// next, from DWM's own clock (`screen_clock`).
+#[cfg(windows)]
+fn refresh_times() -> (i64, Duration) {
+    let (now, vblank, period, hz) = screen_clock();
+    let last = last_refresh(now, vblank, period);
+    (last, Duration::from_secs_f64((last + period - now) as f64 / hz as f64))
+}
+
+/// The refresh at or before `now` in the train of `period` through DWM's `vblank`, which may
+/// lie some behind (it had nothing to show) or just ahead of now.
+#[cfg(windows)]
+fn last_refresh(now: i64, vblank: i64, period: i64) -> i64 {
+    vblank + (now - vblank).div_euclid(period) * period
+}
+
+/// Now, a refresh of DWM's and its period (performance-counter ticks), and the ticks a second;
+/// without DWM, as if the screen refreshed at 60 Hz.
+#[cfg(windows)]
+fn screen_clock() -> (i64, i64, i64, i64) {
+    use windows::Win32::Graphics::Dwm::{DwmGetCompositionTimingInfo, DWM_TIMING_INFO};
+    use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
+    let mut timing = DWM_TIMING_INFO { cbSize: std::mem::size_of::<DWM_TIMING_INFO>() as u32, ..Default::default() };
+    let (mut now, mut hz) = (0i64, 1i64);
+    // SAFETY: plain queries into values of the sizes they are told.
+    let dwm = unsafe {
+        let _ = QueryPerformanceCounter(&mut now);
+        let _ = QueryPerformanceFrequency(&mut hz);
+        DwmGetCompositionTimingInfo(windows::Win32::Foundation::HWND(0), &mut timing).is_ok()
+    };
+    let hz = hz.max(1);
+    match (timing.qpcVBlank as i64, timing.qpcRefreshPeriod as i64) {
+        (vblank, period) if dwm && period > 0 => (now, vblank, period, hz),
+        _ => (now, 0, (hz / 60).max(1), hz),
+    }
 }
 
 fn window_title(iface: &InterfaceSettings) -> String {
@@ -6535,9 +6621,10 @@ pub fn rest_fps(unwatched: bool) -> f32 {
 /// After this long without a key or the pointer, nobody is taken to be watching.
 const AWAY_AFTER_SECS: u64 = 120;
 
-/// Whether nobody is looking closely: no key or pointer for two minutes, or the models are in
-/// standby for a game. Windows is asked once a second; a scripted session is always watched
-/// (its frames are counted on).
+/// Whether nobody is looking closely: no key or pointer for two minutes, or a game runs (a
+/// standby alone is no sign: a full graphics card sends him into one while Sir works beside him).
+/// Windows is asked once a second; a scripted session is always watched (its frames are counted
+/// on).
 fn nobody_watching() -> bool {
     static STARTED: std::sync::LazyLock<Instant> = std::sync::LazyLock::new(Instant::now);
     static ASK_AGAIN_MS: AtomicU64 = AtomicU64::new(0);
@@ -6545,7 +6632,7 @@ fn nobody_watching() -> bool {
     let now = STARTED.elapsed().as_millis() as u64;
     if now >= ASK_AGAIN_MS.load(Ordering::Relaxed) {
         ASK_AGAIN_MS.store(now + 1_000, Ordering::Relaxed);
-        let unwatched = !crate::platform::in_test_session() && (crate::vram_guard::is_dormant() || crate::platform::idle_seconds().is_some_and(|idle| idle >= AWAY_AFTER_SECS));
+        let unwatched = !crate::platform::in_test_session() && (crate::vram_guard::in_game() || crate::platform::idle_seconds().is_some_and(|idle| idle >= AWAY_AFTER_SECS));
         UNWATCHED.store(unwatched, Ordering::Relaxed);
     }
     UNWATCHED.load(Ordering::Relaxed)
@@ -7645,7 +7732,7 @@ pub(super) fn paint_window_border(ctx: &egui::Context) {
     } else {
         crate::holo::outline(&painter, &crate::holo::plate(screen, [0.0; 4]), crate::hud_board::border_colour());
     }
-    paint_window_motion(&painter, screen, &motion, true);
+    paint_window_motion(&painter, screen, &motion, true, faces_right(ctx.input(|i| i.viewport().inner_rect).unwrap_or(screen), core_on_screen()));
     // Esc in a view he put in full screen ("full screen the Earth") brings its window back.
     if ctx.input(|i| i.key_pressed(egui::Key::Escape) && i.viewport().fullscreen == Some(true)) {
         ctx.send_viewport_cmd(ViewportCommand::Fullscreen(false));
@@ -7788,17 +7875,25 @@ fn reveal_when_drawn(ctx: &egui::Context) {
 
 /// Where his windows stand, in the board's own points: those on the board's screen that are
 /// still there, not minimised and not on their way out. (In each window's own points: on a
-/// monitor of another scale than the board's a window is not on the board's screen.)
-fn own_window_rects(ctx: &egui::Context) -> Vec<Rect> {
+/// monitor of another scale than the board's a window is not on the board's screen.) Each with
+/// the ms since its entrance began (its spark leaves the core then: `LAUNCH_MS`).
+fn own_window_rects(ctx: &egui::Context) -> Vec<(Rect, f32)> {
     let Some(board) = ctx.input(|i| i.viewport().inner_rect) else { return Vec::new() };
     let windows: std::collections::HashMap<ViewportId, bool> = ctx.input(|i| i.raw.viewports.iter().map(|(id, v)| (*id, v.minimized == Some(true))).collect());
     let mut motions = lock(&DETACHED_MOTIONS);
     // (A window gone without its exit, a widget closed by its key or a text window, left where
     // it stood behind: a leader from the core to nothing, seen by Sir on 2026-11-19.)
     motions.rects.retain(|viewport, _| windows.contains_key(viewport));
-    let mut rects: Vec<Rect> = motions.rects.iter().filter(|(viewport, _)| !motions.leaving.contains_key(viewport) && windows.get(viewport) == Some(&false)).map(|(_, rect)| rect.translate(-board.min.to_vec2())).filter(|rect| rect.intersects(Rect::from_min_size(Pos2::ZERO, board.size()))).collect();
+    let since = |viewport: &ViewportId| motions.shown.get(viewport).map_or(f32::INFINITY, |(_, at, _)| at.elapsed().as_secs_f32() * 1000.0);
+    let mut rects: Vec<(Rect, f32)> = motions
+        .rects
+        .iter()
+        .filter(|(viewport, _)| !motions.leaving.contains_key(viewport) && windows.get(viewport) == Some(&false))
+        .map(|(viewport, rect)| (rect.translate(-board.min.to_vec2()), since(viewport)))
+        .filter(|(rect, _)| rect.intersects(Rect::from_min_size(Pos2::ZERO, board.size())))
+        .collect();
     // (In one order every frame: a leader drawn over another would flicker.)
-    rects.sort_by(|a, b| a.min.x.total_cmp(&b.min.x).then(a.min.y.total_cmp(&b.min.y)));
+    rects.sort_by(|(a, _), (b, _)| a.min.x.total_cmp(&b.min.x).then(a.min.y.total_cmp(&b.min.y)));
     rects
 }
 
@@ -8411,7 +8506,7 @@ pub(super) fn hud_block_window(ctx: &egui::Context, id: &str, title: &str, size:
         // the scan edge, the settling glow and the closing point's flash; the block itself is
         // never scaled (its text never lays out again while it comes or goes).
         let painter = ctx.layer_painter(inner.response.layer_id);
-        paint_window_motion(&painter, rect, &motion, false);
+        paint_window_motion(&painter, rect, &motion, false, faces_right(rect, crate::hud_dock::orb()));
         if !motion.moving() {
             paint_resize_grip(&painter, rect, edge.gamma_multiply(0.8 * dim));
         }
@@ -8562,10 +8657,14 @@ pub(crate) fn set_still(ctx: &egui::Context, still: bool) {
 /// (`closing` 0 … 1 of `hud_dock::CLOSE_FADE`): one motion language for every block, detached
 /// window, pop-up card and board block. A window is drawn, not shown.
 ///
-/// In: a spark at its top left corner throws a line of light along its top edge (0–130 ms,
-/// fast first); the frame unfolds downwards from that line (110–330 ms) with the corner ticks
-/// riding the travelling edge, white-hot and cooling; the content resolves top to bottom behind
-/// a scan line (280–420 ms); one glow settles on the frame (to 440 ms).
+/// In, as J.A.R.V.I.S. throws a panel out of himself in the films (Sir, 2026-11-21: "He should
+/// open windows like Jarvis from the iron man movies"): a white-hot spark leaves his core and
+/// draws the leader out to the window (0–170 ms, the board draws it: `LAUNCH_MS`); where it
+/// lands, the window's corner that faces him, it throws a line of light along the top edge
+/// (170–300 ms, fast first); the frame unfolds downwards from that line (280–500 ms) with the
+/// corner ticks riding the travelling edge, white-hot and cooling; it flickers once as it
+/// locks (around 505 ms), the content resolves top to bottom behind a scan line (450–610 ms)
+/// and one glow settles on the frame (to 640 ms).
 /// Out, quicker: the content goes (0–80 ms), the frame folds up into the top line (50–170 ms),
 /// the line runs back into its corner (160–235 ms) and the corner sparks once.
 ///
@@ -8589,16 +8688,21 @@ pub(crate) struct WindowMotion {
     pub brackets_alpha: f32,
     /// The glow settling on the frame at the end of an entrance (0 … 1).
     pub glow: f32,
-    /// The spark at the top left corner: as the line leaves it, and as it returns (0 … 1).
+    /// The spark at the top corner: as the line leaves it, and as it returns (0 … 1).
     pub flash: f32,
+    /// How far the frame's light dips as it locks in place (0: not at all).
+    pub flicker: f32,
 }
 
-/// The entrance's beats, in ms of `hud_dock::OPEN_ANIM` (440).
-const IN_LINE: (f32, f32) = (0.0, 130.0);
-const IN_UNFOLD: (f32, f32) = (110.0, 330.0);
-const IN_BRACKETS: (f32, f32) = (100.0, 310.0);
-const IN_RESOLVE: (f32, f32) = (280.0, 420.0);
-const IN_SETTLE: (f32, f32) = (300.0, 440.0);
+/// The entrance's beats, in ms of `hud_dock::OPEN_ANIM` (640). Before the first, the spark is on
+/// its way out of the core: the window shows nothing yet.
+pub(crate) const LAUNCH_MS: f32 = 170.0;
+const IN_LINE: (f32, f32) = (LAUNCH_MS, 300.0);
+const IN_UNFOLD: (f32, f32) = (280.0, 500.0);
+const IN_BRACKETS: (f32, f32) = (270.0, 480.0);
+const IN_LOCK: f32 = 505.0;
+const IN_RESOLVE: (f32, f32) = (450.0, 610.0);
+const IN_SETTLE: (f32, f32) = (470.0, 640.0);
 /// The exit's beats, in ms of `hud_dock::CLOSE_FADE` (240).
 const OUT_CONTENT: (f32, f32) = (0.0, 80.0);
 const OUT_FOLD: (f32, f32) = (50.0, 170.0);
@@ -8614,7 +8718,7 @@ fn beat(ms: f32, (from, to): (f32, f32)) -> f32 {
 use crate::holo_motion::{ease_in_cubic, ease_in_out as ease_in_out_cubic, ease_out_expo};
 
 impl WindowMotion {
-    pub const REST: Self = Self { unfold: 1.0, line: None, resolve: 1.0, frame: 1.0, content: 1.0, brackets: 1.0, brackets_alpha: 1.0, glow: 0.0, flash: 0.0 };
+    pub const REST: Self = Self { unfold: 1.0, line: None, resolve: 1.0, frame: 1.0, content: 1.0, brackets: 1.0, brackets_alpha: 1.0, glow: 0.0, flash: 0.0, flicker: 0.0 };
 
     pub fn of(opening: Option<f32>, closing: Option<f32>) -> Self {
         match (opening, closing) {
@@ -8635,14 +8739,16 @@ impl WindowMotion {
         let line_alpha = 1.0 - smooth(IN_UNFOLD.0 + 60.0, IN_UNFOLD.1, ms);
         Self {
             unfold,
-            line: (line_alpha > 0.0).then(|| (ease_out_expo(beat(ms, IN_LINE)), line_alpha)),
+            line: (line_alpha > 0.0 && ms >= LAUNCH_MS).then(|| (ease_out_expo(beat(ms, IN_LINE)), line_alpha)),
             resolve: ease_in_out_cubic(beat(ms, IN_RESOLVE)),
             frame: smooth(IN_UNFOLD.0 - 10.0, IN_UNFOLD.0 + 50.0, ms),
             content: 1.0,
             brackets: ease_out_expo(beat(ms, IN_BRACKETS)),
             brackets_alpha: smooth(IN_BRACKETS.0, IN_BRACKETS.0 + 50.0, ms),
             glow: smooth(IN_SETTLE.0 - 60.0, IN_SETTLE.0, ms) * (1.0 - smooth(IN_SETTLE.0, IN_SETTLE.1, ms)),
-            flash: 1.0 - smooth(0.0, IN_LINE.1 * 0.8, ms),
+            // (Lit the moment the spark lands, gone as the line runs out.)
+            flash: smooth(LAUNCH_MS - 20.0, LAUNCH_MS, ms) * (1.0 - smooth(LAUNCH_MS, LAUNCH_MS + (IN_LINE.1 - IN_LINE.0) * 0.8, ms)),
+            flicker: 0.75 * (1.0 - (ms - IN_LOCK).abs() / 22.0).max(0.0),
         }
     }
 
@@ -8663,6 +8769,7 @@ impl WindowMotion {
             brackets_alpha: 1.0 - smooth(OUT_BRACKETS.0 + 40.0, OUT_BRACKETS.1 + 10.0, ms),
             glow: 0.0,
             flash: (1.0 - (ms - OUT_FLASH).abs() / 28.0).max(0.0),
+            flicker: 0.0,
         }
     }
 
@@ -8702,7 +8809,9 @@ fn paint_block_frame(painter: &egui::Painter, rect: Rect, m: &WindowMotion, glas
     }
     let t = holo::theme();
     let heat = (1.0 - m.unfold).clamp(0.0, 1.0);
-    let edge = mix(edge, t.hot(), heat * 0.8).gamma_multiply(m.frame.max(heat));
+    // (As it locks in place its light dips once, as a hologram's does: `WindowMotion::flicker`.)
+    let lock = 1.0 - m.flicker;
+    let edge = mix(edge, t.hot(), heat * 0.8).gamma_multiply(m.frame.max(heat) * lock);
     let cut = crate::holo_frame::CUT.min(band.height() / 2.0);
     let shape = holo::plate(band, [0.0, 0.0, cut, 0.0]);
     if glass {
@@ -8712,7 +8821,7 @@ fn paint_block_frame(painter: &egui::Painter, rect: Rect, m: &WindowMotion, glas
     if width > 1.0 {
         holo::outline(painter, &holo::plate(band.shrink(1.0), [0.0, 0.0, cut, 0.0]), edge);
     }
-    let bright = holo::a(mix(t.ink(), t.hot(), heat), 0.85 * m.frame);
+    let bright = holo::a(mix(t.ink(), t.hot(), heat), 0.85 * m.frame * lock);
     let arm = crate::holo_frame::TICK.min(band.width() / 3.0).min(band.height() / 3.0);
     for (at, dx, dy) in [(band.left_top(), 1.0, 1.0), (band.right_top(), -1.0, 1.0), (band.left_bottom(), 1.0, -1.0)] {
         holo::path(painter, &[pos2(at.x + dx * arm, at.y), at, pos2(at.x, at.y + dy * arm)], bright);
@@ -8737,8 +8846,9 @@ fn smooth(from: f32, to: f32, x: f32) -> f32 {
 /// freshly resolved content up out of the window's glass. In a window of his own (`crisp`) the
 /// black around the frame is seen through, so what is drawn there has no light round it, as
 /// the corner orb has none: soft light on a black that is seen through stands round it as a
-/// dark veil.
-pub(super) fn paint_window_motion(painter: &egui::Painter, rect: Rect, m: &WindowMotion, crisp: bool) {
+/// dark veil. `right`: his core stands to the right (`faces_right`), so the spark lands on the
+/// top right corner and the line runs from there.
+pub(super) fn paint_window_motion(painter: &egui::Painter, rect: Rect, m: &WindowMotion, crisp: bool, right: bool) {
     use crate::holo::{a, lit};
     let t = crate::holo::theme();
     let (accent, hot, fill) = (t.accent(), t.hot(), block_slate());
@@ -8753,9 +8863,10 @@ pub(super) fn paint_window_motion(painter: &egui::Painter, rect: Rect, m: &Windo
         let travel = (1.0 - m.brackets).abs().min(1.0);
         crate::hud_board::brackets(painter, r, mix(crate::hud_board::bracket_colour().gamma_multiply(0.85), hot, travel).gamma_multiply(m.brackets_alpha));
     }
+    let (corner, toward) = if right { (rect.right_top(), -1.0) } else { (rect.left_top(), 1.0) };
     if let Some((width, strength)) = m.line {
-        let from = pos2(rect.left(), rect.top() + px * 0.5);
-        let to = pos2(rect.left() + (rect.width() * width).max(px), from.y);
+        let from = pos2(corner.x, rect.top() + px * 0.5);
+        let to = pos2(corner.x + toward * (rect.width() * width).max(px), from.y);
         light.neon(&[from, to], false, px.max(1.2), a(hot, strength), if crisp { 0.0 } else { strength });
         if width < 0.995 {
             if crisp {
@@ -8796,7 +8907,7 @@ pub(super) fn paint_window_motion(painter: &egui::Painter, rect: Rect, m: &Windo
         crate::holo::outline(painter, &frame, a(accent, 0.8 * m.glow));
     }
     if m.flash > 0.0 {
-        let c = rect.left_top();
+        let c = corner;
         if !crisp {
             light.spark(c, 12.0 * m.flash.max(0.4), lit(hot, 0.9 * m.flash));
         }
@@ -9306,7 +9417,12 @@ fn canvas_opacity() -> f32 {
 /// Whether Windows sees through the board's black: then a glow would stand on the wallpaper as
 /// a dark smudge, and the core is drawn as lines alone (`CoreLook::crisp`).
 pub(crate) fn board_keyed() -> bool {
-    cfg!(windows) && canvas_opacity() < 1.0
+    cfg!(windows) && wallpaper_shows()
+}
+
+/// Whether the wallpaper shows through his black (the Opacity setting under 100).
+pub(crate) fn wallpaper_shows() -> bool {
+    canvas_opacity() < 1.0
 }
 
 /// `paint_canvas` with the media's places given.
@@ -9340,23 +9456,33 @@ pub(crate) fn paint_canvas_in(ctx: &egui::Context, media: &[(usize, Rect)]) {
     }
     // The windows are tied to him: a leader from his first circle to the corner of each
     // window's header that faces him, and while he speaks a point of light runs out along it.
+    // A window he has just opened he throws out of himself: a white-hot spark runs out of his
+    // circle and draws its leader, its tail cooling behind it, and lands on the window's
+    // corner as the window's own entrance begins there (`LAUNCH_MS`).
     // (His windows stand on the screen, above the board; a session without windows draws
     // them as blocks on it.)
-    let mut blocks = crate::hud_dock::block_rects();
+    let mut blocks: Vec<(Rect, f32)> = crate::hud_dock::block_rects().into_iter().map(|block| (block, f32::INFINITY)).collect();
     blocks.extend(own_window_rects(ctx));
     if dock < 0.5 {
         let run = (ctx.input(|i| i.time) * 0.9).fract() as f32;
-        for (from, to) in blocks.iter().filter_map(|block| crate::holo_stage::leader(origin, ring, *block)) {
+        let mut launching = false;
+        for ((from, to), since) in blocks.iter().filter_map(|(block, since)| Some((crate::holo_stage::leader(origin, ring, *block)?, *since))) {
+            if since < LAUNCH_MS {
+                launching = true;
+                let head = ease_in_out_cubic(since / LAUNCH_MS);
+                crate::holo::leader_out(&painter, from, to, head, a(ink, 0.26 + 0.3 * voice));
+                for k in (0..6).filter(|k| head > *k as f32 * 0.03) {
+                    light.spark(crate::holo::along(from, to, head - k as f32 * 0.03), 7.0 - k as f32, crate::holo::lit(t.hot(), 1.0 - k as f32 * 0.16));
+                }
+                continue;
+            }
             crate::holo::leader(&painter, from, to, a(ink, 0.26 + 0.3 * voice));
             if voice > 0.03 {
-                // (Along its two legs: the slope to the knee, then level to the window.)
-                let rise = (to.y - from.y).abs().min((to.x - from.x).abs());
-                let knee = pos2(from.x + (to.x - from.x).signum() * rise, to.y);
-                let (first, second) = ((knee - from).length(), (to - knee).length());
-                let at = run * (first + second);
-                let point = if at <= first { from + (knee - from) * (at / first.max(1.0)) } else { knee + (to - knee) * ((at - first) / second.max(1.0)) };
-                light.spark(point, 4.0, crate::holo::lit(t.hot(), voice.min(1.0)));
+                light.spark(crate::holo::along(from, to, run), 4.0, crate::holo::lit(t.hot(), voice.min(1.0)));
             }
+        }
+        if launching {
+            ctx.request_repaint();
         }
     }
     light.paint(&painter);
@@ -9369,7 +9495,7 @@ pub(crate) fn paint_canvas_in(ctx: &egui::Context, media: &[(usize, Rect)]) {
         while x < rect.right() {
             let at = centre + (pos2(x, y) - centre) * zoom;
             let at = pos2(at.x.round(), at.y.round());
-            let fade = (blocks.iter().map(|b| b.distance_to_pos(at)).fold(f32::INFINITY, f32::min) / 48.0).clamp(0.0, 1.0);
+            let fade = (blocks.iter().map(|(b, _)| b.distance_to_pos(at)).fold(f32::INFINITY, f32::min) / 48.0).clamp(0.0, 1.0);
             if fade > 0.0 && is_cross(pos2(x, y) - rect.left_top() - drift) {
                 for arm in [vec2(2.0 * CROSS_ARM + 1.0, 1.0), vec2(1.0, 2.0 * CROSS_ARM + 1.0)] {
                     dots.add_colored_rect(Rect::from_center_size(at + vec2(0.5, 0.5), arm), cross.gamma_multiply(fade));
@@ -10064,6 +10190,86 @@ mod tests {
         assert!(parts_of(&[], at(5)).is_empty());
     }
 
+    /// The pace keeps to the screen's refreshes whether DWM's lies behind now or just ahead.
+    #[test]
+    #[cfg(windows)]
+    fn the_last_refresh_is_found_behind_and_ahead_of_dwms() {
+        assert_eq!(last_refresh(1_000, 900, 100), 1_000);
+        assert_eq!(last_refresh(1_050, 900, 100), 1_000);
+        assert_eq!(last_refresh(1_050, 1_100, 100), 1_000, "DWM's refresh just ahead");
+        assert_eq!(last_refresh(1_050, 9_100, 100), 1_000);
+        let (last, next) = refresh_times();
+        assert!(last > 0 && next <= Duration::from_millis(50), "{next:?}");
+    }
+
+    /// Probe (a small window on monitor 2 for three seconds, never focused, with two windows
+    /// drawn inside its frame as the board draws his cards): how often it draws when it asks for
+    /// every refresh. `JAI_PROBE_VSYNC=1`: every swap waits for the refresh (eframe's own vsync,
+    /// as the HUD drew until 2026-11-21: three refreshes a frame); without it as the HUD draws
+    /// now (`pace`). (Three windows of their own that each ask for every refresh show Windows'
+    /// order instead: the top one takes every turn, see `keep_drawing`.)
+    /// `cargo test --release probe_windows_drawn_on_one_thread -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    #[cfg(windows)]
+    fn probe_windows_drawn_on_one_thread() {
+        use winit::platform::windows::EventLoopBuilderExtWindows;
+        type Frames = Arc<Mutex<std::collections::HashMap<ViewportId, u32>>>;
+        fn window(at: Pos2) -> egui::ViewportBuilder {
+            egui::ViewportBuilder::default().with_title("probe").with_inner_size([240.0, 160.0]).with_position(at).with_active(false)
+        }
+        fn count(ctx: &egui::Context, frames: &Frames) {
+            *lock(frames).entry(ctx.viewport_id()).or_default() += 1;
+            egui::CentralPanel::default().show(ctx, |ui| ui.label(format!("{:.0}", ctx.input(|i| i.time) * 60.0)));
+            ctx.request_repaint();
+        }
+        struct Probe(Frames, Instant, Pos2);
+        impl eframe::App for Probe {
+            fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+                let frames = &self.0;
+                for n in 1..=2u8 {
+                    ctx.show_viewport_immediate(ViewportId::from_hash_of(("probe", n)), window(self.2 + vec2(260.0 * n as f32, 0.0)), |ctx, _| count(ctx, frames));
+                }
+                count(ctx, frames);
+                if self.1.elapsed() > Duration::from_secs(3) {
+                    ctx.send_viewport_cmd(ViewportCommand::Close);
+                }
+            }
+        }
+        let vsync = std::env::var_os("JAI_PROBE_VSYNC").is_some();
+        let monitors = crate::monitors::list();
+        let on = monitors.iter().find(|m| m.index == 2).or(monitors.first()).map_or([0; 4], |m| m.rect);
+        let at = pos2(on[0] as f32 + 40.0, on[1] as f32 + 40.0);
+        let options = eframe::NativeOptions {
+            viewport: window(at),
+            renderer: eframe::Renderer::Glow,
+            vsync,
+            event_loop_builder: Some(Box::new(|builder: &mut eframe::EventLoopBuilder<eframe::UserEvent>| {
+                builder.with_any_thread(true);
+            })),
+            ..Default::default()
+        };
+        let (frames, started) = (Frames::default(), Instant::now());
+        let shared = frames.clone();
+        eframe::run_native(
+            "probe",
+            options,
+            Box::new(move |cc| {
+                if !vsync {
+                    pace_by_the_screen(&cc.egui_ctx);
+                }
+                Ok(Box::new(Probe(shared, Instant::now(), at)))
+            }),
+        )
+        .unwrap();
+        let seconds = started.elapsed().as_secs_f32();
+        for (viewport, n) in lock(&frames).iter() {
+            println!("{}: {viewport:?} drew {:.0} frames a second (fastest screen {:?} Hz)", if vsync { "vsync in every swap" } else { "paced" }, *n as f32 / seconds, crate::monitors::fastest_refresh_hz());
+        }
+        let (now, vblank, period, hz) = screen_clock();
+        println!("DWM's clock: {:.1} Hz, its refresh {:.1} ms from now", hz as f64 / period as f64, (vblank - now) as f64 * 1000.0 / hz as f64);
+    }
+
     /// egui's context lock is not re-entrant: a call on the context inside one of the
     /// context's own closures waits for itself forever. Two of them froze the whole HUD on
     /// 2026-11-16 (every window of his own, and the comms caption); Sir had to end him in the
@@ -10744,9 +10950,17 @@ mod tests {
         assert_eq!(WindowMotion::of(None, None), WindowMotion::REST);
         assert!(!entrance(100).moving(), "an entrance ends exactly at rest");
         let start = entrance(0);
-        assert!(start.moving() && start.unfold == 0.0 && start.frame == 0.0 && start.resolve == 0.0 && start.brackets_alpha == 0.0 && start.flash > 0.9, "it begins as a spark in its corner");
+        assert!(start.moving() && start.unfold == 0.0 && start.frame == 0.0 && start.resolve == 0.0 && start.brackets_alpha == 0.0, "it begins as nothing");
+        let landed = WindowMotion::of(Some(LAUNCH_MS / (crate::hud_dock::OPEN_ANIM.as_secs_f32() * 1000.0)), None);
+        assert!(landed.flash > 0.9 && landed.frame == 0.0, "the spark from the core lands on its corner");
+        let flicker = (0..=100).map(|n| entrance(n).flicker).fold(0.0f32, f32::max);
+        assert!(flicker > 0.5, "it flickers once as it locks: {flicker}");
         for n in 0..=100 {
             let (m, ms) = (entrance(n), ms_in(n));
+            if ms < LAUNCH_MS - 20.0 {
+                assert!(m.line.is_none() && m.flash == 0.0 && m.frame == 0.0 && m.brackets_alpha == 0.0, "while the spark is on its way the window shows nothing ({ms} ms)");
+            }
+            assert!(m.flicker == 0.0 || (m.unfold > 0.99 && (ms - IN_LOCK).abs() < 22.0), "the flicker comes once, as the frame stands whole ({ms} ms)");
             assert!(ms < IN_LINE.1 || m.flash == 0.0, "the corner's spark is gone once the line is out ({ms} ms)");
             assert!(m.brackets >= m.unfold - 1e-6, "the corner ticks ride ahead of the frame ({ms} ms)");
             if m.unfold < 0.98 {
@@ -10758,7 +10972,7 @@ mod tests {
             if n > 0 {
                 let before = entrance(n - 1);
                 assert!(m.unfold >= before.unfold - 1e-6 && m.resolve >= before.resolve - 1e-6 && m.frame >= before.frame - 1e-6 && m.brackets >= before.brackets - 1e-6, "the entrance only grows ({ms} ms)");
-                if ms <= IN_LINE.1 {
+                if ms_in(n - 1) >= IN_LINE.0 && ms <= IN_LINE.1 {
                     let (w0, w1) = (before.line.expect("the line").0, m.line.expect("the line").0);
                     assert!(w1 > w0, "the line runs out of its corner ({ms} ms)");
                 }
@@ -11205,7 +11419,7 @@ mod tests {
             input.viewports.entry(viewport).or_default().minimized = Some(viewport == small);
         }
         let mut rects = Vec::new();
-        let _ = ctx.run(input, |ctx| rects = own_window_rects(ctx));
+        let _ = ctx.run(input, |ctx| rects = own_window_rects(ctx).into_iter().map(|(rect, _)| rect).collect());
         let forgot_the_gone = !lock(&DETACHED_MOTIONS).rects.contains_key(&gone);
         for viewport in [beside, leaving, elsewhere, gone, small] {
             lock(&DETACHED_MOTIONS).forget(viewport);
@@ -11285,6 +11499,79 @@ mod tests {
         let tab = canvas.brightness(Rect::from_min_size(pos2(1.0, 1.0), vec2(10.0, 12.0)));
         assert!(tab > 60.0, "the index tab stands lit in the window's corner: {tab}");
         assert!(canvas.brightness(Rect::from_min_size(pos2(40.0, 6.0), vec2(300.0, 24.0))) > 2.0, "the title is drawn");
+    }
+
+    /// A window of his opening as Sir sees it (Sir, 2026-11-21: "He should open windows like
+    /// Jarvis from the iron man movies"), eight moments of it in one picture
+    /// (`window_launch_strip`, left to right, top to bottom: 60, 120, 175, 240, 320, 420, 505
+    /// and 700 ms): the board with his core and the spark that runs out along the leader, and
+    /// over it the window, whose pure black Windows sees through.
+    #[test]
+    fn gallery_a_window_thrown_out_of_the_core() {
+        let _alone = board_alone();
+        let _look = crate::holo_theme::look_for_pictures();
+        const BOARD: Vec2 = Vec2::new(1280.0, 720.0);
+        let window = Rect::from_min_size(pos2(800.0, 170.0), vec2(440.0, 260.0));
+        let probe = ViewportId::from_hash_of("launch_probe");
+        let emblem = emblem_at_rest();
+        let (cell_w, cell_h) = (BOARD.x as u32 / 2, BOARD.y as u32 / 2);
+        let mut strip = image::RgbaImage::new(cell_w * 4, cell_h * 2);
+        let mut seen = Vec::new();
+        for (k, ms) in [60u64, 120, 175, 240, 320, 420, 505, 700].into_iter().enumerate() {
+            let opened = Instant::now() - Duration::from_millis(ms);
+            {
+                let mut motions = lock(&DETACHED_MOTIONS);
+                motions.rects.insert(probe, window);
+                motions.shown.insert(probe, (0, opened, Instant::now()));
+            }
+            let mut board = crate::ui_snapshot::Snapshot::new(BOARD);
+            let mut input = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, BOARD)), ..Default::default() };
+            input.viewports.entry(ViewportId::ROOT).or_default().inner_rect = Some(Rect::from_min_size(Pos2::ZERO, BOARD));
+            input.viewports.entry(probe).or_default().minimized = Some(false);
+            let draw_board = |ctx: &egui::Context| {
+                paint_canvas(ctx);
+                egui::CentralPanel::default().frame(Frame::none()).show(ctx, |ui| emblem.paint(&ui.painter_at(ctx.screen_rect()), ctx.screen_rect()));
+            };
+            let _ = board.frame(input.clone(), draw_board);
+            let out = board.frame(input, draw_board);
+            let board = board.rasterise(out.shapes, out.pixels_per_point);
+            lock(&DETACHED_MOTIONS).shown.insert(ViewportId::ROOT, (0, opened, Instant::now()));
+            let mut snap = crate::ui_snapshot::Snapshot::new(window.size());
+            let own = snap.render(1, |ctx| {
+                set_still(ctx, false);
+                egui::CentralPanel::default().frame(Frame::none().fill(block_slate()).inner_margin(Margin::same(14.0))).show(ctx, |ui| {
+                    detached_bar(ui, ctx, "launch_probe", "Network radar // who is on the network");
+                    ui.add_space(10.0);
+                    crate::holo_ui::head(ui, "DEVICES");
+                    ui.label(RichText::new("Twelve devices answer. The router is the nearest.").size(13.5).color(strip_ink()));
+                });
+                paint_window_border(ctx);
+            });
+            lock(&DETACHED_MOTIONS).forget(ViewportId::ROOT);
+            // (Windows sees through the window's pure black to the board under it.)
+            let mut frame = image::RgbaImage::from_fn(BOARD.x as u32, BOARD.y as u32, |x, y| {
+                let [r, g, b] = board.pixel(x as usize, y as usize);
+                image::Rgba([r, g, b, 255])
+            });
+            for (x, y) in (0..own.height).flat_map(|y| (0..own.width).map(move |x| (x, y))) {
+                let p = own.pixel(x, y);
+                if p != [0, 0, 0] {
+                    frame.put_pixel(window.min.x as u32 + x as u32, window.min.y as u32 + y as u32, image::Rgba([p[0], p[1], p[2], 255]));
+                }
+            }
+            let cell = image::imageops::resize(&frame, cell_w, cell_h, image::imageops::FilterType::Triangle);
+            image::imageops::overlay(&mut strip, &cell, i64::from(cell_w * (k as u32 % 4)), i64::from(cell_h * (k as u32 / 4)));
+            let drawn = (0..own.height).flat_map(|y| (0..own.width).map(move |x| (x, y))).filter(|&(x, y)| own.pixel(x, y) != [0, 0, 0]).count();
+            let corner = (0..20).flat_map(|y| (0..20).map(move |x| (x, y))).filter(|&(x, y)| own.pixel(x, y).iter().any(|c| *c > 120)).count();
+            seen.push((ms, drawn, corner));
+        }
+        lock(&DETACHED_MOTIONS).forget(probe);
+        let dir = std::path::PathBuf::from("target").join("ui-snapshots").join(crate::holo_theme::picture_set().unwrap_or(""));
+        let _ = std::fs::create_dir_all(&dir);
+        strip.save(dir.join("window_launch_strip.png")).expect("writing the strip");
+        assert_eq!(seen[0].1, 0, "while the spark is on its way the window shows nothing: {seen:?}");
+        assert!(seen[2].2 >= 8, "the spark lands on the corner that faces the core: {seen:?}");
+        assert!(seen[7].1 > seen[3].1, "at rest the window stands whole: {seen:?}");
     }
 
     /// Sir, 2026-11-19: "when the windows are closing the animation is great but there is a

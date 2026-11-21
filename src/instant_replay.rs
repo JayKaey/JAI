@@ -139,7 +139,7 @@ impl Replay {
         };
         if frames.len() < 2 {
             return Err(if !settings.replay_enabled {
-                "Instant Replay is switched off (features.replay_enabled in jai_config.json).".into()
+                "Instant Replay is off, Sir: switch on its rolling buffer in the Integrations window and I keep the screen from then on.".into()
             } else if self.is_running() {
                 "The replay buffer is still filling, Sir; give it a few seconds.".into()
             } else {

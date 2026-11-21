@@ -529,6 +529,9 @@ pub fn start(on_mouse: fn(Mouse) -> bool, on_key: fn(usize), keys: fn()) {
     }
     *lock(&HANDLERS) = Some(on_mouse);
     let _ = std::thread::Builder::new().name("jai-desk".into()).spawn(move || {
+        // Windows holds every mouse event of the desktop until the hook has seen it: served
+        // first, beside a busy CPU too, Sir's pointer never waits on JAI.
+        crate::platform::raise_thread_priority(true);
         // SAFETY: a message loop on this thread: its hotkeys, and a hook installed and taken
         // away on this same thread.
         unsafe {
@@ -971,6 +974,67 @@ mod tests {
                 GetWindowLongPtrW(hwnd, GWL_EXSTYLE)
             };
             println!("{:<30} {:<36} {rect:?} ex {ex:#010x}", crate::win32::process_name(pid).unwrap_or_default(), class_of(hwnd));
+        }
+    }
+
+    /// The desktop's layers as Windows stacks them, top first (`cargo test --release
+    /// the_desktops_layers -- --ignored --nocapture`): Progman's children (the icons, the
+    /// wallpaper's WorkerW and what a wallpaper program put into it, his board) and every
+    /// top-level WorkerW, each with its program, place, style and layer. Read only; no titles
+    /// but his own.
+    #[test]
+    #[ignore]
+    fn the_desktops_layers() {
+        use windows::Win32::Foundation::COLORREF;
+        use windows::Win32::UI::WindowsAndMessaging::{GetLayeredWindowAttributes, GetWindow, GW_CHILD, GW_HWNDNEXT, LAYERED_WINDOW_ATTRIBUTES_FLAGS};
+        // SAFETY: plain queries on handles Windows gave out; a stale one just fails.
+        unsafe fn show(hwnd: HWND, depth: usize) {
+            let mut pid = 0u32;
+            GetWindowThreadProcessId(hwnd, Some(&mut pid));
+            let program = crate::win32::process_name(pid).unwrap_or_default();
+            let (mut key, mut alpha, mut flags) = (COLORREF(0), 0u8, LAYERED_WINDOW_ATTRIBUTES_FLAGS(0));
+            let layer = GetLayeredWindowAttributes(hwnd, Some(&mut key), Some(&mut alpha), Some(&mut flags)).is_ok().then(|| format!(" layer flags {} alpha {alpha} key {:#08x}", flags.0, key.0)).unwrap_or_default();
+            let title = if program.eq_ignore_ascii_case("jai") { format!(" '{}'", title_of(hwnd)) } else { String::new() };
+            println!("{}{:#x} {program} {}{title} {:?} {} ex {:#010x}{layer}", "  ".repeat(depth), hwnd.0, class_of(hwnd), rect_of(hwnd), if IsWindowVisible(hwnd).as_bool() { "shown" } else { "HIDDEN" }, GetWindowLongPtrW(hwnd, GWL_EXSTYLE));
+            if depth < 3 {
+                let mut child = GetWindow(hwnd, GW_CHILD);
+                while child.0 != 0 {
+                    show(child, depth + 1);
+                    child = GetWindow(child, GW_HWNDNEXT);
+                }
+            }
+        }
+        unsafe extern "system" fn worker(hwnd: HWND, _: LPARAM) -> BOOL {
+            // SAFETY: as in `show`.
+            unsafe {
+                if class_of(hwnd) == "WorkerW" {
+                    show(hwnd, 0);
+                }
+            }
+            TRUE
+        }
+        unsafe extern "system" fn ours(hwnd: HWND, _: LPARAM) -> BOOL {
+            // SAFETY: as in `show`.
+            unsafe {
+                let mut pid = 0u32;
+                GetWindowThreadProcessId(hwnd, Some(&mut pid));
+                let program = crate::win32::process_name(pid).unwrap_or_default().to_lowercase();
+                if program == "jai" || program.starts_with("wallpaper") {
+                    show(hwnd, 0);
+                }
+            }
+            TRUE
+        }
+        // SAFETY: as in `show`; the callbacks keep nothing.
+        unsafe {
+            println!("Progman and its children, top first:");
+            show(FindWindowW(w!("Progman"), PCWSTR::null()), 0);
+            println!("Top-level WorkerW windows:");
+            let _ = EnumWindows(Some(worker), LPARAM(0));
+            println!("Top-level windows of JAI and of the wallpaper program, top first:");
+            let _ = EnumWindows(Some(ours), LPARAM(0));
+            // (2: a full-screen program runs, by Windows' own judgement; 5: none.)
+            println!("Windows' word on full-screen programs: {:?}", windows::Win32::UI::Shell::SHQueryUserNotificationState().map(|state| state.0));
         }
     }
 }

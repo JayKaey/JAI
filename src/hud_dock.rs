@@ -151,11 +151,12 @@ struct DockState {
 /// this long before it leaves the board: its content goes, its frame folds up into its top line and
 /// the line runs back into its corner (`gui::WindowMotion`).
 pub const CLOSE_FADE: Duration = Duration::from_millis(240);
-/// A block's entrance takes this long: a line of light runs along its top edge, the frame unfolds
-/// downwards from it with the corner ticks riding its edge, the content resolves behind a scan
-/// line and one glow settles on the frame (`gui::WindowMotion`).
+/// A block's entrance takes this long: a spark runs out of the core along its leader, a line of
+/// light runs along its top edge from where it lands, the frame unfolds downwards from it with
+/// the corner ticks riding its edge, flickers once as it locks, the content resolves behind a
+/// scan line and one glow settles on the frame (`gui::WindowMotion`).
 /// (Fast first, settling softly: `holo_motion::ARRIVE`.)
-pub const OPEN_ANIM: Duration = Duration::from_millis(440);
+pub const OPEN_ANIM: Duration = Duration::from_millis(640);
 /// How long a block glides to where it was told to go ("move it to the middle").
 pub const GLIDE: Duration = Duration::from_millis(220);
 /// A frame later than this after the one before moves an entrance's start on by the wait: a

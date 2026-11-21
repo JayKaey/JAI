@@ -154,6 +154,57 @@ fn best_match<'a>(items: &'a [LibraryItem], query: &str, kinds: &[ItemKind], art
         .max_by(|a, b| a.1.total_cmp(&b.1))
 }
 
+/// The words of a name that tell it apart ("my rock playlist" → "rock").
+fn telling(name: &str) -> Vec<String> {
+    const FILLER: &[&str] = &["my", "the", "a", "an", "one", "ones", "playlist", "play", "list", "music", "songs", "song", "mix", "meine", "meinen", "die", "der", "das", "musik", "lieder", "liste"];
+    crate::ear::words(name).into_iter().filter(|w| !FILLER.contains(&w.as_str())).collect()
+}
+
+/// Whether a word he said is that word of a name: the same, sounding alike, its start ("hit"
+/// for "hits") or a close spelling.
+fn word_like(said: &str, own: &str) -> bool {
+    said == own || (said.len() >= 3 && (own.starts_with(said) || phonetic(said) == phonetic(own))) || (said.len() >= 4 && jaro_winkler(said, own) >= 0.9)
+}
+
+/// His playlist by a loose name (Sir, 2026-11-21: "JAI should be able to gues what playlist i
+/// mean even when i dont tell him the exact playlist"; "play my rock playlist" had played the
+/// song "Rock That Body"): the close match, else the playlist whose name holds the most of the
+/// words he said; then his own before others', the one he played last (`last`) and the tightest
+/// fit. None when two still fit alike.
+fn find_playlist<'a>(items: &'a [LibraryItem], name: &str, last: Option<&str>) -> Option<(&'a LibraryItem, f64)> {
+    let kinds = [ItemKind::Playlist, ItemKind::LocalPlaylist];
+    if let Some(hit) = best_match(items, name, &kinds, None) {
+        // (A close match two lists share, "lofi" for "Lofi Beats" and "Lofi Study", is none:
+        // the words below decide between them.)
+        if items.iter().filter(|i| kinds.contains(&i.kind) && name_score(name, &i.name) >= hit.1).count() == 1 {
+            return Some(hit);
+        }
+    }
+    let said = telling(name);
+    let lists: Vec<&LibraryItem> = items.iter().filter(|i| kinds.contains(&i.kind)).collect();
+    // (His own: the owner of most of them, Spotify's own lists aside.)
+    let mut owners: HashMap<&str, usize> = HashMap::new();
+    for list in &lists {
+        *owners.entry(list.artist.as_str()).or_default() += 1;
+    }
+    let mine = owners.into_iter().filter(|(owner, _)| !owner.is_empty() && !owner.eq_ignore_ascii_case("spotify")).max_by_key(|(_, n)| *n).map(|(owner, _)| owner);
+    let mut ranked: Vec<_> = lists
+        .into_iter()
+        .map(|list| {
+            let own = telling(&list.name);
+            let found = said.iter().filter(|w| own.iter().any(|o| word_like(w, o))).count();
+            let fit = own.iter().filter(|o| said.iter().any(|w| word_like(w, o))).count() * 100 / own.len().max(1);
+            ((found, mine == Some(list.artist.as_str()), last.is_some_and(|l| compact(l) == compact(&list.name)), fit), list)
+        })
+        .filter(|((found, ..), _)| *found > 0 && found * 2 >= said.len())
+        .collect();
+    ranked.sort_by(|a, b| b.0.cmp(&a.0));
+    match ranked.as_slice() {
+        [(best, list), rest @ ..] if rest.first().is_none_or(|(next, _)| next < best) => Some((*list, 0.86)),
+        _ => None,
+    }
+}
+
 // ----------------------------------------------------------------------------- library ----
 
 /// Where Sonora keeps its library cache.
@@ -1103,7 +1154,8 @@ impl MusicEngine {
         let engine = self.clone();
         let items = tokio::task::spawn_blocking(move || engine.library()).await.map_err(|e| e.to_string())?;
         let items: Vec<_> = items.into_iter().filter(|item| !local_only || matches!(item.kind, ItemKind::LocalFile | ItemKind::LocalPlaylist)).collect();
-        let context = playlist.and_then(|name| best_match(&items, name, &[ItemKind::Playlist, ItemKind::LocalPlaylist], None).map(|(i, _)| i.clone()));
+        let last = self.preference("last_playlist");
+        let context = playlist.and_then(|name| find_playlist(&items, name, last.as_deref()).map(|(i, _)| i.clone()));
         let members = context.as_ref().and_then(|item| self.inner.cache.lock().unwrap_or_else(|e| e.into_inner()).members.get(&compact(&item.name)).cloned()).unwrap_or_default();
         // A known playlist's members are authoritative; never label a global match as belonging
         // to that playlist. Missing remote membership is reported explicitly below.
@@ -1111,7 +1163,7 @@ impl MusicEngine {
             best_match(if members.is_empty() { &items } else { &members }, s, &[ItemKind::Track, ItemKind::LocalFile], artist).map(|(i, _)| i.clone())
         } else if let Some(p) = playlist {
             // A name that is no playlist may still be an album, a saved song or an artist.
-            best_match(&items, p, &[ItemKind::Playlist, ItemKind::LocalPlaylist], None)
+            find_playlist(&items, p, last.as_deref())
                 .or_else(|| best_match(&items, p, &[ItemKind::Album], None))
                 .or_else(|| best_match(&items, p, &[ItemKind::Track, ItemKind::LocalFile], artist))
                 .or_else(|| best_match(&items, p, &[ItemKind::Artist], None))
@@ -1195,7 +1247,7 @@ impl MusicEngine {
         let items = tokio::task::spawn_blocking(move || engine.library()).await.map_err(|e| e.to_string())?;
         let found = match (song, playlist, album, artist) {
             (Some(s), ..) => best_match(&items, s, &[ItemKind::Track, ItemKind::LocalFile], artist),
-            (None, Some(p), ..) => best_match(&items, p, &[ItemKind::Playlist, ItemKind::LocalPlaylist], None),
+            (None, Some(p), ..) => find_playlist(&items, p, self.preference("last_playlist").as_deref()),
             (None, None, Some(a), _) => best_match(&items, a, &[ItemKind::Album], artist),
             (None, None, None, Some(a)) => best_match(&items, a, &[ItemKind::Artist], None),
             _ => return Err("Name a song, an album, a playlist or an artist to queue.".into()),
@@ -1220,7 +1272,7 @@ impl MusicEngine {
     async fn playlist_members(&self, playlist: &str) -> Option<(LibraryItem, Vec<LibraryItem>)> {
         let engine = self.clone();
         let items = tokio::task::spawn_blocking(move || engine.library()).await.ok()?;
-        let list = best_match(&items, playlist, &[ItemKind::Playlist, ItemKind::LocalPlaylist], None).map(|(i, _)| i.clone())?;
+        let list = find_playlist(&items, playlist, self.preference("last_playlist").as_deref()).map(|(i, _)| i.clone())?;
         let members = self.inner.cache.lock().unwrap_or_else(|e| e.into_inner()).members.get(&compact(&list.name)).cloned().unwrap_or_default();
         Some((list, members))
     }
@@ -2457,6 +2509,32 @@ mod tests {
         // (Sir, 2026-11-21: "play Back in Black" played the copy by "Back In Black".)
         assert_eq!(best_match(&lib, "back in black", &[ItemKind::Track], None).unwrap().0.artist, "AC/DC", "a copy filed under its own title gives way");
         assert_eq!(phonetic("chase rock"), phonetic("jaysrock"));
+    }
+
+    /// A playlist by a word of its name ("play my rock playlist" played the song "Rock That
+    /// Body", 2026-11-21): his own before others', then the one he played last.
+    #[test]
+    fn a_playlist_is_guessed_from_a_word_of_its_name() {
+        let lib = vec![
+            item(ItemKind::Playlist, "Max Rock", "Max Mustermann"),
+            item(ItemKind::Playlist, "Max Focus", "Max Mustermann"),
+            item(ItemKind::Playlist, "Gym Hits 2024", "Max Mustermann"),
+            item(ItemKind::Playlist, "Classic Rock Mix", "Spotify"),
+            item(ItemKind::Playlist, "Lofi Beats", "Spotify"),
+            item(ItemKind::Playlist, "Lofi Study", "Erika Mustermann"),
+            item(ItemKind::Track, "Rock That Body", "Black Eyed Peas"),
+        ];
+        let guess = |said: &str, last: Option<&str>| find_playlist(&lib, said, last).map(|(i, _)| i.name.clone());
+        assert_eq!(guess("rock", None).as_deref(), Some("Max Rock"), "his own before Spotify's");
+        for said in ["gym", "the gym one", "hit", "gym hits"] {
+            assert_eq!(guess(said, None).as_deref(), Some("Gym Hits 2024"), "{said}");
+        }
+        assert_eq!(guess("classic rock", None).as_deref(), Some("Classic Rock Mix"), "the most of his words");
+        assert_eq!(guess("focus", None).as_deref(), Some("Max Focus"));
+        assert_eq!(guess("lofi", None), None, "two alike, neither his own");
+        assert_eq!(guess("lofi", Some("Lofi Study")).as_deref(), Some("Lofi Study"), "the one he played last");
+        assert_eq!(guess("jazz", None), None);
+        assert_eq!(guess("my playlist", None), None, "no name at all");
     }
 
     #[test]

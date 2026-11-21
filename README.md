@@ -32,7 +32,11 @@ The models and runtimes are too large for git and are not in this repository:
   `--check-models` only reports. Whisper hears on the CPU from the first second and moves to the
   graphics card (any make, through Vulkan) with the larger `ggml-large-v3-turbo-q5_0.bin` once
   that has loaded, when the card has room for it beside the brain; a game sends it back to the
-  CPU until the game is closed.
+  CPU until the game is closed. When the card is full (other programs need it) and he has been
+  quiet for two minutes, every model leaves it; his name brings him back, with the brain in RAM
+  while the card is still full.
+- Instant Replay ("clip that") records the screen only once its rolling buffer is
+  switched on in the Integrations window.
 - `runtime\ollama` and `runtime\espeak-ng`: `tools\package.ps1` copies them from local installs of
   Ollama and eSpeak NG when they are missing.
 - `bin\cloudflared.exe`: downloaded on first use for the phone page's tunnel (SHA-256 verified).
@@ -117,7 +121,9 @@ transparent" ("mach deinen Hintergrund durchsichtig"), "make your background sol
 the Opacity row in the settings (anything under 100). On Windows the black is then gone
 altogether, never half, and his core is drawn sharp without its glow, so no dark seam rims it;
 on Linux (KDE Plasma) it fades as far as the Opacity says. The display finish's grain stays off
-meanwhile.
+meanwhile. Wallpaper Engine unloads its wallpaper when less than a fifth of the graphics card is
+free, so while his black is see-through and he has been quiet for two minutes his models leave
+the card for it (the first answer after that takes longer while they load again).
 
 "Make Discord full screen" is about Discord, "full screen" alone about the window in front, and
 neither ever about him; "move Discord to another monitor" takes it to the next one. A window he
@@ -194,9 +200,12 @@ window): the orbits' plane leans back and sinks into the wells of their gravity,
 up as a relief of the water's height, and a surface made 2D is seen from straight above. The run
 goes on through that, as through a pause; the other simulations are flat and say so.
 
-Every window of his opens with a holographic entrance (the frame draws in, brackets close,
-a scan line passes) and leaves with an exit (it folds into a line), whether it is opened or
-closed by voice, by its CLOSE key or by Esc. Asked for again while it is leaving, it stays.
+Every window of his opens as in the films: a spark leaves his core and runs out along the
+window's leader, a line draws out from where it lands, the frame unfolds from it, flickers once
+as it locks and the content resolves; it leaves with an exit (it folds into a line), whether it
+is opened or closed by voice, by its CLOSE key or by Esc. Asked for again while it is leaving,
+it stays. On Windows all his windows wait for the screen's refresh together, once per refresh,
+so dragging and scrolling run at the screen's full rate however many of them are open.
 
 A pill at the top of the HUD says what he is doing: LISTENING, THINKING, SPEAKING, MUTED or
 STANDBY. While Sir speaks, his voice shows as a ring of ticks round the emblem. Both can be
@@ -223,11 +232,14 @@ Minecraft", "whenever Max's PC comes online"), each added with its ADD key; "eng
 protocol" always works. 02 THEN I DO, the orders in order, as you would say them ("open the earth
 on Max's PC" runs on that PC), or TELL ME. A line he does not understand is refused when you save,
 with the reason; RUN NOW runs it; MAKE IT A PROTOCOL turns a rule said aloud into one. Every PC of
-the link tells the main PC which game it runs.
+the link tells the main PC which game it runs. As a protocol starts he says one line, "Activating
+the Gaming Protocol, Sir.", and runs its orders without a word: only an order that asks something
+("what's the weather") is answered aloud, and one that failed is told afterwards.
 
 Sounds start rules and protocols too: "when I clap twice, open Spotify", "when someone knocks,
 tell me", "if the doorbell rings, pause the music", "wenn es klopft, sag mir Bescheid", "when
-someone else talks, tell me". He hears two and three claps, a finger snap, knocking, the doorbell,
+someone else talks, tell me". He hears two and three claps (soft ones too, at any pace), a finger
+snap, knocking, the doorbell,
 a phone, an alarm, a dog, breaking glass and whistling: the radar notices a sound and a small sound
 model (CED-mini in `models\sound`, offline, optional) names it, so typing, music and applause are
 no claps. Someone else talking is your voice print saying it is not you (told at most once a
@@ -295,6 +307,8 @@ real programs only, never for the PC or the sound.
 Sonora is the player he drives, through its own pipe (`sonora.rs`). A song, an album, an artist
 or one of Sir's playlists starts there at once, private and not downloaded ones too: by its link
 from the library, else by Sonora's own search. "Shuffle my playlist Gym" plays it with shuffle on.
+A playlist may be named loosely: "play my rock playlist" takes the one with that word in its name,
+his own before others', then the one he played last.
 "What's in the queue?" reads what comes next; "play Highway to Hell next" puts it right after the
 song playing, "add Thunderstruck to the queue" at the end. "Turn on shuffle", "repeat this song"
 ("repeat the playlist", "repeat off"), "skip ahead 30 seconds", "go back 10 seconds", "jump to
@@ -395,8 +409,9 @@ at Sir's PC with an account, or asks for one (a key appears on Sir's screen); th
 from Sir's PC. Everything else is downloaded from GitHub: JAI and eSpeak NG come inside the setup,
 his engine from Ollama's release (the version Sir's PC runs, checked by its SHA-256), the voice
 lock's model from sherpa-onnx's. Then come the voice, ears and brain, from where every JAI fetches
-them; the setup adds JAI to the Start menu and starts him. Until it is logged in, such a JAI
-answers nobody.
+them; the setup adds JAI to the Start menu and starts him. A download the connection cuts off
+goes on where it stopped, by itself or when the setup is started again. Until it is logged in,
+such a JAI answers nobody.
 
 "Open the earth on Max's PC", "turn the volume down on Max's computer", "shut down Max's PC": the
 order goes to Max's PC (it waits ten minutes if that PC is offline) and never acts on Sir's. A JAI
@@ -467,7 +482,8 @@ the PC is), `xdg-utils`, and `yt-dlp` and `ffmpeg` (the media grabber); the NVID
 sudo pacman -S --needed espeak-ng zstd libpulse tesseract tesseract-data-eng tesseract-data-deu pacman-contrib discover geoclue xdg-utils yt-dlp ffmpeg
 ```
 
-His own windows are X11 windows (XWayland). Other programs' windows, the keys he presses for Sir
+His own windows are X11 windows (XWayland), each waiting for the screen's refresh by the driver's
+own vsync (the shared wait of Windows is not used there). Other programs' windows, the keys he presses for Sir
 and screenshots go through KWin, which allows them only to a program its menu entry names: at
 every start he writes `~/.local/share/applications/jai.desktop` for the program he is, so start
 him once more after the first start (or after moving him). Music and media keys go over MPRIS,

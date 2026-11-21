@@ -918,7 +918,7 @@ fn carry_out(tools: &crate::tools::ToolContext, rules: Vec<(When, String)>, prot
         let words = when.words();
         tracing::info!("[RULES] {words}: {then}");
         crate::hud_notify::record(&format!("Rule: {words} → {then}"), false);
-        let event = if is_tell_me(&then) { crate::stark::StarkEvent::Alert(when.news()) } else { crate::stark::StarkEvent::RunMacro { name: format!("rule ({words})"), steps: vec![then] } };
+        let event = if is_tell_me(&then) { crate::stark::StarkEvent::Alert(when.news()) } else { crate::stark::StarkEvent::RunMacro { name: format!("rule ({words})"), steps: vec![then], quiet: false } };
         let _ = tools.stark.events.send(event);
     }
     for (name, when) in protocols {

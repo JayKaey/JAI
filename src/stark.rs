@@ -40,8 +40,12 @@ pub enum StarkEvent {
     Notice(String),
     /// The phone crossed into the home geofence.
     Arrived { distance_m: f64 },
-    /// Run a voice macro's steps one after the other.
-    RunMacro { name: String, steps: Vec<String> },
+    /// Run a voice macro's steps one after the other (`quiet`: a protocol's, carried out without
+    /// a word unless a step asks something).
+    RunMacro { name: String, steps: Vec<String>, quiet: bool },
+    /// A line of his own, once he is free (not an alert: it reaches neither the phone nor the
+    /// digest).
+    Say(String),
 }
 
 #[derive(Clone)]

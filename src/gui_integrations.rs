@@ -337,13 +337,19 @@ impl Hub {
         }
     }
 
-    /// Writes the field-system settings (the replay buffer restarts with JAI).
+    /// Writes the field-system settings: a replay buffer switched on starts at once; switched
+    /// off, or a new rate, it holds until JAI starts again.
     fn save_field(&mut self, app: &Jai) {
         let Some(mut f) = self.field.clone() else { return };
         f.game_servers = self.field_servers.split([',', ';']).map(str::trim).filter(|s| !s.is_empty()).map(String::from).collect();
         app.config().update(|c| c.features = f.clone());
+        let replay = &app.tools().stark.features.replay;
+        let starts = f.replay_enabled && !replay.is_running();
+        if starts {
+            replay.start(app.config().clone());
+        }
         self.field = Some(f);
-        self.message = Some(("Saved. Instant Replay changes apply after a restart.".into(), false));
+        self.message = Some((if starts { "Saved. Instant Replay keeps the screen from now on." } else { "Saved. Instant Replay changes apply after a restart." }.into(), false));
     }
 
     /// The fifteen field systems: live state, one-click actions, settings.

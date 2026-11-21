@@ -94,6 +94,15 @@ pub const RELEASES: &[Release] = &[
         date: "2026-11-21",
         name: "Keys, ears and control",
         entries: &[
+            better("A protocol in one line", "\"Activating the Gaming Protocol, Sir\", then its steps run quietly; questions are answered."),
+            fixed("Claps and snaps, heard", "Soft claps, claps at any pace and finger snaps are heard: no more clapping hard."),
+            better("Windows thrown from the core", "A spark leaves his core, runs out along its line, and the window unfolds where it lands."),
+            better("Smooth windows", "Dragging and scrolling run at your screen's full rate, however many of his windows are open."),
+            fixed("Wallpaper Engine through him", "See-through and quiet for two minutes, he leaves your wallpaper the room it needs on the card."),
+            better("A lighter PC beside him", "On a full graphics card his model leaves it after two quiet minutes; say his name, he is back."),
+            better("Instant Replay only when wanted", "The screen is recorded only once you switch Instant Replay on in the Integrations window."),
+            better("Playlists guessed", "\"Play my rock playlist\": the list with that word, yours first, then the one you played last."),
+            fixed("Downloads go on where they broke", "A cut-off download (\"error decoding response body\") goes on where it stopped."),
             new("See-through background", "\"Make your background transparent\": your wallpaper, Wallpaper Engine's too, shows behind him.", "see_through"),
             added("He guesses what you meant", "\"Open the backgrounds window\" finds no program: he opens what you most likely meant."),
             better("Every window sized by hand", "All his windows are resized at their edges and corners, like any other window."),
@@ -635,7 +644,7 @@ pub const EXPLANATIONS: &[Explanation] = &[
         title: "See-through background",
         what: "\"Make your background transparent\": his black lets your wallpaper through, Wallpaper Engine's too, while his light, his windows and his cards stay as they are. On Windows the black turns fully clear; on Linux (KDE Plasma) it fades as far as the Opacity setting says. \"Make your background solid again\" brings the black back.",
         say: &["Jay, make your background transparent.", "Jay, make your background solid again.", "Jay, mach deinen Hintergrund durchsichtig.", "Jay, set the opacity to 60 percent."],
-        know: "It is the Opacity row in the settings: anything under 100 makes his black see-through. On Windows it is there or gone, never half (his windows cannot be drawn half clear there), and his core is drawn sharp, without its glow, so no dark seam rims it. The display finish's grain stays off while he is see-through.",
+        know: "It is the Opacity row in the settings: anything under 100 makes his black see-through. On Windows it is there or gone, never half (his windows cannot be drawn half clear there), and his core is drawn sharp, without its glow, so no dark seam rims it. The display finish's grain stays off while he is see-through. Wallpaper Engine unloads its wallpaper when less than a fifth of the graphics card is free; while he is see-through and has been quiet for two minutes, his models leave the card for it, and the first answer after that takes longer while they load again.",
     },
     Explanation {
         id: "news",
@@ -922,7 +931,7 @@ pub const EXPLANATIONS: &[Explanation] = &[
         title: "Protocol window",
         what: "A protocol is a list of things he does when something starts it. The Protocol window shows everything that starts by itself in one list: your protocols (the built-in ones too, yours to change), the rules you said aloud (\"when I clap twice, open Spotify\") and his own reactions to two claps and to knocking. A protocol reads in two steps. 01 STARTS WHEN: any one of its lines, a phrase you say, a sound, a program starting or closing, a time of day or a friend's PC (the ADD keys). 02 THEN I DO: its orders in order, as you would say them to him, or TELL ME. SAVE keeps it, RUN NOW runs it, DELETE takes it away; a rule said aloud becomes a protocol with MAKE IT A PROTOCOL.",
         say: &["open the protocol window", "when I clap twice, open Spotify", "when someone knocks, tell me", "wake up, daddy's home", "engage the gaming protocol"],
-        know: "Every protocol also starts by its name (\"engage the … protocol\"). A line he does not understand is refused when you save, with the reason. A rule or protocol of yours on two claps or on knocking takes the place of his own reaction to it. Other PCs are seen through the link of your PCs: a friend's PC tells yours which game it runs. The orders run one after another as if you had said them, so \"open the earth on Max's PC\" runs on his PC.",
+        know: "Every protocol also starts by its name (\"engage the … protocol\"). As it starts he says one line, \"Activating the Gaming Protocol, Sir\", and runs its orders without a word: only an order that asks something (\"what's the weather\") is answered aloud, and an order that failed is told afterwards. A line he does not understand is refused when you save, with the reason. A rule or protocol of yours on two claps or on knocking takes the place of his own reaction to it. Other PCs are seen through the link of your PCs: a friend's PC tells yours which game it runs. The orders run as if you had said them, so \"open the earth on Max's PC\" runs on his PC.",
     },
     Explanation {
         id: "simulations_3d",

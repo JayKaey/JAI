@@ -7,10 +7,9 @@
 //!   (the v0.19 files from .../model-files/ still work when a config points at them)
 //!
 //! Downloads stream to `<file>.part` and are renamed only after the size checks out, so an
-//! interrupted download never leaves a corrupt model behind.
+//! interrupted download never leaves a corrupt model behind; the next try goes on from there.
 
 use crate::config::JaiConfig;
-use futures_util::StreamExt;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -248,7 +247,12 @@ pub async fn ensure(cfg: &JaiConfig) -> Vec<ModelFile> {
     let mut still_missing = Vec::new();
     for f in todo {
         info!("[MODELS] Downloading {} → {} …", f.label, f.path.display());
-        match download(&client, &f).await {
+        let label = f.label;
+        let told = |n: u64, of: Option<u64>| match of {
+            Some(t) if t > 0 => info!("[MODELS]   {label} {:.0}% ({:.0}/{:.0} MB)", n as f64 * 100.0 / t as f64, n as f64 / 1e6, t as f64 / 1e6),
+            _ => info!("[MODELS]   {label} {:.0} MB", n as f64 / 1e6),
+        };
+        match download_to(&client, &f.url, &f.path, f.expected_size, &told).await {
             Ok(bytes) => info!("[MODELS] {} downloaded ({:.1} MB)", f.label, bytes as f64 / 1e6),
             Err(e) => {
                 error!("[MODELS] Download of {} failed: {e}", f.label);
@@ -259,45 +263,75 @@ pub async fn ensure(cfg: &JaiConfig) -> Vec<ModelFile> {
     still_missing
 }
 
-async fn download(client: &reqwest::Client, f: &ModelFile) -> Result<u64, String> {
-    if let Some(dir) = f.path.parent() {
+/// `url` into `to` through `<to>.part`. A stream that breaks off (reqwest: "error decoding
+/// response body") goes on where it stopped, by a Range, until five tries in a row bring no
+/// byte; `size` (else the server's) must come whole. `got(bytes, of)` hears it each second.
+pub(crate) async fn download_to(client: &reqwest::Client, url: &str, to: &Path, size: Option<u64>, got: &(dyn Fn(u64, Option<u64>) + Sync)) -> Result<u64, String> {
+    if let Some(dir) = to.parent().filter(|d| !d.as_os_str().is_empty()) {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
-    let resp = client.get(&f.url).send().await.map_err(|e| e.to_string())?;
-    if !resp.status().is_success() {
-        return Err(format!("HTTP {} from {}", resp.status(), f.url));
-    }
-    let total = resp.content_length().or(f.expected_size);
-    let part = f.path.with_extension(format!(
-        "{}.part",
-        f.path.extension().and_then(|e| e.to_str()).unwrap_or("bin")
-    ));
-    let mut file = std::fs::File::create(&part).map_err(|e| e.to_string())?;
-    let mut stream = resp.bytes_stream();
-    let mut written: u64 = 0;
-    let mut last_log = Instant::now();
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|e| e.to_string())?;
-        file.write_all(&chunk).map_err(|e| e.to_string())?;
-        written += chunk.len() as u64;
-        if last_log.elapsed() > Duration::from_secs(3) {
-            last_log = Instant::now();
-            match total {
-                Some(t) if t > 0 => info!("[MODELS]   {} {:.0}% ({:.0}/{:.0} MB)", f.label, written as f64 * 100.0 / t as f64, written as f64 / 1e6, t as f64 / 1e6),
-                _ => info!("[MODELS]   {} {:.0} MB", f.label, written as f64 / 1e6),
+    let mut part = to.as_os_str().to_owned();
+    part.push(".part");
+    let part = PathBuf::from(part);
+    let mut fruitless = 0;
+    loop {
+        let mut have = std::fs::metadata(&part).map_or(0, |m| m.len());
+        if size.is_some_and(|s| have >= s) {
+            let _ = std::fs::remove_file(&part);
+            have = 0;
+        }
+        let asked = if have > 0 { client.get(url).header(reqwest::header::RANGE, format!("bytes={have}-")) } else { client.get(url) };
+        let tried = match asked.send().await.and_then(|a| a.error_for_status()) {
+            Ok(answer) => save(answer, &part, have, size, got).await,
+            Err(e) => {
+                if e.status() == Some(reqwest::StatusCode::RANGE_NOT_SATISFIABLE) {
+                    let _ = std::fs::remove_file(&part);
+                }
+                Err(e.to_string())
+            }
+        };
+        match tried {
+            Ok(bytes) => return std::fs::rename(&part, to).map(|()| bytes).map_err(|e| e.to_string()),
+            Err(e) => {
+                fruitless = if std::fs::metadata(&part).map_or(0, |m| m.len()) > have { 0 } else { fruitless + 1 };
+                if fruitless == 5 {
+                    return Err(e);
+                }
+                warn!("[MODELS] {url} broke off ({e}); going on where it stopped");
+                tokio::time::sleep(Duration::from_secs(if cfg!(test) { 0 } else { 3 })).await;
             }
         }
     }
-    file.flush().map_err(|e| e.to_string())?;
-    drop(file);
-    if let Some(expected) = f.expected_size.or(total) {
-        if written != expected {
-            let _ = std::fs::remove_file(&part);
-            return Err(format!("size mismatch: got {written} bytes, expected {expected}"));
+}
+
+/// One answer into `part`: after its `have` bytes when it is the Range asked for, else afresh.
+async fn save(mut answer: reqwest::Response, part: &Path, have: u64, size: Option<u64>, got: &(dyn Fn(u64, Option<u64>) + Sync)) -> Result<u64, String> {
+    let start = if answer.status() == reqwest::StatusCode::PARTIAL_CONTENT { have } else { 0 };
+    let theirs = answer.content_length().map(|rest| start + rest);
+    if let Some((want, has)) = size.zip(theirs).filter(|(w, h)| w != h) {
+        return Err(format!("it has {has} bytes, not {want}"));
+    }
+    let size = size.or(theirs);
+    let mut file = std::fs::OpenOptions::new().create(true).write(true).append(start > 0).truncate(start == 0).open(part).map_err(|e| e.to_string())?;
+    let mut written = start;
+    let mut told = Instant::now();
+    while let Some(chunk) = answer.chunk().await.map_err(|e| e.to_string())? {
+        file.write_all(&chunk).map_err(|e| e.to_string())?;
+        written += chunk.len() as u64;
+        if told.elapsed() >= Duration::from_secs(1) {
+            told = Instant::now();
+            got(written, size);
         }
     }
-    std::fs::rename(&part, &f.path).map_err(|e| e.to_string())?;
-    Ok(written)
+    match size {
+        Some(size) if written != size => {
+            if written > size {
+                let _ = std::fs::remove_file(part);
+            }
+            Err(format!("got {written} of {size} bytes"))
+        }
+        _ => Ok(written),
+    }
 }
 
 // ---------------------------------------------------------------------------------------------

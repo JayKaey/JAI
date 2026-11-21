@@ -1306,7 +1306,9 @@ fn vad_thread(
                         };
                     if wanted {
                         info!("[RADAR] {ev:?}");
-                        let _ = events.send(AudioEvent::Acoustic(ev, heard.iter().copied().collect()));
+                        // The sound model hears it from 300 ms before it began, a second at least.
+                        let keep = (((radar.span_ms() + 300.0) * 16.0) as usize).clamp(16_000, 48_000);
+                        let _ = events.send(AudioEvent::Acoustic(ev, heard.iter().skip(heard.len().saturating_sub(keep)).copied().collect()));
                     }
                 }
             } else {

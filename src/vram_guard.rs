@@ -1,8 +1,8 @@
 //! Zero-VRAM gaming hibernation and the on-demand model loader.
 //!
 //! The RTX card belongs to Sir's games: whenever a game is running and JAI has been silent for
-//! 15 s, Sir puts him to sleep or signs off, or he has been idle for 30 minutes, every model
-//! leaves the GPU:
+//! 15 s, Sir puts him to sleep or signs off, he has been idle for 30 minutes, or the card is full
+//! (other programs need it) and he has been quiet for two minutes, every model leaves the GPU:
 //! * Ollama unloads each resident model (`/api/generate` with `"keep_alive": 0`, verified with
 //!   `/api/ps`), and every normal chat request keeps the model for 30 minutes (`"30m"`),
 //! * the Whisper and Kokoro workers drop their engines (`Option::take` → `Drop` frees every
@@ -200,6 +200,31 @@ pub const GAME_THREADS: i32 = 4;
 pub const GAME_CTX: u32 = 8192;
 /// What a load onto the GPU needs free when the model has never been measured (MB).
 const MODEL_VRAM_GUESS_MB: u64 = 4500;
+/// Less free than this (MB) and the card is full: Windows starts moving memory out to RAM.
+const CARD_FULL_MB: u64 = 512;
+/// A full card sends the brain off it once JAI has been this quiet (a conversation keeps it).
+const CROWDED_QUIET: Duration = Duration::from_secs(120);
+
+/// MB free when the card is full (under `full_below` MB free) while the brain sits on it and JAI
+/// has been quiet: his other programs need the room (Sir, 2026-11-21: "my whole PC feels laggy
+/// when JAI is open"; Firefox and his 4.2 GB brain had filled the card, 1.3 GB spilled into RAM).
+fn crowded(free_mb: Option<u64>, resident_mb: u64, quiet: Duration, full_below: u64) -> Option<u64> {
+    free_mb.filter(|free| resident_mb > 0 && *free < full_below && quiet >= CROWDED_QUIET)
+}
+
+/// Under how many MB free the card is full: `CARD_FULL_MB`; while a wallpaper program shows
+/// through his black, the fifth of the card (`total_mb`) it keeps free, or it unloads its
+/// wallpaper (Wallpaper Engine's log, 2026-11-21: "VRAM exhausted (6717 of 8192)", again and
+/// again; Sir saw no wallpaper of it through JAI).
+fn full_below(total_mb: Option<u64>, wallpaper_shown: bool) -> u64 {
+    total_mb.filter(|_| wallpaper_shown).map_or(CARD_FULL_MB, |total| (total / 5).max(CARD_FULL_MB))
+}
+
+/// A program that draws the desktop's wallpaper itself (Wallpaper Engine, Lively).
+fn is_wallpaper_program(process: &str) -> bool {
+    let name = process.to_lowercase();
+    matches!(name.trim_end_matches(".exe"), "wallpaper32" | "wallpaper64" | "lively" | "linux-wallpaperengine")
+}
 
 pub fn in_game() -> bool {
     GAME_MODE.load(Ordering::Acquire)
@@ -770,20 +795,23 @@ async fn watchdog(controls: Arc<AudioControls>, config: VramGuardConfig) {
             continue;
         }
         let games = config.game_processes.clone();
-        let (found, free_ram_mb, back) = tokio::task::spawn_blocking(move || {
+        let (found, wallpaper, free_ram_mb, back) = tokio::task::spawn_blocking(move || {
             let found = detect_game(&mut sys, &games);
+            let wallpaper = sys.processes().values().any(|p| is_wallpaper_program(&p.name().to_string_lossy()));
             sys.refresh_memory();
             let free = sys.available_memory() / 1_048_576;
-            (found, free, sys)
+            (found, wallpaper, free, sys)
         })
         .await
-        .unwrap_or_else(|_| (None, u64::MAX, System::new()));
+        .unwrap_or_else(|_| (None, false, u64::MAX, System::new()));
         sys = back;
         FREE_RAM_MB.store(free_ram_mb, Ordering::Release);
         let resident = match HOOKS.get() {
             Some(h) if !is_dormant() => Some(resident_models(&h.llm).await),
             _ => None,
         };
+        let free_vram = crate::guardian::vram_free_mb();
+        let full = full_below(crate::guardian::vram_total_mb(), wallpaper && crate::gui::wallpaper_shows());
         let (decision, want_game, changed) = {
             let mut g = guard();
             let mut changed = None;
@@ -812,6 +840,8 @@ async fn watchdog(controls: Arc<AudioControls>, config: VramGuardConfig) {
                 None
             } else if g.last_user_interaction.elapsed() >= Duration::from_secs(g.config.idle_secs) {
                 Some(format!("{} s idle", g.config.idle_secs))
+            } else if let Some(free) = crowded(free_vram, g.ollama_vram_mb(), g.last_user_interaction.elapsed().min(g.last_jai_activity.elapsed()), full) {
+                Some(format!("the graphics card is full, {free} MB free, and his other programs need it"))
             } else {
                 let left = g.seconds_to_clear().unwrap_or(0);
                 g.power = VramPowerState::IdleCountdown(Instant::now() + Duration::from_secs(left));
@@ -963,6 +993,24 @@ pub fn run_tool(args: &Value) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Sir's PC on 2026-11-21: 204 MB of 8 GB free, the brain holding 4,187 MB of it.
+    #[test]
+    fn a_full_card_sends_the_quiet_brain_off_it() {
+        assert_eq!(crowded(Some(204), 4187, CROWDED_QUIET, CARD_FULL_MB), Some(204));
+        assert_eq!(crowded(Some(204), 4187, Duration::from_secs(30), CARD_FULL_MB), None, "a conversation keeps it");
+        assert_eq!(crowded(Some(204), 0, CROWDED_QUIET, CARD_FULL_MB), None, "nothing of his is on the card");
+        assert_eq!(crowded(Some(2048), 4187, CROWDED_QUIET, CARD_FULL_MB), None, "room enough");
+        assert_eq!(crowded(None, 4187, CROWDED_QUIET, CARD_FULL_MB), None, "no driver to ask");
+        // Wallpaper Engine through his black: it unloaded its wallpaper at 6,579 MB of 8,192 used.
+        let shown = full_below(Some(8192), true);
+        assert_eq!(shown, 1638);
+        assert_eq!(crowded(Some(8192 - 6579), 4187, CROWDED_QUIET, shown), Some(1613), "the wallpaper's room");
+        assert_eq!(crowded(Some(8192 - 6579), 4187, CROWDED_QUIET, full_below(Some(8192), false)), None, "his black solid: only a full card counts");
+        assert_eq!(full_below(None, true), CARD_FULL_MB, "no driver to ask");
+        assert!(["wallpaper64.exe", "Wallpaper32.exe", "lively.exe", "linux-wallpaperengine"].iter().all(|p| is_wallpaper_program(p)));
+        assert!(!["explorer.exe", "wallpaper.exe", "jai.exe"].iter().any(|p| is_wallpaper_program(p)));
+    }
 
     #[test]
     fn he_is_back_when_input_comes_after_a_while_away() {

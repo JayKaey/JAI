@@ -363,6 +363,7 @@ impl Jai {
             started,
             source: if voice { InputSource::Voice } else { InputSource::TextGui },
             voice: crate::modality::VoiceGate::Silent,
+            quiet: false,
             link: Arc::new(TurnLink::default()),
             barge_in: false,
         };
@@ -399,6 +400,7 @@ impl Jai {
             started: Instant::now(),
             source: if via == "voice" { InputSource::Voice } else { InputSource::TextGui },
             voice: crate::modality::VoiceGate::Silent,
+            quiet: false,
             link: Arc::new(TurnLink::default()),
             barge_in: false,
         };
@@ -499,8 +501,13 @@ impl Jai {
         }
         // Sir's phone shows it too (the mobile satellite).
         self.tools().stark.push_to_satellite(&message);
+        self.speak_when_free(message, Trigger::Alert);
+    }
+
+    /// Says a line of his own now, or once whatever he is saying is over (45 s at most).
+    fn speak_when_free(&self, line: String, trigger: Trigger) {
         if !self.busy() || self.inner.quitting.load(Ordering::Acquire) {
-            self.speak_standalone(&message, false, Trigger::Alert);
+            self.speak_standalone(&line, false, trigger);
             return;
         }
         let app = self.clone();
@@ -510,7 +517,7 @@ impl Jai {
                 tokio::time::sleep(Duration::from_millis(250)).await;
             }
             tokio::time::sleep(Duration::from_millis(400)).await;
-            app.speak_standalone(&message, false, Trigger::Alert);
+            app.speak_standalone(&line, false, trigger);
         });
     }
 
@@ -768,7 +775,8 @@ impl Jai {
                     Ok(crate::stark::StarkEvent::Alert(message)) => app.raise_alert(message),
                     Ok(crate::stark::StarkEvent::Notice(message)) => app.emit(HudEvent::Notice { message }),
                     Ok(crate::stark::StarkEvent::Arrived { distance_m }) => app.arrival_protocol(distance_m).await,
-                    Ok(crate::stark::StarkEvent::RunMacro { name, steps }) => app.run_macro(name, steps),
+                    Ok(crate::stark::StarkEvent::RunMacro { name, steps, quiet }) => app.run_macro(name, steps, quiet),
+                    Ok(crate::stark::StarkEvent::Say(line)) => app.speak_when_free(line, Trigger::System),
                     Err(broadcast::error::RecvError::Lagged(_)) => {}
                     Err(broadcast::error::RecvError::Closed) => break,
                 }
@@ -1264,7 +1272,8 @@ impl Jai {
         let sound = crate::sound_sense::judge(ev, scores.as_deref());
         crate::sound_sense::note(ev, sound, scores.as_deref());
         let Some(sound) = sound else {
-            info!("[RADAR] {ev:?}: nothing to act on ({})", scores.as_deref().map(|p| crate::sound_sense::top(p, 1).first().map(|(i, s)| format!("{} {:.0} %", crate::sound_sense::label(*i), s * 100.0)).unwrap_or_default()).unwrap_or_default());
+            // (The model's three likeliest, to tune the radar by.)
+            info!("[RADAR] {ev:?}: nothing to act on ({})", scores.as_deref().map(|p| crate::sound_sense::top(p, 3).iter().map(|(i, s)| format!("{} {:.0} %", crate::sound_sense::label(*i), s * 100.0)).collect::<Vec<_>>().join(", ")).unwrap_or_default());
             return;
         };
         info!("[RADAR] {ev:?} → {}", sound.name());
@@ -1338,8 +1347,11 @@ impl Jai {
         }
     }
 
-    /// Runs a voice macro's steps as separate requests, each after the previous answer.
-    fn run_macro(&self, name: String, steps: Vec<String>) {
+    /// Runs a voice macro's steps as separate requests, each after the previous answer. `quiet`
+    /// (a protocol's): each step without a word, unless it asks something
+    /// (`protocols::wants_an_answer`).
+    fn run_macro(&self, name: String, steps: Vec<String>, quiet: bool) {
+        // (One at a time: a step that starts its own macro again would else never end.)
         if self.inner.macro_running.swap(true, Ordering::AcqRel) {
             warn!("[MACRO] '{name}' asked to run while another macro is running; ignored.");
             return;
@@ -1347,12 +1359,12 @@ impl Jai {
         let source = *self.inner.last_source.lock().unwrap_or_else(|e| e.into_inner());
         let app = self.clone();
         tokio::spawn(async move {
-            info!("[MACRO] Running '{name}' ({} steps)", steps.len());
+            info!("[MACRO] Running '{name}' ({} steps{})", steps.len(), if quiet { ", quietly" } else { "" });
             app.wait_idle(Duration::from_secs(30)).await;
             for (i, step) in steps.iter().enumerate() {
                 info!("[MACRO] '{name}' step {}/{}: {step}", i + 1, steps.len());
                 app.emit(HudEvent::Transcript { text: step.clone(), language: "macro".into(), source: format!("macro {name}"), wake_word: None, stt_ms: 0, audio_ms: 0 });
-                app.dispatch_turn(step.clone(), Instant::now(), 0, source);
+                app.dispatch(step.clone(), Instant::now(), 0, source, None, quiet && !crate::protocols::wants_an_answer(step));
                 app.wait_idle(Duration::from_secs(90)).await;
             }
             app.inner.macro_running.store(false, Ordering::Release);
@@ -2251,7 +2263,7 @@ impl Jai {
 
     /// Starts a brain turn, superseding any running one.
     pub fn dispatch_turn(&self, text: String, started: Instant, stt_ms: u64, source: InputSource) {
-        self.dispatch(text, started, stt_ms, source, None);
+        self.dispatch(text, started, stt_ms, source, None, false);
     }
 
     /// Sir's order from his main PC (`fleet`): carried out here as his, whatever this PC's
@@ -2259,11 +2271,12 @@ impl Jai {
     pub fn dispatch_sirs_order(&self, order: String) {
         // (Kept under the one name no account can have: his orders are one conversation.)
         let brain = self.inner.others.lock().unwrap_or_else(|e| e.into_inner()).entry(String::new()).or_insert_with(|| self.inner.brain.for_caller(crate::accounts::Caller::Remote)).clone();
-        self.dispatch(order, Instant::now(), 0, InputSource::TextGui, Some(brain));
+        self.dispatch(order, Instant::now(), 0, InputSource::TextGui, Some(brain), false);
     }
 
-    /// A turn on `brain` (none: his own, for whoever is at this PC).
-    fn dispatch(&self, text: String, started: Instant, stt_ms: u64, source: InputSource, brain: Option<Brain>) {
+    /// A turn on `brain` (none: his own, for whoever is at this PC); `quiet`: without a word,
+    /// whatever it changes (a protocol's step).
+    fn dispatch(&self, text: String, started: Instant, stt_ms: u64, source: InputSource, brain: Option<Brain>, quiet: bool) {
         // His name in one spelling, typed or spoken ("J.A.I., open Spotify", "jay open spotify").
         let text = crate::wake::canon(&text);
         // Another PC of Sir's answers nobody until it is logged in (`fleet`), nor an account Sir
@@ -2324,7 +2337,7 @@ impl Jai {
         let generation = self.inner.tts.stop();
         let cancel = CancellationToken::new();
         let id = uuid::Uuid::new_v4().to_string();
-        let voice = self.tools().modality.gate(Trigger::Input(source), &text);
+        let voice = if quiet { crate::modality::VoiceGate::Silent } else { self.tools().modality.gate(Trigger::Input(source), &text) };
         let link = Arc::new(TurnLink::default());
         let heard = self.inner.heard_turn.lock().unwrap_or_else(|e| e.into_inner()).take();
         link.set_heard(heard.filter(|_| source == InputSource::Voice));
@@ -2356,7 +2369,7 @@ impl Jai {
         tokio::spawn(async move {
             // The emblem's gyroscope follows this guard: it drops however the turn ends.
             let thinking = crate::thinking_guard::engage();
-            let req = TurnRequest { text, message_id: id.clone(), generation, cancel, started, source, voice, link, barge_in };
+            let req = TurnRequest { text, message_id: id.clone(), generation, cancel, started, source, voice, quiet, link, barge_in };
             brain.as_ref().unwrap_or(&app.inner.brain).run_turn(req, &app.inner.tts, &app.inner.brain_tx).await;
             drop(thinking);
             app.settle_turn(id).await;

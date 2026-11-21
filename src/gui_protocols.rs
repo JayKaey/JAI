@@ -640,7 +640,8 @@ pub(super) fn show(ctx: &egui::Context, app: &crate::app::Jai, rt: &tokio::runti
     let run = move |name: String| {
         let tools = tools.clone();
         rt.spawn(async move {
-            let _ = tools.execute("manage_stark_protocol", &serde_json::json!({ "action": "execute_protocol", "protocol_name": name })).await;
+            // (No turn of his says its line: the tool does.)
+            let _ = tools.execute("manage_stark_protocol", &serde_json::json!({ "action": "execute_protocol", "protocol_name": name, "announce": true })).await;
         });
     };
     let app = app.clone();

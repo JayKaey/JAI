@@ -221,7 +221,7 @@ pub fn run_tool(tools: &ToolContext, args: &Value) -> Result<String, String> {
         "run" | "start" | "execute" => {
             let m = store.get(&name).ok_or_else(|| format!("No voice macro called '{name}'."))?;
             store.used(&m.name);
-            let _ = tools.stark.events.send(StarkEvent::RunMacro { name: m.name.clone(), steps: m.steps.clone() });
+            let _ = tools.stark.events.send(StarkEvent::RunMacro { name: m.name.clone(), steps: m.steps.clone(), quiet: false });
             Ok(format!("Running the '{}' macro: {} step{} ({}).", m.name, m.steps.len(), if m.steps.len() == 1 { "" } else { "s" }, m.steps.join(" → ")))
         }
         _ => {
