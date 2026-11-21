@@ -71,7 +71,7 @@ const fn w(id: &'static str, title: &'static str, about: &'static str, group: us
 pub const GROUPS: [&str; 5] = ["Only you", "Views", "Panels", "Look and sound", "J.A.I."];
 
 /// Every window J.A.I. opens, Sir's own first.
-pub static WINDOWS: [Window; 30] = [
+pub static WINDOWS: [Window; 32] = [
     w("admin", "Admin", "This menu. On another PC, all is yours while it is open.", 0, Open::Order("open the admin window"), &[("admin", "action", "show")], true),
     w("accounts", "Accounts", "Everyone who may use J.A.I.: passwords, permissions, PCs.", 0, Open::Order("open the accounts list"), &[("accounts", "action", "show")], true),
     w("account_report", "Report", "What J.A.I. did for everyone this week.", 0, Open::Order("what did you do for everyone this week"), &[("accounts", "action", "report")], true),
@@ -95,10 +95,12 @@ pub static WINDOWS: [Window; 30] = [
     w("model3d", "3D model", "Any thing in 3D, turned by hand.", 2, Open::Order("show me a 3d model of the earth"), &[("show_3d_model", "", "")], false),
     w("theme_studio", "Theme studio", "A theme of your own colours.", 3, Open::Order("open the theme studio"), &[("*", "theme_studio", "true")], false),
     w("mixer", "Mixer", "A fader for every program that plays sound.", 3, Open::Order("open the mixer"), &[("*", "mixer_view", "true")], false),
+    w("background", "Background", "Your pictures and videos behind him, per monitor.", 3, Open::Order("open the background window"), &[("*", "background_window", "true")], false),
     w("screens", "Screens", "Which monitor he stands on.", 3, Open::Now(crate::gui::show_screens), &[], false),
     w("integrations_hub", "Hub", "Mail, calendars, school and feeds, set up.", 4, Open::Now(crate::gui::show_hub), &[], false),
     w("devices", "Devices", "Microphone, speaker, wake word, memory.", 4, Open::Now(crate::gui::show_devices), &[], false),
     w("missed", "Missed", "The notifications of the last hours.", 4, Open::Order("show my notifications"), &[("*", "missed", "true"), ("notification_history", "", "")], false),
+    w("protocols", "Protocols", "What you say, or what happens, and what he does then.", 4, Open::Order("open the protocol window"), &[("*", "protocol_window", "true")], false),
     w("voice_setup", "Your voice", "He learns your voice, sentence by sentence.", 4, Open::Order("learn my voice"), &[("*", "voice_setup", "true")], false),
     w("changes", "Changes", "What is new in J.A.I., day by day.", 4, Open::Order("show the changes"), &[("show_changes", "", "")], false),
     w("notebook", "Notebook", "The notes.", 4, Open::Order("open my notebook"), &[("notebook", "action", "show")], false),

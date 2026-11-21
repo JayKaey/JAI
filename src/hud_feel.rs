@@ -110,6 +110,17 @@ static PHRASES: LazyLock<Vec<(Regex, Value)>> = LazyLock::new(|| {
         p(r"^(?:obey\s+(?:everyone|everybody|anyone)|listen\s+to\s+(?:everyone|everybody|anyone)(?:\s+again)?|voice\s+lock\s+off|h(?:ö|oe)r\s+auf\s+alle)$", json!({"voice_lock": false})),
         // Everything in one place.
         p(r"^(?:(?:open|show)\s+(?:me\s+)?(?:the\s+|your\s+|all\s+)?settings(?:\s+panel)?|settings|einstellungen(?:\s+(?:öffnen|zeigen))?)$", json!({"settings_panel": true})),
+        // His pictures and videos behind the board, chosen by hand: the background window, and
+        // the media gone again. (Sir, 2026-11-21: "a window where i can set my background".)
+        p(
+            r"^(?:(?:open|show)\s+(?:me\s+)?(?:the\s+|my\s+|your\s+)?background\s+(?:window|settings|menu)|background\s+(?:window|settings)|(?:how\s+(?:can|do)\s+i\s+|i\s+(?:want|would\s+like)\s+to\s+|let\s+me\s+|can\s+i\s+)?(?:set|change|pick|choose)\s+(?:a\s+(?:new\s+)?|the\s+|my\s+|your\s+)?(?:desktop\s+)?(?:background|wallpaper)|(?:ändere?|wechsle?)\s+(?:den\s+|meinen\s+|deinen\s+)?hintergrund|hintergrund\s*-?\s*(?:fenster|einstellungen)|hintergrund\s+ändern)$",
+            json!({"background_window": true}),
+        ),
+        // His protocols, each changed by hand: the protocol window. (Sir, 2026-11-21.)
+        p(
+            r"^(?:(?:open|show)\s+(?:me\s+)?(?:the\s+|my\s+|your\s+)?protocols?\s+(?:window|editor|settings|menu)|protocols?\s+(?:window|editor)|(?:edit|change|set\s+up|manage)\s+(?:my\s+|the\s+|your\s+)?protocols|(?:make|create|set\s+up)\s+(?:a\s+)?(?:new\s+)?protocol|(?:öffne|zeig)\s+(?:mir\s+)?(?:das\s+)?protokoll\s*-?\s*fenster|protokoll\s*-?\s*fenster)$",
+            json!({"protocol_window": true}),
+        ),
         // His keys in every program: the Hotkeys window.
         p(
             r"^(?:(?:open|show)\s+(?:me\s+)?(?:(?:your|my)\s+(?:hot\s*-?\s*keys?|global\s+keys)(?:\s+(?:window|settings|menu))?|(?:the\s+)?(?:hot\s*-?\s*keys?|global\s+keys)\s+(?:window|settings|menu)|(?:the\s+|all\s+)?global\s+keys)|hot\s*-?\s*keys?\s+(?:window|settings)|(?:change|set|pick|choose|give\s+me|make)\s+(?:a\s+|the\s+|my\s+)?(?:new\s+)?(?:mute|microphone|mic)\s+(?:hot\s*)?key|(?:change|edit)\s+(?:the\s+|your\s+|my\s+)?(?:hot\s*-?\s*keys?|global\s+keys)|(?:öffne|zeig)\s+(?:mir\s+)?(?:(?:deine|meine)\s+(?:hotkeys?|tastenkürzel)|(?:das\s+)?hotkey\s*-?\s*fenster)|hotkey\s*-?\s*fenster|(?:ändere?|leg)\s+(?:die\s+|meine\s+)?(?:stumm|mikro(?:fon)?)\s*-?\s*taste(?:\s+fest)?)$",
@@ -123,6 +134,16 @@ static PHRASES: LazyLock<Vec<(Regex, Value)>> = LazyLock::new(|| {
         p(
             r"^(?:hide\s+(?:the\s+)?(?:words|text|info(?:rmation)?(?:\s+window)?)\s+(?:beside|next\s+to|by|at)\s+(?:the\s+|your\s+)?orb|(?:corner\s+)?orb\s+(?:words|text|info(?:rmation)?)\s+off|(?:the\s+)?info(?:rmation)?\s+window\s+off|(?:the\s+)?(?:corner\s+)?orb\s+without\s+(?:the\s+|its\s+)?(?:words|text)|kein(?:en)?\s+text\s+neben\s+(?:der\s+kugel|dem\s+orb))$",
             json!({"orb_words": false}),
+        ),
+        // The song beside the core, there or not (Sir, 2026-11-21; Whisper heard "the null
+        // playing" and "the now playing tab").
+        p(
+            r"^(?:(?:dont|do\s+not|never)\s+(?:show|display)|hide|remove|disable|close|get\s+rid\s+of|take\s+away|turn\s+off|switch\s+off|i\s+dont\s+(?:want|need)(?:\s+to\s+see)?)\s+(?:me\s+)?(?:the\s+|your\s+|that\s+|this\s+)?(?:(?:now|null|know)\s+playing(?:\s+(?:widget|window|tab|panel|section|box|card|display|thing|time|info))?|(?:music|song)\s+(?:widget|panel|section|box|card))(?:\s+(?:anymore|any\s+more|(?:beside|next\s+to)\s+(?:the\s+|your\s+)?(?:orb|core)))?$|^(?:the\s+)?(?:now|null|know)\s+playing(?:\s+(?:widget|window|tab|panel))?\s+(?:off|aus)$|^no\s+(?:more\s+)?(?:now|null)\s+playing(?:\s+(?:widget|window|tab|panel))?$",
+            json!({"now_playing": false}),
+        ),
+        p(
+            r"^(?:show|display|bring\s+back|turn\s+on|switch\s+on|enable)\s+(?:me\s+)?(?:the\s+|your\s+)?(?:(?:now|null|know)\s+playing(?:\s+(?:widget|window|tab|panel|section|box|card|display))?|(?:music|song)\s+(?:widget|panel|section|box|card))(?:\s+again)?(?:\s+(?:beside|next\s+to)\s+(?:the\s+|your\s+)?(?:orb|core))?$|^(?:the\s+)?(?:now|null|know)\s+playing(?:\s+(?:widget|window|tab|panel))?\s+(?:back\s+)?(?:on|an)$",
+            json!({"now_playing": true}),
         ),
         // The clock on the desktop: there or not, its seconds, twelve hours or twenty-four, its date.
         p(r"^(?:(?:show|give)\s+(?:me\s+)?(?:a|the|your)\s+clock|(?:show|put)\s+(?:a|the)\s+clock\s+on\s+(?:the|my)\s+(?:desktop|screen|background)|(?:desktop\s+)?clock\s+on|zeig\s+(?:mir\s+)?(?:eine|die)\s+uhr|uhr\s+an)$", json!({"desk_clock": true})),
@@ -300,7 +321,7 @@ pub fn is_game(process: &str) -> bool {
 
 /// The arguments that are requests of the moment, not settings (`interface::configure` names
 /// them in its summary; `apply` carries them out).
-pub const RUNTIME_KEYS: [(&str, &str); 12] = [
+pub const RUNTIME_KEYS: [(&str, &str); 14] = [
     ("show_board", "the board"),
     ("start_with_system", if cfg!(windows) { "starting with Windows" } else { "starting at login" }),
     ("next_now", "what comes next"),
@@ -313,13 +334,15 @@ pub const RUNTIME_KEYS: [(&str, &str); 12] = [
     ("settings_panel", "settings panel"),
     ("windows_on_call", "his windows in front"),
     ("hotkeys_window", "hotkeys window"),
+    ("protocol_window", "protocol window"),
+    ("background_window", "background window"),
 ];
 
 /// Arguments that have a phrase and no line in the tool's schema: the model's prompt is full
 /// (`brain::tests::the_whole_prompt_fits_the_context_window`), and these are said in words the
 /// fast path knows.
 #[cfg(test)]
-pub const UNLISTED: [&str; 18] = ["background_media", "background_monitor", "background_mode", "background_interval", "background_sound", "background_dim", "show_board", "background_all_monitors", "windows_on_call", "hotkeys_window", "orb_words", "desk_clock", "desk_clock_seconds", "desk_clock_12h", "desk_clock_date", "next_now", "corner_orb_size", "start_with_system"];
+pub const UNLISTED: [&str; 21] = ["background_media", "background_monitor", "background_mode", "background_interval", "background_sound", "background_dim", "show_board", "background_all_monitors", "windows_on_call", "hotkeys_window", "orb_words", "desk_clock", "desk_clock_seconds", "desk_clock_12h", "desk_clock_date", "next_now", "corner_orb_size", "start_with_system", "now_playing", "protocol_window", "background_window"];
 
 /// How long what comes next stands beside the emblem once Sir asked for it.
 const NEXT_SHOWN: std::time::Duration = std::time::Duration::from_secs(10);
@@ -515,6 +538,12 @@ pub fn apply(args: &Value) {
     if flag(args, "windows_on_call") == Some(true) {
         crate::gui::windows_on_call();
     }
+    if flag(args, "background_window") == Some(true) {
+        crate::gui::show_background_window();
+    }
+    if flag(args, "protocol_window") == Some(true) {
+        crate::gui::show_protocols();
+    }
     if flag(args, "hotkeys_window") == Some(true) {
         crate::gui::show_hotkeys();
     }
@@ -588,6 +617,12 @@ pub fn spoken(args: &Value) -> Option<String> {
     if on("windows_on_call") == Some(true) {
         return Some("My windows, Sir, in front of the rest.".to_string());
     }
+    if on("background_window") == Some(true) {
+        return Some("Your background, Sir: a picture, a video or a folder, for every monitor or for each.".to_string());
+    }
+    if on("protocol_window") == Some(true) {
+        return Some("Your protocols, Sir. Say it, or when it happens, and what I do then.".to_string());
+    }
     if on("hotkeys_window") == Some(true) {
         return Some("My keys, Sir. Press SET beside one, then the new key.".to_string());
     }
@@ -627,6 +662,9 @@ pub fn spoken(args: &Value) -> Option<String> {
     }
     if let Some(v) = on("orb_words") {
         return say("What is said stands beside the orb again, Sir.", "Just the orb from now on, Sir.", v);
+    }
+    if let Some(v) = on("now_playing") {
+        return say("The song stands beside the core again, Sir.", "No more song beside the core, Sir.", v);
     }
     if let Some(v) = on("desk_clock_seconds") {
         return say("With its seconds, Sir.", "Without the seconds, Sir.", v);
@@ -779,6 +817,18 @@ mod tests {
             ("open the hotkeys window", json!({"hotkeys_window": true})),
             ("show me your hot keys", json!({"hotkeys_window": true})),
             ("hotkeys window", json!({"hotkeys_window": true})),
+            ("open the background window", json!({"background_window": true})),
+            ("change my background", json!({"background_window": true})),
+            ("set my background", json!({"background_window": true})),
+            ("how can i change your background", json!({"background_window": true})),
+            ("i want to change the wallpaper", json!({"background_window": true})),
+            ("background settings", json!({"background_window": true})),
+            ("ändere meinen hintergrund", json!({"background_window": true})),
+            ("open the protocol window", json!({"protocol_window": true})),
+            ("protocols window", json!({"protocol_window": true})),
+            ("edit my protocols", json!({"protocol_window": true})),
+            ("set up a new protocol", json!({"protocol_window": true})),
+            ("öffne das protokoll fenster", json!({"protocol_window": true})),
             ("open my hotkey settings", json!({"hotkeys_window": true})),
             ("change my mute key", json!({"hotkeys_window": true})),
             ("set a new microphone hotkey", json!({"hotkeys_window": true})),
@@ -793,6 +843,16 @@ mod tests {
             ("info window off", json!({"orb_words": false})),
             ("show the words next to the orb", json!({"orb_words": true})),
             ("the information window on", json!({"orb_words": true})),
+            // 2026-11-21, as Whisper heard Sir (apostrophes are gone by then).
+            ("dont show the null playing", json!({"now_playing": false})),
+            ("dont show the now playing tab", json!({"now_playing": false})),
+            ("disable the now playing window", json!({"now_playing": false})),
+            ("remove the now playing widget", json!({"now_playing": false})),
+            ("hide the now playing next to the orb", json!({"now_playing": false})),
+            ("i dont want to see the music widget anymore", json!({"now_playing": false})),
+            ("now playing off", json!({"now_playing": false})),
+            ("show the now playing widget again", json!({"now_playing": true})),
+            ("now playing back on", json!({"now_playing": true})),
             ("show me a clock", json!({"desk_clock": true})),
             ("clock on", json!({"desk_clock": true})),
             ("hide the clock", json!({"desk_clock": false})),

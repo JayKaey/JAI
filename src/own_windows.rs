@@ -169,10 +169,25 @@ pub fn open(name: &str) -> bool {
 
 /// Where (x, y, w, h) a window standing at `rect` (left, top, right, bottom) goes for a place
 /// and a size in the work area `work`, the gap round it: the views' own geometry, in pixels.
-fn within(work: [i32; 4], rect: [i32; 4], position: Option<Position>, size: Option<Size>) -> [i32; 4] {
+/// Sent somewhere at its own size (the middle, another monitor), it keeps off `others` (his
+/// other windows) as a new window does, or covers them least where the monitor has no room
+/// (Sir, 2026-11-21: "when he moves windows he should do the same thing"); a half, a third or
+/// a quarter is the part of the screen Sir chose, and only "overlap the windows" lets it lie
+/// on them otherwise.
+fn within(work: [i32; 4], rect: [i32; 4], position: Option<Position>, size: Option<Size>, others: &[[i32; 4]]) -> [i32; 4] {
     let px = |[l, t, r, b]: [i32; 4]| eframe::egui::Rect::from_min_max(eframe::egui::pos2(l as f32, t as f32), eframe::egui::pos2(r as f32, b as f32));
-    let to = crate::window_commands::target_rect(px(work).shrink(GAP as f32), px(rect), position, size);
+    let area = px(work).shrink(GAP as f32);
+    let mut to = crate::window_commands::target_rect(area, px(rect), position, size);
+    if position == Some(Position::Centre) && !crate::hud_dock::overlap_allowed() {
+        let others: Vec<_> = others.iter().map(|o| px(*o)).collect();
+        to = crate::holo_stage::settle(area, to, &others, GAP as f32, crate::gui::WINDOW_TITLE_ROW);
+    }
     [to.min.x.round() as i32, to.min.y.round() as i32, to.width().round() as i32, to.height().round() as i32]
+}
+
+/// Where his windows but `window` stand (left, top, right, bottom).
+fn others_than(window: isize) -> Vec<[i32; 4]> {
+    list().into_iter().filter(|w| w.hwnd != window).map(|w| w.rect).collect()
 }
 
 /// What a window is called in a sentence: its title without his name after it.
@@ -188,13 +203,13 @@ pub fn arrange(name: &str, position: Option<Position>, size: Option<Size>) -> Op
     let monitors = crate::monitors::recent();
     let [l, t, r, b] = window.rect;
     let on = monitors.iter().find(|m| m.contains((l + r) / 2, (t + b) / 2)).or_else(|| crate::monitors::primary(&monitors))?;
-    glide(window.hwnd, [l, t, r - l, b - t], within(on.work, window.rect, position, size));
+    glide(window.hwnd, [l, t, r - l, b - t], within(on.work, window.rect, position, size, &others_than(window.hwnd)));
     Some(window.title)
 }
 
 /// "Move the text console to another monitor": the window Sir names glides to the middle of
-/// that monitor (`monitor`: 1, 2, "left", "next" …), at its own size. None: none of his windows
-/// is called that.
+/// that monitor (`monitor`: 1, 2, "left", "next" …), at its own size, or the free spot nearest
+/// it. None: none of his windows is called that.
 pub fn to_monitor(name: &str, monitor: &serde_json::Value) -> Option<Result<String, String>> {
     let window = find(name)?;
     let monitors = crate::monitors::recent();
@@ -207,7 +222,7 @@ pub fn to_monitor(name: &str, monitor: &serde_json::Value) -> Option<Result<Stri
     if current == Some(index) {
         return Some(Ok(format!("My window '{}' is already on Monitor {index}.", called(&window.title))));
     }
-    glide(window.hwnd, [l, t, r - l, b - t], within(on.work, window.rect, Some(Position::Centre), None));
+    glide(window.hwnd, [l, t, r - l, b - t], within(on.work, window.rect, Some(Position::Centre), None, &others_than(window.hwnd)));
     Some(Ok(format!("My window '{}' is on Monitor {index} now.\nSpoken: On monitor {index}, Sir.", called(&window.title))))
 }
 
@@ -431,18 +446,26 @@ mod tests {
         // A monitor to the right of the first, its taskbar under it; a window standing on it.
         let work = [2560, 0, 5120, 1392];
         let rect = [2700, 200, 3140, 840];
-        assert_eq!(within(work, rect, Some(Position::Left), None), [2574, 14, 1266, 1364]);
-        assert_eq!(within(work, rect, Some(Position::Right), None), [3840, 14, 1266, 1364]);
-        assert_eq!(within(work, rect, Some(Position::TopRight), None), [3840, 14, 1266, 682]);
-        assert_eq!(within(work, rect, Some(Position::BottomLeft), None), [2574, 696, 1266, 682]);
-        assert_eq!(within(work, rect, Some(Position::Centre), None), [3620, 376, 440, 640], "in the middle at its own size");
-        assert_eq!(within(work, rect, None, Some(Size::Percent(100.0))), [2574, 14, 2532, 1364], "the whole screen");
-        assert_eq!(within(work, rect, None, Some(Size::Bigger)), [2645, 120, 550, 800], "larger about its middle");
+        assert_eq!(within(work, rect, Some(Position::Left), None, &[]), [2574, 14, 1266, 1364]);
+        assert_eq!(within(work, rect, Some(Position::Right), None, &[]), [3840, 14, 1266, 1364]);
+        assert_eq!(within(work, rect, Some(Position::TopRight), None, &[]), [3840, 14, 1266, 682]);
+        assert_eq!(within(work, rect, Some(Position::BottomLeft), None, &[]), [2574, 696, 1266, 682]);
+        assert_eq!(within(work, rect, Some(Position::Centre), None, &[]), [3620, 376, 440, 640], "in the middle at its own size");
+        assert_eq!(within(work, rect, None, Some(Size::Percent(100.0)), &[]), [2574, 14, 2532, 1364], "the whole screen");
+        assert_eq!(within(work, rect, None, Some(Size::Bigger), &[]), [2645, 120, 550, 800], "larger about its middle");
         // Wherever it is sent, at whatever size, it stays inside the work area.
         for position in Position::ALL {
-            let [x, y, w, h] = within(work, [0, 0, 9000, 9000], Some(position), None);
+            let [x, y, w, h] = within(work, [0, 0, 9000, 9000], Some(position), None, &[]);
             assert!(x >= work[0] && y >= work[1] && x + w <= work[2] && y + h <= work[3], "{position:?}: {x},{y} {w}x{h}");
         }
+        // Sir, 2026-11-21: sent to the middle of a monitor where another of his windows stands
+        // ("move the admin window to my second monitor"), it lands beside that one, not on it.
+        let there = [3500, 300, 4300, 1000];
+        let [x, y, w, h] = within(work, rect, Some(Position::Centre), None, &[there]);
+        assert_eq!((w, h), (440, 640), "at its own size");
+        assert!(x + w <= there[0] || x >= there[2] || y + h <= there[1] || y >= there[3], "on the other window: {x},{y}");
+        assert!(x >= work[0] && x + w <= work[2] && y >= work[1] && y + h <= work[3], "off the monitor: {x},{y}");
+        assert_eq!(within(work, rect, Some(Position::Left), None, &[there]), [2574, 14, 1266, 1364], "the half Sir chose stays his choice");
     }
 
     #[test]

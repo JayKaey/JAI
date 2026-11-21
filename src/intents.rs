@@ -2044,6 +2044,33 @@ pub fn panel_request(text: &str) -> Option<Value> {
     panel_command(text, PanelsUp::now())
 }
 
+/// "3D", "three-dimensional", "dreidimensional".
+const D3: &str = r"(?:3\s?-?\s?d|three\s?-?\s?d|drei\s?-?\s?d|3\s?-?\s?dimensional|three\s?-?\s?dimensional|dreidimensional)";
+
+/// "Switch to 3D", "make it 3D", "tilt the map", "back to 2D", "top-down view", "mach es 3D"
+/// (words as `normalize` leaves them): true for 3D, false for 2D. The Earth's camera and the
+/// Simulation Lab's view take it alike.
+pub fn view_3d(s: &str) -> Option<bool> {
+    static VIEW_3D: LazyLock<Regex> = LazyLock::new(|| {
+        let (d3, d2) = (D3, r"(?:2\s?-?\s?d|two\s?-?\s?d|zwei\s?-?\s?d|2\s?-?\s?dimensional|two\s+dimensional|zweidimensional|flat|flach|top\s?-?\s?down|birds\s?-?\s?eye|overhead)");
+        let obj = r"(?:it|this|that|the\s+(?:map|view|earth|globe|camera))";
+        let (it, mode) = (r"(?:it\s+|this\s+|that\s+|the\s+(?:map|view|earth|globe|camera|city|town|place|area|streets?)\s+)", r"(?:\s+(?:view|mode|map|perspective))?");
+        let (verb, de) = (r"(?:switch|change|go|flip|turn|swap|put|set|show|show\s+me|view|see|let\s+me\s+see|give\s+me)", r"(?:\s?-?\s?(?:ansicht|modus|karte))?(?:\s+(?:um|zurück))?");
+        re(&format!(
+            r"^(?:{verb}\s+{it}?(?:back\s+)?(?:over\s+)?(?:to|into|in)\s+|(?:go\s+)?back\s+to\s+|in\s+)?(?:the\s+)?({d3}|{d2}){mode}(?:\s+again)?$|^(?:go|make\s+{obj})\s+({d3}|{d2})(?:\s+again)?$|^(tilt)(?:\s+{obj})?(?:\s+back)?$|^(lean|tip)\s+{obj}\s+back$|^(untilt|level|straighten)\s+{obj}(?:\s+(?:out|again))?$|^(untilt)$|^look\s+(straight\s+down)$|^(?:schalte?|wechsel|wechsle|geh|gehe|stell|stelle)\s+(?:zurück\s+)?(?:auf|in|zu|zur|in\s+die)\s+(?:die\s+)?({d3}|{d2}|draufsicht){de}$|^(?:zeig|zeige)\s+(?:es|das|mir\s+das|mir\s+die\s+karte|die\s+karte)\s+in\s+({d3}){de}$|^(?:mach|mache)\s+(?:es|das|sie|ihn)\s+(?:wieder\s+)?({d3}|{d2})$|^({d3}|{d2})\s?-?\s?(?:ansicht|modus)$|^(kipp|kippe|neig|neige)\s+(?:die\s+)?(?:karte|ansicht|kamera)$|^(draufsicht)$|^(von\s+oben)$"
+        ))
+    });
+    let c = VIEW_3D.captures(s)?;
+    let said = c.iter().skip(1).flatten().next().map_or("", |m| m.as_str());
+    Some(said.contains('3') || said.contains("three") || said.contains("drei") || ["tilt", "lean", "tip", "kipp", "kippe", "neig", "neige"].contains(&said))
+}
+
+/// "… in 3D", "three-dimensional", "dreidimensional" anywhere in a sentence ("3 days" is none).
+pub fn says_3d(text: &str) -> bool {
+    static SAYS: LazyLock<Regex> = LazyLock::new(|| re(&format!(r"\b{D3}\b")));
+    SAYS.is_match(&text.to_lowercase())
+}
+
 /// The network radar, the disk map and the Earth as Sir asks for them (`open_jai_view`
 /// arguments): "check the network", "who is on my network?", "is my network secure?", "what is
 /// taking up space?", "map my D drive", "show me the earth", "switch to satellite view", "fly to
@@ -2201,18 +2228,7 @@ fn panel_args(text: &str, s: &str, up: PanelsUp) -> Option<Value> {
         }
         // The camera leaned back over the ground (3D) or straight down again (2D), as Google
         // Earth does it: "switch to 3D", "tilt the map", "back to 2D", "top-down view".
-        static VIEW_3D: LazyLock<Regex> = LazyLock::new(|| {
-            let (d3, d2) = (r"(?:3\s?-?\s?d|three\s?-?\s?d|drei\s?-?\s?d|3\s?-?\s?dimensional|three\s+dimensional|dreidimensional)", r"(?:2\s?-?\s?d|two\s?-?\s?d|zwei\s?-?\s?d|2\s?-?\s?dimensional|two\s+dimensional|zweidimensional|flat|top\s?-?\s?down|birds\s?-?\s?eye|overhead)");
-            let obj = r"(?:it|this|that|the\s+(?:map|view|earth|globe|camera))";
-            let (it, mode) = (r"(?:it\s+|this\s+|that\s+|the\s+(?:map|view|earth|globe|camera|city|town|place|area|streets?)\s+)", r"(?:\s+(?:view|mode|map|perspective))?");
-            let (verb, de) = (r"(?:switch|change|go|flip|turn|swap|put|set|show|show\s+me|view|see|let\s+me\s+see|give\s+me)", r"(?:\s?-?\s?(?:ansicht|modus|karte))?(?:\s+(?:um|zurück))?");
-            re(&format!(
-                r"^(?:{verb}\s+{it}?(?:back\s+)?(?:over\s+)?(?:to|into|in)\s+|(?:go\s+)?back\s+to\s+|in\s+)?(?:the\s+)?({d3}|{d2}){mode}(?:\s+again)?$|^(?:go|make\s+{obj})\s+({d3}|{d2})(?:\s+again)?$|^(tilt)(?:\s+{obj})?(?:\s+back)?$|^(lean|tip)\s+{obj}\s+back$|^(untilt|level|straighten)\s+{obj}(?:\s+(?:out|again))?$|^(untilt)$|^look\s+(straight\s+down)$|^(?:schalte?|wechsel|wechsle|geh|gehe|stell|stelle)\s+(?:zurück\s+)?(?:auf|in|zu|zur|in\s+die)\s+(?:die\s+)?({d3}|{d2}|draufsicht){de}$|^(?:zeig|zeige)\s+(?:es|das|mir\s+das|mir\s+die\s+karte|die\s+karte)\s+in\s+({d3}){de}$|^({d3}|{d2})\s?-?\s?(?:ansicht|modus)$|^(kipp|kippe|neig|neige)\s+(?:die\s+)?(?:karte|ansicht|kamera)$|^(draufsicht)$|^(von\s+oben)$"
-            ))
-        });
-        if let Some(c) = VIEW_3D.captures(s) {
-            let said = c.iter().skip(1).flatten().next().map_or("", |m| m.as_str());
-            let leaned = said.contains('3') || said.contains("three") || said.contains("drei") || ["tilt", "lean", "tip", "kipp", "kippe", "neig", "neige"].contains(&said);
+        if let Some(leaned) = view_3d(s) {
             return Some(earth(if leaned { "show_3d" } else { "show_2d" }));
         }
         static BACK_TO_HOLO: LazyLock<Regex> = LazyLock::new(|| {
@@ -4712,7 +4728,9 @@ pub fn takes_any_name(intent: &Intent) -> bool {
         _ => return false,
     };
     match tool {
-        "open_application" | "close_application" | "find_files" | "remove_widget" => true,
+        // ("Activate goon mode" names no app: never read another way, "game mode".)
+        "open_application" => args["app_name"] != crate::apps::PRIVATE_WINDOW,
+        "close_application" | "find_files" | "remove_widget" => true,
         "window_management" => args.get("target_window").is_some(),
         "create_or_update_widget" => args.get("remove_item").is_some() || args.get("add_item").is_some(),
         "hud_board" => args["action"] == "research",
@@ -4855,6 +4873,9 @@ pub fn parse_as_said(text: &str) -> Option<Intent> {
     }
     if GAME_MODE_ASKED.is_match(&s) {
         return tool("manage_vram", json!({ "action": "game_status" }));
+    }
+    if GOON_MODE.is_match(&s) {
+        return tool("open_application", json!({ "app_name": crate::apps::PRIVATE_WINDOW }));
     }
     if GAME_MODE.is_match(&s) {
         let off =["off", "stop", "disable", "deactivate", "end ", "leave", "exit", "quit", " aus", "beende"].iter().any(|w| s.contains(w));
@@ -5280,6 +5301,11 @@ static SLEEP_MODE: LazyLock<Regex> = LazyLock::new(|| {
 /// "Clear the VRAM", "free up my VRAM", "can you move out of my VRAM?", "mach die Grafikkarte
 /// frei": every model off the GPU at once (the zero-VRAM standby; Alt+J or a word wakes him).
 /// "Game mode on/off" (the VRAM guard's switch; "gaming mode" stays the gaming protocol).
+/// "Activate goon mode": a private window of Sir's browser (Sir, 2026-11-21), as Whisper may
+/// write "goon" ("gun", "goo", "gooning"). "Game mode" stays the game's.
+static GOON_MODE: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"^(?:(?:activate|enable|start|enter|begin|go\s+in(?:to)?|switch\s+to|turn\s+on|switch\s+on|put\s+on|aktivier(?:e)?|starte?)\s+)?(?:the\s+|den\s+)?(?:goon|goone|gooning|gun|goo)\s*-?\s*(?:mode|modus)(?:\s+(?:on|an|ein|please))?$")
+});
 static GAME_MODE: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(?:(?:turn|switch|put)\s+(?:on|off)\s+(?:the\s+)?game\s?mode|(?:turn|switch|put)\s+(?:the\s+)?game\s?mode\s+(?:on|off)|game\s?mode\s+(?:on|off)|(?:start|enable|activate|enter|go into|switch to|stop|disable|deactivate|end|leave|exit|quit)\s+(?:the\s+)?game\s?mode|spielmodus\s+(?:an|aus|ein)|(?:starte|beende)\s+(?:den\s+)?spielmodus)(?:\s+please)?$")
 });
@@ -7953,7 +7979,13 @@ mod tests {
             assert_eq!(tool(text), Some(("manage_vram", json!({"action": "game_off"}))), "{text}");
         }
         assert_ne!(tool("gaming mode").map(|t| t.0), Some("manage_vram"));
-        // The games kit through the whole fast path (no older rule takes these words).
+        // Sir, 2026-11-21: "activate goon mode" opens a private browser window, as Whisper may
+        // write it, and through the brain's whole fast path (never read as "game mode").
+        for text in ["Activate goon mode.", "JAI, activate goon mode", "goon mode on", "turn on goon mode", "enable gun mode", "start gooning mode", "goon mode", "aktiviere den goon modus"] {
+            assert_eq!(tool(text), Some(("open_application", json!({"app_name": "private window"}))), "{text}");
+            assert_eq!(crate::phrasings::route(text), Some(("open_application".to_string(), json!({"app_name": "private window"}))), "{text}");
+        }
+        assert_eq!(tool("activate game mode"), Some(("manage_vram", json!({"action": "game_on"}))), "game mode stays the game's");
         for (text, action) in [
             ("Start Batman.", "start"),
             ("launch gta 5", "start"),

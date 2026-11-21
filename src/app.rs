@@ -1884,11 +1884,12 @@ impl Jai {
                 return;
             }
         }
-        // A song through the microphone: while a player is playing, words Whisper is unsure of and
-        // that are no command are the song's, not Sir's (the player is only asked when in doubt).
-        if !forced && addressee.accepted() && transcript.avg_logprob < crate::ears::UNSURE_LOGPROB {
+        // A song through the microphone: while a player is playing, words that may be the song's
+        // are not Sir's (`ears::maybe_sung`; the player is only asked when in doubt).
+        let unnamed = matches!(addressee, crate::ears::Addressee::DirectIntent | crate::ears::Addressee::HandsFree);
+        if !forced && addressee.accepted() && crate::ears::maybe_sung(&transcript.text, transcript.avg_logprob, unnamed) {
             let playing = tokio::time::timeout(Duration::from_millis(200), crate::music::now_playing()).await.ok().flatten().is_some_and(|np| np.playing);
-            if crate::ears::sung_not_said(&transcript.text, transcript.avg_logprob, playing) {
+            if playing {
                 info!("[Background Speech Ignored] sung, not said (a player is playing; log-probability {:.2}, no-speech {:.2}): '{}'", transcript.avg_logprob, transcript.no_speech, transcript.text);
                 self.inner.heard.lock().unwrap_or_else(|e| e.into_inner()).push(&transcript.text, true);
                 self.emit(HudEvent::Transcript {
@@ -1957,6 +1958,12 @@ impl Jai {
         }
         if lock_on {
             match (&judged, &voice) {
+                // A bare media word is carried out where its clip is too short to judge: "Pause."
+                // in 384 ms came out at a likeness of 0.10, the same voice at 0.58 with his name
+                // before it (jai.log 2026-11-21).
+                (Some(j), _) if !j.his && speech_ms < crate::speaker_id::SHORT_MS && crate::ears::bare_media_order(if wake.matched { &wake.command } else { &transcript.text }) => {
+                    info!("[VOICE LOCK] Too short to judge ({speech_ms} ms voiced, likeness {:.2}): the bare order '{}' is carried out", j.score, transcript.text);
+                }
                 (Some(j), _) if !j.his => {
                     // A voice he knows by name speaks for its account: what Sir allowed it, in a
                     // brain of its own, never as Sir.

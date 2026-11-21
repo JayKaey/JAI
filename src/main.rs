@@ -587,7 +587,7 @@ fn init_logging(log_file: &str) {
 }
 
 /// When the process began, for the start-up timeline.
-static PROCESS_START: std::sync::LazyLock<std::time::Instant> = std::sync::LazyLock::new(std::time::Instant::now);
+pub(crate) static PROCESS_START: std::sync::LazyLock<std::time::Instant> = std::sync::LazyLock::new(std::time::Instant::now);
 
 /// A mark on the start-up timeline: how long after the process began a stage was reached. The
 /// `[START]` lines of one start, read together, say where its time went.

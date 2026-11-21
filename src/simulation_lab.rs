@@ -386,6 +386,11 @@ pub enum SimKind {
 }
 
 impl SimKind {
+    /// The kinds with a 3D view: the orbits, the ripple tank and surfaces.
+    pub fn turns_3d(self) -> bool {
+        matches!(self, Self::Gravity | Self::Ripples | Self::Surface)
+    }
+
     /// The kind a sentence or a `sim_type` names (English and German). The specific wave kinds
     /// come before plain "wave interference".
     pub fn parse(s: &str) -> Option<Self> {
@@ -512,6 +517,9 @@ pub struct Simulation {
     /// Bumped on every change: the window restarts its animation.
     pub revision: u64,
     pub paused: bool,
+    /// Seen in 3D (`SimKind::turns_3d`): the orbits' plane leaning back, the tank as a relief, a
+    /// surface from the side; in 2D from straight above.
+    pub three_d: bool,
 }
 
 impl Simulation {
@@ -984,8 +992,20 @@ impl SimulationLab {
         });
     }
 
+    /// How it is seen (paused, in 3D): the window keeps its run where it is (an `edit` restarts it).
+    fn look(&self, id: &str, f: impl FnOnce(&mut Simulation)) {
+        if let Some(sim) = self.sims.write().unwrap_or_else(|e| e.into_inner()).iter_mut().find(|s| s.id == id) {
+            f(sim);
+        }
+        self.revision.fetch_add(1, Ordering::AcqRel);
+    }
+
     pub fn toggle_pause(&self, id: &str) {
-        self.edit(id, |s| s.paused = !s.paused);
+        self.look(id, |s| s.paused = !s.paused);
+    }
+
+    pub fn set_3d(&self, id: &str, on: bool) {
+        self.look(id, |s| s.three_d = on);
     }
 
     pub fn restart(&self, id: &str) {
@@ -1035,6 +1055,7 @@ impl SimulationLab {
             scene: "solar system".into(),
             revision: 0,
             paused: false,
+            three_d: kind == SimKind::Surface || (kind.turns_3d() && crate::intents::says_3d(spec)),
         };
         configure(&mut sim, spec)?;
         self.sims.write().unwrap_or_else(|e| e.into_inner()).push(sim.clone());
@@ -1399,11 +1420,11 @@ pub fn tool_definitions() -> Vec<Value> {
         }}),
         json!({"type": "function", "function": {
             "name": "adjust_simulation",
-            "description": "Change an open simulation by voice: changes maps slider names to values or operations ({\"angle\": 60, \"velocity\": \"*2\"}; also \"half\", \"+10\", or \"function\": \"sin(x)\" to add a curve, \"derivative\": true); action restart, pause, resume or close. sim omitted = the newest simulation.",
+            "description": "Change an open simulation by voice: changes maps slider names to values or operations ({\"angle\": 60, \"velocity\": \"*2\"}; also \"half\", \"+10\", or \"function\": \"sin(x)\" to add a curve, \"derivative\": true); action restart, pause, resume, close, or 3d / 2d for its view. sim omitted = the newest simulation.",
             "parameters": {"type": "object", "properties": {
                 "sim": {"type": "string", "description": "id, title or kind (\"the pendulum\")"},
                 "changes": {"type": "object"},
-                "action": {"type": "string", "enum": ["set", "restart", "pause", "resume", "close"]}
+                "action": {"type": "string", "enum": ["set", "restart", "pause", "resume", "close", "3d", "2d"]}
             }, "required": []}
         }}),
     ]
@@ -1448,6 +1469,17 @@ pub fn run_tool(lab: &SimulationLab, name: &str, args: &Value) -> Result<String,
                         lab.toggle_pause(&sim.id);
                     }
                     format!("{} the {} simulation.", if wanted { "Paused" } else { "Resumed" }, sim.title)
+                }
+                "3d" | "2d" => {
+                    let (deep, view) = (action == "3d", action.to_uppercase());
+                    if !sim.kind.turns_3d() {
+                        format!("The {} simulation stays flat, Sir: the orbits, the ripple tank and surfaces turn {view}.", sim.title)
+                    } else if sim.three_d == deep {
+                        format!("The {} simulation is in {view} already, Sir.", sim.title)
+                    } else {
+                        lab.set_3d(&sim.id, deep);
+                        format!("The {} simulation in {view}, Sir.", sim.title)
+                    }
                 }
                 _ => {
                     let changes = args.get("changes").cloned().or_else(|| str_arg(args, &["text", "change"]).map(|s| json!(s))).unwrap_or(Value::Null);
@@ -1651,6 +1683,26 @@ fn trim_number(x: f64) -> String {
     s.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
+/// "Can you make it 3D?", "show the orbits in 3D", "back to 2D", "mach es 3D" while a
+/// simulation is open: `adjust_simulation` with the action "3d" or "2d". A bare order is the
+/// Earth's while it is up, and one that names a map, the Earth or a place is never the lab's.
+pub fn view_order(lab: &SimulationLab, text: &str) -> Option<Value> {
+    use regex::Regex;
+    use std::sync::LazyLock;
+    static OWN: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"\b(?:the|die|den|das)\s+(?:simulations?|sim|simulator|orbits?|planets?|solar\s+system|ripples?|waves?|tank|surface|plot|graph|bahnen|wellen|fläche)\b").expect("valid simulation noun regex")
+    });
+    let sim = lab.find("")?;
+    let lower = text.to_lowercase();
+    let named = OWN.is_match(&lower);
+    let deep = crate::intents::view_3d(&crate::intents::normalize_phrase(&OWN.replace_all(&lower, "it")))?;
+    let other = ["map", "earth", "globe", "camera", "city", "town", "street", "streets", "karte", "erde", "globus", "kamera", "stadt"];
+    if !named && (crate::earth::is_open() || lower.split(|c: char| !c.is_alphanumeric()).any(|w| other.contains(&w))) {
+        return None;
+    }
+    Some(json!({ "sim": sim.id, "action": if deep { "3d" } else { "2d" } }))
+}
+
 /// "Set the angle to 60 degrees and double the velocity" while a simulation is open: the
 /// `adjust_simulation` arguments (the instant fast path).
 pub fn voice_adjust(lab: &SimulationLab, text: &str) -> Option<Value> {
@@ -1719,6 +1771,46 @@ mod tests {
         assert!(a.contains("19.8 metres per second") && a.contains("2.02 seconds"), "{a}");
         assert!(quick_physics_answer("How fast is a cheetah?").is_none());
         assert!(quick_physics_answer("Show me the simulation").is_none());
+    }
+
+    /// "Can you make it 3D?" with the orbits open (Sir's screenshot, 2026-11-21) turned the view
+    /// of nothing: no route knew the words. Now the newest simulation turns, its run goes on (a
+    /// pause rewound it too), a flat kind says so, and a map or the Earth keeps its own orders.
+    #[test]
+    fn make_it_3d_turns_the_open_simulation() {
+        let lab = SimulationLab::default();
+        assert!(view_order(&lab, "Can you make it 3D?").is_none(), "nothing is open");
+        let sim = lab.launch(SimKind::Gravity, "solar system", None).unwrap();
+        assert!(!sim.three_d);
+        for (text, action) in [
+            ("Can you make it 3D?", "3d"),
+            ("Show the orbits in 3D", "3d"),
+            ("Make the simulation three-dimensional", "3d"),
+            ("3D view, please", "3d"),
+            ("Mach es 3D", "3d"),
+            ("Back to 2D", "2d"),
+            ("Make it flat again", "2d"),
+            ("Mach es wieder 2D", "2d"),
+        ] {
+            let args = view_order(&lab, text).unwrap_or_else(|| panic!("{text}"));
+            assert_eq!((args["sim"].as_str(), args["action"].as_str()), (Some(sim.id.as_str()), Some(action)), "{text}");
+        }
+        for text in ["Tilt the map", "Show me the earth in 3D", "Make it louder", "Render me an Iron Man suit in 3D", "What is 3D printing?"] {
+            assert!(view_order(&lab, text).is_none(), "{text}");
+        }
+        let said = run_tool(&lab, "adjust_simulation", &json!({ "action": "3d" })).unwrap();
+        let now = lab.get(&sim.id).unwrap();
+        assert!(now.three_d && now.revision == sim.revision, "the run goes on: {said}");
+        assert!(run_tool(&lab, "adjust_simulation", &json!({ "action": "3d" })).unwrap().contains("already"));
+        lab.toggle_pause(&sim.id);
+        assert_eq!(lab.get(&sim.id).unwrap().revision, sim.revision, "a pause holds the run where it is");
+        run_tool(&lab, "adjust_simulation", &json!({ "action": "2d" })).unwrap();
+        assert!(!lab.get(&sim.id).unwrap().three_d);
+        let pendulum = lab.launch(SimKind::Pendulum, "", None).unwrap();
+        assert!(run_tool(&lab, "adjust_simulation", &json!({ "sim": pendulum.id, "action": "3d" })).unwrap().contains("flat"));
+        assert!(lab.launch(SimKind::Gravity, "simulate the solar system in 3D", None).unwrap().three_d);
+        assert!(lab.launch(SimKind::Surface, "z = x*y", None).unwrap().three_d);
+        assert!(!lab.launch(SimKind::Gravity, "the sun and the earth for 3 days", None).unwrap().three_d);
     }
 
     #[test]

@@ -139,6 +139,11 @@ fn best_match<'a>(items: &'a [LibraryItem], query: &str, kinds: &[ItemKind], art
         .filter(|i| kinds.contains(&i.kind))
         .map(|i| {
             let mut s = name_score(query, &i.name);
+            // A copy filed under its own title as its artist ("Back in Black" by "Back In
+            // Black") gives way to the song of that name (Sir heard it on 2026-11-21).
+            if compact(&i.artist) == compact(&i.name) {
+                s -= 0.01;
+            }
             if let Some(a) = artist.filter(|a| !a.is_empty()) {
                 // The artist confirms (or contradicts) a song of that title.
                 s += if name_score(a, &i.artist) >= 0.85 || compact(&i.artist).contains(&compact(a)) { 0.05 } else { -0.05 };
@@ -2449,6 +2454,8 @@ mod tests {
         assert!(best_match(&lib, "dinner jazz", &[ItemKind::Playlist], None).is_none());
         let (song, _) = best_match(&lib, "back in black", &[ItemKind::Track], Some("ACDC")).unwrap();
         assert_eq!(song.artist, "AC/DC", "the artist breaks the tie");
+        // (Sir, 2026-11-21: "play Back in Black" played the copy by "Back In Black".)
+        assert_eq!(best_match(&lib, "back in black", &[ItemKind::Track], None).unwrap().0.artist, "AC/DC", "a copy filed under its own title gives way");
         assert_eq!(phonetic("chase rock"), phonetic("jaysrock"));
     }
 

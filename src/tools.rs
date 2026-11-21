@@ -1794,6 +1794,7 @@ impl ToolContext {
                     let summary: Vec<String> = apps.iter().map(|a| format!("{} on Monitor {}{}", apps::display_name(&a.process), a.monitor, if a.maximized { " (maximised)" } else { "" })).collect();
                     self.protocols
                         .save(Protocol {
+                            when: Vec::new(),
                             name: name.to_string(),
                             description: str_arg(args, &["description"]).map(String::from).unwrap_or_else(|| format!("Captured workspace: {}.", summary.join(", "))),
                             trigger_phrases: Vec::new(),
@@ -1820,6 +1821,11 @@ impl ToolContext {
                     self.protocols.list().iter().map(|p| p.name.as_str()).collect::<Vec<_>>().join(", ")
                 )),
                 Some(p) => {
+                    // Steps in his own words follow the rest, one after the other, as if he had
+                    // said them.
+                    let (said, steps): (Vec<protocols::Step>, Vec<protocols::Step>) = p.steps.iter().cloned().partition(|s| s.tool == protocols::ORDER);
+                    let orders: Vec<String> = said.iter().filter_map(|s| s.args["order"].as_str().map(String::from)).collect();
+                    let p = Protocol { steps, ..p };
                     // Steps on different things (each app, the music, JAI's own windows)
                     // run side by side; steps on the same thing keep their order.
                     let stages = protocols::plan(&p.steps);
@@ -1859,15 +1865,23 @@ impl ToolContext {
                         let first = outcome.output.lines().next().unwrap_or("").chars().take(120).collect::<String>();
                         lines.push(format!("{} {}: {first}", if outcome.success { "OK" } else { "FAIL" }, step.tool));
                     }
-                    let summary = format!(
-                        "{} engaged ({} of {} steps succeeded). {}\n{}",
-                        protocols::display_name(&p.name),
-                        p.steps.len() - failed,
-                        p.steps.len(),
-                        protocols::choreography(&p),
-                        lines.join("\n")
-                    );
-                    if failed == p.steps.len() { Err(summary) } else { Ok(summary) }
+                    let then = if orders.is_empty() { String::new() } else { format!("\nThen: {}.", orders.join(", then ")) };
+                    if !orders.is_empty() {
+                        let _ = self.stark.events.send(crate::stark::StarkEvent::RunMacro { name: format!("{} protocol", p.name), steps: orders.clone() });
+                    }
+                    let summary = if p.steps.is_empty() {
+                        format!("{} engaged.{then}", protocols::display_name(&p.name))
+                    } else {
+                        format!(
+                            "{} engaged ({} of {} steps succeeded). {}\n{}{then}",
+                            protocols::display_name(&p.name),
+                            p.steps.len() - failed,
+                            p.steps.len(),
+                            protocols::choreography(&p),
+                            lines.join("\n")
+                        )
+                    };
+                    if failed == p.steps.len() && orders.is_empty() { Err(summary) } else { Ok(summary) }
                 }
             },
             "list" | "show" => Ok(self
@@ -1891,6 +1905,7 @@ impl ToolContext {
                 };
                 self.protocols
                     .save(Protocol {
+                        when: Vec::new(),
                         name: name.to_string(),
                         description: str_arg(args, &["description"]).unwrap_or("").to_string(),
                         trigger_phrases: list("trigger_phrases"),

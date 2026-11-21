@@ -374,6 +374,10 @@ pub async fn open(name: &str, args: &[String]) -> Result<String, String> {
         let via = open_default_browser(&url).await?;
         return Ok(format!("Opened {url} in the default browser ({via})."));
     }
+    if wants_private_window(&query) {
+        let browser = open_private_window().await?;
+        return Ok(format!("Opened a private window of {browser}."));
+    }
     if find_spec(&query).is_some_and(|s| s.id == "browser") {
         let via = open_default_browser(HOME_PAGE).await?;
         return Ok(format!("Opened your default web browser ({via})."));
@@ -509,6 +513,60 @@ pub async fn open_default_browser(url: &str) -> Result<String, String> {
         })
         .await
         .map_err(|e| e.to_string())?
+    }
+}
+
+/// What "activate goon mode" opens (`intents`): a private window of Sir's browser.
+pub const PRIVATE_WINDOW: &str = "private window";
+
+/// "A private window", "an incognito tab", "inprivate", "privates Fenster": no app of that name
+/// ("open private internet access" is one).
+fn wants_private_window(query: &str) -> bool {
+    let words: Vec<&str> = query.split_whitespace().collect();
+    let private = words.iter().any(|w| ["privat", "incognito", "inprivate", "inkognito"].iter().any(|p| w.starts_with(p)));
+    private && (words.len() == 1 || words.iter().any(|w| ["window", "tab", "browser", "fenster", "mode", "modus", "session", "browsing"].contains(w)))
+}
+
+/// The browser a ProgId (Windows: "ChromeHTML", "MSEdgeHTM", "FirefoxURL-…") or a desktop file
+/// (Linux: "firefox.desktop") names, with its switch for a private window: (program, switch,
+/// name). Edge on Windows and Firefox on Linux where none is known.
+fn private_browser(id: &str) -> (&'static str, &'static str, &'static str) {
+    let id = id.to_lowercase();
+    let program = |windows: &'static str, linux: &'static str| if cfg!(windows) { windows } else { linux };
+    if id.contains("firefox") || (!cfg!(windows) && !["brave", "chrome", "chromium", "opera", "vivaldi", "edge"].iter().any(|b| id.contains(b))) {
+        (program("firefox.exe", "firefox"), "-private-window", "Firefox")
+    } else if id.contains("brave") {
+        (program("brave.exe", "brave-browser"), "--incognito", "Brave")
+    } else if id.contains("chromium") {
+        (program("chrome.exe", "chromium"), "--incognito", "Chromium")
+    } else if id.contains("chrome") {
+        (program("chrome.exe", "google-chrome"), "--incognito", "Chrome")
+    } else if id.contains("opera") {
+        (program("opera.exe", "opera"), "--private", "Opera")
+    } else if id.contains("vivaldi") {
+        (program("vivaldi.exe", "vivaldi"), "--incognito", "Vivaldi")
+    } else {
+        (program("msedge.exe", "microsoft-edge"), "--inprivate", "Edge")
+    }
+}
+
+/// Opens a private window of Sir's default browser (Sir, 2026-11-21: "when you say activate
+/// goon mode than he should open a private browser window"). Which browser it was.
+pub async fn open_private_window() -> Result<String, String> {
+    #[cfg(windows)]
+    let id = crate::kit_pc::reg_text(windows::Win32::System::Registry::HKEY_CURRENT_USER, r"Software\Microsoft\Windows\Shell\Associations\UrlAssociations\https\UserChoice", "ProgId").unwrap_or_default();
+    #[cfg(not(windows))]
+    let id = std::process::Command::new("xdg-settings").args(["get", "default-web-browser"]).output().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default();
+    let (program, switch, name) = private_browser(&id);
+    #[cfg(windows)]
+    match crate::win32::call(move || crate::win32::shell_execute(program, Some(switch), None)).await {
+        Ok(Ok(())) => Ok(name.to_string()),
+        Ok(Err(e)) | Err(e) => Err(format!("{name} did not open a private window: {e}")),
+    }
+    #[cfg(not(windows))]
+    {
+        let bin = which(program).ok_or_else(|| format!("{name} is not installed."))?;
+        spawn_detached(&bin.display().to_string(), &[switch.to_string()]).map(|()| name.to_string())
     }
 }
 
@@ -1076,6 +1134,30 @@ pub async fn close(name: &str, force: bool) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Goon mode (Sir, 2026-11-21): a private window of whatever browser is his default, by that
+    /// browser's own switch; "Private Internet Access" stays an app.
+    #[test]
+    fn a_private_window_opens_in_the_default_browser() {
+        for query in [PRIVATE_WINDOW, "incognito tab", "inprivate", "privates fenster", "private browser window", "incognito mode"] {
+            assert!(wants_private_window(query), "{query}");
+        }
+        for query in ["private internet access", "browser", "private", "my private notes"] {
+            assert_eq!(wants_private_window(query), query == "private", "{query}");
+        }
+        if cfg!(windows) {
+            assert_eq!(private_browser("MSEdgeHTM"), ("msedge.exe", "--inprivate", "Edge"));
+            assert_eq!(private_browser("ChromeHTML"), ("chrome.exe", "--incognito", "Chrome"));
+            assert_eq!(private_browser("FirefoxURL-308046B0AF4A39CB"), ("firefox.exe", "-private-window", "Firefox"));
+            assert_eq!(private_browser("BraveHTML"), ("brave.exe", "--incognito", "Brave"));
+            assert_eq!(private_browser("OperaGXStable").1, "--private");
+            assert_eq!(private_browser("").2, "Edge", "none registered: Edge, which Windows has");
+        } else {
+            assert_eq!(private_browser("firefox.desktop"), ("firefox", "-private-window", "Firefox"));
+            assert_eq!(private_browser("google-chrome.desktop"), ("google-chrome", "--incognito", "Chrome"));
+            assert_eq!(private_browser("").2, "Firefox");
+        }
+    }
 
     #[test]
     fn the_part_an_app_plays_is_that_app() {

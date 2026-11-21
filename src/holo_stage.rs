@@ -89,6 +89,61 @@ pub fn slot(bounds: Rect, size: Vec2, core: Rect, taken: &[Rect], gap: f32) -> O
         .map(|(_, at)| at)
 }
 
+/// How much of `taken` a window at `r` covers: its area over them, a header (the top `head` of
+/// each, where its name and keys are) ten times, and the `core` a hundred times.
+fn covered(r: Rect, taken: &[Rect], head: f32, core: Option<Rect>) -> f32 {
+    let over = |b: Rect| {
+        let i = r.intersect(b);
+        if i.is_positive() {
+            i.area()
+        } else {
+            0.0
+        }
+    };
+    taken.iter().map(|t| over(*t) + 9.0 * over(Rect::from_min_size(t.min, Vec2::new(t.width(), head)))).sum::<f32>() + core.map_or(0.0, |c| 100.0 * over(c))
+}
+
+/// Where a window of `size` goes in `bounds` when no spot is free of `taken`: where it covers
+/// them least (`covered`), of such spots the nearest to `want`. (Sir, 2026-11-21: "When a
+/// monitor is to full than he should just put in somewhere so that it doesnt overlay that much.")
+pub fn least_covered(bounds: Rect, size: Vec2, taken: &[Rect], head: f32, core: Option<Rect>, want: Pos2) -> Pos2 {
+    let mut xs = vec![want.x, bounds.left(), bounds.right() - size.x];
+    let mut ys = vec![want.y, bounds.top(), bounds.bottom() - size.y];
+    for t in taken.iter().chain(core.as_ref()) {
+        xs.extend([t.left(), t.right(), t.left() - size.x, t.right() - size.x]);
+        ys.extend([t.top() + head, t.bottom(), t.top() - size.y, t.bottom() - size.y]);
+    }
+    let mut best = (f32::INFINITY, f32::INFINITY, want);
+    for &y in &ys {
+        for &x in &xs {
+            let at = pos2(x.clamp(bounds.left(), (bounds.right() - size.x).max(bounds.left())), y.clamp(bounds.top(), (bounds.bottom() - size.y).max(bounds.top())));
+            let (cost, far) = (covered(Rect::from_min_size(at, size), taken, head, core), (at - want).length());
+            if cost < best.0 - 0.5 || (cost <= best.0 + 0.5 && far < best.1) {
+                best = (cost, far, at);
+            }
+        }
+    }
+    best.2
+}
+
+/// Where a window wanted at `want` goes in `bounds`: there when it keeps `gap` from all of
+/// `taken`, else the nearest spot that does, else where it covers them least.
+pub fn settle(bounds: Rect, want: Rect, taken: &[Rect], gap: f32, head: f32) -> Rect {
+    let size = want.size().min(bounds.size());
+    let mut xs = vec![want.left(), bounds.left(), bounds.right() - size.x];
+    let mut ys = vec![want.top(), bounds.top(), bounds.bottom() - size.y];
+    for t in taken {
+        xs.extend([t.right() + gap, t.left() - gap - size.x]);
+        ys.extend([t.bottom() + gap, t.top() - gap - size.y]);
+    }
+    let far = |r: &Rect| (r.min - want.min).length();
+    ys.iter()
+        .flat_map(|&y| xs.iter().map(move |&x| Rect::from_min_size(pos2(x, y), size)))
+        .filter(|r| inside(*r, bounds) && clear(*r, taken, gap))
+        .min_by(|a, b| far(a).total_cmp(&far(b)))
+        .unwrap_or_else(|| Rect::from_min_size(least_covered(bounds, size, taken, head, None, want.min), size))
+}
+
 /// The leader that ties a window to the core: from the core's range circle towards the window,
 /// to the corner of the window's header that faces the core. None for a window that covers
 /// the core or stands on it.
@@ -159,6 +214,32 @@ mod tests {
         let at = slot(upright, vec2(700.0, 400.0), core, &[], GAP).expect("over or under the core");
         let r = Rect::from_min_size(at, vec2(700.0, 400.0));
         assert!(r.bottom() <= core.top() || r.top() >= core.bottom(), "{r:?}");
+    }
+
+    /// Sir, 2026-11-21: a window he moves keeps off the others as a new one does; where the
+    /// monitor has no room left, it covers them least and never their headers when it can.
+    #[test]
+    fn a_moved_window_settles_off_the_others_or_covers_them_least() {
+        let standing = Rect::from_min_size(pos2(100.0, 100.0), vec2(600.0, 400.0));
+        let want = Rect::from_min_size(pos2(150.0, 150.0), vec2(500.0, 300.0));
+        let free = settle(screen(), want, &[standing], GAP, 36.0);
+        assert!(free == want.translate(free.min - want.min) && screen().contains_rect(free), "its size kept, on the screen: {free:?}");
+        assert!(!free.expand(GAP * 0.5 - 0.5).intersects(standing.expand(GAP * 0.5 - 0.5)), "off the other: {free:?}");
+        assert!((free.min - want.min).length() < 700.0, "the nearest free spot, not any: {free:?}");
+        let clear = Rect::from_min_size(pos2(1200.0, 500.0), vec2(500.0, 300.0));
+        assert_eq!(settle(screen(), clear, &[standing], GAP, 36.0), clear, "where it was sent when that is free");
+        // No room at all: four windows fill the screen in quarters.
+        let quarters: Vec<Rect> = [(0.0, 0.0), (960.0, 0.0), (0.0, 540.0), (960.0, 540.0)].into_iter().map(|(x, y)| Rect::from_min_size(pos2(x, y), vec2(960.0, 540.0))).collect();
+        let full = settle(screen(), want, &quarters, GAP, 36.0);
+        assert!(screen().expand(0.5).contains_rect(full), "{full:?}");
+        let heads = |r: Rect| quarters.iter().filter(|q| r.intersects(Rect::from_min_size(q.min, vec2(q.width(), 36.0)))).count();
+        assert_eq!(heads(full), 0, "it covers no header while a place without one is left: {full:?}");
+        // The least covered spot beats the middle of everything.
+        let middle = Rect::from_center_size(screen().center(), want.size());
+        assert!(covered(full, &quarters, 36.0, None) < covered(middle, &quarters, 36.0, None), "{full:?}");
+        // And never the core when it can help it.
+        let at = least_covered(screen(), vec2(500.0, 300.0), &quarters, 36.0, Some(core()), pos2(710.0, 390.0));
+        assert!(!Rect::from_min_size(at, vec2(500.0, 300.0)).intersect(core()).is_positive(), "an edge on the core's is no cover: {at:?}");
     }
 
     #[test]

@@ -308,6 +308,9 @@ fn draw_body(ui: &mut egui::Ui, p: &Palette, sim: &Simulation, host: &WidgetHost
         if crate::holo_ui::key(ui, if sim.paused { "Resume" } else { "Pause" }).clicked() {
             lab.toggle_pause(&sim.id);
         }
+        if sim.kind.turns_3d() && crate::holo_ui::key_on(ui, "3D", sim.three_d).clicked() {
+            lab.set_3d(&sim.id, !sim.three_d);
+        }
         if crate::holo_ui::key(ui, "Restart").clicked() {
             lab.restart(&sim.id);
         }
@@ -912,6 +915,16 @@ fn tag(painter: &egui::Painter, at: Pos2, anchor: Align2, text: &str, colour: Co
     painter.text(at, anchor, text, crate::holo::font(Face::Mono, 10.0), colour);
 }
 
+/// A tag at the first of `spots` where no tag in `taken` stands, or none: crowded names give
+/// way rather than print over each other.
+fn tag_free(painter: &egui::Painter, taken: &mut Vec<Rect>, spots: &[(Pos2, Align2)], text: &str, colour: Color32) {
+    let galley = painter.layout_no_wrap(text.to_string(), crate::holo::font(Face::Mono, 10.0), colour);
+    if let Some(rect) = spots.iter().map(|&(at, anchor)| anchor.anchor_size(at, galley.size())).find(|rect| !taken.iter().any(|t| t.intersects(*rect))) {
+        taken.push(rect);
+        painter.galley(rect.min, galley, colour);
+    }
+}
+
 /// A canvas under its read-out (the read-out takes the top 44 points).
 fn below_readout(rect: Rect) -> Rect {
     Rect::from_min_max(rect.min + vec2(0.0, 44.0), rect.max - vec2(0.0, 4.0))
@@ -926,44 +939,98 @@ fn draw_gravity(painter: &egui::Painter, rect: Rect, sim: &Simulation, rt: &Runt
     let World::Gravity { scene, reach, e0, .. } = &rt.world else { return };
     let th = crate::holo::theme();
     let area = below_readout(rect);
-    let (centre, radius) = (area.center(), (area.width().min(area.height()) / 2.0 - 24.0).max(40.0));
+    let deep = sim.three_d;
+    // (Leaning back, the plane takes about half its width in height: it may be drawn larger.)
+    let radius = if deep { ((area.width() - 40.0) / 2.7).min((area.height() - 40.0) / 1.1) } else { area.width().min(area.height()) / 2.0 - 24.0 }.max(40.0);
+    let centre = area.center();
     // Distance from the centre by its square root when the planets would otherwise leave the inner ones a dot.
-    let place = |p: [f64; 2]| {
+    let flat = |p: [f64; 2]| {
         let r = (p[0].hypot(p[1]) / reach).min(4.0);
         let k = if scene.root_scale { r.sqrt() } else { r } as f32;
         let angle = p[1].atan2(p[0]) as f32;
-        centre + vec2(angle.cos(), -angle.sin()) * (k * radius)
+        egui::Vec2::angled(angle) * (k * radius)
     };
-    // The origin's axes and range circles: the scale the scene is drawn at.
-    painter.line_segment([pos2(area.left(), centre.y), pos2(area.right(), centre.y)], stroke(1.0, faint(th.ink(), 0.07)));
-    painter.line_segment([pos2(centre.x, area.top()), pos2(centre.x, area.bottom())], stroke(1.0, faint(th.ink(), 0.07)));
-    for frac in [0.25f32, 0.5, 1.0] {
-        painter.circle_stroke(centre, radius * frac, stroke(1.0, faint(th.ink(), 0.16)));
-        let value = reach * if scene.root_scale { (frac * frac) as f64 } else { frac as f64 };
-        tag(painter, centre + vec2(4.0, radius * frac - 2.0), Align2::LEFT_BOTTOM, &format!("{} {}", label(value), scene.units.0), th.muted());
-    }
     let heavy = (0..scene.bodies.len()).max_by(|a, b| scene.bodies[*a].mass.total_cmp(&scene.bodies[*b].mass)).unwrap_or(0);
+    // 3D: the plane of the orbits seen from 30° above, turning slowly, in perspective, sunk
+    // into the well the masses make of it (their potential, softened, its depth capped).
+    let top = scene.bodies.get(heavy).map_or(1.0, |b| b.mass.max(1e-300));
+    let wells: Vec<(egui::Vec2, f32)> = scene.bodies.iter().map(|b| (flat(b.pos), (b.mass / top) as f32)).collect();
+    let (soft, turn, rise) = (radius * 0.15, (20.0 + 4.0 * rt.t as f32).to_radians(), 30f32.to_radians());
+    // (where on the screen, how large against the plane seen from above, how near: 0-1)
+    let view = |at: egui::Vec2| -> (Pos2, f32, f32) {
+        if !deep {
+            return (centre + vec2(at.x, -at.y), 1.0, 1.0);
+        }
+        let h = -0.42 * radius * wells.iter().map(|(p, m)| m * soft / ((at - *p).length_sq() + soft * soft).sqrt()).sum::<f32>().min(1.3);
+        let (x, y) = (at.x * turn.cos() - at.y * turn.sin(), at.x * turn.sin() + at.y * turn.cos());
+        let (up, near) = (y * rise.sin() + h * rise.cos(), -y * rise.cos() + h * rise.sin());
+        let scale = 3.5 * radius / (3.5 * radius - near.min(1.5 * radius));
+        (centre + vec2(0.0, -0.13 * radius) + vec2(x, -up) * scale, scale, (near / radius * 0.5 + 0.5).clamp(0.0, 1.0))
+    };
+    // The origin's axes and range circles: the scale the scene is drawn at. In 3D the plane is
+    // a sheet of rings and spokes that sinks where the masses are.
+    if deep {
+        let tau = std::f32::consts::TAU;
+        for k in 1..=8 {
+            let ring: Vec<Pos2> = (0..=72).map(|i| view(egui::Vec2::angled(i as f32 / 72.0 * tau) * (radius * k as f32 / 8.0)).0).collect();
+            crate::holo::path(painter, &ring, faint(th.ink(), if [2, 4, 8].contains(&k) { 0.16 } else { 0.07 }));
+        }
+        for s in 0..24 {
+            let spoke: Vec<Pos2> = (0..=24).map(|i| view(egui::Vec2::angled(s as f32 / 24.0 * tau) * (radius * i as f32 / 24.0)).0).collect();
+            crate::holo::path(painter, &spoke, faint(th.ink(), if s % 6 == 0 { 0.16 } else { 0.06 }));
+        }
+    } else {
+        painter.line_segment([pos2(area.left(), centre.y), pos2(area.right(), centre.y)], stroke(1.0, faint(th.ink(), 0.07)));
+        painter.line_segment([pos2(centre.x, area.top()), pos2(centre.x, area.bottom())], stroke(1.0, faint(th.ink(), 0.07)));
+    }
+    // (The scale's figures: under each circle seen from above; in 3D at its left end, clear of
+    // the bodies' names, which stand to their right, and of the sun low in its well.)
+    let (side, anchor, nudge) = if deep { (vec2(-turn.cos(), turn.sin()), Align2::RIGHT_BOTTOM, vec2(-4.0, -2.0)) } else { (vec2(0.0, -1.0), Align2::LEFT_BOTTOM, vec2(4.0, -2.0)) };
+    let mut figures = Vec::new();
+    for frac in [0.25f32, 0.5, 1.0] {
+        if !deep {
+            painter.circle_stroke(centre, radius * frac, stroke(1.0, faint(th.ink(), 0.16)));
+        }
+        let value = reach * if scene.root_scale { (frac * frac) as f64 } else { frac as f64 };
+        figures.push((view(side * (radius * frac)).0 + nudge, format!("{} {}", label(value), scene.units.0)));
+    }
     let tones = [th.accent(), th.ink(), th.deep()];
     let colour_of = |i: usize| if i == heavy { th.hot() } else { tones[i % 3] };
     let mut light = Light::new(painter);
     for (i, (trail, body)) in scene.trails.iter().zip(&scene.bodies).enumerate() {
-        let points: Vec<Pos2> = trail.iter().copied().chain([body.pos]).map(&place).collect();
-        let n = points.len();
+        let seen: Vec<(Pos2, f32, f32)> = trail.iter().copied().chain([body.pos]).map(|p| view(flat(p))).collect();
+        let n = seen.len();
         if n >= 2 {
-            let colours: Vec<Color32> = (0..n).map(|k| lit(colour_of(i), 0.12 + 0.8 * (k as f32 / n as f32))).collect();
+            let points: Vec<Pos2> = seen.iter().map(|s| s.0).collect();
+            let colours: Vec<Color32> = seen.iter().enumerate().map(|(k, s)| lit(colour_of(i), (0.12 + 0.8 * (k as f32 / n as f32)) * (0.55 + 0.45 * s.2))).collect();
             light.ribbon(&points, &colours, false, 1.3);
         }
-        light.spark(place(body.pos), body.size * 1.6, colour_of(i));
+        let (at, scale, _) = view(flat(body.pos));
+        light.spark(at, body.size * 1.6 * scale, colour_of(i));
     }
     light.paint(painter);
-    for (i, body) in scene.bodies.iter().enumerate() {
-        let at = place(body.pos);
-        painter.circle_filled(at, body.size * 0.4, th.hot());
-        painter.circle_stroke(at, body.size * 0.75, stroke(1.2, colour_of(i)));
-        tag(painter, at + vec2(body.size * 0.8 + 3.0, -body.size * 0.8), Align2::LEFT_BOTTOM, &body.name, th.ink());
+    // The bodies, the farthest first; then the names, the heaviest's first (at a free corner of
+    // its body), the scale's last.
+    let mut seen: Vec<(usize, (Pos2, f32, f32))> = scene.bodies.iter().enumerate().map(|(i, b)| (i, view(flat(b.pos)))).collect();
+    seen.sort_by(|a, b| a.1 .2.total_cmp(&b.1 .2));
+    for &(i, (at, scale, _)) in &seen {
+        let size = scene.bodies[i].size * scale;
+        painter.circle_filled(at, size * 0.4, th.hot());
+        painter.circle_stroke(at, size * 0.75, stroke(1.2, colour_of(i)));
+    }
+    seen.sort_by(|a, b| scene.bodies[b.0].mass.total_cmp(&scene.bodies[a.0].mass));
+    let mut taken = Vec::new();
+    for (i, (at, scale, _)) in seen {
+        let (x, y) = (scene.bodies[i].size * scale * 0.8 + 3.0, scene.bodies[i].size * scale * 0.8);
+        let spots = [(at + vec2(x, -y), Align2::LEFT_BOTTOM), (at + vec2(-x, -y), Align2::RIGHT_BOTTOM), (at + vec2(x, y), Align2::LEFT_TOP), (at + vec2(-x, y), Align2::RIGHT_TOP)];
+        tag_free(painter, &mut taken, &spots, &scene.bodies[i].name, th.ink());
+    }
+    for (at, text) in figures {
+        tag_free(painter, &mut taken, &[(at, anchor)], &text, th.muted());
     }
     let drift = (scene.energy() - e0) / e0.abs().max(1e-300);
-    readout(painter, rect, 8.0, &format!("t = {} {}   energy drift {drift:+.1e}   {} bodies   speed ×{:.1}", trim_t(scene.t), scene.units.1, scene.bodies.len(), sim.value("speed")), th.ink());
+    let well = if deep { "   3D: the plane sinks into the well of their gravity" } else { "" };
+    readout(painter, rect, 8.0, &format!("t = {} {}   energy drift {drift:+.1e}   {} bodies   speed ×{:.1}{well}", trim_t(scene.t), scene.units.1, scene.bodies.len(), sim.value("speed")), th.ink());
 }
 
 /// A time with the digits it needs (0.0748 years, 12.4 years).
@@ -975,6 +1042,10 @@ fn draw_ripples(painter: &egui::Painter, rect: Rect, sim: &Simulation, rt: &Runt
     let World::Ripples(tank) = &rt.world else { return };
     let th = crate::holo::theme();
     let area = below_readout(rect);
+    readout(painter, rect, 8.0, &format!("f = {:.3}   λ = {:.1} cells   slits {}   slit width {} cells   separation {} cells   {} source{}", tank.frequency, tank.wavelength(), sim.value("slits").round() as i64, sim.value("slit_width").round() as i64, sim.value("separation").round() as i64, if tank.plane { "plane" } else { "point" }, if sim.three_d { "   3D: the water's height" } else { "" }), th.ink());
+    if sim.three_d {
+        return relief(painter, area, tank);
+    }
     let aspect = tank.w as f32 / tank.h as f32;
     let (w, h) = if area.width() / area.height() > aspect { (area.height() * aspect, area.height()) } else { (area.width(), area.width() / aspect) };
     let tank_rect = Rect::from_center_size(area.center(), vec2(w, h));
@@ -1005,7 +1076,50 @@ fn draw_ripples(painter: &egui::Painter, rect: Rect, sim: &Simulation, rt: &Runt
     }
     painter.line_segment([at, at + vec2(lambda, 0.0)], stroke(1.0, th.ink()));
     tag(painter, at + vec2(lambda + 6.0, 0.0), Align2::LEFT_CENTER, &format!("λ = {:.0} cells", tank.wavelength()), th.ink());
-    readout(painter, rect, 8.0, &format!("f = {:.3}   λ = {:.1} cells   slits {}   slit width {} cells   separation {} cells   {} source", tank.frequency, tank.wavelength(), sim.value("slits").round() as i64, sim.value("slit_width").round() as i64, sim.value("separation").round() as i64, if tank.plane { "plane" } else { "point" }), th.ink());
+}
+
+/// The ripple tank in 3D: the water's height as a wireframe seen from 38° above, the wall with
+/// its slits standing in it, the source a line or a spark of light.
+fn relief(painter: &egui::Painter, area: Rect, tank: &phys::Ripples) {
+    let th = crate::holo::theme();
+    let (turn, rise, swell) = ((-28f32).to_radians(), 38f32.to_radians(), 9.0f32);
+    let half = vec2(tank.w as f32, tank.h as f32) / 2.0;
+    let wide = half.x * turn.cos().abs() + half.y * turn.sin().abs();
+    let tall = (half.x * turn.sin().abs() + half.y * turn.cos().abs()) * rise.sin() + swell * rise.cos();
+    let fit = ((area.width() - 30.0) / (2.0 * wide)).min((area.height() - 30.0) / (2.0 * tall));
+    // (screen point, how near: 0-1) of a cell at a height, both in cells.
+    let project = |i: f32, j: f32, h: f32| {
+        let (x, y) = (i - half.x, half.y - j);
+        let (x1, y1) = (x * turn.cos() - y * turn.sin(), x * turn.sin() + y * turn.cos());
+        let (up, near) = (y1 * rise.sin() + h * rise.cos(), -y1 * rise.cos() + h * rise.sin());
+        (area.center() + vec2(x1, -up) * fit, (near / half.y * 0.5 + 0.5).clamp(0.0, 1.0))
+    };
+    let height = |i: usize, j: usize| (tank.at(i, j) * 1.1).tanh() * 0.85 * swell;
+    let mut light = Light::new(painter);
+    for along_x in [true, false] {
+        let (lines, run) = if along_x { (tank.h, tank.w) } else { (tank.w, tank.h) };
+        for a in (0..lines).step_by(4) {
+            let (mut points, mut colours) = (Vec::new(), Vec::new());
+            for b in (0..run).step_by(2) {
+                let (i, j) = if along_x { (b, a) } else { (a, b) };
+                let h = height(i, j);
+                let (at, near) = project(i as f32, j as f32, h);
+                points.push(at);
+                colours.push(lit(mix(th.ink(), th.accent(), (h / swell * 0.5 + 0.5).clamp(0.0, 1.0)), 0.08 + 0.45 * near));
+            }
+            light.ribbon(&points, &colours, false, 1.0);
+        }
+    }
+    if tank.plane {
+        light.seg(project(16.0, 1.0, 0.0).0, project(16.0, tank.h as f32 - 2.0, 0.0).0, 2.0, th.accent());
+    } else {
+        light.spark(project(16.0, half.y, 0.0).0, 9.0, th.hot());
+    }
+    light.paint(painter);
+    let x = tank.wall_x as f32;
+    for j in (0..tank.h).filter(|j| tank.wall[j * tank.w + tank.wall_x]) {
+        crate::holo::rule(painter, project(x, j as f32, -0.4 * swell).0, project(x, j as f32, 1.2 * swell).0, faint(th.ink(), 0.5));
+    }
 }
 
 fn draw_standing(painter: &egui::Painter, rect: Rect, sim: &Simulation, rt: &Runtime) {
@@ -1304,7 +1418,8 @@ fn draw_balls(painter: &egui::Painter, rect: Rect, rt: &Runtime) {
 fn draw_surface(painter: &egui::Painter, rect: Rect, sim: &Simulation, rt: &Runtime) {
     let th = crate::holo::theme();
     let r = sim.value("range").max(0.5);
-    let (turn, tilt) = ((sim.value("turn") + sim.value("spin") * rt.t).to_radians(), sim.value("tilt").to_radians());
+    // (In 2D it is seen from straight above, its height in its colour and brightness.)
+    let (turn, tilt) = if sim.three_d { ((sim.value("turn") + sim.value("spin") * rt.t).to_radians(), sim.value("tilt").to_radians()) } else { (0.0, std::f64::consts::FRAC_PI_2) };
     let n = 34usize;
     let mut ps = sim.surface_params();
     let step = |k: usize| -r + 2.0 * r * k as f64 / n as f64;
@@ -1335,11 +1450,14 @@ fn draw_surface(painter: &egui::Painter, rect: Rect, sim: &Simulation, rt: &Runt
     for (a, b) in [((-1.0, -1.0), (1.0, -1.0)), ((1.0, -1.0), (1.0, 1.0)), ((1.0, 1.0), (-1.0, 1.0)), ((-1.0, 1.0), (-1.0, -1.0))] {
         crate::holo::rule(painter, corner(a.0, a.1), corner(b.0, b.1), faint(th.ink(), 0.3));
     }
-    let origin = corner(-1.0, -1.0);
-    crate::holo::rule(painter, origin, project(-r, -r, tall).0, faint(th.ink(), 0.6));
     tag(painter, corner(1.0, -1.0) + vec2(6.0, 0.0), Align2::LEFT_CENTER, "x", th.ink());
-    tag(painter, corner(-1.0, 1.0) + vec2(6.0, 0.0), Align2::LEFT_CENTER, "y", th.ink());
-    tag(painter, project(-r, -r, tall).0 - vec2(0.0, 6.0), Align2::CENTER_BOTTOM, "z", th.ink());
+    if sim.three_d {
+        tag(painter, corner(-1.0, 1.0) + vec2(6.0, 0.0), Align2::LEFT_CENTER, "y", th.ink());
+        crate::holo::rule(painter, corner(-1.0, -1.0), project(-r, -r, tall).0, faint(th.ink(), 0.6));
+        tag(painter, project(-r, -r, tall).0 - vec2(0.0, 6.0), Align2::CENTER_BOTTOM, "z", th.ink());
+    } else {
+        tag(painter, corner(-1.0, 1.0) - vec2(6.0, 0.0), Align2::RIGHT_CENTER, "y", th.ink());
+    }
     // The wireframe: lines of constant y, then of constant x. Peaks take the accent, the near
     // lines are brighter; a point that is not a number cuts the line.
     let mut light = Light::new(painter);
@@ -1370,7 +1488,8 @@ fn draw_surface(painter: &egui::Painter, rect: Rect, sim: &Simulation, rt: &Runt
     }
     light.paint(painter);
     let src = sim.functions.first().map(|(_, s, _)| s.as_str()).unwrap_or("");
-    readout(painter, rect, 8.0, &format!("z = {src}   turn {:.0}°   tilt {:.0}°   z from {lo:.2} to {hi:.2}", sim.value("turn") + sim.value("spin") * rt.t, sim.value("tilt")), th.ink());
+    let seen = if sim.three_d { format!("turn {:.0}°   tilt {:.0}°", sim.value("turn") + sim.value("spin") * rt.t, sim.value("tilt")) } else { "2D: seen from above".to_string() };
+    readout(painter, rect, 8.0, &format!("z = {src}   {seen}   z from {lo:.2} to {hi:.2}"), th.ink());
 }
 
 /// A simulation's read-out in the top-left corner of its canvas, `top` points under its edge.
@@ -1490,9 +1609,11 @@ mod tests {
     /// A kind's canvas as the window draws it after `seconds` of its run, saved as a picture
     /// (`target/ui-snapshots/<theme>/<name>.png`).
     fn picture(kind: SimKind, spec: &str, name: &str, seconds: f64) -> crate::ui_snapshot::Canvas {
+        picture_of(simulation_lab::SimulationLab::default().launch(kind, spec, None).unwrap(), name, seconds)
+    }
+
+    fn picture_of(sim: Simulation, name: &str, seconds: f64) -> crate::ui_snapshot::Canvas {
         let _look = crate::holo_theme::look_for_pictures();
-        let lab = simulation_lab::SimulationLab::default();
-        let sim = lab.launch(kind, spec, None).unwrap();
         let mut rt = Runtime::new(&sim);
         for _ in 0..(seconds / 0.04) as usize {
             rt.t += 0.04;
@@ -1500,8 +1621,8 @@ mod tests {
         }
         let size = vec2(900.0, 560.0);
         let plot = Rect::from_min_size(pos2(10.0, 10.0), size - vec2(20.0, 20.0));
-        let mut snap = crate::ui_snapshot::Snapshot::new(size);
-        let canvas = snap.render(2, |ctx| {
+        let mut stage = crate::visual_ui_verifier::Stage::new(size);
+        let frame = stage.frames(2, &mut |ctx| {
             crate::holo::install_fonts(ctx);
             egui::CentralPanel::default().frame(Frame::none()).show(ctx, |ui| {
                 let painter = ui.painter_at(plot.expand(2.0));
@@ -1510,7 +1631,9 @@ mod tests {
                 draw_physics(&painter, plot.shrink(16.0), &sim, &rt);
             });
         });
+        let canvas = stage.raster(&frame);
         canvas.save(name);
+        assert_eq!(crate::visual_ui_verifier::text_over_text(&frame), Vec::<String>::new(), "{name}");
         canvas
     }
 
@@ -1540,6 +1663,44 @@ mod tests {
     fn snapshot_gravity_draws_orbits_with_trails_and_names() {
         assert_light_on_black(&picture(SimKind::Gravity, "solar system", "simlab_gravity_solar", 20.0), "the solar system", 300);
         assert_light_on_black(&picture(SimKind::Gravity, "the sun, the earth and a comet", "simlab_gravity_comet", 20.0), "sun, earth and comet", 200);
+    }
+
+    /// Width and height of what is drawn below the read-out (pixels not black glass).
+    fn drawn_box(canvas: &crate::ui_snapshot::Canvas) -> (usize, usize) {
+        let (mut x0, mut y0, mut x1, mut y1) = (usize::MAX, usize::MAX, 0, 0);
+        for y in 80..canvas.height - 30 {
+            for x in 30..canvas.width - 30 {
+                if canvas.pixel(x, y).iter().map(|c| *c as u32).sum::<u32>() > 60 {
+                    (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
+                }
+            }
+        }
+        (x1.saturating_sub(x0), y1.saturating_sub(y0))
+    }
+
+    /// "Make it 3D" (Sir, 2026-11-21): the orbits' plane leans back and sinks into the wells of
+    /// the masses, the tank stands up as a relief of the water's height, and a surface made 2D
+    /// lies flat, seen from above.
+    #[test]
+    fn snapshot_simulations_in_3d_and_from_above() {
+        let flat = picture(SimKind::Gravity, "solar system", "simlab_gravity_2d", 20.0);
+        let deep = picture(SimKind::Gravity, "solar system in 3D", "simlab_gravity_3d", 20.0);
+        assert_light_on_black(&deep, "the orbits in 3D", 300);
+        let ((w2, h2), (w3, h3)) = (drawn_box(&flat), drawn_box(&deep));
+        assert!(h2 * 10 > w2 * 8, "seen from above the orbits are round: {w2}×{h2}");
+        assert!(h3 * 10 < w3 * 6, "in 3D the plane leans back: {w3}×{h3}");
+        assert_light_on_black(&picture(SimKind::Gravity, "binary star in 3D", "simlab_gravity_binary_3d", 12.0), "two wells", 200);
+        let relief = picture(SimKind::Ripples, "double slit plane waves in 3D", "simlab_ripples_3d", 8.0);
+        assert_light_on_black(&relief, "the tank as a relief", 600);
+        let (w, h) = drawn_box(&relief);
+        assert!(w > 600 && h > 200, "the relief fills the canvas: {w}×{h}");
+        let lab = simulation_lab::SimulationLab::default();
+        let mut sim = lab.launch(SimKind::Surface, "z = x^2 - y^2", None).unwrap();
+        sim.three_d = false;
+        let above = picture_of(sim, "simlab_surface_2d", 1.0);
+        assert_light_on_black(&above, "the saddle from above", 400);
+        let (w, h) = drawn_box(&above);
+        assert!(w.abs_diff(h) * 5 < w, "a square seen from above (its x and y beside it): {w}×{h}");
     }
 
     #[test]

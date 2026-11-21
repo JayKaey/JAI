@@ -1218,6 +1218,7 @@ impl Brain {
         let put_off: Option<Value> = crate::later::route(&text).filter(|_| {
             selection_answer.is_none()
                 && stark.macros.match_trigger(&text).is_none()
+                && crate::protocols::his_phrase(&text).is_none()
                 && crate::tool_forge::forge().and_then(|forge| forge.match_utterance(&text)).is_none()
                 && !(crate::exam_coach::route_answer(&stark.features.exam, &text).is_some() && !is_command_not_answer(&text))
         });
@@ -1240,6 +1241,10 @@ impl Brain {
         } else if compound.is_some() {
             self.inner.tools.focus.clear_offer();
             None
+        } else if let Some(name) = crate::protocols::his_phrase(&text) {
+            // "Wake up daddys home": what Sir set as a protocol's phrase, before every router.
+            self.inner.tools.focus.clear_offer();
+            Some(Intent::Tool { name: "manage_stark_protocol", args: json!({ "action": "execute_protocol", "protocol_name": name }) })
         } else if let Some(args) = crate::fleet::command(&text).filter(|_| put_off.is_none()) {
             // "Open the earth on Max's PC", "shut down Max's PC": that PC's order, taken before
             // every router that would carry it out on this one (its volume, its power, its windows).
@@ -1302,6 +1307,11 @@ impl Brain {
             // pronunciation", "forget how I speak": his ear, taught and asked in so many words.
             self.inner.tools.focus.clear_offer();
             Some(Intent::Answer(if dry { "Understood, Sir.".to_string() } else { crate::ear::command(&text).unwrap_or_else(|| "Understood, Sir.".to_string()) }))
+        } else if let Some(args) = crate::simulation_lab::view_order(&stark.simlab, &text) {
+            // "Can you make it 3D?" while a simulation is open: its view, before another wording
+            // takes the words for another order (the Earth keeps a bare one while it is up).
+            self.inner.tools.focus.clear_offer();
+            Some(Intent::Tool { name: "adjust_simulation", args })
         } else if let Some((wording, found)) = reworded {
             // "Could you kill that sleep timer", "mach das Diktat an", "it's way too bright":
             // an order he knows, said another way (`ways`). It is carried out as the wording
@@ -2513,7 +2523,8 @@ impl Brain {
                     "pick_music" | "play_something" => Some(format!("Allow me, Sir. {}", first_sentence(out))),
                     "play" | "start" => Some(match (args["song_name"].as_str(), args["playlist_name"].as_str(), name) {
                         (_, _, Some(n)) if out.contains("Spotify search") => format!("I couldn't find {n} in your library, Sir, so I've searched Spotify for it."),
-                        (_, _, Some(_)) => format!("Sir, {out}"),
+                        (Some(_), _, _) if now_song(out).is_some() => format!("Playing {}, Sir.", now_song(out).unwrap_or_default()),
+                        (_, _, Some(_)) => format!("Sir, {}", first_sentence(out)),
                         _ => "Resuming, Sir.".into(),
                     }),
                     "pause" | "stop" => Some("Paused, Sir.".into()),
@@ -2523,11 +2534,8 @@ impl Brain {
                         Some(rest) => format!("Your playlists are {}, Sir.", rest.split(". Track index").next().unwrap_or(rest).trim_end_matches('.')),
                         None => first_sentence(out),
                     }),
-                    "what_is_playing" | "now_playing" => Some(match out.strip_prefix("Now playing: ") {
-                        Some(rest) => {
-                            let song = rest.split(" (").next().unwrap_or(rest);
-                            format!("This is {song}, Sir.")
-                        }
+                    "what_is_playing" | "now_playing" => Some(match now_song(out).filter(|_| out.starts_with("Now playing: ")) {
+                        Some(song) => format!("This is {song}, Sir."),
                         None => "Nothing is playing at the moment, Sir.".into(),
                     }),
                     // Skips are audible on their own.
@@ -2564,6 +2572,7 @@ impl Brain {
                 Some("explorer") => "Right away, Sir. There it is in the folder.".into(),
                 _ => "Right away, Sir. Opening it.".into(),
             }),
+            "open_application" if args["app_name"] == crate::apps::PRIVATE_WINDOW => Some(format!("{}, Sir.", out.trim_end_matches('.'))),
             "open_application" => Some(
                 self.next_ack(&[
                     "Right away, Sir. Opening {app} now.",
@@ -3974,6 +3983,9 @@ pub(crate) fn fast_as_said(text: &str) -> Option<Fast> {
 /// The routers `Brain::run_turn` asks before the parser, in its order.
 fn fast_before_the_parser(text: &str) -> Option<Fast> {
     let tool = |name: &'static str, args: Value| Some(Fast::Intent(Intent::Tool { name, args }));
+    if let Some(name) = crate::protocols::his_phrase(text) {
+        return tool("manage_stark_protocol", json!({ "action": "execute_protocol", "protocol_name": name }));
+    }
     // An order with a delay ("play music in one minute"), the one just put off dropped again
     // ("cancel that"), the list of what waits: before every router that would take the
     // sentence's words for a song, the calendar or the conversation (`later`).
@@ -4122,7 +4134,8 @@ pub(crate) fn another_way_knowing(text: &str, parsed: Option<&Option<Intent>>) -
     // the first router there is (`later`), which is asked here because nothing is while a
     // sentence is being read another way.
     // (So is an order for another PC: reworded, "… on Max's PC" would lose its PC.)
-    if !rewording() && (crate::later::order(text).is_some() || crate::fleet::command(text).is_some()) {
+    // (And a protocol's own phrase is his order as it stands: "wake up daddys home".)
+    if !rewording() && (crate::later::order(text).is_some() || crate::fleet::command(text).is_some() || crate::protocols::his_phrase(text).is_some()) {
         return None;
     }
     if REWORDING.with(|inside| inside.replace(true)) {
@@ -4667,6 +4680,16 @@ fn first_sentence(s: &str) -> String {
     s.chars().take(end).collect()
 }
 
+/// The song a music result names as playing now, without the player's notes after it: "Back in
+/// Black by AC/DC" of "… Now playing: Back in Black by AC/DC (playing, 0:00 of 3:51, liked)."
+/// (Sir, 2026-11-21: "he shouldnt say the (playing 0:00 of 3:51, liked) thing".)
+fn now_song(out: &str) -> Option<&str> {
+    let (_, now) = out.split_once("Now playing: ").or_else(|| out.split_once(" \u{2014} now: "))?;
+    let now = now.trim_end_matches(['.', ' ']);
+    let song = if now.ends_with(')') { now.rsplit_once(" (").map_or(now, |(song, _)| song) } else { now };
+    (!song.is_empty()).then_some(song)
+}
+
 /// A one-shot English completion outside the conversation (the personal manager's e-mail and
 /// worksheet summaries). None when the engine is not ready or the call fails.
 pub(crate) async fn one_shot(llm: &LlmRuntime, cfg: &JaiConfig, instruction: &str, text: &str, max_tokens: i32) -> Option<String> {
@@ -4798,6 +4821,18 @@ fn spoken_reading(t: &crate::telemetry::SystemTelemetry, reading: Option<&str>) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Repro 2026-11-21 (jai.log): "play Back in Black" was answered "Sir, Playing the song 'Back
+    /// in Black' on Sonora. Now playing: Back in Black by Back In Black (playing, 0:00 of 3:51,
+    /// liked)." He says the song; the player's notes stay in the log.
+    #[test]
+    fn a_started_song_is_said_without_the_players_notes() {
+        let sonora = "Playing the song 'Back in Black' on Sonora. Now playing: Back in Black by AC/DC (playing, 0:00 of 3:51, liked).";
+        assert_eq!(now_song(sonora), Some("Back in Black by AC/DC"));
+        assert_eq!(now_song("Playing Chill on Spotify \u{2014} now: Song (Live) by Max Mustermann (Spotify, playing)."), Some("Song (Live) by Max Mustermann"));
+        assert_eq!(now_song("Now playing: Untitled."), Some("Untitled"));
+        assert_eq!(now_song("Sonora took the song; it is starting."), None);
+    }
 
     /// Repro 2026-11-20 (a silent session): "turn the volume down on Max's computer" set this
     /// PC's master volume to 100 %. The turn asked the feature router, which knows no other PC,

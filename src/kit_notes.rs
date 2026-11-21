@@ -7,6 +7,7 @@
 //! kept when its order is one J.A.I. knows. The sleep timer lets the master volume sink for a
 //! few seconds, pauses every player and puts the volume back where it stood.
 
+use crate::fleet::PcEvent;
 use crate::kit::say;
 use chrono::Timelike;
 use regex::Regex;
@@ -531,14 +532,28 @@ pub enum When {
     Closes(String),
     /// Every day at this hour and minute.
     At(u32, u32),
+    /// What the PC of an account does (its name as said: "max", "maxs"; "i" is this PC), as
+    /// Sir's PC hears it (`fleet::events`).
+    Pc(String, PcEvent),
 }
 
 impl When {
-    fn words(&self) -> String {
+    pub fn words(&self) -> String {
         match self {
             When::Starts(app) => format!("whenever {app} starts"),
             When::Closes(app) => format!("whenever {app} closes"),
             When::At(h, m) => format!("every day at {h:02}:{m:02}"),
+            When::Pc(who, what) => {
+                let me = who == "i";
+                let (who, s) = if me { ("I".to_string(), "") } else { (capitalised(who), "s") };
+                match what {
+                    PcEvent::Online => format!("whenever {who}'s PC comes online"),
+                    PcEvent::Offline => format!("whenever {who}'s PC goes offline"),
+                    PcEvent::Plays(game) if game.is_empty() => format!("whenever {who} start{s} a game"),
+                    PcEvent::Plays(game) => format!("whenever {who} play{s} {game}"),
+                    PcEvent::Stops(game) => format!("whenever {who} stop{s} playing{}", if game.is_empty() { String::new() } else { format!(" {game}") }),
+                }
+            }
         }
     }
 
@@ -547,6 +562,15 @@ impl When {
             When::Starts(app) => json!({"kind": "starts", "app": app}),
             When::Closes(app) => json!({"kind": "closes", "app": app}),
             When::At(h, m) => json!({"kind": "at", "hour": h, "minute": m}),
+            When::Pc(who, what) => {
+                let (event, game) = match what {
+                    PcEvent::Online => ("online", ""),
+                    PcEvent::Offline => ("offline", ""),
+                    PcEvent::Plays(game) => ("plays", game.as_str()),
+                    PcEvent::Stops(game) => ("stops", game.as_str()),
+                };
+                json!({"kind": "pc", "who": who, "event": event, "game": game})
+            }
         }
     }
 
@@ -555,9 +579,111 @@ impl When {
             "starts" => Some(When::Starts(v["app"].as_str()?.to_string())),
             "closes" => Some(When::Closes(v["app"].as_str()?.to_string())),
             "at" => Some(When::At(v["hour"].as_u64()? as u32, v["minute"].as_u64()? as u32)),
+            "pc" => {
+                let game = v["game"].as_str().unwrap_or("").to_string();
+                let what = match v["event"].as_str()? {
+                    "online" => PcEvent::Online,
+                    "offline" => PcEvent::Offline,
+                    "plays" => PcEvent::Plays(game),
+                    "stops" => PcEvent::Stops(game),
+                    _ => return None,
+                };
+                Some(When::Pc(v["who"].as_str()?.to_string(), what))
+            }
             _ => None,
         }
     }
+
+    /// Whether it holds for the programs that have just started and closed, the minute of the
+    /// day that has just begun and what the PCs have just done.
+    pub fn fires(&self, started: &[String], closed: &[String], minute: Option<(u32, u32)>, pcs: &[(String, PcEvent)]) -> bool {
+        let game = |wanted: &str, game: &str| {
+            let compact = |s: &str| s.chars().filter(|c| c.is_alphanumeric()).collect::<String>().to_lowercase();
+            wanted.is_empty() || compact(game).contains(&compact(wanted))
+        };
+        match self {
+            When::Starts(app) => started.iter().any(|p| is_app(app, p)),
+            When::Closes(app) => closed.iter().any(|p| is_app(app, p)),
+            When::At(h, m) => minute == Some((*h, *m)),
+            When::Pc(who, what) => pcs.iter().any(|(name, done)| {
+                crate::fleet::names_in(who).contains(name)
+                    && match (what, done) {
+                        (PcEvent::Online, PcEvent::Online) | (PcEvent::Offline, PcEvent::Offline) => true,
+                        (PcEvent::Plays(wanted), PcEvent::Plays(played)) | (PcEvent::Stops(wanted), PcEvent::Stops(played)) => game(wanted, played),
+                        _ => false,
+                    }
+            }),
+        }
+    }
+}
+
+/// What a PC does, said at the start of `s` in plain words: "max comes online", "maxs pc goes
+/// offline", "max starts a game", "max plays minecraft", "max stops playing", "i start a game"
+/// (this PC). With `whole` the words are that alone (a protocol's line); else the order follows.
+fn pc_event(s: &str, whole: bool) -> Option<(When, String)> {
+    let words: Vec<&str> = s.split_whitespace().collect();
+    let who = *words.first()?;
+    let pc = words.get(1).is_some_and(|w| matches!(*w, "pc" | "computer" | "laptop" | "rechner"));
+    let me = matches!(who, "i" | "ich");
+    // (A program's own name is the app rule's: "discord starts".)
+    if (!pc && !me && known_app(who)) || !who.chars().all(char::is_alphanumeric) {
+        return None;
+    }
+    let rest = &words[1 + pc as usize..];
+    // The game named, then the order: in a rule the longest run of words that names a program he
+    // knows (one word else); in a protocol's line all of them.
+    let named = |from: &[&str], needed: bool| -> Option<(String, String)> {
+        if whole {
+            return Some((from.join(" "), String::new()));
+        }
+        let take = (1..=from.len().saturating_sub(1).min(3)).rev().find(|n| known_app(&from[..*n].join(" ")));
+        match take.or(needed.then_some(1)) {
+            Some(n) if from.len() > n => Some((from[..n].join(" "), from[n..].join(" "))),
+            _ if needed => None,
+            _ => Some((String::new(), from.join(" "))),
+        }
+    };
+    let (what, order) = match rest {
+        [is, "online", after @ ..] if !me && matches!(*is, "comes" | "goes" | "is" | "kommt" | "ist") => (PcEvent::Online, after.join(" ")),
+        [is, "offline", after @ ..] if !me && matches!(*is, "goes" | "is" | "geht" | "ist") => (PcEvent::Offline, after.join(" ")),
+        [start, "a", "game", after @ ..] if matches!(*start, "starts" | "start") => (PcEvent::Plays(String::new()), after.join(" ")),
+        [start, "gaming" | "playing", after @ ..] if matches!(*start, "starts" | "start" | "is" | "am") => {
+            let (game, order) = named(after, false)?;
+            (PcEvent::Plays(game), order)
+        }
+        [stop, "gaming" | "playing", after @ ..] if matches!(*stop, "stops" | "stop") => {
+            let (game, order) = named(after, false)?;
+            (PcEvent::Stops(game), order)
+        }
+        [play, after @ ..] if !after.is_empty() && matches!(*play, "plays" | "play" | "spielt" | "spiele") => {
+            let (game, order) = named(after, true)?;
+            (PcEvent::Plays(game), order)
+        }
+        // ("max starts minecraft": a program he knows, or on that PC.)
+        [start, after @ ..] if !me && !after.is_empty() && matches!(*start, "starts" | "launches" | "opens") && (pc || whole || named(after, false).is_some_and(|(game, _)| !game.is_empty())) => {
+            let (game, order) = named(after, true)?;
+            (PcEvent::Plays(game), order)
+        }
+        [quit, after @ ..] if !me && !after.is_empty() && matches!(*quit, "quits" | "closes") && (pc || whole) => {
+            let (game, order) = named(after, true)?;
+            (PcEvent::Stops(game), order)
+        }
+        _ => return None,
+    };
+    let order = order.trim_start_matches("then ").trim_start_matches("dann ").trim().to_string();
+    (whole == order.is_empty()).then(|| (When::Pc(if me { "i".into() } else { who.to_string() }, what), order))
+}
+
+/// A protocol's WHEN line ("Minecraft starts", "every day at 7:30", "Max comes online", "I start
+/// a game"): the rules' grammar, without an order.
+pub fn when_of(line: &str) -> Option<When> {
+    let said = crate::ear::words(line).join(" ");
+    let s = RULE_WHEN.captures(&said).and_then(|c| c.get(1)).map_or(said.as_str(), |m| m.as_str());
+    if let Some((when, _)) = pc_event(s, true) {
+        return Some(when);
+    }
+    // (The rules' grammar wants an order after it: one is lent.)
+    parse_rule(&format!("{s} then x")).or_else(|| parse_rule(&format!("when {s} then x"))).map(|(when, _)| when)
 }
 
 static RULE_LIST: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:list|show)\s+(?:me\s+)?(?:my\s+|the\s+|all\s+)?rules$|^what\s+rules\s+(?:do\s+(?:i|you)\s+have|are\s+there)$|^(?:zeig\s+(?:mir\s+)?)?meine\s+regeln$"));
@@ -602,6 +728,9 @@ pub fn parse_rule(s: &str) -> Option<(When, String)> {
         return (h < 24 && m < 60).then(|| (When::At(h, m), c.name("order").map_or("", |m| m.as_str()).trim().to_string()));
     }
     let rest = RULE_WHEN.captures(s)?.get(1)?.as_str();
+    if let Some(found) = pc_event(rest, false) {
+        return Some(found);
+    }
     if let Some(c) = RULE_I.captures(rest) {
         let (app, order) = split_app(c.name("rest")?.as_str())?;
         return Some((if c.name("starts").is_some() { When::Starts(app) } else { When::Closes(app) }, order));
@@ -717,22 +846,16 @@ fn is_app(app: &str, process: &str) -> bool {
     compact.len() >= 3 && (running == compact || running.strip_prefix(compact.as_str()).is_some_and(|rest| BUILDS.contains(&rest)) || (named == "minecraft" && running == "javaw"))
 }
 
-/// The orders of the rules that fire: for the programs that have just started and closed, and
-/// for the minute of the day when it has just begun (`minute`: Some((hour, minute))).
-pub fn fired(started: &[String], closed: &[String], minute: Option<(u32, u32)>) -> Vec<(String, String)> {
-    rules()
-        .into_iter()
-        .filter(|(_, when, _)| match when {
-            When::Starts(app) => started.iter().any(|p| is_app(app, p)),
-            When::Closes(app) => closed.iter().any(|p| is_app(app, p)),
-            When::At(h, m) => minute == Some((*h, *m)),
-        })
-        .map(|(_, when, then)| (when.words(), then))
-        .collect()
+/// The orders of the rules that fire: for the programs that have just started and closed, for
+/// the minute of the day when it has just begun (`minute`: Some((hour, minute))) and for what
+/// the PCs have just done.
+pub fn fired(started: &[String], closed: &[String], minute: Option<(u32, u32)>, pcs: &[(String, PcEvent)]) -> Vec<(String, String)> {
+    rules().into_iter().filter(|(_, when, _)| when.fires(started, closed, minute, pcs)).map(|(_, when, then)| (when.words(), then)).collect()
 }
 
-/// Watches what starts and closes and the clock, and has the rules' orders carried out as if
-/// Sir had typed them. (A test and a scripted session run no rules.)
+/// Watches what starts and closes, the clock and the PCs, and has the rules' orders carried out
+/// as if Sir had typed them and the protocols that wait on it engaged. (A test and a scripted
+/// session run no rules.)
 pub fn start(tools: crate::tools::ToolContext, stop: tokio_util::sync::CancellationToken) {
     if cfg!(test) || crate::platform::in_test_session() {
         return;
@@ -742,6 +865,7 @@ pub fn start(tools: crate::tools::ToolContext, stop: tokio_util::sync::Cancellat
         let mut system = System::new();
         let mut running: Option<std::collections::HashSet<String>> = None;
         let mut last_minute = None;
+        let mut last_game: Option<Option<String>> = None;
         let mut ticks = 0u64;
         let mut tick = tokio::time::interval(Duration::from_secs(4));
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -762,12 +886,20 @@ pub fn start(tools: crate::tools::ToolContext, stop: tokio_util::sync::Cancellat
             }
             ticks += 1;
             let all = rules();
-            if all.is_empty() {
+            let waiting: Vec<(String, When)> = tools.protocols.list().into_iter().flat_map(|p| p.when.iter().filter_map(|line| when_of(line)).map(|when| (p.name.clone(), when)).collect::<Vec<_>>()).collect();
+            // What the other PCs did, and the game on this one ("i": the first look only learns it).
+            let mut pcs = crate::fleet::events();
+            let game = crate::vram_guard::game_now().map(|(game, _)| game);
+            if let Some(before) = last_game.replace(game.clone()).filter(|before| *before != game) {
+                pcs.extend(before.map(|g| ("i".to_string(), PcEvent::Stops(g))));
+                pcs.extend(game.map(|g| ("i".to_string(), PcEvent::Plays(g))));
+            }
+            if all.is_empty() && waiting.is_empty() {
                 running = None;
                 continue;
             }
             let (mut started, mut closed) = (Vec::new(), Vec::new());
-            if all.iter().any(|(_, when, _)| !matches!(when, When::At(..))) {
+            if all.iter().map(|(_, when, _)| when).chain(waiting.iter().map(|(_, when)| when)).any(|when| matches!(when, When::Starts(_) | When::Closes(_))) {
                 system.refresh_processes(ProcessesToUpdate::All);
                 let now: std::collections::HashSet<String> = system.processes().values().map(|p| p.name().to_string_lossy().to_lowercase().trim_end_matches(".exe").to_string()).collect();
                 // (The first look only learns what runs: a rule fires on a change, not on a start of his own.)
@@ -781,10 +913,18 @@ pub fn start(tools: crate::tools::ToolContext, stop: tokio_util::sync::Cancellat
             let minute = (clock.hour(), clock.minute());
             let new_minute = (last_minute != Some(minute)).then_some(minute);
             last_minute = Some(minute);
-            for (when, then) in fired(&started, &closed, new_minute) {
+            for (when, then) in fired(&started, &closed, new_minute, &pcs) {
                 tracing::info!("[RULES] {when}: {then}");
                 crate::hud_notify::record(&format!("Rule: {when} → {then}"), false);
                 let _ = tools.stark.events.send(crate::stark::StarkEvent::RunMacro { name: format!("rule ({when})"), steps: vec![then] });
+            }
+            for (name, when) in waiting.into_iter().filter(|(_, when)| when.fires(&started, &closed, new_minute, &pcs)) {
+                tracing::info!("[PROTOCOL] {}: the {name} protocol", when.words());
+                crate::hud_notify::record(&format!("{} → {}", capitalised(&when.words()), crate::protocols::display_name(&name)), false);
+                let tools = tools.clone();
+                tokio::spawn(async move {
+                    let _ = tools.execute("manage_stark_protocol", &json!({ "action": "execute_protocol", "protocol_name": name })).await;
+                });
             }
         }
     });
@@ -938,6 +1078,47 @@ mod tests {
         assert_eq!((minutes_words(1), minutes_words(60), minutes_words(120), minutes_words(45)), ("a minute".to_string(), "an hour".to_string(), "2 hours".to_string(), "45 minutes".to_string()));
     }
 
+    /// Sir's PCs and his friends' (2026-11-21: "when a friend of mine on his pc does something"):
+    /// what they do in a rule and in a protocol's WHEN line, and this PC's own game.
+    #[test]
+    fn what_another_pc_does_is_a_rule_and_a_protocols_when() {
+        let pc = |who: &str, what: PcEvent| When::Pc(who.into(), what);
+        for (line, when) in [
+            ("Max comes online", pc("max", PcEvent::Online)),
+            ("Whenever Max's PC goes offline", pc("maxs", PcEvent::Offline)),
+            ("max starts a game", pc("max", PcEvent::Plays(String::new()))),
+            ("Max plays Rocket League", pc("max", PcEvent::Plays("rocket league".into()))),
+            ("max starts minecraft", pc("max", PcEvent::Plays("minecraft".into()))),
+            ("Max stops playing", pc("max", PcEvent::Stops(String::new()))),
+            ("I start a game", pc("i", PcEvent::Plays(String::new()))),
+            ("Minecraft starts", When::Starts("minecraft".into())),
+            ("when Discord closes", When::Closes("discord".into())),
+            ("every day at 7:30", When::At(7, 30)),
+        ] {
+            assert_eq!(when_of(line), Some(when), "{line}");
+        }
+        for line in ["", "max", "what a nice day", "i feel like it"] {
+            assert_eq!(when_of(line), None, "{line}");
+        }
+        // In a rule the order follows.
+        assert_eq!(parse_rule("whenever max comes online play my playlist"), Some((pc("max", PcEvent::Online), "play my playlist".into())));
+        assert_eq!(parse_rule("whenever max starts a game then mute the music"), Some((pc("max", PcEvent::Plays(String::new())), "mute the music".into())));
+        assert_eq!(parse_rule("when i start a game open discord"), Some((pc("i", PcEvent::Plays(String::new())), "open discord".into())));
+        assert_eq!(parse_rule("when i open spotify set the volume to 30"), Some((When::Starts("spotify".into()), "set the volume to 30".into())), "his own program stays the app rule");
+        // Fired by what the PC did: its name as said ("maxs": Max's), any game or the one named.
+        let heard = [("max".to_string(), PcEvent::Plays("Minecraft: Java Edition".into()))];
+        assert!(pc("maxs", PcEvent::Plays(String::new())).fires(&[], &[], None, &heard));
+        assert!(pc("max", PcEvent::Plays("minecraft".into())).fires(&[], &[], None, &heard));
+        assert!(!pc("max", PcEvent::Plays("fortnite".into())).fires(&[], &[], None, &heard));
+        assert!(!pc("erika", PcEvent::Plays(String::new())).fires(&[], &[], None, &heard));
+        assert!(!pc("max", PcEvent::Online).fires(&[], &[], None, &heard));
+        // Kept and read back as a rule, and said in words.
+        let when = pc("max", PcEvent::Plays("minecraft".into()));
+        assert_eq!(When::of(&when.to_json()), Some(when.clone()));
+        assert_eq!(when.words(), "whenever Max plays minecraft");
+        assert_eq!(pc("i", PcEvent::Plays(String::new())).words(), "whenever I start a game");
+    }
+
     #[test]
     fn a_rule_says_when_and_what_and_fires_on_the_change() {
         let _one = crate::kit::test_lock();
@@ -959,10 +1140,10 @@ mod tests {
         rule(&json!({"action": "add", "when": {"kind": "closes", "app": "spotify"}, "then": "night mode"})).unwrap();
         rule(&json!({"action": "add", "when": {"kind": "at", "hour": 7, "minute": 30}, "then": "open my calendar"})).unwrap();
         assert!(rule(&json!({"action": "add", "when": {"kind": "starts", "app": "discord"}, "then": "open the mixer"})).unwrap().contains("already"));
-        assert_eq!(fired(&["discord".into()], &[], None), [("whenever discord starts".to_string(), "open the mixer".to_string())]);
-        assert_eq!(fired(&["notepad".into()], &["spotify".into()], None).len(), 1);
-        assert_eq!(fired(&[], &[], Some((7, 30))), [("every day at 07:30".to_string(), "open my calendar".to_string())]);
-        assert!(fired(&[], &[], Some((7, 31))).is_empty() && fired(&["discordptb".into()], &[], None).len() == 1);
+        assert_eq!(fired(&["discord".into()], &[], None, &[]), [("whenever discord starts".to_string(), "open the mixer".to_string())]);
+        assert_eq!(fired(&["notepad".into()], &["spotify".into()], None, &[]).len(), 1);
+        assert_eq!(fired(&[], &[], Some((7, 30)), &[]), [("every day at 07:30".to_string(), "open my calendar".to_string())]);
+        assert!(fired(&[], &[], Some((7, 31)), &[]).is_empty() && fired(&["discordptb".into()], &[], None, &[]).len() == 1);
         assert!(is_app("minecraft", "javaw") && is_app("Discord", "discord") && !is_app("discord", "disk"));
         assert!(rule(&json!({"action": "list"})).unwrap().contains("1.  Whenever discord starts"));
         assert!(rule(&json!({"action": "remove", "number": 1})).is_ok());

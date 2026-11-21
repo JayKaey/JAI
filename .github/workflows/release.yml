@@ -170,6 +170,11 @@ jobs:
 
           The setup installs J.A.I. on a PC beside the one he already runs on (the main PC): it asks for the main PC's address and an account there, and downloads nothing from that PC. J.A.I. comes in this file, his engine from Ollama's release on GitHub, then the voice, the ears and the brain that fits the graphics card (4 GB of graphics memory at least). Where J.A.I. is installed already, the same file updates him: he quits, this version comes in, and he starts again (a PC that runs another version than the main PC then takes the main PC's).
           EOF
+          # What changed: the annotated tag's own message (`git tag -a v… -m "…"`), above the rest.
+          tag=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$GITHUB_REF_NAME" --jq '.object.type + " " + .object.sha')
+          if [ "${tag%% *}" = tag ]; then
+            { printf '## What changed\n\n'; gh api "repos/$GITHUB_REPOSITORY/git/tags/${tag#* }" --jq .message; printf '\n'; cat notes.md; } > notes.tmp && mv notes.tmp notes.md
+          fi
           # (An older release or draft of this tag gives way; the list shows drafts too.)
           for id in $(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq ".[] | select(.tag_name == \"$GITHUB_REF_NAME\") | .id"); do
             gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/$id"

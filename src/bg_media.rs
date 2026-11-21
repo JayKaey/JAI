@@ -331,6 +331,81 @@ fn insert(s: &mut InterfaceSettings, key: &str, path: &Path, line: String) -> St
     format!("background {line}")
 }
 
+/// The title of the open dialog that asks for a source (`folder`: one for a slideshow).
+fn dialog_title(folder: bool) -> &'static str {
+    if folder {
+        "A folder of pictures for a slideshow — J.A.I."
+    } else {
+        "A picture or a video for the background — J.A.I."
+    }
+}
+
+/// The desktop's "Open" dialog (kdialog on KDE, zenity on GNOME) for a picture or a video, or
+/// a folder for a slideshow: what Sir chose, or None when he cancelled. It blocks: call it off
+/// the HUD's thread. (A test session opens no dialog.)
+#[cfg(not(windows))]
+pub fn choose(folder: bool) -> Result<Option<PathBuf>, String> {
+    if crate::platform::in_test_session() {
+        return Err("a test session opens no dialogs".into());
+    }
+    let start = home().unwrap_or_else(|| PathBuf::from("/")).display().to_string();
+    let kdialog: Vec<String> = if folder { vec!["--getexistingdirectory".into(), start, "--title".into(), dialog_title(true).into()] } else { vec!["--getopenfilename".into(), start, "*.png *.jpg *.jpeg *.webp *.mp4 *.m4v *.mov".into(), "--title".into(), dialog_title(false).into()] };
+    let mut zenity: Vec<String> = vec!["--file-selection".into(), format!("--title={}", dialog_title(folder))];
+    if folder {
+        zenity.push("--directory".into());
+    }
+    for (program, args) in [("kdialog", &kdialog), ("zenity", &zenity)] {
+        match std::process::Command::new(program).args(args).output() {
+            Ok(out) if out.status.success() => {
+                let chosen = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                return Ok((!chosen.is_empty()).then(|| PathBuf::from(chosen)));
+            }
+            Ok(_) => return Ok(None),
+            Err(_) => continue,
+        }
+    }
+    Err("there's no open dialog on this PC (kdialog or zenity): tell me the path instead".into())
+}
+
+/// The Windows "Open" dialog for a picture or a video, or a folder for a slideshow: what Sir
+/// chose, or None when he cancelled. It blocks: call it off the HUD's thread. (A test session
+/// opens no dialog.)
+#[cfg(windows)]
+pub fn choose(folder: bool) -> Result<Option<PathBuf>, String> {
+    if crate::platform::in_test_session() {
+        return Err("a test session opens no dialogs".into());
+    }
+    use windows::core::HSTRING;
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED};
+    use windows::Win32::UI::Shell::{FileOpenDialog, IFileOpenDialog, FOS_FORCEFILESYSTEM, FOS_PICKFOLDERS, SIGDN_FILESYSPATH};
+    // SAFETY: COM on this (blocking) thread only, released before it returns; the dialog's
+    // strings outlive the calls that use them and the path it returns is freed after copying.
+    unsafe {
+        let com = CoInitializeEx(None, COINIT_APARTMENTTHREADED).is_ok();
+        let chosen = (|| -> windows::core::Result<Option<PathBuf>> {
+            let dialog: IFileOpenDialog = CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER)?;
+            dialog.SetTitle(&HSTRING::from(dialog_title(folder)))?;
+            let mut options = dialog.GetOptions()? | FOS_FORCEFILESYSTEM;
+            if folder {
+                options = options | FOS_PICKFOLDERS;
+            }
+            dialog.SetOptions(options)?;
+            if dialog.Show(HWND(0)).is_err() {
+                return Ok(None);
+            }
+            let raw = dialog.GetResult()?.GetDisplayName(SIGDN_FILESYSPATH)?;
+            let path = raw.to_string();
+            CoTaskMemFree(Some(raw.0 as *const std::ffi::c_void));
+            Ok(path.ok().map(PathBuf::from))
+        })();
+        if com {
+            CoUninitialize();
+        }
+        chosen.map_err(|e| format!("the open dialog failed: {e}"))
+    }
+}
+
 /// `configure_interface`'s background arguments: the media (`background_media`, for the monitor
 /// in `background_monitor`), `background_mode`, `background_interval` (seconds),
 /// `background_sound` and `background_dim` (a share or percent).
@@ -377,6 +452,8 @@ pub fn apply(s: &mut InterfaceSettings, args: &Value, done: &mut Vec<String>, fa
 
 static SET_VERB: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"(?i)\b(?:set|use|make|put|change|show|play|load|take|nimm|nutze|setz|setze|stell|stelle|verwende|benutze|mach|zeig|spiel|spiele|lade)\b").expect("valid regex"));
 static BACKGROUND: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"(?i)\b(?:background|wallpaper|backdrop|hintergrund\w*|slideshow|diashow)\b").expect("valid regex"));
+/// "Remove the background" as the whole order: its media ("the background noise" is none of it).
+static BARE_REMOVE: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"^(?:remove|clear|delete|reset|get rid of)\s+(?:the\s+|my\s+|your\s+)?(?:desktop\s+)?background$|^(?:entferne?|lösche?)\s+(?:den\s+|meinen\s+)?hintergrund$").expect("valid regex"));
 static QUOTED: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r#""([^"]+)"|'([^']{3,})'"#).expect("valid regex"));
 static PATH: LazyLock<regex::Regex> = LazyLock::new(|| {
     regex::Regex::new(r#"(?i)((?:[a-z]:[\\/]|/)[^"]*?)(?:\s+(?:as|on|with|without|for|every|and|then|muted|auf|als|mit|ohne|alle|und)\b|\s*[.!?]?\s*$)"#).expect("valid regex")
@@ -438,7 +515,7 @@ pub fn command(text: &str) -> Option<Value> {
     if let Some(source) = source.filter(|_| background && SET_VERB.is_match(text) && !has(&["how do", "how can", "can you", "could you", "what is", "?"]) || has(&["slideshow", "diashow"]) && !has(&["?"])) {
         args.insert("background_media".into(), json!(source));
         monitor_arg(&mut args);
-    } else if background && sound.is_none() && has(&["remove", "clear", "delete", "reset", "no more", "get rid", "entfern", "lösch", "kein "]) && has(&["picture", "image", "photo", "video", "slideshow", "media", "clip", "bild", "diashow", "wallpaper"]) && !has(&["?"]) {
+    } else if background && sound.is_none() && has(&["remove", "clear", "delete", "reset", "no more", "get rid", "entfern", "lösch", "kein "]) && (has(&["picture", "image", "photo", "video", "slideshow", "media", "clip", "bild", "diashow", "wallpaper"]) || BARE_REMOVE.is_match(&crate::intents::normalize_phrase(text))) && !has(&["?"]) {
         args.insert("background_media".into(), json!("none"));
         monitor_arg(&mut args);
     }
@@ -1255,8 +1332,13 @@ mod tests {
         assert_eq!(said("remove my background picture").unwrap()["background_media"], "none");
         assert_eq!(said("remove my background video on monitor 2").unwrap()["background_monitor"], "2");
         assert_eq!(said("entferne mein Hintergrundbild").unwrap()["background_media"], "none");
+        // (Sir, 2026-11-21: the background said alone, all the way to the tool.)
+        for text in ["Remove the background.", "JAI, clear my background", "Entferne den Hintergrund"] {
+            assert_eq!(said(text).unwrap()["background_media"], "none", "{text}");
+            assert_eq!(crate::phrasings::route(text), Some(("configure_interface".to_string(), json!({"background_media": "none"}))), "{text}");
+        }
         // Not orders for it.
-        for no in ["set my background to red", "make the background darker", "how do I set a wallpaper?", "what is a slideshow?", "open my pictures folder", "play the video on youtube", "mute the music"] {
+        for no in ["set my background to red", "make the background darker", "how do I set a wallpaper?", "what is a slideshow?", "open my pictures folder", "play the video on youtube", "mute the music", "remove the background noise", "clear the background apps"] {
             assert_eq!(said(no), None, "{no}");
         }
         // Found in review: "every", "video" or "desktop" in other orders, "unmute" read as "mute",

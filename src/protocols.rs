@@ -39,6 +39,32 @@ pub struct Step {
     pub args: Value,
 }
 
+/// A step in Sir's own words ("open Spotify", "tell Max's PC to open Minecraft"): carried out
+/// after the others as if he had said it (`StarkEvent::RunMacro`), so it can be anything he
+/// understands.
+pub const ORDER: &str = "order";
+
+impl Step {
+    /// The step as a line of the protocol window: his words, or the tool and its arguments.
+    pub fn line(&self) -> String {
+        match self.args["order"].as_str().filter(|_| self.tool == ORDER) {
+            Some(order) => order.to_string(),
+            None => format!("{} {}", self.tool, self.args),
+        }
+    }
+
+    /// A line of the protocol window as a step: "tool_name {…}" stays that tool's call, any
+    /// other line is an order in his words.
+    pub fn of_line(line: &str) -> Option<Step> {
+        let line = line.trim();
+        let call = line.split_once(' ').filter(|(tool, _)| tool.chars().all(|c| c.is_ascii_lowercase() || c == '_' || c.is_ascii_digit()));
+        if let Some((tool, Ok(args @ Value::Object(_)))) = call.map(|(tool, args)| (tool, serde_json::from_str::<Value>(args.trim()))) {
+            return Some(Step { tool: tool.to_string(), args });
+        }
+        (!line.is_empty()).then(|| Step { tool: ORDER.to_string(), args: json!({ "order": line }) })
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Protocol {
     pub name: String,
@@ -48,6 +74,10 @@ pub struct Protocol {
     #[serde(default)]
     pub trigger_phrases: Vec<String>,
     pub steps: Vec<Step>,
+    /// When it runs by itself, in the rules' words (`kit_notes::when_of`): "Minecraft starts",
+    /// "every day at 7:30", "Max comes online", "I start a game".
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub when: Vec<String>,
 }
 
 fn key(name: &str) -> String {
@@ -89,7 +119,16 @@ pub fn match_utterance(normalized: &str) -> Option<String> {
             .max_by(|a, b| a.1.total_cmp(&b.1))
             .map(|(n, _)| n.clone());
     }
-    triggers.iter().find(|(_, phrases)| phrases.iter().any(|p| p == s)).map(|(n, _)| n.clone())
+    drop(triggers);
+    his_phrase(s)
+}
+
+/// The protocol whose own phrase a sentence is ("wake up daddys home"): what Sir set is his
+/// order as it stands, before every other router.
+pub fn his_phrase(text: &str) -> Option<String> {
+    let s = crate::intents::normalize_phrase(text);
+    let triggers = TRIGGERS.read().unwrap_or_else(|e| e.into_inner());
+    triggers.iter().find(|(_, phrases)| !s.is_empty() && phrases.iter().any(|p| *p == s)).map(|(n, _)| n.clone())
 }
 
 struct FocusSession {
@@ -367,6 +406,7 @@ pub fn plan(steps: &[Step]) -> Vec<Vec<Vec<usize>>> {
 fn starter_protocols() -> Vec<Protocol> {
     vec![
         Protocol {
+            when: Vec::new(),
             name: "house party".into(),
             description: "Music on, volume up, party colours.".into(),
             trigger_phrases: vec!["party time".into(), "party mode".into()],
@@ -377,6 +417,7 @@ fn starter_protocols() -> Vec<Protocol> {
             ],
         },
         Protocol {
+            when: Vec::new(),
             name: "gaming".into(),
             description: "Steam up, Discord on Monitor 2, JaysRock playing, volume at 40 %, JAI silent while a full-screen game runs.".into(),
             trigger_phrases: vec!["gaming mode".into(), "zeit zu zocken".into(), "game time".into()],
@@ -389,6 +430,7 @@ fn starter_protocols() -> Vec<Protocol> {
             ],
         },
         Protocol {
+            when: Vec::new(),
             name: "coding".into(),
             description: "VS Code on Monitor 1, the browser and live PC stats on Monitor 2, focus music.".into(),
             trigger_phrases: vec!["coding mode".into(), "time to code".into(), "zeit zu coden".into()],
@@ -400,6 +442,7 @@ fn starter_protocols() -> Vec<Protocol> {
             ],
         },
         Protocol {
+            when: Vec::new(),
             name: "study".into(),
             description: "A 50-minute focus session, the timetable and the course files on screen, quiet focus music.".into(),
             trigger_phrases: vec!["study mode".into(), "time to study".into(), "lernmodus".into(), "zeit zu lernen".into()],
@@ -412,6 +455,7 @@ fn starter_protocols() -> Vec<Protocol> {
             ],
         },
         Protocol {
+            when: Vec::new(),
             name: "modding".into(),
             description: "VS Code on Monitor 1, the browser and live PC stats on Monitor 2, focus music; a failed Gradle build shows up as a card.".into(),
             trigger_phrases: vec!["modding mode".into(), "time to mod".into(), "zeit zu modden".into()],
@@ -424,6 +468,7 @@ fn starter_protocols() -> Vec<Protocol> {
             ],
         },
         Protocol {
+            when: Vec::new(),
             name: "music and chill".into(),
             description: "Spotify on Monitor 2 with JaysRock, volume at 35 %, the HUD as just the core.".into(),
             trigger_phrases: vec!["music and chill".into(), "chill mode".into(), "chill time".into()],
@@ -435,6 +480,7 @@ fn starter_protocols() -> Vec<Protocol> {
             ],
         },
         Protocol {
+            when: Vec::new(),
             name: "clean slate".into(),
             description: "Stealth: music paused, JAI's extra windows closed, every window out of the way.".into(),
             trigger_phrases: vec!["clear my desk".into(), "clean up my screen".into(), "stealth protocol".into(), "stealth mode".into()],
@@ -445,6 +491,7 @@ fn starter_protocols() -> Vec<Protocol> {
             ],
         },
         Protocol {
+            when: Vec::new(),
             name: "focus".into(),
             description: "A 25-minute focus session (silent except alerts).".into(),
             trigger_phrases: vec![],
@@ -681,6 +728,7 @@ mod tests {
 
         let saved = store
             .save(Protocol {
+                when: Vec::new(),
                 name: "Movie Night Protocol".into(),
                 description: String::new(),
                 trigger_phrases: vec!["movie time".into()],
@@ -689,7 +737,29 @@ mod tests {
             .unwrap();
         assert_eq!(saved.name, "movie night");
         assert_eq!(match_utterance("movie time").as_deref(), Some("movie night"));
-        assert!(store.save(Protocol { name: "loop".into(), description: String::new(), trigger_phrases: vec![], steps: vec![step("protocols", json!({}))] }).is_err());
+        // Sir's own (2026-11-21): his phrase wins over the built-in homecoming, a step is his words
+        // or a tool's call, and both read back as he wrote them in the protocol window.
+        let lines = ["open Spotify", "media_and_volume_control {\"action\":\"set_volume\",\"level\":30}"];
+        store
+            .save(Protocol { name: "daddy".into(), description: String::new(), trigger_phrases: vec!["Wake up, Daddy's home!".into()], when: vec!["Max comes online".into()], steps: lines.iter().filter_map(|l| Step::of_line(l)).collect() })
+            .unwrap();
+        // (Every store another test opens publishes its own phrases: the table is published
+        // again before each look, and the phrase is withdrawn at once.)
+        let (said, routed) = (0..20)
+            .map(|_| {
+                store.publish_triggers();
+                (his_phrase("wake up daddys home"), crate::phrasings::route("Wake up, daddy's home.").map(|(tool, args)| (tool, args["protocol_name"].clone())))
+            })
+            .find(|(said, routed)| said.is_some() && routed.as_ref().is_some_and(|(tool, _)| tool == "manage_stark_protocol"))
+            .unwrap_or_default();
+        let daddy = store.get("daddy").unwrap();
+        assert!(store.delete("daddy"));
+        assert_eq!(said.as_deref(), Some("daddy"));
+        assert_eq!(routed, Some(("manage_stark_protocol".to_string(), json!("daddy"))));
+        assert_eq!(daddy.steps[0], Step { tool: ORDER.into(), args: json!({"order": "open Spotify"}) });
+        assert_eq!(daddy.steps.iter().map(Step::line).collect::<Vec<_>>(), lines);
+        assert_eq!(Step::of_line("  "), None);
+        assert!(store.save(Protocol { name: "loop".into(), description: String::new(), trigger_phrases: vec![], when: vec![], steps: vec![step("protocols", json!({}))] }).is_err());
         assert!(store.delete("movie night"));
 
         // The Stark Protocols Sir names: study, modding, gaming, house party.

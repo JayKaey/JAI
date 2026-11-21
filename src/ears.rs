@@ -223,6 +223,13 @@ pub fn looks_like_chatter(text: &str) -> bool {
     callout || (third && !addresses_someone) || addresses_someone
 }
 
+/// "Pause", "mute", "continue", "nächstes Lied": a media word on its own. His at once without
+/// his name (Sir, 2026-11-21: "even if i dont say the wake word JAI should execute it
+/// immidiatly"), also where the clip is too short for the voice lock to judge.
+pub fn bare_media_order(text: &str) -> bool {
+    crate::intents::silent_quick_command(text).is_some_and(|a| matches!(a.tool, "control_music" | "control_audio_mixer"))
+}
+
 /// "Close", "minimise" on their own: a word anyone in the room or on Discord says. They act on
 /// JAI's own window only when he is addressed (his name, an open conversation, his window).
 fn bare_window_word(text: &str) -> bool {
@@ -289,12 +296,20 @@ pub fn classify_addressee(text: &str, ctx: &AddresseeContext) -> Addressee {
 /// Below this mean log-probability Whisper is unsure of what it wrote.
 pub const UNSURE_LOGPROB: f32 = -0.5;
 
-/// A song through the microphone: while a player is playing, words Whisper is unsure of and that
-/// are no command JAI knows are the song's, not Sir's. (jai.log 2026-11-05 19:45: "Fix that
-/// my heart, hope it never stops war. Yeah." was answered as a request.) With the wake word,
+/// A song through the microphone: words that are the song's, not Sir's, should a player be
+/// playing. No command JAI knows, and either Whisper is unsure of them (jai.log 2026-11-05 19:45:
+/// "Fix that my heart, hope it never stops war. Yeah." was answered as a request), or they came
+/// without his name (`unnamed`) and do not open as an order or a question: a lyric speaks to
+/// someone too ("You wanna fly, you want dude on a ground, you stay up." launched a simulation
+/// on 2026-11-21, Whisper sure of it), but seldom opens like that. With the wake word,
 /// push-to-talk or a barge-in this is never asked.
-pub fn sung_not_said(text: &str, avg_logprob: f32, player_playing: bool) -> bool {
-    player_playing && avg_logprob < UNSURE_LOGPROB && !known_command(text)
+pub fn maybe_sung(text: &str, avg_logprob: f32, unnamed: bool) -> bool {
+    let opens_as_order = || {
+        let words = plain_words(text);
+        let first = words.split_whitespace().find(|w| !FILLERS.contains(w));
+        first.is_some_and(|w| COMMAND_VERBS.contains(&w) || QUESTION_WORDS.contains(&w))
+    };
+    !known_command(text) && (avg_logprob < UNSURE_LOGPROB || (unnamed && !opens_as_order()))
 }
 
 /// Sounds, not words: humming, "la la la", "mm-hm".
@@ -494,14 +509,20 @@ mod relevance_tests {
             ("Fix that my heart, hope it never stops war. Yeah.", -0.57),
             ("Fix that lahard how it never stops war. Yeah. Baby.", -0.84),
         ] {
-            assert!(sung_not_said(text, logprob, true), "{text}");
-            assert!(!sung_not_said(text, logprob, false), "no player playing: Sir may well have said it");
+            assert!(maybe_sung(text, logprob, false), "{text}");
         }
         // What Sir really said without the wake word, while unsure or not (same log, 11-03/04).
-        assert!(!sung_not_said("Close yourself.", -0.60, true), "a command is a command, however unsure");
-        assert!(!sung_not_said("Can you test the Discord bars?", -0.34, true), "Whisper is sure of it");
-        assert!(!sung_not_said("That's not your voice.", -0.21, true));
-        assert!(!sung_not_said("Yes.", -0.29, true));
+        assert!(!maybe_sung("Close yourself.", -0.60, true), "a command is a command, however unsure");
+        assert!(!maybe_sung("Can you test the Discord bars?", -0.34, true), "a question, and Whisper is sure of it");
+        assert!(!maybe_sung("Yes.", -0.29, false), "an answer in an open conversation");
+        // jai.log 2026-11-21 11:52, his playlist playing, Whisper sure of every word: lines that
+        // only speak to someone are the song's while a player plays. (A remark of Sir's like
+        // "That's not your voice." needs his name then.)
+        for (text, logprob) in [("You're not shy, you get round.", -0.16), ("You wanna fly, you want dude on a ground, you stay up.", -0.34), ("That's not your voice.", -0.21)] {
+            assert!(maybe_sung(text, logprob, true), "{text}");
+            assert!(!maybe_sung(text, logprob, false), "in an open conversation, or with his name: his");
+        }
+        assert!(!maybe_sung("What is the weather tomorrow?", -0.2, true) && !maybe_sung("Open the settings", -0.3, true), "an order or a question without his name");
     }
 
     #[test]
@@ -628,6 +649,21 @@ mod addressee_tests {
         assert_eq!(classify_addressee("Minimize", &hands_free), Addressee::Unaddressed);
         assert_eq!(classify_addressee("Close", &AddresseeContext { wake_word: true, ..ctx() }), Addressee::WakeWord);
         assert_eq!(classify_addressee("Pause", &gaming), Addressee::DirectIntent, "music commands still work over a game");
+    }
+
+    /// Sir, 2026-11-21: "When i simply say things like pause, play, mute, unmute, continue or so
+    /// even if i dont say the wake word JAI should execute it immidiatly". jai.log: "Pause." alone
+    /// (384 ms) was addressed, then refused by the voice lock at a likeness of 0.10: such a word
+    /// is too short to judge, and passes (`app`). Everything else waits for his name.
+    #[test]
+    fn a_bare_media_word_is_his_at_once() {
+        for said in ["Pause.", "Play", "Mute.", "Unmute", "Continue.", "Resume", "Next song", "Skip", "Louder", "Stop", "weiter", "Stumm", "Ton an", "nächstes Lied"] {
+            assert!(bare_media_order(said), "{said}");
+            assert_eq!(classify_addressee(said, &ctx()), Addressee::DirectIntent, "{said}");
+        }
+        for said in ["Close", "Minimise", "Play Highway to Hell", "Pause the game for me, Max", "Open Chrome", "Next time maybe"] {
+            assert!(!bare_media_order(said), "{said}");
+        }
     }
 }
 

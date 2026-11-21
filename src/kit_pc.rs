@@ -157,7 +157,7 @@ fn mic_blocked_for() -> Option<&'static str> {
 }
 
 #[cfg(windows)]
-fn reg_text(root: windows::Win32::System::Registry::HKEY, path: &str, name: &str) -> Option<String> {
+pub(crate) fn reg_text(root: windows::Win32::System::Registry::HKEY, path: &str, name: &str) -> Option<String> {
     use windows::core::PCWSTR;
     use windows::Win32::System::Registry::{RegGetValueW, RRF_RT_REG_SZ};
     let (path, name) = (wide(path), wide(name));

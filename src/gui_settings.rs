@@ -44,6 +44,8 @@ pub(super) enum Tool {
     Hotkeys,
     VoiceSetup,
     Missed,
+    Protocols,
+    Background,
 }
 
 /// What the panel asks of the HUD this frame.
@@ -95,7 +97,7 @@ const fn row(group: &'static str, name: &'static str, explain: &'static str, wor
 /// The groups, in the order they stand (each is also a key that shows it alone).
 const GROUPS: [&str; 6] = ["LOOK", "SCREENS", "VOICE", "PRESENCE", "GAMES", "TOOLS"];
 
-static ROWS: [Row; 49] = [
+static ROWS: [Row; 52] = [
     row("LOOK", "Theme", "The HUD's colours: one click on a swatch changes them.", "colour color palette gold cyan red green farbe farben design", Control::Theme),
     row("LOOK", "Your own theme", "Build a theme from your own colours, name it and save it.", "theme studio custom create", Control::Open(Tool::ThemeStudio, "THEME STUDIO")),
     row(
@@ -153,6 +155,8 @@ static ROWS: [Row; 49] = [
     row("SCREENS", "Clock: seconds", "The desktop clock shows its seconds.", "clock uhr sekunden", Control::Switch(|s| s.desk_clock_seconds, |s, v| s.desk_clock_seconds = v)),
     row("SCREENS", "Clock: twelve hours", "The desktop clock counts twelve hours with AM and PM, not twenty-four.", "clock uhr 12 24 am pm", Control::Switch(|s| s.desk_clock_12h, |s, v| s.desk_clock_12h = v)),
     row("SCREENS", "Clock: date", "The date stands under the desktop clock.", "clock uhr datum", Control::Switch(|s| s.desk_clock_date, |s, v| s.desk_clock_date = v)),
+    row("SCREENS", "Now playing", "As the desktop's backdrop: the song that plays stands beside the core.", "now playing song music track widget lied musik", Control::Switch(|s| s.now_playing, |s, v| s.now_playing = v)),
+    row("SCREENS", "Background", "Your pictures, videos or a slideshow behind the board, for every monitor or for each.", "background wallpaper picture video slideshow hintergrund bild diashow", Control::Open(Tool::Background, "BACKGROUND")),
     row("SCREENS", "Monitors", "Which monitor the board is on.", "screens display bildschirm monitor", Control::Open(Tool::Screens, "SCREENS")),
     row("VOICE", "Live words", "Your words appear under the emblem while you speak (paused while a game runs).", "captions transcript mitschrift worte", Control::Switch(|s| s.live_words, |s, v| s.live_words = v)),
     row("VOICE", "Learn my voice", "One minute of reading aloud: he tunes his hearing to your voice and microphone.", "set-up setup calibrate wake name jay stimme lernen einrichten", Control::Open(Tool::VoiceSetup, "START")),
@@ -176,6 +180,7 @@ static ROWS: [Row; 49] = [
     row("PRESENCE", "What did I miss?", "The notifications of the last hours.", "notifications history missed benachrichtigungen verpasst", Control::Open(Tool::Missed, "SHOW")),
     row("GAMES", "Game mode", "In a game his mind moves to RAM (0 MB VRAM). Below: what counts as a game.", "gaming spiele spielmodus steam epic vram batman gta minecraft", Control::Games),
     row("TOOLS", "Accounts and services", "E-mail, calendar, school, Discord, the phone link: the Integrations hub.", "integrations hub webuntis itslearning whatsapp", Control::Open(Tool::Hub, "HUB")),
+    row("TOOLS", "Protocols", "What you say, or what happens by itself, and what he does then: set up and changed by hand.", "protocol routine automation trigger when whenever rule protokoll routine", Control::Open(Tool::Protocols, "PROTOCOLS")),
     row("TOOLS", "Everything he can do", "The Feature Lab: every ability, each with a button to try it.", "features lab abilities help funktionen hilfe", Control::Open(Tool::FeatureLab, "FEATURE LAB")),
 ];
 
@@ -551,8 +556,8 @@ mod tests {
         // The search understands German words for the same things.
         assert_eq!(found("nachtmodus"), vec!["Night mode by the clock"]);
         assert!(found("hintergrund").contains(&"Background on every monitor") && found("hintergrund").contains(&"Background media"));
-        assert_eq!(found("slideshow"), vec!["Background media", "Slideshow time"]);
-        let media = ["Background on every monitor", "Background media", "Media mode", "Slideshow time", "Video sound", "Media dimming"];
+        assert_eq!(found("slideshow"), vec!["Background media", "Slideshow time", "Background"]);
+        let media = ["Background on every monitor", "Background media", "Media mode", "Slideshow time", "Video sound", "Media dimming", "Background"];
         assert_eq!(found("background"), media, "every row of the background answers its name");
         assert!(media.iter().all(|row| found("hintergrund").contains(row)));
         assert!(found("video").contains(&"Video sound") && found("wallpaper").contains(&"Media mode"));

@@ -106,13 +106,16 @@ Your own pictures and videos can lie on his black: a picture (PNG, JPEG, WebP), 
 (silent unless you ask for its sound) or a folder of pictures as a slideshow, for every monitor
 or for one ("set my background to D:\Pictures\sunset.png", "use my Pictures folder as a
 slideshow on monitor 2", "change the slideshow every 2 minutes", "background video with sound",
-"remove my background picture"; the same in the SCREENS settings). Behind the board they are
+"remove my background picture"; the same in the Background window, "open the background window",
+with FILE, FOLDER or NONE for each monitor, and in the SCREENS settings). Behind the board they are
 dimmed so the board reads; as the whole background ("fill the whole background") the board
 fades out and comes back when you speak to him or say "show the board". A game in front, a
 locked PC or a window covering the whole monitor pauses them.
 
 "Make Discord full screen" is about Discord, "full screen" alone about the window in front, and
-neither ever about him; "move Discord to another monitor" takes it to the next one.
+neither ever about him; "move Discord to another monitor" takes it to the next one. A window he
+opens or moves goes where it covers none of the others (on a full monitor, where it covers the
+least), and a moved one slides there quickly instead of jumping.
 
 JAI starts with an empty HUD. "Open that widget again next time" keeps one for the next
 start; "bring back my windows" reopens what was open last, also after a restart.
@@ -173,7 +176,11 @@ waves, the Doppler effect and a sonic boom, sound waves, light through a double 
 den Doppelspalt"), a formula as a curve or as a surface in 3D ("plot z = sin(x) * cos(y)"),
 gradient descent and sorting. Its sliders answer by name ("set the speed to 200"), and "simulate
 it again" or "plot it with 3 m" changes the one just shown. Beside a game a running simulation
-slows to four frames a second.
+slows to four frames a second. The orbits, the ripple tank and surfaces turn 3D and back ("can
+you make it 3D?", "show the orbits in 3D", "back to 2D", "mach es 3D", or the 3D key in their
+window): the orbits' plane leans back and sinks into the wells of their gravity, the tank stands
+up as a relief of the water's height, and a surface made 2D is seen from straight above. The run
+goes on through that, as through a pause; the other simulations are flat and say so.
 
 Every window of his opens with a holographic entrance (the frame draws in, brackets close,
 a scan line passes) and leaves with an exit (it folds into a line), whether it is opened or
@@ -192,6 +199,18 @@ digit or Space needs Ctrl or Alt; F1-F24, Pause and Scroll Lock may stand alone;
 his has is refused; Esc gives up); CLEAR takes it away; a key another program holds shows TAKEN.
 The microphone key sounds rising on and falling off (with the sound cues on). A scripted session
 takes no key.
+
+"Open the protocol window" (or "make a new protocol"; the settings panel's PROTOCOLS, the admin
+window's tile) sets up and edits protocols: lists of orders he carries out one after another. Each
+has a NAME ("engage the gaming protocol" always works), phrases to SAY for it ("wake up, daddy's
+home": a protocol's phrase wins over every other reading of it), WHEN lines for what happens
+("whenever Max plays Minecraft", "whenever Max's PC comes online", "whenever I start a game") and
+the orders to DO, as you would say them ("open the earth on Max's PC" runs on that PC). A WHEN line
+he does not understand is refused when you save, with the reason; RUN saves and runs it. Every PC
+of the link tells the main PC which game it runs.
+
+"Activate goon mode" opens a private window of your default browser (Edge InPrivate, Chrome,
+Brave, Vivaldi or Chromium incognito, a Firefox private window).
 
 "Explain what's on my screen" (and every other look at the screen) leaves his own windows out
 of the capture, so he reads what is behind them; they stay on the monitor (Windows 10 2004 or
@@ -250,6 +269,11 @@ song playing, "add Thunderstruck to the queue" at the end. "Turn on shuffle", "r
 lets nobody clear its queue or change a playlist from outside: "clear the queue" and "add this
 song to my playlist Gym" say so. When Sonora is not running he starts it and waits for it; a test
 session never reaches it.
+
+"Pause", "play", "mute", "unmute", "continue" or "next song" said alone are carried out at once,
+without his name; while music plays, a sung line without his name is the song's, not an order. A
+song he starts he names, without the player's notes. The song beside his orb goes with "hide the
+now playing" (or its row under SCREENS) and comes back with "show the now playing".
 
 ## Widgets by voice
 

@@ -242,8 +242,9 @@ const BAR_CEILING: f32 = 0.50;
 const OWN_MARGIN: f32 = 0.28;
 /// … once this many of them have been learnt from.
 const SETTLED_AFTER: usize = 12;
-/// A short order ("stop", "mute") says less about a voice: it passes this much lower.
-const SHORT_MS: u32 = 1100;
+/// A short order ("stop", "mute") says less about a voice: it passes this much lower (and a
+/// bare media word that short passes at all: `app`'s voice lock).
+pub(crate) const SHORT_MS: u32 = 1100;
 const SHORT_ALLOWANCE: f32 = 0.10;
 /// For this long after a sentence that was surely his, one that falls this far short of the
 /// bar still passes: the same person goes on talking.

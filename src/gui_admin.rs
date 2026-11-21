@@ -326,9 +326,9 @@ mod tests {
     fn the_admin_window_lists_every_window() {
         let _look = crate::holo_theme::look_for_pictures();
         let main = pc("");
-        let mut stage = Stage::new(egui::vec2(720.0, 1000.0));
+        let mut stage = Stage::new(egui::vec2(720.0, 1120.0));
         let frame = stage.frames(4, &mut |ctx| {
-            egui::Window::new("admin").title_bar(false).fixed_pos(egui::pos2(10.0, 10.0)).fixed_size(egui::vec2(680.0, 960.0)).show(ctx, |ui| body(ui, &main));
+            egui::Window::new("admin").title_bar(false).fixed_pos(egui::pos2(10.0, 10.0)).fixed_size(egui::vec2(680.0, 1080.0)).show(ctx, |ui| body(ui, &main));
         });
         stage.raster(&frame).save("panel_admin");
         assert_eq!(visual::clipped_text(&frame), Vec::<String>::new());
@@ -346,7 +346,7 @@ mod tests {
         let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
         assert!(crate::admin::gate(&main, rt.handle(), &["earth", "settings"]).is_empty(), "his main PC closes nothing");
         let frame = stage.frames(4, &mut |ctx| {
-            egui::Window::new("admin").title_bar(false).fixed_pos(egui::pos2(10.0, 10.0)).fixed_size(egui::vec2(680.0, 960.0)).show(ctx, |ui| body(ui, &main));
+            egui::Window::new("admin").title_bar(false).fixed_pos(egui::pos2(10.0, 10.0)).fixed_size(egui::vec2(680.0, 1080.0)).show(ctx, |ui| body(ui, &main));
         });
         stage.raster(&frame).save("panel_admin_open");
         assert_eq!(frame.find_exact("OPEN").len(), 2);

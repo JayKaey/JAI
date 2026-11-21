@@ -193,6 +193,9 @@ pub struct InterfaceSettings {
     pub desk_clock_seconds: bool,
     pub desk_clock_12h: bool,
     pub desk_clock_date: bool,
+    /// As the background: the song that plays stands beside the core. (Sir, 2026-11-21: "I also
+    /// want to be able to disable to now playing widget that shows next to JAIs orb".)
+    pub now_playing: bool,
     /// Media on the board's black (`bg_media`): "behind" (the board over it, dimmed) or "whole"
     /// (the media alone, the board when called); the source per monitor number ("all": every
     /// monitor without its own), a picture, an H.264 MP4 or a folder of pictures; the seconds a
@@ -259,6 +262,7 @@ impl Default for InterfaceSettings {
             desk_clock_seconds: false,
             desk_clock_12h: false,
             desk_clock_date: true,
+            now_playing: true,
             bg_mode: "behind".into(),
             bg_media: Default::default(),
             bg_interval: 30,
@@ -967,6 +971,7 @@ pub fn configure(current: &InterfaceSettings, args: &Value) -> Result<Configured
         ("clock seconds", bool_arg(args, "desk_clock_seconds"), &mut s.desk_clock_seconds),
         ("twelve-hour clock", bool_arg(args, "desk_clock_12h"), &mut s.desk_clock_12h),
         ("clock date", bool_arg(args, "desk_clock_date"), &mut s.desk_clock_date),
+        ("now playing beside the core", bool_arg(args, "now_playing"), &mut s.now_playing),
         // (Before his voice is known it holds nothing back: the print is gathered from the
         // orders given by name, and the lock holds from then on.)
         ("voice lock", bool_arg(args, "voice_lock"), &mut s.voice_lock),

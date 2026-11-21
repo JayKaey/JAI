@@ -54,7 +54,7 @@ static TO_PC: LazyLock<Regex> = LazyLock::new(|| {
 const NO_ORDER: &[&str] = &["i", "im", "i'm", "i’m", "we", "were", "what", "whats", "what's", "how", "where", "who", "why", "when", "which", "is", "are", "was", "ich", "wir", "wie", "wo", "wer", "warum", "wann", "welche", "welcher", "ist", "sind", "bin"];
 
 /// The names a possessive word may stand for ("max's", "maxs", "max'", "chris").
-fn names_in(word: &str) -> Vec<String> {
+pub(crate) fn names_in(word: &str) -> Vec<String> {
     let bare = word.trim_end_matches(['\'', '’']);
     let mut names = vec![bare.to_string()];
     for suffix in ["'s", "’s", "s"] {
@@ -139,9 +139,63 @@ fn take(name: &str) -> Vec<String> {
     lock(&ORDERS).remove(&name.to_lowercase()).unwrap_or_default().into_iter().filter(|(_, at)| at.elapsed() < ORDER_KEEPS).map(|(order, _)| order).collect()
 }
 
+/// What another PC did, as Sir's PC heard it (`events`), for the rules and protocols that wait
+/// on it (`kit_notes::When::Pc`). In a rule an empty game is any game.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PcEvent {
+    Online,
+    Offline,
+    Plays(String),
+    Stops(String),
+}
+
+/// Each account's PC as Sir's PC last heard of it (by its name in lower case): when, and the
+/// game it played.
+static SEEN: LazyLock<Mutex<HashMap<String, (Instant, Option<String>)>>> = LazyLock::new(Default::default);
+/// What the PCs did since the rules last looked.
+static EVENTS: Mutex<Vec<(String, PcEvent)>> = Mutex::new(Vec::new());
+
+/// Notes a client's call: online again, a game started or ended. (`learning`: in the first
+/// minutes after this J.A.I. started nobody knows what was before, so a PC is only noted.)
+fn note(name: &str, game: Option<String>, learning: bool) {
+    let name = name.to_lowercase();
+    let before = lock(&SEEN).insert(name.clone(), (Instant::now(), game.clone()));
+    if learning && before.is_none() {
+        return;
+    }
+    let mut events = lock(&EVENTS);
+    let played = match before {
+        Some((_, played)) => played,
+        None => {
+            events.push((name.clone(), PcEvent::Online));
+            None
+        }
+    };
+    if played != game {
+        events.extend(played.map(|g| (name.clone(), PcEvent::Stops(g))));
+        events.extend(game.map(|g| (name, PcEvent::Plays(g))));
+    }
+}
+
+/// What the PCs did since the last call; one unheard of for `ONLINE_WITHIN` has gone offline.
+pub fn events() -> Vec<(String, PcEvent)> {
+    let mut events = std::mem::take(&mut *lock(&EVENTS));
+    lock(&SEEN).retain(|name, (at, game)| {
+        let gone = at.elapsed().as_secs() >= ONLINE_WITHIN as u64;
+        if gone {
+            events.extend(game.take().map(|g| (name.clone(), PcEvent::Stops(g))));
+            events.push((name.clone(), PcEvent::Offline));
+        }
+        !gone
+    });
+    events
+}
+
 /// Sir's PC answers a client's call: what Sir sent it, his voice print, the build to run, what
 /// its account may (Sir's switches, which that PC follows), and whether his sign-in there holds.
 pub fn hello(db: &str, name: &str, body: &Value) -> Value {
+    let game = body["game"].as_str().map(str::trim).filter(|g| !g.is_empty()).map(String::from);
+    note(name, game, crate::PROCESS_START.elapsed().as_secs() < ONLINE_WITHIN as u64);
     for done in body["done"].as_array().into_iter().flatten() {
         if let Some(order) = done.as_str() {
             crate::hud_notify::record(&format!("{name}'s PC has \"{order}\"."), false);
@@ -221,7 +275,9 @@ pub async fn client(app: Jai) {
         };
         let db = app.config().read(|c| c.memory_db_path.clone());
         let admin = crate::admin::key_held();
-        let body = json!({ "kind": "pc", "device": pc_name(), "version": BUILD, "stats": stats(&app), "done": done, "print": crate::speaker_id::print_to_share(&db), "admin": admin });
+        // (The game it plays: for Sir's rules and protocols that wait on this PC.)
+        let game = crate::vram_guard::game_now().map(|(game, _)| game);
+        let body = json!({ "kind": "pc", "device": pc_name(), "version": BUILD, "stats": stats(&app), "done": done, "print": crate::speaker_id::print_to_share(&db), "admin": admin, "game": game });
         let answer = match http.post(format!("{main}/api/pc")).header("X-JAI-Key", &key).json(&body).send().await {
             Ok(r) if r.status().as_u16() == 403 || r.status().as_u16() == 401 => {
                 // The account is gone, paused or its key no longer holds: log in again.
@@ -413,5 +469,26 @@ mod tests {
         assert!(take("erika").is_empty(), "taken once");
         assert!(runs_here(&[b"MZ".as_slice(), &vec![0u8; 1_000_001]].concat()) == cfg!(windows));
         assert!(!runs_here(b"<html>not found</html>"));
+    }
+
+    /// What another PC does reaches the rules once: online, a game started and ended, gone.
+    #[test]
+    fn another_pc_coming_playing_and_going_is_heard_once() {
+        let heard = || events().into_iter().filter(|(name, _)| name == "erika").map(|(_, e)| e).collect::<Vec<_>>();
+        note("Erika", None, true);
+        assert!(heard().is_empty(), "just after J.A.I. started a PC is only noted");
+        note("Erika", Some("Minecraft".into()), false);
+        assert_eq!(heard(), [PcEvent::Plays("Minecraft".into())]);
+        note("erika", Some("Minecraft".into()), false);
+        assert!(heard().is_empty(), "the same game again is no news");
+        note("Erika", None, false);
+        assert_eq!(heard(), [PcEvent::Stops("Minecraft".into())]);
+        note("Erika", Some("Fortnite".into()), false);
+        assert_eq!(heard(), [PcEvent::Plays("Fortnite".into())]);
+        // Unheard of for ONLINE_WITHIN: gone, its game with it.
+        lock(&SEEN).get_mut("erika").expect("noted").0 = Instant::now().checked_sub(Duration::from_secs(ONLINE_WITHIN as u64)).expect("a clock");
+        assert_eq!(heard(), [PcEvent::Stops("Fortnite".into()), PcEvent::Offline]);
+        note("Erika", None, false);
+        assert_eq!(heard(), [PcEvent::Online]);
     }
 }

@@ -38,6 +38,12 @@ mod settings_panel;
 #[path = "gui_mixer.rs"]
 mod mixer_view;
 /// His keys in every program, each changed by pressing the new key.
+/// His protocols: what he says, when it happens by itself, what is done then.
+/// His pictures and videos behind the board, chosen by hand.
+#[path = "gui_background.rs"]
+mod background_view;
+#[path = "gui_protocols.rs"]
+mod protocols_view;
 #[path = "gui_hotkeys.rs"]
 mod hotkeys_view;
 
@@ -670,6 +676,20 @@ pub fn show_mixer(open: bool) {
 }
 
 /// "Open the hotkeys window".
+/// "Open the background window": his pictures and videos behind the board, chosen by hand.
+pub fn show_background_window() {
+    background_view::open();
+    show();
+    request_repaint();
+}
+
+/// "Open the protocol window": his protocols, each changed by hand.
+pub fn show_protocols() {
+    protocols_view::open();
+    show();
+    request_repaint();
+}
+
 pub fn show_hotkeys() {
     hotkeys_view::open();
     show();
@@ -1108,12 +1128,15 @@ fn core_on_screen() -> Option<Rect> {
 /// Where a new window of `size` opens on the monitor whose work area is `work`: about the
 /// core when he stands on that monitor, beside him on his circle, the emptier side first, off
 /// the windows that stand there already (`holo_stage::slot`); else at `middle`, or where it
-/// stands on none of them when one stands there.
+/// stands on none of them when one stands there. With no free spot left, where it covers the
+/// others least (`holo_stage::least_covered`), never him.
 fn opening_spot(work: Rect, size: Vec2, core: Option<Rect>, taken: &[Rect], middle: Pos2) -> Pos2 {
-    use crate::holo_stage::{slot, GAP};
+    use crate::holo_stage::{least_covered, slot, GAP};
     let Some(core) = core.filter(|core| work.contains(core.center())) else {
-        let on_one = taken.iter().any(|t| t.intersects(Rect::from_min_size(middle, size).shrink(1.0)));
-        return on_one.then(|| crate::hud_dock::find_non_overlapping_slot(work, size, taken, GAP)).flatten().unwrap_or(middle);
+        if !taken.iter().any(|t| t.intersects(Rect::from_min_size(middle, size).shrink(1.0))) {
+            return middle;
+        }
+        return crate::hud_dock::find_non_overlapping_slot(work, size, taken, GAP).unwrap_or_else(|| least_covered(work, size, taken, WINDOW_TITLE_ROW, None, middle));
     };
     // Out on his second circle where the screen has the room: the leader that ties the window
     // to him has a length to show there (hard against his first circle it has none).
@@ -1123,28 +1146,9 @@ fn opening_spot(work: Rect, size: Vec2, core: Option<Rect>, taken: &[Rect], midd
         .or_else(|| slot(work, size, core, taken, GAP))
         // No room left about him: any free spot off him and off the others.
         .or_else(|| crate::hud_dock::find_non_overlapping_slot(work, size, &with_core, GAP))
-        // No free spot at all: over the windows beside him, never on him.
-        .or_else(|| stacked_beside(work, size, core, taken))
-        .unwrap_or(middle)
-}
-
-/// A place beside the core for a window that finds no free one: on his emptier flank, over
-/// the windows that stand there, a step outwards for each and below the header of the lowest,
-/// so that every header stays in view. None for a window too wide to stand beside him at all.
-fn stacked_beside(work: Rect, size: Vec2, core: Rect, taken: &[Rect]) -> Option<Pos2> {
-    let c = core.center();
-    let left = taken.iter().filter(|t| t.center().x < c.x).count();
-    let sides = if left < taken.len() - left { [-1.0, 1.0] } else { [1.0, -1.0] };
-    let top = (c.y - size.y / 2.0).clamp(work.top(), (work.bottom() - size.y).max(work.top()));
-    sides.into_iter().find_map(|side: f32| {
-        let x = if side > 0.0 { (core.right() + crate::holo_stage::GAP).min(work.right() - size.x) } else { (core.left() - crate::holo_stage::GAP - size.x).max(work.left()) };
-        if Rect::from_min_size(pos2(x, top), size).intersects(core) {
-            return None;
-        }
-        let there: Vec<&Rect> = taken.iter().filter(|t| (t.center().x - c.x) * side > 0.0).collect();
-        let below = there.iter().map(|t| t.top() + WINDOW_TITLE_ROW + 4.0).fold(top, f32::max);
-        Some(pos2((x + side * 34.0 * there.len() as f32).clamp(work.left(), work.right() - size.x), below.min((work.bottom() - size.y).max(work.top()))))
-    })
+        // (Nothing stands there, yet it fits nowhere beside him: the middle, where the core
+        // makes room for it.)
+        .unwrap_or_else(|| if taken.is_empty() { middle } else { least_covered(work, size, taken, WINDOW_TITLE_ROW, Some(core), middle) })
 }
 
 /// A stage panel (the radar, the disk map, the Earth) whose window stands over the middle of
@@ -1153,7 +1157,7 @@ fn stage_window_covers_centre(ctx: &egui::Context, screen: Rect) -> bool {
     let Some(board) = ctx.input(|i| i.viewport().inner_rect) else { return false };
     let zone = crate::hud_dock::centre_safe_zone(screen);
     let motions = lock(&DETACHED_MOTIONS);
-    crate::hud_dock::STAGE_BLOCKS.iter().map(|id| viewport_for_block(id)).any(|window| !motions.leaving.contains_key(&window) && motions.rects.get(&window).is_some_and(|rect| rect.translate(-board.min.to_vec2()).intersects(zone)))
+    crate::hud_dock::STAGE_BLOCKS.iter().filter_map(|id| motions.viewport_of(id)).any(|window| !motions.leaving.contains_key(&window) && motions.rects.get(&window).is_some_and(|rect| rect.translate(-board.min.to_vec2()).intersects(zone)))
 }
 
 /// The windows `place_where_sir_works` placed (points), by title, and when each was last asked
@@ -5076,7 +5080,7 @@ impl HudApp {
         // As the background: the day beside the emblem (his choice of 2026-11-13).
         if self.as_background() && self.boot.is_none() {
             // (Beside the emblem on the monitor it stands on.)
-            self.day_panel(ctx, self.emblem.room_at(home, frame.centre), frame.centre, frame.radius);
+            self.day_panel(ctx, self.emblem.room_at(home, frame.centre), frame.centre, frame.radius, iface.now_playing);
             // (Not while the core view has the middle: the clock stood on the sphere.)
             if iface.desk_clock && !self.core_open {
                 self.desk_clock(ctx, iface, home, &frame);
@@ -6305,6 +6309,8 @@ impl HudApp {
                 "theme_studio" => theme_studio::is_open(),
                 "mixer" => mixer_view::is_open(),
                 "hotkeys" => hotkeys_view::is_open(),
+                "protocols" => protocols_view::is_open(),
+                "background" => background_view::is_open(),
                 "screens" => self.screens_open,
                 "integrations_hub" => self.hub.open,
                 "devices" => self.drawer_open,
@@ -6337,6 +6343,8 @@ impl HudApp {
                 "theme_studio" => theme_studio::close(),
                 "mixer" => mixer_view::close(),
                 "hotkeys" => hotkeys_view::close(),
+                "protocols" => protocols_view::close(),
+                "background" => background_view::close(),
                 "screens" => self.screens_open = false,
                 "integrations_hub" => self.hub.open = false,
                 "devices" => self.drawer_open = false,
@@ -6426,6 +6434,8 @@ impl HudApp {
                     Tool::FeatureLab => show_features(true),
                     Tool::Mixer => show_mixer(true),
                     Tool::Hotkeys => show_hotkeys(),
+                    Tool::Protocols => show_protocols(),
+                    Tool::Background => show_background_window(),
                     Tool::VoiceSetup => crate::hud_feel::apply(&serde_json::json!({"voice_setup": true})),
                     Tool::Missed => crate::hud_feel::apply(&serde_json::json!({"missed": true})),
                 }
@@ -6456,6 +6466,8 @@ impl HudApp {
         mark("mixer");
         mixer_view::show(ctx, &self.rt);
         hotkeys_view::show(ctx, self.app.config());
+        protocols_view::show(ctx, &self.app, &self.rt);
+        background_view::show(ctx, self.app.config());
         accounts_view::show(ctx);
         login_view::show(ctx, &self.rt, self.app.config());
         // The network radar, the disk map and the Earth, when open.
@@ -6605,31 +6617,13 @@ fn display_hz() -> f32 {
 // HUD's frame, where the screens are known, a block glides there (`hud_dock`) and a window of
 // its own is moved by `ViewportCommand`s.
 
-/// The OS window of view `id` while it is a window of its own.
+/// The OS window of view `id` while it is a window of its own: the one that wears his bar for
+/// it. (A table of viewports did this until 2026-11-21 and knew neither the admin window nor
+/// any `block` window: "'admin' was not up in time to to_monitor".) One not drawn yet is
+/// found by none, and its order waits for it.
 fn viewport_for_block(id: &str) -> ViewportId {
-    match id {
-        "earth" => ViewportId::from_hash_of("jai_earth"),
-        "network_radar" => ViewportId::from_hash_of("jai_network_radar"),
-        "disk_map" => ViewportId::from_hash_of("jai_disk_map"),
-        "features" => ViewportId::from_hash_of("jai_feature_lab"),
-        "audio_mixer" => ViewportId::from_hash_of("jai_audio_mixer"),
-        "hotkeys" => ViewportId::from_hash_of("jai_hotkeys"),
-        "theme_studio" => ViewportId::from_hash_of("jai_theme_studio"),
-        "discord_audio" => ViewportId::from_hash_of("jai_discord_audio"),
-        "pairing" => ViewportId::from_hash_of("jai_satellite_pairing"),
-        // (An order for the 3D window found none: these had no entry.)
-        "model3d" => ViewportId::from_hash_of("jai_model3d"),
-        "departures" => ViewportId::from_hash_of("jai_departures"),
-        "image_viewer" => ViewportId::from_hash_of("jai_image_viewer"),
-        "webcams" => ViewportId::from_hash_of("jai_webcams"),
-        "street_view" => ViewportId::from_hash_of("jai_street_view"),
-        // The second, third … picture block (`gui_media::show`).
-        id if id.starts_with("image_viewer_") => ViewportId::from_hash_of(format!("jai_{id}")),
-        id => match id.strip_prefix("sim:") {
-            Some(sim) => ViewportId::from_hash_of(("jai_simlab", sim)),
-            None => ViewportId::from_hash_of(("jai_window", id)),
-        },
-    }
+    let drawn = lock(&DETACHED_MOTIONS).viewport_of(id);
+    drawn.unwrap_or_else(|| ViewportId::from_hash_of(("jai_unseen_view", id)))
 }
 
 /// Windows of his own on their way somewhere: the window, from where to where (its top left, in
@@ -6903,21 +6897,15 @@ fn arrange_window(ctx: &egui::Context, id: &str, other: Option<&str>, a: &crate:
                 wc::note_window_fullscreen(id, false);
             }
             match a.action {
+                // By its title, in pixels: it glides there, onto another monitor too, and off
+                // his other windows (`own_windows`). (Sent there in one step until 2026-11-21;
+                // Sir: "they shouldnt teleport but instead they should slide".)
                 Action::Move | Action::Resize => {
-                    let area = work(here?)?;
                     let position = a.position.or((a.action == Action::Move && a.size.is_none()).then_some(wc::Position::Centre));
-                    os_glide(ctx, viewport, outer, inner, wc::target_rect(area, outer, position, a.size));
+                    crate::own_windows::arrange(info.title.as_deref()?, position, a.size)?;
                 }
                 Action::ToMonitor => {
-                    let n = crate::monitors::resolve(a.monitor.as_ref()?, here, &monitors)?;
-                    let area = work(n)?;
-                    // (Across monitors in one step: a window passing onto a screen of another
-                    // scale mid-way would take the rest of the way in that screen's points.)
-                    let to = wc::fit(Rect::from_center_size(area.center(), outer.size()), area);
-                    send(ViewportCommand::OuterPosition(to.min.round()));
-                    if (to.size() - outer.size()).length() > 0.5 {
-                        send(ViewportCommand::InnerSize((to.size() - (outer.size() - inner.size())).max(Vec2::splat(120.0))));
-                    }
+                    crate::own_windows::to_monitor(info.title.as_deref()?, a.monitor.as_ref()?)?.ok()?;
                 }
                 _ => {
                     let other = other.filter(|o| *o != id)?;
@@ -7845,7 +7833,7 @@ pub(super) fn window_ground(ui: &Ui) {
 }
 
 /// How far down a window of his own its title row reaches (points).
-const WINDOW_TITLE_ROW: f32 = 36.0;
+pub(crate) const WINDOW_TITLE_ROW: f32 = 36.0;
 
 /// Esc in a window of his own closes it, as Esc closes the top in-app block, unless Esc only
 /// leaves a line he was typing in (focus as of the last frame: egui drops it on that same Esc)
@@ -7881,7 +7869,9 @@ pub(super) fn bar_title(ui: &mut Ui, ctx: &egui::Context, id: &str, title: &str,
     let number = {
         let mut motions = lock(&DETACHED_MOTIONS);
         motions.opened(viewport, ctx.cumulative_pass_nr());
-        motions.barred.insert(viewport);
+        if motions.barred.get(&viewport).is_none_or(|known| known != id) {
+            motions.barred.insert(viewport, id.to_string());
+        }
         motions.number(viewport)
     };
     let theme = crate::holo::theme();
@@ -7960,8 +7950,9 @@ struct DetachedMotions {
     /// Where each stands on the screen (points), as of its last frame: the board draws its
     /// leader to it (`own_window_rects`).
     rects: std::collections::HashMap<ViewportId, Rect>,
-    /// The windows that wear his bar: their index tabs number them (`number`).
-    barred: std::collections::HashSet<ViewportId>,
+    /// The windows that wear his bar, each with the view it shows: their index tabs number
+    /// them (`number`), and an order finds a view's window by it (`viewport_for_block`).
+    barred: std::collections::HashMap<ViewportId, String>,
     /// The windows whose pure black Windows sees through (`see_through`).
     see_through: std::collections::HashSet<ViewportId>,
 }
@@ -8003,7 +7994,13 @@ impl DetachedMotions {
     fn number(&self, viewport: ViewportId) -> usize {
         let came = |v: &ViewportId| self.shown.get(v).map(|(_, at, _)| *at);
         let Some(mine) = came(&viewport) else { return 1 };
-        1 + self.barred.iter().filter(|v| **v != viewport && !self.leaving.contains_key(v) && came(v).is_some_and(|at| at < mine)).count()
+        1 + self.barred.keys().filter(|v| **v != viewport && !self.leaving.contains_key(v) && came(v).is_some_and(|at| at < mine)).count()
+    }
+
+    /// The window that shows view `id`, or that the dock knows by `id` ("window:{title}").
+    fn viewport_of(&self, id: &str) -> Option<ViewportId> {
+        let shows = self.barred.iter().find(|(_, view)| *view == id).map(|(v, _)| *v);
+        shows.or_else(|| self.named.iter().find(|(_, (known_as, _))| known_as == id).map(|(v, _)| *v))
     }
 
     fn forget(&mut self, viewport: ViewportId) {
@@ -9656,7 +9653,7 @@ impl HudApp {
     /// The day beside the emblem while he is the desktop's background: the lesson and the
     /// appointment that come next, the reminders after them, the timers that run and the song
     /// that plays. Left of the emblem; right of it while his widgets' column stands on the left.
-    fn day_panel(&self, ctx: &egui::Context, home: Rect, centre: Pos2, radius: f32) {
+    fn day_panel(&self, ctx: &egui::Context, home: Rect, centre: Pos2, radius: f32, now_playing: bool) {
         let now = chrono::Local::now().naive_local();
         let glance = crate::idle_screen::glance();
         let dash = crate::kit_screen::dash();
@@ -9685,7 +9682,7 @@ impl HudApp {
         if !planned.is_empty() {
             sections.push(("PLANNED", planned));
         }
-        if let Some(song) = dash.playing {
+        if let Some(song) = dash.playing.filter(|_| now_playing) {
             sections.push(("NOW PLAYING", vec![song]));
         }
         if sections.is_empty() {
@@ -11193,6 +11190,29 @@ mod tests {
         assert!(((from - core).length() - 300.0).abs() < 0.5 && to.x == 1700.0, "from his circle to the edge that faces him: {from:?} {to:?}");
     }
 
+    /// Sir, 2026-11-21: "JAI fails to move windows" (jai.log: "'admin' was not up in time to
+    /// to_monitor"). An order looked its window up in a table of viewports that knew neither
+    /// the admin window nor any `block` window (the settings, the changes …): now every window
+    /// with his bar is found by the view it shows and by the name the dock knows it by.
+    #[test]
+    fn an_order_finds_every_window_that_wears_his_bar() {
+        let (admin, settings) = (ViewportId::from_hash_of("jai_admin"), ViewportId::from_hash_of("jai_block_settings"));
+        {
+            let mut motions = lock(&DETACHED_MOTIONS);
+            motions.barred.insert(admin, "admin".into());
+            motions.named.insert(admin, ("window:Admin // every window".into(), "Admin // every window".into()));
+            motions.barred.insert(settings, "settings".into());
+        }
+        let found = (viewport_for_block("admin"), viewport_for_block("window:Admin // every window"), viewport_for_block("settings"));
+        assert_ne!(viewport_for_block("never_drawn"), admin, "a view not drawn yet is found by none: its order waits");
+        let mut motions = lock(&DETACHED_MOTIONS);
+        for viewport in [admin, settings] {
+            motions.barred.remove(&viewport);
+            motions.named.remove(&viewport);
+        }
+        assert_eq!(found, (admin, admin, settings));
+    }
+
     /// A window of his own wears an index tab as a panel does: numbered in the order his
     /// windows came up. One on its way out is not counted, nor one without his bar.
     #[test]
@@ -11203,7 +11223,7 @@ mod tests {
         for (k, id) in ids.iter().enumerate() {
             let at = start + Duration::from_millis(10 * (k as u64 + 1));
             motions.shown.insert(*id, (0, at, at));
-            motions.barred.insert(*id);
+            motions.barred.insert(*id, format!("probe {k}"));
         }
         assert_eq!(ids.iter().map(|id| motions.number(*id)).collect::<Vec<_>>(), vec![1, 2, 3]);
         motions.shown.insert(ViewportId::from_hash_of("number_probe_console"), (0, start, start));
