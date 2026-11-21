@@ -1334,7 +1334,8 @@ fn normalize(text: &str) -> String {
         if let Some(rest) = without_lost_can(&s) {
             s = rest;
         }
-        for suffix in [" please", " bitte", " jai", " for me", " für mich", " now", " jetzt", " mal", " sofort", " right now"] {
+        // (" right now" before " now": the other way round left "… right".)
+        for suffix in [" please", " bitte", " jai", " for me", " für mich", " right now", " now", " jetzt", " mal", " sofort"] {
             if let Some(rest) = s.strip_suffix(suffix) {
                 s = rest.to_string();
             }

@@ -882,8 +882,9 @@ pub enum AudioEvent {
     Calibrated { noise_floor: f32 },
     MicTest { pcm: Vec<f32>, peak: f32, rms: f32, mic: String },
     DeviceActive { name: String, sample_rate: u32, channels: u16 },
-    /// The acoustic radar: a double clap or a knock on the door.
-    Acoustic(AcousticEvent),
+    /// The acoustic radar: claps, a knock on the door, a click or a sound that lasts, with the
+    /// last seconds of the microphone (16 kHz) for the sound model to name it by.
+    Acoustic(AcousticEvent, Vec<f32>),
 }
 
 pub fn list_input_devices() -> Vec<String> {
@@ -1141,6 +1142,8 @@ fn vad_thread(
     // The energy gate listens to the voice band (100 Hz – 3.5 kHz), not the whole room.
     let mut band = vad::VoiceBand::new();
     let mut radar = AcousticRadar::new(cfg.acoustic.sensitivity);
+    // The last three seconds the radar heard: what the sound model names a sound by.
+    let mut heard: std::collections::VecDeque<f32> = std::collections::VecDeque::with_capacity(48_000);
     let mut feeds: Vec<FeedState> = Vec::new();
     let mut active = 0usize;
     let mut pcm16: Vec<f32> = Vec::with_capacity(8192);
@@ -1283,23 +1286,32 @@ fn vad_thread(
                 None => vad::energy_probability(rms, machine.noise_floor()),
             };
             let assistant_speaking = controls.speaking_or_tail();
-            // Claps and knocks only count while nobody is talking (JAI or Sir).
+            // Claps, knocks and other sounds only count while nobody is talking (JAI or Sir).
+            // Beyond his own two claps and knocks, every sound when a rule or a protocol waits
+            // on one, or the protocol window shows what he hears.
             let flags = controls.acoustic_flags.load(Ordering::Acquire);
-            if flags != 0 {
+            let awaited = crate::sound_sense::wanted();
+            if flags != 0 || awaited {
                 radar.set_sensitivity(load_f32(&controls.acoustic_sensitivity));
+                heard.extend(frame.iter().copied());
+                let over = heard.len().saturating_sub(48_000);
+                heard.drain(..over);
                 let listening = !assistant_speaking && !ptt && mic_test.is_none() && !machine.in_utterance();
                 if let Some(ev) = radar.process(frame, listening) {
-                    let wanted = match ev {
-                        AcousticEvent::DoubleClap => flags & CLAP != 0,
-                        AcousticEvent::Knock { .. } => flags & KNOCK != 0,
-                    };
+                    let wanted = awaited
+                        || match ev {
+                            AcousticEvent::Claps { count: 2 } => flags & CLAP != 0,
+                            AcousticEvent::Knock { .. } => flags & KNOCK != 0,
+                            _ => false,
+                        };
                     if wanted {
                         info!("[RADAR] {ev:?}");
-                        let _ = events.send(AudioEvent::Acoustic(ev));
+                        let _ = events.send(AudioEvent::Acoustic(ev, heard.iter().copied().collect()));
                     }
                 }
             } else {
                 radar.reset_patterns();
+                heard.clear();
             }
             let ctx = FrameContext {
                 assistant_speaking,

@@ -122,6 +122,7 @@ mod startup_sequence;
 mod speaker_id;
 mod speech_repair;
 mod sonora;
+mod sound_sense;
 mod voice_clips;
 mod voice_setup;
 mod holo_block;
@@ -177,6 +178,7 @@ mod scene3d;
 mod monitors;
 mod music;
 mod network_guardian;
+mod news;
 mod network_radar;
 mod omni_inbox;
 mod persona;
@@ -725,7 +727,9 @@ fn main() -> ExitCode {
     // Whose voice it is: where the speaker model lives, and whether Sir's print is known.
     {
         let (models, db) = session.app.config().read(|c| (c.silero_vad_model_path.clone(), c.memory_db_path.clone()));
-        speaker_id::set_models_dir(std::path::Path::new(&models).parent().unwrap_or(std::path::Path::new("models")));
+        let models = std::path::Path::new(&models).parent().unwrap_or(std::path::Path::new("models"));
+        speaker_id::set_models_dir(models);
+        sound_sense::set_models_dir(models);
         hud_feel::set_voice_known(speaker_id::known(&db).is_some());
         // What he has learnt about how Sir's words reach him: kept beside it. (A scripted
         // session learns for its own run only and reads nothing of Sir's.)

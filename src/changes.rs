@@ -94,6 +94,12 @@ pub const RELEASES: &[Release] = &[
         date: "2026-11-21",
         name: "Keys, ears and control",
         entries: &[
+            new("News by country", "\"The most important news from Germany\": that country's newsroom, word for word.", "news"),
+            new("Sounds start things", "\"When I clap twice, open Spotify\": a sound starts a rule or a protocol.", "sounds"),
+            added("He knows what he hears", "A sound model on this PC names claps, snaps, knocks, bells, phones, alarms, dogs and glass."),
+            added("Someone else talking", "\"When someone else talks, tell me\": your voice print tells your voice from another."),
+            better_see("Protocol window, clearer", "One list of all that starts by itself, each in two steps: STARTS WHEN, THEN I DO.", "protocols"),
+            better("Claps counted", "Two and three claps are told apart; one clap, applause, typing or music are no claps."),
             new("Protocol window", "\"Open the protocol window\": your phrases, or what happens, and what he does then.", "protocols"),
             added("When a friend's PC does something", "\"Whenever Max plays Minecraft\" or \"when Max's PC comes online\" starts a protocol or a rule."),
             added("Your protocol's own words", "\"Wake up, daddy's home\", set as a protocol's phrase, runs that protocol before anything else."),
@@ -617,6 +623,20 @@ pub const RELEASES: &[Release] = &[
 /// The explanations, by id.
 pub const EXPLANATIONS: &[Explanation] = &[
     Explanation {
+        id: "news",
+        title: "News by country",
+        what: "\"Give me an overview of the most important news from Germany\": he opens a card with the headlines of that country's newsroom, word for word, and reads the first three. Asked in English, Germany's come from DW, the UK's from the BBC, the US's from NPR and every other country's from the Guardian's page for it. Asked in German, Germany's come from the tagesschau's front page and Austria's from ORF. Without a country you get your own.",
+        say: &["Jay, give me an overview of the most important news from Germany.", "Jay, what's happening in France?", "Jay, die wichtigsten Nachrichten aus Deutschland.", "Jay, what's the news?"],
+        know: "His brain never rewords a headline, so what he reads is what the newsroom wrote; the card names the newsroom and when it was read. Nothing older than three days is told. On the tagesschau's front page Germany's own news comes first, the world after it. Your own country is the one of the country code in your WhatsApp settings (+49, Germany, unless you changed it). A country he has no newsroom for goes to his web search, as before.",
+    },
+    Explanation {
+        id: "sounds",
+        title: "Sounds start things",
+        what: "Besides your words he listens for sounds: two or three claps, a finger snap, knocking, the doorbell, a phone, an alarm, a dog barking, glass breaking and whistling. A small sound model on this PC (CED-mini, offline) names what the microphone caught, so typing, music and applause are no claps. Your voice print tells your voice from someone else's. Each of them starts a rule or a protocol: say \"when …, …\", or add A SOUND in the Protocol window. TELL ME as the order makes him tell you what happened. The Protocol window's I HEAR line shows the last sounds he heard.",
+        say: &["Jay, when I clap twice, open Spotify.", "Jay, when someone knocks, tell me.", "Jay, if the doorbell rings, pause the music.", "Jay, wenn es klopft, sag mir Bescheid.", "Jay, when someone else talks, tell me."],
+        know: "He listens for sounds only while something waits for one: a rule, a protocol, the Protocol window, or his own reactions in the settings. A single clap, applause or more than six knocks count as nothing. Someone else talking is told at most once a minute. Without the sound model (models\\sound) only claps and knocking are heard, by their shape alone.",
+    },
+    Explanation {
         id: "other_pcs",
         title: "J.A.I. on other PCs",
         what: "A friend opens your phone page's address in a browser and takes \"J.A.I. for your Windows PC\" (or you give them that file): one file that installs him, or updates him where he is installed. It reads the graphics card (4 GB of memory at the least; under 8 GB he gets the smaller brain, Qwen3.5 2B), logs in at your PC with their account, fetches the program and its engines from your PC, then his voice, ears and brain, and puts him in the Start menu. Their J.A.I. calls yours every few seconds: you see it in the accounts list (online, its version, CPU, memory, graphics card), and what you order for it, it does. Theirs never sends anything to yours.",
@@ -885,9 +905,9 @@ pub const EXPLANATIONS: &[Explanation] = &[
     Explanation {
         id: "protocols",
         title: "Protocol window",
-        what: "A protocol is a list of things he does, started by a phrase of yours (\"wake up, daddy's home\"), by something that happens (another PC comes online or starts a game, a game starts here) or by its name (\"engage the gaming protocol\"). In the Protocol window NEW starts one: its NAME, what you SAY (a phrase a line), WHEN it runs (an event a line) and what he DOes (an order a line, as you would say it to him). SAVE keeps it, RUN saves and runs it, DELETE takes it away.",
-        say: &["open the protocol window", "make a new protocol", "wake up, daddy's home", "engage the gaming protocol"],
-        know: "A WHEN line he does not understand is refused when you save, with the reason, e.g. \"whenever Max plays Minecraft\", \"whenever Max's PC comes online\" or \"whenever I start a game\" (\"I\" is this PC). Other PCs are seen through the link of your PCs: a PC of a friend's tells yours which game it runs. The orders run one after another as if you had said them, so \"open the earth on Max's PC\" runs on his PC.",
+        what: "A protocol is a list of things he does when something starts it. The Protocol window shows everything that starts by itself in one list: your protocols (the built-in ones too, yours to change), the rules you said aloud (\"when I clap twice, open Spotify\") and his own reactions to two claps and to knocking. A protocol reads in two steps. 01 STARTS WHEN: any one of its lines, a phrase you say, a sound, a program starting or closing, a time of day or a friend's PC (the ADD keys). 02 THEN I DO: its orders in order, as you would say them to him, or TELL ME. SAVE keeps it, RUN NOW runs it, DELETE takes it away; a rule said aloud becomes a protocol with MAKE IT A PROTOCOL.",
+        say: &["open the protocol window", "when I clap twice, open Spotify", "when someone knocks, tell me", "wake up, daddy's home", "engage the gaming protocol"],
+        know: "Every protocol also starts by its name (\"engage the … protocol\"). A line he does not understand is refused when you save, with the reason. A rule or protocol of yours on two claps or on knocking takes the place of his own reaction to it. Other PCs are seen through the link of your PCs: a friend's PC tells yours which game it runs. The orders run one after another as if you had said them, so \"open the earth on Max's PC\" runs on his PC.",
     },
     Explanation {
         id: "simulations_3d",

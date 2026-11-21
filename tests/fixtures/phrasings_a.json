@@ -1,5 +1,24 @@
 {
   "dev": {
+    "news.country": [
+      "Give me an overview of the most important news from Germany",
+      "what's the news in Germany?",
+      "any news from Germany",
+      "tell me the latest headlines from Germany",
+      "what are the top stories in Germany today",
+      "what's happening in Germany right now",
+      "read me the German news",
+      "can you give me a quick rundown of the news from Germany please"
+    ],
+    "news.country_de": [
+      "Gib mir einen Überblick über die wichtigsten Nachrichten aus Deutschland",
+      "Was sind die aktuellen Schlagzeilen aus Deutschland?",
+      "Nachrichten aus Deutschland bitte",
+      "lies mir die deutschen Nachrichten vor",
+      "was ist gerade in Deutschland los",
+      "was gibt es Neues aus Deutschland",
+      "zeig mir die wichtigsten Meldungen aus Deutschland"
+    ],
     "dictation.start": [
       "begin dictation",
       "Could you start typing what I say?",

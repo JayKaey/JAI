@@ -201,13 +201,34 @@ The microphone key sounds rising on and falling off (with the sound cues on). A 
 takes no key.
 
 "Open the protocol window" (or "make a new protocol"; the settings panel's PROTOCOLS, the admin
-window's tile) sets up and edits protocols: lists of orders he carries out one after another. Each
-has a NAME ("engage the gaming protocol" always works), phrases to SAY for it ("wake up, daddy's
-home": a protocol's phrase wins over every other reading of it), WHEN lines for what happens
-("whenever Max plays Minecraft", "whenever Max's PC comes online", "whenever I start a game") and
-the orders to DO, as you would say them ("open the earth on Max's PC" runs on that PC). A WHEN line
-he does not understand is refused when you save, with the reason; RUN saves and runs it. Every PC
-of the link tells the main PC which game it runs.
+window's tile) shows everything that starts by itself in one list: your protocols (the built-in
+ones too, yours to change), the rules said aloud ("when I clap twice, open Spotify") and his own
+reactions to two claps and to knocking (MY OWN: switched there, and replaced by a rule or protocol
+of yours on the same sound). A protocol reads in two steps. 01 STARTS WHEN, any one of its lines:
+a phrase you SAY ("wake up, daddy's home": a protocol's phrase wins over every other reading of
+it), a sound, a program starting or closing, a time of day or a friend's PC ("whenever Max plays
+Minecraft", "whenever Max's PC comes online"), each added with its ADD key; "engage the gaming
+protocol" always works. 02 THEN I DO, the orders in order, as you would say them ("open the earth
+on Max's PC" runs on that PC), or TELL ME. A line he does not understand is refused when you save,
+with the reason; RUN NOW runs it; MAKE IT A PROTOCOL turns a rule said aloud into one. Every PC of
+the link tells the main PC which game it runs.
+
+Sounds start rules and protocols too: "when I clap twice, open Spotify", "when someone knocks,
+tell me", "if the doorbell rings, pause the music", "wenn es klopft, sag mir Bescheid", "when
+someone else talks, tell me". He hears two and three claps, a finger snap, knocking, the doorbell,
+a phone, an alarm, a dog, breaking glass and whistling: the radar notices a sound and a small sound
+model (CED-mini in `models\sound`, offline, optional) names it, so typing, music and applause are
+no claps. Someone else talking is your voice print saying it is not you (told at most once a
+minute). "Tell me" as the order makes him say what happened. He listens for sounds only while
+something waits for one; the protocol window's I HEAR line shows the last two he heard.
+
+"Give me an overview of the most important news from Germany" (or "what's happening in France?",
+"die wichtigsten Nachrichten aus Deutschland", "what's the news?" for your own country, by the
+country code of the WhatsApp settings) opens a card with that country's headlines, word for word,
+and reads the first three. In English: DW for Germany, the BBC for the UK, NPR for the US, the
+Guardian's country page for the others; in German: the tagesschau's front page for Germany (its
+own news first) and ORF for Austria, English headlines elsewhere. Nothing older than three days is
+told; a country without a newsroom goes to the web search.
 
 "Activate goon mode" opens a private window of your default browser (Edge InPrivate, Chrome,
 Brave, Vivaldi or Chromium incognito, a Firefox private window).

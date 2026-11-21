@@ -145,6 +145,8 @@ const CANON: &[(&str, &str)] = &[
     ("zoom.out", "zoom out"),
     ("mic.stop", "stop listening"),
     ("pc.shutdown", "shut down my PC"),
+    ("news.country", "give me the most important news from germany"),
+    ("news.country_de", "die wichtigsten nachrichten aus deutschland"),
 ];
 
 /// Other wordings of an order whose road counts as its own (the same thing by another of the

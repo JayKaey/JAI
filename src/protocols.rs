@@ -45,14 +45,6 @@ pub struct Step {
 pub const ORDER: &str = "order";
 
 impl Step {
-    /// The step as a line of the protocol window: his words, or the tool and its arguments.
-    pub fn line(&self) -> String {
-        match self.args["order"].as_str().filter(|_| self.tool == ORDER) {
-            Some(order) => order.to_string(),
-            None => format!("{} {}", self.tool, self.args),
-        }
-    }
-
     /// A line of the protocol window as a step: "tool_name {…}" stays that tool's call, any
     /// other line is an order in his words.
     pub fn of_line(line: &str) -> Option<Step> {
@@ -62,6 +54,41 @@ impl Step {
             return Some(Step { tool: tool.to_string(), args });
         }
         (!line.is_empty()).then(|| Step { tool: ORDER.to_string(), args: json!({ "order": line }) })
+    }
+
+    /// The step in plain words, for the protocol window: his own words as he gave them, a
+    /// built-in step as what it does ("Open Spotify", "Set the volume to 65 %").
+    pub fn words(&self) -> String {
+        let a = &self.args;
+        let text = |keys: &[&str]| str_arg(a, keys).map(String::from).or_else(|| keys.iter().find_map(|k| a.get(*k).filter(|v| v.is_number()).map(Value::to_string)));
+        let app = || crate::apps::display_name(str_arg(a, &["app_name", "app_or_window_name", "name"]).unwrap_or("the app"));
+        let pairs = || a.as_object().map(|o| o.iter().map(|(k, v)| format!("{} {}", k.replace('_', " "), v.as_str().map_or_else(|| v.to_string(), String::from))).collect::<Vec<_>>().join(", ")).unwrap_or_default();
+        match (self.tool.as_str(), str_arg(a, &["action"])) {
+            (ORDER, _) => text(&["order"]).unwrap_or_default(),
+            ("open_application", _) => format!("Open {}", app()),
+            ("place_application_window" | "move_window_to_monitor", _) => {
+                format!("Put {} on monitor {}{}", app(), text(&["monitor", "target_monitor"]).unwrap_or_else(|| "1".into()), if a["maximized"] == true { ", full size" } else { "" })
+            }
+            ("control_music", Some("pause")) => "Pause the music".into(),
+            ("control_music", Some("resume")) => "Resume the music".into(),
+            ("control_music", _) => format!("Play {}", text(&["playlist_name", "song_name", "query"]).unwrap_or_else(|| "music".into())),
+            ("media_and_volume_control", Some("set_volume")) => format!("Set the volume to {} %", text(&["level"]).unwrap_or_default()),
+            ("spawn_native_window", _) => format!("Open the {} window", text(&["title", "live"]).unwrap_or_else(|| "extra".into()).replace('_', " ")),
+            ("close_native_window", _) => "Close my extra windows".into(),
+            ("window_management", Some("minimize_all")) => "Clear the desktop".into(),
+            ("focus_mode", _) => format!("Start {} minutes of focus", text(&["minutes"]).unwrap_or_else(|| "25".into())),
+            ("open_jai_view", _) => format!("Show the {} view", text(&["view"]).unwrap_or_default().replace('_', " ")),
+            ("configure_interface", _) => format!("Change my look: {}", pairs()),
+            ("set_response_modality", _) if a["custom_condition"] == "mute_when_fullscreen_app_active" => "Stay quiet while a game is full screen".into(),
+            ("sync_study_materials_and_deadlines", _) => "Show my school deadlines".into(),
+            (tool, _) => {
+                let tool = crate::kit_notes::capitalised(&tool.replace('_', " "));
+                match pairs() {
+                    rest if rest.is_empty() => tool,
+                    rest => format!("{tool}: {rest}"),
+                }
+            }
+        }
     }
 }
 
@@ -403,6 +430,12 @@ pub fn plan(steps: &[Step]) -> Vec<Vec<Vec<usize>>> {
     stages
 }
 
+/// Whether a protocol is one J.A.I. comes with (his to change all the same).
+pub fn built_in(name: &str) -> bool {
+    static NAMES: LazyLock<Vec<String>> = LazyLock::new(|| starter_protocols().into_iter().map(|p| p.name).collect());
+    NAMES.iter().any(|n| *n == key(name))
+}
+
 fn starter_protocols() -> Vec<Protocol> {
     vec![
         Protocol {
@@ -738,7 +771,7 @@ mod tests {
         assert_eq!(saved.name, "movie night");
         assert_eq!(match_utterance("movie time").as_deref(), Some("movie night"));
         // Sir's own (2026-11-21): his phrase wins over the built-in homecoming, a step is his words
-        // or a tool's call, and both read back as he wrote them in the protocol window.
+        // or a tool's call, and the protocol window reads both in plain words.
         let lines = ["open Spotify", "media_and_volume_control {\"action\":\"set_volume\",\"level\":30}"];
         store
             .save(Protocol { name: "daddy".into(), description: String::new(), trigger_phrases: vec!["Wake up, Daddy's home!".into()], when: vec!["Max comes online".into()], steps: lines.iter().filter_map(|l| Step::of_line(l)).collect() })
@@ -757,7 +790,8 @@ mod tests {
         assert_eq!(said.as_deref(), Some("daddy"));
         assert_eq!(routed, Some(("manage_stark_protocol".to_string(), json!("daddy"))));
         assert_eq!(daddy.steps[0], Step { tool: ORDER.into(), args: json!({"order": "open Spotify"}) });
-        assert_eq!(daddy.steps.iter().map(Step::line).collect::<Vec<_>>(), lines);
+        assert_eq!(daddy.steps[1], Step { tool: "media_and_volume_control".into(), args: json!({"action": "set_volume", "level": 30}) });
+        assert_eq!(daddy.steps.iter().map(Step::words).collect::<Vec<_>>(), ["open Spotify", "Set the volume to 30 %"]);
         assert_eq!(Step::of_line("  "), None);
         assert!(store.save(Protocol { name: "loop".into(), description: String::new(), trigger_phrases: vec![], when: vec![], steps: vec![step("protocols", json!({}))] }).is_err());
         assert!(store.delete("movie night"));

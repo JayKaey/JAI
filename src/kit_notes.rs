@@ -4,11 +4,14 @@
 //!
 //! Notes and rules live in the kit's store. A rule's order is carried out as if Sir had typed
 //! it (`StarkEvent::RunMacro`), so a rule can do whatever an order of his can; it is only
-//! kept when its order is one J.A.I. knows. The sleep timer lets the master volume sink for a
-//! few seconds, pauses every player and puts the volume back where it stood.
+//! kept when its order is one J.A.I. knows, or "tell me" (he then says what happened). A rule
+//! can wait on a sound too ("whenever I clap twice, …", "when you hear knocking, tell me"). The
+//! sleep timer lets the master volume sink for a few seconds, pauses every player and puts the
+//! volume back where it stood.
 
 use crate::fleet::PcEvent;
 use crate::kit::say;
+use crate::sound_sense::Sound;
 use chrono::Timelike;
 use regex::Regex;
 use serde_json::{json, Value};
@@ -535,6 +538,8 @@ pub enum When {
     /// What the PC of an account does (its name as said: "max", "maxs"; "i" is this PC), as
     /// Sir's PC hears it (`fleet::events`).
     Pc(String, PcEvent),
+    /// A sound he hears (`sound_sense`): two claps, a knock, the doorbell, someone else's voice.
+    Hears(Sound),
 }
 
 impl When {
@@ -543,6 +548,7 @@ impl When {
             When::Starts(app) => format!("whenever {app} starts"),
             When::Closes(app) => format!("whenever {app} closes"),
             When::At(h, m) => format!("every day at {h:02}:{m:02}"),
+            When::Hears(sound) => format!("whenever {}", sound.words()),
             When::Pc(who, what) => {
                 let me = who == "i";
                 let (who, s) = if me { ("I".to_string(), "") } else { (capitalised(who), "s") };
@@ -571,11 +577,33 @@ impl When {
                 };
                 json!({"kind": "pc", "who": who, "event": event, "game": game})
             }
+            When::Hears(sound) => json!({"kind": "hears", "sound": sound.key()}),
+        }
+    }
+
+    /// What J.A.I. says when Sir asked to be told ("when Max comes online, tell me").
+    pub fn news(&self) -> String {
+        match self {
+            When::Starts(app) => format!("{} has just started, Sir.", capitalised(app)),
+            When::Closes(app) => format!("{} has just closed, Sir.", capitalised(app)),
+            When::At(h, m) => format!("It is {h:02}:{m:02}, Sir."),
+            When::Hears(sound) => sound.news().to_string(),
+            When::Pc(who, what) => {
+                let who = if who == "i" { "You".to_string() } else { capitalised(who) };
+                match what {
+                    PcEvent::Online => format!("{who}'s PC has come online, Sir."),
+                    PcEvent::Offline => format!("{who}'s PC has gone offline, Sir."),
+                    PcEvent::Plays(game) if game.is_empty() => format!("{who} started a game, Sir."),
+                    PcEvent::Plays(game) => format!("{who} started {game}, Sir."),
+                    PcEvent::Stops(game) => format!("{who} stopped playing{}, Sir.", if game.is_empty() { String::new() } else { format!(" {game}") }),
+                }
+            }
         }
     }
 
     fn of(v: &Value) -> Option<When> {
         match v["kind"].as_str()? {
+            "hears" => Sound::of_key(v["sound"].as_str()?).map(When::Hears),
             "starts" => Some(When::Starts(v["app"].as_str()?.to_string())),
             "closes" => Some(When::Closes(v["app"].as_str()?.to_string())),
             "at" => Some(When::At(v["hour"].as_u64()? as u32, v["minute"].as_u64()? as u32)),
@@ -605,6 +633,8 @@ impl When {
             When::Starts(app) => started.iter().any(|p| is_app(app, p)),
             When::Closes(app) => closed.iter().any(|p| is_app(app, p)),
             When::At(h, m) => minute == Some((*h, *m)),
+            // (A sound is heard as it happens: `heard`.)
+            When::Hears(_) => false,
             When::Pc(who, what) => pcs.iter().any(|(name, done)| {
                 crate::fleet::names_in(who).contains(name)
                     && match (what, done) {
@@ -679,6 +709,9 @@ fn pc_event(s: &str, whole: bool) -> Option<(When, String)> {
 pub fn when_of(line: &str) -> Option<When> {
     let said = crate::ear::words(line).join(" ");
     let s = RULE_WHEN.captures(&said).and_then(|c| c.get(1)).map_or(said.as_str(), |m| m.as_str());
+    if let Some((sound, rest)) = crate::sound_sense::said(s) {
+        return rest.is_empty().then_some(When::Hears(sound));
+    }
     if let Some((when, _)) = pc_event(s, true) {
         return Some(when);
     }
@@ -691,6 +724,7 @@ static RULE_REMOVE: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(?:delete|remove|forget|drop)\s+(?:the\s+|my\s+)?rule\s+(?:number\s+)?(?P<n>\d+)$|^(?:delete|remove|forget|drop)\s+(?:the\s+|my\s+)?rule\s+(?:about|for|with)\s+(?P<about>.+)$|^(?:delete|remove|forget)\s+(?P<all>all)\s+(?:my\s+)?rules$|^lösche?\s+regel\s+(?P<n2>\d+)$")
 });
 static RULE_WHEN: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:whenever|every\s+time|each\s+time|when|as\s+soon\s+as|immer\s+wenn|jedes\s+mal\s+wenn|sobald|wenn)\s+(.+)$"));
+static RULE_IF: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:if|falls)\s+(.+)$"));
 static RULE_SUBJECT: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(?P<app>.+?)\s+(?:(?P<starts>starts|opens|launches|is\s+started|is\s+opened|comes\s+up|is\s+running|startet|aufgeht|geöffnet\s+wird|läuft)|(?P<closes>closes|quits|exits|ends|is\s+closed|shuts\s+down|zugeht|geschlossen\s+wird|beendet\s+wird))\s+(?:then\s+|dann\s+)?(?P<order>.+)$")
 });
@@ -727,6 +761,10 @@ pub fn parse_rule(s: &str) -> Option<(When, String)> {
         }
         return (h < 24 && m < 60).then(|| (When::At(h, m), c.name("order").map_or("", |m| m.as_str()).trim().to_string()));
     }
+    // A sound (said with "if" too: "if I clap twice, turn on the lights").
+    if let Some((sound, order)) = RULE_WHEN.captures(s).or_else(|| RULE_IF.captures(s)).and_then(|c| crate::sound_sense::said(c.get(1)?.as_str())) {
+        return Some((When::Hears(sound), order));
+    }
     let rest = RULE_WHEN.captures(s)?.get(1)?.as_str();
     if let Some(found) = pc_event(rest, false) {
         return Some(found);
@@ -758,11 +796,25 @@ pub fn rule_command(s: &str) -> Option<Value> {
     }
     let (when, order) = parse_rule(s)?;
     // (Only what he can carry out is a rule: "when Discord closes I feel lonely" is talk.)
-    (!order.is_empty() && crate::ear::is_order(&order)).then(|| json!({"action": "add", "when": when.to_json(), "then": order}))
+    (!order.is_empty() && (is_tell_me(&order) || crate::ear::is_order(&order))).then(|| json!({"action": "add", "when": when.to_json(), "then": order}))
 }
 
-fn rules() -> Vec<(String, When, String)> {
+/// His rules: (the key each is kept by, when, what then).
+pub(crate) fn rules() -> Vec<(String, When, String)> {
     crate::kit::list(RULE).into_iter().filter_map(|(key, v, _)| Some((key, When::of(&v["when"])?, v["then"].as_str()?.to_string()))).collect()
+}
+
+/// The rules' card on the board shows them as they are now.
+fn refresh_rules_card() {
+    if crate::kit::text_is_up(RULES) {
+        crate::kit::show_text(RULES, "Rules // whenever … then …", &rules_text(), [500.0, 380.0]);
+    }
+}
+
+/// Drops the rule kept by `key` (the protocol window).
+pub(crate) fn drop_rule(key: &str) {
+    crate::kit::remove(RULE, key);
+    refresh_rules_card();
 }
 
 fn rules_text() -> String {
@@ -774,17 +826,12 @@ fn rules_text() -> String {
     format!("{}\n\n\"Delete rule 2\" removes one.", lines.join("\n\n"))
 }
 
-fn capitalised(text: &str) -> String {
+pub(crate) fn capitalised(text: &str) -> String {
     let mut c = text.chars();
     c.next().map_or(String::new(), |first| first.to_uppercase().chain(c).collect())
 }
 
 pub fn rule(args: &Value) -> Result<String, String> {
-    let refresh = || {
-        if crate::kit::text_is_up(RULES) {
-            crate::kit::show_text(RULES, "Rules // whenever … then …", &rules_text(), [500.0, 380.0]);
-        }
-    };
     match args["action"].as_str().unwrap_or("list") {
         "add" => {
             let when = When::of(&args["when"]).ok_or("I did not catch when the rule should hold, Sir.")?;
@@ -796,9 +843,10 @@ pub fn rule(args: &Value) -> Result<String, String> {
                 return Ok(say("That rule is kept already.", "I have that rule already, Sir."));
             }
             crate::kit::put(RULE, &crate::kit::stamp(), &json!({"when": when.to_json(), "then": then}))?;
-            refresh();
+            refresh_rules_card();
             tracing::info!("[RULES] Kept: {} → {then}", when.words());
-            Ok(say(format!("Rule kept: {} → {then}", when.words()), format!("Understood, Sir. {}, I'll {then}.", capitalised(&when.words()))))
+            let will = if is_tell_me(&then) { "tell you" } else { then.as_str() };
+            Ok(say(format!("Rule kept: {} → {then}", when.words()), format!("Understood, Sir. {}, I'll {will}.", capitalised(&when.words()))))
         }
         "remove" => {
             let all = rules();
@@ -818,7 +866,7 @@ pub fn rule(args: &Value) -> Result<String, String> {
             for (key, _, _) in &gone {
                 crate::kit::remove(RULE, key);
             }
-            refresh();
+            refresh_rules_card();
             Ok(say(format!("{} rule(s) removed.", gone.len()), if gone.len() == 1 { "That rule is gone, Sir.".to_string() } else { format!("{} rules are gone, Sir.", gone.len()) }))
         }
         _ => {
@@ -849,8 +897,53 @@ fn is_app(app: &str, process: &str) -> bool {
 /// The orders of the rules that fire: for the programs that have just started and closed, for
 /// the minute of the day when it has just begun (`minute`: Some((hour, minute))) and for what
 /// the PCs have just done.
-pub fn fired(started: &[String], closed: &[String], minute: Option<(u32, u32)>, pcs: &[(String, PcEvent)]) -> Vec<(String, String)> {
-    rules().into_iter().filter(|(_, when, _)| when.fires(started, closed, minute, pcs)).map(|(_, when, then)| (when.words(), then)).collect()
+pub fn fired(started: &[String], closed: &[String], minute: Option<(u32, u32)>, pcs: &[(String, PcEvent)]) -> Vec<(When, String)> {
+    rules().into_iter().filter(|(_, when, _)| when.fires(started, closed, minute, pcs)).map(|(_, when, then)| (when, then)).collect()
+}
+
+/// "Tell me", "let me know", "sag mir Bescheid": the order of a rule or a protocol's step that
+/// only has J.A.I. say what happened.
+static TELL_ME: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"^(?:please\s+|just\s+|then\s+)?(?:tell\s+me|let\s+me\s+know|warn\s+me|alert\s+me|notify\s+me|inform\s+me|give\s+me\s+a\s+(?:shout|heads\s+up)|say\s+so|sag\s+(?:es\s+)?(?:mir\s+)?(?:bescheid|das)|sag\s+es\s+mir|gib\s+mir\s+bescheid|warne?\s+mich|benachrichtige\s+mich|informiere\s+mich)(?:\s+(?:about\s+it|about\s+that|right\s+away|immediately|at\s+once|please|sir|sofort|bitte|davon))*$")
+});
+
+pub fn is_tell_me(order: &str) -> bool {
+    TELL_ME.is_match(&crate::ear::words(order).join(" "))
+}
+
+/// Carries out the rules that fired (their orders as if Sir had typed them; "tell me" is said at
+/// once, with what happened) and engages the protocols that wait on what happened.
+fn carry_out(tools: &crate::tools::ToolContext, rules: Vec<(When, String)>, protocols: Vec<(String, When)>) {
+    for (when, then) in rules {
+        let words = when.words();
+        tracing::info!("[RULES] {words}: {then}");
+        crate::hud_notify::record(&format!("Rule: {words} → {then}"), false);
+        let event = if is_tell_me(&then) { crate::stark::StarkEvent::Alert(when.news()) } else { crate::stark::StarkEvent::RunMacro { name: format!("rule ({words})"), steps: vec![then] } };
+        let _ = tools.stark.events.send(event);
+    }
+    for (name, when) in protocols {
+        tracing::info!("[PROTOCOL] {}: the {name} protocol", when.words());
+        crate::hud_notify::record(&format!("{} → {}", capitalised(&when.words()), crate::protocols::display_name(&name)), false);
+        let tools = tools.clone();
+        tokio::spawn(async move {
+            let _ = tools.execute("manage_stark_protocol", &json!({ "action": "execute_protocol", "protocol_name": name, "because": when.news() })).await;
+        });
+    }
+}
+
+/// A sound was heard: the rules and protocols that wait on it are carried out. Whether any
+/// did (Sir's own rule for a sound takes the place of J.A.I.'s own reaction to it). (A test and
+/// a scripted session run none.)
+pub fn heard(tools: &crate::tools::ToolContext, sound: Sound) -> bool {
+    if cfg!(test) || crate::platform::in_test_session() {
+        return false;
+    }
+    let when = When::Hears(sound);
+    let rules: Vec<(When, String)> = rules().into_iter().filter(|(_, w, _)| *w == when).map(|(_, w, then)| (w, then)).collect();
+    let protocols: Vec<(String, When)> = tools.protocols.list().into_iter().filter(|p| p.when.iter().any(|line| when_of(line).as_ref() == Some(&when))).map(|p| (p.name, when.clone())).collect();
+    let any = !rules.is_empty() || !protocols.is_empty();
+    carry_out(tools, rules, protocols);
+    any
 }
 
 /// Watches what starts and closes, the clock and the PCs, and has the rules' orders carried out
@@ -887,6 +980,8 @@ pub fn start(tools: crate::tools::ToolContext, stop: tokio_util::sync::Cancellat
             ticks += 1;
             let all = rules();
             let waiting: Vec<(String, When)> = tools.protocols.list().into_iter().flat_map(|p| p.when.iter().filter_map(|line| when_of(line)).map(|when| (p.name.clone(), when)).collect::<Vec<_>>()).collect();
+            // (The radar listens for every kind of sound while something waits on one.)
+            crate::sound_sense::set_awaited(all.iter().map(|(_, when, _)| when).chain(waiting.iter().map(|(_, when)| when)).any(|when| matches!(when, When::Hears(_))));
             // What the other PCs did, and the game on this one ("i": the first look only learns it).
             let mut pcs = crate::fleet::events();
             let game = crate::vram_guard::game_now().map(|(game, _)| game);
@@ -913,19 +1008,8 @@ pub fn start(tools: crate::tools::ToolContext, stop: tokio_util::sync::Cancellat
             let minute = (clock.hour(), clock.minute());
             let new_minute = (last_minute != Some(minute)).then_some(minute);
             last_minute = Some(minute);
-            for (when, then) in fired(&started, &closed, new_minute, &pcs) {
-                tracing::info!("[RULES] {when}: {then}");
-                crate::hud_notify::record(&format!("Rule: {when} → {then}"), false);
-                let _ = tools.stark.events.send(crate::stark::StarkEvent::RunMacro { name: format!("rule ({when})"), steps: vec![then] });
-            }
-            for (name, when) in waiting.into_iter().filter(|(_, when)| when.fires(&started, &closed, new_minute, &pcs)) {
-                tracing::info!("[PROTOCOL] {}: the {name} protocol", when.words());
-                crate::hud_notify::record(&format!("{} → {}", capitalised(&when.words()), crate::protocols::display_name(&name)), false);
-                let tools = tools.clone();
-                tokio::spawn(async move {
-                    let _ = tools.execute("manage_stark_protocol", &json!({ "action": "execute_protocol", "protocol_name": name })).await;
-                });
-            }
+            let engaged = waiting.into_iter().filter(|(_, when)| when.fires(&started, &closed, new_minute, &pcs)).collect();
+            carry_out(&tools, fired(&started, &closed, new_minute, &pcs), engaged);
         }
     });
 }
@@ -1119,6 +1203,41 @@ mod tests {
         assert_eq!(pc("i", PcEvent::Plays(String::new())).words(), "whenever I start a game");
     }
 
+    /// Sir, 2026-11-21: "when I clap twice do this and this, or when you hear knocking tell me".
+    /// A sound in a rule (English, German, with "if") and in a protocol's WHEN line; "tell me" is
+    /// an order of its own, and what he then says.
+    #[test]
+    fn a_sound_is_a_rule_and_a_protocols_when() {
+        let hears = When::Hears;
+        assert_eq!(parse_rule("when i clap twice turn on the lights"), Some((hears(Sound::Claps(2)), "turn on the lights".into())));
+        assert_eq!(parse_rule("whenever i clap three times then pause the music"), Some((hears(Sound::Claps(3)), "pause the music".into())));
+        assert_eq!(parse_rule("if i snap my fingers next song"), Some((hears(Sound::Snap), "next song".into())));
+        assert_eq!(parse_rule("wenn ich zweimal klatsche mach musik an"), Some((hears(Sound::Claps(2)), "mach musik an".into())));
+        assert_eq!(parse_rule("if it rains tomorrow open my calendar"), None, "an if that is no sound is no rule");
+        assert_eq!(rule_command("when you hear knocking tell me"), Some(json!({"action": "add", "when": {"kind": "hears", "sound": "knock"}, "then": "tell me"})));
+        assert_eq!(rule_command("wenn es klopft sag mir bescheid"), Some(json!({"action": "add", "when": {"kind": "hears", "sound": "knock"}, "then": "sag mir bescheid"})));
+        assert_eq!(rule_command("when the doorbell rings pause the music"), Some(json!({"action": "add", "when": {"kind": "hears", "sound": "doorbell"}, "then": "pause the music"})));
+        assert_eq!(rule_command("when i clap twice i feel happy"), None, "talk, not an order");
+        for (line, sound) in [("I clap twice", Sound::Claps(2)), ("someone knocks", Sound::Knock), ("When the doorbell rings", Sound::Doorbell), ("someone else talks", Sound::SomeoneElse)] {
+            assert_eq!(when_of(line), Some(hears(sound)), "{line}");
+        }
+        assert_eq!(when_of("I clap twice open spotify"), None, "a WHEN line is only the when");
+        for sound in Sound::ALL {
+            assert_eq!(When::of(&hears(sound).to_json()), Some(hears(sound)));
+            assert_eq!(when_of(&hears(sound).words()), Some(hears(sound)), "{sound:?}: what the window writes is read back");
+        }
+        assert!(!hears(Sound::Knock).fires(&["discord".into()], &[], Some((7, 30)), &[]), "a sound fires when it is heard");
+        for order in ["tell me", "Tell me!", "let me know right away", "warn me", "sag mir bescheid", "please notify me"] {
+            assert!(is_tell_me(order), "{order}");
+        }
+        for order in ["tell me a joke", "tell me the time", "open spotify"] {
+            assert!(!is_tell_me(order), "{order}");
+        }
+        assert_eq!(hears(Sound::Knock).news(), "Sir, someone is knocking.");
+        assert_eq!(When::Pc("max".into(), PcEvent::Online).news(), "Max's PC has come online, Sir.");
+        assert_eq!(When::Starts("minecraft".into()).news(), "Minecraft has just started, Sir.");
+    }
+
     #[test]
     fn a_rule_says_when_and_what_and_fires_on_the_change() {
         let _one = crate::kit::test_lock();
@@ -1140,9 +1259,9 @@ mod tests {
         rule(&json!({"action": "add", "when": {"kind": "closes", "app": "spotify"}, "then": "night mode"})).unwrap();
         rule(&json!({"action": "add", "when": {"kind": "at", "hour": 7, "minute": 30}, "then": "open my calendar"})).unwrap();
         assert!(rule(&json!({"action": "add", "when": {"kind": "starts", "app": "discord"}, "then": "open the mixer"})).unwrap().contains("already"));
-        assert_eq!(fired(&["discord".into()], &[], None, &[]), [("whenever discord starts".to_string(), "open the mixer".to_string())]);
+        assert_eq!(fired(&["discord".into()], &[], None, &[]), [(When::Starts("discord".into()), "open the mixer".to_string())]);
         assert_eq!(fired(&["notepad".into()], &["spotify".into()], None, &[]).len(), 1);
-        assert_eq!(fired(&[], &[], Some((7, 30)), &[]), [("every day at 07:30".to_string(), "open my calendar".to_string())]);
+        assert_eq!(fired(&[], &[], Some((7, 30)), &[]), [(When::At(7, 30), "open my calendar".to_string())]);
         assert!(fired(&[], &[], Some((7, 31)), &[]).is_empty() && fired(&["discordptb".into()], &[], None, &[]).len() == 1);
         assert!(is_app("minecraft", "javaw") && is_app("Discord", "discord") && !is_app("discord", "disk"));
         assert!(rule(&json!({"action": "list"})).unwrap().contains("1.  Whenever discord starts"));

@@ -573,7 +573,7 @@ impl Default for LocationSettings {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AcousticSettings {
-    /// Two sharp claps 150-450 ms apart.
+    /// Two sharp claps 150-500 ms apart.
     pub double_clap: bool,
     /// "wake" (JAI listens) or "toggle_music" (play / pause).
     pub clap_action: String,

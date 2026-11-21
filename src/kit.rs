@@ -56,6 +56,7 @@ pub const TOOLS: &[&str] = &[
     "accounts",
     "other_pc",
     "admin",
+    crate::news::TOOL,
 ];
 
 /// "What's my next lesson?", "wann ist meine nächste Stunde?": WebUntis, without the model.
@@ -84,6 +85,7 @@ pub fn command(s: &str, original: &str) -> Option<(&'static str, Value)> {
     // Then games: "whenever I start GTA, …" is a game's routine, not a whenever-rule.)
     crate::fleet::command(s).map(|a| ("other_pc", a)).or_else(|| crate::kit_games::command(s).map(|a| ("games", a)))
         .or_else(|| NEXT_LESSON.is_match(s.trim_end_matches(['?', '.', '!'])).then(|| ("next_lesson", serde_json::json!({}))))
+        .or_else(|| crate::news::command(s).map(|a| (crate::news::TOOL, a)))
         .or_else(|| crate::calc::equation_command(original).map(|a| ("equation", a)))
         .or_else(|| crate::commute_advisor::wear_command(s).map(|a| ("what_to_wear", a)))
         .or_else(|| crate::kit_school::grades_command(s).map(|a| ("grades", a)))
@@ -162,6 +164,7 @@ pub async fn run_tool(ctx: &ToolContext, name: &str, args: &Value) -> Result<Str
         "accounts" => crate::accounts::run(ctx, args).await,
         "other_pc" => crate::fleet::run(ctx, args).await,
         "admin" => crate::admin::run(ctx, args),
+        crate::news::TOOL => crate::news::run(ctx, args).await,
         other => Err(format!("The kit has no tool called '{other}'.")),
     }
 }
@@ -173,7 +176,7 @@ pub fn only_looks(name: &str, args: &Value) -> bool {
     let action = args["action"].as_str().unwrap_or("");
     is_tool(name)
         && (matches!(action, "show" | "list" | "status" | "check" | "report")
-            || matches!(name, "evening_recap" | "internet_doctor" | "show_changes" | "hearing_log" | "next_lesson" | "spell_word" | "equation" | "what_to_wear")
+            || matches!(name, "evening_recap" | "internet_doctor" | "show_changes" | "hearing_log" | "next_lesson" | "spell_word" | "equation" | "what_to_wear" | crate::news::TOOL)
             || (matches!(name, "put_away" | "birthdays") && matches!(action, "where" | "when"))
             || (name == "games" && matches!(action, "playtime" | "news" | "free" | "vram" | "download" | "routines" | "unplayed" | "wishlist"))
             || (name == "school_day" && crate::kit_school::school_only_looks(args))

@@ -530,7 +530,8 @@ impl Jai {
         }
         let now = chrono::Local::now();
         // One look before the greeting: what is wrong is said instead of "all systems online".
-        let missing: Vec<&str> = crate::models::missing(&self.inner.config.snapshot()).iter().map(|f| f.label).collect();
+        // (An optional model that is missing breaks nothing: he does without it.)
+        let missing: Vec<&str> = crate::models::missing(&self.inner.config.snapshot()).iter().filter(|f| f.required).map(|f| f.label).collect();
         let problem = crate::briefing::startup_problem(&missing, &self.tools().monitor.latest().disks);
         let mut line = crate::briefing::startup_line_with(now.hour(), now.timestamp_subsec_micros() as usize, problem.as_deref());
         let today = self.tools().reminders.list().into_iter().filter(|r| r.due().date_naive() == now.date_naive()).count();
@@ -1003,9 +1004,9 @@ impl Jai {
                 let app = self.clone();
                 tokio::spawn(async move { app.finish_mic_test(pcm, peak, rms, mic).await });
             }
-            AudioEvent::Acoustic(ev) => {
+            AudioEvent::Acoustic(ev, clip) => {
                 let app = self.clone();
-                tokio::spawn(async move { app.on_acoustic(ev).await });
+                tokio::spawn(async move { app.on_acoustic(ev, clip).await });
             }
         }
     }
@@ -1243,12 +1244,38 @@ impl Jai {
     }
 
     /// A double clap or a knock on the door.
-    async fn on_acoustic(&self, ev: crate::acoustic_radar::AcousticEvent) {
-        use crate::acoustic_radar::AcousticEvent;
+    /// The radar heard something: the sound model names it from the last seconds of the
+    /// microphone, then Sir's own rules and protocols for that sound run, or (when he set none
+    /// up for it) J.A.I.'s own reaction to two claps and a knock.
+    async fn on_acoustic(&self, ev: crate::acoustic_radar::AcousticEvent, clip: Vec<f32>) {
+        use crate::sound_sense::Sound;
+        let scores = if crate::sound_sense::available() {
+            match tokio::task::spawn_blocking(move || crate::sound_sense::scores(&clip)).await {
+                Ok(Ok(scores)) => Some(scores),
+                Ok(Err(e)) => {
+                    warn!("[RADAR] The sound model: {e}");
+                    None
+                }
+                Err(_) => None,
+            }
+        } else {
+            None
+        };
+        let sound = crate::sound_sense::judge(ev, scores.as_deref());
+        crate::sound_sense::note(ev, sound, scores.as_deref());
+        let Some(sound) = sound else {
+            info!("[RADAR] {ev:?}: nothing to act on ({})", scores.as_deref().map(|p| crate::sound_sense::top(p, 1).first().map(|(i, s)| format!("{} {:.0} %", crate::sound_sense::label(*i), s * 100.0)).unwrap_or_default()).unwrap_or_default());
+            return;
+        };
+        info!("[RADAR] {ev:?} → {}", sound.name());
         let settings = self.inner.config.read(|c| c.acoustic.clone());
         let stark = &self.tools().stark;
-        match ev {
-            AcousticEvent::DoubleClap => {
+        if crate::kit_notes::heard(self.tools(), sound) {
+            stark.pulse(&["acoustic", "ears", "brain"], false);
+            return;
+        }
+        match sound {
+            Sound::Claps(2) if settings.double_clap => {
                 stark.pulse(&["acoustic", "ears", "brain"], false);
                 if self.busy() || !self.inner.controls.mic_enabled.load(Ordering::Acquire) {
                     return;
@@ -1265,13 +1292,13 @@ impl Jai {
                 }
                 self.wake_listening("Double clap");
             }
-            AcousticEvent::Knock { count } => {
+            Sound::Knock if settings.knock_alert => {
                 let music = crate::music::now_playing().await.filter(|n| n.playing);
                 if settings.knock_only_with_music && music.is_none() {
-                    info!("[RADAR] {count} knocks heard, but no music is playing; staying quiet.");
+                    info!("[RADAR] Knocking heard, but no music is playing; staying quiet.");
                     return;
                 }
-                info!("[RADAR] {count} knocks while Sir has music on: alerting");
+                info!("[RADAR] Knocking: alerting");
                 stark.pulse(&["acoustic", "guardian", "voice"], true);
                 let message = "Pardon me, Sir, it sounds like someone just knocked on your door.".to_string();
                 self.emit(HudEvent::RoomAlert { message: message.clone() });
@@ -1282,6 +1309,7 @@ impl Jai {
                     restore.await;
                 });
             }
+            _ => {}
         }
     }
 
@@ -1715,6 +1743,12 @@ impl Jai {
             _ => None,
         };
         let his_voice = judged.is_some_and(|j| j.sure);
+        // A voice clearly not his: among what he heard, and for the rules that wait on one.
+        if let Some(j) = judged.filter(|_| !scripted) {
+            if crate::sound_sense::voice(j.his, j.score, j.bar) {
+                crate::kit_notes::heard(self.tools(), crate::sound_sense::Sound::SomeoneElse);
+            }
+        }
         let (jai_focused, gaming) = foreground_context().await;
         // A voice he asked "who am I speaking with?" answers with its name.
         if !scripted && !judged.is_some_and(|j| j.his) {

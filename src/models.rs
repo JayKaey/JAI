@@ -45,6 +45,8 @@ pub fn voice_cache_path(models_dir: &Path, archive: &Path, voice: &str) -> PathB
     }
 }
 const WHISPER_BASE: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main";
+/// CED-mini, the model that tells what a sound is (`sound_sense`), as sherpa-onnx exported it.
+const SOUND_BASE: &str = "https://huggingface.co/k2-fsa/sherpa-onnx-ced-mini-audio-tagging-2024-04-19/resolve/main";
 
 #[derive(Debug, Clone)]
 pub struct ModelFile {
@@ -66,6 +68,8 @@ fn known_size(file_name: &str) -> Option<u64> {
         "ggml-base-q8_0.bin" => Some(81_768_585),
         "ggml-small.bin" => Some(487_601_967),
         "ggml-large-v3-turbo-q5_0.bin" => Some(574_041_195),
+        "model.int8.onnx" => Some(10_451_715),
+        "class_labels_indices.csv" => Some(14_675),
         _ => None,
     }
 }
@@ -118,6 +122,11 @@ pub fn required_files(cfg: &JaiConfig) -> Vec<ModelFile> {
         expected_size: Some(2_327_524),
         required: true,
     });
+    // What a sound is (optional: without it the radar tells claps and knocks by itself).
+    let sound = Path::new(&cfg.silero_vad_model_path).parent().unwrap_or(Path::new("models")).join("sound");
+    for (label, name) in [("Sound model (CED-mini)", crate::sound_sense::MODEL), ("Sound model's labels", crate::sound_sense::LABELS)] {
+        files.push(ModelFile { label, path: sound.join(name), url: format!("{SOUND_BASE}/{name}"), expected_size: known_size(name), required: false });
+    }
     let v1 = is_kokoro_v1(&cfg.kokoro_model_path);
     let model_name = file_name(&cfg.kokoro_model_path);
     files.push(ModelFile {

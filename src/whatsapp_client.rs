@@ -527,7 +527,7 @@ fn open_wpn(path: &Path) -> Result<Connection, String> {
 static TOAST_TEXT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?s)<text[^>]*>(.*?)</text>").expect("valid toast regex"));
 static GROUP_LINE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(.{1,40}?):\s+(.+)$").expect("valid group regex"));
 
-fn unescape_xml(s: &str) -> String {
+pub(crate) fn unescape_xml(s: &str) -> String {
     s.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&apos;", "'").replace("&#39;", "'").replace("&amp;", "&")
 }
 

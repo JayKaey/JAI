@@ -1824,7 +1824,12 @@ impl ToolContext {
                     // Steps in his own words follow the rest, one after the other, as if he had
                     // said them.
                     let (said, steps): (Vec<protocols::Step>, Vec<protocols::Step>) = p.steps.iter().cloned().partition(|s| s.tool == protocols::ORDER);
-                    let orders: Vec<String> = said.iter().filter_map(|s| s.args["order"].as_str().map(String::from)).collect();
+                    // ("Tell me" is said at once: what set the protocol off, or that it runs.)
+                    let (told, orders): (Vec<String>, Vec<String>) = said.iter().filter_map(|s| s.args["order"].as_str().map(String::from)).partition(|order| crate::kit_notes::is_tell_me(order));
+                    if !told.is_empty() {
+                        let news = str_arg(args, &["because"]).map(String::from).unwrap_or_else(|| format!("The {} is engaged, Sir.", protocols::display_name(&p.name)));
+                        let _ = self.stark.events.send(crate::stark::StarkEvent::Alert(news));
+                    }
                     let p = Protocol { steps, ..p };
                     // Steps on different things (each app, the music, JAI's own windows)
                     // run side by side; steps on the same thing keep their order.
