@@ -4973,7 +4973,8 @@ pub fn parse_as_said(text: &str) -> Option<Intent> {
             _ => "focus",
         };
         let target = strip_article(&c[2]);
-        if looks_like_app_name(&target) {
+        // ("Zeig mir das Sonnensystem" shows a thing: only a program of his is a window to bring up.)
+        if looks_like_app_name(&target) && (!c[1].starts_with("zeig") || known_app(&target)) {
             return tool("window_management", json!({ "action": action, "target_window": target }));
         }
     }

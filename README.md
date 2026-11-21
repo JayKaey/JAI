@@ -146,6 +146,13 @@ Three panels open by voice, each in a window of its own, and close with "close t
 and says which ("open three random windows" opens three). Asked for his opinion he gives one,
 in English unless the sentence itself asks for German.
 
+An unclear "show me" is his to decide, and he says what he chose: "show me the moon" or "zeig
+mir ein Herz" opens a 3D model, "show me waves" or "show me how a pendulum swings" a simulation,
+"show me a sine wave" a plot, anything else a picture ("show me a volcano"); "draw a cat" gets a
+picture too, and he says he can't draw. What is Sir's own (his calendar, a program, a window, a
+place on the open globe) keeps its own order. Where no tool of his can do a thing, he says so and
+asks "Shall I build a tool for it?"; a yes builds it in the Tool Forge.
+
 Every window of his opens with a holographic entrance (the frame draws in, brackets close,
 a scan line passes) and leaves with an exit (it folds into a line), whether it is opened or
 closed by voice, by its CLOSE key or by Esc. Asked for again while it is leaving, it stays.

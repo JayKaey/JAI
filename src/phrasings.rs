@@ -194,7 +194,8 @@ pub(crate) fn route(text: &str) -> Option<(String, Value)> {
     if let Some((_, found)) = crate::brain::another_way(text) {
         return Some(road(&found));
     }
-    crate::brain::fast_as_said(text).as_ref().map(road)
+    // (His own pick for unclear words is the brain's last rule: "show me the moon".)
+    crate::brain::fast_as_said(text).or_else(|| crate::show_me::pick(text).map(Fast::Intent)).as_ref().map(road)
 }
 
 /// Arguments as they are compared: words in small letters, without punctuation.

@@ -205,6 +205,7 @@ mod self_improve;
 mod selftest;
 mod shell;
 mod shortcut_overlay;
+mod show_me;
 mod simulation_lab;
 mod sites;
 mod spatial_scenes;

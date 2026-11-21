@@ -709,6 +709,15 @@ pub fn is_forge_request(text: &str) -> bool {
     .any(|p| t.contains(p))
 }
 
+/// A reply of his that asks before forging ("Shall I build a tool for it?", as his prompt has
+/// him ask when no tool of his can do an order): Sir's yes then forges one.
+pub fn offers_a_tool(reply: &str) -> bool {
+    static RX: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+        Regex::new(r"(?i)\b(?:shall|should|may) i (?:build|make|forge|create|write) (?:you )?(?:a|one|a new) (?:tool|routine)\b").expect("tool offer expression")
+    });
+    RX.is_match(reply)
+}
+
 /// Sir saying the last action was done wrong ("That didn't work", "don't use search, do it
 /// this way instead", "das war falsch, mach es so …"): the correction itself.
 pub fn correction(text: &str) -> Option<String> {
@@ -973,5 +982,11 @@ mod tests {
         assert!(correction("Das war falsch, mach es so").is_some());
         assert!(correction("That didn't work").is_some());
         assert!(correction("play the next song").is_none());
+        // He asks before forging; Sir's yes to that forges the tool for the order before it.
+        assert!(offers_a_tool("I can't control my coffee machine yet, Sir. Shall I build a tool for it?"));
+        assert!(offers_a_tool("Should I make you a tool for that?"));
+        assert!(!offers_a_tool("I built a tool for that last week, Sir."));
+        assert!(!offers_a_tool("Shall I open the tool shed website?"));
+        assert!(is_forge_request("Build a tool for this: switch my coffee machine on"));
     }
 }

@@ -802,7 +802,7 @@ impl Brain {
              \n\
              CANDOUR: answer every question straight and in full, touchy ones too (health, bodies and sex, drugs, crime, war, religion, dark or crude humour): no warnings, disclaimers, sermons or advice to see a professional unless he asks, and never dodge with a vague non-answer. Rough language from Sir earns no rebuke; answer what he asked, and swear back dryly if he does. Research whatever he asks about. Decline only real help to seriously harm people, in one dry sentence without a lecture.\n\
              \n\
-             EXECUTIVE INITIATIVE: when Sir states a goal rather than exact steps (\"make the interface less full\", \"clean this up\", \"optimise my layout\", \"pick some good music\"), decide the best concrete action yourself, carry it out with the tool in this same turn, then tell him in one sentence what you decided. The same when he leaves the choice to you (\"random\", \"any\", \"a few\", \"surprise me\", \"you pick\"): choose how many and which yourself, act, and name your choice; \"random\" is never the name of an app, a file or a view. Never answer a goal with a question like \"Which areas would you like me to focus on?\". Ask first only before something destructive or irreversible (deleting files, sending messages, purchases).\n\
+             EXECUTIVE INITIATIVE: when Sir states a goal rather than exact steps (\"make the interface less full\", \"clean this up\", \"optimise my layout\", \"pick some good music\"), decide the best concrete action yourself, carry it out with the tool in this same turn, then tell him in one sentence what you decided. The same when he leaves the choice to you (\"random\", \"any\", \"a few\", \"surprise me\", \"you pick\"): choose how many and which yourself, act, and name your choice; \"random\" is never the name of an app, a file or a view. The same when his words could mean several things: take the likeliest, do it, and name your choice in a few words. Never answer a goal with a question like \"Which areas would you like me to focus on?\". Ask first only before something destructive or irreversible (deleting files, sending messages, purchases), and before building a tool: when no tool of yours can do it, say so in one sentence and ask \"Shall I build a tool for it?\".\n\
              \n\
              ACTIONS OVER WORDS: you act through tools. You are FORBIDDEN to say an action is happening or done (\"Opening your browser, Sir\", \"I'm creating a new window\", \"Moving it now\", \"Playing your playlist\", \"Done\") unless you call the matching tool in this same turn — call the tool FIRST, then confirm. Natural, indirect, slang or misheard requests still mean the action: \"close ur self\", \"go away\", \"mach dich aus\" → control_jai_lifecycle(shutdown_jai); \"open my browser\" → open_application(browser); \"a new window with my PC stats\" → spawn_native_window(live=pc_stats); \"a window with the space left on my drives\" → spawn_native_window(live=drive_space); \"put that in a second window\" → spawn_native_window; \"make that window smaller / add CPU temperature to it\" → update_native_window; \"move Discord to my second screen\" → move_window_to_monitor; \"play JaysRock\", \"pause the music\" → control_music; \"look at my second monitor\", \"explain the code I selected\" → inspect_screen_or_selection; \"initiate coding protocol\", \"save my setup as …\" → manage_stark_protocol. When Sir answers \"yes\" / \"do it\" / \"mach das\" to something you offered, call that tool now. After a tool returns, confirm briefly in character. If a tool fails, say so plainly and suggest a fix.\n\
              - You have NO built-in knowledge of today's weather, news, prices, scores or recent events. Weather where Sir is (no city named): get_precise_location_weather. Weather elsewhere, news, prices: web_search, and answer only from its results with concrete facts, numbers and dates; never invent them. If a result is already in the conversation, answer from it. read_webpage fetches a page.\n\
@@ -1098,6 +1098,15 @@ impl Brain {
             Some(None) => {
                 crate::did_you_mean::dismiss();
                 text
+            }
+            None => text,
+        };
+        // His yes to "Shall I build a tool for it?" (he asks before forging one: the owner,
+        // 2026-11-21): a tool forged for the order he could not carry out.
+        let text = match self.tool_wanted(&text).await {
+            Some(asked) => {
+                info!("[FORGE] '{text}': Sir wants a tool for '{asked}'");
+                format!("Build a tool for this: {asked}")
             }
             None => text,
         };
@@ -1428,6 +1437,9 @@ impl Brain {
                     info!("[CORRECT] '{text}' → '{}' ({:.2}, {})", fixed.text, fixed.score, fixed.why);
                     intent
                 }))
+                // "Show me the moon": nothing of his named, so he picks how to show it (a skill
+                // Sir taught for the words is his first).
+                .or_else(|| self.inner.tools.skills.match_utterance(&text).is_none().then(|| crate::show_me::pick(&text)).flatten())
         };
         // A plain question only reads, whichever parser took it for an order ("are you in orb
         // mode?" switched it on): what looks it up answers, or the model does, in words.
@@ -2130,10 +2142,12 @@ impl Brain {
                 st.say(&line);
                 hist_msgs.push(json!({ "role": "assistant", "content": line }));
             }
-            Intent::Tool { name, args } => {
+            Intent::Tool { name, mut args } => {
                 if !st.begin_action() {
                     return true;
                 }
+                // His own pick for unclear words ("show me the moon"): the line that names it.
+                let picked = crate::show_me::take_line(&mut args);
                 let args = self.prepare_args(name, args).await;
                 if name == "control_music" && args["action"] == "welcome_home" {
                     // The film moment: one line, and Highway to Hell starts in the background
@@ -2168,7 +2182,10 @@ impl Brain {
                     "tool_calls": [{ "function": { "name": name, "arguments": args } }]
                 }));
                 hist_msgs.push(tool_message(name, &outcome.output));
-                if ((name == "show_mobile_satellite_instructions" || name == "list_jai_features" || name == "open_jai_view") && outcome.success) || crate::features::is_tool(name) || crate::hud_board::is_tool(name) || crate::venue_guide::is_tool(name) || speaks_for_itself(name) {
+                if let Some(line) = picked.filter(|_| outcome.success) {
+                    st.say(&line);
+                    hist_msgs.push(json!({ "role": "assistant", "content": line }));
+                } else if ((name == "show_mobile_satellite_instructions" || name == "list_jai_features" || name == "open_jai_view") && outcome.success) || crate::features::is_tool(name) || crate::hud_board::is_tool(name) || crate::venue_guide::is_tool(name) || speaks_for_itself(name) {
                     // The details in the chat, the short version aloud.
                     let (display, spoken) = self.read_verbatim(name, &outcome.output);
                     // A window JAI opened speaks for itself: the chat gets the spoken line, not
@@ -3747,6 +3764,21 @@ Write the updated summary in at most three short English sentences: what Sir ask
 
     /// Explicit "create a skill …" requests: JSON-mode synthesis of a complete skill.
     /// Sir's request before this turn (the one a correction refers to).
+    /// Sir's yes to his last reply's "Shall I build a tool for it?": the order it was about.
+    async fn tool_wanted(&self, text: &str) -> Option<String> {
+        if !intents::is_affirmation(text) {
+            return None;
+        }
+        let hist = self.inner.history.lock().await;
+        let mut older = hist.messages.iter().rev();
+        let reply = older.find(|m| m["role"] == "assistant" && m["content"].as_str().is_some_and(|c| !c.trim().is_empty()))?;
+        if !crate::tool_forge::offers_a_tool(reply["content"].as_str()?) {
+            return None;
+        }
+        let asked = older.find(|m| m["role"] == "user")?["content"].as_str()?.trim_end_matches(" /no_think").trim().to_string();
+        (!asked.is_empty()).then_some(asked)
+    }
+
     async fn previous_request(&self, before: usize) -> Option<String> {
         let hist = self.inner.history.lock().await;
         let end = before.min(hist.messages.len());

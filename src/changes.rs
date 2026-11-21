@@ -100,6 +100,9 @@ pub const RELEASES: &[Release] = &[
             added("Corrections and stutters", "\"Open Chrome, uh, I mean Firefox\" opens Firefox; \"Open the… never mind\" is taken back."),
             new("Sonora, at once", "Your songs and playlists, private or not downloaded, start at once; the queue and more by voice.", "sonora"),
             better("He waits for the rest", "A sentence that stops on \"and\" or \"no wait\" gets a person's pause; half an order never runs."),
+            added("He picks for unclear orders", "\"Show me the moon\": the likeliest way, a picture, a 3D model or a simulation, and he says which."),
+            added("Asks before building a tool", "Where no tool of his can do it, he asks \"Shall I build a tool for it?\"; your yes builds it."),
+            fixed("\"Zeig mir\" a thing", "\"Zeig mir das Sonnensystem\" no longer looks for a window of that name."),
         ],
     },
     Release {
