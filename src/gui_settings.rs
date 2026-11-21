@@ -135,18 +135,18 @@ static ROWS: [Row; 49] = [
         "SCREENS",
         "Media mode",
         "Behind the board (dimmed), or alone: the board comes only when he is spoken to.",
-        "wallpaper picture video whole fill only black hintergrund",
+        "background wallpaper picture video whole fill only black hintergrund",
         Control::Keys(&[("BEHIND THE BOARD", |s| s.bg_mode != "whole", |s| s.bg_mode = "behind".into()), ("WHOLE BACKGROUND", |s| s.bg_mode == "whole", |s| s.bg_mode = "whole".into())]),
     ),
     row(
         "SCREENS",
         "Slideshow time",
         "How long each picture of a slideshow stays before it fades into the next.",
-        "interval seconds minutes diashow wechsel sekunden",
+        "background interval seconds minutes diashow wechsel sekunden hintergrund",
         Control::Keys(&[("10 S", |s| s.bg_interval == 10, |s| s.bg_interval = 10), ("30 S", |s| s.bg_interval == 30, |s| s.bg_interval = 30), ("1 MIN", |s| s.bg_interval == 60, |s| s.bg_interval = 60), ("5 MIN", |s| s.bg_interval == 300, |s| s.bg_interval = 300)]),
     ),
-    row("SCREENS", "Video sound", "A background video plays its sound. Off: it is silent.", "audio mute ton stumm", Control::Switch(|s| s.bg_sound, |s, v| s.bg_sound = v)),
-    row("SCREENS", "Media dimming", "How much black lies over the media behind the board, so the board reads.", "dark darker brightness dunkler hell", Control::Size(|s| s.bg_dim, |s, v| s.bg_dim = v, 0.0, 0.9)),
+    row("SCREENS", "Video sound", "A background video plays its sound. Off: it is silent.", "audio mute ton stumm hintergrund", Control::Switch(|s| s.bg_sound, |s, v| s.bg_sound = v)),
+    row("SCREENS", "Media dimming", "How much black lies over the media behind the board, so the board reads.", "background dark darker brightness dunkler hell hintergrund", Control::Size(|s| s.bg_dim, |s, v| s.bg_dim = v, 0.0, 0.9)),
     row("SCREENS", "Words beside the corner orb", "What is said stands beside the orb in its corner. Off: the orb alone.", "info information window plate text orb corner kugel", Control::Switch(|s| s.orb_words, |s, v| s.orb_words = v)),
     row("SCREENS", "Corner orb size", "How large the orb is in its corner (the wheel over it does the same).", "orb size bigger smaller kugel größe", Control::Size(|s| s.corner_orb_scale, |s, v| s.corner_orb_scale = v, 0.6, 1.8)),
     row("SCREENS", "Desktop clock", "As the desktop's backdrop: the time under the emblem. Drag it anywhere.", "clock time uhr uhrzeit", Control::Switch(|s| s.desk_clock, |s, v| s.desk_clock = v)),
@@ -266,8 +266,13 @@ fn body(ui: &mut Ui, iface: &InterfaceSettings) -> Option<Out> {
             ui.horizontal(|ui| {
                 ui.set_min_height(44.0);
                 let width = ui.available_width();
-                let wide = matches!(row.control, Control::Theme | Control::Keys(_));
-                ui.allocate_ui_with_layout(vec2((width - if wide { 250.0 } else { 150.0 }).max(120.0), 44.0), Layout::top_down(Align::Min), |ui| {
+                // (Room for the keys as wide as they are: a long pair never lies over the line.)
+                let control = match row.control {
+                    Control::Theme => 250.0,
+                    Control::Keys(keys) => keys.iter().map(|(label, ..)| crate::holo_kit::key_width(ui.painter(), label) + 4.0).sum::<f32>() + 12.0,
+                    _ => 150.0,
+                };
+                ui.allocate_ui_with_layout(vec2((width - control).max(120.0), 44.0), Layout::top_down(Align::Min), |ui| {
                     ui.spacing_mut().item_spacing.y = 2.0;
                     ui.label(lit(row.name, &needle, FontId::new(ts(14.5), super::label_family()), strip_ink(), accent));
                     ui.add(egui::Label::new(lit(row.explain, &needle, FontId::proportional(ts(11.5)), strip_muted(), accent)).wrap());
@@ -547,6 +552,9 @@ mod tests {
         assert_eq!(found("nachtmodus"), vec!["Night mode by the clock"]);
         assert!(found("hintergrund").contains(&"Background on every monitor") && found("hintergrund").contains(&"Background media"));
         assert_eq!(found("slideshow"), vec!["Background media", "Slideshow time"]);
+        let media = ["Background on every monitor", "Background media", "Media mode", "Slideshow time", "Video sound", "Media dimming"];
+        assert_eq!(found("background"), media, "every row of the background answers its name");
+        assert!(media.iter().all(|row| found("hintergrund").contains(row)));
         assert!(found("video").contains(&"Video sound") && found("wallpaper").contains(&"Media mode"));
         assert!(found("stimme").contains(&"Only obey me") && found("stimme").contains(&"Learn my voice"));
         assert_eq!(found("lautstärke"), vec!["Mixer"]);

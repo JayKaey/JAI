@@ -11,8 +11,8 @@
 //! Decoding is off the HUD's thread: pictures by `image`, videos by `mp4` (demux), `openh264`
 //! (H.264 video) and `symphonia` (AAC) with `cpal` for the sound. Only H.264 in MP4 plays; any
 //! other file gets its reason in a plain sentence. A decoder idles whenever the background cannot
-//! be seen (a game or a fullscreen program in front, the PC locked, the window hidden), and
-//! presents at most 30 frames a second, skipping a frame rather than falling behind.
+//! be seen (a game in front, a window over the whole monitor, the PC locked, the board not
+//! drawn), and presents at most 30 frames a second, skipping a frame rather than falling behind.
 
 use crate::interface::InterfaceSettings;
 use eframe::egui::{self, pos2, Color32, Rect, TextureHandle, TextureOptions};
@@ -779,8 +779,10 @@ struct Player {
     /// What it plays: (the path, the monitor's pixels, the interval, the sound).
     what: (String, (u32, u32), u32, bool),
     shared: Arc<Shared>,
-    /// The textures of the two layers, each with the picture it holds.
+    /// The textures of the two layers, each with the picture it holds, and the context they
+    /// were loaded into.
     textures: [Option<(u64, TextureHandle)>; 2],
+    ctx: egui::Context,
 }
 
 impl Drop for Player {
@@ -859,10 +861,14 @@ fn tick(ctx: &egui::Context, look: &Look, rects: &[(usize, Rect)]) {
         if players.get(index).is_none_or(|p| p.what != what) {
             players.remove(index);
             if let Some(shared) = start(ctx, &what) {
-                players.insert(*index, Player { what, shared, textures: [None, None] });
+                players.insert(*index, Player { what, shared, textures: [None, None], ctx: ctx.clone() });
             }
         }
         let Some(player) = players.get_mut(index) else { continue };
+        // (Another HUD's context, an offscreen one, knows none of these textures: it loads its own.)
+        if player.ctx != *ctx {
+            (player.ctx, player.textures) = (ctx.clone(), [None, None]);
+        }
         player.shared.paused.store(stood || covered(*index), Ordering::Relaxed);
         player.shared.seen.store(now_ms(), Ordering::Relaxed);
         let layers = lock(&player.shared.layers);
@@ -1262,6 +1268,10 @@ mod tests {
         let quiet = said("Hintergrundvideo ohne Ton").unwrap();
         assert_eq!((quiet["background_sound"].as_bool(), quiet.get("background_media")), (Some(false), None));
         assert_eq!(media("use my desktop folder as a slideshow"), Some("desktop".into()));
+        // The whole road: no router before the parser takes them.
+        for order in [format!("set my background to {path}"), "use my Pictures folder as a slideshow on monitor 2".into(), "fill the whole background".into(), "change the slideshow every 2 minutes".into()] {
+            assert_eq!(crate::phrasings::route(&order).map(|(tool, _)| tool).as_deref(), Some("configure_interface"), "{order}");
+        }
         // The changes page's examples.
         assert_eq!(media("Setz mein Hintergrundbild auf meinen Bilder-Ordner"), Some("bilder".into()));
         assert_eq!(media("set my background to D:\\Pictures\\sunset.png"), Some("D:\\Pictures\\sunset.png".into()));
@@ -1344,9 +1354,15 @@ mod tests {
             let (left, right) = (Rect::from_min_size(pos2(40.0, 40.0), vec2(200.0, 200.0)), Rect::from_min_size(pos2(680.0, 40.0), vec2(200.0, 200.0)));
             let (l, r) = (canvas.brightness(left), canvas.brightness(right));
             assert!(l > 5.0 && r > 5.0, "{name}: media drawn ({l}, {r})");
+            // (The players outlive the first picture's context: the second loads its own textures
+            // instead of drawing the first's unknown ones as white.)
+            assert!(l < 200.0 && r < 200.0, "{name}: the media, not white ({l}, {r})");
             lights.push(l);
-            *lock(&PLAYERS) = None;
         }
         assert!(lights[1] > lights[0] * 1.3, "behind the board the media is dimmed, alone it is not: {lights:?}");
+        // (Nothing of this stays for the pictures of other tests.)
+        *lock(&PLAYERS) = None;
+        *lock(&LOOK) = None;
+        *lock(&BOARD) = (1.0, None);
     }
 }

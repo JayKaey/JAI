@@ -10220,6 +10220,35 @@ mod tests {
         crate::hud_dock::forget(settings_panel::ID);
     }
 
+    /// The background's rows, found by their word, with a path field for every monitor and one
+    /// for each of two (the second holding a video).
+    #[test]
+    fn gallery_settings_background_media() {
+        let _g = crate::hud_dock::test_lock();
+        let _look = crate::holo_theme::look_for_pictures();
+        let screen = |index: usize, x: i32| crate::monitors::Monitor { index, name: String::new(), rect: [x, 0, x + 1920, 1080], work: [x, 0, x + 1920, 1032], primary: index == 1 };
+        crate::monitors::pretend(Some(vec![screen(1, 0), screen(2, 1920)]));
+        settings_panel::open(true);
+        let mut iface = InterfaceSettings::default();
+        iface.bg_media.insert("2".into(), "D:\\Videos\\rain on glass.mp4".into());
+        let mut snap = crate::ui_snapshot::Snapshot::new(GALLERY);
+        let mut last = None;
+        for k in 0..30 {
+            let input = egui::RawInput { screen_rect: Some(snap.screen()), time: Some(k as f64 / 60.0), predicted_dt: 1.0 / 60.0, ..Default::default() };
+            last = Some(snap.frame(input, |ctx| {
+                ctx.data_mut(|d| d.insert_temp(egui::Id::new("jai_settings_search"), "background".to_string()));
+                paint_canvas(ctx);
+                crate::hud_dock::begin_frame();
+                let _ = settings_panel::show(ctx, &iface);
+            }));
+        }
+        let out = last.expect("frames");
+        snap.rasterise(out.shapes, out.pixels_per_point).save("gallery_settings_background");
+        settings_panel::open(false);
+        crate::hud_dock::forget(settings_panel::ID);
+        crate::monitors::pretend(None);
+    }
+
     #[test]
     fn gallery_notifications_and_edge_light() {
         let _alone = board_alone();
