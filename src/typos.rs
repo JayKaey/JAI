@@ -297,6 +297,10 @@ pub fn imperative_after_name(command: &str) -> String {
 
 /// Sir's sentence with JAI's domain words spelt right (unchanged when nothing needed fixing).
 pub fn normalize_user_input_typos(text: &str) -> String {
+    // "Open Ch-Chrome, uh, I mean Firefox" is "Open Firefox": said once, as finally meant.
+    if let Some(meant) = crate::speech_repair::repaired(text) {
+        return normalize_user_input_typos(&meant);
+    }
     if let Some(order) = polite_gerund(text) {
         return normalize_user_input_typos(&order);
     }

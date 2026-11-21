@@ -5373,6 +5373,25 @@ const CONNECTORS: &[&str] = &[
     "nach", "bei", "also", "dann", "um", "ob", "als", "wie",
 ];
 
+/// The words no sentence ends on ("… and", "change it to", "öffne den"): unlike "turn it on",
+/// "log in" or "mach das", where the last word closes the order. (Not "an": "Mikro an".)
+const NEVER_LAST: &[&str] = &[
+    "and", "or", "but", "because", "the", "a", "my", "your", "if", "of", "to", "for", "with", "into", "und", "oder", "aber", "weil", "dass",
+    "wenn", "der", "den", "dem", "ein", "eine", "einen", "mein", "meine", "meinen", "für", "fuer", "zum", "zur",
+];
+
+/// A sentence that surely goes on: it stops on a comma or a dash, on a word no sentence ends on,
+/// on a filler or on a correction still to come ("open Chrome, no wait"). JAI gives Sir the
+/// time a person would before he acts on it.
+pub fn hangs(text: &str) -> bool {
+    let t = text.trim();
+    if t.is_empty() || t.ends_with(['?', '!']) {
+        return false;
+    }
+    let last = t.split_whitespace().last().map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase()).unwrap_or_default();
+    t.ends_with([',', '-', '–', '—']) || NEVER_LAST.contains(&last.as_str()) || crate::speech_repair::dangling(t)
+}
+
 /// A transcript that sounds unfinished: trailing "…", a dangling connector, or a short fragment
 /// that is not a complete command on its own. JAI waits a little longer for the rest.
 pub fn looks_incomplete(text: &str) -> bool {
@@ -5380,7 +5399,7 @@ pub fn looks_incomplete(text: &str) -> bool {
     if t.is_empty() {
         return false;
     }
-    if t.ends_with("...") || t.ends_with('…') || t.ends_with(',') || t.ends_with('-') || t.ends_with(" -") {
+    if t.ends_with("...") || t.ends_with('…') || hangs(t) {
         return true;
     }
     let last = t
@@ -6404,6 +6423,14 @@ mod tests {
         assert!(!looks_incomplete("Stop!"));
         assert!(!looks_incomplete("What is the weather like in Berlin today?"));
         assert!(!looks_incomplete("Make the interface green."));
+        // What surely goes on gets the time a person would give; "…" and a short fragment only
+        // the short wait, since Whisper writes "…" after a whole order that trails off.
+        for goes_on in ["Open Spotify and", "Change it to", "Set a timer for,", "Open the-", "Öffne den", "Open Chrome, no wait", "Set a timer for five minutes and uh", "Spiel Musik und"] {
+            assert!(hangs(goes_on) && looks_incomplete(goes_on), "{goes_on}");
+        }
+        for whole in ["Turn it on", "Log in", "Mach das", "Where are you from?", "Open Spotify...", "Default.", "Mikro an", "Hör nicht zu", "Open Chrome, no wait, Firefox"] {
+            assert!(!hangs(whole), "{whole}");
+        }
     }
 
     /// 2026-11-13: "Jay, don't listen." was whole, and the lock still waited 0.4 s for the rest

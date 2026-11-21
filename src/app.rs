@@ -1491,6 +1491,11 @@ impl Jai {
             }
             let carried = app.inner.carry.lock().unwrap_or_else(|e| e.into_inner()).take_if(|c| c.id == id);
             if let Some(c) = carried {
+                // (An order taken back whose correction never came is dropped, not carried out.)
+                if crate::speech_repair::withdrawn(&c.text) {
+                    info!("[STITCH] '{}' was taken back and nothing followed", c.text);
+                    return;
+                }
                 info!("[STITCH] Nothing followed; answering '{}' on its own", c.text);
                 app.dispatch_turn(c.text, Instant::now(), 0, InputSource::Voice);
             }
@@ -2091,9 +2096,14 @@ impl Jai {
             self.stitch_rest(kept, speech_ms, u.barge_in, u.ptt, carried, command);
             return;
         }
-        // "Set the colour to …", "Open the …": give Sir a moment to finish the thought.
+        // "Set the colour to …", "Open the …": give Sir a moment to finish the thought, and the
+        // time a person would give to a sentence that surely goes on ("… and", "Chrome, no wait").
         if stitching_enabled && crate::intents::looks_incomplete(&command) {
-            let wait = Duration::from_millis(self.inner.config.read(|c| c.incomplete_thought_wait_ms) as u64);
+            let mut wait = Duration::from_millis(self.inner.config.read(|c| c.incomplete_thought_wait_ms) as u64);
+            if crate::intents::hangs(&command) {
+                wait = wait.max(Duration::from_millis(2000));
+                self.set_state("listening", "Listening — go on, Sir");
+            }
             let deadline = Instant::now() + wait;
             while Instant::now() < deadline && !superseded() {
                 tokio::time::sleep(Duration::from_millis(25)).await;
@@ -2102,6 +2112,15 @@ impl Jai {
                 info!("[STITCH] '{command}' sounded unfinished and Sir carried on");
                 self.emit(HudEvent::Retracted { message_id: String::new() });
                 self.stitch_rest(kept, speech_ms, u.barge_in, u.ptt, carried, command);
+                return;
+            }
+            // "Open Chrome, no wait" and nothing more yet: never carried out as it stood. The
+            // new words, when they come, join it ("… Firefox" opens Firefox).
+            if crate::speech_repair::withdrawn(&command) {
+                info!("[STITCH] '{command}' is taken back until its correction comes");
+                self.emit(HudEvent::Retracted { message_id: String::new() });
+                self.keep_for_stitching(command);
+                self.wake_listening("A correction still to come");
                 return;
             }
         }

@@ -119,6 +119,7 @@ mod pc_audio;
 mod desktop_backdrop;
 mod startup_sequence;
 mod speaker_id;
+mod speech_repair;
 mod voice_clips;
 mod voice_setup;
 mod holo_block;

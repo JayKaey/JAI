@@ -97,6 +97,8 @@ pub const RELEASES: &[Release] = &[
             new("Hotkeys", "\"Open the hotkeys window\": every key of his, in any program or game; SET, then the new key.", "hotkeys"),
             added("A key for the microphone", "Your microphone on and off by a key of your choice, in any program or game, with a sound."),
             better("Straight answers", "Touchy questions, rough words and any research topic get a straight, full answer: no lectures, warnings or dodging."),
+            added("Corrections and stutters", "\"Open Chrome, uh, I mean Firefox\" opens Firefox: stutters and \"uh\"s count once, the last correction wins, and \"Open the… never mind\" is taken back."),
+            better("He waits for the rest", "A sentence that stops on \"and\", \"to\" or a correction still to come (\"Open Chrome, no wait\") gets the moment a person would give it; half a sentence is never carried out."),
         ],
     },
     Release {
