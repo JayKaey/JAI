@@ -71,11 +71,12 @@ const fn w(id: &'static str, title: &'static str, about: &'static str, group: us
 pub const GROUPS: [&str; 5] = ["Only you", "Views", "Panels", "Look and sound", "J.A.I."];
 
 /// Every window J.A.I. opens, Sir's own first.
-pub static WINDOWS: [Window; 29] = [
+pub static WINDOWS: [Window; 30] = [
     w("admin", "Admin", "This menu. On another PC, all is yours while it is open.", 0, Open::Order("open the admin window"), &[("admin", "action", "show")], true),
     w("accounts", "Accounts", "Everyone who may use J.A.I.: passwords, permissions, PCs.", 0, Open::Order("open the accounts list"), &[("accounts", "action", "show")], true),
     w("account_report", "Report", "What J.A.I. did for everyone this week.", 0, Open::Order("what did you do for everyone this week"), &[("accounts", "action", "report")], true),
     w("settings", "Settings", "Every setting of his look, his voice and his presence.", 0, Open::Order("open settings"), &[("*", "settings_panel", "true")], true),
+    w("hotkeys", "Hotkeys", "Keys that work in every program and game, mute included.", 0, Open::Order("open the hotkeys window"), &[("*", "hotkeys_window", "true")], true),
     w("feature_lab", "Feature Lab", "Every tool he has, each with TRY; the Tool Forge.", 0, Open::Order("open the feature lab"), &[("*", "feature_lab", "true"), ("forge_tool", "", ""), ("delete_forged_tool", "", "")], true),
     w("discord", "Discord", "His voice into a Discord call: the audio routing.", 0, Open::Now(crate::gui::show_discord), &[("discord_call", "", ""), ("discord_bot", "", "")], true),
     w("system_stats", "System stats", "CPU, graphics, memory, temperatures, busy programs.", 1, Open::Order("open my system stats"), &[("open_jai_view", "view", "system_stats")], false),

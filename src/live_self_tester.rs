@@ -446,6 +446,7 @@ const ROUTES: &[Route] = &[
     r("Guest mode.", "configure_interface", r#"{"voice_guest": true}"#),
     r("Let my friend speak for half an hour.", "configure_interface", r#"{"voice_guest": true, "voice_guest_minutes": 30}"#),
     r("Open settings.", "configure_interface", r#"{"settings_panel": true}"#),
+    r("Open the hotkeys window.", "configure_interface", r#"{"hotkeys_window": true}"#),
     r("Edge light off.", "configure_interface", r#"{"edge_light": false}"#),
     r("Move with the music.", "configure_interface", r#"{"music_visuals": true}"#),
     r("List your features.", "list_jai_features", "{}"),

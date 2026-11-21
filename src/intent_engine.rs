@@ -1279,6 +1279,7 @@ pub fn strip_close_fillers(name: &str) -> String {
 pub fn own_view_name(name: &str) -> String {
     match name {
         "world" | "planet" | "weltkugel" | "welt" => "earth".to_string(),
+        "hot keys" | "hotkey" | "hotkey-fenster" | "hotkey fenster" => "hotkeys".to_string(),
         _ => name.to_string(),
     }
 }
@@ -1297,6 +1298,8 @@ pub fn is_own_view(name: &str) -> bool {
         "feature lab" | "features" | "feature list" | "telemetry" | "system telemetry" | "system stats" | "pc stats" | "stats" | "theme studio" | "plotter" | "function plotter" | "simulation"
             | "simulation lab" | "sim lab" | "holomat" | "qr" | "qr code" | "phone qr" | "pairing" | "schedule" | "timetable" | "chronos" | "discord routing" | "audio routing"
             | "mixer" | "audio mixer" | "volume mixer" | "sound mixer"
+            // (No program is called that: "close the hotkeys window" force-closed one, 2026-11-21.)
+            | "hotkeys" | "hot keys" | "hotkey" | "hotkey-fenster" | "hotkey fenster"
             // The panels from the reference videos.
             | "radar" | "network radar" | "netzwerkradar" | "netzwerk radar" | "disk map" | "drive map" | "storage map" | "festplattenkarte" | "earth"
             | "globe" | "world" | "world map" | "planet" | "earth view" | "satellite view" | "erde" | "globus" | "weltkugel"

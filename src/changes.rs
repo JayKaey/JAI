@@ -91,6 +91,15 @@ const fn fixed(title: &'static str, what: &'static str) -> Entry {
 /// Every change, newest first.
 pub const RELEASES: &[Release] = &[
     Release {
+        date: "2026-11-21",
+        name: "Keys, ears and control",
+        entries: &[
+            new("Hotkeys", "\"Open the hotkeys window\": every key of his, in any program or game; SET, then the new key.", "hotkeys"),
+            added("A key for the microphone", "Your microphone on and off by a key of your choice, in any program or game, with a sound."),
+            better("Straight answers", "Touchy questions, rough words and any research topic get a straight, full answer: no lectures, warnings or dodging."),
+        ],
+    },
+    Release {
         date: "2026-11-20",
         name: "Accounts, other PCs and Linux",
         entries: &[
@@ -809,7 +818,14 @@ pub const EXPLANATIONS: &[Explanation] = &[
         title: "Always your desktop",
         what: "He is your desktop's background, always and on every PC, from the first start: the board itself stands behind your icons, on every monitor or on your first, and looks as it does across all monitors. Every view of his, the console too, opens as a window of its own that you move like any other. Speak to him while a window covers his emblem, and the orb leaves the background for the lower left corner of the monitor you are using: smaller, in front of everything, with what is being said beside it. Five seconds after the last of it, it glides back. Orb mode keeps his orb floating in front of your work the whole time, mini mode a slim strip along the top. His keys on the background take your clicks; everything else on the desktop is yours as before.",
         say: &["background on all monitors", "background only on the main monitor", "orb mode", "mini mode", "show your windows", "tidy the windows"],
-        know: "Ctrl+Alt+J brings his windows to the front, Ctrl+Alt+K the console to type to him. Drag an orb where you want it (the corner orb remembers the spot for each monitor); a click on the corner orb opens the console, a double click on either orb, or BOARD on the strip, shows the desktop. Beside a game he leaves the mouse alone. It sits in front of a wallpaper program's picture and behind everything else. Should Explorer start again, or not take him at first, he opens his background anew by himself.",
+        know: "Ctrl+Alt+J brings his windows to the front, Ctrl+Alt+K the console to type to him (the Hotkeys window changes them). Drag an orb where you want it (the corner orb remembers the spot for each monitor); a click on the corner orb opens the console, a double click on either orb, or BOARD on the strip, shows the desktop. Beside a game he leaves the mouse alone. It sits in front of a wallpaper program's picture and behind everything else. Should Explorer start again, or not take him at first, he opens his background anew by himself.",
+    },
+    Explanation {
+        id: "hotkeys",
+        title: "Hotkeys",
+        what: "His keys work in every program, and in games while they are in front: the microphone on and off (no key until you give it one), his windows to the front (Ctrl+Alt+J), the console to type to him (Ctrl+Alt+K) and waking him from standby (Alt+J). In the Hotkeys window press SET beside one, then the new key; CLEAR takes a key away. A key another program already holds is marked TAKEN: choose another.",
+        say: &["open the hotkeys window", "change my mute key", "zeig mir die tastenkürzel"],
+        know: "A letter, a digit or Space needs Ctrl or Alt with it; F1 to F24, Pause and Scroll Lock may stand alone. Esc, or another window in front, gives up on a new key and keeps the old one. With the sound cues on, the microphone key sounds rising when he listens again and falling when he stops. On KDE the keys also stand in System Settings under Shortcuts.",
     },
 ];
 

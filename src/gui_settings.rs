@@ -41,6 +41,7 @@ pub(super) enum Tool {
     Hub,
     FeatureLab,
     Mixer,
+    Hotkeys,
     VoiceSetup,
     Missed,
 }
@@ -92,7 +93,7 @@ const fn row(group: &'static str, name: &'static str, explain: &'static str, wor
 /// The groups, in the order they stand (each is also a key that shows it alone).
 const GROUPS: [&str; 6] = ["LOOK", "SCREENS", "VOICE", "PRESENCE", "GAMES", "TOOLS"];
 
-static ROWS: [Row; 43] = [
+static ROWS: [Row; 44] = [
     row("LOOK", "Theme", "The HUD's colours: one click on a swatch changes them.", "colour color palette gold cyan red green farbe farben design", Control::Theme),
     row("LOOK", "Your own theme", "Build a theme from your own colours, name it and save it.", "theme studio custom create", Control::Open(Tool::ThemeStudio, "THEME STUDIO")),
     row(
@@ -141,6 +142,7 @@ static ROWS: [Row; 43] = [
     row("VOICE", "Sound cues", "The short sounds when a block opens or closes, a report is ready, something fails.", "sounds earcons beep töne klänge", Control::Switch(|s| s.sound_cues, |s, v| s.sound_cues = v)),
     row("VOICE", "Microphone, devices and memory", "Pick the microphone and speaker, the wake word's strictness, what he remembers.", "audio input output drawer mikrofon lautsprecher geräte", Control::Open(Tool::Devices, "OPEN")),
     row("VOICE", "Mixer", "A fader for the master volume and for every program that plays sound.", "volume loud quiet lautstärke laut leise", Control::Open(Tool::Mixer, "MIXER")),
+    row("VOICE", "Hotkeys", "His keys in every program and game: microphone, windows, console, wake.", "keyboard shortcut mute key microphone hotkey tastenkürzel taste stumm mikrofon", Control::Open(Tool::Hotkeys, "HOTKEYS")),
     row(
         "PRESENCE",
         if cfg!(windows) { "Start with Windows" } else { "Start at login" },

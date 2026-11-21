@@ -110,6 +110,11 @@ static PHRASES: LazyLock<Vec<(Regex, Value)>> = LazyLock::new(|| {
         p(r"^(?:obey\s+(?:everyone|everybody|anyone)|listen\s+to\s+(?:everyone|everybody|anyone)(?:\s+again)?|voice\s+lock\s+off|h(?:ö|oe)r\s+auf\s+alle)$", json!({"voice_lock": false})),
         // Everything in one place.
         p(r"^(?:(?:open|show)\s+(?:me\s+)?(?:the\s+|your\s+|all\s+)?settings(?:\s+panel)?|settings|einstellungen(?:\s+(?:öffnen|zeigen))?)$", json!({"settings_panel": true})),
+        // His keys in every program: the Hotkeys window.
+        p(
+            r"^(?:(?:open|show)\s+(?:me\s+)?(?:(?:your|my)\s+(?:hot\s*-?\s*keys?|global\s+keys)(?:\s+(?:window|settings|menu))?|(?:the\s+)?(?:hot\s*-?\s*keys?|global\s+keys)\s+(?:window|settings|menu)|(?:the\s+|all\s+)?global\s+keys)|hot\s*-?\s*keys?\s+(?:window|settings)|(?:change|set|pick|choose|give\s+me|make)\s+(?:a\s+|the\s+|my\s+)?(?:new\s+)?(?:mute|microphone|mic)\s+(?:hot\s*)?key|(?:change|edit)\s+(?:the\s+|your\s+|my\s+)?(?:hot\s*-?\s*keys?|global\s+keys)|(?:öffne|zeig)\s+(?:mir\s+)?(?:(?:deine|meine)\s+(?:hotkeys?|tastenkürzel)|(?:das\s+)?hotkey\s*-?\s*fenster)|hotkey\s*-?\s*fenster|(?:ändere?|leg)\s+(?:die\s+|meine\s+)?(?:stumm|mikro(?:fon)?)\s*-?\s*taste(?:\s+fest)?)$",
+            json!({"hotkeys_window": true}),
+        ),
         // What is being said, beside the corner orb or not. (Sir, 2026-11-14.)
         p(
             r"^(?:show\s+(?:me\s+)?(?:the\s+)?(?:words|text|info(?:rmation)?(?:\s+window)?)\s+(?:beside|next\s+to|by|at)\s+(?:the\s+|your\s+)?orb|(?:corner\s+)?orb\s+(?:words|text|info(?:rmation)?)\s+on|(?:the\s+)?info(?:rmation)?\s+window\s+on|zeig\s+(?:mir\s+)?(?:den\s+)?text\s+neben\s+(?:der\s+kugel|dem\s+orb))$",
@@ -295,7 +300,7 @@ pub fn is_game(process: &str) -> bool {
 
 /// The arguments that are requests of the moment, not settings (`interface::configure` names
 /// them in its summary; `apply` carries them out).
-pub const RUNTIME_KEYS: [(&str, &str); 10] = [
+pub const RUNTIME_KEYS: [(&str, &str); 11] = [
     ("start_with_system", if cfg!(windows) { "starting with Windows" } else { "starting at login" }),
     ("next_now", "what comes next"),
     ("night_now", "night mode"),
@@ -306,13 +311,14 @@ pub const RUNTIME_KEYS: [(&str, &str); 10] = [
     ("voice_setup", "voice set-up"),
     ("settings_panel", "settings panel"),
     ("windows_on_call", "his windows in front"),
+    ("hotkeys_window", "hotkeys window"),
 ];
 
 /// Arguments that have a phrase and no line in the tool's schema: the model's prompt is full
 /// (`brain::tests::the_whole_prompt_fits_the_context_window`), and these are said in words the
 /// fast path knows.
 #[cfg(test)]
-pub const UNLISTED: [&str; 10] = ["background_all_monitors", "windows_on_call", "orb_words", "desk_clock", "desk_clock_seconds", "desk_clock_12h", "desk_clock_date", "next_now", "corner_orb_size", "start_with_system"];
+pub const UNLISTED: [&str; 11] = ["background_all_monitors", "windows_on_call", "hotkeys_window", "orb_words", "desk_clock", "desk_clock_seconds", "desk_clock_12h", "desk_clock_date", "next_now", "corner_orb_size", "start_with_system"];
 
 /// How long what comes next stands beside the emblem once Sir asked for it.
 const NEXT_SHOWN: std::time::Duration = std::time::Duration::from_secs(10);
@@ -508,6 +514,9 @@ pub fn apply(args: &Value) {
     if flag(args, "windows_on_call") == Some(true) {
         crate::gui::windows_on_call();
     }
+    if flag(args, "hotkeys_window") == Some(true) {
+        crate::gui::show_hotkeys();
+    }
     if flag(args, "next_now") == Some(true) {
         *lock(&NEXT_UNTIL) = Some(std::time::Instant::now() + NEXT_SHOWN);
         crate::gui::refresh();
@@ -571,6 +580,9 @@ pub fn spoken(args: &Value) -> Option<String> {
     }
     if on("windows_on_call") == Some(true) {
         return Some("My windows, Sir, in front of the rest.".to_string());
+    }
+    if on("hotkeys_window") == Some(true) {
+        return Some("My keys, Sir. Press SET beside one, then the new key.".to_string());
     }
     if let Some(v) = on("subtitles_translate").filter(|_| on("subtitles") != Some(false)) {
         return say("Subtitles in English, Sir.", "Subtitles in the language spoken, Sir.", v);
@@ -757,6 +769,16 @@ mod tests {
             ("obey everyone", json!({"voice_lock": false})),
             ("open settings", json!({"settings_panel": true})),
             ("show me all settings", json!({"settings_panel": true})),
+            ("open the hotkeys window", json!({"hotkeys_window": true})),
+            ("show me your hot keys", json!({"hotkeys_window": true})),
+            ("hotkeys window", json!({"hotkeys_window": true})),
+            ("open my hotkey settings", json!({"hotkeys_window": true})),
+            ("change my mute key", json!({"hotkeys_window": true})),
+            ("set a new microphone hotkey", json!({"hotkeys_window": true})),
+            ("give me a mute key", json!({"hotkeys_window": true})),
+            ("zeig mir deine tastenkürzel", json!({"hotkeys_window": true})),
+            ("öffne das hotkey fenster", json!({"hotkeys_window": true})),
+            ("leg die stummtaste fest", json!({"hotkeys_window": true})),
             // 2026-11-14: the plate beside the corner orb, the desktop clock, what comes next
             // only when asked, the corner orb's size.
             ("hide the words beside the orb", json!({"orb_words": false})),

@@ -155,6 +155,15 @@ STANDBY. While Sir speaks, his voice shows as a ring of ticks round the emblem. 
 switched off in the VIEW menu. F1 (or M) mutes the microphone; the key hints at the bottom right
 can be clicked.
 
+"Open the hotkeys window" (or "change my mute key", "zeig mir die Tastenkürzel"; the settings
+panel's HOTKEYS, the admin window's tile) lists his keys that work in every program and in games:
+the microphone on and off (no key at first), his windows to the front (Ctrl+Alt+J), the console
+(Ctrl+Alt+K) and waking him from standby (Alt+J). SET, then the new key, changes one (a letter,
+digit or Space needs Ctrl or Alt; F1-F24, Pause and Scroll Lock may stand alone; a key another of
+his has is refused; Esc gives up); CLEAR takes it away; a key another program holds shows TAKEN.
+The microphone key sounds rising on and falling off (with the sound cues on). A scripted session
+takes no key.
+
 "Explain what's on my screen" (and every other look at the screen) leaves his own windows out
 of the capture, so he reads what is behind them; they stay on the monitor (Windows 10 2004 or
 later). The HUD frosts over for a moment while he looks, and a card under the emblem names what

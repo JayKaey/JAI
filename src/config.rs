@@ -309,6 +309,8 @@ pub struct JaiConfig {
     pub features: FeatureSettings,
     /// Zero-VRAM gaming standby: idle/game eviction of every model, wake hotkeys.
     pub vram_guard: crate::vram_guard::VramGuardConfig,
+    /// His keys in every program (the Hotkeys window): the microphone, his windows, the console.
+    pub hotkeys: crate::hotkeys::HotkeySettings,
     /// live layers (C1): the rain note before rain arrives and the ISS pass heads-up.
     pub live_layers: crate::live_layers::LiveLayerSettings,
 
@@ -702,6 +704,7 @@ impl Default for JaiConfig {
             acoustic: AcousticSettings::default(),
             features: FeatureSettings::default(),
             vram_guard: crate::vram_guard::VramGuardConfig::default(),
+            hotkeys: crate::hotkeys::HotkeySettings::default(),
             live_layers: crate::live_layers::LiveLayerSettings::default(), // live layers (C1)
 
             memory_db_path: env("JAI_MEMORY_DB", "jai_memory.db"),

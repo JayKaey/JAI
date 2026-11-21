@@ -37,6 +37,9 @@ mod settings_panel;
 
 #[path = "gui_mixer.rs"]
 mod mixer_view;
+/// His keys in every program, each changed by pressing the new key.
+#[path = "gui_hotkeys.rs"]
+mod hotkeys_view;
 
 #[path = "gui_accounts.rs"]
 mod accounts_view;
@@ -495,16 +498,6 @@ static WINDOWS_LIST: AtomicBool = AtomicBool::new(false);
 /// scripted session's stand-in for Sir's click on the desktop.
 static DEMO_KEY: Mutex<Option<Rect>> = Mutex::new(None);
 
-/// One of his global keys was pressed (`win32_desktop::start`): 0 his windows to the front,
-/// 1 the console to type to him.
-pub fn on_global_key(key: usize) {
-    match key {
-        0 => {
-            windows_on_call();
-        }
-        _ => set_text_console(true),
-    }
-}
 
 /// Text the console's input line takes on its next frame (the Feature Lab's `[ TRY ]`).
 static CONSOLE_PREFILL: Mutex<Option<String>> = Mutex::new(None);
@@ -674,6 +667,13 @@ pub fn show_mixer(open: bool) {
         mixer_view::close();
         request_repaint();
     }
+}
+
+/// "Open the hotkeys window".
+pub fn show_hotkeys() {
+    hotkeys_view::open();
+    show();
+    request_repaint();
 }
 
 /// Whether the view with this `configure_interface` key is still up. (The core and the console
@@ -6303,6 +6303,7 @@ impl HudApp {
                 "mobile_qr" => pairing_view::is_open(),
                 "theme_studio" => theme_studio::is_open(),
                 "mixer" => mixer_view::is_open(),
+                "hotkeys" => hotkeys_view::is_open(),
                 "screens" => self.screens_open,
                 "integrations_hub" => self.hub.open,
                 "devices" => self.drawer_open,
@@ -6334,6 +6335,7 @@ impl HudApp {
                 "mobile_qr" => pairing_view::toggle(),
                 "theme_studio" => theme_studio::close(),
                 "mixer" => mixer_view::close(),
+                "hotkeys" => hotkeys_view::close(),
                 "screens" => self.screens_open = false,
                 "integrations_hub" => self.hub.open = false,
                 "devices" => self.drawer_open = false,
@@ -6422,6 +6424,7 @@ impl HudApp {
                     Tool::Hub => self.hub.open = true,
                     Tool::FeatureLab => show_features(true),
                     Tool::Mixer => show_mixer(true),
+                    Tool::Hotkeys => show_hotkeys(),
                     Tool::VoiceSetup => crate::hud_feel::apply(&serde_json::json!({"voice_setup": true})),
                     Tool::Missed => crate::hud_feel::apply(&serde_json::json!({"missed": true})),
                 }
@@ -6451,6 +6454,7 @@ impl HudApp {
         }
         mark("mixer");
         mixer_view::show(ctx, &self.rt);
+        hotkeys_view::show(ctx, self.app.config());
         accounts_view::show(ctx);
         login_view::show(ctx, &self.rt, self.app.config());
         // The network radar, the disk map and the Earth, when open.
@@ -6601,6 +6605,7 @@ fn viewport_for_block(id: &str) -> ViewportId {
         "disk_map" => ViewportId::from_hash_of("jai_disk_map"),
         "features" => ViewportId::from_hash_of("jai_feature_lab"),
         "audio_mixer" => ViewportId::from_hash_of("jai_audio_mixer"),
+        "hotkeys" => ViewportId::from_hash_of("jai_hotkeys"),
         "theme_studio" => ViewportId::from_hash_of("jai_theme_studio"),
         "discord_audio" => ViewportId::from_hash_of("jai_discord_audio"),
         "pairing" => ViewportId::from_hash_of("jai_satellite_pairing"),

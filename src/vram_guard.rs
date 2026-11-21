@@ -263,8 +263,9 @@ fn guard() -> std::sync::MutexGuard<'static, VramGuardState> {
     GUARD.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// Starts the idle/game watchdog and the wake hotkeys. `on_flush` runs after an eviction (the
-/// brain forgets its primed prompt), `on_wake` when Sir wakes JAI (the brain primes again).
+/// Starts the idle/game watchdog (the wake keys are `hotkeys`'). `on_flush` runs after an
+/// eviction (the brain forgets its primed prompt), `on_wake` when Sir wakes JAI (the brain primes
+/// again).
 pub fn start(
     cfg: &JaiConfig,
     controls: Arc<AudioControls>,
@@ -285,8 +286,7 @@ pub fn start(
         );
     }
     rt.spawn(game_voice(Arc::clone(&controls)));
-    rt.spawn(watchdog(controls, config.clone()));
-    hotkeys::spawn(&config.hotkeys);
+    rt.spawn(watchdog(controls, config));
 }
 
 /// The morning warm-up: Sir's first word of each day is kept (minutes after midnight); ten
@@ -857,7 +857,7 @@ async fn watchdog(controls: Arc<AudioControls>, config: VramGuardConfig) {
 /// The HUD header badge: (text, hover detail, dormant).
 pub fn badge() -> (String, String, bool) {
     let g = guard();
-    let key = g.config.hotkeys.first().cloned().unwrap_or_else(|| "Alt+J".into()).to_uppercase();
+    let wake = crate::hotkeys::first(crate::hotkeys::Act::Wake).map(|key| format!("CLICK OR PRESS {} TO WAKE", key.to_uppercase())).unwrap_or_else(|| "CLICK TO WAKE".into());
     let parts = format!(
         "Whisper {} · Kokoro {} · Ollama {} MB{}",
         if g.stt_loaded { "loaded" } else { "unloaded" },
@@ -872,7 +872,7 @@ pub fn badge() -> (String, String, bool) {
         }
         VramPowerState::ZeroVramDormant => {
             let why = g.last_flush.as_ref().map(|(at, why)| format!("\nCleared {} s ago ({why}).", at.elapsed().as_secs())).unwrap_or_default();
-            (format!("VRAM: 0 MB (GAMING STANDBY — CLICK OR PRESS {key} TO WAKE)"), format!("{parts}{why}"), true)
+            (format!("VRAM: 0 MB (GAMING STANDBY — {wake})"), format!("{parts}{why}"), true)
         }
         _ => {
             let left = g.seconds_to_clear().map(|s| format!(" (AUTO-CLEAR IN {s}s)")).unwrap_or_default();
@@ -922,7 +922,8 @@ pub fn run_tool(args: &Value) -> Result<String, String> {
     match args["action"].as_str().unwrap_or("status") {
         "flush" | "clear" | "free" | "sleep" | "hibernate" => {
             flush_all_vram_now();
-            Ok("GPU cleared: the language model, Whisper and Kokoro are unloaded (0 MB VRAM). Press Alt+J, click or talk to me to wake me.".into())
+            let wake = crate::hotkeys::first(crate::hotkeys::Act::Wake).map(|key| format!("Press {key}, click")).unwrap_or_else(|| "Click".into());
+            Ok(format!("GPU cleared: the language model, Whisper and Kokoro are unloaded (0 MB VRAM). {wake} or talk to me to wake me."))
         }
         "wake" | "load" | "activate" => {
             wake("tool");
@@ -944,134 +945,6 @@ pub fn run_tool(args: &Value) -> Result<String, String> {
             (false, _) => "Game mode is off, Sir. It switches itself on when a game starts.".to_string(),
         }),
         _ => Ok(status_line()),
-    }
-}
-
-#[cfg(windows)]
-mod hotkeys {
-    use tracing::{info, warn};
-    use windows::Win32::Foundation::HWND;
-    use windows::Win32::UI::Input::KeyboardAndMouse::{RegisterHotKey, HOT_KEY_MODIFIERS, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, MOD_WIN};
-    use windows::Win32::UI::WindowsAndMessaging::{GetMessageW, MSG, WM_HOTKEY};
-
-    /// "Alt+J" → (modifiers, virtual key).
-    pub fn parse(spec: &str) -> Option<(HOT_KEY_MODIFIERS, u32)> {
-        let mut mods = HOT_KEY_MODIFIERS(0);
-        let mut key = None;
-        for part in spec.split('+').map(|p| p.trim().to_lowercase()) {
-            match part.as_str() {
-                "alt" => mods |= MOD_ALT,
-                "ctrl" | "control" | "strg" => mods |= MOD_CONTROL,
-                "shift" => mods |= MOD_SHIFT,
-                "win" | "super" | "meta" => mods |= MOD_WIN,
-                "space" => key = Some(0x20),
-                "enter" | "return" => key = Some(0x0D),
-                "home" => key = Some(0x24),
-                "end" => key = Some(0x23),
-                "insert" => key = Some(0x2D),
-                "pause" => key = Some(0x13),
-                f if f.len() >= 2 && f.starts_with('f') && f[1..].parse::<u32>().is_ok_and(|n| (1..=24).contains(&n)) => {
-                    key = f[1..].parse::<u32>().ok().map(|n| 0x6F + n);
-                }
-                c if c.len() == 1 && c.chars().all(|ch| ch.is_ascii_alphanumeric()) => {
-                    key = c.chars().next().map(|ch| ch.to_ascii_uppercase() as u32);
-                }
-                _ => return None,
-            }
-        }
-        key.map(|k| (mods, k))
-    }
-
-    /// Registers the hotkeys on a thread with its own message loop (WM_HOTKEY → wake).
-    pub fn spawn(specs: &[String]) {
-        let parsed: Vec<(String, HOT_KEY_MODIFIERS, u32)> = specs
-            .iter()
-            .filter_map(|s| match parse(s) {
-                Some((m, k)) => Some((s.clone(), m, k)),
-                None => {
-                    warn!("[VRAM] Unknown hotkey '{s}'");
-                    None
-                }
-            })
-            .collect();
-        if parsed.is_empty() {
-            return;
-        }
-        let spawned = std::thread::Builder::new().name("jai-wake-hotkey".into()).spawn(move || {
-            let mut any = false;
-            for (i, (name, mods, vk)) in parsed.iter().enumerate() {
-                // SAFETY: thread-owned hotkey (no window); the id is unique within this thread.
-                match unsafe { RegisterHotKey(HWND(0), 0x4A00 + i as i32, *mods | MOD_NOREPEAT, *vk) } {
-                    Ok(()) => {
-                        any = true;
-                        info!("[VRAM] Wake hotkey {name} registered.");
-                    }
-                    Err(e) => warn!("[VRAM] Hotkey {name} is taken by another program ({e})."),
-                }
-            }
-            if !any {
-                return;
-            }
-            let mut msg = MSG::default();
-            // SAFETY: standard message loop on this thread's own queue.
-            while unsafe { GetMessageW(&mut msg, HWND(0), 0, 0) }.as_bool() {
-                if msg.message == WM_HOTKEY {
-                    super::wake("hotkey");
-                }
-            }
-        });
-        if let Err(e) = spawned {
-            warn!("[VRAM] No hotkey thread: {e}");
-        }
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-
-        #[test]
-        fn parses_hotkeys() {
-            assert_eq!(parse("Alt+J"), Some((MOD_ALT, 'J' as u32)));
-            assert_eq!(parse("ctrl + space"), Some((MOD_CONTROL, 0x20)));
-            assert_eq!(parse("Ctrl+Shift+F9"), Some((MOD_CONTROL | MOD_SHIFT, 0x78)));
-            assert_eq!(parse("Alt+Banana"), None);
-        }
-    }
-}
-
-/// The wake keys on KDE Plasma: registered with KGlobalAccel (System Settings › Shortcuts shows
-/// them, and Sir may give them other keys there). A scripted session takes none of his keys.
-#[cfg(not(windows))]
-mod hotkeys {
-    use tracing::{info, warn};
-
-    pub fn spawn(specs: &[String]) {
-        if crate::platform::in_test_session() {
-            return;
-        }
-        let keys: Vec<(String, String, i32)> = specs
-            .iter()
-            .enumerate()
-            .filter_map(|(i, spec)| match crate::kde::qt_key(spec) {
-                Some(key) => Some((format!("wake-{i}"), format!("Wake J.A.I. ({spec})"), key)),
-                None => {
-                    warn!("[VRAM] Unknown hotkey '{spec}'");
-                    None
-                }
-            })
-            .collect();
-        if keys.is_empty() {
-            return;
-        }
-        let named: Vec<(&str, &str, i32)> = keys.iter().map(|(action, name, key)| (action.as_str(), name.as_str(), *key)).collect();
-        match crate::kde::global_keys(&named, |action| {
-            if action.starts_with("wake-") {
-                super::wake("hotkey");
-            }
-        }) {
-            Ok(()) => info!("[VRAM] Wake keys registered with KDE: {}", specs.join(", ")),
-            Err(e) => warn!("[VRAM] KDE took no wake key: {e}"),
-        }
     }
 }
 

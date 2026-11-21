@@ -104,6 +104,7 @@ mod holo_motion;
 mod holo_stage;
 mod holo_theme;
 mod holo_ui;
+mod hotkeys;
 mod hud;
 mod hud_dock;
 mod hud_board;
@@ -909,28 +910,6 @@ fn main() -> ExitCode {
             app.handle_command(hud::HudCommand::Shutdown).await;
         });
     }
-    // His two global keys (Ctrl+Alt+J: his windows to the front; Ctrl+Alt+K: the console to
-    // type to him) and the thread the mouse is followed on while he is the desktop's
-    // background. A scripted session takes no key of Sir's keyboard.
-    #[cfg(windows)]
-    if hud.is_some() {
-        const KEYS: &[(u32, u32)] = &[(0x0001 | 0x0002, 0x4A), (0x0001 | 0x0002, 0x4B)];
-        win32_desktop::start(if platform::in_test_session() { &[] } else { KEYS }, wallpaper::on_mouse, gui::on_global_key);
-    }
-    // (On KDE they are registered with Plasma, where Sir may give them other keys.)
-    #[cfg(not(windows))]
-    if hud.is_some() && !platform::in_test_session() {
-        let keys = [("windows", "His windows to the front", kde::qt_key("Ctrl+Alt+J")), ("console", "The console to type to him", kde::qt_key("Ctrl+Alt+K"))];
-        let keys: Vec<(&str, &str, i32)> = keys.into_iter().filter_map(|(action, name, key)| Some((action, name, key?))).collect();
-        let pressed = |action: &str| match action {
-            "windows" => gui::on_global_key(0),
-            "console" => gui::on_global_key(1),
-            _ => {}
-        };
-        if let Err(e) = kde::global_keys(&keys, pressed) {
-            warn!("[HUD] KDE took none of my global keys: {e}");
-        }
-    }
     if let Some(hud) = hud {
         start_mark("the window is asked for");
         // The window system wants the main thread; the HUD keeps it until JAI quits.
@@ -1254,6 +1233,8 @@ async fn start(cli: &Cli, cfg: JaiConfig) -> Started {
     });
 
     let (tray_tx, tray_rx) = tokio::sync::mpsc::unbounded_channel();
+    // His keys in every program (the microphone's goes the tray's way to the app).
+    hotkeys::start(app.config().clone(), tray_tx.clone());
     let (mic, of_tray) = (Arc::clone(&controls), app.clone());
     tray::spawn(tray_tx, move || tray::TrayState {
         mic_on: mic.mic_enabled.load(Ordering::Relaxed),
@@ -1333,6 +1314,8 @@ fn spawn_tray_handler(mut actions: UnboundedReceiver<TrayAction>, app: app::Jai,
                 TrayAction::ToggleMic => {
                     let enabled = !app.config_state().mic_enabled;
                     app.handle_command(hud::HudCommand::SetMic { enabled }).await;
+                    // (Heard in a game too, where nothing of his is seen: rising on, falling off.)
+                    tts::play_cue(if enabled { jai_voice_dsp::Earcon::Materialize } else { jai_voice_dsp::Earcon::Dismiss });
                 }
                 TrayAction::Quit => {
                     info!("[TRAY] Quit requested");

@@ -468,11 +468,11 @@ use crate::wallpaper::{Mouse, MouseKind};
 /// The thread with the message loop that the hook and the keys live on (0: not started).
 static THREAD: AtomicU32 = AtomicU32::new(0);
 static HOOKED: AtomicBool = AtomicBool::new(false);
-/// What is done with the mouse (true: the event is his alone and goes no further) and with
-/// one of his keys (its number).
-static HANDLERS: Mutex<Option<(fn(Mouse) -> bool, fn(usize))>> = Mutex::new(None);
+/// What is done with the mouse (true: the event is his alone and goes no further).
+static HANDLERS: Mutex<Option<fn(Mouse) -> bool>> = Mutex::new(None);
 const HOOK_ON: u32 = WM_APP + 71;
 const HOOK_OFF: u32 = WM_APP + 72;
+const KEYS_AGAIN: u32 = WM_APP + 73;
 
 unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if code >= 0 {
@@ -490,7 +490,7 @@ unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) 
             _ => None,
         };
         // (Never waited for: a hook that is slow is taken away by Windows.)
-        let handler = HANDLERS.try_lock().ok().and_then(|h| h.map(|(mouse, _)| mouse));
+        let handler = HANDLERS.try_lock().ok().and_then(|h| *h);
         if let (Some(kind), Some(handler)) = (kind, handler) {
             if handler(Mouse { kind, x: info.pt.x, y: info.pt.y }) {
                 return LRESULT(1);
@@ -501,37 +501,28 @@ unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) 
     unsafe { CallNextHookEx(HHOOK(0), code, wparam, lparam) }
 }
 
-/// Starts the thread his global keys and the mouse hook live on (once). `keys`: (modifiers,
-/// virtual key) of each key; `on_key` is told its number when Sir presses it; `on_mouse` gets
-/// every move and button of the mouse while the hook is on (`mouse_hook`) and says whether the
-/// event is his alone.
-pub fn start(keys: &'static [(u32, u32)], on_mouse: fn(Mouse) -> bool, on_key: fn(usize)) {
+/// Starts the thread his global keys and the mouse hook live on (once). `keys` registers his
+/// keys on it (at once, and anew on `keys_again`); `on_key` is told a key's id when Sir presses
+/// it; `on_mouse` gets every move and button of the mouse while the hook is on (`mouse_hook`)
+/// and says whether the event is his alone.
+pub fn start(on_mouse: fn(Mouse) -> bool, on_key: fn(usize), keys: fn()) {
     use windows::Win32::System::Threading::GetCurrentThreadId;
-    use windows::Win32::UI::Input::KeyboardAndMouse::{RegisterHotKey, HOT_KEY_MODIFIERS, MOD_NOREPEAT};
     if THREAD.load(Ordering::Acquire) != 0 {
         return;
     }
-    *lock(&HANDLERS) = Some((on_mouse, on_key));
+    *lock(&HANDLERS) = Some(on_mouse);
     let _ = std::thread::Builder::new().name("jai-desk".into()).spawn(move || {
         // SAFETY: a message loop on this thread: its hotkeys, and a hook installed and taken
         // away on this same thread.
         unsafe {
             THREAD.store(GetCurrentThreadId(), Ordering::Release);
-            for (i, (mods, vk)) in keys.iter().enumerate() {
-                if let Err(e) = RegisterHotKey(HWND(0), 0x4B00 + i as i32, HOT_KEY_MODIFIERS(*mods) | MOD_NOREPEAT, *vk) {
-                    tracing::warn!("[DESKTOP] One of my keys is taken by another program ({})", e.message());
-                }
-            }
+            keys();
             let mut hook: Option<HHOOK> = None;
             let mut msg = MSG::default();
             while GetMessageW(&mut msg, HWND(0), 0, 0).0 > 0 {
                 match msg.message {
-                    WM_HOTKEY => {
-                        let handler = lock(&HANDLERS).map(|(_, key)| key);
-                        if let Some(handler) = handler {
-                            handler((msg.wParam.0 as i32 - 0x4B00).max(0) as usize);
-                        }
-                    }
+                    WM_HOTKEY => on_key(msg.wParam.0),
+                    KEYS_AGAIN => keys(),
                     HOOK_ON if hook.is_none() => match SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_proc), None, 0) {
                         Ok(h) => {
                             hook = Some(h);
@@ -553,6 +544,18 @@ pub fn start(keys: &'static [(u32, u32)], on_mouse: fn(Mouse) -> bool, on_key: f
             }
         }
     });
+}
+
+/// His keys are registered anew on their thread (`start`'s `keys`): one changed, or the Hotkeys
+/// window waits for a new one.
+pub fn keys_again() {
+    let thread = THREAD.load(Ordering::Acquire);
+    if thread != 0 {
+        // SAFETY: posting a message to our own thread's queue.
+        unsafe {
+            let _ = PostThreadMessageW(thread, KEYS_AGAIN, WPARAM(0), LPARAM(0));
+        }
+    }
 }
 
 /// Follows the mouse (`true`) or lets it be (`false`). The hook costs every mouse event of the

@@ -59,6 +59,16 @@ pub fn qt_key(text: &str) -> Option<i32> {
             "shift" => 0x0200_0000,
             "win" | "super" | "meta" => 0x1000_0000,
             "space" => 0x20,
+            "enter" | "return" => 0x0100_0004,
+            "insert" => 0x0100_0006,
+            "pause" => 0x0100_0008,
+            "home" => 0x0100_0010,
+            "end" => 0x0100_0011,
+            "pageup" => 0x0100_0016,
+            "pagedown" => 0x0100_0017,
+            "scrolllock" => 0x0100_0026,
+            // (The number pad's digits: Qt's KeypadModifier with the digit.)
+            key if key.len() == 4 && key.starts_with("num") && key.as_bytes()[3].is_ascii_digit() => 0x2000_0000 | i32::from(key.as_bytes()[3]),
             key if key.len() == 1 && key.as_bytes()[0].is_ascii_alphanumeric() => key.to_ascii_uppercase().as_bytes()[0] as i32,
             key => match key.strip_prefix('f').and_then(|n| n.parse::<i32>().ok()) {
                 Some(n @ 1..=24) => 0x0100_0030 + n - 1,
@@ -69,21 +79,33 @@ pub fn qt_key(text: &str) -> Option<i32> {
     (code & 0x01FF_FFFF != 0).then_some(code)
 }
 
-/// Registers J.A.I.'s global keys with KDE (they then show in System Settings › Shortcuts, where
-/// Sir may give them other keys) and calls `pressed` with the action's name each time its keys
-/// are pressed, on a thread of its own. `keys` are (action, its name in the settings, Qt key).
-pub fn global_keys(keys: &[(&str, &str, i32)], pressed: impl Fn(&str) + Send + 'static) -> Result<(), String> {
-    const API: &str = "org.kde.KGlobalAccel";
-    for (action, friendly, key) in keys {
-        let id = ["jai", *action, "J.A.I.", *friendly];
-        call::<_, ()>(KGLOBALACCEL, "/kglobalaccel", API, "doRegister", &(id,))?;
-        let sequence: Vec<(Vec<i32>,)> = vec![(vec![*key],)];
-        // (IsDefault, then SetPresent: a key Sir chose in the settings stays his.)
-        for flags in [8u32, 2] {
-            call::<_, Vec<(Vec<i32>,)>>(KGLOBALACCEL, "/kglobalaccel", API, "setShortcutKeys", &(id, &sequence, flags))?;
-        }
+const ACCEL_API: &str = "org.kde.KGlobalAccel";
+
+/// Registers J.A.I.'s global key `action` with KDE (it then shows in System Settings › Shortcuts,
+/// where Sir may give it other keys too) with the keys `codes` (Qt numbers; none: no key), by
+/// KGlobalAccel's `flags` in turn, and says whether KDE gave them (it refuses a key another
+/// program has).
+pub fn set_global_key(action: &str, friendly: &str, codes: &[i32], flags: &[u32]) -> Result<bool, String> {
+    let id = ["jai", action, "J.A.I.", friendly];
+    call::<_, ()>(KGLOBALACCEL, "/kglobalaccel", ACCEL_API, "doRegister", &(id,))?;
+    let sequence: Vec<(Vec<i32>,)> = codes.iter().map(|code| (vec![*code],)).collect();
+    let mut given = Vec::new();
+    for flag in flags {
+        given = call::<_, Vec<(Vec<i32>,)>>(KGLOBALACCEL, "/kglobalaccel", ACCEL_API, "setShortcutKeys", &(id, &sequence, *flag))?;
     }
-    let component: OwnedObjectPath = call(KGLOBALACCEL, "/kglobalaccel", API, "getComponent", &("jai",))?;
+    Ok(codes.is_empty() || !given.is_empty())
+}
+
+/// Holds back every global key (while the Hotkeys window waits for a new one, as KDE's own
+/// key fields do), or gives them back.
+pub fn block_global_keys(block: bool) -> Result<(), String> {
+    call::<_, ()>(KGLOBALACCEL, "/kglobalaccel", ACCEL_API, "blockGlobalShortcuts", &(block,))
+}
+
+/// Calls `pressed` with the action's name each time one of J.A.I.'s global keys is pressed
+/// (`set_global_key` registered them first), on a thread of its own.
+pub fn listen_global_keys(pressed: impl Fn(&str) + Send + 'static) -> Result<(), String> {
+    let component: OwnedObjectPath = call(KGLOBALACCEL, "/kglobalaccel", ACCEL_API, "getComponent", &("jai",))?;
     let proxy = Proxy::new(bus()?, KGLOBALACCEL, component, "org.kde.kglobalaccel.Component").map_err(|e| e.to_string())?;
     std::thread::Builder::new()
         .name("jai-keys".into())
@@ -248,6 +270,15 @@ mod tests {
         assert_eq!(qt_key("ctrl + shift + f9"), Some(0x0600_0000 | 0x0100_0038));
         assert_eq!(qt_key("Alt"), None, "a modifier alone is no key");
         assert_eq!(qt_key("Alt+Banana"), None);
+        assert_eq!(qt_key("Pause"), Some(0x0100_0008));
+        assert_eq!(qt_key("Alt+PageDown"), Some(0x0800_0000 | 0x0100_0017));
+        assert_eq!(qt_key("Ctrl+Num5"), Some(0x0400_0000 | 0x2000_0000 | 0x35));
+        // Every key the Hotkeys window can keep has its number here.
+        for vk in 0..=0xFF {
+            if let Some(name) = crate::hotkeys::spec(crate::hotkeys::CTRL, vk) {
+                assert!(qt_key(&name).is_some(), "{name}");
+            }
+        }
     }
 
     #[test]

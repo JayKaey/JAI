@@ -591,7 +591,7 @@ fn view_name(o: &str) -> Option<String> {
     if says_window && !own && crate::hud_dock::find_open(&name).is_none() {
         return None;
     }
-    let known = matches!(name.as_str(), "feature lab" | "features" | "theme studio" | "mixer" | "audio mixer" | "volume mixer" | "telemetry" | "system telemetry" | "simulation lab" | "sim lab" | "plotter" | "qr code" | "schedule" | "calendar" | "stundenplan" | "kalender")
+    let known = matches!(name.as_str(), "feature lab" | "features" | "theme studio" | "mixer" | "audio mixer" | "volume mixer" | "hotkeys" | "hot keys" | "hotkey" | "hotkey-fenster" | "telemetry" | "system telemetry" | "simulation lab" | "sim lab" | "plotter" | "qr code" | "schedule" | "calendar" | "stundenplan" | "kalender")
         || own
         || crate::hud_dock::find_open(&name).is_some();
     known.then_some(name)

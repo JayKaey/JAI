@@ -402,6 +402,9 @@ pub const CASES: &[Case] = &[
     c("mixer block", 1, "Close the mixer.", "hud_board", r#"{"action": "close", "target": "mixer"}"#),
     c("mixer block", 2, "Zeig den Mixer.", "configure_interface", r#"{"mixer_view": true}"#),
     c("mixer block", 3, "show the volume mixer", "configure_interface", r#"{"mixer_view": true}"#),
+    c("hotkeys window", 1, "Open the hotkeys window.", "configure_interface", r#"{"hotkeys_window": true}"#),
+    c("hotkeys window", 2, "Zeig mir deine Tastenkürzel.", "configure_interface", r#"{"hotkeys_window": true}"#),
+    c("hotkeys window", 3, "change my mute key", "configure_interface", r#"{"hotkeys_window": true}"#),
     c("theme studio", 1, "Open the theme studio.", "configure_interface", r#"{"theme_studio": true}"#),
     c("theme studio", 2, "Erstelle ein neues Theme.", "configure_interface", r#"{"theme_studio": true}"#),
     c("theme studio", 3, "create a new theme", "configure_interface", r#"{"theme_studio": true}"#),
@@ -522,6 +525,7 @@ pub const COMPOUNDS: &[Compound] = &[
     Compound { category: "pictures", say: "Show me a picture of the Eiffel Tower and pause the music.", wants: &[("show_image", r#"{"query": "eiffel tower"}"#), PAUSE], needs: Needs::Nothing },
     Compound { category: "cameras", say: "Show me a live camera from New York and move the orb to the top right.", wants: &[("show_live_camera", r#"{"place": "new york"}"#), ORB_TOP_RIGHT], needs: Needs::Nothing },
     Compound { category: "street view", say: "Show me street view of the Eiffel Tower and pause the music.", wants: &[("show_street_view", r#"{"place": "eiffel tower"}"#), PAUSE], needs: Needs::Nothing },
+    Compound { category: "hotkeys window", say: "Open the hotkeys window and pause the music.", wants: &[("configure_interface", r#"{"hotkeys_window": true}"#), PAUSE], needs: Needs::Nothing },
 ];
 
 /// The categories of matrix A, in the table's order.
