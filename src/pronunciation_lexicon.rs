@@ -138,7 +138,12 @@ static NAMES: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| {
         (r"\bAPIs\b", "A P Is"),
         (r"\bAPI\b", "A P I"),
         (r"\bUI\b", "U I"),
-        (r"\bFPS\b", "F P S"),
+        (r"(?i)\bfps\b", "F P S"),
+        (r"\bOLED\b", "O L E D"),
+        (r"\bLED\b", "L E D"),
+        (r"\bCLI\b", "C L I"),
+        (r"\bIDE\b", "I D E"),
+        (r"\bPh\.?D\.?", "P H D"),
         (r"\bLOC\b", "lines of code"),
         (r"\bSSD\b", "S S D"),
         (r"\bUSB\b", "U S B"),
@@ -177,11 +182,16 @@ fn hardware(s: &str) -> String {
         };
         format!("{} {}{suffix}", spaced_letters(&c[1]), pair_words(n))
     });
-    RESOLUTION.replace_all(&s, |c: &Captures| format!("{} P", pair_words(c[1].parse().unwrap_or(0)))).into_owned()
+    let s = RESOLUTION.replace_all(&s, |c: &Captures| format!("{} P", pair_words(c[1].parse().unwrap_or(0))));
+    SCREEN_SIZE.replace_all(&s, |c: &Captures| format!("{} by {}", pair_words(c[1].parse().unwrap_or(0)), pair_words(c[2].parse().unwrap_or(0)))).into_owned()
 }
 
+/// "1920x1080" → "nineteen twenty by ten eighty".
+static SCREEN_SIZE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\b(\d{3,4})\s?[x×]\s?(\d{3,4})\b").unwrap());
+
 static TIME_COLON: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\b([01]?\d|2[0-3]):([0-5]\d)\b").unwrap());
-static TIME_H: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\b(\d{1,2})h([0-5]\d)?\b").unwrap());
+static TIME_MERIDIEM: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\b(1[0-2]|0?[1-9])(?::([0-5]\d))?\s?([ap])(?:m\b|\.m\b\.?)").unwrap());
+static TIME_H: LazyLock<Regex>= LazyLock::new(|| Regex::new(r"\b(\d{1,2})h([0-5]\d)?\b").unwrap());
 
 /// The word before a match.
 fn word_before(s: &str, at: usize) -> String {
@@ -190,8 +200,21 @@ fn word_before(s: &str, at: usize) -> String {
 
 /// "15:00" / "15h" → "three P M"; "07:50" → "seven fifty A M"; "for 8h" → "8 hours".
 fn times(s: &str) -> String {
+    // "3 pm", "7:05 a.m.": the 12-hour clock as it is written (a sentence-ending stop stays).
+    let s = TIME_MERIDIEM.replace_all(s, |c: &Captures| {
+        let whole = c.get(0).expect("whole match");
+        let (h, m): (u32, u32) = (c[1].parse().unwrap_or(0), c.get(2).and_then(|m| m.as_str().parse().ok()).unwrap_or(0));
+        let h24 = match (c[3].to_lowercase().as_str(), h) {
+            ("a", 12) => 0,
+            ("p", 1..=11) => h + 12,
+            _ => h,
+        };
+        let rest = s[whole.end()..].trim_start();
+        let stop = whole.as_str().ends_with('.') && (rest.is_empty() || rest.starts_with(char::is_uppercase));
+        format!("{}{}", clock(h24, m), if stop { "." } else { "" })
+    }).into_owned();
     let s = TIME_COLON
-        .replace_all(s, |c: &Captures| {
+        .replace_all(&s, |c: &Captures| {
             let m = c.get(0).expect("whole match");
             // "1:00:00" and "10:30:15" are durations, "3:1" never matched.
             let before = s[..m.start()].chars().last();
@@ -246,6 +269,12 @@ fn identifiers(s: &str) -> String {
 
 static UNITS: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| {
     [
+        (r"(\d)\s?km/h\b", "$1 kilometres per hour"),
+        (r"(\d)\s?mph\b", "$1 miles per hour"),
+        (r"(\d)\s?MB/s\b", "$1 megabytes per second"),
+        (r"(\d)\s?GB/s\b", "$1 gigabytes per second"),
+        (r"(\d)\s?M(?:bps|bit/s)\b", "$1 megabits per second"),
+        (r"(\d)\s?G(?:bps|bit/s)\b", "$1 gigabits per second"),
         (r"(\d)\s?kHz\b", "$1 kilohertz"),
         (r"\bkHz\b", "kilohertz"),
         (r"(\d)\s?MHz\b", "$1 megahertz"),
@@ -266,12 +295,19 @@ static UNITS: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| {
         (r"\bGB\b", "gigabytes"),
         (r"\bMB\b", "megabytes"),
         (r"\bKB\b", "kilobytes"),
+        (r"(\d)\s?km\b", "$1 kilometres"),
+        (r"(\d)\s?kg\b", "$1 kilograms"),
+        (r"(\d)\s?cm\b", "$1 centimetres"),
+        (r"(\d)\s?mm\b", "$1 millimetres"),
+        (r"(\d)\s?kWh\b", "$1 kilowatt hours"),
+        (r"(\d)\s?kW\b", "$1 kilowatts"),
+        (r"(\d)\s?mAh\b", "$1 milliamp hours"),
+        (r"(\d)\s?min\b", "$1 minutes"),
+        (r"(\d)\s?secs?\b", "$1 seconds"),
+        (r"(\d)\s?hrs?\b", "$1 hours"),
         (r"\s?°\s?C\b", " degrees Celsius"),
         (r"(\d)\s?%", "$1 percent"),
         (r"\s?%", " percent"),
-        (r"(\d+(?:[.,]\d+)?)\s?(?:EUR\b|€)", "$1 Euros"),
-        (r"(?:\bEUR|€)\s?(\d+(?:[.,]\d+)?)", "$1 Euros"),
-        (r"\bEUR\b|€", "Euros"),
         (r"\s*&\s*", " and "),
         (r"\band/or\b", "and or"),
     ]
@@ -327,11 +363,18 @@ fn homographs(s: &str) -> String {
     for m in LIVE.find_iter(s) {
         let before = word_before(s, m.start()).replace('’', "'");
         let after = s[m.end()..].trim_start().to_lowercase();
+        // ("Jürgen Schröder live on Hauptstraße": a name before it is a subject.)
+        let prev: Vec<&str> = s[..m.start()].split_whitespace().rev().take(2).collect();
+        let named = prev.len() == 2 && prev[0].starts_with(char::is_uppercase) && !prev[1].ends_with(['.', '!', '?']);
         let verb = LIVE_AS_VERB_AFTER.contains(&before.as_str()) || ["in a ", "in an ", "in the "].iter().any(|p| after.starts_with(p));
+        // eSpeak reads a "live" with no pronoun before it as the adjective: these it must be told ("liv").
+        let said_liv = !verb && (["near ", "with ", "here", "there", "together", "alone", "abroad", "nearby"].iter().any(|p| after.starts_with(p)) || named && after.starts_with("on "));
         out.push_str(&s[last..m.start()]);
         let word = m.as_str();
         out.push_str(if verb {
             word
+        } else if said_liv {
+            "liv"
         } else if word.chars().next().is_some_and(char::is_uppercase) && word.chars().skip(1).all(char::is_lowercase) {
             "Lyve"
         } else {
@@ -340,8 +383,41 @@ fn homographs(s: &str) -> String {
         last = m.end();
     }
     out.push_str(&s[last..]);
-    READ_PAST.replace_all(&out, "${1}${2} red").into_owned()
+    let out = READ_PAST.replace_all(&out, "${1}${2} red").into_owned();
+    // "I read it yesterday": a time in the past puts "read" in the past ("Did you read it yesterday?" stays).
+    let out = READ_THEN
+        .replace_all(&out, |c: &Captures| {
+            let whole = c.get(0).expect("whole match");
+            let from = out[..whole.start()].rfind(['.', '!', '?']).map_or(0, |i| i + 1);
+            let to = out[whole.end()..].find(['.', '!', '?']).map_or(out.len(), |i| whole.end() + i);
+            let past = READ_TIMES.iter().any(|t| out[from..to].to_lowercase().contains(t));
+            if past && !READ_AUX.contains(&word_before(&out, whole.start()).as_str()) { format!("{} red", &c[1]) } else { whole.as_str().to_string() }
+        })
+        .into_owned();
+    // "Close the door", "Please record it": the verb, which eSpeak reads as the adjective / the noun at a sentence's start.
+    let out = IMPERATIVE
+        .replace_all(&out, |c: &Captures| {
+            let verb = match c[2].to_lowercase().as_str() {
+                "close" => "cloze",
+                "wind" => "wined",
+                _ => "rekord",
+            };
+            let cap = c[2].starts_with(char::is_uppercase);
+            format!("{}{}{}", &c[1], if cap { verb[..1].to_uppercase() + &verb[1..] } else { verb.to_string() }, &c[3])
+        })
+        .into_owned();
+    // The metal: "lead pipes" (the noun "lead" of "take the lead" is /liːd/).
+    LEAD_METAL.replace_all(&out, |c: &Captures| format!("{}{}", if c[1].starts_with(char::is_uppercase) { "Led" } else { "led" }, &c[2])).into_owned()
 }
+
+static READ_THEN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\b(I|we|you|he|she|they|who)\s+read\b").unwrap());
+const READ_TIMES: [&str; 7] = ["yesterday", "last night", "last week", "last month", "last year", " ago", "the other day"];
+const READ_AUX: [&str; 12] = ["did", "didn't", "do", "don't", "does", "doesn't", "will", "would", "can", "could", "should", "to"];
+static IMPERATIVE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)((?:^|[.!?]\s+|\b(?:please|and|then|just)[,]?\s+))(close|record|wind)(\s+(?:the|it|all|this|that|your|my|every|a|an|these|those|them|any|both|me|us|everything|another)\b)").unwrap()
+});
+static LEAD_METAL: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)\b(lead)(\s+(?:pipes?|paint|poisoning|shot|weights?|acid|batter(?:y|ies)|free|crystal|glass|sheets?|plates?|apron|shielding)\b)").unwrap());
 
 /// A sentence each, with what ends it and the space after.
 static SENTENCE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?s).+?(?:[.!?]+(?:\s+|$)|$)").unwrap());
@@ -444,16 +520,131 @@ fn titles_with(learnt: &[(String, String)], s: &str) -> String {
     s
 }
 
+const MONTHS: [&str; 12] = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+
+/// 21 → "21st" (eSpeak reads it "twenty first").
+fn ordinal(n: u32) -> String {
+    let suffix = match (n % 100, n % 10) {
+        (11..=13, _) => "th",
+        (_, 1) => "st",
+        (_, 2) => "nd",
+        (_, 3) => "rd",
+        _ => "th",
+    };
+    format!("{n}{suffix}")
+}
+
+/// A year the way it is said: 1999 → "nineteen ninety nine", 2026 → "twenty twenty six", 2005 → "two thousand and five".
+fn year_words(y: u32) -> String {
+    match y {
+        2000 => "two thousand".into(),
+        2001..=2009 => format!("two thousand and {}", ONES[(y - 2000) as usize]),
+        _ => pair_words(y),
+    }
+}
+
+/// The month a three-letter (or "Sept") abbreviation names.
+fn month_of(abbr: &str) -> Option<&'static str> {
+    let key = abbr.to_lowercase();
+    MONTHS.iter().find(|m| m.to_lowercase().starts_with(&key[..3.min(key.len())])).copied()
+}
+
+const MONTH_ABBR: &str = "Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sept?|Oct|Nov|Dec";
+static DATE_DOTTED: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\b(\d{1,2})\.(\d{1,2})\.(\d{4})\b").unwrap());
+static DATE_ISO: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\b(\d{4})-(\d{2})-(\d{2})\b").unwrap());
+static MONTH_DAY: LazyLock<Regex> = LazyLock::new(|| Regex::new(&format!(r"\b({MONTH_ABBR})\.?\s+(\d{{1,2}})(?:st|nd|rd|th)?\b")).unwrap());
+static DAY_MONTH: LazyLock<Regex> = LazyLock::new(|| Regex::new(&format!(r"\b(\d{{1,2}})(?:st|nd|rd|th)?\s+({MONTH_ABBR})\b\.?")).unwrap());
+static NUMBER_RANGE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\b(\d{1,4})\s?[-–]\s?(\d{1,4})\b").unwrap());
+static YEAR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\b(1[1-9]\d\d|20\d\d)\b").unwrap());
+/// Words that put a four-digit number in the calendar ("in 1999", "since 2026", "from 1990 to 2000").
+const YEAR_AFTER: [&str; 12] = ["in", "since", "year", "until", "till", "during", "circa", "from", "to", "by", "before", "after"];
+/// What follows a four-digit number that is a quantity, not a year ("in 1500 ms").
+const NOT_A_YEAR_BEFORE: [&str; 20] = [
+    "ms", "mb", "gb", "kb", "tb", "hz", "khz", "mhz", "ghz", "fps", "p", "w", "kg", "km", "users", "items", "files", "times", "people", "words",
+];
+
+fn full_date(day: &str, month: &str, year: &str) -> Option<String> {
+    let (d, m): (u32, usize) = (day.parse().ok()?, month.parse().ok()?);
+    ((1..=31).contains(&d) && (1..=12).contains(&m)).then(|| format!("the {} of {} {year}", ordinal(d), MONTHS[m - 1]))
+}
+
+/// "21.11.2026" → "the 21st of November 2026", "Nov 21" → "November 21st", "in 1999" → "in nineteen ninety nine",
+/// "3-5" → "3 to 5". English sentences only (a German sentence keeps its digits for the German voice).
+fn dates(s: &str) -> String {
+    let s = DATE_DOTTED.replace_all(s, |c: &Captures| full_date(&c[1], &c[2], &c[3]).unwrap_or_else(|| c[0].to_string()));
+    let s = DATE_ISO.replace_all(&s, |c: &Captures| full_date(&c[3], &c[2], &c[1]).unwrap_or_else(|| c[0].to_string()));
+    let s = MONTH_DAY.replace_all(&s, |c: &Captures| match (month_of(&c[1]), c[2].parse::<u32>()) {
+        (Some(month), Ok(d)) if (1..=31).contains(&d) => format!("{month} {}", ordinal(d)),
+        _ => c[0].to_string(),
+    });
+    let s = DAY_MONTH
+        .replace_all(&s, |c: &Captures| match (month_of(&c[2]), c[1].parse::<u32>()) {
+            (Some(month), Ok(d)) if (1..=31).contains(&d) => format!("{} {month}", ordinal(d)),
+            _ => c[0].to_string(),
+        })
+        .into_owned();
+    let s = NUMBER_RANGE.replace_all(&s, "$1 to $2").into_owned();
+    YEAR.replace_all(&s, |c: &Captures| {
+        let at = c.get(0).expect("whole match");
+        let before = word_before(&s, at.start());
+        let after = s[at.end()..].split_whitespace().next().unwrap_or("").trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase();
+        // ("in 1999 and 2026": the second year follows the first.)
+        let chained = matches!(before.as_str(), "and" | "or") && s[..at.start()].split_whitespace().rev().nth(1).and_then(|w| w.trim_matches(|c: char| !c.is_ascii_digit()).parse::<u32>().ok()).is_some_and(|y| (1100..=2099).contains(&y));
+        let dated = chained
+            || YEAR_AFTER.contains(&before.as_str())
+            || MONTHS.iter().any(|m| m.to_lowercase() == before)
+            || before.starts_with(|c: char| c.is_ascii_digit()) && ["st", "nd", "rd", "th"].iter().any(|x| before.ends_with(x));
+        if dated && !NOT_A_YEAR_BEFORE.contains(&after.as_str()) { year_words(c[1].parse().unwrap_or(0)) } else { c[0].to_string() }
+    })
+    .into_owned()
+}
+
+const AMOUNT: &str = r"\d+(?:,\d{3})*(?:[.,]\d+)?";
+const CURRENCY: &str = r"[$£€]|\b(?:EUR|USD|GBP)\b";
+static MONEY: LazyLock<Regex> = LazyLock::new(|| Regex::new(&format!(r"(?:({CURRENCY})\s?({AMOUNT}))|(?:({AMOUNT})\s?({CURRENCY}))")).unwrap());
+static LONE_CURRENCY: LazyLock<Regex> = LazyLock::new(|| Regex::new(CURRENCY).unwrap());
+
+/// A sum as it is said ("$3.50" → "3 dollars and 50 cents"); without an amount just the currency's name.
+/// (The euro is respelled: eSpeak reads "euro" as "yaw-roh".)
+fn spoken_money(symbol: &str, amount: &str) -> String {
+    let (one, many, cents) = match symbol {
+        "$" | "USD" => ("dollar", "dollars", "cents"),
+        "£" | "GBP" => ("pound", "pounds", "pence"),
+        _ => ("ewro", "ewros", "cents"),
+    };
+    if amount.is_empty() {
+        return many.to_string();
+    }
+    let (major, minor) = match amount.rsplit_once(['.', ',']) {
+        Some((m, f)) if f.len() <= 2 => (m, f.parse::<u32>().unwrap_or(0) * if f.len() == 1 { 10 } else { 1 }),
+        _ => (amount, 0),
+    };
+    match (major, minor) {
+        ("0", c) if c > 0 => format!("{c} {cents}"),
+        (m, 0) => format!("{m} {}", if m == "1" { one } else { many }),
+        (m, c) => format!("{m} {} and {c} {cents}", if m == "1" { one } else { many }),
+    }
+}
+
+/// "$3.50", "5€", "30 EUR", "£2" in words.
+fn money(s: &str) -> String {
+    let s = MONEY.replace_all(s, |c: &Captures| match (c.get(1), c.get(2)) {
+        (Some(symbol), Some(amount)) => spoken_money(symbol.as_str(), amount.as_str()),
+        _ => spoken_money(&c[4], &c[3]),
+    });
+    LONE_CURRENCY.replace_all(&s, |c: &Captures| spoken_money(&c[0], "")).into_owned()
+}
+
 impl PronunciationLexicon {
     /// The text as the voice should say it.
     pub fn normalize_for_speech(text: &str) -> String {
         // Times and units follow the language of their sentence.
-        let text: String = SENTENCE.find_iter(text).map(|m| if crate::phonemizer::sentence_is_german(m.as_str()) { german(m.as_str()) } else { m.as_str().to_string() }).collect();
+        let text: String = SENTENCE.find_iter(text).map(|m| if crate::phonemizer::sentence_is_german(m.as_str()) { german(m.as_str()) } else { dates(m.as_str()) }).collect();
         let mut s = homographs(&paths(&taught(&titles(&text))));
         for (re, rep) in NAMES.iter() {
             s = re.replace_all(&s, *rep).into_owned();
         }
-        s = hardware(&s);
+        s = money(&hardware(&s));
         s = times(&s);
         s = identifiers(&s);
         for (re, rep) in UNITS.iter() {
@@ -467,10 +658,17 @@ impl PronunciationLexicon {
 /// Places and school words the phonemizer must read in German ("Freiburg", "Gymnasium",
 /// "Oberstufe"). Sir's own town is not written here (no private data in the code): it comes
 /// from his home (`home_reads_german`), the towns round it from their German endings
-/// (`phonemizer::is_german_word`).
-const GERMAN_PLACES_AND_TERMS: [&str; 22] = [
+/// (`phonemizer::is_german_word`). Surnames and first names without an umlaut are here too: an
+/// English reading of "Meyer" or "Wolfgang" is wrong in a German name.
+const GERMAN_PLACES_AND_TERMS: &[&str] = &[
     "freiburg", "karlsruhe", "stuttgart", "münchen", "muenchen", "köln", "koeln", "schwarzwald", "württemberg", "gymnasium", "oberstufe", "kursstufe",
     "mündlich", "schriftlich", "lehrerzimmer", "mensa", "aula", "sekretariat", "referat", "notenschnitt", "deutschprobeklausur", "probeklausur",
+    "berlin", "hamburg", "frankfurt", "dresden", "leipzig", "heidelberg", "hannover", "bremen", "dortmund", "essen", "bonn", "mannheim", "augsburg",
+    "wiesbaden", "mainz", "kassel", "ulm", "konstanz", "potsdam", "rostock", "kiel", "erfurt", "salzburg", "wien", "bern", "basel", "innsbruck", "graz",
+    "linz", "nuernberg", "wuerzburg", "dusseldorf", "duesseldorf", "zuerich", "luebeck", "deutschland", "bayern", "sachsen", "hessen", "schweiz",
+    "brandenburg", "niedersachsen", "westfalen", "bundesliga", "autobahn", "oktoberfest",
+    "meyer", "meier", "maier", "mayer", "becker", "weber", "wagner", "fischer", "richter", "bauer", "werner", "schulz", "schulze", "schubert", "schuster",
+    "klaus", "wolfgang", "dieter", "helmut", "heinz", "hans", "gerhard", "ulrich", "friedrich", "heinrich", "matthias",
 ];
 
 pub fn is_german_term(key: &str) -> bool {
@@ -553,7 +751,7 @@ mod tests {
         assert_eq!(say("Die Stunde beginnt um 9:15 und kostet 5€ & mehr."), "Die Stunde beginnt um Viertel nach 9 und kostet 5 Euro und mehr.");
         assert_eq!(say("Lunch at 12:30. Der Termin ist um 14:20."), "Lunch at half past twelve P M. Der Termin ist um 14 Uhr 20.");
         assert_eq!(say("it took 8h and 1:00:00 total"), "it took 8 hours and 1:00:00 total");
-        assert_eq!(say("22°C, 85% load, 30 EUR, 5€ & tips"), "22 degrees Celsius, 85 percent load, 30 Euros, 5 Euros and tips");
+        assert_eq!(say("22°C, 85% load, 30 EUR, 5€ & tips"), "22 degrees Celsius, 85 percent load, 30 ewros, 5 ewros and tips");
         assert_eq!(say("read/write access, 25 Wh/kg"), "read or write access, 25 Wh/kg");
         assert_eq!(clock(0, 5), "twelve oh five A M");
         assert_eq!(pair_words(1905), "nineteen oh five");

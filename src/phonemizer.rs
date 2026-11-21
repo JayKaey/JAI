@@ -366,11 +366,11 @@ fn is_german_word(word: &str) -> bool {
         return true;
     }
     let capital = bare.chars().next().is_some_and(char::is_uppercase);
-    let compound = ["klausur", "arbeit", "unterricht", "stunde", "plan", "kurs", "termin", "schule", "lehrer"].iter().any(|tail| key.len() > tail.len() + 3 && key.ends_with(tail));
+    let compound = ["klausur", "arbeit", "unterricht", "stunde", "plan", "kurs", "termin", "schule", "lehrer", "straße", "strasse", "platz"].iter().any(|tail| key.len() > tail.len() + 3 && key.ends_with(tail));
     let morphology = capital && key.chars().count() >= 7 && ["ung", "heit", "keit", "schaft"].iter().any(|s| key.ends_with(s));
     let name = capital && (key.starts_with("sch") && key.chars().nth(3).is_some_and(|c| "lmnrw".contains(c)) || key.ends_with("mann") && key.len() > 5);
     // German towns by their endings ("Musterheim", "Offenbach", "Tübingen", "Neudorf").
-    let town = capital && key.chars().count() >= 7 && ["heim", "bach", "ingen", "hausen", "dorf", "burg"].iter().any(|s| key.ends_with(s));
+    let town = capital && key.chars().count() >= 7 && ["heim", "bach", "ingen", "hausen", "dorf", "burg", "stadt", "furt"].iter().any(|s| key.ends_with(s));
     (compound && capital) || morphology || name || town
 }
 
@@ -381,8 +381,10 @@ pub fn sentence_is_german(text: &str) -> bool {
     if words.is_empty() {
         return false;
     }
-    let strong = words.iter().filter(|w| GERMAN_STRONG.contains(&w.as_str()) || has_umlaut(w)).count();
-    let weak = words.iter().filter(|w| GERMAN_WEAK.contains(&w.as_str())).count();
+    // (An umlaut counts for the share, not as a German word: "Herr Müller and Jürgen Schröder live in
+    // München" is an English sentence with German names.)
+    let strong = words.iter().filter(|w| GERMAN_STRONG.contains(&w.as_str())).count();
+    let weak = words.iter().filter(|w| GERMAN_WEAK.contains(&w.as_str()) || has_umlaut(w) && !GERMAN_STRONG.contains(&w.as_str())).count();
     let terms = words.iter().filter(|w| GERMAN_TERMS.contains(&w.as_str())).count();
     let share = (strong + weak + terms) as f32 / words.len() as f32;
     (strong >= 2 && share >= 0.3) || (strong >= 1 && share >= 0.5 && words.len() >= 3)
@@ -557,11 +559,17 @@ fn postprocess_en(ipa: &str) -> String {
 /// non-syllabic marks dropped.
 fn postprocess_de(ipa: &str) -> String {
     let s = merge(&LANG_SWITCH.replace_all(ipa, ""), "^", &MERGED);
-    let s: String = s
-        .chars()
-        .filter(|c| !matches!(c, '^' | '\u{32F}' | '\u{361}' | '\u{35C}'))
-        .map(|c| match c {
-            'r' => 'ʁ',
+    let chars: Vec<char> = s.chars().filter(|c| !matches!(c, '^' | '\u{32F}' | '\u{361}' | '\u{35C}')).collect();
+    let vowel = |c: Option<&char>| c.is_some_and(|c| "aeiouyɑɐɛɜɪɔøœʊəɒæAIWYQ".contains(*c));
+    let s: String = chars
+        .iter()
+        .enumerate()
+        .map(|(i, &c)| match c {
+            // eSpeak's German r: after a vowel and not before one ("Herr", "Nürnberg") it is the
+            // vowel ɐ Germans say there, anywhere else the uvular ʁ (never the tap).
+            'r' | 'ɾ' if (i > 0 && (vowel(chars.get(i - 1)) || chars[i - 1] == 'ː')) && !vowel(chars.get(i + 1)) && chars.get(i + 1).is_none_or(|n| !matches!(n, 'ˈ' | 'ˌ')) => 'ɐ',
+            'r' | 'ɾ' => 'ʁ',
+            'ɜ' => 'ɐ',
             'ʏ' => 'y',
             'ʲ' => 'j',
             'ɬ' => 'l',
@@ -717,7 +725,9 @@ mod tests {
         assert_eq!(unmerge("ɹˈIt əwˈA, ʤˈɑːvɪs bˈɒtᵊl"), "ɹˈaɪt əwˈeɪ, dʒˈɑːvɪs bˈɒtəl");
         // German keeps its own sounds: uvular r, "ach" and "ich", and ʏ as y.
         assert_eq!(postprocess_de("rˈʏkən bˈax ɪç t^sˈa^ɪt"), "ʁˈykən bˈax ɪç ʦˈIt");
-        assert_eq!(postprocess_de("(de)ʃtɾˈɑːsə"), "ʃtɾˈɑːsə");
+        // The tap is no German sound: ʁ before a vowel, the vowel ɐ after one ("Herr", "Nürnberg").
+        assert_eq!(postprocess_de("(de)ʃtɾˈɑːsə"), "ʃtʁˈɑːsə");
+        assert_eq!(postprocess_de("hˈɛɾ mˈylɜ nˈyɾnbɛɾk ˈeːɾə"), "hˈɛɐ mˈylɐ nˈyɐnbɛɐk ˈeːʁə");
     }
 
     #[test]
@@ -749,9 +759,129 @@ mod tests {
         assert!(ipa.contains("spˈɒtɪfaɪ") && ipa.ends_with('.'), "{ipa}");
     }
 
+    /// One library for every test, one test at a time: libespeak-ng is not thread-safe.
+    fn shared() -> std::sync::MutexGuard<'static, Phonemizer> {
+        static P: LazyLock<std::sync::Mutex<Phonemizer>> = LazyLock::new(|| std::sync::Mutex::new(Phonemizer::new(None)));
+        P.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// The real pipeline, as `tts` runs a clause: the lexicon (and units), then the phonemizer.
+    fn said(text: &str) -> (String, String) {
+        let spoken = crate::tts::normalize_for_speech(text);
+        let ipa = shared().phonemize(&spoken);
+        (spoken, ipa)
+    }
+
+    #[test]
+    fn probe_bank_prints() {
+        for s in PROBES {
+            let (spoken, ipa) = said(s);
+            println!("{s}\n   => {spoken}\n   => {ipa}");
+        }
+    }
+
+    /// What is said (after the lexicon) and the sounds that must be in it, as Kokoro's symbols write them
+    /// (A = eɪ, I = aɪ, W = aʊ, Q = əʊ, ʤ = dʒ).
+    const CHECKED: &[(&str, &str, &[&str])] = &[
+        ("It is 42 degrees.", "It is 42 degrees.", &["fˈɔːtɪ tˈuː"]),
+        ("That is 3.5 meters.", "That is 3.5 meters.", &["θɹˈiː pYnt fˈIv"]),
+        ("It is -5 degrees.", "It is -5 degrees.", &["mˈInəs fˈIv"]),
+        ("The 21st of May.", "The 21st of May.", &["twˈɛntɪ fˈɜːst"]),
+        ("In 1999 and 2026.", "In nineteen ninety-nine and twenty twenty-six.", &["nˈIntiːn nˈIntɪnˈIn", "twˈɛntɪ twˈɛntɪsˈɪks"]),
+        ("From 1990 to 2000 and in 2005.", "From nineteen ninety to two thousand and in two thousand and five.", &[]),
+        ("At 15:30 sharp.", "At half past three P M sharp.", &["pˈiː ˈɛm"]),
+        ("At 7:05 sharp.", "At seven oh five eh M sharp.", &["ˈQ fˈIv ˈA ˈɛm"]),
+        ("At 3 p.m. sharp.", "At three P M sharp.", &["θɹˈiː pˈiː ˈɛm ʃˈɑːp"]),
+        ("Meet at 3:30 pm or 12 am.", "Meet at half past three P M or midnight.", &[]),
+        ("On 21.11.2026 we meet.", "On the 21st of November twenty twenty-six we meet.", &["nQvˈɛmbə twˈɛntɪ twˈɛntɪsˈɪks"]),
+        ("On Nov 21 we meet.", "On November 21st we meet.", &["nQvˈɛmbə twˈɛntɪ fˈɜːst"]),
+        ("On Nov 21st at 7 a.m. sharp.", "On November 21st at seven eh M sharp.", &[]),
+        ("Wait 3-5 minutes.", "Wait 3 to 5 minutes.", &[]),
+        ("It is 5 km away.", "It is 5 kilometres away.", &["kˈɪləmˌiːtəz"]),
+        ("It is 20°C outside.", "It is 20 degrees Celsius outside.", &["sˈɛlsɪəs"]),
+        ("He drove 120 km/h.", "He drove 120 kilometres per hour.", &[]),
+        ("It costs €5.", "It costs 5 ewros.", &["fˈIv jˈuːɹQz"]),
+        ("It costs $3.50 or £2 or 1 dollar.", "It costs 3 dollars and 50 cents or 2 pounds or 1 dollar.", &["fˈɪftɪ sˈɛnts"]),
+        ("That is 19,99 € and 30 EUR.", "That is 19 ewros and 99 cents and 30 ewros.", &[]),
+        ("Running at 60 fps.", "Running at 60 F P S.", &["ˈɛf pˈiː ˈɛs"]),
+        ("A 3 GHz chip.", "A 3 gigahertz chip.", &[]),
+        ("You have 5 GB left.", "You have 5 gigabytes left.", &[]),
+        ("A 1920x1080 screen at 5 MB/s and 10 Mbps.", "A nineteen twenty by ten eighty screen at 5 megabytes per second and 10 megabits per second.", &[]),
+        ("JAI is ready.", "Jay is ready.", &["ʤˈA ɪz"]),
+        ("The CPU and GPU and RAM.", "The C P U and G P U and Ram.", &[]),
+        ("The AI reads a URL via an API.", "The AI reads a U R L via an eh P I.", &["ən ˈA pˈiː ˈI"]),
+        ("The LED is on.", "The L E D is on.", &["ˈɛl ˈiː dˈiː"]),
+        ("He is a Ph.D. student.", "He is a P H D student.", &[]),
+        ("For example, e.g. this, i.e. that, etc.", "For example, for example this, that is that, et cetera", &[]),
+        ("Dr. Smith and Mr. Jones, Alice vs. Bob.", "Doctor Smith and Mister Jones, Alice versus Bob.", &[]),
+        // German names inside English sentences: the names German, every English word English.
+        ("Herr Müller and Jürgen Schröder live on Hauptstraße.", "Herr Müller and Jürgen Schröder liv on Hauptstraße.", &["hˈɛɐ mˈylɐ ænd", "jˈyʁɡən", "ʃʁˈøːdɐ", "lˈɪv", "hˈWptstʁˌɑːsə"]),
+        ("She flew to München and Köln and Düsseldorf.", "She flew to München and Köln and Düsseldorf.", &["ʃiː flˈuː", "mˈynçən ænd kˈœln ænd dˈysəldˌɔɐf"]),
+        ("Nürnberg, Stuttgart and Würzburg.", "Nürnberg, Stuttgart and Würzburg.", &["nˈyʁnbɛɐk,", "ʃtˈʊtɡaɐt ænd vˈyʁʦbʊɐk"]),
+        ("Frau Meyer from Hamburg met Wolfgang and Hans in Berlin.", "Frau Meyer from Hamburg met Wolfgang and Hans in Berlin.", &["fɹɒm hˈambʊɐk mˈɛt", "bɛɐlˈiːn"]),
+        ("Meet at the Marktplatz in Darmstadt.", "Meet at the Marktplatz in Darmstadt.", &["mˈaɐktplaʦ", "dˈaɐmstat"]),
+        ("The Straße is long.", "The Straße is long.", &["ðə ʃtʁˈɑːsə ɪz lˈɒŋ"]),
+        // English hard words and heteronyms.
+        ("I read the book yesterday.", "I red the book yesterday.", &["ɹˈɛd"]),
+        ("Did you read it yesterday?", "Did you read it yesterday?", &["ɹˈiːd"]),
+        ("I have read the book.", "I have red the book.", &[]),
+        ("Is it live?", "Is it lyve?", &["lˈIv"]),
+        ("He took the lead.", "He took the lead.", &["lˈiːd"]),
+        ("Lead pipes are old.", "Led pipes are old.", &["lˈɛd"]),
+        ("Close the door.", "Cloze the door.", &["klˈQz"]),
+        ("He is close to me.", "He is close to me.", &["klˈQs"]),
+        ("Please record it and close the window.", "Please rekord it and cloze the window.", &["ɹɪkˈɔːd"]),
+        ("Set a record.", "Set a record.", &["ɹˈɛkɔːd"]),
+        ("Wind the clock.", "Wined the clock.", &["wˈInd"]),
+        ("It is Wednesday.", "It is Wednesday.", &["wˈɛnzdA"]),
+        ("The colonel agreed.", "The colonel agreed.", &["kˈɜːnᵊl"]),
+        ("On the quay.", "On the quay.", &["kˈiː"]),
+        ("An epitome of style.", "An epitome of style.", &["ɪpˈɪtəmɪ"]),
+        ("Worcestershire sauce.", "Worcestershire sauce.", &["wˈʊstəʃə"]),
+    ];
+
+    /// The probe bank: each sentence through the lexicon and the phonemizer, as `tts` runs a clause.
+    #[test]
+    fn the_probe_bank_is_said_right() {
+        for (text, spoken, sounds) in CHECKED {
+            let (said_text, ipa) = said(text);
+            println!("{text}\n   => {said_text}\n   => {ipa}");
+            if shared().backend_name() != "espeak-ng (library)" {
+                continue;
+            }
+            assert_eq!(&said_text, spoken, "{text}");
+            for sound in *sounds {
+                assert!(ipa.contains(sound), "{text}: {ipa} lacks {sound}");
+            }
+        }
+        // An English sentence with German names stays English; a German one stays German.
+        assert!(!sentence_is_german("Herr Müller and Jürgen Schröder live in München."));
+        assert!(!sentence_is_german("She flew to München and Köln and Düsseldorf."));
+        assert!(sentence_is_german("Schöne Grüße aus Köln."));
+        let runs = language_runs("Herr Müller and Jürgen Schröder live in München");
+        assert_eq!(runs.iter().filter(|(l, _)| *l == Lang::En).map(|(_, t)| t.as_str()).collect::<Vec<_>>(), ["and", "live in"], "{runs:?}");
+        for english in ["I will read the Wednesday quay report", "Colonel Worcestershire records a Hamburger", "The School schedule is a Hamburger"] {
+            assert!(language_runs(english).iter().all(|(l, _)| *l == Lang::En), "{english}");
+        }
+    }
+
+    const PROBES: &[&str] = &[
+        "It is 42 degrees.", "That is 3.5 meters.", "We have 1,250,000 users.", "The 21st of May.", "In 1999 and 2026.", "About 85% done.", "It is -5 degrees.",
+        "At 15:30 sharp.", "At 7:05 sharp.", "At 3 pm sharp.", "At 3 p.m. sharp.", "at 15h", "It is half past three.",
+        "On 21.11.2026 we meet.", "On Nov 21 we meet.", "On 21 November 2026 we meet.",
+        "It is 5 km away.", "It is 20°C outside.", "He drove 120 km/h.", "It costs €5.", "It costs $3.50.", "You have 5 GB left.", "Running at 60 fps.", "A 3 GHz chip.",
+        "JAI is ready.", "The CPU and GPU and RAM.", "A USB stick on the PC.", "The AI reads a URL via an API.", "For example, e.g. this, i.e. that, etc.", "Dr. Smith and Mr. Jones, Alice vs. Bob.",
+        "Herr Müller and Jürgen Schröder live on Hauptstraße.", "She flew to München and Köln and Düsseldorf.", "Nürnberg, Stuttgart and Würzburg.", "Meet Jürgen in Nürnberg.", "The Straße is long.",
+        "I read the book yesterday.", "I will read the book.", "I have read the book.", "Is it live?", "He took the lead.", "Lead the way.", "Set a record.", "Record a video.", "It is Wednesday.", "The colonel agreed.",
+        "It costs $3.50 or £2 or 1 dollar.", "That is 19,99 € and 30 EUR.", "Meet at 3:30 pm or 12 am.", "A 1920x1080 screen at 5 MB/s and 10 Mbps.", "Wait 3-5 minutes.", "From 1990 to 2000 and in 2005.",
+        "Yesterday I read the news.", "Did you read it yesterday?", "Close the door.", "Please record it and close the window.", "Lead pipes are old.", "Frau Meyer from Hamburg met Wolfgang and Hans in Berlin.",
+        "Meet at the Marktplatz in Darmstadt.", "Call an API from the AI.", "The LED is on.", "He is a Ph.D. student.", "On Nov 21st at 7 a.m. sharp.",
+        "On the quay.", "An epitome of style.", "Worcestershire sauce.", "The wind is strong.", "Wind the clock.", "Tear in the paper.", "Close the door.", "He is close to me.",
+    ];
+
     #[test]
     fn espeak_backend_if_installed() {
-        let p = Phonemizer::new(None);
+        let p = shared();
         let ipa = p.phonemize("Right away, Sir. Opening Spotify now.");
         assert!(!ipa.is_empty());
         assert!(ipa.contains(',') && ipa.ends_with('.'), "punctuation kept: {ipa}");
