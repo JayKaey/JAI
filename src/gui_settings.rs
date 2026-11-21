@@ -241,11 +241,9 @@ fn body(ui: &mut Ui, iface: &InterfaceSettings) -> Option<Out> {
                 headers.push((group, line.top()));
                 ui.add_space(4.0);
             }
-            // The row under the pointer stands out a little.
-            let band = Rect::from_min_size(ui.cursor().min - vec2(4.0, 2.0), vec2(ui.available_width() + 8.0, 48.0));
-            if ui.rect_contains_pointer(band) {
-                ui.painter().rect_filled(band, Rounding::ZERO, holo::a(strip_ink(), 0.045));
-            }
+            // The row under the pointer stands out a little: painted under it once its height is known.
+            let band_at = ui.painter().add(egui::Shape::Noop);
+            let (start, width) = (ui.cursor().min, ui.available_width());
             ui.horizontal(|ui| {
                 ui.set_min_height(44.0);
                 let width = ui.available_width();
@@ -354,7 +352,17 @@ fn body(ui: &mut Ui, iface: &InterfaceSettings) -> Option<Out> {
             if matches!(row.control, Control::Games) {
                 games_list(ui);
             }
-            ui.add_space(ROW_GAP);
+            let band = Rect::from_min_max(start - vec2(4.0, 2.0), pos2(start.x + width + 4.0, ui.cursor().min.y + 2.0));
+            if ui.rect_contains_pointer(band) {
+                ui.painter().set(band_at, egui::Shape::rect_filled(band, Rounding::ZERO, holo::a(strip_ink(), 0.045)));
+            }
+            // A hairline between two rows of a group (a group's title has its own).
+            ui.add_space(ROW_GAP / 2.0);
+            if shown.get(k + 1).is_some_and(|next| next.group == row.group) {
+                let y = ui.cursor().min.y;
+                holo::rule(ui.painter(), pos2(start.x, y), pos2(start.x + width, y), holo::a(strip_ink(), 0.10));
+            }
+            ui.add_space(ROW_GAP / 2.0);
         }
         ui.add_space(8.0);
         // The group of the rows at the top stays named there while they scroll by.
@@ -372,8 +380,8 @@ fn body(ui: &mut Ui, iface: &InterfaceSettings) -> Option<Out> {
     out
 }
 
-/// Space between two rows.
-const ROW_GAP: f32 = 6.0;
+/// Space between two rows (a hairline halfway).
+const ROW_GAP: f32 = 12.0;
 
 /// A group's name and a hairline after it, in `line`.
 fn group_title(p: &egui::Painter, line: Rect, group: &str) {

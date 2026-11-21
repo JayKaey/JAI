@@ -4975,8 +4975,8 @@ impl HudApp {
             let lines_top = if frame.dock < 0.5 { crate::hud_lines::top_under(frame.centre, frame.radius) + vec2(0.0, self.clock_room(iface, frame.rest)) } else { pos2(screen.center().x, screen.bottom() - TELEMETRY_H - 110.0) };
             // The music's spectrum is the core's own voice ring (when Sir's voice is not there).
             self.emblem_music = music && frame.dock < 0.5 && self.voice_rim < 0.05;
-            if self.emblem_music {
-                ctx.request_repaint_after(Duration::from_millis(if crate::hud_feel::game_in_front() { 40 } else { 16 }));
+            if let Some(next) = music_frame(self.emblem_music, crate::wallpaper::hidden() && self.corner_orb.is_home(), crate::hud_feel::game_in_front()) {
+                ctx.request_repaint_after(next);
             }
             // Under it: the line being sung (lyrics on), else what plays.
             let lyric = crate::hud_feel::lyric_line()
@@ -5200,6 +5200,7 @@ impl HudApp {
                 anchors.push((id, response.clone()));
             }
         }
+        paint_seams(&painter, &row);
         for (id, rect) in row.placed {
             let item = items.iter().find(|i| i.id == id).expect("laid-out item");
             if !item.boxed {
@@ -6512,6 +6513,13 @@ impl HudApp {
 /// The fastest the HUD ever draws.
 pub const MAX_FPS: f32 = 180.0;
 
+/// When the music's spectrum on the emblem wants its next frame: never while nobody sees the
+/// emblem (`unseen`: a window or a game covers it, the orb at home), else 60 a second, 25 beside
+/// a game.
+fn music_frame(music: bool, unseen: bool, gaming: bool) -> Option<Duration> {
+    (music && !unseen).then(|| Duration::from_millis(if gaming { 40 } else { 16 }))
+}
+
 /// His frame rate as the desktop's background, from the board's own (`fps`). `unseen`: a
 /// window covers his emblem and the orb is at home, so he draws for nobody: twelve frames a
 /// second are plenty, and two beside a game, as at rest beside one. Seen, he draws as the
@@ -7177,6 +7185,30 @@ struct HeaderRow {
     hidden: Vec<&'static str>,
     /// The `[ MORE ]` box, where the row begins, when anything is hidden.
     more: Option<Rect>,
+    /// Where a hairline stands between two groups of boxes (x).
+    seams: Vec<f32>,
+}
+
+/// Where a group of the strip begins: his windows, the view, the console, the devices. Groups
+/// stand `HEADER_GROUP_GAP` apart with a hairline between them; boxes within one 6 px.
+const HEADER_GROUPS: &[&str] = &["modules", "view", "console", "camera"];
+const HEADER_GAP: f32 = 6.0;
+const HEADER_GROUP_GAP: f32 = 22.0;
+
+fn gap_before(id: &str) -> f32 {
+    if HEADER_GROUPS.contains(&id) {
+        HEADER_GROUP_GAP
+    } else {
+        HEADER_GAP
+    }
+}
+
+/// The hairlines between the strip's groups.
+fn paint_seams(p: &egui::Painter, row: &HeaderRow) {
+    let Some((_, first)) = row.placed.first() else { return };
+    for x in &row.seams {
+        holo::rule(p, pos2(*x, first.top() + 5.0), pos2(*x, first.bottom() - 5.0), holo::theme().faint());
+    }
 }
 
 /// The items' rects on one row between `left` and `right`, laid out right to left (each box its
@@ -7198,19 +7230,25 @@ fn header_layout(items: &[HeaderItem], left: f32, right: f32, y: f32, measure: i
         .collect();
     let more_w = measure("MORE") + 14.0;
     // The row from item `k` on, with the menu's box before it unless it is the whole strip.
-    let needs = |k: usize| widths[k..].iter().sum::<f32>() + 6.0 * (items.len() - k).saturating_sub(1) as f32 + if k > 0 { more_w + 6.0 } else { 0.0 };
+    let needs = |k: usize| widths[k..].iter().sum::<f32>() + items[k + 1..].iter().map(|i| gap_before(i.id)).sum::<f32>() + if k > 0 { more_w + HEADER_GAP } else { 0.0 };
     let first = (0..items.len()).find(|k| needs(*k) <= right - left).unwrap_or(items.len());
     let mut x = right;
-    let mut placed = Vec::new();
-    for (item, w) in items.iter().zip(&widths).skip(first).rev() {
+    let (mut placed, mut seams) = (Vec::new(), Vec::new());
+    for (k, (item, w)) in items.iter().zip(&widths).enumerate().skip(first).rev() {
         placed.push((item.id, Rect::from_min_size(pos2(x - w, y), vec2(*w, HEADER_H))));
-        x -= w + 6.0;
+        let gap = if k > first { gap_before(item.id) } else { HEADER_GAP };
+        if gap > HEADER_GAP {
+            seams.push(x - w - gap / 2.0);
+        }
+        x -= w + gap;
     }
     placed.reverse();
+    seams.reverse();
     HeaderRow {
         placed,
         hidden: items[..first].iter().filter(|item| item.boxed).map(|item| item.id).collect(),
         more: (first > 0).then(|| Rect::from_min_size(pos2(x - more_w, y), vec2(more_w, HEADER_H))),
+        seams,
     }
 }
 
@@ -10295,6 +10333,7 @@ mod tests {
                     let items = header_items(&lit, "REBOOT", "DEFAULT CAMERA");
                     let row = header_layout(&items, screen.left() + 12.0, screen.right() - 12.0, screen.top() + 10.0, |t| rail_width(&painter, t));
                     let taken: Vec<Rect> = row.placed.iter().map(|(_, r)| *r).collect();
+                    paint_seams(&painter, &row);
                     for (id, rect) in row.placed {
                         let item = items.iter().find(|i| i.id == id).expect("laid-out item");
                         if !item.boxed {
@@ -10935,6 +10974,12 @@ mod tests {
         assert_eq!(background_fps(144.0, true, true, true), 2.0);
         assert_eq!(background_fps(rest, false, false, true), 2.0, "at rest beside a game");
         assert_eq!(background_fps(60.0, true, false, true), 60.0, "spoken to beside a game, on a monitor the game is not on");
+        // The music's spectrum asked for 25 frames a second behind a game that covered it.
+        assert_eq!(music_frame(true, true, true), None, "a game covers the emblem: no frames for its spectrum");
+        assert_eq!(music_frame(true, true, false), None, "a window covers it");
+        assert_eq!(music_frame(true, false, true), Some(Duration::from_millis(40)));
+        assert_eq!(music_frame(true, false, false), Some(Duration::from_millis(16)));
+        assert_eq!(music_frame(false, false, false), None);
     }
 
     /// "Move yourself to my second monitor" as the desktop's background: his emblem's spot,
@@ -11586,6 +11631,12 @@ mod tests {
         assert!(rects.len() == items.len() && row.hidden.is_empty() && row.more.is_none());
         assert_eq!(rects.last().unwrap().1.right(), 2548.0);
         assert!(rects.windows(2).all(|w| w[0].1.right() + 6.0 <= w[1].1.left() + 0.01));
+        // The groups stand apart, a hairline halfway between each two.
+        assert_eq!(row.seams.len(), HEADER_GROUPS.len());
+        for (seam, id) in row.seams.iter().zip(HEADER_GROUPS) {
+            let after = rects.iter().find(|(i, _)| i == id).unwrap().1;
+            assert!((after.left() - seam - HEADER_GROUP_GAP / 2.0).abs() < 0.01, "{id}: {seam} before {after:?}");
+        }
         let source = rects.iter().find(|(id, _)| *id == "source").unwrap().1;
         assert!(source.width() >= SOURCE_PICKER_W, "the picker is a wide field");
         assert!(rects.iter().all(|(_, r)| r.height() == HEADER_H && r.top() == 10.0));
@@ -11601,6 +11652,7 @@ mod tests {
             let boxes: Vec<Rect> = row.more.into_iter().chain(row.placed.iter().map(|(_, r)| *r)).collect();
             assert!(boxes.iter().all(|r| r.left() >= left - 0.01 && r.right() <= right + 0.01), "{width}: a box leaves the screen: {boxes:?}");
             assert!(boxes.windows(2).all(|w| w[0].right() + 6.0 <= w[1].left() + 0.01), "{width}: boxes overlap");
+            assert!(row.seams.iter().all(|x| boxes.iter().all(|r| !(r.left()..=r.right()).contains(x))), "{width}: a seam cuts a box");
             // Every box is either on the row or in the menu, and the menu is there exactly
             // when something is in it.
             let boxed = items.iter().filter(|i| i.boxed).count();

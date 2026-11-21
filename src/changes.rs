@@ -103,6 +103,12 @@ pub const RELEASES: &[Release] = &[
             added("He picks for unclear orders", "\"Show me the moon\": the likeliest way, a picture, a 3D model or a simulation, and he says which."),
             added("Asks before building a tool", "Where no tool of his can do it, he asks \"Shall I build a tool for it?\"; your yes builds it."),
             fixed("\"Zeig mir\" a thing", "\"Zeig mir das Sonnensystem\" no longer looks for a window of that name."),
+            better("Hearing on the graphics card", "A larger Whisper on the graphics card: fewer wrong words, German too, and faster than before."),
+            new("Ten new simulations","Orbits, ripples, standing waves, Doppler, sound, light, springs, bouncing balls, 3D surfaces.", "simulations"),
+            better("Simulations in the new look", "Collisions and interfering waves are drawn as light on black glass, like the new ones."),
+            better("Better pronunciation", "Dates, years, money, units, times and German names are said the way a person says them."),
+            better("Clearer windows", "The board's keys stand in groups, settings rows have hairlines, account options are in words."),
+            better("Lighter beside a game", "Behind a game his music ring and simulations draw far less, and Whisper leaves the card."),
         ],
     },
     Release {
@@ -839,6 +845,13 @@ pub const EXPLANATIONS: &[Explanation] = &[
         what: "He speaks to Sonora through its own remote control: nothing is typed into its search and none of its windows is touched. A song, an album or any playlist of yours plays at once, downloaded or not, private or public; what is not in your library plays as Sonora's best hit. He reads you the queue, adds to its end or plays something next, turns shuffle and repeat on and off, jumps in the song, and likes or unlikes it. When Sonora isn't running, he starts it first.",
         say: &["what's in the queue", "play Highway to Hell next", "add Thunderstruck to the queue", "turn on shuffle", "repeat this song", "skip ahead 30 seconds", "like this song"],
         know: "Sonora's remote control cannot take songs out of the queue or change playlists: that stays in Sonora itself, and he says so. A Spotify playlist while Sonora is on another provider switches it to Spotify first.",
+    },
+    Explanation {
+        id: "simulations",
+        title: "Ten new simulations",
+        what: "The Simulation Lab works the physics out itself: orbits of the sun, planets, moons and comets, ripples in a tank and through a slit, standing waves on a string, the Doppler effect and a sonic boom, sound as pressure, light through a double slit, a mass on a spring, a double pendulum, balls bouncing in a box, and any formula of x and y as a surface in 3D. Each has sliders you can set by name, and \"simulate it again\" or \"plot it with 3 m\" changes the one just shown.",
+        say: &["simulate the sun, the earth and a comet", "zeig mir das Sonnensystem", "show me ripples with a single slit", "simulate standing waves", "simulate the doppler effect", "simuliere den Doppelspalt", "plot z = sin(x) * cos(y)", "set the speed to 200"],
+        know: "The solar system uses the planets' real orbits (AU, years and Sun masses); distances are drawn by their square root, or the inner planets would be a dot beside Neptune. Beside a game a running simulation slows to four frames a second.",
     },
 ];
 

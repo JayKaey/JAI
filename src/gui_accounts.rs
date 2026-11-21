@@ -413,7 +413,9 @@ fn place(ui: &mut Ui, view: &mut View, a: &Account, own: bool, change: &dyn Fn(&
                             for value in &g.values {
                                 let key = format!("{}:{value}", g.tool);
                                 let mut on = s.allows(&key);
-                                if holo_ui::toggle(ui, &mut on, value.replace('=', ": ")).changed() {
+                                // In words ("view=disk_map" is "View: disk map"); the key itself on hover.
+                                let words = crate::pim::capitalise(&value.replace('=', ": ").replace('_', " "));
+                                if holo_ui::toggle(ui, &mut on, words).on_hover_text(value).changed() {
                                     change(&mut |x| switches(x, own).set(&key, on));
                                 }
                             }
@@ -502,7 +504,7 @@ mod tests {
         assert_eq!(visual::clipped_text(&frame), Vec::<String>::new());
         assert_eq!(visual::text_over_text(&frame), Vec::<String>::new());
         let row = "Max  ·  their PC: everything  ·  yours: 1 chosen";
-        for shown in [row,"PASSWORD", "SHOW", "PAUSE 1 H", "REMOVE", "ON MAX'S PC", "ON YOUR PC", "TALK ONLY", "CHOSEN", "EVERYTHING", "Feature Lab", "Discord", "Opens one of his views", "view: earth", "action: show_satellites", "TOPICS CLOSED TO MAX", "Musterstadt-PC", "Mustermann  ·  your admin account"] {
+        for shown in [row,"PASSWORD", "SHOW", "PAUSE 1 H", "REMOVE", "ON MAX'S PC", "ON YOUR PC", "TALK ONLY", "CHOSEN", "EVERYTHING", "Feature Lab", "Discord", "Opens one of his views", "View: earth", "Action: show satellites", "TOPICS CLOSED TO MAX", "Musterstadt-PC", "Mustermann  ·  your admin account"] {
             assert!(!frame.find_text(shown).is_empty(), "'{shown}' is not in the list");
         }
         *lock() = None;
