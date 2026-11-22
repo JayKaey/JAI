@@ -91,6 +91,11 @@ const fn fixed(title: &'static str, what: &'static str) -> Entry {
 /// Every change, newest first.
 pub const RELEASES: &[Release] = &[
     Release {
+        date: "2026-11-22",
+        name: "Windows in turn",
+        entries: &[fixed("Every window draws in turn", "A menu under the turning Earth or a running simulation no longer stands still: all draw.")],
+    },
+    Release {
         date: "2026-11-21",
         name: "Keys, ears and control",
         entries: &[

@@ -117,6 +117,9 @@ ort = { version = "=2.0.0-rc.15", features = ["directml"] }
 whisper-rs = { version = "0.16.0", features = ["vulkan"] }
 # The HUD's native window handle (show/hide from the tray, placement, quit message).
 raw-window-handle = "0.6"
+# eframe's winit, named for its hook on each message its loop takes (`gui::paint_all_waiting`)
+# and for the frame probe's windows on a test's own thread.
+winit = { version = "0.30", default-features = false }
 # The vault's master key lives in the Windows Credential Manager.
 keyring = { version = "3", features = ["windows-native"] }
 # Same major as cpal's own `windows` dependency, so it is compiled once.
@@ -188,10 +191,6 @@ wayland-protocols-plasma = { version = "0.3", features = ["client"] }
 wayland-protocols = { version = "0.32", features = ["client", "staging"] }
 # pipe2, the parent-death signal of the engine, nice levels, statvfs, the camera's ioctls.
 libc = "0.2"
-
-# The frame probe opens its windows on a test's own thread (eframe's winit, named for that).
-[target.'cfg(windows)'.dev-dependencies]
-winit = { version = "0.30", default-features = false }
 
 [build-dependencies]
 # Embeds the icon, version info and the DPI-aware manifest into the Windows executable.

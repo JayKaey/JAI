@@ -1286,6 +1286,10 @@ fn open_window(app: &Jai, rt: &Handle, model: &Arc<Mutex<HudModel>>) -> Result<(
         vsync: cfg!(not(windows)),
         #[cfg(not(windows))]
         event_loop_builder: on_x11(),
+        #[cfg(windows)]
+        event_loop_builder: Some(Box::new(|builder: &mut eframe::EventLoopBuilder<eframe::UserEvent>| {
+            winit::platform::windows::EventLoopBuilderExtWindows::with_msg_hook(builder, paint_all_waiting);
+        })),
         ..Default::default()
     };
     if fullscreen {
@@ -1344,6 +1348,46 @@ fn pace(viewport: ViewportId) {
         *drew = (refresh_times().0, Vec::new());
     }
     drew.1.push(viewport);
+}
+
+/// Windows hands a thread's windows their turn to paint from the top one down, and a window of
+/// his that asks for every refresh (the Earth as it turns, a simulation, the radar) took every
+/// turn: the windows under it drew nothing while it stood, a menu Sir scrolled under it stood
+/// still (`probe_windows_of_their_own_take_turns` at 180 Hz, 2026-11-22: the top window at 178
+/// frames a second, the other three at 1; with this, all four at 168). So whenever one window of
+/// his is given its paint, every other one that waits for a paint gets it first, from Windows'
+/// own record of who waits (a frame egui asked for, input, a resize): nobody waits more than a
+/// round, and a window that asks for nothing is not drawn. (winit's hook on each
+/// message its loop takes. The board as the desktop's background is no top-level window of
+/// this thread: `keep_drawing` sees to it.)
+#[cfg(windows)]
+fn paint_all_waiting(msg: *const std::ffi::c_void) -> bool {
+    use windows::Win32::Foundation::{BOOL, HWND, LPARAM};
+    use windows::Win32::System::Threading::GetCurrentThreadId;
+    use windows::Win32::UI::WindowsAndMessaging::{DispatchMessageW, EnumThreadWindows, PeekMessageW, MSG, PM_REMOVE, WM_PAINT};
+    unsafe extern "system" fn add(hwnd: HWND, list: LPARAM) -> BOOL {
+        // SAFETY: `list` is the Vec passed below, alive for the whole enumeration.
+        unsafe { (*(list.0 as *mut Vec<HWND>)).push(hwnd) };
+        BOOL(1)
+    }
+    // SAFETY: winit hands over the MSG it is about to dispatch.
+    let taken = unsafe { &*(msg as *const MSG) };
+    if taken.message != WM_PAINT {
+        return false;
+    }
+    let mut windows = Vec::new();
+    // SAFETY: the callback only pushes into `windows` through the pointer given; a waiting
+    // paint is taken and dispatched as winit's own loop does it, on the thread of its windows.
+    unsafe {
+        let _ = EnumThreadWindows(GetCurrentThreadId(), Some(add), LPARAM(&mut windows as *mut Vec<HWND> as isize));
+        for hwnd in windows.into_iter().filter(|hwnd| *hwnd != taken.hwnd) {
+            let mut waiting = MSG::default();
+            if PeekMessageW(&mut waiting, hwnd, WM_PAINT, WM_PAINT, PM_REMOVE).as_bool() {
+                DispatchMessageW(&waiting);
+            }
+        }
+    }
+    false
 }
 
 /// When the screen last refreshed (a performance-counter time) and how long until it refreshes
@@ -10202,54 +10246,72 @@ mod tests {
         assert!(last > 0 && next <= Duration::from_millis(50), "{next:?}");
     }
 
-    /// Probe (a small window on monitor 2 for three seconds, never focused, with two windows
-    /// drawn inside its frame as the board draws his cards): how often it draws when it asks for
-    /// every refresh. `JAI_PROBE_VSYNC=1`: every swap waits for the refresh (eframe's own vsync,
-    /// as the HUD drew until 2026-11-21: three refreshes a frame); without it as the HUD draws
-    /// now (`pace`). (Three windows of their own that each ask for every refresh show Windows'
-    /// order instead: the top one takes every turn, see `keep_drawing`.)
-    /// `cargo test --release probe_windows_drawn_on_one_thread -- --ignored --nocapture`
-    #[test]
-    #[ignore]
+    /// Probes (on monitor 2 for three seconds, never focused): how often windows draw that each
+    /// ask for every refresh. `probe_windows_drawn_on_one_thread`: a small window with two windows
+    /// drawn inside its frame, as the board draws his cards. `JAI_PROBE_VSYNC=1`: every swap waits
+    /// for the refresh (eframe's own vsync, as the HUD drew until 2026-11-21: three refreshes a
+    /// frame); without it as the HUD draws now (`pace`). `probe_windows_of_their_own_take_turns`:
+    /// that window and three windows of their own, as his views are, and a fourth that asks for
+    /// nothing (it must draw no more for the others' turns). `JAI_PROBE_UNFAIR=1`: without
+    /// `paint_all_waiting`, as until 2026-11-22 (the top one at the screen's rate, the rest at 0).
+    /// One probe a run (winit makes one event loop a process):
+    /// `cargo test --release probe_windows_of_their_own_take_turns -- --ignored --nocapture`
     #[cfg(windows)]
-    fn probe_windows_drawn_on_one_thread() {
+    fn probe_frames(own: bool) {
         use winit::platform::windows::EventLoopBuilderExtWindows;
-        type Frames = Arc<Mutex<std::collections::HashMap<ViewportId, u32>>>;
-        fn window(at: Pos2) -> egui::ViewportBuilder {
-            egui::ViewportBuilder::default().with_title("probe").with_inner_size([240.0, 160.0]).with_position(at).with_active(false)
+        type Frames = Arc<Mutex<std::collections::HashMap<String, u32>>>;
+        const FOR: Duration = Duration::from_secs(3);
+        fn window(at: Pos2, n: u8) -> egui::ViewportBuilder {
+            egui::ViewportBuilder::default().with_title(format!("probe {n}")).with_inner_size([240.0, 160.0]).with_position(at + vec2(260.0 * n as f32, 0.0)).with_active(false)
         }
-        fn count(ctx: &egui::Context, frames: &Frames) {
-            *lock(frames).entry(ctx.viewport_id()).or_default() += 1;
+        // (Then no window asks for more, and whichever draws closes the probe: the old run, whose
+        // close waited for a window that never got a turn, stood for over two minutes.)
+        fn count(ctx: &egui::Context, frames: &Frames, started: Instant, asks: bool) {
             egui::CentralPanel::default().show(ctx, |ui| ui.label(format!("{:.0}", ctx.input(|i| i.time) * 60.0)));
-            ctx.request_repaint();
+            if started.elapsed() < FOR {
+                *lock(frames).entry(ctx.input(|i| i.viewport().title.clone()).unwrap_or_default()).or_default() += 1;
+                if asks {
+                    ctx.request_repaint();
+                }
+            } else {
+                ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Close);
+                ctx.request_repaint_of(ViewportId::ROOT);
+            }
         }
-        struct Probe(Frames, Instant, Pos2);
+        struct Probe(Frames, Instant, Pos2, bool);
         impl eframe::App for Probe {
             fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
-                let frames = &self.0;
-                for n in 1..=2u8 {
-                    ctx.show_viewport_immediate(ViewportId::from_hash_of(("probe", n)), window(self.2 + vec2(260.0 * n as f32, 0.0)), |ctx, _| count(ctx, frames));
+                let Probe(frames, started, at, own) = self;
+                for n in 1..=if *own { 4 } else { 2 } {
+                    let id = ViewportId::from_hash_of(("probe", n));
+                    if *own {
+                        let (frames, started) = (frames.clone(), *started);
+                        ctx.show_viewport_deferred(id, window(*at, n), move |ctx, _| count(ctx, &frames, started, n < 4));
+                    } else {
+                        ctx.show_viewport_immediate(id, window(*at, n), |ctx, _| count(ctx, frames, *started, true));
+                    }
                 }
-                count(ctx, frames);
-                if self.1.elapsed() > Duration::from_secs(3) {
-                    ctx.send_viewport_cmd(ViewportCommand::Close);
-                }
+                count(ctx, frames, *started, true);
             }
         }
         let vsync = std::env::var_os("JAI_PROBE_VSYNC").is_some();
+        let fair = std::env::var_os("JAI_PROBE_UNFAIR").is_none();
         let monitors = crate::monitors::list();
         let on = monitors.iter().find(|m| m.index == 2).or(monitors.first()).map_or([0; 4], |m| m.rect);
         let at = pos2(on[0] as f32 + 40.0, on[1] as f32 + 40.0);
         let options = eframe::NativeOptions {
-            viewport: window(at),
+            viewport: window(at, 0),
             renderer: eframe::Renderer::Glow,
             vsync,
-            event_loop_builder: Some(Box::new(|builder: &mut eframe::EventLoopBuilder<eframe::UserEvent>| {
+            event_loop_builder: Some(Box::new(move |builder: &mut eframe::EventLoopBuilder<eframe::UserEvent>| {
                 builder.with_any_thread(true);
+                if fair {
+                    builder.with_msg_hook(paint_all_waiting);
+                }
             })),
             ..Default::default()
         };
-        let (frames, started) = (Frames::default(), Instant::now());
+        let frames = Frames::default();
         let shared = frames.clone();
         eframe::run_native(
             "probe",
@@ -10258,16 +10320,30 @@ mod tests {
                 if !vsync {
                     pace_by_the_screen(&cc.egui_ctx);
                 }
-                Ok(Box::new(Probe(shared, Instant::now(), at)))
+                Ok(Box::new(Probe(shared, Instant::now(), at, own)))
             }),
         )
         .unwrap();
-        let seconds = started.elapsed().as_secs_f32();
-        for (viewport, n) in lock(&frames).iter() {
-            println!("{}: {viewport:?} drew {:.0} frames a second (fastest screen {:?} Hz)", if vsync { "vsync in every swap" } else { "paced" }, *n as f32 / seconds, crate::monitors::fastest_refresh_hz());
+        let how = if vsync { "vsync in every swap" } else if fair { "paced, fair turns" } else { "paced, Windows' order" };
+        for (title, n) in lock(&frames).iter() {
+            println!("{how}: {title} drew {:.0} frames a second (fastest screen {:?} Hz)", *n as f32 / FOR.as_secs_f32(), crate::monitors::fastest_refresh_hz());
         }
         let (now, vblank, period, hz) = screen_clock();
         println!("DWM's clock: {:.1} Hz, its refresh {:.1} ms from now", hz as f64 / period as f64, (vblank - now) as f64 * 1000.0 / hz as f64);
+    }
+
+    #[test]
+    #[ignore]
+    #[cfg(windows)]
+    fn probe_windows_drawn_on_one_thread() {
+        probe_frames(false);
+    }
+
+    #[test]
+    #[ignore]
+    #[cfg(windows)]
+    fn probe_windows_of_their_own_take_turns() {
+        probe_frames(true);
     }
 
     /// egui's context lock is not re-entrant: a call on the context inside one of the
