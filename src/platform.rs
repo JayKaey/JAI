@@ -1,6 +1,7 @@
 //! Small OS-specific helpers.
 
-/// Raises the calling thread's scheduling priority (audio/VAD: highest, STT: above normal).
+/// Raises the calling thread's scheduling priority (audio/VAD: highest, STT and the HUD's
+/// windows: above normal).
 pub fn raise_thread_priority(audio: bool) {
     #[cfg(windows)]
     {

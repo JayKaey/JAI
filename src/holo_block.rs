@@ -151,7 +151,7 @@ pub const FLING_AWAY: f32 = 3000.0;
 /// One frame of a thrown block: it glides on from `rect` at `velocity`, slowing down, and stops
 /// at the edge of `bounds`. Returns where it is now and how fast; None once it rests.
 pub fn glide_on(rect: Rect, velocity: egui::Vec2, bounds: Rect, dt: f32) -> Option<(Rect, egui::Vec2)> {
-    let dt = dt.clamp(0.0, 0.05);
+    let dt = dt.clamp(0.0, crate::holo_motion::LONGEST_STEP);
     let velocity = velocity * (-9.0 * dt).exp();
     if velocity.length() < 24.0 {
         return None;

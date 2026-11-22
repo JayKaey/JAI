@@ -176,6 +176,39 @@ pub static APPS: &[AppSpec] = &[
         linux: &["bin:gnome-control-center", "bin:systemsettings", "bin:xfce4-settings-manager"],
         processes: &["systemsettings", "gnome-control-center"],
     },
+    // Settings' own pages (Sir, 2026-11-22: "open the sound settings" opened Settings' start).
+    AppSpec {
+        id: "sound_settings",
+        display: "the sound settings",
+        aliases: &["sound settings", "audio settings", "soundeinstellungen", "audioeinstellungen", "toneinstellungen"],
+        windows: &["uri:ms-settings:sound"],
+        linux: &["bin:systemsettings|kcm_pulseaudio"],
+        processes: &["systemsettings"],
+    },
+    AppSpec {
+        id: "display_settings",
+        display: "the display settings",
+        aliases: &["display settings", "screen settings", "monitor settings", "anzeigeeinstellungen", "bildschirmeinstellungen"],
+        windows: &["uri:ms-settings:display"],
+        linux: &["bin:systemsettings|kcm_kscreen"],
+        processes: &["systemsettings"],
+    },
+    AppSpec {
+        id: "bluetooth_settings",
+        display: "the Bluetooth settings",
+        aliases: &["bluetooth settings", "bluetooth einstellungen", "bluetootheinstellungen"],
+        windows: &["uri:ms-settings:bluetooth"],
+        linux: &["bin:systemsettings|kcm_bluetooth"],
+        processes: &["systemsettings"],
+    },
+    AppSpec {
+        id: "network_settings",
+        display: "the network settings",
+        aliases: &["network settings", "wifi settings", "wi-fi settings", "wlan settings", "internet settings", "netzwerkeinstellungen", "wlan einstellungen"],
+        windows: &["uri:ms-settings:network-wifi"],
+        linux: &["bin:systemsettings|kcm_networkmanagement"],
+        processes: &["systemsettings"],
+    },
     AppSpec {
         id: "paint",
         display: "Paint",
@@ -627,9 +660,12 @@ async fn launch_target(target: &str, args: &[String]) -> Result<(), String> {
         tokio::task::spawn_blocking(move || match kind.as_str() {
             "url" | "folder" | "xdg" => spawn_detached("xdg-open", &[expand_env(&value)]),
             "bin" => {
-                let bin = expand_env(&value);
+                // ("bin:systemsettings|kcm_pulseaudio": the program, then its own arguments.)
+                let (bin, own) = value.split_once('|').unwrap_or((value.as_str(), ""));
+                let bin = expand_env(bin);
                 let resolved = which(&bin).ok_or_else(|| format!("{bin} is not installed"))?;
-                spawn_detached(&resolved.display().to_string(), &extra_args)
+                let args: Vec<String> = own.split_whitespace().map(str::to_string).chain(extra_args).collect();
+                spawn_detached(&resolved.display().to_string(), &args)
             }
             "flatpak" => {
                 which("flatpak").ok_or("flatpak is not installed")?;

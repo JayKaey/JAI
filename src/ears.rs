@@ -1293,6 +1293,7 @@ fn vad_thread(
             let awaited = crate::sound_sense::wanted();
             if flags != 0 || awaited {
                 radar.set_sensitivity(load_f32(&controls.acoustic_sensitivity));
+                radar.set_personal(crate::sound_sense::personal());
                 heard.extend(frame.iter().copied());
                 let over = heard.len().saturating_sub(48_000);
                 heard.drain(..over);

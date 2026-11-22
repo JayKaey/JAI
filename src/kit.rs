@@ -57,6 +57,10 @@ pub const TOOLS: &[&str] = &[
     "other_pc",
     "admin",
     crate::news::TOOL,
+    "where_was_i",
+    "countdowns",
+    "file_helper",
+    "desk_helper",
 ];
 
 /// "What's my next lesson?", "wann ist meine nächste Stunde?": WebUntis, without the model.
@@ -86,6 +90,10 @@ pub fn command(s: &str, original: &str) -> Option<(&'static str, Value)> {
     crate::fleet::command(s).map(|a| ("other_pc", a)).or_else(|| crate::kit_games::command(s).map(|a| ("games", a)))
         .or_else(|| NEXT_LESSON.is_match(s.trim_end_matches(['?', '.', '!'])).then(|| ("next_lesson", serde_json::json!({}))))
         .or_else(|| crate::news::command(s).map(|a| (crate::news::TOOL, a)))
+        .or_else(|| crate::where_was_i::command(s).map(|a| ("where_was_i", a)))
+        .or_else(|| crate::countdowns::command(s).map(|a| ("countdowns", a)))
+        .or_else(|| crate::kit_files::command(s, original).map(|a| ("file_helper", a)))
+        .or_else(|| crate::kit_desk::command(s, original).map(|a| ("desk_helper", a)))
         .or_else(|| crate::calc::equation_command(original).map(|a| ("equation", a)))
         .or_else(|| crate::commute_advisor::wear_command(s).map(|a| ("what_to_wear", a)))
         .or_else(|| crate::kit_school::grades_command(s).map(|a| ("grades", a)))
@@ -165,6 +173,10 @@ pub async fn run_tool(ctx: &ToolContext, name: &str, args: &Value) -> Result<Str
         "other_pc" => crate::fleet::run(ctx, args).await,
         "admin" => crate::admin::run(ctx, args),
         crate::news::TOOL => crate::news::run(ctx, args).await,
+        "where_was_i" => crate::where_was_i::run(ctx, args).await,
+        "countdowns" => crate::countdowns::run(args),
+        "file_helper" => crate::kit_files::run(ctx, args).await,
+        "desk_helper" => crate::kit_desk::run(ctx, args).await,
         other => Err(format!("The kit has no tool called '{other}'.")),
     }
 }
@@ -181,6 +193,8 @@ pub fn only_looks(name: &str, args: &Value) -> bool {
             || (name == "games" && matches!(action, "playtime" | "news" | "free" | "vram" | "download" | "routines" | "unplayed" | "wishlist"))
             || (name == "school_day" && crate::kit_school::school_only_looks(args))
             || (name == "pc_helper" && crate::kit_pc::only_looks(args))
+            || (name == "file_helper" && crate::kit_files::only_looks(args))
+            || (name == "desk_helper" && crate::kit_desk::only_looks(args))
             || (name == "code_helper" && crate::kit_code::only_looks(args)))
 }
 
@@ -190,7 +204,7 @@ pub fn stays_inside(name: &str, args: &Value) -> bool {
     // through this same door, call by call.)
     only_looks(name, args)
         || (name == "games" && matches!(action, "after" | "routine" | "forget_routine" | "bedtime" | "watch_download"))
-        || matches!(name, "notebook" | "privacy_board" | "pronunciation_coach" | "say_like" | "known_guest" | "subtitle_place" | "block_places" | "notification_history" | "scheduled_order" | "grades" | "put_away" | "birthdays")
+        || matches!(name, "countdowns" | "notebook" | "privacy_board" | "pronunciation_coach" | "say_like" | "known_guest" | "subtitle_place" | "block_places" | "notification_history" | "scheduled_order" | "grades" | "put_away" | "birthdays")
         || (name == "accounts" && action == "close")
         || name == "admin"
         || (name == "school_day" && matches!(action, "teach_pack" | "homework_done")) || (matches!(name, "type_snippet" | "whenever_rule" | "desk_layout") && matches!(action, "save" | "add" | "delete" | "remove"))
@@ -199,7 +213,7 @@ pub fn stays_inside(name: &str, args: &Value) -> bool {
 /// Tools that press keys or type in the app in front, or answer aloud about who is in the
 /// room: without his name they are carried out for no one (`ears::classify_addressee`).
 pub fn acts_for_whoever_speaks(name: &str) -> bool {
-    matches!(name, "press_keys" | "type_snippet" | "take_dictation" | "read_aloud" | "known_guest")
+    matches!(name, "press_keys" | "type_snippet" | "take_dictation" | "read_aloud" | "known_guest" | "file_helper" | "where_was_i")
 }
 
 /// A tool's answer: what stands in the chat, and the one line he says.

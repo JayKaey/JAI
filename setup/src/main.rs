@@ -305,7 +305,7 @@ mod packages {
     /// What J.A.I. needs on Arch (the README's Linux section): the libraries he starts with, his
     /// voice, Ollama's unpacking, the mixer, reading the screen, updates, where the PC is, links
     /// and the media grabber.
-    pub const NEEDED: &[&str] = &["alsa-lib", "opus", "espeak-ng", "zstd", "libpulse", "tesseract", "tesseract-data-eng", "tesseract-data-deu", "pacman-contrib", "discover", "geoclue", "xdg-utils", "yt-dlp", "ffmpeg"];
+    pub const NEEDED: &[&str] = &["alsa-lib", "opus", "espeak-ng", "zstd", "libpulse", "tesseract", "tesseract-data-eng", "tesseract-data-deu", "pacman-contrib", "discover", "geoclue", "xdg-utils", "yt-dlp", "ffmpeg", "wl-clipboard"];
 
     /// Installs those not installed yet (pacman as root asks for the password through polkit).
     pub fn install(check: bool) -> Result<(), String> {

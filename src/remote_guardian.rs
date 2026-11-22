@@ -209,7 +209,7 @@ fn magic_packet(mac: &str) -> Result<[u8; 102], String> {
     Ok(packet)
 }
 
-async fn send_wol(mac: &str, broadcast: &str) -> Result<(), String> {
+pub(crate) async fn send_wol(mac: &str, broadcast: &str) -> Result<(), String> {
     let packet = magic_packet(mac)?;
     let address: std::net::Ipv4Addr = broadcast.parse().map_err(|_| "wake_broadcast must be an IPv4 broadcast address")?;
     let socket = tokio::net::UdpSocket::bind("0.0.0.0:0").await.map_err(|e| e.to_string())?;

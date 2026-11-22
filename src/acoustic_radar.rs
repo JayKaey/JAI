@@ -47,6 +47,14 @@ pub enum AcousticEvent {
     Sound,
 }
 
+/// What Sir taught about his own claps and snaps (`sound_sense::personal`): how far over the
+/// room an impulse must stand (his softest, with room to spare) and how much echo may follow it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Personal {
+    pub gate: f32,
+    pub tail: f32,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Kind {
     Clap,
@@ -64,6 +72,7 @@ struct Onset {
 
 pub struct AcousticRadar {
     sensitivity: f32,
+    personal: Option<Personal>,
     low_hp: Biquad,
     low_lp: Biquad,
     high_hp: Biquad,
@@ -98,6 +107,7 @@ impl AcousticRadar {
     pub fn new(sensitivity: f32) -> Self {
         Self {
             sensitivity: sensitivity.clamp(0.5, 2.0),
+            personal: None,
             low_hp: Biquad::high_pass(100.0, RATE),
             low_lp: Biquad::low_pass(900.0, RATE),
             high_hp: Biquad::high_pass(2500.0, RATE),
@@ -139,6 +149,10 @@ impl AcousticRadar {
 
     pub fn set_sensitivity(&mut self, s: f32) {
         self.sensitivity = s.clamp(0.5, 2.0);
+    }
+
+    pub fn set_personal(&mut self, personal: Option<Personal>) {
+        self.personal = personal;
     }
 
     /// Forgets half-seen gestures (Sir started talking, JAI is speaking).
@@ -194,18 +208,24 @@ impl AcousticRadar {
             on.after.push(e);
             if on.after.len() >= DECAY_BLOCKS {
                 let on = self.onset.take().expect("onset present");
-                if let Some(kind) = classify(&on) {
+                if let Some(kind) = classify(&on, self.personal) {
                     // (The loud stretch it began is its own echo.)
                     self.loud_impulse |= self.loud_since.is_some_and(|since| since >= on.at);
                     out = self.pattern(kind, on.at);
                 }
             }
         } else if listening && self.now_ms >= self.refractory_until {
-            // Inside a sound that lasts (a clap's echo, a bell) only a sharp jump over the block
-            // before is an impulse: the sound's own ups and downs and its end are none.
-            let inside = self.loud_since.is_some_and(|since| self.loud_last - since >= 100.0);
-            let k = 12.0 / self.sensitivity;
-            let floor = 6e-6 / self.sensitivity;
+            // Inside a loud stretch (a clap's echo, a bell) only a sharp jump over the block before
+            // is an impulse: the sound's own ups and downs and its end are none. (From its first
+            // block on: with his gate open, a clap's echo 64 ms on was a "clap" of its own, and
+            // the pair it began was no longer alone.)
+            let inside = self.loud_since.is_some();
+            let (mut k, mut floor) = (12.0 / self.sensitivity, 6e-6 / self.sensitivity);
+            if let Some(his) = self.personal {
+                // (His softest taught one gets through; his prints say whether it was his.)
+                k = k.min(his.gate);
+                floor = floor.min(1e-6);
+            }
             if e > self.background * k && e > floor && (!inside || e > self.prev * JUMP) {
                 self.onset = Some(Onset { at: self.now_ms, peak: e, peak_low: el, peak_high: eh, after: Vec::with_capacity(DECAY_BLOCKS) });
                 self.refractory_until = self.now_ms + 60.0;
@@ -225,7 +245,10 @@ impl AcousticRadar {
         if let Some(since) = self.loud_since {
             let over = !listening || self.now_ms - self.loud_last > 120.0;
             let lasted = self.loud_last - since;
-            if listening && !self.loud_told && self.now_ms >= self.sound_rest_until && (lasted >= SOUND_TOLD_MS || (over && lasted >= SOUND_SHORTEST_MS && !self.loud_impulse)) {
+            // (Claps in an echoing room keep it loud from one to the next: the echo of impulses is
+            // told as a sound only once it lasts far longer than an echo can.)
+            let told_after = if self.loud_impulse { 3.0 * SOUND_TOLD_MS } else { SOUND_TOLD_MS };
+            if listening && !self.loud_told && self.now_ms >= self.sound_rest_until && (lasted >= told_after || (over && lasted >= SOUND_SHORTEST_MS && !self.loud_impulse)) {
                 self.loud_told = true;
                 self.sound_rest_until = self.now_ms + SOUND_REST_MS;
                 self.told_from = since;
@@ -321,16 +344,18 @@ impl AcousticRadar {
 }
 
 /// An impulse that fell away fast: a clap (broadband, bright) or a knock (low, dull).
-fn classify(on: &Onset) -> Option<Kind> {
+/// Taught (`personal`), more echo may follow and an impulse between bright and dull counts too:
+/// his snap through a headset's microphone.
+fn classify(on: &Onset, personal: Option<Personal>) -> Option<Kind> {
     let tail: f32 = on.after[3..].iter().sum::<f32>() / (on.after.len() - 3).max(1) as f32;
-    if tail > on.peak * 0.25 {
+    if tail > on.peak * personal.map_or(0.25, |his| his.tail) {
         return None;
     }
     let high = on.peak_high / on.peak.max(1e-9);
     let low = on.peak_low / on.peak.max(1e-9);
     if low > 0.4 && high < 0.15 {
         Some(Kind::Knock)
-    } else if high > 0.12 {
+    } else if high > 0.12 || personal.is_some() {
         // (Bright, or a clap as a headset's microphone hears it, its treble cut.)
         Some(Kind::Clap)
     } else {
@@ -496,6 +521,61 @@ mod tests {
         }
         let s = scene(1500 + 2500, &[(1500, snap(0.03))]);
         assert_eq!(run(&mut AcousticRadar::new(1.0), &s), vec![AcousticEvent::Single], "a snap");
+    }
+
+    /// Sir, 2026-11-22: "the clap and snap detection is extremely bad and barely works even with
+    /// the training". Taught his snaps, 45 s of snapping gave the radar one: a snap his headset's
+    /// microphone hears without its treble is neither bright nor dull, a soft one stands under
+    /// twelve times the room, and a clap in his room keeps too much echo for the impulse test.
+    /// What he taught (`Personal`) opens the radar to his own; the sound model and his prints
+    /// (`sound_sense`) judge what came through.
+    #[test]
+    fn his_own_snaps_and_claps_come_through_once_taught() {
+        // (A headset's microphone cuts its treble steeply: four poles at 1.6 kHz.)
+        let mid_snap = |peak: f32| -> Vec<f32> {
+            let mut seed = 4242u32;
+            let mut hp = crate::dsp::Biquad::high_pass(900.0, RATE);
+            let (mut lp1, mut lp2) = (crate::dsp::Biquad::low_pass(1600.0, RATE), crate::dsp::Biquad::low_pass(1600.0, RATE));
+            (0..16 * 60)
+                .map(|i| {
+                    seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12345);
+                    let x = hp.process((((seed >> 16) as f32 / 32768.0) - 1.0) * peak * (-(i as f32) / 12.0).exp());
+                    lp2.process(lp1.process(x))
+                })
+                .collect()
+        };
+        let echoing_clap = || -> Vec<f32> {
+            let mut seed = 777u32;
+            (0..16 * 500)
+                .map(|i| {
+                    seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12345);
+                    let t = i as f32;
+                    (((seed >> 16) as f32 / 32768.0) - 1.0) * 0.3 * ((-t / 40.0).exp() + 0.6 * (-t / 2500.0).exp())
+                })
+                .collect()
+        };
+        let his = Personal { gate: 4.0, tail: 0.6 };
+        let heard = |signal: &[f32], personal: Option<Personal>| {
+            let mut r = AcousticRadar::new(1.0);
+            r.set_personal(personal);
+            run(&mut r, signal)
+        };
+        let headset_snap = scene(1500 + 2500, &[(1500, mid_snap(0.08))]);
+        let soft_snap = scene(1500 + 2500, &[(1500, snap(0.012))]);
+        let claps = scene(1500 + 400 + 2500, &[(1500, echoing_clap()), (1900, echoing_clap())]);
+        let found: Vec<(&str, Vec<AcousticEvent>, Vec<AcousticEvent>)> = vec![
+            // Untaught: a snap without treble is let be, a soft one is under the gate, claps with
+            // a long echo are no impulses but a sound that lasts (the sound model names it).
+            ("headset snap, untaught", heard(&headset_snap, None), vec![]),
+            ("soft snap, untaught", heard(&soft_snap, None), vec![]),
+            ("echoing claps, untaught", heard(&claps, None), vec![AcousticEvent::Sound]),
+            ("headset snap, taught", heard(&headset_snap, Some(his)), vec![AcousticEvent::Single]),
+            ("soft snap, taught", heard(&soft_snap, Some(his)), vec![AcousticEvent::Single]),
+            ("echoing claps, taught", heard(&claps, Some(his)), vec![AcousticEvent::Claps { count: 2 }]),
+            ("the room alone, however open", heard(&room(4000), Some(his)), vec![]),
+        ];
+        let wrong: Vec<String> = found.iter().filter(|(_, got, want)| got != want).map(|(what, got, want)| format!("{what}: {got:?}, not {want:?}")).collect();
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
     }
 
     /// The sound model hears the gesture itself: from its first clap to the moment it is told

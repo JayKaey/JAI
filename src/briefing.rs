@@ -649,6 +649,11 @@ pub async fn executive(tools: &ToolContext, time_of_day: Option<&str>) -> String
         md.extend(["### Weather".to_string(), format!("- {line}")]);
         spoken.push(line);
     }
+    // His countdowns a week or less away ("5 days until your exam").
+    if let Some(line) = crate::countdowns::briefing_line(day) {
+        md.extend(["### Countdowns".to_string(), format!("- {line}")]);
+        spoken.push(line);
+    }
     // The town he found Sir in himself is asked about once (his yes keeps it as the home).
     let asked_home = weather.as_ref().and_then(|(home, ..)| {
         let asked = crate::kit::get("home_asked", "town").and_then(|v| v.as_str().map(str::to_string));

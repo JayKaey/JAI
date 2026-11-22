@@ -347,7 +347,7 @@ fn parse_target(raw: &str, known: &dyn Fn(&str) -> Option<PathBuf>, home: Option
 }
 
 /// The user's temp folder, without a trailing separator.
-fn temp_folder() -> PathBuf {
+pub(crate) fn temp_folder() -> PathBuf {
     let temp = std::env::temp_dir();
     let text = temp.to_string_lossy();
     let trimmed = text.trim_end_matches(['\\', '/']);
@@ -360,7 +360,7 @@ fn temp_folder() -> PathBuf {
 
 /// Where one of Sir's known folders is (Windows knows where he moved them).
 #[cfg(windows)]
-fn known_folder(name: &str) -> Option<PathBuf> {
+pub(crate) fn known_folder(name: &str) -> Option<PathBuf> {
     use windows::Win32::Foundation::HANDLE;
     use windows::Win32::System::Com::CoTaskMemFree;
     use windows::Win32::UI::Shell::{SHGetKnownFolderPath, FOLDERID_Desktop, FOLDERID_Documents, FOLDERID_Downloads, FOLDERID_Music, FOLDERID_Pictures, FOLDERID_Videos, KF_FLAG_DEFAULT};
@@ -391,7 +391,7 @@ fn known_folder(name: &str) -> Option<PathBuf> {
 }
 
 #[cfg(not(windows))]
-fn known_folder(name: &str) -> Option<PathBuf> {
+pub(crate) fn known_folder(name: &str) -> Option<PathBuf> {
     match name {
         "Temp" => Some(temp_folder()),
         "AppData" => crate::apps::home_dir().map(|h| h.join(".local").join("share")),
@@ -523,7 +523,7 @@ fn recycle_bin(letter: char) -> Option<u64> {
 }
 
 #[cfg(not(windows))]
-fn recycle_bin(_letter: char) -> Option<u64> {
+pub(crate) fn recycle_bin(_letter: char) -> Option<u64> {
     // The freedesktop trash of the home partition: what is in files/ is what emptying frees.
     let files = crate::apps::home_dir()?.join(".local/share/Trash/files");
     Some(walkdir::WalkDir::new(files).into_iter().flatten().filter_map(|e| e.metadata().ok()).filter(|m| m.is_file()).map(|m| m.len()).sum())

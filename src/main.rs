@@ -47,6 +47,7 @@ mod config;
 mod contacts;
 mod context;
 mod context_graph;
+mod countdowns;
 mod crash_guard;
 mod deal_sniper;
 mod deep_research_engine;
@@ -142,6 +143,8 @@ mod interface;
 mod jai_voice_dsp;
 mod kit;
 mod kit_code;
+mod kit_desk;
+mod kit_files;
 mod kit_games;
 mod kit_insight;
 mod kit_notes;
@@ -251,6 +254,8 @@ mod webcams;
 mod websearch;
 mod webuntis_client;
 mod whatsapp_client;
+mod where_was_i;
+mod wake_pc;
 mod widgets;
 mod window_commands;
 mod window_drill;
@@ -1192,6 +1197,7 @@ async fn start(cli: &Cli, cfg: JaiConfig) -> Started {
     away_mode::start(app.tools().clone(), shutdown.clone());
     watch_and_tell::start(shutdown.clone());
     kit_notes::start(app.tools().clone(), shutdown.clone());
+    where_was_i::start(app.tools().clone(), shutdown.clone());
     // A dry line now and then (a long stretch at the PC, a hot GPU).
     kit_wit::start(app.tools().monitor.subscribe());
     // Once a day: a whole copy of the memory database and the settings, the last seven kept.

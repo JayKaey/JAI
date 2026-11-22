@@ -530,7 +530,7 @@ impl MindView {
     /// layer, 1 just now … 0 fading); `layer_names`: the four layers, inside out.
     pub fn show(&mut self, ui: &mut egui::Ui, rect: Rect, look: &CoreLook, layer_names: &[&str; SHELLS], active: &[(&str, usize, f32)]) {
         let t = holo::theme();
-        let dt = ui.input(|i| i.stable_dt).min(0.05);
+        let dt = crate::holo_motion::dt(ui.ctx());
         let response = ui.interact(rect, ui.id().with("holo_mind_view"), egui::Sense::click_and_drag());
         if response.dragged() {
             self.drag(response.drag_delta(), dt);

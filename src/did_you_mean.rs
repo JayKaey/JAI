@@ -395,6 +395,11 @@ fn label(order: &str) -> String {
 /// The orders he knows that are closest to `said`, the closest first: at most three, and none
 /// that is not close (see the module's head).
 pub fn closest(said: &str) -> Vec<Choice> {
+    ranked(said).into_iter().map(|(_, choice)| choice).collect()
+}
+
+/// `closest`, each with how close it is (up to 2: all of what he said, all of its own words).
+fn ranked(said: &str) -> Vec<(f32, Choice)> {
     let words = telling(said);
     let all: f32 = words.iter().map(|w| weight(w)).sum();
     if words.is_empty() || all < 1.0 {
@@ -415,7 +420,7 @@ pub fn closest(said: &str) -> Vec<Choice> {
     }
     ranked.sort_by(|a, b| b.0.total_cmp(&a.0));
     let best = ranked.first().map_or(0.0, |(score, _)| *score);
-    ranked.into_iter().filter(|(score, _)| *score >= best - 0.6).take(MOST).map(|(_, choice)| choice).collect()
+    ranked.into_iter().filter(|(score, _)| *score >= best - 0.6).take(MOST).collect()
 }
 
 /// Whether a sentence begins like an order ("open …", "can you …", "ich will …"): one he
@@ -459,14 +464,28 @@ pub fn offer_for(said: &str) -> bool {
 }
 
 /// What an order that found nothing most likely was ("open the backgrounds window": no program
-/// of that name): the one close order he knows, when all it does is open or show something.
-/// More than one, or one that does anything else, is only ever offered. (Sir, 2026-11-21:
-/// "make it so that JAI ... tries to guess if he doesn't find something".)
+/// of that name): the close order he knows, the only one or well ahead of the next, when it is
+/// harmless (`harmless`). Any other is only ever offered. (Sir, 2026-11-21: "make it so that
+/// JAI ... tries to guess if he doesn't find something"; 2026-11-22: "guess more ... so that he
+/// always does something".)
 pub fn guess(said: &str) -> Option<Choice> {
-    let choices = closest(said);
-    let [only] = choices.as_slice() else { return None };
-    let own = only.order != crate::ear::words(said).join(" ");
-    (own && (only.order.starts_with("open ") || only.order.starts_with("show "))).then(|| only.clone())
+    let ranked = ranked(said);
+    let (best, choice) = ranked.first()?;
+    let ahead = ranked.get(1).is_none_or(|(next, _)| best - next >= 0.3);
+    let own = choice.order != crate::ear::words(said).join(" ");
+    (own && ahead && harmless(&choice.order)).then(|| choice.clone())
+}
+
+/// An order a guess may carry out unasked: it opens, shows, tells or reads something, or
+/// switches something of his that one word switches back. One that deletes, forgets, types into
+/// his programs, changes whom he obeys or puts windows away is only ever offered.
+fn harmless(order: &str) -> bool {
+    const LEADS: &[&str] = &[
+        "open ", "show ", "list ", "read ", "what", "how ", "who ", "why ", "where ", "when ", "explain ", "translate ", "summarise ", "brief ", "system status", "privacy board", "zoom ", "subtitles ", "night mode",
+        "calm mode", "live desktop ", "put the live background", "portrait dashboard", "volume ", "set the volume", "mute", "pause the music", "resume the music", "next song", "previous song", "make the screens",
+        "dim the ", "brightness ", "set a timer", "scroll ", "go to the ", "page ", "next tab", "previous tab", "use all monitors", "use one monitor",
+    ];
+    LEADS.iter().any(|lead| order.starts_with(lead))
 }
 
 /// The offer that stands, if one does.
@@ -638,13 +657,24 @@ mod tests {
     #[test]
     fn an_open_order_that_found_nothing_is_taken_as_the_one_close_view() {
         // "open the backgrounds window" found no program of that name (Sir, 2026-11-21).
-        for (said, meant) in [("open the backgrounds window", "open the background window"), ("Jay, open the keybinds window", "open the hotkeys window"), ("open the protocols window please", "open the protocol window"), ("open the admin pannel", "open the admin window"), ("open the accounts", "open the accounts list")] {
+        // (And since 2026-11-22, "guess more": one well ahead of the rest, and anything one word
+        // takes back.)
+        for (said, meant) in [
+            ("open the backgrounds window", "open the background window"),
+            ("Jay, open the keybinds window", "open the hotkeys window"),
+            ("open the protocols window please", "open the protocol window"),
+            ("open the admin pannel", "open the admin window"),
+            ("open the accounts", "open the accounts list"),
+            ("the captions should go away", "subtitles off"),
+            ("Throw it in all monitors.", "use all monitors"),
+        ] {
             assert_eq!(guess(said).map(|c| c.order).as_deref(), Some(meant), "{said}");
             // (Carried out by the fast path in the same turn: it must be an order there.)
             assert!(matches!(crate::brain::fast_as_said(meant), Some(crate::brain::Fast::Intent(_))), "{meant}");
         }
-        // Its own words, nothing close, more than one close, or one that does more than open.
-        for said in ["open the background window", "open teams", "open the pod bay doors", "Throw it in all monitors.", "the captions should go away"] {
+        // Its own words, nothing close, or one that deletes, puts away or stops him listening:
+        // those are only offered.
+        for said in ["open the background window", "open teams", "open the pod bay doors", "delete my last notes", "close all the windows you opened", "stop the listening please", "wipe my notifications"] {
             assert_eq!(guess(said).map(|c| c.order), None, "{said}");
         }
     }

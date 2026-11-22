@@ -478,12 +478,20 @@ fields of `whisper_full_params`. After a build without it, run `cargo clean -p w
 At run time he needs `espeak-ng` (his voice), `zstd` (the installer unpacks Ollama with it),
 `libpulse` (`pactl`: the volume of every app and the microphone), `tesseract` with its English and
 German data (reading the screen), `pacman-contrib` and `discover` (app updates), `geoclue` (where
-the PC is), `xdg-utils`, and `yt-dlp` and `ffmpeg` (the media grabber); the NVIDIA driver's
-`nvidia-smi` tells him the video memory:
+the PC is), `xdg-utils`, `yt-dlp` and `ffmpeg` (the media grabber), and `wl-clipboard` (the
+selection in Dolphin); the NVIDIA driver's `nvidia-smi` tells him the video memory:
 
 ```
-sudo pacman -S --needed espeak-ng zstd libpulse tesseract tesseract-data-eng tesseract-data-deu pacman-contrib discover geoclue xdg-utils yt-dlp ffmpeg
+sudo pacman -S --needed espeak-ng zstd libpulse tesseract tesseract-data-eng tesseract-data-deu pacman-contrib discover geoclue xdg-utils yt-dlp ffmpeg wl-clipboard
 ```
+
+The file orders ("rename this", "zip these", "print it twice", "copy the path of this") read
+Dolphin's selection by copying it, so "make a new folder here" needs something selected in that
+folder. Zips are made and unpacked by `bsdtar` (libarchive, which pacman itself needs); printing
+needs CUPS (`lp`). "Free up some space" empties only the Trash: Linux clears its temp files
+itself. "What colour is this?" brings up KWin's own colour picker, since Wayland lets no program
+read the screen: click the colour. Waking another PC works on the same network only, as on
+Windows.
 
 His own windows are X11 windows (XWayland), each waiting for the screen's refresh by the driver's
 own vsync (the shared wait of Windows is not used there). Other programs' windows, the keys he presses for Sir

@@ -124,8 +124,14 @@ pub fn pick(text: &str) -> Option<Intent> {
     let draw = ["draw", "draw2", "draw3", "draw4", "draw5"].iter().any(|g| c.name(g).is_some());
     let german = ["s3", "s4", "s5"].iter().any(|g| c.name(g).is_some());
     let mut subject = ["s", "s2", "s3", "s4", "s5"].iter().find_map(|g| c.name(g))?.as_str().trim().to_string();
-    for tail in [" sir", " jay", " quickly", " dar"] {
+    for tail in [" sir", " jay", " quickly", " dar", " in a new window", " in the new window", " in a window"] {
         if let Some(rest) = subject.strip_suffix(tail) {
+            subject = rest.trim().to_string();
+        }
+    }
+    // "The function of a sine wave", "the graph of …": the curve itself.
+    for lead in ["the function of ", "a function of ", "the graph of ", "a graph of ", "the plot of ", "a plot of ", "the curve of "] {
+        if let Some(rest) = subject.strip_prefix(lead) {
             subject = rest.trim().to_string();
         }
     }

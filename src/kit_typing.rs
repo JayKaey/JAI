@@ -192,7 +192,11 @@ pub enum Key {
     T,
     A,
     V,
+    // (Copying is only pressed on KDE: Explorer's selection is read through the shell.)
+    #[cfg(not(windows))]
+    C,
     F,
+    Z,
     Left,
     Right,
     Down,
@@ -241,6 +245,7 @@ async fn strike(strokes: Vec<Stroke>) -> Result<(), String> {
                     Key::A => k::VK_A,
                     Key::V => k::VK_V,
                     Key::F => k::VK_F,
+                    Key::Z => k::VK_Z,
                     Key::Left => k::VK_LEFT,
                     Key::Right => k::VK_RIGHT,
                     Key::Down => k::VK_DOWN,
@@ -381,6 +386,8 @@ const KEYS: &[Keys] = &[
     },
     Keys { phrase: r"^(?:select\s+all|select\s+everything|alles\s+(?:markieren|auswählen))$", name: "select_all", strokes: &[stroke(Key::A, true, false, false, 1)], done: "All selected." },
     Keys { phrase: r"^(?:paste\s+(?:it|that)|paste\s+(?:it\s+)?here|füg\s+(?:es|das)\s+ein|einfügen)$", name: "paste", strokes: &[stroke(Key::V, true, false, false, 1)], done: "Pasted." },
+    // (Also how a rewritten selection is taken back: "undo that" after "fix the grammar of this".)
+    Keys { phrase: r"^(?:press\s+(?:control|ctrl|strg)\s+z|undo\s+(?:my|the)\s+(?:typing|edit))$", name: "undo_edit", strokes: &[stroke(Key::Z, true, false, false, 1)], done: "Undone." },
     Keys { phrase: r"^(?:press|hit)\s+(?:the\s+)?enter(?:\s+key)?$|^enter\s+drücken$|^drück\s+enter$", name: "enter", strokes: &[stroke(Key::Enter, false, false, false, 1)], done: "Enter." },
     Keys { phrase: r"^(?:press|hit)\s+(?:the\s+)?escape(?:\s+key)?$|^escape\s+drücken$|^drück\s+escape$", name: "escape", strokes: &[stroke(Key::Escape, false, false, false, 1)], done: "Escape." },
 ];
@@ -414,6 +421,13 @@ async fn to_his_app(ctx: &ToolContext) -> Result<(), String> {
     }
     let _ = ctx;
     Ok(())
+}
+
+/// Ctrl+C in the app he works in (Dolphin's selected files onto the clipboard: `kit_files`).
+#[cfg(not(windows))]
+pub async fn copy_in_his_app(ctx: &ToolContext) -> Result<(), String> {
+    to_his_app(ctx).await?;
+    strike(vec![stroke(Key::C, true, false, false, 1)]).await
 }
 
 pub async fn keys(ctx: &ToolContext, args: &Value) -> Result<String, String> {

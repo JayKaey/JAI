@@ -1263,20 +1263,16 @@ impl Jai {
     /// up for it) J.A.I.'s own reaction to two claps and a knock.
     async fn on_acoustic(&self, ev: crate::acoustic_radar::AcousticEvent, clip: Vec<f32>) {
         use crate::sound_sense::Sound;
-        let scores = if crate::sound_sense::available() {
-            match tokio::task::spawn_blocking(move || crate::sound_sense::scores(&clip)).await {
-                Ok(Ok(scores)) => Some(scores),
-                Ok(Err(e)) => {
-                    warn!("[RADAR] The sound model: {e}");
-                    None
-                }
-                Err(_) => None,
-            }
-        } else {
-            None
-        };
+        // The model's word on the clip, and the prints of its impulses (for Sir's own claps and snaps).
+        let model = crate::sound_sense::available();
+        let (scores, prints) = tokio::task::spawn_blocking(move || {
+            let scores = model.then(|| crate::sound_sense::scores(&clip)).and_then(|s| s.map_err(|e| warn!("[RADAR] The sound model: {e}")).ok());
+            (scores, crate::sound_sense::prints(&clip))
+        })
+        .await
+        .unwrap_or_default();
         // ("Learn my claps": while he is taught, what he hears is Sir's own sound, nothing else.)
-        if let Some((own, n, done)) = crate::sound_sense::learn(ev, scores.as_deref()) {
+        if let Some((own, n, done)) = crate::sound_sense::learn(ev, scores.as_deref(), &prints) {
             info!("[RADAR] {ev:?}: Sir's own {own:?}, sample {n}");
             self.tools().stark.pulse(&["acoustic", "ears", "brain"], false);
             match done {
@@ -1285,7 +1281,7 @@ impl Jai {
             }
             return;
         }
-        let sound = crate::sound_sense::judge(ev, scores.as_deref());
+        let sound = crate::sound_sense::judge(ev, scores.as_deref(), &prints);
         crate::sound_sense::note(ev, sound, scores.as_deref());
         let Some(sound) = sound else {
             // (The model's three likeliest, to tune the radar by.)

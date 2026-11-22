@@ -87,7 +87,12 @@ fn wide(s: &str) -> Vec<u16> {
 /// ShellExecuteEx("open") without error dialogs. Handles exe names via App Paths/PATH,
 /// absolute paths, URLs, URI schemes (`spotify:`) and `shell:AppsFolder\<AUMID>`.
 pub fn shell_execute(file: &str, params: Option<&str>, dir: Option<&str>) -> Result<(), String> {
-    let verb = wide("open");
+    shell_verb("open", file, params, dir)
+}
+
+/// ShellExecuteEx with another verb ("print": a file printed by its own app).
+pub fn shell_verb(verb: &str, file: &str, params: Option<&str>, dir: Option<&str>) -> Result<(), String> {
+    let verb = wide(verb);
     let file_w = wide(file);
     let params_w = params.filter(|p| !p.is_empty()).map(wide);
     let dir_w = dir.filter(|d| !d.is_empty()).map(wide);

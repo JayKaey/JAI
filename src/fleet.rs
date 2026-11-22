@@ -75,9 +75,23 @@ pub(crate) fn names_in(word: &str) -> Vec<String> {
 /// (The routers behind the brain read it without its apostrophe: "shut down maxs pc".)
 static OF_PC: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)^(?P<order>.+?)\s+(?P<word>[\w.-]+?(?:'s|’s|s'|s’|s))\s+(?:pc|computer|laptop|rechner)$").expect("regex"));
 
+/// "Wake up Max's PC", "turn on Max's computer", "weck Max PC auf": waking it (`wake_pc`), not an
+/// order it could only read once it is up.
+static WAKE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)^(?:please\s+)?(?:(?:wake(?:\s+up)?|turn\s+on|switch\s+on|power\s+on|power\s+up|boot(?:\s+up)?)\s+(?P<word>[\w.'’-]+)\s+(?:pc|computer|laptop|rechner)(?:\s+up)?|(?:weck(?:e)?|fahr(?:e)?|schalte?)\s+(?P<word2>[\w.'’-]+)\s+(?:pc|computer|laptop|rechner)\s+(?:auf|hoch|ein|an))$").expect("regex")
+});
+/// Words that name no other PC's owner ("my PC", "this PC", "Sir's PC").
+const NOT_A_NAME: &[&str] = &[
+    "my", "your", "this", "the", "that", "our", "his", "her", "their", "a", "its", "yours", "ours", "hers", "theirs", "every", "each", "all", "any", "another", "other", "both", "mein", "meinem", "meinen", "deinem", "seinem", "ihrem", "unserem", "eurem", "dem", "diesem", "des", "sir's", "sirs", "jai's", "jais", "jay's", "jays",
+];
+
 /// An order for another PC: what, and whose PC.
 pub fn command(s: &str) -> Option<Value> {
     let s = s.trim().trim_end_matches(['.', '!', '?']);
+    if let Some(c) = WAKE.captures(s) {
+        let word = c.name("word").or(c.name("word2"))?.as_str().to_lowercase();
+        return (!NOT_A_NAME.contains(&word.as_str())).then(|| json!({ "wake": true, "names": names_in(&word) }));
+    }
     let (order, word) = if let Some(c) = TO_PC.captures(s) {
         (c["order"].trim().trim_matches(['"', '“', '”', '„', '\'']).trim().to_string(), c.name("to").or(c.name("tell"))?.as_str().to_lowercase())
     } else if let Some(c) = ON_PC.captures(s).or_else(|| AMID_PC.captures(s)) {
@@ -86,12 +100,7 @@ pub fn command(s: &str) -> Option<Value> {
         OF_PC.captures(s).map(|c| (format!("{} this PC", c["order"].trim()), c["word"].to_lowercase()))?
     };
     let first = order.split_whitespace().next().unwrap_or("").trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase();
-    if NO_ORDER.contains(&first.as_str())
-        || [
-            "my", "your", "this", "the", "that", "our", "his", "her", "their", "a", "its", "yours", "ours", "hers", "theirs", "every", "each", "all", "any", "another", "other", "both", "mein", "meinem", "meinen", "deinem", "seinem", "ihrem", "unserem", "eurem", "dem", "diesem", "des", "sir's", "sirs", "jai's", "jais", "jay's", "jays",
-        ]
-        .contains(&word.as_str())
-    {
+    if NO_ORDER.contains(&first.as_str()) || NOT_A_NAME.contains(&word.as_str()) {
         return None;
     }
     Some(json!({ "order": order, "names": names_in(&word) }))
@@ -108,6 +117,10 @@ pub async fn run(ctx: &ToolContext, args: &Value) -> Result<String, String> {
     let (db, main) = ctx.config.read(|c| (c.memory_db_path.clone(), c.main_pc.clone()));
     if ctx.caller.guest().is_some() {
         return Err("Only Sir controls other PCs.".into());
+    }
+    if args["wake"] == true {
+        let names: Vec<String> = serde_json::from_value(args["names"].clone()).unwrap_or_default();
+        return crate::wake_pc::wake(ctx, &names).await;
     }
     if is_client(&main) {
         let v = crate::admin::remote(json!({ "action": "order", "args": args })).await?;
@@ -182,6 +195,11 @@ fn note(name: &str, game: Option<String>, learning: bool) {
     }
 }
 
+/// Whether an account's PC called since `since`.
+pub fn heard_since(name: &str, since: Instant) -> bool {
+    lock(&SEEN).get(&name.to_lowercase()).is_some_and(|(at, _)| *at >= since)
+}
+
 /// What the PCs did since the last call; one unheard of for `ONLINE_WITHIN` has gone offline.
 pub fn events() -> Vec<(String, PcEvent)> {
     let mut events = std::mem::take(&mut *lock(&EVENTS));
@@ -209,6 +227,7 @@ pub fn hello(db: &str, name: &str, body: &Value) -> Value {
     if let Some(print) = body.get("print").filter(|p| p.is_object()) {
         crate::speaker_id::share_guest(name, print);
     }
+    crate::wake_pc::learn(name, body);
     let account = crate::accounts::get(db, name).map(|a| crate::accounts::Account { devices: Vec::new(), ..a });
     let admin = body["admin"].as_str().is_some_and(crate::admin::holds);
     json!({ "orders": take(name), "sir": crate::speaker_id::print_to_share(db), "build": BUILD, "version": VERSION, "os": std::env::consts::OS, "account": account, "admin": admin })
@@ -282,7 +301,7 @@ pub async fn client(app: Jai) {
         let admin = crate::admin::key_held();
         // (The game it plays: for Sir's rules and protocols that wait on this PC.)
         let game = crate::vram_guard::game_now().map(|(game, _)| game);
-        let body = json!({ "kind": "pc", "device": pc_name(), "version": BUILD, "stats": stats(&app), "done": done, "print": crate::speaker_id::print_to_share(&db), "admin": admin, "game": game });
+        let body = json!({ "kind": "pc", "device": pc_name(), "version": BUILD, "stats": stats(&app), "done": done, "print": crate::speaker_id::print_to_share(&db), "admin": admin, "game": game, "mac": crate::wake_pc::this_pc_mac() });
         let answer = match http.post(format!("{main}/api/pc")).header("X-JAI-Key", &key).json(&body).send().await {
             Ok(r) if r.status().as_u16() == 403 || r.status().as_u16() == 401 => {
                 // The account is gone, paused or its key no longer holds: log in again.

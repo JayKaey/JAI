@@ -1037,7 +1037,7 @@ static OPEN_VERB: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:open|load|show|ren
 /// The subject of an opening request, cleaned ("an Iron Man suit" → "iron man suit").
 fn subject(raw: &str) -> Option<String> {
     static ART: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:a|an|the|some|one|my|ein|eine|einen|einem|einer|eines|der|die|das|den|dem|des|vom|von|von\s+der|von\s+dem|von\s+einem|von\s+einer)\s+"));
-    static END: LazyLock<Regex> = LazyLock::new(|| re(r"\s+(?:for\s+me|please|bitte|now|jetzt|in\s+3d|als\s+3d\s+modell|as\s+a\s+3d\s+model|model|modell|real\s+quick|quickly|schnell)$"));
+    static END: LazyLock<Regex> = LazyLock::new(|| re(r"\s+(?:for\s+me|please|bitte|now|jetzt|in\s+3d|als\s+3d\s+modell|as\s+a\s+3d\s+model|model|modell|real\s+quick|quickly|schnell|in\s+(?:a|the)\s+(?:new\s+|separate\s+|own\s+)?window|in\s+einem\s+(?:neuen\s+|eigenen\s+)?fenster)$"));
     let mut s = raw.trim().to_string();
     for _ in 0..3 {
         s = ART.replace(&s, "").trim().to_string();
@@ -1052,7 +1052,7 @@ fn subject(raw: &str) -> Option<String> {
 fn open_command(t: &str) -> Option<Value> {
     const VERBS: &str = r"(?:render|draw|build|make|create|model|generate|show|display|bring\s+up|pull\s+up|give|put\s+up|load|open|visuali[sz]e|project|zeig|zeige|zeigt|rendere|bau|baue|erstelle|erstell|mach|mache|generiere|modelliere|öffne|oeffne|lade|stell\s+dar)";
     static OF_3D: LazyLock<Regex> = LazyLock::new(|| {
-        re(&format!(r"^{VERBS}(?:\s+(?:me|us|mir|uns))?(?:\s+up)?\s+(?:a|an|the|some|this|that|another|ein|eine|einen|das|den|die)?\s*3d\s+(?:model|modell|render|rendering|version|view|ansicht|hologram|hologramm|replica|scan)\s+(?:of|von|vom|from)\s+(.+)$"))
+        re(&format!(r"^{VERBS}(?:\s+(?:me|us|mir|uns))?(?:\s+up)?\s+(?:a|an|the|some|this|that|another|your\s+own|your|a\s+new|ein|eine|einen|das|den|die|dein\s+eigenes|dein)?\s*3d\s+(?:model|modell|render|rendering|version|view|ansicht|hologram|hologramm|replica|scan)\s+(?:of|von|vom|from)\s+(.+)$"))
     });
     // "Show me the model of an eatable apple" (2026-11-09: without "3D" it went to the model).
     static MODEL_OF: LazyLock<Regex> = LazyLock::new(|| {

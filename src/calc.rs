@@ -479,7 +479,7 @@ const NAMED_DAYS: [(&str, u32, u32); 12] = [
 ];
 
 /// "the 3rd of March", "the 10th of April 2027".
-fn spoken_date(date: chrono::NaiveDate, today: chrono::NaiveDate) -> String {
+pub(crate) fn spoken_date(date: chrono::NaiveDate, today: chrono::NaiveDate) -> String {
     use chrono::Datelike;
     const NAMES: [&str; 12] = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
     let day = date.day();
@@ -496,7 +496,7 @@ fn spoken_date(date: chrono::NaiveDate, today: chrono::NaiveDate) -> String {
 /// A date as Sir says it: "March 3rd", "the 10th of April 2027", "3. März", "10.04.",
 /// "2026-12-24", "tomorrow", "Christmas". Without a year: this year's (`after`: the next one on
 /// or after that day). (the date, whether a year was given)
-fn parse_date(phrase: &str, today: chrono::NaiveDate, after: Option<chrono::NaiveDate>) -> Option<(chrono::NaiveDate, bool)> {
+pub(crate) fn parse_date(phrase: &str, today: chrono::NaiveDate, after: Option<chrono::NaiveDate>) -> Option<(chrono::NaiveDate, bool)> {
     use chrono::{Datelike, NaiveDate};
     let s: String = phrase.to_lowercase().replace(['’', '\''], "").chars().map(|c| if c.is_alphanumeric() || c == '.' || c == '-' { c } else { ' ' }).collect();
     let s = s.split_whitespace().filter(|w| !matches!(*w, "the" | "of" | "dem" | "den" | "der" | "am" | "on" | "zum")).collect::<Vec<_>>().join(" ");
@@ -601,7 +601,13 @@ pub fn answer_dates(text: &str, today: chrono::NaiveDate) -> Option<String> {
     }
     if let Some(c) = UNTIL.captures(&lower) {
         let unit = c.get(1).map_or("days", |m| m.as_str());
-        let (date, dated) = parse_date(c.get(2).or(c.get(3))?.as_str(), today, Some(today))?;
+        let phrase = c.get(2).or(c.get(3))?.as_str();
+        // ("How many days until my exam?": a countdown of his own.)
+        if let Some((name, date)) = crate::countdowns::kept(phrase) {
+            let days = (date - today).num_days().max(0);
+            return Some(if days == 0 { format!("{} is today, Sir.", capitalise(&name)) } else { format!("{} until {name}, Sir ({}).", capitalise(&count(days, unit)), spoken_date(date, today)) });
+        }
+        let (date, dated) = parse_date(phrase, today, Some(today))?;
         let days = (date - today).num_days();
         return Some(match days {
             0 => "That is today, Sir.".to_string(),

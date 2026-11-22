@@ -1128,6 +1128,7 @@ impl Brain {
         }
         if !dry {
             crate::instant_replay::note("Sir", &typed);
+            crate::where_was_i::note_asked(&typed);
         }
         // The window Sir was working in before he spoke or typed ("full screen" may mean it).
         self.inner.tools.focus.capture_foreground().await;
@@ -1161,6 +1162,21 @@ impl Brain {
         } else if let Some(own) = crate::sound_sense::teach_order(&text) {
             // "Learn my claps": the next few he hears are Sir's own (`App::on_acoustic`).
             Some(crate::sound_sense::teach(own))
+        } else if let Some(found) = crate::kit_voice::rewrite_selection(&self.inner.tools, &text).await {
+            // "Fix the grammar of this": the selection rewritten in its place.
+            Some(match found {
+                Ok((ask, selection)) => match one_shot(&self.inner.llm, &self.inner.config.snapshot(), &ask, &selection, 1200).await {
+                    Some(answer) => {
+                        let new = crate::kit_voice::bare_rewrite(&answer);
+                        match crate::kit_voice::put_in_place(&self.inner.tools, &new).await {
+                            Ok(()) => format!("{new}\nSpoken: Done, Sir. \"Undo that\" brings your text back."),
+                            Err(why) => format!("{new}\nSpoken: Here it is, Sir: I couldn't put it in place ({why})."),
+                        }
+                    }
+                    None => "I could not rewrite it just now, Sir: my language model is not answering.".to_string(),
+                },
+                Err(why) => why,
+            })
         } else if let Some((words, into)) = crate::translate::parse(&text) {
             // "Translate good morning into Japanese": one bare request, nothing else in it.
             Some(match one_shot(&self.inner.llm, &self.inner.config.snapshot(), &crate::translate::instruction(into), &words, 200).await {

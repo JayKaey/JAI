@@ -274,6 +274,13 @@ pub fn imperative_after_name(command: &str) -> String {
         ("removes", "remove"), ("added", "add"), ("adds", "add"), ("sets", "set"), ("minimized", "minimize"), ("minimizes", "minimize"),
         ("maximized", "maximize"), ("maximizes", "maximize"), ("cleared", "clear"), ("clears", "clear"), ("faded", "fade"), ("fades", "fade"),
         ("skipped", "skip"), ("skips", "skip"), ("resumed", "resume"), ("resumes", "resume"), ("spans", "span"), ("spanned", "span"),
+        // (Not "played", "made", "woke", "copied" or "locked": "Jay, I played football today" and
+        // the like are told, not ordered.)
+        ("liked", "like"), ("likes", "like"), ("plays", "play"), ("activated", "activate"), ("activates", "activate"),
+        ("enabled", "enable"), ("enables", "enable"), ("disabled", "disable"), ("disables", "disable"), ("makes", "make"),
+        ("deleted", "delete"), ("deletes", "delete"), ("renamed", "rename"), ("renames", "rename"), ("printed", "print"), ("prints", "print"),
+        ("zipped", "zip"), ("zips", "zip"), ("copies", "copy"), ("locks", "lock"),
+        ("translated", "translate"), ("translates", "translate"), ("plotted", "plot"), ("plots", "plot"), ("wakes", "wake"),
         ("öffnet", "öffne"), ("schließt", "schließe"), ("schliesst", "schliesse"), ("zeigt", "zeig"), ("startet", "starte"),
         ("stoppt", "stopp"), ("beendet", "beende"),
     ];

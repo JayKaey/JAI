@@ -32,10 +32,35 @@ pub fn phase(t: f32, from: f32, to: f32) -> f32 {
     ((t - from) / (to - from).max(1e-6)).clamp(0.0, 1.0)
 }
 
+/// The longest step a motion takes in one frame: down to 10 frames a second everything moves
+/// in real time; only a slower frame than that slows it.
+pub const LONGEST_STEP: f32 = 0.1;
+
+/// The real time since this window's last frame, for a motion that steps (a spring, a glide, a
+/// turn). egui's `stable_dt` is a guess of one 60 Hz refresh whenever the frame before only asked
+/// to be drawn later (a window taking its turn, one at rest), and the steps were cut at 50 ms:
+/// on a busy PC his glides and his core ran at a third of their speed. Between two frames that
+/// both moved this is the time that really passed; the first frame of a motion steps one
+/// refresh (a window that slept did not move meanwhile). The same in every call of one frame.
+pub fn dt(ctx: &eframe::egui::Context) -> f32 {
+    let (id, pass) = (eframe::egui::Id::new(("holo_motion_dt", ctx.viewport_id())), ctx.cumulative_pass_nr());
+    let (time, refresh) = ctx.input(|i| (i.time, i.predicted_dt));
+    ctx.data_mut(|d| {
+        let dt = match d.get_temp::<(u64, f64, f32)>(id) {
+            Some((seen, _, dt)) if seen == pass => return dt,
+            Some((seen, at, _)) if seen + 1 == pass => ((time - at) as f32).clamp(0.0, LONGEST_STEP),
+            _ => refresh,
+        };
+        d.insert_temp(id, (pass, time, dt));
+        dt
+    })
+}
+
 /// One step of a critically damped spring: `x` follows `target` with stiffness `omega`
-/// (higher is quicker; 14 settles in about a third of a second) and never overshoots.
+/// (higher is quicker; 14 settles in about a third of a second) and never overshoots. (The
+/// step is exact for any `dt`: a slow frame moves it as far as the time that passed.)
 pub fn spring(x: &mut f32, v: &mut f32, target: f32, omega: f32, dt: f32) {
-    let dt = dt.clamp(0.0, 0.05);
+    let dt = dt.clamp(0.0, LONGEST_STEP);
     let d = *x - target;
     let k = (-omega * dt).exp();
     let c = *v + omega * d;
@@ -46,7 +71,7 @@ pub fn spring(x: &mut f32, v: &mut f32, target: f32, omega: f32, dt: f32) {
 /// One frame of `from` closing in on `to` so that it is there (within 1 %) after `secs`.
 pub fn approach(from: f32, to: f32, dt: f32, secs: f32) -> f32 {
     let rate = 4.6 / secs.max(0.001);
-    let next = to + (from - to) * (-rate * dt.clamp(0.0, 0.1)).exp();
+    let next = to + (from - to) * (-rate * dt.clamp(0.0, LONGEST_STEP)).exp();
     if (next - to).abs() < 0.002 { to } else { next }
 }
 
@@ -112,6 +137,46 @@ mod tests {
             spring(&mut x, &mut v, 100.0, 14.0, 1.0 / 60.0);
         }
         assert!(x > 90.0, "{x}");
+    }
+
+    /// Sir, 2026-11-22: "when my PC is lagging that should [not] make his animations lag". A
+    /// window drawn every 100 ms (a busy PC, or one taking its turn: it asks for its next frame
+    /// later, not at once) moves in real time: a glide of a third of a second has landed half a
+    /// second on, and the core turns as far as it would at full speed.
+    #[test]
+    fn a_busy_pc_slows_no_motion() {
+        use eframe::egui::{Context, RawInput};
+        let glide = |clock: &dyn Fn(&Context) -> f32| {
+            let ctx = Context::default();
+            let (mut x, mut v, mut turned) = (0.0f32, 0.0f32, 0.0f32);
+            for k in 0..=5 {
+                let _ = ctx.run(RawInput { time: Some(k as f64 * 0.1), ..Default::default() }, |ctx| {
+                    let dt = clock(ctx);
+                    spring(&mut x, &mut v, 100.0, 14.0, dt);
+                    turned += dt;
+                    ctx.request_repaint_after(std::time::Duration::from_millis(50));
+                });
+            }
+            (x, turned)
+        };
+        // egui's own clock: one 60 Hz refresh a frame, whatever passed (the fault).
+        let (x, turned) = glide(&|ctx| ctx.input(|i| i.stable_dt));
+        assert!(x < 80.0 && turned < 0.2, "egui's clock kept time after all: {x}, {turned}");
+        // The real one: half a second passed, half a second moved (the first frame one refresh).
+        let (x, turned) = glide(&dt);
+        assert!(x > 98.0, "the glide is still under way: {x}");
+        assert!((turned - (0.5 + 1.0 / 60.0)).abs() < 1e-3, "{turned}");
+        // Several calls in one frame step it once.
+        let ctx = Context::default();
+        let _ = ctx.run(RawInput { time: Some(0.0), ..Default::default() }, |_| {});
+        let _ = ctx.run(RawInput { time: Some(0.04), ..Default::default() }, |ctx| {
+            let _ = dt(ctx);
+        });
+        let _ = ctx.run(RawInput { time: Some(0.07), ..Default::default() }, |ctx| {
+            assert!((dt(ctx) - 0.03).abs() < 1e-4 && (dt(ctx) - 0.03).abs() < 1e-4);
+        });
+        // A frame after a long sleep is no leap.
+        let _ = ctx.run(RawInput { time: Some(9.0), ..Default::default() }, |ctx| assert!(dt(ctx) <= LONGEST_STEP));
     }
 
     #[test]

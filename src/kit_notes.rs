@@ -985,6 +985,7 @@ pub fn start(tools: crate::tools::ToolContext, stop: tokio_util::sync::Cancellat
             }
             if ticks % 15 == 0 {
                 crate::kit_screen::sync_layouts(&tools);
+                crate::countdowns::refresh();
             }
             ticks += 1;
             let all = rules();

@@ -3310,7 +3310,7 @@ static SNAP: LazyLock<Regex> = LazyLock::new(|| {
 const HUD_SELF: &str = r"(?:yourself|your (?:window|interface|hud|gui)|the (?:hud|interface|gui)|dich|dein fenster)";
 
 static HUD_SHOW: LazyLock<Regex> = LazyLock::new(|| {
-    re(r"^(?:show yourself|show your (?:window|interface|hud|gui|face)|open (?:your (?:window|interface|hud|gui)|the (?:interface|hud|gui))|bring (?:yourself|your window|the hud|the interface) (?:up|back|forward|to the front)|come back|appear|zeig dich|zeige dich|komm zurück|komm her|öffne (?:dein|das) (?:fenster|interface|hud))$")
+    re(r"^(?:show yourself|show your (?:window|interface|hud|gui|face)|show (?:me )?(?:the|your) board|open (?:the|your) board|open (?:your (?:window|interface|hud|gui)|the (?:interface|hud|gui))|bring (?:yourself|your window|the hud|the interface) (?:up|back|forward|to the front)|come back|appear|zeig dich|zeige dich|komm zurück|komm her|öffne (?:dein|das) (?:fenster|interface|hud))$")
 });
 static HUD_HIDE: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(?:hide yourself|hide your (?:window|interface|hud|gui)|hide the (?:interface|hud|gui)|close your (?:window|interface|hud)|go (?:to|into) the (?:tray|background)|go to tray|disappear|vanish|versteck dich|verstecke dich|verschwinde|geh in den hintergrund|ab in den hintergrund|schließe dein fenster|schliesse dein fenster)$")
@@ -3391,7 +3391,7 @@ static HUD_ZOOM_SET: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(?:set\s+)?(?:the\s+)?(?:zoom|scale|ui scale|interface scale|text size|font size|skalierung)\s+(?:to\s+|auf\s+|at\s+)?(\d{2,3})\s*(?:%|percent|prozent)?$")
 });
 static HUD_OPACITY: LazyLock<Regex> = LazyLock::new(|| {
-    re(r"^(?:make\s+)?(?:(?:the|your)\s+)?(?:window|interface|hud|background|yourself|gui|ui|everything)\s+(?:a bit\s+|a little\s+|slightly\s+)?((?:more|less)\s+(?:transparent|see[- ]through|opaque|solid)|transparent|see[- ]through|translucent|opaque|solid|non[- ]transparent)(?:\s+again|\s+so\s+(?:that\s+)?i\s+can\s+see\b.*)?$|^(?:mach|mache)\s+(?:dich|das fenster|das interface|die oberfläche|(?:den|deinen) hintergrund|das hud|alles)\s+(?:wieder\s+)?(durchsichtig|durchsichtiger|transparent|transparenter|undurchsichtig|weniger transparent|weniger durchsichtig)$")
+    re(r"^(?:make\s+)?(?:(?:the|your)\s+)?(?:window|interface|hud|background|wallpaper|yourself|gui|ui|everything)\s+(?:a bit\s+|a little\s+|slightly\s+)?((?:more|less)\s+(?:transparent|see[- ]through|opaque|solid)|transparent|see[- ]through|translucent|opaque|solid|non[- ]transparent)(?:\s+again|\s+so\s+(?:that\s+)?i\s+can\s+see\b.*)?$|^(?:mach|mache)\s+(?:dich|das fenster|das interface|die oberfläche|(?:den|deinen) hintergrund|das hud|alles)\s+(?:wieder\s+)?(durchsichtig|durchsichtiger|transparent|transparenter|undurchsichtig|weniger transparent|weniger durchsichtig)$")
 });
 static HUD_OPACITY_SET: LazyLock<Regex> = LazyLock::new(|| {
     // ("Make the interfaces opacity 0 %": "interface's" without its apostrophe.)
@@ -3630,6 +3630,13 @@ fn interface_command(s: &str) -> Option<Value> {
     if let Some(c) = HUD_ZOOM_SET.captures(s) {
         let pct: f64 = capture(&c)?.parse().ok()?;
         return Some(json!({ "scale": pct / 100.0 }));
+    }
+    // "Stop making the wallpaper transparent": solid again.
+    static NO_MORE_SEE_THROUGH: LazyLock<Regex> = LazyLock::new(|| {
+        re(r"^(?:stop|quit)\s+making\s+(?:the|your|my)\s+(?:window|interface|hud|background|wallpaper|desktop|gui|ui|everything)\s+(?:transparent|see[- ]through|translucent)$|^(?:don'?t|do not)\s+make\s+(?:the|your|my)\s+(?:window|interface|hud|background|wallpaper|desktop|gui|ui|everything)\s+(?:transparent|see[- ]through|translucent)(?:\s+anymore|\s+any more)?$")
+    });
+    if NO_MORE_SEE_THROUGH.is_match(s) {
+        return Some(json!({ "opacity": 100 }));
     }
     if let Some(c) = HUD_OPACITY.captures(s) {
         let opacity = match capture(&c)? {

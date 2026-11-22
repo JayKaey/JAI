@@ -1305,6 +1305,9 @@ fn open_window(app: &Jai, rt: &Handle, model: &Arc<Mutex<HudModel>>) -> Result<(
         "J.A.I.",
         options,
         Box::new(move |cc| {
+            // Every window of his draws on this thread: a busy PC's own work waits for its frames
+            // (game mode's lowered class still puts it under the game).
+            crate::platform::raise_thread_priority(false);
             #[cfg(windows)]
             pace_by_the_screen(&cc.egui_ctx);
             Ok(Box::new(HudApp::new(cc, app, rt, model, restore)))
@@ -8625,7 +8628,7 @@ pub(super) fn hud_block_window(ctx: &egui::Context, id: &str, title: &str, size:
             // A thrown block glides on until it rests (or is taken hold of again: `pressed`).
             let mut thrown = lock(&THROWN);
             if let Some((at, velocity)) = thrown.get(id).copied() {
-                match crate::holo_block::glide_on(at, velocity, bounds, ctx.input(|i| i.stable_dt)) {
+                match crate::holo_block::glide_on(at, velocity, bounds, crate::holo_motion::dt(ctx)) {
                     Some((next, v)) => {
                         thrown.insert(id.to_string(), (next, v));
                         crate::hud_dock::hold_once(id, next);

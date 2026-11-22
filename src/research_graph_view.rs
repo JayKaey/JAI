@@ -315,7 +315,7 @@ impl ResearchGraphView {
         let response = ui.allocate_rect(rect, Sense::click_and_drag());
         let painter = ui.painter_at(rect);
         let t = ui.input(|i| i.time) as f32;
-        let dt = ui.input(|i| i.stable_dt);
+        let dt = crate::holo_motion::dt(ui.ctx());
         let hover = response.hover_pos();
 
         // Zoom around the cursor.

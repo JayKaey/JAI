@@ -1724,7 +1724,7 @@ pub struct UiAnimState {
 impl UiAnimState {
     /// Advances one frame and returns `t`.
     pub fn step(&mut self, dt: f32) -> f32 {
-        let dt = dt.clamp(0.0, 0.1);
+        let dt = dt.clamp(0.0, crate::holo_motion::LONGEST_STEP);
         if self.target_open {
             self.t += (1.0 - self.t) * (1.0 - (-22.0 * dt).exp());
             if self.t > 0.995 {
@@ -2422,7 +2422,7 @@ impl BoardView {
             if let Some((i, _)) = spot {
                 self.spot_index = i;
             }
-            let spot_t = self.spot.step(ui.input(|i| i.stable_dt));
+            let spot_t = self.spot.step(crate::holo_motion::dt(ui.ctx()));
             let spot_shown = (self.spot.visible() && self.spot_index < shown.report.blocks.len()).then_some(self.spot_index);
             if self.spot.moving() {
                 animating = true;
@@ -2432,7 +2432,7 @@ impl BoardView {
             let pointer = ui.input(|inp| inp.pointer.hover_pos()).filter(|_| !own && spot_shown.is_none() && self.drag_from.is_none());
             let over = pointer.and_then(|at| rects.iter().enumerate().find_map(|(i, r)| r.filter(|r| r.translate(self.moved.get(&i).copied().unwrap_or_default()).contains(at)).map(|_| i)));
             let (last, eased) = self.hover;
-            let eased = crate::holo_motion::approach(eased, if over.is_some() { 1.0 } else { 0.0 }, ui.input(|inp| inp.stable_dt), crate::holo_motion::LEAVE);
+            let eased = crate::holo_motion::approach(eased, if over.is_some() { 1.0 } else { 0.0 }, crate::holo_motion::dt(ui.ctx()), crate::holo_motion::LEAVE);
             self.hover = (over.or(if eased > 0.0 { last } else { None }), eased);
             animating |= eased > 0.0 && eased < 1.0;
             for (i, (block, rect)) in shown.report.blocks.iter().zip(&rects).enumerate() {

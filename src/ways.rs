@@ -492,7 +492,7 @@ fn language(value: &str) -> &'static str {
 /// The words of `found` as they stand in what was said (their capitals, commas, hyphens and
 /// apostrophes), when they can be found there. (By going through what was said word by word:
 /// a pattern made for the purpose cost 10 ms to build, every time.)
-fn as_said(original: &str, found: &str) -> String {
+pub(crate) fn as_said(original: &str, found: &str) -> String {
     let wanted: Vec<&str> = found.split_whitespace().collect();
     if wanted.is_empty() {
         return found.to_string();
@@ -2724,5 +2724,31 @@ mod tests {
         assume_running(true);
         assert_eq!(first("thats enough for today").as_deref(), Some("stop the coach"));
         assume_running(false);
+    }
+
+    /// Sir, 2026-11-22: "in most cases he actually is able to do the things but just doesn't get
+    /// the correct phrasing for it". What he said from 2026-11-19 to 2026-11-22 that went to the
+    /// language model, though an order of his own was meant.
+    #[test]
+    fn his_misses_of_the_week_are_understood() {
+        let _dock = crate::hud_dock::test_lock();
+        let _kit = crate::kit::test_lock();
+        let route = |said: &str| crate::phrasings::route(&crate::wake::canon(said));
+        let tool = |said: &str| route(said).map(|(name, _)| name).unwrap_or_default();
+        let model = route("Jay, can you make your own 3D model of the Empire State Building?").expect("a model of his own");
+        assert_eq!((model.0.as_str(), model.1["query"].as_str()), (crate::model3d::TOOL, Some("empire state building")));
+        let suit = route("Can you show me a model of the Iron Man suit in the new window?").expect("a model in a window");
+        assert_eq!((suit.0.as_str(), suit.1["query"].as_str()), (crate::model3d::TOOL, Some("iron man suit")));
+        assert_eq!(tool("Jay. Show me the function of a sine wave."), "launch_interactive_simulation");
+        assert_eq!(route("Jay. Show the board."), route("show yourself"));
+        assert_eq!(route("Jay liked this song."), route("like this song"));
+        assert_eq!(route("Jay stop making the wallpaper transparent.").map(|(_, a)| a), Some(serde_json::json!({"opacity": 100})));
+        assert_eq!(crate::apps::find_spec("sound settings").map(|s| s.id), Some("sound_settings"));
+        assert_eq!(crate::apps::find_spec("the Wi-Fi settings").map(|s| s.id), Some("network_settings"));
+        assert_eq!(crate::apps::find_spec("settings").map(|s| s.id), Some("settings"));
+        // What already went its way stays there.
+        for (said, name) in [("Jay, show me a sine wave.", "launch_interactive_simulation"), ("Jay, hide yourself.", "configure_interface"), ("Jay closed the earth.", "hud_board")] {
+            assert_eq!(tool(said), name, "{said}");
+        }
     }
 }

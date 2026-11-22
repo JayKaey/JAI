@@ -358,6 +358,8 @@ pub fn only_looks(name: &str, args: &Value) -> bool {
         || BY_NAME.iter().any(|prefix| name.starts_with(prefix))
         || LOOKING.contains(&name)
         || crate::kit::only_looks(name, args)
+        // ("Where was I?" is asked, and bringing it back is the answer.)
+        || name == "where_was_i"
         // ("Are you there?" wakes the board: that is the answer.)
         || (name == "hud_board" && args["action"] == "wake")
         // ("What's next?", "what did I miss?": he shows it, and that is the answer.)

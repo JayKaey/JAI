@@ -47,6 +47,7 @@ const KNOCK: &[usize] = &[354, 359, 360, 468]; // door, knock, tap (at a door), 
 const TYPING: &[usize] = &[384, 385, 386]; // typing, typewriter, computer keyboard
 const MUSIC: &[usize] = &[137];
 const SHATTER: usize = 443;
+const SPEECH: usize = 0;
 /// What a sound that lasts may be, and how sure the model must be of it.
 const LASTING: &[(Sound, &[usize], f32)] = &[
     (Sound::Doorbell, &[355, 356], 0.2),
@@ -331,24 +332,33 @@ pub fn top(scores: &[f32], n: usize) -> Vec<(usize, f32)> {
 
 /// What an event of the radar was, by the model's scores for its clip (None: no model): a sound
 /// a rule or a protocol can wait on, or nothing worth one (typing, music, a tap on the desk).
-pub fn judge(event: AcousticEvent, scores: Option<&[f32]>) -> Option<Sound> {
-    judge_by(event, scores, &taught())
+pub fn judge(event: AcousticEvent, scores: Option<&[f32]>, prints: &[Print]) -> Option<Sound> {
+    with_taught(|taught| judge_by(event, scores, prints, taught))
 }
 
-fn judge_by(event: AcousticEvent, scores: Option<&[f32]>, taught: &[(Own, Vec<f32>, u32)]) -> Option<Sound> {
-    // Sir's own clap or snap, as he taught it, comes before the rules for anyone's.
-    if let Some(own) = scores.filter(|p| p.len() >= CLASSES).and_then(|p| by_ear(p, taught)) {
-        match (own, event) {
-            (Own::Snap, AcousticEvent::Claps { .. } | AcousticEvent::Single) => return Some(Sound::Snap),
-            (Own::Clap, AcousticEvent::Claps { count }) => return Some(Sound::Claps(count as u8)),
-            (Own::Clap, AcousticEvent::Single) => return None,
+fn judge_by(event: AcousticEvent, scores: Option<&[f32]>, prints: &[Print], taught: &[Sample]) -> Option<Sound> {
+    // Sir's own clap or snap, as he taught it, comes before the rules for anyone's: each impulse
+    // the radar counted must lie among his own (typing, talk or music heard with it: none).
+    let impulses = match event {
+        AcousticEvent::Claps { count } => count,
+        AcousticEvent::Single => 1,
+        _ => 0,
+    };
+    if impulses > 0 && !drowned(scores) {
+        match (by_ear(prints, impulses, taught), event) {
+            (Some(Own::Snap), _) => return Some(Sound::Snap),
+            (Some(Own::Clap), AcousticEvent::Claps { count }) => return Some(Sound::Claps(count as u8)),
+            (Some(Own::Clap), _) => return None,
             _ => {}
         }
     }
+    // (Once taught, the radar lets softer impulses through: a run that is not his counts only
+    // when the model is sure of clapping, so two clicks of the mouse are no double clap.)
+    let knows_his_claps = taught.len() >= LEAST_TAUGHT;
     let Some(p) = scores.filter(|p| p.len() >= CLASSES) else {
         // Without the model the radar's own word holds for what it can tell.
         return match event {
-            AcousticEvent::Claps { count } => Some(Sound::Claps(count as u8)),
+            AcousticEvent::Claps { count } if !knows_his_claps => Some(Sound::Claps(count as u8)),
             AcousticEvent::Knock { .. } => Some(Sound::Knock),
             _ => None,
         };
@@ -365,7 +375,7 @@ fn judge_by(event: AcousticEvent, scores: Option<&[f32]>, taught: &[(Own, Vec<f3
             } else if knock > clap.max(0.2) {
                 Some(Sound::Knock)
             } else {
-                Some(Sound::Claps(count as u8))
+                (!knows_his_claps || clap >= 0.3).then_some(Sound::Claps(count as u8))
             }
         }
         AcousticEvent::Knock { .. } => (typing <= knock.max(0.1) && !(music > 0.5 && knock < 0.1)).then_some(Sound::Knock),
@@ -382,8 +392,12 @@ fn judge_by(event: AcousticEvent, scores: Option<&[f32]>, taught: &[(Own, Vec<f3
 
 // -------------------------------------------------------------- Sir's own clap and snap ----
 
-/// A sound Sir teaches him by ear ("learn my claps", Sir, 2026-11-22): the model's scores for
-/// his own clap or snap, averaged, so his are told apart from anyone's.
+/// A sound Sir teaches him by ear ("learn my claps", Sir, 2026-11-22). Each impulse he makes
+/// while taught is kept as a print (`Print`: the shape of its spectrum, how far over the room it
+/// stood, how fast it died); afterwards an impulse is his when it lies as close to one of his as
+/// his own lie to each other (`reach`), and the radar opens for impulses as soft and as echoing
+/// as his (`personal`). Averaging the model's scores for his sounds (the first try) told little:
+/// for his snaps the model said "Silence", "Spray", "Tick".
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Own {
     Clap,
@@ -401,15 +415,130 @@ impl Own {
 
 /// How many he hears while taught; how long he listens for them.
 const SAMPLES: usize = 5;
-const TEACHING_FOR: Duration = Duration::from_secs(45);
-/// How close a clip must be to what Sir taught (the cosine of their scores).
-const OWN_BAR: f32 = 0.85;
-/// The newest samples weigh as much as this many older ones together (it keeps up with him).
-const KEPT_SAMPLES: u32 = 20;
-const TAUGHT_FILE: &str = "taught.json";
+const TEACHING_FOR: Duration = Duration::from_secs(60);
+/// The prints kept of each (the newest; he keeps up with Sir), and how many before they count.
+const MOST_KEPT: usize = 40;
+const LEAST_TAUGHT: usize = 3;
+/// How far from the nearest of his an impulse may lie (decibels over the 16 bands), at least
+/// and at most, whatever his own spread is.
+const REACH_LEAST: f32 = 7.0;
+const REACH_MOST: f32 = 16.0;
+const BANDS: usize = 16;
+const OWN_FILE: &str = "own_sounds.json";
 
 static TEACHING: Mutex<Option<(Own, Instant, usize)>> = Mutex::new(None);
-static TAUGHT: Mutex<Option<Vec<(Own, Vec<f32>, u32)>>> = Mutex::new(None);
+static TAUGHT: Mutex<Option<Vec<Sample>>> = Mutex::new(None);
+
+/// How far under its strongest band the shape of an impulse goes: below that a soft one's bands
+/// are the room's, a loud one's are its own, and both read the same.
+const DEPTH: f32 = 20.0;
+
+/// One impulse of a clip: its spectrum's shape in `BANDS` bands (what it added to the room, in
+/// decibels under its strongest band, down to `DEPTH`: how loud it was does not count), how far
+/// over the clip's quiet it stood (dB), and how much of its power was left 40 ms on.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Print {
+    pub shape: Vec<f32>,
+    pub over_db: f32,
+    pub tail: f32,
+}
+
+/// A print of Sir's own.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Sample {
+    own: Own,
+    print: Print,
+}
+
+/// The impulses of a clip (16 kHz), the loudest first, at most three: frames that stand 6 dB
+/// over the clip's quiet and are the loudest for 80 ms around. (At 9 dB a soft snap of his, one
+/// the radar had let through, left no print at all; the room's own frames stay within a dB.)
+pub fn prints(pcm: &[f32]) -> Vec<Print> {
+    let rows = features(pcm);
+    if rows.len() < 8 {
+        return Vec::new();
+    }
+    let lin: Vec<Vec<f32>> = rows.iter().map(|r| r.iter().map(|db| 10f32.powf(db / 10.0)).collect()).collect();
+    let power: Vec<f32> = lin.iter().map(|r| r.iter().sum()).collect();
+    let median = |mut v: Vec<f32>| {
+        v.sort_by(f32::total_cmp);
+        v[v.len() / 2]
+    };
+    let quiet = median(power.clone()).max(1e-10);
+    // The room in each mel band: what the impulses add is laid over it.
+    let room: Vec<f32> = (0..MELS).map(|m| median(lin.iter().map(|r| r.get(m).copied().unwrap_or(0.0)).collect())).collect();
+    let mut peaks: Vec<usize> = (1..power.len() - 1).filter(|&i| power[i] >= power[i - 1] && power[i] > power[i + 1] && power[i] > quiet * 4.0).collect();
+    peaks.sort_by(|a, b| power[*b].total_cmp(&power[*a]));
+    let mut kept: Vec<usize> = Vec::new();
+    for at in peaks {
+        if kept.iter().all(|k| k.abs_diff(at) >= 8) {
+            kept.push(at);
+        }
+    }
+    kept.truncate(3);
+    kept.into_iter()
+        .map(|i| {
+            let added: Vec<f32> = lin[i].chunks(MELS / BANDS).zip(room.chunks(MELS / BANDS)).map(|(p, q)| p.iter().zip(q).map(|(p, q)| (p - q).max(0.0)).sum()).collect();
+            let top = added.iter().copied().fold(0.0f32, f32::max).max(1e-12);
+            let shape = added.iter().map(|a| (10.0 * (a / top).max(1e-12).log10()).max(-DEPTH)).collect();
+            Print { shape, over_db: 10.0 * (power[i] / quiet).log10(), tail: power.get(i + 4).map_or(0.0, |p| p / power[i]) }
+        })
+        .collect()
+}
+
+/// Typing, talk or music in the clip: whatever its impulses look like, they are not his gesture.
+fn drowned(scores: Option<&[f32]>) -> bool {
+    scores.filter(|p| p.len() >= CLASSES).is_some_and(|p| {
+        let of = |ids: &[usize]| ids.iter().map(|&i| p[i]).fold(0.0f32, f32::max);
+        of(TYPING) > 0.35 || p[SPEECH] > 0.5 || of(MUSIC) > 0.7
+    })
+}
+
+fn distance(a: &[f32], b: &[f32]) -> f32 {
+    a.iter().zip(b).map(|(x, y)| (x - y) * (x - y)).sum::<f32>().sqrt()
+}
+
+/// How far one of his own may lie from the nearest he taught: twice the widest gap between his
+/// own and their nearest (half again missed one in forty of his; a click or a knock lies three
+/// times further off). None until he taught at least `LEAST_TAUGHT`.
+fn reach(own: Own, taught: &[Sample]) -> Option<f32> {
+    let his: Vec<&[f32]> = taught.iter().filter(|s| s.own == own).map(|s| s.print.shape.as_slice()).collect();
+    if his.len() < LEAST_TAUGHT {
+        return None;
+    }
+    let widest = his.iter().enumerate().map(|(i, a)| his.iter().enumerate().filter(|(j, _)| *j != i).map(|(_, b)| distance(a, b)).fold(f32::MAX, f32::min)).fold(0.0f32, f32::max);
+    Some((widest * 2.0).clamp(REACH_LEAST, REACH_MOST))
+}
+
+/// Which of his own the clip's `impulses` loudest impulses are: each must lie within reach of
+/// his of one kind, all of the same kind.
+fn by_ear(prints: &[Print], impulses: usize, taught: &[Sample]) -> Option<Own> {
+    let own_of = |print: &Print| {
+        let (nearest, d) = taught.iter().map(|s| (s, distance(&print.shape, &s.print.shape))).min_by(|a, b| a.1.total_cmp(&b.1))?;
+        (d <= reach(nearest.own, taught)?).then_some(nearest.own)
+    };
+    let kinds: Vec<Option<Own>> = prints.iter().take(impulses).map(own_of).collect();
+    let first = *kinds.first()?;
+    kinds.iter().all(|k| *k == first).then_some(first).flatten()
+}
+
+/// How the radar opens for his own (`acoustic_radar::Personal`): wide while he teaches, then as
+/// soft as his softest (half of it) and as echoing as his most echoing (half again).
+pub fn personal() -> Option<crate::acoustic_radar::Personal> {
+    if teaching() {
+        return Some(crate::acoustic_radar::Personal { gate: 4.0, tail: 0.6 });
+    }
+    with_taught(|taught| opening(taught))
+}
+
+fn opening(taught: &[Sample]) -> Option<crate::acoustic_radar::Personal> {
+    if taught.len() < LEAST_TAUGHT {
+        return None;
+    }
+    let softest = taught.iter().map(|s| s.print.over_db).fold(f32::MAX, f32::min);
+    let echo = taught.iter().map(|s| s.print.tail).fold(0.0f32, f32::max);
+    Some(crate::acoustic_radar::Personal { gate: (10f32.powf(softest / 10.0) * 0.5).clamp(4.0, 12.0), tail: (echo * 1.5).clamp(0.25, 0.6) })
+}
 
 /// "Learn my claps", "lern mein Schnipsen": which of his sounds he is to learn.
 pub fn teach_order(text: &str) -> Option<Own> {
@@ -436,10 +565,17 @@ fn teaching() -> bool {
     lock(&TEACHING).is_some_and(|(_, at, _)| at.elapsed() < TEACHING_FOR)
 }
 
-/// A sound heard while he is taught, kept as Sir's own: which, how many so far, and his line once
-/// he has them all.
-pub fn learn(event: AcousticEvent, scores: Option<&[f32]>) -> Option<(Own, usize, Option<String>)> {
-    let p = scores.filter(|p| p.len() >= CLASSES && !matches!(event, AcousticEvent::Sound))?;
+/// A gesture heard while he is taught, its impulses kept as Sir's own: which, how many so far,
+/// and his line once he has them all. (Typing, talk or music heard with it: not his.)
+pub fn learn(event: AcousticEvent, scores: Option<&[f32]>, prints: &[Print]) -> Option<(Own, usize, Option<String>)> {
+    let impulses = match event {
+        AcousticEvent::Claps { count } => count,
+        AcousticEvent::Single => 1,
+        _ => return None,
+    };
+    if prints.is_empty() || drowned(scores) || !teaching() {
+        return None;
+    }
     let (own, n) = {
         let mut teaching = lock(&TEACHING);
         let (own, _, n) = teaching.as_mut().filter(|(_, at, _)| at.elapsed() < TEACHING_FOR)?;
@@ -450,47 +586,39 @@ pub fn learn(event: AcousticEvent, scores: Option<&[f32]>) -> Option<(Own, usize
         }
         out
     };
-    {
-        let mut taught = taught();
-        match taught.iter_mut().find(|(o, ..)| *o == own) {
-            Some((_, mean, k)) => blend(mean, k, p),
-            None => taught.push((own, p[..CLASSES].to_vec(), 1)),
-        }
-        *lock(&TAUGHT) = Some(taught.clone());
+    with_taught(|taught| {
+        keep_prints(taught, own, prints.iter().take(impulses).cloned());
         if !cfg!(test) && !crate::platform::in_test_session() {
             if let Some(dir) = DIR.get() {
-                let _ = std::fs::write(dir.join(TAUGHT_FILE), serde_json::to_string(&taught).unwrap_or_default());
+                let _ = std::fs::write(dir.join(OWN_FILE), serde_json::to_string(&*taught).unwrap_or_default());
             }
         }
-    }
+    });
     let done = (n >= SAMPLES).then(|| format!("Got it, Sir: I know your {} now.", own.plural()));
     Some((own, n, done))
 }
 
-/// What Sir taught him, read once from `models/sound/taught.json`.
-fn taught() -> Vec<(Own, Vec<f32>, u32)> {
-    lock(&TAUGHT)
-        .get_or_insert_with(|| DIR.get().and_then(|d| std::fs::read_to_string(d.join(TAUGHT_FILE)).ok()).and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default())
-        .clone()
-}
-
-/// A new sample into the average (at most `KEPT_SAMPLES` deep).
-fn blend(mean: &mut [f32], k: &mut u32, p: &[f32]) {
-    let w = *k as f32;
-    for (m, x) in mean.iter_mut().zip(p) {
-        *m = (*m * w + x) / (w + 1.0);
+/// His new prints of one kind, the oldest of that kind dropped past `MOST_KEPT`.
+fn keep_prints(taught: &mut Vec<Sample>, own: Own, prints: impl Iterator<Item = Print>) {
+    taught.extend(prints.map(|print| Sample { own, print }));
+    while taught.iter().filter(|s| s.own == own).count() > MOST_KEPT {
+        let oldest = taught.iter().position(|s| s.own == own).expect("one of that kind");
+        taught.remove(oldest);
     }
-    *k = (*k + 1).min(KEPT_SAMPLES);
 }
 
-/// Which of Sir's own sounds the clip is, when it is close enough to one.
-fn by_ear(p: &[f32], taught: &[(Own, Vec<f32>, u32)]) -> Option<Own> {
-    let cosine = |a: &[f32], b: &[f32]| {
-        let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
-        let norm = a.iter().map(|x| x * x).sum::<f32>().sqrt() * b.iter().map(|x| x * x).sum::<f32>().sqrt();
-        if norm > 0.0 { dot / norm } else { 0.0 }
-    };
-    taught.iter().map(|(own, mean, _)| (*own, cosine(p, mean))).filter(|(_, s)| *s >= OWN_BAR).max_by(|a, b| a.1.total_cmp(&b.1)).map(|(own, _)| own)
+/// What Sir taught him, read once from `models/sound/own_sounds.json`.
+fn with_taught<R>(f: impl FnOnce(&mut Vec<Sample>) -> R) -> R {
+    let mut taught = lock(&TAUGHT);
+    let taught = taught.get_or_insert_with(|| {
+        let dir = DIR.get();
+        // (What the first try kept, the model's averaged scores, is of no use to the prints.)
+        if let Some(d) = dir.filter(|_| !cfg!(test)) {
+            let _ = std::fs::remove_file(d.join("taught.json"));
+        }
+        dir.and_then(|d| std::fs::read_to_string(d.join(OWN_FILE)).ok()).and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+    });
+    f(taught)
 }
 
 // ------------------------------------------------------------------ what he heard lately ----
@@ -582,9 +710,6 @@ pub fn wanted() -> bool {
 mod tests {
     use super::*;
 
-    /// AudioSet's speech.
-    const SPEECH: usize = 0;
-
     /// Every sound in Sir's words, English and German, with the order after it.
     #[test]
     fn sounds_are_heard_in_his_words() {
@@ -631,29 +756,90 @@ mod tests {
         p
     }
 
-    /// Sir, 2026-11-22: "train clap and snap detection on my own sounds". His snap that the model
-    /// takes for a clap (his fingers are loud) is his snap once taught; anyone's clap stays a clap.
-    #[test]
-    fn sirs_own_snap_is_known_once_he_taught_it() {
-        let his_snap = scores_with(&[(63, 0.45), (62, 0.05), (467, 0.3)]);
-        let claps = AcousticEvent::Claps { count: 2 };
-        assert_eq!(judge_by(claps, Some(&his_snap), &[]), Some(Sound::Claps(2)), "untaught, the model's word holds");
-        let (mut mean, mut k) = (scores_with(&[(63, 0.4), (62, 0.08), (467, 0.35)]), 1);
-        for _ in 0..30 {
-            blend(&mut mean, &mut k, &his_snap);
+    /// A burst of noise (its seed, peak, band in Hz and how fast it dies, in samples) in a quiet
+    /// room, at these times (ms): a snap, a clap, a click, a knock as a microphone hears them.
+    fn room_with(ms: usize, bursts: &[(usize, u32, f32, (f32, f32), f32)]) -> Vec<f32> {
+        let mut seed = 99u32;
+        let mut noise = || {
+            seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12345);
+            ((seed >> 16) as f32 / 32768.0) - 1.0
+        };
+        let mut s: Vec<f32> = (0..ms * 16).map(|_| noise() * 0.0009).collect();
+        for &(at, mut seed, peak, (low, high), dies) in bursts {
+            let (mut hp, mut lp) = (crate::dsp::Biquad::high_pass(low, 16_000.0), crate::dsp::Biquad::low_pass(high, 16_000.0));
+            for (i, y) in s.iter_mut().skip(at * 16).take(16 * 120).enumerate() {
+                seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12345);
+                *y += lp.process(hp.process((((seed >> 16) as f32 / 32768.0) - 1.0) * peak * (-(i as f32) / dies).exp()));
+            }
         }
-        assert_eq!(k, KEPT_SAMPLES);
-        let taught = vec![(Own::Snap, mean, k)];
-        assert_eq!(judge_by(claps, Some(&his_snap), &taught), Some(Sound::Snap));
-        assert_eq!(judge_by(AcousticEvent::Single, Some(&his_snap), &taught), Some(Sound::Snap));
-        let someones_clap = scores_with(&[(63, 0.7), (61, 0.5)]);
-        assert_eq!(by_ear(&someones_clap, &taught), None);
-        assert_eq!(judge_by(claps, Some(&someones_clap), &taught), Some(Sound::Claps(2)));
+        s
+    }
+
+    const SNAPPED: (f32, f32) = (1800.0, 7500.0);
+    const CLAPPED: (f32, f32) = (300.0, 7500.0);
+
+    /// Sir, 2026-11-22: "the clap and snap detection is extremely bad and barely works even with
+    /// the training ... it should get my snaps and claps right 100% of the time but still only
+    /// when I really clap or snap". Five of each taught, every other of his is known, at another
+    /// loudness too; a click, a knock and two clicks of the mouse are not his, and nor is his own
+    /// clap with typing heard over it.
+    #[test]
+    fn his_own_claps_and_snaps_are_known_and_nothing_else() {
+        let one = |seed: u32, peak: f32, band: (f32, f32), dies: f32| prints(&room_with(1600, &[(1000, seed, peak, band, dies)]));
+        // His own: the same hand makes the same sound (one body for his snap, one for his clap),
+        // a share of it new each time (fresh noise at half its strength), at any loudness. (Bursts
+        // of fresh noise alone are each another sound: no print could know them again.)
+        let his_at = |at: usize, seed: u32, peak: f32, band: (f32, f32), dies: f32| {
+            let body = if band == SNAPPED { 7 } else { 57 };
+            [(at, body, peak * 0.85, band, dies), (at, seed, peak * 0.45, band, dies)]
+        };
+        let his = |seed: u32, peak: f32, band: (f32, f32), dies: f32| prints(&room_with(1600, &his_at(1000, seed, peak, band, dies)));
+        let mut taught = Vec::new();
+        for seed in 1..=5 {
+            keep_prints(&mut taught, Own::Snap, his(seed, 0.05 + seed as f32 * 0.01, SNAPPED, 8.0).into_iter().take(1));
+            keep_prints(&mut taught, Own::Clap, his(seed + 50, 0.2 + seed as f32 * 0.03, CLAPPED, 40.0).into_iter().take(1));
+        }
+        assert_eq!(taught.len(), 10, "each gave one print");
+        let (snap_reach, clap_reach) = (reach(Own::Snap, &taught).unwrap(), reach(Own::Clap, &taught).unwrap());
+        // (Every miss at once, with how far it lay from the nearest of his.)
+        let nearest = |p: &[Print]| p.first().and_then(|p| taught.iter().map(|s| (s.own, distance(&p.shape, &s.print.shape))).min_by(|a, b| a.1.total_cmp(&b.1)));
+        let mut wrong = Vec::new();
+        for seed in 11..31 {
+            for (peak, scale) in [(0.03, "soft"), (0.12, "loud")] {
+                for (what, heard, own) in [("snap", his(seed, peak, SNAPPED, 8.0), Own::Snap), ("clap", his(seed + 100, peak * 4.0, CLAPPED, 40.0), Own::Clap)] {
+                    if by_ear(&heard, 1, &taught) != Some(own) {
+                        wrong.push(format!("his {scale} {what} {seed}: {:?}", nearest(&heard)));
+                    }
+                }
+            }
+            for (what, heard) in [("a dull click", one(seed, 0.1, (200.0, 1200.0), 20.0)), ("a knock", one(seed, 0.3, (100.0, 400.0), 120.0))] {
+                if by_ear(&heard, 1, &taught).is_some() {
+                    wrong.push(format!("{what} {seed}: {:?}", nearest(&heard)));
+                }
+            }
+        }
+        assert!(wrong.is_empty(), "reach: snaps {snap_reach:.1}, claps {clap_reach:.1}\n{}", wrong.join("\n"));
+        // Two of his claps, and two clicks of the mouse the model is unsure of.
+        let claps = AcousticEvent::Claps { count: 2 };
+        let his_two = prints(&room_with(2400, &[his_at(1000, 7, 0.3, CLAPPED, 40.0), his_at(1400, 8, 0.25, CLAPPED, 40.0)].concat()));
+        assert_eq!(judge_by(claps, Some(&scores_with(&[])), &his_two, &taught), Some(Sound::Claps(2)));
+        let snaps_two = prints(&room_with(2400, &[his_at(1000, 7, 0.08, SNAPPED, 8.0), his_at(1400, 8, 0.06, SNAPPED, 8.0)].concat()));
+        assert_eq!(judge_by(claps, Some(&scores_with(&[])), &snaps_two, &taught), Some(Sound::Snap), "two of his snaps close together");
+        let clicks = prints(&room_with(2400, &[(1000, 7, 0.1, (200.0, 1200.0), 20.0), (1400, 8, 0.1, (200.0, 1200.0), 20.0)]));
+        assert_eq!(judge_by(claps, Some(&scores_with(&[])), &clicks, &taught), None, "untaught he would have taken them");
+        assert_eq!(judge_by(claps, Some(&scores_with(&[])), &clicks, &[]), Some(Sound::Claps(2)));
+        assert_eq!(judge_by(claps, Some(&scores_with(&[(386, 0.6)])), &his_two, &taught), None, "typing over it");
+        assert_eq!(judge_by(AcousticEvent::Single, None, &his(3, 0.2, CLAPPED, 40.0), &taught), None, "a lone clap of his is no gesture");
+        // The radar opens to the softest of his, and to his echo.
+        let open = opening(&taught).unwrap();
+        // (Never shut tighter than the radar's own 12; his loud taught ones need no more.)
+        assert!((4.0..=12.0).contains(&open.gate) && (0.25..=0.6).contains(&open.tail), "{open:?}");
+        assert_eq!(opening(&taught[..2]), None, "two prints teach nothing yet");
         for (said, own) in [("JAI, learn my claps", Own::Clap), ("learn how I clap", Own::Clap), ("teach you my finger snap", Own::Snap), ("lern mein Schnipsen", Own::Snap), ("lerne mein Klatschen", Own::Clap)] {
             assert_eq!(teach_order(said), Some(own), "{said}");
         }
         assert_eq!(teach_order("when I clap twice open spotify"), None);
-        assert_eq!(learn(AcousticEvent::Single, Some(&his_snap)), None, "nothing is learned unless he was asked to");
+        assert_eq!(learn(AcousticEvent::Single, None, &his_two), None, "nothing is learned unless he was asked to");
     }
 
     /// The model's word on what the radar heard: typing is no knock, a snap is no clap, a lasting
@@ -662,24 +848,24 @@ mod tests {
     fn the_model_decides_what_the_radar_heard() {
         let claps = AcousticEvent::Claps { count: 2 };
         let knocks = AcousticEvent::Knock { count: 3 };
-        assert_eq!(judge(claps, None), Some(Sound::Claps(2)));
-        assert_eq!(judge(AcousticEvent::Claps { count: 3 }, None), Some(Sound::Claps(3)));
-        assert_eq!(judge(knocks, None), Some(Sound::Knock));
-        assert_eq!(judge(AcousticEvent::Single, None), None);
-        assert_eq!(judge(AcousticEvent::Sound, None), None);
-        assert_eq!(judge(claps, Some(&scores_with(&[(63, 0.6)]))), Some(Sound::Claps(2)));
-        assert_eq!(judge(claps, Some(&scores_with(&[(63, 0.1), (62, 0.4)]))), Some(Sound::Snap));
-        assert_eq!(judge(claps, Some(&scores_with(&[(386, 0.5), (63, 0.05)]))), None, "typing");
-        assert_eq!(judge(claps, Some(&scores_with(&[]))), Some(Sound::Claps(2)), "unsure: the radar holds");
-        assert_eq!(judge(knocks, Some(&scores_with(&[(359, 0.5)]))), Some(Sound::Knock));
-        assert_eq!(judge(knocks, Some(&scores_with(&[(384, 0.6), (359, 0.1)]))), None, "typing");
-        assert_eq!(judge(knocks, Some(&scores_with(&[(137, 0.8)]))), None, "a beat");
-        assert_eq!(judge(AcousticEvent::Single, Some(&scores_with(&[(62, 0.5)]))), Some(Sound::Snap));
-        assert_eq!(judge(AcousticEvent::Single, Some(&scores_with(&[(SHATTER, 0.5)]))), Some(Sound::Glass));
-        assert_eq!(judge(AcousticEvent::Single, Some(&scores_with(&[(63, 0.5)]))), None, "a lone clap");
-        assert_eq!(judge(AcousticEvent::Sound, Some(&scores_with(&[(355, 0.5), (0, 0.3)]))), Some(Sound::Doorbell));
-        assert_eq!(judge(AcousticEvent::Sound, Some(&scores_with(&[(390, 0.3), (75, 0.6)]))), Some(Sound::Dog));
-        assert_eq!(judge(AcousticEvent::Sound, Some(&scores_with(&[(137, 0.9), (SPEECH, 0.5)]))), None, "music and talk");
+        assert_eq!(judge(claps, None, &[]), Some(Sound::Claps(2)));
+        assert_eq!(judge(AcousticEvent::Claps { count: 3 }, None, &[]), Some(Sound::Claps(3)));
+        assert_eq!(judge(knocks, None, &[]), Some(Sound::Knock));
+        assert_eq!(judge(AcousticEvent::Single, None, &[]), None);
+        assert_eq!(judge(AcousticEvent::Sound, None, &[]), None);
+        assert_eq!(judge(claps, Some(&scores_with(&[(63, 0.6)])), &[]), Some(Sound::Claps(2)));
+        assert_eq!(judge(claps, Some(&scores_with(&[(63, 0.1), (62, 0.4)])), &[]), Some(Sound::Snap));
+        assert_eq!(judge(claps, Some(&scores_with(&[(386, 0.5), (63, 0.05)])), &[]), None, "typing");
+        assert_eq!(judge(claps, Some(&scores_with(&[])), &[]), Some(Sound::Claps(2)), "unsure: the radar holds");
+        assert_eq!(judge(knocks, Some(&scores_with(&[(359, 0.5)])), &[]), Some(Sound::Knock));
+        assert_eq!(judge(knocks, Some(&scores_with(&[(384, 0.6), (359, 0.1)])), &[]), None, "typing");
+        assert_eq!(judge(knocks, Some(&scores_with(&[(137, 0.8)])), &[]), None, "a beat");
+        assert_eq!(judge(AcousticEvent::Single, Some(&scores_with(&[(62, 0.5)])), &[]), Some(Sound::Snap));
+        assert_eq!(judge(AcousticEvent::Single, Some(&scores_with(&[(SHATTER, 0.5)])), &[]), Some(Sound::Glass));
+        assert_eq!(judge(AcousticEvent::Single, Some(&scores_with(&[(63, 0.5)])), &[]), None, "a lone clap");
+        assert_eq!(judge(AcousticEvent::Sound, Some(&scores_with(&[(355, 0.5), (0, 0.3)])), &[]), Some(Sound::Doorbell));
+        assert_eq!(judge(AcousticEvent::Sound, Some(&scores_with(&[(390, 0.3), (75, 0.6)])), &[]), Some(Sound::Dog));
+        assert_eq!(judge(AcousticEvent::Sound, Some(&scores_with(&[(137, 0.9), (SPEECH, 0.5)])), &[]), None, "music and talk");
     }
 
     /// What was heard is kept, newest first, six at most; a voice clearly not his is someone
