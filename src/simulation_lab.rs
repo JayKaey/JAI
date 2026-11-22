@@ -327,14 +327,37 @@ pub fn integral(e: &Expr, a: f64, b: f64, params: &[Param]) -> f64 {
 
 /// Roots in [a, b] (sign changes refined by bisection).
 pub fn roots(e: &Expr, a: f64, b: f64, params: &[Param]) -> Vec<f64> {
+    zeros(|x| e.eval(x, params), a, b)
+}
+
+/// Where f′ changes sign in [a, b]: the turning points (x, f(x), whether a maximum).
+pub fn turning_points(e: &Expr, a: f64, b: f64, params: &[Param]) -> Vec<(f64, f64, bool)> {
+    zeros(|x| derivative(e, x, params), a, b)
+        .into_iter()
+        .filter_map(|x| {
+            let (y, h) = (e.eval(x, params), (b - a) * 1e-3);
+            let (l, r) = (e.eval(x - h, params), e.eval(x + h, params));
+            // (A pole's sign change is none: both sides are finite and on one side of it.)
+            (y.is_finite() && l.is_finite() && r.is_finite() && (l - y).signum() == (r - y).signum() && y.abs() < 1e9).then_some((x, y, l < y))
+        })
+        .collect()
+}
+
+/// Where two curves meet in [a, b]: (x, y).
+pub fn crossings(f: &Expr, g: &Expr, a: f64, b: f64, params: &[Param]) -> Vec<(f64, f64)> {
+    zeros(|x| f.eval(x, params) - g.eval(x, params), a, b).into_iter().map(|x| (x, f.eval(x, params))).filter(|(_, y)| y.is_finite()).collect()
+}
+
+/// The zeros of `f` in [a, b] (sign changes refined by bisection).
+fn zeros(f: impl Fn(f64) -> f64, a: f64, b: f64) -> Vec<f64> {
     let n = 800;
     let step = (b - a) / n as f64;
     let mut out: Vec<f64> = Vec::new();
     let mut x0 = a;
-    let mut y0 = e.eval(x0, params);
+    let mut y0 = f(x0);
     for i in 1..=n {
         let x1 = a + i as f64 * step;
-        let y1 = e.eval(x1, params);
+        let y1 = f(x1);
         if y0.is_finite() && y1.is_finite() {
             if y0 == 0.0 {
                 out.push(x0);
@@ -342,7 +365,7 @@ pub fn roots(e: &Expr, a: f64, b: f64, params: &[Param]) -> Vec<f64> {
                 let (mut lo, mut hi) = (x0, x1);
                 for _ in 0..60 {
                     let mid = 0.5 * (lo + hi);
-                    if e.eval(mid, params).signum() == e.eval(lo, params).signum() {
+                    if f(mid).signum() == f(lo).signum() {
                         lo = mid;
                     } else {
                         hi = mid;
@@ -520,9 +543,51 @@ pub struct Simulation {
     /// Seen in 3D (`SimKind::turns_3d`): the orbits' plane leaning back, the tank as a relief, a
     /// surface from the side; in 2D from straight above.
     pub three_d: bool,
+    /// A plot: the part of the plane on screen (x from, x to, y from, y to) as Sir dragged and
+    /// zoomed it or JAI set it; None: the curves' own (`plane`).
+    pub view: Option<[f64; 4]>,
+    /// A plot: named points, as in a geometry program ("A", 2, 3).
+    pub points: Vec<(String, f64, f64)>,
 }
 
+/// The names plots give their curves, in turn.
+const CURVE_NAMES: [&str; 6] = ["f", "g", "h", "p", "q", "r"];
+
 impl Simulation {
+    /// The part of the plane a plot shows: Sir's or JAI's, else x over `x_range` and y over the
+    /// curves' 2nd-98th percentile with a tenth to spare (an asymptote flattens nothing).
+    pub fn plane(&self) -> [f64; 4] {
+        if let Some(view) = self.view {
+            return view;
+        }
+        let (a, b) = self.x_range;
+        let xs = (0..=200).map(|i| a + (b - a) * i as f64 / 200.0);
+        let mut ys: Vec<f64> = self
+            .functions
+            .iter()
+            .flat_map(|(_, _, e)| xs.clone().flat_map(move |x| [Some(e.eval(x, &self.params)), self.show_derivative.then(|| derivative(e, x, &self.params))]))
+            .flatten()
+            .chain(self.points.iter().map(|p| p.2))
+            .filter(|y| y.is_finite())
+            .collect();
+        ys.sort_by(f64::total_cmp);
+        let (mut y0, mut y1) = if ys.is_empty() { (-1.0, 1.0) } else { (ys[ys.len() * 2 / 100], ys[(ys.len() * 98 / 100).min(ys.len() - 1)]) };
+        if (y1 - y0).abs() < 1e-6 {
+            y0 -= 1.0;
+            y1 += 1.0;
+        }
+        let pad = (y1 - y0) * 0.1;
+        [a, b, y0 - pad, y1 + pad]
+    }
+
+    /// The next free name for a curve ("g" after "f"), or the one its formula gives itself
+    /// ("h(x) = …").
+    fn curve_name(&self, src: &str) -> String {
+        let own = src.split_once('=').and_then(|(lhs, _)| lhs.trim().strip_suffix("(x)")).map(str::trim).filter(|n| (1..=3).contains(&n.len()) && n.chars().all(char::is_alphabetic));
+        let free = || CURVE_NAMES.iter().find(|n| !self.functions.iter().any(|(l, _, _)| l == *n)).map_or("y", |n| *n);
+        own.unwrap_or_else(free).to_string()
+    }
+
     pub fn value(&self, name: &str) -> f64 {
         self.params.iter().find(|p| p.name == name).map(|p| p.value).unwrap_or(0.0)
     }
@@ -716,20 +781,33 @@ impl Simulation {
                 format!("z = {src}; z(0, 0) = {:.3}; between {lo:.2} and {hi:.2} for x and y within ±{r}", self.surface_z(&mut ps, 0.0, 0.0))
             }
             SimKind::Function => {
-                let (a, b) = self.x_range;
-                self.functions
+                let [a, b, ..] = self.plane();
+                let (a, b) = (fmt(a).parse().unwrap_or(a), fmt(b).parse().unwrap_or(b));
+                let mut parts: Vec<String> = self
+                    .functions
                     .iter()
                     .map(|(label, src, e)| {
                         let r = roots(e, a, b, &self.params);
                         let shown: Vec<String> = r.iter().take(6).map(|x| format!("{x:.3}")).collect();
+                        let turns: Vec<String> = turning_points(e, a, b, &self.params).iter().take(4).map(|(x, y, max)| format!("{} ({x:.3}, {y:.3})", if *max { "max" } else { "min" })).collect();
                         format!(
-                            "{label}(x) = {src}: roots {}; ∫ from {a} to {b} = {:.4}",
+                            "{label}(x) = {src}: roots {}{}; ∫ from {a} to {b} = {:.4}",
                             if shown.is_empty() { "none in range".to_string() } else { shown.join(", ") },
+                            if turns.is_empty() { String::new() } else { format!("; {}", turns.join(", ")) },
                             integral(e, a, b, &self.params)
                         )
                     })
-                    .collect::<Vec<_>>()
-                    .join(" | ")
+                    .collect();
+                for (i, (f, _, e)) in self.functions.iter().enumerate() {
+                    for (g, _, d) in &self.functions[i + 1..] {
+                        let met: Vec<String> = crossings(e, d, a, b, &self.params).iter().take(4).map(|(x, y)| format!("({x:.3}, {y:.3})")).collect();
+                        if !met.is_empty() {
+                            parts.push(format!("{f} and {g} meet at {}", met.join(", ")));
+                        }
+                    }
+                }
+                parts.extend(self.points.iter().map(|(n, x, y)| format!("{n} = ({}, {})", fmt(*x), fmt(*y))));
+                parts.join(" | ")
             }
         }
     }
@@ -1036,6 +1114,92 @@ impl SimulationLab {
         });
     }
 
+    /// Where a plot looks (None: the curves' own view again); its run goes on. A view that is
+    /// no rectangle is let be.
+    pub fn set_view(&self, id: &str, view: Option<[f64; 4]>) {
+        if view.is_none_or(|v| v.iter().all(|x| x.is_finite()) && v[1] > v[0] && v[3] > v[2]) {
+            self.look(id, |s| s.view = view);
+        }
+    }
+
+    /// A point of a plot, named ("A") or given the next free capital; the same name moves it.
+    pub fn put_point(&self, id: &str, name: Option<&str>, x: f64, y: f64) -> Option<String> {
+        self.edit(id, |s| {
+            let name = name.map(str::to_string).unwrap_or_else(|| ('A'..='Z').map(String::from).find(|n| !s.points.iter().any(|(p, _, _)| p == n)).unwrap_or_else(|| "P".into()));
+            s.points.retain(|(p, _, _)| *p != name);
+            s.points.push((name.clone(), x, y));
+            name
+        })
+    }
+
+    /// What Sir types into a plot's input line, as in GeoGebra: "A = (2, 3)" or "(1, 4)" is a
+    /// point, anything else a curve ("g(x) = sin x", "x^3").
+    pub fn plot_input(&self, id: &str, text: &str) -> Result<Vec<String>, String> {
+        let text = text.trim();
+        let key = if !text.contains('x') && point_of(&json!(text)).is_some() { "point" } else { "function" };
+        self.adjust(id, &json!({ key: text }))
+    }
+
+    /// Takes a curve (by its name or formula) or a point (by its name) off a plot: what went.
+    pub fn remove_object(&self, id: &str, what: &str) -> Option<String> {
+        let w = what.trim().trim_end_matches("(x)").trim().to_lowercase();
+        self.edit(id, |s| {
+            if let Some(i) = s.functions.iter().position(|(l, src, _)| l.to_lowercase() == w || src.to_lowercase().replace(' ', "") == w.replace(' ', "")) {
+                let (label, src, _) = s.functions.remove(i);
+                return Some(format!("{label}(x) = {src}"));
+            }
+            let i = s.points.iter().position(|(n, _, _)| n.to_lowercase() == w.trim_start_matches("point ").trim())?;
+            Some(format!("the point {}", s.points.remove(i).0))
+        })
+        .flatten()
+    }
+
+    /// One change of a plot's own (its view, a point, a curve taken off): what it did, None
+    /// when `key` is no such change.
+    fn plot_change(&self, sim: &Simulation, key: &str, value: &Value, plane: &mut Option<Option<[f64; 4]>>) -> Result<Option<String>, String> {
+        let key = key.trim().to_lowercase().replace([' ', '-'], "_");
+        let mut v = plane.flatten().unwrap_or_else(|| sim.plane());
+        let number = || value.as_f64().or_else(|| value.as_str().and_then(|s| s.trim().replace('−', "-").parse().ok())).ok_or_else(|| format!("'{value}' is no number"));
+        match key.as_str() {
+            "view" | "reset_view" | "fit" => {
+                *plane = Some(None);
+                return Ok(Some("the view fits the curves again".into()));
+            }
+            "point" | "add_point" => {
+                let (name, x, y) = point_of(value).ok_or_else(|| format!("I couldn't read the point '{value}' (\"A = (2, 3)\")."))?;
+                let name = self.put_point(&sim.id, name.as_deref(), x, y).unwrap_or_default();
+                return Ok(Some(format!("{name} = ({}, {})", fmt(x), fmt(y))));
+            }
+            "remove" | "delete" | "remove_function" | "remove_point" => {
+                let what = value.as_str().unwrap_or_default();
+                return self.remove_object(&sim.id, what).map(|gone| Some(format!("removed {gone}"))).ok_or_else(|| format!("This plot has no curve or point called '{what}'."));
+            }
+            "zoom" => {
+                let k = match value.as_str().map(str::trim) {
+                    Some("in" | "rein" | "hinein") => 2.0,
+                    Some("out" | "raus" | "heraus") => 0.5,
+                    _ => number()?,
+                };
+                v = zoomed(v, k, ((v[0] + v[1]) / 2.0, (v[2] + v[3]) / 2.0));
+            }
+            "x_range" | "x_axis" | "x" | "y_range" | "y_axis" | "y" => {
+                let (a, b) = two_numbers(value).ok_or_else(|| format!("I couldn't read the range '{value}' (\"-5 to 5\")."))?;
+                let at = if key.starts_with('x') { 0 } else { 2 };
+                (v[at], v[at + 1]) = (a.min(b), a.max(b));
+            }
+            "x_min" => v[0] = number()?,
+            "x_max" => v[1] = number()?,
+            "y_min" => v[2] = number()?,
+            "y_max" => v[3] = number()?,
+            _ => return Ok(None),
+        }
+        if !(v[1] > v[0] && v[3] > v[2]) {
+            return Err("The axes must run from a smaller number to a larger one.".into());
+        }
+        *plane = Some(Some(v));
+        Ok(Some(format!("x from {} to {}, y from {} to {}", fmt(v[0]), fmt(v[1]), fmt(v[2]), fmt(v[3]))))
+    }
+
     /// Opens a new simulation; returns its id.
     pub fn launch(&self, kind: SimKind, spec: &str, title: Option<&str>) -> Result<Simulation, String> {
         if self.list().len() >= 6 {
@@ -1056,6 +1220,8 @@ impl SimulationLab {
             revision: 0,
             paused: false,
             three_d: kind == SimKind::Surface || (kind.turns_3d() && crate::intents::says_3d(spec)),
+            view: None,
+            points: Vec::new(),
         };
         configure(&mut sim, spec)?;
         self.sims.write().unwrap_or_else(|e| e.into_inner()).push(sim.clone());
@@ -1073,7 +1239,15 @@ impl SimulationLab {
             Value::String(s) => parse_pairs(s).into_iter().map(|(k, v)| (k, json!(v))).collect(),
             _ => Vec::new(),
         };
+        // A plot's view (`plane`): Some(None) puts it back to the curves' own.
+        let mut plane: Option<Option<[f64; 4]>> = None;
         for (raw_name, raw_value) in map {
+            if sim.kind == SimKind::Function {
+                if let Some(said) = self.plot_change(&sim, &raw_name, &raw_value, &mut plane)? {
+                    applied.push(said);
+                    continue;
+                }
+            }
             let name = slider_name(&sim.params, &raw_name);
             match name.as_str() {
                 "derivative" | "integral" => {
@@ -1085,9 +1259,12 @@ impl SimulationLab {
                 "function" | "formula" | "add_function" => {
                     if let Some(src) = raw_value.as_str() {
                         let e = parse_expr(src)?;
+                        // "g(x) = cos x" keeps its name and is shown as "cos x".
+                        let body = src.split_once('=').filter(|(lhs, _)| lhs.trim().len() <= 6).map_or(src, |(_, rhs)| rhs).trim();
                         self.edit(id, |s| {
-                            let label = ["f", "g", "h", "p", "q", "r"].get(s.functions.len()).copied().unwrap_or("y").to_string();
-                            s.functions.push((label, src.to_string(), e));
+                            let label = s.curve_name(src);
+                            s.functions.retain(|(l, _, _)| *l != label);
+                            s.functions.push((label, body.to_string(), e));
                         });
                         applied.push(format!("added {src}"));
                     }
@@ -1106,6 +1283,9 @@ impl SimulationLab {
         for (name, value) in updates {
             self.set_param(id, &name, value);
         }
+        if let Some(view) = plane {
+            self.set_view(id, view);
+        }
         if applied.is_empty() {
             return Err("Tell me which slider to change and to what.".into());
         }
@@ -1119,6 +1299,40 @@ fn fmt(v: f64) -> String {
     } else {
         format!("{v:.3}").trim_end_matches('0').trim_end_matches('.').to_string()
     }
+}
+
+/// The plane `view` seen `k` times nearer (0.5: farther) about the point `at`; as it was when
+/// that would make it absurdly small or large.
+pub fn zoomed(view: [f64; 4], k: f64, at: (f64, f64)) -> [f64; 4] {
+    let v = [at.0 - (at.0 - view[0]) / k, at.0 + (view[1] - at.0) / k, at.1 - (at.1 - view[2]) / k, at.1 + (view[3] - at.1) / k];
+    let fine = |a: f64, b: f64| (1e-9..1e9).contains(&(b - a));
+    if k.is_finite() && k > 0.0 && fine(v[0], v[1]) && fine(v[2], v[3]) { v } else { view }
+}
+
+/// Two numbers in order: "-5 to 5", "-5..5", "[-5, 5]", "(2, 3)", [2, 3].
+fn two_numbers(v: &Value) -> Option<(f64, f64)> {
+    if let Some([a, b]) = v.as_array().map(Vec::as_slice) {
+        return Some((a.as_f64()?, b.as_f64()?));
+    }
+    static NUMBER: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"-?\d+(?:\.\d+)?").expect("valid number regex"));
+    let text = v.as_str()?.replace('−', "-");
+    let mut n = NUMBER.find_iter(&text).filter_map(|m| m.as_str().parse::<f64>().ok());
+    Some((n.next()?, n.next()?))
+}
+
+/// A point as said or written: "A = (2, 3)", "B(1|-4)", "(2, 3)", "point C at 1, 2", [2, 3].
+fn point_of(v: &Value) -> Option<(Option<String>, f64, f64)> {
+    let (x, y) = two_numbers(&match v.as_str() {
+        Some(s) => json!(s.replace('|', ",")),
+        None => v.clone(),
+    })?;
+    let name = v.as_str().and_then(|s| {
+        let s = s.trim();
+        let s = s.strip_prefix("point ").or_else(|| s.strip_prefix("Point ")).or_else(|| s.strip_prefix("punkt ")).unwrap_or(s).trim();
+        let name: String = s.chars().take_while(|c| c.is_alphabetic()).collect();
+        (name.chars().count() == 1).then(|| name.to_uppercase())
+    });
+    Some((name, x, y))
 }
 
 /// "angle=60, velocity 30 m/s, gravity: 1.62" → pairs.
@@ -1420,7 +1634,7 @@ pub fn tool_definitions() -> Vec<Value> {
         }}),
         json!({"type": "function", "function": {
             "name": "adjust_simulation",
-            "description": "Change an open simulation by voice: changes maps slider names to values or operations ({\"angle\": 60, \"velocity\": \"*2\"}; also \"half\", \"+10\", or \"function\": \"sin(x)\" to add a curve, \"derivative\": true); action restart, pause, resume, close, or 3d / 2d for its view. sim omitted = the newest simulation.",
+            "description": "Change an open simulation by voice: changes maps slider names to values or operations ({\"angle\": 60, \"velocity\": \"*2\"}; also \"half\", \"+10\", or \"function\": \"g(x) = sin(x)\" to add a curve, \"derivative\": true; a plot also takes \"zoom\": \"in\"/\"out\"/2, \"x_range\"/\"y_range\": \"-5 to 5\", \"view\": \"reset\", \"point\": \"A = (2, 3)\", \"remove\": \"g\"); action restart, pause, resume, close, or 3d / 2d for its view. sim omitted = the newest simulation.",
             "parameters": {"type": "object", "properties": {
                 "sim": {"type": "string", "description": "id, title or kind (\"the pendulum\")"},
                 "changes": {"type": "object"},
@@ -1692,6 +1906,9 @@ pub fn view_order(lab: &SimulationLab, text: &str) -> Option<Value> {
     static OWN: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r"\b(?:the|die|den|das)\s+(?:simulations?|sim|simulator|orbits?|planets?|solar\s+system|ripples?|waves?|tank|surface|plot|graph|bahnen|wellen|fläche)\b").expect("valid simulation noun regex")
     });
+    if let Some(args) = plot_order(lab, text) {
+        return Some(args);
+    }
     let sim = lab.find("")?;
     let lower = text.to_lowercase();
     let named = OWN.is_match(&lower);
@@ -1701,6 +1918,55 @@ pub fn view_order(lab: &SimulationLab, text: &str) -> Option<Value> {
         return None;
     }
     Some(json!({ "sim": sim.id, "action": if deep { "3d" } else { "2d" } }))
+}
+
+/// What Sir says to the plot that is open (Sir, 2026-11-22: "JAI and myself should be able to
+/// edit the size of the coordinate system and zoom in and out"): "zoom in on the graph", "set
+/// the x axis from -5 to 5", "reset the view", "add the point A at 2, 3", "remove g", "g(x) =
+/// cos x", "also plot x^3". The `adjust_simulation` arguments.
+pub fn plot_order(lab: &SimulationLab, text: &str) -> Option<Value> {
+    use regex::Regex;
+    use std::sync::LazyLock;
+    static ZOOM: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"^(?:jai,?\s+)?(?:zoom|zoome)\s+(in|out|rein|raus|hinein|heraus)(?:\s+(?:on|of|in|into|at|auf)\s+(?:the\s+|das\s+|den\s+)?(graph|plot|function|curve|coordinate\s+system|grid|graphen|funktion|koordinatensystem))?$").expect("zoom regex")
+    });
+    static AXIS: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"^(?:jai,?\s+)?(?:(?:set|make|change|put|let|show|stell|setz)\s+)?(?:the\s+|die\s+)?([xy])(?:\s*-?\s*(?:axis|achse|range|bereich))?(?:\s+(?:go|run|goes|runs|reach))?\s+(?:from|von)?\s*(-?\d+(?:\.\d+)?)\s+(?:to|bis|until|through)\s+(-?\d+(?:\.\d+)?)$").expect("axis regex")
+    });
+    static RESET: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(?:jai,?\s+)?(?:reset|fit)\s+(?:the\s+)?(?:view|zoom|graph|plot|axes|coordinate\s+system)$").expect("reset regex"));
+    static POINT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(?:jai,?\s+)?(?:add|plot|mark|draw|put|set|zeichne|setze?)\s+(?:the\s+|a\s+|den\s+|einen\s+)?(?:point|punkt)\s+(.+)$").expect("point regex"));
+    static REMOVE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"^(?:jai,?\s+)?(?:remove|delete|take\s+away|entferne|lösche)\s+(?:the\s+|die\s+|den\s+)?(?:function\s+|curve\s+|graph\s+|point\s+|funktion\s+|punkt\s+)?([a-z])(?:\s*\(x\))?$").expect("remove regex")
+    });
+    static DEFINE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(?:jai,?\s+)?(?:(?:also|now)\s+)?(?:(?:add|plot|draw|graph)\s+)?(?:also\s+)?([a-z]\(x\)\s*=\s*.+)$|^(?:jai,?\s+)?(?:add|also\s+plot|also\s+draw|add\s+the\s+function)\s+(.+)$").expect("define regex"));
+    let sim = lab.find("").filter(|s| s.kind == SimKind::Function)?;
+    let s = text.trim().trim_end_matches(['.', '!', '?']).to_lowercase().replace("minus ", "-").replace('−', "-");
+    let change = |key: &str, value: Value| Some(json!({ "sim": sim.id, "changes": { key: value } }));
+    if let Some(c) = ZOOM.captures(&s) {
+        // (Without a word for the plot, the Earth's zoom is the Earth's.)
+        if c.get(2).is_none() && crate::earth::is_open() {
+            return None;
+        }
+        return change("zoom", json!(if matches!(&c[1], "in" | "rein" | "hinein") { "in" } else { "out" }));
+    }
+    if let Some(c) = AXIS.captures(&s) {
+        return change(if &c[1] == "x" { "x_range" } else { "y_range" }, json!(format!("{} to {}", &c[2], &c[3])));
+    }
+    if RESET.is_match(&s) {
+        return change("view", json!("reset"));
+    }
+    if let Some(c) = POINT.captures(&s) {
+        return point_of(&json!(c[1].replace(" at ", " "))).is_some().then(|| change("point", json!(c[1].replace(" at ", " "))))?;
+    }
+    if let Some(c) = REMOVE.captures(&s) {
+        let name = &c[1];
+        return (sim.functions.iter().any(|(l, _, _)| l == name) || sim.points.iter().any(|(p, _, _)| p.eq_ignore_ascii_case(name))).then(|| change("remove", json!(name)))?;
+    }
+    if let Some(c) = DEFINE.captures(&s) {
+        let src = c.get(1).or(c.get(2))?.as_str().trim();
+        return (src.contains('x') && parse_expr(src).is_ok()).then(|| change("function", json!(src)))?;
+    }
+    None
 }
 
 /// "Set the angle to 60 degrees and double the velocity" while a simulation is open: the
@@ -1811,6 +2077,72 @@ mod tests {
         assert!(lab.launch(SimKind::Gravity, "simulate the solar system in 3D", None).unwrap().three_d);
         assert!(lab.launch(SimKind::Surface, "z = x*y", None).unwrap().three_d);
         assert!(!lab.launch(SimKind::Gravity, "the sun and the earth for 3 days", None).unwrap().three_d);
+    }
+
+    /// A plot is a GeoGebra of his (Sir, 2026-11-22): he and JAI zoom it, set its axes, put
+    /// points and more curves on it and take them off, by voice and by the tool, and it reads
+    /// out its extrema and where its curves meet.
+    #[test]
+    fn a_plot_is_zoomed_and_edited_like_geogebra() {
+        assert_eq!(zoomed([-10.0, 10.0, -5.0, 5.0], 2.0, (0.0, 0.0)), [-5.0, 5.0, -2.5, 2.5]);
+        assert_eq!(zoomed([0.0, 4.0, 0.0, 4.0], 0.5, (0.0, 0.0)), [0.0, 8.0, 0.0, 8.0], "about the cursor's point");
+        assert_eq!(zoomed([0.0, 1.0, 0.0, 1.0], 1e12, (0.5, 0.5)), [0.0, 1.0, 0.0, 1.0], "no absurd zoom");
+        assert_eq!(two_numbers(&json!("−5 to 5")), Some((-5.0, 5.0)));
+        assert_eq!(point_of(&json!("A = (2, 3)")), Some((Some("A".into()), 2.0, 3.0)));
+        assert_eq!(point_of(&json!("b(1|-4)")), Some((Some("B".into()), 1.0, -4.0)));
+        assert_eq!(point_of(&json!("(2.5, 3)")), Some((None, 2.5, 3.0)));
+        assert_eq!(point_of(&json!("nothing")), None);
+
+        let lab = SimulationLab::default();
+        assert!(plot_order(&lab, "zoom in on the graph").is_none(), "no plot is open");
+        let sim = lab.launch(SimKind::Function, "x^2 - 4", None).unwrap();
+        let fit = lab.get(&sim.id).unwrap().plane();
+        assert!(fit[0] == -10.0 && fit[1] == 10.0 && fit[2] < -4.0 && fit[3] > 90.0, "{fit:?}");
+        let orders = |text: &str| plot_order(&lab, text).map(|a| a["changes"].clone());
+        assert_eq!(orders("Zoom in on the graph"), Some(json!({ "zoom": "in" })));
+        assert_eq!(orders("zoom out"), Some(json!({ "zoom": "out" })));
+        assert_eq!(orders("Set the x axis from minus 5 to 5."), Some(json!({ "x_range": "-5 to 5" })));
+        assert_eq!(orders("y from 0 to 20"), Some(json!({ "y_range": "0 to 20" })));
+        assert_eq!(orders("reset the view"), Some(json!({ "view": "reset" })));
+        assert_eq!(orders("add the point A at 2, 3"), Some(json!({ "point": "a 2, 3" })));
+        assert_eq!(orders("g(x) = cos(x)"), Some(json!({ "function": "g(x) = cos(x)" })));
+        assert_eq!(orders("also plot x^3"), Some(json!({ "function": "x^3" })));
+        for text in ["zoom in on the map", "add a reminder", "remove the timer", "set the volume to 5", "remove g"] {
+            assert_eq!(orders(text), None, "{text}");
+        }
+
+        let said = lab.adjust(&sim.id, &json!({ "x_range": "-5 to 5", "y_range": [-10, 30] })).unwrap();
+        assert_eq!(lab.get(&sim.id).unwrap().plane(), [-5.0, 5.0, -10.0, 30.0], "{said:?}");
+        lab.adjust(&sim.id, &json!({ "zoom": "in" })).unwrap();
+        assert_eq!(lab.get(&sim.id).unwrap().plane(), [-2.5, 2.5, 0.0, 20.0]);
+        assert!(lab.adjust(&sim.id, &json!({ "x_min": 9 })).is_err(), "an axis that runs backwards");
+        lab.adjust(&sim.id, &json!({ "view": "reset" })).unwrap();
+        assert_eq!(lab.get(&sim.id).unwrap().plane(), fit);
+
+        lab.adjust(&sim.id, &json!({ "point": "A = (2, 3)", "function": "g(x) = 2x - 1" })).unwrap();
+        lab.adjust(&sim.id, &json!({ "point": "(0, 0)" })).unwrap();
+        let now = lab.get(&sim.id).unwrap();
+        assert_eq!(now.points.iter().map(|(n, ..)| n.as_str()).collect::<Vec<_>>(), ["A", "B"]);
+        assert_eq!(now.functions.iter().map(|(l, ..)| l.as_str()).collect::<Vec<_>>(), ["f", "g"]);
+        assert_eq!(orders("remove g"), Some(json!({ "remove": "g" })));
+        let readout = now.readout();
+        assert!(readout.contains("meet") && readout.contains("A = (2, 3)"), "{readout}");
+        assert_eq!(turning_points(&now.functions[0].2, -5.0, 5.0, &now.params).len(), 1);
+        let meet = crossings(&now.functions[0].2, &now.functions[1].2, -10.0, 10.0, &now.params);
+        assert_eq!(meet.len(), 2, "x² - 4 = 2x - 1 at x = -1 and 3: {meet:?}");
+        assert!((meet[0].0 + 1.0).abs() < 1e-6 && (meet[1].0 - 3.0).abs() < 1e-6, "{meet:?}");
+        lab.adjust(&sim.id, &json!({ "remove": "g", "delete": "A" })).unwrap();
+        let now = lab.get(&sim.id).unwrap();
+        assert_eq!((now.functions.len(), now.points.len()), (1, 1));
+        assert!(lab.adjust(&sim.id, &json!({ "remove": "z" })).is_err());
+        // The input line: points and curves as GeoGebra takes them.
+        lab.plot_input(&sim.id, "C = (1, -2)").unwrap();
+        lab.plot_input(&sim.id, "h(x) = sin(x)").unwrap();
+        lab.plot_input(&sim.id, "x^3").unwrap();
+        assert!(lab.plot_input(&sim.id, "x +* 2").is_err());
+        let now = lab.get(&sim.id).unwrap();
+        assert!(now.points.iter().any(|(n, x, y)| n == "C" && *x == 1.0 && *y == -2.0));
+        assert_eq!(now.functions.iter().map(|(l, s, _)| format!("{l}: {s}")).collect::<Vec<_>>(), ["f: x^2 - 4", "h: sin(x)", "g: x^3"]);
     }
 
     #[test]

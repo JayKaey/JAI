@@ -332,6 +332,19 @@ pub fn top(scores: &[f32], n: usize) -> Vec<(usize, f32)> {
 /// What an event of the radar was, by the model's scores for its clip (None: no model): a sound
 /// a rule or a protocol can wait on, or nothing worth one (typing, music, a tap on the desk).
 pub fn judge(event: AcousticEvent, scores: Option<&[f32]>) -> Option<Sound> {
+    judge_by(event, scores, &taught())
+}
+
+fn judge_by(event: AcousticEvent, scores: Option<&[f32]>, taught: &[(Own, Vec<f32>, u32)]) -> Option<Sound> {
+    // Sir's own clap or snap, as he taught it, comes before the rules for anyone's.
+    if let Some(own) = scores.filter(|p| p.len() >= CLASSES).and_then(|p| by_ear(p, taught)) {
+        match (own, event) {
+            (Own::Snap, AcousticEvent::Claps { .. } | AcousticEvent::Single) => return Some(Sound::Snap),
+            (Own::Clap, AcousticEvent::Claps { count }) => return Some(Sound::Claps(count as u8)),
+            (Own::Clap, AcousticEvent::Single) => return None,
+            _ => {}
+        }
+    }
     let Some(p) = scores.filter(|p| p.len() >= CLASSES) else {
         // Without the model the radar's own word holds for what it can tell.
         return match event {
@@ -365,6 +378,119 @@ pub fn judge(event: AcousticEvent, scores: Option<&[f32]>) -> Option<Sound> {
         }
         AcousticEvent::Sound => LASTING.iter().map(|(sound, ids, bar)| (*sound, of(ids), *bar)).filter(|(_, score, bar)| score >= bar).max_by(|a, b| a.1.total_cmp(&b.1)).map(|(sound, ..)| sound),
     }
+}
+
+// -------------------------------------------------------------- Sir's own clap and snap ----
+
+/// A sound Sir teaches him by ear ("learn my claps", Sir, 2026-11-22): the model's scores for
+/// his own clap or snap, averaged, so his are told apart from anyone's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum Own {
+    Clap,
+    Snap,
+}
+
+impl Own {
+    fn plural(self) -> &'static str {
+        match self {
+            Own::Clap => "claps",
+            Own::Snap => "snaps",
+        }
+    }
+}
+
+/// How many he hears while taught; how long he listens for them.
+const SAMPLES: usize = 5;
+const TEACHING_FOR: Duration = Duration::from_secs(45);
+/// How close a clip must be to what Sir taught (the cosine of their scores).
+const OWN_BAR: f32 = 0.85;
+/// The newest samples weigh as much as this many older ones together (it keeps up with him).
+const KEPT_SAMPLES: u32 = 20;
+const TAUGHT_FILE: &str = "taught.json";
+
+static TEACHING: Mutex<Option<(Own, Instant, usize)>> = Mutex::new(None);
+static TAUGHT: Mutex<Option<Vec<(Own, Vec<f32>, u32)>>> = Mutex::new(None);
+
+/// "Learn my claps", "lern mein Schnipsen": which of his sounds he is to learn.
+pub fn teach_order(text: &str) -> Option<Own> {
+    static ORDER: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"^(?:jai\s+)?(?:please\s+|bitte\s+)?(?:learn|teach\s+(?:you|yourself)|lerne?|lern\s+dir)\s+(?:how\s+i\s+|my\s+|mein(?:e|en)?\s+|wie\s+ich\s+)(?:finger\s*)?(clap|snap|klatsch|schnip)").expect("valid regex")
+    });
+    let words = crate::ear::words(text).join(" ");
+    ORDER.captures(&words).map(|c| if matches!(&c[1], "clap" | "klatsch") { Own::Clap } else { Own::Snap })
+}
+
+/// He listens for Sir's own sound now; his line for it.
+pub fn teach(own: Own) -> String {
+    if !available() {
+        return "I need the sound model for that, Sir, and it isn't installed.".into();
+    }
+    *lock(&TEACHING) = Some((own, Instant::now(), 0));
+    match own {
+        Own::Clap => format!("Clap twice, {SAMPLES} times over, Sir. I'm listening."),
+        Own::Snap => format!("Snap your fingers {SAMPLES} times, Sir, a moment apart. I'm listening."),
+    }
+}
+
+fn teaching() -> bool {
+    lock(&TEACHING).is_some_and(|(_, at, _)| at.elapsed() < TEACHING_FOR)
+}
+
+/// A sound heard while he is taught, kept as Sir's own: which, how many so far, and his line once
+/// he has them all.
+pub fn learn(event: AcousticEvent, scores: Option<&[f32]>) -> Option<(Own, usize, Option<String>)> {
+    let p = scores.filter(|p| p.len() >= CLASSES && !matches!(event, AcousticEvent::Sound))?;
+    let (own, n) = {
+        let mut teaching = lock(&TEACHING);
+        let (own, _, n) = teaching.as_mut().filter(|(_, at, _)| at.elapsed() < TEACHING_FOR)?;
+        *n += 1;
+        let out = (*own, *n);
+        if out.1 >= SAMPLES {
+            *teaching = None;
+        }
+        out
+    };
+    {
+        let mut taught = taught();
+        match taught.iter_mut().find(|(o, ..)| *o == own) {
+            Some((_, mean, k)) => blend(mean, k, p),
+            None => taught.push((own, p[..CLASSES].to_vec(), 1)),
+        }
+        *lock(&TAUGHT) = Some(taught.clone());
+        if !cfg!(test) && !crate::platform::in_test_session() {
+            if let Some(dir) = DIR.get() {
+                let _ = std::fs::write(dir.join(TAUGHT_FILE), serde_json::to_string(&taught).unwrap_or_default());
+            }
+        }
+    }
+    let done = (n >= SAMPLES).then(|| format!("Got it, Sir: I know your {} now.", own.plural()));
+    Some((own, n, done))
+}
+
+/// What Sir taught him, read once from `models/sound/taught.json`.
+fn taught() -> Vec<(Own, Vec<f32>, u32)> {
+    lock(&TAUGHT)
+        .get_or_insert_with(|| DIR.get().and_then(|d| std::fs::read_to_string(d.join(TAUGHT_FILE)).ok()).and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default())
+        .clone()
+}
+
+/// A new sample into the average (at most `KEPT_SAMPLES` deep).
+fn blend(mean: &mut [f32], k: &mut u32, p: &[f32]) {
+    let w = *k as f32;
+    for (m, x) in mean.iter_mut().zip(p) {
+        *m = (*m * w + x) / (w + 1.0);
+    }
+    *k = (*k + 1).min(KEPT_SAMPLES);
+}
+
+/// Which of Sir's own sounds the clip is, when it is close enough to one.
+fn by_ear(p: &[f32], taught: &[(Own, Vec<f32>, u32)]) -> Option<Own> {
+    let cosine = |a: &[f32], b: &[f32]| {
+        let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
+        let norm = a.iter().map(|x| x * x).sum::<f32>().sqrt() * b.iter().map(|x| x * x).sum::<f32>().sqrt();
+        if norm > 0.0 { dot / norm } else { 0.0 }
+    };
+    taught.iter().map(|(own, mean, _)| (*own, cosine(p, mean))).filter(|(_, s)| *s >= OWN_BAR).max_by(|a, b| a.1.total_cmp(&b.1)).map(|(own, _)| own)
 }
 
 // ------------------------------------------------------------------ what he heard lately ----
@@ -414,7 +540,7 @@ pub fn note(event: AcousticEvent, sound: Option<Sound>, scores: Option<&[f32]>) 
     };
     match sound {
         Some(sound) => keep(sound.name().to_string(), true, detail),
-        None => keep(format!("{heard}, let be"), false, detail),
+        None => keep(format!("{heard}, nothing to act on"), false, detail),
     }
 }
 
@@ -449,7 +575,7 @@ pub fn watch() {
 /// Whether the radar should listen for every kind of sound (not only J.A.I.'s own claps and
 /// knocks).
 pub fn wanted() -> bool {
-    AWAITED.load(Ordering::Acquire) || lock(&WATCHED).is_some_and(|t| t.elapsed() < Duration::from_secs(3))
+    AWAITED.load(Ordering::Acquire) || lock(&WATCHED).is_some_and(|t| t.elapsed() < Duration::from_secs(3)) || teaching()
 }
 
 #[cfg(test)]
@@ -503,6 +629,31 @@ mod tests {
             p[*i] = *s;
         }
         p
+    }
+
+    /// Sir, 2026-11-22: "train clap and snap detection on my own sounds". His snap that the model
+    /// takes for a clap (his fingers are loud) is his snap once taught; anyone's clap stays a clap.
+    #[test]
+    fn sirs_own_snap_is_known_once_he_taught_it() {
+        let his_snap = scores_with(&[(63, 0.45), (62, 0.05), (467, 0.3)]);
+        let claps = AcousticEvent::Claps { count: 2 };
+        assert_eq!(judge_by(claps, Some(&his_snap), &[]), Some(Sound::Claps(2)), "untaught, the model's word holds");
+        let (mut mean, mut k) = (scores_with(&[(63, 0.4), (62, 0.08), (467, 0.35)]), 1);
+        for _ in 0..30 {
+            blend(&mut mean, &mut k, &his_snap);
+        }
+        assert_eq!(k, KEPT_SAMPLES);
+        let taught = vec![(Own::Snap, mean, k)];
+        assert_eq!(judge_by(claps, Some(&his_snap), &taught), Some(Sound::Snap));
+        assert_eq!(judge_by(AcousticEvent::Single, Some(&his_snap), &taught), Some(Sound::Snap));
+        let someones_clap = scores_with(&[(63, 0.7), (61, 0.5)]);
+        assert_eq!(by_ear(&someones_clap, &taught), None);
+        assert_eq!(judge_by(claps, Some(&someones_clap), &taught), Some(Sound::Claps(2)));
+        for (said, own) in [("JAI, learn my claps", Own::Clap), ("learn how I clap", Own::Clap), ("teach you my finger snap", Own::Snap), ("lern mein Schnipsen", Own::Snap), ("lerne mein Klatschen", Own::Clap)] {
+            assert_eq!(teach_order(said), Some(own), "{said}");
+        }
+        assert_eq!(teach_order("when I clap twice open spotify"), None);
+        assert_eq!(learn(AcousticEvent::Single, Some(&his_snap)), None, "nothing is learned unless he was asked to");
     }
 
     /// The model's word on what the radar heard: typing is no knock, a snap is no clap, a lasting

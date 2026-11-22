@@ -215,6 +215,19 @@ async fn open_own_choice(ctx: &ToolContext, args: &Value) -> Result<String, Stri
     Ok(format!("Opened: {list}.\nSpoken: {spoken}"))
 }
 
+/// "Show me the capital of France": the language model names the place a description means
+/// before the Earth looks for it (Sir, 2026-11-22); a name stays as it was said.
+async fn named_place(ctx: &ToolContext, args: &Value) -> Value {
+    let mut args = args.clone();
+    let Some(words) = args.get("place").and_then(Value::as_str).filter(|p| crate::earth::describes_a_place(p)) else { return args };
+    let instruction = "Name the one real place these words describe, as a map search finds it (\"Paris, France\"). Answer with the name alone, or NONE when no single place is meant.";
+    let named = ctx.pim.complete(instruction, words, 24).await.map(|n| n.trim().trim_matches(['"', '.', '*']).trim().to_string());
+    if let Some(name) = named.filter(|n| !n.is_empty() && n.len() < 80 && !n.eq_ignore_ascii_case("none")) {
+        args["place"] = json!(name);
+    }
+    args
+}
+
 /// `open_jai_view`: the view as a HUD block (or its own window). The result ends with a
 /// "Spoken:" line.
 pub async fn run(ctx: &ToolContext, args: &Value) -> Result<String, String> {
@@ -243,7 +256,7 @@ pub async fn run(ctx: &ToolContext, args: &Value) -> Result<String, String> {
                 JaiSubWindow::NetworkRadar => crate::network_radar::run(args).await,
                 JaiSubWindow::DiskMap => crate::disk_map::run(args).await,
                 JaiSubWindow::Departures => crate::transit::run(ctx, args).await, // live layers (C1)
-                _ => crate::earth::run(args).await,
+                _ => crate::earth::run(&named_place(ctx, args).await).await,
             }
         }
         JaiSubWindow::SystemStatsMonitor => {
@@ -395,7 +408,7 @@ pub fn tool_definition() -> Value {
         "parameters": {"type": "object", "properties": {
             "view": {"type": "string", "enum": ["system_stats", "schedule", "simulation_lab", "mobile_qr", "workout_finance", "contacts", "network_radar", "disk_map", "earth", "departures", "live", "random"]},
             "count": {"type": "integer"},
-            "action": {"type": "string", "description": "network_radar: show, rescan, check_security. disk_map: show (path), rescan, back. earth: show, show_satellite, show_holo, show_place (place), show_quakes (place, radius_km), show_flights (place), show_storms, show_fires, show_iss, show_satellites (name: group), find_satellite (name), show_overhead, show_trains (place), show_traffic (name or place), show_my_location (where am I), show_mountains (place optional), exaggerate_terrain, show_radar, animate_radar, show_clouds (date optional), show_labels / hide_labels, show_buildings (place optional: the houses in 3D), set_imagery (imagery), show_date (date, place optional: a past day's imagery), show_today, show_world_tour, stop_tour, hide_layer (layer), hide_layers, zoom_in, zoom_out, home, spin, spin_reverse (the other direction), stop_spin. departures: show (name). live: passes (name, place), traffic (name or place), weather_on (date, place), rain_soon (place)."},
+            "action": {"type": "string", "description": "network_radar: show, rescan, check_security. disk_map: show (path), rescan, back. earth: show, show_satellite, show_holo, show_place (place), show_quakes (place, radius_km), show_flights (place), track_flight (from, to), show_storms, show_fires, show_iss, show_satellites (name: group), find_satellite (name), show_overhead, show_trains (place), show_traffic (name or place), show_my_location (where am I), show_mountains (place optional), exaggerate_terrain, show_radar, animate_radar, show_clouds (date optional), show_labels / hide_labels, show_buildings (place optional: the houses in 3D), set_imagery (imagery), show_date (date, place optional: a past day's imagery), show_today, show_world_tour, stop_tour, hide_layer (layer), hide_layers, zoom_in, zoom_out, home, spin, spin_reverse (the other direction), stop_spin. departures: show (name). live: passes (name, place), traffic (name or place), weather_on (date, place), rain_soon (place)."},
             "layer": {"type": "string", "description": "earth, hide_layer: quakes, flights, storms, fires, iss, satellites, trains, traffic, radar, clouds, terrain, labels, buildings"},
             "name": {"type": "string", "description": "satellite, group (starlink), station or motorway (A8)"},
             "date": {"type": "string", "description": "a day as said (\"yesterday\", \"1 March 2024\", 2024-03-01)"},

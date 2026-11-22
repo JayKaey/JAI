@@ -64,7 +64,10 @@ fn body(ui: &mut Ui, config: &ConfigStore) {
         "Your main PC: everything here is yours. Your own windows come first; on another PC they open only with your admin sign-in."
     };
     ui.label(RichText::new(about).font(holo::font(Face::Body, 13.0)).color(strip_muted()));
-    ui.add_space(4.0);
+    // A rule the list scrolls under, clear of the words above it (2026-11-22: scrolled, the
+    // tiles' cut lines stood right under the sentence, as if written over it).
+    let (rule, _) = ui.allocate_exact_size(vec2(ui.available_width(), 12.0), Sense::hover());
+    holo::rule(ui.painter(), pos2(rule.left(), rule.center().y), pos2(rule.right(), rule.center().y), holo::a(holo::theme().ink(), 0.18));
     crate::holo_block::faded(ui, egui::ScrollArea::vertical().auto_shrink([false; 2]), |ui| {
         for (g, group) in GROUPS.iter().enumerate() {
             let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::hover());

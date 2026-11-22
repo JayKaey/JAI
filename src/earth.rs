@@ -1371,6 +1371,9 @@ pub enum Action {
     Place(String),
     Quakes { place: Option<String>, radius_km: Option<f64> },
     Flights(Option<String>),
+    /// "Track a flight from Frankfurt to New York", "follow LH 400": one aircraft followed.
+    Track { from: Option<String>, to: Option<String>, flight: Option<String> },
+    StopTrack,
     Storms,
     Fires,
     Iss,
@@ -1542,6 +1545,14 @@ pub fn parse_action(args: &Value) -> Result<Action, String> {
         "show_place" | "fly_to" | "place" => Action::Place(place.ok_or("show_place needs a place to fly to")?),
         "show_quakes" | "quakes" | "earthquakes" => Action::Quakes { place, radius_km: radius },
         "show_flights" | "flights" => Action::Flights(place),
+        "track_flight" | "follow_flight" | "track" => {
+            let (from, to, flight) = (text("from"), text("to"), text("flight").or(text("callsign")));
+            if flight.is_none() && (from.is_none() || to.is_none()) {
+                return Err("track_flight needs from and to (cities), or a flight's callsign".into());
+            }
+            Action::Track { from, to, flight }
+        }
+        "stop_tracking" | "stop_following" | "untrack" => Action::StopTrack,
         "show_storms" | "storms" => Action::Storms,
         "show_fires" | "fires" | "wildfires" => Action::Fires,
         "show_iss" | "iss" => Action::Iss,
@@ -1557,7 +1568,7 @@ pub fn parse_action(args: &Value) -> Result<Action, String> {
         "spin_reverse" | "reverse_spin" | "spin_other_way" | "spin_backwards" => Action::SpinReverse,
         "stop_spin" => Action::StopSpin,
         "show_cameras" | "cameras" | "webcams" => Action::Cameras, // cameras (C2)
-        other => return Err(format!("'{other}' is not something the Earth does (show, show_satellite, show_holo, show_place, show_quakes, show_flights, show_storms, show_fires, show_iss, show_cameras, hide_layer, hide_layers, zoom_in, zoom_out, home, spin, spin_reverse, stop_spin, show_my_location, show_mountains, show_terrain, exaggerate_terrain, show_radar, animate_radar, show_clouds, show_labels, hide_labels, show_buildings, hide_buildings, show_3d, show_2d, set_imagery, show_date, show_today, show_world_tour, stop_tour).")),
+        other => return Err(format!("'{other}' is not something the Earth does (show, show_satellite, show_holo, show_place, show_quakes, show_flights, track_flight, stop_tracking, show_storms, show_fires, show_iss, show_cameras, hide_layer, hide_layers, zoom_in, zoom_out, home, spin, spin_reverse, stop_spin, show_my_location, show_mountains, show_terrain, exaggerate_terrain, show_radar, animate_radar, show_clouds, show_labels, hide_labels, show_buildings, hide_buildings, show_3d, show_2d, set_imagery, show_date, show_today, show_world_tour, stop_tour).")),
     })
 }
 
@@ -4104,6 +4115,10 @@ async fn act(action: Action, offline: bool) -> (String, String) {
     if !matches!(action, Action::Tour | Action::StopTour | Action::Show) {
         state().tour = None;
     }
+    // Another place to look at ends following a flight.
+    if matches!(action, Action::Place(_) | Action::Home | Action::Locate | Action::Iss | Action::Tour | Action::Mountains(_) | Action::Buildings(_)) {
+        crate::flight_track::stop();
+    }
     match action {
         Action::Show => ("The Earth is open: the globe with earthquakes, storms, wildfires and the ISS.".into(), "The Earth is on your display, Sir. You can spin or zoom it as you like.".into()),
         Action::Satellite => {
@@ -4208,6 +4223,14 @@ async fn act(action: Action, offline: bool) -> (String, String) {
         Action::Quakes { place: None, radius_km: None } => global_quakes(offline).await,
         Action::Quakes { place, radius_km } => area_quakes(place, radius_km, offline).await,
         Action::Flights(place) => flights(place, offline).await,
+        Action::Track { from, to, flight } => track(from, to, flight, offline).await,
+        Action::StopTrack => {
+            if crate::flight_track::stop() {
+                ("No flight followed any more.".into(), "I've stopped following it, Sir.".into())
+            } else {
+                ("No flight was followed.".into(), "I'm not following any flight, Sir.".into())
+            }
+        }
         Action::Storms => events(EventKind::Storm, offline).await,
         Action::Fires => events(EventKind::Fire, offline).await,
         Action::Iss => iss(offline).await,
@@ -4257,6 +4280,69 @@ async fn act(action: Action, offline: bool) -> (String, String) {
         Action::Cameras => crate::webcams::earth_layer_action(offline).await, // cameras (C2)
         Action::Live(live) => crate::earth_layers::act(live, offline).await, // live layers (C1)
     }
+}
+
+/// "Track a flight from Frankfurt to New York", "follow LH 400": one aircraft in the air found
+/// in the live feed and followed (`flight_track`).
+async fn track(from: Option<String>, to: Option<String>, flight: Option<String>, offline: bool) -> (String, String) {
+    if offline || state().demo {
+        return ("Live flights need the internet.".into(), "I need the internet to find a live flight, Sir.".into());
+    }
+    let mut between = String::new();
+    let found = match (flight, from, to) {
+        (Some(said), ..) => crate::flight_track::by_callsign(&crate::flight_track::icao_callsign(&said)).await,
+        (None, Some(a), Some(b)) => match futures_util::future::join(resolve(&a, false), resolve(&b, false)).await {
+            (Ok(a), Ok(b)) => {
+                between = format!(" from {} to {}", a.name, b.name);
+                crate::flight_track::find((a.lat, a.lon), (b.lat, b.lon)).await.map(|(plane, route)| (plane, Some(route)))
+            }
+            (Err(e), _) | (_, Err(e)) => Err(e),
+        },
+        _ => Err("no route and no callsign".into()),
+    };
+    let (plane, route) = match found {
+        Ok(found) => found,
+        Err(e) => return (format!("No flight found: {e}."), format!("I can't find a flight{between} in the air right now, Sir. Far out over an ocean they're beyond the receivers.")),
+    };
+    let label = format!("{}{}", plane.callsign, route.as_ref().map(|r| format!(" · {}", r.codes.replace('-', " → "))).unwrap_or_default());
+    show_plane(&plane, &label, false);
+    crate::flight_track::follow(&plane, label.clone());
+    let over = fetch_place(plane.lat, plane.lon).await.map(|p| p.spoken()).filter(|s| !s.is_empty()).unwrap_or_else(|| spoken_coords(plane.lat, plane.lon));
+    let height = plane.alt_ft.map_or_else(String::new, |ft| format!(" at {} feet", group_digits(ft.round() as i64)));
+    let digits = plane.callsign.find(|c: char| c.is_ascii_digit()).unwrap_or(plane.callsign.len());
+    let (airline, number) = plane.callsign.split_at(digits);
+    (
+        format!("Following {label}: {}{height}, {} kn.", coords_label(plane.lat, plane.lon), plane.speed_kt.round()),
+        format!("Following {airline} {number}{between}, Sir. It's over {over}{height}."),
+    )
+}
+
+/// The followed aircraft: the marker on it, the camera over it (down to 900 km the first time,
+/// at Sir's own height after: `keep`).
+pub fn show_plane(plane: &crate::flight_track::Plane, label: &str, keep: bool) {
+    {
+        let mut st = state();
+        let height = plane.alt_ft.map_or_else(|| "on the ground".to_string(), |ft| format!("{} ft", group_digits(ft.round() as i64)));
+        st.marker = Some(Marker { name: format!("{label} · {height}"), lat: plane.lat, lon: plane.lon });
+        let alt = if keep { st.target().alt } else { 900.0 };
+        st.fly_to(Camera { lat: plane.lat, lon: plane.lon, alt });
+    }
+    crate::gui::refresh();
+}
+
+/// Words that describe a place rather than name it: "the capital of France", "the tallest
+/// building in the world", "die größte Stadt Deutschlands" (Sir, 2026-11-22: JAI should guess
+/// what is meant). The language model names it before the map looks for it.
+pub fn describes_a_place(words: &str) -> bool {
+    static DESCRIBED: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new(concat!(
+            r"\b(?:capital|hauptstadt|birthplace|geburtsort|headquarters|hauptsitz)\s+(?:of|von|der|des|city)\b|\bhauptstadt\s+\w+s$",
+            r"|\b(?:largest|biggest|tallest|highest|deepest|longest|oldest|smallest|busiest|coldest|hottest|most\s+\w+|famous|größte|grösste|groesste|höchste|hoechste|tiefste|längste|laengste|älteste|aelteste|kleinste|berühmteste)\b.*\b(?:city|cities|town|country|state|mountain|volcano|river|lake|island|building|tower|bridge|desert|ocean|sea|waterfall|airport|stadium|stadt|städte|berg|fluss|insel|gebäude|turm|brücke|wüste|flughafen)\b",
+            r"|\bwhere\s+.+\s+(?:was|were|is|are)\s+(?:born|built|made|founded|invented|signed)\b",
+        ))
+        .expect("valid place description regex")
+    });
+    DESCRIBED.is_match(&words.to_lowercase())
 }
 
 async fn show_place(name: &str, offline: bool) -> (String, String) {

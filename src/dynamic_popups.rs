@@ -488,7 +488,7 @@ fn card_body(ui: &mut egui::Ui, p: &mut DynamicHudPopup, style: &CardStyle, acti
             if p.collapsed {
                 let r = ui.horizontal(|ui| {
                     ui.label(RichText::new(if *is_playing { "PLAY" } else { "PAUSE" }).font(font(Face::Label, 8.5)).color(style.accent));
-                    ui.label(RichText::new(format!("{title} — {artist}")).font(font(Face::Body, 11.0)).color(style.text));
+                    ui.label(RichText::new(if artist.is_empty() { title.clone() } else { format!("{title} — {artist}") }).font(font(Face::Body, 11.0)).color(style.text));
                 });
                 if ui.interact(r.response.rect, Id::new(("popup_pill", p.id)), Sense::click()).clicked() {
                     p.collapsed = false;

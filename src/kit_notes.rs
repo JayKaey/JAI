@@ -913,12 +913,20 @@ pub fn is_tell_me(order: &str) -> bool {
 
 /// Carries out the rules that fired (their orders as if Sir had typed them; "tell me" is said at
 /// once, with what happened) and engages the protocols that wait on what happened.
+/// Whether what set a rule or a protocol off was no word to him (a clap, a snap, a knock): then
+/// he does what it says without a word of his own, unless it says to say something (Sir,
+/// 2026-11-22).
+fn without_a_word(when: &When) -> bool {
+    matches!(when, When::Hears(_))
+}
+
 fn carry_out(tools: &crate::tools::ToolContext, rules: Vec<(When, String)>, protocols: Vec<(String, When)>) {
     for (when, then) in rules {
         let words = when.words();
         tracing::info!("[RULES] {words}: {then}");
         crate::hud_notify::record(&format!("Rule: {words} → {then}"), false);
-        let event = if is_tell_me(&then) { crate::stark::StarkEvent::Alert(when.news()) } else { crate::stark::StarkEvent::RunMacro { name: format!("rule ({words})"), steps: vec![then], quiet: false } };
+        let quiet = without_a_word(&when) && !crate::protocols::wants_an_answer(&then);
+        let event = if is_tell_me(&then) { crate::stark::StarkEvent::Alert(when.news()) } else { crate::stark::StarkEvent::RunMacro { name: format!("rule ({words})"), steps: vec![then], quiet } };
         let _ = tools.stark.events.send(event);
     }
     for (name, when) in protocols {
@@ -926,7 +934,8 @@ fn carry_out(tools: &crate::tools::ToolContext, rules: Vec<(When, String)>, prot
         crate::hud_notify::record(&format!("{} → {}", capitalised(&when.words()), crate::protocols::display_name(&name)), false);
         let tools = tools.clone();
         tokio::spawn(async move {
-            let _ = tools.execute("manage_stark_protocol", &json!({ "action": "execute_protocol", "protocol_name": name, "because": when.news() })).await;
+            let quiet = without_a_word(&when);
+            let _ = tools.execute("manage_stark_protocol", &json!({ "action": "execute_protocol", "protocol_name": name, "because": when.news(), "quiet": quiet })).await;
         });
     }
 }
@@ -1227,6 +1236,9 @@ mod tests {
             assert_eq!(when_of(&hears(sound).words()), Some(hears(sound)), "{sound:?}: what the window writes is read back");
         }
         assert!(!hears(Sound::Knock).fires(&["discord".into()], &[], Some((7, 30)), &[]), "a sound fires when it is heard");
+        // Set off by a sound, he says nothing of his own; set off by a time, he still says what he does.
+        assert!(without_a_word(&hears(Sound::Claps(2))) && without_a_word(&hears(Sound::Snap)));
+        assert!(!without_a_word(&When::At(7, 0)) && !without_a_word(&When::Starts("discord".into())));
         for order in ["tell me", "Tell me!", "let me know right away", "warn me", "sag mir bescheid", "please notify me"] {
             assert!(is_tell_me(order), "{order}");
         }

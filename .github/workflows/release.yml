@@ -91,11 +91,15 @@ jobs:
           setup/target/release/jai-setup.exe --check > check.txt 2>&1 || eval "$CHECK_FAILED"
           head -n 3 check.txt
           cp setup/target/release/jai-setup.exe JAI-setup.exe
-          ls -l JAI-setup.exe
+          # (J.A.I. alone too: another PC of Sir's takes a newer release from it by itself, `fleet::update`.)
+          cp target/release/jai.exe JAI.exe
+          ls -l JAI-setup.exe JAI.exe
       - uses: actions/upload-artifact@v7
         with:
           name: windows
-          path: JAI-setup.exe
+          path: |
+            JAI-setup.exe
+            JAI.exe
 
   linux:
     runs-on: ubuntu-24.04
@@ -120,11 +124,14 @@ jobs:
           mkdir -p ../payload && cp ../target/release/jai ../payload/jai
           JAI_SETUP_PAYLOAD="$GITHUB_WORKSPACE/payload" cargo build --release 2>&1 | tee build.txt || eval "$FAILED"
           cp target/release/jai-setup ../JAI-setup-linux
-          ls -l ../JAI-setup-linux
+          cp ../target/release/jai ../jai-linux
+          ls -l ../JAI-setup-linux ../jai-linux
       - uses: actions/upload-artifact@v7
         with:
           name: linux
-          path: JAI-setup-linux
+          path: |
+            JAI-setup-linux
+            jai-linux
 
   # The Linux setup on a bare Arch: it installs the packages J.A.I. needs, and the jai it carries
   # starts there.
@@ -169,6 +176,8 @@ jobs:
           - **Linux** (made for KDE Plasma 6 on Arch): `chmod +x JAI-setup-linux`, then start it. It installs the packages J.A.I. needs with pacman and asks for your password for that. Linux has not yet been run on a real PC.
 
           The setup installs J.A.I. on a PC beside the one he already runs on (the main PC): it asks for the main PC's address and an account there, and downloads nothing from that PC. J.A.I. comes in this file, his engine from Ollama's release on GitHub, then the voice, the ears and the brain that fits the graphics card (4 GB of graphics memory at least). Where J.A.I. is installed already, the same file updates him: he quits, this version comes in, and he starts again (a PC that runs another version than the main PC then takes the main PC's).
+
+          `JAI.exe` and `jai-linux` are J.A.I. alone, for his own updates: J.A.I. on another PC with a valid account takes a newer release by itself, even while the main PC is off.
           EOF
           # What changed: the annotated tag's own message (`git tag -a v… -m "…"`), above the rest.
           tag=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$GITHUB_REF_NAME" --jq '.object.type + " " + .object.sha')
@@ -179,5 +188,5 @@ jobs:
           for id in $(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq ".[] | select(.tag_name == \"$GITHUB_REF_NAME\") | .id"); do
             gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/$id"
           done
-          gh release create "$GITHUB_REF_NAME" out/windows/JAI-setup.exe out/linux/JAI-setup-linux \
+          gh release create "$GITHUB_REF_NAME" out/windows/JAI-setup.exe out/linux/JAI-setup-linux out/windows/JAI.exe out/linux/jai-linux \
             --repo "$GITHUB_REPOSITORY" --verify-tag --title "J.A.I. $GITHUB_REF_NAME" --notes-file notes.md

@@ -41,6 +41,19 @@ impl ItemKind {
     }
 }
 
+/// What the media card shows for an item that started (title, artist, playlist): a playlist
+/// shows the song the player names as playing in it; its owner is no artist (Spotify gives its
+/// account id stood on the card as the artist, 2026-11-22).
+fn card_of<'a>(item: &'a LibraryItem, result: &str) -> (String, String, Option<&'a str>) {
+    if !matches!(item.kind, ItemKind::Playlist | ItemKind::LocalPlaylist) {
+        return (item.name.clone(), item.artist.clone(), None);
+    }
+    match crate::brain::now_song(result).and_then(|song| song.rsplit_once(" by ")) {
+        Some((song, artist)) => (song.to_string(), artist.to_string(), Some(&item.name)),
+        None => (item.name.clone(), String::new(), None),
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct LibraryItem {
     pub kind: ItemKind,
@@ -1201,7 +1214,8 @@ impl MusicEngine {
             _ => self.play_spotify(&item).await,
         }?;
         info!("[MUSIC] {result}");
-        crate::dynamic_popups::now_playing(&item.name, &item.artist, context.as_ref().map(|c| c.name.as_str()), &player_name(player));
+        let (title, artist, list) = card_of(&item, &result);
+        crate::dynamic_popups::now_playing(&title, &artist, context.as_ref().map(|c| c.name.as_str()).or(list), &player_name(player));
         if matches!(item.kind, ItemKind::Playlist | ItemKind::LocalPlaylist) {
             self.set_preference("last_playlist", &item.name);
         }
@@ -2379,6 +2393,18 @@ mod tests {
         "tracks":[{"id":"08onVqQ8YicJ98Ycm1qoLf","name":"Urgent","artists":"Foreigner","album_id":"2Pw51hAGvWpTA3AYl2WVuu","track_number":3},
                   {"id":"2zYzyRzz6pRmhPzyfMEC8s","name":"Highway to Hell","artists":"AC/DC","album_id":"10v912xgTZbjAtYfyKWJCS","track_number":1},
                   {"id":"08mG3Y1vljYA6bvDt4Wqkj","name":"Back In Black","artists":"AC/DC"}]}"#;
+
+    /// Repro 2026-11-22 (Sir's screenshot): a started playlist put its owner's account id on
+    /// the media card as the artist. Now the song playing in it shows.
+    #[test]
+    fn a_playlists_card_shows_the_song_not_its_owner() {
+        let list = LibraryItem { kind: ItemKind::Playlist, name: "Chill".into(), uri: "spotify:playlist:x".into(), artist: "abc123ownerid".into(), source: "Sonora library" };
+        let said = "Playing the playlist 'Chill' on Sonora. Now playing: Virtual Insanity by Jamiroquai (playing, 0:00 of 3:47, liked).";
+        assert_eq!(card_of(&list, said), ("Virtual Insanity".to_string(), "Jamiroquai".to_string(), Some("Chill")));
+        assert_eq!(card_of(&list, "Sonora took the playlist; it is starting."), ("Chill".to_string(), String::new(), None), "no owner as artist");
+        let song = LibraryItem { kind: ItemKind::Track, name: "Urgent".into(), uri: "spotify:track:y".into(), artist: "Foreigner".into(), source: "Sonora library" };
+        assert_eq!(card_of(&song, said), ("Urgent".to_string(), "Foreigner".to_string(), None));
+    }
 
     #[test]
     fn sonora_downloaded_playlists_keep_their_order() {

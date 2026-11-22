@@ -92,8 +92,26 @@ const fn fixed(title: &'static str, what: &'static str) -> Entry {
 pub const RELEASES: &[Release] = &[
     Release {
         date: "2026-11-22",
-        name: "Windows in turn",
-        entries: &[fixed("Every window draws in turn", "A menu under the turning Earth or a running simulation no longer stands still: all draw.")],
+        name: "Plots, flights and your own claps",
+        entries: &[
+            new("A plot you edit like GeoGebra", "\"Zoom in\", \"x from -5 to 5\", \"put a point at (2, 3)\": by voice or by hand, offline.", "plot_lab"),
+            better("Walk around a 3D simulation", "Drag to turn it, right-drag to move, the wheel to zoom, a double-click to reset."),
+            new("Flights tracked on the Earth", "\"Track a flight from Frankfurt to New York\": he finds one in the air and follows it.", "flight_tracking"),
+            better("The Earth guesses the place", "\"Show me the capital of France\" flies to Paris: a place described is a place found."),
+            better("Web search with its sources", "Two engines, two pages read; \"what are your sources?\" lists where an answer came from."),
+            better("Pictures, the thing's own first", "\"Show me a picture of the Eiffel Tower\": Wikipedia's own picture of it comes first."),
+            new("Go on where he was stopped", "Stopped mid-sentence, \"continue\" has him go on with what he was saying.", "continue_speech"),
+            new("How he addresses you", "On first start he asks: Sir, your name, or no title. Change it in the settings or aloud.", "address"),
+            new("Translate anything", "\"Translate good morning into Japanese\": shown, said and copied, in a moment.", "translate"),
+            added("Updates from GitHub on other PCs", "A newer release comes to your other PCs by itself, even while the main PC is off."),
+            new("Your own claps and snaps", "\"Learn my claps\": he listens to five of yours and tells them from anyone's.", "own_sounds"),
+            better("A sound sets a protocol off quietly", "A clap or a snap runs its protocol without a word, unless the protocol says one."),
+            better("He acts on his best guess", "An order the model did nothing about: the one window it surely meant opens."),
+            fixed("A window of his to another monitor", "\"Move the admin window to my second monitor\" moves it, and says monitor 2."),
+            fixed("A playlist's card shows the song", "A started playlist shows the song playing in it, not its owner's account id."),
+            fixed("Index tabs never twice", "Two windows no longer wear the same number when one before them came and went."),
+            fixed("Every window draws in turn", "A menu under the turning Earth or a running simulation no longer stands still: all draw."),
+        ],
     },
     Release {
         date: "2026-11-21",
@@ -644,6 +662,48 @@ pub const RELEASES: &[Release] = &[
 
 /// The explanations, by id.
 pub const EXPLANATIONS: &[Explanation] = &[
+    Explanation {
+        id: "plot_lab",
+        title: "A plot you edit like GeoGebra",
+        what: "A function plot in the simulation lab is a plane you work on: its zeros, turning points and crossings are marked, and you zoom, set the axes, add or remove functions and points, by voice or in the INPUT field under it. Drag moves the plane, the wheel zooms where the pointer is, a double-click fits it again.",
+        say: &["Jay, plot x squared minus 4.", "Jay, zoom in.", "Jay, set x from -5 to 5.", "Jay, put a point at (2, 3).", "Jay, add g(x) = sin(x).", "Jay, remove g."],
+        know: "It runs offline in the lab's own window; what you type in INPUT is a function when it has an x in it (\"f(x) = x^3\") and a point when it is a pair (\"(1, 2)\"). FIT puts the view back on what is drawn.",
+    },
+    Explanation {
+        id: "flight_tracking",
+        title: "Flights tracked on the Earth",
+        what: "\"Track a flight from Frankfurt to New York\": he looks along the great circle between the two for planes in the air (the open ADS-B feed of adsb.lol), checks each one's route, and flies the Earth to the one that flies it. Every few seconds its place is read anew and the Earth follows it.",
+        say: &["Jay, track a flight from Frankfurt to New York.", "Jay, follow LH400.", "Jay, stop tracking."],
+        know: "It needs the internet; a route with no plane in the air right now says so. Opening another place on the Earth stops the following.",
+    },
+    Explanation {
+        id: "continue_speech",
+        title: "Go on where he was stopped",
+        what: "Cut him off mid-sentence (\"stop\", or speaking over him), and within two minutes \"continue\", \"go on\" or \"weiter\" has him go on from where he was stopped, not start again.",
+        say: &["Jay, continue.", "Jay, go on.", "Jay, mach weiter."],
+        know: "After two minutes, or once he has said something else, \"continue\" is an ordinary order again (the music, a paused task).",
+    },
+    Explanation {
+        id: "address",
+        title: "How he addresses you",
+        what: "The first time he starts on a PC he asks how you would like to be addressed, or whether Sir is all right. Answer with yes, a name, or \"no title\", and every line he says or shows uses it from then on.",
+        say: &["Sir is fine.", "Call me Max.", "No title, please.", "Jay, from now on call me Boss."],
+        know: "It is the row \"How he addresses you\" in the settings (LOOK); left empty, he leaves the title out. An install that ran before keeps Sir.",
+    },
+    Explanation {
+        id: "translate",
+        title: "Translate anything",
+        what: "\"Translate good morning into Japanese\": his brain translates it at once, the translation is shown and said, and it is on the clipboard to paste. Any of thirty-odd languages into any other, by their English or German names; with text selected, \"translate this into French\" takes the selection.",
+        say: &["Jay, translate good morning into Japanese.", "Jay, what is thank you in Italian?", "Jay, übersetze guten Abend ins Englische.", "Jay, translate this into French."],
+        know: "It runs on his own brain, offline; a long text takes a little longer than a sentence.",
+    },
+    Explanation {
+        id: "own_sounds",
+        title: "Your own claps and snaps",
+        what: "\"Learn my claps\" or \"learn my snaps\": for the next forty-five seconds he takes what he hears as yours, five of them, and keeps what the sound model hears in them. From then on a sound close to yours is yours, so a loud snap of yours is no clap and anyone's clap stays a clap.",
+        say: &["Jay, learn my claps.", "Jay, learn my snaps.", "Jay, lern mein Schnipsen."],
+        know: "It needs the sound model (models/sound). Teach him again any time: the newest samples count most, so he keeps up with you.",
+    },
     Explanation {
         id: "see_through",
         title: "See-through background",

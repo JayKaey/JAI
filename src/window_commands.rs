@@ -852,6 +852,8 @@ pub fn spoken_name(id: &str) -> String {
         "changes" => "the changes list".into(),
         "missed" => "the notifications".into(),
         id if id.starts_with("explain:") => "the explanation".into(),
+        // A module's own window by its title ("Admin // every window": the admin window).
+        id if id.starts_with("window:") => format!("the {} window", id["window:".len()..].split("//").next().unwrap_or_default().trim().to_lowercase()),
         id if id.starts_with("kit_") => format!("the {}", id["kit_".len()..].replace('_', " ")),
         other => format!("the {}", other.replace('_', " ")),
     }
@@ -908,7 +910,7 @@ pub async fn run_tool(ctx: &ToolContext, args: &Value) -> Result<String, String>
     let lower = raw.to_lowercase();
     // One of his windows that is no view of the dock (the text console, a report, the system
     // column): moved and sized as the window it is.
-    if !is_it(&lower) && !is_them(&lower) && crate::hud_dock::find_open(&raw).is_none() {
+    if by_title(&lower, crate::hud_dock::find_open(&raw)) {
         if let Some(done) = own_window(&raw, action, position, size, monitor.as_ref()) {
             return done;
         }
@@ -969,7 +971,7 @@ pub async fn run_tool(ctx: &ToolContext, args: &Value) -> Result<String, String>
         Action::Maximize => format!("{} is maximised, Sir.", capitalised(&name)),
         Action::Restore => format!("{} is restored, Sir.", capitalised(&name)),
         Action::Minimize => format!("{} is put away, Sir. Say \"restore it\" to bring it back.", capitalised(&name)),
-        Action::ToMonitor => format!("{} is on monitor {}, Sir.", capitalised(&name), monitor.as_ref().map_or_else(String::new, |m| m.as_str().map_or_else(|| m.to_string(), str::to_string))),
+        Action::ToMonitor => format!("{} is on monitor {}, Sir.", capitalised(&name), monitor_word(monitor.as_ref(), &crate::monitors::recent())),
         Action::SideBySide => format!("{} and {} are side by side, Sir.", capitalised(&name), other.as_deref().map_or_else(String::new, spoken_name)),
         Action::Swap => format!("{} and {} have swapped places, Sir.", capitalised(&name), other.as_deref().map_or_else(String::new, spoken_name)),
     };
@@ -997,6 +999,21 @@ fn own_window(name: &str, action: Action, position: Option<Position>, size: Opti
     };
     let title = own::arrange(name, position, size)?;
     Some(Ok(format!("Arranged my window '{}': {}.\nSpoken: {spoken}", own::called(&title), action.name())))
+}
+
+/// Whether an order for `lower` goes to one of his windows by its title (`own_window`): not
+/// "it" or "them", and no view of the dock by that name, or only a module's own window the
+/// dock knows by its title (`window:…`), which the dock cannot send to a monitor. (Seen
+/// 2026-11-22: "move the admin window to my second monitor" was answered "The window:Admin //
+/// every window is on monitor my second monitor" and the window never moved.)
+fn by_title(lower: &str, dock: Option<String>) -> bool {
+    !is_it(lower) && !is_them(lower) && dock.is_none_or(|id| id.starts_with("window:"))
+}
+
+/// The monitor an order names, as its number ("my second monitor" is 2), else as said.
+fn monitor_word(monitor: Option<&Value>, monitors: &[crate::monitors::Monitor]) -> String {
+    let Some(m) = monitor else { return String::new() };
+    crate::monitors::resolve(m, None, monitors).map_or_else(|| m.as_str().map_or_else(|| m.to_string(), str::to_string), |n| n.to_string())
 }
 
 fn capitalised(s: &str) -> String {
@@ -1113,6 +1130,26 @@ mod tests {
         assert_eq!(monitor_of("monitor 2"), Some(json!(2)));
         assert_eq!(monitor_of("den zweiten Bildschirm".to_lowercase().as_str()), Some(json!("den zweiten bildschirm")));
         assert_eq!(monitor_of("the middle"), None);
+    }
+
+    /// Repro 2026-11-22 (Sir's screenshot, jai.log): "move the admin window to my second
+    /// monitor" took the dock's "window:Admin // every window", which the dock cannot move
+    /// ("was not up in time"), and was answered "The window:Admin // every window is on monitor
+    /// my second monitor, Sir." Now a module's own window goes by its title to the monitor, and
+    /// a dock view's answer names the monitor by its number.
+    #[test]
+    fn a_window_of_its_own_goes_to_another_monitor_by_its_title() {
+        assert!(by_title("admin window", Some("window:Admin // every window".into())), "the admin window by its title");
+        assert!(by_title("protocols window", None));
+        assert!(!by_title("earth", Some("earth".into())), "a view of the dock stays the dock's");
+        assert!(!by_title("it", None));
+        assert_eq!(spoken_name("window:Admin // every window"), "the admin window");
+        let screen = |index: usize, x: i32| crate::monitors::Monitor { index, name: format!("M{index}"), rect: [x, 0, x + 1920, 1080], work: [x, 0, x + 1920, 1040], primary: index == 1 };
+        let two = [screen(1, 0), screen(2, 1920)];
+        assert_eq!(monitor_word(Some(&json!("my second monitor")), &two), "2");
+        assert_eq!(monitor_word(Some(&json!(1)), &two), "1");
+        assert_eq!(monitor_word(Some(&json!("the left one")), &two), "1");
+        assert_eq!(monitor_word(Some(&json!("monitor 7")), &two), "monitor 7", "none such: as said");
     }
 
     #[test]

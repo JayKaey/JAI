@@ -44,7 +44,28 @@ fn quick_words(text: &str) -> String {
 
 /// "Pause", "mute", "louder", "volume 40", "lautstärke 30", "next", "orb mode" …: carried out in
 /// milliseconds without speech or the language model. Only whole, short utterances qualify.
+/// How long "go on" brings back what a stop cut off (Sir, 2026-11-22: stopped mid-sentence,
+/// "continue" or the like goes on with it).
+const RESUME_WITHIN: std::time::Duration = std::time::Duration::from_secs(120);
+
+static GO_ON: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"^(?:(?:jai|jay|ok|okay|sorry|yes|yeah|alright|right|ja|gut|na gut|so)\s+)*(?:(?:you can|you may|please|bitte|du kannst|now)\s+)?(?:continue|go on|go ahead|keep going|carry on|resume|go on talking|keep talking|continue talking|finish what you were saying|finish your sentence|what were you saying|where were we|weiter|mach weiter|weitermachen|weiter machen|sprich weiter|red weiter|rede weiter|erzähl weiter|fahr fort|fahre fort|weiterreden)(?:\s+(?:please|bitte|then|now|jetzt|sir|jai|jay|talking|where you left off|from where you stopped))*$")
+});
+
+/// "Continue", "go on", "weiter" right after Sir stopped JAI mid-sentence: what was cut off is
+/// wanted, not the music (so the media keys and the wake-word gate let it through to `parse`).
+pub fn resumes_speech(text: &str) -> bool {
+    resumes(text, crate::tts::was_cut(RESUME_WITHIN))
+}
+
+fn resumes(text: &str, cut: bool) -> bool {
+    cut && GO_ON.is_match(&normalize(text))
+}
+
 pub fn silent_quick_command(text: &str) -> Option<SilentAction> {
+    if resumes_speech(text) {
+        return None;
+    }
     let s = quick_words(text);
     if s.is_empty() || s.split_whitespace().count() > 4 {
         return None;
@@ -2188,7 +2209,10 @@ fn panel_args(text: &str, s: &str, up: PanelsUp) -> Option<Value> {
     let view = |name: &str, action: &str| json!({ "view": name, "action": action });
     let earth = |action: &str| view("earth", action);
     let at = |mut args: Value, place: &str| {
-        args["place"] = json!(spoken_place(text, place));
+        // (A description, "the capital of France", keeps its case: it is no name to capitalise.)
+        let p = place.trim();
+        let p = p.strip_prefix("the ").unwrap_or(p);
+        args["place"] = json!(if crate::earth::describes_a_place(p) { original_case(text, p) } else { spoken_place(text, place) });
         args
     };
 
@@ -2279,6 +2303,28 @@ fn panel_args(text: &str, s: &str, up: PanelsUp) -> Option<Value> {
             }
             return Some(args);
         }
+    }
+    // "Track a flight that goes from Frankfurt to New York", "follow LH 400", "stop tracking".
+    static TRACK: LazyLock<Regex> = LazyLock::new(|| {
+        re(concat!(
+            r"^(?:track|follow|find|show\s+me|show|verfolge?|finde?|zeig\s+mir|zeige\s+mir)\s+(?:me\s+|mir\s+)?(?:a|an|one|the|any|einen|ein|den)?\s*(?:live\s+|current\s+)?(?:flight|plane|aircraft|airplane|jet|flug|flieger|flugzeug)\s+(?:that\s+(?:goes|is\s+going|flies|is\s+flying|travels)\s+|going\s+|flying\s+|heading\s+|der\s+|das\s+|on\s+the\s+way\s+)?(?:from|von|out\s+of)\s+(.+?)\s+(?:to|nach|into)\s+(.+?)(?:\s+(?:fliegt|geht|right\s+now|now))?$",
+            r"|^(?:track|follow|verfolge?)\s+(?:the\s+|den\s+)?(?:flight\s+|flug\s+)?([a-z]{2,3}\s?\d{1,4}[a-z]?)$",
+        ))
+    });
+    if let Some(c) = TRACK.captures(s) {
+        return Some(match c.get(3) {
+            Some(flight) => json!({ "view": "earth", "action": "track_flight", "flight": flight.as_str() }),
+            None => json!({ "view": "earth", "action": "track_flight", "from": spoken_place(text, &c[1]), "to": spoken_place(text, &c[2]) }),
+        });
+    }
+    static UNTRACK: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:stop|end|quit)\s+(?:tracking|following)(?:\s+(?:the|that|this)\s+(?:flight|plane|aircraft))?$|^(?:hör|hoer)\s+auf\s+(?:den\s+flug\s+)?zu\s+verfolgen$"));
+    if UNTRACK.is_match(s) && crate::flight_track::following().is_some() {
+        return Some(earth("stop_tracking"));
+    }
+    // "Show me the capital of France": a place described, even before the Earth is up.
+    static DESCRIBED: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:show\s+me|show|find|where\s+is|wheres|zeig\s+mir|zeige\s+mir|wo\s+ist|wo\s+liegt)\s+(?:the\s+|die\s+|der\s+|das\s+)?(.+?)(?:\s+(?:on|auf)\s+(?:the|my|der|dem)\s+(?:globe|earth|map|world\s+map|erde|globus|karte))?$"));
+    if let Some(c) = DESCRIBED.captures(s).filter(|c| crate::earth::describes_a_place(&c[1]) && c[1].split(' ').count() <= 8) {
+        return Some(at(earth("show_place"), &c[1]));
     }
     static FLIGHTS: LazyLock<Regex> = LazyLock::new(|| {
         re(r"^(?:(show|show\s+me|display|turn\s+on|enable|track|add|put\s+up|zeig|zeig\s+mir|zeige|zeige\s+mir)\s+(?:me\s+|mir\s+)?(?:all\s+)?(?:the\s+|die\s+|alle\s+)?)?(live\s+|current\s+|real[\s-]?time\s+)?(?:flights|planes|aircraft|airplanes|air\s+traffic|flight\s+traffic|flugzeuge|flüge|fluege|flugverkehr)(?:\s+(?:over|above|near|around|in|über|ueber|bei|um)\s+(.+))?$|^(?:what|which)\s+(?:planes|aircraft|flights)\s+are\s+(?:flying\s+|in\s+the\s+air\s+)?(?:over|above|near|around)\s+(.+)$|^(flight\s+tracker|flight\s+radar|flightradar)$")
@@ -4780,11 +4826,11 @@ pub fn parse_as_said(text: &str) -> Option<Intent> {
     if s.is_empty() {
         return None;
     }
-    // "Go on": what he was cut off saying (talked over, stopped) half a minute ago or less,
-    // from the start of that sentence. (Bare "continue" and "weiter" resume the music.)
-    static GO_ON: LazyLock<Regex> = LazyLock::new(|| re(r"^(?:go on|carry on|go on talking|keep talking|finish what you were saying|what were you saying|sprich weiter|red weiter|rede weiter|erzähl weiter)$"));
+    // "Go on", "continue": what he was cut off saying (talked over, stopped) two minutes ago or
+    // less, from the start of that sentence. (With nothing cut off, "continue" and "weiter"
+    // resume the music.)
     if GO_ON.is_match(&s) {
-        if let Some(rest) = crate::tts::cut_off(std::time::Duration::from_secs(30)) {
+        if let Some(rest) = crate::tts::cut_off(RESUME_WITHIN) {
             return Some(Intent::Answer(rest));
         }
     }
@@ -7059,6 +7105,56 @@ mod tests {
 
     /// Sir's words with the Earth up: a layer off, back on, all off; never the orb (the brain
     /// once turned the orb off for "I don't want to see the satellite any more").
+    /// Sir, 2026-11-22: stopped mid-sentence, "continue" or the like has JAI go on with what he
+    /// was saying; with nothing cut off, "continue" and "weiter" are the music's again.
+    #[test]
+    fn continue_goes_on_with_what_was_cut_off() {
+        for text in ["Continue", "continue.", "Go on", "Okay, continue please", "Sorry, go ahead", "Keep going", "You can continue", "Jai, carry on", "Weiter", "Mach weiter", "Ja, sprich weiter", "Fahr fort", "Where were we?", "finish your sentence"] {
+            assert!(resumes(text, true), "{text}");
+            assert!(!resumes(text, false), "{text}: nothing was cut off");
+        }
+        for text in ["Continue the music", "Go on to the next slide", "Weiter zum nächsten Lied", "Continue with the timer", "next"] {
+            assert!(!resumes(text, true), "{text}");
+        }
+        assert_eq!(silent_quick_command("continue").map(|a| a.tool), Some("control_music"), "nothing cut off: the music");
+    }
+
+    /// Sir, 2026-11-22: "track a flight that goes from Frankfurt to New York" finds one in the air
+    /// and follows it; "show me the capital of France" shows Paris (the model names a described
+    /// place), with or without the Earth up, and other "show me"s stay theirs.
+    #[test]
+    fn flights_are_tracked_and_described_places_found_by_voice() {
+        let (none, earth_up) = (PanelsUp::default(), PanelsUp { earth: true, ..PanelsUp::default() });
+        for text in [
+            "Track a flight that goes from Frankfurt to New York",
+            "track a flight from frankfurt to new york",
+            "Follow a plane flying from Frankfurt to New York right now",
+            "Find me a flight from Frankfurt to New York",
+            "Verfolge einen Flug von Frankfurt nach New York",
+        ] {
+            let args = panel_command(text, none).unwrap_or_else(|| panic!("{text}"));
+            assert_eq!((args["action"].as_str(), args["from"].as_str(), args["to"].as_str()), (Some("track_flight"), Some("Frankfurt"), Some("New York")), "{text}");
+        }
+        for (text, flight) in [("Track flight LH 400", "lh 400"), ("follow DLH400", "dlh400")] {
+            assert_eq!(panel_command(text, none).unwrap()["flight"], flight, "{text}");
+        }
+        assert_eq!(panel_command("stop tracking", earth_up), None, "nothing is followed");
+        for (text, place) in [
+            ("Show me the capital of France", "capital of France"),
+            ("Where is the tallest building in the world?", "tallest building in the world"),
+            ("Zeig mir die Hauptstadt von Spanien", "Hauptstadt von Spanien"),
+            ("Show me the largest city in Germany on the globe", "largest city in Germany"),
+        ] {
+            for up in [none, earth_up] {
+                let args = panel_command(text, up).unwrap_or_else(|| panic!("{text}"));
+                assert_eq!((args["action"].as_str(), args["place"].as_str()), (Some("show_place"), Some(place)), "{text}");
+            }
+        }
+        for text in ["Show me the largest file", "Show me my most played songs", "Where is the capital letter key", "Show me the biggest folders on my drive"] {
+            assert_ne!(panel_command(text, none).and_then(|a| a["action"].as_str().map(str::to_string)).as_deref(), Some("show_place"), "{text}");
+        }
+    }
+
     #[test]
     fn earth_layers_by_voice() {
         let earth_up = PanelsUp { earth: true, ..PanelsUp::default() };

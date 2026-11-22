@@ -91,6 +91,8 @@ mod file_ops;
 mod finance_tracker;
 mod flashcards;
 mod fleet;
+mod flight_track;
+mod translate;
 mod focus;
 mod formula_sheet;
 mod guardian;
@@ -799,7 +801,8 @@ fn main() -> ExitCode {
             if catch_up {
                 line.push_str(" Let me bring you up to date.");
             }
-            app.speak_standalone(&line, false, modality::Trigger::System);
+            // (A question in it opens the window: the answer needs no name.)
+            app.speak_standalone(&line, line.ends_with(persona::ADDRESS_QUESTION), modality::Trigger::System);
             if catch_up {
                 // After a long time away, once the greeting is said: his day, his mail, the news,
                 // told aloud. (Sent as a typed order it was answered in writing only: seen live

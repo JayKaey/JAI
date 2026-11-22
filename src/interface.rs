@@ -140,6 +140,8 @@ pub struct InterfaceSettings {
     pub brief_confirmations: bool,
     /// Name shown in the header.
     pub title: String,
+    /// How he addresses Sir: "Sir", a name, or "" for no title. None until asked on first use.
+    pub address: Option<String>,
     /// Radius of the 3D sphere orb relative to its viewport (0.4-2.5).
     pub orb_scale: f32,
     /// Text size on top of the zoom (0.75-1.6).
@@ -239,6 +241,7 @@ impl Default for InterfaceSettings {
             portrait_dashboard: false,
             brief_confirmations: true,
             title: DEFAULT_TITLE.to_string(),
+            address: None,
             orb_scale: 1.0,
             font_scale: 1.0,
             orb_mode: false,

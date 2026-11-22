@@ -52,6 +52,12 @@ pub fn is_identity_key(key: &str) -> bool {
     ) || k.ends_with("_title") && k.starts_with("user") || k.contains("form_of_address") || k.contains("preferred_name")
 }
 
+/// The identity keys that say how Sir is addressed (not his name alone).
+pub fn is_address_key(key: &str) -> bool {
+    let k = MemoryManager::normalize_key(key);
+    is_identity_key(&k) && !matches!(k.as_str(), "user_name" | "name" | "user_identity" | "sir_name" | "sirs_name")
+}
+
 static IDENTITY_CHANGE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
     regex::Regex::new(
         r"(?i)^(?:(?:hey\s+)?jai[,.!]?\s+)?(?:(?:from\s+now\s+on|ab\s+jetzt|von\s+jetzt\s+an|please|bitte|you\s+can|you\s+may|du\s+kannst)[,]?\s+)*(?:call\s+me|address\s+me\s+as|refer\s+to\s+me\s+as|my\s+name\s+is|my\s+names|my\s+name's|i\s+am\s+called|i'm\s+called|im\s+called|(?:don'?t|do\s+not|stop)\s+call(?:ing)?\s+me|nenn\s+mich|nenne\s+mich|ich\s+heiße|ich\s+heisse|mein\s+name\s+ist|sag\s+\S+\s+zu\s+mir)\b",

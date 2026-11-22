@@ -418,7 +418,10 @@ order goes to Max's PC (it waits ten minutes if that PC is offline) and never ac
 on another PC sends no orders anywhere but in Sir's admin mode (see Admin): asked to act on Sir's
 PC, it says it can't. It always runs
 the version Sir's PC runs (a newer one is fetched at once and started; Sir's own PC never updates
-itself), hears of new commits on GitHub, and shows in the accounts list with its version and its
+itself). Every half hour it also looks at GitHub's newest release and takes it by itself when it is
+newer, even while Sir's PC is off, as long as its account's key was good when Sir's PC last
+answered (the release's `JAI.exe` or `jai-linux`); it never goes back to an older version. It shows
+in the accounts list with its version and its
 PC's load. Voice prints are shared both ways and held in memory only: each stays on its owner's PC.
 A Linux PC installs him as well (see Linux).
 

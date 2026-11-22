@@ -64,8 +64,8 @@ enum Control {
     Size(fn(&InterfaceSettings) -> f32, fn(&mut InterfaceSettings, f32), f32, f32),
     /// One of a few, each a key: (its label, whether it is the one chosen, choosing it).
     Keys(&'static [(&'static str, fn(&InterfaceSettings) -> bool, fn(&mut InterfaceSettings))]),
-    /// His name, typed.
-    Name,
+    /// A word typed in a field: (get, set), kept once the field is left.
+    Text(fn(&InterfaceSettings) -> String, fn(&mut InterfaceSettings, String)),
     /// The HUD's colours: a swatch for each ready-made theme.
     Theme,
     /// A deeper tool, behind a key with this label.
@@ -97,7 +97,7 @@ const fn row(group: &'static str, name: &'static str, explain: &'static str, wor
 /// The groups, in the order they stand (each is also a key that shows it alone).
 const GROUPS: [&str; 6] = ["LOOK", "SCREENS", "VOICE", "PRESENCE", "GAMES", "TOOLS"];
 
-static ROWS: [Row; 52] = [
+static ROWS: [Row; 53] = [
     row("LOOK", "Theme", "The HUD's colours: one click on a swatch changes them.", "colour color palette gold cyan red green farbe farben design", Control::Theme),
     row("LOOK", "Your own theme", "Build a theme from your own colours, name it and save it.", "theme studio custom create", Control::Open(Tool::ThemeStudio, "THEME STUDIO")),
     row(
@@ -115,7 +115,8 @@ static ROWS: [Row; 52] = [
         "transparency transparent see through durchsichtig deckkraft wallpaper engine",
         Control::Size(|s| s.opacity as f32 / 100.0, |s, v| s.opacity = (v * 100.0).round() as u8, 0.15, 1.0),
     ),
-    row("LOOK", "Name", "The name his window goes by in the taskbar.", "title titel call yourself", Control::Name),
+    row("LOOK", "Name", "The name his window goes by in the taskbar.", "title titel call yourself", Control::Text(|s| s.title.clone(), |s, v| s.title = v)),
+    row("LOOK", "How he addresses you", "Sir, your name or anything else; empty, and he leaves the title out.", "address call me sir anrede name title", Control::Text(|s| s.address.clone().unwrap_or_default(), |s, v| s.address = Some(v.trim().to_string()))),
     row("LOOK", "Display finish", "Scan lines, a fine grain and darker edges: the HUD reads as light on glass.", "rough grain scan lines glass scratches", Control::Switch(|s| s.display_finish, |s, v| s.display_finish = v)),
     row("LOOK", "Animations", "Blocks unfold, glide and fold away. Off: everything appears at once.", "motion movement animation bewegung", Control::Switch(|s| s.animations, |s, v| s.animations = v)),
     row("LOOK", "Calm HUD", "The readouts at the top and bottom step back until the mouse comes near.", "quiet dense readouts header telemetry", Control::Switch(|s| s.calm_hud, |s, v| s.calm_hud = v)),
@@ -325,16 +326,16 @@ fn body(ui: &mut Ui, iface: &InterfaceSettings) -> Option<Out> {
                             }
                         }
                     }
-                    Control::Name => {
-                        // What is typed is kept until the field is left, then it is his name.
-                        let id = egui::Id::new("jai_settings_name");
-                        let mut name = ui.data(|d| d.get_temp::<String>(id)).unwrap_or_else(|| iface.title.clone());
-                        let field = crate::holo_ui::slot(ui, egui::TextEdit::singleline(&mut name).desired_width(130.0).font(FontId::proportional(ts(13.5))).text_color(strip_ink()));
+                    Control::Text(get, set) => {
+                        // What is typed is kept until the field is left, then it is the setting.
+                        let id = egui::Id::new(("jai_settings_text", row.name));
+                        let mut text = ui.data(|d| d.get_temp::<String>(id)).unwrap_or_else(|| get(iface));
+                        let field = crate::holo_ui::slot(ui, egui::TextEdit::singleline(&mut text).desired_width(130.0).font(FontId::proportional(ts(13.5))).text_color(strip_ink()));
                         if field.has_focus() {
-                            ui.data_mut(|d| d.insert_temp(id, name));
-                        } else if ui.data_mut(|d| d.remove_temp::<String>(id)).is_some() && name.trim() != iface.title {
+                            ui.data_mut(|d| d.insert_temp(id, text));
+                        } else if ui.data_mut(|d| d.remove_temp::<String>(id)).is_some() && text.trim() != get(iface) {
                             let mut next = iface.clone();
-                            next.title = name;
+                            set(&mut next, text);
                             next.sanitize();
                             out = Some(Out::Set(Box::new(next)));
                         }
@@ -609,7 +610,7 @@ mod tests {
                         assert_eq!(chosen, [k], "{}: {label}", row.name);
                     }
                 }
-                Control::Moment(..) | Control::Open(..) | Control::Theme | Control::Games | Control::Name | Control::Media => {}
+                Control::Moment(..) | Control::Open(..) | Control::Theme | Control::Games | Control::Text(..) | Control::Media => {}
             }
         }
         // The features of 2026-11-12 are all here.

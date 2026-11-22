@@ -1504,6 +1504,11 @@ fn cut_from(clauses: &[(String, Option<Instant>)], now: Instant) -> Option<Strin
     Some(clauses[first..].iter().map(|(text, _)| text.trim()).collect::<Vec<_>>().join(" "))
 }
 
+/// Whether something he was saying was cut off within the last `within` (left where it is).
+pub fn was_cut(within: Duration) -> bool {
+    CUT.lock().unwrap_or_else(|e| e.into_inner()).as_ref().is_some_and(|(at, _)| at.elapsed() <= within)
+}
+
 /// What he was cut off saying within the last `within`, taken (said once).
 pub fn cut_off(within: Duration) -> Option<String> {
     let mut cut = CUT.lock().unwrap_or_else(|e| e.into_inner());
@@ -1606,7 +1611,7 @@ impl TtsController {
     }
 
     pub fn enqueue_clause(&self, text: String, generation: u64) {
-        let text = sanitize_for_display_and_speech(&text);
+        let text = sanitize_for_display_and_speech(&crate::persona::addressed(&text));
         if !text.chars().any(char::is_alphanumeric) || generation != self.generation() {
             return;
         }

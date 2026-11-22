@@ -15,7 +15,7 @@ use tracing::{error, info, warn};
 
 pub const CONFIG_FILE: &str = "jai_config.json";
 /// Bump whenever tuned defaults change and old persisted values must be migrated.
-pub const CONFIG_VERSION: u32 = 29;
+pub const CONFIG_VERSION: u32 = 30;
 
 /// His name as the settings list it (`wake::WakeWordMatcher` knows how it is misheard and spelt;
 /// further names may be added here).
@@ -973,6 +973,10 @@ impl JaiConfig {
             // Integrations window starts it.
             self.features.replay_enabled = false;
         }
+        if self.config_version < 30 && self.interface.address.is_none() {
+            // v30: a new install asks how to address its owner; one that has run before keeps "Sir".
+            self.interface.address = Some("Sir".into());
+        }
         if self.config_version < 22 && self.pre_roll_ms == 320 {
             // v22: 500 ms of audio before the onset, so "JAI" / "Move" keep their first
             // syllable.
@@ -1135,6 +1139,7 @@ pub struct ConfigStore {
 
 impl ConfigStore {
     pub fn new(cfg: JaiConfig) -> Self {
+        crate::persona::set_address(cfg.interface.address.clone());
         Self {
             inner: Arc::new(RwLock::new(cfg)),
             dirty: Arc::new(tokio::sync::Notify::new()),
@@ -1156,6 +1161,7 @@ impl ConfigStore {
             let mut guard = self.inner.write().unwrap_or_else(|e| e.into_inner());
             f(&mut guard);
             guard.sanitize();
+            crate::persona::set_address(guard.interface.address.clone());
         }
         self.dirty.notify_one();
     }
@@ -1323,7 +1329,18 @@ mod tests {
             cfg.sanitize();
             assert_eq!(cfg.interface.hud_palette, now);
         }
-        assert_eq!(CONFIG_VERSION, 29);
+        assert_eq!(CONFIG_VERSION, 30);
+    }
+
+    #[test]
+    fn an_install_that_ran_before_keeps_sir_and_a_new_one_asks() {
+        let mut old: JaiConfig = serde_json::from_str(r#"{ "config_version": 29 }"#).unwrap();
+        old.migrate();
+        assert_eq!(old.interface.address.as_deref(), Some("Sir"));
+        assert_eq!(JaiConfig::default().interface.address, None);
+        let mut chosen: JaiConfig = serde_json::from_str(r#"{ "config_version": 29, "interface": { "address": "Max" } }"#).unwrap();
+        chosen.migrate();
+        assert_eq!(chosen.interface.address.as_deref(), Some("Max"));
     }
 
     #[test]

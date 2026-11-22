@@ -269,9 +269,118 @@ impl PersonaStream {
     }
 }
 
+/// How he addresses Sir (`interface.address`): None until asked, which reads as "Sir".
+static ADDRESS: std::sync::RwLock<Option<String>> = std::sync::RwLock::new(None);
+
+pub fn set_address(address: Option<String>) {
+    // (Tests keep "Sir": a test that stores a title must not change every other test's lines.)
+    if !cfg!(test) {
+        *ADDRESS.write().unwrap_or_else(|e| e.into_inner()) = address;
+    }
+}
+
+/// When the first-use question "How would you like me to address you?" was asked.
+static ASKED: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+
+pub const ADDRESS_QUESTION: &str = "How would you like me to address you? Is Sir all right?";
+
+pub fn mark_asked() {
+    *ASKED.lock().unwrap_or_else(|e| e.into_inner()) = Some(std::time::Instant::now());
+}
+
+/// Sir's answer to the first-use question (asked in the last five minutes and not yet answered):
+/// the address to keep, if the answer gave one, and his reply.
+pub fn address_reply(text: &str) -> Option<(Option<String>, String)> {
+    let asked = ASKED.lock().unwrap_or_else(|e| e.into_inner()).is_some_and(|t| t.elapsed().as_secs() < 300);
+    if !asked || ADDRESS.read().unwrap_or_else(|e| e.into_inner()).is_some() {
+        return None;
+    }
+    let reply = answer_to_question(text)?;
+    if reply.0.is_some() {
+        *ASKED.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+    Some(reply)
+}
+
+fn answer_to_question(text: &str) -> Option<(Option<String>, String)> {
+    static NO_TITLE: LazyLock<Regex> = LazyLock::new(|| re(r"(?i)\b(?:no\s+title|nothing|just\s+talk|gar\s+nicht|nichts|ohne\s+titel|keinen?\s+titel)\b"));
+    static OK: LazyLock<Regex> = LazyLock::new(|| re(r"(?i)^(?:sir\s+is\s+|sir'?s\s+|that'?s\s+|it'?s\s+|das\s+ist\s+|sir\s+ist\s+)?(?:fine|ok(?:ay)?|good|great|perfect|all\s+right|alright|passt|gut|in\s+ordnung)\b"));
+    let t = text.trim().trim_end_matches(['.', '!', '?']).trim();
+    if NO_TITLE.is_match(t) {
+        return Some((Some(String::new()), "Very well. No titles, then.".into()));
+    }
+    if crate::intents::is_affirmation(t) || OK.is_match(t) || t.eq_ignore_ascii_case("sir") {
+        return Some((Some("Sir".into()), "Sir it is.".into()));
+    }
+    if crate::intents::is_negation(t) {
+        return Some((None, "What shall I call you instead?".into()));
+    }
+    let name = crate::memory::identity_name(t).or_else(|| {
+        let words: Vec<&str> = t.split_whitespace().collect();
+        // (A short order, "open Spotify", is an order, not a name.)
+        ((1..=3).contains(&words.len()) && crate::brain::fast_as_said(t).is_none()).then(|| words.join(" "))
+    })?;
+    Some((Some(name.clone()), format!("Very well, {name}. You can change it in the settings or by telling me.")))
+}
+
+/// The address he uses now ("Sir" until told otherwise).
+pub fn address() -> String {
+    ADDRESS.read().unwrap_or_else(|e| e.into_inner()).clone().unwrap_or_else(|| "Sir".into())
+}
+
+/// Every line he shows or says, with "Sir" as Sir wants to be addressed.
+pub fn addressed(text: &str) -> std::borrow::Cow<'_, str> {
+    address_as(text, &address())
+}
+
+fn address_as<'a>(text: &'a str, address: &str) -> std::borrow::Cow<'a, str> {
+    static SIR: LazyLock<Regex> = LazyLock::new(|| re(r"\bSir\b"));
+    // With no title: "Done, Sir." → "Done.", "Sir, it is late." → "It is late.", "Yes Sir" → "Yes".
+    static NO_TITLE: LazyLock<Regex> = LazyLock::new(|| re(r"(?:,\s*|\s+)\bSir\b|^\s*\bSir\b[,!.]?\s*"));
+    let address = address.trim();
+    if address == "Sir" || !SIR.is_match(text) {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    if address.is_empty() {
+        let out = NO_TITLE.replace_all(text, "");
+        let starts_cut = text.trim_start().starts_with("Sir");
+        return std::borrow::Cow::Owned(if starts_cut { capitalise_first(&out) } else { out.into_owned() });
+    }
+    SIR.replace_all(text, regex::NoExpand(address))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sir_is_addressed_as_he_wants() {
+        assert_eq!(address_as("Done, Sir.", "Sir"), "Done, Sir.");
+        assert_eq!(address_as("Done, Sir. Sirius is up.", "Max"), "Done, Max. Sirius is up.");
+        assert_eq!(address_as("Done, Sir.", "Ma'am"), "Done, Ma'am.");
+        assert_eq!(address_as("Done, Sir.", "$1 boss"), "Done, $1 boss.");
+        assert_eq!(address_as("Done, Sir.", ""), "Done.");
+        assert_eq!(address_as("Sir, it is late.", ""), "It is late.");
+        assert_eq!(address_as("Very good, Sir, I'll do it.", ""), "Very good, I'll do it.");
+        assert_eq!(address_as("Yes Sir", ""), "Yes");
+        assert_eq!(address_as("The Sirius pass", ""), "The Sirius pass");
+    }
+
+    #[test]
+    fn the_first_use_question_is_answered_many_ways() {
+        let kept = |t: &str| answer_to_question(t).and_then(|r| r.0);
+        for yes in ["Yes.", "Sir is fine", "that's fine", "ja", "passt", "Sir"] {
+            assert_eq!(kept(yes).as_deref(), Some("Sir"), "{yes}");
+        }
+        assert_eq!(kept("Call me Max.").as_deref(), Some("Max"));
+        assert_eq!(kept("Nenn mich Max").as_deref(), Some("Max"));
+        assert_eq!(kept("Boss").as_deref(), Some("Boss"));
+        assert_eq!(kept("Max Mustermann").as_deref(), Some("Max Mustermann"));
+        assert_eq!(kept("No title please").as_deref(), Some(""));
+        assert_eq!(answer_to_question("No.").map(|r| r.1).as_deref(), Some("What shall I call you instead?"));
+        assert_eq!(answer_to_question("Open Spotify."), None);
+        assert_eq!(answer_to_question("what time is it"), None);
+    }
 
     #[test]
     fn customer_service_closers_are_dropped() {

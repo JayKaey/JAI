@@ -547,6 +547,12 @@ impl Jai {
             1 => line.push_str(" You have one reminder today."),
             n => line.push_str(&format!(" You have {n} reminders today.")),
         }
+        if self.inner.config.read(|c| c.interface.address.is_none()) {
+            // First use: he asks once how Sir wants to be addressed (answered in `persona::address_reply`).
+            line.push(' ');
+            line.push_str(crate::persona::ADDRESS_QUESTION);
+            crate::persona::mark_asked();
+        }
         line
     }
 
@@ -1269,6 +1275,16 @@ impl Jai {
         } else {
             None
         };
+        // ("Learn my claps": while he is taught, what he hears is Sir's own sound, nothing else.)
+        if let Some((own, n, done)) = crate::sound_sense::learn(ev, scores.as_deref()) {
+            info!("[RADAR] {ev:?}: Sir's own {own:?}, sample {n}");
+            self.tools().stark.pulse(&["acoustic", "ears", "brain"], false);
+            match done {
+                Some(line) => self.speak_when_free(line, Trigger::System),
+                None => crate::hud_notify::record(&format!("Learned {n} of them."), false),
+            }
+            return;
+        }
         let sound = crate::sound_sense::judge(ev, scores.as_deref());
         crate::sound_sense::note(ev, sound, scores.as_deref());
         let Some(sound) = sound else {
@@ -2560,7 +2576,7 @@ impl Jai {
                 }
                 self.emit(HudEvent::FirstToken { message_id, latency_ms, since_speech_ms, model });
             }
-            BrainEvent::Token { message_id, token } => self.emit(HudEvent::Token { message_id, token }),
+            BrainEvent::Token { message_id, token } => self.emit(HudEvent::Token { message_id, token: crate::persona::addressed(&token).into_owned() }),
             BrainEvent::Tool(outcome) => self.emit_tool(&outcome),
             BrainEvent::MemoriesChanged => {
                 self.emit(HudEvent::Memories { items: self.tools().memory.list(200).unwrap_or_default(), query: None });
@@ -2573,11 +2589,12 @@ impl Jai {
                 crate::hud_lines::took(latency_ms as u64, interrupted);
                 // JAI asked something (even in writing): Sir may answer without the wake word.
                 // A spoken reply re-opens the window once its audio has finished.
-                if !interrupted && text.trim_end().ends_with('?') && !self.inner.quitting.load(Ordering::Acquire) {
+                if !interrupted && text.split("\n\nSources:").next().unwrap_or_default().trim_end().ends_with('?') && !self.inner.quitting.load(Ordering::Acquire) {
                     let secs = self.inner.config.read(|c| c.active_conversation_window_secs);
                     self.inner.controls.open_window(secs);
                 }
                 self.note_turn(&text);
+                let text = crate::persona::addressed(&text).into_owned();
                 self.emit(HudEvent::AssistantDone { message_id, text, latency_ms, model, interrupted });
             }
             BrainEvent::Quick { label, ok } => {

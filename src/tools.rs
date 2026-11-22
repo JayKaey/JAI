@@ -718,6 +718,10 @@ impl ToolContext {
                     .remember_fact(key.unwrap_or(""), value, str_arg(&args, &["category"]), int_arg(&args, "importance").map(|i| i as i32))
                     .map(|o| {
                         memories_changed = true;
+                        // "Call me Max": the title he uses on every line from now on.
+                        if crate::memory::is_address_key(&o.entry.key) && o.entry.value.split_whitespace().count() <= 4 {
+                            self.config.update(|c| c.interface.address = Some(o.entry.value.clone()));
+                        }
                         // (What it was, with its kind, is what "undo that" puts back: `undo::way_back`.)
                         match (o.previous_value, o.previous_kind) {
                             (Some(prev), Some((category, importance))) => format!("Updated memory '{}' (was: \"{prev}\" [{category}, {importance}]): {}", o.entry.key, o.entry.value),
@@ -1830,9 +1834,9 @@ impl ToolContext {
                     if let Some(news) = because.filter(|_| !told.is_empty()) {
                         let _ = self.stark.events.send(crate::stark::StarkEvent::Alert(news.to_string()));
                     }
-                    // Its one line, when no turn of his says it: set off by a sound, a time or a
-                    // rule, or by RUN NOW in its window.
-                    if because.is_some() || args["announce"] == true {
+                    // Its one line, when no turn of his says it: set off by a time or a rule, or by
+                    // RUN NOW in its window. (Set off by a sound, `quiet`: not a word of his own.)
+                    if (because.is_some() && args["quiet"] != true) || args["announce"] == true {
                         let _ = self.stark.events.send(crate::stark::StarkEvent::Say(protocols::activating(&p.name)));
                     }
                     let p = Protocol { steps, ..p };

@@ -823,6 +823,46 @@ pub fn parse_nasa(v: &Value) -> Vec<Picture> {
         .collect()
 }
 
+fn wikipedia_url(query: &str, n: usize) -> String {
+    format!("https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch={}&gsrlimit={n}&prop=pageimages|info&piprop=thumbnail|original&pithumbsize=400&inprop=url&format=json&formatversion=2", urlencoding::encode(query))
+}
+
+/// The lead pictures of the Wikipedia articles a search finds, in its order (Sir, 2026-11-22:
+/// image finding "much better"): the picture an encyclopaedia chose for the thing itself. A
+/// huge original comes as Wikimedia's 1280 px rendition.
+pub fn parse_wikipedia(v: &Value) -> Vec<Picture> {
+    static SIZE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"/\d+px-").expect("valid thumbnail size regex"));
+    let Some(pages) = v["query"]["pages"].as_array() else { return Vec::new() };
+    let mut found: Vec<(u64, Picture)> = pages
+        .iter()
+        .filter_map(|p| {
+            let thumb = p["thumbnail"]["source"].as_str()?.to_string();
+            let original = &p["original"];
+            let full = match original["source"].as_str() {
+                Some(src) if original["width"].as_u64().unwrap_or(u64::MAX) <= 2600 => src.to_string(),
+                _ => SIZE.replace(&thumb, "/1280px-").into_owned(),
+            };
+            Some((
+                p["index"].as_u64().unwrap_or(u64::MAX),
+                Picture {
+                    title: p["title"].as_str()?.to_string(),
+                    thumb,
+                    full,
+                    alt: Vec::new(),
+                    source: "Wikipedia".into(),
+                    creator: "Wikimedia Commons contributors".into(),
+                    license: "See the picture's page".into(),
+                    page: p["fullurl"].as_str().unwrap_or_default().to_string(),
+                    local: None,
+                    when: String::new(),
+                },
+            ))
+        })
+        .collect();
+    found.sort_by_key(|(index, _)| *index);
+    found.into_iter().map(|(_, p)| p).collect()
+}
+
 const EPIC_API: &str = "https://epic.gsfc.nasa.gov/api/natural";
 
 /// NASA EPIC: the whole sunlit Earth from DSCOVR, 1.5 million km out, a frame every hour or two.
@@ -899,9 +939,11 @@ async fn search(query: &str, source: &str) -> Found {
             let (nasa, ov, wm) = tokio::join!(from_source("NASA", nasa_url(&q, 12), parse_nasa), from_source("Openverse", openverse_url(&q, 8), parse_openverse), from_source("Wikimedia Commons", wikimedia_url(&q, 6), parse_wikimedia));
             lists.extend([nasa, ov, wm]);
         }
+        "wikipedia" => lists.push(from_source("Wikipedia", wikipedia_url(&q, 16), parse_wikipedia).await),
         _ => {
-            let (ov, wm) = tokio::join!(from_source("Openverse", openverse_url(&q, 14), parse_openverse), from_source("Wikimedia Commons", wikimedia_url(&q, 10), parse_wikimedia));
-            lists.extend([ov, wm]);
+            // The thing's own picture first (its article's), then the open libraries in turns.
+            let (wp, ov, wm) = tokio::join!(from_source("Wikipedia", wikipedia_url(&q, 6), parse_wikipedia), from_source("Openverse", openverse_url(&q, 14), parse_openverse), from_source("Wikimedia Commons", wikimedia_url(&q, 10), parse_wikimedia));
+            lists.extend([wp, ov, wm]);
         }
     }
     let mut ordered: Vec<Vec<Picture>> = Vec::new();
@@ -915,8 +957,9 @@ async fn search(query: &str, source: &str) -> Found {
             Err(e) => found.failed.push(format!("{name}: {e}")),
         }
     }
-    // The Earth and space: the first source's in order, then the rest in turns.
-    let merged = if earth || is_space(&q) {
+    // The Earth, space and an encyclopaedia's own pictures: the first source's in order, then
+    // the rest in turns.
+    let merged = if earth || is_space(&q) || found.used.first() == Some(&"Wikipedia") {
         let mut it = ordered.into_iter();
         let first = it.next().unwrap_or_default();
         let rest = it.fold(Vec::new(), interleave);
@@ -1553,6 +1596,26 @@ mod tests {
             Some(Intent::Tool { name, args }) => Some((name, args)),
             _ => None,
         }
+    }
+
+    /// Wikipedia's answer as it came on 2026-11-22: the articles' lead pictures in the search's
+    /// order, a huge original as the 1280 px rendition, an article without a picture left out.
+    #[test]
+    fn wikipedia_gives_the_things_own_picture_first() {
+        let v = serde_json::json!({"query": {"pages": [
+            {"title": "Futa (red panda)", "index": 4, "fullurl": "https://en.wikipedia.org/wiki/Futa",
+             "thumbnail": {"source": "https://thumb.wikimedia.org/wikipedia/commons/thumb/1/10/F.jpg/500px-F.jpg", "width": 400},
+             "original": {"source": "https://upload.wikimedia.org/wikipedia/commons/1/10/F.jpg", "width": 1200}},
+            {"title": "Red Panda", "index": 3},
+            {"title": "Red panda", "index": 1, "fullurl": "https://en.wikipedia.org/wiki/Red_panda",
+             "thumbnail": {"source": "https://thumb.wikimedia.org/wikipedia/commons/thumb/e/e6/R.jpg/500px-R.jpg", "width": 400},
+             "original": {"source": "https://upload.wikimedia.org/wikipedia/commons/e/e6/R.jpg", "width": 3900}}
+        ]}});
+        let p = parse_wikipedia(&v);
+        assert_eq!(p.iter().map(|p| p.title.as_str()).collect::<Vec<_>>(), ["Red panda", "Futa (red panda)"]);
+        assert_eq!(p[0].full, "https://thumb.wikimedia.org/wikipedia/commons/thumb/e/e6/R.jpg/1280px-R.jpg");
+        assert_eq!(p[1].full, "https://upload.wikimedia.org/wikipedia/commons/1/10/F.jpg");
+        assert_eq!((p[0].page.as_str(), p[0].source.as_str()), ("https://en.wikipedia.org/wiki/Red_panda", "Wikipedia"));
     }
 
     #[test]

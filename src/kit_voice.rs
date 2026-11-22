@@ -143,7 +143,7 @@ static ASK_SELECTION: LazyLock<Regex> = LazyLock::new(|| {
     const SEL: &str = r"this|the\s+selection|the\s+selected\s+text|what\s+i\s+(?:selected|marked|highlighted)";
     const SEL_DE: &str = r"das\s+hier|die\s+auswahl|die\s+markierung|den\s+markierten\s+text|das\s+markierte";
     re(&format!(
-        r"^(?:(?P<explain>explain\s+(?:{SEL})(?:\s+(?:to\s+me|simply|in\s+simple\s+words))?|what\s+does\s+this\s+mean|erkläre?\s+(?:mir\s+)?(?:{SEL_DE})|was\s+(?:bedeutet|heißt)\s+(?:{SEL_DE}))|(?P<translate>translate\s+(?:{SEL})|übersetze?\s+(?:{SEL_DE}))(?:\s+(?:in)?to\s+(?P<to>english|german)|\s+(?:auf|ins)\s+(?P<zu>englisch|englische|deutsch|deutsche))?|(?P<sum>(?:summari[sz]e|sum\s+up|shorten)\s+(?:{SEL})|fasse?\s+(?:{SEL_DE})\s+zusammen))$"
+        r"^(?:(?P<explain>explain\s+(?:{SEL})(?:\s+(?:to\s+me|simply|in\s+simple\s+words))?|what\s+does\s+this\s+mean|erkläre?\s+(?:mir\s+)?(?:{SEL_DE})|was\s+(?:bedeutet|heißt)\s+(?:{SEL_DE}))|(?P<translate>translate\s+(?:{SEL})|übersetze?\s+(?:{SEL_DE}))(?:\s+(?:in)?to\s+(?P<to>\p{{L}}+)|\s+(?:auf|ins)\s+(?P<zu>\p{{L}}+))?|(?P<sum>(?:summari[sz]e|sum\s+up|shorten)\s+(?:{SEL})|fasse?\s+(?:{SEL_DE})\s+zusammen))$"
     ))
 });
 
@@ -156,9 +156,10 @@ pub fn selection_ask(s: &str) -> Option<String> {
     } else if c.name("sum").is_some() {
         "Summarise this text in a few sentences".to_string()
     } else {
-        match c.name("to").or(c.name("zu")).map(|m| m.as_str()) {
-            Some("german" | "deutsch" | "deutsche") => "Translate this text into German and reply with the German translation only".to_string(),
-            Some(_) => "Translate this text into English".to_string(),
+        // (Into any language: "translate this into Japanese", "übersetze das hier ins Spanische".)
+        match c.name("to").or(c.name("zu")).and_then(|m| crate::translate::language(m.as_str())) {
+            Some("English") => "Translate this text into English".to_string(),
+            Some(into) => format!("Translate this text into {into} and reply with the {into} translation only"),
             None => "Translate this text into English (into German if it is English already)".to_string(),
         }
     })

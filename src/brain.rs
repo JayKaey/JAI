@@ -1152,6 +1152,27 @@ impl Brain {
         };
         let selection_answer: Option<String> = if crate::live_self_tester::dry() {
             None
+        } else if let Some((chosen, line)) = crate::persona::address_reply(&text) {
+            // The answer to the first-use "How would you like me to address you?".
+            if let Some(address) = chosen {
+                self.inner.config.update(|c| c.interface.address = Some(address));
+            }
+            Some(line)
+        } else if let Some(own) = crate::sound_sense::teach_order(&text) {
+            // "Learn my claps": the next few he hears are Sir's own (`App::on_acoustic`).
+            Some(crate::sound_sense::teach(own))
+        } else if let Some((words, into)) = crate::translate::parse(&text) {
+            // "Translate good morning into Japanese": one bare request, nothing else in it.
+            Some(match one_shot(&self.inner.llm, &self.inner.config.snapshot(), &crate::translate::instruction(into), &words, 200).await {
+                Some(translation) => {
+                    let (shown, said) = crate::translate::reply(into, &translation);
+                    if !crate::platform::in_test_session() {
+                        let _ = crate::clipboard::write(shown.split_once(": ").map_or(shown.as_str(), |(_, t)| t)).await;
+                    }
+                    format!("{shown}\nSpoken: {said}, Sir.")
+                }
+                None => "I can't translate just now, Sir: my language model is not answering.".to_string(),
+            })
         } else {
             match crate::kit_voice::about_selection(&self.inner.tools, &text, asked_another_way).await {
                 Some(Ok((ask, selection))) => Some(match one_shot(&self.inner.llm, &self.inner.config.snapshot(), &ask, &selection, 600).await {
@@ -1309,6 +1330,9 @@ impl Brain {
             // pronunciation", "forget how I speak": his ear, taught and asked in so many words.
             self.inner.tools.focus.clear_offer();
             Some(Intent::Answer(if dry { "Understood, Sir.".to_string() } else { crate::ear::command(&text).unwrap_or_else(|| "Understood, Sir.".to_string()) }))
+        } else if let Some(answer) = crate::websearch::sources_answer(&text) {
+            // "What are your sources?": the last search's, listed (never a new search).
+            Some(Intent::Answer(answer))
         } else if let Some(args) = crate::simulation_lab::view_order(&stark.simlab, &text) {
             // "Can you make it 3D?" while a simulation is open: its view, before another wording
             // takes the words for another order (the Earth keeps a bare one while it is up).
@@ -1656,6 +1680,15 @@ impl Brain {
             info!("[TURN] Alert: speaking the reply");
             tts.speak(&reply, req.generation);
         }
+        // What this turn searched, in the chat only: sources are never read aloud (Sir,
+        // 2026-11-22: "JAI should provide its sources").
+        let reply = match crate::websearch::sources_since(req.started).filter(|_| !interrupted && !reply.is_empty() && !crate::live_self_tester::dry()) {
+            Some(list) => {
+                let _ = events.send(BrainEvent::Token { message_id: req.message_id.clone(), token: format!("\n\n{list}") });
+                format!("{reply}\n\n{list}")
+            }
+            None => reply,
+        };
         // A recorded dry turn (the live self-test, the start-up warm-up) has no speech to close:
         // an end mark for the generation in the air would end a real reply's speaking state
         // early.
@@ -2151,7 +2184,11 @@ impl Brain {
                 hist_msgs.push(json!({ "role": "assistant", "content": line }));
             }
             Intent::Answer(line) => {
-                st.say(&line);
+                // ("display\nSpoken: words": the chat shows more than is said.)
+                match line.split_once("\nSpoken: ") {
+                    Some((display, spoken)) => st.say_display(display, spoken),
+                    None => st.say(&line),
+                }
                 hist_msgs.push(json!({ "role": "assistant", "content": line }));
             }
             Intent::Tool { name, mut args } => {
@@ -2566,7 +2603,7 @@ impl Brain {
                     "play" | "start" => Some(match (args["song_name"].as_str(), args["playlist_name"].as_str(), name) {
                         (_, _, Some(n)) if out.contains("Spotify search") => format!("I couldn't find {n} in your library, Sir, so I've searched Spotify for it."),
                         (Some(_), _, _) if now_song(out).is_some() => format!("Playing {}, Sir.", now_song(out).unwrap_or_default()),
-                        (_, _, Some(_)) => format!("Sir, {}", first_sentence(out)),
+                        (_, _, Some(_)) => with_sir(out),
                         _ => "Resuming, Sir.".into(),
                     }),
                     "pause" | "stop" => Some("Paused, Sir.".into()),
@@ -3033,8 +3070,22 @@ impl Brain {
                         let class = crate::intent_engine::classify(request);
                         if !crate::intent_engine::fulfilled(&class, st.grounding.tools_run()) {
                             info!("[GROUND] '{request}' ({class:?}) ended without a matching tool");
-                            // An order nothing was done about: the closest ones he does know
-                            // are offered (`did_you_mean`), where there are any.
+                            // An order nothing was done about: the one order of his own it surely
+                            // was, carried out when all it does is open or show something (Sir,
+                            // 2026-11-22: "guess more"); else the closest are offered.
+                            let meant = (!st.acted && !crate::live_self_tester::dry() && !st.req.cancel.is_cancelled())
+                                .then(|| crate::did_you_mean::guess(request))
+                                .flatten()
+                                .and_then(|g| match fast_as_said(&g.order) {
+                                    Some(Fast::Intent(meant)) => Some((g.order, meant)),
+                                    _ => None,
+                                });
+                            if let Some((order, meant)) = meant {
+                                info!("[MEANT] '{request}' taken as '{order}' after the model did nothing");
+                                st.say(&format!("I took that as \"{order}\", Sir."));
+                                Box::pin(self.fast_path(meant, &order, st)).await;
+                                return (model, st.req.cancel.is_cancelled());
+                            }
                             if crate::did_you_mean::current().is_none() {
                                 crate::did_you_mean::offer_for(request);
                             }
@@ -4706,6 +4757,12 @@ fn brief_ack(line: &str, request: &str) -> String {
     }
 }
 
+/// A result's first sentence as his line: "Playing the playlist 'Chill' on Sonora, Sir." (not
+/// "Sir, Playing the playlist …", seen in the console on 2026-11-22).
+fn with_sir(out: &str) -> String {
+    format!("{}, Sir.", first_sentence(out).trim_end_matches(['.', '!', ' ']))
+}
+
 fn first_sentence(s: &str) -> String {
     let s = s.trim();
     let end = s.find(['.', '\n']).map(|i| i + 1).unwrap_or(s.len()).min(160);
@@ -4715,7 +4772,7 @@ fn first_sentence(s: &str) -> String {
 /// The song a music result names as playing now, without the player's notes after it: "Back in
 /// Black by AC/DC" of "… Now playing: Back in Black by AC/DC (playing, 0:00 of 3:51, liked)."
 /// (Sir, 2026-11-21: "he shouldnt say the (playing 0:00 of 3:51, liked) thing".)
-fn now_song(out: &str) -> Option<&str> {
+pub(crate) fn now_song(out: &str) -> Option<&str> {
     let (_, now) = out.split_once("Now playing: ").or_else(|| out.split_once(" \u{2014} now: "))?;
     let now = now.trim_end_matches(['.', ' ']);
     let song = if now.ends_with(')') { now.rsplit_once(" (").map_or(now, |(song, _)| song) } else { now };
@@ -4864,6 +4921,9 @@ mod tests {
         assert_eq!(now_song("Playing Chill on Spotify \u{2014} now: Song (Live) by Max Mustermann (Spotify, playing)."), Some("Song (Live) by Max Mustermann"));
         assert_eq!(now_song("Now playing: Untitled."), Some("Untitled"));
         assert_eq!(now_song("Sonora took the song; it is starting."), None);
+        // Repro 2026-11-22 (Sir's screenshot): "Sir, Playing the playlist 'Jays Focus' on Sonora."
+        let playlist = "Playing the playlist 'Chill' on Sonora. Now playing: Virtual Insanity by Jamiroquai (playing, 0:00 of 3:47, liked).";
+        assert_eq!(with_sir(playlist), "Playing the playlist 'Chill' on Sonora, Sir.");
     }
 
     /// Repro 2026-11-20 (a silent session): "turn the volume down on Max's computer" set this

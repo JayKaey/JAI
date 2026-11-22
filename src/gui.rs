@@ -8015,14 +8015,19 @@ fn on_top_key(ui: &mut Ui, draw: impl FnOnce(&mut Ui, bool) -> egui::Response) {
 /// cut to leave `keys` of the row free, and the lamp of view `id`.
 pub(super) fn bar_title(ui: &mut Ui, ctx: &egui::Context, id: &str, title: &str, keys: f32) {
     let viewport = ctx.viewport_id();
-    let number = {
+    let (number, stale) = {
         let mut motions = lock(&DETACHED_MOTIONS);
         motions.opened(viewport, ctx.cumulative_pass_nr());
         if motions.barred.get(&viewport).is_none_or(|known| known != id) {
             motions.barred.insert(viewport, id.to_string());
         }
-        motions.number(viewport)
+        let number = motions.number(viewport);
+        motions.drawn.insert(viewport, number);
+        (number, motions.stale(viewport))
     };
+    for other in stale {
+        ctx.request_repaint_of(other);
+    }
     let theme = crate::holo::theme();
     // The tab stands in the window's own corner, outside the room its content has.
     let shell = ui.painter().with_clip_rect(ctx.screen_rect());
@@ -8104,6 +8109,11 @@ struct DetachedMotions {
     barred: std::collections::HashMap<ViewportId, String>,
     /// The windows whose pure black Windows sees through (`see_through`).
     see_through: std::collections::HashSet<ViewportId>,
+    /// Each window's place in the order his windows came up (`comes` counts them), never moved
+    /// on by a held-up frame as `shown`'s start is; and the number each last wore on its tab.
+    came: std::collections::HashMap<ViewportId, u64>,
+    comes: u64,
+    drawn: std::collections::HashMap<ViewportId, usize>,
 }
 
 impl DetachedMotions {
@@ -8121,6 +8131,8 @@ impl DetachedMotions {
                     self.owned.remove(&viewport);
                     self.see_through.remove(&viewport);
                 }
+                self.comes += 1;
+                self.came.insert(viewport, self.comes);
                 now
             }
         };
@@ -8141,9 +8153,15 @@ impl DetachedMotions {
     /// The number on this window's index tab: its place among his open windows with a bar,
     /// in the order they came up, as the sheets of a drawing are numbered.
     fn number(&self, viewport: ViewportId) -> usize {
-        let came = |v: &ViewportId| self.shown.get(v).map(|(_, at, _)| *at);
-        let Some(mine) = came(&viewport) else { return 1 };
-        1 + self.barred.keys().filter(|v| **v != viewport && !self.leaving.contains_key(v) && came(v).is_some_and(|at| at < mine)).count()
+        let Some(mine) = self.came.get(&viewport) else { return 1 };
+        1 + self.barred.keys().filter(|v| **v != viewport && !self.leaving.contains_key(v) && self.came.get(v).is_some_and(|at| at < mine)).count()
+    }
+
+    /// His other windows whose tab shows a number that is no longer theirs (one before them
+    /// closed or came up): they draw again. (Seen 2026-11-22: two windows wore "03", one of
+    /// them idle since another had come and gone.)
+    fn stale(&self, but: ViewportId) -> Vec<ViewportId> {
+        self.drawn.iter().filter(|(v, n)| **v != but && self.barred.contains_key(v) && self.number(**v) != **n).map(|(v, _)| *v).collect()
     }
 
     /// The window that shows view `id`, or that the dock knows by `id` ("window:{title}").
@@ -8163,6 +8181,8 @@ impl DetachedMotions {
         self.looked.remove(&viewport);
         self.told.remove(&viewport);
         self.see_through.remove(&viewport);
+        self.came.remove(&viewport);
+        self.drawn.remove(&viewport);
         if let Some((known_as, _)) = self.named.remove(&viewport) {
             crate::hud_dock::window_gone(&known_as);
         }
@@ -11540,15 +11560,24 @@ mod tests {
         let ids: Vec<ViewportId> = (0..3).map(|k| ViewportId::from_hash_of(("number_probe", k))).collect();
         let start = Instant::now();
         for (k, id) in ids.iter().enumerate() {
-            let at = start + Duration::from_millis(10 * (k as u64 + 1));
-            motions.shown.insert(*id, (0, at, at));
+            motions.opened(*id, 0);
             motions.barred.insert(*id, format!("probe {k}"));
         }
         assert_eq!(ids.iter().map(|id| motions.number(*id)).collect::<Vec<_>>(), vec![1, 2, 3]);
-        motions.shown.insert(ViewportId::from_hash_of("number_probe_console"), (0, start, start));
+        motions.opened(ViewportId::from_hash_of("number_probe_console"), 0);
         assert_eq!(motions.number(ids[2]), 3, "a window without his bar takes no number");
+        // Repro 2026-11-22: a frame held up during the first window's entrance moved its start
+        // past the others', and it took their number ("03" twice on the screen).
+        let later = start + Duration::from_secs(5);
+        motions.shown.insert(ids[0], (1, later, later));
+        assert_eq!(ids.iter().map(|id| motions.number(*id)).collect::<Vec<_>>(), vec![1, 2, 3], "a held-up frame moves no number");
+        for id in &ids {
+            let n = motions.number(*id);
+            motions.drawn.insert(*id, n);
+        }
         motions.leaving.insert(ids[0], (Instant::now(), true));
         assert_eq!((motions.number(ids[1]), motions.number(ids[2])), (1, 2), "the first is leaving");
+        assert_eq!(motions.stale(ids[1]), vec![ids[2]], "the third draws its new number");
     }
 
     /// A window of his own as it stands on the screen, for the eye: his bar (the index tab in

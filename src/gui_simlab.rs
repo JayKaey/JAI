@@ -43,6 +43,61 @@ struct Runtime {
     sort_pos: f64,
     /// What the physics-based kinds step (see `advance`).
     world: World,
+    /// Sir's hold on a 3D view (a Cell: the painters see the runtime shared).
+    cam: std::cell::Cell<Cam>,
+}
+
+/// How Sir looks at a 3D simulation (Sir, 2026-11-22: "I want to be able to move around in
+/// it"): dragging turns it and tips it, the right button (or Shift) moves it, the wheel brings
+/// it nearer, a double click gives it back. Until he takes hold of it, it turns by itself.
+#[derive(Clone, Copy)]
+struct Cam {
+    held: bool,
+    /// Turn and rise (radians) while held; the view's own last ones (to take over from).
+    aim: (f32, f32),
+    own: (f32, f32),
+    zoom: f32,
+    pan: egui::Vec2,
+}
+
+impl Default for Cam {
+    fn default() -> Self {
+        Cam { held: false, aim: (0.0, 0.0), own: (0.0, 0.0), zoom: 1.0, pan: egui::Vec2::ZERO }
+    }
+}
+
+impl Cam {
+    /// A drag of (dx, dy) points: the view turns about its upright and tips toward or away.
+    fn turn(&mut self, d: egui::Vec2) {
+        if !self.held {
+            (self.held, self.aim) = (true, self.own);
+        }
+        self.aim.0 -= d.x * 0.008;
+        self.aim.1 = (self.aim.1 + d.y * 0.006).clamp(4f32.to_radians(), 89f32.to_radians());
+    }
+
+    /// The wheel: `k` times nearer, about the point under the pointer (`at`, from the centre).
+    fn zoom_by(&mut self, k: f32, at: egui::Vec2) {
+        let zoom = (self.zoom * k).clamp(0.25, 12.0);
+        self.pan = at - (at - self.pan) * (zoom / self.zoom);
+        self.zoom = zoom;
+    }
+}
+
+impl Runtime {
+    /// The turn and rise a 3D view is seen at: its own (`turn`, `rise`) until Sir holds it.
+    fn aim(&self, turn: f32, rise: f32) -> (f32, f32) {
+        let mut cam = self.cam.get();
+        cam.own = (turn, rise);
+        self.cam.set(cam);
+        if cam.held { cam.aim } else { cam.own }
+    }
+
+    /// (how much nearer, how far moved) for a 3D view's scale and centre.
+    fn lens(&self) -> (f32, egui::Vec2) {
+        let cam = self.cam.get();
+        (cam.zoom, cam.pan)
+    }
 }
 
 /// The state of the simulations that `simulation_physics` runs.
@@ -79,6 +134,7 @@ impl Runtime {
             sort: Vec::new(),
             sort_pos: 0.0,
             world: World::None,
+            cam: Default::default(),
         };
         match sim.kind {
             SimKind::Gravity => {
@@ -329,7 +385,15 @@ fn draw_body(ui: &mut egui::Ui, p: &Palette, sim: &Simulation, host: &WidgetHost
         ui.set_width(controls_rect.width());
         crate::holo_block::faded(ui, egui::ScrollArea::vertical().id_salt(("sim_controls", &sim.id)).max_height(controls_rect.height()), |ui| controls(ui, p, sim, host));
     });
-    let response = ui.allocate_rect(plot_rect, Sense::hover());
+    let deep = sim.three_d && matches!(sim.kind, SimKind::Gravity | SimKind::Ripples | SimKind::Surface);
+    let held = deep || sim.kind == SimKind::Function;
+    let response = ui.allocate_rect(plot_rect, if held { Sense::click_and_drag() } else { Sense::hover() });
+    // (Read before the plot is drawn: the context is never asked inside its own lock.)
+    let (wheel, shift, secondary) = if response.hovered() || response.dragged() {
+        ui.input(|i| (i.zoom_delta() * (i.smooth_scroll_delta.y / 240.0).exp(), i.modifiers.shift, i.pointer.secondary_down()))
+    } else {
+        (1.0, false, false)
+    };
     let painter = ui.painter_at(plot_rect.expand(2.0));
     painter.rect_filled(plot_rect, Rounding::ZERO, crate::holo::theme().void());
     crate::holo::outline(&painter, &crate::holo::plate(plot_rect, [0.0; 4]), plot_frame());
@@ -339,14 +403,43 @@ fn draw_body(ui: &mut egui::Ui, p: &Palette, sim: &Simulation, host: &WidgetHost
     let rt = runtimes.entry(sim.id.clone()).or_insert_with(|| Runtime::new(sim));
     if rt.revision != sim.revision {
         // Slider changes keep the pendulum swinging from where it is only when its own
-        // start angle did not change; everything else restarts cleanly.
+        // start angle did not change; everything else restarts cleanly. Sir's view stays his.
+        let cam = rt.cam.get();
         *rt = Runtime::new(sim);
+        rt.cam.set(cam);
     }
     let now = Instant::now();
     let dt = if sim.paused { 0.0 } else { now.duration_since(rt.last).as_secs_f64().min(0.05) };
     rt.last = now;
     rt.t += dt;
     let inner = plot_rect.shrink(16.0);
+    if deep {
+        let mut cam = rt.cam.get();
+        if response.double_clicked() {
+            cam = Cam::default();
+        } else if response.dragged() && (shift || secondary) {
+            cam.pan += response.drag_delta();
+        } else if response.dragged() {
+            cam.turn(response.drag_delta());
+        }
+        if let Some(at) = response.hover_pos().filter(|_| wheel != 1.0) {
+            cam.zoom_by(wheel, at - inner.center());
+        }
+        rt.cam.set(cam);
+        hint(&painter, plot_rect, "DRAG TURNS · RIGHT-DRAG MOVES · WHEEL ZOOMS · DOUBLE-CLICK RESETS");
+    } else if sim.kind == SimKind::Function {
+        let view = View::of(plot_area(inner), sim.plane());
+        if response.double_clicked() {
+            lab.set_view(&sim.id, None);
+        } else if response.dragged() && response.drag_delta() != egui::Vec2::ZERO {
+            let (x, y) = view.to_world(view.rect.center() - response.drag_delta());
+            let (cx, cy) = view.to_world(view.rect.center());
+            lab.set_view(&sim.id, Some([view.x0 + x - cx, view.x1 + x - cx, view.y0 + y - cy, view.y1 + y - cy]));
+        } else if let Some(at) = response.hover_pos().filter(|_| wheel != 1.0) {
+            lab.set_view(&sim.id, Some(simulation_lab::zoomed([view.x0, view.x1, view.y0, view.y1], wheel as f64, view.to_world(at))));
+        }
+        hint(&painter, plot_rect, "DRAG MOVES · WHEEL ZOOMS · DOUBLE-CLICK FITS");
+    }
     advance(sim, rt, dt);
     match sim.kind {
         SimKind::Gravity | SimKind::Ripples | SimKind::StandingWave | SimKind::Doppler | SimKind::Sound | SimKind::Light | SimKind::Spring | SimKind::DoublePendulum | SimKind::Balls | SimKind::Surface => draw_physics(&painter, inner, sim, rt),
@@ -383,10 +476,7 @@ fn controls(ui: &mut egui::Ui, p: &Palette, sim: &Simulation, host: &WidgetHost)
         if crate::holo_ui::toggle(ui, &mut i, "Shade the integral").changed() {
             lab.set_option(&sim.id, None, Some(i));
         }
-        ui.add_space(4.0);
-        for (label, src, _) in &sim.functions {
-            ui.label(RichText::new(format!("{label}(x) = {src}")).font(crate::holo::font(Face::Mono, 11.5)).color(p.accent));
-        }
+        plot_editor(ui, p, sim, lab);
     }
     if sim.kind == SimKind::Surface {
         ui.add_space(4.0);
@@ -404,6 +494,63 @@ fn controls(ui: &mut egui::Ui, p: &Palette, sim: &Simulation, host: &WidgetHost)
     muted(ui, "Drag the sliders, or tell JAI: “set the angle to 60 degrees and double the velocity”.");
 }
 
+/// A plot's GeoGebra side: the input line ("g(x) = sin x", "A = (2, 3)"), what stands on the
+/// plot (each with a key that takes it off) and the four ends of its axes.
+fn plot_editor(ui: &mut egui::Ui, p: &Palette, sim: &Simulation, lab: &simulation_lab::SimulationLab) {
+    let id = egui::Id::new(("plot_input", &sim.id));
+    let (mut text, mut said) = ui.data_mut(|d| d.get_temp::<(String, String)>(id)).unwrap_or_default();
+    ui.add_space(6.0);
+    ui.label(RichText::new("INPUT").font(crate::holo::font(Face::Label, 9.0)).color(p.muted).extra_letter_spacing(1.0));
+    let entered = ui
+        .horizontal(|ui| {
+            let line = crate::holo_ui::slot(ui, egui::TextEdit::singleline(&mut text).desired_width(ui.available_width() - 44.0).hint_text("g(x) = sin x   A = (2, 3)").font(crate::holo::font(Face::Mono, 12.0)));
+            let pressed = line.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            crate::holo_ui::key(ui, "ADD").clicked() || pressed
+        })
+        .inner;
+    if entered && !text.trim().is_empty() {
+        match lab.plot_input(&sim.id, &text) {
+            Ok(_) => (text, said) = (String::new(), String::new()),
+            Err(e) => said = e,
+        }
+    }
+    if !said.is_empty() {
+        ui.label(RichText::new(&said).font(crate::holo::font(Face::Body, 11.5)).color(crate::holo::theme().alert()));
+    }
+    ui.data_mut(|d| d.insert_temp(id, (text, said)));
+    let row = |ui: &mut egui::Ui, text: String, colour: Color32, what: &str| {
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(text).font(crate::holo::font(Face::Mono, 11.5)).color(colour));
+            if crate::holo_ui::key(ui, "×").on_hover_text("Take it off the plot").clicked() {
+                lab.remove_object(&sim.id, what);
+            }
+        });
+    };
+    for (k, (label, src, _)) in sim.functions.iter().enumerate() {
+        row(ui, format!("{label}(x) = {src}"), curve_colours(p)[k % 6], label);
+    }
+    for (name, x, y) in &sim.points {
+        row(ui, format!("{name} = ({}, {})", label(*x), label(*y)), crate::holo::theme().ink(), name);
+    }
+    ui.add_space(6.0);
+    ui.label(RichText::new("AXES").font(crate::holo::font(Face::Label, 9.0)).color(p.muted).extra_letter_spacing(1.0));
+    let mut v = sim.plane();
+    let was = v;
+    for (axis, at) in [("x", 0), ("y", 2)] {
+        let speed = (v[at + 1] - v[at]) / 200.0;
+        ui.horizontal(|ui| {
+            ui.add(crate::holo_ui::Number::new(&mut v[at]).speed(speed).prefix(format!("{axis} ")));
+            ui.add(crate::holo_ui::Number::new(&mut v[at + 1]).speed(speed).prefix("to "));
+        });
+    }
+    if v != was {
+        lab.set_view(&sim.id, Some(v));
+    }
+    if sim.view.is_some() && crate::holo_ui::key(ui, "FIT").on_hover_text("Fit the view to the curves again").clicked() {
+        lab.set_view(&sim.id, None);
+    }
+}
+
 // ---------------------------------------------------------------------- plotting ----
 
 /// World → screen mapping with a grid and labelled axes.
@@ -416,6 +563,10 @@ struct View {
 }
 
 impl View {
+    fn of(rect: Rect, [x0, x1, y0, y1]: [f64; 4]) -> View {
+        View { rect, x0, x1, y0, y1 }
+    }
+
     fn to_screen(&self, x: f64, y: f64) -> Pos2 {
         let fx = ((x - self.x0) / (self.x1 - self.x0)) as f32;
         let fy = ((y - self.y0) / (self.y1 - self.y0)) as f32;
@@ -507,9 +658,19 @@ pub(super) fn curve_runs(xs: &[f64], ys: &[f64], to_screen: impl Fn(f64, f64) ->
     runs
 }
 
+/// A plot's own controls, said once in its lower right corner.
+fn hint(painter: &egui::Painter, rect: Rect, text: &str) {
+    painter.text(rect.right_bottom() - vec2(6.0, 3.0), Align2::RIGHT_BOTTOM, text, crate::holo::font(Face::Label, 8.0), faint(crate::holo::theme().ink(), 0.4));
+}
+
+/// The plane of a plot inside its canvas (room on the left and below for the axes' figures).
+fn plot_area(rect: Rect) -> Rect {
+    Rect::from_min_max(rect.min + vec2(34.0, 0.0), rect.max - vec2(0.0, 16.0))
+}
+
 fn draw_function(painter: &egui::Painter, rect: Rect, p: &Palette, sim: &Simulation, hover: Option<Pos2>) {
-    let rect = Rect::from_min_max(rect.min + vec2(34.0, 0.0), rect.max - vec2(0.0, 16.0));
-    let (a, b) = sim.x_range;
+    let rect = plot_area(rect);
+    let [a, b, y0, y1] = sim.plane();
     let n = CURVE_SEGMENTS;
     let xs = sample_xs(a, b);
     let mut series: Vec<(Vec<f64>, Color32, bool)> = Vec::new();
@@ -521,16 +682,7 @@ fn draw_function(painter: &egui::Painter, rect: Rect, p: &Palette, sim: &Simulat
             series.push((xs.iter().map(|x| simulation_lab::derivative(e, *x, &sim.params)).collect(), if k == 0 { second_series() } else { colour.gamma_multiply(0.6) }, k > 0));
         }
     }
-    // The y range from the 2nd-98th percentile, so asymptotes don't flatten everything.
-    let mut ys: Vec<f64> = series.iter().flat_map(|(v, _, _)| v.iter().copied()).filter(|v| v.is_finite()).collect();
-    ys.sort_by(|a, b| a.total_cmp(b));
-    let (mut y0, mut y1) = if ys.is_empty() { (-1.0, 1.0) } else { (ys[ys.len() * 2 / 100], ys[(ys.len() * 98 / 100).min(ys.len() - 1)]) };
-    if (y1 - y0).abs() < 1e-6 {
-        y0 -= 1.0;
-        y1 += 1.0;
-    }
-    let pad = (y1 - y0) * 0.1;
-    let view = View { rect, x0: a, x1: b, y0: y0 - pad, y1: y1 + pad };
+    let view = View::of(rect, [a, b, y0, y1]);
     view.grid(painter, p);
     // Integral of the first function: shaded strips down to the axis.
     if sim.show_integral {
@@ -560,12 +712,29 @@ fn draw_function(painter: &egui::Painter, rect: Rect, p: &Palette, sim: &Simulat
             }
         }
     }
-    // Roots.
+    // Roots (rings), maxima and minima (diamonds), where two curves meet (white dots), his points.
+    let th = crate::holo::theme();
     for (k, (_, _, e)) in sim.functions.iter().enumerate() {
+        let colour = curve_colours(p)[k % 6];
         for r in simulation_lab::roots(e, a, b, &sim.params) {
-            let at = view.to_screen(r, 0.0f64.clamp(view.y0, view.y1));
-            painter.circle_stroke(at, 4.5, stroke(1.6, curve_colours(p)[k % 6]));
+            painter.circle_stroke(view.to_screen(r, 0.0), 4.5, stroke(1.6, colour));
         }
+        for (x, y, _) in simulation_lab::turning_points(e, a, b, &sim.params) {
+            let at = view.to_screen(x, y);
+            painter.add(Shape::closed_line([vec2(0.0, -5.0), vec2(5.0, 0.0), vec2(0.0, 5.0), vec2(-5.0, 0.0)].map(|d| at + d).to_vec(), stroke(1.4, colour)));
+        }
+        for (_, _, g) in &sim.functions[k + 1..] {
+            for (x, y) in simulation_lab::crossings(e, g, a, b, &sim.params) {
+                painter.circle_filled(view.to_screen(x, y), 3.5, th.hot());
+            }
+        }
+    }
+    let mut taken = Vec::new();
+    for (name, x, y) in &sim.points {
+        let at = view.to_screen(*x, *y);
+        painter.circle_filled(at, 4.0, th.accent());
+        painter.circle_stroke(at, 7.0, stroke(1.0, faint(th.ink(), 0.5)));
+        tag_free(painter, &mut taken, &[(at + vec2(8.0, -6.0), Align2::LEFT_BOTTOM), (at + vec2(-8.0, -6.0), Align2::RIGHT_BOTTOM)], &format!("{name} ({}, {})", label(*x), label(*y)), th.ink());
     }
     // Legend.
     let mut top = 8.0;
@@ -941,8 +1110,9 @@ fn draw_gravity(painter: &egui::Painter, rect: Rect, sim: &Simulation, rt: &Runt
     let area = below_readout(rect);
     let deep = sim.three_d;
     // (Leaning back, the plane takes about half its width in height: it may be drawn larger.)
-    let radius = if deep { ((area.width() - 40.0) / 2.7).min((area.height() - 40.0) / 1.1) } else { area.width().min(area.height()) / 2.0 - 24.0 }.max(40.0);
-    let centre = area.center();
+    let (zoom, pan) = if deep { rt.lens() } else { (1.0, egui::Vec2::ZERO) };
+    let radius = if deep { ((area.width() - 40.0) / 2.7).min((area.height() - 40.0) / 1.1) } else { area.width().min(area.height()) / 2.0 - 24.0 }.max(40.0) * zoom;
+    let centre = area.center() + pan;
     // Distance from the centre by its square root when the planets would otherwise leave the inner ones a dot.
     let flat = |p: [f64; 2]| {
         let r = (p[0].hypot(p[1]) / reach).min(4.0);
@@ -955,7 +1125,8 @@ fn draw_gravity(painter: &egui::Painter, rect: Rect, sim: &Simulation, rt: &Runt
     // into the well the masses make of it (their potential, softened, its depth capped).
     let top = scene.bodies.get(heavy).map_or(1.0, |b| b.mass.max(1e-300));
     let wells: Vec<(egui::Vec2, f32)> = scene.bodies.iter().map(|b| (flat(b.pos), (b.mass / top) as f32)).collect();
-    let (soft, turn, rise) = (radius * 0.15, (20.0 + 4.0 * rt.t as f32).to_radians(), 30f32.to_radians());
+    let soft = radius * 0.15;
+    let (turn, rise) = if deep { rt.aim((20.0 + 4.0 * rt.t as f32).to_radians(), 30f32.to_radians()) } else { (0.0, 0.0) };
     // (where on the screen, how large against the plane seen from above, how near: 0-1)
     let view = |at: egui::Vec2| -> (Pos2, f32, f32) {
         if !deep {
@@ -1044,7 +1215,7 @@ fn draw_ripples(painter: &egui::Painter, rect: Rect, sim: &Simulation, rt: &Runt
     let area = below_readout(rect);
     readout(painter, rect, 8.0, &format!("f = {:.3}   λ = {:.1} cells   slits {}   slit width {} cells   separation {} cells   {} source{}", tank.frequency, tank.wavelength(), sim.value("slits").round() as i64, sim.value("slit_width").round() as i64, sim.value("separation").round() as i64, if tank.plane { "plane" } else { "point" }, if sim.three_d { "   3D: the water's height" } else { "" }), th.ink());
     if sim.three_d {
-        return relief(painter, area, tank);
+        return relief(painter, area, tank, rt);
     }
     let aspect = tank.w as f32 / tank.h as f32;
     let (w, h) = if area.width() / area.height() > aspect { (area.height() * aspect, area.height()) } else { (area.width(), area.width() / aspect) };
@@ -1080,13 +1251,17 @@ fn draw_ripples(painter: &egui::Painter, rect: Rect, sim: &Simulation, rt: &Runt
 
 /// The ripple tank in 3D: the water's height as a wireframe seen from 38° above, the wall with
 /// its slits standing in it, the source a line or a spark of light.
-fn relief(painter: &egui::Painter, area: Rect, tank: &phys::Ripples) {
+fn relief(painter: &egui::Painter, area: Rect, tank: &phys::Ripples, rt: &Runtime) {
     let th = crate::holo::theme();
-    let (turn, rise, swell) = ((-28f32).to_radians(), 38f32.to_radians(), 9.0f32);
+    let ((turn, rise), swell) = (rt.aim((-28f32).to_radians(), 38f32.to_radians()), 9.0f32);
+    let (zoom, pan) = rt.lens();
     let half = vec2(tank.w as f32, tank.h as f32) / 2.0;
-    let wide = half.x * turn.cos().abs() + half.y * turn.sin().abs();
-    let tall = (half.x * turn.sin().abs() + half.y * turn.cos().abs()) * rise.sin() + swell * rise.cos();
-    let fit = ((area.width() - 30.0) / (2.0 * wide)).min((area.height() - 30.0) / (2.0 * tall));
+    // (Fitted at its own angle, so turning it by hand does not breathe its size.)
+    let (t0, r0) = rt.cam.get().own;
+    let wide = half.x * t0.cos().abs() + half.y * t0.sin().abs();
+    let tall = (half.x * t0.sin().abs() + half.y * t0.cos().abs()) * r0.sin() + swell * r0.cos();
+    let fit = ((area.width() - 30.0) / (2.0 * wide)).min((area.height() - 30.0) / (2.0 * tall)) * zoom;
+    let area = area.translate(pan);
     // (screen point, how near: 0-1) of a cell at a height, both in cells.
     let project = |i: f32, j: f32, h: f32| {
         let (x, y) = (i - half.x, half.y - j);
@@ -1419,7 +1594,13 @@ fn draw_surface(painter: &egui::Painter, rect: Rect, sim: &Simulation, rt: &Runt
     let th = crate::holo::theme();
     let r = sim.value("range").max(0.5);
     // (In 2D it is seen from straight above, its height in its colour and brightness.)
-    let (turn, tilt) = if sim.three_d { ((sim.value("turn") + sim.value("spin") * rt.t).to_radians(), sim.value("tilt").to_radians()) } else { (0.0, std::f64::consts::FRAC_PI_2) };
+    let (turn, tilt) = if sim.three_d {
+        let (turn, tilt) = rt.aim((sim.value("turn") + sim.value("spin") * rt.t).to_radians() as f32, sim.value("tilt").to_radians() as f32);
+        (turn as f64, tilt as f64)
+    } else {
+        (0.0, std::f64::consts::FRAC_PI_2)
+    };
+    let (zoom, pan) = if sim.three_d { rt.lens() } else { (1.0, egui::Vec2::ZERO) };
     let n = 34usize;
     let mut ps = sim.surface_params();
     let step = |k: usize| -r + 2.0 * r * k as f64 / n as f64;
@@ -1435,8 +1616,8 @@ fn draw_surface(painter: &egui::Painter, rect: Rect, sim: &Simulation, rt: &Runt
     let tall = r * 0.9;
     let high = |v: f64| ((v - (lo + hi) / 2.0) / (hi - lo) * 2.0 * tall).clamp(-1.4 * tall, 1.4 * tall);
     let area = below_readout(rect);
-    let pixels = area.width().min(area.height()) * 0.5 * 0.8 / (r as f32 * 1.4);
-    let centre = area.center() + vec2(0.0, 8.0);
+    let pixels = area.width().min(area.height()) * 0.5 * 0.8 / (r as f32 * 1.4) * zoom;
+    let centre = area.center() + vec2(0.0, 8.0) + pan;
     // (screen point, how near to the viewer, 0-1) of a point of the surface.
     let project = |x: f64, y: f64, h: f64| {
         let (x1, y1) = (x * turn.cos() - y * turn.sin(), x * turn.sin() + y * turn.cos());
@@ -1488,7 +1669,7 @@ fn draw_surface(painter: &egui::Painter, rect: Rect, sim: &Simulation, rt: &Runt
     }
     light.paint(painter);
     let src = sim.functions.first().map(|(_, s, _)| s.as_str()).unwrap_or("");
-    let seen = if sim.three_d { format!("turn {:.0}°   tilt {:.0}°", sim.value("turn") + sim.value("spin") * rt.t, sim.value("tilt")) } else { "2D: seen from above".to_string() };
+    let seen = if sim.three_d { format!("turn {:.0}°   tilt {:.0}°", turn.to_degrees().rem_euclid(360.0), tilt.to_degrees()) } else { "2D: seen from above".to_string() };
     readout(painter, rect, 8.0, &format!("z = {src}   {seen}   z from {lo:.2} to {hi:.2}"), th.ink());
 }
 

@@ -386,7 +386,7 @@ pub fn background_speech(text: &str, hands_free: bool, recent: &[String]) -> Opt
     if !hands_free {
         return None;
     }
-    let quick = crate::intents::silent_quick_command(text).is_some() || known_command(text);
+    let quick = crate::intents::silent_quick_command(text).is_some() || known_command(text) || crate::intents::resumes_speech(text);
     let meaningful = meaningful_words(text);
     if meaningful.len() < 2 && !quick {
         return Some("fragment");

@@ -5,8 +5,9 @@
 //! sends it ("open the earth on Max's PC"). A client sends orders nowhere, so nothing on Sir's
 //! PC obeys another PC. Voice prints go both ways and are held in memory only
 //! (`speaker_id::share_*`): each is kept on disk on its owner's PC alone. A client runs the
-//! version Sir's PC runs: a new one is fetched at once and started (`update`); Sir's own PC
-//! never updates itself.
+//! version Sir's PC runs: a new one is fetched at once and started (`update`). A newer release
+//! on GitHub comes too, even while Sir's PC is out of reach, as long as this PC's key was good
+//! when Sir's PC last answered. Sir's own PC never updates itself.
 
 use crate::app::Jai;
 use crate::config::ConfigStore;
@@ -30,8 +31,12 @@ const EVERY: Duration = Duration::from_secs(3);
 const ORDER_KEEPS: Duration = Duration::from_secs(600);
 /// A PC that called within this long is online (its device entry is written once a minute).
 pub const ONLINE_WITHIN: i64 = 90;
-/// The repository whose new versions a client hears of.
-const GITHUB_HEAD: &str = "https://api.github.com/repos/JayKaey/JAI/commits/v3.2-tested-features";
+/// This version's number ("3.4.1"): an update never goes back to an older one.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// The newest release, looked at every half hour by a client.
+const GITHUB_RELEASE: &str = "https://api.github.com/repos/JayKaey/JAI/releases/latest";
+/// The release's file that is J.A.I. himself on this system (`release.yml`).
+const RELEASE_ASSET: &str = if cfg!(windows) { "JAI.exe" } else { "jai-linux" };
 
 /// Orders Sir sent to an account's PC (by its name in lower case), until that PC fetches them.
 static ORDERS: LazyLock<Mutex<HashMap<String, Vec<(String, Instant)>>>> = LazyLock::new(Default::default);
@@ -206,7 +211,7 @@ pub fn hello(db: &str, name: &str, body: &Value) -> Value {
     }
     let account = crate::accounts::get(db, name).map(|a| crate::accounts::Account { devices: Vec::new(), ..a });
     let admin = body["admin"].as_str().is_some_and(crate::admin::holds);
-    json!({ "orders": take(name), "sir": crate::speaker_id::print_to_share(db), "build": BUILD, "os": std::env::consts::OS, "account": account, "admin": admin })
+    json!({ "orders": take(name), "sir": crate::speaker_id::print_to_share(db), "build": BUILD, "version": VERSION, "os": std::env::consts::OS, "account": account, "admin": admin })
 }
 
 /// How this PC is, in a line for Sir's list.
@@ -265,7 +270,7 @@ pub async fn client(app: Jai) {
     }
     let Ok(http) = reqwest::Client::builder().timeout(Duration::from_secs(20)).build() else { return };
     let mut done: Vec<String> = Vec::new();
-    let (mut said_offline, mut github, mut github_at) = (false, None::<String>, None::<Instant>);
+    let (mut said_offline, mut github_at) = (false, None::<Instant>);
     loop {
         tokio::time::sleep(EVERY).await;
         let main = app.config().read(|c| c.main_pc.trim().trim_end_matches('/').to_string());
@@ -297,6 +302,22 @@ pub async fn client(app: Jai) {
                 None
             }
         };
+        // A newer release on GitHub, looked for every half hour: it comes even while Sir's PC
+        // is out of reach (this PC still holds its key, so its account was good when last heard).
+        if github_at.is_none_or(|at| at.elapsed() > Duration::from_secs(1800)) {
+            github_at = Some(Instant::now());
+            let release = http.get(GITHUB_RELEASE).header("User-Agent", "JAI-client").send().await.ok();
+            let release = match release {
+                Some(r) => r.json::<Value>().await.ok().as_ref().and_then(release_of),
+                None => None,
+            };
+            if let Some((tag, url)) = release.filter(|(tag, _)| newer(tag)) {
+                match update(http.get(&url).header("User-Agent", "JAI-client"), &format!("GitHub ({tag})")).await {
+                    Ok(()) => return,
+                    Err(e) => warn!("[FLEET] The new version ({tag}) did not come from GitHub: {e}"),
+                }
+            }
+        }
         let Some(answer) = answer else { continue };
         said_offline = false;
         done.clear();
@@ -314,38 +335,39 @@ pub async fn client(app: Jai) {
         }
         // (Only from a PC of its own kind: a Linux JAI's new version comes from GitHub, not from Sir's Windows.)
         let same_system = answer["os"].as_str().is_none_or(|os| os == std::env::consts::OS);
-        if let Some(build) = answer["build"].as_str().filter(|b| *b != BUILD && !b.is_empty() && same_system) {
-            match update(&http, &main, &key, build).await {
+        // (Never an older one: a PC that took a newer release from GitHub keeps it.)
+        let not_older = answer["version"].as_str().is_some_and(|v| version(v) >= version(VERSION));
+        if let Some(build) = answer["build"].as_str().filter(|b| *b != BUILD && !b.is_empty() && same_system && not_older) {
+            match update(http.get(format!("{main}/api/pc/update")).header("X-JAI-Key", &key), &format!("Sir's PC ({build})")).await {
                 Ok(()) => return,
                 Err(e) => warn!("[FLEET] The new version ({build}) did not come: {e}"),
-            }
-        }
-        // A new version on GitHub: said once per commit (the version itself comes from Sir's PC).
-        if github_at.is_none_or(|at| at.elapsed() > Duration::from_secs(1800)) {
-            github_at = Some(Instant::now());
-            if let Some((sha, message)) = github_head(&http).await {
-                if github.as_ref().is_some_and(|seen| *seen != sha) {
-                    crate::hud_notify::record(&format!("J.A.I. was updated on GitHub: {message}"), false);
-                }
-                github = Some(sha);
             }
         }
     }
 }
 
-/// The newest commit of the repository: its id and the first line of its message.
-async fn github_head(http: &reqwest::Client) -> Option<(String, String)> {
-    let v: Value = http.get(GITHUB_HEAD).header("User-Agent", "JAI-client").send().await.ok()?.json().await.ok()?;
-    let message = v["commit"]["message"].as_str()?.lines().next()?.to_string();
-    Some((v["sha"].as_str()?.to_string(), message))
+/// "v3.4.1" as numbers, to tell a newer version from an older one.
+fn version(v: &str) -> Option<(u32, u32, u32)> {
+    let mut parts = v.trim().trim_start_matches('v').split(['.', '-', '+']).map(|p| p.parse::<u32>().ok());
+    Some((parts.next()??, parts.next()??, parts.next().flatten().unwrap_or(0)))
 }
 
-/// Sir's version, fetched from his PC and put in place of this one, then started. (A running
-/// program may be renamed on Windows, not overwritten.)
-async fn update(http: &reqwest::Client, main: &str, key: &str, build: &str) -> Result<(), String> {
+fn newer(v: &str) -> bool {
+    version(v) > version(VERSION)
+}
+
+/// A release's version and the address of its file for this system.
+fn release_of(v: &Value) -> Option<(String, String)> {
+    let asset = v["assets"].as_array()?.iter().find(|a| a["name"] == RELEASE_ASSET)?;
+    Some((v["tag_name"].as_str()?.to_string(), asset["browser_download_url"].as_str()?.to_string()))
+}
+
+/// A new version, fetched and put in place of this one, then started. (A running program may
+/// be renamed on Windows, not overwritten.)
+async fn update(request: reqwest::RequestBuilder, from: &str) -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    info!("[FLEET] Sir's PC runs {build}, this one {BUILD}: fetching it");
-    let bytes = http.get(format!("{main}/api/pc/update")).header("X-JAI-Key", key).timeout(Duration::from_secs(900)).send().await.map_err(|e| e.to_string())?.error_for_status().map_err(|e| e.to_string())?.bytes().await.map_err(|e| e.to_string())?;
+    info!("[FLEET] A new version from {from}, this one {VERSION} ({BUILD}): fetching it");
+    let bytes = request.timeout(Duration::from_secs(900)).send().await.map_err(|e| e.to_string())?.error_for_status().map_err(|e| e.to_string())?.bytes().await.map_err(|e| e.to_string())?;
     if !runs_here(&bytes) {
         return Err("what came is no program for this PC".into());
     }
@@ -360,7 +382,7 @@ async fn update(http: &reqwest::Client, main: &str, key: &str, build: &str) -> R
         return Err(e.to_string());
     }
     crate::lifecycle::request_restart(crate::lifecycle::Restart::Same);
-    crate::lifecycle::signal(crate::lifecycle::Signal::Alert("Sir's PC has a new version of me: restarting with it.".into()));
+    crate::lifecycle::signal(crate::lifecycle::Signal::Alert(format!("A new version of me came from {from}: restarting with it.")));
     crate::lifecycle::signal(crate::lifecycle::Signal::Shutdown);
     Ok(())
 }
@@ -415,6 +437,20 @@ pub async fn ask_for_account(main: &str, name: &str, password: &str) -> Result<S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_newer_release_on_github_is_taken_and_an_older_never() {
+        let release = json!({ "tag_name": "v99.0.0", "assets": [
+            { "name": "JAI-setup.exe", "browser_download_url": "https://example.invalid/setup" },
+            { "name": RELEASE_ASSET, "browser_download_url": "https://example.invalid/jai" },
+        ] });
+        assert_eq!(release_of(&release), Some(("v99.0.0".into(), "https://example.invalid/jai".into())));
+        assert_eq!(release_of(&json!({ "tag_name": "v99.0.0", "assets": [] })), None);
+        assert!(newer("v99.0.0") && newer("99.1"));
+        assert!(!newer(&format!("v{VERSION}")) && !newer("v0.9.9") && !newer("nightly"));
+        assert!(version("v3.10.0") > version("v3.9.2"));
+        assert_eq!(version("v3.4.1-rc1"), Some((3, 4, 1)));
+    }
 
     #[test]
     fn sirs_orders_for_another_pc_are_read_in_his_words() {

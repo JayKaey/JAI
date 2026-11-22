@@ -97,6 +97,7 @@ pub async fn search(query: &str) -> Result<String, String> {
     let key = query.to_lowercase();
     if let Some(kept) = SEARCHED.get(&key) {
         info!("[TOOL] Web search: '{query}' (read in the last 15 minutes)");
+        note_sources(&kept);
         return Ok(kept);
     }
     info!("[TOOL] Web search: '{query}'");
@@ -110,14 +111,18 @@ pub async fn search(query: &str) -> Result<String, String> {
             wikipedia_summary(query).await
         }
     };
-    let (wiki, ddg, weather) = tokio::join!(wiki_lookup, duckduckgo(query), weather(query));
-    let results = match ddg {
-        Ok(r) => r,
-        Err(e) => {
+    // Two engines at once, their results taken in turn (one blocked or thin leaves the other).
+    let (wiki, ddg, bing, weather) = tokio::join!(wiki_lookup, duckduckgo(query), bing(query), weather(query));
+    let results = interleave(
+        ddg.unwrap_or_else(|e| {
             warn!("[TOOL] DuckDuckGo search failed: {e}");
             Vec::new()
-        }
-    };
+        }),
+        bing.unwrap_or_else(|e| {
+            warn!("[TOOL] Bing search failed: {e}");
+            Vec::new()
+        }),
+    );
 
     let mut out = String::new();
     if let Some(w) = &weather {
@@ -132,9 +137,10 @@ pub async fn search(query: &str) -> Result<String, String> {
             out.push_str(&format!("{}. {} — {} ({})\n", i + 1, r.title, whole_sentences(&r.snippet), r.url));
         }
     }
-    // Live weather already has the numbers; otherwise read the best page for concrete facts.
+    // Live weather already has the numbers; otherwise read the best two pages for concrete
+    // facts (two sources agree or tell what differs).
     if weather.is_none() {
-        if let Some((url, page)) = read_best(&results, wiki.is_some()).await {
+        for (url, page) in read_best(&results, wiki.is_some()).await {
             out.push_str(&format!("\nPage extract from {url}:\n{page}\n"));
         }
     }
@@ -142,20 +148,36 @@ pub async fn search(query: &str) -> Result<String, String> {
         Err(format!("No live results found for '{query}' (offline or blocked)."))
     } else {
         SEARCHED.put(&key, out.trim());
+        note_sources(out.trim());
         Ok(out.trim().to_string())
     }
 }
 
-/// Fetches the two most relevant readable results concurrently; the higher-ranked success wins.
-async fn read_best(results: &[SearchResult], have_wikipedia: bool) -> Option<(String, String)> {
+/// Two engines' results in turn, each page once (its address without a trailing slash).
+fn interleave(a: Vec<SearchResult>, b: Vec<SearchResult>) -> Vec<SearchResult> {
+    let mut out: Vec<SearchResult> = Vec::new();
+    let (mut a, mut b) = (a.into_iter(), b.into_iter());
+    loop {
+        let (x, y) = (a.next(), b.next());
+        if x.is_none() && y.is_none() {
+            return out;
+        }
+        for r in [x, y].into_iter().flatten() {
+            if !out.iter().any(|o| o.url.trim_end_matches('/') == r.url.trim_end_matches('/')) {
+                out.push(r);
+            }
+        }
+    }
+}
+
+/// Reads the three most relevant readable results at once; the two best-ranked that read well.
+async fn read_best(results: &[SearchResult], have_wikipedia: bool) -> Vec<(String, String)> {
     let candidates: Vec<&SearchResult> = results
         .iter()
+        .take(RESULT_COUNT)
         .filter(|r| readable_url(&r.url) && !(have_wikipedia && r.url.contains("wikipedia.org")))
-        .take(2)
+        .take(3)
         .collect();
-    if candidates.is_empty() {
-        return None;
-    }
     let reads = futures_util::future::join_all(candidates.iter().map(|r| async move {
         tokio::time::timeout(Duration::from_secs(6), fetch_readable(&r.url)).await.ok().and_then(Result::ok)
     }))
@@ -163,7 +185,74 @@ async fn read_best(results: &[SearchResult], have_wikipedia: bool) -> Option<(St
     candidates
         .iter()
         .zip(reads)
-        .find_map(|(r, page)| page.filter(|p| p.text.chars().count() >= 200).map(|p| (r.url.clone(), p.text)))
+        .filter_map(|(r, page)| page.filter(|p| p.text.chars().count() >= 200).map(|p| (r.url.clone(), p.text.chars().take(PAGE_TEXT_LIMIT * 3 / 5).collect())))
+        .take(2)
+        .collect()
+}
+
+/// The sources of the last search: (title, address), and when.
+static SOURCES: std::sync::Mutex<Option<(std::time::Instant, Vec<(String, String)>)>> = std::sync::Mutex::new(None);
+
+/// What a search's result lists as its sources ("1. Title — snippet (https://…)"; Wikipedia).
+pub fn sources_of(result: &str) -> Vec<(String, String)> {
+    static LINE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?m)^\d+\. (.+?) — .*\((https?://[^\s()]+)\)\s*$").expect("valid source line regex"));
+    let mut found: Vec<(String, String)> = LINE.captures_iter(result).map(|c| (c[1].trim().to_string(), c[2].to_string())).collect();
+    if result.lines().any(|l| l.starts_with("Wikipedia: ")) {
+        found.insert(0, ("Wikipedia".into(), String::new()));
+    }
+    found
+}
+
+fn note_sources(result: &str) {
+    *SOURCES.lock().unwrap_or_else(|e| e.into_inner()) = Some((std::time::Instant::now(), sources_of(result)));
+}
+
+/// The sources of a search made since `since`, as a list for the chat (Sir, 2026-11-22: "JAI
+/// should provide its sources"). None when no search was made since.
+pub fn sources_since(since: std::time::Instant) -> Option<String> {
+    let kept = SOURCES.lock().unwrap_or_else(|e| e.into_inner());
+    kept.as_ref().filter(|(at, list)| *at >= since && !list.is_empty()).map(|(_, list)| sources_list(list))
+}
+
+fn sources_list(list: &[(String, String)]) -> String {
+    let lines: Vec<String> = list.iter().take(5).enumerate().map(|(i, (title, url))| if url.is_empty() { format!("{}. {title}", i + 1) } else { format!("{}. {title} — {url}", i + 1) }).collect();
+    format!("Sources:\n{}", lines.join("\n"))
+}
+
+/// The host of an address without "www." ("reuters.com").
+fn site(url: &str) -> &str {
+    let host = url.split("://").nth(1).unwrap_or(url).split(['/', '?', '#']).next().unwrap_or_default();
+    host.strip_prefix("www.").unwrap_or(host)
+}
+
+/// "What are your sources?", "where did you get that from?", "woher weißt du das?": the last
+/// search's sources (in the last half hour), shown in full and named aloud by their sites.
+pub fn sources_answer(text: &str) -> Option<String> {
+    static ASKED: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"^(?:jai,?\s+)?(?:what\s+(?:are|were|was)\s+(?:your|the|its)\s+sources?|(?:and\s+)?where\s+(?:did|do)\s+you\s+(?:get|find|read|learn|have)\s+(?:that|this|it)(?:\s+from)?|(?:give|show|tell)\s+me\s+(?:your|the)\s+sources?|(?:your\s+)?sources?(?:\s+please)?|which\s+sources?\s+did\s+you\s+use|was\s+(?:sind|waren)\s+(?:deine|die)\s+quellen|woher\s+(?:hast|weißt|weisst)\s+du\s+das|(?:deine\s+)?quellen(?:\s+bitte)?|welche\s+quellen\s+hast\s+du\s+(?:benutzt|genutzt))$")
+            .expect("valid sources question regex")
+    });
+    let asked = text.trim().trim_end_matches(['?', '.', '!']).trim().to_lowercase();
+    if !ASKED.is_match(&asked) {
+        return None;
+    }
+    let kept = SOURCES.lock().unwrap_or_else(|e| e.into_inner());
+    let Some((_, list)) = kept.as_ref().filter(|(at, list)| at.elapsed() < Duration::from_secs(30 * 60) && !list.is_empty()) else {
+        return Some("I haven't searched anything recently, Sir: that came from what I know.".into());
+    };
+    let mut sites: Vec<&str> = Vec::new();
+    for (title, url) in list.iter().take(5) {
+        let name = if url.is_empty() { title.as_str() } else { site(url) };
+        if !sites.contains(&name) {
+            sites.push(name);
+        }
+    }
+    let spoken = match sites.as_slice() {
+        [one] => one.to_string(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+        [] => String::new(),
+    };
+    Some(format!("{}\nSpoken: From {spoken}, Sir.", sources_list(list)))
 }
 
 fn readable_url(url: &str) -> bool {
@@ -505,6 +594,37 @@ fn parse_ddg_lite(html: &str) -> Vec<SearchResult> {
         .collect()
 }
 
+/// Bing's results page: each result's own address is base64 in its redirect ("u=a1…").
+async fn bing(query: &str) -> Result<Vec<SearchResult>, String> {
+    let html = HTTP.get("https://www.bing.com/search").query(&[("q", query), ("setlang", "en")]).send().await.map_err(|e| e.to_string())?.text().await.map_err(|e| e.to_string())?;
+    Ok(parse_bing(&html))
+}
+
+fn parse_bing(html: &str) -> Vec<SearchResult> {
+    let doc = Html::parse_document(html);
+    let (link, snippet) = (selector("h2 a"), selector(".b_caption p"));
+    doc.select(&selector("li.b_algo"))
+        .filter_map(|block| {
+            let a = block.select(&link).next()?;
+            let url = decode_bing_link(a.value().attr("href")?)?;
+            let title = clean(&a.text().collect::<String>());
+            let text = block.select(&snippet).next().map(|s| clean(&s.text().collect::<String>())).unwrap_or_default();
+            (!title.is_empty()).then_some(SearchResult { title, url, snippet: text })
+        })
+        .take(RESULT_COUNT)
+        .collect()
+}
+
+fn decode_bing_link(raw: &str) -> Option<String> {
+    use base64::Engine;
+    if !raw.contains("bing.com/ck/") {
+        return raw.starts_with("http").then(|| raw.to_string());
+    }
+    let encoded = raw.split(['?', '&']).find_map(|p| p.strip_prefix("u=a1"))?;
+    let url = String::from_utf8(base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(encoded.trim_end_matches('=')).ok()?).ok()?;
+    url.starts_with("http").then_some(url)
+}
+
 fn decode_ddg_link(raw: &str) -> String {
     if let Some(i) = raw.find("uddg=") {
         let enc = raw[i + 5..].split('&').next().unwrap_or("");
@@ -732,6 +852,34 @@ mod tests {
         assert_eq!(whole_sentences("Short fragment without an end"), "Short fragment without an end …");
         assert_eq!(whole_sentences("Complete."), "Complete.");
         assert_eq!(r[1].snippet, "Snippet two");
+    }
+
+    /// Sir, 2026-11-22: search "much better", with its sources. Bing's page (its shape on that
+    /// day: the address base64 in the redirect) joins DuckDuckGo's, each page once, and the
+    /// sources of a search are listed and named.
+    #[test]
+    fn a_second_engine_and_the_sources_of_a_search() {
+        let html = r#"<ol><li class="b_algo" data-id><h2><a target="_blank" href="https://www.bing.com/ck/a?!&amp;&amp;p=1e&amp;u=a1aHR0cHM6Ly93d3cuZnJhbmtmdXJ0LWFpcnBvcnQuY29tL2VuLmh0bWw&amp;ntb=1">Frankfurt <b>Airport</b></a></h2>
+            <div class="b_caption"><p class="b_lineclamp2">Germany's largest airport.</p></div></li>
+            <li class="b_algo"><h2><a href="https://example.org/two/">Two</a></h2></li></ol>"#;
+        let bing = parse_bing(html);
+        assert_eq!(bing.iter().map(|r| r.url.as_str()).collect::<Vec<_>>(), ["https://www.frankfurt-airport.com/en.html", "https://example.org/two/"]);
+        assert_eq!((bing[0].title.as_str(), bing[0].snippet.as_str()), ("Frankfurt Airport", "Germany's largest airport."));
+        let r = |url: &str| SearchResult { title: url.into(), url: url.into(), snippet: String::new() };
+        let both = interleave(vec![r("https://a.org"), r("https://example.org/two"), r("https://c.org")], bing);
+        assert_eq!(both.iter().map(|r| r.url.as_str()).collect::<Vec<_>>(), ["https://a.org", "https://www.frankfurt-airport.com/en.html", "https://example.org/two", "https://c.org"]);
+
+        let result = "Wikipedia: Frankfurt Airport is …\n\nWeb results:\n1. Frankfurt Airport — Germany's largest (and busiest) airport. (https://www.frankfurt-airport.com/en.html)\n2. Two — x (https://example.org/two)\n\nPage extract from https://example.org/two:\ntext";
+        assert_eq!(sources_of(result), [("Wikipedia".to_string(), String::new()), ("Frankfurt Airport".into(), "https://www.frankfurt-airport.com/en.html".into()), ("Two".into(), "https://example.org/two".into())]);
+        assert_eq!(sources_answer("What's the weather like?"), None);
+        let before = std::time::Instant::now();
+        note_sources(result);
+        let shown = sources_since(before).unwrap();
+        assert!(shown.starts_with("Sources:\n1. Wikipedia\n2. Frankfurt Airport — https://www.frankfurt-airport.com/en.html"), "{shown}");
+        for asked in ["What are your sources?", "Where did you get that from?", "Woher weißt du das?", "sources please"] {
+            let answer = sources_answer(asked).unwrap_or_else(|| panic!("{asked}"));
+            assert!(answer.ends_with("\nSpoken: From Wikipedia, frankfurt-airport.com and example.org, Sir."), "{answer}");
+        }
     }
 
     #[test]
