@@ -290,7 +290,9 @@ fn disk_bar(ui: &mut Ui, w: &mut Wizard, index: usize) {
     // The pieces, by where they start (MiB): partitions, and free rooms worth showing.
     let mut pieces: Vec<(u64, u64, Option<&os_install::Part>)> = disk.parts.iter().map(|part| (part.start / MIB, (part.start + part.size).div_ceil(MIB), Some(part))).collect();
     pieces.extend(disk.free().into_iter().filter(|(from, to)| to - from >= 64).map(|(from, to)| (from, to, None)));
-    if pieces.is_empty() {
+    // (A disk that is erased whole, or has nothing on it, is one piece.)
+    if pieces.is_empty() || room.is_some() && w.way == Way::Erase {
+        pieces.clear();
         pieces.push((0, disk.size / MIB, None));
     }
     pieces.sort_by_key(|piece| piece.0);

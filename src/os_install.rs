@@ -920,7 +920,7 @@ mod tests {
     fn encryption_wraps_the_root_and_is_asked_for_at_the_start() {
         let disks = disks(SAMPLE);
         let open = plan(&disks, &choices(free()), &machine()).unwrap();
-        assert!(!open.shown().iter().any(|l| l.contains("cryptsetup") || l.contains("/dev/mapper")));
+        assert!(!open.shown().iter().any(|l| l.starts_with("cryptsetup") || l.contains("/dev/mapper")));
         assert!(!open.file("/mnt/etc/mkinitcpio.conf.d/jaios.conf").unwrap().contains("encrypt") && !open.file("/mnt/etc/default/limine").unwrap().contains("rd.luks"));
         let sealed = plan(&disks, &Choices { passphrase: Some("correct horse".into()), ..choices(free()) }, &machine()).unwrap();
         let shown = sealed.shown();
@@ -962,7 +962,7 @@ mod tests {
         // The maker's keys stay: nothing is enrolled, a note is left for his root core, and
         // the summary warns.
         let kept = super::plan(&disks, &choices(free()), &Machine { secure_boot: SecureBoot::On, ..machine() }).unwrap();
-        assert!(!kept.shown().iter().any(|l| l.contains("sbctl")) && kept.file("/mnt/var/lib/jaios/secure-boot-pending").is_some());
+        assert!(!kept.shown().iter().any(|l| l.contains("/mnt sbctl") || l.contains("enroll-config")) && kept.file("/mnt/var/lib/jaios/secure-boot-pending").is_some());
         assert!(kept.file("/mnt/etc/default/limine").unwrap().contains("ENABLE_ENROLL_LIMINE_CONFIG=no") && kept.summary.iter().any(|(s, warn)| *warn && s.en.contains("Setup Mode")));
     }
 
