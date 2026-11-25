@@ -1,0 +1,38 @@
+# J.A.I.OS itself: nothing of its own, it names what the system is made of. J.A.I. is the
+# desktop, the login screen and the installer; KWin (KDE Plasma 6) is the compositor.
+# The kernel, the graphics driver and the programs Sir gets with it (Steam, Firefox, Discover,
+# Flatpak, paru) are the installer's choice: os/packages/target.txt.
+
+_repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+
+pkgname=jaios
+pkgver="$(sed -n 's/^version = "\(.*\)"$/\1/p' "$_repo/Cargo.toml" | head -n 1)"
+pkgrel="${JAIOS_PKGREL:-1}"
+pkgdesc="J.A.I.OS: an Arch-based system whose desktop, login screen and installer are J.A.I."
+arch=('any')
+url="https://github.com/JayKaey/JAI"
+license=('custom')
+depends=(
+  "jai=$pkgver-$pkgrel" "jaios-settings=$pkgver-$pkgrel"
+  # The compositor and the session it starts (startplasma-wayland), KDE's services he talks to.
+  'kwin' 'plasma-workspace' 'plasma-integration' 'xorg-xwayland' 'kscreen' 'polkit-kde-agent'
+  'xdg-desktop-portal-kde' 'breeze' 'breeze-icons' 'qt6-wayland'
+  # From power-on to the desktop.
+  'limine' 'plymouth' 'greetd' 'sbctl'
+  # btrfs with a snapshot before each update.
+  'btrfs-progs' 'snapper' 'snap-pac'
+  # Sound and network.
+  'pipewire' 'pipewire-pulse' 'pipewire-alsa' 'wireplumber' 'networkmanager'
+  # CachyOS underneath.
+  'cachyos-keyring' 'cachyos-mirrorlist' 'cachyos-settings'
+)
+optdepends=(
+  'limine-snapper-sync: the snapshots in the boot menu'
+  'limine-mkinitcpio-hook: the boot menu follows the kernels'
+  'plasma-desktop: KDE Plasma as the safe mode (plasmashell)'
+)
+
+package() {
+  # (A package of nothing but its dependencies.)
+  true
+}

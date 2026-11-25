@@ -1,0 +1,16 @@
+# J.A.I.OS's KWin, for every user who has set nothing of his own.
+# (The colours and the fonts are in kdeglobals, which `jai --os-look` writes.)
+
+[org.kde.kdecoration2]
+library=org.kde.breeze
+theme=Breeze
+BorderSize=None
+BorderSizeAuto=false
+
+[Windows]
+# J.A.I. places his own windows (holo_stage); KWin puts other programs' in the middle.
+Placement=Centered
+
+[Effect-overview]
+# No hot corner: the corners are the desktop's.
+BorderActivate=9

@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Install J.A.I.OS
+Name[de]=J.A.I.OS installieren
+Icon=jaios
+# As root (sudoers.d/liveuser), its output in the journal: the stick forwards the journal to the
+# serial port, where the workflow reads the installer's "JAIOS-INSTALLER-READY".
+Exec=systemd-cat --identifier=jaios-installer sudo /usr/lib/jai/jai --os-install
+Terminal=false
+OnlyShowIn=KDE;
+X-KDE-autostart-phase=2

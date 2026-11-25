@@ -1,0 +1,253 @@
+# J.A.I.OS: builds J.A.I. on Arch, packs J.A.I.OS's three packages (os/pkg: jai, jaios-settings,
+# jaios) into the pacman repository [jaios], builds the install stick from them (os/iso, with
+# mkarchiso) and starts the stick in QEMU until J.A.I.'s installer says its window is up.
+#
+# - A push to main (or a tag `v…`) publishes the packages as the rolling release `jaios-repo`:
+#   that release is the repository an installed J.A.I.OS updates from.
+# - A tag `v…` also attaches `jaios-<version>-x86_64.iso` and its `.sha256` to that version's
+#   release, once the `Release` workflow has made it.
+# - Every run keeps the packages, the ISO, the look J.A.I. wrote (`jai --os-look`) and the QEMU
+#   check's screen and serial log as artifacts.
+name: J.A.I.OS
+
+on:
+  push:
+    branches: [main, v3.2-tested-features]
+    tags: ['v*']
+    paths: ['os/**', 'src/os_*', '.github/workflows/jaios.yml']
+  workflow_dispatch:
+
+env:
+  # whisper-rs-sys's own Linux bindings (see linux.yml), and whisper.cpp for any PC rather than
+  # the runner's CPU (see release.yml).
+  WHISPER_DONT_GENERATE_BINDINGS: "1"
+  GGML_NATIVE: "OFF"
+  # A failed build as errors anyone can read (the log needs a sign-in), as linux.yml has them.
+  FAILURES: |
+    /^error(\[|:)|: error: / { print "::error::" $0 }
+    /^---- .* stdout ----$/ { if (m) print "::error::" m; m = $0; next }
+    m && (/^note: run with/ || /^failures:$/) { print "::error::" m; m = ""; next }
+    m && NF { m = m "%0A" $0 }
+    END { if (m) print "::error::" m }
+  # The end of a log as one annotation: `echo "::error title=…::$(tail -c 3000 file | sed "$ONE_LINE")"`.
+  ONE_LINE: ':a;N;$!ba;s/%/%25/g;s/\r//g;s/\n/%0A/g'
+
+jobs:
+  packages:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    container: archlinux:latest
+    steps:
+      - name: Arch's build tools and what J.A.I. links against
+        run: |
+          pacman -Sy --noconfirm archlinux-keyring
+          pacman -Su --noconfirm --needed base-devel rust cmake clang alsa-lib opus git
+      - uses: actions/checkout@v7
+        with:
+          # (Every commit: their count is the packages' release number.)
+          fetch-depth: 0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+          key: jaios-bundled-bindings
+      - name: Build J.A.I.
+        shell: bash
+        run: cargo build --release 2>&1 | tee build.txt || { awk "$FAILURES" build.txt; exit 1; }
+      # makepkg refuses to run as root: a user of its own builds the three packages.
+      - name: The packages
+        shell: bash
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          release="$(git rev-list --count HEAD)"
+          useradd -m builder
+          mkdir -p repo && chown -R builder: repo os/pkg
+          for package in jai jaios-settings jaios; do
+            (cd "os/pkg/$package" && sudo -u builder env JAI_BIN="$GITHUB_WORKSPACE/target/release/jai" JAIOS_PKGREL="$release" \
+              PKGDEST="$GITHUB_WORKSPACE/repo" BUILDDIR=/tmp/makepkg PKGEXT=.pkg.tar.zst makepkg -d -f --nocheck) 2>&1 | tee -a packages.txt \
+              || { echo "::error title=Package $package::$(tail -c 3000 packages.txt | sed "$ONE_LINE")"; exit 1; }
+          done
+          cd repo
+          repo-add jaios.db.tar.zst ./*.pkg.tar.zst
+          # (A release holds no links: the database under its plain names.)
+          for part in db files; do cp --remove-destination "$(readlink -f "jaios.$part")" "jaios.$part"; done
+          rm -f jaios.db.tar.zst* jaios.files.tar.zst*
+          echo "::notice title=Packages::$(ls -s --block-size=K | tail -n +2 | sed "$ONE_LINE")"
+      - name: The look J.A.I. writes
+        shell: bash
+        run: target/release/jai --os-look look
+      - uses: actions/upload-artifact@v7
+        with:
+          name: jaios-repo
+          path: repo/
+          retention-days: 30
+      - uses: actions/upload-artifact@v7
+        with:
+          name: jaios-look
+          path: look/
+          retention-days: 30
+
+  # The rolling release `jaios-repo` is the pacman repository:
+  #   [jaios]  Server = https://github.com/<owner>/<repository>/releases/download/jaios-repo
+  publish:
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    needs: packages
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    concurrency: jaios-repo
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: jaios-repo
+          path: repo
+      - name: The repository
+        shell: bash
+        run: |
+          if ! gh release view jaios-repo > /dev/null 2>&1; then
+            gh release create jaios-repo --target "$GITHUB_SHA" --latest=false --title "J.A.I.OS packages" \
+              --notes "J.A.I.OS's own pacman repository \`[jaios]\`: J.A.I., J.A.I.OS's settings and J.A.I.OS itself, as the \`J.A.I.OS\` workflow built them last. An installed J.A.I.OS updates from here; nothing in it is for downloading by hand."
+          fi
+          # The packages first and the database last, so it never names a file that is not there
+          # yet; then what the database no longer names goes.
+          gh release upload jaios-repo repo/*.pkg.tar.zst --clobber
+          gh release upload jaios-repo repo/jaios.db repo/jaios.files --clobber
+          for old in $(gh release view jaios-repo --json assets --jq '.assets[].name'); do
+            [ -e "repo/$old" ] || gh release delete-asset jaios-repo "$old" --yes
+          done
+          echo "::notice title=jaios-repo::$(ls repo | sed "$ONE_LINE")"
+
+  iso:
+    needs: packages
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    container:
+      image: archlinux:latest
+      # (mkarchiso mounts and chroots; QEMU takes the runner's KVM.)
+      options: --privileged
+    steps:
+      - name: archiso, QEMU with UEFI
+        run: |
+          pacman -Sy --noconfirm archlinux-keyring
+          pacman -Su --noconfirm --needed archiso git libarchive qemu-system-x86 edk2-ovmf socat
+      # CachyOS's packages are signed: its key as CachyOS's own instructions add it, then its
+      # keyring from its repository. mkarchiso checks with this keyring.
+      - name: CachyOS's keys
+        shell: bash
+        run: |
+          pacman-key --init
+          pacman-key --recv-keys F3B607488DB35A47 --keyserver keyserver.ubuntu.com || pacman-key --recv-keys F3B607488DB35A47 --keyserver hkps://keys.openpgp.org
+          pacman-key --lsign-key F3B607488DB35A47
+          printf '[cachyos]\nServer = https://mirror.cachyos.org/repo/$arch/$repo\n' >> /etc/pacman.conf
+          pacman -Sy --noconfirm cachyos-keyring
+          pacman-key --populate cachyos
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: jaios-repo
+          path: repo
+      # The stick is built from the packages of this run; its BIOS menu's head and picture are
+      # J.A.I.'s own, out of jaios-settings.
+      - name: The profile
+        shell: bash
+        run: |
+          sed -i "s|%JAIOS_REPO%|$GITHUB_WORKSPACE/repo|" os/iso/pacman.conf
+          bsdtar -xf repo/jaios-settings-*.pkg.tar.zst -C /tmp usr/share/jaios/iso
+          cp /tmp/usr/share/jaios/iso/splash.png /tmp/usr/share/jaios/iso/archiso_head.cfg os/iso/syslinux/
+      - name: The install stick
+        shell: bash
+        run: |
+          mkarchiso -v -w /tmp/archiso -o out os/iso > iso.txt 2>&1 || { awk "$FAILURES" iso.txt; echo "::error title=mkarchiso::$(tail -c 3000 iso.txt | sed "$ONE_LINE")"; exit 1; }
+          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)"
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then version="${GITHUB_REF_NAME#v}"; fi
+          iso="jaios-$version-x86_64.iso"
+          mv out/*.iso "out/$iso"
+          (cd out && sha256sum "$iso" > "$iso.sha256")
+          echo "ISO=out/$iso" >> "$GITHUB_ENV"
+          echo "::notice title=Install stick::$iso, $(( $(stat -c %s "out/$iso") / 1048576 )) MiB; the largest packages: $(pacman -Qi --root /tmp/archiso/x86_64/airootfs 2> /dev/null | awk '/^Name/ { n = $3 } /^Installed Size/ { print $4 $5, n }' | sort -hr | head -n 12 | sed "$ONE_LINE")"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: jaios-iso
+          path: out/
+          retention-days: 14
+          compression-level: 0
+      # GitHub takes no release file of 2 GiB or more.
+      - name: Under 2 GiB
+        shell: bash
+        run: |
+          size="$(stat -c %s "$ISO")"
+          if [ "$size" -ge 2147483648 ]; then echo "::error title=Install stick::$ISO is $size bytes: 2 GiB or more, too large for a GitHub release"; exit 1; fi
+      # The stick starts by UEFI without a screen; its journal comes out of the serial port
+      # (airootfs/etc/systemd/journald.conf.d/live.conf), where the installer's own line says
+      # that its window is up.
+      - name: It starts, and the installer's window comes up
+        shell: bash
+        run: |
+          cp /usr/share/edk2/x64/OVMF_VARS.4m.fd vars.fd
+          accel=tcg; if [ -w /dev/kvm ]; then accel=kvm; fi
+          qemu-system-x86_64 -machine "q35,accel=$accel" -cpu max -smp 4 -m 6144 \
+            -drive if=pflash,format=raw,readonly=on,file=/usr/share/edk2/x64/OVMF_CODE.4m.fd -drive if=pflash,format=raw,file=vars.fd \
+            -cdrom "$ISO" -vga none -device virtio-vga -display none -nic user,model=virtio-net-pci \
+            -serial file:serial.log -monitor unix:monitor.sock,server,nowait -daemonize -pidfile qemu.pid
+          ready=1
+          for _ in $(seq 1 240); do
+            if grep -q -a JAIOS-INSTALLER-READY serial.log 2> /dev/null; then ready=0; break; fi
+            kill -0 "$(cat qemu.pid)" 2> /dev/null || break
+            sleep 5
+          done
+          # (A moment for the window to be drawn; then the screen as QEMU has it.)
+          sleep 5
+          echo "screendump screen.png -f png" | socat - UNIX-CONNECT:monitor.sock > /dev/null || true
+          sleep 2
+          echo quit | socat - UNIX-CONNECT:monitor.sock > /dev/null || true
+          log="$(tr -cd '\11\12\40-\176' < serial.log | tail -c 3000 | sed "$ONE_LINE")"
+          if [ "$ready" = 0 ]; then
+            echo "::notice title=Install stick ($accel)::The installer's window came up.%0A$log"
+          else
+            echo "::error title=Install stick ($accel)::The installer never said JAIOS-INSTALLER-READY.%0A$log"
+          fi
+          exit "$ready"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: jaios-boot-check
+          path: |
+            serial.log
+            screen.png
+            iso.txt
+          retention-days: 30
+
+  # A tag's release is made by the `Release` workflow, which replaces an older one of the same
+  # tag: the ISO is attached once that workflow's run for this tag has finished.
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: iso
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+    permissions:
+      contents: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: jaios-iso
+          path: out
+      - name: The ISO on the release
+        shell: bash
+        run: |
+          for _ in $(seq 1 300); do
+            state="$(gh run list --workflow release.yml --branch "$GITHUB_REF_NAME" --commit "$GITHUB_SHA" --limit 1 --json status,conclusion --jq '.[0] | .status + " " + (.conclusion // "")' || true)"
+            case "$state" in
+              "completed success") break ;;
+              completed*) echo "::error title=Release::The Release workflow ended as '$state': there is no release to attach the ISO to"; exit 1 ;;
+            esac
+            sleep 60
+          done
+          gh release upload "$GITHUB_REF_NAME" out/*.iso out/*.sha256 --clobber
+          echo "::notice title=Release::$(ls out | sed "$ONE_LINE")"

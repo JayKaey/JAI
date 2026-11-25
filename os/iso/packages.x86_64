@@ -1,0 +1,85 @@
+# The install stick: enough of J.A.I.OS to show J.A.I.'s installer on any PC. The system itself
+# is installed online (os/packages/target.txt), so nothing is here for its own sake.
+# Budget: the ISO stays under 2 GiB (the workflow fails beyond it). First to go when it does
+# not: firefox, then konsole.
+
+# J.A.I.OS
+jai
+jaios-settings
+
+# The base, the kernel, what boots the stick
+base
+linux-cachyos
+mkinitcpio
+mkinitcpio-archiso
+syslinux
+amd-ucode
+intel-ucode
+linux-firmware
+sof-firmware
+cachyos-keyring
+cachyos-mirrorlist
+cachyos-settings
+
+# Graphics: Mesa for every card, and NVIDIA's own driver with the open kernel modules as on
+# CachyOS's stick (the boot menu's second entry starts without it, for a card it does not know).
+mesa
+vulkan-radeon
+vulkan-intel
+linux-cachyos-nvidia-open
+nvidia-utils
+
+# KWin and the least of a Plasma session round it
+kwin
+plasma-workspace
+plasma-integration
+xorg-xwayland
+qt6-wayland
+breeze
+breeze-icons
+kscreen
+polkit-kde-agent
+xdg-desktop-portal-kde
+greetd
+plymouth
+
+# Sound and network
+pipewire
+pipewire-pulse
+pipewire-alsa
+wireplumber
+alsa-utils
+networkmanager
+wireless-regdb
+
+# What the installer works with: disks, file systems, the boot loader, pacstrap
+arch-install-scripts
+btrfs-progs
+dosfstools
+e2fsprogs
+exfatprogs
+ntfs-3g
+cryptsetup
+parted
+gptfdisk
+efibootmgr
+limine
+sbctl
+snapper
+os-prober
+sudo
+
+# Fonts for what his own faces have no glyph for
+noto-fonts
+ttf-dejavu
+
+# In a virtual machine (and in the workflow's QEMU check)
+qemu-guest-agent
+spice-vdagent
+vulkan-virtio
+
+# By hand, when something is wrong
+konsole
+nano
+less
+firefox
