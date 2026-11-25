@@ -1,7 +1,9 @@
 //! The first start of J.A.I. on another PC (Sir, 2026-11-19: "When opening JAI on a PC for the
 //! first time there should be an login screen like on the phone"): the address of Sir's PC, a
 //! name and a password; or asking for an account there, with the key his screen shows. Until it
-//! is logged in, a J.A.I. on another PC answers nobody (`fleet::locked`).
+//! is logged in, a J.A.I. on another PC answers nobody (`fleet::locked`). The installer offers
+//! both (Sir, 2026-11-25): LOG IN with his admin account (this PC becomes one of his Main PCs, no
+//! other PC is asked) or REGISTER at his Main PC as above.
 
 use super::{strip_ink, strip_muted};
 use crate::config::ConfigStore;
@@ -28,6 +30,9 @@ struct Form {
     busy: bool,
     /// What the last try came to, and whether that is a fault.
     said: (String, bool),
+    /// The installer's LOG IN: this PC becomes one of Sir's Main PCs with his admin account.
+    /// Off: REGISTER at his Main PC (`main`).
+    own: bool,
     /// The installer's own lines (`installer`), when this is it.
     setup: Option<Setup>,
 }
@@ -44,7 +49,8 @@ struct Setup {
 
 /// The installer's window opens with this form.
 pub(super) fn installing(main: String, update: bool, card: String, brain: Result<&'static str, String>, into: &std::path::Path) {
-    *lock() = Some(Form { main, setup: Some(Setup { card, brain, into: into.display().to_string(), update, finished: false }), ..Default::default() });
+    let own = main.trim().is_empty();
+    *lock() = Some(Form { main, own, setup: Some(Setup { card, brain, into: into.display().to_string(), update, finished: false }), ..Default::default() });
 }
 
 /// A step of the installer, for its window.
@@ -76,10 +82,12 @@ pub(super) fn field(ui: &mut Ui, title: &str, text: &mut String, hint: &str, pas
     ui.add_space(6.0);
 }
 
-/// Logs in (or asks for an account, or finishes asking with the key) at Sir's PC.
+/// Logs in (or asks for an account, or finishes asking with the key) at Sir's PC; in the
+/// installer's LOG IN, with his admin account on this PC.
 fn send(rt: &Handle, config: &ConfigStore, form: &mut Form, ask: bool) {
     let (name, password) = (form.name.trim().to_string(), form.password.clone());
     let update = !ask && form.setup.as_ref().is_some_and(|s| s.update);
+    let own = !ask && form.own && form.setup.is_some();
     // (An update logs in with the key this PC holds: no name, no password.)
     if let (Err(e), false) = (crate::accounts::check(&name, true).and_then(|_| crate::accounts::check(&password, false)), update) {
         form.said = (e, true);
@@ -91,6 +99,8 @@ fn send(rt: &Handle, config: &ConfigStore, form: &mut Form, ask: bool) {
     rt.spawn(async move {
         let mut result = if update {
             Ok(String::new())
+        } else if own {
+            crate::admin::log_in_here(&config, &name, &password).map(|()| String::new())
         } else if ask {
             crate::fleet::ask_for_account(&main, &name, &password).await
         } else {
@@ -109,8 +119,9 @@ fn send(rt: &Handle, config: &ConfigStore, form: &mut Form, ask: bool) {
                     setup.finished = true;
                 }
             }
-            // (Sir's PC may no longer take this PC's key: the login comes back.)
-            if let (Some(setup), true) = (form.setup.as_mut(), update && result.is_err()) {
+            // (Sir's PC may no longer take this PC's key: the login comes back. A Main PC's own
+            // admin account stays: its UPDATE is tried again as it is.)
+            if let (Some(setup), true) = (form.setup.as_mut(), update && result.is_err() && !form.own) {
                 setup.update = false;
             }
             form.said = result.map_or_else(|e| (e, true), |m| (m, false));
@@ -123,12 +134,14 @@ fn body(ui: &mut Ui, rt: &Handle, config: &ConfigStore) {
     let mut guard = lock();
     let form = guard.get_or_insert_with(|| Form { main: config.read(|c| c.main_pc.clone()), ..Default::default() });
     let update = form.setup.as_ref().is_some_and(|s| s.update);
-    let about = if update {
-        "J.A.I. is installed on this PC: UPDATE brings him to the version Sir's PC runs, with anything new he needs."
-    } else if form.setup.is_some() {
-        "Install J.A.I. on this PC: log in with your account at Sir's PC, or ask for one (a key appears on his screen). J.A.I. himself comes from GitHub, nothing from Sir's PC."
-    } else {
-        "This PC runs J.A.I. as one of Sir's. Log in with your account, or ask for one: a key appears on Sir's screen."
+    // (Only the installer offers LOG IN: a J.A.I. that runs already is one of Sir's PCs or not.)
+    let own = form.own && form.setup.is_some();
+    let about = match (update, own, form.setup.is_some()) {
+        (true, true, _) => "J.A.I. is installed on this PC, one of your Main PCs: UPDATE puts this newest J.A.I. in place, with anything new he needs.",
+        (true, false, _) => "J.A.I. is installed on this PC: UPDATE brings him to the version Sir's PC runs, with anything new he needs.",
+        (false, true, _) => "Install J.A.I. on this PC as one of your Main PCs: log in with your admin account, the same name and password as on your other PCs. No other PC is asked; J.A.I. comes from GitHub.",
+        (false, false, true) => "Install J.A.I. on this PC: log in with your account at Sir's PC, or ask for one (a key appears on his screen). J.A.I. himself comes from GitHub, nothing from Sir's PC.",
+        (false, false, false) => "This PC runs J.A.I. as one of Sir's. Log in with your account, or ask for one: a key appears on Sir's screen.",
     };
     ui.label(RichText::new(about).font(crate::holo::font(Face::Body, 13.0)).color(strip_muted()));
     holo_ui::rule(ui);
@@ -146,12 +159,28 @@ fn body(ui: &mut Ui, rt: &Handle, config: &ConfigStore) {
     if !runs_here {
         return;
     }
-    field(ui, "Sir's PC", &mut form.main, "https://…", false);
+    if form.setup.is_some() && !update {
+        ui.horizontal(|ui| {
+            ui.add_enabled_ui(!form.busy, |ui| {
+                for (label, mine) in [("LOG IN", true), ("REGISTER", false)] {
+                    if holo_ui::key_on(ui, label, own == mine).clicked() && own != mine {
+                        form.own = mine;
+                        form.said = Default::default();
+                    }
+                }
+            });
+        });
+        ui.add_space(6.0);
+    }
+    if !own {
+        field(ui, "Sir's PC", &mut form.main, "https://…", false);
+    }
     if !update {
-        field(ui, "Name", &mut form.name, "3 to 20 characters", false);
+        field(ui, if own { "Admin account" } else { "Name" }, &mut form.name, "3 to 20 characters", false);
         field(ui, "Password", &mut form.password, "3 to 20 characters", true);
     }
-    if form.asked {
+    let asked = form.asked && !own;
+    if asked {
         field(ui, "The key on Sir's screen", &mut form.key, "six digits", false);
     }
     ui.horizontal(|ui| {
@@ -160,7 +189,7 @@ fn body(ui: &mut Ui, rt: &Handle, config: &ConfigStore) {
                 if holo_ui::key(ui, "UPDATE").clicked() {
                     send(rt, config, form, false);
                 }
-            } else if form.asked {
+            } else if asked {
                 if holo_ui::key(ui, "CREATE ACCOUNT").clicked() {
                     send(rt, config, form, false);
                 }
@@ -168,7 +197,7 @@ fn body(ui: &mut Ui, rt: &Handle, config: &ConfigStore) {
                 if holo_ui::key(ui, if form.setup.is_some() { "INSTALL" } else { "LOG IN" }).clicked() {
                     send(rt, config, form, false);
                 }
-                if holo_ui::key(ui, "ASK FOR AN ACCOUNT").clicked() {
+                if !own && holo_ui::key(ui, "ASK FOR AN ACCOUNT").clicked() {
                     send(rt, config, form, true);
                 }
             }
@@ -261,19 +290,34 @@ mod tests {
             assert!(!frame.find_text(shown).is_empty(), "'{shown}' is not in the login");
         }
         assert!(frame.find_text("secret").is_empty(), "the password is never shown");
-        // The installer: the card and the brain it allows, where he goes, INSTALL; a card too
-        // small for him (no keys at all); and a PC that holds its key already (UPDATE, no login).
-        let installer = [(Ok(crate::installer::SMALL_BRAIN), false, "panel_installer", "INSTALL"), (crate::installer::brain_for(Some(2048)), false, "panel_installer_refused", "2.0 GB"), (Ok(crate::installer::SMALL_BRAIN), true, "panel_installer_update", "UPDATE")];
-        for (brain, update, picture, shown) in installer {
-            installing("https://jai.example.ts.net".into(), update, "Graphics memory 6 GB".into(), brain, std::path::Path::new(r"C:\Users\Max\AppData\Local\Programs\JAI"));
+        // The installer, with the card and the brain it allows and where he goes: LOG IN with his
+        // admin account on a new PC (no other PC asked, Sir, 2026-11-25), REGISTER at his Main PC,
+        // a card too small for him (no keys at all), the UPDATE of a PC that holds its key, and
+        // that of one of his Main PCs (no login either).
+        let pc = "https://jai.example.ts.net";
+        let small = || Ok(crate::installer::SMALL_BRAIN);
+        let installer: [(&str, bool, Result<&'static str, String>, &str, &[&str], &[&str], &str); 5] = [
+            ("", false, small(), "panel_installer_login", &["LOG IN", "REGISTER", "ADMIN ACCOUNT", "PASSWORD", "INSTALL"], &["SIR'S PC", "NAME", "ASK FOR AN ACCOUNT"], "same"),
+            (pc, false, small(), "panel_installer", &["LOG IN", "REGISTER", "SIR'S PC", "NAME", "PASSWORD", "INSTALL", "ASK FOR AN ACCOUNT"], &["ADMIN ACCOUNT"], "himself"),
+            (pc, false, crate::installer::brain_for(Some(2048)), "panel_installer_refused", &[], &["REGISTER", "PASSWORD", "INSTALL"], "2.0 GB"),
+            (pc, true, small(), "panel_installer_update", &["SIR'S PC", "UPDATE"], &["REGISTER", "PASSWORD", "ASK FOR AN ACCOUNT"], "version"),
+            ("", true, small(), "panel_installer_update_main", &["UPDATE"], &["SIR'S PC", "REGISTER", "PASSWORD"], "newest"),
+        ];
+        for (main, update, brain, picture, shown, hidden, said) in installer {
+            installing(main.into(), update, "Graphics memory 6 GB".into(), brain, std::path::Path::new(r"C:\Users\Max\AppData\Local\Programs\JAI"));
             let frame = stage.frames(4, &mut |ctx| {
                 egui::Window::new("login").title_bar(false).fixed_pos(egui::pos2(10.0, 10.0)).fixed_size(egui::vec2(440.0, 420.0)).show(ctx, |ui| body(ui, rt.handle(), &config));
             });
             stage.raster(&frame).save(picture);
             assert_eq!(visual::clipped_text(&frame), Vec::<String>::new(), "{picture}");
-            assert!(!frame.find_text(shown).is_empty(), "'{shown}' is not in {picture}");
-            assert_eq!(frame.find_text("ASK FOR AN ACCOUNT").is_empty(), picture != "panel_installer", "{picture}");
-            assert_eq!(frame.find_text("PASSWORD").is_empty(), picture != "panel_installer", "{picture}");
+            assert_eq!(visual::text_over_text(&frame), Vec::<String>::new(), "{picture}");
+            assert!(!frame.find_text(said).is_empty(), "'{said}' is not in {picture}");
+            for label in shown {
+                assert!(!frame.find_exact(label).is_empty(), "'{label}' is not in {picture}");
+            }
+            for label in hidden {
+                assert!(frame.find_exact(label).is_empty(), "'{label}' is in {picture}");
+            }
         }
         // An update with the key this PC holds goes on without a name or a password.
         let mut form = Form { setup: Some(Setup { card: String::new(), brain: Ok(crate::installer::SMALL_BRAIN), into: String::new(), update: true, finished: false }), ..Default::default() };
@@ -283,6 +327,14 @@ mod tests {
         let mut form = Form { setup: form.setup.take().map(|s| Setup { update: false, ..s }), ..Default::default() };
         send(rt.handle(), &config, &mut form, false);
         assert!(!form.busy && form.said.1, "{:?}", form.said);
+        // LOG IN as well; with both it goes on, asking no other PC. (This runtime never runs
+        // what was spawned: nothing is made or installed here.)
+        form.own = true;
+        send(rt.handle(), &config, &mut form, false);
+        assert!(!form.busy && form.said.1, "{:?}", form.said);
+        (form.name, form.password) = ("Mustermann".into(), "geheim123".into());
+        send(rt.handle(), &config, &mut form, false);
+        assert!(form.busy && !form.said.1, "{:?}", form.said);
         *lock() = None;
     }
 }

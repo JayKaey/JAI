@@ -159,11 +159,24 @@ async fn unpack(archive: &Path, into: &Path) -> Result<(), String> {
     }
 }
 
-/// Installs J.A.I. into the current folder (the install folder) from GitHub, after the login at
-/// Sir's PC: this program, his engines, the voice lock's model, then his models; puts him in the
-/// Start menu and starts him. `said`: each step, for the window.
+/// Whether this PC is logged in already, so the installer's UPDATE needs no login: one of Sir's
+/// Main PCs with his admin account, or another PC holding its key to his Main PC.
+pub fn logged_in(config: &ConfigStore) -> bool {
+    if crate::fleet::is_client(&config.read(|c| c.main_pc.clone())) {
+        crate::fleet::key(config).is_some()
+    } else {
+        crate::accounts::admin(&config.read(|c| c.memory_db_path.clone())).is_some()
+    }
+}
+
+/// Installs J.A.I. into the current folder (the install folder) from GitHub, after the login (his
+/// admin account on a Main PC, or an account at his Main PC): this program, his engines, the
+/// voice lock's model, then his models; puts him in the Start menu and starts him. `said`: each
+/// step, for the window.
 pub async fn install(config: &ConfigStore, said: impl Fn(String) + Sync) -> Result<(), String> {
-    crate::fleet::key(config).ok_or("Log in first.")?;
+    if !logged_in(config) {
+        return Err("Log in first.".into());
+    }
     let http = reqwest::Client::builder().connect_timeout(Duration::from_secs(15)).read_timeout(Duration::from_secs(120)).build().map_err(|e| e.to_string())?;
     config.snapshot().save().map_err(|e| e.to_string())?;
     let exe = std::env::current_dir().map_err(|e| e.to_string())?.join(PROGRAM);
@@ -331,6 +344,20 @@ mod tests {
         assert!(brain_for(None).is_err());
         // (This PC's own card is read.)
         assert!(vram_mb().is_some_and(|mb| mb >= 1024), "{:?}", vram_mb());
+    }
+
+    /// One of Sir's Main PCs (Sir, 2026-11-25) is logged in once his admin account is made there:
+    /// its UPDATE and the install itself need no other PC.
+    #[test]
+    fn a_main_pc_is_logged_in_with_his_admin_account() {
+        let dir = std::env::temp_dir().join(format!("jai_install_main_{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("jai_memory.db").to_string_lossy().to_string();
+        let config = ConfigStore::new(JaiConfig { memory_db_path: db.clone(), ..Default::default() });
+        assert!(!logged_in(&config), "no admin account yet");
+        crate::accounts::make_admin(&db, &crate::vault::Vault::in_memory(), "Mustermann", "geheim123").unwrap();
+        assert!(logged_in(&config));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A new PC takes nothing from Sir's PC (Sir, 2026-11-20): what it fetches is a file of a

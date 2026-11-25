@@ -531,6 +531,29 @@ pub fn set_up(config: &ConfigStore, name: &str, password: &str) -> Result<(), St
     accounts::make_admin(&db, &vault, name, password)
 }
 
+/// Sir logs in with his admin account on a PC he installs J.A.I. on (Sir, 2026-11-25: "i want to
+/// be able to log into my admin account and install JAI without having to connect to my PC and
+/// every PC that is logged into my account is a MAIN pc"): nothing is contacted, and this PC
+/// becomes one of his Main PCs.
+pub fn log_in_here(config: &ConfigStore, name: &str, password: &str) -> Result<(), String> {
+    let db = config.read(|c| c.memory_db_path.clone());
+    own_pc(&db, &crate::vault::Vault::open(&db)?, name, password)?;
+    config.update(|c| c.main_pc.clear());
+    Ok(())
+}
+
+/// The admin account of a PC Sir logs in on: made with that name and password, or, made already,
+/// it must be them (a second try after a broken download).
+fn own_pc(db: &str, vault: &crate::vault::Vault, name: &str, password: &str) -> Result<(), String> {
+    if accounts::admin(db).is_none() {
+        return accounts::make_admin(db, vault, name, password);
+    }
+    match accounts::verify(db, vault, name, password, "setup")? {
+        account if account.admin => Ok(()),
+        _ => Err("That is not the admin account of this PC.".into()),
+    }
+}
+
 // ----------------------------------------------------------- his main PC: the sign-ins ----
 
 /// Sir's sign-ins on his other PCs: key → when that PC last called about it.
@@ -816,6 +839,26 @@ mod tests {
         assert!(may_power(&main) && turned_away(&main, "tell me a joke").is_none() && gate(&main, rt.handle(), &["settings"]).is_empty());
         *lock(&ACCOUNT) = None;
         *lock(&STATE) = State { key: None, grants: Vec::new(), asking: None, up: Vec::new() };
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The installer's LOG IN (Sir, 2026-11-25): his admin account is made on a PC no other PC
+    /// was asked about; made once, only its own name and password log in there again.
+    #[test]
+    fn logging_in_while_installing_makes_this_pc_his_main_pc() {
+        let dir = std::env::temp_dir().join(format!("jai_admin_own_{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("jai_memory.db").to_string_lossy().to_string();
+        let vault = crate::vault::Vault::in_memory();
+        own_pc(&db, &vault, "Mustermann", "geheim123").unwrap();
+        assert!(accounts::admin(&db).is_some_and(|a| a.name == "Mustermann"));
+        own_pc(&db, &vault, "mustermann", "geheim123").expect("the same account again, after a broken download");
+        assert!(own_pc(&db, &vault, "Mustermann", "wrong").is_err());
+        assert!(own_pc(&db, &vault, "Musterfrau", "geheim123").is_err(), "a second admin account");
+        accounts::for_voice(&db, "Max", "").unwrap();
+        vault.set_secret("jai-account", "max", "maxpass").unwrap();
+        assert!(own_pc(&db, &vault, "Max", "maxpass").is_err(), "an account that is not his admin account");
+        assert_eq!(accounts::all(&db).len(), 2);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

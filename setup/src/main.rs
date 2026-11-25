@@ -1,7 +1,8 @@
 //! J.A.I.'s setup: one file that installs him on a new PC or updates him where he is installed.
 //! It carries J.A.I.'s own installer (his program, with the libraries it starts with), unpacks it
-//! into a folder of its own and starts it with `--install`: that window logs in at Sir's PC (for
-//! the account alone) and fetches everything else from GitHub and from where his models come
+//! into a folder of its own and starts it with `--install`: that window logs in (LOG IN with Sir's
+//! admin account, asking no other PC; or REGISTER at his Main PC, for the account alone) and
+//! fetches everything else from GitHub and from where his models come
 //! (eSpeak NG rides in this file as `espeak-ng.zip`, beside the installer). A J.A.I. that runs from
 //! the install folder is asked to quit first, so his program can be replaced (and he starts again
 //! when the update is called off). On Arch the packages he needs come first (pacman, the password

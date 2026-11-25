@@ -402,11 +402,15 @@ that person himself.
 
 ## J.A.I. on other PCs
 
-Sir's PC is always the main one. A friend takes `JAI-setup.exe` from GitHub's Releases page (the
-phone page's "J.A.I. for your Windows PC" leads there too), the one-file setup below. It needs a
-graphics card with 4 GB of memory (under 8 GB it takes the smaller brain, Qwen3.5 2B) and logs in
-at Sir's PC with an account, or asks for one (a key appears on Sir's screen); that is all it takes
-from Sir's PC. Everything else is downloaded from GitHub: JAI and eSpeak NG come inside the setup,
+Every PC logged into Sir's admin account is a Main PC of his; any other PC is registered at one of
+them. The one-file setup below (`JAI-setup.exe` from GitHub's Releases page; the phone page's
+"J.A.I. for your Windows PC" leads there too) opens on that choice. LOG IN takes Sir's admin
+account, the same name and password as on his other Main PCs, and asks no other PC: this PC
+becomes one of his Main PCs, its admin account made with them (on a second try they must match).
+REGISTER is a friend's: the address of Sir's Main PC, then log in there with an account, or ask
+for one (a key appears on Sir's screen); that is all it takes from Sir's PC. Either way it needs a
+graphics card with 4 GB of memory (under 8 GB it takes the smaller brain, Qwen3.5 2B).
+Everything else is downloaded from GitHub: JAI and eSpeak NG come inside the setup,
 his engine from Ollama's release (the version Sir's PC runs, checked by its SHA-256), the voice
 lock's model from sherpa-onnx's. Then come the voice, ears and brain, from where every JAI fetches
 them; the setup adds JAI to the Start menu and starts him. A download the connection cuts off
@@ -430,7 +434,8 @@ GitHub's Releases page has one file for each: `JAI-setup.exe` (Windows) and `JAI
 Visual C++ runtime, DirectML and eSpeak NG, so nothing has to be installed first; on Arch it
 installs the packages below with pacman, asking for the password). On a PC where JAI is installed
 already, the same file updates him: the running JAI quits, UPDATE puts in the version the file
-carries with the key that PC holds (no login), and he starts again (and then takes the version
+carries with the key that PC holds, or on a Main PC with its admin account (no login either way),
+and he starts again (and then takes the version
 Sir's PC runs, if that is another); called off, he starts as he was. It never
 touches a JAI that runs from another folder, such as Sir's own. The files are built from `setup/`
 (a crate of its own that packs the built JAI) by the `Release` workflow, which publishes them when
@@ -444,8 +449,9 @@ the accounts list and the report, and the settings, the Feature Lab (the Tool Fo
 Discord unless that PC's account may do everything there.
 "Close the admin window" ("admin mode off") closes it.
 
-Sir's main PC (one with no main PC of its own) asks once for his admin account, a name and a
-password typed twice, and answers nobody until it is made; from then on it is his. That account
+A Main PC of Sir's (one with no main PC of its own) installed without LOG IN asks once for his
+admin account, a name and a password typed twice, and answers nobody until it is made; from then
+on it is his. That account
 logs in nowhere: it only signs Sir in at another PC, and it is never paused, removed or shown from
 there.
 
@@ -502,9 +508,9 @@ power and sleep over logind, the lock to KDE's own lock screen, and his tray ico
 StatusNotifierItem. Other desktops get what works without KDE (`wmctrl` and `xdotool` on X11,
 `hyprctl` on Hyprland, `xprintidle` for the idle time).
 
-Started on its own, `jai` is the installer: it logs in at Sir's PC, takes his data (never his
-Windows programs), fetches Ollama for Linux and the models, and installs into `~/.local/share/jai`
-with an entry in the applications menu. Only on Windows: WhatsApp Desktop (Linux opens WhatsApp
+Started on its own, `jai` is the installer, with the same LOG IN and REGISTER as on Windows: it
+fetches Ollama for Linux and the models, and installs into `~/.local/share/jai` with an entry in
+the applications menu. Only on Windows: WhatsApp Desktop (Linux opens WhatsApp
 Web) and the microphone's level meter.
 
 ## JAI's own Discord account
