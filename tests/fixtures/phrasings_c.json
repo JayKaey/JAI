@@ -395,6 +395,39 @@
       "could you shut down the computer please",
       "fahr den PC runter",
       "schalte den PC aus"
+    ],
+    "jaios.room": [
+      "make room for J.A.I.OS",
+      "could you make some room for Jay OS please",
+      "free up space for JAI OS",
+      "shrink Windows for J.A.I.OS",
+      "I need you to make room for Jaios",
+      "clear some space for J.A.I. OS on my drive",
+      "mach Platz für J.A.I.OS",
+      "schaff bitte Platz für Jay OS",
+      "kannst du Windows für J.A.I.OS verkleinern"
+    ],
+    "jaios.stick": [
+      "make a J.A.I.OS stick",
+      "put J.A.I.OS on the USB stick",
+      "create a bootable Jay OS USB stick",
+      "I need a JAI OS install stick",
+      "write J.A.I.OS to my USB drive",
+      "can you make me a Jaios stick?",
+      "erstell einen J.A.I.OS-Stick",
+      "mach mir bitte einen Jay OS USB-Stick",
+      "pack J.A.I.OS auf den USB-Stick"
+    ],
+    "jaios.ready": [
+      "is my PC ready for J.A.I.OS?",
+      "can my computer run Jay OS?",
+      "check if this PC is ready for J.A.I.OS",
+      "am I ready for JAI OS",
+      "could I install J.A.I.OS on this machine?",
+      "does my PC meet the requirements for Jaios",
+      "ist mein PC bereit für J.A.I.OS?",
+      "kann mein Rechner Jay OS?",
+      "prüf mal, ob mein PC für J.A.I.OS bereit ist"
     ]
   },
   "heldout": {

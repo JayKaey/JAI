@@ -72,6 +72,8 @@ mod streamdeck_bridge;
 mod discord_bridge;
 mod discord_bot;
 mod discord_voice;
+mod dualboot;
+mod dualboot_disk;
 mod own_windows;
 mod wallpaper;
 mod wave_link;
@@ -301,6 +303,8 @@ struct Cli {
     check_models: bool,
     download_models: bool,
     install: bool,
+    /// A step of J.A.I.OS's that runs with rights (`dualboot_disk::helper`), with its arguments.
+    jaios_step: Option<Vec<String>>,
     selftest: bool,
     speak: bool,
     bench: bool,
@@ -357,6 +361,7 @@ impl Cli {
             check_models: false,
             download_models: false,
             install: false,
+            jaios_step: None,
             selftest: false,
             voice_calibrate: false,
             voice_verify: false,
@@ -389,6 +394,7 @@ impl Cli {
                 "--check-models" => cli.check_models = true,
                 "--download-models" => cli.download_models = true,
                 "--install" => cli.install = true,
+                "--make-room" | "--write-stick" | "--fast-startup-off" => cli.jaios_step = Some(std::iter::once(arg.clone()).chain(args.by_ref()).collect()),
                 "--selftest" => cli.selftest = true,
                 "--voice-calibrate" => cli.voice_calibrate = true,
                 "--voice-verify" => cli.voice_verify = true,
@@ -469,6 +475,12 @@ USAGE: JAI.exe [OPTIONS]
   --download-models   install anything missing (speech models and language model), then exit
   --install           install J.A.I. on this PC as one of Sir's (also when JAI.exe is started on
                       its own, with nothing of his beside it)
+  --make-room <MB> --result <file>
+                      (with rights) shrink C: by that much for J.A.I.OS; the outcome goes into the file
+  --write-stick --disk <n> --size <bytes> --serial <s> --iso <file> --sha <hex> --result <file>
+                      (with rights) write the J.A.I.OS image to that USB stick and read it back
+  --fast-startup-off --result <file>
+                      (with rights) switch Windows' Fast Startup off
   --selftest          offline pipeline test (TTS → VAD → Whisper → wake word → intents → LLM)
   --speak             with --selftest: also play a test sentence on the speakers
   --bench             with --selftest: time Whisper across settings (threads, encoder window, ...)
@@ -623,6 +635,9 @@ fn main() -> ExitCode {
             return if msg.is_empty() { ExitCode::SUCCESS } else { ExitCode::from(2) };
         }
     };
+    if let Some(step) = &cli.jaios_step {
+        return dualboot_disk::helper(step);
+    }
     if !ensure_working_directory() && !cli.is_diagnostic() || cli.install {
         return installer::run();
     }

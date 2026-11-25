@@ -61,6 +61,7 @@ pub const TOOLS: &[&str] = &[
     "countdowns",
     "file_helper",
     "desk_helper",
+    crate::dualboot::TOOL,
 ];
 
 /// "What's my next lesson?", "wann ist meine nächste Stunde?": WebUntis, without the model.
@@ -88,6 +89,7 @@ pub fn command(s: &str, original: &str) -> Option<(&'static str, Value)> {
     // (An order for another PC first: "open the earth on Max's PC" is Max's PC's to carry out.
     // Then games: "whenever I start GTA, …" is a game's routine, not a whenever-rule.)
     crate::fleet::command(s).map(|a| ("other_pc", a)).or_else(|| crate::kit_games::command(s).map(|a| ("games", a)))
+        .or_else(|| crate::dualboot::command(s).map(|a| (crate::dualboot::TOOL, a)))
         .or_else(|| NEXT_LESSON.is_match(s.trim_end_matches(['?', '.', '!'])).then(|| ("next_lesson", serde_json::json!({}))))
         .or_else(|| crate::news::command(s).map(|a| (crate::news::TOOL, a)))
         .or_else(|| crate::where_was_i::command(s).map(|a| ("where_was_i", a)))
@@ -177,6 +179,7 @@ pub async fn run_tool(ctx: &ToolContext, name: &str, args: &Value) -> Result<Str
         "countdowns" => crate::countdowns::run(args),
         "file_helper" => crate::kit_files::run(ctx, args).await,
         "desk_helper" => crate::kit_desk::run(ctx, args).await,
+        crate::dualboot::TOOL => crate::dualboot::run(args).await,
         other => Err(format!("The kit has no tool called '{other}'.")),
     }
 }
@@ -195,6 +198,7 @@ pub fn only_looks(name: &str, args: &Value) -> bool {
             || (name == "pc_helper" && crate::kit_pc::only_looks(args))
             || (name == "file_helper" && crate::kit_files::only_looks(args))
             || (name == "desk_helper" && crate::kit_desk::only_looks(args))
+            || (name == crate::dualboot::TOOL && crate::dualboot::only_looks(args))
             || (name == "code_helper" && crate::kit_code::only_looks(args)))
 }
 

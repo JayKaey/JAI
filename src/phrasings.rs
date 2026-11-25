@@ -147,6 +147,9 @@ const CANON: &[(&str, &str)] = &[
     ("pc.shutdown", "shut down my PC"),
     ("news.country", "give me the most important news from germany"),
     ("news.country_de", "die wichtigsten nachrichten aus deutschland"),
+    ("jaios.room", "make room for J.A.I.OS"),
+    ("jaios.stick", "make a J.A.I.OS stick"),
+    ("jaios.ready", "is my PC ready for J.A.I.OS"),
 ];
 
 /// Other wordings of an order whose road counts as its own (the same thing by another of the
