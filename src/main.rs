@@ -73,6 +73,7 @@ mod discord_bridge;
 mod discord_bot;
 mod discord_voice;
 mod own_windows;
+mod os_look;
 mod wallpaper;
 mod wave_link;
 mod ways;
@@ -301,6 +302,8 @@ struct Cli {
     check_models: bool,
     download_models: bool,
     install: bool,
+    /// Write J.A.I.OS's look (boot animation, boot menu, KDE colours) into this folder.
+    os_look: Option<std::path::PathBuf>,
     selftest: bool,
     speak: bool,
     bench: bool,
@@ -378,6 +381,7 @@ impl Cli {
             live_test: false,
             exhaustive: None,
             monitor: None,
+            os_look: None,
         };
         let mut args = std::env::args().skip(1).peekable();
         while let Some(arg) = args.next() {
@@ -389,6 +393,7 @@ impl Cli {
                 "--check-models" => cli.check_models = true,
                 "--download-models" => cli.download_models = true,
                 "--install" => cli.install = true,
+                "--os-look" => cli.os_look = Some(args.next().ok_or("--os-look needs a folder")?.into()),
                 "--selftest" => cli.selftest = true,
                 "--voice-calibrate" => cli.voice_calibrate = true,
                 "--voice-verify" => cli.voice_verify = true,
@@ -469,6 +474,8 @@ USAGE: JAI.exe [OPTIONS]
   --download-models   install anything missing (speech models and language model), then exit
   --install           install J.A.I. on this PC as one of Sir's (also when JAI.exe is started on
                       its own, with nothing of his beside it)
+  --os-look <dir>     write J.A.I.OS's look into <dir>: the boot animation (Plymouth), the boot
+                      menu's wallpaper and colours (Limine), KDE's and Konsole's colours, the logo
   --selftest          offline pipeline test (TTS → VAD → Whisper → wake word → intents → LLM)
   --speak             with --selftest: also play a test sentence on the speakers
   --bench             with --selftest: time Whisper across settings (threads, encoder window, ...)
@@ -623,6 +630,10 @@ fn main() -> ExitCode {
             return if msg.is_empty() { ExitCode::SUCCESS } else { ExitCode::from(2) };
         }
     };
+    // (Before he looks for his home: the folder is the caller's, and a package build has no home.)
+    if let Some(dir) = &cli.os_look {
+        return os_look::run(dir);
+    }
     if !ensure_working_directory() && !cli.is_diagnostic() || cli.install {
         return installer::run();
     }
