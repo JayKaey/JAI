@@ -1,0 +1,6 @@
+# The bus starts the root core when it is first asked for.
+[D-BUS Service]
+Name=org.jaios.System1
+Exec=/bin/false
+User=root
+SystemdService=jai-system.service

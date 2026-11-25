@@ -142,7 +142,8 @@ impl Switches {
     /// Why this call may not be made; None: it may.
     pub fn refusal(&self, tool: &str, args: &Value) -> Option<String> {
         let keys = keys(tool, args);
-        let allowed = self.allow.iter().any(|a| a == "*" || keys.contains(a));
+        // ("Everything" is everything but root on J.A.I.OS: that is a switch of its own.)
+        let allowed = self.allow.iter().any(|a| (a == "*" && tool != crate::os_orders::TOOL) || keys.contains(a));
         (self.denies(tool, args) || !allowed).then(|| "Sir has not given you that permission.".to_string())
     }
 
@@ -154,7 +155,7 @@ impl Switches {
     /// Whether this one call would be allowed: the tool, or one value of an option.
     pub fn allows(&self, key: &str) -> bool {
         let tool = key.split(':').next().unwrap_or(key);
-        !self.deny.iter().any(|d| d == key) && self.allow.iter().any(|a| a == "*" || a == key || a == tool)
+        !self.deny.iter().any(|d| d == key) && self.allow.iter().any(|a| (a == "*" && tool != crate::os_orders::TOOL) || a == key || a == tool)
     }
 
     /// Allows (or takes back) one key: a tool, or one value of an option.
@@ -821,6 +822,8 @@ pub fn grants(definitions: &[Value]) -> Vec<Grant> {
         .collect();
     // (The PC's power is no tool of the model's: asked for, it is the brain's own dialogue.)
     grants.push(Grant { tool: POWER.into(), about: "Shut down, restart, sleep or lock this PC".into(), values: Vec::new() });
+    // (Root on J.A.I.OS is the kit's, with no schema of the model's: its actions one by one.)
+    grants.push(Grant { tool: crate::os_orders::TOOL.into(), about: "Root on J.A.I.OS: install, remove, update, roll back, run as root".into(), values: crate::os_orders::ACTIONS.iter().map(|a| format!("action={a}")).collect() });
     grants.sort_by(|a, b| a.tool.cmp(&b.tool));
     grants
 }

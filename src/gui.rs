@@ -1545,7 +1545,7 @@ fn native_window(cc: &eframe::CreationContext<'_>) -> isize {
 /// On Linux his windows run on X11 (XWayland under KDE Plasma) when there is one: there a program
 /// may place, raise and pin its windows, which Wayland lets none do.
 #[cfg(not(windows))]
-fn on_x11() -> Option<eframe::EventLoopBuilderHook> {
+pub(crate) fn on_x11() -> Option<eframe::EventLoopBuilderHook> {
     use winit::platform::x11::EventLoopBuilderExtX11;
     std::env::var_os("DISPLAY").map(|_| {
         Box::new(|builder: &mut eframe::EventLoopBuilder<eframe::UserEvent>| {
@@ -2163,7 +2163,7 @@ fn bold(size: f32) -> FontId {
 }
 
 /// Text styles at the interface's font scale (on top of the zoom).
-fn configure_style(ctx: &egui::Context, font_scale: f32) {
+pub(crate) fn configure_style(ctx: &egui::Context, font_scale: f32) {
     use egui::TextStyle;
     let f = font_scale.clamp(0.5, 2.0);
     ctx.style_mut(|s| {

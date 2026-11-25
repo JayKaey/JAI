@@ -341,7 +341,7 @@ const UPGRADE_ORDER_TEXT: &str = if cfg!(windows) { "upgrade all apps with winge
 
 /// (name, id, installed, available) of every app with an update.
 #[cfg(windows)]
-async fn app_updates() -> Result<Vec<(String, String, String, String)>, String> {
+pub(crate) async fn app_updates() -> Result<Vec<(String, String, String, String)>, String> {
     let winget = crate::apps::which("winget").ok_or("winget is not on this PC, Sir.")?;
     let out = crate::shell::run_helper(&winget, ["upgrade", "--accept-source-agreements", "--disable-interactivity"], None, &[], std::time::Duration::from_secs(120)).await.map_err(|e| format!("winget did not run, Sir: {e}"))?;
     Ok(upgrade_rows(&String::from_utf8_lossy(&out.stdout)))
@@ -774,7 +774,7 @@ fn flatpak_rows(out: &str) -> Vec<(String, String, String, String)> {
 /// The updates pacman and Flatpak know of. `checkupdates` (pacman-contrib) reads a copy of the
 /// package database, so nothing needs root; exit code 2 means there are none.
 #[cfg(not(windows))]
-async fn app_updates() -> Result<Vec<(String, String, String, String)>, String> {
+pub(crate) async fn app_updates() -> Result<Vec<(String, String, String, String)>, String> {
     let wait = std::time::Duration::from_secs(120);
     let check = crate::apps::which("checkupdates").ok_or("checkupdates is not installed, Sir. Install it with: sudo pacman -S pacman-contrib")?;
     let out = crate::shell::run_helper(&check, std::iter::empty::<&str>(), None, &[], wait).await.map_err(|e| format!("checkupdates did not run, Sir: {e}"))?;
