@@ -134,6 +134,8 @@ mod hyper_cortex;
 mod image_viewer;
 mod instant_replay;
 mod installer;
+mod os_install;
+mod os_install_run;
 mod integration_registry;
 mod integration_router;
 mod intent_engine;
@@ -301,6 +303,7 @@ struct Cli {
     check_models: bool,
     download_models: bool,
     install: bool,
+    os_install: bool,
     selftest: bool,
     speak: bool,
     bench: bool,
@@ -357,6 +360,7 @@ impl Cli {
             check_models: false,
             download_models: false,
             install: false,
+            os_install: false,
             selftest: false,
             voice_calibrate: false,
             voice_verify: false,
@@ -389,6 +393,7 @@ impl Cli {
                 "--check-models" => cli.check_models = true,
                 "--download-models" => cli.download_models = true,
                 "--install" => cli.install = true,
+                "--os-install" => cli.os_install = true,
                 "--selftest" => cli.selftest = true,
                 "--voice-calibrate" => cli.voice_calibrate = true,
                 "--voice-verify" => cli.voice_verify = true,
@@ -469,6 +474,8 @@ USAGE: JAI.exe [OPTIONS]
   --download-models   install anything missing (speech models and language model), then exit
   --install           install J.A.I. on this PC as one of Sir's (also when JAI.exe is started on
                       its own, with nothing of his beside it)
+  --os-install        J.A.I.OS's installer: as root on its stick it installs J.A.I.OS, anywhere
+                      else it is a preview on a sample PC that changes nothing
   --selftest          offline pipeline test (TTS → VAD → Whisper → wake word → intents → LLM)
   --speak             with --selftest: also play a test sentence on the speakers
   --bench             with --selftest: time Whisper across settings (threads, encoder window, ...)
@@ -623,6 +630,9 @@ fn main() -> ExitCode {
             return if msg.is_empty() { ExitCode::SUCCESS } else { ExitCode::from(2) };
         }
     };
+    if cli.os_install {
+        return os_install_run::run();
+    }
     if !ensure_working_directory() && !cli.is_diagnostic() || cli.install {
         return installer::run();
     }
