@@ -395,6 +395,67 @@
       "could you shut down the computer please",
       "fahr den PC runter",
       "schalte den PC aus"
+    ],
+    "system.install": [
+      "install Firefox",
+      "Can you install Firefox?",
+      "please install the package firefox",
+      "install the app Firefox",
+      "installiere Firefox",
+      "installier bitte Firefox",
+      "kannst du Firefox installieren"
+    ],
+    "system.remove": [
+      "uninstall VLC",
+      "could you uninstall VLC",
+      "remove the package vlc",
+      "remove VLC from the system",
+      "deinstalliere VLC",
+      "kannst du VLC deinstallieren",
+      "entferne das Paket vlc"
+    ],
+    "system.update": [
+      "update yourself",
+      "update the system",
+      "please upgrade the system",
+      "install the updates",
+      "aktualisiere dich",
+      "aktualisiere das System",
+      "installiere die Updates",
+      "mach die Updates"
+    ],
+    "system.check": [
+      "are there system updates",
+      "are there any system updates?",
+      "any new updates for the system",
+      "which updates are waiting",
+      "gibt es Updates für das System",
+      "welche Updates gibt es",
+      "gibt es neue Systemupdates"
+    ],
+    "system.undo_update": [
+      "undo the last update",
+      "revert the last update",
+      "roll back the last update",
+      "take back the last system update",
+      "mach das letzte Update rückgängig",
+      "nimm das letzte Update zurück"
+    ],
+    "system.snapshots": [
+      "show the snapshots",
+      "show me the snapshots",
+      "list the system snapshots",
+      "which snapshots are there",
+      "zeig mir die Snapshots",
+      "welche Snapshots gibt es"
+    ],
+    "system.secure_boot": [
+      "finish Secure Boot",
+      "set up Secure Boot",
+      "complete the Secure Boot setup",
+      "enroll the Secure Boot keys",
+      "richte Secure Boot ein",
+      "Secure Boot einrichten"
     ]
   },
   "heldout": {
@@ -645,6 +706,9 @@
     ]
   },
   "not_commands": [
+    "I installed Firefox yesterday and it keeps crashing on me",
+    "the last update broke my game, did you see that",
+    "he said to run it as root but that sounds sketchy to me",
     "bro can you close the door, I can hear your sister screaming",
     "wait, there's a chest behind the waterfall, open it",
     "I'm gonna mute myself for a sec, my mom just walked in",

@@ -147,6 +147,14 @@ const CANON: &[(&str, &str)] = &[
     ("pc.shutdown", "shut down my PC"),
     ("news.country", "give me the most important news from germany"),
     ("news.country_de", "die wichtigsten nachrichten aus deutschland"),
+    // --- J.A.I.OS: the system's own orders (`os_orders`)
+    ("system.install", "install firefox"),
+    ("system.remove", "uninstall vlc"),
+    ("system.update", "update yourself"),
+    ("system.check", "are there system updates"),
+    ("system.undo_update", "undo the last update"),
+    ("system.snapshots", "show the snapshots"),
+    ("system.secure_boot", "finish secure boot"),
 ];
 
 /// Other wordings of an order whose road counts as its own (the same thing by another of the

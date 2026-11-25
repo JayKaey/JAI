@@ -149,6 +149,9 @@ mod kit_games;
 mod kit_insight;
 mod kit_notes;
 mod kit_pc;
+mod os_greeter;
+mod os_orders;
+mod os_system;
 mod kit_school;
 mod kit_screen;
 mod kit_typing;
@@ -469,6 +472,10 @@ USAGE: JAI.exe [OPTIONS]
   --download-models   install anything missing (speech models and language model), then exit
   --install           install J.A.I. on this PC as one of Sir's (also when JAI.exe is started on
                       its own, with nothing of his beside it)
+  --system            J.A.I.OS: the root core (org.jaios.System1 on the system bus; started by
+                      jai-system.service as root)
+  --greeter           J.A.I.OS: the login screen (started by greetd)
+  --as-root <cmd…>    J.A.I.OS: run one command through the root core (group jai)
   --selftest          offline pipeline test (TTS → VAD → Whisper → wake word → intents → LLM)
   --speak             with --selftest: also play a test sentence on the speakers
   --bench             with --selftest: time Whisper across settings (threads, encoder window, ...)
@@ -606,6 +613,14 @@ pub(crate) fn start_mark(stage: &str) {
 
 fn main() -> ExitCode {
     std::sync::LazyLock::force(&PROCESS_START);
+    // J.A.I.OS: his root core, his login screen and a command through the root core are
+    // programs of their own (no settings, no single instance, none of the rest).
+    match std::env::args().nth(1).as_deref() {
+        Some("--system") => return os_system::serve(),
+        Some("--greeter") => return os_greeter::run(),
+        Some("--as-root") => return os_system::run_as_root(&std::env::args().skip(2).collect::<Vec<_>>()),
+        _ => {}
+    }
     let parsed = Cli::parse();
     match &parsed {
         Ok(cli) if cli.console => platform::open_console(),
@@ -1202,6 +1217,8 @@ async fn start(cli: &Cli, cfg: JaiConfig) -> Started {
     kit_wit::start(app.tools().monitor.subscribe());
     // Once a day: a whole copy of the memory database and the settings, the last seven kept.
     backups::start(&cfg.memory_db_path, config::CONFIG_FILE, &cfg.features.minecraft_dir, shutdown.clone());
+    // J.A.I.OS: once a day what updates wait (never during a game), and how Secure Boot stands.
+    os_orders::start(shutdown.clone());
     // The internet's drop and return, told once each; online reads answer from their last copy.
     diagnostics::start_link_watch(shutdown.clone());
     // live layers (C1): the rain note and the ISS heads-up.

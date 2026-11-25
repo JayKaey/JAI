@@ -1,0 +1,16 @@
+# J.A.I.OS: his root core (src/os_system.rs). A user's J.A.I. asks it over the system bus for what
+# needs root: pacman, the update, snapper, Secure Boot, the login screen's voice prints.
+[Unit]
+Description=J.A.I.OS root core (org.jaios.System1)
+After=dbus.service
+
+[Service]
+Type=dbus
+BusName=org.jaios.System1
+ExecStart=/usr/lib/jai/jai --system
+Restart=on-failure
+RestartSec=2
+# (No sandbox: pacman, snapper and sbctl work on the whole system.)
+
+[Install]
+WantedBy=multi-user.target

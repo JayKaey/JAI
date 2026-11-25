@@ -1,0 +1,9 @@
+# J.A.I.OS: the login screen is J.A.I. himself (src/os_greeter.rs), inside KWin: the compositor
+# the session runs on, so the same driver path and the same screens, and nothing more to install.
+# KWin ends with him, and greetd then starts the session he asked for.
+[terminal]
+vt = 1
+
+[default_session]
+command = "dbus-run-session kwin_wayland --drm --no-lockscreen --no-global-shortcuts --locale1 --xwayland --exit-with-session '/usr/lib/jai/jai --greeter'"
+user = "greeter"

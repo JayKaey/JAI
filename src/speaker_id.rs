@@ -757,8 +757,18 @@ pub fn known(db: &str) -> Option<VoicePrint> {
             Some(print)
         });
         *known = Some(read.filter(|p| !p.print.is_empty()));
+        // (Once a start: a print learnt before J.A.I.OS was installed reaches its login screen too.)
+        if let Some(Some(print)) = known.as_ref() {
+            share_with_login(Some(print));
+        }
     }
     known.clone().flatten()
+}
+
+/// On J.A.I.OS the login screen knows Sir by the same print: the root core keeps a copy of it
+/// (the set-up's print, what has grown since, the bar, and how he is addressed).
+fn share_with_login(print: Option<&VoicePrint>) {
+    crate::os_system::share_voice(print.map(|p| serde_json::json!({ "address": crate::persona::address(), "print": p.print, "grown": p.grown, "bar": p.bar() })));
 }
 
 /// Prints made before this moment came from whole clips, silence and all (`print_of` cuts a
@@ -791,6 +801,7 @@ pub fn keep(db: &str, print: &VoicePrint) -> Result<(), String> {
     *lock(&KNOWN) = Some(Some(VoicePrint { grown: Vec::new(), grown_clips: 0, own: 0.0, ..print.clone() }));
     *lock(&LAST_SURE) = None;
     SET_ASIDE.store(false, std::sync::atomic::Ordering::Release);
+    share_with_login(Some(print));
     Ok(())
 }
 
@@ -802,6 +813,7 @@ pub fn forget(db: &str) -> Result<(), String> {
     *lock(&LAST_SURE) = None;
     SET_ASIDE.store(false, std::sync::atomic::Ordering::Release);
     lock(&GATHERED).clear();
+    share_with_login(None);
     tracing::info!("[VOICE] Sir's voice print is forgotten on his word");
     Ok(())
 }
@@ -817,6 +829,7 @@ pub fn keep_grown(db: &str, print: &VoicePrint) -> Result<(), String> {
         rusqlite::params![bytes(&print.grown), print.grown_clips as i64, print.own as f64, chrono::Utc::now().to_rfc3339()],
     )
     .map_err(|e| e.to_string())?;
+    share_with_login(Some(print));
     Ok(())
 }
 

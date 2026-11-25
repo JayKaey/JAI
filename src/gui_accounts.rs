@@ -66,7 +66,16 @@ fn grouped(definitions: &[serde_json::Value], grants: Vec<Grant>) -> Vec<(&'stat
     groups.push(("Power and lock", Vec::new()));
     let last = groups.len() - 1;
     for g in grants {
-        let i = catalogue.iter().position(|(_, tools)| tools.iter().any(|(tool, _)| *tool == g.tool)).unwrap_or(last);
+        // (A tool without a schema of the model's stands under its category all the same: "System".)
+        let named = || crate::tools::JAI_CAPABILITY_MANIFEST.iter().find(|c| c.tools.contains(&g.tool.as_str())).map(|c| c.name);
+        let i = catalogue.iter().position(|(_, tools)| tools.iter().any(|(tool, _)| *tool == g.tool)).or_else(|| {
+            let name = named()?;
+            groups.iter().position(|(n, _)| *n == name).or_else(|| {
+                groups.push((name, Vec::new()));
+                Some(groups.len() - 1)
+            })
+        });
+        let i = i.unwrap_or(last);
         groups[i].1.push(g);
     }
     groups.retain(|(_, g)| !g.is_empty());
