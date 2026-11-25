@@ -240,6 +240,12 @@ pub fn offer(order: &str) {
     }
 }
 
+/// An offer that waits longer than `OFFER_FOR` (a long question read aloud first: a disk about
+/// to be changed): its clock starts that much later.
+pub fn offer_for(order: &str, wait: Duration) {
+    *lock(&OFFER) = Some((order.to_string(), Instant::now() + wait.saturating_sub(OFFER_FOR)));
+}
+
 /// The offer on screen: the order and how much of its time is left (1 … 0).
 pub fn offered() -> Option<(String, f32)> {
     let mut offer = lock(&OFFER);

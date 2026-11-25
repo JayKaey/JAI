@@ -155,6 +155,9 @@ const CANON: &[(&str, &str)] = &[
     ("system.undo_update", "undo the last update"),
     ("system.snapshots", "show the snapshots"),
     ("system.secure_boot", "finish secure boot"),
+    ("jaios.room", "make room for J.A.I.OS"),
+    ("jaios.stick", "make a J.A.I.OS stick"),
+    ("jaios.ready", "is my PC ready for J.A.I.OS"),
 ];
 
 /// Other wordings of an order whose road counts as its own (the same thing by another of the

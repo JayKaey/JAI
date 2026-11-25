@@ -112,7 +112,7 @@ async fn fetch(http: &reqwest::Client, (url, size, sha): (&str, u64, &str), to: 
 }
 
 /// A file's SHA-256, in hex.
-fn sha256(path: &Path) -> Result<String, String> {
+pub(crate) fn sha256(path: &Path) -> Result<String, String> {
     let mut file = std::fs::File::open(path).map_err(|e| e.to_string())?;
     let mut hash = ring::digest::Context::new(&ring::digest::SHA256);
     let mut buf = vec![0u8; 1 << 20];
