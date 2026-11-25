@@ -513,6 +513,75 @@ fetches Ollama for Linux and the models, and installs into `~/.local/share/jai` 
 the applications menu. Only on Windows: WhatsApp Desktop (Linux opens WhatsApp
 Web) and the microphone's level meter.
 
+## J.A.I.OS
+
+J.A.I.OS is an operating system made of J.A.I.: Arch Linux with CachyOS's repositories and kernel
+(`linux-cachyos`), KWin as the compositor, and J.A.I. in place of the Plasma shell, the login
+screen and the system's control. Everything for it lives in `os/` in this repository; the program
+is the same `jai`, started in other modes. Nothing of it has run on a real PC yet.
+
+**Root core.** `jai-system.service` runs `jai --system` as root: the D-Bus service
+`org.jaios.System1` on the system bus. Only root and members of the group `jai` may call it; it
+checks each caller's Unix user itself. It runs pacman, the update (`pacman -Syu`, then Flatpak;
+snap-pac takes snapshots before and after), snapper's way back, Secure Boot's enrolment and single
+commands as root, always as argument lists, never as a shell line. Whoever is in `jai` is root
+through it.
+
+**By voice.** "Install Firefox", "uninstall VLC", "update yourself", "are there system updates",
+"undo the last update", "show the snapshots", "go back to snapshot 12", "finish Secure Boot", "run …
+as root". Installing from the repositories and updating run at once (never during a game).
+Removing, going back, Secure Boot's keys, any command as root and a package from the AUR are asked
+aloud first. AUR packages are built by paru as you, never as root. Once a day he tells what updates
+wait.
+
+**Undoing an update.** He takes back exactly what the last update changed (`snapper undochange`),
+makes a snapshot of now first and rebuilds the boot files; restart afterwards. If the system no
+longer starts, pick a snapshot in Limine's menu.
+
+**Secure Boot.** If the firmware was not in Setup Mode at installation he tells you on the first
+start: clear the Secure Boot keys in the firmware's setup, start again, say "finish Secure Boot".
+
+**Login.** greetd starts `jai --greeter` inside KWin. He greets when the screen is up; if he knows
+your voice he greets you by name and chooses your user. The password is always required. Voice
+prints for the login screen live in `/var/lib/jaios/voices` (root's, readable by the login screen
+only).
+
+**Accounts.** Root is the switch "System" in an account's list, off by default and not part of
+"everything".
+
+**The look.** `jai --os-look <folder>` writes what the OS shows outside J.A.I.'s windows, from his
+theme: Plymouth's theme `jaios` (a light runs round his reference ring while the PC starts, then
+his core draws itself and settles), Limine's wallpaper and colour lines, KDE's colour scheme `JAI`
+and the system's kdeglobals, Konsole's colours, the install stick's boot picture and the logo.
+`jaios-settings` runs it when it is built.
+
+**The repository.** `[jaios]` is the rolling GitHub release `jaios-repo`: `Server =
+https://github.com/JayKaey/JAI/releases/download/jaios-repo`. Every push to `main` replaces its
+packages; the release number of a package is the commit count. The packages are not signed yet.
+
+**The release.** A tag `v…` attaches `jaios-<version>-x86_64.iso` and its `.sha256` to that
+version's release (under 2 GiB, GitHub's limit for one file). The stick's own boot loaders are not
+signed: switch Secure Boot off for the install; the installed system signs its own with sbctl.
+
+**Building it.** J.A.I.OS's files are in `os/`: `os/settings/` (the tree of the package
+`jaios-settings`), `os/pkg/` (the PKGBUILDs of `jai`, `jaios-settings` and `jaios`) and `os/iso/`
+(the install stick's archiso profile). The `J.A.I.OS` workflow builds all of it on Arch, packs the
+repository, builds the stick and starts it in QEMU until the installer's window is up. By hand, on
+Arch:
+
+```
+WHISPER_DONT_GENERATE_BINDINGS=1 cargo build --release
+for p in jai jaios-settings jaios; do (cd os/pkg/$p && PKGDEST=$PWD/../../../repo makepkg -d -f); done
+(cd repo && repo-add jaios.db.tar.zst *.pkg.tar.zst)
+sed -i "s|%JAIOS_REPO%|$PWD/repo|" os/iso/pacman.conf
+bsdtar -xf repo/jaios-settings-*.pkg.tar.zst -C /tmp usr/share/jaios/iso && cp /tmp/usr/share/jaios/iso/* os/iso/syslinux/
+sudo mkarchiso -v -w /tmp/archiso -o out os/iso
+```
+
+(The builder's pacman must trust CachyOS's key first: `pacman-key --recv-keys F3B607488DB35A47
+--keyserver keyserver.ubuntu.com && pacman-key --lsign-key F3B607488DB35A47`, then install
+`cachyos-keyring`.)
+
 ## JAI's own Discord account
 
 JAI can have a Discord account of his own: a bot you create once.

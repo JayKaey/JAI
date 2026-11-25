@@ -523,6 +523,10 @@ fn ensure_working_directory() -> bool {
         return true;
     }
     if let Ok(exe) = std::env::current_exe() {
+        // J.A.I.OS: the program is the system's (/usr/lib/jai, read-only); each user's J.A.I. is his own folder.
+        if exe.starts_with("/usr/lib/jai") && is_home(&installer::folder()) {
+            return std::env::set_current_dir(installer::folder()).is_ok();
+        }
         let mut dir = exe.parent();
         while let Some(d) = dir {
             if is_home(d) {

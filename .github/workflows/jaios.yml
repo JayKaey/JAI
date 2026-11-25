@@ -14,8 +14,15 @@ on:
   push:
     branches: [main, v3.2-tested-features]
     tags: ['v*']
-    paths: ['os/**', 'src/os_*', '.github/workflows/jaios.yml']
+    # Every change of J.A.I. himself too: an installed J.A.I.OS gets him from [jaios].
+    paths: ['os/**', 'src/**', 'assets/**', 'build.rs', 'Cargo.toml', 'Cargo.lock', '.github/workflows/jaios.yml']
   workflow_dispatch:
+
+# A newer push to the same branch makes the older run's stick stale (publish uploads the
+# database last, so a cancelled run leaves the repository as it was).
+concurrency:
+  group: jaios-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   # whisper-rs-sys's own Linux bindings (see linux.yml), and whisper.cpp for any PC rather than

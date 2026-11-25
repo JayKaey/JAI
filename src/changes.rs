@@ -91,6 +91,21 @@ const fn fixed(title: &'static str, what: &'static str) -> Entry {
 /// Every change, newest first.
 pub const RELEASES: &[Release] = &[
     Release {
+        date: "2026-11-25",
+        name: "J.A.I.OS",
+        entries: &[
+            new("The system by voice", "On J.A.I.OS: \"install Firefox\", \"update yourself\", \"undo the last update\".", "system_by_voice"),
+            better("Log in or register when installing", "LOG IN with your admin account: no other PC needed, and this PC becomes a Main PC."),
+            added("J.A.I.OS root core", "jai --system installs, updates, rolls back and runs commands as root, for the group jai."),
+            added("Daily update check", "Once a day he tells what updates wait, never in a game; each update takes a snapshot first."),
+            added("His own login screen", "J.A.I.OS logs in through him on greetd: he knows your voice, the password is still asked."),
+            added("A system switch for accounts", "Root on J.A.I.OS is its own switch in the accounts window; \"everything\" leaves it out."),
+            added("J.A.I.OS's look", "jai --os-look draws the boot animation, boot menu, KDE's colours and the logo from his theme."),
+            added("J.A.I.OS packages and install stick", "The os/ folder: its settings, the packages jai, jaios-settings and jaios, the stick's profile."),
+            added("J.A.I.OS workflow", "GitHub builds the [jaios] repository and the ISO, and starts the stick in QEMU to check it."),
+        ],
+    },
+    Release {
         date: "2026-11-22",
         name: "Plots, flights and your own claps",
         entries: &[
@@ -678,6 +693,13 @@ pub const RELEASES: &[Release] = &[
 
 /// The explanations, by id.
 pub const EXPLANATIONS: &[Explanation] = &[
+    Explanation {
+        id: "system_by_voice",
+        title: "The system by voice",
+        what: "On J.A.I.OS he is the system's root: he installs and removes programs, updates the whole system, takes the last update back, goes back to a snapshot, finishes Secure Boot and runs single commands as root. Installing from the repositories and updating run at once; removing, going back, Secure Boot's keys, a command as root and a package from the AUR are asked aloud first.",
+        say: &["Jay, are there system updates?", "Jay, install Firefox.", "Jay, update yourself.", "Jay, undo the last update.", "Jay, run systemctl restart bluetooth as root.", "Jay, installiere Firefox."],
+        know: "Only on J.A.I.OS, and never during a game. Each update takes a snapshot first. After going back, restart; if the system no longer starts, pick a snapshot in the boot menu.",
+    },
     Explanation {
         id: "rewrite",
         title: "Rewrite what you selected",
