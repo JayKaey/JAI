@@ -1,0 +1,8 @@
+# J.A.I.OS's own packages (jai, jaios-settings, jaios): the rolling release `jaios-repo` of
+# J.A.I.'s repository on GitHub, built by the `J.A.I.OS` workflow. In /etc/pacman.conf, above
+# CachyOS's and Arch's repositories:
+#
+#   [jaios]
+#   SigLevel = Optional TrustAll
+#   Include = /etc/pacman.d/jaios-mirrorlist
+Server = https://github.com/JayKaey/JAI/releases/download/jaios-repo

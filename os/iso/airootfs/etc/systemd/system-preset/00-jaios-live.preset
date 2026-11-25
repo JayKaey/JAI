@@ -1,0 +1,6 @@
+# What the install stick starts. The stick's first boot is every boot (mkarchiso leaves the
+# machine id uninitialised), and systemd enables these then: the profile carries no links.
+enable greetd.service
+enable NetworkManager.service
+enable systemd-timesyncd.service
+enable pacman-init.service

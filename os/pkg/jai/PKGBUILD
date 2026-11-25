@@ -1,0 +1,56 @@
+# J.A.I. as a package of J.A.I.OS's own repository [jaios].
+#
+# It packs the program the `J.A.I.OS` workflow has just built (`cargo build --release` in the
+# repository's root, or JAI_BIN=<the built jai>); it does not build him. From this folder:
+#
+#   makepkg -d -f
+#
+# The version is Cargo.toml's; the release number is the commit count (JAIOS_PKGREL), so every
+# push is an update for pacman. No epoch: GitHub's asset names take no colon.
+
+_repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+
+pkgname=jai
+pkgver="$(sed -n 's/^version = "\(.*\)"$/\1/p' "$_repo/Cargo.toml" | head -n 1)"
+pkgrel="${JAIOS_PKGREL:-1}"
+pkgdesc="J.A.I., the local voice assistant: the desktop, the login screen and the installer of J.A.I.OS"
+arch=('x86_64')
+url="https://github.com/JayKaey/JAI"
+license=('custom')
+# What the program links against, then what he calls at run time (the README's Linux section;
+# `NEEDED` in setup/src/main.rs is the same list for other Arch PCs).
+depends=(
+  'glibc' 'gcc-libs' 'alsa-lib' 'opus'
+  'espeak-ng' 'ollama'
+  'zstd' 'libpulse' 'tesseract' 'tesseract-data-eng' 'tesseract-data-deu'
+  'pacman-contrib' 'discover' 'geoclue' 'xdg-utils' 'yt-dlp' 'ffmpeg' 'wl-clipboard'
+  'xorg-xwayland' 'libglvnd' 'libxkbcommon' 'wayland' 'dbus'
+  'noto-fonts' 'ttf-dejavu'
+)
+optdepends=(
+  'ollama-cuda: the language model on an NVIDIA card (the installer picks it)'
+  'ollama-rocm: the language model on an AMD card (the installer picks it)'
+  'ollama-vulkan: the language model on any card with Vulkan'
+  'nvidia-utils: nvidia-smi tells him the video memory'
+  'cups: "print it twice"'
+)
+options=('!strip' '!debug')
+
+package() {
+  local bin="${JAI_BIN:-$_repo/target/release/jai}"
+  install -Dm755 "$bin" "$pkgdir/usr/lib/jai/jai"
+  install -d "$pkgdir/usr/bin"
+  ln -s /usr/lib/jai/jai "$pkgdir/usr/bin/jai"
+
+  # runtime/: he looks for his engine in runtime/ollama (`runtime::engine_binary`) and for
+  # eSpeak NG in runtime/espeak-ng (`models`, `phonemizer`). Both are Arch's own packages here.
+  install -d "$pkgdir/usr/lib/jai/runtime/ollama/bin" "$pkgdir/usr/lib/jai/runtime/espeak-ng"
+  ln -s /usr/bin/ollama "$pkgdir/usr/lib/jai/runtime/ollama/bin/ollama"
+  ln -s /usr/lib/libespeak-ng.so.1 "$pkgdir/usr/lib/jai/runtime/espeak-ng/libespeak-ng.so.1"
+  ln -s /usr/bin/espeak-ng "$pkgdir/usr/lib/jai/runtime/espeak-ng/espeak-ng"
+  ln -s /usr/share/espeak-ng-data "$pkgdir/usr/lib/jai/runtime/espeak-ng/espeak-ng-data"
+
+  install -Dm644 "$startdir/jai.desktop" "$pkgdir/usr/share/applications/jai.desktop"
+  install -Dm644 "$startdir/jai-home.conf" "$pkgdir/usr/share/user-tmpfiles.d/jai.conf"
+  install -Dm644 "$_repo/README.md" "$pkgdir/usr/share/doc/jai/README.md"
+}

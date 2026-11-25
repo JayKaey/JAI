@@ -1,0 +1,10 @@
+NAME="J.A.I.OS"
+PRETTY_NAME="J.A.I.OS"
+ID=jaios
+ID_LIKE="cachyos arch"
+BUILD_ID=rolling
+HOME_URL="https://github.com/JayKaey/JAI"
+DOCUMENTATION_URL="https://github.com/JayKaey/JAI#readme"
+SUPPORT_URL="https://github.com/JayKaey/JAI/issues"
+BUG_REPORT_URL="https://github.com/JayKaey/JAI/issues"
+LOGO=jaios

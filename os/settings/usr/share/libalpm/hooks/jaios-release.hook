@@ -1,0 +1,15 @@
+# Arch's packages own these three files and write their own names into them at every update of
+# theirs: J.A.I.OS's come back (kept in /usr/share/jaios by jaios-settings).
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Type = Path
+Target = usr/lib/os-release
+Target = etc/lsb-release
+Target = etc/issue
+Target = usr/share/jaios/os-release
+
+[Action]
+Description = Naming the system J.A.I.OS...
+When = PostTransaction
+Exec = /usr/bin/sh -c 'cp /usr/share/jaios/os-release /usr/lib/os-release; cp /usr/share/jaios/lsb-release /etc/lsb-release; cp /usr/share/jaios/issue /etc/issue'

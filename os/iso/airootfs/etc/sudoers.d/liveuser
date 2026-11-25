@@ -1,0 +1,4 @@
+# The installer runs as root in liveuser's session: no password, and the session it draws in
+# (KWin's Wayland and XWayland sockets, the session bus) goes with it.
+Defaults:liveuser env_keep += "WAYLAND_DISPLAY XDG_RUNTIME_DIR DISPLAY XAUTHORITY XDG_SESSION_TYPE XDG_CURRENT_DESKTOP DBUS_SESSION_BUS_ADDRESS LANG LANGUAGE"
+liveuser ALL=(ALL) NOPASSWD: ALL

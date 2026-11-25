@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=J.A.I.OS
+Comment=J.A.I.'s desktop on KWin (Wayland)
+Comment[de]=J.A.I.s Desktop auf KWin (Wayland)
+# KDE's own session start: KWin, KDE's services and the session's systemd units. J.A.I.'s shell
+# stands where plasmashell would (its units: usr/lib/systemd/user/).
+Exec=/usr/lib/plasma-dbus-run-session-if-needed /usr/bin/startplasma-wayland
+TryExec=/usr/bin/startplasma-wayland
+DesktopNames=KDE

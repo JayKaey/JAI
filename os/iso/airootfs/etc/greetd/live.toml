@@ -1,0 +1,14 @@
+# The install stick: no login. `liveuser` is in the J.A.I.OS session at once (KWin, J.A.I.'s
+# shell), where the installer starts (/etc/xdg/autostart/jaios-installer.desktop).
+
+[terminal]
+vt = 1
+
+[initial_session]
+command = "env XDG_SESSION_TYPE=wayland /usr/lib/plasma-dbus-run-session-if-needed /usr/bin/startplasma-wayland"
+user = "liveuser"
+
+# After that session has ended: J.A.I.'s login screen, as on the installed system.
+[default_session]
+command = "/usr/lib/jai/jai --greeter"
+user = "greeter"

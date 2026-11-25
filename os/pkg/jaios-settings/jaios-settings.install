@@ -1,0 +1,13 @@
+# The files other packages own: the system's name (os-release, lsb-release, issue; the hook
+# jaios-release.hook keeps them after this) and Plymouth's theme.
+post_install() {
+  cp /usr/share/jaios/os-release /usr/lib/os-release
+  cp /usr/share/jaios/lsb-release /etc/lsb-release
+  cp /usr/share/jaios/issue /etc/issue
+  # (Without -R: the initramfs is built by whoever installs the kernel, after this.)
+  plymouth-set-default-theme jaios
+}
+
+post_upgrade() {
+  post_install
+}

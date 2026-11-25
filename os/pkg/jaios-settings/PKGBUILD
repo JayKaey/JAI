@@ -1,0 +1,61 @@
+# J.A.I.OS's settings: the tree os/settings/ as it lies, and the look J.A.I. writes himself
+# (`jai --os-look`: the boot animation, the boot menu's wallpaper and colours, KDE's and
+# Konsole's colours, the logo), with his fonts for every program.
+#
+#   JAI_BIN=<the built jai> makepkg -d -f      (default: target/release/jai of this repository)
+
+_repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+
+pkgname=jaios-settings
+pkgver="$(sed -n 's/^version = "\(.*\)"$/\1/p' "$_repo/Cargo.toml" | head -n 1)"
+pkgrel="${JAIOS_PKGREL:-1}"
+pkgdesc="J.A.I.OS: its name, its look from boot to desktop, and its defaults"
+arch=('any')
+url="https://github.com/JayKaey/JAI"
+license=('custom' 'OFL-1.1')
+depends=('plymouth' 'breeze' 'breeze-icons' 'systemd')
+optdepends=(
+  'greetd: the login screen (J.A.I.OS tells it to read /usr/share/jaios/greetd/config.toml)'
+  'limine: the boot menu (/usr/share/jaios/limine)'
+  'snapper: snapshots before each update (the template jaios)'
+  'konsole: the terminal in his colours'
+)
+backup=('etc/xdg/kdeglobals' 'etc/xdg/kwinrc' 'etc/xdg/konsolerc' 'etc/pacman.d/jaios-mirrorlist')
+install=jaios-settings.install
+
+package() {
+  local bin="${JAI_BIN:-$_repo/target/release/jai}" look="$srcdir/look"
+  cp -a "$_repo/os/settings/." "$pkgdir/"
+  chown -R root:root "$pkgdir"
+  find "$pkgdir" -type d -exec chmod 755 {} +
+  find "$pkgdir" -type f -exec chmod 644 {} +
+  [[ ! -d "$pkgdir/etc/sudoers.d" ]] || chmod 750 "$pkgdir/etc/sudoers.d"
+  [[ ! -d "$pkgdir/etc/sudoers.d" ]] || find "$pkgdir/etc/sudoers.d" -type f -exec chmod 440 {} +
+
+  # greetd's package owns /etc/greetd/config.toml: J.A.I.OS's goes beside it (see the drop-in
+  # usr/lib/systemd/system/greetd.service.d/jaios.conf). Without one, greetd keeps its own.
+  if [[ -f "$pkgdir/etc/greetd/config.toml" ]]; then
+    install -Dm644 "$pkgdir/etc/greetd/config.toml" "$pkgdir/usr/share/jaios/greetd/config.toml"
+    rm "$pkgdir/etc/greetd/config.toml"
+    rmdir --ignore-fail-on-non-empty "$pkgdir/etc/greetd"
+  else
+    rm -r "$pkgdir/usr/lib/systemd/system/greetd.service.d"
+  fi
+
+  rm -rf "$look"
+  "$bin" --os-look "$look"
+  install -d "$pkgdir/usr/share/plymouth/themes" "$pkgdir/usr/share/jaios"
+  cp -r "$look/plymouth/jaios" "$pkgdir/usr/share/plymouth/themes/jaios"
+  cp -r "$look/limine" "$look/iso" "$pkgdir/usr/share/jaios/"
+  install -Dm644 "$look/kde/JAI.colors" "$pkgdir/usr/share/color-schemes/JAI.colors"
+  install -Dm644 "$look/kde/kdeglobals" "$pkgdir/etc/xdg/kdeglobals"
+  install -Dm644 -t "$pkgdir/usr/share/konsole" "$look/konsole/JAI.colorscheme" "$look/konsole/JAI.profile"
+  local size
+  for size in 16 32 48 64 128 256; do
+    install -Dm644 "$look/icons/$size/jaios.png" "$pkgdir/usr/share/icons/hicolor/${size}x${size}/apps/jaios.png"
+  done
+  install -Dm644 "$look/icons/256/jaios.png" "$pkgdir/usr/share/pixmaps/jaios.png"
+
+  install -Dm644 -t "$pkgdir/usr/share/fonts/jai" "$_repo"/assets/fonts/*.ttf
+  install -Dm644 -t "$pkgdir/usr/share/licenses/$pkgname" "$_repo"/assets/fonts/*-OFL.txt
+}
