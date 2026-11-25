@@ -19,6 +19,8 @@ linux-firmware
 sof-firmware
 cachyos-keyring
 cachyos-mirrorlist
+cachyos-v3-mirrorlist
+cachyos-v4-mirrorlist
 cachyos-settings
 
 # Graphics: Mesa for every card, and NVIDIA's own driver with the open kernel modules as on
