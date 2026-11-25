@@ -188,7 +188,12 @@ raw-window-handle = "0.6"
 wayland-client = "0.31"
 wayland-protocols-plasma = { version = "0.3", features = ["client"] }
 # Sir's idle time from the compositor (ext-idle-notify), as Windows' last-input time.
-wayland-protocols = { version = "0.32", features = ["client", "staging"] }
+wayland-protocols = { version = "0.32", features = ["client", "staging", "unstable"] }
+# J.A.I.OS's shell (`jai --shell`): its taskbar, menu and desktop are layer-shell surfaces, its
+# keys come through the keyboard's xkb map, and the programs' icons are mostly SVG.
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+xkbcommon-dl = "0.4"
+resvg = { version = "0.45", default-features = false }
 # pipe2, the parent-death signal of the engine, nice levels, statvfs, the camera's ioctls.
 libc = "0.2"
 

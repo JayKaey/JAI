@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=J.A.I.
+Comment=Local voice assistant
+Exec="/usr/lib/jai/jai"
+Path=/usr/lib/jai
+Terminal=false
+Categories=Utility;
+X-KDE-Wayland-Interfaces=org_kde_plasma_window_management,org_kde_kwin_fake_input
+X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2

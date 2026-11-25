@@ -640,6 +640,9 @@ impl Jai {
             hud.state = state.to_string();
             hud.detail = detail.clone();
         }
+        // (J.A.I.OS's shell shows it as its lamp and its core.)
+        #[cfg(target_os = "linux")]
+        crate::os_link::state_changed(state);
         self.emit(HudEvent::State {
             state: state.to_string(),
             detail,

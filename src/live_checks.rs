@@ -585,4 +585,17 @@ mod kde {
         crate::wallpaper::stand(hwnd, None);
         assert!(until(5, || mine().is_some_and(|w| !w.is(state::KEEP_BELOW) && !w.is(state::SKIP_TASKBAR))), "still standing as {:?}", mine());
     }
+
+    /// J.A.I.OS's shell (`jai --shell`) against KWin: on every monitor its desktop, his core
+    /// and the taskbar are layer-shell surfaces that KWin sizes and takes a picture for.
+    #[test]
+    #[ignore = "opens the desktop shell's surfaces under KWin: JAI_REAL_PLASMA=1"]
+    fn kwin_shows_the_shells_surfaces() {
+        if !kwin() {
+            return;
+        }
+        let monitors = plasma::outputs().len().max(1);
+        let drawn = crate::os_wayland::check(40).expect("the shell's surfaces");
+        assert!(drawn >= 3 * monitors, "{drawn} surfaces were drawn for {monitors} monitors");
+    }
 }

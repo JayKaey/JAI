@@ -1,0 +1,13 @@
+# Safe mode: KDE's own desktop (panel, menu, notifications), opened when J.A.I.OS's shell failed
+# three times within a minute. `systemctl --user start jai-shell.service` brings his back.
+[Unit]
+Description=KDE's desktop as J.A.I.OS's safe mode
+PartOf=graphical-session.target
+Conflicts=jai-shell.service
+After=jai-shell.service
+
+[Service]
+ExecStart=/usr/bin/plasmashell --no-respawn
+Restart=on-failure
+Slice=session.slice
+TimeoutStopSec=5

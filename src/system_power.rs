@@ -284,7 +284,7 @@ mod imp {
 
 /// logind's Manager on the system bus: the PC's own power verbs (polkit decides who may).
 #[cfg(not(windows))]
-fn logind(method: &str) -> Result<(), String> {
+pub(crate) fn logind(method: &str) -> Result<(), String> {
     let bus = zbus::blocking::Connection::system().map_err(|e| format!("no system bus: {e}"))?;
     bus.call_method(Some("org.freedesktop.login1"), "/org/freedesktop/login1", Some("org.freedesktop.login1.Manager"), method, &(false,)).map(drop).map_err(|e| e.to_string())
 }
