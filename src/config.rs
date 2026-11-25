@@ -131,6 +131,9 @@ pub struct JaiConfig {
     /// Last HUD window placement on the desktop (x, y, width, height in physical pixels).
     pub hud_window: Option<[i32; 4]>,
     pub hud_maximized: bool,
+    /// J.A.I.OS: the programs pinned in the [J] menu, by their menu entry's id; empty means
+    /// the stock ones (`os_shell::FAVOURITES`). The shell reads them from the settings file.
+    pub os_favourites: Vec<String>,
 
     // ---- LLM ----------------------------------------------------------------------------
     /// Built-in engine shipped with JAI (a private copy of Ollama). Used whenever present.
@@ -604,6 +607,7 @@ impl Default for JaiConfig {
             interface: InterfaceSettings::default(),
             hud_window: None,
             hud_maximized: false,
+            os_favourites: Vec::new(),
 
             llm_runtime_dir: "runtime/ollama".to_string(),
             llm_models_dir: "models/llm".to_string(),

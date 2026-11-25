@@ -287,6 +287,20 @@ mod kde;
 mod plasma;
 #[cfg(target_os = "linux")]
 mod x11;
+// J.A.I.OS's desktop shell (`--shell`): what it draws is drawn offscreen in the tests anywhere,
+// its surfaces and its bus side exist on Linux.
+#[cfg(any(target_os = "linux", test))]
+mod os_apps;
+#[cfg(target_os = "linux")]
+mod os_bus;
+#[cfg(target_os = "linux")]
+mod os_link;
+#[cfg(any(target_os = "linux", test))]
+mod os_notes;
+#[cfg(any(target_os = "linux", test))]
+mod os_shell;
+#[cfg(target_os = "linux")]
+mod os_wayland;
 
 use crate::config::{ConfigStore, JaiConfig};
 use crate::tray::TrayAction;
@@ -310,6 +324,7 @@ struct Cli {
     /// Write J.A.I.OS's look (boot animation, boot menu, KDE colours) into this folder.
     os_look: Option<std::path::PathBuf>,
     os_install: bool,
+    shell: bool,
     selftest: bool,
     speak: bool,
     bench: bool,
@@ -367,6 +382,7 @@ impl Cli {
             download_models: false,
             install: false,
             os_install: false,
+            shell: false,
             selftest: false,
             voice_calibrate: false,
             voice_verify: false,
@@ -402,6 +418,7 @@ impl Cli {
                 "--install" => cli.install = true,
                 "--os-look" => cli.os_look = Some(args.next().ok_or("--os-look needs a folder")?.into()),
                 "--os-install" => cli.os_install = true,
+                "--shell" => cli.shell = true,
                 "--selftest" => cli.selftest = true,
                 "--voice-calibrate" => cli.voice_calibrate = true,
                 "--voice-verify" => cli.voice_verify = true,
@@ -482,7 +499,7 @@ USAGE: JAI.exe [OPTIONS]
   --download-models   install anything missing (speech models and language model), then exit
   --install           install J.A.I. on this PC as one of Sir's (also when JAI.exe is started on
                       its own, with nothing of his beside it)
-  --system           J.A.I.OS: the root core (org.jaios.System1 on the system bus; started by
+  --system            J.A.I.OS: the root core (org.jaios.System1 on the system bus; started by
                       jai-system.service as root)
   --greeter           J.A.I.OS: the login screen (started by greetd)
   --as-root <cmd…>    J.A.I.OS: run one command through the root core (group jai)
@@ -490,6 +507,8 @@ USAGE: JAI.exe [OPTIONS]
                       menu's wallpaper and colours (Limine), KDE's and Konsole's colours, the logo
   --os-install        J.A.I.OS's installer: as root on its stick it installs J.A.I.OS, anywhere
                       else it is a preview on a sample PC that changes nothing
+  --shell             J.A.I.OS: be the desktop shell on KWin (taskbar, [J] menu, desktop icons,
+                      notifications); a light process beside the assistant, Linux only
   --selftest          offline pipeline test (TTS → VAD → Whisper → wake word → intents → LLM)
   --speak             with --selftest: also play a test sentence on the speakers
   --bench             with --selftest: time Whisper across settings (threads, encoder window, ...)
@@ -662,6 +681,15 @@ fn main() -> ExitCode {
     }
     if cli.os_install {
         return os_install_run::run();
+    }
+    if cli.shell {
+        #[cfg(target_os = "linux")]
+        return os_wayland::run();
+        #[cfg(not(target_os = "linux"))]
+        {
+            eprintln!("--shell is J.A.I.OS's desktop shell: it runs on Linux, on KWin.");
+            return ExitCode::from(2);
+        }
     }
     if !ensure_working_directory() && !cli.is_diagnostic() || cli.install {
         return installer::run();
@@ -1307,6 +1335,8 @@ async fn start(cli: &Cli, cfg: JaiConfig) -> Started {
         autostart: kit_pc::starts_with_system(),
     });
     spawn_tray_handler(tray_rx, app.clone(), shutdown.clone());
+    #[cfg(target_os = "linux")]
+    os_link::serve(app.clone());
 
     info!("[READY] Say \"JAI …\". Quit by voice (\"JAI, shut down\"), from the tray icon or the HUD.");
     let finished = tokio::spawn(shutdown_sequence(app.clone(), store, llm, shutdown));

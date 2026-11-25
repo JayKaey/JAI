@@ -1519,6 +1519,11 @@ fn startup_geometry(iface: &InterfaceSettings, behind: Option<[i32; 4]>, windowe
 /// only the monitor that session was given (`--monitor`, or `JAI_BACKDROP_MONITOR`): never one
 /// Sir works on; without one it has no background.
 fn background_rect(iface: &InterfaceSettings) -> Option<[i32; 4]> {
+    // On J.A.I.OS the shell draws the desktop, with his core on it: he is no second one.
+    #[cfg(target_os = "linux")]
+    if crate::os_link::shell_has_desktop() {
+        return None;
+    }
     let monitors = crate::monitors::recent();
     if crate::platform::in_test_session() {
         let named = std::env::var("JAI_BACKDROP_MONITOR").ok().and_then(|n| n.trim().parse::<usize>().ok()).unwrap_or_else(|| START_MONITOR.load(Ordering::Acquire));

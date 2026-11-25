@@ -1,0 +1,19 @@
+# The assistant himself, in Sir's session: he listens, speaks and acts. His data lies in
+# ~/.local/share/jai (settings, memory, log), with the shared models and the program's
+# runtime linked in (jaios.conf in user-tmpfiles.d makes the folder and the links).
+[Unit]
+Description=J.A.I.
+PartOf=graphical-session.target
+After=plasma-kwin_wayland.service jai-shell.service
+
+[Service]
+ExecStartPre=/usr/bin/systemd-tmpfiles --user --create /usr/share/user-tmpfiles.d/jaios.conf
+ExecStart=/usr/lib/jai/jai
+WorkingDirectory=-%h/.local/share/jai
+Restart=on-failure
+RestartSec=2
+Slice=session.slice
+TimeoutStopSec=20
+
+[Install]
+WantedBy=plasma-workspace.target

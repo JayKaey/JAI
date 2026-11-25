@@ -53,6 +53,9 @@ pub struct Snapshot {
     pub ctx: egui::Context,
     textures: HashMap<TextureId, Texture>,
     size: egui::Vec2,
+    /// What the canvas is before anything is drawn (premultiplied): black, or nothing at all
+    /// for a surface the desktop shows through (J.A.I.OS's shell).
+    pub clear: [f32; 4],
 }
 
 impl Snapshot {
@@ -62,7 +65,7 @@ impl Snapshot {
         crate::holo::install_fonts(&ctx);
         // Measured as it rests: no window entrance or exit moves what is checked.
         ctx.data_mut(|d| d.insert_temp(egui::Id::new(crate::gui::STILL_WINDOWS), true));
-        Self { ctx, textures: HashMap::new(), size }
+        Self { ctx, textures: HashMap::new(), size, clear: [0.0, 0.0, 0.0, 1.0] }
     }
 
     fn apply(&mut self, delta: &egui::TexturesDelta) {
@@ -129,7 +132,7 @@ impl Snapshot {
         let primitives = self.ctx.tessellate(shapes, pixels_per_point);
         let ppp = pixels_per_point;
         let (w, h) = ((self.size.x * ppp).round() as usize, (self.size.y * ppp).round() as usize);
-        let mut canvas = Canvas { width: w, height: h, pixels: vec![[0.0, 0.0, 0.0, 1.0]; w * h] };
+        let mut canvas = Canvas { width: w, height: h, pixels: vec![self.clear; w * h] };
         for p in primitives {
             if let epaint::Primitive::Mesh(mesh) = &p.primitive {
                 // (epaint hands points; a GPU backend scales them to pixels, so does this.)
@@ -200,6 +203,17 @@ impl Canvas {
     pub fn pixel(&self, x: usize, y: usize) -> [u8; 3] {
         let p = self.pixels[y * self.width + x];
         [(p[0] * 255.0) as u8, (p[1] * 255.0) as u8, (p[2] * 255.0) as u8]
+    }
+
+    /// The picture as a Wayland buffer takes it (ARGB8888: blue, green, red, alpha in memory,
+    /// premultiplied). Light added where nothing covers shows as light: its alpha is raised to
+    /// its brightest channel, so no channel exceeds it.
+    #[cfg(target_os = "linux")]
+    pub fn write_argb(&self, out: &mut [u8]) {
+        for (p, o) in self.pixels.iter().zip(out.chunks_exact_mut(4)) {
+            let alpha = p[3].max(p[0]).max(p[1]).max(p[2]);
+            o.copy_from_slice(&[(p[2] * 255.0) as u8, (p[1] * 255.0) as u8, (p[0] * 255.0) as u8, (alpha * 255.0) as u8]);
+        }
     }
 
     /// Mean brightness (0-255) of a region.
