@@ -135,6 +135,8 @@ mod hyper_cortex;
 mod image_viewer;
 mod instant_replay;
 mod installer;
+mod os_install;
+mod os_install_run;
 mod integration_registry;
 mod integration_router;
 mod intent_engine;
@@ -307,6 +309,7 @@ struct Cli {
     install: bool,
     /// Write J.A.I.OS's look (boot animation, boot menu, KDE colours) into this folder.
     os_look: Option<std::path::PathBuf>,
+    os_install: bool,
     selftest: bool,
     speak: bool,
     bench: bool,
@@ -363,6 +366,7 @@ impl Cli {
             check_models: false,
             download_models: false,
             install: false,
+            os_install: false,
             selftest: false,
             voice_calibrate: false,
             voice_verify: false,
@@ -397,6 +401,7 @@ impl Cli {
                 "--download-models" => cli.download_models = true,
                 "--install" => cli.install = true,
                 "--os-look" => cli.os_look = Some(args.next().ok_or("--os-look needs a folder")?.into()),
+                "--os-install" => cli.os_install = true,
                 "--selftest" => cli.selftest = true,
                 "--voice-calibrate" => cli.voice_calibrate = true,
                 "--voice-verify" => cli.voice_verify = true,
@@ -477,12 +482,14 @@ USAGE: JAI.exe [OPTIONS]
   --download-models   install anything missing (speech models and language model), then exit
   --install           install J.A.I. on this PC as one of Sir's (also when JAI.exe is started on
                       its own, with nothing of his beside it)
-  --system            J.A.I.OS: the root core (org.jaios.System1 on the system bus; started by
+  --system           J.A.I.OS: the root core (org.jaios.System1 on the system bus; started by
                       jai-system.service as root)
   --greeter           J.A.I.OS: the login screen (started by greetd)
   --as-root <cmd…>    J.A.I.OS: run one command through the root core (group jai)
   --os-look <dir>     write J.A.I.OS's look into <dir>: the boot animation (Plymouth), the boot
                       menu's wallpaper and colours (Limine), KDE's and Konsole's colours, the logo
+  --os-install        J.A.I.OS's installer: as root on its stick it installs J.A.I.OS, anywhere
+                      else it is a preview on a sample PC that changes nothing
   --selftest          offline pipeline test (TTS → VAD → Whisper → wake word → intents → LLM)
   --speak             with --selftest: also play a test sentence on the speakers
   --bench             with --selftest: time Whisper across settings (threads, encoder window, ...)
@@ -652,6 +659,9 @@ fn main() -> ExitCode {
     // (Before he looks for his home: the folder is the caller's, and a package build has no home.)
     if let Some(dir) = &cli.os_look {
         return os_look::run(dir);
+    }
+    if cli.os_install {
+        return os_install_run::run();
     }
     if !ensure_working_directory() && !cli.is_diagnostic() || cli.install {
         return installer::run();

@@ -1,0 +1,79 @@
+# What J.A.I.OS's installer puts on a new PC (`jai --os-install`, src/os_install.rs):
+# one package per line, from CachyOS's repositories, Arch's and [jaios].
+
+# The system
+base
+base-devel
+linux-cachyos
+linux-cachyos-headers
+linux-firmware
+amd-ucode
+intel-ucode
+mkinitcpio
+sudo
+nano
+cachyos-keyring
+cachyos-mirrorlist
+cachyos-v3-mirrorlist
+cachyos-v4-mirrorlist
+
+# Disk, start and snapshots
+btrfs-progs
+dosfstools
+cryptsetup
+snapper
+snap-pac
+limine
+limine-mkinitcpio-hook
+limine-snapper-sync
+sbctl
+efibootmgr
+plymouth
+
+# Login, network, sound
+greetd
+networkmanager
+bluez
+bluez-utils
+pipewire
+pipewire-pulse
+pipewire-alsa
+pipewire-jack
+wireplumber
+
+# KWin and the pieces of Plasma's session (plasma-desktop only for the safe mode)
+kwin
+plasma-workspace
+plasma-desktop
+xorg-xwayland
+qt6-wayland
+systemsettings
+dolphin
+konsole
+kate
+spectacle
+ark
+plasma-nm
+plasma-pa
+powerdevil
+bluedevil
+kscreen
+xdg-desktop-portal-kde
+breeze
+noto-fonts
+
+# Graphics drivers (chwd -a picks them, NVIDIA's too)
+chwd
+
+# What Sir wants on it
+steam
+proton-cachyos
+firefox
+discover
+flatpak
+paru
+
+# J.A.I. himself
+jai
+jaios-settings
+jaios

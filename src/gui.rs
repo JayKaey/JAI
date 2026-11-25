@@ -56,6 +56,10 @@ mod admin_view;
 #[path = "gui_login.rs"]
 mod login_view;
 
+/// J.A.I.OS's installer (`jai --os-install`).
+#[path = "os_install_gui.rs"]
+pub mod os_install_view;
+
 #[path = "gui_network_radar.rs"]
 mod radar_view;
 
