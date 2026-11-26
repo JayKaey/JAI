@@ -23,7 +23,7 @@ depends=(
   'glibc' 'gcc-libs' 'alsa-lib' 'opus'
   'espeak-ng' 'ollama'
   'zstd' 'libpulse' 'tesseract' 'tesseract-data-eng' 'tesseract-data-deu'
-  'pacman-contrib' 'discover' 'geoclue' 'xdg-utils' 'yt-dlp' 'ffmpeg' 'wl-clipboard'
+  'pacman-contrib' 'discover' 'geoclue' 'xdg-utils' 'yt-dlp' 'ffmpeg' 'wl-clipboard' 'polkit'
   'xorg-xwayland' 'libglvnd' 'libxkbcommon' 'wayland' 'dbus'
   'noto-fonts' 'ttf-dejavu'
 )
@@ -50,7 +50,6 @@ package() {
   ln -s /usr/bin/espeak-ng "$pkgdir/usr/lib/jai/runtime/espeak-ng/espeak-ng"
   ln -s /usr/share/espeak-ng-data "$pkgdir/usr/lib/jai/runtime/espeak-ng/espeak-ng-data"
 
-  install -Dm644 "$startdir/jai.desktop" "$pkgdir/usr/share/applications/jai.desktop"
-  install -Dm644 "$startdir/jai-home.conf" "$pkgdir/usr/share/user-tmpfiles.d/jai.conf"
+  # (His menu entry, user units and each user's folder are jaios-settings'.)
   install -Dm644 "$_repo/README.md" "$pkgdir/usr/share/doc/jai/README.md"
 }

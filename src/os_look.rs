@@ -174,7 +174,7 @@ pub fn ansi(t: &Theme) -> [[u8; 3]; 16] {
     ]
 }
 
-/// Where the installer puts the wallpaper on the boot partition (`limine/theme.conf` names it).
+/// Where the installer puts the wallpaper on the boot partition (`limine_conf` names it).
 pub const LIMINE_WALLPAPER: &str = "boot():/limine/jaios.png";
 
 /// Limine's global lines: his look, three seconds, the entry booted last.
@@ -182,7 +182,7 @@ pub fn limine_conf(t: &Theme) -> String {
     let colours = ansi(t);
     let row = |from: usize| colours[from..from + 8].iter().map(|c| hex(*c)).collect::<Vec<_>>().join(";");
     format!(
-        "# J.A.I.OS: Limine in J.A.I.'s look (written by `jai --os-look`).\ntimeout: 3\nremember_last_entry: yes\ninterface_branding: J.A.I.OS\ninterface_branding_colour: {}\ninterface_help_colour: {}\nwallpaper: {LIMINE_WALLPAPER}\nwallpaper_style: stretched\nbackdrop: {void}\nterm_margin: 64\nterm_palette: {}\nterm_palette_bright: {}\nterm_background: 40{void}\nterm_foreground: {ink}\nterm_background_bright: {void}\nterm_foreground_bright: {ink}\n",
+        "# J.A.I.OS: Limine in J.A.I.'s look.\ntimeout: 3\nremember_last_entry: yes\ninterface_branding: J.A.I.OS\ninterface_branding_colour: {}\ninterface_help_colour: {}\nwallpaper: {LIMINE_WALLPAPER}\nwallpaper_style: stretched\nbackdrop: {void}\nterm_margin: 64\nterm_palette: {}\nterm_palette_bright: {}\nterm_background: 40{void}\nterm_foreground: {ink}\nterm_background_bright: {void}\nterm_foreground_bright: {ink}\n",
         hex(t.accent),
         hex(mix(t.void, t.ink, 0.58)),
         row(0),
@@ -382,7 +382,6 @@ pub fn write(dir: &Path) -> io::Result<Vec<PathBuf>> {
 
     // (The name stands in the margin Limine keeps free round its menu.)
     file("limine/wallpaper.png".into(), &png(1920, 1080, &backdrop(vec2(1920.0, 1080.0), vec2(0.5, 0.972), 15.0))?)?;
-    file("limine/theme.conf".into(), limine_conf(&theme).as_bytes())?;
     file("iso/splash.png".into(), &png(640, 480, &backdrop(vec2(640.0, 480.0), vec2(0.5, 0.1), 20.0))?)?;
     file("iso/archiso_head.cfg".into(), syslinux_head(&theme).as_bytes())?;
     file("kde/JAI.colors".into(), kde_scheme(&theme).as_bytes())?;
@@ -482,7 +481,7 @@ mod tests {
 
         let read = |name: &str| std::fs::read_to_string(dir.join(name)).expect(name);
         assert!(read("plymouth/jaios/jaios.plymouth").contains(&format!("BackgroundStartColor=0x{}\n", hex(t.void))));
-        let limine = read("limine/theme.conf");
+        let limine = limine_conf(&t);
         assert!(limine.contains(&format!("term_foreground: {}\n", hex(t.ink))) && limine.contains("timeout: 3\n") && limine.contains("remember_last_entry: yes\n"));
         assert!(limine.contains(&format!("interface_branding_colour: {}\n", hex(t.accent))));
         let palette = limine.lines().find_map(|l| l.strip_prefix("term_palette: ")).expect("a palette");

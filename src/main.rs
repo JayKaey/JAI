@@ -557,14 +557,23 @@ ENV: JAI_LOG (e.g. jai=debug), JAI_PROFILE, OLLAMA_URL (external engine)";
 /// there is one (JAI.exe on its own, downloaded, has none: it is the installer).
 fn ensure_working_directory() -> bool {
     let is_home = |p: &Path| p.join("models").is_dir() || p.join("runtime").is_dir() || p.join(config::CONFIG_FILE).is_file();
+    let exe = std::env::current_exe();
+    // J.A.I.OS: the program is the system's (/usr/lib/jai, read-only, though its runtime/ makes it
+    // look like a home, and the menu entry starts him there); each user's J.A.I. is his own folder,
+    // made at his first start as the installer makes the first user's.
+    #[cfg(unix)]
+    if exe.as_ref().is_ok_and(|e| e.starts_with("/usr/lib/jai")) {
+        let home = installer::folder();
+        if !is_home(&home) && std::fs::create_dir_all(&home).is_ok() {
+            let _ = std::os::unix::fs::symlink("/usr/lib/jai/runtime", home.join("runtime"));
+            let _ = std::os::unix::fs::symlink("/var/lib/jai/models", home.join("models"));
+        }
+        return std::env::set_current_dir(home).is_ok();
+    }
     if std::env::current_dir().map(|d| is_home(&d)).unwrap_or(false) {
         return true;
     }
-    if let Ok(exe) = std::env::current_exe() {
-        // J.A.I.OS: the program is the system's (/usr/lib/jai, read-only); each user's J.A.I. is his own folder.
-        if exe.starts_with("/usr/lib/jai") && is_home(&installer::folder()) {
-            return std::env::set_current_dir(installer::folder()).is_ok();
-        }
+    if let Ok(exe) = exe {
         let mut dir = exe.parent();
         while let Some(d) = dir {
             if is_home(d) {

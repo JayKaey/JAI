@@ -1,0 +1,5 @@
+# J.A.I.OS: no KDE splash between the login screen and the desktop: Plymouth and his login
+# screen are the look, and his shell is up before a splash could show.
+[KSplash]
+Engine=none
+Theme=None

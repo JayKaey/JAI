@@ -14,3 +14,7 @@ Placement=Centered
 [Effect-overview]
 # No hot corner: the corners are the desktop's.
 BorderActivate=9
+
+[ModifierOnlyShortcuts]
+# The Meta key alone opens his [J] menu (the shell also answers Plasma's own name for it).
+Meta=org.jaios.Shell,/Shell,org.jaios.Shell,ToggleMenu

@@ -609,20 +609,13 @@ pub fn pacman_conf(level: Level) -> String {
     conf
 }
 
-fn hex(c: [u8; 3]) -> String {
-    format!("{:02X}{:02X}{:02X}", c[0], c[1], c[2])
-}
-
-/// Limine's menu in J.A.I.'s look: it starts what was started last, after 3 s. J.A.I.OS's
-/// entry stands first; limine-entry-tool puts every kernel under it (with its checksum) and
-/// limine-snapper-sync the snapshots, so entry 2 is the newest kernel. Windows is started
-/// from its own partition, found by that partition's GUID.
+/// Limine's menu in J.A.I.'s look (`os_look`'s lines, the same as the package's): it starts
+/// what was started last, after 3 s. J.A.I.OS's entry stands first; limine-entry-tool puts
+/// every kernel under it (with its checksum) and limine-snapper-sync the snapshots, so entry 2
+/// is the newest kernel. Windows is started from its own partition, found by that partition's GUID.
 fn limine_conf(windows_esp: Option<&Part>) -> String {
-    let t = crate::holo::theme();
-    let (accent, deep, ink, alert) = (hex(t.accent), hex(t.deep), hex(t.ink), hex(t.alert));
-    let mut conf = format!(
-        "timeout: 3\nremember_last_entry: yes\ndefault_entry: 2\ninterface_branding: {NAME}\ninterface_branding_colour: {accent}\nterm_palette: 000000;{alert};{accent};{accent};{deep};{deep};{accent};{ink}\nterm_foreground: {ink}\nterm_background: 00000000\nbackdrop: 000000\nwallpaper: boot():/jaios/wallpaper.png\nwallpaper_style: centered\n\n/+{NAME}\n    comment: J.A.I.\n"
-    );
+    let mut conf = crate::os_look::limine_conf(&crate::holo::theme());
+    conf += &format!("default_entry: 2\n\n/+{NAME}\n    comment: J.A.I.\n");
     if let Some(esp) = windows_esp {
         conf += &format!("\n/Windows\n    comment: Windows, as it was\n    protocol: efi\n    path: guid({}):/EFI/Microsoft/Boot/bootmgfw.efi\n", esp.partuuid);
     }
@@ -716,15 +709,15 @@ pub fn plan(disks: &[Disk], c: &Choices, m: &Machine) -> Result<Plan, Said> {
         ids.fs,
         if own_keys { "yes" } else { "no" }
     );
-    let (loader, fallback) = ("/boot/EFI/limine/limine_x64.efi", "/boot/EFI/BOOT/BOOTX64.EFI");
+    let [loader, fallback] = crate::os_system::LIMINE_LOADERS;
     let mut boot = vec![
         file("/etc/default/limine", defaults),
         file("/boot/limine.conf", limine_conf(windows_esp)),
         run(&["install", "-D", &format!("{ROOT}/usr/share/limine/BOOTX64.EFI"), &format!("{ROOT}{loader}")]),
         run(&["install", "-D", &format!("{ROOT}/usr/share/limine/BOOTX64.EFI"), &format!("{ROOT}{fallback}")]),
-        run(&["install", "-D", &format!("{ROOT}/usr/share/jaios/limine-wallpaper.png"), &format!("{ROOT}/boot/jaios/wallpaper.png")]).soft(),
-        inside(&["snapper", "--no-dbus", "-c", "root", "create-config", "/"]),
-        inside(&["snapper", "--no-dbus", "-c", "root", "set-config", "TIMELINE_CREATE=no", "NUMBER_LIMIT=10", "NUMBER_LIMIT_IMPORTANT=5"]),
+        run(&["install", "-D", &format!("{ROOT}/usr/share/jaios/limine/wallpaper.png"), &format!("{ROOT}{}", crate::os_look::LIMINE_WALLPAPER.replace("boot():", "/boot"))]).soft(),
+        // jaios-settings' template: ten snapshots, five important ones, none by the clock.
+        inside(&["snapper", "--no-dbus", "-c", "root", "create-config", "-t", "jaios", "/"]),
     ];
     if own_keys {
         // The firmware takes keys now: his own and Microsoft's (-m: Windows and the cards'
@@ -743,11 +736,9 @@ pub fn plan(disks: &[Disk], c: &Choices, m: &Machine) -> Result<Plan, Said> {
         // it, since that needs the checksum computed here; the firmware starts EFI/limine by
         // its entry. Enroll it too once the root core keeps the keys.
         boot.extend([inside(&["limine-enroll-config"]).soft(), inside(&["sbctl", "sign", "--save", loader]), inside(&["sbctl", "sign", "--save", fallback])]);
-    } else {
-        // Secure Boot keeps the maker's keys (or is off): J.A.I.'s root core finishes this at
-        // the first start, when the firmware is in Setup Mode.
-        boot.push(file("/var/lib/jaios/secure-boot-pending", "The installer made no Secure Boot keys: the firmware was not in Setup Mode.\n"));
     }
+    // (With the maker's keys, or Secure Boot off, his root core finishes this later: he tells
+    // how at the first start, from `sbctl status`, and "finish Secure Boot" does it.)
     boot.push(run(&["efibootmgr", "--create", "--disk", disk, "--part", &n_esp.to_string(), "--label", NAME, "--loader", r"\EFI\limine\limine_x64.efi"]));
     boot.push(inside(&["systemctl", "enable", "greetd.service", "NetworkManager.service", "bluetooth.service", "fstrim.timer", "limine-snapper-sync.service", "jai-system.service"]));
     step("Making it start", "Startfähig machen", boot);
@@ -958,11 +949,11 @@ mod tests {
         let at = |what: &str| shown.iter().position(|l| l == what).unwrap_or_else(|| panic!("{what} is not planned"));
         let order = [at("arch-chroot /mnt sbctl create-keys"), at("arch-chroot /mnt sbctl enroll-keys --microsoft"), at("arch-chroot /mnt limine-update"), at("arch-chroot /mnt limine-enroll-config"), at("arch-chroot /mnt sbctl sign --save /boot/EFI/limine/limine_x64.efi")];
         assert!(order.windows(2).all(|w| w[0] < w[1]), "{order:?}");
-        assert!(!shown.iter().any(|l| l.contains("sbctl sign") && l.contains("vmlinuz")) && plan.file("/mnt/var/lib/jaios/secure-boot-pending").is_none());
-        // The maker's keys stay: nothing is enrolled, a note is left for his root core, and
-        // the summary warns.
+        assert!(!shown.iter().any(|l| l.contains("sbctl sign") && l.contains("vmlinuz")));
+        // The maker's keys stay: nothing is enrolled (his root core finishes it later), and the
+        // summary warns.
         let kept = super::plan(&disks, &choices(free()), &Machine { secure_boot: SecureBoot::On, ..machine() }).unwrap();
-        assert!(!kept.shown().iter().any(|l| l.contains("/mnt sbctl") || l.contains("enroll-config")) && kept.file("/mnt/var/lib/jaios/secure-boot-pending").is_some());
+        assert!(!kept.shown().iter().any(|l| l.contains("/mnt sbctl") || l.contains("enroll-config")));
         assert!(kept.file("/mnt/etc/default/limine").unwrap().contains("ENABLE_ENROLL_LIMINE_CONFIG=no") && kept.summary.iter().any(|(s, warn)| *warn && s.en.contains("Setup Mode")));
     }
 

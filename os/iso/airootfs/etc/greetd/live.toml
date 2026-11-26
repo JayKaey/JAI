@@ -8,7 +8,8 @@ vt = 1
 command = "env XDG_SESSION_TYPE=wayland /usr/lib/plasma-dbus-run-session-if-needed /usr/bin/startplasma-wayland"
 user = "liveuser"
 
-# After that session has ended: J.A.I.'s login screen, as on the installed system.
+# After that session has ended: J.A.I.'s login screen inside KWin, as on the installed system
+# (os/settings/etc/greetd/config.toml).
 [default_session]
-command = "/usr/lib/jai/jai --greeter"
+command = "dbus-run-session kwin_wayland --drm --no-lockscreen --no-global-shortcuts --locale1 --xwayland --exit-with-session '/usr/lib/jai/jai --greeter'"
 user = "greeter"

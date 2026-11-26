@@ -111,6 +111,10 @@ fn argv(words: &[&str]) -> Vec<String> {
     words.iter().map(|w| w.to_string()).collect()
 }
 
+/// Limine on the boot partition: what the firmware's entry starts, and the fallback loader.
+/// With Secure Boot both are signed (the installer in Setup Mode, else `FinishSecureBoot`).
+pub const LIMINE_LOADERS: [&str; 2] = ["/boot/EFI/limine/limine_x64.efi", "/boot/EFI/BOOT/BOOTX64.EFI"];
+
 /// Taking back what changed between two snapshots: a snapshot of now first, then snapper, then
 /// the boot files (the kernel and its initramfs stand on the ESP, outside every snapshot).
 #[cfg(any(target_os = "linux", test))]
@@ -142,9 +146,16 @@ impl Order {
             Order::UndoLastUpdate => last_update(snapshots).map(|(pre, post)| way_back(&format!("{pre}..{post}"), has)).ok_or_else(|| "No update has a snapshot before and after it.".to_string()),
             Order::Rollback(n) => snapshots.iter().any(|s| s.number == *n).then(|| way_back(&format!("{n}..0"), has)).ok_or_else(|| format!("There is no snapshot {n}.")),
             Order::FinishSecureBoot if !setup_mode => Err("The firmware is not in Setup Mode. Restart into the firmware's setup, clear its Secure Boot keys, start again and ask once more.".to_string()),
-            // (CachyOS's own way with Limine: own keys beside Microsoft's, the config's checksum
-            // enrolled, then limine-update signs what the firmware starts.)
-            Order::FinishSecureBoot => Ok([argv(&["sbctl", "create-keys"]), argv(&["sbctl", "enroll-keys", "--microsoft"])].into_iter().chain(["limine-enroll-config", "limine-update"].into_iter().filter(|tool| has(tool)).map(|tool| argv(&[tool]))).collect()),
+            // (As the installer does it in Setup Mode: own keys beside Microsoft's; once they are
+            // enrolled, limine-update puts the menu's checksum into Limine, now and at every
+            // kernel and snapshot; then Limine is signed, as a signature covers the checksum. The
+            // kernels are not signed: Limine holds them to their checksums.)
+            Order::FinishSecureBoot => Ok([argv(&["sbctl", "create-keys"]), argv(&["sbctl", "enroll-keys", "--microsoft"])]
+                .into_iter()
+                .chain(has("limine-update").then(|| argv(&["sed", "-i", "s/^ENABLE_ENROLL_LIMINE_CONFIG=no$/ENABLE_ENROLL_LIMINE_CONFIG=yes/", "/etc/default/limine"])))
+                .chain(has("limine-update").then(|| argv(&["limine-update"])))
+                .chain(LIMINE_LOADERS.map(|loader| argv(&["sbctl", "sign", "--save", loader])))
+                .collect()),
             Order::Run(command) if command.first().is_none_or(|program| program.trim().is_empty() || program.starts_with('-')) => Err("That is no command.".to_string()),
             Order::Run(command) => Ok(vec![command.clone()]),
         }
@@ -549,7 +560,18 @@ mod tests {
         assert!(Order::UndoLastUpdate.steps(&all, &[snapshot(4, "single", 0), snapshot(9, "post", 3)], false).is_err(), "no pair, nothing to take back");
         // Secure Boot only while the firmware takes keys.
         assert!(Order::FinishSecureBoot.steps(&all, &[], false).unwrap_err().contains("Setup Mode"));
-        assert_eq!(steps(Order::FinishSecureBoot).unwrap(), [argv(&["sbctl", "create-keys"]), argv(&["sbctl", "enroll-keys", "--microsoft"]), argv(&["limine-enroll-config"]), argv(&["limine-update"])]);
+        assert_eq!(
+            steps(Order::FinishSecureBoot).unwrap(),
+            [
+                argv(&["sbctl", "create-keys"]),
+                argv(&["sbctl", "enroll-keys", "--microsoft"]),
+                // (Only once the keys are in: a failed job leaves the setting as it was.)
+                argv(&["sed", "-i", "s/^ENABLE_ENROLL_LIMINE_CONFIG=no$/ENABLE_ENROLL_LIMINE_CONFIG=yes/", "/etc/default/limine"]),
+                argv(&["limine-update"]),
+                argv(&["sbctl", "sign", "--save", "/boot/EFI/limine/limine_x64.efi"]),
+                argv(&["sbctl", "sign", "--save", "/boot/EFI/BOOT/BOOTX64.EFI"]),
+            ]
+        );
         // A command as root is its own words, one argument each.
         assert_eq!(steps(Order::Run(argv(&["systemctl", "restart", "bluetooth"]))).unwrap(), [argv(&["systemctl", "restart", "bluetooth"])]);
         assert!(steps(Order::Run(Vec::new())).is_err() && steps(Order::Run(argv(&["-rf", "/"]))).is_err() && steps(Order::Run(argv(&[" "]))).is_err());

@@ -484,11 +484,11 @@ fields of `whisper_full_params`. After a build without it, run `cargo clean -p w
 At run time he needs `espeak-ng` (his voice), `zstd` (the installer unpacks Ollama with it),
 `libpulse` (`pactl`: the volume of every app and the microphone), `tesseract` with its English and
 German data (reading the screen), `pacman-contrib` and `discover` (app updates), `geoclue` (where
-the PC is), `xdg-utils`, `yt-dlp` and `ffmpeg` (the media grabber), and `wl-clipboard` (the
-selection in Dolphin); the NVIDIA driver's `nvidia-smi` tells him the video memory:
+the PC is), `xdg-utils`, `yt-dlp` and `ffmpeg` (the media grabber), `wl-clipboard` (the
+selection in Dolphin) and `polkit` (`pkexec`: the rights to write a J.A.I.OS stick); the NVIDIA driver's `nvidia-smi` tells him the video memory:
 
 ```
-sudo pacman -S --needed espeak-ng zstd libpulse tesseract tesseract-data-eng tesseract-data-deu pacman-contrib discover geoclue xdg-utils yt-dlp ffmpeg wl-clipboard
+sudo pacman -S --needed espeak-ng zstd libpulse tesseract tesseract-data-eng tesseract-data-deu pacman-contrib discover geoclue xdg-utils yt-dlp ffmpeg wl-clipboard polkit
 ```
 
 The file orders ("rename this", "zip these", "print it twice", "copy the path of this") read
@@ -513,12 +513,62 @@ fetches Ollama for Linux and the models, and installs into `~/.local/share/jai` 
 the applications menu. Only on Windows: WhatsApp Desktop (Linux opens WhatsApp
 Web) and the microphone's level meter.
 
+"Make a J.A.I.OS stick" works on Linux too: polkit (`pkexec`) asks for the rights, the stick's
+partitions are unmounted and the device is written directly and read back; drives are read with
+`lsblk`. "Is my PC ready for J.A.I.OS?" tells UEFI, Secure Boot and the newest image. Making room
+for J.A.I.OS is not offered on Linux, as Linux cannot shrink a BitLocker partition: ask J.A.I. on
+Windows.
+
 ## J.A.I.OS
 
 J.A.I.OS is an operating system made of J.A.I.: Arch Linux with CachyOS's repositories and kernel
 (`linux-cachyos`), KWin as the compositor, and J.A.I. in place of the Plasma shell, the login
 screen and the system's control. Everything for it lives in `os/` in this repository; the program
 is the same `jai`, started in other modes. Nothing of it has run on a real PC yet.
+
+**From Windows.** "Is my PC ready for J.A.I.OS?" shows UEFI, Secure Boot, GPT, BitLocker, Fast
+Startup, the room after C: (40 GB needed) and the newest install image. "Make room for J.A.I.OS"
+(or "make 150 GB of room for J.A.I.OS") shrinks C: with Windows' own storage API, which works
+with BitLocker on: he says how much C: can give, suggests 100 GB, never leaves C: under 30 GB
+free, and shrinks only after your yes and Windows' own permission question. Keep the BitLocker
+recovery key at hand. "Switch off Fast Startup" does that (a dual boot needs it off). "Make a
+J.A.I.OS stick" (optionally "on the SanDisk" or "to drive E") fetches the newest
+`jaios-<version>-x86_64.iso` from the GitHub releases, checks its SHA-256, asks before erasing the
+stick, writes it and reads it back. Only USB sticks up to 300 GB that hold nothing of the system
+are written to. Rufus and Ventoy work with the same ISO. The steps that need rights are flags of
+the same program, started by him with Windows' permission question: `--make-room`,
+`--write-stick`, `--fast-startup-off`.
+
+**Installing J.A.I.OS.** Start the stick in UEFI mode; the installer (`jai --os-install`) opens by
+itself. It asks for the language (English or German), the time zone and keyboard, where on the
+disk J.A.I.OS goes, your J.A.I. account, and a user. Three ways onto the disk: *beside Windows,
+into free space* (chosen by itself when a disk with Windows has 40 GiB or more unallocated; make
+that room from Windows first, the installer never shrinks Windows), *erase this disk* (type the
+disk's name), or *replace a partition*. Windows' partitions, its EFI partition and the stick are
+never taken. A summary lists every change before anything is touched. J.A.I.OS gets its own
+4 GiB boot partition and a btrfs root (@, @home, @root, @srv, @cache, @tmp, @log), encrypted with
+LUKS2 if you switch that on. Packages come from CachyOS's repositories for your processor
+(x86-64-v3, v4, znver4), Arch's and `[jaios]`; the list is `os/packages/target.txt`. Limine
+starts what was started last after 3 seconds and has an entry for Windows. Secure Boot: with the
+firmware in Setup Mode J.A.I. enrolls his own keys next to Microsoft's; otherwise he tells you at
+the first start how to finish. With Secure Boot on and the maker's keys, J.A.I.OS does not start
+until you do that or turn it off. Account: LOG IN makes this PC a Main PC with your admin
+account; REGISTER joins a Main PC. Anywhere but on the stick, `jai --os-install` is a preview on a
+sample PC and changes nothing.
+
+**The desktop.** On J.A.I.OS, J.A.I. draws the desktop himself, on KWin: `jai --shell` is a small
+process beside the assistant (no models, no voice), started with the session by
+`jai-shell.service`. Every monitor gets a taskbar: the [J] key, a key per open program (a click
+brings its window to the front or steps it back, another click goes round a program's windows,
+a middle click opens another), the tray, his lamp with what he is doing, and the clock. The [J]
+key or the Meta key opens the menu: type to search programs; whatever matches none is an order
+for J.A.I. on Enter; a right click pins a program to the favourites; shut down, restart and log
+out ask for a second press. The desktop shows his core and the icons of your Desktop folder.
+Notifications from every program appear as cards at the top right; the volume and brightness
+keys show their reading at the bottom. If the shell crashes it starts again; after three crashes
+in a minute KDE's own desktop opens as safe mode (`systemctl --user start jai-shell.service`
+brings his back). The shell is drawn on the CPU into shared memory, so it comes up on any
+graphics driver.
 
 **Root core.** `jai-system.service` runs `jai --system` as root: the D-Bus service
 `org.jaios.System1` on the system bus. Only root and members of the group `jai` may call it; it

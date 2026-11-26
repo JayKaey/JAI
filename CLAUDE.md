@@ -77,6 +77,8 @@ The owner uses the PC while tests run. Put test windows on `--monitor 2` and nev
 - `memory.rs` is `jai_memory.db` (SQLite with WAL and FTS5). The feature modules keep their tables there too.
 - `vault.rs` keeps AES-GCM sealed secrets, with the key in the Windows Credential Manager.
 
+**J.A.I.OS** (2026-11-25; the README's J.A.I.OS section; nothing of it has run on real hardware) is an Arch/CachyOS system where the same binary is the OS, in other modes: `--shell` (the desktop on KWin layer-shell: `os_wayland`, `os_bus`, `os_shell`, `os_apps`, `os_notes`, `os_link`), `--greeter` (the login screen on greetd: `os_greeter`), `--system` (the root core `org.jaios.System1`: `os_system`; spoken orders in `os_orders`), `--os-install` (`os_install`, `os_install_run`, `gui::os_install_view`) and `--os-look` (`os_look`). `dualboot` / `dualboot_disk` are the Windows side (make room, the stick). Data files live in `os/` (`os/settings/` is the `jaios-settings` tree, `os/pkg/` the PKGBUILDs, `os/iso/` the archiso profile); the `J.A.I.OS` workflow (`jaios.yml`) builds the `[jaios]` repository and the ISO and boots it in QEMU. Logic stays in Rust; those files are data only.
+
 **Test-session guards.**
 - `platform::in_test_session()`: a scripted session is running.
 - `platform::hands_off()`: true under `cfg(test)` as well. Code that touches the owner's media players obeys it.

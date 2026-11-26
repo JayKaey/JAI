@@ -286,7 +286,7 @@ fn start_menu(exe: &Path) -> Result<(), String> {
 pub(crate) fn menu_entry(exe: &Path) -> String {
     let folder = exe.parent().unwrap_or(Path::new("."));
     format!(
-        "[Desktop Entry]\nType=Application\nName=J.A.I.\nComment=Local voice assistant\nExec=\"{}\"\nPath={}\nTerminal=false\nCategories=Utility;\nX-KDE-Wayland-Interfaces=org_kde_plasma_window_management,org_kde_kwin_fake_input\nX-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2\n",
+        "[Desktop Entry]\nType=Application\nName=J.A.I.\nComment=Local voice assistant\nExec=\"{}\"\nPath={}\nIcon=jaios\nTerminal=false\nCategories=Utility;\nX-KDE-Wayland-Interfaces=org_kde_plasma_window_management,org_kde_kwin_fake_input\nX-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2\n",
         exe.display(),
         folder.display()
     )
