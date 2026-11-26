@@ -58,6 +58,9 @@ jobs:
           cargo test --release -- --test-threads=4 2>&1 | tee all.txt || code=$?
           echo "::notice title=Whole suite on Linux::$(grep '^test result' all.txt)"
           awk "$FAILURES" all.txt | sed 's/^::error::/::warning::/'
+          # (A step shows ten warnings at most: every failed test's name in one notice.)
+          failed="$(grep -E '^    [a-z0-9_]+(::[a-z0-9_]+)+$' all.txt | tr -d ' ' | tr '\n' ' ')" || true
+          [ -z "$failed" ] || echo "::notice title=Failed on Linux::$failed"
           exit $code
       - uses: actions/upload-artifact@v7
         with:

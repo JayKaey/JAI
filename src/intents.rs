@@ -1806,7 +1806,8 @@ fn live_gauge(subject: &str) -> Option<(&'static str, &'static str, &'static str
 fn hud_view_sentence(text: &str) -> Option<Intent> {
     let s = normalize(text);
     let interface = |args: Value| Some(Intent::Tool { name: "configure_interface", args });
-    if WINDOWS_BACK.is_match(&s) {
+    // ("Restore my last session" is "where was I", programs too: this runs before the parser.)
+    if WINDOWS_BACK.is_match(&s) && crate::where_was_i::command(&s).is_none() {
         return Some(Intent::Tool { name: "spawn_native_window", args: json!({ "restore": "recent" }) });
     }
     if let Some(args) = keep_at_start_command(&s) {
@@ -7681,6 +7682,8 @@ mod tests {
         }
         // (His whole last session, programs too, is "where was I", since 2026-11-22.)
         assert_eq!(parse("Restore my last session"), Some(Intent::Tool { name: "where_was_i", args: json!({}) }));
+        // (Live 2026-11-26 the brain's HUD views, asked before the parser, brought back windows only.)
+        assert_eq!(crate::phrasings::route("Restore my last session").map(|(tool, _)| tool).as_deref(), Some("where_was_i"));
         let keep = |id: &str, on: bool| Some(Intent::Tool { name: "create_or_update_widget", args: json!({"id": id, "keep_at_start": on}) });
         for (text, id, on) in [
             ("Open that widget again the next time I start you", "last", true),

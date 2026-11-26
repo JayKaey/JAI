@@ -818,13 +818,25 @@ pub fn resolve_new(raw: &str, focus_dir: Option<&Path>) -> Result<PathBuf, Strin
 
 /// Writing here could break Windows, Linux or JAI himself.
 fn check_writable(path: &Path) -> Result<(), String> {
-    let key = same_path_key(path);
+    // ("~/../../etc/hosts" is /etc/hosts.)
+    let plain = path.components().fold(PathBuf::new(), |mut plain, part| {
+        match part {
+            std::path::Component::ParentDir => {
+                plain.pop();
+            }
+            std::path::Component::CurDir => {}
+            part => plain.push(part),
+        }
+        plain
+    });
+    let key = same_path_key(&plain);
     let protected: &[&str] = if cfg!(windows) {
         &["c:\\windows", "c:\\program files", "c:\\programdata", "c:\\$recycle.bin", "c:\\system volume information"]
     } else {
         &["/etc", "/usr", "/bin", "/sbin", "/boot", "/sys", "/proc", "/lib", "/var/lib", "/dev"]
     };
-    if protected.iter().any(|p| key.starts_with(p)) {
+    // (Keyed the same way: on Linux the key's "\etc" never began with "/etc", so none was kept.)
+    if protected.iter().any(|p| key.starts_with(&same_path_key(Path::new(p)))) {
         return Err(format!("{} is a system location; I won't write there.", path.display()));
     }
     if key.split('\\').any(|c| c == BACKUP_DIR) {
@@ -1323,13 +1335,14 @@ mod tests {
     #[test]
     fn a_nearest_name_is_listed_not_opened() {
         // "Open my kalender file" opened a Blender installer, the nearest name (0.869).
-        let hit = |loose| Hit { path: PathBuf::from("C:\\Users\\max\\Downloads\\blender-4.2.0-windows-x64.msi"), is_dir: false, size: 1, modified: SystemTime::UNIX_EPOCH, score: 0.869, loose };
+        let path = Path::new("Users").join("max").join("Downloads").join("blender-4.2.0-windows-x64.msi");
+        let hit = |loose| Hit { path: path.clone(), is_dir: false, size: 1, modified: SystemTime::UNIX_EPOCH, score: 0.869, loose };
         assert!(to_open(&[hit(true)], true).is_none(), "a nearest name is never opened by itself");
         assert!(to_open(&[hit(false)], true).is_some(), "a name as said still opens");
         assert!(to_open(&[hit(false)], false).is_none());
         let said = nearest_names("kalender.ics", &[hit(true)]);
         assert_eq!(said.lines().next(), Some("Nothing is called 'kalender.ics', Sir. The closest is blender-4.2.0-windows-x64.msi."), "what he says");
-        assert!(said.contains("C:\\Users\\max\\Downloads\\blender-4.2.0-windows-x64.msi (") && !said.contains("Opening"), "listed for the model, not opened");
+        assert!(said.contains(&format!("{} (", path.display())) && !said.contains("Opening"), "listed for the model, not opened");
     }
 
     #[test]
@@ -1416,8 +1429,10 @@ mod tests {
     fn system_and_own_source_paths_are_protected() {
         if cfg!(windows) {
             assert!(check_writable(Path::new("C:\\Windows\\System32\\drivers\\etc\\hosts")).is_err());
+            assert!(check_writable(Path::new("C:\\Users\\max\\..\\..\\Windows\\win.ini")).is_err(), "no way round by ..");
         } else {
             assert!(check_writable(Path::new("/etc/hosts")).is_err());
+            assert!(check_writable(Path::new("/home/max/../../etc/hosts")).is_err(), "no way round by ..");
         }
         if let Ok(root) = crate::self_improve::project_root() {
             assert!(check_writable(&root.join("src").join("main.rs")).unwrap_err().contains("patch_own_source"));

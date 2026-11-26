@@ -12,6 +12,7 @@
 //! as an example request for Sir to send. The badge shows PASS / FAIL (or IN CONSOLE).
 
 use super::{strip_font, strip_ink, strip_muted};
+use crate::brain::first_sentence;
 use crate::tools::{ToolContext, JAI_CAPABILITY_MANIFEST};
 use eframe::egui::{self, Frame, Margin, Response, RichText, Ui, ViewportBuilder, ViewportClass, ViewportCommand, ViewportId};
 use serde_json::Value;
@@ -351,19 +352,6 @@ fn body(ui: &mut Ui, app: &crate::app::Jai, rt: &Handle) {
     });
 }
 
-/// The first sentence of `text`: up to the first stop, "!" or "?" that ends one (a space or the
-/// end follows it), never a stop inside "e.g.", "i.e." or "3.5". (Seen in the real window on
-/// 2026-11-19: "Open any installed application, folder or file (e.")
-fn first_sentence(text: &str) -> &str {
-    for (i, c) in text.char_indices() {
-        let ends = matches!(c, '.' | '!' | '?') && text[i + 1..].chars().next().is_none_or(char::is_whitespace);
-        if ends && !(text[..i].ends_with("e.g") || text[..i].ends_with("i.e")) {
-            return text[..=i].trim();
-        }
-    }
-    text.trim()
-}
-
 fn row(ui: &mut Ui, tools: &ToolContext, rt: &Handle, name: &str, description: &str, plan: TryPlan) {
     let probe = probe_args(name).is_some();
     let outcome = results().get(name).cloned();
@@ -420,7 +408,7 @@ fn row(ui: &mut Ui, tools: &ToolContext, rt: &Handle, name: &str, description: &
     let text = match (&outcome, &suite) {
         (Some(Some((_, _, line))), _) if !line.is_empty() => format!("→ {line}"),
         (None, Some(o)) if !o.detail.is_empty() => format!("→ {}", o.detail),
-        _ => first_sentence(description).to_string(),
+        _ => first_sentence(description),
     };
     ui.add(egui::Label::new(RichText::new(text).size(11.0).color(strip_muted())).wrap());
 }
@@ -487,11 +475,18 @@ mod tests {
         assert_eq!(first_sentence("\"Is Firefox open?\" is answered from the process list. More."), "\"Is Firefox open?\" is answered from the process list.");
         assert_eq!(first_sentence("Zoom 1.25 is bigger! And then."), "Zoom 1.25 is bigger!");
         assert_eq!(first_sentence("  One line without a stop  "), "One line without a stop");
+        // (Live 2026-11-26, the reply to "bring back my windows": "Brought back 3 views: Protocols, J.")
+        assert_eq!(first_sentence("Brought back 2 views: J.A.I. // CONTACTS, Protocols. Then more."), "Brought back 2 views: J.A.I. // CONTACTS, Protocols.");
+        assert_eq!(first_sentence("Updated to 3.5. Restart me.\nMore"), "Updated to 3.5.");
+        assert_eq!(first_sentence("First line\nsecond line."), "First line");
+        // (Over 160 characters: cut after a word, and shown to be cut.)
+        let long = first_sentence(&"word ".repeat(60));
+        assert!(long.ends_with(" word…") && long.chars().count() == 160, "{long}");
         // Every tool's line in the lab ends as a sentence does, or is the whole description.
         let defs = crate::tools::definitions_with(Vec::new());
         for (name, description) in catalogue(&defs).into_iter().flat_map(|(_, tools)| tools) {
             let line = first_sentence(&description);
-            assert!(line == description.trim() || line.ends_with(['.', '!', '?']), "{name}: {line}");
+            assert!(line == description.trim() || line.ends_with(['.', '!', '?', '…']), "{name}: {line}");
             assert!(!line.ends_with("(e.") && !line.ends_with(" e."), "{name}: {line}");
         }
     }

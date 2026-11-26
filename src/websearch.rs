@@ -102,8 +102,11 @@ pub async fn search(query: &str) -> Result<String, String> {
     }
     info!("[TOOL] Web search: '{query}'");
 
-    // An encyclopaedia article about the city adds nothing to "what's the weather in Berlin".
-    let wants_weather = weather_location(query).is_some();
+    // An encyclopaedia article about the city adds nothing to "what's the weather in Berlin",
+    // and the engines get "weather berlin" (live 2026-11-26 the whole question found WhatsApp).
+    let place = weather_location(query);
+    let wants_weather = place.is_some();
+    let asked = place.filter(|place| !place.is_empty()).map_or_else(|| query.to_string(), |place| format!("weather {place}"));
     let wiki_lookup = async {
         if wants_weather {
             None
@@ -112,7 +115,7 @@ pub async fn search(query: &str) -> Result<String, String> {
         }
     };
     // Two engines at once, their results taken in turn (one blocked or thin leaves the other).
-    let (wiki, ddg, bing, weather) = tokio::join!(wiki_lookup, duckduckgo(query), bing(query), weather(query));
+    let (wiki, ddg, bing, weather) = tokio::join!(wiki_lookup, duckduckgo(&asked), bing(&asked), weather(query));
     let results = interleave(
         ddg.unwrap_or_else(|e| {
             warn!("[TOOL] DuckDuckGo search failed: {e}");
@@ -923,6 +926,7 @@ mod tests {
     fn weather_questions_find_their_place() {
         assert_eq!(weather_location("Wie ist das Wetter gerade in Berlin?").as_deref(), Some("berlin"));
         assert_eq!(weather_location("What's the weather in London tomorrow").as_deref(), Some("london"));
+        assert_eq!(weather_location("What's the weather like in Berlin").as_deref(), Some("berlin"));
         assert_eq!(weather_location("what's the weather at my current location").as_deref(), Some(""));
         assert_eq!(weather_location("Weather forecast").as_deref(), Some(""));
         assert_eq!(weather_location("Who is the chancellor of Germany"), None);

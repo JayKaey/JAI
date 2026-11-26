@@ -3277,7 +3277,9 @@ mod tests {
         assert_eq!(saved(r"save it to D:\Prints"), stl(r"D:\Prints"));
         assert_eq!(saved("save it somewhere else"), stl("ask"));
         assert_eq!(saved("export it as OBJ to my downloads").map(|s| (s.1, s.2)), Some((Some("obj".to_string()), Some("downloads".to_string()))));
-        assert_eq!(folder_path(r"D:\Prints"), PathBuf::from(r"D:\Prints"));
+        // (A whole path is kept as it is: a drive on Windows, a path from "/" on Linux.)
+        let anywhere = if cfg!(windows) { r"D:\Prints" } else { "/mnt/prints" };
+        assert_eq!(folder_path(anywhere), PathBuf::from(anywhere));
         assert!(folder_path("desktop").ends_with("Desktop"));
     }
 

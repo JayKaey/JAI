@@ -262,8 +262,9 @@ mod tests {
     #[test]
     fn fixes_are_shown_and_said_by_their_source() {
         let device = Fix { lat: 45.7578, lon: 4.8320, accuracy_m: 18.0, source: Source::Device, label: None };
-        assert_eq!(device.display(), "You: 45.7578, 4.8320 (\u{b1}18 m, Windows location)");
-        assert_eq!(device.spoken(), "There you are, Sir: the Windows location service has you to within about 20 metres.");
+        let (service, said) = if cfg!(windows) { ("Windows location", "Windows") } else { ("GeoClue location", "system") };
+        assert_eq!(device.display(), format!("You: 45.7578, 4.8320 (\u{b1}18 m, {service})"));
+        assert_eq!(device.spoken(), format!("There you are, Sir: the {said} location service has you to within about 20 metres."));
         assert!(device.altitude_km() < 2.0, "street level for a precise fix");
         let net = Fix { lat: 45.76, lon: 4.84, accuracy_m: NETWORK_ACCURACY_M, source: Source::Network, label: Some("Lyon, France".into()) };
         assert_eq!(net.spoken(), "There you are, Sir: around Lyon, France, going by your internet connection, so only to within about 25 kilometres.");

@@ -342,8 +342,10 @@ mod tests {
         assert_eq!(brain_for(Some(4 * 1024)), Ok(SMALL_BRAIN));
         assert!(brain_for(Some(2 * 1024)).unwrap_err().contains("2.0 GB"));
         assert!(brain_for(None).is_err());
-        // (This PC's own card is read.)
-        assert!(vram_mb().is_some_and(|mb| mb >= 1024), "{:?}", vram_mb());
+        // (This PC's own card is read; GitHub's Linux runners have none.)
+        if cfg!(windows) || std::env::var_os("CI").is_none() {
+            assert!(vram_mb().is_some_and(|mb| mb >= 1024), "{:?}", vram_mb());
+        }
     }
 
     /// One of Sir's Main PCs (Sir, 2026-11-25) is logged in once his admin account is made there:

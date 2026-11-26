@@ -127,6 +127,12 @@ pub const RELEASES: &[Release] = &[
             fixed("J.A.I.OS's brain on the graphics card", "The installer adds Ollama's part for the card: CUDA on NVIDIA, ROCm on AMD, else Vulkan."),
             new("Wi-Fi, Bluetooth, power plan, dark or light", "\"Wi-Fi off\", \"airplane mode on\", \"high performance mode\", \"switch Windows to dark mode\".", "pc_switches"),
             fixed("\"Mach Platz\" moves him aside", "Said alone, it moves his core out of the way again; \"mach Platz frei\" still frees disk space."),
+            fixed("\"Restore my last session\" is all of it", "It brought back his windows alone; now it is \"where was I\": programs and folders too."),
+            fixed("Replies that stopped at \"J.\"", "\"Bring back my windows\" stopped at the \"J.\" of \"J.A.I.\"; now it says the whole sentence."),
+            fixed("Short German answers", "A one-line German answer slipped past his English-only rule; it is asked again in English now."),
+            fixed("Weather without WhatsApp", "\"What's the weather in Berlin?\" cited WhatsApp's pages; the search is \"weather Berlin\" now."),
+            fixed("Linux: system folders are safe", "His file tools could write to /etc or /usr on Linux: the guard read paths the Windows way."),
+            fixed("Linux: textures of models made on Windows", "A model that names its textures the Windows way (\"tex\\wood.png\") finds them on Linux too."),
         ],
     },
     Release {

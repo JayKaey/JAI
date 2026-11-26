@@ -445,8 +445,10 @@ fn vocabulary() -> Vec<Term> {
         }
     };
     // The built-in applications that are installed here (all of them while the index of
-    // installed programs is still being made: nothing is known yet then).
-    let indexed = !crate::appindex::names().is_empty();
+    // installed programs is still being made: nothing is known yet then; and in tests, which
+    // must not hang on what the PC they run on has installed).
+    let installed = if cfg!(test) { Vec::new() } else { crate::appindex::names() };
+    let indexed = !installed.is_empty();
     for spec in crate::apps::APPS {
         if indexed && !(crate::appindex::is_known(spec.display) || crate::appindex::is_known(spec.id)) {
             continue;
@@ -456,7 +458,7 @@ fn vocabulary() -> Vec<Term> {
             add(alias, spec.display, spec.id);
         }
     }
-    for name in crate::appindex::names() {
+    for name in installed {
         let id = words(&name).join(" ");
         add(&name, &name, &id);
     }
@@ -959,7 +961,8 @@ pub fn worth_hearing_again(text: &str, heard: crate::stt::HeardQuality, routes: 
 /// The names worth giving the recogniser for a careful hearing: the applications Sir has, and
 /// his own views.
 pub fn hint() -> String {
-    let mut names: Vec<&str> = crate::apps::APPS.iter().filter(|spec| crate::appindex::is_known(spec.display) || crate::appindex::is_known(spec.id)).map(|spec| spec.display).take(8).collect();
+    // (Tests take the names below: what this PC has installed is no part of them.)
+    let mut names: Vec<&str> = crate::apps::APPS.iter().filter(|spec| !cfg!(test) && (crate::appindex::is_known(spec.display) || crate::appindex::is_known(spec.id))).map(|spec| spec.display).take(8).collect();
     if names.is_empty() {
         names = vec!["Discord", "Spotify", "Firefox", "Steam"];
     }

@@ -2183,10 +2183,12 @@ mod tests {
         assert_eq!(drive_letter(Path::new("e:\\x")), Some('E'));
         assert_eq!(drive_letter(Path::new("relative")), None);
         assert_eq!(label_of(Path::new("D:\\")), "D:\\");
-        assert_eq!(root_name(Path::new("C:\\Users\\max\\Downloads")), "Downloads");
+        // (Folders by this system's own separator: a Windows path is one name on Linux.)
+        let downloads = Path::new("Users").join("max").join("Downloads");
+        assert_eq!(root_name(&downloads), "Downloads");
         assert_eq!(spoken_target(Path::new("Z:\\")), "your Z drive");
-        assert_eq!(spoken_target(Path::new("C:\\Users\\max\\Downloads")), "your Downloads folder");
-        assert_eq!(spoken_target(Path::new("D:\\Games")), "the Games folder");
+        assert_eq!(spoken_target(&downloads), "your Downloads folder");
+        assert_eq!(spoken_target(&Path::new("Data").join("Games")), "the Games folder");
         assert_eq!(speakable("C:\\"), "the C drive");
         assert_eq!(speakable("Users"), "Users");
         assert!(same_path(Path::new("C:\\Users\\"), Path::new("c:\\users")));

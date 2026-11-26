@@ -4641,7 +4641,7 @@ fn opening_judgeable(text: &str) -> bool {
 const GERMAN_REPLY_WORDS: &[&str] = &[
     "ich", "nicht", "und", "der", "das", "ist", "natürlich", "gerne", "bitte", "ihnen", "auf", "deutsch", "mit", "für", "eine", "einen",
     "habe", "werde", "kann", "wird", "sind", "ihre", "heute", "morgen", "selbstverständlich", "sehr", "gut", "jetzt", "schon", "noch", "auch",
-    "dass", "wenn", "aber", "oder", "wie", "keine", "kein", "mein", "dein", "ja", "nein", "erledigt", "gemacht", "verstanden",
+    "dass", "wenn", "aber", "oder", "wie", "keine", "kein", "mein", "dein", "ja", "nein", "erledigt", "gemacht", "verstanden", "von", "es",
 ];
 
 /// The text without what stands in double quotation marks ("…", “…”, „…“, «…»). A mark that
@@ -4795,10 +4795,25 @@ fn with_sir(out: &str) -> String {
     format!("{}, Sir.", first_sentence(out).trim_end_matches(['.', '!', ' ']))
 }
 
-fn first_sentence(s: &str) -> String {
-    let s = s.trim();
-    let end = s.find(['.', '\n']).map(|i| i + 1).unwrap_or(s.len()).min(160);
-    s.chars().take(end).collect()
+/// The first sentence of `text`: up to a line break or the first stop, "!" or "?" that ends one
+/// (a space or the end follows it), never a stop inside "e.g.", "3.5" or "J.A.I." (live
+/// 2026-11-26: "Brought back 3 views: Protocols, J."). Over 160 characters it is cut after a word.
+pub(crate) fn first_sentence(text: &str) -> String {
+    let text = text.trim();
+    // "J.A.I", "e.g": single letters with stops between them.
+    let initials = |before: &str| {
+        let word = before.rsplit(char::is_whitespace).next().unwrap_or("").trim_start_matches(|c: char| !c.is_alphanumeric());
+        word.contains('.') && word.split('.').all(|part| part.chars().count() == 1 && part.chars().all(char::is_alphabetic))
+    };
+    let end = text
+        .char_indices()
+        .find(|&(i, c)| c == '\n' || (matches!(c, '.' | '!' | '?') && text[i + 1..].chars().next().is_none_or(char::is_whitespace) && !initials(&text[..i])))
+        .map_or(text.len(), |(i, c)| i + c.len_utf8());
+    let sentence = text[..end].trim_end();
+    match sentence.char_indices().nth(160) {
+        Some((at, _)) => format!("{}…", sentence[..at].rsplit_once(char::is_whitespace).map_or(&sentence[..at], |(head, _)| head).trim_end_matches([',', ';', ':'])),
+        None => sentence.to_string(),
+    }
 }
 
 /// The song a music result names as playing now, without the player's notes after it: "Back in
@@ -5168,6 +5183,10 @@ mod tests {
         assert!(looks_german_reply("Ich habe das erledigt."));
         assert!(!looks_german_reply("Your next lesson is Mathe with Herr Müller in Raum 204, Sir."));
         assert!(!looks_german_reply("Certainly, Sir. The Audio Devices panel is hidden."));
+        // A short German answer (live 2026-11-26, to "Was ist die Hauptstadt von Kanada?").
+        assert!(looks_german_reply("Die Hauptstadt von Kanada ist Ottawa."));
+        assert!(looks_german_reply("Es ist 13 Uhr."));
+        assert!(!looks_german_reply("Wernher von Braun built the Saturn V, Sir."));
         // A confirmation leaves out what Sir said himself, and keeps what he did not say.
         assert_eq!(brief_ack("Done, Sir. Discord is on Monitor 2.", "move discord to monitor 2"), "Done, Sir.");
         assert_eq!(brief_ack("Right away, Sir. Opening Discord.", "Open Discord"), "Right away, Sir.");

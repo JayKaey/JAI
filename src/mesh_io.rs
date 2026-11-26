@@ -761,8 +761,10 @@ pub fn decode_texture(bytes: &[u8]) -> Option<Texture> {
 /// A relative file next to the model (never above it, never absolute).
 fn sibling(base: Option<&Path>, uri: &str) -> Option<PathBuf> {
     let decoded = urlencoding::decode(uri).map(|c| c.into_owned()).unwrap_or_else(|_| uri.to_string());
+    // A model made on Windows names "tex\wood.png", on Linux too; "C:" is a drive on either.
+    let decoded = decoded.replace('\\', "/");
     let rel = Path::new(&decoded);
-    if rel.is_absolute() || rel.components().any(|c| matches!(c, std::path::Component::ParentDir | std::path::Component::Prefix(_) | std::path::Component::RootDir)) {
+    if rel.is_absolute() || decoded.contains(':') || rel.components().any(|c| matches!(c, std::path::Component::ParentDir | std::path::Component::Prefix(_) | std::path::Component::RootDir)) {
         return None;
     }
     Some(base.unwrap_or(Path::new(".")).join(rel))
@@ -2322,6 +2324,8 @@ mod tests {
         assert_eq!(sibling(Some(Path::new("C:/models")), "../secret.bin"), None);
         assert_eq!(sibling(Some(Path::new("C:/models")), "C:/Windows/x.png"), None);
         assert_eq!(sibling(Some(Path::new("/m")), "tex%20one.png"), Some(Path::new("/m").join("tex one.png")));
+        assert_eq!(sibling(Some(Path::new("/m")), r"tex\wood.png"), Some(Path::new("/m").join("tex").join("wood.png")));
+        assert_eq!(sibling(Some(Path::new("/m")), r"..\secret.bin"), None);
     }
 
     #[test]
