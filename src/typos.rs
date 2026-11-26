@@ -242,6 +242,8 @@ fn misheard(text: &str) -> Option<String> {
             (r"(?i)^(stop|start|end|quit)\s+panning\b", "$1 spanning"),
             (r"(?i)^(save|load)\s+(this|the|my)\s+mix(?:'s|er's|\s+his|\s+is)\s+", "$1 $2 mix as "),
             (r"(?i)\bmonitons?\b", "monitors"),
+            // "JAI, close the Earth, you." in an American voice (2026-11-26): "closely earth you".
+            (r"(?i)^closely\s+(earth|world|planet|board|radar|mixer|core)\b", "close the $1"),
             (r"(?i)\b(?:five\s+ocks|fire\s+fox)\b", "Firefox"),
             // "Set Discord to eighty percent" heard as "said Discord the 80%" and "said this
             // called the 80%" (only there: "what's this called?" stays a question).
@@ -384,11 +386,14 @@ mod tests {
             ("Watts Open.", "what's open"),
             ("use all Monitons.", "use all monitors"),
             ("turn five ocks off.", "turn Firefox off"),
+            // 2026-11-26, an American voice: "close the" run together.
+            ("closely earth you.", "close the earth you"),
+            ("Closely board.", "close the board"),
         ] {
             assert_eq!(normalize_user_input_typos(heard), normalize_user_input_typos(meant), "{heard}");
         }
         // As it is, where it is a sentence of its own.
-        for said in ["The pulse is fine", "I paused it", "Is the mutant movie good?", "said nothing", "Stop watching me", "What's this called?", "What's this mix's name?"] {
+        for said in ["The pulse is fine", "I paused it", "Is the mutant movie good?", "said nothing", "Stop watching me", "What's this called?", "What's this mix's name?", "Watch the earth closely", "closely related topics", "Closely watch my GPU"] {
             assert_eq!(misheard(said), None, "{said}");
         }
     }

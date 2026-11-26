@@ -556,6 +556,8 @@ mod tests {
             ("Jay said this called the 80%.", "said this called the 80%"),
             ("Jay Watts Open.", "Watts Open"),
             ("Jay use all Monitons.", "use all Monitons"),
+            // 2026-11-26, an American voice, in 4 runs of 5: "JAI, close the Earth, you."
+            ("Jay closely earth you.", "closely earth you"),
             // What other prompts made of the same clips (stt::bench::spoken_commands_keep_his_name).
             ("J-Pause,", "Pause"),
             ("J-System status.", "System status"),
@@ -570,6 +572,9 @@ mod tests {
             assert!(r.matched, "should match: {input}");
             assert_eq!(r.command, command, "{input}");
         }
+        // ...and the dispatcher reads it as it was meant (its typos first, as `Brain::run_turn`).
+        let heard = crate::typos::normalize_user_input_typos(&m.evaluate("Jay closely earth you.").command);
+        assert_eq!(crate::phrasings::route(&heard), Some(("hud_board".to_string(), serde_json::json!({"action": "close", "target": "earth"}))), "{heard}");
         assert_eq!(canon("Jaymute,"), "JAI, mute");
         // One word that only begins like his name, and Sir's handle with an order behind it.
         for input in [
@@ -586,6 +591,8 @@ mod tests {
             "Jump to the next page",
             "J-Lo is on tour",
             "Jaey Kaey, open Spotify",
+            // (Told of, not ordered: "closely" is "close the" only before a view of his.)
+            "Jay closely watched the game",
         ] {
             let r = m.evaluate(input);
             assert!(!r.matched, "should not match: {input} (command '{}')", r.command);
