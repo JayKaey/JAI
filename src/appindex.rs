@@ -95,7 +95,7 @@ fn score(query: &str, key: &str) -> f64 {
     jaro_winkler(query, key).max(normalized_levenshtein(query, key))
 }
 
-fn best(entries: &[AppEntry], query: &str, threshold: f64) -> Option<(f64, AppEntry)> {
+fn best<'a>(entries: impl IntoIterator<Item = &'a AppEntry>, query: &str, threshold: f64) -> Option<(f64, AppEntry)> {
     let mut best: Option<(f64, &AppEntry)> = None;
     for e in entries {
         let s = e.keys.iter().map(|k| score(query, k)).fold(0.0, f64::max);
@@ -147,12 +147,14 @@ pub fn names() -> Vec<String> {
 
 /// In-memory check used by the intent parser: an installed app with (nearly) this exact name.
 pub fn is_known(name: &str) -> bool {
+    known_in(&INDEX.read().unwrap_or_else(|e| e.into_inner()).entries, name)
+}
+
+/// Not every program on Linux's PATH: "cat", "date" or "sort" is no app name Sir says (CI,
+/// 2026-11-26: "make me a drawing of a cat" was no picture on Linux).
+fn known_in(entries: &[AppEntry], name: &str) -> bool {
     let query = normalize(name);
-    if query.len() < 3 {
-        return false;
-    }
-    let index = INDEX.read().unwrap_or_else(|e| e.into_inner());
-    best(&index.entries, &query, 0.97).is_some()
+    query.len() >= 3 && best(entries.iter().filter(|e| e.kind != EntryKind::PathBin), &query, 0.97).is_some()
 }
 
 fn entry(name: &str, target: PathBuf, kind: EntryKind, extra_key: Option<&str>) -> Option<AppEntry> {
@@ -427,6 +429,9 @@ mod tests {
         assert_eq!((find("gimpy"), near("gimpy").as_deref()), (None, Some("GIMP 2.10")));
         assert_eq!(near("photoshop"), None);
         assert_eq!(near("obs studios"), None, "only names Sir would say, not raw executables");
+        // A program on Linux's PATH is no app name of his: "cat" stays a cat.
+        let linux = [e("cat", EntryKind::PathBin, None), e("Firefox", EntryKind::Desktop, None)];
+        assert!(!known_in(&linux, "cat") && known_in(&linux, "firefox") && known_in(&entries, "visual studio code"));
     }
 
     #[test]

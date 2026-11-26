@@ -133,6 +133,7 @@ pub const RELEASES: &[Release] = &[
             fixed("Weather without WhatsApp", "\"What's the weather in Berlin?\" cited WhatsApp's pages; the search is \"weather Berlin\" now."),
             fixed("Linux: system folders are safe", "His file tools could write to /etc or /usr on Linux: the guard read paths the Windows way."),
             fixed("Linux: textures of models made on Windows", "A model that names its textures the Windows way (\"tex\\wood.png\") finds them on Linux too."),
+            fixed("Linux: a cat is a cat", "\"Make me a drawing of a cat\" showed nothing on Linux: \"cat\" was taken for the program cat."),
         ],
     },
     Release {
