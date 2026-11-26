@@ -18,16 +18,23 @@ arch=('x86_64')
 url="https://github.com/JayKaey/JAI"
 license=('custom')
 # What the program links against, then what he calls at run time (the README's Linux section;
-# `NEEDED` in setup/src/main.rs is the same list for other Arch PCs).
+# `NEEDED` in setup/src/main.rs is the list for other Arch PCs). The heavy tools only the
+# running assistant uses are optdepends, as the install stick needs none of them to show the
+# installer: Discover brings Qt's web engine and yt-dlp Python and Deno, which put the stick
+# over 2 GiB (2026-11-26). J.A.I.OS's own list (os/packages/target.txt) installs them.
 depends=(
   'glibc' 'gcc-libs' 'alsa-lib' 'opus'
-  'espeak-ng' 'ollama'
-  'zstd' 'libpulse' 'tesseract' 'tesseract-data-eng' 'tesseract-data-deu'
-  'pacman-contrib' 'discover' 'geoclue' 'xdg-utils' 'yt-dlp' 'ffmpeg' 'wl-clipboard' 'polkit'
+  'espeak-ng'
+  'zstd' 'libpulse'
+  'pacman-contrib' 'geoclue' 'xdg-utils' 'ffmpeg' 'wl-clipboard' 'polkit'
   'xorg-xwayland' 'libglvnd' 'libxkbcommon' 'wayland' 'dbus'
   'noto-fonts' 'ttf-dejavu'
 )
 optdepends=(
+  'ollama: the language model'
+  'tesseract: reading the screen (with tesseract-data-eng and tesseract-data-deu)'
+  'discover: the app updates'
+  'yt-dlp: downloads from video sites'
   'ollama-cuda: the language model on an NVIDIA card (the installer picks it)'
   'ollama-rocm: the language model on an AMD card (the installer picks it)'
   'ollama-vulkan: the language model on any card with Vulkan'

@@ -123,6 +123,7 @@ pub const RELEASES: &[Release] = &[
             new("Live cameras as the films show them", "\"Show me a random live camera\"; every feed numbered, its lamp, place and frame age.", "live_cameras"),
             better("Live cameras in more places", "Eight more networks: Georgia, Nevada, Ontario, Alberta, Atlantic Canada and Yukon."),
             fixed("3D houses seen from a low angle", "Houses behind the middle fall back into the deep, not a tangle; far roofs carry no label."),
+            fixed("The J.A.I.OS stick under 2 GiB", "His heavy tools are left off the install stick, which only shows the installer."),
             new("Wi-Fi, Bluetooth, power plan, dark or light", "\"Wi-Fi off\", \"airplane mode on\", \"high performance mode\", \"switch Windows to dark mode\".", "pc_switches"),
         ],
     },

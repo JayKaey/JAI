@@ -1,7 +1,8 @@
 # The install stick: enough of J.A.I.OS to show J.A.I.'s installer on any PC. The system itself
 # is installed online (os/packages/target.txt), so nothing is here for its own sake.
 # Budget: the ISO stays under 2 GiB (the workflow fails beyond it). First to go when it does
-# not: firefox, then konsole.
+# not: firefox, then konsole. (At 2164 MiB on 2026-11-26 the jai package's own heavy tools went
+# first: they are optdepends now, see os/pkg/jai/PKGBUILD.)
 
 # J.A.I.OS
 jai

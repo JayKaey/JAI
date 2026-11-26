@@ -995,7 +995,8 @@ mod tests {
         assert_eq!(plan.file("/run/jaios-install/pacman.conf"), plan.file("/mnt/etc/pacman.conf"));
         // The list: one name a line, each once, what the owner asked for among them.
         let packages = packages();
-        for wanted in ["base", "linux-cachyos", "linux-cachyos-headers", "limine", "limine-snapper-sync", "snapper", "snap-pac", "sbctl", "plymouth", "greetd", "kwin", "steam", "proton-cachyos", "firefox", "discover", "flatpak", "paru", "chwd", "jai", "jaios-settings", "jaios"] {
+        // (Ollama, Tesseract and yt-dlp too: J.A.I.'s package leaves them optional for the stick.)
+        for wanted in ["base", "linux-cachyos", "linux-cachyos-headers", "limine", "limine-snapper-sync", "snapper", "snap-pac", "sbctl", "plymouth", "greetd", "kwin", "steam", "proton-cachyos", "firefox", "discover", "flatpak", "paru", "chwd", "jai", "jaios-settings", "jaios", "ollama", "tesseract", "tesseract-data-eng", "tesseract-data-deu", "yt-dlp"] {
             assert_eq!(packages.iter().filter(|p| **p == wanted).count(), 1, "{wanted}");
         }
         assert!(packages.iter().all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || "-+._".contains(c))), "{packages:?}");
